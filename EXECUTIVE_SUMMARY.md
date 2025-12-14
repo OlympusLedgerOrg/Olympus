@@ -160,7 +160,7 @@ Comprehensive review of test coverage, protocol implementation, API behavior, CI
 | Unit test pass rate | 100% (79/79) | 100% | ✅ |
 | Linting issues | 5 minor | 0 | ⚠️ |
 | Type errors | 8 | 0 | ⚠️ |
-| Deprecation warnings | 8 | 0 | ⚠️ |
+| Deprecation warnings | 9 | 0 | ⚠️ |
 | Test coverage (estimated) | ~75% | 80% | ⚠️ |
 | Security issues | 0 detected | 0 | ✅ |
 
