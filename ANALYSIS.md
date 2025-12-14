@@ -586,58 +586,83 @@ PGDATABASE=olympus
 
 ## 8. Recommendations
 
-### Immediate Actions (Phase 0.5)
+### Critical (Must Fix Before 1.0)
 
-1. **Add tests for canonicalization functions:**
-   - Direct tests for `canonicalize_json()`
+1. **Fix `datetime.utcnow()` deprecation warnings:**
+   - Replace all `datetime.utcnow()` with `datetime.now(timezone.utc)`
+   - Affects: `test_shards.py` (8 instances), possibly `protocol/ledger.py`
+   - Risk: Will break in future Python versions
+
+2. **Fix type annotation errors:**
+   - Add missing return type annotations for `__init__` methods
+   - Fix generic type parameters in `protocol/ssmf.py`
+   - Fix type incompatibilities in `protocol/canonical.py`
+   - Use `mypy --strict` for stricter checking
+
+3. **Implement guardian replication or document as "not yet implemented":**
+   - Current spec implies finality requires M-of-N replication
+   - Either implement or clearly mark as Phase 1+ feature
+
+### High Priority (Phase 0.5)
+
+4. **Add tests for canonicalization functions:**
+   - Direct tests for `canonical_json_encode()`
    - Direct tests for `canonicalize_document()`
-   - Edge cases: empty objects, nested structures, unicode
+   - Edge cases: empty objects, nested structures, unicode, NaN/Infinity
 
-2. **Integrate schema validation:**
+5. **Integrate schema validation:**
    - Add `jsonschema` or use Pydantic schema validation
    - Validate API inputs/outputs against JSON schemas
    - Add tests that verify schema compliance
 
-3. **Resolve database inconsistency:**
+6. **Resolve database inconsistency:**
    - Document why E2E uses Postgres and API tests use SQLite
    - Consider unifying on one database for clarity
    - Or clearly separate "storage layer" tests from "API" tests
 
-4. **Add CLI tool tests:**
+7. **Add dedicated unit tests for ledger protocol:**
+   - Test `Ledger` class independently
+   - Test chain verification with tampered entries
+   - Test genesis handling
+
+### Medium Priority
+
+8. **Add CLI tool tests:**
    - Test `tools/verify_cli.py` with known-good inputs
    - Test `tools/canonicalize_cli.py` with various formats
 
-5. **Expand redaction tests:**
+9. **Expand redaction tests:**
    - Invalid proof detection
    - Partial revelation scenarios
    - Edge cases (empty revealed set, all revealed, etc.)
 
+10. **Fix linting issues:**
+    - Remove trailing whitespace (3 instances in api/app.py)
+    - Combine nested `with` statements (api/app.py:130)
+    - Replace `typing.Dict` with `dict`
+
 ### Future Enhancements (Post-0.5)
 
-6. **Implement guardian replication:**
-   - Multi-signature support
-   - Consensus protocol (BFT with M ≥ ⌈2N/3⌉)
-   - Conflicting state detection
-
-7. **Add test coverage reporting:**
+11. **Add test coverage reporting:**
    - Integrate pytest-cov
    - Publish coverage reports in CI
-   - Set minimum coverage thresholds
+   - Set minimum coverage thresholds (aim for 80%+)
 
-8. **Security enhancements:**
-   - Add dependency vulnerability scanning
+12. **Security enhancements:**
+   - Add dependency vulnerability scanning (e.g., Safety, Dependabot)
    - Add SAST (static analysis security testing)
    - Document threat model validation
 
-9. **Performance testing:**
+13. **Performance testing:**
    - Benchmark hash functions
    - Merkle tree construction/proof generation at scale
-   - Database query performance
+   - Database query performance under load
 
-10. **Documentation improvements:**
-    - Mark unimplemented features clearly (e.g., guardian replication)
-    - Add architecture decision records (ADRs)
-    - Document database choice rationale
+14. **Documentation improvements:**
+   - Mark unimplemented features clearly (e.g., guardian replication)
+   - Add architecture decision records (ADRs)
+   - Document database choice rationale
+   - Add API usage examples
 
 ---
 
@@ -653,7 +678,54 @@ PGDATABASE=olympus
 
 ---
 
-## 10. Conclusion
+## 10. Validation Results
+
+### Test Execution
+
+**Command:** `pytest tests/ -v --ignore=tests/test_e2e_audit.py --ignore=tests/test_storage.py`  
+**Result:** ✅ **79 tests passed, 8 warnings, 0 failures**
+
+**Note:** E2E and storage tests require Postgres and were not run in this environment.
+
+### Linting Results
+
+**Command:** `ruff check protocol/ storage/ api/ tests/`  
+**Issues Found:**
+- 3 × W293: Blank lines contain whitespace (api/app.py)
+- 1 × SIM117: Nested `with` statements could be combined (api/app.py)
+- 1 × UP035: Use `dict` instead of `typing.Dict` (deprecated)
+
+**Severity:** ⚠️ **Minor style issues, no functional bugs**
+
+### Type Checking Results
+
+**Command:** `mypy protocol/ --ignore-missing-imports`  
+**Issues Found (8 errors in 3 files):**
+
+**protocol/canonical.py:**
+- Incorrect type annotations in list comprehensions (lines 65, 70)
+
+**protocol/ssmf.py:**
+- Missing type parameters for `dict` return types (lines 55, 73)
+- Missing return type annotation for `__init__` (line 92, 124)
+- Incompatible tuple type assignment (line 173)
+
+**protocol/ledger.py:**
+- Missing return type annotation for `__init__` (line 42)
+
+**Severity:** ⚠️ **Type safety issues, but tests still pass**
+
+### Warnings in Tests
+
+**8 DeprecationWarnings in test_shards.py:**
+- Using `datetime.utcnow()` which is deprecated in Python 3.12
+- Should use `datetime.now(timezone.utc)` instead
+
+**Impact:** ⚠️ **Will break in future Python versions**
+
+---
+
+## 11. Conclusion
 
 The Olympus repository demonstrates **strong cryptographic implementation** with **excellent test coverage for core primitives**. The protocol design is sound, and the API is well-architected for offline verification.
 
