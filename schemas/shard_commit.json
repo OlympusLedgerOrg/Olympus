@@ -1,0 +1,44 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://olympus-protocol.org/schemas/shard_commit.json",
+  "title": "Shard Commitment",
+  "description": "Schema for a shard commitment in the Merkle forest",
+  "type": "object",
+  "required": [
+    "shard_id",
+    "merkle_root",
+    "timestamp",
+    "leaf_count",
+    "previous_shard_root"
+  ],
+  "properties": {
+    "shard_id": {
+      "type": "string",
+      "description": "Unique identifier for this shard"
+    },
+    "merkle_root": {
+      "type": "string",
+      "description": "Hex-encoded Merkle root hash",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "timestamp": {
+      "type": "string",
+      "format": "date-time",
+      "description": "ISO 8601 timestamp of commitment"
+    },
+    "leaf_count": {
+      "type": "integer",
+      "minimum": 1,
+      "description": "Number of leaves in this shard"
+    },
+    "previous_shard_root": {
+      "type": "string",
+      "description": "Root hash of previous shard state",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "signature": {
+      "type": "string",
+      "description": "Cryptographic signature over the commitment"
+    }
+  }
+}

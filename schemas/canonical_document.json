@@ -1,0 +1,61 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://olympus-protocol.org/schemas/canonical_document.json",
+  "title": "Canonical Document",
+  "description": "Schema for a canonicalized document in Olympus",
+  "type": "object",
+  "required": [
+    "version",
+    "document_id",
+    "content",
+    "metadata"
+  ],
+  "properties": {
+    "version": {
+      "type": "string",
+      "description": "Schema version",
+      "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$"
+    },
+    "document_id": {
+      "type": "string",
+      "description": "Unique identifier for the document"
+    },
+    "content": {
+      "type": "object",
+      "description": "Canonical content representation",
+      "properties": {
+        "format": {
+          "type": "string",
+          "enum": ["text", "structured", "binary"]
+        },
+        "encoding": {
+          "type": "string",
+          "enum": ["utf-8", "base64"]
+        },
+        "data": {
+          "description": "The actual content data"
+        }
+      },
+      "required": ["format", "encoding", "data"]
+    },
+    "metadata": {
+      "type": "object",
+      "description": "Document metadata",
+      "properties": {
+        "title": {
+          "type": "string"
+        },
+        "author": {
+          "type": "string"
+        },
+        "created_at": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "source_agency": {
+          "type": "string"
+        }
+      }
+    }
+  }
+}
