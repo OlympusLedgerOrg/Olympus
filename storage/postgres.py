@@ -25,14 +25,14 @@ from protocol.ssmf import ExistenceProof, NonExistenceProof, SparseMerkleTree
 class StorageLayer:
     """
     Postgres storage layer for Olympus protocol.
-    
+
     All operations are append-only and deterministic.
     """
 
     def __init__(self, connection_string: str):
         """
         Initialize storage layer.
-        
+
         Args:
             connection_string: Postgres connection string
         """
@@ -41,12 +41,12 @@ class StorageLayer:
     def _get_connection(self) -> psycopg.Connection:
         """
         Get a database connection with autocommit disabled (transaction mode).
-        
+
         psycopg3 behavior:
         - autocommit=False (default): connection starts in transaction mode
         - context manager (`with conn:`) ensures rollback on exception
         - must call conn.commit() explicitly to finalize
-        
+
         Returns:
             Connection in transaction mode
         """
@@ -55,7 +55,7 @@ class StorageLayer:
     def init_schema(self) -> None:
         """
         Initialize database schema.
-        
+
         Reads and executes the schema migration SQL.
         All DDL statements execute in a single transaction.
         """
@@ -81,7 +81,7 @@ class StorageLayer:
     ) -> tuple[bytes, ExistenceProof, dict[str, Any], str, LedgerEntry]:
         """
         Append a record to the sparse Merkle tree and update shard header and ledger.
-        
+
         This is the main write operation. It:
         1. Loads the current tree state from DB
         2. Inserts the new leaf
@@ -89,13 +89,13 @@ class StorageLayer:
         4. Creates and signs a new shard header
         5. Creates a ledger entry
         6. Persists everything atomically
-        
+
         Transaction semantics:
         - All operations occur in a single transaction
         - SELECT MAX(seq)+1 queries execute inside the transaction
         - commit() finalizes all writes atomically
         - Exceptions trigger automatic rollback via context manager
-        
+
         Args:
             shard_id: Shard identifier
             record_type: Type of record
@@ -103,7 +103,7 @@ class StorageLayer:
             version: Record version
             value_hash: 32-byte hash of record value
             signing_key: Ed25519 signing key for shard header
-            
+
         Returns:
             Tuple of (root_hash, proof, header, signature, ledger_entry)
         """
@@ -280,16 +280,16 @@ class StorageLayer:
     ) -> ExistenceProof | None:
         """
         Get existence proof for a record.
-        
+
         Read-only operation. Transaction will rollback on context exit
         (no commit needed for SELECT-only operations).
-        
+
         Args:
             shard_id: Shard identifier
             record_type: Type of record
             record_id: Record identifier
             version: Record version
-            
+
         Returns:
             Existence proof if record exists, None otherwise
         """
@@ -323,19 +323,19 @@ class StorageLayer:
     ) -> NonExistenceProof:
         """
         Get non-existence proof for a record.
-        
+
         Read-only operation. Transaction will rollback on context exit
         (no commit needed for SELECT-only operations).
-        
+
         Args:
             shard_id: Shard identifier
             record_type: Type of record
             record_id: Record identifier
             version: Record version
-            
+
         Returns:
             Non-existence proof
-            
+
         Raises:
             ValueError: If record exists
         """
@@ -361,13 +361,13 @@ class StorageLayer:
     def get_latest_header(self, shard_id: str) -> dict[str, Any] | None:
         """
         Get the latest shard header.
-        
+
         Read-only operation. Transaction will rollback on context exit
         (no commit needed for SELECT-only operations).
-        
+
         Args:
             shard_id: Shard identifier
-            
+
         Returns:
             Dictionary with header, signature, and pubkey, or None if no headers exist
         """
@@ -399,7 +399,7 @@ class StorageLayer:
             else:
                 # Unexpected type - raise error for clarity
                 raise TypeError(f"Unexpected timestamp type: {type(ts_value).__name__}. Expected str or datetime.")
-            
+
             header = {
                 "shard_id": shard_id,
                 "root_hash": bytes(row['root']).hex(),
@@ -418,14 +418,14 @@ class StorageLayer:
     def get_ledger_tail(self, shard_id: str, n: int = 10) -> list[LedgerEntry]:
         """
         Get the last N ledger entries for a shard.
-        
+
         Read-only operation. Transaction will rollback on context exit
         (no commit needed for SELECT-only operations).
-        
+
         Args:
             shard_id: Shard identifier
             n: Number of entries to retrieve
-            
+
         Returns:
             List of ledger entries (most recent first)
         """
@@ -461,10 +461,10 @@ class StorageLayer:
     def get_all_shard_ids(self) -> list[str]:
         """
         Get all shard IDs that have headers.
-        
+
         Read-only operation. Transaction will rollback on context exit
         (no commit needed for SELECT-only operations).
-        
+
         Returns:
             List of shard IDs
         """
@@ -482,13 +482,13 @@ class StorageLayer:
     def verify_persisted_root(self, shard_id: str) -> bool:
         """
         Verify that the persisted root matches recomputed root from leaves.
-        
+
         Read-only operation. Transaction will rollback on context exit
         (no commit needed for SELECT-only operations).
-        
+
         Args:
             shard_id: Shard identifier
-            
+
         Returns:
             True if root is valid
         """
@@ -521,14 +521,14 @@ class StorageLayer:
     def _load_tree_state(self, cur: psycopg.Cursor, shard_id: str) -> SparseMerkleTree:
         """
         Load sparse Merkle tree state from database.
-        
+
         Read-only helper. Must be called within an existing transaction.
         No writes, no commit.
-        
+
         Args:
             cur: Database cursor
             shard_id: Shard identifier
-            
+
         Returns:
             SparseMerkleTree with all leaves loaded
         """
@@ -556,10 +556,10 @@ class StorageLayer:
     def _persist_tree_nodes(self, cur: psycopg.Cursor, shard_id: str, tree: SparseMerkleTree) -> None:
         """
         Persist tree nodes to database.
-        
+
         Only inserts new nodes (append-only).
         Node insertion failures are acceptable - they indicate the node already exists.
-        
+
         Args:
             cur: Database cursor
             shard_id: Shard identifier
@@ -593,10 +593,10 @@ class StorageLayer:
     def _encode_path(self, path: tuple[int, ...]) -> bytes:
         """
         Encode path tuple as bytes.
-        
+
         Args:
             path: Tuple of 0s and 1s
-            
+
         Returns:
             Bytes representation
         """
