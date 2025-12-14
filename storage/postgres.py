@@ -38,22 +38,36 @@ class StorageLayer:
         self.connection_string = connection_string
     
     def _get_connection(self) -> psycopg.Connection:
-        """Get a database connection."""
-        return psycopg.connect(self.connection_string, row_factory=dict_row)
+        """
+        Get a database connection with autocommit disabled (transaction mode).
+        
+        psycopg3 behavior:
+        - autocommit=False (default): connection starts in transaction mode
+        - context manager (`with conn:`) ensures rollback on exception
+        - must call conn.commit() explicitly to finalize
+        
+        Returns:
+            Connection in transaction mode
+        """
+        return psycopg.connect(self.connection_string, row_factory=dict_row, autocommit=False)
     
     def init_schema(self) -> None:
         """
         Initialize database schema.
         
         Reads and executes the schema migration SQL.
+        All DDL statements execute in a single transaction.
         """
         with open('/home/runner/work/Olympus/Olympus/migrations/001_init_schema.sql', 'r') as f:
             schema_sql = f.read()
         
+        # BEGIN TRANSACTION (implicit via context manager)
         with self._get_connection() as conn:
             with conn.cursor() as cur:
                 cur.execute(schema_sql)
+            # COMMIT TRANSACTION (explicit)
             conn.commit()
+        # END TRANSACTION (implicit via context manager exit)
     
     def append_record(
         self,
@@ -75,6 +89,12 @@ class StorageLayer:
         5. Creates a ledger entry
         6. Persists everything atomically
         
+        Transaction semantics:
+        - All operations occur in a single transaction
+        - SELECT MAX(seq)+1 queries execute inside the transaction
+        - commit() finalizes all writes atomically
+        - Exceptions trigger automatic rollback via context manager
+        
         Args:
             shard_id: Shard identifier
             record_type: Type of record
@@ -92,6 +112,7 @@ class StorageLayer:
         # Generate record key
         key = record_key(record_type, record_id, version)
         
+        # BEGIN TRANSACTION (implicit via context manager)
         with self._get_connection() as conn:
             with conn.cursor() as cur:
                 # Load current tree state
@@ -243,9 +264,12 @@ class StorageLayer:
                     entry_hash=entry_hash.hex()
                 )
                 
+                # COMMIT TRANSACTION (explicit)
+                # All INSERTs succeed atomically or rollback on exception
                 conn.commit()
                 
                 return root_hash, proof, header, signature, ledger_entry
+        # END TRANSACTION (implicit via context manager exit)
     
     def get_proof(
         self,
@@ -256,6 +280,9 @@ class StorageLayer:
     ) -> Optional[ExistenceProof]:
         """
         Get existence proof for a record.
+        
+        Read-only operation. Transaction will rollback on context exit
+        (no commit needed for SELECT-only operations).
         
         Args:
             shard_id: Shard identifier
@@ -268,6 +295,7 @@ class StorageLayer:
         """
         key = record_key(record_type, record_id, version)
         
+        # READ-ONLY: No commit needed, transaction auto-rolls back
         with self._get_connection() as conn:
             with conn.cursor() as cur:
                 # Check if leaf exists
@@ -297,6 +325,9 @@ class StorageLayer:
         """
         Get non-existence proof for a record.
         
+        Read-only operation. Transaction will rollback on context exit
+        (no commit needed for SELECT-only operations).
+        
         Args:
             shard_id: Shard identifier
             record_type: Type of record
@@ -311,6 +342,7 @@ class StorageLayer:
         """
         key = record_key(record_type, record_id, version)
         
+        # READ-ONLY: No commit needed, transaction auto-rolls back
         with self._get_connection() as conn:
             with conn.cursor() as cur:
                 # Check if leaf exists
@@ -332,12 +364,16 @@ class StorageLayer:
         """
         Get the latest shard header.
         
+        Read-only operation. Transaction will rollback on context exit
+        (no commit needed for SELECT-only operations).
+        
         Args:
             shard_id: Shard identifier
             
         Returns:
             Dictionary with header, signature, and pubkey, or None if no headers exist
         """
+        # READ-ONLY: No commit needed, transaction auto-rolls back
         with self._get_connection() as conn:
             with conn.cursor() as cur:
                 cur.execute(
@@ -375,6 +411,9 @@ class StorageLayer:
         """
         Get the last N ledger entries for a shard.
         
+        Read-only operation. Transaction will rollback on context exit
+        (no commit needed for SELECT-only operations).
+        
         Args:
             shard_id: Shard identifier
             n: Number of entries to retrieve
@@ -382,6 +421,7 @@ class StorageLayer:
         Returns:
             List of ledger entries (most recent first)
         """
+        # READ-ONLY: No commit needed, transaction auto-rolls back
         with self._get_connection() as conn:
             with conn.cursor() as cur:
                 cur.execute(
@@ -415,9 +455,13 @@ class StorageLayer:
         """
         Get all shard IDs that have headers.
         
+        Read-only operation. Transaction will rollback on context exit
+        (no commit needed for SELECT-only operations).
+        
         Returns:
             List of shard IDs
         """
+        # READ-ONLY: No commit needed, transaction auto-rolls back
         with self._get_connection() as conn:
             with conn.cursor() as cur:
                 cur.execute(
@@ -433,12 +477,16 @@ class StorageLayer:
         """
         Verify that the persisted root matches recomputed root from leaves.
         
+        Read-only operation. Transaction will rollback on context exit
+        (no commit needed for SELECT-only operations).
+        
         Args:
             shard_id: Shard identifier
             
         Returns:
             True if root is valid
         """
+        # READ-ONLY: No commit needed, transaction auto-rolls back
         with self._get_connection() as conn:
             with conn.cursor() as cur:
                 # Get latest header root
@@ -468,6 +516,9 @@ class StorageLayer:
     def _load_tree_state(self, cur: psycopg.Cursor, shard_id: str) -> SparseMerkleTree:
         """
         Load sparse Merkle tree state from database.
+        
+        Read-only helper. Must be called within an existing transaction.
+        No writes, no commit.
         
         Args:
             cur: Database cursor
