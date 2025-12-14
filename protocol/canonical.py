@@ -56,7 +56,7 @@ def canonicalize_document(doc: dict[str, Any]) -> dict[str, Any]:
     if not isinstance(doc, dict):
         raise ValueError("Document must be a dictionary")
 
-    canonical = {}
+    canonical: dict[str, Any] = {}
     for key in sorted(doc.keys()):
         value = doc[key]
         if isinstance(value, dict):

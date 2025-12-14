@@ -40,7 +40,7 @@ class Ledger:
     a hash of the previous entry, creating a tamper-evident log.
     """
 
-    def __init__(self):
+    def __init__(self) -> None:
         """Initialize an empty ledger."""
         self.entries: list[LedgerEntry] = []
 

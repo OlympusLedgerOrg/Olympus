@@ -52,7 +52,7 @@ class ExistenceProof:
     siblings: list[bytes]  # Sibling hashes along path to root (256 siblings)
     root_hash: bytes  # 32-byte root hash
 
-    def to_dict(self) -> dict:
+    def to_dict(self) -> dict[str, bool | str | list[str]]:
         """Convert proof to dictionary for JSON serialization."""
         return {
             "exists": True,
@@ -70,7 +70,7 @@ class NonExistenceProof:
     siblings: list[bytes]  # Sibling hashes along path to empty leaf
     root_hash: bytes  # 32-byte root hash
 
-    def to_dict(self) -> dict:
+    def to_dict(self) -> dict[str, bool | str | list[str]]:
         """Convert proof to dictionary for JSON serialization."""
         return {
             "exists": False,
@@ -89,7 +89,7 @@ class SparseMerkleTree:
     version into the key derivation (via record_key from hashes module).
     """
 
-    def __init__(self):
+    def __init__(self) -> None:
         """Initialize an empty sparse Merkle tree."""
         # Store only non-empty nodes: path -> hash
         self.nodes: dict[tuple[int, ...], bytes] = {}
@@ -121,7 +121,7 @@ class SparseMerkleTree:
             raise ValueError(f"Key must be 32 bytes, got {len(key)}")
         return self.leaves.get(key)
 
-    def update(self, key: bytes, value_hash: bytes):
+    def update(self, key: bytes, value_hash: bytes) -> None:
         """
         Update or insert a key-value pair.
 
