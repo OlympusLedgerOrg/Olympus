@@ -115,9 +115,9 @@ LEDGER_PREFIX = b"OLY:LEDGER:V1" # Ledger entries
 - Proper 32-byte length validation
 - Follows BLAKE3 standard
 
-**Concerns:**
-- `POLICY_PREFIX` defined but not used in tests (dead code?)
-- `HASH_SEPARATOR = "|"` defined but appears unused in `hashes.py` itself
+**Questions for Future Investigation:**
+- `POLICY_PREFIX` defined and tested but not used functionally (reserved for Phase 1+ policy features?)
+- `HASH_SEPARATOR = "|"` defined in `hashes.py` but unused (documented in copilot-instructions.md for field separation)
 
 #### Sparse Merkle Tree (`protocol/ssmf.py`)
 
@@ -151,8 +151,8 @@ LEDGER_PREFIX = b"OLY:LEDGER:V1" # Ledger entries
 - Root stability for same inputs
 - Order sensitivity (different order → different root)
 
-**Issue Found:**
-- Uses `merkle_parent_hash()` from `hashes.py`, but that function doesn't exist in the reviewed portion of `hashes.py` (may be at line 80+)
+**Verified Implementation:**
+- ✅ `merkle_parent_hash()` exists at line 178-190 (legacy compatibility wrapper for `node_hash()`)
 
 #### Canonicalization (`protocol/canonical.py`)
 
