@@ -41,7 +41,7 @@ def test_canonicalization_golden_vector():
     expected1 = b"Hello world"
     assert canonicalize_text(raw1).encode('utf-8') == expected1
     
-    # Test case 2: Multiple spaces and line preservation (\\r\\n -> \\n)
+    # Test case 2: Multiple spaces and line preservation (\r\n -> \n)
     raw2 = "Line1\r\nLine2\r\n"
     expected2 = b"Line1\nLine2"
     assert canonicalize_text(raw2).encode('utf-8') == expected2
