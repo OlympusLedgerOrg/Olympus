@@ -9,6 +9,10 @@ import hashlib
 from typing import Union
 
 
+# Hash field separator for structured data
+HASH_SEPARATOR = "|"
+
+
 def hash_bytes(data: bytes) -> bytes:
     """
     Compute SHA-256 hash of raw bytes.

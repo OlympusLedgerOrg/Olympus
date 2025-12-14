@@ -7,7 +7,7 @@ This module implements the append-only ledger for recording document commitments
 from typing import List, Optional, Dict, Any
 from dataclasses import dataclass, asdict
 from datetime import datetime
-from .hashes import hash_bytes, hash_string
+from .hashes import hash_bytes, hash_string, HASH_SEPARATOR
 
 
 @dataclass
@@ -66,7 +66,7 @@ class Ledger:
         previous_hash = self.entries[-1].entry_hash if self.entries else ""
         
         # Compute entry hash
-        entry_data = f"{timestamp}|{document_hash}|{merkle_root}|{shard_id}|{source_signature}|{previous_hash}"
+        entry_data = f"{timestamp}{HASH_SEPARATOR}{document_hash}{HASH_SEPARATOR}{merkle_root}{HASH_SEPARATOR}{shard_id}{HASH_SEPARATOR}{source_signature}{HASH_SEPARATOR}{previous_hash}"
         entry_hash = hash_string(entry_data).hex()
         
         entry = LedgerEntry(
@@ -114,7 +114,7 @@ class Ledger:
         # Check each entry
         for i, entry in enumerate(self.entries):
             # Verify entry hash
-            entry_data = f"{entry.timestamp}|{entry.document_hash}|{entry.merkle_root}|{entry.shard_id}|{entry.source_signature}|{entry.previous_hash}"
+            entry_data = f"{entry.timestamp}{HASH_SEPARATOR}{entry.document_hash}{HASH_SEPARATOR}{entry.merkle_root}{HASH_SEPARATOR}{entry.shard_id}{HASH_SEPARATOR}{entry.source_signature}{HASH_SEPARATOR}{entry.previous_hash}"
             expected_hash = hash_string(entry_data).hex()
             if entry.entry_hash != expected_hash:
                 return False
