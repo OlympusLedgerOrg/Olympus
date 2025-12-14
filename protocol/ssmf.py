@@ -51,6 +51,16 @@ class ExistenceProof:
     value_hash: bytes  # 32-byte hash of the value
     siblings: List[bytes]  # Sibling hashes along path to root (256 siblings)
     root_hash: bytes  # 32-byte root hash
+    
+    def to_dict(self) -> dict:
+        """Convert proof to dictionary for JSON serialization."""
+        return {
+            "exists": True,
+            "key": self.key.hex(),
+            "value_hash": self.value_hash.hex(),
+            "siblings": [s.hex() for s in self.siblings],
+            "root_hash": self.root_hash.hex()
+        }
 
 
 @dataclass
@@ -59,6 +69,15 @@ class NonExistenceProof:
     key: bytes  # 32-byte key
     siblings: List[bytes]  # Sibling hashes along path to empty leaf
     root_hash: bytes  # 32-byte root hash
+    
+    def to_dict(self) -> dict:
+        """Convert proof to dictionary for JSON serialization."""
+        return {
+            "exists": False,
+            "key": self.key.hex(),
+            "siblings": [s.hex() for s in self.siblings],
+            "root_hash": self.root_hash.hex()
+        }
 
 
 class SparseMerkleTree:
