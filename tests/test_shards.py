@@ -70,7 +70,7 @@ def test_sign_and_verify_header():
     assert len(bytes.fromhex(signature)) == 64  # Ed25519 signature is 64 bytes
     
     # Verify header
-    assert verify_header(header, signature, verify_key) == True
+    assert verify_header(header, signature, verify_key) is True
 
 
 def test_verify_header_with_bad_signature():
@@ -93,7 +93,7 @@ def test_verify_header_with_bad_signature():
     signature = sign_header(header, signing_key2)
     
     # Verify with key1 should fail
-    assert verify_header(header, signature, verify_key1) == False
+    assert verify_header(header, signature, verify_key1) is False
 
 
 def test_verify_header_with_tampered_hash():
@@ -115,7 +115,7 @@ def test_verify_header_with_tampered_hash():
     header["header_hash"] = hash_bytes(b"tampered").hex()
     
     # Verification should fail
-    assert verify_header(header, signature, verify_key) == False
+    assert verify_header(header, signature, verify_key) is False
 
 
 def test_deterministic_signing_key_from_seed():
@@ -150,7 +150,7 @@ def test_get_verify_key_from_signing_key():
     )
     
     signature = sign_header(header, signing_key)
-    assert verify_header(header, signature, verify_key) == True
+    assert verify_header(header, signature, verify_key) is True
 
 
 def test_header_hash_changes_with_content():

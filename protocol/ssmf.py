@@ -23,6 +23,17 @@ def _precompute_empty_hashes(height: int = 256) -> List[bytes]:
 EMPTY_HASHES = _precompute_empty_hashes()
 
 
+def _key_to_path_bits(key: bytes) -> List[int]:
+    """Convert 32-byte key to 256-bit path (list of 0s and 1s)."""
+    path = []
+    for byte in key:
+        for i in range(8):
+            # Extract bit (MSB first)
+            bit = (byte >> (7 - i)) & 1
+            path.append(bit)
+    return path
+
+
 @dataclass
 class ExistenceProof:
     """Proof that a key-value pair exists in the tree."""
@@ -219,13 +230,7 @@ class SparseMerkleTree:
     
     def _key_to_path(self, key: bytes) -> Tuple[int, ...]:
         """Convert 32-byte key to 256-bit path (tuple of 0s and 1s)."""
-        path = []
-        for byte in key:
-            for i in range(8):
-                # Extract bit (MSB first)
-                bit = (byte >> (7 - i)) & 1
-                path.append(bit)
-        return tuple(path)
+        return tuple(_key_to_path_bits(key))
     
     def _sibling_path(self, path: Tuple[int, ...]) -> Tuple[int, ...]:
         """Get the path of the sibling node."""
@@ -259,12 +264,8 @@ def verify_proof(proof: ExistenceProof) -> bool:
         if len(sibling) != 32:
             return False
     
-    # Compute path from key
-    path = []
-    for byte in proof.key:
-        for i in range(8):
-            bit = (byte >> (7 - i)) & 1
-            path.append(bit)
+    # Compute path from key using shared function
+    path = _key_to_path_bits(proof.key)
     
     # Compute root from leaf
     # Siblings are ordered from leaf to root (level 0, 1, 2...)
@@ -306,12 +307,8 @@ def verify_nonexistence_proof(proof: NonExistenceProof) -> bool:
         if len(sibling) != 32:
             return False
     
-    # Compute path from key
-    path = []
-    for byte in proof.key:
-        for i in range(8):
-            bit = (byte >> (7 - i)) & 1
-            path.append(bit)
+    # Compute path from key using shared function
+    path = _key_to_path_bits(proof.key)
     
     # For non-existence, we start with empty leaf hash
     current_hash = EMPTY_HASHES[0]

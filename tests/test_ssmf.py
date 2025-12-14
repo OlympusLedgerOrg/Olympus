@@ -62,7 +62,7 @@ def test_ssmf_existence_proof():
     assert proof.root_hash == tree.get_root()
     
     # Verify proof
-    assert verify_proof(proof) == True
+    assert verify_proof(proof) is True
 
 
 def test_ssmf_existence_proof_for_nonexistent_key():
@@ -93,7 +93,7 @@ def test_ssmf_nonexistence_proof():
     assert proof.root_hash == tree.get_root()
     
     # Verify proof
-    assert verify_nonexistence_proof(proof) == True
+    assert verify_nonexistence_proof(proof) is True
 
 
 def test_ssmf_nonexistence_proof_for_existing_key():
@@ -126,7 +126,7 @@ def test_ssmf_tampered_proof_detected():
         root_hash=proof.root_hash
     )
     
-    assert verify_proof(tampered_proof) == False
+    assert verify_proof(tampered_proof) is False
 
 
 def test_ssmf_tampered_siblings_detected():
@@ -150,7 +150,7 @@ def test_ssmf_tampered_siblings_detected():
         root_hash=proof.root_hash
     )
     
-    assert verify_proof(tampered_proof) == False
+    assert verify_proof(tampered_proof) is False
 
 
 def test_ssmf_wrong_key_detected():
@@ -173,7 +173,7 @@ def test_ssmf_wrong_key_detected():
         root_hash=proof.root_hash
     )
     
-    assert verify_proof(wrong_proof) == False
+    assert verify_proof(wrong_proof) is False
 
 
 def test_ssmf_invalid_key_length():
