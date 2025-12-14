@@ -534,7 +534,7 @@ class StorageLayer:
 
             return persisted_root == computed_root
 
-    def _load_tree_state(self, cur: psycopg.Cursor[dict[str, Any]], shard_id: str) -> SparseMerkleTree:
+    def _load_tree_state(self, cur: psycopg.Cursor[Any], shard_id: str) -> SparseMerkleTree:
         """
         Load sparse Merkle tree state from database.
 
@@ -569,7 +569,7 @@ class StorageLayer:
 
         return tree
 
-    def _persist_tree_nodes(self, cur: psycopg.Cursor[dict[str, Any]], shard_id: str, tree: SparseMerkleTree) -> None:
+    def _persist_tree_nodes(self, cur: psycopg.Cursor[Any], shard_id: str, tree: SparseMerkleTree) -> None:
         """
         Persist tree nodes to database.
 
