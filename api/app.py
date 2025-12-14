@@ -9,10 +9,13 @@ All responses include everything required for offline verification.
 
 import logging
 import os
+from urllib.parse import urlparse
 
 from fastapi import FastAPI, HTTPException, Query
+from psycopg import connect
 from pydantic import BaseModel
 
+from protocol.canonical_json import canonical_json_encode
 from storage.postgres import StorageLayer
 
 # Set up logging
@@ -89,8 +92,31 @@ app = FastAPI(
     version="0.5.0"
 )
 
-# Get database connection string from environment
-DATABASE_URL = os.environ.get('DATABASE_URL', 'postgresql://postgres:postgres@localhost:5432/olympus')
+# Get database connection string from environment with explicit credentials
+# NEVER allow implicit OS user (root in CI) to be used
+DEFAULT_DATABASE_URL = "postgresql://olympus:olympus@localhost:5432/olympus"
+DATABASE_URL = os.environ.get('DATABASE_URL', DEFAULT_DATABASE_URL)
+
+# Validate that DATABASE_URL contains explicit username/password
+# This prevents "role root does not exist" errors in CI
+try:
+    parsed_url = urlparse(DATABASE_URL)
+    
+    # Check if URL has a username (userinfo is username[:password])
+    if not parsed_url.username:
+        raise RuntimeError(f"DATABASE_URL missing username/password: {DATABASE_URL}")
+    
+    # Log database connection info (password is automatically redacted by urlparse)
+    logger.info(f"Connecting to database: scheme={parsed_url.scheme}, "
+                f"user={parsed_url.username}, "
+                f"host={parsed_url.hostname or 'unknown'}, "
+                f"db={parsed_url.path.lstrip('/') if parsed_url.path else 'unknown'}")
+except Exception as e:
+    # If URL parsing fails or validation fails, raise with clear message
+    if isinstance(e, RuntimeError):
+        raise
+    raise RuntimeError(f"Invalid DATABASE_URL format: {DATABASE_URL}") from e
+
 storage = StorageLayer(DATABASE_URL)
 
 
@@ -98,9 +124,24 @@ storage = StorageLayer(DATABASE_URL)
 try:
     storage.init_schema()
     logger.info("Database schema initialized successfully")
+    
+    # Quick connectivity check with explicit error handling
+    try:
+        with connect(DATABASE_URL) as conn:
+            with conn.cursor() as cur:
+                cur.execute("SELECT 1")
+                result = cur.fetchone()
+                if result and result[0] == 1:
+                    logger.info("Database connectivity verified: SELECT 1 succeeded")
+                else:
+                    raise RuntimeError(f"Database connectivity check failed: unexpected result {result}")
+    except Exception as conn_error:
+        logger.error(f"Database connectivity check failed: {conn_error}")
+        raise RuntimeError("Failed to verify database connectivity") from conn_error
 except Exception as e:
-    logger.warning(f"Failed to initialize schema on startup: {e}")
-    logger.warning("Schema will be initialized on first request if needed")
+    logger.error(f"Failed to initialize database: {e}")
+    logger.error("Application startup failed - database not accessible")
+    raise  # Fail fast on DB errors
 
 
 @app.get("/")
@@ -167,7 +208,6 @@ async def get_latest_header(shard_id: str):
         header = header_data['header']
 
         # Create canonical header JSON for verification
-        from protocol.canonical_json import canonical_json_encode
         canonical_header = {
             "shard_id": header['shard_id'],
             "root_hash": header['root_hash'],
@@ -225,7 +265,6 @@ async def get_proof(
 
         # Build header response
         header = header_data['header']
-        from protocol.canonical_json import canonical_json_encode
         canonical_header = {
             "shard_id": header['shard_id'],
             "root_hash": header['root_hash'],

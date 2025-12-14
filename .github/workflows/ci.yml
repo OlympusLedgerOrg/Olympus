@@ -10,17 +10,28 @@ jobs:
   test:
     runs-on: ubuntu-latest
     
+    # Environment variables for the entire job
+    env:
+      DATABASE_URL: postgresql://olympus:olympus@localhost:5432/olympus
+      TEST_DATABASE_URL: postgresql://olympus:olympus@localhost:5432/olympus
+      PGHOST: localhost
+      PGPORT: "5432"
+      PGUSER: olympus
+      PGPASSWORD: olympus
+      PGDATABASE: olympus
+    
     services:
       postgres:
         image: postgres:16
         env:
-          POSTGRES_PASSWORD: postgres
-          POSTGRES_DB: olympus_test
+          POSTGRES_USER: olympus
+          POSTGRES_PASSWORD: olympus
+          POSTGRES_DB: olympus
         options: >-
-          --health-cmd pg_isready
-          --health-interval 10s
-          --health-timeout 5s
-          --health-retries 5
+          --health-cmd="pg_isready -U olympus -d olympus"
+          --health-interval=5s
+          --health-timeout=5s
+          --health-retries=20
         ports:
           - 5432:5432
     
@@ -39,9 +50,6 @@ jobs:
         pip install -r requirements-dev.txt
     
     - name: Run pytest
-      env:
-        TEST_DATABASE_URL: postgresql://postgres:postgres@localhost:5432/olympus_test
-        DATABASE_URL: postgresql://postgres:postgres@localhost:5432/olympus_test
       run: |
         pytest tests/ -v --tb=short
     

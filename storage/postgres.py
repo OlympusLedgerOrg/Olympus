@@ -389,10 +389,21 @@ class StorageLayer:
                 return None
 
             # Reconstruct header
+            # Convert timestamp to ISO 8601 string if it's a datetime object
+            ts_value = row['ts']
+            if isinstance(ts_value, str):
+                timestamp_str = ts_value
+            elif isinstance(ts_value, datetime):
+                # It's a datetime object from Postgres - convert to ISO 8601 string
+                timestamp_str = ts_value.isoformat().replace('+00:00', 'Z')
+            else:
+                # Unexpected type - raise error for clarity
+                raise TypeError(f"Unexpected timestamp type: {type(ts_value).__name__}. Expected str or datetime.")
+            
             header = {
                 "shard_id": shard_id,
                 "root_hash": bytes(row['root']).hex(),
-                "timestamp": row['ts'],
+                "timestamp": timestamp_str,
                 "previous_header_hash": row['previous_header_hash'],
                 "header_hash": bytes(row['header_hash']).hex()
             }
