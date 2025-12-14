@@ -1,17 +1,11 @@
-"""
-Merkle tree implementation for Olympus
-
-This module implements Merkle trees and Merkle forests for efficient
-cryptographic commitments and proof generation.
-"""
+"""Ordered Merkle tree implementation using BLAKE3."""
 
 from typing import List, Tuple, Optional
 from dataclasses import dataclass
-from .hashes import hash_bytes, merkle_parent_hash
+from .hashes import node_hash
 
-# Merkle tree version - DO NOT CHANGE
-# Changing this breaks all historical Merkle proofs
-MERKLE_VERSION = "merkle_v1"
+# Merkle tree version - bump on semantic changes
+MERKLE_VERSION = "merkle_v2"
 
 
 @dataclass
@@ -59,7 +53,7 @@ class MerkleTree:
         for i in range(0, len(hashes), 2):
             left_hash = hashes[i]
             right_hash = hashes[i + 1] if i + 1 < len(hashes) else hashes[i]
-            parent_hash = merkle_parent_hash(left_hash, right_hash)
+            parent_hash = node_hash(left_hash, right_hash)
             parents.append(parent_hash)
         
         return self._build_tree(parents)
@@ -106,7 +100,7 @@ class MerkleTree:
             for i in range(0, len(hashes), 2):
                 left = hashes[i]
                 right = hashes[i + 1] if i + 1 < len(hashes) else hashes[i]
-                new_hashes.append(merkle_parent_hash(left, right))
+                new_hashes.append(node_hash(left, right))
             
             hashes = new_hashes
             index = index // 2
@@ -133,8 +127,8 @@ def verify_proof(proof: MerkleProof) -> bool:
     
     for sibling_hash, is_right in proof.siblings:
         if is_right:
-            current_hash = merkle_parent_hash(current_hash, sibling_hash)
+            current_hash = node_hash(current_hash, sibling_hash)
         else:
-            current_hash = merkle_parent_hash(sibling_hash, current_hash)
+            current_hash = node_hash(sibling_hash, current_hash)
     
     return current_hash == proof.root_hash

@@ -8,9 +8,8 @@ consistent hashing regardless of superficial formatting differences.
 import json
 from typing import Any, Dict, List, Union
 
-# Canonical format version - DO NOT CHANGE
-# Changing this breaks all historical document proofs
-CANONICAL_VERSION = "canonical_v1"
+# Canonical format version - bump when canonical semantics change
+CANONICAL_VERSION = "canonical_v2"
 
 
 def canonicalize_json(data: Dict[str, Any]) -> str:

@@ -1,0 +1,8 @@
+fastapi
+uvicorn
+blake3
+PyNaCl
+pydantic
+sqlalchemy
+psycopg2-binary
+pytest
