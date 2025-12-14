@@ -12,6 +12,14 @@ from typing import Union
 # Hash field separator for structured data
 HASH_SEPARATOR = "|"
 
+# Hash domain separation prefixes - DO NOT CHANGE
+# These prefixes are protocol-critical. Changing them breaks all historical proofs.
+DOC_PREFIX = b"OLYMPUS_DOC_V1"
+NS_PREFIX = b"OLYMPUS_NS_V1"
+LEAF_PREFIX = b"OLYMPUS_LEAF_V1"
+SHARD_PREFIX = b"OLYMPUS_SHARD_V1"
+ANCHOR_PREFIX = b"OLYMPUS_ANCHOR_V1"
+
 
 def hash_bytes(data: bytes) -> bytes:
     """

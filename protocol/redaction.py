@@ -153,3 +153,30 @@ class RedactionProtocol:
                 result.append(redaction_marker)
         
         return result
+
+
+def apply_redaction(original: str, mask: List[int], replacement: str = "█") -> str:
+    """
+    Apply a redaction mask to text.
+    
+    Semantics: 1 = redact, 0 = keep
+    
+    Args:
+        original: Original text string
+        mask: List of integers (0 or 1) indicating which characters to redact
+        replacement: String to use for redacted characters
+        
+    Returns:
+        Redacted text with replacement characters
+    """
+    if len(mask) != len(original):
+        raise ValueError("Mask length must equal original text length")
+    
+    result = []
+    for char, mask_bit in zip(original, mask):
+        if mask_bit == 1:
+            result.append(replacement)
+        else:
+            result.append(char)
+    
+    return ''.join(result)
