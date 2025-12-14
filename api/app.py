@@ -7,12 +7,17 @@ to verify records, proofs, signatures, and ledger integrity.
 All responses include everything required for offline verification.
 """
 
+import logging
 import os
 
 from fastapi import FastAPI, HTTPException, Query
 from pydantic import BaseModel
 
 from storage.postgres import StorageLayer
+
+# Set up logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
 
 # API models for responses
@@ -92,9 +97,10 @@ storage = StorageLayer(DATABASE_URL)
 # Initialize schema on app startup
 try:
     storage.init_schema()
+    logger.info("Database schema initialized successfully")
 except Exception as e:
-    print(f"Warning: Failed to initialize schema on startup: {e}")
-    print("Schema will be initialized on first request if needed.")
+    logger.warning(f"Failed to initialize schema on startup: {e}")
+    logger.warning("Schema will be initialized on first request if needed")
 
 
 @app.get("/")
