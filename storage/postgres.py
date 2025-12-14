@@ -38,7 +38,7 @@ class StorageLayer:
         """
         self.connection_string = connection_string
 
-    def _get_connection(self) -> psycopg.Connection[dict[str, Any]]:
+    def _get_connection(self) -> psycopg.Connection[Any]:
         """
         Get a database connection with autocommit disabled (transaction mode).
 
@@ -50,9 +50,8 @@ class StorageLayer:
         Returns:
             Connection in transaction mode
         """
-        connection: psycopg.Connection[dict[str, Any]] = psycopg.connect(
+        connection: psycopg.Connection[Any] = psycopg.connect(
             self.connection_string,
-            row_factory=dict_row,
             autocommit=False
         )
         return connection
@@ -69,7 +68,7 @@ class StorageLayer:
 
         # BEGIN TRANSACTION (implicit via context manager)
         with self._get_connection() as conn:
-            with conn.cursor() as cur:
+            with conn.cursor(row_factory=dict_row) as cur:
                 cur.execute(schema_sql)
             # COMMIT TRANSACTION (explicit)
             conn.commit()
@@ -119,7 +118,7 @@ class StorageLayer:
         key = record_key(record_type, record_id, version)
 
         # BEGIN TRANSACTION (implicit via context manager)
-        with self._get_connection() as conn, conn.cursor() as cur:
+        with self._get_connection() as conn, conn.cursor(row_factory=dict_row) as cur:
             # Load current tree state
             tree = self._load_tree_state(cur, shard_id)
 
@@ -157,7 +156,10 @@ class StorageLayer:
                 (shard_id,)
             )
             prev_row = cur.fetchone()
-            prev_header_hash = bytes(prev_row['header_hash']).hex() if prev_row else ""
+            if prev_row is None:
+                prev_header_hash = ""
+            else:
+                prev_header_hash = bytes(prev_row['header_hash']).hex()
 
             # Get next sequence number
             cur.execute(
@@ -219,7 +221,10 @@ class StorageLayer:
                 (shard_id,)
             )
             prev_ledger_row = cur.fetchone()
-            prev_entry_hash = bytes(prev_ledger_row['entry_hash']).hex() if prev_ledger_row else ""
+            if prev_ledger_row is None:
+                prev_entry_hash = ""
+            else:
+                prev_entry_hash = bytes(prev_ledger_row['entry_hash']).hex()
 
             # Get next ledger sequence number
             cur.execute(
@@ -307,7 +312,7 @@ class StorageLayer:
         key = record_key(record_type, record_id, version)
 
         # READ-ONLY: No commit needed, transaction auto-rolls back
-        with self._get_connection() as conn, conn.cursor() as cur:
+        with self._get_connection() as conn, conn.cursor(row_factory=dict_row) as cur:
             # Check if leaf exists
             cur.execute(
                 """
@@ -353,7 +358,7 @@ class StorageLayer:
         key = record_key(record_type, record_id, version)
 
         # READ-ONLY: No commit needed, transaction auto-rolls back
-        with self._get_connection() as conn, conn.cursor() as cur:
+        with self._get_connection() as conn, conn.cursor(row_factory=dict_row) as cur:
             # Check if leaf exists
             cur.execute(
                 """
@@ -383,7 +388,7 @@ class StorageLayer:
             Dictionary with header, signature, and pubkey, or None if no headers exist
         """
         # READ-ONLY: No commit needed, transaction auto-rolls back
-        with self._get_connection() as conn, conn.cursor() as cur:
+        with self._get_connection() as conn, conn.cursor(row_factory=dict_row) as cur:
             cur.execute(
                 """
                     SELECT root, header_hash, sig, pubkey, previous_header_hash, ts, seq
@@ -441,7 +446,7 @@ class StorageLayer:
             List of ledger entries (most recent first)
         """
         # READ-ONLY: No commit needed, transaction auto-rolls back
-        with self._get_connection() as conn, conn.cursor() as cur:
+        with self._get_connection() as conn, conn.cursor(row_factory=dict_row) as cur:
             cur.execute(
                 """
                     SELECT payload, entry_hash
@@ -480,7 +485,7 @@ class StorageLayer:
             List of shard IDs
         """
         # READ-ONLY: No commit needed, transaction auto-rolls back
-        with self._get_connection() as conn, conn.cursor() as cur:
+        with self._get_connection() as conn, conn.cursor(row_factory=dict_row) as cur:
             cur.execute(
                 """
                     SELECT DISTINCT shard_id FROM shard_headers
@@ -504,7 +509,7 @@ class StorageLayer:
             True if root is valid
         """
         # READ-ONLY: No commit needed, transaction auto-rolls back
-        with self._get_connection() as conn, conn.cursor() as cur:
+        with self._get_connection() as conn, conn.cursor(row_factory=dict_row) as cur:
             # Get latest header root
             cur.execute(
                 """
