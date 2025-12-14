@@ -38,7 +38,7 @@ class StorageLayer:
         """
         self.connection_string = connection_string
 
-    def _get_connection(self) -> psycopg.Connection:
+    def _get_connection(self) -> psycopg.Connection[dict[str, Any]]:
         """
         Get a database connection with autocommit disabled (transaction mode).
 
@@ -50,7 +50,12 @@ class StorageLayer:
         Returns:
             Connection in transaction mode
         """
-        return psycopg.connect(self.connection_string, row_factory=dict_row, autocommit=False)
+        connection: psycopg.Connection[dict[str, Any]] = psycopg.connect(
+            self.connection_string,
+            row_factory=dict_row,
+            autocommit=False
+        )
+        return connection
 
     def init_schema(self) -> None:
         """
@@ -163,7 +168,10 @@ class StorageLayer:
                     """,
                 (shard_id,)
             )
-            seq = cur.fetchone()['next_seq']
+            seq_row = cur.fetchone()
+            if seq_row is None:
+                raise RuntimeError("Failed to compute next shard header sequence")
+            seq = seq_row['next_seq']
 
             # Create shard header
             ts = datetime.now(UTC).isoformat().replace('+00:00', 'Z')
@@ -222,7 +230,10 @@ class StorageLayer:
                     """,
                 (shard_id,)
             )
-            ledger_seq = cur.fetchone()['next_seq']
+            ledger_row = cur.fetchone()
+            if ledger_row is None:
+                raise RuntimeError("Failed to compute next ledger sequence")
+            ledger_seq = ledger_row['next_seq']
 
             # Create ledger entry payload
             ledger_payload = {
@@ -518,7 +529,7 @@ class StorageLayer:
 
             return persisted_root == computed_root
 
-    def _load_tree_state(self, cur: psycopg.Cursor, shard_id: str) -> SparseMerkleTree:
+    def _load_tree_state(self, cur: psycopg.Cursor[dict[str, Any]], shard_id: str) -> SparseMerkleTree:
         """
         Load sparse Merkle tree state from database.
 
@@ -553,7 +564,7 @@ class StorageLayer:
 
         return tree
 
-    def _persist_tree_nodes(self, cur: psycopg.Cursor, shard_id: str, tree: SparseMerkleTree) -> None:
+    def _persist_tree_nodes(self, cur: psycopg.Cursor[dict[str, Any]], shard_id: str, tree: SparseMerkleTree) -> None:
         """
         Persist tree nodes to database.
 

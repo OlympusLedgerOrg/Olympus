@@ -9,6 +9,7 @@ All responses include everything required for offline verification.
 
 import logging
 import os
+from typing import Any
 from urllib.parse import urlparse
 
 from fastapi import FastAPI, HTTPException, Query
@@ -144,7 +145,7 @@ except Exception as e:
 
 
 @app.get("/")
-async def root():
+async def root() -> dict[str, Any]:
     """API root with basic info."""
     return {
         "name": "Olympus Public Audit API",
@@ -160,7 +161,7 @@ async def root():
 
 
 @app.get("/shards", response_model=list[ShardInfo])
-async def list_shards():
+async def list_shards() -> list[ShardInfo]:
     """
     List all shards with their latest state.
 
@@ -186,7 +187,7 @@ async def list_shards():
 
 
 @app.get("/shards/{shard_id}/header/latest", response_model=ShardHeaderResponse)
-async def get_latest_header(shard_id: str):
+async def get_latest_header(shard_id: str) -> ShardHeaderResponse:
     """
     Get the latest shard header with signature.
 
@@ -238,7 +239,7 @@ async def get_proof(
     record_type: str = Query(..., description="Type of record (e.g., 'document')"),
     record_id: str = Query(..., description="Record identifier"),
     version: int = Query(..., description="Record version", ge=1)
-):
+) -> ExistenceProofResponse | NonExistenceProofResponse:
     """
     Get existence or non-existence proof for a record.
 
@@ -320,7 +321,7 @@ async def get_proof(
 async def get_ledger_tail(
     shard_id: str,
     n: int = Query(10, description="Number of entries to retrieve", ge=1, le=1000)
-):
+) -> LedgerTailResponse:
     """
     Get the last N ledger entries for a shard.
 
@@ -357,6 +358,6 @@ async def get_ledger_tail(
 
 # Health check endpoint
 @app.get("/health")
-async def health():
+async def health() -> dict[str, str]:
     """Health check endpoint."""
     return {"status": "healthy", "version": "0.5.0"}
