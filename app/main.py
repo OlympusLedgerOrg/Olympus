@@ -59,6 +59,11 @@ def proof_existence(shard_id: str, key: str, version: Optional[str] = None):
     a structured proof with HTTP 200. The proof.exists field indicates
     whether the key actually exists.
     
+    NOTE: Both /proof/existence and /proof/nonexistence endpoints return
+    identical results. They exist as separate routes for API ergonomics
+    and semantic clarity when querying, but both return unified proofs
+    that indicate actual existence status via the proof.exists field.
+    
     ABSENCE IS NOT ERROR: always 200 with proof.exists flag.
     Missing key is NOT an error; proof.exists communicates absence.
     
@@ -92,6 +97,11 @@ def proof_nonexistence(shard_id: str, key: str, version: Optional[str] = None):
     This endpoint is named 'nonexistence' for ergonomics, but ALWAYS returns
     a structured proof with HTTP 200. The proof.exists field indicates
     whether the key actually exists.
+    
+    NOTE: Both /proof/existence and /proof/nonexistence endpoints return
+    identical results. They exist as separate routes for API ergonomics
+    and semantic clarity when querying, but both return unified proofs
+    that indicate actual existence status via the proof.exists field.
     
     ABSENCE IS NOT ERROR: always 200 with proof.exists flag.
     Missing key is NOT an error; proof.exists communicates absence.

@@ -6,6 +6,7 @@ Wires to existing protocol/ssmf.py. Implements unified proof that never raises o
 
 from typing import Dict, Optional, Union
 from protocol.ssmf import SparseMerkleTree, ExistenceProof, NonExistenceProof
+from protocol.hashes import forest_root
 
 
 class ShardState:
@@ -30,12 +31,12 @@ class ShardState:
         Args:
             key: 32-byte key to prove
             version: Optional version parameter (reserved for future use, currently ignored)
+                     Note: Versioning must be handled by caller via record_key() when constructing the key
             
         Returns:
             ExistenceProof if key exists, NonExistenceProof otherwise
         """
-        # Note: version parameter is reserved for future use but currently ignored
-        # The tree.prove() method already handles versioning via record_key()
+        # Version parameter is reserved for future use but currently ignored
         return self.tree.prove(key)
 
 
@@ -127,7 +128,6 @@ class OlympusState:
         
         # Compute global root using forest_root over header hashes
         # For now, use shard roots as a proxy (in full impl, would use actual header hashes)
-        from protocol.hashes import forest_root
         header_hashes = [bytes.fromhex(root) for root in shard_roots.values()]
         
         if header_hashes:
