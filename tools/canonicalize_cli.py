@@ -5,9 +5,9 @@ Canonicalization CLI for Olympus
 This tool canonicalizes documents according to Olympus protocol standards.
 """
 
-import sys
-import json
 import argparse
+import json
+import sys
 from pathlib import Path
 
 # Add parent directory to path for imports
@@ -43,12 +43,12 @@ def main():
         default='json',
         help='Output format (default: json)'
     )
-    
+
     args = parser.parse_args()
-    
+
     # Read input document
     try:
-        with open(args.input_file, 'r') as f:
+        with open(args.input_file) as f:
             document = json.load(f)
     except FileNotFoundError:
         print(f"Error: File not found: {args.input_file}", file=sys.stderr)
@@ -56,7 +56,7 @@ def main():
     except json.JSONDecodeError as e:
         print(f"Error: Invalid JSON: {e}", file=sys.stderr)
         return 1
-    
+
     # Canonicalize
     try:
         canonical = canonicalize_document(document)
@@ -64,7 +64,7 @@ def main():
     except Exception as e:
         print(f"Error during canonicalization: {e}", file=sys.stderr)
         return 1
-    
+
     # Compute output
     if args.hash:
         output = hash_bytes(canonical_bytes).hex()
@@ -75,7 +75,7 @@ def main():
             output = canonical_bytes.decode('utf-8')
         elif args.format == 'hex':
             output = canonical_bytes.hex()
-    
+
     # Write output
     if args.output:
         try:
@@ -89,7 +89,7 @@ def main():
             return 1
     else:
         print(output)
-    
+
     return 0
 
 

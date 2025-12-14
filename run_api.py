@@ -9,8 +9,8 @@ Environment variables:
     DATABASE_URL: Postgres connection string (required)
 """
 
-import sys
 import os
+import sys
 
 # Check for required environment variable
 if 'DATABASE_URL' not in os.environ:
@@ -19,17 +19,18 @@ if 'DATABASE_URL' not in os.environ:
     sys.exit(1)
 
 import uvicorn
+
 from api.app import app
 
 if __name__ == "__main__":
     import argparse
-    
+
     parser = argparse.ArgumentParser(description="Run Olympus Public Audit API")
     parser.add_argument("--host", default="0.0.0.0", help="Host to bind to")
     parser.add_argument("--port", type=int, default=8000, help="Port to bind to")
-    
+
     args = parser.parse_args()
-    
+
     print(f"Starting Olympus Public Audit API on {args.host}:{args.port}")
     print(f"Database: {os.environ['DATABASE_URL']}")
     print("\nEndpoints:")
@@ -40,5 +41,5 @@ if __name__ == "__main__":
     print("  GET  /shards/{shard_id}/proof")
     print("  GET  /ledger/{shard_id}/tail")
     print("\nPress CTRL+C to stop\n")
-    
+
     uvicorn.run(app, host=args.host, port=args.port)
