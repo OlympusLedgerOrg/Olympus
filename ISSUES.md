@@ -44,7 +44,7 @@ Forthcoming Python releases will remove `datetime.utcnow()`. Shipping deprecated
 
 ### Acceptance criteria (objective, testable)
 
-- All calls to `datetime.utcnow()` replaced with `datetime.now(timezone.utc)`
+- All calls to `datetime.utcnow()` replaced with `datetime.now(UTC)`
 - Tests pass on Python 3.12+
 - No deprecation warnings in test or CI output
 

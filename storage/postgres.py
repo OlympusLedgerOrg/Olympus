@@ -20,6 +20,7 @@ from protocol.hashes import record_key
 from protocol.ledger import LedgerEntry
 from protocol.shards import create_shard_header, sign_header
 from protocol.ssmf import ExistenceProof, NonExistenceProof, SparseMerkleTree
+from protocol.timestamps import current_timestamp
 
 
 class StorageLayer:
@@ -166,7 +167,7 @@ class StorageLayer:
             seq = cur.fetchone()['next_seq']
 
             # Create shard header
-            ts = datetime.now(UTC).isoformat().replace('+00:00', 'Z')
+            ts = current_timestamp()
             header = create_shard_header(
                 shard_id=shard_id,
                 root_hash=root_hash,
