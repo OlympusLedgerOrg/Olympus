@@ -125,15 +125,19 @@ try:
     storage.init_schema()
     logger.info("Database schema initialized successfully")
     
-    # Quick connectivity check
-    with connect(DATABASE_URL) as conn:
-        with conn.cursor() as cur:
-            cur.execute("SELECT 1")
-            result = cur.fetchone()
-            if result and result[0] == 1:
-                logger.info("Database connectivity verified: SELECT 1 succeeded")
-            else:
-                logger.error("Database connectivity check failed: unexpected result")
+    # Quick connectivity check with explicit error handling
+    try:
+        with connect(DATABASE_URL) as conn:
+            with conn.cursor() as cur:
+                cur.execute("SELECT 1")
+                result = cur.fetchone()
+                if result and result[0] == 1:
+                    logger.info("Database connectivity verified: SELECT 1 succeeded")
+                else:
+                    raise RuntimeError(f"Database connectivity check failed: unexpected result {result}")
+    except Exception as conn_error:
+        logger.error(f"Database connectivity check failed: {conn_error}")
+        raise RuntimeError("Failed to verify database connectivity") from conn_error
 except Exception as e:
     logger.error(f"Failed to initialize database: {e}")
     logger.error("Application startup failed - database not accessible")
