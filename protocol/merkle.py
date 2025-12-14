@@ -55,13 +55,7 @@ class MerkleTree:
         for i in range(0, len(hashes), 2):
             left_hash = hashes[i]
             right_hash = hashes[i + 1] if i + 1 < len(hashes) else hashes[i]
-            
-            left_node = MerkleNode(hash=left_hash)
-            right_node = MerkleNode(hash=right_hash)
-            
             parent_hash = merkle_parent_hash(left_hash, right_hash)
-            parent = MerkleNode(hash=parent_hash, left=left_node, right=right_node)
-            
             parents.append(parent_hash)
         
         return self._build_tree(parents)

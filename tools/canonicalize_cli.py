@@ -60,7 +60,7 @@ def main():
     # Canonicalize
     try:
         canonical = canonicalize_document(document)
-        canonical_bytes = document_to_bytes(document)
+        canonical_bytes = document_to_bytes(canonical)
     except Exception as e:
         print(f"Error during canonicalization: {e}", file=sys.stderr)
         return 1

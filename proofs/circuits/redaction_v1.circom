@@ -80,8 +80,9 @@ template MerkleTreeBuilder(numLeaves) {
     signal input leaves[numLeaves];
     signal output root;
     
-    // Simplified: just hash all leaves together
-    // In production, build proper Merkle tree
+    // NOTE: This is a simplified reference implementation for demonstration.
+    // Production version should build a proper Merkle tree structure
+    // matching the Python implementation's bottom-up construction.
     component hasher = Poseidon(numLeaves);
     for (var i = 0; i < numLeaves; i++) {
         hasher.inputs[i] <== leaves[i];
