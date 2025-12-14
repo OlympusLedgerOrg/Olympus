@@ -91,7 +91,7 @@ app = FastAPI(
 
 # Get database connection string from environment with explicit credentials
 # NEVER allow implicit OS user (root in CI) to be used
-DEFAULT_DATABASE_URL = "postgresql+psycopg://olympus:olympus@localhost:5432/olympus"
+DEFAULT_DATABASE_URL = "postgresql://olympus:olympus@localhost:5432/olympus"
 DATABASE_URL = os.environ.get('DATABASE_URL', DEFAULT_DATABASE_URL)
 
 # Validate that DATABASE_URL contains explicit username/password
