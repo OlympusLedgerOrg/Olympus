@@ -83,7 +83,7 @@ Each stage must be independently verifiable and auditable.
 
 Olympus intentionally does NOT:
 - Assert that governments are honest
-Guarantee completeness of public records
+- Guarantee completeness of public records
 - Decide what should be redacted
 - Require trust in a single institution
 
