@@ -7,7 +7,7 @@ This module implements the append-only ledger for recording document commitments
 from typing import List, Optional, Dict, Any
 from dataclasses import dataclass, asdict
 from datetime import datetime
-from .hashes import hash_bytes, hash_string
+from .hashes import hash_bytes, hash_string, HASH_SEPARATOR
 
 
 @dataclass
@@ -66,7 +66,7 @@ class Ledger:
         previous_hash = self.entries[-1].entry_hash if self.entries else ""
         
         # Compute entry hash
-        entry_data = f"{timestamp}|{document_hash}|{merkle_root}|{shard_id}|{source_signature}|{previous_hash}"
+        entry_data = HASH_SEPARATOR.join([str(timestamp), str(document_hash), str(merkle_root), str(shard_id), str(source_signature), str(previous_hash)])
         entry_hash = hash_string(entry_data).hex()
         
         entry = LedgerEntry(
@@ -114,7 +114,7 @@ class Ledger:
         # Check each entry
         for i, entry in enumerate(self.entries):
             # Verify entry hash
-            entry_data = f"{entry.timestamp}|{entry.document_hash}|{entry.merkle_root}|{entry.shard_id}|{entry.source_signature}|{entry.previous_hash}"
+            entry_data = HASH_SEPARATOR.join([str(entry.timestamp), str(entry.document_hash), str(entry.merkle_root), str(entry.shard_id), str(entry.source_signature), str(entry.previous_hash)])
             expected_hash = hash_string(entry_data).hex()
             if entry.entry_hash != expected_hash:
                 return False
