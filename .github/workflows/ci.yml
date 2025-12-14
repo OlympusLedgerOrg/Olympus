@@ -48,15 +48,15 @@ jobs:
         python -m pip install --upgrade pip
         pip install -r requirements.txt
         pip install -r requirements-dev.txt
-    
+
+    - name: Run ruff linting
+      run: |
+        ruff check protocol/ storage/ api/ app/ tests/
+
+    - name: Run mypy type checking
+      run: |
+        mypy protocol/ storage/ api/ --ignore-missing-imports
+
     - name: Run pytest
       run: |
         pytest tests/ -v --tb=short
-    
-    - name: Run ruff
-      run: |
-        ruff check protocol/ storage/ api/ tests/
-    
-    - name: Run mypy
-      run: |
-        mypy protocol/ storage/ api/ --ignore-missing-imports

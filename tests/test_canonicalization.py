@@ -1,8 +1,9 @@
 from protocol.canonical import canonicalize_text
 
+
 def test_canonicalization_is_deterministic():
     text = "Hello   world\n\nThis is Olympus.\r\n"
-    
+
     first = canonicalize_text(text)
     second = canonicalize_text(text)
 
@@ -26,13 +27,13 @@ def test_line_endings_normalized():
 def test_canonicalization_golden_vector():
     """
     Golden vector test to anchor canonicalization behavior across time.
-    
+
     This test ensures that the canonical bytes never subtly change.
     DO NOT CHANGE the expected bytes without a protocol version bump.
-    
+
     If this test fails, it means canonicalization semantics have changed,
     which would break all historical document proofs.
-    
+
     Note: Canonicalization normalizes \\r\\n (Windows) and \\r (Mac) to \\n (Unix)
     and strips leading/trailing empty lines while preserving internal structure.
     """
@@ -40,17 +41,17 @@ def test_canonicalization_golden_vector():
     raw1 = "Hello   world\r\n"
     expected1 = b"Hello world"
     assert canonicalize_text(raw1).encode('utf-8') == expected1
-    
+
     # Test case 2: Multiple spaces and line preservation (\r\n -> \n)
     raw2 = "Line1\r\nLine2\r\n"
     expected2 = b"Line1\nLine2"
     assert canonicalize_text(raw2).encode('utf-8') == expected2
-    
+
     # Test case 3: Leading/trailing whitespace removal
     raw3 = "  Trimmed  content  \r\n"
     expected3 = b"Trimmed content"
     assert canonicalize_text(raw3).encode('utf-8') == expected3
-    
+
     # Test case 4: Complex multi-line document
     raw4 = "First   line\r\n\r\nSecond   line\r\n"
     expected4 = b"First line\n\nSecond line"

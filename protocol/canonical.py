@@ -6,20 +6,20 @@ consistent hashing regardless of superficial formatting differences.
 """
 
 import json
-from typing import Any, Dict, List, Union
+from typing import Any
 
 # Canonical format version - DO NOT CHANGE
 # Changing this breaks all historical document proofs
 CANONICAL_VERSION = "canonical_v1"
 
 
-def canonicalize_json(data: Dict[str, Any]) -> str:
+def canonicalize_json(data: dict[str, Any]) -> str:
     """
     Canonicalize a JSON-serializable dictionary.
-    
+
     Args:
         data: Dictionary to canonicalize
-        
+
     Returns:
         Canonical JSON string representation
     """
@@ -29,10 +29,10 @@ def canonicalize_json(data: Dict[str, Any]) -> str:
 def normalize_whitespace(text: str) -> str:
     """
     Normalize whitespace in text.
-    
+
     Args:
         text: Input text
-        
+
     Returns:
         Text with normalized whitespace
     """
@@ -41,21 +41,21 @@ def normalize_whitespace(text: str) -> str:
     return ' '.join(text.split())
 
 
-def canonicalize_document(doc: Dict[str, Any]) -> Dict[str, Any]:
+def canonicalize_document(doc: dict[str, Any]) -> dict[str, Any]:
     """
     Canonicalize a document structure.
-    
+
     This ensures deterministic ordering and formatting.
-    
+
     Args:
         doc: Document to canonicalize
-        
+
     Returns:
         Canonicalized document
     """
     if not isinstance(doc, dict):
         raise ValueError("Document must be a dictionary")
-    
+
     canonical = {}
     for key in sorted(doc.keys()):
         value = doc[key]
@@ -70,17 +70,17 @@ def canonicalize_document(doc: Dict[str, Any]) -> Dict[str, Any]:
             canonical[key] = normalize_whitespace(value)
         else:
             canonical[key] = value
-    
+
     return canonical
 
 
-def document_to_bytes(doc: Dict[str, Any]) -> bytes:
+def document_to_bytes(doc: dict[str, Any]) -> bytes:
     """
     Convert document to canonical byte representation.
-    
+
     Args:
         doc: Document to convert
-        
+
     Returns:
         Canonical bytes
     """
@@ -92,27 +92,27 @@ def document_to_bytes(doc: Dict[str, Any]) -> bytes:
 def canonicalize_text(text: str) -> str:
     """
     Canonicalize text by normalizing whitespace and line endings.
-    
+
     This ensures the same content produces the same canonical bytes
     regardless of whitespace or line ending differences.
-    
+
     Args:
         text: Input text
-        
+
     Returns:
         Canonicalized text with normalized whitespace and Unix line endings
     """
     # Normalize line endings to Unix style (\n)
     text = text.replace('\r\n', '\n').replace('\r', '\n')
-    
+
     # Normalize multiple spaces to single space
     lines = text.split('\n')
     normalized_lines = [' '.join(line.split()) for line in lines]
-    
+
     # Remove empty lines at start and end, preserve internal structure
     while normalized_lines and not normalized_lines[0]:
         normalized_lines.pop(0)
     while normalized_lines and not normalized_lines[-1]:
         normalized_lines.pop()
-    
+
     return '\n'.join(normalized_lines)

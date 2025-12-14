@@ -1,5 +1,6 @@
 from protocol.redaction import apply_redaction
 
+
 def test_redaction_mask_semantics():
     original = "ABCDE"
     mask     = [0, 1, 0, 1, 0]  # redact B and D

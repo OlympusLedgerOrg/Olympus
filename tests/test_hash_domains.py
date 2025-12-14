@@ -1,12 +1,13 @@
 from protocol.hashes import (
+    FOREST_PREFIX,
+    HDR_PREFIX,
     KEY_PREFIX,
     LEAF_PREFIX,
-    NODE_PREFIX,
-    HDR_PREFIX,
-    FOREST_PREFIX,
-    POLICY_PREFIX,
     LEDGER_PREFIX,
+    NODE_PREFIX,
+    POLICY_PREFIX,
 )
+
 
 def test_hash_domain_prefixes_are_frozen():
     """
