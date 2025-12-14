@@ -43,7 +43,7 @@ A shard state is considered **final** when all of the following conditions are m
 
 2. **M-of-N Guardian Replication** — The shard state has been successfully replicated to at least **M** guardian nodes out of **N** total guardian nodes in the federation
    - Minimum threshold: M ≥ ⌈(N+1)/2⌉ (simple majority)
-   - Recommended threshold: M ≥ ⌈2N/3⌉ + 1 (supermajority for Byzantine fault tolerance)
+   - Recommended threshold: M ≥ ⌈2N/3⌉ (supermajority for Byzantine fault tolerance)
    - Each guardian node must acknowledge receipt with a signed commitment
 
 3. **No Conflicting State** — No conflicting signed shard state with the same parent hash exists
