@@ -130,15 +130,10 @@ class OlympusState:
         # For now, use shard roots as a proxy (in full impl, would use actual header hashes)
         header_hashes = [bytes.fromhex(root) for root in shard_roots.values()]
 
-        if header_hashes:
-            global_root = forest_root(header_hashes).hex()
-        else:
-            # Empty forest - use a zero hash
-            global_root = (b'\x00' * 32).hex()
+        global_root = forest_root(header_hashes).hex() if header_hashes else (b"\x00" * 32).hex()
 
         return {
             "global_root": global_root,
             "shards": shard_roots
         }
-
 

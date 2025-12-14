@@ -79,7 +79,7 @@ def proof_existence(shard_id: str, key: str, version: str | None = None):
         key_bytes = bytes.fromhex(key)
     except ValueError:
         # Invalid hex -> HTTP 400
-        raise HTTPException(status_code=400, detail="key must be hex")
+        raise HTTPException(status_code=400, detail="key must be hex") from None
 
     # Call state.proof() - never raises on absence
     proof = state.proof(shard_id, key_bytes, version)
@@ -118,7 +118,7 @@ def proof_nonexistence(shard_id: str, key: str, version: str | None = None):
         key_bytes = bytes.fromhex(key)
     except ValueError:
         # Invalid hex -> HTTP 400
-        raise HTTPException(status_code=400, detail="key must be hex")
+        raise HTTPException(status_code=400, detail="key must be hex") from None
 
     # Call state.proof() - never raises on absence
     proof = state.proof(shard_id, key_bytes, version)

@@ -338,12 +338,11 @@ def verify_proof(proof: ExistenceProof) -> bool:
     for level in range(256):
         sibling = proof.siblings[level]
         bit_pos = 255 - level  # Map from level to bit position
-        if path[bit_pos] == 0:
-            # Current is left child
-            current_hash = node_hash(current_hash, sibling)
-        else:
-            # Current is right child
-            current_hash = node_hash(sibling, current_hash)
+        current_hash = (
+            node_hash(current_hash, sibling)
+            if path[bit_pos] == 0
+            else node_hash(sibling, current_hash)
+        )
 
     return current_hash == proof.root_hash
 
@@ -379,12 +378,11 @@ def verify_nonexistence_proof(proof: NonExistenceProof) -> bool:
     for level in range(256):
         sibling = proof.siblings[level]
         bit_pos = 255 - level  # Map from level to bit position
-        if path[bit_pos] == 0:
-            # Current is left child
-            current_hash = node_hash(current_hash, sibling)
-        else:
-            # Current is right child
-            current_hash = node_hash(sibling, current_hash)
+        current_hash = (
+            node_hash(current_hash, sibling)
+            if path[bit_pos] == 0
+            else node_hash(sibling, current_hash)
+        )
 
     return current_hash == proof.root_hash
 
@@ -433,4 +431,3 @@ def is_nonexistence_proof(proof: ExistenceProof | NonExistenceProof) -> bool:
         True if proof is a NonExistenceProof, False if ExistenceProof
     """
     return isinstance(proof, NonExistenceProof)
-
