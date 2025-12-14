@@ -89,8 +89,30 @@ app = FastAPI(
     version="0.5.0"
 )
 
-# Get database connection string from environment
-DATABASE_URL = os.environ.get('DATABASE_URL', 'postgresql://postgres:postgres@localhost:5432/olympus')
+# Get database connection string from environment with explicit credentials
+# NEVER allow implicit OS user (root in CI) to be used
+DEFAULT_DATABASE_URL = "postgresql+psycopg://olympus:olympus@localhost:5432/olympus"
+DATABASE_URL = os.environ.get('DATABASE_URL', DEFAULT_DATABASE_URL)
+
+# Validate that DATABASE_URL contains explicit username/password
+# This prevents "role root does not exist" errors in CI
+if "@" in DATABASE_URL:
+    # Extract userinfo (username:password) before @ symbol
+    userinfo = DATABASE_URL.split("@", 1)[0]
+    if "://" in userinfo:
+        userinfo = userinfo.split("://", 1)[1]
+    if userinfo.strip() == "":
+        raise RuntimeError(f"DATABASE_URL missing username/password: {DATABASE_URL}")
+else:
+    # If no '@', most likely no userinfo; force explicit credentials
+    raise RuntimeError(f"DATABASE_URL must include username/password and host: {DATABASE_URL}")
+
+# Log database connection info (redact password)
+logger.info(f"Connecting to database: scheme={DATABASE_URL.split('://')[0]}, "
+            f"user={userinfo.split(':')[0] if ':' in userinfo else userinfo}, "
+            f"host={DATABASE_URL.split('@')[1].split('/')[0] if '@' in DATABASE_URL else 'unknown'}, "
+            f"db={DATABASE_URL.split('/')[-1] if '/' in DATABASE_URL else 'unknown'}")
+
 storage = StorageLayer(DATABASE_URL)
 
 
@@ -98,9 +120,21 @@ storage = StorageLayer(DATABASE_URL)
 try:
     storage.init_schema()
     logger.info("Database schema initialized successfully")
+    
+    # Quick connectivity check
+    from psycopg import connect
+    with connect(DATABASE_URL) as conn:
+        with conn.cursor() as cur:
+            cur.execute("SELECT 1")
+            result = cur.fetchone()
+            if result and result[0] == 1:
+                logger.info("Database connectivity verified: SELECT 1 succeeded")
+            else:
+                logger.error("Database connectivity check failed: unexpected result")
 except Exception as e:
-    logger.warning(f"Failed to initialize schema on startup: {e}")
-    logger.warning("Schema will be initialized on first request if needed")
+    logger.error(f"Failed to initialize database: {e}")
+    logger.error("Application startup failed - database not accessible")
+    raise  # Fail fast on DB errors
 
 
 @app.get("/")
