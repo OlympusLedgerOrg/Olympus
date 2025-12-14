@@ -89,10 +89,12 @@ DATABASE_URL = os.environ.get('DATABASE_URL', 'postgresql://postgres:postgres@lo
 storage = StorageLayer(DATABASE_URL)
 
 
-@app.on_event("startup")
-async def startup_event():
-    """Initialize schema on startup."""
+# Initialize schema on app startup
+try:
     storage.init_schema()
+except Exception as e:
+    print(f"Warning: Failed to initialize schema on startup: {e}")
+    print("Schema will be initialized on first request if needed.")
 
 
 @app.get("/")
