@@ -6,10 +6,10 @@ All hashes must be deterministic and collision-resistant.
 Uses BLAKE3 for all cryptographic hashing.
 """
 
-import blake3
 import json
-from typing import List, Dict, Any
+from typing import Any
 
+import blake3
 
 # Hash field separator for structured data
 HASH_SEPARATOR = "|"
@@ -25,13 +25,13 @@ POLICY_PREFIX = b"OLY:POLICY:V1"
 LEDGER_PREFIX = b"OLY:LEDGER:V1"
 
 
-def blake3_hash(parts: List[bytes]) -> bytes:
+def blake3_hash(parts: list[bytes]) -> bytes:
     """
     Compute BLAKE3 hash with deterministic concatenation.
-    
+
     Args:
         parts: List of byte strings to hash together
-        
+
     Returns:
         32-byte BLAKE3 hash
     """
@@ -41,27 +41,27 @@ def blake3_hash(parts: List[bytes]) -> bytes:
 def record_key(record_type: str, record_id: str, version: int) -> bytes:
     """
     Generate a deterministic 32-byte key for a record.
-    
+
     Args:
         record_type: Type of record (e.g., "document", "policy")
         record_id: Unique identifier for the record
         version: Version number of the record
-        
+
     Returns:
         32-byte key using KEY_PREFIX domain separation
     """
-    key_data = f"{record_type}:{record_id}:{version}".encode('utf-8')
+    key_data = f"{record_type}:{record_id}:{version}".encode()
     return blake3_hash([KEY_PREFIX, key_data])
 
 
 def leaf_hash(key: bytes, value_hash: bytes) -> bytes:
     """
     Compute hash of a leaf node in sparse Merkle tree.
-    
+
     Args:
         key: 32-byte key
         value_hash: 32-byte hash of the value
-        
+
     Returns:
         32-byte leaf hash using LEAF_PREFIX domain separation
     """
@@ -75,11 +75,11 @@ def leaf_hash(key: bytes, value_hash: bytes) -> bytes:
 def node_hash(left: bytes, right: bytes) -> bytes:
     """
     Compute hash of an internal node in Merkle tree.
-    
+
     Args:
         left: 32-byte hash of left child
         right: 32-byte hash of right child
-        
+
     Returns:
         32-byte node hash using NODE_PREFIX domain separation
     """
@@ -90,26 +90,26 @@ def node_hash(left: bytes, right: bytes) -> bytes:
     return blake3_hash([NODE_PREFIX, left, right])
 
 
-def merkle_root(leaves: List[bytes]) -> bytes:
+def merkle_root(leaves: list[bytes]) -> bytes:
     """
     Compute Merkle root from leaf hashes.
     Duplicates last leaf if odd number of leaves.
-    
+
     Args:
         leaves: List of 32-byte leaf hashes
-        
+
     Returns:
         32-byte Merkle root hash
     """
     if not leaves:
         raise ValueError("Cannot compute Merkle root of empty list")
-    
+
     for leaf in leaves:
         if len(leaf) != 32:
             raise ValueError(f"All leaves must be 32 bytes, got {len(leaf)}")
-    
+
     current_level = leaves[:]
-    
+
     while len(current_level) > 1:
         next_level = []
         for i in range(0, len(current_level), 2):
@@ -118,17 +118,17 @@ def merkle_root(leaves: List[bytes]) -> bytes:
             right = current_level[i + 1] if i + 1 < len(current_level) else current_level[i]
             next_level.append(node_hash(left, right))
         current_level = next_level
-    
+
     return current_level[0]
 
 
-def shard_header_hash(fields_dict: Dict[str, Any]) -> bytes:
+def shard_header_hash(fields_dict: dict[str, Any]) -> bytes:
     """
     Compute hash of a shard header using canonical JSON.
-    
+
     Args:
         fields_dict: Dictionary of shard header fields
-        
+
     Returns:
         32-byte shard header hash using HDR_PREFIX domain separation
     """
@@ -138,23 +138,23 @@ def shard_header_hash(fields_dict: Dict[str, Any]) -> bytes:
     return blake3_hash([HDR_PREFIX, canonical_bytes])
 
 
-def forest_root(header_hashes: List[bytes]) -> bytes:
+def forest_root(header_hashes: list[bytes]) -> bytes:
     """
     Compute global forest root from shard header hashes.
-    
+
     Args:
         header_hashes: List of 32-byte shard header hashes
-        
+
     Returns:
         32-byte forest root hash using FOREST_PREFIX domain separation
     """
     if not header_hashes:
         raise ValueError("Cannot compute forest root of empty list")
-    
+
     for h in header_hashes:
         if len(h) != 32:
             raise ValueError(f"All header hashes must be 32 bytes, got {len(h)}")
-    
+
     # Sort header hashes for determinism
     sorted_hashes = sorted(header_hashes)
     # Compute Merkle root of sorted hashes

@@ -15,27 +15,27 @@ from typing import Any
 def canonical_json_encode(obj: Any) -> str:
     """
     Encode object to canonical JSON string.
-    
+
     Rules:
     - UTF-8 encoding
     - Sorted keys
     - No whitespace (compact separators)
     - Reject NaN and Infinity
     - Deterministic and stable output
-    
+
     Args:
         obj: Object to encode (must be JSON-serializable)
-        
+
     Returns:
         Canonical JSON string
-        
+
     Raises:
         ValueError: If object contains NaN or Infinity
         TypeError: If object is not JSON-serializable
     """
     # Check for NaN/Infinity in numeric values
     _validate_no_special_floats(obj)
-    
+
     # Canonical JSON: sorted keys, compact separators, ASCII escape, deterministic
     return json.dumps(
         obj,
@@ -49,10 +49,10 @@ def canonical_json_encode(obj: Any) -> str:
 def canonical_json_bytes(obj: Any) -> bytes:
     """
     Encode object to canonical JSON bytes.
-    
+
     Args:
         obj: Object to encode
-        
+
     Returns:
         Canonical JSON as UTF-8 bytes
     """
@@ -62,10 +62,10 @@ def canonical_json_bytes(obj: Any) -> bytes:
 def _validate_no_special_floats(obj: Any) -> None:
     """
     Recursively validate that object contains no NaN or Infinity values.
-    
+
     Args:
         obj: Object to validate
-        
+
     Raises:
         ValueError: If NaN or Infinity found
     """

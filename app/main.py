@@ -6,11 +6,10 @@ Non-existence is a proofable state, not an error.
 """
 
 import os
-from typing import Optional
+
 from fastapi import FastAPI, HTTPException
 
 from app.state import OlympusState
-
 
 app = FastAPI(title="Olympus Phase 0", version="0.1.0", docs_url="/")
 
@@ -41,7 +40,7 @@ def list_shards():
 def shard_header_latest(shard_id: str):
     """
     Get latest header for a shard.
-    
+
     Returns 404 if shard doesn't exist (does NOT create shard).
     """
     header = state.header_latest(shard_id)
@@ -51,27 +50,27 @@ def shard_header_latest(shard_id: str):
 
 
 @app.get("/shards/{shard_id}/proof/existence")
-def proof_existence(shard_id: str, key: str, version: Optional[str] = None):
+def proof_existence(shard_id: str, key: str, version: str | None = None):
     """
     Get a proof for a key (existence or non-existence).
-    
+
     This endpoint is named 'existence' for ergonomics, but ALWAYS returns
     a structured proof with HTTP 200. The proof.exists field indicates
     whether the key actually exists.
-    
+
     NOTE: Both /proof/existence and /proof/nonexistence endpoints return
     identical results. They exist as separate routes for API ergonomics
     and semantic clarity when querying, but both return unified proofs
     that indicate actual existence status via the proof.exists field.
-    
+
     ABSENCE IS NOT ERROR: always 200 with proof.exists flag.
     Missing key is NOT an error; proof.exists communicates absence.
-    
+
     Args:
         shard_id: Shard identifier
         key: Hex-encoded 32-byte key
         version: Optional version parameter
-        
+
     Returns:
         Structured proof dictionary with 'exists' field (always HTTP 200)
     """
@@ -81,36 +80,36 @@ def proof_existence(shard_id: str, key: str, version: Optional[str] = None):
     except ValueError:
         # Invalid hex -> HTTP 400
         raise HTTPException(status_code=400, detail="key must be hex")
-    
+
     # Call state.proof() - never raises on absence
     proof = state.proof(shard_id, key_bytes, version)
-    
+
     # Return proof.to_dict() - always 200
     return proof.to_dict()
 
 
 @app.get("/shards/{shard_id}/proof/nonexistence")
-def proof_nonexistence(shard_id: str, key: str, version: Optional[str] = None):
+def proof_nonexistence(shard_id: str, key: str, version: str | None = None):
     """
     Get a proof for a key (existence or non-existence).
-    
+
     This endpoint is named 'nonexistence' for ergonomics, but ALWAYS returns
     a structured proof with HTTP 200. The proof.exists field indicates
     whether the key actually exists.
-    
+
     NOTE: Both /proof/existence and /proof/nonexistence endpoints return
     identical results. They exist as separate routes for API ergonomics
     and semantic clarity when querying, but both return unified proofs
     that indicate actual existence status via the proof.exists field.
-    
+
     ABSENCE IS NOT ERROR: always 200 with proof.exists flag.
     Missing key is NOT an error; proof.exists communicates absence.
-    
+
     Args:
         shard_id: Shard identifier
         key: Hex-encoded 32-byte key
         version: Optional version parameter
-        
+
     Returns:
         Structured proof dictionary with 'exists' field (always HTTP 200)
     """
@@ -120,9 +119,9 @@ def proof_nonexistence(shard_id: str, key: str, version: Optional[str] = None):
     except ValueError:
         # Invalid hex -> HTTP 400
         raise HTTPException(status_code=400, detail="key must be hex")
-    
+
     # Call state.proof() - never raises on absence
     proof = state.proof(shard_id, key_bytes, version)
-    
+
     # Return proof.to_dict() - always 200
     return proof.to_dict()

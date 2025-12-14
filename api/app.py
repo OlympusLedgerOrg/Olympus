@@ -101,11 +101,11 @@ DATABASE_URL = os.environ.get('DATABASE_URL', DEFAULT_DATABASE_URL)
 # This prevents "role root does not exist" errors in CI
 try:
     parsed_url = urlparse(DATABASE_URL)
-    
+
     # Check if URL has a username (userinfo is username[:password])
     if not parsed_url.username:
         raise RuntimeError(f"DATABASE_URL missing username/password: {DATABASE_URL}")
-    
+
     # Log database connection info (password is automatically redacted by urlparse)
     logger.info(f"Connecting to database: scheme={parsed_url.scheme}, "
                 f"user={parsed_url.username}, "
@@ -124,17 +124,16 @@ storage = StorageLayer(DATABASE_URL)
 try:
     storage.init_schema()
     logger.info("Database schema initialized successfully")
-    
+
     # Quick connectivity check with explicit error handling
     try:
-        with connect(DATABASE_URL) as conn:
-            with conn.cursor() as cur:
-                cur.execute("SELECT 1")
-                result = cur.fetchone()
-                if result and result[0] == 1:
-                    logger.info("Database connectivity verified: SELECT 1 succeeded")
-                else:
-                    raise RuntimeError(f"Database connectivity check failed: unexpected result {result}")
+        with connect(DATABASE_URL) as conn, conn.cursor() as cur:
+            cur.execute("SELECT 1")
+            result = cur.fetchone()
+            if result and result[0] == 1:
+                logger.info("Database connectivity verified: SELECT 1 succeeded")
+            else:
+                raise RuntimeError(f"Database connectivity check failed: unexpected result {result}")
     except Exception as conn_error:
         logger.error(f"Database connectivity check failed: {conn_error}")
         raise RuntimeError("Failed to verify database connectivity") from conn_error

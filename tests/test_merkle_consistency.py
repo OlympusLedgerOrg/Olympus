@@ -1,5 +1,6 @@
 from protocol.merkle import MerkleTree
 
+
 def test_merkle_root_stable_for_same_inputs():
     leaves = [b"a", b"b", b"c"]
 
