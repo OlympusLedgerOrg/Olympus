@@ -8,6 +8,10 @@ consistent hashing regardless of superficial formatting differences.
 import json
 from typing import Any, Dict, List, Union
 
+# Canonical format version - DO NOT CHANGE
+# Changing this breaks all historical document proofs
+CANONICAL_VERSION = "canonical_v1"
+
 
 def canonicalize_json(data: Dict[str, Any]) -> str:
     """
@@ -83,3 +87,32 @@ def document_to_bytes(doc: Dict[str, Any]) -> bytes:
     canonical = canonicalize_document(doc)
     json_str = canonicalize_json(canonical)
     return json_str.encode('utf-8')
+
+
+def canonicalize_text(text: str) -> str:
+    """
+    Canonicalize text by normalizing whitespace and line endings.
+    
+    This ensures the same content produces the same canonical bytes
+    regardless of whitespace or line ending differences.
+    
+    Args:
+        text: Input text
+        
+    Returns:
+        Canonicalized text with normalized whitespace and Unix line endings
+    """
+    # Normalize line endings to Unix style (\n)
+    text = text.replace('\r\n', '\n').replace('\r', '\n')
+    
+    # Normalize multiple spaces to single space
+    lines = text.split('\n')
+    normalized_lines = [' '.join(line.split()) for line in lines]
+    
+    # Remove empty lines at start and end, preserve internal structure
+    while normalized_lines and not normalized_lines[0]:
+        normalized_lines.pop(0)
+    while normalized_lines and not normalized_lines[-1]:
+        normalized_lines.pop()
+    
+    return '\n'.join(normalized_lines)

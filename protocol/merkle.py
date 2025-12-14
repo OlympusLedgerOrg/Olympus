@@ -9,6 +9,10 @@ from typing import List, Tuple, Optional
 from dataclasses import dataclass
 from .hashes import hash_bytes, merkle_parent_hash
 
+# Merkle tree version - DO NOT CHANGE
+# Changing this breaks all historical Merkle proofs
+MERKLE_VERSION = "merkle_v1"
+
 
 @dataclass
 class MerkleNode:
@@ -43,7 +47,7 @@ class MerkleTree:
             raise ValueError("Cannot create empty Merkle tree")
         
         self.leaves = leaves
-        self.root = self._build_tree(leaves)
+        self._root_node = self._build_tree(leaves)
     
     def _build_tree(self, hashes: List[bytes]) -> MerkleNode:
         """Build tree from bottom up."""
@@ -62,7 +66,11 @@ class MerkleTree:
     
     def get_root(self) -> bytes:
         """Get the Merkle root hash."""
-        return self.root.hash
+        return self._root_node.hash
+    
+    def root(self) -> bytes:
+        """Get the Merkle root hash (alias for get_root)."""
+        return self.get_root()
     
     def generate_proof(self, leaf_index: int) -> MerkleProof:
         """
@@ -107,7 +115,7 @@ class MerkleTree:
             leaf_hash=leaf_hash,
             leaf_index=leaf_index,
             siblings=siblings,
-            root_hash=self.root.hash
+            root_hash=self._root_node.hash
         )
 
 
