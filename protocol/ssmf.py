@@ -176,20 +176,7 @@ class SparseMerkleTree:
         
         value_hash = self.leaves[key]
         path = self._key_to_path(key)
-        siblings = []
-        
-        # Collect siblings along path from leaf to root
-        # Level 0 = first bit, Level 255 = last bit (leaf level)
-        for level in range(256):
-            bit_pos = 255 - level
-            if bit_pos < 0:
-                break
-            
-            sibling_path = self._sibling_path(path[:bit_pos+1])
-            if sibling_path in self.nodes:
-                siblings.append(self.nodes[sibling_path])
-            else:
-                siblings.append(EMPTY_HASHES[level])
+        siblings = self._collect_siblings(path)
         
         return ExistenceProof(
             key=key,
@@ -218,19 +205,7 @@ class SparseMerkleTree:
             raise ValueError(f"Key exists in tree, cannot prove non-existence")
         
         path = self._key_to_path(key)
-        siblings = []
-        
-        # Collect siblings along path from leaf to root
-        for level in range(256):
-            bit_pos = 255 - level
-            if bit_pos < 0:
-                break
-            
-            sibling_path = self._sibling_path(path[:bit_pos+1])
-            if sibling_path in self.nodes:
-                siblings.append(self.nodes[sibling_path])
-            else:
-                siblings.append(EMPTY_HASHES[level])
+        siblings = self._collect_siblings(path)
         
         return NonExistenceProof(
             key=key,
@@ -261,18 +236,7 @@ class SparseMerkleTree:
             # Key exists - return existence proof
             value_hash = self.leaves[key]
             path = self._key_to_path(key)
-            siblings = []
-            
-            for level in range(256):
-                bit_pos = 255 - level
-                if bit_pos < 0:
-                    break
-                
-                sibling_path = self._sibling_path(path[:bit_pos+1])
-                if sibling_path in self.nodes:
-                    siblings.append(self.nodes[sibling_path])
-                else:
-                    siblings.append(EMPTY_HASHES[level])
+            siblings = self._collect_siblings(path)
             
             return ExistenceProof(
                 key=key,
@@ -283,24 +247,36 @@ class SparseMerkleTree:
         else:
             # Key does not exist - return non-existence proof
             path = self._key_to_path(key)
-            siblings = []
-            
-            for level in range(256):
-                bit_pos = 255 - level
-                if bit_pos < 0:
-                    break
-                
-                sibling_path = self._sibling_path(path[:bit_pos+1])
-                if sibling_path in self.nodes:
-                    siblings.append(self.nodes[sibling_path])
-                else:
-                    siblings.append(EMPTY_HASHES[level])
+            siblings = self._collect_siblings(path)
             
             return NonExistenceProof(
                 key=key,
                 siblings=siblings,
                 root_hash=self.get_root()
             )
+    
+    def _collect_siblings(self, path: Tuple[int, ...]) -> List[bytes]:
+        """
+        Collect sibling hashes along a path from leaf to root.
+        
+        Args:
+            path: Path as tuple of bits
+            
+        Returns:
+            List of 256 sibling hashes
+        """
+        siblings = []
+        for level in range(256):
+            bit_pos = 255 - level
+            if bit_pos < 0:
+                break
+            
+            sibling_path = self._sibling_path(path[:bit_pos+1])
+            if sibling_path in self.nodes:
+                siblings.append(self.nodes[sibling_path])
+            else:
+                siblings.append(EMPTY_HASHES[level])
+        return siblings
     
     def _key_to_path(self, key: bytes) -> Tuple[int, ...]:
         """Convert 32-byte key to 256-bit path (tuple of 0s and 1s)."""
