@@ -1,0 +1,53 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://olympus-protocol.org/schemas/source_proof.json",
+  "title": "Source Proof",
+  "description": "Schema for proof of document source and authenticity",
+  "type": "object",
+  "required": [
+    "document_hash",
+    "source_agency",
+    "timestamp",
+    "signature",
+    "public_key"
+  ],
+  "properties": {
+    "document_hash": {
+      "type": "string",
+      "description": "Hex-encoded hash of the canonical document",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "source_agency": {
+      "type": "string",
+      "description": "Identifier of the source agency"
+    },
+    "timestamp": {
+      "type": "string",
+      "format": "date-time",
+      "description": "ISO 8601 timestamp when document was submitted"
+    },
+    "signature": {
+      "type": "string",
+      "description": "Cryptographic signature from source agency"
+    },
+    "public_key": {
+      "type": "string",
+      "description": "Public key of source agency"
+    },
+    "metadata": {
+      "type": "object",
+      "description": "Additional metadata about the source",
+      "properties": {
+        "submission_id": {
+          "type": "string"
+        },
+        "submission_method": {
+          "type": "string"
+        },
+        "contact": {
+          "type": "string"
+        }
+      }
+    }
+  }
+}

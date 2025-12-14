@@ -1,0 +1,59 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://olympus-protocol.org/schemas/leaf_record.json",
+  "title": "Leaf Record",
+  "description": "Schema for a leaf record in a Merkle tree",
+  "type": "object",
+  "required": [
+    "leaf_index",
+    "leaf_hash",
+    "content_hash",
+    "parent_tree_root"
+  ],
+  "properties": {
+    "leaf_index": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "Index of this leaf in the tree"
+    },
+    "leaf_hash": {
+      "type": "string",
+      "description": "Hex-encoded hash of the leaf",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "content_hash": {
+      "type": "string",
+      "description": "Hex-encoded hash of the leaf content",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "parent_tree_root": {
+      "type": "string",
+      "description": "Root hash of the Merkle tree containing this leaf",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "inclusion_proof": {
+      "type": "object",
+      "description": "Merkle inclusion proof for this leaf",
+      "properties": {
+        "siblings": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "hash": {
+                "type": "string",
+                "pattern": "^[0-9a-f]{64}$"
+              },
+              "position": {
+                "type": "string",
+                "enum": ["left", "right"]
+              }
+            },
+            "required": ["hash", "position"]
+          }
+        }
+      },
+      "required": ["siblings"]
+    }
+  }
+}
