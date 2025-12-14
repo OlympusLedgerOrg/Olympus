@@ -1,0 +1,308 @@
+"""
+Sparse Merkle Forest implementation for Olympus
+
+This module implements a 256-height sparse Merkle tree with precomputed empty hashes
+for efficient storage and proof generation.
+"""
+
+from typing import List, Tuple, Dict, Optional
+from dataclasses import dataclass
+from .hashes import leaf_hash, node_hash, hash_bytes
+
+
+# Precompute empty hashes for sparse Merkle tree (256 levels)
+# EMPTY[i] = hash of empty subtree at height i
+def _precompute_empty_hashes(height: int = 256) -> List[bytes]:
+    """Precompute empty node hashes for sparse tree."""
+    empty = [b'\x00' * 32]  # Empty leaf hash
+    for i in range(height):
+        empty.append(node_hash(empty[i], empty[i]))
+    return empty
+
+
+EMPTY_HASHES = _precompute_empty_hashes()
+
+
+@dataclass
+class ExistenceProof:
+    """Proof that a key-value pair exists in the tree."""
+    key: bytes  # 32-byte key
+    value_hash: bytes  # 32-byte hash of the value
+    siblings: List[bytes]  # Sibling hashes along path to root (256 siblings)
+    root_hash: bytes  # 32-byte root hash
+
+
+@dataclass
+class NonExistenceProof:
+    """Proof that a key does not exist in the tree."""
+    key: bytes  # 32-byte key
+    siblings: List[bytes]  # Sibling hashes along path to empty leaf
+    root_hash: bytes  # 32-byte root hash
+
+
+class SparseMerkleTree:
+    """
+    A 256-height sparse Merkle tree for efficient key-value storage.
+    
+    Keys are 32 bytes, values are 32-byte hashes.
+    The tree is append-only: versioning is handled by incorporating
+    version into the key derivation (via record_key from hashes module).
+    """
+    
+    def __init__(self):
+        """Initialize an empty sparse Merkle tree."""
+        # Store only non-empty nodes: path -> hash
+        self.nodes: Dict[Tuple[int, ...], bytes] = {}
+        # Store leaves: key -> value_hash
+        self.leaves: Dict[bytes, bytes] = {}
+    
+    def get_root(self) -> bytes:
+        """Get the root hash of the tree."""
+        if not self.nodes and not self.leaves:
+            # Empty tree
+            return EMPTY_HASHES[256]
+        
+        # Compute root by traversing from stored nodes
+        if () in self.nodes:
+            return self.nodes[()]
+        return EMPTY_HASHES[256]
+    
+    def get(self, key: bytes) -> Optional[bytes]:
+        """
+        Get the value hash for a key.
+        
+        Args:
+            key: 32-byte key
+            
+        Returns:
+            32-byte value hash if exists, None otherwise
+        """
+        if len(key) != 32:
+            raise ValueError(f"Key must be 32 bytes, got {len(key)}")
+        return self.leaves.get(key)
+    
+    def update(self, key: bytes, value_hash: bytes):
+        """
+        Update or insert a key-value pair.
+        
+        Args:
+            key: 32-byte key
+            value_hash: 32-byte hash of the value
+        """
+        if len(key) != 32:
+            raise ValueError(f"Key must be 32 bytes, got {len(key)}")
+        if len(value_hash) != 32:
+            raise ValueError(f"Value hash must be 32 bytes, got {len(value_hash)}")
+        
+        # Store leaf
+        self.leaves[key] = value_hash
+        
+        # Compute path from key (each bit determines left/right)
+        path = self._key_to_path(key)
+        
+        # Update tree from leaf to root
+        current_hash = leaf_hash(key, value_hash)
+        
+        for level in range(255, -1, -1):
+            # Get sibling hash
+            sibling_path = self._sibling_path(path[:level+1])
+            if sibling_path in self.nodes:
+                sibling_hash = self.nodes[sibling_path]
+            else:
+                sibling_hash = EMPTY_HASHES[255 - level]
+            
+            # Compute parent hash
+            if path[level] == 0:
+                # Current is left child
+                parent_hash = node_hash(current_hash, sibling_hash)
+            else:
+                # Current is right child
+                parent_hash = node_hash(sibling_hash, current_hash)
+            
+            # Store parent
+            parent_path = path[:level]
+            if level == 0:
+                parent_path = ()
+            self.nodes[parent_path] = parent_hash
+            current_hash = parent_hash
+    
+    def prove_existence(self, key: bytes) -> ExistenceProof:
+        """
+        Generate a proof that a key exists in the tree.
+        
+        Args:
+            key: 32-byte key to prove
+            
+        Returns:
+            Existence proof
+            
+        Raises:
+            ValueError: If key does not exist
+        """
+        if len(key) != 32:
+            raise ValueError(f"Key must be 32 bytes, got {len(key)}")
+        
+        if key not in self.leaves:
+            raise ValueError(f"Key does not exist in tree")
+        
+        value_hash = self.leaves[key]
+        path = self._key_to_path(key)
+        siblings = []
+        
+        # Collect siblings along path
+        for level in range(256):
+            sibling_path = self._sibling_path(path[:level+1])
+            if sibling_path in self.nodes:
+                siblings.append(self.nodes[sibling_path])
+            else:
+                siblings.append(EMPTY_HASHES[255 - level])
+        
+        return ExistenceProof(
+            key=key,
+            value_hash=value_hash,
+            siblings=siblings,
+            root_hash=self.get_root()
+        )
+    
+    def prove_nonexistence(self, key: bytes) -> NonExistenceProof:
+        """
+        Generate a proof that a key does not exist in the tree.
+        
+        Args:
+            key: 32-byte key to prove
+            
+        Returns:
+            Non-existence proof
+            
+        Raises:
+            ValueError: If key exists
+        """
+        if len(key) != 32:
+            raise ValueError(f"Key must be 32 bytes, got {len(key)}")
+        
+        if key in self.leaves:
+            raise ValueError(f"Key exists in tree, cannot prove non-existence")
+        
+        path = self._key_to_path(key)
+        siblings = []
+        
+        # Collect siblings along path
+        for level in range(256):
+            sibling_path = self._sibling_path(path[:level+1])
+            if sibling_path in self.nodes:
+                siblings.append(self.nodes[sibling_path])
+            else:
+                siblings.append(EMPTY_HASHES[255 - level])
+        
+        return NonExistenceProof(
+            key=key,
+            siblings=siblings,
+            root_hash=self.get_root()
+        )
+    
+    def _key_to_path(self, key: bytes) -> Tuple[int, ...]:
+        """Convert 32-byte key to 256-bit path (tuple of 0s and 1s)."""
+        path = []
+        for byte in key:
+            for i in range(8):
+                # Extract bit (MSB first)
+                bit = (byte >> (7 - i)) & 1
+                path.append(bit)
+        return tuple(path)
+    
+    def _sibling_path(self, path: Tuple[int, ...]) -> Tuple[int, ...]:
+        """Get the path of the sibling node."""
+        if not path:
+            raise ValueError("Cannot get sibling of root")
+        # Flip the last bit
+        return path[:-1] + (1 - path[-1],)
+
+
+def verify_proof(proof: ExistenceProof) -> bool:
+    """
+    Verify an existence proof.
+    
+    Args:
+        proof: Existence proof to verify
+        
+    Returns:
+        True if proof is valid, False otherwise
+    """
+    if len(proof.key) != 32:
+        return False
+    if len(proof.value_hash) != 32:
+        return False
+    if len(proof.siblings) != 256:
+        return False
+    if len(proof.root_hash) != 32:
+        return False
+    
+    # Check all siblings are 32 bytes
+    for sibling in proof.siblings:
+        if len(sibling) != 32:
+            return False
+    
+    # Compute path from key
+    path = []
+    for byte in proof.key:
+        for i in range(8):
+            bit = (byte >> (7 - i)) & 1
+            path.append(bit)
+    
+    # Compute root from leaf
+    current_hash = leaf_hash(proof.key, proof.value_hash)
+    
+    for level in range(256):
+        sibling = proof.siblings[level]
+        if path[level] == 0:
+            # Current is left child
+            current_hash = node_hash(current_hash, sibling)
+        else:
+            # Current is right child
+            current_hash = node_hash(sibling, current_hash)
+    
+    return current_hash == proof.root_hash
+
+
+def verify_nonexistence_proof(proof: NonExistenceProof) -> bool:
+    """
+    Verify a non-existence proof.
+    
+    Args:
+        proof: Non-existence proof to verify
+        
+    Returns:
+        True if proof is valid, False otherwise
+    """
+    if len(proof.key) != 32:
+        return False
+    if len(proof.siblings) != 256:
+        return False
+    if len(proof.root_hash) != 32:
+        return False
+    
+    # Check all siblings are 32 bytes
+    for sibling in proof.siblings:
+        if len(sibling) != 32:
+            return False
+    
+    # Compute path from key
+    path = []
+    for byte in proof.key:
+        for i in range(8):
+            bit = (byte >> (7 - i)) & 1
+            path.append(bit)
+    
+    # For non-existence, we start with empty leaf hash
+    current_hash = EMPTY_HASHES[0]
+    
+    for level in range(256):
+        sibling = proof.siblings[level]
+        if path[level] == 0:
+            # Current is left child
+            current_hash = node_hash(current_hash, sibling)
+        else:
+            # Current is right child
+            current_hash = node_hash(sibling, current_hash)
+    
+    return current_hash == proof.root_hash

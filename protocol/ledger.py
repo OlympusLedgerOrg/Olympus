@@ -7,18 +7,18 @@ This module implements the append-only ledger for recording document commitments
 from typing import List, Optional, Dict, Any
 from dataclasses import dataclass, asdict
 from datetime import datetime
-from .hashes import hash_bytes, hash_string, HASH_SEPARATOR
+import json
+from .hashes import blake3_hash, LEDGER_PREFIX
 
 
 @dataclass
 class LedgerEntry:
     """An entry in the Olympus ledger."""
-    timestamp: str  # ISO 8601 format
-    document_hash: str  # Hex-encoded
-    merkle_root: str  # Hex-encoded
-    shard_id: str
-    source_signature: str
-    previous_hash: str  # Hex-encoded, empty string for genesis
+    ts: str  # ISO 8601 timestamp
+    record_hash: str  # Hex-encoded record hash
+    shard_id: str  # Shard identifier
+    shard_root: str  # Hex-encoded shard root hash
+    prev_entry_hash: str  # Hex-encoded previous entry hash, empty string for genesis
     entry_hash: str  # Hex-encoded hash of this entry
     
     def to_dict(self) -> Dict[str, Any]:
@@ -45,37 +45,43 @@ class Ledger:
     
     def append(
         self,
-        document_hash: str,
-        merkle_root: str,
+        record_hash: str,
         shard_id: str,
-        source_signature: str
+        shard_root: str
     ) -> LedgerEntry:
         """
         Append a new entry to the ledger.
         
         Args:
-            document_hash: Hash of the document
-            merkle_root: Root of Merkle tree
+            record_hash: Hash of the record
             shard_id: Identifier for the shard
-            source_signature: Signature from source
+            shard_root: Root hash of the shard
             
         Returns:
             The newly created entry
         """
-        timestamp = datetime.utcnow().isoformat() + 'Z'
-        previous_hash = self.entries[-1].entry_hash if self.entries else ""
+        ts = datetime.utcnow().isoformat() + 'Z'
+        prev_entry_hash = self.entries[-1].entry_hash if self.entries else ""
         
-        # Compute entry hash
-        entry_data = HASH_SEPARATOR.join([str(timestamp), str(document_hash), str(merkle_root), str(shard_id), str(source_signature), str(previous_hash)])
-        entry_hash = hash_string(entry_data).hex()
+        # Create payload for hashing
+        payload = {
+            "ts": ts,
+            "record_hash": record_hash,
+            "shard_id": shard_id,
+            "shard_root": shard_root,
+            "prev_entry_hash": prev_entry_hash
+        }
+        
+        # Compute entry hash using LEDGER_PREFIX + canonical JSON
+        canonical_json = json.dumps(payload, sort_keys=True, separators=(',', ':'), ensure_ascii=True)
+        entry_hash = blake3_hash([LEDGER_PREFIX, canonical_json.encode('utf-8')]).hex()
         
         entry = LedgerEntry(
-            timestamp=timestamp,
-            document_hash=document_hash,
-            merkle_root=merkle_root,
+            ts=ts,
+            record_hash=record_hash,
             shard_id=shard_id,
-            source_signature=source_signature,
-            previous_hash=previous_hash,
+            shard_root=shard_root,
+            prev_entry_hash=prev_entry_hash,
             entry_hash=entry_hash
         )
         
@@ -108,20 +114,28 @@ class Ledger:
             return True
         
         # Check genesis entry
-        if self.entries[0].previous_hash != "":
+        if self.entries[0].prev_entry_hash != "":
             return False
         
         # Check each entry
         for i, entry in enumerate(self.entries):
-            # Verify entry hash
-            entry_data = HASH_SEPARATOR.join([str(entry.timestamp), str(entry.document_hash), str(entry.merkle_root), str(entry.shard_id), str(entry.source_signature), str(entry.previous_hash)])
-            expected_hash = hash_string(entry_data).hex()
+            # Recompute entry hash
+            payload = {
+                "ts": entry.ts,
+                "record_hash": entry.record_hash,
+                "shard_id": entry.shard_id,
+                "shard_root": entry.shard_root,
+                "prev_entry_hash": entry.prev_entry_hash
+            }
+            canonical_json = json.dumps(payload, sort_keys=True, separators=(',', ':'), ensure_ascii=True)
+            expected_hash = blake3_hash([LEDGER_PREFIX, canonical_json.encode('utf-8')]).hex()
+            
             if entry.entry_hash != expected_hash:
                 return False
             
             # Verify chain linkage
             if i > 0:
-                if entry.previous_hash != self.entries[i - 1].entry_hash:
+                if entry.prev_entry_hash != self.entries[i - 1].entry_hash:
                     return False
         
         return True
