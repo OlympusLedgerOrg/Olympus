@@ -39,8 +39,8 @@ Comprehensive review of test coverage, protocol implementation, API behavior, CI
 
 ### Critical Issues (Must Fix Before 1.0)
 
-1. **Python 3.12 Deprecation Warnings (8 instances)**
-   - Using deprecated `datetime.utcnow()` in tests and code
+1. **Python 3.12 Deprecation Warnings (9 instances total)**
+   - Using deprecated `datetime.utcnow()` in `protocol/ledger.py` (line 63) and `tests/test_shards.py` (8 instances)
    - **Impact:** Will break in future Python versions
    - **Fix:** Replace with `datetime.now(timezone.utc)`
 
@@ -126,9 +126,11 @@ Comprehensive review of test coverage, protocol implementation, API behavior, CI
 
 ### Immediate (This Sprint)
 
-1. ✅ **Fix deprecation warnings** - Replace `datetime.utcnow()` (30 min)
-2. ✅ **Fix mypy type errors** - Add annotations (1-2 hours)
-3. ✅ **Fix linting issues** - Remove whitespace, combine `with` statements (15 min)
+1. ⚠️ **Fix deprecation warnings** - Replace `datetime.utcnow()` in 9 locations (30 min)
+   - `protocol/ledger.py` line 63
+   - `tests/test_shards.py` 8 instances
+2. ⚠️ **Fix mypy type errors** - Add annotations (1-2 hours)
+3. ⚠️ **Fix linting issues** - Remove whitespace, combine `with` statements (15 min)
 
 ### Short Term (Next Sprint)
 

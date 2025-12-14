@@ -589,8 +589,9 @@ PGDATABASE=olympus
 ### Critical (Must Fix Before 1.0)
 
 1. **Fix `datetime.utcnow()` deprecation warnings:**
-   - Replace all `datetime.utcnow()` with `datetime.now(timezone.utc)`
-   - Affects: `test_shards.py` (8 instances), possibly `protocol/ledger.py`
+   - Replace all `datetime.utcnow()` with `datetime.now(timezone.utc)` in 9 locations:
+     - `protocol/ledger.py` line 63 (1 instance)
+     - `tests/test_shards.py` (8 instances)
    - Risk: Will break in future Python versions
 
 2. **Fix type annotation errors:**
@@ -717,8 +718,9 @@ PGDATABASE=olympus
 
 ### Warnings in Tests
 
-**8 DeprecationWarnings in test_shards.py:**
-- Using `datetime.utcnow()` which is deprecated in Python 3.12
+**9 DeprecationWarnings total:**
+- `tests/test_shards.py`: 8 instances of deprecated `datetime.utcnow()`
+- `protocol/ledger.py` line 63: 1 instance of deprecated `datetime.utcnow()`
 - Should use `datetime.now(timezone.utc)` instead
 
 **Impact:** ⚠️ **Will break in future Python versions**
