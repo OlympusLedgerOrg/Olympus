@@ -3,9 +3,19 @@ Sparse Merkle Forest implementation for Olympus
 
 This module implements a 256-height sparse Merkle tree with precomputed empty hashes
 for efficient storage and proof generation.
+
+IMPORTANT: Non-existence semantics
+----------------------------------
+The `prove()` method treats non-existence as a valid cryptographic response,
+not as an error. This is critical for API/service layers that need to return
+deterministic proofs without raising exceptions for missing keys.
+
+- Use `prove(key)` for unified proof generation (returns ExistenceProof or NonExistenceProof)
+- Use `prove_existence(key)` only when you know the key exists (raises ValueError if not)
+- Use `prove_nonexistence(key)` only when you know the key doesn't exist (raises ValueError if it does)
 """
 
-from typing import List, Tuple, Dict, Optional
+from typing import List, Tuple, Dict, Optional, Union
 from dataclasses import dataclass
 from .hashes import leaf_hash, node_hash, hash_bytes
 
@@ -166,20 +176,7 @@ class SparseMerkleTree:
         
         value_hash = self.leaves[key]
         path = self._key_to_path(key)
-        siblings = []
-        
-        # Collect siblings along path from leaf to root
-        # Level 0 = first bit, Level 255 = last bit (leaf level)
-        for level in range(256):
-            bit_pos = 255 - level
-            if bit_pos < 0:
-                break
-            
-            sibling_path = self._sibling_path(path[:bit_pos+1])
-            if sibling_path in self.nodes:
-                siblings.append(self.nodes[sibling_path])
-            else:
-                siblings.append(EMPTY_HASHES[level])
+        siblings = self._collect_siblings(path)
         
         return ExistenceProof(
             key=key,
@@ -208,9 +205,67 @@ class SparseMerkleTree:
             raise ValueError(f"Key exists in tree, cannot prove non-existence")
         
         path = self._key_to_path(key)
-        siblings = []
+        siblings = self._collect_siblings(path)
         
-        # Collect siblings along path from leaf to root
+        return NonExistenceProof(
+            key=key,
+            siblings=siblings,
+            root_hash=self.get_root()
+        )
+    
+    def prove(self, key: bytes) -> Union[ExistenceProof, NonExistenceProof]:
+        """
+        Generate a proof for a key (existence or non-existence).
+        
+        This is the recommended interface for proof generation as it treats
+        non-existence as a valid response rather than an error condition.
+        
+        Args:
+            key: 32-byte key to prove
+            
+        Returns:
+            ExistenceProof if key exists, NonExistenceProof if key does not exist
+            
+        Raises:
+            ValueError: Only for invalid inputs (e.g., wrong key length)
+        """
+        if len(key) != 32:
+            raise ValueError(f"Key must be 32 bytes, got {len(key)}")
+        
+        if key in self.leaves:
+            # Key exists - return existence proof
+            value_hash = self.leaves[key]
+            path = self._key_to_path(key)
+            siblings = self._collect_siblings(path)
+            
+            return ExistenceProof(
+                key=key,
+                value_hash=value_hash,
+                siblings=siblings,
+                root_hash=self.get_root()
+            )
+        else:
+            # Key does not exist - return non-existence proof
+            path = self._key_to_path(key)
+            siblings = self._collect_siblings(path)
+            
+            return NonExistenceProof(
+                key=key,
+                siblings=siblings,
+                root_hash=self.get_root()
+            )
+    
+    def _collect_siblings(self, path: Tuple[int, ...]) -> List[bytes]:
+        """
+        Collect sibling hashes along a path from leaf to root.
+        
+        Args:
+            path: Path as tuple of bits
+            
+        Returns:
+            List of 256 sibling hashes
+        """
+        siblings = []
         for level in range(256):
             bit_pos = 255 - level
             if bit_pos < 0:
@@ -221,12 +276,7 @@ class SparseMerkleTree:
                 siblings.append(self.nodes[sibling_path])
             else:
                 siblings.append(EMPTY_HASHES[level])
-        
-        return NonExistenceProof(
-            key=key,
-            siblings=siblings,
-            root_hash=self.get_root()
-        )
+        return siblings
     
     def _key_to_path(self, key: bytes) -> Tuple[int, ...]:
         """Convert 32-byte key to 256-bit path (tuple of 0s and 1s)."""
@@ -324,3 +374,50 @@ def verify_nonexistence_proof(proof: NonExistenceProof) -> bool:
             current_hash = node_hash(sibling, current_hash)
     
     return current_hash == proof.root_hash
+
+
+def verify_unified_proof(proof: Union[ExistenceProof, NonExistenceProof]) -> bool:
+    """
+    Verify a proof (existence or non-existence).
+    
+    This is a unified verification function that works with both proof types.
+    
+    Args:
+        proof: Existence or non-existence proof to verify
+        
+    Returns:
+        True if proof is valid, False otherwise
+    """
+    if isinstance(proof, ExistenceProof):
+        return verify_proof(proof)
+    elif isinstance(proof, NonExistenceProof):
+        return verify_nonexistence_proof(proof)
+    else:
+        return False
+
+
+def is_existence_proof(proof: Union[ExistenceProof, NonExistenceProof]) -> bool:
+    """
+    Check if a proof is an existence proof.
+    
+    Args:
+        proof: Proof to check
+        
+    Returns:
+        True if proof is an ExistenceProof, False if NonExistenceProof
+    """
+    return isinstance(proof, ExistenceProof)
+
+
+def is_nonexistence_proof(proof: Union[ExistenceProof, NonExistenceProof]) -> bool:
+    """
+    Check if a proof is a non-existence proof.
+    
+    Args:
+        proof: Proof to check
+        
+    Returns:
+        True if proof is a NonExistenceProof, False if ExistenceProof
+    """
+    return isinstance(proof, NonExistenceProof)
+
