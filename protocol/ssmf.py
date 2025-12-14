@@ -101,28 +101,36 @@ class SparseMerkleTree:
         path = self._key_to_path(key)
         
         # Update tree from leaf to root
+        # Level 0 = first bit, Level 255 = last bit (leaf level)
         current_hash = leaf_hash(key, value_hash)
         
-        for level in range(255, -1, -1):
-            # Get sibling hash
-            sibling_path = self._sibling_path(path[:level+1])
+        # Go from leaf level (255) up to root (0)
+        for level in range(256):
+            # At level L (counting from leaf=0), we need sibling at height L
+            # The sibling's path differs in the bit at position (255-level)
+            bit_pos = 255 - level
+            if bit_pos < 0:
+                break  # We've reached the root
+            
+            sibling_path = self._sibling_path(path[:bit_pos+1])
             if sibling_path in self.nodes:
                 sibling_hash = self.nodes[sibling_path]
             else:
-                sibling_hash = EMPTY_HASHES[255 - level]
+                sibling_hash = EMPTY_HASHES[level]
             
             # Compute parent hash
-            if path[level] == 0:
+            if path[bit_pos] == 0:
                 # Current is left child
                 parent_hash = node_hash(current_hash, sibling_hash)
             else:
                 # Current is right child
                 parent_hash = node_hash(sibling_hash, current_hash)
             
-            # Store parent
-            parent_path = path[:level]
-            if level == 0:
+            # Store parent at path up to bit_pos
+            if bit_pos == 0:
                 parent_path = ()
+            else:
+                parent_path = path[:bit_pos]
             self.nodes[parent_path] = parent_hash
             current_hash = parent_hash
     
@@ -149,13 +157,18 @@ class SparseMerkleTree:
         path = self._key_to_path(key)
         siblings = []
         
-        # Collect siblings along path
+        # Collect siblings along path from leaf to root
+        # Level 0 = first bit, Level 255 = last bit (leaf level)
         for level in range(256):
-            sibling_path = self._sibling_path(path[:level+1])
+            bit_pos = 255 - level
+            if bit_pos < 0:
+                break
+            
+            sibling_path = self._sibling_path(path[:bit_pos+1])
             if sibling_path in self.nodes:
                 siblings.append(self.nodes[sibling_path])
             else:
-                siblings.append(EMPTY_HASHES[255 - level])
+                siblings.append(EMPTY_HASHES[level])
         
         return ExistenceProof(
             key=key,
@@ -186,13 +199,17 @@ class SparseMerkleTree:
         path = self._key_to_path(key)
         siblings = []
         
-        # Collect siblings along path
+        # Collect siblings along path from leaf to root
         for level in range(256):
-            sibling_path = self._sibling_path(path[:level+1])
+            bit_pos = 255 - level
+            if bit_pos < 0:
+                break
+            
+            sibling_path = self._sibling_path(path[:bit_pos+1])
             if sibling_path in self.nodes:
                 siblings.append(self.nodes[sibling_path])
             else:
-                siblings.append(EMPTY_HASHES[255 - level])
+                siblings.append(EMPTY_HASHES[level])
         
         return NonExistenceProof(
             key=key,
@@ -250,11 +267,14 @@ def verify_proof(proof: ExistenceProof) -> bool:
             path.append(bit)
     
     # Compute root from leaf
+    # Siblings are ordered from leaf to root (level 0, 1, 2...)
+    # Path bits are ordered from root to leaf (bit 0, 1, 2...)
     current_hash = leaf_hash(proof.key, proof.value_hash)
     
     for level in range(256):
         sibling = proof.siblings[level]
-        if path[level] == 0:
+        bit_pos = 255 - level  # Map from level to bit position
+        if path[bit_pos] == 0:
             # Current is left child
             current_hash = node_hash(current_hash, sibling)
         else:
@@ -298,7 +318,8 @@ def verify_nonexistence_proof(proof: NonExistenceProof) -> bool:
     
     for level in range(256):
         sibling = proof.siblings[level]
-        if path[level] == 0:
+        bit_pos = 255 - level  # Map from level to bit position
+        if path[bit_pos] == 0:
             # Current is left child
             current_hash = node_hash(current_hash, sibling)
         else:
