@@ -390,12 +390,10 @@ class StorageLayer:
 
             # Reconstruct header
             # Convert timestamp to ISO 8601 string if it's a datetime object
-            from datetime import datetime as dt
-            
             ts_value = row['ts']
             if isinstance(ts_value, str):
                 timestamp_str = ts_value
-            elif isinstance(ts_value, dt):
+            elif isinstance(ts_value, datetime):
                 # It's a datetime object from Postgres - convert to ISO 8601 string
                 timestamp_str = ts_value.isoformat().replace('+00:00', 'Z')
             else:
