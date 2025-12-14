@@ -10,7 +10,7 @@ def current_timestamp() -> str:
     """
     Return the current UTC timestamp in RFC3339 / ISO-8601 format.
 
-    The timestamp is timezone-aware, uses the Python 3.12 UTC alias,
+    The timestamp is timezone-aware, uses the standard datetime.UTC alias,
     and normalizes the offset to a trailing 'Z'.
     """
     return datetime.now(UTC).isoformat().replace("+00:00", "Z")
