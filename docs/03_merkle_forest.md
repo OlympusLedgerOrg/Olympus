@@ -35,7 +35,7 @@ This section defines the immutable semantics of Merkle trees in Olympus. These r
 ### What a Leaf Represents
 
 A leaf in an Olympus Merkle tree is:
-- A raw byte hash (32 bytes, SHA-256) of a document part or document commitment
+- A raw byte hash (32 bytes, BLAKE3) of a document part or document commitment
 - The exact input is the hash itself, not re-hashed
 - Leaves are **ordered** and **indexed** starting from position 0
 - Each leaf is assigned a specific index position that is semantically meaningful
@@ -49,7 +49,7 @@ The Merkle root changes if and only if:
 3. **Leaf order is changed** (reordering leaves produces a different root)
 
 The root is computed bottom-up:
-- Parent hash = SHA-256(left_child_hash || right_child_hash)
+- Parent hash = BLAKE3(NODE_PREFIX || left_child_hash || right_child_hash)
 - If odd number of leaves, the last leaf is duplicated as its own sibling
 - The root is deterministic for a given ordered sequence of leaves
 
