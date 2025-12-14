@@ -3,7 +3,7 @@ Tests for shard header protocol
 """
 
 import pytest
-from datetime import datetime
+from datetime import datetime, timezone
 import nacl.signing
 from protocol.shards import (
     create_shard_header,
@@ -15,10 +15,14 @@ from protocol.shards import (
 from protocol.hashes import hash_bytes
 
 
+def _utc_timestamp() -> str:
+    return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+
+
 def test_create_shard_header():
     """Test creating a shard header."""
     root_hash = hash_bytes(b"test root")
-    timestamp = datetime.utcnow().isoformat() + 'Z'
+    timestamp = _utc_timestamp()
     
     header = create_shard_header(
         shard_id="shard1",
@@ -37,7 +41,7 @@ def test_create_shard_header():
 def test_create_shard_header_with_previous():
     """Test creating a shard header with previous hash."""
     root_hash = hash_bytes(b"test root")
-    timestamp = datetime.utcnow().isoformat() + 'Z'
+    timestamp = _utc_timestamp()
     previous_hash = hash_bytes(b"previous").hex()
     
     header = create_shard_header(
@@ -58,7 +62,7 @@ def test_sign_and_verify_header():
     
     # Create header
     root_hash = hash_bytes(b"test root")
-    timestamp = datetime.utcnow().isoformat() + 'Z'
+    timestamp = _utc_timestamp()
     header = create_shard_header(
         shard_id="shard1",
         root_hash=root_hash,
@@ -82,7 +86,7 @@ def test_verify_header_with_bad_signature():
     
     # Create and sign header with key1
     root_hash = hash_bytes(b"test root")
-    timestamp = datetime.utcnow().isoformat() + 'Z'
+    timestamp = _utc_timestamp()
     header = create_shard_header(
         shard_id="shard1",
         root_hash=root_hash,
@@ -102,7 +106,7 @@ def test_verify_header_with_tampered_hash():
     verify_key = signing_key.verify_key
     
     root_hash = hash_bytes(b"test root")
-    timestamp = datetime.utcnow().isoformat() + 'Z'
+    timestamp = _utc_timestamp()
     header = create_shard_header(
         shard_id="shard1",
         root_hash=root_hash,
@@ -142,7 +146,7 @@ def test_get_verify_key_from_signing_key():
     
     # Should be able to verify signatures
     root_hash = hash_bytes(b"test root")
-    timestamp = datetime.utcnow().isoformat() + 'Z'
+    timestamp = _utc_timestamp()
     header = create_shard_header(
         shard_id="shard1",
         root_hash=root_hash,
@@ -156,7 +160,7 @@ def test_get_verify_key_from_signing_key():
 def test_header_hash_changes_with_content():
     """Test that header hash changes when content changes."""
     root_hash = hash_bytes(b"test root")
-    timestamp = datetime.utcnow().isoformat() + 'Z'
+    timestamp = _utc_timestamp()
     
     header1 = create_shard_header(
         shard_id="shard1",
@@ -195,7 +199,7 @@ def test_header_hash_deterministic():
 
 def test_invalid_root_hash_length():
     """Test that invalid root hash length is rejected."""
-    timestamp = datetime.utcnow().isoformat() + 'Z'
+    timestamp = _utc_timestamp()
     
     with pytest.raises(ValueError, match="must be 32 bytes"):
         create_shard_header(
