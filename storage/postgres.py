@@ -156,7 +156,10 @@ class StorageLayer:
                 (shard_id,)
             )
             prev_row = cur.fetchone()
-            prev_header_hash = "" if prev_row is None else bytes(prev_row['header_hash']).hex()
+            if prev_row is None:
+                prev_header_hash = ""
+            else:
+                prev_header_hash = bytes(prev_row['header_hash']).hex()
 
             # Get next sequence number
             cur.execute(
@@ -218,7 +221,10 @@ class StorageLayer:
                 (shard_id,)
             )
             prev_ledger_row = cur.fetchone()
-            prev_entry_hash = "" if prev_ledger_row is None else bytes(prev_ledger_row['entry_hash']).hex()
+            if prev_ledger_row is None:
+                prev_entry_hash = ""
+            else:
+                prev_entry_hash = bytes(prev_ledger_row['entry_hash']).hex()
 
             # Get next ledger sequence number
             cur.execute(
