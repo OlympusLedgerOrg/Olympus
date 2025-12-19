@@ -55,7 +55,7 @@ jobs:
 
     - name: Run mypy type checking
       run: |
-        mypy protocol/ storage/ api/ --ignore-missing-imports
+        mypy protocol/ storage/ api/
 
     - name: Run pytest
       run: |
