@@ -10,6 +10,8 @@ Phase 0.5 adds:
 - **End-to-end tests** validating the complete audit flow
 - **CI/CD pipeline** with pytest, ruff, and mypy
 
+**Database Backend**: PostgreSQL 16+ is the only supported production database. See `08_database_strategy.md` for rationale and testing strategy.
+
 ## Architecture
 
 ```
