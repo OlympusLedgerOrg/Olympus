@@ -35,10 +35,10 @@ jobs:
           POSTGRES_PASSWORD: olympus
           POSTGRES_DB: olympus
         options: >-
-          --health-cmd="pg_isready -U olympus -d olympus"
-          --health-interval=5s
-          --health-timeout=5s
-          --health-retries=20
+          --health-cmd pg_isready -U olympus -d olympus
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
         ports:
           - 5432:5432
     
@@ -64,6 +64,10 @@ jobs:
       run: |
         mypy protocol/ storage/ api/
 
-    - name: Run pytest
+    - name: Run pytest (fast lane - SQLite proof tests)
       run: |
-        pytest tests/ -v --tb=short
+        pytest tests/ -v --tb=short -m "not postgres"
+
+    - name: Run pytest (Postgres lane - E2E and storage tests)
+      run: |
+        pytest tests/ -v --tb=short -m "postgres"

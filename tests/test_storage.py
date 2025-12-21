@@ -15,6 +15,9 @@ from datetime import UTC, datetime
 import nacl.signing
 import pytest
 
+# Mark all tests in this module as requiring PostgreSQL
+pytestmark = pytest.mark.postgres
+
 from protocol.hashes import hash_bytes
 from protocol.ssmf import verify_proof
 from storage.postgres import StorageLayer
