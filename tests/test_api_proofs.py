@@ -3,6 +3,11 @@ Tests for API proof endpoints
 
 This test validates that the proof endpoints return structured proofs
 without raising exceptions for both existing and non-existing keys.
+
+DATABASE: SQLite (test-only, in-memory state)
+This test uses app/state.py (in-memory) to test proof generation logic only.
+It does NOT test the production storage layer (storage/postgres.py).
+See docs/08_database_strategy.md for rationale.
 """
 
 import os

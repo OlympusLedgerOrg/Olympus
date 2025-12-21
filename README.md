@@ -46,8 +46,21 @@ Olympus only guarantees the integrity of what it has seen.
 - `proofs/` — Zero-knowledge circuits and notes
 - `examples/` — Known-good test artifacts
 - `tools/` — CLI utilities for canonicalization and verification
+- `storage/` — PostgreSQL storage layer (production backend)
+- `migrations/` — Database schema migrations
 
 This repository is intended to be read and audited.
+
+---
+
+## Database Backend
+
+Olympus uses **PostgreSQL** as its production database backend.
+
+**Production**: PostgreSQL 16+ only  
+**Testing**: PostgreSQL for E2E tests; SQLite for lightweight proof logic tests
+
+See `docs/08_database_strategy.md` for detailed rationale and usage guidance.
 
 ---
 

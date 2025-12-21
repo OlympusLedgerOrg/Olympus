@@ -3,6 +3,10 @@ Tests for storage layer.
 
 These tests validate that the Postgres storage layer correctly
 persists the Sparse Merkle State Forest, shard headers, and ledger entries.
+
+DATABASE: PostgreSQL (production storage layer)
+This test uses storage/postgres.py to validate production persistence semantics.
+See docs/08_database_strategy.md for rationale.
 """
 
 import os

@@ -10,7 +10,11 @@ jobs:
   test:
     runs-on: ubuntu-latest
     
-    # Environment variables for the entire job
+    # Database Strategy (see docs/08_database_strategy.md):
+    # - PostgreSQL is the ONLY production backend
+    # - CI uses Postgres to ensure production parity
+    # - E2E tests (test_e2e_audit.py, test_storage.py) require Postgres
+    # - API tests (test_api_proofs.py) use SQLite for proof logic only
     env:
       DATABASE_URL: postgresql://olympus:olympus@localhost:5432/olympus
       TEST_DATABASE_URL: postgresql://olympus:olympus@localhost:5432/olympus
@@ -20,6 +24,9 @@ jobs:
       PGPASSWORD: olympus
       PGDATABASE: olympus
     
+    # PostgreSQL service for E2E and storage tests
+    # Required by: test_e2e_audit.py, test_storage.py
+    # NOT used by: test_api_proofs.py (uses temporary SQLite)
     services:
       postgres:
         image: postgres:16

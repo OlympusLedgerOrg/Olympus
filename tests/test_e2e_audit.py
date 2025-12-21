@@ -8,6 +8,10 @@ This test validates the complete audit flow:
 4. Verifies proofs, signatures, and ledger chain offline
 
 No DB shortcuts, no mocks beyond HTTP.
+
+DATABASE: PostgreSQL (production storage layer)
+This test uses storage/postgres.py to validate the full production stack.
+See docs/08_database_strategy.md for rationale.
 """
 
 import os
