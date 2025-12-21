@@ -8,6 +8,7 @@ All operations are append-only (no UPDATE or DELETE).
 """
 
 import json
+from collections.abc import Mapping
 from datetime import UTC, datetime
 from typing import Any
 
@@ -38,7 +39,7 @@ class StorageLayer:
         """
         self.connection_string = connection_string
 
-    def _get_connection(self) -> psycopg.Connection[Any]:
+    def _get_connection(self) -> psycopg.Connection[dict[str, Any]]:
         """
         Get a database connection with autocommit disabled (transaction mode).
 
@@ -46,13 +47,15 @@ class StorageLayer:
         - autocommit=False (default): connection starts in transaction mode
         - context manager (`with conn:`) ensures rollback on exception
         - must call conn.commit() explicitly to finalize
+        - row_factory=dict_row makes all cursors return dicts by default
 
         Returns:
-            Connection in transaction mode
+            Connection in transaction mode with dict row factory
         """
-        connection: psycopg.Connection[Any] = psycopg.connect(
+        connection: psycopg.Connection[dict[str, Any]] = psycopg.connect(
             self.connection_string,
-            autocommit=False
+            autocommit=False,
+            row_factory=dict_row
         )
         return connection
 
@@ -534,6 +537,24 @@ class StorageLayer:
 
             return persisted_root == computed_root
 
+    def _row_get(self, row: Any, key: str, idx: int) -> Any:
+        """
+        Get value from row, supporting both dict and tuple rows.
+
+        This defensive helper ensures compatibility with different cursor row factories.
+
+        Args:
+            row: Database row (dict or tuple)
+            key: Column name (for dict rows)
+            idx: Column index (for tuple rows)
+
+        Returns:
+            Value at the specified column
+        """
+        if isinstance(row, Mapping):
+            return row[key]
+        return row[idx]
+
     def _load_tree_state(self, cur: psycopg.Cursor[Any], shard_id: str) -> SparseMerkleTree:
         """
         Load sparse Merkle tree state from database.
@@ -563,8 +584,10 @@ class StorageLayer:
 
         # Rebuild tree by updating each leaf
         for row in rows:
-            key = bytes(row['key'])
-            value_hash = bytes(row['value_hash'])
+            # Support both dict and tuple rows for robustness
+            # SELECT key, value_hash => indices 0, 1
+            key = bytes(self._row_get(row, 'key', 0))
+            value_hash = bytes(self._row_get(row, 'value_hash', 1))
             tree.update(key, value_hash)
 
         return tree
