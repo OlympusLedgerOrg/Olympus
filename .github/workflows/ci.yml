@@ -35,7 +35,7 @@ jobs:
           POSTGRES_PASSWORD: olympus
           POSTGRES_DB: olympus
         options: >-
-          --health-cmd pg_isready -U olympus -d olympus
+          --health-cmd "pg_isready -U olympus -d olympus"
           --health-interval 5s
           --health-timeout 5s
           --health-retries 20
