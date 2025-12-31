@@ -6,7 +6,7 @@ This module implements the append-only ledger for recording document commitments
 
 import json
 from dataclasses import asdict, dataclass
-from datetime import datetime
+from datetime import UTC, datetime
 from typing import Any
 
 from .hashes import LEDGER_PREFIX, blake3_hash
@@ -61,7 +61,7 @@ class Ledger:
         Returns:
             The newly created entry
         """
-        ts = datetime.utcnow().isoformat() + 'Z'
+        ts = datetime.now(UTC).isoformat().replace('+00:00', 'Z')
         prev_entry_hash = self.entries[-1].entry_hash if self.entries else ""
 
         # Create payload for hashing
