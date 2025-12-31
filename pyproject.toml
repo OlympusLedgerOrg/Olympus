@@ -30,6 +30,9 @@ testpaths = ["tests"]
 python_files = "test_*.py"
 python_functions = "test_*"
 asyncio_mode = "auto"
+markers = [
+    "postgres: tests that require a running PostgreSQL instance",
+]
 
 [tool.ruff]
 line-length = 120

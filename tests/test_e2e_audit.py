@@ -21,12 +21,14 @@ import nacl.signing
 import pytest
 from fastapi.testclient import TestClient
 
-from api.app import app
 from protocol.canonical_json import canonical_json_encode
 from protocol.hashes import LEDGER_PREFIX, blake3_hash, hash_bytes
 from protocol.shards import verify_header
 from protocol.ssmf import ExistenceProof, verify_proof
 from storage.postgres import StorageLayer
+
+# Mark all tests in this module as requiring PostgreSQL
+pytestmark = pytest.mark.postgres
 
 # Test database connection string
 TEST_DB = os.environ.get('TEST_DATABASE_URL', 'postgresql://olympus:olympus@localhost:5432/olympus')
@@ -50,6 +52,9 @@ def signing_key():
 @pytest.fixture
 def client(storage):
     """Create test client for API."""
+    # Import here to avoid connecting to Postgres during test collection
+    from api.app import app
+
     # Override DATABASE_URL for the API
     os.environ['DATABASE_URL'] = TEST_DB
     return TestClient(app)
