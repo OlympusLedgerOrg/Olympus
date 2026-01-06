@@ -319,8 +319,15 @@ Phase 0.5 is complete when:
 - [x] End-to-end tests pass
 - [x] CI pipeline is green
 
-Future phases may add:
-- JavaScript/TypeScript client library
-- Guardian replication protocol
-- BFT finality consensus
-- Privacy-preserving proofs
+## Phase 1+ Features (Not Included in v1.0)
+
+The following features are planned for Phase 1+ and are **not implemented in v1.0**:
+
+- **Guardian replication protocol** — M-of-N multi-node replication with signed acknowledgments
+- **BFT finality consensus** — Byzantine fault tolerance and fork detection
+- **JavaScript/TypeScript client library** — Browser-based verification
+- **Privacy-preserving proofs** — Zero-knowledge proof extensions
+
+**v1.0 Scope:** Single-node operation with Ed25519 signatures, Sparse Merkle Forest, and offline verifiable proofs.
+
+See `docs/04_ledger_protocol.md` for detailed annotations on which features are Phase 1+.
