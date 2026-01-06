@@ -97,7 +97,7 @@ def validate_with_jsonschema(schemas: dict[Path, dict[str, Any]]) -> list[str]:
     """
     errors: list[str] = []
     try:
-        from jsonschema.validators import validator_for  # type: ignore
+        from jsonschema.validators import validator_for  # type: ignore[import-untyped]
     except Exception:
         return ["jsonschema not installed; cannot validate JSON Schema documents"]
 

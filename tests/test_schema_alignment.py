@@ -12,8 +12,8 @@ the source of truth for implementation.
 import json
 from pathlib import Path
 
-import jsonschema
 import pytest
+from jsonschema.validators import validator_for
 from pydantic import BaseModel, ValidationError
 
 # Define test models that mirror the API models to avoid importing api.app
@@ -121,7 +121,8 @@ class TestSchemaAlignment:
         # and documents the expected structure for external consumers.
 
         # Verify the schema itself is valid
-        jsonschema.Draft7Validator.check_schema(schema)
+        validator_cls = validator_for(schema)
+        validator_cls.check_schema(schema)
 
         # Create a sample that matches the shard_commit schema
         shard_commit_sample = {
@@ -134,7 +135,7 @@ class TestSchemaAlignment:
         }
 
         # Validate the sample against the schema
-        jsonschema.validate(instance=shard_commit_sample, schema=schema)
+        validator_cls(schema).validate(shard_commit_sample)
 
         # Verify key fields are present in both
         assert "shard_id" in response_dict
@@ -145,7 +146,8 @@ class TestSchemaAlignment:
     def test_leaf_record_schema_is_valid(self):
         """Verify leaf_record.json is a valid JSON schema."""
         schema = load_schema("leaf_record.json")
-        jsonschema.Draft7Validator.check_schema(schema)
+        validator_cls = validator_for(schema)
+        validator_cls.check_schema(schema)
 
         # Create a sample leaf record that matches the schema
         leaf_record = {
@@ -162,12 +164,13 @@ class TestSchemaAlignment:
         }
 
         # Validate against schema
-        jsonschema.validate(instance=leaf_record, schema=schema)
+        validator_cls(schema).validate(leaf_record)
 
     def test_canonical_document_schema_is_valid(self):
         """Verify canonical_document.json is a valid JSON schema."""
         schema = load_schema("canonical_document.json")
-        jsonschema.Draft7Validator.check_schema(schema)
+        validator_cls = validator_for(schema)
+        validator_cls.check_schema(schema)
 
         # Create a sample canonical document
         canonical_doc = {
@@ -187,12 +190,13 @@ class TestSchemaAlignment:
         }
 
         # Validate against schema
-        jsonschema.validate(instance=canonical_doc, schema=schema)
+        validator_cls(schema).validate(canonical_doc)
 
     def test_source_proof_schema_is_valid(self):
         """Verify source_proof.json is a valid JSON schema."""
         schema = load_schema("source_proof.json")
-        jsonschema.Draft7Validator.check_schema(schema)
+        validator_cls = validator_for(schema)
+        validator_cls.check_schema(schema)
 
         # Create a sample source proof
         source_proof = {
@@ -209,7 +213,7 @@ class TestSchemaAlignment:
         }
 
         # Validate against schema
-        jsonschema.validate(instance=source_proof, schema=schema)
+        validator_cls(schema).validate(source_proof)
 
     def test_ledger_entry_response_has_required_fields(self):
         """Verify LedgerEntryResponse has fields that would be in a ledger schema."""
@@ -254,7 +258,7 @@ class TestSchemaAlignment:
         with pytest.raises(ValidationError):
             ShardInfo(
                 shard_id="shard1",
-                latest_seq="not_an_int",  # Should be int
+                latest_seq="not_an_int",  # Should be an int
                 latest_root="a" * 64
             )
 
