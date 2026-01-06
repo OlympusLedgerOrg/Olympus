@@ -9,7 +9,7 @@ but forest-level headers with signatures are deferred to Phase 1+.
 """
 
 from dataclasses import asdict, dataclass
-from typing import Any
+from typing import Any, Self
 
 import nacl.encoding
 import nacl.signing
@@ -39,7 +39,7 @@ class ShardHeader:
         return asdict(self)
 
     @classmethod
-    def from_dict(cls, data: dict[str, Any]) -> 'ShardHeader':
+    def from_dict(cls, data: dict[str, Any]) -> Self:
         """Create from dictionary."""
         return cls(**data)
 

@@ -153,10 +153,9 @@ class OlympusState:
         for shard_id, shard in self.shards.items():
             shard_roots[shard_id] = shard.tree.get_root().hex()
 
-        # Compute global root using forest_root over header hashes
-        # NOTE: This test-only implementation uses shard roots directly.
-        # Production implementation (storage/postgres.py) uses actual signed shard headers.
-        # Forest-level headers (Phase 1+) are not implemented in v1.0.
+        # Compute global root using forest_root over header hashes.
+        # NOTE: This test-only implementation uses shard roots directly. Production implementation
+        # (storage/postgres.py) uses actual signed shard headers. Forest-level headers are Phase 1+.
         header_hashes = [bytes.fromhex(root) for root in shard_roots.values()]
 
         global_root = forest_root(header_hashes).hex() if header_hashes else (b"\x00" * 32).hex()
