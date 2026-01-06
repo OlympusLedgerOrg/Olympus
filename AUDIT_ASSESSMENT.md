@@ -395,7 +395,10 @@
 
 ---
 
-### 1.10 Tests (`tests/`, 19 files, 3853 lines)
+### 1.10 Tests (`tests/`, 20 files, 3858 lines)
+
+#### Test Package
+- **`tests/__init__.py`** (5 lines) - Test package initialization
 
 #### Core Protocol Tests
 - **`test_hash_functions.py`** (272 lines) - Hash function tests
@@ -830,7 +833,7 @@
 2. **Storage layer:** PostgreSQL backend fully functional with atomic transactions
 3. **Public audit API:** Read-only API operational with proof generation
 4. **CLI tools:** Canonicalization and verification tools working
-5. **Tests:** Comprehensive test suite (3853 lines) with CI integration
+5. **Tests:** Comprehensive test suite (3858 lines total) with CI integration
 6. **Documentation:** Protocol specifications complete for Phase 0
 
 ### Critical Gaps for v1.0
