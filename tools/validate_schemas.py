@@ -14,14 +14,15 @@ import json
 import sys
 from collections.abc import Iterable
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 SCHEMAS_DIR = Path(__file__).resolve().parents[1] / "schemas"
 
 
 def load_json(path: Path) -> dict[str, Any]:
     try:
-        return json.loads(path.read_text(encoding="utf-8"))
+        data = json.loads(path.read_text(encoding="utf-8"))
+        return cast(dict[str, Any], data)
     except Exception as e:
         raise ValueError(f"{path}: invalid JSON: {e}") from e
 
@@ -127,8 +128,8 @@ def main() -> int:
             errors.append(str(e))
 
     if errors:
-        for e in errors:
-            print(e, file=sys.stderr)
+        for err in errors:
+            print(err, file=sys.stderr)
         return 1
 
     # Hygiene checks
@@ -140,26 +141,26 @@ def main() -> int:
     hard_fail: list[str] = []
     soft_warn: list[str] = []
 
-    for e in id_errors:
+    for err in id_errors:
         # missing $id => warn; duplicate => fail
-        if "duplicate $id" in e:
-            hard_fail.append(e)
+        if "duplicate $id" in err:
+            hard_fail.append(err)
         else:
-            soft_warn.append(e)
+            soft_warn.append(err)
 
-    for e in ref_errors:
-        hard_fail.append(e)
+    for err in ref_errors:
+        hard_fail.append(err)
 
-    for e in schema_errors:
+    for err in schema_errors:
         # missing jsonschema dependency should fail CI: you want deterministic protocol checks
-        hard_fail.append(e)
+        hard_fail.append(err)
 
     for w in soft_warn:
         print(f"WARNING: {w}", file=sys.stderr)
 
     if hard_fail:
-        for e in hard_fail:
-            print(f"ERROR: {e}", file=sys.stderr)
+        for err in hard_fail:
+            print(f"ERROR: {err}", file=sys.stderr)
         return 1
 
     print(f"OK: validated {len(schemas)} schema file(s)")

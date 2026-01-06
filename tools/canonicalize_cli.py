@@ -17,7 +17,7 @@ from protocol.canonical import canonicalize_document, document_to_bytes
 from protocol.hashes import hash_bytes
 
 
-def main():
+def main() -> int:
     parser = argparse.ArgumentParser(
         description='Canonicalize documents for Olympus protocol'
     )

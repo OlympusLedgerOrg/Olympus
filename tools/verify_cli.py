@@ -18,7 +18,7 @@ from protocol.merkle import MerkleProof, verify_proof
 from protocol.redaction import RedactionProof, RedactionProtocol
 
 
-def verify_merkle_proof(args) -> int:
+def verify_merkle_proof(args: argparse.Namespace) -> int:
     """Verify a Merkle inclusion proof."""
     try:
         with open(args.proof_file) as f:
@@ -44,7 +44,7 @@ def verify_merkle_proof(args) -> int:
         return 1
 
 
-def verify_ledger_chain(args) -> int:
+def verify_ledger_chain(args: argparse.Namespace) -> int:
     """Verify integrity of a ledger chain."""
     try:
         with open(args.ledger_file) as f:
@@ -68,7 +68,7 @@ def verify_ledger_chain(args) -> int:
         return 1
 
 
-def verify_redaction(args) -> int:
+def verify_redaction(args: argparse.Namespace) -> int:
     """Verify a redaction proof."""
     try:
         with open(args.proof_file) as f:
@@ -109,7 +109,7 @@ def verify_redaction(args) -> int:
         return 1
 
 
-def main():
+def main() -> int:
     parser = argparse.ArgumentParser(
         description='Verify proofs and commitments in Olympus protocol'
     )
