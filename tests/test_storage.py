@@ -1,12 +1,33 @@
 """
 Tests for storage layer.
 
-These tests validate that the Postgres storage layer correctly
-persists the Sparse Merkle State Forest, shard headers, and ledger entries.
+PRODUCTION STORAGE LAYER TESTING (PostgreSQL REQUIRED)
+=======================================================
 
-DATABASE: PostgreSQL (production storage layer)
-This test uses storage/postgres.py to validate production persistence semantics.
-See docs/08_database_strategy.md for rationale.
+These tests validate the PRODUCTION PostgreSQL storage layer implementation.
+They test transaction semantics, persistence, and ACID guarantees.
+
+DATABASE: PostgreSQL 16+ (via storage.postgres.StorageLayer)
+CODE PATH: storage/postgres.py (production storage layer)
+WHAT IS TESTED:
+  ✅ Transaction atomicity across all four tables
+  ✅ Sequence number generation (SELECT MAX(seq)+1 pattern)
+  ✅ Chain linkage preservation (prev_entry_hash, previous_header_hash)
+  ✅ Constraint enforcement (32-byte hashes, key lengths)
+  ✅ Concurrent access safety
+  ✅ Persistence and recovery
+
+TABLES TESTED:
+  - smt_leaves: Sparse Merkle Tree leaf nodes
+  - smt_nodes: Sparse Merkle Tree internal nodes
+  - shard_headers: Signed shard root commitments
+  - ledger_entries: Append-only ledger chain
+
+SETUP:
+  export TEST_DATABASE_URL='postgresql://olympus:olympus@localhost:5432/olympus'
+  pytest tests/test_storage.py -v
+
+See docs/08_database_strategy.md for complete database strategy documentation.
 """
 
 import os

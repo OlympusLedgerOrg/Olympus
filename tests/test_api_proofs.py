@@ -1,13 +1,28 @@
 """
 Tests for API proof endpoints
 
-This test validates that the proof endpoints return structured proofs
-without raising exceptions for both existing and non-existing keys.
+IN-MEMORY PROOF LOGIC TESTING (NO DATABASE)
+============================================
 
-DATABASE: SQLite (test-only, in-memory state)
-This test uses app/state.py (in-memory) to test proof generation logic only.
-It does NOT test the production storage layer (storage/postgres.py).
-See docs/08_database_strategy.md for rationale.
+This test validates proof generation logic using in-memory SparseMerkleTree instances.
+It does NOT test the production storage layer or database transactions.
+
+DATABASE: None (in-memory state via app/state.py)
+CODE PATH: app/main.py (test API) + app/state.py (in-memory)
+WHAT IS TESTED:
+  ✅ protocol/ssmf.py proof generation logic
+  ✅ Unified proof behavior (exists field)
+  ✅ API endpoint response structure
+  ❌ NOT tested: PostgreSQL storage layer
+  ❌ NOT tested: Transaction semantics
+  ❌ NOT tested: Persistence
+
+For production storage layer testing, see test_storage.py and test_e2e_audit.py.
+
+NOTE: The 'SQLite' file path created in setup_test_db() is VESTIGIAL and NOT USED.
+The test API (app/main.py) uses in-memory SparseMerkleTree instances, not a database.
+
+See docs/08_database_strategy.md for complete database strategy documentation.
 """
 
 import os
@@ -19,10 +34,17 @@ from fastapi.testclient import TestClient
 from protocol.hashes import hash_bytes, record_key
 
 
-# Set up test environment with a temporary database
 @pytest.fixture(autouse=True)
 def setup_test_db():
-    """Create a temporary database for tests."""
+    """
+    Create a temporary database file path for tests.
+
+    NOTE: This file path is VESTIGIAL and NOT USED for actual database operations.
+    The test API (app/main.py) uses in-memory SparseMerkleTree instances.
+    No database reads or writes occur.
+
+    This fixture exists for API compatibility only.
+    """
     with tempfile.NamedTemporaryFile(suffix='.sqlite', delete=False) as f:
         db_path = f.name
 
