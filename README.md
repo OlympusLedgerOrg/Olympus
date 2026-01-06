@@ -68,7 +68,21 @@ See `docs/08_database_strategy.md` for detailed rationale and usage guidance.
 
 ## Status
 
-This repository is in **protocol hardening phase**.
-APIs, UIs, and deployments are intentionally out of scope until
+This repository is in **protocol hardening phase** preparing for v1.0 release.
+
+**v1.0 Scope:**
+- Single-node append-only ledger with Ed25519 signatures
+- Sparse Merkle Forest for efficient proofs
+- Offline verifiable cryptographic commitments
+- PostgreSQL storage backend
+- Public audit API
+
+**Phase 1+ Features (not in v1.0):**
+- Guardian replication protocol
+- Byzantine fault tolerance
+- Multi-node consensus
+- Fork detection and resolution
+
+APIs, UIs, and production deployments are intentionally out of scope until
 the core semantics are finalized.
 

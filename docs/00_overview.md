@@ -9,7 +9,7 @@ Olympus is a federated, append-only public ledger for government documents desig
 - Deterministic canonicalization
 - Merkle commitments
 - Verifiable proofs
-- Distributed replication
+- Distributed replication ⚠️ **(Phase 1+ only)**
 
 ## Architecture
 
@@ -18,3 +18,7 @@ The Olympus system follows a strict pipeline:
 **Ingest → Canonicalize → Hash → Commit → Prove → Replicate → Verify**
 
 Each stage in this pipeline is designed to be independently verifiable and auditable.
+
+**v1.0 Implementation Status:**
+- ✅ Ingest, Canonicalize, Hash, Commit, Prove, Verify — **Implemented**
+- ⚠️ Replicate (multi-node Guardian replication) — **Phase 1+ only**
