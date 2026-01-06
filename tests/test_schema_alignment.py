@@ -16,7 +16,6 @@ import jsonschema
 import pytest
 from pydantic import BaseModel, ValidationError
 
-
 # Define test models that mirror the API models to avoid importing api.app
 # which would trigger database initialization
 
@@ -94,13 +93,13 @@ class TestSchemaAlignment:
     def test_shard_commit_aligns_with_shard_header_response(self):
         """
         Verify shard_commit.json is compatible with ShardHeaderResponse.
-        
+
         Note: The schema and model don't need to match exactly - the schema
         is a specification artifact while the Pydantic model is the implementation.
         This test just ensures they're not fundamentally incompatible.
         """
         schema = load_schema("shard_commit.json")
-        
+
         # Create a valid ShardHeaderResponse instance
         response = ShardHeaderResponse(
             shard_id="test_shard",
@@ -113,17 +112,17 @@ class TestSchemaAlignment:
             pubkey="e" * 64,     # 32 bytes hex (Ed25519 public key)
             canonical_header_json='{"shard_id":"test_shard"}'
         )
-        
+
         # Convert to dict for JSON schema validation
         response_dict = response.model_dump()
-        
+
         # The schema describes a shard commitment which is conceptually similar
         # but not identical to the API response. We verify the schema is valid
         # and documents the expected structure for external consumers.
-        
+
         # Verify the schema itself is valid
         jsonschema.Draft7Validator.check_schema(schema)
-        
+
         # Create a sample that matches the shard_commit schema
         shard_commit_sample = {
             "shard_id": "test_shard",
@@ -133,10 +132,10 @@ class TestSchemaAlignment:
             "previous_shard_root": "b" * 64,
             "signature": "c" * 128
         }
-        
+
         # Validate the sample against the schema
         jsonschema.validate(instance=shard_commit_sample, schema=schema)
-        
+
         # Verify key fields are present in both
         assert "shard_id" in response_dict
         assert "timestamp" in response_dict
@@ -147,7 +146,7 @@ class TestSchemaAlignment:
         """Verify leaf_record.json is a valid JSON schema."""
         schema = load_schema("leaf_record.json")
         jsonschema.Draft7Validator.check_schema(schema)
-        
+
         # Create a sample leaf record that matches the schema
         leaf_record = {
             "leaf_index": 0,
@@ -161,7 +160,7 @@ class TestSchemaAlignment:
                 ]
             }
         }
-        
+
         # Validate against schema
         jsonschema.validate(instance=leaf_record, schema=schema)
 
@@ -169,7 +168,7 @@ class TestSchemaAlignment:
         """Verify canonical_document.json is a valid JSON schema."""
         schema = load_schema("canonical_document.json")
         jsonschema.Draft7Validator.check_schema(schema)
-        
+
         # Create a sample canonical document
         canonical_doc = {
             "version": "1.0.0",
@@ -186,7 +185,7 @@ class TestSchemaAlignment:
                 "source_agency": "TestGov"
             }
         }
-        
+
         # Validate against schema
         jsonschema.validate(instance=canonical_doc, schema=schema)
 
@@ -194,7 +193,7 @@ class TestSchemaAlignment:
         """Verify source_proof.json is a valid JSON schema."""
         schema = load_schema("source_proof.json")
         jsonschema.Draft7Validator.check_schema(schema)
-        
+
         # Create a sample source proof
         source_proof = {
             "document_hash": "a" * 64,
@@ -208,7 +207,7 @@ class TestSchemaAlignment:
                 "contact": "admin@testgov.example"
             }
         }
-        
+
         # Validate against schema
         jsonschema.validate(instance=source_proof, schema=schema)
 
@@ -223,9 +222,9 @@ class TestSchemaAlignment:
             prev_entry_hash="c" * 64,
             entry_hash="d" * 64
         )
-        
+
         entry_dict = entry.model_dump()
-        
+
         # Verify expected fields are present
         assert "ts" in entry_dict
         assert "record_hash" in entry_dict
@@ -233,10 +232,10 @@ class TestSchemaAlignment:
         assert "shard_root" in entry_dict
         assert "prev_entry_hash" in entry_dict
         assert "entry_hash" in entry_dict
-        
+
         # Verify timestamp format
         assert entry_dict["ts"].endswith("Z")
-        
+
         # Verify hash fields are hex strings
         assert len(entry_dict["record_hash"]) == 64
         assert all(c in "0123456789abcdef" for c in entry_dict["record_hash"])
@@ -250,7 +249,7 @@ class TestSchemaAlignment:
             latest_root="a" * 64
         )
         assert shard_info.shard_id == "shard1"
-        
+
         # Invalid ShardInfo should raise ValidationError
         with pytest.raises(ValidationError):
             ShardInfo(
@@ -272,7 +271,7 @@ class TestSchemaAlignment:
             pubkey="e" * 64,
             canonical_header_json="{}"
         )
-        
+
         proof = ExistenceProofResponse(
             shard_id="test",
             record_type="document",
@@ -284,9 +283,9 @@ class TestSchemaAlignment:
             root_hash="d" * 64,
             shard_header=header
         )
-        
+
         proof_dict = proof.model_dump()
-        
+
         # Verify structure matches expected API response format
         assert proof_dict["shard_id"] == "test"
         assert proof_dict["record_type"] == "document"
@@ -297,7 +296,7 @@ class TestSchemaAlignment:
         """Verify schemas directory has README explaining their purpose."""
         readme_path = Path(__file__).parent.parent / "schemas" / "README.md"
         assert readme_path.exists(), "schemas/README.md should document schema purpose"
-        
+
         # Verify README contains key information
         readme_content = readme_path.read_text()
         assert "runtime validation" in readme_content.lower()

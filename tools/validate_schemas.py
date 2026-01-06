@@ -12,13 +12,14 @@ from __future__ import annotations
 
 import json
 import sys
+from collections.abc import Iterable
 from pathlib import Path
-from typing import Any, Dict, Iterable, Set, Tuple
+from typing import Any
 
 SCHEMAS_DIR = Path(__file__).resolve().parents[1] / "schemas"
 
 
-def load_json(path: Path) -> Dict[str, Any]:
+def load_json(path: Path) -> dict[str, Any]:
     try:
         return json.loads(path.read_text(encoding="utf-8"))
     except Exception as e:
@@ -31,8 +32,8 @@ def iter_schema_files() -> Iterable[Path]:
     yield from sorted(SCHEMAS_DIR.glob("*.json"))
 
 
-def collect_ids(schemas: Dict[Path, Dict[str, Any]]) -> Tuple[Set[str], list[str]]:
-    seen: Set[str] = set()
+def collect_ids(schemas: dict[Path, dict[str, Any]]) -> tuple[set[str], list[str]]:
+    seen: set[str] = set()
     errors: list[str] = []
     for path, doc in schemas.items():
         sid = doc.get("$id")
@@ -46,7 +47,7 @@ def collect_ids(schemas: Dict[Path, Dict[str, Any]]) -> Tuple[Set[str], list[str
     return seen, errors
 
 
-def walk_refs(obj: Any, out: Set[str]) -> None:
+def walk_refs(obj: Any, out: set[str]) -> None:
     if isinstance(obj, dict):
         if "$ref" in obj and isinstance(obj["$ref"], str):
             out.add(obj["$ref"])
@@ -58,7 +59,7 @@ def walk_refs(obj: Any, out: Set[str]) -> None:
 
 
 def check_local_refs(
-    schemas: Dict[Path, Dict[str, Any]],
+    schemas: dict[Path, dict[str, Any]],
 ) -> list[str]:
     """
     Best-effort local ref validation.
@@ -69,11 +70,11 @@ def check_local_refs(
 
     We do not try to resolve remote URLs here.
     """
-    available_files = {p.name for p in schemas.keys()}
+    available_files = {p.name for p in schemas}
     errors: list[str] = []
 
     for path, doc in schemas.items():
-        refs: Set[str] = set()
+        refs: set[str] = set()
         walk_refs(doc, refs)
         for ref in sorted(refs):
             if "://" in ref:
@@ -89,22 +90,21 @@ def check_local_refs(
     return errors
 
 
-def validate_with_jsonschema(schemas: Dict[Path, Dict[str, Any]]) -> list[str]:
+def validate_with_jsonschema(schemas: dict[Path, dict[str, Any]]) -> list[str]:
     """
     Validate each schema document as a JSON Schema.
     Uses jsonschema if installed.
     """
     errors: list[str] = []
     try:
-        import jsonschema  # type: ignore
         from jsonschema.validators import validator_for  # type: ignore
     except Exception:
         return ["jsonschema not installed; cannot validate JSON Schema documents"]
 
     for path, doc in schemas.items():
         try:
-            Validator = validator_for(doc)
-            Validator.check_schema(doc)
+            validator = validator_for(doc)
+            validator.check_schema(doc)
         except Exception as e:
             errors.append(f"{path.name}: invalid JSON Schema: {e}")
     return errors
@@ -116,7 +116,7 @@ def main() -> int:
         print("No schema files found under schemas/*.json", file=sys.stderr)
         return 2
 
-    schemas: Dict[Path, Dict[str, Any]] = {}
+    schemas: dict[Path, dict[str, Any]] = {}
     errors: list[str] = []
 
     # Load JSON
