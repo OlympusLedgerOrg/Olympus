@@ -188,7 +188,7 @@ uvicorn api.app:app --host 0.0.0.0 --port 8000
 
 ```bash
 # Set test database URL
-export TEST_DATABASE_URL='postgresql://postgres:postgres@localhost:5432/olympus_test'
+export TEST_DATABASE_URL='postgresql://olympus:olympus@localhost:5432/olympus_test'
 
 # Run all tests
 pytest tests/ -v

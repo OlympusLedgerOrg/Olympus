@@ -61,7 +61,7 @@ jobs:
 
     - name: Run ruff linting
       run: |
-        ruff check protocol/ storage/ api/ app/ tests/
+        ruff check --fix protocol/ storage/ api/ app/ tests/
 
     - name: Run mypy type checking
       run: |
