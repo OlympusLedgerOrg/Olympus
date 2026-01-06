@@ -21,6 +21,8 @@ Non-existence is a proofable state, not an error.
 
 import os
 
+from typing import Any
+
 from fastapi import FastAPI, HTTPException
 
 from app.state import OlympusState
@@ -32,26 +34,26 @@ state = OlympusState(os.getenv("OLY_DB_PATH", "/tmp/olympus.sqlite"))
 
 
 @app.get("/status")
-def status():
+def status() -> dict[str, Any]:
     """Health check endpoint with global root."""
     roots_data = state.roots()
     return {"status": "ok", "global_root": roots_data["global_root"]}
 
 
 @app.get("/roots")
-def roots():
+def roots() -> dict[str, Any]:
     """Get global root and all shard roots."""
     return state.roots()
 
 
 @app.get("/shards")
-def list_shards():
+def list_shards() -> dict[str, list[str]]:
     """List all shard IDs."""
     return {"shards": state.list_shards()}
 
 
 @app.get("/shards/{shard_id}/header/latest")
-def shard_header_latest(shard_id: str):
+def shard_header_latest(shard_id: str) -> dict[str, str]:
     """
     Get latest header for a shard.
 
@@ -64,7 +66,7 @@ def shard_header_latest(shard_id: str):
 
 
 @app.get("/shards/{shard_id}/proof/existence")
-def proof_existence(shard_id: str, key: str, version: str | None = None):
+def proof_existence(shard_id: str, key: str, version: str | None = None) -> dict[str, Any]:
     """
     Get a proof for a key (existence or non-existence).
 
@@ -103,7 +105,7 @@ def proof_existence(shard_id: str, key: str, version: str | None = None):
 
 
 @app.get("/shards/{shard_id}/proof/nonexistence")
-def proof_nonexistence(shard_id: str, key: str, version: str | None = None):
+def proof_nonexistence(shard_id: str, key: str, version: str | None = None) -> dict[str, Any]:
     """
     Get a proof for a key (existence or non-existence).
 

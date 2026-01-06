@@ -24,6 +24,8 @@ Wires to existing protocol/ssmf.py. Implements unified proof that never raises o
 """
 
 
+from typing import Any
+
 from protocol.hashes import forest_root
 from protocol.ssmf import ExistenceProof, NonExistenceProof, SparseMerkleTree
 
@@ -96,11 +98,11 @@ class OlympusState:
             self.shards[shard_id] = ShardState(shard_id)
         return self.shards[shard_id]
 
-    def list_shards(self) -> list:
+    def list_shards(self) -> list[str]:
         """Get list of shard IDs."""
         return sorted(self.shards.keys())
 
-    def header_latest(self, shard_id: str) -> dict | None:
+    def header_latest(self, shard_id: str) -> dict[str, str] | None:
         """
         Get latest header for a shard.
 
@@ -140,7 +142,7 @@ class OlympusState:
         shard = self._shard(shard_id)
         return shard.prove(key, version)
 
-    def roots(self) -> dict:
+    def roots(self) -> dict[str, Any]:
         """
         Get root hashes for all shards and global root.
 
