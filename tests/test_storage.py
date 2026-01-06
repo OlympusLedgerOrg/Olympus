@@ -44,7 +44,7 @@ from storage.postgres import StorageLayer
 pytestmark = pytest.mark.postgres
 
 # Test database connection string
-TEST_DB = os.environ.get('TEST_DATABASE_URL', 'postgresql://postgres:postgres@localhost:5432/olympus_test')
+TEST_DB = os.environ.get('TEST_DATABASE_URL', 'postgresql://olympus:olympus@localhost:5432/olympus_test')
 
 
 @pytest.fixture
