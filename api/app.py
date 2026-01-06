@@ -12,6 +12,9 @@ PERSISTENCE: Full transactional persistence across four tables
 CONCURRENCY: Safe for concurrent access
 PRODUCTION USE: ✅ YES - This is the production API
 
+v1.0 SCOPE: Single-node operation with cryptographic signatures and hash-chain integrity.
+Phase 1+ ONLY: Multi-node Guardian replication, Byzantine fault tolerance.
+
 Environment Variables:
 - DATABASE_URL: PostgreSQL connection string (REQUIRED)
 

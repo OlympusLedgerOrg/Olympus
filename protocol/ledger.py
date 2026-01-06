@@ -2,6 +2,11 @@
 Ledger protocol implementation for Olympus
 
 This module implements the append-only ledger for recording document commitments.
+
+v1.0 SCOPE: Single-node operation with cryptographic signatures and hash-chain integrity.
+Phase 1+ ONLY: Multi-node Guardian replication, Byzantine fault tolerance.
+
+For Guardian Replication specification (Phase 1+), see docs/04_ledger_protocol.md.
 """
 
 import json
