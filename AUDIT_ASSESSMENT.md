@@ -330,10 +330,16 @@
 - **Used by:** External integrators
 - **Not used by:** Python code (source signatures not yet implemented)
 
-#### `schemas/README.md` (exists but not viewed)
-- **What it does:** Documentation for schema usage and rationale
+#### `schemas/README.md` (74 lines)
+- **What it does:** Documentation explaining why schemas are specification artifacts not runtime validators
 - **Runtime status:** Documentation
-- **Completeness:** Unknown (not examined)
+- **Completeness:** Complete
+- **Key points:**
+  - Schemas are for external integrators and cross-language implementations
+  - Runtime validation uses Pydantic models for performance and type safety
+  - Schemas must stay aligned with Pydantic models
+  - Validated by CI via `tools/validate_schemas.py`
+- **Rationale:** Protocol hardening phase focuses on internal correctness, not external API contracts
 
 ---
 
@@ -389,41 +395,40 @@
 
 ---
 
-### 1.10 Tests (`tests/`, 21 files, 3858 lines)
+### 1.10 Tests (`tests/`, 19 files, 3853 lines)
 
 #### Core Protocol Tests
-- **`test_hash_functions.py`** (6966 lines claimed, likely error) - Hash function tests
-- **`test_hash_domains.py`** (602 lines) - Domain separation tests
-- **`test_canonical_json.py`** (6152 lines) - Canonical JSON encoding tests
-- **`test_canonical_document.py`** (7474 lines) - Document canonicalization tests
-- **`test_canonicalization.py`** (1917 lines) - Additional canonicalization tests
-- **`test_merkle_consistency.py`** (471 lines) - Merkle tree consistency tests
-- **`test_ledger.py`** (10985 lines) - Ledger chain tests
-- **`test_ssmf.py`** (6342 lines) - Sparse Merkle forest tests
-- **`test_redaction_semantics.py`** (471 lines) - Redaction semantics tests
-- **`test_timestamps.py`** (365 lines) - Timestamp tests
-- **`test_shards.py`** (5825 lines) - Shard header and signature tests
+- **`test_hash_functions.py`** (272 lines) - Hash function tests
+- **`test_hash_domains.py`** (23 lines) - Domain separation tests
+- **`test_canonical_json.py`** (202 lines) - Canonical JSON encoding tests
+- **`test_canonical_document.py`** (263 lines) - Document canonicalization tests
+- **`test_canonicalization.py`** (58 lines) - Additional canonicalization tests
+- **`test_merkle_consistency.py`** (20 lines) - Merkle tree consistency tests
+- **`test_ledger.py`** (441 lines) - Ledger chain tests
+- **`test_ssmf.py`** (233 lines) - Sparse Merkle forest tests
+- **`test_redaction_semantics.py`** (19 lines) - Redaction semantics tests
+- **`test_timestamps.py`** (14 lines) - Timestamp tests
+- **`test_shards.py`** (206 lines) - Shard header and signature tests
 
 #### Integration Tests
-- **`test_e2e_audit.py`** (11757 lines) - End-to-end audit flow (requires Postgres)
-- **`test_storage.py`** (11684 lines) - Storage layer tests (requires Postgres)
-- **`test_unified_proofs.py`** (6814 lines) - Unified proof tests
-- **`test_schema_alignment.py`** (10318 lines) - Schema alignment tests
+- **`test_e2e_audit.py`** (332 lines) - End-to-end audit flow (requires Postgres)
+- **`test_storage.py`** (398 lines) - Storage layer tests (requires Postgres)
+- **`test_unified_proofs.py`** (228 lines) - Unified proof tests
+- **`test_schema_alignment.py`** (308 lines) - Schema alignment tests
 
 #### CLI Tests
-- **`test_cli_canonicalize.py`** (7379 lines) - Canonicalization CLI tests
-- **`test_cli_verify.py`** (9944 lines) - Verification CLI tests
+- **`test_cli_canonicalize.py`** (277 lines) - Canonicalization CLI tests
+- **`test_cli_verify.py`** (365 lines) - Verification CLI tests
 
 #### API Tests
-- **`test_api_proofs.py`** (5750 lines) - API proof endpoint tests
+- **`test_api_proofs.py`** (184 lines) - API proof endpoint tests
 
 #### Invariant Tests
-- **`test_invariants.py`** (255 lines) - Protocol invariant tests
+- **`test_invariants.py`** (10 lines) - Protocol invariant tests
 
 **Runtime status:** All production-ready, run in CI  
 **Completeness:** Comprehensive coverage  
-**CI marks:** Tests marked with `@pytest.mark.postgres` for database-requiring tests  
-**Note:** Line counts appear inflated in some files (likely counting includes/fixtures)
+**CI marks:** Tests marked with `@pytest.mark.postgres` for database-requiring tests
 
 ---
 
@@ -489,10 +494,18 @@
 - **Content:** Problem statement, architecture, proofs, governance, audience
 - **Note:** High-level pitch, not technical spec
 
-#### `CONTRIBUTING.md` (exists but not viewed)
-- **What it does:** Contribution guidelines
+#### `CONTRIBUTING.md` (229 lines)
+- **What it does:** Contribution guidelines with setup instructions
 - **Runtime status:** Documentation
-- **Completeness:** Unknown
+- **Completeness:** Complete
+- **Content:**
+  - Development environment setup (Python 3.12+, PostgreSQL 16+)
+  - Database creation and environment variables
+  - Running tests (all, specific suites, database strategy)
+  - Code quality tools (ruff, mypy)
+  - Database usage guidelines (when to use Postgres vs SQLite)
+  - Common issues and troubleshooting
+  - Documentation guidelines
 
 #### `ISSUES.md` (147 lines)
 - **What it does:** Open issues tracker
@@ -525,10 +538,12 @@
 - **Completeness:** Complete
 - **Dependencies:** blake3, PyNaCl, FastAPI, uvicorn, psycopg, pydantic
 
-#### `requirements-dev.txt` (exists but not viewed)
+#### `requirements-dev.txt` (7 lines)
 - **What it does:** Development dependencies
 - **Runtime status:** Development configuration
-- **Completeness:** Unknown
+- **Completeness:** Complete
+- **Dependencies:** pytest, pytest-asyncio, ruff, mypy, httpx, jsonschema
+- **Note:** Includes jsonschema for schema validation in CI
 
 #### `run_api.py` (46 lines)
 - **What it does:** API server launcher
@@ -647,9 +662,10 @@
 #### Timestamp Consistency
 - **Issue:** `protocol/timestamps.py` exists but unused
 - **Reality:** `datetime.now(UTC)` called directly in `storage/postgres.py`, `protocol/ledger.py`
-- **Gap:** Inconsistent timestamp generation, deprecated `datetime.utcnow()` in some tests (ISSUES.md #15)
-- **Files affected:** Multiple files
+- **Gap:** Inconsistent timestamp generation across modules
+- **Files affected:** `protocol/timestamps.py`, `storage/postgres.py`, `protocol/ledger.py`
 - **Recommendation:** Standardize on `protocol/timestamps.py` or remove it
+- **Note:** No deprecated `datetime.utcnow()` found in codebase (ISSUES.md #15 may be outdated)
 
 #### Type Safety Issues
 - **Issue:** ISSUES.md #16 reports 8 mypy errors
@@ -819,11 +835,11 @@
 
 ### Critical Gaps for v1.0
 1. **Guardian Replication:** Documented but not implemented (spec-code mismatch)
-2. **Type safety:** 8 mypy errors need resolution
-3. **Timestamp deprecation:** datetime.utcnow() needs replacement
-4. **Schema alignment:** JSON schemas orphaned, need integration or documentation
-5. **Forest headers:** Global forest commitment missing from storage/API
-6. **Operations documentation:** Deployment, backup, monitoring guides missing
+2. **Type safety:** 8 mypy errors need resolution (per ISSUES.md #16)
+3. **Schema alignment:** JSON schemas orphaned, need integration or clear documentation (addressed in schemas/README.md)
+4. **Forest headers:** Global forest commitment missing from storage/API
+5. **Operations documentation:** Deployment, backup, monitoring guides missing
+6. **Timestamp inconsistency:** `protocol/timestamps.py` unused, direct datetime.now(UTC) calls scattered
 
 ### Non-Critical Gaps (Phase 1+)
 1. **ZK circuits:** Reference only, not production-ready (documented as such)
@@ -832,9 +848,9 @@
 4. **Observability:** Logging, metrics, tracing minimal
 
 ### Recommendations
-1. **For immediate v1.0:** Fix type errors, deprecation warnings, document Guardian Replication as Phase 1+
+1. **For immediate v1.0:** Fix type errors, document Guardian Replication as Phase 1+, standardize timestamp usage
 2. **For production readiness:** Add operations documentation, deployment guide, backup procedures
 3. **For auditability:** Add chain verification tool, periodic integrity checks
-4. **For maintainability:** Resolve schema-implementation gap (integrate or document as spec-only)
+4. **For maintainability:** Schema alignment already documented in schemas/README.md
 
 This assessment is based on code examination as of 2026-01-06 and ties all claims to specific files and line counts where available.
