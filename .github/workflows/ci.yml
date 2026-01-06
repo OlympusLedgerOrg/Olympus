@@ -56,6 +56,9 @@ jobs:
         pip install -r requirements.txt
         pip install -r requirements-dev.txt
 
+    - name: Validate JSON schemas
+      run: python tools/validate_schemas.py
+
     - name: Run ruff linting
       run: |
         ruff check protocol/ storage/ api/ app/ tests/

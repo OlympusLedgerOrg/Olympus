@@ -43,9 +43,16 @@ Defines the structure of a source authenticity proof, including agency signature
 
 While the schemas are not used for runtime validation, they MUST remain aligned with the Pydantic models in the codebase. This is enforced by:
 
-1. **Manual review** during code changes
-2. **CI tests** that verify schema-model compatibility (see `tests/test_schema_alignment.py`)
-3. **Documentation updates** when data structures change
+1. **Schema validation script** (`tools/validate_schemas.py`) - Ensures schemas are valid JSON Schema documents
+2. **CI automation** - The validation script runs on every commit to catch schema errors early
+3. **Alignment tests** (`tests/test_schema_alignment.py`) - Verify schema-model compatibility
+4. **Manual review** during code changes
+5. **Documentation updates** when data structures change
+
+To validate schemas locally:
+```bash
+python tools/validate_schemas.py
+```
 
 ## For External Integrators
 
