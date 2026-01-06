@@ -1,6 +1,6 @@
 # Olympus
 
-Olympus is a federated, append-only public ledger for government documents.
+Olympus is an append-only public ledger for government documents with planned federation capabilities.
 
 Its purpose is simple:
 
