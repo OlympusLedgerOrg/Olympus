@@ -42,7 +42,7 @@ Olympus only guarantees the integrity of what it has seen.
 
 - `docs/` — The protocol specification (read this first)
 - `protocol/` — Reference implementations of core primitives
-- `schemas/` — Canonical data formats
+- `schemas/` — JSON schemas for external interoperability (see `schemas/README.md` for details)
 - `proofs/` — Zero-knowledge circuits and notes
 - `examples/` — Known-good test artifacts
 - `tools/` — CLI utilities for canonicalization and verification
@@ -50,6 +50,8 @@ Olympus only guarantees the integrity of what it has seen.
 - `migrations/` — Database schema migrations
 
 This repository is intended to be read and audited.
+
+**Note on Schemas**: The JSON schemas in `schemas/` are specification artifacts for external integrators and cross-language implementations. Runtime validation uses Pydantic models defined in the API code. See `schemas/README.md` for the rationale.
 
 ---
 
