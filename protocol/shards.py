@@ -2,14 +2,46 @@
 Shard header protocol for Olympus
 
 This module implements shard header hashing and signature verification.
+
+Forest headers are NOT implemented in v1.0. The forest_root() function
+in protocol.hashes provides the global root computation over shard headers,
+but forest-level headers with signatures are deferred to Phase 1+.
 """
 
+from dataclasses import asdict, dataclass
 from typing import Any
 
 import nacl.encoding
 import nacl.signing
 
 from .hashes import shard_header_hash
+
+
+@dataclass
+class ShardHeader:
+    """
+    Shard header structure for v1.0.
+    
+    A shard header represents a committed state of a single shard's
+    Sparse Merkle Tree at a specific sequence number.
+    """
+    shard_id: str
+    seq: int
+    root_hash: str  # Hex-encoded 32-byte root
+    header_hash: str  # Hex-encoded 32-byte header hash
+    previous_header_hash: str  # Hex-encoded previous header hash (empty for genesis)
+    timestamp: str  # ISO 8601 with Z suffix
+    signature: str  # Hex-encoded Ed25519 signature
+    pubkey: str  # Hex-encoded Ed25519 public key
+
+    def to_dict(self) -> dict[str, Any]:
+        """Convert to dictionary."""
+        return asdict(self)
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> 'ShardHeader':
+        """Create from dictionary."""
+        return cls(**data)
 
 
 def create_shard_header(
