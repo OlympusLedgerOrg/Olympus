@@ -5,28 +5,27 @@ These tests validate the canonical_json_encode() function which provides
 deterministic JSON encoding for the Olympus protocol.
 """
 
-import math
 
 import pytest
 
-from protocol.canonical_json import canonical_json_encode, canonical_json_bytes
+from protocol.canonical_json import canonical_json_bytes, canonical_json_encode
 
 
 def test_canonical_json_encode_basic_types():
     """Test encoding of basic JSON types."""
     # String
     assert canonical_json_encode("hello") == '"hello"'
-    
+
     # Number (integer)
     assert canonical_json_encode(42) == '42'
-    
+
     # Number (float)
     assert canonical_json_encode(3.14) == '3.14'
-    
+
     # Boolean
     assert canonical_json_encode(True) == 'true'
     assert canonical_json_encode(False) == 'false'
-    
+
     # Null
     assert canonical_json_encode(None) == 'null'
 
@@ -128,11 +127,11 @@ def test_canonical_json_encode_deterministic():
         "a": {"nested": True},
         "m": "value"
     }
-    
+
     result1 = canonical_json_encode(obj)
     result2 = canonical_json_encode(obj)
     result3 = canonical_json_encode(obj)
-    
+
     assert result1 == result2 == result3
 
 
@@ -142,11 +141,11 @@ def test_canonical_json_encode_equivalent_objects():
     obj1 = {"z": 1, "a": 2, "m": 3}
     obj2 = {"a": 2, "m": 3, "z": 1}
     obj3 = {"m": 3, "z": 1, "a": 2}
-    
+
     result1 = canonical_json_encode(obj1)
     result2 = canonical_json_encode(obj2)
     result3 = canonical_json_encode(obj3)
-    
+
     assert result1 == result2 == result3
 
 
@@ -154,7 +153,7 @@ def test_canonical_json_bytes():
     """Test canonical_json_bytes returns UTF-8 bytes."""
     obj = {"key": "value"}
     result = canonical_json_bytes(obj)
-    
+
     assert isinstance(result, bytes)
     assert result == b'{"key":"value"}'
 
@@ -163,7 +162,7 @@ def test_canonical_json_bytes_unicode():
     """Test canonical_json_bytes handles unicode correctly."""
     obj = {"unicode": "hello 世界"}
     result = canonical_json_bytes(obj)
-    
+
     assert isinstance(result, bytes)
     # Should be ASCII-escaped in the JSON
     decoded = result.decode('utf-8')
@@ -196,7 +195,7 @@ def test_canonical_json_encode_special_characters():
         "tab": "col1\tcol2"
     }
     result = canonical_json_encode(obj)
-    
+
     # All special characters should be properly escaped
     assert '\\"' in result or r'\"' in result
     assert '\\n' in result

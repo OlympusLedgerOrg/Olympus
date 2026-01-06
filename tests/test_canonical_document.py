@@ -19,7 +19,7 @@ def test_canonicalize_document_simple_dict():
     """Test canonicalization of a simple dictionary."""
     doc = {"name": "Alice", "age": 30}
     result = canonicalize_document(doc)
-    
+
     # Keys should be sorted
     assert list(result.keys()) == ["age", "name"]
     assert result["name"] == "Alice"
@@ -30,7 +30,7 @@ def test_canonicalize_document_sorts_keys():
     """Test that keys are sorted alphabetically."""
     doc = {"z": 1, "a": 2, "m": 3, "b": 4}
     result = canonicalize_document(doc)
-    
+
     assert list(result.keys()) == ["a", "b", "m", "z"]
 
 
@@ -43,7 +43,7 @@ def test_canonicalize_document_nested_dict():
         }
     }
     result = canonicalize_document(doc)
-    
+
     # Outer keys sorted
     assert list(result.keys()) == ["outer"]
     # Inner keys also sorted
@@ -57,7 +57,7 @@ def test_canonicalize_document_normalizes_whitespace():
         "field2": "multiple  \t  spaces"
     }
     result = canonicalize_document(doc)
-    
+
     assert result["field1"] == "hello world"
     assert result["field2"] == "multiple spaces"
 
@@ -68,7 +68,7 @@ def test_canonicalize_document_with_list():
         "items": ["apple", "banana", "cherry"]
     }
     result = canonicalize_document(doc)
-    
+
     # List order should be preserved
     assert result["items"] == ["apple", "banana", "cherry"]
 
@@ -82,7 +82,7 @@ def test_canonicalize_document_list_with_dicts():
         ]
     }
     result = canonicalize_document(doc)
-    
+
     # Each dict in the list should be canonicalized
     assert list(result["people"][0].keys()) == ["age", "name"]
     assert list(result["people"][1].keys()) == ["age", "name"]
@@ -97,7 +97,7 @@ def test_canonicalize_document_preserves_non_string_values():
         "float": 3.14
     }
     result = canonicalize_document(doc)
-    
+
     assert result["number"] == 42
     assert result["boolean"] is True
     assert result["null"] is None
@@ -108,10 +108,10 @@ def test_canonicalize_document_rejects_non_dict():
     """Test that non-dictionary input raises ValueError."""
     with pytest.raises(ValueError, match="must be a dictionary"):
         canonicalize_document("not a dict")
-    
+
     with pytest.raises(ValueError, match="must be a dictionary"):
         canonicalize_document([1, 2, 3])
-    
+
     with pytest.raises(ValueError, match="must be a dictionary"):
         canonicalize_document(42)
 
@@ -136,7 +136,7 @@ def test_canonicalize_document_deeply_nested():
         }
     }
     result = canonicalize_document(doc)
-    
+
     # Navigate to deep level and check sorting
     deep = result["level1"]["level2"]["level3"]
     assert list(deep.keys()) == ["a", "z"]
@@ -149,11 +149,11 @@ def test_canonicalize_document_deterministic():
         "a": "first",
         "nested": {"b": 2, "a": 1}
     }
-    
+
     result1 = canonicalize_document(doc)
     result2 = canonicalize_document(doc)
     result3 = canonicalize_document(doc)
-    
+
     assert result1 == result2 == result3
 
 
@@ -161,7 +161,7 @@ def test_canonicalize_json():
     """Test canonicalize_json produces canonical JSON string."""
     data = {"z": 1, "a": 2}
     result = canonicalize_json(data)
-    
+
     # Should be sorted, compact, ASCII
     assert result == '{"a":2,"z":1}'
 
@@ -170,7 +170,7 @@ def test_document_to_bytes():
     """Test document_to_bytes produces canonical bytes."""
     doc = {"name": "Alice  Smith", "id": 123}
     result = document_to_bytes(doc)
-    
+
     assert isinstance(result, bytes)
     # Should be canonical JSON with normalized whitespace
     assert result == b'{"id":123,"name":"Alice Smith"}'
@@ -179,10 +179,10 @@ def test_document_to_bytes():
 def test_document_to_bytes_deterministic():
     """Test that document_to_bytes is deterministic."""
     doc = {"z": "value", "a": "other"}
-    
+
     result1 = document_to_bytes(doc)
     result2 = document_to_bytes(doc)
-    
+
     assert result1 == result2
 
 
@@ -190,16 +190,16 @@ def test_normalize_whitespace():
     """Test normalize_whitespace function."""
     # Multiple spaces
     assert normalize_whitespace("hello   world") == "hello world"
-    
+
     # Leading/trailing spaces
     assert normalize_whitespace("  hello  ") == "hello"
-    
+
     # Tabs
     assert normalize_whitespace("hello\tworld") == "hello world"
-    
+
     # Newlines
     assert normalize_whitespace("hello\nworld") == "hello world"
-    
+
     # Mixed whitespace
     assert normalize_whitespace("  hello  \t \n  world  ") == "hello world"
 
@@ -221,7 +221,7 @@ def test_canonicalize_document_with_whitespace_in_nested_strings():
         ]
     }
     result = canonicalize_document(doc)
-    
+
     assert result["outer"]["text"] == "multiple spaces"
     assert result["items"][0]["description"] == "leading and trailing"
 
@@ -249,13 +249,13 @@ def test_canonicalize_document_complex_real_world():
             ]
         }
     }
-    
+
     result = canonicalize_document(doc)
-    
+
     # Check key ordering at each level
     assert list(result.keys()) == ["content", "metadata", "title", "version"]
     assert list(result["metadata"].keys()) == ["author", "created", "tags"]
-    
+
     # Check whitespace normalization
     assert result["title"] == "Important Document"
     assert result["metadata"]["author"] == "John Doe"
