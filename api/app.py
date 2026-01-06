@@ -1,6 +1,24 @@
 """
 Public audit API for Olympus Phase 0.5
 
+PRODUCTION API (PostgreSQL REQUIRED)
+=====================================
+
+This is the PRODUCTION FastAPI application for Olympus.
+It requires PostgreSQL 16+ and provides full ACID transaction guarantees.
+
+DATABASE: PostgreSQL 16+ (via storage.postgres.StorageLayer)
+PERSISTENCE: Full transactional persistence across four tables
+CONCURRENCY: Safe for concurrent access
+PRODUCTION USE: ✅ YES - This is the production API
+
+Environment Variables:
+- DATABASE_URL: PostgreSQL connection string (REQUIRED)
+
+For testing proof logic without PostgreSQL, use app/main.py (test-only).
+
+See docs/08_database_strategy.md for complete database strategy documentation.
+
 This module provides read-only HTTP endpoints for third-party auditors
 to verify records, proofs, signatures, and ledger integrity.
 

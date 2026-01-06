@@ -1,6 +1,20 @@
 """
 FastAPI application for Olympus proof API
 
+TEST API (IN-MEMORY, NO DATABASE)
+==================================
+
+This is a TEST-ONLY FastAPI application for validating proof generation logic.
+It does NOT use a database and is NOT suitable for production.
+
+DATABASE: None (in-memory via app/state.py)
+PERSISTENCE: None (ephemeral state)
+PRODUCTION USE: ❌ NO - Use api/app.py instead
+
+For production deployment with PostgreSQL, use api/app.py.
+
+See docs/08_database_strategy.md for complete database strategy documentation.
+
 Proof endpoints must always return 200 and must never throw on absence.
 Non-existence is a proofable state, not an error.
 """

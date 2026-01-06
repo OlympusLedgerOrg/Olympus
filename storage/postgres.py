@@ -1,10 +1,28 @@
 """
 Storage layer for Olympus protocol.
 
-This module provides persistence for the Sparse Merkle State Forest,
-shard headers, and ledger entries using Postgres.
+DATABASE BACKEND: PostgreSQL 16+ (PRODUCTION ONLY)
+===================================================
 
-All operations are append-only (no UPDATE or DELETE).
+This module provides the AUTHORITATIVE production storage layer for Olympus.
+
+PostgreSQL is the ONLY supported production database. This implementation provides:
+- ACID transaction guarantees across all tables
+- Atomic append operations (no UPDATE or DELETE)
+- Concurrent access safety
+- Cryptographic hash integrity (32-byte BYTEA constraints)
+
+TABLES (all append-only):
+- smt_leaves: Sparse Merkle Tree leaf nodes (key-value pairs)
+- smt_nodes: Sparse Merkle Tree internal nodes (path-to-hash mappings)
+- shard_headers: Signed shard root commitments with chain linkage
+- ledger_entries: Append-only ledger chain linking records to shard roots
+
+TRANSACTION BOUNDARIES:
+- append_record(): Single atomic transaction across all four tables
+- get_*(): Read-only operations, automatic rollback on exit
+
+See docs/08_database_strategy.md for complete database strategy documentation.
 """
 
 import json

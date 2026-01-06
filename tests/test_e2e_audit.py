@@ -1,17 +1,35 @@
 """
 End-to-end audit test for Phase 0.5
 
-This test validates the complete audit flow:
-1. Appends multiple records (with versions)
-2. Emits ledger entries and signed shard headers
-3. Serves data via the API
-4. Verifies proofs, signatures, and ledger chain offline
+FULL PRODUCTION STACK TESTING (PostgreSQL REQUIRED)
+====================================================
 
-No DB shortcuts, no mocks beyond HTTP.
+This test validates the complete production audit flow from record insertion
+through API serving to offline cryptographic verification.
 
-DATABASE: PostgreSQL (production storage layer)
-This test uses storage/postgres.py to validate the full production stack.
-See docs/08_database_strategy.md for rationale.
+DATABASE: PostgreSQL 16+ (via storage.postgres.StorageLayer)
+CODE PATH: storage/postgres.py + api/app.py (full production stack)
+WHAT IS TESTED:
+  ✅ Complete write path (append_record transactions)
+  ✅ Ledger chain integrity and linkage
+  ✅ Shard header chain and Ed25519 signatures
+  ✅ Production API endpoints (api/app.py)
+  ✅ Offline proof verification
+  ✅ Offline signature verification
+  ✅ Offline ledger chain verification
+
+TABLES EXERCISED:
+  - All four production tables: smt_leaves, smt_nodes, shard_headers, ledger_entries
+  - Full transaction atomicity across all tables
+  - Chain linkage preservation
+
+NO DB SHORTCUTS, NO MOCKS BEYOND HTTP.
+
+SETUP:
+  export TEST_DATABASE_URL='postgresql://olympus:olympus@localhost:5432/olympus'
+  pytest tests/test_e2e_audit.py -v
+
+See docs/08_database_strategy.md for complete database strategy documentation.
 """
 
 import os

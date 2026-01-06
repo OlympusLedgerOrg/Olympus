@@ -1,6 +1,25 @@
 """
 Application state management for Olympus API
 
+IN-MEMORY STATE (TEST-ONLY, NO DATABASE)
+==========================================
+
+This module provides an IN-MEMORY state manager for testing proof generation logic.
+It does NOT use a database and is NOT suitable for production.
+
+DATABASE: None (in-memory SparseMerkleTree instances)
+PERSISTENCE: None (ephemeral, lost on restart)
+CONCURRENCY: Not supported (single process only)
+PRODUCTION USE: ❌ NO - Use storage/postgres.py instead
+
+This module is used ONLY by:
+- app/main.py (test API)
+- tests/test_api_proofs.py (proof logic tests)
+
+For production storage with PostgreSQL, use storage.postgres.StorageLayer.
+
+See docs/08_database_strategy.md for complete database strategy documentation.
+
 Wires to existing protocol/ssmf.py. Implements unified proof that never raises on absence.
 """
 
@@ -49,8 +68,14 @@ class OlympusState:
         """
         Initialize Olympus state.
 
+        NOTE: The db_path parameter is VESTIGIAL and NOT USED for actual database operations.
+        This class maintains state in-memory using Python dictionaries and SparseMerkleTree instances.
+        No database reads or writes occur.
+
+        This is a TEST-ONLY component. For production, use storage.postgres.StorageLayer.
+
         Args:
-            db_path: Path to database file (file-backed, NOT :memory:)
+            db_path: Vestigial parameter (not used for actual database operations)
         """
         self.db_path = db_path
         self.shards: dict[str, ShardState] = {}
