@@ -38,11 +38,11 @@ from protocol.hashes import hash_bytes, record_key
 def setup_test_db():
     """
     Create a temporary database file path for tests.
-    
+
     NOTE: This file path is VESTIGIAL and NOT USED for actual database operations.
     The test API (app/main.py) uses in-memory SparseMerkleTree instances.
     No database reads or writes occur.
-    
+
     This fixture exists for API compatibility only.
     """
     with tempfile.NamedTemporaryFile(suffix='.sqlite', delete=False) as f:
