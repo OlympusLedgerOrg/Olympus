@@ -35,7 +35,7 @@ jobs:
           POSTGRES_PASSWORD: olympus
           POSTGRES_DB: olympus
         options: >-
-          --health-cmd pg_isready
+          --health-cmd "pg_isready -U olympus"
           --health-interval 5s
           --health-timeout 5s
           --health-retries 20
@@ -61,7 +61,7 @@ jobs:
 
     - name: Run ruff linting
       run: |
-        ruff check --fix protocol/ storage/ api/ app/ tests/
+        ruff check protocol/ storage/ api/ app/ tests/
 
     - name: Run mypy type checking
       run: |
