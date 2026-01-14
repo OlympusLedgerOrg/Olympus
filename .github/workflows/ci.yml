@@ -66,8 +66,8 @@ jobs:
     - name: Install dependencies
       run: |
         python -m pip install --upgrade pip
-        # Keep tools up-to-date and ensure build backend satisfies pyproject floor
-        pip install -U setuptools wheel
+        pip install -U setuptools
+        pip install wheel
         pip install -e ".[dev]"
 
     - name: Validate JSON schemas
