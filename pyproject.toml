@@ -1,5 +1,5 @@
 [build-system]
-requires = ["setuptools>=61.0"]
+requires = ["setuptools>=77.0.0", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
@@ -8,15 +8,15 @@ version = "0.1.0"
 description = "Append-only public ledger for government documents with cryptographic guarantees"
 readme = "README.md"
 requires-python = ">=3.10"
-license = {text = "Apache-2.0"}
+license = "Apache-2.0"  # SPDX string (fixes setuptools deprecation)
 authors = [
     {name = "Olympus Contributors"}
 ]
 classifiers = [
     "Development Status :: 3 - Alpha",
     "Intended Audience :: Developers",
-    "License :: OSI Approved :: Apache Software License",
     "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3 :: Only",
     "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
@@ -41,6 +41,31 @@ dev = [
     "jsonschema>=4.20.0",
     "coverage>=7.0.0",
     "bandit>=1.9.0",
+]
+
+[tool.setuptools]
+include-package-data = true
+
+[tool.setuptools.packages.find]
+# Flat repo layout: discover from repo root
+where = ["."]
+# Explicitly include your first-party pkgs to avoid "Multiple top-level packages" error
+include = [
+    "api*",
+    "app*",
+    "protocol*",
+    "schemas*",
+    "storage*",
+    "proofs*",
+]
+# Common excludes not meant for distribution wheels
+exclude = [
+    "tests*",
+    "migrations*",
+    "docs*",
+    "scripts*",
+    "examples*",
+    "tools*",
 ]
 
 [tool.ruff]
@@ -100,6 +125,7 @@ branch = true
 [tool.coverage.report]
 precision = 2
 skip_empty = true
+fail_under = 75.0
 exclude_lines = [
     "pragma: no cover",
     "def __repr__",
