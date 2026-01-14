@@ -53,7 +53,7 @@ def list_shards() -> dict[str, list[str]]:
 
 
 @app.get("/shards/{shard_id}/header/latest")
-def shard_header_latest(shard_id: str) -> dict[str, str]:
+def shard_header_latest(shard_id: str) -> dict[str, Any]:
     """
     Get latest header for a shard.
 
