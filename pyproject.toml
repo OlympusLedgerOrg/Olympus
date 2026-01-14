@@ -123,19 +123,9 @@ omit = [
 branch = true
 
 [tool.coverage.report]
-precision = 2
-skip_empty = true
-fail_under = 60.0  # Start at 60% (non-postgres baseline); aim for 75%+ with postgres tests
-exclude_lines = [
-    "pragma: no cover",
-    "def __repr__",
-    "raise AssertionError",
-    "raise NotImplementedError",
-    "if __name__ == .__main__.:",
-    "if TYPE_CHECKING:",
-    "class .*\\bProtocol\\):",
-    "@(abc\\.)?abstractmethod",
-]
+show_missing = true
+skip_covered = true
+fail_under = 75  # raise to 80 once DB-backed tests are green
 
 [tool.coverage.xml]
 output = "coverage.xml"

@@ -1,6 +1,9 @@
 name: Olympus CI
 
 on:
+  # Ensure manual reruns are possible from the UI
+  workflow_dispatch:
+
   push:
     branches: [ main, copilot/** ]
   pull_request:
@@ -51,9 +54,20 @@ jobs:
         python-version: '3.12'
         cache: 'pip'
 
+    - name: Show Python/pip/setuptools
+      run: |
+        python --version
+        pip --version
+        python - <<'PY'
+        import setuptools, sys
+        print("setuptools:", setuptools.__version__)
+        PY
+
     - name: Install dependencies
       run: |
         python -m pip install --upgrade pip
+        # Keep tools up-to-date and ensure build backend satisfies pyproject floor
+        pip install -U setuptools wheel
         pip install -e ".[dev]"
 
     - name: Validate JSON schemas
