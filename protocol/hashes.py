@@ -134,8 +134,10 @@ def shard_header_hash(fields_dict: dict[str, Any]) -> bytes:
         32-byte shard header hash using HDR_PREFIX domain separation
     """
     # Canonical JSON: sorted keys, compact separators, UTF-8
-    canonical_json = json.dumps(fields_dict, sort_keys=True, separators=(',', ':'), ensure_ascii=True)
-    canonical_bytes = canonical_json.encode('utf-8')
+    canonical_json = json.dumps(
+        fields_dict, sort_keys=True, separators=(",", ":"), ensure_ascii=True
+    )
+    canonical_bytes = canonical_json.encode("utf-8")
     return blake3_hash([HDR_PREFIX, canonical_bytes])
 
 
@@ -173,7 +175,7 @@ def hash_bytes(data: bytes) -> bytes:
 
 def hash_string(data: str) -> bytes:
     """Legacy: Compute BLAKE3 hash of a UTF-8 string."""
-    return hash_bytes(data.encode('utf-8'))
+    return hash_bytes(data.encode("utf-8"))
 
 
 def merkle_parent_hash(left: bytes, right: bytes) -> bytes:

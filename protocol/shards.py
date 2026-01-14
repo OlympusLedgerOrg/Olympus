@@ -13,10 +13,7 @@ from .hashes import shard_header_hash
 
 
 def create_shard_header(
-    shard_id: str,
-    root_hash: bytes,
-    timestamp: str,
-    previous_header_hash: str = ""
+    shard_id: str, root_hash: bytes, timestamp: str, previous_header_hash: str = ""
 ) -> dict[str, Any]:
     """
     Create a shard header dictionary.
@@ -37,7 +34,7 @@ def create_shard_header(
         "shard_id": shard_id,
         "root_hash": root_hash.hex(),
         "timestamp": timestamp,
-        "previous_header_hash": previous_header_hash
+        "previous_header_hash": previous_header_hash,
     }
 
     # Compute header hash
@@ -66,9 +63,7 @@ def sign_header(header: dict[str, Any], signing_key: nacl.signing.SigningKey) ->
 
 
 def verify_header(
-    header: dict[str, Any],
-    signature: str,
-    verify_key: nacl.signing.VerifyKey
+    header: dict[str, Any], signature: str, verify_key: nacl.signing.VerifyKey
 ) -> bool:
     """
     Verify a shard header's hash and Ed25519 signature.

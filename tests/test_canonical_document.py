@@ -36,12 +36,7 @@ def test_canonicalize_document_sorts_keys():
 
 def test_canonicalize_document_nested_dict():
     """Test canonicalization of nested dictionaries."""
-    doc = {
-        "outer": {
-            "z": "last",
-            "a": "first"
-        }
-    }
+    doc = {"outer": {"z": "last", "a": "first"}}
     result = canonicalize_document(doc)
 
     # Outer keys sorted
@@ -52,10 +47,7 @@ def test_canonicalize_document_nested_dict():
 
 def test_canonicalize_document_normalizes_whitespace():
     """Test that whitespace in string values is normalized."""
-    doc = {
-        "field1": "hello   world",
-        "field2": "multiple  \t  spaces"
-    }
+    doc = {"field1": "hello   world", "field2": "multiple  \t  spaces"}
     result = canonicalize_document(doc)
 
     assert result["field1"] == "hello world"
@@ -64,9 +56,7 @@ def test_canonicalize_document_normalizes_whitespace():
 
 def test_canonicalize_document_with_list():
     """Test canonicalization of documents containing lists."""
-    doc = {
-        "items": ["apple", "banana", "cherry"]
-    }
+    doc = {"items": ["apple", "banana", "cherry"]}
     result = canonicalize_document(doc)
 
     # List order should be preserved
@@ -75,12 +65,7 @@ def test_canonicalize_document_with_list():
 
 def test_canonicalize_document_list_with_dicts():
     """Test canonicalization of lists containing dictionaries."""
-    doc = {
-        "people": [
-            {"name": "Bob", "age": 25},
-            {"name": "Alice", "age": 30}
-        ]
-    }
+    doc = {"people": [{"name": "Bob", "age": 25}, {"name": "Alice", "age": 30}]}
     result = canonicalize_document(doc)
 
     # Each dict in the list should be canonicalized
@@ -90,12 +75,7 @@ def test_canonicalize_document_list_with_dicts():
 
 def test_canonicalize_document_preserves_non_string_values():
     """Test that non-string values are preserved."""
-    doc = {
-        "number": 42,
-        "boolean": True,
-        "null": None,
-        "float": 3.14
-    }
+    doc = {"number": 42, "boolean": True, "null": None, "float": 3.14}
     result = canonicalize_document(doc)
 
     assert result["number"] == 42
@@ -125,16 +105,7 @@ def test_canonicalize_document_empty_dict():
 
 def test_canonicalize_document_deeply_nested():
     """Test canonicalization of deeply nested structures."""
-    doc = {
-        "level1": {
-            "level2": {
-                "level3": {
-                    "z": "deep",
-                    "a": "value"
-                }
-            }
-        }
-    }
+    doc = {"level1": {"level2": {"level3": {"z": "deep", "a": "value"}}}}
     result = canonicalize_document(doc)
 
     # Navigate to deep level and check sorting
@@ -144,11 +115,7 @@ def test_canonicalize_document_deeply_nested():
 
 def test_canonicalize_document_deterministic():
     """Test that canonicalization is deterministic."""
-    doc = {
-        "z": "last",
-        "a": "first",
-        "nested": {"b": 2, "a": 1}
-    }
+    doc = {"z": "last", "a": "first", "nested": {"b": 2, "a": 1}}
 
     result1 = canonicalize_document(doc)
     result2 = canonicalize_document(doc)
@@ -213,12 +180,8 @@ def test_normalize_whitespace_empty_string():
 def test_canonicalize_document_with_whitespace_in_nested_strings():
     """Test whitespace normalization in nested structures."""
     doc = {
-        "outer": {
-            "text": "multiple   spaces"
-        },
-        "items": [
-            {"description": "  leading and trailing  "}
-        ]
+        "outer": {"text": "multiple   spaces"},
+        "items": [{"description": "  leading and trailing  "}],
     }
     result = canonicalize_document(doc)
 
@@ -234,20 +197,14 @@ def test_canonicalize_document_complex_real_world():
         "metadata": {
             "author": "John   Doe",
             "created": "2024-01-01",
-            "tags": ["public", "archived"]
+            "tags": ["public", "archived"],
         },
         "content": {
             "sections": [
-                {
-                    "heading": "Section  1",
-                    "text": "This  is   content"
-                },
-                {
-                    "heading": "Section  2",
-                    "text": "More   content"
-                }
+                {"heading": "Section  1", "text": "This  is   content"},
+                {"heading": "Section  2", "text": "More   content"},
             ]
-        }
+        },
     }
 
     result = canonicalize_document(doc)

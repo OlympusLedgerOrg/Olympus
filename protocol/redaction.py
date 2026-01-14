@@ -16,6 +16,7 @@ class RedactionProof:
     """
     Proof that a redacted document is a valid redaction.
     """
+
     original_root: str  # Hex-encoded Merkle root of original
     revealed_indices: list[int]  # Indices of revealed leaves
     revealed_hashes: list[str]  # Hex-encoded hashes of revealed leaves
@@ -38,7 +39,7 @@ class RedactionProtocol:
         Returns:
             List of leaf hashes
         """
-        return [hash_bytes(part.encode('utf-8')) for part in document_parts]
+        return [hash_bytes(part.encode("utf-8")) for part in document_parts]
 
     @staticmethod
     def commit_document(document_parts: list[str]) -> tuple[MerkleTree, str]:
@@ -56,10 +57,7 @@ class RedactionProtocol:
         return tree, tree.get_root().hex()
 
     @staticmethod
-    def create_redaction_proof(
-        tree: MerkleTree,
-        revealed_indices: list[int]
-    ) -> RedactionProof:
+    def create_redaction_proof(tree: MerkleTree, revealed_indices: list[int]) -> RedactionProof:
         """
         Create a proof for a redacted version.
 
@@ -78,14 +76,11 @@ class RedactionProtocol:
             original_root=root_hash,
             revealed_indices=revealed_indices,
             revealed_hashes=revealed_hashes,
-            merkle_proofs=merkle_proofs
+            merkle_proofs=merkle_proofs,
         )
 
     @staticmethod
-    def verify_redaction_proof(
-        proof: RedactionProof,
-        revealed_content: list[str]
-    ) -> bool:
+    def verify_redaction_proof(proof: RedactionProof, revealed_content: list[str]) -> bool:
         """
         Verify a redaction proof.
 
@@ -109,7 +104,7 @@ class RedactionProtocol:
         # Verify each revealed leaf
         for i, content in enumerate(revealed_content):
             # Check content hash matches
-            content_hash = hash_bytes(content.encode('utf-8')).hex()
+            content_hash = hash_bytes(content.encode("utf-8")).hex()
             if content_hash != proof.revealed_hashes[i]:
                 return False
 
@@ -129,7 +124,7 @@ class RedactionProtocol:
         revealed_content: list[str],
         revealed_indices: list[int],
         total_parts: int,
-        redaction_marker: str = "[REDACTED]"
+        redaction_marker: str = "[REDACTED]",
     ) -> list[str]:
         """
         Reconstruct a redacted document with markers.
@@ -179,4 +174,4 @@ def apply_redaction(original: str, mask: list[int], replacement: str = "█") ->
         else:
             result.append(char)
 
-    return ''.join(result)
+    return "".join(result)

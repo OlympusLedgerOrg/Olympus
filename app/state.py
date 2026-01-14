@@ -23,7 +23,6 @@ See docs/08_database_strategy.md for complete database strategy documentation.
 Wires to existing protocol/ssmf.py. Implements unified proof that never raises on absence.
 """
 
-
 from protocol.hashes import forest_root
 from protocol.ssmf import ExistenceProof, NonExistenceProof, SparseMerkleTree
 
@@ -123,7 +122,9 @@ class OlympusState:
             "root_hash": shard.tree.get_root().hex(),
         }
 
-    def proof(self, shard_id: str, key: bytes, version: str | None = None) -> ExistenceProof | NonExistenceProof:
+    def proof(
+        self, shard_id: str, key: bytes, version: str | None = None
+    ) -> ExistenceProof | NonExistenceProof:
         """
         Generate a proof for a key in a specific shard.
 
@@ -157,7 +158,4 @@ class OlympusState:
 
         global_root = forest_root(header_hashes).hex() if header_hashes else (b"\x00" * 32).hex()
 
-        return {
-            "global_root": global_root,
-            "shards": shard_roots
-        }
+        return {"global_root": global_root, "shards": shard_roots}

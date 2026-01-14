@@ -124,7 +124,7 @@ def test_ssmf_tampered_proof_detected():
         key=proof.key,
         value_hash=hash_bytes(b"different value"),
         siblings=proof.siblings,
-        root_hash=proof.root_hash
+        root_hash=proof.root_hash,
     )
 
     assert verify_proof(tampered_proof) is False
@@ -148,7 +148,7 @@ def test_ssmf_tampered_siblings_detected():
         key=proof.key,
         value_hash=proof.value_hash,
         siblings=tampered_siblings,
-        root_hash=proof.root_hash
+        root_hash=proof.root_hash,
     )
 
     assert verify_proof(tampered_proof) is False
@@ -168,10 +168,7 @@ def test_ssmf_wrong_key_detected():
 
     # Use wrong key
     wrong_proof = ExistenceProof(
-        key=key2,
-        value_hash=proof.value_hash,
-        siblings=proof.siblings,
-        root_hash=proof.root_hash
+        key=key2, value_hash=proof.value_hash, siblings=proof.siblings, root_hash=proof.root_hash
     )
 
     assert verify_proof(wrong_proof) is False

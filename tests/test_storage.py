@@ -45,7 +45,9 @@ from storage.postgres import StorageLayer
 pytestmark = pytest.mark.postgres
 
 # Test database connection string
-TEST_DB = os.environ.get('TEST_DATABASE_URL', 'postgresql://olympus:olympus@localhost:5432/olympus_test')
+TEST_DB = os.environ.get(
+    "TEST_DATABASE_URL", "postgresql://olympus:olympus@localhost:5432/olympus_test"
+)
 
 
 @pytest.fixture
@@ -71,7 +73,7 @@ def test_schema_initialization(storage):
     # Just verify we can query the tables
     with storage._get_connection() as conn, conn.cursor() as cur:
         cur.execute("SELECT COUNT(*) as count FROM smt_leaves")
-        assert cur.fetchone()['count'] >= 0
+        assert cur.fetchone()["count"] >= 0
 
 
 def test_append_record_creates_proof(storage, signing_key):
@@ -85,7 +87,7 @@ def test_append_record_creates_proof(storage, signing_key):
         record_id="doc1",
         version=1,
         value_hash=value_hash,
-        signing_key=signing_key
+        signing_key=signing_key,
     )
 
     # Verify proof is valid
@@ -94,9 +96,9 @@ def test_append_record_creates_proof(storage, signing_key):
     assert len(proof.siblings) == 256
 
     # Verify header
-    assert header['shard_id'] == shard_id
-    assert header['root_hash'] == root.hex()
-    assert len(bytes.fromhex(header['header_hash'])) == 32
+    assert header["shard_id"] == shard_id
+    assert header["root_hash"] == root.hex()
+    assert len(bytes.fromhex(header["header_hash"])) == 32
 
     # Verify signature
     assert len(bytes.fromhex(signature)) == 64
@@ -119,7 +121,7 @@ def test_append_record_prevents_duplicates(storage, signing_key):
         record_id="doc1",
         version=1,
         value_hash=value_hash,
-        signing_key=signing_key
+        signing_key=signing_key,
     )
 
     # Second append should fail
@@ -130,7 +132,7 @@ def test_append_record_prevents_duplicates(storage, signing_key):
             record_id="doc1",
             version=1,
             value_hash=value_hash,
-            signing_key=signing_key
+            signing_key=signing_key,
         )
 
 
@@ -149,7 +151,7 @@ def test_append_multiple_versions(storage, signing_key):
         record_id="doc1",
         version=1,
         value_hash=value_v1,
-        signing_key=signing_key
+        signing_key=signing_key,
     )
 
     root2, proof2, _, _, _ = storage.append_record(
@@ -158,7 +160,7 @@ def test_append_multiple_versions(storage, signing_key):
         record_id="doc1",
         version=2,
         value_hash=value_v2,
-        signing_key=signing_key
+        signing_key=signing_key,
     )
 
     root3, proof3, _, _, _ = storage.append_record(
@@ -167,7 +169,7 @@ def test_append_multiple_versions(storage, signing_key):
         record_id="doc1",
         version=3,
         value_hash=value_v3,
-        signing_key=signing_key
+        signing_key=signing_key,
     )
 
     # All proofs should be valid
@@ -191,15 +193,12 @@ def test_get_proof_returns_valid_proof(storage, signing_key):
         record_id="doc1",
         version=1,
         value_hash=value_hash,
-        signing_key=signing_key
+        signing_key=signing_key,
     )
 
     # Get proof
     proof = storage.get_proof(
-        shard_id=shard_id,
-        record_type="document",
-        record_id="doc1",
-        version=1
+        shard_id=shard_id, record_type="document", record_id="doc1", version=1
     )
 
     assert proof is not None
@@ -212,10 +211,7 @@ def test_get_proof_returns_none_for_nonexistent(storage):
     shard_id = f"test_shard_{datetime.now(UTC).timestamp()}"
 
     proof = storage.get_proof(
-        shard_id=shard_id,
-        record_type="document",
-        record_id="nonexistent",
-        version=1
+        shard_id=shard_id, record_type="document", record_id="nonexistent", version=1
     )
 
     assert proof is None
@@ -232,7 +228,7 @@ def test_get_latest_header(storage, signing_key):
         record_id="doc1",
         version=1,
         value_hash=hash_bytes(b"value 1"),
-        signing_key=signing_key
+        signing_key=signing_key,
     )
 
     # Append second record
@@ -242,16 +238,16 @@ def test_get_latest_header(storage, signing_key):
         record_id="doc2",
         version=1,
         value_hash=hash_bytes(b"value 2"),
-        signing_key=signing_key
+        signing_key=signing_key,
     )
 
     # Get latest header
     latest = storage.get_latest_header(shard_id)
 
     assert latest is not None
-    assert latest['header']['header_hash'] == header2['header_hash']
-    assert latest['header']['root_hash'] == root2.hex()
-    assert latest['signature'] == sig2
+    assert latest["header"]["header_hash"] == header2["header_hash"]
+    assert latest["header"]["root_hash"] == root2.hex()
+    assert latest["signature"] == sig2
 
 
 def test_get_ledger_tail(storage, signing_key):
@@ -267,7 +263,7 @@ def test_get_ledger_tail(storage, signing_key):
             record_id=f"doc{i}",
             version=1,
             value_hash=hash_bytes(f"value {i}".encode()),
-            signing_key=signing_key
+            signing_key=signing_key,
         )
         entries.append(entry)
 
@@ -293,7 +289,7 @@ def test_verify_persisted_root(storage, signing_key):
             record_id=f"doc{i}",
             version=1,
             value_hash=hash_bytes(f"value {i}".encode()),
-            signing_key=signing_key
+            signing_key=signing_key,
         )
 
     # Verify root
@@ -311,11 +307,11 @@ def test_shard_header_chain_linkage(storage, signing_key):
         record_id="doc1",
         version=1,
         value_hash=hash_bytes(b"value 1"),
-        signing_key=signing_key
+        signing_key=signing_key,
     )
 
     # First header should have empty previous hash
-    assert header1['previous_header_hash'] == ""
+    assert header1["previous_header_hash"] == ""
 
     # Append second record
     _, _, header2, _, _ = storage.append_record(
@@ -324,11 +320,11 @@ def test_shard_header_chain_linkage(storage, signing_key):
         record_id="doc2",
         version=1,
         value_hash=hash_bytes(b"value 2"),
-        signing_key=signing_key
+        signing_key=signing_key,
     )
 
     # Second header should link to first
-    assert header2['previous_header_hash'] == header1['header_hash']
+    assert header2["previous_header_hash"] == header1["header_hash"]
 
 
 def test_ledger_chain_linkage(storage, signing_key):
@@ -342,7 +338,7 @@ def test_ledger_chain_linkage(storage, signing_key):
         record_id="doc1",
         version=1,
         value_hash=hash_bytes(b"value 1"),
-        signing_key=signing_key
+        signing_key=signing_key,
     )
 
     # First entry should have empty previous hash
@@ -355,7 +351,7 @@ def test_ledger_chain_linkage(storage, signing_key):
         record_id="doc2",
         version=1,
         value_hash=hash_bytes(b"value 2"),
-        signing_key=signing_key
+        signing_key=signing_key,
     )
 
     # Second entry should link to first
@@ -375,7 +371,7 @@ def test_get_all_shard_ids(storage, signing_key):
         record_id="doc1",
         version=1,
         value_hash=hash_bytes(b"value 1"),
-        signing_key=signing_key
+        signing_key=signing_key,
     )
 
     storage.append_record(
@@ -384,7 +380,7 @@ def test_get_all_shard_ids(storage, signing_key):
         record_id="doc1",
         version=1,
         value_hash=hash_bytes(b"value 1"),
-        signing_key=signing_key
+        signing_key=signing_key,
     )
 
     # Get all shard IDs
@@ -407,7 +403,7 @@ def test_deterministic_root_recomputation(storage, signing_key):
             record_id=f"doc{i}",
             version=1,
             value_hash=hash_bytes(f"value {i}".encode()),
-            signing_key=signing_key
+            signing_key=signing_key,
         )
         roots.append(root)
 

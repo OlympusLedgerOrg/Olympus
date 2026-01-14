@@ -39,11 +39,11 @@ def merkle_proof_data(tmp_path):
         "leaf_hash": proof.leaf_hash.hex(),
         "leaf_index": proof.leaf_index,
         "siblings": [[h.hex(), is_right] for h, is_right in proof.siblings],
-        "root_hash": proof.root_hash.hex()
+        "root_hash": proof.root_hash.hex(),
     }
 
     proof_file = tmp_path / "merkle_proof.json"
-    with open(proof_file, 'w') as f:
+    with open(proof_file, "w") as f:
         json.dump(proof_data, f)
 
     return proof_file
@@ -57,11 +57,11 @@ def invalid_merkle_proof_data(tmp_path):
         "leaf_hash": "0" * 64,  # Invalid hash
         "leaf_index": 0,
         "siblings": [["1" * 64, False]],
-        "root_hash": "2" * 64
+        "root_hash": "2" * 64,
     }
 
     proof_file = tmp_path / "invalid_merkle_proof.json"
-    with open(proof_file, 'w') as f:
+    with open(proof_file, "w") as f:
         json.dump(proof_data, f)
 
     return proof_file
@@ -73,31 +73,17 @@ def ledger_data(tmp_path):
     ledger = Ledger()
 
     # Add several entries
-    ledger.append(
-        record_hash="hash1",
-        shard_id="shard1",
-        shard_root="root1"
-    )
+    ledger.append(record_hash="hash1", shard_id="shard1", shard_root="root1")
 
-    ledger.append(
-        record_hash="hash2",
-        shard_id="shard1",
-        shard_root="root2"
-    )
+    ledger.append(record_hash="hash2", shard_id="shard1", shard_root="root2")
 
-    ledger.append(
-        record_hash="hash3",
-        shard_id="shard1",
-        shard_root="root3"
-    )
+    ledger.append(record_hash="hash3", shard_id="shard1", shard_root="root3")
 
     # Export to JSON format
-    ledger_data = {
-        "entries": [entry.to_dict() for entry in ledger.entries]
-    }
+    ledger_data = {"entries": [entry.to_dict() for entry in ledger.entries]}
 
     ledger_file = tmp_path / "ledger.json"
-    with open(ledger_file, 'w') as f:
+    with open(ledger_file, "w") as f:
         json.dump(ledger_data, f)
 
     return ledger_file
@@ -108,27 +94,17 @@ def tampered_ledger_data(tmp_path):
     """Create a tampered ledger for testing."""
     ledger = Ledger()
 
-    ledger.append(
-        record_hash="hash1",
-        shard_id="shard1",
-        shard_root="root1"
-    )
+    ledger.append(record_hash="hash1", shard_id="shard1", shard_root="root1")
 
-    ledger.append(
-        record_hash="hash2",
-        shard_id="shard1",
-        shard_root="root2"
-    )
+    ledger.append(record_hash="hash2", shard_id="shard1", shard_root="root2")
 
     # Tamper with the second entry
     ledger.entries[1].record_hash = "tampered_hash"
 
-    ledger_data = {
-        "entries": [entry.to_dict() for entry in ledger.entries]
-    }
+    ledger_data = {"entries": [entry.to_dict() for entry in ledger.entries]}
 
     ledger_file = tmp_path / "tampered_ledger.json"
-    with open(ledger_file, 'w') as f:
+    with open(ledger_file, "w") as f:
         json.dump(ledger_data, f)
 
     return ledger_file
@@ -138,11 +114,7 @@ def tampered_ledger_data(tmp_path):
 def redaction_proof_data(tmp_path):
     """Create a valid redaction proof for testing."""
     # Create document parts
-    document_parts = [
-        "Public information",
-        "Sensitive data",
-        "More public info"
-    ]
+    document_parts = ["Public information", "Sensitive data", "More public info"]
 
     # Create commitment
     tree, root_hash = RedactionProtocol.commit_document(document_parts)
@@ -161,23 +133,21 @@ def redaction_proof_data(tmp_path):
                 "leaf_hash": mp.leaf_hash.hex(),
                 "leaf_index": mp.leaf_index,
                 "siblings": [[h.hex(), is_right] for h, is_right in mp.siblings],
-                "root_hash": mp.root_hash.hex()
+                "root_hash": mp.root_hash.hex(),
             }
             for mp in proof.merkle_proofs
-        ]
+        ],
     }
 
     proof_file = tmp_path / "redaction_proof.json"
-    with open(proof_file, 'w') as f:
+    with open(proof_file, "w") as f:
         json.dump(proof_data, f)
 
     # Create content file
-    content_data = {
-        "revealed_content": [document_parts[i] for i in revealed_indices]
-    }
+    content_data = {"revealed_content": [document_parts[i] for i in revealed_indices]}
 
     content_file = tmp_path / "revealed_content.json"
-    with open(content_file, 'w') as f:
+    with open(content_file, "w") as f:
         json.dump(content_data, f)
 
     return proof_file, content_file
@@ -188,7 +158,7 @@ def test_cli_verify_merkle_proof_valid(merkle_proof_data):
     result = subprocess.run(
         [sys.executable, str(CLI_PATH), "merkle", str(merkle_proof_data)],
         capture_output=True,
-        text=True
+        text=True,
     )
 
     assert result.returncode == 0
@@ -200,7 +170,7 @@ def test_cli_verify_merkle_proof_invalid(invalid_merkle_proof_data):
     result = subprocess.run(
         [sys.executable, str(CLI_PATH), "merkle", str(invalid_merkle_proof_data)],
         capture_output=True,
-        text=True
+        text=True,
     )
 
     assert result.returncode == 1
@@ -210,9 +180,7 @@ def test_cli_verify_merkle_proof_invalid(invalid_merkle_proof_data):
 def test_cli_verify_ledger_valid(ledger_data):
     """Test verification of valid ledger chain."""
     result = subprocess.run(
-        [sys.executable, str(CLI_PATH), "ledger", str(ledger_data)],
-        capture_output=True,
-        text=True
+        [sys.executable, str(CLI_PATH), "ledger", str(ledger_data)], capture_output=True, text=True
     )
 
     assert result.returncode == 0
@@ -225,7 +193,7 @@ def test_cli_verify_ledger_tampered(tampered_ledger_data):
     result = subprocess.run(
         [sys.executable, str(CLI_PATH), "ledger", str(tampered_ledger_data)],
         capture_output=True,
-        text=True
+        text=True,
     )
 
     assert result.returncode == 1
@@ -239,7 +207,7 @@ def test_cli_verify_redaction_proof_valid(redaction_proof_data):
     result = subprocess.run(
         [sys.executable, str(CLI_PATH), "redaction", str(proof_file), str(content_file)],
         capture_output=True,
-        text=True
+        text=True,
     )
 
     assert result.returncode == 0
@@ -249,11 +217,7 @@ def test_cli_verify_redaction_proof_valid(redaction_proof_data):
 
 def test_cli_no_command():
     """Test that CLI shows help when no command is provided."""
-    result = subprocess.run(
-        [sys.executable, str(CLI_PATH)],
-        capture_output=True,
-        text=True
-    )
+    result = subprocess.run([sys.executable, str(CLI_PATH)], capture_output=True, text=True)
 
     assert result.returncode == 1
     assert "usage:" in result.stderr.lower() or "help" in result.stdout.lower()
@@ -264,7 +228,7 @@ def test_cli_merkle_missing_file():
     result = subprocess.run(
         [sys.executable, str(CLI_PATH), "merkle", "nonexistent.json"],
         capture_output=True,
-        text=True
+        text=True,
     )
 
     assert result.returncode == 1
@@ -276,7 +240,7 @@ def test_cli_ledger_missing_file():
     result = subprocess.run(
         [sys.executable, str(CLI_PATH), "ledger", "nonexistent.json"],
         capture_output=True,
-        text=True
+        text=True,
     )
 
     assert result.returncode == 1
@@ -286,13 +250,13 @@ def test_cli_ledger_missing_file():
 def test_cli_redaction_missing_proof_file(tmp_path):
     """Test error handling for missing redaction proof file."""
     content_file = tmp_path / "content.json"
-    with open(content_file, 'w') as f:
+    with open(content_file, "w") as f:
         json.dump({"revealed_content": []}, f)
 
     result = subprocess.run(
         [sys.executable, str(CLI_PATH), "redaction", "nonexistent.json", str(content_file)],
         capture_output=True,
-        text=True
+        text=True,
     )
 
     assert result.returncode == 1
@@ -302,18 +266,21 @@ def test_cli_redaction_missing_proof_file(tmp_path):
 def test_cli_redaction_missing_content_file(tmp_path):
     """Test error handling for missing content file."""
     proof_file = tmp_path / "proof.json"
-    with open(proof_file, 'w') as f:
-        json.dump({
-            "original_root": "test",
-            "revealed_indices": [],
-            "revealed_hashes": [],
-            "merkle_proofs": []
-        }, f)
+    with open(proof_file, "w") as f:
+        json.dump(
+            {
+                "original_root": "test",
+                "revealed_indices": [],
+                "revealed_hashes": [],
+                "merkle_proofs": [],
+            },
+            f,
+        )
 
     result = subprocess.run(
         [sys.executable, str(CLI_PATH), "redaction", str(proof_file), "nonexistent.json"],
         capture_output=True,
-        text=True
+        text=True,
     )
 
     assert result.returncode == 1
@@ -323,24 +290,16 @@ def test_cli_redaction_missing_content_file(tmp_path):
 def test_cli_ledger_single_entry(tmp_path):
     """Test verification of ledger with single entry."""
     ledger = Ledger()
-    ledger.append(
-        record_hash="hash1",
-        shard_id="shard1",
-        shard_root="root1"
-    )
+    ledger.append(record_hash="hash1", shard_id="shard1", shard_root="root1")
 
-    ledger_data = {
-        "entries": [entry.to_dict() for entry in ledger.entries]
-    }
+    ledger_data = {"entries": [entry.to_dict() for entry in ledger.entries]}
 
     ledger_file = tmp_path / "single_entry.json"
-    with open(ledger_file, 'w') as f:
+    with open(ledger_file, "w") as f:
         json.dump(ledger_data, f)
 
     result = subprocess.run(
-        [sys.executable, str(CLI_PATH), "ledger", str(ledger_file)],
-        capture_output=True,
-        text=True
+        [sys.executable, str(CLI_PATH), "ledger", str(ledger_file)], capture_output=True, text=True
     )
 
     assert result.returncode == 0
@@ -353,13 +312,11 @@ def test_cli_ledger_empty(tmp_path):
     ledger_data = {"entries": []}
 
     ledger_file = tmp_path / "empty_ledger.json"
-    with open(ledger_file, 'w') as f:
+    with open(ledger_file, "w") as f:
         json.dump(ledger_data, f)
 
     result = subprocess.run(
-        [sys.executable, str(CLI_PATH), "ledger", str(ledger_file)],
-        capture_output=True,
-        text=True
+        [sys.executable, str(CLI_PATH), "ledger", str(ledger_file)], capture_output=True, text=True
     )
 
     assert result.returncode == 0

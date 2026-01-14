@@ -46,6 +46,7 @@ logger = logging.getLogger(__name__)
 # API models for responses
 class ShardInfo(BaseModel):
     """Information about a shard."""
+
     shard_id: str
     latest_seq: int
     latest_root: str  # Hex-encoded
@@ -53,6 +54,7 @@ class ShardInfo(BaseModel):
 
 class ShardHeaderResponse(BaseModel):
     """Shard header with signature for verification."""
+
     shard_id: str
     seq: int
     root_hash: str  # Hex-encoded 32-byte root
@@ -66,6 +68,7 @@ class ShardHeaderResponse(BaseModel):
 
 class ExistenceProofResponse(BaseModel):
     """Existence proof with all data for offline verification."""
+
     shard_id: str
     record_type: str
     record_id: str
@@ -79,6 +82,7 @@ class ExistenceProofResponse(BaseModel):
 
 class NonExistenceProofResponse(BaseModel):
     """Non-existence proof with all data for offline verification."""
+
     shard_id: str
     record_type: str
     record_id: str
@@ -91,6 +95,7 @@ class NonExistenceProofResponse(BaseModel):
 
 class LedgerEntryResponse(BaseModel):
     """Ledger entry for chain verification."""
+
     ts: str  # ISO 8601 timestamp
     record_hash: str  # Hex-encoded
     shard_id: str
@@ -101,6 +106,7 @@ class LedgerEntryResponse(BaseModel):
 
 class LedgerTailResponse(BaseModel):
     """Last N ledger entries for a shard."""
+
     shard_id: str
     entries: list[LedgerEntryResponse]
 
@@ -109,13 +115,13 @@ class LedgerTailResponse(BaseModel):
 app = FastAPI(
     title="Olympus Public Audit API",
     description="Read-only API for verifying Olympus ledger, proofs, and signatures",
-    version="0.5.0"
+    version="0.5.0",
 )
 
 # Get database connection string from environment with explicit credentials
 # NEVER allow implicit OS user (root in CI) to be used
 DEFAULT_DATABASE_URL = "postgresql://olympus:olympus@localhost:5432/olympus"
-DATABASE_URL = os.environ.get('DATABASE_URL', DEFAULT_DATABASE_URL)
+DATABASE_URL = os.environ.get("DATABASE_URL", DEFAULT_DATABASE_URL)
 
 # Validate that DATABASE_URL contains explicit username/password
 # This prevents "role root does not exist" errors in CI
@@ -127,10 +133,12 @@ try:
         raise RuntimeError(f"DATABASE_URL missing username/password: {DATABASE_URL}")
 
     # Log database connection info (password is automatically redacted by urlparse)
-    logger.info(f"Connecting to database: scheme={parsed_url.scheme}, "
-                f"user={parsed_url.username}, "
-                f"host={parsed_url.hostname or 'unknown'}, "
-                f"db={parsed_url.path.lstrip('/') if parsed_url.path else 'unknown'}")
+    logger.info(
+        f"Connecting to database: scheme={parsed_url.scheme}, "
+        f"user={parsed_url.username}, "
+        f"host={parsed_url.hostname or 'unknown'}, "
+        f"db={parsed_url.path.lstrip('/') if parsed_url.path else 'unknown'}"
+    )
 except Exception as e:
     # If URL parsing fails or validation fails, raise with clear message
     if isinstance(e, RuntimeError):
@@ -153,7 +161,9 @@ try:
             if result and result[0] == 1:
                 logger.info("Database connectivity verified: SELECT 1 succeeded")
             else:
-                raise RuntimeError(f"Database connectivity check failed: unexpected result {result}")
+                raise RuntimeError(
+                    f"Database connectivity check failed: unexpected result {result}"
+                )
     except Exception as conn_error:
         logger.error(f"Database connectivity check failed: {conn_error}")
         raise RuntimeError("Failed to verify database connectivity") from conn_error
@@ -174,8 +184,8 @@ async def root() -> dict[str, Any]:
             "/shards",
             "/shards/{shard_id}/header/latest",
             "/shards/{shard_id}/proof",
-            "/ledger/{shard_id}/tail"
-        ]
+            "/ledger/{shard_id}/tail",
+        ],
     }
 
 
@@ -194,11 +204,13 @@ async def list_shards() -> list[ShardInfo]:
         for shard_id in shard_ids:
             header_data = storage.get_latest_header(shard_id)
             if header_data:
-                result.append(ShardInfo(
-                    shard_id=shard_id,
-                    latest_seq=header_data['seq'],
-                    latest_root=header_data['header']['root_hash']
-                ))
+                result.append(
+                    ShardInfo(
+                        shard_id=shard_id,
+                        latest_seq=header_data["seq"],
+                        latest_root=header_data["header"]["root_hash"],
+                    )
+                )
 
         return result
     except Exception as e:
@@ -224,27 +236,27 @@ async def get_latest_header(shard_id: str) -> ShardHeaderResponse:
         if header_data is None:
             raise HTTPException(status_code=404, detail=f"Shard not found: {shard_id}")
 
-        header = header_data['header']
+        header = header_data["header"]
 
         # Create canonical header JSON for verification
         canonical_header = {
-            "shard_id": header['shard_id'],
-            "root_hash": header['root_hash'],
-            "timestamp": header['timestamp'],
-            "previous_header_hash": header['previous_header_hash']
+            "shard_id": header["shard_id"],
+            "root_hash": header["root_hash"],
+            "timestamp": header["timestamp"],
+            "previous_header_hash": header["previous_header_hash"],
         }
         canonical_json = canonical_json_encode(canonical_header)
 
         return ShardHeaderResponse(
-            shard_id=header['shard_id'],
-            seq=header_data['seq'],
-            root_hash=header['root_hash'],
-            header_hash=header['header_hash'],
-            previous_header_hash=header['previous_header_hash'],
-            timestamp=header['timestamp'],
-            signature=header_data['signature'],
-            pubkey=header_data['pubkey'],
-            canonical_header_json=canonical_json
+            shard_id=header["shard_id"],
+            seq=header_data["seq"],
+            root_hash=header["root_hash"],
+            header_hash=header["header_hash"],
+            previous_header_hash=header["previous_header_hash"],
+            timestamp=header["timestamp"],
+            signature=header_data["signature"],
+            pubkey=header_data["pubkey"],
+            canonical_header_json=canonical_json,
         )
     except HTTPException:
         raise
@@ -257,7 +269,7 @@ async def get_proof(
     shard_id: str,
     record_type: str = Query(..., description="Type of record (e.g., 'document')"),
     record_id: str = Query(..., description="Record identifier"),
-    version: int = Query(..., description="Record version", ge=1)
+    version: int = Query(..., description="Record version", ge=1),
 ) -> ExistenceProofResponse | NonExistenceProofResponse:
     """
     Get existence or non-existence proof for a record.
@@ -283,25 +295,25 @@ async def get_proof(
             raise HTTPException(status_code=404, detail=f"Shard not found: {shard_id}")
 
         # Build header response
-        header = header_data['header']
+        header = header_data["header"]
         canonical_header = {
-            "shard_id": header['shard_id'],
-            "root_hash": header['root_hash'],
-            "timestamp": header['timestamp'],
-            "previous_header_hash": header['previous_header_hash']
+            "shard_id": header["shard_id"],
+            "root_hash": header["root_hash"],
+            "timestamp": header["timestamp"],
+            "previous_header_hash": header["previous_header_hash"],
         }
         canonical_json = canonical_json_encode(canonical_header)
 
         shard_header = ShardHeaderResponse(
-            shard_id=header['shard_id'],
-            seq=header_data['seq'],
-            root_hash=header['root_hash'],
-            header_hash=header['header_hash'],
-            previous_header_hash=header['previous_header_hash'],
-            timestamp=header['timestamp'],
-            signature=header_data['signature'],
-            pubkey=header_data['pubkey'],
-            canonical_header_json=canonical_json
+            shard_id=header["shard_id"],
+            seq=header_data["seq"],
+            root_hash=header["root_hash"],
+            header_hash=header["header_hash"],
+            previous_header_hash=header["previous_header_hash"],
+            timestamp=header["timestamp"],
+            signature=header_data["signature"],
+            pubkey=header_data["pubkey"],
+            canonical_header_json=canonical_json,
         )
 
         if proof is not None:
@@ -315,7 +327,7 @@ async def get_proof(
                 value_hash=proof.value_hash.hex(),
                 siblings=[s.hex() for s in proof.siblings],
                 root_hash=proof.root_hash.hex(),
-                shard_header=shard_header
+                shard_header=shard_header,
             )
         else:
             # Record doesn't exist - return non-existence proof
@@ -328,7 +340,7 @@ async def get_proof(
                 key=non_proof.key.hex(),
                 siblings=[s.hex() for s in non_proof.siblings],
                 root_hash=non_proof.root_hash.hex(),
-                shard_header=shard_header
+                shard_header=shard_header,
             )
     except HTTPException:
         raise
@@ -338,8 +350,7 @@ async def get_proof(
 
 @app.get("/ledger/{shard_id}/tail", response_model=LedgerTailResponse)
 async def get_ledger_tail(
-    shard_id: str,
-    n: int = Query(10, description="Number of entries to retrieve", ge=1, le=1000)
+    shard_id: str, n: int = Query(10, description="Number of entries to retrieve", ge=1, le=1000)
 ) -> LedgerTailResponse:
     """
     Get the last N ledger entries for a shard.
@@ -366,10 +377,10 @@ async def get_ledger_tail(
                     shard_id=entry.shard_id,
                     shard_root=entry.shard_root,
                     prev_entry_hash=entry.prev_entry_hash,
-                    entry_hash=entry.entry_hash
+                    entry_hash=entry.entry_hash,
                 )
                 for entry in entries
-            ]
+            ],
         )
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to get ledger tail: {str(e)}") from e

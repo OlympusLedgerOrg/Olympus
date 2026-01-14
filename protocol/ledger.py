@@ -15,6 +15,7 @@ from .hashes import LEDGER_PREFIX, blake3_hash
 @dataclass
 class LedgerEntry:
     """An entry in the Olympus ledger."""
+
     ts: str  # ISO 8601 timestamp
     record_hash: str  # Hex-encoded record hash
     shard_id: str  # Shard identifier
@@ -27,7 +28,7 @@ class LedgerEntry:
         return asdict(self)
 
     @classmethod
-    def from_dict(cls, data: dict[str, Any]) -> 'LedgerEntry':
+    def from_dict(cls, data: dict[str, Any]) -> "LedgerEntry":
         """Create from dictionary."""
         return cls(**data)
 
@@ -44,12 +45,7 @@ class Ledger:
         """Initialize an empty ledger."""
         self.entries: list[LedgerEntry] = []
 
-    def append(
-        self,
-        record_hash: str,
-        shard_id: str,
-        shard_root: str
-    ) -> LedgerEntry:
+    def append(self, record_hash: str, shard_id: str, shard_root: str) -> LedgerEntry:
         """
         Append a new entry to the ledger.
 
@@ -61,7 +57,7 @@ class Ledger:
         Returns:
             The newly created entry
         """
-        ts = datetime.now(UTC).isoformat().replace('+00:00', 'Z')
+        ts = datetime.now(UTC).isoformat().replace("+00:00", "Z")
         prev_entry_hash = self.entries[-1].entry_hash if self.entries else ""
 
         # Create payload for hashing
@@ -70,12 +66,14 @@ class Ledger:
             "record_hash": record_hash,
             "shard_id": shard_id,
             "shard_root": shard_root,
-            "prev_entry_hash": prev_entry_hash
+            "prev_entry_hash": prev_entry_hash,
         }
 
         # Compute entry hash using LEDGER_PREFIX + canonical JSON
-        canonical_json = json.dumps(payload, sort_keys=True, separators=(',', ':'), ensure_ascii=True)
-        entry_hash = blake3_hash([LEDGER_PREFIX, canonical_json.encode('utf-8')]).hex()
+        canonical_json = json.dumps(
+            payload, sort_keys=True, separators=(",", ":"), ensure_ascii=True
+        )
+        entry_hash = blake3_hash([LEDGER_PREFIX, canonical_json.encode("utf-8")]).hex()
 
         entry = LedgerEntry(
             ts=ts,
@@ -83,7 +81,7 @@ class Ledger:
             shard_id=shard_id,
             shard_root=shard_root,
             prev_entry_hash=prev_entry_hash,
-            entry_hash=entry_hash
+            entry_hash=entry_hash,
         )
 
         self.entries.append(entry)
@@ -126,10 +124,12 @@ class Ledger:
                 "record_hash": entry.record_hash,
                 "shard_id": entry.shard_id,
                 "shard_root": entry.shard_root,
-                "prev_entry_hash": entry.prev_entry_hash
+                "prev_entry_hash": entry.prev_entry_hash,
             }
-            canonical_json = json.dumps(payload, sort_keys=True, separators=(',', ':'), ensure_ascii=True)
-            expected_hash = blake3_hash([LEDGER_PREFIX, canonical_json.encode('utf-8')]).hex()
+            canonical_json = json.dumps(
+                payload, sort_keys=True, separators=(",", ":"), ensure_ascii=True
+            )
+            expected_hash = blake3_hash([LEDGER_PREFIX, canonical_json.encode("utf-8")]).hex()
 
             if entry.entry_hash != expected_hash:
                 return False

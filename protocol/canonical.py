@@ -24,7 +24,7 @@ def canonicalize_json(data: dict[str, Any]) -> str:
     Returns:
         Canonical JSON string representation
     """
-    return json.dumps(data, sort_keys=True, separators=(',', ':'), ensure_ascii=True)
+    return json.dumps(data, sort_keys=True, separators=(",", ":"), ensure_ascii=True)
 
 
 def normalize_whitespace(text: str) -> str:
@@ -39,7 +39,7 @@ def normalize_whitespace(text: str) -> str:
     """
     # Replace multiple whitespace with single space
     # Strip leading/trailing whitespace
-    return ' '.join(text.split())
+    return " ".join(text.split())
 
 
 def canonicalize_document(doc: dict[str, Any]) -> dict[str, Any]:
@@ -64,8 +64,7 @@ def canonicalize_document(doc: dict[str, Any]) -> dict[str, Any]:
             canonical[key] = canonicalize_document(value)
         elif isinstance(value, list):
             canonical[key] = [
-                canonicalize_document(item) if isinstance(item, dict) else item
-                for item in value
+                canonicalize_document(item) if isinstance(item, dict) else item for item in value
             ]
         elif isinstance(value, str):
             canonical[key] = normalize_whitespace(value)
@@ -87,7 +86,7 @@ def document_to_bytes(doc: dict[str, Any]) -> bytes:
     """
     canonical = canonicalize_document(doc)
     json_str = canonicalize_json(canonical)
-    return json_str.encode('utf-8')
+    return json_str.encode("utf-8")
 
 
 def canonicalize_text(text: str) -> str:
@@ -104,11 +103,11 @@ def canonicalize_text(text: str) -> str:
         Canonicalized text with normalized whitespace and Unix line endings
     """
     # Normalize line endings to Unix style (\n)
-    text = text.replace('\r\n', '\n').replace('\r', '\n')
+    text = text.replace("\r\n", "\n").replace("\r", "\n")
 
     # Normalize multiple spaces to single space
-    lines = text.split('\n')
-    normalized_lines = [' '.join(line.split()) for line in lines]
+    lines = text.split("\n")
+    normalized_lines = [" ".join(line.split()) for line in lines]
 
     # Remove empty lines at start and end, preserve internal structure
     while normalized_lines and not normalized_lines[0]:
@@ -116,4 +115,4 @@ def canonicalize_text(text: str) -> str:
     while normalized_lines and not normalized_lines[-1]:
         normalized_lines.pop()
 
-    return '\n'.join(normalized_lines)
+    return "\n".join(normalized_lines)

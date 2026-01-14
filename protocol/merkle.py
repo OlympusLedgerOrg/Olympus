@@ -19,14 +19,16 @@ MERKLE_VERSION = "merkle_v1"
 @dataclass
 class MerkleNode:
     """A node in a Merkle tree."""
+
     hash: bytes
-    left: Optional['MerkleNode'] = None
-    right: Optional['MerkleNode'] = None
+    left: Optional["MerkleNode"] = None
+    right: Optional["MerkleNode"] = None
 
 
 @dataclass
 class MerkleProof:
     """A Merkle inclusion proof."""
+
     leaf_hash: bytes
     leaf_index: int
     siblings: list[tuple[bytes, bool]]  # (hash, is_right_sibling)
@@ -117,7 +119,7 @@ class MerkleTree:
             leaf_hash=leaf_hash,
             leaf_index=leaf_index,
             siblings=siblings,
-            root_hash=self._root_node.hash
+            root_hash=self._root_node.hash,
         )
 
 
