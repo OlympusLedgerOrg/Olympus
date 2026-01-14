@@ -56,12 +56,6 @@ jobs:
         pip install -r requirements.txt
         pip install -r requirements-dev.txt
 
-    - name: Create PostgreSQL root Role
-      run: |
-        psql -U postgres -c "CREATE ROLE root SUPERUSER CREATEDB CREATEROLE LOGIN PASSWORD 'password';" || echo "Role may already exist"
-      env:
-        PGPASSWORD: postgres
-
     - name: Validate JSON schemas
       run: python tools/validate_schemas.py
 
