@@ -96,7 +96,7 @@ class OlympusState:
             self.shards[shard_id] = ShardState(shard_id)
         return self.shards[shard_id]
 
-    def list_shards(self) -> list:
+    def list_shards(self) -> list[str]:
         """Get list of shard IDs."""
         return sorted(self.shards.keys())
 
@@ -161,4 +161,3 @@ class OlympusState:
             "global_root": global_root,
             "shards": shard_roots
         }
-

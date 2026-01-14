@@ -47,7 +47,7 @@ def roots() -> dict[str, Any]:
 
 
 @app.get("/shards")
-def list_shards() -> dict[str, Any]:
+def list_shards() -> dict[str, list[str]]:
     """List all shard IDs."""
     return {"shards": state.list_shards()}
 
