@@ -3,7 +3,7 @@ from protocol.redaction import apply_redaction
 
 def test_redaction_mask_semantics():
     original = "ABCDE"
-    mask     = [0, 1, 0, 1, 0]  # redact B and D
+    mask = [0, 1, 0, 1, 0]  # redact B and D
 
     redacted = apply_redaction(original, mask, replacement="█")
 
@@ -12,7 +12,7 @@ def test_redaction_mask_semantics():
 
 def test_redaction_does_not_modify_kept_text():
     original = "OLYMPUS"
-    mask     = [0] * len(original)
+    mask = [0] * len(original)
 
     redacted = apply_redaction(original, mask, replacement="█")
 

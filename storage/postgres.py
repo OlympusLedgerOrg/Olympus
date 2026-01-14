@@ -71,9 +71,7 @@ class StorageLayer:
             Connection in transaction mode with dict row factory
         """
         connection: psycopg.Connection[dict[str, Any]] = psycopg.connect(
-            self.connection_string,
-            autocommit=False,
-            row_factory=dict_row
+            self.connection_string, autocommit=False, row_factory=dict_row
         )
         return connection
 
@@ -84,7 +82,7 @@ class StorageLayer:
         Reads and executes the schema migration SQL.
         All DDL statements execute in a single transaction.
         """
-        with open('/home/runner/work/Olympus/Olympus/migrations/001_init_schema.sql') as f:
+        with open("/home/runner/work/Olympus/Olympus/migrations/001_init_schema.sql") as f:
             schema_sql = f.read()
 
         # BEGIN TRANSACTION (implicit via context manager)
@@ -102,7 +100,7 @@ class StorageLayer:
         record_id: str,
         version: int,
         value_hash: bytes,
-        signing_key: nacl.signing.SigningKey
+        signing_key: nacl.signing.SigningKey,
     ) -> tuple[bytes, ExistenceProof, dict[str, Any], str, LedgerEntry]:
         """
         Append a record to the sparse Merkle tree and update shard header and ledger.
@@ -160,7 +158,7 @@ class StorageLayer:
                     INSERT INTO smt_leaves (shard_id, key, version, value_hash, ts)
                     VALUES (%s, %s, %s, %s, %s)
                     """,
-                (shard_id, key, version, value_hash, datetime.now(UTC))
+                (shard_id, key, version, value_hash, datetime.now(UTC)),
             )
 
             # Insert/update affected nodes
@@ -174,10 +172,10 @@ class StorageLayer:
                     ORDER BY seq DESC
                     LIMIT 1
                     """,
-                (shard_id,)
+                (shard_id,),
             )
             prev_row = cur.fetchone()
-            prev_header_hash = "" if prev_row is None else bytes(prev_row['header_hash']).hex()
+            prev_header_hash = "" if prev_row is None else bytes(prev_row["header_hash"]).hex()
 
             # Get next sequence number
             cur.execute(
@@ -186,20 +184,20 @@ class StorageLayer:
                     FROM shard_headers
                     WHERE shard_id = %s
                     """,
-                (shard_id,)
+                (shard_id,),
             )
             seq_row = cur.fetchone()
             if seq_row is None:
                 raise RuntimeError("Failed to compute next shard header sequence")
-            seq = seq_row['next_seq']
+            seq = seq_row["next_seq"]
 
             # Create shard header
-            ts = datetime.now(UTC).isoformat().replace('+00:00', 'Z')
+            ts = datetime.now(UTC).isoformat().replace("+00:00", "Z")
             header = create_shard_header(
                 shard_id=shard_id,
                 root_hash=root_hash,
                 timestamp=ts,
-                previous_header_hash=prev_header_hash
+                previous_header_hash=prev_header_hash,
             )
 
             # Sign header
@@ -216,12 +214,12 @@ class StorageLayer:
                     shard_id,
                     seq,
                     root_hash,
-                    bytes.fromhex(header['header_hash']),
+                    bytes.fromhex(header["header_hash"]),
                     bytes.fromhex(signature),
                     pubkey,
                     prev_header_hash,
-                    ts
-                )
+                    ts,
+                ),
             )
 
             # Create ledger entry
@@ -236,10 +234,12 @@ class StorageLayer:
                     ORDER BY seq DESC
                     LIMIT 1
                     """,
-                (shard_id,)
+                (shard_id,),
             )
             prev_ledger_row = cur.fetchone()
-            prev_entry_hash = "" if prev_ledger_row is None else bytes(prev_ledger_row['entry_hash']).hex()
+            prev_entry_hash = (
+                "" if prev_ledger_row is None else bytes(prev_ledger_row["entry_hash"]).hex()
+            )
 
             # Get next ledger sequence number
             cur.execute(
@@ -248,12 +248,12 @@ class StorageLayer:
                     FROM ledger_entries
                     WHERE shard_id = %s
                     """,
-                (shard_id,)
+                (shard_id,),
             )
             ledger_row = cur.fetchone()
             if ledger_row is None:
                 raise RuntimeError("Failed to compute next ledger sequence")
-            ledger_seq = ledger_row['next_seq']
+            ledger_seq = ledger_row["next_seq"]
 
             # Create ledger entry payload
             ledger_payload = {
@@ -261,13 +261,14 @@ class StorageLayer:
                 "record_hash": record_hash_hex,
                 "shard_id": shard_id,
                 "shard_root": shard_root_hex,
-                "prev_entry_hash": prev_entry_hash
+                "prev_entry_hash": prev_entry_hash,
             }
 
             # Compute entry hash using canonical JSON
             from protocol.hashes import LEDGER_PREFIX, blake3_hash
+
             canonical_json = canonical_json_encode(ledger_payload)
-            entry_hash = blake3_hash([LEDGER_PREFIX, canonical_json.encode('utf-8')])
+            entry_hash = blake3_hash([LEDGER_PREFIX, canonical_json.encode("utf-8")])
 
             # Insert ledger entry
             cur.execute(
@@ -279,10 +280,10 @@ class StorageLayer:
                     shard_id,
                     ledger_seq,
                     entry_hash,
-                    bytes.fromhex(prev_entry_hash) if prev_entry_hash else b'',
+                    bytes.fromhex(prev_entry_hash) if prev_entry_hash else b"",
                     json.dumps(ledger_payload),
-                    ts
-                )
+                    ts,
+                ),
             )
 
             # Create LedgerEntry object
@@ -292,7 +293,7 @@ class StorageLayer:
                 shard_id=shard_id,
                 shard_root=shard_root_hex,
                 prev_entry_hash=prev_entry_hash,
-                entry_hash=entry_hash.hex()
+                entry_hash=entry_hash.hex(),
             )
 
             # COMMIT TRANSACTION (explicit)
@@ -303,11 +304,7 @@ class StorageLayer:
         # END TRANSACTION (implicit via context manager exit)
 
     def get_proof(
-        self,
-        shard_id: str,
-        record_type: str,
-        record_id: str,
-        version: int
+        self, shard_id: str, record_type: str, record_id: str, version: int
     ) -> ExistenceProof | None:
         """
         Get existence proof for a record.
@@ -334,7 +331,7 @@ class StorageLayer:
                     SELECT value_hash FROM smt_leaves
                     WHERE shard_id = %s AND key = %s AND version = %s
                     """,
-                (shard_id, key, version)
+                (shard_id, key, version),
             )
             row = cur.fetchone()
 
@@ -346,11 +343,7 @@ class StorageLayer:
             return tree.prove_existence(key)
 
     def get_nonexistence_proof(
-        self,
-        shard_id: str,
-        record_type: str,
-        record_id: str,
-        version: int
+        self, shard_id: str, record_type: str, record_id: str, version: int
     ) -> NonExistenceProof:
         """
         Get non-existence proof for a record.
@@ -380,7 +373,7 @@ class StorageLayer:
                     SELECT 1 FROM smt_leaves
                     WHERE shard_id = %s AND key = %s AND version = %s
                     """,
-                (shard_id, key, version)
+                (shard_id, key, version),
             )
             if cur.fetchone() is not None:
                 raise ValueError("Record exists, cannot generate non-existence proof")
@@ -412,7 +405,7 @@ class StorageLayer:
                     ORDER BY seq DESC
                     LIMIT 1
                     """,
-                (shard_id,)
+                (shard_id,),
             )
             row = cur.fetchone()
 
@@ -421,29 +414,31 @@ class StorageLayer:
 
             # Reconstruct header
             # Convert timestamp to ISO 8601 string if it's a datetime object
-            ts_value = row['ts']
+            ts_value = row["ts"]
             if isinstance(ts_value, str):
                 timestamp_str = ts_value
             elif isinstance(ts_value, datetime):
                 # It's a datetime object from Postgres - convert to ISO 8601 string
-                timestamp_str = ts_value.isoformat().replace('+00:00', 'Z')
+                timestamp_str = ts_value.isoformat().replace("+00:00", "Z")
             else:
                 # Unexpected type - raise error for clarity
-                raise TypeError(f"Unexpected timestamp type: {type(ts_value).__name__}. Expected str or datetime.")
+                raise TypeError(
+                    f"Unexpected timestamp type: {type(ts_value).__name__}. Expected str or datetime."
+                )
 
             header = {
                 "shard_id": shard_id,
-                "root_hash": bytes(row['root']).hex(),
+                "root_hash": bytes(row["root"]).hex(),
                 "timestamp": timestamp_str,
-                "previous_header_hash": row['previous_header_hash'],
-                "header_hash": bytes(row['header_hash']).hex()
+                "previous_header_hash": row["previous_header_hash"],
+                "header_hash": bytes(row["header_hash"]).hex(),
             }
 
             return {
                 "header": header,
-                "signature": bytes(row['sig']).hex(),
-                "pubkey": bytes(row['pubkey']).hex(),
-                "seq": row['seq']
+                "signature": bytes(row["sig"]).hex(),
+                "pubkey": bytes(row["pubkey"]).hex(),
+                "seq": row["seq"],
             }
 
     def get_ledger_tail(self, shard_id: str, n: int = 10) -> list[LedgerEntry]:
@@ -470,20 +465,20 @@ class StorageLayer:
                     ORDER BY seq DESC
                     LIMIT %s
                     """,
-                (shard_id, n)
+                (shard_id, n),
             )
             rows = cur.fetchall()
 
             entries = []
             for row in rows:
-                payload = row['payload']
+                payload = row["payload"]
                 entry = LedgerEntry(
-                    ts=payload['ts'],
-                    record_hash=payload['record_hash'],
-                    shard_id=payload['shard_id'],
-                    shard_root=payload['shard_root'],
-                    prev_entry_hash=payload['prev_entry_hash'],
-                    entry_hash=bytes(row['entry_hash']).hex()
+                    ts=payload["ts"],
+                    record_hash=payload["record_hash"],
+                    shard_id=payload["shard_id"],
+                    shard_root=payload["shard_root"],
+                    prev_entry_hash=payload["prev_entry_hash"],
+                    entry_hash=bytes(row["entry_hash"]).hex(),
                 )
                 entries.append(entry)
 
@@ -508,7 +503,7 @@ class StorageLayer:
                     """
             )
             rows = cur.fetchall()
-            return [row['shard_id'] for row in rows]
+            return [row["shard_id"] for row in rows]
 
     def verify_persisted_root(self, shard_id: str) -> bool:
         """
@@ -533,7 +528,7 @@ class StorageLayer:
                     ORDER BY seq DESC
                     LIMIT 1
                     """,
-                (shard_id,)
+                (shard_id,),
             )
             row = cur.fetchone()
 
@@ -541,7 +536,7 @@ class StorageLayer:
                 # No headers, so root is valid (empty tree)
                 return True
 
-            persisted_root = bytes(row['root'])
+            persisted_root = bytes(row["root"])
 
             # Recompute root from leaves
             tree = self._load_tree_state(cur, shard_id)
@@ -590,7 +585,7 @@ class StorageLayer:
             WHERE shard_id = %s
             ORDER BY ts ASC
             """,
-            (shard_id,)
+            (shard_id,),
         )
         rows = cur.fetchall()
 
@@ -598,13 +593,15 @@ class StorageLayer:
         for row in rows:
             # Support both dict and tuple rows for robustness
             # SELECT key, value_hash => indices 0, 1
-            key = bytes(self._row_get(row, 'key', 0))
-            value_hash = bytes(self._row_get(row, 'value_hash', 1))
+            key = bytes(self._row_get(row, "key", 0))
+            value_hash = bytes(self._row_get(row, "value_hash", 1))
             tree.update(key, value_hash)
 
         return tree
 
-    def _persist_tree_nodes(self, cur: psycopg.Cursor[Any], shard_id: str, tree: SparseMerkleTree) -> None:
+    def _persist_tree_nodes(
+        self, cur: psycopg.Cursor[Any], shard_id: str, tree: SparseMerkleTree
+    ) -> None:
         """
         Persist tree nodes to database.
 
@@ -628,7 +625,7 @@ class StorageLayer:
                 SELECT 1 FROM smt_nodes
                 WHERE shard_id = %s AND level = %s AND index = %s
                 """,
-                (shard_id, level, path_bytes)
+                (shard_id, level, path_bytes),
             )
 
             if cur.fetchone() is None:
@@ -638,7 +635,7 @@ class StorageLayer:
                     INSERT INTO smt_nodes (shard_id, level, index, hash, ts)
                     VALUES (%s, %s, %s, %s, %s)
                     """,
-                    (shard_id, level, path_bytes, hash_value, datetime.now(UTC))
+                    (shard_id, level, path_bytes, hash_value, datetime.now(UTC)),
                 )
 
     def _encode_path(self, path: tuple[int, ...]) -> bytes:

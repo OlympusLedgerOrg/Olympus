@@ -205,7 +205,7 @@ def test_shard_header_hash_deterministic():
     fields = {
         "shard_id": "shard1",
         "root_hash": hash_bytes(b"root").hex(),
-        "timestamp": "2024-01-01T00:00:00Z"
+        "timestamp": "2024-01-01T00:00:00Z",
     }
 
     hash1 = shard_header_hash(fields)
@@ -220,13 +220,13 @@ def test_shard_header_hash_changes_with_content():
     fields1 = {
         "shard_id": "shard1",
         "root_hash": hash_bytes(b"root").hex(),
-        "timestamp": "2024-01-01T00:00:00Z"
+        "timestamp": "2024-01-01T00:00:00Z",
     }
 
     fields2 = {
         "shard_id": "shard2",
         "root_hash": hash_bytes(b"root").hex(),
-        "timestamp": "2024-01-01T00:00:00Z"
+        "timestamp": "2024-01-01T00:00:00Z",
     }
 
     hash1 = shard_header_hash(fields1)

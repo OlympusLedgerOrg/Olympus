@@ -24,7 +24,7 @@ from .hashes import leaf_hash, node_hash
 # EMPTY[i] = hash of empty subtree at height i
 def _precompute_empty_hashes(height: int = 256) -> list[bytes]:
     """Precompute empty node hashes for sparse tree."""
-    empty = [b'\x00' * 32]  # Empty leaf hash
+    empty = [b"\x00" * 32]  # Empty leaf hash
     for i in range(height):
         empty.append(node_hash(empty[i], empty[i]))
     return empty
@@ -47,6 +47,7 @@ def _key_to_path_bits(key: bytes) -> list[int]:
 @dataclass
 class ExistenceProof:
     """Proof that a key-value pair exists in the tree."""
+
     key: bytes  # 32-byte key
     value_hash: bytes  # 32-byte hash of the value
     siblings: list[bytes]  # Sibling hashes along path to root (256 siblings)
@@ -59,13 +60,14 @@ class ExistenceProof:
             "key": self.key.hex(),
             "value_hash": self.value_hash.hex(),
             "siblings": [s.hex() for s in self.siblings],
-            "root_hash": self.root_hash.hex()
+            "root_hash": self.root_hash.hex(),
         }
 
 
 @dataclass
 class NonExistenceProof:
     """Proof that a key does not exist in the tree."""
+
     key: bytes  # 32-byte key
     siblings: list[bytes]  # Sibling hashes along path to empty leaf
     root_hash: bytes  # 32-byte root hash
@@ -76,7 +78,7 @@ class NonExistenceProof:
             "exists": False,
             "key": self.key.hex(),
             "siblings": [s.hex() for s in self.siblings],
-            "root_hash": self.root_hash.hex()
+            "root_hash": self.root_hash.hex(),
         }
 
 
@@ -152,8 +154,10 @@ class SparseMerkleTree:
             if bit_pos < 0:
                 break  # We've reached the root
 
-            sibling_path = self._sibling_path(path[:bit_pos+1])
-            sibling_hash = self.nodes[sibling_path] if sibling_path in self.nodes else EMPTY_HASHES[level]
+            sibling_path = self._sibling_path(path[: bit_pos + 1])
+            sibling_hash = (
+                self.nodes[sibling_path] if sibling_path in self.nodes else EMPTY_HASHES[level]
+            )
 
             # Compute parent hash
             if path[bit_pos] == 0:
@@ -192,10 +196,7 @@ class SparseMerkleTree:
         siblings = self._collect_siblings(path)
 
         return ExistenceProof(
-            key=key,
-            value_hash=value_hash,
-            siblings=siblings,
-            root_hash=self.get_root()
+            key=key, value_hash=value_hash, siblings=siblings, root_hash=self.get_root()
         )
 
     def prove_nonexistence(self, key: bytes) -> NonExistenceProof:
@@ -220,11 +221,7 @@ class SparseMerkleTree:
         path = self._key_to_path(key)
         siblings = self._collect_siblings(path)
 
-        return NonExistenceProof(
-            key=key,
-            siblings=siblings,
-            root_hash=self.get_root()
-        )
+        return NonExistenceProof(key=key, siblings=siblings, root_hash=self.get_root())
 
     def prove(self, key: bytes) -> ExistenceProof | NonExistenceProof:
         """
@@ -252,21 +249,14 @@ class SparseMerkleTree:
             siblings = self._collect_siblings(path)
 
             return ExistenceProof(
-                key=key,
-                value_hash=value_hash,
-                siblings=siblings,
-                root_hash=self.get_root()
+                key=key, value_hash=value_hash, siblings=siblings, root_hash=self.get_root()
             )
         else:
             # Key does not exist - return non-existence proof
             path = self._key_to_path(key)
             siblings = self._collect_siblings(path)
 
-            return NonExistenceProof(
-                key=key,
-                siblings=siblings,
-                root_hash=self.get_root()
-            )
+            return NonExistenceProof(key=key, siblings=siblings, root_hash=self.get_root())
 
     def _collect_siblings(self, path: tuple[int, ...]) -> list[bytes]:
         """
@@ -284,7 +274,7 @@ class SparseMerkleTree:
             if bit_pos < 0:
                 break
 
-            sibling_path = self._sibling_path(path[:bit_pos+1])
+            sibling_path = self._sibling_path(path[: bit_pos + 1])
             if sibling_path in self.nodes:
                 siblings.append(self.nodes[sibling_path])
             else:

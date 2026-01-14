@@ -45,11 +45,11 @@ def setup_test_db():
 
     This fixture exists for API compatibility only.
     """
-    with tempfile.NamedTemporaryFile(suffix='.sqlite', delete=False) as f:
+    with tempfile.NamedTemporaryFile(suffix=".sqlite", delete=False) as f:
         db_path = f.name
 
     # Set the environment variable before importing the app
-    os.environ['OLY_DB_PATH'] = db_path
+    os.environ["OLY_DB_PATH"] = db_path
 
     yield db_path
 
@@ -63,6 +63,7 @@ def client():
     """Create a test client for the FastAPI app."""
     # Import here to ensure the environment variable is set
     from app.main import app
+
     return TestClient(app)
 
 

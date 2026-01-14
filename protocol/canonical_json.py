@@ -38,11 +38,7 @@ def canonical_json_encode(obj: Any) -> str:
 
     # Canonical JSON: sorted keys, compact separators, ASCII escape, deterministic
     return json.dumps(
-        obj,
-        sort_keys=True,
-        separators=(',', ':'),
-        ensure_ascii=True,
-        allow_nan=False
+        obj, sort_keys=True, separators=(",", ":"), ensure_ascii=True, allow_nan=False
     )
 
 
@@ -56,7 +52,7 @@ def canonical_json_bytes(obj: Any) -> bytes:
     Returns:
         Canonical JSON as UTF-8 bytes
     """
-    return canonical_json_encode(obj).encode('utf-8')
+    return canonical_json_encode(obj).encode("utf-8")
 
 
 def _validate_no_special_floats(obj: Any) -> None:

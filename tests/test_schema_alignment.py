@@ -16,11 +16,14 @@ import pytest
 from jsonschema.validators import validator_for
 from pydantic import BaseModel, ValidationError
 
+
 # Define test models that mirror the API models to avoid importing api.app
 # which would trigger database initialization
 
+
 class ShardInfo(BaseModel):
     """Information about a shard."""
+
     shard_id: str
     latest_seq: int
     latest_root: str
@@ -28,6 +31,7 @@ class ShardInfo(BaseModel):
 
 class ShardHeaderResponse(BaseModel):
     """Shard header with signature for verification."""
+
     shard_id: str
     seq: int
     root_hash: str
@@ -41,6 +45,7 @@ class ShardHeaderResponse(BaseModel):
 
 class ExistenceProofResponse(BaseModel):
     """Existence proof with all data for offline verification."""
+
     shard_id: str
     record_type: str
     record_id: str
@@ -54,6 +59,7 @@ class ExistenceProofResponse(BaseModel):
 
 class NonExistenceProofResponse(BaseModel):
     """Non-existence proof with all data for offline verification."""
+
     shard_id: str
     record_type: str
     record_id: str
@@ -66,6 +72,7 @@ class NonExistenceProofResponse(BaseModel):
 
 class LedgerEntryResponse(BaseModel):
     """Ledger entry for chain verification."""
+
     ts: str
     record_hash: str
     shard_id: str
@@ -76,6 +83,7 @@ class LedgerEntryResponse(BaseModel):
 
 class LedgerTailResponse(BaseModel):
     """Last N ledger entries for a shard."""
+
     shard_id: str
     entries: list[LedgerEntryResponse]
 
@@ -109,8 +117,8 @@ class TestSchemaAlignment:
             previous_header_hash="c" * 64,
             timestamp="2024-01-01T00:00:00Z",
             signature="d" * 128,  # 64 bytes hex (Ed25519 signature)
-            pubkey="e" * 64,     # 32 bytes hex (Ed25519 public key)
-            canonical_header_json='{"shard_id":"test_shard"}'
+            pubkey="e" * 64,  # 32 bytes hex (Ed25519 public key)
+            canonical_header_json='{"shard_id":"test_shard"}',
         )
 
         # Convert to dict for JSON schema validation
@@ -131,7 +139,7 @@ class TestSchemaAlignment:
             "timestamp": "2024-01-01T00:00:00Z",
             "leaf_count": 10,
             "previous_shard_root": "b" * 64,
-            "signature": "c" * 128
+            "signature": "c" * 128,
         }
 
         # Validate the sample against the schema
@@ -158,9 +166,9 @@ class TestSchemaAlignment:
             "inclusion_proof": {
                 "siblings": [
                     {"hash": "d" * 64, "position": "left"},
-                    {"hash": "e" * 64, "position": "right"}
+                    {"hash": "e" * 64, "position": "right"},
                 ]
-            }
+            },
         }
 
         # Validate against schema
@@ -176,17 +184,13 @@ class TestSchemaAlignment:
         canonical_doc = {
             "version": "1.0.0",
             "document_id": "doc123",
-            "content": {
-                "format": "text",
-                "encoding": "utf-8",
-                "data": "Sample document content"
-            },
+            "content": {"format": "text", "encoding": "utf-8", "data": "Sample document content"},
             "metadata": {
                 "title": "Test Document",
                 "author": "Test Agency",
                 "created_at": "2024-01-01T00:00:00Z",
-                "source_agency": "TestGov"
-            }
+                "source_agency": "TestGov",
+            },
         }
 
         # Validate against schema
@@ -208,8 +212,8 @@ class TestSchemaAlignment:
             "metadata": {
                 "submission_id": "sub123",
                 "submission_method": "api",
-                "contact": "admin@testgov.example"
-            }
+                "contact": "admin@testgov.example",
+            },
         }
 
         # Validate against schema
@@ -224,7 +228,7 @@ class TestSchemaAlignment:
             shard_id="test_shard",
             shard_root="b" * 64,
             prev_entry_hash="c" * 64,
-            entry_hash="d" * 64
+            entry_hash="d" * 64,
         )
 
         entry_dict = entry.model_dump()
@@ -247,11 +251,7 @@ class TestSchemaAlignment:
     def test_pydantic_models_validate_correctly(self):
         """Ensure Pydantic models provide runtime validation."""
         # Valid ShardInfo
-        shard_info = ShardInfo(
-            shard_id="shard1",
-            latest_seq=42,
-            latest_root="a" * 64
-        )
+        shard_info = ShardInfo(shard_id="shard1", latest_seq=42, latest_root="a" * 64)
         assert shard_info.shard_id == "shard1"
 
         # Invalid ShardInfo should raise ValidationError
@@ -259,7 +259,7 @@ class TestSchemaAlignment:
             ShardInfo(
                 shard_id="shard1",
                 latest_seq="not_an_int",  # Should be an int
-                latest_root="a" * 64
+                latest_root="a" * 64,
             )
 
     def test_existence_proof_response_structure(self):
@@ -273,7 +273,7 @@ class TestSchemaAlignment:
             timestamp="2024-01-01T00:00:00Z",
             signature="d" * 128,
             pubkey="e" * 64,
-            canonical_header_json="{}"
+            canonical_header_json="{}",
         )
 
         proof = ExistenceProofResponse(
@@ -285,7 +285,7 @@ class TestSchemaAlignment:
             value_hash="b" * 64,
             siblings=["c" * 64] * 256,
             root_hash="d" * 64,
-            shard_header=header
+            shard_header=header,
         )
 
         proof_dict = proof.model_dump()

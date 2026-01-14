@@ -1,0 +1,74 @@
+# Git
+.git
+.gitignore
+.github
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+*.egg-info/
+dist/
+build/
+
+# Virtual environments
+venv/
+.venv/
+ENV/
+env/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Testing
+.pytest_cache/
+.coverage
+htmlcov/
+coverage.xml
+*.cover
+.hypothesis/
+
+# Documentation
+docs/
+*.md
+!README.md
+
+# Examples and tests
+examples/
+tests/
+proofs/
+
+# Circom artifacts
+*.r1cs
+*.wasm
+*.sym
+*.zkey
+*.ptau
+
+# Development files
+requirements-dev.txt
+.pre-commit-config.yaml
+.editorconfig
+
+# Database files
+*.db
+*.sqlite
+*.sqlite3
+
+# Logs
+*.log
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Temporary files
+tmp/
+temp/
+*.tmp

@@ -5,7 +5,6 @@ These tests validate the canonical_json_encode() function which provides
 deterministic JSON encoding for the Olympus protocol.
 """
 
-
 import pytest
 
 from protocol.canonical_json import canonical_json_bytes, canonical_json_encode
@@ -17,17 +16,17 @@ def test_canonical_json_encode_basic_types():
     assert canonical_json_encode("hello") == '"hello"'
 
     # Number (integer)
-    assert canonical_json_encode(42) == '42'
+    assert canonical_json_encode(42) == "42"
 
     # Number (float)
-    assert canonical_json_encode(3.14) == '3.14'
+    assert canonical_json_encode(3.14) == "3.14"
 
     # Boolean
-    assert canonical_json_encode(True) == 'true'
-    assert canonical_json_encode(False) == 'false'
+    assert canonical_json_encode(True) == "true"
+    assert canonical_json_encode(False) == "false"
 
     # Null
-    assert canonical_json_encode(None) == 'null'
+    assert canonical_json_encode(None) == "null"
 
 
 def test_canonical_json_encode_sorted_keys():
@@ -44,7 +43,7 @@ def test_canonical_json_encode_compact_separators():
     result = canonical_json_encode(obj)
     # Should have no spaces after colons or commas
     assert result == '{"key":"value","nested":{"a":1,"b":2}}'
-    assert ' ' not in result
+    assert " " not in result
 
 
 def test_canonical_json_encode_ascii_only():
@@ -52,20 +51,14 @@ def test_canonical_json_encode_ascii_only():
     obj = {"unicode": "hello 世界"}
     result = canonical_json_encode(obj)
     # Non-ASCII characters should be escaped
-    assert '\\u' in result
+    assert "\\u" in result
     # Should not contain raw non-ASCII bytes
-    result.encode('ascii')  # Should not raise
+    result.encode("ascii")  # Should not raise
 
 
 def test_canonical_json_encode_nested_objects():
     """Test encoding of nested objects."""
-    obj = {
-        "outer": {
-            "middle": {
-                "inner": "value"
-            }
-        }
-    }
+    obj = {"outer": {"middle": {"inner": "value"}}}
     result = canonical_json_encode(obj)
     assert result == '{"outer":{"middle":{"inner":"value"}}}'
 
@@ -87,46 +80,42 @@ def test_canonical_json_encode_mixed_types():
 
 def test_canonical_json_encode_rejects_nan():
     """Test that NaN values are rejected."""
-    obj = {"value": float('nan')}
+    obj = {"value": float("nan")}
     with pytest.raises(ValueError, match="NaN"):
         canonical_json_encode(obj)
 
 
 def test_canonical_json_encode_rejects_infinity():
     """Test that Infinity values are rejected."""
-    obj = {"value": float('inf')}
+    obj = {"value": float("inf")}
     with pytest.raises(ValueError, match="Infinity"):
         canonical_json_encode(obj)
 
 
 def test_canonical_json_encode_rejects_negative_infinity():
     """Test that -Infinity values are rejected."""
-    obj = {"value": float('-inf')}
+    obj = {"value": float("-inf")}
     with pytest.raises(ValueError, match="Infinity"):
         canonical_json_encode(obj)
 
 
 def test_canonical_json_encode_rejects_nan_in_nested_object():
     """Test that NaN in nested objects is rejected."""
-    obj = {"outer": {"inner": {"value": float('nan')}}}
+    obj = {"outer": {"inner": {"value": float("nan")}}}
     with pytest.raises(ValueError, match="NaN"):
         canonical_json_encode(obj)
 
 
 def test_canonical_json_encode_rejects_nan_in_array():
     """Test that NaN in arrays is rejected."""
-    obj = {"values": [1, 2, float('nan'), 4]}
+    obj = {"values": [1, 2, float("nan"), 4]}
     with pytest.raises(ValueError, match="NaN"):
         canonical_json_encode(obj)
 
 
 def test_canonical_json_encode_deterministic():
     """Test that encoding is deterministic across multiple calls."""
-    obj = {
-        "z": [3, 2, 1],
-        "a": {"nested": True},
-        "m": "value"
-    }
+    obj = {"z": [3, 2, 1], "a": {"nested": True}, "m": "value"}
 
     result1 = canonical_json_encode(obj)
     result2 = canonical_json_encode(obj)
@@ -165,18 +154,18 @@ def test_canonical_json_bytes_unicode():
 
     assert isinstance(result, bytes)
     # Should be ASCII-escaped in the JSON
-    decoded = result.decode('utf-8')
-    assert '\\u' in decoded
+    decoded = result.decode("utf-8")
+    assert "\\u" in decoded
 
 
 def test_canonical_json_encode_empty_object():
     """Test encoding of empty object."""
-    assert canonical_json_encode({}) == '{}'
+    assert canonical_json_encode({}) == "{}"
 
 
 def test_canonical_json_encode_empty_array():
     """Test encoding of empty array."""
-    assert canonical_json_encode([]) == '[]'
+    assert canonical_json_encode([]) == "[]"
 
 
 def test_canonical_json_encode_deeply_nested():
@@ -192,11 +181,11 @@ def test_canonical_json_encode_special_characters():
         "quotes": 'He said "hello"',
         "backslash": "path\\to\\file",
         "newline": "line1\nline2",
-        "tab": "col1\tcol2"
+        "tab": "col1\tcol2",
     }
     result = canonical_json_encode(obj)
 
     # All special characters should be properly escaped
-    assert '\\"' in result or r'\"' in result
-    assert '\\n' in result
-    assert '\\t' in result
+    assert '\\"' in result or r"\"" in result
+    assert "\\n" in result
+    assert "\\t" in result

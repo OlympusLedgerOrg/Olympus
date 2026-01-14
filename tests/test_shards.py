@@ -21,11 +21,7 @@ def test_create_shard_header():
     root_hash = hash_bytes(b"test root")
     timestamp = current_timestamp()
 
-    header = create_shard_header(
-        shard_id="shard1",
-        root_hash=root_hash,
-        timestamp=timestamp
-    )
+    header = create_shard_header(shard_id="shard1", root_hash=root_hash, timestamp=timestamp)
 
     assert header["shard_id"] == "shard1"
     assert header["root_hash"] == root_hash.hex()
@@ -45,7 +41,7 @@ def test_create_shard_header_with_previous():
         shard_id="shard1",
         root_hash=root_hash,
         timestamp=timestamp,
-        previous_header_hash=previous_hash
+        previous_header_hash=previous_hash,
     )
 
     assert header["previous_header_hash"] == previous_hash
@@ -60,11 +56,7 @@ def test_sign_and_verify_header():
     # Create header
     root_hash = hash_bytes(b"test root")
     timestamp = current_timestamp()
-    header = create_shard_header(
-        shard_id="shard1",
-        root_hash=root_hash,
-        timestamp=timestamp
-    )
+    header = create_shard_header(shard_id="shard1", root_hash=root_hash, timestamp=timestamp)
 
     # Sign header
     signature = sign_header(header, signing_key)
@@ -84,11 +76,7 @@ def test_verify_header_with_bad_signature():
     # Create and sign header with key1
     root_hash = hash_bytes(b"test root")
     timestamp = current_timestamp()
-    header = create_shard_header(
-        shard_id="shard1",
-        root_hash=root_hash,
-        timestamp=timestamp
-    )
+    header = create_shard_header(shard_id="shard1", root_hash=root_hash, timestamp=timestamp)
 
     # Sign with key2 (wrong key)
     signature = sign_header(header, signing_key2)
@@ -104,11 +92,7 @@ def test_verify_header_with_tampered_hash():
 
     root_hash = hash_bytes(b"test root")
     timestamp = current_timestamp()
-    header = create_shard_header(
-        shard_id="shard1",
-        root_hash=root_hash,
-        timestamp=timestamp
-    )
+    header = create_shard_header(shard_id="shard1", root_hash=root_hash, timestamp=timestamp)
 
     signature = sign_header(header, signing_key)
 
@@ -144,11 +128,7 @@ def test_get_verify_key_from_signing_key():
     # Should be able to verify signatures
     root_hash = hash_bytes(b"test root")
     timestamp = current_timestamp()
-    header = create_shard_header(
-        shard_id="shard1",
-        root_hash=root_hash,
-        timestamp=timestamp
-    )
+    header = create_shard_header(shard_id="shard1", root_hash=root_hash, timestamp=timestamp)
 
     signature = sign_header(header, signing_key)
     assert verify_header(header, signature, verify_key) is True
@@ -159,16 +139,12 @@ def test_header_hash_changes_with_content():
     root_hash = hash_bytes(b"test root")
     timestamp = current_timestamp()
 
-    header1 = create_shard_header(
-        shard_id="shard1",
-        root_hash=root_hash,
-        timestamp=timestamp
-    )
+    header1 = create_shard_header(shard_id="shard1", root_hash=root_hash, timestamp=timestamp)
 
     header2 = create_shard_header(
         shard_id="shard2",  # Different shard ID
         root_hash=root_hash,
-        timestamp=timestamp
+        timestamp=timestamp,
     )
 
     assert header1["header_hash"] != header2["header_hash"]
@@ -179,17 +155,9 @@ def test_header_hash_deterministic():
     root_hash = hash_bytes(b"test root")
     timestamp = "2024-01-01T00:00:00Z"  # Fixed timestamp
 
-    header1 = create_shard_header(
-        shard_id="shard1",
-        root_hash=root_hash,
-        timestamp=timestamp
-    )
+    header1 = create_shard_header(shard_id="shard1", root_hash=root_hash, timestamp=timestamp)
 
-    header2 = create_shard_header(
-        shard_id="shard1",
-        root_hash=root_hash,
-        timestamp=timestamp
-    )
+    header2 = create_shard_header(shard_id="shard1", root_hash=root_hash, timestamp=timestamp)
 
     assert header1["header_hash"] == header2["header_hash"]
 
@@ -199,8 +167,4 @@ def test_invalid_root_hash_length():
     timestamp = current_timestamp()
 
     with pytest.raises(ValueError, match="must be 32 bytes"):
-        create_shard_header(
-            shard_id="shard1",
-            root_hash=b"short",
-            timestamp=timestamp
-        )
+        create_shard_header(shard_id="shard1", root_hash=b"short", timestamp=timestamp)

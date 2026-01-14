@@ -97,10 +97,7 @@ def test_prove_multiple_keys_mixed_existence():
     tree = SparseMerkleTree()
 
     # Add some keys
-    existing_keys = [
-        record_key("document", f"doc{i}", 1)
-        for i in range(3)
-    ]
+    existing_keys = [record_key("document", f"doc{i}", 1) for i in range(3)]
     for key in existing_keys:
         tree.update(key, hash_bytes(f"value for {key.hex()}".encode()))
 
@@ -111,10 +108,7 @@ def test_prove_multiple_keys_mixed_existence():
         assert verify_unified_proof(proof) is True
 
     # Test non-existing keys
-    missing_keys = [
-        record_key("document", f"missing{i}", 1)
-        for i in range(3)
-    ]
+    missing_keys = [record_key("document", f"missing{i}", 1) for i in range(3)]
     for key in missing_keys:
         proof = tree.prove(key)
         assert isinstance(proof, NonExistenceProof)

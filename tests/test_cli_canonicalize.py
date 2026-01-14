@@ -11,6 +11,7 @@ from pathlib import Path
 
 import pytest
 
+
 # Path to the CLI script
 CLI_PATH = Path(__file__).parent.parent / "tools" / "canonicalize_cli.py"
 
@@ -18,16 +19,10 @@ CLI_PATH = Path(__file__).parent.parent / "tools" / "canonicalize_cli.py"
 @pytest.fixture
 def sample_document(tmp_path):
     """Create a sample document for testing."""
-    doc = {
-        "title": "Test  Document",
-        "version": 1,
-        "metadata": {
-            "author": "John   Doe"
-        }
-    }
+    doc = {"title": "Test  Document", "version": 1, "metadata": {"author": "John   Doe"}}
 
     doc_path = tmp_path / "sample.json"
-    with open(doc_path, 'w') as f:
+    with open(doc_path, "w") as f:
         json.dump(doc, f)
 
     return doc_path
@@ -37,7 +32,7 @@ def sample_document(tmp_path):
 def invalid_json(tmp_path):
     """Create an invalid JSON file for testing."""
     invalid_path = tmp_path / "invalid.json"
-    with open(invalid_path, 'w') as f:
+    with open(invalid_path, "w") as f:
         f.write("{ this is not valid JSON }")
 
     return invalid_path
@@ -46,9 +41,7 @@ def invalid_json(tmp_path):
 def test_cli_basic_canonicalization(sample_document):
     """Test basic document canonicalization via CLI."""
     result = subprocess.run(
-        [sys.executable, str(CLI_PATH), str(sample_document)],
-        capture_output=True,
-        text=True
+        [sys.executable, str(CLI_PATH), str(sample_document)], capture_output=True, text=True
     )
 
     assert result.returncode == 0
@@ -69,7 +62,7 @@ def test_cli_hash_flag(sample_document):
     result = subprocess.run(
         [sys.executable, str(CLI_PATH), str(sample_document), "--hash"],
         capture_output=True,
-        text=True
+        text=True,
     )
 
     assert result.returncode == 0
@@ -88,7 +81,7 @@ def test_cli_output_flag(sample_document, tmp_path):
     result = subprocess.run(
         [sys.executable, str(CLI_PATH), str(sample_document), "--output", str(output_path)],
         capture_output=True,
-        text=True
+        text=True,
     )
 
     assert result.returncode == 0
@@ -106,7 +99,7 @@ def test_cli_format_json(sample_document):
     result = subprocess.run(
         [sys.executable, str(CLI_PATH), str(sample_document), "--format", "json"],
         capture_output=True,
-        text=True
+        text=True,
     )
 
     assert result.returncode == 0
@@ -121,7 +114,7 @@ def test_cli_format_bytes(sample_document):
     result = subprocess.run(
         [sys.executable, str(CLI_PATH), str(sample_document), "--format", "bytes"],
         capture_output=True,
-        text=True
+        text=True,
     )
 
     assert result.returncode == 0
@@ -137,7 +130,7 @@ def test_cli_format_hex(sample_document):
     result = subprocess.run(
         [sys.executable, str(CLI_PATH), str(sample_document), "--format", "hex"],
         capture_output=True,
-        text=True
+        text=True,
     )
 
     assert result.returncode == 0
@@ -152,9 +145,16 @@ def test_cli_hash_with_output_file(sample_document, tmp_path):
     output_path = tmp_path / "hash.txt"
 
     result = subprocess.run(
-        [sys.executable, str(CLI_PATH), str(sample_document), "--hash", "--output", str(output_path)],
+        [
+            sys.executable,
+            str(CLI_PATH),
+            str(sample_document),
+            "--hash",
+            "--output",
+            str(output_path),
+        ],
         capture_output=True,
-        text=True
+        text=True,
     )
 
     assert result.returncode == 0
@@ -170,9 +170,7 @@ def test_cli_hash_with_output_file(sample_document, tmp_path):
 def test_cli_file_not_found():
     """Test error handling for non-existent file."""
     result = subprocess.run(
-        [sys.executable, str(CLI_PATH), "nonexistent.json"],
-        capture_output=True,
-        text=True
+        [sys.executable, str(CLI_PATH), "nonexistent.json"], capture_output=True, text=True
     )
 
     assert result.returncode == 1
@@ -182,9 +180,7 @@ def test_cli_file_not_found():
 def test_cli_invalid_json(invalid_json):
     """Test error handling for invalid JSON."""
     result = subprocess.run(
-        [sys.executable, str(CLI_PATH), str(invalid_json)],
-        capture_output=True,
-        text=True
+        [sys.executable, str(CLI_PATH), str(invalid_json)], capture_output=True, text=True
     )
 
     assert result.returncode == 1
@@ -194,15 +190,11 @@ def test_cli_invalid_json(invalid_json):
 def test_cli_deterministic_output(sample_document):
     """Test that CLI produces deterministic output."""
     result1 = subprocess.run(
-        [sys.executable, str(CLI_PATH), str(sample_document)],
-        capture_output=True,
-        text=True
+        [sys.executable, str(CLI_PATH), str(sample_document)], capture_output=True, text=True
     )
 
     result2 = subprocess.run(
-        [sys.executable, str(CLI_PATH), str(sample_document)],
-        capture_output=True,
-        text=True
+        [sys.executable, str(CLI_PATH), str(sample_document)], capture_output=True, text=True
     )
 
     assert result1.stdout == result2.stdout
@@ -213,13 +205,13 @@ def test_cli_deterministic_hash(sample_document):
     result1 = subprocess.run(
         [sys.executable, str(CLI_PATH), str(sample_document), "--hash"],
         capture_output=True,
-        text=True
+        text=True,
     )
 
     result2 = subprocess.run(
         [sys.executable, str(CLI_PATH), str(sample_document), "--hash"],
         capture_output=True,
-        text=True
+        text=True,
     )
 
     assert result1.stdout == result2.stdout
@@ -229,24 +221,19 @@ def test_cli_complex_document(tmp_path):
     """Test CLI with a complex real-world document."""
     doc = {
         "title": "Complex   Document",
-        "metadata": {
-            "z_author": "Jane",
-            "a_created": "2024-01-01"
-        },
+        "metadata": {"z_author": "Jane", "a_created": "2024-01-01"},
         "sections": [
             {"heading": "Section  1", "content": "Text   here"},
-            {"heading": "Section  2", "content": "More   text"}
-        ]
+            {"heading": "Section  2", "content": "More   text"},
+        ],
     }
 
     doc_path = tmp_path / "complex.json"
-    with open(doc_path, 'w') as f:
+    with open(doc_path, "w") as f:
         json.dump(doc, f)
 
     result = subprocess.run(
-        [sys.executable, str(CLI_PATH), str(doc_path)],
-        capture_output=True,
-        text=True
+        [sys.executable, str(CLI_PATH), str(doc_path)], capture_output=True, text=True
     )
 
     assert result.returncode == 0
@@ -264,13 +251,11 @@ def test_cli_complex_document(tmp_path):
 def test_cli_empty_document(tmp_path):
     """Test CLI with empty document."""
     doc_path = tmp_path / "empty.json"
-    with open(doc_path, 'w') as f:
+    with open(doc_path, "w") as f:
         json.dump({}, f)
 
     result = subprocess.run(
-        [sys.executable, str(CLI_PATH), str(doc_path)],
-        capture_output=True,
-        text=True
+        [sys.executable, str(CLI_PATH), str(doc_path)], capture_output=True, text=True
     )
 
     assert result.returncode == 0
