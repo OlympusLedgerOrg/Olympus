@@ -98,8 +98,11 @@ omit = [
 branch = true
 
 [tool.coverage.report]
+fail_under = 65  # Current baseline with postgres tests; target 75% after adding storage tests, then 80%
 precision = 2
 skip_empty = true
+show_missing = true
+skip_covered = true
 exclude_lines = [
     "pragma: no cover",
     "def __repr__",

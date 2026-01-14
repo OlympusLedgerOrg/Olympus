@@ -19,6 +19,10 @@ This guide provides copy-paste commands to get Olympus up and running quickly.
 git clone https://github.com/wombatvagina69-crypto/Olympus.git
 cd Olympus
 
+# One-liner: Create venv and install all dependencies
+python3 -m venv .venv && source .venv/bin/activate && pip install -U pip && pip install -r requirements.txt -r requirements-dev.txt -e .
+
+# Or step-by-step:
 # Create virtual environment
 python3 -m venv .venv
 
@@ -30,7 +34,7 @@ source .venv/bin/activate  # On macOS/Linux
 pip install -U pip
 
 # Install all dependencies
-pip install -r requirements.txt -r requirements-dev.txt
+pip install -r requirements.txt -r requirements-dev.txt -e .
 ```
 
 ---
@@ -70,16 +74,20 @@ export DATABASE_URL='postgresql://olympus@localhost:5432/olympus'
 ### Docker (Alternative)
 
 ```bash
+# One-liner: Run PostgreSQL in Docker and set DATABASE_URL
+docker run --name olympus-postgres -e POSTGRES_USER=olympus -e POSTGRES_PASSWORD=olympus -e POSTGRES_DB=olympus_test -p 5432:5432 -d postgres:16 && export DATABASE_URL='postgresql://olympus:olympus@localhost:5432/olympus_test'
+
+# Or step-by-step:
 # Run PostgreSQL in Docker
 docker run --name olympus-postgres \
   -e POSTGRES_USER=olympus \
   -e POSTGRES_PASSWORD=olympus \
-  -e POSTGRES_DB=olympus \
+  -e POSTGRES_DB=olympus_test \
   -p 5432:5432 \
   -d postgres:16
 
 # Set environment variable
-export DATABASE_URL='postgresql://olympus:olympus@localhost:5432/olympus'
+export DATABASE_URL='postgresql://olympus:olympus@localhost:5432/olympus_test'
 ```
 
 ---
@@ -136,13 +144,25 @@ mypy protocol/ storage/ api/
 ### Testing
 
 ```bash
+# One-liner: Lint, format, and type-check
+ruff check . && ruff format . && mypy protocol/ storage/ api/
+
 # Run all tests
 pytest tests/ -v
 
 # Run specific test file
 pytest tests/test_ledger.py -v
 
-# Run with coverage
+# Run tests without PostgreSQL (fast)
+pytest -q -m "not postgres"
+
+# Run tests with PostgreSQL only
+pytest -q -m "postgres"
+
+# One-liner: Run all tests with PostgreSQL and generate coverage report
+DATABASE_URL=postgresql://olympus:olympus@localhost:5432/olympus_test coverage run -m pytest -q && coverage report -m
+
+# Run with coverage (detailed)
 pytest tests/ -m "not postgres" \
   --cov=protocol --cov=storage --cov=api --cov=app \
   --cov-report=term-missing --cov-report=html

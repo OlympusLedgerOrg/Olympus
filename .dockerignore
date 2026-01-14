@@ -72,3 +72,10 @@ Thumbs.db
 tmp/
 temp/
 *.tmp
+
+# Additional build artifacts
+.mypy_cache/
+.ruff_cache/
+*.egg
+pip-log.txt
+pip-delete-this-directory.txt

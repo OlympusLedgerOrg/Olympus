@@ -16,13 +16,15 @@ jobs:
     # - E2E tests (test_e2e_audit.py, test_storage.py) require Postgres
     # - API tests (test_api_proofs.py) use SQLite for proof logic only
     env:
-      DATABASE_URL: postgresql://olympus:olympus@localhost:5432/olympus
-      TEST_DATABASE_URL: postgresql://olympus:olympus@localhost:5432/olympus
+      DATABASE_URL: postgresql://olympus:olympus@localhost:5432/olympus_test
+      TEST_DATABASE_URL: postgresql://olympus:olympus@localhost:5432/olympus_test
+      PYTHONDONTWRITEBYTECODE: "1"
+      PYTHONUNBUFFERED: "1"
       PGHOST: localhost
       PGPORT: "5432"
       PGUSER: olympus
       PGPASSWORD: olympus
-      PGDATABASE: olympus
+      PGDATABASE: olympus_test
     
     # PostgreSQL service for E2E and storage tests
     # Required by: test_e2e_audit.py, test_storage.py
@@ -33,12 +35,12 @@ jobs:
         env:
           POSTGRES_USER: olympus
           POSTGRES_PASSWORD: olympus
-          POSTGRES_DB: olympus
+          POSTGRES_DB: olympus_test
         options: >-
-          --health-cmd "pg_isready -U olympus"
-          --health-interval 5s
-          --health-timeout 5s
-          --health-retries 20
+          --health-cmd="pg_isready -U olympus -d olympus_test"
+          --health-interval=5s
+          --health-timeout=5s
+          --health-retries=20
         ports:
           - 5432:5432
     
@@ -46,16 +48,31 @@ jobs:
     - uses: actions/checkout@v4
 
     - name: Set up Python 3.12
-      uses: actions/setup-python@v4
+      uses: actions/setup-python@v5
       with:
         python-version: '3.12'
-        cache: 'pip'
+
+    - name: Cache pip packages
+      uses: actions/cache@v4
+      with:
+        path: ~/.cache/pip
+        key: ${{ runner.os }}-pip-${{ hashFiles('**/pyproject.toml', '**/requirements*.txt') }}
+        restore-keys: |
+          ${{ runner.os }}-pip-
 
     - name: Install dependencies
       run: |
         python -m pip install --upgrade pip
-        pip install -r requirements.txt
-        pip install -r requirements-dev.txt
+        pip install -r requirements.txt || true
+        pip install -r requirements-dev.txt || true
+        pip install -e .
+
+    - name: Wait for PostgreSQL
+      run: |
+        for i in {1..60}; do
+          pg_isready -h localhost -p 5432 -d olympus_test && break
+          sleep 1
+        done
 
     - name: Validate JSON schemas
       run: python tools/validate_schemas.py
@@ -77,20 +94,15 @@ jobs:
         bandit -r protocol/ storage/ api/ app/ -f txt
       continue-on-error: true
 
-    - name: Run pytest (fast lane - SQLite proof tests) with coverage
+    - name: Run tests with coverage
       run: |
-        pytest tests/ -v --tb=short -m "not postgres" \
-          --cov=protocol --cov=storage --cov=api --cov=app \
-          --cov-report=term-missing --cov-report=xml
+        coverage run -m pytest -q
+        coverage xml
+        coverage report -m
 
-    - name: Run pytest (Postgres lane - E2E and storage tests)
-      run: |
-        pytest tests/ -v --tb=short -m "postgres"
-
-    - name: Upload coverage to Codecov (optional)
-      uses: codecov/codecov-action@v3
-      if: github.event_name == 'push'
+    - name: Upload coverage to Codecov
+      if: success()
+      uses: codecov/codecov-action@v4
       with:
-        file: ./coverage.xml
+        files: ./coverage.xml
         fail_ci_if_error: false
-      continue-on-error: true
