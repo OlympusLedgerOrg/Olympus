@@ -45,6 +45,7 @@ from protocol.shards import verify_header
 from protocol.ssmf import ExistenceProof, verify_proof
 from storage.postgres import StorageLayer
 
+
 # Mark all tests in this module as requiring PostgreSQL
 pytestmark = pytest.mark.postgres
 

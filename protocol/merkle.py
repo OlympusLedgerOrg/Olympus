@@ -10,6 +10,7 @@ from typing import Optional
 
 from .hashes import merkle_parent_hash
 
+
 # Merkle tree version - DO NOT CHANGE
 # Changing this breaks all historical Merkle proofs
 MERKLE_VERSION = "merkle_v1"

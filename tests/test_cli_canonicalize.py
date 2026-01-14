@@ -11,6 +11,7 @@ from pathlib import Path
 
 import pytest
 
+
 # Path to the CLI script
 CLI_PATH = Path(__file__).parent.parent / "tools" / "canonicalize_cli.py"
 

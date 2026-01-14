@@ -16,6 +16,7 @@ from collections.abc import Iterable
 from pathlib import Path
 from typing import Any, cast
 
+
 SCHEMAS_DIR = Path(__file__).resolve().parents[1] / "schemas"
 
 

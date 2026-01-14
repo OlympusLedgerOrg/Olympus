@@ -9,11 +9,17 @@ both existence and non-existence cases without exception handling.
 import os
 import sys
 
+
 # Add parent directory to path
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from protocol.hashes import hash_bytes, record_key
-from protocol.ssmf import SparseMerkleTree, is_existence_proof, is_nonexistence_proof, verify_unified_proof
+from protocol.ssmf import (
+    SparseMerkleTree,
+    is_existence_proof,
+    is_nonexistence_proof,
+    verify_unified_proof,
+)
 
 
 def main():

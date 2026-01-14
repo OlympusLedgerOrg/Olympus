@@ -11,6 +11,7 @@ from typing import Any
 
 import blake3
 
+
 # Hash field separator for structured data
 HASH_SEPARATOR = "|"
 

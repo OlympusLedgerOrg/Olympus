@@ -16,6 +16,7 @@ from protocol.ledger import Ledger
 from protocol.merkle import MerkleTree
 from protocol.redaction import RedactionProtocol
 
+
 # Path to the CLI script
 CLI_PATH = Path(__file__).parent.parent / "tools" / "verify_cli.py"
 

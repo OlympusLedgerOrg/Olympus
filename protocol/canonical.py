@@ -8,6 +8,7 @@ consistent hashing regardless of superficial formatting differences.
 import json
 from typing import Any
 
+
 # Canonical format version - DO NOT CHANGE
 # Changing this breaks all historical document proofs
 CANONICAL_VERSION = "canonical_v1"

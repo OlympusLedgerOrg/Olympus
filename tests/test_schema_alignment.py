@@ -16,6 +16,7 @@ import pytest
 from jsonschema.validators import validator_for
 from pydantic import BaseModel, ValidationError
 
+
 # Define test models that mirror the API models to avoid importing api.app
 # which would trigger database initialization
 

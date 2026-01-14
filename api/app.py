@@ -37,6 +37,7 @@ from pydantic import BaseModel
 from protocol.canonical_json import canonical_json_encode
 from storage.postgres import StorageLayer
 
+
 # Set up logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
