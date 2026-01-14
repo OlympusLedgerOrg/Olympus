@@ -11,7 +11,7 @@ Validates:
 import pytest
 
 from protocol.hashes import hash_bytes
-from protocol.redaction import RedactionProtocol, RedactionProof, apply_redaction
+from protocol.redaction import RedactionProtocol, apply_redaction
 
 
 def test_redaction_mask_semantics():
@@ -91,7 +91,6 @@ def test_redaction_protocol_verify_tampered_content():
     """Test that verification fails if revealed content is tampered."""
     document_parts = ["Sensitive", "Public", "Classified", "Unclassified"]
     revealed_indices = [1, 3]
-    revealed_content = ["Public", "Unclassified"]
 
     tree, _ = RedactionProtocol.commit_document(document_parts)
     proof = RedactionProtocol.create_redaction_proof(tree, revealed_indices)
@@ -107,7 +106,6 @@ def test_redaction_protocol_verify_wrong_content_count():
     """Test that verification fails if content count doesn't match."""
     document_parts = ["Sensitive", "Public", "Classified"]
     revealed_indices = [1]
-    revealed_content = ["Public"]
 
     tree, _ = RedactionProtocol.commit_document(document_parts)
     proof = RedactionProtocol.create_redaction_proof(tree, revealed_indices)
