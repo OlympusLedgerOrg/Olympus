@@ -323,7 +323,7 @@ Phase 0.5 is complete when:
 
 The following features are planned for Phase 1+ and are **not implemented in v1.0**:
 
-- **Guardian replication protocol** — M-of-N multi-node replication with signed acknowledgments
+- **Guardian replication protocol (Phase 1+ only)** — M-of-N multi-node replication with signed acknowledgments
 - **BFT finality consensus** — Byzantine fault tolerance and fork detection
 - **JavaScript/TypeScript client library** — Browser-based verification
 - **Privacy-preserving proofs** — Zero-knowledge proof extensions

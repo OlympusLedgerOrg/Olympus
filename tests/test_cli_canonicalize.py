@@ -69,7 +69,7 @@ def test_cli_hash_flag(sample_document):
 
     # Output should be a hex hash
     output = result.stdout.strip()
-    assert len(output) == 64  # SHA-256 hex is 64 characters
+    assert len(output) == 64  # BLAKE3 hex is 64 characters
     # Should be valid hex
     int(output, 16)
 
@@ -164,7 +164,7 @@ def test_cli_hash_with_output_file(sample_document, tmp_path):
     with open(output_path) as f:
         output = f.read().strip()
 
-    assert len(output) == 64  # SHA-256 hex
+    assert len(output) == 64  # BLAKE3 hex
 
 
 def test_cli_file_not_found():
