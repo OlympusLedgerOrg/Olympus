@@ -34,7 +34,7 @@ Each stage must be independently verifiable and auditable.
 
 ### Cryptographic Standards
 
-1. **Hash Functions**: Always use SHA-256 via the `hashes.py` module
+1. **Hash Functions**: Always use BLAKE3 via the `hashes.py` module
    - Use `hash_bytes()` for raw bytes
    - Use `hash_string()` for UTF-8 strings
    - Use `hash_hex()` for hex-encoded output
@@ -76,7 +76,7 @@ Each stage must be independently verifiable and auditable.
 1. **No Secrets in Code**: Never commit cryptographic keys or secrets
 2. **Tamper Evidence**: All operations must preserve chain integrity
 3. **Determinism**: All hash operations must be deterministic and reproducible
-4. **Collision Resistance**: Always use SHA-256 or stronger
+4. **Collision Resistance**: Always use BLAKE3 or stronger
 5. **Input Validation**: Validate all external inputs before processing
 
 ## Non-Goals

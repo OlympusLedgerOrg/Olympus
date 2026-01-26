@@ -531,3 +531,13 @@ docker build -t olympus . && docker run -p 8000:8000 olympus
 ---
 
 **Happy coding! 🚀**
+
+### Unified check command
+
+Run the full local check suite (schemas, lint/format, mypy, pytest fast lane, pytest postgres). Set `DOCKER_BUILD=1` to include the optional Docker build.
+
+```bash
+make check
+# Optional Docker build
+DOCKER_BUILD=1 make check
+```

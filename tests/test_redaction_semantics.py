@@ -49,7 +49,7 @@ def test_redaction_protocol_commit_document():
 
     # Root hash should be deterministic
     assert isinstance(root_hash, str)
-    assert len(root_hash) == 64  # SHA-256 hex is 64 chars
+    assert len(root_hash) == 64  # BLAKE3 hex is 64 chars
     assert root_hash == tree.get_root().hex()
 
 

@@ -19,6 +19,8 @@ The Olympus system follows a strict pipeline:
 
 Each stage in this pipeline is designed to be independently verifiable and auditable.
 
+We use BLAKE3 for hashing and Merkle commitments; we use Ed25519 for signatures.
+
 **v1.0 Implementation Status:**
 - ✅ Ingest, Canonicalize, Hash, Commit, Prove, Verify — **Implemented**
 - ⚠️ Replicate (multi-node Guardian replication) — **Phase 1+ only**

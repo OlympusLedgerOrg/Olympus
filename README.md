@@ -25,6 +25,8 @@ It does this through a strict pipeline:
 
 **Ingest → Canonicalize → Hash → Commit → Prove → Replicate → Verify**
 
+We use BLAKE3 for hashing and Merkle commitments; we use Ed25519 for signatures.
+
 ---
 
 ## What Olympus Does *Not* Do
@@ -78,11 +80,10 @@ This repository is in **protocol hardening phase** preparing for v1.0 release.
 - Public audit API
 
 **Phase 1+ Features (not in v1.0):**
-- Guardian replication protocol
+- Guardian replication protocol (Phase 1+ only)
 - Byzantine fault tolerance
 - Multi-node consensus
 - Fork detection and resolution
 
 APIs, UIs, and production deployments are intentionally out of scope until
 the core semantics are finalized.
-
