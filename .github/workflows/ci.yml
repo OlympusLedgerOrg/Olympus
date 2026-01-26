@@ -54,6 +54,13 @@ jobs:
         python-version: '3.12'
         cache: 'pip'
 
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install -U setuptools
+        pip install wheel
+        pip install -e ".[dev]"
+
     - name: Show Python/pip/setuptools
       run: |
         python --version
@@ -62,13 +69,6 @@ jobs:
         import setuptools, sys
         print("setuptools:", setuptools.__version__)
         PY
-
-    - name: Install dependencies
-      run: |
-        python -m pip install --upgrade pip
-        pip install -U setuptools
-        pip install wheel
-        pip install -e ".[dev]"
 
     - name: Validate JSON schemas
       run: python tools/validate_schemas.py
