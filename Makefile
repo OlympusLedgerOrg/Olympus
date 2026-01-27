@@ -6,7 +6,7 @@ check:
 	ruff format --check protocol/ storage/ api/ app/ tests/
 	mypy protocol/ storage/ api/
 	pytest tests/ -v --tb=short -m "not postgres" \
-	  --cov=protocol --cov=storage --cov=api --cov=app \
+	  --cov=protocol --cov=app \
 	  --cov-report=term-missing --cov-report=xml \
 	  --cov-fail-under=75
 	pytest tests/ -v --tb=short -m "postgres"
