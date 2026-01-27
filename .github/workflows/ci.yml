@@ -14,6 +14,8 @@ jobs:
   # Runs ~201 tests covering cryptographic primitives, canonicalization, and proof logic
   fast-lane:
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     
     steps:
     - uses: actions/checkout@v4
@@ -79,6 +81,8 @@ jobs:
   # Runs ~17 tests covering production database layer and end-to-end flows
   postgres-lane:
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     
     # Database Strategy (see docs/08_database_strategy.md):
     # - PostgreSQL is the ONLY production backend
