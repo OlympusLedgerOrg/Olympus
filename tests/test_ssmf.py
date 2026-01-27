@@ -228,3 +228,93 @@ def test_ssmf_deterministic_root():
         tree2.update(key, value)
 
     assert tree1.get_root() == tree2.get_root()
+
+
+def test_ssmf_prove_with_invalid_key_length():
+    """Test that prove() rejects invalid key length."""
+    tree = SparseMerkleTree()
+
+    # Try to prove with a key that's not 32 bytes
+    with pytest.raises(ValueError, match="must be 32 bytes"):
+        tree.prove(b"short_key")
+
+
+def test_ssmf_prove_existence_returns_existence_proof():
+    """Test that prove() returns ExistenceProof for existing keys."""
+    from protocol.ssmf import is_existence_proof, is_nonexistence_proof
+
+    tree = SparseMerkleTree()
+    key = record_key("document", "existing", 1)
+    value = hash_bytes(b"value")
+    tree.update(key, value)
+
+    # Use the prove() method
+    proof = tree.prove(key)
+
+    # Should be an ExistenceProof
+    assert is_existence_proof(proof) is True
+    assert is_nonexistence_proof(proof) is False
+    proof_dict = proof.to_dict()
+    assert proof_dict["exists"] is True
+    assert proof.key == key
+    assert proof.value_hash == value
+
+
+def test_ssmf_prove_nonexistence_returns_nonexistence_proof():
+    """Test that prove() returns NonExistenceProof for missing keys."""
+    from protocol.ssmf import is_existence_proof, is_nonexistence_proof
+
+    tree = SparseMerkleTree()
+    key = record_key("document", "missing", 1)
+
+    # Use the prove() method
+    proof = tree.prove(key)
+
+    # Should be a NonExistenceProof
+    assert is_nonexistence_proof(proof) is True
+    assert is_existence_proof(proof) is False
+    proof_dict = proof.to_dict()
+    assert proof_dict["exists"] is False
+    assert proof.key == key
+
+
+def test_ssmf_verify_unified_proof():
+    """Test verify_unified_proof function with both proof types."""
+    from protocol.ssmf import verify_unified_proof
+
+    tree = SparseMerkleTree()
+    key1 = record_key("document", "exists", 1)
+    value1 = hash_bytes(b"value1")
+    tree.update(key1, value1)
+
+    key2 = record_key("document", "missing", 1)
+
+    # Test with existence proof
+    existence_proof = tree.prove(key1)
+    assert verify_unified_proof(existence_proof) is True
+
+    # Test with nonexistence proof
+    nonexistence_proof = tree.prove(key2)
+    assert verify_unified_proof(nonexistence_proof) is True
+
+    # Test with invalid proof type (should return False)
+    assert verify_unified_proof("not a proof") is False
+
+
+def test_ssmf_prove_existence_invalid_key():
+    """Test prove_existence raises error for invalid key."""
+    tree = SparseMerkleTree()
+
+    # Try to get existence proof for invalid key length
+    with pytest.raises(ValueError, match="must be 32 bytes"):
+        tree.prove_existence(b"short")
+
+
+def test_ssmf_prove_existence_missing_key():
+    """Test prove_existence raises error for missing key."""
+    tree = SparseMerkleTree()
+    key = record_key("document", "missing", 1)
+
+    # Try to get existence proof for key that doesn't exist
+    with pytest.raises(ValueError, match="does not exist"):
+        tree.prove_existence(key)

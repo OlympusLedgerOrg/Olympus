@@ -205,3 +205,113 @@ def test_database_is_file_backed():
     assert state.db_path
     assert isinstance(state.db_path, str)
     assert len(state.db_path) > 0
+
+
+def test_roots_endpoint(client):
+    """Test the /roots endpoint returns global and shard roots."""
+    # Add some data to create shards
+    from app.main import state
+
+    key1 = record_key("document", "doc1", 1)
+    value_hash1 = hash_bytes(b"value1")
+    shard1 = state._shard("shard_a")
+    shard1.tree.update(key1, value_hash1)
+
+    key2 = record_key("document", "doc2", 1)
+    value_hash2 = hash_bytes(b"value2")
+    shard2 = state._shard("shard_b")
+    shard2.tree.update(key2, value_hash2)
+
+    # Query the /roots endpoint
+    response = client.get("/roots")
+    assert response.status_code == 200
+
+    data = response.json()
+    assert "global_root" in data
+    assert "shards" in data
+    assert "shard_a" in data["shards"]
+    assert "shard_b" in data["shards"]
+    assert isinstance(data["shards"]["shard_a"], str)
+    assert isinstance(data["shards"]["shard_b"], str)
+
+
+def test_list_shards_endpoint(client):
+    """Test the /shards endpoint returns list of shard IDs."""
+    # Add some shards
+    from app.main import state
+
+    key1 = record_key("document", "doc_x", 1)
+    value_hash1 = hash_bytes(b"value_x")
+    shard1 = state._shard("shard_x")
+    shard1.tree.update(key1, value_hash1)
+
+    key2 = record_key("document", "doc_y", 1)
+    value_hash2 = hash_bytes(b"value_y")
+    shard2 = state._shard("shard_y")
+    shard2.tree.update(key2, value_hash2)
+
+    # Query the /shards endpoint
+    response = client.get("/shards")
+    assert response.status_code == 200
+
+    data = response.json()
+    assert "shards" in data
+    assert isinstance(data["shards"], list)
+    assert "shard_x" in data["shards"]
+    assert "shard_y" in data["shards"]
+
+
+def test_shard_header_latest_returns_404_for_nonexistent_shard(client):
+    """Test that /shards/{shard_id}/header/latest returns 404 for non-existent shard."""
+    response = client.get("/shards/nonexistent_shard/header/latest")
+    assert response.status_code == 404
+    assert "shard not found" in response.json()["detail"]
+
+
+def test_shard_header_latest_returns_header_for_existing_shard(client):
+    """Test that /shards/{shard_id}/header/latest returns header for existing shard."""
+    from app.main import state
+
+    # Create a shard with data
+    key = record_key("document", "doc_header", 1)
+    value_hash = hash_bytes(b"header_value")
+    shard = state._shard("shard_with_header")
+    shard.tree.update(key, value_hash)
+
+    # Query the header
+    response = client.get("/shards/shard_with_header/header/latest")
+    assert response.status_code == 200
+
+    data = response.json()
+    assert "shard_id" in data
+    assert data["shard_id"] == "shard_with_header"
+    assert "root_hash" in data
+    assert isinstance(data["root_hash"], str)
+
+
+def test_proof_nonexistence_invalid_key_returns_400(client):
+    """Test that /proof/nonexistence returns 400 for invalid hex key."""
+    response = client.get("/shards/shard1/proof/nonexistence?key=invalid_hex_key")
+    assert response.status_code == 400
+    assert "key must be hex" in response.json()["detail"]
+
+
+def test_list_shards_when_empty(client):
+    """Test that list_shards returns empty list when no shards exist."""
+    # Create a fresh state with no shards
+    from app.state import OlympusState
+
+    # Create new state temporarily
+    fresh_state = OlympusState("/tmp/test_empty.sqlite")
+
+    # Test the list_shards method directly
+    assert fresh_state.list_shards() == []
+
+
+def test_header_latest_returns_none_for_missing_shard():
+    """Test that header_latest returns None when shard doesn't exist."""
+    from app.state import OlympusState
+
+    state = OlympusState("/tmp/test_header.sqlite")
+    header = state.header_latest("nonexistent_shard")
+    assert header is None

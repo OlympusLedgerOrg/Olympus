@@ -212,3 +212,31 @@ def test_redaction_proof_independence():
     # No access to original tree needed
     is_valid = RedactionProtocol.verify_redaction_proof(proof, revealed_content)
     assert is_valid is True
+
+
+def test_redaction_proof_verification_mismatched_revealed_count():
+    """Test that proof verification fails when revealed_content count mismatches."""
+    document_parts = ["Part A", "Part B", "Part C"]
+    revealed_indices = [0, 2]
+
+    tree, _ = RedactionProtocol.commit_document(document_parts)
+    proof = RedactionProtocol.create_redaction_proof(tree, revealed_indices)
+
+    # Try to verify with wrong number of revealed items
+    wrong_revealed = ["Part A"]  # Should be 2 items, not 1
+    is_valid = RedactionProtocol.verify_redaction_proof(proof, wrong_revealed)
+    assert is_valid is False
+
+
+def test_redaction_proof_verification_wrong_content():
+    """Test that proof verification fails with wrong revealed content."""
+    document_parts = ["Correct A", "Correct B"]
+    revealed_indices = [0, 1]
+
+    tree, _ = RedactionProtocol.commit_document(document_parts)
+    proof = RedactionProtocol.create_redaction_proof(tree, revealed_indices)
+
+    # Try to verify with wrong content
+    wrong_content = ["Wrong A", "Wrong B"]
+    is_valid = RedactionProtocol.verify_redaction_proof(proof, wrong_content)
+    assert is_valid is False
