@@ -299,7 +299,6 @@ def test_proof_nonexistence_invalid_key_returns_400(client):
 def test_list_shards_when_empty(client):
     """Test that list_shards returns empty list when no shards exist."""
     # Create a fresh state with no shards
-    from app.main import app
     from app.state import OlympusState
 
     # Create new state temporarily
