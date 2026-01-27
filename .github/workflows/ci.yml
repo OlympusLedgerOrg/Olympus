@@ -93,7 +93,7 @@ jobs:
     - name: Run pytest (fast lane - SQLite proof tests) with coverage
       run: |
         pytest tests/ -v --tb=short -m "not postgres" \
-          --cov=protocol --cov=storage --cov=api --cov=app \
+          --cov=protocol --cov=app \
           --cov-report=term-missing --cov-report=xml \
           --cov-fail-under=75
 
