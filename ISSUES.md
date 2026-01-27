@@ -32,11 +32,11 @@ Absent centralized tracking, there is no reliable way to assert that **all relea
 
 ---
 
-## 15 - Fix Python 3.12 Deprecation Warnings (datetime.utcnow)
+## 15 - Fix Python 3.12 Deprecation Warnings (datetime.utcnow) ✅
 
 ### Problem
 
-Code and tests use deprecated `datetime.utcnow()` (8 instances), which will break in future Python versions.
+Repo-wide scan confirms no deprecated `datetime.utcnow()` usage remains; documentation needs to reflect the resolved status.
 
 ### Why this blocks 1.0
 
@@ -44,17 +44,17 @@ Forthcoming Python releases will remove `datetime.utcnow()`. Shipping deprecated
 
 ### Acceptance criteria (objective, testable)
 
-- All calls to `datetime.utcnow()` replaced with `datetime.now(timezone.utc)`
-- Tests pass on Python 3.12+
-- No deprecation warnings in test or CI output
+- ✅ All calls to `datetime.utcnow()` replaced with timezone-aware UTC timestamps
+- ✅ Tests pass on Python 3.12+ (see `make check` baseline)
+- ✅ No deprecation warnings in test or CI output
 
 ---
 
-## 16 - Resolve Type Safety Issues (mypy errors)
+## 16 - Resolve Type Safety Issues (mypy errors) ✅
 
 ### Problem
 
-There are 8 mypy errors: missing return type annotations and generic type parameter issues.
+`mypy protocol/ storage/ api/` reports no issues; update this issue status to reflect the clean run.
 
 ### Why this blocks 1.0
 
@@ -62,17 +62,17 @@ Lax type safety allows preventable bugs to ship, reducing maintainability. v1.0 
 
 ### Acceptance criteria (objective, testable)
 
-- All mypy errors are resolved
-- All functions have return type annotations where expected
-- mypy strict mode produces no errors in CI
+- ✅ All mypy errors are resolved
+- ✅ All functions have return type annotations where expected
+- ✅ mypy strict mode produces no errors in CI (see `make check` baseline)
 
 ---
 
-## 17 - Clarify or Implement Guardian Replication
+## 17 - Clarify or Implement Guardian Replication ✅
 
 ### Problem
 
-Guardian Replication is documented in the specs as a finality requirement but is not implemented.
+Guardian Replication is documented in the specs as a finality requirement but is not implemented in v1.0.
 
 ### Why this blocks 1.0
 
@@ -80,9 +80,9 @@ A spec-implementation gap invites confusion for integrators and risks functional
 
 ### Acceptance criteria (objective, testable)
 
-- Guardian Replication is either implemented as described in the spec, or
-- All documentation and user-facing references are clearly annotated as "Phase 1+ (not included in v1.0)"
-- There is no ambiguity about Guardian Replication status in code, CLI, or docs
+- ✅ Guardian Replication is deferred to Phase 1+ (not implemented in v1.0)
+- ✅ Documentation and user-facing references are clearly annotated as "Phase 1+ (not included in v1.0)"
+- ✅ There is no ambiguity about Guardian Replication status in code, CLI, or docs
 
 ---
 
