@@ -46,11 +46,16 @@ from protocol.ssmf import ExistenceProof, verify_proof
 from storage.postgres import StorageLayer
 
 
-# Mark all tests in this module as requiring PostgreSQL
-pytestmark = pytest.mark.postgres
-
 # Test database connection string
-TEST_DB = os.environ.get("TEST_DATABASE_URL", "postgresql://olympus:olympus@localhost:5432/olympus")
+TEST_DB = os.environ.get("TEST_DATABASE_URL", "")
+
+pytestmark = [
+    pytest.mark.postgres,
+    pytest.mark.skipif(
+        not TEST_DB,
+        reason="TEST_DATABASE_URL is not set; skipping PostgreSQL end-to-end tests.",
+    ),
+]
 
 
 @pytest.fixture
