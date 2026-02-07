@@ -1,5 +1,10 @@
 # Olympus
 
+![CI](https://github.com/wombatvagina69-crypto/Olympus/workflows/Olympus%20CI/badge.svg)
+![Python](https://img.shields.io/badge/python-3.10%20%7C%203.11%20%7C%203.12-blue)
+![License](https://img.shields.io/badge/license-Apache%202.0-blue.svg)
+![Coverage](https://img.shields.io/badge/coverage-61%25-yellow)
+
 Olympus is an append-only public ledger for government documents with planned federation capabilities.
 
 Its purpose is simple:
@@ -72,6 +77,8 @@ See `docs/08_database_strategy.md` for detailed rationale and usage guidance.
 
 This repository is in **protocol hardening phase** preparing for v1.0 release.
 
+📊 **For detailed v1.0 readiness status, see [STATUS.md](STATUS.md)**
+
 **v1.0 Scope:**
 - Single-node append-only ledger with Ed25519 signatures
 - Sparse Merkle Forest for efficient proofs
@@ -87,3 +94,26 @@ This repository is in **protocol hardening phase** preparing for v1.0 release.
 
 APIs, UIs, and production deployments are intentionally out of scope until
 the core semantics are finalized.
+
+---
+
+## Quick Start
+
+See [QUICKSTART.md](QUICKSTART.md) for detailed setup instructions.
+
+```bash
+# Clone and setup
+git clone https://github.com/wombatvagina69-crypto/Olympus.git
+cd Olympus
+python3 -m venv .venv
+source .venv/bin/activate
+pip install -U pip
+pip install -r requirements.txt -r requirements-dev.txt
+
+# Run tests
+pytest tests/ -m "not postgres" -v
+
+# Run quality checks
+ruff check protocol/ storage/ api/ app/ tests/
+mypy protocol/ storage/ api/
+```
