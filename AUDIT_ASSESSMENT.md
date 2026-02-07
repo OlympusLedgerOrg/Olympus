@@ -516,9 +516,9 @@
 - **Completeness:** Current as of document creation
 - **Issues listed:**
   - #14: v1.0 Readiness epic
-  - #15: Fix Python 3.12 datetime.utcnow deprecation
-  - #16: Resolve mypy type safety issues
-  - #17: Clarify Guardian Replication status
+  - #15: Fix Python 3.12 datetime.utcnow deprecation (resolved; no occurrences)
+  - #16: Resolve mypy type safety issues (resolved; clean mypy run)
+  - #17: Clarify Guardian Replication status (resolved; documented Phase 1+)
   - #18: Improve test coverage (CLI, edge cases)
   - #19: Align JSON schemas with implementation
   - #20: Clarify database strategy
@@ -563,11 +563,11 @@
 ### 2.1 Missing Core Features
 
 #### Guardian Replication Protocol
-- **Status:** Documented in specs (`docs/03_merkle_forest.md`, `EXECUTIVE_SUMMARY.md`) but not implemented
+- **Status:** Documented in specs and now explicitly labeled as Phase 1+ (not implemented in v1.0)
 - **Impact:** Cannot achieve distributed finality or Byzantine fault tolerance
 - **Files affected:** No implementation files exist
 - **Gap:** Spec-implementation mismatch for Phase 1 feature
-- **Recommendation:** Document as "Phase 1+ feature, not in v1.0" or implement before v1.0
+- **Recommendation:** Keep Phase 1+ labeling until implementation begins; update status when Phase 1+ work starts
 
 #### Multi-Node Ledger Consensus
 - **Status:** Single-node ledger only (`protocol/ledger.py`)
@@ -668,13 +668,13 @@
 - **Gap:** Inconsistent timestamp generation across modules
 - **Files affected:** `protocol/timestamps.py`, `storage/postgres.py`, `protocol/ledger.py`
 - **Recommendation:** Standardize on `protocol/timestamps.py` or remove it
-- **Note:** No deprecated `datetime.utcnow()` found in codebase (ISSUES.md #15 may be outdated)
+- **Note:** No deprecated `datetime.utcnow()` found in codebase; issue #15 has been marked resolved
 
 #### Type Safety Issues
-- **Issue:** ISSUES.md #16 reports 8 mypy errors
-- **Files affected:** Unknown (need to run mypy to identify)
-- **Gap:** Missing return type annotations, generic type issues
-- **Recommendation:** Run `mypy protocol/ storage/ api/` and fix all errors before v1.0
+- **Issue:** ISSUES.md #16 reported 8 mypy errors
+- **Files affected:** None currently (clean mypy run)
+- **Gap:** Previously missing return type annotations, generic type issues
+- **Recommendation:** Keep `mypy protocol/ storage/ api/` in CI to prevent regressions
 
 #### Database Strategy Clarity
 - **Issue:** ISSUES.md #20 notes confusion between SQLite (app/state.py) and Postgres (storage/postgres.py)
@@ -837,8 +837,8 @@
 6. **Documentation:** Protocol specifications complete for Phase 0
 
 ### Critical Gaps for v1.0
-1. **Guardian Replication:** Documented but not implemented (spec-code mismatch)
-2. **Type safety:** 8 mypy errors need resolution (per ISSUES.md #16)
+1. **Guardian Replication:** Documented and explicitly marked Phase 1+ (not implemented in v1.0)
+2. **Type safety:** Previously reported errors resolved; keep mypy in CI
 3. **Schema alignment:** JSON schemas orphaned, need integration or clear documentation (addressed in schemas/README.md)
 4. **Forest headers:** Global forest commitment missing from storage/API
 5. **Operations documentation:** Deployment, backup, monitoring guides missing
@@ -851,7 +851,7 @@
 4. **Observability:** Logging, metrics, tracing minimal
 
 ### Recommendations
-1. **For immediate v1.0:** Fix type errors, document Guardian Replication as Phase 1+, standardize timestamp usage
+1. **For immediate v1.0:** Maintain Guardian Replication Phase 1+ labeling, keep mypy clean, standardize timestamp usage
 2. **For production readiness:** Add operations documentation, deployment guide, backup procedures
 3. **For auditability:** Add chain verification tool, periodic integrity checks
 4. **For maintainability:** Schema alignment already documented in schemas/README.md

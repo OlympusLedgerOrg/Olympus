@@ -12,7 +12,7 @@ Olympus is a federated, append-only public ledger for government documents. It p
 2. **Deterministic Canonicalization**: Semantically equivalent documents must produce identical hashes
 3. **Merkle Commitments**: Documents use Merkle trees for efficient cryptographic commitments
 4. **Verifiable Proofs**: All operations must be independently verifiable
-5. **Distributed Replication**: No trust in a single institution required
+5. **Distributed Replication (Guardian Replication)**: No trust in a single institution required (Phase 1+ only; not in v1.0)
 
 ## Pipeline Stages
 
@@ -20,6 +20,8 @@ The Olympus system follows this strict pipeline:
 **Ingest → Canonicalize → Hash → Commit → Prove → Replicate → Verify**
 
 Each stage must be independently verifiable and auditable.
+
+**Note:** The Replicate stage refers to the Guardian replication protocol, which is a Phase 1+ feature and not implemented in v1.0.
 
 ## Repository Structure
 
@@ -68,7 +70,7 @@ Each stage must be independently verifiable and auditable.
 
 1. **Chain Linkage**: Each entry must include hash of previous entry
 2. **Genesis Entry**: First entry has empty string for `previous_hash`
-3. **Timestamps**: Use ISO 8601 format with 'Z' suffix: `datetime.utcnow().isoformat() + 'Z'`
+3. **Timestamps**: Use ISO 8601 format with 'Z' suffix via `protocol.timestamps.current_timestamp()` (timezone-aware `datetime.now(UTC)` with `Z` normalization)
 4. **Entry Hash**: Compute over all fields joined with `HASH_SEPARATOR`
 
 ## Security Considerations
