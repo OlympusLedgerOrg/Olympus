@@ -14,9 +14,9 @@ The Olympus repository is in **excellent shape** with strong foundations and cle
 
 - ✅ **Infrastructure**: Production-ready tooling and CI/CD
 - ✅ **Code Quality**: All quality checks passing (Ruff, mypy, formatting)
-- ✅ **Testing**: 172/172 tests passing, 61% coverage (exceeds 60% baseline)
+- ✅ **Testing**: 201/201 tests passing, 68% coverage (exceeds 60% baseline)
 - ✅ **Security**: Clean dependency scan, 2 acceptable Bandit findings
-- ⚠️ **v1.0 Blockers**: Test coverage improvements needed (61% → 80%)
+- ⚠️ **v1.0 Blockers**: Test coverage improvements needed (68% → 80%)
 
 ---
 
@@ -29,8 +29,8 @@ The Olympus repository is in **excellent shape** with strong foundations and cle
 | **Ruff Lint** | ✅ 0 violations | All pass | All style checks clean |
 | **Ruff Format** | ✅ 37 files | Consistent | Fully formatted codebase |
 | **MyPy** | ✅ 0 errors | Type-safe | Python 3.10+ compatibility |
-| **Tests** | ✅ 172/172 pass | 100% | All non-postgres tests pass |
-| **Coverage** | ✅ 61% | 60%+ | Exceeds baseline target |
+| **Tests** | ✅ 201/201 pass | 100% | All non-postgres tests pass |
+| **Coverage** | ✅ 68% | 60%+ | Exceeds baseline target |
 | **Security (Bandit)** | ✅ 2 minor | Low risk | Dev defaults only |
 | **Dependencies** | ✅ No CVEs | Clean | Production deps secure |
 
@@ -75,7 +75,7 @@ The Olympus repository is in **excellent shape** with strong foundations and cle
 | `protocol/redaction.py` | 60% | ⚠️ **Needs improvement** |
 | `storage/postgres.py` | 18% | * Requires PostgreSQL setup |
 | `api/app.py` | 0% | * API integration tests needed |
-| **Overall** | **61%** | **Target: 80%** |
+| **Overall** | **68%** | **Target: 80%** |
 
 \* Low coverage due to test environment requirements, not lack of tests
 
@@ -94,7 +94,7 @@ The Olympus repository is in **excellent shape** with strong foundations and cle
 
 **Verification**:
 ```bash
-pytest tests/ -v  # 172/172 passing on Python 3.12
+pytest tests/ -v  # 201/201 passing on Python 3.12
 ```
 
 ### Issue #16 - Type Safety Issues ✅ COMPLETE
@@ -141,7 +141,7 @@ This is the meta-tracking issue coordinating all v1.0 release work.
 - ✅ All sub-issues assigned to `1.0` or `Phase 0.5` milestone
 - ✅ No open issues with `critical` or `high-priority` labels
 - 🔄 `1.0` milestone review in progress:
-  - ✅ Test suite green (172/172 passing)
+  - ✅ Test suite green (201/201 passing)
   - ✅ No unresolved schema concerns (schemas/ documented)
   - ✅ No unresolved replication concerns (Phase 1+ deferred)
   - ⚠️ Documentation sufficient (needs test coverage improvement)
@@ -168,7 +168,7 @@ This is the **primary remaining blocker** for v1.0 release.
 
 **Coverage Improvement Needed**:
 - ⚠️ `protocol/redaction.py`: **60% → 80%+** (security-critical module)
-- ⚠️ Overall coverage: **61% → 80%** (v1.0 target)
+- ⚠️ Overall coverage: **68% → 80%** (v1.0 target)
 - 📋 Add API integration tests with httpx TestClient
 - 📋 Add CLI tool tests
 
@@ -328,8 +328,8 @@ pytest tests/ -m "not postgres" --cov=protocol --cov=storage --cov=api --cov=app
 ### Required (Blockers)
 
 - ✅ All quality checks passing (Ruff, mypy, Bandit)
-- ✅ All tests passing (172/172)
-- ⚠️ **Test coverage ≥ 80%** (currently 61%)
+- ✅ All tests passing (201/201)
+- ⚠️ **Test coverage ≥ 80%** (currently 68%)
 - ⚠️ **Direct unit tests for all critical APIs** (Issue #18)
 - ✅ No critical or high-priority issues open
 - ✅ Documentation complete and accurate

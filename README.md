@@ -3,7 +3,7 @@
 ![CI](https://github.com/wombatvagina69-crypto/Olympus/workflows/Olympus%20CI/badge.svg)
 ![Python](https://img.shields.io/badge/python-3.10%20%7C%203.11%20%7C%203.12-blue)
 ![License](https://img.shields.io/badge/license-Apache%202.0-blue.svg)
-![Coverage](https://img.shields.io/badge/coverage-61%25-yellow)
+![Coverage](https://img.shields.io/badge/coverage-68%25-yellow)
 
 Olympus is an append-only public ledger for government documents with planned federation capabilities.
 
