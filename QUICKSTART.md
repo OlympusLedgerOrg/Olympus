@@ -67,7 +67,23 @@ sudo -u postgres createdb -O olympus olympus
 export DATABASE_URL='postgresql://olympus@localhost:5432/olympus'
 ```
 
-### Docker (Alternative)
+### Docker (Recommended for Development)
+
+The easiest way to run PostgreSQL locally is with Docker Compose:
+
+```bash
+# Start PostgreSQL using docker-compose (runs in background)
+docker compose up -d db
+
+# Verify it's running
+docker compose ps
+
+# Set environment variables
+export DATABASE_URL='postgresql://olympus:olympus@localhost:5432/olympus'
+export TEST_DATABASE_URL='postgresql://olympus:olympus@localhost:5432/olympus'
+```
+
+**Alternative: Docker Run (one-liner)**
 
 ```bash
 # Run PostgreSQL in Docker
@@ -80,6 +96,17 @@ docker run --name olympus-postgres \
 
 # Set environment variable
 export DATABASE_URL='postgresql://olympus:olympus@localhost:5432/olympus'
+export TEST_DATABASE_URL='postgresql://olympus:olympus@localhost:5432/olympus'
+```
+
+**Verify database connection:**
+
+```bash
+# Check if PostgreSQL is ready
+docker compose exec db pg_isready -U olympus -d olympus
+
+# Or test with Python
+python -c "from psycopg import connect; connect('$DATABASE_URL'); print('Connected!')"
 ```
 
 ---
@@ -169,12 +196,15 @@ bandit-baseline -r protocol/ storage/ api/ app/
 ### Development Mode (with hot reload)
 
 ```bash
-# Using uvicorn directly
-uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
+# Using uvicorn directly (works without PostgreSQL, DB endpoints return 503)
+uvicorn api.app:app --reload --host 0.0.0.0 --port 8000
 
 # Or using the run script
 python run_api.py
 ```
+
+**Note:** The API can start without PostgreSQL. Non-DB endpoints (`/`, `/health`) always work.
+DB-dependent endpoints (`/shards`, `/proof`, `/ledger`) return HTTP 503 if the database is not available.
 
 ### Production Mode
 
@@ -183,11 +213,11 @@ python run_api.py
 export DATABASE_URL='postgresql://olympus:olympus@localhost:5432/olympus'
 
 # Run with multiple workers
-uvicorn app.main:app --host 0.0.0.0 --port 8000 --workers 4
+uvicorn api.app:app --host 0.0.0.0 --port 8000 --workers 4
 
 # Or with gunicorn (install separately)
 pip install gunicorn
-gunicorn app.main:app \
+gunicorn api.app:app \
   --workers 4 \
   --worker-class uvicorn.workers.UvicornWorker \
   --bind 0.0.0.0:8000
@@ -245,46 +275,22 @@ docker stop olympus-app
 docker rm olympus-app
 ```
 
-### Docker Compose (Optional)
+### Docker Compose
 
-Create `docker-compose.yml`:
-
-```yaml
-version: '3.8'
-
-services:
-  postgres:
-    image: postgres:16
-    environment:
-      POSTGRES_USER: olympus
-      POSTGRES_PASSWORD: olympus
-      POSTGRES_DB: olympus
-    ports:
-      - "5432:5432"
-    volumes:
-      - postgres_data:/var/lib/postgresql/data
-
-  app:
-    build:
-      context: .
-      target: production
-    ports:
-      - "8000:8000"
-    environment:
-      DATABASE_URL: postgresql://olympus:olympus@postgres:5432/olympus
-    depends_on:
-      - postgres
-
-volumes:
-  postgres_data:
-```
-
-Run with:
+A `docker-compose.yml` is included in the repository. Run:
 
 ```bash
-docker-compose up -d
-docker-compose logs -f app
-docker-compose down
+# Start just the database
+docker compose up -d db
+
+# Start database and app together
+docker compose up -d
+
+# View logs
+docker compose logs -f
+
+# Stop all services
+docker compose down
 ```
 
 ---
@@ -522,10 +528,10 @@ pytest --cov=protocol --cov=storage --cov=api --cov=app
 bandit -r protocol/ storage/ api/ app/
 
 # Run app
-uvicorn app.main:app --reload
+uvicorn api.app:app --reload
 
 # Docker
-docker build -t olympus . && docker run -p 8000:8000 olympus
+docker compose up -d
 ```
 
 ---
