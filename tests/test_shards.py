@@ -85,6 +85,18 @@ def test_verify_header_with_bad_signature():
     assert verify_header(header, signature, verify_key1) is False
 
 
+def test_verify_header_rejects_non_hex_signature():
+    """Test that verification fails with non-hex signature input."""
+    signing_key = nacl.signing.SigningKey.generate()
+    verify_key = signing_key.verify_key
+
+    root_hash = hash_bytes(b"test root")
+    timestamp = current_timestamp()
+    header = create_shard_header(shard_id="shard1", root_hash=root_hash, timestamp=timestamp)
+
+    assert verify_header(header, "not-hex", verify_key) is False
+
+
 def test_verify_header_with_tampered_hash():
     """Test that verification fails with tampered header hash."""
     signing_key = nacl.signing.SigningKey.generate()

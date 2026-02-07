@@ -64,10 +64,10 @@ jobs:
 
     - name: Run pytest (fast lane - protocol and app tests) with coverage
       run: |
-        pytest tests/ -v --tb=short -m "not postgres" \
-          --cov=protocol --cov=app \
-          --cov-report=term-missing --cov-report=xml \
-          --cov-fail-under=75
+          pytest tests/ -v --tb=short -m "not postgres" \
+            --cov=protocol --cov=app \
+            --cov-report=term-missing --cov-report=xml \
+            --cov-fail-under=80
 
     - name: Upload coverage to Codecov (optional)
       uses: codecov/codecov-action@v3

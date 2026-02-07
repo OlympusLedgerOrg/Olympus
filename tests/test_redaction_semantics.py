@@ -53,6 +53,28 @@ def test_redaction_protocol_commit_document():
     assert root_hash == tree.get_root().hex()
 
 
+def test_redaction_protocol_commit_does_not_mutate_parts():
+    """Test that committing does not mutate the input parts list."""
+    document_parts = ["Alpha", "Beta", "Gamma"]
+    original_parts = list(document_parts)
+
+    RedactionProtocol.commit_document(document_parts)
+
+    assert document_parts == original_parts
+
+
+def test_redaction_protocol_proof_deterministic():
+    """Test that redaction proofs are deterministic for the same inputs."""
+    document_parts = ["Red", "Green", "Blue"]
+    revealed_indices = [0, 2]
+
+    tree, _ = RedactionProtocol.commit_document(document_parts)
+    proof1 = RedactionProtocol.create_redaction_proof(tree, revealed_indices)
+    proof2 = RedactionProtocol.create_redaction_proof(tree, revealed_indices)
+
+    assert proof1 == proof2
+
+
 def test_redaction_protocol_create_proof():
     """Test creating a redaction proof for partial document reveal."""
     document_parts = ["Secret A", "Public B", "Secret C", "Public D"]
@@ -152,6 +174,18 @@ def test_redaction_protocol_reconstruct_redacted_document():
     )
 
     assert result == ["Part A", "[REDACTED]", "Part C", "[REDACTED]"]
+
+
+def test_redaction_protocol_reconstruct_with_missing_revealed_content():
+    """Test reconstruction when revealed content is missing indices."""
+    revealed_content = ["Visible"]
+    revealed_indices = [0, 2]
+
+    result = RedactionProtocol.reconstruct_redacted_document(
+        revealed_content, revealed_indices, total_parts=3, redaction_marker="[REDACTED]"
+    )
+
+    assert result == ["Visible", "[REDACTED]", "[REDACTED]"]
 
 
 def test_redaction_protocol_reconstruct_with_custom_marker():

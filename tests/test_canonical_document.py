@@ -124,6 +124,24 @@ def test_canonicalize_document_deterministic():
     assert result1 == result2 == result3
 
 
+def test_canonicalize_document_idempotent_with_unicode():
+    """Test idempotence and unicode handling in nested documents."""
+    doc = {
+        "title": "Résumé   of  José",
+        "meta": {"author": "Zoë  Ångström"},
+        "sections": [{"heading": "Intro   🌟", "body": "Hello   world"}],
+    }
+
+    first = canonicalize_document(doc)
+    second = canonicalize_document(first)
+
+    assert first == second
+    assert first["title"] == "Résumé of José"
+    assert first["meta"]["author"] == "Zoë Ångström"
+    assert first["sections"][0]["heading"] == "Intro 🌟"
+    assert first["sections"][0]["body"] == "Hello world"
+
+
 def test_canonicalize_json():
     """Test canonicalize_json produces canonical JSON string."""
     data = {"z": 1, "a": 2}
