@@ -77,10 +77,16 @@ def signing_key():
 def client(storage):
     """Create test client for API."""
     # Import here to avoid connecting to Postgres during test collection
+    import api.app as api_app
     from api.app import app
 
     # Override DATABASE_URL for the API
     os.environ["DATABASE_URL"] = TEST_DB
+
+    # Reset lazy storage state so tests start fresh
+    api_app._storage = None
+    api_app._db_error = None
+
     return TestClient(app)
 
 

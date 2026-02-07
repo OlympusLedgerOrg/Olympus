@@ -1,0 +1,37 @@
+# Docker Compose configuration for Olympus development environment
+# Provides PostgreSQL 16 database for local development and testing
+
+services:
+  db:
+    image: postgres:16
+    container_name: olympus-postgres
+    environment:
+      POSTGRES_USER: olympus
+      POSTGRES_PASSWORD: olympus
+      POSTGRES_DB: olympus
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U olympus -d olympus"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+    volumes:
+      - olympus_pgdata:/var/lib/postgresql/data
+
+  # Optional: Application service (use `docker compose up -d app` to run full stack)
+  app:
+    build:
+      context: .
+      target: production
+    container_name: olympus-app
+    ports:
+      - "8000:8000"
+    environment:
+      DATABASE_URL: postgresql://olympus:olympus@db:5432/olympus
+    depends_on:
+      db:
+        condition: service_healthy
+
+volumes:
+  olympus_pgdata:

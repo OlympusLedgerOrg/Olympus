@@ -1,11 +1,11 @@
 """
 Public audit API for Olympus Phase 0.5
 
-PRODUCTION API (PostgreSQL REQUIRED)
-=====================================
+PRODUCTION API (PostgreSQL RECOMMENDED)
+========================================
 
 This is the PRODUCTION FastAPI application for Olympus.
-It requires PostgreSQL 16+ and provides full ACID transaction guarantees.
+It uses PostgreSQL 16+ for full ACID transaction guarantees.
 
 DATABASE: PostgreSQL 16+ (via storage.postgres.StorageLayer)
 PERSISTENCE: Full transactional persistence across four tables
@@ -13,7 +13,12 @@ CONCURRENCY: Safe for concurrent access
 PRODUCTION USE: ✅ YES - This is the production API
 
 Environment Variables:
-- DATABASE_URL: PostgreSQL connection string (REQUIRED)
+- DATABASE_URL: PostgreSQL connection string (optional at startup, required for DB endpoints)
+
+LAZY INITIALIZATION:
+- The app can start without a PostgreSQL connection
+- DB-dependent endpoints return HTTP 503 if the database is not available
+- Non-DB endpoints (/, /health) always work
 
 For testing proof logic without PostgreSQL, use app/main.py (test-only).
 
@@ -31,16 +36,98 @@ from typing import Any
 from urllib.parse import urlparse
 
 from fastapi import FastAPI, HTTPException, Query
-from psycopg import connect
 from pydantic import BaseModel
 
 from protocol.canonical_json import canonical_json_encode
-from storage.postgres import StorageLayer
 
 
 # Set up logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+
+
+# Lazy storage layer management
+_storage: Any = None  # Will be StorageLayer when initialized
+_db_error: str | None = None  # Error message if DB init failed
+
+
+def _get_storage() -> Any:
+    """
+    Get the storage layer, initializing lazily on first use.
+
+    Returns:
+        StorageLayer instance
+
+    Raises:
+        HTTPException: 503 if database is not available
+    """
+    global _storage, _db_error
+
+    if _storage is not None:
+        return _storage
+
+    if _db_error is not None:
+        raise HTTPException(
+            status_code=503,
+            detail=f"Database not available: {_db_error}",
+        )
+
+    # Try to initialize the storage layer
+    try:
+        from psycopg import connect
+
+        from storage.postgres import StorageLayer
+
+        # Get database connection string from environment
+        DEFAULT_DATABASE_URL = "postgresql://olympus:olympus@localhost:5432/olympus"
+        DATABASE_URL = os.environ.get("DATABASE_URL", DEFAULT_DATABASE_URL)
+
+        # Validate DATABASE_URL format
+        parsed_url = urlparse(DATABASE_URL)
+        if not parsed_url.username:
+            raise RuntimeError(f"DATABASE_URL missing username/password: {DATABASE_URL}")
+
+        logger.info(
+            f"Connecting to database: scheme={parsed_url.scheme}, "
+            f"user={parsed_url.username}, "
+            f"host={parsed_url.hostname or 'unknown'}, "
+            f"db={parsed_url.path.lstrip('/') if parsed_url.path else 'unknown'}"
+        )
+
+        storage = StorageLayer(DATABASE_URL)
+        storage.init_schema()
+        logger.info("Database schema initialized successfully")
+
+        # Quick connectivity check
+        with connect(DATABASE_URL) as conn, conn.cursor() as cur:
+            cur.execute("SELECT 1")
+            result = cur.fetchone()
+            if result and result[0] == 1:
+                logger.info("Database connectivity verified: SELECT 1 succeeded")
+            else:
+                raise RuntimeError(
+                    f"Database connectivity check failed: unexpected result {result}"
+                )
+
+        _storage = storage
+        return _storage
+
+    except Exception as e:
+        _db_error = str(e)
+        logger.warning(f"Database initialization deferred: {e}")
+        raise HTTPException(
+            status_code=503,
+            detail=f"Database not available: {_db_error}",
+        ) from e
+
+
+def _require_storage() -> Any:
+    """
+    Get storage layer, raising 503 if not available.
+
+    This is used by endpoints that require the database.
+    """
+    return _get_storage()
 
 
 # API models for responses
@@ -118,60 +205,6 @@ app = FastAPI(
     version="0.5.0",
 )
 
-# Get database connection string from environment with explicit credentials
-# NEVER allow implicit OS user (root in CI) to be used
-DEFAULT_DATABASE_URL = "postgresql://olympus:olympus@localhost:5432/olympus"
-DATABASE_URL = os.environ.get("DATABASE_URL", DEFAULT_DATABASE_URL)
-
-# Validate that DATABASE_URL contains explicit username/password
-# This prevents "role root does not exist" errors in CI
-try:
-    parsed_url = urlparse(DATABASE_URL)
-
-    # Check if URL has a username (userinfo is username[:password])
-    if not parsed_url.username:
-        raise RuntimeError(f"DATABASE_URL missing username/password: {DATABASE_URL}")
-
-    # Log database connection info (password is automatically redacted by urlparse)
-    logger.info(
-        f"Connecting to database: scheme={parsed_url.scheme}, "
-        f"user={parsed_url.username}, "
-        f"host={parsed_url.hostname or 'unknown'}, "
-        f"db={parsed_url.path.lstrip('/') if parsed_url.path else 'unknown'}"
-    )
-except Exception as e:
-    # If URL parsing fails or validation fails, raise with clear message
-    if isinstance(e, RuntimeError):
-        raise
-    raise RuntimeError(f"Invalid DATABASE_URL format: {DATABASE_URL}") from e
-
-storage = StorageLayer(DATABASE_URL)
-
-
-# Initialize schema on app startup
-try:
-    storage.init_schema()
-    logger.info("Database schema initialized successfully")
-
-    # Quick connectivity check with explicit error handling
-    try:
-        with connect(DATABASE_URL) as conn, conn.cursor() as cur:
-            cur.execute("SELECT 1")
-            result = cur.fetchone()
-            if result and result[0] == 1:
-                logger.info("Database connectivity verified: SELECT 1 succeeded")
-            else:
-                raise RuntimeError(
-                    f"Database connectivity check failed: unexpected result {result}"
-                )
-    except Exception as conn_error:
-        logger.error(f"Database connectivity check failed: {conn_error}")
-        raise RuntimeError("Failed to verify database connectivity") from conn_error
-except Exception as e:
-    logger.error(f"Failed to initialize database: {e}")
-    logger.error("Application startup failed - database not accessible")
-    raise  # Fail fast on DB errors
-
 
 @app.get("/")
 async def root() -> dict[str, Any]:
@@ -197,6 +230,7 @@ async def list_shards() -> list[ShardInfo]:
     Returns:
         List of shard information
     """
+    storage = _require_storage()
     try:
         shard_ids = storage.get_all_shard_ids()
         result = []
@@ -213,6 +247,8 @@ async def list_shards() -> list[ShardInfo]:
                 )
 
         return result
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to list shards: {str(e)}") from e
 
@@ -230,6 +266,7 @@ async def get_latest_header(shard_id: str) -> ShardHeaderResponse:
     Returns:
         Latest shard header with signature and canonical JSON
     """
+    storage = _require_storage()
     try:
         header_data = storage.get_latest_header(shard_id)
 
@@ -285,6 +322,7 @@ async def get_proof(
     Returns:
         Existence proof if record exists, non-existence proof otherwise
     """
+    storage = _require_storage()
     try:
         # Try to get existence proof
         proof = storage.get_proof(shard_id, record_type, record_id, version)
@@ -365,6 +403,7 @@ async def get_ledger_tail(
     Returns:
         List of ledger entries
     """
+    storage = _require_storage()
     try:
         entries = storage.get_ledger_tail(shard_id, n)
 
@@ -382,12 +421,29 @@ async def get_ledger_tail(
                 for entry in entries
             ],
         )
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to get ledger tail: {str(e)}") from e
 
 
 # Health check endpoint
 @app.get("/health")
-async def health() -> dict[str, str]:
-    """Health check endpoint."""
-    return {"status": "healthy", "version": "0.5.0"}
+async def health() -> dict[str, Any]:
+    """
+    Health check endpoint.
+
+    Returns basic health status. DB-dependent operations may still fail
+    even if this endpoint returns healthy.
+    """
+    global _storage, _db_error
+
+    db_status = (
+        "connected" if _storage is not None else ("error" if _db_error else "not_initialized")
+    )
+
+    return {
+        "status": "healthy",
+        "version": "0.5.0",
+        "database": db_status,
+    }
