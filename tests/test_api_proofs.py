@@ -181,6 +181,12 @@ def test_invalid_key_returns_400(client):
     assert "key must be hex" in response.json()["detail"]
 
 
+def test_proof_existence_missing_key_returns_422(client):
+    """Test that missing key parameter returns HTTP 422."""
+    response = client.get("/shards/shard1/proof/existence")
+    assert response.status_code == 422
+
+
 def test_health_check(client):
     """Test the root health check endpoint."""
     response = client.get("/status")

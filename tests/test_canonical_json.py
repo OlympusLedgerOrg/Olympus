@@ -124,6 +124,14 @@ def test_canonical_json_encode_deterministic():
     assert result1 == result2 == result3
 
 
+def test_canonical_json_encode_nested_deterministic():
+    """Test deterministic encoding for nested objects with reordered keys."""
+    obj1 = {"meta": {"z": 3, "a": 1}, "items": [{"b": 2, "a": 1}]}
+    obj2 = {"items": [{"a": 1, "b": 2}], "meta": {"a": 1, "z": 3}}
+
+    assert canonical_json_encode(obj1) == canonical_json_encode(obj2)
+
+
 def test_canonical_json_encode_equivalent_objects():
     """Test that semantically equivalent objects produce identical output."""
     # Same object with different key order

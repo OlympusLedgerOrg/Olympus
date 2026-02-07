@@ -119,6 +119,13 @@ def test_ledger_get_entry_not_found():
     assert retrieved is None
 
 
+def test_ledger_get_entry_empty_returns_none():
+    """Test that get_entry returns None for empty ledger."""
+    ledger = Ledger()
+
+    assert ledger.get_entry("missing_hash") is None
+
+
 def test_ledger_verify_chain_empty_ledger():
     """Test that verify_chain returns True for empty ledger."""
     ledger = Ledger()
