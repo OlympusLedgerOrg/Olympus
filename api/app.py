@@ -32,7 +32,7 @@ All responses include everything required for offline verification.
 
 import logging
 import os
-from typing import Any
+from typing import TYPE_CHECKING, Any
 from urllib.parse import urlparse
 
 from fastapi import FastAPI, HTTPException, Query
@@ -41,17 +41,21 @@ from pydantic import BaseModel
 from protocol.canonical_json import canonical_json_encode
 
 
+# Type for lazy-loaded storage layer
+# Import StorageLayer at type-checking time only to avoid circular imports
+if TYPE_CHECKING:
+    from storage.postgres import StorageLayer
+
 # Set up logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-
 # Lazy storage layer management
-_storage: Any = None  # Will be StorageLayer when initialized
+_storage: "StorageLayer | None" = None
 _db_error: str | None = None  # Error message if DB init failed
 
 
-def _get_storage() -> Any:
+def _get_storage() -> "StorageLayer":
     """
     Get the storage layer, initializing lazily on first use.
 
@@ -121,13 +125,17 @@ def _get_storage() -> Any:
         ) from e
 
 
-def _require_storage() -> Any:
+def _require_storage() -> "StorageLayer":
     """
     Get storage layer, raising 503 if not available.
 
-    This is used by endpoints that require the database.
+    This wrapper provides a clear semantic interface for endpoints that require
+    the database. It may be extended in the future for additional checks.
     """
-    return _get_storage()
+    storage = _get_storage()
+    # Type assertion since _get_storage raises if storage is None
+    assert storage is not None  # noqa: S101
+    return storage
 
 
 # API models for responses
