@@ -35,6 +35,7 @@ import os
 from datetime import UTC, datetime
 
 import nacl.signing
+import psycopg
 import pytest
 
 from protocol.hashes import hash_bytes
@@ -424,7 +425,7 @@ def test_ledger_entries_reject_out_of_order_seq(storage, signing_key):
         "prev_entry_hash": entry.entry_hash,
     }
 
-    with pytest.raises(Exception, match="Out-of-order ledger entry"):
+    with pytest.raises(psycopg.errors.RaiseException, match="Out-of-order ledger entry"):
         with storage._get_connection() as conn, conn.cursor() as cur:
             cur.execute(
                 """

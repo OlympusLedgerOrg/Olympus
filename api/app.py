@@ -85,7 +85,7 @@ def _get_storage() -> "StorageLayer":
         # Get database connection string from environment
         database_url = os.environ.get("DATABASE_URL")
         if not database_url:
-            raise RuntimeError("DATABASE_URL is not set")
+            raise RuntimeError("DATABASE_URL is required for production operation")
 
         # Validate DATABASE_URL format
         parsed_url = urlparse(database_url)
