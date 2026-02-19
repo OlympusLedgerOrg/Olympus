@@ -30,12 +30,13 @@ from collections.abc import Mapping
 from datetime import UTC, datetime
 from typing import Any
 
+import nacl.exceptions
 import nacl.signing
 import psycopg
 from psycopg.rows import dict_row
 
 from protocol.canonical_json import canonical_json_encode
-from protocol.hashes import record_key
+from protocol.hashes import record_key, shard_header_hash
 from protocol.ledger import LedgerEntry
 from protocol.shards import create_shard_header, sign_header, verify_header
 from protocol.ssmf import ExistenceProof, NonExistenceProof, SparseMerkleTree
@@ -444,6 +445,24 @@ class StorageLayer:
             verify_key = nacl.signing.VerifyKey(bytes(row["pubkey"]))
             if not verify_header(header, signature, verify_key):
                 raise ValueError(f"Invalid shard header signature for shard '{shard_id}'")
+
+            expected_hash = shard_header_hash(
+                {
+                    "shard_id": header["shard_id"],
+                    "root_hash": header["root_hash"],
+                    "timestamp": header["timestamp"],
+                    "previous_header_hash": header["previous_header_hash"],
+                }
+            ).hex()
+            if header["header_hash"] != expected_hash:
+                raise ValueError(f"Invalid shard header hash for shard '{shard_id}'")
+
+            sig_bytes = bytes(row["sig"])
+            verify_key = nacl.signing.VerifyKey(bytes(row["pubkey"]))
+            try:
+                verify_key.verify(bytes.fromhex(header["header_hash"]), sig_bytes)
+            except nacl.exceptions.BadSignatureError as e:
+                raise ValueError(f"Invalid shard header signature for shard '{shard_id}'") from e
 
             return {
                 "header": header,
