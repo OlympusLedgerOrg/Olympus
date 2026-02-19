@@ -1,4 +1,4 @@
-.PHONY: check
+.PHONY: check smoke
 
 check:
 	python tools/validate_schemas.py
@@ -13,3 +13,6 @@ check:
 	@if [ -n "$(DOCKER_BUILD)" ]; then \
 	docker build --target production -t olympus:prod .; \
 	fi
+
+smoke:
+	bash tools/dev_smoke.sh
