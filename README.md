@@ -64,6 +64,15 @@ Olympus uses **PostgreSQL** as its production database backend.
 **Production**: PostgreSQL 16+ only  
 **Testing**: PostgreSQL for E2E tests; SQLite for lightweight proof logic tests
 
+## What This Repository Is in Practice (from the DB model)
+
+From the implemented schema and storage layer, this repository is currently a **cryptographic append-only audit database** built on PostgreSQL:
+- `smt_leaves` + `smt_nodes` persist Sparse Merkle state
+- `shard_headers` persists signed root commitments
+- `ledger_entries` persists chained append-only ledger events
+
+In other words: this is primarily a verifiable data-integrity backend and proof service, not a generalized blockchain platform.
+
 See `docs/08_database_strategy.md` for detailed rationale and usage guidance.
 
 ---
