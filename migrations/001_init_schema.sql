@@ -98,3 +98,52 @@ CREATE INDEX IF NOT EXISTS ledger_entries_shard_seq_desc_idx ON ledger_entries(s
 
 -- Index for global ledger ordering
 CREATE INDEX IF NOT EXISTS ledger_entries_ts_idx ON ledger_entries(ts);
+
+-- Enforce monotonic ledger order and chain linkage at write time
+CREATE OR REPLACE FUNCTION enforce_ledger_entry_order()
+RETURNS TRIGGER AS $$
+DECLARE
+    latest_seq BIGINT;
+    latest_hash BYTEA;
+BEGIN
+    SELECT seq, entry_hash
+    INTO latest_seq, latest_hash
+    FROM ledger_entries
+    WHERE shard_id = NEW.shard_id
+    ORDER BY seq DESC
+    LIMIT 1;
+
+    IF latest_seq IS NULL THEN
+        IF NEW.seq <> 0 THEN
+            RAISE EXCEPTION 'First ledger entry for shard % must have seq=0, got %', NEW.shard_id, NEW.seq;
+        END IF;
+        IF octet_length(NEW.prev_entry_hash) <> 0 THEN
+            RAISE EXCEPTION 'First ledger entry for shard % must have empty prev_entry_hash', NEW.shard_id;
+        END IF;
+    ELSE
+        IF NEW.seq <> latest_seq + 1 THEN
+            RAISE EXCEPTION 'Out-of-order ledger entry for shard %: expected seq %, got %', NEW.shard_id, latest_seq + 1, NEW.seq;
+        END IF;
+        IF NEW.prev_entry_hash <> latest_hash THEN
+            RAISE EXCEPTION 'Invalid prev_entry_hash for shard % at seq %', NEW.shard_id, NEW.seq;
+        END IF;
+    END IF;
+
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+DO $$
+BEGIN
+    IF NOT EXISTS (
+        SELECT 1
+        FROM pg_trigger
+        WHERE tgname = 'ledger_entries_order_guard'
+    ) THEN
+        CREATE TRIGGER ledger_entries_order_guard
+        BEFORE INSERT ON ledger_entries
+        FOR EACH ROW
+        EXECUTE FUNCTION enforce_ledger_entry_order();
+    END IF;
+END;
+$$;
