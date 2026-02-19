@@ -83,8 +83,9 @@ def _get_storage() -> "StorageLayer":
         from storage.postgres import StorageLayer
 
         # Get database connection string from environment
-        DEFAULT_DATABASE_URL = "postgresql://olympus:olympus@localhost:5432/olympus"
-        DATABASE_URL = os.environ.get("DATABASE_URL", DEFAULT_DATABASE_URL)
+        DATABASE_URL = os.environ.get("DATABASE_URL")
+        if not DATABASE_URL:
+            raise RuntimeError("DATABASE_URL is required.")
 
         # Validate DATABASE_URL format
         parsed_url = urlparse(DATABASE_URL)

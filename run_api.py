@@ -6,10 +6,11 @@ Usage:
     python run_api.py [--host HOST] [--port PORT]
 
 Environment variables:
-    DATABASE_URL: Postgres connection string (recommended, uses default if not set)
+    DATABASE_URL: Postgres connection string (required)
 """
 
 import os
+import sys
 
 import uvicorn
 
@@ -25,16 +26,13 @@ if __name__ == "__main__":
 
     args = parser.parse_args()
 
-    # Get database URL for display (uses default if not set)
-    # WARNING: Default credentials are for LOCAL DEVELOPMENT ONLY.
-    # In production, always set DATABASE_URL with secure credentials.
-    DEFAULT_DATABASE_URL = "postgresql://olympus:olympus@localhost:5432/olympus"
-    database_url = os.environ.get("DATABASE_URL", DEFAULT_DATABASE_URL)
+    database_url = os.environ.get("DATABASE_URL")
+    if not database_url:
+        print("ERROR: DATABASE_URL is required.", file=sys.stderr)
+        raise SystemExit(2)
 
     print(f"Starting Olympus Public Audit API on {args.host}:{args.port}")
     print(f"Database: {database_url}")
-    if "DATABASE_URL" not in os.environ:
-        print("  (using default; set DATABASE_URL to configure)")
     print("\nEndpoints:")
     print("  GET  /         - API info")
     print("  GET  /health   - Health check (always works)")

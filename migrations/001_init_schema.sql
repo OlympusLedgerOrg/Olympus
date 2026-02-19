@@ -98,3 +98,46 @@ CREATE INDEX IF NOT EXISTS ledger_entries_shard_seq_desc_idx ON ledger_entries(s
 
 -- Index for global ledger ordering
 CREATE INDEX IF NOT EXISTS ledger_entries_ts_idx ON ledger_entries(ts);
+
+-- Enforce append-only sequence and chain linkage at DB layer.
+-- Advisory lock serializes inserts per shard to avoid race conditions.
+CREATE OR REPLACE FUNCTION enforce_ledger_entry_order()
+RETURNS trigger AS $$
+DECLARE
+    last_seq BIGINT;
+    last_hash BYTEA;
+BEGIN
+    PERFORM pg_advisory_xact_lock(hashtext(NEW.shard_id));
+
+    SELECT seq, entry_hash
+    INTO last_seq, last_hash
+    FROM ledger_entries
+    WHERE shard_id = NEW.shard_id
+    ORDER BY seq DESC
+    LIMIT 1;
+
+    IF last_seq IS NULL THEN
+        IF NEW.seq <> 0 THEN
+            RAISE EXCEPTION 'Genesis must have seq=0 (got %)', NEW.seq;
+        END IF;
+        IF COALESCE(NEW.prev_entry_hash, '\x'::BYTEA) <> '\x'::BYTEA THEN
+            RAISE EXCEPTION 'Genesis must have empty prev_entry_hash';
+        END IF;
+    ELSE
+        IF NEW.seq <> last_seq + 1 THEN
+            RAISE EXCEPTION 'Invalid seq: expected %, got %', last_seq + 1, NEW.seq;
+        END IF;
+        IF NEW.prev_entry_hash IS DISTINCT FROM last_hash THEN
+            RAISE EXCEPTION 'Invalid prev_entry_hash: does not match latest entry_hash';
+        END IF;
+    END IF;
+
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+DROP TRIGGER IF EXISTS trg_enforce_ledger_entry_order ON ledger_entries;
+CREATE TRIGGER trg_enforce_ledger_entry_order
+BEFORE INSERT ON ledger_entries
+FOR EACH ROW
+EXECUTE FUNCTION enforce_ledger_entry_order();
