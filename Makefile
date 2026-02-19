@@ -8,7 +8,7 @@ check:
 	pytest tests/ -v --tb=short -m "not postgres" \
 	  --cov=protocol --cov=app \
 	  --cov-report=term-missing --cov-report=xml \
-	  --cov-fail-under=80
+	  --cov-fail-under=85
 	pytest tests/ -v --tb=short -m "postgres"
 	@if [ -n "$(DOCKER_BUILD)" ]; then \
 	docker build --target production -t olympus:prod .; \

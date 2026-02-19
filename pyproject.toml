@@ -125,7 +125,7 @@ branch = true
 [tool.coverage.report]
 show_missing = true
 skip_covered = true
-fail_under = 75  # raise to 80 once DB-backed tests are green
+fail_under = 85
 
 [tool.coverage.xml]
 output = "coverage.xml"

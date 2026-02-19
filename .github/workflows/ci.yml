@@ -67,7 +67,7 @@ jobs:
           pytest tests/ -v --tb=short -m "not postgres" \
             --cov=protocol --cov=app \
             --cov-report=term-missing --cov-report=xml \
-            --cov-fail-under=80
+            --cov-fail-under=85
 
     - name: Upload coverage to Codecov (optional)
       uses: codecov/codecov-action@v3
