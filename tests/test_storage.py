@@ -425,7 +425,10 @@ def test_ledger_entries_reject_out_of_order_seq(storage, signing_key):
         "prev_entry_hash": entry.entry_hash,
     }
 
-    with pytest.raises(psycopg.errors.RaiseException, match="Out-of-order ledger entry"):
+    with pytest.raises(
+        psycopg.errors.RaiseException,
+        match=r"Out-of-order ledger entry for shard .*: expected seq \d+, got \d+",
+    ):
         with storage._get_connection() as conn, conn.cursor() as cur:
             cur.execute(
                 """
