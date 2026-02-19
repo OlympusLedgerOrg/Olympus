@@ -20,7 +20,7 @@ def test_run_api_exits_when_database_url_missing():
         cwd=REPO_ROOT,
     )
 
-    assert result.returncode == 2
+    assert result.returncode == 1
     assert "DATABASE_URL is required" in result.stderr
 
 
