@@ -10,6 +10,7 @@ Environment variables:
 """
 
 import os
+import sys
 
 import uvicorn
 
@@ -28,7 +29,8 @@ if __name__ == "__main__":
     # DATABASE_URL is required for production API operation.
     database_url = os.environ.get("DATABASE_URL")
     if not database_url:
-        raise SystemExit("DATABASE_URL is required")
+        print("DATABASE_URL is required", file=sys.stderr)
+        raise SystemExit(2)
 
     print(f"Starting Olympus Public Audit API on {args.host}:{args.port}")
     print(f"Database: {database_url}")
