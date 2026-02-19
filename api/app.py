@@ -88,9 +88,9 @@ def _get_storage() -> "StorageLayer":
             raise RuntimeError("DATABASE_URL is required.")
 
         # Validate DATABASE_URL format
-        parsed_url = urlparse(database_url)
+        parsed_url = urlparse(DATABASE_URL)
         if not parsed_url.username:
-            raise RuntimeError(f"DATABASE_URL missing username/password: {database_url}")
+            raise RuntimeError(f"DATABASE_URL missing username/password: {DATABASE_URL}")
 
         logger.info(
             f"Connecting to database: scheme={parsed_url.scheme}, "
@@ -99,12 +99,12 @@ def _get_storage() -> "StorageLayer":
             f"db={parsed_url.path.lstrip('/') if parsed_url.path else 'unknown'}"
         )
 
-        storage = StorageLayer(database_url)
+        storage = StorageLayer(DATABASE_URL)
         storage.init_schema()
         logger.info("Database schema initialized successfully")
 
         # Quick connectivity check
-        with connect(database_url) as conn, conn.cursor() as cur:
+        with connect(DATABASE_URL) as conn, conn.cursor() as cur:
             cur.execute("SELECT 1")
             result = cur.fetchone()
             if result and result[0] == 1:
