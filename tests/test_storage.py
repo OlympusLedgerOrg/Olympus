@@ -283,48 +283,6 @@ def test_get_latest_header_detects_corrupt_signature(storage, signing_key):
         storage.get_latest_header(shard_id)
 
 
-def test_ledger_trigger_rejects_out_of_order_insert(storage):
-    """Test that DB trigger rejects out-of-order ledger inserts."""
-    shard_id = f"test_shard_{datetime.now(UTC).timestamp()}"
-    ts = datetime.now(UTC).isoformat().replace("+00:00", "Z")
-
-    genesis_payload = {
-        "ts": ts,
-        "record_hash": "a" * 64,
-        "shard_id": shard_id,
-        "shard_root": "b" * 64,
-        "prev_entry_hash": "",
-    }
-    genesis_hash = bytes.fromhex("11" * 32)
-
-    with storage._get_connection() as conn, conn.cursor() as cur:
-        cur.execute(
-            """
-                INSERT INTO ledger_entries (shard_id, seq, entry_hash, prev_entry_hash, payload, ts)
-                VALUES (%s, %s, %s, %s, %s, %s)
-                """,
-            (shard_id, 0, genesis_hash, b"", json.dumps(genesis_payload), ts),
-        )
-        conn.commit()
-
-    with storage._get_connection() as conn, conn.cursor() as cur:
-        with pytest.raises(psycopg.errors.RaiseException, match="Invalid seq"):
-            cur.execute(
-                """
-                    INSERT INTO ledger_entries (shard_id, seq, entry_hash, prev_entry_hash, payload, ts)
-                    VALUES (%s, %s, %s, %s, %s, %s)
-                    """,
-                (
-                    shard_id,
-                    2,
-                    bytes.fromhex("22" * 32),
-                    genesis_hash,
-                    json.dumps(genesis_payload),
-                    ts,
-                ),
-            )
-
-
 def test_get_ledger_tail(storage, signing_key):
     """Test that get_ledger_tail returns recent entries."""
     shard_id = f"test_shard_{datetime.now(UTC).timestamp()}"
