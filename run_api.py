@@ -6,21 +6,15 @@ Usage:
     python run_api.py [--host HOST] [--port PORT]
 
 Environment variables:
-    DATABASE_URL: Postgres connection string (required)
+    DATABASE_URL: Postgres connection string (recommended, uses default if not set)
 """
 
 import os
-import sys
-
-# Check for required environment variable
-if 'DATABASE_URL' not in os.environ:
-    print("Error: DATABASE_URL environment variable is required", file=sys.stderr)
-    print("Example: export DATABASE_URL='postgresql://user:pass@localhost:5432/olympus'", file=sys.stderr)
-    sys.exit(1)
 
 import uvicorn
 
 from api.app import app
+
 
 if __name__ == "__main__":
     import argparse
@@ -31,15 +25,24 @@ if __name__ == "__main__":
 
     args = parser.parse_args()
 
+    # Get database URL for display (uses default if not set)
+    # WARNING: Default credentials are for LOCAL DEVELOPMENT ONLY.
+    # In production, always set DATABASE_URL with secure credentials.
+    DEFAULT_DATABASE_URL = "postgresql://olympus:olympus@localhost:5432/olympus"
+    database_url = os.environ.get("DATABASE_URL", DEFAULT_DATABASE_URL)
+
     print(f"Starting Olympus Public Audit API on {args.host}:{args.port}")
-    print(f"Database: {os.environ['DATABASE_URL']}")
+    print(f"Database: {database_url}")
+    if "DATABASE_URL" not in os.environ:
+        print("  (using default; set DATABASE_URL to configure)")
     print("\nEndpoints:")
-    print("  GET  /")
-    print("  GET  /health")
-    print("  GET  /shards")
-    print("  GET  /shards/{shard_id}/header/latest")
-    print("  GET  /shards/{shard_id}/proof")
-    print("  GET  /ledger/{shard_id}/tail")
-    print("\nPress CTRL+C to stop\n")
+    print("  GET  /         - API info")
+    print("  GET  /health   - Health check (always works)")
+    print("  GET  /shards   - List shards (requires DB)")
+    print("  GET  /shards/{shard_id}/header/latest  (requires DB)")
+    print("  GET  /shards/{shard_id}/proof          (requires DB)")
+    print("  GET  /ledger/{shard_id}/tail           (requires DB)")
+    print("\nNote: DB endpoints return 503 if database is not available.")
+    print("Press CTRL+C to stop\n")
 
     uvicorn.run(app, host=args.host, port=args.port)

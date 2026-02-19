@@ -82,7 +82,14 @@ class StorageLayer:
         Reads and executes the schema migration SQL.
         All DDL statements execute in a single transaction.
         """
-        with open("/home/runner/work/Olympus/Olympus/migrations/001_init_schema.sql") as f:
+        import os
+
+        # Find migrations directory relative to this file
+        storage_dir = os.path.dirname(os.path.abspath(__file__))
+        repo_root = os.path.dirname(storage_dir)
+        schema_path = os.path.join(repo_root, "migrations", "001_init_schema.sql")
+
+        with open(schema_path) as f:
             schema_sql = f.read()
 
         # BEGIN TRANSACTION (implicit via context manager)
