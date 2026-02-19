@@ -49,6 +49,8 @@ Olympus only guarantees the integrity of what it has seen.
 - `examples/` — Known-good test artifacts
 - `tools/` — CLI utilities for canonicalization and verification
 - `storage/` — PostgreSQL storage layer (production backend)
+- `api/` — Production FastAPI audit API
+- `app/` — Test-only in-memory application (no database)
 - `migrations/` — Database schema migrations
 
 This repository is intended to be read and audited.
@@ -64,14 +66,28 @@ Olympus uses **PostgreSQL** as its production database backend.
 **Production**: PostgreSQL 16+ only  
 **Testing**: PostgreSQL for E2E tests; SQLite for lightweight proof logic tests
 
-## What This Repository Is in Practice (from the DB model)
+---
 
-From the implemented schema and storage layer, this repository is currently a **cryptographic append-only audit database** built on PostgreSQL:
-- `smt_leaves` + `smt_nodes` persist Sparse Merkle state
-- `shard_headers` persists signed root commitments
-- `ledger_entries` persists chained append-only ledger events
+## What This Repository Is in Practice
 
-In other words: this is primarily a verifiable data-integrity backend and proof service, not a generalized blockchain platform.
+Olympus is currently a PostgreSQL-backed cryptographic append-only audit database.
+
+Its behavior is defined by the persisted structures:
+
+- `smt_leaves` + `smt_nodes` — Sparse Merkle Tree state
+- `shard_headers` — Signed root commitments
+- `ledger_entries` — Append-only, hash-chained ledger events
+
+Integrity guarantees are enforced at multiple layers:
+
+- Ed25519 signature verification on shard headers (validated on read)
+- DB-level append-order enforcement via trigger
+- ACID transactional guarantees via PostgreSQL 16+
+
+This repository does not implement:
+- Distributed consensus
+- Blockchain networking
+- Federation (planned for Phase 1+)
 
 See `docs/08_database_strategy.md` for detailed rationale and usage guidance.
 
@@ -94,5 +110,7 @@ This repository is in **protocol hardening phase** preparing for v1.0 release.
 - Multi-node consensus
 - Fork detection and resolution
 
-APIs, UIs, and production deployments are intentionally out of scope until
-the core semantics are finalized.
+The repository now includes a production-grade PostgreSQL-backed audit API.
+
+The core protocol semantics are considered stable for Phase 0.5,
+but federation and network-layer features remain out of scope.
