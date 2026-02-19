@@ -1,5 +1,9 @@
 # Olympus
 
+![CI](https://github.com/wombatvagina69-crypto/Olympus/workflows/Olympus%20CI/badge.svg)
+![Python](https://img.shields.io/badge/python-3.10%2B-blue)
+![License](https://img.shields.io/badge/license-Apache%202.0-blue.svg)
+
 Olympus is an append-only public ledger for government documents with planned federation capabilities.
 
 Its purpose is simple:
@@ -44,11 +48,14 @@ Olympus only guarantees the integrity of what it has seen.
 
 - `docs/` — The protocol specification (read this first)
 - `protocol/` — Reference implementations of core primitives
+- `api/` — FastAPI public audit API for third-party verification
+- `app/` — Application state management and SQLite backend (testing only)
+- `storage/` — PostgreSQL storage layer (production backend)
 - `schemas/` — JSON schemas for external interoperability (see `schemas/README.md` for details)
 - `proofs/` — Zero-knowledge circuits and notes
 - `examples/` — Known-good test artifacts
 - `tools/` — CLI utilities for canonicalization and verification
-- `storage/` — PostgreSQL storage layer (production backend)
+- `tests/` — Comprehensive test suite
 - `migrations/` — Database schema migrations
 
 This repository is intended to be read and audited.
@@ -96,3 +103,32 @@ This repository is in **protocol hardening phase** preparing for v1.0 release.
 
 APIs, UIs, and production deployments are intentionally out of scope until
 the core semantics are finalized.
+
+---
+
+## Quick Start
+
+See [QUICKSTART.md](QUICKSTART.md) for detailed setup instructions.
+
+```bash
+# Clone and setup
+git clone https://github.com/wombatvagina69-crypto/Olympus.git
+cd Olympus
+python3 -m venv .venv && source .venv/bin/activate
+pip install -r requirements.txt -r requirements-dev.txt
+
+# Run tests
+pytest tests/ -v
+
+# Start the API (development mode)
+uvicorn api.app:app --reload
+```
+
+---
+
+## Documentation
+
+- [QUICKSTART.md](QUICKSTART.md) — Setup and development guide
+- [CONTRIBUTING.md](CONTRIBUTING.md) — Development workflow
+- [EXECUTIVE_SUMMARY.md](EXECUTIVE_SUMMARY.md) — High-level overview
+- [docs/](docs/) — Protocol specifications
