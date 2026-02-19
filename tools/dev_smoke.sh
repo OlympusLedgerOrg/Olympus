@@ -11,6 +11,6 @@ export DATABASE_URL TEST_DATABASE_URL
 docker compose up -d db
 python -m pip install -r requirements-dev.txt
 python -m pip install ruff
-python -c "from storage.postgres import StorageLayer; StorageLayer('${DATABASE_URL}').init_schema()"
+python -c "import os; from storage.postgres import StorageLayer; StorageLayer(os.environ['DATABASE_URL']).init_schema()"
 python -c "import api.app"
 pytest tests/ -v --tb=short -m "postgres"

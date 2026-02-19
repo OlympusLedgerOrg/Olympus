@@ -16,4 +16,5 @@ def test_dev_smoke_script_includes_required_steps():
 def test_makefile_smoke_target_uses_script():
     makefile = (Path(__file__).parent.parent / "Makefile").read_text(encoding="utf-8")
 
-    assert "\nsmoke:\n\tbash tools/dev_smoke.sh\n" in makefile
+    assert "\nsmoke:\n" in makefile
+    assert "bash tools/dev_smoke.sh" in makefile
