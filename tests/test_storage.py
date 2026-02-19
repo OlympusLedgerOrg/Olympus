@@ -30,10 +30,12 @@ SETUP:
 See docs/08_database_strategy.md for complete database strategy documentation.
 """
 
+import json
 import os
 from datetime import UTC, datetime
 
 import nacl.signing
+import psycopg
 import pytest
 
 from protocol.hashes import hash_bytes
@@ -359,6 +361,86 @@ def test_ledger_chain_linkage(storage, signing_key):
 
     # Second entry should link to first
     assert entry2.prev_entry_hash == entry1.entry_hash
+
+
+def test_get_latest_header_detects_corrupted_signature(storage, signing_key):
+    """Test that corrupted shard header signatures are detected on read."""
+    shard_id = f"test_shard_{datetime.now(UTC).timestamp()}"
+
+    _, _, _, signature, _ = storage.append_record(
+        shard_id=shard_id,
+        record_type="document",
+        record_id="doc1",
+        version=1,
+        value_hash=hash_bytes(b"value 1"),
+        signing_key=signing_key,
+    )
+
+    # Simulate corruption in persisted signature bytes.
+    with storage._get_connection() as conn, conn.cursor() as cur:
+        cur.execute(
+            """
+            UPDATE shard_headers
+            SET sig = %s
+            WHERE shard_id = %s AND seq = 0
+            """,
+            (b"\x00" * 64, shard_id),
+        )
+        conn.commit()
+
+    with pytest.raises(ValueError, match="Invalid shard header signature"):
+        storage.get_latest_header(shard_id)
+
+    # Restore original signature to avoid polluting later append-only integration tests.
+    with storage._get_connection() as conn, conn.cursor() as cur:
+        cur.execute(
+            """
+            UPDATE shard_headers
+            SET sig = %s
+            WHERE shard_id = %s AND seq = 0
+            """,
+            (bytes.fromhex(signature), shard_id),
+        )
+        conn.commit()
+
+
+def test_ledger_entries_reject_out_of_order_seq(storage, signing_key):
+    """Test that out-of-order ledger sequence insertion is rejected."""
+    shard_id = f"test_shard_{datetime.now(UTC).timestamp()}"
+
+    _, _, _, _, entry = storage.append_record(
+        shard_id=shard_id,
+        record_type="document",
+        record_id="doc1",
+        version=1,
+        value_hash=hash_bytes(b"value 1"),
+        signing_key=signing_key,
+    )
+
+    payload = {
+        "ts": datetime.now(UTC).isoformat().replace("+00:00", "Z"),
+        "record_hash": hash_bytes(b"forged").hex(),
+        "shard_id": shard_id,
+        "shard_root": hash_bytes(b"forged root").hex(),
+        "prev_entry_hash": entry.entry_hash,
+    }
+
+    with pytest.raises(psycopg.errors.RaiseException, match="Out-of-order ledger entry"):
+        with storage._get_connection() as conn, conn.cursor() as cur:
+            cur.execute(
+                """
+                INSERT INTO ledger_entries (shard_id, seq, entry_hash, prev_entry_hash, payload, ts)
+                VALUES (%s, %s, %s, %s, %s, %s)
+                """,
+                (
+                    shard_id,
+                    5,
+                    hash_bytes(b"forged entry hash"),
+                    bytes.fromhex(entry.entry_hash),
+                    json.dumps(payload),
+                    payload["ts"],
+                ),
+            )
 
 
 def test_get_all_shard_ids(storage, signing_key):

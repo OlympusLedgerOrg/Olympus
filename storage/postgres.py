@@ -37,7 +37,7 @@ from psycopg.rows import dict_row
 from protocol.canonical_json import canonical_json_encode
 from protocol.hashes import record_key
 from protocol.ledger import LedgerEntry
-from protocol.shards import create_shard_header, sign_header
+from protocol.shards import create_shard_header, sign_header, verify_header
 from protocol.ssmf import ExistenceProof, NonExistenceProof, SparseMerkleTree
 
 
@@ -440,10 +440,14 @@ class StorageLayer:
                 "previous_header_hash": row["previous_header_hash"],
                 "header_hash": bytes(row["header_hash"]).hex(),
             }
+            signature = bytes(row["sig"]).hex()
+            verify_key = nacl.signing.VerifyKey(bytes(row["pubkey"]))
+            if not verify_header(header, signature, verify_key):
+                raise ValueError(f"Invalid shard header signature for shard '{shard_id}'")
 
             return {
                 "header": header,
-                "signature": bytes(row["sig"]).hex(),
+                "signature": signature,
                 "pubkey": bytes(row["pubkey"]).hex(),
                 "seq": row["seq"],
             }
