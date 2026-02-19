@@ -471,7 +471,7 @@ def test_ledger_trigger_rejects_out_of_order_insert(storage):
         conn.commit()
 
     with storage._get_connection() as conn, conn.cursor() as cur:
-        with pytest.raises(psycopg.errors.RaiseException, match="Out-of-order ledger entry"):
+        with pytest.raises(psycopg.errors.RaiseException, match=r"Out-of-order ledger entry"):
             cur.execute(
                 """
                 INSERT INTO ledger_entries (shard_id, seq, entry_hash, prev_entry_hash, payload, ts)
