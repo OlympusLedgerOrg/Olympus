@@ -13,7 +13,7 @@ CONCURRENCY: Safe for concurrent access
 PRODUCTION USE: ✅ YES - This is the production API
 
 Environment Variables:
-- DATABASE_URL: PostgreSQL connection string (optional at startup, required for DB endpoints)
+- DATABASE_URL: PostgreSQL connection string (required for DB endpoints)
 
 LAZY INITIALIZATION:
 - The app can start without a PostgreSQL connection
@@ -88,9 +88,9 @@ def _get_storage() -> "StorageLayer":
             raise RuntimeError("DATABASE_URL is required.")
 
         # Validate DATABASE_URL format
-        parsed_url = urlparse(DATABASE_URL)
+        parsed_url = urlparse(database_url)
         if not parsed_url.username:
-            raise RuntimeError(f"DATABASE_URL missing username/password: {DATABASE_URL}")
+            raise RuntimeError(f"DATABASE_URL missing username/password: {database_url}")
 
         logger.info(
             f"Connecting to database: scheme={parsed_url.scheme}, "
@@ -99,12 +99,12 @@ def _get_storage() -> "StorageLayer":
             f"db={parsed_url.path.lstrip('/') if parsed_url.path else 'unknown'}"
         )
 
-        storage = StorageLayer(DATABASE_URL)
+        storage = StorageLayer(database_url)
         storage.init_schema()
         logger.info("Database schema initialized successfully")
 
         # Quick connectivity check
-        with connect(DATABASE_URL) as conn, conn.cursor() as cur:
+        with connect(database_url) as conn, conn.cursor() as cur:
             cur.execute("SELECT 1")
             result = cur.fetchone()
             if result and result[0] == 1:

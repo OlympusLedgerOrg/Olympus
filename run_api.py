@@ -26,10 +26,10 @@ if __name__ == "__main__":
 
     args = parser.parse_args()
 
+    # DATABASE_URL is required for production API operation.
     database_url = os.environ.get("DATABASE_URL")
     if not database_url:
-        print("ERROR: DATABASE_URL is required.", file=sys.stderr)
-        sys.exit(2)
+        raise SystemExit("DATABASE_URL is required")
 
     print(f"Starting Olympus Public Audit API on {args.host}:{args.port}")
     print(f"Database: {database_url}")
