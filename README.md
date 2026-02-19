@@ -2,97 +2,138 @@
 
 Olympus is an append-only public ledger for government documents with planned federation capabilities.
 
-Its purpose is simple:
+Its purpose:
 
 > Make it cryptographically obvious when public records are created, changed, hidden, or over-redacted.
 
 Olympus is **not** a blockchain, not a DAO, and not a token system.
-It is a civic integrity primitive built around deterministic canonicalization,
-Merkle commitments, and verifiable proofs.
+It is a deterministic integrity backend built on canonicalization, Merkle commitments, and verifiable proofs.
 
 ---
 
-## What Olympus Does
+## What Olympus Guarantees
 
-Olympus provides verifiable guarantees that:
+For any committed document, Olympus guarantees:
 
-- A document existed at a specific time
-- The document has not been altered since that time
-- A redacted document is a faithful redaction of an original
-- History cannot be silently rewritten without detection
+- **Existence at a specific time**
+- **Tamper detection** (content cannot change silently)
+- **Verifiable redaction integrity**
+- **Append-only historical state**
 
-It does this through a strict pipeline:
-
-**Ingest → Canonicalize → Hash → Commit → Prove → Replicate → Verify**
-
-We use BLAKE3 for hashing and Merkle commitments; we use Ed25519 for signatures.
+Integrity violations are rejected or detectable.
 
 ---
 
-## What Olympus Does *Not* Do
+## How It Works
 
-- It does not assert that governments are honest
-- It does not guarantee completeness of public records
-- It does not decide what *should* be redacted
-- It does not require trust in a single institution
+**Deterministic pipeline:**
 
-Olympus only guarantees the integrity of what it has seen.
+```
+Ingest → Canonicalize → Hash → Commit → Prove → Verify
+```
+
+**Cryptographic primitives:**
+
+- **BLAKE3** — hashing and Merkle commitments
+- **Ed25519** — digital signatures
+
+Documents are canonicalized, hashed, inserted into a Sparse Merkle Tree, anchored via signed shard headers, and recorded in a hash-chained ledger.
+
+---
+
+## What It Does Not Guarantee
+
+Olympus does **not**:
+
+- Guarantee completeness of public records
+- Guarantee governments are honest
+- Decide redaction policy
+- Provide distributed consensus (planned Phase 1+)
+
+It guarantees integrity of what it has observed and committed — nothing more.
+
+---
+
+## What This Repository Is (Implementation Reality)
+
+Olympus is currently a:
+
+> **PostgreSQL-backed cryptographic append-only audit database.**
+
+**Core persisted structures:**
+
+- `smt_leaves`, `smt_nodes` — Sparse Merkle state
+- `shard_headers` — Ed25519-signed root commitments
+- `ledger_entries` — Hash-chained append-only events
+
+**Integrity enforcement layers:**
+
+- Signature verification on read
+- DB-level append-order trigger enforcement
+- ACID guarantees via PostgreSQL 16+
+
+This repository does not implement distributed networking or consensus.
+
+---
+
+## Threat Model
+
+**Olympus defends against:**
+
+- Retroactive data modification
+- Ledger history rewriting
+- Out-of-order ledger insertion
+- Forged shard headers
+- Direct SQL tampering attempts
+
+**It does not defend against:**
+
+- Key compromise
+- Full database deletion without replication
+- Data never being published
+- Multi-node collusion (federation planned)
 
 ---
 
 ## Repository Structure
 
-- `docs/` — The protocol specification (read this first)
-- `protocol/` — Reference implementations of core primitives
-- `schemas/` — JSON schemas for external interoperability (see `schemas/README.md` for details)
-- `proofs/` — Zero-knowledge circuits and notes
-- `examples/` — Known-good test artifacts
-- `tools/` — CLI utilities for canonicalization and verification
-- `storage/` — PostgreSQL storage layer (production backend)
-- `migrations/` — Database schema migrations
+- `docs/` — Protocol specification
+- `protocol/` — Canonicalization & primitives
+- `storage/` — PostgreSQL backend
+- `api/` — Public FastAPI audit API
+- `migrations/` — Schema + integrity triggers
+- `schemas/` — External spec artifacts
+- `tests/` — Test suite
 
 This repository is intended to be read and audited.
-
-**Note on Schemas**: The JSON schemas in `schemas/` are specification artifacts for external integrators and cross-language implementations. Runtime validation uses Pydantic models defined in the API code. See `schemas/README.md` for the rationale.
-
----
-
-## Database Backend
-
-Olympus uses **PostgreSQL** as its production database backend.
-
-**Production**: PostgreSQL 16+ only  
-**Testing**: PostgreSQL for E2E tests; SQLite for lightweight proof logic tests
-
-## What This Repository Is in Practice (from the DB model)
-
-From the implemented schema and storage layer, this repository is currently a **cryptographic append-only audit database** built on PostgreSQL:
-- `smt_leaves` + `smt_nodes` persist Sparse Merkle state
-- `shard_headers` persists signed root commitments
-- `ledger_entries` persists chained append-only ledger events
-
-In other words: this is primarily a verifiable data-integrity backend and proof service, not a generalized blockchain platform.
-
-See `docs/08_database_strategy.md` for detailed rationale and usage guidance.
 
 ---
 
 ## Status
 
-This repository is in **protocol hardening phase** preparing for v1.0 release.
+**Phase 0.5** — Protocol hardening
 
-**v1.0 Scope:**
-- Single-node append-only ledger with Ed25519 signatures
-- Sparse Merkle Forest for efficient proofs
-- Offline verifiable cryptographic commitments
-- PostgreSQL storage backend
+**v1.0 includes:**
+
+- Single-node append-only ledger
+- Signed shard headers
+- Sparse Merkle proofs
+- PostgreSQL storage
 - Public audit API
 
-**Phase 1+ Features (not in v1.0):**
-- Guardian replication protocol (Phase 1+ only)
-- Byzantine fault tolerance
-- Multi-node consensus
-- Fork detection and resolution
+Federation and consensus are future work.
 
-APIs, UIs, and production deployments are intentionally out of scope until
-the core semantics are finalized.
+---
+
+## Quick Start
+
+See [QUICKSTART.md](QUICKSTART.md).
+
+```bash
+git clone https://github.com/your-org/Olympus.git
+cd Olympus
+python3 -m venv .venv && source .venv/bin/activate
+pip install -r requirements.txt -r requirements-dev.txt
+pytest tests/ -v
+uvicorn api.app:app --reload
+```
