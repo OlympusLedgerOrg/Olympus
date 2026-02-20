@@ -4,7 +4,7 @@ import json
 import os
 from typing import Any
 from urllib.error import HTTPError, URLError
-from urllib.parse import quote
+from urllib.parse import quote, urlparse
 from urllib.request import urlopen
 
 import nacl.exceptions
@@ -15,6 +15,9 @@ from fastapi.templating import Jinja2Templates
 
 
 API_BASE = os.environ.get("UI_API_BASE", "http://127.0.0.1:8000")
+_parsed_api_base = urlparse(API_BASE)
+if _parsed_api_base.scheme not in {"http", "https"} or not _parsed_api_base.netloc:
+    raise ValueError("UI_API_BASE must be an absolute http(s) URL")
 
 app = FastAPI(title="Olympus Debug Console", version="0.1.0")
 templates = Jinja2Templates(directory="ui/templates")
@@ -22,14 +25,19 @@ templates = Jinja2Templates(directory="ui/templates")
 
 def _fetch_json(path: str) -> dict[str, Any] | list[dict[str, Any]]:
     """Fetch JSON from the Olympus API."""
+    if not path.startswith("/") or "://" in path:
+        raise ValueError("API path must be a relative path")
     with urlopen(f"{API_BASE}{path}", timeout=5) as response:  # noqa: S310
         return json.loads(response.read().decode("utf-8"))
 
 
 def _verify_signature(header: dict[str, Any]) -> bool:
     """Verify Ed25519 shard header signature."""
-    verify_key = nacl.signing.VerifyKey(bytes.fromhex(header["pubkey"]))
-    verify_key.verify(bytes.fromhex(header["header_hash"]), bytes.fromhex(header["signature"]))
+    try:
+        verify_key = nacl.signing.VerifyKey(bytes.fromhex(header["pubkey"]))
+        verify_key.verify(bytes.fromhex(header["header_hash"]), bytes.fromhex(header["signature"]))
+    except (ValueError, KeyError, nacl.exceptions.BadSignatureError):
+        return False
     return True
 
 
@@ -69,10 +77,8 @@ def debug_console(request: Request):
         try:
             header = _fetch_json(f"/shards/{quote(shard_id)}/header/latest")
             shard_row["header"] = header
-            try:
-                shard_row["signature_valid"] = _verify_signature(header)
-            except (ValueError, KeyError, nacl.exceptions.BadSignatureError):
-                shard_row["signature_valid"] = False
+            shard_row["signature_valid"] = _verify_signature(header)
+            if not shard_row["signature_valid"]:
                 context["banners"].append(f"Invalid signature detected for shard {shard_id}.")
 
             ledger = _fetch_json(f"/ledger/{quote(shard_id)}/tail?n=10")

@@ -73,7 +73,7 @@ def test_console_shows_invalid_signature_banner(monkeypatch):
         raise AssertionError(f"Unexpected path: {path}")
 
     monkeypatch.setattr(ui_app, "_fetch_json", fake_fetch)
-    monkeypatch.setattr(ui_app, "_verify_signature", lambda header: (_ for _ in ()).throw(ValueError))
+    monkeypatch.setattr(ui_app, "_verify_signature", lambda header: False)
 
     response = client.get("/")
 
