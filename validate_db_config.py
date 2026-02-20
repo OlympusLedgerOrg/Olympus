@@ -14,7 +14,7 @@ import re
 from pathlib import Path
 
 
-BASE_DIR = Path(__file__).resolve().parent
+SCRIPT_DIR = Path(__file__).resolve().parent
 
 
 def check_database_urls() -> bool:
@@ -45,7 +45,7 @@ def check_database_urls() -> bool:
     files_checked = 0
     
     for file_path in files_to_check:
-        full_path = BASE_DIR / file_path
+        full_path = SCRIPT_DIR / file_path
         if not full_path.exists():
             print(f"⚠️  File not found: {file_path}")
             continue
