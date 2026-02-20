@@ -37,6 +37,7 @@ def test_merkle_leaf_prefix_applied():
     leaf1_hash = blake3_hash([LEAF_PREFIX, b"leaf1"])
 
     from protocol.hashes import merkle_parent_hash
+
     expected_root = merkle_parent_hash(leaf0_hash, leaf1_hash)
 
     assert tree.get_root() == expected_root
