@@ -9,6 +9,8 @@ __version__ = "0.1.0"
 __all__ = [
     "hashes",
     "canonical",
+    "canonical_json",
+    "canonicalizer",
     "merkle",
     "ledger",
     "redaction",
