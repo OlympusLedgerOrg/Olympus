@@ -240,14 +240,14 @@ def test_canonicalize_document_complex_real_world():
 
 def test_normalize_whitespace_nbsp():
     """Test that NO-BREAK SPACE (U+00A0) is normalized to regular space."""
-    nbsp = "\u00A0"
+    nbsp = "\u00a0"
     assert normalize_whitespace(f"hello{nbsp}world") == "hello world"
     assert normalize_whitespace(f"hello{nbsp}{nbsp}world") == "hello world"
 
 
 def test_normalize_whitespace_narrow_nbsp():
     """Test that NARROW NO-BREAK SPACE (U+202F) is normalized to regular space."""
-    nnbsp = "\u202F"
+    nnbsp = "\u202f"
     assert normalize_whitespace(f"hello{nnbsp}world") == "hello world"
 
 
@@ -261,7 +261,7 @@ def test_normalize_whitespace_unicode_spaces_nfkc():
     """Test that various Unicode space variants (normalized by NFKC) collapse correctly."""
     en_space = "\u2002"
     em_space = "\u2003"
-    hair_space = "\u200A"
+    hair_space = "\u200a"
     assert normalize_whitespace(f"a{en_space}b") == "a b"
     assert normalize_whitespace(f"a{em_space}b") == "a b"
     assert normalize_whitespace(f"a{hair_space}b") == "a b"
@@ -269,8 +269,8 @@ def test_normalize_whitespace_unicode_spaces_nfkc():
 
 def test_normalize_whitespace_mixed_unicode():
     """Test mixing NBSP and standard whitespace collapses to single space."""
-    nbsp = "\u00A0"
-    nnbsp = "\u202F"
+    nbsp = "\u00a0"
+    nnbsp = "\u202f"
     # NBSP + regular space should collapse to single space
     assert normalize_whitespace(f"hello{nbsp} world") == "hello world"
     # Multiple different unicode spaces collapse to single space
@@ -282,7 +282,7 @@ def test_document_to_bytes_nbsp_identical_to_regular_space():
     NBSP and regular space in document string values must produce identical
     document_to_bytes() output (critical for canonicalization determinism).
     """
-    nbsp = "\u00A0"
+    nbsp = "\u00a0"
     doc_with_nbsp = {"text": f"hello{nbsp}world"}
     doc_with_space = {"text": "hello world"}
     assert document_to_bytes(doc_with_nbsp) == document_to_bytes(doc_with_space)
@@ -290,7 +290,7 @@ def test_document_to_bytes_nbsp_identical_to_regular_space():
 
 def test_document_to_bytes_narrow_nbsp_identical_to_regular_space():
     """NARROW NO-BREAK SPACE must canonicalize identically to regular space."""
-    nnbsp = "\u202F"
+    nnbsp = "\u202f"
     doc_with_nnbsp = {"text": f"hello{nnbsp}world"}
     doc_with_space = {"text": "hello world"}
     assert document_to_bytes(doc_with_nnbsp) == document_to_bytes(doc_with_space)

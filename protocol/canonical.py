@@ -15,8 +15,8 @@ from typing import Any
 # (commonly found in PDFs and other document formats).
 _RESIDUAL_UNICODE_SPACES = str.maketrans(
     {
-        "\u00A0": " ",  # NO-BREAK SPACE
-        "\u202F": " ",  # NARROW NO-BREAK SPACE
+        "\u00a0": " ",  # NO-BREAK SPACE
+        "\u202f": " ",  # NARROW NO-BREAK SPACE
     }
 )
 
