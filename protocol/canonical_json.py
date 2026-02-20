@@ -14,10 +14,9 @@ cross-language divergence:
 """
 
 from decimal import Decimal, InvalidOperation
+from json.encoder import encode_basestring_ascii
 import math
 from typing import Any
-
-from json.encoder import encode_basestring_ascii
 
 
 def canonical_json_encode(obj: Any) -> str:
