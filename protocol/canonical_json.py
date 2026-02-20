@@ -78,7 +78,7 @@ def _validate_no_special_floats(obj: Any) -> None:
     elif isinstance(obj, dict):
         for value in obj.values():
             _validate_no_special_floats(value)
-    elif isinstance(obj, (list, tuple)):
+    elif isinstance(obj, list | tuple):
         for item in obj:
             _validate_no_special_floats(item)
 
@@ -92,9 +92,9 @@ def _encode_value(value: Any) -> str:
         return "false"
     if isinstance(value, str):
         return encode_basestring_ascii(value)
-    if isinstance(value, (int, Decimal, float)) and not isinstance(value, bool):
+    if isinstance(value, int | Decimal | float) and not isinstance(value, bool):
         return _encode_number(value)
-    if isinstance(value, (list, tuple)):
+    if isinstance(value, list | tuple):
         return "[" + ",".join(_encode_value(item) for item in value) + "]"
     if isinstance(value, dict):
         items = []
