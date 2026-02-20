@@ -8,7 +8,7 @@ cryptographic commitments and proof generation.
 from dataclasses import dataclass
 from typing import Optional
 
-from .hashes import merkle_parent_hash
+from .hashes import LEAF_PREFIX, blake3_hash, merkle_parent_hash
 
 
 # Merkle tree version - DO NOT CHANGE
@@ -42,16 +42,24 @@ class MerkleTree:
 
     def __init__(self, leaves: list[bytes]):
         """
-        Construct a Merkle tree from leaf hashes.
+        Construct a Merkle tree from leaf data.
+
+        Leaf data is domain-separated using LEAF_PREFIX before tree construction,
+        ensuring structural ambiguity between leaf nodes and internal nodes is
+        impossible (second-preimage resistance).
 
         Args:
-            leaves: List of leaf hashes
+            leaves: List of leaf data (arbitrary bytes per leaf)
         """
         if not leaves:
             raise ValueError("Cannot create empty Merkle tree")
 
         self.leaves = leaves
-        self._root_node = self._build_tree(leaves)
+        # Apply LEAF_PREFIX domain separation to each leaf before building the tree.
+        # This prevents second-preimage attacks where an internal node hash could
+        # be mistaken for a leaf hash.
+        self._leaf_hashes = [blake3_hash([LEAF_PREFIX, leaf]) for leaf in leaves]
+        self._root_node = self._build_tree(self._leaf_hashes)
 
     def _build_tree(self, hashes: list[bytes]) -> MerkleNode:
         """Build tree from bottom up."""
@@ -89,11 +97,11 @@ class MerkleTree:
         if leaf_index < 0 or leaf_index >= len(self.leaves):
             raise ValueError("Invalid leaf index")
 
-        leaf_hash = self.leaves[leaf_index]
+        leaf_hash = self._leaf_hashes[leaf_index]
         siblings = []
 
         # Collect siblings along path to root
-        hashes = self.leaves[:]
+        hashes = self._leaf_hashes[:]
         index = leaf_index
 
         while len(hashes) > 1:
