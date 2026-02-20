@@ -26,7 +26,7 @@ def test_merkle_leaf_prefix_applied():
     The root produced by MerkleTree must differ from a tree built using
     NODE_PREFIX for all levels (i.e., the old behavior without domain separation).
     """
-    from protocol.hashes import LEAF_PREFIX, NODE_PREFIX, blake3_hash
+    from protocol.hashes import LEAF_PREFIX, blake3_hash
 
     leaves = [b"leaf0", b"leaf1"]
     tree = MerkleTree(leaves)
