@@ -137,8 +137,8 @@ class TestJsonJcs:
         """Ensure NFC normalization of Unicode input."""
         # Use raw UTF-8 bytes (not json.dumps ensure_ascii=True which escapes)
         # \u00e9 (é precomposed) vs e + \u0301 (decomposed) should give same result
-        precomposed = '{"key":"\u00e9"}'.encode("utf-8")
-        decomposed = '{"key":"e\u0301"}'.encode("utf-8")
+        precomposed = '{"key":"\u00e9"}'.encode()
+        decomposed = '{"key":"e\u0301"}'.encode()
         assert Canonicalizer.json_jcs(precomposed) == Canonicalizer.json_jcs(decomposed)
 
 
