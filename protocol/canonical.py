@@ -9,6 +9,7 @@ import json
 import unicodedata
 from typing import Any
 
+
 # Unicode space-like characters that unicodedata.normalize("NFKC", ...) does NOT
 # map to ASCII space but that are visually indistinguishable from a regular space
 # (commonly found in PDFs and other document formats).
