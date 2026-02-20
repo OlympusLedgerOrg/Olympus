@@ -10,12 +10,14 @@ Usage:
     python validate_db_config.py
 """
 
-import os
 import re
 from pathlib import Path
 
 
-def check_database_urls():
+SCRIPT_DIR = Path(__file__).resolve().parent
+
+
+def check_database_urls() -> bool:
     """Check all Python files for database URL configurations."""
     
     print("=" * 70)
@@ -43,7 +45,7 @@ def check_database_urls():
     files_checked = 0
     
     for file_path in files_to_check:
-        full_path = Path(file_path)
+        full_path = SCRIPT_DIR / file_path
         if not full_path.exists():
             print(f"⚠️  File not found: {file_path}")
             continue
@@ -51,23 +53,24 @@ def check_database_urls():
         files_checked += 1
         print(f"✓ Checking {file_path}...")
         
-        with open(full_path, 'r') as f:
-            content = f.read()
-            
-            # Check for incorrect patterns
-            for pattern, description in incorrect_patterns:
-                matches = re.findall(pattern, content)
-                if matches:
-                    issues_found.append({
-                        'file': file_path,
-                        'issue': f"Found {description}",
-                        'pattern': pattern
-                    })
-            
-            # Check for correct pattern in test files
-            if 'test_' in file_path or 'api/app.py' in file_path:
-                if correct_pattern in content:
-                    print(f"  ✓ Correct credentials found (olympus:olympus)")
+        content = full_path.read_text(encoding="utf-8")
+
+        # Check for incorrect patterns
+        for pattern, description in incorrect_patterns:
+            matches = re.findall(pattern, content)
+            if matches:
+                issues_found.append(
+                    {
+                        "file": file_path,
+                        "issue": f"Found {description}",
+                        "pattern": pattern,
+                    }
+                )
+
+        # Check for correct pattern in test files
+        if "test_" in file_path or "api/app.py" in file_path:
+            if correct_pattern in content:
+                print("  ✓ Correct credentials found (olympus:olympus)")
     
     print()
     print("=" * 70)
