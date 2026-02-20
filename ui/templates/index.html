@@ -1,0 +1,89 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Olympus Debug Console</title>
+    <style>
+        body { font-family: sans-serif; margin: 1rem 2rem; }
+        .banner { background: #fee2e2; border: 1px solid #ef4444; color: #7f1d1d; padding: .5rem; margin-bottom: .5rem; }
+        .panel { border: 1px solid #ddd; margin-bottom: 1rem; padding: .75rem; border-radius: 6px; }
+        .ok { color: #166534; }
+        .bad { color: #991b1b; font-weight: 700; }
+        code { font-size: .85rem; }
+        table { width: 100%; border-collapse: collapse; }
+        td, th { border: 1px solid #ddd; padding: .25rem .4rem; text-align: left; }
+        input { margin-right: .5rem; }
+        pre { background: #f8fafc; border: 1px solid #ddd; padding: .75rem; overflow: auto; }
+    </style>
+</head>
+<body>
+    <h1>Olympus Developer Debug Console</h1>
+    <p>API base: <code>{{ api_base }}</code></p>
+
+    {% for banner in banners %}
+        <div class="banner">{{ banner }}</div>
+    {% endfor %}
+
+    <div class="panel">
+        <h2>Proof Explorer</h2>
+        <form id="proof-form">
+            <input type="text" name="shard_id" placeholder="shard_id" required />
+            <input type="text" name="record_type" placeholder="record_type" value="document" required />
+            <input type="text" name="record_id" placeholder="record_id" required />
+            <input type="number" name="version" placeholder="version" value="1" min="1" required />
+            <button type="submit">Fetch proof</button>
+        </form>
+        <pre id="proof-result">Submit query to inspect proof payload.</pre>
+    </div>
+
+    <div class="panel">
+        <h2>Shard List</h2>
+        <table>
+            <thead>
+                <tr><th>Shard</th><th>Latest Seq</th><th>Latest Root</th><th>Signature</th></tr>
+            </thead>
+            <tbody>
+            {% for row in shards %}
+                <tr>
+                    <td>{{ row.shard.shard_id }}</td>
+                    <td>{{ row.shard.latest_seq }}</td>
+                    <td><code>{{ row.shard.latest_root }}</code></td>
+                    <td>{% if row.signature_valid %}<span class="ok">valid</span>{% else %}<span class="bad">invalid</span>{% endif %}</td>
+                </tr>
+            {% endfor %}
+            </tbody>
+        </table>
+    </div>
+
+    {% for row in shards %}
+        <div class="panel">
+            <h3>Latest Header: {{ row.shard.shard_id }}</h3>
+            {% if row.header %}
+                <code>{{ row.header }}</code>
+            {% else %}
+                <p>No header available.</p>
+            {% endif %}
+            <h4>Ledger Tail</h4>
+            {% if row.ledger_tail %}
+                <pre>{{ row.ledger_tail }}</pre>
+            {% else %}
+                <p>No ledger entries.</p>
+            {% endif %}
+        </div>
+    {% endfor %}
+
+    <script>
+        const form = document.getElementById('proof-form');
+        const out = document.getElementById('proof-result');
+        form.addEventListener('submit', async (event) => {
+            event.preventDefault();
+            const params = new URLSearchParams(new FormData(form));
+            out.textContent = 'Loading...';
+            const response = await fetch(`/proof-explorer?${params.toString()}`);
+            const data = await response.json();
+            out.textContent = JSON.stringify(data, null, 2);
+        });
+    </script>
+</body>
+</html>

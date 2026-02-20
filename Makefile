@@ -1,4 +1,4 @@
-.PHONY: check smoke
+.PHONY: check smoke dev
 
 check:
 	python tools/validate_schemas.py
@@ -16,3 +16,7 @@ check:
 
 smoke:
 	bash tools/dev_smoke.sh
+
+dev:
+	DATABASE_URL=$${DATABASE_URL:-postgresql://olympus:olympus@localhost:5432/olympus} uvicorn api.app:app --host 127.0.0.1 --port 8000 & \
+	UI_API_BASE=http://127.0.0.1:8000 uvicorn ui.app:app --host 127.0.0.1 --port 8080

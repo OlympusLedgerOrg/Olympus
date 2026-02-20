@@ -30,7 +30,7 @@ if __name__ == "__main__":
     database_url = os.environ.get("DATABASE_URL")
     if not database_url:
         print("DATABASE_URL is required", file=sys.stderr)
-        raise SystemExit(2)
+        raise SystemExit(1)
 
     print(f"Starting Olympus Public Audit API on {args.host}:{args.port}")
     print(f"Database: {database_url}")
