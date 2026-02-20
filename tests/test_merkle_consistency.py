@@ -24,7 +24,7 @@ def test_merkle_leaf_prefix_applied():
     """
     Leaf data must be hashed with LEAF_PREFIX before tree construction.
     The root produced by MerkleTree must differ from a tree built using
-    NODE_PREFIX for all levels (i.e., the old behavior without domain separation).
+    a node prefix for all levels (i.e., the old behavior without domain separation).
     """
     from protocol.hashes import LEAF_PREFIX, blake3_hash
 
