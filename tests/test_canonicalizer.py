@@ -6,6 +6,7 @@ ingestion pipeline, and version pinning constants.
 """
 
 import json
+from decimal import Decimal
 
 import pytest
 
@@ -43,47 +44,31 @@ class TestSerializeJcsNumber:
     """RFC 8785 / ECMA-262 compliant number formatting."""
 
     def test_zero(self):
-        from decimal import Decimal
-
         assert Canonicalizer._serialize_jcs_number(Decimal("0")) == "0"
         assert Canonicalizer._serialize_jcs_number(Decimal("-0")) == "0"
 
     def test_integer(self):
-        from decimal import Decimal
-
         assert Canonicalizer._serialize_jcs_number(Decimal("42")) == "42"
 
     def test_negative(self):
-        from decimal import Decimal
-
         assert Canonicalizer._serialize_jcs_number(Decimal("-3.14")) == "-3.14"
 
     def test_trailing_zeros_stripped(self):
-        from decimal import Decimal
-
         assert Canonicalizer._serialize_jcs_number(Decimal("1.00")) == "1"
 
     def test_scientific_notation_large(self):
-        from decimal import Decimal
-
         result = Canonicalizer._serialize_jcs_number(Decimal("1e21"))
         assert "e" in result.lower()
 
     def test_fixed_notation_within_range(self):
-        from decimal import Decimal
-
         result = Canonicalizer._serialize_jcs_number(Decimal("0.000001"))
         assert result == "0.000001"
 
     def test_scientific_notation_small(self):
-        from decimal import Decimal
-
         result = Canonicalizer._serialize_jcs_number(Decimal("1e-7"))
         assert "e" in result.lower()
 
     def test_non_finite_rejected(self):
-        from decimal import Decimal
-
         with pytest.raises(CanonicalizationError, match="non-finite"):
             Canonicalizer._serialize_jcs_number(Decimal("Infinity"))
 
