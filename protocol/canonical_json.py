@@ -13,9 +13,9 @@ cross-language divergence:
 * -0 normalized to 0
 """
 
+import math
 from decimal import Decimal, InvalidOperation
 from json.encoder import encode_basestring_ascii
-import math
 from typing import Any
 
 
