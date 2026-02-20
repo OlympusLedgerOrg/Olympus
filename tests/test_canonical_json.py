@@ -223,6 +223,7 @@ def test_canonical_json_encode_numeric_edge_cases():
     assert canonical_json_encode({"wide": 1e308}) == '{"wide":1e+308}'
     assert canonical_json_encode({"fixed_min": 1e-6}) == '{"fixed_min":0.000001}'
     assert canonical_json_encode({"sci_min": 1e-7}) == '{"sci_min":1e-7}'
+    # fixed_max is 1 followed by 20 zeros (fixed-notation upper bound)
     assert canonical_json_encode({"fixed_max": 1e20}) == '{"fixed_max":100000000000000000000}'
     assert canonical_json_encode({"sci_max": 1e21}) == '{"sci_max":1e+21}'
     assert (

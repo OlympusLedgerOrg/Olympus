@@ -108,9 +108,6 @@ def _encode_value(value: Any) -> str:
 
 
 def _encode_number(value: int | float | Decimal) -> str:
-    if isinstance(value, bool):
-        return "true" if value else "false"
-
     dec_value = _to_decimal(value)
     if dec_value.is_zero():
         return "0"
