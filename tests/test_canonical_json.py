@@ -46,6 +46,27 @@ def test_canonical_json_encode_compact_separators():
     assert " " not in result
 
 
+def test_canonical_json_encode_trims_trailing_zeros():
+    """Numbers should not include insignificant trailing zeros."""
+    obj = {"value": 1.0, "precise": 3.1400}
+    result = canonical_json_encode(obj)
+    assert result == '{"precise":3.14,"value":1}'
+
+
+def test_canonical_json_encode_avoids_scientific_notation():
+    """Small magnitude numbers should stay in fixed-point form."""
+    obj = {"tiny": 0.000001, "small": 0.01}
+    result = canonical_json_encode(obj)
+    assert result == '{"small":0.01,"tiny":0.000001}'
+
+
+def test_canonical_json_encode_allows_scientific_when_required():
+    """Extremely small or large numbers may use scientific notation to stay deterministic."""
+    obj = {"micro": 0.0000001, "huge": 1e21}
+    result = canonical_json_encode(obj)
+    assert result == '{"huge":1e+21,"micro":1e-7}'
+
+
 def test_canonical_json_encode_ascii_only():
     """Test that non-ASCII characters are escaped."""
     obj = {"unicode": "hello 世界"}

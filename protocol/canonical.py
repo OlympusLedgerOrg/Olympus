@@ -5,8 +5,9 @@ This module implements deterministic canonicalization of documents to ensure
 consistent hashing regardless of superficial formatting differences.
 """
 
-import json
 from typing import Any
+
+from protocol.canonical_json import canonical_json_encode
 
 
 # Canonical format version - DO NOT CHANGE
@@ -24,7 +25,7 @@ def canonicalize_json(data: dict[str, Any]) -> str:
     Returns:
         Canonical JSON string representation
     """
-    return json.dumps(data, sort_keys=True, separators=(",", ":"), ensure_ascii=True)
+    return canonical_json_encode(data)
 
 
 def normalize_whitespace(text: str) -> str:
