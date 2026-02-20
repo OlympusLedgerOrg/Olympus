@@ -123,6 +123,8 @@ This repository is intended to be read and audited.
 
 Federation and consensus are future work.
 
+Phase 0.1 “best-case” expectations are captured in [docs/PHASE_01_BEST_CASE.md](docs/PHASE_01_BEST_CASE.md).
+
 ---
 
 ## Quick Start
