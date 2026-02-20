@@ -39,6 +39,15 @@ Ingest → Canonicalize → Hash → Commit → Prove → Verify
 
 Documents are canonicalized, hashed, inserted into a Sparse Merkle Tree, anchored via signed shard headers, and recorded in a hash-chained ledger.
 
+**Multi-format canonicalization (Phase 0.1):**
+
+The hardened canonicalizer (`protocol/canonicalizer.py`) provides byte-stable, idempotent artifact ingestion with version-pinned canonicalization for:
+
+- **JSON** — JCS (RFC 8785) with NFC normalization, duplicate key rejection, and `Decimal`-based numeric parsing
+- **HTML** — NFC normalization, attribute sorting, active content stripping (requires `lxml`)
+- **DOCX** — ZIP entry ordering, XML C14N, volatile metadata stripping (requires `lxml`)
+- **PDF** — Structural scrub of volatile metadata keys and line ending normalization
+
 ---
 
 ## What It Does Not Guarantee
@@ -98,12 +107,13 @@ This repository does not implement distributed networking or consensus.
 ## Repository Structure
 
 - `docs/` — Protocol specification
-- `protocol/` — Canonicalization & primitives
+- `protocol/` — Canonicalization, cryptographic primitives, and artifact ingestion
 - `storage/` — PostgreSQL backend
 - `api/` — Public FastAPI audit API
 - `migrations/` — Schema + integrity triggers
 - `schemas/` — External spec artifacts
 - `tests/` — Test suite
+- `tools/` — CLI utilities for canonicalization and verification
 
 This repository is intended to be read and audited.
 
@@ -118,6 +128,7 @@ This repository is intended to be read and audited.
 - Single-node append-only ledger
 - Signed shard headers
 - Sparse Merkle proofs
+- Version-pinned multi-format canonicalization (JSON/HTML/DOCX/PDF)
 - PostgreSQL storage
 - Public audit API
 

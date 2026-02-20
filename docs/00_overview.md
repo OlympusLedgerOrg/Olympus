@@ -23,4 +23,5 @@ We use BLAKE3 for hashing and Merkle commitments; we use Ed25519 for signatures.
 
 **v1.0 Implementation Status:**
 - ✅ Ingest, Canonicalize, Hash, Commit, Prove, Verify — **Implemented**
+- ✅ Multi-format canonicalization (JSON/HTML/DOCX/PDF) with version pinning — **Implemented**
 - ⚠️ Replicate (multi-node Guardian replication) — **Phase 1+ only**

@@ -202,23 +202,16 @@ def test_canonical_json_encode_special_characters():
 def test_canonical_json_encode_trims_trailing_zeros_and_bounds():
     """Canonical numbers: trim zeros, fixed/scientific boundaries."""
     assert (
-        canonical_json_encode({"micro": 0.0000001, "huge": 1e21})
-        == '{"huge":1e+21,"micro":1e-7}'
+        canonical_json_encode({"micro": 0.0000001, "huge": 1e21}) == '{"huge":1e+21,"micro":1e-7}'
     )
-    assert (
-        canonical_json_encode({"value": 1.0, "precise": 3.1400})
-        == '{"precise":3.14,"value":1}'
-    )
+    assert canonical_json_encode({"value": 1.0, "precise": 3.1400}) == '{"precise":3.14,"value":1}'
 
 
 def test_canonical_json_encode_numeric_edge_cases():
     """Float traps, exponent limits, and negative zero normalization."""
     assert canonical_json_encode({"z": -0.0}) == '{"z":0}'
     assert canonical_json_encode({"tenth": 0.1}) == '{"tenth":0.1}'
-    assert (
-        canonical_json_encode({"int": 9007199254740993})
-        == '{"int":9007199254740993}'
-    )
+    assert canonical_json_encode({"int": 9007199254740993}) == '{"int":9007199254740993}'
     assert canonical_json_encode({"deep": 1e-308}) == '{"deep":1e-308}'
     assert canonical_json_encode({"wide": 1e308}) == '{"wide":1e+308}'
     assert canonical_json_encode({"fixed_min": 1e-6}) == '{"fixed_min":0.000001}'
@@ -228,6 +221,5 @@ def test_canonical_json_encode_numeric_edge_cases():
     assert canonical_json_encode({"fixed_max": 1e20}) == expected_fixed_max
     assert canonical_json_encode({"sci_max": 1e21}) == '{"sci_max":1e+21}'
     assert (
-        canonical_json_encode({"precise": 1.2345678901234567})
-        == '{"precise":1.2345678901234567}'
+        canonical_json_encode({"precise": 1.2345678901234567}) == '{"precise":1.2345678901234567}'
     )

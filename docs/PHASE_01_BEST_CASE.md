@@ -3,8 +3,9 @@
 This note captures what “good” looks like for the earliest Phase 0.1 delivery. It is intentionally concrete so auditors know exactly which properties to expect and where to verify them.
 
 ## 1) Deterministic identity that survives audit
-- **Canonicalizer pinning**: Every canonicalizer run is tied to the exact parser library and version, the canonicalizer version, and explicit behaviors for Unicode normalization, duplicate JSON keys, HTML entity handling, DOCX non-XML parts, and PDF fallback reasons.
-- **Idempotent + byte-stable**: Canonicalization is reproducible: `Hash(C(x)) == Hash(C(C(x)))` *and* the bytes of `C(x)` are identical across runs for the same version.
+- **Canonicalizer pinning**: Every canonicalizer run is tied to the exact parser library and version, the canonicalizer version, and explicit behaviors for Unicode normalization, duplicate JSON keys, HTML entity handling, DOCX non-XML parts, and PDF fallback reasons. Version constants are declared in `protocol/canonicalizer.py:CANONICALIZER_VERSIONS`.
+- **Idempotent + byte-stable**: Canonicalization is reproducible: `Hash(C(x)) == Hash(C(C(x)))` *and* the bytes of `C(x)` are identical across runs for the same version. Enforced by idempotency guards in `json_jcs()` and `html_v1()`.
+- **Multi-format support**: JSON (JCS/RFC 8785), HTML (NFC + attribute sorting), DOCX (ZIP + XML C14N), and PDF (structural scrub) are all supported through the `process_artifact()` entry point.
 
 ## 2) Append-only you can independently verify
 - **Signed shard headers (Ed25519)** include: root, shard range, created_at, canonicalizer versions, and optional witness anchors.

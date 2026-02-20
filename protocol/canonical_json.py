@@ -13,9 +13,9 @@ cross-language divergence:
 * -0 normalized to 0
 """
 
+import math
 from decimal import Decimal, InvalidOperation
 from json.encoder import encode_basestring_ascii
-import math
 from typing import Any
 
 
@@ -115,8 +115,9 @@ def _encode_number(value: int | float | Decimal) -> str:
     sign = "-" if dec_value.is_signed() else ""
     dec_value = abs(dec_value)
 
-    digits = "".join(str(d) for d in dec_value.as_tuple().digits)
-    exponent = dec_value.as_tuple().exponent
+    dec_tuple = dec_value.as_tuple()
+    digits = "".join(str(d) for d in dec_tuple.digits)
+    exponent: int = int(dec_tuple.exponent)
     adjusted_exponent = dec_value.adjusted()
 
     if -6 <= adjusted_exponent <= 20:

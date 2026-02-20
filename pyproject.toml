@@ -153,6 +153,10 @@ ignore_missing_imports = true
 module = "nacl.*"
 ignore_missing_imports = true
 
+[[tool.mypy.overrides]]
+module = "lxml.*"
+ignore_missing_imports = true
+
 [tool.bandit]
 exclude_dirs = ["tests", ".venv", "venv"]
 skips = ["B101"]  # Skip assert_used check (assertions are fine in tests)
