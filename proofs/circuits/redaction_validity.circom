@@ -33,7 +33,7 @@ template RedactionValidity(maxLeaves, depth) {
         inclusionProofs[i].pathIndices <== pathIndices[i];
 
         // Only constrain the root when revealMask is 1
-        originalRoot === inclusionProofs[i].root;
+        revealMask[i] * (originalRoot - inclusionProofs[i].root) === 0;
 
         revealedLeaves[i] <== revealMask[i] * originalLeaves[i];
     }

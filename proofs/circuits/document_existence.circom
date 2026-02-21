@@ -20,6 +20,16 @@ template DocumentExistence(depth) {
     signal input pathElements[depth];
     signal input pathIndices[depth];
 
+    // Ensure pathIndices encode the provided leafIndex
+    signal indexAccum[depth + 1];
+    indexAccum[0] <== 0;
+    for (var i = 0; i < depth; i++) {
+        // Boolean constraint for path index
+        pathIndices[i] * (pathIndices[i] - 1) === 0;
+        indexAccum[i + 1] <== indexAccum[i] + pathIndices[i] * (1 << i);
+    }
+    leafIndex === indexAccum[depth];
+
     component merkle = MerkleProof(depth);
     merkle.leaf <== leaf;
     merkle.pathElements <== pathElements;
