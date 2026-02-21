@@ -119,7 +119,7 @@ def build_timestamp_request(hash_hex: str) -> bytes:
         hashname="sha256",
         include_tsa_certificate=True,
     )
-    return rfc3161ng.encode_timestamp_request(req)
+    return bytes(rfc3161ng.encode_timestamp_request(req))
 
 
 def request_timestamp(
@@ -185,9 +185,11 @@ def verify_timestamp_token(
                     the message imprint does not match.
     """
     digest = _sha256_of_hash(hash_hex)
-    return rfc3161ng.check_timestamp(
-        tst_bytes,
-        certificate=certificate,
-        digest=digest,
-        hashname="sha256",
+    return bool(
+        rfc3161ng.check_timestamp(
+            tst_bytes,
+            certificate=certificate,
+            digest=digest,
+            hashname="sha256",
+        )
     )

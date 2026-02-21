@@ -33,7 +33,7 @@ try:
     from lxml import etree, html as lxml_html
 
     LXML_VERSION: str | None = ".".join(map(str, etree.LXML_VERSION))
-except ImportError:
+except ImportError:  # pragma: no cover
     lxml_html = None
     etree = None
     LXML_VERSION = None
@@ -179,7 +179,7 @@ class Canonicalizer:
                 return "false"
             elif item is None:
                 return "null"
-            raise CanonicalizationError(f"Unsupported type: {type(item)}")
+            raise CanonicalizationError(f"Unsupported type: {type(item)}")  # pragma: no cover
 
         return encode_recursive(obj).encode("utf-8")
 
@@ -230,9 +230,7 @@ class Canonicalizer:
                 walk(child)
 
         walk(root)
-        result: bytes = etree.tostring(
-            root, method="html", encoding="utf-8", include_meta_content_type=True
-        )
+        result: bytes = lxml_html.tostring(root, encoding="utf-8", include_meta_content_type=True)
         return result
 
     @staticmethod
