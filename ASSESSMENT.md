@@ -407,7 +407,7 @@ createdb olympus
 export DATABASE_URL='postgresql://yourusername@localhost:5432/olympus'
 
 # 5. Lint & format
-ruff check protocol/ storage/ api/ app/ tests/ --fix
+ruff check protocol/ storage/ api/ app_testonly/ tests/ --fix
 ruff format protocol/ storage/ api/ app/ tests/
 
 # 6. Type check
@@ -450,7 +450,7 @@ docker run -p 8000:8000 \
 ```bash
 # Replicate CI locally
 python tools/validate_schemas.py
-ruff check protocol/ storage/ api/ app/ tests/
+ruff check protocol/ storage/ api/ app_testonly/ tests/
 ruff format --check protocol/ storage/ api/ app/ tests/
 mypy protocol/ storage/ api/
 bandit -r protocol/ storage/ api/ app/
@@ -561,7 +561,7 @@ Comprehensive assessment and modernization of the Olympus repository across code
 All tests pass locally and in CI:
 ```bash
 pytest tests/ -v  # 172 passed, 17 deselected (postgres)
-ruff check protocol/ storage/ api/ app/ tests/  # 0 errors
+ruff check protocol/ storage/ api/ app_testonly/ tests/  # 0 errors
 mypy protocol/ storage/ api/  # Success
 bandit -r protocol/ storage/ api/ app/  # 2 acceptable findings
 ```
@@ -605,7 +605,7 @@ source .venv/bin/activate
 pip install -r requirements.txt -r requirements-dev.txt
 
 # Run all checks
-ruff check protocol/ storage/ api/ app/ tests/
+ruff check protocol/ storage/ api/ app_testonly/ tests/
 ruff format --check protocol/ storage/ api/ app/ tests/
 mypy protocol/ storage/ api/
 pytest tests/ -m "not postgres" --cov=protocol --cov=storage --cov=api --cov=app

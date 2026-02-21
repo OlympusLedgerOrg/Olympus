@@ -119,7 +119,7 @@ pytest tests/test_canonicalization.py tests/test_hash_functions.py -v
 We use [ruff](https://docs.astral.sh/ruff/) for linting:
 
 ```bash
-ruff check protocol/ storage/ api/ app/ tests/
+ruff check protocol/ storage/ api/ app_testonly/ tests/
 ```
 
 ### Type Checking
@@ -135,7 +135,7 @@ mypy protocol/ storage/ api/
 Before committing, ensure:
 
 1. All tests pass: `pytest tests/ -v`
-2. No linting errors: `ruff check protocol/ storage/ api/ app/ tests/`
+2. No linting errors: `ruff check protocol/ storage/ api/ app_testonly/ tests/`
 3. No type errors: `mypy protocol/ storage/ api/`
 
 ---

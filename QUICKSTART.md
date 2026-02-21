@@ -118,7 +118,7 @@ python -c "from psycopg import connect; connect('$DATABASE_URL'); print('Connect
 python tools/validate_schemas.py
 
 # Run linting
-ruff check protocol/ storage/ api/ app/ tests/
+ruff check protocol/ storage/ api/ app_testonly/ tests/
 
 # Run type checking
 mypy protocol/ storage/ api/
@@ -141,10 +141,10 @@ pytest tests/ -v
 
 ```bash
 # Check code style
-ruff check protocol/ storage/ api/ app/ tests/
+ruff check protocol/ storage/ api/ app_testonly/ tests/
 
 # Auto-fix issues
-ruff check protocol/ storage/ api/ app/ tests/ --fix
+ruff check protocol/ storage/ api/ app_testonly/ tests/ --fix
 
 # Format code
 ruff format protocol/ storage/ api/ app/ tests/
@@ -335,7 +335,7 @@ echo "🔍 Validating schemas..."
 python tools/validate_schemas.py
 
 echo "🔍 Running ruff linting..."
-ruff check protocol/ storage/ api/ app/ tests/
+ruff check protocol/ storage/ api/ app_testonly/ tests/
 
 echo "🔍 Running ruff format check..."
 ruff format --check protocol/ storage/ api/ app/ tests/
