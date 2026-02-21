@@ -1,0 +1,180 @@
+"""Tests for api.ingest module (batch ingestion endpoints)."""
+
+import pytest
+from fastapi.testclient import TestClient
+
+from api.app import app
+
+
+@pytest.fixture()
+def client():
+    """Create a test client for the API."""
+    return TestClient(app)
+
+
+# ---------------------------------------------------------------------------
+# POST /ingest/records
+# ---------------------------------------------------------------------------
+
+
+class TestBatchIngestion:
+    def test_ingest_single_record(self, client: TestClient):
+        payload = {
+            "records": [
+                {
+                    "shard_id": "shard-1",
+                    "record_type": "document",
+                    "record_id": "doc-001",
+                    "version": 1,
+                    "content": {"title": "Test Document", "body": "Hello world"},
+                }
+            ]
+        }
+        resp = client.post("/ingest/records", json=payload)
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["ingested"] == 1
+        assert data["deduplicated"] == 0
+        assert len(data["results"]) == 1
+        assert data["results"][0]["record_id"] == "doc-001"
+        assert data["results"][0]["deduplicated"] is False
+        assert data["results"][0]["content_hash"]  # non-empty
+        assert data["ledger_entry_hash"]  # non-empty
+
+    def test_ingest_batch_multiple_records(self, client: TestClient):
+        payload = {
+            "records": [
+                {
+                    "shard_id": "shard-batch",
+                    "record_type": "document",
+                    "record_id": f"doc-{i}",
+                    "version": 1,
+                    "content": {"index": i, "text": f"Document {i}"},
+                }
+                for i in range(5)
+            ]
+        }
+        resp = client.post("/ingest/records", json=payload)
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["ingested"] == 5
+        assert data["deduplicated"] == 0
+        assert len(data["results"]) == 5
+
+    def test_ingest_deduplication(self, client: TestClient):
+        """Ingesting the same content twice should deduplicate."""
+        record = {
+            "shard_id": "shard-dedup",
+            "record_type": "document",
+            "record_id": "doc-dedup",
+            "version": 1,
+            "content": {"unique_key": "dedup-test-value-42"},
+        }
+        # First ingestion
+        resp1 = client.post("/ingest/records", json={"records": [record]})
+        assert resp1.status_code == 200
+        proof_id_1 = resp1.json()["results"][0]["proof_id"]
+
+        # Second ingestion of same content
+        resp2 = client.post("/ingest/records", json={"records": [record]})
+        assert resp2.status_code == 200
+        data2 = resp2.json()
+        assert data2["deduplicated"] == 1
+        assert data2["ingested"] == 0
+        assert data2["results"][0]["deduplicated"] is True
+        assert data2["results"][0]["proof_id"] == proof_id_1
+
+    def test_ingest_empty_batch_rejected(self, client: TestClient):
+        resp = client.post("/ingest/records", json={"records": []})
+        assert resp.status_code == 422  # Validation error
+
+    def test_ingest_invalid_version(self, client: TestClient):
+        payload = {
+            "records": [
+                {
+                    "shard_id": "shard-1",
+                    "record_type": "doc",
+                    "record_id": "x",
+                    "version": 0,  # must be >= 1
+                    "content": {"a": 1},
+                }
+            ]
+        }
+        resp = client.post("/ingest/records", json=payload)
+        assert resp.status_code == 422
+
+    def test_ingest_returns_timestamp(self, client: TestClient):
+        payload = {
+            "records": [
+                {
+                    "shard_id": "shard-ts",
+                    "record_type": "document",
+                    "record_id": "doc-ts",
+                    "version": 1,
+                    "content": {"ts_test": True},
+                }
+            ]
+        }
+        resp = client.post("/ingest/records", json=payload)
+        data = resp.json()
+        assert "timestamp" in data
+        assert data["timestamp"].endswith("Z") or "+" in data["timestamp"]
+
+
+# ---------------------------------------------------------------------------
+# GET /ingest/records/{proof_id}/proof
+# ---------------------------------------------------------------------------
+
+
+class TestIngestionProof:
+    def test_get_proof_after_ingestion(self, client: TestClient):
+        payload = {
+            "records": [
+                {
+                    "shard_id": "shard-proof",
+                    "record_type": "document",
+                    "record_id": "doc-proof",
+                    "version": 1,
+                    "content": {"proof_test": "data-unique-xyz"},
+                }
+            ]
+        }
+        resp = client.post("/ingest/records", json=payload)
+        proof_id = resp.json()["results"][0]["proof_id"]
+
+        proof_resp = client.get(f"/ingest/records/{proof_id}/proof")
+        assert proof_resp.status_code == 200
+        proof_data = proof_resp.json()
+        assert proof_data["proof_id"] == proof_id
+        assert proof_data["record_id"] == "doc-proof"
+        assert proof_data["merkle_root"]
+        assert proof_data["merkle_proof"]
+        assert proof_data["ledger_entry_hash"]
+
+    def test_get_proof_not_found(self, client: TestClient):
+        resp = client.get("/ingest/records/nonexistent-id/proof")
+        assert resp.status_code == 404
+
+
+# ---------------------------------------------------------------------------
+# Health endpoint
+# ---------------------------------------------------------------------------
+
+
+class TestHealthEndpoint:
+    def test_health_includes_endpoints(self, client: TestClient):
+        resp = client.get("/health")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert "endpoints" in data
+        assert "/ingest/records" in data["endpoints"]
+
+    def test_health_includes_version(self, client: TestClient):
+        resp = client.get("/health")
+        data = resp.json()
+        assert data["version"] == "0.5.0"
+
+    def test_root_includes_ingest_endpoints(self, client: TestClient):
+        resp = client.get("/")
+        data = resp.json()
+        assert "/ingest/records" in data["endpoints"]
