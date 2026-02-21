@@ -59,9 +59,7 @@ def create_shard_header(
     # Attach RFC 3161 timestamp token after hash commitment (not part of the hash)
     if timestamp_token is not None:
         header["timestamp_token"] = (
-            timestamp_token.to_dict()
-            if hasattr(timestamp_token, "to_dict")
-            else timestamp_token
+            timestamp_token.to_dict() if hasattr(timestamp_token, "to_dict") else timestamp_token
         )
 
     return header
@@ -100,9 +98,7 @@ def verify_header(
     """
     # Verify header hash
     header_without_hash = {
-        k: v
-        for k, v in header.items()
-        if k not in ["header_hash", "signature", "timestamp_token"]
+        k: v for k, v in header.items() if k not in ["header_hash", "signature", "timestamp_token"]
     }
     expected_hash = shard_header_hash(header_without_hash).hex()
 
@@ -134,7 +130,9 @@ def get_signing_key_from_seed(seed: bytes) -> nacl.signing.SigningKey:
     return nacl.signing.SigningKey(seed)
 
 
-def get_verify_key_from_signing_key(signing_key: nacl.signing.SigningKey) -> nacl.signing.VerifyKey:
+def get_verify_key_from_signing_key(
+    signing_key: nacl.signing.SigningKey,
+) -> nacl.signing.VerifyKey:
     """
     Get Ed25519 verification key from signing key.
 

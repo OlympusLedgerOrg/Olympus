@@ -276,8 +276,8 @@ class Canonicalizer:
                             content = etree.tostring(
                                 xml_root, method="xml", exclusive=True, with_comments=False
                             )
-                        except Exception:
-                            pass
+                        except Exception:  # nosec B112
+                            continue
 
                     hasher.update(name.encode("utf-8"))
                     hasher.update(content)

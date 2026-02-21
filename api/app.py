@@ -135,8 +135,11 @@ def _require_storage() -> "StorageLayer":
     the database. It may be extended in the future for additional checks.
     """
     storage = _get_storage()
-    # Type assertion since _get_storage raises if storage is None
-    assert storage is not None  # noqa: S101
+    if storage is None:
+        raise HTTPException(
+            status_code=503,
+            detail="Database not available: storage not initialized",
+        )
     return storage
 
 

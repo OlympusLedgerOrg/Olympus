@@ -23,6 +23,7 @@ Non-existence is a proofable state, not an error.
 """
 
 import os
+import tempfile
 from typing import Any
 
 from fastapi import FastAPI, HTTPException
@@ -33,7 +34,8 @@ from app_testonly.state import OlympusState
 app = FastAPI(title="Olympus Phase 0", version="0.1.0", docs_url="/")
 
 # IMPORTANT: do NOT default to ":memory:" — breaks e2e due to per-connection DB
-state = OlympusState(os.getenv("OLY_DB_PATH", "/tmp/olympus.sqlite"))
+default_db_path = os.path.join(tempfile.gettempdir(), "olympus.sqlite")
+state = OlympusState(os.getenv("OLY_DB_PATH", default_db_path))
 
 
 @app.get("/status")

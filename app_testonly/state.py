@@ -23,6 +23,9 @@ See docs/08_database_strategy.md for complete database strategy documentation.
 Wires to existing protocol/ssmf.py. Implements unified proof that never raises on absence.
 """
 
+import os
+import tempfile
+
 from protocol.hashes import forest_root
 from protocol.ssmf import ExistenceProof, NonExistenceProof, SparseMerkleTree
 
@@ -63,7 +66,7 @@ class OlympusState:
     Global state for Olympus API, managing multiple shards.
     """
 
-    def __init__(self, db_path: str = "/tmp/olympus.sqlite"):
+    def __init__(self, db_path: str | None = None):
         """
         Initialize Olympus state.
 
@@ -76,7 +79,8 @@ class OlympusState:
         Args:
             db_path: Vestigial parameter (not used for actual database operations)
         """
-        self.db_path = db_path
+        default_path = os.path.join(tempfile.gettempdir(), "olympus.sqlite")
+        self.db_path = db_path or default_path
         self.shards: dict[str, ShardState] = {}
 
     def _shard(self, shard_id: str) -> ShardState:

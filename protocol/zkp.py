@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import json
 import shutil
-import subprocess
+import subprocess  # nosec B404
 import tempfile
 from dataclasses import dataclass
 from pathlib import Path
@@ -57,7 +57,7 @@ class Groth16Prover:
     def _run(self, args: list[str], cwd: Path | None = None) -> subprocess.CompletedProcess[str]:
         """Execute a snarkjs command and return the completed process."""
         self._check_snarkjs()
-        return subprocess.run(
+        return subprocess.run(  # nosec B603
             [self.snarkjs_bin, *args],
             cwd=cwd or self.circuits_dir,
             check=True,
