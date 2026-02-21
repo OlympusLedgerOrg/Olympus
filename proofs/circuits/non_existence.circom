@@ -21,8 +21,10 @@ template NonExistence(depth) {
     // Reuse MerkleProof with an empty leaf
     component merkle = MerkleProof(depth);
     merkle.leaf <== emptyLeaf;
-    merkle.pathElements <== pathElements;
-    merkle.pathIndices <== pathIndices;
+    for (var i = 0; i < depth; i++) {
+        merkle.pathElements[i] <== pathElements[i];
+        merkle.pathIndices[i] <== pathIndices[i];
+    }
 
     // Enforce that the leaf is zero to model non-membership
     emptyLeaf === 0;

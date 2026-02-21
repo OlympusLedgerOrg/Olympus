@@ -32,8 +32,10 @@ template DocumentExistence(depth) {
 
     component merkle = MerkleProof(depth);
     merkle.leaf <== leaf;
-    merkle.pathElements <== pathElements;
-    merkle.pathIndices <== pathIndices;
+    for (var j = 0; j < depth; j++) {
+        merkle.pathElements[j] <== pathElements[j];
+        merkle.pathIndices[j] <== pathIndices[j];
+    }
 
     root === merkle.root;
 }
