@@ -135,7 +135,8 @@ class TestJsonJcs:
 
 
 class TestPdfNormalize:
-    def _build_pdf(self) -> bytes:
+    @staticmethod
+    def _build_pdf() -> bytes:
         pdf = pikepdf.Pdf.new()
         pdf.add_blank_page(page_size=(612, 792))
         pdf.docinfo["/CreationDate"] = "D:20240101"
@@ -191,7 +192,7 @@ class TestProcessArtifact:
         assert result["fallback_reason"] is None
 
     def test_pdf_artifact(self):
-        raw = TestPdfNormalize()._build_pdf()
+        raw = TestPdfNormalize._build_pdf()
         result = process_artifact(raw, "application/pdf")
         assert result["mode"] == "pdf_norm_pikepdf_v1"
 

@@ -55,7 +55,7 @@ services:
       UI_API_BASE: http://app:8000
     depends_on:
       app:
-        condition: service_started
+        condition: service_healthy
     ports:
       - "8080:8080"
 
