@@ -110,6 +110,7 @@ class Groth16Prover:
         verification_key_path: Path | None = None,
     ) -> bool:
         """Verify a Groth16 proof with snarkjs."""
+        self._check_snarkjs()
         vkey = verification_key_path or self.circuits_dir / "keys" / "verification_keys" / "existence_vkey.json"
         if not vkey.exists():
             raise FileNotFoundError(f"Verification key not found: {vkey}")
