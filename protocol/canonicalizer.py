@@ -306,26 +306,26 @@ class Canonicalizer:
             CanonicalizationError: If the PDF cannot be parsed or normalized.
         """
         volatile_keys = [
-            "CreationDate",
-            "ModDate",
-            "Producer",
-            "Creator",
-            "Title",
-            "Subject",
-            "Author",
-            "Keywords",
+            "/CreationDate",
+            "/ModDate",
+            "/Producer",
+            "/Creator",
+            "/Title",
+            "/Subject",
+            "/Author",
+            "/Keywords",
         ]
 
         try:
             with pikepdf.open(io.BytesIO(data)) as pdf:
                 for key in volatile_keys:
-                    for candidate in (key, f"/{key}"):
+                    for candidate in {key, key.lstrip("/")}:
                         if candidate in pdf.docinfo:
                             del pdf.docinfo[candidate]
 
                 try:
                     pdf.remove_unreferenced_resources()
-                except Exception:
+                except pikepdf.PdfError:
                     # Safe to ignore; best-effort cleanup
                     pass
 
@@ -333,7 +333,8 @@ class Canonicalizer:
                 try:
                     metadata = pdf.open_metadata(set_pikepdf_as_editor=False)
                     metadata.clear()
-                except Exception:
+                except pikepdf.PdfError:
+                    # Some PDFs omit XMP packets; safe to continue
                     pass
 
                 buf = io.BytesIO()

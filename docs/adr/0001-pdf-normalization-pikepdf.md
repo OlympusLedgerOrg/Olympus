@@ -18,4 +18,4 @@
 ## Consequences
 - Introduces a new pinned dependency (`pikepdf==9.4.1`).
 - Deterministic, idempotent PDF hashes across runs and platforms.
-- Requires libqpdf (bundled with manylinux wheel) but no JVM runtime.***
+- Requires libqpdf (bundled with manylinux wheel) but no JVM runtime.
