@@ -5,11 +5,16 @@
   "description": "Zero-knowledge proof circuits for Olympus",
   "scripts": {
     "setup": "bash setup_circuits.sh",
-    "smoke": "bash smoke_test.sh"
+    "smoke": "bash smoke_test.sh",
+    "test:jsonpath": "node --test"
   },
   "dependencies": {
     "circomlib": "^2.0.5",
     "circomlibjs": "^0.1.7",
+    "jsonpath": "file:./safe-jsonpath",
     "snarkjs": "^0.7.5"
+  },
+  "overrides": {
+    "jsonpath": "file:./safe-jsonpath"
   }
 }
