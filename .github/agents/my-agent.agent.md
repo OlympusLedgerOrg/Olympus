@@ -73,7 +73,7 @@ Expected repo structure (baseline)
 
 protocol/ contains SSMF, hashes, shards, canonicalization, ledger/storage
 
-app/ contains FastAPI wiring (app/main.py, app/state.py)
+app_testonly/ contains FastAPI wiring (app_testonly/main.py, app_testonly/state.py)
 
 .github/workflows/ contains CI that provisions Postgres correctly
 
