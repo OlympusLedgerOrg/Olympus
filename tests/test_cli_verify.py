@@ -73,11 +73,11 @@ def ledger_data(tmp_path):
     ledger = Ledger()
 
     # Add several entries
-    ledger.append(record_hash="hash1", shard_id="shard1", shard_root="root1")
+    ledger.append(doc_id="doc1", record_hash="hash1", shard_id="shard1", shard_root="root1")
 
-    ledger.append(record_hash="hash2", shard_id="shard1", shard_root="root2")
+    ledger.append(doc_id="doc2", record_hash="hash2", shard_id="shard1", shard_root="root2")
 
-    ledger.append(record_hash="hash3", shard_id="shard1", shard_root="root3")
+    ledger.append(doc_id="doc3", record_hash="hash3", shard_id="shard1", shard_root="root3")
 
     # Export to JSON format
     ledger_data = {"entries": [entry.to_dict() for entry in ledger.entries]}
@@ -94,9 +94,9 @@ def tampered_ledger_data(tmp_path):
     """Create a tampered ledger for testing."""
     ledger = Ledger()
 
-    ledger.append(record_hash="hash1", shard_id="shard1", shard_root="root1")
+    ledger.append(doc_id="doc1", record_hash="hash1", shard_id="shard1", shard_root="root1")
 
-    ledger.append(record_hash="hash2", shard_id="shard1", shard_root="root2")
+    ledger.append(doc_id="doc2", record_hash="hash2", shard_id="shard1", shard_root="root2")
 
     # Tamper with the second entry
     ledger.entries[1].record_hash = "tampered_hash"
@@ -290,7 +290,7 @@ def test_cli_redaction_missing_content_file(tmp_path):
 def test_cli_ledger_single_entry(tmp_path):
     """Test verification of ledger with single entry."""
     ledger = Ledger()
-    ledger.append(record_hash="hash1", shard_id="shard1", shard_root="root1")
+    ledger.append(doc_id="doc1", record_hash="hash1", shard_id="shard1", shard_root="root1")
 
     ledger_data = {"entries": [entry.to_dict() for entry in ledger.entries]}
 

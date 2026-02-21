@@ -193,6 +193,7 @@ class LedgerEntryResponse(BaseModel):
     """Ledger entry for chain verification."""
 
     ts: str  # ISO 8601 timestamp
+    doc_id: str  # Document identifier
     record_hash: str  # Hex-encoded
     shard_id: str
     shard_root: str  # Hex-encoded
@@ -421,6 +422,7 @@ async def get_ledger_tail(
             entries=[
                 LedgerEntryResponse(
                     ts=entry.ts,
+                    doc_id=entry.doc_id,
                     record_hash=entry.record_hash,
                     shard_id=entry.shard_id,
                     shard_root=entry.shard_root,

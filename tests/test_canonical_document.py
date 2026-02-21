@@ -267,6 +267,12 @@ def test_normalize_whitespace_unicode_spaces_nfkc():
     assert normalize_whitespace(f"a{hair_space}b") == "a b"
 
 
+def test_normalize_whitespace_unicode_line_separator():
+    """Test that Unicode line separators normalize to regular whitespace."""
+    line_separator = "\u2028"
+    assert normalize_whitespace(f"hello{line_separator}world") == "hello world"
+
+
 def test_normalize_whitespace_mixed_unicode():
     """Test mixing NBSP and standard whitespace collapses to single space."""
     nbsp = "\u00a0"

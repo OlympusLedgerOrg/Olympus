@@ -78,7 +78,7 @@ CREATE TABLE IF NOT EXISTS ledger_entries (
     seq BIGINT NOT NULL,  -- Sequence number within shard (monotonically increasing)
     entry_hash BYTEA NOT NULL,  -- 32-byte hash of this entry
     prev_entry_hash BYTEA NOT NULL,  -- 32-byte hash of previous entry (empty bytes for genesis)
-    payload JSONB NOT NULL,  -- Canonical JSON payload (ts, record_hash, shard_id, shard_root, prev_entry_hash)
+    payload JSONB NOT NULL,  -- Canonical JSON payload (ts, doc_id, record_hash, shard_id, shard_root, prev_entry_hash)
     ts TIMESTAMPTZ NOT NULL,  -- ISO 8601 timestamp from payload
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),  -- Database insertion time
     

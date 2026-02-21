@@ -25,6 +25,10 @@ FOREST_PREFIX = b"OLY:FOREST:V1"
 POLICY_PREFIX = b"OLY:POLICY:V1"
 LEDGER_PREFIX = b"OLY:LEDGER:V1"
 
+# Merkle structural prefixes for leaf and node hashing
+LEAF_HASH_PREFIX = b"\x00"
+NODE_HASH_PREFIX = b"\x01"
+
 
 def blake3_hash(parts: list[bytes]) -> bytes:
     """
@@ -64,13 +68,13 @@ def leaf_hash(key: bytes, value_hash: bytes) -> bytes:
         value_hash: 32-byte hash of the value
 
     Returns:
-        32-byte leaf hash using LEAF_PREFIX domain separation
+        32-byte leaf hash using LEAF_HASH_PREFIX domain separation
     """
     if len(key) != 32:
         raise ValueError(f"Key must be 32 bytes, got {len(key)}")
     if len(value_hash) != 32:
         raise ValueError(f"Value hash must be 32 bytes, got {len(value_hash)}")
-    return blake3_hash([LEAF_PREFIX, key, value_hash])
+    return blake3_hash([LEAF_HASH_PREFIX, key, value_hash])
 
 
 def node_hash(left: bytes, right: bytes) -> bytes:
@@ -82,13 +86,13 @@ def node_hash(left: bytes, right: bytes) -> bytes:
         right: 32-byte hash of right child
 
     Returns:
-        32-byte node hash using NODE_PREFIX domain separation
+        32-byte node hash using NODE_HASH_PREFIX domain separation
     """
     if len(left) != 32:
         raise ValueError(f"Left hash must be 32 bytes, got {len(left)}")
     if len(right) != 32:
         raise ValueError(f"Right hash must be 32 bytes, got {len(right)}")
-    return blake3_hash([NODE_PREFIX, left, right])
+    return blake3_hash([NODE_HASH_PREFIX, left, right])
 
 
 def merkle_root(leaves: list[bytes]) -> bytes:

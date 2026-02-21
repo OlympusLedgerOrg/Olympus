@@ -5,6 +5,8 @@ Tests for new BLAKE3 hash functions
 import pytest
 
 from protocol.hashes import (
+    LEAF_HASH_PREFIX,
+    NODE_HASH_PREFIX,
     blake3_hash,
     forest_root,
     hash_bytes,
@@ -89,6 +91,16 @@ def test_leaf_hash_deterministic():
     assert leaf1 == leaf2
 
 
+def test_leaf_hash_prefix():
+    """Test that leaf hash uses the leaf prefix byte."""
+    key = record_key("document", "doc1", 1)
+    value_hash = hash_bytes(b"test value")
+
+    expected = blake3_hash([LEAF_HASH_PREFIX, key, value_hash])
+
+    assert leaf_hash(key, value_hash) == expected
+
+
 def test_leaf_hash_invalid_key_length():
     """Test that invalid key length is rejected."""
     with pytest.raises(ValueError, match="must be 32 bytes"):
@@ -122,6 +134,16 @@ def test_node_hash_deterministic():
     node2 = node_hash(left, right)
 
     assert node1 == node2
+
+
+def test_node_hash_prefix():
+    """Test that node hash uses the node prefix byte."""
+    left = hash_bytes(b"left")
+    right = hash_bytes(b"right")
+
+    expected = blake3_hash([NODE_HASH_PREFIX, left, right])
+
+    assert node_hash(left, right) == expected
 
 
 def test_node_hash_order_matters():

@@ -140,6 +140,7 @@ Returns the last N ledger entries for a shard.
   "entries": [
     {
       "ts": "2024-01-01T00:00:00Z",
+      "doc_id": "doc1",
       "record_hash": "hash_hex...",
       "shard_id": "shard1",
       "shard_root": "root_hex...",

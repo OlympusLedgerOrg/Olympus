@@ -17,6 +17,7 @@ class LedgerEntry:
     """An entry in the Olympus ledger."""
 
     ts: str  # ISO 8601 timestamp
+    doc_id: str  # Document identifier
     record_hash: str  # Hex-encoded record hash
     shard_id: str  # Shard identifier
     shard_root: str  # Hex-encoded shard root hash
@@ -45,11 +46,14 @@ class Ledger:
         """Initialize an empty ledger."""
         self.entries: list[LedgerEntry] = []
 
-    def append(self, record_hash: str, shard_id: str, shard_root: str) -> LedgerEntry:
+    def append(
+        self, doc_id: str, record_hash: str, shard_id: str, shard_root: str
+    ) -> LedgerEntry:
         """
         Append a new entry to the ledger.
 
         Args:
+            doc_id: Identifier for the document
             record_hash: Hash of the record
             shard_id: Identifier for the shard
             shard_root: Root hash of the shard
@@ -63,6 +67,7 @@ class Ledger:
         # Create payload for hashing
         payload = {
             "ts": ts,
+            "doc_id": doc_id,
             "record_hash": record_hash,
             "shard_id": shard_id,
             "shard_root": shard_root,
@@ -77,6 +82,7 @@ class Ledger:
 
         entry = LedgerEntry(
             ts=ts,
+            doc_id=doc_id,
             record_hash=record_hash,
             shard_id=shard_id,
             shard_root=shard_root,
@@ -121,6 +127,7 @@ class Ledger:
             # Recompute entry hash
             payload = {
                 "ts": entry.ts,
+                "doc_id": entry.doc_id,
                 "record_hash": entry.record_hash,
                 "shard_id": entry.shard_id,
                 "shard_root": entry.shard_root,

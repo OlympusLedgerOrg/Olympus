@@ -31,7 +31,7 @@ def test_merkle_leaf_prefix_applied():
     tree = MerkleTree(leaves)
 
     # Manually compute what the root should be with LEAF_PREFIX for leaves
-    # and NODE_PREFIX for internal nodes.
+    # and the node-hash prefix for internal nodes.
     leaf0_hash = blake3_hash([LEAF_PREFIX, b"leaf0"])
     leaf1_hash = blake3_hash([LEAF_PREFIX, b"leaf1"])
 

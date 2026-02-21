@@ -266,6 +266,7 @@ class StorageLayer:
             # Create ledger entry payload
             ledger_payload = {
                 "ts": ts,
+                "doc_id": record_id,
                 "record_hash": record_hash_hex,
                 "shard_id": shard_id,
                 "shard_root": shard_root_hex,
@@ -297,6 +298,7 @@ class StorageLayer:
             # Create LedgerEntry object
             ledger_entry = LedgerEntry(
                 ts=ts,
+                doc_id=record_id,
                 record_hash=record_hash_hex,
                 shard_id=shard_id,
                 shard_root=shard_root_hex,
@@ -504,6 +506,7 @@ class StorageLayer:
                 payload = row["payload"]
                 entry = LedgerEntry(
                     ts=payload["ts"],
+                    doc_id=payload["doc_id"],
                     record_hash=payload["record_hash"],
                     shard_id=payload["shard_id"],
                     shard_root=payload["shard_root"],

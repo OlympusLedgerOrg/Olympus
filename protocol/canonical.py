@@ -10,17 +10,6 @@ import unicodedata
 from typing import Any
 
 
-# Unicode space-like characters that unicodedata.normalize("NFKC", ...) does NOT
-# map to ASCII space but that are visually indistinguishable from a regular space
-# (commonly found in PDFs and other document formats).
-_RESIDUAL_UNICODE_SPACES = str.maketrans(
-    {
-        "\u00a0": " ",  # NO-BREAK SPACE
-        "\u202f": " ",  # NARROW NO-BREAK SPACE
-    }
-)
-
-
 # Canonical format version - DO NOT CHANGE
 # Changing this breaks all historical document proofs
 CANONICAL_VERSION = "canonical_v1"
@@ -43,12 +32,12 @@ def normalize_whitespace(text: str) -> str:
     """
     Normalize whitespace in text to ensure deterministic canonicalization.
 
-    Handles non-standard Unicode whitespace commonly present in PDFs (e.g.,
-    NO-BREAK SPACE U+00A0, NARROW NO-BREAK SPACE U+202F, THIN SPACE U+2009).
+    Handles non-standard Unicode whitespace commonly present in PDFs
+    (e.g., NO-BREAK SPACE U+00A0, NARROW NO-BREAK SPACE U+202F, THIN SPACE U+2009).
 
     Steps applied:
-    1. NFKC normalization (maps most Unicode space variants to ASCII space).
-    2. Explicit replacement of residual NBSP-like characters not covered by NFKC.
+    1. NFKC normalization (maps compatibility characters deterministically).
+    2. Map all Unicode separator categories (Zs/Zl/Zp) to ASCII space.
     3. Collapse all remaining whitespace runs and strip leading/trailing whitespace.
 
     Args:
@@ -57,13 +46,14 @@ def normalize_whitespace(text: str) -> str:
     Returns:
         Text with normalized whitespace
     """
-    # Step 1: NFKC normalizes Unicode compatibility variants (e.g., thin space
-    # U+2009, en space U+2002, em space U+2003) to ASCII space.
+    # Step 1: Normalize compatibility variants (e.g., thin space U+2009).
     text = unicodedata.normalize("NFKC", text)
-    # Step 2: Map residual non-breaking space characters that NFKC leaves intact.
-    text = text.translate(_RESIDUAL_UNICODE_SPACES)
+    # Step 2: Map Unicode separator categories to ASCII space.
+    normalized = "".join(
+        " " if unicodedata.category(char).startswith("Z") else char for char in text
+    )
     # Step 3: Collapse all whitespace and strip.
-    return " ".join(text.split())
+    return " ".join(normalized.split())
 
 
 def canonicalize_document(doc: dict[str, Any]) -> dict[str, Any]:

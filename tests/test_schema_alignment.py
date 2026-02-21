@@ -74,6 +74,7 @@ class LedgerEntryResponse(BaseModel):
     """Ledger entry for chain verification."""
 
     ts: str
+    doc_id: str
     record_hash: str
     shard_id: str
     shard_root: str
@@ -224,6 +225,7 @@ class TestSchemaAlignment:
         # Create a valid LedgerEntryResponse
         entry = LedgerEntryResponse(
             ts="2024-01-01T00:00:00Z",
+            doc_id="doc1",
             record_hash="a" * 64,
             shard_id="test_shard",
             shard_root="b" * 64,
@@ -235,6 +237,7 @@ class TestSchemaAlignment:
 
         # Verify expected fields are present
         assert "ts" in entry_dict
+        assert "doc_id" in entry_dict
         assert "record_hash" in entry_dict
         assert "shard_id" in entry_dict
         assert "shard_root" in entry_dict

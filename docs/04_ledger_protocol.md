@@ -13,6 +13,7 @@ The Olympus ledger is an append-only log of document commitments.
 
 Each ledger entry contains:
 - Timestamp
+- Document identifier
 - Document hash
 - Merkle root
 - Shard identifier

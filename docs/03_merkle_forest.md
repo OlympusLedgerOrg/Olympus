@@ -49,7 +49,7 @@ The Merkle root changes if and only if:
 3. **Leaf order is changed** (reordering leaves produces a different root)
 
 The root is computed bottom-up:
-- Parent hash = BLAKE3(NODE_PREFIX || left_child_hash || right_child_hash)
+- Parent hash = BLAKE3(0x01 || left_child_hash || right_child_hash)
 - If odd number of leaves, the last leaf is duplicated as its own sibling
 - The root is deterministic for a given ordered sequence of leaves
 
