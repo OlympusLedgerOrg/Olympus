@@ -147,10 +147,10 @@ ruff check protocol/ storage/ api/ app_testonly/ tests/
 ruff check protocol/ storage/ api/ app_testonly/ tests/ --fix
 
 # Format code
-ruff format protocol/ storage/ api/ app/ tests/
+ruff format protocol/ storage/ api/ app_testonly/ tests/
 
 # Check formatting (without changing)
-ruff format --check protocol/ storage/ api/ app/ tests/
+ruff format --check protocol/ storage/ api/ app_testonly/ tests/
 ```
 
 ### Type Checking
@@ -171,7 +171,7 @@ pytest tests/test_ledger.py -v
 
 # Run with coverage
 pytest tests/ -m "not postgres" \
-  --cov=protocol --cov=storage --cov=api --cov=app \
+  --cov=protocol --cov=storage --cov=api --cov=app_testonly \
   --cov-report=term-missing --cov-report=html
 
 # View coverage report
@@ -183,10 +183,10 @@ xdg-open htmlcov/index.html  # Linux
 
 ```bash
 # Run bandit security scan
-bandit -r protocol/ storage/ api/ app/
+bandit -r protocol/ storage/ api/ app_testonly/
 
 # Generate baseline (optional)
-bandit-baseline -r protocol/ storage/ api/ app/
+bandit-baseline -r protocol/ storage/ api/ app_testonly/
 ```
 
 ---
@@ -338,17 +338,17 @@ echo "🔍 Running ruff linting..."
 ruff check protocol/ storage/ api/ app_testonly/ tests/
 
 echo "🔍 Running ruff format check..."
-ruff format --check protocol/ storage/ api/ app/ tests/
+ruff format --check protocol/ storage/ api/ app_testonly/ tests/
 
 echo "🔍 Running mypy type checking..."
 mypy protocol/ storage/ api/
 
 echo "🔍 Running bandit security scan..."
-bandit -r protocol/ storage/ api/ app/ || true
+bandit -r protocol/ storage/ api/ app_testonly/ || true
 
 echo "🔍 Running pytest (fast lane)..."
 pytest tests/ -m "not postgres" \
-  --cov=protocol --cov=storage --cov=api --cov=app \
+  --cov=protocol --cov=storage --cov=api --cov=app_testonly \
   --cov-report=term-missing
 
 echo "✅ All checks passed!"

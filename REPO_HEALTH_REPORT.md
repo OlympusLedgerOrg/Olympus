@@ -157,7 +157,7 @@ $ pytest tests/ -v -m "not postgres"
 **Test Distribution:**
 - protocol/: ~140 tests (canonicalization, hashing, Merkle trees, ledger, etc.)
 - api/: 7 tests (proof endpoints)
-- app/: Covered by integration tests
+- app_testonly/: Covered by integration tests
 - storage/: 13 postgres-marked tests (deselected)
 
 ### Coverage Report
@@ -166,8 +166,8 @@ Name                         Stmts   Miss Branch BrPart   Cover
 ---------------------------------------------------------------
 api/__init__.py                  2      2      0      0   0.00%   (not tested without postgres)
 api/app.py                     142    142     16      0   0.00%   (postgres-dependent)
-app/main.py                     38      8      2      0  75.00%
-app/state.py                    33      5      6      0  82.05%
+app_testonly/main.py                     38      8      2      0  75.00%
+app_testonly/state.py                    33      5      6      0  82.05%
 protocol/__init__.py             2      0      0      0 100.00%
 protocol/canonical.py           34      1     14      1  95.83%
 protocol/canonical_json.py      20      0     14      0 100.00%
@@ -212,16 +212,16 @@ No critical gaps found. The 17 postgres-marked tests cover:
 
 ### Bandit Results
 ```bash
-$ bandit -r protocol/ storage/ api/ app/
+$ bandit -r protocol/ storage/ api/ app_testonly/
 Total issues (by severity):
   Medium: 2
   High: 0
 
 Issues Found:
-1. app/main.py:33 - B108:hardcoded_tmp_directory
+1. app_testonly/main.py:33 - B108:hardcoded_tmp_directory
    Default: "/tmp/olympus.sqlite"
    
-2. app/state.py:66 - B108:hardcoded_tmp_directory  
+2. app_testonly/state.py:66 - B108:hardcoded_tmp_directory  
    Default: "/tmp/olympus.sqlite"
 ```
 
@@ -396,10 +396,10 @@ pytest -q -m "not postgres"
 ```bash
 python tools/validate_schemas.py
 ruff check protocol/ storage/ api/ app_testonly/ tests/
-ruff format --check protocol/ storage/ api/ app/ tests/
+ruff format --check protocol/ storage/ api/ app_testonly/ tests/
 mypy protocol/ storage/ api/
-bandit -r protocol/ storage/ api/ app/ -f txt
-pytest -q -m "not postgres" --cov=protocol --cov=storage --cov=api --cov=app
+bandit -r protocol/ storage/ api/ app_testonly/ -f txt
+pytest -q -m "not postgres" --cov=protocol --cov=storage --cov=api --cov=app_testonly
 ```
 
 ### With Coverage Report
@@ -509,8 +509,8 @@ python tools/validate_schemas.py
 ruff check protocol/ storage/ api/ app_testonly/ tests/
 ruff format --check .
 mypy protocol/ storage/ api/
-bandit -r protocol/ storage/ api/ app/
-pytest -q -m "not postgres" --cov=protocol --cov=storage --cov=api --cov=app
+bandit -r protocol/ storage/ api/ app_testonly/
+pytest -q -m "not postgres" --cov=protocol --cov=storage --cov=api --cov=app_testonly
 ```
 
 ## Metrics

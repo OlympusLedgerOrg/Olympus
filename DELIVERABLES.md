@@ -64,7 +64,7 @@ Successfully completed comprehensive repository health assessment and modernizat
 **Verification**:
 ```bash
 ruff check protocol/ storage/ api/ app_testonly/ tests/  # All checks passed
-ruff format --check protocol/ storage/ api/ app/ tests/  # 37 files already formatted
+ruff format --check protocol/ storage/ api/ app_testonly/ tests/  # 37 files already formatted
 ```
 
 ### 3. New/Updated Config Files
@@ -131,7 +131,7 @@ ruff format --check protocol/ storage/ api/ app/ tests/  # 37 files already form
 #### `.github/CODEOWNERS` ✅ NEW
 
 **Default ownership**: @wombatvagina69-crypto  
-**Specific paths**: protocol/, storage/, api/, app/, docs/, tests/
+**Specific paths**: protocol/, storage/, api/, app_testonly/, docs/, tests/
 
 ### 4. Test & Coverage Plan
 
@@ -190,12 +190,12 @@ open htmlcov/index.html
 
 **Command**:
 ```bash
-bandit -r protocol/ storage/ api/ app/
+bandit -r protocol/ storage/ api/ app_testonly/
 ```
 
 **Results**: 2 findings (both acceptable)
 
-**Finding 1**: Hardcoded temp directory in `app/main.py:33`
+**Finding 1**: Hardcoded temp directory in `app_testonly/main.py:33`
 ```python
 state = OlympusState(os.getenv("OLY_DB_PATH", "/tmp/olympus.sqlite"))
 ```
@@ -203,7 +203,7 @@ state = OlympusState(os.getenv("OLY_DB_PATH", "/tmp/olympus.sqlite"))
 **Assessment**: ✅ Acceptable - Development default, overridable via env var  
 **Recommendation**: Document in production deployment guide
 
-**Finding 2**: Hardcoded temp directory in `app/state.py:67`
+**Finding 2**: Hardcoded temp directory in `app_testonly/state.py:67`
 ```python
 def __init__(self, db_path: str = "/tmp/olympus.sqlite"):
 ```
@@ -389,10 +389,10 @@ pre-commit run --all-files
 ```bash
 python tools/validate_schemas.py
 ruff check protocol/ storage/ api/ app_testonly/ tests/
-ruff format --check protocol/ storage/ api/ app/ tests/
+ruff format --check protocol/ storage/ api/ app_testonly/ tests/
 mypy protocol/ storage/ api/
-bandit -r protocol/ storage/ api/ app/
-pytest tests/ -m "not postgres" --cov=protocol --cov=storage --cov=api --cov=app
+bandit -r protocol/ storage/ api/ app_testonly/
+pytest tests/ -m "not postgres" --cov=protocol --cov=storage --cov=api --cov=app_testonly
 pytest tests/ -m "postgres"  # Requires DATABASE_URL
 ```
 
@@ -460,7 +460,7 @@ pytest tests/ -m "not postgres" --cov=protocol --cov=storage --cov=api --cov=app
 | Module | Coverage |
 |--------|----------|
 | protocol/ | **92%** avg |
-| app/ | **82%** avg |
+| app_testonly/ | **82%** avg |
 | storage/ | 18%* |
 | api/ | 0%* |
 | **Overall** | **61%** |
@@ -546,11 +546,11 @@ pytest tests/ -m "not postgres" --cov=protocol --cov=storage --cov=api --cov=app
 
 **Commands Reference**:
 - Lint: `ruff check protocol/ storage/ api/ app_testonly/ tests/`
-- Format: `ruff format protocol/ storage/ api/ app/ tests/`
+- Format: `ruff format protocol/ storage/ api/ app_testonly/ tests/`
 - Type check: `mypy protocol/ storage/ api/`
 - Test: `pytest tests/ -v`
-- Coverage: `pytest --cov=protocol --cov=storage --cov=api --cov=app`
-- Security: `bandit -r protocol/ storage/ api/ app/`
+- Coverage: `pytest --cov=protocol --cov=storage --cov=api --cov=app_testonly`
+- Security: `bandit -r protocol/ storage/ api/ app_testonly/`
 
 **Key Files**:
 - Configuration: `pyproject.toml`
