@@ -38,6 +38,7 @@ from urllib.parse import urlparse
 from fastapi import FastAPI, HTTPException, Query
 from pydantic import BaseModel
 
+from api.ingest import router as ingest_router
 from protocol.canonical_json import canonical_json_encode
 
 
@@ -229,9 +230,12 @@ class HeaderVerificationResponse(BaseModel):
 # Initialize FastAPI app
 app = FastAPI(
     title="Olympus Public Audit API",
-    description="Read-only API for verifying Olympus ledger, proofs, and signatures",
+    description="API for verifying and ingesting Olympus ledger records, proofs, and signatures",
     version="0.5.0",
 )
+
+# Register write/ingest endpoints
+app.include_router(ingest_router)
 
 
 @app.get("/")
@@ -240,13 +244,16 @@ async def root() -> dict[str, Any]:
     return {
         "name": "Olympus Public Audit API",
         "version": "0.5.0",
-        "description": "Read-only API for verifying Olympus protocol integrity",
+        "description": "API for verifying and ingesting Olympus protocol records",
         "endpoints": [
             "/shards",
             "/shards/{shard_id}/header/latest",
             "/shards/{shard_id}/header/latest/verify",
             "/shards/{shard_id}/proof",
             "/ledger/{shard_id}/tail",
+            "/ingest/records",
+            "/ingest/records/{proof_id}/proof",
+            "/health",
         ],
     }
 
@@ -533,8 +540,36 @@ async def health() -> dict[str, Any]:
         "connected" if _storage is not None else ("error" if _db_error else "not_initialized")
     )
 
+    # Attempt a lightweight DB connectivity check when connected
+    db_check = False
+    if _storage is not None:
+        try:
+            from psycopg import connect
+
+            DATABASE_URL = os.environ.get("DATABASE_URL", "")
+            if DATABASE_URL:
+                with connect(DATABASE_URL) as conn, conn.cursor() as cur:
+                    cur.execute("SELECT 1")
+                    result = cur.fetchone()
+                    db_check = result is not None and result[0] == 1
+        except Exception:
+            db_check = False
+            db_status = "degraded"
+
+    overall = "healthy" if db_status != "error" else "degraded"
+
     return {
-        "status": "healthy",
+        "status": overall,
         "version": "0.5.0",
         "database": db_status,
+        "db_check": db_check,
+        "endpoints": [
+            "/shards",
+            "/shards/{shard_id}/header/latest",
+            "/shards/{shard_id}/header/latest/verify",
+            "/shards/{shard_id}/proof",
+            "/ledger/{shard_id}/tail",
+            "/ingest/records",
+            "/ingest/records/{proof_id}/proof",
+        ],
     }
