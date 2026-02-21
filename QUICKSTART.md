@@ -522,10 +522,10 @@ mypy protocol/ storage/ api/
 pytest tests/ -v
 
 # Coverage
-pytest --cov=protocol --cov=storage --cov=api --cov=app
+pytest --cov=protocol --cov=app_testonly
 
 # Security
-bandit -r protocol/ storage/ api/ app/
+bandit -r protocol/ storage/ api/ app_testonly/
 
 # Run app
 uvicorn api.app:app --reload
