@@ -23,7 +23,6 @@ Olympus allows documents to be redacted while providing cryptographic proof that
 
 ## Proof System
 
-- Uses circom circuits
-- Proves Merkle inclusion
-- Demonstrates structural validity
-- Supports batch verification
+- **Recommended (Phase 0.5+)**: Halo2 (no trusted setup; production-proven in Zcash/Scroll). Python bindings exist (`py-halo2`) though less mature than Rust; circuits should be versioned with explicit parameter pins.
+- Current reference: circom circuits for Merkle inclusion and structural validity.
+- Batch verification is supported at the proof layer.
