@@ -4,40 +4,22 @@ This directory contains the zero-knowledge proof circuits used in Olympus.
 
 ## Circuits
 
-### `inclusion.circom`
+### `document_existence.circom`
 
-A Merkle tree inclusion proof circuit. Proves that a leaf exists in a Merkle tree
-with a given root without revealing the leaf's position.
+Poseidon Merkle inclusion proof that exposes the leaf index as a public input.
 
-**Parameters:**
-- `levels`: Depth of the Merkle tree (default: 20)
+### `redaction_validity.circom`
 
-**Public Inputs:**
-- `root`: The Merkle root to verify against
+Validates that revealed leaves belong to the original Poseidon Merkle root and
+that the redacted commitment only covers the revealed leaves.
 
-**Private Inputs:**
-- `leaf`: The leaf value to prove inclusion of
-- `pathElements`: Sibling hashes along the path to root
-- `pathIndices`: 0/1 values indicating left/right positions
+### `non_existence.circom`
 
-### `redaction_v1.circom`
+Sparse Merkle non-membership proof that constrains the queried leaf to zero.
 
-A redaction proof circuit. Proves that a redacted document is a valid subset
-of an original committed document.
+### Legacy circuits
 
-**Parameters:**
-- `maxLeaves`: Maximum number of leaves in the document tree
-- `treeDepth`: Depth of the Merkle tree
-
-**Public Inputs:**
-- `originalRoot`: Root hash of the original document
-- `revealedRoot`: Root hash of the revealed (non-redacted) portions
-
-**Private Inputs:**
-- `originalLeaves`: All leaf values from original document
-- `revealMask`: Binary mask indicating which leaves are revealed
-- `pathElements`: Merkle proof elements for each leaf
-- `pathIndices`: Merkle proof path indices for each leaf
+`inclusion.circom` and `redaction_v1.circom` remain as reference baselines.
 
 ## Building Circuits
 
@@ -45,26 +27,40 @@ To compile these circuits, you need:
 - [circom](https://docs.circom.io/) compiler
 - [snarkjs](https://github.com/iden3/snarkjs) for proof generation
 
+Groth16 flow (per new requirement):
+
 ```bash
 # Install dependencies
-npm install circomlib
+npm install circomlib snarkjs
 
-# Compile circuit
-circom inclusion.circom --r1cs --wasm --sym
+# Compile circuits (example: document existence)
+circom proofs/circuits/document_existence.circom --r1cs --wasm --sym -o proofs/build
 
-# Generate proving and verification keys
-snarkjs groth16 setup inclusion.r1cs pot12_final.ptau inclusion_0000.zkey
-snarkjs zkey contribute inclusion_0000.zkey inclusion_final.zkey
-snarkjs zkey export verificationkey inclusion_final.zkey verification_key.json
+# Trusted setup (Phase 1 only with Groth16)
+snarkjs groth16 setup proofs/build/document_existence.r1cs proofs/keys/powersOfTau28_hez_final_08.ptau proofs/build/document_existence_0000.zkey
+snarkjs zkey contribute proofs/build/document_existence_0000.zkey proofs/build/document_existence_final.zkey
+snarkjs zkey export verificationkey proofs/build/document_existence_final.zkey proofs/keys/verification_keys/existence_vkey.json
+
+# Prove
+snarkjs groth16 prove proofs/build/document_existence_final.zkey proofs/build/document_existence.wtns proofs/build/document_existence_proof.json proofs/build/document_existence_public.json
+
+# Verify
+snarkjs groth16 verify proofs/keys/verification_keys/existence_vkey.json proofs/build/document_existence_public.json proofs/build/document_existence_proof.json
 ```
+
+## Hash boundary
+
+- Circuits use **Poseidon** for in-circuit hashing (see `proofs/circuits/lib/poseidon.circom`).
+- Python/ledger code uses **BLAKE3** (see `protocol/hashes.py`).
+- Witness generation must translate BLAKE3 leaf commitments into Poseidon field elements before proving.
 
 ## Security Considerations
 
-- These circuits are **reference implementations** for protocol specification
+- These circuits are **reference implementations** for protocol specification.
 - Production use requires:
   - Formal verification
   - Security audit
-  - Trusted setup ceremony
+  - Trusted setup ceremony (Groth16 Phase 1)
   - Parameter tuning for performance
   
 ## References

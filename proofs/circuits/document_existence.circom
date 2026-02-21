@@ -1,0 +1,32 @@
+pragma circom 2.0.0;
+
+/*
+ * Document existence proof.
+ *
+ * Verifies a Poseidon Merkle path from a leaf to a public root. The leaf index
+ * is exposed as a public input to anchor ledger position without revealing the
+ * leaf value.
+ */
+
+include "./lib/merkleProof.circom";
+
+template DocumentExistence(depth) {
+    // Public inputs
+    signal input root;
+    signal input leafIndex;
+
+    // Private inputs
+    signal input leaf;
+    signal input pathElements[depth];
+    signal input pathIndices[depth];
+
+    component merkle = MerkleProof(depth);
+    merkle.leaf <== leaf;
+    merkle.pathElements <== pathElements;
+    merkle.pathIndices <== pathIndices;
+
+    root === merkle.root;
+}
+
+// Default depth 20 (sparse tree friendly)
+component main {public [root, leafIndex]} = DocumentExistence(20);
