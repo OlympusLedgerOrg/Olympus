@@ -23,7 +23,7 @@ def create_shard_header(
     root_hash: bytes,
     timestamp: str,
     previous_header_hash: str = "",
-    timestamp_token: TimestampToken | None = None,
+    timestamp_token: TimestampToken | dict[str, str] | None = None,
 ) -> dict[str, Any]:
     """
     Create a shard header dictionary.
@@ -58,7 +58,11 @@ def create_shard_header(
 
     # Attach RFC 3161 timestamp token after hash commitment (not part of the hash)
     if timestamp_token is not None:
-        header["timestamp_token"] = timestamp_token.to_dict()
+        header["timestamp_token"] = (
+            timestamp_token.to_dict()
+            if hasattr(timestamp_token, "to_dict")
+            else timestamp_token
+        )
 
     return header
 
@@ -95,7 +99,11 @@ def verify_header(
         True if header hash is correct and signature is valid
     """
     # Verify header hash
-    header_without_hash = {k: v for k, v in header.items() if k not in ["header_hash", "signature"]}
+    header_without_hash = {
+        k: v
+        for k, v in header.items()
+        if k not in ["header_hash", "signature", "timestamp_token"]
+    }
     expected_hash = shard_header_hash(header_without_hash).hex()
 
     if header.get("header_hash") != expected_hash:

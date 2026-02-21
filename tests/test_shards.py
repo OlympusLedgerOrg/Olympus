@@ -66,6 +66,31 @@ def test_sign_and_verify_header():
     assert verify_header(header, signature, verify_key) is True
 
 
+def test_sign_and_verify_header_with_timestamp_token_payload():
+    """Verify signatures still validate when timestamp token payload is attached."""
+    signing_key = nacl.signing.SigningKey.generate()
+    verify_key = signing_key.verify_key
+
+    root_hash = hash_bytes(b"test root")
+    timestamp = current_timestamp()
+    token_payload = {
+        "hash_hex": root_hash.hex(),
+        "tsa_url": "https://tsa.example",
+        "tst_hex": "00",
+        "timestamp": timestamp,
+    }
+    header = create_shard_header(
+        shard_id="shard1",
+        root_hash=root_hash,
+        timestamp=timestamp,
+        timestamp_token=token_payload,
+    )
+
+    signature = sign_header(header, signing_key)
+
+    assert verify_header(header, signature, verify_key) is True
+
+
 def test_verify_header_with_bad_signature():
     """Test that verification fails with wrong signature."""
     # Generate two different key pairs
