@@ -39,13 +39,13 @@ circom proofs/circuits/document_existence.circom --r1cs --wasm --sym -o proofs/b
 # Trusted setup (Phase 1 only with Groth16)
 snarkjs groth16 setup proofs/build/document_existence.r1cs proofs/keys/powersOfTau28_hez_final_08.ptau proofs/build/document_existence_0000.zkey
 snarkjs zkey contribute proofs/build/document_existence_0000.zkey proofs/build/document_existence_final.zkey
-snarkjs zkey export verificationkey proofs/build/document_existence_final.zkey proofs/keys/verification_keys/existence_vkey.json
+snarkjs zkey export verificationkey proofs/build/document_existence_final.zkey proofs/keys/verification_keys/document_existence_vkey.json
 
 # Prove
 snarkjs groth16 prove proofs/build/document_existence_final.zkey proofs/build/document_existence.wtns proofs/build/document_existence_proof.json proofs/build/document_existence_public.json
 
 # Verify
-snarkjs groth16 verify proofs/keys/verification_keys/existence_vkey.json proofs/build/document_existence_public.json proofs/build/document_existence_proof.json
+snarkjs groth16 verify proofs/keys/verification_keys/document_existence_vkey.json proofs/build/document_existence_public.json proofs/build/document_existence_proof.json
 
 # Powers of Tau
 # Download a development PTAU (8 powers) for testing:
