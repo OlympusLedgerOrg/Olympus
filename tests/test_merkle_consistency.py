@@ -1,4 +1,5 @@
-from protocol.merkle import MerkleTree
+from protocol.hashes import LEAF_PREFIX, blake3_hash, merkle_parent_hash
+from protocol.merkle import MerkleTree, verify_proof
 
 
 def test_merkle_root_stable_for_same_inputs():
@@ -26,8 +27,6 @@ def test_merkle_leaf_prefix_applied():
     The root produced by MerkleTree must differ from a tree built using
     a node prefix for all levels (i.e., the old behavior without domain separation).
     """
-    from protocol.hashes import LEAF_PREFIX, blake3_hash
-
     leaves = [b"leaf0", b"leaf1"]
     tree = MerkleTree(leaves)
 
@@ -36,8 +35,6 @@ def test_merkle_leaf_prefix_applied():
     leaf0_hash = blake3_hash([LEAF_PREFIX, b"leaf0"])
     leaf1_hash = blake3_hash([LEAF_PREFIX, b"leaf1"])
 
-    from protocol.hashes import merkle_parent_hash
-
     expected_root = merkle_parent_hash(leaf0_hash, leaf1_hash)
 
     assert tree.get_root() == expected_root
@@ -45,8 +42,6 @@ def test_merkle_leaf_prefix_applied():
 
 def test_merkle_proof_verifies_with_domain_separation():
     """Inclusion proofs must verify correctly with the domain-separated leaf scheme."""
-    from protocol.merkle import verify_proof
-
     leaves = [b"alpha", b"beta", b"gamma"]
     tree = MerkleTree(leaves)
 
@@ -57,8 +52,6 @@ def test_merkle_proof_verifies_with_domain_separation():
 
 def test_merkle_proof_leaf_hash_uses_leaf_prefix():
     """MerkleProof.leaf_hash must be the LEAF_PREFIX-domain-separated hash."""
-    from protocol.hashes import LEAF_PREFIX, blake3_hash
-
     leaves = [b"x", b"y"]
     tree = MerkleTree(leaves)
 
