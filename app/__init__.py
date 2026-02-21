@@ -1,1 +1,0 @@
-# Olympus FastAPI application package

@@ -13,6 +13,14 @@ WORKDIR /app
 RUN apt-get update && apt-get install -y --no-install-recommends \
     postgresql-client \
     curl \
+    ca-certificates \
+    gnupg \
+    && mkdir -p /etc/apt/keyrings \
+    && curl -fsSL https://deb.nodesource.com/gpgkey/nodesource-repo.gpg.key \
+       | gpg --dearmor -o /etc/apt/keyrings/nodesource.gpg \
+    && echo "deb [signed-by=/etc/apt/keyrings/nodesource.gpg] https://deb.nodesource.com/node_20.x nodistro main" \
+       > /etc/apt/sources.list.d/nodesource.list \
+    && apt-get update && apt-get install -y --no-install-recommends nodejs \
     && rm -rf /var/lib/apt/lists/* \
     && apt-get clean
 
@@ -29,7 +37,7 @@ RUN pip install --no-cache-dir -r requirements-dev.txt
 
 COPY . .
 
-CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--reload"]
+CMD ["uvicorn", "api.app:app", "--host", "0.0.0.0", "--port", "8000", "--reload"]
 
 # Production stage
 FROM base AS production
@@ -42,9 +50,10 @@ RUN groupadd -r -g 1000 olympus \
 COPY --chown=olympus:olympus protocol /app/protocol
 COPY --chown=olympus:olympus storage /app/storage
 COPY --chown=olympus:olympus api /app/api
-COPY --chown=olympus:olympus app /app/app
+COPY --chown=olympus:olympus app_testonly /app/app_testonly
 COPY --chown=olympus:olympus ui /app/ui
 COPY --chown=olympus:olympus schemas /app/schemas
+COPY --chown=olympus:olympus proofs /app/proofs
 
 # Security: Set explicit file permissions (read-only for all, directories executable)
 RUN find /app -type f -exec chmod 444 {} \; \
@@ -70,4 +79,4 @@ LABEL org.opencontainers.image.licenses="Apache-2.0"
 LABEL security.non-root="true"
 
 # Run the application
-CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
+CMD ["uvicorn", "api.app:app", "--host", "0.0.0.0", "--port", "8000"]

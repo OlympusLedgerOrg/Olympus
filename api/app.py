@@ -20,7 +20,7 @@ LAZY INITIALIZATION:
 - DB-dependent endpoints return HTTP 503 if the database is not available
 - Non-DB endpoints (/, /health) always work
 
-For testing proof logic without PostgreSQL, use app/main.py (test-only).
+For testing proof logic without PostgreSQL, use app_testonly/main.py (test-only).
 
 See docs/08_database_strategy.md for complete database strategy documentation.
 

@@ -3,6 +3,11 @@ Canonical document representation for Olympus
 
 This module implements deterministic canonicalization of documents to ensure
 consistent hashing regardless of superficial formatting differences.
+
+This provides basic structural canonicalization: JSON key sorting, whitespace
+normalization, and deterministic byte encoding. For multi-format artifact
+ingestion (JCS/RFC 8785, HTML, DOCX, PDF) with version-pinned pipelines,
+see protocol/canonicalizer.py instead.
 """
 
 import json

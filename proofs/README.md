@@ -2,6 +2,21 @@
 
 This directory contains the zero-knowledge proof circuits used in Olympus.
 
+## Quick Start
+
+```bash
+# 1. Install npm dependencies (circomlib, snarkjs)
+cd proofs/
+npm install
+
+# 2. Download PTAU, compile circuits, generate dev verification keys
+#    Requires: circom compiler in PATH
+bash setup_circuits.sh
+
+# 3. Smoke test — prove and verify one example of each circuit
+bash smoke_test.sh
+```
+
 ## Circuits
 
 ### `document_existence.circom`
@@ -21,39 +36,68 @@ Sparse Merkle non-membership proof that constrains the queried leaf to zero.
 
 `inclusion.circom` and `redaction_v1.circom` remain as reference baselines.
 
-## Building Circuits
+## Directory Layout
 
-To compile these circuits, you need:
-- [circom](https://docs.circom.io/) compiler
-- [snarkjs](https://github.com/iden3/snarkjs) for proof generation
+```
+proofs/
+├── circuits/
+│   ├── lib/
+│   │   ├── poseidon.circom       # Re-exports Poseidon from circomlib
+│   │   └── merkleProof.circom    # Shared MerkleProof(depth) template
+│   ├── document_existence.circom
+│   ├── redaction_validity.circom
+│   ├── non_existence.circom
+│   ├── inclusion.circom          # Legacy reference
+│   └── redaction_v1.circom       # Legacy reference
+├── keys/
+│   └── verification_keys/        # Exported vkey JSON files
+├── test_inputs/
+│   └── generate_inputs.js        # Generates valid Poseidon Merkle inputs
+├── build/                        # Compiled artifacts (git-ignored)
+├── setup_circuits.sh             # PTAU download + compilation + key gen
+├── smoke_test.sh                 # End-to-end prove + verify
+└── package.json                  # npm dependencies
+```
 
-Groth16 flow (per new requirement):
+## Scripts
+
+### `setup_circuits.sh`
+
+Downloads the Hermez Powers of Tau file (2^17), compiles all three main
+circuits with `circom`, runs Groth16 trusted setup with a single dev
+contribution, and exports verification keys to `keys/verification_keys/`.
+Falls back to generating the PTAU locally if the download is unavailable.
+
+### `smoke_test.sh`
+
+Generates valid test inputs via `test_inputs/generate_inputs.js`, then for
+each circuit: generates the witness, creates a Groth16 proof, and verifies it.
+
+### `test_inputs/generate_inputs.js`
+
+Node.js script that builds Poseidon Merkle trees using circomlibjs and writes
+the corresponding JSON input files that circom's WASM witness generators
+expect.
+
+## Building Circuits Manually
 
 ```bash
-# Install dependencies
-npm install circomlib snarkjs
+# Compile (example: document existence)
+circom proofs/circuits/document_existence.circom --r1cs --wasm --sym \
+  -l proofs/node_modules -o proofs/build
 
-# Compile circuits (example: document existence)
-circom proofs/circuits/document_existence.circom --r1cs --wasm --sym -o proofs/build
+# Groth16 setup
+npx snarkjs groth16 setup proofs/build/document_existence.r1cs \
+  proofs/keys/powersOfTau28_hez_final_15.ptau \
+  proofs/build/document_existence_0000.zkey
 
-# Trusted setup (Phase 1 only with Groth16)
-snarkjs groth16 setup proofs/build/document_existence.r1cs proofs/keys/powersOfTau28_hez_final_08.ptau proofs/build/document_existence_0000.zkey
-snarkjs zkey contribute proofs/build/document_existence_0000.zkey proofs/build/document_existence_final.zkey
-snarkjs zkey export verificationkey proofs/build/document_existence_final.zkey proofs/keys/verification_keys/document_existence_vkey.json
+npx snarkjs zkey contribute proofs/build/document_existence_0000.zkey \
+  proofs/build/document_existence_final.zkey \
+  --name="Dev contribution"
 
-# Prove
-snarkjs groth16 prove proofs/build/document_existence_final.zkey proofs/build/document_existence.wtns proofs/build/document_existence_proof.json proofs/build/document_existence_public.json
-
-# Verify
-snarkjs groth16 verify proofs/keys/verification_keys/document_existence_vkey.json proofs/build/document_existence_public.json proofs/build/document_existence_proof.json
-
-# Powers of Tau
-# Download a development PTAU (8 powers) for testing:
-#   curl -o proofs/keys/powersOfTau28_hez_final_08.ptau https://hermez.s3-eu-west-1.amazonaws.com/powersOfTau28_hez_final_08.ptau
-# Use the full powers file for production:
-#   curl -o proofs/keys/powersOfTau28_hez_final.ptau https://hermez.s3-eu-west-1.amazonaws.com/powersOfTau28_hez_final.ptau
-# Choose powers such that 2^power comfortably exceeds the circuit constraint
-# count; the 08 file is only suitable for tiny dev circuits, not production.
+npx snarkjs zkey export verificationkey \
+  proofs/build/document_existence_final.zkey \
+  proofs/keys/verification_keys/document_existence_vkey.json
 ```
 
 ## Hash boundary
@@ -65,10 +109,12 @@ snarkjs groth16 verify proofs/keys/verification_keys/document_existence_vkey.jso
 ## Security Considerations
 
 - These circuits are **reference implementations** for protocol specification.
+- Development keys use a single contribution and are NOT suitable for production.
 - Production use requires:
   - Formal verification
   - Security audit
-  - Trusted setup ceremony (Groth16 Phase 1)
+  - Phase 2 ceremony with at least 3 independent contributors
+  - Verification keys published publicly with ceremony transcript
   - Parameter tuning for performance
   
 ## References
