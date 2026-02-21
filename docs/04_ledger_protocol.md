@@ -132,4 +132,4 @@ To control RFC 3161 (or equivalent) timestamping costs at scale:
 - **Batch window**: All entries within the window are covered by the same anchor, reducing per-entry cost while keeping bounded delay.
 - **Integrity linkage**: Each batch anchor references the Merkle root at the end of the window; the next window links by previous hash as usual.
 - **Backpressure**: If anchoring fails, halt new batch closure until the anchor succeeds to avoid unanchored gaps.
-- **Auditability**: Record the timestamp token and TSA certificate chain alongside the batch root in the ledger so verifiers can validate the anchor independently.
+- **Auditability**: Record the timestamp token and TSA certificate chain (RFC 3161 or equivalent) alongside the batch root in the ledger so verifiers can validate the anchor independently.
