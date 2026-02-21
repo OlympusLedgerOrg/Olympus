@@ -46,6 +46,12 @@ snarkjs groth16 prove proofs/build/document_existence_final.zkey proofs/build/do
 
 # Verify
 snarkjs groth16 verify proofs/keys/verification_keys/existence_vkey.json proofs/build/document_existence_public.json proofs/build/document_existence_proof.json
+
+# Powers of Tau
+# Download a development PTAU (8 powers) for testing:
+#   curl -o proofs/keys/powersOfTau28_hez_final_08.ptau https://hermez.s3-eu-west-1.amazonaws.com/powersOfTau28_hez_final_08.ptau
+# Use the full powers file for production:
+#   curl -o proofs/keys/powersOfTau28_hez_final.ptau https://hermez.s3-eu-west-1.amazonaws.com/powersOfTau28_hez_final.ptau
 ```
 
 ## Hash boundary

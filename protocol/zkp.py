@@ -82,6 +82,7 @@ class Groth16Prover:
 
         Expects the witness to be generated already (e.g., via circom/wasm).
         """
+        self._check_snarkjs()
         witness = witness_path or self.circuits_dir / "build" / "document_existence.wtns"
         zkey = zkey_path or self.circuits_dir / "build" / "document_existence_final.zkey"
         proof_file = proof_path or self.circuits_dir / "build" / "document_existence_proof.json"
@@ -111,7 +112,12 @@ class Groth16Prover:
     ) -> bool:
         """Verify a Groth16 proof with snarkjs."""
         self._check_snarkjs()
-        vkey = verification_key_path or self.circuits_dir / "keys" / "verification_keys" / "existence_vkey.json"
+        if verification_key_path is not None:
+            vkey = verification_key_path
+        else:
+            candidate = self.circuits_dir / "keys" / "verification_keys" / "existence_vkey.json"
+            fallback = self.circuits_dir.parent / "keys" / "verification_keys" / "existence_vkey.json"
+            vkey = candidate if candidate.exists() else fallback
         if not vkey.exists():
             raise FileNotFoundError(f"Verification key not found: {vkey}")
 

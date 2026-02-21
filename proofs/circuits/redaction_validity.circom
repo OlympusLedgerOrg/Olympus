@@ -29,8 +29,10 @@ template RedactionValidity(maxLeaves, depth) {
     for (var i = 0; i < maxLeaves; i++) {
         inclusionProofs[i] = MerkleProof(depth);
         inclusionProofs[i].leaf <== originalLeaves[i];
-        inclusionProofs[i].pathElements <== pathElements[i];
-        inclusionProofs[i].pathIndices <== pathIndices[i];
+        for (var j = 0; j < depth; j++) {
+            inclusionProofs[i].pathElements[j] <== pathElements[i][j];
+            inclusionProofs[i].pathIndices[j] <== pathIndices[i][j];
+        }
 
         // Only constrain the root when revealMask is 1
         revealMask[i] * (originalRoot - inclusionProofs[i].root) === 0;
@@ -39,13 +41,21 @@ template RedactionValidity(maxLeaves, depth) {
     }
 
     // Aggregate revealed leaves into a Poseidon commitment
-    component aggregator = Poseidon(maxLeaves + 1);
-    aggregator.inputs[0] <== revealedCount;
-    for (var j = 0; j < maxLeaves; j++) {
-        aggregator.inputs[j + 1] <== revealedLeaves[j];
+    signal acc[maxLeaves];
+    component initHash = Poseidon(2);
+    initHash.inputs[0] <== revealedCount;
+    initHash.inputs[1] <== revealedLeaves[0];
+    acc[0] <== initHash.out;
+
+    component hashers[maxLeaves - 1];
+    for (var k = 1; k < maxLeaves; k++) {
+        hashers[k - 1] = Poseidon(2);
+        hashers[k - 1].inputs[0] <== acc[k - 1];
+        hashers[k - 1].inputs[1] <== revealedLeaves[k];
+        acc[k] <== hashers[k - 1].out;
     }
 
-    redactedCommitment === aggregator.out;
+    redactedCommitment === acc[maxLeaves - 1];
 }
 
 // Default parameters: 16 leaves, depth 4
