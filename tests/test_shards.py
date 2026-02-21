@@ -16,6 +16,11 @@ from protocol.shards import (
 from protocol.timestamps import current_timestamp
 
 
+class _DummyTimestampToken:
+    def to_dict(self) -> dict[str, str]:
+        return {"tst": "00", "tsa_url": "https://tsa.example", "hash_algorithm": "sha256"}
+
+
 def test_create_shard_header():
     """Test creating a shard header."""
     root_hash = hash_bytes(b"test root")
@@ -29,6 +34,21 @@ def test_create_shard_header():
     assert header["previous_header_hash"] == ""
     assert "header_hash" in header
     assert len(bytes.fromhex(header["header_hash"])) == 32
+
+
+def test_create_shard_header_with_timestamp_token():
+    """Test creating a shard header with an RFC 3161 timestamp token payload."""
+    root_hash = hash_bytes(b"test root")
+    timestamp = current_timestamp()
+
+    header = create_shard_header(
+        shard_id="shard1",
+        root_hash=root_hash,
+        timestamp=timestamp,
+        timestamp_token=_DummyTimestampToken(),  # type: ignore[arg-type]
+    )
+
+    assert header["timestamp_token"]["tst"] == "00"
 
 
 def test_create_shard_header_with_previous():
