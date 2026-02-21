@@ -1,0 +1,13 @@
+{
+  "name": "jsonpath",
+  "version": "1.1.1",
+  "private": true,
+  "main": "index.js",
+  "license": "MIT",
+  "description": "Safe, minimal JSONPath parser for Olympus proofs (alias for insecure jsonpath)",
+  "keywords": [
+    "jsonpath",
+    "secure",
+    "olympus"
+  ]
+}
