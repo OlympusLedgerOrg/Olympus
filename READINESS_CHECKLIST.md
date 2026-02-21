@@ -24,10 +24,10 @@ python -c "from protocol import hashes; print('✓ Protocol imports working')"
 ### 1. Code Linting & Formatting
 ```bash
 # Check code quality (E, W, F, I, UP rules)
-ruff check protocol/ storage/ api/ app/ tests/
+ruff check protocol/ storage/ api/ app_testonly/ tests/
 
 # Auto-fix issues
-ruff check protocol/ storage/ api/ app/ tests/ --fix
+ruff check protocol/ storage/ api/ app_testonly/ tests/ --fix
 
 # Check formatting
 ruff format --check protocol/ storage/ api/ app/ tests/
@@ -154,7 +154,7 @@ The GitHub Actions workflow automatically runs on push and PR:
 python -m pip install --upgrade pip
 pip install -e ".[dev]"
 python tools/validate_schemas.py
-ruff check protocol/ storage/ api/ app/ tests/
+ruff check protocol/ storage/ api/ app_testonly/ tests/
 ruff format --check protocol/ storage/ api/ app/ tests/
 mypy protocol/ storage/ api/
 bandit -r protocol/ storage/ api/ app/ -f txt

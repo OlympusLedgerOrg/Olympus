@@ -63,7 +63,7 @@ Successfully completed comprehensive repository health assessment and modernizat
 
 **Verification**:
 ```bash
-ruff check protocol/ storage/ api/ app/ tests/  # All checks passed
+ruff check protocol/ storage/ api/ app_testonly/ tests/  # All checks passed
 ruff format --check protocol/ storage/ api/ app/ tests/  # 37 files already formatted
 ```
 
@@ -368,7 +368,7 @@ export DATABASE_URL='postgresql://yourusername@localhost:5432/olympus'
 
 # 3. Verify installation
 python tools/validate_schemas.py
-ruff check protocol/ storage/ api/ app/ tests/
+ruff check protocol/ storage/ api/ app_testonly/ tests/
 mypy protocol/ storage/ api/
 pytest tests/ -v
 
@@ -388,7 +388,7 @@ pre-commit run --all-files
 
 ```bash
 python tools/validate_schemas.py
-ruff check protocol/ storage/ api/ app/ tests/
+ruff check protocol/ storage/ api/ app_testonly/ tests/
 ruff format --check protocol/ storage/ api/ app/ tests/
 mypy protocol/ storage/ api/
 bandit -r protocol/ storage/ api/ app/
@@ -434,7 +434,7 @@ feat: Repository Health & Modernization - Comprehensive Assessment & Fixes
 # Quick verification
 python3 -m venv .venv && source .venv/bin/activate
 pip install -r requirements.txt -r requirements-dev.txt
-ruff check protocol/ storage/ api/ app/ tests/
+ruff check protocol/ storage/ api/ app_testonly/ tests/
 mypy protocol/ storage/ api/
 pytest tests/ -m "not postgres" --cov=protocol --cov=storage --cov=api --cov=app
 ```
@@ -545,7 +545,7 @@ pytest tests/ -m "not postgres" --cov=protocol --cov=storage --cov=api --cov=app
 - `README.md` - Project overview
 
 **Commands Reference**:
-- Lint: `ruff check protocol/ storage/ api/ app/ tests/`
+- Lint: `ruff check protocol/ storage/ api/ app_testonly/ tests/`
 - Format: `ruff format protocol/ storage/ api/ app/ tests/`
 - Type check: `mypy protocol/ storage/ api/`
 - Test: `pytest tests/ -v`

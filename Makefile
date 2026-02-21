@@ -5,7 +5,7 @@ check:
 	ruff check protocol/ storage/ api/ app_testonly/ tests/
 	ruff format --check protocol/ storage/ api/ app_testonly/ tests/
 	mypy protocol/ storage/ api/
-	bandit -r protocol/ storage/ api/ app/ -f txt
+	bandit -r protocol/ storage/ api/ app_testonly/ -f txt
 	pytest tests/ -v --tb=short -m "not postgres" \
 	  --cov=protocol --cov=app_testonly \
 	  --cov-report=term-missing --cov-report=xml \

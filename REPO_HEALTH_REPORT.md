@@ -92,7 +92,7 @@ Successfully installed olympus-0.1.0
 
 ### Ruff Check Results
 ```bash
-$ ruff check protocol/ storage/ api/ app/ tests/
+$ ruff check protocol/ storage/ api/ app_testonly/ tests/
 All checks passed!
 ```
 
@@ -395,7 +395,7 @@ pytest -q -m "not postgres"
 ### Full CI Simulation
 ```bash
 python tools/validate_schemas.py
-ruff check protocol/ storage/ api/ app/ tests/
+ruff check protocol/ storage/ api/ app_testonly/ tests/
 ruff format --check protocol/ storage/ api/ app/ tests/
 mypy protocol/ storage/ api/
 bandit -r protocol/ storage/ api/ app/ -f txt
@@ -506,7 +506,7 @@ ruff check . && mypy protocol/ storage/ api/ && pytest -q -m "not postgres"
 ### Full CI Simulation
 ```bash
 python tools/validate_schemas.py
-ruff check protocol/ storage/ api/ app/ tests/
+ruff check protocol/ storage/ api/ app_testonly/ tests/
 ruff format --check .
 mypy protocol/ storage/ api/
 bandit -r protocol/ storage/ api/ app/
