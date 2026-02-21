@@ -7,6 +7,7 @@ ingestion pipeline, and version pinning constants.
 
 import io
 import json
+import zipfile
 from decimal import Decimal
 
 import pikepdf
@@ -218,6 +219,126 @@ class TestProcessArtifact:
         raw = b"test"
         result = process_artifact(raw, "text/plain")
         assert "lxml_pinned" in result
+
+    def test_html_artifact(self):
+        raw = b"<html><body><p>hello</p></body></html>"
+        result = process_artifact(raw, "text/html")
+        assert result["mode"] == "html_v1"
+        assert result["raw_hash"]
+        assert result["canonical_hash"]
+
+    def test_docx_artifact(self):
+        raw = _build_minimal_docx()
+        result = process_artifact(
+            raw,
+            "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        )
+        assert result["mode"] == "docx_v1"
+        assert result["raw_hash"]
+        assert result["canonical_hash"]
+
+
+# ---------------------------------------------------------------------------
+# HTML canonicalization
+# ---------------------------------------------------------------------------
+
+
+class TestHtmlV1:
+    def test_sorted_attributes(self):
+        html = b"<html><body><div z='1' a='2'>hello</div></body></html>"
+        result = Canonicalizer.html_v1(html)
+        assert b"<div" in result
+        # Attributes should be sorted alphabetically
+        a_pos = result.index(b"a=")
+        z_pos = result.index(b"z=")
+        assert a_pos < z_pos
+
+    def test_strips_scripts(self):
+        html = b"<html><body><script>alert(1)</script><p>content</p></body></html>"
+        result = Canonicalizer.html_v1(html)
+        assert b"<script" not in result
+        assert b"content" in result
+
+    def test_strips_styles(self):
+        html = b"<html><body><style>.x{color:red}</style><p>text</p></body></html>"
+        result = Canonicalizer.html_v1(html)
+        assert b"<style" not in result
+
+    def test_nfc_normalization(self):
+        # Both decomposed and precomposed should produce the same output
+        precomposed = "<html><body><p>\u00e9</p></body></html>".encode()
+        decomposed = "<html><body><p>e\u0301</p></body></html>".encode()
+        assert Canonicalizer.html_v1(precomposed) == Canonicalizer.html_v1(decomposed)
+
+    def test_returns_bytes(self):
+        html = b"<html><body><p>hello</p></body></html>"
+        result = Canonicalizer.html_v1(html)
+        assert isinstance(result, bytes)
+
+    def test_invalid_html_raises(self):
+        with pytest.raises(CanonicalizationError, match="HTML Parse Failure"):
+            Canonicalizer.html_v1(b"\xff\xfe not utf-8 not html \x00\x01")
+
+
+# ---------------------------------------------------------------------------
+# DOCX canonicalization
+# ---------------------------------------------------------------------------
+
+
+def _build_minimal_docx() -> bytes:
+    """Create a minimal valid DOCX (ZIP with word/document.xml)."""
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
+        zf.writestr(
+            "word/document.xml",
+            '<?xml version="1.0" encoding="UTF-8"?>'
+            '<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">'
+            "<w:body><w:p><w:r><w:t>Hello</w:t></w:r></w:p></w:body>"
+            "</w:document>",
+        )
+        zf.writestr(
+            "_rels/.rels",
+            '<?xml version="1.0"?><Relationships xmlns="http://schemas.openxmlformats.org/'
+            'package/2006/relationships"></Relationships>',
+        )
+        zf.writestr(
+            "docProps/core.xml",
+            '<?xml version="1.0"?><cp:coreProperties '
+            'xmlns:cp="http://schemas.openxmlformats.org/package/2006/metadata/core-properties">'
+            "</cp:coreProperties>",
+        )
+    return buf.getvalue()
+
+
+class TestDocxV1:
+    def test_returns_32_bytes(self):
+        docx = _build_minimal_docx()
+        result = Canonicalizer.docx_v1(docx)
+        assert isinstance(result, bytes)
+        assert len(result) == 32
+
+    def test_deterministic(self):
+        docx = _build_minimal_docx()
+        assert Canonicalizer.docx_v1(docx) == Canonicalizer.docx_v1(docx)
+
+    def test_invalid_docx_raises(self):
+        with pytest.raises(CanonicalizationError, match="DOCX C14N failure"):
+            Canonicalizer.docx_v1(b"not a zip file at all")
+
+    def test_strips_volatile_metadata(self):
+        # The core.xml is stripped (docProps/core.xml in the skip list)
+        # Two DOCXes with different core.xml but same document.xml should hash the same
+        buf1 = io.BytesIO()
+        with zipfile.ZipFile(buf1, "w") as zf:
+            zf.writestr("word/document.xml", "<root/>")
+            zf.writestr("docProps/core.xml", "<core>v1</core>")
+
+        buf2 = io.BytesIO()
+        with zipfile.ZipFile(buf2, "w") as zf:
+            zf.writestr("word/document.xml", "<root/>")
+            zf.writestr("docProps/core.xml", "<core>v2</core>")
+
+        assert Canonicalizer.docx_v1(buf1.getvalue()) == Canonicalizer.docx_v1(buf2.getvalue())
 
 
 # ---------------------------------------------------------------------------
