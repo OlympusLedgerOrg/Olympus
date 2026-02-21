@@ -9,7 +9,7 @@ from urllib.request import urlopen
 
 import nacl.exceptions
 import nacl.signing
-from fastapi import FastAPI, Query, Request
+from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.responses import JSONResponse
 from fastapi.templating import Jinja2Templates
 
@@ -18,6 +18,9 @@ API_BASE = os.environ.get("UI_API_BASE", "http://127.0.0.1:8000")
 _parsed_api_base = urlparse(API_BASE)
 if _parsed_api_base.scheme not in {"http", "https"} or not _parsed_api_base.netloc:
     raise ValueError("UI_API_BASE must be an absolute http(s) URL")
+
+# Debug UI is disabled by default; set OLYMPUS_DEBUG_UI=true to enable.
+DEBUG_UI_ENABLED = os.environ.get("OLYMPUS_DEBUG_UI", "false").lower() == "true"
 
 app = FastAPI(title="Olympus Debug Console", version="0.1.0")
 templates = Jinja2Templates(directory="ui/templates")
@@ -52,6 +55,8 @@ def _is_chain_broken(entries: list[dict[str, Any]]) -> bool:
 @app.get("/")
 def debug_console(request: Request):
     """Render the debug console view."""
+    if not DEBUG_UI_ENABLED:
+        raise HTTPException(status_code=404, detail="Debug UI is disabled in this environment.")
     context: dict[str, Any] = {
         "request": request,
         "api_base": API_BASE,
@@ -107,6 +112,8 @@ def proof_explorer(
     version: int = Query(..., ge=1),
 ):
     """Proxy proof explorer requests to the API."""
+    if not DEBUG_UI_ENABLED:
+        raise HTTPException(status_code=404, detail="Debug UI is disabled in this environment.")
     path = (
         f"/shards/{quote(shard_id)}/proof?record_type={quote(record_type)}"
         f"&record_id={quote(record_id)}&version={version}"

@@ -80,7 +80,7 @@ class StorageLayer:
         """
         Initialize database schema.
 
-        Reads and executes the schema migration SQL.
+        Reads and executes all schema migration SQL files in order.
         All DDL statements execute in a single transaction.
         """
         import os
@@ -88,15 +88,16 @@ class StorageLayer:
         # Find migrations directory relative to this file
         storage_dir = os.path.dirname(os.path.abspath(__file__))
         repo_root = os.path.dirname(storage_dir)
-        schema_path = os.path.join(repo_root, "migrations", "001_init_schema.sql")
+        migrations_dir = os.path.join(repo_root, "migrations")
 
-        with open(schema_path) as f:
-            schema_sql = f.read()
+        migration_files = sorted(f for f in os.listdir(migrations_dir) if f.endswith(".sql"))
 
         # BEGIN TRANSACTION (implicit via context manager)
         with self._get_connection() as conn:
             with conn.cursor(row_factory=dict_row) as cur:
-                cur.execute(schema_sql)
+                for migration_file in migration_files:
+                    with open(os.path.join(migrations_dir, migration_file)) as f:
+                        cur.execute(f.read())
             # COMMIT TRANSACTION (explicit)
             conn.commit()
         # END TRANSACTION (implicit via context manager exit)
@@ -534,6 +535,90 @@ class StorageLayer:
             )
             rows = cur.fetchall()
             return [row["shard_id"] for row in rows]
+
+    def store_timestamp_token(
+        self,
+        shard_id: str,
+        header_hash_hex: str,
+        token: "Any",
+    ) -> None:
+        """
+        Persist an RFC 3161 timestamp token for a shard header.
+
+        The token must have been issued for the given ``header_hash_hex``.
+        This operation is idempotent – a second insert for the same
+        ``(shard_id, header_hash)`` is silently ignored.
+
+        Args:
+            shard_id: Shard identifier.
+            header_hash_hex: Hex-encoded 32-byte shard header hash.
+            token: :class:`protocol.rfc3161.TimestampToken` instance.
+        """
+        header_hash_bytes = bytes.fromhex(header_hash_hex)
+        if len(header_hash_bytes) != 32:
+            raise ValueError(
+                f"header_hash_hex must encode exactly 32 bytes, got {len(header_hash_bytes)}"
+            )
+
+        ts = datetime.fromisoformat(token.timestamp.replace("Z", "+00:00"))
+        with self._get_connection() as conn, conn.cursor(row_factory=dict_row) as cur:
+            cur.execute(
+                """
+                INSERT INTO timestamp_tokens
+                    (shard_id, header_hash, tsa_url, tst_hex, hash_hex, ts)
+                VALUES (%s, %s, %s, %s, %s, %s)
+                ON CONFLICT (shard_id, header_hash) DO NOTHING
+                """,
+                (
+                    shard_id,
+                    header_hash_bytes,
+                    token.tsa_url,
+                    token.tst_bytes.hex(),
+                    token.hash_hex,
+                    ts,
+                ),
+            )
+            conn.commit()
+
+    def get_timestamp_token(self, shard_id: str, header_hash_hex: str) -> "dict[str, Any] | None":
+        """
+        Retrieve the RFC 3161 timestamp token for a shard header, if stored.
+
+        Args:
+            shard_id: Shard identifier.
+            header_hash_hex: Hex-encoded 32-byte shard header hash.
+
+        Returns:
+            Dictionary with keys ``tsa_url``, ``tst_hex``, ``hash_hex``,
+            ``timestamp`` (ISO 8601 with 'Z' suffix), or ``None`` if not found.
+        """
+        header_hash_bytes = bytes.fromhex(header_hash_hex)
+        with self._get_connection() as conn, conn.cursor(row_factory=dict_row) as cur:
+            cur.execute(
+                """
+                SELECT tsa_url, tst_hex, hash_hex, ts
+                FROM timestamp_tokens
+                WHERE shard_id = %s AND header_hash = %s
+                """,
+                (shard_id, header_hash_bytes),
+            )
+            row = cur.fetchone()
+
+        if row is None:
+            return None
+
+        ts_value = row["ts"]
+        if isinstance(ts_value, datetime):
+            timestamp_str = ts_value.isoformat().replace("+00:00", "Z")
+        else:
+            timestamp_str = str(ts_value)
+
+        return {
+            "tsa_url": row["tsa_url"],
+            "tst_hex": row["tst_hex"],
+            "hash_hex": row["hash_hex"],
+            "timestamp": timestamp_str,
+        }
 
     def verify_persisted_root(self, shard_id: str) -> bool:
         """
