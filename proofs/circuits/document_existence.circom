@@ -22,11 +22,16 @@ template DocumentExistence(depth) {
 
     // Ensure pathIndices encode the provided leafIndex
     signal indexAccum[depth + 1];
+    signal pow2[depth];
+    pow2[0] <== 1;
+    for (var p = 1; p < depth; p++) {
+        pow2[p] <== pow2[p - 1] * 2;
+    }
     indexAccum[0] <== 0;
     for (var i = 0; i < depth; i++) {
         // Boolean constraint for path index
         pathIndices[i] * (pathIndices[i] - 1) === 0;
-        indexAccum[i + 1] <== indexAccum[i] + pathIndices[i] * (2 ** i);
+        indexAccum[i + 1] <== indexAccum[i] + pathIndices[i] * pow2[i];
     }
     leafIndex === indexAccum[depth];
 

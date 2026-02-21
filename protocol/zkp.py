@@ -115,8 +115,9 @@ class Groth16Prover:
         if verification_key_path is not None:
             vkey = verification_key_path
         else:
-            candidate = self.circuits_dir / "keys" / "verification_keys" / "existence_vkey.json"
-            fallback = self.circuits_dir.parent / "keys" / "verification_keys" / "existence_vkey.json"
+            vkey_filename = f"{proof.circuit}_vkey.json"
+            candidate = self.circuits_dir / "keys" / "verification_keys" / vkey_filename
+            fallback = self.circuits_dir.parent / "keys" / "verification_keys" / vkey_filename
             vkey = candidate if candidate.exists() else fallback
         if not vkey.exists():
             raise FileNotFoundError(f"Verification key not found: {vkey}")
