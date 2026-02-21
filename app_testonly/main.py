@@ -7,11 +7,14 @@ TEST API (IN-MEMORY, NO DATABASE)
 This is a TEST-ONLY FastAPI application for validating proof generation logic.
 It does NOT use a database and is NOT suitable for production.
 
-DATABASE: None (in-memory via app/state.py)
+DATABASE: None (in-memory via app_testonly/state.py)
 PERSISTENCE: None (ephemeral state)
 PRODUCTION USE: ❌ NO - Use api/app.py instead
 
 For production deployment with PostgreSQL, use api/app.py.
+
+This package is named 'app_testonly' to make its scope self-evident.
+It is NOT the production API.
 
 See docs/08_database_strategy.md for complete database strategy documentation.
 
@@ -24,7 +27,7 @@ from typing import Any
 
 from fastapi import FastAPI, HTTPException
 
-from app.state import OlympusState
+from app_testonly.state import OlympusState
 
 
 app = FastAPI(title="Olympus Phase 0", version="0.1.0", docs_url="/")

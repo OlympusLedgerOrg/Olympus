@@ -29,7 +29,7 @@ RUN pip install --no-cache-dir -r requirements-dev.txt
 
 COPY . .
 
-CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--reload"]
+CMD ["uvicorn", "api.app:app", "--host", "0.0.0.0", "--port", "8000", "--reload"]
 
 # Production stage
 FROM base AS production
@@ -42,7 +42,7 @@ RUN groupadd -r -g 1000 olympus \
 COPY --chown=olympus:olympus protocol /app/protocol
 COPY --chown=olympus:olympus storage /app/storage
 COPY --chown=olympus:olympus api /app/api
-COPY --chown=olympus:olympus app /app/app
+COPY --chown=olympus:olympus app_testonly /app/app_testonly
 COPY --chown=olympus:olympus ui /app/ui
 COPY --chown=olympus:olympus schemas /app/schemas
 
@@ -70,4 +70,4 @@ LABEL org.opencontainers.image.licenses="Apache-2.0"
 LABEL security.non-root="true"
 
 # Run the application
-CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
+CMD ["uvicorn", "api.app:app", "--host", "0.0.0.0", "--port", "8000"]

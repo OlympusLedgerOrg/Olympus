@@ -54,7 +54,7 @@ where = ["."]
 # Explicitly include your first-party pkgs to avoid "Multiple top-level packages" error
 include = [
     "api*",
-    "app*",
+    "app_testonly*",
     "protocol*",
     "schemas*",
     "storage*",
@@ -92,7 +92,7 @@ unfixable = []
 
 [tool.ruff.lint.isort]
 # Ensure first-party modules are grouped correctly after stdlib and third-party.
-known-first-party = ["app", "api", "protocol", "storage", "tests"]
+known-first-party = ["app_testonly", "api", "protocol", "storage", "tests"]
 combine-as-imports = true
 force-single-line = false
 lines-after-imports = 2
@@ -115,7 +115,7 @@ markers = [
 ]
 
 [tool.coverage.run]
-source = ["protocol", "storage", "api", "app"]
+source = ["protocol", "storage", "api", "app_testonly"]
 omit = [
     "*/tests/*",
     "*/__pycache__/*",
