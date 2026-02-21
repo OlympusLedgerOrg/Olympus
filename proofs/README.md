@@ -52,6 +52,8 @@ snarkjs groth16 verify proofs/keys/verification_keys/document_existence_vkey.jso
 #   curl -o proofs/keys/powersOfTau28_hez_final_08.ptau https://hermez.s3-eu-west-1.amazonaws.com/powersOfTau28_hez_final_08.ptau
 # Use the full powers file for production:
 #   curl -o proofs/keys/powersOfTau28_hez_final.ptau https://hermez.s3-eu-west-1.amazonaws.com/powersOfTau28_hez_final.ptau
+# Choose powers such that 2^power comfortably exceeds the circuit constraint
+# count; the 08 file is only suitable for tiny dev circuits, not production.
 ```
 
 ## Hash boundary

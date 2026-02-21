@@ -22,6 +22,7 @@ template DocumentExistence(depth) {
 
     // Ensure pathIndices encode the provided leafIndex
     signal indexAccum[depth + 1];
+    // Compute powers of two dynamically so the template remains parameterized by depth
     signal pow2[depth + 1];
     pow2[0] <== 1;
     for (var p = 1; p <= depth; p++) {
