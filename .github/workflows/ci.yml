@@ -47,11 +47,11 @@ jobs:
 
     - name: Run ruff linting
       run: |
-        ruff check protocol/ storage/ api/ app/ tests/ --output-format=github
+        ruff check protocol/ storage/ api/ app_testonly/ tests/ --output-format=github
 
     - name: Run ruff formatting check
       run: |
-        ruff format --check protocol/ storage/ api/ app/ tests/
+        ruff format --check protocol/ storage/ api/ app_testonly/ tests/
 
     - name: Run mypy type checking
       run: |
@@ -59,13 +59,13 @@ jobs:
 
     - name: Run bandit security scan
       run: |
-        bandit -r protocol/ storage/ api/ app/ -f txt
+        bandit -r protocol/ storage/ api/ app_testonly/ -f txt
       continue-on-error: true
 
     - name: Run pytest (fast lane - protocol and app tests) with coverage
       run: |
           pytest tests/ -v --tb=short -m "not postgres" \
-            --cov=protocol --cov=app \
+            --cov=protocol --cov=app_testonly \
             --cov-report=term-missing --cov-report=xml \
             --cov-fail-under=85
 

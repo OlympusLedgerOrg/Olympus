@@ -1,0 +1,37 @@
+name: Fast Lane CI
+
+on:
+  push:
+    branches: [ main, copilot/** ]
+  pull_request:
+    branches: [ main ]
+  workflow_dispatch:
+
+jobs:
+  fast-lane:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Set up Python 3.12
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.12'
+        cache: 'pip'
+
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install -U setuptools
+        pip install wheel
+        pip install -e ".[dev]"
+
+    - name: Verify api/app.py can be imported
+      run: python -c "import api.app"
+
+    - name: Run api/app.py tests
+      run: |
+        pytest tests/test_run_api.py tests/test_api_db_config.py -v --tb=short -m "not postgres"
