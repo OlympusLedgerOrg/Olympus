@@ -12,6 +12,7 @@ client = TestClient(ui_app.app)
 
 def test_console_shows_db_unavailable_banner(monkeypatch):
     """Root page should show DB unavailable banner on 503 from API."""
+    monkeypatch.setattr(ui_app, "DEBUG_UI_ENABLED", True)
 
     def raise_503(path: str):
         raise HTTPError(url=path, code=503, msg="service unavailable", hdrs=None, fp=None)
@@ -26,6 +27,7 @@ def test_console_shows_db_unavailable_banner(monkeypatch):
 
 def test_console_shows_chain_broken_banner(monkeypatch):
     """Root page should show chain broken banner when tail linkage is invalid."""
+    monkeypatch.setattr(ui_app, "DEBUG_UI_ENABLED", True)
 
     def fake_fetch(path: str):
         if path == "/shards":
@@ -62,6 +64,7 @@ def test_console_shows_chain_broken_banner(monkeypatch):
 
 def test_console_shows_invalid_signature_banner(monkeypatch):
     """Root page should show invalid signature banner when verification fails."""
+    monkeypatch.setattr(ui_app, "DEBUG_UI_ENABLED", True)
 
     def fake_fetch(path: str):
         if path == "/shards":
@@ -79,3 +82,14 @@ def test_console_shows_invalid_signature_banner(monkeypatch):
 
     assert response.status_code == 200
     assert "Invalid signature detected for shard s1." in response.text
+
+
+def test_debug_ui_disabled_by_default(monkeypatch):
+    """Debug console and proof explorer return 404 when OLYMPUS_DEBUG_UI is not set."""
+    monkeypatch.setattr(ui_app, "DEBUG_UI_ENABLED", False)
+
+    assert client.get("/").status_code == 404
+    assert (
+        client.get("/proof-explorer?shard_id=s&record_type=t&record_id=r&version=1").status_code
+        == 404
+    )

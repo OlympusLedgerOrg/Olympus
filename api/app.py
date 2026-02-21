@@ -207,6 +207,25 @@ class LedgerTailResponse(BaseModel):
     entries: list[LedgerEntryResponse]
 
 
+class TimestampTokenResponse(BaseModel):
+    """RFC 3161 timestamp token for a shard header."""
+
+    tsa_url: str  # URL of the issuing Timestamp Authority
+    tst_hex: str  # DER-encoded TimeStampToken, hex-encoded
+    hash_hex: str  # Hex-encoded BLAKE3 hash that was submitted to the TSA
+    timestamp: str  # ISO 8601 timestamp from the TSA response
+
+
+class HeaderVerificationResponse(BaseModel):
+    """Combined Ed25519 signature and RFC 3161 timestamp verification result."""
+
+    shard_id: str
+    header_hash: str  # Hex-encoded 32-byte header hash
+    signature_valid: bool
+    timestamp_token: TimestampTokenResponse | None  # None if not yet timestamped
+    timestamp_valid: bool | None  # None if no token available
+
+
 # Initialize FastAPI app
 app = FastAPI(
     title="Olympus Public Audit API",
@@ -225,6 +244,7 @@ async def root() -> dict[str, Any]:
         "endpoints": [
             "/shards",
             "/shards/{shard_id}/header/latest",
+            "/shards/{shard_id}/header/latest/verify",
             "/shards/{shard_id}/proof",
             "/ledger/{shard_id}/tail",
         ],
@@ -434,6 +454,68 @@ async def get_ledger_tail(
         raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to get ledger tail: {str(e)}") from e
+
+
+@app.get("/shards/{shard_id}/header/latest/verify", response_model=HeaderVerificationResponse)
+async def verify_latest_header(shard_id: str) -> HeaderVerificationResponse:
+    """
+    Verify the Ed25519 signature and RFC 3161 timestamp of the latest shard header.
+
+    Returns both the signature validity and, if a timestamp token has been stored,
+    the RFC 3161 token and whether it is cryptographically valid.
+
+    Args:
+        shard_id: Shard identifier.
+
+    Returns:
+        Verification result including signature status, timestamp token, and
+        timestamp validity.
+    """
+    storage = _require_storage()
+    try:
+        header_data = storage.get_latest_header(shard_id)
+        if header_data is None:
+            raise HTTPException(status_code=404, detail=f"Shard not found: {shard_id}")
+
+        header = header_data["header"]
+        header_hash = header["header_hash"]
+
+        # Signature is already verified by get_latest_header (raises ValueError if invalid)
+        signature_valid = True
+
+        # Retrieve timestamp token if stored
+        token_dict = storage.get_timestamp_token(shard_id, header_hash)
+        timestamp_token: TimestampTokenResponse | None = None
+        timestamp_valid: bool | None = None
+
+        if token_dict is not None:
+            timestamp_token = TimestampTokenResponse(
+                tsa_url=token_dict["tsa_url"],
+                tst_hex=token_dict["tst_hex"],
+                hash_hex=token_dict["hash_hex"],
+                timestamp=token_dict["timestamp"],
+            )
+            from protocol.rfc3161 import verify_timestamp_token
+
+            try:
+                timestamp_valid = verify_timestamp_token(
+                    bytes.fromhex(token_dict["tst_hex"]),
+                    token_dict["hash_hex"],
+                )
+            except Exception:
+                timestamp_valid = False
+
+        return HeaderVerificationResponse(
+            shard_id=shard_id,
+            header_hash=header_hash,
+            signature_valid=signature_valid,
+            timestamp_token=timestamp_token,
+            timestamp_valid=timestamp_valid,
+        )
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to verify header: {str(e)}") from e
 
 
 # Health check endpoint

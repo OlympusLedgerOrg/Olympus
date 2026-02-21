@@ -4,7 +4,9 @@ Shard header protocol for Olympus
 This module implements shard header hashing and signature verification.
 """
 
-from typing import Any
+from __future__ import annotations
+
+from typing import TYPE_CHECKING, Any
 
 import nacl.encoding
 import nacl.signing
@@ -12,8 +14,16 @@ import nacl.signing
 from .hashes import shard_header_hash
 
 
+if TYPE_CHECKING:
+    from .rfc3161 import TimestampToken
+
+
 def create_shard_header(
-    shard_id: str, root_hash: bytes, timestamp: str, previous_header_hash: str = ""
+    shard_id: str,
+    root_hash: bytes,
+    timestamp: str,
+    previous_header_hash: str = "",
+    timestamp_token: TimestampToken | None = None,
 ) -> dict[str, Any]:
     """
     Create a shard header dictionary.
@@ -23,6 +33,10 @@ def create_shard_header(
         root_hash: 32-byte root hash of the shard's sparse Merkle tree
         timestamp: ISO 8601 timestamp
         previous_header_hash: Hex-encoded hash of previous header (empty for genesis)
+        timestamp_token: Optional RFC 3161 timestamp token for the header hash.
+            If provided, the token's serialized form is included in the returned
+            header under the ``"timestamp_token"`` key (not part of the hash
+            commitment, since the token is obtained after hashing).
 
     Returns:
         Dictionary containing shard header fields
@@ -41,6 +55,10 @@ def create_shard_header(
     header["header_hash"] = shard_header_hash(
         {k: v for k, v in header.items() if k != "header_hash"}
     ).hex()
+
+    # Attach RFC 3161 timestamp token after hash commitment (not part of the hash)
+    if timestamp_token is not None:
+        header["timestamp_token"] = timestamp_token.to_dict()
 
     return header
 
