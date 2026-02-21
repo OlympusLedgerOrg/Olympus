@@ -259,7 +259,7 @@ def test_get_latest_header_detects_corrupt_signature(storage, signing_key):
     """Test that get_latest_header fails if persisted signature is corrupted."""
     shard_id = f"test_shard_{datetime.now(UTC).timestamp()}"
 
-    storage.append_record(
+    _, _, _, signature, _ = storage.append_record(
         shard_id=shard_id,
         record_type="document",
         record_id="doc1",
@@ -281,6 +281,18 @@ def test_get_latest_header_detects_corrupt_signature(storage, signing_key):
 
     with pytest.raises(ValueError, match="Invalid shard header signature"):
         storage.get_latest_header(shard_id)
+
+    # Restore original signature to avoid polluting later append-only integration tests.
+    with storage._get_connection() as conn, conn.cursor() as cur:
+        cur.execute(
+            """
+                UPDATE shard_headers
+                SET sig = %s
+                WHERE shard_id = %s AND seq = 0
+                """,
+            (bytes.fromhex(signature), shard_id),
+        )
+        conn.commit()
 
 
 def test_get_ledger_tail(storage, signing_key):
@@ -486,7 +498,8 @@ def test_ledger_trigger_rejects_out_of_order_insert(storage):
         "shard_root": "b" * 64,
         "prev_entry_hash": "",
     }
-    genesis_hash = bytes.fromhex("11" * 32)
+    genesis_hash = hash_bytes(f"genesis-{shard_id}".encode())
+    ooo_hash = hash_bytes(f"ooo-{shard_id}".encode())
 
     with storage._get_connection() as conn, conn.cursor() as cur:
         cur.execute(
@@ -508,7 +521,7 @@ def test_ledger_trigger_rejects_out_of_order_insert(storage):
                 (
                     shard_id,
                     2,
-                    bytes.fromhex("22" * 32),
+                    ooo_hash,
                     genesis_hash,
                     json.dumps(genesis_payload),
                     ts,
