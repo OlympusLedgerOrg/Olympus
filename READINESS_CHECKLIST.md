@@ -30,10 +30,10 @@ ruff check protocol/ storage/ api/ app_testonly/ tests/
 ruff check protocol/ storage/ api/ app_testonly/ tests/ --fix
 
 # Check formatting
-ruff format --check protocol/ storage/ api/ app/ tests/
+ruff format --check protocol/ storage/ api/ app_testonly/ tests/
 
 # Auto-format code
-ruff format protocol/ storage/ api/ app/ tests/
+ruff format protocol/ storage/ api/ app_testonly/ tests/
 ```
 
 ### 2. Type Checking
@@ -45,7 +45,7 @@ mypy protocol/ storage/ api/
 ### 3. Security Scanning
 ```bash
 # Bandit security scan
-bandit -r protocol/ storage/ api/ app/ -f txt
+bandit -r protocol/ storage/ api/ app_testonly/ -f txt
 
 # Check dependencies for known vulnerabilities
 pip-audit -r requirements.txt
@@ -155,10 +155,10 @@ python -m pip install --upgrade pip
 pip install -e ".[dev]"
 python tools/validate_schemas.py
 ruff check protocol/ storage/ api/ app_testonly/ tests/
-ruff format --check protocol/ storage/ api/ app/ tests/
+ruff format --check protocol/ storage/ api/ app_testonly/ tests/
 mypy protocol/ storage/ api/
-bandit -r protocol/ storage/ api/ app/ -f txt
-pytest -q -m "not postgres" --cov=protocol --cov=storage --cov=api --cov=app
+bandit -r protocol/ storage/ api/ app_testonly/ -f txt
+pytest -q -m "not postgres" --cov=protocol --cov=storage --cov=api --cov=app_testonly
 ```
 
 ## 🔐 Security Best Practices
@@ -189,8 +189,8 @@ ruff check . && ruff format --check . && mypy protocol/ storage/ api/ && pytest 
 ```bash
 # Full quality check with coverage
 ruff check . && ruff format --check . && mypy protocol/ storage/ api/ && \
-pytest -q -m "not postgres" --cov=protocol --cov=storage --cov=api --cov=app --cov-report=term && \
-bandit -r protocol/ storage/ api/ app/
+pytest -q -m "not postgres" --cov=protocol --cov=storage --cov=api --cov=app_testonly --cov-report=term && \
+bandit -r protocol/ storage/ api/ app_testonly/
 ```
 
 ## 📚 Additional Resources

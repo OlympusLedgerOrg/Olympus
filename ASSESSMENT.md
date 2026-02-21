@@ -158,7 +158,7 @@ exclude_lines = [
 
 #### Issue 1: Hardcoded Temp Directory
 ```
-Location: app/main.py:33:46
+Location: app_testonly/main.py:33:46
 Code: state = OlympusState(os.getenv("OLY_DB_PATH", "/tmp/olympus.sqlite"))
 Severity: Medium
 ```
@@ -169,7 +169,7 @@ Severity: Medium
 
 #### Issue 2: Hardcoded Temp Directory
 ```
-Location: app/state.py:67:38
+Location: app_testonly/state.py:67:38
 Code: def __init__(self, db_path: str = "/tmp/olympus.sqlite"):
 Severity: Medium
 ```
@@ -408,20 +408,20 @@ export DATABASE_URL='postgresql://yourusername@localhost:5432/olympus'
 
 # 5. Lint & format
 ruff check protocol/ storage/ api/ app_testonly/ tests/ --fix
-ruff format protocol/ storage/ api/ app/ tests/
+ruff format protocol/ storage/ api/ app_testonly/ tests/
 
 # 6. Type check
 mypy protocol/ storage/ api/
 
 # 7. Security scan
-bandit -r protocol/ storage/ api/ app/
+bandit -r protocol/ storage/ api/ app_testonly/
 
 # 8. Run tests
 pytest tests/ -v
 
 # 9. Run tests with coverage
 pytest tests/ -m "not postgres" \
-  --cov=protocol --cov=storage --cov=api --cov=app \
+  --cov=protocol --cov=storage --cov=api --cov=app_testonly \
   --cov-report=term-missing --cov-report=html
 
 # 10. View coverage report
@@ -451,10 +451,10 @@ docker run -p 8000:8000 \
 # Replicate CI locally
 python tools/validate_schemas.py
 ruff check protocol/ storage/ api/ app_testonly/ tests/
-ruff format --check protocol/ storage/ api/ app/ tests/
+ruff format --check protocol/ storage/ api/ app_testonly/ tests/
 mypy protocol/ storage/ api/
-bandit -r protocol/ storage/ api/ app/
-pytest tests/ -m "not postgres" --cov=protocol --cov=storage --cov=api --cov=app
+bandit -r protocol/ storage/ api/ app_testonly/
+pytest tests/ -m "not postgres" --cov=protocol --cov=storage --cov=api --cov=app_testonly
 pytest tests/ -m "postgres"  # Requires PostgreSQL
 ```
 
@@ -563,7 +563,7 @@ All tests pass locally and in CI:
 pytest tests/ -v  # 172 passed, 17 deselected (postgres)
 ruff check protocol/ storage/ api/ app_testonly/ tests/  # 0 errors
 mypy protocol/ storage/ api/  # Success
-bandit -r protocol/ storage/ api/ app/  # 2 acceptable findings
+bandit -r protocol/ storage/ api/ app_testonly/  # 2 acceptable findings
 ```
 
 ## Coverage Report
@@ -606,9 +606,9 @@ pip install -r requirements.txt -r requirements-dev.txt
 
 # Run all checks
 ruff check protocol/ storage/ api/ app_testonly/ tests/
-ruff format --check protocol/ storage/ api/ app/ tests/
+ruff format --check protocol/ storage/ api/ app_testonly/ tests/
 mypy protocol/ storage/ api/
-pytest tests/ -m "not postgres" --cov=protocol --cov=storage --cov=api --cov=app
+pytest tests/ -m "not postgres" --cov=protocol --cov=storage --cov=api --cov=app_testonly
 ```
 
 ### Full CI Replication (Requires PostgreSQL)
