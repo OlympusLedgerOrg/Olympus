@@ -50,3 +50,7 @@ htmlcov/
 *.sym
 *.zkey
 *.ptau
+*.wtns
+
+# Node.js
+node_modules/
