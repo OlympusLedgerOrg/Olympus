@@ -39,6 +39,25 @@ services:
     depends_on:
       db:
         condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://localhost:8000/health || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  ui:
+    build:
+      context: .
+      target: production
+    container_name: olympus-ui
+    command: ["uvicorn", "ui.app:app", "--host", "0.0.0.0", "--port", "8080"]
+    environment:
+      UI_API_BASE: http://app:8000
+    depends_on:
+      app:
+        condition: service_started
+    ports:
+      - "8080:8080"
 
 volumes:
   olympus_pgdata:

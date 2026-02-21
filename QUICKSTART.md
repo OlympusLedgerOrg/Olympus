@@ -72,8 +72,8 @@ export DATABASE_URL='postgresql://olympus@localhost:5432/olympus'
 The easiest way to run PostgreSQL locally is with Docker Compose:
 
 ```bash
-# Start PostgreSQL using docker-compose (runs in background)
-docker compose up -d db
+# Start API + PostgreSQL (and UI) using docker-compose (runs in background)
+docker compose up -d
 
 # Verify it's running
 docker compose ps

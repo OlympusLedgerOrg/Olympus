@@ -5,9 +5,11 @@ Validates JCS JSON canonicalization, PDF structural scrub, the artifact
 ingestion pipeline, and version pinning constants.
 """
 
+import io
 import json
 from decimal import Decimal
 
+import pikepdf
 import pytest
 
 from protocol.canonicalizer import (
@@ -128,40 +130,45 @@ class TestJsonJcs:
 
 
 # ---------------------------------------------------------------------------
-# PDF safe scrub
+# PDF normalization
 # ---------------------------------------------------------------------------
 
 
-class TestPdfSafe:
-    def test_volatile_keys_stripped(self):
-        pdf = b"""%PDF-1.4
-/CreationDate (D:20240101)
-/ModDate (D:20240102)
-/Producer (Test Producer)
-/Creator (Test Creator)
-/Content (preserved)
-%%EOF"""
-        cleaned, mode = Canonicalizer.pdf_safe(pdf)
+class TestPdfNormalize:
+    def _build_pdf(self) -> bytes:
+        pdf = pikepdf.Pdf.new()
+        pdf.add_blank_page(page_size=(612, 792))
+        pdf.docinfo["/CreationDate"] = "D:20240101"
+        pdf.docinfo["/ModDate"] = "D:20240102"
+        pdf.docinfo["/Producer"] = "Test Producer"
+        pdf.docinfo["/Creator"] = "Test Creator"
+        buf = io.BytesIO()
+        pdf.save(buf)
+        return buf.getvalue()
+
+    def test_volatile_keys_stripped_and_linearized(self):
+        raw_pdf = self._build_pdf()
+        cleaned, mode = Canonicalizer.pdf_normalize(raw_pdf)
         assert b"/CreationDate" not in cleaned
         assert b"/ModDate" not in cleaned
         assert b"/Producer" not in cleaned
         assert b"/Creator" not in cleaned
-        assert b"/Content" in cleaned
-        assert mode == "pdf_structural_scrub_v1"
+        assert b"/Linearized" in cleaned[:256]
+        assert mode == "pdf_norm_pikepdf_v1"
 
     def test_line_endings_normalized(self):
-        pdf = b"line1\r\nline2\rline3\n"
-        cleaned, _ = Canonicalizer.pdf_safe(pdf)
+        raw_pdf = self._build_pdf().replace(b"\n", b"\r\n")
+        cleaned, _ = Canonicalizer.pdf_normalize(raw_pdf)
         assert b"\r" not in cleaned
 
     def test_idempotent(self):
-        pdf = b"%PDF-1.4\n/CreationDate (D:20240101)\n/Body (data)\n%%EOF"
-        first, _ = Canonicalizer.pdf_safe(pdf)
-        second, _ = Canonicalizer.pdf_safe(first)
+        raw_pdf = self._build_pdf()
+        first, _ = Canonicalizer.pdf_normalize(raw_pdf)
+        second, _ = Canonicalizer.pdf_normalize(first)
         assert first == second
 
     def test_returns_tuple(self):
-        result = Canonicalizer.pdf_safe(b"minimal pdf")
+        result = Canonicalizer.pdf_normalize(self._build_pdf())
         assert isinstance(result, tuple)
         assert len(result) == 2
         assert isinstance(result[0], bytes)
@@ -184,9 +191,9 @@ class TestProcessArtifact:
         assert result["fallback_reason"] is None
 
     def test_pdf_artifact(self):
-        raw = b"%PDF-1.4\n/CreationDate (D:20240101)\n%%EOF"
+        raw = TestPdfNormalize()._build_pdf()
         result = process_artifact(raw, "application/pdf")
-        assert result["mode"] == "pdf_structural_scrub_v1"
+        assert result["mode"] == "pdf_norm_pikepdf_v1"
 
     def test_unknown_mime_type_preserved(self):
         raw = b"arbitrary binary data"

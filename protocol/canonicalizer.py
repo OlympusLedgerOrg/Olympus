@@ -17,6 +17,7 @@ from decimal import Decimal
 from typing import Any
 
 import blake3 as _blake3
+import pikepdf
 
 
 # PHASE-0.1 INSTITUTIONAL PINNING
@@ -25,7 +26,7 @@ CANONICALIZER_VERSIONS: dict[str, str] = {
     "jcs": "1.2.0-strict-numeric",
     "html": "1.0.1-lxml-pinned-nfc",
     "docx": "1.1.0-c14n-strict",
-    "pdf": "1.2.0-structural-scrub",
+    "pdf": "1.3.0-pikepdf-linearized",
 }
 
 try:
@@ -287,41 +288,62 @@ class Canonicalizer:
             raise CanonicalizationError(f"DOCX C14N failure: {e!s}")
 
     @staticmethod
-    def pdf_safe(data: bytes) -> tuple[bytes, str]:
-        """PDF Structural Scrub: Recursive stripping of volatile keys.
+    def pdf_normalize(data: bytes) -> tuple[bytes, str]:
+        """Deterministic PDF normalization using pikepdf.
 
-        Strips non-deterministic PDF metadata keys (CreationDate, ModDate,
-        Producer, etc.) and normalizes line endings.
+        - Strips volatile metadata (CreationDate, ModDate, Producer, Creator, Title,
+          Subject, Author, Keywords)
+        - Forces static document IDs and linearized output for canonical byte order
+        - Normalizes line endings to LF
 
         Args:
-            data: Raw PDF bytes to scrub.
+            data: Raw PDF bytes to normalize.
 
         Returns:
-            Tuple of (cleaned bytes, mode string).
+            Tuple of (normalized bytes, mode string).
+
+        Raises:
+            CanonicalizationError: If the PDF cannot be parsed or normalized.
         """
-        # Targets PDF Info Dict keys and IDs structurally
         volatile_keys = [
-            rb"/CreationDate",
-            rb"/ModDate",
-            rb"/Producer",
-            rb"/Creator",
-            rb"/ID",
-            rb"/Title",
-            rb"/Subject",
-            rb"/Author",
+            "CreationDate",
+            "ModDate",
+            "Producer",
+            "Creator",
+            "Title",
+            "Subject",
+            "Author",
+            "Keywords",
         ]
 
-        cleaned = data
-        for key in volatile_keys:
-            # Strip key and its associated value (handles parens and hex delimiters)
-            cleaned = re.sub(key + rb"\s*(\([^)]*\)|<[^>]*>)", rb"", cleaned)
+        try:
+            with pikepdf.open(io.BytesIO(data)) as pdf:
+                for key in volatile_keys:
+                    for candidate in (key, f"/{key}"):
+                        if candidate in pdf.docinfo:
+                            del pdf.docinfo[candidate]
 
-        # Standardize line endings to LF
-        cleaned = cleaned.replace(b"\r\n", b"\n").replace(b"\r", b"\n")
-        # Rebuild naive xref-friendly spacing
-        cleaned = re.sub(rb"\n\s*\n", rb"\n", cleaned)
+                try:
+                    pdf.remove_unreferenced_resources()
+                except Exception:
+                    # Safe to ignore; best-effort cleanup
+                    pass
 
-        return cleaned, "pdf_structural_scrub_v1"
+                # Ensure any XMP packet is cleared to avoid hidden timestamps
+                try:
+                    metadata = pdf.open_metadata(set_pikepdf_as_editor=False)
+                    metadata.clear()
+                except Exception:
+                    pass
+
+                buf = io.BytesIO()
+                pdf.save(buf, linearize=True, static_id=True)
+                normalized = buf.getvalue()
+        except Exception as e:
+            raise CanonicalizationError(f"PDF normalization failure: {e!s}")
+
+        normalized = normalized.replace(b"\r\n", b"\n").replace(b"\r", b"\n")
+        return normalized, "pdf_norm_pikepdf_v1"
 
 
 def process_artifact(
@@ -372,7 +394,7 @@ def process_artifact(
             }
 
         elif "pdf" in mime_type:
-            processed, mode = c.pdf_safe(raw_data)
+            processed, mode = c.pdf_normalize(raw_data)
 
     except Exception as e:
         mode, reason, processed = "byte_preserved", f"canonical_error: {e!s}", raw_data

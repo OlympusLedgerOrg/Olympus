@@ -12,6 +12,7 @@ WORKDIR /app
 # Security: Install system dependencies and remove cache
 RUN apt-get update && apt-get install -y --no-install-recommends \
     postgresql-client \
+    curl \
     && rm -rf /var/lib/apt/lists/* \
     && apt-get clean
 
@@ -42,6 +43,7 @@ COPY --chown=olympus:olympus protocol /app/protocol
 COPY --chown=olympus:olympus storage /app/storage
 COPY --chown=olympus:olympus api /app/api
 COPY --chown=olympus:olympus app /app/app
+COPY --chown=olympus:olympus ui /app/ui
 COPY --chown=olympus:olympus schemas /app/schemas
 
 # Security: Set explicit file permissions (read-only for all, directories executable)

@@ -46,7 +46,7 @@ The hardened canonicalizer (`protocol/canonicalizer.py`) provides byte-stable, i
 - **JSON** — JCS (RFC 8785) with NFC normalization, duplicate key rejection, and `Decimal`-based numeric parsing
 - **HTML** — NFC normalization, attribute sorting, active content stripping (requires `lxml`)
 - **DOCX** — ZIP entry ordering, XML C14N, volatile metadata stripping (requires `lxml`)
-- **PDF** — Structural scrub of volatile metadata keys and line ending normalization
+- **PDF** — pikepdf-based normalization: volatile metadata scrub, static IDs, linearization, and LF line endings
 
 ---
 

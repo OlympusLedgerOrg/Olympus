@@ -110,3 +110,26 @@ Finality is a public property — any observer can verify it given the appropria
 - Guardian node acknowledgments
 
 For v1.0, finality is based on cryptographic commitments from a single trusted node. Multi-node consensus and Byzantine fault tolerance are deferred to Phase 1+.
+
+## Key Rotation and Compromise Response (Ed25519)
+
+When an agency signing key is suspected or confirmed compromised, verifiers need deterministic guidance:
+
+1. **Revocation record** — Publish a signed revocation statement using the *new* key that references the compromised public key, a compromise timestamp, and the last known good ledger height.
+2. **Re-sign historical shard headers** — For every historical shard header, produce an attestation signed by the new key over the original header hash. This does **not** replace history; it adds an append-only “superseding signature.”
+3. **Ledger entries remain immutable** — No ledger entry bytes change. The append-only property is preserved.
+4. **Verifier behavior**:
+   - Before compromise height: accept old-key signatures if they validate and precede the published compromise timestamp.
+   - At/after compromise height: require either the new-key signature directly on the entry or a superseding attestation that chains the original hash to the new key.
+   - Reject any shard headers signed by the compromised key with a timestamp at or after the compromise timestamp unless a superseding attestation exists.
+5. **Publishing** — Store revocation statements and superseding attestations in the ledger as dedicated event types to keep the chain of custody auditable.
+
+## Batched Timestamping Strategy
+
+To control RFC 3161 (or equivalent) timestamping costs at scale:
+
+- **Cadence**: Anchor the ledger root hash on a fixed schedule (e.g., every 5 minutes) rather than per entry.
+- **Batch window**: All entries within the window are covered by the same anchor, reducing per-entry cost while keeping bounded delay.
+- **Integrity linkage**: Each batch anchor references the Merkle root at the end of the window; the next window links by previous hash as usual.
+- **Backpressure**: If anchoring fails, halt new batch closure until the anchor succeeds to avoid unanchored gaps.
+- **Auditability**: Record the timestamp token and TSA certificate chain alongside the batch root in the ledger so verifiers can validate the anchor independently.
