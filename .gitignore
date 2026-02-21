@@ -51,6 +51,9 @@ htmlcov/
 *.zkey
 *.ptau
 *.wtns
+# Allow circom helper libraries
+!proofs/circuits/lib/
+!proofs/circuits/lib/*.circom
 
 # Node.js
 node_modules/

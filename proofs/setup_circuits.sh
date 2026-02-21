@@ -96,6 +96,7 @@ for circuit in "${CIRCUITS[@]}"; do
   echo "  [1/4] Compiling ${CIRCOM_FILE} …"
   ${CIRCOM} "${CIRCOM_FILE}" \
     --r1cs --wasm --sym \
+    -l circuits \
     -l node_modules \
     -o "${BUILD_DIR}"
 
