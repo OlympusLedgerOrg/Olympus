@@ -44,7 +44,7 @@ def create_shard_header(
     if len(root_hash) != 32:
         raise ValueError(f"Root hash must be 32 bytes, got {len(root_hash)}")
 
-    header = {
+    header: dict[str, Any] = {
         "shard_id": shard_id,
         "root_hash": root_hash.hex(),
         "timestamp": timestamp,
