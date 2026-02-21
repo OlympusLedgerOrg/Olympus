@@ -1,35 +1,39 @@
 # ADR 0001: Poseidon vs BLAKE3 Boundary
 
 ## Status
-Accepted
+Accepted (updated after Groth16 requirement)
 
 ## Context
 
-- Olympus ledger hashing uses BLAKE3 for performance and domain separation.
-- Circom circuits require algebraically friendly hash functions; BLAKE3 is not
-  field-friendly.
-- Poseidon is already available via circomlib and is efficient inside circuits.
-- New requirement specifies Groth16 proving, which still relies on circuit-side
-  hashing; only the proving system changes.
+- Ledger-level hashing is fixed to BLAKE3 for append-only commitments and domain
+  separation.
+- Circom circuits require field-friendly hashes; BLAKE3 is infeasible in-circuit.
+- Poseidon is efficient and available via circomlib, making it the default
+  in-circuit hash.
+- The proving system is Groth16 (per latest requirement); proving keys are tied
+  to the circuit hash function.
 
 ## Decision
 
-- All **in-circuit** hashing uses Poseidon (see `proofs/circuits/lib/poseidon.circom`).
-- All **Python/ledger** hashing remains BLAKE3 (see `protocol/hashes.py`).
-- Witness generation is responsible for translating ledger commitments
-  (BLAKE3-derived) into the Poseidon field elements consumed by circuits.
-- SnarkJS is invoked via a Python bridge (`protocol/zkp.py`) using Groth16.
+- Use **Poseidon** for all in-circuit hashing (see `proofs/circuits/lib/poseidon.circom`).
+- Keep **BLAKE3** for all Python/ledger hashing (see `protocol/hashes.py`).
+- Witness generation must convert BLAKE3 commitments into Poseidon field
+  elements before proving.
+- snarkjs is invoked via the Groth16 bridge in `protocol/zkp.py`; any switch to
+  PLONK would require new keys but would not change the hash boundary decision.
 
 ## Consequences
 
-- Changing the in-circuit hash would invalidate proving/verifying keys.
-- Developers must be explicit about the conversion boundary when preparing
+- Changing the in-circuit hash invalidates all Groth16 keys and proofs.
+- Developers must document and test the BLAKE3→Poseidon conversion when building
   witnesses.
-- Integration tests should cover Python → witness → circuit → Groth16 verify.
+- Integration must cover Python → witness → circuit → Groth16 verify using the
+  same Poseidon parameters.
 
 ## Alternatives Considered
 
-- **Poseidon everywhere:** rejected due to existing BLAKE3 commitments and
-  ecosystem tooling.
-- **PLONK migration:** deferred per new requirement to keep Groth16 flow while
-  preserving Poseidon in circuits.
+- **Poseidon everywhere:** rejected to preserve existing BLAKE3 commitments and
+  audit trail.
+- **In-circuit BLAKE3 gadget:** rejected for performance/complexity.
+- **Immediate PLONK migration:** deferred; Groth16 remains the proving system
+  while keeping the Poseidon/BLAKE3 boundary stable.
