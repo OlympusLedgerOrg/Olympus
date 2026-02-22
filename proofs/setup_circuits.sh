@@ -12,6 +12,15 @@
 # -----------------------------------------------------------------------
 set -euo pipefail
 
+# Parse flags
+COMPILE_ONLY=0
+for arg in "$@"; do
+  case "${arg}" in
+    --compile-only) COMPILE_ONLY=1 ;;
+    *) echo "Unknown argument: ${arg}" >&2; exit 1 ;;
+  esac
+done
+
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "${SCRIPT_DIR}"
 
@@ -84,7 +93,7 @@ else
 fi
 
 # -----------------------------------------------------------------------
-# 3. Compile each circuit and run Groth16 setup
+# 3. Compile each circuit and (optionally) run Groth16 setup
 # -----------------------------------------------------------------------
 
 for circuit in "${CIRCUITS[@]}"; do
@@ -101,6 +110,13 @@ for circuit in "${CIRCUITS[@]}"; do
     -o "${BUILD_DIR}"
 
   R1CS="${BUILD_DIR}/${circuit}.r1cs"
+
+  if [ "${COMPILE_ONLY}" -eq 1 ]; then
+    echo "  [--compile-only] Skipping Groth16 setup."
+    echo "        r1cs  : ${R1CS}"
+    echo "        wasm  : ${BUILD_DIR}/${circuit}_js/${circuit}.wasm"
+    continue
+  fi
 
   # ---- Phase 2 setup (development contribution) ----
   echo "  [2/4] Groth16 setup …"
@@ -129,6 +145,10 @@ for circuit in "${CIRCUITS[@]}"; do
 done
 
 echo ""
-echo "==> All circuits compiled and development keys generated."
-echo "    WARNING: These keys use a SINGLE dev contribution."
-echo "    Production requires a Phase 2 ceremony with ≥ 3 independent contributors."
+if [ "${COMPILE_ONLY}" -eq 1 ]; then
+  echo "==> All circuits compiled (R1CS + WASM). Run without --compile-only to generate keys."
+else
+  echo "==> All circuits compiled and development keys generated."
+  echo "    WARNING: These keys use a SINGLE dev contribution."
+  echo "    Production requires a Phase 2 ceremony with ≥ 3 independent contributors."
+fi

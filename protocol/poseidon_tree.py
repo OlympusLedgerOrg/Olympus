@@ -25,7 +25,10 @@ def _to_field_int(value: int | str | bytes) -> int:
 
 def _poseidon_hash(left: int, right: int) -> int:
     """Hash two field elements with Poseidon(2), returning an in-field int."""
-    return poseidon_hash(left % SNARK_SCALAR_FIELD, right % SNARK_SCALAR_FIELD) % SNARK_SCALAR_FIELD
+    return (
+        int(poseidon_hash(left % SNARK_SCALAR_FIELD, right % SNARK_SCALAR_FIELD))
+        % SNARK_SCALAR_FIELD
+    )
 
 
 @dataclass

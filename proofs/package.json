@@ -4,6 +4,8 @@
   "private": true,
   "description": "Zero-knowledge proof circuits for Olympus",
   "scripts": {
+    "circom:build": "bash setup_circuits.sh --compile-only",
+    "groth16:setup": "bash setup_circuits.sh",
     "setup": "bash setup_circuits.sh",
     "smoke": "bash smoke_test.sh",
     "test:jsonpath": "node --test"
