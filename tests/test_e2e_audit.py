@@ -34,10 +34,14 @@ See docs/08_database_strategy.md for complete database strategy documentation.
 
 import os
 from datetime import UTC, datetime
+from urllib.parse import urlparse, urlunparse
+from uuid import uuid4
 
 import nacl.signing
+import psycopg
 import pytest
 from fastapi.testclient import TestClient
+from psycopg import conninfo, sql
 
 from protocol.canonical_json import canonical_json_encode
 from protocol.hashes import LEDGER_PREFIX, blake3_hash, hash_bytes
@@ -58,10 +62,61 @@ pytestmark = [
 ]
 
 
+def _create_isolated_database(base_url: str) -> tuple[str, callable]:
+    """
+    Create a temporary database for an isolated test run.
+
+    Returns a tuple of (database_url, drop_fn).
+    """
+    parsed = urlparse(base_url)
+    if not parsed.path or not parsed.username:
+        raise ValueError("TEST_DATABASE_URL must include username/password and a database name")
+
+    base_db = parsed.path.lstrip("/")
+    temp_db = f"{base_db}_e2e_{uuid4().hex}"
+
+    admin_cfg = {
+        "user": parsed.username,
+        "password": parsed.password or "",
+        "host": parsed.hostname or "localhost",
+        "port": parsed.port or 5432,
+        "dbname": "postgres",
+    }
+    admin_dsn = conninfo.make_conninfo(**admin_cfg)
+
+    temp_url = urlunparse(parsed._replace(path=f"/{temp_db}"))
+
+    with psycopg.connect(admin_dsn) as conn:
+        conn.autocommit = True
+        with conn.cursor() as cur:
+            cur.execute(sql.SQL("CREATE DATABASE {}").format(sql.Identifier(temp_db)))
+
+    def drop_db() -> None:
+        try:
+            with psycopg.connect(admin_dsn) as conn:
+                conn.autocommit = True
+                with conn.cursor() as cur:
+                    cur.execute(sql.SQL("DROP DATABASE IF EXISTS {}").format(sql.Identifier(temp_db)))
+        except Exception:
+            pass
+
+    return temp_url, drop_db
+
+
+@pytest.fixture(scope="module")
+def isolated_db_url():
+    """Provide an isolated test database URL and clean it up afterwards."""
+    db_url, drop_db = _create_isolated_database(TEST_DB)
+    try:
+        yield db_url
+    finally:
+        drop_db()
+
+
 @pytest.fixture
-def storage():
+def storage(isolated_db_url):
     """Create a storage layer for testing."""
-    storage = StorageLayer(TEST_DB)
+    storage = StorageLayer(isolated_db_url)
     storage.init_schema()
     return storage
 
@@ -74,20 +129,25 @@ def signing_key():
 
 
 @pytest.fixture
-def client(storage):
+def client(storage, isolated_db_url):
     """Create test client for API."""
     # Import here to avoid connecting to Postgres during test collection
     import api.app as api_app
     from api.app import app
 
     # Override DATABASE_URL for the API
-    os.environ["DATABASE_URL"] = TEST_DB
+    os.environ["DATABASE_URL"] = isolated_db_url
+    os.environ["TEST_DATABASE_URL"] = isolated_db_url
 
     # Reset lazy storage state so tests start fresh
     api_app._storage = None
     api_app._db_error = None
 
-    return TestClient(app)
+    client = TestClient(app)
+    try:
+        yield client
+    finally:
+        client.close()
 
 
 def test_end_to_end_audit_flow(storage, signing_key, client):
