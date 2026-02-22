@@ -100,7 +100,7 @@ class ProofGenerator:
         self.keys_dir = keys_dir or _KEYS_DIR
         self.snarkjs_bin = snarkjs_bin
 
-        # NOTE: Groth16Prover expects circuits_dir to be the proofs/circuits directory
+        # Groth16Prover expects circuits_dir to be the proofs/circuits directory
         self._prover = Groth16Prover(self.circuits_dir, snarkjs_bin=snarkjs_bin)
 
     @property
@@ -111,7 +111,9 @@ class ProofGenerator:
     def generate_witness(self, **inputs: Any) -> Witness:
         """
         Build a witness for the configured circuit.
-        Writes a unique input JSON and attempts to generate a unique witness .wtns via WASM.
+
+        Writes a unique input JSON and generates a unique witness .wtns via WASM.
+        Only Node.js is required for witness generation.
         """
         self._validate_inputs(inputs)
 
@@ -139,7 +141,6 @@ class ProofGenerator:
         if not generate_witness_js.exists():
             return witness
 
-        # We can generate a witness without snarkjs; only node is required.
         subprocess.run(
             ["node", str(generate_witness_js), str(wasm_file), str(input_path), str(witness_out)],
             check=True,
@@ -193,6 +194,9 @@ class ProofGenerator:
         Verify a Groth16 proof.
 
         If public_inputs is provided, it overrides proof.public_signals for this call.
+
+        Important: by default the verification key is selected based on proof.circuit,
+        not the generator's configured circuit.
         """
         if not self.snarkjs_available:
             raise RuntimeError(
@@ -210,7 +214,7 @@ class ProofGenerator:
 
         vkey = verification_key_path
         if vkey is None:
-            vkey = self.keys_dir / "verification_keys" / f"{self.circuit}_vkey.json"
+            vkey = self.keys_dir / "verification_keys" / f"{verify_proof.circuit}_vkey.json"
 
         return self._prover.verify(verify_proof, verification_key_path=vkey)
 
@@ -230,9 +234,11 @@ class ProofGenerator:
             circuit=data["circuit"],
         )
 
+    # Keep this in sync with circuit signal names
     _REQUIRED_INPUTS: dict[str, list[str]] = {
         "document_existence": ["root", "leaf", "leafIndex", "pathElements", "pathIndices"],
-        "non_existence": ["root", "emptyLeaf", "pathElements", "pathIndices"],
+        # UPDATED: indexed non-existence now uses leafIndex (public) and does NOT take emptyLeaf.
+        "non_existence": ["root", "leafIndex", "pathElements", "pathIndices"],
         "redaction_validity": [
             "originalRoot",
             "redactedCommitment",
