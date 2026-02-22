@@ -3,9 +3,15 @@ pragma circom 2.0.0;
 /*
  * Redaction validity proof (Poseidon-based).
  *
- * Demonstrates that a revealed subset of leaves belongs to an original Merkle
- * root and that the redacted commitment is derived only from the revealed
- * leaves (no additions).
+ * Proves:
+ *   1) For each i where revealMask[i] == 1, the leaf at *position i* is included
+ *      in the original Merkle tree with root originalRoot.
+ *   2) revealedCount equals the number of revealed leaves (sum of revealMask).
+ *   3) redactedCommitment is Poseidon-chained over (revealedCount, revealedLeaves[]),
+ *      where revealedLeaves[i] = originalLeaves[i] if revealed, else 0.
+ *
+ * NOTE: This proves “subset authenticity + position binding + commitment”.
+ * It does NOT prove anything about formatting of a redacted document string.
  */
 
 include "./lib/merkleProof.circom";
@@ -23,10 +29,39 @@ template RedactionValidity(maxLeaves, depth) {
     signal input pathElements[maxLeaves][depth];
     signal input pathIndices[maxLeaves][depth];
 
-    // Verify each revealed leaf is in the original tree
+    // -------------------------
+    // 1) Enforce revealedCount = sum(revealMask)
+    // -------------------------
+    signal maskSum[maxLeaves + 1];
+    maskSum[0] <== 0;
+
+    // -------------------------
+    // 2) Verify revealed leaves are included at the correct *index i*
+    // -------------------------
     component inclusionProofs[maxLeaves];
     signal revealedLeaves[maxLeaves];
+
     for (var i = 0; i < maxLeaves; i++) {
+        // Force revealMask to be strictly binary (0 or 1)
+        revealMask[i] * (revealMask[i] - 1) === 0;
+
+        // Accumulate sum of mask bits
+        maskSum[i + 1] <== maskSum[i] + revealMask[i];
+
+        // Bind pathIndices to index i (LSB-first), so this proof is about position i.
+        // Since maxLeaves = 2^depth, i fits in 'depth' bits.
+        var pow2 = 1;
+        signal idxAccum[depth + 1];
+        idxAccum[0] <== 0;
+        for (var b = 0; b < depth; b++) {
+            // Path bits are boolean (defense in depth; Merkle gadget also enforces this)
+            pathIndices[i][b] * (pathIndices[i][b] - 1) === 0;
+            idxAccum[b + 1] <== idxAccum[b] + pathIndices[i][b] * pow2;
+            pow2 = pow2 * 2;
+        }
+        idxAccum[depth] === i;
+
+        // Inclusion proof (computed regardless; enforced only when revealed)
         inclusionProofs[i] = MerkleTreeInclusionProof(depth);
         inclusionProofs[i].leaf <== originalLeaves[i];
         for (var j = 0; j < depth; j++) {
@@ -34,19 +69,21 @@ template RedactionValidity(maxLeaves, depth) {
             inclusionProofs[i].pathIndices[j] <== pathIndices[i][j];
         }
 
-        // Force revealMask to be strictly binary (0 or 1)
-        revealMask[i] * (revealMask[i] - 1) === 0;
-
-        // Only constrain the root when revealMask is 1 (conditional constraint):
-        // if revealMask[i] == 0 the product is 0 and the constraint is vacuous;
-        // if revealMask[i] == 1 it enforces originalRoot == inclusionProofs[i].root.
+        // Only constrain root when revealed
         revealMask[i] * (originalRoot - inclusionProofs[i].root) === 0;
 
+        // Masked reveal vector
         revealedLeaves[i] <== revealMask[i] * originalLeaves[i];
     }
 
-    // Aggregate revealed leaves into a Poseidon commitment
+    // Sum constraint
+    revealedCount === maskSum[maxLeaves];
+
+    // -------------------------
+    // 3) Commit to revealedLeaves + revealedCount
+    // -------------------------
     signal acc[maxLeaves];
+
     component initHash = Poseidon(2);
     initHash.inputs[0] <== revealedCount;
     initHash.inputs[1] <== revealedLeaves[0];
