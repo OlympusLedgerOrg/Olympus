@@ -30,8 +30,12 @@ import nacl.signing
 
 from protocol.hashes import shard_header_hash
 from protocol.merkle import MerkleProof, verify_proof
+from protocol.rfc3161 import TRUST_MODE_DEV, TRUST_MODE_PROD, verify_timestamp_token
 from protocol.shards import verify_header
 
+
+BUNDLE_SCHEMA_VERSION = "1.0.0"
+BUNDLE_CLI_VERSION = "1.0.0"
 
 # ---------------------------------------------------------------------------
 # Core verification logic
@@ -75,7 +79,14 @@ def _check_signature(
     return True, "Ed25519 signature valid"
 
 
-def _check_timestamp_token(header_hash_hex: str, token: dict[str, str]) -> tuple[bool, str]:
+def _check_timestamp_token(
+    header_hash_hex: str,
+    token: dict[str, str],
+    *,
+    trust_mode: str,
+    trusted_fingerprints: set[str] | None,
+    trust_store_path: str | None,
+) -> tuple[bool, str]:
     """Verify the RFC 3161 timestamp token imprint matches the header hash.
 
     The Olympus imprint scheme is::
@@ -89,6 +100,9 @@ def _check_timestamp_token(header_hash_hex: str, token: dict[str, str]) -> tuple
     Returns:
         ``(passed, message)``
     """
+    if "tsa_cert_fingerprint" not in token:
+        return False, "Timestamp token missing tsa_cert_fingerprint"
+
     # 1. Verify that the token was issued for the correct header hash
     if token["hash_hex"] != header_hash_hex:
         return False, (
@@ -99,30 +113,22 @@ def _check_timestamp_token(header_hash_hex: str, token: dict[str, str]) -> tuple
     # 2. Verify the imprint scheme: SHA-256(blake3_bytes)
     try:
         blake3_bytes = bytes.fromhex(header_hash_hex)
-        expected_imprint = hashlib.sha256(blake3_bytes).digest()
+        hashlib.sha256(blake3_bytes).digest()
     except ValueError as exc:
         return False, f"Invalid header hash hex: {exc}"
 
-    # 3. Optionally verify the TST DER bytes via rfc3161ng
     try:
-        import rfc3161ng
-
         tst_bytes = bytes.fromhex(token["tst_hex"])
-        result = rfc3161ng.check_timestamp(
+        result = verify_timestamp_token(
             tst_bytes,
-            certificate=None,
-            digest=expected_imprint,
-            hashname="sha256",
+            header_hash_hex,
+            trust_mode=trust_mode,
+            trusted_fingerprints=trusted_fingerprints,
+            trust_store_path=trust_store_path,
         )
         if result:
             return True, "RFC 3161 timestamp token valid (imprint verified)"
         return False, "RFC 3161 timestamp token INVALID"
-    except ImportError:
-        # rfc3161ng not installed – do a best-effort check
-        return True, (
-            "RFC 3161 imprint scheme consistent "
-            "(full TST verification skipped – rfc3161ng not installed)"
-        )
     except Exception as exc:
         return False, f"RFC 3161 verification error: {exc}"
 
@@ -167,7 +173,37 @@ def _check_merkle_proofs(
     return results
 
 
-def verify_bundle(bundle: dict[str, Any]) -> tuple[bool, list[tuple[bool, str]]]:
+def _check_bundle_version(bundle_version: str) -> tuple[bool, str]:
+    """Ensure the bundle schema version is supported."""
+    if bundle_version == BUNDLE_SCHEMA_VERSION:
+        return True, f"Bundle schema version supported: {bundle_version}"
+    return False, f"Bundle schema version unsupported: {bundle_version}"
+
+
+def _check_canonicalization_provenance(
+    canonicalization: dict[str, Any],
+) -> tuple[bool, str]:
+    """Verify canonicalization provenance fields are present."""
+    required = {"format", "normalization_mode", "canonicalizer_versions", "fallback_reason"}
+    missing = required - set(canonicalization.keys())
+    if missing:
+        return False, f"Canonicalization provenance missing fields: {sorted(missing)}"
+    if not isinstance(canonicalization.get("canonicalizer_versions"), dict):
+        return False, "Canonicalization provenance canonicalizer_versions must be a dict"
+    return True, (
+        "Canonicalization provenance present "
+        f"(format={canonicalization.get('format')}, "
+        f"mode={canonicalization.get('normalization_mode')})"
+    )
+
+
+def verify_bundle(
+    bundle: dict[str, Any],
+    *,
+    trust_mode: str = TRUST_MODE_DEV,
+    trusted_fingerprints: set[str] | None = None,
+    trust_store_path: str | None = None,
+) -> tuple[bool, list[tuple[bool, str]]]:
     """Verify all components of a verification bundle.
 
     Args:
@@ -181,11 +217,19 @@ def verify_bundle(bundle: dict[str, Any]) -> tuple[bool, list[tuple[bool, str]]]
 
     # --- Required fields ---
     try:
+        bundle_version = bundle["bundle_version"]
+        canonicalization = bundle["canonicalization"]
         header = bundle["shard_header"]
         signature_hex = bundle["signature"]
         pubkey_hex = bundle["pubkey"]
     except KeyError as exc:
         return False, [(False, f"Missing required field: {exc}")]
+
+    # 0. Bundle schema version
+    results.append(_check_bundle_version(bundle_version))
+
+    # 0.5 Canonicalization provenance
+    results.append(_check_canonicalization_provenance(canonicalization))
 
     # 1. Header hash
     results.append(_check_header_hash(header))
@@ -195,7 +239,15 @@ def verify_bundle(bundle: dict[str, Any]) -> tuple[bool, list[tuple[bool, str]]]
 
     # 3. Timestamp token (optional)
     if "timestamp_token" in bundle and bundle["timestamp_token"] is not None:
-        results.append(_check_timestamp_token(header["header_hash"], bundle["timestamp_token"]))
+        results.append(
+            _check_timestamp_token(
+                header["header_hash"],
+                bundle["timestamp_token"],
+                trust_mode=trust_mode,
+                trusted_fingerprints=trusted_fingerprints,
+                trust_store_path=trust_store_path,
+            )
+        )
 
     # 4. Merkle proofs (optional)
     if "merkle_proofs" in bundle and bundle["merkle_proofs"]:
@@ -215,8 +267,29 @@ def main() -> int:
         description="Offline verifier for Olympus verification bundles",
     )
     parser.add_argument(
+        "--version",
+        action="version",
+        version=f"Olympus bundle verifier {BUNDLE_CLI_VERSION}",
+    )
+    parser.add_argument(
         "bundle_file",
         help="Path to the verification bundle JSON file",
+    )
+    parser.add_argument(
+        "--tsa-trust-mode",
+        choices=[TRUST_MODE_DEV, TRUST_MODE_PROD],
+        default=TRUST_MODE_DEV,
+        help="TSA trust policy (dev accepts embedded certs; prod requires pinning)",
+    )
+    parser.add_argument(
+        "--tsa-fingerprint",
+        action="append",
+        default=[],
+        help="Trusted TSA certificate fingerprint (hex). Repeatable.",
+    )
+    parser.add_argument(
+        "--tsa-trust-store",
+        help="Path to a TSA certificate PEM/DER for production verification.",
     )
     args = parser.parse_args()
 
@@ -230,7 +303,13 @@ def main() -> int:
         print(f"Error: invalid JSON: {exc}", file=sys.stderr)
         return 1
 
-    all_passed, results = verify_bundle(bundle)
+    trusted_fingerprints = {fp.lower() for fp in args.tsa_fingerprint} if args.tsa_fingerprint else None
+    all_passed, results = verify_bundle(
+        bundle,
+        trust_mode=args.tsa_trust_mode,
+        trusted_fingerprints=trusted_fingerprints,
+        trust_store_path=args.tsa_trust_store,
+    )
 
     for passed, message in results:
         symbol = "✓" if passed else "✗"

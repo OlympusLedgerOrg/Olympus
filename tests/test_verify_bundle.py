@@ -12,6 +12,7 @@ from unittest.mock import patch
 
 import nacl.signing
 
+from protocol.canonicalizer import CANONICALIZER_VERSIONS
 from protocol.hashes import hash_bytes
 from protocol.merkle import MerkleTree
 from protocol.shards import create_shard_header, sign_header
@@ -57,6 +58,13 @@ def _make_bundle(
     pubkey_hex = verify_key.encode().hex()
 
     bundle: dict = {
+        "bundle_version": "1.0.0",
+        "canonicalization": {
+            "format": "application/json",
+            "normalization_mode": "canonical_v1",
+            "fallback_reason": None,
+            "canonicalizer_versions": CANONICALIZER_VERSIONS,
+        },
         "shard_header": header,
         "signature": signature_hex,
         "pubkey": pubkey_hex,
@@ -76,6 +84,7 @@ def _make_bundle(
             "tsa_url": "https://freetsa.org/tsr",
             "tst_hex": "3000",  # minimal placeholder
             "timestamp": ts,
+            "tsa_cert_fingerprint": "aa" * 32,
         }
 
     # Optional Merkle proofs
@@ -113,7 +122,7 @@ def test_valid_bundle_minimal():
     bundle = _make_bundle()
     passed, results = verify_bundle(bundle)
     assert passed is True
-    assert len(results) == 2  # header hash + signature
+    assert len(results) == 4  # bundle version + canonicalization + header + signature
 
 
 def test_valid_bundle_with_timestamp_token():
@@ -123,7 +132,7 @@ def test_valid_bundle_with_timestamp_token():
     with patch("rfc3161ng.check_timestamp", return_value=True):
         passed, results = verify_bundle(bundle)
     assert passed is True
-    assert len(results) == 3
+    assert len(results) == 5
 
 
 def test_valid_bundle_with_merkle_proofs():
@@ -145,6 +154,13 @@ def test_valid_bundle_with_merkle_proofs():
 
     proof = tree.generate_proof(0)
     bundle = {
+        "bundle_version": "1.0.0",
+        "canonicalization": {
+            "format": "application/json",
+            "normalization_mode": "canonical_v1",
+            "fallback_reason": None,
+            "canonicalizer_versions": CANONICALIZER_VERSIONS,
+        },
         "shard_header": header,
         "signature": sig,
         "pubkey": verify_key.encode().hex(),
@@ -216,6 +232,13 @@ def test_full_bundle_all_checks():
 
     proof = tree.generate_proof(0)
     bundle = {
+        "bundle_version": "1.0.0",
+        "canonicalization": {
+            "format": "application/json",
+            "normalization_mode": "canonical_v1",
+            "fallback_reason": None,
+            "canonicalizer_versions": CANONICALIZER_VERSIONS,
+        },
         "shard_header": header,
         "signature": sig,
         "pubkey": verify_key.encode().hex(),
@@ -224,6 +247,7 @@ def test_full_bundle_all_checks():
             "tsa_url": "https://freetsa.org/tsr",
             "tst_hex": "3000",
             "timestamp": ts,
+            "tsa_cert_fingerprint": "aa" * 32,
         },
         "merkle_proofs": [
             {
@@ -239,7 +263,7 @@ def test_full_bundle_all_checks():
         passed, results = verify_bundle(bundle)
 
     assert passed is True
-    assert len(results) == 4  # header + sig + token + 1 merkle proof
+    assert len(results) == 6  # version + canonicalization + header + sig + token + proof
 
 
 # ---------------------------------------------------------------------------

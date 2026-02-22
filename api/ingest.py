@@ -21,7 +21,8 @@ from typing import Any
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
 
-from protocol.canonical import canonicalize_document, document_to_bytes
+from protocol.canonical import CANONICAL_VERSION, canonicalize_document, document_to_bytes
+from protocol.canonicalizer import canonicalization_provenance
 from protocol.hashes import hash_bytes
 from protocol.ledger import Ledger
 from protocol.merkle import MerkleTree
@@ -74,6 +75,7 @@ class BatchIngestionResponse(BaseModel):
     results: list[IngestionResult]
     ledger_entry_hash: str = Field(..., description="Hash of the ledger entry for this batch")
     timestamp: str
+    canonicalization: dict[str, Any]
 
 
 class IngestionProofResponse(BaseModel):
@@ -87,6 +89,7 @@ class IngestionProofResponse(BaseModel):
     merkle_proof: dict[str, Any]
     ledger_entry_hash: str
     timestamp: str
+    canonicalization: dict[str, Any]
 
 
 # ---------------------------------------------------------------------------
@@ -128,6 +131,10 @@ async def ingest_batch(batch: BatchIngestionRequest) -> BatchIngestionResponse:
     results: list[IngestionResult] = []
     new_hashes: list[bytes] = []
     dedup_count = 0
+    canonicalization = canonicalization_provenance(
+        "application/json",
+        CANONICAL_VERSION,
+    )
 
     for record in batch.records:
         # Canonicalize and hash
@@ -179,6 +186,7 @@ async def ingest_batch(batch: BatchIngestionRequest) -> BatchIngestionResponse:
             record_hash=merkle_root,
             shard_id=shard_id,
             shard_root=merkle_root,
+            canonicalization=canonicalization,
         )
         ledger_entry_hash = ledger_entry.entry_hash
 
@@ -202,6 +210,7 @@ async def ingest_batch(batch: BatchIngestionRequest) -> BatchIngestionResponse:
                     },
                     "ledger_entry_hash": ledger_entry_hash,
                     "timestamp": ts,
+                    "canonicalization": canonicalization,
                 }
     else:
         ledger_entry_hash = _write_ledger.entries[-1].entry_hash if _write_ledger.entries else ""
@@ -221,6 +230,7 @@ async def ingest_batch(batch: BatchIngestionRequest) -> BatchIngestionResponse:
         results=results,
         ledger_entry_hash=ledger_entry_hash,
         timestamp=ts,
+        canonicalization=canonicalization,
     )
 
 

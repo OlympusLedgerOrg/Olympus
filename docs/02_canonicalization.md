@@ -64,7 +64,7 @@ Phase 0.1 Institutional Pinning — multi-format artifact ingestion with byte-st
 #### PDF
 
 - **Module**: `Canonicalizer.pdf_normalize()`
-- **Version**: `1.3.0-pikepdf-linearized`
+- **Version**: `1.4.0-pikepdf-10.3.0-linearized`
 - Implementation: `pikepdf` (version-pinned)
 - Strips volatile metadata keys (CreationDate, ModDate, Producer, Creator, Title, Subject, Author, Keywords) and clears XMP packets
 - Forces deterministic document IDs (`static_id=True`) and linearized output for stable byte order
@@ -103,6 +103,18 @@ A separate deterministic JSON encoder used internally for protocol operations (l
 ## Version Pinning
 
 All canonicalizer versions are declared in `CANONICALIZER_VERSIONS` and embedded in every artifact result. Changing a version requires a protocol version bump and invalidates all historical proofs for that format.
+
+## Commitment Provenance Metadata
+
+Every commitment and verification bundle must carry canonicalization provenance:
+
+- **`format`** — MIME type or format identifier (e.g., `application/pdf`)
+- **`normalization_mode`** — Canonicalization pipeline identifier (e.g., `pdf_norm_pikepdf_v1`)
+- **`canonicalizer_versions`** — Full `CANONICALIZER_VERSIONS` map pinned at commit time
+- **`fallback_reason`** — Explicit fallback reason code when byte preservation is used
+
+This metadata prevents “same document hashed differently later” disputes by making
+the canonicalization decision explicit and auditable.
 
 ## Canonicalization Rules Summary
 

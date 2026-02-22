@@ -200,6 +200,7 @@ class LedgerEntryResponse(BaseModel):
     record_hash: str  # Hex-encoded
     shard_id: str
     shard_root: str  # Hex-encoded
+    canonicalization: dict[str, Any]
     prev_entry_hash: str  # Hex-encoded (empty for genesis)
     entry_hash: str  # Hex-encoded
 
@@ -218,6 +219,7 @@ class TimestampTokenResponse(BaseModel):
     tst_hex: str  # DER-encoded TimeStampToken, hex-encoded
     hash_hex: str  # Hex-encoded BLAKE3 hash that was submitted to the TSA
     timestamp: str  # ISO 8601 timestamp from the TSA response
+    tsa_cert_fingerprint: str | None  # SHA-256 fingerprint of TSA cert
 
 
 class HeaderVerificationResponse(BaseModel):
@@ -454,6 +456,7 @@ async def get_ledger_tail(
                     record_hash=entry.record_hash,
                     shard_id=entry.shard_id,
                     shard_root=entry.shard_root,
+                    canonicalization=entry.canonicalization,
                     prev_entry_hash=entry.prev_entry_hash,
                     entry_hash=entry.entry_hash,
                 )
@@ -504,6 +507,7 @@ async def verify_latest_header(shard_id: str) -> HeaderVerificationResponse:
                 tst_hex=token_dict["tst_hex"],
                 hash_hex=token_dict["hash_hex"],
                 timestamp=token_dict["timestamp"],
+                tsa_cert_fingerprint=token_dict["tsa_cert_fingerprint"],
             )
             from protocol.rfc3161 import verify_timestamp_token
 
