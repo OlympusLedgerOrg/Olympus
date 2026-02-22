@@ -11,7 +11,8 @@ Validates:
 import pytest
 
 from protocol.hashes import hash_bytes
-from protocol.redaction import RedactionProtocol, apply_redaction
+from protocol.merkle import MerkleProof
+from protocol.redaction import RedactionProof, RedactionProtocol, apply_redaction
 
 
 def test_redaction_mask_semantics():
@@ -274,3 +275,133 @@ def test_redaction_proof_verification_wrong_content():
     wrong_content = ["Wrong A", "Wrong B"]
     is_valid = RedactionProtocol.verify_redaction_proof(proof, wrong_content)
     assert is_valid is False
+
+
+def test_redaction_proof_tampered_revealed_hashes_length():
+    """Test that verification fails when revealed_hashes length is inconsistent with indices."""
+    document_parts = ["Part A", "Part B", "Part C"]
+    revealed_indices = [0, 2]
+
+    tree, _ = RedactionProtocol.commit_document(document_parts)
+    proof = RedactionProtocol.create_redaction_proof(tree, revealed_indices)
+
+    # Tamper the proof: keep indices at length 2 but truncate revealed_hashes to length 1
+    tampered_proof = RedactionProof(
+        original_root=proof.original_root,
+        revealed_indices=proof.revealed_indices,
+        revealed_hashes=proof.revealed_hashes[:1],  # shorter than indices
+        merkle_proofs=proof.merkle_proofs,
+    )
+
+    # revealed_content has 2 items matching indices, but revealed_hashes only has 1
+    is_valid = RedactionProtocol.verify_redaction_proof(tampered_proof, ["Part A", "Part C"])
+    assert is_valid is False
+
+
+def test_redaction_proof_tampered_merkle_proofs_length():
+    """Test that verification fails when merkle_proofs length is inconsistent."""
+    document_parts = ["Part A", "Part B", "Part C"]
+    revealed_indices = [0, 2]
+
+    tree, _ = RedactionProtocol.commit_document(document_parts)
+    proof = RedactionProtocol.create_redaction_proof(tree, revealed_indices)
+
+    # Tamper the proof: keep indices and hashes at length 2 but truncate merkle_proofs to length 1
+    tampered_proof = RedactionProof(
+        original_root=proof.original_root,
+        revealed_indices=proof.revealed_indices,
+        revealed_hashes=proof.revealed_hashes,
+        merkle_proofs=proof.merkle_proofs[:1],  # shorter than indices
+    )
+
+    # revealed_content has 2 items, but merkle_proofs only has 1
+    is_valid = RedactionProtocol.verify_redaction_proof(tampered_proof, ["Part A", "Part C"])
+    assert is_valid is False
+
+
+def test_redaction_proof_tampered_merkle_proof_siblings():
+    """Test that verification fails when Merkle proof siblings are tampered."""
+    document_parts = ["Part A", "Part B", "Part C"]
+    revealed_indices = [0]
+
+    tree, _ = RedactionProtocol.commit_document(document_parts)
+    proof = RedactionProtocol.create_redaction_proof(tree, revealed_indices)
+
+    # Tamper the Merkle proof by corrupting its sibling hash
+    original_mp = proof.merkle_proofs[0]
+    fake_sibling = b"\x00" * 32
+    tampered_siblings = [(fake_sibling, is_right) for _, is_right in original_mp.siblings]
+    tampered_mp = MerkleProof(
+        leaf_hash=original_mp.leaf_hash,
+        leaf_index=original_mp.leaf_index,
+        siblings=tampered_siblings,
+        root_hash=original_mp.root_hash,
+    )
+    tampered_proof = RedactionProof(
+        original_root=proof.original_root,
+        revealed_indices=proof.revealed_indices,
+        revealed_hashes=proof.revealed_hashes,
+        merkle_proofs=[tampered_mp],
+    )
+
+    is_valid = RedactionProtocol.verify_redaction_proof(tampered_proof, ["Part A"])
+    assert is_valid is False
+
+
+def test_redaction_proof_mismatched_root_hash():
+    """Test that verification fails when Merkle proof root hash differs from claimed root."""
+    document_parts = ["Part A", "Part B"]
+    revealed_indices = [0]
+
+    tree, _ = RedactionProtocol.commit_document(document_parts)
+    proof = RedactionProtocol.create_redaction_proof(tree, revealed_indices)
+
+    # Build a proof where original_root claims a different root than the Merkle proof contains
+    tampered_proof = RedactionProof(
+        original_root="a" * 64,  # wrong root
+        revealed_indices=proof.revealed_indices,
+        revealed_hashes=proof.revealed_hashes,
+        merkle_proofs=proof.merkle_proofs,
+    )
+
+    is_valid = RedactionProtocol.verify_redaction_proof(tampered_proof, ["Part A"])
+    assert is_valid is False
+
+
+def test_apply_redaction_fully_redacted():
+    """Test apply_redaction when all characters are redacted."""
+    original = "SECRET"
+    mask = [1] * len(original)
+
+    redacted = apply_redaction(original, mask, replacement="█")
+
+    assert redacted == "██████"
+
+
+def test_apply_redaction_empty_string():
+    """Test apply_redaction with an empty string."""
+    original = ""
+    mask = []
+
+    redacted = apply_redaction(original, mask, replacement="█")
+
+    assert redacted == ""
+
+
+def test_create_leaf_hashes_deterministic():
+    """Test that create_leaf_hashes produces consistent, deterministic results."""
+    parts = ["alpha", "beta", "gamma"]
+    hashes1 = RedactionProtocol.create_leaf_hashes(parts)
+    hashes2 = RedactionProtocol.create_leaf_hashes(parts)
+
+    assert hashes1 == hashes2
+    assert all(isinstance(h, bytes) for h in hashes1)
+    assert len(hashes1) == len(parts)
+
+
+def test_create_leaf_hashes_unique_per_part():
+    """Test that distinct document parts produce distinct leaf hashes."""
+    parts = ["apple", "orange", "banana"]
+    hashes = RedactionProtocol.create_leaf_hashes(parts)
+
+    assert len(set(hashes)) == len(parts)

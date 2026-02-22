@@ -102,6 +102,88 @@ This repository does not implement distributed networking or consensus.
 - Data never being published
 - Multi-node collusion (federation planned)
 
+See [threat-model.md](threat-model.md) for a plain-English one-page summary
+suitable for auditors, policymakers, and grant committees.
+
+---
+
+## FOIA Workflow Support
+
+Olympus is designed to bring cryptographic integrity to Freedom of Information
+Act (FOIA) workflows.  The core problem it addresses: **an agency could alter a
+document before responding to a FOIA request**, and the requester would have no
+way to know.
+
+### How the FOIA Workflow Works
+
+```
+Agency publishes document → Olympus commits hash → FOIA request arrives
+→ Agency produces redacted version → Requestor verifies redacted version
+  is derived from the same committed original
+```
+
+1. **Pre-commitment** — Before any FOIA request arrives, the agency commits
+   the original document to Olympus.  A cryptographic fingerprint (BLAKE3 hash)
+   and a signed Merkle commitment are written to the append-only ledger.
+
+2. **Redaction proof** — When the agency produces a redacted FOIA response, it
+   uses `protocol/redaction.py` to generate a `RedactionProof`.  This proof
+   cryptographically ties each revealed paragraph or section back to the
+   pre-committed Merkle root.
+
+3. **Independent verification** — Any requester or auditor can call
+   `RedactionProtocol.verify_redaction_proof(proof, revealed_content)` to
+   confirm:
+   - The revealed content matches its committed hash.
+   - Each revealed section has a valid Merkle inclusion proof against the
+     original root.
+   - The root in the proof matches the root that was committed to the ledger
+     before the FOIA request.
+
+### What This Proves
+
+| Property | Guarantee |
+|----------|-----------|
+| Original document was committed before the FOIA request | ✅ Ledger timestamp and hash-chain linkage |
+| Revealed content was not altered between commitment and release | ✅ Hash comparison against committed leaf |
+| Redacted sections cannot be silently un-redacted later | ✅ Merkle root is fixed at commitment time |
+| The agency cannot claim a different original document | ✅ Signed shard header binds root to agency key |
+
+### Key Code Entry Points for FOIA Auditors
+
+| Component | Location | Purpose |
+|-----------|----------|---------|
+| Redaction proof creation | `protocol/redaction.py` — `RedactionProtocol.create_redaction_proof()` | Generates a proof for a FOIA redacted release |
+| Redaction proof verification | `protocol/redaction.py` — `RedactionProtocol.verify_redaction_proof()` | Independently verifies a FOIA redaction proof |
+| Document commitment | `protocol/redaction.py` — `RedactionProtocol.commit_document()` | Commits an original document before FOIA disclosure |
+| Redacted document reconstruction | `protocol/redaction.py` — `RedactionProtocol.reconstruct_redacted_document()` | Rebuilds a redacted document with markers for omitted sections |
+| Ledger chain verification | `protocol/ledger.py` — `Ledger.verify_chain()` | Confirms no entries have been added out-of-order or tampered with |
+
+### Example: Verifying a FOIA Response
+
+```python
+from protocol.redaction import RedactionProtocol
+
+# Receive the redaction proof from the agency (stored in the ledger)
+# and the revealed content from the FOIA response
+is_valid = RedactionProtocol.verify_redaction_proof(proof, revealed_content)
+
+if is_valid:
+    print("FOIA response is cryptographically consistent with the committed original.")
+else:
+    print("WARNING: FOIA response does NOT match the committed original.")
+```
+
+### What Olympus Does Not Guarantee for FOIA
+
+- **Completeness** — Olympus cannot force an agency to commit all documents.
+  It only guarantees the integrity of what has been committed.
+- **Redaction policy** — Olympus does not decide what should or should not be
+  redacted.  That judgment remains with the agency and applicable law.
+- **Key honesty** — If an agency controls the signing keys, Olympus cannot
+  detect colluding parties signing forged roots.  Federation (planned Phase 1+)
+  addresses this.
+
 ---
 
 ## Repository Structure
