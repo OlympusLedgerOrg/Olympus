@@ -244,3 +244,5 @@ pip install -r requirements.txt -r requirements-dev.txt
 pytest tests/ -v
 uvicorn api.app:app --reload
 ```
+
+For detailed development workflows and setup instructions, see [DEVELOPMENT.md](DEVELOPMENT.md).
