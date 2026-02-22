@@ -54,7 +54,7 @@ class Groth16Prover:
         """Ensure snarkjs launcher is available (snarkjs or npx)."""
         if shutil.which(self.snarkjs_bin) is None:
             raise FileNotFoundError(
-                f"snarkjs launcher '{self.snarkjs_bin}' not found in PATH. "
+                f"snarkjs binary '{self.snarkjs_bin}' not found in PATH. "
                 "Install Node.js/npm (for npx) or install snarkjs globally, "
                 "or provide an explicit path."
             )
@@ -108,7 +108,14 @@ class Groth16Prover:
         public_path.parent.mkdir(parents=True, exist_ok=True)
 
         self._run(
-            ["groth16", "prove", str(zkey_path), str(witness_path), str(proof_path), str(public_path)],
+            [
+                "groth16",
+                "prove",
+                str(zkey_path),
+                str(witness_path),
+                str(proof_path),
+                str(public_path),
+            ],
             cwd=self.circuits_dir,
         )
 
@@ -141,7 +148,9 @@ class Groth16Prover:
         witness = witness_path or (self.circuits_dir / "build" / "document_existence.wtns")
         zkey = zkey_path or (self.circuits_dir / "build" / "document_existence_final.zkey")
         proof_file = proof_path or (self.circuits_dir / "build" / "document_existence_proof.json")
-        public_file = public_path or (self.circuits_dir / "build" / "document_existence_public.json")
+        public_file = public_path or (
+            self.circuits_dir / "build" / "document_existence_public.json"
+        )
 
         return self.prove(
             circuit="document_existence",

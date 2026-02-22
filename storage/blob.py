@@ -11,9 +11,10 @@ variables.
 """
 
 import os
+from typing import cast
 
-import boto3
-from botocore.exceptions import ClientError
+import boto3  # type: ignore[import-untyped]
+from botocore.exceptions import ClientError  # type: ignore[import-untyped]
 
 
 class BlobStore:
@@ -115,7 +116,7 @@ class BlobStore:
 
         try:
             response = self.s3.get_object(Bucket=self.bucket, Key=raw_hash)
-            return response["Body"].read()
+            return cast(bytes, response["Body"].read())
         except ClientError as e:
             if e.response["Error"]["Code"] == "NoSuchKey":
                 return None
