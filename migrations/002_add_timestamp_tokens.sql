@@ -23,7 +23,8 @@ CREATE TABLE IF NOT EXISTS timestamp_tokens (
     -- DER-encoded RFC 3161 TimeStampToken
     tst           BYTEA       NOT NULL,
 
-    -- 32-byte BLAKE3 hash submitted to TSA as messageImprint.hashedMessage
+    -- 32-byte SHA-256 digest of the BLAKE3 header hash bytes, submitted to
+    -- TSA as messageImprint.hashedMessage.  Computed as SHA-256(bytes.fromhex(blake3_hex)).
     imprint_hash  BYTEA       NOT NULL,
 
     -- genTime extracted from TSTInfo
@@ -94,7 +95,7 @@ COMMENT ON TABLE timestamp_tokens IS
 'RFC 3161 TimeStampTokens anchoring shard header hashes. Append-only.';
 
 COMMENT ON COLUMN timestamp_tokens.imprint_hash IS
-'32-byte BLAKE3 hash submitted as RFC3161 messageImprint.hashedMessage.';
+'32-byte SHA-256 digest of the BLAKE3 header hash bytes, submitted as RFC 3161 messageImprint.hashedMessage. Computed as SHA-256(bytes.fromhex(blake3_hex)).';
 
 COMMENT ON COLUMN timestamp_tokens.gen_time IS
 'TSA-provided genTime from RFC3161 TSTInfo.';

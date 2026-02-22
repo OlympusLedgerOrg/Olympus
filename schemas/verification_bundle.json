@@ -1,0 +1,68 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://olympus-protocol.org/schemas/verification_bundle.json",
+  "title": "Olympus Verification Bundle",
+  "description": "Self-contained bundle for offline verification of an Olympus shard commitment. Contains the shard header, Ed25519 signature, optional RFC 3161 timestamp token, and optional Merkle inclusion proofs.",
+  "type": "object",
+  "required": ["shard_header", "signature", "pubkey"],
+  "properties": {
+    "shard_header": {
+      "type": "object",
+      "description": "Shard header fields (header_hash is recomputed for verification)",
+      "required": ["shard_id", "root_hash", "timestamp", "previous_header_hash", "header_hash"],
+      "properties": {
+        "shard_id": { "type": "string" },
+        "root_hash": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+        "timestamp": { "type": "string" },
+        "previous_header_hash": { "type": "string" },
+        "header_hash": { "type": "string", "pattern": "^[0-9a-f]{64}$" }
+      }
+    },
+    "signature": {
+      "type": "string",
+      "description": "Hex-encoded 64-byte Ed25519 signature over header_hash",
+      "pattern": "^[0-9a-f]{128}$"
+    },
+    "pubkey": {
+      "type": "string",
+      "description": "Hex-encoded 32-byte Ed25519 public key",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "timestamp_token": {
+      "type": "object",
+      "description": "Optional RFC 3161 timestamp token for the header hash",
+      "required": ["hash_hex", "tsa_url", "tst_hex", "timestamp"],
+      "properties": {
+        "hash_hex": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+        "tsa_url": { "type": "string", "format": "uri" },
+        "tst_hex": { "type": "string" },
+        "timestamp": { "type": "string" }
+      }
+    },
+    "merkle_proofs": {
+      "type": "array",
+      "description": "Optional Merkle inclusion proofs anchored to the shard root",
+      "items": {
+        "type": "object",
+        "required": ["leaf_hash", "leaf_index", "siblings", "root_hash"],
+        "properties": {
+          "leaf_hash": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+          "leaf_index": { "type": "integer", "minimum": 0 },
+          "siblings": {
+            "type": "array",
+            "items": {
+              "type": "array",
+              "minItems": 2,
+              "maxItems": 2,
+              "items": [
+                { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+                { "type": "boolean" }
+              ]
+            }
+          },
+          "root_hash": { "type": "string", "pattern": "^[0-9a-f]{64}$" }
+        }
+      }
+    }
+  }
+}
