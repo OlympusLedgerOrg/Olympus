@@ -1,8 +1,3 @@
-Here’s a **full rewrite of your `proofs/README.md`** that matches the repo as it exists now (indexed `non_existence`, updated smoke inputs, and more accurate claims). I tightened wording so it’s “awesome” *and* honest about what’s proven.
-
-**Put this file here:** `proofs/README.md` (overwrite)
-
-````md
 # Zero-Knowledge Proofs for Olympus
 
 This directory contains the Circom circuits and Groth16 tooling used by Olympus to
@@ -192,13 +187,4 @@ These circuits are reference implementations used for protocol development and t
 * snarkjs documentation
 * Olympus Protocol Specification: `../docs/05_zk_redaction.md`
 
-```
-
----
-
-## Two tiny things you should update elsewhere (so docs never drift again)
-1) In the repo root docs (if they mention `emptyLeaf`), change it to `leafIndex` for non-existence.  
-2) In `Building Circuits Manually`, your PTAU filename was `_15` in the old text; your scripts use `_17`. I updated it above.
-
-If you paste `proofs/circuits/redaction_validity.circom` *as it exists now* (post “Fix redaction validity constraints”), I can tighten that circuit description even further so it exactly matches the proved statement.
 ```
