@@ -60,7 +60,7 @@ class Witness:
 
     circuit: str
     inputs: dict[str, Any]
-    run_id: str
+    run_id: str = field(default_factory=lambda: uuid.uuid4().hex)
     input_path: Path | None = field(default=None, repr=False)
     witness_path: Path | None = field(default=None, repr=False)
 
@@ -117,8 +117,8 @@ class ProofGenerator:
         """
         self._validate_inputs(inputs)
 
-        run_id = uuid.uuid4().hex
-        witness = Witness(circuit=self.circuit, inputs=inputs, run_id=run_id)
+        witness = Witness(circuit=self.circuit, inputs=inputs)
+        run_id = witness.run_id
 
         self.build_dir.mkdir(parents=True, exist_ok=True)
 
@@ -156,7 +156,7 @@ class ProofGenerator:
         """
         if not self.snarkjs_available:
             raise RuntimeError(
-                f"snarkjs launcher '{self.snarkjs_bin}' not found. "
+                f"snarkjs binary '{self.snarkjs_bin}' not found. "
                 "Install Node.js/npm (for npx) or install snarkjs globally."
             )
 
@@ -200,7 +200,7 @@ class ProofGenerator:
         """
         if not self.snarkjs_available:
             raise RuntimeError(
-                f"snarkjs launcher '{self.snarkjs_bin}' not found. "
+                f"snarkjs binary '{self.snarkjs_bin}' not found. "
                 "Install Node.js/npm (for npx) or install snarkjs globally."
             )
 

@@ -38,7 +38,9 @@ def make_404_error():
 
 def make_no_such_key_error():
     """Create a mock NoSuchKey ClientError for testing."""
-    error_response = {"Error": {"Code": "NoSuchKey", "Message": "The specified key does not exist."}}
+    error_response = {
+        "Error": {"Code": "NoSuchKey", "Message": "The specified key does not exist."}
+    }
     return ClientError(error_response, "GetObject")
 
 
