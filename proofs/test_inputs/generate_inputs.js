@@ -3,7 +3,7 @@
 // generate_inputs.js — Generate valid Poseidon Merkle inputs for smoke tests
 //
 // Produces JSON input files that the circom WASM witness generators can
-// consume.  Each file contains a complete, valid witness for its circuit.
+// consume. Each file contains a complete, valid witness for its circuit.
 //
 // Usage:  node generate_inputs.js
 // Output: proofs/build/<circuit>_input.json
@@ -15,11 +15,6 @@ const fs = require("fs");
 const path = require("path");
 
 const BUILD_DIR = path.join(__dirname, "..", "build");
-
-// Convert a BigInt-like poseidon output to a decimal string for circom JSON
-function F2str(F, val) {
-  return F.toObject(val).toString();
-}
 
 // -----------------------------------------------------------------------
 // Build a depth-N Merkle tree from leaves using Poseidon(2)
@@ -49,6 +44,7 @@ function buildMerkleTree(poseidon, F, leaves, depth) {
 
 // -----------------------------------------------------------------------
 // Extract a Merkle proof (sibling path) for a given leaf index
+// pathIndices are LSB-first bits (idx & 1 then idx >>= 1)
 // -----------------------------------------------------------------------
 function getMerkleProof(layers, index, depth) {
   const pathElements = [];
@@ -76,6 +72,7 @@ async function main() {
     const depth = 20;
     const leafValue = BigInt(42);
     const leafIndex = 0;
+
     const { root, layers } = buildMerkleTree(poseidon, F, [leafValue], depth);
     const { pathElements, pathIndices } = getMerkleProof(layers, leafIndex, depth);
 
@@ -93,18 +90,19 @@ async function main() {
   }
 
   // =====================================================================
-  // 2. non_existence  (depth = 20, empty leaf = 0 at index 5)
+  // 2. non_existence  (depth = 20, prove leaf at index 5 is empty (0))
+  //    NOTE: For smoke tests we use an all-zero tree, so every index is empty.
   // =====================================================================
   {
     const depth = 20;
-    // All leaves are zero (empty tree) — proving index 5 is empty
     const leafIndex = 5;
+
     const { root, layers } = buildMerkleTree(poseidon, F, [], depth);
     const { pathElements, pathIndices } = getMerkleProof(layers, leafIndex, depth);
 
     const input = {
       root: root.toString(),
-      emptyLeaf: "0",
+      leafIndex: leafIndex.toString(),
       pathElements: pathElements.map((e) => e.toString()),
       pathIndices: pathIndices.map((e) => e.toString()),
     };
@@ -145,13 +143,9 @@ async function main() {
     }
 
     // Compute redacted commitment: chain Poseidon over revealed leaves
-    const revealedLeaves = allLeaves.map((v, i) =>
-      revealMask[i] === 1 ? v : BigInt(0)
-    );
+    const revealedLeaves = allLeaves.map((v, i) => (revealMask[i] === 1 ? v : BigInt(0)));
 
-    let acc = F.toObject(
-      poseidon([BigInt(revealedCount), revealedLeaves[0]])
-    );
+    let acc = F.toObject(poseidon([BigInt(revealedCount), revealedLeaves[0]]));
     for (let k = 1; k < maxLeaves; k++) {
       acc = F.toObject(poseidon([acc, revealedLeaves[k]]));
     }
