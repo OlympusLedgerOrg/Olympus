@@ -11,6 +11,9 @@ from typing import Any
 
 import blake3
 
+# BN128 scalar field prime (alt_bn128) used by Circom/snarkjs
+SNARK_SCALAR_FIELD = 21888242871839275222246405745257275088548364400416034343698204186575808495617
+
 
 # Hash field separator for structured data
 HASH_SEPARATOR = "|"
@@ -191,3 +194,19 @@ def merkle_parent_hash(left: bytes, right: bytes) -> bytes:
     if len(right) != 32:
         right = hash_bytes(right)
     return node_hash(left, right)
+
+
+def blake3_to_field_element(data: bytes) -> str:
+    """
+    Hash raw data with BLAKE3 and map it into the BN128 scalar field.
+
+    Args:
+        data: Raw bytes to hash.
+
+    Returns:
+        Decimal string representation of the field element (required by snarkjs).
+    """
+    digest = blake3.blake3(data).digest()
+    big_int = int.from_bytes(digest, byteorder="big")
+    field_element = big_int % SNARK_SCALAR_FIELD
+    return str(field_element)
