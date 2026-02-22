@@ -175,9 +175,9 @@ Agency commits document → Olympus signs Merkle root → FOIA request arrives
 
 | Property | Guarantee |
 |----------|-----------|
-| Document committed before FOIA request | ✅ Ledger timestamp and hash-chain |
+| Document committed before FOIA request | ✅ RFC 3161 genTime in timestamp token; ledger hash-chain |
 | Revealed content unchanged since commitment | ✅ Leaf hash comparison |
-| Redacted sections cannot be silently un-redacted | ✅ Merkle root fixed at commitment |
+| Later disclosures are verifiably consistent with original commitment | ✅ Merkle root fixed at commitment |
 | Agency cannot claim a different original | ✅ Ed25519-signed shard header |
 
 ### Key Code Entry Points
