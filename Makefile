@@ -23,4 +23,4 @@ dev:
 	DATABASE_URL=$${DATABASE_URL:-postgresql://olympus:olympus@localhost:5432/olympus} uvicorn api.app:app --host 127.0.0.1 --port 8000 & \
 	api_pid=$$!; \
 	trap 'kill $$api_pid' EXIT INT TERM; \
-	UI_API_BASE=http://127.0.0.1:8000 uvicorn ui.app:app --host 127.0.0.1 --port 8080
+	UI_API_BASE=http://127.0.0.1:8000 OLYMPUS_DEBUG_UI=true uvicorn ui.app:app --host 127.0.0.1 --port 8080
