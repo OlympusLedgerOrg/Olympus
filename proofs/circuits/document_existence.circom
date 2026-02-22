@@ -22,28 +22,25 @@ template DocumentExistence(depth) {
 
     // Ensure pathIndices encode the provided leafIndex
     signal indexAccum[depth + 1];
-    // Compute powers of two dynamically so the template remains parameterized by depth
-    signal pow2[depth + 1];
-    pow2[0] <== 1;
-    for (var p = 1; p <= depth; p++) {
-        pow2[p] <== pow2[p - 1] * 2;
-    }
     indexAccum[0] <== 0;
+    // OPTIMIZATION: Use a compile-time 'var' instead of an array of 'signal's
+    var pow2 = 1;
     for (var i = 0; i < depth; i++) {
         // Boolean constraint for path index
         pathIndices[i] * (pathIndices[i] - 1) === 0;
-        indexAccum[i + 1] <== indexAccum[i] + pathIndices[i] * pow2[i];
+        indexAccum[i + 1] <== indexAccum[i] + pathIndices[i] * pow2;
+        pow2 = pow2 * 2;
     }
     leafIndex === indexAccum[depth];
 
-    component merkle = MerkleProof(depth);
+    component merkle = MerkleTreeInclusionProof(depth);
+    merkle.root <== root;
     merkle.leaf <== leaf;
     for (var j = 0; j < depth; j++) {
         merkle.pathElements[j] <== pathElements[j];
         merkle.pathIndices[j] <== pathIndices[j];
     }
 
-    root === merkle.root;
 }
 
 // Default depth 20 (sparse tree friendly)
