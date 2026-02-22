@@ -220,6 +220,18 @@ Phase 0.1 “best-case” expectations are captured in [docs/PHASE_01_BEST_CASE.
 
 ---
 
+## Current State for Government Verification
+
+- **Posture:** Reference integrity layer suitable for pilot deployments where an agency must prove document provenance and redaction correctness to the public.
+- **What works today:** Cryptographic commitments (BLAKE3), Merkle proofs, Ed25519-signed shard headers, append-only ledger verification, and FOIA redaction proof tooling.
+- **Immediate improvements being hardened:**
+  - Guardian/replicated shard signing to reduce single-operator trust.
+  - HSM-backed key custody and rotation runbooks for agency signing keys.
+  - Operational assurances: tested backup/restore, external transparency anchoring, and audit logging defaults.
+  - Ingest/egress automation for FOIA pipelines so commitments and proofs are published automatically.
+
+---
+
 ## Quick Start
 
 See [QUICKSTART.md](QUICKSTART.md).
