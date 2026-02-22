@@ -31,7 +31,7 @@ CREATE TABLE IF NOT EXISTS timestamp_tokens (
 
     created_at    TIMESTAMPTZ NOT NULL DEFAULT NOW(),
 
-    PRIMARY KEY (shard_id, header_hash tsa_url),
+    PRIMARY KEY (shard_id, header_hash, tsa_url),
 
     -- Constraints
     CONSTRAINT timestamp_tokens_header_hash_length
