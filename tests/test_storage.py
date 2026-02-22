@@ -39,6 +39,7 @@ import psycopg
 import pytest
 
 from protocol.hashes import hash_bytes
+from protocol.shards import create_shard_header
 from protocol.ssmf import verify_proof
 from storage.postgres import StorageLayer
 
@@ -257,42 +258,36 @@ def test_get_latest_header(storage, signing_key):
 
 def test_get_latest_header_detects_corrupt_signature(storage, signing_key):
     """Test that get_latest_header fails if persisted signature is corrupted."""
-    shard_id = f"test_shard_{datetime.now(UTC).timestamp()}"
+    shard_id = f"test_shard_corrupt_sig_{datetime.now(UTC).timestamp()}"
+    root = hash_bytes(f"root-{shard_id}".encode())
+    ts = datetime.now(UTC).isoformat().replace("+00:00", "Z")
+    header = create_shard_header(shard_id=shard_id, root_hash=root, timestamp=ts)
+    pubkey = signing_key.verify_key.encode()
 
-    _, _, _, signature, _ = storage.append_record(
-        shard_id=shard_id,
-        record_type="document",
-        record_id="doc1",
-        version=1,
-        value_hash=hash_bytes(b"value 1"),
-        signing_key=signing_key,
-    )
-
+    # Insert a shard header directly with an all-zero (corrupt) signature.
+    # This respects the append-only constraint: no UPDATE is performed.
     with storage._get_connection() as conn, conn.cursor() as cur:
         cur.execute(
             """
-                UPDATE shard_headers
-                SET sig = decode(repeat('00', 64), 'hex')
-                WHERE shard_id = %s AND seq = 0
-                """,
-            (shard_id,),
+            INSERT INTO shard_headers
+                (shard_id, seq, root, header_hash, sig, pubkey, previous_header_hash, ts)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+            """,
+            (
+                shard_id,
+                0,
+                root,
+                bytes.fromhex(header["header_hash"]),
+                b"\x00" * 64,
+                pubkey,
+                "",
+                ts,
+            ),
         )
         conn.commit()
 
     with pytest.raises(ValueError, match="Invalid shard header signature"):
         storage.get_latest_header(shard_id)
-
-    # Restore original signature to avoid polluting later append-only integration tests.
-    with storage._get_connection() as conn, conn.cursor() as cur:
-        cur.execute(
-            """
-                UPDATE shard_headers
-                SET sig = %s
-                WHERE shard_id = %s AND seq = 0
-                """,
-            (bytes.fromhex(signature), shard_id),
-        )
-        conn.commit()
 
 
 def test_get_ledger_tail(storage, signing_key):
@@ -405,43 +400,36 @@ def test_ledger_chain_linkage(storage, signing_key):
 
 def test_get_latest_header_detects_corrupted_signature(storage, signing_key):
     """Test that corrupted shard header signatures are detected on read."""
-    shard_id = f"test_shard_{datetime.now(UTC).timestamp()}"
+    shard_id = f"test_shard_corrupted_sig_{datetime.now(UTC).timestamp()}"
+    root = hash_bytes(f"root-{shard_id}".encode())
+    ts = datetime.now(UTC).isoformat().replace("+00:00", "Z")
+    header = create_shard_header(shard_id=shard_id, root_hash=root, timestamp=ts)
+    pubkey = signing_key.verify_key.encode()
 
-    _, _, _, signature, _ = storage.append_record(
-        shard_id=shard_id,
-        record_type="document",
-        record_id="doc1",
-        version=1,
-        value_hash=hash_bytes(b"value 1"),
-        signing_key=signing_key,
-    )
-
-    # Simulate corruption in persisted signature bytes.
+    # Insert a shard header directly with an all-zero (corrupt) signature.
+    # This respects the append-only constraint: no UPDATE is performed.
     with storage._get_connection() as conn, conn.cursor() as cur:
         cur.execute(
             """
-            UPDATE shard_headers
-            SET sig = %s
-            WHERE shard_id = %s AND seq = 0
+            INSERT INTO shard_headers
+                (shard_id, seq, root, header_hash, sig, pubkey, previous_header_hash, ts)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
             """,
-            (b"\x00" * 64, shard_id),
+            (
+                shard_id,
+                0,
+                root,
+                bytes.fromhex(header["header_hash"]),
+                b"\x00" * 64,
+                pubkey,
+                "",
+                ts,
+            ),
         )
         conn.commit()
 
     with pytest.raises(ValueError, match="Invalid shard header signature"):
         storage.get_latest_header(shard_id)
-
-    # Restore original signature to avoid polluting later append-only integration tests.
-    with storage._get_connection() as conn, conn.cursor() as cur:
-        cur.execute(
-            """
-            UPDATE shard_headers
-            SET sig = %s
-            WHERE shard_id = %s AND seq = 0
-            """,
-            (bytes.fromhex(signature), shard_id),
-        )
-        conn.commit()
 
 
 def test_ledger_entries_reject_out_of_order_seq(storage, signing_key):
