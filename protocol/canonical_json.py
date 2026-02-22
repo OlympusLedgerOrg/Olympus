@@ -84,6 +84,18 @@ def _validate_no_special_floats(obj: Any) -> None:
 
 
 def _encode_value(value: Any) -> str:
+    """
+    Recursively encode a value to canonical JSON string.
+
+    Args:
+        value: Value to encode
+
+    Returns:
+        Canonical JSON string representation
+
+    Raises:
+        TypeError: If value is not JSON-serializable or object keys are not strings
+    """
     if value is None:
         return "null"
     if value is True:
@@ -107,6 +119,18 @@ def _encode_value(value: Any) -> str:
 
 
 def _encode_number(value: int | float | Decimal) -> str:
+    """
+    Encode a number to canonical JSON format.
+
+    Uses fixed notation when -6 <= exp10 <= 20, otherwise scientific notation.
+    Normalizes -0 to 0 and strips trailing zeros.
+
+    Args:
+        value: Number to encode
+
+    Returns:
+        Canonical JSON number string
+    """
     dec_value = _to_decimal(value)
     if dec_value.is_zero():
         return "0"
@@ -129,6 +153,18 @@ def _encode_number(value: int | float | Decimal) -> str:
 
 
 def _to_decimal(value: int | float | Decimal) -> Decimal:
+    """
+    Convert a numeric value to Decimal for precise formatting.
+
+    Args:
+        value: Numeric value to convert
+
+    Returns:
+        Decimal representation
+
+    Raises:
+        ValueError: If value is infinite or invalid
+    """
     if isinstance(value, Decimal):
         return value
     if isinstance(value, float):
@@ -142,6 +178,16 @@ def _to_decimal(value: int | float | Decimal) -> Decimal:
 
 
 def _format_fixed(digits: str, exponent: int) -> str:
+    """
+    Format a number in fixed notation (no scientific notation).
+
+    Args:
+        digits: Digit string of the number
+        exponent: Decimal exponent
+
+    Returns:
+        Fixed notation string
+    """
     if exponent >= 0:
         return digits + ("0" * exponent)
 
@@ -152,6 +198,16 @@ def _format_fixed(digits: str, exponent: int) -> str:
 
 
 def _format_scientific(digits: str, adjusted_exponent: int) -> str:
+    """
+    Format a number in scientific notation.
+
+    Args:
+        digits: Digit string of the number
+        adjusted_exponent: Adjusted exponent value
+
+    Returns:
+        Scientific notation string (e.g., "1.23e+4")
+    """
     if len(digits) == 1:
         mantissa = digits
     else:

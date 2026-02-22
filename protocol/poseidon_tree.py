@@ -51,6 +51,16 @@ class PoseidonMerkleTree:
     """
 
     def __init__(self, leaves: Iterable[int | str | bytes], depth: int | None = None) -> None:
+        """
+        Initialize a Poseidon Merkle tree.
+
+        Args:
+            leaves: Leaf values (bytes hashed with BLAKE3, decimal strings, or field ints)
+            depth: Optional fixed depth; pads with zeros to 2**depth leaves
+
+        Raises:
+            ValueError: If no leaves provided or too many leaves for specified depth
+        """
         normalized = [_to_field_int(leaf) for leaf in leaves]
         if not normalized:
             raise ValueError("Cannot create Poseidon Merkle tree with no leaves")
