@@ -45,12 +45,22 @@ CREATE TABLE IF NOT EXISTS timestamp_tokens (
 );
 
 -- Optional strict referential integrity:
--- Ensures timestamp token only exists for known shard header.
--- Safe because shard_headers enforces unique (shard_id, header_hash)
-ALTER TABLE timestamp_tokens
-ADD CONSTRAINT timestamp_tokens_header_fk
-FOREIGN KEY (shard_id, header_hash)
-REFERENCES shard_headers (shard_id, header_hash);
+-- Ensures timestamp token only exists for a known shard header.
+-- shard_headers has UNIQUE (shard_id, header_hash).
+DO $$
+BEGIN
+    IF NOT EXISTS (
+        SELECT 1
+        FROM pg_constraint
+        WHERE conname = 'timestamp_tokens_header_fk'
+    ) THEN
+        ALTER TABLE timestamp_tokens
+        ADD CONSTRAINT timestamp_tokens_header_fk
+        FOREIGN KEY (shard_id, header_hash)
+        REFERENCES shard_headers (shard_id, header_hash);
+    END IF;
+END;
+$$;
 
 -- Index for quick retrieval of latest timestamp per shard
 CREATE INDEX IF NOT EXISTS timestamp_tokens_shard_created_desc_idx
