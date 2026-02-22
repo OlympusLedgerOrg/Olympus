@@ -7,7 +7,7 @@ check:
 	mypy protocol/ storage/ api/
 	bandit -r protocol/ storage/ api/ app_testonly/ -f txt
 	pytest tests/ -v --tb=short -m "not postgres" \
-	  --cov=protocol --cov=app_testonly \
+	  --cov=protocol --cov=app_testonly --cov=storage --cov=api \
 	  --cov-report=term-missing --cov-report=xml \
 	  --cov-fail-under=85
 	pytest tests/ -v --tb=short -m "postgres"
