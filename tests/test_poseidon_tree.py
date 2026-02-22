@@ -1,5 +1,4 @@
 import pytest
-
 from poseidon_py.poseidon_hash import poseidon_hash
 
 from protocol.hashes import SNARK_SCALAR_FIELD, blake3_to_field_element

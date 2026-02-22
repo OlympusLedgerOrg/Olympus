@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
+from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
-from typing import Iterable, List, Sequence
 
 from poseidon_py.poseidon_hash import poseidon_hash
 
@@ -48,20 +48,22 @@ class PoseidonMerkleTree:
     """
 
     def __init__(self, leaves: Iterable[int | str | bytes], depth: int | None = None) -> None:
-        normalized = [_to_field_int(l) for l in leaves]
+        normalized = [_to_field_int(leaf) for leaf in leaves]
         if not normalized:
             raise ValueError("Cannot create Poseidon Merkle tree with no leaves")
 
         if depth is not None:
             width = 1 << depth
             if len(normalized) > width:
-                raise ValueError(f"Provided {len(normalized)} leaves but depth {depth} only supports {width}")
+                raise ValueError(
+                    f"Provided {len(normalized)} leaves but depth {depth} only supports {width}"
+                )
             padding = [0] * (width - len(normalized))
-            self._leaves: List[int] = normalized + padding
+            self._leaves: list[int] = normalized + padding
         else:
             self._leaves = normalized
 
-    def _build_level(self, level: Sequence[int]) -> List[int]:
+    def _build_level(self, level: Sequence[int]) -> list[int]:
         """Hash a level upwards, duplicating the final leaf when odd."""
         if len(level) == 1:
             return [level[0]]
@@ -122,7 +124,9 @@ class PoseidonMerkleTree:
         return path_elements, path_indices
 
 
-def build_poseidon_witness_inputs(document_leaves: list[bytes], target_index: int, *, depth: int | None = None) -> PoseidonProof:
+def build_poseidon_witness_inputs(
+    document_leaves: list[bytes], target_index: int, *, depth: int | None = None
+) -> PoseidonProof:
     """
     Prepare Poseidon Merkle inputs for circom/snarkjs witnesses.
 
