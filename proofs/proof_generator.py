@@ -11,18 +11,19 @@ Usage::
 
     generator = ProofGenerator("document_existence")
     witness = generator.generate_witness(
-        merkle_root="123",
+        root="123",
+        leafIndex="0",
         leaf="42",
-        path_elements=["0"] * 20,
-        path_indices=[0] * 20,
+        pathElements=["0"] * 20,
+        pathIndices=[0] * 20,
     )
     proof = generator.prove(witness)
     verified = generator.verify(proof, public_inputs=proof.public_signals)
 
 Hash boundary note:
     Circuits use **Poseidon** for in-circuit hashing while the Python/ledger
-    layer uses **BLAKE3**.  Witness generation must supply Poseidon-compatible
-    field elements.  See ``proofs/README.md`` for details.
+    layer may use **BLAKE3**. Witness generation must supply Poseidon-compatible
+    field elements. See ``proofs/README.md`` for details.
 """
 
 from __future__ import annotations
@@ -38,9 +39,6 @@ from typing import Any
 from protocol.zkp import Groth16Prover, ZKProof
 
 
-# ---------------------------------------------------------------------------
-# Supported circuits
-# ---------------------------------------------------------------------------
 SUPPORTED_CIRCUITS = frozenset(
     {
         "document_existence",
@@ -56,41 +54,30 @@ _KEYS_DIR = _PROOFS_DIR / "keys"
 _BUILD_DIR = _PROOFS_DIR / "build"
 
 
-# ---------------------------------------------------------------------------
-# Witness container
-# ---------------------------------------------------------------------------
 @dataclass
 class Witness:
     """Container for a circuit witness (input signals)."""
 
     circuit: str
     inputs: dict[str, Any]
+    run_id: str
+    input_path: Path | None = field(default=None, repr=False)
     witness_path: Path | None = field(default=None, repr=False)
 
     def to_dict(self) -> dict[str, Any]:
-        """Serialize witness metadata to a dictionary."""
         return {
             "circuit": self.circuit,
             "inputs": self.inputs,
+            "run_id": self.run_id,
         }
 
 
-# ---------------------------------------------------------------------------
-# ProofGenerator
-# ---------------------------------------------------------------------------
 class ProofGenerator:
     """
     High-level interface for generating and verifying ZK proofs.
 
     Wraps :class:`protocol.zkp.Groth16Prover` with ergonomic helpers for
     witness construction, proof generation, and verification.
-
-    Args:
-        circuit: Name of the circuit (must be in ``SUPPORTED_CIRCUITS``).
-        circuits_dir: Override the default circuits directory.
-        build_dir: Override the default build artefacts directory.
-        keys_dir: Override the default keys directory.
-        snarkjs_bin: Path to or name of the ``snarkjs`` binary.
     """
 
     def __init__(
@@ -100,118 +87,102 @@ class ProofGenerator:
         circuits_dir: Path | None = None,
         build_dir: Path | None = None,
         keys_dir: Path | None = None,
-        snarkjs_bin: str = "snarkjs",
+        snarkjs_bin: str = "npx",
     ) -> None:
         if circuit not in SUPPORTED_CIRCUITS:
             raise ValueError(
                 f"Unsupported circuit '{circuit}'. Supported: {sorted(SUPPORTED_CIRCUITS)}"
             )
+
         self.circuit = circuit
         self.circuits_dir = circuits_dir or _CIRCUITS_DIR
         self.build_dir = build_dir or _BUILD_DIR
         self.keys_dir = keys_dir or _KEYS_DIR
         self.snarkjs_bin = snarkjs_bin
 
+        # NOTE: Groth16Prover expects circuits_dir to be the proofs/circuits directory
         self._prover = Groth16Prover(self.circuits_dir, snarkjs_bin=snarkjs_bin)
 
-    # ------------------------------------------------------------------
-    # snarkjs availability check
-    # ------------------------------------------------------------------
     @property
     def snarkjs_available(self) -> bool:
-        """Return *True* if the configured snarkjs binary is on PATH."""
+        """Return True if the configured snarkjs launcher is on PATH."""
         return shutil.which(self.snarkjs_bin) is not None
 
-    # ------------------------------------------------------------------
-    # Witness generation
-    # ------------------------------------------------------------------
     def generate_witness(self, **inputs: Any) -> Witness:
         """
         Build a witness for the configured circuit.
+        Writes a unique input JSON and attempts to generate a unique witness .wtns via WASM.
         """
         self._validate_inputs(inputs)
-        witness = Witness(circuit=self.circuit, inputs=inputs)
 
-        # FIX: Generate a unique run ID to prevent file collisions
         run_id = uuid.uuid4().hex
+        witness = Witness(circuit=self.circuit, inputs=inputs, run_id=run_id)
 
-        # Write the JSON input file with a unique name
         self.build_dir.mkdir(parents=True, exist_ok=True)
-        input_path = self.build_dir / f"{self.circuit}_input_{run_id}.json"
 
+        # Write input JSON (unique)
+        input_path = self.build_dir / f"{self.circuit}_input_{run_id}.json"
         with input_path.open("w", encoding="utf-8") as fh:
             json.dump(inputs, fh)
+        witness.input_path = input_path
 
-        # Attempt WASM witness generation if tooling is available
+        # Attempt WASM witness generation
         wasm_dir = self.build_dir / f"{self.circuit}_js"
         wasm_file = wasm_dir / f"{self.circuit}.wasm"
-
-        # FIX: Make the output witness file unique as well
         witness_out = self.build_dir / f"{self.circuit}_{run_id}.wtns"
 
-        if wasm_file.exists() and self.snarkjs_available:
-            generate_witness_js = wasm_dir / "generate_witness.js"
-            if generate_witness_js.exists():
-                subprocess.run(
-                    [
-                        "node",
-                        str(generate_witness_js),
-                        str(wasm_file),
-                        str(input_path),
-                        str(witness_out),
-                    ],
-                    check=True,
-                    capture_output=True,
-                    text=True,
-                )
-                witness.witness_path = witness_out
+        if not wasm_file.exists():
+            # Circuit not compiled to WASM yet (setup_circuits.sh --compile-only or missing build)
+            return witness
 
+        generate_witness_js = wasm_dir / "generate_witness.js"
+        if not generate_witness_js.exists():
+            return witness
+
+        # We can generate a witness without snarkjs; only node is required.
+        subprocess.run(
+            ["node", str(generate_witness_js), str(wasm_file), str(input_path), str(witness_out)],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        witness.witness_path = witness_out
         return witness
 
-    # ------------------------------------------------------------------
-    # Proof generation
-    # ------------------------------------------------------------------
     def prove(self, witness: Witness) -> ZKProof:
         """
-        Generate a Groth16 proof from a witness.
-
-        Args:
-            witness: A :class:`Witness` previously created via
-                :meth:`generate_witness`.
-
-        Returns:
-            :class:`ZKProof` containing the proof and public signals.
-
-        Raises:
-            FileNotFoundError: When required artefacts (witness file,
-                zkey) are missing.
-            RuntimeError: When snarkjs is not available.
+        Generate a Groth16 proof from a witness produced by generate_witness().
         """
         if not self.snarkjs_available:
             raise RuntimeError(
-                f"snarkjs binary '{self.snarkjs_bin}' not found. "
-                "Install snarkjs globally or provide an explicit path."
+                f"snarkjs launcher '{self.snarkjs_bin}' not found. "
+                "Install Node.js/npm (for npx) or install snarkjs globally."
             )
 
-        witness_path = witness.witness_path or (self.build_dir / f"{self.circuit}.wtns")
-        zkey_path = self.build_dir / f"{self.circuit}_final.zkey"
-        proof_path = self.build_dir / f"{self.circuit}_proof.json"
-        public_path = self.build_dir / f"{self.circuit}_public.json"
+        if witness.witness_path is None or not witness.witness_path.exists():
+            raise FileNotFoundError(
+                "Witness file missing. Ensure circuits are compiled (setup_circuits.sh) "
+                "and witness generation succeeded."
+            )
 
-        return self._prover.prove_existence(
-            leaf=witness.inputs.get("leaf", "0"),
-            root=witness.inputs.get("root", "0"),
-            path_elements=witness.inputs.get("pathElements", []),
-            path_indices=witness.inputs.get("pathIndices", []),
-            witness_path=witness_path,
+        zkey_path = self.build_dir / f"{self.circuit}_final.zkey"
+        if not zkey_path.exists():
+            raise FileNotFoundError(
+                f"ZKey file not found: {zkey_path}. Run 'bash setup_circuits.sh' first."
+            )
+
+        # Unique outputs per run to avoid collisions
+        proof_path = self.build_dir / f"{self.circuit}_proof_{witness.run_id}.json"
+        public_path = self.build_dir / f"{self.circuit}_public_{witness.run_id}.json"
+
+        return self._prover.prove(
+            circuit=self.circuit,
+            witness_path=witness.witness_path,
             zkey_path=zkey_path,
             proof_path=proof_path,
             public_path=public_path,
         )
 
-    # ------------------------------------------------------------------
-    # Verification
-    # ------------------------------------------------------------------
     def verify(
         self,
         proof: ZKProof,
@@ -221,22 +192,12 @@ class ProofGenerator:
         """
         Verify a Groth16 proof.
 
-        Args:
-            proof: The :class:`ZKProof` to verify.
-            public_inputs: Optional override for public signals.  If
-                provided they replace the signals inside *proof* for
-                this verification call.
-            verification_key_path: Explicit path to a verification key
-                JSON file.  When *None* the generator searches the
-                standard ``keys/verification_keys/`` directory.
-
-        Returns:
-            *True* if the proof verifies successfully, *False* otherwise.
+        If public_inputs is provided, it overrides proof.public_signals for this call.
         """
         if not self.snarkjs_available:
             raise RuntimeError(
-                f"snarkjs binary '{self.snarkjs_bin}' not found. "
-                "Install snarkjs globally or provide an explicit path."
+                f"snarkjs launcher '{self.snarkjs_bin}' not found. "
+                "Install Node.js/npm (for npx) or install snarkjs globally."
             )
 
         verify_proof = proof
@@ -253,29 +214,14 @@ class ProofGenerator:
 
         return self._prover.verify(verify_proof, verification_key_path=vkey)
 
-    # ------------------------------------------------------------------
-    # Offline helpers
-    # ------------------------------------------------------------------
     def export_proof(self, proof: ZKProof, path: Path) -> None:
-        """Write a proof and its public signals to a JSON file.
-
-        Args:
-            proof: The proof to export.
-            path: Destination file path.
-        """
+        """Write a proof and its public signals to a JSON file."""
         with path.open("w", encoding="utf-8") as fh:
             json.dump(proof.to_dict(), fh, indent=2)
 
     @staticmethod
     def load_proof(path: Path) -> ZKProof:
-        """Load a proof from a JSON file previously written by :meth:`export_proof`.
-
-        Args:
-            path: Path to the proof JSON file.
-
-        Returns:
-            Reconstructed :class:`ZKProof`.
-        """
+        """Load a proof from a JSON file previously written by export_proof()."""
         with path.open("r", encoding="utf-8") as fh:
             data = json.load(fh)
         return ZKProof(
@@ -284,9 +230,6 @@ class ProofGenerator:
             circuit=data["circuit"],
         )
 
-    # ------------------------------------------------------------------
-    # Input validation
-    # ------------------------------------------------------------------
     _REQUIRED_INPUTS: dict[str, list[str]] = {
         "document_existence": ["root", "leaf", "leafIndex", "pathElements", "pathIndices"],
         "non_existence": ["root", "emptyLeaf", "pathElements", "pathIndices"],
@@ -302,7 +245,6 @@ class ProofGenerator:
     }
 
     def _validate_inputs(self, inputs: dict[str, Any]) -> None:
-        """Raise ``ValueError`` if required inputs are missing."""
         required = self._REQUIRED_INPUTS.get(self.circuit, [])
         missing = [k for k in required if k not in inputs]
         if missing:
