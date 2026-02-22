@@ -1,10 +1,11 @@
 pragma circom 2.0.0;
 
 /*
- * Sparse Merkle non-existence proof (simplified).
+ * Indexed non-existence proof (empty-leaf at a specific public index).
  *
- * Proves that a queried key is absent by showing the path terminates at an
- * empty leaf and that the provided sibling path reconstructs the claimed root.
+ * Proves that the leaf at leafIndex is 0 in the Poseidon Merkle tree with root.
+ * This is NOT a full sparse-merkle keyed non-membership proof, but it is a
+ * coherent “absence at index” statement for indexed document trees.
  */
 
 include "./lib/merkleProof.circom";
@@ -12,23 +13,31 @@ include "./lib/merkleProof.circom";
 template NonExistence(depth) {
     // Public inputs
     signal input root;
+    signal input leafIndex;
 
     // Private inputs
-    signal input emptyLeaf;
     signal input pathElements[depth];
     signal input pathIndices[depth];
 
-    // Reuse MerkleProof with an empty leaf
-    component merkle = MerkleProof(depth);
-    merkle.leaf <== emptyLeaf;
+    // Enforce pathIndices encode the provided leafIndex (LSB-first)
+    signal indexAccum[depth + 1];
+    indexAccum[0] <== 0;
+    var pow2 = 1;
     for (var i = 0; i < depth; i++) {
-        merkle.pathElements[i] <== pathElements[i];
-        merkle.pathIndices[i] <== pathIndices[i];
+        pathIndices[i] * (pathIndices[i] - 1) === 0;
+        indexAccum[i + 1] <== indexAccum[i] + pathIndices[i] * pow2;
+        pow2 = pow2 * 2;
     }
+    leafIndex === indexAccum[depth];
 
-    // Enforce that the leaf is zero to model non-membership
-    emptyLeaf === 0;
-    root === merkle.root;
+    // Prove inclusion of the empty leaf (0) at that index
+    component merkle = MerkleTreeInclusionProof(depth);
+    merkle.root <== root;
+    merkle.leaf <== 0;
+    for (var j = 0; j < depth; j++) {
+        merkle.pathElements[j] <== pathElements[j];
+        merkle.pathIndices[j] <== pathIndices[j];
+    }
 }
 
-component main {public [root]} = NonExistence(20);
+component main {public [root, leafIndex]} = NonExistence(20);
