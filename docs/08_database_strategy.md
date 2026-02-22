@@ -83,7 +83,7 @@ BEGIN TRANSACTION;
   -- 2. Verify key doesn't exist
   -- 3. Update in-memory tree
   -- 4. INSERT new leaf into smt_leaves
-  -- 5. INSERT/UPDATE affected nodes in smt_nodes
+  -- 5. INSERT new affected nodes into smt_nodes (skip if node exists)
   -- 6. SELECT MAX(seq)+1 for next shard header sequence
   -- 7. INSERT new shard header into shard_headers
   -- 8. SELECT MAX(seq)+1 for next ledger entry sequence
@@ -92,7 +92,8 @@ COMMIT;
 ```
 
 **Guarantees**:
-- All four tables are updated atomically or none are updated (rollback on exception)
+- All four tables are append-only (INSERT only, no UPDATE or DELETE)
+- All writes succeed atomically or rollback on exception
 - Sequence numbers are consistent (SELECT MAX inside transaction prevents race conditions)
 - Chain linkage is preserved (previous hashes are consistent within transaction)
 - No partial updates visible to other connections
