@@ -573,3 +573,223 @@ def test_deterministic_root_recomputation(storage, signing_key):
 
         # Should match the last recorded root
         assert computed_root == roots[-1]
+
+
+def test_shard_headers_reject_update(storage, signing_key):
+    """Test that UPDATE on shard_headers is rejected by append-only trigger."""
+    shard_id = f"test_shard_reject_update_{datetime.now(UTC).timestamp()}"
+
+    # Append a record to create a shard header
+    storage.append_record(
+        shard_id=shard_id,
+        record_type="document",
+        record_id="doc1",
+        version=1,
+        value_hash=hash_bytes(b"value 1"),
+        signing_key=signing_key,
+    )
+
+    # Attempt to UPDATE the shard header should fail
+    with pytest.raises(
+        psycopg.errors.ReadOnlySqlTransaction, match=r"shard_headers is append-only"
+    ):
+        with storage._get_connection() as conn, conn.cursor() as cur:
+            cur.execute(
+                """
+                UPDATE shard_headers
+                SET previous_header_hash = 'modified'
+                WHERE shard_id = %s
+                """,
+                (shard_id,),
+            )
+
+
+def test_shard_headers_reject_delete(storage, signing_key):
+    """Test that DELETE on shard_headers is rejected by append-only trigger."""
+    shard_id = f"test_shard_reject_delete_{datetime.now(UTC).timestamp()}"
+
+    # Append a record to create a shard header
+    storage.append_record(
+        shard_id=shard_id,
+        record_type="document",
+        record_id="doc1",
+        version=1,
+        value_hash=hash_bytes(b"value 1"),
+        signing_key=signing_key,
+    )
+
+    # Attempt to DELETE the shard header should fail
+    with pytest.raises(
+        psycopg.errors.ReadOnlySqlTransaction, match=r"shard_headers is append-only"
+    ):
+        with storage._get_connection() as conn, conn.cursor() as cur:
+            cur.execute(
+                """
+                DELETE FROM shard_headers
+                WHERE shard_id = %s
+                """,
+                (shard_id,),
+            )
+
+
+def test_ledger_entries_reject_update(storage, signing_key):
+    """Test that UPDATE on ledger_entries is rejected by append-only trigger."""
+    shard_id = f"test_ledger_reject_update_{datetime.now(UTC).timestamp()}"
+
+    # Append a record to create a ledger entry
+    storage.append_record(
+        shard_id=shard_id,
+        record_type="document",
+        record_id="doc1",
+        version=1,
+        value_hash=hash_bytes(b"value 1"),
+        signing_key=signing_key,
+    )
+
+    # Attempt to UPDATE the ledger entry should fail
+    with pytest.raises(
+        psycopg.errors.ReadOnlySqlTransaction, match=r"ledger_entries is append-only"
+    ):
+        with storage._get_connection() as conn, conn.cursor() as cur:
+            cur.execute(
+                """
+                UPDATE ledger_entries
+                SET payload = '{}'
+                WHERE shard_id = %s
+                """,
+                (shard_id,),
+            )
+
+
+def test_ledger_entries_reject_delete(storage, signing_key):
+    """Test that DELETE on ledger_entries is rejected by append-only trigger."""
+    shard_id = f"test_ledger_reject_delete_{datetime.now(UTC).timestamp()}"
+
+    # Append a record to create a ledger entry
+    storage.append_record(
+        shard_id=shard_id,
+        record_type="document",
+        record_id="doc1",
+        version=1,
+        value_hash=hash_bytes(b"value 1"),
+        signing_key=signing_key,
+    )
+
+    # Attempt to DELETE the ledger entry should fail
+    with pytest.raises(
+        psycopg.errors.ReadOnlySqlTransaction, match=r"ledger_entries is append-only"
+    ):
+        with storage._get_connection() as conn, conn.cursor() as cur:
+            cur.execute(
+                """
+                DELETE FROM ledger_entries
+                WHERE shard_id = %s
+                """,
+                (shard_id,),
+            )
+
+
+def test_smt_leaves_reject_update(storage, signing_key):
+    """Test that UPDATE on smt_leaves is rejected by append-only trigger."""
+    shard_id = f"test_smt_leaves_reject_update_{datetime.now(UTC).timestamp()}"
+
+    # Append a record to create an SMT leaf
+    storage.append_record(
+        shard_id=shard_id,
+        record_type="document",
+        record_id="doc1",
+        version=1,
+        value_hash=hash_bytes(b"value 1"),
+        signing_key=signing_key,
+    )
+
+    # Attempt to UPDATE the SMT leaf should fail
+    with pytest.raises(psycopg.errors.ReadOnlySqlTransaction, match=r"smt_leaves is append-only"):
+        with storage._get_connection() as conn, conn.cursor() as cur:
+            cur.execute(
+                """
+                UPDATE smt_leaves
+                SET value_hash = %s
+                WHERE shard_id = %s
+                """,
+                (hash_bytes(b"modified"), shard_id),
+            )
+
+
+def test_smt_leaves_reject_delete(storage, signing_key):
+    """Test that DELETE on smt_leaves is rejected by append-only trigger."""
+    shard_id = f"test_smt_leaves_reject_delete_{datetime.now(UTC).timestamp()}"
+
+    # Append a record to create an SMT leaf
+    storage.append_record(
+        shard_id=shard_id,
+        record_type="document",
+        record_id="doc1",
+        version=1,
+        value_hash=hash_bytes(b"value 1"),
+        signing_key=signing_key,
+    )
+
+    # Attempt to DELETE the SMT leaf should fail
+    with pytest.raises(psycopg.errors.ReadOnlySqlTransaction, match=r"smt_leaves is append-only"):
+        with storage._get_connection() as conn, conn.cursor() as cur:
+            cur.execute(
+                """
+                DELETE FROM smt_leaves
+                WHERE shard_id = %s
+                """,
+                (shard_id,),
+            )
+
+
+def test_smt_nodes_reject_update(storage, signing_key):
+    """Test that UPDATE on smt_nodes is rejected by append-only trigger."""
+    shard_id = f"test_smt_nodes_reject_update_{datetime.now(UTC).timestamp()}"
+
+    # Append a record to create SMT nodes
+    storage.append_record(
+        shard_id=shard_id,
+        record_type="document",
+        record_id="doc1",
+        version=1,
+        value_hash=hash_bytes(b"value 1"),
+        signing_key=signing_key,
+    )
+
+    # Attempt to UPDATE the SMT node should fail
+    with pytest.raises(psycopg.errors.ReadOnlySqlTransaction, match=r"smt_nodes is append-only"):
+        with storage._get_connection() as conn, conn.cursor() as cur:
+            cur.execute(
+                """
+                UPDATE smt_nodes
+                SET hash = %s
+                WHERE shard_id = %s
+                """,
+                (hash_bytes(b"modified"), shard_id),
+            )
+
+
+def test_smt_nodes_reject_delete(storage, signing_key):
+    """Test that DELETE on smt_nodes is rejected by append-only trigger."""
+    shard_id = f"test_smt_nodes_reject_delete_{datetime.now(UTC).timestamp()}"
+
+    # Append a record to create SMT nodes
+    storage.append_record(
+        shard_id=shard_id,
+        record_type="document",
+        record_id="doc1",
+        version=1,
+        value_hash=hash_bytes(b"value 1"),
+        signing_key=signing_key,
+    )
+
+    # Attempt to DELETE the SMT node should fail
+    with pytest.raises(psycopg.errors.ReadOnlySqlTransaction, match=r"smt_nodes is append-only"):
+        with storage._get_connection() as conn, conn.cursor() as cur:
+            cur.execute(
+                """
+                DELETE FROM smt_nodes
+                WHERE shard_id = %s
+                """,
+                (shard_id,),
+            )

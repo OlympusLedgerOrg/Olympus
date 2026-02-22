@@ -170,7 +170,7 @@ class StorageLayer:
                 (shard_id, key, version, value_hash, datetime.now(UTC)),
             )
 
-            # Insert/update affected nodes
+            # Insert new affected nodes (append-only, skip if node exists)
             self._persist_tree_nodes(cur, shard_id, tree)
 
             # Get previous header
