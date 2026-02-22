@@ -30,6 +30,7 @@ from __future__ import annotations
 import json
 import shutil
 import subprocess
+import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -127,36 +128,26 @@ class ProofGenerator:
     def generate_witness(self, **inputs: Any) -> Witness:
         """
         Build a witness for the configured circuit.
-
-        The caller provides circuit-specific inputs as keyword arguments.
-        For ``document_existence`` the required inputs are ``root``,
-        ``leaf``, ``leafIndex``, ``pathElements``, and ``pathIndices``.
-
-        If snarkjs and the WASM witness generator are available the
-        witness binary (``.wtns``) is also produced; otherwise only the
-        JSON input file is written (useful for offline / deferred
-        proving).
-
-        Returns:
-            :class:`Witness` with populated ``inputs`` and optional
-            ``witness_path``.
-
-        Raises:
-            ValueError: When required inputs are missing.
         """
         self._validate_inputs(inputs)
         witness = Witness(circuit=self.circuit, inputs=inputs)
 
-        # Write the JSON input file
-        input_path = self.build_dir / f"{self.circuit}_input.json"
+        # FIX: Generate a unique run ID to prevent file collisions
+        run_id = uuid.uuid4().hex
+
+        # Write the JSON input file with a unique name
         self.build_dir.mkdir(parents=True, exist_ok=True)
+        input_path = self.build_dir / f"{self.circuit}_input_{run_id}.json"
+
         with input_path.open("w", encoding="utf-8") as fh:
             json.dump(inputs, fh)
 
         # Attempt WASM witness generation if tooling is available
         wasm_dir = self.build_dir / f"{self.circuit}_js"
         wasm_file = wasm_dir / f"{self.circuit}.wasm"
-        witness_out = self.build_dir / f"{self.circuit}.wtns"
+
+        # FIX: Make the output witness file unique as well
+        witness_out = self.build_dir / f"{self.circuit}_{run_id}.wtns"
 
         if wasm_file.exists() and self.snarkjs_available:
             generate_witness_js = wasm_dir / "generate_witness.js"

@@ -27,12 +27,15 @@ template RedactionValidity(maxLeaves, depth) {
     component inclusionProofs[maxLeaves];
     signal revealedLeaves[maxLeaves];
     for (var i = 0; i < maxLeaves; i++) {
-        inclusionProofs[i] = MerkleProof(depth);
+        inclusionProofs[i] = MerkleTreeInclusionProof(depth);
         inclusionProofs[i].leaf <== originalLeaves[i];
         for (var j = 0; j < depth; j++) {
             inclusionProofs[i].pathElements[j] <== pathElements[i][j];
             inclusionProofs[i].pathIndices[j] <== pathIndices[i][j];
         }
+
+        // Force revealMask to be strictly binary (0 or 1)
+        revealMask[i] * (revealMask[i] - 1) === 0;
 
         // Only constrain the root when revealMask is 1 (conditional constraint):
         // if revealMask[i] == 0 the product is 0 and the constraint is vacuous;

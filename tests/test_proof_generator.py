@@ -115,9 +115,9 @@ class TestWitnessGeneration:
             pathElements=["0"] * 20,
             pathIndices=[0] * 20,
         )
-        input_file = tmp_path / "document_existence_input.json"
-        assert input_file.exists()
-        data = json.loads(input_file.read_text())
+        input_files = list(tmp_path.glob("document_existence_input_*.json"))
+        assert len(input_files) == 1
+        data = json.loads(input_files[0].read_text())
         assert data["root"] == "123"
         assert data["leaf"] == "42"
         # No WASM generator available, so witness_path is None
