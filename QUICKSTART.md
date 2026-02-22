@@ -484,7 +484,75 @@ pytest tests/ -v
 
 ---
 
-## 11. Next Steps
+## 11. Zero-Knowledge Proof Setup (Groth16 Ceremony)
+
+Olympus uses Circom circuits with Groth16 proofs for cryptographic verifiability.
+The ZK tooling lives under `proofs/`.
+
+### Prerequisites
+
+- **Node.js ≥ 18** and **npm**
+- **circom compiler** — install from https://docs.circom.io/getting-started/installation/
+  or via `cargo install circom` (Rust required)
+
+### Run the full Groth16 setup ceremony
+
+```bash
+# From repo root — install npm deps, compile circuits, generate dev keys
+./tools/groth16_setup.sh
+```
+
+This single command:
+1. Installs npm dependencies (`snarkjs`, `circomlib`, `circomlibjs`)
+2. Downloads the Hermez Powers of Tau file (2^17, ~130K constraints)
+   — falls back to generating locally if the download is unavailable
+3. Compiles all three main circuits to R1CS + WASM
+4. Runs Groth16 Phase 2 setup with a single dev contribution
+5. Exports verification keys to `proofs/keys/verification_keys/`
+
+Alternatively, use the npm scripts from the `proofs/` directory:
+
+```bash
+cd proofs/
+npm install
+
+# Compile circuits only (R1CS + WASM, no keys)
+npm run circom:build
+
+# Full Groth16 setup (Phase 1 + Phase 2 + key export)
+npm run groth16:setup
+```
+
+### Output artifacts
+
+| Artifact | Path | Committed? |
+|---|---|---|
+| R1CS constraint system | `proofs/build/<circuit>.r1cs` | No (build artifact) |
+| WASM witness generator | `proofs/build/<circuit>_js/` | No (build artifact) |
+| Proving key (zkey) | `proofs/build/<circuit>_final.zkey` | No (contains toxic waste) |
+| Verification key | `proofs/keys/verification_keys/<circuit>_vkey.json` | Yes (public artifact) |
+
+### Security notes
+
+- Dev keys use a **single contribution** and are NOT suitable for production.
+- Production requires a Phase 2 ceremony with ≥ 3 independent contributors
+  and publicly published ceremony transcript.
+- The proving key (`.zkey`) contains toxic waste from the setup; do not share it.
+- No private randomness or secrets are checked into the repository.
+
+### Smoke test (prove + verify)
+
+After running the setup, validate everything works end-to-end:
+
+```bash
+cd proofs/ && npm run smoke
+```
+
+See `proofs/README.md` for full circuit documentation.
+
+---
+
+## 12. Next Steps
 
 1. **Read the documentation**: Start with `README.md` and `docs/00_overview.md`
 2. **Explore the protocol**: Check `protocol/` for core primitives
@@ -495,7 +563,7 @@ pytest tests/ -v
 
 ---
 
-## 12. Resources
+## 13. Resources
 
 - **Repository**: https://github.com/wombatvagina69-crypto/Olympus
 - **Documentation**: `docs/` directory
