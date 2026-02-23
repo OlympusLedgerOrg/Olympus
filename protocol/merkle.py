@@ -5,15 +5,18 @@ This module implements Merkle trees and Merkle forests for efficient
 cryptographic commitments and proof generation.
 """
 
+from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import Optional
 
-from .hashes import LEAF_PREFIX, blake3_hash, merkle_parent_hash
+from .events import CanonicalEvent
+from .hashes import HASH_SEPARATOR, LEAF_PREFIX, blake3_hash, merkle_parent_hash
 
 
 # Merkle tree version - DO NOT CHANGE
 # Changing this breaks all historical Merkle proofs
 MERKLE_VERSION = "merkle_v1"
+_SEP = HASH_SEPARATOR.encode("utf-8")
 
 
 @dataclass
@@ -31,8 +34,13 @@ class MerkleProof:
 
     leaf_hash: bytes
     leaf_index: int
-    siblings: list[tuple[bytes, bool]]  # (hash, is_right_sibling)
+    siblings: list[tuple[bytes, str]]  # (hash, "left" | "right")
     root_hash: bytes
+
+
+@dataclass
+class InclusionProof(MerkleProof):
+    """Alias for MerkleProof to match protocol terminology."""
 
 
 class MerkleTree:
@@ -40,7 +48,7 @@ class MerkleTree:
     A Merkle tree for committing to a set of documents.
     """
 
-    def __init__(self, leaves: list[bytes]):
+    def __init__(self, leaves: Sequence[bytes | CanonicalEvent]):
         """
         Construct a Merkle tree from leaf data.
 
@@ -49,30 +57,45 @@ class MerkleTree:
         impossible (second-preimage resistance).
 
         Args:
-            leaves: List of leaf data (arbitrary bytes per leaf)
+            leaves: List of leaf data (canonical event bytes or CanonicalEvent instances)
         """
         if not leaves:
             raise ValueError("Cannot create empty Merkle tree")
 
-        self.leaves = leaves
-        # Apply LEAF_PREFIX domain separation to each leaf before building the tree.
-        # This prevents second-preimage attacks where an internal node hash could
-        # be mistaken for a leaf hash.
-        self._leaf_hashes = [blake3_hash([LEAF_PREFIX, leaf]) for leaf in leaves]
-        self._root_node = self._build_tree(self._leaf_hashes)
+        self.leaves: list[bytes] = [self._extract_leaf_bytes(leaf) for leaf in leaves]
+        # Apply LEAF_PREFIX domain separation with HASH_SEPARATOR to prevent
+        # collisions with internal nodes and to follow structured hashing rules.
+        self._leaf_hashes: list[bytes] = [merkle_leaf_hash(leaf) for leaf in self.leaves]
+        leaf_nodes = [MerkleNode(hash=h) for h in self._leaf_hashes]
+        self._root_node = self._build_tree(leaf_nodes)
 
-    def _build_tree(self, hashes: list[bytes]) -> MerkleNode:
+    @staticmethod
+    def _extract_leaf_bytes(leaf: bytes | CanonicalEvent) -> bytes:
+        """Normalize leaf input to raw bytes."""
+        if isinstance(leaf, CanonicalEvent):
+            return leaf.canonical_bytes
+        if isinstance(leaf, bytes | bytearray):
+            return bytes(leaf)
+        raise ValueError("Leaves must be bytes or CanonicalEvent instances")
+
+    def _build_tree(self, nodes: list[MerkleNode]) -> MerkleNode:
         """Build tree from bottom up."""
-        if len(hashes) == 1:
-            return MerkleNode(hash=hashes[0])
+        if len(nodes) == 1:
+            return nodes[0]
 
         # Build parent level
         parents = []
-        for i in range(0, len(hashes), 2):
-            left_hash = hashes[i]
-            right_hash = hashes[i + 1] if i + 1 < len(hashes) else hashes[i]
-            parent_hash = merkle_parent_hash(left_hash, right_hash)
-            parents.append(parent_hash)
+        for i in range(0, len(nodes), 2):
+            left_node = nodes[i]
+            right_node = nodes[i + 1] if i + 1 < len(nodes) else nodes[i]
+            parent_hash = merkle_parent_hash(left_node.hash, right_node.hash)
+            parents.append(
+                MerkleNode(
+                    hash=parent_hash,
+                    left=left_node,
+                    right=right_node,
+                )
+            )
 
         return self._build_tree(parents)
 
@@ -101,26 +124,27 @@ class MerkleTree:
         siblings = []
 
         # Collect siblings along path to root
-        hashes = self._leaf_hashes[:]
+        current_level: list[MerkleNode] = [MerkleNode(hash=h) for h in self._leaf_hashes]
         index = leaf_index
 
-        while len(hashes) > 1:
+        while len(current_level) > 1:
             if index % 2 == 0:
                 # Left child, sibling is on right
-                sibling_index = index + 1 if index + 1 < len(hashes) else index
-                siblings.append((hashes[sibling_index], True))
+                sibling_index = index + 1 if index + 1 < len(current_level) else index
+                siblings.append((current_level[sibling_index].hash, "right"))
             else:
                 # Right child, sibling is on left
-                siblings.append((hashes[index - 1], False))
+                siblings.append((current_level[index - 1].hash, "left"))
 
             # Move to parent level
-            new_hashes = []
-            for i in range(0, len(hashes), 2):
-                left = hashes[i]
-                right = hashes[i + 1] if i + 1 < len(hashes) else hashes[i]
-                new_hashes.append(merkle_parent_hash(left, right))
+            new_level: list[MerkleNode] = []
+            for i in range(0, len(current_level), 2):
+                left = current_level[i]
+                right = current_level[i + 1] if i + 1 < len(current_level) else current_level[i]
+                new_hash = merkle_parent_hash(left.hash, right.hash)
+                new_level.append(MerkleNode(hash=new_hash, left=left, right=right))
 
-            hashes = new_hashes
+            current_level = new_level
             index = index // 2
 
         return MerkleProof(
@@ -144,9 +168,26 @@ def verify_proof(proof: MerkleProof) -> bool:
     current_hash = proof.leaf_hash
 
     for sibling_hash, is_right in proof.siblings:
-        if is_right:
+        if is_right == "right":
             current_hash = merkle_parent_hash(current_hash, sibling_hash)
-        else:
+        elif is_right == "left":
             current_hash = merkle_parent_hash(sibling_hash, current_hash)
+        else:
+            raise ValueError("Sibling position must be 'left' or 'right'")
 
     return current_hash == proof.root_hash
+
+
+def merkle_leaf_hash(payload: bytes) -> bytes:
+    """
+    Compute the domain-separated hash of a leaf payload using HASH_SEPARATOR.
+
+    Args:
+        payload: Raw leaf payload (canonical event bytes).
+
+    Returns:
+        32-byte BLAKE3 hash for use as a Merkle leaf.
+    """
+    if not isinstance(payload, bytes | bytearray):
+        raise ValueError("Leaf payload must be bytes")
+    return blake3_hash([LEAF_PREFIX, _SEP, bytes(payload)])

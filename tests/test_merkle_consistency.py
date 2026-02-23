@@ -1,5 +1,5 @@
-from protocol.hashes import LEAF_PREFIX, blake3_hash, merkle_parent_hash
-from protocol.merkle import MerkleTree, verify_proof
+from protocol.hashes import merkle_parent_hash
+from protocol.merkle import MerkleTree, merkle_leaf_hash, verify_proof
 
 
 def test_merkle_root_stable_for_same_inputs():
@@ -32,8 +32,8 @@ def test_merkle_leaf_prefix_applied():
 
     # Manually compute what the root should be with LEAF_PREFIX for leaves
     # and NODE_PREFIX for internal nodes.
-    leaf0_hash = blake3_hash([LEAF_PREFIX, b"leaf0"])
-    leaf1_hash = blake3_hash([LEAF_PREFIX, b"leaf1"])
+    leaf0_hash = merkle_leaf_hash(b"leaf0")
+    leaf1_hash = merkle_leaf_hash(b"leaf1")
 
     expected_root = merkle_parent_hash(leaf0_hash, leaf1_hash)
 
@@ -56,7 +56,7 @@ def test_merkle_proof_leaf_hash_uses_leaf_prefix():
     tree = MerkleTree(leaves)
 
     proof = tree.generate_proof(0)
-    expected_leaf_hash = blake3_hash([LEAF_PREFIX, b"x"])
+    expected_leaf_hash = merkle_leaf_hash(b"x")
     assert proof.leaf_hash == expected_leaf_hash
 
 

@@ -29,7 +29,7 @@ def verify_merkle_proof(args: argparse.Namespace) -> int:
         proof = MerkleProof(
             leaf_hash=bytes.fromhex(proof_data["leaf_hash"]),
             leaf_index=proof_data["leaf_index"],
-            siblings=[(bytes.fromhex(h), is_right) for h, is_right in proof_data["siblings"]],
+            siblings=[(bytes.fromhex(h), pos) for h, pos in proof_data["siblings"]],
             root_hash=bytes.fromhex(proof_data["root_hash"]),
         )
 
@@ -84,7 +84,7 @@ def verify_redaction(args: argparse.Namespace) -> int:
             mp = MerkleProof(
                 leaf_hash=bytes.fromhex(mp_data["leaf_hash"]),
                 leaf_index=mp_data["leaf_index"],
-                siblings=[(bytes.fromhex(h), is_right) for h, is_right in mp_data["siblings"]],
+                siblings=[(bytes.fromhex(h), pos) for h, pos in mp_data["siblings"]],
                 root_hash=bytes.fromhex(mp_data["root_hash"]),
             )
             merkle_proofs.append(mp)

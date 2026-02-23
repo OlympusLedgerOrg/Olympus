@@ -44,7 +44,7 @@ def merkle_proof_data(tmp_path):
     proof_data = {
         "leaf_hash": proof.leaf_hash.hex(),
         "leaf_index": proof.leaf_index,
-        "siblings": [[h.hex(), is_right] for h, is_right in proof.siblings],
+        "siblings": [[h.hex(), pos] for h, pos in proof.siblings],
         "root_hash": proof.root_hash.hex(),
     }
 
@@ -62,7 +62,7 @@ def invalid_merkle_proof_data(tmp_path):
     proof_data = {
         "leaf_hash": "0" * 64,  # Invalid hash
         "leaf_index": 0,
-        "siblings": [["1" * 64, False]],
+        "siblings": [["1" * 64, "right"]],
         "root_hash": "2" * 64,
     }
 
@@ -163,7 +163,7 @@ def redaction_proof_data(tmp_path):
             {
                 "leaf_hash": mp.leaf_hash.hex(),
                 "leaf_index": mp.leaf_index,
-                "siblings": [[h.hex(), is_right] for h, is_right in mp.siblings],
+                "siblings": [[h.hex(), pos] for h, pos in mp.siblings],
                 "root_hash": mp.root_hash.hex(),
             }
             for mp in proof.merkle_proofs

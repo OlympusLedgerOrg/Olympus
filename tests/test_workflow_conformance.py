@@ -31,6 +31,8 @@ from protocol.canonicalizer import (
     canonicalization_provenance,
     process_artifact,
 )
+from protocol.epochs import EpochRecord, compute_epoch_head
+from protocol.events import CanonicalEvent
 from protocol.hashes import (
     FOREST_PREFIX,
     HASH_SEPARATOR,
@@ -51,7 +53,7 @@ from protocol.hashes import (
     shard_header_hash,
 )
 from protocol.ledger import Ledger, LedgerEntry
-from protocol.merkle import MerkleProof, MerkleTree, verify_proof
+from protocol.merkle import InclusionProof, MerkleProof, MerkleTree, verify_proof
 from protocol.redaction import RedactionProof, RedactionProtocol
 from protocol.shards import (
     create_shard_header,
@@ -239,6 +241,10 @@ class TestProveStage:
         assert callable(RedactionProtocol.create_redaction_proof)
         assert callable(RedactionProtocol.verify_redaction_proof)
 
+    def test_inclusion_proof_alias_exists(self):
+        """InclusionProof is an alias of MerkleProof for clarity."""
+        assert issubclass(InclusionProof, MerkleProof)
+
 
 # ---------------------------------------------------------------------------
 # Stage 6: Verify — chain verification and proof validation
@@ -292,6 +298,31 @@ class TestLedgerStage:
         """LedgerEntry supports to_dict/from_dict for serialization."""
         assert callable(LedgerEntry.to_dict)
         assert callable(LedgerEntry.from_dict)
+
+
+class TestEpochAndEvents:
+    """Verify canonical event and epoch chaining helpers."""
+
+    def test_canonical_event_dataclass_exists(self):
+        """CanonicalEvent provides canonical bytes and hash."""
+        event = CanonicalEvent.from_raw({"body": "hello  world"}, "1.0.0")
+        assert event.schema_version == "1.0.0"
+        assert event.hash_hex
+        assert event.payload["body"] == "hello world"
+
+    def test_epoch_record_head_computation(self):
+        """EpochRecord computes deterministic epoch heads."""
+        merkle_root = hash_bytes(b"root")
+        metadata_hash = hash_bytes(b"meta")
+        record = EpochRecord.create(
+            epoch_index=0,
+            merkle_root=merkle_root,
+            metadata_hash=metadata_hash,
+        )
+        computed_head = compute_epoch_head(
+            record.previous_epoch_head, record.merkle_root, record.metadata_hash
+        ).hex()
+        assert record.epoch_head == computed_head
 
 
 # ---------------------------------------------------------------------------
@@ -350,11 +381,12 @@ class TestPipelineSmokeTest:
 
         # Append to ledger
         ledger = Ledger()
+        canon_meta = canonicalization_provenance("application/json", "canonical_v1")
         entry = ledger.append(
             record_hash=doc_hash,
             shard_id="shard-1",
             shard_root=root,
-            canonicalization=canonicalization_provenance("application/json", CANONICAL_VERSION),
+            canonicalization=canon_meta,
         )
 
         assert entry.record_hash == doc_hash

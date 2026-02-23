@@ -330,7 +330,7 @@ def test_redaction_proof_tampered_merkle_proof_siblings():
     # Tamper the Merkle proof by corrupting its sibling hash
     original_mp = proof.merkle_proofs[0]
     fake_sibling = b"\x00" * 32
-    tampered_siblings = [(fake_sibling, is_right) for _, is_right in original_mp.siblings]
+    tampered_siblings = [(fake_sibling, position) for _, position in original_mp.siblings]
     tampered_mp = MerkleProof(
         leaf_hash=original_mp.leaf_hash,
         leaf_index=original_mp.leaf_index,
