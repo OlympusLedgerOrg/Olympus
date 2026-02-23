@@ -14,7 +14,7 @@ from protocol.ledger import Ledger
 
 # Add tools to path so we can import chain_verify_cli
 sys.path.insert(0, str(Path(__file__).parent.parent / "tools"))
-import chain_verify_cli
+import chain_verify_cli  # noqa: E402
 
 
 def _canonicalization():
