@@ -149,6 +149,29 @@ entries = storage.get_ledger_tail("documents", n=10)
 
 ---
 
+## Database Roles and Permissions
+
+Olympus ships with a least-privilege role model enforced in
+`migrations/005_roles_and_permissions.sql`:
+
+| Role | Intended Use | Grants |
+| --- | --- | --- |
+| `migrator` | Apply schema migrations and DDL changes | `CONNECT`, `USAGE`, `CREATE` on schema, `ALL` on tables |
+| `writer` | Append-only ingestion services | `INSERT` + minimal `SELECT` on tables |
+| `auditor` | Read-only verification tooling | `SELECT` only |
+
+**Append-only guardrails**:
+- `writer` has no `UPDATE`/`DELETE`, and `TRUNCATE` is explicitly revoked.
+- `ALTER TABLE` and trigger management remain restricted to owners/superusers.
+- Triggers enforcing append-only semantics remain enabled by default and cannot be disabled by `writer`.
+
+**Operational guidance**:
+- Use `migrator` only in controlled deployment pipelines.
+- Run application services with the `writer` role.
+- Provide auditors the `auditor` role for offline verification and reporting.
+
+---
+
 ## Two FastAPI Applications: Production vs Testing
 
 Olympus contains **two separate FastAPI applications** that serve different purposes:

@@ -17,14 +17,20 @@ Protocol usage:
 import hashlib
 from dataclasses import dataclass
 from datetime import UTC
+from pathlib import Path
 
 import rfc3161ng
+from cryptography.hazmat.primitives import hashes
+from pyasn1.codec.der import decoder
+from rfc3161ng.api import load_certificate
 
 
 # Well-known public TSA endpoints (free, unauthenticated, publicly trusted)
 DEFAULT_TSA_URL = "https://freetsa.org/tsr"
 DIGICERT_TSA_URL = "https://timestamp.digicert.com"
 SECTIGO_TSA_URL = "https://timestamp.sectigo.com"
+TRUST_MODE_DEV = "dev"
+TRUST_MODE_PROD = "prod"
 
 
 @dataclass
@@ -42,8 +48,9 @@ class TimestampToken:
     tsa_url: str
     tst_bytes: bytes
     timestamp: str
+    tsa_cert_fingerprint: str | None = None
 
-    def to_dict(self) -> dict[str, str]:
+    def to_dict(self) -> dict[str, str | None]:
         """Serialize to a JSON-safe dictionary (``tst_bytes`` encoded as hex).
 
         Returns:
@@ -54,6 +61,7 @@ class TimestampToken:
             "tsa_url": self.tsa_url,
             "tst_hex": self.tst_bytes.hex(),
             "timestamp": self.timestamp,
+            "tsa_cert_fingerprint": self.tsa_cert_fingerprint,
         }
 
     @classmethod
@@ -62,7 +70,8 @@ class TimestampToken:
 
         Args:
             data: Dictionary with keys ``hash_hex``, ``tsa_url``,
-                  ``tst_hex``, and ``timestamp``.
+                  ``tst_hex``, ``timestamp``, and optional
+                  ``tsa_cert_fingerprint``.
 
         Returns:
             A :class:`TimestampToken` instance.
@@ -72,7 +81,29 @@ class TimestampToken:
             tsa_url=data["tsa_url"],
             tst_bytes=bytes.fromhex(data["tst_hex"]),
             timestamp=data["timestamp"],
+            tsa_cert_fingerprint=data.get("tsa_cert_fingerprint"),
         )
+
+
+def _extract_tsa_cert_fingerprint(tst_bytes: bytes) -> str | None:
+    """Extract the TSA certificate fingerprint from a TimeStampToken, if present."""
+    try:
+        tst, substrate = decoder.decode(tst_bytes, asn1Spec=rfc3161ng.TimeStampToken())
+        if substrate:
+            return None
+        signed_data = tst.content
+        certificate = load_certificate(signed_data, certificate=b"")
+        return certificate.fingerprint(hashes.SHA256()).hex()
+    except Exception:
+        return None
+
+
+def _load_trust_store_certificate(trust_store_path: str) -> bytes:
+    """Load a TSA certificate from a configured trust store path."""
+    path = Path(trust_store_path)
+    if not path.exists():
+        raise ValueError(f"Trust store path not found: {trust_store_path}")
+    return path.read_bytes()
 
 
 def _sha256_of_hash(hash_hex: str) -> bytes:
@@ -149,11 +180,13 @@ def request_timestamp(
     tst_bytes: bytes = stamper(digest=digest, return_tsr=False)
     ts = rfc3161ng.get_timestamp(tst_bytes, naive=False).astimezone(UTC)
     timestamp = ts.strftime("%Y-%m-%dT%H:%M:%SZ")
+    tsa_cert_fingerprint = _extract_tsa_cert_fingerprint(tst_bytes)
     return TimestampToken(
         hash_hex=hash_hex,
         tsa_url=tsa_url,
         tst_bytes=tst_bytes,
         timestamp=timestamp,
+        tsa_cert_fingerprint=tsa_cert_fingerprint,
     )
 
 
@@ -161,6 +194,9 @@ def verify_timestamp_token(
     tst_bytes: bytes,
     hash_hex: str,
     certificate: bytes | None = None,
+    trust_mode: str = TRUST_MODE_DEV,
+    trusted_fingerprints: set[str] | None = None,
+    trust_store_path: str | None = None,
 ) -> bool:
     """Verify an RFC 3161 timestamp token against a ledger root hash.
 
@@ -173,9 +209,12 @@ def verify_timestamp_token(
         tst_bytes: DER-encoded TimeStampToken bytes (from
                    :attr:`TimestampToken.tst_bytes`).
         hash_hex: Hex-encoded BLAKE3 ledger root hash that was timestamped.
-        certificate: PEM-encoded TSA signing certificate.  If ``None``, the
-                     certificate embedded in the token (``certReq=True``) is
-                     used for verification.
+        certificate: PEM/DER-encoded TSA signing certificate to pin explicitly.
+        trust_mode: ``dev`` accepts embedded certificates; ``prod`` requires
+            pinned fingerprints or an explicit trust store certificate.
+        trusted_fingerprints: Set of SHA-256 TSA certificate fingerprints (hex)
+            accepted in production mode.
+        trust_store_path: Path to a PEM/DER TSA certificate for production mode.
 
     Returns:
         ``True`` if the token is valid.
@@ -184,6 +223,25 @@ def verify_timestamp_token(
         ValueError: If ``hash_hex`` is invalid, the token is malformed, or
                     the message imprint does not match.
     """
+    if trust_mode not in {TRUST_MODE_DEV, TRUST_MODE_PROD}:
+        raise ValueError(f"Unsupported trust_mode: {trust_mode}")
+
+    tsa_fingerprint = _extract_tsa_cert_fingerprint(tst_bytes)
+
+    if trust_mode == TRUST_MODE_PROD:
+        if trusted_fingerprints:
+            if tsa_fingerprint is None:
+                raise ValueError("Missing TSA certificate fingerprint in timestamp token")
+            normalized_fingerprints = {fp.lower() for fp in trusted_fingerprints}
+            if tsa_fingerprint.lower() not in normalized_fingerprints:
+                raise ValueError("TSA certificate fingerprint not trusted")
+        elif trust_store_path:
+            certificate = _load_trust_store_certificate(trust_store_path)
+        elif certificate is None:
+            raise ValueError(
+                "Production trust_mode requires trusted_fingerprints or trust_store_path"
+            )
+
     digest = _sha256_of_hash(hash_hex)
     return bool(
         rfc3161ng.check_timestamp(

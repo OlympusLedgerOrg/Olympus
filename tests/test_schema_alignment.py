@@ -10,6 +10,7 @@ the source of truth for implementation.
 """
 
 import json
+from typing import Any
 from pathlib import Path
 
 import pytest
@@ -77,6 +78,7 @@ class LedgerEntryResponse(BaseModel):
     record_hash: str
     shard_id: str
     shard_root: str
+    canonicalization: dict[str, Any]
     prev_entry_hash: str
     entry_hash: str
 

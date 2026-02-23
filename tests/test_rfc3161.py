@@ -12,6 +12,7 @@ import pytest
 
 from protocol.rfc3161 import (
     DEFAULT_TSA_URL,
+    TRUST_MODE_PROD,
     TimestampToken,
     _sha256_of_hash,
     build_timestamp_request,
@@ -99,13 +100,20 @@ def _make_token() -> TimestampToken:
         tsa_url="https://freetsa.org/tsr",
         tst_bytes=b"\x30\x01\x00",
         timestamp="2026-02-21T02:28:25Z",
+        tsa_cert_fingerprint="aa" * 32,
     )
 
 
 def test_timestamp_token_to_dict_keys():
     token = _make_token()
     d = token.to_dict()
-    assert set(d.keys()) == {"hash_hex", "tsa_url", "tst_hex", "timestamp"}
+    assert set(d.keys()) == {
+        "hash_hex",
+        "tsa_url",
+        "tst_hex",
+        "timestamp",
+        "tsa_cert_fingerprint",
+    }
 
 
 def test_timestamp_token_to_dict_tst_is_hex():
@@ -136,6 +144,7 @@ def test_timestamp_token_all_fields_preserved_in_roundtrip():
     assert restored.hash_hex == token.hash_hex
     assert restored.tsa_url == token.tsa_url
     assert restored.timestamp == token.timestamp
+    assert restored.tsa_cert_fingerprint == token.tsa_cert_fingerprint
 
 
 # ---------------------------------------------------------------------------
@@ -166,6 +175,7 @@ def test_request_timestamp_returns_timestamp_token():
     with (
         patch("protocol.rfc3161.rfc3161ng.RemoteTimestamper", return_value=stamper_mock),
         patch("protocol.rfc3161.rfc3161ng.get_timestamp", return_value=fake_ts),
+        patch("protocol.rfc3161._extract_tsa_cert_fingerprint", return_value="bb" * 32),
     ):
         token = request_timestamp(hash_hex, tsa_url="https://example-tsa.test/tsr")
 
@@ -174,6 +184,7 @@ def test_request_timestamp_returns_timestamp_token():
     assert token.tsa_url == "https://example-tsa.test/tsr"
     assert token.tst_bytes == fake_tst_bytes
     assert token.timestamp == "2026-02-21T02:28:25Z"
+    assert token.tsa_cert_fingerprint == "bb" * 32
 
 
 def test_request_timestamp_uses_default_tsa_when_no_url_given():
@@ -285,3 +296,38 @@ def test_verify_timestamp_token_propagates_value_error_from_check():
 def test_verify_timestamp_token_rejects_invalid_hash_hex():
     with pytest.raises(ValueError, match="Invalid hash_hex"):
         verify_timestamp_token(b"\x30\x00", "not-hex!!")
+
+
+def test_verify_timestamp_token_prod_accepts_pinned_fingerprint():
+    hash_hex = "a" * 64
+    fake_tst_bytes = b"\x30\x00"
+    trusted = "cc" * 32
+
+    with (
+        patch("protocol.rfc3161._extract_tsa_cert_fingerprint", return_value=trusted),
+        patch("protocol.rfc3161.rfc3161ng.check_timestamp", return_value=True) as mock_check,
+    ):
+        assert (
+            verify_timestamp_token(
+                fake_tst_bytes,
+                hash_hex,
+                trust_mode=TRUST_MODE_PROD,
+                trusted_fingerprints={trusted},
+            )
+            is True
+        )
+    mock_check.assert_called_once()
+
+
+def test_verify_timestamp_token_prod_rejects_untrusted_fingerprint():
+    hash_hex = "b" * 64
+    fake_tst_bytes = b"\x30\x00"
+
+    with patch("protocol.rfc3161._extract_tsa_cert_fingerprint", return_value="dd" * 32):
+        with pytest.raises(ValueError, match="not trusted"):
+            verify_timestamp_token(
+                fake_tst_bytes,
+                hash_hex,
+                trust_mode=TRUST_MODE_PROD,
+                trusted_fingerprints={"ee" * 32},
+            )

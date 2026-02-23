@@ -1,0 +1,23 @@
+{
+  "bundle_version": "1.0.0",
+  "canonicalization": {
+    "canonicalizer_versions": {
+      "docx": "1.1.0-c14n-strict",
+      "html": "1.0.1-lxml-pinned-nfc",
+      "jcs": "1.2.0-strict-numeric",
+      "pdf": "1.4.0-pikepdf-10.3.0-linearized"
+    },
+    "fallback_reason": null,
+    "format": "application/json",
+    "normalization_mode": "canonical_v1"
+  },
+  "pubkey": "a86549794163a4025e609e5a77a1f68283c30bd4906b9d0daa535fba220a191b",
+  "shard_header": {
+    "header_hash": "197c3b610839e1f918b55b51b383135f957fbcb64b0ef2df343f40b3fc570079",
+    "previous_header_hash": "",
+    "root_hash": "2ef5badeef04c3e6ac273502087c0450e210c1a9d93e281c1460425adf242606",
+    "shard_id": "example-shard",
+    "timestamp": "2026-02-22T21:18:41Z"
+  },
+  "signature": "460fe52ed36c8466fea7f8a537ea74995a1565f977aa159ea1a602093164301a8bdf2488aa04fc73574933a3e940dc71d4e44c5a42714b8161053890d9ab0c0c"
+}

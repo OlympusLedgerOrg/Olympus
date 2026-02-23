@@ -26,8 +26,31 @@ CANONICALIZER_VERSIONS: dict[str, str] = {
     "jcs": "1.2.0-strict-numeric",
     "html": "1.0.1-lxml-pinned-nfc",
     "docx": "1.1.0-c14n-strict",
-    "pdf": "1.3.0-pikepdf-linearized",
+    "pdf": "1.4.0-pikepdf-10.3.0-linearized",
 }
+
+
+def canonicalization_provenance(
+    format_name: str,
+    normalization_mode: str,
+    fallback_reason: str | None = None,
+) -> dict[str, Any]:
+    """Build canonicalization provenance metadata for commitments.
+
+    Args:
+        format_name: Artifact format (e.g. MIME type).
+        normalization_mode: Canonicalization mode identifier.
+        fallback_reason: Optional fallback reason code.
+
+    Returns:
+        Dictionary capturing canonicalization provenance for bundle/commitment metadata.
+    """
+    return {
+        "format": format_name,
+        "normalization_mode": normalization_mode,
+        "fallback_reason": fallback_reason,
+        "canonicalizer_versions": CANONICALIZER_VERSIONS,
+    }
 
 try:
     from lxml import etree, html as lxml_html

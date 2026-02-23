@@ -14,6 +14,8 @@
 # -----------------------------------------------------------------------
 set -euo pipefail
 
+echo "WARNING: PRODUCTION UNSAFE — smoke tests use dev Groth16 artifacts."
+
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "${SCRIPT_DIR}"
 

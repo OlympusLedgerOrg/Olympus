@@ -20,6 +20,7 @@ class LedgerEntry:
     record_hash: str  # Hex-encoded record hash
     shard_id: str  # Shard identifier
     shard_root: str  # Hex-encoded shard root hash
+    canonicalization: dict[str, Any]  # Canonicalization provenance for commitments
     prev_entry_hash: str  # Hex-encoded previous entry hash, empty string for genesis
     entry_hash: str  # Hex-encoded hash of this entry
 
@@ -45,7 +46,13 @@ class Ledger:
         """Initialize an empty ledger."""
         self.entries: list[LedgerEntry] = []
 
-    def append(self, record_hash: str, shard_id: str, shard_root: str) -> LedgerEntry:
+    def append(
+        self,
+        record_hash: str,
+        shard_id: str,
+        shard_root: str,
+        canonicalization: dict[str, Any],
+    ) -> LedgerEntry:
         """
         Append a new entry to the ledger.
 
@@ -53,6 +60,7 @@ class Ledger:
             record_hash: Hash of the record
             shard_id: Identifier for the shard
             shard_root: Root hash of the shard
+            canonicalization: Canonicalization provenance metadata for the commitment
 
         Returns:
             The newly created entry
@@ -66,6 +74,7 @@ class Ledger:
             "record_hash": record_hash,
             "shard_id": shard_id,
             "shard_root": shard_root,
+            "canonicalization": canonicalization,
             "prev_entry_hash": prev_entry_hash,
         }
 
@@ -80,6 +89,7 @@ class Ledger:
             record_hash=record_hash,
             shard_id=shard_id,
             shard_root=shard_root,
+            canonicalization=canonicalization,
             prev_entry_hash=prev_entry_hash,
             entry_hash=entry_hash,
         )
@@ -124,6 +134,7 @@ class Ledger:
                 "record_hash": entry.record_hash,
                 "shard_id": entry.shard_id,
                 "shard_root": entry.shard_root,
+                "canonicalization": entry.canonicalization,
                 "prev_entry_hash": entry.prev_entry_hash,
             }
             canonical_json = json.dumps(

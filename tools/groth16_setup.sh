@@ -27,6 +27,8 @@
 # -----------------------------------------------------------------------
 set -e
 
+echo "WARNING: PRODUCTION UNSAFE — dev-only Groth16 setup script."
+
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
 # Setup directories
@@ -47,5 +49,17 @@ snarkjs zkey contribute build/foia_redaction_0000.zkey build/foia_redaction_fina
 
 echo "Exporting verification key..."
 snarkjs zkey export verificationkey build/foia_redaction_final.zkey build/verification_key.json
+
+echo "Recording provenance..."
+PTAU_SHA256="$(sha256sum build/pot15_final.ptau | awk '{print $1}')"
+VKEY_SHA256="$(sha256sum build/verification_key.json | awk '{print $1}')"
+cat <<EOF > build/PROVENANCE.md
+# Groth16 Setup Provenance (FOIA Redaction Circuit)
+
+Generated: $(date -u +"%Y-%m-%dT%H:%M:%SZ")
+PTAU_SOURCE: local-dev-generated
+PTAU_SHA256: ${PTAU_SHA256}
+VKEY_SHA256: ${VKEY_SHA256}
+EOF
 
 echo "Groth16 setup pipeline complete. Artifacts saved in proofs/build/"

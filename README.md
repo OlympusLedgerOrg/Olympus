@@ -117,6 +117,35 @@ All proofs can be verified offline without access to Olympus:
 
 ---
 
+## How to Verify Without Trusting Olympus
+
+The primary offline interface is the **verification bundle**. A bundle packages
+canonicalization provenance, the shard header, signatures, and optional proofs so
+auditors can verify everything without network access.
+
+1. **Obtain the bundle JSON** from the publisher or export pipeline.
+2. **Validate against the schema**:
+   - Schema: `examples/verification_bundle.schema.json`
+   - Example bundle: `examples/verification_bundle.example.json`
+3. **Run the offline verifier**:
+
+```bash
+python tools/verify_bundle_cli.py examples/verification_bundle.example.json
+```
+
+Use production TSA pinning when verifying RFC 3161 tokens:
+
+```bash
+python tools/verify_bundle_cli.py bundle.json \
+  --tsa-trust-mode prod \
+  --tsa-fingerprint <sha256-hex>
+```
+
+The bundle is intentionally self-contained: no API calls or Olympus services are
+required to validate the commitment.
+
+---
+
 ## Threat Model
 
 **Olympus defends against:**

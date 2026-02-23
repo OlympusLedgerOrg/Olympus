@@ -8,8 +8,14 @@ ledger for recording document commitments.
 import json
 from datetime import datetime
 
+from protocol.canonical import CANONICAL_VERSION
+from protocol.canonicalizer import canonicalization_provenance
 from protocol.hashes import LEDGER_PREFIX, blake3_hash
 from protocol.ledger import Ledger, LedgerEntry
+
+
+def _canonicalization():
+    return canonicalization_provenance("application/json", CANONICAL_VERSION)
 
 
 def test_ledger_initialization():
@@ -23,7 +29,12 @@ def test_ledger_append_single_entry():
     """Test appending a single entry to the ledger."""
     ledger = Ledger()
 
-    entry = ledger.append(record_hash="abc123", shard_id="shard1", shard_root="def456")
+    entry = ledger.append(
+        record_hash="abc123",
+        shard_id="shard1",
+        shard_root="def456",
+        canonicalization=_canonicalization(),
+    )
 
     assert len(ledger.entries) == 1
     assert entry.record_hash == "abc123"
@@ -37,11 +48,26 @@ def test_ledger_append_multiple_entries():
     """Test appending multiple entries to the ledger."""
     ledger = Ledger()
 
-    entry1 = ledger.append(record_hash="hash1", shard_id="shard1", shard_root="root1")
+    entry1 = ledger.append(
+        record_hash="hash1",
+        shard_id="shard1",
+        shard_root="root1",
+        canonicalization=_canonicalization(),
+    )
 
-    entry2 = ledger.append(record_hash="hash2", shard_id="shard1", shard_root="root2")
+    entry2 = ledger.append(
+        record_hash="hash2",
+        shard_id="shard1",
+        shard_root="root2",
+        canonicalization=_canonicalization(),
+    )
 
-    entry3 = ledger.append(record_hash="hash3", shard_id="shard2", shard_root="root3")
+    entry3 = ledger.append(
+        record_hash="hash3",
+        shard_id="shard2",
+        shard_root="root3",
+        canonicalization=_canonicalization(),
+    )
 
     assert len(ledger.entries) == 3
     assert ledger.entries[0] == entry1
@@ -53,7 +79,12 @@ def test_ledger_genesis_entry_has_empty_prev_hash():
     """Test that the first (genesis) entry has empty prev_entry_hash."""
     ledger = Ledger()
 
-    entry = ledger.append(record_hash="hash1", shard_id="shard1", shard_root="root1")
+    entry = ledger.append(
+        record_hash="hash1",
+        shard_id="shard1",
+        shard_root="root1",
+        canonicalization=_canonicalization(),
+    )
 
     assert entry.prev_entry_hash == ""
 
@@ -62,11 +93,26 @@ def test_ledger_chain_linkage():
     """Test that entries are properly linked in a chain."""
     ledger = Ledger()
 
-    entry1 = ledger.append(record_hash="hash1", shard_id="shard1", shard_root="root1")
+    entry1 = ledger.append(
+        record_hash="hash1",
+        shard_id="shard1",
+        shard_root="root1",
+        canonicalization=_canonicalization(),
+    )
 
-    entry2 = ledger.append(record_hash="hash2", shard_id="shard1", shard_root="root2")
+    entry2 = ledger.append(
+        record_hash="hash2",
+        shard_id="shard1",
+        shard_root="root2",
+        canonicalization=_canonicalization(),
+    )
 
-    entry3 = ledger.append(record_hash="hash3", shard_id="shard1", shard_root="root3")
+    entry3 = ledger.append(
+        record_hash="hash3",
+        shard_id="shard1",
+        shard_root="root3",
+        canonicalization=_canonicalization(),
+    )
 
     # Each entry should link to the previous one
     assert entry2.prev_entry_hash == entry1.entry_hash
@@ -77,7 +123,12 @@ def test_ledger_entry_hash_computation():
     """Test that entry hash is computed correctly."""
     ledger = Ledger()
 
-    entry = ledger.append(record_hash="test_hash", shard_id="test_shard", shard_root="test_root")
+    entry = ledger.append(
+        record_hash="test_hash",
+        shard_id="test_shard",
+        shard_root="test_root",
+        canonicalization=_canonicalization(),
+    )
 
     # Recompute the hash to verify
     payload = {
@@ -85,6 +136,7 @@ def test_ledger_entry_hash_computation():
         "record_hash": entry.record_hash,
         "shard_id": entry.shard_id,
         "shard_root": entry.shard_root,
+        "canonicalization": entry.canonicalization,
         "prev_entry_hash": entry.prev_entry_hash,
     }
     canonical_json = json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=True)
@@ -97,9 +149,19 @@ def test_ledger_get_entry_by_hash():
     """Test retrieving an entry by its hash."""
     ledger = Ledger()
 
-    entry1 = ledger.append(record_hash="hash1", shard_id="shard1", shard_root="root1")
+    entry1 = ledger.append(
+        record_hash="hash1",
+        shard_id="shard1",
+        shard_root="root1",
+        canonicalization=_canonicalization(),
+    )
 
-    entry2 = ledger.append(record_hash="hash2", shard_id="shard1", shard_root="root2")
+    entry2 = ledger.append(
+        record_hash="hash2",
+        shard_id="shard1",
+        shard_root="root2",
+        canonicalization=_canonicalization(),
+    )
 
     # Retrieve by hash
     retrieved = ledger.get_entry(entry1.entry_hash)
@@ -113,7 +175,12 @@ def test_ledger_get_entry_not_found():
     """Test that get_entry returns None for non-existent hash."""
     ledger = Ledger()
 
-    ledger.append(record_hash="hash1", shard_id="shard1", shard_root="root1")
+    ledger.append(
+        record_hash="hash1",
+        shard_id="shard1",
+        shard_root="root1",
+        canonicalization=_canonicalization(),
+    )
 
     retrieved = ledger.get_entry("nonexistent_hash")
     assert retrieved is None
@@ -136,11 +203,26 @@ def test_ledger_verify_chain_valid():
     """Test that verify_chain returns True for valid chain."""
     ledger = Ledger()
 
-    ledger.append(record_hash="hash1", shard_id="shard1", shard_root="root1")
+    ledger.append(
+        record_hash="hash1",
+        shard_id="shard1",
+        shard_root="root1",
+        canonicalization=_canonicalization(),
+    )
 
-    ledger.append(record_hash="hash2", shard_id="shard1", shard_root="root2")
+    ledger.append(
+        record_hash="hash2",
+        shard_id="shard1",
+        shard_root="root2",
+        canonicalization=_canonicalization(),
+    )
 
-    ledger.append(record_hash="hash3", shard_id="shard1", shard_root="root3")
+    ledger.append(
+        record_hash="hash3",
+        shard_id="shard1",
+        shard_root="root3",
+        canonicalization=_canonicalization(),
+    )
 
     assert ledger.verify_chain() is True
 
@@ -149,9 +231,19 @@ def test_ledger_verify_chain_detects_tampered_entry_hash():
     """Test that verify_chain detects tampered entry hash."""
     ledger = Ledger()
 
-    ledger.append(record_hash="hash1", shard_id="shard1", shard_root="root1")
+    ledger.append(
+        record_hash="hash1",
+        shard_id="shard1",
+        shard_root="root1",
+        canonicalization=_canonicalization(),
+    )
 
-    ledger.append(record_hash="hash2", shard_id="shard1", shard_root="root2")
+    ledger.append(
+        record_hash="hash2",
+        shard_id="shard1",
+        shard_root="root2",
+        canonicalization=_canonicalization(),
+    )
 
     # Tamper with an entry hash
     ledger.entries[1].entry_hash = "tampered_hash"
@@ -163,9 +255,19 @@ def test_ledger_verify_chain_detects_tampered_record_hash():
     """Test that verify_chain detects tampered record data."""
     ledger = Ledger()
 
-    ledger.append(record_hash="hash1", shard_id="shard1", shard_root="root1")
+    ledger.append(
+        record_hash="hash1",
+        shard_id="shard1",
+        shard_root="root1",
+        canonicalization=_canonicalization(),
+    )
 
-    ledger.append(record_hash="hash2", shard_id="shard1", shard_root="root2")
+    ledger.append(
+        record_hash="hash2",
+        shard_id="shard1",
+        shard_root="root2",
+        canonicalization=_canonicalization(),
+    )
 
     # Tamper with record data (changing this invalidates the entry_hash)
     ledger.entries[1].record_hash = "tampered_record_hash"
@@ -177,9 +279,19 @@ def test_ledger_verify_chain_detects_broken_linkage():
     """Test that verify_chain detects broken chain linkage."""
     ledger = Ledger()
 
-    ledger.append(record_hash="hash1", shard_id="shard1", shard_root="root1")
+    ledger.append(
+        record_hash="hash1",
+        shard_id="shard1",
+        shard_root="root1",
+        canonicalization=_canonicalization(),
+    )
 
-    ledger.append(record_hash="hash2", shard_id="shard1", shard_root="root2")
+    ledger.append(
+        record_hash="hash2",
+        shard_id="shard1",
+        shard_root="root2",
+        canonicalization=_canonicalization(),
+    )
 
     # Break the chain linkage
     ledger.entries[1].prev_entry_hash = "wrong_prev_hash"
@@ -193,7 +305,12 @@ def test_ledger_verify_chain_detects_invalid_genesis():
     """Test that verify_chain detects invalid genesis entry."""
     ledger = Ledger()
 
-    ledger.append(record_hash="hash1", shard_id="shard1", shard_root="root1")
+    ledger.append(
+        record_hash="hash1",
+        shard_id="shard1",
+        shard_root="root1",
+        canonicalization=_canonicalization(),
+    )
 
     # Tamper with genesis entry's prev_entry_hash
     ledger.entries[0].prev_entry_hash = "should_be_empty"
@@ -208,6 +325,7 @@ def test_ledger_entry_to_dict():
         record_hash="hash1",
         shard_id="shard1",
         shard_root="root1",
+        canonicalization=_canonicalization(),
         prev_entry_hash="prev",
         entry_hash="entry",
     )
@@ -219,6 +337,7 @@ def test_ledger_entry_to_dict():
     assert result["record_hash"] == "hash1"
     assert result["shard_id"] == "shard1"
     assert result["shard_root"] == "root1"
+    assert result["canonicalization"] == _canonicalization()
     assert result["prev_entry_hash"] == "prev"
     assert result["entry_hash"] == "entry"
 
@@ -230,6 +349,7 @@ def test_ledger_entry_from_dict():
         "record_hash": "hash1",
         "shard_id": "shard1",
         "shard_root": "root1",
+        "canonicalization": _canonicalization(),
         "prev_entry_hash": "prev",
         "entry_hash": "entry",
     }
@@ -240,6 +360,7 @@ def test_ledger_entry_from_dict():
     assert entry.record_hash == "hash1"
     assert entry.shard_id == "shard1"
     assert entry.shard_root == "root1"
+    assert entry.canonicalization == _canonicalization()
     assert entry.prev_entry_hash == "prev"
     assert entry.entry_hash == "entry"
 
@@ -251,6 +372,7 @@ def test_ledger_entry_roundtrip_serialization():
         record_hash="hash1",
         shard_id="shard1",
         shard_root="root1",
+        canonicalization=_canonicalization(),
         prev_entry_hash="prev",
         entry_hash="entry",
     )
@@ -265,9 +387,19 @@ def test_ledger_get_all_entries():
     """Test get_all_entries returns copy of entries."""
     ledger = Ledger()
 
-    ledger.append(record_hash="hash1", shard_id="shard1", shard_root="root1")
+    ledger.append(
+        record_hash="hash1",
+        shard_id="shard1",
+        shard_root="root1",
+        canonicalization=_canonicalization(),
+    )
 
-    ledger.append(record_hash="hash2", shard_id="shard1", shard_root="root2")
+    ledger.append(
+        record_hash="hash2",
+        shard_id="shard1",
+        shard_root="root2",
+        canonicalization=_canonicalization(),
+    )
 
     entries = ledger.get_all_entries()
 
@@ -280,7 +412,12 @@ def test_ledger_timestamp_format():
     """Test that timestamps are in correct ISO 8601 format with Z suffix."""
     ledger = Ledger()
 
-    entry = ledger.append(record_hash="hash1", shard_id="shard1", shard_root="root1")
+    entry = ledger.append(
+        record_hash="hash1",
+        shard_id="shard1",
+        shard_root="root1",
+        canonicalization=_canonicalization(),
+    )
 
     # Should end with 'Z' for UTC
     assert entry.ts.endswith("Z")
@@ -294,9 +431,19 @@ def test_ledger_entry_hashes_are_unique():
     """Test that different entries produce different hashes."""
     ledger = Ledger()
 
-    entry1 = ledger.append(record_hash="hash1", shard_id="shard1", shard_root="root1")
+    entry1 = ledger.append(
+        record_hash="hash1",
+        shard_id="shard1",
+        shard_root="root1",
+        canonicalization=_canonicalization(),
+    )
 
-    entry2 = ledger.append(record_hash="hash2", shard_id="shard1", shard_root="root2")
+    entry2 = ledger.append(
+        record_hash="hash2",
+        shard_id="shard1",
+        shard_root="root2",
+        canonicalization=_canonicalization(),
+    )
 
     assert entry1.entry_hash != entry2.entry_hash
 
@@ -312,6 +459,7 @@ def test_ledger_deterministic_hash_for_same_data():
         record_hash="hash1",
         shard_id="shard1",
         shard_root="root1",
+        canonicalization=_canonicalization(),
         prev_entry_hash="",
         entry_hash="",
     )
@@ -322,6 +470,7 @@ def test_ledger_deterministic_hash_for_same_data():
         "record_hash": "hash1",
         "shard_id": "shard1",
         "shard_root": "root1",
+        "canonicalization": _canonicalization(),
         "prev_entry_hash": "",
     }
     canonical_json = json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=True)
@@ -333,6 +482,7 @@ def test_ledger_deterministic_hash_for_same_data():
         record_hash="hash1",
         shard_id="shard1",
         shard_root="root1",
+        canonicalization=_canonicalization(),
         prev_entry_hash="",
         entry_hash=computed_hash,
     )
