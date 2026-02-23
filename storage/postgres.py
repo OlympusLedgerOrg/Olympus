@@ -27,7 +27,7 @@ See docs/08_database_strategy.md for complete database strategy documentation.
 
 import json
 from collections.abc import Mapping
-from datetime import UTC, datetime
+from datetime import datetime, timezone
 from typing import Any
 
 import nacl.exceptions
@@ -171,7 +171,7 @@ class StorageLayer:
                     INSERT INTO smt_leaves (shard_id, key, version, value_hash, ts)
                     VALUES (%s, %s, %s, %s, %s)
                     """,
-                (shard_id, key, version, value_hash, datetime.now(UTC)),
+                (shard_id, key, version, value_hash, datetime.now(timezone.utc)),
             )
 
             # Insert new affected nodes (append-only, skip if node exists)
@@ -205,7 +205,7 @@ class StorageLayer:
             seq = seq_row["next_seq"]
 
             # Create shard header
-            ts = datetime.now(UTC).isoformat().replace("+00:00", "Z")
+            ts = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
             header = create_shard_header(
                 shard_id=shard_id,
                 root_hash=root_hash,
@@ -776,7 +776,7 @@ class StorageLayer:
                     INSERT INTO smt_nodes (shard_id, level, index, hash, ts)
                     VALUES (%s, %s, %s, %s, %s)
                     """,
-                    (shard_id, level, path_bytes, hash_value, datetime.now(UTC)),
+                    (shard_id, level, path_bytes, hash_value, datetime.now(timezone.utc)),
                 )
 
     def _encode_path(self, path: tuple[int, ...]) -> bytes:
