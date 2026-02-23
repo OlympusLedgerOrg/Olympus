@@ -28,8 +28,10 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 
 import nacl.signing
 
+from protocol.epochs import EpochRecord, compute_epoch_head
+from protocol.events import CanonicalEvent
 from protocol.hashes import shard_header_hash
-from protocol.merkle import MerkleProof, verify_proof
+from protocol.merkle import MerkleProof, MerkleTree, merkle_leaf_hash, verify_proof
 from protocol.rfc3161 import TRUST_MODE_DEV, TRUST_MODE_PROD, verify_timestamp_token
 from protocol.shards import verify_header
 
@@ -144,10 +146,16 @@ def _check_merkle_proofs(
     results: list[tuple[bool, str]] = []
     for i, pdata in enumerate(proofs):
         try:
+            sibling_entries = []
+            for h, position in pdata["siblings"]:
+                if position not in ("left", "right"):
+                    raise ValueError("Sibling position must be 'left' or 'right'")
+                sibling_entries.append((bytes.fromhex(h), position))
+
             proof = MerkleProof(
                 leaf_hash=bytes.fromhex(pdata["leaf_hash"]),
                 leaf_index=pdata["leaf_index"],
-                siblings=[(bytes.fromhex(h), is_right) for h, is_right in pdata["siblings"]],
+                siblings=sibling_entries,
                 root_hash=bytes.fromhex(pdata["root_hash"]),
             )
         except (KeyError, ValueError) as exc:
@@ -164,11 +172,13 @@ def _check_merkle_proofs(
                 )
             )
             continue
-
-        if verify_proof(proof):
-            results.append((True, f"Merkle proof [{i}]: valid (leaf {pdata['leaf_index']})"))
-        else:
-            results.append((False, f"Merkle proof [{i}]: INVALID"))
+        try:
+            if verify_proof(proof):
+                results.append((True, f"Merkle proof [{i}]: valid (leaf {pdata['leaf_index']})"))
+            else:
+                results.append((False, f"Merkle proof [{i}]: INVALID"))
+        except ValueError as exc:
+            results.append((False, f"Merkle proof [{i}]: INVALID ({exc})"))
 
     return results
 
@@ -197,6 +207,114 @@ def _check_canonicalization_provenance(
     )
 
 
+def _check_schema_version(schema_version: str) -> tuple[bool, str]:
+    """Ensure the bundle schema version is present and matches expectations."""
+    if not schema_version:
+        return False, "Schema version missing"
+    if schema_version == BUNDLE_SCHEMA_VERSION:
+        return True, f"Schema version supported: {schema_version}"
+    return False, f"Schema version unsupported: {schema_version}"
+
+
+def _check_root_consistency(header_root_hex: str, bundle_root_hex: str) -> tuple[bool, str]:
+    """Ensure Merkle root in bundle matches the shard header root."""
+    if header_root_hex.lower() == bundle_root_hex.lower():
+        return True, f"Merkle root matches shard header: {header_root_hex}"
+    return False, (
+        f"Merkle root mismatch: header root {header_root_hex} " f"!= bundle root {bundle_root_hex}"
+    )
+
+
+def _canonical_event_bytes(schema_version: str, event_data: Any) -> CanonicalEvent:
+    """Canonicalize event payload to bytes and hash."""
+    if not isinstance(event_data, dict):
+        raise ValueError("canonical_events entries must be objects")
+    return CanonicalEvent.from_raw(event_data, schema_version)
+
+
+def _check_canonical_events(
+    schema_version: str,
+    canonical_events: list[dict[str, Any]],
+    leaf_hashes: list[str],
+    claimed_root_hex: str,
+) -> list[tuple[bool, str]]:
+    """Validate canonical events, leaf hashes, and Merkle root determinism."""
+    results: list[tuple[bool, str]] = []
+    if not isinstance(claimed_root_hex, str):
+        return [(False, "Merkle root must be a hex string")]
+    claimed_root_hex = claimed_root_hex.lower()
+    if len(claimed_root_hex) != 64:
+        return [(False, f"Merkle root must be 64 hex chars, got {len(claimed_root_hex)}")]
+    try:
+        events = [_canonical_event_bytes(schema_version, evt) for evt in canonical_events]
+    except Exception as exc:
+        return [(False, f"Canonical events invalid: {exc}")]
+
+    if len(events) != len(leaf_hashes):
+        return [
+            (
+                False,
+                f"Leaf hash count mismatch: {len(leaf_hashes)} provided "
+                f"for {len(events)} canonical events",
+            )
+        ]
+
+    computed_leaf_hashes = [merkle_leaf_hash(evt.canonical_bytes).hex() for evt in events]
+    try:
+        provided_hashes = [h.lower() for h in leaf_hashes]
+    except Exception as exc:
+        return [(False, f"Leaf hashes invalid: {exc}")]
+    leaves_match = computed_leaf_hashes == provided_hashes
+    results.append(
+        (
+            leaves_match,
+            "Leaf hashes match canonical events"
+            if leaves_match
+            else "Leaf hashes do not match canonical events",
+        )
+    )
+
+    tree_root = MerkleTree([evt.canonical_bytes for evt in events]).get_root().hex()
+    root_match = tree_root == claimed_root_hex.lower()
+    results.append(
+        (
+            root_match,
+            f"Merkle root deterministic: {tree_root}"
+            if root_match
+            else f"Merkle root mismatch: computed {tree_root}, claimed {claimed_root_hex}",
+        )
+    )
+    return results
+
+
+def _check_epoch_record(epoch_record: dict[str, Any], root_hash_hex: str) -> tuple[bool, str]:
+    """Validate epoch record linkage."""
+    try:
+        record = EpochRecord.from_dict(epoch_record)
+    except Exception as exc:
+        return False, f"Epoch record malformed: {exc}"
+
+    if record.merkle_root.lower() != root_hash_hex.lower():
+        return False, (
+            f"Epoch record Merkle root mismatch: "
+            f"{record.merkle_root} != shard root {root_hash_hex}"
+        )
+
+    try:
+        computed_head = compute_epoch_head(
+            record.previous_epoch_head, record.merkle_root, record.metadata_hash
+        ).hex()
+    except ValueError as exc:
+        return False, f"Epoch head computation failed: {exc}"
+
+    if computed_head != record.epoch_head:
+        return False, (
+            f"Epoch head mismatch: computed {computed_head} " f"!= claimed {record.epoch_head}"
+        )
+
+    return True, f"Epoch record valid (head={record.epoch_head})"
+
+
 def verify_bundle(
     bundle: dict[str, Any],
     *,
@@ -218,24 +336,47 @@ def verify_bundle(
     # --- Required fields ---
     try:
         bundle_version = bundle["bundle_version"]
+        schema_version = bundle.get("schema_version", bundle_version)
         canonicalization = bundle["canonicalization"]
+        canonical_events = bundle["canonical_events"]
+        leaf_hashes = bundle["leaf_hashes"]
+        merkle_root_hex = bundle["merkle_root"]
         header = bundle["shard_header"]
         signature_hex = bundle["signature"]
         pubkey_hex = bundle["pubkey"]
+        epoch_record = bundle.get("epoch_record")
     except KeyError as exc:
         return False, [(False, f"Missing required field: {exc}")]
 
     # 0. Bundle schema version
     results.append(_check_bundle_version(bundle_version))
+    results.append(_check_schema_version(schema_version))
 
     # 0.5 Canonicalization provenance
     results.append(_check_canonicalization_provenance(canonicalization))
 
+    # 0.7 Canonical events and Merkle root determinism
+    results.extend(
+        _check_canonical_events(
+            schema_version,
+            canonical_events,
+            leaf_hashes,
+            merkle_root_hex,
+        )
+    )
+
     # 1. Header hash
     results.append(_check_header_hash(header))
+    results.append(_check_root_consistency(header["root_hash"], merkle_root_hex))
 
     # 2. Ed25519 signature
     results.append(_check_signature(header, signature_hex, pubkey_hex))
+
+    # 2.5 Epoch chaining (required for tamper-evident replication)
+    if epoch_record is None:
+        results.append((False, "Epoch record missing"))
+    else:
+        results.append(_check_epoch_record(epoch_record, header["root_hash"]))
 
     # 3. Timestamp token (optional)
     if "timestamp_token" in bundle and bundle["timestamp_token"] is not None:
@@ -250,8 +391,9 @@ def verify_bundle(
         )
 
     # 4. Merkle proofs (optional)
-    if "merkle_proofs" in bundle and bundle["merkle_proofs"]:
-        results.extend(_check_merkle_proofs(header["root_hash"], bundle["merkle_proofs"]))
+    proof_entries = bundle.get("inclusion_proofs") or bundle.get("merkle_proofs")
+    if proof_entries:
+        results.extend(_check_merkle_proofs(header["root_hash"], proof_entries))
 
     all_passed = all(passed for passed, _ in results)
     return all_passed, results
@@ -303,7 +445,9 @@ def main() -> int:
         print(f"Error: invalid JSON: {exc}", file=sys.stderr)
         return 1
 
-    trusted_fingerprints = {fp.lower() for fp in args.tsa_fingerprint} if args.tsa_fingerprint else None
+    trusted_fingerprints = (
+        {fp.lower() for fp in args.tsa_fingerprint} if args.tsa_fingerprint else None
+    )
     all_passed, results = verify_bundle(
         bundle,
         trust_mode=args.tsa_trust_mode,

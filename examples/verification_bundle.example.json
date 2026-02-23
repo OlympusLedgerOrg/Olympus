@@ -1,5 +1,21 @@
 {
   "bundle_version": "1.0.0",
+  "schema_version": "1.0.0",
+  "canonical_events": [
+    {
+      "body": "Hello world",
+      "title": "Example"
+    },
+    {
+      "body": "Second",
+      "title": "Example"
+    }
+  ],
+  "leaf_hashes": [
+    "b1f8d28db7704c46d3bd7dead6006a0d9f1873db3674be930d61ab03eca53021",
+    "e44959d8fa987c2378da4cfb6053b3debdd4d582a5f899afe68c876784c96232"
+  ],
+  "merkle_root": "33474f9119e1f322a3a5b96d426baed1ee429195a300963106f2e63262f3d303",
   "canonicalization": {
     "canonicalizer_versions": {
       "docx": "1.1.0-c14n-strict",
@@ -11,13 +27,33 @@
     "format": "application/json",
     "normalization_mode": "canonical_v1"
   },
-  "pubkey": "a86549794163a4025e609e5a77a1f68283c30bd4906b9d0daa535fba220a191b",
+  "pubkey": "8a88e3dd7409f195fd52db2d3cba5d72ca6709bf1d94121bf3748801b40f6f5c",
   "shard_header": {
-    "header_hash": "197c3b610839e1f918b55b51b383135f957fbcb64b0ef2df343f40b3fc570079",
+    "header_hash": "349f3a2d5a4ae8960cf6aa6862f5fa7d6e0d0542b47fe6a0642b204f44c026e0",
     "previous_header_hash": "",
-    "root_hash": "2ef5badeef04c3e6ac273502087c0450e210c1a9d93e281c1460425adf242606",
+    "root_hash": "33474f9119e1f322a3a5b96d426baed1ee429195a300963106f2e63262f3d303",
     "shard_id": "example-shard",
     "timestamp": "2026-02-22T21:18:41Z"
   },
-  "signature": "460fe52ed36c8466fea7f8a537ea74995a1565f977aa159ea1a602093164301a8bdf2488aa04fc73574933a3e940dc71d4e44c5a42714b8161053890d9ab0c0c"
+  "epoch_record": {
+    "epoch_head": "acdf235a3df88f9a5baf4b20665a61567a71315f54baa3705f987e4db1b8a2e3",
+    "epoch_index": 0,
+    "merkle_root": "33474f9119e1f322a3a5b96d426baed1ee429195a300963106f2e63262f3d303",
+    "metadata_hash": "51cf09b2f462a5d534a2a228dd0e748f2e35c465887e86e8c282b5052e05cc09",
+    "previous_epoch_head": ""
+  },
+  "signature": "917b728e13801b92e319cd24951053d84f45388ac539516918995877fb5bc46567b48bb444991d3024dcbab5f247516155b9646b9ecb59e128d50f5cd0b85405",
+  "merkle_proofs": [
+    {
+      "leaf_hash": "b1f8d28db7704c46d3bd7dead6006a0d9f1873db3674be930d61ab03eca53021",
+      "leaf_index": 0,
+      "siblings": [
+        [
+          "e44959d8fa987c2378da4cfb6053b3debdd4d582a5f899afe68c876784c96232",
+          "right"
+        ]
+      ],
+      "root_hash": "33474f9119e1f322a3a5b96d426baed1ee429195a300963106f2e63262f3d303"
+    }
+  ]
 }

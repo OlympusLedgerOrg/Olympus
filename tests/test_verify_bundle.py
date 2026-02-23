@@ -13,8 +13,10 @@ from unittest.mock import patch
 import nacl.signing
 
 from protocol.canonicalizer import CANONICALIZER_VERSIONS
+from protocol.epochs import EpochRecord
+from protocol.events import CanonicalEvent
 from protocol.hashes import hash_bytes
-from protocol.merkle import MerkleTree
+from protocol.merkle import MerkleTree, merkle_leaf_hash
 from protocol.shards import create_shard_header, sign_header
 from protocol.timestamps import current_timestamp
 
@@ -45,8 +47,23 @@ def _make_bundle(
     signing_key = nacl.signing.SigningKey.generate()
     verify_key = signing_key.verify_key
 
-    root_hash = hash_bytes(b"test-root-data")
+    schema_version = "1.0.0"
+    canonical_events_raw = [{"id": 1, "body": "event-a"}, {"id": 2, "body": "event-b"}]
+    canonical_events = [
+        CanonicalEvent.from_raw(evt, schema_version) for evt in canonical_events_raw
+    ]
+    leaf_hashes = [merkle_leaf_hash(evt.canonical_bytes).hex() for evt in canonical_events]
+
+    tree = MerkleTree([evt.canonical_bytes for evt in canonical_events])
+    root_hash = tree.get_root()
+    merkle_root_hex = root_hash.hex()
     ts = current_timestamp()
+    canonicalization = {
+        "format": "application/json",
+        "normalization_mode": "canonical_v1",
+        "fallback_reason": None,
+        "canonicalizer_versions": CANONICALIZER_VERSIONS,
+    }
 
     header = create_shard_header(
         shard_id="test-shard",
@@ -57,15 +74,25 @@ def _make_bundle(
     signature_hex = sign_header(header, signing_key)
     pubkey_hex = verify_key.encode().hex()
 
+    epoch_record = EpochRecord.create(
+        epoch_index=0,
+        merkle_root=root_hash,
+        metadata_hash=hash_bytes(
+            json.dumps(
+                canonicalization, sort_keys=True, separators=(",", ":"), ensure_ascii=True
+            ).encode("utf-8")
+        ),
+    ).to_dict()
+
     bundle: dict = {
         "bundle_version": "1.0.0",
-        "canonicalization": {
-            "format": "application/json",
-            "normalization_mode": "canonical_v1",
-            "fallback_reason": None,
-            "canonicalizer_versions": CANONICALIZER_VERSIONS,
-        },
+        "schema_version": schema_version,
+        "canonical_events": [evt.payload for evt in canonical_events],
+        "leaf_hashes": leaf_hashes,
+        "merkle_root": merkle_root_hex,
+        "canonicalization": canonicalization,
         "shard_header": header,
+        "epoch_record": epoch_record,
         "signature": signature_hex,
         "pubkey": pubkey_hex,
     }
@@ -89,22 +116,15 @@ def _make_bundle(
 
     # Optional Merkle proofs
     if include_merkle:
-        leaves = [
-            hash_bytes(b"doc-part-0"),
-            hash_bytes(b"doc-part-1"),
-            hash_bytes(b"doc-part-2"),
-            hash_bytes(b"doc-part-3"),
-        ]
-        tree = MerkleTree(leaves)
         proof = tree.generate_proof(1)
 
-        proof_root = tree.get_root().hex() if not tamper_merkle_root else "dd" * 32
+        proof_root = merkle_root_hex if not tamper_merkle_root else "dd" * 32
 
         bundle["merkle_proofs"] = [
             {
                 "leaf_hash": proof.leaf_hash.hex(),
                 "leaf_index": proof.leaf_index,
-                "siblings": [[h.hex(), is_right] for h, is_right in proof.siblings],
+                "siblings": [[h.hex(), pos] for h, pos in proof.siblings],
                 "root_hash": proof_root,
             }
         ]
@@ -122,7 +142,7 @@ def test_valid_bundle_minimal():
     bundle = _make_bundle()
     passed, results = verify_bundle(bundle)
     assert passed is True
-    assert len(results) == 4  # bundle version + canonicalization + header + signature
+    assert all(passed for passed, _ in results)
 
 
 def test_valid_bundle_with_timestamp_token():
@@ -132,47 +152,12 @@ def test_valid_bundle_with_timestamp_token():
     with patch("rfc3161ng.check_timestamp", return_value=True):
         passed, results = verify_bundle(bundle)
     assert passed is True
-    assert len(results) == 5
+    assert any("timestamp token" in msg.lower() for _, msg in results)
 
 
 def test_valid_bundle_with_merkle_proofs():
     """Bundle with Merkle proofs that match a generated tree passes."""
-    # Build bundle where root_hash in the header matches the Merkle tree root
-    signing_key = nacl.signing.SigningKey.generate()
-    verify_key = signing_key.verify_key
-
-    leaves = [
-        hash_bytes(b"doc-part-0"),
-        hash_bytes(b"doc-part-1"),
-    ]
-    tree = MerkleTree(leaves)
-    root_hash = tree.get_root()
-
-    ts = current_timestamp()
-    header = create_shard_header(shard_id="test-shard", root_hash=root_hash, timestamp=ts)
-    sig = sign_header(header, signing_key)
-
-    proof = tree.generate_proof(0)
-    bundle = {
-        "bundle_version": "1.0.0",
-        "canonicalization": {
-            "format": "application/json",
-            "normalization_mode": "canonical_v1",
-            "fallback_reason": None,
-            "canonicalizer_versions": CANONICALIZER_VERSIONS,
-        },
-        "shard_header": header,
-        "signature": sig,
-        "pubkey": verify_key.encode().hex(),
-        "merkle_proofs": [
-            {
-                "leaf_hash": proof.leaf_hash.hex(),
-                "leaf_index": proof.leaf_index,
-                "siblings": [[h.hex(), is_right] for h, is_right in proof.siblings],
-                "root_hash": proof.root_hash.hex(),
-            }
-        ],
-    }
+    bundle = _make_bundle(include_merkle=True)
     passed, results = verify_bundle(bundle)
     assert passed is True
     assert any("Merkle proof" in msg for _, msg in results)
@@ -219,51 +204,14 @@ def test_missing_required_field():
 
 def test_full_bundle_all_checks():
     """Bundle with all optional fields and valid data passes all checks."""
-    signing_key = nacl.signing.SigningKey.generate()
-    verify_key = signing_key.verify_key
-
-    leaves = [hash_bytes(b"part-a"), hash_bytes(b"part-b")]
-    tree = MerkleTree(leaves)
-    root_hash = tree.get_root()
-
-    ts = current_timestamp()
-    header = create_shard_header(shard_id="full-test", root_hash=root_hash, timestamp=ts)
-    sig = sign_header(header, signing_key)
-
-    proof = tree.generate_proof(0)
-    bundle = {
-        "bundle_version": "1.0.0",
-        "canonicalization": {
-            "format": "application/json",
-            "normalization_mode": "canonical_v1",
-            "fallback_reason": None,
-            "canonicalizer_versions": CANONICALIZER_VERSIONS,
-        },
-        "shard_header": header,
-        "signature": sig,
-        "pubkey": verify_key.encode().hex(),
-        "timestamp_token": {
-            "hash_hex": header["header_hash"],
-            "tsa_url": "https://freetsa.org/tsr",
-            "tst_hex": "3000",
-            "timestamp": ts,
-            "tsa_cert_fingerprint": "aa" * 32,
-        },
-        "merkle_proofs": [
-            {
-                "leaf_hash": proof.leaf_hash.hex(),
-                "leaf_index": proof.leaf_index,
-                "siblings": [[h.hex(), is_right] for h, is_right in proof.siblings],
-                "root_hash": proof.root_hash.hex(),
-            }
-        ],
-    }
+    bundle = _make_bundle(include_token=True, include_merkle=True)
 
     with patch("rfc3161ng.check_timestamp", return_value=True):
         passed, results = verify_bundle(bundle)
 
     assert passed is True
-    assert len(results) == 6  # version + canonicalization + header + sig + token + proof
+    assert any("timestamp token" in msg.lower() for _, msg in results)
+    assert any("merkle proof" in msg.lower() for _, msg in results)
 
 
 # ---------------------------------------------------------------------------

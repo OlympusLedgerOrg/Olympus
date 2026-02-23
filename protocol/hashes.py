@@ -17,6 +17,7 @@ SNARK_SCALAR_FIELD = 21888242871839275222246405745257275088548364400416034343698
 
 # Hash field separator for structured data
 HASH_SEPARATOR = "|"
+_SEP = HASH_SEPARATOR.encode("utf-8")
 
 # Hash domain separation prefixes - DO NOT CHANGE
 # These prefixes are protocol-critical. Changing them breaks all historical proofs.
@@ -73,7 +74,7 @@ def leaf_hash(key: bytes, value_hash: bytes) -> bytes:
         raise ValueError(f"Key must be 32 bytes, got {len(key)}")
     if len(value_hash) != 32:
         raise ValueError(f"Value hash must be 32 bytes, got {len(value_hash)}")
-    return blake3_hash([LEAF_PREFIX, key, value_hash])
+    return blake3_hash([LEAF_PREFIX, _SEP, key, _SEP, value_hash])
 
 
 def node_hash(left: bytes, right: bytes) -> bytes:
@@ -91,7 +92,7 @@ def node_hash(left: bytes, right: bytes) -> bytes:
         raise ValueError(f"Left hash must be 32 bytes, got {len(left)}")
     if len(right) != 32:
         raise ValueError(f"Right hash must be 32 bytes, got {len(right)}")
-    return blake3_hash([NODE_PREFIX, left, right])
+    return blake3_hash([NODE_PREFIX, _SEP, left, _SEP, right])
 
 
 def merkle_root(leaves: list[bytes]) -> bytes:

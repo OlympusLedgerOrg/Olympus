@@ -11,6 +11,8 @@ __all__ = [
     "canonical",
     "canonical_json",
     "canonicalizer",
+    "events",
+    "epochs",
     "merkle",
     "ledger",
     "redaction",
