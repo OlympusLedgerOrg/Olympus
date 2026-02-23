@@ -1,4 +1,4 @@
-from datetime import UTC, datetime
+from datetime import datetime, timezone
 
 from protocol.timestamps import current_timestamp
 
@@ -11,4 +11,4 @@ def test_current_timestamp_returns_rfc3339_utc_with_z_suffix() -> None:
     assert "T" in ts
 
     parsed = datetime.fromisoformat(ts.replace("Z", "+00:00"))
-    assert parsed.tzinfo == UTC
+    assert parsed.tzinfo == timezone.utc

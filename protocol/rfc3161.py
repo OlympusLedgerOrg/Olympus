@@ -16,7 +16,7 @@ Protocol usage:
 
 import hashlib
 from dataclasses import dataclass
-from datetime import UTC
+from datetime import timezone
 from pathlib import Path
 
 import rfc3161ng
@@ -180,7 +180,7 @@ def request_timestamp(
         include_tsa_certificate=True,
     )
     tst_bytes: bytes = stamper(digest=digest, return_tsr=False)
-    ts = rfc3161ng.get_timestamp(tst_bytes, naive=False).astimezone(UTC)
+    ts = rfc3161ng.get_timestamp(tst_bytes, naive=False).astimezone(timezone.utc)
     timestamp = ts.strftime("%Y-%m-%dT%H:%M:%SZ")
     tsa_cert_fingerprint = _extract_tsa_cert_fingerprint(tst_bytes)
     return TimestampToken(
