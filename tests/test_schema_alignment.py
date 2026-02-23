@@ -229,7 +229,7 @@ class TestSchemaAlignment:
             record_hash="a" * 64,
             shard_id="test_shard",
             shard_root="b" * 64,
-            canonicalization={},
+            canonicalization={"version": "1.0.0", "media_type": "application/json"},
             prev_entry_hash="c" * 64,
             entry_hash="d" * 64,
         )

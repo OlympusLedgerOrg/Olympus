@@ -20,8 +20,9 @@ from datetime import UTC
 from pathlib import Path
 
 import rfc3161ng
+from cryptography import x509
 from cryptography.hazmat.primitives import hashes
-from pyasn1.codec.der import decoder
+from pyasn1.codec.der import decoder  # type: ignore[import-untyped]
 from rfc3161ng.api import load_certificate
 
 
@@ -92,8 +93,9 @@ def _extract_tsa_cert_fingerprint(tst_bytes: bytes) -> str | None:
         if substrate:
             return None
         signed_data = tst.content
-        certificate = load_certificate(signed_data, certificate=b"")
-        return certificate.fingerprint(hashes.SHA256()).hex()
+        certificate: x509.Certificate = load_certificate(signed_data, certificate=b"")
+        fingerprint = certificate.fingerprint(hashes.SHA256())
+        return fingerprint.hex()
     except Exception:
         return None
 

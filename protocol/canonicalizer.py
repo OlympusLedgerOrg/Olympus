@@ -52,6 +52,7 @@ def canonicalization_provenance(
         "canonicalizer_versions": CANONICALIZER_VERSIONS,
     }
 
+
 try:
     from lxml import etree, html as lxml_html
 
