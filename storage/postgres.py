@@ -27,7 +27,7 @@ See docs/08_database_strategy.md for complete database strategy documentation.
 
 import json
 from collections.abc import Mapping
-from datetime import UTC, datetime
+from datetime import datetime, timezone
 from typing import Any
 
 import nacl.exceptions
@@ -36,8 +36,10 @@ import psycopg
 from psycopg.rows import dict_row
 
 from protocol.canonical_json import canonical_json_encode
+from protocol.canonicalizer import canonicalization_provenance
 from protocol.hashes import record_key, shard_header_hash
 from protocol.ledger import LedgerEntry
+from protocol.rfc3161 import _sha256_of_hash
 from protocol.shards import create_shard_header, sign_header, verify_header
 from protocol.ssmf import ExistenceProof, NonExistenceProof, SparseMerkleTree
 
@@ -110,6 +112,7 @@ class StorageLayer:
         version: int,
         value_hash: bytes,
         signing_key: nacl.signing.SigningKey,
+        canonicalization: dict[str, Any] | None = None,
     ) -> tuple[bytes, ExistenceProof, dict[str, Any], str, LedgerEntry]:
         """
         Append a record to the sparse Merkle tree and update shard header and ledger.
@@ -135,6 +138,7 @@ class StorageLayer:
             version: Record version
             value_hash: 32-byte hash of record value
             signing_key: Ed25519 signing key for shard header
+            canonicalization: Canonicalization provenance for the committed value
 
         Returns:
             Tuple of (root_hash, proof, header, signature, ledger_entry)
@@ -167,7 +171,7 @@ class StorageLayer:
                     INSERT INTO smt_leaves (shard_id, key, version, value_hash, ts)
                     VALUES (%s, %s, %s, %s, %s)
                     """,
-                (shard_id, key, version, value_hash, datetime.now(UTC)),
+                (shard_id, key, version, value_hash, datetime.now(timezone.utc)),
             )
 
             # Insert new affected nodes (append-only, skip if node exists)
@@ -201,7 +205,7 @@ class StorageLayer:
             seq = seq_row["next_seq"]
 
             # Create shard header
-            ts = datetime.now(UTC).isoformat().replace("+00:00", "Z")
+            ts = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
             header = create_shard_header(
                 shard_id=shard_id,
                 root_hash=root_hash,
@@ -264,12 +268,18 @@ class StorageLayer:
                 raise RuntimeError("Failed to compute next ledger sequence")
             ledger_seq = ledger_row["next_seq"]
 
+            canonicalization = canonicalization or canonicalization_provenance(
+                "application/octet-stream",
+                "byte_preserved",
+            )
+
             # Create ledger entry payload
             ledger_payload = {
                 "ts": ts,
                 "record_hash": record_hash_hex,
                 "shard_id": shard_id,
                 "shard_root": shard_root_hex,
+                "canonicalization": canonicalization,
                 "prev_entry_hash": prev_entry_hash,
             }
 
@@ -301,6 +311,7 @@ class StorageLayer:
                 record_hash=record_hash_hex,
                 shard_id=shard_id,
                 shard_root=shard_root_hex,
+                canonicalization=canonicalization,
                 prev_entry_hash=prev_entry_hash,
                 entry_hash=entry_hash.hex(),
             )
@@ -508,6 +519,7 @@ class StorageLayer:
                     record_hash=payload["record_hash"],
                     shard_id=payload["shard_id"],
                     shard_root=payload["shard_root"],
+                    canonicalization=payload["canonicalization"],
                     prev_entry_hash=payload["prev_entry_hash"],
                     entry_hash=bytes(row["entry_hash"]).hex(),
                 )
@@ -560,22 +572,35 @@ class StorageLayer:
                 f"header_hash_hex must encode exactly 32 bytes, got {len(header_hash_bytes)}"
             )
 
-        ts = datetime.fromisoformat(token.timestamp.replace("Z", "+00:00"))
+        hash_hex = token.hash_hex if hasattr(token, "hash_hex") else token["hash_hex"]
+        tsa_url = token.tsa_url if hasattr(token, "tsa_url") else token["tsa_url"]
+        tst_bytes = (
+            token.tst_bytes if hasattr(token, "tst_bytes") else bytes.fromhex(token["tst_hex"])
+        )
+        tsa_cert_fingerprint = (
+            token.tsa_cert_fingerprint
+            if hasattr(token, "tsa_cert_fingerprint")
+            else token.get("tsa_cert_fingerprint")
+        )
+        timestamp = token.timestamp if hasattr(token, "timestamp") else token["timestamp"]
+        ts = datetime.fromisoformat(timestamp.replace("Z", "+00:00"))
+        imprint_hash = _sha256_of_hash(hash_hex)
         with self._get_connection() as conn, conn.cursor(row_factory=dict_row) as cur:
             cur.execute(
                 """
                 INSERT INTO timestamp_tokens
-                    (shard_id, header_hash, tsa_url, tst_hex, hash_hex, ts)
-                VALUES (%s, %s, %s, %s, %s, %s)
-                ON CONFLICT (shard_id, header_hash) DO NOTHING
+                    (shard_id, header_hash, tsa_url, tst, imprint_hash, gen_time, tsa_cert_fingerprint)
+                VALUES (%s, %s, %s, %s, %s, %s, %s)
+                ON CONFLICT (shard_id, header_hash, tsa_url) DO NOTHING
                 """,
                 (
                     shard_id,
                     header_hash_bytes,
-                    token.tsa_url,
-                    token.tst_bytes.hex(),
-                    token.hash_hex,
+                    tsa_url,
+                    tst_bytes,
+                    imprint_hash,
                     ts,
+                    tsa_cert_fingerprint,
                 ),
             )
             conn.commit()
@@ -596,7 +621,7 @@ class StorageLayer:
         with self._get_connection() as conn, conn.cursor(row_factory=dict_row) as cur:
             cur.execute(
                 """
-                SELECT tsa_url, tst_hex, hash_hex, ts
+                SELECT tsa_url, tst, gen_time, tsa_cert_fingerprint
                 FROM timestamp_tokens
                 WHERE shard_id = %s AND header_hash = %s
                 """,
@@ -607,7 +632,7 @@ class StorageLayer:
         if row is None:
             return None
 
-        ts_value = row["ts"]
+        ts_value = row["gen_time"]
         if isinstance(ts_value, datetime):
             timestamp_str = ts_value.isoformat().replace("+00:00", "Z")
         else:
@@ -615,9 +640,10 @@ class StorageLayer:
 
         return {
             "tsa_url": row["tsa_url"],
-            "tst_hex": row["tst_hex"],
-            "hash_hex": row["hash_hex"],
+            "tst_hex": bytes(row["tst"]).hex(),
+            "hash_hex": header_hash_hex,
             "timestamp": timestamp_str,
+            "tsa_cert_fingerprint": row["tsa_cert_fingerprint"],
         }
 
     def verify_persisted_root(self, shard_id: str) -> bool:
@@ -750,7 +776,7 @@ class StorageLayer:
                     INSERT INTO smt_nodes (shard_id, level, index, hash, ts)
                     VALUES (%s, %s, %s, %s, %s)
                     """,
-                    (shard_id, level, path_bytes, hash_value, datetime.now(UTC)),
+                    (shard_id, level, path_bytes, hash_value, datetime.now(timezone.utc)),
                 )
 
     def _encode_path(self, path: tuple[int, ...]) -> bytes:

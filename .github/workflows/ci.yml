@@ -101,7 +101,7 @@ jobs:
     - name: Run unit tests with coverage floor
       run: |
         pytest tests/ -v --tb=short -m "not postgres" \
-          --cov=protocol --cov=app_testonly \
+          --cov=protocol --cov=app_testonly --cov=storage --cov=api \
           --cov-report=xml \
           --cov-fail-under=85
 
@@ -152,6 +152,51 @@ jobs:
         python -m pip install --upgrade pip
         pip install -e ".[dev]"
 
+    - name: Apply database migrations
+      run: |
+        for migration in $(ls migrations/*.sql | sort); do
+          psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f "$migration"
+        done
+
     - name: Run integration tests
       run: |
         pytest tests/ -v --tb=short -m "postgres"
+
+  supply-chain:
+    name: supply-chain (sbom + audit)
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - name: Install tooling
+        run: |
+          python -m pip install --upgrade pip
+          pip install cyclonedx-bom==7.2.2 pip-audit==2.8.0
+
+      - name: Generate SBOM (CycloneDX)
+        run: |
+          cyclonedx-py requirements requirements.txt \
+            --pyproject pyproject.toml \
+            --output-reproducible \
+            --of json \
+            -o sbom.json
+
+      - name: Upload SBOM artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: sbom-cyclonedx
+          path: sbom.json
+
+      - name: Dependency vulnerability audit
+        run: |
+          IGNORE_ARGS=$(grep -v '^[[:space:]]*#' pip-audit-baseline.txt | awk 'NF {printf "--ignore-vuln %s ", $1}')
+          pip-audit -r requirements.txt -r requirements-dev.txt \
+            --progress-spinner off \
+            ${IGNORE_ARGS}

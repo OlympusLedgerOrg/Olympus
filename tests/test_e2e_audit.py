@@ -33,7 +33,7 @@ See docs/08_database_strategy.md for complete database strategy documentation.
 """
 
 import os
-from datetime import UTC, datetime
+from datetime import datetime, timezone
 from urllib.parse import urlparse, urlunparse
 from uuid import uuid4
 
@@ -96,7 +96,9 @@ def _create_isolated_database(base_url: str) -> tuple[str, callable]:
             with psycopg.connect(admin_dsn) as conn:
                 conn.autocommit = True
                 with conn.cursor() as cur:
-                    cur.execute(sql.SQL("DROP DATABASE IF EXISTS {}").format(sql.Identifier(temp_db)))
+                    cur.execute(
+                        sql.SQL("DROP DATABASE IF EXISTS {}").format(sql.Identifier(temp_db))
+                    )
         except Exception:
             pass
 
@@ -163,7 +165,7 @@ def test_end_to_end_audit_flow(storage, signing_key, client):
     6. Verifies signatures offline
     7. Verifies ledger chain offline
     """
-    shard_id = f"audit_test_shard_{datetime.now(UTC).timestamp()}"
+    shard_id = f"audit_test_shard_{datetime.now(timezone.utc).timestamp()}"
 
     # Step 1: Append multiple records
     print(f"\n=== Step 1: Appending records to shard {shard_id} ===")
@@ -205,9 +207,9 @@ def test_end_to_end_audit_flow(storage, signing_key, client):
 
     # Step 2: Verify ledger chain linkage
     print("\n=== Step 2: Verifying ledger chain linkage ===")
-    assert results[0]["ledger_entry"].prev_entry_hash == "", (
-        "First entry should have empty prev_entry_hash"
-    )
+    assert (
+        results[0]["ledger_entry"].prev_entry_hash == ""
+    ), "First entry should have empty prev_entry_hash"
 
     for i in range(1, len(results)):
         prev_hash = results[i - 1]["ledger_entry"].entry_hash
@@ -217,9 +219,9 @@ def test_end_to_end_audit_flow(storage, signing_key, client):
 
     # Step 3: Verify shard header chain linkage
     print("\n=== Step 3: Verifying shard header chain linkage ===")
-    assert results[0]["header"]["previous_header_hash"] == "", (
-        "First header should have empty previous_header_hash"
-    )
+    assert (
+        results[0]["header"]["previous_header_hash"] == ""
+    ), "First header should have empty previous_header_hash"
 
     for i in range(1, len(results)):
         prev_hash = results[i - 1]["header"]["header_hash"]
@@ -330,9 +332,9 @@ def test_end_to_end_audit_flow(storage, signing_key, client):
     # Verify chain linkage
     assert entries[0]["prev_entry_hash"] == "", "First entry should have empty prev_entry_hash"
     for i in range(1, len(entries)):
-        assert entries[i]["prev_entry_hash"] == entries[i - 1]["entry_hash"], (
-            f"Chain break at entry {i}"
-        )
+        assert (
+            entries[i]["prev_entry_hash"] == entries[i - 1]["entry_hash"]
+        ), f"Chain break at entry {i}"
     print(f"  ✓ Ledger chain linkage verified ({len(entries)} entries)")
 
     print("\n=== ✓ All verification steps passed! ===")
@@ -342,7 +344,7 @@ def test_nonexistence_proof_via_api(storage, signing_key, client):
     """
     Test that non-existence proofs work via the API.
     """
-    shard_id = f"nonexist_test_shard_{datetime.now(UTC).timestamp()}"
+    shard_id = f"nonexist_test_shard_{datetime.now(timezone.utc).timestamp()}"
 
     # Append one record to create the shard
     storage.append_record(
@@ -377,8 +379,8 @@ def test_list_shards_via_api(storage, signing_key, client):
     Test that listing shards works via the API.
     """
     # Create two shards
-    shard1 = f"list_test_shard_1_{datetime.now(UTC).timestamp()}"
-    shard2 = f"list_test_shard_2_{datetime.now(UTC).timestamp()}"
+    shard1 = f"list_test_shard_1_{datetime.now(timezone.utc).timestamp()}"
+    shard2 = f"list_test_shard_2_{datetime.now(timezone.utc).timestamp()}"
 
     storage.append_record(
         shard_id=shard1,

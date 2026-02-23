@@ -11,6 +11,8 @@ from pathlib import Path
 
 import pytest
 
+from protocol.canonical import CANONICAL_VERSION
+from protocol.canonicalizer import canonicalization_provenance
 from protocol.hashes import hash_bytes
 from protocol.ledger import Ledger
 from protocol.merkle import MerkleTree
@@ -19,6 +21,10 @@ from protocol.redaction import RedactionProtocol
 
 # Path to the CLI script
 CLI_PATH = Path(__file__).parent.parent / "tools" / "verify_cli.py"
+
+
+def _canonicalization():
+    return canonicalization_provenance("application/json", CANONICAL_VERSION)
 
 
 @pytest.fixture
@@ -73,11 +79,26 @@ def ledger_data(tmp_path):
     ledger = Ledger()
 
     # Add several entries
-    ledger.append(record_hash="hash1", shard_id="shard1", shard_root="root1")
+    ledger.append(
+        record_hash="hash1",
+        shard_id="shard1",
+        shard_root="root1",
+        canonicalization=_canonicalization(),
+    )
 
-    ledger.append(record_hash="hash2", shard_id="shard1", shard_root="root2")
+    ledger.append(
+        record_hash="hash2",
+        shard_id="shard1",
+        shard_root="root2",
+        canonicalization=_canonicalization(),
+    )
 
-    ledger.append(record_hash="hash3", shard_id="shard1", shard_root="root3")
+    ledger.append(
+        record_hash="hash3",
+        shard_id="shard1",
+        shard_root="root3",
+        canonicalization=_canonicalization(),
+    )
 
     # Export to JSON format
     ledger_data = {"entries": [entry.to_dict() for entry in ledger.entries]}
@@ -94,9 +115,19 @@ def tampered_ledger_data(tmp_path):
     """Create a tampered ledger for testing."""
     ledger = Ledger()
 
-    ledger.append(record_hash="hash1", shard_id="shard1", shard_root="root1")
+    ledger.append(
+        record_hash="hash1",
+        shard_id="shard1",
+        shard_root="root1",
+        canonicalization=_canonicalization(),
+    )
 
-    ledger.append(record_hash="hash2", shard_id="shard1", shard_root="root2")
+    ledger.append(
+        record_hash="hash2",
+        shard_id="shard1",
+        shard_root="root2",
+        canonicalization=_canonicalization(),
+    )
 
     # Tamper with the second entry
     ledger.entries[1].record_hash = "tampered_hash"
@@ -290,7 +321,12 @@ def test_cli_redaction_missing_content_file(tmp_path):
 def test_cli_ledger_single_entry(tmp_path):
     """Test verification of ledger with single entry."""
     ledger = Ledger()
-    ledger.append(record_hash="hash1", shard_id="shard1", shard_root="root1")
+    ledger.append(
+        record_hash="hash1",
+        shard_id="shard1",
+        shard_root="root1",
+        canonicalization=_canonicalization(),
+    )
 
     ledger_data = {"entries": [entry.to_dict() for entry in ledger.entries]}
 

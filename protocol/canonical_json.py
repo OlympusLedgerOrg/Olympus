@@ -15,7 +15,7 @@ cross-language divergence:
 
 import math
 from decimal import Decimal, InvalidOperation
-from json.encoder import encode_basestring_ascii
+from json.encoder import py_encode_basestring_ascii
 from typing import Any
 
 
@@ -103,7 +103,7 @@ def _encode_value(value: Any) -> str:
     if value is False:
         return "false"
     if isinstance(value, str):
-        return encode_basestring_ascii(value)
+        return py_encode_basestring_ascii(value)
     if isinstance(value, int | Decimal | float) and not isinstance(value, bool):
         return _encode_number(value)
     if isinstance(value, list | tuple):
@@ -113,7 +113,7 @@ def _encode_value(value: Any) -> str:
         for key in sorted(value.keys()):
             if not isinstance(key, str):
                 raise TypeError("Object keys must be strings for canonical JSON")
-            items.append(f"{encode_basestring_ascii(key)}:{_encode_value(value[key])}")
+            items.append(f"{py_encode_basestring_ascii(key)}:{_encode_value(value[key])}")
         return "{" + ",".join(items) + "}"
     raise TypeError(f"Type {type(value)} is not JSON-serializable")
 

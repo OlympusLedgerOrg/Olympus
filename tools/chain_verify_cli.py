@@ -94,6 +94,7 @@ def cmd_verify(args: argparse.Namespace) -> int:
             "record_hash": entry.record_hash,
             "shard_id": entry.shard_id,
             "shard_root": entry.shard_root,
+            "canonicalization": entry.canonicalization,
             "prev_entry_hash": entry.prev_entry_hash,
         }
         canonical_json = json.dumps(

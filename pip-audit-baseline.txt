@@ -1,0 +1,2 @@
+# Known vulnerability IDs to ignore during pip-audit.
+# Keep this file sorted and prefer removing IDs as dependencies are upgraded.

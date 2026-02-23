@@ -34,6 +34,10 @@ and keeps the **leaf value** private.
 
 **Proves:** “A leaf exists at public `leafIndex` in the Poseidon Merkle tree with public `root`.”
 
+**Does NOT prove:**
+- That the leaf value corresponds to any specific document or canonicalization pipeline
+- That the Poseidon root is anchored in the Olympus ledger (that linkage is external)
+
 ---
 
 ### `redaction_validity.circom`
@@ -52,6 +56,8 @@ Selective redaction proof over a Poseidon Merkle tree.
 * This circuit is a *reference implementation* for “subset authenticity + commitment”.
 * It does **not** by itself guarantee a particular text-format redaction policy (e.g., FOIA rules),
   and it does not reconstruct or validate a rendered redacted document string.
+* It does **not** prove that the redacted commitment was anchored in the ledger; that linkage must
+  be established via the Olympus verification bundle.
 
 ---
 
@@ -64,6 +70,10 @@ with public `root`.”
 
 **Not a full sparse Merkle keyed non-membership proof.**
 This circuit does not accept a key/value pair or prove divergence; it proves emptiness at a specific index.
+
+**Does NOT prove:**
+- Non-existence of an arbitrary key in a sparse Merkle tree
+- Any linkage to an Olympus ledger entry without external validation
 
 ---
 
@@ -106,6 +116,7 @@ proofs/
 * Compiles all three main circuits with Circom (`.r1cs`, `.wasm`, `.sym`).
 * Runs Groth16 Phase 2 setup with a **single dev contribution**.
 * Exports verification keys to `keys/verification_keys/`.
+* Writes `keys/PROVENANCE.md` with PTAU source, SHA-256 hashes, and verification key fingerprints.
 
 If the PTAU download is unavailable, the script falls back to generating a dev PTAU locally.
 
@@ -178,6 +189,12 @@ These circuits are reference implementations used for protocol development and t
 * A Phase 2 ceremony with ≥ 3 independent contributors
 * Publicly published verification keys and ceremony transcript
 * Parameter tuning / performance evaluation
+
+**Setup provenance (required):**
+
+- Record PTAU source URL, SHA-256 hash, and download method.
+- Record verification key fingerprints (SHA-256) for every circuit.
+- Treat `.ptau`, `.zkey`, and generated witness artifacts as sensitive until audited.
 
 ---
 

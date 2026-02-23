@@ -64,7 +64,7 @@ Phase 0.1 Institutional Pinning — multi-format artifact ingestion with byte-st
 #### PDF
 
 - **Module**: `Canonicalizer.pdf_normalize()`
-- **Version**: `1.3.0-pikepdf-linearized`
+- **Version**: `1.4.0-pikepdf-10.3.0-linearized`
 - Implementation: `pikepdf` (version-pinned)
 - Strips volatile metadata keys (CreationDate, ModDate, Producer, Creator, Title, Subject, Author, Keywords) and clears XMP packets
 - Forces deterministic document IDs (`static_id=True`) and linearized output for stable byte order

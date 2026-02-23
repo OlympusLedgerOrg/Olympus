@@ -7,21 +7,42 @@ from unittest.mock import patch
 
 import pytest
 
+from protocol.canonical import CANONICAL_VERSION
+from protocol.canonicalizer import canonicalization_provenance
 from protocol.ledger import Ledger
 
 
 # Add tools to path so we can import chain_verify_cli
 sys.path.insert(0, str(Path(__file__).parent.parent / "tools"))
-import chain_verify_cli
+import chain_verify_cli  # noqa: E402
+
+
+def _canonicalization():
+    return canonicalization_provenance("application/json", CANONICAL_VERSION)
 
 
 @pytest.fixture()
 def valid_ledger_file(tmp_path: Path) -> Path:
     """Create a valid ledger export file."""
     ledger = Ledger()
-    ledger.append(record_hash="aabb", shard_id="shard-1", shard_root="ccdd")
-    ledger.append(record_hash="eeff", shard_id="shard-1", shard_root="1122")
-    ledger.append(record_hash="3344", shard_id="shard-2", shard_root="5566")
+    ledger.append(
+        record_hash="aabb",
+        shard_id="shard-1",
+        shard_root="ccdd",
+        canonicalization=_canonicalization(),
+    )
+    ledger.append(
+        record_hash="eeff",
+        shard_id="shard-1",
+        shard_root="1122",
+        canonicalization=_canonicalization(),
+    )
+    ledger.append(
+        record_hash="3344",
+        shard_id="shard-2",
+        shard_root="5566",
+        canonicalization=_canonicalization(),
+    )
 
     data = {"entries": [e.to_dict() for e in ledger.entries]}
     path = tmp_path / "ledger.json"
@@ -33,8 +54,18 @@ def valid_ledger_file(tmp_path: Path) -> Path:
 def broken_ledger_file(tmp_path: Path) -> Path:
     """Create a ledger with a broken chain."""
     ledger = Ledger()
-    ledger.append(record_hash="aabb", shard_id="shard-1", shard_root="ccdd")
-    ledger.append(record_hash="eeff", shard_id="shard-1", shard_root="1122")
+    ledger.append(
+        record_hash="aabb",
+        shard_id="shard-1",
+        shard_root="ccdd",
+        canonicalization=_canonicalization(),
+    )
+    ledger.append(
+        record_hash="eeff",
+        shard_id="shard-1",
+        shard_root="1122",
+        canonicalization=_canonicalization(),
+    )
 
     entries_data = [e.to_dict() for e in ledger.entries]
     # Break the chain

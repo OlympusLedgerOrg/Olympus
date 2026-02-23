@@ -11,6 +11,7 @@ the source of truth for implementation.
 
 import json
 from pathlib import Path
+from typing import Any
 
 import pytest
 from jsonschema.validators import validator_for
@@ -77,6 +78,7 @@ class LedgerEntryResponse(BaseModel):
     record_hash: str
     shard_id: str
     shard_root: str
+    canonicalization: dict[str, Any]
     prev_entry_hash: str
     entry_hash: str
 
@@ -227,6 +229,7 @@ class TestSchemaAlignment:
             record_hash="a" * 64,
             shard_id="test_shard",
             shard_root="b" * 64,
+            canonicalization={"version": "1.0.0", "media_type": "application/json"},
             prev_entry_hash="c" * 64,
             entry_hash="d" * 64,
         )

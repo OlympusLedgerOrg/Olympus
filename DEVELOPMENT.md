@@ -174,6 +174,13 @@ make dev
 3. Run full test suite to ensure compatibility
 4. Update `pyproject.toml` if needed
 
+## Release / Supply-Chain Hygiene
+
+- CI generates a CycloneDX SBOM and runs `pip-audit` with a baseline allowlist.
+- Record dependency changes in `requirements.txt` and `requirements-dev.txt`.
+- **If publishing Docker images**, sign them with `cosign` and publish the
+  signature alongside the image tag.
+
 ## Debugging
 
 ### Enable debug logging

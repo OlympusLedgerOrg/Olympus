@@ -12,6 +12,9 @@
 # -----------------------------------------------------------------------
 set -euo pipefail
 
+echo "WARNING: PRODUCTION UNSAFE — dev-only Groth16 setup (single contributor)."
+echo "         Record PTAU provenance and verification key fingerprints."
+
 # Parse flags
 COMPILE_ONLY=0
 for arg in "$@"; do
@@ -42,6 +45,7 @@ PTAU_POWER=17
 PTAU_FILE="powersOfTau28_hez_final_${PTAU_POWER}.ptau"
 PTAU_URL="https://hermez.s3-eu-west-1.amazonaws.com/${PTAU_FILE}"
 PTAU_PATH="${KEYS_DIR}/${PTAU_FILE}"
+PTAU_SOURCE="${PTAU_URL}"
 
 # -----------------------------------------------------------------------
 # 0. Install npm dependencies (circomlib, snarkjs)
@@ -81,6 +85,7 @@ else
   else
     echo "    Download failed — generating PTAU locally (dev only) …"
     echo "    This may take several minutes for power ${PTAU_POWER}."
+    PTAU_SOURCE="local-dev-generated"
     PTAU_TMP0="${BUILD_DIR}/pot_${PTAU_POWER}_0000.ptau"
     PTAU_TMP1="${BUILD_DIR}/pot_${PTAU_POWER}_0001.ptau"
     ${SNARKJS} powersoftau new bn128 "${PTAU_POWER}" "${PTAU_TMP0}"
@@ -91,6 +96,23 @@ else
     echo "    Generated local dev PTAU: ${PTAU_PATH}"
   fi
 fi
+
+# -----------------------------------------------------------------------
+# 2.5 Record provenance (PTAU source + hashes + verification key fingerprints)
+# -----------------------------------------------------------------------
+PROVENANCE_FILE="${KEYS_DIR}/PROVENANCE.md"
+PTAU_SHA256="$(sha256sum "${PTAU_PATH}" | awk '{print $1}')"
+{
+  echo "# Groth16 Setup Provenance"
+  echo ""
+  echo "Generated: $(date -u +"%Y-%m-%dT%H:%M:%SZ")"
+  echo ""
+  echo "PTAU_SOURCE: ${PTAU_SOURCE}"
+  echo "PTAU_FILE: ${PTAU_FILE}"
+  echo "PTAU_SHA256: ${PTAU_SHA256}"
+  echo ""
+  echo "Verification key fingerprints (SHA-256):"
+} > "${PROVENANCE_FILE}"
 
 # -----------------------------------------------------------------------
 # 3. Compile each circuit and (optionally) run Groth16 setup
@@ -136,6 +158,8 @@ for circuit in "${CIRCUITS[@]}"; do
   echo "  [3/4] Exporting verification key …"
   VKEY="${VKEYS_DIR}/${circuit}_vkey.json"
   ${SNARKJS} zkey export verificationkey "${ZKEY_FINAL}" "${VKEY}"
+  VKEY_SHA256="$(sha256sum "${VKEY}" | awk '{print $1}')"
+  echo "- ${circuit}_vkey.json: ${VKEY_SHA256}" >> "${PROVENANCE_FILE}"
 
   # ---- Summary ----
   echo "  [4/4] Done."

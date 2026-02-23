@@ -1,0 +1,38 @@
+name: Dependency Lock
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "0 6 * * 1"
+
+jobs:
+  lock:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - name: Install pip-tools
+        run: |
+          python -m pip install --upgrade pip
+          pip install pip-tools==7.4.1
+
+      - name: Compile lockfiles
+        run: |
+          pip-compile pyproject.toml --output-file requirements.txt
+          pip-compile pyproject.toml --extra dev --output-file requirements-dev.txt
+
+      - name: Create pull request
+        uses: peter-evans/create-pull-request@v6
+        with:
+          commit-message: "chore: update locked requirements"
+          title: "chore: update locked requirements"
+          body: "Automated update of pinned Python requirements."
+          branch: "automation/lock-requirements"

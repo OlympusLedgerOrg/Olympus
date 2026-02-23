@@ -124,6 +124,27 @@ When an agency signing key is suspected or confirmed compromised, verifiers need
    - Reject any shard headers signed by the compromised key with a timestamp at or after the compromise timestamp unless a superseding attestation exists.
 5. **Publishing** — Store revocation statements and superseding attestations in the ledger as dedicated event types to keep the chain of custody auditable.
 
+## Key Storage & Publication Guidance (v1.0)
+
+Even in development, key handling must be deterministic and auditable:
+
+1. **Local storage (dev)** — Store signing keys outside the repo, e.g.
+   `~/.config/olympus/keys/<shard_id>.ed25519`, with `0600` permissions.
+   Export the path via `OLYMPUS_SIGNING_KEY_PATH` in `.env` or runtime
+   configuration. Never commit secrets to source control.
+2. **Public key publication** — Publish the hex-encoded Ed25519 public key
+   and its **SHA-256 fingerprint** in an append-only “key registry” entry
+   in the ledger (or equivalent metadata channel). Each shard header already
+   embeds the public key, but the registry entry provides a stable audit trail
+   for discovery and rotation tracking.
+3. **Rotation records** — Every rotation should emit:
+   - `old_pubkey` + fingerprint
+   - `new_pubkey` + fingerprint
+   - effective timestamp and reason code (e.g., scheduled rotation, compromise)
+4. **Future KMS/HSM support (optional)** — In production, plan to load the
+   signing key from a hardware-backed KMS/HSM. The public key and fingerprint
+   should remain identical to the values recorded in the ledger registry.
+
 ## Batched Timestamping Strategy
 
 To control RFC 3161 (or equivalent) timestamping costs at scale:
@@ -133,3 +154,16 @@ To control RFC 3161 (or equivalent) timestamping costs at scale:
 - **Integrity linkage**: Each batch anchor references the Merkle root at the end of the window; the next window links by previous hash as usual.
 - **Backpressure**: If anchoring fails, halt new batch closure until the anchor succeeds to avoid unanchored gaps.
 - **Auditability**: Record the timestamp token and TSA certificate chain (RFC 3161 or equivalent) alongside the batch root in the ledger so verifiers can validate the anchor independently.
+
+## TSA Trust Policy (Dev vs Prod)
+
+To keep verification predictable, Olympus treats RFC 3161 trust modes explicitly:
+
+- **Dev mode** — Accept the TSA certificate embedded in the TimeStampToken.
+  This mode is suitable for local testing and sandbox deployments.
+- **Prod mode** — Require either:
+  - **Pinned TSA certificate fingerprints** (SHA-256), or
+  - **Validation against a configured trust store** of approved TSA certs.
+
+Every stored timestamp token must log the TSA certificate fingerprint so auditors
+can validate provenance without trusting Olympus infrastructure.
