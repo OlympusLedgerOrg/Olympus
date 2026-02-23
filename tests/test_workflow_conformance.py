@@ -17,6 +17,7 @@ import dataclasses
 import inspect
 
 from protocol.canonical import (
+    CANONICAL_VERSION,
     canonicalize_document,
     canonicalize_json,
     canonicalize_text,
@@ -24,7 +25,12 @@ from protocol.canonical import (
     normalize_whitespace,
 )
 from protocol.canonical_json import canonical_json_bytes, canonical_json_encode
-from protocol.canonicalizer import CanonicalizationError, Canonicalizer, process_artifact
+from protocol.canonicalizer import (
+    CanonicalizationError,
+    Canonicalizer,
+    canonicalization_provenance,
+    process_artifact,
+)
 from protocol.hashes import (
     FOREST_PREFIX,
     HASH_SEPARATOR,
@@ -344,7 +350,12 @@ class TestPipelineSmokeTest:
 
         # Append to ledger
         ledger = Ledger()
-        entry = ledger.append(record_hash=doc_hash, shard_id="shard-1", shard_root=root)
+        entry = ledger.append(
+            record_hash=doc_hash,
+            shard_id="shard-1",
+            shard_root=root,
+            canonicalization=canonicalization_provenance("application/json", CANONICAL_VERSION),
+        )
 
         assert entry.record_hash == doc_hash
         assert entry.shard_root == root

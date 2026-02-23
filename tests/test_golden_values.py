@@ -99,13 +99,13 @@ class TestJsonCanonicalGoldenValues:
     def test_scientific_notation_boundary(self):
         """Pin the fixed/scientific notation boundary values."""
         # Fixed notation: -6 <= adjusted_exponent <= 20
-        assert canonical_json_encode(0.000001) == "0.000001"   # 1e-6 in fixed
-        assert canonical_json_encode(1e-7) == "1e-7"           # 1e-7 in scientific
+        assert canonical_json_encode(0.000001) == "0.000001"  # 1e-6 in fixed
+        assert canonical_json_encode(1e-7) == "1e-7"  # 1e-7 in scientific
 
         # Upper boundary
         expected_1e20 = "1" + "0" * 20
-        assert canonical_json_encode(1e20) == expected_1e20    # 1e20 in fixed
-        assert canonical_json_encode(1e21) == "1e+21"          # 1e21 in scientific
+        assert canonical_json_encode(1e20) == expected_1e20  # 1e20 in fixed
+        assert canonical_json_encode(1e21) == "1e+21"  # 1e21 in scientific
 
 
 # ---------------------------------------------------------------------------
@@ -308,9 +308,7 @@ class TestLedgerHashGoldenValues:
         assert canonical_json == expected_json
 
         # Pin the hash (deterministic)
-        assert entry_hash == blake3_hash(
-            [LEDGER_PREFIX, expected_json.encode("utf-8")]
-        ).hex()
+        assert entry_hash == blake3_hash([LEDGER_PREFIX, expected_json.encode("utf-8")]).hex()
 
     def test_chained_entry_hashes_golden(self):
         """
@@ -327,9 +325,7 @@ class TestLedgerHashGoldenValues:
             "shard_root": "root1",
             "prev_entry_hash": "",
         }
-        json1 = json.dumps(
-            payload1, sort_keys=True, separators=(",", ":"), ensure_ascii=True
-        )
+        json1 = json.dumps(payload1, sort_keys=True, separators=(",", ":"), ensure_ascii=True)
         entry1_hash = blake3_hash([LEDGER_PREFIX, json1.encode("utf-8")]).hex()
 
         # Second entry (chains to first)
@@ -340,9 +336,7 @@ class TestLedgerHashGoldenValues:
             "shard_root": "root2",
             "prev_entry_hash": entry1_hash,
         }
-        json2 = json.dumps(
-            payload2, sort_keys=True, separators=(",", ":"), ensure_ascii=True
-        )
+        json2 = json.dumps(payload2, sort_keys=True, separators=(",", ":"), ensure_ascii=True)
         entry2_hash = blake3_hash([LEDGER_PREFIX, json2.encode("utf-8")]).hex()
 
         # Verify chain linkage
