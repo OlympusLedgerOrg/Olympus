@@ -321,6 +321,7 @@ def test_end_to_end_audit_flow(storage, signing_key, client):
             "record_hash": entry["record_hash"],
             "shard_id": entry["shard_id"],
             "shard_root": entry["shard_root"],
+            "canonicalization": entry["canonicalization"],
             "prev_entry_hash": entry["prev_entry_hash"],
         }
         canonical_json = canonical_json_encode(payload)
