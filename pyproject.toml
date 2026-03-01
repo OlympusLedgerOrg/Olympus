@@ -45,7 +45,7 @@ dev = [
     "hypothesis==6.120.0",
     "ruff==0.1.0",
     "mypy==1.8.0",
-    "pre-commit==3.7.0",
+    "pre-commit==4.5.1",
     "httpx==0.26.0",
     "jsonschema==4.20.0",
     "coverage==7.10.6",
