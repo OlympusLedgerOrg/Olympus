@@ -7,6 +7,6 @@ ruff==0.1.0
 mypy==1.8.0
 pre-commit==3.7.0
 httpx==0.26.0
-jsonschema==4.20.0
+jsonschema==4.26.0
 coverage==7.10.6
 bandit==1.9.3
