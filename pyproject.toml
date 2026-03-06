@@ -49,7 +49,7 @@ dev = [
     "httpx==0.26.0",
     "jsonschema==4.26.0",
     "coverage==7.13.4",
-    "bandit==1.9.3",
+    "bandit==1.9.4",
 ]
 
 [tool.setuptools]
