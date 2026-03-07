@@ -37,6 +37,9 @@ jobs:
         python -m pip install --upgrade pip
         pip install -e ".[dev]"
 
+    - name: Verify dependency consistency
+      run: pip check
+
     - name: Validate JSON schemas
       run: python tools/validate_schemas.py
 
@@ -102,6 +105,9 @@ jobs:
         python -m pip install --upgrade pip
         pip install -e ".[dev]"
 
+    - name: Verify dependency consistency
+      run: pip check
+
     - name: Run unit tests with coverage floor
       run: |
         pytest tests/ -v --tb=short -m "not postgres" \
@@ -155,6 +161,9 @@ jobs:
       run: |
         python -m pip install --upgrade pip
         pip install -e ".[dev]"
+
+    - name: Verify dependency consistency
+      run: pip check
 
     - name: Apply database migrations
       run: |
