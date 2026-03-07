@@ -49,7 +49,6 @@ from protocol.shards import verify_header
 from protocol.ssmf import ExistenceProof, verify_proof
 from storage.postgres import StorageLayer
 
-
 # Test database connection string
 TEST_DB = os.environ.get("TEST_DATABASE_URL", "")
 
@@ -70,7 +69,9 @@ def _create_isolated_database(base_url: str) -> tuple[str, callable]:
     """
     parsed = urlparse(base_url)
     if not parsed.path or not parsed.username:
-        raise ValueError("TEST_DATABASE_URL must include username/password and a database name")
+        raise ValueError(
+            "TEST_DATABASE_URL must include username/password and a database name"
+        )
 
     base_db = parsed.path.lstrip("/")
     temp_db = f"{base_db}_e2e_{uuid4().hex}"
@@ -97,7 +98,9 @@ def _create_isolated_database(base_url: str) -> tuple[str, callable]:
                 conn.autocommit = True
                 with conn.cursor() as cur:
                     cur.execute(
-                        sql.SQL("DROP DATABASE IF EXISTS {}").format(sql.Identifier(temp_db))
+                        sql.SQL("DROP DATABASE IF EXISTS {}").format(
+                            sql.Identifier(temp_db)
+                        )
                     )
         except Exception:
             pass
@@ -203,13 +206,15 @@ def test_end_to_end_audit_flow(storage, signing_key, client):
                 "ledger_entry": ledger_entry,
             }
         )
-        print(f"  Appended: {record_type}:{record_id}:v{version} -> {value_hash.hex()[:16]}...")
+        print(
+            f"  Appended: {record_type}:{record_id}:v{version} -> {value_hash.hex()[:16]}..."
+        )
 
     # Step 2: Verify ledger chain linkage
     print("\n=== Step 2: Verifying ledger chain linkage ===")
-    assert results[0]["ledger_entry"].prev_entry_hash == "", (
-        "First entry should have empty prev_entry_hash"
-    )
+    assert (
+        results[0]["ledger_entry"].prev_entry_hash == ""
+    ), "First entry should have empty prev_entry_hash"
 
     for i in range(1, len(results)):
         prev_hash = results[i - 1]["ledger_entry"].entry_hash
@@ -219,9 +224,9 @@ def test_end_to_end_audit_flow(storage, signing_key, client):
 
     # Step 3: Verify shard header chain linkage
     print("\n=== Step 3: Verifying shard header chain linkage ===")
-    assert results[0]["header"]["previous_header_hash"] == "", (
-        "First header should have empty previous_header_hash"
-    )
+    assert (
+        results[0]["header"]["previous_header_hash"] == ""
+    ), "First header should have empty previous_header_hash"
 
     for i in range(1, len(results)):
         prev_hash = results[i - 1]["header"]["header_hash"]
@@ -275,7 +280,9 @@ def test_end_to_end_audit_flow(storage, signing_key, client):
         )
 
         # Verify proof offline
-        assert verify_proof(api_proof) is True, f"Proof verification failed for record {i}"
+        assert (
+            verify_proof(api_proof) is True
+        ), f"Proof verification failed for record {i}"
         print(
             f"  ✓ Proof verified for {result['record_type']}:{result['record_id']}:v{result['version']}"
         )
@@ -297,7 +304,9 @@ def test_end_to_end_audit_flow(storage, signing_key, client):
 
     # Verify signature offline
     verify_key = nacl.signing.VerifyKey(bytes.fromhex(header_data["pubkey"]))
-    is_valid = verify_header(header_for_verification, header_data["signature"], verify_key)
+    is_valid = verify_header(
+        header_for_verification, header_data["signature"], verify_key
+    )
     assert is_valid is True, "Signature verification failed"
     print(f"  ✓ Signature verified for latest header (seq={header_data['seq']})")
 
@@ -325,17 +334,23 @@ def test_end_to_end_audit_flow(storage, signing_key, client):
             "prev_entry_hash": entry["prev_entry_hash"],
         }
         canonical_json = canonical_json_encode(payload)
-        expected_hash = blake3_hash([LEDGER_PREFIX, canonical_json.encode("utf-8")]).hex()
+        expected_hash = blake3_hash(
+            [LEDGER_PREFIX, canonical_json.encode("utf-8")]
+        ).hex()
 
-        assert entry["entry_hash"] == expected_hash, f"Entry hash mismatch for entry {i}"
+        assert (
+            entry["entry_hash"] == expected_hash
+        ), f"Entry hash mismatch for entry {i}"
         print(f"  ✓ Entry {i} hash verified: {entry['entry_hash'][:16]}...")
 
     # Verify chain linkage
-    assert entries[0]["prev_entry_hash"] == "", "First entry should have empty prev_entry_hash"
+    assert (
+        entries[0]["prev_entry_hash"] == ""
+    ), "First entry should have empty prev_entry_hash"
     for i in range(1, len(entries)):
-        assert entries[i]["prev_entry_hash"] == entries[i - 1]["entry_hash"], (
-            f"Chain break at entry {i}"
-        )
+        assert (
+            entries[i]["prev_entry_hash"] == entries[i - 1]["entry_hash"]
+        ), f"Chain break at entry {i}"
     print(f"  ✓ Ledger chain linkage verified ({len(entries)} entries)")
 
     print("\n=== ✓ All verification steps passed! ===")
