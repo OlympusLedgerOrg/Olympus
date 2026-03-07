@@ -49,34 +49,14 @@ template MerkleTreeInclusionProof(levels) {
     signal input pathElements[levels];
     signal input pathIndices[levels];
 
-    // Intermediate signals
-    signal levelHashes[levels + 1];
-    signal diff[levels];
-    signal mux[levels];
-
-    // Base case: start with leaf
-    levelHashes[0] <== leaf;
-
-    // Hash up the tree
-    component hashers[levels];
+    // Reuse the MerkleProof gadget to avoid duplicated hashing logic
+    component proof = MerkleProof(levels);
+    proof.leaf <== leaf;
     for (var i = 0; i < levels; i++) {
-        // Defense in depth: Force path index to be strictly 0 or 1
-        pathIndices[i] * (pathIndices[i] - 1) === 0;
-
-        hashers[i] = Poseidon(2);
-
-        // OPTIMIZATION: Single-multiplication routing (Switcher logic)
-        // If pathIndex is 0: inputs are (levelHashes, pathElements)
-        // If pathIndex is 1: inputs are (pathElements, levelHashes)
-        diff[i] <== pathElements[i] - levelHashes[i];
-        mux[i] <== pathIndices[i] * diff[i];
-
-        hashers[i].inputs[0] <== levelHashes[i] + mux[i];
-        hashers[i].inputs[1] <== pathElements[i] - mux[i];
-
-        levelHashes[i + 1] <== hashers[i].out;
+        proof.pathElements[i] <== pathElements[i];
+        proof.pathIndices[i] <== pathIndices[i];
     }
 
     // Constrain the computed root to match the public root
-    root === levelHashes[levels];
+    root === proof.root;
 }
