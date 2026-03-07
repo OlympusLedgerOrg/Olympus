@@ -17,7 +17,6 @@ import dataclasses
 import inspect
 
 from protocol.canonical import (
-    CANONICAL_VERSION,
     canonicalize_document,
     canonicalize_json,
     canonicalize_text,
