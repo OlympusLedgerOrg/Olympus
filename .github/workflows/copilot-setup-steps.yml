@@ -13,10 +13,16 @@ jobs:
 
       - name: Download powers of tau parameters
         run: |
+          set -euo pipefail
           mkdir -p proofs/keys
-          curl -fSL --connect-timeout 30 --retry 3 --retry-delay 5 \
-            -o proofs/keys/powersOfTau28_hez_final_17.ptau \
-            https://hermez.s3-eu-west-1.amazonaws.com/powersOfTau28_hez_final_17.ptau
-          test -s proofs/keys/powersOfTau28_hez_final_17.ptau
-          echo "6247a3433948b35fbfae414fa5a9355bfb45f56efa7ab4929e669264a0258976741dfbe3288bfb49828e5df02c2e633df38d2245e30162ae7e3bcca5b8b49345  proofs/keys/powersOfTau28_hez_final_17.ptau" \
-            | b2sum --check -
+          PTAU_PATH="proofs/keys/powersOfTau28_hez_final_17.ptau"
+          PTAU_URL="https://hermez.s3-eu-west-1.amazonaws.com/powersOfTau28_hez_final_17.ptau"
+          PTAU_B2="6247a3433948b35fbfae414fa5a9355bfb45f56efa7ab4929e669264a0258976741dfbe3288bfb49828e5df02c2e633df38d2245e30162ae7e3bcca5b8b49345"
+
+          if curl -fSL --connect-timeout 30 --retry 3 --retry-delay 5 \
+            -o "${PTAU_PATH}" "${PTAU_URL}"; then
+            echo "${PTAU_B2}  ${PTAU_PATH}" | b2sum --check -
+          else
+            echo "WARNING: Could not download PTAU parameters; skipping optional setup step."
+            rm -f "${PTAU_PATH}"
+          fi
