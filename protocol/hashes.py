@@ -6,10 +6,11 @@ All hashes must be deterministic and collision-resistant.
 Uses BLAKE3 for all cryptographic hashing.
 """
 
-import json
 from typing import Any
 
 import blake3
+
+from .canonical_json import canonical_json_bytes
 
 
 # BN128 scalar field prime (alt_bn128) used by Circom/snarkjs
@@ -137,12 +138,8 @@ def shard_header_hash(fields_dict: dict[str, Any]) -> bytes:
     Returns:
         32-byte shard header hash using HDR_PREFIX domain separation
     """
-    # Canonical JSON: sorted keys, compact separators, UTF-8
-    canonical_json = json.dumps(
-        fields_dict, sort_keys=True, separators=(",", ":"), ensure_ascii=True
-    )
-    canonical_bytes = canonical_json.encode("utf-8")
-    return blake3_hash([HDR_PREFIX, canonical_bytes])
+    # Canonical JSON: sorted keys, compact separators, ASCII-escaped, NaN/Infinity rejected
+    return blake3_hash([HDR_PREFIX, canonical_json_bytes(fields_dict)])
 
 
 def forest_root(header_hashes: list[bytes]) -> bytes:

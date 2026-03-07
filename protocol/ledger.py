@@ -4,10 +4,10 @@ Ledger protocol implementation for Olympus
 This module implements the append-only ledger for recording document commitments.
 """
 
-import json
 from dataclasses import asdict, dataclass
 from typing import Any
 
+from .canonical_json import canonical_json_bytes
 from .hashes import LEDGER_PREFIX, blake3_hash
 from .timestamps import current_timestamp
 
@@ -79,10 +79,7 @@ class Ledger:
         }
 
         # Compute entry hash using LEDGER_PREFIX + canonical JSON
-        canonical_json = json.dumps(
-            payload, sort_keys=True, separators=(",", ":"), ensure_ascii=True
-        )
-        entry_hash = blake3_hash([LEDGER_PREFIX, canonical_json.encode("utf-8")]).hex()
+        entry_hash = blake3_hash([LEDGER_PREFIX, canonical_json_bytes(payload)]).hex()
 
         entry = LedgerEntry(
             ts=ts,
@@ -137,10 +134,7 @@ class Ledger:
                 "canonicalization": entry.canonicalization,
                 "prev_entry_hash": entry.prev_entry_hash,
             }
-            canonical_json = json.dumps(
-                payload, sort_keys=True, separators=(",", ":"), ensure_ascii=True
-            )
-            expected_hash = blake3_hash([LEDGER_PREFIX, canonical_json.encode("utf-8")]).hex()
+            expected_hash = blake3_hash([LEDGER_PREFIX, canonical_json_bytes(payload)]).hex()
 
             if entry.entry_hash != expected_hash:
                 return False

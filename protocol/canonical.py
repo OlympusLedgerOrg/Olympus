@@ -10,9 +10,10 @@ ingestion (JCS/RFC 8785, HTML, DOCX, PDF) with version-pinned pipelines,
 see protocol/canonicalizer.py instead.
 """
 
-import json
 import unicodedata
 from typing import Any
+
+from .canonical_json import canonical_json_encode
 
 
 # Unicode space-like characters that unicodedata.normalize("NFKC", ...) does NOT
@@ -41,7 +42,7 @@ def canonicalize_json(data: dict[str, Any]) -> str:
     Returns:
         Canonical JSON string representation
     """
-    return json.dumps(data, sort_keys=True, separators=(",", ":"), ensure_ascii=True)
+    return canonical_json_encode(data)
 
 
 def normalize_whitespace(text: str) -> str:
