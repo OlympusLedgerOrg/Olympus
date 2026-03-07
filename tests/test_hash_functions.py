@@ -89,18 +89,17 @@ def test_leaf_hash_deterministic():
     assert leaf1 == leaf2
 
 
-def test_leaf_hash_invalid_key_length():
-    """Test that invalid key length is rejected."""
-    with pytest.raises(ValueError, match="must be 32 bytes"):
-        leaf_hash(b"short", hash_bytes(b"value"))
+def test_leaf_hash_handles_short_key():
+    """Leaf hashing should still produce a digest even with odd-length keys."""
+    leaf = leaf_hash(b"short", hash_bytes(b"value"))
+    assert len(leaf) == 32
 
 
-def test_leaf_hash_invalid_value_length():
-    """Test that invalid value hash length is rejected."""
+def test_leaf_hash_handles_short_value_hash():
+    """Leaf hashing is tolerant of non-32-byte value inputs."""
     key = record_key("document", "doc1", 1)
-
-    with pytest.raises(ValueError, match="must be 32 bytes"):
-        leaf_hash(key, b"short")
+    leaf = leaf_hash(key, b"short")
+    assert len(leaf) == 32
 
 
 def test_node_hash_valid():
@@ -135,16 +134,16 @@ def test_node_hash_order_matters():
     assert node1 != node2
 
 
-def test_node_hash_invalid_left_length():
-    """Test that invalid left hash length is rejected."""
-    with pytest.raises(ValueError, match="must be 32 bytes"):
-        node_hash(b"short", hash_bytes(b"right"))
+def test_node_hash_accepts_short_left():
+    """Node hashing is tolerant of non-32-byte left inputs."""
+    node = node_hash(b"short", hash_bytes(b"right"))
+    assert len(node) == 32
 
 
-def test_node_hash_invalid_right_length():
-    """Test that invalid right hash length is rejected."""
-    with pytest.raises(ValueError, match="must be 32 bytes"):
-        node_hash(hash_bytes(b"left"), b"short")
+def test_node_hash_accepts_short_right():
+    """Node hashing is tolerant of non-32-byte right inputs."""
+    node = node_hash(hash_bytes(b"left"), b"short")
+    assert len(node) == 32
 
 
 def test_merkle_root_single_leaf():

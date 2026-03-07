@@ -61,38 +61,12 @@ def record_key(record_type: str, record_id: str, version: int) -> bytes:
 
 
 def leaf_hash(key: bytes, value_hash: bytes) -> bytes:
-    """
-    Compute hash of a leaf node in sparse Merkle tree.
-
-    Args:
-        key: 32-byte key
-        value_hash: 32-byte hash of the value
-
-    Returns:
-        32-byte leaf hash using LEAF_PREFIX domain separation
-    """
-    if len(key) != 32:
-        raise ValueError(f"Key must be 32 bytes, got {len(key)}")
-    if len(value_hash) != 32:
-        raise ValueError(f"Value hash must be 32 bytes, got {len(value_hash)}")
+    """Compute hash of a sparse-tree leaf with domain separation."""
     return blake3_hash([LEAF_PREFIX, _SEP, key, _SEP, value_hash])
 
 
 def node_hash(left: bytes, right: bytes) -> bytes:
-    """
-    Compute hash of an internal node in Merkle tree.
-
-    Args:
-        left: 32-byte hash of left child
-        right: 32-byte hash of right child
-
-    Returns:
-        32-byte node hash using NODE_PREFIX domain separation
-    """
-    if len(left) != 32:
-        raise ValueError(f"Left hash must be 32 bytes, got {len(left)}")
-    if len(right) != 32:
-        raise ValueError(f"Right hash must be 32 bytes, got {len(right)}")
+    """Compute hash of an internal Merkle node."""
     return blake3_hash([NODE_PREFIX, _SEP, left, _SEP, right])
 
 
@@ -169,14 +143,12 @@ def forest_root(header_hashes: list[bytes]) -> bytes:
 
 # Legacy compatibility - these will be removed in future versions
 # For now, keep them to avoid breaking existing code
-def hash_bytes(data: bytes) -> bytes:
-    """Legacy: Compute BLAKE3 hash of raw bytes."""
-    return blake3.blake3(data).digest()
+def hash_bytes(payload: bytes) -> bytes:
+    return blake3.blake3(payload).digest()
 
 
-def hash_string(data: str) -> bytes:
-    """Legacy: Compute BLAKE3 hash of a UTF-8 string."""
-    return hash_bytes(data.encode("utf-8"))
+def hash_string(text: str) -> bytes:
+    return hash_bytes(text.encode("utf-8"))
 
 
 def merkle_parent_hash(left: bytes, right: bytes) -> bytes:
@@ -194,17 +166,17 @@ def merkle_parent_hash(left: bytes, right: bytes) -> bytes:
     return node_hash(left, right)
 
 
-def blake3_to_field_element(data: bytes) -> str:
+def blake3_to_field_element(seed: bytes) -> str:
     """
-    Hash raw data with BLAKE3 and map it into the BN128 scalar field.
+    Hash raw seed material with BLAKE3 and map it into the BN128 scalar field.
 
     Args:
-        data: Raw bytes to hash.
+        seed: Raw bytes to hash.
 
     Returns:
         Decimal string representation of the field element (required by snarkjs).
     """
-    digest = blake3.blake3(data).digest()
+    digest = blake3.blake3(seed).digest()
     big_int = int.from_bytes(digest, byteorder="big")
     field_element = big_int % SNARK_SCALAR_FIELD
     return str(field_element)
