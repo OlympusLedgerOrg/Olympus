@@ -50,14 +50,14 @@ template RedactionValidity(maxLeaves, depth) {
 
         // Bind pathIndices to index i (LSB-first), so this proof is about position i.
         // Since maxLeaves = 2^depth, i fits in 'depth' bits.
-        var pow2 = 1;
+        // The bit-weight accumulator is compile-time: weights[b] = 2^b.
         signal idxAccum[depth + 1];
         idxAccum[0] <== 0;
         for (var b = 0; b < depth; b++) {
+            var bitWeight = 1 << b;
             // Path bits are boolean (defense in depth; Merkle gadget also enforces this)
             pathIndices[i][b] * (pathIndices[i][b] - 1) === 0;
-            idxAccum[b + 1] <== idxAccum[b] + pathIndices[i][b] * pow2;
-            pow2 = pow2 * 2;
+            idxAccum[b + 1] <== idxAccum[b] + pathIndices[i][b] * bitWeight;
         }
         idxAccum[depth] === i;
 
@@ -72,7 +72,9 @@ template RedactionValidity(maxLeaves, depth) {
         // Only constrain root when revealed
         revealMask[i] * (originalRoot - inclusionProofs[i].root) === 0;
 
-        // Masked reveal vector
+        // Masked reveal vector:
+        // - revealed leaves keep their original value
+        // - unrevealed leaves are forced to 0 and therefore zero-pad the commitment chain
         revealedLeaves[i] <== revealMask[i] * originalLeaves[i];
     }
 
@@ -80,7 +82,8 @@ template RedactionValidity(maxLeaves, depth) {
     revealedCount === maskSum[maxLeaves];
 
     // -------------------------
-    // 3) Commit to revealedLeaves + revealedCount
+    // 3) Commit to revealedLeaves + revealedCount.
+    // Unrevealed entries contribute zeros because revealedLeaves[i] is masked above.
     // -------------------------
     signal acc[maxLeaves];
 
