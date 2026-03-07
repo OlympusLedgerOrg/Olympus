@@ -5,10 +5,10 @@ These tests validate the Ledger class which implements the append-only
 ledger for recording document commitments.
 """
 
-import json
 from datetime import datetime
 
 from protocol.canonical import CANONICAL_VERSION
+from protocol.canonical_json import canonical_json_bytes
 from protocol.canonicalizer import canonicalization_provenance
 from protocol.hashes import LEDGER_PREFIX, blake3_hash
 from protocol.ledger import Ledger, LedgerEntry
@@ -139,8 +139,7 @@ def test_ledger_entry_hash_computation():
         "canonicalization": entry.canonicalization,
         "prev_entry_hash": entry.prev_entry_hash,
     }
-    canonical_json = json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=True)
-    expected_hash = blake3_hash([LEDGER_PREFIX, canonical_json.encode("utf-8")]).hex()
+    expected_hash = blake3_hash([LEDGER_PREFIX, canonical_json_bytes(payload)]).hex()
 
     assert entry.entry_hash == expected_hash
 
@@ -473,8 +472,7 @@ def test_ledger_deterministic_hash_for_same_data():
         "canonicalization": _canonicalization(),
         "prev_entry_hash": "",
     }
-    canonical_json = json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=True)
-    computed_hash = blake3_hash([LEDGER_PREFIX, canonical_json.encode("utf-8")]).hex()
+    computed_hash = blake3_hash([LEDGER_PREFIX, canonical_json_bytes(payload)]).hex()
 
     entry1.entry_hash = computed_hash
     entry2 = LedgerEntry(

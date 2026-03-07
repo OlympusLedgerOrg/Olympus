@@ -263,12 +263,10 @@ class TestHashGoldenValues:
         assert len(result) == 32
 
         # Recompute independently to verify
-        canonical_json = json.dumps(
-            header, sort_keys=True, separators=(",", ":"), ensure_ascii=True
-        )
+        from protocol.canonical_json import canonical_json_bytes as _cjb
         from protocol.hashes import HDR_PREFIX
 
-        expected = blake3_hash([HDR_PREFIX, canonical_json.encode("utf-8")])
+        expected = blake3_hash([HDR_PREFIX, _cjb(header)])
         assert result == expected
 
 
@@ -294,9 +292,7 @@ class TestLedgerHashGoldenValues:
             "shard_root": "def456",
             "prev_entry_hash": "",
         }
-        canonical_json = json.dumps(
-            payload, sort_keys=True, separators=(",", ":"), ensure_ascii=True
-        )
+        canonical_json = canonical_json_encode(payload)
         entry_hash = blake3_hash([LEDGER_PREFIX, canonical_json.encode("utf-8")]).hex()
 
         # Pin the canonical JSON form
@@ -325,7 +321,7 @@ class TestLedgerHashGoldenValues:
             "shard_root": "root1",
             "prev_entry_hash": "",
         }
-        json1 = json.dumps(payload1, sort_keys=True, separators=(",", ":"), ensure_ascii=True)
+        json1 = canonical_json_encode(payload1)
         entry1_hash = blake3_hash([LEDGER_PREFIX, json1.encode("utf-8")]).hex()
 
         # Second entry (chains to first)
@@ -336,7 +332,7 @@ class TestLedgerHashGoldenValues:
             "shard_root": "root2",
             "prev_entry_hash": entry1_hash,
         }
-        json2 = json.dumps(payload2, sort_keys=True, separators=(",", ":"), ensure_ascii=True)
+        json2 = canonical_json_encode(payload2)
         entry2_hash = blake3_hash([LEDGER_PREFIX, json2.encode("utf-8")]).hex()
 
         # Verify chain linkage

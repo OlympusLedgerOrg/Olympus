@@ -28,6 +28,7 @@ from pathlib import Path
 # Add parent directory to path for imports
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
+from protocol.canonical_json import canonical_json_bytes
 from protocol.hashes import LEDGER_PREFIX, blake3_hash
 from protocol.ledger import Ledger, LedgerEntry
 
@@ -97,10 +98,7 @@ def cmd_verify(args: argparse.Namespace) -> int:
             "canonicalization": entry.canonicalization,
             "prev_entry_hash": entry.prev_entry_hash,
         }
-        canonical_json = json.dumps(
-            payload, sort_keys=True, separators=(",", ":"), ensure_ascii=True
-        )
-        expected_hash = blake3_hash([LEDGER_PREFIX, canonical_json.encode("utf-8")]).hex()
+        expected_hash = blake3_hash([LEDGER_PREFIX, canonical_json_bytes(payload)]).hex()
 
         if entry.entry_hash != expected_hash:
             errors.append(
