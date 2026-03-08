@@ -2,8 +2,10 @@
 
 import json
 import os
+import re
 from datetime import datetime, timezone
-from typing import Any
+from pathlib import Path
+from typing import Any, cast
 from urllib.error import HTTPError, URLError
 from urllib.parse import quote, urlencode, urlparse
 from urllib.request import Request as UrlRequest, urlopen
@@ -21,7 +23,6 @@ from protocol.redaction import RedactionProtocol
 from protocol.redaction_ledger import (
     RedactionProofWithLedger,
     ZKPublicInputs,
-    poseidon_root_to_bytes,
     verify_zk_redaction,
 )
 from protocol.ssmf import ExistenceProof, SparseMerkleTree
@@ -819,24 +820,143 @@ def _foia_delay_proof(record: dict[str, Any]) -> dict[str, Any]:
     return _build_receipt(receipt_type, payload)
 
 
+def _collect_federation_dashboard() -> dict[str, Any]:
+    """Collect cross-node shard agreement details for the federation dashboard."""
+    if not FEDERATION_NODES:
+        return {"configured": False, "shards": []}
+
+    shard_map: dict[str, list[dict[str, Any]]] = {}
+    quorum = (len(FEDERATION_NODES) // 2) + 1
+
+    for node_name, base_url in FEDERATION_NODES.items():
+        try:
+            _expect_json_object(_fetch_json_from_base(base_url, "/health"))
+            shards = _expect_json_list(_fetch_json_from_base(base_url, "/shards"))
+        except (HTTPError, URLError, TypeError, ValueError):
+            continue
+
+        for shard in shards:
+            shard_id = str(shard.get("shard_id", ""))
+            latest_seq = int(shard.get("latest_seq", 0))
+            latest_root = str(shard.get("latest_root", ""))
+            signature_valid = True
+            chain_ok = True
+
+            try:
+                header = _expect_json_object(
+                    _fetch_json_from_base(base_url, f"/shards/{quote(shard_id)}/header/latest")
+                )
+                signature_valid = _verify_signature(header)
+            except (HTTPError, URLError, TypeError, ValueError):
+                signature_valid = False
+
+            try:
+                ledger = _expect_json_object(
+                    _fetch_json_from_base(base_url, f"/ledger/{quote(shard_id)}/tail?n=10")
+                )
+                chain_ok = not _is_chain_broken(ledger.get("entries", []))
+            except (HTTPError, URLError, TypeError, ValueError):
+                chain_ok = False
+
+            shard_map.setdefault(shard_id, []).append(
+                {
+                    "node": node_name,
+                    "latest_seq": latest_seq,
+                    "latest_root": latest_root,
+                    "signature_valid": signature_valid,
+                    "chain_ok": chain_ok,
+                }
+            )
+
+    federation_rows: list[dict[str, Any]] = []
+    for shard_id in sorted(shard_map):
+        states = shard_map[shard_id]
+        root_counts: dict[str, int] = {}
+        for state in states:
+            root = state["latest_root"]
+            root_counts[root] = root_counts.get(root, 0) + 1
+
+        agreement_root = max(
+            root_counts.items(),
+            key=lambda item: (item[1], item[0]),
+        )[0]
+        agreement_count = root_counts[agreement_root]
+
+        for state in states:
+            state["sync_status"] = (
+                "in sync" if state["latest_root"] == agreement_root else "diverged"
+            )
+
+        federation_rows.append(
+            {
+                "shard_id": shard_id,
+                "quorum": quorum,
+                "agreement_root": agreement_root,
+                "agreement_count": agreement_count,
+                "quorum_met": agreement_count >= quorum,
+                "states": states,
+            }
+        )
+
+    return {"configured": True, "shards": federation_rows}
+
+
+def _base_context(request: Request, *, debug_tools: bool) -> dict[str, Any]:
+    """Build the shared template context for the debug console and public portal."""
+    page_title = "Olympus Debug Console" if debug_tools else "Public Verification Portal"
+    return {
+        "request": request,
+        "api_base": API_BASE,
+        "page_title": page_title,
+        "page_heading": page_title,
+        "show_debug_tools": debug_tools,
+        "shards": [],
+        "banners": [],
+        "federation": _collect_federation_dashboard()
+        if debug_tools
+        else {"configured": False, "shards": []},
+    }
+
+
+def _parse_proof_bundle(
+    body: dict[str, Any],
+) -> tuple[RedactionProofWithLedger, bytes, list[int], list[str], int]:
+    """Parse a JSON proof bundle into typed redaction-ledger objects."""
+    smt_proof_data = body["smt_proof"]
+    public_inputs_data = body["zk_public_inputs"]
+
+    smt_proof = ExistenceProof(
+        key=bytes.fromhex(str(smt_proof_data["key"])),
+        value_hash=bytes.fromhex(str(smt_proof_data["value_hash"])),
+        siblings=[bytes.fromhex(str(sibling)) for sibling in smt_proof_data["siblings"]],
+        root_hash=bytes.fromhex(str(smt_proof_data["root_hash"])),
+    )
+    proof = RedactionProofWithLedger(
+        smt_proof=smt_proof,
+        zk_proof=dict(body.get("zk_proof") or {}),
+        zk_public_inputs=ZKPublicInputs(
+            original_root=str(public_inputs_data["original_root"]),
+            redacted_commitment=str(public_inputs_data["redacted_commitment"]),
+            revealed_count=int(public_inputs_data["revealed_count"]),
+        ),
+    )
+    smt_root = bytes.fromhex(str(body["smt_root"]))
+    revealed_indices = [int(index) for index in body["revealed_indices"]]
+    revealed_content = [str(content) for content in body["revealed_content"]]
+    total_parts = int(body["total_parts"])
+
+    if len(revealed_indices) != len(revealed_content):
+        raise ValueError("revealed_indices and revealed_content must have the same length")
+    if total_parts < 0:
+        raise ValueError("total_parts must be non-negative")
+
+    return proof, smt_root, revealed_indices, revealed_content, total_parts
+
+
 @app.get("/")
 def debug_console(request: Request):
     """Render the debug console view."""
     _require_debug_ui()
-    context: dict[str, Any] = {
-        "request": request,
-        "api_base": API_BASE,
-        "shards": [],
-        "banners": [],
-        "federation": _collect_federation_dashboard(),
-    }
-
-
-@app.get("/")
-def debug_console(request: Request):
-    """Render the debug console view."""
-    if not DEBUG_UI_ENABLED:
-        raise HTTPException(status_code=404, detail="Debug UI is disabled in this environment.")
     context = _base_context(request, debug_tools=True)
 
     try:
@@ -900,6 +1020,21 @@ def verification_portal(request: Request):
         "index.html",
         _base_context(request, debug_tools=False),
     )
+
+
+@app.get("/verification-portal/hash/{content_hash}")
+def verification_portal_hash(content_hash: str):
+    """Proxy public content-hash verification lookups to the API."""
+    try:
+        verification = _fetch_json(f"/ingest/records/hash/{quote(content_hash)}/verify")
+        return JSONResponse({"ok": True, "verification": verification})
+    except HTTPError as exc:
+        return JSONResponse(
+            status_code=exc.code,
+            content={"ok": False, "error": f"Hash verification failed (HTTP {exc.code})."},
+        )
+    except URLError:
+        return JSONResponse(status_code=503, content={"ok": False, "error": "API unavailable."})
 
 
 @app.get("/proof-explorer")
