@@ -360,7 +360,7 @@ async def commit_artifact(request: ArtifactCommitRequest) -> ArtifactCommitRespo
             proof_id=existing_proof_id,
             artifact_hash=artifact_hash_hex,
             namespace=existing.get("namespace", request.namespace),
-            id=existing.get("artifact_id", request.id),
+            id=existing.get("record_id", request.id),
             committed_at=existing["timestamp"],
             ledger_entry_hash=existing["ledger_entry_hash"],
         )
@@ -390,7 +390,6 @@ async def commit_artifact(request: ArtifactCommitRequest) -> ArtifactCommitRespo
         "shard_id": shard_id,
         "content_hash": artifact_hash_hex,
         "namespace": request.namespace,
-        "artifact_id": request.id,
         "merkle_root": merkle_root,
         "merkle_proof": {
             "leaf_hash": proof.leaf_hash.hex(),
