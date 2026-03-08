@@ -13,7 +13,8 @@ from fastapi import FastAPI, File, Form, HTTPException, Query, Request, UploadFi
 from fastapi.responses import JSONResponse
 from fastapi.templating import Jinja2Templates
 
-from protocol.hashes import blake3_to_field_element
+from protocol.canonical import canonicalize_document, document_to_bytes
+from protocol.hashes import blake3_to_field_element, hash_bytes
 from protocol.poseidon_tree import PoseidonMerkleTree
 from protocol.redaction import RedactionProtocol
 from protocol.redaction_ledger import (
@@ -39,6 +40,30 @@ templates = Jinja2Templates(directory="ui/templates")
 # Key: "{document_id}:{version}"
 # Not persisted across restarts; for debug/demo use only.
 _commit_store: dict[str, dict[str, Any]] = {}
+
+_JURY_DEMO_MODELS: list[dict[str, Any]] = [
+    {
+        "model": "ollama/llama3.1:70b",
+        "weight": 0.5,
+        "verdict": "release",
+        "confidence": 0.92,
+        "reason": "Most passages are factual and already public.",
+    },
+    {
+        "model": "openai/gpt-4.1",
+        "weight": 0.3,
+        "verdict": "release",
+        "confidence": 0.81,
+        "reason": "No personal identifiers detected in the cited sections.",
+    },
+    {
+        "model": "anthropic/claude-sonnet-4",
+        "weight": 0.2,
+        "verdict": "escalate",
+        "confidence": 0.63,
+        "reason": "One paragraph may still require human redaction review.",
+    },
+]
 
 
 def _fetch_json(path: str) -> dict[str, Any] | list[dict[str, Any]]:
@@ -67,17 +92,80 @@ def _is_chain_broken(entries: list[dict[str, Any]]) -> bool:
     return False
 
 
+def _build_jury_demo() -> dict[str, Any]:
+    """Build a deterministic demo aggregation for the AI jury dashboard."""
+    total_weight = sum(model["weight"] for model in _JURY_DEMO_MODELS)
+    weighted_totals: dict[str, float] = {}
+    normalized_models: list[dict[str, Any]] = []
+
+    for model in _JURY_DEMO_MODELS:
+        normalized_weight = round(model["weight"] / total_weight, 4)
+        weighted_support = round(normalized_weight * model["confidence"], 4)
+        weighted_totals[model["verdict"]] = round(
+            weighted_totals.get(model["verdict"], 0.0) + weighted_support,
+            4,
+        )
+        normalized_models.append({
+            **model,
+            "normalized_weight": normalized_weight,
+            "weighted_support": weighted_support,
+        })
+
+    combined_verdict = max(weighted_totals.items(), key=lambda item: (item[1], item[0]))[0]
+    commitment_payload = {
+        "record_type": "jury_verdict",
+        "record_id": "foia-appeal-demo-2026-001",
+        "version": 1,
+        "aggregation_method": "weighted_confidence_sum",
+        "models": [
+            {
+                "model": item["model"],
+                "verdict": item["verdict"],
+                "confidence": item["confidence"],
+                "normalized_weight": item["normalized_weight"],
+                "weighted_support": item["weighted_support"],
+            }
+            for item in normalized_models
+        ],
+        "weighted_totals": weighted_totals,
+        "combined_verdict": combined_verdict,
+    }
+    commitment_hash = hash_bytes(
+        document_to_bytes(canonicalize_document(commitment_payload))
+    ).hex()
+    return {
+        "case_id": "foia-appeal-demo-2026-001",
+        "combined_verdict": combined_verdict,
+        "weighted_totals": weighted_totals,
+        "models": normalized_models,
+        "commitment_payload": commitment_payload,
+        "commitment_hash": commitment_hash,
+    }
+
+
+def _base_context(request: Request, *, debug_tools: bool) -> dict[str, Any]:
+    """Return common Jinja context for debug and public portal views."""
+    title = "Olympus Developer Debug Console" if debug_tools else "Olympus Public Verification Portal"
+    return {
+        "request": request,
+        "api_base": API_BASE,
+        "shards": [],
+        "banners": [],
+        "page_title": title,
+        "page_heading": title,
+        "show_debug_tools": debug_tools,
+        "show_public_verifier": True,
+        "show_jury_dashboard": True,
+        "jury_demo": _build_jury_demo(),
+    }
+
+
 @app.get("/")
 def debug_console(request: Request):
     """Render the debug console view."""
     if not DEBUG_UI_ENABLED:
         raise HTTPException(status_code=404, detail="Debug UI is disabled in this environment.")
-    context: dict[str, Any] = {
-        "request": request,
-        "api_base": API_BASE,
-        "shards": [],
-        "banners": [],
-    }
+    context = _base_context(request, debug_tools=True)
 
     try:
         shards = _fetch_json("/shards")
@@ -119,6 +207,16 @@ def debug_console(request: Request):
     return templates.TemplateResponse(request, "index.html", context)
 
 
+@app.get("/verification-portal")
+def verification_portal(request: Request):
+    """Render the public verification portal without debug-only controls."""
+    return templates.TemplateResponse(
+        request,
+        "index.html",
+        _base_context(request, debug_tools=False),
+    )
+
+
 @app.get("/proof-explorer")
 def proof_explorer(
     shard_id: str = Query(...),
@@ -140,6 +238,22 @@ def proof_explorer(
         return JSONResponse(
             status_code=exc.code,
             content={"ok": False, "error": f"Proof query failed (HTTP {exc.code})."},
+        )
+    except URLError:
+        return JSONResponse(status_code=503, content={"ok": False, "error": "API unavailable."})
+
+
+@app.get("/verification-portal/hash/{content_hash}")
+def verify_committed_hash(content_hash: str):
+    """Resolve and verify a committed document hash through the public API."""
+    path = f"/ingest/records/hash/{quote(content_hash)}/verify"
+    try:
+        verification = _fetch_json(path)
+        return JSONResponse({"ok": True, "verification": verification})
+    except HTTPError as exc:
+        return JSONResponse(
+            status_code=exc.code,
+            content={"ok": False, "error": f"Hash verification failed (HTTP {exc.code})."},
         )
     except URLError:
         return JSONResponse(status_code=503, content={"ok": False, "error": "API unavailable."})

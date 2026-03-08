@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Olympus Debug Console</title>
+    <title>{{ page_title }}</title>
     <style>
         :root {
             --bg: #f8fafc;
@@ -57,13 +57,74 @@
     </style>
 </head>
 <body>
-    <h1>Olympus Developer Debug Console</h1>
+    <h1>{{ page_heading }}</h1>
     <p>API base: <code>{{ api_base }}</code></p>
 
     {% for banner in banners %}
         <div class="banner">{{ banner }}</div>
     {% endfor %}
 
+    {% if show_public_verifier %}
+    <div class="panel">
+        <h2>Public Verification Portal</h2>
+        <p>Enter a committed BLAKE3 document hash to retrieve its proof transcript, confirm the
+           Merkle proof replays successfully, and inspect the ledger commitment without any account
+           or API key.</p>
+        <form id="hash-verify-form">
+            <div class="row">
+                <input
+                    type="text"
+                    id="content-hash"
+                    placeholder="64-character BLAKE3 content hash"
+                    minlength="64"
+                    maxlength="64"
+                    required
+                />
+                <button type="submit">Verify committed hash</button>
+            </div>
+        </form>
+        <pre id="hash-verify-result">Enter a committed document hash to inspect its proof transcript.</pre>
+    </div>
+    {% endif %}
+
+    {% if show_jury_dashboard %}
+    <div class="panel">
+        <h2>AI Jury Aggregation Dashboard</h2>
+        <p>This demo shows how Olympus can normalize model weights, sum weighted support for each
+           verdict, and commit the resulting aggregation payload as a deterministic hash.</p>
+        <table>
+            <thead>
+                <tr>
+                    <th>Model</th>
+                    <th>Verdict</th>
+                    <th>Weight</th>
+                    <th>Confidence</th>
+                    <th>Weighted support</th>
+                </tr>
+            </thead>
+            <tbody>
+            {% for model in jury_demo.models %}
+                <tr>
+                    <td>{{ model.model }}</td>
+                    <td>{{ model.verdict }}</td>
+                    <td>{{ model.normalized_weight }}</td>
+                    <td>{{ model.confidence }}</td>
+                    <td>{{ model.weighted_support }}</td>
+                </tr>
+            {% endfor %}
+            </tbody>
+        </table>
+        <p>
+            Combined verdict:
+            <strong>{{ jury_demo.combined_verdict }}</strong>
+            · Commitment hash:
+            <code>{{ jury_demo.commitment_hash }}</code>
+        </p>
+        <pre id="jury-dashboard-result">{{ jury_demo.commitment_payload }}</pre>
+    </div>
+    {% endif %}
+
+    {% if show_debug_tools %}
     <!-- ── Commit Document ──────────────────────────────────────────────── -->
     <div class="panel">
         <h2>Commit Document</h2>
@@ -132,7 +193,9 @@
         </form>
         <pre id="proof-result">Submit query to inspect proof payload.</pre>
     </div>
+    {% endif %}
 
+    {% if show_debug_tools %}
     <div class="panel">
         <h2>Shard List</h2>
         <table>
@@ -168,88 +231,131 @@
             {% endif %}
         </div>
     {% endfor %}
+    {% endif %}
 
     <script>
+        // ── Public Verification Portal ──────────────────────────────────────
+        const hashVerifyForm = document.getElementById('hash-verify-form');
+        if (hashVerifyForm) {
+            hashVerifyForm.addEventListener('submit', async (event) => {
+                event.preventDefault();
+                const verifyResult = document.getElementById('hash-verify-result');
+                const contentHash = document.getElementById('content-hash').value.trim();
+                verifyResult.textContent = 'Resolving committed hash…';
+                try {
+                    const response = await fetch(
+                        `/verification-portal/hash/${encodeURIComponent(contentHash)}`
+                    );
+                    const data = await response.json();
+                    if (!data.ok) {
+                        verifyResult.textContent = `✗ Error: ${data.error}`;
+                        return;
+                    }
+                    const verification = data.verification;
+                    verifyResult.textContent =
+                        `✓ Committed hash located\n\n` +
+                        `Content hash       : ${verification.content_hash}\n` +
+                        `Proof ID           : ${verification.proof_id}\n` +
+                        `Shard ID           : ${verification.shard_id}\n` +
+                        `Merkle root        : ${verification.merkle_root}\n` +
+                        `Ledger entry hash  : ${verification.ledger_entry_hash}\n` +
+                        `Merkle proof valid : ${verification.merkle_proof_valid}\n\n` +
+                        `Use the proof payload below for independent offline replay:\n` +
+                        `${JSON.stringify(verification.merkle_proof, null, 2)}`;
+                } catch (err) {
+                    verifyResult.textContent = `✗ Failed: ${err}`;
+                }
+            });
+        }
+
         // ── Proof Explorer ──────────────────────────────────────────────────
         const form = document.getElementById('proof-form');
         const out = document.getElementById('proof-result');
-        form.addEventListener('submit', async (event) => {
-            event.preventDefault();
-            const params = new URLSearchParams(new FormData(form));
-            out.textContent = 'Loading...';
-            const response = await fetch(`/proof-explorer?${params.toString()}`);
-            const data = await response.json();
-            out.textContent = JSON.stringify(data, null, 2);
-        });
+        if (form && out) {
+            form.addEventListener('submit', async (event) => {
+                event.preventDefault();
+                const params = new URLSearchParams(new FormData(form));
+                out.textContent = 'Loading...';
+                const response = await fetch(`/proof-explorer?${params.toString()}`);
+                const data = await response.json();
+                out.textContent = JSON.stringify(data, null, 2);
+            });
+        }
 
         // ── Commit Document ─────────────────────────────────────────────────
-        document.getElementById('commit-form').addEventListener('submit', async (event) => {
-            event.preventDefault();
-            const commitResult = document.getElementById('commit-result');
-            commitResult.textContent = 'Committing…';
-            const formData = new FormData(event.target);
-            try {
-                const resp = await fetch('/commit', { method: 'POST', body: formData });
-                const data = await resp.json();
-                if (data.ok) {
-                    commitResult.textContent =
-                        `✓ Committed successfully!\n\n` +
-                        `Document ID : ${data.document_id}\n` +
-                        `Version     : ${data.version}\n` +
-                        `Sections    : ${data.sections_count}\n\n` +
-                        `BLAKE3 root  : ${data.blake3_root}\n` +
-                        `Poseidon root: ${data.poseidon_root}`;
-                } else {
-                    commitResult.textContent = `✗ Error: ${data.error}`;
+        const commitForm = document.getElementById('commit-form');
+        if (commitForm) {
+            commitForm.addEventListener('submit', async (event) => {
+                event.preventDefault();
+                const commitResult = document.getElementById('commit-result');
+                commitResult.textContent = 'Committing…';
+                const formData = new FormData(event.target);
+                try {
+                    const resp = await fetch('/commit', { method: 'POST', body: formData });
+                    const data = await resp.json();
+                    if (data.ok) {
+                        commitResult.textContent =
+                            `✓ Committed successfully!\n\n` +
+                            `Document ID : ${data.document_id}\n` +
+                            `Version     : ${data.version}\n` +
+                            `Sections    : ${data.sections_count}\n\n` +
+                            `BLAKE3 root  : ${data.blake3_root}\n` +
+                            `Poseidon root: ${data.poseidon_root}`;
+                    } else {
+                        commitResult.textContent = `✗ Error: ${data.error}`;
+                    }
+                } catch (err) {
+                    commitResult.textContent = `✗ Request failed: ${err}`;
                 }
-            } catch (err) {
-                commitResult.textContent = `✗ Request failed: ${err}`;
-            }
-        });
+            });
+        }
 
         // ── Verify Proof ────────────────────────────────────────────────────
-        document.getElementById('verify-form').addEventListener('submit', async (event) => {
-            event.preventDefault();
-            const verifyResult = document.getElementById('verify-result');
-            verifyResult.textContent = 'Verifying…';
-            const fileInput = document.getElementById('verify-file');
-            if (!fileInput.files.length) {
-                verifyResult.textContent = 'No file selected.';
-                return;
-            }
-            try {
-                const text = await fileInput.files[0].text();
-                const bundle = JSON.parse(text);
-                const resp = await fetch('/verify', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify(bundle),
-                });
-                const data = await resp.json();
-                if (!data.ok) {
-                    verifyResult.textContent = `✗ Error: ${data.error}`;
+        const verifyForm = document.getElementById('verify-form');
+        if (verifyForm) {
+            verifyForm.addEventListener('submit', async (event) => {
+                event.preventDefault();
+                const verifyResult = document.getElementById('verify-result');
+                verifyResult.textContent = 'Verifying…';
+                const fileInput = document.getElementById('verify-file');
+                if (!fileInput.files.length) {
+                    verifyResult.textContent = 'No file selected.';
                     return;
                 }
-                const overallMark = data.verified ? '✓' : '✗';
-                const smtMark = data.smt_anchor_verified ? '✓' : '✗';
-                const zkMark = data.zk_verified ? '✓' : '✗';
-                let verificationOutput = `${overallMark} Overall verification: ${data.verified ? 'PASSED' : 'FAILED'}\n\n` +
-                            `${smtMark} SMT anchor verified : ${data.smt_anchor_verified}\n` +
-                            `${zkMark} ZK proof verified   : ${data.zk_verified}` +
-                            ` (requires snarkjs; placeholder proof will show false)\n\n`;
-                if (data.revealed_sections.length > 0) {
-                    verificationOutput += `Revealed sections (${data.revealed_sections.length} of ${data.total_parts}):\n`;
-                    data.revealed_sections.forEach(s => {
-                        verificationOutput += `  [${s.index}] ${s.content}\n`;
+                try {
+                    const text = await fileInput.files[0].text();
+                    const bundle = JSON.parse(text);
+                    const resp = await fetch('/verify', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify(bundle),
                     });
-                } else {
-                    verificationOutput += 'No revealed sections in bundle.';
+                    const data = await resp.json();
+                    if (!data.ok) {
+                        verifyResult.textContent = `✗ Error: ${data.error}`;
+                        return;
+                    }
+                    const overallMark = data.verified ? '✓' : '✗';
+                    const smtMark = data.smt_anchor_verified ? '✓' : '✗';
+                    const zkMark = data.zk_verified ? '✓' : '✗';
+                    let verificationOutput = `${overallMark} Overall verification: ${data.verified ? 'PASSED' : 'FAILED'}\n\n` +
+                                `${smtMark} SMT anchor verified : ${data.smt_anchor_verified}\n` +
+                                `${zkMark} ZK proof verified   : ${data.zk_verified}` +
+                                ` (requires snarkjs; placeholder proof will show false)\n\n`;
+                    if (data.revealed_sections.length > 0) {
+                        verificationOutput += `Revealed sections (${data.revealed_sections.length} of ${data.total_parts}):\n`;
+                        data.revealed_sections.forEach(s => {
+                            verificationOutput += `  [${s.index}] ${s.content}\n`;
+                        });
+                    } else {
+                        verificationOutput += 'No revealed sections in bundle.';
+                    }
+                    verifyResult.textContent = verificationOutput;
+                } catch (err) {
+                    verifyResult.textContent = `✗ Failed: ${err}`;
                 }
-                verifyResult.textContent = verificationOutput;
-            } catch (err) {
-                verifyResult.textContent = `✗ Failed: ${err}`;
-            }
-        });
+            });
+        }
 
         // ── Redaction Interface ─────────────────────────────────────────────
         let activeProofBundle = null;
@@ -349,17 +455,20 @@
             }
         }
 
-        document.getElementById('download-proof-link').addEventListener('click', (event) => {
-            event.preventDefault();
-            if (!activeProofBundle) return;
-            const blob = new Blob([JSON.stringify(activeProofBundle, null, 2)], { type: 'application/json' });
-            const url = URL.createObjectURL(blob);
-            const a = document.createElement('a');
-            a.href = url;
-            a.download = 'proof_bundle.json';
-            a.click();
-            URL.revokeObjectURL(url);
-        });
+        const downloadProofLink = document.getElementById('download-proof-link');
+        if (downloadProofLink) {
+            downloadProofLink.addEventListener('click', (event) => {
+                event.preventDefault();
+                if (!activeProofBundle) return;
+                const blob = new Blob([JSON.stringify(activeProofBundle, null, 2)], { type: 'application/json' });
+                const url = URL.createObjectURL(blob);
+                const a = document.createElement('a');
+                a.href = url;
+                a.download = 'proof_bundle.json';
+                a.click();
+                URL.revokeObjectURL(url);
+            });
+        }
     </script>
 </body>
 </html>

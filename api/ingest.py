@@ -25,7 +25,7 @@ from protocol.canonical import CANONICAL_VERSION, canonicalize_document, documen
 from protocol.canonicalizer import canonicalization_provenance
 from protocol.hashes import hash_bytes
 from protocol.ledger import Ledger
-from protocol.merkle import MerkleTree
+from protocol.merkle import MerkleProof, MerkleTree, verify_proof
 from protocol.timestamps import current_timestamp
 
 
@@ -92,6 +92,12 @@ class IngestionProofResponse(BaseModel):
     canonicalization: dict[str, Any]
 
 
+class HashVerificationResponse(IngestionProofResponse):
+    """Verification result for a committed content hash."""
+
+    merkle_proof_valid: bool
+
+
 # ---------------------------------------------------------------------------
 # In-memory state for ingestion tracking
 # (Production would use the PostgreSQL StorageLayer)
@@ -105,6 +111,32 @@ _content_index: dict[str, str] = {}
 
 # Shared ledger for write path
 _write_ledger = Ledger()
+
+
+def _parse_content_hash(content_hash: str) -> bytes:
+    """Validate and decode a hex-encoded BLAKE3 content hash."""
+    try:
+        raw = bytes.fromhex(content_hash)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail="content_hash must be valid hex") from exc
+    if len(raw) != 32:
+        raise HTTPException(status_code=400, detail="content_hash must be a 32-byte BLAKE3 hash")
+    return raw
+
+
+def _merkle_proof_from_store(data: dict[str, Any]) -> MerkleProof:
+    """Convert stored ingestion proof metadata into a MerkleProof instance."""
+    proof_data = data["merkle_proof"]
+    siblings = [
+        (bytes.fromhex(hash_hex), "right" if is_right else "left")
+        for hash_hex, is_right in proof_data["siblings"]
+    ]
+    return MerkleProof(
+        leaf_hash=bytes.fromhex(proof_data["leaf_hash"]),
+        leaf_index=int(proof_data["leaf_index"]),
+        siblings=siblings,
+        root_hash=bytes.fromhex(proof_data["root_hash"]),
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -253,3 +285,22 @@ async def get_ingestion_proof(proof_id: str) -> IngestionProofResponse:
 
     data = _ingestion_store[proof_id]
     return IngestionProofResponse(**data)
+
+
+@router.get("/records/hash/{content_hash}/verify", response_model=HashVerificationResponse)
+async def verify_ingested_content_hash(content_hash: str) -> HashVerificationResponse:
+    """
+    Verify that a committed BLAKE3 content hash exists in the ingestion store.
+
+    This endpoint returns the stored proof bundle plus a server-side Merkle proof
+    verification result so public portals can display both the commitment data and
+    the verifiable transcript needed for independent re-checking.
+    """
+    normalized_hash = _parse_content_hash(content_hash).hex()
+    proof_id = _content_index.get(normalized_hash)
+    if proof_id is None:
+        raise HTTPException(status_code=404, detail=f"Committed hash not found: {normalized_hash}")
+
+    data = _ingestion_store[proof_id]
+    merkle_proof_valid = verify_proof(_merkle_proof_from_store(data))
+    return HashVerificationResponse(**data, merkle_proof_valid=merkle_proof_valid)
