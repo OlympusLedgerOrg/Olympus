@@ -199,6 +199,8 @@ def test_commit_txt_file(monkeypatch):
     assert len(data["blake3_root"]) == 64
     assert data["poseidon_root"].isdigit()
     assert data["commit_key"] == "doc1:1"
+    assert data["receipt"]["receipt_type"] == "document_commitment"
+    assert len(data["receipt"]["receipt_hash"]) == 64
 
 
 def test_commit_json_file(monkeypatch):
@@ -269,6 +271,7 @@ def test_get_committed_sections(monkeypatch):
     assert data["sections"] == ["Part A", "Part B"]
     assert len(data["blake3_root"]) == 64
     assert data["poseidon_root"].isdigit()
+    assert data["receipt"]["receipt_type"] == "document_commitment"
 
 
 def test_get_committed_sections_not_found(monkeypatch):
@@ -389,6 +392,168 @@ def test_verify_disabled_returns_404(monkeypatch):
     assert response.status_code == 404
 
 
+# ── Receipt + embargo management ──────────────────────────────────────────────
+
+
+def test_commit_returns_receipt_and_embargo_metadata(monkeypatch):
+    """POST /commit returns a receipt and configured embargo metadata."""
+    monkeypatch.setattr(ui_app, "DEBUG_UI_ENABLED", True)
+    ui_app._commit_store.clear()
+
+    response = client.post(
+        "/commit",
+        data={
+            "document_id": "embargo-doc",
+            "version": 3,
+            "release_at": "2026-03-10T15:00:00Z",
+            "recipient_keys": "alice-key\nbob-key",
+        },
+        files={"file": ("doc.txt", b"One\nTwo\n", "text/plain")},
+    )
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["receipt"]["payload"]["release_at"] == "2026-03-10T15:00:00Z"
+    assert data["embargo"]["recipient_keys"] == ["alice-key", "bob-key"]
+    assert data["embargo"]["active_recipient_keys"] == ["alice-key", "bob-key"]
+    assert data["embargo"]["revoked_recipient_keys"] == []
+
+
+def test_embargo_update_and_revoke(monkeypatch):
+    """Embargo endpoints update recipients and support revocation."""
+    monkeypatch.setattr(ui_app, "DEBUG_UI_ENABLED", True)
+    ui_app._commit_store.clear()
+
+    client.post(
+        "/commit",
+        data={"document_id": "docE", "version": 1},
+        files={"file": ("doc.txt", b"First\nSecond\n", "text/plain")},
+    )
+
+    update_response = client.post(
+        "/embargo/update",
+        json={
+            "document_id": "docE",
+            "version": 1,
+            "release_at": "2026-03-09T12:00:00Z",
+            "recipient_keys": "key-a,key-b",
+        },
+    )
+    assert update_response.status_code == 200
+    update_data = update_response.json()
+    assert update_data["embargo"]["release_at"] == "2026-03-09T12:00:00Z"
+    assert update_data["embargo"]["active_recipient_keys"] == ["key-a", "key-b"]
+    assert update_data["receipt"]["receipt_type"] == "embargo_update"
+    assert len(update_data["receipt"]["receipt_hash"]) == 64
+
+    revoke_response = client.post(
+        "/embargo/revoke",
+        json={"document_id": "docE", "version": 1, "recipient_key": "key-a"},
+    )
+    assert revoke_response.status_code == 200
+    revoke_data = revoke_response.json()
+    assert revoke_data["embargo"]["active_recipient_keys"] == ["key-b"]
+    assert revoke_data["embargo"]["revoked_recipient_keys"] == ["key-a"]
+
+    get_response = client.get("/embargo/docE/1")
+    assert get_response.status_code == 200
+    get_data = get_response.json()
+    assert get_data["embargo"]["active_recipient_keys"] == ["key-b"]
+    assert get_data["embargo"]["revoked_recipient_keys"] == ["key-a"]
+
+
+# ── FOIA tracker ──────────────────────────────────────────────────────────────
+
+
+def test_foia_request_response_and_delay_proof(monkeypatch):
+    """FOIA tracker commits request metadata, logs responses, and returns delay proofs."""
+    monkeypatch.setattr(ui_app, "DEBUG_UI_ENABLED", True)
+    ui_app._commit_store.clear()
+    ui_app._foia_store.clear()
+
+    request_response = client.post(
+        "/foia/request",
+        json={
+            "request_id": "foia-001",
+            "agency": "Records Office",
+            "requester": "Jane Citizen",
+            "description": "Budget spreadsheet for 2025",
+            "submitted_at": "2026-03-01T00:00:00Z",
+            "response_due_at": "2026-03-05T00:00:00Z",
+        },
+    )
+    assert request_response.status_code == 200
+    request_data = request_response.json()
+    assert request_data["request"]["request_id"] == "foia-001"
+    assert request_data["request"]["request_receipt"]["receipt_type"] == "foia_request_submission"
+    assert request_data["delay_proof"]["receipt_type"] == "foia_delay_snapshot"
+    assert request_data["delay_proof"]["payload"]["proof_mode"] == "snapshot"
+    assert request_data["delay_proof"]["payload"]["pending"] is True
+
+    response_response = client.post(
+        "/foia/response",
+        json={
+            "request_id": "foia-001",
+            "response_received_at": "2026-03-07T00:00:00Z",
+            "response_summary": "Released with redactions",
+        },
+    )
+    assert response_response.status_code == 200
+    response_data = response_response.json()
+    assert response_data["request"]["response_received_at"] == "2026-03-07T00:00:00Z"
+    assert response_data["request"]["response_receipt"]["receipt_type"] == "foia_response_log"
+    assert response_data["delay_proof"]["receipt_type"] == "foia_delay_proof"
+    assert response_data["delay_proof"]["payload"]["proof_mode"] == "response-anchored"
+    assert response_data["delay_proof"]["payload"]["pending"] is False
+    assert response_data["delay_proof"]["payload"]["delayed"] is True
+    assert response_data["delay_proof"]["payload"]["delay_seconds"] == 172800
+
+    proof_response = client.get("/foia/foia-001/delay-proof")
+    assert proof_response.status_code == 200
+    proof_data = proof_response.json()
+    assert (
+        proof_data["delay_proof"]["payload"]["request_receipt_hash"]
+        == (request_data["request"]["request_receipt"]["receipt_hash"])
+    )
+    assert (
+        proof_data["delay_proof"]["payload"]["response_receipt_hash"]
+        == (response_data["request"]["response_receipt"]["receipt_hash"])
+    )
+
+
+def test_foia_response_before_due_date_is_not_delayed(monkeypatch):
+    """FOIA delay proof should show no delay when the response arrives before the due date."""
+    monkeypatch.setattr(ui_app, "DEBUG_UI_ENABLED", True)
+    ui_app._commit_store.clear()
+    ui_app._foia_store.clear()
+
+    client.post(
+        "/foia/request",
+        json={
+            "request_id": "foia-002",
+            "agency": "City Clerk",
+            "requester": "Alex Example",
+            "description": "Meeting minutes",
+            "submitted_at": "2026-03-01T00:00:00Z",
+            "response_due_at": "2026-03-05T00:00:00Z",
+        },
+    )
+
+    response = client.post(
+        "/foia/response",
+        json={
+            "request_id": "foia-002",
+            "response_received_at": "2026-03-04T12:00:00Z",
+            "response_summary": "Released in full",
+        },
+    )
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["delay_proof"]["payload"]["delayed"] is False
+    assert data["delay_proof"]["payload"]["delay_seconds"] == 0
+
+
 # ── New panel HTML presence ──────────────────────────────────────────────────
 
 
@@ -423,3 +588,16 @@ def test_index_has_redaction_panel(monkeypatch):
     assert response.status_code == 200
     assert "Redaction Interface" in response.text
     assert "redact-sections" in response.text
+
+
+def test_index_has_foia_and_embargo_panels(monkeypatch):
+    """Root page should include FOIA tracker and embargo management panels."""
+    monkeypatch.setattr(ui_app, "DEBUG_UI_ENABLED", True)
+    monkeypatch.setattr(ui_app, "_fetch_json", lambda path: [])
+
+    response = client.get("/")
+    assert response.status_code == 200
+    assert "FOIA Request Tracker" in response.text
+    assert "foia-request-form" in response.text
+    assert "Embargo Management" in response.text
+    assert "embargo-doc-id" in response.text
