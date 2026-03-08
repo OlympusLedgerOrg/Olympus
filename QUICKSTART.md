@@ -556,7 +556,7 @@ See `proofs/README.md` for full circuit documentation.
 
 1. **Read the documentation**: Start with `README.md` and `docs/00_overview.md`
 2. **Explore the protocol**: Check `protocol/` for core primitives
-3. **Run examples**: See `examples/` for usage patterns
+3. **Run examples**: See `examples/` for usage patterns and the new walkthrough notebooks (`*.ipynb`)
 4. **Review tests**: `tests/` shows expected behavior
 5. **Read CONTRIBUTING.md**: Development guidelines and workflow
 6. **Review ASSESSMENT.md**: Repository health and improvement roadmap
