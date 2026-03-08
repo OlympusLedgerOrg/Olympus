@@ -66,10 +66,12 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
 
 from .hashes import SNARK_SCALAR_FIELD, record_key
 from .ssmf import ExistenceProof, verify_proof
+from .zkp import Groth16Prover, ZKProof
 
 
 # Record-type namespace used to key Poseidon roots in the SMT.
@@ -182,6 +184,43 @@ class ZKPublicInputs:
     revealed_count: int
 
 
+def verify_zk_redaction(proof_blob: dict[str, Any], public_inputs: ZKPublicInputs) -> bool:
+    """
+    Verify a Groth16 redaction proof against the redaction_validity verification key.
+
+    Args:
+        proof_blob: Parsed Groth16 proof JSON (snarkjs-style ``pi_a/pi_b/pi_c``).
+        public_inputs: Public signals for the redaction circuit.
+
+    Returns:
+        ``True`` when snarkjs verifies the proof; ``False`` on verification
+        failure, malformed inputs, missing verifier artifacts, or runtime errors.
+        This boolean API is intentionally non-throwing so callers can treat all
+        verification failures uniformly.
+    """
+    try:
+        public_signals = [
+            str(int(public_inputs.original_root)),
+            str(int(public_inputs.redacted_commitment)),
+            str(int(public_inputs.revealed_count)),
+        ]
+    except (TypeError, ValueError):
+        return False
+
+    repo_root = Path(__file__).resolve().parent.parent
+    circuits_dir = repo_root / "proofs" / "circuits"
+    vkey_path = repo_root / "proofs" / "keys" / "verification_keys" / "redaction_validity_vkey.json"
+    prover = Groth16Prover(circuits_dir=circuits_dir)
+    proof = ZKProof(proof=proof_blob, public_signals=public_signals, circuit="redaction_validity")
+
+    try:
+        return prover.verify(proof=proof, verification_key_path=vkey_path)
+    except (FileNotFoundError, OSError, ValueError):
+        # Verification failures and verifier-environment errors are collapsed
+        # to False by design for a strictly boolean verification API.
+        return False
+
+
 @dataclass
 class RedactionProofWithLedger:
     """
@@ -257,23 +296,20 @@ class RedactionProofWithLedger:
         """
         Verify both the SMT anchor and (optionally) the ZK proof.
 
-        The ZK verifier is intentionally pluggable because Groth16 proof
-        verification requires a language-specific binding to snarkjs/arkworks
-        that is not yet implemented in Python.  Callers may inject a verifier
-        once one is available without changing this interface.
+        By default, this method verifies the Groth16 proof using
+        :func:`verify_zk_redaction`. A custom *zk_verifier* may still be
+        provided for testing or alternate verification backends.
 
         Args:
             smt_root_hash: The 32-byte SMT root hash; passed to
                            :meth:`verify_smt_anchor`.
             zk_verifier: Optional callable with signature
-                         ``(zk_proof, zk_public_inputs) -> bool``.  When
-                         ``None``, the ZK proof is *not* verified (anchor-only
-                         mode).  Pass a real verifier to enable full
-                         end-to-end validation.
+                         ``(zk_proof, zk_public_inputs) -> bool``. When
+                         provided, this overrides the default verifier.
 
         Returns:
-            ``True`` if the SMT anchor check passes and, when a *zk_verifier*
-            is supplied, the ZK proof is also valid; ``False`` otherwise.
+            ``True`` if both the SMT anchor and ZK proof checks pass;
+            ``False`` otherwise.
         """
         if not self.verify_smt_anchor(smt_root_hash):
             return False
@@ -281,4 +317,4 @@ class RedactionProofWithLedger:
         if zk_verifier is not None:
             return zk_verifier(self.zk_proof, self.zk_public_inputs)
 
-        return True
+        return verify_zk_redaction(self.zk_proof, self.zk_public_inputs)

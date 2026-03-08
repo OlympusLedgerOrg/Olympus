@@ -59,10 +59,11 @@ A verifier holding a `RedactionProofWithLedger` bundle performs two independent 
      `zk_public_inputs.original_root`.
    - Confirm the proof is tied to a specific committed SMT root (from a ledger entry).
 
-2. **ZK proof check** (`verify_all` with a `zk_verifier` hook):
-   - Pass the Groth16 proof blob and public inputs to a language-specific
-     snarkjs/arkworks binding.
+2. **ZK proof check** (`verify_all` / `verify_zk_redaction`):
+   - By default, `verify_all` invokes `verify_zk_redaction`, which calls
+     `snarkjs groth16 verify` via the Python `Groth16Prover` bridge.
    - The public inputs include `originalRoot`, `redactedCommitment`, and `revealedCount`.
+   - A custom verifier hook can still be supplied to `verify_all` when needed.
 
 Because step (1) confirms the Poseidon root is recorded in the ledger, and step (2)
 confirms the ZK proof is valid for that same root, a verifier gains end-to-end
@@ -107,4 +108,3 @@ Values outside [0, SNARK_SCALAR_FIELD) are rejected with `ValueError`.
 | `RedactionProtocol.commit_document_dual` | `protocol/redaction.py` |
 | `RedactionProtocol.create_redaction_proof_with_ledger` | `protocol/redaction.py` |
 | Tests | `tests/test_redaction_ledger.py` |
-
