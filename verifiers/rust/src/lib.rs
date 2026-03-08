@@ -5,9 +5,9 @@
 use blake3;
 use hex;
 
-/// Constants for domain separation
-const LEAF_PREFIX: &[u8] = b"LEAF";
-const NODE_PREFIX: &[u8] = b"NODE";
+/// Constants for domain separation - must match protocol/hashes.py
+const LEAF_PREFIX: &[u8] = b"OLY:LEAF:V1";
+const NODE_PREFIX: &[u8] = b"OLY:NODE:V1";
 const HASH_SEPARATOR: &[u8] = b"|";
 
 /// Compute BLAKE3 hash of data
@@ -184,5 +184,104 @@ mod tests {
         let leaves: Vec<Vec<u8>> = vec![];
         let result = compute_merkle_root(&leaves);
         assert!(result.is_err());
+    }
+
+    // ---- Conformance tests against verifiers/test_vectors/vectors.json ----
+    // Vectors are hard-coded here (generated from the Python reference implementation)
+    // to avoid a file I/O dependency in the Rust test harness.
+
+    #[test]
+    fn conformance_blake3_raw() {
+        let cases: &[(&[u8], &str)] = &[
+            (b"Hello, Olympus!", "31948d8be54169e9a5b9e4ebeeb02dc233a82778e8e07b41fb09c0925780c469"),
+            (b"", "af1349b9f5f9a1a6a0404dea36dcc9499bcb25c9adc112b7cc9a93cae41f3262"),
+        ];
+        for (input, expected) in cases {
+            let got = hex::encode(compute_blake3(input));
+            assert_eq!(got, *expected, "blake3_raw({:?})", input);
+        }
+    }
+
+    #[test]
+    fn conformance_merkle_leaf_hash() {
+        let cases: &[(&[u8], &str)] = &[
+            (b"leaf1", "ca49d51cdd54cf54fc89c04b1d2abda03f0e7474d0af83ce143e7520e2eff199"),
+            (b"alpha", "9cdaa796deeaec992a83d52101921e788ca4e2f959b47316a00fa43aa1ef9dc5"),
+            (b"beta",  "23ffd41f2e47a101c0b510809770af0aefb2c293d5114989d69abe3384704720"),
+            (b"gamma", "9cc9d6578dab4333405bc3fd06579f13e41aeab1770b062617a2037acaa01626"),
+        ];
+        for (input, expected) in cases {
+            let got = hex::encode(merkle_leaf_hash(input));
+            assert_eq!(got, *expected, "merkle_leaf_hash({:?})", input);
+        }
+    }
+
+    #[test]
+    fn conformance_merkle_parent_hash() {
+        let left  = hex::decode("9cdaa796deeaec992a83d52101921e788ca4e2f959b47316a00fa43aa1ef9dc5").unwrap();
+        let right = hex::decode("23ffd41f2e47a101c0b510809770af0aefb2c293d5114989d69abe3384704720").unwrap();
+        let left_arr: [u8; 32]  = left.try_into().unwrap();
+        let right_arr: [u8; 32] = right.try_into().unwrap();
+        let got = hex::encode(merkle_parent_hash(&left_arr, &right_arr));
+        assert_eq!(got, "b1463a3156ed73e5df9d0101533766d62381dbb6e0b5b23a4c1b651095ba36dc");
+    }
+
+    #[test]
+    fn conformance_merkle_root() {
+        let cases: &[(&[&[u8]], &str)] = &[
+            (&[b"solo"], "22997be8efb920766d4a869cb3c0562f7ad5b8020887bc501f58029964485a11"),
+            (&[b"alpha", b"beta"], "b1463a3156ed73e5df9d0101533766d62381dbb6e0b5b23a4c1b651095ba36dc"),
+            (&[b"alpha", b"beta", b"gamma"], "a75ef97f9f64aa774b70c281d2bbf8129a87dd224ba61cbaafbe6977885283e7"),
+        ];
+        for (leaves_raw, expected) in cases {
+            let leaves: Vec<Vec<u8>> = leaves_raw.iter().map(|s| s.to_vec()).collect();
+            let got = compute_merkle_root(&leaves).unwrap();
+            assert_eq!(got, *expected, "merkle_root({:?})", leaves_raw);
+        }
+    }
+
+    #[test]
+    fn conformance_merkle_proof() {
+        // Proof for leaf 0 in 2-leaf tree ['alpha','beta'] — valid
+        let leaf_hash_0 = hex::decode("9cdaa796deeaec992a83d52101921e788ca4e2f959b47316a00fa43aa1ef9dc5").unwrap();
+        let proof_valid = MerkleProof {
+            leaf_hash: leaf_hash_0.try_into().unwrap(),
+            siblings: vec![MerkleSibling {
+                hash: "23ffd41f2e47a101c0b510809770af0aefb2c293d5114989d69abe3384704720".to_string(),
+                position: "right".to_string(),
+            }],
+            root_hash: "b1463a3156ed73e5df9d0101533766d62381dbb6e0b5b23a4c1b651095ba36dc".to_string(),
+        };
+        assert!(verify_merkle_proof(&proof_valid).unwrap(), "valid proof should pass");
+
+        // Tampered proof — wrong root hash — must fail
+        let leaf_hash_1 = hex::decode("9cdaa796deeaec992a83d52101921e788ca4e2f959b47316a00fa43aa1ef9dc5").unwrap();
+        let proof_tampered = MerkleProof {
+            leaf_hash: leaf_hash_1.try_into().unwrap(),
+            siblings: vec![MerkleSibling {
+                hash: "23ffd41f2e47a101c0b510809770af0aefb2c293d5114989d69abe3384704720".to_string(),
+                position: "right".to_string(),
+            }],
+            root_hash: "0000000000000000000000000000000000000000000000000000000000000000".to_string(),
+        };
+        assert!(!verify_merkle_proof(&proof_tampered).unwrap(), "tampered proof should fail");
+
+        // Proof for leaf 1 in 3-leaf tree ['alpha','beta','gamma'] — valid
+        let leaf_hash_2 = hex::decode("23ffd41f2e47a101c0b510809770af0aefb2c293d5114989d69abe3384704720").unwrap();
+        let proof_3leaf = MerkleProof {
+            leaf_hash: leaf_hash_2.try_into().unwrap(),
+            siblings: vec![
+                MerkleSibling {
+                    hash: "9cdaa796deeaec992a83d52101921e788ca4e2f959b47316a00fa43aa1ef9dc5".to_string(),
+                    position: "left".to_string(),
+                },
+                MerkleSibling {
+                    hash: "079d81bba4942d4e0508ae6560571a309125872610956c26d93849e9dc119b30".to_string(),
+                    position: "right".to_string(),
+                },
+            ],
+            root_hash: "a75ef97f9f64aa774b70c281d2bbf8129a87dd224ba61cbaafbe6977885283e7".to_string(),
+        };
+        assert!(verify_merkle_proof(&proof_3leaf).unwrap(), "3-leaf proof should pass");
     }
 }

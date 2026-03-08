@@ -5,7 +5,7 @@
   "main": "verifier.js",
   "types": "verifier.d.ts",
   "scripts": {
-    "test": "node test.js"
+    "test": "node test.js && node test_conformance.js"
   },
   "keywords": [
     "olympus",

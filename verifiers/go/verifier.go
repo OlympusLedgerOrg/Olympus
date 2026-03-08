@@ -5,14 +5,15 @@ import (
 	"bytes"
 	"encoding/hex"
 	"errors"
+	"strings"
 
 	"github.com/zeebo/blake3"
 )
 
-// Constants for domain separation
+// Constants for domain separation - must match protocol/hashes.py
 const (
-	LeafPrefix = "LEAF"
-	NodePrefix = "NODE"
+	LeafPrefix    = "OLY:LEAF:V1"
+	NodePrefix    = "OLY:NODE:V1"
 	HashSeparator = "|"
 )
 
@@ -26,7 +27,7 @@ func ComputeBlake3(data []byte) []byte {
 func VerifyBlake3Hash(data []byte, expectedHash string) bool {
 	actualHash := ComputeBlake3(data)
 	actualHex := hex.EncodeToString(actualHash)
-	return actualHex == expectedHash
+	return actualHex == strings.ToLower(expectedHash)
 }
 
 // MerkleLeafHash computes the domain-separated hash of a leaf
