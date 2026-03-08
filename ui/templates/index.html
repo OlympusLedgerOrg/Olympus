@@ -5,16 +5,50 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Olympus Debug Console</title>
     <style>
-        body { font-family: sans-serif; margin: 1rem 2rem; }
-        .banner { background: #fee2e2; border: 1px solid #ef4444; color: #7f1d1d; padding: .5rem; margin-bottom: .5rem; }
-        .panel { border: 1px solid #ddd; margin-bottom: 1rem; padding: .75rem; border-radius: 6px; }
-        .ok { color: #166534; }
-        .bad { color: #991b1b; font-weight: 700; }
-        code { font-size: .85rem; }
+        :root {
+            --bg: #f8fafc;
+            --surface: #ffffff;
+            --surface-muted: #f1f5f9;
+            --text: #0f172a;
+            --muted-text: #334155;
+            --border: #cbd5e1;
+            --accent: #0f766e;
+            --danger-bg: #fee2e2;
+            --danger-border: #ef4444;
+            --danger-text: #7f1d1d;
+            --ok: #166534;
+            --bad: #991b1b;
+        }
+
+        @media (prefers-color-scheme: dark) {
+            :root {
+                --bg: #020617;
+                --surface: #0f172a;
+                --surface-muted: #111827;
+                --text: #e2e8f0;
+                --muted-text: #94a3b8;
+                --border: #334155;
+                --accent: #2dd4bf;
+                --danger-bg: #450a0a;
+                --danger-border: #dc2626;
+                --danger-text: #fecaca;
+                --ok: #4ade80;
+                --bad: #f87171;
+            }
+        }
+
+        body { background: var(--bg); color: var(--text); font-family: sans-serif; margin: 1rem 2rem; }
+        h1, h2, h3, h4 { color: var(--accent); }
+        p { color: var(--muted-text); }
+        .banner { background: var(--danger-bg); border: 1px solid var(--danger-border); color: var(--danger-text); padding: .5rem; margin-bottom: .5rem; }
+        .panel { background: var(--surface); border: 1px solid var(--border); margin-bottom: 1rem; padding: .75rem; border-radius: 6px; }
+        .ok { color: var(--ok); }
+        .bad { color: var(--bad); font-weight: 700; }
+        code { font-size: .85rem; overflow-wrap: break-word; }
         table { width: 100%; border-collapse: collapse; }
-        td, th { border: 1px solid #ddd; padding: .25rem .4rem; text-align: left; }
+        td, th { border: 1px solid var(--border); padding: .25rem .4rem; text-align: left; }
         input { margin-right: .5rem; }
-        pre { background: #f8fafc; border: 1px solid #ddd; padding: .75rem; overflow: auto; }
+        pre { background: var(--surface-muted); border: 1px solid var(--border); padding: .75rem; overflow: auto; }
     </style>
 </head>
 <body>
