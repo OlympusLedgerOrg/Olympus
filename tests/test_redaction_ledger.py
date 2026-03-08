@@ -9,6 +9,8 @@ Coverage:
 - Tamper detection: modified ZK public input root, modified SMT value
 """
 
+from unittest.mock import patch
+
 import pytest
 
 from protocol.hashes import SNARK_SCALAR_FIELD, record_key
@@ -20,6 +22,7 @@ from protocol.redaction_ledger import (
     poseidon_root_from_bytes,
     poseidon_root_record_key,
     poseidon_root_to_bytes,
+    verify_zk_redaction,
 )
 from protocol.ssmf import ExistenceProof, SparseMerkleTree
 
@@ -200,9 +203,13 @@ def test_verify_smt_anchor_fails_if_smt_value_tampered():
 
 
 def test_verify_all_without_zk_verifier():
-    """verify_all without a ZK verifier relies solely on SMT anchor."""
+    """verify_all without an override uses the default Groth16 verifier."""
     smt, wrapped = make_fixture()
-    assert wrapped.verify_all(smt.get_root()) is True
+
+    with patch("protocol.redaction_ledger.verify_zk_redaction", return_value=True) as mock_verify:
+        assert wrapped.verify_all(smt.get_root()) is True
+        mock_verify.assert_called_once_with(wrapped.zk_proof, wrapped.zk_public_inputs)
+
     assert wrapped.verify_all(bytes(32)) is False
 
 
@@ -244,6 +251,37 @@ def test_verify_all_zk_verifier_receives_correct_args():
 
     assert captured["proof"] is wrapped.zk_proof
     assert captured["inputs"] is wrapped.zk_public_inputs
+
+
+def test_verify_zk_redaction_maps_public_inputs_and_calls_prover():
+    """verify_zk_redaction forwards a redaction_validity proof to Groth16Prover."""
+    proof_blob = {"pi_a": ["1", "2"], "pi_b": [["3", "4"], ["5", "6"]], "pi_c": ["7", "8"]}
+    public_inputs = ZKPublicInputs(
+        original_root="123",
+        redacted_commitment="456",
+        revealed_count=2,
+    )
+
+    with patch("protocol.redaction_ledger.Groth16Prover.verify", return_value=True) as mock_verify:
+        assert verify_zk_redaction(proof_blob, public_inputs) is True
+
+    zk_proof_arg = mock_verify.call_args.args[0]
+    vkey_arg = mock_verify.call_args.kwargs["verification_key_path"]
+
+    assert zk_proof_arg.proof is proof_blob
+    assert zk_proof_arg.circuit == "redaction_validity"
+    assert zk_proof_arg.public_signals == ["123", "456", "2"]
+    assert vkey_arg.name == "redaction_validity_vkey.json"
+
+
+def test_verify_zk_redaction_rejects_invalid_public_inputs():
+    """Non-numeric public inputs are rejected before snarkjs invocation."""
+    bad_inputs = ZKPublicInputs(
+        original_root="not-a-number",
+        redacted_commitment="456",
+        revealed_count=1,
+    )
+    assert verify_zk_redaction({"pi_a": [], "pi_b": [], "pi_c": []}, bad_inputs) is False
 
 
 # ---------------------------------------------------------------------------
