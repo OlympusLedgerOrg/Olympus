@@ -193,6 +193,14 @@ def _is_chain_broken(entries: list[dict[str, Any]]) -> bool:
     return False
 
 
+def _exception_summary(exc: Exception) -> str:
+    """Return a compact one-line summary for debug UI status messages."""
+    message = str(exc).splitlines()[0]
+    if not message:
+        return exc.__class__.__name__
+    return f"{exc.__class__.__name__}: {message}"
+
+
 def _poseidon_vector_parity_report() -> dict[str, Any]:
     """Check Python Poseidon outputs against the circomlibjs reference vectors."""
     if shutil.which("node") is None:
@@ -223,11 +231,10 @@ def _poseidon_vector_parity_report() -> dict[str, Any]:
         )
         payload = json.loads(result.stdout)
     except (json.JSONDecodeError, subprocess.CalledProcessError, subprocess.TimeoutExpired) as exc:
-        detail = str(exc).splitlines()[0] if str(exc) else exc.__class__.__name__
         return {
             "status": "failed",
             "verified": False,
-            "reason": f"circomlibjs parity replay failed ({exc.__class__.__name__}: {detail})",
+            "reason": f"circomlibjs parity replay failed ({_exception_summary(exc)})",
             "vectors_checked": 0,
             "mismatches": [],
         }
