@@ -18,7 +18,7 @@ policy, or perfect availability under every operational failure.
 
 ## Adversary Types
 
-| Adversary | Capability |
+| Adversary | Attack Vector |
 | --- | --- |
 | Government actor | Attempts evidence suppression or publication delay |
 | Malicious node | Tries to rewrite history or sign a conflicting shard header |

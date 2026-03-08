@@ -198,7 +198,7 @@ The prototype uses **quorum acknowledgment consensus**, not blind leader trust:
 - The originating Steward signs the shard header hash first.
 - Guardians independently verify the header and sign acknowledgments over that exact `header_hash`.
 - Finality threshold:
-  - minimum prototype threshold: `Q >= ceil((N + 1) / 2)`
+  - minimum prototype threshold: `Q >= floor(N / 2) + 1`
   - recommended Byzantine threshold: `Q >= ceil(2N / 3)`
 - If two distinct headers claim the same `(shard_id, seq)` or the same `previous_header_hash`, the system has detected a fork.
 - Fork resolution follows `docs/10_federation_governance.md`: highest Guardian quorum weight, then earliest valid anchor, then lowest lexicographic `header_hash`.

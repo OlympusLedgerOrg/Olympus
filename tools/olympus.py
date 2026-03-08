@@ -82,7 +82,12 @@ def _load_registry(path: str | None) -> FederationRegistry:
 def _fetch_json(url: str) -> dict | list:
     """Fetch JSON from a federation node endpoint."""
     with urlopen(url, timeout=5) as response:
-        return json.loads(response.read().decode("utf-8"))
+        payload = response.read().decode("utf-8")
+        try:
+            return json.loads(payload)
+        except json.JSONDecodeError as exc:
+            preview = payload[:120].replace("\n", " ")
+            raise ValueError(f"Invalid JSON returned by {url}: {preview!r}") from exc
 
 
 def _cmd_node_list(args: argparse.Namespace) -> int:
@@ -124,6 +129,7 @@ def _cmd_node_start(args: argparse.Namespace) -> int:
         print("DATABASE_URL is required", file=sys.stderr)
         return 1
 
+    # Import here so non-server CLI commands do not pay the FastAPI/uvicorn import cost.
     import uvicorn
 
     from api.app import app
@@ -154,7 +160,7 @@ def _cmd_federation_status(args: argparse.Namespace) -> int:
         for node in active_nodes:
             try:
                 shards = _fetch_json(f"{node.endpoint}/shards")
-            except (HTTPError, URLError, TimeoutError, ValueError, json.JSONDecodeError):
+            except (HTTPError, URLError, ValueError):
                 continue
 
             if not isinstance(shards, list):

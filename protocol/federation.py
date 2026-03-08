@@ -104,6 +104,7 @@ class FederationRegistry:
         active_count = len(self.active_nodes())
         if active_count == 0:
             raise ValueError("Federation registry has no active nodes")
+        # Require at least a two-thirds quorum of active federation members.
         return math.ceil((2 * active_count) / 3)
 
 
@@ -140,7 +141,10 @@ def verify_federated_header_signatures(
     for signature in signatures:
         if signature.node_id in seen_nodes:
             continue
-        node = registry.get_node(signature.node_id)
+        try:
+            node = registry.get_node(signature.node_id)
+        except ValueError:
+            continue
         if not node.active:
             continue
         if verify_header(header, signature.signature, node.verify_key()):

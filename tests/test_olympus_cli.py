@@ -39,7 +39,7 @@ def test_olympus_node_list_outputs_registry_nodes() -> None:
     assert result.returncode == 0
     assert "olympus-node-1" in result.stdout
     assert "City Records Office" in result.stdout
-    assert "https://node3.olympus.org" in result.stdout
+    assert "State Auditor" in result.stdout
 
 
 def test_olympus_federation_status_reports_counts_without_live_nodes() -> None:

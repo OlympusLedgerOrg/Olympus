@@ -22,6 +22,6 @@ def test_threat_model_notebook_exists_and_has_expected_sections():
     assert "Attack scenarios" in combined_source
     assert "Selective withholding before commitment" in combined_source
     assert "If I'm a malicious agency trying to fake a redaction" in combined_source
-    assert "fake_redaction_attempts" in combined_source
+    assert "adversarial_redaction_attempts" in combined_source
     assert "outside Olympus coverage" in combined_source
     assert "classify_event" in combined_source

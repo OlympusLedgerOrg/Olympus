@@ -19,6 +19,11 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 REGISTRY_PATH = REPO_ROOT / "examples" / "federation_registry.json"
 
 
+def _test_signing_key(seed_byte: int):
+    """Return a deterministic test-only Ed25519 key for federation quorum tests."""
+    return get_signing_key_from_seed(bytes([seed_byte]) * 32)
+
+
 def test_federation_registry_loads_static_nodes() -> None:
     """Static federation registry should expose node identity metadata."""
     registry = FederationRegistry.from_file(REGISTRY_PATH)
@@ -45,8 +50,8 @@ def test_federated_shard_header_reaches_quorum_with_two_of_three_signatures() ->
     )
 
     signatures = [
-        sign_federated_header(header, "olympus-node-1", get_signing_key_from_seed(bytes([1]) * 32)),
-        sign_federated_header(header, "olympus-node-2", get_signing_key_from_seed(bytes([2]) * 32)),
+        sign_federated_header(header, "olympus-node-1", _test_signing_key(1)),
+        sign_federated_header(header, "olympus-node-2", _test_signing_key(2)),
     ]
 
     valid_signatures = verify_federated_header_signatures(header, signatures, registry)
@@ -76,12 +81,12 @@ def test_federated_quorum_rejects_invalid_or_duplicate_signatures() -> None:
     duplicate_signature = sign_federated_header(
         header,
         "olympus-node-1",
-        get_signing_key_from_seed(bytes([1]) * 32),
+        _test_signing_key(1),
     )
     wrong_header_signature = sign_federated_header(
         other_header,
         "olympus-node-2",
-        get_signing_key_from_seed(bytes([2]) * 32),
+        _test_signing_key(2),
     )
 
     signatures = [duplicate_signature, duplicate_signature, wrong_header_signature]
