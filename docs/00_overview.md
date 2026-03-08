@@ -50,3 +50,24 @@ Each pipeline stage maps to specific modules and functions in the `protocol/` pa
 | | `protocol/ledger.py` | `Ledger.verify_chain()` |
 
 The `tests/test_workflow_conformance.py` test suite verifies that all documented pipeline functions remain importable and callable, catching undocumented changes automatically.
+
+## Specification Map
+
+- **Protocol specification**: `docs/09_protocol_spec.md` (normative pipeline, data structures, verification rules)
+- **Canonicalization**: `docs/02_canonicalization.md`
+- **Merkle commitments**: `docs/03_merkle_forest.md`
+- **Ledger and finality**: `docs/04_ledger_protocol.md`
+- **ZK redaction**: `docs/05_zk_redaction.md`
+- **External anchoring**: `docs/11_external_anchoring.md`
+- **Federation governance (Phase 1+)**: `docs/10_federation_governance.md`
+- **Protocol vs applications**: `docs/12_protocol_vs_applications.md`
+- **Public explorer interface**: `docs/13_public_explorer.md`
+- **Threat model**: `docs/01_threat_model.md` and `docs/threat_model_walkthrough.ipynb`
+
+## Protocol vs Applications
+
+Olympus treats the protocol (hashing, canonicalization, Merkle/ledger formats, proofs) as immutable and independently verifiable. Applications (APIs, explorers, ingestion services) consume protocol outputs but must not alter canonical bytes or ledger linkage. See `docs/12_protocol_vs_applications.md` for the boundary contract.
+
+## Public Explorer (Read-Only)
+
+A public explorer surfaces shard headers, ledger entries, proofs, and anchors without authentication. It is a read-only consumer of protocol artifacts and must provide links back to canonical JSON, proofs, and anchors for independent verification (see `docs/13_public_explorer.md`).
