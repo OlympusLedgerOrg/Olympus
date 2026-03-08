@@ -60,7 +60,8 @@ function verifyBlake3Hash(data, expectedHash) {
  */
 function merkleParentHash(leftHash, rightHash) {
   // Concatenate: NODE_PREFIX || HASH_SEPARATOR || left || HASH_SEPARATOR || right
-  const NODE_PREFIX = new TextEncoder().encode('NODE');
+  // Prefixes must match protocol/hashes.py: OLY:NODE:V1
+  const NODE_PREFIX = new TextEncoder().encode('OLY:NODE:V1');
   const HASH_SEPARATOR = new TextEncoder().encode('|');
 
   const combined = new Uint8Array(
@@ -92,7 +93,8 @@ function merkleParentHash(leftHash, rightHash) {
  */
 function merkleLeafHash(leafData) {
   // Hash with LEAF_PREFIX domain separation
-  const LEAF_PREFIX = new TextEncoder().encode('LEAF');
+  // Prefix must match protocol/hashes.py: OLY:LEAF:V1
+  const LEAF_PREFIX = new TextEncoder().encode('OLY:LEAF:V1');
   const HASH_SEPARATOR = new TextEncoder().encode('|');
 
   const combined = new Uint8Array(

@@ -1,0 +1,108 @@
+{
+  "version": "1",
+  "description": "Olympus cross-language conformance test vectors. Generated from the Python reference implementation (protocol/hashes.py, protocol/merkle.py). All hash values are lowercase hex strings.",
+  "domain_separation": {
+    "leaf_prefix": "OLY:LEAF:V1",
+    "node_prefix": "OLY:NODE:V1",
+    "hash_separator": "|"
+  },
+  "blake3_raw": [
+    {
+      "description": "BLAKE3 of ASCII string 'Hello, Olympus!'",
+      "input_utf8": "Hello, Olympus!",
+      "hash": "31948d8be54169e9a5b9e4ebeeb02dc233a82778e8e07b41fb09c0925780c469"
+    },
+    {
+      "description": "BLAKE3 of empty bytes",
+      "input_utf8": "",
+      "hash": "af1349b9f5f9a1a6a0404dea36dcc9499bcb25c9adc112b7cc9a93cae41f3262"
+    }
+  ],
+  "merkle_leaf_hash": [
+    {
+      "description": "Leaf hash of 'leaf1' — BLAKE3(OLY:LEAF:V1 || '|' || leaf_data)",
+      "input_utf8": "leaf1",
+      "hash": "ca49d51cdd54cf54fc89c04b1d2abda03f0e7474d0af83ce143e7520e2eff199"
+    },
+    {
+      "description": "Leaf hash of 'alpha'",
+      "input_utf8": "alpha",
+      "hash": "9cdaa796deeaec992a83d52101921e788ca4e2f959b47316a00fa43aa1ef9dc5"
+    },
+    {
+      "description": "Leaf hash of 'beta'",
+      "input_utf8": "beta",
+      "hash": "23ffd41f2e47a101c0b510809770af0aefb2c293d5114989d69abe3384704720"
+    },
+    {
+      "description": "Leaf hash of 'gamma'",
+      "input_utf8": "gamma",
+      "hash": "9cc9d6578dab4333405bc3fd06579f13e41aeab1770b062617a2037acaa01626"
+    }
+  ],
+  "merkle_parent_hash": [
+    {
+      "description": "Parent of leaf_hash('alpha') and leaf_hash('beta') — BLAKE3(OLY:NODE:V1 || '|' || left || '|' || right)",
+      "left_hash": "9cdaa796deeaec992a83d52101921e788ca4e2f959b47316a00fa43aa1ef9dc5",
+      "right_hash": "23ffd41f2e47a101c0b510809770af0aefb2c293d5114989d69abe3384704720",
+      "parent_hash": "b1463a3156ed73e5df9d0101533766d62381dbb6e0b5b23a4c1b651095ba36dc"
+    }
+  ],
+  "merkle_root": [
+    {
+      "description": "Root of 1-leaf tree ['solo']",
+      "leaves_utf8": ["solo"],
+      "root": "22997be8efb920766d4a869cb3c0562f7ad5b8020887bc501f58029964485a11"
+    },
+    {
+      "description": "Root of 2-leaf tree ['alpha', 'beta']",
+      "leaves_utf8": ["alpha", "beta"],
+      "root": "b1463a3156ed73e5df9d0101533766d62381dbb6e0b5b23a4c1b651095ba36dc"
+    },
+    {
+      "description": "Root of 3-leaf tree ['alpha', 'beta', 'gamma'] — odd leaf duplication applied",
+      "leaves_utf8": ["alpha", "beta", "gamma"],
+      "root": "a75ef97f9f64aa774b70c281d2bbf8129a87dd224ba61cbaafbe6977885283e7"
+    }
+  ],
+  "merkle_proof": [
+    {
+      "description": "Inclusion proof for leaf 0 in 2-leaf tree ['alpha', 'beta']. Must verify as valid.",
+      "leaf_hash": "9cdaa796deeaec992a83d52101921e788ca4e2f959b47316a00fa43aa1ef9dc5",
+      "leaf_index": 0,
+      "siblings": [
+        {"hash": "23ffd41f2e47a101c0b510809770af0aefb2c293d5114989d69abe3384704720", "position": "right"}
+      ],
+      "root_hash": "b1463a3156ed73e5df9d0101533766d62381dbb6e0b5b23a4c1b651095ba36dc",
+      "expected_valid": true
+    },
+    {
+      "description": "Inclusion proof for leaf 1 in 3-leaf tree ['alpha', 'beta', 'gamma']. Must verify as valid.",
+      "leaf_hash": "23ffd41f2e47a101c0b510809770af0aefb2c293d5114989d69abe3384704720",
+      "leaf_index": 1,
+      "siblings": [
+        {"hash": "9cdaa796deeaec992a83d52101921e788ca4e2f959b47316a00fa43aa1ef9dc5", "position": "left"},
+        {"hash": "079d81bba4942d4e0508ae6560571a309125872610956c26d93849e9dc119b30", "position": "right"}
+      ],
+      "root_hash": "a75ef97f9f64aa774b70c281d2bbf8129a87dd224ba61cbaafbe6977885283e7",
+      "expected_valid": true
+    },
+    {
+      "description": "Tampered proof — wrong root hash. Must verify as invalid.",
+      "leaf_hash": "9cdaa796deeaec992a83d52101921e788ca4e2f959b47316a00fa43aa1ef9dc5",
+      "leaf_index": 0,
+      "siblings": [
+        {"hash": "23ffd41f2e47a101c0b510809770af0aefb2c293d5114989d69abe3384704720", "position": "right"}
+      ],
+      "root_hash": "0000000000000000000000000000000000000000000000000000000000000000",
+      "expected_valid": false
+    }
+  ],
+  "poseidon_root": [
+    {
+      "description": "Poseidon Merkle root of 3-byte-string leaves ['doc1', 'doc2', 'doc3']. Leaves are converted via BLAKE3→field element before tree construction.",
+      "leaves_utf8": ["doc1", "doc2", "doc3"],
+      "root_decimal": "20679371205210647879274694938426569857462123059249235630121741487840610060424"
+    }
+  ]
+}

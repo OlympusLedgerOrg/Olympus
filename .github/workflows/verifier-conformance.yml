@@ -1,0 +1,87 @@
+name: Verifier Conformance
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [ main, copilot/** ]
+    paths:
+      - 'verifiers/**'
+      - 'protocol/hashes.py'
+      - 'protocol/merkle.py'
+  pull_request:
+    branches: [ main ]
+    paths:
+      - 'verifiers/**'
+      - 'protocol/hashes.py'
+      - 'protocol/merkle.py'
+
+concurrency:
+  group: verifiers-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  python-conformance:
+    name: Python CLI conformance
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install dependencies
+        run: python -m pip install -e ".[dev]"
+
+      - name: Run Python conformance tests
+        run: python verifiers/cli/test_conformance.py
+
+  go-conformance:
+    name: Go conformance
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.21"
+          cache: true
+          cache-dependency-path: verifiers/go/go.sum
+
+      - name: Run Go tests (including conformance)
+        working-directory: verifiers/go
+        run: go test ./...
+
+  rust-conformance:
+    name: Rust conformance
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust stable
+        run: rustup toolchain install stable --no-self-update && rustup default stable
+
+      - name: Run Rust tests (including conformance)
+        working-directory: verifiers/rust
+        run: cargo test
+
+  javascript-conformance:
+    name: JavaScript conformance
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: verifiers/javascript/package-lock.json
+
+      - name: Install JS dependencies
+        working-directory: verifiers/javascript
+        run: npm install
+
+      - name: Run JavaScript tests (including conformance)
+        working-directory: verifiers/javascript
+        run: npm test
