@@ -326,6 +326,133 @@ def test_verify_disabled_returns_404(monkeypatch):
     assert response.status_code == 404
 
 
+# ── Civic tooling endpoints ───────────────────────────────────────────────────
+
+
+def test_voting_record_uses_openstates_data(monkeypatch):
+    """GET /civic/voting-record normalizes OpenStates people and bill vote payloads."""
+    monkeypatch.setattr(ui_app, "DEBUG_UI_ENABLED", True)
+
+    def fake_openstates(path: str, params: dict[str, object]):
+        if path == "/people":
+            return {
+                "results": [
+                    {
+                        "id": "ocd-person/123",
+                        "name": "Jane Doe",
+                        "party": "Independent",
+                        "current_role": {"district": "7", "title": "Representative"},
+                    }
+                ]
+            }
+        if path == "/bills":
+            assert params["include"] == ["votes"]
+            return {
+                "results": [
+                    {
+                        "identifier": "HB 101",
+                        "title": "Transit Expansion Act",
+                        "classification": ["bill"],
+                        "votes": [
+                            {
+                                "motion_text": "Final passage",
+                                "date": "2026-02-01",
+                                "result": "passed",
+                                "organization": {"name": "House"},
+                                "votes": [
+                                    {"person_id": "ocd-person/123", "option": "yes"},
+                                    {"person_id": "ocd-person/999", "option": "no"},
+                                ],
+                            }
+                        ],
+                    }
+                ]
+            }
+        raise AssertionError(f"Unexpected path: {path}")
+
+    monkeypatch.setattr(ui_app, "_fetch_openstates_json", fake_openstates)
+
+    response = client.get("/civic/voting-record?name=Jane%20Doe&jurisdiction=Texas")
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["ok"] is True
+    assert data["representative"]["name"] == "Jane Doe"
+    assert data["source"]["provider"] == "OpenStates"
+    assert data["votes"] == [
+        {
+            "bill_identifier": "HB 101",
+            "bill_title": "Transit Expansion Act",
+            "classification": ["bill"],
+            "motion": "Final passage",
+            "date": "2026-02-01",
+            "result": "passed",
+            "option": "yes",
+            "organization": "House",
+        }
+    ]
+
+
+def test_simplify_bill_returns_summary_and_prompt_chain(monkeypatch):
+    """POST /civic/simplify-bill returns a deterministic summary with visible prompts."""
+    monkeypatch.setattr(ui_app, "DEBUG_UI_ENABLED", True)
+
+    response = client.post(
+        "/civic/simplify-bill",
+        json={
+            "text": (
+                "The department shall publish an annual housing report by January 15, 2027. "
+                "The agency may not spend more than $250,000 without council approval."
+            )
+        },
+    )
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["ok"] is True
+    assert "must publish an annual housing report" in data["plain_english_summary"].lower()
+    assert data["amounts"] == ["$250,000"]
+    assert "January 15, 2027" in data["dates"][0]
+    assert [stage["stage"] for stage in data["prompt_chain"]] == [
+        "extract_obligations",
+        "translate_for_constituents",
+        "flag_open_questions",
+    ]
+
+
+def test_geofence_preview_returns_overlap_counts_and_svg(monkeypatch):
+    """POST /civic/geofence-preview computes overlap and returns an SVG map preview."""
+    monkeypatch.setattr(ui_app, "DEBUG_UI_ENABLED", True)
+
+    response = client.post(
+        "/civic/geofence-preview",
+        json={
+            "district_geojson": {
+                "type": "Polygon",
+                "coordinates": [
+                    [[-97.8, 30.2], [-97.7, 30.2], [-97.7, 30.3], [-97.8, 30.3], [-97.8, 30.2]]
+                ],
+            },
+            "constituents": [
+                {"name": "Inside Resident", "lat": 30.25, "lon": -97.75},
+                {"name": "Outside Resident", "lat": 30.35, "lon": -97.75},
+            ],
+        },
+    )
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["ok"] is True
+    assert data["district_count"] == 1
+    assert data["overlap_count"] == 1
+    assert data["outside_count"] == 1
+    assert "<svg" in data["svg"]
+    assert data["constituents"] == [
+        {"name": "Inside Resident", "lat": 30.25, "lon": -97.75, "inside": True},
+        {"name": "Outside Resident", "lat": 30.35, "lon": -97.75, "inside": False},
+    ]
+
+
 # ── New panel HTML presence ──────────────────────────────────────────────────
 
 
@@ -360,3 +487,18 @@ def test_index_has_redaction_panel(monkeypatch):
     assert response.status_code == 200
     assert "Redaction Interface" in response.text
     assert "redact-sections" in response.text
+
+
+def test_index_has_civic_tooling_panels(monkeypatch):
+    """Root page should include the new civic tooling prototype panels."""
+    monkeypatch.setattr(ui_app, "DEBUG_UI_ENABLED", True)
+    monkeypatch.setattr(ui_app, "_fetch_json", lambda path: [])
+
+    response = client.get("/")
+    assert response.status_code == 200
+    assert "Representative Voting Record Tracker" in response.text
+    assert "Bill Text Simplifier Pipeline" in response.text
+    assert "Geofence Boundary Visualizer" in response.text
+    assert "votes-form" in response.text
+    assert "simplify-form" in response.text
+    assert "geofence-form" in response.text

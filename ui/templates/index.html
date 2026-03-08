@@ -54,6 +54,8 @@
         .section-item { display: flex; align-items: flex-start; gap: .5rem; margin-bottom: .25rem; }
         .section-item input[type=checkbox] { margin-top: .2rem; flex-shrink: 0; }
         .section-text { font-size: .85rem; color: var(--muted-text); white-space: pre-wrap; word-break: break-word; }
+        textarea { width: 100%; min-height: 7rem; margin-bottom: .5rem; background: var(--surface-muted); color: var(--text); border: 1px solid var(--border); }
+        .map-preview svg { width: 100%; max-width: 420px; border: 1px solid var(--border); background: var(--surface-muted); }
     </style>
 </head>
 <body>
@@ -118,6 +120,51 @@
             </div>
         </div>
         <pre id="redact-result">Load a committed document to select sections.</pre>
+    </div>
+
+    <!-- ── Civic Tooling Prototypes ───────────────────────────────────────── -->
+    <div class="panel">
+        <h2>Representative Voting Record Tracker</h2>
+        <p>Look up a legislator by name and jurisdiction, then pull recent recorded votes from the OpenStates API.</p>
+        <form id="votes-form">
+            <div class="row">
+                <input type="text" name="name" placeholder="Representative name" required />
+                <input type="text" name="jurisdiction" placeholder="Jurisdiction (e.g. Texas)" required />
+                <input type="text" name="chamber" placeholder="Chamber (optional)" />
+                <button type="submit">Load votes</button>
+            </div>
+        </form>
+        <pre id="votes-result">Search OpenStates for a representative to see recent votes.</pre>
+    </div>
+
+    <div class="panel">
+        <h2>Bill Text Simplifier Pipeline</h2>
+        <p>Paste bill text, generate a deterministic plain-English summary, and inspect the prompt chain used for each stage.</p>
+        <form id="simplify-form">
+            <textarea id="simplify-text" placeholder="Paste bill text here..." required></textarea>
+            <div class="row">
+                <button type="submit">Simplify bill text</button>
+            </div>
+        </form>
+        <pre id="simplify-result">Paste bill text to produce a plain-English summary.</pre>
+    </div>
+
+    <div class="panel">
+        <h2>Geofence Boundary Visualizer</h2>
+        <p>Paste district GeoJSON plus constituent coordinates to render the boundary and show who falls inside the district.</p>
+        <form id="geofence-form">
+            <label for="district-geojson">District GeoJSON</label>
+            <textarea id="district-geojson" placeholder='{"type":"Polygon","coordinates":[[[-97.8,30.2],[-97.7,30.2],[-97.7,30.3],[-97.8,30.3],[-97.8,30.2]]]}'
+                required></textarea>
+            <label for="constituents-json">Constituents JSON</label>
+            <textarea id="constituents-json" placeholder='[{"name":"Alice","lat":30.25,"lon":-97.75},{"name":"Bob","lat":30.31,"lon":-97.75}]'
+                required></textarea>
+            <div class="row">
+                <button type="submit">Render overlap</button>
+            </div>
+        </form>
+        <div id="geofence-map" class="map-preview"></div>
+        <pre id="geofence-result">Paste GeoJSON and constituent points to visualize overlap.</pre>
     </div>
 
     <!-- ── Proof Explorer ───────────────────────────────────────────────── -->
@@ -204,6 +251,105 @@
                 }
             } catch (err) {
                 commitResult.textContent = `✗ Request failed: ${err}`;
+            }
+        });
+
+        // ── Voting Record Tracker ────────────────────────────────────────────
+        document.getElementById('votes-form').addEventListener('submit', async (event) => {
+            event.preventDefault();
+            const output = document.getElementById('votes-result');
+            output.textContent = 'Loading OpenStates voting record…';
+            const params = new URLSearchParams(new FormData(event.target));
+            try {
+                const response = await fetch(`/civic/voting-record?${params.toString()}`);
+                const data = await response.json();
+                if (!data.ok) {
+                    output.textContent = `✗ Error: ${data.error}`;
+                    return;
+                }
+                const rep = data.representative;
+                let text = `Representative: ${rep.name}\n` +
+                           `Party / District: ${rep.party || 'Unknown'} / ${rep.district || 'Unknown'}\n` +
+                           `Chamber: ${rep.chamber || 'Unknown'}\n` +
+                           `Source: ${data.source.provider} (bills scanned: ${data.source.bills_scanned})\n\n`;
+                if (data.votes.length === 0) {
+                    text += 'No recent votes matched this representative in the fetched bill window.';
+                } else {
+                    text += 'Recent votes:\n';
+                    data.votes.forEach((vote) => {
+                        text += `- ${vote.date || 'Unknown date'} | ${vote.option || 'unknown'} | ${vote.bill_identifier} ${vote.bill_title}\n`;
+                        text += `  Motion: ${vote.motion}\n`;
+                    });
+                }
+                output.textContent = text;
+            } catch (err) {
+                output.textContent = `✗ Request failed: ${err}`;
+            }
+        });
+
+        // ── Bill Text Simplifier ─────────────────────────────────────────────
+        document.getElementById('simplify-form').addEventListener('submit', async (event) => {
+            event.preventDefault();
+            const output = document.getElementById('simplify-result');
+            output.textContent = 'Simplifying bill text…';
+            try {
+                const response = await fetch('/civic/simplify-bill', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ text: document.getElementById('simplify-text').value }),
+                });
+                const data = await response.json();
+                if (!data.ok) {
+                    output.textContent = `✗ Error: ${data.error}`;
+                    return;
+                }
+                const actionLines = data.key_actions.length ? data.key_actions.map((line) => `- ${line}`).join('\n') : '- No obvious must/cannot clauses found.';
+                const promptLines = data.prompt_chain.map((stage, idx) =>
+                    `Stage ${idx + 1}: ${stage.stage}\nPrompt: ${stage.prompt}\nOutput: ${JSON.stringify(stage.output, null, 2)}`
+                ).join('\n\n');
+                output.textContent =
+                    `Plain English summary:\n${data.plain_english_summary}\n\n` +
+                    `Key actions:\n${actionLines}\n\n` +
+                    `Dates: ${(data.dates || []).join(', ') || 'None detected'}\n` +
+                    `Amounts: ${(data.amounts || []).join(', ') || 'None detected'}\n\n` +
+                    `Prompt chain:\n${promptLines}`;
+            } catch (err) {
+                output.textContent = `✗ Request failed: ${err}`;
+            }
+        });
+
+        // ── Geofence Boundary Visualizer ─────────────────────────────────────
+        document.getElementById('geofence-form').addEventListener('submit', async (event) => {
+            event.preventDefault();
+            const output = document.getElementById('geofence-result');
+            const map = document.getElementById('geofence-map');
+            output.textContent = 'Rendering geofence preview…';
+            map.innerHTML = '';
+            try {
+                const response = await fetch('/civic/geofence-preview', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        district_geojson: document.getElementById('district-geojson').value,
+                        constituents: document.getElementById('constituents-json').value,
+                    }),
+                });
+                const data = await response.json();
+                if (!data.ok) {
+                    output.textContent = `✗ Error: ${data.error}`;
+                    return;
+                }
+                map.innerHTML = data.svg;
+                const inside = data.constituents.filter((item) => item.inside).map((item) => item.name).join(', ') || 'None';
+                const outside = data.constituents.filter((item) => !item.inside).map((item) => item.name).join(', ') || 'None';
+                output.textContent =
+                    `District shapes: ${data.district_count}\n` +
+                    `Inside boundary: ${data.overlap_count}\n` +
+                    `Outside boundary: ${data.outside_count}\n\n` +
+                    `Inside: ${inside}\n` +
+                    `Outside: ${outside}`;
+            } catch (err) {
+                output.textContent = `✗ Request failed: ${err}`;
             }
         });
 
