@@ -1,7 +1,7 @@
 import pytest
-from poseidon_py.poseidon_hash import poseidon_hash
 
 from protocol.hashes import SNARK_SCALAR_FIELD, blake3_to_field_element
+from protocol.poseidon_bn128 import poseidon_hash_bn128
 from protocol.poseidon_tree import PoseidonMerkleTree, build_poseidon_witness_inputs
 
 
@@ -18,9 +18,9 @@ def _recompute_root(leaf: int, path_elements: list[str], path_indices: list[int]
     for sibling, idx in zip(path_elements, path_indices):
         sib = int(sibling)
         if idx == 0:
-            current = poseidon_hash(current, sib)
+            current = poseidon_hash_bn128(current, sib)
         else:
-            current = poseidon_hash(sib, current)
+            current = poseidon_hash_bn128(sib, current)
         current %= SNARK_SCALAR_FIELD
     return current % SNARK_SCALAR_FIELD
 
