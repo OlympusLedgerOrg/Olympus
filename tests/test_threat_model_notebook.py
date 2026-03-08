@@ -10,7 +10,7 @@ NOTEBOOK_PATH = Path(__file__).parent.parent / "docs" / "threat_model_walkthroug
 
 
 def test_threat_model_notebook_exists_and_has_expected_sections():
-    """Threat model notebook should cover protections, non-goals, and attack scenarios."""
+    """Threat model notebook should cover guarantees, attacks, and fake-redaction limits."""
     notebook = json.loads(NOTEBOOK_PATH.read_text(encoding="utf-8"))
 
     assert notebook["nbformat"] == 4
@@ -21,4 +21,7 @@ def test_threat_model_notebook_exists_and_has_expected_sections():
     assert "does not protect" in combined_source
     assert "Attack scenarios" in combined_source
     assert "Selective withholding before commitment" in combined_source
+    assert "If I'm a malicious agency trying to fake a redaction" in combined_source
+    assert "adversarial_redaction_attempts" in combined_source
+    assert "outside Olympus coverage" in combined_source
     assert "classify_event" in combined_source

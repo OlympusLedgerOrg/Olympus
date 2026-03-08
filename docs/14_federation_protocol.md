@@ -1,0 +1,227 @@
+# Federation Protocol Prototype (Phase 1+)
+
+This document defines the **Phase 1+ federation prototype** for Olympus. It does **not** claim that v1.0 already ships a decentralized implementation; instead, it pins the smallest interoperable node-to-node protocol that future work must preserve.
+
+The prototype is designed to extend the existing signed shard header and append-only ledger model without rewriting v1.0 semantics.
+
+## Goals
+
+- Define a deterministic **node-to-node protocol** for Stewards, Guardians, and Auditors.
+- Specify **shard replication** as an append-only exchange of signed shard headers, ledger tails, and proofs.
+- Define **header-signing consensus** via quorum acknowledgments over a single shard header hash.
+- Preserve independent verification: every federation message is reducible to hashes, signatures, ledger linkage, and proofs already described elsewhere in the spec.
+
+## Roles
+
+- **Steward node**: Originates shard headers and serves canonical ledger/proof material.
+- **Guardian node**: Replicates headers and ledger entries, verifies them, and signs acknowledgments.
+- **Auditor node**: Observes public APIs, recomputes verification, and detects forks or gaps.
+
+Role membership, trust roots, and dispute resolution policy are governed by `docs/10_federation_governance.md`.
+
+## Prototype Assets in This Repository
+
+- `protocol/federation.py` defines the `FederationNode` identity model, static
+  registry loader, and `>= 2/3` quorum helpers.
+- `examples/federation_registry.json` is the prototype registry shared by tests
+  and CLI commands.
+- `tools/olympus.py` exposes `node list` and `federation status` commands for
+  operator visibility.
+
+Each prototype node identity carries:
+
+- `node_id`
+- `pubkey`
+- `operator`
+- `endpoint`
+- `jurisdiction`
+- `status`
+
+## Transport and Identity
+
+- Transport is HTTPS with canonical JSON request/response bodies.
+- Every node publishes an Ed25519 public key and fingerprint in the append-only identity registry.
+- Every federation message includes:
+  - `sender_id`
+  - `sender_pubkey`
+  - `sent_at`
+  - `message_type`
+  - `payload`
+  - `signature`
+- Signatures are computed over canonical JSON bytes of the unsigned message body.
+
+## Existing v1.0 Read APIs Used by the Prototype
+
+The federation prototype deliberately builds on the existing public verification surfaces:
+
+- `GET /shards`
+- `GET /shards/{shard_id}/header/latest`
+- `GET /shards/{shard_id}/header/latest/verify`
+- `GET /shards/{shard_id}/history`
+- `GET /shards/{shard_id}/diff`
+- `GET /ledger/{shard_id}/tail`
+- `GET /shards/{shard_id}/proof`
+
+These APIs are sufficient for a Guardian or Auditor to fetch the current signed state, verify chain linkage, and compare divergent views before any write-path federation automation exists.
+
+## Message Types
+
+### 1. Header Announcement
+
+Steward → Guardians
+
+```json
+{
+  "message_type": "header_announce",
+  "payload": {
+    "shard_id": "records/agency-a",
+    "seq": 42,
+    "header_hash": "<hex>",
+    "root_hash": "<hex>",
+    "previous_header_hash": "<hex>",
+    "timestamp": "2026-03-08T00:00:00Z"
+  }
+}
+```
+
+Semantics:
+
+- Announces the candidate shard header to be replicated.
+- The `header_hash` must match the canonical shard header served at `GET /shards/{shard_id}/header/latest`.
+- Guardians must reject announcements whose `previous_header_hash` does not extend their local append-only chain.
+
+### 2. Replication Request
+
+Guardian → Steward
+
+```json
+{
+  "message_type": "replication_request",
+  "payload": {
+    "shard_id": "records/agency-a",
+    "from_seq": 39,
+    "to_seq": 42
+  }
+}
+```
+
+Semantics:
+
+- Requests the missing signed headers, ledger tail, and any needed Merkle/SMT proofs for the specified sequence range.
+- Requests are **range-based** so that gaps are explicit and auditable.
+
+### 3. Replication Segment
+
+Steward → Guardian
+
+```json
+{
+  "message_type": "replication_segment",
+  "payload": {
+    "shard_id": "records/agency-a",
+    "headers": ["<canonical header json>", "<canonical header json>"],
+    "ledger_tail": ["<canonical ledger entry>", "<canonical ledger entry>"],
+    "proof_refs": ["record_id=document:abc:1"]
+  }
+}
+```
+
+Semantics:
+
+- Contains an append-only range of headers and ledger entries.
+- Guardians verify every header signature, every `previous_header_hash`, and every ledger `previous_hash`.
+- Guardians reject segments with missing sequence numbers, mismatched roots, or invalid proofs.
+
+### 4. Guardian Acknowledgment
+
+Guardian → Steward and other Guardians
+
+```json
+{
+  "message_type": "guardian_ack",
+  "payload": {
+    "shard_id": "records/agency-a",
+    "seq": 42,
+    "header_hash": "<hex>",
+    "replicated_at": "2026-03-08T00:00:10Z",
+    "ledger_tail_hash": "<hex>"
+  }
+}
+```
+
+Semantics:
+
+- States that the Guardian verified and stored the shard header and corresponding ledger state.
+- Acknowledgments are append-only attestations; they never overwrite a prior acknowledgment.
+- Guardians must not sign two different `header_hash` values for the same `(shard_id, seq)` unless they are explicitly publishing fork evidence.
+
+### 5. Quorum Certificate
+
+Derived artifact, served by Stewards or Auditors
+
+```json
+{
+  "shard_id": "records/agency-a",
+  "seq": 42,
+  "header_hash": "<hex>",
+  "acknowledgments": ["<signed guardian_ack>", "<signed guardian_ack>"],
+  "quorum_threshold": 3
+}
+```
+
+Semantics:
+
+- A **quorum certificate** exists when acknowledgments from at least `Q` distinct Guardians reference the same `header_hash`.
+- The certificate is independently verifiable from the included signed acknowledgments and the published membership registry.
+- Certificates are attached as append-only metadata; historical headers are never rewritten.
+
+## Replication Algorithm
+
+1. A Steward emits and signs a candidate shard header.
+2. The Steward sends `header_announce` to all configured Guardians.
+3. Each Guardian compares the announced `(shard_id, seq, previous_header_hash)` to its local state.
+4. If a gap exists, the Guardian sends `replication_request`.
+5. The Steward answers with `replication_segment`.
+6. The Guardian verifies:
+   - shard header signature validity,
+   - header chain continuity,
+   - ledger append-only linkage,
+   - any referenced Merkle/SMT proofs,
+   - optional anchor validity when tokens are present.
+7. If verification succeeds, the Guardian persists the segment and emits `guardian_ack`.
+8. When `Q` matching acknowledgments exist, the header is considered **federation-final**.
+
+## Header-Signing Consensus
+
+The prototype uses **quorum acknowledgment consensus**, not blind leader trust:
+
+- The originating Steward signs the shard header hash first.
+- Guardians independently verify the header and sign acknowledgments over that exact `header_hash`.
+- Finality threshold:
+  - minimum prototype threshold: `Q >= floor(N / 2) + 1`
+  - recommended Byzantine threshold: `Q >= ceil(2N / 3)`
+- If two distinct headers claim the same `(shard_id, seq)` or the same `previous_header_hash`, the system has detected a fork.
+- Fork resolution follows `docs/10_federation_governance.md`: highest Guardian quorum weight, then earliest valid anchor, then lowest lexicographic `header_hash`.
+
+This makes header signing decentralized in the narrow protocol sense: no single Steward signature is sufficient for federation finality after the Phase 1+ cutover.
+
+## Safety and Liveness Notes
+
+### Safety
+
+- No Guardian may acknowledge a header without replaying signature and chain verification.
+- No quorum certificate is valid if it mixes acknowledgments for different `header_hash` values.
+- No node may truncate history during replication; all transfers are append-only ranges.
+
+### Liveness
+
+- A temporarily unavailable Guardian delays quorum but cannot rewrite prior committed history.
+- Replication is pull-friendly: Guardians can recover after downtime by requesting the missing range.
+- Auditors can reconstruct quorum status from public APIs plus signed acknowledgment artifacts.
+
+## Explicit Non-Goals of the Prototype
+
+- It does not specify transport encryption beyond HTTPS deployment expectations.
+- It does not require a specific threshold-signature scheme; Ed25519 acknowledgments are sufficient for the prototype.
+- It does not replace the legal/governance rules in `docs/10_federation_governance.md`.
+- It does not change v1.0 into a production-ready decentralized network today; it defines the forward-compatible wire semantics needed to get there.

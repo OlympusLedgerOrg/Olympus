@@ -60,9 +60,11 @@ The `tests/test_workflow_conformance.py` test suite verifies that all documented
 - **ZK redaction**: `docs/05_zk_redaction.md`
 - **External anchoring**: `docs/11_external_anchoring.md`
 - **Federation governance (Phase 1+)**: `docs/10_federation_governance.md`
+- **Federation protocol prototype (Phase 1+)**: `docs/14_federation_protocol.md`
 - **Protocol vs applications**: `docs/12_protocol_vs_applications.md`
 - **Public explorer interface**: `docs/13_public_explorer.md`
-- **Threat model**: `docs/01_threat_model.md` and `docs/threat_model_walkthrough.ipynb`
+- **Threat model**: `docs/01_threat_model.md`, `docs/threat_model.md`, and `docs/threat_model_walkthrough.ipynb`
+- **Formal specification**: `docs/15_formal_spec.md` and `docs/formal/OlympusAppendOnly.tla`
 
 ## Protocol vs Applications
 

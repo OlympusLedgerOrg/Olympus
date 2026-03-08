@@ -29,6 +29,8 @@ Olympus uses a federated consensus model (Phase 1+):
 - Fork detection mechanism
 - Conflict resolution rules
 
+See `docs/14_federation_protocol.md` for the Phase 1+ node-to-node protocol, shard replication flow, and quorum certificate rules.
+
 **v1.0 Implementation:** Single-node operation with Ed25519 signatures. Multi-node consensus is planned for Phase 1+.
 
 ## Replication
@@ -40,6 +42,8 @@ Guardian replication features (Phase 1+):
 - Merkle proof verification
 - Gap detection and recovery
 - Byzantine fault tolerance
+
+The concrete replication messages and acknowledgment format are specified in `docs/14_federation_protocol.md`.
 
 **v1.0 Implementation:** Single-node append-only ledger. Guardian replication is planned for Phase 1+.
 

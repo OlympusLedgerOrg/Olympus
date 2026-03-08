@@ -68,6 +68,52 @@ export TEST_DATABASE_URL="$DATABASE_URL"
 make dev
 ```
 
+## Federation Architecture
+
+Olympus operates as a federated transparency log. Multiple independent nodes
+maintain shard state and sign shard headers, so no single node can rewrite
+history once a federation quorum has acknowledged a header.
+
+Prototype components in this repository:
+
+- `protocol/federation.py` — persistent node identity, static registry loading,
+  and a simple `>= 2/3` shard-header quorum model
+- `examples/federation_registry.json` — static federation membership for local
+  development and tests
+- `docker-compose.federation.yml` and `make federation-dev` — local three-node
+  federation simulation
+
+Federation data flow:
+
+```text
+client
+  ↓
+commit request
+  ↓
+node receives commit
+  ↓
+node updates shard tree
+  ↓
+node proposes shard header
+  ↓
+federation nodes sign header
+  ↓
+header finalized
+  ↓
+global state root updated
+```
+
+Useful prototype commands:
+
+```bash
+python tools/olympus.py node list
+python tools/olympus.py federation status
+make federation-dev
+```
+
+Olympus is influenced by the operational model of Certificate Transparency and
+Sigstore: transparency logs, multiple operators, and independent verification.
+
 ## Key developer entrypoints
 
 - API application: `api/app.py`

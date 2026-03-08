@@ -71,6 +71,7 @@ Any verifier must be able to, offline and without secrets:
 - **Consensus**: Conflict resolution rules favor the highest-finality chain (quorum + timestamp monotonicity).
 - **Key Rotation**: Superseding signatures are attached without mutating historical headers (see `docs/04_ledger_protocol.md`).
 - **External Anchors**: Multiple anchors per batch are allowed; verifiers must accept any valid anchor whose hash matches the documented commitment.
+- **Formal model**: The append-only ledger and proof-validity abstraction is captured in `docs/formal/OlympusAppendOnly.tla`.
 
 ## Normative References
 
@@ -80,4 +81,6 @@ Any verifier must be able to, offline and without secrets:
 - ZK redaction: `docs/05_zk_redaction.md`
 - Verification flows: `docs/06_verification_flows.md`
 - External anchoring: `docs/11_external_anchoring.md`
+- Federation protocol prototype: `docs/14_federation_protocol.md`
+- Formal specification: `docs/15_formal_spec.md`
 - Protocol vs applications: `docs/12_protocol_vs_applications.md`

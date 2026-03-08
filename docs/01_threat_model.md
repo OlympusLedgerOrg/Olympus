@@ -1,6 +1,6 @@
 # Threat Model
 
-This document describes the threat model for the Olympus protocol. For an interactive walkthrough with attack scenarios and verification exercises, see `docs/threat_model_walkthrough.ipynb`.
+This document describes the threat model for the Olympus protocol. For the reviewer-oriented system goals, adversary table, and attack walkthrough, see `docs/threat_model.md`. For an interactive adversarial walkthrough with malicious-agency redaction attempts and verification exercises, see `docs/threat_model_walkthrough.ipynb`.
 
 ## Assets and Invariants
 
