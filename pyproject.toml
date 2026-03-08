@@ -34,7 +34,7 @@ dependencies = [
     "pikepdf==10.3.0",
     "lxml==6.0.2",
     "poseidon-py==0.1.5",
-    "boto3==1.42.59",
+    "boto3==1.42.63",
 ]
 
 [project.optional-dependencies]
