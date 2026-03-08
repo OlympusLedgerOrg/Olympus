@@ -82,6 +82,23 @@ class NonExistenceProof:
         }
 
 
+@dataclass(frozen=True)
+class SparseMerkleDiffEntry:
+    """A single key-level difference between two sparse Merkle tree states."""
+
+    key: bytes
+    before_value_hash: bytes | None
+    after_value_hash: bytes | None
+
+    def to_dict(self) -> dict[str, str | None]:
+        """Convert diff entry to a JSON-serializable dictionary."""
+        return {
+            "key": self.key.hex(),
+            "before_value_hash": None if self.before_value_hash is None else self.before_value_hash.hex(),
+            "after_value_hash": None if self.after_value_hash is None else self.after_value_hash.hex(),
+        }
+
+
 class SparseMerkleTree:
     """
     A 256-height sparse Merkle tree for efficient key-value storage.
@@ -291,6 +308,47 @@ class SparseMerkleTree:
             raise ValueError("Cannot get sibling of root")
         # Flip the last bit
         return path[:-1] + (1 - path[-1],)
+
+
+def diff_sparse_merkle_trees(
+    before: SparseMerkleTree, after: SparseMerkleTree
+) -> dict[str, list[SparseMerkleDiffEntry]]:
+    """
+    Compare two sparse Merkle tree states at the leaf level.
+
+    Args:
+        before: Earlier tree state
+        after: Later tree state
+
+    Returns:
+        Dictionary containing deterministic lists of added, changed, and removed leaves
+    """
+    before_keys = set(before.leaves)
+    after_keys = set(after.leaves)
+
+    added = [
+        SparseMerkleDiffEntry(key=key, before_value_hash=None, after_value_hash=after.leaves[key])
+        for key in sorted(after_keys - before_keys)
+    ]
+    changed = [
+        SparseMerkleDiffEntry(
+            key=key,
+            before_value_hash=before.leaves[key],
+            after_value_hash=after.leaves[key],
+        )
+        for key in sorted(before_keys & after_keys)
+        if before.leaves[key] != after.leaves[key]
+    ]
+    removed = [
+        SparseMerkleDiffEntry(key=key, before_value_hash=before.leaves[key], after_value_hash=None)
+        for key in sorted(before_keys - after_keys)
+    ]
+
+    return {
+        "added": added,
+        "changed": changed,
+        "removed": removed,
+    }
 
 
 def verify_proof(proof: ExistenceProof) -> bool:

@@ -1,0 +1,131 @@
+services:
+  node1-db:
+    image: postgres:16
+    container_name: olympus-node1-db
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-olympus}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-olympus}
+      POSTGRES_DB: ${POSTGRES_DB:-olympus}
+    ports:
+      - "5433:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-olympus} -d ${POSTGRES_DB:-olympus}"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+    volumes:
+      - olympus_node1_pgdata:/var/lib/postgresql/data
+
+  node2-db:
+    image: postgres:16
+    container_name: olympus-node2-db
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-olympus}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-olympus}
+      POSTGRES_DB: ${POSTGRES_DB:-olympus}
+    ports:
+      - "5434:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-olympus} -d ${POSTGRES_DB:-olympus}"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+    volumes:
+      - olympus_node2_pgdata:/var/lib/postgresql/data
+
+  node3-db:
+    image: postgres:16
+    container_name: olympus-node3-db
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-olympus}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-olympus}
+      POSTGRES_DB: ${POSTGRES_DB:-olympus}
+    ports:
+      - "5435:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-olympus} -d ${POSTGRES_DB:-olympus}"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+    volumes:
+      - olympus_node3_pgdata:/var/lib/postgresql/data
+
+  node1-app:
+    build:
+      context: .
+      target: production
+    container_name: olympus-node1-app
+    environment:
+      DATABASE_URL: postgresql://${POSTGRES_USER:-olympus}:${POSTGRES_PASSWORD:-olympus}@node1-db:5432/${POSTGRES_DB:-olympus}
+    depends_on:
+      node1-db:
+        condition: service_healthy
+    ports:
+      - "8001:8000"
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://localhost:8000/health || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  node2-app:
+    build:
+      context: .
+      target: production
+    container_name: olympus-node2-app
+    environment:
+      DATABASE_URL: postgresql://${POSTGRES_USER:-olympus}:${POSTGRES_PASSWORD:-olympus}@node2-db:5432/${POSTGRES_DB:-olympus}
+    depends_on:
+      node2-db:
+        condition: service_healthy
+    ports:
+      - "8002:8000"
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://localhost:8000/health || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  node3-app:
+    build:
+      context: .
+      target: production
+    container_name: olympus-node3-app
+    environment:
+      DATABASE_URL: postgresql://${POSTGRES_USER:-olympus}:${POSTGRES_PASSWORD:-olympus}@node3-db:5432/${POSTGRES_DB:-olympus}
+    depends_on:
+      node3-db:
+        condition: service_healthy
+    ports:
+      - "8003:8000"
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://localhost:8000/health || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  federation-ui:
+    build:
+      context: .
+      target: production
+    container_name: olympus-federation-ui
+    command: ["uvicorn", "ui.app:app", "--host", "0.0.0.0", "--port", "8080"]
+    environment:
+      OLYMPUS_DEBUG_UI: "true"
+      UI_API_BASE: http://node1-app:8000
+      OLYMPUS_FEDERATION_NODES: >-
+        {"node1":"http://node1-app:8000","node2":"http://node2-app:8000","node3":"http://node3-app:8000"}
+    depends_on:
+      node1-app:
+        condition: service_healthy
+      node2-app:
+        condition: service_healthy
+      node3-app:
+        condition: service_healthy
+    ports:
+      - "8081:8080"
+
+volumes:
+  olympus_node1_pgdata:
+  olympus_node2_pgdata:
+  olympus_node3_pgdata:

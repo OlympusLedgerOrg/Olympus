@@ -260,6 +260,29 @@ def _pow5(x: int) -> int:
     return pow(x, 5, _FIELD)
 
 
+def poseidon_parameter_summary() -> dict[str, int | str | list[str] | list[list[str]]]:
+    """
+    Return a JSON-serializable summary of the BN128 Poseidon parameters.
+
+    The exported structure is intended for provenance/debug tooling that needs
+    to render or export the exact constants mirrored from circomlibjs.
+
+    Returns:
+        Dictionary containing source metadata, round structure, and the full
+        round-constant / MDS tables as decimal strings.
+    """
+    return {
+        "source": "circomlibjs/src/poseidon_constants.json",
+        "field": str(_FIELD),
+        "state_width": _T,
+        "arity": _T - 1,
+        "full_rounds": _N_ROUNDS_F,
+        "partial_rounds": _N_ROUNDS_P,
+        "round_constants": [str(value) for value in _C],
+        "mds_matrix": [[str(value) for value in row] for row in _M],
+    }
+
+
 def poseidon_hash_bn128(a: int, b: int) -> int:
     """
     Compute Poseidon(a, b) over the BN128 scalar field.

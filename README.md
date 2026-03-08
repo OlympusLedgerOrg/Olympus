@@ -112,3 +112,9 @@ uvicorn api.main:app --reload --port 8000
 ```bash
 python tools/verify_proof.py --commit_id <commit_id>
 ```
+
+For the Dockerized three-node federation demo and the debug dashboard / SMT diff viewer, see `QUICKSTART.md` and run:
+
+```bash
+docker compose -f docker-compose.federation.yml up -d
+```

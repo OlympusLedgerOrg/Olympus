@@ -232,6 +232,45 @@ class HeaderVerificationResponse(BaseModel):
     timestamp_valid: bool | None  # None if no token available
 
 
+class ShardHistoryEntryResponse(BaseModel):
+    """Historical shard header snapshot."""
+
+    seq: int
+    root_hash: str
+    header_hash: str
+    previous_header_hash: str
+    timestamp: str
+
+
+class ShardHistoryResponse(BaseModel):
+    """Recent shard history for a shard."""
+
+    shard_id: str
+    headers: list[ShardHistoryEntryResponse]
+
+
+class StateRootDiffEntryResponse(BaseModel):
+    """Leaf-level difference between two sparse Merkle roots."""
+
+    key: str
+    before_value_hash: str | None
+    after_value_hash: str | None
+
+
+class StateRootDiffResponse(BaseModel):
+    """Comparison between two shard state roots."""
+
+    shard_id: str
+    from_seq: int
+    to_seq: int
+    from_root_hash: str
+    to_root_hash: str
+    added: list[StateRootDiffEntryResponse]
+    changed: list[StateRootDiffEntryResponse]
+    removed: list[StateRootDiffEntryResponse]
+    summary: dict[str, int]
+
+
 # Initialize FastAPI app
 app = FastAPI(
     title="Olympus Public Audit API",
@@ -254,6 +293,8 @@ async def root() -> dict[str, Any]:
             "/shards",
             "/shards/{shard_id}/header/latest",
             "/shards/{shard_id}/header/latest/verify",
+            "/shards/{shard_id}/history",
+            "/shards/{shard_id}/diff",
             "/shards/{shard_id}/proof",
             "/ledger/{shard_id}/tail",
             "/ingest/records",
@@ -470,6 +511,76 @@ async def get_ledger_tail(
         raise HTTPException(status_code=500, detail=f"Failed to get ledger tail: {str(e)}") from e
 
 
+@app.get("/shards/{shard_id}/history", response_model=ShardHistoryResponse)
+async def get_shard_history(
+    shard_id: str, n: int = Query(10, description="Number of headers to retrieve", ge=1, le=1000)
+) -> ShardHistoryResponse:
+    """
+    Get recent historical shard headers for a shard.
+
+    Args:
+        shard_id: Shard identifier
+        n: Number of header snapshots to return
+
+    Returns:
+        Recent shard header snapshots in reverse chronological order
+    """
+    storage = _require_storage()
+    try:
+        history = storage.get_header_history(shard_id, n)
+        return ShardHistoryResponse(
+            shard_id=shard_id,
+            headers=[ShardHistoryEntryResponse(**entry) for entry in history],
+        )
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to get shard history: {str(e)}") from e
+
+
+@app.get("/shards/{shard_id}/diff", response_model=StateRootDiffResponse)
+async def get_shard_state_diff(
+    shard_id: str,
+    from_seq: int = Query(..., description="Baseline shard header sequence", ge=0),
+    to_seq: int = Query(..., description="Target shard header sequence", ge=0),
+) -> StateRootDiffResponse:
+    """
+    Compare two historical shard states and return leaf-level differences.
+
+    Args:
+        shard_id: Shard identifier
+        from_seq: Baseline shard header sequence
+        to_seq: Target shard header sequence
+
+    Returns:
+        Root hashes plus added, changed, and removed leaf keys
+    """
+    storage = _require_storage()
+    try:
+        diff = storage.get_root_diff(shard_id, from_seq, to_seq)
+        return StateRootDiffResponse(
+            shard_id=shard_id,
+            from_seq=from_seq,
+            to_seq=to_seq,
+            from_root_hash=diff["from_root_hash"],
+            to_root_hash=diff["to_root_hash"],
+            added=[StateRootDiffEntryResponse(**entry) for entry in diff["added"]],
+            changed=[StateRootDiffEntryResponse(**entry) for entry in diff["changed"]],
+            removed=[StateRootDiffEntryResponse(**entry) for entry in diff["removed"]],
+            summary={
+                "added": len(diff["added"]),
+                "changed": len(diff["changed"]),
+                "removed": len(diff["removed"]),
+            },
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e)) from e
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to diff shard state: {str(e)}") from e
+
+
 @app.get("/shards/{shard_id}/header/latest/verify", response_model=HeaderVerificationResponse)
 async def verify_latest_header(shard_id: str) -> HeaderVerificationResponse:
     """
@@ -575,6 +686,8 @@ async def health() -> dict[str, Any]:
             "/shards",
             "/shards/{shard_id}/header/latest",
             "/shards/{shard_id}/header/latest/verify",
+            "/shards/{shard_id}/history",
+            "/shards/{shard_id}/diff",
             "/shards/{shard_id}/proof",
             "/ledger/{shard_id}/tail",
             "/ingest/records",
