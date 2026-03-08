@@ -1,5 +1,6 @@
 """Tests for developer debug console UI."""
 
+import json
 from urllib.error import HTTPError
 
 from fastapi.testclient import TestClient
@@ -109,3 +110,253 @@ def test_console_uses_theme_tokens(monkeypatch):
     assert "@media (prefers-color-scheme: dark)" in response.text
     assert "background: var(--bg);" in response.text
     assert "color: var(--accent);" in response.text
+
+
+# ── Commit Document endpoint ────────────────────────────────────────────────
+
+
+def test_commit_txt_file(monkeypatch):
+    """POST /commit with a plain-text file returns BLAKE3 and Poseidon roots."""
+    monkeypatch.setattr(ui_app, "DEBUG_UI_ENABLED", True)
+    ui_app._commit_store.clear()
+
+    content = b"Section one\nSection two\nSection three\n"
+    response = client.post(
+        "/commit",
+        data={"document_id": "doc1", "version": 1},
+        files={"file": ("doc.txt", content, "text/plain")},
+    )
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["ok"] is True
+    assert data["document_id"] == "doc1"
+    assert data["version"] == 1
+    assert data["sections_count"] == 3
+    assert len(data["blake3_root"]) == 64
+    assert data["poseidon_root"].isdigit()
+    assert data["commit_key"] == "doc1:1"
+
+
+def test_commit_json_file(monkeypatch):
+    """POST /commit with a JSON array file returns correct section count."""
+    monkeypatch.setattr(ui_app, "DEBUG_UI_ENABLED", True)
+    ui_app._commit_store.clear()
+
+    content = json.dumps(["Alpha", "Beta", "Gamma"]).encode()
+    response = client.post(
+        "/commit",
+        data={"document_id": "docJ", "version": 2},
+        files={"file": ("doc.json", content, "application/json")},
+    )
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["ok"] is True
+    assert data["sections_count"] == 3
+
+
+def test_commit_empty_file_returns_error(monkeypatch):
+    """POST /commit with an empty file should return a 400 error."""
+    monkeypatch.setattr(ui_app, "DEBUG_UI_ENABLED", True)
+
+    response = client.post(
+        "/commit",
+        data={"document_id": "empty", "version": 1},
+        files={"file": ("doc.txt", b"\n\n\n", "text/plain")},
+    )
+
+    assert response.status_code == 400
+    assert response.json()["ok"] is False
+
+
+def test_commit_disabled_returns_404(monkeypatch):
+    """POST /commit returns 404 when debug UI is disabled."""
+    monkeypatch.setattr(ui_app, "DEBUG_UI_ENABLED", False)
+
+    response = client.post(
+        "/commit",
+        data={"document_id": "x", "version": 1},
+        files={"file": ("doc.txt", b"hello", "text/plain")},
+    )
+
+    assert response.status_code == 404
+
+
+# ── Committed sections endpoint ─────────────────────────────────────────────
+
+
+def test_get_committed_sections(monkeypatch):
+    """GET /committed/{doc_id}/{version}/sections returns stored sections."""
+    monkeypatch.setattr(ui_app, "DEBUG_UI_ENABLED", True)
+    ui_app._commit_store.clear()
+
+    # Commit a document first
+    content = b"Part A\nPart B\n"
+    client.post(
+        "/commit",
+        data={"document_id": "docS", "version": 1},
+        files={"file": ("doc.txt", content, "text/plain")},
+    )
+
+    response = client.get("/committed/docS/1/sections")
+    assert response.status_code == 200
+    data = response.json()
+    assert data["ok"] is True
+    assert data["sections"] == ["Part A", "Part B"]
+    assert len(data["blake3_root"]) == 64
+    assert data["poseidon_root"].isdigit()
+
+
+def test_get_committed_sections_not_found(monkeypatch):
+    """GET /committed/{doc_id}/{version}/sections returns 404 if not committed."""
+    monkeypatch.setattr(ui_app, "DEBUG_UI_ENABLED", True)
+    ui_app._commit_store.clear()
+
+    response = client.get("/committed/ghost/99/sections")
+    assert response.status_code == 404
+    assert response.json()["ok"] is False
+
+
+# ── Redaction endpoint ──────────────────────────────────────────────────────
+
+
+def test_redact_generates_proof_bundle(monkeypatch):
+    """POST /redact returns a well-formed proof bundle."""
+    monkeypatch.setattr(ui_app, "DEBUG_UI_ENABLED", True)
+    ui_app._commit_store.clear()
+
+    content = b"Section A\nSection B\nSection C\n"
+    client.post(
+        "/commit",
+        data={"document_id": "docR", "version": 1},
+        files={"file": ("doc.txt", content, "text/plain")},
+    )
+
+    response = client.post(
+        "/redact",
+        json={"document_id": "docR", "version": 1, "revealed_indices": [0, 2]},
+    )
+    assert response.status_code == 200
+    data = response.json()
+    assert data["ok"] is True
+    bundle = data["bundle"]
+    assert bundle["revealed_indices"] == [0, 2]
+    assert bundle["revealed_content"] == ["Section A", "Section C"]
+    assert bundle["total_parts"] == 3
+    assert "smt_proof" in bundle
+    assert "zk_public_inputs" in bundle
+    assert bundle["zk_public_inputs"]["revealed_count"] == 2
+
+
+def test_redact_out_of_range_index(monkeypatch):
+    """POST /redact returns 400 for an out-of-range section index."""
+    monkeypatch.setattr(ui_app, "DEBUG_UI_ENABLED", True)
+    ui_app._commit_store.clear()
+
+    client.post(
+        "/commit",
+        data={"document_id": "docOOR", "version": 1},
+        files={"file": ("doc.txt", b"Only one section\n", "text/plain")},
+    )
+
+    response = client.post(
+        "/redact",
+        json={"document_id": "docOOR", "version": 1, "revealed_indices": [5]},
+    )
+    assert response.status_code == 400
+    assert response.json()["ok"] is False
+
+
+def test_redact_unknown_commit(monkeypatch):
+    """POST /redact returns 404 when document has not been committed."""
+    monkeypatch.setattr(ui_app, "DEBUG_UI_ENABLED", True)
+    ui_app._commit_store.clear()
+
+    response = client.post(
+        "/redact",
+        json={"document_id": "nobody", "version": 1, "revealed_indices": [0]},
+    )
+    assert response.status_code == 404
+
+
+# ── Verify endpoint ─────────────────────────────────────────────────────────
+
+
+def test_verify_valid_smt_anchor(monkeypatch):
+    """POST /verify passes SMT anchor check for a freshly generated bundle."""
+    monkeypatch.setattr(ui_app, "DEBUG_UI_ENABLED", True)
+    ui_app._commit_store.clear()
+
+    content = b"Alpha\nBeta\nGamma\n"
+    client.post(
+        "/commit",
+        data={"document_id": "docV", "version": 1},
+        files={"file": ("doc.txt", content, "text/plain")},
+    )
+    redact_resp = client.post(
+        "/redact",
+        json={"document_id": "docV", "version": 1, "revealed_indices": [1]},
+    )
+    bundle = redact_resp.json()["bundle"]
+
+    verify_resp = client.post("/verify", json=bundle)
+    assert verify_resp.status_code == 200
+    vdata = verify_resp.json()
+    assert vdata["ok"] is True
+    assert vdata["smt_anchor_verified"] is True
+    assert vdata["revealed_sections"] == [{"index": 1, "content": "Beta"}]
+    assert vdata["total_parts"] == 3
+
+
+def test_verify_invalid_bundle(monkeypatch):
+    """POST /verify returns 400 for a malformed proof bundle."""
+    monkeypatch.setattr(ui_app, "DEBUG_UI_ENABLED", True)
+
+    response = client.post("/verify", json={"broken": True})
+    assert response.status_code == 400
+    assert response.json()["ok"] is False
+
+
+def test_verify_disabled_returns_404(monkeypatch):
+    """POST /verify returns 404 when debug UI is disabled."""
+    monkeypatch.setattr(ui_app, "DEBUG_UI_ENABLED", False)
+
+    response = client.post("/verify", json={})
+    assert response.status_code == 404
+
+
+# ── New panel HTML presence ──────────────────────────────────────────────────
+
+
+def test_index_has_commit_panel(monkeypatch):
+    """Root page should include the Commit Document panel."""
+    monkeypatch.setattr(ui_app, "DEBUG_UI_ENABLED", True)
+    monkeypatch.setattr(ui_app, "_fetch_json", lambda path: [])
+
+    response = client.get("/")
+    assert response.status_code == 200
+    assert "Commit Document" in response.text
+    assert "commit-form" in response.text
+
+
+def test_index_has_verify_panel(monkeypatch):
+    """Root page should include the Verify Proof panel."""
+    monkeypatch.setattr(ui_app, "DEBUG_UI_ENABLED", True)
+    monkeypatch.setattr(ui_app, "_fetch_json", lambda path: [])
+
+    response = client.get("/")
+    assert response.status_code == 200
+    assert "Verify Proof" in response.text
+    assert "verify-form" in response.text
+
+
+def test_index_has_redaction_panel(monkeypatch):
+    """Root page should include the Redaction Interface panel."""
+    monkeypatch.setattr(ui_app, "DEBUG_UI_ENABLED", True)
+    monkeypatch.setattr(ui_app, "_fetch_json", lambda path: [])
+
+    response = client.get("/")
+    assert response.status_code == 200
+    assert "Redaction Interface" in response.text
+    assert "redact-sections" in response.text
