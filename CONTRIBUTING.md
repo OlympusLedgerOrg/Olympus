@@ -6,6 +6,32 @@ This guide explains how to set up your development environment and run tests.
 
 ---
 
+## Branching Strategy
+
+All code changes **must** go through pull requests — direct pushes to `main` are not permitted.
+
+1. **Create a feature branch** from the latest `main`:
+   ```bash
+   git checkout main
+   git pull origin main
+   git checkout -b feature/my-feature
+   ```
+
+2. **Make your changes** on the feature branch, commit, and push:
+   ```bash
+   git add .
+   git commit -m "feat: describe your change"
+   git push origin feature/my-feature
+   ```
+
+3. **Open a pull request** targeting `main` on GitHub and wait for CI checks to pass.
+
+4. **Merge via pull request** — never use `git push origin main` or force-push to `main`.
+
+> **Note for Copilot agents**: All automated changes must also follow this workflow. Push to a `copilot/<branch-name>` branch and open a pull request; do not push directly to `main`.
+
+---
+
 ## Development Environment Setup
 
 ### Prerequisites
