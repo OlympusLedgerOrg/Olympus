@@ -1,0 +1,25 @@
+{
+  "name": "@olympus/verifier",
+  "version": "0.1.0",
+  "description": "JavaScript/TypeScript verifier for Olympus commitments",
+  "main": "verifier.js",
+  "types": "verifier.d.ts",
+  "scripts": {
+    "test": "node test.js"
+  },
+  "keywords": [
+    "olympus",
+    "cryptography",
+    "merkle",
+    "blake3",
+    "verification"
+  ],
+  "author": "Olympus Contributors",
+  "license": "Apache-2.0",
+  "dependencies": {
+    "@noble/hashes": "^1.3.3"
+  },
+  "devDependencies": {
+    "@types/node": "^20.0.0"
+  }
+}

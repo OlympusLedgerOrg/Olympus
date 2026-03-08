@@ -1,0 +1,20 @@
+[package]
+name = "olympus-verifier"
+version = "0.1.0"
+edition = "2021"
+authors = ["Olympus Contributors"]
+license = "Apache-2.0"
+description = "High-performance Rust verifier for Olympus commitments"
+repository = "https://github.com/olympus/olympus"
+keywords = ["cryptography", "merkle", "blake3", "verification"]
+
+[dependencies]
+blake3 = "1.5"
+hex = "0.4"
+
+[dev-dependencies]
+criterion = "0.5"
+
+[[bench]]
+name = "verification"
+harness = false
