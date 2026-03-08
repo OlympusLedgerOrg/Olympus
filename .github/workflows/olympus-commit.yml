@@ -1,0 +1,83 @@
+name: Commit to Olympus
+
+# Anchor every published release to the Olympus public ledger.
+# If the Olympus API is unavailable the release is NOT blocked; a visible
+# warning is emitted instead so a human can investigate and re-anchor later.
+
+on:
+  release:
+    types: [published]
+
+jobs:
+  olympus-commit:
+    name: Anchor release artifacts to Olympus
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write  # required to update release notes
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - name: Install Olympus CLI
+        run: pip install -e .
+
+      - name: Download release assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          mkdir -p release-assets
+          gh release download "${{ github.ref_name }}" --dir release-assets || true
+
+      - name: Commit artifacts to Olympus
+        id: olympus
+        continue-on-error: true
+        env:
+          OLYMPUS_API_URL: ${{ vars.OLYMPUS_API_URL }}
+          OLYMPUS_API_KEY: ${{ secrets.OLYMPUS_API_KEY }}
+        run: |
+          set -euo pipefail
+
+          PROOF_IDS=""
+          # Determine the API URL, falling back to the public Olympus endpoint
+          API_URL="${OLYMPUS_API_URL:-https://api.olympus.example.com}"
+
+          for artifact in release-assets/*; do
+            [ -f "$artifact" ] || continue
+            PROOF_ID=$(python tools/olympus.py commit "$artifact" \
+              --api-key "${OLYMPUS_API_KEY:-}" \
+              --namespace github \
+              --id "${{ github.repository }}/${{ github.ref_name }}" \
+              --api-url "$API_URL")
+            echo "Committed $artifact → proof_id=$PROOF_ID"
+            PROOF_IDS="${PROOF_IDS}${PROOF_ID} "
+          done
+
+          # Trim trailing space
+          PROOF_IDS="${PROOF_IDS% }"
+          echo "proof_ids=${PROOF_IDS}" >> "$GITHUB_OUTPUT"
+
+      - name: Warn if Olympus commitment failed
+        if: steps.olympus.outcome == 'failure'
+        run: echo "::warning::Olympus commitment failed — release not anchored"
+
+      - name: Add proof IDs to release notes
+        if: steps.olympus.outcome == 'success' && steps.olympus.outputs.proof_ids != ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          PROOF_IDS="${{ steps.olympus.outputs.proof_ids }}"
+          EXISTING_NOTES=$(gh release view "${{ github.ref_name }}" --json body -q '.body // ""')
+          NOTES_APPEND="## Olympus Provenance
+
+Proof IDs: \`${PROOF_IDS}\`
+
+These artifacts have been anchored to the [Olympus](https://github.com/wombatvagina69-crypto/Olympus) public ledger."
+
+          printf '%s\n\n%s' "${EXISTING_NOTES}" "${NOTES_APPEND}" > /tmp/updated-notes.txt
+          gh release edit "${{ github.ref_name }}" --notes-file /tmp/updated-notes.txt

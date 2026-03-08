@@ -211,3 +211,80 @@ class TestHealthEndpoint:
         data = resp.json()
         assert "/ingest/records" in data["endpoints"]
         assert "/ingest/records/hash/{content_hash}/verify" in data["endpoints"]
+        assert "/ingest/commit" in data["endpoints"]
+
+
+# ---------------------------------------------------------------------------
+# POST /ingest/commit
+# ---------------------------------------------------------------------------
+
+
+class TestArtifactCommit:
+    def test_commit_valid_artifact_hash(self, client: TestClient):
+        """A well-formed BLAKE3 hash should be committed and return a proof_id."""
+        artifact_hash = "ab" * 32  # 64 hex chars = 32 bytes
+        resp = client.post(
+            "/ingest/commit",
+            json={"artifact_hash": artifact_hash, "namespace": "github", "id": "org/repo/v1.0.0"},
+        )
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["proof_id"]
+        assert data["artifact_hash"] == artifact_hash
+        assert data["namespace"] == "github"
+        assert data["id"] == "org/repo/v1.0.0"
+        assert data["committed_at"]
+        assert data["ledger_entry_hash"]
+
+    def test_commit_deduplication_returns_same_proof_id(self, client: TestClient):
+        """Committing the same hash twice should return the same proof_id."""
+        artifact_hash = "cd" * 32
+        resp1 = client.post(
+            "/ingest/commit",
+            json={"artifact_hash": artifact_hash, "namespace": "ci", "id": "proj/v2.0.0"},
+        )
+        proof_id_1 = resp1.json()["proof_id"]
+
+        resp2 = client.post(
+            "/ingest/commit",
+            json={"artifact_hash": artifact_hash, "namespace": "ci", "id": "proj/v2.0.0"},
+        )
+        assert resp2.status_code == 200
+        assert resp2.json()["proof_id"] == proof_id_1
+
+    def test_commit_invalid_hex_rejected(self, client: TestClient):
+        resp = client.post(
+            "/ingest/commit",
+            json={"artifact_hash": "not-hex!", "namespace": "github", "id": "org/repo/v1.0.0"},
+        )
+        assert resp.status_code == 400
+
+    def test_commit_wrong_length_rejected(self, client: TestClient):
+        """A hash shorter than 32 bytes should be rejected."""
+        short_hash = "ab" * 16  # only 16 bytes
+        resp = client.post(
+            "/ingest/commit",
+            json={"artifact_hash": short_hash, "namespace": "github", "id": "org/repo/v1.0.0"},
+        )
+        assert resp.status_code == 400
+
+    def test_commit_with_api_key_accepted(self, client: TestClient):
+        """Providing an api_key field should not cause errors."""
+        artifact_hash = "ef" * 32
+        resp = client.post(
+            "/ingest/commit",
+            json={
+                "artifact_hash": artifact_hash,
+                "namespace": "github",
+                "id": "org/repo/v3.0.0",
+                "api_key": "test-key",
+            },
+        )
+        assert resp.status_code == 200
+        assert resp.json()["proof_id"]
+
+    def test_health_includes_commit_endpoint(self, client: TestClient):
+        resp = client.get("/health")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert "/ingest/commit" in data["endpoints"]
