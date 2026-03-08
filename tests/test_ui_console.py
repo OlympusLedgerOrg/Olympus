@@ -326,6 +326,72 @@ def test_verify_disabled_returns_404(monkeypatch):
     assert response.status_code == 404
 
 
+def test_constants_provenance_endpoint(monkeypatch):
+    """GET /constants-provenance returns notebook metadata and verification state."""
+    monkeypatch.setattr(ui_app, "DEBUG_UI_ENABLED", True)
+    monkeypatch.setattr(
+        ui_app,
+        "_poseidon_vector_parity_report",
+        lambda: {
+            "status": "passed",
+            "verified": True,
+            "reason": "",
+            "vectors_checked": 4,
+            "mismatches": [],
+        },
+    )
+
+    response = client.get("/constants-provenance")
+    assert response.status_code == 200
+    data = response.json()
+    assert data["ok"] is True
+    assert data["notebook"]["verified_identical"] is True
+    assert data["notebook"]["parameters"]["source"] == "circomlibjs/src/poseidon_constants.json"
+    assert data["notebook"]["parameters"]["round_constants_count"] == 195
+
+
+def test_circuit_constraints_endpoint(monkeypatch):
+    """GET /circuit-constraints returns circuit summaries and verified snippets."""
+    monkeypatch.setattr(ui_app, "DEBUG_UI_ENABLED", True)
+
+    response = client.get("/circuit-constraints")
+    assert response.status_code == 200
+    data = response.json()
+    assert data["ok"] is True
+    circuit_names = {circuit["name"] for circuit in data["circuits"]}
+    assert {"document_existence", "non_existence", "redaction_validity"} <= circuit_names
+    redaction = next(c for c in data["circuits"] if c["name"] == "redaction_validity")
+    assert any(constraint["source_verified"] for constraint in redaction["constraints"])
+    assert "revealedLeaves[i] <== revealMask[i] * originalLeaves[i];" in redaction["source_excerpt"]
+
+
+def test_inspect_proof_bundle_endpoint(monkeypatch):
+    """POST /inspect-proof-bundle decodes fields and reports pass/fail checks."""
+    monkeypatch.setattr(ui_app, "DEBUG_UI_ENABLED", True)
+    ui_app._commit_store.clear()
+
+    client.post(
+        "/commit",
+        data={"document_id": "docI", "version": 1},
+        files={"file": ("doc.txt", b"One\nTwo\nThree\n", "text/plain")},
+    )
+    redact_resp = client.post(
+        "/redact",
+        json={"document_id": "docI", "version": 1, "revealed_indices": [0, 2]},
+    )
+    bundle = redact_resp.json()["bundle"]
+
+    response = client.post("/inspect-proof-bundle", json=bundle)
+    assert response.status_code == 200
+    data = response.json()
+    assert data["ok"] is True
+    field_paths = {field["path"] for field in data["fields"]}
+    assert "smt_proof.key" in field_paths
+    assert "zk_public_inputs.original_root" in field_paths
+    assert any(check["label"] == "SMT anchor verification passes" for check in data["checks"])
+    assert any(check["label"] == "ZK verification passes" and check["passed"] is False for check in data["checks"])
+
+
 # ── New panel HTML presence ──────────────────────────────────────────────────
 
 
@@ -360,3 +426,15 @@ def test_index_has_redaction_panel(monkeypatch):
     assert response.status_code == 200
     assert "Redaction Interface" in response.text
     assert "redact-sections" in response.text
+
+
+def test_index_has_inspector_and_visualizer_panels(monkeypatch):
+    """Root page should include the new proof tooling panels."""
+    monkeypatch.setattr(ui_app, "DEBUG_UI_ENABLED", True)
+    monkeypatch.setattr(ui_app, "_fetch_json", lambda path: [])
+
+    response = client.get("/")
+    assert response.status_code == 200
+    assert "Proof Bundle Inspector" in response.text
+    assert "Constants Provenance Notebook" in response.text
+    assert "Circuit Constraint Visualizer" in response.text

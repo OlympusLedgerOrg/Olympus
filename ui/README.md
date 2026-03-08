@@ -24,8 +24,11 @@ Top-to-bottom layout:
 1. **Header bar**: title + API base URL.
 2. **Failure banners**: red alert blocks for DB missing/503, invalid signature, chain broken.
 3. **Proof explorer panel**: shard/record form + JSON output pane.
-4. **Shard list table**: shard id, latest seq, latest root, signature validity.
-5. **Per-shard panels**: latest header payload and ledger tail for linkage inspection.
+4. **Proof bundle inspector**: paste a proof bundle JSON document and inspect decoded fields + invariant checks.
+5. **Constants provenance notebook**: render/export the Poseidon parameter provenance payload.
+6. **Circuit constraint visualizer**: explain the active Circom constraints in human-readable form.
+7. **Shard list table**: shard id, latest seq, latest root, signature validity.
+8. **Per-shard panels**: latest header payload and ledger tail for linkage inspection.
 
 This is a read-only debug view intended for engineers validating invariants.
 

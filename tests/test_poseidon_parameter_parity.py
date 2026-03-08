@@ -35,7 +35,7 @@ from pathlib import Path
 import pytest
 
 from protocol.hashes import SNARK_SCALAR_FIELD
-from protocol.poseidon_bn128 import poseidon_hash_bn128
+from protocol.poseidon_bn128 import poseidon_hash_bn128, poseidon_parameter_summary
 from protocol.poseidon_js import _run_node
 
 
@@ -91,6 +91,21 @@ def _load_js_vectors() -> list[dict]:
     )
     data = json.loads(result.stdout.strip())
     return data["vectors"]
+
+
+def test_parameter_summary_exports_expected_shape() -> None:
+    """The parameter summary should expose the full BN128 Poseidon constant tables."""
+    summary = poseidon_parameter_summary()
+
+    assert summary["source"] == "circomlibjs/src/poseidon_constants.json"
+    assert summary["field"] == str(SNARK_SCALAR_FIELD)
+    assert summary["state_width"] == 3
+    assert summary["arity"] == 2
+    assert summary["full_rounds"] == 8
+    assert summary["partial_rounds"] == 57
+    assert len(summary["round_constants"]) == 195
+    assert len(summary["mds_matrix"]) == 3
+    assert all(len(row) == 3 for row in summary["mds_matrix"])
 
 
 # ---------------------------------------------------------------------------
@@ -162,7 +177,6 @@ class TestBN128PythonParity:
             f"  circomlibjs    : {expected}\n"
             f"  poseidon_bn128 : {py_out}"
         )
-
 
 # ---------------------------------------------------------------------------
 # Class 2: JS backend plumbing (must pass in CI)
