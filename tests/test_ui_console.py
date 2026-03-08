@@ -159,6 +159,50 @@ def test_state_diff_proxy(monkeypatch):
     assert response.json()["diff"]["summary"]["added"] == 1
 
 
+def test_public_verification_portal_available_without_debug(monkeypatch):
+    """Public verification portal stays available even when debug tools are disabled."""
+    monkeypatch.setattr(ui_app, "DEBUG_UI_ENABLED", False)
+
+    response = client.get("/verification-portal")
+
+    assert response.status_code == 200
+    assert "Public Verification Portal" in response.text
+    assert "hash-verify-form" in response.text
+
+
+def test_public_hash_lookup_proxies_api(monkeypatch):
+    """Public hash verification proxy returns proof data from the API."""
+    monkeypatch.setattr(
+        ui_app,
+        "_fetch_json",
+        lambda path: {
+            "proof_id": "proof-123",
+            "record_id": "doc-123",
+            "shard_id": "shard-1",
+            "content_hash": "ab" * 32,
+            "merkle_root": "cd" * 32,
+            "merkle_proof": {
+                "leaf_hash": "ef" * 32,
+                "leaf_index": 0,
+                "siblings": [],
+                "root_hash": "cd" * 32,
+            },
+            "ledger_entry_hash": "12" * 32,
+            "timestamp": "2026-01-01T00:00:00Z",
+            "canonicalization": {"method": "demo"},
+            "merkle_proof_valid": True,
+        },
+    )
+
+    response = client.get(f"/verification-portal/hash/{'ab' * 32}")
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["ok"] is True
+    assert data["verification"]["proof_id"] == "proof-123"
+    assert data["verification"]["merkle_proof_valid"] is True
+
+
 def test_console_uses_theme_tokens(monkeypatch):
     """Root page should expose CSS custom properties for the theme system."""
     monkeypatch.setattr(ui_app, "DEBUG_UI_ENABLED", True)

@@ -192,6 +192,30 @@ _CIRCUIT_VISUALIZER = {
 _commit_store: dict[str, dict[str, Any]] = {}
 _foia_store: dict[str, dict[str, Any]] = {}
 
+_JURY_DEMO_MODELS: list[dict[str, Any]] = [
+    {
+        "model": "ollama/llama3.1:70b",
+        "weight": 0.5,
+        "verdict": "release",
+        "confidence": 0.92,
+        "reason": "Most passages are factual and already public.",
+    },
+    {
+        "model": "openai/gpt-4.1",
+        "weight": 0.3,
+        "verdict": "release",
+        "confidence": 0.81,
+        "reason": "No personal identifiers detected in the cited sections.",
+    },
+    {
+        "model": "anthropic/claude-sonnet-4",
+        "weight": 0.2,
+        "verdict": "escalate",
+        "confidence": 0.63,
+        "reason": "One paragraph may still require human redaction review.",
+    },
+]
+
 
 def _fetch_json(path: str) -> dict[str, Any] | list[dict[str, Any]]:
     """Fetch JSON from the Olympus API."""
@@ -466,6 +490,14 @@ def debug_console(request: Request):
         "federation": _collect_federation_dashboard(),
     }
 
+
+@app.get("/")
+def debug_console(request: Request):
+    """Render the debug console view."""
+    if not DEBUG_UI_ENABLED:
+        raise HTTPException(status_code=404, detail="Debug UI is disabled in this environment.")
+    context = _base_context(request, debug_tools=True)
+
     try:
         shards = _expect_json_list(_fetch_json("/shards"))
     except HTTPError as exc:
@@ -517,6 +549,16 @@ def debug_console(request: Request):
         context["shards"].append(shard_row)
 
     return templates.TemplateResponse(request, "index.html", context)
+
+
+@app.get("/verification-portal")
+def verification_portal(request: Request):
+    """Render the public verification portal without debug-only controls."""
+    return templates.TemplateResponse(
+        request,
+        "index.html",
+        _base_context(request, debug_tools=False),
+    )
 
 
 @app.get("/proof-explorer")

@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Olympus Debug Console</title>
+    <title>{{ page_title }}</title>
     <style>
         :root {
             --bg: #f8fafc;
@@ -59,7 +59,7 @@
     </style>
 </head>
 <body>
-    <h1>Olympus Developer Debug Console</h1>
+    <h1>{{ page_heading }}</h1>
     <p>API base: <code>{{ api_base }}</code></p>
 
     {% for banner in banners %}
@@ -289,7 +289,9 @@
         </form>
         <pre id="proof-result">Submit query to inspect proof payload.</pre>
     </div>
+    {% endif %}
 
+    {% if show_debug_tools %}
     <div class="panel">
         <h2>SMT Diff Viewer</h2>
         <p>Compare two historical shard header sequences and inspect which SMT keys were added, changed, or removed between the two state roots.</p>
@@ -354,8 +356,43 @@
             {% endif %}
         </div>
     {% endfor %}
+    {% endif %}
 
     <script>
+        // ── Public Verification Portal ──────────────────────────────────────
+        const hashVerifyForm = document.getElementById('hash-verify-form');
+        if (hashVerifyForm) {
+            hashVerifyForm.addEventListener('submit', async (event) => {
+                event.preventDefault();
+                const verifyResult = document.getElementById('hash-verify-result');
+                const contentHash = document.getElementById('content-hash').value.trim();
+                verifyResult.textContent = 'Resolving committed hash…';
+                try {
+                    const response = await fetch(
+                        `/verification-portal/hash/${encodeURIComponent(contentHash)}`
+                    );
+                    const data = await response.json();
+                    if (!data.ok) {
+                        verifyResult.textContent = `✗ Error: ${data.error}`;
+                        return;
+                    }
+                    const verification = data.verification;
+                    verifyResult.textContent =
+                        `✓ Committed hash located\n\n` +
+                        `Content hash       : ${verification.content_hash}\n` +
+                        `Proof ID           : ${verification.proof_id}\n` +
+                        `Shard ID           : ${verification.shard_id}\n` +
+                        `Merkle root        : ${verification.merkle_root}\n` +
+                        `Ledger entry hash  : ${verification.ledger_entry_hash}\n` +
+                        `Merkle proof valid : ${verification.merkle_proof_valid}\n\n` +
+                        `Use the proof payload below for independent offline replay:\n` +
+                        `${JSON.stringify(verification.merkle_proof, null, 2)}`;
+                } catch (err) {
+                    verifyResult.textContent = `✗ Failed: ${err}`;
+                }
+            });
+        }
+
         // ── Proof Explorer ──────────────────────────────────────────────────
         const form = document.getElementById('proof-form');
         const out = document.getElementById('proof-result');
@@ -410,10 +447,8 @@
                 } else {
                     commitResult.textContent = `✗ Error: ${data.error}`;
                 }
-            } catch (err) {
-                commitResult.textContent = `✗ Request failed: ${err}`;
-            }
-        });
+            });
+        }
 
         document.getElementById('download-receipt-link').addEventListener('click', (event) => {
             event.preventDefault();
@@ -642,48 +677,51 @@
         }
 
         // ── Verify Proof ────────────────────────────────────────────────────
-        document.getElementById('verify-form').addEventListener('submit', async (event) => {
-            event.preventDefault();
-            const verifyResult = document.getElementById('verify-result');
-            verifyResult.textContent = 'Verifying…';
-            const fileInput = document.getElementById('verify-file');
-            if (!fileInput.files.length) {
-                verifyResult.textContent = 'No file selected.';
-                return;
-            }
-            try {
-                const text = await fileInput.files[0].text();
-                const bundle = JSON.parse(text);
-                const resp = await fetch('/verify', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify(bundle),
-                });
-                const data = await resp.json();
-                if (!data.ok) {
-                    verifyResult.textContent = `✗ Error: ${data.error}`;
+        const verifyForm = document.getElementById('verify-form');
+        if (verifyForm) {
+            verifyForm.addEventListener('submit', async (event) => {
+                event.preventDefault();
+                const verifyResult = document.getElementById('verify-result');
+                verifyResult.textContent = 'Verifying…';
+                const fileInput = document.getElementById('verify-file');
+                if (!fileInput.files.length) {
+                    verifyResult.textContent = 'No file selected.';
                     return;
                 }
-                const overallMark = data.verified ? '✓' : '✗';
-                const smtMark = data.smt_anchor_verified ? '✓' : '✗';
-                const zkMark = data.zk_verified ? '✓' : '✗';
-                let verificationOutput = `${overallMark} Overall verification: ${data.verified ? 'PASSED' : 'FAILED'}\n\n` +
-                            `${smtMark} SMT anchor verified : ${data.smt_anchor_verified}\n` +
-                            `${zkMark} ZK proof verified   : ${data.zk_verified}` +
-                            ` (requires snarkjs; placeholder proof will show false)\n\n`;
-                if (data.revealed_sections.length > 0) {
-                    verificationOutput += `Revealed sections (${data.revealed_sections.length} of ${data.total_parts}):\n`;
-                    data.revealed_sections.forEach(s => {
-                        verificationOutput += `  [${s.index}] ${s.content}\n`;
+                try {
+                    const text = await fileInput.files[0].text();
+                    const bundle = JSON.parse(text);
+                    const resp = await fetch('/verify', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify(bundle),
                     });
-                } else {
-                    verificationOutput += 'No revealed sections in bundle.';
+                    const data = await resp.json();
+                    if (!data.ok) {
+                        verifyResult.textContent = `✗ Error: ${data.error}`;
+                        return;
+                    }
+                    const overallMark = data.verified ? '✓' : '✗';
+                    const smtMark = data.smt_anchor_verified ? '✓' : '✗';
+                    const zkMark = data.zk_verified ? '✓' : '✗';
+                    let verificationOutput = `${overallMark} Overall verification: ${data.verified ? 'PASSED' : 'FAILED'}\n\n` +
+                                `${smtMark} SMT anchor verified : ${data.smt_anchor_verified}\n` +
+                                `${zkMark} ZK proof verified   : ${data.zk_verified}` +
+                                ` (requires snarkjs; placeholder proof will show false)\n\n`;
+                    if (data.revealed_sections.length > 0) {
+                        verificationOutput += `Revealed sections (${data.revealed_sections.length} of ${data.total_parts}):\n`;
+                        data.revealed_sections.forEach(s => {
+                            verificationOutput += `  [${s.index}] ${s.content}\n`;
+                        });
+                    } else {
+                        verificationOutput += 'No revealed sections in bundle.';
+                    }
+                    verifyResult.textContent = verificationOutput;
+                } catch (err) {
+                    verifyResult.textContent = `✗ Failed: ${err}`;
                 }
-                verifyResult.textContent = verificationOutput;
-            } catch (err) {
-                verifyResult.textContent = `✗ Failed: ${err}`;
-            }
-        });
+            });
+        }
 
         // ── Proof Bundle Inspector ──────────────────────────────────────────
         async function inspectProofBundleText(rawText) {
