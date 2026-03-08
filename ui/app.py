@@ -2,7 +2,7 @@
 
 import json
 import os
-from typing import Any
+from typing import Any, cast
 from urllib.error import HTTPError, URLError
 from urllib.parse import quote, urlparse
 from urllib.request import urlopen
@@ -32,6 +32,32 @@ if _parsed_api_base.scheme not in {"http", "https"} or not _parsed_api_base.netl
 # Debug UI is disabled by default; set OLYMPUS_DEBUG_UI=true to enable.
 DEBUG_UI_ENABLED = os.environ.get("OLYMPUS_DEBUG_UI", "false").lower() == "true"
 
+
+def _load_federation_nodes() -> dict[str, str]:
+    """Parse optional federation node endpoints from JSON environment configuration."""
+    raw_nodes = os.environ.get("OLYMPUS_FEDERATION_NODES", "").strip()
+    if not raw_nodes:
+        return {}
+
+    try:
+        parsed = json.loads(raw_nodes)
+    except json.JSONDecodeError as exc:
+        raise ValueError("OLYMPUS_FEDERATION_NODES must be valid JSON") from exc
+
+    if not isinstance(parsed, dict):
+        raise ValueError("OLYMPUS_FEDERATION_NODES must be a JSON object of node_name -> base_url")
+
+    nodes: dict[str, str] = {}
+    for name, base_url in parsed.items():
+        parsed_base = urlparse(str(base_url))
+        if parsed_base.scheme not in {"http", "https"} or not parsed_base.netloc:
+            raise ValueError(f"Federation node '{name}' must use an absolute http(s) URL")
+        nodes[str(name)] = str(base_url)
+    return nodes
+
+
+FEDERATION_NODES = _load_federation_nodes()
+
 app = FastAPI(title="Olympus Debug Console", version="0.1.0")
 templates = Jinja2Templates(directory="ui/templates")
 
@@ -43,10 +69,34 @@ _commit_store: dict[str, dict[str, Any]] = {}
 
 def _fetch_json(path: str) -> dict[str, Any] | list[dict[str, Any]]:
     """Fetch JSON from the Olympus API."""
+    return _fetch_json_from_base(API_BASE, path)
+
+
+def _fetch_json_from_base(base_url: str, path: str) -> dict[str, Any] | list[dict[str, Any]]:
+    """Fetch JSON from a specific Olympus API base URL."""
     if not path.startswith("/") or "://" in path:
         raise ValueError("API path must be a relative path")
-    with urlopen(f"{API_BASE}{path}", timeout=5) as response:  # noqa: S310
-        return json.loads(response.read().decode("utf-8"))
+    with urlopen(f"{base_url}{path}", timeout=5) as response:  # noqa: S310
+        payload = json.loads(response.read().decode("utf-8"))
+    if isinstance(payload, dict):
+        return cast(dict[str, Any], payload)
+    if isinstance(payload, list) and all(isinstance(item, dict) for item in payload):
+        return cast(list[dict[str, Any]], payload)
+    raise TypeError("Expected JSON object or list of objects from API")
+
+
+def _expect_json_object(payload: dict[str, Any] | list[dict[str, Any]]) -> dict[str, Any]:
+    """Require a JSON object payload from the API helper."""
+    if not isinstance(payload, dict):
+        raise TypeError("Expected JSON object")
+    return payload
+
+
+def _expect_json_list(payload: dict[str, Any] | list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Require a JSON array payload from the API helper."""
+    if not isinstance(payload, list):
+        raise TypeError("Expected JSON array")
+    return payload
 
 
 def _verify_signature(header: dict[str, Any]) -> bool:
@@ -67,6 +117,108 @@ def _is_chain_broken(entries: list[dict[str, Any]]) -> bool:
     return False
 
 
+def _sync_status(latest_seq: int, max_seq: int) -> str:
+    """Summarize whether a node is caught up with the highest observed sequence."""
+    lag = max_seq - latest_seq
+    if lag <= 0:
+        return "in sync"
+    if lag == 1:
+        return "lagging by 1 header"
+    return f"lagging by {lag} headers"
+
+
+def _collect_federation_dashboard() -> dict[str, Any]:
+    """Fetch multi-node shard health, agreement, and historical snapshots."""
+    if not FEDERATION_NODES:
+        return {"configured": False, "nodes": [], "shards": []}
+
+    node_snapshots: list[dict[str, Any]] = []
+    for node_name, base_url in FEDERATION_NODES.items():
+        snapshot: dict[str, Any] = {
+            "name": node_name,
+            "base_url": base_url,
+            "health": None,
+            "shards": [],
+            "error": None,
+        }
+        try:
+            snapshot["health"] = _expect_json_object(_fetch_json_from_base(base_url, "/health"))
+            shards = _expect_json_list(_fetch_json_from_base(base_url, "/shards"))
+            for shard in shards:
+                shard_id = shard["shard_id"]
+                header = _expect_json_object(
+                    _fetch_json_from_base(base_url, f"/shards/{quote(shard_id)}/header/latest")
+                )
+                ledger = _expect_json_object(
+                    _fetch_json_from_base(base_url, f"/ledger/{quote(shard_id)}/tail?n=10")
+                )
+                history = _expect_json_object(
+                    _fetch_json_from_base(base_url, f"/shards/{quote(shard_id)}/history?n=5")
+                )
+                entries = ledger.get("entries", [])
+                snapshot["shards"].append(
+                    {
+                        "shard_id": shard_id,
+                        "latest_seq": shard["latest_seq"],
+                        "latest_root": shard["latest_root"],
+                        "header": header,
+                        "history": history.get("headers", []),
+                        "chain_ok": not _is_chain_broken(entries),
+                        "signature_valid": _verify_signature(header),
+                    }
+                )
+        except (HTTPError, URLError, KeyError, TypeError, ValueError) as exc:
+            snapshot["error"] = str(exc)
+        node_snapshots.append(snapshot)
+
+    shard_rows: list[dict[str, Any]] = []
+    shard_ids = sorted(
+        {
+            shard["shard_id"]
+            for snapshot in node_snapshots
+            for shard in snapshot.get("shards", [])
+        }
+    )
+    quorum = (len(node_snapshots) // 2) + 1
+    for shard_id in shard_ids:
+        states = []
+        for snapshot in node_snapshots:
+            shard_state = next(
+                (candidate for candidate in snapshot.get("shards", []) if candidate["shard_id"] == shard_id),
+                None,
+            )
+            if shard_state is not None:
+                states.append({"node": snapshot["name"], **shard_state})
+
+        max_seq = max((state["latest_seq"] for state in states), default=0)
+        root_groups: dict[str, list[str]] = {}
+        for state in states:
+            root_groups.setdefault(state["latest_root"], []).append(state["node"])
+        agreement_root = ""
+        agreement_nodes: list[str] = []
+        if root_groups:
+            agreement_root, agreement_nodes = max(
+                root_groups.items(), key=lambda item: (len(item[1]), item[0])
+            )
+
+        for state in states:
+            state["sync_status"] = _sync_status(state["latest_seq"], max_seq)
+
+        shard_rows.append(
+            {
+                "shard_id": shard_id,
+                "quorum": quorum,
+                "agreement_root": agreement_root,
+                "agreement_nodes": agreement_nodes,
+                "agreement_count": len(agreement_nodes),
+                "quorum_met": len(agreement_nodes) >= quorum,
+                "states": states,
+            }
+        )
+
+    return {"configured": True, "nodes": node_snapshots, "shards": shard_rows}
+
+
 @app.get("/")
 def debug_console(request: Request):
     """Render the debug console view."""
@@ -77,10 +229,11 @@ def debug_console(request: Request):
         "api_base": API_BASE,
         "shards": [],
         "banners": [],
+        "federation": _collect_federation_dashboard(),
     }
 
     try:
-        shards = _fetch_json("/shards")
+        shards = _expect_json_list(_fetch_json("/shards"))
     except HTTPError as exc:
         if exc.code == 503:
             context["banners"].append("Database unavailable (503).")
@@ -93,17 +246,30 @@ def debug_console(request: Request):
 
     for shard in shards:
         shard_id = shard["shard_id"]
-        shard_row = {"shard": shard, "header": None, "ledger_tail": [], "signature_valid": True}
+        shard_row: dict[str, Any] = {
+            "shard": shard,
+            "header": None,
+            "ledger_tail": [],
+            "signature_valid": True,
+            "chain_ok": True,
+            "history": [],
+        }
         try:
-            header = _fetch_json(f"/shards/{quote(shard_id)}/header/latest")
+            header = _expect_json_object(_fetch_json(f"/shards/{quote(shard_id)}/header/latest"))
             shard_row["header"] = header
             shard_row["signature_valid"] = _verify_signature(header)
             if not shard_row["signature_valid"]:
                 context["banners"].append(f"Invalid signature detected for shard {shard_id}.")
 
-            ledger = _fetch_json(f"/ledger/{quote(shard_id)}/tail?n=10")
+            ledger = _expect_json_object(_fetch_json(f"/ledger/{quote(shard_id)}/tail?n=10"))
             entries = ledger.get("entries", [])
             shard_row["ledger_tail"] = entries
+            shard_row["chain_ok"] = not _is_chain_broken(entries)
+            try:
+                history = _expect_json_object(_fetch_json(f"/shards/{quote(shard_id)}/history?n=5"))
+                shard_row["history"] = history.get("headers", [])
+            except (HTTPError, URLError, TypeError, ValueError, AssertionError):
+                shard_row["history"] = []
             if _is_chain_broken(entries):
                 context["banners"].append(f"Chain linkage broken in shard {shard_id} ledger tail.")
         except HTTPError as exc:
@@ -140,6 +306,29 @@ def proof_explorer(
         return JSONResponse(
             status_code=exc.code,
             content={"ok": False, "error": f"Proof query failed (HTTP {exc.code})."},
+        )
+    except URLError:
+        return JSONResponse(status_code=503, content={"ok": False, "error": "API unavailable."})
+
+
+@app.get("/state-diff")
+def state_diff_viewer(
+    shard_id: str = Query(...),
+    from_seq: int = Query(..., ge=0),
+    to_seq: int = Query(..., ge=0),
+):
+    """Proxy state-root diff requests to the API."""
+    if not DEBUG_UI_ENABLED:
+        raise HTTPException(status_code=404, detail="Debug UI is disabled in this environment.")
+
+    path = f"/shards/{quote(shard_id)}/diff?from_seq={from_seq}&to_seq={to_seq}"
+    try:
+        diff = _fetch_json(path)
+        return JSONResponse({"ok": True, "diff": diff})
+    except HTTPError as exc:
+        return JSONResponse(
+            status_code=exc.code,
+            content={"ok": False, "error": f"State diff query failed (HTTP {exc.code})."},
         )
     except URLError:
         return JSONResponse(status_code=503, content={"ok": False, "error": "API unavailable."})

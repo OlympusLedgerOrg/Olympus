@@ -41,7 +41,12 @@ from protocol.hashes import record_key, shard_header_hash
 from protocol.ledger import LedgerEntry
 from protocol.rfc3161 import _sha256_of_hash
 from protocol.shards import create_shard_header, sign_header, verify_header
-from protocol.ssmf import ExistenceProof, NonExistenceProof, SparseMerkleTree
+from protocol.ssmf import (
+    ExistenceProof,
+    NonExistenceProof,
+    SparseMerkleTree,
+    diff_sparse_merkle_trees,
+)
 
 
 class StorageLayer:
@@ -483,6 +488,89 @@ class StorageLayer:
                 "seq": row["seq"],
             }
 
+    def get_header_history(self, shard_id: str, n: int = 10) -> list[dict[str, Any]]:
+        """
+        Get the last N signed shard headers for a shard.
+
+        Args:
+            shard_id: Shard identifier
+            n: Number of headers to retrieve
+
+        Returns:
+            Header snapshots in reverse chronological order
+        """
+        with self._get_connection() as conn, conn.cursor(row_factory=dict_row) as cur:
+            cur.execute(
+                """
+                    SELECT seq, root, header_hash, previous_header_hash, ts
+                    FROM shard_headers
+                    WHERE shard_id = %s
+                    ORDER BY seq DESC
+                    LIMIT %s
+                    """,
+                (shard_id, n),
+            )
+            rows = cur.fetchall()
+            history = []
+            for row in rows:
+                ts_value = row["ts"]
+                if isinstance(ts_value, str):
+                    timestamp_str = ts_value
+                elif isinstance(ts_value, datetime):
+                    timestamp_str = ts_value.isoformat().replace("+00:00", "Z")
+                else:
+                    raise TypeError(
+                        f"Unexpected timestamp type: {type(ts_value).__name__}. Expected str or datetime."
+                    )
+
+                history.append(
+                    {
+                        "seq": row["seq"],
+                        "root_hash": bytes(row["root"]).hex(),
+                        "header_hash": bytes(row["header_hash"]).hex(),
+                        "previous_header_hash": bytes(row["previous_header_hash"]).hex(),
+                        "timestamp": timestamp_str,
+                    }
+                )
+
+            return history
+
+    def get_root_diff(self, shard_id: str, from_seq: int, to_seq: int) -> dict[str, Any]:
+        """
+        Compare two historical shard states reconstructed from header timestamps.
+
+        Args:
+            shard_id: Shard identifier
+            from_seq: Baseline shard header sequence
+            to_seq: Target shard header sequence
+
+        Returns:
+            Root hashes and leaf-level additions, changes, and removals
+
+        Raises:
+            ValueError: If either sequence does not exist
+        """
+        with self._get_connection() as conn, conn.cursor(row_factory=dict_row) as cur:
+            from_header = self._get_header_by_seq(cur, shard_id, from_seq)
+            to_header = self._get_header_by_seq(cur, shard_id, to_seq)
+
+            if from_header is None:
+                raise ValueError(f"Shard header not found: {shard_id}@{from_seq}")
+            if to_header is None:
+                raise ValueError(f"Shard header not found: {shard_id}@{to_seq}")
+
+            from_tree = self._load_tree_state(cur, shard_id, up_to_ts=from_header["ts"])
+            to_tree = self._load_tree_state(cur, shard_id, up_to_ts=to_header["ts"])
+            diff = diff_sparse_merkle_trees(from_tree, to_tree)
+
+            return {
+                "from_root_hash": bytes(from_header["root"]).hex(),
+                "to_root_hash": bytes(to_header["root"]).hex(),
+                "added": [entry.to_dict() for entry in diff["added"]],
+                "changed": [entry.to_dict() for entry in diff["changed"]],
+                "removed": [entry.to_dict() for entry in diff["removed"]],
+            }
+
     def get_ledger_tail(self, shard_id: str, n: int = 10) -> list[LedgerEntry]:
         """
         Get the last N ledger entries for a shard.
@@ -703,7 +791,12 @@ class StorageLayer:
             return row[key]
         return row[idx]
 
-    def _load_tree_state(self, cur: psycopg.Cursor[Any], shard_id: str) -> SparseMerkleTree:
+    def _load_tree_state(
+        self,
+        cur: psycopg.Cursor[Any],
+        shard_id: str,
+        up_to_ts: datetime | str | None = None,
+    ) -> SparseMerkleTree:
         """
         Load sparse Merkle tree state from database.
 
@@ -713,6 +806,7 @@ class StorageLayer:
         Args:
             cur: Database cursor
             shard_id: Shard identifier
+            up_to_ts: Optional inclusive timestamp cutoff for historical snapshots
 
         Returns:
             SparseMerkleTree with all leaves loaded
@@ -720,14 +814,27 @@ class StorageLayer:
         tree = SparseMerkleTree()
 
         # Load all leaves for this shard
-        cur.execute(
-            """
-            SELECT key, value_hash FROM smt_leaves
-            WHERE shard_id = %s
-            ORDER BY ts ASC
-            """,
-            (shard_id,),
-        )
+        if up_to_ts is None:
+            cur.execute(
+                """
+                SELECT key, value_hash FROM smt_leaves
+                WHERE shard_id = %s
+                ORDER BY ts ASC, key ASC
+                """,
+                (shard_id,),
+            )
+        else:
+            cutoff = up_to_ts
+            if isinstance(cutoff, str):
+                cutoff = datetime.fromisoformat(cutoff.replace("Z", "+00:00"))
+            cur.execute(
+                """
+                SELECT key, value_hash FROM smt_leaves
+                WHERE shard_id = %s AND ts <= %s
+                ORDER BY ts ASC, key ASC
+                """,
+                (shard_id, cutoff),
+            )
         rows = cur.fetchall()
 
         # Rebuild tree by updating each leaf
@@ -739,6 +846,30 @@ class StorageLayer:
             tree.update(key, value_hash)
 
         return tree
+
+    def _get_header_by_seq(
+        self, cur: psycopg.Cursor[Any], shard_id: str, seq: int
+    ) -> dict[str, Any] | None:
+        """
+        Retrieve a shard header row by sequence number.
+
+        Args:
+            cur: Database cursor
+            shard_id: Shard identifier
+            seq: Header sequence number
+
+        Returns:
+            Matching row or None when absent
+        """
+        cur.execute(
+            """
+            SELECT seq, root, header_hash, previous_header_hash, ts
+            FROM shard_headers
+            WHERE shard_id = %s AND seq = %s
+            """,
+            (shard_id, seq),
+        )
+        return cur.fetchone()
 
     def _persist_tree_nodes(
         self, cur: psycopg.Cursor[Any], shard_id: str, tree: SparseMerkleTree

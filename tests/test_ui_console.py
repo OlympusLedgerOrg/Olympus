@@ -94,6 +94,65 @@ def test_debug_ui_disabled_by_default(monkeypatch):
         client.get("/proof-explorer?shard_id=s&record_type=t&record_id=r&version=1").status_code
         == 404
     )
+    assert client.get("/state-diff?shard_id=s&from_seq=1&to_seq=2").status_code == 404
+
+
+def test_console_shows_federation_dashboard(monkeypatch):
+    """Root page should render federation agreement details when nodes are configured."""
+    monkeypatch.setattr(ui_app, "DEBUG_UI_ENABLED", True)
+    monkeypatch.setattr(
+        ui_app,
+        "FEDERATION_NODES",
+        {
+            "node1": "http://node1.example",
+            "node2": "http://node2.example",
+            "node3": "http://node3.example",
+        },
+    )
+    monkeypatch.setattr(ui_app, "_fetch_json", lambda path: [])
+
+    def fake_fetch(base_url: str, path: str):
+        if path == "/health":
+            return {"status": "healthy"}
+        if path == "/shards":
+            return [{"shard_id": "s1", "latest_seq": 2, "latest_root": "abc"}]
+        if path == "/shards/s1/header/latest":
+            return {"header_hash": "0" * 64, "signature": "0" * 128, "pubkey": "0" * 64}
+        if path == "/ledger/s1/tail?n=10":
+            return {"entries": [{"prev_entry_hash": "", "entry_hash": "e1"}]}
+        if path == "/shards/s1/history?n=5":
+            return {"headers": [{"seq": 2, "root_hash": "abc"}]}
+        raise AssertionError(f"Unexpected path for {base_url}: {path}")
+
+    monkeypatch.setattr(ui_app, "_fetch_json_from_base", fake_fetch)
+    monkeypatch.setattr(ui_app, "_verify_signature", lambda header: True)
+
+    response = client.get("/")
+
+    assert response.status_code == 200
+    assert "Federation Health Dashboard" in response.text
+    assert "in sync" in response.text
+    assert "seq 2" in response.text
+
+
+def test_state_diff_proxy(monkeypatch):
+    """The state diff proxy should return API diff payloads."""
+    monkeypatch.setattr(ui_app, "DEBUG_UI_ENABLED", True)
+    monkeypatch.setattr(
+        ui_app,
+        "_fetch_json",
+        lambda path: {
+            "from_root_hash": "aa" * 32,
+            "to_root_hash": "bb" * 32,
+            "summary": {"added": 1, "changed": 0, "removed": 0},
+        },
+    )
+
+    response = client.get("/state-diff?shard_id=s1&from_seq=1&to_seq=2")
+
+    assert response.status_code == 200
+    assert response.json()["ok"] is True
+    assert response.json()["diff"]["summary"]["added"] == 1
 
 
 def test_console_uses_theme_tokens(monkeypatch):
