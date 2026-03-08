@@ -434,7 +434,13 @@ def derive_scoped_signing_key(
         raise ValueError("master_seed must be non-empty")
     if not shard_id:
         raise ValueError("shard_id must be non-empty")
-    info = f"olympus-ed25519:{shard_id}:{node_id}".encode()
+    info = canonical_json_bytes(
+        {
+            "label": "olympus-ed25519",
+            "node_id": node_id,
+            "shard_id": shard_id,
+        }
+    )
     seed = HKDF(
         algorithm=hashes.SHA256(),
         length=32,
