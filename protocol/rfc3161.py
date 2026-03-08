@@ -371,6 +371,8 @@ def timestamp_watchdog_status(
     if stale_after_seconds < 0:
         raise ValueError("stale_after_seconds must be non-negative")
 
+    if now is not None and (now.tzinfo is None or now.utcoffset() is None):
+        raise ValueError("now must be timezone-aware")
     current_time = now.astimezone(timezone.utc) if now is not None else datetime.now(timezone.utc)
     token_map = {
         parsed.tsa_url: parsed

@@ -464,3 +464,14 @@ def test_verify_timestamp_token_rejects_dev_trust_mode_in_production(monkeypatch
 
 def test_max_tsa_tokens_constant_limits_flooding():
     assert MAX_TSA_TOKENS == 3
+
+
+def test_timestamp_watchdog_status_rejects_naive_now():
+    token = TimestampToken("a" * 64, DEFAULT_TSA_URL, b"\x01", "2026-03-01T00:00:00Z")
+
+    with pytest.raises(ValueError, match="timezone-aware"):
+        timestamp_watchdog_status(
+            [token],
+            required_tsa_urls=(DEFAULT_TSA_URL, DIGICERT_TSA_URL),
+            now=datetime(2026, 3, 1, 0, 2, 0),
+        )

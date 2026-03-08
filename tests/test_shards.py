@@ -186,6 +186,13 @@ def test_derive_scoped_signing_key_changes_across_scopes():
     assert bytes(key_a) != bytes(key_c)
 
 
+def test_derive_scoped_signing_key_rejects_empty_explicit_node_id():
+    master_seed = hash_bytes(b"root secret")
+
+    with pytest.raises(ValueError, match="node_id must be non-empty"):
+        derive_scoped_signing_key(master_seed, "shard-a", "")
+
+
 def test_get_verify_key_from_signing_key():
     """Test extracting verify key from signing key."""
     signing_key = nacl.signing.SigningKey.generate()
