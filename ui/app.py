@@ -15,7 +15,7 @@ from fastapi.responses import JSONResponse
 from fastapi.templating import Jinja2Templates
 
 from protocol.canonical_json import canonical_json_bytes
-from protocol.hashes import blake3_to_field_element, hash_bytes
+from protocol.hashes import HASH_SEPARATOR, blake3_to_field_element, hash_bytes
 from protocol.poseidon_tree import PoseidonMerkleTree
 from protocol.redaction import RedactionProtocol
 from protocol.redaction_ledger import (
@@ -79,13 +79,20 @@ def _require_debug_ui() -> None:
 
 def _normalize_timestamp(value: str, field_name: str) -> str:
     """Parse an ISO 8601 timestamp and normalize it to a Z-suffixed UTC string."""
+    return _parse_timestamp(value, field_name).isoformat().replace("+00:00", "Z")
+
+
+def _parse_timestamp(value: str, field_name: str) -> datetime:
+    """Parse an ISO 8601 timestamp into a timezone-aware UTC datetime."""
     try:
         parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
     except ValueError as exc:
-        raise ValueError(f"{field_name} must be a valid ISO 8601 timestamp.") from exc
+        raise ValueError(
+            f"{field_name} must be a valid ISO 8601 timestamp (e.g., 2026-03-08T12:00:00Z)."
+        ) from exc
     if parsed.tzinfo is None:
         parsed = parsed.replace(tzinfo=timezone.utc)
-    return parsed.astimezone(timezone.utc).isoformat().replace("+00:00", "Z")
+    return parsed.astimezone(timezone.utc)
 
 
 def _parse_recipient_keys(raw: str | None) -> list[str]:
@@ -103,12 +110,21 @@ def _parse_recipient_keys(raw: str | None) -> list[str]:
 
 
 def _build_receipt(receipt_type: str, payload: dict[str, Any]) -> dict[str, Any]:
-    """Create a deterministic receipt with a cryptographic hash."""
+    """Create a deterministic receipt with a cryptographic hash.
+
+    The authoritative receipt timestamp depends on workflow: commitments use
+    ``committed_at``, generated artifacts use ``generated_at``, response logs
+    use ``timestamp``, and delay proofs use ``proof_generated_at``.
+    """
+    issued_at = (
+        payload.get("committed_at")
+        or payload.get("generated_at")
+        or payload.get("timestamp")
+        or payload.get("proof_generated_at")
+    )
     receipt_payload = {
         "receipt_type": receipt_type,
-        "issued_at": payload.get(
-            "committed_at", payload.get("generated_at", payload.get("timestamp"))
-        ),
+        "issued_at": issued_at,
         "payload": payload,
     }
     receipt_hash = hash_bytes(canonical_json_bytes(receipt_payload)).hex()
@@ -185,6 +201,7 @@ def _commit_parts(
         "release_at": normalized_release_at,
         "recipient_keys": recipients,
         "revoked_recipient_keys": [],
+        "embargo_update_receipts": [],
         "metadata": entry_metadata,
         "receipt": receipt,
     }
@@ -210,7 +227,7 @@ def _get_commit_entry(document_id: str, version: int) -> dict[str, Any]:
 def _embargo_summary(entry: dict[str, Any]) -> dict[str, Any]:
     """Return derived embargo state for a committed document."""
     release_at = entry.get("release_at")
-    now = datetime.now(timezone.utc)
+    now = _parse_timestamp(current_timestamp(), "current time")
     active_keys = [
         key
         for key in entry.get("recipient_keys", [])
@@ -218,7 +235,7 @@ def _embargo_summary(entry: dict[str, Any]) -> dict[str, Any]:
     ]
     is_released = False
     if release_at:
-        is_released = datetime.fromisoformat(release_at.replace("Z", "+00:00")) <= now
+        is_released = _parse_timestamp(release_at, "release_at") <= now
     return {
         "release_at": release_at,
         "is_released": is_released,
@@ -230,21 +247,22 @@ def _embargo_summary(entry: dict[str, Any]) -> dict[str, Any]:
 
 def _foia_delay_proof(record: dict[str, Any]) -> dict[str, Any]:
     """Build a deterministic delay proof from FOIA request/response timestamps."""
-    submitted_at = datetime.fromisoformat(record["submitted_at"].replace("Z", "+00:00"))
+    submitted_at = _parse_timestamp(record["submitted_at"], "submitted_at")
     response_at_value = record.get("response_received_at")
     reference_timestamp = response_at_value or current_timestamp()
-    reference_at = datetime.fromisoformat(reference_timestamp.replace("Z", "+00:00"))
+    reference_at = _parse_timestamp(reference_timestamp, "reference_timestamp")
     elapsed_seconds = int((reference_at - submitted_at).total_seconds())
 
     due_at_value = record.get("response_due_at")
     delayed = False
     delay_seconds = 0
     if due_at_value:
-        due_at = datetime.fromisoformat(due_at_value.replace("Z", "+00:00"))
+        due_at = _parse_timestamp(due_at_value, "response_due_at")
         delayed = reference_at > due_at
         delay_seconds = max(0, int((reference_at - due_at).total_seconds()))
 
     response_receipt = record.get("response_receipt") or {}
+    pending = response_at_value is None
     payload = {
         "request_id": record["request_id"],
         "request_receipt_hash": record["request_receipt"]["receipt_hash"],
@@ -254,12 +272,14 @@ def _foia_delay_proof(record: dict[str, Any]) -> dict[str, Any]:
         "response_due_at": due_at_value,
         "proof_generated_at": current_timestamp(),
         "reference_timestamp": reference_timestamp,
-        "pending": response_at_value is None,
+        "proof_mode": "snapshot" if pending else "response-anchored",
+        "pending": pending,
         "elapsed_seconds": elapsed_seconds,
         "delayed": delayed,
         "delay_seconds": delay_seconds,
     }
-    return _build_receipt("foia_delay_proof", payload)
+    receipt_type = "foia_delay_snapshot" if pending else "foia_delay_proof"
+    return _build_receipt(receipt_type, payload)
 
 
 @app.get("/")
@@ -346,7 +366,15 @@ async def commit_document(
     release_at: str | None = Form(None),
     recipient_keys: str | None = Form(None),
 ):
-    """Commit a document using the dual-anchor strategy (BLAKE3 + Poseidon)."""
+    """Commit a document using the dual-anchor strategy (BLAKE3 + Poseidon).
+
+    Args:
+        document_id: Human-readable document identifier.
+        version: Positive document version number.
+        file: UTF-8 plain text or JSON array of strings to commit.
+        release_at: Optional embargo expiry in ISO 8601 format.
+        recipient_keys: Optional comma/newline separated access-recipient keys.
+    """
     _require_debug_ui()
 
     raw = await file.read()
@@ -608,12 +636,12 @@ async def commit_foia_request(request: Request):
         "response_due_at": normalized_due_at,
     }
     parts = [
-        f"request_id={request_id}",
-        f"agency={agency}",
-        f"requester={requester}",
-        f"submitted_at={submitted_at}",
-        f"response_due_at={normalized_due_at or ''}",
-        f"description={description}",
+        HASH_SEPARATOR.join(["request_id", request_id]),
+        HASH_SEPARATOR.join(["agency", agency]),
+        HASH_SEPARATOR.join(["requester", requester]),
+        HASH_SEPARATOR.join(["submitted_at", submitted_at]),
+        HASH_SEPARATOR.join(["response_due_at", normalized_due_at or ""]),
+        HASH_SEPARATOR.join(["description", description]),
     ]
     try:
         commit_result = _commit_parts(
@@ -697,9 +725,9 @@ async def log_foia_response(request: Request):
             document_id=f"foia-response:{request_id}",
             version=1,
             parts=[
-                f"request_id={request_id}",
-                f"response_received_at={response_received_at}",
-                f"response_summary={response_summary}",
+                HASH_SEPARATOR.join(["request_id", request_id]),
+                HASH_SEPARATOR.join(["response_received_at", response_received_at]),
+                HASH_SEPARATOR.join(["response_summary", response_summary]),
             ],
             metadata=metadata,
         )
@@ -786,20 +814,21 @@ async def update_embargo(request: Request):
 
     entry["release_at"] = normalized_release_at
     entry["recipient_keys"] = recipient_keys
-    entry["revoked_recipient_keys"] = [
-        key for key in entry.get("revoked_recipient_keys", []) if key in recipient_keys
-    ]
-    entry["receipt"] = _build_receipt(
-        "document_commitment",
+    receipt = _build_receipt(
+        "embargo_update",
         {
-            **entry["receipt"]["payload"],
+            "document_id": document_id,
+            "version": version,
+            "committed_at": entry["committed_at"],
+            "original_receipt_hash": entry["receipt"]["receipt_hash"],
             "release_at": normalized_release_at,
             "recipient_keys": recipient_keys,
+            "previous_recipient_keys": entry["receipt"]["payload"].get("recipient_keys", []),
+            "updated_at": current_timestamp(),
         },
     )
-    return JSONResponse(
-        {"ok": True, "embargo": _embargo_summary(entry), "receipt": entry["receipt"]}
-    )
+    entry["embargo_update_receipts"].append(receipt)
+    return JSONResponse({"ok": True, "embargo": _embargo_summary(entry), "receipt": receipt})
 
 
 @app.post("/embargo/revoke")

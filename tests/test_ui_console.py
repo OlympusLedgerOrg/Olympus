@@ -380,6 +380,7 @@ def test_embargo_update_and_revoke(monkeypatch):
     update_data = update_response.json()
     assert update_data["embargo"]["release_at"] == "2026-03-09T12:00:00Z"
     assert update_data["embargo"]["active_recipient_keys"] == ["key-a", "key-b"]
+    assert update_data["receipt"]["receipt_type"] == "embargo_update"
     assert len(update_data["receipt"]["receipt_hash"]) == 64
 
     revoke_response = client.post(
@@ -395,6 +396,7 @@ def test_embargo_update_and_revoke(monkeypatch):
     assert get_response.status_code == 200
     get_data = get_response.json()
     assert get_data["embargo"]["active_recipient_keys"] == ["key-b"]
+    assert get_data["embargo"]["revoked_recipient_keys"] == ["key-a"]
 
 
 # ── FOIA tracker ──────────────────────────────────────────────────────────────
@@ -421,6 +423,8 @@ def test_foia_request_response_and_delay_proof(monkeypatch):
     request_data = request_response.json()
     assert request_data["request"]["request_id"] == "foia-001"
     assert request_data["request"]["request_receipt"]["receipt_type"] == "foia_request_submission"
+    assert request_data["delay_proof"]["receipt_type"] == "foia_delay_snapshot"
+    assert request_data["delay_proof"]["payload"]["proof_mode"] == "snapshot"
     assert request_data["delay_proof"]["payload"]["pending"] is True
 
     response_response = client.post(
@@ -435,6 +439,8 @@ def test_foia_request_response_and_delay_proof(monkeypatch):
     response_data = response_response.json()
     assert response_data["request"]["response_received_at"] == "2026-03-07T00:00:00Z"
     assert response_data["request"]["response_receipt"]["receipt_type"] == "foia_response_log"
+    assert response_data["delay_proof"]["receipt_type"] == "foia_delay_proof"
+    assert response_data["delay_proof"]["payload"]["proof_mode"] == "response-anchored"
     assert response_data["delay_proof"]["payload"]["pending"] is False
     assert response_data["delay_proof"]["payload"]["delayed"] is True
     assert response_data["delay_proof"]["payload"]["delay_seconds"] == 172800
@@ -450,6 +456,39 @@ def test_foia_request_response_and_delay_proof(monkeypatch):
         proof_data["delay_proof"]["payload"]["response_receipt_hash"]
         == (response_data["request"]["response_receipt"]["receipt_hash"])
     )
+
+
+def test_foia_response_before_due_date_is_not_delayed(monkeypatch):
+    """FOIA delay proof should show no delay when the response arrives before the due date."""
+    monkeypatch.setattr(ui_app, "DEBUG_UI_ENABLED", True)
+    ui_app._commit_store.clear()
+    ui_app._foia_store.clear()
+
+    client.post(
+        "/foia/request",
+        json={
+            "request_id": "foia-002",
+            "agency": "City Clerk",
+            "requester": "Alex Example",
+            "description": "Meeting minutes",
+            "submitted_at": "2026-03-01T00:00:00Z",
+            "response_due_at": "2026-03-05T00:00:00Z",
+        },
+    )
+
+    response = client.post(
+        "/foia/response",
+        json={
+            "request_id": "foia-002",
+            "response_received_at": "2026-03-04T12:00:00Z",
+            "response_summary": "Released in full",
+        },
+    )
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["delay_proof"]["payload"]["delayed"] is False
+    assert data["delay_proof"]["payload"]["delay_seconds"] == 0
 
 
 # ── New panel HTML presence ──────────────────────────────────────────────────

@@ -79,7 +79,7 @@
             <div class="row">
                 <input type="text" name="document_id" placeholder="document_id" required />
                 <input type="number" name="version" placeholder="version" value="1" min="1" />
-                <input type="text" name="release_at" placeholder="release_at (optional ISO 8601)" />
+                <input type="text" name="release_at" placeholder="scheduled_release_at (optional ISO 8601)" />
                 <button type="submit">Commit</button>
             </div>
             <div class="row">
@@ -143,7 +143,7 @@
             <button onclick="loadEmbargo()">Load Embargo State</button>
         </div>
         <div class="row">
-            <input type="text" id="embargo-release-at" placeholder="release_at (ISO 8601)" />
+            <input type="text" id="embargo-release-at" placeholder="scheduled_release_at (ISO 8601)" />
         </div>
         <div class="row">
             <textarea id="embargo-recipient-keys" placeholder="recipient keys (comma or newline separated)"></textarea>
@@ -265,7 +265,9 @@
             const a = document.createElement('a');
             a.href = url;
             a.download = filename;
+            document.body.appendChild(a);
             a.click();
+            document.body.removeChild(a);
             URL.revokeObjectURL(url);
         }
 
@@ -292,7 +294,7 @@
                         `BLAKE3 root  : ${data.blake3_root}\n` +
                         `Poseidon root: ${data.poseidon_root}\n` +
                         `Receipt hash : ${data.receipt.receipt_hash}\n` +
-                        `Release at   : ${data.embargo.release_at || 'none'}\n` +
+                        `Scheduled release: ${data.embargo.release_at || 'none'}\n` +
                         `Recipients   : ${data.embargo.active_recipient_keys.length}`;
                 } else {
                     commitResult.textContent = `✗ Error: ${data.error}`;
@@ -378,6 +380,7 @@
                     `✓ FOIA response recorded.\n\n` +
                     `Request ID       : ${data.request.request_id}\n` +
                     `Response at      : ${data.request.response_received_at}\n` +
+                    `Proof mode       : ${data.delay_proof.payload.proof_mode}\n` +
                     `Elapsed seconds  : ${data.delay_proof.payload.elapsed_seconds}\n` +
                     `Delayed          : ${data.delay_proof.payload.delayed}\n` +
                     `Delay seconds    : ${data.delay_proof.payload.delay_seconds}\n` +
@@ -408,6 +411,7 @@
                 result.textContent =
                     `✓ Delay proof loaded.\n\n` +
                     `Request ID       : ${data.request.request_id}\n` +
+                    `Proof mode       : ${data.delay_proof.payload.proof_mode}\n` +
                     `Pending          : ${data.delay_proof.payload.pending}\n` +
                     `Elapsed seconds  : ${data.delay_proof.payload.elapsed_seconds}\n` +
                     `Delayed          : ${data.delay_proof.payload.delayed}\n` +
@@ -446,7 +450,7 @@
                 result.textContent =
                     `✓ Embargo loaded.\n\n` +
                     `Released         : ${data.embargo.is_released}\n` +
-                    `Release at       : ${data.embargo.release_at || 'none'}\n` +
+                    `Scheduled release: ${data.embargo.release_at || 'none'}\n` +
                     `Active recipients: ${data.embargo.active_recipient_keys.join(', ') || 'none'}\n` +
                     `Revoked recipients: ${data.embargo.revoked_recipient_keys.join(', ') || 'none'}`;
             } catch (err) {
@@ -483,7 +487,7 @@
                 }
                 result.textContent =
                     `✓ Embargo saved.\n\n` +
-                    `Release at       : ${data.embargo.release_at || 'none'}\n` +
+                    `Scheduled release: ${data.embargo.release_at || 'none'}\n` +
                     `Active recipients: ${data.embargo.active_recipient_keys.join(', ') || 'none'}\n` +
                     `Revoked recipients: ${data.embargo.revoked_recipient_keys.join(', ') || 'none'}\n` +
                     `Receipt hash     : ${data.receipt.receipt_hash}`;
