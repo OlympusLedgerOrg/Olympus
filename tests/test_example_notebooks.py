@@ -12,6 +12,21 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 EXAMPLES_DIR = REPO_ROOT / "examples"
 
 
+def extract_notebook_sources(data: dict) -> str:
+    """Return the concatenated source text from every notebook cell."""
+    return "\n".join("".join(cell.get("source", [])) for cell in data["cells"])
+
+
+def extract_notebook_outputs(data: dict) -> str:
+    """Return concatenated stream output text from every notebook code cell."""
+    return "\n".join(
+        "".join(output.get("text", []))
+        for cell in data["cells"]
+        for output in cell.get("outputs", [])
+        if output.get("output_type") == "stream"
+    )
+
+
 @pytest.mark.parametrize(
     ("name", "required_strings", "required_output"),
     [
@@ -70,13 +85,8 @@ def test_explanatory_notebook_exists_and_contains_expected_walkthrough(
     assert data["nbformat"] == 4
     assert data["cells"], f"Notebook {name} has no cells"
 
-    sources = "\n".join("".join(cell.get("source", [])) for cell in data["cells"])
-    outputs = "\n".join(
-        "".join(output.get("text", []))
-        for cell in data["cells"]
-        for output in cell.get("outputs", [])
-        if output.get("output_type") == "stream"
-    )
+    sources = extract_notebook_sources(data)
+    outputs = extract_notebook_outputs(data)
 
     for text in required_strings:
         assert text in sources, f"Notebook {name} is missing walkthrough text: {text!r}"
