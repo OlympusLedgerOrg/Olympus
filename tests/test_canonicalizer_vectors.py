@@ -61,8 +61,10 @@ def test_positive_canonicalizer_vectors_match_expected_output_and_hash() -> None
         grouped_outputs[group_id].add(result)
         grouped_hashes[group_id].add(hash_hex)
 
-    assert all(len(outputs) == 1 for outputs in grouped_outputs.values())
-    assert all(len(hashes) == 1 for hashes in grouped_hashes.values())
+    for group_id, outputs in grouped_outputs.items():
+        assert len(outputs) == 1, f"group {group_id} produced multiple canonical outputs"
+    for group_id, hashes in grouped_hashes.items():
+        assert len(hashes) == 1, f"group {group_id} produced multiple canonical hashes"
 
 
 @pytest.mark.parametrize(("description", "raw_input", "error_substring"), _load_negative_vectors())

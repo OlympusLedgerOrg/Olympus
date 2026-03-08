@@ -116,7 +116,7 @@ def _load_trust_store_certificate(trust_store_path: str) -> bytes:
 def _enforce_trust_mode_environment(trust_mode: str) -> None:
     """Reject insecure trust-mode selections in production environments."""
     env = os.getenv("OLYMPUS_ENV", "").strip().lower()
-    if env in {"prod", "production"} and trust_mode == TRUST_MODE_DEV:
+    if env in {"prd", "prod", "production", "live"} and trust_mode == TRUST_MODE_DEV:
         raise ValueError("TRUST_MODE_DEV is not allowed when OLYMPUS_ENV=production")
 
 
