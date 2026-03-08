@@ -93,3 +93,16 @@ def test_debug_ui_disabled_by_default(monkeypatch):
         client.get("/proof-explorer?shard_id=s&record_type=t&record_id=r&version=1").status_code
         == 404
     )
+
+
+def test_console_uses_theme_tokens(monkeypatch):
+    """Root page should expose CSS custom properties for the theme system."""
+    monkeypatch.setattr(ui_app, "DEBUG_UI_ENABLED", True)
+    monkeypatch.setattr(ui_app, "_fetch_json", lambda path: [])
+
+    response = client.get("/")
+
+    assert response.status_code == 200
+    assert "--bg:" in response.text
+    assert "--accent:" in response.text
+    assert "@media (prefers-color-scheme: dark)" in response.text

@@ -28,3 +28,7 @@ Top-to-bottom layout:
 5. **Per-shard panels**: latest header payload and ledger tail for linkage inspection.
 
 This is a read-only debug view intended for engineers validating invariants.
+
+Theme notes:
+- Uses CSS custom properties (`:root`) for a consistent "cryptographic" palette.
+- Automatically adapts to dark mode via `prefers-color-scheme`.
