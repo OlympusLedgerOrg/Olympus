@@ -1,120 +1,87 @@
-# Olympus: Federated Transparent Accountability Ledger
+# Olympus
 
-**Project Purpose:**  
-Olympus is a cryptographically verifiable transparency platform designed to record, verify, and protect public documents, journalistic evidence, and whistleblower submissions. It guarantees **document integrity**, timestamps submissions, and provides a **trust-weighted network of anonymous contributors** — all auditable by anyone.
+Olympus is an append-only public ledger for government documents. The repository
+is focused on protocol hardening: deterministic canonicalization, Merkle
+commitments, verifiable proofs, and developer tooling for inspecting and
+validating those primitives.
 
----
+## Current repository state
 
-## Key Features
+The primary local developer workflows are:
 
-### 1. Federated Ledger
-- Distributed shard-based ledger with **federation nodes**.  
-- Each node stores signed shard headers and participates in consensus.  
-- Eliminates single-point-of-trust; tampering is cryptographically detectable.  
-- Supports proof generation for existence and non-existence of documents.
+- `python -m pip install -e ".[dev]"` — install the package plus development
+  tooling.
+- `make check` — run schema validation, Ruff, mypy, Bandit, and the Python test
+  suites.
+- `make smoke` — run the PostgreSQL-backed smoke path defined in
+  `tools/dev_smoke.sh`.
+- `make dev` — start the FastAPI API on `127.0.0.1:8000` and the debug UI on
+  `127.0.0.1:8080`.
 
-### 2. Document Commit & Verification
-- Journalists, whistleblowers, and auditors can **commit hashes** of documents immediately.  
-- Later publication can be verified against Olympus, proving the document existed **before public release**.  
-- Supports multiple recipients via **multi-recipient hash commitments**.
+The smoke test currently provisions PostgreSQL with Docker Compose, initializes
+the schema, imports the test-only app, and runs the `postgres`-marked pytest
+suite.
 
-### 3. Anonymous Key Reputation & SBT-style Credentials
-- Each public key can earn **reputation scores** based on historical accuracy and contributions.  
-- Non-transferable **SBT-style credentials** can be issued to keys:  
-  - `verified_journalist`  
-  - `trusted_whistleblower`  
-  - `accurate_source`  
-- Credentials are **ledger-stored, fully auditable, and tied to keys only**, not real names.
+## Repository scaffold
 
-### 4. Canonicalization & Proofs
-- Supports multiple document formats: JSON, HTML, DOCX, PDF.  
-- Deterministic canonicalization ensures consistent hashing across format variations.  
-- Sparse Merkle Tree (256-height) per shard; signed shard headers with Ed25519 signatures.  
-- Public FastAPI endpoints and CLI tools for proof verification.
-
-### 5. Transparency & External Anchoring
-- Ledger roots can be anchored to public logs or blockchain timestamps.  
-- Proofs are **verifiable independently**, without trusting Olympus operators.
-
-### 6. Use Cases
-- Investigative journalism: Prove documents existed prior to publication.  
-- Whistleblowers: Commit evidence safely and anonymously.  
-- Government oversight: Track public records and FOIA requests.  
-- Audit & verification: NGOs, journalists, and the public can validate all commits.
-
----
-
-## Architecture Overview
-
-```
-+----------------+        +----------------+        +----------------+
-| Olympus Node A | <----> | Olympus Node B | <----> | Olympus Node C |
-+----------------+        +----------------+        +----------------+
-|                        |                        |
-v                        v                        v
-Shard Ledger → Signed Shard Headers → Sparse Merkle Tree
-                           |
-                           v
-Global State Root → Public Verification / Anchoring
+```text
+api/        FastAPI application and ingestion routes
+app_testonly/  test-only application wiring used by smoke/dev flows
+docs/       protocol notes, threat model material, and walkthroughs
+examples/   sample artifacts and notebook examples
+proofs/     Circom circuits, proving assets, and JS-based proof tooling
+protocol/   reference implementations of hashing, Merkle, and redaction logic
+schemas/    JSON schema definitions validated by tools/validate_schemas.py
+storage/    persistence layer implementations and schema bootstrap logic
+tests/      regression tests for protocol, API, UI, and smoke/dev workflows
+tools/      command-line helpers, schema validation, and dev smoke script
+ui/         FastAPI debug console and public verification portal
 ```
 
-- **Nodes** replicate shard headers and validate all commits.  
-- **Sparse Merkle Trees** store document hashes and key credential events.  
-- **Global State Root** forms an auditable, cryptographically anchored ledger.
-
----
-
-## API Endpoints (FastAPI)
-
-| Endpoint | Purpose |
-|----------|---------|
-| `POST /doc/commit` | Commit a document hash (supports embargo or multi-recipient, keys only). |
-| `POST /doc/verify` | Verify a document hash against Olympus ledger. |
-| `POST /key/credential` | Issue a non-transferable credential (SBT-style) to a key. |
-| `GET /ledger/shard/{shard_id}` | Retrieve shard headers and proofs. |
-| `GET /ledger/proof/{commit_id}` | Retrieve proof of inclusion in the ledger. |
-
----
-
-## Ledger Record Types
-
-- `doc_commit` → Timestamped document hash (only keys referenced).  
-- `key_credential` → SBT-style credential issuance/revocation.  
-- `jury_verdict` → AI jury system verdicts with multiple model aggregation.  
-- `funding_suggestion` → Civic Fund or budget-related suggestions.  
-- `seed_entry` → Jury seed management per county/period.
-
----
-
-## Getting Started
-
-1. Clone the repository:
+## Quick start
 
 ```bash
 git clone https://github.com/wombatvagina69-crypto/Olympus.git
 cd Olympus
+python -m pip install -e ".[dev]"
 ```
 
-2. Install dependencies:
+### Quality gate
 
 ```bash
-pip install -r requirements.txt
+make check
 ```
 
-3. Start the FastAPI server:
+### Smoke test
+
+The smoke target expects Docker Compose so it can start PostgreSQL locally.
 
 ```bash
-uvicorn api.main:app --reload --port 8000
+make smoke
 ```
 
-4. Use CLI tools for verification:
+### Run the API + UI locally
 
 ```bash
-python tools/verify_proof.py --commit_id <commit_id>
+export DATABASE_URL='postgresql://olympus:olympus@localhost:5432/olympus'
+export TEST_DATABASE_URL="$DATABASE_URL"
+make dev
 ```
 
-For the Dockerized three-node federation demo and the debug dashboard / SMT diff viewer, see `QUICKSTART.md` and run:
+## Key developer entrypoints
 
-```bash
-docker compose -f docker-compose.federation.yml up -d
-```
+- API application: `api/app.py`
+- Debug UI / verification portal: `ui/app.py`
+- Canonicalization + verification CLIs: `tools/canonicalize_cli.py`,
+  `tools/verify_cli.py`, and `tools/verify_bundle_cli.py`
+- Zero-knowledge proof setup and smoke docs: `proofs/README.md`
+- Extended setup guide: `QUICKSTART.md`
+- Contribution workflow: `CONTRIBUTING.md`
+
+## Notes
+
+- Python requirement: `>=3.10` (3.12 is used in CI/dev tooling).
+- The debug console is disabled by default; set `OLYMPUS_DEBUG_UI=true` when
+  running the UI directly.
+- The public verification portal remains available at `/verification-portal`
+  even when debug-only routes are disabled.

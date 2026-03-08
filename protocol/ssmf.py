@@ -94,8 +94,12 @@ class SparseMerkleDiffEntry:
         """Convert diff entry to a JSON-serializable dictionary."""
         return {
             "key": self.key.hex(),
-            "before_value_hash": None if self.before_value_hash is None else self.before_value_hash.hex(),
-            "after_value_hash": None if self.after_value_hash is None else self.after_value_hash.hex(),
+            "before_value_hash": None
+            if self.before_value_hash is None
+            else self.before_value_hash.hex(),
+            "after_value_hash": None
+            if self.after_value_hash is None
+            else self.after_value_hash.hex(),
         }
 
 
