@@ -56,6 +56,9 @@ These vectors cover:
 - Merkle root for 1-, 2-, and 3-leaf trees (including odd-count duplication)
 - Merkle proof verification cases (valid and tampered)
 - Poseidon commitment root
+- Canonicalizer JCS regression vectors (`canonicalizer_vectors.tsv`) with 500+
+  input/output pairs and pinned BLAKE3 hashes for Unicode/NFC, escaped nulls,
+  numeric format variants, and nested ordering stability
 
 Each language's test suite includes conformance tests that verify byte-for-byte
 identical outputs against these vectors:
@@ -80,4 +83,3 @@ All verifiers produce identical results for the same inputs, demonstrating:
 
 A dedicated CI workflow (`.github/workflows/verifier-conformance.yml`) runs all
 language test suites on every commit touching `verifiers/` or the core hash/Merkle modules.
-

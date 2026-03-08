@@ -7,11 +7,17 @@ import pytest
 
 from protocol.hashes import hash_bytes
 from protocol.shards import (
+    create_key_revocation_record,
     create_shard_header,
+    create_superseding_signature,
     get_signing_key_from_seed,
     get_verify_key_from_signing_key,
+    rotation_record_to_event,
     sign_header,
     verify_header,
+    verify_header_with_rotation,
+    verify_key_revocation_record,
+    verify_superseding_signature,
 )
 from protocol.timestamps import current_timestamp
 
@@ -205,3 +211,134 @@ def test_invalid_root_hash_length():
 
     with pytest.raises(ValueError, match="must be 32 bytes"):
         create_shard_header(shard_id="shard1", root_hash=b"short", timestamp=timestamp)
+
+
+def test_verify_key_revocation_record():
+    """A replacement key must sign revocation metadata for the compromised key."""
+    old_signing_key = nacl.signing.SigningKey.generate()
+    new_signing_key = nacl.signing.SigningKey.generate()
+
+    record = create_key_revocation_record(
+        old_verify_key=old_signing_key.verify_key,
+        new_signing_key=new_signing_key,
+        compromise_timestamp="2026-03-01T00:00:00Z",
+        last_good_sequence=7,
+    )
+
+    assert verify_key_revocation_record(record) is True
+
+
+def test_verify_header_with_rotation_rejects_post_compromise_old_key():
+    """Old-key signatures after compromise must be rejected without supersession."""
+    old_signing_key = nacl.signing.SigningKey.generate()
+    new_signing_key = nacl.signing.SigningKey.generate()
+    header = create_shard_header(
+        shard_id="shard1",
+        root_hash=hash_bytes(b"test root"),
+        timestamp="2026-03-01T00:00:00Z",
+    )
+    signature = sign_header(header, old_signing_key)
+    revocation = create_key_revocation_record(
+        old_verify_key=old_signing_key.verify_key,
+        new_signing_key=new_signing_key,
+        compromise_timestamp="2026-02-28T23:59:59Z",
+        last_good_sequence=2,
+    )
+
+    assert (
+        verify_header_with_rotation(
+            header,
+            signature,
+            old_signing_key.verify_key,
+            header_sequence=3,
+            revocation_record=revocation,
+        )
+        is False
+    )
+
+
+def test_verify_header_with_rotation_accepts_superseding_signature():
+    """Historical headers can be re-attested by the replacement key."""
+    old_signing_key = nacl.signing.SigningKey.generate()
+    new_signing_key = nacl.signing.SigningKey.generate()
+    header = create_shard_header(
+        shard_id="shard1",
+        root_hash=hash_bytes(b"test root"),
+        timestamp="2026-03-01T00:00:00Z",
+    )
+    signature = sign_header(header, old_signing_key)
+    revocation = create_key_revocation_record(
+        old_verify_key=old_signing_key.verify_key,
+        new_signing_key=new_signing_key,
+        compromise_timestamp="2026-02-28T23:59:59Z",
+        last_good_sequence=2,
+    )
+    superseding = create_superseding_signature(
+        header_hash=header["header_hash"],
+        old_verify_key=old_signing_key.verify_key,
+        new_signing_key=new_signing_key,
+        supersedes_from=revocation["compromise_timestamp"],
+    )
+
+    assert verify_superseding_signature(
+        superseding,
+        header_hash=header["header_hash"],
+        revocation_record=revocation,
+    )
+    assert (
+        verify_header_with_rotation(
+            header,
+            signature,
+            old_signing_key.verify_key,
+            header_sequence=3,
+            revocation_record=revocation,
+            superseding_signature=superseding,
+        )
+        is True
+    )
+
+
+def test_verify_header_with_rotation_accepts_new_key_direct_signature():
+    """Post-compromise headers signed directly by the replacement key stay valid."""
+    old_signing_key = nacl.signing.SigningKey.generate()
+    new_signing_key = nacl.signing.SigningKey.generate()
+    header = create_shard_header(
+        shard_id="shard1",
+        root_hash=hash_bytes(b"test root"),
+        timestamp="2026-03-01T00:00:00Z",
+    )
+    signature = sign_header(header, new_signing_key)
+    revocation = create_key_revocation_record(
+        old_verify_key=old_signing_key.verify_key,
+        new_signing_key=new_signing_key,
+        compromise_timestamp="2026-02-28T23:59:59Z",
+        last_good_sequence=2,
+    )
+
+    assert (
+        verify_header_with_rotation(
+            header,
+            signature,
+            new_signing_key.verify_key,
+            header_sequence=3,
+            revocation_record=revocation,
+        )
+        is True
+    )
+
+
+def test_rotation_record_to_event_creates_canonical_event():
+    """Rotation artifacts must be commit-ready for the append-only ledger."""
+    old_signing_key = nacl.signing.SigningKey.generate()
+    new_signing_key = nacl.signing.SigningKey.generate()
+    record = create_key_revocation_record(
+        old_verify_key=old_signing_key.verify_key,
+        new_signing_key=new_signing_key,
+        compromise_timestamp="2026-03-01T00:00:00Z",
+        last_good_sequence=7,
+    )
+
+    event = rotation_record_to_event(record)
+
+    assert event.payload["event_type"] == "key_revocation"
+    assert event.hash_hex

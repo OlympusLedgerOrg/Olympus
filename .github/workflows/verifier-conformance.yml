@@ -8,12 +8,14 @@ on:
       - 'verifiers/**'
       - 'protocol/hashes.py'
       - 'protocol/merkle.py'
+      - 'protocol/canonicalizer.py'
   pull_request:
     branches: [ main ]
     paths:
       - 'verifiers/**'
       - 'protocol/hashes.py'
       - 'protocol/merkle.py'
+      - 'protocol/canonicalizer.py'
 
 concurrency:
   group: verifiers-${{ github.workflow }}-${{ github.ref }}

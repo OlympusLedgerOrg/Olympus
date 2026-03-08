@@ -693,6 +693,49 @@ class StorageLayer:
             )
             conn.commit()
 
+    def get_timestamp_tokens(self, shard_id: str, header_hash_hex: str) -> list[dict[str, Any]]:
+        """
+        Retrieve all stored RFC 3161 timestamp tokens for a shard header.
+
+        Args:
+            shard_id: Shard identifier.
+            header_hash_hex: Hex-encoded 32-byte shard header hash.
+
+        Returns:
+            Stored timestamp tokens ordered by generation time, then TSA URL.
+        """
+        header_hash_bytes = bytes.fromhex(header_hash_hex)
+        with self._get_connection() as conn, conn.cursor(row_factory=dict_row) as cur:
+            cur.execute(
+                """
+                SELECT tsa_url, tst, gen_time, tsa_cert_fingerprint
+                FROM timestamp_tokens
+                WHERE shard_id = %s AND header_hash = %s
+                ORDER BY gen_time ASC, tsa_url ASC
+                """,
+                (shard_id, header_hash_bytes),
+            )
+            rows = cur.fetchall()
+
+        tokens: list[dict[str, Any]] = []
+        for row in rows:
+            ts_value = row["gen_time"]
+            if isinstance(ts_value, datetime):
+                timestamp_str = ts_value.isoformat().replace("+00:00", "Z")
+            else:
+                timestamp_str = str(ts_value)
+
+            tokens.append(
+                {
+                    "tsa_url": row["tsa_url"],
+                    "tst_hex": bytes(row["tst"]).hex(),
+                    "hash_hex": header_hash_hex,
+                    "timestamp": timestamp_str,
+                    "tsa_cert_fingerprint": row["tsa_cert_fingerprint"],
+                }
+            )
+        return tokens
+
     def get_timestamp_token(self, shard_id: str, header_hash_hex: str) -> "dict[str, Any] | None":
         """
         Retrieve the RFC 3161 timestamp token for a shard header, if stored.
@@ -705,34 +748,10 @@ class StorageLayer:
             Dictionary with keys ``tsa_url``, ``tst_hex``, ``hash_hex``,
             ``timestamp`` (ISO 8601 with 'Z' suffix), or ``None`` if not found.
         """
-        header_hash_bytes = bytes.fromhex(header_hash_hex)
-        with self._get_connection() as conn, conn.cursor(row_factory=dict_row) as cur:
-            cur.execute(
-                """
-                SELECT tsa_url, tst, gen_time, tsa_cert_fingerprint
-                FROM timestamp_tokens
-                WHERE shard_id = %s AND header_hash = %s
-                """,
-                (shard_id, header_hash_bytes),
-            )
-            row = cur.fetchone()
-
-        if row is None:
+        tokens = self.get_timestamp_tokens(shard_id, header_hash_hex)
+        if not tokens:
             return None
-
-        ts_value = row["gen_time"]
-        if isinstance(ts_value, datetime):
-            timestamp_str = ts_value.isoformat().replace("+00:00", "Z")
-        else:
-            timestamp_str = str(ts_value)
-
-        return {
-            "tsa_url": row["tsa_url"],
-            "tst_hex": bytes(row["tst"]).hex(),
-            "hash_hex": header_hash_hex,
-            "timestamp": timestamp_str,
-            "tsa_cert_fingerprint": row["tsa_cert_fingerprint"],
-        }
+        return tokens[0]
 
     def verify_persisted_root(self, shard_id: str) -> bool:
         """

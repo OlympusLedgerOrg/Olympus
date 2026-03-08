@@ -128,6 +128,10 @@ When an agency signing key is suspected or confirmed compromised, verifiers need
    - Reject any shard headers signed by the compromised key with a timestamp at or after the compromise timestamp unless a superseding attestation exists.
 5. **Publishing** — Store revocation statements and superseding attestations in the ledger as dedicated event types to keep the chain of custody auditable.
 
+Reference implementation support lives in `protocol/shards.py` via
+`create_key_revocation_record()`, `create_superseding_signature()`,
+`verify_header_with_rotation()`, and `rotation_record_to_event()`.
+
 ## Key Storage & Publication Guidance (v1.0)
 
 Even in development, key handling must be deterministic and auditable:

@@ -1,0 +1,9 @@
+# description	input_hex	error_substring
+duplicate-top-level	7b2261223a312c2261223a327d	Duplicate JSON key
+duplicate-nested	7b226f75746572223a7b2278223a312c2278223a327d7d	Duplicate JSON key
+duplicate-sibling-order	7b2262223a312c2261223a322c2262223a337d	Duplicate JSON key
+literal-null-trailer	7b2261223a226f6b227d00	JSON Ingest Failure
+literal-null-in-string	7b2274657874223a2261626300646566227d	JSON Ingest Failure
+invalid-json	7b6e6f74206a736f6e7d	JSON Ingest Failure
+odd-brace	7b2261223a31	JSON Ingest Failure
+invalid-utf8	7b2274657874223a22ff227d	JSON Ingest Failure

@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"testing"
 )
 
@@ -15,6 +16,13 @@ func vectorFile(t *testing.T) string {
 	_, thisFile, _, _ := runtime.Caller(0)
 	dir := filepath.Dir(thisFile)
 	return filepath.Join(dir, "..", "test_vectors", "vectors.json")
+}
+
+func canonicalizerVectorFile(t *testing.T) string {
+	t.Helper()
+	_, thisFile, _, _ := runtime.Caller(0)
+	dir := filepath.Dir(thisFile)
+	return filepath.Join(dir, "..", "test_vectors", "canonicalizer_vectors.tsv")
 }
 
 // --- JSON structures for parsing vectors.json ---
@@ -66,6 +74,13 @@ type MerkleProofVec struct {
 	ExpectedValid bool         `json:"expected_valid"`
 }
 
+type CanonicalizerHashVec struct {
+	GroupID        string
+	InputRaw       []byte
+	CanonicalBytes []byte
+	Hash           string
+}
+
 func loadVectors(t *testing.T) Vectors {
 	t.Helper()
 	data, err := os.ReadFile(vectorFile(t))
@@ -77,6 +92,40 @@ func loadVectors(t *testing.T) Vectors {
 		t.Fatalf("Failed to parse vectors.json: %v", err)
 	}
 	return v
+}
+
+func loadCanonicalizerVectors(t *testing.T) []CanonicalizerHashVec {
+	t.Helper()
+	data, err := os.ReadFile(canonicalizerVectorFile(t))
+	if err != nil {
+		t.Fatalf("Failed to read canonicalizer_vectors.tsv: %v", err)
+	}
+	lines := strings.Split(strings.TrimSpace(string(data)), "\n")
+	rows := make([]CanonicalizerHashVec, 0, len(lines))
+	for _, line := range lines {
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		parts := strings.Split(line, "\t")
+		if len(parts) != 4 {
+			t.Fatalf("Malformed canonicalizer vector line: %q", line)
+		}
+		inputRaw, err := hex.DecodeString(parts[1])
+		if err != nil {
+			t.Fatalf("Failed to decode input hex: %v", err)
+		}
+		canonicalBytes, err := hex.DecodeString(parts[2])
+		if err != nil {
+			t.Fatalf("Failed to decode canonical hex: %v", err)
+		}
+		rows = append(rows, CanonicalizerHashVec{
+			GroupID:        parts[0],
+			InputRaw:       inputRaw,
+			CanonicalBytes: canonicalBytes,
+			Hash:           parts[3],
+		})
+	}
+	return rows
 }
 
 func TestConformanceBlake3Raw(t *testing.T) {
@@ -167,6 +216,21 @@ func TestConformanceMerkleProof(t *testing.T) {
 			}
 			if got != vec.ExpectedValid {
 				t.Errorf("merkle_proof verify: got %v, want %v", got, vec.ExpectedValid)
+			}
+		})
+	}
+}
+
+func TestConformanceCanonicalizerHash(t *testing.T) {
+	vectors := loadCanonicalizerVectors(t)
+	if len(vectors) < 500 {
+		t.Fatalf("expected at least 500 canonicalizer vectors, got %d", len(vectors))
+	}
+	for _, vec := range vectors {
+		t.Run(vec.GroupID, func(t *testing.T) {
+			got := hex.EncodeToString(ComputeBlake3(vec.CanonicalBytes))
+			if got != vec.Hash {
+				t.Errorf("canonicalizer_hash(%s):\n  got  %s\n  want %s", vec.GroupID, got, vec.Hash)
 			}
 		})
 	}

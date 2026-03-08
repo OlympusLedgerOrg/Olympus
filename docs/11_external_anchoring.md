@@ -19,9 +19,13 @@ Olympus optionally anchors ledger state to an external Timestamp Authority (TSA)
 
 1. Compute the target hash (Merkle root or shard header hash).
 2. Build an RFC 3161 `TimeStampReq` with `sha256` or `blake3` OIDs as supported by the TSA.
-3. Send the request via `protocol.rfc3161.request_timestamp_token`.
+3. Send the request via `protocol.rfc3161.request_timestamp_quorum(...)` so the
+   same shard header hash is submitted to two independent TSAs.
 4. Store the raw TST bytes, TSA certificate chain, and SHA-256 fingerprint in the ledger entry metadata.
-5. Expose the anchor alongside the ledger/shard response so verifiers can audit offline.
+5. Finalize the batch only after `protocol.rfc3161.verify_timestamp_quorum(...)`
+   succeeds for both required TSAs, and surface
+   `protocol.rfc3161.timestamp_watchdog_status(...)` alerts when either anchor
+   goes missing or stale.
 
 ## Verification Flow
 

@@ -6,12 +6,15 @@ This module implements shard header hashing and signature verification.
 
 from __future__ import annotations
 
+from datetime import datetime
 from typing import TYPE_CHECKING, Any
 
 import nacl.encoding
 import nacl.signing
 
-from .hashes import shard_header_hash
+from .canonical_json import canonical_json_bytes
+from .events import CanonicalEvent
+from .hashes import hash_bytes, shard_header_hash
 
 
 if TYPE_CHECKING:
@@ -113,6 +116,284 @@ def verify_header(
         return True
     except Exception:
         return False
+
+
+def _parse_timestamp(timestamp: str) -> datetime:
+    """Parse an ISO 8601 timestamp that may use a ``Z`` suffix."""
+    return datetime.fromisoformat(timestamp.replace("Z", "+00:00"))
+
+
+def _sign_rotation_payload(payload: dict[str, Any], signing_key: nacl.signing.SigningKey) -> str:
+    """Sign a canonicalized rotation payload and return the hex signature."""
+    payload_hash = hash_bytes(canonical_json_bytes(payload))
+    return signing_key.sign(payload_hash).signature.hex()
+
+
+def _verify_rotation_payload(
+    payload: dict[str, Any], signature: str, verify_key: nacl.signing.VerifyKey
+) -> bool:
+    """Verify a canonicalized rotation payload signature."""
+    try:
+        payload_hash = hash_bytes(canonical_json_bytes(payload))
+        verify_key.verify(payload_hash, bytes.fromhex(signature))
+        return True
+    except Exception:
+        return False
+
+
+def create_key_revocation_record(
+    *,
+    old_verify_key: nacl.signing.VerifyKey,
+    new_signing_key: nacl.signing.SigningKey,
+    compromise_timestamp: str,
+    last_good_sequence: int,
+    reason: str = "compromise",
+) -> dict[str, Any]:
+    """
+    Create a signed Ed25519 key revocation record.
+
+    The revocation record is signed by the replacement key and references the
+    compromised public key, the effective compromise timestamp, and the last
+    header sequence that verifiers may still accept from the old key.
+
+    Args:
+        old_verify_key: Compromised Ed25519 verification key.
+        new_signing_key: Replacement Ed25519 signing key.
+        compromise_timestamp: Effective compromise timestamp in ISO 8601 format.
+        last_good_sequence: Last accepted shard header sequence signed by the old key.
+        reason: Human-readable reason code for the rotation.
+
+    Returns:
+        Signed revocation record dictionary.
+    """
+    payload = {
+        "event_type": "key_revocation",
+        "old_pubkey": old_verify_key.encode(encoder=nacl.encoding.HexEncoder).decode("ascii"),
+        "new_pubkey": new_signing_key.verify_key.encode(encoder=nacl.encoding.HexEncoder).decode(
+            "ascii"
+        ),
+        "compromise_timestamp": compromise_timestamp,
+        "last_good_sequence": last_good_sequence,
+        "reason": reason,
+    }
+    return {
+        **payload,
+        "signature": _sign_rotation_payload(payload, new_signing_key),
+    }
+
+
+def verify_key_revocation_record(record: dict[str, Any]) -> bool:
+    """
+    Verify a signed Ed25519 key revocation record.
+
+    Args:
+        record: Revocation record produced by :func:`create_key_revocation_record`.
+
+    Returns:
+        ``True`` when the record is well-formed and the replacement key's
+        signature is valid.
+    """
+    required_fields = {
+        "event_type",
+        "old_pubkey",
+        "new_pubkey",
+        "compromise_timestamp",
+        "last_good_sequence",
+        "reason",
+        "signature",
+    }
+    if not required_fields.issubset(record):
+        return False
+    if record.get("event_type") != "key_revocation":
+        return False
+    try:
+        verify_key = nacl.signing.VerifyKey(bytes.fromhex(record["new_pubkey"]))
+        _parse_timestamp(record["compromise_timestamp"])
+        if int(record["last_good_sequence"]) < 0:
+            return False
+    except Exception:
+        return False
+    payload = {key: record[key] for key in required_fields if key != "signature"}
+    return _verify_rotation_payload(payload, record["signature"], verify_key)
+
+
+def create_superseding_signature(
+    *,
+    header_hash: str,
+    old_verify_key: nacl.signing.VerifyKey,
+    new_signing_key: nacl.signing.SigningKey,
+    supersedes_from: str,
+) -> dict[str, Any]:
+    """
+    Create a signed superseding attestation for a historical shard header hash.
+
+    Args:
+        header_hash: Hex-encoded shard header hash being attested to.
+        old_verify_key: Compromised Ed25519 verification key being superseded.
+        new_signing_key: Replacement Ed25519 signing key.
+        supersedes_from: Effective compromise timestamp or other audit marker
+            carried forward from the rotation record.
+
+    Returns:
+        Signed superseding attestation dictionary.
+    """
+    payload = {
+        "event_type": "superseding_signature",
+        "header_hash": header_hash,
+        "old_pubkey": old_verify_key.encode(encoder=nacl.encoding.HexEncoder).decode("ascii"),
+        "new_pubkey": new_signing_key.verify_key.encode(encoder=nacl.encoding.HexEncoder).decode(
+            "ascii"
+        ),
+        "supersedes_from": supersedes_from,
+    }
+    return {
+        **payload,
+        "signature": _sign_rotation_payload(payload, new_signing_key),
+    }
+
+
+def verify_superseding_signature(
+    superseding_signature: dict[str, Any],
+    *,
+    header_hash: str,
+    revocation_record: dict[str, Any],
+) -> bool:
+    """
+    Verify a superseding Ed25519 attestation against a revocation record.
+
+    Args:
+        superseding_signature: Superseding attestation payload.
+        header_hash: Hex-encoded shard header hash being attested to.
+        revocation_record: Verified revocation record linking the old and new keys.
+
+    Returns:
+        ``True`` when the attestation is valid and matches the revocation record.
+    """
+    required_fields = {
+        "event_type",
+        "header_hash",
+        "old_pubkey",
+        "new_pubkey",
+        "supersedes_from",
+        "signature",
+    }
+    if not required_fields.issubset(superseding_signature):
+        return False
+    if superseding_signature.get("event_type") != "superseding_signature":
+        return False
+    if not verify_key_revocation_record(revocation_record):
+        return False
+    if superseding_signature.get("header_hash") != header_hash:
+        return False
+    if superseding_signature.get("old_pubkey") != revocation_record.get("old_pubkey"):
+        return False
+    if superseding_signature.get("new_pubkey") != revocation_record.get("new_pubkey"):
+        return False
+    if superseding_signature.get("supersedes_from") != revocation_record.get(
+        "compromise_timestamp"
+    ):
+        return False
+    try:
+        verify_key = nacl.signing.VerifyKey(bytes.fromhex(superseding_signature["new_pubkey"]))
+    except Exception:
+        return False
+    payload = {key: superseding_signature[key] for key in required_fields if key != "signature"}
+    return _verify_rotation_payload(payload, superseding_signature["signature"], verify_key)
+
+
+def verify_header_with_rotation(
+    header: dict[str, Any],
+    signature: str,
+    verify_key: nacl.signing.VerifyKey,
+    *,
+    header_sequence: int | None = None,
+    revocation_record: dict[str, Any] | None = None,
+    superseding_signature: dict[str, Any] | None = None,
+) -> bool:
+    """
+    Verify a shard header while enforcing key-rotation compromise rules.
+
+    Args:
+        header: Shard header dictionary.
+        signature: Hex-encoded Ed25519 signature on the header hash.
+        verify_key: Verification key corresponding to the supplied signature.
+        header_sequence: Optional shard header sequence for compromise cutoff checks.
+        revocation_record: Optional signed revocation record for the compromised key.
+        superseding_signature: Optional signed attestation by the new key over the
+            original header hash.
+
+    Returns:
+        ``True`` when the header is valid under the rotation policy.
+    """
+    if not verify_header(header, signature, verify_key):
+        return False
+    if revocation_record is None:
+        return True
+    if not verify_key_revocation_record(revocation_record):
+        return False
+
+    verify_key_hex = verify_key.encode(encoder=nacl.encoding.HexEncoder).decode("ascii")
+    old_pubkey = revocation_record["old_pubkey"]
+    new_pubkey = revocation_record["new_pubkey"]
+    if verify_key_hex == new_pubkey:
+        return True
+    if verify_key_hex != old_pubkey:
+        return True
+
+    header_timestamp = _parse_timestamp(header["timestamp"])
+    compromise_timestamp = _parse_timestamp(revocation_record["compromise_timestamp"])
+    post_compromise = header_timestamp >= compromise_timestamp
+    if header_sequence is not None:
+        post_compromise = post_compromise or header_sequence > int(
+            revocation_record["last_good_sequence"]
+        )
+    if not post_compromise:
+        return True
+    if superseding_signature is None:
+        return False
+    return verify_superseding_signature(
+        superseding_signature,
+        header_hash=header["header_hash"],
+        revocation_record=revocation_record,
+    )
+
+
+def rotation_record_to_event(
+    record: dict[str, Any],
+    schema_version: str = "olympus.key-rotation.v1",
+    revocation_record: dict[str, Any] | None = None,
+) -> CanonicalEvent:
+    """
+    Convert a verified key-rotation record into a canonical ledger event.
+
+    Args:
+        record: Signed key revocation or superseding signature payload.
+        schema_version: Schema version to attach to the canonical event.
+        revocation_record: Verified revocation record required when committing a
+            superseding signature event.
+
+    Returns:
+        Canonical event suitable for append-only ledger commitment.
+
+    Raises:
+        ValueError: If the supplied record is not a supported, verified rotation payload.
+    """
+    event_type = record.get("event_type")
+    if event_type == "key_revocation":
+        if not verify_key_revocation_record(record):
+            raise ValueError("Invalid key revocation record")
+    elif event_type == "superseding_signature":
+        if revocation_record is None:
+            raise ValueError("Superseding signature events require revocation_record")
+        if not verify_superseding_signature(
+            record,
+            header_hash=record.get("header_hash", ""),
+            revocation_record=revocation_record,
+        ):
+            raise ValueError("Invalid superseding signature record")
+    else:
+        raise ValueError(f"Unsupported rotation event_type: {event_type}")
+    return CanonicalEvent.from_raw(record, schema_version)
 
 
 def get_signing_key_from_seed(seed: bytes) -> nacl.signing.SigningKey:

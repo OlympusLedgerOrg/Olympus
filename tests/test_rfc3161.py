@@ -12,12 +12,16 @@ import pytest
 
 from protocol.rfc3161 import (
     DEFAULT_TSA_URL,
+    DIGICERT_TSA_URL,
     TRUST_MODE_PROD,
     TimestampToken,
     _load_trust_store_certificate,
     _sha256_of_hash,
     build_timestamp_request,
     request_timestamp,
+    request_timestamp_quorum,
+    timestamp_watchdog_status,
+    verify_timestamp_quorum,
     verify_timestamp_token,
 )
 
@@ -404,3 +408,48 @@ def test_verify_timestamp_token_prod_uses_trust_store_path(tmp_path):
             trust_store_path=str(cert_file),
         )
     assert result is True
+
+
+def test_request_timestamp_quorum_requests_both_tsas():
+    hash_hex = "a" * 64
+    token_a = TimestampToken(hash_hex, DEFAULT_TSA_URL, b"\x01", "2026-03-01T00:00:00Z")
+    token_b = TimestampToken(hash_hex, DIGICERT_TSA_URL, b"\x02", "2026-03-01T00:00:01Z")
+
+    with patch(
+        "protocol.rfc3161.request_timestamp",
+        side_effect=[token_a, token_b],
+    ) as request_mock:
+        tokens = request_timestamp_quorum(hash_hex, tsa_urls=(DEFAULT_TSA_URL, DIGICERT_TSA_URL))
+
+    assert tokens == [token_a, token_b]
+    assert request_mock.call_args_list[0].args == (hash_hex,)
+    assert request_mock.call_args_list[0].kwargs == {"tsa_url": DEFAULT_TSA_URL}
+    assert request_mock.call_args_list[1].kwargs == {"tsa_url": DIGICERT_TSA_URL}
+
+
+def test_verify_timestamp_quorum_requires_both_valid_tokens():
+    token_a = TimestampToken("a" * 64, DEFAULT_TSA_URL, b"\x01", "2026-03-01T00:00:00Z")
+    token_b = TimestampToken("a" * 64, DIGICERT_TSA_URL, b"\x02", "2026-03-01T00:00:01Z")
+
+    with patch("protocol.rfc3161.verify_timestamp_token", side_effect=[True, True]):
+        assert verify_timestamp_quorum([token_a, token_b], "a" * 64) is True
+
+    with patch("protocol.rfc3161.verify_timestamp_token", side_effect=[True]):
+        assert verify_timestamp_quorum([token_a], "a" * 64) is False
+
+
+def test_timestamp_watchdog_status_alerts_for_stale_or_missing_tsa():
+    token = TimestampToken("a" * 64, DEFAULT_TSA_URL, b"\x01", "2026-03-01T00:00:00Z")
+
+    status = timestamp_watchdog_status(
+        [token],
+        required_tsa_urls=(DEFAULT_TSA_URL, DIGICERT_TSA_URL),
+        stale_after_seconds=60,
+        now=datetime(2026, 3, 1, 0, 2, 0, tzinfo=timezone.utc),
+    )
+
+    assert status["healthy"] is False
+    assert any("stale" in alert for alert in status["alerts"])
+    assert any("missing" in alert for alert in status["alerts"])
+    assert status["tsa_status"][DEFAULT_TSA_URL]["stale"] is True
+    assert status["tsa_status"][DIGICERT_TSA_URL]["present"] is False
