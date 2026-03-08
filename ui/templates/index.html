@@ -49,6 +49,11 @@
         td, th { border: 1px solid var(--border); padding: .25rem .4rem; text-align: left; }
         input { margin-right: .5rem; }
         pre { background: var(--surface-muted); border: 1px solid var(--border); padding: .75rem; overflow: auto; }
+        .row { display: flex; flex-wrap: wrap; gap: .5rem; align-items: center; margin-bottom: .5rem; }
+        .section-list { margin: .5rem 0; }
+        .section-item { display: flex; align-items: flex-start; gap: .5rem; margin-bottom: .25rem; }
+        .section-item input[type=checkbox] { margin-top: .2rem; flex-shrink: 0; }
+        .section-text { font-size: .85rem; color: var(--muted-text); white-space: pre-wrap; word-break: break-word; }
     </style>
 </head>
 <body>
@@ -59,6 +64,63 @@
         <div class="banner">{{ banner }}</div>
     {% endfor %}
 
+    <!-- ── Commit Document ──────────────────────────────────────────────── -->
+    <div class="panel">
+        <h2>Commit Document</h2>
+        <p>Upload a plain-text file (one section per line) or a JSON array of strings.
+           The panel calls <code>commit_document_dual()</code> and displays the BLAKE3 root and Poseidon root.</p>
+        <form id="commit-form" enctype="multipart/form-data">
+            <div class="row">
+                <label>File (.txt or .json):</label>
+                <input type="file" name="file" accept=".txt,.json" required />
+            </div>
+            <div class="row">
+                <input type="text" name="document_id" placeholder="document_id" required />
+                <input type="number" name="version" placeholder="version" value="1" min="1" />
+                <button type="submit">Commit</button>
+            </div>
+        </form>
+        <pre id="commit-result">Upload a document to commit.</pre>
+    </div>
+
+    <!-- ── Verify Proof ─────────────────────────────────────────────────── -->
+    <div class="panel">
+        <h2>Verify Proof</h2>
+        <p>Upload a proof bundle JSON file. The panel checks the SMT anchor and ZK proof,
+           then displays the revealed sections.</p>
+        <form id="verify-form">
+            <div class="row">
+                <label>Proof bundle (.json):</label>
+                <input type="file" id="verify-file" accept=".json" required />
+                <button type="submit">Verify</button>
+            </div>
+        </form>
+        <pre id="verify-result">Upload a proof bundle to verify.</pre>
+    </div>
+
+    <!-- ── Redaction Interface ───────────────────────────────────────────── -->
+    <div class="panel">
+        <h2>Redaction Interface</h2>
+        <p>Load a committed document, select the sections to reveal, generate a proof bundle,
+           and download it.</p>
+        <div class="row">
+            <input type="text" id="redact-doc-id" placeholder="document_id" />
+            <input type="number" id="redact-version" placeholder="version" value="1" min="1" />
+            <button onclick="loadRedactDocument()">Load Document</button>
+        </div>
+        <div id="redact-sections" class="section-list"></div>
+        <div id="redact-controls" style="display:none">
+            <div class="row">
+                <button onclick="generateRedactionProof()">Generate Proof</button>
+                <a id="download-proof-link" style="display:none">
+                    <button type="button">Download Proof Bundle</button>
+                </a>
+            </div>
+        </div>
+        <pre id="redact-result">Load a committed document to select sections.</pre>
+    </div>
+
+    <!-- ── Proof Explorer ───────────────────────────────────────────────── -->
     <div class="panel">
         <h2>Proof Explorer</h2>
         <form id="proof-form">
@@ -108,6 +170,7 @@
     {% endfor %}
 
     <script>
+        // ── Proof Explorer ──────────────────────────────────────────────────
         const form = document.getElementById('proof-form');
         const out = document.getElementById('proof-result');
         form.addEventListener('submit', async (event) => {
@@ -117,6 +180,185 @@
             const response = await fetch(`/proof-explorer?${params.toString()}`);
             const data = await response.json();
             out.textContent = JSON.stringify(data, null, 2);
+        });
+
+        // ── Commit Document ─────────────────────────────────────────────────
+        document.getElementById('commit-form').addEventListener('submit', async (event) => {
+            event.preventDefault();
+            const commitResult = document.getElementById('commit-result');
+            commitResult.textContent = 'Committing…';
+            const formData = new FormData(event.target);
+            try {
+                const resp = await fetch('/commit', { method: 'POST', body: formData });
+                const data = await resp.json();
+                if (data.ok) {
+                    commitResult.textContent =
+                        `✓ Committed successfully!\n\n` +
+                        `Document ID : ${data.document_id}\n` +
+                        `Version     : ${data.version}\n` +
+                        `Sections    : ${data.sections_count}\n\n` +
+                        `BLAKE3 root  : ${data.blake3_root}\n` +
+                        `Poseidon root: ${data.poseidon_root}`;
+                } else {
+                    commitResult.textContent = `✗ Error: ${data.error}`;
+                }
+            } catch (err) {
+                commitResult.textContent = `✗ Request failed: ${err}`;
+            }
+        });
+
+        // ── Verify Proof ────────────────────────────────────────────────────
+        document.getElementById('verify-form').addEventListener('submit', async (event) => {
+            event.preventDefault();
+            const verifyResult = document.getElementById('verify-result');
+            verifyResult.textContent = 'Verifying…';
+            const fileInput = document.getElementById('verify-file');
+            if (!fileInput.files.length) {
+                verifyResult.textContent = 'No file selected.';
+                return;
+            }
+            try {
+                const text = await fileInput.files[0].text();
+                const bundle = JSON.parse(text);
+                const resp = await fetch('/verify', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(bundle),
+                });
+                const data = await resp.json();
+                if (!data.ok) {
+                    verifyResult.textContent = `✗ Error: ${data.error}`;
+                    return;
+                }
+                const overallMark = data.verified ? '✓' : '✗';
+                const smtMark = data.smt_anchor_verified ? '✓' : '✗';
+                const zkMark = data.zk_verified ? '✓' : '✗';
+                let verificationOutput = `${overallMark} Overall verification: ${data.verified ? 'PASSED' : 'FAILED'}\n\n` +
+                            `${smtMark} SMT anchor verified : ${data.smt_anchor_verified}\n` +
+                            `${zkMark} ZK proof verified   : ${data.zk_verified}` +
+                            ` (requires snarkjs; placeholder proof will show false)\n\n`;
+                if (data.revealed_sections.length > 0) {
+                    verificationOutput += `Revealed sections (${data.revealed_sections.length} of ${data.total_parts}):\n`;
+                    data.revealed_sections.forEach(s => {
+                        verificationOutput += `  [${s.index}] ${s.content}\n`;
+                    });
+                } else {
+                    verificationOutput += 'No revealed sections in bundle.';
+                }
+                verifyResult.textContent = verificationOutput;
+            } catch (err) {
+                verifyResult.textContent = `✗ Failed: ${err}`;
+            }
+        });
+
+        // ── Redaction Interface ─────────────────────────────────────────────
+        let activeProofBundle = null;
+
+        async function loadRedactDocument() {
+            const docId = document.getElementById('redact-doc-id').value.trim();
+            const version = document.getElementById('redact-version').value;
+            const sectionsDiv = document.getElementById('redact-sections');
+            const controls = document.getElementById('redact-controls');
+            const result = document.getElementById('redact-result');
+            const downloadLink = document.getElementById('download-proof-link');
+
+            activeProofBundle = null;
+            downloadLink.style.display = 'none';
+            sectionsDiv.innerHTML = '';
+            controls.style.display = 'none';
+            result.textContent = 'Loading…';
+
+            if (!docId) { result.textContent = 'Enter a document_id first.'; return; }
+
+            try {
+                const resp = await fetch(`/committed/${encodeURIComponent(docId)}/${version}/sections`);
+                const data = await resp.json();
+                if (!data.ok) {
+                    result.textContent = `✗ ${data.error}`;
+                    return;
+                }
+                result.textContent =
+                    `Loaded: ${data.sections.length} section(s)\n` +
+                    `BLAKE3 root  : ${data.blake3_root}\n` +
+                    `Poseidon root: ${data.poseidon_root}\n\n` +
+                    `Select the sections to reveal, then click Generate Proof.`;
+
+                sectionsDiv.innerHTML = '<strong>Sections (check to reveal):</strong>';
+                data.sections.forEach((section, idx) => {
+                    const item = document.createElement('div');
+                    item.className = 'section-item';
+                    const cb = document.createElement('input');
+                    cb.type = 'checkbox';
+                    cb.id = `section-${idx}`;
+                    cb.value = idx;
+                    const label = document.createElement('label');
+                    label.htmlFor = `section-${idx}`;
+                    label.className = 'section-text';
+                    label.textContent = `[${idx}] ${section}`;
+                    item.appendChild(cb);
+                    item.appendChild(label);
+                    sectionsDiv.appendChild(item);
+                });
+                controls.style.display = 'block';
+            } catch (err) {
+                result.textContent = `✗ Failed: ${err}`;
+            }
+        }
+
+        async function generateRedactionProof() {
+            const docId = document.getElementById('redact-doc-id').value.trim();
+            const version = parseInt(document.getElementById('redact-version').value, 10);
+            const result = document.getElementById('redact-result');
+            const downloadLink = document.getElementById('download-proof-link');
+
+            const checked = Array.from(
+                document.querySelectorAll('#redact-sections input[type=checkbox]:checked')
+            ).map(cb => parseInt(cb.value, 10));
+
+            if (checked.length === 0) {
+                result.textContent = 'Select at least one section to reveal.';
+                return;
+            }
+
+            result.textContent = 'Generating proof…';
+            activeProofBundle = null;
+            downloadLink.style.display = 'none';
+
+            try {
+                const resp = await fetch('/redact', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ document_id: docId, version, revealed_indices: checked }),
+                });
+                const data = await resp.json();
+                if (!data.ok) {
+                    result.textContent = `✗ Error: ${data.error}`;
+                    return;
+                }
+                activeProofBundle = data.bundle;
+                result.textContent =
+                    `✓ Proof generated!\n\n` +
+                    `Revealed indices  : [${data.bundle.revealed_indices.join(', ')}]\n` +
+                    `Redacted commitment: ${data.bundle.zk_public_inputs.redacted_commitment}\n` +
+                    `Poseidon root      : ${data.bundle.zk_public_inputs.original_root}\n\n` +
+                    `Click "Download Proof Bundle" to save the proof JSON.`;
+                downloadLink.href = '#';
+                downloadLink.style.display = 'inline';
+            } catch (err) {
+                result.textContent = `✗ Failed: ${err}`;
+            }
+        }
+
+        document.getElementById('download-proof-link').addEventListener('click', (event) => {
+            event.preventDefault();
+            if (!activeProofBundle) return;
+            const blob = new Blob([JSON.stringify(activeProofBundle, null, 2)], { type: 'application/json' });
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = 'proof_bundle.json';
+            a.click();
+            URL.revokeObjectURL(url);
         });
     </script>
 </body>

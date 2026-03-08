@@ -9,9 +9,19 @@ from urllib.request import urlopen
 
 import nacl.exceptions
 import nacl.signing
-from fastapi import FastAPI, HTTPException, Query, Request
+from fastapi import FastAPI, File, Form, HTTPException, Query, Request, UploadFile
 from fastapi.responses import JSONResponse
 from fastapi.templating import Jinja2Templates
+
+from protocol.hashes import blake3_to_field_element
+from protocol.poseidon_tree import PoseidonMerkleTree
+from protocol.redaction import RedactionProtocol
+from protocol.redaction_ledger import (
+    RedactionProofWithLedger,
+    ZKPublicInputs,
+    verify_zk_redaction,
+)
+from protocol.ssmf import ExistenceProof, SparseMerkleTree
 
 
 API_BASE = os.environ.get("UI_API_BASE", "http://127.0.0.1:8000")
@@ -24,6 +34,11 @@ DEBUG_UI_ENABLED = os.environ.get("OLYMPUS_DEBUG_UI", "false").lower() == "true"
 
 app = FastAPI(title="Olympus Debug Console", version="0.1.0")
 templates = Jinja2Templates(directory="ui/templates")
+
+# In-memory store for committed documents.
+# Key: "{document_id}:{version}"
+# Not persisted across restarts; for debug/demo use only.
+_commit_store: dict[str, dict[str, Any]] = {}
 
 
 def _fetch_json(path: str) -> dict[str, Any] | list[dict[str, Any]]:
@@ -128,3 +143,235 @@ def proof_explorer(
         )
     except URLError:
         return JSONResponse(status_code=503, content={"ok": False, "error": "API unavailable."})
+
+
+@app.post("/commit")
+async def commit_document(
+    document_id: str = Form(...),
+    version: int = Form(1),
+    file: UploadFile = File(...),
+):
+    """Commit a document using the dual-anchor strategy (BLAKE3 + Poseidon)."""
+    if not DEBUG_UI_ENABLED:
+        raise HTTPException(status_code=404, detail="Debug UI is disabled in this environment.")
+
+    raw = await file.read()
+    try:
+        text = raw.decode("utf-8")
+    except UnicodeDecodeError:
+        return JSONResponse(status_code=400, content={"ok": False, "error": "File must be valid UTF-8."})
+
+    # Accept JSON array of strings or plain text (one section per non-empty line).
+    parts: list[str] = []
+    try:
+        parsed = json.loads(text)
+        if isinstance(parsed, list):
+            parts = [str(item) for item in parsed if str(item).strip()]
+        else:
+            return JSONResponse(
+                status_code=400,
+                content={"ok": False, "error": "JSON file must be an array of strings."},
+            )
+    except json.JSONDecodeError:
+        parts = [line for line in text.splitlines() if line.strip()]
+
+    if not parts:
+        return JSONResponse(status_code=400, content={"ok": False, "error": "Document has no sections."})
+
+    # Build Poseidon Merkle tree over field-element leaves derived from each section.
+    leaf_fields = [blake3_to_field_element(part.encode("utf-8")) for part in parts]
+    poseidon_tree = PoseidonMerkleTree(leaf_fields)
+    poseidon_root = poseidon_tree.get_root()
+
+    smt = SparseMerkleTree()
+    try:
+        tree, blake3_root = RedactionProtocol.commit_document_dual(
+            document_parts=parts,
+            poseidon_root=poseidon_root,
+            smt=smt,
+            document_id=document_id,
+            version=version,
+        )
+    except ValueError as exc:
+        return JSONResponse(status_code=400, content={"ok": False, "error": str(exc)})
+
+    commit_key = f"{document_id}:{version}"
+    _commit_store[commit_key] = {
+        "parts": parts,
+        "leaf_fields": leaf_fields,
+        "tree": tree,
+        "smt": smt,
+        "blake3_root": blake3_root,
+        "poseidon_root": poseidon_root,
+        "document_id": document_id,
+        "version": version,
+    }
+
+    return JSONResponse({
+        "ok": True,
+        "document_id": document_id,
+        "version": version,
+        "blake3_root": blake3_root,
+        "poseidon_root": poseidon_root,
+        "sections_count": len(parts),
+        "commit_key": commit_key,
+    })
+
+
+@app.get("/committed/{doc_id}/{version}/sections")
+def get_committed_sections(doc_id: str, version: int):
+    """Return sections of a previously committed document."""
+    if not DEBUG_UI_ENABLED:
+        raise HTTPException(status_code=404, detail="Debug UI is disabled in this environment.")
+
+    commit_key = f"{doc_id}:{version}"
+    entry = _commit_store.get(commit_key)
+    if entry is None:
+        return JSONResponse(
+            status_code=404,
+            content={"ok": False, "error": f"No committed document for '{commit_key}'."},
+        )
+
+    return JSONResponse({
+        "ok": True,
+        "document_id": doc_id,
+        "version": version,
+        "sections": entry["parts"],
+        "blake3_root": entry["blake3_root"],
+        "poseidon_root": entry["poseidon_root"],
+    })
+
+
+@app.post("/redact")
+async def create_redaction(request: Request):
+    """Generate a redaction proof bundle for a previously committed document."""
+    if not DEBUG_UI_ENABLED:
+        raise HTTPException(status_code=404, detail="Debug UI is disabled in this environment.")
+
+    try:
+        body = await request.json()
+        document_id = str(body["document_id"])
+        version = int(body["version"])
+        revealed_indices = [int(i) for i in body["revealed_indices"]]
+    except (KeyError, TypeError, ValueError) as exc:
+        return JSONResponse(status_code=400, content={"ok": False, "error": f"Invalid request: {exc}"})
+
+    commit_key = f"{document_id}:{version}"
+    entry = _commit_store.get(commit_key)
+    if entry is None:
+        return JSONResponse(
+            status_code=404,
+            content={"ok": False, "error": f"No committed document for '{commit_key}'."},
+        )
+
+    parts: list[str] = entry["parts"]
+    leaf_fields: list[str] = entry["leaf_fields"]
+    tree = entry["tree"]
+    smt: SparseMerkleTree = entry["smt"]
+    poseidon_root: str = entry["poseidon_root"]
+
+    for idx in revealed_indices:
+        if idx < 0 or idx >= len(parts):
+            return JSONResponse(
+                status_code=400,
+                content={"ok": False, "error": f"Section index {idx} is out of range."},
+            )
+
+    # Compute the redacted commitment: Poseidon root over the nullified leaf vector
+    # (revealed leaves kept, redacted leaves replaced with field element 0).
+    revealed_set = set(revealed_indices)
+    nullified = [leaf_fields[i] if i in revealed_set else "0" for i in range(len(parts))]
+    redacted_tree = PoseidonMerkleTree(nullified)
+    redacted_commitment = redacted_tree.get_root()
+    revealed_count = len(revealed_indices)
+
+    proof = RedactionProtocol.create_redaction_proof_with_ledger(
+        tree=tree,
+        revealed_indices=revealed_indices,
+        poseidon_root=poseidon_root,
+        smt=smt,
+        document_id=document_id,
+        version=version,
+        zk_proof={},
+        redacted_commitment=redacted_commitment,
+        revealed_count=revealed_count,
+    )
+
+    smt_root_hex = smt.get_root().hex()
+    revealed_content = [parts[i] for i in revealed_indices]
+
+    bundle = {
+        "smt_proof": {
+            "key": proof.smt_proof.key.hex(),
+            "value_hash": proof.smt_proof.value_hash.hex(),
+            "siblings": [s.hex() for s in proof.smt_proof.siblings],
+            "root_hash": proof.smt_proof.root_hash.hex(),
+        },
+        "zk_proof": proof.zk_proof,
+        "zk_public_inputs": {
+            "original_root": proof.zk_public_inputs.original_root,
+            "redacted_commitment": proof.zk_public_inputs.redacted_commitment,
+            "revealed_count": proof.zk_public_inputs.revealed_count,
+        },
+        "smt_root": smt_root_hex,
+        "revealed_indices": revealed_indices,
+        "revealed_content": revealed_content,
+        "total_parts": len(parts),
+    }
+
+    return JSONResponse({"ok": True, "bundle": bundle})
+
+
+@app.post("/verify")
+async def verify_proof_bundle(request: Request):
+    """Verify a redaction proof bundle (SMT anchor + ZK proof)."""
+    if not DEBUG_UI_ENABLED:
+        raise HTTPException(status_code=404, detail="Debug UI is disabled in this environment.")
+
+    try:
+        body = await request.json()
+        smt_proof_data = body["smt_proof"]
+        smt_proof = ExistenceProof(
+            key=bytes.fromhex(smt_proof_data["key"]),
+            value_hash=bytes.fromhex(smt_proof_data["value_hash"]),
+            siblings=[bytes.fromhex(s) for s in smt_proof_data["siblings"]],
+            root_hash=bytes.fromhex(smt_proof_data["root_hash"]),
+        )
+        zk_pi = body["zk_public_inputs"]
+        public_inputs = ZKPublicInputs(
+            original_root=str(zk_pi["original_root"]),
+            redacted_commitment=str(zk_pi["redacted_commitment"]),
+            revealed_count=int(zk_pi["revealed_count"]),
+        )
+        proof = RedactionProofWithLedger(
+            smt_proof=smt_proof,
+            zk_proof=body["zk_proof"],
+            zk_public_inputs=public_inputs,
+        )
+        smt_root = bytes.fromhex(body["smt_root"])
+        revealed_indices: list[int] = body.get("revealed_indices", [])
+        revealed_content: list[str] = body.get("revealed_content", [])
+        total_parts: int = int(body.get("total_parts", 0))
+    except (KeyError, TypeError, ValueError) as exc:
+        return JSONResponse(
+            status_code=400,
+            content={"ok": False, "error": f"Invalid proof bundle: {exc}"},
+        )
+
+    smt_anchor_ok = proof.verify_smt_anchor(smt_root)
+    zk_ok = verify_zk_redaction(proof.zk_proof, proof.zk_public_inputs)
+    overall = smt_anchor_ok and zk_ok
+
+    revealed_sections = [
+        {"index": idx, "content": content}
+        for idx, content in zip(revealed_indices, revealed_content)
+    ]
+
+    return JSONResponse({
+        "ok": True,
+        "verified": overall,
+        "smt_anchor_verified": smt_anchor_ok,
+        "zk_verified": zk_ok,
+        "revealed_sections": revealed_sections,
+        "total_parts": total_parts,
+    })
