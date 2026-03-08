@@ -45,6 +45,8 @@ Olympus optionally anchors ledger state to an external Timestamp Authority (TSA)
 
 - Publish TSA certificate fingerprints in an append-only registry.
 - Separate TSA credentials (if any) from protocol signing keys; no shared key material.
+- Set `OLYMPUS_ENV=production` in production deployments so `TRUST_MODE_DEV`
+  fails closed instead of accepting embedded TSA certificates.
 - Audit logs must include request/response transcripts (minus secrets) for forensic reconstruction.
 - Anchoring configuration (cadence, target hash type, acceptance policy) is versioned and recorded in the ledger.
 

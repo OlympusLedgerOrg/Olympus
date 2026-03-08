@@ -11,6 +11,8 @@ from typing import TYPE_CHECKING, Any
 
 import nacl.encoding
 import nacl.signing
+from cryptography.hazmat.primitives import hashes
+from cryptography.hazmat.primitives.kdf.hkdf import HKDF
 
 from .canonical_json import canonical_json_bytes
 from .events import CanonicalEvent
@@ -408,6 +410,37 @@ def get_signing_key_from_seed(seed: bytes) -> nacl.signing.SigningKey:
     """
     if len(seed) != 32:
         raise ValueError(f"Seed must be 32 bytes, got {len(seed)}")
+    return nacl.signing.SigningKey(seed)
+
+
+def derive_scoped_signing_key(
+    master_seed: bytes, shard_id: str, node_id: str = ""
+) -> nacl.signing.SigningKey:
+    """
+    Derive a shard- and node-scoped Ed25519 signing key from master seed material.
+
+    This prevents raw seed reuse across shards or nodes by binding the derived
+    key to an explicit scope using HKDF-SHA256.
+
+    Args:
+        master_seed: Root seed material.
+        shard_id: Shard identifier bound into the derived key.
+        node_id: Optional node identifier bound into the derived key.
+
+    Returns:
+        Deterministically derived Ed25519 signing key.
+    """
+    if not master_seed:
+        raise ValueError("master_seed must be non-empty")
+    if not shard_id:
+        raise ValueError("shard_id must be non-empty")
+    info = f"olympus-ed25519:{shard_id}:{node_id}".encode()
+    seed = HKDF(
+        algorithm=hashes.SHA256(),
+        length=32,
+        salt=None,
+        info=info,
+    ).derive(master_seed)
     return nacl.signing.SigningKey(seed)
 
 

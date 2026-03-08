@@ -15,6 +15,7 @@ Protocol usage:
 """
 
 import hashlib
+import os
 from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -33,6 +34,7 @@ DEFAULT_TSA_URL = "https://freetsa.org/tsr"
 DIGICERT_TSA_URL = "https://timestamp.digicert.com"
 SECTIGO_TSA_URL = "https://timestamp.sectigo.com"
 DEFAULT_FINALIZATION_TSA_URLS = (DEFAULT_TSA_URL, DIGICERT_TSA_URL)
+MAX_TSA_TOKENS = 3
 TRUST_MODE_DEV = "dev"
 TRUST_MODE_PROD = "prod"
 
@@ -109,6 +111,13 @@ def _load_trust_store_certificate(trust_store_path: str) -> bytes:
     if not path.exists():
         raise ValueError(f"Trust store path not found: {trust_store_path}")
     return path.read_bytes()
+
+
+def _enforce_trust_mode_environment(trust_mode: str) -> None:
+    """Reject insecure trust-mode selections in production environments."""
+    env = os.getenv("OLYMPUS_ENV", "").strip().lower()
+    if env in {"prod", "production"} and trust_mode == TRUST_MODE_DEV:
+        raise ValueError("TRUST_MODE_DEV is not allowed when OLYMPUS_ENV=production")
 
 
 def _sha256_of_hash(hash_hex: str) -> bytes:
@@ -260,6 +269,7 @@ def verify_timestamp_token(
     """
     if trust_mode not in {TRUST_MODE_DEV, TRUST_MODE_PROD}:
         raise ValueError(f"Unsupported trust_mode: {trust_mode}")
+    _enforce_trust_mode_environment(trust_mode)
 
     tsa_fingerprint = _extract_tsa_cert_fingerprint(tst_bytes)
 
@@ -317,10 +327,10 @@ def verify_timestamp_quorum(
         token_map[parsed.tsa_url] = parsed
 
     for tsa_url in _normalize_tsa_urls(required_tsa_urls):
-        token = token_map.get(tsa_url)
-        if token is None:
+        required_token = token_map.get(tsa_url)
+        if required_token is None:
             return False
-        if token.hash_hex != hash_hex:
+        if required_token.hash_hex != hash_hex:
             return False
         trusted_fingerprints = None
         if trusted_fingerprints_by_tsa is not None:
@@ -329,7 +339,7 @@ def verify_timestamp_quorum(
         if trust_store_paths_by_tsa is not None:
             trust_store_path = trust_store_paths_by_tsa.get(tsa_url)
         if not verify_timestamp_token(
-            token.tst_bytes,
+            required_token.tst_bytes,
             hash_hex,
             trust_mode=trust_mode,
             trusted_fingerprints=trusted_fingerprints,

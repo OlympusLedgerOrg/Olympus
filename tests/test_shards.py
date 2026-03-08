@@ -10,6 +10,7 @@ from protocol.shards import (
     create_key_revocation_record,
     create_shard_header,
     create_superseding_signature,
+    derive_scoped_signing_key,
     get_signing_key_from_seed,
     get_verify_key_from_signing_key,
     rotation_record_to_event,
@@ -161,6 +162,28 @@ def test_signing_key_from_seed_invalid_length():
     """Test that invalid seed length is rejected."""
     with pytest.raises(ValueError, match="must be 32 bytes"):
         get_signing_key_from_seed(b"short")
+
+
+def test_derive_scoped_signing_key_is_deterministic_per_scope():
+    """Scoped derivation should be stable for the same shard/node scope."""
+    master_seed = hash_bytes(b"root secret")
+
+    key1 = derive_scoped_signing_key(master_seed, "shard-a", "node-1")
+    key2 = derive_scoped_signing_key(master_seed, "shard-a", "node-1")
+
+    assert bytes(key1) == bytes(key2)
+
+
+def test_derive_scoped_signing_key_changes_across_scopes():
+    """Changing shard or node scope must change the derived key."""
+    master_seed = hash_bytes(b"root secret")
+
+    key_a = derive_scoped_signing_key(master_seed, "shard-a", "node-1")
+    key_b = derive_scoped_signing_key(master_seed, "shard-b", "node-1")
+    key_c = derive_scoped_signing_key(master_seed, "shard-a", "node-2")
+
+    assert bytes(key_a) != bytes(key_b)
+    assert bytes(key_a) != bytes(key_c)
 
 
 def test_get_verify_key_from_signing_key():

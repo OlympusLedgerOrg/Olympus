@@ -39,7 +39,7 @@ from protocol.canonical_json import canonical_json_encode
 from protocol.canonicalizer import canonicalization_provenance
 from protocol.hashes import record_key, shard_header_hash
 from protocol.ledger import LedgerEntry
-from protocol.rfc3161 import _sha256_of_hash
+from protocol.rfc3161 import MAX_TSA_TOKENS, _sha256_of_hash
 from protocol.shards import create_shard_header, sign_header, verify_header
 from protocol.ssmf import (
     ExistenceProof,
@@ -185,7 +185,7 @@ class StorageLayer:
             # Get previous header
             cur.execute(
                 """
-                    SELECT header_hash FROM shard_headers
+                    SELECT header_hash, ts FROM shard_headers
                     WHERE shard_id = %s
                     ORDER BY seq DESC
                     LIMIT 1
@@ -211,6 +211,14 @@ class StorageLayer:
 
             # Create shard header
             ts = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+            if prev_row is not None:
+                last_ts_value = prev_row["ts"]
+                if isinstance(last_ts_value, datetime):
+                    last_ts = last_ts_value.astimezone(timezone.utc)
+                else:
+                    last_ts = datetime.fromisoformat(str(last_ts_value).replace("Z", "+00:00"))
+                if datetime.fromisoformat(ts.replace("Z", "+00:00")) <= last_ts:
+                    raise ValueError("New shard header timestamp must be strictly monotonic")
             header = create_shard_header(
                 shard_id=shard_id,
                 root_hash=root_hash,
@@ -674,6 +682,24 @@ class StorageLayer:
         ts = datetime.fromisoformat(timestamp.replace("Z", "+00:00"))
         imprint_hash = _sha256_of_hash(hash_hex)
         with self._get_connection() as conn, conn.cursor(row_factory=dict_row) as cur:
+            cur.execute(
+                """
+                SELECT COUNT(*) AS token_count,
+                       BOOL_OR(tsa_url = %s) AS tsa_already_present
+                FROM timestamp_tokens
+                WHERE shard_id = %s AND header_hash = %s
+                """,
+                (tsa_url, shard_id, header_hash_bytes),
+            )
+            limit_row = cur.fetchone()
+            if limit_row is None:
+                raise RuntimeError("Failed to load timestamp token count")
+            if int(limit_row["token_count"]) >= MAX_TSA_TOKENS and not bool(
+                limit_row["tsa_already_present"]
+            ):
+                raise ValueError(
+                    f"Refusing to store more than {MAX_TSA_TOKENS} TSA tokens for a header"
+                )
             cur.execute(
                 """
                 INSERT INTO timestamp_tokens

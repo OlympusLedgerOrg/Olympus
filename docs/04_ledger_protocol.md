@@ -140,6 +140,8 @@ Even in development, key handling must be deterministic and auditable:
    `~/.config/olympus/keys/<shard_id>.ed25519`, with `0600` permissions.
    Export the path via `OLYMPUS_SIGNING_KEY_PATH` in `.env` or runtime
    configuration. Never commit secrets to source control.
+   When deriving keys from shared seed material, scope them with HKDF over
+   `shard_id` and `node_id` instead of reusing a raw seed across authorities.
 2. **Public key publication** — Publish the hex-encoded Ed25519 public key
    and its **SHA-256 fingerprint** in an append-only “key registry” entry
    in the ledger (or equivalent metadata channel). Each shard header already

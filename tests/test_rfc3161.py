@@ -13,6 +13,7 @@ import pytest
 from protocol.rfc3161 import (
     DEFAULT_TSA_URL,
     DIGICERT_TSA_URL,
+    MAX_TSA_TOKENS,
     TRUST_MODE_PROD,
     TimestampToken,
     _load_trust_store_certificate,
@@ -453,3 +454,13 @@ def test_timestamp_watchdog_status_alerts_for_stale_or_missing_tsa():
     assert any("missing" in alert for alert in status["alerts"])
     assert status["tsa_status"][DEFAULT_TSA_URL]["stale"] is True
     assert status["tsa_status"][DIGICERT_TSA_URL]["present"] is False
+
+
+def test_verify_timestamp_token_rejects_dev_trust_mode_in_production(monkeypatch):
+    monkeypatch.setenv("OLYMPUS_ENV", "production")
+    with pytest.raises(ValueError, match="TRUST_MODE_DEV is not allowed"):
+        verify_timestamp_token(b"\x30\x00", "a" * 64)
+
+
+def test_max_tsa_tokens_constant_limits_flooding():
+    assert MAX_TSA_TOKENS == 3
