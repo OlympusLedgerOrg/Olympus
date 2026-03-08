@@ -66,6 +66,47 @@
         <div class="banner">{{ banner }}</div>
     {% endfor %}
 
+    {% if federation.configured %}
+    <div class="panel">
+        <h2>Federation Health Dashboard</h2>
+        <p>Cross-node observer view for shard sync, chain integrity, and node agreement. Quorum is a simple majority of the configured nodes.</p>
+        <table>
+            <thead>
+                <tr>
+                    <th>Shard</th>
+                    <th>Agreement</th>
+                    <th>Quorum</th>
+                    <th>Agreement Root</th>
+                    <th>Nodes</th>
+                </tr>
+            </thead>
+            <tbody>
+            {% for shard in federation.shards %}
+                <tr>
+                    <td>{{ shard.shard_id }}</td>
+                    <td>{% if shard.quorum_met %}<span class="ok">{{ shard.agreement_count }} node(s)</span>{% else %}<span class="bad">{{ shard.agreement_count }} node(s)</span>{% endif %}</td>
+                    <td>{{ shard.quorum }}</td>
+                    <td><code>{{ shard.agreement_root }}</code></td>
+                    <td>
+                        <ul class="mini-list">
+                        {% for state in shard.states %}
+                            <li>
+                                <strong>{{ state.node }}</strong> —
+                                seq {{ state.latest_seq }},
+                                {{ state.sync_status }},
+                                signature {% if state.signature_valid %}<span class="ok">ok</span>{% else %}<span class="bad">bad</span>{% endif %},
+                                chain {% if state.chain_ok %}<span class="ok">ok</span>{% else %}<span class="bad">broken</span>{% endif %}
+                            </li>
+                        {% endfor %}
+                        </ul>
+                    </td>
+                </tr>
+            {% endfor %}
+            </tbody>
+        </table>
+    </div>
+    {% endif %}
+
     <!-- ── Commit Document ──────────────────────────────────────────────── -->
     <div class="panel">
         <h2>Commit Document</h2>
@@ -209,10 +250,31 @@
     </div>
 
     <div class="panel">
+        <h2>SMT Diff Viewer</h2>
+        <p>Compare two historical shard header sequences and inspect which SMT keys were added, changed, or removed between the two state roots.</p>
+        <form id="diff-form">
+            <div class="row">
+                <input type="text" name="shard_id" placeholder="shard_id" required />
+                <input type="number" name="from_seq" placeholder="from_seq" min="0" required />
+                <input type="number" name="to_seq" placeholder="to_seq" min="0" required />
+                <button type="submit">Compare roots</button>
+            </div>
+        </form>
+        <pre id="diff-result">Submit two shard header sequences to inspect state root differences.</pre>
+    </div>
+
+    <div class="panel">
         <h2>Shard List</h2>
         <table>
             <thead>
-                <tr><th>Shard</th><th>Latest Seq</th><th>Latest Root</th><th>Signature</th></tr>
+                <tr>
+                    <th>Shard</th>
+                    <th>Latest Seq</th>
+                    <th>Latest Root</th>
+                    <th>Signature</th>
+                    <th>Chain</th>
+                    <th>History</th>
+                </tr>
             </thead>
             <tbody>
             {% for row in shards %}
@@ -221,6 +283,14 @@
                     <td>{{ row.shard.latest_seq }}</td>
                     <td><code>{{ row.shard.latest_root }}</code></td>
                     <td>{% if row.signature_valid %}<span class="ok">valid</span>{% else %}<span class="bad">invalid</span>{% endif %}</td>
+                    <td>{% if row.chain_ok %}<span class="ok">ok</span>{% else %}<span class="bad">broken</span>{% endif %}</td>
+                    <td>
+                        <ul class="mini-list">
+                        {% for header in row.history %}
+                            <li>seq {{ header.seq }} → <code>{{ header.root_hash }}</code></li>
+                        {% endfor %}
+                        </ul>
+                    </td>
                 </tr>
             {% endfor %}
             </tbody>

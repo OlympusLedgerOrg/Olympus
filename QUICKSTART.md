@@ -293,6 +293,34 @@ docker compose logs -f
 docker compose down
 ```
 
+### Three-node federation demo
+
+For a Dockerized federation-style deployment with three independent API nodes and a shared observer UI, use the included `docker-compose.federation.yml`:
+
+```bash
+# Start three Olympus nodes plus the federation debug UI
+docker compose -f docker-compose.federation.yml up -d
+
+# Federation dashboard / SMT diff viewer
+curl http://localhost:8081 | head
+
+# Stop the federation demo
+docker compose -f docker-compose.federation.yml down
+```
+
+What this demo provides:
+
+- **Three independent nodes** (`node1-app`, `node2-app`, `node3-app`) with separate PostgreSQL backends
+- **Federation health dashboard** showing shard sync status, chain integrity, and root agreement
+- **Historical shard views** via `GET /shards/{shard_id}/history`
+- **SMT diff viewer** via `GET /shards/{shard_id}/diff?from_seq=&to_seq=`
+
+Important protocol note:
+
+- This Docker setup demonstrates **observer-side majority agreement** across three nodes.
+- It does **not** change the v1.0 protocol finality model, which remains single-node signed headers as described in `docs/04_ledger_protocol.md`.
+- Treat the dashboard quorum as an operational visibility tool for federation rollouts, not as a replacement for the Phase 1+ guardian consensus protocol.
+
 ---
 
 ## 7. Pre-commit Hooks

@@ -35,6 +35,32 @@ if _parsed_api_base.scheme not in {"http", "https"} or not _parsed_api_base.netl
 # Debug UI is disabled by default; set OLYMPUS_DEBUG_UI=true to enable.
 DEBUG_UI_ENABLED = os.environ.get("OLYMPUS_DEBUG_UI", "false").lower() == "true"
 
+
+def _load_federation_nodes() -> dict[str, str]:
+    """Parse optional federation node endpoints from JSON environment configuration."""
+    raw_nodes = os.environ.get("OLYMPUS_FEDERATION_NODES", "").strip()
+    if not raw_nodes:
+        return {}
+
+    try:
+        parsed = json.loads(raw_nodes)
+    except json.JSONDecodeError as exc:
+        raise ValueError("OLYMPUS_FEDERATION_NODES must be valid JSON") from exc
+
+    if not isinstance(parsed, dict):
+        raise ValueError("OLYMPUS_FEDERATION_NODES must be a JSON object of node_name -> base_url")
+
+    nodes: dict[str, str] = {}
+    for name, base_url in parsed.items():
+        parsed_base = urlparse(str(base_url))
+        if parsed_base.scheme not in {"http", "https"} or not parsed_base.netloc:
+            raise ValueError(f"Federation node '{name}' must use an absolute http(s) URL")
+        nodes[str(name)] = str(base_url)
+    return nodes
+
+
+FEDERATION_NODES = _load_federation_nodes()
+
 app = FastAPI(title="Olympus Debug Console", version="0.1.0")
 templates = Jinja2Templates(directory="ui/templates")
 
@@ -47,10 +73,34 @@ _foia_store: dict[str, dict[str, Any]] = {}
 
 def _fetch_json(path: str) -> dict[str, Any] | list[dict[str, Any]]:
     """Fetch JSON from the Olympus API."""
+    return _fetch_json_from_base(API_BASE, path)
+
+
+def _fetch_json_from_base(base_url: str, path: str) -> dict[str, Any] | list[dict[str, Any]]:
+    """Fetch JSON from a specific Olympus API base URL."""
     if not path.startswith("/") or "://" in path:
         raise ValueError("API path must be a relative path")
-    with urlopen(f"{API_BASE}{path}", timeout=5) as response:  # noqa: S310
-        return json.loads(response.read().decode("utf-8"))
+    with urlopen(f"{base_url}{path}", timeout=5) as response:  # noqa: S310
+        payload = json.loads(response.read().decode("utf-8"))
+    if isinstance(payload, dict):
+        return cast(dict[str, Any], payload)
+    if isinstance(payload, list) and all(isinstance(item, dict) for item in payload):
+        return cast(list[dict[str, Any]], payload)
+    raise TypeError("Expected JSON object or list of objects from API")
+
+
+def _expect_json_object(payload: dict[str, Any] | list[dict[str, Any]]) -> dict[str, Any]:
+    """Require a JSON object payload from the API helper."""
+    if not isinstance(payload, dict):
+        raise TypeError("Expected JSON object")
+    return payload
+
+
+def _expect_json_list(payload: dict[str, Any] | list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Require a JSON array payload from the API helper."""
+    if not isinstance(payload, list):
+        raise TypeError("Expected JSON array")
+    return payload
 
 
 def _verify_signature(header: dict[str, Any]) -> bool:
@@ -291,10 +341,11 @@ def debug_console(request: Request):
         "api_base": API_BASE,
         "shards": [],
         "banners": [],
+        "federation": _collect_federation_dashboard(),
     }
 
     try:
-        shards = _fetch_json("/shards")
+        shards = _expect_json_list(_fetch_json("/shards"))
     except HTTPError as exc:
         if exc.code == 503:
             context["banners"].append("Database unavailable (503).")
@@ -307,17 +358,30 @@ def debug_console(request: Request):
 
     for shard in shards:
         shard_id = shard["shard_id"]
-        shard_row = {"shard": shard, "header": None, "ledger_tail": [], "signature_valid": True}
+        shard_row: dict[str, Any] = {
+            "shard": shard,
+            "header": None,
+            "ledger_tail": [],
+            "signature_valid": True,
+            "chain_ok": True,
+            "history": [],
+        }
         try:
-            header = _fetch_json(f"/shards/{quote(shard_id)}/header/latest")
+            header = _expect_json_object(_fetch_json(f"/shards/{quote(shard_id)}/header/latest"))
             shard_row["header"] = header
             shard_row["signature_valid"] = _verify_signature(header)
             if not shard_row["signature_valid"]:
                 context["banners"].append(f"Invalid signature detected for shard {shard_id}.")
 
-            ledger = _fetch_json(f"/ledger/{quote(shard_id)}/tail?n=10")
+            ledger = _expect_json_object(_fetch_json(f"/ledger/{quote(shard_id)}/tail?n=10"))
             entries = ledger.get("entries", [])
             shard_row["ledger_tail"] = entries
+            shard_row["chain_ok"] = not _is_chain_broken(entries)
+            try:
+                history = _expect_json_object(_fetch_json(f"/shards/{quote(shard_id)}/history?n=5"))
+                shard_row["history"] = history.get("headers", [])
+            except (HTTPError, URLError, TypeError, ValueError):
+                shard_row["history"] = []
             if _is_chain_broken(entries):
                 context["banners"].append(f"Chain linkage broken in shard {shard_id} ledger tail.")
         except HTTPError as exc:
@@ -353,6 +417,29 @@ def proof_explorer(
         return JSONResponse(
             status_code=exc.code,
             content={"ok": False, "error": f"Proof query failed (HTTP {exc.code})."},
+        )
+    except URLError:
+        return JSONResponse(status_code=503, content={"ok": False, "error": "API unavailable."})
+
+
+@app.get("/state-diff")
+def state_diff_viewer(
+    shard_id: str = Query(...),
+    from_seq: int = Query(..., ge=0),
+    to_seq: int = Query(..., ge=0),
+):
+    """Proxy state-root diff requests to the API."""
+    if not DEBUG_UI_ENABLED:
+        raise HTTPException(status_code=404, detail="Debug UI is disabled in this environment.")
+
+    path = f"/shards/{quote(shard_id)}/diff?from_seq={from_seq}&to_seq={to_seq}"
+    try:
+        diff = _fetch_json(path)
+        return JSONResponse({"ok": True, "diff": diff})
+    except HTTPError as exc:
+        return JSONResponse(
+            status_code=exc.code,
+            content={"ok": False, "error": f"State diff query failed (HTTP {exc.code})."},
         )
     except URLError:
         return JSONResponse(status_code=503, content={"ok": False, "error": "API unavailable."})
