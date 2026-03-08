@@ -16,10 +16,7 @@ def test_threat_model_notebook_exists_and_has_expected_sections():
     assert notebook["nbformat"] == 4
     assert notebook["cells"]
 
-    combined_source = "\n".join(
-        "".join(cell.get("source", []))
-        for cell in notebook["cells"]
-    )
+    combined_source = "\n".join("".join(cell.get("source", [])) for cell in notebook["cells"])
     assert "what Olympus **protects**" in combined_source
     assert "does not protect" in combined_source
     assert "Attack scenarios" in combined_source

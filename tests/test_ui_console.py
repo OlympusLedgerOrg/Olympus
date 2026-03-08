@@ -118,7 +118,12 @@ def test_public_hash_lookup_proxies_api(monkeypatch):
             "shard_id": "shard-1",
             "content_hash": "ab" * 32,
             "merkle_root": "cd" * 32,
-            "merkle_proof": {"leaf_hash": "ef" * 32, "leaf_index": 0, "siblings": [], "root_hash": "cd" * 32},
+            "merkle_proof": {
+                "leaf_hash": "ef" * 32,
+                "leaf_index": 0,
+                "siblings": [],
+                "root_hash": "cd" * 32,
+            },
             "ledger_entry_hash": "12" * 32,
             "timestamp": "2026-01-01T00:00:00Z",
             "canonicalization": {"method": "demo"},

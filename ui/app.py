@@ -71,7 +71,12 @@ def _fetch_json(path: str) -> dict[str, Any] | list[dict[str, Any]]:
     if not path.startswith("/") or "://" in path:
         raise ValueError("API path must be a relative path")
     with urlopen(f"{API_BASE}{path}", timeout=5) as response:  # noqa: S310
-        return json.loads(response.read().decode("utf-8"))
+        data = json.loads(response.read().decode("utf-8"))
+    if isinstance(data, dict):
+        return data
+    if isinstance(data, list) and all(isinstance(item, dict) for item in data):
+        return data
+    raise ValueError("API response must be a JSON object or list of objects")
 
 
 def _verify_signature(header: dict[str, Any]) -> bool:
@@ -168,7 +173,10 @@ def debug_console(request: Request):
     context = _base_context(request, debug_tools=True)
 
     try:
-        shards = _fetch_json("/shards")
+        shards_data = _fetch_json("/shards")
+        if not isinstance(shards_data, list):
+            raise ValueError("Expected /shards to return a JSON list")
+        shards = shards_data
     except HTTPError as exc:
         if exc.code == 503:
             context["banners"].append("Database unavailable (503).")
@@ -181,15 +189,26 @@ def debug_console(request: Request):
 
     for shard in shards:
         shard_id = shard["shard_id"]
-        shard_row = {"shard": shard, "header": None, "ledger_tail": [], "signature_valid": True}
+        shard_row: dict[str, Any] = {
+            "shard": shard,
+            "header": None,
+            "ledger_tail": [],
+            "signature_valid": True,
+        }
         try:
-            header = _fetch_json(f"/shards/{quote(shard_id)}/header/latest")
+            header_data = _fetch_json(f"/shards/{quote(shard_id)}/header/latest")
+            if not isinstance(header_data, dict):
+                raise ValueError("Expected shard header response to be a JSON object")
+            header = header_data
             shard_row["header"] = header
             shard_row["signature_valid"] = _verify_signature(header)
             if not shard_row["signature_valid"]:
                 context["banners"].append(f"Invalid signature detected for shard {shard_id}.")
 
-            ledger = _fetch_json(f"/ledger/{quote(shard_id)}/tail?n=10")
+            ledger_data = _fetch_json(f"/ledger/{quote(shard_id)}/tail?n=10")
+            if not isinstance(ledger_data, dict):
+                raise ValueError("Expected ledger tail response to be a JSON object")
+            ledger = ledger_data
             entries = ledger.get("entries", [])
             shard_row["ledger_tail"] = entries
             if _is_chain_broken(entries):
