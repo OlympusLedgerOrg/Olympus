@@ -106,7 +106,7 @@
 
     <div class="panel">
         <h2>Proof Bundle Inspector</h2>
-        <p>Paste any <code>proof_bundle.json</code> to decode every field and explain each invariant check.</p>
+        <p>Paste any <code>proof_bundle.json</code> to decode every field and explain each invariant check. Proofs generated below are copied here automatically for inspection.</p>
         <div class="button-row">
             <button type="button" id="inspect-proof-button">Inspect pasted bundle</button>
             <button type="button" id="load-proof-file-button">Load from file chooser</button>
@@ -246,7 +246,19 @@
             list.className = 'check-list';
             checks.forEach((check) => {
                 const item = document.createElement('li');
-                item.innerHTML = `<span class="${check.passed ? 'ok' : 'bad'}">${check.passed ? 'PASS' : 'FAIL'}</span> ${check.label}<br><span class="muted">${check.detail || ''}</span>`;
+                const badge = document.createElement('span');
+                badge.className = check.passed ? 'ok' : 'bad';
+                badge.textContent = check.passed ? 'PASS' : 'FAIL';
+                const label = document.createTextNode(` ${check.label}`);
+                item.appendChild(badge);
+                item.appendChild(label);
+                if (check.detail) {
+                    item.appendChild(document.createElement('br'));
+                    const detail = document.createElement('span');
+                    detail.className = 'muted';
+                    detail.textContent = check.detail;
+                    item.appendChild(detail);
+                }
                 list.appendChild(item);
             });
             return list;
@@ -259,7 +271,22 @@
             fields.forEach((field) => {
                 const row = document.createElement('tr');
                 const rawValue = typeof field.value === 'string' ? field.value : JSON.stringify(field.value);
-                row.innerHTML = `<td><code>${field.path}</code><br><span class="muted">${rawValue}</span></td><td>${field.decoded}</td><td>${field.explanation}</td>`;
+                const fieldCell = document.createElement('td');
+                const code = document.createElement('code');
+                code.textContent = field.path;
+                fieldCell.appendChild(code);
+                fieldCell.appendChild(document.createElement('br'));
+                const raw = document.createElement('span');
+                raw.className = 'muted';
+                raw.textContent = rawValue;
+                fieldCell.appendChild(raw);
+                const decodedCell = document.createElement('td');
+                decodedCell.textContent = field.decoded;
+                const explanationCell = document.createElement('td');
+                explanationCell.textContent = field.explanation;
+                row.appendChild(fieldCell);
+                row.appendChild(decodedCell);
+                row.appendChild(explanationCell);
                 tbody.appendChild(row);
             });
             table.appendChild(tbody);
@@ -400,14 +427,27 @@
                 const paritySummary = parity.status === 'passed'
                     ? `Verified identical against ${parity.vectors_checked} circomlibjs vector(s).`
                     : `Parity status: ${parity.status}${parity.reason ? ` — ${parity.reason}` : ''}`;
-                summary.innerHTML =
-                    `<span class="${data.notebook.verified_identical ? 'ok' : 'bad'}">` +
-                    `${data.notebook.verified_identical ? 'VERIFIED' : 'NOT VERIFIED'}</span><br>` +
-                    `Source: <code>${data.notebook.parameters.source}</code><br>` +
-                    `Field: <code>${data.notebook.parameters.field}</code><br>` +
-                    `Round constants: ${data.notebook.parameters.round_constants_count}<br>` +
-                    `MDS dimensions: ${data.notebook.parameters.mds_rows} × ${data.notebook.parameters.mds_cols}<br>` +
-                    `${paritySummary}`;
+                summary.innerHTML = '';
+                const status = document.createElement('span');
+                status.className = data.notebook.verified_identical ? 'ok' : 'bad';
+                status.textContent = data.notebook.verified_identical ? 'VERIFIED' : 'NOT VERIFIED';
+                summary.appendChild(status);
+                summary.appendChild(document.createElement('br'));
+                const sourceLine = document.createElement('div');
+                sourceLine.textContent = `Source: ${data.notebook.parameters.source}`;
+                summary.appendChild(sourceLine);
+                const fieldLine = document.createElement('div');
+                fieldLine.textContent = `Field: ${data.notebook.parameters.field}`;
+                summary.appendChild(fieldLine);
+                const roundLine = document.createElement('div');
+                roundLine.textContent = `Round constants: ${data.notebook.parameters.round_constants_count}`;
+                summary.appendChild(roundLine);
+                const mdsLine = document.createElement('div');
+                mdsLine.textContent = `MDS dimensions: ${data.notebook.parameters.mds_rows} × ${data.notebook.parameters.mds_cols}`;
+                summary.appendChild(mdsLine);
+                const parityLine = document.createElement('div');
+                parityLine.textContent = paritySummary;
+                summary.appendChild(parityLine);
                 exportPane.textContent = JSON.stringify(data.notebook, null, 2);
                 document.getElementById('download-constants-button').disabled = false;
             } catch (err) {
@@ -443,11 +483,20 @@
                             detail: `${constraint.explanation} Source snippets: ${constraint.source_snippets.join(' | ')}`,
                         }))
                     );
-                    block.innerHTML =
-                        `<h3>${circuit.title}</h3>` +
-                        `<p><code>${circuit.source_path}</code></p>` +
-                        `<p><strong>Public inputs:</strong> ${circuit.public_inputs.join(', ')}</p>` +
-                        `<p><strong>Private inputs:</strong> ${circuit.private_inputs.join(', ')}</p>`;
+                    const title = document.createElement('h3');
+                    title.textContent = circuit.title;
+                    block.appendChild(title);
+                    const path = document.createElement('p');
+                    const pathCode = document.createElement('code');
+                    pathCode.textContent = circuit.source_path;
+                    path.appendChild(pathCode);
+                    block.appendChild(path);
+                    const publicInputs = document.createElement('p');
+                    publicInputs.textContent = `Public inputs: ${circuit.public_inputs.join(', ')}`;
+                    block.appendChild(publicInputs);
+                    const privateInputs = document.createElement('p');
+                    privateInputs.textContent = `Private inputs: ${circuit.private_inputs.join(', ')}`;
+                    block.appendChild(privateInputs);
                     block.appendChild(constraintList);
                     const source = document.createElement('pre');
                     source.textContent = circuit.source_excerpt;

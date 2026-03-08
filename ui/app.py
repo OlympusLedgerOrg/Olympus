@@ -212,15 +212,24 @@ def _poseidon_vector_parity_report() -> dict[str, Any]:
             "mismatches": [],
         }
 
-    result = subprocess.run(
-        ["node", str(_POSEIDON_VECTORS_SCRIPT)],
-        capture_output=True,
-        text=True,
-        check=True,
-        cwd=str(_POSEIDON_VECTORS_SCRIPT.parent),
-        timeout=30,
-    )
-    payload = json.loads(result.stdout)
+    try:
+        result = subprocess.run(
+            ["node", str(_POSEIDON_VECTORS_SCRIPT)],
+            capture_output=True,
+            text=True,
+            check=True,
+            cwd=str(_POSEIDON_VECTORS_SCRIPT.parent),
+            timeout=10,
+        )
+        payload = json.loads(result.stdout)
+    except (json.JSONDecodeError, subprocess.CalledProcessError, subprocess.TimeoutExpired) as exc:
+        return {
+            "status": "failed",
+            "verified": False,
+            "reason": f"circomlibjs parity replay failed: {exc}",
+            "vectors_checked": 0,
+            "mismatches": [],
+        }
     mismatches: list[dict[str, str]] = []
     for vector in payload["vectors"]:
         actual = str(poseidon_hash_bn128(int(vector["a"]), int(vector["b"])))
