@@ -58,3 +58,6 @@ htmlcov/
 
 # Node.js
 node_modules/
+
+# Benchmark results
+benchmarks/results/
