@@ -3,6 +3,8 @@ name: Olympus CI
 on:
   workflow_dispatch:
   push:
+    # Runs on merge commits landing on main (post-PR merge) and on Copilot working branches.
+    # Direct pushes to main are blocked by branch protection; this trigger covers post-merge CI.
     branches: [ main, copilot/** ]
   pull_request:
     branches: [ main ]
