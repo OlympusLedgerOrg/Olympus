@@ -22,6 +22,13 @@ from typing import Any
 
 from .hashes import hash_bytes
 from .merkle import MerkleProof, MerkleTree, verify_proof
+from .redaction_ledger import (
+    RedactionProofWithLedger,
+    ZKPublicInputs,
+    poseidon_root_record_key,
+    poseidon_root_to_bytes,
+)
+from .ssmf import SparseMerkleTree
 
 
 @dataclass
@@ -219,6 +226,117 @@ class RedactionProtocol:
                 return False
 
         return True
+
+    @staticmethod
+    def commit_document_dual(
+        document_parts: list[str],
+        poseidon_root: str,
+        smt: "SparseMerkleTree",
+        document_id: str,
+        version: int,
+    ) -> tuple["MerkleTree", str]:
+        """
+        Commit a document using the dual-anchor strategy.
+
+        Builds the standard BLAKE3 Merkle commitment (same as
+        :meth:`commit_document`) **and** inserts the Poseidon Merkle root used
+        by the Groth16 ZK circuit into *smt* under a dedicated
+        ``"redaction_root_poseidon"`` key.
+
+        This anchors both commitment types in the same BLAKE3 SMT so that a
+        verifier can:
+
+        1. Confirm SMT membership of the Poseidon root (via an existence proof).
+        2. Independently verify the ZK proof against the public inputs that
+           include the same Poseidon root.
+
+        No BLAKE3→Poseidon bridge circuit is needed; the two proofs are
+        checked separately.
+
+        Args:
+            document_parts: Ordered list of document sections.
+            poseidon_root: Decimal string of the Poseidon Merkle root for the
+                           same document sections (computed externally, e.g.
+                           via :class:`~protocol.poseidon_tree.PoseidonMerkleTree`).
+            smt: The :class:`~protocol.ssmf.SparseMerkleTree` to update.
+            document_id: Unique identifier for this document (used in key
+                         derivation; see :func:`~protocol.redaction_ledger.poseidon_root_record_key`).
+            version: Version number for append-only key derivation.
+
+        Returns:
+            Tuple of ``(tree, blake3_root_hex)`` identical to the return value
+            of :meth:`commit_document`.
+
+        Raises:
+            ValueError: If *poseidon_root* is not a valid field element.
+        """
+        # Standard BLAKE3 commitment
+        tree, blake3_root = RedactionProtocol.commit_document(document_parts)
+
+        # Anchor the Poseidon root in the SMT under its own key namespace
+        key = poseidon_root_record_key(document_id, version)
+        value = poseidon_root_to_bytes(poseidon_root)
+        smt.update(key, value)
+
+        return tree, blake3_root
+
+    @staticmethod
+    def create_redaction_proof_with_ledger(
+        tree: "MerkleTree",
+        revealed_indices: list[int],
+        poseidon_root: str,
+        smt: "SparseMerkleTree",
+        document_id: str,
+        version: int,
+        zk_proof: "dict[str, Any]",
+        redacted_commitment: str,
+        revealed_count: int,
+    ) -> "RedactionProofWithLedger":
+        """
+        Create a :class:`~protocol.redaction_ledger.RedactionProofWithLedger`.
+
+        Generates an SMT existence proof for the Poseidon root that was
+        previously inserted by :meth:`commit_document_dual`, then wraps it
+        together with the ZK proof blob and its public inputs.
+
+        Args:
+            tree: The :class:`~protocol.merkle.MerkleTree` from
+                  :meth:`commit_document_dual`.
+            revealed_indices: Zero-based indices of sections to reveal (used to
+                              build the inner :class:`RedactionProof`).
+            poseidon_root: Decimal string of the Poseidon root (must match what
+                           was inserted via :meth:`commit_document_dual`).
+            smt: The SMT containing the Poseidon root record.
+            document_id: Document identifier (same as passed to
+                         :meth:`commit_document_dual`).
+            version: Version number (same as passed to
+                     :meth:`commit_document_dual`).
+            zk_proof: Opaque Groth16 proof dict. The expected structure follows
+                      the snarkjs JSON format with keys ``"pi_a"``, ``"pi_b"``,
+                      ``"pi_c"``, and ``"protocol"``. This layer treats the
+                      dict as opaque and passes it through to the ZK verifier.
+            redacted_commitment: Decimal string of the ``redactedCommitment``
+                                 public signal from the ZK circuit.
+            revealed_count: Integer value of the ``revealedCount`` public signal.
+
+        Returns:
+            A :class:`~protocol.redaction_ledger.RedactionProofWithLedger`
+            ready for transport and verification.
+        """
+        key = poseidon_root_record_key(document_id, version)
+        smt_proof = smt.prove_existence(key)
+
+        public_inputs = ZKPublicInputs(
+            original_root=poseidon_root,
+            redacted_commitment=redacted_commitment,
+            revealed_count=revealed_count,
+        )
+
+        return RedactionProofWithLedger(
+            smt_proof=smt_proof,
+            zk_proof=zk_proof,
+            zk_public_inputs=public_inputs,
+        )
 
     @staticmethod
     def reconstruct_redacted_document(
