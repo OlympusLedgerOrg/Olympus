@@ -5,9 +5,8 @@ from __future__ import annotations
 from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
 
-from poseidon_py.poseidon_hash import poseidon_hash
-
 from .hashes import SNARK_SCALAR_FIELD, blake3_to_field_element
+from .poseidon_bn128 import poseidon_hash_bn128
 
 
 def _to_field_int(value: int | str | bytes) -> int:
@@ -23,12 +22,34 @@ def _to_field_int(value: int | str | bytes) -> int:
     raise TypeError(f"Unsupported leaf type: {type(value)!r}")
 
 
+def _poseidon_hash_pairs(pairs: list[tuple[int, int]]) -> list[int]:
+    """
+    Hash a list of (left, right) field-element pairs with BN128 Poseidon(2).
+
+    Default backend: ``protocol.poseidon_bn128.poseidon_hash_bn128`` — a pure
+    Python implementation using the exact same round constants and MDS matrix
+    as circomlibjs / the circom circuit, so Python Merkle roots are
+    bit-for-bit identical to what the circuit computes.
+
+    When ``OLY_POSEIDON_BACKEND=js`` is set, all pairs are sent to the
+    persistent Node.js process in a **single IPC round-trip** via
+    ``batch_hash2``, keeping the JS backend at O(depth) calls for a full tree.
+
+    Zero-leaf sentinel semantics are **not** affected by either backend; zero
+    leaves remain the raw field element 0, never Poseidon(0, 0).
+    """
+    from . import poseidon_js  # local import avoids circular imports at module load
+
+    if poseidon_js.backend_enabled():
+        reduced = [(a % SNARK_SCALAR_FIELD, b % SNARK_SCALAR_FIELD) for a, b in pairs]
+        return poseidon_js.batch_compute_poseidon2(reduced)
+
+    return [poseidon_hash_bn128(a % SNARK_SCALAR_FIELD, b % SNARK_SCALAR_FIELD) for a, b in pairs]
+
+
 def _poseidon_hash(left: int, right: int) -> int:
-    """Hash two field elements with Poseidon(2), returning an in-field int."""
-    return (
-        int(poseidon_hash(left % SNARK_SCALAR_FIELD, right % SNARK_SCALAR_FIELD))
-        % SNARK_SCALAR_FIELD
-    )
+    """Single-pair convenience wrapper around :func:`_poseidon_hash_pairs`."""
+    return _poseidon_hash_pairs([(left, right)])[0]
 
 
 @dataclass
@@ -77,7 +98,12 @@ class PoseidonMerkleTree:
             self._leaves = normalized
 
     def _build_level(self, level: Sequence[int]) -> list[int]:
-        """Hash a level upwards, duplicating the final leaf when odd."""
+        """
+        Hash a level upwards, duplicating the final leaf when odd.
+
+        All pairs in the level are hashed in a single backend call so that
+        the JS backend needs only one subprocess per level, not one per pair.
+        """
         if len(level) == 1:
             return [level[0]]
 
@@ -85,10 +111,8 @@ class PoseidonMerkleTree:
         if len(padded) % 2 == 1:
             padded.append(padded[-1])
 
-        next_level = []
-        for i in range(0, len(padded), 2):
-            next_level.append(_poseidon_hash(padded[i], padded[i + 1]))
-        return next_level
+        pairs = [(padded[i], padded[i + 1]) for i in range(0, len(padded), 2)]
+        return _poseidon_hash_pairs(pairs)
 
     def get_root(self) -> str:
         """Return the Merkle root as a decimal string."""
@@ -103,6 +127,9 @@ class PoseidonMerkleTree:
 
         pathIndices follows the circom convention: 0 when the current node is a
         left child, 1 when it is a right child.
+
+        All pairs at each level are hashed in a single backend call, keeping
+        the JS backend at O(depth) subprocess calls for the entire proof.
         """
         if leaf_index < 0 or leaf_index >= len(self._leaves):
             raise ValueError(f"Invalid leaf index {leaf_index}")
@@ -127,11 +154,9 @@ class PoseidonMerkleTree:
 
             path_elements.append(str(sibling % SNARK_SCALAR_FIELD))
 
-            parents: list[int] = []
-            for i in range(0, len(padded), 2):
-                parents.append(_poseidon_hash(padded[i], padded[i + 1]))
-
-            level = parents
+            # Hash all pairs in the level in one batch call.
+            pairs = [(padded[i], padded[i + 1]) for i in range(0, len(padded), 2)]
+            level = _poseidon_hash_pairs(pairs)
             index //= 2
 
         return path_elements, path_indices

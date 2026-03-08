@@ -37,3 +37,49 @@ Accepted (updated after Groth16 requirement)
 - **In-circuit BLAKE3 gadget:** rejected for performance/complexity.
 - **Immediate PLONK migration:** deferred; Groth16 remains the proving system
   while keeping the Poseidon/BLAKE3 boundary stable.
+
+## Poseidon Backend Option and Parameter Parity
+
+### Python BN128 implementation (`protocol/poseidon_bn128.py`)
+
+``poseidon_py`` (drknzz/poseidon-py v0.1.5) implements the StarkWare/Cairo
+Hades permutation (capacity element = 2, STARK-prime round constants), which
+is **fundamentally incompatible** with the BN128 Poseidon used by circomlibjs
+and the circom circuits.
+
+To resolve this, ``protocol/poseidon_bn128.py`` provides a pure-Python BN128
+Poseidon implementation whose round constants and MDS matrix are extracted
+verbatim from ``circomlibjs/src/poseidon_constants.json`` (entry C[1], M[1]
+for t = 3).  It is the **default** hash function used by
+``protocol/poseidon_tree.py`` and produces outputs that are bit-for-bit
+identical to what the circuits compute.  ``poseidon_py`` is no longer used in
+consensus-critical code.
+
+### Parity tests (`tests/test_poseidon_parameter_parity.py`)
+
+* ``TestBN128PythonParity`` — asserts that ``poseidon_hash_bn128`` matches
+  circomlibjs for four deterministic BN128 test vectors (``(0,0)``,
+  ``(1,2)``, ``(42,0)``, ``(p-1, 123)``).  All pass; no ``xfail`` needed.
+
+* ``TestJSBackendEndToEnd`` — verifies the persistent-process plumbing in
+  ``protocol.poseidon_js`` (``hash2``, ``batch_hash2``, ``merkle_root``) via
+  the reference vector script.  Must pass in CI.
+
+CI installs Node ≥ 18 and runs ``npm install`` in ``proofs/`` before pytest.
+If Node is missing in CI the tests hard-fail (``pytest.fail``, not ``skip``)
+so the gap is never silent.
+
+### JS backend option (`protocol/poseidon_js.py`)
+
+Set ``OLY_POSEIDON_BACKEND=js`` to route all ``_poseidon_hash_pairs`` calls
+through a **persistent** Node.js process (single spawn per interpreter
+lifetime, line-delimited JSON IPC, ``batch_hash2`` op amortises one IPC
+call per tree level).  This is an advanced option for environments that need
+independent verification against the JS reference; the Python BN128 backend
+is the default and is already circuit-compatible.
+
+### Zero-leaf semantics
+
+Zero-leaf padding (``0`` as raw field element) is preserved in both backends.
+The backend selector controls only the parent-node hash, not leaf representation.
+
