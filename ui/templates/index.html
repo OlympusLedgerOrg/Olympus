@@ -47,13 +47,15 @@
         code { font-size: .85rem; overflow-wrap: break-word; }
         table { width: 100%; border-collapse: collapse; }
         td, th { border: 1px solid var(--border); padding: .25rem .4rem; text-align: left; }
-        input { margin-right: .5rem; }
+        input, textarea { margin-right: .5rem; }
         pre { background: var(--surface-muted); border: 1px solid var(--border); padding: .75rem; overflow: auto; }
         .row { display: flex; flex-wrap: wrap; gap: .5rem; align-items: center; margin-bottom: .5rem; }
         .section-list { margin: .5rem 0; }
         .section-item { display: flex; align-items: flex-start; gap: .5rem; margin-bottom: .25rem; }
         .section-item input[type=checkbox] { margin-top: .2rem; flex-shrink: 0; }
         .section-text { font-size: .85rem; color: var(--muted-text); white-space: pre-wrap; word-break: break-word; }
+        textarea { min-height: 4.5rem; min-width: 20rem; }
+        button { cursor: pointer; }
     </style>
 </head>
 <body>
@@ -77,10 +79,83 @@
             <div class="row">
                 <input type="text" name="document_id" placeholder="document_id" required />
                 <input type="number" name="version" placeholder="version" value="1" min="1" />
+                <input type="text" name="release_at" placeholder="scheduled_release_at (optional ISO 8601)" />
                 <button type="submit">Commit</button>
             </div>
+            <div class="row">
+                <textarea name="recipient_keys" placeholder="recipient keys (optional, comma or newline separated)"></textarea>
+            </div>
         </form>
+        <div class="row">
+            <a id="download-receipt-link" style="display:none">
+                <button type="button">Download Receipt</button>
+            </a>
+        </div>
         <pre id="commit-result">Upload a document to commit.</pre>
+    </div>
+
+    <!-- ── FOIA Request Tracker ────────────────────────────────────────────── -->
+    <div class="panel">
+        <h2>FOIA Request Tracker</h2>
+        <p>Commit request submissions, record response timestamps, and download a hashed delay proof.</p>
+        <form id="foia-request-form">
+            <div class="row">
+                <input type="text" name="request_id" placeholder="request_id" required />
+                <input type="text" name="agency" placeholder="agency" required />
+                <input type="text" name="requester" placeholder="requester" required />
+            </div>
+            <div class="row">
+                <input type="text" name="submitted_at" placeholder="submitted_at (ISO 8601)" required />
+                <input type="text" name="response_due_at" placeholder="response_due_at (optional ISO 8601)" />
+            </div>
+            <div class="row">
+                <textarea name="description" placeholder="request description" required></textarea>
+            </div>
+            <div class="row">
+                <button type="submit">Commit Request</button>
+                <a id="download-foia-proof-link" style="display:none">
+                    <button type="button">Download Delay Proof</button>
+                </a>
+            </div>
+        </form>
+        <div class="row">
+            <input type="text" id="foia-response-request-id" placeholder="request_id" />
+            <input type="text" id="foia-response-timestamp" placeholder="response_received_at (ISO 8601)" />
+            <button onclick="logFoiaResponse()">Log Response</button>
+        </div>
+        <div class="row">
+            <textarea id="foia-response-summary" placeholder="response summary (optional)"></textarea>
+        </div>
+        <div class="row">
+            <input type="text" id="foia-proof-request-id" placeholder="request_id" />
+            <button onclick="refreshFoiaDelayProof()">Refresh Delay Proof</button>
+        </div>
+        <pre id="foia-result">Commit a FOIA request to start tracking it.</pre>
+    </div>
+
+    <!-- ── Embargo Management ──────────────────────────────────────────────── -->
+    <div class="panel">
+        <h2>Embargo Management</h2>
+        <p>Set release dates, update multi-recipient access lists, and revoke specific recipients.</p>
+        <div class="row">
+            <input type="text" id="embargo-doc-id" placeholder="document_id" />
+            <input type="number" id="embargo-version" placeholder="version" value="1" min="1" />
+            <button onclick="loadEmbargo()">Load Embargo State</button>
+        </div>
+        <div class="row">
+            <input type="text" id="embargo-release-at" placeholder="scheduled_release_at (ISO 8601)" />
+        </div>
+        <div class="row">
+            <textarea id="embargo-recipient-keys" placeholder="recipient keys (comma or newline separated)"></textarea>
+        </div>
+        <div class="row">
+            <button onclick="saveEmbargo()">Save Embargo Settings</button>
+        </div>
+        <div class="row">
+            <input type="text" id="embargo-revoke-key" placeholder="recipient key to revoke" />
+            <button onclick="revokeEmbargoRecipient()">Revoke Access</button>
+        </div>
+        <pre id="embargo-result">Load a committed document to manage embargo settings.</pre>
     </div>
 
     <!-- ── Verify Proof ─────────────────────────────────────────────────── -->
@@ -173,6 +248,8 @@
         // ── Proof Explorer ──────────────────────────────────────────────────
         const form = document.getElementById('proof-form');
         const out = document.getElementById('proof-result');
+        let activeCommitReceipt = null;
+        let activeFoiaDelayProof = null;
         form.addEventListener('submit', async (event) => {
             event.preventDefault();
             const params = new URLSearchParams(new FormData(form));
@@ -182,23 +259,43 @@
             out.textContent = JSON.stringify(data, null, 2);
         });
 
+        function downloadJson(filename, payload) {
+            const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' });
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = filename;
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
+            URL.revokeObjectURL(url);
+        }
+
         // ── Commit Document ─────────────────────────────────────────────────
         document.getElementById('commit-form').addEventListener('submit', async (event) => {
             event.preventDefault();
             const commitResult = document.getElementById('commit-result');
+            const receiptLink = document.getElementById('download-receipt-link');
             commitResult.textContent = 'Committing…';
+            activeCommitReceipt = null;
+            receiptLink.style.display = 'none';
             const formData = new FormData(event.target);
             try {
                 const resp = await fetch('/commit', { method: 'POST', body: formData });
                 const data = await resp.json();
                 if (data.ok) {
+                    activeCommitReceipt = data.receipt;
+                    receiptLink.style.display = 'inline';
                     commitResult.textContent =
                         `✓ Committed successfully!\n\n` +
                         `Document ID : ${data.document_id}\n` +
                         `Version     : ${data.version}\n` +
                         `Sections    : ${data.sections_count}\n\n` +
                         `BLAKE3 root  : ${data.blake3_root}\n` +
-                        `Poseidon root: ${data.poseidon_root}`;
+                        `Poseidon root: ${data.poseidon_root}\n` +
+                        `Receipt hash : ${data.receipt.receipt_hash}\n` +
+                        `Scheduled release: ${data.embargo.release_at || 'none'}\n` +
+                        `Recipients   : ${data.embargo.active_recipient_keys.length}`;
                 } else {
                     commitResult.textContent = `✗ Error: ${data.error}`;
                 }
@@ -206,6 +303,232 @@
                 commitResult.textContent = `✗ Request failed: ${err}`;
             }
         });
+
+        document.getElementById('download-receipt-link').addEventListener('click', (event) => {
+            event.preventDefault();
+            if (!activeCommitReceipt) return;
+            downloadJson('commit_receipt.json', activeCommitReceipt);
+        });
+
+        // ── FOIA Tracker ────────────────────────────────────────────────────
+        document.getElementById('foia-request-form').addEventListener('submit', async (event) => {
+            event.preventDefault();
+            const result = document.getElementById('foia-result');
+            const proofLink = document.getElementById('download-foia-proof-link');
+            activeFoiaDelayProof = null;
+            proofLink.style.display = 'none';
+            result.textContent = 'Committing FOIA request…';
+            const formData = new FormData(event.target);
+            const payload = Object.fromEntries(formData.entries());
+            try {
+                const resp = await fetch('/foia/request', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(payload),
+                });
+                const data = await resp.json();
+                if (!data.ok) {
+                    result.textContent = `✗ Error: ${data.error}`;
+                    return;
+                }
+                activeFoiaDelayProof = data.delay_proof;
+                proofLink.style.display = 'inline';
+                document.getElementById('foia-proof-request-id').value = data.request.request_id;
+                document.getElementById('foia-response-request-id').value = data.request.request_id;
+                result.textContent =
+                    `✓ FOIA request committed.\n\n` +
+                    `Request ID         : ${data.request.request_id}\n` +
+                    `Agency             : ${data.request.agency}\n` +
+                    `Submitted at       : ${data.request.submitted_at}\n` +
+                    `Response due at    : ${data.request.response_due_at || 'not set'}\n` +
+                    `Request receipt    : ${data.request.request_receipt.receipt_hash}\n` +
+                    `Delay proof hash   : ${data.delay_proof.receipt_hash}`;
+            } catch (err) {
+                result.textContent = `✗ Request failed: ${err}`;
+            }
+        });
+
+        async function logFoiaResponse() {
+            const requestId = document.getElementById('foia-response-request-id').value.trim();
+            const responseReceivedAt = document.getElementById('foia-response-timestamp').value.trim();
+            const responseSummary = document.getElementById('foia-response-summary').value.trim();
+            const result = document.getElementById('foia-result');
+            const proofLink = document.getElementById('download-foia-proof-link');
+            if (!requestId || !responseReceivedAt) {
+                result.textContent = 'Enter request_id and response_received_at first.';
+                return;
+            }
+            result.textContent = 'Recording FOIA response…';
+            try {
+                const resp = await fetch('/foia/response', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        request_id: requestId,
+                        response_received_at: responseReceivedAt,
+                        response_summary: responseSummary,
+                    }),
+                });
+                const data = await resp.json();
+                if (!data.ok) {
+                    result.textContent = `✗ Error: ${data.error}`;
+                    return;
+                }
+                activeFoiaDelayProof = data.delay_proof;
+                proofLink.style.display = 'inline';
+                result.textContent =
+                    `✓ FOIA response recorded.\n\n` +
+                    `Request ID       : ${data.request.request_id}\n` +
+                    `Response at      : ${data.request.response_received_at}\n` +
+                    `Proof mode       : ${data.delay_proof.payload.proof_mode}\n` +
+                    `Elapsed seconds  : ${data.delay_proof.payload.elapsed_seconds}\n` +
+                    `Delayed          : ${data.delay_proof.payload.delayed}\n` +
+                    `Delay seconds    : ${data.delay_proof.payload.delay_seconds}\n` +
+                    `Proof hash       : ${data.delay_proof.receipt_hash}`;
+            } catch (err) {
+                result.textContent = `✗ Failed: ${err}`;
+            }
+        }
+
+        async function refreshFoiaDelayProof() {
+            const requestId = document.getElementById('foia-proof-request-id').value.trim();
+            const result = document.getElementById('foia-result');
+            const proofLink = document.getElementById('download-foia-proof-link');
+            if (!requestId) {
+                result.textContent = 'Enter request_id first.';
+                return;
+            }
+            result.textContent = 'Loading FOIA delay proof…';
+            try {
+                const resp = await fetch(`/foia/${encodeURIComponent(requestId)}/delay-proof`);
+                const data = await resp.json();
+                if (!data.ok) {
+                    result.textContent = `✗ Error: ${data.error}`;
+                    return;
+                }
+                activeFoiaDelayProof = data.delay_proof;
+                proofLink.style.display = 'inline';
+                result.textContent =
+                    `✓ Delay proof loaded.\n\n` +
+                    `Request ID       : ${data.request.request_id}\n` +
+                    `Proof mode       : ${data.delay_proof.payload.proof_mode}\n` +
+                    `Pending          : ${data.delay_proof.payload.pending}\n` +
+                    `Elapsed seconds  : ${data.delay_proof.payload.elapsed_seconds}\n` +
+                    `Delayed          : ${data.delay_proof.payload.delayed}\n` +
+                    `Delay seconds    : ${data.delay_proof.payload.delay_seconds}\n` +
+                    `Proof hash       : ${data.delay_proof.receipt_hash}`;
+            } catch (err) {
+                result.textContent = `✗ Failed: ${err}`;
+            }
+        }
+
+        document.getElementById('download-foia-proof-link').addEventListener('click', (event) => {
+            event.preventDefault();
+            if (!activeFoiaDelayProof) return;
+            downloadJson('foia_delay_proof.json', activeFoiaDelayProof);
+        });
+
+        // ── Embargo Management ──────────────────────────────────────────────
+        async function loadEmbargo() {
+            const docId = document.getElementById('embargo-doc-id').value.trim();
+            const version = document.getElementById('embargo-version').value;
+            const result = document.getElementById('embargo-result');
+            if (!docId) {
+                result.textContent = 'Enter document_id first.';
+                return;
+            }
+            result.textContent = 'Loading embargo state…';
+            try {
+                const resp = await fetch(`/embargo/${encodeURIComponent(docId)}/${version}`);
+                const data = await resp.json();
+                if (!data.ok) {
+                    result.textContent = `✗ Error: ${data.error}`;
+                    return;
+                }
+                document.getElementById('embargo-release-at').value = data.embargo.release_at || '';
+                document.getElementById('embargo-recipient-keys').value = data.embargo.recipient_keys.join('\n');
+                result.textContent =
+                    `✓ Embargo loaded.\n\n` +
+                    `Released         : ${data.embargo.is_released}\n` +
+                    `Scheduled release: ${data.embargo.release_at || 'none'}\n` +
+                    `Active recipients: ${data.embargo.active_recipient_keys.join(', ') || 'none'}\n` +
+                    `Revoked recipients: ${data.embargo.revoked_recipient_keys.join(', ') || 'none'}`;
+            } catch (err) {
+                result.textContent = `✗ Failed: ${err}`;
+            }
+        }
+
+        async function saveEmbargo() {
+            const documentId = document.getElementById('embargo-doc-id').value.trim();
+            const version = parseInt(document.getElementById('embargo-version').value, 10);
+            const releaseAt = document.getElementById('embargo-release-at').value.trim();
+            const recipientKeys = document.getElementById('embargo-recipient-keys').value;
+            const result = document.getElementById('embargo-result');
+            if (!documentId) {
+                result.textContent = 'Enter document_id first.';
+                return;
+            }
+            result.textContent = 'Saving embargo settings…';
+            try {
+                const resp = await fetch('/embargo/update', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        document_id: documentId,
+                        version,
+                        release_at: releaseAt || null,
+                        recipient_keys: recipientKeys,
+                    }),
+                });
+                const data = await resp.json();
+                if (!data.ok) {
+                    result.textContent = `✗ Error: ${data.error}`;
+                    return;
+                }
+                result.textContent =
+                    `✓ Embargo saved.\n\n` +
+                    `Scheduled release: ${data.embargo.release_at || 'none'}\n` +
+                    `Active recipients: ${data.embargo.active_recipient_keys.join(', ') || 'none'}\n` +
+                    `Revoked recipients: ${data.embargo.revoked_recipient_keys.join(', ') || 'none'}\n` +
+                    `Receipt hash     : ${data.receipt.receipt_hash}`;
+            } catch (err) {
+                result.textContent = `✗ Failed: ${err}`;
+            }
+        }
+
+        async function revokeEmbargoRecipient() {
+            const documentId = document.getElementById('embargo-doc-id').value.trim();
+            const version = parseInt(document.getElementById('embargo-version').value, 10);
+            const recipientKey = document.getElementById('embargo-revoke-key').value.trim();
+            const result = document.getElementById('embargo-result');
+            if (!documentId || !recipientKey) {
+                result.textContent = 'Enter document_id and recipient key first.';
+                return;
+            }
+            result.textContent = 'Revoking recipient access…';
+            try {
+                const resp = await fetch('/embargo/revoke', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        document_id: documentId,
+                        version,
+                        recipient_key: recipientKey,
+                    }),
+                });
+                const data = await resp.json();
+                if (!data.ok) {
+                    result.textContent = `✗ Error: ${data.error}`;
+                    return;
+                }
+                result.textContent =
+                    `✓ Recipient revoked.\n\n` +
+                    `Active recipients: ${data.embargo.active_recipient_keys.join(', ') || 'none'}\n` +
+                    `Revoked recipients: ${data.embargo.revoked_recipient_keys.join(', ') || 'none'}`;
+            } catch (err) {
+                result.textContent = `✗ Failed: ${err}`;
+            }
+        }
 
         // ── Verify Proof ────────────────────────────────────────────────────
         document.getElementById('verify-form').addEventListener('submit', async (event) => {
@@ -352,13 +675,7 @@
         document.getElementById('download-proof-link').addEventListener('click', (event) => {
             event.preventDefault();
             if (!activeProofBundle) return;
-            const blob = new Blob([JSON.stringify(activeProofBundle, null, 2)], { type: 'application/json' });
-            const url = URL.createObjectURL(blob);
-            const a = document.createElement('a');
-            a.href = url;
-            a.download = 'proof_bundle.json';
-            a.click();
-            URL.revokeObjectURL(url);
+            downloadJson('proof_bundle.json', activeProofBundle);
         });
     </script>
 </body>
