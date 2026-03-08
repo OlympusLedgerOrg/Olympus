@@ -7,6 +7,7 @@ Minimal FastAPI + Jinja2 developer console for integrity inspection.
 ```bash
 export DATABASE_URL='postgresql://olympus:olympus@localhost:5432/olympus'
 export OLYMPUS_DEBUG_UI=true
+export OPENSTATES_API_KEY='your-openstates-api-key'  # required for live voting lookups
 make dev
 ```
 

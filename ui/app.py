@@ -5,8 +5,8 @@ import os
 from datetime import datetime, timezone
 from typing import Any
 from urllib.error import HTTPError, URLError
-from urllib.parse import quote, urlparse
-from urllib.request import urlopen
+from urllib.parse import quote, urlencode, urlparse
+from urllib.request import Request as UrlRequest, urlopen
 
 import nacl.exceptions
 import nacl.signing
@@ -32,6 +32,16 @@ API_BASE = os.environ.get("UI_API_BASE", "http://127.0.0.1:8000")
 _parsed_api_base = urlparse(API_BASE)
 if _parsed_api_base.scheme not in {"http", "https"} or not _parsed_api_base.netloc:
     raise ValueError("UI_API_BASE must be an absolute http(s) URL")
+
+OPENSTATES_API_BASE = os.environ.get("OPENSTATES_API_BASE", "https://v3.openstates.org")
+_parsed_openstates_api_base = urlparse(OPENSTATES_API_BASE)
+if (
+    _parsed_openstates_api_base.scheme not in {"http", "https"}
+    or not _parsed_openstates_api_base.netloc
+):
+    raise ValueError("OPENSTATES_API_BASE must be an absolute http(s) URL")
+
+RAY_CAST_EPSILON = 1e-12
 
 # Debug UI is disabled by default; set OLYMPUS_DEBUG_UI=true to enable.
 DEBUG_UI_ENABLED = os.environ.get("OLYMPUS_DEBUG_UI", "false").lower() == "true"
@@ -247,6 +257,337 @@ def _expect_json_list(payload: dict[str, Any] | list[dict[str, Any]]) -> list[di
     if not isinstance(payload, list):
         raise TypeError("Expected JSON array")
     return payload
+
+
+def _fetch_openstates_json(
+    path: str, params: dict[str, Any]
+) -> dict[str, Any] | list[dict[str, Any]]:
+    """Fetch JSON from the OpenStates API using the configured API key."""
+    if not path.startswith("/") or "://" in path:
+        raise ValueError("OpenStates path must be relative")
+    api_key = os.environ.get("OPENSTATES_API_KEY", "").strip()
+    if not api_key:
+        raise ValueError("OPENSTATES_API_KEY is required to query OpenStates.")
+    query = urlencode({k: v for k, v in params.items() if v is not None and v != ""}, doseq=True)
+    url = f"{OPENSTATES_API_BASE}{path}"
+    if query:
+        url = f"{url}?{query}"
+    request = UrlRequest(url, headers={"X-API-KEY": api_key})
+    with urlopen(request, timeout=10) as response:  # noqa: S310
+        return json.loads(response.read().decode("utf-8"))
+
+
+def _results_from_payload(payload: dict[str, Any] | list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Normalize paginated API payloads into a list of result dictionaries."""
+    if isinstance(payload, list):
+        return [item for item in payload if isinstance(item, dict)]
+    for key in ("results", "items", "data"):
+        value = payload.get(key)
+        if isinstance(value, list):
+            return [item for item in value if isinstance(item, dict)]
+    return []
+
+
+def _normalize_chamber(value: str | None) -> str:
+    """Return a lowercase chamber name for matching."""
+    return (value or "").strip().lower()
+
+
+def _choose_representative(
+    people: list[dict[str, Any]],
+    requested_name: str,
+    chamber: str | None,
+) -> dict[str, Any] | None:
+    """Select the best OpenStates person match for the requested name and chamber."""
+    normalized_name = requested_name.strip().lower()
+    normalized_chamber = _normalize_chamber(chamber)
+    preferred: list[dict[str, Any]] = []
+    fallback: list[dict[str, Any]] = []
+    for person in people:
+        name = str(person.get("name", "")).strip().lower()
+        role = person.get("current_role") or {}
+        role_title = str(role.get("title", "")).strip().lower()
+        chamber_name = str(role.get("org_classification", "")).strip().lower()
+        matches_name = name == normalized_name or normalized_name in name
+        matches_chamber = not normalized_chamber or normalized_chamber in {
+            role_title,
+            chamber_name,
+        }
+        if matches_name and matches_chamber:
+            preferred.append(person)
+        elif matches_name:
+            fallback.append(person)
+    return (preferred or fallback or people or [None])[0]
+
+
+def _normalize_vote_entries(vote: dict[str, Any]) -> list[dict[str, Any]]:
+    """Return per-legislator vote entries from varying OpenStates vote payloads."""
+    for key in ("votes", "legislator_votes", "voters"):
+        value = vote.get(key)
+        if isinstance(value, list):
+            return [entry for entry in value if isinstance(entry, dict)]
+    return []
+
+
+def _extract_voting_records(
+    person: dict[str, Any],
+    bills: list[dict[str, Any]],
+    limit: int,
+) -> list[dict[str, Any]]:
+    """Build a representative voting record from bill vote payloads."""
+    person_id = str(person.get("id", "")).strip()
+    person_name = str(person.get("name", "")).strip().lower()
+    records: list[dict[str, Any]] = []
+    for bill in bills:
+        votes = bill.get("votes")
+        if not isinstance(votes, list):
+            continue
+        for vote in votes:
+            if not isinstance(vote, dict):
+                continue
+            for entry in _normalize_vote_entries(vote):
+                entry_person_id = str(entry.get("person_id") or entry.get("id") or "").strip()
+                voter_name = str(entry.get("voter_name") or entry.get("name") or "").strip().lower()
+                if person_id and entry_person_id != person_id and voter_name != person_name:
+                    continue
+                records.append(
+                    {
+                        "bill_identifier": str(bill.get("identifier", "")),
+                        "bill_title": str(bill.get("title", "")),
+                        "classification": bill.get("classification", []),
+                        "motion": str(
+                            vote.get("motion_text") or vote.get("motion") or "Recorded vote"
+                        ),
+                        "date": str(vote.get("date") or entry.get("voted_at") or ""),
+                        "result": str(vote.get("result") or ""),
+                        "option": str(entry.get("option") or entry.get("vote") or ""),
+                        "organization": str(
+                            (vote.get("organization") or {}).get("name")
+                            if isinstance(vote.get("organization"), dict)
+                            else vote.get("organization", "")
+                        ),
+                    }
+                )
+                break
+    records.sort(key=lambda item: item["date"], reverse=True)
+    return records[:limit]
+
+
+def _normalize_whitespace(text: str) -> str:
+    """Collapse repeated whitespace into single spaces."""
+    return " ".join(text.split())
+
+
+def _rewrite_legalese(text: str) -> str:
+    """Apply deterministic legalese-to-plain-English substitutions."""
+    replacements = {
+        r"\bshall\b": "must",
+        r"\bmay not\b": "cannot",
+        r"\bpursuant to\b": "under",
+        r"\bnotwithstanding\b": "even if",
+        r"\bprior to\b": "before",
+        r"\bsubsequent to\b": "after",
+        r"\bcommence\b": "start",
+        r"\bterminate\b": "end",
+        r"\butilize\b": "use",
+        r"\bpersons\b": "people",
+    }
+    rewritten = text
+    for pattern, replacement in replacements.items():
+        rewritten = re.sub(pattern, replacement, rewritten, flags=re.IGNORECASE)
+    rewritten = re.sub(r"\s*;\s*", ". ", rewritten)
+    return _normalize_whitespace(rewritten)
+
+
+def _extract_bill_highlights(text: str) -> dict[str, list[str]]:
+    """Extract simple structured highlights from pasted bill text."""
+    sentences = [
+        _rewrite_legalese(sentence.strip())
+        for sentence in re.split(r"(?<=[.!?])\s+", _normalize_whitespace(text))
+        if sentence.strip()
+    ]
+    dates = re.findall(
+        r"\b(?:January|February|March|April|May|June|July|August|September|October|November|December)\s+\d{1,2}(?:,\s*\d{4})?",
+        text,
+        flags=re.IGNORECASE,
+    )
+    amounts = re.findall(r"\$\s?\d[\d,]*(?:\.\d+)?", text)
+    actions = [
+        sentence
+        for sentence in sentences
+        if any(
+            keyword in sentence.lower()
+            for keyword in ("must", "cannot", "authorizes", "requires", "prohibits")
+        )
+    ]
+    return {
+        "sentences": sentences,
+        "dates": dates[:3],
+        "amounts": amounts[:3],
+        "actions": actions[:3],
+    }
+
+
+def _build_plain_english_summary(text: str) -> dict[str, Any]:
+    """Produce a deterministic bill summary and prompt chain."""
+    normalized = _normalize_whitespace(text)
+    if not normalized:
+        raise ValueError("Bill text is required.")
+    highlights = _extract_bill_highlights(normalized)
+    prompt_chain = [
+        {
+            "stage": "extract_obligations",
+            "prompt": (
+                "Read the legislation and list the actors, required actions, deadlines, money, and"
+                " enforcement hooks."
+            ),
+            "output": {
+                "actions": highlights["actions"],
+                "dates": highlights["dates"],
+                "amounts": highlights["amounts"],
+            },
+        },
+        {
+            "stage": "translate_for_constituents",
+            "prompt": (
+                "Rewrite the obligations in direct plain English, replace legalese with everyday"
+                " terms, and keep uncertainty visible."
+            ),
+            "output": highlights["sentences"][:3],
+        },
+        {
+            "stage": "flag_open_questions",
+            "prompt": (
+                "List what a resident, reporter, or advocate should still verify in the full text"
+                " before relying on the summary."
+            ),
+            "output": [
+                "Confirm fiscal effects in the enrolled bill text."
+                if highlights["amounts"]
+                else "No explicit dollar amount detected.",
+                "Check the effective date section."
+                if highlights["dates"]
+                else "No clear effective date detected.",
+            ],
+        },
+    ]
+    summary_lines = highlights["sentences"][:2] or [normalized[:240]]
+    return {
+        "plain_english_summary": " ".join(summary_lines),
+        "key_actions": highlights["actions"],
+        "dates": highlights["dates"],
+        "amounts": highlights["amounts"],
+        "prompt_chain": prompt_chain,
+    }
+
+
+def _parse_geojson_geometry(payload: dict[str, Any]) -> list[list[tuple[float, float]]]:
+    """Extract polygon rings from a Feature, FeatureCollection, Polygon, or MultiPolygon."""
+    geo_type = payload.get("type")
+    if geo_type == "FeatureCollection":
+        polygons: list[list[tuple[float, float]]] = []
+        for feature in payload.get("features", []):
+            if isinstance(feature, dict):
+                polygons.extend(_parse_geojson_geometry(feature))
+        return polygons
+    if geo_type == "Feature":
+        geometry = payload.get("geometry")
+        if not isinstance(geometry, dict):
+            raise ValueError("GeoJSON feature is missing geometry.")
+        return _parse_geojson_geometry(geometry)
+    if geo_type == "Polygon":
+        coordinates = payload.get("coordinates")
+        if not isinstance(coordinates, list) or not coordinates:
+            raise ValueError("GeoJSON polygon has no coordinates.")
+        ring = coordinates[0]
+        return [[(float(point[0]), float(point[1])) for point in ring]]
+    if geo_type == "MultiPolygon":
+        coordinates = payload.get("coordinates")
+        if not isinstance(coordinates, list):
+            raise ValueError("GeoJSON multipolygon has no coordinates.")
+        polygons = []
+        for polygon in coordinates:
+            if polygon:
+                polygons.append([(float(point[0]), float(point[1])) for point in polygon[0]])
+        return polygons
+    raise ValueError("GeoJSON must be a Feature, FeatureCollection, Polygon, or MultiPolygon.")
+
+
+def _point_in_polygon(point: tuple[float, float], polygon: list[tuple[float, float]]) -> bool:
+    """Determine whether a point falls inside a polygon using ray casting."""
+    x, y = point
+    inside = False
+    if len(polygon) < 3:
+        return False
+    j = len(polygon) - 1
+    for i in range(len(polygon)):
+        xi, yi = polygon[i]
+        xj, yj = polygon[j]
+        intersects = ((yi > y) != (yj > y)) and (
+            x < (xj - xi) * (y - yi) / ((yj - yi) or RAY_CAST_EPSILON) + xi
+        )
+        if intersects:
+            inside = not inside
+        j = i
+    return inside
+
+
+def _project_to_svg(
+    point: tuple[float, float],
+    bounds: tuple[float, float, float, float],
+    width: int = 420,
+    height: int = 280,
+    padding: int = 20,
+) -> tuple[float, float]:
+    """Project longitude/latitude-like points into an SVG viewport."""
+    min_x, min_y, max_x, max_y = bounds
+    scale_x = (width - 2 * padding) / ((max_x - min_x) or 1.0)
+    scale_y = (height - 2 * padding) / ((max_y - min_y) or 1.0)
+    px = padding + (point[0] - min_x) * scale_x
+    py = height - padding - (point[1] - min_y) * scale_y
+    return px, py
+
+
+def _build_geofence_svg(
+    polygons: list[list[tuple[float, float]]],
+    constituents: list[dict[str, Any]],
+) -> str:
+    """Render a compact SVG showing district outlines and constituent points."""
+    points = [(float(item["lon"]), float(item["lat"])) for item in constituents]
+    all_points = [point for polygon in polygons for point in polygon] + points
+    min_x = min(point[0] for point in all_points)
+    max_x = max(point[0] for point in all_points)
+    min_y = min(point[1] for point in all_points)
+    max_y = max(point[1] for point in all_points)
+    bounds = (min_x, min_y, max_x, max_y)
+    path_data = []
+    for polygon in polygons:
+        projected = [_project_to_svg(point, bounds) for point in polygon]
+        if not projected:
+            continue
+        first_x, first_y = projected[0]
+        commands = [f"M {first_x:.2f} {first_y:.2f}"]
+        commands.extend(f"L {x:.2f} {y:.2f}" for x, y in projected[1:])
+        commands.append("Z")
+        path_data.append(" ".join(commands))
+    circles = []
+    for item in constituents:
+        cx, cy = _project_to_svg((float(item["lon"]), float(item["lat"])), bounds)
+        color = "#166534" if item["inside"] else "#991b1b"
+        circles.append(
+            f'<circle cx="{cx:.2f}" cy="{cy:.2f}" r="5" fill="{color}"><title>{item["name"]}</title></circle>'
+        )
+    return (
+        '<svg viewBox="0 0 420 280" role="img" aria-label="District overlap map" '
+        'xmlns="http://www.w3.org/2000/svg">'
+        '<rect width="420" height="280" fill="#f8fafc" />'
+        + "".join(
+            f'<path d="{segment}" fill="rgba(15,118,110,0.18)" stroke="#0f766e" stroke-width="2" />'
+            for segment in path_data
+        )
+        + "".join(circles)
+        + "</svg>"
+    )
 
 
 def _verify_signature(header: dict[str, Any]) -> bool:

@@ -277,6 +277,51 @@
         <pre id="redact-result">Load a committed document to select sections.</pre>
     </div>
 
+    <!-- ── Civic Tooling Prototypes ───────────────────────────────────────── -->
+    <div class="panel">
+        <h2>Representative Voting Record Tracker</h2>
+        <p>Look up a legislator by name and jurisdiction, then pull recent recorded votes from the OpenStates API.</p>
+        <form id="votes-form">
+            <div class="row">
+                <input type="text" name="name" placeholder="Representative name" required />
+                <input type="text" name="jurisdiction" placeholder="Jurisdiction (e.g. Texas)" required />
+                <input type="text" name="chamber" placeholder="Chamber (optional)" />
+                <button type="submit">Load votes</button>
+            </div>
+        </form>
+        <pre id="votes-result">Search OpenStates for a representative to see recent votes.</pre>
+    </div>
+
+    <div class="panel">
+        <h2>Bill Text Simplifier Pipeline</h2>
+        <p>Paste bill text, generate a deterministic plain-English summary, and inspect the prompt chain used for each stage.</p>
+        <form id="simplify-form">
+            <textarea id="simplify-text" placeholder="Paste bill text here..." required></textarea>
+            <div class="row">
+                <button type="submit">Simplify bill text</button>
+            </div>
+        </form>
+        <pre id="simplify-result">Paste bill text to produce a plain-English summary.</pre>
+    </div>
+
+    <div class="panel">
+        <h2>Geofence Boundary Visualizer</h2>
+        <p>Paste district GeoJSON plus constituent coordinates to render the boundary and show who falls inside the district.</p>
+        <form id="geofence-form">
+            <label for="district-geojson">District GeoJSON</label>
+            <textarea id="district-geojson" placeholder='{"type":"Polygon","coordinates":[[[-97.8,30.2],[-97.7,30.2],[-97.7,30.3],[-97.8,30.3],[-97.8,30.2]]]}'
+                required></textarea>
+            <label for="constituents-json">Constituents JSON</label>
+            <textarea id="constituents-json" placeholder='[{"name":"Alice","lat":30.25,"lon":-97.75},{"name":"Bob","lat":30.31,"lon":-97.75}]'
+                required></textarea>
+            <div class="row">
+                <button type="submit">Render overlap</button>
+            </div>
+        </form>
+        <div id="geofence-map" class="map-preview"></div>
+        <pre id="geofence-result">Paste GeoJSON and constituent points to visualize overlap.</pre>
+    </div>
+
     <!-- ── Proof Explorer ───────────────────────────────────────────────── -->
     <div class="panel">
         <h2>Proof Explorer</h2>
