@@ -214,6 +214,47 @@
         <pre id="verify-result">Upload a proof bundle to verify.</pre>
     </div>
 
+    <div class="panel">
+        <h2>Proof Bundle Inspector</h2>
+        <p>Paste any <code>proof_bundle.json</code> to decode every field and explain each invariant check. Proofs generated below are copied here automatically for inspection.</p>
+        <div class="button-row">
+            <button type="button" id="inspect-proof-button">Inspect pasted bundle</button>
+            <button type="button" id="load-proof-file-button">Load from file chooser</button>
+        </div>
+        <textarea id="proof-bundle-input" spellcheck="false" placeholder='{"smt_proof": {...}, "zk_public_inputs": {...}}'></textarea>
+        <div class="grid-two">
+            <div>
+                <h3>Checks</h3>
+                <div id="proof-inspector-checks" class="muted">Paste a bundle and inspect it.</div>
+            </div>
+            <div>
+                <h3>Decoded Fields</h3>
+                <div id="proof-inspector-fields" class="muted">Decoded field metadata will appear here.</div>
+            </div>
+        </div>
+    </div>
+
+    <div class="panel">
+        <h2>Constants Provenance Notebook</h2>
+        <p>Render the Poseidon BN128 constants provenance chain from circomlibjs source metadata through the exported Python constants, then download the full JSON notebook.</p>
+        <div class="button-row">
+            <button type="button" id="load-constants-button">Load notebook</button>
+            <button type="button" id="download-constants-button" disabled>Download notebook JSON</button>
+        </div>
+        <div id="constants-summary" class="muted">Load the notebook to inspect constants provenance.</div>
+        <pre id="constants-export">Notebook JSON will appear here.</pre>
+    </div>
+
+    <div class="panel">
+        <h2>Circuit Constraint Visualizer</h2>
+        <p>Render a human-readable summary of what each Circom circuit is constraining, backed by exact source snippets.</p>
+        <div class="button-row">
+            <button type="button" id="load-circuits-button">Load circuit summaries</button>
+            <button type="button" id="download-circuits-button" disabled>Download circuit JSON</button>
+        </div>
+        <div id="circuit-visualizer" class="muted">Load the circuit summaries to inspect constraints.</div>
+    </div>
+
     <!-- ── Redaction Interface ───────────────────────────────────────────── -->
     <div class="panel">
         <h2>Redaction Interface</h2>
@@ -644,6 +685,158 @@
             }
         });
 
+        // ── Proof Bundle Inspector ──────────────────────────────────────────
+        async function inspectProofBundleText(rawText) {
+            const checksContainer = document.getElementById('proof-inspector-checks');
+            const fieldsContainer = document.getElementById('proof-inspector-fields');
+            checksContainer.textContent = 'Inspecting…';
+            fieldsContainer.textContent = '';
+            try {
+                const bundle = JSON.parse(rawText);
+                const resp = await fetch('/inspect-proof-bundle', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(bundle),
+                });
+                const data = await resp.json();
+                if (!data.ok) {
+                    checksContainer.textContent = `✗ ${data.error}`;
+                    return;
+                }
+                checksContainer.innerHTML = '';
+                fieldsContainer.innerHTML = '';
+                checksContainer.appendChild(renderChecks(data.checks));
+                fieldsContainer.appendChild(renderFieldTable(data.fields));
+            } catch (err) {
+                checksContainer.textContent = `✗ Failed: ${err}`;
+            }
+        }
+
+        document.getElementById('inspect-proof-button').addEventListener('click', async () => {
+            const rawText = document.getElementById('proof-bundle-input').value.trim();
+            if (!rawText) {
+                document.getElementById('proof-inspector-checks').textContent = 'Paste a proof bundle first.';
+                return;
+            }
+            await inspectProofBundleText(rawText);
+        });
+
+        document.getElementById('load-proof-file-button').addEventListener('click', async () => {
+            const fileInput = document.getElementById('verify-file');
+            if (!fileInput.files.length) {
+                document.getElementById('proof-inspector-checks').textContent = 'Choose a proof bundle file in the Verify Proof panel first.';
+                return;
+            }
+            const rawText = await fileInput.files[0].text();
+            document.getElementById('proof-bundle-input').value = rawText;
+            await inspectProofBundleText(rawText);
+        });
+
+        // ── Constants Provenance Notebook ───────────────────────────────────
+        document.getElementById('load-constants-button').addEventListener('click', async () => {
+            const summary = document.getElementById('constants-summary');
+            const exportPane = document.getElementById('constants-export');
+            summary.textContent = 'Loading…';
+            exportPane.textContent = '';
+            try {
+                const resp = await fetch('/constants-provenance');
+                const data = await resp.json();
+                if (!data.ok) {
+                    summary.textContent = `✗ ${data.error}`;
+                    return;
+                }
+                activeConstantsNotebook = data.notebook;
+                const parity = data.notebook.parity;
+                const paritySummary = parity.status === 'passed'
+                    ? `Verified identical against ${parity.vectors_checked} circomlibjs vector(s).`
+                    : `Parity status: ${parity.status}${parity.reason ? ` — ${parity.reason}` : ''}`;
+                summary.innerHTML = '';
+                const status = document.createElement('span');
+                status.className = data.notebook.verified_identical ? 'ok' : 'bad';
+                status.textContent = data.notebook.verified_identical ? 'VERIFIED' : 'NOT VERIFIED';
+                summary.appendChild(status);
+                summary.appendChild(document.createElement('br'));
+                const sourceLine = document.createElement('div');
+                sourceLine.textContent = `Source: ${data.notebook.parameters.source}`;
+                summary.appendChild(sourceLine);
+                const fieldLine = document.createElement('div');
+                fieldLine.textContent = `Field: ${data.notebook.parameters.field}`;
+                summary.appendChild(fieldLine);
+                const roundLine = document.createElement('div');
+                roundLine.textContent = `Round constants: ${data.notebook.parameters.round_constants_count}`;
+                summary.appendChild(roundLine);
+                const mdsLine = document.createElement('div');
+                mdsLine.textContent = `MDS dimensions: ${data.notebook.parameters.mds_rows} × ${data.notebook.parameters.mds_cols}`;
+                summary.appendChild(mdsLine);
+                const parityLine = document.createElement('div');
+                parityLine.textContent = paritySummary;
+                summary.appendChild(parityLine);
+                exportPane.textContent = JSON.stringify(data.notebook, null, 2);
+                document.getElementById('download-constants-button').disabled = false;
+            } catch (err) {
+                summary.textContent = `✗ Failed: ${err}`;
+            }
+        });
+
+        document.getElementById('download-constants-button').addEventListener('click', () => {
+            if (!activeConstantsNotebook) return;
+            downloadJson('poseidon_constants_notebook.json', activeConstantsNotebook);
+        });
+
+        // ── Circuit Constraint Visualizer ───────────────────────────────────
+        document.getElementById('load-circuits-button').addEventListener('click', async () => {
+            const container = document.getElementById('circuit-visualizer');
+            container.textContent = 'Loading…';
+            try {
+                const resp = await fetch('/circuit-constraints');
+                const data = await resp.json();
+                if (!data.ok) {
+                    container.textContent = `✗ ${data.error}`;
+                    return;
+                }
+                activeCircuitVisualizer = data;
+                container.innerHTML = '';
+                data.circuits.forEach((circuit) => {
+                    const block = document.createElement('div');
+                    block.className = 'panel';
+                    const constraintList = renderChecks(
+                        circuit.constraints.map((constraint) => ({
+                            passed: constraint.source_verified,
+                            label: constraint.label,
+                            detail: `${constraint.explanation}\nSource snippets: ${constraint.source_snippets.join(' | ')}`,
+                        }))
+                    );
+                    const title = document.createElement('h3');
+                    title.textContent = circuit.title;
+                    block.appendChild(title);
+                    const path = document.createElement('p');
+                    const pathCode = document.createElement('code');
+                    pathCode.textContent = circuit.source_path;
+                    path.appendChild(pathCode);
+                    block.appendChild(path);
+                    const publicInputs = document.createElement('p');
+                    publicInputs.textContent = `Public inputs: ${circuit.public_inputs.join(', ')}`;
+                    block.appendChild(publicInputs);
+                    const privateInputs = document.createElement('p');
+                    privateInputs.textContent = `Private inputs: ${circuit.private_inputs.join(', ')}`;
+                    block.appendChild(privateInputs);
+                    block.appendChild(constraintList);
+                    const source = document.createElement('pre');
+                    source.textContent = circuit.source_excerpt;
+                    block.appendChild(source);
+                    container.appendChild(block);
+                });
+                document.getElementById('download-circuits-button').disabled = false;
+            } catch (err) {
+                container.textContent = `✗ Failed: ${err}`;
+            }
+        });
+
+        document.getElementById('download-circuits-button').addEventListener('click', () => {
+            if (!activeCircuitVisualizer) return;
+            downloadJson('circuit_constraint_visualizer.json', activeCircuitVisualizer);
+        });
+
         // ── Redaction Interface ─────────────────────────────────────────────
         let activeProofBundle = null;
 
@@ -729,6 +922,7 @@
                     return;
                 }
                 activeProofBundle = data.bundle;
+                document.getElementById('proof-bundle-input').value = JSON.stringify(activeProofBundle, null, 2);
                 result.textContent =
                     `✓ Proof generated!\n\n` +
                     `Revealed indices  : [${data.bundle.revealed_indices.join(', ')}]\n` +

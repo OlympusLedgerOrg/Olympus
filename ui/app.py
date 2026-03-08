@@ -21,6 +21,7 @@ from protocol.redaction import RedactionProtocol
 from protocol.redaction_ledger import (
     RedactionProofWithLedger,
     ZKPublicInputs,
+    poseidon_root_to_bytes,
     verify_zk_redaction,
 )
 from protocol.ssmf import ExistenceProof, SparseMerkleTree
@@ -63,6 +64,127 @@ FEDERATION_NODES = _load_federation_nodes()
 
 app = FastAPI(title="Olympus Debug Console", version="0.1.0")
 templates = Jinja2Templates(directory="ui/templates")
+REPO_ROOT = Path(__file__).resolve().parent.parent
+_POSEIDON_VECTORS_SCRIPT = REPO_ROOT / "proofs" / "test_inputs" / "poseidon_vectors.js"
+_POSEIDON_NODE_MODULES = REPO_ROOT / "proofs" / "node_modules"
+_CIRCUIT_FILES = {
+    "document_existence": REPO_ROOT / "proofs" / "circuits" / "document_existence.circom",
+    "non_existence": REPO_ROOT / "proofs" / "circuits" / "non_existence.circom",
+    "redaction_validity": REPO_ROOT / "proofs" / "circuits" / "redaction_validity.circom",
+}
+_CIRCUIT_VISUALIZER = {
+    "document_existence": {
+        "title": "Document existence proof",
+        "public_inputs": ["root", "leafIndex"],
+        "private_inputs": ["leaf", "pathElements[depth]", "pathIndices[depth]"],
+        "constraints": [
+            {
+                "label": "Index bits are boolean and reconstruct leafIndex",
+                "explanation": (
+                    "Each pathIndices[i] bit is constrained to 0/1, then folded "
+                    "LSB-first into indexAccum so the Merkle path is tied to the "
+                    "public leafIndex."
+                ),
+                "source_snippets": [
+                    "pathIndices[i] * (pathIndices[i] - 1) === 0;",
+                    "leafIndex === indexAccum[depth];",
+                ],
+            },
+            {
+                "label": "Merkle path must open to the public root",
+                "explanation": (
+                    "The MerkleTreeInclusionProof gadget constrains the supplied "
+                    "leaf and sibling path to hash to the public root."
+                ),
+                "source_snippets": [
+                    "component merkle = MerkleTreeInclusionProof(depth);",
+                    "merkle.root <== root;",
+                    "merkle.leaf <== leaf;",
+                ],
+            },
+        ],
+    },
+    "non_existence": {
+        "title": "Indexed non-existence proof",
+        "public_inputs": ["root", "leafIndex"],
+        "private_inputs": ["pathElements[depth]", "pathIndices[depth]"],
+        "constraints": [
+            {
+                "label": "Index bits are boolean and bind the path to leafIndex",
+                "explanation": (
+                    "The circuit reconstructs the public leafIndex from LSB-first "
+                    "path bits so the witness cannot prove emptiness at a "
+                    "different position."
+                ),
+                "source_snippets": [
+                    "pathIndices[i] * (pathIndices[i] - 1) === 0;",
+                    "leafIndex === indexAccum[depth];",
+                ],
+            },
+            {
+                "label": "The opened leaf is forced to be the empty value 0",
+                "explanation": (
+                    "Instead of taking a private leaf input, the Merkle proof "
+                    "gadget is wired to the constant 0, so only an empty slot can "
+                    "satisfy the proof."
+                ),
+                "source_snippets": [
+                    "component merkle = MerkleTreeInclusionProof(depth);",
+                    "merkle.leaf <== 0;",
+                ],
+            },
+        ],
+    },
+    "redaction_validity": {
+        "title": "Redaction validity proof",
+        "public_inputs": ["originalRoot", "redactedCommitment", "revealedCount"],
+        "private_inputs": [
+            "originalLeaves[maxLeaves]",
+            "revealMask[maxLeaves]",
+            "pathElements[maxLeaves][depth]",
+            "pathIndices[maxLeaves][depth]",
+        ],
+        "constraints": [
+            {
+                "label": "Reveal mask is binary and revealedCount is its sum",
+                "explanation": (
+                    "Every revealMask entry is constrained to 0/1 and accumulated "
+                    "into maskSum so the public revealedCount matches the number "
+                    "of disclosed leaves."
+                ),
+                "source_snippets": [
+                    "revealMask[i] * (revealMask[i] - 1) === 0;",
+                    "revealedCount === maskSum[maxLeaves];",
+                ],
+            },
+            {
+                "label": "Each revealed proof is position-bound to index i",
+                "explanation": (
+                    "The circuit reconstructs each leaf position from pathIndices "
+                    "and constrains the accumulator to equal the compile-time "
+                    "index i before checking Merkle inclusion."
+                ),
+                "source_snippets": [
+                    "idxAccum[depth] === i;",
+                    "revealMask[i] * (originalRoot - inclusionProofs[i].root) === 0;",
+                ],
+            },
+            {
+                "label": "The redacted commitment hashes only revealed leaves",
+                "explanation": (
+                    "revealedLeaves[i] is originalLeaves[i] when revealed and 0 "
+                    "otherwise, then a Poseidon chain commits to "
+                    "(revealedCount, revealedLeaves[0..maxLeaves-1])."
+                ),
+                "source_snippets": [
+                    "revealedLeaves[i] <== revealMask[i] * originalLeaves[i];",
+                    "initHash.inputs[0] <== revealedCount;",
+                    "redactedCommitment === acc[maxLeaves - 1];",
+                ],
+            },
+        ],
+    },
+}
 
 # In-memory store for committed documents.
 # Key: "{document_id}:{version}"
@@ -636,28 +758,7 @@ async def verify_proof_bundle(request: Request):
 
     try:
         body = await request.json()
-        smt_proof_data = body["smt_proof"]
-        smt_proof = ExistenceProof(
-            key=bytes.fromhex(smt_proof_data["key"]),
-            value_hash=bytes.fromhex(smt_proof_data["value_hash"]),
-            siblings=[bytes.fromhex(s) for s in smt_proof_data["siblings"]],
-            root_hash=bytes.fromhex(smt_proof_data["root_hash"]),
-        )
-        zk_pi = body["zk_public_inputs"]
-        public_inputs = ZKPublicInputs(
-            original_root=str(zk_pi["original_root"]),
-            redacted_commitment=str(zk_pi["redacted_commitment"]),
-            revealed_count=int(zk_pi["revealed_count"]),
-        )
-        proof = RedactionProofWithLedger(
-            smt_proof=smt_proof,
-            zk_proof=body["zk_proof"],
-            zk_public_inputs=public_inputs,
-        )
-        smt_root = bytes.fromhex(body["smt_root"])
-        revealed_indices: list[int] = body.get("revealed_indices", [])
-        revealed_content: list[str] = body.get("revealed_content", [])
-        total_parts: int = int(body.get("total_parts", 0))
+        proof, smt_root, revealed_indices, revealed_content, total_parts = _parse_proof_bundle(body)
     except (KeyError, TypeError, ValueError) as exc:
         return JSONResponse(
             status_code=400,
