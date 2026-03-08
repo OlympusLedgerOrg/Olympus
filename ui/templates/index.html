@@ -187,14 +187,21 @@
                 <button type="submit">Compare roots</button>
             </div>
         </form>
-        <pre id="diff-result">Submit two shard header sequences to inspect root deltas.</pre>
+        <pre id="diff-result">Submit two shard header sequences to inspect state root differences.</pre>
     </div>
 
     <div class="panel">
         <h2>Shard List</h2>
         <table>
             <thead>
-                <tr><th>Shard</th><th>Latest Seq</th><th>Latest Root</th><th>Signature</th><th>Chain</th><th>History</th></tr>
+                <tr>
+                    <th>Shard</th>
+                    <th>Latest Seq</th>
+                    <th>Latest Root</th>
+                    <th>Signature</th>
+                    <th>Chain</th>
+                    <th>History</th>
+                </tr>
             </thead>
             <tbody>
             {% for row in shards %}

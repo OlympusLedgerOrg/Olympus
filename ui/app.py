@@ -197,6 +197,10 @@ def _collect_federation_dashboard() -> dict[str, Any]:
         agreement_root = ""
         agreement_nodes: list[str] = []
         if root_groups:
+            # Use lexicographic root order as a stable tie-break when equal numbers
+            # of nodes report different roots with the same level of support. This is
+            # an observer-side dashboard heuristic only; it does not change Olympus
+            # v1.0 single-node signed-header finality semantics.
             agreement_root, agreement_nodes = max(
                 root_groups.items(), key=lambda item: (len(item[1]), item[0])
             )
@@ -268,7 +272,7 @@ def debug_console(request: Request):
             try:
                 history = _expect_json_object(_fetch_json(f"/shards/{quote(shard_id)}/history?n=5"))
                 shard_row["history"] = history.get("headers", [])
-            except (HTTPError, URLError, TypeError, ValueError, AssertionError):
+            except (HTTPError, URLError, TypeError, ValueError):
                 shard_row["history"] = []
             if _is_chain_broken(entries):
                 context["banners"].append(f"Chain linkage broken in shard {shard_id} ledger tail.")

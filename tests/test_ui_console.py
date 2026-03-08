@@ -53,6 +53,8 @@ def test_console_shows_chain_broken_banner(monkeypatch):
                     {"prev_entry_hash": "y", "entry_hash": "e1"},
                 ],
             }
+        if path == "/shards/s1/history?n=5":
+            return {"headers": [{"seq": 2, "root_hash": "abc"}]}
         raise AssertionError(f"Unexpected path: {path}")
 
     monkeypatch.setattr(ui_app, "_fetch_json", fake_fetch)
@@ -74,6 +76,8 @@ def test_console_shows_invalid_signature_banner(monkeypatch):
             return {"header_hash": "0" * 64, "signature": "0" * 128, "pubkey": "0" * 64}
         if path == "/ledger/s1/tail?n=10":
             return {"shard_id": "s1", "entries": []}
+        if path == "/shards/s1/history?n=5":
+            return {"headers": [{"seq": 1, "root_hash": "abc"}]}
         raise AssertionError(f"Unexpected path: {path}")
 
     monkeypatch.setattr(ui_app, "_fetch_json", fake_fetch)

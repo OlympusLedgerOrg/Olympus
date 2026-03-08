@@ -814,6 +814,10 @@ class StorageLayer:
         tree = SparseMerkleTree()
 
         # Load all leaves for this shard
+        # Secondary ordering by key makes replay deterministic when multiple inserts share
+        # the same timestamp, while preserving the primary append order on ts. Without
+        # this stable tie-break, historical reconstruction could yield different roots
+        # for the same cutoff timestamp and break offline verification.
         if up_to_ts is None:
             cur.execute(
                 """
