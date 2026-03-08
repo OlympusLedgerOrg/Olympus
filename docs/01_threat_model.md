@@ -2,6 +2,9 @@
 
 This document describes the threat model for the Olympus protocol.
 
+For an interactive walkthrough with attack scenarios and verification exercises,
+see `docs/threat_model_walkthrough.ipynb`.
+
 ## Adversaries
 
 - Malicious document submitters

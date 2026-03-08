@@ -53,6 +53,8 @@ def test_console_shows_chain_broken_banner(monkeypatch):
                     {"prev_entry_hash": "y", "entry_hash": "e1"},
                 ],
             }
+        if path == "/shards/s1/history?n=5":
+            return {"headers": [{"seq": 2, "root_hash": "abc"}]}
         raise AssertionError(f"Unexpected path: {path}")
 
     monkeypatch.setattr(ui_app, "_fetch_json", fake_fetch)
@@ -74,6 +76,8 @@ def test_console_shows_invalid_signature_banner(monkeypatch):
             return {"header_hash": "0" * 64, "signature": "0" * 128, "pubkey": "0" * 64}
         if path == "/ledger/s1/tail?n=10":
             return {"shard_id": "s1", "entries": []}
+        if path == "/shards/s1/history?n=5":
+            return {"headers": [{"seq": 1, "root_hash": "abc"}]}
         raise AssertionError(f"Unexpected path: {path}")
 
     monkeypatch.setattr(ui_app, "_fetch_json", fake_fetch)
@@ -94,6 +98,109 @@ def test_debug_ui_disabled_by_default(monkeypatch):
         client.get("/proof-explorer?shard_id=s&record_type=t&record_id=r&version=1").status_code
         == 404
     )
+    assert client.get("/state-diff?shard_id=s&from_seq=1&to_seq=2").status_code == 404
+
+
+def test_console_shows_federation_dashboard(monkeypatch):
+    """Root page should render federation agreement details when nodes are configured."""
+    monkeypatch.setattr(ui_app, "DEBUG_UI_ENABLED", True)
+    monkeypatch.setattr(
+        ui_app,
+        "FEDERATION_NODES",
+        {
+            "node1": "http://node1.example",
+            "node2": "http://node2.example",
+            "node3": "http://node3.example",
+        },
+    )
+    monkeypatch.setattr(ui_app, "_fetch_json", lambda path: [])
+
+    def fake_fetch(base_url: str, path: str):
+        if path == "/health":
+            return {"status": "healthy"}
+        if path == "/shards":
+            return [{"shard_id": "s1", "latest_seq": 2, "latest_root": "abc"}]
+        if path == "/shards/s1/header/latest":
+            return {"header_hash": "0" * 64, "signature": "0" * 128, "pubkey": "0" * 64}
+        if path == "/ledger/s1/tail?n=10":
+            return {"entries": [{"prev_entry_hash": "", "entry_hash": "e1"}]}
+        if path == "/shards/s1/history?n=5":
+            return {"headers": [{"seq": 2, "root_hash": "abc"}]}
+        raise AssertionError(f"Unexpected path for {base_url}: {path}")
+
+    monkeypatch.setattr(ui_app, "_fetch_json_from_base", fake_fetch)
+    monkeypatch.setattr(ui_app, "_verify_signature", lambda header: True)
+
+    response = client.get("/")
+
+    assert response.status_code == 200
+    assert "Federation Health Dashboard" in response.text
+    assert "in sync" in response.text
+    assert "seq 2" in response.text
+
+
+def test_state_diff_proxy(monkeypatch):
+    """The state diff proxy should return API diff payloads."""
+    monkeypatch.setattr(ui_app, "DEBUG_UI_ENABLED", True)
+    monkeypatch.setattr(
+        ui_app,
+        "_fetch_json",
+        lambda path: {
+            "from_root_hash": "aa" * 32,
+            "to_root_hash": "bb" * 32,
+            "summary": {"added": 1, "changed": 0, "removed": 0},
+        },
+    )
+
+    response = client.get("/state-diff?shard_id=s1&from_seq=1&to_seq=2")
+
+    assert response.status_code == 200
+    assert response.json()["ok"] is True
+    assert response.json()["diff"]["summary"]["added"] == 1
+
+
+def test_public_verification_portal_available_without_debug(monkeypatch):
+    """Public verification portal stays available even when debug tools are disabled."""
+    monkeypatch.setattr(ui_app, "DEBUG_UI_ENABLED", False)
+
+    response = client.get("/verification-portal")
+
+    assert response.status_code == 200
+    assert "Public Verification Portal" in response.text
+    assert "hash-verify-form" in response.text
+
+
+def test_public_hash_lookup_proxies_api(monkeypatch):
+    """Public hash verification proxy returns proof data from the API."""
+    monkeypatch.setattr(
+        ui_app,
+        "_fetch_json",
+        lambda path: {
+            "proof_id": "proof-123",
+            "record_id": "doc-123",
+            "shard_id": "shard-1",
+            "content_hash": "ab" * 32,
+            "merkle_root": "cd" * 32,
+            "merkle_proof": {
+                "leaf_hash": "ef" * 32,
+                "leaf_index": 0,
+                "siblings": [],
+                "root_hash": "cd" * 32,
+            },
+            "ledger_entry_hash": "12" * 32,
+            "timestamp": "2026-01-01T00:00:00Z",
+            "canonicalization": {"method": "demo"},
+            "merkle_proof_valid": True,
+        },
+    )
+
+    response = client.get(f"/verification-portal/hash/{'ab' * 32}")
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["ok"] is True
+    assert data["verification"]["proof_id"] == "proof-123"
+    assert data["verification"]["merkle_proof_valid"] is True
 
 
 def test_console_uses_theme_tokens(monkeypatch):
@@ -136,6 +243,8 @@ def test_commit_txt_file(monkeypatch):
     assert len(data["blake3_root"]) == 64
     assert data["poseidon_root"].isdigit()
     assert data["commit_key"] == "doc1:1"
+    assert data["receipt"]["receipt_type"] == "document_commitment"
+    assert len(data["receipt"]["receipt_hash"]) == 64
 
 
 def test_commit_json_file(monkeypatch):
@@ -206,6 +315,7 @@ def test_get_committed_sections(monkeypatch):
     assert data["sections"] == ["Part A", "Part B"]
     assert len(data["blake3_root"]) == 64
     assert data["poseidon_root"].isdigit()
+    assert data["receipt"]["receipt_type"] == "document_commitment"
 
 
 def test_get_committed_sections_not_found(monkeypatch):
@@ -326,131 +436,166 @@ def test_verify_disabled_returns_404(monkeypatch):
     assert response.status_code == 404
 
 
-# ── Civic tooling endpoints ───────────────────────────────────────────────────
+# ── Receipt + embargo management ──────────────────────────────────────────────
 
 
-def test_voting_record_uses_openstates_data(monkeypatch):
-    """GET /civic/voting-record normalizes OpenStates people and bill vote payloads."""
+def test_commit_returns_receipt_and_embargo_metadata(monkeypatch):
+    """POST /commit returns a receipt and configured embargo metadata."""
     monkeypatch.setattr(ui_app, "DEBUG_UI_ENABLED", True)
+    ui_app._commit_store.clear()
 
-    def fake_openstates(path: str, params: dict[str, object]):
-        if path == "/people":
-            return {
-                "results": [
-                    {
-                        "id": "ocd-person/123",
-                        "name": "Jane Doe",
-                        "party": "Independent",
-                        "current_role": {"district": "7", "title": "Representative"},
-                    }
-                ]
-            }
-        if path == "/bills":
-            assert params["include"] == ["votes"]
-            return {
-                "results": [
-                    {
-                        "identifier": "HB 101",
-                        "title": "Transit Expansion Act",
-                        "classification": ["bill"],
-                        "votes": [
-                            {
-                                "motion_text": "Final passage",
-                                "date": "2026-02-01",
-                                "result": "passed",
-                                "organization": {"name": "House"},
-                                "votes": [
-                                    {"person_id": "ocd-person/123", "option": "yes"},
-                                    {"person_id": "ocd-person/999", "option": "no"},
-                                ],
-                            }
-                        ],
-                    }
-                ]
-            }
-        raise AssertionError(f"Unexpected path: {path}")
-
-    monkeypatch.setattr(ui_app, "_fetch_openstates_json", fake_openstates)
-
-    response = client.get("/civic/voting-record?name=Jane%20Doe&jurisdiction=Texas")
+    response = client.post(
+        "/commit",
+        data={
+            "document_id": "embargo-doc",
+            "version": 3,
+            "release_at": "2026-03-10T15:00:00Z",
+            "recipient_keys": "alice-key\nbob-key",
+        },
+        files={"file": ("doc.txt", b"One\nTwo\n", "text/plain")},
+    )
 
     assert response.status_code == 200
     data = response.json()
-    assert data["ok"] is True
-    assert data["representative"]["name"] == "Jane Doe"
-    assert data["source"]["provider"] == "OpenStates"
-    assert data["votes"] == [
-        {
-            "bill_identifier": "HB 101",
-            "bill_title": "Transit Expansion Act",
-            "classification": ["bill"],
-            "motion": "Final passage",
-            "date": "2026-02-01",
-            "result": "passed",
-            "option": "yes",
-            "organization": "House",
-        }
-    ]
+    assert data["receipt"]["payload"]["release_at"] == "2026-03-10T15:00:00Z"
+    assert data["embargo"]["recipient_keys"] == ["alice-key", "bob-key"]
+    assert data["embargo"]["active_recipient_keys"] == ["alice-key", "bob-key"]
+    assert data["embargo"]["revoked_recipient_keys"] == []
 
 
-def test_simplify_bill_returns_summary_and_prompt_chain(monkeypatch):
-    """POST /civic/simplify-bill returns a deterministic summary with visible prompts."""
+def test_embargo_update_and_revoke(monkeypatch):
+    """Embargo endpoints update recipients and support revocation."""
     monkeypatch.setattr(ui_app, "DEBUG_UI_ENABLED", True)
+    ui_app._commit_store.clear()
+
+    client.post(
+        "/commit",
+        data={"document_id": "docE", "version": 1},
+        files={"file": ("doc.txt", b"First\nSecond\n", "text/plain")},
+    )
+
+    update_response = client.post(
+        "/embargo/update",
+        json={
+            "document_id": "docE",
+            "version": 1,
+            "release_at": "2026-03-09T12:00:00Z",
+            "recipient_keys": "key-a,key-b",
+        },
+    )
+    assert update_response.status_code == 200
+    update_data = update_response.json()
+    assert update_data["embargo"]["release_at"] == "2026-03-09T12:00:00Z"
+    assert update_data["embargo"]["active_recipient_keys"] == ["key-a", "key-b"]
+    assert update_data["receipt"]["receipt_type"] == "embargo_update"
+    assert len(update_data["receipt"]["receipt_hash"]) == 64
+
+    revoke_response = client.post(
+        "/embargo/revoke",
+        json={"document_id": "docE", "version": 1, "recipient_key": "key-a"},
+    )
+    assert revoke_response.status_code == 200
+    revoke_data = revoke_response.json()
+    assert revoke_data["embargo"]["active_recipient_keys"] == ["key-b"]
+    assert revoke_data["embargo"]["revoked_recipient_keys"] == ["key-a"]
+
+    get_response = client.get("/embargo/docE/1")
+    assert get_response.status_code == 200
+    get_data = get_response.json()
+    assert get_data["embargo"]["active_recipient_keys"] == ["key-b"]
+    assert get_data["embargo"]["revoked_recipient_keys"] == ["key-a"]
+
+
+# ── FOIA tracker ──────────────────────────────────────────────────────────────
+
+
+def test_foia_request_response_and_delay_proof(monkeypatch):
+    """FOIA tracker commits request metadata, logs responses, and returns delay proofs."""
+    monkeypatch.setattr(ui_app, "DEBUG_UI_ENABLED", True)
+    ui_app._commit_store.clear()
+    ui_app._foia_store.clear()
+
+    request_response = client.post(
+        "/foia/request",
+        json={
+            "request_id": "foia-001",
+            "agency": "Records Office",
+            "requester": "Jane Citizen",
+            "description": "Budget spreadsheet for 2025",
+            "submitted_at": "2026-03-01T00:00:00Z",
+            "response_due_at": "2026-03-05T00:00:00Z",
+        },
+    )
+    assert request_response.status_code == 200
+    request_data = request_response.json()
+    assert request_data["request"]["request_id"] == "foia-001"
+    assert request_data["request"]["request_receipt"]["receipt_type"] == "foia_request_submission"
+    assert request_data["delay_proof"]["receipt_type"] == "foia_delay_snapshot"
+    assert request_data["delay_proof"]["payload"]["proof_mode"] == "snapshot"
+    assert request_data["delay_proof"]["payload"]["pending"] is True
+
+    response_response = client.post(
+        "/foia/response",
+        json={
+            "request_id": "foia-001",
+            "response_received_at": "2026-03-07T00:00:00Z",
+            "response_summary": "Released with redactions",
+        },
+    )
+    assert response_response.status_code == 200
+    response_data = response_response.json()
+    assert response_data["request"]["response_received_at"] == "2026-03-07T00:00:00Z"
+    assert response_data["request"]["response_receipt"]["receipt_type"] == "foia_response_log"
+    assert response_data["delay_proof"]["receipt_type"] == "foia_delay_proof"
+    assert response_data["delay_proof"]["payload"]["proof_mode"] == "response-anchored"
+    assert response_data["delay_proof"]["payload"]["pending"] is False
+    assert response_data["delay_proof"]["payload"]["delayed"] is True
+    assert response_data["delay_proof"]["payload"]["delay_seconds"] == 172800
+
+    proof_response = client.get("/foia/foia-001/delay-proof")
+    assert proof_response.status_code == 200
+    proof_data = proof_response.json()
+    assert (
+        proof_data["delay_proof"]["payload"]["request_receipt_hash"]
+        == (request_data["request"]["request_receipt"]["receipt_hash"])
+    )
+    assert (
+        proof_data["delay_proof"]["payload"]["response_receipt_hash"]
+        == (response_data["request"]["response_receipt"]["receipt_hash"])
+    )
+
+
+def test_foia_response_before_due_date_is_not_delayed(monkeypatch):
+    """FOIA delay proof should show no delay when the response arrives before the due date."""
+    monkeypatch.setattr(ui_app, "DEBUG_UI_ENABLED", True)
+    ui_app._commit_store.clear()
+    ui_app._foia_store.clear()
+
+    client.post(
+        "/foia/request",
+        json={
+            "request_id": "foia-002",
+            "agency": "City Clerk",
+            "requester": "Alex Example",
+            "description": "Meeting minutes",
+            "submitted_at": "2026-03-01T00:00:00Z",
+            "response_due_at": "2026-03-05T00:00:00Z",
+        },
+    )
 
     response = client.post(
-        "/civic/simplify-bill",
+        "/foia/response",
         json={
-            "text": (
-                "The department shall publish an annual housing report by January 15, 2027. "
-                "The agency may not spend more than $250,000 without council approval."
-            )
+            "request_id": "foia-002",
+            "response_received_at": "2026-03-04T12:00:00Z",
+            "response_summary": "Released in full",
         },
     )
 
     assert response.status_code == 200
     data = response.json()
-    assert data["ok"] is True
-    assert "must publish an annual housing report" in data["plain_english_summary"].lower()
-    assert data["amounts"] == ["$250,000"]
-    assert "January 15, 2027" in data["dates"][0]
-    assert [stage["stage"] for stage in data["prompt_chain"]] == [
-        "extract_obligations",
-        "translate_for_constituents",
-        "flag_open_questions",
-    ]
-
-
-def test_geofence_preview_returns_overlap_counts_and_svg(monkeypatch):
-    """POST /civic/geofence-preview computes overlap and returns an SVG map preview."""
-    monkeypatch.setattr(ui_app, "DEBUG_UI_ENABLED", True)
-
-    response = client.post(
-        "/civic/geofence-preview",
-        json={
-            "district_geojson": {
-                "type": "Polygon",
-                "coordinates": [
-                    [[-97.8, 30.2], [-97.7, 30.2], [-97.7, 30.3], [-97.8, 30.3], [-97.8, 30.2]]
-                ],
-            },
-            "constituents": [
-                {"name": "Inside Resident", "lat": 30.25, "lon": -97.75},
-                {"name": "Outside Resident", "lat": 30.35, "lon": -97.75},
-            ],
-        },
-    )
-
-    assert response.status_code == 200
-    data = response.json()
-    assert data["ok"] is True
-    assert data["district_count"] == 1
-    assert data["overlap_count"] == 1
-    assert data["outside_count"] == 1
-    assert "<svg" in data["svg"]
-    assert data["constituents"] == [
-        {"name": "Inside Resident", "lat": 30.25, "lon": -97.75, "inside": True},
-        {"name": "Outside Resident", "lat": 30.35, "lon": -97.75, "inside": False},
-    ]
+    assert data["delay_proof"]["payload"]["delayed"] is False
+    assert data["delay_proof"]["payload"]["delay_seconds"] == 0
 
 
 # ── New panel HTML presence ──────────────────────────────────────────────────
@@ -489,16 +634,14 @@ def test_index_has_redaction_panel(monkeypatch):
     assert "redact-sections" in response.text
 
 
-def test_index_has_civic_tooling_panels(monkeypatch):
-    """Root page should include the new civic tooling prototype panels."""
+def test_index_has_foia_and_embargo_panels(monkeypatch):
+    """Root page should include FOIA tracker and embargo management panels."""
     monkeypatch.setattr(ui_app, "DEBUG_UI_ENABLED", True)
     monkeypatch.setattr(ui_app, "_fetch_json", lambda path: [])
 
     response = client.get("/")
     assert response.status_code == 200
-    assert "Representative Voting Record Tracker" in response.text
-    assert "Bill Text Simplifier Pipeline" in response.text
-    assert "Geofence Boundary Visualizer" in response.text
-    assert "votes-form" in response.text
-    assert "simplify-form" in response.text
-    assert "geofence-form" in response.text
+    assert "FOIA Request Tracker" in response.text
+    assert "foia-request-form" in response.text
+    assert "Embargo Management" in response.text
+    assert "embargo-doc-id" in response.text

@@ -155,6 +155,37 @@ class TestIngestionProof:
         resp = client.get("/ingest/records/nonexistent-id/proof")
         assert resp.status_code == 404
 
+    def test_verify_by_content_hash(self, client: TestClient):
+        payload = {
+            "records": [
+                {
+                    "shard_id": "shard-hash",
+                    "record_type": "document",
+                    "record_id": "doc-hash",
+                    "version": 1,
+                    "content": {"hash_lookup": "present"},
+                }
+            ]
+        }
+        resp = client.post("/ingest/records", json=payload)
+        content_hash = resp.json()["results"][0]["content_hash"]
+
+        verify_resp = client.get(f"/ingest/records/hash/{content_hash}/verify")
+        assert verify_resp.status_code == 200
+        verify_data = verify_resp.json()
+        assert verify_data["content_hash"] == content_hash
+        assert verify_data["record_id"] == "doc-hash"
+        assert verify_data["merkle_proof_valid"] is True
+
+    def test_verify_by_content_hash_rejects_invalid_hex(self, client: TestClient):
+        resp = client.get("/ingest/records/hash/not-hex/verify")
+        assert resp.status_code == 400
+
+    def test_verify_by_content_hash_not_found(self, client: TestClient):
+        missing_hash = "ab" * 32
+        resp = client.get(f"/ingest/records/hash/{missing_hash}/verify")
+        assert resp.status_code == 404
+
 
 # ---------------------------------------------------------------------------
 # Health endpoint
@@ -168,6 +199,7 @@ class TestHealthEndpoint:
         data = resp.json()
         assert "endpoints" in data
         assert "/ingest/records" in data["endpoints"]
+        assert "/ingest/records/hash/{content_hash}/verify" in data["endpoints"]
 
     def test_health_includes_version(self, client: TestClient):
         resp = client.get("/health")
@@ -178,3 +210,4 @@ class TestHealthEndpoint:
         resp = client.get("/")
         data = resp.json()
         assert "/ingest/records" in data["endpoints"]
+        assert "/ingest/records/hash/{content_hash}/verify" in data["endpoints"]
