@@ -38,6 +38,8 @@ if (
 ):
     raise ValueError("OPENSTATES_API_BASE must be an absolute http(s) URL")
 
+RAY_CAST_EPSILON = 1e-12
+
 # Debug UI is disabled by default; set OLYMPUS_DEBUG_UI=true to enable.
 DEBUG_UI_ENABLED = os.environ.get("OLYMPUS_DEBUG_UI", "false").lower() == "true"
 
@@ -323,7 +325,7 @@ def _point_in_polygon(point: tuple[float, float], polygon: list[tuple[float, flo
         xi, yi = polygon[i]
         xj, yj = polygon[j]
         intersects = ((yi > y) != (yj > y)) and (
-            x < (xj - xi) * (y - yi) / ((yj - yi) or 1e-12) + xi
+            x < (xj - xi) * (y - yi) / ((yj - yi) or RAY_CAST_EPSILON) + xi
         )
         if intersects:
             inside = not inside
