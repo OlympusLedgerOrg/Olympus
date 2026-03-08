@@ -105,4 +105,7 @@ def test_console_uses_theme_tokens(monkeypatch):
     assert response.status_code == 200
     assert "--bg:" in response.text
     assert "--accent:" in response.text
+    assert "--surface-muted:" in response.text
     assert "@media (prefers-color-scheme: dark)" in response.text
+    assert "background: var(--bg);" in response.text
+    assert "color: var(--accent);" in response.text
