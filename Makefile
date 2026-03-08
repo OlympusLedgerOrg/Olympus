@@ -1,4 +1,4 @@
-.PHONY: check smoke dev
+.PHONY: check smoke dev federation-dev federation-down
 
 check:
 	python tools/validate_schemas.py
@@ -24,3 +24,9 @@ dev:
 	api_pid=$$!; \
 	trap 'kill $$api_pid' EXIT INT TERM; \
 	UI_API_BASE=http://127.0.0.1:8000 OLYMPUS_DEBUG_UI=true uvicorn ui.app:app --host 127.0.0.1 --port 8080
+
+federation-dev:
+	docker compose -f docker-compose.federation.yml up -d
+
+federation-down:
+	docker compose -f docker-compose.federation.yml down
