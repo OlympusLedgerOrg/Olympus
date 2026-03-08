@@ -195,6 +195,8 @@ def verify_zk_redaction(proof_blob: dict[str, Any], public_inputs: ZKPublicInput
     Returns:
         ``True`` when snarkjs verifies the proof; ``False`` on verification
         failure, malformed inputs, missing verifier artifacts, or runtime errors.
+        This boolean API is intentionally non-throwing so callers can treat all
+        verification failures uniformly.
     """
     try:
         public_signals = [
@@ -205,20 +207,17 @@ def verify_zk_redaction(proof_blob: dict[str, Any], public_inputs: ZKPublicInput
     except (TypeError, ValueError):
         return False
 
-    circuits_dir = Path(__file__).resolve().parent.parent / "proofs" / "circuits"
-    vkey_path = (
-        Path(__file__).resolve().parent.parent
-        / "proofs"
-        / "keys"
-        / "verification_keys"
-        / ("redaction_validity_vkey.json")
-    )
+    repo_root = Path(__file__).resolve().parent.parent
+    circuits_dir = repo_root / "proofs" / "circuits"
+    vkey_path = repo_root / "proofs" / "keys" / "verification_keys" / "redaction_validity_vkey.json"
     prover = Groth16Prover(circuits_dir=circuits_dir)
     proof = ZKProof(proof=proof_blob, public_signals=public_signals, circuit="redaction_validity")
 
     try:
-        return prover.verify(proof, verification_key_path=vkey_path)
+        return prover.verify(proof=proof, verification_key_path=vkey_path)
     except (FileNotFoundError, OSError, ValueError):
+        # Verification failures and verifier-environment errors are collapsed
+        # to False by design for a strictly boolean verification API.
         return False
 
 

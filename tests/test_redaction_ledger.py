@@ -265,8 +265,9 @@ def test_verify_zk_redaction_maps_public_inputs_and_calls_prover():
     with patch("protocol.redaction_ledger.Groth16Prover.verify", return_value=True) as mock_verify:
         assert verify_zk_redaction(proof_blob, public_inputs) is True
 
-    zk_proof_arg = mock_verify.call_args.args[0]
-    vkey_arg = mock_verify.call_args.kwargs["verification_key_path"]
+    kwargs = mock_verify.call_args[1]
+    zk_proof_arg = kwargs["proof"]
+    vkey_arg = kwargs["verification_key_path"]
 
     assert zk_proof_arg.proof is proof_blob
     assert zk_proof_arg.circuit == "redaction_validity"
