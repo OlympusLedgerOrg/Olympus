@@ -5,7 +5,13 @@ Tests for Sparse Merkle Tree implementation
 import pytest
 
 from protocol.hashes import hash_bytes, record_key
-from protocol.ssmf import ExistenceProof, SparseMerkleTree, verify_nonexistence_proof, verify_proof
+from protocol.ssmf import (
+    ExistenceProof,
+    SparseMerkleTree,
+    diff_sparse_merkle_trees,
+    verify_nonexistence_proof,
+    verify_proof,
+)
 
 
 def test_ssmf_empty_tree():
@@ -228,6 +234,45 @@ def test_ssmf_deterministic_root():
         tree2.update(key, value)
 
     assert tree1.get_root() == tree2.get_root()
+
+
+def test_ssmf_diff_reports_added_changed_and_removed_keys():
+    """Tree diffs should classify added, changed, and removed leaves deterministically."""
+    before = SparseMerkleTree()
+    after = SparseMerkleTree()
+
+    key_removed = record_key("document", "removed", 1)
+    key_changed = record_key("document", "changed", 1)
+    key_added = record_key("document", "added", 1)
+
+    before.update(key_removed, hash_bytes(b"old removed value"))
+    before.update(key_changed, hash_bytes(b"before change"))
+
+    after.update(key_changed, hash_bytes(b"after change"))
+    after.update(key_added, hash_bytes(b"new value"))
+
+    diff = diff_sparse_merkle_trees(before, after)
+
+    assert [entry.key for entry in diff["added"]] == [key_added]
+    assert [entry.key for entry in diff["changed"]] == [key_changed]
+    assert [entry.key for entry in diff["removed"]] == [key_removed]
+    assert diff["changed"][0].before_value_hash == hash_bytes(b"before change")
+    assert diff["changed"][0].after_value_hash == hash_bytes(b"after change")
+
+
+def test_ssmf_diff_is_empty_for_identical_trees():
+    """No diff entries should be reported when the trees are identical."""
+    left = SparseMerkleTree()
+    right = SparseMerkleTree()
+
+    key = record_key("document", "same", 1)
+    value_hash = hash_bytes(b"same value")
+    left.update(key, value_hash)
+    right.update(key, value_hash)
+
+    diff = diff_sparse_merkle_trees(left, right)
+
+    assert diff == {"added": [], "changed": [], "removed": []}
 
 
 def test_ssmf_prove_with_invalid_key_length():

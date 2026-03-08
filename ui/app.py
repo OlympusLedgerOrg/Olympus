@@ -2,9 +2,7 @@
 
 import json
 import os
-import shutil
-import subprocess
-from pathlib import Path
+from datetime import datetime, timezone
 from typing import Any
 from urllib.error import HTTPError, URLError
 from urllib.parse import quote, urlparse
@@ -16,8 +14,8 @@ from fastapi import FastAPI, File, Form, HTTPException, Query, Request, UploadFi
 from fastapi.responses import JSONResponse
 from fastapi.templating import Jinja2Templates
 
-from protocol.hashes import SNARK_SCALAR_FIELD, blake3_to_field_element
-from protocol.poseidon_bn128 import poseidon_hash_bn128, poseidon_parameter_summary
+from protocol.canonical_json import canonical_json_bytes
+from protocol.hashes import HASH_SEPARATOR, blake3_to_field_element, hash_bytes
 from protocol.poseidon_tree import PoseidonMerkleTree
 from protocol.redaction import RedactionProtocol
 from protocol.redaction_ledger import (
@@ -27,6 +25,7 @@ from protocol.redaction_ledger import (
     verify_zk_redaction,
 )
 from protocol.ssmf import ExistenceProof, SparseMerkleTree
+from protocol.timestamps import current_timestamp
 
 
 API_BASE = os.environ.get("UI_API_BASE", "http://127.0.0.1:8000")
@@ -36,6 +35,32 @@ if _parsed_api_base.scheme not in {"http", "https"} or not _parsed_api_base.netl
 
 # Debug UI is disabled by default; set OLYMPUS_DEBUG_UI=true to enable.
 DEBUG_UI_ENABLED = os.environ.get("OLYMPUS_DEBUG_UI", "false").lower() == "true"
+
+
+def _load_federation_nodes() -> dict[str, str]:
+    """Parse optional federation node endpoints from JSON environment configuration."""
+    raw_nodes = os.environ.get("OLYMPUS_FEDERATION_NODES", "").strip()
+    if not raw_nodes:
+        return {}
+
+    try:
+        parsed = json.loads(raw_nodes)
+    except json.JSONDecodeError as exc:
+        raise ValueError("OLYMPUS_FEDERATION_NODES must be valid JSON") from exc
+
+    if not isinstance(parsed, dict):
+        raise ValueError("OLYMPUS_FEDERATION_NODES must be a JSON object of node_name -> base_url")
+
+    nodes: dict[str, str] = {}
+    for name, base_url in parsed.items():
+        parsed_base = urlparse(str(base_url))
+        if parsed_base.scheme not in {"http", "https"} or not parsed_base.netloc:
+            raise ValueError(f"Federation node '{name}' must use an absolute http(s) URL")
+        nodes[str(name)] = str(base_url)
+    return nodes
+
+
+FEDERATION_NODES = _load_federation_nodes()
 
 app = FastAPI(title="Olympus Debug Console", version="0.1.0")
 templates = Jinja2Templates(directory="ui/templates")
@@ -165,14 +190,39 @@ _CIRCUIT_VISUALIZER = {
 # Key: "{document_id}:{version}"
 # Not persisted across restarts; for debug/demo use only.
 _commit_store: dict[str, dict[str, Any]] = {}
+_foia_store: dict[str, dict[str, Any]] = {}
 
 
 def _fetch_json(path: str) -> dict[str, Any] | list[dict[str, Any]]:
     """Fetch JSON from the Olympus API."""
+    return _fetch_json_from_base(API_BASE, path)
+
+
+def _fetch_json_from_base(base_url: str, path: str) -> dict[str, Any] | list[dict[str, Any]]:
+    """Fetch JSON from a specific Olympus API base URL."""
     if not path.startswith("/") or "://" in path:
         raise ValueError("API path must be a relative path")
-    with urlopen(f"{API_BASE}{path}", timeout=5) as response:  # noqa: S310
-        return json.loads(response.read().decode("utf-8"))
+    with urlopen(f"{base_url}{path}", timeout=5) as response:  # noqa: S310
+        payload = json.loads(response.read().decode("utf-8"))
+    if isinstance(payload, dict):
+        return cast(dict[str, Any], payload)
+    if isinstance(payload, list) and all(isinstance(item, dict) for item in payload):
+        return cast(list[dict[str, Any]], payload)
+    raise TypeError("Expected JSON object or list of objects from API")
+
+
+def _expect_json_object(payload: dict[str, Any] | list[dict[str, Any]]) -> dict[str, Any]:
+    """Require a JSON object payload from the API helper."""
+    if not isinstance(payload, dict):
+        raise TypeError("Expected JSON object")
+    return payload
+
+
+def _expect_json_list(payload: dict[str, Any] | list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Require a JSON array payload from the API helper."""
+    if not isinstance(payload, list):
+        raise TypeError("Expected JSON array")
+    return payload
 
 
 def _verify_signature(header: dict[str, Any]) -> bool:
@@ -193,354 +243,231 @@ def _is_chain_broken(entries: list[dict[str, Any]]) -> bool:
     return False
 
 
-def _exception_summary(exc: Exception) -> str:
-    """Return a compact one-line summary for debug UI status messages."""
-    message = str(exc).splitlines()[0]
-    if not message:
-        return exc.__class__.__name__
-    return f"{exc.__class__.__name__}: {message}"
+def _require_debug_ui() -> None:
+    """Raise 404 when the debug console is disabled."""
+    if not DEBUG_UI_ENABLED:
+        raise HTTPException(status_code=404, detail="Debug UI is disabled in this environment.")
 
 
-def _poseidon_vector_parity_report() -> dict[str, Any]:
-    """Check Python Poseidon outputs against the circomlibjs reference vectors."""
-    if shutil.which("node") is None:
-        return {
-            "status": "unavailable",
-            "verified": False,
-            "reason": "node is not available on PATH",
-            "vectors_checked": 0,
-            "mismatches": [],
-        }
-    if not _POSEIDON_NODE_MODULES.is_dir():
-        return {
-            "status": "unavailable",
-            "verified": False,
-            "reason": "proofs/node_modules is not installed",
-            "vectors_checked": 0,
-            "mismatches": [],
-        }
+def _normalize_timestamp(value: str, field_name: str) -> str:
+    """Parse an ISO 8601 timestamp and normalize it to a Z-suffixed UTC string."""
+    return _parse_timestamp(value, field_name).isoformat().replace("+00:00", "Z")
 
+
+def _parse_timestamp(value: str, field_name: str) -> datetime:
+    """Parse an ISO 8601 timestamp into a timezone-aware UTC datetime."""
     try:
-        result = subprocess.run(
-            ["node", str(_POSEIDON_VECTORS_SCRIPT)],
-            capture_output=True,
-            text=True,
-            check=True,
-            cwd=str(_POSEIDON_VECTORS_SCRIPT.parent),
-            timeout=10,
-        )
-        payload = json.loads(result.stdout)
-    except (json.JSONDecodeError, subprocess.CalledProcessError, subprocess.TimeoutExpired) as exc:
-        return {
-            "status": "failed",
-            "verified": False,
-            "reason": f"circomlibjs parity replay failed ({_exception_summary(exc)})",
-            "vectors_checked": 0,
-            "mismatches": [],
-        }
-    mismatches: list[dict[str, str]] = []
-    for vector in payload["vectors"]:
-        actual = str(poseidon_hash_bn128(int(vector["a"]), int(vector["b"])))
-        if actual != vector["out"]:
-            mismatches.append({
-                "a": vector["a"],
-                "b": vector["b"],
-                "expected": vector["out"],
-                "actual": actual,
-            })
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError as exc:
+        raise ValueError(
+            f"{field_name} must be a valid ISO 8601 timestamp (e.g., 2026-03-08T12:00:00Z)."
+        ) from exc
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone(timezone.utc)
 
+
+def _parse_recipient_keys(raw: str | None) -> list[str]:
+    """Split comma/newline separated recipient keys into a stable unique list."""
+    if not raw:
+        return []
+    parsed: list[str] = []
+    seen: set[str] = set()
+    for chunk in raw.replace("\n", ",").split(","):
+        key = chunk.strip()
+        if key and key not in seen:
+            seen.add(key)
+            parsed.append(key)
+    return parsed
+
+
+def _build_receipt(receipt_type: str, payload: dict[str, Any]) -> dict[str, Any]:
+    """Create a deterministic receipt with a cryptographic hash.
+
+    The authoritative receipt timestamp depends on workflow: commitments use
+    ``committed_at``, generated artifacts use ``generated_at``, response logs
+    use ``timestamp``, and delay proofs use ``proof_generated_at``.
+    """
+    issued_at = (
+        payload.get("committed_at")
+        or payload.get("generated_at")
+        or payload.get("timestamp")
+        or payload.get("proof_generated_at")
+    )
+    receipt_payload = {
+        "receipt_type": receipt_type,
+        "issued_at": issued_at,
+        "payload": payload,
+    }
+    receipt_hash = hash_bytes(canonical_json_bytes(receipt_payload)).hex()
     return {
-        "status": "passed" if not mismatches else "failed",
-        "verified": not mismatches,
-        "reason": "",
-        "vectors_checked": len(payload["vectors"]),
-        "mismatches": mismatches,
+        **receipt_payload,
+        "receipt_hash": receipt_hash,
     }
 
 
-def _poseidon_constants_notebook() -> dict[str, Any]:
-    """
-    Build the rendered/exportable Poseidon constants provenance notebook payload.
+def _commit_parts(
+    document_id: str,
+    version: int,
+    parts: list[str],
+    *,
+    file_name: str | None = None,
+    release_at: str | None = None,
+    recipient_keys: list[str] | None = None,
+    metadata: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Commit document parts and persist the local debug-console state."""
+    if not parts:
+        raise ValueError("Document has no sections.")
 
-    Returns:
-        Dictionary containing source-chain notes, exported parameter tables,
-        structural validation checks, the circomlibjs parity replay result, and
-        an overall ``verified_identical`` status used by the debug UI.
-    """
-    parameters = poseidon_parameter_summary()
-    structural_checks = [
-        {
-            "label": "Round-constant count matches state_width × (full_rounds + partial_rounds)",
-            "passed": len(parameters["round_constants"])
-            == parameters["state_width"] * (parameters["full_rounds"] + parameters["partial_rounds"]),
-        },
-        {
-            "label": "MDS matrix is 3 × 3 for Poseidon(2) / t = 3",
-            "passed": len(parameters["mds_matrix"]) == 3
-            and all(len(row) == 3 for row in parameters["mds_matrix"]),
-        },
-    ]
-    parity = _poseidon_vector_parity_report()
+    normalized_release_at = None
+    if release_at:
+        normalized_release_at = _normalize_timestamp(release_at, "release_at")
+
+    recipients = recipient_keys or []
+    committed_at = metadata.get("committed_at") if metadata else None
+    if committed_at is None:
+        committed_at = current_timestamp()
+
+    leaf_fields = [blake3_to_field_element(part.encode("utf-8")) for part in parts]
+    poseidon_tree = PoseidonMerkleTree(leaf_fields)
+    poseidon_root = poseidon_tree.get_root()
+
+    smt = SparseMerkleTree()
+    tree, blake3_root = RedactionProtocol.commit_document_dual(
+        document_parts=parts,
+        poseidon_root=poseidon_root,
+        smt=smt,
+        document_id=document_id,
+        version=version,
+    )
+
+    commit_key = f"{document_id}:{version}"
+    entry_metadata = dict(metadata or {})
+    entry_metadata["committed_at"] = committed_at
+    receipt_payload = {
+        "document_id": document_id,
+        "version": version,
+        "file_name": file_name,
+        "sections_count": len(parts),
+        "blake3_root": blake3_root,
+        "poseidon_root": poseidon_root,
+        "committed_at": committed_at,
+        "release_at": normalized_release_at,
+        "recipient_keys": recipients,
+        "metadata": entry_metadata,
+    }
+    receipt = _build_receipt("document_commitment", receipt_payload)
+
+    _commit_store[commit_key] = {
+        "parts": parts,
+        "leaf_fields": leaf_fields,
+        "tree": tree,
+        "smt": smt,
+        "blake3_root": blake3_root,
+        "poseidon_root": poseidon_root,
+        "document_id": document_id,
+        "version": version,
+        "file_name": file_name,
+        "committed_at": committed_at,
+        "release_at": normalized_release_at,
+        "recipient_keys": recipients,
+        "revoked_recipient_keys": [],
+        "embargo_update_receipts": [],
+        "metadata": entry_metadata,
+        "receipt": receipt,
+    }
+
     return {
-        "title": "Poseidon Constants Provenance Notebook",
-        "source_chain": [
-            {
-                "step": "circomlibjs JSON source",
-                "detail": (
-                    "protocol.poseidon_bn128 documents that its BN128 Poseidon "
-                    "parameters are mirrored from circomlibjs/src/poseidon_constants.json."
-                ),
-            },
-            {
-                "step": "Python constant export",
-                "detail": (
-                    "poseidon_parameter_summary() exports the exact round constants and "
-                    "MDS matrix as JSON-friendly decimal strings."
-                ),
-            },
-            {
-                "step": "Parity verification",
-                "detail": (
-                    "The notebook replays deterministic circomlibjs reference vectors "
-                    "through poseidon_hash_bn128 and records pass/fail status."
-                ),
-            },
-        ],
-        "parameters": {
-            **parameters,
-            "round_constants_count": len(parameters["round_constants"]),
-            "mds_rows": len(parameters["mds_matrix"]),
-            "mds_cols": len(parameters["mds_matrix"][0]) if parameters["mds_matrix"] else 0,
-        },
-        "checks": structural_checks,
-        "parity": parity,
-        "verified_identical": all(check["passed"] for check in structural_checks) and parity["verified"],
+        "commit_key": commit_key,
+        "blake3_root": blake3_root,
+        "poseidon_root": poseidon_root,
+        "sections_count": len(parts),
+        "receipt": receipt,
     }
 
 
-def _circuit_constraint_visualizer() -> dict[str, Any]:
-    """
-    Return human-readable summaries of the circuit constraints backed by source checks.
-
-    Returns:
-        Dictionary with one entry per supported Circom file. Each entry includes
-        public/private input summaries, human-readable constraint explanations,
-        exact source snippets used for verification, and a source excerpt for
-        direct inspection in the UI.
-    """
-    circuits: list[dict[str, Any]] = []
-    for name, meta in _CIRCUIT_VISUALIZER.items():
-        source = _CIRCUIT_FILES[name].read_text(encoding="utf-8")
-        constraints: list[dict[str, Any]] = []
-        for constraint in meta["constraints"]:
-            snippets = constraint["source_snippets"]
-            constraints.append({
-                "label": constraint["label"],
-                "explanation": constraint["explanation"],
-                "source_verified": all(snippet in source for snippet in snippets),
-                "source_snippets": snippets,
-            })
-        circuits.append({
-            "name": name,
-            "title": meta["title"],
-            "public_inputs": meta["public_inputs"],
-            "private_inputs": meta["private_inputs"],
-            "constraints": constraints,
-            "source_path": str(_CIRCUIT_FILES[name].relative_to(REPO_ROOT)),
-            "source_excerpt": source,
-        })
-    return {"circuits": circuits}
+def _get_commit_entry(document_id: str, version: int) -> dict[str, Any]:
+    """Look up a committed document by key."""
+    commit_key = f"{document_id}:{version}"
+    entry = _commit_store.get(commit_key)
+    if entry is None:
+        raise ValueError(f"No committed document for '{commit_key}'.")
+    return entry
 
 
-def _parse_proof_bundle(
-    body: dict[str, Any],
-) -> tuple[RedactionProofWithLedger, bytes, list[int], list[str], int]:
-    """Parse and validate the structural shape of a proof bundle payload."""
-    smt_proof_data = body["smt_proof"]
-    smt_proof = ExistenceProof(
-        key=bytes.fromhex(smt_proof_data["key"]),
-        value_hash=bytes.fromhex(smt_proof_data["value_hash"]),
-        siblings=[bytes.fromhex(s) for s in smt_proof_data["siblings"]],
-        root_hash=bytes.fromhex(smt_proof_data["root_hash"]),
-    )
-    zk_pi = body["zk_public_inputs"]
-    public_inputs = ZKPublicInputs(
-        original_root=str(zk_pi["original_root"]),
-        redacted_commitment=str(zk_pi["redacted_commitment"]),
-        revealed_count=int(zk_pi["revealed_count"]),
-    )
-    proof = RedactionProofWithLedger(
-        smt_proof=smt_proof,
-        zk_proof=body["zk_proof"],
-        zk_public_inputs=public_inputs,
-    )
-    smt_root = bytes.fromhex(body["smt_root"])
-    revealed_indices = [int(index) for index in body.get("revealed_indices", [])]
-    revealed_content = [str(content) for content in body.get("revealed_content", [])]
-    total_parts = int(body.get("total_parts", 0))
-    return proof, smt_root, revealed_indices, revealed_content, total_parts
-
-
-def _proof_bundle_inspection(body: dict[str, Any]) -> dict[str, Any]:
-    """Decode a proof bundle into human-readable fields and pass/fail checks."""
-    proof, smt_root, revealed_indices, revealed_content, total_parts = _parse_proof_bundle(body)
-
-    try:
-        original_root_bytes = poseidon_root_to_bytes(proof.zk_public_inputs.original_root)
-        original_root_valid = True
-    except ValueError:
-        original_root_bytes = b""
-        original_root_valid = False
-
-    sibling_lengths = [len(sibling) == 32 for sibling in proof.smt_proof.siblings]
-    unique_indices = len(set(revealed_indices)) == len(revealed_indices)
-    indices_in_range = all(0 <= index < total_parts for index in revealed_indices)
-    smt_anchor_ok = proof.verify_smt_anchor(smt_root)
-    zk_ok = verify_zk_redaction(proof.zk_proof, proof.zk_public_inputs)
-
-    checks = [
-        {
-            "label": "SMT proof root matches bundle.smt_root",
-            "passed": proof.smt_proof.root_hash == smt_root,
-            "detail": "The membership proof should be tied to the same committed SMT root published in the bundle.",
-        },
-        {
-            "label": "SMT value_hash matches original_root serialized as 32 bytes",
-            "passed": original_root_valid and proof.smt_proof.value_hash == original_root_bytes,
-            "detail": "The ledger anchor must store the exact Poseidon originalRoot used by the ZK statement.",
-        },
-        {
-            "label": "revealed_count matches revealed_indices/revealed_content lengths",
-            "passed": proof.zk_public_inputs.revealed_count == len(revealed_indices) == len(revealed_content),
-            "detail": "The public count should match the disclosed positions and plaintext values.",
-        },
-        {
-            "label": "revealed_indices are unique and within total_parts",
-            "passed": unique_indices and indices_in_range,
-            "detail": "Each revealed section index should be distinct and refer to an existing document part.",
-        },
-        {
-            "label": "All SMT proof sibling hashes are 32 bytes",
-            "passed": all(sibling_lengths),
-            "detail": "Sparse Merkle proofs in Olympus use 32-byte sibling hashes at every level.",
-        },
-        {
-            "label": "SMT anchor verification passes",
-            "passed": smt_anchor_ok,
-            "detail": "This runs RedactionProofWithLedger.verify_smt_anchor against the supplied smt_root.",
-        },
-        {
-            "label": "ZK verification passes",
-            "passed": zk_ok,
-            "detail": "This invokes the Groth16 verifier when verifier artifacts are available; placeholder proofs fail.",
-        },
+def _embargo_summary(entry: dict[str, Any]) -> dict[str, Any]:
+    """Return derived embargo state for a committed document."""
+    release_at = entry.get("release_at")
+    now = _parse_timestamp(current_timestamp(), "current time")
+    active_keys = [
+        key
+        for key in entry.get("recipient_keys", [])
+        if key not in entry.get("revoked_recipient_keys", [])
     ]
-
-    fields = [
-        {
-            "path": "smt_proof.key",
-            "value": proof.smt_proof.key.hex(),
-            "decoded": f"{len(proof.smt_proof.key)} bytes",
-            "explanation": "Deterministic SMT lookup key for the anchored Poseidon root record.",
-        },
-        {
-            "path": "smt_proof.value_hash",
-            "value": proof.smt_proof.value_hash.hex(),
-            "decoded": f"{len(proof.smt_proof.value_hash)} bytes",
-            "explanation": "Stored SMT value; should equal original_root serialized as a 32-byte big-endian field element.",
-        },
-        {
-            "path": "smt_proof.siblings",
-            "value": [sibling.hex() for sibling in proof.smt_proof.siblings],
-            "decoded": f"{len(proof.smt_proof.siblings)} sibling hash(es)",
-            "explanation": "Sparse Merkle authentication path used to anchor the Poseidon root in the ledger tree.",
-        },
-        {
-            "path": "smt_proof.root_hash",
-            "value": proof.smt_proof.root_hash.hex(),
-            "decoded": f"{len(proof.smt_proof.root_hash)} bytes",
-            "explanation": "SMT root proven by the membership path before comparison with bundle.smt_root.",
-        },
-        {
-            "path": "smt_root",
-            "value": smt_root.hex(),
-            "decoded": f"{len(smt_root)} bytes",
-            "explanation": "Committed ledger-side SMT root that the verifier should pin the SMT proof to.",
-        },
-        {
-            "path": "zk_public_inputs.original_root",
-            "value": proof.zk_public_inputs.original_root,
-            "decoded": (
-                "valid BN128 field element"
-                if original_root_valid
-                and 0 <= int(proof.zk_public_inputs.original_root) < SNARK_SCALAR_FIELD
-                else "invalid BN128 field element"
-            ),
-            "explanation": "Poseidon Merkle root of the original unredacted document committed inside the circuit.",
-        },
-        {
-            "path": "zk_public_inputs.redacted_commitment",
-            "value": proof.zk_public_inputs.redacted_commitment,
-            "decoded": "decimal field element",
-            "explanation": "Poseidon chain commitment over revealedCount and the masked revealed leaf vector.",
-        },
-        {
-            "path": "zk_public_inputs.revealed_count",
-            "value": proof.zk_public_inputs.revealed_count,
-            "decoded": "integer",
-            "explanation": "Public count of how many document sections were disclosed.",
-        },
-        {
-            "path": "revealed_indices",
-            "value": revealed_indices,
-            "decoded": f"{len(revealed_indices)} index value(s)",
-            "explanation": "Document positions disclosed to the verifier; these should align with revealed_content.",
-        },
-        {
-            "path": "revealed_content",
-            "value": revealed_content,
-            "decoded": f"{len(revealed_content)} plaintext section(s)",
-            "explanation": "The cleartext sections revealed by the proof bundle.",
-        },
-        {
-            "path": "total_parts",
-            "value": total_parts,
-            "decoded": "integer",
-            "explanation": "Total number of document sections represented by the original commitment.",
-        },
-        {
-            "path": "zk_proof",
-            "value": proof.zk_proof,
-            "decoded": (
-                f"{len(proof.zk_proof)} top-level field(s)"
-                if isinstance(proof.zk_proof, dict)
-                else type(proof.zk_proof).__name__
-            ),
-            "explanation": "Opaque Groth16 proof payload passed through to the verifier.",
-        },
-    ]
-
+    is_released = False
+    if release_at:
+        is_released = _parse_timestamp(release_at, "release_at") <= now
     return {
-        "fields": fields,
-        "checks": checks,
-        "verified": all(check["passed"] for check in checks),
+        "release_at": release_at,
+        "is_released": is_released,
+        "recipient_keys": entry.get("recipient_keys", []),
+        "active_recipient_keys": active_keys,
+        "revoked_recipient_keys": entry.get("revoked_recipient_keys", []),
     }
+
+
+def _foia_delay_proof(record: dict[str, Any]) -> dict[str, Any]:
+    """Build a deterministic delay proof from FOIA request/response timestamps."""
+    submitted_at = _parse_timestamp(record["submitted_at"], "submitted_at")
+    response_at_value = record.get("response_received_at")
+    reference_timestamp = response_at_value or current_timestamp()
+    reference_at = _parse_timestamp(reference_timestamp, "reference_timestamp")
+    elapsed_seconds = int((reference_at - submitted_at).total_seconds())
+
+    due_at_value = record.get("response_due_at")
+    delayed = False
+    delay_seconds = 0
+    if due_at_value:
+        due_at = _parse_timestamp(due_at_value, "response_due_at")
+        delayed = reference_at > due_at
+        delay_seconds = max(0, int((reference_at - due_at).total_seconds()))
+
+    response_receipt = record.get("response_receipt") or {}
+    pending = response_at_value is None
+    payload = {
+        "request_id": record["request_id"],
+        "request_receipt_hash": record["request_receipt"]["receipt_hash"],
+        "response_receipt_hash": response_receipt.get("receipt_hash"),
+        "submitted_at": record["submitted_at"],
+        "response_received_at": response_at_value,
+        "response_due_at": due_at_value,
+        "proof_generated_at": current_timestamp(),
+        "reference_timestamp": reference_timestamp,
+        "proof_mode": "snapshot" if pending else "response-anchored",
+        "pending": pending,
+        "elapsed_seconds": elapsed_seconds,
+        "delayed": delayed,
+        "delay_seconds": delay_seconds,
+    }
+    receipt_type = "foia_delay_snapshot" if pending else "foia_delay_proof"
+    return _build_receipt(receipt_type, payload)
 
 
 @app.get("/")
 def debug_console(request: Request):
     """Render the debug console view."""
-    if not DEBUG_UI_ENABLED:
-        raise HTTPException(status_code=404, detail="Debug UI is disabled in this environment.")
+    _require_debug_ui()
     context: dict[str, Any] = {
         "request": request,
         "api_base": API_BASE,
         "shards": [],
         "banners": [],
+        "federation": _collect_federation_dashboard(),
     }
 
     try:
-        shards = _fetch_json("/shards")
+        shards = _expect_json_list(_fetch_json("/shards"))
     except HTTPError as exc:
         if exc.code == 503:
             context["banners"].append("Database unavailable (503).")
@@ -553,17 +480,30 @@ def debug_console(request: Request):
 
     for shard in shards:
         shard_id = shard["shard_id"]
-        shard_row = {"shard": shard, "header": None, "ledger_tail": [], "signature_valid": True}
+        shard_row: dict[str, Any] = {
+            "shard": shard,
+            "header": None,
+            "ledger_tail": [],
+            "signature_valid": True,
+            "chain_ok": True,
+            "history": [],
+        }
         try:
-            header = _fetch_json(f"/shards/{quote(shard_id)}/header/latest")
+            header = _expect_json_object(_fetch_json(f"/shards/{quote(shard_id)}/header/latest"))
             shard_row["header"] = header
             shard_row["signature_valid"] = _verify_signature(header)
             if not shard_row["signature_valid"]:
                 context["banners"].append(f"Invalid signature detected for shard {shard_id}.")
 
-            ledger = _fetch_json(f"/ledger/{quote(shard_id)}/tail?n=10")
+            ledger = _expect_json_object(_fetch_json(f"/ledger/{quote(shard_id)}/tail?n=10"))
             entries = ledger.get("entries", [])
             shard_row["ledger_tail"] = entries
+            shard_row["chain_ok"] = not _is_chain_broken(entries)
+            try:
+                history = _expect_json_object(_fetch_json(f"/shards/{quote(shard_id)}/history?n=5"))
+                shard_row["history"] = history.get("headers", [])
+            except (HTTPError, URLError, TypeError, ValueError):
+                shard_row["history"] = []
             if _is_chain_broken(entries):
                 context["banners"].append(f"Chain linkage broken in shard {shard_id} ledger tail.")
         except HTTPError as exc:
@@ -587,8 +527,7 @@ def proof_explorer(
     version: int = Query(..., ge=1),
 ):
     """Proxy proof explorer requests to the API."""
-    if not DEBUG_UI_ENABLED:
-        raise HTTPException(status_code=404, detail="Debug UI is disabled in this environment.")
+    _require_debug_ui()
     path = (
         f"/shards/{quote(shard_id)}/proof?record_type={quote(record_type)}"
         f"&record_id={quote(record_id)}&version={version}"
@@ -605,20 +544,27 @@ def proof_explorer(
         return JSONResponse(status_code=503, content={"ok": False, "error": "API unavailable."})
 
 
-@app.get("/constants-provenance")
-def constants_provenance():
-    """Return the rendered/exportable Poseidon constants provenance notebook."""
+@app.get("/state-diff")
+def state_diff_viewer(
+    shard_id: str = Query(...),
+    from_seq: int = Query(..., ge=0),
+    to_seq: int = Query(..., ge=0),
+):
+    """Proxy state-root diff requests to the API."""
     if not DEBUG_UI_ENABLED:
         raise HTTPException(status_code=404, detail="Debug UI is disabled in this environment.")
-    return JSONResponse({"ok": True, "notebook": _poseidon_constants_notebook()})
 
-
-@app.get("/circuit-constraints")
-def circuit_constraints():
-    """Return human-readable circuit constraint visualizations."""
-    if not DEBUG_UI_ENABLED:
-        raise HTTPException(status_code=404, detail="Debug UI is disabled in this environment.")
-    return JSONResponse({"ok": True, **_circuit_constraint_visualizer()})
+    path = f"/shards/{quote(shard_id)}/diff?from_seq={from_seq}&to_seq={to_seq}"
+    try:
+        diff = _fetch_json(path)
+        return JSONResponse({"ok": True, "diff": diff})
+    except HTTPError as exc:
+        return JSONResponse(
+            status_code=exc.code,
+            content={"ok": False, "error": f"State diff query failed (HTTP {exc.code})."},
+        )
+    except URLError:
+        return JSONResponse(status_code=503, content={"ok": False, "error": "API unavailable."})
 
 
 @app.post("/commit")
@@ -626,16 +572,27 @@ async def commit_document(
     document_id: str = Form(...),
     version: int = Form(1),
     file: UploadFile = File(...),
+    release_at: str | None = Form(None),
+    recipient_keys: str | None = Form(None),
 ):
-    """Commit a document using the dual-anchor strategy (BLAKE3 + Poseidon)."""
-    if not DEBUG_UI_ENABLED:
-        raise HTTPException(status_code=404, detail="Debug UI is disabled in this environment.")
+    """Commit a document using the dual-anchor strategy (BLAKE3 + Poseidon).
+
+    Args:
+        document_id: Human-readable document identifier.
+        version: Positive document version number.
+        file: UTF-8 plain text or JSON array of strings to commit.
+        release_at: Optional embargo expiry in ISO 8601 format.
+        recipient_keys: Optional comma/newline separated access-recipient keys.
+    """
+    _require_debug_ui()
 
     raw = await file.read()
     try:
         text = raw.decode("utf-8")
     except UnicodeDecodeError:
-        return JSONResponse(status_code=400, content={"ok": False, "error": "File must be valid UTF-8."})
+        return JSONResponse(
+            status_code=400, content={"ok": False, "error": "File must be valid UTF-8."}
+        )
 
     # Accept JSON array of strings or plain text (one section per non-empty line).
     parts: list[str] = []
@@ -652,77 +609,71 @@ async def commit_document(
         parts = [line for line in text.splitlines() if line.strip()]
 
     if not parts:
-        return JSONResponse(status_code=400, content={"ok": False, "error": "Document has no sections."})
+        return JSONResponse(
+            status_code=400, content={"ok": False, "error": "Document has no sections."}
+        )
 
-    # Build Poseidon Merkle tree over field-element leaves derived from each section.
-    leaf_fields = [blake3_to_field_element(part.encode("utf-8")) for part in parts]
-    poseidon_tree = PoseidonMerkleTree(leaf_fields)
-    poseidon_root = poseidon_tree.get_root()
-
-    smt = SparseMerkleTree()
     try:
-        tree, blake3_root = RedactionProtocol.commit_document_dual(
-            document_parts=parts,
-            poseidon_root=poseidon_root,
-            smt=smt,
+        recipients = _parse_recipient_keys(recipient_keys)
+        commit_result = _commit_parts(
             document_id=document_id,
             version=version,
+            parts=parts,
+            file_name=file.filename,
+            release_at=release_at,
+            recipient_keys=recipients,
         )
     except ValueError as exc:
         return JSONResponse(status_code=400, content={"ok": False, "error": str(exc)})
 
-    commit_key = f"{document_id}:{version}"
-    _commit_store[commit_key] = {
-        "parts": parts,
-        "leaf_fields": leaf_fields,
-        "tree": tree,
-        "smt": smt,
-        "blake3_root": blake3_root,
-        "poseidon_root": poseidon_root,
-        "document_id": document_id,
-        "version": version,
-    }
+    entry = _commit_store[commit_result["commit_key"]]
 
-    return JSONResponse({
-        "ok": True,
-        "document_id": document_id,
-        "version": version,
-        "blake3_root": blake3_root,
-        "poseidon_root": poseidon_root,
-        "sections_count": len(parts),
-        "commit_key": commit_key,
-    })
+    return JSONResponse(
+        {
+            "ok": True,
+            "document_id": document_id,
+            "version": version,
+            "blake3_root": commit_result["blake3_root"],
+            "poseidon_root": commit_result["poseidon_root"],
+            "sections_count": commit_result["sections_count"],
+            "commit_key": commit_result["commit_key"],
+            "receipt": commit_result["receipt"],
+            "embargo": _embargo_summary(entry),
+        }
+    )
 
 
 @app.get("/committed/{doc_id}/{version}/sections")
 def get_committed_sections(doc_id: str, version: int):
     """Return sections of a previously committed document."""
-    if not DEBUG_UI_ENABLED:
-        raise HTTPException(status_code=404, detail="Debug UI is disabled in this environment.")
+    _require_debug_ui()
 
-    commit_key = f"{doc_id}:{version}"
-    entry = _commit_store.get(commit_key)
-    if entry is None:
+    try:
+        entry = _get_commit_entry(doc_id, version)
+    except ValueError as exc:
         return JSONResponse(
             status_code=404,
-            content={"ok": False, "error": f"No committed document for '{commit_key}'."},
+            content={"ok": False, "error": str(exc)},
         )
 
-    return JSONResponse({
-        "ok": True,
-        "document_id": doc_id,
-        "version": version,
-        "sections": entry["parts"],
-        "blake3_root": entry["blake3_root"],
-        "poseidon_root": entry["poseidon_root"],
-    })
+    return JSONResponse(
+        {
+            "ok": True,
+            "document_id": doc_id,
+            "version": version,
+            "sections": entry["parts"],
+            "blake3_root": entry["blake3_root"],
+            "poseidon_root": entry["poseidon_root"],
+            "receipt": entry["receipt"],
+            "embargo": _embargo_summary(entry),
+        }
+    )
 
 
 @app.post("/redact")
 async def create_redaction(request: Request):
     """Generate a redaction proof bundle for a previously committed document."""
-    if not DEBUG_UI_ENABLED:
-        raise HTTPException(status_code=404, detail="Debug UI is disabled in this environment.")
+    _require_debug_ui()
 
     try:
         body = await request.json()
@@ -730,14 +681,16 @@ async def create_redaction(request: Request):
         version = int(body["version"])
         revealed_indices = [int(i) for i in body["revealed_indices"]]
     except (KeyError, TypeError, ValueError) as exc:
-        return JSONResponse(status_code=400, content={"ok": False, "error": f"Invalid request: {exc}"})
+        return JSONResponse(
+            status_code=400, content={"ok": False, "error": f"Invalid request: {exc}"}
+        )
 
-    commit_key = f"{document_id}:{version}"
-    entry = _commit_store.get(commit_key)
-    if entry is None:
+    try:
+        entry = _get_commit_entry(document_id, version)
+    except ValueError as exc:
         return JSONResponse(
             status_code=404,
-            content={"ok": False, "error": f"No committed document for '{commit_key}'."},
+            content={"ok": False, "error": str(exc)},
         )
 
     parts: list[str] = entry["parts"]
@@ -801,8 +754,7 @@ async def create_redaction(request: Request):
 @app.post("/verify")
 async def verify_proof_bundle(request: Request):
     """Verify a redaction proof bundle (SMT anchor + ZK proof)."""
-    if not DEBUG_UI_ENABLED:
-        raise HTTPException(status_code=404, detail="Debug UI is disabled in this environment.")
+    _require_debug_ui()
 
     try:
         body = await request.json()
@@ -822,29 +774,273 @@ async def verify_proof_bundle(request: Request):
         for idx, content in zip(revealed_indices, revealed_content)
     ]
 
-    return JSONResponse({
-        "ok": True,
-        "verified": overall,
-        "smt_anchor_verified": smt_anchor_ok,
-        "zk_verified": zk_ok,
-        "revealed_sections": revealed_sections,
-        "total_parts": total_parts,
-    })
+    return JSONResponse(
+        {
+            "ok": True,
+            "verified": overall,
+            "smt_anchor_verified": smt_anchor_ok,
+            "zk_verified": zk_ok,
+            "revealed_sections": revealed_sections,
+            "total_parts": total_parts,
+        }
+    )
 
 
-@app.post("/inspect-proof-bundle")
-async def inspect_proof_bundle(request: Request):
-    """Decode and explain a proof bundle with pass/fail checks for each invariant."""
-    if not DEBUG_UI_ENABLED:
-        raise HTTPException(status_code=404, detail="Debug UI is disabled in this environment.")
+@app.post("/foia/request")
+async def commit_foia_request(request: Request):
+    """Commit a FOIA request submission and return a downloadable receipt."""
+    _require_debug_ui()
 
     try:
         body = await request.json()
-        inspection = _proof_bundle_inspection(body)
+        request_id = str(body["request_id"]).strip()
+        agency = str(body["agency"]).strip()
+        requester = str(body["requester"]).strip()
+        description = str(body["description"]).strip()
+        submitted_at = _normalize_timestamp(str(body["submitted_at"]), "submitted_at")
+        response_due_at = body.get("response_due_at")
+        normalized_due_at = (
+            _normalize_timestamp(str(response_due_at), "response_due_at")
+            if response_due_at
+            else None
+        )
     except (KeyError, TypeError, ValueError) as exc:
         return JSONResponse(
-            status_code=400,
-            content={"ok": False, "error": f"Invalid proof bundle: {exc}"},
+            status_code=400, content={"ok": False, "error": f"Invalid request: {exc}"}
         )
 
-    return JSONResponse({"ok": True, **inspection})
+    if not all([request_id, agency, requester, description]):
+        return JSONResponse(
+            status_code=400, content={"ok": False, "error": "All fields are required."}
+        )
+
+    metadata = {
+        "workflow": "foia_request",
+        "request_id": request_id,
+        "agency": agency,
+        "requester": requester,
+        "description": description,
+        "submitted_at": submitted_at,
+        "response_due_at": normalized_due_at,
+    }
+    parts = [
+        HASH_SEPARATOR.join(["request_id", request_id]),
+        HASH_SEPARATOR.join(["agency", agency]),
+        HASH_SEPARATOR.join(["requester", requester]),
+        HASH_SEPARATOR.join(["submitted_at", submitted_at]),
+        HASH_SEPARATOR.join(["response_due_at", normalized_due_at or ""]),
+        HASH_SEPARATOR.join(["description", description]),
+    ]
+    try:
+        commit_result = _commit_parts(
+            document_id=f"foia-request:{request_id}",
+            version=1,
+            parts=parts,
+            file_name=None,
+            metadata=metadata,
+        )
+    except ValueError as exc:
+        return JSONResponse(status_code=400, content={"ok": False, "error": str(exc)})
+
+    request_receipt = _build_receipt(
+        "foia_request_submission",
+        {
+            "request_id": request_id,
+            "agency": agency,
+            "requester": requester,
+            "description": description,
+            "submitted_at": submitted_at,
+            "response_due_at": normalized_due_at,
+            "request_commit_receipt_hash": commit_result["receipt"]["receipt_hash"],
+            "committed_at": _commit_store[commit_result["commit_key"]]["committed_at"],
+        },
+    )
+    _foia_store[request_id] = {
+        "request_id": request_id,
+        "agency": agency,
+        "requester": requester,
+        "description": description,
+        "submitted_at": submitted_at,
+        "response_due_at": normalized_due_at,
+        "request_commit_key": commit_result["commit_key"],
+        "request_receipt": request_receipt,
+        "response_received_at": None,
+        "response_summary": None,
+        "response_receipt": None,
+    }
+
+    return JSONResponse(
+        {
+            "ok": True,
+            "request": _foia_store[request_id],
+            "delay_proof": _foia_delay_proof(_foia_store[request_id]),
+        }
+    )
+
+
+@app.post("/foia/response")
+async def log_foia_response(request: Request):
+    """Record a FOIA response timestamp and return an updated delay proof."""
+    _require_debug_ui()
+
+    try:
+        body = await request.json()
+        request_id = str(body["request_id"]).strip()
+        response_received_at = _normalize_timestamp(
+            str(body["response_received_at"]), "response_received_at"
+        )
+        response_summary = str(body.get("response_summary", "")).strip()
+    except (KeyError, TypeError, ValueError) as exc:
+        return JSONResponse(
+            status_code=400, content={"ok": False, "error": f"Invalid request: {exc}"}
+        )
+
+    record = _foia_store.get(request_id)
+    if record is None:
+        return JSONResponse(
+            status_code=404,
+            content={"ok": False, "error": f"No FOIA request tracked for '{request_id}'."},
+        )
+
+    metadata = {
+        "workflow": "foia_response",
+        "request_id": request_id,
+        "response_received_at": response_received_at,
+        "response_summary": response_summary,
+    }
+    try:
+        commit_result = _commit_parts(
+            document_id=f"foia-response:{request_id}",
+            version=1,
+            parts=[
+                HASH_SEPARATOR.join(["request_id", request_id]),
+                HASH_SEPARATOR.join(["response_received_at", response_received_at]),
+                HASH_SEPARATOR.join(["response_summary", response_summary]),
+            ],
+            metadata=metadata,
+        )
+    except ValueError as exc:
+        return JSONResponse(status_code=400, content={"ok": False, "error": str(exc)})
+
+    record["response_received_at"] = response_received_at
+    record["response_summary"] = response_summary
+    record["response_receipt"] = _build_receipt(
+        "foia_response_log",
+        {
+            "request_id": request_id,
+            "response_received_at": response_received_at,
+            "response_summary": response_summary,
+            "response_commit_receipt_hash": commit_result["receipt"]["receipt_hash"],
+            "timestamp": response_received_at,
+        },
+    )
+
+    return JSONResponse({"ok": True, "request": record, "delay_proof": _foia_delay_proof(record)})
+
+
+@app.get("/foia/{request_id}")
+def get_foia_request(request_id: str):
+    """Return the tracked FOIA request state."""
+    _require_debug_ui()
+
+    record = _foia_store.get(request_id)
+    if record is None:
+        return JSONResponse(
+            status_code=404,
+            content={"ok": False, "error": f"No FOIA request tracked for '{request_id}'."},
+        )
+    return JSONResponse({"ok": True, "request": record})
+
+
+@app.get("/foia/{request_id}/delay-proof")
+def get_foia_delay_proof(request_id: str):
+    """Return the derived FOIA delay proof for a tracked request."""
+    _require_debug_ui()
+
+    record = _foia_store.get(request_id)
+    if record is None:
+        return JSONResponse(
+            status_code=404,
+            content={"ok": False, "error": f"No FOIA request tracked for '{request_id}'."},
+        )
+    return JSONResponse({"ok": True, "delay_proof": _foia_delay_proof(record), "request": record})
+
+
+@app.get("/embargo/{doc_id}/{version}")
+def get_embargo_state(doc_id: str, version: int):
+    """Return embargo and recipient-key state for a committed document."""
+    _require_debug_ui()
+
+    try:
+        entry = _get_commit_entry(doc_id, version)
+    except ValueError as exc:
+        return JSONResponse(status_code=404, content={"ok": False, "error": str(exc)})
+    return JSONResponse(
+        {"ok": True, "document_id": doc_id, "version": version, "embargo": _embargo_summary(entry)}
+    )
+
+
+@app.post("/embargo/update")
+async def update_embargo(request: Request):
+    """Set or update release date and recipient keys for a committed document."""
+    _require_debug_ui()
+
+    try:
+        body = await request.json()
+        document_id = str(body["document_id"]).strip()
+        version = int(body["version"])
+        entry = _get_commit_entry(document_id, version)
+        release_at = body.get("release_at")
+        normalized_release_at = (
+            _normalize_timestamp(str(release_at), "release_at") if release_at else None
+        )
+        recipient_keys = _parse_recipient_keys(str(body.get("recipient_keys", "")))
+    except (KeyError, TypeError, ValueError) as exc:
+        return JSONResponse(
+            status_code=400, content={"ok": False, "error": f"Invalid request: {exc}"}
+        )
+
+    entry["release_at"] = normalized_release_at
+    entry["recipient_keys"] = recipient_keys
+    receipt = _build_receipt(
+        "embargo_update",
+        {
+            "document_id": document_id,
+            "version": version,
+            "committed_at": entry["committed_at"],
+            "original_receipt_hash": entry["receipt"]["receipt_hash"],
+            "release_at": normalized_release_at,
+            "recipient_keys": recipient_keys,
+            "previous_recipient_keys": entry["receipt"]["payload"].get("recipient_keys", []),
+            "updated_at": current_timestamp(),
+        },
+    )
+    entry["embargo_update_receipts"].append(receipt)
+    return JSONResponse({"ok": True, "embargo": _embargo_summary(entry), "receipt": receipt})
+
+
+@app.post("/embargo/revoke")
+async def revoke_embargo_recipient(request: Request):
+    """Revoke a recipient key from a committed document."""
+    _require_debug_ui()
+
+    try:
+        body = await request.json()
+        document_id = str(body["document_id"]).strip()
+        version = int(body["version"])
+        recipient_key = str(body["recipient_key"]).strip()
+        entry = _get_commit_entry(document_id, version)
+    except (KeyError, TypeError, ValueError) as exc:
+        return JSONResponse(
+            status_code=400, content={"ok": False, "error": f"Invalid request: {exc}"}
+        )
+
+    if recipient_key not in entry.get("recipient_keys", []):
+        return JSONResponse(
+            status_code=404,
+            content={"ok": False, "error": f"Recipient key '{recipient_key}' is not configured."},
+        )
+    if recipient_key not in entry["revoked_recipient_keys"]:
+        entry["revoked_recipient_keys"].append(recipient_key)
+
+    return JSONResponse({"ok": True, "embargo": _embargo_summary(entry)})
