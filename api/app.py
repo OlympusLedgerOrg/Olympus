@@ -300,6 +300,7 @@ async def root() -> dict[str, Any]:
             "/ingest/records",
             "/ingest/records/{proof_id}/proof",
             "/ingest/records/hash/{content_hash}/verify",
+            "/ingest/commit",
             "/health",
         ],
     }
@@ -693,5 +694,6 @@ async def health() -> dict[str, Any]:
             "/ingest/records",
             "/ingest/records/{proof_id}/proof",
             "/ingest/records/hash/{content_hash}/verify",
+            "/ingest/commit",
         ],
     }

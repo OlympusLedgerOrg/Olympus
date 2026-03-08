@@ -4,6 +4,7 @@ Unified Olympus CLI.
 
 Currently supports:
     olympus canon <input.json> [--hash] [--format json|bytes|hex] [-o output]
+    olympus commit <file> --api-key <key> [--namespace ns] [--id id] [--api-url url]
 """
 
 import argparse
@@ -13,7 +14,7 @@ import sys
 from pathlib import Path
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlparse
-from urllib.request import urlopen
+from urllib.request import Request, urlopen
 
 
 # Add parent directory to path for imports
@@ -65,6 +66,61 @@ def _cmd_canon(args: argparse.Namespace) -> int:
     else:
         print(output)
 
+    return 0
+
+
+def _cmd_commit(args: argparse.Namespace) -> int:
+    """Compute the BLAKE3 hash of a file and commit it to the Olympus ledger."""
+    file_path = Path(args.file)
+    try:
+        file_bytes = file_path.read_bytes()
+    except FileNotFoundError:
+        print(f"Error: File not found: {args.file}", file=sys.stderr)
+        return 1
+    except OSError as exc:
+        print(f"Error reading file: {exc}", file=sys.stderr)
+        return 1
+
+    artifact_hash = hash_bytes(file_bytes).hex()
+
+    payload: dict = {
+        "artifact_hash": artifact_hash,
+        "namespace": args.namespace,
+        "id": args.id,
+    }
+    if args.api_key:
+        payload["api_key"] = args.api_key
+
+    api_url = args.api_url.rstrip("/")
+    endpoint = f"{api_url}/ingest/commit"
+
+    try:
+        data = json.dumps(payload).encode("utf-8")
+        req = Request(
+            endpoint,
+            data=data,
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        with urlopen(req, timeout=30) as response:  # noqa: S310
+            result = json.loads(response.read().decode("utf-8"))
+    except HTTPError as exc:
+        body = exc.read().decode("utf-8", errors="replace")
+        print(f"Error: Olympus API returned HTTP {exc.code}: {body}", file=sys.stderr)
+        return 1
+    except URLError as exc:
+        print(f"Error: Could not reach Olympus API at {endpoint}: {exc.reason}", file=sys.stderr)
+        return 1
+    except Exception as exc:
+        print(f"Error: Olympus API call failed: {exc}", file=sys.stderr)
+        return 1
+
+    proof_id = result.get("proof_id", "")
+    if not proof_id:
+        print("Error: Olympus API returned no proof_id", file=sys.stderr)
+        return 1
+
+    print(proof_id)
     return 0
 
 
@@ -199,6 +255,36 @@ def main() -> int:
         help="Output format when not hashing (default: json)",
     )
 
+    commit_parser = subparsers.add_parser(
+        "commit",
+        help="Compute BLAKE3 hash of a file and commit it to the Olympus ledger",
+    )
+    commit_parser.add_argument("file", type=str, help="Path to the artifact file to commit")
+    commit_parser.add_argument(
+        "--api-key",
+        type=str,
+        default=os.environ.get("OLYMPUS_API_KEY", ""),
+        help="Olympus API key (or set OLYMPUS_API_KEY env var)",
+    )
+    commit_parser.add_argument(
+        "--namespace",
+        type=str,
+        default="default",
+        help="Namespace for the artifact (e.g. 'github')",
+    )
+    commit_parser.add_argument(
+        "--id",
+        type=str,
+        default="",
+        help="Artifact identifier (e.g. 'org/repo/v1.0.0')",
+    )
+    commit_parser.add_argument(
+        "--api-url",
+        type=str,
+        default=os.environ.get("OLYMPUS_API_URL", "http://localhost:8000"),
+        help="Base URL of the Olympus API (or set OLYMPUS_API_URL env var)",
+    )
+
     node_parser = subparsers.add_parser("node", help="Manage federation node configuration")
     node_subparsers = node_parser.add_subparsers(dest="node_command", required=True)
 
@@ -248,6 +334,8 @@ def main() -> int:
 
     if args.command == "canon":
         return _cmd_canon(args)
+    if args.command == "commit":
+        return _cmd_commit(args)
     if args.command == "node":
         if args.node_command == "list":
             return _cmd_node_list(args)

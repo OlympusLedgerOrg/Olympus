@@ -8,6 +8,7 @@ proof retrieval.
 Endpoints:
     POST /ingest/records         — Atomically ingest a batch of records
     GET  /ingest/records/{proof_id}/proof — Retrieve proof for an ingested record
+    POST /ingest/commit          — Commit a pre-computed artifact hash to the ledger
 
 All write operations are append-only and maintain ledger chain integrity.
 """
@@ -304,3 +305,115 @@ async def verify_ingested_content_hash(content_hash: str) -> HashVerificationRes
     data = _ingestion_store[proof_id]
     merkle_proof_valid = verify_proof(_merkle_proof_from_store(data))
     return HashVerificationResponse(**data, merkle_proof_valid=merkle_proof_valid)
+
+
+# ---------------------------------------------------------------------------
+# Artifact commit endpoint
+# ---------------------------------------------------------------------------
+
+
+class ArtifactCommitRequest(BaseModel):
+    """Request body for committing a pre-computed artifact hash to the ledger."""
+
+    artifact_hash: str = Field(..., description="Hex-encoded BLAKE3 hash of the artifact")
+    namespace: str = Field(..., description="Namespace for the artifact (e.g. 'github')")
+    id: str = Field(..., description="Artifact identifier (e.g. 'org/repo/v1.0.0')")
+    api_key: str | None = Field(None, description="Optional API key for authentication")
+
+
+class ArtifactCommitResponse(BaseModel):
+    """Response for a successful artifact commitment."""
+
+    proof_id: str = Field(..., description="Proof identifier for future verification")
+    artifact_hash: str = Field(..., description="Hex-encoded BLAKE3 hash that was committed")
+    namespace: str
+    id: str
+    committed_at: str = Field(..., description="ISO 8601 commitment timestamp")
+    ledger_entry_hash: str = Field(..., description="Hash of the ledger entry")
+
+
+@router.post("/commit", response_model=ArtifactCommitResponse)
+async def commit_artifact(request: ArtifactCommitRequest) -> ArtifactCommitResponse:
+    """
+    Commit a pre-computed artifact hash to the Olympus ledger.
+
+    This endpoint is the primary integration point for CI/CD pipelines.
+    The caller is responsible for computing the BLAKE3 hash of the artifact
+    before calling this endpoint.  The hash is committed to an append-only
+    ledger entry, and a proof ID is returned for future verification.
+
+    Args:
+        request: Artifact commit request with hash, namespace, and id.
+
+    Returns:
+        Commitment response with proof_id and ledger anchor details.
+    """
+    # Validate artifact_hash is a well-formed 32-byte BLAKE3 hex string
+    artifact_hash_bytes = _parse_content_hash(request.artifact_hash)
+    artifact_hash_hex = artifact_hash_bytes.hex()
+
+    # Dedup: if this exact hash has already been committed, return existing proof
+    if artifact_hash_hex in _content_index:
+        existing_proof_id = _content_index[artifact_hash_hex]
+        existing = _ingestion_store[existing_proof_id]
+        return ArtifactCommitResponse(
+            proof_id=existing_proof_id,
+            artifact_hash=artifact_hash_hex,
+            namespace=existing.get("namespace", request.namespace),
+            id=existing.get("artifact_id", request.id),
+            committed_at=existing["timestamp"],
+            ledger_entry_hash=existing["ledger_entry_hash"],
+        )
+
+    # Build a single-leaf Merkle tree for this artifact
+    tree = MerkleTree([artifact_hash_bytes])
+    merkle_root = tree.get_root().hex()
+
+    # Append a ledger entry
+    canonicalization = canonicalization_provenance("application/octet-stream", CANONICAL_VERSION)
+    shard_id = f"artifacts/{request.namespace}"
+    ledger_entry = _write_ledger.append(
+        record_hash=merkle_root,
+        shard_id=shard_id,
+        shard_root=merkle_root,
+        canonicalization=canonicalization,
+    )
+
+    proof_id = str(uuid.uuid4())
+    ts = current_timestamp()
+    proof = tree.generate_proof(0)
+
+    # Store metadata for future retrieval / verification
+    _ingestion_store[proof_id] = {
+        "proof_id": proof_id,
+        "record_id": request.id,
+        "shard_id": shard_id,
+        "content_hash": artifact_hash_hex,
+        "namespace": request.namespace,
+        "artifact_id": request.id,
+        "merkle_root": merkle_root,
+        "merkle_proof": {
+            "leaf_hash": proof.leaf_hash.hex(),
+            "leaf_index": proof.leaf_index,
+            "siblings": [[h.hex(), is_right] for h, is_right in proof.siblings],
+            "root_hash": proof.root_hash.hex(),
+        },
+        "ledger_entry_hash": ledger_entry.entry_hash,
+        "timestamp": ts,
+        "canonicalization": canonicalization,
+    }
+    _content_index[artifact_hash_hex] = proof_id
+
+    logger.info(
+        "artifact_committed",
+        extra={"proof_id": proof_id, "namespace": request.namespace, "id": request.id},
+    )
+
+    return ArtifactCommitResponse(
+        proof_id=proof_id,
+        artifact_hash=artifact_hash_hex,
+        namespace=request.namespace,
+        id=request.id,
+        committed_at=ts,
+        ledger_entry_hash=ledger_entry.entry_hash,
+    )
