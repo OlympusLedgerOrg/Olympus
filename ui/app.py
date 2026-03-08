@@ -223,10 +223,11 @@ def _poseidon_vector_parity_report() -> dict[str, Any]:
         )
         payload = json.loads(result.stdout)
     except (json.JSONDecodeError, subprocess.CalledProcessError, subprocess.TimeoutExpired) as exc:
+        detail = str(exc).splitlines()[0] if str(exc) else exc.__class__.__name__
         return {
             "status": "failed",
             "verified": False,
-            "reason": f"circomlibjs parity replay failed: {exc}",
+            "reason": f"circomlibjs parity replay failed ({exc.__class__.__name__}: {detail})",
             "vectors_checked": 0,
             "mismatches": [],
         }
@@ -251,7 +252,14 @@ def _poseidon_vector_parity_report() -> dict[str, Any]:
 
 
 def _poseidon_constants_notebook() -> dict[str, Any]:
-    """Build the rendered/exportable Poseidon constants provenance notebook payload."""
+    """
+    Build the rendered/exportable Poseidon constants provenance notebook payload.
+
+    Returns:
+        Dictionary containing source-chain notes, exported parameter tables,
+        structural validation checks, the circomlibjs parity replay result, and
+        an overall ``verified_identical`` status used by the debug UI.
+    """
     parameters = poseidon_parameter_summary()
     structural_checks = [
         {
@@ -304,7 +312,15 @@ def _poseidon_constants_notebook() -> dict[str, Any]:
 
 
 def _circuit_constraint_visualizer() -> dict[str, Any]:
-    """Return human-readable summaries of the circuit constraints backed by source checks."""
+    """
+    Return human-readable summaries of the circuit constraints backed by source checks.
+
+    Returns:
+        Dictionary with one entry per supported Circom file. Each entry includes
+        public/private input summaries, human-readable constraint explanations,
+        exact source snippets used for verification, and a source excerpt for
+        direct inspection in the UI.
+    """
     circuits: list[dict[str, Any]] = []
     for name, meta in _CIRCUIT_VISUALIZER.items():
         source = _CIRCUIT_FILES[name].read_text(encoding="utf-8")

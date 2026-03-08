@@ -237,7 +237,9 @@
             const a = document.createElement('a');
             a.href = url;
             a.download = filename;
+            document.body.appendChild(a);
             a.click();
+            a.remove();
             URL.revokeObjectURL(url);
         }
 
@@ -254,10 +256,13 @@
                 item.appendChild(label);
                 if (check.detail) {
                     item.appendChild(document.createElement('br'));
-                    const detail = document.createElement('span');
-                    detail.className = 'muted';
-                    detail.textContent = check.detail;
-                    item.appendChild(detail);
+                    check.detail.split('\n').forEach((line, index) => {
+                        if (index > 0) item.appendChild(document.createElement('br'));
+                        const detail = document.createElement('span');
+                        detail.className = 'muted';
+                        detail.textContent = line;
+                        item.appendChild(detail);
+                    });
                 }
                 list.appendChild(item);
             });
@@ -480,7 +485,7 @@
                         circuit.constraints.map((constraint) => ({
                             passed: constraint.source_verified,
                             label: constraint.label,
-                            detail: `${constraint.explanation} Source snippets: ${constraint.source_snippets.join(' | ')}`,
+                            detail: `${constraint.explanation}\nSource snippets: ${constraint.source_snippets.join(' | ')}`,
                         }))
                     );
                     const title = document.createElement('h3');
