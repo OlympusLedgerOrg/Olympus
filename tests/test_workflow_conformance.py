@@ -16,6 +16,8 @@ undocumented changes early.
 import dataclasses
 import inspect
 
+import pytest
+
 from protocol.canonical import (
     canonicalize_document,
     canonicalize_json,
@@ -309,6 +311,26 @@ class TestEpochAndEvents:
         assert event.hash_hex
         assert event.payload["body"] == "hello world"
 
+    def test_canonical_event_rejects_non_dict(self):
+        """CanonicalEvent.from_raw raises ValueError for non-dict input."""
+
+        with pytest.raises(ValueError, match="must be a dictionary"):
+            CanonicalEvent.from_raw("not a dict", "1.0.0")  # type: ignore[arg-type]
+
+    def test_canonical_event_rejects_empty_schema_version(self):
+        """CanonicalEvent.from_raw raises ValueError for empty schema_version."""
+
+        with pytest.raises(ValueError, match="non-empty string"):
+            CanonicalEvent.from_raw({"key": "value"}, "")
+
+    def test_canonical_event_to_dict(self):
+        """CanonicalEvent.to_dict serializes payload, schema_version, and hash."""
+        event = CanonicalEvent.from_raw({"key": "value"}, "2.0.0")
+        result = event.to_dict()
+        assert result["schema_version"] == "2.0.0"
+        assert result["payload"] == event.payload
+        assert result["hash_hex"] == event.hash_hex
+
     def test_epoch_record_head_computation(self):
         """EpochRecord computes deterministic epoch heads."""
         merkle_root = hash_bytes(b"root")
@@ -322,6 +344,54 @@ class TestEpochAndEvents:
             record.previous_epoch_head, record.merkle_root, record.metadata_hash
         ).hex()
         assert record.epoch_head == computed_head
+
+    def test_epoch_record_chaining(self):
+        """EpochRecord correctly chains epochs using the previous epoch head."""
+        merkle_root = hash_bytes(b"root1")
+        metadata_hash = hash_bytes(b"meta1")
+        first = EpochRecord.create(
+            epoch_index=0,
+            merkle_root=merkle_root,
+            metadata_hash=metadata_hash,
+        )
+        second = EpochRecord.create(
+            epoch_index=1,
+            merkle_root=hash_bytes(b"root2"),
+            metadata_hash=hash_bytes(b"meta2"),
+            previous_epoch_head=first.epoch_head,
+        )
+        assert second.previous_epoch_head == first.epoch_head
+        assert second.epoch_head != first.epoch_head
+
+    def test_epoch_record_rejects_negative_index(self):
+        """EpochRecord.create raises ValueError for negative epoch_index."""
+
+        with pytest.raises(ValueError, match="non-negative"):
+            EpochRecord.create(
+                epoch_index=-1,
+                merkle_root=hash_bytes(b"root"),
+                metadata_hash=hash_bytes(b"meta"),
+            )
+
+    def test_epoch_record_rejects_wrong_hash_type(self):
+        """EpochRecord.create raises ValueError for invalid hash type."""
+
+        with pytest.raises(ValueError, match="bytes or hex strings"):
+            EpochRecord.create(
+                epoch_index=0,
+                merkle_root=12345,  # type: ignore[arg-type]
+                metadata_hash=hash_bytes(b"meta"),
+            )
+
+    def test_epoch_record_rejects_wrong_hash_length(self):
+        """EpochRecord.create raises ValueError when hash is wrong length."""
+
+        with pytest.raises(ValueError, match="32 bytes"):
+            EpochRecord.create(
+                epoch_index=0,
+                merkle_root=b"tooshort",
+                metadata_hash=hash_bytes(b"meta"),
+            )
 
 
 # ---------------------------------------------------------------------------

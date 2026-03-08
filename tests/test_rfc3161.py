@@ -14,6 +14,7 @@ from protocol.rfc3161 import (
     DEFAULT_TSA_URL,
     TRUST_MODE_PROD,
     TimestampToken,
+    _load_trust_store_certificate,
     _sha256_of_hash,
     build_timestamp_request,
     request_timestamp,
@@ -331,3 +332,75 @@ def test_verify_timestamp_token_prod_rejects_untrusted_fingerprint():
                 trust_mode=TRUST_MODE_PROD,
                 trusted_fingerprints={"ee" * 32},
             )
+
+
+# ---------------------------------------------------------------------------
+# _load_trust_store_certificate
+# ---------------------------------------------------------------------------
+
+
+def test_load_trust_store_certificate_returns_bytes(tmp_path):
+    cert_file = tmp_path / "tsa.pem"
+    cert_file.write_bytes(b"FAKE CERT DATA")
+    result = _load_trust_store_certificate(str(cert_file))
+    assert result == b"FAKE CERT DATA"
+
+
+def test_load_trust_store_certificate_raises_for_missing_path(tmp_path):
+    missing = str(tmp_path / "nonexistent.pem")
+    with pytest.raises(ValueError, match="Trust store path not found"):
+        _load_trust_store_certificate(missing)
+
+
+# ---------------------------------------------------------------------------
+# verify_timestamp_token – additional trust_mode branches
+# ---------------------------------------------------------------------------
+
+
+def test_verify_timestamp_token_rejects_unsupported_trust_mode():
+    with pytest.raises(ValueError, match="Unsupported trust_mode"):
+        verify_timestamp_token(b"\x30\x00", "a" * 64, trust_mode="invalid_mode")
+
+
+def test_verify_timestamp_token_prod_raises_when_fingerprint_missing():
+    hash_hex = "a" * 64
+    fake_tst_bytes = b"\x30\x00"
+    with patch("protocol.rfc3161._extract_tsa_cert_fingerprint", return_value=None):
+        with pytest.raises(ValueError, match="Missing TSA certificate fingerprint"):
+            verify_timestamp_token(
+                fake_tst_bytes,
+                hash_hex,
+                trust_mode=TRUST_MODE_PROD,
+                trusted_fingerprints={"aa" * 32},
+            )
+
+
+def test_verify_timestamp_token_prod_raises_without_trust_config():
+    hash_hex = "a" * 64
+    fake_tst_bytes = b"\x30\x00"
+    with patch("protocol.rfc3161._extract_tsa_cert_fingerprint", return_value=None):
+        with pytest.raises(ValueError, match="requires trusted_fingerprints or trust_store_path"):
+            verify_timestamp_token(
+                fake_tst_bytes,
+                hash_hex,
+                trust_mode=TRUST_MODE_PROD,
+            )
+
+
+def test_verify_timestamp_token_prod_uses_trust_store_path(tmp_path):
+    hash_hex = "a" * 64
+    fake_tst_bytes = b"\x30\x00"
+    cert_file = tmp_path / "tsa.pem"
+    cert_file.write_bytes(b"FAKE CERT")
+
+    with (
+        patch("protocol.rfc3161._extract_tsa_cert_fingerprint", return_value=None),
+        patch("protocol.rfc3161.rfc3161ng.check_timestamp", return_value=True),
+    ):
+        result = verify_timestamp_token(
+            fake_tst_bytes,
+            hash_hex,
+            trust_mode=TRUST_MODE_PROD,
+            trust_store_path=str(cert_file),
+        )
+    assert result is True

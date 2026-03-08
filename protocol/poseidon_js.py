@@ -59,7 +59,7 @@ import json
 import os
 import queue
 import shutil
-import subprocess
+import subprocess  # nosec B404
 import threading
 from pathlib import Path
 
@@ -133,7 +133,7 @@ class _PoseidonNodeProcess:
         _check_prerequisites()
         self._stdout_queue = queue.Queue()
         self._stderr_buf.clear()
-        proc = subprocess.Popen(
+        proc = subprocess.Popen(  # nosec B603 B607
             ["node", str(self._script)],
             stdin=subprocess.PIPE,
             stdout=subprocess.PIPE,
@@ -157,7 +157,8 @@ class _PoseidonNodeProcess:
 
     def _stdout_reader(self, proc: subprocess.Popen[str]) -> None:
         """Daemon thread: move stdout lines into the response queue."""
-        assert proc.stdout
+        if proc.stdout is None:
+            return
         try:
             for line in proc.stdout:
                 self._stdout_queue.put(line)
@@ -166,7 +167,8 @@ class _PoseidonNodeProcess:
 
     def _stderr_reader(self, proc: subprocess.Popen[str]) -> None:
         """Daemon thread: drain stderr into a ring buffer for diagnostics."""
-        assert proc.stderr
+        if proc.stderr is None:
+            return
         for line in proc.stderr:
             self._stderr_buf.append(line.rstrip())
 
@@ -198,7 +200,8 @@ class _PoseidonNodeProcess:
 
         with self._lock:
             self._ensure_alive()
-            assert self._proc and self._proc.stdin  # guaranteed by _ensure_alive
+            if self._proc is None or self._proc.stdin is None:  # guaranteed by _ensure_alive
+                raise RuntimeError("Poseidon node process unavailable after _ensure_alive")
 
             try:
                 self._proc.stdin.write(line)
@@ -335,7 +338,7 @@ def compute_poseidon_merkle_root(leaves: list[int], depth: int | None = None) ->
     payload: dict = {"op": "merkle_root", "leaves": [str(v) for v in leaves]}
     if depth is not None:
         payload["depth"] = depth
-    return _run_node(payload)["out"]
+    return str(_run_node(payload)["out"])
 
 
 def backend_enabled() -> bool:
