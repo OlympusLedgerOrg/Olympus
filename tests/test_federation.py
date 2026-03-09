@@ -120,7 +120,9 @@ def test_federated_quorum_rejects_invalid_or_duplicate_signatures() -> None:
         timestamp="2026-03-08T17:09:11Z",
     )
 
-    duplicate_signature = sign_federated_header(header, "olympus-node-1", _test_signing_key(1), registry)
+    duplicate_signature = sign_federated_header(
+        header, "olympus-node-1", _test_signing_key(1), registry
+    )
     wrong_header_signature = sign_federated_header(
         other_header,
         "olympus-node-2",
@@ -273,7 +275,9 @@ def test_federation_node_key_rotation_preserves_historical_quorum_verification()
         timestamp="2026-03-09T23:59:59Z",
     )
     historical_signatures = [
-        sign_federated_header(historical_header, "olympus-node-1", old_node_one_key, rotated_registry),
+        sign_federated_header(
+            historical_header, "olympus-node-1", old_node_one_key, rotated_registry
+        ),
         sign_federated_header(
             historical_header, "olympus-node-2", _test_signing_key(2), rotated_registry
         ),
@@ -362,6 +366,42 @@ def test_verify_quorum_certificate_ignores_duplicate_acknowledgments() -> None:
     assert verify_quorum_certificate(certificate, header, registry) is True
 
 
+def test_verify_quorum_certificate_rejects_conflicting_duplicate_node_votes() -> None:
+    """A node must not contribute multiple conflicting signatures in one round."""
+    registry = FederationRegistry.from_file(REGISTRY_PATH)
+    header = create_shard_header(
+        shard_id="records/city-a",
+        root_hash=bytes.fromhex("ab" * 32),
+        timestamp="2026-03-09T00:00:04Z",
+    )
+    signature_one = sign_federated_header(header, "olympus-node-1", _test_signing_key(1), registry)
+    signature_two = sign_federated_header(header, "olympus-node-2", _test_signing_key(2), registry)
+    conflicting_signature_one = sign_federated_header(
+        header,
+        "olympus-node-1",
+        _test_signing_key(9),
+        registry,
+    )
+    certificate = {
+        "shard_id": header["shard_id"],
+        "header_hash": header["header_hash"],
+        "timestamp": header["timestamp"],
+        "event_id": build_quorum_certificate(header, [signature_one, signature_two], registry)[
+            "event_id"
+        ],
+        "federation_epoch": registry.epoch,
+        "membership_hash": registry.membership_hash(),
+        "quorum_threshold": registry.quorum_threshold(),
+        "acknowledgments": [
+            signature_one.to_dict(),
+            conflicting_signature_one.to_dict(),
+            signature_two.to_dict(),
+        ],
+    }
+
+    assert verify_quorum_certificate(certificate, header, registry) is False
+
+
 def test_federation_signature_is_domain_separated_from_plain_header_signature() -> None:
     """Plain shard-header signatures must not verify as federation votes."""
     registry = FederationRegistry.from_file(REGISTRY_PATH)
@@ -416,9 +456,8 @@ def test_verify_quorum_certificate_rejects_membership_hash_mismatch() -> None:
 
 def test_verify_quorum_certificate_rejects_epoch_mismatch() -> None:
     """Certificates must be bound to the federation epoch."""
-    registry = FederationRegistry.from_dict(
-        {"epoch": 7, "nodes": FederationRegistry.from_file(REGISTRY_PATH).to_dict()["nodes"]}
-    )
+    base_registry = FederationRegistry.from_file(REGISTRY_PATH)
+    registry = FederationRegistry(nodes=base_registry.nodes, epoch=7)
     header = create_shard_header(
         shard_id="records/city-a",
         root_hash=bytes.fromhex("ee" * 32),

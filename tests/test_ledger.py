@@ -171,7 +171,7 @@ def test_ledger_entry_hash_includes_federation_quorum_certificate_when_present()
         "shard_root": entry.shard_root,
         "canonicalization": entry.canonicalization,
         "prev_entry_hash": entry.prev_entry_hash,
-        "federation_quorum_certificate": certificate,
+        "federation_quorum_certificate": entry.federation_quorum_certificate,
     }
     expected_hash = blake3_hash([LEDGER_PREFIX, canonical_json_bytes(payload)]).hex()
     assert entry.entry_hash == expected_hash

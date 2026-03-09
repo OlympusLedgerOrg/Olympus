@@ -150,7 +150,7 @@ class FederationRegistry:
         data = json.loads(Path(path).read_text(encoding="utf-8"))
         return cls.from_dict(data)
 
-    def to_dict(self) -> dict[str, list[dict[str, Any]]]:
+    def to_dict(self) -> dict[str, Any]:
         """Serialize the registry to JSON-friendly data."""
         return {"nodes": [node.to_dict() for node in self.nodes], "epoch": self.epoch}
 
@@ -176,7 +176,8 @@ class FederationRegistry:
     def membership_hash(self) -> str:
         """Return the deterministic hash commitment for active federation membership."""
         active_members = sorted(
-            (node.node_id, node.pubkey.hex()) for node in self.active_nodes()
+            ((node.node_id, node.pubkey.hex()) for node in self.active_nodes()),
+            key=lambda item: (item[0], item[1]),
         )
         payload = HASH_SEPARATOR.join(
             [f"{node_id}:{pubkey_hex}" for node_id, pubkey_hex in active_members]
@@ -420,11 +421,14 @@ def verify_quorum_certificate(
         if isinstance(item, dict) and "node_id" in item and "signature" in item
     ]
     unique_signatures: list[NodeSignature] = []
-    seen_node_ids: set[str] = set()
+    seen_signatures_by_node: dict[str, str] = {}
     for signature in signatures:
-        if signature.node_id in seen_node_ids:
+        previous_signature = seen_signatures_by_node.get(signature.node_id)
+        if previous_signature is not None:
+            if previous_signature != signature.signature:
+                return False
             continue
-        seen_node_ids.add(signature.node_id)
+        seen_signatures_by_node[signature.node_id] = signature.signature
         unique_signatures.append(signature)
     valid_signatures = verify_federated_header_signatures(header, unique_signatures, registry)
     return len(valid_signatures) >= registry.quorum_threshold() and len(valid_signatures) == len(
