@@ -77,6 +77,7 @@ class Ledger:
             sorted_acknowledgments = []
         return {
             "acknowledgments": sorted_acknowledgments,
+            "event_id": str(certificate.get("event_id", "")),
             "header_hash": str(certificate.get("header_hash", "")),
             "quorum_threshold": int(certificate.get("quorum_threshold", 0)),
             "shard_id": str(certificate.get("shard_id", "")),
