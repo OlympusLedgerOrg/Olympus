@@ -352,9 +352,7 @@ class StorageLayer:
             # Verify the header and signature before persisting — this guards
             # against any subtle serialization bug causing a corrupt DB write.
             if not verify_header(header, signature, signing_key.verify_key):
-                raise RuntimeError(
-                    "Shard header signature verification failed before persistence"
-                )
+                raise RuntimeError("Shard header signature verification failed before persistence")
 
             # Insert shard header
             cur.execute(

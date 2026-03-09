@@ -159,6 +159,18 @@ def test_deterministic_signing_key_from_seed():
     assert bytes(key1) == bytes(key2)
 
 
+def test_signing_key_from_seed_not_equal_to_raw_seed():
+    """HKDF domain separation must produce a key different from the raw seed."""
+    import nacl.signing as _nacl_signing
+
+    seed = hash_bytes(b"test seed")
+    derived = get_signing_key_from_seed(seed)
+    raw = _nacl_signing.SigningKey(seed)
+
+    # The HKDF-derived key must not equal the raw-seed key.
+    assert bytes(derived) != bytes(raw)
+
+
 def test_signing_key_from_seed_invalid_length():
     """Test that invalid seed length is rejected."""
     with pytest.raises(ValueError, match="must be 32 bytes"):
@@ -185,6 +197,26 @@ def test_derive_scoped_signing_key_changes_across_scopes():
 
     assert bytes(key_a) != bytes(key_b)
     assert bytes(key_a) != bytes(key_c)
+
+
+def test_derive_scoped_signing_key_node_isolation():
+    """Shard keys for different nodes must differ even for the same shard."""
+    master_seed = hash_bytes(b"shared master seed")
+
+    key_node1 = derive_scoped_signing_key(master_seed, "shard-x", "node-1")
+    key_node2 = derive_scoped_signing_key(master_seed, "shard-x", "node-2")
+
+    assert bytes(key_node1) != bytes(key_node2)
+
+
+def test_derive_scoped_signing_key_two_level_differs_from_single_level():
+    """A key derived with a node_id must differ from one derived without."""
+    master_seed = hash_bytes(b"root secret")
+
+    with_node = derive_scoped_signing_key(master_seed, "shard-a", "node-1")
+    without_node = derive_scoped_signing_key(master_seed, "shard-a")
+
+    assert bytes(with_node) != bytes(without_node)
 
 
 def test_derive_scoped_signing_key_rejects_empty_explicit_node_id():
@@ -388,10 +420,18 @@ def test_canonical_header_sorts_keys():
     """canonical_header must emit sorted keys regardless of insertion order."""
     root_hash = hash_bytes(b"test root")
     timestamp = "2024-01-01T00:00:00Z"
-    header_ab = {"previous_header_hash": "", "root_hash": root_hash.hex(),
-                 "shard_id": "shard1", "timestamp": timestamp}
-    header_ba = {"timestamp": timestamp, "shard_id": "shard1",
-                 "root_hash": root_hash.hex(), "previous_header_hash": ""}
+    header_ab = {
+        "previous_header_hash": "",
+        "root_hash": root_hash.hex(),
+        "shard_id": "shard1",
+        "timestamp": timestamp,
+    }
+    header_ba = {
+        "timestamp": timestamp,
+        "shard_id": "shard1",
+        "root_hash": root_hash.hex(),
+        "previous_header_hash": "",
+    }
 
     assert canonical_header(header_ab) == canonical_header(header_ba)
 
