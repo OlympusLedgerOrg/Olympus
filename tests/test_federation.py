@@ -167,6 +167,52 @@ def test_quorum_certificate_is_verifiable_and_persisted_in_ledger() -> None:
     assert ledger.verify_chain() is True
 
 
+def test_quorum_certificate_acknowledgments_are_canonicalized_for_determinism() -> None:
+    """Quorum certificate signatures should be serialized in deterministic node-id order."""
+    registry = FederationRegistry.from_file(REGISTRY_PATH)
+    header = create_shard_header(
+        shard_id="records/city-a",
+        root_hash=bytes.fromhex("99" * 32),
+        timestamp="2026-03-09T00:00:03Z",
+    )
+    signatures = [
+        sign_federated_header(header, "olympus-node-2", _test_signing_key(2)),
+        sign_federated_header(header, "olympus-node-1", _test_signing_key(1)),
+    ]
+
+    certificate = build_quorum_certificate(header, signatures, registry)
+
+    assert [ack["node_id"] for ack in certificate["acknowledgments"]] == [
+        "olympus-node-1",
+        "olympus-node-2",
+    ]
+
+
+def test_verify_quorum_certificate_ignores_duplicate_acknowledgments() -> None:
+    """Duplicate acknowledgments should be filtered before signature validation."""
+    registry = FederationRegistry.from_file(REGISTRY_PATH)
+    header = create_shard_header(
+        shard_id="records/city-a",
+        root_hash=bytes.fromhex("aa" * 32),
+        timestamp="2026-03-09T00:00:04Z",
+    )
+    signature_one = sign_federated_header(header, "olympus-node-1", _test_signing_key(1))
+    signature_two = sign_federated_header(header, "olympus-node-2", _test_signing_key(2))
+    certificate = {
+        "shard_id": header["shard_id"],
+        "header_hash": header["header_hash"],
+        "timestamp": header["timestamp"],
+        "quorum_threshold": registry.quorum_threshold(),
+        "acknowledgments": [
+            signature_one.to_dict(),
+            signature_one.to_dict(),
+            signature_two.to_dict(),
+        ],
+    }
+
+    assert verify_quorum_certificate(certificate, header, registry) is True
+
+
 def test_node_key_rotation_with_superseding_signature() -> None:
     """Compromised node key rotation should preserve old-header verification via supersession."""
     old_key = _test_signing_key(1)

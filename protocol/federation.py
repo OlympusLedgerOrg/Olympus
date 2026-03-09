@@ -193,7 +193,10 @@ def build_quorum_certificate(
         "header_hash": str(header["header_hash"]),
         "timestamp": str(header["timestamp"]),
         "quorum_threshold": registry.quorum_threshold(),
-        "acknowledgments": [signature.to_dict() for signature in valid_signatures],
+        "acknowledgments": [
+            signature.to_dict()
+            for signature in sorted(valid_signatures, key=lambda signature: signature.node_id)
+        ],
     }
 
 
@@ -229,9 +232,17 @@ def verify_quorum_certificate(
         for item in acknowledgments
         if isinstance(item, dict) and "node_id" in item and "signature" in item
     ]
-    valid_signatures = verify_federated_header_signatures(header, signatures, registry)
+    unique_signatures: list[NodeSignature] = []
+    seen_signature_tuples: set[tuple[str, str]] = set()
+    for signature in signatures:
+        signature_key = (signature.node_id, signature.signature)
+        if signature_key in seen_signature_tuples:
+            continue
+        seen_signature_tuples.add(signature_key)
+        unique_signatures.append(signature)
+    valid_signatures = verify_federated_header_signatures(header, unique_signatures, registry)
     return len(valid_signatures) >= registry.quorum_threshold() and len(valid_signatures) == len(
-        signatures
+        unique_signatures
     )
 
 

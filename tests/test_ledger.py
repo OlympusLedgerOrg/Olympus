@@ -176,6 +176,35 @@ def test_ledger_entry_hash_includes_federation_quorum_certificate_when_present()
     assert entry.entry_hash == expected_hash
 
 
+def test_ledger_canonicalizes_quorum_certificate_acknowledgment_order_before_hashing():
+    """Entry hash commitment should be stable regardless of acknowledgment ordering."""
+    ledger = Ledger()
+    certificate = {
+        "shard_id": "records/city-a",
+        "header_hash": "ab" * 32,
+        "timestamp": "2026-03-09T00:00:00Z",
+        "quorum_threshold": 2,
+        "acknowledgments": [
+            {"node_id": "olympus-node-2", "signature": "ef" * 64},
+            {"node_id": "olympus-node-1", "signature": "cd" * 64},
+        ],
+    }
+
+    entry = ledger.append(
+        record_hash="test_hash",
+        shard_id="records/city-a",
+        shard_root="test_root",
+        canonicalization=_canonicalization(),
+        federation_quorum_certificate=certificate,
+    )
+
+    assert [ack["node_id"] for ack in entry.federation_quorum_certificate["acknowledgments"]] == [
+        "olympus-node-1",
+        "olympus-node-2",
+    ]
+    assert ledger.verify_chain() is True
+
+
 def test_ledger_get_entry_by_hash():
     """Test retrieving an entry by its hash."""
     ledger = Ledger()

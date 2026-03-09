@@ -245,6 +245,16 @@ def _normalize_tsa_urls(tsa_urls: Sequence[str]) -> tuple[str, ...]:
     return normalized
 
 
+def _enforce_uniform_tsa_configuration(tsa_urls: Sequence[str]) -> tuple[str, ...]:
+    """Require all nodes to use the protocol-default TSA quorum configuration."""
+    normalized = _normalize_tsa_urls(tsa_urls)
+    if normalized != DEFAULT_FINALIZATION_TSA_URLS:
+        raise ValueError(
+            "TSA quorum URLs must match DEFAULT_FINALIZATION_TSA_URLS for uniform federation finalization"
+        )
+    return normalized
+
+
 def request_timestamp_quorum(
     hash_hex: str, tsa_urls: Sequence[str] = DEFAULT_FINALIZATION_TSA_URLS
 ) -> list[TimestampToken]:
@@ -262,7 +272,10 @@ def request_timestamp_quorum(
     Returns:
         List of :class:`TimestampToken` instances, one per TSA URL.
     """
-    return [request_timestamp(hash_hex, tsa_url=url) for url in _normalize_tsa_urls(tsa_urls)]
+    return [
+        request_timestamp(hash_hex, tsa_url=url)
+        for url in _enforce_uniform_tsa_configuration(tsa_urls)
+    ]
 
 
 def verify_timestamp_token(
@@ -426,7 +439,7 @@ def timestamp_watchdog_status(
 
     statuses: dict[str, dict[str, Any]] = {}
     alerts: list[str] = []
-    for tsa_url in _normalize_tsa_urls(required_tsa_urls):
+    for tsa_url in _enforce_uniform_tsa_configuration(required_tsa_urls):
         token = token_map.get(tsa_url)
         if token is None:
             statuses[tsa_url] = {"present": False, "stale": True, "age_seconds": None}
