@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import math
 from dataclasses import dataclass
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
@@ -20,6 +21,27 @@ _HEADER_EXCLUDED_FIELDS: frozenset[str] = frozenset({"header_hash", "signature",
 
 
 @dataclass(frozen=True)
+class FederationKeyHistoryEntry:
+    """Historical federation key binding for rotation-aware signature verification."""
+
+    pubkey: bytes
+    valid_until: str
+
+    def to_dict(self) -> dict[str, str]:
+        """Serialize to JSON-friendly data."""
+        return {"pubkey": self.pubkey.hex(), "valid_until": self.valid_until}
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> FederationKeyHistoryEntry:
+        """Create a historical key binding from registry JSON data."""
+        return cls(pubkey=bytes.fromhex(str(data["pubkey"])), valid_until=str(data["valid_until"]))
+
+    def is_valid_for_timestamp(self, header_timestamp: str) -> bool:
+        """Return whether this historical key is valid for a header timestamp."""
+        return _parse_timestamp(header_timestamp) <= _parse_timestamp(self.valid_until)
+
+
+@dataclass(frozen=True)
 class FederationNode:
     """Persistent identity for a federation participant."""
 
@@ -29,6 +51,7 @@ class FederationNode:
     operator: str
     jurisdiction: str
     status: str = "active"
+    key_history: tuple[FederationKeyHistoryEntry, ...] = ()
 
     @property
     def active(self) -> bool:
@@ -37,7 +60,7 @@ class FederationNode:
 
     def to_dict(self) -> dict[str, Any]:
         """Serialize the node to JSON-friendly values."""
-        return {
+        node_data: dict[str, Any] = {
             "node_id": self.node_id,
             "pubkey": self.pubkey.hex(),
             "endpoint": self.endpoint,
@@ -45,11 +68,20 @@ class FederationNode:
             "jurisdiction": self.jurisdiction,
             "status": self.status,
         }
+        if self.key_history:
+            node_data["key_history"] = [entry.to_dict() for entry in self.key_history]
+        return node_data
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> FederationNode:
         """Create a node from registry JSON data."""
         pubkey_hex = str(data["pubkey"])
+        raw_key_history = data.get("key_history", [])
+        key_history = tuple(
+            FederationKeyHistoryEntry.from_dict(item)
+            for item in raw_key_history
+            if isinstance(item, dict) and "pubkey" in item and "valid_until" in item
+        )
         return cls(
             node_id=str(data["node_id"]),
             pubkey=bytes.fromhex(pubkey_hex),
@@ -57,11 +89,25 @@ class FederationNode:
             operator=str(data["operator"]),
             jurisdiction=str(data["jurisdiction"]),
             status=str(data.get("status", "active")),
+            key_history=key_history,
         )
 
     def verify_key(self) -> nacl.signing.VerifyKey:
         """Return the Ed25519 verification key for this node."""
         return nacl.signing.VerifyKey(self.pubkey)
+
+    def verify_keys_for_timestamp(
+        self, header_timestamp: str
+    ) -> tuple[nacl.signing.VerifyKey, ...]:
+        """Return current plus timestamp-valid historical verification keys."""
+        verify_keys: list[nacl.signing.VerifyKey] = [self.verify_key()]
+        for key_entry in self.key_history:
+            try:
+                if key_entry.is_valid_for_timestamp(header_timestamp):
+                    verify_keys.append(nacl.signing.VerifyKey(key_entry.pubkey))
+            except ValueError:
+                continue
+        return tuple(verify_keys)
 
 
 @dataclass(frozen=True)
@@ -81,9 +127,15 @@ class FederationRegistry:
         node_ids = {node.node_id for node in nodes}
         if len(node_ids) != len(nodes):
             raise ValueError("Federation registry node_id values must be unique")
-        pubkeys = {node.pubkey for node in nodes}
-        if len(pubkeys) != len(nodes):
-            raise ValueError("Federation registry pubkey values must be unique")
+        pubkeys: set[bytes] = set()
+        for node in nodes:
+            if node.pubkey in pubkeys:
+                raise ValueError("Federation registry pubkey values must be unique")
+            pubkeys.add(node.pubkey)
+            for historical_key in node.key_history:
+                if historical_key.pubkey in pubkeys:
+                    raise ValueError("Federation registry pubkey values must be unique")
+                pubkeys.add(historical_key.pubkey)
 
         return cls(nodes=nodes)
 
@@ -115,6 +167,48 @@ class FederationRegistry:
             raise ValueError("Federation registry has no active nodes")
         # Require at least a two-thirds quorum of active federation members.
         return math.ceil((2 * active_count) / 3)
+
+    def rotate_node_key(
+        self,
+        *,
+        node_id: str,
+        new_pubkey: bytes,
+        rotated_at: str,
+    ) -> FederationRegistry:
+        """Return a new registry with one node key rotated while preserving history."""
+        try:
+            _parse_timestamp(rotated_at)
+        except ValueError as exc:
+            raise ValueError(f"Invalid rotation timestamp: {rotated_at}") from exc
+        updated_nodes: list[FederationNode] = []
+        found = False
+        for node in self.nodes:
+            if node.node_id != node_id:
+                updated_nodes.append(node)
+                continue
+            found = True
+            updated_nodes.append(
+                FederationNode(
+                    node_id=node.node_id,
+                    pubkey=new_pubkey,
+                    endpoint=node.endpoint,
+                    operator=node.operator,
+                    jurisdiction=node.jurisdiction,
+                    status=node.status,
+                    key_history=(
+                        *node.key_history,
+                        FederationKeyHistoryEntry(pubkey=node.pubkey, valid_until=rotated_at),
+                    ),
+                )
+            )
+        if not found:
+            raise ValueError(f"Unknown federation node: {node_id}")
+        return FederationRegistry(nodes=tuple(updated_nodes))
+
+
+def _parse_timestamp(timestamp: str) -> datetime:
+    """Parse an ISO 8601 timestamp that may use a ``Z`` suffix as timezone-aware datetime."""
+    return datetime.fromisoformat(timestamp.replace("Z", "+00:00"))
 
 
 @dataclass(frozen=True)
@@ -199,9 +293,15 @@ def verify_federated_header_signatures(
             continue
         try:
             vote_hash = hash_bytes(_federation_vote_payload(header, signature.node_id))
-            node.verify_key().verify(vote_hash, bytes.fromhex(signature.signature))
-            valid_signatures.append(signature)
-            seen_nodes.add(signature.node_id)
+            signature_bytes = bytes.fromhex(signature.signature)
+            for verify_key in node.verify_keys_for_timestamp(str(header["timestamp"])):
+                try:
+                    verify_key.verify(vote_hash, signature_bytes)
+                    valid_signatures.append(signature)
+                    seen_nodes.add(signature.node_id)
+                    break
+                except nacl.exceptions.BadSignatureError:
+                    continue
         except (ValueError, nacl.exceptions.BadSignatureError):
             continue
 

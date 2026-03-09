@@ -171,6 +171,66 @@ def test_byzantine_simulation_mid_commit_node_kill_rejects_subquorum() -> None:
     assert has_federation_quorum(header, signatures, registry) is False
 
 
+def test_byzantine_threshold_for_four_nodes_requires_three_signatures() -> None:
+    """2/3 quorum should require three signatures when four active nodes are present."""
+    registry = FederationRegistry.from_dict(
+        {
+            "nodes": [
+                {
+                    "node_id": "olympus-node-1",
+                    "pubkey": _test_signing_key(1).verify_key.encode().hex(),
+                    "endpoint": "https://node1.olympus.org",
+                    "operator": "City Records Office",
+                    "jurisdiction": "city-a",
+                    "status": "active",
+                },
+                {
+                    "node_id": "olympus-node-2",
+                    "pubkey": _test_signing_key(2).verify_key.encode().hex(),
+                    "endpoint": "https://node2.olympus.org",
+                    "operator": "County Archive",
+                    "jurisdiction": "county-b",
+                    "status": "active",
+                },
+                {
+                    "node_id": "olympus-node-3",
+                    "pubkey": _test_signing_key(3).verify_key.encode().hex(),
+                    "endpoint": "https://node3.olympus.org",
+                    "operator": "State Auditor",
+                    "jurisdiction": "state-c",
+                    "status": "active",
+                },
+                {
+                    "node_id": "olympus-node-4",
+                    "pubkey": _test_signing_key(4).verify_key.encode().hex(),
+                    "endpoint": "https://node4.olympus.org",
+                    "operator": "Regional Clerk",
+                    "jurisdiction": "region-d",
+                    "status": "active",
+                },
+            ]
+        }
+    )
+    header = create_shard_header(
+        shard_id="records/city-a",
+        root_hash=bytes.fromhex("56" * 32),
+        timestamp="2026-03-09T00:00:01Z",
+    )
+
+    two_signatures = [
+        sign_federated_header(header, "olympus-node-1", _test_signing_key(1)),
+        sign_federated_header(header, "olympus-node-2", _test_signing_key(2)),
+    ]
+    three_signatures = [
+        *two_signatures,
+        sign_federated_header(header, "olympus-node-3", _test_signing_key(3)),
+    ]
+
+    assert registry.quorum_threshold() == 3
+    assert has_federation_quorum(header, two_signatures, registry) is False
+    assert has_federation_quorum(header, three_signatures, registry) is True
+
+
 def test_quorum_certificate_is_verifiable_and_persisted_in_ledger() -> None:
     """Signed federation quorum certificates should be persisted as ledger metadata."""
     registry = FederationRegistry.from_file(REGISTRY_PATH)
@@ -197,6 +257,59 @@ def test_quorum_certificate_is_verifiable_and_persisted_in_ledger() -> None:
     )
     assert entry.federation_quorum_certificate == certificate
     assert ledger.verify_chain() is True
+
+
+def test_federation_node_key_rotation_preserves_historical_quorum_verification() -> None:
+    """Node key rotation should keep pre-rotation signatures verifiable via key history."""
+    registry = FederationRegistry.from_file(REGISTRY_PATH)
+    old_node_one_key = _test_signing_key(1)
+    new_node_one_key = _test_signing_key(9)
+    rotated_registry = registry.rotate_node_key(
+        node_id="olympus-node-1",
+        new_pubkey=bytes(new_node_one_key.verify_key),
+        rotated_at="2026-03-10T00:00:00Z",
+    )
+
+    historical_header = create_shard_header(
+        shard_id="records/city-a",
+        root_hash=bytes.fromhex("6f" * 32),
+        timestamp="2026-03-09T23:59:59Z",
+    )
+    historical_signatures = [
+        sign_federated_header(historical_header, "olympus-node-1", old_node_one_key),
+        sign_federated_header(historical_header, "olympus-node-2", _test_signing_key(2)),
+    ]
+
+    assert has_federation_quorum(historical_header, historical_signatures, rotated_registry) is True
+
+
+def test_federation_node_key_rotation_rejects_post_rotation_old_key_signatures() -> None:
+    """After key rotation, old compromised keys must not satisfy quorum for new headers."""
+    registry = FederationRegistry.from_file(REGISTRY_PATH)
+    old_node_one_key = _test_signing_key(1)
+    new_node_one_key = _test_signing_key(9)
+    rotated_registry = registry.rotate_node_key(
+        node_id="olympus-node-1",
+        new_pubkey=bytes(new_node_one_key.verify_key),
+        rotated_at="2026-03-10T00:00:00Z",
+    )
+    header = create_shard_header(
+        shard_id="records/city-a",
+        root_hash=bytes.fromhex("7f" * 32),
+        timestamp="2026-03-10T00:00:01Z",
+    )
+
+    old_key_signatures = [
+        sign_federated_header(header, "olympus-node-1", old_node_one_key),
+        sign_federated_header(header, "olympus-node-2", _test_signing_key(2)),
+    ]
+    assert has_federation_quorum(header, old_key_signatures, rotated_registry) is False
+
+    rotated_key_signatures = [
+        sign_federated_header(header, "olympus-node-1", new_node_one_key),
+        sign_federated_header(header, "olympus-node-2", _test_signing_key(2)),
+    ]
+    assert has_federation_quorum(header, rotated_key_signatures, rotated_registry) is True
 
 
 def test_quorum_certificate_acknowledgments_are_canonicalized_for_determinism() -> None:
