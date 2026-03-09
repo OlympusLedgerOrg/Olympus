@@ -42,7 +42,7 @@ def test_federation_registry_loads_static_nodes() -> None:
     assert registry.quorum_threshold() == 2
     assert registry.nodes[0] == FederationNode(
         node_id="olympus-node-1",
-        pubkey=bytes.fromhex("8a88e3dd7409f195fd52db2d3cba5d72ca6709bf1d94121bf3748801b40f6f5c"),
+        pubkey=bytes.fromhex("10d7472a02f7338b0c7aeee1b81e447ee7c91081c2b190b89f05b7149ca934a7"),
         endpoint="https://node1.olympus.org",
         operator="City Records Office",
         jurisdiction="city-a",

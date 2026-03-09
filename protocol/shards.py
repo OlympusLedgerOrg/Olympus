@@ -18,14 +18,49 @@ from .canonical_json import canonical_json_bytes
 from .events import CanonicalEvent
 from .hashes import hash_bytes, shard_header_hash
 
+
 # Fields excluded from the canonical commitment bytes (derived or post-commitment metadata)
-_HEADER_EXCLUDED_FIELDS: frozenset[str] = frozenset(
-    {"header_hash", "signature", "timestamp_token"}
-)
+_HEADER_EXCLUDED_FIELDS: frozenset[str] = frozenset({"header_hash", "signature", "timestamp_token"})
+
+# HKDF domain separation constants for key derivation.
+# salt provides domain separation from other HKDF usages; info labels bind
+# each derived key to its specific purpose.  These values are protocol-critical:
+# changing them will produce different keys for the same inputs.
+_HKDF_SALT: bytes = b"olympus"
+_HKDF_INFO_SEED_KEY: bytes = b"OLY:SEED-KEY:V1"
+_HKDF_INFO_NODE_KEY: bytes = b"OLY:NODE-KEY:V1"
+_HKDF_INFO_SHARD_SIGNING_KEY: bytes = b"OLY:SHARD-SIGNING-KEY:V1"
 
 
 if TYPE_CHECKING:
     from .rfc3161 import TimestampToken
+
+
+def _hkdf_derive(ikm: bytes, info: bytes, length: int = 32) -> bytearray:
+    """
+    Derive key material using HKDF-SHA256 with Olympus domain separation.
+
+    Uses ``_HKDF_SALT`` as a fixed salt shared by all Olympus HKDF usages;
+    callers differentiate derivation contexts through the ``info`` label.
+
+    Returns a mutable ``bytearray`` so callers can zero-fill the buffer after
+    extracting the key material.
+
+    Args:
+        ikm: Input key material.
+        info: Context-specific info label that binds the derived key to its use.
+        length: Length in bytes of the derived output (default 32).
+
+    Returns:
+        Derived key material as a zeroisable ``bytearray``.
+    """
+    raw = HKDF(
+        algorithm=hashes.SHA256(),
+        length=length,
+        salt=_HKDF_SALT,
+        info=info,
+    ).derive(ikm)
+    return bytearray(raw)
 
 
 def canonical_header(header: dict[str, Any]) -> bytes:
@@ -426,17 +461,30 @@ def rotation_record_to_event(
 
 def get_signing_key_from_seed(seed: bytes) -> nacl.signing.SigningKey:
     """
-    Get Ed25519 signing key from a 32-byte seed.
+    Derive an Ed25519 signing key from seed material using HKDF domain separation.
+
+    Rather than using the raw seed bytes directly as Ed25519 key material, the
+    seed is treated as HKDF input key material.  HKDF-SHA256 with the Olympus
+    domain-separation salt and a purpose-specific info label is applied to
+    produce the actual 32-byte key material.  This ensures that knowing the
+    seed bytes does not directly expose the private key, and that keys derived
+    here cannot be confused with keys derived for other purposes.
+
+    The intermediate key material buffer is zeroed before returning.
 
     Args:
-        seed: 32-byte seed for deterministic key generation
+        seed: 32-byte seed for deterministic key generation.
 
     Returns:
-        Ed25519 signing key
+        Ed25519 signing key derived from the seed via HKDF-SHA256.
     """
     if len(seed) != 32:
         raise ValueError(f"Seed must be 32 bytes, got {len(seed)}")
-    return nacl.signing.SigningKey(seed)
+    key_material = _hkdf_derive(seed, _HKDF_INFO_SEED_KEY)
+    try:
+        return nacl.signing.SigningKey(bytes(key_material))
+    finally:
+        key_material[:] = b"\x00" * len(key_material)
 
 
 def derive_scoped_signing_key(
@@ -445,14 +493,27 @@ def derive_scoped_signing_key(
     """
     Derive a shard- and node-scoped Ed25519 signing key from master seed material.
 
-    This prevents raw seed reuse across shards or nodes by binding the derived
-    key to an explicit scope using HKDF-SHA256.
+    Uses a two-level HKDF-SHA256 hierarchy for domain separation::
+
+        master_seed  →(HKDF, info=OLY:NODE-KEY:V1\\x00<node_id>)→  node_key
+        node_key     →(HKDF, info=OLY:SHARD-SIGNING-KEY:V1\\x00<shard_id>)→  shard_key
+
+    When no ``node_id`` is provided the derivation collapses to a single HKDF
+    step directly from ``master_seed`` to ``shard_key``.  Both levels use an
+    explicit ``b"olympus"`` salt and encode the identifier into the HKDF info
+    label via a null-byte separator to prevent key-label confusion.
+
+    The intermediate ``node_key`` buffer is zeroed immediately after the shard
+    key is derived.
 
     Args:
         master_seed: Root seed material.
         shard_id: Shard identifier bound into the derived key.
-        node_id: Optional node identifier bound into the derived key. When
-            omitted, the derivation is explicitly scoped to the shard only.
+        node_id: Optional node identifier.  When provided a node key is first
+            derived from the master seed; that key is then used as input key
+            material for the shard key derivation, preventing master seed reuse
+            across nodes.  When omitted, a single HKDF step from master seed
+            is used.
 
     Returns:
         Deterministically derived Ed25519 signing key.
@@ -463,20 +524,31 @@ def derive_scoped_signing_key(
         raise ValueError("shard_id must be non-empty")
     if node_id == "":
         raise ValueError("node_id must be non-empty when provided")
-    info = canonical_json_bytes(
-        {
-            "label": "olympus-ed25519",
-            "node_id": node_id,
-            "shard_id": shard_id,
-        }
-    )
-    seed = HKDF(
-        algorithm=hashes.SHA256(),
-        length=32,
-        salt=None,
-        info=info,
-    ).derive(master_seed)
-    return nacl.signing.SigningKey(seed)
+
+    node_key: bytearray | None = None
+    try:
+        if node_id is not None:
+            # Step 1: master_seed → node_key (bound to node_id)
+            node_key = _hkdf_derive(
+                master_seed,
+                _HKDF_INFO_NODE_KEY + b"\x00" + node_id.encode("utf-8"),
+            )
+            ikm = bytes(node_key)
+        else:
+            ikm = master_seed
+
+        # Step 2: node_key (or master_seed) → shard_key (bound to shard_id)
+        key_material = _hkdf_derive(
+            ikm,
+            _HKDF_INFO_SHARD_SIGNING_KEY + b"\x00" + shard_id.encode("utf-8"),
+        )
+        try:
+            return nacl.signing.SigningKey(bytes(key_material))
+        finally:
+            key_material[:] = b"\x00" * len(key_material)
+    finally:
+        if node_key is not None:
+            node_key[:] = b"\x00" * len(node_key)
 
 
 def get_verify_key_from_signing_key(
