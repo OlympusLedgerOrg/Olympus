@@ -63,7 +63,11 @@ We follow a **coordinated disclosure** model:
 
 ## Threat Model Summary
 
-The threat model is described in detail in [`threat-model.md`](threat-model.md).
+The threat model is described in detail in:
+- [`docs/threat_model.md`](docs/threat_model.md) — High-level adversary model and security goals
+- [`docs/01_threat_model.md`](docs/01_threat_model.md) — Detailed protocol-level threat analysis
+- [`docs/threat-model-mitigations.md`](docs/threat-model-mitigations.md) — **Threat-to-mitigation mapping with evidence links**
+
 Key properties Olympus aims to protect:
 
 - **Chain integrity** — An attacker who can write to the database cannot
@@ -86,6 +90,22 @@ Key properties Olympus aims to protect:
 | Dependency vulnerability audit (pip-audit) | `.github/workflows/ci.yml` — `supply-chain` job |
 | SBOM generation (CycloneDX) | `.github/workflows/ci.yml` — `supply-chain` job |
 | Type checking (mypy strict) | `.github/workflows/ci.yml` — `typecheck` job |
+| Chaos engineering tests | `tests/chaos/` — disk full, network partition, clock skew, DB connection loss |
+
+---
+
+## Observability and Monitoring
+
+Olympus implements structured observability for detecting security and integrity issues:
+
+| Component | Purpose | Documentation |
+|-----------|---------|---------------|
+| OpenTelemetry traces | End-to-end flow tracing (commit/verify/redact) | [`docs/observability-deployment.md`](docs/observability-deployment.md) |
+| Prometheus metrics | Proof latency, ledger height, SMT divergence alerts | [`docs/prometheus-alerting.md`](docs/prometheus-alerting.md) |
+| SMT root divergence alerting | Detects tampering or replication bugs | [`protocol/telemetry.py`](protocol/telemetry.py) — `record_smt_divergence()` |
+| Chaos engineering tests | Automated fault injection with documented behaviors | [`tests/chaos/README.md`](tests/chaos/README.md) |
+
+**Critical Alert:** Any increase in `olympus_smt_root_divergence_total` metric indicates potential tampering or integrity violation and requires immediate investigation.
 
 ---
 

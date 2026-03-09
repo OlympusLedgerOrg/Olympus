@@ -29,6 +29,7 @@ from .redaction_ledger import (
     poseidon_root_to_bytes,
 )
 from .ssmf import SparseMerkleTree
+from .telemetry import get_tracer
 
 
 @dataclass
@@ -135,10 +136,14 @@ class RedactionProtocol:
             Tuple of ``(tree, root_hash_hex)`` where ``root_hash_hex`` is the
             64-character hex-encoded BLAKE3 Merkle root.
         """
-        leaf_hashes = RedactionProtocol.create_leaf_hashes(document_parts)
-        tree = MerkleTree(leaf_hashes)
-        root_hash = tree.get_root().hex()
-        return tree, root_hash
+        tracer = get_tracer()
+        with tracer.start_as_current_span("redaction.commit_document") as span:
+            span.set_attribute("document_parts_count", len(document_parts))
+            leaf_hashes = RedactionProtocol.create_leaf_hashes(document_parts)
+            tree = MerkleTree(leaf_hashes)
+            root_hash = tree.get_root().hex()
+            span.set_attribute("merkle_root", root_hash)
+            return tree, root_hash
 
     @staticmethod
     def create_redaction_proof(
@@ -160,21 +165,25 @@ class RedactionProtocol:
             A :class:`RedactionProof` containing the original root hash,
             revealed leaf hashes, and Merkle inclusion proofs.
         """
-        original_root = tree.get_root().hex()
-        revealed_hashes: list[str] = []
-        merkle_proofs: list[MerkleProof] = []
+        tracer = get_tracer()
+        with tracer.start_as_current_span("redaction.create_proof") as span:
+            span.set_attribute("revealed_indices_count", len(revealed_indices))
+            original_root = tree.get_root().hex()
+            revealed_hashes: list[str] = []
+            merkle_proofs: list[MerkleProof] = []
 
-        for idx in revealed_indices:
-            # tree.leaves holds the raw leaf bytes (hash_bytes output)
-            revealed_hashes.append(tree.leaves[idx].hex())
-            merkle_proofs.append(tree.generate_proof(idx))
+            for idx in revealed_indices:
+                # tree.leaves holds the raw leaf bytes (hash_bytes output)
+                revealed_hashes.append(tree.leaves[idx].hex())
+                merkle_proofs.append(tree.generate_proof(idx))
 
-        return RedactionProof(
-            original_root=original_root,
-            revealed_indices=list(revealed_indices),
-            revealed_hashes=revealed_hashes,
-            merkle_proofs=merkle_proofs,
-        )
+            span.set_attribute("original_root", original_root)
+            return RedactionProof(
+                original_root=original_root,
+                revealed_indices=list(revealed_indices),
+                revealed_hashes=revealed_hashes,
+                merkle_proofs=merkle_proofs,
+            )
 
     @staticmethod
     def verify_redaction_proof(
@@ -200,32 +209,44 @@ class RedactionProtocol:
         Returns:
             ``True`` if the proof is valid; ``False`` otherwise.
         """
-        n = len(proof.revealed_indices)
+        tracer = get_tracer()
+        with tracer.start_as_current_span("redaction.verify_proof") as span:
+            span.set_attribute("revealed_indices_count", len(proof.revealed_indices))
+            span.set_attribute("original_root", proof.original_root)
 
-        # Structural consistency checks
-        if len(revealed_content) != n:
-            return False
-        if len(proof.revealed_hashes) != n:
-            return False
-        if len(proof.merkle_proofs) != n:
-            return False
+            n = len(proof.revealed_indices)
 
-        for i, content in enumerate(revealed_content):
-            # 1. Content must hash to the committed leaf hash
-            content_hash = hash_bytes(content.encode("utf-8")).hex()
-            if content_hash != proof.revealed_hashes[i]:
+            # Structural consistency checks
+            if len(revealed_content) != n:
+                span.set_attribute("verification_result", "failed_content_length_mismatch")
+                return False
+            if len(proof.revealed_hashes) != n:
+                span.set_attribute("verification_result", "failed_hashes_length_mismatch")
+                return False
+            if len(proof.merkle_proofs) != n:
+                span.set_attribute("verification_result", "failed_proofs_length_mismatch")
                 return False
 
-            # 2. Merkle inclusion proof must be cryptographically valid
-            mp = proof.merkle_proofs[i]
-            if not verify_proof(mp):
-                return False
+            for i, content in enumerate(revealed_content):
+                # 1. Content must hash to the committed leaf hash
+                content_hash = hash_bytes(content.encode("utf-8")).hex()
+                if content_hash != proof.revealed_hashes[i]:
+                    span.set_attribute("verification_result", f"failed_hash_mismatch_at_{i}")
+                    return False
 
-            # 3. Proof root must match the claimed original root
-            if mp.root_hash.hex() != proof.original_root:
-                return False
+                # 2. Merkle inclusion proof must be cryptographically valid
+                mp = proof.merkle_proofs[i]
+                if not verify_proof(mp):
+                    span.set_attribute("verification_result", f"failed_merkle_proof_invalid_at_{i}")
+                    return False
 
-        return True
+                # 3. Proof root must match the claimed original root
+                if mp.root_hash.hex() != proof.original_root:
+                    span.set_attribute("verification_result", f"failed_root_mismatch_at_{i}")
+                    return False
+
+            span.set_attribute("verification_result", "success")
+            return True
 
     @staticmethod
     def commit_document_dual(
