@@ -591,6 +591,56 @@ Potential future database enhancements (post-v1.0):
 
 ---
 
+## Backup and Point-in-Time Recovery (PITR)
+
+Olympus production deployments MUST use PostgreSQL WAL archiving and regularly test restoration.
+The append-only model simplifies consistency, but it does not remove operational recovery needs.
+
+### Required PostgreSQL WAL Archiving Configuration
+
+Minimum `postgresql.conf` requirements:
+
+```conf
+wal_level = replica
+archive_mode = on
+archive_timeout = 60s
+archive_command = 'test ! -f /var/lib/postgresql/wal_archive/%f && cp %p /var/lib/postgresql/wal_archive/%f'
+```
+
+Minimum `recovery.signal` / restore settings for PITR:
+
+```conf
+restore_command = 'cp /var/lib/postgresql/wal_archive/%f %p'
+```
+
+### Recovery Objectives
+
+- **RPO (Recovery Point Objective): 5 minutes**
+  - Base backups run at least every 24h.
+  - WAL archive shipping latency must remain below 5 minutes.
+- **RTO (Recovery Time Objective): 30 minutes**
+  - Restore from latest base backup plus WAL replay to target timestamp.
+  - Validate Olympus integrity checks before returning service to production traffic.
+
+### Restore Test Runbook (must be exercised regularly)
+
+At least once per month, execute and record a full restore drill:
+
+1. **Provision isolated restore target** (new PostgreSQL instance, no production writes).
+2. **Restore latest base backup** using `pg_basebackup` artifact or backup snapshot tooling.
+3. **Replay WAL to a target timestamp** (`recovery_target_time`) within the drill window.
+4. **Run Olympus verification checks**:
+   - `StorageLayer.verify_persisted_root(shard_id)` on sampled shards
+   - Ledger continuity checks via API or storage verification scripts
+5. **Compare recovery timestamp vs. target** to verify RPO compliance.
+6. **Measure total restore wall-clock duration** to verify RTO compliance.
+7. **Archive drill evidence** (commands, timestamps, verification outputs, operator sign-off).
+
+If a drill misses RTO or RPO targets, treat it as an operational incident and update backup cadence,
+archive transport, or infrastructure sizing before next production release.
+
+---
+
 ## Frequently Asked Questions
 
 ### Q: Can I use SQLite for local development?
@@ -619,7 +669,7 @@ Potential future database enhancements (post-v1.0):
 
 ### Q: What about database backups?
 
-**A: Standard PostgreSQL tooling.** Use `pg_dump` for backups, `pg_restore` for recovery. Olympus does not provide custom backup tooling in v1.0. Append-only semantics make backups straightforward (no complex snapshot consistency requirements).
+**A: Use WAL-backed PITR, not dump-only backups.** Production requires PostgreSQL WAL archiving and tested point-in-time recovery drills (see **Backup and Point-in-Time Recovery (PITR)** above). `pg_dump`/`pg_restore` can be used for ad-hoc exports but are insufficient as the primary disaster-recovery strategy.
 
 ### Q: Can I query the database directly?
 

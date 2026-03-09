@@ -26,14 +26,20 @@ See docs/08_database_strategy.md for complete database strategy documentation.
 """
 
 import json
-from collections.abc import Mapping
+import time
+from collections.abc import Iterator, Mapping
+from contextlib import contextmanager
 from datetime import datetime, timezone
+from threading import Lock
 from typing import Any
 
 import nacl.exceptions
 import nacl.signing
 import psycopg
+from psycopg import OperationalError
+from psycopg.pq import TransactionStatus
 from psycopg.rows import dict_row
+from psycopg_pool import ConnectionPool, PoolTimeout
 
 from protocol.canonical_json import canonical_json_encode
 from protocol.canonicalizer import canonicalization_provenance
@@ -56,32 +62,145 @@ class StorageLayer:
     All operations are append-only and deterministic.
     """
 
-    def __init__(self, connection_string: str):
+    def __init__(
+        self,
+        connection_string: str,
+        *,
+        pool_min_size: int = 1,
+        pool_max_size: int = 10,
+        connection_retries: int = 3,
+        retry_base_delay_seconds: float = 0.1,
+        retry_max_delay_seconds: float = 2.0,
+        circuit_breaker_threshold: int = 5,
+        circuit_breaker_timeout_seconds: float = 30.0,
+    ):
         """
         Initialize storage layer.
 
         Args:
             connection_string: Postgres connection string
+            pool_min_size: Minimum number of pooled DB connections.
+            pool_max_size: Maximum number of pooled DB connections.
+            connection_retries: Number of retries for transient connection failures.
+            retry_base_delay_seconds: Initial exponential backoff delay in seconds.
+            retry_max_delay_seconds: Maximum retry backoff delay in seconds.
+            circuit_breaker_threshold: Consecutive transient failures before opening breaker.
+            circuit_breaker_timeout_seconds: Breaker open duration in seconds.
         """
+        if pool_min_size < 1:
+            raise ValueError("pool_min_size must be >= 1")
+        if pool_max_size < pool_min_size:
+            raise ValueError("pool_max_size must be >= pool_min_size")
+        if connection_retries < 0:
+            raise ValueError("connection_retries must be >= 0")
+        if retry_base_delay_seconds <= 0:
+            raise ValueError("retry_base_delay_seconds must be > 0")
+        if retry_max_delay_seconds < retry_base_delay_seconds:
+            raise ValueError("retry_max_delay_seconds must be >= retry_base_delay_seconds")
+        if circuit_breaker_threshold < 1:
+            raise ValueError("circuit_breaker_threshold must be >= 1")
+        if circuit_breaker_timeout_seconds <= 0:
+            raise ValueError("circuit_breaker_timeout_seconds must be > 0")
+
         self.connection_string = connection_string
-
-    def _get_connection(self) -> psycopg.Connection[dict[str, Any]]:
-        """
-        Get a database connection with autocommit disabled (transaction mode).
-
-        psycopg3 behavior:
-        - autocommit=False (default): connection starts in transaction mode
-        - context manager (`with conn:`) ensures rollback on exception
-        - must call conn.commit() explicitly to finalize
-        - row_factory=dict_row makes all cursors return dicts by default
-
-        Returns:
-            Connection in transaction mode with dict row factory
-        """
-        connection: psycopg.Connection[dict[str, Any]] = psycopg.connect(
-            self.connection_string, autocommit=False, row_factory=dict_row
+        self._connection_retries = connection_retries
+        self._retry_base_delay_seconds = retry_base_delay_seconds
+        self._retry_max_delay_seconds = retry_max_delay_seconds
+        self._circuit_breaker_threshold = circuit_breaker_threshold
+        self._circuit_breaker_timeout_seconds = circuit_breaker_timeout_seconds
+        self._circuit_open_until = 0.0
+        self._consecutive_connection_failures = 0
+        self._circuit_lock = Lock()
+        self._pool: ConnectionPool[psycopg.Connection[dict[str, Any]]] = ConnectionPool(
+            conninfo=self.connection_string,
+            min_size=pool_min_size,
+            max_size=pool_max_size,
+            open=True,
+            kwargs={"autocommit": False, "row_factory": dict_row},
         )
-        return connection
+
+    @contextmanager
+    def _get_connection(self) -> Iterator[psycopg.Connection[dict[str, Any]]]:
+        """
+        Acquire a pooled database connection with retry and circuit-breaker protection.
+
+        Connection semantics:
+        - Connections are reused from a pool (no per-request connect calls).
+        - Transient acquisition failures are retried with exponential backoff.
+        - Sustained failures open a circuit breaker to fail fast for a cooldown period.
+        - Any uncommitted transaction is rolled back before returning to the pool.
+
+        Yields:
+            Connection in transaction mode with dict row factory.
+        """
+        connection = self._acquire_connection_with_retry()
+        try:
+            yield connection
+        finally:
+            if (
+                not connection.closed
+                and connection.info.transaction_status != TransactionStatus.IDLE
+            ):
+                connection.rollback()
+            self._pool.putconn(connection)
+
+    def close(self) -> None:
+        """Close all pooled database connections."""
+        self._pool.close()
+
+    def _acquire_connection_with_retry(self) -> psycopg.Connection[dict[str, Any]]:
+        """Acquire a pooled connection with retry and circuit-breaker protection."""
+        last_transient_error: Exception | None = None
+        for attempt in range(self._connection_retries + 1):
+            if self._is_circuit_breaker_open():
+                raise RuntimeError("Database circuit breaker is open; retry later")
+
+            try:
+                connection: psycopg.Connection[dict[str, Any]] = self._pool.getconn()
+            except Exception as exc:
+                if not self._is_transient_connection_error(exc):
+                    raise
+                last_transient_error = exc
+                self._record_connection_failure()
+                if attempt == self._connection_retries:
+                    break
+                delay = min(
+                    self._retry_base_delay_seconds * (2**attempt),
+                    self._retry_max_delay_seconds,
+                )
+                time.sleep(delay)
+                continue
+
+            self._reset_connection_failures()
+            return connection
+
+        if last_transient_error is not None:
+            raise RuntimeError("Failed to acquire PostgreSQL connection after retries") from (
+                last_transient_error
+            )
+        raise RuntimeError("Failed to acquire PostgreSQL connection after retries")
+
+    def _is_transient_connection_error(self, exc: Exception) -> bool:
+        """Return True when an exception is likely transient and safe to retry."""
+        return isinstance(exc, (OperationalError, PoolTimeout))
+
+    def _record_connection_failure(self) -> None:
+        """Update circuit-breaker state after a transient connection failure."""
+        with self._circuit_lock:
+            self._consecutive_connection_failures += 1
+            if self._consecutive_connection_failures >= self._circuit_breaker_threshold:
+                self._circuit_open_until = time.monotonic() + self._circuit_breaker_timeout_seconds
+
+    def _reset_connection_failures(self) -> None:
+        """Reset circuit-breaker counters after successful connection acquisition."""
+        with self._circuit_lock:
+            self._consecutive_connection_failures = 0
+            self._circuit_open_until = 0.0
+
+    def _is_circuit_breaker_open(self) -> bool:
+        """Return True when the connection circuit breaker is currently open."""
+        with self._circuit_lock:
+            return time.monotonic() < self._circuit_open_until
 
     def init_schema(self) -> None:
         """
@@ -940,24 +1059,14 @@ class StorageLayer:
             path_bytes = self._encode_path(path)
             level = len(path)
 
-            # Check if node already exists before inserting
             cur.execute(
                 """
-                SELECT 1 FROM smt_nodes
-                WHERE shard_id = %s AND level = %s AND index = %s
+                INSERT INTO smt_nodes (shard_id, level, index, hash, ts)
+                VALUES (%s, %s, %s, %s, %s)
+                ON CONFLICT (shard_id, level, index) DO NOTHING
                 """,
-                (shard_id, level, path_bytes),
+                (shard_id, level, path_bytes, hash_value, datetime.now(timezone.utc)),
             )
-
-            if cur.fetchone() is None:
-                # Node doesn't exist, insert it
-                cur.execute(
-                    """
-                    INSERT INTO smt_nodes (shard_id, level, index, hash, ts)
-                    VALUES (%s, %s, %s, %s, %s)
-                    """,
-                    (shard_id, level, path_bytes, hash_value, datetime.now(timezone.utc)),
-                )
 
     def _encode_path(self, path: tuple[int, ...]) -> bytes:
         """
