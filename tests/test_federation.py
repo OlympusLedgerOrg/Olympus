@@ -4,9 +4,12 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
+
 from protocol.federation import (
     FederationNode,
     FederationRegistry,
+    NodeSignature,
     append_quorum_certificate_to_ledger,
     build_federation_header_record,
     build_quorum_certificate,
@@ -21,6 +24,7 @@ from protocol.shards import (
     create_shard_header,
     create_superseding_signature,
     get_signing_key_from_seed,
+    sign_header,
     verify_header_with_rotation,
 )
 
@@ -48,6 +52,34 @@ def test_federation_registry_loads_static_nodes() -> None:
         jurisdiction="city-a",
         status="active",
     )
+
+
+def test_federation_registry_rejects_duplicate_pubkeys() -> None:
+    """Registry identity binding should reject pubkeys assigned to multiple node IDs."""
+    shared_pubkey = _test_signing_key(1).verify_key.encode().hex()
+    with pytest.raises(ValueError, match="pubkey"):
+        FederationRegistry.from_dict(
+            {
+                "nodes": [
+                    {
+                        "node_id": "olympus-node-1",
+                        "pubkey": shared_pubkey,
+                        "endpoint": "https://node1.olympus.org",
+                        "operator": "City Records Office",
+                        "jurisdiction": "city-a",
+                        "status": "active",
+                    },
+                    {
+                        "node_id": "olympus-node-2",
+                        "pubkey": shared_pubkey,
+                        "endpoint": "https://node2.olympus.org",
+                        "operator": "County Archive",
+                        "jurisdiction": "county-b",
+                        "status": "active",
+                    },
+                ]
+            }
+        )
 
 
 def test_federated_shard_header_reaches_quorum_with_two_of_three_signatures() -> None:
@@ -202,6 +234,9 @@ def test_verify_quorum_certificate_ignores_duplicate_acknowledgments() -> None:
         "shard_id": header["shard_id"],
         "header_hash": header["header_hash"],
         "timestamp": header["timestamp"],
+        "event_id": build_quorum_certificate(header, [signature_one, signature_two], registry)[
+            "event_id"
+        ],
         "quorum_threshold": registry.quorum_threshold(),
         "acknowledgments": [
             signature_one.to_dict(),
@@ -211,6 +246,40 @@ def test_verify_quorum_certificate_ignores_duplicate_acknowledgments() -> None:
     }
 
     assert verify_quorum_certificate(certificate, header, registry) is True
+
+
+def test_federation_signature_is_domain_separated_from_plain_header_signature() -> None:
+    """Plain shard-header signatures must not verify as federation votes."""
+    registry = FederationRegistry.from_file(REGISTRY_PATH)
+    header = create_shard_header(
+        shard_id="records/city-a",
+        root_hash=bytes.fromhex("bb" * 32),
+        timestamp="2026-03-09T00:00:05Z",
+    )
+    plain_signature = NodeSignature(
+        node_id="olympus-node-1",
+        signature=sign_header(header, _test_signing_key(1)),
+    )
+
+    assert verify_federated_header_signatures(header, [plain_signature], registry) == []
+
+
+def test_verify_quorum_certificate_rejects_event_id_replay() -> None:
+    """Event identifier mismatches must invalidate quorum certificates."""
+    registry = FederationRegistry.from_file(REGISTRY_PATH)
+    header = create_shard_header(
+        shard_id="records/city-a",
+        root_hash=bytes.fromhex("cc" * 32),
+        timestamp="2026-03-09T00:00:06Z",
+    )
+    signatures = [
+        sign_federated_header(header, "olympus-node-1", _test_signing_key(1)),
+        sign_federated_header(header, "olympus-node-2", _test_signing_key(2)),
+    ]
+    certificate = build_quorum_certificate(header, signatures, registry)
+    replayed_certificate = {**certificate, "event_id": "00" * 32}
+
+    assert verify_quorum_certificate(replayed_certificate, header, registry) is False
 
 
 def test_node_key_rotation_with_superseding_signature() -> None:
@@ -224,11 +293,7 @@ def test_node_key_rotation_with_superseding_signature() -> None:
         root_hash=bytes.fromhex("77" * 32),
         timestamp="2026-03-01T00:00:00Z",
     )
-    pre_compromise_sig = sign_federated_header(
-        pre_compromise_header,
-        "olympus-node-1",
-        old_key,
-    ).signature
+    pre_compromise_sig = sign_header(pre_compromise_header, old_key)
     assert (
         verify_header_with_rotation(pre_compromise_header, pre_compromise_sig, old_verify_key)
         is True
@@ -246,9 +311,7 @@ def test_node_key_rotation_with_superseding_signature() -> None:
         root_hash=bytes.fromhex("88" * 32),
         timestamp="2026-03-03T00:00:00Z",
     )
-    post_compromise_sig = sign_federated_header(
-        post_compromise_header, "olympus-node-1", old_key
-    ).signature
+    post_compromise_sig = sign_header(post_compromise_header, old_key)
     assert (
         verify_header_with_rotation(
             post_compromise_header,

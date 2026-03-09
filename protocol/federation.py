@@ -8,10 +8,15 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+import nacl.exceptions
 import nacl.signing
 
+from protocol.hashes import HASH_SEPARATOR, hash_bytes, shard_header_hash
 from protocol.ledger import Ledger, LedgerEntry
-from protocol.shards import sign_header, verify_header
+
+
+_FEDERATION_VOTE_DOMAIN = "OLY:FEDERATION-VOTE:V1"
+_HEADER_EXCLUDED_FIELDS: frozenset[str] = frozenset({"header_hash", "signature", "timestamp_token"})
 
 
 @dataclass(frozen=True)
@@ -76,6 +81,9 @@ class FederationRegistry:
         node_ids = {node.node_id for node in nodes}
         if len(node_ids) != len(nodes):
             raise ValueError("Federation registry node_id values must be unique")
+        pubkeys = {node.pubkey for node in nodes}
+        if len(pubkeys) != len(nodes):
+            raise ValueError("Federation registry pubkey values must be unique")
 
         return cls(nodes=nodes)
 
@@ -127,7 +135,46 @@ def sign_federated_header(
     signing_key: nacl.signing.SigningKey,
 ) -> NodeSignature:
     """Sign a shard header on behalf of a federation node."""
-    return NodeSignature(node_id=node_id, signature=sign_header(header, signing_key))
+    vote_hash = hash_bytes(_federation_vote_payload(header, node_id))
+    signature = signing_key.sign(vote_hash).signature.hex()
+    return NodeSignature(node_id=node_id, signature=signature)
+
+
+def _federation_vote_event_id(header: dict[str, Any]) -> str:
+    """Return the deterministic federation vote event identifier for a shard header."""
+    payload = HASH_SEPARATOR.join(
+        [
+            str(header["shard_id"]),
+            str(header["header_hash"]),
+            str(header["timestamp"]),
+        ]
+    ).encode("utf-8")
+    return hash_bytes(payload).hex()
+
+
+def _federation_vote_payload(header: dict[str, Any], node_id: str) -> bytes:
+    """Build domain-separated bytes for federation vote signing and verification."""
+    event_id = _federation_vote_event_id(header)
+    payload = HASH_SEPARATOR.join(
+        [
+            _FEDERATION_VOTE_DOMAIN,
+            str(node_id),
+            str(header["shard_id"]),
+            str(header["header_hash"]),
+            str(header["timestamp"]),
+            event_id,
+        ]
+    )
+    return payload.encode("utf-8")
+
+
+def _header_hash_matches_commitment(header: dict[str, Any]) -> bool:
+    """Return whether the provided header_hash matches committed shard header fields."""
+    if "header_hash" not in header:
+        return False
+    header_without_hash = {k: v for k, v in header.items() if k not in _HEADER_EXCLUDED_FIELDS}
+    expected_hash = shard_header_hash(header_without_hash).hex()
+    return str(header.get("header_hash")) == expected_hash
 
 
 def verify_federated_header_signatures(
@@ -136,6 +183,8 @@ def verify_federated_header_signatures(
     registry: FederationRegistry,
 ) -> list[NodeSignature]:
     """Return the subset of unique, valid node signatures for a shard header."""
+    if not _header_hash_matches_commitment(header):
+        return []
     valid_signatures: list[NodeSignature] = []
     seen_nodes: set[str] = set()
 
@@ -148,9 +197,13 @@ def verify_federated_header_signatures(
             continue
         if not node.active:
             continue
-        if verify_header(header, signature.signature, node.verify_key()):
+        try:
+            vote_hash = hash_bytes(_federation_vote_payload(header, signature.node_id))
+            node.verify_key().verify(vote_hash, bytes.fromhex(signature.signature))
             valid_signatures.append(signature)
             seen_nodes.add(signature.node_id)
+        except (ValueError, nacl.exceptions.BadSignatureError):
+            continue
 
     return valid_signatures
 
@@ -192,6 +245,7 @@ def build_quorum_certificate(
         "shard_id": str(header["shard_id"]),
         "header_hash": str(header["header_hash"]),
         "timestamp": str(header["timestamp"]),
+        "event_id": _federation_vote_event_id(header),
         "quorum_threshold": registry.quorum_threshold(),
         "acknowledgments": [
             signature.to_dict()
@@ -210,6 +264,7 @@ def verify_quorum_certificate(
         "shard_id",
         "header_hash",
         "timestamp",
+        "event_id",
         "quorum_threshold",
         "acknowledgments",
     }
@@ -220,6 +275,8 @@ def verify_quorum_certificate(
     if certificate["header_hash"] != header.get("header_hash"):
         return False
     if certificate["timestamp"] != header.get("timestamp"):
+        return False
+    if certificate["event_id"] != _federation_vote_event_id(header):
         return False
     if int(certificate["quorum_threshold"]) != registry.quorum_threshold():
         return False

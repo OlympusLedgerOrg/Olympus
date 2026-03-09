@@ -152,6 +152,7 @@ def test_ledger_entry_hash_includes_federation_quorum_certificate_when_present()
         "shard_id": "records/city-a",
         "header_hash": "ab" * 32,
         "timestamp": "2026-03-09T00:00:00Z",
+        "event_id": "ef" * 32,
         "quorum_threshold": 2,
         "acknowledgments": [{"node_id": "olympus-node-1", "signature": "cd" * 64}],
     }
@@ -183,6 +184,7 @@ def test_ledger_canonicalizes_quorum_certificate_acknowledgment_order_before_has
         "shard_id": "records/city-a",
         "header_hash": "ab" * 32,
         "timestamp": "2026-03-09T00:00:00Z",
+        "event_id": "ef" * 32,
         "quorum_threshold": 2,
         "acknowledgments": [
             {"node_id": "olympus-node-2", "signature": "ef" * 64},
