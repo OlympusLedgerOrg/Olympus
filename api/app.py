@@ -40,6 +40,7 @@ from pydantic import BaseModel
 
 from api.ingest import router as ingest_router
 from protocol.canonical_json import canonical_json_encode
+from protocol.telemetry import opentelemetry_available, prometheus_available, record_smt_divergence
 
 
 # Type for lazy-loaded storage layer
@@ -695,5 +696,86 @@ async def health() -> dict[str, Any]:
             "/ingest/records/{proof_id}/proof",
             "/ingest/records/hash/{content_hash}/verify",
             "/ingest/commit",
+            "/metrics",
         ],
+    }
+
+
+# Prometheus metrics endpoint
+@app.get("/metrics")
+async def metrics() -> Any:
+    """
+    Prometheus metrics endpoint.
+
+    Returns all registered Olympus metrics in Prometheus text exposition
+    format (``Content-Type: text/plain; version=0.0.4``).
+
+    Metrics exposed:
+    - ``olympus_proof_generation_seconds`` — histogram of proof latency by operation.
+    - ``olympus_ledger_height`` — current ledger height per shard.
+    - ``olympus_smt_root_divergence_total`` — counter of SMT root divergence events.
+    - ``olympus_ingest_operations_total`` — counter of ingest outcomes.
+
+    Returns HTTP 503 if the ``prometheus-client`` library is not installed.
+    """
+    if not prometheus_available():
+        raise HTTPException(
+            status_code=503,
+            detail=(
+                "prometheus-client is not installed. "
+                "Install it with: pip install prometheus-client"
+            ),
+        )
+
+    import prometheus_client
+    from starlette.responses import Response
+
+    data = prometheus_client.generate_latest()
+    return Response(
+        content=data,
+        media_type=prometheus_client.CONTENT_TYPE_LATEST,
+    )
+
+
+# SMT divergence alert endpoint (used by inter-node health checks)
+@app.post("/shards/{shard_id}/alert/smt-divergence")
+async def alert_smt_divergence(
+    shard_id: str,
+    local_root: str = Query(..., description="Hex-encoded local SMT root"),
+    remote_root: str = Query(..., description="Hex-encoded remote SMT root"),
+    remote_node: str = Query(..., description="Remote node identifier (URL or node ID)"),
+) -> dict[str, Any]:
+    """
+    Record an SMT root divergence event between this node and a remote peer.
+
+    This endpoint is called by inter-node health-check processes when they
+    detect that the SMT root for a shard differs between nodes.  It increments
+    the ``olympus_smt_root_divergence_total`` Prometheus counter and emits a
+    structured warning log so that alerting rules can fire.
+
+    Args:
+        shard_id:    The shard whose SMT root diverged.
+        local_root:  Hex-encoded SMT root computed on this node.
+        remote_root: Hex-encoded SMT root reported by the remote peer.
+        remote_node: Identifier of the remote peer.
+
+    Returns:
+        Confirmation that the divergence event was recorded.
+    """
+    record_smt_divergence(
+        shard_id=shard_id,
+        local_root=local_root,
+        remote_root=remote_root,
+        remote_node=remote_node,
+    )
+    return {
+        "recorded": True,
+        "shard_id": shard_id,
+        "local_root": local_root,
+        "remote_root": remote_root,
+        "remote_node": remote_node,
+        "observability": {
+            "opentelemetry": opentelemetry_available(),
+            "prometheus": prometheus_available(),
+        },
     }

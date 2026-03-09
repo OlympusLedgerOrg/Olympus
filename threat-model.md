@@ -98,6 +98,58 @@ Document → Canonicalize → Hash → Merkle Tree → Signed Header → Hash-Ch
 
 ---
 
+## Mitigations and Evidence
+
+The table below maps each threat to the concrete mitigation implemented in this
+repository, with links to the relevant source evidence.
+
+### T1 — Silent After-the-Fact Modification
+
+| Property | Mitigation | Evidence |
+|----------|-----------|---------|
+| Preimage resistance | BLAKE3 hash; changing any byte produces a different hash | [`protocol/hashes.py`](protocol/hashes.py) — `hash_bytes()` |
+| Domain separation | Leaf / node / entry prefixes prevent cross-context collisions | [`protocol/hashes.py`](protocol/hashes.py) — `LEAF_PREFIX`, `NODE_PREFIX`, `ENTRY_PREFIX` |
+| Merkle commitment | Single root commits all document parts; inclusion proof verifiable offline | [`protocol/merkle.py`](protocol/merkle.py) — `MerkleTree`, `verify_proof()` |
+| Canonicalization | Deterministic byte sequence from any semantically equivalent input | [`protocol/canonical.py`](protocol/canonical.py), [`protocol/canonicalizer.py`](protocol/canonicalizer.py) |
+| Cross-language test vectors | Canonicalization hash parity verified in Python, Go, JS, Rust | [`verifiers/test_vectors/canonicalizer_vectors.tsv`](verifiers/test_vectors/canonicalizer_vectors.tsv) |
+
+### T2 — Retroactive Deletion or Reordering
+
+| Property | Mitigation | Evidence |
+|----------|-----------|---------|
+| Hash-chained entries | Each `LedgerEntry.prev_entry_hash` binds to its predecessor | [`protocol/ledger.py`](protocol/ledger.py) — `LedgerEntry`, `Ledger.append()` |
+| Chain verification | `verify_chain()` detects any gap or reordering | [`protocol/ledger.py`](protocol/ledger.py) — `Ledger.verify_chain()` |
+| Append-only DB schema | No `UPDATE`/`DELETE` paths exist in the storage layer; PK enforces ordering | [`storage/postgres.py`](storage/postgres.py), [`migrations/001_init_schema.sql`](migrations/001_init_schema.sql) |
+| SMT root divergence alert | Prometheus counter fires when replicas compute different roots | [`protocol/telemetry.py`](protocol/telemetry.py) — `smt_divergence_total` |
+
+### T3 — Forged Audit Proofs
+
+| Property | Mitigation | Evidence |
+|----------|-----------|---------|
+| Ed25519 shard header signature | Batch root signed before ledger append; verifiable with public key | [`protocol/shards.py`](protocol/shards.py) |
+| Federation quorum certificate | Optional M-of-N quorum hash commits to multi-party agreement | [`protocol/federation.py`](protocol/federation.py), [`protocol/ledger.py`](protocol/ledger.py) |
+| RFC 3161 timestamp token | SHA-256(BLAKE3 root) submitted to TSA; token stored alongside header | [`protocol/rfc3161.py`](protocol/rfc3161.py) |
+
+### T4 — Over-Redaction or Secret Redaction
+
+| Property | Mitigation | Evidence |
+|----------|-----------|---------|
+| Redaction commitment | Document parts hashed individually into Merkle tree before any release | [`protocol/redaction.py`](protocol/redaction.py) — `RedactionProtocol.commit_document()` |
+| Redaction proof binding | Revealed leaves verified against original committed root | [`protocol/redaction.py`](protocol/redaction.py) — `verify_redaction_proof()` |
+| Semantic equivalence | Canonicalization ensures whitespace / formatting changes do not mask content | [`protocol/canonical.py`](protocol/canonical.py) — `normalize_whitespace()` |
+
+### T5 — Infrastructure / Operational Attacks
+
+| Property | Mitigation | Evidence |
+|----------|-----------|---------|
+| DB connection resilience | Connection pool with exponential-backoff retry + circuit breaker | [`storage/postgres.py`](storage/postgres.py) — `StorageLayer._get_connection()` |
+| Supply-chain integrity | SBOM (CycloneDX) + `pip-audit` on every CI run | [`.github/workflows/ci.yml`](.github/workflows/ci.yml) — `supply-chain` job |
+| Static security analysis | Bandit scan across all first-party code | [`.github/workflows/ci.yml`](.github/workflows/ci.yml) — `lint` job |
+| CodeQL extended queries | Semantic vulnerability patterns detected in CI | [`.github/workflows/codeql.yml`](.github/workflows/codeql.yml) |
+| Observability / alerting | OpenTelemetry traces + Prometheus metrics expose anomalies in real time | [`protocol/telemetry.py`](protocol/telemetry.py) |
+
+---
+
 ## Summary
 
 Olympus is a **tamper-evident audit trail** for public records.  It cannot
