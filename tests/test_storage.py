@@ -793,3 +793,64 @@ def test_smt_nodes_reject_delete(storage, signing_key):
                 """,
                 (shard_id,),
             )
+
+
+def test_verify_state_replay_matches_headers_and_ledger(storage, signing_key):
+    """Full replay should reproduce every persisted shard root."""
+    shard_id = f"test_verify_state_replay_{datetime.now(timezone.utc).timestamp()}"
+
+    values = [hash_bytes(b"alpha"), hash_bytes(b"beta"), hash_bytes(b"gamma")]
+    for idx, value_hash in enumerate(values, start=1):
+        storage.append_record(
+            shard_id=shard_id,
+            record_type="document",
+            record_id=f"doc{idx}",
+            version=1,
+            value_hash=value_hash,
+            signing_key=signing_key,
+        )
+
+    assert storage.verify_state_replay(shard_id) is True
+
+
+def test_verify_state_replay_detects_header_root_divergence(storage, signing_key):
+    """Replay must fail if a persisted root deviates from recomputed SMT state."""
+    shard_id = f"test_verify_state_replay_detects_divergence_{datetime.now(timezone.utc).timestamp()}"
+
+    storage.append_record(
+        shard_id=shard_id,
+        record_type="document",
+        record_id="doc1",
+        version=1,
+        value_hash=hash_bytes(b"value 1"),
+        signing_key=signing_key,
+    )
+    storage.append_record(
+        shard_id=shard_id,
+        record_type="document",
+        record_id="doc2",
+        version=1,
+        value_hash=hash_bytes(b"value 2"),
+        signing_key=signing_key,
+    )
+
+    # Tamper with the latest shard header root to simulate a divergence
+    with storage._get_connection() as conn, conn.cursor() as cur:
+        cur.execute(
+            """
+            UPDATE shard_headers
+            SET root = %s
+            WHERE shard_id = %s AND seq = (
+                SELECT MAX(seq) FROM shard_headers WHERE shard_id = %s
+            )
+            """,
+            (b"\x00" * 32, shard_id, shard_id),
+        )
+        conn.commit()
+
+    with pytest.raises(ValueError, match="root mismatch"):
+        storage.verify_state_replay(shard_id)
+
+    # get_latest_header should also reject the corrupted state
+    with pytest.raises(ValueError, match="Computed root"):
+        storage.get_latest_header(shard_id)
