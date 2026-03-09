@@ -176,7 +176,10 @@ class FederationRegistry:
         rotated_at: str,
     ) -> FederationRegistry:
         """Return a new registry with one node key rotated while preserving history."""
-        _parse_timestamp(rotated_at)
+        try:
+            _parse_timestamp(rotated_at)
+        except ValueError as exc:
+            raise ValueError(f"Invalid rotation timestamp: {rotated_at}") from exc
         updated_nodes: list[FederationNode] = []
         found = False
         for node in self.nodes:
@@ -204,7 +207,7 @@ class FederationRegistry:
 
 
 def _parse_timestamp(timestamp: str) -> datetime:
-    """Parse an ISO 8601 timestamp that may use a ``Z`` suffix."""
+    """Parse an ISO 8601 timestamp that may use a ``Z`` suffix as timezone-aware datetime."""
     return datetime.fromisoformat(timestamp.replace("Z", "+00:00"))
 
 
