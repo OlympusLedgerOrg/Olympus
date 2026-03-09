@@ -1,0 +1,29 @@
+name: Dependabot Review Gate
+
+on:
+  pull_request_target:
+    types: [opened, synchronize, reopened, ready_for_review]
+
+jobs:
+  require-human-approval:
+    if: github.actor == 'dependabot[bot]'
+    runs-on: ubuntu-latest
+    permissions:
+      pull-requests: read
+    steps:
+      - name: Require at least one human approval
+        uses: actions/github-script@v8
+        with:
+          script: |
+            const { owner, repo } = context.repo;
+            const pull_number = context.payload.pull_request.number;
+            const reviews = await github.paginate(
+              github.rest.pulls.listReviews,
+              { owner, repo, pull_number, per_page: 100 }
+            );
+            const approved = reviews.some((review) =>
+              review.state === "APPROVED" && review.user?.login !== "dependabot[bot]"
+            );
+            if (!approved) {
+              core.setFailed("Dependabot PR requires at least one non-bot approving review before merge.");
+            }

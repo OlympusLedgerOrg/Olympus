@@ -3,13 +3,21 @@
 import pytest
 from fastapi.testclient import TestClient
 
+from api import ingest as ingest_api
 from api.app import app
 
 
 @pytest.fixture()
 def client():
     """Create a test client for the API."""
-    return TestClient(app)
+    ingest_api._reset_ingest_state_for_tests()
+    ingest_api._register_api_key_for_tests(
+        api_key="test-key",
+        key_id="test-key-id",
+        scopes={"ingest", "commit", "verify"},
+        expires_at="2099-01-01T00:00:00Z",
+    )
+    return TestClient(app, headers={"X-API-Key": "test-key"})
 
 
 # ---------------------------------------------------------------------------
@@ -288,3 +296,97 @@ class TestArtifactCommit:
         assert resp.status_code == 200
         data = resp.json()
         assert "/ingest/commit" in data["endpoints"]
+
+
+class TestAuthAndRateLimiting:
+    def test_ingest_requires_api_key(self):
+        ingest_api._reset_ingest_state_for_tests()
+        unauth_client = TestClient(app)
+        payload = {
+            "records": [
+                {
+                    "shard_id": "shard-auth",
+                    "record_type": "document",
+                    "record_id": "doc-auth",
+                    "version": 1,
+                    "content": {"secure": True},
+                }
+            ]
+        }
+        resp = unauth_client.post("/ingest/records", json=payload)
+        assert resp.status_code == 401
+
+    def test_scope_enforced_for_verify(self, client: TestClient):
+        ingest_api._reset_ingest_state_for_tests()
+        ingest_api._register_api_key_for_tests(
+            api_key="ingest-only",
+            key_id="ingest-only-id",
+            scopes={"ingest"},
+            expires_at="2099-01-01T00:00:00Z",
+        )
+        scoped_client = TestClient(app, headers={"X-API-Key": "ingest-only"})
+
+        payload = {
+            "records": [
+                {
+                    "shard_id": "shard-scope",
+                    "record_type": "document",
+                    "record_id": "doc-scope",
+                    "version": 1,
+                    "content": {"scope": "test"},
+                }
+            ]
+        }
+        ingest_resp = scoped_client.post("/ingest/records", json=payload)
+        content_hash = ingest_resp.json()["results"][0]["content_hash"]
+        verify_resp = scoped_client.get(f"/ingest/records/hash/{content_hash}/verify")
+        assert verify_resp.status_code == 403
+
+    def test_expired_key_rejected(self):
+        ingest_api._reset_ingest_state_for_tests()
+        ingest_api._register_api_key_for_tests(
+            api_key="expired-key",
+            key_id="expired-id",
+            scopes={"ingest", "commit", "verify"},
+            expires_at="2000-01-01T00:00:00Z",
+        )
+        expired_client = TestClient(app, headers={"X-API-Key": "expired-key"})
+        payload = {
+            "records": [
+                {
+                    "shard_id": "shard-exp",
+                    "record_type": "document",
+                    "record_id": "doc-exp",
+                    "version": 1,
+                    "content": {"expired": True},
+                }
+            ]
+        }
+        resp = expired_client.post("/ingest/records", json=payload)
+        assert resp.status_code == 401
+
+    def test_rate_limit_enforced_per_key(self):
+        ingest_api._reset_ingest_state_for_tests()
+        ingest_api._register_api_key_for_tests(
+            api_key="rate-key",
+            key_id="rate-id",
+            scopes={"ingest", "commit", "verify"},
+            expires_at="2099-01-01T00:00:00Z",
+        )
+        ingest_api._set_rate_limit_for_tests("ingest", capacity=1.0, refill_rate_per_second=0.0)
+        rl_client = TestClient(app, headers={"X-API-Key": "rate-key"})
+        payload = {
+            "records": [
+                {
+                    "shard_id": "shard-rl",
+                    "record_type": "document",
+                    "record_id": "doc-rl",
+                    "version": 1,
+                    "content": {"rate": 1},
+                }
+            ]
+        }
+        first = rl_client.post("/ingest/records", json=payload)
+        second = rl_client.post("/ingest/records", json=payload)
+        assert first.status_code == 200
+        assert second.status_code == 429

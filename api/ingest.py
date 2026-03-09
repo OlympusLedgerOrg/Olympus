@@ -15,11 +15,16 @@ All write operations are append-only and maintain ledger chain integrity.
 
 from __future__ import annotations
 
+import json
 import logging
+import os
 import uuid
+from dataclasses import dataclass
+from datetime import UTC, datetime
+from time import monotonic
 from typing import Any
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, Field
 
 from protocol.canonical import CANONICAL_VERSION, canonicalize_document, document_to_bytes
@@ -114,6 +119,238 @@ _content_index: dict[str, str] = {}
 # Shared ledger for write path
 _write_ledger = Ledger()
 
+# API key hash -> key record
+_api_key_store: dict[str, ApiKeyRecord] = {}
+_api_keys_loaded = False
+
+
+@dataclass
+class ApiKeyRecord:
+    """Hashed API key record with scoped permissions and expiry."""
+
+    key_id: str
+    key_hash: str
+    scopes: set[str]
+    expires_at: datetime
+
+
+@dataclass
+class TokenBucket:
+    """Simple token-bucket rate limiter state."""
+
+    capacity: float
+    refill_rate_per_second: float
+    tokens: float
+    last_refill_ts: float
+
+    def consume(self, tokens: float = 1.0) -> bool:
+        """Consume tokens if available."""
+        now = monotonic()
+        elapsed = max(0.0, now - self.last_refill_ts)
+        self.tokens = min(self.capacity, self.tokens + elapsed * self.refill_rate_per_second)
+        self.last_refill_ts = now
+        if self.tokens < tokens:
+            return False
+        self.tokens -= tokens
+        return True
+
+
+_rate_limit_policy: dict[str, tuple[float, float]] = {
+    "ingest": (60.0, 1.0),
+    "commit": (30.0, 0.5),
+    "verify": (120.0, 2.0),
+}
+_rate_limit_key_buckets: dict[str, dict[str, TokenBucket]] = {
+    "ingest": {},
+    "commit": {},
+    "verify": {},
+}
+_rate_limit_ip_buckets: dict[str, dict[str, TokenBucket]] = {
+    "ingest": {},
+    "commit": {},
+    "verify": {},
+}
+
+
+def _parse_timestamp(raw: str) -> datetime:
+    """Parse ISO-8601 timestamp with optional Z suffix."""
+    normalized = raw.strip()
+    if normalized.endswith("Z"):
+        normalized = normalized[:-1] + "+00:00"
+    parsed = datetime.fromisoformat(normalized)
+    if parsed.tzinfo is None:
+        raise ValueError("expires_at must be timezone-aware")
+    return parsed.astimezone(UTC)
+
+
+def _hash_api_key(api_key: str) -> str:
+    """Hash API key material for at-rest storage."""
+    return hash_bytes(api_key.encode("utf-8")).hex()
+
+
+def _append_security_audit_event(event: str, details: dict[str, Any]) -> None:
+    """Append a security audit event to the append-only ledger."""
+    payload = {
+        "event": event,
+        "timestamp": current_timestamp(),
+        "details": details,
+    }
+    payload_hash = hash_bytes(document_to_bytes(canonicalize_document(payload))).hex()
+    _write_ledger.append(
+        record_hash=payload_hash,
+        shard_id="audit/security",
+        shard_root=payload_hash,
+        canonicalization=canonicalization_provenance("application/json", CANONICAL_VERSION),
+    )
+
+
+def _load_api_keys_from_env() -> None:
+    """Load API keys once from OLYMPUS_API_KEYS_JSON."""
+    global _api_keys_loaded
+    if _api_keys_loaded:
+        return
+    _api_keys_loaded = True
+    try:
+        raw = json.loads(os.environ.get("OLYMPUS_API_KEYS_JSON", "[]"))
+    except json.JSONDecodeError as exc:
+        raise ValueError("OLYMPUS_API_KEYS_JSON must be valid JSON") from exc
+    for item in raw:
+        _register_api_key_for_tests(
+            api_key=item["api_key"],
+            key_id=item.get("key_id", "default"),
+            scopes=set(item.get("scopes", ["ingest", "commit", "verify"])),
+            expires_at=item.get("expires_at", "2099-01-01T00:00:00Z"),
+        )
+
+
+def _register_api_key_for_tests(
+    api_key: str, key_id: str, scopes: set[str], expires_at: str
+) -> None:  # pragma: no cover - test utility
+    """Register hashed API key (used by env bootstrap and tests)."""
+    key_hash = _hash_api_key(api_key)
+    _api_key_store[key_hash] = ApiKeyRecord(
+        key_id=key_id,
+        key_hash=key_hash,
+        scopes=scopes,
+        expires_at=_parse_timestamp(expires_at),
+    )
+    _append_security_audit_event(
+        "api_key_registered",
+        {"key_id": key_id, "scopes": sorted(scopes), "expires_at": expires_at},
+    )
+
+
+def _reset_ingest_state_for_tests() -> None:  # pragma: no cover - test utility
+    """Reset in-memory ingestion, auth, and rate-limit state."""
+    global _write_ledger, _api_keys_loaded
+    _ingestion_store.clear()
+    _content_index.clear()
+    _api_key_store.clear()
+    _api_keys_loaded = False
+    for action in _rate_limit_key_buckets:
+        _rate_limit_key_buckets[action].clear()
+        _rate_limit_ip_buckets[action].clear()
+    _write_ledger = Ledger()
+
+
+def _set_rate_limit_for_tests(
+    action: str, capacity: float, refill_rate_per_second: float
+) -> None:  # pragma: no cover - test utility
+    """Override rate-limit policy for tests."""
+    _rate_limit_policy[action] = (capacity, refill_rate_per_second)
+    _rate_limit_key_buckets[action].clear()
+    _rate_limit_ip_buckets[action].clear()
+
+
+def _client_ip(request: Request) -> str:
+    """Resolve the caller IP address for abuse controls."""
+    host = request.client.host if request.client else None
+    return host or "unknown"
+
+
+def _extract_api_key(request: Request, body_api_key: str | None = None) -> str:
+    """Extract API key from header, bearer token, or request body fallback."""
+    header_key = request.headers.get("x-api-key")
+    if header_key:
+        return header_key
+    authz = request.headers.get("authorization", "")
+    if authz.lower().startswith("bearer "):
+        return authz[7:].strip()
+    if body_api_key:
+        return body_api_key
+    raise HTTPException(status_code=401, detail="API key is required")
+
+
+def _get_bucket(buckets: dict[str, TokenBucket], subject: str, action: str) -> TokenBucket:
+    """Get/create a token bucket for the subject and action."""
+    existing = buckets.get(subject)
+    if existing is not None:
+        return existing
+    capacity, refill = _rate_limit_policy[action]
+    created = TokenBucket(
+        capacity=capacity,
+        refill_rate_per_second=refill,
+        tokens=capacity,
+        last_refill_ts=monotonic(),
+    )
+    buckets[subject] = created
+    return created
+
+
+def _authorize_and_rate_limit(
+    request: Request, action: str, body_api_key: str | None = None
+) -> ApiKeyRecord:
+    """Authenticate API key, enforce scope/expiry, and apply token buckets."""
+    _load_api_keys_from_env()
+    api_key = _extract_api_key(request, body_api_key=body_api_key)
+    key_hash = _hash_api_key(api_key)
+    record = _api_key_store.get(key_hash)
+    client_ip = _client_ip(request)
+    if record is None:
+        _append_security_audit_event("api_key_invalid", {"client_ip": client_ip, "action": action})
+        raise HTTPException(status_code=401, detail="Invalid API key")
+    if datetime.now(UTC) >= record.expires_at:
+        _append_security_audit_event(
+            "api_key_expired", {"key_id": record.key_id, "client_ip": client_ip, "action": action}
+        )
+        raise HTTPException(status_code=401, detail="API key expired")
+    if action not in record.scopes:
+        _append_security_audit_event(
+            "api_key_scope_denied",
+            {"key_id": record.key_id, "client_ip": client_ip, "action": action},
+        )
+        raise HTTPException(status_code=403, detail=f"API key lacks required scope: {action}")
+
+    key_bucket = _get_bucket(_rate_limit_key_buckets[action], record.key_id, action)
+    if not key_bucket.consume():
+        logger.warning(
+            "rate_limit_hit",
+            extra={"dimension": "api_key", "key_id": record.key_id, "action": action},
+        )
+        _append_security_audit_event(
+            "rate_limit_hit",
+            {
+                "dimension": "api_key",
+                "key_id": record.key_id,
+                "client_ip": client_ip,
+                "action": action,
+            },
+        )
+        raise HTTPException(status_code=429, detail="Rate limit exceeded for API key")
+
+    ip_bucket = _get_bucket(_rate_limit_ip_buckets[action], client_ip, action)
+    if not ip_bucket.consume():
+        logger.warning(
+            "rate_limit_hit",
+            extra={"dimension": "ip", "client_ip": client_ip, "action": action},
+        )
+        _append_security_audit_event(
+            "rate_limit_hit",
+            {"dimension": "ip", "key_id": record.key_id, "client_ip": client_ip, "action": action},
+        )
+        raise HTTPException(status_code=429, detail="Rate limit exceeded for IP address")
+    return record
+
 
 def _parse_content_hash(content_hash: str) -> bytes:
     """Validate and decode a hex-encoded BLAKE3 content hash."""
@@ -147,7 +384,7 @@ def _merkle_proof_from_store(data: dict[str, Any]) -> MerkleProof:
 
 
 @router.post("/records", response_model=BatchIngestionResponse)
-async def ingest_batch(batch: BatchIngestionRequest) -> BatchIngestionResponse:
+async def ingest_batch(batch: BatchIngestionRequest, request: Request) -> BatchIngestionResponse:
     """
     Atomically ingest a batch of records.
 
@@ -302,7 +539,9 @@ async def get_ingestion_proof(proof_id: str) -> IngestionProofResponse:
 
 
 @router.get("/records/hash/{content_hash}/verify", response_model=HashVerificationResponse)
-async def verify_ingested_content_hash(content_hash: str) -> HashVerificationResponse:
+async def verify_ingested_content_hash(
+    content_hash: str, request: Request
+) -> HashVerificationResponse:
     """
     Verify that a committed BLAKE3 content hash exists in the ingestion store.
 
@@ -351,7 +590,9 @@ class ArtifactCommitResponse(BaseModel):
 
 
 @router.post("/commit", response_model=ArtifactCommitResponse)
-async def commit_artifact(request: ArtifactCommitRequest) -> ArtifactCommitResponse:
+async def commit_artifact(
+    request: ArtifactCommitRequest, http_request: Request
+) -> ArtifactCommitResponse:
     """
     Commit a pre-computed artifact hash to the Olympus ledger.
 

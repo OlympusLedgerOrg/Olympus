@@ -37,7 +37,8 @@ jobs:
     - name: Install dependencies
       run: |
         python -m pip install --upgrade pip
-        pip install -e ".[dev]"
+        pip install --require-hashes -r requirements-dev.txt
+        pip install -e . --no-deps
 
     - name: Verify dependency consistency
       run: pip check
@@ -77,7 +78,8 @@ jobs:
     - name: Install dependencies
       run: |
         python -m pip install --upgrade pip
-        pip install -e ".[dev]"
+        pip install --require-hashes -r requirements-dev.txt
+        pip install -e . --no-deps
 
     - name: MyPy type check
       run: mypy protocol/ storage/ api/
@@ -105,7 +107,8 @@ jobs:
     - name: Install dependencies
       run: |
         python -m pip install --upgrade pip
-        pip install -e ".[dev]"
+        pip install --require-hashes -r requirements-dev.txt
+        pip install -e . --no-deps
 
     - name: Verify dependency consistency
       run: pip check
@@ -172,7 +175,8 @@ jobs:
     - name: Install dependencies
       run: |
         python -m pip install --upgrade pip
-        pip install -e ".[dev]"
+        pip install --require-hashes -r requirements-dev.txt
+        pip install -e . --no-deps
 
     - name: Verify dependency consistency
       run: pip check
