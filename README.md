@@ -10,7 +10,7 @@ validating those primitives.
 Olympus follows a strict, auditable pipeline:
 
 ```text
-Ingest → Canonicalize → Hash → Commit → Prove → Replicate → Verify
+Ingest → Canonicalize → Hash → Commit → Prove → (Replicate, Phase 1+) → Verify
 ```
 
 - **Implemented in v1.0:** Ingest, Canonicalize, Hash, Commit, Prove, Verify
