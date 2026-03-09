@@ -10,8 +10,8 @@ from typing import Any
 
 import nacl.signing
 
+from protocol.hashes import event_id, federation_vote_hash
 from protocol.ledger import Ledger, LedgerEntry
-from protocol.shards import sign_header, verify_header
 
 
 @dataclass(frozen=True)
@@ -126,8 +126,41 @@ def sign_federated_header(
     node_id: str,
     signing_key: nacl.signing.SigningKey,
 ) -> NodeSignature:
-    """Sign a shard header on behalf of a federation node."""
-    return NodeSignature(node_id=node_id, signature=sign_header(header, signing_key))
+    """
+    Sign a shard header on behalf of a federation node.
+
+    Creates a federation vote signature that binds the signature to:
+    - The federation protocol domain
+    - The specific node making the vote (node_id)
+    - The shard being voted on (shard_id)
+    - The specific header commitment (header_hash)
+    - The timestamp of the event
+    - A unique event identifier derived from (shard_id, header_hash, timestamp)
+
+    This provides cryptographic proof that a specific federation node
+    acknowledged a specific shard header at a specific time.
+
+    Args:
+        header: Shard header dictionary with shard_id, header_hash, and timestamp
+        node_id: Federation node identifier (registry binding)
+        signing_key: Ed25519 signing key for the node
+
+    Returns:
+        NodeSignature containing the node_id and hex-encoded signature
+    """
+    shard_id = str(header["shard_id"])
+    header_hash = str(header["header_hash"])
+    timestamp = str(header["timestamp"])
+
+    # Compute event ID to bind signature to this specific event
+    event_id_hex = event_id(shard_id, header_hash, timestamp)
+
+    # Compute the federation vote hash with domain separation
+    vote_hash = federation_vote_hash(node_id, shard_id, header_hash, timestamp, event_id_hex)
+
+    # Sign the vote hash
+    signed = signing_key.sign(vote_hash)
+    return NodeSignature(node_id=node_id, signature=signed.signature.hex())
 
 
 def verify_federated_header_signatures(
@@ -135,9 +168,32 @@ def verify_federated_header_signatures(
     signatures: list[NodeSignature],
     registry: FederationRegistry,
 ) -> list[NodeSignature]:
-    """Return the subset of unique, valid node signatures for a shard header."""
+    """
+    Return the subset of unique, valid node signatures for a shard header.
+
+    Verifies each signature by:
+    1. Checking the node is in the registry and active
+    2. Computing the same event_id and vote hash used during signing
+    3. Verifying the Ed25519 signature over the vote hash
+
+    Args:
+        header: Shard header dictionary with shard_id, header_hash, and timestamp
+        signatures: List of NodeSignature objects to verify
+        registry: Federation registry for node lookup and key verification
+
+    Returns:
+        List of valid, unique NodeSignature objects
+    """
     valid_signatures: list[NodeSignature] = []
     seen_nodes: set[str] = set()
+
+    # Extract header fields needed for verification
+    shard_id = str(header["shard_id"])
+    header_hash = str(header["header_hash"])
+    timestamp = str(header["timestamp"])
+
+    # Compute event ID once for all signature verifications
+    event_id_hex = event_id(shard_id, header_hash, timestamp)
 
     for signature in signatures:
         if signature.node_id in seen_nodes:
@@ -148,9 +204,20 @@ def verify_federated_header_signatures(
             continue
         if not node.active:
             continue
-        if verify_header(header, signature.signature, node.verify_key()):
+
+        # Compute the vote hash this node should have signed
+        vote_hash = federation_vote_hash(
+            signature.node_id, shard_id, header_hash, timestamp, event_id_hex
+        )
+
+        # Verify the signature
+        try:
+            signature_bytes = bytes.fromhex(signature.signature)
+            node.verify_key().verify(vote_hash, signature_bytes)
             valid_signatures.append(signature)
             seen_nodes.add(signature.node_id)
+        except Exception:  # nosec B112
+            continue
 
     return valid_signatures
 

@@ -29,6 +29,8 @@ HDR_PREFIX = b"OLY:HDR:V1"
 FOREST_PREFIX = b"OLY:FOREST:V1"
 POLICY_PREFIX = b"OLY:POLICY:V1"
 LEDGER_PREFIX = b"OLY:LEDGER:V1"
+FEDERATION_PREFIX = b"OLY:FEDERATION:V1"
+EVENT_PREFIX = b"OLY:EVENT:V1"
 
 
 def blake3_hash(parts: list[bytes]) -> bytes:
@@ -180,3 +182,63 @@ def blake3_to_field_element(seed: bytes) -> str:
     big_int = int.from_bytes(digest, byteorder="big")
     field_element = big_int % SNARK_SCALAR_FIELD
     return str(field_element)
+
+
+def event_id(shard_id: str, header_hash: str, timestamp: str) -> str:
+    """
+    Compute a deterministic event ID for a shard header event.
+
+    The event ID binds a federation signature to a specific shard header
+    commitment using domain separation. It is computed as:
+        hash(EVENT_PREFIX || shard_id || "|" || header_hash || "|" || timestamp)
+
+    Args:
+        shard_id: Shard identifier
+        header_hash: Hex-encoded header hash
+        timestamp: ISO 8601 timestamp
+
+    Returns:
+        Hex-encoded event ID
+    """
+    event_data = HASH_SEPARATOR.join([shard_id, header_hash, timestamp])
+    return blake3_hash([EVENT_PREFIX, _SEP, event_data.encode("utf-8")]).hex()
+
+
+def federation_vote_hash(
+    node_id: str,
+    shard_id: str,
+    header_hash: str,
+    timestamp: str,
+    event_id_hex: str,
+) -> bytes:
+    """
+    Compute the hash that a federation node signs when voting on a shard header.
+
+    Federation votes sign a structured payload that binds the signature to:
+    - The federation protocol domain (FEDERATION_PREFIX)
+    - The specific node making the vote (node_id)
+    - The shard being voted on (shard_id)
+    - The specific header commitment (header_hash)
+    - The timestamp of the event (timestamp)
+    - The unique event identifier (event_id)
+
+    The hash is computed as:
+        hash(FEDERATION_PREFIX || domain || node_id || shard_id || header_hash || timestamp || event_id)
+
+    where domain is always "olympus.federation.v1" for the current protocol version.
+
+    Args:
+        node_id: Federation node identifier
+        shard_id: Shard identifier
+        header_hash: Hex-encoded header hash
+        timestamp: ISO 8601 timestamp
+        event_id_hex: Hex-encoded event ID
+
+    Returns:
+        32-byte hash to be signed by the federation node
+    """
+    domain = "olympus.federation.v1"
+    vote_data = HASH_SEPARATOR.join(
+        [domain, node_id, shard_id, header_hash, timestamp, event_id_hex]
+    )
+    return blake3_hash([FEDERATION_PREFIX, _SEP, vote_data.encode("utf-8")])

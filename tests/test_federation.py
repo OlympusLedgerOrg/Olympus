@@ -21,6 +21,7 @@ from protocol.shards import (
     create_shard_header,
     create_superseding_signature,
     get_signing_key_from_seed,
+    sign_header,
     verify_header_with_rotation,
 )
 
@@ -224,11 +225,7 @@ def test_node_key_rotation_with_superseding_signature() -> None:
         root_hash=bytes.fromhex("77" * 32),
         timestamp="2026-03-01T00:00:00Z",
     )
-    pre_compromise_sig = sign_federated_header(
-        pre_compromise_header,
-        "olympus-node-1",
-        old_key,
-    ).signature
+    pre_compromise_sig = sign_header(pre_compromise_header, old_key)
     assert (
         verify_header_with_rotation(pre_compromise_header, pre_compromise_sig, old_verify_key)
         is True
@@ -246,9 +243,7 @@ def test_node_key_rotation_with_superseding_signature() -> None:
         root_hash=bytes.fromhex("88" * 32),
         timestamp="2026-03-03T00:00:00Z",
     )
-    post_compromise_sig = sign_federated_header(
-        post_compromise_header, "olympus-node-1", old_key
-    ).signature
+    post_compromise_sig = sign_header(post_compromise_header, old_key)
     assert (
         verify_header_with_rotation(
             post_compromise_header,
