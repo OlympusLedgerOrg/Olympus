@@ -7,6 +7,7 @@ import pytest
 
 from protocol.hashes import hash_bytes
 from protocol.shards import (
+    canonical_header,
     create_key_revocation_record,
     create_shard_header,
     create_superseding_signature,
@@ -372,3 +373,56 @@ def test_rotation_record_to_event_creates_canonical_event():
 
     assert event.payload["event_type"] == "key_revocation"
     assert event.hash_hex
+
+
+def test_canonical_header_is_deterministic():
+    """canonical_header must produce identical bytes for identical input dicts."""
+    root_hash = hash_bytes(b"test root")
+    timestamp = "2024-01-01T00:00:00Z"
+    header = create_shard_header(shard_id="shard1", root_hash=root_hash, timestamp=timestamp)
+
+    assert canonical_header(header) == canonical_header(header)
+
+
+def test_canonical_header_sorts_keys():
+    """canonical_header must emit sorted keys regardless of insertion order."""
+    root_hash = hash_bytes(b"test root")
+    timestamp = "2024-01-01T00:00:00Z"
+    header_ab = {"previous_header_hash": "", "root_hash": root_hash.hex(),
+                 "shard_id": "shard1", "timestamp": timestamp}
+    header_ba = {"timestamp": timestamp, "shard_id": "shard1",
+                 "root_hash": root_hash.hex(), "previous_header_hash": ""}
+
+    assert canonical_header(header_ab) == canonical_header(header_ba)
+
+
+def test_canonical_header_excludes_post_commitment_fields():
+    """canonical_header must exclude header_hash, signature, and timestamp_token."""
+    root_hash = hash_bytes(b"test root")
+    timestamp = "2024-01-01T00:00:00Z"
+    header = create_shard_header(shard_id="shard1", root_hash=root_hash, timestamp=timestamp)
+
+    # header_hash is added by create_shard_header — it must not affect the bytes
+    header_with_extra = dict(header)
+    header_with_extra["signature"] = "deadbeef"
+    header_with_extra["timestamp_token"] = {"tst_hex": "00"}
+
+    assert canonical_header(header) == canonical_header(header_with_extra)
+
+
+def test_canonical_header_produces_valid_compact_json():
+    """canonical_header must produce compact JSON with sorted keys and no whitespace."""
+    import json
+
+    root_hash = hash_bytes(b"test root")
+    timestamp = "2024-01-01T00:00:00Z"
+    header = create_shard_header(shard_id="shard1", root_hash=root_hash, timestamp=timestamp)
+
+    cb = canonical_header(header)
+    # Must be valid JSON
+    parsed = json.loads(cb.decode("utf-8"))
+    # Keys must be sorted alphabetically
+    keys = list(parsed.keys())
+    assert keys == sorted(keys), "canonical_header keys must be sorted"
+    # Must use compact separators (no spaces)
+    assert b" " not in cb, "canonical_header must use compact separators (no spaces)"
