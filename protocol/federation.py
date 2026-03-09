@@ -188,14 +188,6 @@ def verify_federated_header_signatures(
     valid_signatures: list[NodeSignature] = []
     seen_nodes: set[str] = set()
 
-    # Extract header fields needed for verification
-    shard_id = str(header["shard_id"])
-    header_hash = str(header["header_hash"])
-    timestamp = str(header["timestamp"])
-
-    # Compute event ID once for all signature verifications
-    event_id_hex = event_id(shard_id, header_hash, timestamp)
-
     for signature in signatures:
         if signature.node_id in seen_nodes:
             continue

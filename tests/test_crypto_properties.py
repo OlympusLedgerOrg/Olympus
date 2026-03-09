@@ -116,6 +116,9 @@ def test_merkle_root_is_order_sensitive(leaves: list[bytes]):
 
     # Reverse the order
     reversed_leaves = list(reversed(leaves))
+    if reversed_leaves == leaves:
+        # Palindromic sequences reverse to themselves; no order change occurred.
+        return
     tree2 = MerkleTree(reversed_leaves)
     root2 = tree2.get_root()
 

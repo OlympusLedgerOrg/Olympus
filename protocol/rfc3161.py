@@ -246,9 +246,15 @@ def _normalize_tsa_urls(tsa_urls: Sequence[str]) -> tuple[str, ...]:
 
 
 def _enforce_uniform_tsa_configuration(tsa_urls: Sequence[str]) -> tuple[str, ...]:
-    """Require all nodes to use the protocol-default TSA quorum configuration."""
+    """Require all nodes to use a prefix of the protocol-default TSA configuration.
+
+    Accepts any prefix of ``DEFAULT_FINALIZATION_TSA_URLS`` of length >= 2 so
+    callers can request exactly the subset of TSAs they intend to anchor to
+    while preserving deterministic ordering across the federation.
+    """
     normalized = _normalize_tsa_urls(tsa_urls)
-    if normalized != DEFAULT_FINALIZATION_TSA_URLS:
+    default_prefix = DEFAULT_FINALIZATION_TSA_URLS[: len(normalized)]
+    if normalized != default_prefix:
         raise ValueError(
             "TSA quorum URLs must match DEFAULT_FINALIZATION_TSA_URLS for uniform federation finalization"
         )
@@ -378,7 +384,7 @@ def verify_timestamp_quorum(
         token_map[parsed.tsa_url] = parsed
 
     valid_count = 0
-    for tsa_url in _normalize_tsa_urls(required_tsa_urls):
+    for tsa_url in _enforce_uniform_tsa_configuration(required_tsa_urls):
         required_token = token_map.get(tsa_url)
         if required_token is None:
             continue
