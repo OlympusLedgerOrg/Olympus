@@ -23,6 +23,9 @@ class LedgerEntry:
     canonicalization: dict[str, Any]  # Canonicalization provenance for commitments
     prev_entry_hash: str  # Hex-encoded previous entry hash, empty string for genesis
     entry_hash: str  # Hex-encoded hash of this entry
+    federation_quorum_certificate: dict[str, Any] | None = (
+        None  # Optional signed federation quorum certificate
+    )
 
     def to_dict(self) -> dict[str, Any]:
         """Convert to dictionary."""
@@ -52,6 +55,7 @@ class Ledger:
         shard_id: str,
         shard_root: str,
         canonicalization: dict[str, Any],
+        federation_quorum_certificate: dict[str, Any] | None = None,
     ) -> LedgerEntry:
         """
         Append a new entry to the ledger.
@@ -61,6 +65,8 @@ class Ledger:
             shard_id: Identifier for the shard
             shard_root: Root hash of the shard
             canonicalization: Canonicalization provenance metadata for the commitment
+            federation_quorum_certificate: Optional signed federation quorum certificate
+                proving 2/3 federation agreement for the shard header
 
         Returns:
             The newly created entry
@@ -77,6 +83,8 @@ class Ledger:
             "canonicalization": canonicalization,
             "prev_entry_hash": prev_entry_hash,
         }
+        if federation_quorum_certificate is not None:
+            payload["federation_quorum_certificate"] = federation_quorum_certificate
 
         # Compute entry hash using LEDGER_PREFIX + canonical JSON
         entry_hash = blake3_hash([LEDGER_PREFIX, canonical_json_bytes(payload)]).hex()
@@ -87,6 +95,7 @@ class Ledger:
             shard_id=shard_id,
             shard_root=shard_root,
             canonicalization=canonicalization,
+            federation_quorum_certificate=federation_quorum_certificate,
             prev_entry_hash=prev_entry_hash,
             entry_hash=entry_hash,
         )
@@ -134,6 +143,8 @@ class Ledger:
                 "canonicalization": entry.canonicalization,
                 "prev_entry_hash": entry.prev_entry_hash,
             }
+            if entry.federation_quorum_certificate is not None:
+                payload["federation_quorum_certificate"] = entry.federation_quorum_certificate
             expected_hash = blake3_hash([LEDGER_PREFIX, canonical_json_bytes(payload)]).hex()
 
             if entry.entry_hash != expected_hash:

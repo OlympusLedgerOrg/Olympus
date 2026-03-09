@@ -7,12 +7,22 @@ from pathlib import Path
 from protocol.federation import (
     FederationNode,
     FederationRegistry,
+    append_quorum_certificate_to_ledger,
     build_federation_header_record,
+    build_quorum_certificate,
     has_federation_quorum,
     sign_federated_header,
     verify_federated_header_signatures,
+    verify_quorum_certificate,
 )
-from protocol.shards import create_shard_header, get_signing_key_from_seed
+from protocol.ledger import Ledger
+from protocol.shards import (
+    create_key_revocation_record,
+    create_shard_header,
+    create_superseding_signature,
+    get_signing_key_from_seed,
+    verify_header_with_rotation,
+)
 
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -94,3 +104,130 @@ def test_federated_quorum_rejects_invalid_or_duplicate_signatures() -> None:
     valid_signatures = verify_federated_header_signatures(header, signatures, registry)
     assert len(valid_signatures) == 1
     assert has_federation_quorum(header, signatures, registry) is False
+
+
+def test_byzantine_simulation_partition_accepts_two_of_three_quorum() -> None:
+    """A partition that still has 2/3 signatures should finalize the header."""
+    registry = FederationRegistry.from_file(REGISTRY_PATH)
+    header = create_shard_header(
+        shard_id="records/city-a",
+        root_hash=bytes.fromhex("44" * 32),
+        timestamp="2026-03-09T00:00:00Z",
+    )
+
+    # Simulate one node partitioned away while two nodes can still acknowledge.
+    signatures = [
+        sign_federated_header(header, "olympus-node-1", _test_signing_key(1)),
+        sign_federated_header(header, "olympus-node-2", _test_signing_key(2)),
+    ]
+
+    assert has_federation_quorum(header, signatures, registry) is True
+
+
+def test_byzantine_simulation_mid_commit_node_kill_rejects_subquorum() -> None:
+    """If a node dies mid-commit and only one signature remains, quorum must fail."""
+    registry = FederationRegistry.from_file(REGISTRY_PATH)
+    header = create_shard_header(
+        shard_id="records/city-a",
+        root_hash=bytes.fromhex("55" * 32),
+        timestamp="2026-03-09T00:00:01Z",
+    )
+
+    # Node 1 signs, then nodes 2 and 3 are unavailable/partitioned before ack.
+    signatures = [sign_federated_header(header, "olympus-node-1", _test_signing_key(1))]
+
+    assert has_federation_quorum(header, signatures, registry) is False
+
+
+def test_quorum_certificate_is_verifiable_and_persisted_in_ledger() -> None:
+    """Signed federation quorum certificates should be persisted as ledger metadata."""
+    registry = FederationRegistry.from_file(REGISTRY_PATH)
+    header = create_shard_header(
+        shard_id="records/city-a",
+        root_hash=bytes.fromhex("66" * 32),
+        timestamp="2026-03-09T00:00:02Z",
+    )
+    signatures = [
+        sign_federated_header(header, "olympus-node-1", _test_signing_key(1)),
+        sign_federated_header(header, "olympus-node-2", _test_signing_key(2)),
+    ]
+
+    certificate = build_quorum_certificate(header, signatures, registry)
+    assert verify_quorum_certificate(certificate, header, registry) is True
+
+    ledger = Ledger()
+    entry = append_quorum_certificate_to_ledger(
+        ledger=ledger,
+        header=header,
+        signatures=signatures,
+        registry=registry,
+        canonicalization={"type": "federation-quorum.v1"},
+    )
+    assert entry.federation_quorum_certificate == certificate
+    assert ledger.verify_chain() is True
+
+
+def test_node_key_rotation_with_superseding_signature() -> None:
+    """Compromised node key rotation should preserve old-header verification via supersession."""
+    old_key = _test_signing_key(1)
+    new_key = _test_signing_key(9)
+    old_verify_key = old_key.verify_key
+
+    pre_compromise_header = create_shard_header(
+        shard_id="records/city-a",
+        root_hash=bytes.fromhex("77" * 32),
+        timestamp="2026-03-01T00:00:00Z",
+    )
+    pre_compromise_sig = sign_federated_header(
+        pre_compromise_header,
+        "olympus-node-1",
+        old_key,
+    ).signature
+    assert (
+        verify_header_with_rotation(pre_compromise_header, pre_compromise_sig, old_verify_key)
+        is True
+    )
+
+    revocation = create_key_revocation_record(
+        old_verify_key=old_verify_key,
+        new_signing_key=new_key,
+        compromise_timestamp="2026-03-02T00:00:00Z",
+        last_good_sequence=10,
+    )
+
+    post_compromise_header = create_shard_header(
+        shard_id="records/city-a",
+        root_hash=bytes.fromhex("88" * 32),
+        timestamp="2026-03-03T00:00:00Z",
+    )
+    post_compromise_sig = sign_federated_header(
+        post_compromise_header, "olympus-node-1", old_key
+    ).signature
+    assert (
+        verify_header_with_rotation(
+            post_compromise_header,
+            post_compromise_sig,
+            old_verify_key,
+            header_sequence=11,
+            revocation_record=revocation,
+        )
+        is False
+    )
+
+    superseding = create_superseding_signature(
+        header_hash=post_compromise_header["header_hash"],
+        old_verify_key=old_verify_key,
+        new_signing_key=new_key,
+        supersedes_from=revocation["compromise_timestamp"],
+    )
+    assert (
+        verify_header_with_rotation(
+            post_compromise_header,
+            post_compromise_sig,
+            old_verify_key,
+            header_sequence=11,
+            revocation_record=revocation,
+            superseding_signature=superseding,
+        )
+        is True
+    )
