@@ -167,7 +167,7 @@ def test_quorum_certificate_is_verifiable_and_persisted_in_ledger() -> None:
     assert ledger.verify_chain() is True
 
 
-def test_node_identity_rotation_preserves_historical_verification_continuity() -> None:
+def test_node_key_rotation_with_superseding_signature() -> None:
     """Compromised node key rotation should preserve old-header verification via supersession."""
     old_key = _test_signing_key(1)
     new_key = _test_signing_key(9)
