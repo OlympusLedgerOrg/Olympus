@@ -11,8 +11,14 @@ The primary local developer workflows are:
 
 - `python -m pip install -e ".[dev]"` — install the package plus development
   tooling.
+- `make help` — list all available make targets with descriptions.
 - `make check` — run schema validation, Ruff, mypy, Bandit, and the Python test
-  suites.
+  suites (includes `boundary-check`).
+- `make vectors` — verify golden test vectors deterministically (canonicalization
+  + hashing regression detection).
+- `make boundary-check` — verify protocol module import boundaries are intact.
+- `make lint` — run Ruff + mypy + Bandit without running tests.
+- `make format` — auto-format code with Ruff.
 - `make smoke` — run the PostgreSQL-backed smoke path defined in
   `tools/dev_smoke.sh`.
 - `make dev` — start the FastAPI API on `127.0.0.1:8000` and the debug UI on
@@ -21,6 +27,12 @@ The primary local developer workflows are:
 The smoke test currently provisions PostgreSQL with Docker Compose, initializes
 the schema, imports the test-only app, and runs the `postgres`-marked pytest
 suite.
+
+## Documentation
+
+See [`docs/README.md`](docs/README.md) for a full index of the documentation.
+See [`docs/architecture.md`](docs/architecture.md) for the pipeline → module
+map and developer entrypoints.
 
 ## Repository scaffold
 

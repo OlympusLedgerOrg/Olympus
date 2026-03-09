@@ -14,7 +14,10 @@ def test_dev_smoke_script_includes_required_steps():
 
 
 def test_makefile_smoke_target_uses_script():
-    makefile = (Path(__file__).parent.parent / "Makefile").read_text(encoding="utf-8")
+    repo_root = Path(__file__).parent.parent
+    # Collect the root Makefile and all included .mk fragments
+    make_sources = [repo_root / "Makefile"] + sorted((repo_root / "tools" / "make").glob("*.mk"))
+    combined = "\n".join(p.read_text(encoding="utf-8") for p in make_sources)
 
-    assert "\nsmoke:\n" in makefile
-    assert "bash tools/dev_smoke.sh" in makefile
+    assert "smoke:" in combined
+    assert "bash tools/dev_smoke.sh" in combined
