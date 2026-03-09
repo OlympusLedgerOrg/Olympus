@@ -59,5 +59,8 @@ htmlcov/
 # Node.js
 node_modules/
 
+# Rust
+verifiers/rust/target/
+
 # Benchmark results
 benchmarks/results/

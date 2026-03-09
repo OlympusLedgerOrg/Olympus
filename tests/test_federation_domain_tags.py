@@ -134,7 +134,7 @@ def test_federation_signatures_bind_to_node_id() -> None:
     )
 
     # Sign with node-1's key and node_id
-    sig1 = sign_federated_header(header, "node-1", key1)
+    sig1 = sign_federated_header(header, "node-1", key1, registry)
 
     # The signature should verify when node_id matches
     valid_sigs = verify_federated_header_signatures(header, [sig1], registry)
@@ -142,7 +142,7 @@ def test_federation_signatures_bind_to_node_id() -> None:
 
     # Create a signature with the wrong node_id but correct key
     # (This simulates a node trying to impersonate another node)
-    sig_wrong_id = sign_federated_header(header, "node-2", key1)
+    sig_wrong_id = sign_federated_header(header, "node-2", key1, registry)
 
     # This should fail verification because the pubkey doesn't match node-2's registry entry
     valid_sigs = verify_federated_header_signatures(header, [sig_wrong_id], registry)
@@ -162,9 +162,21 @@ def test_domain_prefix_constants_are_immutable() -> None:
 
 def test_signature_replay_protection_via_event_id() -> None:
     """Event IDs should prevent signature replay across different headers."""
-    from protocol.federation import sign_federated_header
+    from protocol.federation import FederationNode, FederationRegistry, sign_federated_header
 
     key = get_signing_key_from_seed(bytes([1]) * 32)
+    registry = FederationRegistry(
+        nodes=(
+            FederationNode(
+                node_id="test-node",
+                pubkey=bytes(key.verify_key),
+                endpoint="https://node1.example.com",
+                operator="Operator 1",
+                jurisdiction="test",
+                status="active",
+            ),
+        )
+    )
 
     # Create two different headers with same timestamp
     header1 = create_shard_header(
@@ -179,8 +191,8 @@ def test_signature_replay_protection_via_event_id() -> None:
     )
 
     # Sign both headers
-    sig1 = sign_federated_header(header1, "test-node", key)
-    sig2 = sign_federated_header(header2, "test-node", key)
+    sig1 = sign_federated_header(header1, "test-node", key, registry)
+    sig2 = sign_federated_header(header2, "test-node", key, registry)
 
     # Signatures should be different because event IDs are different
     assert sig1.signature != sig2.signature
