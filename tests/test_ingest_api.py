@@ -390,3 +390,76 @@ class TestAuthAndRateLimiting:
         second = rl_client.post("/ingest/records", json=payload)
         assert first.status_code == 200
         assert second.status_code == 429
+
+    def test_rate_limit_enforced_per_ip(self):
+        """Separate keys sharing the same IP should respect the IP bucket."""
+        ingest_api._reset_ingest_state_for_tests()
+        ingest_api._register_api_key_for_tests(
+            api_key="ip-key-1",
+            key_id="ip-key-1",
+            scopes={"ingest", "commit", "verify"},
+            expires_at="2099-01-01T00:00:00Z",
+        )
+        ingest_api._register_api_key_for_tests(
+            api_key="ip-key-2",
+            key_id="ip-key-2",
+            scopes={"ingest", "commit", "verify"},
+            expires_at="2099-01-01T00:00:00Z",
+        )
+        ingest_api._set_rate_limit_for_tests("ingest", capacity=1.0, refill_rate_per_second=0.0)
+        client_one = TestClient(app, headers={"X-API-Key": "ip-key-1"})
+        client_two = TestClient(app, headers={"X-API-Key": "ip-key-2"})
+        payload_one = {
+            "records": [
+                {
+                    "shard_id": "shard-ip-1",
+                    "record_type": "document",
+                    "record_id": "doc-ip-1",
+                    "version": 1,
+                    "content": {"rate": "ip-one"},
+                }
+            ]
+        }
+        payload_two = {
+            "records": [
+                {
+                    "shard_id": "shard-ip-2",
+                    "record_type": "document",
+                    "record_id": "doc-ip-2",
+                    "version": 1,
+                    "content": {"rate": "ip-two"},
+                }
+            ]
+        }
+        first = client_one.post("/ingest/records", json=payload_one)
+        second = client_two.post("/ingest/records", json=payload_two)
+        assert first.status_code == 200
+        assert second.status_code == 429
+
+    def test_rate_limit_hits_are_audited(self):
+        ingest_api._reset_ingest_state_for_tests()
+        ingest_api._register_api_key_for_tests(
+            api_key="audit-rate",
+            key_id="audit-rate",
+            scopes={"ingest", "commit", "verify"},
+            expires_at="2099-01-01T00:00:00Z",
+        )
+        ingest_api._set_rate_limit_for_tests("ingest", capacity=1.0, refill_rate_per_second=0.0)
+        client = TestClient(app, headers={"X-API-Key": "audit-rate"})
+        payload = {
+            "records": [
+                {
+                    "shard_id": "shard-audit",
+                    "record_type": "document",
+                    "record_id": "doc-audit",
+                    "version": 1,
+                    "content": {"audit": True},
+                }
+            ]
+        }
+        client.post("/ingest/records", json=payload)
+        ledger_len_before = len(ingest_api._write_ledger.entries)
+        rate_limited = client.post("/ingest/records", json=payload)
+        assert rate_limited.status_code == 429
+        assert len(ingest_api._write_ledger.entries) == ledger_len_before + 1
+        assert ingest_api._write_ledger.entries[-1].shard_id == "audit/security"
