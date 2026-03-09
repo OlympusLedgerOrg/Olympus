@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# ruff: noqa: E402
 """
 Conformance tests for the Olympus Python CLI verifier.
 
@@ -10,14 +11,19 @@ import json
 import sys
 from pathlib import Path
 
+
 # Add repository root to path
 REPO_ROOT = Path(__file__).parent.parent.parent
 sys.path.insert(0, str(REPO_ROOT))
 
-from protocol.hashes import blake3_hash, NODE_PREFIX, HASH_SEPARATOR
-from protocol.merkle import MerkleTree, merkle_leaf_hash, verify_proof, MerkleProof
+from protocol.hashes import HASH_SEPARATOR, NODE_PREFIX, blake3_hash
+from protocol.merkle import MerkleProof, MerkleTree, merkle_leaf_hash, verify_proof
+
 
 VECTORS_PATH = Path(__file__).parent.parent / "test_vectors" / "vectors.json"
+CANONICALIZER_VECTORS_PATH = (
+    Path(__file__).parent.parent / "test_vectors" / "canonicalizer_vectors.tsv"
+)
 _SEP = HASH_SEPARATOR.encode("utf-8")
 
 
@@ -26,13 +32,26 @@ def load_vectors() -> dict:
         return json.load(f)
 
 
+def load_canonicalizer_vectors() -> list[tuple[str, bytes, bytes, str]]:
+    rows: list[tuple[str, bytes, bytes, str]] = []
+    with open(CANONICALIZER_VECTORS_PATH, encoding="utf-8") as f:
+        for line in f:
+            line = line.rstrip("\n")
+            if not line or line.startswith("#"):
+                continue
+            group_id, input_hex, canonical_hex, hash_hex = line.split("\t")
+            rows.append(
+                (group_id, bytes.fromhex(input_hex), bytes.fromhex(canonical_hex), hash_hex)
+            )
+    return rows
+
+
 def test_blake3_raw(vectors: dict) -> None:
     for vec in vectors["blake3_raw"]:
         data = vec["input_utf8"].encode("utf-8")
         got = blake3_hash([data]).hex()
         assert got == vec["hash"], (
-            f"blake3_raw failed for {repr(vec['input_utf8'])!r}: "
-            f"got {got}, want {vec['hash']}"
+            f"blake3_raw failed for {repr(vec['input_utf8'])!r}: got {got}, want {vec['hash']}"
         )
     print(f"  ✓ blake3_raw: {len(vectors['blake3_raw'])} vectors")
 
@@ -42,8 +61,7 @@ def test_merkle_leaf_hash(vectors: dict) -> None:
         data = vec["input_utf8"].encode("utf-8")
         got = merkle_leaf_hash(data).hex()
         assert got == vec["hash"], (
-            f"merkle_leaf_hash failed for {repr(vec['input_utf8'])}: "
-            f"got {got}, want {vec['hash']}"
+            f"merkle_leaf_hash failed for {repr(vec['input_utf8'])}: got {got}, want {vec['hash']}"
         )
     print(f"  ✓ merkle_leaf_hash: {len(vectors['merkle_leaf_hash'])} vectors")
 
@@ -65,8 +83,7 @@ def test_merkle_root(vectors: dict) -> None:
         tree = MerkleTree(leaves)
         got = tree.get_root().hex()
         assert got == vec["root"], (
-            f"merkle_root failed for {vec['leaves_utf8']}: "
-            f"got {got}, want {vec['root']}"
+            f"merkle_root failed for {vec['leaves_utf8']}: got {got}, want {vec['root']}"
         )
     print(f"  ✓ merkle_root: {len(vectors['merkle_root'])} vectors")
 
@@ -76,10 +93,7 @@ def test_merkle_proof(vectors: dict) -> None:
         proof = MerkleProof(
             leaf_hash=bytes.fromhex(vec["leaf_hash"]),
             leaf_index=vec["leaf_index"],
-            siblings=[
-                (bytes.fromhex(s["hash"]), s["position"])
-                for s in vec["siblings"]
-            ],
+            siblings=[(bytes.fromhex(s["hash"]), s["position"]) for s in vec["siblings"]],
             root_hash=bytes.fromhex(vec["root_hash"]),
         )
         got = verify_proof(proof)
@@ -87,6 +101,15 @@ def test_merkle_proof(vectors: dict) -> None:
             f"merkle_proof verification failed: got {got}, want {vec['expected_valid']}"
         )
     print(f"  ✓ merkle_proof: {len(vectors['merkle_proof'])} vectors")
+
+
+def test_canonicalizer_hash_vectors() -> None:
+    rows = load_canonicalizer_vectors()
+    assert len(rows) >= 500, "canonicalizer vector suite must include at least 500 pairs"
+    for _, _, canonical_bytes, hash_hex in rows:
+        got = blake3_hash([canonical_bytes]).hex()
+        assert got == hash_hex, f"canonicalizer vector hash mismatch: got {got}, want {hash_hex}"
+    print(f"  ✓ canonicalizer_hash: {len(rows)} vectors")
 
 
 def main() -> None:
@@ -97,6 +120,7 @@ def main() -> None:
     test_merkle_parent_hash(vectors)
     test_merkle_root(vectors)
     test_merkle_proof(vectors)
+    test_canonicalizer_hash_vectors()
     print("\n✓ All Python conformance tests passed!")
 
 

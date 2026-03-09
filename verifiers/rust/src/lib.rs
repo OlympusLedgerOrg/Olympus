@@ -284,4 +284,26 @@ mod tests {
         };
         assert!(verify_merkle_proof(&proof_3leaf).unwrap(), "3-leaf proof should pass");
     }
+
+    #[test]
+    fn conformance_canonicalizer_hash() {
+        let tsv = include_str!("../../test_vectors/canonicalizer_vectors.tsv");
+        let rows: Vec<&str> = tsv
+            .lines()
+            .filter(|line| !line.is_empty() && !line.starts_with('#'))
+            .collect();
+        assert!(
+            rows.len() >= 500,
+            "expected at least 500 canonicalizer vectors, got {}",
+            rows.len()
+        );
+        for row in rows {
+            let parts: Vec<&str> = row.split('\t').collect();
+            assert_eq!(parts.len(), 4, "malformed canonicalizer vector row");
+            let group_id = parts[0];
+            let canonical_bytes = hex::decode(parts[2]).expect("canonical hex must decode");
+            let got = hex::encode(compute_blake3(&canonical_bytes));
+            assert_eq!(got, parts[3], "canonicalizer_hash({})", group_id);
+        }
+    }
 }

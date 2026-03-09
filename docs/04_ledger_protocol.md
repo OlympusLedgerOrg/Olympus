@@ -128,6 +128,10 @@ When an agency signing key is suspected or confirmed compromised, verifiers need
    - Reject any shard headers signed by the compromised key with a timestamp at or after the compromise timestamp unless a superseding attestation exists.
 5. **Publishing** — Store revocation statements and superseding attestations in the ledger as dedicated event types to keep the chain of custody auditable.
 
+Reference implementation support lives in `protocol/shards.py` via
+`create_key_revocation_record()`, `create_superseding_signature()`,
+`verify_header_with_rotation()`, and `rotation_record_to_event()`.
+
 ## Key Storage & Publication Guidance (v1.0)
 
 Even in development, key handling must be deterministic and auditable:
@@ -136,6 +140,8 @@ Even in development, key handling must be deterministic and auditable:
    `~/.config/olympus/keys/<shard_id>.ed25519`, with `0600` permissions.
    Export the path via `OLYMPUS_SIGNING_KEY_PATH` in `.env` or runtime
    configuration. Never commit secrets to source control.
+   When deriving keys from shared seed material, scope them with HKDF over
+   `shard_id` and `node_id` instead of reusing a raw seed across authorities.
 2. **Public key publication** — Publish the hex-encoded Ed25519 public key
    and its **SHA-256 fingerprint** in an append-only “key registry” entry
    in the ledger (or equivalent metadata channel). Each shard header already

@@ -19,6 +19,7 @@ const {
 } = require('./verifier');
 
 const VECTORS_PATH = path.join(__dirname, '..', 'test_vectors', 'vectors.json');
+const CANONICALIZER_VECTORS_PATH = path.join(__dirname, '..', 'test_vectors', 'canonicalizer_vectors.tsv');
 
 function assert(condition, message) {
   if (!condition) {
@@ -28,6 +29,21 @@ function assert(condition, message) {
 
 function loadVectors() {
   return JSON.parse(fs.readFileSync(VECTORS_PATH, 'utf8'));
+}
+
+function loadCanonicalizerVectors() {
+  return fs.readFileSync(CANONICALIZER_VECTORS_PATH, 'utf8')
+    .split('\n')
+    .filter(line => line && !line.startsWith('#'))
+    .map(line => {
+      const [groupId, inputHex, canonicalHex, hash] = line.split('\t');
+      return {
+        groupId,
+        inputHex,
+        canonicalBytes: Buffer.from(canonicalHex, 'hex'),
+        hash,
+      };
+    });
 }
 
 function testBlake3Raw(vectors) {
@@ -88,14 +104,26 @@ function testMerkleProof(vectors) {
   console.log(`  ✓ merkle_proof: ${vectors.merkle_proof.length} vectors`);
 }
 
+function testCanonicalizerHash(vectors) {
+  console.log('Testing conformance: canonicalizer_hash...');
+  assert(vectors.length >= 500, `canonicalizer_hash vector count too small: ${vectors.length}`);
+  for (const vec of vectors) {
+    const got = toHex(computeBlake3(vec.canonicalBytes));
+    assert(got === vec.hash, `canonicalizer_hash(${vec.groupId}): got ${got}, want ${vec.hash}`);
+  }
+  console.log(`  ✓ canonicalizer_hash: ${vectors.length} vectors`);
+}
+
 function runConformanceTests() {
   console.log('Running JavaScript conformance tests against vectors.json\n');
   const vectors = loadVectors();
+  const canonicalizerVectors = loadCanonicalizerVectors();
   testBlake3Raw(vectors);
   testMerkleLeafHash(vectors);
   testMerkleParentHash(vectors);
   testMerkleRoot(vectors);
   testMerkleProof(vectors);
+  testCanonicalizerHash(canonicalizerVectors);
   console.log('\n✓ All JavaScript conformance tests passed!');
 }
 

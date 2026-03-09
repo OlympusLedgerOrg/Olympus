@@ -39,7 +39,7 @@ from protocol.canonical_json import canonical_json_encode
 from protocol.canonicalizer import canonicalization_provenance
 from protocol.hashes import record_key, shard_header_hash
 from protocol.ledger import LedgerEntry
-from protocol.rfc3161 import _sha256_of_hash
+from protocol.rfc3161 import MAX_TSA_TOKENS, _sha256_of_hash
 from protocol.shards import create_shard_header, sign_header, verify_header
 from protocol.ssmf import (
     ExistenceProof,
@@ -185,7 +185,7 @@ class StorageLayer:
             # Get previous header
             cur.execute(
                 """
-                    SELECT header_hash FROM shard_headers
+                    SELECT header_hash, ts FROM shard_headers
                     WHERE shard_id = %s
                     ORDER BY seq DESC
                     LIMIT 1
@@ -211,6 +211,14 @@ class StorageLayer:
 
             # Create shard header
             ts = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+            if prev_row is not None:
+                last_ts_value = prev_row["ts"]
+                if isinstance(last_ts_value, datetime):
+                    last_ts = last_ts_value.astimezone(timezone.utc)
+                else:
+                    last_ts = datetime.fromisoformat(str(last_ts_value).replace("Z", "+00:00"))
+                if datetime.fromisoformat(ts.replace("Z", "+00:00")) <= last_ts:
+                    raise ValueError("New shard header timestamp must be strictly monotonic")
             header = create_shard_header(
                 shard_id=shard_id,
                 root_hash=root_hash,
@@ -676,6 +684,24 @@ class StorageLayer:
         with self._get_connection() as conn, conn.cursor(row_factory=dict_row) as cur:
             cur.execute(
                 """
+                SELECT COUNT(*) AS token_count,
+                       BOOL_OR(tsa_url = %s) AS tsa_already_present
+                FROM timestamp_tokens
+                WHERE shard_id = %s AND header_hash = %s
+                """,
+                (tsa_url, shard_id, header_hash_bytes),
+            )
+            limit_row = cur.fetchone()
+            if limit_row is None:
+                raise RuntimeError("Failed to load timestamp token count")
+            if int(limit_row["token_count"]) >= MAX_TSA_TOKENS and not bool(
+                limit_row["tsa_already_present"]
+            ):
+                raise ValueError(
+                    f"Refusing to store more than {MAX_TSA_TOKENS} TSA tokens for a header"
+                )
+            cur.execute(
+                """
                 INSERT INTO timestamp_tokens
                     (shard_id, header_hash, tsa_url, tst, imprint_hash, gen_time, tsa_cert_fingerprint)
                 VALUES (%s, %s, %s, %s, %s, %s, %s)
@@ -693,6 +719,49 @@ class StorageLayer:
             )
             conn.commit()
 
+    def get_timestamp_tokens(self, shard_id: str, header_hash_hex: str) -> list[dict[str, Any]]:
+        """
+        Retrieve all stored RFC 3161 timestamp tokens for a shard header.
+
+        Args:
+            shard_id: Shard identifier.
+            header_hash_hex: Hex-encoded 32-byte shard header hash.
+
+        Returns:
+            Stored timestamp tokens ordered by generation time, then TSA URL.
+        """
+        header_hash_bytes = bytes.fromhex(header_hash_hex)
+        with self._get_connection() as conn, conn.cursor(row_factory=dict_row) as cur:
+            cur.execute(
+                """
+                SELECT tsa_url, tst, gen_time, tsa_cert_fingerprint
+                FROM timestamp_tokens
+                WHERE shard_id = %s AND header_hash = %s
+                ORDER BY gen_time ASC, tsa_url ASC
+                """,
+                (shard_id, header_hash_bytes),
+            )
+            rows = cur.fetchall()
+
+        tokens: list[dict[str, Any]] = []
+        for row in rows:
+            ts_value = row["gen_time"]
+            if isinstance(ts_value, datetime):
+                timestamp_str = ts_value.isoformat().replace("+00:00", "Z")
+            else:
+                timestamp_str = str(ts_value)
+
+            tokens.append(
+                {
+                    "tsa_url": row["tsa_url"],
+                    "tst_hex": bytes(row["tst"]).hex(),
+                    "hash_hex": header_hash_hex,
+                    "timestamp": timestamp_str,
+                    "tsa_cert_fingerprint": row["tsa_cert_fingerprint"],
+                }
+            )
+        return tokens
+
     def get_timestamp_token(self, shard_id: str, header_hash_hex: str) -> "dict[str, Any] | None":
         """
         Retrieve the RFC 3161 timestamp token for a shard header, if stored.
@@ -705,34 +774,10 @@ class StorageLayer:
             Dictionary with keys ``tsa_url``, ``tst_hex``, ``hash_hex``,
             ``timestamp`` (ISO 8601 with 'Z' suffix), or ``None`` if not found.
         """
-        header_hash_bytes = bytes.fromhex(header_hash_hex)
-        with self._get_connection() as conn, conn.cursor(row_factory=dict_row) as cur:
-            cur.execute(
-                """
-                SELECT tsa_url, tst, gen_time, tsa_cert_fingerprint
-                FROM timestamp_tokens
-                WHERE shard_id = %s AND header_hash = %s
-                """,
-                (shard_id, header_hash_bytes),
-            )
-            row = cur.fetchone()
-
-        if row is None:
+        tokens = self.get_timestamp_tokens(shard_id, header_hash_hex)
+        if not tokens:
             return None
-
-        ts_value = row["gen_time"]
-        if isinstance(ts_value, datetime):
-            timestamp_str = ts_value.isoformat().replace("+00:00", "Z")
-        else:
-            timestamp_str = str(ts_value)
-
-        return {
-            "tsa_url": row["tsa_url"],
-            "tst_hex": bytes(row["tst"]).hex(),
-            "hash_hex": header_hash_hex,
-            "timestamp": timestamp_str,
-            "tsa_cert_fingerprint": row["tsa_cert_fingerprint"],
-        }
+        return tokens[0]
 
     def verify_persisted_root(self, shard_id: str) -> bool:
         """

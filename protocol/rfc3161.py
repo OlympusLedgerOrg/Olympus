@@ -15,9 +15,12 @@ Protocol usage:
 """
 
 import hashlib
+import os
+from collections.abc import Sequence
 from dataclasses import dataclass
-from datetime import timezone
+from datetime import datetime, timezone
 from pathlib import Path
+from typing import Any
 
 import rfc3161ng
 from cryptography import x509
@@ -30,6 +33,8 @@ from rfc3161ng.api import load_certificate
 DEFAULT_TSA_URL = "https://freetsa.org/tsr"
 DIGICERT_TSA_URL = "https://timestamp.digicert.com"
 SECTIGO_TSA_URL = "https://timestamp.sectigo.com"
+DEFAULT_FINALIZATION_TSA_URLS = (DEFAULT_TSA_URL, DIGICERT_TSA_URL)
+MAX_TSA_TOKENS = 3
 TRUST_MODE_DEV = "dev"
 TRUST_MODE_PROD = "prod"
 
@@ -106,6 +111,13 @@ def _load_trust_store_certificate(trust_store_path: str) -> bytes:
     if not path.exists():
         raise ValueError(f"Trust store path not found: {trust_store_path}")
     return path.read_bytes()
+
+
+def _enforce_trust_mode_environment(trust_mode: str) -> None:
+    """Reject insecure trust-mode selections in production environments."""
+    env = os.getenv("OLYMPUS_ENV", "").strip().lower()
+    if env in {"prd", "prod", "production", "live"} and trust_mode == TRUST_MODE_DEV:
+        raise ValueError("TRUST_MODE_DEV is not allowed when OLYMPUS_ENV=production")
 
 
 def _sha256_of_hash(hash_hex: str) -> bytes:
@@ -192,6 +204,36 @@ def request_timestamp(
     )
 
 
+def _normalize_tsa_urls(tsa_urls: Sequence[str]) -> tuple[str, ...]:
+    """Validate and normalize a sequence of TSA URLs for quorum operations."""
+    normalized = tuple(url for url in tsa_urls if url)
+    if len(normalized) < 2:
+        raise ValueError("At least two independent TSA URLs are required")
+    if len(set(normalized)) != len(normalized):
+        raise ValueError("TSA URLs must be unique for quorum anchoring")
+    return normalized
+
+
+def request_timestamp_quorum(
+    hash_hex: str, tsa_urls: Sequence[str] = DEFAULT_FINALIZATION_TSA_URLS
+) -> list[TimestampToken]:
+    """
+    Request timestamp tokens from multiple independent TSAs.
+
+    Finalization requires one valid token from each configured TSA URL. This
+    helper enforces a minimum quorum of two independent authorities and returns
+    the collected tokens in caller-specified order.
+
+    Args:
+        hash_hex: Hex-encoded BLAKE3 hash to timestamp.
+        tsa_urls: Independent RFC 3161 TSA endpoints to require for finalization.
+
+    Returns:
+        List of :class:`TimestampToken` instances, one per TSA URL.
+    """
+    return [request_timestamp(hash_hex, tsa_url=url) for url in _normalize_tsa_urls(tsa_urls)]
+
+
 def verify_timestamp_token(
     tst_bytes: bytes,
     hash_hex: str,
@@ -227,6 +269,7 @@ def verify_timestamp_token(
     """
     if trust_mode not in {TRUST_MODE_DEV, TRUST_MODE_PROD}:
         raise ValueError(f"Unsupported trust_mode: {trust_mode}")
+    _enforce_trust_mode_environment(trust_mode)
 
     tsa_fingerprint = _extract_tsa_cert_fingerprint(tst_bytes)
 
@@ -253,3 +296,109 @@ def verify_timestamp_token(
             hashname="sha256",
         )
     )
+
+
+def verify_timestamp_quorum(
+    tokens: Sequence[TimestampToken | dict[str, Any]],
+    hash_hex: str,
+    *,
+    trust_mode: str = TRUST_MODE_DEV,
+    required_tsa_urls: Sequence[str] = DEFAULT_FINALIZATION_TSA_URLS,
+    trusted_fingerprints_by_tsa: dict[str, set[str]] | None = None,
+    trust_store_paths_by_tsa: dict[str, str] | None = None,
+) -> bool:
+    """
+    Verify that all required TSAs issued valid tokens for the same hash.
+
+    Args:
+        tokens: Timestamp tokens collected for the target hash.
+        hash_hex: Hex-encoded BLAKE3 hash that was submitted to the TSAs.
+        trust_mode: Timestamp trust mode passed through to token verification.
+        required_tsa_urls: Exact TSA URLs that must all be present for finalization.
+        trusted_fingerprints_by_tsa: Optional pinned fingerprint sets by TSA URL.
+        trust_store_paths_by_tsa: Optional trust-store paths by TSA URL.
+
+    Returns:
+        ``True`` when every required TSA contributes a valid token.
+    """
+    token_map: dict[str, TimestampToken] = {}
+    for token in tokens:
+        parsed = token if isinstance(token, TimestampToken) else TimestampToken.from_dict(token)
+        token_map[parsed.tsa_url] = parsed
+
+    for tsa_url in _normalize_tsa_urls(required_tsa_urls):
+        required_token = token_map.get(tsa_url)
+        if required_token is None:
+            return False
+        if required_token.hash_hex != hash_hex:
+            return False
+        trusted_fingerprints = None
+        if trusted_fingerprints_by_tsa is not None:
+            trusted_fingerprints = trusted_fingerprints_by_tsa.get(tsa_url)
+        trust_store_path = None
+        if trust_store_paths_by_tsa is not None:
+            trust_store_path = trust_store_paths_by_tsa.get(tsa_url)
+        if not verify_timestamp_token(
+            required_token.tst_bytes,
+            hash_hex,
+            trust_mode=trust_mode,
+            trusted_fingerprints=trusted_fingerprints,
+            trust_store_path=trust_store_path,
+        ):
+            return False
+    return True
+
+
+def timestamp_watchdog_status(
+    tokens: Sequence[TimestampToken | dict[str, Any]],
+    *,
+    required_tsa_urls: Sequence[str] = DEFAULT_FINALIZATION_TSA_URLS,
+    stale_after_seconds: int = 3600,
+    now: datetime | None = None,
+) -> dict[str, Any]:
+    """
+    Evaluate watchdog freshness for required TSA anchors.
+
+    Args:
+        tokens: Timestamp tokens available for the latest finalized header.
+        required_tsa_urls: Exact TSA URLs that must remain fresh.
+        stale_after_seconds: Maximum allowed age in seconds before a token is stale.
+        now: Optional current time for deterministic testing.
+
+    Returns:
+        Dictionary containing per-TSA status and alert messages.
+    """
+    if stale_after_seconds < 0:
+        raise ValueError("stale_after_seconds must be non-negative")
+
+    if now is not None and (now.tzinfo is None or now.utcoffset() is None):
+        raise ValueError("now must be timezone-aware")
+    current_time = now.astimezone(timezone.utc) if now is not None else datetime.now(timezone.utc)
+    token_map = {
+        parsed.tsa_url: parsed
+        for parsed in (
+            token if isinstance(token, TimestampToken) else TimestampToken.from_dict(token)
+            for token in tokens
+        )
+    }
+
+    statuses: dict[str, dict[str, Any]] = {}
+    alerts: list[str] = []
+    for tsa_url in _normalize_tsa_urls(required_tsa_urls):
+        token = token_map.get(tsa_url)
+        if token is None:
+            statuses[tsa_url] = {"present": False, "stale": True, "age_seconds": None}
+            alerts.append(f"missing timestamp token for {tsa_url}")
+            continue
+        issued_at = datetime.fromisoformat(token.timestamp.replace("Z", "+00:00")).astimezone(
+            timezone.utc
+        )
+        age_seconds = int((current_time - issued_at).total_seconds())
+        stale = age_seconds > stale_after_seconds
+        statuses[tsa_url] = {"present": True, "stale": stale, "age_seconds": age_seconds}
+        if stale:
+            alerts.append(
+                f"timestamp token for {tsa_url} is stale ({age_seconds}s > {stale_after_seconds}s)"
+            )
+
+    return {"healthy": not alerts, "alerts": alerts, "tsa_status": statuses}
