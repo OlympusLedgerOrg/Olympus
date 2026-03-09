@@ -26,6 +26,7 @@ import rfc3161ng
 from cryptography import x509
 from cryptography.hazmat.primitives import hashes
 from pyasn1.codec.der import decoder  # type: ignore[import-untyped]
+from pyasn1.type import univ as pyasn1_univ  # type: ignore[import-untyped]
 from rfc3161ng.api import load_certificate
 
 
@@ -33,8 +34,9 @@ from rfc3161ng.api import load_certificate
 DEFAULT_TSA_URL = "https://freetsa.org/tsr"
 DIGICERT_TSA_URL = "https://timestamp.digicert.com"
 SECTIGO_TSA_URL = "https://timestamp.sectigo.com"
-DEFAULT_FINALIZATION_TSA_URLS = (DEFAULT_TSA_URL, DIGICERT_TSA_URL)
+DEFAULT_FINALIZATION_TSA_URLS = (DEFAULT_TSA_URL, DIGICERT_TSA_URL, SECTIGO_TSA_URL)
 MAX_TSA_TOKENS = 3
+TSA_QUORUM_THRESHOLD = 2
 TRUST_MODE_DEV = "dev"
 TRUST_MODE_PROD = "prod"
 
@@ -113,11 +115,40 @@ def _load_trust_store_certificate(trust_store_path: str) -> bytes:
     return path.read_bytes()
 
 
+def _extract_message_imprint(tst_bytes: bytes) -> bytes | None:
+    """Extract the hashedMessage bytes from a TimeStampToken's TSTInfo.
+
+    Args:
+        tst_bytes: DER-encoded TimeStampToken bytes.
+
+    Returns:
+        Raw bytes of the message imprint hash, or ``None`` if extraction fails.
+    """
+    try:
+        tst, substrate = decoder.decode(tst_bytes, asn1Spec=rfc3161ng.TimeStampToken())
+        if substrate:
+            return None
+        tstinfo_oct = (
+            tst.getComponentByName("content").getComponentByPosition(2).getComponentByPosition(1)
+        )
+        tstinfo_oct, substrate = decoder.decode(
+            bytes(tstinfo_oct), asn1Spec=pyasn1_univ.OctetString()
+        )
+        if substrate:
+            return None
+        tstinfo, substrate = decoder.decode(bytes(tstinfo_oct), asn1Spec=rfc3161ng.TSTInfo())
+        if substrate:
+            return None
+        return bytes(tstinfo["messageImprint"]["hashedMessage"])
+    except Exception:
+        return None
+
+
 def _enforce_trust_mode_environment(trust_mode: str) -> None:
     """Reject insecure trust-mode selections in production environments."""
     env = os.getenv("OLYMPUS_ENV", "").strip().lower()
     if env in {"prd", "prod", "production", "live"} and trust_mode == TRUST_MODE_DEV:
-        raise ValueError("TRUST_MODE_DEV is not allowed when OLYMPUS_ENV=production")
+        raise RuntimeError("DEV trust mode forbidden in production")
 
 
 def _sha256_of_hash(hash_hex: str) -> bytes:
@@ -288,6 +319,11 @@ def verify_timestamp_token(
             )
 
     digest = _sha256_of_hash(hash_hex)
+
+    actual_imprint = _extract_message_imprint(tst_bytes)
+    if actual_imprint is not None and actual_imprint != digest:
+        raise ValueError("Message imprint mismatch: token imprint does not match sha256(hash_hex)")
+
     return bool(
         rfc3161ng.check_timestamp(
             tst_bytes,
@@ -308,45 +344,51 @@ def verify_timestamp_quorum(
     trust_store_paths_by_tsa: dict[str, str] | None = None,
 ) -> bool:
     """
-    Verify that all required TSAs issued valid tokens for the same hash.
+    Verify that at least ``TSA_QUORUM_THRESHOLD`` of the required TSAs issued
+    valid tokens for the same hash (2-of-3 quorum).
 
     Args:
         tokens: Timestamp tokens collected for the target hash.
         hash_hex: Hex-encoded BLAKE3 hash that was submitted to the TSAs.
         trust_mode: Timestamp trust mode passed through to token verification.
-        required_tsa_urls: Exact TSA URLs that must all be present for finalization.
+        required_tsa_urls: TSA URLs that form the quorum pool.
         trusted_fingerprints_by_tsa: Optional pinned fingerprint sets by TSA URL.
         trust_store_paths_by_tsa: Optional trust-store paths by TSA URL.
 
     Returns:
-        ``True`` when every required TSA contributes a valid token.
+        ``True`` when at least ``TSA_QUORUM_THRESHOLD`` required TSAs each
+        contribute a valid token.
     """
     token_map: dict[str, TimestampToken] = {}
     for token in tokens:
         parsed = token if isinstance(token, TimestampToken) else TimestampToken.from_dict(token)
         token_map[parsed.tsa_url] = parsed
 
+    valid_count = 0
     for tsa_url in _normalize_tsa_urls(required_tsa_urls):
         required_token = token_map.get(tsa_url)
         if required_token is None:
-            return False
+            continue
         if required_token.hash_hex != hash_hex:
-            return False
+            continue
         trusted_fingerprints = None
         if trusted_fingerprints_by_tsa is not None:
             trusted_fingerprints = trusted_fingerprints_by_tsa.get(tsa_url)
         trust_store_path = None
         if trust_store_paths_by_tsa is not None:
             trust_store_path = trust_store_paths_by_tsa.get(tsa_url)
-        if not verify_timestamp_token(
-            required_token.tst_bytes,
-            hash_hex,
-            trust_mode=trust_mode,
-            trusted_fingerprints=trusted_fingerprints,
-            trust_store_path=trust_store_path,
-        ):
-            return False
-    return True
+        try:
+            if verify_timestamp_token(
+                required_token.tst_bytes,
+                hash_hex,
+                trust_mode=trust_mode,
+                trusted_fingerprints=trusted_fingerprints,
+                trust_store_path=trust_store_path,
+            ):
+                valid_count += 1
+        except ValueError:
+            pass
+    return valid_count >= TSA_QUORUM_THRESHOLD
 
 
 def timestamp_watchdog_status(

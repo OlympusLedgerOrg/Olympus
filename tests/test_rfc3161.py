@@ -11,11 +11,15 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from protocol.rfc3161 import (
+    DEFAULT_FINALIZATION_TSA_URLS,
     DEFAULT_TSA_URL,
     DIGICERT_TSA_URL,
     MAX_TSA_TOKENS,
+    SECTIGO_TSA_URL,
     TRUST_MODE_PROD,
+    TSA_QUORUM_THRESHOLD,
     TimestampToken,
+    _extract_message_imprint,
     _load_trust_store_certificate,
     _sha256_of_hash,
     build_timestamp_request,
@@ -458,7 +462,7 @@ def test_timestamp_watchdog_status_alerts_for_stale_or_missing_tsa():
 
 def test_verify_timestamp_token_rejects_dev_trust_mode_in_production(monkeypatch):
     monkeypatch.setenv("OLYMPUS_ENV", "production")
-    with pytest.raises(ValueError, match="TRUST_MODE_DEV is not allowed"):
+    with pytest.raises(RuntimeError, match="DEV trust mode forbidden in production"):
         verify_timestamp_token(b"\x30\x00", "a" * 64)
 
 
@@ -475,3 +479,117 @@ def test_timestamp_watchdog_status_rejects_naive_now():
             required_tsa_urls=(DEFAULT_TSA_URL, DIGICERT_TSA_URL),
             now=datetime(2026, 3, 1, 0, 2, 0),
         )
+
+
+# ---------------------------------------------------------------------------
+# TSA quorum – 2-of-3 requirement
+# ---------------------------------------------------------------------------
+
+
+def test_default_finalization_tsa_urls_has_three_providers():
+    assert len(DEFAULT_FINALIZATION_TSA_URLS) == 3
+    assert DEFAULT_TSA_URL in DEFAULT_FINALIZATION_TSA_URLS
+    assert DIGICERT_TSA_URL in DEFAULT_FINALIZATION_TSA_URLS
+    assert SECTIGO_TSA_URL in DEFAULT_FINALIZATION_TSA_URLS
+
+
+def test_tsa_quorum_threshold_is_two():
+    assert TSA_QUORUM_THRESHOLD == 2
+
+
+def test_verify_timestamp_quorum_two_of_three_is_sufficient():
+    """Two valid tokens from three configured TSAs satisfies the 2-of-3 quorum."""
+    hash_hex = "a" * 64
+    token_a = TimestampToken(hash_hex, DEFAULT_TSA_URL, b"\x01", "2026-03-01T00:00:00Z")
+    token_b = TimestampToken(hash_hex, DIGICERT_TSA_URL, b"\x02", "2026-03-01T00:00:01Z")
+    # Sectigo token is absent – quorum should still be satisfied with 2 of 3
+
+    with patch("protocol.rfc3161.verify_timestamp_token", side_effect=[True, True]):
+        result = verify_timestamp_quorum(
+            [token_a, token_b],
+            hash_hex,
+            required_tsa_urls=(DEFAULT_TSA_URL, DIGICERT_TSA_URL, SECTIGO_TSA_URL),
+        )
+    assert result is True
+
+
+def test_verify_timestamp_quorum_one_of_three_is_insufficient():
+    """One valid token from three configured TSAs does not satisfy the 2-of-3 quorum."""
+    hash_hex = "a" * 64
+    token_a = TimestampToken(hash_hex, DEFAULT_TSA_URL, b"\x01", "2026-03-01T00:00:00Z")
+
+    with patch("protocol.rfc3161.verify_timestamp_token", side_effect=[True]):
+        result = verify_timestamp_quorum(
+            [token_a],
+            hash_hex,
+            required_tsa_urls=(DEFAULT_TSA_URL, DIGICERT_TSA_URL, SECTIGO_TSA_URL),
+        )
+    assert result is False
+
+
+def test_verify_timestamp_quorum_failed_token_does_not_count():
+    """A token that fails verification is not counted toward the quorum."""
+    hash_hex = "a" * 64
+    token_a = TimestampToken(hash_hex, DEFAULT_TSA_URL, b"\x01", "2026-03-01T00:00:00Z")
+    token_b = TimestampToken(hash_hex, DIGICERT_TSA_URL, b"\x02", "2026-03-01T00:00:01Z")
+    token_c = TimestampToken(hash_hex, SECTIGO_TSA_URL, b"\x03", "2026-03-01T00:00:02Z")
+
+    # Only 1 token validates successfully – quorum should fail
+    with patch(
+        "protocol.rfc3161.verify_timestamp_token",
+        side_effect=[True, ValueError("bad token"), False],
+    ):
+        result = verify_timestamp_quorum(
+            [token_a, token_b, token_c],
+            hash_hex,
+            required_tsa_urls=(DEFAULT_TSA_URL, DIGICERT_TSA_URL, SECTIGO_TSA_URL),
+        )
+    assert result is False
+
+
+# ---------------------------------------------------------------------------
+# Strict message imprint verification
+# ---------------------------------------------------------------------------
+
+
+def test_extract_message_imprint_returns_none_for_invalid_bytes():
+    assert _extract_message_imprint(b"\x30\x00") is None
+    assert _extract_message_imprint(b"") is None
+    assert _extract_message_imprint(b"\xff\xff") is None
+
+
+def test_verify_timestamp_token_rejects_mismatched_message_imprint():
+    """verify_timestamp_token raises when the extracted imprint doesn't match hash_hex."""
+    hash_hex = "a" * 64
+    wrong_hash_hex = "b" * 64
+    wrong_imprint = _sha256_of_hash(wrong_hash_hex)
+    fake_tst_bytes = b"\x30\x00"
+
+    with patch("protocol.rfc3161._extract_message_imprint", return_value=wrong_imprint):
+        with pytest.raises(ValueError, match="Message imprint mismatch"):
+            verify_timestamp_token(fake_tst_bytes, hash_hex)
+
+
+def test_verify_timestamp_token_accepts_matching_message_imprint():
+    """verify_timestamp_token succeeds when the extracted imprint matches hash_hex."""
+    hash_hex = "a" * 64
+    correct_imprint = _sha256_of_hash(hash_hex)
+    fake_tst_bytes = b"\x30\x00"
+
+    with (
+        patch("protocol.rfc3161._extract_message_imprint", return_value=correct_imprint),
+        patch("protocol.rfc3161.rfc3161ng.check_timestamp", return_value=True),
+    ):
+        assert verify_timestamp_token(fake_tst_bytes, hash_hex) is True
+
+
+def test_verify_timestamp_token_skips_imprint_check_when_unextractable():
+    """When imprint cannot be extracted, verification delegates entirely to rfc3161ng."""
+    hash_hex = "a" * 64
+    fake_tst_bytes = b"\x30\x00"
+
+    with (
+        patch("protocol.rfc3161._extract_message_imprint", return_value=None),
+        patch("protocol.rfc3161.rfc3161ng.check_timestamp", return_value=True),
+    ):
+        assert verify_timestamp_token(fake_tst_bytes, hash_hex) is True
