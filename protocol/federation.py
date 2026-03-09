@@ -115,6 +115,7 @@ class FederationRegistry:
     """Static federation registry used by the prototype."""
 
     nodes: tuple[FederationNode, ...]
+    epoch: int = 0
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> FederationRegistry:
@@ -137,7 +138,11 @@ class FederationRegistry:
                     raise ValueError("Federation registry pubkey values must be unique")
                 pubkeys.add(historical_key.pubkey)
 
-        return cls(nodes=nodes)
+        epoch = int(data.get("epoch", 0))
+        if epoch < 0:
+            raise ValueError("Federation registry epoch must be non-negative")
+
+        return cls(nodes=nodes, epoch=epoch)
 
     @classmethod
     def from_file(cls, path: str | Path) -> FederationRegistry:
@@ -145,9 +150,9 @@ class FederationRegistry:
         data = json.loads(Path(path).read_text(encoding="utf-8"))
         return cls.from_dict(data)
 
-    def to_dict(self) -> dict[str, list[dict[str, Any]]]:
+    def to_dict(self) -> dict[str, Any]:
         """Serialize the registry to JSON-friendly data."""
-        return {"nodes": [node.to_dict() for node in self.nodes]}
+        return {"nodes": [node.to_dict() for node in self.nodes], "epoch": self.epoch}
 
     def get_node(self, node_id: str) -> FederationNode:
         """Return the registry entry for a node id."""
@@ -167,6 +172,17 @@ class FederationRegistry:
             raise ValueError("Federation registry has no active nodes")
         # Require at least a two-thirds quorum of active federation members.
         return math.ceil((2 * active_count) / 3)
+
+    def membership_hash(self) -> str:
+        """Return the deterministic hash commitment for active federation membership."""
+        active_members = sorted(
+            ((node.node_id, node.pubkey.hex()) for node in self.active_nodes()),
+            key=lambda item: (item[0], item[1]),
+        )
+        payload = HASH_SEPARATOR.join(
+            [f"{node_id}:{pubkey_hex}" for node_id, pubkey_hex in active_members]
+        ).encode("utf-8")
+        return hash_bytes(payload).hex()
 
     def rotate_node_key(
         self,
@@ -227,28 +243,33 @@ def sign_federated_header(
     header: dict[str, Any],
     node_id: str,
     signing_key: nacl.signing.SigningKey,
+    registry: FederationRegistry,
 ) -> NodeSignature:
     """Sign a shard header on behalf of a federation node."""
-    vote_hash = hash_bytes(_federation_vote_payload(header, node_id))
+    vote_hash = hash_bytes(_federation_vote_payload(header, node_id, registry))
     signature = signing_key.sign(vote_hash).signature.hex()
     return NodeSignature(node_id=node_id, signature=signature)
 
 
-def _federation_vote_event_id(header: dict[str, Any]) -> str:
+def _federation_vote_event_id(header: dict[str, Any], registry: FederationRegistry) -> str:
     """Return the deterministic federation vote event identifier for a shard header."""
     payload = HASH_SEPARATOR.join(
         [
             str(header["shard_id"]),
             str(header["header_hash"]),
             str(header["timestamp"]),
+            str(registry.epoch),
+            registry.membership_hash(),
         ]
     ).encode("utf-8")
     return hash_bytes(payload).hex()
 
 
-def _federation_vote_payload(header: dict[str, Any], node_id: str) -> bytes:
+def _federation_vote_payload(
+    header: dict[str, Any], node_id: str, registry: FederationRegistry
+) -> bytes:
     """Build domain-separated bytes for federation vote signing and verification."""
-    event_id = _federation_vote_event_id(header)
+    event_id = _federation_vote_event_id(header, registry)
     payload = HASH_SEPARATOR.join(
         [
             _FEDERATION_VOTE_DOMAIN,
@@ -256,6 +277,8 @@ def _federation_vote_payload(header: dict[str, Any], node_id: str) -> bytes:
             str(header["shard_id"]),
             str(header["header_hash"]),
             str(header["timestamp"]),
+            str(registry.epoch),
+            registry.membership_hash(),
             event_id,
         ]
     )
@@ -292,7 +315,7 @@ def verify_federated_header_signatures(
         if not node.active:
             continue
         try:
-            vote_hash = hash_bytes(_federation_vote_payload(header, signature.node_id))
+            vote_hash = hash_bytes(_federation_vote_payload(header, signature.node_id, registry))
             signature_bytes = bytes.fromhex(signature.signature)
             for verify_key in node.verify_keys_for_timestamp(str(header["timestamp"])):
                 try:
@@ -345,7 +368,9 @@ def build_quorum_certificate(
         "shard_id": str(header["shard_id"]),
         "header_hash": str(header["header_hash"]),
         "timestamp": str(header["timestamp"]),
-        "event_id": _federation_vote_event_id(header),
+        "event_id": _federation_vote_event_id(header, registry),
+        "federation_epoch": registry.epoch,
+        "membership_hash": registry.membership_hash(),
         "quorum_threshold": registry.quorum_threshold(),
         "acknowledgments": [
             signature.to_dict()
@@ -365,6 +390,8 @@ def verify_quorum_certificate(
         "header_hash",
         "timestamp",
         "event_id",
+        "federation_epoch",
+        "membership_hash",
         "quorum_threshold",
         "acknowledgments",
     }
@@ -376,7 +403,11 @@ def verify_quorum_certificate(
         return False
     if certificate["timestamp"] != header.get("timestamp"):
         return False
-    if certificate["event_id"] != _federation_vote_event_id(header):
+    if certificate["event_id"] != _federation_vote_event_id(header, registry):
+        return False
+    if int(certificate["federation_epoch"]) != registry.epoch:
+        return False
+    if str(certificate["membership_hash"]) != registry.membership_hash():
         return False
     if int(certificate["quorum_threshold"]) != registry.quorum_threshold():
         return False
@@ -390,12 +421,14 @@ def verify_quorum_certificate(
         if isinstance(item, dict) and "node_id" in item and "signature" in item
     ]
     unique_signatures: list[NodeSignature] = []
-    seen_signature_tuples: set[tuple[str, str]] = set()
+    seen_signatures_by_node: dict[str, str] = {}
     for signature in signatures:
-        signature_key = (signature.node_id, signature.signature)
-        if signature_key in seen_signature_tuples:
+        previous_signature = seen_signatures_by_node.get(signature.node_id)
+        if previous_signature is not None:
+            if previous_signature != signature.signature:
+                return False
             continue
-        seen_signature_tuples.add(signature_key)
+        seen_signatures_by_node[signature.node_id] = signature.signature
         unique_signatures.append(signature)
     valid_signatures = verify_federated_header_signatures(header, unique_signatures, registry)
     return len(valid_signatures) >= registry.quorum_threshold() and len(valid_signatures) == len(

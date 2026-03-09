@@ -92,8 +92,8 @@ def test_federated_shard_header_reaches_quorum_with_two_of_three_signatures() ->
     )
 
     signatures = [
-        sign_federated_header(header, "olympus-node-1", _test_signing_key(1)),
-        sign_federated_header(header, "olympus-node-2", _test_signing_key(2)),
+        sign_federated_header(header, "olympus-node-1", _test_signing_key(1), registry),
+        sign_federated_header(header, "olympus-node-2", _test_signing_key(2), registry),
     ]
 
     valid_signatures = verify_federated_header_signatures(header, signatures, registry)
@@ -121,14 +121,13 @@ def test_federated_quorum_rejects_invalid_or_duplicate_signatures() -> None:
     )
 
     duplicate_signature = sign_federated_header(
-        header,
-        "olympus-node-1",
-        _test_signing_key(1),
+        header, "olympus-node-1", _test_signing_key(1), registry
     )
     wrong_header_signature = sign_federated_header(
         other_header,
         "olympus-node-2",
         _test_signing_key(2),
+        registry,
     )
 
     signatures = [duplicate_signature, duplicate_signature, wrong_header_signature]
@@ -149,8 +148,8 @@ def test_byzantine_simulation_partition_accepts_two_of_three_quorum() -> None:
 
     # Simulate one node partitioned away while two nodes can still acknowledge.
     signatures = [
-        sign_federated_header(header, "olympus-node-1", _test_signing_key(1)),
-        sign_federated_header(header, "olympus-node-2", _test_signing_key(2)),
+        sign_federated_header(header, "olympus-node-1", _test_signing_key(1), registry),
+        sign_federated_header(header, "olympus-node-2", _test_signing_key(2), registry),
     ]
 
     assert has_federation_quorum(header, signatures, registry) is True
@@ -166,7 +165,7 @@ def test_byzantine_simulation_mid_commit_node_kill_rejects_subquorum() -> None:
     )
 
     # Node 1 signs, then nodes 2 and 3 are unavailable/partitioned before ack.
-    signatures = [sign_federated_header(header, "olympus-node-1", _test_signing_key(1))]
+    signatures = [sign_federated_header(header, "olympus-node-1", _test_signing_key(1), registry)]
 
     assert has_federation_quorum(header, signatures, registry) is False
 
@@ -218,12 +217,12 @@ def test_byzantine_threshold_for_four_nodes_requires_three_signatures() -> None:
     )
 
     two_signatures = [
-        sign_federated_header(header, "olympus-node-1", _test_signing_key(1)),
-        sign_federated_header(header, "olympus-node-2", _test_signing_key(2)),
+        sign_federated_header(header, "olympus-node-1", _test_signing_key(1), registry),
+        sign_federated_header(header, "olympus-node-2", _test_signing_key(2), registry),
     ]
     three_signatures = [
         *two_signatures,
-        sign_federated_header(header, "olympus-node-3", _test_signing_key(3)),
+        sign_federated_header(header, "olympus-node-3", _test_signing_key(3), registry),
     ]
 
     assert registry.quorum_threshold() == 3
@@ -240,8 +239,8 @@ def test_quorum_certificate_is_verifiable_and_persisted_in_ledger() -> None:
         timestamp="2026-03-09T00:00:02Z",
     )
     signatures = [
-        sign_federated_header(header, "olympus-node-1", _test_signing_key(1)),
-        sign_federated_header(header, "olympus-node-2", _test_signing_key(2)),
+        sign_federated_header(header, "olympus-node-1", _test_signing_key(1), registry),
+        sign_federated_header(header, "olympus-node-2", _test_signing_key(2), registry),
     ]
 
     certificate = build_quorum_certificate(header, signatures, registry)
@@ -276,8 +275,12 @@ def test_federation_node_key_rotation_preserves_historical_quorum_verification()
         timestamp="2026-03-09T23:59:59Z",
     )
     historical_signatures = [
-        sign_federated_header(historical_header, "olympus-node-1", old_node_one_key),
-        sign_federated_header(historical_header, "olympus-node-2", _test_signing_key(2)),
+        sign_federated_header(
+            historical_header, "olympus-node-1", old_node_one_key, rotated_registry
+        ),
+        sign_federated_header(
+            historical_header, "olympus-node-2", _test_signing_key(2), rotated_registry
+        ),
     ]
 
     assert has_federation_quorum(historical_header, historical_signatures, rotated_registry) is True
@@ -300,14 +303,14 @@ def test_federation_node_key_rotation_rejects_post_rotation_old_key_signatures()
     )
 
     old_key_signatures = [
-        sign_federated_header(header, "olympus-node-1", old_node_one_key),
-        sign_federated_header(header, "olympus-node-2", _test_signing_key(2)),
+        sign_federated_header(header, "olympus-node-1", old_node_one_key, rotated_registry),
+        sign_federated_header(header, "olympus-node-2", _test_signing_key(2), rotated_registry),
     ]
     assert has_federation_quorum(header, old_key_signatures, rotated_registry) is False
 
     rotated_key_signatures = [
-        sign_federated_header(header, "olympus-node-1", new_node_one_key),
-        sign_federated_header(header, "olympus-node-2", _test_signing_key(2)),
+        sign_federated_header(header, "olympus-node-1", new_node_one_key, rotated_registry),
+        sign_federated_header(header, "olympus-node-2", _test_signing_key(2), rotated_registry),
     ]
     assert has_federation_quorum(header, rotated_key_signatures, rotated_registry) is True
 
@@ -321,8 +324,8 @@ def test_quorum_certificate_acknowledgments_are_canonicalized_for_determinism() 
         timestamp="2026-03-09T00:00:03Z",
     )
     signatures = [
-        sign_federated_header(header, "olympus-node-2", _test_signing_key(2)),
-        sign_federated_header(header, "olympus-node-1", _test_signing_key(1)),
+        sign_federated_header(header, "olympus-node-2", _test_signing_key(2), registry),
+        sign_federated_header(header, "olympus-node-1", _test_signing_key(1), registry),
     ]
 
     certificate = build_quorum_certificate(header, signatures, registry)
@@ -341,8 +344,8 @@ def test_verify_quorum_certificate_ignores_duplicate_acknowledgments() -> None:
         root_hash=bytes.fromhex("aa" * 32),
         timestamp="2026-03-09T00:00:04Z",
     )
-    signature_one = sign_federated_header(header, "olympus-node-1", _test_signing_key(1))
-    signature_two = sign_federated_header(header, "olympus-node-2", _test_signing_key(2))
+    signature_one = sign_federated_header(header, "olympus-node-1", _test_signing_key(1), registry)
+    signature_two = sign_federated_header(header, "olympus-node-2", _test_signing_key(2), registry)
     certificate = {
         "shard_id": header["shard_id"],
         "header_hash": header["header_hash"],
@@ -350,6 +353,8 @@ def test_verify_quorum_certificate_ignores_duplicate_acknowledgments() -> None:
         "event_id": build_quorum_certificate(header, [signature_one, signature_two], registry)[
             "event_id"
         ],
+        "federation_epoch": registry.epoch,
+        "membership_hash": registry.membership_hash(),
         "quorum_threshold": registry.quorum_threshold(),
         "acknowledgments": [
             signature_one.to_dict(),
@@ -359,6 +364,42 @@ def test_verify_quorum_certificate_ignores_duplicate_acknowledgments() -> None:
     }
 
     assert verify_quorum_certificate(certificate, header, registry) is True
+
+
+def test_verify_quorum_certificate_rejects_conflicting_duplicate_node_votes() -> None:
+    """A node must not contribute multiple conflicting signatures in one round."""
+    registry = FederationRegistry.from_file(REGISTRY_PATH)
+    header = create_shard_header(
+        shard_id="records/city-a",
+        root_hash=bytes.fromhex("ab" * 32),
+        timestamp="2026-03-09T00:00:04Z",
+    )
+    signature_one = sign_federated_header(header, "olympus-node-1", _test_signing_key(1), registry)
+    signature_two = sign_federated_header(header, "olympus-node-2", _test_signing_key(2), registry)
+    conflicting_signature_one = sign_federated_header(
+        header,
+        "olympus-node-1",
+        _test_signing_key(9),
+        registry,
+    )
+    certificate = {
+        "shard_id": header["shard_id"],
+        "header_hash": header["header_hash"],
+        "timestamp": header["timestamp"],
+        "event_id": build_quorum_certificate(header, [signature_one, signature_two], registry)[
+            "event_id"
+        ],
+        "federation_epoch": registry.epoch,
+        "membership_hash": registry.membership_hash(),
+        "quorum_threshold": registry.quorum_threshold(),
+        "acknowledgments": [
+            signature_one.to_dict(),
+            conflicting_signature_one.to_dict(),
+            signature_two.to_dict(),
+        ],
+    }
+
+    assert verify_quorum_certificate(certificate, header, registry) is False
 
 
 def test_federation_signature_is_domain_separated_from_plain_header_signature() -> None:
@@ -386,13 +427,50 @@ def test_verify_quorum_certificate_rejects_event_id_replay() -> None:
         timestamp="2026-03-09T00:00:06Z",
     )
     signatures = [
-        sign_federated_header(header, "olympus-node-1", _test_signing_key(1)),
-        sign_federated_header(header, "olympus-node-2", _test_signing_key(2)),
+        sign_federated_header(header, "olympus-node-1", _test_signing_key(1), registry),
+        sign_federated_header(header, "olympus-node-2", _test_signing_key(2), registry),
     ]
     certificate = build_quorum_certificate(header, signatures, registry)
     replayed_certificate = {**certificate, "event_id": "00" * 32}
 
     assert verify_quorum_certificate(replayed_certificate, header, registry) is False
+
+
+def test_verify_quorum_certificate_rejects_membership_hash_mismatch() -> None:
+    """Certificates must be bound to the registry membership commitment."""
+    registry = FederationRegistry.from_file(REGISTRY_PATH)
+    header = create_shard_header(
+        shard_id="records/city-a",
+        root_hash=bytes.fromhex("dd" * 32),
+        timestamp="2026-03-09T00:00:07Z",
+    )
+    signatures = [
+        sign_federated_header(header, "olympus-node-1", _test_signing_key(1), registry),
+        sign_federated_header(header, "olympus-node-2", _test_signing_key(2), registry),
+    ]
+    certificate = build_quorum_certificate(header, signatures, registry)
+    tampered_certificate = {**certificate, "membership_hash": "00" * 32}
+
+    assert verify_quorum_certificate(tampered_certificate, header, registry) is False
+
+
+def test_verify_quorum_certificate_rejects_epoch_mismatch() -> None:
+    """Certificates must be bound to the federation epoch."""
+    base_registry = FederationRegistry.from_file(REGISTRY_PATH)
+    registry = FederationRegistry(nodes=base_registry.nodes, epoch=7)
+    header = create_shard_header(
+        shard_id="records/city-a",
+        root_hash=bytes.fromhex("ee" * 32),
+        timestamp="2026-03-09T00:00:08Z",
+    )
+    signatures = [
+        sign_federated_header(header, "olympus-node-1", _test_signing_key(1), registry),
+        sign_federated_header(header, "olympus-node-2", _test_signing_key(2), registry),
+    ]
+    certificate = build_quorum_certificate(header, signatures, registry)
+    tampered_certificate = {**certificate, "federation_epoch": registry.epoch + 1}
+
+    assert verify_quorum_certificate(tampered_certificate, header, registry) is False
 
 
 def test_node_key_rotation_with_superseding_signature() -> None:
