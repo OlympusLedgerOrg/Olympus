@@ -428,6 +428,14 @@ def test_request_timestamp_quorum_requests_both_tsas():
     assert request_mock.call_args_list[1].kwargs == {"tsa_url": DIGICERT_TSA_URL}
 
 
+def test_request_timestamp_quorum_rejects_non_uniform_tsa_configuration():
+    with pytest.raises(ValueError, match="uniform federation finalization"):
+        request_timestamp_quorum(
+            "a" * 64,
+            tsa_urls=(DEFAULT_TSA_URL, "https://timestamp.sectigo.com"),
+        )
+
+
 def test_verify_timestamp_quorum_requires_both_valid_tokens():
     token_a = TimestampToken("a" * 64, DEFAULT_TSA_URL, b"\x01", "2026-03-01T00:00:00Z")
     token_b = TimestampToken("a" * 64, DIGICERT_TSA_URL, b"\x02", "2026-03-01T00:00:01Z")
@@ -437,6 +445,18 @@ def test_verify_timestamp_quorum_requires_both_valid_tokens():
 
     with patch("protocol.rfc3161.verify_timestamp_token", side_effect=[True]):
         assert verify_timestamp_quorum([token_a], "a" * 64) is False
+
+
+def test_verify_timestamp_quorum_rejects_non_uniform_required_tsa_urls():
+    token_a = TimestampToken("a" * 64, DEFAULT_TSA_URL, b"\x01", "2026-03-01T00:00:00Z")
+    token_b = TimestampToken("a" * 64, DIGICERT_TSA_URL, b"\x02", "2026-03-01T00:00:01Z")
+
+    with pytest.raises(ValueError, match="uniform federation finalization"):
+        verify_timestamp_quorum(
+            [token_a, token_b],
+            "a" * 64,
+            required_tsa_urls=(DIGICERT_TSA_URL, DEFAULT_TSA_URL),
+        )
 
 
 def test_timestamp_watchdog_status_alerts_for_stale_or_missing_tsa():
@@ -454,6 +474,16 @@ def test_timestamp_watchdog_status_alerts_for_stale_or_missing_tsa():
     assert any("missing" in alert for alert in status["alerts"])
     assert status["tsa_status"][DEFAULT_TSA_URL]["stale"] is True
     assert status["tsa_status"][DIGICERT_TSA_URL]["present"] is False
+
+
+def test_timestamp_watchdog_status_rejects_non_uniform_required_tsa_urls():
+    token = TimestampToken("a" * 64, DEFAULT_TSA_URL, b"\x01", "2026-03-01T00:00:00Z")
+
+    with pytest.raises(ValueError, match="uniform federation finalization"):
+        timestamp_watchdog_status(
+            [token],
+            required_tsa_urls=(DIGICERT_TSA_URL, DEFAULT_TSA_URL),
+        )
 
 
 def test_verify_timestamp_token_rejects_dev_trust_mode_in_production(monkeypatch):

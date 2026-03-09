@@ -49,6 +49,27 @@ class Ledger:
         """Initialize an empty ledger."""
         self.entries: list[LedgerEntry] = []
 
+    @staticmethod
+    def _canonicalize_quorum_certificate(
+        certificate: dict[str, Any] | None,
+    ) -> dict[str, Any] | None:
+        """Normalize quorum certificate metadata before hash commitment."""
+        if certificate is None:
+            return None
+        normalized_certificate = dict(certificate)
+        acknowledgments = normalized_certificate.get("acknowledgments")
+        if isinstance(acknowledgments, list):
+            signature_items = [
+                {"node_id": str(item["node_id"]), "signature": str(item["signature"])}
+                for item in acknowledgments
+                if isinstance(item, dict) and "node_id" in item and "signature" in item
+            ]
+            normalized_certificate["acknowledgments"] = sorted(
+                signature_items,
+                key=lambda item: (item["node_id"], item["signature"]),
+            )
+        return normalized_certificate
+
     def append(
         self,
         record_hash: str,
@@ -74,6 +95,10 @@ class Ledger:
         ts = current_timestamp()
         prev_entry_hash = self.entries[-1].entry_hash if self.entries else ""
 
+        normalized_certificate = self._canonicalize_quorum_certificate(
+            federation_quorum_certificate
+        )
+
         # Create payload for hashing
         payload = {
             "ts": ts,
@@ -83,8 +108,8 @@ class Ledger:
             "canonicalization": canonicalization,
             "prev_entry_hash": prev_entry_hash,
         }
-        if federation_quorum_certificate is not None:
-            payload["federation_quorum_certificate"] = federation_quorum_certificate
+        if normalized_certificate is not None:
+            payload["federation_quorum_certificate"] = normalized_certificate
 
         # Compute entry hash using LEDGER_PREFIX + canonical JSON
         entry_hash = blake3_hash([LEDGER_PREFIX, canonical_json_bytes(payload)]).hex()
@@ -95,7 +120,7 @@ class Ledger:
             shard_id=shard_id,
             shard_root=shard_root,
             canonicalization=canonicalization,
-            federation_quorum_certificate=federation_quorum_certificate,
+            federation_quorum_certificate=normalized_certificate,
             prev_entry_hash=prev_entry_hash,
             entry_hash=entry_hash,
         )
@@ -143,8 +168,11 @@ class Ledger:
                 "canonicalization": entry.canonicalization,
                 "prev_entry_hash": entry.prev_entry_hash,
             }
-            if entry.federation_quorum_certificate is not None:
-                payload["federation_quorum_certificate"] = entry.federation_quorum_certificate
+            normalized_certificate = self._canonicalize_quorum_certificate(
+                entry.federation_quorum_certificate
+            )
+            if normalized_certificate is not None:
+                payload["federation_quorum_certificate"] = normalized_certificate
             expected_hash = blake3_hash([LEDGER_PREFIX, canonical_json_bytes(payload)]).hex()
 
             if entry.entry_hash != expected_hash:
