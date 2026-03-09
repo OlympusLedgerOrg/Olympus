@@ -1,4 +1,6 @@
 from protocol.hashes import (
+    EVENT_PREFIX,
+    FEDERATION_PREFIX,
     FOREST_PREFIX,
     HDR_PREFIX,
     KEY_PREFIX,
@@ -21,3 +23,5 @@ def test_hash_domain_prefixes_are_frozen():
     assert FOREST_PREFIX == b"OLY:FOREST:V1"
     assert POLICY_PREFIX == b"OLY:POLICY:V1"
     assert LEDGER_PREFIX == b"OLY:LEDGER:V1"
+    assert FEDERATION_PREFIX == b"OLY:FEDERATION:V1"
+    assert EVENT_PREFIX == b"OLY:EVENT:V1"
