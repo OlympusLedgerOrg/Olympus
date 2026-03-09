@@ -144,6 +144,38 @@ def test_ledger_entry_hash_computation():
     assert entry.entry_hash == expected_hash
 
 
+def test_ledger_entry_hash_includes_federation_quorum_certificate_when_present():
+    """Quorum certificate metadata should be part of ledger entry hash commitment."""
+    ledger = Ledger()
+
+    certificate = {
+        "shard_id": "records/city-a",
+        "header_hash": "ab" * 32,
+        "timestamp": "2026-03-09T00:00:00Z",
+        "quorum_threshold": 2,
+        "acknowledgments": [{"node_id": "olympus-node-1", "signature": "cd" * 64}],
+    }
+    entry = ledger.append(
+        record_hash="test_hash",
+        shard_id="records/city-a",
+        shard_root="test_root",
+        canonicalization=_canonicalization(),
+        federation_quorum_certificate=certificate,
+    )
+
+    payload = {
+        "ts": entry.ts,
+        "record_hash": entry.record_hash,
+        "shard_id": entry.shard_id,
+        "shard_root": entry.shard_root,
+        "canonicalization": entry.canonicalization,
+        "prev_entry_hash": entry.prev_entry_hash,
+        "federation_quorum_certificate": certificate,
+    }
+    expected_hash = blake3_hash([LEDGER_PREFIX, canonical_json_bytes(payload)]).hex()
+    assert entry.entry_hash == expected_hash
+
+
 def test_ledger_get_entry_by_hash():
     """Test retrieving an entry by its hash."""
     ledger = Ledger()

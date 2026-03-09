@@ -10,6 +10,7 @@ from typing import Any
 
 import nacl.signing
 
+from protocol.ledger import Ledger, LedgerEntry
 from protocol.shards import sign_header, verify_header
 
 
@@ -176,3 +177,78 @@ def build_federation_header_record(
         "header_hash": str(header["header_hash"]),
         "node_signatures": [signature.to_dict() for signature in signatures],
     }
+
+
+def build_quorum_certificate(
+    header: dict[str, Any],
+    signatures: list[NodeSignature],
+    registry: FederationRegistry,
+) -> dict[str, Any]:
+    """Build a verifiable quorum certificate for a federation-finalized shard header."""
+    valid_signatures = verify_federated_header_signatures(header, signatures, registry)
+    if len(valid_signatures) < registry.quorum_threshold():
+        raise ValueError("Insufficient valid federation signatures for quorum certificate")
+    return {
+        "shard_id": str(header["shard_id"]),
+        "header_hash": str(header["header_hash"]),
+        "timestamp": str(header["timestamp"]),
+        "quorum_threshold": registry.quorum_threshold(),
+        "acknowledgments": [signature.to_dict() for signature in valid_signatures],
+    }
+
+
+def verify_quorum_certificate(
+    certificate: dict[str, Any],
+    header: dict[str, Any],
+    registry: FederationRegistry,
+) -> bool:
+    """Verify a quorum certificate against a header and registry membership."""
+    required_fields = {
+        "shard_id",
+        "header_hash",
+        "timestamp",
+        "quorum_threshold",
+        "acknowledgments",
+    }
+    if not required_fields.issubset(certificate):
+        return False
+    if certificate["shard_id"] != header.get("shard_id"):
+        return False
+    if certificate["header_hash"] != header.get("header_hash"):
+        return False
+    if certificate["timestamp"] != header.get("timestamp"):
+        return False
+    if int(certificate["quorum_threshold"]) != registry.quorum_threshold():
+        return False
+
+    acknowledgments = certificate.get("acknowledgments")
+    if not isinstance(acknowledgments, list):
+        return False
+    signatures = [
+        NodeSignature(node_id=str(item["node_id"]), signature=str(item["signature"]))
+        for item in acknowledgments
+        if isinstance(item, dict) and "node_id" in item and "signature" in item
+    ]
+    valid_signatures = verify_federated_header_signatures(header, signatures, registry)
+    return len(valid_signatures) >= registry.quorum_threshold() and len(valid_signatures) == len(
+        signatures
+    )
+
+
+def append_quorum_certificate_to_ledger(
+    *,
+    ledger: Ledger,
+    header: dict[str, Any],
+    signatures: list[NodeSignature],
+    registry: FederationRegistry,
+    canonicalization: dict[str, Any],
+) -> LedgerEntry:
+    """Append a ledger entry that persistently commits a federation quorum certificate."""
+    certificate = build_quorum_certificate(header, signatures, registry)
+    return ledger.append(
+        record_hash=str(header["header_hash"]),
+        shard_id=str(header["shard_id"]),
+        shard_root=str(header["root_hash"]),
+        canonicalization=canonicalization,
+        federation_quorum_certificate=certificate,
+    )
