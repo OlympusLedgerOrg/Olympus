@@ -59,7 +59,7 @@ class _FakeCursor:
     def __init__(self) -> None:
         self.statements: list[str] = []
 
-    def execute(self, sql: str, _params: tuple[object, ...]) -> None:
+    def execute(self, sql: str, _params: object) -> None:
         self.statements.append(" ".join(sql.split()))
 
 

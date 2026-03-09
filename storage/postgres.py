@@ -150,6 +150,7 @@ class StorageLayer:
 
     def _acquire_connection_with_retry(self) -> psycopg.Connection[dict[str, Any]]:
         """Acquire a pooled connection with retry and circuit-breaker protection."""
+        last_transient_error: Exception | None = None
         for attempt in range(self._connection_retries + 1):
             if self._is_circuit_breaker_open():
                 raise RuntimeError("Database circuit breaker is open; retry later")
@@ -159,11 +160,10 @@ class StorageLayer:
             except Exception as exc:
                 if not self._is_transient_connection_error(exc):
                     raise
+                last_transient_error = exc
                 self._record_connection_failure()
                 if attempt == self._connection_retries:
-                    raise RuntimeError(
-                        "Failed to acquire PostgreSQL connection after retries"
-                    ) from exc
+                    break
                 delay = min(
                     self._retry_base_delay_seconds * (2**attempt),
                     self._retry_max_delay_seconds,
@@ -174,6 +174,10 @@ class StorageLayer:
             self._reset_connection_failures()
             return connection
 
+        if last_transient_error is not None:
+            raise RuntimeError("Failed to acquire PostgreSQL connection after retries") from (
+                last_transient_error
+            )
         raise RuntimeError("Failed to acquire PostgreSQL connection after retries")
 
     def _is_transient_connection_error(self, exc: Exception) -> bool:
