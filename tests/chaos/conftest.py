@@ -4,10 +4,10 @@ from __future__ import annotations
 
 import pytest
 
+from protocol.ledger import Ledger
+
 
 @pytest.fixture()
-def fresh_ledger():  # type: ignore[no-untyped-def]
+def fresh_ledger() -> Ledger:
     """Return a new empty Ledger instance for each test."""
-    from protocol.ledger import Ledger
-
     return Ledger()

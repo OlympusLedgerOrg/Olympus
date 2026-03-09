@@ -92,8 +92,8 @@ def test_chain_integrity_with_non_monotonic_timestamps(fresh_ledger: Ledger) -> 
     """
     fake_timestamps = [
         "2026-06-01T12:00:00Z",
-        "2025-01-01T00:00:00Z",   # backwards jump
-        "2024-03-15T08:30:00Z",   # further back
+        "2025-01-01T00:00:00Z",  # backwards jump
+        "2024-03-15T08:30:00Z",  # further back
     ]
 
     for i, ts in enumerate(fake_timestamps):

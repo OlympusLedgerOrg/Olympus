@@ -20,7 +20,6 @@ Expected system behaviour
 from __future__ import annotations
 
 import logging
-import socket
 from unittest.mock import patch
 
 import pytest
@@ -63,14 +62,17 @@ def test_local_commit_succeeds_when_tsa_unreachable(fresh_ledger: Ledger) -> Non
     Ledger append succeeds even when the RFC 3161 TSA is unreachable.
 
     The TSA call is simulated by patching ``socket.getaddrinfo`` to raise a
-    ``socket.gaierror`` (DNS failure).  The local commit path must not block
-    on the TSA response.
+    ``socket.gaierror`` (DNS failure) for TSA hostnames.  The local commit
+    path must not block on the TSA response.
     """
+    import socket as _socket
 
-    def _dns_fail(host: str, *_args: object, **_kwargs: object) -> list[object]:
+    _real_getaddrinfo = _socket.getaddrinfo
+
+    def _dns_fail(host: str, *args: object, **kwargs: object) -> list[object]:
         if "freetsa" in str(host) or "tsa" in str(host):
-            raise socket.gaierror(11001, "Name or service not known")
-        return socket.getaddrinfo.__wrapped__(host, *_args, **_kwargs)  # type: ignore[attr-defined]
+            raise _socket.gaierror(11001, "Name or service not known")
+        return _real_getaddrinfo(host, *args, **kwargs)  # type: ignore[arg-type]
 
     # In-memory Ledger.append() never contacts the TSA directly; verify it
     # succeeds even if the network is unavailable.

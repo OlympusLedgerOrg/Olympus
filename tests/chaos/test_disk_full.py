@@ -51,12 +51,12 @@ def test_in_memory_ledger_survives_disk_full(fresh_ledger: Ledger) -> None:
     Simulates an ``OSError`` on any ``open()`` call during a ledger append and
     verifies that the in-memory chain remains intact and verifiable.
     """
-    original_open = open  # noqa: WPS421
+    builtin_open = open  # keep reference before patch
 
     def _raise_on_write(path: object, mode: str = "r", **kwargs: object) -> io.IOBase:
         if isinstance(mode, str) and "w" in mode:
             raise OSError(28, "No space left on device")
-        return original_open(path, mode, **kwargs)  # type: ignore[arg-type,call-arg]
+        return builtin_open(path, mode, **kwargs)  # type: ignore[arg-type,call-arg]
 
     # Commit two entries before injecting the fault
     for i in range(2):
@@ -158,9 +158,10 @@ def test_committed_entries_verifiable_after_failed_extra_append(
     assert pre_fault_count == 3
 
     # Patch current_timestamp to raise on the very next call
-    monkeypatch.setattr(
-        ledger_module, "current_timestamp", lambda: (_ for _ in ()).throw(OSError(28, "No space left on device"))  # type: ignore[misc]
-    )
+    def _raise_disk_full() -> str:
+        raise OSError(28, "No space left on device")
+
+    monkeypatch.setattr(ledger_module, "current_timestamp", _raise_disk_full)
 
     leaf4 = _make_leaf_hash(100)
     tree4 = MerkleTree([leaf4])

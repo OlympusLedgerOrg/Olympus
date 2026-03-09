@@ -722,8 +722,7 @@ async def metrics() -> Any:
         raise HTTPException(
             status_code=503,
             detail=(
-                "prometheus-client is not installed. "
-                "Install it with: pip install prometheus-client"
+                "prometheus-client is not installed. Install it with: pip install prometheus-client"
             ),
         )
 
