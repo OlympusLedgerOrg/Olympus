@@ -19,7 +19,7 @@ Expected system behaviour
 from __future__ import annotations
 
 import re
-from datetime import UTC, datetime
+from datetime import datetime, timezone
 from unittest.mock import patch
 
 import protocol.ledger as ledger_module
@@ -150,9 +150,9 @@ def test_iso8601_serialisation_unaffected_by_extreme_dates() -> None:
     iso8601_re = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$")
 
     extreme_dates = [
-        datetime(1970, 1, 1, 0, 0, 0, tzinfo=UTC),
-        datetime(2000, 2, 29, 12, 0, 0, tzinfo=UTC),  # leap year
-        datetime(9999, 12, 31, 23, 59, 59, tzinfo=UTC),
+        datetime(1970, 1, 1, 0, 0, 0, tzinfo=timezone.utc),
+        datetime(2000, 2, 29, 12, 0, 0, tzinfo=timezone.utc),  # leap year
+        datetime(9999, 12, 31, 23, 59, 59, tzinfo=timezone.utc),
     ]
 
     for dt in extreme_dates:
