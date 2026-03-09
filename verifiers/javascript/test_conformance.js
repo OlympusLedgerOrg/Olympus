@@ -16,6 +16,7 @@ const {
   merkleParentHash,
   computeMerkleRoot,
   verifyMerkleProof,
+  computeLedgerEntryHash,
 } = require('./verifier');
 
 const VECTORS_PATH = path.join(__dirname, '..', 'test_vectors', 'vectors.json');
@@ -114,6 +115,16 @@ function testCanonicalizerHash(vectors) {
   console.log(`  ✓ canonicalizer_hash: ${vectors.length} vectors`);
 }
 
+function testLedgerEntryHash(vectors) {
+  console.log('Testing conformance: ledger_entry_hash...');
+  for (const vec of vectors.ledger_entry_hash) {
+    const payloadBytes = Buffer.from(vec.canonical_payload_hex, 'hex');
+    const got = toHex(computeLedgerEntryHash(payloadBytes));
+    assert(got === vec.entry_hash, `ledger_entry_hash(${JSON.stringify(vec.description)}): got ${got}, want ${vec.entry_hash}`);
+  }
+  console.log(`  ✓ ledger_entry_hash: ${vectors.ledger_entry_hash.length} vectors`);
+}
+
 function runConformanceTests() {
   console.log('Running JavaScript conformance tests against vectors.json\n');
   const vectors = loadVectors();
@@ -124,6 +135,7 @@ function runConformanceTests() {
   testMerkleRoot(vectors);
   testMerkleProof(vectors);
   testCanonicalizerHash(canonicalizerVectors);
+  testLedgerEntryHash(vectors);
   console.log('\n✓ All JavaScript conformance tests passed!');
 }
 

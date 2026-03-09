@@ -28,11 +28,12 @@ func canonicalizerVectorFile(t *testing.T) string {
 // --- JSON structures for parsing vectors.json ---
 
 type Vectors struct {
-	Blake3Raw        []Blake3RawVec        `json:"blake3_raw"`
-	MerkleLeafHash   []LeafHashVec         `json:"merkle_leaf_hash"`
-	MerkleParentHash []ParentHashVec       `json:"merkle_parent_hash"`
-	MerkleRoot       []MerkleRootVec       `json:"merkle_root"`
-	MerkleProof      []MerkleProofVec      `json:"merkle_proof"`
+	Blake3Raw          []Blake3RawVec          `json:"blake3_raw"`
+	MerkleLeafHash     []LeafHashVec           `json:"merkle_leaf_hash"`
+	MerkleParentHash   []ParentHashVec         `json:"merkle_parent_hash"`
+	MerkleRoot         []MerkleRootVec         `json:"merkle_root"`
+	MerkleProof        []MerkleProofVec        `json:"merkle_proof"`
+	LedgerEntryHash    []LedgerEntryHashVec    `json:"ledger_entry_hash"`
 }
 
 type Blake3RawVec struct {
@@ -72,6 +73,12 @@ type MerkleProofVec struct {
 	Siblings      []SiblingVec `json:"siblings"`
 	RootHash      string       `json:"root_hash"`
 	ExpectedValid bool         `json:"expected_valid"`
+}
+
+type LedgerEntryHashVec struct {
+	Description        string `json:"description"`
+	CanonicalPayloadHex string `json:"canonical_payload_hex"`
+	EntryHash          string `json:"entry_hash"`
 }
 
 type CanonicalizerHashVec struct {
@@ -231,6 +238,22 @@ func TestConformanceCanonicalizerHash(t *testing.T) {
 			got := hex.EncodeToString(ComputeBlake3(vec.CanonicalBytes))
 			if got != vec.Hash {
 				t.Errorf("canonicalizer_hash(%s):\n  got  %s\n  want %s", vec.GroupID, got, vec.Hash)
+			}
+		})
+	}
+}
+
+func TestConformanceLedgerEntryHash(t *testing.T) {
+	vectors := loadVectors(t)
+	for _, vec := range vectors.LedgerEntryHash {
+		t.Run(vec.Description, func(t *testing.T) {
+			payloadBytes, err := hex.DecodeString(vec.CanonicalPayloadHex)
+			if err != nil {
+				t.Fatalf("failed to decode canonical_payload_hex: %v", err)
+			}
+			got := hex.EncodeToString(ComputeLedgerEntryHash(payloadBytes))
+			if got != vec.EntryHash {
+				t.Errorf("ledger_entry_hash:\n  got  %s\n  want %s", got, vec.EntryHash)
 			}
 		})
 	}

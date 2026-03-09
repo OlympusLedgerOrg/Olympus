@@ -166,6 +166,22 @@ function verifyMerkleProof(proof) {
   return toHex(currentHash) === proof.rootHash.toLowerCase();
 }
 
+/**
+ * Compute the ledger entry hash from pre-canonicalized payload bytes.
+ * Formula: BLAKE3(OLY:LEDGER:V1 || canonical_json_bytes(payload))
+ * The canonical_json_bytes must be produced by the Olympus canonical JSON encoder
+ * (JCS / RFC 8785 with BLAKE3-specific numeric rules — see protocol/canonical_json.py).
+ * @param {Uint8Array} canonicalPayloadBytes - Pre-canonicalized JSON payload bytes
+ * @returns {Uint8Array} - 32-byte entry hash
+ */
+function computeLedgerEntryHash(canonicalPayloadBytes) {
+  const LEDGER_PREFIX = new TextEncoder().encode('OLY:LEDGER:V1');
+  const combined = new Uint8Array(LEDGER_PREFIX.length + canonicalPayloadBytes.length);
+  combined.set(LEDGER_PREFIX, 0);
+  combined.set(canonicalPayloadBytes, LEDGER_PREFIX.length);
+  return computeBlake3(combined);
+}
+
 // Export functions
 module.exports = {
   computeBlake3,
@@ -176,4 +192,5 @@ module.exports = {
   merkleLeafHash,
   computeMerkleRoot,
   verifyMerkleProof,
+  computeLedgerEntryHash,
 };

@@ -14,6 +14,7 @@ import (
 const (
 	LeafPrefix    = "OLY:LEAF:V1"
 	NodePrefix    = "OLY:NODE:V1"
+	LedgerPrefix  = "OLY:LEDGER:V1"
 	HashSeparator = "|"
 )
 
@@ -121,4 +122,15 @@ func VerifyMerkleProof(proof *MerkleProof) (bool, error) {
 
 	actualRoot := hex.EncodeToString(currentHash)
 	return actualRoot == proof.RootHash, nil
+}
+
+// ComputeLedgerEntryHash computes the entry hash from pre-canonicalized payload bytes.
+// Formula: BLAKE3(OLY:LEDGER:V1 || canonical_json_bytes(payload))
+// The canonical_json_bytes must be produced by the Olympus canonical JSON encoder
+// (JCS / RFC 8785 with BLAKE3-specific numeric rules — see protocol/canonical_json.py).
+func ComputeLedgerEntryHash(canonicalPayloadBytes []byte) []byte {
+	var buf bytes.Buffer
+	buf.WriteString(LedgerPrefix)
+	buf.Write(canonicalPayloadBytes)
+	return ComputeBlake3(buf.Bytes())
 }
