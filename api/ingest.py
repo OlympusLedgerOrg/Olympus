@@ -399,6 +399,7 @@ async def ingest_batch(batch: BatchIngestionRequest, request: Request) -> BatchI
     Returns:
         Ingestion results with proof IDs.
     """
+    _authorize_and_rate_limit(request, action="ingest")
     shard_id = batch.records[0].shard_id
     with timed_operation("commit", shard_id=shard_id) as span:
         span.set_attribute("batch_size", len(batch.records))
@@ -549,6 +550,7 @@ async def verify_ingested_content_hash(
     verification result so public portals can display both the commitment data and
     the verifiable transcript needed for independent re-checking.
     """
+    _authorize_and_rate_limit(request, action="verify")
     with timed_operation("verify") as span:
         normalized_hash = _parse_content_hash(content_hash).hex()
         span.set_attribute("content_hash", normalized_hash)
@@ -607,6 +609,7 @@ async def commit_artifact(
     Returns:
         Commitment response with proof_id and ledger anchor details.
     """
+    _authorize_and_rate_limit(http_request, action="commit", body_api_key=request.api_key)
     shard_id = f"artifacts/{request.namespace}"
     with timed_operation("commit", shard_id=shard_id) as span:
         span.set_attribute("namespace", request.namespace)
