@@ -18,9 +18,35 @@ from .canonical_json import canonical_json_bytes
 from .events import CanonicalEvent
 from .hashes import hash_bytes, shard_header_hash
 
+# Fields excluded from the canonical commitment bytes (derived or post-commitment metadata)
+_HEADER_EXCLUDED_FIELDS: frozenset[str] = frozenset(
+    {"header_hash", "signature", "timestamp_token"}
+)
+
 
 if TYPE_CHECKING:
     from .rfc3161 import TimestampToken
+
+
+def canonical_header(header: dict[str, Any]) -> bytes:
+    """
+    Serialize the committed fields of a shard header to canonical JSON bytes.
+
+    Produces a deterministic byte sequence suitable for hashing: keys are
+    sorted alphabetically, separators are compact (no whitespace), and
+    non-ASCII characters are ASCII-escaped.  Fields that are derived from
+    or attached *after* the hash commitment (``header_hash``, ``signature``,
+    ``timestamp_token``) are excluded so that the serialization is stable
+    regardless of whether those fields are present.
+
+    Args:
+        header: Shard header dictionary.
+
+    Returns:
+        Canonical JSON bytes for the header commitment fields.
+    """
+    fields = {k: v for k, v in header.items() if k not in _HEADER_EXCLUDED_FIELDS}
+    return canonical_json_bytes(fields)
 
 
 def create_shard_header(
