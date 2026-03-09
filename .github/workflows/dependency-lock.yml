@@ -26,8 +26,8 @@ jobs:
 
       - name: Compile lockfiles
         run: |
-          pip-compile pyproject.toml --output-file requirements.txt
-          pip-compile pyproject.toml --extra dev --output-file requirements-dev.txt
+          pip-compile pyproject.toml --generate-hashes --output-file requirements.txt
+          pip-compile pyproject.toml --extra dev --generate-hashes --output-file requirements-dev.txt
 
       - name: Create pull request
         uses: peter-evans/create-pull-request@v8
