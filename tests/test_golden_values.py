@@ -377,3 +377,73 @@ class TestCanonicalIdempotencyGolden:
         parsed = json.loads(first.decode("utf-8"))
         second = document_to_bytes(parsed)
         assert first == second
+
+
+# ---------------------------------------------------------------------------
+# Golden vectors: pipeline_golden_example.json artifact
+# ---------------------------------------------------------------------------
+
+
+class TestPipelineGoldenArtifact:
+    """Verify the examples/pipeline_golden_example.json artifact is self-consistent.
+
+    This test independently reproduces every hash in the artifact so that:
+    - contributors cannot accidentally change canonicalization/hashing semantics
+      without this test failing, and
+    - a third party can verify the artifact without trusting the server.
+    """
+
+    def _load_artifact(self) -> dict:
+        from pathlib import Path
+
+        path = Path(__file__).parent.parent / "examples" / "pipeline_golden_example.json"
+        return json.loads(path.read_text(encoding="utf-8"))
+
+    def test_canonical_json_reproducible(self):
+        """Reproduce stage 2 (canonicalize) from the raw document."""
+        artifact = self._load_artifact()
+        doc = artifact["stage_1_ingest"]["document"]
+        expected = artifact["stage_2_canonicalize"]["canonical_json"]
+        assert canonicalize_json(doc) == expected
+
+    def test_document_hash_reproducible(self):
+        """Reproduce stage 3 (hash) from the canonical JSON."""
+        artifact = self._load_artifact()
+        doc = artifact["stage_1_ingest"]["document"]
+        expected_hex = artifact["stage_3_hash"]["document_hash_blake3"]
+        doc_bytes = document_to_bytes(doc)
+        assert hash_bytes(doc_bytes).hex() == expected_hex
+
+    def test_merkle_leaf_hashes_reproducible(self):
+        """Reproduce stage 4 merkle leaf hashes."""
+        from protocol.merkle import merkle_leaf_hash
+
+        artifact = self._load_artifact()
+        leaves_utf8 = artifact["stage_4_commit"]["merkle_leaves_utf8"]
+        expected_hashes = artifact["stage_4_commit"]["merkle_leaf_hashes"]
+        for leaf_text, expected_hex in zip(leaves_utf8, expected_hashes):
+            assert merkle_leaf_hash(leaf_text.encode("utf-8")).hex() == expected_hex
+
+    def test_merkle_root_reproducible(self):
+        """Reproduce stage 4 Merkle root."""
+        from protocol.merkle import MerkleTree, merkle_leaf_hash
+
+        artifact = self._load_artifact()
+        leaves_utf8 = artifact["stage_4_commit"]["merkle_leaves_utf8"]
+        expected_root = artifact["stage_4_commit"]["merkle_root"]
+        leaf_hashes = [merkle_leaf_hash(s.encode("utf-8")) for s in leaves_utf8]
+        tree = MerkleTree(leaf_hashes)
+        assert tree.get_root().hex() == expected_root
+
+    def test_ledger_entry_hash_reproducible(self):
+        """Reproduce stage 4 ledger entry hash."""
+        artifact = self._load_artifact()
+        entry = artifact["stage_4_commit"]["ledger_entry"]
+        expected_canonical_json = entry["payload_canonical_json"]
+        expected_entry_hash = entry["entry_hash"]
+        # Reproduce canonical JSON from payload dict
+        actual_canonical = canonical_json_encode(entry["payload"])
+        assert actual_canonical == expected_canonical_json
+        # Reproduce entry hash
+        actual_hash = blake3_hash([LEDGER_PREFIX, actual_canonical.encode("utf-8")]).hex()
+        assert actual_hash == expected_entry_hash

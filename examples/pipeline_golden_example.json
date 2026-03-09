@@ -1,0 +1,70 @@
+{
+  "_description": "Olympus pipeline example: known-good golden artifact demonstrating all pipeline stages (Ingest → Canonicalize → Hash → Commit → Prove → Verify). Hash values are deterministic and must not change without a protocol version bump.",
+  "_protocol_version": "1.0",
+  "_hash_function": "BLAKE3",
+  "_note": "Replicate (Guardian multi-node replication) is a Phase 1+ feature and is not represented here.",
+  "stage_1_ingest": {
+    "description": "Raw document accepted for ingestion",
+    "document": {
+      "agency": "NARA",
+      "body": "This record was filed on 2024-01-15.",
+      "classification": "UNCLASSIFIED",
+      "id": "DOC-2024-00001",
+      "title": "Example Government Record"
+    }
+  },
+  "stage_2_canonicalize": {
+    "description": "Deterministic JSON canonicalization (RFC 8785 / JCS): keys sorted, compact separators, ensure_ascii=True",
+    "canonical_json": "{\"agency\":\"NARA\",\"body\":\"This record was filed on 2024-01-15.\",\"classification\":\"UNCLASSIFIED\",\"id\":\"DOC-2024-00001\",\"title\":\"Example Government Record\"}"
+  },
+  "stage_3_hash": {
+    "description": "BLAKE3 hash of canonical JSON bytes (UTF-8)",
+    "document_hash_blake3": "b3e714baa89952032eea617ea1b38623be2d620b724a42dca94fda8daeeb48c1"
+  },
+  "stage_4_commit": {
+    "description": "Merkle tree commitment over document sections. Leaf hashes use domain prefix OLY:LEAF:V1.",
+    "merkle_leaves_utf8": [
+      "section-1 text",
+      "section-2 text",
+      "section-3 text"
+    ],
+    "merkle_leaf_hashes": [
+      "1887c99214ab245b39f6b64aa6dd26b118c96a562258074c8550f533dd76d8f9",
+      "7fd0876eb743dc0ef20b4fc848b9f2aa30c96a09bfe55d93b3ba2824f0cc5605",
+      "e2578ff3d3760c1393b39accece25a55d87932418e209f895b5ab19f105a914e"
+    ],
+    "merkle_root": "a2abbad59496d2669283b5a1ad017e0efdd637694696a5570ed060204cbaebbe",
+    "ledger_entry": {
+      "payload": {
+        "prev_entry_hash": "",
+        "record_hash": "b3e714baa89952032eea617ea1b38623be2d620b724a42dca94fda8daeeb48c1",
+        "shard_id": "shard-examples",
+        "shard_root": "a2abbad59496d2669283b5a1ad017e0efdd637694696a5570ed060204cbaebbe",
+        "ts": "2024-01-15T00:00:00Z"
+      },
+      "payload_canonical_json": "{\"prev_entry_hash\":\"\",\"record_hash\":\"b3e714baa89952032eea617ea1b38623be2d620b724a42dca94fda8daeeb48c1\",\"shard_id\":\"shard-examples\",\"shard_root\":\"a2abbad59496d2669283b5a1ad017e0efdd637694696a5570ed060204cbaebbe\",\"ts\":\"2024-01-15T00:00:00Z\"}",
+      "entry_hash": "3ccee8cef9b11c7b7e755099272cefb7b4bade362fe8f861baeec2af70e1187c",
+      "entry_hash_domain": "OLY:LEDGER:V1"
+    }
+  },
+  "stage_5_prove": {
+    "description": "Merkle inclusion proof for leaf index 0 (section-1 text)",
+    "leaf_index": 0,
+    "leaf_hash": "1887c99214ab245b39f6b64aa6dd26b118c96a562258074c8550f533dd76d8f9",
+    "proof_note": "Run `python -c 'from protocol.merkle import MerkleTree, verify_proof; ...'` to verify."
+  },
+  "stage_6_replicate": {
+    "description": "NOT IMPLEMENTED IN v1.0 — Guardian replication is a Phase 1+ feature."
+  },
+  "stage_7_verify": {
+    "description": "Independent verification: reconstruct canonical JSON, recompute hashes, check Merkle root and ledger chain.",
+    "verification_steps": [
+      "1. Canonicalize the document to reproduce canonical_json (stage 2)",
+      "2. Hash canonical_json bytes with BLAKE3 to reproduce document_hash_blake3 (stage 3)",
+      "3. Compute merkle_leaf_hashes using BLAKE3(OLY:LEAF:V1 | leaf_data) for each section",
+      "4. Build Merkle tree and verify merkle_root (stage 4)",
+      "5. Canonicalize the ledger entry payload JSON and hash with BLAKE3(OLY:LEDGER:V1 | payload_bytes) to reproduce entry_hash",
+      "6. Run `make vectors` to verify all golden test vectors pass"
+    ]
+  }
+}
