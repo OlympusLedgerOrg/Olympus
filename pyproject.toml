@@ -53,6 +53,11 @@ dev = [
     "coverage==7.13.4",
     "bandit==1.9.4",
 ]
+observability = [
+    "opentelemetry-api==1.40.0",
+    "opentelemetry-sdk==1.40.0",
+    "prometheus-client==0.24.1",
+]
 
 [tool.setuptools]
 include-package-data = true
@@ -178,6 +183,14 @@ ignore_missing_imports = true
 
 [[tool.mypy.overrides]]
 module = "poseidon_py.*"
+ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+module = "opentelemetry.*"
+ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+module = "prometheus_client.*"
 ignore_missing_imports = true
 
 [tool.bandit]

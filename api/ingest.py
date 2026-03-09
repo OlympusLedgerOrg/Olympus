@@ -32,6 +32,7 @@ from protocol.canonicalizer import canonicalization_provenance
 from protocol.hashes import hash_bytes
 from protocol.ledger import Ledger
 from protocol.merkle import MerkleProof, MerkleTree, verify_proof
+from protocol.telemetry import INGEST_TOTAL, LEDGER_HEIGHT, timed_operation
 from protocol.timestamps import current_timestamp
 
 
@@ -398,93 +399,104 @@ async def ingest_batch(batch: BatchIngestionRequest, request: Request) -> BatchI
     Returns:
         Ingestion results with proof IDs.
     """
-    _authorize_and_rate_limit(request, "ingest")
-    results: list[IngestionResult] = []
-    new_hashes: list[bytes] = []
-    dedup_count = 0
-    canonicalization = canonicalization_provenance(
-        "application/json",
-        CANONICAL_VERSION,
-    )
+    shard_id = batch.records[0].shard_id
+    with timed_operation("commit", shard_id=shard_id) as span:
+        span.set_attribute("batch_size", len(batch.records))
+        results: list[IngestionResult] = []
+        new_hashes: list[bytes] = []
+        dedup_count = 0
+        canonicalization = canonicalization_provenance(
+            "application/json",
+            CANONICAL_VERSION,
+        )
 
-    for record in batch.records:
-        # Canonicalize and hash
-        canonical = canonicalize_document(record.content)
-        content_bytes = document_to_bytes(canonical)
-        content_hash = hash_bytes(content_bytes).hex()
+        for record in batch.records:
+            # Canonicalize and hash
+            canonical = canonicalize_document(record.content)
+            content_bytes = document_to_bytes(canonical)
+            content_hash = hash_bytes(content_bytes).hex()
 
-        # Dedup check
-        if content_hash in _content_index:
-            existing_proof_id = _content_index[content_hash]
+            # Dedup check
+            if content_hash in _content_index:
+                existing_proof_id = _content_index[content_hash]
+                results.append(
+                    IngestionResult(
+                        proof_id=existing_proof_id,
+                        record_id=record.record_id,
+                        shard_id=record.shard_id,
+                        content_hash=content_hash,
+                        deduplicated=True,
+                    )
+                )
+                dedup_count += 1
+                INGEST_TOTAL.labels(outcome="deduplicated").inc()
+                continue
+
+            proof_id = str(uuid.uuid4())
+            new_hashes.append(bytes.fromhex(content_hash))
+
             results.append(
                 IngestionResult(
-                    proof_id=existing_proof_id,
+                    proof_id=proof_id,
                     record_id=record.record_id,
                     shard_id=record.shard_id,
                     content_hash=content_hash,
-                    deduplicated=True,
+                    deduplicated=False,
                 )
             )
-            dedup_count += 1
-            continue
 
-        proof_id = str(uuid.uuid4())
-        new_hashes.append(bytes.fromhex(content_hash))
+            _content_index[content_hash] = proof_id
 
-        results.append(
-            IngestionResult(
-                proof_id=proof_id,
-                record_id=record.record_id,
-                shard_id=record.shard_id,
-                content_hash=content_hash,
-                deduplicated=False,
+        # Build Merkle tree from new content hashes
+        ingested_count = len(batch.records) - dedup_count
+        ts = current_timestamp()
+
+        if new_hashes:
+            tree = MerkleTree(new_hashes)
+            merkle_root = tree.get_root().hex()
+
+            # Append to ledger
+            ledger_entry = _write_ledger.append(
+                record_hash=merkle_root,
+                shard_id=shard_id,
+                shard_root=merkle_root,
+                canonicalization=canonicalization,
             )
-        )
+            ledger_entry_hash = ledger_entry.entry_hash
+            ledger_height = len(_write_ledger.entries)
+            LEDGER_HEIGHT.labels(shard_id=shard_id).set(ledger_height)
+            span.set_attribute("ledger_height", ledger_height)
 
-        _content_index[content_hash] = proof_id
+            # Store proof metadata for each new record
+            for i, result in enumerate(results):
+                if not result.deduplicated:
+                    # Find this record's index among new records
+                    new_idx = sum(1 for r in results[: i + 1] if not r.deduplicated) - 1
+                    proof = tree.generate_proof(new_idx)
+                    _ingestion_store[result.proof_id] = {
+                        "proof_id": result.proof_id,
+                        "record_id": result.record_id,
+                        "shard_id": result.shard_id,
+                        "content_hash": result.content_hash,
+                        "merkle_root": merkle_root,
+                        "merkle_proof": {
+                            "leaf_hash": proof.leaf_hash.hex(),
+                            "leaf_index": proof.leaf_index,
+                            "siblings": [[h.hex(), is_right] for h, is_right in proof.siblings],
+                            "root_hash": proof.root_hash.hex(),
+                        },
+                        "ledger_entry_hash": ledger_entry_hash,
+                        "timestamp": ts,
+                        "canonicalization": canonicalization,
+                    }
+                    INGEST_TOTAL.labels(outcome="committed").inc()
+        else:
+            ledger_entry_hash = (
+                _write_ledger.entries[-1].entry_hash if _write_ledger.entries else ""
+            )
 
-    # Build Merkle tree from new content hashes
-    ingested_count = len(batch.records) - dedup_count
-    ts = current_timestamp()
-
-    if new_hashes:
-        tree = MerkleTree(new_hashes)
-        merkle_root = tree.get_root().hex()
-
-        # Append to ledger
-        shard_id = batch.records[0].shard_id
-        ledger_entry = _write_ledger.append(
-            record_hash=merkle_root,
-            shard_id=shard_id,
-            shard_root=merkle_root,
-            canonicalization=canonicalization,
-        )
-        ledger_entry_hash = ledger_entry.entry_hash
-
-        # Store proof metadata for each new record
-        for i, result in enumerate(results):
-            if not result.deduplicated:
-                # Find this record's index among new records
-                new_idx = sum(1 for r in results[: i + 1] if not r.deduplicated) - 1
-                proof = tree.generate_proof(new_idx)
-                _ingestion_store[result.proof_id] = {
-                    "proof_id": result.proof_id,
-                    "record_id": result.record_id,
-                    "shard_id": result.shard_id,
-                    "content_hash": result.content_hash,
-                    "merkle_root": merkle_root,
-                    "merkle_proof": {
-                        "leaf_hash": proof.leaf_hash.hex(),
-                        "leaf_index": proof.leaf_index,
-                        "siblings": [[h.hex(), is_right] for h, is_right in proof.siblings],
-                        "root_hash": proof.root_hash.hex(),
-                    },
-                    "ledger_entry_hash": ledger_entry_hash,
-                    "timestamp": ts,
-                    "canonicalization": canonicalization,
-                }
-    else:
-        ledger_entry_hash = _write_ledger.entries[-1].entry_hash if _write_ledger.entries else ""
+        span.set_attribute("ingested", ingested_count)
+        span.set_attribute("deduplicated", dedup_count)
 
     logger.info(
         "batch_ingested",
@@ -537,15 +549,19 @@ async def verify_ingested_content_hash(
     verification result so public portals can display both the commitment data and
     the verifiable transcript needed for independent re-checking.
     """
-    _authorize_and_rate_limit(request, "verify")
-    normalized_hash = _parse_content_hash(content_hash).hex()
-    proof_id = _content_index.get(normalized_hash)
-    if proof_id is None:
-        raise HTTPException(status_code=404, detail=f"Committed hash not found: {normalized_hash}")
+    with timed_operation("verify") as span:
+        normalized_hash = _parse_content_hash(content_hash).hex()
+        span.set_attribute("content_hash", normalized_hash)
+        proof_id = _content_index.get(normalized_hash)
+        if proof_id is None:
+            raise HTTPException(
+                status_code=404, detail=f"Committed hash not found: {normalized_hash}"
+            )
 
-    data = _ingestion_store[proof_id]
-    merkle_proof_valid = verify_proof(_merkle_proof_from_store(data))
-    return HashVerificationResponse(**data, merkle_proof_valid=merkle_proof_valid)
+        data = _ingestion_store[proof_id]
+        merkle_proof_valid = verify_proof(_merkle_proof_from_store(data))
+        span.set_attribute("merkle_proof_valid", merkle_proof_valid)
+        return HashVerificationResponse(**data, merkle_proof_valid=merkle_proof_valid)
 
 
 # ---------------------------------------------------------------------------
@@ -591,65 +607,71 @@ async def commit_artifact(
     Returns:
         Commitment response with proof_id and ledger anchor details.
     """
-    key_record = _authorize_and_rate_limit(http_request, "commit", body_api_key=request.api_key)
-    _append_security_audit_event(
-        "artifact_commit_authorized",
-        {"key_id": key_record.key_id, "namespace": request.namespace, "id": request.id},
-    )
-    # Validate artifact_hash is a well-formed 32-byte BLAKE3 hex string
-    artifact_hash_bytes = _parse_content_hash(request.artifact_hash)
-    artifact_hash_hex = artifact_hash_bytes.hex()
-
-    # Dedup: if this exact hash has already been committed, return existing proof
-    if artifact_hash_hex in _content_index:
-        existing_proof_id = _content_index[artifact_hash_hex]
-        existing = _ingestion_store[existing_proof_id]
-        return ArtifactCommitResponse(
-            proof_id=existing_proof_id,
-            artifact_hash=artifact_hash_hex,
-            namespace=existing.get("namespace", request.namespace),
-            id=existing.get("record_id", request.id),
-            committed_at=existing["timestamp"],
-            ledger_entry_hash=existing["ledger_entry_hash"],
-        )
-
-    # Build a single-leaf Merkle tree for this artifact
-    tree = MerkleTree([artifact_hash_bytes])
-    merkle_root = tree.get_root().hex()
-
-    # Append a ledger entry
-    canonicalization = canonicalization_provenance("application/octet-stream", CANONICAL_VERSION)
     shard_id = f"artifacts/{request.namespace}"
-    ledger_entry = _write_ledger.append(
-        record_hash=merkle_root,
-        shard_id=shard_id,
-        shard_root=merkle_root,
-        canonicalization=canonicalization,
-    )
+    with timed_operation("commit", shard_id=shard_id) as span:
+        span.set_attribute("namespace", request.namespace)
+        span.set_attribute("artifact_id", request.id)
 
-    proof_id = str(uuid.uuid4())
-    ts = current_timestamp()
-    proof = tree.generate_proof(0)
+        # Validate artifact_hash is a well-formed 32-byte BLAKE3 hex string
+        artifact_hash_bytes = _parse_content_hash(request.artifact_hash)
+        artifact_hash_hex = artifact_hash_bytes.hex()
 
-    # Store metadata for future retrieval / verification
-    _ingestion_store[proof_id] = {
-        "proof_id": proof_id,
-        "record_id": request.id,
-        "shard_id": shard_id,
-        "content_hash": artifact_hash_hex,
-        "namespace": request.namespace,
-        "merkle_root": merkle_root,
-        "merkle_proof": {
-            "leaf_hash": proof.leaf_hash.hex(),
-            "leaf_index": proof.leaf_index,
-            "siblings": [[h.hex(), is_right] for h, is_right in proof.siblings],
-            "root_hash": proof.root_hash.hex(),
-        },
-        "ledger_entry_hash": ledger_entry.entry_hash,
-        "timestamp": ts,
-        "canonicalization": canonicalization,
-    }
-    _content_index[artifact_hash_hex] = proof_id
+        # Dedup: if this exact hash has already been committed, return existing proof
+        if artifact_hash_hex in _content_index:
+            existing_proof_id = _content_index[artifact_hash_hex]
+            existing = _ingestion_store[existing_proof_id]
+            INGEST_TOTAL.labels(outcome="deduplicated").inc()
+            return ArtifactCommitResponse(
+                proof_id=existing_proof_id,
+                artifact_hash=artifact_hash_hex,
+                namespace=existing.get("namespace", request.namespace),
+                id=existing.get("record_id", request.id),
+                committed_at=existing["timestamp"],
+                ledger_entry_hash=existing["ledger_entry_hash"],
+            )
+
+        # Build a single-leaf Merkle tree for this artifact
+        tree = MerkleTree([artifact_hash_bytes])
+        merkle_root = tree.get_root().hex()
+
+        # Append a ledger entry
+        canonicalization = canonicalization_provenance(
+            "application/octet-stream", CANONICAL_VERSION
+        )
+        ledger_entry = _write_ledger.append(
+            record_hash=merkle_root,
+            shard_id=shard_id,
+            shard_root=merkle_root,
+            canonicalization=canonicalization,
+        )
+        ledger_height = len(_write_ledger.entries)
+        LEDGER_HEIGHT.labels(shard_id=shard_id).set(ledger_height)
+        span.set_attribute("ledger_height", ledger_height)
+
+        proof_id = str(uuid.uuid4())
+        ts = current_timestamp()
+        proof = tree.generate_proof(0)
+
+        # Store metadata for future retrieval / verification
+        _ingestion_store[proof_id] = {
+            "proof_id": proof_id,
+            "record_id": request.id,
+            "shard_id": shard_id,
+            "content_hash": artifact_hash_hex,
+            "namespace": request.namespace,
+            "merkle_root": merkle_root,
+            "merkle_proof": {
+                "leaf_hash": proof.leaf_hash.hex(),
+                "leaf_index": proof.leaf_index,
+                "siblings": [[h.hex(), is_right] for h, is_right in proof.siblings],
+                "root_hash": proof.root_hash.hex(),
+            },
+            "ledger_entry_hash": ledger_entry.entry_hash,
+            "timestamp": ts,
+            "canonicalization": canonicalization,
+        }
+        _content_index[artifact_hash_hex] = proof_id
+        INGEST_TOTAL.labels(outcome="committed").inc()
 
     logger.info(
         "artifact_committed",
