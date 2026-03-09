@@ -613,6 +613,9 @@ class StorageLayer:
             except nacl.exceptions.BadSignatureError as e:
                 raise ValueError(f"Invalid shard header signature for shard '{shard_id}'") from e
 
+            # Guard against SMT divergence by recomputing the current root.
+            self._assert_root_matches_state(cur, shard_id, bytes(row["root"]))
+
             return {
                 "header": header,
                 "signature": signature,
@@ -767,6 +770,101 @@ class StorageLayer:
             )
             rows = cur.fetchall()
             return [row["shard_id"] for row in rows]
+
+    def verify_state_replay(self, shard_id: str) -> bool:
+        """
+        Replay shard state from genesis and verify roots against headers and ledger.
+
+        Returns True when:
+          * Every persisted shard header root matches the recomputed SMT root, and
+          * Every ledger entry payload shard_root matches the same recomputed root.
+
+        Args:
+            shard_id: Shard identifier to replay.
+
+        Raises:
+            ValueError: If counts diverge or any root mismatch is detected.
+        """
+        with self._get_connection() as conn, conn.cursor(row_factory=dict_row) as cur:
+            cur.execute(
+                """
+                SELECT key, value_hash
+                FROM smt_leaves
+                WHERE shard_id = %s
+                ORDER BY ts ASC, key ASC
+                """,
+                (shard_id,),
+            )
+            leaves = cur.fetchall()
+
+            cur.execute(
+                """
+                SELECT seq, root
+                FROM shard_headers
+                WHERE shard_id = %s
+                ORDER BY seq ASC
+                """,
+                (shard_id,),
+            )
+            headers = cur.fetchall()
+
+            cur.execute(
+                """
+                SELECT seq, payload
+                FROM ledger_entries
+                WHERE shard_id = %s
+                ORDER BY seq ASC
+                """,
+                (shard_id,),
+            )
+            ledger_rows = cur.fetchall()
+
+            if len(headers) != len(leaves):
+                raise ValueError(
+                    f"Replay mismatch for shard '{shard_id}': {len(headers)} headers vs "
+                    f"{len(leaves)} leaves"
+                )
+
+            if len(ledger_rows) != len(headers):
+                raise ValueError(
+                    f"Replay mismatch for shard '{shard_id}': {len(ledger_rows)} ledger entries "
+                    f"vs {len(headers)} headers"
+                )
+
+            tree = SparseMerkleTree()
+
+            for idx, leaf_row in enumerate(leaves):
+                key = bytes(self._row_get(leaf_row, "key", 0))
+                value_hash = bytes(self._row_get(leaf_row, "value_hash", 1))
+                tree.update(key, value_hash)
+                computed_root = tree.get_root()
+
+                header_row = headers[idx]
+                header_seq = int(self._row_get(header_row, "seq", 0))
+                expected_header_root = bytes(self._row_get(header_row, "root", 1))
+                if computed_root != expected_header_root:
+                    raise ValueError(
+                        f"Shard '{shard_id}' root mismatch at header seq {header_seq}: "
+                        f"expected {expected_header_root.hex()}, computed {computed_root.hex()}"
+                    )
+
+                ledger_row = ledger_rows[idx]
+                ledger_seq = int(self._row_get(ledger_row, "seq", 0))
+                payload = self._row_get(ledger_row, "payload", 1)
+                if isinstance(payload, str):
+                    payload = json.loads(payload)
+                shard_root_hex = payload.get("shard_root")
+                if shard_root_hex is None:
+                    raise ValueError(
+                        f"Ledger entry missing shard_root for shard '{shard_id}' at seq {ledger_seq}"
+                    )
+                if computed_root.hex() != shard_root_hex:
+                    raise ValueError(
+                        f"Shard '{shard_id}' ledger root mismatch at seq {ledger_seq}: "
+                        f"expected {shard_root_hex}, computed {computed_root.hex()}"
+                    )
+
+            return True
 
     def store_timestamp_token(
         self,
@@ -959,6 +1057,31 @@ class StorageLayer:
         if isinstance(row, Mapping):
             return row[key]
         return row[idx]
+
+    def _assert_root_matches_state(
+        self,
+        cur: psycopg.Cursor[Any],
+        shard_id: str,
+        expected_root: bytes,
+    ) -> None:
+        """
+        Recompute the current shard root and ensure it matches ``expected_root``.
+
+        Args:
+            cur: Active database cursor (read-only).
+            shard_id: Shard identifier.
+            expected_root: Root hash from persisted header.
+
+        Raises:
+            ValueError: When the recomputed root diverges from ``expected_root``.
+        """
+        tree = self._load_tree_state(cur, shard_id)
+        computed_root = tree.get_root()
+        if computed_root != expected_root:
+            raise ValueError(
+                f"Computed root {computed_root.hex()} does not match persisted root "
+                f"{expected_root.hex()} for shard '{shard_id}'"
+            )
 
     def _load_tree_state(
         self,

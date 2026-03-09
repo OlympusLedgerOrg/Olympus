@@ -236,6 +236,24 @@ def test_ssmf_deterministic_root():
     assert tree1.get_root() == tree2.get_root()
 
 
+def test_ssmf_root_independent_of_insert_order():
+    """Insertion order should not change the final root for the same key/value set."""
+    keys = [record_key("document", f"doc{i}", 1) for i in range(4)]
+    values = [hash_bytes(f"value {i}".encode()) for i in range(4)]
+
+    tree_in_order = SparseMerkleTree()
+    for key, value in zip(keys, values, strict=False):
+        tree_in_order.update(key, value)
+
+    tree_reordered = SparseMerkleTree()
+    # Apply a different network arrival order
+    reorder = [2, 0, 3, 1]
+    for idx in reorder:
+        tree_reordered.update(keys[idx], values[idx])
+
+    assert tree_in_order.get_root() == tree_reordered.get_root()
+
+
 def test_ssmf_diff_reports_added_changed_and_removed_keys():
     """Tree diffs should classify added, changed, and removed leaves deterministically."""
     before = SparseMerkleTree()
