@@ -815,7 +815,9 @@ def test_verify_state_replay_matches_headers_and_ledger(storage, signing_key):
 
 def test_verify_state_replay_detects_header_root_divergence(storage, signing_key):
     """Replay must fail if a persisted root deviates from recomputed SMT state."""
-    shard_id = f"test_verify_state_replay_detects_divergence_{datetime.now(timezone.utc).timestamp()}"
+    shard_id = (
+        f"test_verify_state_replay_detects_divergence_{datetime.now(timezone.utc).timestamp()}"
+    )
 
     storage.append_record(
         shard_id=shard_id,
