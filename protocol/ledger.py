@@ -53,22 +53,35 @@ class Ledger:
     def _canonicalize_quorum_certificate(
         certificate: dict[str, Any] | None,
     ) -> dict[str, Any] | None:
-        """Normalize quorum certificate metadata before hash commitment."""
+        """Normalize quorum certificate metadata before hash commitment.
+
+        Rebuilds the certificate from a fixed set of known fields only, ensuring
+        that extra or unrecognized fields are excluded from the hash payload and
+        that all field types are explicit. The acknowledgments list is sorted
+        lexicographically by (node_id, signature) for determinism.
+        """
         if certificate is None:
             return None
-        normalized_certificate = dict(certificate)
-        acknowledgments = normalized_certificate.get("acknowledgments")
+        acknowledgments = certificate.get("acknowledgments")
         if isinstance(acknowledgments, list):
             signature_items = [
                 {"node_id": str(item["node_id"]), "signature": str(item["signature"])}
                 for item in acknowledgments
                 if isinstance(item, dict) and "node_id" in item and "signature" in item
             ]
-            normalized_certificate["acknowledgments"] = sorted(
+            sorted_acknowledgments: list[dict[str, str]] = sorted(
                 signature_items,
                 key=lambda item: (item["node_id"], item["signature"]),
             )
-        return normalized_certificate
+        else:
+            sorted_acknowledgments = []
+        return {
+            "acknowledgments": sorted_acknowledgments,
+            "header_hash": str(certificate.get("header_hash", "")),
+            "quorum_threshold": int(certificate.get("quorum_threshold", 0)),
+            "shard_id": str(certificate.get("shard_id", "")),
+            "timestamp": str(certificate.get("timestamp", "")),
+        }
 
     def append(
         self,

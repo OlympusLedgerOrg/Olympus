@@ -16,7 +16,7 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).parent.parent.parent
 sys.path.insert(0, str(REPO_ROOT))
 
-from protocol.hashes import HASH_SEPARATOR, NODE_PREFIX, blake3_hash
+from protocol.hashes import HASH_SEPARATOR, LEDGER_PREFIX, NODE_PREFIX, blake3_hash
 from protocol.merkle import MerkleProof, MerkleTree, merkle_leaf_hash, verify_proof
 
 
@@ -112,6 +112,22 @@ def test_canonicalizer_hash_vectors() -> None:
     print(f"  ✓ canonicalizer_hash: {len(rows)} vectors")
 
 
+def test_ledger_entry_hash(vectors: dict) -> None:
+    """Test that ledger entry hashes match across the Python reference implementation.
+
+    Each vector stores the pre-canonicalized payload bytes (hex) and the expected
+    entry hash. Formula: BLAKE3(OLY:LEDGER:V1 || canonical_json_bytes(payload)).
+    """
+    for vec in vectors["ledger_entry_hash"]:
+        payload_bytes = bytes.fromhex(vec["canonical_payload_hex"])
+        got = blake3_hash([LEDGER_PREFIX, payload_bytes]).hex()
+        assert got == vec["entry_hash"], (
+            f"ledger_entry_hash failed for {vec['description']!r}: "
+            f"got {got}, want {vec['entry_hash']}"
+        )
+    print(f"  ✓ ledger_entry_hash: {len(vectors['ledger_entry_hash'])} vectors")
+
+
 def main() -> None:
     print("Running Python conformance tests against vectors.json\n")
     vectors = load_vectors()
@@ -121,6 +137,7 @@ def main() -> None:
     test_merkle_root(vectors)
     test_merkle_proof(vectors)
     test_canonicalizer_hash_vectors()
+    test_ledger_entry_hash(vectors)
     print("\n✓ All Python conformance tests passed!")
 
 
