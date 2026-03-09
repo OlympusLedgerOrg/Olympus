@@ -5,6 +5,40 @@ is focused on protocol hardening: deterministic canonicalization, Merkle
 commitments, verifiable proofs, and developer tooling for inspecting and
 validating those primitives.
 
+## Technical architecture
+
+Olympus follows a strict, auditable pipeline:
+
+```text
+Ingest → Canonicalize → Hash → Commit → Prove → (Replicate, Phase 1+) → Verify
+```
+
+- **Implemented in v1.0:** Ingest, Canonicalize, Hash, Commit, Prove, Verify
+- **Phase 1+ (not implemented in v1.0):** Replicate (Guardian multi-node
+  replication)
+
+Core technical guarantees:
+
+- Deterministic canonicalization for stable, reproducible document bytes
+- Domain-separated BLAKE3 hashing for collision-resistant commitments
+- Merkle and sparse Merkle structures for inclusion/non-membership proofs
+- Append-only ledger linkage for tamper-evident history
+- Independent verification paths through CLI tools and cross-language verifiers
+
+See [`docs/architecture.md`](docs/architecture.md) for the complete
+stage-to-module mapping and dependency flow.
+
+## Technology stack
+
+- **Language/runtime:** Python 3.10+ (3.12 in CI/dev tooling)
+- **API/UI framework:** FastAPI + Starlette + Uvicorn
+- **Cryptography:** BLAKE3 hashing, Ed25519 signatures (PyNaCl), RFC3161
+  timestamping support
+- **Data/storage:** PostgreSQL integration via psycopg/psycopg-pool
+- **Proof tooling:** Merkle and redaction primitives in `protocol/`, Circom
+  assets in `proofs/`
+- **Quality tooling:** Ruff, mypy, Bandit, pytest, Hypothesis
+
 ## Current repository state
 
 The primary local developer workflows are:
