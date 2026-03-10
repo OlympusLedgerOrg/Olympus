@@ -23,6 +23,7 @@ from protocol.redaction import RedactionProtocol
 from protocol.redaction_ledger import (
     RedactionProofWithLedger,
     ZKPublicInputs,
+    VerificationResult,
     verify_zk_redaction,
 )
 from protocol.ssmf import ExistenceProof, SparseMerkleTree
@@ -695,8 +696,11 @@ def _commit_parts(
     if committed_at is None:
         committed_at = current_timestamp()
 
-    leaf_fields = [blake3_to_field_element(part.encode("utf-8")) for part in parts]
-    poseidon_tree = PoseidonMerkleTree(leaf_fields)
+    canonical_sections = RedactionProtocol.canonical_section_bytes_list(parts)
+    leaf_fields = [blake3_to_field_element(part) for part in canonical_sections]
+    if len(leaf_fields) < 16:
+        leaf_fields.extend(["0"] * (16 - len(leaf_fields)))
+    poseidon_tree = PoseidonMerkleTree(leaf_fields, depth=4)
     poseidon_root = poseidon_tree.get_root()
 
     smt = SparseMerkleTree()
@@ -1284,7 +1288,8 @@ async def verify_proof_bundle(request: Request):
         )
 
     smt_anchor_ok = proof.verify_smt_anchor(smt_root)
-    zk_ok = verify_zk_redaction(proof.zk_proof, proof.zk_public_inputs)
+    zk_result = verify_zk_redaction(proof.zk_proof, proof.zk_public_inputs)
+    zk_ok = zk_result is VerificationResult.VALID
     overall = smt_anchor_ok and zk_ok
 
     revealed_sections = [
@@ -1298,6 +1303,7 @@ async def verify_proof_bundle(request: Request):
             "verified": overall,
             "smt_anchor_verified": smt_anchor_ok,
             "zk_verified": zk_ok,
+            "zk_status": zk_result.value,
             "revealed_sections": revealed_sections,
             "total_parts": total_parts,
         }

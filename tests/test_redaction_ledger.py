@@ -13,11 +13,13 @@ from unittest.mock import patch
 
 import pytest
 
-from protocol.hashes import SNARK_SCALAR_FIELD, record_key
+from protocol.hashes import SNARK_SCALAR_FIELD, blake3_to_field_element, record_key
+from protocol.poseidon_tree import PoseidonMerkleTree
 from protocol.redaction import RedactionProtocol
 from protocol.redaction_ledger import (
     POSEIDON_ROOT_RECORD_TYPE,
     RedactionProofWithLedger,
+    VerificationResult,
     ZKPublicInputs,
     poseidon_root_from_bytes,
     poseidon_root_record_key,
@@ -25,6 +27,12 @@ from protocol.redaction_ledger import (
     verify_zk_redaction,
 )
 from protocol.ssmf import ExistenceProof, SparseMerkleTree
+
+
+def _poseidon_root_for_parts(parts: list[str]) -> str:
+    canonical = RedactionProtocol.canonical_section_bytes_list(parts)
+    leaves = [int(blake3_to_field_element(part)) for part in canonical]
+    return PoseidonMerkleTree(leaves, depth=4).get_root()
 
 
 # ---------------------------------------------------------------------------
@@ -206,11 +214,13 @@ def test_verify_all_without_zk_verifier():
     """verify_all without an override uses the default Groth16 verifier."""
     smt, wrapped = make_fixture()
 
-    with patch("protocol.redaction_ledger.verify_zk_redaction", return_value=True) as mock_verify:
-        assert wrapped.verify_all(smt.get_root()) is True
+    with patch(
+        "protocol.redaction_ledger.verify_zk_redaction", return_value=VerificationResult.VALID
+    ) as mock_verify:
+        assert wrapped.verify_all(smt.get_root()) is VerificationResult.VALID
         mock_verify.assert_called_once_with(wrapped.zk_proof, wrapped.zk_public_inputs)
 
-    assert wrapped.verify_all(bytes(32)) is False
+    assert wrapped.verify_all(bytes(32)) is VerificationResult.INVALID
 
 
 def test_verify_all_with_accepting_zk_verifier():
@@ -219,20 +229,20 @@ def test_verify_all_with_accepting_zk_verifier():
     smt_root = smt.get_root()
 
     def accept_all(proof, inputs):
-        return True
+        return VerificationResult.VALID
 
-    assert wrapped.verify_all(smt_root, zk_verifier=accept_all) is True
+    assert wrapped.verify_all(smt_root, zk_verifier=accept_all) is VerificationResult.VALID
 
 
 def test_verify_all_with_rejecting_zk_verifier():
-    """verify_all returns False when the ZK verifier rejects."""
+    """verify_all returns INVALID when the ZK verifier rejects."""
     smt, wrapped = make_fixture()
     smt_root = smt.get_root()
 
     def reject_all(proof, inputs):
-        return False
+        return VerificationResult.INVALID
 
-    assert wrapped.verify_all(smt_root, zk_verifier=reject_all) is False
+    assert wrapped.verify_all(smt_root, zk_verifier=reject_all) is VerificationResult.INVALID
 
 
 def test_verify_all_zk_verifier_receives_correct_args():
@@ -245,7 +255,7 @@ def test_verify_all_zk_verifier_receives_correct_args():
     def capture(proof, inputs):
         captured["proof"] = proof
         captured["inputs"] = inputs
-        return True
+        return VerificationResult.VALID
 
     wrapped.verify_all(smt_root, zk_verifier=capture)
 
@@ -263,7 +273,7 @@ def test_verify_zk_redaction_maps_public_inputs_and_calls_prover():
     )
 
     with patch("protocol.redaction_ledger.Groth16Prover.verify", return_value=True) as mock_verify:
-        assert verify_zk_redaction(proof_blob, public_inputs) is True
+        assert verify_zk_redaction(proof_blob, public_inputs) is VerificationResult.VALID
 
     kwargs = mock_verify.call_args[1]
     zk_proof_arg = kwargs["proof"]
@@ -282,7 +292,25 @@ def test_verify_zk_redaction_rejects_invalid_public_inputs():
         redacted_commitment="456",
         revealed_count=1,
     )
-    assert verify_zk_redaction({"pi_a": [], "pi_b": [], "pi_c": []}, bad_inputs) is False
+    assert (
+        verify_zk_redaction({"pi_a": [], "pi_b": [], "pi_c": []}, bad_inputs)
+        is VerificationResult.UNABLE_TO_VERIFY
+    )
+
+
+def test_verify_zk_redaction_reports_missing_verification_key():
+    """Missing verification key surfaces as UNABLE_TO_VERIFY."""
+    proof_blob = {"pi_a": ["1", "2"], "pi_b": [["3", "4"], ["5", "6"]], "pi_c": ["7", "8"]}
+    public_inputs = ZKPublicInputs(
+        original_root="123",
+        redacted_commitment="456",
+        revealed_count=2,
+    )
+
+    with patch("protocol.redaction_ledger.Groth16Prover.verify", side_effect=FileNotFoundError):
+        result = verify_zk_redaction(proof_blob, public_inputs)
+
+    assert result is VerificationResult.UNABLE_TO_VERIFY
 
 
 # ---------------------------------------------------------------------------
@@ -293,7 +321,7 @@ def test_verify_zk_redaction_rejects_invalid_public_inputs():
 def test_commit_document_dual_inserts_poseidon_root():
     """commit_document_dual inserts the Poseidon root into the SMT."""
     parts = ["section one", "section two", "section three"]
-    poseidon_root = "7654321"
+    poseidon_root = _poseidon_root_for_parts(parts)
     smt = SparseMerkleTree()
 
     tree, blake3_root = RedactionProtocol.commit_document_dual(
@@ -320,7 +348,7 @@ def test_create_redaction_proof_with_ledger_round_trip():
     Full flow: commit → generate proof with ledger → verify SMT anchor.
     """
     parts = ["alpha", "beta", "gamma"]
-    poseidon_root = "99887766554433"
+    poseidon_root = _poseidon_root_for_parts(parts)
     smt = SparseMerkleTree()
 
     tree, _ = RedactionProtocol.commit_document_dual(
@@ -352,18 +380,19 @@ def test_create_redaction_proof_with_ledger_round_trip():
 def test_append_only_versioning_via_dual_anchor():
     """Different versions produce independent SMT entries."""
     parts = ["x", "y"]
+    poseidon_root = _poseidon_root_for_parts(parts)
     smt = SparseMerkleTree()
 
     RedactionProtocol.commit_document_dual(
         document_parts=parts,
-        poseidon_root="111",
+        poseidon_root=poseidon_root,
         smt=smt,
         document_id="docD",
         version=1,
     )
     RedactionProtocol.commit_document_dual(
         document_parts=parts,
-        poseidon_root="222",
+        poseidon_root=poseidon_root,
         smt=smt,
         document_id="docD",
         version=2,
@@ -372,6 +401,27 @@ def test_append_only_versioning_via_dual_anchor():
     key_v1 = poseidon_root_record_key("docD", 1)
     key_v2 = poseidon_root_record_key("docD", 2)
 
-    assert smt.get(key_v1) == poseidon_root_to_bytes("111")
-    assert smt.get(key_v2) == poseidon_root_to_bytes("222")
+    assert smt.get(key_v1) == poseidon_root_to_bytes(poseidon_root)
+    assert smt.get(key_v2) == poseidon_root_to_bytes(poseidon_root)
     assert key_v1 != key_v2
+
+
+def test_commit_document_dual_rejects_poseidon_root_mismatch():
+    """
+    Adversary cannot mix-and-match Poseidon and BLAKE3 commitments.
+
+    The Poseidon root derived from a different document must be rejected
+    rather than silently anchored alongside the BLAKE3 commitment.
+    """
+    mismatched_poseidon_root = _poseidon_root_for_parts(["alpha", "beta", "delta"])
+
+    smt = SparseMerkleTree()
+
+    with pytest.raises(ValueError, match="does not match canonical document sections"):
+        RedactionProtocol.commit_document_dual(
+            document_parts=["alpha", "beta", "gamma"],
+            poseidon_root=mismatched_poseidon_root,
+            smt=smt,
+            document_id="docE",
+            version=1,
+        )

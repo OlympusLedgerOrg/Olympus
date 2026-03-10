@@ -36,6 +36,21 @@ Olympus uses two independent hash functions for two distinct purposes:
 | Ledger / SMT | **BLAKE3** | Append-only state commitments; efficient, post-quantum candidate |
 | ZK circuit | **Poseidon** | Arithmetic-friendly hash native to BN128 field; cheap to verify inside Groth16 |
 
+### Canonical leaf bytes (single document view)
+
+Both the BLAKE3 and Poseidon Merkle trees consume the **same canonical leaf
+bytes**:
+
+```
+canonical_section = normalize_whitespace(section).encode("utf-8")
+```
+
+`RedactionProtocol.commit_document_dual` derives both Merkle commitments from
+these bytes, pads the Poseidon tree to 16 leaves (depth 4), and rejects any
+caller-provided Poseidon root that does not match the canonical leaf stream.
+This eliminates the prior dual-anchor binding gap where mismatched leaf
+transformations could be anchored together.
+
 ### Why two hashes?
 
 The Groth16 redaction circuit (`proofs/circuits/redaction_validity.circom`) uses
@@ -62,7 +77,10 @@ A verifier holding a `RedactionProofWithLedger` bundle performs two independent 
 2. **ZK proof check** (`verify_all` / `verify_zk_redaction`):
    - By default, `verify_all` invokes `verify_zk_redaction`, which calls
      `snarkjs groth16 verify` via the Python `Groth16Prover` bridge.
-   - The public inputs include `originalRoot`, `redactedCommitment`, and `revealedCount`.
+   - The public inputs include `originalRoot`, `redactedCommitment`, and `revealedCount`
+     (exactly the order declared as `public` signals in `redaction_validity.circom`).
+   - Returns a three-valued `VerificationResult`: `VALID`, `INVALID`, or
+     `UNABLE_TO_VERIFY` (e.g., missing verification key or malformed inputs).
    - A custom verifier hook can still be supplied to `verify_all` when needed.
 
 Because step (1) confirms the Poseidon root is recorded in the ledger, and step (2)
@@ -108,3 +126,20 @@ Values outside [0, SNARK_SCALAR_FIELD) are rejected with `ValueError`.
 | `RedactionProtocol.commit_document_dual` | `protocol/redaction.py` |
 | `RedactionProtocol.create_redaction_proof_with_ledger` | `protocol/redaction.py` |
 | Tests | `tests/test_redaction_ledger.py` |
+
+### Witness generation pipeline (redaction_validity)
+
+* Input construction lives in `proofs/test_inputs/generate_inputs.js`, which
+  builds Poseidon Merkle trees (depth 4, 16 leaves), derives per-leaf sibling
+  paths, and writes circuit-ready JSON inputs to `proofs/build/redaction_validity_input.json`.
+* Python witness/proof helpers live in `proofs/proof_generator.py`:
+  * `ProofGenerator.generate_witness()` writes the JSON inputs and calls the
+    circuit's WASM witness generator (`proofs/build/redaction_validity_js/generate_witness.js`)
+    to produce a `.wtns`.
+  * `ProofGenerator.prove()` and `verify()` bridge to `snarkjs groth16` for proof
+    generation and verification using the dev keys emitted by `proofs/setup_circuits.sh`.
+* Public signal ordering enforced by `verify_zk_redaction` is
+  `[originalRoot, redactedCommitment, revealedCount]`, matching the circuit's
+  `component main {public [...]}` declaration.
+* Integration test coverage: `tests/test_proof_generator.py::test_redaction_validity_round_trip_verification`
+  exercises input generation → witness → proof → verification end to end.

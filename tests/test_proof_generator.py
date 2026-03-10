@@ -1,11 +1,14 @@
 """Tests for proofs.proof_generator module."""
 
 import json
+import shutil
+import subprocess
 from pathlib import Path
 
 import pytest
 
 from proofs.proof_generator import SUPPORTED_CIRCUITS, ProofGenerator, Witness
+from protocol.redaction_ledger import VerificationResult, ZKPublicInputs, verify_zk_redaction
 from protocol.zkp import ZKProof
 
 
@@ -156,6 +159,63 @@ class TestProveAndVerify:
             snarkjs_bin="nonexistent-snarkjs",
         )
         assert gen.snarkjs_available is False
+
+
+def _require_redaction_artifacts() -> tuple[Path, Path]:
+    repo_root = Path(__file__).resolve().parent.parent
+    build_dir = repo_root / "proofs" / "build"
+    vkey_path = repo_root / "proofs" / "keys" / "verification_keys" / "redaction_validity_vkey.json"
+    wasm_dir = build_dir / "redaction_validity_js"
+    wasm = wasm_dir / "redaction_validity.wasm"
+    generator = wasm_dir / "generate_witness.js"
+    zkey = build_dir / "redaction_validity_final.zkey"
+
+    missing = [path for path in (wasm, generator, zkey, vkey_path) if not path.exists()]
+    if missing:
+        pytest.skip(
+            f"redaction_validity artifacts missing ({', '.join(str(m) for m in missing)}); "
+            "run proofs/setup_circuits.sh to generate them"
+        )
+    if shutil.which("node") is None or shutil.which("npx") is None:
+        pytest.skip("Node.js and npx are required for redaction round-trip integration test")
+    return repo_root, build_dir
+
+
+def test_redaction_validity_round_trip_verification() -> None:
+    """
+    Generate witness → prove → verify for redaction_validity circuit.
+
+    Ensures the public signal ordering expected by verify_zk_redaction aligns
+    with the circuit declaration.
+    """
+    repo_root, build_dir = _require_redaction_artifacts()
+    input_script = repo_root / "proofs" / "test_inputs" / "generate_inputs.js"
+    subprocess.run(["node", str(input_script)], check=True, cwd=repo_root)
+
+    input_path = build_dir / "redaction_validity_input.json"
+    inputs = json.loads(input_path.read_text())
+
+    gen = ProofGenerator("redaction_validity")
+    witness = gen.generate_witness(**inputs)
+    assert witness.witness_path is not None
+
+    proof = gen.prove(witness)
+    # verify() operates on the ZKProof container
+    assert gen.verify(proof, public_inputs=proof.public_signals) is True
+
+    # verify_zk_redaction expects the unpacked Groth16 proof blob + public inputs
+    zk_inputs = ZKPublicInputs(
+        original_root=inputs["originalRoot"],
+        redacted_commitment=inputs["redactedCommitment"],
+        revealed_count=int(inputs["revealedCount"]),
+    )
+    result = verify_zk_redaction(proof.proof, zk_inputs)
+    assert result is VerificationResult.VALID
+    assert proof.public_signals[:3] == [
+        inputs["originalRoot"],
+        inputs["redactedCommitment"],
+        inputs["revealedCount"],
+    ]
 
 
 # ---------------------------------------------------------------------------

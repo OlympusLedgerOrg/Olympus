@@ -6,6 +6,7 @@ from protocol.hashes import (
     EVENT_PREFIX,
     FEDERATION_PREFIX,
     HASH_SEPARATOR,
+    blake3_hash,
     event_id,
     federation_vote_hash,
 )
@@ -91,6 +92,26 @@ def test_federation_vote_hash_is_deterministic() -> None:
     vote_hash_2 = federation_vote_hash(node_id, shard_id, header_hash, timestamp, event_id_hex)
 
     assert vote_hash_1 == vote_hash_2
+
+
+def test_federation_vote_hash_prevents_field_injection() -> None:
+    """Length-prefixing prevents '|' injection collisions across fields."""
+    header_hash = "a" * 64
+    timestamp = "2026-03-09T00:00:00Z"
+    event_id_hex = "deadbeef"
+
+    def legacy_vote_hash(node_id: str, shard_id: str) -> bytes:
+        vote_data = HASH_SEPARATOR.join(
+            ["olympus.federation.v1", node_id, shard_id, header_hash, timestamp, event_id_hex]
+        )
+        return blake3_hash([FEDERATION_PREFIX, b"|", vote_data.encode("utf-8")])
+
+    colliding_legacy = legacy_vote_hash("node|A", "shard")
+    assert colliding_legacy == legacy_vote_hash("node", "A|shard")
+
+    secure_a = federation_vote_hash("node|A", "shard", header_hash, timestamp, event_id_hex)
+    secure_b = federation_vote_hash("node", "A|shard", header_hash, timestamp, event_id_hex)
+    assert secure_a != secure_b
 
 
 def test_federation_signatures_bind_to_node_id() -> None:

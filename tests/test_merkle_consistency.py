@@ -1,4 +1,6 @@
-from protocol.hashes import merkle_parent_hash
+from hypothesis import given, strategies as st
+
+from protocol.hashes import node_hash
 from protocol.merkle import MerkleTree, merkle_leaf_hash, verify_proof
 
 
@@ -35,7 +37,7 @@ def test_merkle_leaf_prefix_applied():
     leaf0_hash = merkle_leaf_hash(b"leaf0")
     leaf1_hash = merkle_leaf_hash(b"leaf1")
 
-    expected_root = merkle_parent_hash(leaf0_hash, leaf1_hash)
+    expected_root = node_hash(leaf0_hash, leaf1_hash)
 
     assert tree.get_root() == expected_root
 
@@ -65,3 +67,16 @@ def test_merkle_tree_leaves_attr_unchanged():
     raw_leaves = [b"raw1", b"raw2"]
     tree = MerkleTree(raw_leaves)
     assert tree.leaves == raw_leaves
+
+
+@given(st.binary(min_size=0, max_size=128), st.binary(min_size=0, max_size=128))
+def test_leaf_and_internal_node_hashes_are_domain_separated(left: bytes, right: bytes) -> None:
+    """
+    Domain separation must prevent collisions between leaf and internal node hashing.
+
+    For any inputs, a leaf hash (LEAF_PREFIX) must never collide with a
+    NODE_PREFIX-derived internal node hash.
+    """
+    leaf_hash = merkle_leaf_hash(left)
+    internal_hash = node_hash(left, right)
+    assert leaf_hash != internal_hash
