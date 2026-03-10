@@ -78,14 +78,17 @@ class Ledger:
         return {
             "event_id": str(certificate.get("event_id", "")),
             "federation_epoch": int(certificate.get("federation_epoch", 0)),
+            "height": int(certificate.get("height", 0)),
             "header_hash": str(certificate.get("header_hash", "")),
             "membership_hash": str(certificate.get("membership_hash", "")),
             "quorum_threshold": int(certificate.get("quorum_threshold", 0)),
+            "round": int(certificate.get("round", 0)),
             "scheme": str(certificate.get("scheme", "")),
             "shard_id": str(certificate.get("shard_id", "")),
             "signatures": sorted_signatures,
             "signer_bitmap": str(certificate.get("signer_bitmap", "")),
             "timestamp": str(certificate.get("timestamp", "")),
+            "validator_set_hash": str(certificate.get("validator_set_hash", "")),
         }
 
     def append(

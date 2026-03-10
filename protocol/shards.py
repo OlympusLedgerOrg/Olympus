@@ -88,6 +88,8 @@ def create_shard_header(
     shard_id: str,
     root_hash: bytes,
     timestamp: str,
+    height: int = 0,
+    round_number: int = 0,
     previous_header_hash: str = "",
     timestamp_token: TimestampToken | dict[str, str] | None = None,
 ) -> dict[str, Any]:
@@ -98,6 +100,8 @@ def create_shard_header(
         shard_id: Identifier for the shard
         root_hash: 32-byte root hash of the shard's sparse Merkle tree
         timestamp: ISO 8601 timestamp
+        height: Consensus height for the shard header (non-negative integer)
+        round_number: Consensus round for the shard header (non-negative integer)
         previous_header_hash: Hex-encoded hash of previous header (empty for genesis)
         timestamp_token: Optional RFC 3161 timestamp token for the header hash.
             If provided, the token's serialized form is included in the returned
@@ -109,11 +113,20 @@ def create_shard_header(
     """
     if len(root_hash) != 32:
         raise ValueError(f"Root hash must be 32 bytes, got {len(root_hash)}")
+    try:
+        normalized_height = int(height)
+        normalized_round = int(round_number)
+    except (TypeError, ValueError) as exc:
+        raise ValueError("height and round_number must be integers") from exc
+    if normalized_height < 0 or normalized_round < 0:
+        raise ValueError("height and round_number must be non-negative")
 
     header: dict[str, Any] = {
         "shard_id": shard_id,
         "root_hash": root_hash.hex(),
         "timestamp": timestamp,
+        "height": normalized_height,
+        "round": normalized_round,
         "previous_header_hash": previous_header_hash,
     }
 

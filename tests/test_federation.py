@@ -230,6 +230,32 @@ def test_byzantine_threshold_for_four_nodes_requires_three_signatures() -> None:
     assert has_federation_quorum(header, three_signatures, registry) is True
 
 
+def test_federated_vote_signatures_bind_round_and_height() -> None:
+    """Votes must be bound to the consensus round and height metadata."""
+    registry = FederationRegistry.from_file(REGISTRY_PATH)
+    header = create_shard_header(
+        shard_id="records/city-a",
+        root_hash=bytes.fromhex("57" * 32),
+        timestamp="2026-03-09T00:00:01Z",
+        height=7,
+        round_number=3,
+    )
+    mismatched_round_header = create_shard_header(
+        shard_id="records/city-a",
+        root_hash=bytes.fromhex("57" * 32),
+        timestamp="2026-03-09T00:00:01Z",
+        height=7,
+        round_number=4,
+    )
+
+    signature = sign_federated_header(header, "olympus-node-1", _test_signing_key(1), registry)
+
+    assert verify_federated_header_signatures(header, [signature], registry) != []
+    assert verify_federated_header_signatures(
+        mismatched_round_header, [signature], registry
+    ) == []
+
+
 def test_quorum_certificate_is_verifiable_and_persisted_in_ledger() -> None:
     """Signed federation quorum certificates should be persisted as ledger metadata."""
     registry = FederationRegistry.from_file(REGISTRY_PATH)
@@ -343,8 +369,8 @@ def test_quorum_certificate_signatures_are_canonicalized_for_determinism() -> No
     assert certificate["signer_bitmap"] == expected_bitmap
 
 
-def test_verify_quorum_certificate_ignores_duplicate_signatures() -> None:
-    """Duplicate signatures should be filtered before signature validation."""
+def test_verify_quorum_certificate_rejects_duplicate_signatures() -> None:
+    """Duplicate signatures should invalidate canonical bitmap ordering."""
     registry = FederationRegistry.from_file(REGISTRY_PATH)
     header = create_shard_header(
         shard_id="records/city-a",
@@ -360,6 +386,8 @@ def test_verify_quorum_certificate_ignores_duplicate_signatures() -> None:
     )
     certificate = {
         "shard_id": header["shard_id"],
+        "height": header["height"],
+        "round": header["round"],
         "header_hash": header["header_hash"],
         "timestamp": header["timestamp"],
         "event_id": build_quorum_certificate(header, [signature_one, signature_two], registry)[
@@ -367,6 +395,7 @@ def test_verify_quorum_certificate_ignores_duplicate_signatures() -> None:
         ],
         "federation_epoch": registry.epoch,
         "membership_hash": registry.membership_hash(),
+        "validator_set_hash": registry.membership_hash(),
         "quorum_threshold": registry.quorum_threshold(),
         "scheme": "ed25519",
         "signer_bitmap": signer_bitmap,
@@ -377,7 +406,7 @@ def test_verify_quorum_certificate_ignores_duplicate_signatures() -> None:
         ],
     }
 
-    assert verify_quorum_certificate(certificate, header, registry) is True
+    assert verify_quorum_certificate(certificate, header, registry) is False
 
 
 def test_verify_quorum_certificate_rejects_conflicting_duplicate_node_votes() -> None:
@@ -403,6 +432,8 @@ def test_verify_quorum_certificate_rejects_conflicting_duplicate_node_votes() ->
     )
     certificate = {
         "shard_id": header["shard_id"],
+        "height": header["height"],
+        "round": header["round"],
         "header_hash": header["header_hash"],
         "timestamp": header["timestamp"],
         "event_id": build_quorum_certificate(header, [signature_one, signature_two], registry)[
@@ -410,6 +441,7 @@ def test_verify_quorum_certificate_rejects_conflicting_duplicate_node_votes() ->
         ],
         "federation_epoch": registry.epoch,
         "membership_hash": registry.membership_hash(),
+        "validator_set_hash": registry.membership_hash(),
         "quorum_threshold": registry.quorum_threshold(),
         "scheme": "ed25519",
         "signer_bitmap": signer_bitmap,
@@ -444,6 +476,32 @@ def test_verify_quorum_certificate_rejects_signer_bitmap_mismatch() -> None:
     }
 
     assert verify_quorum_certificate(tampered_certificate, header, registry) is False
+
+
+def test_verify_quorum_certificate_rejects_noncanonical_signature_order() -> None:
+    """Signature order must follow canonical bitmap indexing of active nodes."""
+    registry = FederationRegistry.from_file(REGISTRY_PATH)
+    header = create_shard_header(
+        shard_id="records/city-a",
+        root_hash=bytes.fromhex("ad" * 32),
+        timestamp="2026-03-09T00:00:04Z",
+    )
+    signature_one = sign_federated_header(header, "olympus-node-1", _test_signing_key(1), registry)
+    signature_two = sign_federated_header(header, "olympus-node-2", _test_signing_key(2), registry)
+
+    canonical_certificate = build_quorum_certificate(
+        header, [signature_one, signature_two], registry
+    )
+    swapped_certificate = {
+        **canonical_certificate,
+        "signatures": [
+            signature_two.to_dict(),
+            signature_one.to_dict(),
+        ],
+    }
+
+    assert verify_quorum_certificate(canonical_certificate, header, registry) is True
+    assert verify_quorum_certificate(swapped_certificate, header, registry) is False
 
 
 def test_federation_signature_is_domain_separated_from_plain_header_signature() -> None:
@@ -494,6 +552,24 @@ def test_verify_quorum_certificate_rejects_membership_hash_mismatch() -> None:
     ]
     certificate = build_quorum_certificate(header, signatures, registry)
     tampered_certificate = {**certificate, "membership_hash": "00" * 32}
+
+    assert verify_quorum_certificate(tampered_certificate, header, registry) is False
+
+
+def test_verify_quorum_certificate_rejects_validator_set_hash_mismatch() -> None:
+    """Certificates must include the validator_set_hash binding."""
+    registry = FederationRegistry.from_file(REGISTRY_PATH)
+    header = create_shard_header(
+        shard_id="records/city-a",
+        root_hash=bytes.fromhex("de" * 32),
+        timestamp="2026-03-09T00:00:07Z",
+    )
+    signatures = [
+        sign_federated_header(header, "olympus-node-1", _test_signing_key(1), registry),
+        sign_federated_header(header, "olympus-node-2", _test_signing_key(2), registry),
+    ]
+    certificate = build_quorum_certificate(header, signatures, registry)
+    tampered_certificate = {**certificate, "validator_set_hash": "ff" * 32}
 
     assert verify_quorum_certificate(tampered_certificate, header, registry) is False
 
