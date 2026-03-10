@@ -436,11 +436,11 @@ def test_verify_quorum_certificate_rejects_signer_bitmap_mismatch() -> None:
         sign_federated_header(header, "olympus-node-2", _test_signing_key(2), registry),
     ]
     certificate = build_quorum_certificate(header, signatures, registry)
-    active_node_count = len(tuple(registry.active_nodes()))
+    first_bit = certificate["signer_bitmap"][0]
+    flipped_first_bit = "0" if first_bit == "1" else "1"
     tampered_certificate = {
         **certificate,
-        "signer_bitmap": ("0" if certificate["signer_bitmap"][0] == "1" else "1")
-        + certificate["signer_bitmap"][1:active_node_count],
+        "signer_bitmap": flipped_first_bit + certificate["signer_bitmap"][1:],
     }
 
     assert verify_quorum_certificate(tampered_certificate, header, registry) is False
