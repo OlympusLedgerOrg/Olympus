@@ -14,6 +14,7 @@ from protocol.federation import (
     build_federation_header_record,
     build_quorum_certificate,
     has_federation_quorum,
+    quorum_certificate_hash,
     sign_federated_header,
     verify_federated_header_signatures,
     verify_quorum_certificate,
@@ -396,6 +397,7 @@ def test_verify_quorum_certificate_rejects_duplicate_signatures() -> None:
         "federation_epoch": registry.epoch,
         "membership_hash": registry.membership_hash(),
         "validator_set_hash": registry.membership_hash(),
+        "validator_count": len(registry.active_nodes()),
         "quorum_threshold": registry.quorum_threshold(),
         "scheme": "ed25519",
         "signer_bitmap": signer_bitmap,
@@ -405,7 +407,7 @@ def test_verify_quorum_certificate_rejects_duplicate_signatures() -> None:
             signature_two.to_dict(),
         ],
     }
-
+    header["quorum_certificate_hash"] = quorum_certificate_hash(certificate)
     assert verify_quorum_certificate(certificate, header, registry) is False
 
 
@@ -442,6 +444,7 @@ def test_verify_quorum_certificate_rejects_conflicting_duplicate_node_votes() ->
         "federation_epoch": registry.epoch,
         "membership_hash": registry.membership_hash(),
         "validator_set_hash": registry.membership_hash(),
+        "validator_count": len(registry.active_nodes()),
         "quorum_threshold": registry.quorum_threshold(),
         "scheme": "ed25519",
         "signer_bitmap": signer_bitmap,
@@ -452,6 +455,7 @@ def test_verify_quorum_certificate_rejects_conflicting_duplicate_node_votes() ->
         ],
     }
 
+    header["quorum_certificate_hash"] = quorum_certificate_hash(certificate)
     assert verify_quorum_certificate(certificate, header, registry) is False
 
 
@@ -475,6 +479,7 @@ def test_verify_quorum_certificate_rejects_signer_bitmap_mismatch() -> None:
         "signer_bitmap": flipped_first_bit + certificate["signer_bitmap"][1:],
     }
 
+    header["quorum_certificate_hash"] = quorum_certificate_hash(tampered_certificate)
     assert verify_quorum_certificate(tampered_certificate, header, registry) is False
 
 
@@ -492,6 +497,7 @@ def test_verify_quorum_certificate_rejects_noncanonical_signature_order() -> Non
     canonical_certificate = build_quorum_certificate(
         header, [signature_one, signature_two], registry
     )
+    header["quorum_certificate_hash"] = quorum_certificate_hash(canonical_certificate)
     swapped_certificate = {
         **canonical_certificate,
         "signatures": [
@@ -501,6 +507,7 @@ def test_verify_quorum_certificate_rejects_noncanonical_signature_order() -> Non
     }
 
     assert verify_quorum_certificate(canonical_certificate, header, registry) is True
+    header["quorum_certificate_hash"] = quorum_certificate_hash(swapped_certificate)
     assert verify_quorum_certificate(swapped_certificate, header, registry) is False
 
 
@@ -535,6 +542,7 @@ def test_verify_quorum_certificate_rejects_event_id_replay() -> None:
     certificate = build_quorum_certificate(header, signatures, registry)
     replayed_certificate = {**certificate, "event_id": "00" * 32}
 
+    header["quorum_certificate_hash"] = quorum_certificate_hash(replayed_certificate)
     assert verify_quorum_certificate(replayed_certificate, header, registry) is False
 
 
@@ -553,6 +561,7 @@ def test_verify_quorum_certificate_rejects_membership_hash_mismatch() -> None:
     certificate = build_quorum_certificate(header, signatures, registry)
     tampered_certificate = {**certificate, "membership_hash": "00" * 32}
 
+    header["quorum_certificate_hash"] = quorum_certificate_hash(tampered_certificate)
     assert verify_quorum_certificate(tampered_certificate, header, registry) is False
 
 
@@ -571,6 +580,7 @@ def test_verify_quorum_certificate_rejects_validator_set_hash_mismatch() -> None
     certificate = build_quorum_certificate(header, signatures, registry)
     tampered_certificate = {**certificate, "validator_set_hash": "ff" * 32}
 
+    header["quorum_certificate_hash"] = quorum_certificate_hash(tampered_certificate)
     assert verify_quorum_certificate(tampered_certificate, header, registry) is False
 
 
@@ -590,6 +600,7 @@ def test_verify_quorum_certificate_rejects_epoch_mismatch() -> None:
     certificate = build_quorum_certificate(header, signatures, registry)
     tampered_certificate = {**certificate, "federation_epoch": registry.epoch + 1}
 
+    header["quorum_certificate_hash"] = quorum_certificate_hash(tampered_certificate)
     assert verify_quorum_certificate(tampered_certificate, header, registry) is False
 
 
