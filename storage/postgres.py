@@ -539,6 +539,148 @@ class StorageLayer:
             tree = self._load_tree_state(cur, shard_id)
             return tree.prove_nonexistence(key)
 
+    def store_ingestion_batch(self, batch_id: str, records: list[dict[str, Any]]) -> None:
+        """
+        Persist proof_id-to-record mappings for ingestion durability.
+
+        Args:
+            batch_id: Unique batch identifier for the ingestion batch.
+            records: List of ingestion metadata dicts to persist.
+        """
+        if not records:
+            return
+
+        with self._get_connection() as conn, conn.cursor(row_factory=dict_row) as cur:
+            cur.execute(
+                """
+                    INSERT INTO ingestion_batches (batch_id)
+                    VALUES (%s)
+                    ON CONFLICT (batch_id) DO NOTHING
+                """,
+                (batch_id,),
+            )
+
+            for idx, record in enumerate(records):
+                cur.execute(
+                    """
+                        INSERT INTO ingestion_proofs (
+                            proof_id,
+                            batch_id,
+                            batch_index,
+                            shard_id,
+                            record_type,
+                            record_id,
+                            version,
+                            content_hash,
+                            merkle_root,
+                            merkle_proof,
+                            ledger_entry_hash,
+                            ts,
+                            canonicalization,
+                            persisted
+                        )
+                        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                        ON CONFLICT (proof_id) DO NOTHING
+                    """,
+                    (
+                        record["proof_id"],
+                        batch_id,
+                        record.get("batch_index", idx),
+                        record["shard_id"],
+                        record.get("record_type", "document"),
+                        record["record_id"],
+                        record.get("version", 1),
+                        bytes.fromhex(record["content_hash"]),
+                        bytes.fromhex(record["merkle_root"]),
+                        json.dumps(record["merkle_proof"]),
+                        bytes.fromhex(record["ledger_entry_hash"]),
+                        record["timestamp"],
+                        json.dumps(record.get("canonicalization")),
+                        record.get("persisted", True),
+                    ),
+                )
+
+            conn.commit()
+
+    def get_ingestion_proof(self, proof_id: str) -> dict[str, Any] | None:
+        """Retrieve a persisted ingestion proof mapping by proof_id."""
+        with self._get_connection() as conn, conn.cursor(row_factory=dict_row) as cur:
+            cur.execute(
+                """
+                    SELECT
+                        proof_id,
+                        batch_id,
+                        batch_index,
+                        shard_id,
+                        record_type,
+                        record_id,
+                        version,
+                        content_hash,
+                        merkle_root,
+                        merkle_proof,
+                        ledger_entry_hash,
+                        ts,
+                        canonicalization,
+                        persisted
+                    FROM ingestion_proofs
+                    WHERE proof_id = %s
+                    LIMIT 1
+                """,
+                (proof_id,),
+            )
+            row = cur.fetchone()
+
+        if row is None:
+            return None
+
+        ts_value = row["ts"]
+        ts = (
+            ts_value.astimezone(timezone.utc).isoformat().replace("+00:00", "Z")
+            if isinstance(ts_value, datetime)
+            else str(ts_value)
+        )
+
+        return {
+            "proof_id": row["proof_id"],
+            "batch_id": row["batch_id"],
+            "batch_index": row["batch_index"],
+            "record_id": row["record_id"],
+            "record_type": row["record_type"],
+            "version": row["version"],
+            "shard_id": row["shard_id"],
+            "content_hash": bytes(row["content_hash"]).hex(),
+            "merkle_root": bytes(row["merkle_root"]).hex(),
+            "merkle_proof": row["merkle_proof"],
+            "ledger_entry_hash": bytes(row["ledger_entry_hash"]).hex(),
+            "timestamp": ts,
+            "canonicalization": row["canonicalization"],
+            "persisted": row.get("persisted", True),
+        }
+
+    def get_ingestion_proof_by_content_hash(
+        self, content_hash: bytes
+    ) -> dict[str, Any] | None:
+        """Retrieve a persisted ingestion proof mapping by content hash."""
+        if len(content_hash) != 32:
+            raise ValueError("content_hash must be 32 bytes")
+
+        with self._get_connection() as conn, conn.cursor(row_factory=dict_row) as cur:
+            cur.execute(
+                """
+                    SELECT proof_id
+                    FROM ingestion_proofs
+                    WHERE content_hash = %s
+                    LIMIT 1
+                """,
+                (content_hash,),
+            )
+            row = cur.fetchone()
+
+        if row is None:
+            return None
+
+        return self.get_ingestion_proof(row["proof_id"])
+
     def get_latest_header(self, shard_id: str) -> dict[str, Any] | None:
         """
         Get the latest shard header.
