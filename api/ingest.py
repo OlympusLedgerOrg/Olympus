@@ -608,7 +608,9 @@ async def ingest_batch(batch: BatchIngestionRequest, request: Request) -> BatchI
                     if "Record already exists" in str(e):
                         # Record exists in database, treat as dedup and hydrate mapping
                         existing_record = _fetch_by_content_hash(content_hash)
-                        existing_proof_id = existing_record["proof_id"] if existing_record else proof_id
+                        existing_proof_id = (
+                            existing_record["proof_id"] if existing_record else proof_id
+                        )
                         results.append(
                             IngestionResult(
                                 proof_id=existing_proof_id,

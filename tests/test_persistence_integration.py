@@ -32,9 +32,7 @@ def test_postgres_persistence_survives_restart():
     batch_id = str(uuid.uuid4())
     proof_id = str(uuid.uuid4())
     value_hash = hash_bytes(b"durable-ingest-payload")
-    canonicalization = canonicalization_provenance(
-        "application/octet-stream", CANONICAL_VERSION
-    )
+    canonicalization = canonicalization_provenance("application/octet-stream", CANONICAL_VERSION)
 
     root_hash, proof, header, signature, ledger_entry = storage1.append_record(
         shard_id=shard_id,

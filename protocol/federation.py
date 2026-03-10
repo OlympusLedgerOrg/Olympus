@@ -21,6 +21,14 @@ _HEADER_EXCLUDED_FIELDS: frozenset[str] = frozenset({"header_hash", "signature",
 _CERTIFICATE_SIGNATURE_SCHEME_ED25519 = "ed25519"
 
 
+def _to_int(value: Any) -> int | None:
+    """Convert a value to int, returning None on type/format errors."""
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
 @dataclass(frozen=True)
 class FederationKeyHistoryEntry:
     """Historical federation key binding for rotation-aware signature verification."""
@@ -444,12 +452,18 @@ def verify_quorum_certificate(
         return False
     if certificate["timestamp"] != header.get("timestamp"):
         return False
-    try:
-        if int(certificate["height"]) != int(header.get("height")):
-            return False
-        if int(certificate["round"]) != int(header.get("round")):
-            return False
-    except (TypeError, ValueError):
+
+    cert_height = _to_int(certificate.get("height"))
+    header_height = _to_int(header.get("height"))
+    cert_round = _to_int(certificate.get("round"))
+    header_round = _to_int(header.get("round"))
+
+    if None in (cert_height, header_height, cert_round, header_round):
+        return False
+
+    if cert_height != header_height:
+        return False
+    if cert_round != header_round:
         return False
     if certificate["event_id"] != _federation_vote_event_id(header, registry):
         return False

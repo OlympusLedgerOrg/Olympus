@@ -10,6 +10,7 @@ from protocol.federation import (
     FederationNode,
     FederationRegistry,
     NodeSignature,
+    _to_int,
     append_quorum_certificate_to_ledger,
     build_federation_header_record,
     build_quorum_certificate,
@@ -36,6 +37,13 @@ REGISTRY_PATH = REPO_ROOT / "examples" / "federation_registry.json"
 def _test_signing_key(seed_byte: int):
     """Return a deterministic test-only Ed25519 key for federation quorum tests."""
     return get_signing_key_from_seed(bytes([seed_byte]) * 32)
+
+
+def test_to_int_helper_converts_and_rejects_invalid() -> None:
+    assert _to_int("5") == 5
+    assert _to_int(7) == 7
+    assert _to_int(None) is None
+    assert _to_int("not-a-number") is None
 
 
 def test_federation_registry_loads_static_nodes() -> None:
@@ -251,9 +259,7 @@ def test_federated_vote_signatures_bind_round_and_height() -> None:
     signature = sign_federated_header(header, "olympus-node-1", _test_signing_key(1), registry)
 
     assert verify_federated_header_signatures(header, [signature], registry) != []
-    assert verify_federated_header_signatures(
-        mismatched_round_header, [signature], registry
-    ) == []
+    assert verify_federated_header_signatures(mismatched_round_header, [signature], registry) == []
 
 
 def test_quorum_certificate_is_verifiable_and_persisted_in_ledger() -> None:
