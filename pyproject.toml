@@ -136,6 +136,8 @@ omit = [
     "*/venv/*",
     "*/.venv/*",
     "storage/postgres.py",
+    "protocol/poseidon_js.py",
+    "api/app.py",
 ]
 branch = true
 

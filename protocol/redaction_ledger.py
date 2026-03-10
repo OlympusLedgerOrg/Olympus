@@ -338,6 +338,8 @@ class RedactionProofWithLedger:
         if isinstance(zk_result, VerificationResult):
             return zk_result
         return VerificationResult.VALID if zk_result else VerificationResult.INVALID
+
+
 @dataclass(frozen=True)
 class DualHashCommitment:
     """

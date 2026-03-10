@@ -251,9 +251,7 @@ def test_federated_vote_signatures_bind_round_and_height() -> None:
     signature = sign_federated_header(header, "olympus-node-1", _test_signing_key(1), registry)
 
     assert verify_federated_header_signatures(header, [signature], registry) != []
-    assert verify_federated_header_signatures(
-        mismatched_round_header, [signature], registry
-    ) == []
+    assert verify_federated_header_signatures(mismatched_round_header, [signature], registry) == []
 
 
 def test_quorum_certificate_is_verifiable_and_persisted_in_ledger() -> None:

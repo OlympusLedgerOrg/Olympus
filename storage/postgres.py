@@ -675,9 +675,7 @@ class StorageLayer:
             "persisted": row.get("persisted", True),
         }
 
-    def get_ingestion_proof_by_content_hash(
-        self, content_hash: bytes
-    ) -> dict[str, Any] | None:
+    def get_ingestion_proof_by_content_hash(self, content_hash: bytes) -> dict[str, Any] | None:
         """Retrieve a persisted ingestion proof mapping by content hash."""
         if len(content_hash) != 32:
             raise ValueError("content_hash must be 32 bytes")

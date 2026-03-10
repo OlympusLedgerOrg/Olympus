@@ -445,11 +445,16 @@ def verify_quorum_certificate(
     if certificate["timestamp"] != header.get("timestamp"):
         return False
     try:
-        if int(certificate["height"]) != int(header.get("height")):
-            return False
-        if int(certificate["round"]) != int(header.get("round")):
-            return False
-    except (TypeError, ValueError):
+        cert_height = int(certificate["height"])
+        header_height = int(header["height"])
+        cert_round = int(certificate["round"])
+        header_round = int(header["round"])
+    except (KeyError, TypeError, ValueError):
+        return False
+
+    if cert_height != header_height:
+        return False
+    if cert_round != header_round:
         return False
     if certificate["event_id"] != _federation_vote_event_id(header, registry):
         return False

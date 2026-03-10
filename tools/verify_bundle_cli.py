@@ -50,12 +50,7 @@ def _check_header_hash(header: dict[str, Any]) -> tuple[bool, str]:
     Returns:
         ``(passed, message)``
     """
-    fields = {
-        "shard_id": header["shard_id"],
-        "root_hash": header["root_hash"],
-        "timestamp": header["timestamp"],
-        "previous_header_hash": header["previous_header_hash"],
-    }
+    fields = {k: v for k, v in header.items() if k != "header_hash"}
     expected = shard_header_hash(fields).hex()
     claimed = header["header_hash"]
     if expected == claimed:

@@ -123,7 +123,7 @@ class MerkleTree:
             raise ValueError("Invalid leaf index")
 
         leaf_hash = self._leaf_hashes[leaf_index]
-        siblings = []
+        siblings: list[tuple[bytes, str | bool]] = []
 
         # Collect siblings along path to root
         current_level: list[MerkleNode] = [MerkleNode(hash=h) for h in self._leaf_hashes]
@@ -196,7 +196,7 @@ def deserialize_merkle_proof(proof_data: dict[str, Any]) -> MerkleProof:
     Returns:
         MerkleProof with normalized sibling positions.
     """
-    normalized_siblings: list[tuple[bytes, str]] = []
+    normalized_siblings: list[tuple[bytes, str | bool]] = []
     for sibling_hash_hex, is_right in proof_data.get("siblings", []):
         if isinstance(is_right, str):
             normalized_flag = is_right.lower() == "right"
