@@ -69,8 +69,9 @@ template RedactionValidity(maxLeaves, depth) {
             inclusionProofs[i].pathIndices[j] <== pathIndices[i][j];
         }
 
-        // Only constrain root when revealed
-        revealMask[i] * (originalRoot - inclusionProofs[i].root) === 0;
+        // Bind every leaf (revealed or redacted) to the original root to prevent
+        // proofs that only constrain revealed positions.
+        inclusionProofs[i].root === originalRoot;
 
         // Masked reveal vector:
         // - revealed leaves keep their original value
