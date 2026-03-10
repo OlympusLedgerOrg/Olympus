@@ -744,7 +744,7 @@ def test_serialize_vote_message_is_deterministic() -> None:
 
 def test_serialize_vote_message_differs_for_different_node_ids() -> None:
     """Changing node_id must produce different canonical bytes."""
-    base_kwargs = dict(
+    common_fields = dict(
         domain=FEDERATION_DOMAIN_TAG,
         event_id="e" * 64,
         shard_id="records/city-a",
@@ -755,8 +755,30 @@ def test_serialize_vote_message_differs_for_different_node_ids() -> None:
         epoch=0,
         validator_set_hash="b" * 64,
     )
-    msg1 = FederationVoteMessage(node_id="node-1", **base_kwargs)  # type: ignore[arg-type]
-    msg2 = FederationVoteMessage(node_id="node-2", **base_kwargs)  # type: ignore[arg-type]
+    msg1 = FederationVoteMessage(
+        node_id="node-1",
+        domain=common_fields["domain"],
+        event_id=common_fields["event_id"],
+        shard_id=common_fields["shard_id"],
+        entry_seq=common_fields["entry_seq"],
+        round_number=common_fields["round_number"],
+        shard_root=common_fields["shard_root"],
+        timestamp=common_fields["timestamp"],
+        epoch=common_fields["epoch"],
+        validator_set_hash=common_fields["validator_set_hash"],
+    )
+    msg2 = FederationVoteMessage(
+        node_id="node-2",
+        domain=common_fields["domain"],
+        event_id=common_fields["event_id"],
+        shard_id=common_fields["shard_id"],
+        entry_seq=common_fields["entry_seq"],
+        round_number=common_fields["round_number"],
+        shard_root=common_fields["shard_root"],
+        timestamp=common_fields["timestamp"],
+        epoch=common_fields["epoch"],
+        validator_set_hash=common_fields["validator_set_hash"],
+    )
     assert serialize_vote_message(msg1) != serialize_vote_message(msg2)
 
 

@@ -21,9 +21,6 @@ from protocol.ledger import Ledger, LedgerEntry
 # Prevents signatures created for other protocol contexts (ingest, admin,
 # shard-merge, …) from being replayed as federation votes.
 FEDERATION_DOMAIN_TAG = "OLY:FEDERATION-VOTE:V1"
-
-# Internal alias kept for the few call-sites that pre-date the public constant.
-_FEDERATION_VOTE_DOMAIN = FEDERATION_DOMAIN_TAG
 _HEADER_EXCLUDED_FIELDS: frozenset[str] = frozenset({"header_hash", "signature", "timestamp_token"})
 _CERTIFICATE_SIGNATURE_SCHEME_ED25519 = "ed25519"
 
@@ -405,18 +402,6 @@ def _federation_vote_event_id(header: dict[str, Any], registry: FederationRegist
         ]
     ).encode("utf-8")
     return hash_bytes(payload).hex()
-
-
-def _federation_vote_payload(
-    header: dict[str, Any], node_id: str, registry: FederationRegistry
-) -> bytes:
-    """Return canonical vote bytes for signing and verification.
-
-    Delegates to :func:`serialize_vote_message` so that the wire format is
-    always canonical JSON.  Kept for backward-compatibility; prefer calling
-    ``serialize_vote_message(_build_federation_vote_message(...))`` directly.
-    """
-    return serialize_vote_message(_build_federation_vote_message(header, node_id, registry))
 
 
 def _header_hash_matches_commitment(header: dict[str, Any]) -> bool:
