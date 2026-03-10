@@ -12,11 +12,18 @@ from typing import Any
 import nacl.exceptions
 import nacl.signing
 
+from protocol.canonical_json import canonical_json_bytes
 from protocol.hashes import HASH_SEPARATOR, hash_bytes, shard_header_hash
 from protocol.ledger import Ledger, LedgerEntry
 
 
-_FEDERATION_VOTE_DOMAIN = "OLY:FEDERATION-VOTE:V1"
+# Public domain-separation tag bound to every federation vote message.
+# Prevents signatures created for other protocol contexts (ingest, admin,
+# shard-merge, …) from being replayed as federation votes.
+FEDERATION_DOMAIN_TAG = "OLY:FEDERATION-VOTE:V1"
+
+# Internal alias kept for the few call-sites that pre-date the public constant.
+_FEDERATION_VOTE_DOMAIN = FEDERATION_DOMAIN_TAG
 _HEADER_EXCLUDED_FIELDS: frozenset[str] = frozenset({"header_hash", "signature", "timestamp_token"})
 _CERTIFICATE_SIGNATURE_SCHEME_ED25519 = "ed25519"
 
@@ -260,6 +267,119 @@ class NodeSignature:
         return {"node_id": self.node_id, "signature": self.signature}
 
 
+@dataclass(frozen=True)
+class FederationVoteMessage:
+    """Canonical federation vote message — the only payload federation nodes ever sign.
+
+    Using a single, typed message eliminates serialization drift, replay
+    ambiguity, and cross-language mismatches.  Every field is included in the
+    canonical JSON serialization so that signers and verifiers always hash
+    identical bytes regardless of the implementation language.
+
+    Fields
+    ------
+    domain:
+        Protocol-level domain-separation tag.  Must always equal
+        ``FEDERATION_DOMAIN_TAG`` so that a signature produced for any other
+        Olympus context (ingest, admin, shard-merge …) cannot be replayed as a
+        federation vote.
+    node_id:
+        Registry identity of the signing node.  The verifier looks up the
+        public key from the registry using this ID, so an attacker cannot claim
+        another node's identity.
+    event_id:
+        Deterministic event identifier that binds the vote to a unique
+        (shard_id, header_hash, timestamp, epoch, membership_hash) tuple.
+    shard_id:
+        Identifier of the shard being voted on.
+    entry_seq:
+        Consensus height (block height) of the shard header.
+    round_number:
+        Consensus round number of the shard header.
+    shard_root:
+        Header hash — a cryptographic commitment over all shard header fields.
+    timestamp:
+        ISO 8601 timestamp of the shard header.
+    epoch:
+        Federation registry epoch at the time of the vote.
+    validator_set_hash:
+        Hash commitment of the active validator set (membership hash).
+    """
+
+    domain: str
+    node_id: str
+    event_id: str
+    shard_id: str
+    entry_seq: int
+    round_number: int
+    shard_root: str
+    timestamp: str
+    epoch: int
+    validator_set_hash: str
+
+
+def serialize_vote_message(msg: FederationVoteMessage) -> bytes:
+    """Return the canonical JSON bytes that federation nodes sign.
+
+    The payload is a deterministic canonical-JSON encoding of all
+    ``FederationVoteMessage`` fields.  Using canonical JSON (sorted keys,
+    compact separators, ASCII-escaped) guarantees that every implementation
+    language produces identical bytes for the same logical message.
+
+    Args:
+        msg: The vote message to serialize.
+
+    Returns:
+        UTF-8 canonical JSON bytes ready to be hashed and signed.
+    """
+    payload: dict[str, Any] = {
+        "domain": msg.domain,
+        "entry_seq": msg.entry_seq,
+        "epoch": msg.epoch,
+        "event_id": msg.event_id,
+        "node_id": msg.node_id,
+        "round_number": msg.round_number,
+        "shard_id": msg.shard_id,
+        "shard_root": msg.shard_root,
+        "timestamp": msg.timestamp,
+        "validator_set_hash": msg.validator_set_hash,
+    }
+    return canonical_json_bytes(payload)
+
+
+def _build_federation_vote_message(
+    header: dict[str, Any], node_id: str, registry: FederationRegistry
+) -> FederationVoteMessage:
+    """Construct the canonical FederationVoteMessage for a shard header.
+
+    Args:
+        header: Shard header dictionary (must include shard_id, header_hash,
+            timestamp, height, and round).
+        node_id: Registry identity of the node that will sign or is being
+            verified.
+        registry: Current federation registry supplying epoch and membership.
+
+    Returns:
+        Fully-populated FederationVoteMessage with domain set to
+        FEDERATION_DOMAIN_TAG.
+    """
+    event_id_hex = _federation_vote_event_id(header, registry)
+    validator_set_hash = registry.membership_hash()
+    height, round_number = _extract_round_and_height(header)
+    return FederationVoteMessage(
+        domain=FEDERATION_DOMAIN_TAG,
+        node_id=node_id,
+        event_id=event_id_hex,
+        shard_id=str(header["shard_id"]),
+        entry_seq=height,
+        round_number=round_number,
+        shard_root=str(header["header_hash"]),
+        timestamp=str(header["timestamp"]),
+        epoch=registry.epoch,
+        validator_set_hash=validator_set_hash,
+    )
+
+
 def sign_federated_header(
     header: dict[str, Any],
     node_id: str,
@@ -267,7 +387,8 @@ def sign_federated_header(
     registry: FederationRegistry,
 ) -> NodeSignature:
     """Sign a shard header on behalf of a federation node."""
-    vote_hash = hash_bytes(_federation_vote_payload(header, node_id, registry))
+    msg = _build_federation_vote_message(header, node_id, registry)
+    vote_hash = hash_bytes(serialize_vote_message(msg))
     signature = signing_key.sign(vote_hash).signature.hex()
     return NodeSignature(node_id=node_id, signature=signature)
 
@@ -289,25 +410,13 @@ def _federation_vote_event_id(header: dict[str, Any], registry: FederationRegist
 def _federation_vote_payload(
     header: dict[str, Any], node_id: str, registry: FederationRegistry
 ) -> bytes:
-    """Build domain-separated bytes for federation vote signing and verification."""
-    event_id = _federation_vote_event_id(header, registry)
-    validator_set_hash = registry.membership_hash()
-    height, round_number = _extract_round_and_height(header)
-    payload = HASH_SEPARATOR.join(
-        [
-            _FEDERATION_VOTE_DOMAIN,
-            str(node_id),
-            str(header["shard_id"]),
-            str(header["header_hash"]),
-            str(header["timestamp"]),
-            str(height),
-            str(round_number),
-            str(registry.epoch),
-            validator_set_hash,
-            event_id,
-        ]
-    )
-    return payload.encode("utf-8")
+    """Return canonical vote bytes for signing and verification.
+
+    Delegates to :func:`serialize_vote_message` so that the wire format is
+    always canonical JSON.  Kept for backward-compatibility; prefer calling
+    ``serialize_vote_message(_build_federation_vote_message(...))`` directly.
+    """
+    return serialize_vote_message(_build_federation_vote_message(header, node_id, registry))
 
 
 def _header_hash_matches_commitment(header: dict[str, Any]) -> bool:
@@ -334,13 +443,21 @@ def verify_federated_header_signatures(
         if signature.node_id in seen_nodes:
             continue
         try:
+            # Enforce node identity binding: always derive the public key from
+            # the registry rather than trusting any caller-supplied key.
             node = registry.get_node(signature.node_id)
         except ValueError:
             continue
         if not node.active:
             continue
         try:
-            vote_hash = hash_bytes(_federation_vote_payload(header, signature.node_id, registry))
+            # Build the canonical vote message and assert domain separation.
+            msg = _build_federation_vote_message(header, signature.node_id, registry)
+            if msg.domain != FEDERATION_DOMAIN_TAG:
+                # Reject messages whose domain tag does not match the federation
+                # vote context (guards against cross-context signature replay).
+                continue
+            vote_hash = hash_bytes(serialize_vote_message(msg))
             signature_bytes = bytes.fromhex(signature.signature)
             for verify_key in node.verify_keys_for_timestamp(str(header["timestamp"])):
                 try:
@@ -428,7 +545,28 @@ def verify_quorum_certificate(
     header: dict[str, Any],
     registry: FederationRegistry,
 ) -> bool:
-    """Verify a quorum certificate against a header and registry membership."""
+    """Verify a quorum certificate against a header and registry membership.
+
+    Security properties enforced
+    ----------------------------
+    * **Structural completeness** – all required certificate fields must be present.
+    * **Header binding** – shard_id, header_hash, timestamp, height, and round
+      must match the provided header exactly.
+    * **Event-ID binding** – event_id is recomputed from the header and registry
+      and must match the certificate value (prevents replay across rounds).
+    * **Epoch & membership binding** – federation_epoch and membership_hash must
+      match the current registry state.
+    * **Node identity binding** – for every signature the signing node's public
+      key is looked up directly in the registry by node_id; no caller-supplied
+      key is trusted.
+    * **Domain separation** – the canonical vote message is constructed with
+      ``FEDERATION_DOMAIN_TAG`` and the domain is checked before verification,
+      preventing cross-context signature reuse.
+    * **Uniqueness** – duplicate node_id values are tracked explicitly; only the
+      count of *unique* verified signers is compared against the quorum threshold.
+    * **Signer-bitmap consistency** – the signatures list must correspond exactly
+      to the "1" bits in the signer bitmap.
+    """
     required_fields = {
         "shard_id",
         "height",
@@ -495,7 +633,10 @@ def verify_quorum_certificate(
     ]
     if len(serialized_signatures) != len(expected_signer_ids):
         return False
-    ordered_signatures: list[NodeSignature] = []
+
+    # Verify each signature individually with explicit registry key lookup and
+    # explicit uniqueness tracking, then check quorum against unique signers.
+    unique_verified_nodes: set[str] = set()
     for expected_node_id, serialized_signature in zip(
         expected_signer_ids, serialized_signatures, strict=True
     ):
@@ -506,15 +647,49 @@ def verify_quorum_certificate(
         ):
             return False
         node_id = str(serialized_signature["node_id"])
+        # The signer bitmap already establishes the expected order; reject any
+        # mismatch to prevent node-id spoofing.
         if node_id != expected_node_id:
             return False
-        ordered_signatures.append(
-            NodeSignature(node_id=node_id, signature=str(serialized_signature["signature"]))
-        )
-    valid_signatures = verify_federated_header_signatures(header, ordered_signatures, registry)
-    return len(valid_signatures) >= registry.quorum_threshold() and len(valid_signatures) == len(
-        ordered_signatures
-    )
+        # Enforce uniqueness: a node_id must appear at most once.
+        if node_id in unique_verified_nodes:
+            return False
+
+        # Explicit registry key lookup — identity flows from the registry, not
+        # from any field inside the certificate.
+        try:
+            node = registry.get_node(node_id)
+        except ValueError:
+            return False
+        if not node.active:
+            return False
+
+        # Build the canonical vote message and assert the domain tag.
+        msg = _build_federation_vote_message(header, node_id, registry)
+        if msg.domain != FEDERATION_DOMAIN_TAG:
+            return False
+        vote_hash = hash_bytes(serialize_vote_message(msg))
+
+        # Verify the signature against the registry-derived key(s).
+        try:
+            sig_bytes = bytes.fromhex(str(serialized_signature["signature"]))
+            verified = False
+            for verify_key in node.verify_keys_for_timestamp(str(header["timestamp"])):
+                try:
+                    verify_key.verify(vote_hash, sig_bytes)
+                    verified = True
+                    break
+                except nacl.exceptions.BadSignatureError:
+                    continue
+            if not verified:
+                return False
+        except (ValueError, nacl.exceptions.BadSignatureError):
+            return False
+
+        unique_verified_nodes.add(node_id)
+
+    # Quorum is counted against the number of *unique* verified signers.
+    return len(unique_verified_nodes) >= registry.quorum_threshold()
 
 
 def append_quorum_certificate_to_ledger(

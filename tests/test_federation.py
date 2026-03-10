@@ -6,15 +6,19 @@ from pathlib import Path
 
 import pytest
 
+from protocol.canonical_json import canonical_json_bytes
 from protocol.federation import (
+    FEDERATION_DOMAIN_TAG,
     FederationNode,
     FederationRegistry,
+    FederationVoteMessage,
     NodeSignature,
     _to_int,
     append_quorum_certificate_to_ledger,
     build_federation_header_record,
     build_quorum_certificate,
     has_federation_quorum,
+    serialize_vote_message,
     sign_federated_header,
     verify_federated_header_signatures,
     verify_quorum_certificate,
@@ -657,3 +661,180 @@ def test_node_key_rotation_with_superseding_signature() -> None:
         )
         is True
     )
+
+
+# ---------------------------------------------------------------------------
+# FederationVoteMessage, serialize_vote_message, FEDERATION_DOMAIN_TAG tests
+# ---------------------------------------------------------------------------
+
+
+def test_federation_domain_tag_constant_matches_expected_value() -> None:
+    """FEDERATION_DOMAIN_TAG must equal the wire-protocol value."""
+    assert FEDERATION_DOMAIN_TAG == "OLY:FEDERATION-VOTE:V1"
+
+
+def test_federation_vote_message_is_frozen_dataclass() -> None:
+    """FederationVoteMessage instances must be immutable."""
+    msg = FederationVoteMessage(
+        domain=FEDERATION_DOMAIN_TAG,
+        node_id="test-node",
+        event_id="e" * 64,
+        shard_id="records/test",
+        entry_seq=1,
+        round_number=0,
+        shard_root="a" * 64,
+        timestamp="2026-03-10T00:00:00Z",
+        epoch=0,
+        validator_set_hash="b" * 64,
+    )
+    with pytest.raises((AttributeError, TypeError)):
+        msg.node_id = "tampered"  # type: ignore[misc]
+
+
+def test_serialize_vote_message_produces_canonical_json_bytes() -> None:
+    """serialize_vote_message must return valid canonical JSON bytes."""
+    msg = FederationVoteMessage(
+        domain=FEDERATION_DOMAIN_TAG,
+        node_id="node-1",
+        event_id="e" * 64,
+        shard_id="records/city-a",
+        entry_seq=42,
+        round_number=3,
+        shard_root="a" * 64,
+        timestamp="2026-03-10T00:00:00Z",
+        epoch=1,
+        validator_set_hash="b" * 64,
+    )
+    result = serialize_vote_message(msg)
+    assert isinstance(result, bytes)
+    # Must round-trip through canonical JSON
+    expected = canonical_json_bytes(
+        {
+            "domain": FEDERATION_DOMAIN_TAG,
+            "entry_seq": 42,
+            "epoch": 1,
+            "event_id": "e" * 64,
+            "node_id": "node-1",
+            "round_number": 3,
+            "shard_id": "records/city-a",
+            "shard_root": "a" * 64,
+            "timestamp": "2026-03-10T00:00:00Z",
+            "validator_set_hash": "b" * 64,
+        }
+    )
+    assert result == expected
+
+
+def test_serialize_vote_message_is_deterministic() -> None:
+    """serialize_vote_message must produce identical bytes on repeated calls."""
+    msg = FederationVoteMessage(
+        domain=FEDERATION_DOMAIN_TAG,
+        node_id="node-1",
+        event_id="e" * 64,
+        shard_id="records/city-a",
+        entry_seq=1,
+        round_number=0,
+        shard_root="a" * 64,
+        timestamp="2026-03-10T00:00:00Z",
+        epoch=0,
+        validator_set_hash="b" * 64,
+    )
+    assert serialize_vote_message(msg) == serialize_vote_message(msg)
+
+
+def test_serialize_vote_message_differs_for_different_node_ids() -> None:
+    """Changing node_id must produce different canonical bytes."""
+    base_kwargs = dict(
+        domain=FEDERATION_DOMAIN_TAG,
+        event_id="e" * 64,
+        shard_id="records/city-a",
+        entry_seq=1,
+        round_number=0,
+        shard_root="a" * 64,
+        timestamp="2026-03-10T00:00:00Z",
+        epoch=0,
+        validator_set_hash="b" * 64,
+    )
+    msg1 = FederationVoteMessage(node_id="node-1", **base_kwargs)  # type: ignore[arg-type]
+    msg2 = FederationVoteMessage(node_id="node-2", **base_kwargs)  # type: ignore[arg-type]
+    assert serialize_vote_message(msg1) != serialize_vote_message(msg2)
+
+
+def test_serialize_vote_message_embeds_domain_tag() -> None:
+    """The canonical bytes must contain the domain tag string."""
+    msg = FederationVoteMessage(
+        domain=FEDERATION_DOMAIN_TAG,
+        node_id="node-1",
+        event_id="e" * 64,
+        shard_id="records/city-a",
+        entry_seq=1,
+        round_number=0,
+        shard_root="a" * 64,
+        timestamp="2026-03-10T00:00:00Z",
+        epoch=0,
+        validator_set_hash="b" * 64,
+    )
+    serialized = serialize_vote_message(msg)
+    assert FEDERATION_DOMAIN_TAG.encode("utf-8") in serialized
+
+
+def test_sign_and_verify_uses_canonical_vote_message() -> None:
+    """sign_federated_header and verify round-trip through FederationVoteMessage."""
+    registry = FederationRegistry.from_file(REGISTRY_PATH)
+    header = create_shard_header(
+        shard_id="records/city-a",
+        root_hash=bytes.fromhex("f1" * 32),
+        timestamp="2026-03-10T12:00:00Z",
+    )
+    key = _test_signing_key(1)
+    sig = sign_federated_header(header, "olympus-node-1", key, registry)
+    valid = verify_federated_header_signatures(header, [sig], registry)
+    assert len(valid) == 1
+    assert valid[0].node_id == "olympus-node-1"
+
+
+def test_verify_quorum_certificate_uses_registry_for_key_lookup() -> None:
+    """verify_quorum_certificate must reject a tampered node_id that is not in the registry."""
+    registry = FederationRegistry.from_file(REGISTRY_PATH)
+    header = create_shard_header(
+        shard_id="records/city-a",
+        root_hash=bytes.fromhex("f2" * 32),
+        timestamp="2026-03-10T12:01:00Z",
+    )
+    sig1 = sign_federated_header(header, "olympus-node-1", _test_signing_key(1), registry)
+    sig2 = sign_federated_header(header, "olympus-node-2", _test_signing_key(2), registry)
+    certificate = build_quorum_certificate(header, [sig1, sig2], registry)
+
+    # Tamper the node_id in one of the serialized signatures to a non-existent node
+    tampered_signatures = list(certificate["signatures"])
+    tampered_signatures[0] = {
+        "node_id": "unknown-node",
+        "signature": tampered_signatures[0]["signature"],
+    }
+    tampered_certificate = {**certificate, "signatures": tampered_signatures}
+
+    assert verify_quorum_certificate(tampered_certificate, header, registry) is False
+
+
+def test_verify_quorum_certificate_unique_nodes_counted_for_quorum() -> None:
+    """verify_quorum_certificate must reject a bitmap with the same node appearing twice."""
+    registry = FederationRegistry.from_file(REGISTRY_PATH)
+    header = create_shard_header(
+        shard_id="records/city-a",
+        root_hash=bytes.fromhex("f3" * 32),
+        timestamp="2026-03-10T12:02:00Z",
+    )
+    sig1 = sign_federated_header(header, "olympus-node-1", _test_signing_key(1), registry)
+    sig2 = sign_federated_header(header, "olympus-node-2", _test_signing_key(2), registry)
+    certificate = build_quorum_certificate(header, [sig1, sig2], registry)
+
+    # The bitmap already enforces one slot per active node — a duplicate node_id
+    # inside the signatures list for a given bitmap slot should be rejected.
+    # Construct a malformed certificate where both slots claim the same node_id.
+    dup_signatures = [
+        {"node_id": "olympus-node-1", "signature": sig1.signature},
+        {"node_id": "olympus-node-1", "signature": sig1.signature},
+    ]
+    tampered_certificate = {**certificate, "signatures": dup_signatures}
+
+    assert verify_quorum_certificate(tampered_certificate, header, registry) is False
