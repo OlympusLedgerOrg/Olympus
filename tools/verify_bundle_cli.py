@@ -50,7 +50,21 @@ def _check_header_hash(header: dict[str, Any]) -> tuple[bool, str]:
     Returns:
         ``(passed, message)``
     """
-    fields = {k: v for k, v in header.items() if k != "header_hash"}
+    required_fields = {
+        "shard_id",
+        "root_hash",
+        "timestamp",
+        "height",
+        "round",
+        "previous_header_hash",
+    }
+    if not required_fields.issubset(header):
+        missing = required_fields - set(header)
+        return False, f"Header validation failed: missing required fields {sorted(missing)}"
+
+    # Use the full header (minus header_hash) to mirror protocol.shards.create_shard_header
+    # canonicalization; sorting keys keeps the hash reproducible across Python versions and runtimes.
+    fields = {k: header[k] for k in sorted(header) if k != "header_hash"}
     expected = shard_header_hash(fields).hex()
     claimed = header["header_hash"]
     if expected == claimed:
@@ -216,7 +230,7 @@ def _check_root_consistency(header_root_hex: str, bundle_root_hex: str) -> tuple
     if header_root_hex.lower() == bundle_root_hex.lower():
         return True, f"Merkle root matches shard header: {header_root_hex}"
     return False, (
-        f"Merkle root mismatch: header root {header_root_hex} " f"!= bundle root {bundle_root_hex}"
+        f"Merkle root mismatch: header root {header_root_hex} != bundle root {bundle_root_hex}"
     )
 
 
@@ -291,8 +305,7 @@ def _check_epoch_record(epoch_record: dict[str, Any], root_hash_hex: str) -> tup
 
     if record.merkle_root.lower() != root_hash_hex.lower():
         return False, (
-            f"Epoch record Merkle root mismatch: "
-            f"{record.merkle_root} != shard root {root_hash_hex}"
+            f"Epoch record Merkle root mismatch: {record.merkle_root} != shard root {root_hash_hex}"
         )
 
     try:
@@ -304,7 +317,7 @@ def _check_epoch_record(epoch_record: dict[str, Any], root_hash_hex: str) -> tup
 
     if computed_head != record.epoch_head:
         return False, (
-            f"Epoch head mismatch: computed {computed_head} " f"!= claimed {record.epoch_head}"
+            f"Epoch head mismatch: computed {computed_head} != claimed {record.epoch_head}"
         )
 
     return True, f"Epoch record valid (head={record.epoch_head})"

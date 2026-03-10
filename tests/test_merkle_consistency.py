@@ -80,3 +80,16 @@ def test_leaf_and_internal_node_hashes_are_domain_separated(left: bytes, right: 
     leaf_hash = merkle_leaf_hash(left)
     internal_hash = node_hash(left, right)
     assert leaf_hash != internal_hash
+
+
+def test_merkleproof_normalizes_boolean_positions():
+    """Legacy boolean sibling positions are normalized to strings."""
+    proof = MerkleTree([b"a", b"b"]).generate_proof(0)
+    proof_with_bools = proof.__class__(
+        leaf_hash=proof.leaf_hash,
+        leaf_index=proof.leaf_index,
+        siblings=[(proof.siblings[0][0], True)],
+        root_hash=proof.root_hash,
+    )
+    assert all(isinstance(pos, str) for _, pos in proof_with_bools.siblings)
+    assert proof_with_bools.siblings[0][1] == "right"

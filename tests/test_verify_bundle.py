@@ -23,7 +23,7 @@ from protocol.timestamps import current_timestamp
 
 # Imported from the tool under test
 sys.path.insert(0, str(Path(__file__).parent.parent / "tools"))
-from verify_bundle_cli import verify_bundle  # noqa: E402
+from verify_bundle_cli import _check_header_hash, verify_bundle  # noqa: E402
 
 
 CLI_PATH = Path(__file__).parent.parent / "tools" / "verify_bundle_cli.py"
@@ -200,6 +200,18 @@ def test_missing_required_field():
     passed, results = verify_bundle({"signature": "aa" * 64, "pubkey": "bb" * 32})
     assert passed is False
     assert any("Missing" in msg for _, msg in results)
+
+
+def test_header_validation_requires_consensus_fields():
+    """Shard header validation fails cleanly when consensus fields are missing."""
+    bundle = _make_bundle()
+    header = dict(bundle["shard_header"])
+    header.pop("height")
+
+    passed, message = _check_header_hash(header)
+
+    assert passed is False
+    assert "missing required fields" in message
 
 
 def test_full_bundle_all_checks():

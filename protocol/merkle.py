@@ -36,8 +36,23 @@ class MerkleProof:
 
     leaf_hash: bytes
     leaf_index: int
-    siblings: list[tuple[bytes, str | bool]]  # (hash, "left" | "right")
+    # sibling positions stored as canonical "left"/"right" strings; __post_init__
+    # normalizes legacy boolean inputs where encountered.
+    siblings: Sequence[tuple[bytes, str | bool]]
     root_hash: bytes
+
+    def __post_init__(self) -> None:
+        """Normalize sibling positions to canonical 'left'/'right' strings."""
+        normalized: list[tuple[bytes, str]] = []
+        for sibling_hash, position in self.siblings:
+            if isinstance(position, bool):
+                position = "right" if position else "left"
+            if position not in ("left", "right"):
+                raise ValueError("Sibling position must be 'left' or 'right'")
+            normalized.append((sibling_hash, position))
+        # Use object.__setattr__ to update the field during initialization while keeping
+        # runtime instances immutable and canonical (always string positions).
+        object.__setattr__(self, "siblings", normalized)
 
 
 @dataclass
@@ -123,7 +138,7 @@ class MerkleTree:
             raise ValueError("Invalid leaf index")
 
         leaf_hash = self._leaf_hashes[leaf_index]
-        siblings: list[tuple[bytes, str | bool]] = []
+        siblings: list[tuple[bytes, str]] = []
 
         # Collect siblings along path to root
         current_level: list[MerkleNode] = [MerkleNode(hash=h) for h in self._leaf_hashes]
@@ -196,7 +211,7 @@ def deserialize_merkle_proof(proof_data: dict[str, Any]) -> MerkleProof:
     Returns:
         MerkleProof with normalized sibling positions.
     """
-    normalized_siblings: list[tuple[bytes, str | bool]] = []
+    normalized_siblings: list[tuple[bytes, str]] = []
     for sibling_hash_hex, is_right in proof_data.get("siblings", []):
         if isinstance(is_right, str):
             normalized_flag = is_right.lower() == "right"
