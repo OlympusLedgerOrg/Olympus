@@ -164,15 +164,18 @@ Derived artifact, served by Stewards or Auditors
   "shard_id": "records/agency-a",
   "seq": 42,
   "header_hash": "<hex>",
-  "acknowledgments": ["<signed guardian_ack>", "<signed guardian_ack>"],
+  "scheme": "ed25519",
+  "signer_bitmap": "<bitmap over active membership order>",
+  "signatures": [{"node_id": "...", "signature": "<hex>"}],
   "quorum_threshold": 3
 }
 ```
 
 Semantics:
 
-- A **quorum certificate** exists when acknowledgments from at least `Q` distinct Guardians reference the same `header_hash`.
-- The certificate is independently verifiable from the included signed acknowledgments and the published membership registry.
+- A **quorum certificate** exists when signatures from at least `Q` distinct Guardians reference the same `header_hash`.
+- `scheme` identifies the signature representation; the prototype uses `"ed25519"` and keeps room for future schemes (for example `"bls_aggregate"`).
+- The certificate is independently verifiable from the included signatures, signer bitmap, and the published membership registry.
 - Certificates are attached as append-only metadata; historical headers are never rewritten.
 
 ## Replication Algorithm
