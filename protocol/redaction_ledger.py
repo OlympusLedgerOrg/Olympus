@@ -66,6 +66,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from dataclasses import dataclass
+from enum import Enum
 from pathlib import Path
 from typing import Any
 
@@ -184,7 +185,20 @@ class ZKPublicInputs:
     revealed_count: int
 
 
-def verify_zk_redaction(proof_blob: dict[str, Any], public_inputs: ZKPublicInputs) -> bool:
+class VerificationResult(Enum):
+    """Three-valued verification outcome."""
+
+    VALID = "valid"
+    INVALID = "invalid"
+    UNABLE_TO_VERIFY = "unable_to_verify"
+
+    def __bool__(self) -> bool:  # pragma: no cover - convenience for legacy callers
+        return self is VerificationResult.VALID
+
+
+def verify_zk_redaction(
+    proof_blob: dict[str, Any], public_inputs: ZKPublicInputs
+) -> VerificationResult:
     """
     Verify a Groth16 redaction proof against the redaction_validity verification key.
 
@@ -193,10 +207,10 @@ def verify_zk_redaction(proof_blob: dict[str, Any], public_inputs: ZKPublicInput
         public_inputs: Public signals for the redaction circuit.
 
     Returns:
-        ``True`` when snarkjs verifies the proof; ``False`` on verification
-        failure, malformed inputs, missing verifier artifacts, or runtime errors.
-        This boolean API is intentionally non-throwing so callers can treat all
-        verification failures uniformly.
+        VerificationResult.VALID when snarkjs verifies the proof.
+        VerificationResult.INVALID when verification cryptographically fails.
+        VerificationResult.UNABLE_TO_VERIFY when verifier inputs are malformed
+        or the verification artifacts are unavailable (e.g., missing vkey).
     """
     try:
         public_signals = [
@@ -205,7 +219,7 @@ def verify_zk_redaction(proof_blob: dict[str, Any], public_inputs: ZKPublicInput
             str(int(public_inputs.revealed_count)),
         ]
     except (TypeError, ValueError):
-        return False
+        return VerificationResult.UNABLE_TO_VERIFY
 
     repo_root = Path(__file__).resolve().parent.parent
     circuits_dir = repo_root / "proofs" / "circuits"
@@ -214,11 +228,11 @@ def verify_zk_redaction(proof_blob: dict[str, Any], public_inputs: ZKPublicInput
     proof = ZKProof(proof=proof_blob, public_signals=public_signals, circuit="redaction_validity")
 
     try:
-        return prover.verify(proof=proof, verification_key_path=vkey_path)
+        verified = prover.verify(proof=proof, verification_key_path=vkey_path)
     except (FileNotFoundError, OSError, ValueError):
-        # Verification failures and verifier-environment errors are collapsed
-        # to False by design for a strictly boolean verification API.
-        return False
+        return VerificationResult.UNABLE_TO_VERIFY
+
+    return VerificationResult.VALID if verified else VerificationResult.INVALID
 
 
 @dataclass
@@ -291,8 +305,9 @@ class RedactionProofWithLedger:
     def verify_all(
         self,
         smt_root_hash: bytes,
-        zk_verifier: Callable[[dict[str, Any], ZKPublicInputs], bool] | None = None,
-    ) -> bool:
+        zk_verifier: Callable[[dict[str, Any], ZKPublicInputs], VerificationResult | bool]
+        | None = None,
+    ) -> VerificationResult:
         """
         Verify both the SMT anchor and (optionally) the ZK proof.
 
@@ -304,17 +319,22 @@ class RedactionProofWithLedger:
             smt_root_hash: The 32-byte SMT root hash; passed to
                            :meth:`verify_smt_anchor`.
             zk_verifier: Optional callable with signature
-                         ``(zk_proof, zk_public_inputs) -> bool``. When
-                         provided, this overrides the default verifier.
+                         ``(zk_proof, zk_public_inputs) -> VerificationResult``.
+                         When provided, this overrides the default verifier. Legacy
+                         callables that return ``bool`` are also supported and will
+                         be coerced into :class:`VerificationResult`.
 
         Returns:
-            ``True`` if both the SMT anchor and ZK proof checks pass;
-            ``False`` otherwise.
+            VerificationResult describing the combined SMT + ZK verification outcome.
         """
         if not self.verify_smt_anchor(smt_root_hash):
-            return False
+            return VerificationResult.INVALID
 
         if zk_verifier is not None:
-            return zk_verifier(self.zk_proof, self.zk_public_inputs)
+            zk_result = zk_verifier(self.zk_proof, self.zk_public_inputs)
+        else:
+            zk_result = verify_zk_redaction(self.zk_proof, self.zk_public_inputs)
 
-        return verify_zk_redaction(self.zk_proof, self.zk_public_inputs)
+        if isinstance(zk_result, VerificationResult):
+            return zk_result
+        return VerificationResult.VALID if zk_result else VerificationResult.INVALID

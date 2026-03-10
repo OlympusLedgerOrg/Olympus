@@ -10,7 +10,7 @@ from dataclasses import dataclass
 from typing import Optional
 
 from .events import CanonicalEvent
-from .hashes import HASH_SEPARATOR, LEAF_PREFIX, blake3_hash, merkle_parent_hash
+from .hashes import HASH_SEPARATOR, LEAF_PREFIX, blake3_hash, node_hash
 
 
 # Merkle tree version - DO NOT CHANGE
@@ -88,7 +88,7 @@ class MerkleTree:
         for i in range(0, len(nodes), 2):
             left_node = nodes[i]
             right_node = nodes[i + 1] if i + 1 < len(nodes) else nodes[i]
-            parent_hash = merkle_parent_hash(left_node.hash, right_node.hash)
+            parent_hash = node_hash(left_node.hash, right_node.hash)
             parents.append(
                 MerkleNode(
                     hash=parent_hash,
@@ -141,7 +141,7 @@ class MerkleTree:
             for i in range(0, len(current_level), 2):
                 left = current_level[i]
                 right = current_level[i + 1] if i + 1 < len(current_level) else current_level[i]
-                new_hash = merkle_parent_hash(left.hash, right.hash)
+                new_hash = node_hash(left.hash, right.hash)
                 new_level.append(MerkleNode(hash=new_hash, left=left, right=right))
 
             current_level = new_level
@@ -169,9 +169,9 @@ def verify_proof(proof: MerkleProof) -> bool:
 
     for sibling_hash, is_right in proof.siblings:
         if is_right == "right":
-            current_hash = merkle_parent_hash(current_hash, sibling_hash)
+            current_hash = node_hash(current_hash, sibling_hash)
         elif is_right == "left":
-            current_hash = merkle_parent_hash(sibling_hash, current_hash)
+            current_hash = node_hash(sibling_hash, current_hash)
         else:
             raise ValueError("Sibling position must be 'left' or 'right'")
 

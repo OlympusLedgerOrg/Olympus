@@ -4,8 +4,15 @@ Cryptographic hash functions for Olympus
 This module provides the canonical hash functions used throughout the Olympus protocol.
 All hashes must be deterministic and collision-resistant.
 Uses BLAKE3 for all cryptographic hashing.
+
+Protocol notes:
+- Federation vote hashing uses **length-prefixed encoding (V2)**: each UTF-8
+  field is prefixed with its 4-byte big-endian length before hashing with
+  ``FEDERATION_PREFIX``. This prevents field-injection collisions when fields
+  contain literal ``|`` characters.
 """
 
+import warnings
 from typing import Any
 
 import blake3
@@ -158,7 +165,16 @@ def merkle_parent_hash(left: bytes, right: bytes) -> bytes:
     Legacy: Compute parent hash in Merkle tree.
     This function is more lenient for backward compatibility.
     It accepts any byte strings, not just 32-byte hashes.
+
+    Deprecated: will be removed in a future release (merkle_v2). Use
+    :func:`node_hash` directly for domain-separated internal nodes.
     """
+    warnings.warn(
+        "merkle_parent_hash is deprecated and will be removed in merkle_v2; "
+        "use node_hash(left, right) instead.",
+        DeprecationWarning,
+        stacklevel=2,
+    )
     # For legacy compatibility, accept any byte strings
     # Hash them first if they're not already 32 bytes
     if len(left) != 32:
@@ -222,10 +238,14 @@ def federation_vote_hash(
     - The timestamp of the event (timestamp)
     - The unique event identifier (event_id)
 
-    The hash is computed as:
-        hash(FEDERATION_PREFIX || domain || node_id || shard_id || header_hash || timestamp || event_id)
+    Encoding (version 2):
+        - domain is always "olympus.federation.v1" for the current protocol version
+        - each field is encoded as: [4-byte big-endian length] || [UTF-8 bytes]
+        - payload = concat(fields)
+        - vote_hash = blake3(FEDERATION_PREFIX || "|" || payload)
 
-    where domain is always "olympus.federation.v1" for the current protocol version.
+    Length-prefixing prevents field-injection collisions (e.g., literal "|" characters
+    inside node_id or shard_id) while preserving deterministic, auditable encoding.
 
     Args:
         node_id: Federation node identifier
@@ -238,7 +258,12 @@ def federation_vote_hash(
         32-byte hash to be signed by the federation node
     """
     domain = "olympus.federation.v1"
-    vote_data = HASH_SEPARATOR.join(
-        [domain, node_id, shard_id, header_hash, timestamp, event_id_hex]
-    )
-    return blake3_hash([FEDERATION_PREFIX, _SEP, vote_data.encode("utf-8")])
+    fields = [domain, node_id, shard_id, header_hash, timestamp, event_id_hex]
+    encoded_fields = []
+    for value in fields:
+        field_bytes = value.encode("utf-8")
+        encoded_fields.append(len(field_bytes).to_bytes(4, byteorder="big"))
+        encoded_fields.append(field_bytes)
+
+    payload = b"".join(encoded_fields)
+    return blake3_hash([FEDERATION_PREFIX, _SEP, payload])

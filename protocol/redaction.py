@@ -20,8 +20,10 @@ revealed content — no access to the original document or private keys.
 from dataclasses import dataclass
 from typing import Any
 
-from .hashes import hash_bytes
+from .canonical import normalize_whitespace
+from .hashes import blake3_to_field_element, hash_bytes
 from .merkle import MerkleProof, MerkleTree, verify_proof
+from .poseidon_tree import PoseidonMerkleTree
 from .redaction_ledger import (
     RedactionProofWithLedger,
     ZKPublicInputs,
@@ -30,6 +32,11 @@ from .redaction_ledger import (
 )
 from .ssmf import SparseMerkleTree
 from .telemetry import get_tracer
+
+
+# Poseidon redaction circuit parameters (16 leaves, depth 4)
+_POSEIDON_TREE_DEPTH = 4
+_POSEIDON_MAX_LEAVES = 1 << _POSEIDON_TREE_DEPTH
 
 
 @dataclass
@@ -107,11 +114,31 @@ class RedactionProtocol:
     """
 
     @staticmethod
+    def canonical_section_bytes(section: str) -> bytes:
+        """
+        Canonical byte representation for a document section.
+
+        The canonical form normalizes whitespace (per ``normalize_whitespace``)
+        and encodes the result as UTF-8. Both the BLAKE3 and Poseidon Merkle
+        trees MUST derive their leaves from this exact byte sequence to ensure
+        the two commitments are bound to the same document semantics.
+        """
+        normalized = normalize_whitespace(section)
+        return normalized.encode("utf-8")
+
+    @classmethod
+    def canonical_section_bytes_list(cls, parts: list[str]) -> list[bytes]:
+        """Apply :meth:`canonical_section_bytes` to every part."""
+        return [cls.canonical_section_bytes(part) for part in parts]
+
+    @staticmethod
     def create_leaf_hashes(parts: list[str]) -> list[bytes]:
         """
         Compute BLAKE3 leaf hashes for a list of document sections.
 
-        Each section is encoded as UTF-8 before hashing.
+        Each section is normalized (``normalize_whitespace``) and encoded as
+        UTF-8 before hashing. The resulting bytes are later domain-separated
+        as Merkle leaves by :class:`~protocol.merkle.MerkleTree`.
 
         Args:
             parts: Ordered list of document sections (strings).
@@ -119,7 +146,8 @@ class RedactionProtocol:
         Returns:
             List of 32-byte BLAKE3 hashes, one per section.
         """
-        return [hash_bytes(part.encode("utf-8")) for part in parts]
+        canonical_bytes = RedactionProtocol.canonical_section_bytes_list(parts)
+        return [hash_bytes(part_bytes) for part_bytes in canonical_bytes]
 
     @staticmethod
     def commit_document(document_parts: list[str]) -> tuple["MerkleTree", str]:
@@ -229,7 +257,7 @@ class RedactionProtocol:
 
             for i, content in enumerate(revealed_content):
                 # 1. Content must hash to the committed leaf hash
-                content_hash = hash_bytes(content.encode("utf-8")).hex()
+                content_hash = hash_bytes(RedactionProtocol.canonical_section_bytes(content)).hex()
                 if content_hash != proof.revealed_hashes[i]:
                     span.set_attribute("verification_result", f"failed_hash_mismatch_at_{i}")
                     return False
@@ -262,7 +290,10 @@ class RedactionProtocol:
         Builds the standard BLAKE3 Merkle commitment (same as
         :meth:`commit_document`) **and** inserts the Poseidon Merkle root used
         by the Groth16 ZK circuit into *smt* under a dedicated
-        ``"redaction_root_poseidon"`` key.
+        ``"redaction_root_poseidon"`` key. Both Merkle trees are derived from
+        the same canonical section bytes (``normalize_whitespace`` + UTF-8).
+        The Poseidon tree is padded to 16 leaves (depth 4), and any caller-
+        provided poseidon_root is validated against the computed root.
 
         This anchors both commitment types in the same BLAKE3 SMT so that a
         verifier can:
@@ -291,12 +322,36 @@ class RedactionProtocol:
         Raises:
             ValueError: If *poseidon_root* is not a valid field element.
         """
-        # Standard BLAKE3 commitment
-        tree, blake3_root = RedactionProtocol.commit_document(document_parts)
+        if len(document_parts) > _POSEIDON_MAX_LEAVES:
+            raise ValueError(
+                f"Poseidon tree supports at most {_POSEIDON_MAX_LEAVES} sections; "
+                f"got {len(document_parts)}"
+            )
+
+        canonical_sections = RedactionProtocol.canonical_section_bytes_list(document_parts)
+
+        # Standard BLAKE3 commitment using the canonical section bytes
+        leaf_hashes = [hash_bytes(part_bytes) for part_bytes in canonical_sections]
+        tree = MerkleTree(leaf_hashes)
+        blake3_root = tree.get_root().hex()
+
+        # Poseidon commitment derived from the *same* canonical section bytes
+        poseidon_leaves = [
+            int(blake3_to_field_element(part_bytes)) for part_bytes in canonical_sections
+        ]
+        poseidon_tree = PoseidonMerkleTree(poseidon_leaves, depth=_POSEIDON_TREE_DEPTH)
+        computed_poseidon_root = poseidon_tree.get_root()
+
+        # Enforce binding: supplied root must match computed root
+        if str(int(poseidon_root)) != computed_poseidon_root:
+            raise ValueError(
+                "Provided poseidon_root does not match canonical document sections; "
+                "ensure both commitments use the same canonical leaf bytes"
+            )
 
         # Anchor the Poseidon root in the SMT under its own key namespace
         key = poseidon_root_record_key(document_id, version)
-        value = poseidon_root_to_bytes(poseidon_root)
+        value = poseidon_root_to_bytes(computed_poseidon_root)
         smt.update(key, value)
 
         return tree, blake3_root

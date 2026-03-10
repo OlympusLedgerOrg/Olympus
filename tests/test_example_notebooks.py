@@ -48,7 +48,7 @@ def extract_notebook_outputs(data: dict) -> str:
                 "commit_document_dual",
                 "verify_smt_anchor",
             ],
-            "verify_zk_redaction(...) => True",
+            "verify_zk_redaction(...) => VerificationResult.VALID",
         ),
         (
             "smt_explainer.ipynb",
