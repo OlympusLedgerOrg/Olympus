@@ -36,12 +36,14 @@ This guide covers common development workflows for the Olympus project.
 
 5. **Start PostgreSQL** (if using Docker)
    ```bash
-   docker-compose up -d
+   docker compose up -d
    ```
 
-6. **Run database migrations**
+6. **Apply database migrations**
    ```bash
-   python migrations/apply_migrations.py
+   for migration in $(ls migrations/*.sql | sort); do
+     psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f "$migration"
+   done
    ```
 
 ## Running Tests
@@ -206,7 +208,7 @@ psql postgresql://olympus:olympus@localhost:5432/olympus
 ## Common Issues
 
 ### PostgreSQL connection errors
-- Ensure PostgreSQL is running: `docker-compose ps`
+- Ensure PostgreSQL is running: `docker compose ps`
 - Check connection string in `.env`
 - Verify credentials: `olympus:olympus` (default)
 

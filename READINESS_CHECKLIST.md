@@ -87,17 +87,17 @@ coverage report -m
 coverage xml  # For CI integration
 ```
 
-## 📊 Current Quality Metrics
+## 📊 Quality Targets
 
-| Metric | Status | Target | Notes |
-|--------|--------|--------|-------|
-| **Ruff Lint** | ✅ Pass | All checks pass | E, W, F, I, UP rules |
-| **Ruff Format** | ✅ Pass | 37 files formatted | Consistent style |
-| **MyPy** | ✅ Pass | No issues | Type safety verified |
-| **Tests (non-postgres)** | ✅ 172/172 | 100% pass rate | Fast test suite |
-| **Coverage** | ✅ 61.48% | 60%+ baseline | Exceeds threshold |
-| **Security (Bandit)** | ⚠️ 2 minor | Low risk | Hardcoded /tmp paths (dev defaults) |
-| **Dependencies** | ✅ No CVEs | Clean | Production deps secure |
+| Metric | Target |
+|--------|--------|
+| **Ruff Lint** | All checks pass (E, W, F, I, UP rules) |
+| **Ruff Format** | Consistent style |
+| **MyPy** | No type errors |
+| **Tests (non-postgres)** | 100% pass rate |
+| **Coverage** | ≥85% (CI floor) |
+| **Security (Bandit)** | No high/critical findings |
+| **Dependencies** | No known CVEs |
 
 ## 🐳 Docker Development
 
@@ -198,15 +198,14 @@ bandit -r protocol/ storage/ api/ app_testonly/
 - **Protocol Specs:** `docs/` directory
 - **Architecture:** See `README.md` and `docs/`
 - **Contributing:** See `CONTRIBUTING.md`
-- **Copilot Instructions:** `.github/copilot-instructions.md`
 
 ## ❓ FAQ
 
 **Q: Why does `pip install -e .` fail?**  
-A: Ensure setuptools >= 77.0.0. This is now enforced in `pyproject.toml`.
+A: Ensure setuptools >= 77.0.0. This is enforced in `pyproject.toml`.
 
-**Q: Coverage seems low at 61%?**  
-A: This is expected without Postgres tests. With Postgres, coverage increases to 75%+.
+**Q: Coverage is below 85%?**  
+A: Run the full test suite including Postgres-marked tests (`pytest tests/ -v`) for complete coverage.
 
 **Q: What about migrations?**  
 A: `migrations/` is excluded from package distribution but can be included if needed for Alembic runtime.
@@ -215,6 +214,3 @@ A: `migrations/` is excluded from package distribution but can be included if ne
 A: Yes! The project supports Python 3.10, 3.11, and 3.12.
 
 ---
-
-**Last Updated:** 2026-01-14  
-**Baseline:** Post-packaging fixes (SPDX license + setuptools discovery)

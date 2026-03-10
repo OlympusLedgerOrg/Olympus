@@ -601,7 +601,7 @@ See `proofs/README.md` for full circuit documentation.
 
 ---
 
-## 13. Quick Reference Card
+## 14. Quick Reference Card
 
 ```bash
 # Setup
