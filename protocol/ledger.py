@@ -57,32 +57,34 @@ class Ledger:
 
         Rebuilds the certificate from a fixed set of known fields only, ensuring
         that extra or unrecognized fields are excluded from the hash payload and
-        that all field types are explicit. The acknowledgments list is sorted
+        that all field types are explicit. The signatures list is sorted
         lexicographically by (node_id, signature) for determinism.
         """
         if certificate is None:
             return None
-        acknowledgments = certificate.get("acknowledgments")
-        if isinstance(acknowledgments, list):
+        signatures = certificate.get("signatures")
+        if isinstance(signatures, list):
             signature_items = [
                 {"node_id": str(item["node_id"]), "signature": str(item["signature"])}
-                for item in acknowledgments
+                for item in signatures
                 if isinstance(item, dict) and "node_id" in item and "signature" in item
             ]
-            sorted_acknowledgments: list[dict[str, str]] = sorted(
+            sorted_signatures: list[dict[str, str]] = sorted(
                 signature_items,
                 key=lambda item: (item["node_id"], item["signature"]),
             )
         else:
-            sorted_acknowledgments = []
+            sorted_signatures = []
         return {
-            "acknowledgments": sorted_acknowledgments,
             "event_id": str(certificate.get("event_id", "")),
             "federation_epoch": int(certificate.get("federation_epoch", 0)),
             "header_hash": str(certificate.get("header_hash", "")),
             "membership_hash": str(certificate.get("membership_hash", "")),
             "quorum_threshold": int(certificate.get("quorum_threshold", 0)),
+            "scheme": str(certificate.get("scheme", "")),
             "shard_id": str(certificate.get("shard_id", "")),
+            "signatures": sorted_signatures,
+            "signer_bitmap": str(certificate.get("signer_bitmap", "")),
             "timestamp": str(certificate.get("timestamp", "")),
         }
 

@@ -18,6 +18,7 @@ from protocol.ledger import Ledger, LedgerEntry
 
 _FEDERATION_VOTE_DOMAIN = "OLY:FEDERATION-VOTE:V1"
 _HEADER_EXCLUDED_FIELDS: frozenset[str] = frozenset({"header_hash", "signature", "timestamp_token"})
+_CERTIFICATE_SIGNATURE_SCHEME_ED25519 = "ed25519"
 
 
 @dataclass(frozen=True)
@@ -364,6 +365,12 @@ def build_quorum_certificate(
     valid_signatures = verify_federated_header_signatures(header, signatures, registry)
     if len(valid_signatures) < registry.quorum_threshold():
         raise ValueError("Insufficient valid federation signatures for quorum certificate")
+    ordered_signatures = sorted(valid_signatures, key=lambda signature: signature.node_id)
+    signed_node_ids = {signature.node_id for signature in ordered_signatures}
+    active_node_ids = sorted(node.node_id for node in registry.active_nodes())
+    signer_bitmap = "".join(
+        "1" if node_id in signed_node_ids else "0" for node_id in active_node_ids
+    )
     return {
         "shard_id": str(header["shard_id"]),
         "header_hash": str(header["header_hash"]),
@@ -372,10 +379,9 @@ def build_quorum_certificate(
         "federation_epoch": registry.epoch,
         "membership_hash": registry.membership_hash(),
         "quorum_threshold": registry.quorum_threshold(),
-        "acknowledgments": [
-            signature.to_dict()
-            for signature in sorted(valid_signatures, key=lambda signature: signature.node_id)
-        ],
+        "scheme": _CERTIFICATE_SIGNATURE_SCHEME_ED25519,
+        "signer_bitmap": signer_bitmap,
+        "signatures": [signature.to_dict() for signature in ordered_signatures],
     }
 
 
@@ -393,7 +399,9 @@ def verify_quorum_certificate(
         "federation_epoch",
         "membership_hash",
         "quorum_threshold",
-        "acknowledgments",
+        "scheme",
+        "signer_bitmap",
+        "signatures",
     }
     if not required_fields.issubset(certificate):
         return False
@@ -411,13 +419,15 @@ def verify_quorum_certificate(
         return False
     if int(certificate["quorum_threshold"]) != registry.quorum_threshold():
         return False
+    if certificate.get("scheme") != _CERTIFICATE_SIGNATURE_SCHEME_ED25519:
+        return False
 
-    acknowledgments = certificate.get("acknowledgments")
-    if not isinstance(acknowledgments, list):
+    serialized_signatures = certificate.get("signatures")
+    if not isinstance(serialized_signatures, list):
         return False
     signatures = [
         NodeSignature(node_id=str(item["node_id"]), signature=str(item["signature"]))
-        for item in acknowledgments
+        for item in serialized_signatures
         if isinstance(item, dict) and "node_id" in item and "signature" in item
     ]
     unique_signatures: list[NodeSignature] = []
@@ -430,6 +440,19 @@ def verify_quorum_certificate(
             continue
         seen_signatures_by_node[signature.node_id] = signature.signature
         unique_signatures.append(signature)
+    active_node_ids = sorted(node.node_id for node in registry.active_nodes())
+    signer_bitmap = certificate.get("signer_bitmap")
+    if not isinstance(signer_bitmap, str):
+        return False
+    if len(signer_bitmap) != len(active_node_ids) or set(signer_bitmap) - {"0", "1"}:
+        return False
+    expected_signer_ids = {
+        node_id
+        for node_id, bitmap_bit in zip(active_node_ids, signer_bitmap, strict=True)
+        if bitmap_bit == "1"
+    }
+    if set(seen_signatures_by_node) != expected_signer_ids:
+        return False
     valid_signatures = verify_federated_header_signatures(header, unique_signatures, registry)
     return len(valid_signatures) >= registry.quorum_threshold() and len(valid_signatures) == len(
         unique_signatures

@@ -315,7 +315,7 @@ def test_federation_node_key_rotation_rejects_post_rotation_old_key_signatures()
     assert has_federation_quorum(header, rotated_key_signatures, rotated_registry) is True
 
 
-def test_quorum_certificate_acknowledgments_are_canonicalized_for_determinism() -> None:
+def test_quorum_certificate_signatures_are_canonicalized_for_determinism() -> None:
     """Quorum certificate signatures should be serialized in deterministic node-id order."""
     registry = FederationRegistry.from_file(REGISTRY_PATH)
     header = create_shard_header(
@@ -330,14 +330,21 @@ def test_quorum_certificate_acknowledgments_are_canonicalized_for_determinism() 
 
     certificate = build_quorum_certificate(header, signatures, registry)
 
-    assert [ack["node_id"] for ack in certificate["acknowledgments"]] == [
+    assert certificate["scheme"] == "ed25519"
+    assert [signature["node_id"] for signature in certificate["signatures"]] == [
         "olympus-node-1",
         "olympus-node-2",
     ]
+    active_node_ids = sorted(node.node_id for node in registry.active_nodes())
+    expected_bitmap = "".join(
+        "1" if node_id in {"olympus-node-1", "olympus-node-2"} else "0"
+        for node_id in active_node_ids
+    )
+    assert certificate["signer_bitmap"] == expected_bitmap
 
 
-def test_verify_quorum_certificate_ignores_duplicate_acknowledgments() -> None:
-    """Duplicate acknowledgments should be filtered before signature validation."""
+def test_verify_quorum_certificate_ignores_duplicate_signatures() -> None:
+    """Duplicate signatures should be filtered before signature validation."""
     registry = FederationRegistry.from_file(REGISTRY_PATH)
     header = create_shard_header(
         shard_id="records/city-a",
@@ -346,6 +353,11 @@ def test_verify_quorum_certificate_ignores_duplicate_acknowledgments() -> None:
     )
     signature_one = sign_federated_header(header, "olympus-node-1", _test_signing_key(1), registry)
     signature_two = sign_federated_header(header, "olympus-node-2", _test_signing_key(2), registry)
+    active_node_ids = sorted(node.node_id for node in registry.active_nodes())
+    signer_bitmap = "".join(
+        "1" if node_id in {"olympus-node-1", "olympus-node-2"} else "0"
+        for node_id in active_node_ids
+    )
     certificate = {
         "shard_id": header["shard_id"],
         "header_hash": header["header_hash"],
@@ -356,7 +368,9 @@ def test_verify_quorum_certificate_ignores_duplicate_acknowledgments() -> None:
         "federation_epoch": registry.epoch,
         "membership_hash": registry.membership_hash(),
         "quorum_threshold": registry.quorum_threshold(),
-        "acknowledgments": [
+        "scheme": "ed25519",
+        "signer_bitmap": signer_bitmap,
+        "signatures": [
             signature_one.to_dict(),
             signature_one.to_dict(),
             signature_two.to_dict(),
@@ -382,6 +396,11 @@ def test_verify_quorum_certificate_rejects_conflicting_duplicate_node_votes() ->
         _test_signing_key(9),
         registry,
     )
+    active_node_ids = sorted(node.node_id for node in registry.active_nodes())
+    signer_bitmap = "".join(
+        "1" if node_id in {"olympus-node-1", "olympus-node-2"} else "0"
+        for node_id in active_node_ids
+    )
     certificate = {
         "shard_id": header["shard_id"],
         "header_hash": header["header_hash"],
@@ -392,7 +411,9 @@ def test_verify_quorum_certificate_rejects_conflicting_duplicate_node_votes() ->
         "federation_epoch": registry.epoch,
         "membership_hash": registry.membership_hash(),
         "quorum_threshold": registry.quorum_threshold(),
-        "acknowledgments": [
+        "scheme": "ed25519",
+        "signer_bitmap": signer_bitmap,
+        "signatures": [
             signature_one.to_dict(),
             conflicting_signature_one.to_dict(),
             signature_two.to_dict(),
@@ -400,6 +421,29 @@ def test_verify_quorum_certificate_rejects_conflicting_duplicate_node_votes() ->
     }
 
     assert verify_quorum_certificate(certificate, header, registry) is False
+
+
+def test_verify_quorum_certificate_rejects_signer_bitmap_mismatch() -> None:
+    """Signer bitmap must match the exact signer set represented in signatures."""
+    registry = FederationRegistry.from_file(REGISTRY_PATH)
+    header = create_shard_header(
+        shard_id="records/city-a",
+        root_hash=bytes.fromhex("ac" * 32),
+        timestamp="2026-03-09T00:00:04Z",
+    )
+    signatures = [
+        sign_federated_header(header, "olympus-node-1", _test_signing_key(1), registry),
+        sign_federated_header(header, "olympus-node-2", _test_signing_key(2), registry),
+    ]
+    certificate = build_quorum_certificate(header, signatures, registry)
+    first_bit = certificate["signer_bitmap"][0]
+    flipped_first_bit = "0" if first_bit == "1" else "1"
+    tampered_certificate = {
+        **certificate,
+        "signer_bitmap": flipped_first_bit + certificate["signer_bitmap"][1:],
+    }
+
+    assert verify_quorum_certificate(tampered_certificate, header, registry) is False
 
 
 def test_federation_signature_is_domain_separated_from_plain_header_signature() -> None:
