@@ -45,11 +45,20 @@ bytes**:
 canonical_section = normalize_whitespace(section).encode("utf-8")
 ```
 
-`RedactionProtocol.commit_document_dual` derives both Merkle commitments from
-these bytes, pads the Poseidon tree to 16 leaves (depth 4), and rejects any
-caller-provided Poseidon root that does not match the canonical leaf stream.
-This eliminates the prior dual-anchor binding gap where mismatched leaf
-transformations could be anchored together.
+`RedactionProtocol.commit_document_dual` anchors only the **root pair**
+(`blake3_root`, `poseidon_root`) into the SMT. No Poseidon tree structure is
+stored or exposed. Poseidon tree construction now happens on the proof path:
+`create_redaction_proof_with_ledger` rebuilds the Poseidon tree from the same
+canonical bytes (depth 4, padded to 16 leaves) and enforces the binding check
+from the previous PR:
+
+```
+if str(int(poseidon_root)) != poseidon_tree.get_root():
+    raise ValueError("Provided poseidon_root does not match canonical document sections")
+```
+
+This keeps the committed Poseidon root aligned with the tree used by the
+Groth16 circuit while reducing the public commitment to two hashes.
 
 ### Why two hashes?
 
