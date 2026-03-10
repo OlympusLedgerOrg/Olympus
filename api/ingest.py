@@ -32,7 +32,7 @@ from protocol.canonical import CANONICAL_VERSION, canonicalize_document, documen
 from protocol.canonicalizer import canonicalization_provenance
 from protocol.hashes import hash_bytes
 from protocol.ledger import Ledger
-from protocol.merkle import MerkleProof, MerkleTree, verify_proof
+from protocol.merkle import MerkleProof, MerkleTree, deserialize_merkle_proof, verify_proof
 from protocol.ssmf import ExistenceProof
 from protocol.telemetry import INGEST_TOTAL, LEDGER_HEIGHT, timed_operation
 from protocol.timestamps import current_timestamp
@@ -89,6 +89,7 @@ class BatchIngestionResponse(BaseModel):
     ledger_entry_hash: str = Field(..., description="Hash of the ledger entry for this batch")
     timestamp: str
     canonicalization: dict[str, Any]
+    batch_id: str | None = Field(None, description="Durable batch identifier")
 
 
 class IngestionProofResponse(BaseModel):
@@ -103,6 +104,7 @@ class IngestionProofResponse(BaseModel):
     ledger_entry_hash: str
     timestamp: str
     canonicalization: dict[str, Any]
+    batch_id: str | None = Field(None, description="Batch identifier if available")
 
 
 class HashVerificationResponse(IngestionProofResponse):
@@ -176,6 +178,40 @@ def _get_storage() -> StorageLayer | None:
     except Exception as e:
         logger.error(f"Failed to initialize storage layer: {e}")
         return None
+
+
+def _cache_ingestion_record(entry: dict[str, Any]) -> None:
+    """Cache ingestion metadata in memory for fast lookups."""
+    proof_id = entry["proof_id"]
+    _ingestion_store[proof_id] = entry
+    _content_index[entry["content_hash"]] = proof_id
+
+
+def _fetch_persisted_proof(proof_id: str) -> dict[str, Any] | None:
+    """Load a persisted proof mapping from storage and cache it."""
+    storage = _get_storage()
+    if storage is None:
+        return None
+    record = storage.get_ingestion_proof(proof_id)
+    if record is None:
+        return None
+    _cache_ingestion_record(record)
+    return record
+
+
+def _fetch_by_content_hash(content_hash_hex: str) -> dict[str, Any] | None:
+    """Lookup proof metadata by content hash from memory or storage."""
+    proof_id = _content_index.get(content_hash_hex)
+    if proof_id and proof_id in _ingestion_store:
+        return _ingestion_store[proof_id]
+
+    storage = _get_storage()
+    if storage is None:
+        return None
+    record = storage.get_ingestion_proof_by_content_hash(bytes.fromhex(content_hash_hex))
+    if record:
+        _cache_ingestion_record(record)
+    return record
 
 
 @dataclass
@@ -422,16 +458,7 @@ def _parse_content_hash(content_hash: str) -> bytes:
 def _merkle_proof_from_store(data: dict[str, Any]) -> MerkleProof:
     """Convert stored ingestion proof metadata into a MerkleProof instance."""
     proof_data = data["merkle_proof"]
-    siblings = [
-        (bytes.fromhex(hash_hex), "right" if is_right else "left")
-        for hash_hex, is_right in proof_data["siblings"]
-    ]
-    return MerkleProof(
-        leaf_hash=bytes.fromhex(proof_data["leaf_hash"]),
-        leaf_index=int(proof_data["leaf_index"]),
-        siblings=siblings,
-        root_hash=bytes.fromhex(proof_data["root_hash"]),
-    )
+    return deserialize_merkle_proof(proof_data)
 
 
 def _smt_proof_to_merkle_proof_dict(proof: ExistenceProof, leaf_hash: bytes) -> dict[str, Any]:
@@ -489,16 +516,21 @@ async def ingest_batch(batch: BatchIngestionRequest, request: Request) -> BatchI
     # Try to get storage layer (returns None if not configured)
     storage = _get_storage()
 
+    batch_id = str(uuid.uuid4())
+
     with timed_operation("commit", shard_id=shard_id) as span:
         span.set_attribute("batch_size", len(batch.records))
         span.set_attribute("using_postgres", storage is not None)
         results: list[IngestionResult] = []
         new_hashes: list[bytes] = []
         dedup_count = 0
+        persist_queue: list[dict[str, Any]] = []
         canonicalization = canonicalization_provenance(
             "application/json",
             CANONICAL_VERSION,
         )
+        ts = current_timestamp()
+        ledger_entry_hash = ""
 
         for record in batch.records:
             # Canonicalize and hash
@@ -507,19 +539,20 @@ async def ingest_batch(batch: BatchIngestionRequest, request: Request) -> BatchI
             content_hash = hash_bytes(content_bytes).hex()
             content_hash_bytes = bytes.fromhex(content_hash)
 
-            # Dedup check
-            if content_hash in _content_index:
-                existing_proof_id = _content_index[content_hash]
+            # Dedup check (in-memory or persisted)
+            existing_record = _fetch_by_content_hash(content_hash)
+            if existing_record is not None:
                 results.append(
                     IngestionResult(
-                        proof_id=existing_proof_id,
-                        record_id=record.record_id,
-                        shard_id=record.shard_id,
-                        content_hash=content_hash,
+                        proof_id=existing_record["proof_id"],
+                        record_id=existing_record["record_id"],
+                        shard_id=existing_record["shard_id"],
+                        content_hash=existing_record["content_hash"],
                         deduplicated=True,
                     )
                 )
                 dedup_count += 1
+                ledger_entry_hash = existing_record.get("ledger_entry_hash", ledger_entry_hash)
                 INGEST_TOTAL.labels(outcome="deduplicated").inc()
                 continue
 
@@ -539,7 +572,7 @@ async def ingest_batch(batch: BatchIngestionRequest, request: Request) -> BatchI
                     )
 
                     # Store mapping from proof_id to record coordinates for later retrieval
-                    _ingestion_store[proof_id] = {
+                    ingestion_entry = {
                         "proof_id": proof_id,
                         "record_id": record.record_id,
                         "shard_id": record.shard_id,
@@ -552,19 +585,19 @@ async def ingest_batch(batch: BatchIngestionRequest, request: Request) -> BatchI
                         "timestamp": ledger_entry.ts,
                         "canonicalization": canonicalization,
                         "persisted": True,
+                        "batch_id": batch_id,
+                        "batch_index": len(persist_queue),
                     }
+                    _cache_ingestion_record(ingestion_entry)
+                    persist_queue.append(ingestion_entry)
+                    ts = ledger_entry.ts
+                    ledger_entry_hash = ledger_entry.entry_hash
                     logger.info(f"Record {record.record_id} persisted to PostgreSQL")
                 except ValueError as e:
                     if "Record already exists" in str(e):
-                        # Record exists in database, treat as dedup
-                        # Try to find existing proof_id (may not exist if from previous session)
-                        if content_hash in _content_index:
-                            existing_proof_id = _content_index[content_hash]
-                        else:
-                            # Create new proof_id mapping for existing record
-                            _content_index[content_hash] = proof_id
-                            existing_proof_id = proof_id
-
+                        # Record exists in database, treat as dedup and hydrate mapping
+                        existing_record = _fetch_by_content_hash(content_hash)
+                        existing_proof_id = existing_record["proof_id"] if existing_record else proof_id
                         results.append(
                             IngestionResult(
                                 proof_id=existing_proof_id,
@@ -576,6 +609,10 @@ async def ingest_batch(batch: BatchIngestionRequest, request: Request) -> BatchI
                         )
                         dedup_count += 1
                         INGEST_TOTAL.labels(outcome="deduplicated").inc()
+                        if existing_record:
+                            ledger_entry_hash = existing_record.get(
+                                "ledger_entry_hash", ledger_entry_hash
+                            )
                         continue
                     else:
                         raise
@@ -598,8 +635,6 @@ async def ingest_batch(batch: BatchIngestionRequest, request: Request) -> BatchI
         # Build Merkle tree from new content hashes (in-memory path only)
         ingested_count = len(batch.records) - dedup_count
         ts = current_timestamp()
-        ledger_entry_hash = ""
-
         if new_hashes and storage is None:
             # In-memory path: build batch Merkle tree and ledger
             tree = MerkleTree(new_hashes)
@@ -642,10 +677,15 @@ async def ingest_batch(batch: BatchIngestionRequest, request: Request) -> BatchI
                         "timestamp": ts,
                         "canonicalization": canonicalization,
                         "persisted": False,
+                        "batch_id": batch_id,
+                        "batch_index": sum(1 for r in results[: i + 1] if not r.deduplicated) - 1,
                     }
+                    _cache_ingestion_record(_ingestion_store[result.proof_id])
                     INGEST_TOTAL.labels(outcome="committed").inc()
         elif storage is not None:
             # PostgreSQL path: records already persisted individually
+            if persist_queue:
+                storage.store_ingestion_batch(batch_id, persist_queue)
             # Get the latest ledger entry hash for response
             for result in results:
                 if not result.deduplicated and result.proof_id in _ingestion_store:
@@ -676,6 +716,7 @@ async def ingest_batch(batch: BatchIngestionRequest, request: Request) -> BatchI
         ledger_entry_hash=ledger_entry_hash,
         timestamp=ts,
         canonicalization=canonicalization,
+        batch_id=batch_id,
     )
 
 
@@ -693,10 +734,10 @@ async def get_ingestion_proof(proof_id: str) -> IngestionProofResponse:
     Raises:
         HTTPException: 404 if proof_id is not found.
     """
-    if proof_id not in _ingestion_store:
+    data = _ingestion_store.get(proof_id) or _fetch_persisted_proof(proof_id)
+    if data is None:
         raise HTTPException(status_code=404, detail=f"Proof not found: {proof_id}")
 
-    data = _ingestion_store[proof_id]
     return IngestionProofResponse(**data)
 
 
@@ -715,16 +756,15 @@ async def verify_ingested_content_hash(
     with timed_operation("verify") as span:
         normalized_hash = _parse_content_hash(content_hash).hex()
         span.set_attribute("content_hash", normalized_hash)
-        proof_id = _content_index.get(normalized_hash)
-        if proof_id is None:
+        record = _fetch_by_content_hash(normalized_hash)
+        if record is None:
             raise HTTPException(
                 status_code=404, detail=f"Committed hash not found: {normalized_hash}"
             )
 
-        data = _ingestion_store[proof_id]
-        merkle_proof_valid = verify_proof(_merkle_proof_from_store(data))
+        merkle_proof_valid = verify_proof(_merkle_proof_from_store(record))
         span.set_attribute("merkle_proof_valid", merkle_proof_valid)
-        return HashVerificationResponse(**data, merkle_proof_valid=merkle_proof_valid)
+        return HashVerificationResponse(**record, merkle_proof_valid=merkle_proof_valid)
 
 
 # ---------------------------------------------------------------------------
@@ -774,6 +814,7 @@ async def commit_artifact(
     """
     _authorize_and_rate_limit(http_request, action="commit", body_api_key=request.api_key)
     shard_id = f"artifacts/{request.namespace}"
+    batch_id = str(uuid.uuid4())
 
     # Try to get storage layer (returns None if not configured)
     storage = _get_storage()
@@ -788,9 +829,9 @@ async def commit_artifact(
         artifact_hash_hex = artifact_hash_bytes.hex()
 
         # Dedup: if this exact hash has already been committed, return existing proof
-        if artifact_hash_hex in _content_index:
-            existing_proof_id = _content_index[artifact_hash_hex]
-            existing = _ingestion_store[existing_proof_id]
+        existing = _fetch_by_content_hash(artifact_hash_hex)
+        if existing is not None:
+            existing_proof_id = existing["proof_id"]
             INGEST_TOTAL.labels(outcome="deduplicated").inc()
             return ArtifactCommitResponse(
                 proof_id=existing_proof_id,
@@ -820,7 +861,7 @@ async def commit_artifact(
                 )
 
                 # Store mapping from proof_id to record coordinates
-                _ingestion_store[proof_id] = {
+                ingestion_entry = {
                     "proof_id": proof_id,
                     "record_id": request.id,
                     "shard_id": shard_id,
@@ -834,8 +875,12 @@ async def commit_artifact(
                     "timestamp": ledger_entry.ts,
                     "canonicalization": canonicalization,
                     "persisted": True,
+                    "batch_id": batch_id,
+                    "batch_index": 0,
                 }
+                _ingestion_store[proof_id] = ingestion_entry
                 _content_index[artifact_hash_hex] = proof_id
+                storage.store_ingestion_batch(batch_id, [ingestion_entry])
                 INGEST_TOTAL.labels(outcome="committed").inc()
 
                 logger.info(
@@ -858,14 +903,8 @@ async def commit_artifact(
                 )
             except ValueError as e:
                 if "Record already exists" in str(e):
-                    # Record exists in database, treat as dedup
-                    if artifact_hash_hex in _content_index:
-                        existing_proof_id = _content_index[artifact_hash_hex]
-                    else:
-                        _content_index[artifact_hash_hex] = proof_id
-                        existing_proof_id = proof_id
-
-                    existing = _ingestion_store.get(existing_proof_id, {})
+                    existing = _fetch_by_content_hash(artifact_hash_hex) or {}
+                    existing_proof_id = existing.get("proof_id", proof_id)
                     INGEST_TOTAL.labels(outcome="deduplicated").inc()
                     return ArtifactCommitResponse(
                         proof_id=existing_proof_id,
@@ -916,6 +955,8 @@ async def commit_artifact(
             "timestamp": ts,
             "canonicalization": canonicalization,
             "persisted": False,
+            "batch_id": batch_id,
+            "batch_index": 0,
         }
         _content_index[artifact_hash_hex] = proof_id
         INGEST_TOTAL.labels(outcome="committed").inc()

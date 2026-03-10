@@ -5,9 +5,10 @@ This module implements Merkle trees and Merkle forests for efficient
 cryptographic commitments and proof generation.
 """
 
+import logging
 from collections.abc import Sequence
 from dataclasses import dataclass
-from typing import Optional
+from typing import Any, Optional
 
 from .events import CanonicalEvent
 from .hashes import HASH_SEPARATOR, LEAF_PREFIX, blake3_hash, node_hash
@@ -17,6 +18,7 @@ from .hashes import HASH_SEPARATOR, LEAF_PREFIX, blake3_hash, node_hash
 # Changing this breaks all historical Merkle proofs
 MERKLE_VERSION = "merkle_v1"
 _SEP = HASH_SEPARATOR.encode("utf-8")
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -34,7 +36,7 @@ class MerkleProof:
 
     leaf_hash: bytes
     leaf_index: int
-    siblings: list[tuple[bytes, str]]  # (hash, "left" | "right")
+    siblings: list[tuple[bytes, str | bool]]  # (hash, "left" | "right")
     root_hash: bytes
 
 
@@ -168,6 +170,8 @@ def verify_proof(proof: MerkleProof) -> bool:
     current_hash = proof.leaf_hash
 
     for sibling_hash, is_right in proof.siblings:
+        if isinstance(is_right, bool):
+            is_right = "right" if is_right else "left"
         if is_right == "right":
             current_hash = node_hash(current_hash, sibling_hash)
         elif is_right == "left":
@@ -176,6 +180,39 @@ def verify_proof(proof: MerkleProof) -> bool:
             raise ValueError("Sibling position must be 'left' or 'right'")
 
     return current_hash == proof.root_hash
+
+
+def deserialize_merkle_proof(proof_data: dict[str, Any]) -> MerkleProof:
+    """
+    Deserialize a Merkle proof, normalizing legacy sibling encodings.
+
+    Historical serialized proofs used string values ("left"/"right") for sibling
+    positions. Modern proofs use booleans. This function accepts both and
+    normalizes them to the canonical string form before constructing a MerkleProof.
+
+    Args:
+        proof_data: Serialized Merkle proof dictionary.
+
+    Returns:
+        MerkleProof with normalized sibling positions.
+    """
+    normalized_siblings: list[tuple[bytes, str]] = []
+    for sibling_hash_hex, is_right in proof_data.get("siblings", []):
+        if isinstance(is_right, str):
+            normalized_flag = is_right.lower() == "right"
+            logger.debug("Normalized legacy sibling format", extra={"is_right": is_right})
+        else:
+            normalized_flag = bool(is_right)
+        normalized_siblings.append(
+            (bytes.fromhex(sibling_hash_hex), "right" if normalized_flag else "left")
+        )
+
+    return MerkleProof(
+        leaf_hash=bytes.fromhex(str(proof_data["leaf_hash"])),
+        leaf_index=int(proof_data["leaf_index"]),
+        siblings=normalized_siblings,
+        root_hash=bytes.fromhex(str(proof_data["root_hash"])),
+    )
 
 
 def merkle_leaf_hash(payload: bytes) -> bytes:
