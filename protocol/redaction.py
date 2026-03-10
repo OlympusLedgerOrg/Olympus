@@ -25,6 +25,7 @@ from .hashes import blake3_to_field_element, hash_bytes
 from .merkle import MerkleProof, MerkleTree, verify_proof
 from .poseidon_tree import PoseidonMerkleTree
 from .redaction_ledger import (
+    DualHashCommitment,
     RedactionProofWithLedger,
     ZKPublicInputs,
     poseidon_root_record_key,
@@ -283,17 +284,16 @@ class RedactionProtocol:
         smt: "SparseMerkleTree",
         document_id: str,
         version: int,
-    ) -> tuple["MerkleTree", str]:
+    ) -> tuple["MerkleTree", DualHashCommitment]:
         """
         Commit a document using the dual-anchor strategy.
 
         Builds the standard BLAKE3 Merkle commitment (same as
         :meth:`commit_document`) **and** inserts the Poseidon Merkle root used
         by the Groth16 ZK circuit into *smt* under a dedicated
-        ``"redaction_root_poseidon"`` key. Both Merkle trees are derived from
-        the same canonical section bytes (``normalize_whitespace`` + UTF-8).
-        The Poseidon tree is padded to 16 leaves (depth 4), and any caller-
-        provided poseidon_root is validated against the computed root.
+        ``"redaction_root_poseidon"`` key. The public commitment is reduced to
+        the root pair only (BLAKE3 root + Poseidon root); no Merkle tree
+        structure is persisted or returned.
 
         This anchors both commitment types in the same BLAKE3 SMT so that a
         verifier can:
@@ -316,8 +316,8 @@ class RedactionProtocol:
             version: Version number for append-only key derivation.
 
         Returns:
-            Tuple of ``(tree, blake3_root_hex)`` identical to the return value
-            of :meth:`commit_document`.
+            Tuple of ``(tree, DualHashCommitment)``. The commitment contains
+            only the BLAKE3 root (hex) and Poseidon root (decimal string).
 
         Raises:
             ValueError: If *poseidon_root* is not a valid field element.
@@ -335,38 +335,53 @@ class RedactionProtocol:
         tree = MerkleTree(leaf_hashes)
         blake3_root = tree.get_root().hex()
 
-        # Poseidon commitment derived from the *same* canonical section bytes
-        poseidon_leaves = [
-            int(blake3_to_field_element(part_bytes)) for part_bytes in canonical_sections
-        ]
-        poseidon_tree = PoseidonMerkleTree(poseidon_leaves, depth=_POSEIDON_TREE_DEPTH)
-        computed_poseidon_root = poseidon_tree.get_root()
-
-        # Enforce binding: supplied root must match computed root
-        if str(int(poseidon_root)) != computed_poseidon_root:
-            raise ValueError(
-                "Provided poseidon_root does not match canonical document sections; "
-                "ensure both commitments use the same canonical leaf bytes"
-            )
-
         # Anchor the Poseidon root in the SMT under its own key namespace
         key = poseidon_root_record_key(document_id, version)
-        value = poseidon_root_to_bytes(computed_poseidon_root)
-        smt.update(key, value)
+        poseidon_bytes = poseidon_root_to_bytes(poseidon_root)
+        smt.update(key, poseidon_bytes)
 
-        return tree, blake3_root
+        normalized_poseidon_root = str(int.from_bytes(poseidon_bytes, byteorder="big"))
+        commitment = DualHashCommitment(
+            blake3_root=blake3_root,
+            poseidon_root=normalized_poseidon_root,
+        )
+
+        return tree, commitment
+
+    @staticmethod
+    def _poseidon_leaves_from_sections(canonical_sections: list[bytes]) -> list[int]:
+        """Derive Poseidon field elements from canonical section bytes with padding."""
+        if len(canonical_sections) > _POSEIDON_MAX_LEAVES:
+            raise ValueError(
+                f"Poseidon tree supports at most {_POSEIDON_MAX_LEAVES} sections; "
+                f"got {len(canonical_sections)}"
+            )
+
+        leaves = [int(blake3_to_field_element(part_bytes)) for part_bytes in canonical_sections]
+        if len(leaves) < _POSEIDON_MAX_LEAVES:
+            leaves.extend([0] * (_POSEIDON_MAX_LEAVES - len(leaves)))
+        return leaves
+
+    @classmethod
+    def build_poseidon_tree(cls, document_parts: list[str]) -> tuple[PoseidonMerkleTree, list[int]]:
+        """
+        Build the Poseidon Merkle tree for a document.
+
+        Returns both the tree and the padded leaf vector (length 16 for depth-4).
+        """
+        canonical_sections = cls.canonical_section_bytes_list(document_parts)
+        leaves = cls._poseidon_leaves_from_sections(canonical_sections)
+        return PoseidonMerkleTree(leaves, depth=_POSEIDON_TREE_DEPTH), leaves
 
     @staticmethod
     def create_redaction_proof_with_ledger(
-        tree: "MerkleTree",
+        document_parts: list[str],
         revealed_indices: list[int],
         poseidon_root: str,
         smt: "SparseMerkleTree",
         document_id: str,
         version: int,
         zk_proof: "dict[str, Any]",
-        redacted_commitment: str,
-        revealed_count: int,
     ) -> "RedactionProofWithLedger":
         """
         Create a :class:`~protocol.redaction_ledger.RedactionProofWithLedger`.
@@ -376,8 +391,8 @@ class RedactionProtocol:
         together with the ZK proof blob and its public inputs.
 
         Args:
-            tree: The :class:`~protocol.merkle.MerkleTree` from
-                  :meth:`commit_document_dual`.
+            document_parts: Ordered list of document sections (same canonical
+                             bytes used at commit time).
             revealed_indices: Zero-based indices of sections to reveal (used to
                               build the inner :class:`RedactionProof`).
             poseidon_root: Decimal string of the Poseidon root (must match what
@@ -391,19 +406,37 @@ class RedactionProtocol:
                       the snarkjs JSON format with keys ``"pi_a"``, ``"pi_b"``,
                       ``"pi_c"``, and ``"protocol"``. This layer treats the
                       dict as opaque and passes it through to the ZK verifier.
-            redacted_commitment: Decimal string of the ``redactedCommitment``
-                                 public signal from the ZK circuit.
-            revealed_count: Integer value of the ``revealedCount`` public signal.
-
         Returns:
             A :class:`~protocol.redaction_ledger.RedactionProofWithLedger`
             ready for transport and verification.
         """
+        poseidon_tree, poseidon_leaves = RedactionProtocol.build_poseidon_tree(document_parts)
+        computed_poseidon_root = poseidon_tree.get_root()
+        normalized_poseidon_root = str(int(poseidon_root))
+        poseidon_root_to_bytes(normalized_poseidon_root)
+
+        if normalized_poseidon_root != computed_poseidon_root:
+            raise ValueError(
+                "Provided poseidon_root does not match canonical document sections; "
+                "ensure both commitments use the same canonical leaf bytes"
+            )
+
+        if any(idx < 0 or idx >= len(document_parts) for idx in revealed_indices):
+            raise ValueError("Revealed indices must be within the document length")
+
+        revealed_set = set(revealed_indices)
+        nullified_leaves = [
+            poseidon_leaves[i] if i in revealed_set else 0 for i in range(_POSEIDON_MAX_LEAVES)
+        ]
+        redacted_tree = PoseidonMerkleTree(nullified_leaves, depth=_POSEIDON_TREE_DEPTH)
+        redacted_commitment = redacted_tree.get_root()
+        revealed_count = len(revealed_set)
+
         key = poseidon_root_record_key(document_id, version)
         smt_proof = smt.prove_existence(key)
 
         public_inputs = ZKPublicInputs(
-            original_root=poseidon_root,
+            original_root=computed_poseidon_root,
             redacted_commitment=redacted_commitment,
             revealed_count=revealed_count,
         )

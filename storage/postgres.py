@@ -26,6 +26,7 @@ See docs/08_database_strategy.md for complete database strategy documentation.
 """
 
 import json
+import logging
 import time
 from collections.abc import Iterator, Mapping
 from contextlib import contextmanager
@@ -53,6 +54,9 @@ from protocol.ssmf import (
     SparseMerkleTree,
     diff_sparse_merkle_trees,
 )
+
+
+logger = logging.getLogger(__name__)
 
 
 class StorageLayer:
@@ -227,6 +231,20 @@ class StorageLayer:
             # COMMIT TRANSACTION (explicit)
             conn.commit()
         # END TRANSACTION (implicit via context manager exit)
+
+    def check_ingestion_schema(self) -> None:
+        """
+        Verify ingestion tables exist before persisting ingestion batches.
+
+        Raises:
+            RuntimeError: When required ingestion tables are missing.
+        """
+        try:
+            with self._get_connection() as conn, conn.cursor(row_factory=dict_row) as cur:
+                cur.execute("SELECT 1 FROM ingestion_batches LIMIT 1")
+        except Exception as exc:  # pragma: no cover - defensive guardrail
+            logger.error("Migration not applied: ingestion_batches table missing")
+            raise RuntimeError("Database not migrated - run migrations first") from exc
 
     def append_record(
         self,

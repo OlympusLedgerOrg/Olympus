@@ -17,8 +17,7 @@ from fastapi.responses import JSONResponse
 from fastapi.templating import Jinja2Templates
 
 from protocol.canonical_json import canonical_json_bytes
-from protocol.hashes import HASH_SEPARATOR, blake3_to_field_element, hash_bytes
-from protocol.poseidon_tree import PoseidonMerkleTree
+from protocol.hashes import HASH_SEPARATOR, hash_bytes
 from protocol.redaction import RedactionProtocol
 from protocol.redaction_ledger import (
     RedactionProofWithLedger,
@@ -696,15 +695,11 @@ def _commit_parts(
     if committed_at is None:
         committed_at = current_timestamp()
 
-    canonical_sections = RedactionProtocol.canonical_section_bytes_list(parts)
-    leaf_fields = [blake3_to_field_element(part) for part in canonical_sections]
-    if len(leaf_fields) < 16:
-        leaf_fields.extend(["0"] * (16 - len(leaf_fields)))
-    poseidon_tree = PoseidonMerkleTree(leaf_fields, depth=4)
+    poseidon_tree, _ = RedactionProtocol.build_poseidon_tree(parts)
     poseidon_root = poseidon_tree.get_root()
 
     smt = SparseMerkleTree()
-    tree, blake3_root = RedactionProtocol.commit_document_dual(
+    tree, commitment = RedactionProtocol.commit_document_dual(
         document_parts=parts,
         poseidon_root=poseidon_root,
         smt=smt,
@@ -720,8 +715,8 @@ def _commit_parts(
         "version": version,
         "file_name": file_name,
         "sections_count": len(parts),
-        "blake3_root": blake3_root,
-        "poseidon_root": poseidon_root,
+        "blake3_root": commitment.blake3_root,
+        "poseidon_root": commitment.poseidon_root,
         "committed_at": committed_at,
         "release_at": normalized_release_at,
         "recipient_keys": recipients,
@@ -731,11 +726,9 @@ def _commit_parts(
 
     _commit_store[commit_key] = {
         "parts": parts,
-        "leaf_fields": leaf_fields,
-        "tree": tree,
         "smt": smt,
-        "blake3_root": blake3_root,
-        "poseidon_root": poseidon_root,
+        "blake3_root": commitment.blake3_root,
+        "poseidon_root": commitment.poseidon_root,
         "document_id": document_id,
         "version": version,
         "file_name": file_name,
@@ -750,8 +743,8 @@ def _commit_parts(
 
     return {
         "commit_key": commit_key,
-        "blake3_root": blake3_root,
-        "poseidon_root": poseidon_root,
+        "blake3_root": commitment.blake3_root,
+        "poseidon_root": commitment.poseidon_root,
         "sections_count": len(parts),
         "receipt": receipt,
     }
@@ -1216,8 +1209,6 @@ async def create_redaction(request: Request):
         )
 
     parts: list[str] = entry["parts"]
-    leaf_fields: list[str] = entry["leaf_fields"]
-    tree = entry["tree"]
     smt: SparseMerkleTree = entry["smt"]
     poseidon_root: str = entry["poseidon_root"]
 
@@ -1228,25 +1219,18 @@ async def create_redaction(request: Request):
                 content={"ok": False, "error": f"Section index {idx} is out of range."},
             )
 
-    # Compute the redacted commitment: Poseidon root over the nullified leaf vector
-    # (revealed leaves kept, redacted leaves replaced with field element 0).
-    revealed_set = set(revealed_indices)
-    nullified = [leaf_fields[i] if i in revealed_set else "0" for i in range(len(parts))]
-    redacted_tree = PoseidonMerkleTree(nullified)
-    redacted_commitment = redacted_tree.get_root()
-    revealed_count = len(revealed_indices)
-
-    proof = RedactionProtocol.create_redaction_proof_with_ledger(
-        tree=tree,
-        revealed_indices=revealed_indices,
-        poseidon_root=poseidon_root,
-        smt=smt,
-        document_id=document_id,
-        version=version,
-        zk_proof={},
-        redacted_commitment=redacted_commitment,
-        revealed_count=revealed_count,
-    )
+    try:
+        proof = RedactionProtocol.create_redaction_proof_with_ledger(
+            document_parts=parts,
+            revealed_indices=revealed_indices,
+            poseidon_root=poseidon_root,
+            smt=smt,
+            document_id=document_id,
+            version=version,
+            zk_proof={},
+        )
+    except ValueError as exc:
+        return JSONResponse(status_code=400, content={"ok": False, "error": str(exc)})
 
     smt_root_hex = smt.get_root().hex()
     revealed_content = [parts[i] for i in revealed_indices]

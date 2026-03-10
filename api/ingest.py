@@ -33,6 +33,7 @@ from protocol.canonicalizer import canonicalization_provenance
 from protocol.hashes import hash_bytes
 from protocol.ledger import Ledger
 from protocol.merkle import MerkleProof, MerkleTree, deserialize_merkle_proof, verify_proof
+from protocol.redaction_ledger import poseidon_root_to_bytes
 from protocol.ssmf import ExistenceProof
 from protocol.telemetry import INGEST_TOTAL, LEDGER_HEIGHT, timed_operation
 from protocol.timestamps import current_timestamp
@@ -105,6 +106,9 @@ class IngestionProofResponse(BaseModel):
     timestamp: str
     canonicalization: dict[str, Any]
     batch_id: str | None = Field(None, description="Batch identifier if available")
+    poseidon_root: str | None = Field(
+        None, description="Optional Poseidon root associated with the commitment"
+    )
 
 
 class HashVerificationResponse(IngestionProofResponse):
@@ -165,6 +169,7 @@ def _get_storage() -> StorageLayer | None:
         # Initialize storage
         storage = StorageLayer(database_url)
         storage.init_schema()
+        storage.check_ingestion_schema()
 
         # Initialize signing key
         signing_key_bytes = bytes.fromhex(signing_key_hex)
@@ -182,6 +187,12 @@ def _get_storage() -> StorageLayer | None:
 
 def _cache_ingestion_record(entry: dict[str, Any]) -> None:
     """Cache ingestion metadata in memory for fast lookups."""
+    poseidon_root = entry.get("poseidon_root")
+    if poseidon_root is None:
+        canonicalization = entry.get("canonicalization") or {}
+        poseidon_root = canonicalization.get("poseidon_root")
+        if poseidon_root is not None:
+            entry["poseidon_root"] = poseidon_root
     proof_id = entry["proof_id"]
     _ingestion_store[proof_id] = entry
     _content_index[entry["content_hash"]] = proof_id
@@ -778,6 +789,13 @@ class ArtifactCommitRequest(BaseModel):
     artifact_hash: str = Field(..., description="Hex-encoded BLAKE3 hash of the artifact")
     namespace: str = Field(..., description="Namespace for the artifact (e.g. 'github')")
     id: str = Field(..., description="Artifact identifier (e.g. 'org/repo/v1.0.0')")
+    poseidon_root: str | None = Field(
+        None,
+        description=(
+            "Optional Poseidon root (decimal string) to bind a ZK circuit root to the"
+            " committed artifact hash"
+        ),
+    )
     api_key: str | None = Field(None, description="Optional API key for authentication")
 
 
@@ -790,6 +808,9 @@ class ArtifactCommitResponse(BaseModel):
     id: str
     committed_at: str = Field(..., description="ISO 8601 commitment timestamp")
     ledger_entry_hash: str = Field(..., description="Hash of the ledger entry")
+    poseidon_root: str | None = Field(
+        None, description="Optional Poseidon root bound to the artifact commitment"
+    )
 
 
 @router.post("/commit", response_model=ArtifactCommitResponse)
@@ -815,6 +836,12 @@ async def commit_artifact(
     _authorize_and_rate_limit(http_request, action="commit", body_api_key=request.api_key)
     shard_id = f"artifacts/{request.namespace}"
     batch_id = str(uuid.uuid4())
+    poseidon_root_input = request.poseidon_root
+    poseidon_root_normalized: str | None = None
+
+    if poseidon_root_input is not None:
+        poseidon_bytes = poseidon_root_to_bytes(poseidon_root_input)
+        poseidon_root_normalized = str(int.from_bytes(poseidon_bytes, byteorder="big"))
 
     # Try to get storage layer (returns None if not configured)
     storage = _get_storage()
@@ -831,6 +858,15 @@ async def commit_artifact(
         # Dedup: if this exact hash has already been committed, return existing proof
         existing = _fetch_by_content_hash(artifact_hash_hex)
         if existing is not None:
+            existing_poseidon = existing.get("poseidon_root")
+            if poseidon_root_normalized is not None and existing_poseidon not in (
+                None,
+                poseidon_root_normalized,
+            ):
+                raise HTTPException(
+                    status_code=400,
+                    detail="Conflicting poseidon_root for existing artifact commitment",
+                )
             existing_proof_id = existing["proof_id"]
             INGEST_TOTAL.labels(outcome="deduplicated").inc()
             return ArtifactCommitResponse(
@@ -840,12 +876,16 @@ async def commit_artifact(
                 id=existing.get("record_id", request.id),
                 committed_at=existing["timestamp"],
                 ledger_entry_hash=existing["ledger_entry_hash"],
+                poseidon_root=existing.get("poseidon_root"),
             )
 
         proof_id = str(uuid.uuid4())
         canonicalization = canonicalization_provenance(
             "application/octet-stream", CANONICAL_VERSION
         )
+        if poseidon_root_normalized is not None:
+            canonicalization = dict(canonicalization)
+            canonicalization["poseidon_root"] = poseidon_root_normalized
 
         # If PostgreSQL is configured, persist artifact durably
         if storage is not None and _signing_key is not None:
@@ -877,6 +917,7 @@ async def commit_artifact(
                     "persisted": True,
                     "batch_id": batch_id,
                     "batch_index": 0,
+                    "poseidon_root": poseidon_root_normalized,
                 }
                 _ingestion_store[proof_id] = ingestion_entry
                 _content_index[artifact_hash_hex] = proof_id
@@ -900,6 +941,7 @@ async def commit_artifact(
                     id=request.id,
                     committed_at=ledger_entry.ts,
                     ledger_entry_hash=ledger_entry.entry_hash,
+                    poseidon_root=poseidon_root_normalized,
                 )
             except ValueError as e:
                 if "Record already exists" in str(e):
@@ -913,6 +955,7 @@ async def commit_artifact(
                         id=existing.get("record_id", request.id),
                         committed_at=existing.get("timestamp", current_timestamp()),
                         ledger_entry_hash=existing.get("ledger_entry_hash", ""),
+                        poseidon_root=existing.get("poseidon_root", poseidon_root_normalized),
                     )
                 else:
                     raise
@@ -957,6 +1000,7 @@ async def commit_artifact(
             "persisted": False,
             "batch_id": batch_id,
             "batch_index": 0,
+            "poseidon_root": poseidon_root_normalized,
         }
         _content_index[artifact_hash_hex] = proof_id
         INGEST_TOTAL.labels(outcome="committed").inc()
@@ -978,4 +1022,5 @@ async def commit_artifact(
         id=request.id,
         committed_at=ts,
         ledger_entry_hash=ledger_entry.entry_hash,
+        poseidon_root=poseidon_root_normalized,
     )

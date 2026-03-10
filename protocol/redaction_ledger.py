@@ -338,3 +338,15 @@ class RedactionProofWithLedger:
         if isinstance(zk_result, VerificationResult):
             return zk_result
         return VerificationResult.VALID if zk_result else VerificationResult.INVALID
+@dataclass(frozen=True)
+class DualHashCommitment:
+    """
+    Public commitment that binds a BLAKE3 Merkle root to a Poseidon Merkle root.
+
+    Only the root pair is exposed; no tree structure or leaf data is included.
+    The Poseidon root is expressed as a decimal string (field element) so it
+    can be fed directly into the Groth16 circuit as ``originalRoot``.
+    """
+
+    blake3_root: str  # 64-char hex
+    poseidon_root: str  # decimal string (0 <= root < SNARK_SCALAR_FIELD)

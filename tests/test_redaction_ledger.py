@@ -324,7 +324,7 @@ def test_commit_document_dual_inserts_poseidon_root():
     poseidon_root = _poseidon_root_for_parts(parts)
     smt = SparseMerkleTree()
 
-    tree, blake3_root = RedactionProtocol.commit_document_dual(
+    tree, commitment = RedactionProtocol.commit_document_dual(
         document_parts=parts,
         poseidon_root=poseidon_root,
         smt=smt,
@@ -333,8 +333,9 @@ def test_commit_document_dual_inserts_poseidon_root():
     )
 
     # The BLAKE3 commitment is still returned as a hex string
-    assert isinstance(blake3_root, str)
-    assert len(blake3_root) == 64  # 32 bytes hex-encoded
+    assert isinstance(commitment.blake3_root, str)
+    assert len(commitment.blake3_root) == 64  # 32 bytes hex-encoded
+    assert commitment.poseidon_root == poseidon_root
 
     # The Poseidon root must be in the SMT
     key = poseidon_root_record_key("docB", 1)
@@ -351,7 +352,7 @@ def test_create_redaction_proof_with_ledger_round_trip():
     poseidon_root = _poseidon_root_for_parts(parts)
     smt = SparseMerkleTree()
 
-    tree, _ = RedactionProtocol.commit_document_dual(
+    tree, commitment = RedactionProtocol.commit_document_dual(
         document_parts=parts,
         poseidon_root=poseidon_root,
         smt=smt,
@@ -360,21 +361,65 @@ def test_create_redaction_proof_with_ledger_round_trip():
     )
 
     wrapped = RedactionProtocol.create_redaction_proof_with_ledger(
-        tree=tree,
+        document_parts=parts,
         revealed_indices=[0, 2],
         poseidon_root=poseidon_root,
         smt=smt,
         document_id="docC",
         version=1,
         zk_proof={"dummy": True},
-        redacted_commitment="55555",
-        revealed_count=2,
     )
 
     assert isinstance(wrapped, RedactionProofWithLedger)
-    assert wrapped.zk_public_inputs.original_root == poseidon_root
+    assert wrapped.zk_public_inputs.original_root == commitment.poseidon_root
     assert wrapped.zk_public_inputs.revealed_count == 2
+    assert wrapped.zk_public_inputs.redacted_commitment.isdigit()
     assert wrapped.verify_smt_anchor(smt.get_root()) is True
+
+
+def test_commit_to_zk_proof_round_trip_binding_poseidon_root():
+    """
+    Round-trip: commit → build ZK inputs → verify against committed Poseidon root.
+    """
+    parts = ["delta", "epsilon", "zeta", "eta"]
+    poseidon_root = _poseidon_root_for_parts(parts)
+    smt = SparseMerkleTree()
+
+    _, commitment = RedactionProtocol.commit_document_dual(
+        document_parts=parts,
+        poseidon_root=poseidon_root,
+        smt=smt,
+        document_id="docZ",
+        version=1,
+    )
+
+    revealed_indices = [1, 3]
+    wrapped = RedactionProtocol.create_redaction_proof_with_ledger(
+        document_parts=parts,
+        revealed_indices=revealed_indices,
+        poseidon_root=commitment.poseidon_root,
+        smt=smt,
+        document_id="docZ",
+        version=1,
+        zk_proof={"pi_a": [], "pi_b": [], "pi_c": []},
+    )
+
+    _, poseidon_leaves = RedactionProtocol.build_poseidon_tree(parts)
+    revealed_set = set(revealed_indices)
+    nullified = [
+        poseidon_leaves[i] if i in revealed_set else 0 for i in range(len(poseidon_leaves))
+    ]
+    expected_redacted = PoseidonMerkleTree(nullified, depth=4).get_root()
+
+    assert wrapped.zk_public_inputs.original_root == commitment.poseidon_root
+    assert wrapped.zk_public_inputs.redacted_commitment == expected_redacted
+
+    def zk_verifier(proof, inputs):
+        assert proof == wrapped.zk_proof
+        assert inputs.original_root == commitment.poseidon_root
+        return VerificationResult.VALID
+
+    assert wrapped.verify_all(smt.get_root(), zk_verifier=zk_verifier) is VerificationResult.VALID
 
 
 def test_append_only_versioning_via_dual_anchor():
@@ -411,17 +456,28 @@ def test_commit_document_dual_rejects_poseidon_root_mismatch():
     Adversary cannot mix-and-match Poseidon and BLAKE3 commitments.
 
     The Poseidon root derived from a different document must be rejected
-    rather than silently anchored alongside the BLAKE3 commitment.
+    when generating a proof, rather than silently anchored alongside the
+    BLAKE3 commitment.
     """
     mismatched_poseidon_root = _poseidon_root_for_parts(["alpha", "beta", "delta"])
 
     smt = SparseMerkleTree()
 
+    _tree, _commitment = RedactionProtocol.commit_document_dual(
+        document_parts=["alpha", "beta", "gamma"],
+        poseidon_root=mismatched_poseidon_root,
+        smt=smt,
+        document_id="docE",
+        version=1,
+    )
+
     with pytest.raises(ValueError, match="does not match canonical document sections"):
-        RedactionProtocol.commit_document_dual(
+        RedactionProtocol.create_redaction_proof_with_ledger(
             document_parts=["alpha", "beta", "gamma"],
+            revealed_indices=[0],
             poseidon_root=mismatched_poseidon_root,
             smt=smt,
             document_id="docE",
             version=1,
+            zk_proof={},
         )
