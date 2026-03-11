@@ -229,3 +229,36 @@ jobs:
           pip-audit -r requirements.txt -r requirements-dev.txt \
             --progress-spinner off \
             ${IGNORE_ARGS}
+
+  go-verifier:
+    name: Go verifier conformance
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.21"
+          cache: true
+          cache-dependency-path: verifiers/go/go.sum
+
+      - name: Run Go verifier tests
+        working-directory: verifiers/go
+        run: go test ./... -v
+
+  rust-verifier:
+    name: Rust verifier conformance
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust stable
+        run: rustup toolchain install stable --no-self-update && rustup default stable
+
+      - name: Run Rust verifier tests
+        working-directory: verifiers/rust
+        run: cargo test

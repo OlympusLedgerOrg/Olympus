@@ -315,20 +315,38 @@ class SparseMerkleTree:
 
 
 def diff_sparse_merkle_trees(
-    before: SparseMerkleTree, after: SparseMerkleTree
+    before: SparseMerkleTree,
+    after: SparseMerkleTree,
+    key_range_start: bytes | None = None,
+    key_range_end: bytes | None = None,
 ) -> dict[str, list[SparseMerkleDiffEntry]]:
     """
     Compare two sparse Merkle tree states at the leaf level.
 
+    For large trees with millions of leaves, use key_range_start and key_range_end
+    to compute diffs in bounded batches to avoid memory exhaustion.
+
     Args:
         before: Earlier tree state
         after: Later tree state
+        key_range_start: Inclusive lower bound for key range (default: all keys >= 0x00...00)
+        key_range_end: Exclusive upper bound for key range (default: all keys < 0xFF...FF)
 
     Returns:
         Dictionary containing deterministic lists of added, changed, and removed leaves
+        within the specified key range
     """
-    before_keys = set(before.leaves)
-    after_keys = set(after.leaves)
+
+    # Apply key range filter if specified
+    def in_range(key: bytes) -> bool:
+        if key_range_start is not None and key < key_range_start:
+            return False
+        if key_range_end is not None and key >= key_range_end:
+            return False
+        return True
+
+    before_keys = {k for k in before.leaves if in_range(k)}
+    after_keys = {k for k in after.leaves if in_range(k)}
 
     added = [
         SparseMerkleDiffEntry(key=key, before_value_hash=None, after_value_hash=after.leaves[key])
