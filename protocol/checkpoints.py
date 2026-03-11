@@ -10,15 +10,20 @@ Based on Certificate Transparency's Signed Tree Head (STH) design.
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import asdict, dataclass
 from typing import Any
 
-import nacl.encoding
+import nacl.exceptions
 import nacl.signing
 
 from .canonical_json import canonical_json_bytes
-from .hashes import CHECKPOINT_PREFIX, hash_bytes
+from .federation import FederationRegistry, NodeSignature
+from .hashes import CHECKPOINT_PREFIX, HASH_SEPARATOR, hash_bytes
 from .timestamps import current_timestamp
+
+
+CHECKPOINT_DOMAIN_TAG = "OLY:CHECKPOINT-VOTE:V1"
 
 
 @dataclass
@@ -54,11 +59,8 @@ class SignedCheckpoint:
     # Hex-encoded hash of the checkpoint payload (computed from above fields)
     checkpoint_hash: str
 
-    # Hex-encoded Ed25519 signature over checkpoint_hash
-    signature: str
-
-    # Hex-encoded Ed25519 public key used to sign this checkpoint
-    public_key: str
+    # Federation quorum certificate binding federation signatures to this checkpoint
+    federation_quorum_certificate: dict[str, Any]
 
     def to_dict(self) -> dict[str, Any]:
         """Convert to dictionary."""
@@ -76,9 +78,334 @@ class SignedCheckpoint:
             shard_roots=data.get("shard_roots", {}),
             consistency_proof=data.get("consistency_proof", []),
             checkpoint_hash=data["checkpoint_hash"],
-            signature=data["signature"],
-            public_key=data["public_key"],
+            federation_quorum_certificate=data["federation_quorum_certificate"],
         )
+
+
+@dataclass(frozen=True)
+class CheckpointVoteMessage:
+    """Canonical federation vote message for checkpoint signatures."""
+
+    domain: str
+    node_id: str
+    event_id: str
+    checkpoint_hash: str
+    sequence: int
+    ledger_height: int
+    timestamp: str
+    federation_epoch: int
+    validator_set_hash: str
+
+
+def serialize_checkpoint_vote_message(msg: CheckpointVoteMessage) -> bytes:
+    """Return canonical JSON bytes for a checkpoint vote message."""
+    payload: dict[str, Any] = {
+        "checkpoint_hash": msg.checkpoint_hash,
+        "domain": msg.domain,
+        "event_id": msg.event_id,
+        "federation_epoch": msg.federation_epoch,
+        "ledger_height": msg.ledger_height,
+        "node_id": msg.node_id,
+        "sequence": msg.sequence,
+        "timestamp": msg.timestamp,
+        "validator_set_hash": msg.validator_set_hash,
+    }
+    return canonical_json_bytes(payload)
+
+
+def _checkpoint_vote_event_id(
+    checkpoint_hash: str, sequence: int, ledger_height: int, registry: FederationRegistry
+) -> str:
+    """Return deterministic event identifier for checkpoint votes."""
+    payload = HASH_SEPARATOR.join(
+        [
+            checkpoint_hash,
+            str(sequence),
+            str(ledger_height),
+            str(registry.epoch),
+            registry.membership_hash(),
+        ]
+    ).encode("utf-8")
+    return hash_bytes(payload).hex()
+
+
+def _build_checkpoint_vote_message(
+    *,
+    checkpoint_hash: str,
+    sequence: int,
+    ledger_height: int,
+    timestamp: str,
+    node_id: str,
+    registry: FederationRegistry,
+) -> CheckpointVoteMessage:
+    """Construct the canonical checkpoint vote message for signing or verification."""
+    event_id = _checkpoint_vote_event_id(checkpoint_hash, sequence, ledger_height, registry)
+    validator_set_hash = registry.membership_hash()
+    return CheckpointVoteMessage(
+        domain=CHECKPOINT_DOMAIN_TAG,
+        node_id=node_id,
+        event_id=event_id,
+        checkpoint_hash=checkpoint_hash,
+        sequence=sequence,
+        ledger_height=ledger_height,
+        timestamp=timestamp,
+        federation_epoch=registry.epoch,
+        validator_set_hash=validator_set_hash,
+    )
+
+
+def sign_federated_checkpoint(
+    *,
+    checkpoint_hash: str,
+    sequence: int,
+    ledger_height: int,
+    timestamp: str,
+    node_id: str,
+    signing_key: nacl.signing.SigningKey,
+    registry: FederationRegistry,
+) -> NodeSignature:
+    """Sign a checkpoint on behalf of a federation node."""
+    msg = _build_checkpoint_vote_message(
+        checkpoint_hash=checkpoint_hash,
+        sequence=sequence,
+        ledger_height=ledger_height,
+        timestamp=timestamp,
+        node_id=node_id,
+        registry=registry,
+    )
+    vote_hash = hash_bytes(serialize_checkpoint_vote_message(msg))
+    signature = signing_key.sign(vote_hash).signature.hex()
+    return NodeSignature(node_id=node_id, signature=signature)
+
+
+def verify_federated_checkpoint_signatures(
+    *,
+    checkpoint_hash: str,
+    sequence: int,
+    ledger_height: int,
+    timestamp: str,
+    signatures: list[NodeSignature],
+    registry: FederationRegistry,
+) -> list[NodeSignature]:
+    """Return the subset of federation signatures that verify for this checkpoint."""
+    valid_signatures: list[NodeSignature] = []
+    seen_nodes: set[str] = set()
+    for signature in signatures:
+        if signature.node_id in seen_nodes:
+            continue
+        try:
+            node = registry.get_node(signature.node_id)
+        except ValueError:
+            continue
+        if not node.active:
+            continue
+        msg = _build_checkpoint_vote_message(
+            checkpoint_hash=checkpoint_hash,
+            sequence=sequence,
+            ledger_height=ledger_height,
+            timestamp=timestamp,
+            node_id=signature.node_id,
+            registry=registry,
+        )
+        if msg.domain != CHECKPOINT_DOMAIN_TAG:
+            continue
+        vote_hash = hash_bytes(serialize_checkpoint_vote_message(msg))
+        try:
+            sig_bytes = bytes.fromhex(signature.signature)
+        except ValueError:
+            continue
+        verified = False
+        for verify_key in node.verify_keys_for_timestamp(timestamp):
+            try:
+                verify_key.verify(vote_hash, sig_bytes)
+                verified = True
+                break
+            except nacl.exceptions.BadSignatureError:
+                continue
+        if not verified:
+            continue
+        valid_signatures.append(signature)
+        seen_nodes.add(signature.node_id)
+    return valid_signatures
+
+
+def build_checkpoint_quorum_certificate(
+    *,
+    checkpoint_hash: str,
+    sequence: int,
+    ledger_height: int,
+    timestamp: str,
+    signatures: list[NodeSignature],
+    registry: FederationRegistry,
+) -> dict[str, Any]:
+    """Build a quorum certificate for a federation-signed checkpoint."""
+    valid_signatures = verify_federated_checkpoint_signatures(
+        checkpoint_hash=checkpoint_hash,
+        sequence=sequence,
+        ledger_height=ledger_height,
+        timestamp=timestamp,
+        signatures=signatures,
+        registry=registry,
+    )
+    if len(valid_signatures) < registry.quorum_threshold():
+        raise ValueError("Insufficient valid federation signatures for checkpoint quorum")
+    signature_by_node = {signature.node_id: signature for signature in valid_signatures}
+    active_node_ids = sorted(node.node_id for node in registry.active_nodes())
+    signer_bitmap_bits: list[str] = []
+    ordered_signatures: list[NodeSignature] = []
+    validator_count = len(active_node_ids)
+    for node_id in active_node_ids:
+        signature = signature_by_node.get(node_id)
+        if signature is not None:
+            ordered_signatures.append(signature)
+            signer_bitmap_bits.append("1")
+        else:
+            signer_bitmap_bits.append("0")
+    if len(ordered_signatures) < registry.quorum_threshold():
+        raise ValueError("Insufficient valid federation signatures for checkpoint quorum")
+    validator_set_hash = registry.membership_hash()
+    return {
+        "checkpoint_hash": checkpoint_hash,
+        "sequence": sequence,
+        "ledger_height": ledger_height,
+        "timestamp": timestamp,
+        "event_id": _checkpoint_vote_event_id(
+            checkpoint_hash, sequence, ledger_height, registry
+        ),
+        "federation_epoch": registry.epoch,
+        "membership_hash": validator_set_hash,
+        "validator_set_hash": validator_set_hash,
+        "validator_count": validator_count,
+        "quorum_threshold": registry.quorum_threshold(),
+        "scheme": "ed25519",
+        "signer_bitmap": "".join(signer_bitmap_bits),
+        "signatures": [signature.to_dict() for signature in ordered_signatures],
+    }
+
+
+def verify_checkpoint_quorum_certificate(
+    *,
+    checkpoint: SignedCheckpoint,
+    registry: FederationRegistry,
+) -> bool:
+    """Verify the federation quorum certificate for a checkpoint."""
+    certificate = checkpoint.federation_quorum_certificate
+    required_fields = {
+        "checkpoint_hash",
+        "sequence",
+        "ledger_height",
+        "timestamp",
+        "event_id",
+        "federation_epoch",
+        "membership_hash",
+        "validator_set_hash",
+        "validator_count",
+        "quorum_threshold",
+        "scheme",
+        "signer_bitmap",
+        "signatures",
+    }
+    if not required_fields.issubset(certificate):
+        return False
+    if certificate["checkpoint_hash"] != checkpoint.checkpoint_hash:
+        return False
+    if int(certificate["sequence"]) != checkpoint.sequence:
+        return False
+    if int(certificate["ledger_height"]) != checkpoint.ledger_height:
+        return False
+    if certificate["timestamp"] != checkpoint.timestamp:
+        return False
+    if certificate["event_id"] != _checkpoint_vote_event_id(
+        checkpoint.checkpoint_hash,
+        checkpoint.sequence,
+        checkpoint.ledger_height,
+        registry,
+    ):
+        return False
+    if int(certificate["federation_epoch"]) != registry.epoch:
+        return False
+    validator_set_hash = registry.membership_hash()
+    if str(certificate["membership_hash"]) != validator_set_hash:
+        return False
+    if str(certificate["validator_set_hash"]) != validator_set_hash:
+        return False
+    try:
+        validator_count = int(certificate["validator_count"])
+        quorum_threshold = int(certificate["quorum_threshold"])
+    except (TypeError, ValueError):
+        return False
+    if validator_count != len(registry.active_nodes()):
+        return False
+    if quorum_threshold != registry.quorum_threshold():
+        return False
+    if certificate.get("scheme") != "ed25519":
+        return False
+
+    serialized_signatures = certificate.get("signatures")
+    if not isinstance(serialized_signatures, list):
+        return False
+    signer_bitmap = certificate.get("signer_bitmap")
+    if not isinstance(signer_bitmap, str):
+        return False
+    active_node_ids = sorted(node.node_id for node in registry.active_nodes())
+    if len(signer_bitmap) != len(active_node_ids) or set(signer_bitmap) - {"0", "1"}:
+        return False
+    expected_signer_ids = [
+        node_id
+        for node_id, bitmap_bit in zip(active_node_ids, signer_bitmap, strict=True)
+        if bitmap_bit == "1"
+    ]
+    if len(serialized_signatures) != len(expected_signer_ids):
+        return False
+
+    unique_verified_nodes: set[str] = set()
+    for expected_node_id, serialized_signature in zip(
+        expected_signer_ids, serialized_signatures, strict=True
+    ):
+        if not (
+            isinstance(serialized_signature, dict)
+            and "node_id" in serialized_signature
+            and "signature" in serialized_signature
+        ):
+            return False
+        node_id = str(serialized_signature["node_id"])
+        if node_id != expected_node_id:
+            return False
+        if node_id in unique_verified_nodes:
+            return False
+        try:
+            node = registry.get_node(node_id)
+        except ValueError:
+            return False
+        if not node.active:
+            return False
+        msg = _build_checkpoint_vote_message(
+            checkpoint_hash=checkpoint.checkpoint_hash,
+            sequence=checkpoint.sequence,
+            ledger_height=checkpoint.ledger_height,
+            timestamp=checkpoint.timestamp,
+            node_id=node_id,
+            registry=registry,
+        )
+        if msg.domain != CHECKPOINT_DOMAIN_TAG:
+            return False
+        vote_hash = hash_bytes(serialize_checkpoint_vote_message(msg))
+        try:
+            sig_bytes = bytes.fromhex(str(serialized_signature["signature"]))
+        except ValueError:
+            return False
+        verified = False
+        for verify_key in node.verify_keys_for_timestamp(checkpoint.timestamp):
+            try:
+                verify_key.verify(vote_hash, sig_bytes)
+                verified = True
+                break
+            except nacl.exceptions.BadSignatureError:
+                continue
+        if not verified:
+            return False
+        unique_verified_nodes.add(node_id)
+    return len(unique_verified_nodes) >= registry.quorum_threshold()
 
 
 def create_checkpoint(
@@ -89,7 +416,9 @@ def create_checkpoint(
     previous_checkpoint_hash: str = "",
     shard_roots: dict[str, str] | None = None,
     consistency_proof: list[str] | None = None,
-    signing_key: nacl.signing.SigningKey,
+    registry: FederationRegistry,
+    signing_keys: Mapping[str, nacl.signing.SigningKey] | None = None,
+    signatures: list[NodeSignature] | None = None,
 ) -> SignedCheckpoint:
     """
     Create a signed checkpoint for the current ledger state.
@@ -103,7 +432,12 @@ def create_checkpoint(
         consistency_proof: Merkle consistency proof (hex strings) showing this
             ledger root extends the previous checkpoint's ledger root. Required
             for non-genesis checkpoints.
-        signing_key: Ed25519 signing key for this checkpoint
+        registry: Federation registry used to verify quorum signatures
+        signing_keys: Optional mapping of node_id -> signing key. If provided,
+            signatures are generated locally for each entry. Either signing_keys
+            or signatures must be supplied.
+        signatures: Optional list of federation node signatures over the
+            checkpoint vote message. Either signing_keys or signatures must be supplied.
 
     Returns:
         Signed checkpoint
@@ -115,8 +449,20 @@ def create_checkpoint(
         raise ValueError(f"Checkpoint sequence must be non-negative, got {sequence}")
     if ledger_height < 0:
         raise ValueError(f"Ledger height must be non-negative, got {ledger_height}")
-    if previous_checkpoint_hash and not consistency_proof:
-        raise ValueError("Non-genesis checkpoints must include a consistency proof")
+    if sequence == 0:
+        if previous_checkpoint_hash:
+            raise ValueError("Genesis checkpoints must not include previous_checkpoint_hash")
+        if consistency_proof:
+            raise ValueError("Genesis checkpoints must not include a consistency proof")
+    else:
+        if not previous_checkpoint_hash:
+            raise ValueError("Non-genesis checkpoints must include previous_checkpoint_hash")
+        if not consistency_proof:
+            raise ValueError("Non-genesis checkpoints must include a consistency proof")
+    if signatures and signing_keys:
+        raise ValueError("Provide either signing_keys or signatures, not both")
+    if signatures is None and signing_keys is None:
+        raise ValueError("Checkpoint creation requires federation signatures")
 
     timestamp = current_timestamp()
     consistency_proof = consistency_proof or []
@@ -143,12 +489,28 @@ def create_checkpoint(
     checkpoint_hash_bytes = hash_bytes(CHECKPOINT_PREFIX + canonical_json_bytes(payload))
     checkpoint_hash = checkpoint_hash_bytes.hex()
 
-    # Sign the checkpoint hash
-    signature_bytes = signing_key.sign(checkpoint_hash_bytes).signature
-    signature = signature_bytes.hex()
+    if signatures is None:
+        signatures = [
+            sign_federated_checkpoint(
+                checkpoint_hash=checkpoint_hash,
+                sequence=sequence,
+                ledger_height=ledger_height,
+                timestamp=timestamp,
+                node_id=node_id,
+                signing_key=key,
+                registry=registry,
+            )
+            for node_id, key in signing_keys.items()
+        ]
 
-    # Extract public key
-    public_key = signing_key.verify_key.encode(encoder=nacl.encoding.HexEncoder).decode("ascii")
+    certificate = build_checkpoint_quorum_certificate(
+        checkpoint_hash=checkpoint_hash,
+        sequence=sequence,
+        ledger_height=ledger_height,
+        timestamp=timestamp,
+        signatures=signatures,
+        registry=registry,
+    )
 
     return SignedCheckpoint(
         sequence=sequence,
@@ -159,23 +521,20 @@ def create_checkpoint(
         shard_roots=shard_roots or {},
         consistency_proof=consistency_proof,
         checkpoint_hash=checkpoint_hash,
-        signature=signature,
-        public_key=public_key,
+        federation_quorum_certificate=certificate,
     )
 
 
 def verify_checkpoint(
     checkpoint: SignedCheckpoint,
-    verify_key: nacl.signing.VerifyKey | None = None,
+    registry: FederationRegistry,
 ) -> bool:
     """
     Verify a signed checkpoint's integrity and signature.
 
     Args:
         checkpoint: Checkpoint to verify
-        verify_key: Optional Ed25519 verification key. If not provided,
-                   the public key embedded in the checkpoint is used.
-
+        registry: Federation registry used to verify quorum certificates
     Returns:
         True if checkpoint is valid, False otherwise
     """
@@ -195,20 +554,18 @@ def verify_checkpoint(
         if checkpoint.checkpoint_hash != expected_hash:
             return False
 
-        # Verify signature
-        if verify_key is None:
-            verify_key = nacl.signing.VerifyKey(bytes.fromhex(checkpoint.public_key))
-
-        checkpoint_hash_bytes = bytes.fromhex(checkpoint.checkpoint_hash)
-        signature_bytes = bytes.fromhex(checkpoint.signature)
-        verify_key.verify(checkpoint_hash_bytes, signature_bytes)
-
-        return True
+        return verify_checkpoint_quorum_certificate(
+            checkpoint=checkpoint,
+            registry=registry,
+        )
     except Exception:
         return False
 
 
-def verify_checkpoint_chain(checkpoints: list[SignedCheckpoint]) -> bool:
+def verify_checkpoint_chain(
+    checkpoints: list[SignedCheckpoint],
+    registry: FederationRegistry,
+) -> bool:
     """
     Verify the integrity of a chain of checkpoints.
 
@@ -220,6 +577,7 @@ def verify_checkpoint_chain(checkpoints: list[SignedCheckpoint]) -> bool:
 
     Args:
         checkpoints: List of checkpoints in chronological order
+        registry: Federation registry used to verify quorum certificates
 
     Returns:
         True if the entire chain is valid, False otherwise
@@ -235,7 +593,7 @@ def verify_checkpoint_chain(checkpoints: list[SignedCheckpoint]) -> bool:
 
     for i, checkpoint in enumerate(checkpoints):
         # Verify individual checkpoint
-        if not verify_checkpoint(checkpoint):
+        if not verify_checkpoint(checkpoint, registry):
             return False
 
         # Verify sequence numbers are monotonically increasing
@@ -313,12 +671,14 @@ class CheckpointRegistry:
     Registry for storing and verifying checkpoint chains.
 
     This class provides an in-memory store for checkpoints with methods
-    to verify chain integrity and detect forks.
+    to verify chain integrity and detect forks. Verification is bound
+    to a federation registry for quorum certificate validation.
     """
 
-    def __init__(self) -> None:
-        """Initialize an empty checkpoint registry."""
+    def __init__(self, registry: FederationRegistry) -> None:
+        """Initialize an empty checkpoint registry bound to a federation registry."""
         self.checkpoints: list[SignedCheckpoint] = []
+        self.registry = registry
 
     def add_checkpoint(self, checkpoint: SignedCheckpoint) -> bool:
         """
@@ -334,7 +694,7 @@ class CheckpointRegistry:
             ValueError: If checkpoint would create a fork
         """
         # Verify checkpoint is valid
-        if not verify_checkpoint(checkpoint):
+        if not verify_checkpoint(checkpoint, self.registry):
             return False
 
         # Check for forks
@@ -365,7 +725,7 @@ class CheckpointRegistry:
         Returns:
             True if all checkpoints form a valid chain
         """
-        return verify_checkpoint_chain(self.checkpoints)
+        return verify_checkpoint_chain(self.checkpoints, self.registry)
 
     def get_checkpoint(self, sequence: int) -> SignedCheckpoint | None:
         """

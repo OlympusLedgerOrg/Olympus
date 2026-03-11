@@ -34,17 +34,21 @@ class SignedCheckpoint:
     shard_roots: dict[str, str]         # Optional shard-specific commitments
     consistency_proof: list[str]        # Merkle consistency proof to previous root
     checkpoint_hash: str                # Hash of checkpoint payload
-    signature: str                      # Ed25519 signature
-    public_key: str                     # Public key used for signing
+    federation_quorum_certificate: dict # Federation quorum certificate
 ```
 
 ## Creating Checkpoints
 
 ```python
 from protocol.checkpoints import create_checkpoint
-import nacl.signing
+from protocol.federation import FederationRegistry
+from protocol.shards import get_signing_key_from_seed
 
-signing_key = nacl.signing.SigningKey.generate()
+registry = FederationRegistry.from_file("examples/federation_registry.json")
+signing_keys = {
+    "olympus-node-1": get_signing_key_from_seed(b"\x01" * 32),
+    "olympus-node-2": get_signing_key_from_seed(b"\x02" * 32),
+}
 
 checkpoint = create_checkpoint(
     sequence=0,
@@ -52,7 +56,8 @@ checkpoint = create_checkpoint(
     ledger_height=100,
     previous_checkpoint_hash="",  # Empty for genesis
     shard_roots={"shard1": "root1", "shard2": "root2"},
-    signing_key=signing_key,
+    registry=registry,
+    signing_keys=signing_keys,
 )
 ```
 
@@ -63,7 +68,7 @@ checkpoint = create_checkpoint(
 ```python
 from protocol.checkpoints import verify_checkpoint
 
-is_valid = verify_checkpoint(checkpoint)
+is_valid = verify_checkpoint(checkpoint, registry)
 ```
 
 ### Checkpoint Chain Verification
@@ -72,7 +77,7 @@ is_valid = verify_checkpoint(checkpoint)
 from protocol.checkpoints import verify_checkpoint_chain
 
 checkpoints = [checkpoint1, checkpoint2, checkpoint3]
-is_valid = verify_checkpoint_chain(checkpoints)
+is_valid = verify_checkpoint_chain(checkpoints, registry)
 ```
 
 Chain verification ensures:
@@ -108,23 +113,23 @@ The `CheckpointRegistry` class provides an in-memory store for checkpoints with 
 ```python
 from protocol.checkpoints import CheckpointRegistry
 
-registry = CheckpointRegistry()
+checkpoint_registry = CheckpointRegistry(registry)
 
 # Add checkpoints (automatically detects forks)
 try:
-    registry.add_checkpoint(checkpoint1)
-    registry.add_checkpoint(checkpoint2)
+    checkpoint_registry.add_checkpoint(checkpoint1)
+    checkpoint_registry.add_checkpoint(checkpoint2)
 except ValueError as e:
     print(f"Fork detected: {e}")
 
 # Verify entire registry
-is_valid = registry.verify_registry()
+is_valid = checkpoint_registry.verify_registry()
 
 # Get latest checkpoint
-latest = registry.get_latest_checkpoint()
+latest = checkpoint_registry.get_latest_checkpoint()
 
 # Get checkpoint by sequence
-checkpoint = registry.get_checkpoint(sequence=5)
+checkpoint = checkpoint_registry.get_checkpoint(sequence=5)
 ```
 
 ## Witness Protocol
@@ -144,7 +149,7 @@ from protocol.ledger import Ledger
 from protocol.checkpoints import create_checkpoint, CheckpointRegistry
 
 ledger = Ledger()
-checkpoint_registry = CheckpointRegistry()
+checkpoint_registry = CheckpointRegistry(registry)
 
 # After adding entries to ledger
 if len(ledger.entries) % 1000 == 0:
@@ -156,7 +161,8 @@ if len(ledger.entries) % 1000 == 0:
         ledger_head_hash=latest_entry.entry_hash,
         ledger_height=len(ledger.entries),
         previous_checkpoint_hash=previous_checkpoint.checkpoint_hash if previous_checkpoint else "",
-        signing_key=signing_key,
+        registry=registry,
+        signing_keys=signing_keys,
     )
 
     checkpoint_registry.add_checkpoint(checkpoint)
@@ -166,8 +172,8 @@ if len(ledger.entries) % 1000 == 0:
 
 Signed checkpoints provide:
 
-1. **Non-repudiation**: Operator cannot deny creating a checkpoint
-2. **Tamper evidence**: Any modification to checkpoint invalidates signature
+1. **Non-repudiation**: Federation signers cannot deny creating a checkpoint
+2. **Tamper evidence**: Any modification to checkpoint invalidates federation signatures
 3. **Fork detection**: Witnesses can detect split views by comparing checkpoints
 4. **Append-only guarantee**: Checkpoint chain ensures history cannot be rewritten
    and consistency proofs prevent history truncation forks
@@ -175,7 +181,7 @@ Signed checkpoints provide:
 
 ## Domain Separation
 
-Checkpoint hashes use the domain separation prefix `OLY:CHECKPOINT:V1` to prevent cross-domain collisions with other hash types in the protocol.
+Checkpoint hashes use the domain separation prefix `OLY:CHECKPOINT:V1` to prevent cross-domain collisions with other hash types in the protocol. Federation vote signatures use the `OLY:CHECKPOINT-VOTE:V1` domain tag inside the signed payload to prevent replay across protocol contexts.
 
 ## Future Enhancements
 

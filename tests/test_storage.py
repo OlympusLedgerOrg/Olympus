@@ -32,6 +32,7 @@ See docs/08_database_strategy.md for complete database strategy documentation.
 
 import json
 import os
+import uuid
 from datetime import datetime, timezone
 
 import nacl.signing
@@ -792,6 +793,94 @@ def test_smt_nodes_reject_delete(storage, signing_key):
                 WHERE shard_id = %s
                 """,
                 (shard_id,),
+            )
+
+
+def _store_ingestion_batch(storage: StorageLayer) -> tuple[str, str]:
+    batch_id = f"test_ingestion_batch_{uuid.uuid4()}"
+    proof_id = str(uuid.uuid4())
+    timestamp = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+    record = {
+        "proof_id": proof_id,
+        "record_id": "doc-ingest",
+        "record_type": "document",
+        "version": 1,
+        "shard_id": f"ingest/{batch_id}",
+        "content_hash": hash_bytes(b"ingest-content").hex(),
+        "merkle_root": hash_bytes(b"ingest-root").hex(),
+        "merkle_proof": {"siblings": []},
+        "ledger_entry_hash": hash_bytes(b"ingest-ledger").hex(),
+        "timestamp": timestamp,
+        "canonicalization": {"type": "ingest-test"},
+        "persisted": True,
+    }
+    storage.store_ingestion_batch(batch_id, [record])
+    return batch_id, proof_id
+
+
+def test_ingestion_batches_reject_update(storage):
+    """Test that UPDATE on ingestion_batches is rejected by append-only trigger."""
+    batch_id, _ = _store_ingestion_batch(storage)
+    with pytest.raises(
+        psycopg.errors.ReadOnlySqlTransaction, match=r"ingestion_batches is append-only"
+    ):
+        with storage._get_connection() as conn, conn.cursor() as cur:
+            cur.execute(
+                """
+                UPDATE ingestion_batches
+                SET created_at = NOW()
+                WHERE batch_id = %s
+                """,
+                (batch_id,),
+            )
+
+
+def test_ingestion_batches_reject_delete(storage):
+    """Test that DELETE on ingestion_batches is rejected by append-only trigger."""
+    batch_id, _ = _store_ingestion_batch(storage)
+    with pytest.raises(
+        psycopg.errors.ReadOnlySqlTransaction, match=r"ingestion_batches is append-only"
+    ):
+        with storage._get_connection() as conn, conn.cursor() as cur:
+            cur.execute(
+                """
+                DELETE FROM ingestion_batches
+                WHERE batch_id = %s
+                """,
+                (batch_id,),
+            )
+
+
+def test_ingestion_proofs_reject_update(storage):
+    """Test that UPDATE on ingestion_proofs is rejected by append-only trigger."""
+    _, proof_id = _store_ingestion_batch(storage)
+    with pytest.raises(
+        psycopg.errors.ReadOnlySqlTransaction, match=r"ingestion_proofs is append-only"
+    ):
+        with storage._get_connection() as conn, conn.cursor() as cur:
+            cur.execute(
+                """
+                UPDATE ingestion_proofs
+                SET record_id = %s
+                WHERE proof_id = %s
+                """,
+                ("modified", proof_id),
+            )
+
+
+def test_ingestion_proofs_reject_delete(storage):
+    """Test that DELETE on ingestion_proofs is rejected by append-only trigger."""
+    _, proof_id = _store_ingestion_batch(storage)
+    with pytest.raises(
+        psycopg.errors.ReadOnlySqlTransaction, match=r"ingestion_proofs is append-only"
+    ):
+        with storage._get_connection() as conn, conn.cursor() as cur:
+            cur.execute(
+                """
+                DELETE FROM ingestion_proofs
+                WHERE proof_id = %s
+                """,
+                (proof_id,),
             )
 
 
