@@ -213,25 +213,73 @@ class MerkleTree:
 
 def verify_proof(proof: MerkleProof) -> bool:
     """
-    Verify a Merkle inclusion proof.
+    Verify a Merkle inclusion proof with strict depth and position checks.
+
+    This function enforces:
+    1. Exact proof depth based on tree_size (rejects proofs that are too short or too long)
+    2. Canonical sibling position representation (only "left" or "right" strings, rejects booleans)
+    3. Valid tree_size (must be positive for strict verification)
+    4. Valid leaf_index (must be within tree bounds when tree_size is known)
+
+    For legacy proofs where tree_size=0 (indicating unknown tree size), the function
+    performs basic verification without depth checks. However, new proofs must always
+    include tree_size for strict verification.
 
     Args:
         proof: Merkle proof to verify
 
     Returns:
-        True if proof is valid
+        True if proof is valid, False otherwise
+
+    Raises:
+        ValueError: If proof structure is malformed (invalid positions, incorrect depth, etc.)
     """
+    # Strict validation: all sibling positions must be canonical strings ("left" or "right")
+    # Reject boolean positions - they must be normalized before verification
+    for i, (sibling_hash, position) in enumerate(proof.siblings):
+        if isinstance(position, bool):
+            raise ValueError(
+                f"Invalid sibling position at index {i}: got boolean {position}, "
+                f"expected canonical string 'left' or 'right'. "
+                f"Positions must be normalized before verification."
+            )
+        if position not in ("left", "right"):
+            raise ValueError(
+                f"Invalid sibling position at index {i}: '{position}' "
+                f"(must be exactly 'left' or 'right')"
+            )
+    
+    # Strict depth validation (only for proofs with known tree_size)
+    if proof.tree_size > 0:
+        # Strict validation: leaf_index must be within bounds
+        if proof.leaf_index < 0 or proof.leaf_index >= proof.tree_size:
+            raise ValueError(
+                f"Invalid leaf_index: {proof.leaf_index} (must be in range [0, {proof.tree_size}))"
+            )
+        
+        # Calculate expected proof depth from tree_size
+        # For a tree with n leaves, depth = ceil(log2(n)) for n > 1, else 0
+        if proof.tree_size == 1:
+            expected_depth = 0
+        else:
+            expected_depth = (proof.tree_size - 1).bit_length()
+        
+        # Strict validation: proof must have exactly the expected number of siblings
+        actual_depth = len(proof.siblings)
+        if actual_depth != expected_depth:
+            raise ValueError(
+                f"Invalid proof depth: expected {expected_depth} siblings for tree_size={proof.tree_size}, "
+                f"got {actual_depth}"
+            )
+    
+    # Compute the root hash by walking up the tree
     current_hash = proof.leaf_hash
 
-    for sibling_hash, is_right in proof.siblings:
-        if isinstance(is_right, bool):
-            is_right = "right" if is_right else "left"
-        if is_right == "right":
+    for sibling_hash, position in proof.siblings:
+        if position == "right":
             current_hash = node_hash(current_hash, sibling_hash)
-        elif is_right == "left":
+        else:  # position == "left"
             current_hash = node_hash(sibling_hash, current_hash)
-        else:
-            raise ValueError("Sibling position must be 'left' or 'right'")
 
     return current_hash == proof.root_hash
 
