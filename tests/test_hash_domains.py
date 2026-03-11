@@ -1,4 +1,5 @@
 from protocol.hashes import (
+    CHECKPOINT_PREFIX,
     EVENT_PREFIX,
     FEDERATION_PREFIX,
     FOREST_PREFIX,
@@ -25,3 +26,4 @@ def test_hash_domain_prefixes_are_frozen():
     assert LEDGER_PREFIX == b"OLY:LEDGER:V1"
     assert FEDERATION_PREFIX == b"OLY:FEDERATION:V1"
     assert EVENT_PREFIX == b"OLY:EVENT:V1"
+    assert CHECKPOINT_PREFIX == b"OLY:CHECKPOINT:V1"
