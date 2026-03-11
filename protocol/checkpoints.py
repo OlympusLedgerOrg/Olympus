@@ -255,9 +255,11 @@ def build_checkpoint_quorum_certificate(
         registry=registry,
     )
     if len(valid_signatures) < registry.quorum_threshold():
+        signer_ids = [signature.node_id for signature in valid_signatures]
         raise ValueError(
             "Insufficient valid federation signatures for checkpoint quorum "
-            f"(got {len(valid_signatures)}, need {registry.quorum_threshold()})"
+            f"(got {len(valid_signatures)} from {signer_ids}, "
+            f"need {registry.quorum_threshold()})"
         )
     signature_by_node = {signature.node_id: signature for signature in valid_signatures}
     active_node_ids = sorted(node.node_id for node in registry.active_nodes())
@@ -271,11 +273,6 @@ def build_checkpoint_quorum_certificate(
             signer_bitmap_bits.append("1")
         else:
             signer_bitmap_bits.append("0")
-    if len(ordered_signatures) < registry.quorum_threshold():
-        raise ValueError(
-            "Insufficient valid federation signatures after bitmap ordering "
-            f"(got {len(ordered_signatures)}, need {registry.quorum_threshold()})"
-        )
     validator_set_hash = registry.membership_hash()
     return {
         "checkpoint_hash": checkpoint_hash,
@@ -468,11 +465,11 @@ def create_checkpoint(
     if sequence == 0:
         if previous_checkpoint_hash:
             raise ValueError(
-                "Genesis checkpoints (sequence=0) must not include previous_checkpoint_hash"
+                "Genesis checkpoints (sequence=0) cannot have previous_checkpoint_hash"
             )
         if consistency_proof:
             raise ValueError(
-                "Genesis checkpoints (sequence=0) must not include a consistency proof"
+                "Genesis checkpoints (sequence=0) cannot have consistency_proof"
             )
     else:
         if not previous_checkpoint_hash:

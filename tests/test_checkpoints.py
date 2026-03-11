@@ -333,7 +333,7 @@ def test_verify_checkpoint_chain_non_monotonic_sequence(registry, signing_keys):
         previous=checkpoint2,
     )
 
-    # Intentional sequence ordering: 0, 2, 1 to confirm 2→1 non-monotonic detection.
+    # Intentional sequence ordering: 0, 2, 1 with valid linkage to isolate 2→1 non-monotonic detection.
     assert not verify_checkpoint_chain([checkpoint1, checkpoint2, checkpoint3], registry)
 
 
@@ -549,8 +549,10 @@ def test_checkpoint_registry_get_checkpoint(registry, signing_keys):
     parent = _build_checkpoint(
         sequence=0, height=1, registry=registry, signing_keys=signing_keys
     )
+    registry_store.add_checkpoint(parent)
+
     checkpoint = _build_checkpoint(
-        sequence=5,
+        sequence=1,
         height=2,
         registry=registry,
         signing_keys=signing_keys,
@@ -558,9 +560,9 @@ def test_checkpoint_registry_get_checkpoint(registry, signing_keys):
     )
     registry_store.add_checkpoint(checkpoint)
 
-    retrieved = registry_store.get_checkpoint(5)
+    retrieved = registry_store.get_checkpoint(1)
     assert retrieved is not None
-    assert retrieved.sequence == 5
+    assert retrieved.sequence == 1
 
     assert registry_store.get_checkpoint(999) is None
 
