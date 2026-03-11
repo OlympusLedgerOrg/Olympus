@@ -198,6 +198,8 @@ def test_merkle_proof_verifies_for_all_leaves(leaves: list[bytes], seed: int):
 @given(leaf_lists, st.integers(min_value=0))
 def test_poseidon_merkle_proof_verifies_for_all_leaves(leaves: list[bytes], seed: int):
     """Every leaf in a Poseidon Merkle tree must have a valid inclusion proof."""
+    from protocol.poseidon_tree import _to_field_int
+
     tree = PoseidonMerkleTree(leaves)
 
     # Test a random leaf
@@ -207,8 +209,8 @@ def test_poseidon_merkle_proof_verifies_for_all_leaves(leaves: list[bytes], seed
     # Manually verify the proof by reconstructing the root
     from protocol.poseidon_bn128 import poseidon_hash_bn128
 
-    # Get the leaf value
-    leaf_int = int(blake3_to_field_element(leaves[leaf_index]))
+    # Get the leaf value with position binding
+    leaf_int = _to_field_int(leaves[leaf_index], index=leaf_index)
 
     # Reconstruct root from proof
     current = leaf_int
