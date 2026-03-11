@@ -235,13 +235,14 @@ def verify_proof(proof: MerkleProof) -> bool:
         ValueError: If proof structure is malformed (invalid positions, incorrect depth, etc.)
     """
     # Strict validation: all sibling positions must be canonical strings ("left" or "right")
-    # Reject boolean positions - they must be normalized before verification
+    # Reject boolean positions - they should be normalized by MerkleProof.__post_init__
+    # during proof construction. If we see booleans here, the proof was constructed incorrectly.
     for i, (sibling_hash, position) in enumerate(proof.siblings):
         if isinstance(position, bool):
             raise ValueError(
                 f"Invalid sibling position at index {i}: got boolean {position}, "
                 f"expected canonical string 'left' or 'right'. "
-                f"Positions must be normalized before verification."
+                f"Positions should be normalized by MerkleProof.__post_init__ during construction."
             )
         if position not in ("left", "right"):
             raise ValueError(

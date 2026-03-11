@@ -268,11 +268,14 @@ def test_swapped_sibling_positions_causes_verification_failure(tree_size: int, l
         tree_size=proof.tree_size,
     )
 
-    # Swapped proof should fail verification (except in rare cases where it might work)
-    # In most cases this will fail, but we can't guarantee 100% failure due to hash collisions
-    result = verify_proof(swapped_proof)
-    # For now, just ensure it doesn't crash - the verification will likely fail
-    assert isinstance(result, bool)
+    # Swapping sibling positions should cause verification to fail.
+    # This is a cryptographic property: changing the tree structure (left vs right)
+    # should result in a different root hash, so verification must fail.
+    # While theoretically a hash collision could make this pass, the probability is
+    # negligible (2^-256 for BLAKE3), so we assert it always fails.
+    assert not verify_proof(
+        swapped_proof
+    ), "Swapping sibling positions should always fail verification"
 
 
 def test_proof_depth_calculation_matches_expected_formula():
