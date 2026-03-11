@@ -29,7 +29,7 @@ REGISTRY_PATH = REPO_ROOT / "examples" / "federation_registry.json"
 
 
 def _test_signing_key(seed_byte: int) -> nacl.signing.SigningKey:
-    """Return a deterministic test-only Ed25519 key for checkpoint tests."""
+    """Return a deterministic test-only Ed25519 key for checkpoint tests (not for production)."""
     return get_signing_key_from_seed(bytes([seed_byte]) * 32)
 
 
@@ -333,7 +333,7 @@ def test_verify_checkpoint_chain_non_monotonic_sequence(registry, signing_keys):
         previous=checkpoint2,
     )
 
-    # Intentional sequence ordering: 0, 2, 1 to detect non-monotonic sequences.
+    # Intentional sequence ordering: 0, 2, 1 to confirm 2→1 non-monotonic detection.
     assert not verify_checkpoint_chain([checkpoint1, checkpoint2, checkpoint3], registry)
 
 

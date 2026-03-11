@@ -328,12 +328,13 @@ def verify_checkpoint_quorum_certificate(
         return False
     if certificate["timestamp"] != checkpoint.timestamp:
         return False
-    if certificate["event_id"] != _checkpoint_vote_event_id(
+    expected_event_id = _checkpoint_vote_event_id(
         checkpoint.checkpoint_hash,
         checkpoint.sequence,
         checkpoint.ledger_height,
         registry,
-    ):
+    )
+    if certificate["event_id"] != expected_event_id:
         return False
     if int(certificate["federation_epoch"]) != registry.epoch:
         return False
@@ -467,13 +468,11 @@ def create_checkpoint(
     if sequence == 0:
         if previous_checkpoint_hash:
             raise ValueError(
-                "Genesis checkpoints (sequence=0) must not include previous_checkpoint_hash "
-                "because there is no earlier checkpoint to reference"
+                "Genesis checkpoints (sequence=0) must not include previous_checkpoint_hash"
             )
         if consistency_proof:
             raise ValueError(
-                "Genesis checkpoints (sequence=0) must not include a consistency proof "
-                "because there is no previous checkpoint to verify"
+                "Genesis checkpoints (sequence=0) must not include a consistency proof"
             )
     else:
         if not previous_checkpoint_hash:
@@ -482,8 +481,7 @@ def create_checkpoint(
             raise ValueError("Non-genesis checkpoints must include a consistency proof")
     if signatures and signing_keys:
         raise ValueError(
-            "Provide either signing_keys (local signing) or signatures "
-            "(externally signed), not both"
+            "Cannot provide both signing_keys and signatures: choose one signing method"
         )
     if signatures is None and signing_keys is None:
         raise ValueError(
