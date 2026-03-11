@@ -48,6 +48,9 @@ class SignedCheckpoint:
     # Optional shard-specific state commitments
     shard_roots: dict[str, str]  # shard_id -> root_hash
 
+    # Merkle consistency proof linking to the previous checkpoint's ledger root
+    consistency_proof: list[str]
+
     # Hex-encoded hash of the checkpoint payload (computed from above fields)
     checkpoint_hash: str
 
@@ -64,7 +67,18 @@ class SignedCheckpoint:
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> SignedCheckpoint:
         """Create from dictionary."""
-        return cls(**data)
+        return cls(
+            sequence=data["sequence"],
+            timestamp=data["timestamp"],
+            ledger_head_hash=data["ledger_head_hash"],
+            previous_checkpoint_hash=data["previous_checkpoint_hash"],
+            ledger_height=data["ledger_height"],
+            shard_roots=data.get("shard_roots", {}),
+            consistency_proof=data.get("consistency_proof", []),
+            checkpoint_hash=data["checkpoint_hash"],
+            signature=data["signature"],
+            public_key=data["public_key"],
+        )
 
 
 def create_checkpoint(
@@ -74,6 +88,7 @@ def create_checkpoint(
     ledger_height: int,
     previous_checkpoint_hash: str = "",
     shard_roots: dict[str, str] | None = None,
+    consistency_proof: list[str] | None = None,
     signing_key: nacl.signing.SigningKey,
 ) -> SignedCheckpoint:
     """
@@ -85,6 +100,9 @@ def create_checkpoint(
         ledger_height: Total number of ledger entries
         previous_checkpoint_hash: Hex-encoded hash of previous checkpoint
         shard_roots: Optional mapping of shard_id to root_hash
+        consistency_proof: Merkle consistency proof (hex strings) showing this
+            ledger root extends the previous checkpoint's ledger root. Required
+            for non-genesis checkpoints.
         signing_key: Ed25519 signing key for this checkpoint
 
     Returns:
@@ -97,8 +115,18 @@ def create_checkpoint(
         raise ValueError(f"Checkpoint sequence must be non-negative, got {sequence}")
     if ledger_height < 0:
         raise ValueError(f"Ledger height must be non-negative, got {ledger_height}")
+    if previous_checkpoint_hash and not consistency_proof:
+        raise ValueError("Non-genesis checkpoints must include a consistency proof")
 
     timestamp = current_timestamp()
+    consistency_proof = consistency_proof or []
+
+    # Validate proof encodings
+    for proof_element in consistency_proof:
+        try:
+            bytes.fromhex(proof_element)
+        except ValueError as exc:  # pragma: no cover - defensive
+            raise ValueError("Consistency proof elements must be hex strings") from exc
 
     # Build canonical checkpoint payload (excludes signature and checkpoint_hash)
     payload = {
@@ -108,6 +136,7 @@ def create_checkpoint(
         "previous_checkpoint_hash": previous_checkpoint_hash,
         "ledger_height": ledger_height,
         "shard_roots": shard_roots or {},
+        "consistency_proof": consistency_proof,
     }
 
     # Compute checkpoint hash with domain separation
@@ -130,6 +159,7 @@ def create_checkpoint(
         previous_checkpoint_hash=previous_checkpoint_hash,
         ledger_height=ledger_height,
         shard_roots=shard_roots or {},
+        consistency_proof=consistency_proof,
         checkpoint_hash=checkpoint_hash,
         signature=signature,
         public_key=public_key,
@@ -160,6 +190,7 @@ def verify_checkpoint(
             "previous_checkpoint_hash": checkpoint.previous_checkpoint_hash,
             "ledger_height": checkpoint.ledger_height,
             "shard_roots": checkpoint.shard_roots,
+            "consistency_proof": checkpoint.consistency_proof,
         }
         expected_hash = hash_bytes(
             CHECKPOINT_PREFIX + canonical_json_bytes(payload)
@@ -203,6 +234,8 @@ def verify_checkpoint_chain(checkpoints: list[SignedCheckpoint]) -> bool:
     # Verify genesis checkpoint
     if checkpoints[0].previous_checkpoint_hash != "":
         return False
+    if checkpoints[0].consistency_proof:
+        return False
 
     for i, checkpoint in enumerate(checkpoints):
         # Verify individual checkpoint
@@ -221,6 +254,28 @@ def verify_checkpoint_chain(checkpoints: list[SignedCheckpoint]) -> bool:
             # Verify ledger heights are monotonically increasing
             if checkpoint.ledger_height < checkpoints[i - 1].ledger_height:
                 return False
+
+            # Verify Merkle consistency proof links previous and current roots
+            try:
+                from .merkle import verify_consistency_proof
+
+                previous_root = bytes.fromhex(checkpoints[i - 1].ledger_head_hash)
+                current_root = bytes.fromhex(checkpoint.ledger_head_hash)
+                proof_bytes = [bytes.fromhex(p) for p in checkpoint.consistency_proof]
+            except Exception:
+                return False
+
+            if not verify_consistency_proof(
+                previous_root,
+                current_root,
+                proof_bytes,
+                checkpoints[i - 1].ledger_height,
+                checkpoint.ledger_height,
+            ):
+                return False
+        elif checkpoint.consistency_proof:
+            # A genesis checkpoint must not carry a consistency proof
+            return False
 
     return True
 

@@ -11,7 +11,7 @@ from dataclasses import dataclass
 from typing import Any, Optional
 
 from .events import CanonicalEvent
-from .hashes import HASH_SEPARATOR, LEAF_PREFIX, blake3_hash, node_hash
+from .hashes import HASH_SEPARATOR, LEAF_PREFIX, blake3_hash, merkle_root, node_hash
 
 
 # Merkle tree version - DO NOT CHANGE
@@ -195,6 +195,119 @@ def verify_proof(proof: MerkleProof) -> bool:
             raise ValueError("Sibling position must be 'left' or 'right'")
 
     return current_hash == proof.root_hash
+
+
+def _largest_power_of_two_less_than(n: int) -> int:
+    """Return the largest power of two strictly less than ``n``."""
+    if n <= 1:
+        return 1
+    return 1 << ((n - 1).bit_length() - 1)
+
+
+def _subtree_root(leaf_hashes: Sequence[bytes], start: int, size: int) -> bytes:
+    """Compute the Merkle root for a contiguous slice of leaves."""
+    if size <= 0:
+        raise ValueError("Subtree size must be positive")
+    end = start + size
+    if end > len(leaf_hashes):
+        raise ValueError("Subtree range exceeds available leaves")
+    return ct_merkle_root(list(leaf_hashes[start:end]))
+
+
+def ct_merkle_root(leaves: Sequence[bytes]) -> bytes:
+    """
+    Compute a Merkle root without duplicating the last leaf (CT-style).
+
+    Args:
+        leaves: List of leaf hashes.
+
+    Returns:
+        Root hash of the Merkle tree.
+    """
+    if not leaves:
+        raise ValueError("Cannot compute Merkle root of empty list")
+
+    level = list(leaves)
+    while len(level) > 1:
+        next_level: list[bytes] = []
+        for i in range(0, len(level), 2):
+            if i + 1 < len(level):
+                next_level.append(node_hash(level[i], level[i + 1]))
+            else:
+                next_level.append(level[i])
+        level = next_level
+    return level[0]
+
+
+def generate_consistency_proof(
+    leaf_hashes: Sequence[bytes], old_size: int, new_size: int
+) -> list[bytes]:
+    """
+    Generate a Merkle consistency proof demonstrating that a tree of ``new_size``
+    leaves extends a prior tree of ``old_size`` leaves.
+
+    This proof contains the ordered leaf hashes for the newer tree. The verifier
+    recomputes both the previous root (over the first ``old_size`` leaves) and
+    the current root (over all ``new_size`` leaves) to confirm append-only growth.
+
+    Args:
+        leaf_hashes: Pre-hashed Merkle leaves (32-byte hashes).
+        old_size: Number of leaves in the prior tree.
+        new_size: Number of leaves in the current tree (must satisfy new_size >= old_size).
+
+    Returns:
+        List of subtree hashes (bytes) forming the consistency proof.
+
+    Raises:
+        ValueError: If sizes are invalid or leaf_hashes are insufficient.
+    """
+    if old_size < 0 or new_size < 0:
+        raise ValueError("Tree sizes must be non-negative")
+    if old_size > new_size:
+        raise ValueError("old_size cannot exceed new_size")
+    if new_size > len(leaf_hashes):
+        raise ValueError("Not enough leaf hashes to build the requested tree")
+    if old_size == 0 or old_size == new_size:
+        return list(leaf_hashes[:new_size])
+
+    return list(leaf_hashes[:new_size])
+
+
+def verify_consistency_proof(
+    old_root: bytes,
+    new_root: bytes,
+    proof: Sequence[bytes],
+    old_size: int,
+    new_size: int,
+) -> bool:
+    """
+    Verify that ``new_root`` represents a Merkle tree that extends the tree with
+    root ``old_root``.
+
+    Args:
+        old_root: Merkle root of the prior tree (size ``old_size``).
+        new_root: Merkle root of the newer tree (size ``new_size``).
+        proof: Consistency proof as produced by :func:`generate_consistency_proof`.
+        old_size: Leaf count of the prior tree.
+        new_size: Leaf count of the newer tree (must satisfy new_size >= old_size).
+
+    Returns:
+        True if the proof is valid and demonstrates append-only growth.
+    """
+    if old_size < 0 or new_size < 0 or old_size > new_size:
+        return False
+    if old_size == 0:
+        return True
+    if not proof or len(proof) < new_size:
+        return False
+
+    try:
+        computed_old_root = ct_merkle_root(list(proof[:old_size]))
+        computed_new_root = ct_merkle_root(list(proof[:new_size]))
+    except ValueError:
+        return False
+
+    return computed_old_root == old_root and computed_new_root == new_root
 
 
 def deserialize_merkle_proof(proof_data: dict[str, Any]) -> MerkleProof:
