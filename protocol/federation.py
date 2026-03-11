@@ -763,7 +763,7 @@ def resolve_canonical_fork(
         return None
     effective_epoch = registry.epoch if current_epoch is None else int(current_epoch)
     if effective_epoch < 0:
-        raise ValueError("Current federation epoch must be non-negative")
+        raise ValueError("Current federation epoch must be an integer >= 0")
 
     eligible: list[tuple[tuple[int, datetime, str], dict[str, Any], dict[str, Any]]] = []
     slot: tuple[str, int, int] | None = None
@@ -788,7 +788,7 @@ def resolve_canonical_fork(
 
         signer_count = len(certificate["signatures"])
         certificate_timestamp = _parse_timestamp(str(certificate["timestamp"]))
-        header_hash = str(certificate["header_hash"])
+        header_hash = str(header["header_hash"])
         eligible.append(((-signer_count, certificate_timestamp, header_hash), header, certificate))
 
     if not eligible:

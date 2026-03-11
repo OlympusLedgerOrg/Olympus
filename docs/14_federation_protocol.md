@@ -203,7 +203,7 @@ The prototype uses **quorum acknowledgment consensus**, not blind leader trust:
 - Deterministic finality threshold:
   - Let `N` be the count of **active** federation members in the current registry epoch.
   - A root becomes canonical only when `Q = ceil(2N / 3)` distinct node signatures are present for the same `(shard_id, height, round, header_hash)`.
-  - This is the only quorum rule used by the prototype (`FederationRegistry.quorum_threshold()` in code).
+  - This rule supersedes earlier prototype discussions of `floor(N/2)+1`; the implementation uses only `FederationRegistry.quorum_threshold()`.
 - If two distinct headers claim the same `(shard_id, height, round)`, the system has detected a fork.
 - Deterministic fork resolution order:
   1. prefer the candidate with the highest number of valid signer approvals,

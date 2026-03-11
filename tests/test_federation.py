@@ -707,7 +707,7 @@ def test_resolve_canonical_fork_uses_lexicographic_tiebreak_for_simultaneous_roo
     assert resolved is not None
     selected_header, selected_certificate = resolved
     assert selected_header["header_hash"] == expected
-    assert selected_certificate["header_hash"] == expected
+    assert selected_certificate["header_hash"] == selected_header["header_hash"]
 
 
 def test_resolve_canonical_fork_rejects_stale_epoch_candidates() -> None:
