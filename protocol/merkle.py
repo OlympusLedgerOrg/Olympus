@@ -248,7 +248,7 @@ def verify_proof(proof: MerkleProof) -> bool:
                 f"Invalid sibling position at index {i}: '{position}' "
                 f"(must be exactly 'left' or 'right')"
             )
-    
+
     # Strict depth validation (only for proofs with known tree_size)
     if proof.tree_size > 0:
         # Strict validation: leaf_index must be within bounds
@@ -256,14 +256,14 @@ def verify_proof(proof: MerkleProof) -> bool:
             raise ValueError(
                 f"Invalid leaf_index: {proof.leaf_index} (must be in range [0, {proof.tree_size}))"
             )
-        
+
         # Calculate expected proof depth from tree_size
         # For a tree with n leaves, depth = ceil(log2(n)) for n > 1, else 0
         if proof.tree_size == 1:
             expected_depth = 0
         else:
             expected_depth = (proof.tree_size - 1).bit_length()
-        
+
         # Strict validation: proof must have exactly the expected number of siblings
         actual_depth = len(proof.siblings)
         if actual_depth != expected_depth:
@@ -271,7 +271,7 @@ def verify_proof(proof: MerkleProof) -> bool:
                 f"Invalid proof depth: expected {expected_depth} siblings for tree_size={proof.tree_size}, "
                 f"got {actual_depth}"
             )
-    
+
     # Compute the root hash by walking up the tree
     current_hash = proof.leaf_hash
 
