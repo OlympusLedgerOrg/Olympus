@@ -685,6 +685,10 @@ async def ingest_batch(batch: BatchIngestionRequest, request: Request) -> BatchI
                                 for h, is_right in merkle_proof.siblings
                             ],
                             "root_hash": merkle_proof.root_hash.hex(),
+                            "proof_version": merkle_proof.proof_version,
+                            "tree_version": merkle_proof.tree_version,
+                            "epoch": merkle_proof.epoch,
+                            "tree_size": merkle_proof.tree_size,
                         },
                         "ledger_entry_hash": ledger_entry_hash,
                         "timestamp": ts,
@@ -995,6 +999,10 @@ async def commit_artifact(
                     [h.hex(), is_right == "right"] for h, is_right in merkle_proof.siblings
                 ],
                 "root_hash": merkle_proof.root_hash.hex(),
+                "proof_version": merkle_proof.proof_version,
+                "tree_version": merkle_proof.tree_version,
+                "epoch": merkle_proof.epoch,
+                "tree_size": merkle_proof.tree_size,
             },
             "ledger_entry_hash": ledger_entry.entry_hash,
             "timestamp": ts,

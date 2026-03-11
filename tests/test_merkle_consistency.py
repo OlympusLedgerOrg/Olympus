@@ -1,7 +1,14 @@
 from hypothesis import given, strategies as st
 
 from protocol.hashes import node_hash
-from protocol.merkle import MerkleTree, merkle_leaf_hash, verify_proof
+from protocol.merkle import (
+    MERKLE_VERSION,
+    PROOF_VERSION,
+    MerkleTree,
+    deserialize_merkle_proof,
+    merkle_leaf_hash,
+    verify_proof,
+)
 
 
 def test_merkle_root_stable_for_same_inputs():
@@ -93,3 +100,76 @@ def test_merkleproof_normalizes_boolean_positions():
     )
     assert all(isinstance(pos, str) for _, pos in proof_with_bools.siblings)
     assert proof_with_bools.siblings[0][1] == "right"
+
+
+# ---------------------------------------------------------------------------
+# Proof format versioning
+# ---------------------------------------------------------------------------
+
+
+def test_merkle_proof_has_version_fields():
+    """Generated proofs must carry all four versioning fields."""
+    leaves = [b"a", b"b", b"c"]
+    tree = MerkleTree(leaves)
+    proof = tree.generate_proof(0)
+
+    assert proof.proof_version == PROOF_VERSION
+    assert proof.tree_version == MERKLE_VERSION
+    assert isinstance(proof.epoch, int)
+    assert proof.tree_size == len(leaves)
+
+
+def test_merkle_proof_tree_size_matches_leaf_count():
+    """tree_size in a generated proof must equal the number of leaves."""
+    for n in [1, 2, 3, 4, 8, 9]:
+        leaves = [bytes([i]) for i in range(n)]
+        tree = MerkleTree(leaves)
+        proof = tree.generate_proof(0)
+        assert proof.tree_size == n, f"tree_size mismatch for {n} leaves"
+
+
+def test_deserialize_merkle_proof_restores_version_fields():
+    """Round-trip through deserialize_merkle_proof must preserve versioning fields."""
+    leaves = [b"x", b"y", b"z"]
+    tree = MerkleTree(leaves)
+    proof = tree.generate_proof(1)
+
+    proof_dict = {
+        "leaf_hash": proof.leaf_hash.hex(),
+        "leaf_index": proof.leaf_index,
+        "siblings": [[h.hex(), pos == "right"] for h, pos in proof.siblings],
+        "root_hash": proof.root_hash.hex(),
+        "proof_version": proof.proof_version,
+        "tree_version": proof.tree_version,
+        "epoch": proof.epoch,
+        "tree_size": proof.tree_size,
+    }
+
+    restored = deserialize_merkle_proof(proof_dict)
+    assert restored.proof_version == PROOF_VERSION
+    assert restored.tree_version == MERKLE_VERSION
+    assert restored.epoch == 0
+    assert restored.tree_size == len(leaves)
+    assert verify_proof(restored)
+
+
+def test_deserialize_merkle_proof_handles_legacy_proof_without_version_fields():
+    """Legacy proofs without versioning fields must deserialize with defaults."""
+    leaves = [b"legacy", b"proof"]
+    tree = MerkleTree(leaves)
+    proof = tree.generate_proof(0)
+
+    # Simulate a legacy serialized proof without versioning fields
+    legacy_dict = {
+        "leaf_hash": proof.leaf_hash.hex(),
+        "leaf_index": proof.leaf_index,
+        "siblings": [[h.hex(), pos == "right"] for h, pos in proof.siblings],
+        "root_hash": proof.root_hash.hex(),
+    }
+
+    restored = deserialize_merkle_proof(legacy_dict)
+    assert restored.proof_version == PROOF_VERSION
+    assert restored.tree_version == MERKLE_VERSION
+    assert restored.epoch == 0
+    assert restored.tree_size == 0
+    assert verify_proof(restored)

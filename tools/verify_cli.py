@@ -15,7 +15,13 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from protocol.ledger import Ledger, LedgerEntry
-from protocol.merkle import MerkleProof, verify_proof
+from protocol.merkle import (
+    MERKLE_VERSION,
+    PROOF_VERSION,
+    MerkleProof,
+    deserialize_merkle_proof,
+    verify_proof,
+)
 from protocol.redaction import RedactionProof, RedactionProtocol
 
 
@@ -25,16 +31,29 @@ def verify_merkle_proof(args: argparse.Namespace) -> int:
         with open(args.proof_file) as f:
             proof_data = json.load(f)
 
-        # Reconstruct proof object
-        proof = MerkleProof(
-            leaf_hash=bytes.fromhex(proof_data["leaf_hash"]),
-            leaf_index=proof_data["leaf_index"],
-            siblings=[(bytes.fromhex(h), pos) for h, pos in proof_data["siblings"]],
-            root_hash=bytes.fromhex(proof_data["root_hash"]),
-        )
+        # Reconstruct proof object, preserving versioning fields
+        proof = deserialize_merkle_proof(proof_data)
+
+        # Warn on unknown proof or tree versions so operators notice format drift
+        if proof.proof_version != PROOF_VERSION:
+            print(
+                f"Warning: proof_version '{proof.proof_version}' does not match "
+                f"current '{PROOF_VERSION}'",
+                file=sys.stderr,
+            )
+        if proof.tree_version != MERKLE_VERSION:
+            print(
+                f"Warning: tree_version '{proof.tree_version}' does not match "
+                f"current '{MERKLE_VERSION}'",
+                file=sys.stderr,
+            )
 
         if verify_proof(proof):
             print("✓ Merkle proof is VALID")
+            print(f"  proof_version : {proof.proof_version}")
+            print(f"  tree_version  : {proof.tree_version}")
+            print(f"  epoch         : {proof.epoch}")
+            print(f"  tree_size     : {proof.tree_size}")
             return 0
         else:
             print("✗ Merkle proof is INVALID", file=sys.stderr)

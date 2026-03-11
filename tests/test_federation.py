@@ -18,6 +18,7 @@ from protocol.federation import (
     build_federation_header_record,
     build_quorum_certificate,
     has_federation_quorum,
+    quorum_certificate_hash,
     serialize_vote_message,
     sign_federated_header,
     verify_federated_header_signatures,
