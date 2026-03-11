@@ -21,7 +21,9 @@ from protocol.ledger import Ledger, LedgerEntry
 # Prevents signatures created for other protocol contexts (ingest, admin,
 # shard-merge, …) from being replayed as federation votes.
 FEDERATION_DOMAIN_TAG = "OLY:FEDERATION-VOTE:V1"
-_HEADER_EXCLUDED_FIELDS: frozenset[str] = frozenset({"header_hash", "signature", "timestamp_token"})
+_HEADER_EXCLUDED_FIELDS: frozenset[str] = frozenset(
+    {"header_hash", "signature", "timestamp_token", "quorum_certificate_hash"}
+)
 _CERTIFICATE_SIGNATURE_SCHEME_ED25519 = "ed25519"
 
 

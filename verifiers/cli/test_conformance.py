@@ -17,7 +17,12 @@ REPO_ROOT = Path(__file__).parent.parent.parent
 sys.path.insert(0, str(REPO_ROOT))
 
 from protocol.hashes import HASH_SEPARATOR, LEDGER_PREFIX, NODE_PREFIX, blake3_hash
-from protocol.merkle import MerkleProof, MerkleTree, merkle_leaf_hash, verify_proof
+from protocol.merkle import (
+    MerkleTree,
+    deserialize_merkle_proof,
+    merkle_leaf_hash,
+    verify_proof,
+)
 
 
 VECTORS_PATH = Path(__file__).parent.parent / "test_vectors" / "vectors.json"
@@ -90,12 +95,16 @@ def test_merkle_root(vectors: dict) -> None:
 
 def test_merkle_proof(vectors: dict) -> None:
     for vec in vectors["merkle_proof"]:
-        proof = MerkleProof(
-            leaf_hash=bytes.fromhex(vec["leaf_hash"]),
-            leaf_index=vec["leaf_index"],
-            siblings=[(bytes.fromhex(s["hash"]), s["position"]) for s in vec["siblings"]],
-            root_hash=bytes.fromhex(vec["root_hash"]),
-        )
+        # Use deserialize_merkle_proof so that versioning fields are handled
+        # consistently; legacy vectors without proof_version/tree_version/epoch/
+        # tree_size receive the current defaults.
+        proof_data = {
+            "leaf_hash": vec["leaf_hash"],
+            "leaf_index": vec["leaf_index"],
+            "siblings": [[s["hash"], s["position"]] for s in vec["siblings"]],
+            "root_hash": vec["root_hash"],
+        }
+        proof = deserialize_merkle_proof(proof_data)
         got = verify_proof(proof)
         assert got == vec["expected_valid"], (
             f"merkle_proof verification failed: got {got}, want {vec['expected_valid']}"
