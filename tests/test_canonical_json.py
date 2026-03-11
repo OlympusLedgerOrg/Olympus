@@ -5,6 +5,8 @@ These tests validate the canonical_json_encode() function which provides
 deterministic JSON encoding for the Olympus protocol.
 """
 
+from decimal import Decimal
+
 import pytest
 
 from protocol.canonical_json import canonical_json_bytes, canonical_json_encode
@@ -18,8 +20,8 @@ def test_canonical_json_encode_basic_types():
     # Number (integer)
     assert canonical_json_encode(42) == "42"
 
-    # Number (float)
-    assert canonical_json_encode(3.14) == "3.14"
+    # Number (decimal)
+    assert canonical_json_encode(Decimal("3.14")) == "3.14"
 
     # Boolean
     assert canonical_json_encode(True) == "true"
@@ -97,6 +99,12 @@ def test_canonical_json_encode_rejects_negative_infinity():
     obj = {"value": float("-inf")}
     with pytest.raises(ValueError, match="Infinity"):
         canonical_json_encode(obj)
+
+
+def test_canonical_json_encode_rejects_finite_float():
+    """Test that finite floats are rejected in favor of Decimal."""
+    with pytest.raises(ValueError, match="Float values are not allowed"):
+        canonical_json_encode({"value": 3.14})
 
 
 def test_canonical_json_encode_rejects_nan_in_nested_object():
@@ -202,24 +210,42 @@ def test_canonical_json_encode_special_characters():
 def test_canonical_json_encode_trims_trailing_zeros_and_bounds():
     """Canonical numbers: trim zeros, fixed/scientific boundaries."""
     assert (
-        canonical_json_encode({"micro": 0.0000001, "huge": 1e21}) == '{"huge":1e+21,"micro":1e-7}'
+        canonical_json_encode({"micro": Decimal("0.0000001"), "huge": Decimal("1e21")})
+        == '{"huge":1e+21,"micro":1e-7}'
     )
-    assert canonical_json_encode({"value": 1.0, "precise": 3.1400}) == '{"precise":3.14,"value":1}'
+    assert (
+        canonical_json_encode({"value": Decimal("1.0"), "precise": Decimal("3.1400")})
+        == '{"precise":3.14,"value":1}'
+    )
 
 
 def test_canonical_json_encode_numeric_edge_cases():
-    """Float traps, exponent limits, and negative zero normalization."""
-    assert canonical_json_encode({"z": -0.0}) == '{"z":0}'
-    assert canonical_json_encode({"tenth": 0.1}) == '{"tenth":0.1}'
+    """Decimal numeric edge cases and exponent limits."""
+    assert canonical_json_encode({"z": Decimal("-0.0")}) == '{"z":0}'
+    assert canonical_json_encode({"tenth": Decimal("0.1")}) == '{"tenth":0.1}'
     assert canonical_json_encode({"int": 9007199254740993}) == '{"int":9007199254740993}'
-    assert canonical_json_encode({"deep": 1e-308}) == '{"deep":1e-308}'
-    assert canonical_json_encode({"wide": 1e308}) == '{"wide":1e+308}'
-    assert canonical_json_encode({"fixed_min": 1e-6}) == '{"fixed_min":0.000001}'
-    assert canonical_json_encode({"sci_min": 1e-7}) == '{"sci_min":1e-7}'
+    assert canonical_json_encode({"deep": Decimal("1e-308")}) == '{"deep":1e-308}'
+    assert canonical_json_encode({"wide": Decimal("1e308")}) == '{"wide":1e+308}'
+    assert canonical_json_encode({"fixed_min": Decimal("1e-6")}) == '{"fixed_min":0.000001}'
+    assert canonical_json_encode({"sci_min": Decimal("1e-7")}) == '{"sci_min":1e-7}'
     # fixed_max is 1 followed by 20 zeros (fixed-notation upper bound)
     expected_fixed_max = '{"fixed_max":' + ("1" + "0" * 20) + "}"
-    assert canonical_json_encode({"fixed_max": 1e20}) == expected_fixed_max
-    assert canonical_json_encode({"sci_max": 1e21}) == '{"sci_max":1e+21}'
+    assert canonical_json_encode({"fixed_max": Decimal("1e20")}) == expected_fixed_max
+    assert canonical_json_encode({"sci_max": Decimal("1e21")}) == '{"sci_max":1e+21}'
     assert (
-        canonical_json_encode({"precise": 1.2345678901234567}) == '{"precise":1.2345678901234567}'
+        canonical_json_encode({"precise": Decimal("1.2345678901234567")})
+        == '{"precise":1.2345678901234567}'
     )
+
+
+def test_canonical_json_encode_normalizes_unicode_nfc():
+    """Keys and string values are normalized to NFC before encoding."""
+    precomposed = {"café": "résumé"}
+    decomposed = {"cafe\u0301": "re\u0301sume\u0301"}
+    assert canonical_json_encode(precomposed) == canonical_json_encode(decomposed)
+
+
+def test_canonical_json_encode_rejects_duplicate_keys_after_nfc():
+    """Reject keys that collide after Unicode NFC normalization."""
+    with pytest.raises(ValueError, match="Duplicate key after NFC normalization"):
+        canonical_json_encode({"é": 1, "e\u0301": 2})

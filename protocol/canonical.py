@@ -53,8 +53,8 @@ def normalize_whitespace(text: str) -> str:
     NO-BREAK SPACE U+00A0, NARROW NO-BREAK SPACE U+202F, THIN SPACE U+2009).
 
     Steps applied:
-    1. NFKC normalization (maps most Unicode space variants to ASCII space).
-    2. Explicit replacement of residual NBSP-like characters not covered by NFKC.
+    1. NFC normalization to a single canonical Unicode form.
+    2. Explicit replacement of NBSP-like characters (which NFC preserves as semantically distinct).
     3. Collapse all remaining whitespace runs and strip leading/trailing whitespace.
 
     Args:
@@ -63,10 +63,9 @@ def normalize_whitespace(text: str) -> str:
     Returns:
         Text with normalized whitespace
     """
-    # Step 1: NFKC normalizes Unicode compatibility variants (e.g., thin space
-    # U+2009, en space U+2002, em space U+2003) to ASCII space.
-    text = unicodedata.normalize("NFKC", text)
-    # Step 2: Map residual non-breaking space characters that NFKC leaves intact.
+    # Step 1: NFC normalizes canonical-equivalent Unicode representations.
+    text = unicodedata.normalize("NFC", text)
+    # Step 2: Map non-breaking space characters (NFC preserves them as distinct).
     text = text.translate(_RESIDUAL_UNICODE_SPACES)
     # Step 3: Collapse all whitespace and strip.
     return " ".join(text.split())
@@ -87,19 +86,21 @@ def canonicalize_document(doc: dict[str, Any]) -> dict[str, Any]:
     if not isinstance(doc, dict):
         raise ValueError("Document must be a dictionary")
 
+    def _canonicalize_value(value: Any) -> Any:
+        if isinstance(value, dict):
+            return canonicalize_document(value)
+        if isinstance(value, list):
+            return [_canonicalize_value(item) for item in value]
+        if isinstance(value, str):
+            return normalize_whitespace(value)
+        return value
+
+    if any(not isinstance(key, str) for key in doc.keys()):
+        raise ValueError("Document keys must be strings")
+
     canonical: dict[str, Any] = {}
     for key in sorted(doc.keys()):
-        value = doc[key]
-        if isinstance(value, dict):
-            canonical[key] = canonicalize_document(value)
-        elif isinstance(value, list):
-            canonical[key] = [
-                canonicalize_document(item) if isinstance(item, dict) else item for item in value
-            ]
-        elif isinstance(value, str):
-            canonical[key] = normalize_whitespace(value)
-        else:
-            canonical[key] = value
+        canonical[key] = _canonicalize_value(doc[key])
 
     return canonical
 
