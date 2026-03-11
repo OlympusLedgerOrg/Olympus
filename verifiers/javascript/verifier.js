@@ -182,6 +182,58 @@ function computeLedgerEntryHash(canonicalPayloadBytes) {
   return computeBlake3(combined);
 }
 
+/**
+ * Compute the dual-root commitment hash from BLAKE3 and Poseidon roots.
+ *
+ * Formula:
+ *   BLAKE3(OLY:LEDGER:V1 | "|" | blake3RootBytes | "|" | poseidonRoot32BEBytes)
+ *
+ * where poseidonRoot32BEBytes is the 32-byte big-endian encoding of the BN128
+ * field element expressed as a decimal string.
+ *
+ * This matches the Python reference:
+ *   blake3_hash([LEDGER_PREFIX, SEP, blake3_root_bytes, SEP, poseidon_root_32be])
+ *
+ * @param {string} blake3RootHex - BLAKE3 Merkle root as 64-char hex string
+ * @param {string} poseidonRootDecimal - Poseidon root as decimal string (BN128 field element)
+ * @returns {string} - 64-char hex dual commitment hash
+ */
+function computeDualCommitment(blake3RootHex, poseidonRootDecimal) {
+  const LEDGER_PREFIX = new TextEncoder().encode('OLY:LEDGER:V1');
+  const SEP = new TextEncoder().encode('|');
+  const blake3RootBytes = fromHex(blake3RootHex);
+
+  // Encode poseidon root decimal string as 32-byte big-endian
+  const poseidonBytes = bigIntTo32BytesBE(BigInt(poseidonRootDecimal));
+
+  const combined = new Uint8Array(
+    LEDGER_PREFIX.length + SEP.length + blake3RootBytes.length + SEP.length + poseidonBytes.length
+  );
+  let offset = 0;
+  combined.set(LEDGER_PREFIX, offset); offset += LEDGER_PREFIX.length;
+  combined.set(SEP, offset);           offset += SEP.length;
+  combined.set(blake3RootBytes, offset); offset += blake3RootBytes.length;
+  combined.set(SEP, offset);           offset += SEP.length;
+  combined.set(poseidonBytes, offset);
+
+  return toHex(computeBlake3(combined));
+}
+
+/**
+ * Encode a BigInt as a 32-byte big-endian Uint8Array.
+ * @param {bigint} n - Non-negative integer to encode
+ * @returns {Uint8Array} - 32 bytes, big-endian
+ */
+function bigIntTo32BytesBE(n) {
+  const bytes = new Uint8Array(32);
+  let tmp = n;
+  for (let i = 31; i >= 0; i--) {
+    bytes[i] = Number(tmp & 0xffn);
+    tmp >>= 8n;
+  }
+  return bytes;
+}
+
 // Export functions
 module.exports = {
   computeBlake3,
@@ -193,4 +245,5 @@ module.exports = {
   computeMerkleRoot,
   verifyMerkleProof,
   computeLedgerEntryHash,
+  computeDualCommitment,
 };
