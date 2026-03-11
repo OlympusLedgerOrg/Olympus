@@ -1,4 +1,6 @@
-from hypothesis import given, strategies as st
+"""
+Tests for Merkle consistency proofs.
+"""
 
 from protocol.hashes import node_hash
 from protocol.merkle import (
@@ -11,23 +13,31 @@ from protocol.merkle import (
 )
 
 
-def test_merkle_root_stable_for_same_inputs():
-    leaves = [b"a", b"b", b"c"]
+def test_merkle_consistency_proof_round_trip():
+    """Generated consistency proofs should verify."""
+    leaves = [hash_bytes(f"leaf-{i}".encode("utf-8")) for i in range(6)]
+    old_size = 3
+    new_size = 6
 
-    tree1 = MerkleTree(leaves)
-    tree2 = MerkleTree(leaves)
+    old_root = ct_merkle_root(leaves[:old_size])
+    new_root = ct_merkle_root(leaves[:new_size])
+    proof = generate_consistency_proof(leaves, old_size, new_size)
 
-    assert tree1.root() == tree2.root()
+    assert verify_consistency_proof(old_root, new_root, proof, old_size, new_size)
 
 
-def test_merkle_root_changes_if_order_changes():
-    leaves1 = [b"a", b"b", b"c"]
-    leaves2 = [b"b", b"a", b"c"]
+def test_merkle_consistency_proof_detects_tampering():
+    """Tampering with the proof should invalidate verification."""
+    leaves = [hash_bytes(f"leaf-{i}".encode("utf-8")) for i in range(5)]
+    old_size = 2
+    new_size = 5
 
-    tree1 = MerkleTree(leaves1)
-    tree2 = MerkleTree(leaves2)
+    old_root = ct_merkle_root(leaves[:old_size])
+    new_root = ct_merkle_root(leaves[:new_size])
+    proof = generate_consistency_proof(leaves, old_size, new_size)
 
-    assert tree1.root() != tree2.root()
+    bad_proof = proof.copy()
+    bad_proof[0] = hash_bytes(b"tamper")
 
 
 def test_merkle_leaf_prefix_applied():

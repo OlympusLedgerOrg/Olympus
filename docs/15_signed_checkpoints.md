@@ -32,6 +32,7 @@ class SignedCheckpoint:
     previous_checkpoint_hash: str        # Hash of previous checkpoint (chain)
     ledger_height: int                  # Total number of ledger entries
     shard_roots: dict[str, str]         # Optional shard-specific commitments
+    consistency_proof: list[str]        # Merkle consistency proof to previous root
     checkpoint_hash: str                # Hash of checkpoint payload
     signature: str                      # Ed25519 signature
     public_key: str                     # Public key used for signing
@@ -79,6 +80,13 @@ Chain verification ensures:
 2. Sequences are monotonically increasing
 3. Each checkpoint correctly references the previous checkpoint hash
 4. Ledger heights are monotonically increasing
+5. Merkle consistency proofs demonstrate that each new ledger root extends the
+   previous root (no truncation forks)
+
+Each checkpoint carries a `consistency_proof` containing the ordered leaf
+hashes for the current tree. Verifiers recompute the prior root over the first
+`ledger_height` leaves and the current root over all provided leaves to confirm
+that the state grew append-only.
 
 ## Fork Detection
 
@@ -162,6 +170,7 @@ Signed checkpoints provide:
 2. **Tamper evidence**: Any modification to checkpoint invalidates signature
 3. **Fork detection**: Witnesses can detect split views by comparing checkpoints
 4. **Append-only guarantee**: Checkpoint chain ensures history cannot be rewritten
+   and consistency proofs prevent history truncation forks
 5. **Public verifiability**: Anyone can verify checkpoint signatures
 
 ## Domain Separation
