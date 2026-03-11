@@ -8,7 +8,7 @@ from dataclasses import asdict, dataclass
 from typing import Any
 
 from .canonical_json import canonical_json_bytes
-from .hashes import LEDGER_PREFIX, blake3_hash
+from .hashes import LEDGER_PREFIX, blake3_hash, create_dual_root_commitment
 from .timestamps import current_timestamp
 
 
@@ -26,6 +26,7 @@ class LedgerEntry:
     federation_quorum_certificate: dict[str, Any] | None = (
         None  # Optional signed federation quorum certificate
     )
+    poseidon_root: str | None = None  # Optional Poseidon Merkle root (decimal string)
 
     def to_dict(self) -> dict[str, Any]:
         """Convert to dictionary."""
@@ -99,17 +100,26 @@ class Ledger:
         shard_root: str,
         canonicalization: dict[str, Any],
         federation_quorum_certificate: dict[str, Any] | None = None,
+        poseidon_root: str | None = None,
     ) -> LedgerEntry:
         """
         Append a new entry to the ledger.
 
+        When *poseidon_root* is supplied the entry hash is computed as a
+        dual-root commitment that atomically binds both the BLAKE3 shard root
+        and the Poseidon Merkle root.  Entries without a Poseidon root use the
+        legacy hash formula for backward compatibility.
+
         Args:
             record_hash: Hash of the record
             shard_id: Identifier for the shard
-            shard_root: Root hash of the shard
+            shard_root: Root hash of the shard (hex-encoded BLAKE3 root)
             canonicalization: Canonicalization provenance metadata for the commitment
             federation_quorum_certificate: Optional signed federation quorum certificate
                 proving 2/3 federation agreement for the shard header
+            poseidon_root: Optional Poseidon Merkle root as a decimal string
+                (BN128 field element).  When provided, the entry hash uses the
+                dual-root commitment formula instead of the legacy payload hash.
 
         Returns:
             The newly created entry
@@ -122,7 +132,7 @@ class Ledger:
         )
 
         # Create payload for hashing
-        payload = {
+        payload: dict[str, Any] = {
             "ts": ts,
             "record_hash": record_hash,
             "shard_id": shard_id,
@@ -132,9 +142,25 @@ class Ledger:
         }
         if normalized_certificate is not None:
             payload["federation_quorum_certificate"] = normalized_certificate
+        if poseidon_root is not None:
+            payload["poseidon_root"] = poseidon_root
 
-        # Compute entry hash using LEDGER_PREFIX + canonical JSON
-        entry_hash = blake3_hash([LEDGER_PREFIX, canonical_json_bytes(payload)]).hex()
+        # Compute entry hash: dual-root commitment when poseidon_root is present,
+        # otherwise fall back to the legacy canonical-JSON hash.
+        if poseidon_root is not None:
+            from .hashes import SNARK_SCALAR_FIELD
+
+            poseidon_int = int(poseidon_root)
+            if not (0 <= poseidon_int < SNARK_SCALAR_FIELD):
+                raise ValueError(
+                    f"poseidon_root {poseidon_root!r} is not a valid BN128 field element"
+                )
+            poseidon_bytes = poseidon_int.to_bytes(32, byteorder="big")
+            entry_hash = create_dual_root_commitment(
+                bytes.fromhex(shard_root), poseidon_bytes
+            ).hex()
+        else:
+            entry_hash = blake3_hash([LEDGER_PREFIX, canonical_json_bytes(payload)]).hex()
 
         entry = LedgerEntry(
             ts=ts,
@@ -145,6 +171,7 @@ class Ledger:
             federation_quorum_certificate=normalized_certificate,
             prev_entry_hash=prev_entry_hash,
             entry_hash=entry_hash,
+            poseidon_root=poseidon_root,
         )
 
         self.entries.append(entry)
@@ -169,6 +196,9 @@ class Ledger:
         """
         Verify the integrity of the entire ledger chain.
 
+        Supports both legacy entries (single BLAKE3 root) and new entries
+        that use the dual-root commitment formula.
+
         Returns:
             True if chain is valid
         """
@@ -182,7 +212,7 @@ class Ledger:
         # Check each entry
         for i, entry in enumerate(self.entries):
             # Recompute entry hash
-            payload = {
+            payload: dict[str, Any] = {
                 "ts": entry.ts,
                 "record_hash": entry.record_hash,
                 "shard_id": entry.shard_id,
@@ -195,7 +225,27 @@ class Ledger:
             )
             if normalized_certificate is not None:
                 payload["federation_quorum_certificate"] = normalized_certificate
-            expected_hash = blake3_hash([LEDGER_PREFIX, canonical_json_bytes(payload)]).hex()
+
+            if entry.poseidon_root is not None:
+                # New format: dual-root commitment
+                payload["poseidon_root"] = entry.poseidon_root
+                try:
+                    from .hashes import SNARK_SCALAR_FIELD
+
+                    poseidon_int = int(entry.poseidon_root)
+                    if not (0 <= poseidon_int < SNARK_SCALAR_FIELD):
+                        return False
+                    poseidon_bytes = poseidon_int.to_bytes(32, byteorder="big")
+                    expected_hash = create_dual_root_commitment(
+                        bytes.fromhex(entry.shard_root), poseidon_bytes
+                    ).hex()
+                except (ValueError, OverflowError):
+                    return False
+            else:
+                # Legacy format: canonical JSON payload hash
+                expected_hash = blake3_hash(
+                    [LEDGER_PREFIX, canonical_json_bytes(payload)]
+                ).hex()
 
             if entry.entry_hash != expected_hash:
                 return False

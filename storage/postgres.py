@@ -271,6 +271,7 @@ class StorageLayer:
         value_hash: bytes,
         signing_key: nacl.signing.SigningKey,
         canonicalization: dict[str, Any] | None = None,
+        poseidon_root: bytes | None = None,
     ) -> tuple[bytes, ExistenceProof, dict[str, Any], str, LedgerEntry]:
         """
         Append a record to the sparse Merkle tree and update shard header and ledger.
@@ -297,6 +298,10 @@ class StorageLayer:
             value_hash: 32-byte hash of record value
             signing_key: Ed25519 signing key for shard header
             canonicalization: Canonicalization provenance for the committed value
+            poseidon_root: Optional 32-byte Poseidon Merkle root (BN128 field element,
+                big-endian). When provided, the ledger entry hash uses the dual-root
+                commitment formula to atomically bind both the BLAKE3 SMT root and the
+                Poseidon root.
 
         Returns:
             Tuple of (root_hash, proof, header, signature, ledger_entry)
@@ -449,7 +454,7 @@ class StorageLayer:
             )
 
             # Create ledger entry payload
-            ledger_payload = {
+            ledger_payload: dict[str, Any] = {
                 "ts": ts,
                 "record_hash": record_hash_hex,
                 "shard_id": shard_id,
@@ -458,11 +463,26 @@ class StorageLayer:
                 "prev_entry_hash": prev_entry_hash,
             }
 
-            # Compute entry hash using canonical JSON
-            from protocol.hashes import LEDGER_PREFIX, blake3_hash
+            # Derive the Poseidon root decimal string for payload storage
+            poseidon_root_decimal: str | None = None
+            if poseidon_root is not None:
+                if len(poseidon_root) != 32:
+                    raise ValueError(
+                        f"poseidon_root must be 32 bytes, got {len(poseidon_root)}"
+                    )
+                poseidon_root_decimal = str(int.from_bytes(poseidon_root, byteorder="big"))
+                ledger_payload["poseidon_root"] = poseidon_root_decimal
 
-            canonical_json = canonical_json_encode(ledger_payload)
-            entry_hash = blake3_hash([LEDGER_PREFIX, canonical_json.encode("utf-8")])
+            # Compute entry hash using canonical JSON
+            from protocol.hashes import LEDGER_PREFIX, blake3_hash, create_dual_root_commitment
+
+            if poseidon_root is not None:
+                # New format: dual-root commitment atomically binds BLAKE3 and Poseidon roots
+                entry_hash = create_dual_root_commitment(root_hash, poseidon_root)
+            else:
+                # Legacy format: hash of canonical JSON payload
+                canonical_json = canonical_json_encode(ledger_payload)
+                entry_hash = blake3_hash([LEDGER_PREFIX, canonical_json.encode("utf-8")])
 
             # Insert ledger entry
             cur.execute(
@@ -489,6 +509,7 @@ class StorageLayer:
                 canonicalization=canonicalization,
                 prev_entry_hash=prev_entry_hash,
                 entry_hash=entry_hash.hex(),
+                poseidon_root=poseidon_root_decimal,
             )
 
             # COMMIT TRANSACTION (explicit)

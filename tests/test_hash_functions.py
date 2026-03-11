@@ -6,11 +6,13 @@ import pytest
 
 from protocol.hashes import (
     blake3_hash,
+    create_dual_root_commitment,
     forest_root,
     hash_bytes,
     leaf_hash,
     merkle_root,
     node_hash,
+    parse_dual_root_commitment,
     record_key,
     shard_header_hash,
 )
@@ -269,3 +271,83 @@ def test_forest_root_invalid_hash_length():
 
     with pytest.raises(ValueError, match="must be 32 bytes"):
         forest_root(headers)
+
+
+# ---------------------------------------------------------------------------
+# Dual-root commitment tests
+# ---------------------------------------------------------------------------
+
+
+def test_create_dual_root_commitment_returns_32_bytes():
+    """Dual-root commitment must always be exactly 32 bytes."""
+    blake3_root = hash_bytes(b"blake3 shard root")
+    poseidon_root = hash_bytes(b"poseidon root as bytes")
+    result = create_dual_root_commitment(blake3_root, poseidon_root)
+    assert len(result) == 32
+
+
+def test_create_dual_root_commitment_deterministic():
+    """Same inputs must produce the same commitment."""
+    blake3_root = hash_bytes(b"blake3 shard root")
+    poseidon_root = hash_bytes(b"poseidon root as bytes")
+    assert create_dual_root_commitment(blake3_root, poseidon_root) == create_dual_root_commitment(
+        blake3_root, poseidon_root
+    )
+
+
+def test_create_dual_root_commitment_different_blake3_root():
+    """Changing the BLAKE3 root must change the commitment."""
+    poseidon_root = hash_bytes(b"poseidon root as bytes")
+    c1 = create_dual_root_commitment(hash_bytes(b"root_a"), poseidon_root)
+    c2 = create_dual_root_commitment(hash_bytes(b"root_b"), poseidon_root)
+    assert c1 != c2
+
+
+def test_create_dual_root_commitment_different_poseidon_root():
+    """Changing the Poseidon root must change the commitment."""
+    blake3_root = hash_bytes(b"blake3 shard root")
+    c1 = create_dual_root_commitment(blake3_root, hash_bytes(b"poseidon_a"))
+    c2 = create_dual_root_commitment(blake3_root, hash_bytes(b"poseidon_b"))
+    assert c1 != c2
+
+
+def test_create_dual_root_commitment_differs_from_single_root_hash():
+    """The dual commitment must not equal the BLAKE3 hash of either root alone."""
+    from protocol.hashes import LEDGER_PREFIX
+
+    blake3_root = hash_bytes(b"blake3 shard root")
+    poseidon_root = hash_bytes(b"poseidon root as bytes")
+    dual = create_dual_root_commitment(blake3_root, poseidon_root)
+    single = blake3_hash([LEDGER_PREFIX, blake3_root])
+    assert dual != single
+
+
+def test_create_dual_root_commitment_rejects_short_blake3_root():
+    """BLAKE3 root shorter than 32 bytes must raise ValueError."""
+    with pytest.raises(ValueError, match="32 bytes"):
+        create_dual_root_commitment(b"short", hash_bytes(b"poseidon"))
+
+
+def test_create_dual_root_commitment_rejects_short_poseidon_root():
+    """Poseidon root shorter than 32 bytes must raise ValueError."""
+    with pytest.raises(ValueError, match="32 bytes"):
+        create_dual_root_commitment(hash_bytes(b"blake3"), b"short")
+
+
+def test_parse_dual_root_commitment_round_trips():
+    """parse_dual_root_commitment must recover the original roots from 64-byte input."""
+    blake3_root = hash_bytes(b"blake3 shard root")
+    poseidon_root = hash_bytes(b"poseidon root as bytes")
+    serialized = blake3_root + poseidon_root
+    recovered_blake3, recovered_poseidon = parse_dual_root_commitment(serialized)
+    assert recovered_blake3 == blake3_root
+    assert recovered_poseidon == poseidon_root
+
+
+def test_parse_dual_root_commitment_rejects_wrong_length():
+    """Input that is not exactly 64 bytes must raise ValueError."""
+    with pytest.raises(ValueError, match="64 bytes"):
+        parse_dual_root_commitment(b"too short")
+
+    with pytest.raises(ValueError, match="64 bytes"):
+        parse_dual_root_commitment(b"x" * 65)

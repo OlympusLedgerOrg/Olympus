@@ -896,6 +896,14 @@ async def commit_artifact(
         # If PostgreSQL is configured, persist artifact durably
         if storage is not None and _signing_key is not None:
             try:
+                # Convert the normalized Poseidon root decimal string to bytes for the
+                # storage layer, which uses raw 32-byte big-endian encoding.
+                poseidon_root_bytes: bytes | None = None
+                if poseidon_root_normalized is not None:
+                    poseidon_root_bytes = int(poseidon_root_normalized).to_bytes(
+                        32, byteorder="big"
+                    )
+
                 root_hash, proof, header, signature, ledger_entry = storage.append_record(
                     shard_id=shard_id,
                     record_type="artifact",
@@ -904,6 +912,7 @@ async def commit_artifact(
                     value_hash=artifact_hash_bytes,
                     signing_key=_signing_key,
                     canonicalization=canonicalization,
+                    poseidon_root=poseidon_root_bytes,
                 )
 
                 # Store mapping from proof_id to record coordinates

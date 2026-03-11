@@ -7,6 +7,8 @@ ledger for recording document commitments.
 
 from datetime import datetime
 
+import pytest
+
 from protocol.canonical import CANONICAL_VERSION
 from protocol.canonical_json import canonical_json_bytes
 from protocol.canonicalizer import canonicalization_provenance
@@ -553,3 +555,187 @@ def test_ledger_deterministic_hash_for_same_data():
     )
 
     assert entry1.entry_hash == entry2.entry_hash
+
+
+# ---------------------------------------------------------------------------
+# Dual-root commitment ledger tests
+# ---------------------------------------------------------------------------
+
+_SAMPLE_BLAKE3_ROOT = "a" * 64  # 32-byte hex-encoded test value (all 0xaa bytes)
+# A valid BN128 field element (decimal string)
+_SAMPLE_POSEIDON_ROOT = "12345678901234567890"
+
+
+def _poseidon_root_bytes(decimal: str) -> bytes:
+    return int(decimal).to_bytes(32, byteorder="big")
+
+
+def test_ledger_append_with_poseidon_root_sets_field():
+    """Appending with poseidon_root must populate LedgerEntry.poseidon_root."""
+    ledger = Ledger()
+    entry = ledger.append(
+        record_hash="hash1",
+        shard_id="shard1",
+        shard_root=_SAMPLE_BLAKE3_ROOT,
+        canonicalization=_canonicalization(),
+        poseidon_root=_SAMPLE_POSEIDON_ROOT,
+    )
+    assert entry.poseidon_root == _SAMPLE_POSEIDON_ROOT
+
+
+def test_ledger_append_without_poseidon_root_field_is_none():
+    """Omitting poseidon_root must leave LedgerEntry.poseidon_root as None."""
+    ledger = Ledger()
+    entry = ledger.append(
+        record_hash="hash1",
+        shard_id="shard1",
+        shard_root=_SAMPLE_BLAKE3_ROOT,
+        canonicalization=_canonicalization(),
+    )
+    assert entry.poseidon_root is None
+
+
+def test_ledger_dual_root_entry_hash_uses_dual_commitment():
+    """Entry hash for dual-root entries must equal create_dual_root_commitment output."""
+    from protocol.hashes import create_dual_root_commitment
+
+    ledger = Ledger()
+    entry = ledger.append(
+        record_hash="hash1",
+        shard_id="shard1",
+        shard_root=_SAMPLE_BLAKE3_ROOT,
+        canonicalization=_canonicalization(),
+        poseidon_root=_SAMPLE_POSEIDON_ROOT,
+    )
+    expected = create_dual_root_commitment(
+        bytes.fromhex(_SAMPLE_BLAKE3_ROOT),
+        _poseidon_root_bytes(_SAMPLE_POSEIDON_ROOT),
+    ).hex()
+    assert entry.entry_hash == expected
+
+
+def test_ledger_dual_root_entry_hash_differs_from_legacy_hash():
+    """Dual-root entry hash must differ from the legacy canonical-JSON hash."""
+    ledger_dual = Ledger()
+    entry_dual = ledger_dual.append(
+        record_hash="hash1",
+        shard_id="shard1",
+        shard_root=_SAMPLE_BLAKE3_ROOT,
+        canonicalization=_canonicalization(),
+        poseidon_root=_SAMPLE_POSEIDON_ROOT,
+    )
+
+    ledger_legacy = Ledger()
+    entry_legacy = ledger_legacy.append(
+        record_hash="hash1",
+        shard_id="shard1",
+        shard_root=_SAMPLE_BLAKE3_ROOT,
+        canonicalization=_canonicalization(),
+    )
+
+    assert entry_dual.entry_hash != entry_legacy.entry_hash
+
+
+def test_ledger_verify_chain_valid_with_dual_root_entries():
+    """verify_chain must return True for a chain containing dual-root entries."""
+    ledger = Ledger()
+    ledger.append(
+        record_hash="hash1",
+        shard_id="shard1",
+        shard_root=_SAMPLE_BLAKE3_ROOT,
+        canonicalization=_canonicalization(),
+        poseidon_root=_SAMPLE_POSEIDON_ROOT,
+    )
+    ledger.append(
+        record_hash="hash2",
+        shard_id="shard1",
+        shard_root=_SAMPLE_BLAKE3_ROOT,
+        canonicalization=_canonicalization(),
+        poseidon_root=_SAMPLE_POSEIDON_ROOT,
+    )
+    assert ledger.verify_chain() is True
+
+
+def test_ledger_verify_chain_mixed_legacy_and_dual_root():
+    """verify_chain must handle chains with a mix of legacy and dual-root entries."""
+    ledger = Ledger()
+    # First entry: legacy (no poseidon_root)
+    ledger.append(
+        record_hash="hash1",
+        shard_id="shard1",
+        shard_root=_SAMPLE_BLAKE3_ROOT,
+        canonicalization=_canonicalization(),
+    )
+    # Second entry: new format (with poseidon_root)
+    ledger.append(
+        record_hash="hash2",
+        shard_id="shard1",
+        shard_root=_SAMPLE_BLAKE3_ROOT,
+        canonicalization=_canonicalization(),
+        poseidon_root=_SAMPLE_POSEIDON_ROOT,
+    )
+    assert ledger.verify_chain() is True
+
+
+def test_ledger_verify_chain_detects_tampered_poseidon_root():
+    """verify_chain must fail if poseidon_root is tampered with after commit."""
+    ledger = Ledger()
+    ledger.append(
+        record_hash="hash1",
+        shard_id="shard1",
+        shard_root=_SAMPLE_BLAKE3_ROOT,
+        canonicalization=_canonicalization(),
+        poseidon_root=_SAMPLE_POSEIDON_ROOT,
+    )
+    # Tamper with the poseidon_root after insertion
+    ledger.entries[0].poseidon_root = "99999999999999999999"
+    assert ledger.verify_chain() is False
+
+
+def test_ledger_append_with_poseidon_root_rejects_invalid_field_element():
+    """Appending with a poseidon_root outside the BN128 field must raise ValueError."""
+    from protocol.hashes import SNARK_SCALAR_FIELD
+
+    ledger = Ledger()
+    out_of_range = str(SNARK_SCALAR_FIELD)  # >= field prime -> invalid
+    with pytest.raises(ValueError, match="BN128 field element"):
+        ledger.append(
+            record_hash="hash1",
+            shard_id="shard1",
+            shard_root=_SAMPLE_BLAKE3_ROOT,
+            canonicalization=_canonicalization(),
+            poseidon_root=out_of_range,
+        )
+
+
+def test_ledger_entry_from_dict_backward_compatible_without_poseidon_root():
+    """LedgerEntry.from_dict must work for old entries that lack poseidon_root."""
+    data = {
+        "ts": "2024-01-01T00:00:00Z",
+        "record_hash": "hash1",
+        "shard_id": "shard1",
+        "shard_root": "root1",
+        "canonicalization": _canonicalization(),
+        "prev_entry_hash": "",
+        "entry_hash": "somehash",
+        "federation_quorum_certificate": None,
+    }
+    entry = LedgerEntry.from_dict(data)
+    assert entry.poseidon_root is None
+
+
+def test_ledger_entry_from_dict_with_poseidon_root():
+    """LedgerEntry.from_dict must preserve poseidon_root when present."""
+    data = {
+        "ts": "2024-01-01T00:00:00Z",
+        "record_hash": "hash1",
+        "shard_id": "shard1",
+        "shard_root": _SAMPLE_BLAKE3_ROOT,
+        "canonicalization": _canonicalization(),
+        "prev_entry_hash": "",
+        "entry_hash": "somehash",
+        "federation_quorum_certificate": None,
+        "poseidon_root": _SAMPLE_POSEIDON_ROOT,
+    }
+    entry = LedgerEntry.from_dict(data)
+    assert entry.poseidon_root == _SAMPLE_POSEIDON_ROOT
