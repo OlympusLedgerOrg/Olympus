@@ -15,8 +15,11 @@ import pytest
 
 from protocol.canonicalizer import (
     CANONICALIZER_VERSIONS,
+    ArtifactCanonicalizationError,
+    ArtifactIdempotencyError,
     CanonicalizationError,
     Canonicalizer,
+    UnsupportedMimeTypeError,
     process_artifact,
 )
 
@@ -197,27 +200,36 @@ class TestProcessArtifact:
         result = process_artifact(raw, "application/pdf")
         assert result["mode"] == "pdf_norm_pikepdf_v1"
 
-    def test_unknown_mime_type_preserved(self):
+    def test_unknown_mime_type_rejected(self):
         raw = b"arbitrary binary data"
-        result = process_artifact(raw, "application/octet-stream")
-        assert result["mode"] == "byte_preserved"
-        assert result["raw_hash"] == result["canonical_hash"]
+        with pytest.raises(UnsupportedMimeTypeError):
+            process_artifact(raw, "application/octet-stream")
 
     def test_witness_anchor_propagated(self):
         raw = json.dumps({"a": 1}).encode("utf-8")
         result = process_artifact(raw, "application/json", witness_anchor="anchor-123")
         assert result["witness_anchor"] == "anchor-123"
 
-    def test_invalid_json_falls_back(self):
+    def test_invalid_json_rejected(self):
         raw = b"not json at all"
-        result = process_artifact(raw, "application/json")
-        assert result["mode"] == "byte_preserved"
-        assert result["fallback_reason"] is not None
-        assert "canonical_error" in result["fallback_reason"]
+        with pytest.raises(ArtifactCanonicalizationError):
+            process_artifact(raw, "application/json")
+
+    def test_html_idempotency_violation_raises(self, monkeypatch):
+        raw = b"<html><body>ok</body></html>"
+
+        def bad_html(data: bytes) -> bytes:  # pragma: no cover - controlled monkeypatch
+            if data == raw:
+                return b"first"
+            return b"second"
+
+        monkeypatch.setattr(Canonicalizer, "html_v1", staticmethod(bad_html))
+        with pytest.raises(ArtifactIdempotencyError):
+            process_artifact(raw, "text/html")
 
     def test_lxml_version_included(self):
-        raw = b"test"
-        result = process_artifact(raw, "text/plain")
+        raw = b"<html><body>test</body></html>"
+        result = process_artifact(raw, "text/html")
         assert "lxml_pinned" in result
 
     def test_html_artifact(self):
@@ -278,6 +290,22 @@ class TestHtmlV1:
     def test_invalid_html_raises(self):
         with pytest.raises(CanonicalizationError, match="HTML Parse Failure"):
             Canonicalizer.html_v1(b"\xff\xfe not utf-8 not html \x00\x01")
+
+    def test_strips_event_handlers(self):
+        html = b"<html><body><a href='/' onclick='steal()'>x</a></body></html>"
+        result = Canonicalizer.html_v1(html)
+        assert b"onclick" not in result
+
+    def test_strips_javascript_urls(self):
+        html = b"<html><body><a href=' javascript:alert(1) '>x</a></body></html>"
+        result = Canonicalizer.html_v1(html)
+        assert b"javascript:" not in result
+
+    def test_removes_script_contents(self):
+        html = b"<html><body><script>alert('hi')</script><p>ok</p></body></html>"
+        result = Canonicalizer.html_v1(html)
+        assert b"alert" not in result
+        assert b"ok" in result
 
 
 # ---------------------------------------------------------------------------

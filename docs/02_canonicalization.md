@@ -88,7 +88,7 @@ result = process_artifact(raw_bytes, "application/json", witness_anchor="anchor-
 # }
 ```
 
-Unknown MIME types fall back to `byte_preserved` mode (raw bytes are hashed without transformation). Canonicalization errors also trigger fallback with a `fallback_reason` field.
+Unknown MIME types are rejected with `UnsupportedMimeTypeError`, and canonicalization failures raise explicit `ArtifactCanonicalizationError`/`ArtifactIdempotencyError` exceptions instead of silently falling back to raw bytes. Successful runs still include a `fallback_reason` field (always `null`) for bundle schema compatibility.
 
 ## Canonical JSON Encoding (`protocol/canonical_json.py`)
 

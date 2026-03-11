@@ -104,21 +104,6 @@ It **eliminates the need for it**.
 
 ---
 
-## Governance & Economics (High Level)
-
-- **One Verified Human = One Vote** (no pay-to-govern)
-- **Policy rules are versioned and ledger-committed**
-- **Revenue waterfall is transparent and provable**
-  - Ops (capped)
-  - Architect Vault (10%)
-  - Civic Fund (10%)
-  - R&D (capped)
-  - Remainder → Civic Fund
-
-No carve-outs. Same rules for everyone.
-
----
-
 ## Who This Is For
 
 - **Citizens** who want proof, not promises
@@ -131,16 +116,13 @@ No carve-outs. Same rules for everyone.
 
 ## Status
 
-Olympus is not a slide deck.
+The Olympus protocol implementation includes:
 
-It already includes:
 - A working Sharded Sparse Merkle Forest
 - Signed shard and forest headers
 - Proof generation and verification
 - API, database schema, and tests
 - Deterministic, auditable commit logic
-
-What remains is deployment, partnerships, and jurisdictional adoption—not core feasibility.
 
 ---
 
