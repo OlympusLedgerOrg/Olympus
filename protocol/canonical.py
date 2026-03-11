@@ -54,7 +54,7 @@ def normalize_whitespace(text: str) -> str:
 
     Steps applied:
     1. NFC normalization to a single canonical Unicode form.
-    2. Explicit replacement of residual NBSP-like characters not covered by NFC.
+    2. Explicit replacement of NBSP-like characters (which NFC preserves as semantically distinct).
     3. Collapse all remaining whitespace runs and strip leading/trailing whitespace.
 
     Args:
@@ -65,7 +65,7 @@ def normalize_whitespace(text: str) -> str:
     """
     # Step 1: NFC normalizes canonical-equivalent Unicode representations.
     text = unicodedata.normalize("NFC", text)
-    # Step 2: Map residual non-breaking space characters that NFC leaves intact.
+    # Step 2: Map non-breaking space characters (NFC preserves them as distinct).
     text = text.translate(_RESIDUAL_UNICODE_SPACES)
     # Step 3: Collapse all whitespace and strip.
     return " ".join(text.split())

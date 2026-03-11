@@ -59,5 +59,6 @@ def test_canonical_json_encode_decimal_roundtrip(value):
     """Finite Decimal values should round-trip through canonical JSON."""
     encoded = canonical_json_encode({"value": value})
     decoded = json.loads(encoded, parse_float=Decimal, parse_int=Decimal)["value"]
+    # Canonical JSON normalizes both +0 and -0 to 0.
     expected = Decimal("0") if value == 0 else value.normalize()
     assert decoded == expected

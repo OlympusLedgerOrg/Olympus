@@ -195,7 +195,10 @@ def _to_decimal(value: int | Decimal) -> Decimal:
         return value
     if isinstance(value, int):
         return Decimal(value)
-    raise ValueError("Invalid decimal value for canonical JSON")
+    raise ValueError(
+        "Only int and Decimal numeric values are allowed for canonical JSON, "
+        f"got {type(value).__name__}"
+    )
 
 
 def _format_fixed(digits: str, exponent: int) -> str:

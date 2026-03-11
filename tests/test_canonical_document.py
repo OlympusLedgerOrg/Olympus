@@ -63,6 +63,13 @@ def test_canonicalize_document_with_list():
     assert result["items"] == ["apple", "banana", "cherry", "café"]
 
 
+def test_canonicalize_document_normalizes_nested_list_dict_strings():
+    """String normalization applies recursively to dicts nested inside lists."""
+    doc = {"items": [{"name": "cafe\u0301"}]}
+    result = canonicalize_document(doc)
+    assert result["items"][0]["name"] == "café"
+
+
 def test_canonicalize_document_list_with_dicts():
     """Test canonicalization of lists containing dictionaries."""
     doc = {"people": [{"name": "Bob", "age": 25}, {"name": "Alice", "age": 30}]}
