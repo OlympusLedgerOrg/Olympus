@@ -18,7 +18,7 @@ from protocol.checkpoints import (
     verify_checkpoint,
     verify_checkpoint_chain,
 )
-from protocol.federation import FederationRegistry
+from protocol.federation import FederationNode, FederationRegistry
 from protocol.hashes import hash_bytes
 from protocol.merkle import ct_merkle_root, generate_consistency_proof
 from protocol.shards import get_signing_key_from_seed
@@ -217,6 +217,37 @@ def test_verify_checkpoint_invalid_signature(registry, signing_keys):
 
     checkpoint.federation_quorum_certificate["signatures"][0]["signature"] = "00"
     assert not verify_checkpoint(checkpoint, registry)
+
+
+def test_verify_checkpoint_uses_epoch_snapshot(registry, signing_keys):
+    """Verification should use the registry snapshot matching the certificate epoch."""
+    checkpoint = create_checkpoint(
+        sequence=0,
+        ledger_head_hash="abc123",
+        ledger_height=1,
+        registry=registry,
+        signing_keys=signing_keys,
+    )
+
+    advanced_registry = FederationRegistry(
+        nodes=tuple(
+            [
+                *registry.nodes,
+                FederationNode(
+                    node_id="olympus-node-4",
+                    pubkey=_test_signing_key(4).verify_key.encode(),
+                    endpoint="https://node4.olympus.org",
+                    operator="Regional Clerk",
+                    jurisdiction="region-d",
+                    status="active",
+                ),
+            ]
+        ),
+        epoch=1,
+        snapshots={0: registry},
+    )
+
+    assert verify_checkpoint(checkpoint, advanced_registry)
 
 
 def test_verify_checkpoint_tampered_content(registry, signing_keys):

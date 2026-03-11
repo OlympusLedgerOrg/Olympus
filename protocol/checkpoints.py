@@ -317,6 +317,14 @@ def verify_checkpoint_quorum_certificate(
     }
     if not required_fields.issubset(certificate):
         return False
+    try:
+        certificate_epoch = int(certificate["federation_epoch"])
+    except (TypeError, ValueError):
+        return False
+    try:
+        registry_snapshot = registry.get_snapshot(certificate_epoch)
+    except ValueError:
+        return False
     if certificate["checkpoint_hash"] != checkpoint.checkpoint_hash:
         return False
     if int(certificate["sequence"]) != checkpoint.sequence:
@@ -329,13 +337,13 @@ def verify_checkpoint_quorum_certificate(
         checkpoint.checkpoint_hash,
         checkpoint.sequence,
         checkpoint.ledger_height,
-        registry,
+        registry_snapshot,
     )
     if certificate["event_id"] != expected_event_id:
         return False
-    if int(certificate["federation_epoch"]) != registry.epoch:
+    if int(certificate["federation_epoch"]) != registry_snapshot.epoch:
         return False
-    validator_set_hash = registry.membership_hash()
+    validator_set_hash = registry_snapshot.membership_hash()
     if str(certificate["membership_hash"]) != validator_set_hash:
         return False
     if str(certificate["validator_set_hash"]) != validator_set_hash:
@@ -345,9 +353,9 @@ def verify_checkpoint_quorum_certificate(
         quorum_threshold = int(certificate["quorum_threshold"])
     except (TypeError, ValueError):
         return False
-    if validator_count != len(registry.active_nodes()):
+    if validator_count != len(registry_snapshot.active_nodes()):
         return False
-    if quorum_threshold != registry.quorum_threshold():
+    if quorum_threshold != registry_snapshot.quorum_threshold():
         return False
     if certificate.get("scheme") != "ed25519":
         return False
@@ -358,7 +366,7 @@ def verify_checkpoint_quorum_certificate(
     signer_bitmap = certificate.get("signer_bitmap")
     if not isinstance(signer_bitmap, str):
         return False
-    active_node_ids = sorted(node.node_id for node in registry.active_nodes())
+    active_node_ids = sorted(node.node_id for node in registry_snapshot.active_nodes())
     if len(signer_bitmap) != len(active_node_ids):
         return False
     if not all(bit in {"0", "1"} for bit in signer_bitmap):
@@ -387,7 +395,7 @@ def verify_checkpoint_quorum_certificate(
         if node_id in unique_verified_nodes:
             return False
         try:
-            node = registry.get_node(node_id)
+            node = registry_snapshot.get_node(node_id)
         except ValueError:
             return False
         if not node.active:
@@ -398,7 +406,7 @@ def verify_checkpoint_quorum_certificate(
             ledger_height=checkpoint.ledger_height,
             timestamp=checkpoint.timestamp,
             node_id=node_id,
-            registry=registry,
+            registry=registry_snapshot,
         )
         if msg.domain != CHECKPOINT_DOMAIN_TAG:
             return False
@@ -418,7 +426,7 @@ def verify_checkpoint_quorum_certificate(
         if not verified:
             return False
         unique_verified_nodes.add(node_id)
-    return len(unique_verified_nodes) >= registry.quorum_threshold()
+    return len(unique_verified_nodes) >= registry_snapshot.quorum_threshold()
 
 
 def create_checkpoint(
