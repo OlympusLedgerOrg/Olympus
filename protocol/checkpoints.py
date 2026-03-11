@@ -23,6 +23,7 @@ from .hashes import CHECKPOINT_PREFIX, HASH_SEPARATOR, hash_bytes
 from .timestamps import current_timestamp
 
 
+# Domain tag for federation vote messages (distinct from CHECKPOINT_PREFIX hashes).
 CHECKPOINT_DOMAIN_TAG = "OLY:CHECKPOINT-VOTE:V1"
 
 
@@ -241,8 +242,9 @@ def build_checkpoint_quorum_certificate(
     """Build a quorum certificate for a federation-signed checkpoint.
 
     The certificate includes both membership_hash and validator_set_hash to
-    mirror federation header certificates. Both values are derived from the
-    active membership hash for compatibility with downstream verifiers.
+    mirror federation header certificates. membership_hash matches the
+    registry commitment used by federation verifiers, while validator_set_hash
+    preserves parity with header certificate schemas consumed by ledger tooling.
     """
     valid_signatures = verify_federated_checkpoint_signatures(
         checkpoint_hash=checkpoint_hash,
@@ -464,7 +466,10 @@ def create_checkpoint(
         raise ValueError(f"Ledger height must be non-negative, got {ledger_height}")
     if sequence == 0:
         if previous_checkpoint_hash:
-            raise ValueError("Genesis checkpoints must not include previous_checkpoint_hash")
+            raise ValueError(
+                "Genesis checkpoints (sequence=0) must not include previous_checkpoint_hash "
+                "because there is no earlier checkpoint to reference"
+            )
         if consistency_proof:
             raise ValueError(
                 "Genesis checkpoints (sequence=0) must not include a consistency proof "
@@ -478,7 +483,7 @@ def create_checkpoint(
     if signatures and signing_keys:
         raise ValueError(
             "Provide either signing_keys (local signing) or signatures "
-            "(pre-signed certificates), not both"
+            "(externally signed), not both"
         )
     if signatures is None and signing_keys is None:
         raise ValueError(

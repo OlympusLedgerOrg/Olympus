@@ -278,7 +278,7 @@ def test_verify_checkpoint_chain_valid(registry, signing_keys):
 
 def test_verify_checkpoint_chain_invalid_genesis(registry, signing_keys):
     """Test that non-empty previous_checkpoint_hash in genesis is rejected."""
-    with pytest.raises(ValueError, match="Genesis checkpoints must not include"):
+    with pytest.raises(ValueError, match="Genesis checkpoints .* previous_checkpoint_hash"):
         create_checkpoint(
             sequence=0,
             ledger_head_hash="abc123",
@@ -333,7 +333,7 @@ def test_verify_checkpoint_chain_non_monotonic_sequence(registry, signing_keys):
         previous=checkpoint2,
     )
 
-    # Intentional sequence ordering: 0, 2, 1 to exercise non-monotonic detection.
+    # Intentional sequence ordering: 0, 2, 1 to detect non-monotonic sequences.
     assert not verify_checkpoint_chain([checkpoint1, checkpoint2, checkpoint3], registry)
 
 
