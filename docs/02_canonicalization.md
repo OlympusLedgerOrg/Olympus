@@ -200,7 +200,7 @@ No secret keys or proprietary algorithms are required for verification.
 
 ## Canonicalization Rules Summary
 
-- Whitespace normalization (Unicode NFC + residual NBSP mapping + collapse)
+- Whitespace normalization (Unicode NFC, then residual NBSP mapping, then collapse)
 - Consistent encoding (UTF-8)
 - Unicode NFC normalization (for JSON/HTML content)
 - Deterministic ordering of keys and attributes

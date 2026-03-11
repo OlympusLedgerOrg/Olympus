@@ -54,7 +54,7 @@ def normalize_whitespace(text: str) -> str:
 
     Steps applied:
     1. NFC normalization to a single canonical Unicode form.
-    2. Explicit replacement of residual NBSP-like characters not covered by NFKC.
+    2. Explicit replacement of residual NBSP-like characters not covered by NFC.
     3. Collapse all remaining whitespace runs and strip leading/trailing whitespace.
 
     Args:
@@ -65,7 +65,7 @@ def normalize_whitespace(text: str) -> str:
     """
     # Step 1: NFC normalizes canonical-equivalent Unicode representations.
     text = unicodedata.normalize("NFC", text)
-    # Step 2: Map residual non-breaking space characters that NFKC leaves intact.
+    # Step 2: Map residual non-breaking space characters that NFC leaves intact.
     text = text.translate(_RESIDUAL_UNICODE_SPACES)
     # Step 3: Collapse all whitespace and strip.
     return " ".join(text.split())
@@ -94,6 +94,9 @@ def canonicalize_document(doc: dict[str, Any]) -> dict[str, Any]:
         if isinstance(value, str):
             return normalize_whitespace(value)
         return value
+
+    if any(not isinstance(key, str) for key in doc.keys()):
+        raise ValueError("Document keys must be strings")
 
     canonical: dict[str, Any] = {}
     for key in sorted(doc.keys()):

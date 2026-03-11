@@ -17,7 +17,7 @@ cross-language divergence:
 
 import math
 import unicodedata
-from decimal import Decimal, InvalidOperation
+from decimal import Decimal
 from json.encoder import py_encode_basestring_ascii
 from typing import Any
 
@@ -195,10 +195,7 @@ def _to_decimal(value: int | Decimal) -> Decimal:
         return value
     if isinstance(value, int):
         return Decimal(value)
-    try:
-        return Decimal(value)
-    except InvalidOperation as exc:  # pragma: no cover - defensive
-        raise ValueError("Invalid decimal value for canonical JSON") from exc
+    raise ValueError("Invalid decimal value for canonical JSON")
 
 
 def _format_fixed(digits: str, exponent: int) -> str:

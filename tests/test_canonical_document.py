@@ -96,6 +96,12 @@ def test_canonicalize_document_rejects_non_dict():
         canonicalize_document(42)
 
 
+def test_canonicalize_document_rejects_non_string_keys():
+    """Document keys must be strings for deterministic canonicalization."""
+    with pytest.raises(ValueError, match="keys must be strings"):
+        canonicalize_document({"ok": 1, 2: "bad"})
+
+
 def test_canonicalize_document_empty_dict():
     """Test canonicalization of empty dictionary."""
     doc = {}
