@@ -154,12 +154,17 @@ class MerkleTree:
         """Get the Merkle root hash (alias for get_root)."""
         return self.get_root()
 
-    def generate_proof(self, leaf_index: int) -> MerkleProof:
+    def generate_proof(self, leaf_index: int, epoch: int = 0) -> MerkleProof:
         """
         Generate inclusion proof for a leaf.
 
         Args:
             leaf_index: Index of leaf to prove
+            epoch: Logical ledger epoch at proof generation time.  Pass the
+                current epoch from the enclosing ledger/shard context so that
+                proofs can be tied to a specific epoch for key-rotation and
+                registry-change detection.  Defaults to 0 when epoch tracking
+                is not required at this layer.
 
         Returns:
             Merkle proof
@@ -201,6 +206,7 @@ class MerkleTree:
             root_hash=self._root_node.hash,
             proof_version=PROOF_VERSION,
             tree_version=MERKLE_VERSION,
+            epoch=epoch,
             tree_size=len(self.leaves),
         )
 
@@ -260,6 +266,19 @@ def deserialize_merkle_proof(proof_data: dict[str, Any]) -> MerkleProof:
             (bytes.fromhex(sibling_hash_hex), "right" if normalized_flag else "left")
         )
 
+    try:
+        epoch_val = int(proof_data.get("epoch", 0))
+    except (TypeError, ValueError) as exc:
+        raise ValueError(
+            f"Malformed proof: 'epoch' must be an integer, got {proof_data.get('epoch')!r}"
+        ) from exc
+    try:
+        tree_size_val = int(proof_data.get("tree_size", 0))
+    except (TypeError, ValueError) as exc:
+        raise ValueError(
+            f"Malformed proof: 'tree_size' must be an integer, got {proof_data.get('tree_size')!r}"
+        ) from exc
+
     return MerkleProof(
         leaf_hash=bytes.fromhex(str(proof_data["leaf_hash"])),
         leaf_index=int(proof_data["leaf_index"]),
@@ -267,8 +286,8 @@ def deserialize_merkle_proof(proof_data: dict[str, Any]) -> MerkleProof:
         root_hash=bytes.fromhex(str(proof_data["root_hash"])),
         proof_version=str(proof_data.get("proof_version", PROOF_VERSION)),
         tree_version=str(proof_data.get("tree_version", MERKLE_VERSION)),
-        epoch=int(proof_data.get("epoch", 0)),
-        tree_size=int(proof_data.get("tree_size", 0)),
+        epoch=epoch_val,
+        tree_size=tree_size_val,
     )
 
 

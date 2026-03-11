@@ -106,11 +106,12 @@ def merkle_proof_command(args):
     # [hash, is_right] pairs.  deserialize_merkle_proof handles both via its
     # existing normalisation logic for the [hash, is_right] form; the
     # dict-of-{hash, position} form used by this verifier is normalized here.
-    if proof_data.get("siblings") and isinstance(proof_data["siblings"][0], dict):
+    siblings = proof_data.get("siblings") or []
+    if siblings and isinstance(siblings[0], dict):
         # Convert {"hash": ..., "position": ...} → [hash_hex, position]
         proof_data = dict(proof_data)
         proof_data["siblings"] = [
-            [s["hash"], s["position"]] for s in proof_data["siblings"]
+            [s["hash"], s["position"]] for s in siblings
         ]
     proof = deserialize_merkle_proof(proof_data)
 
