@@ -5,6 +5,8 @@ import (
 	"bytes"
 	"encoding/hex"
 	"errors"
+	"fmt"
+	"math/big"
 	"strings"
 
 	"github.com/zeebo/blake3"
@@ -133,4 +135,44 @@ func ComputeLedgerEntryHash(canonicalPayloadBytes []byte) []byte {
 	buf.WriteString(LedgerPrefix)
 	buf.Write(canonicalPayloadBytes)
 	return ComputeBlake3(buf.Bytes())
+}
+
+// ComputeDualCommitment computes the dual-root commitment hash from BLAKE3 and Poseidon roots.
+//
+// Formula:
+//
+//	BLAKE3(OLY:LEDGER:V1 | "|" | blake3RootBytes | "|" | poseidonRoot32BEBytes)
+//
+// where poseidonRoot32BEBytes is the 32-byte big-endian encoding of the BN128 field
+// element expressed as a decimal string.
+//
+// This matches the Python reference:
+//
+//	blake3_hash([LEDGER_PREFIX, SEP, blake3_root_bytes, SEP, poseidon_root_32be])
+func ComputeDualCommitment(blake3RootHex string, poseidonRootDecimal string) (string, error) {
+	blake3RootBytes, err := hex.DecodeString(blake3RootHex)
+	if err != nil {
+		return "", fmt.Errorf("invalid blake3_root hex: %w", err)
+	}
+
+	poseidonInt, ok := new(big.Int).SetString(poseidonRootDecimal, 10)
+	if !ok {
+		return "", fmt.Errorf("invalid poseidon_root decimal: %s", poseidonRootDecimal)
+	}
+
+	// Encode as 32-byte big-endian
+	poseidonBytes := make([]byte, 32)
+	poseidonBigEndian := poseidonInt.Bytes()
+	if len(poseidonBigEndian) > 32 {
+		return "", fmt.Errorf("poseidon_root exceeds 32 bytes")
+	}
+	copy(poseidonBytes[32-len(poseidonBigEndian):], poseidonBigEndian)
+
+	var buf bytes.Buffer
+	buf.WriteString(LedgerPrefix)
+	buf.WriteString(HashSeparator)
+	buf.Write(blake3RootBytes)
+	buf.WriteString(HashSeparator)
+	buf.Write(poseidonBytes)
+	return hex.EncodeToString(ComputeBlake3(buf.Bytes())), nil
 }

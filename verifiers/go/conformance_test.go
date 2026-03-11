@@ -28,12 +28,13 @@ func canonicalizerVectorFile(t *testing.T) string {
 // --- JSON structures for parsing vectors.json ---
 
 type Vectors struct {
-	Blake3Raw          []Blake3RawVec          `json:"blake3_raw"`
-	MerkleLeafHash     []LeafHashVec           `json:"merkle_leaf_hash"`
-	MerkleParentHash   []ParentHashVec         `json:"merkle_parent_hash"`
-	MerkleRoot         []MerkleRootVec         `json:"merkle_root"`
-	MerkleProof        []MerkleProofVec        `json:"merkle_proof"`
-	LedgerEntryHash    []LedgerEntryHashVec    `json:"ledger_entry_hash"`
+	Blake3Raw           []Blake3RawVec           `json:"blake3_raw"`
+	MerkleLeafHash      []LeafHashVec            `json:"merkle_leaf_hash"`
+	MerkleParentHash    []ParentHashVec          `json:"merkle_parent_hash"`
+	MerkleRoot          []MerkleRootVec          `json:"merkle_root"`
+	MerkleProof         []MerkleProofVec         `json:"merkle_proof"`
+	LedgerEntryHash     []LedgerEntryHashVec     `json:"ledger_entry_hash"`
+	DualRootCommitment  []DualRootCommitmentVec  `json:"dual_root_commitment"`
 }
 
 type Blake3RawVec struct {
@@ -79,6 +80,37 @@ type LedgerEntryHashVec struct {
 	Description        string `json:"description"`
 	CanonicalPayloadHex string `json:"canonical_payload_hex"`
 	EntryHash          string `json:"entry_hash"`
+}
+
+// Blake3ProofVec mirrors the blake3_proof sub-object in dual_root_commitment vectors.
+type Blake3ProofVec struct {
+	LeafHash  string       `json:"leaf_hash"`
+	LeafIndex int          `json:"leaf_index"`
+	Siblings  []SiblingVec `json:"siblings"`
+	RootHash  string       `json:"root_hash"`
+}
+
+// DualRootCommitmentVec represents one dual-root commitment conformance test case.
+//
+// Fields:
+//   - DocumentPartsUTF8: ordered list of UTF-8 document sections used to build both trees.
+//   - Blake3Root: BLAKE3 Merkle root (hex) of the leaf-hashed document parts.
+//   - PoseidonRoot: Poseidon Merkle root (decimal BN128 field element string).
+//   - DualCommitment: BLAKE3(OLY:LEDGER:V1 | "|" | blake3_root_bytes | "|" | poseidon_root_32be).
+//   - Blake3Proof: optional BLAKE3 Merkle inclusion proof for a specific leaf.
+//   - ExpectedValid: true iff both roots are consistent with the same document parts.
+//   - ExpectedBlake3Consistent: true iff the stored blake3_root matches what is recomputed
+//     from document_parts_utf8.  Go/Rust/JS verifiers use this field; Python checks the full
+//     ExpectedValid (which also covers Poseidon consistency).
+type DualRootCommitmentVec struct {
+	Description              string          `json:"description"`
+	DocumentPartsUTF8        []string        `json:"document_parts_utf8"`
+	Blake3Root               string          `json:"blake3_root"`
+	PoseidonRoot             string          `json:"poseidon_root"`
+	DualCommitment           string          `json:"dual_commitment"`
+	Blake3Proof              *Blake3ProofVec `json:"blake3_proof"`
+	ExpectedValid            bool            `json:"expected_valid"`
+	ExpectedBlake3Consistent bool            `json:"expected_blake3_consistent"`
 }
 
 type CanonicalizerHashVec struct {
@@ -254,6 +286,79 @@ func TestConformanceLedgerEntryHash(t *testing.T) {
 			got := hex.EncodeToString(ComputeLedgerEntryHash(payloadBytes))
 			if got != vec.EntryHash {
 				t.Errorf("ledger_entry_hash:\n  got  %s\n  want %s", got, vec.EntryHash)
+			}
+		})
+	}
+}
+
+// TestConformanceDualRootCommitment validates the dual-root commitment formula and
+// BLAKE3 root consistency against the test vectors in vectors.json.
+//
+// For each vector this test:
+//  1. Recomputes the BLAKE3 Merkle root from document_parts_utf8 and checks it
+//     matches blake3_root iff expected_blake3_consistent is true.
+//  2. Recomputes the dual_commitment from the stored blake3_root + poseidon_root
+//     and verifies it matches the committed dual_commitment value.
+//  3. If a blake3_proof is present, verifies it is valid against the stored root.
+//
+// Note: Poseidon root consistency (expected_valid) is only checked by the Python
+// conformance test, which has access to the full Poseidon hash implementation.
+func TestConformanceDualRootCommitment(t *testing.T) {
+	vectors := loadVectors(t)
+	for _, vec := range vectors.DualRootCommitment {
+		vec := vec // capture range variable
+		t.Run(vec.Description, func(t *testing.T) {
+			// 1. Recompute BLAKE3 root from document parts
+			parts := make([][]byte, len(vec.DocumentPartsUTF8))
+			for i, s := range vec.DocumentPartsUTF8 {
+				parts[i] = []byte(s)
+			}
+			computedRoot, err := ComputeMerkleRoot(parts)
+			if err != nil {
+				t.Fatalf("ComputeMerkleRoot error: %v", err)
+			}
+			blake3Consistent := computedRoot == vec.Blake3Root
+			if blake3Consistent != vec.ExpectedBlake3Consistent {
+				t.Errorf(
+					"expected_blake3_consistent=%v but computed root match=%v\n  computed: %s\n  vector:   %s",
+					vec.ExpectedBlake3Consistent, blake3Consistent, computedRoot, vec.Blake3Root,
+				)
+			}
+
+			// 2. Verify dual_commitment formula using the stored blake3_root + poseidon_root
+			gotDual, err := ComputeDualCommitment(vec.Blake3Root, vec.PoseidonRoot)
+			if err != nil {
+				t.Fatalf("ComputeDualCommitment error: %v", err)
+			}
+			if gotDual != vec.DualCommitment {
+				t.Errorf(
+					"dual_commitment mismatch:\n  got  %s\n  want %s",
+					gotDual, vec.DualCommitment,
+				)
+			}
+
+			// 3. Verify blake3_proof when present
+			if vec.Blake3Proof != nil {
+				leafHashBytes, err := hex.DecodeString(vec.Blake3Proof.LeafHash)
+				if err != nil {
+					t.Fatalf("bad blake3_proof leaf_hash: %v", err)
+				}
+				siblings := make([]MerkleSibling, len(vec.Blake3Proof.Siblings))
+				for i, s := range vec.Blake3Proof.Siblings {
+					siblings[i] = MerkleSibling{Hash: s.Hash, Position: s.Position}
+				}
+				proof := &MerkleProof{
+					LeafHash: leafHashBytes,
+					Siblings: siblings,
+					RootHash: vec.Blake3Proof.RootHash,
+				}
+				valid, err := VerifyMerkleProof(proof)
+				if err != nil {
+					t.Fatalf("VerifyMerkleProof error: %v", err)
+				}
+				if !valid {
+					t.Errorf("blake3_proof verification failed for %q", vec.Description)
+				}
 			}
 		})
 	}

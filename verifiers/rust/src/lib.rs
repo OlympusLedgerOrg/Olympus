@@ -134,6 +134,27 @@ pub fn compute_ledger_entry_hash(canonical_payload_bytes: &[u8]) -> [u8; 32] {
     compute_blake3(&combined)
 }
 
+/// Compute the dual-root commitment hash from BLAKE3 and Poseidon roots.
+///
+/// Formula:
+///   BLAKE3(OLY:LEDGER:V1 | "|" | blake3_root_bytes | "|" | poseidon_root_32be_bytes)
+///
+/// where `poseidon_root_32be` is the 32-byte big-endian encoding of the BN128 field element.
+///
+/// This matches the Python reference:
+///   `blake3_hash([LEDGER_PREFIX, SEP, blake3_root_bytes, SEP, poseidon_root_32be])`
+pub fn compute_dual_commitment(blake3_root: &[u8; 32], poseidon_root_32be: &[u8; 32]) -> [u8; 32] {
+    let mut combined = Vec::with_capacity(
+        LEDGER_PREFIX.len() + HASH_SEPARATOR.len() + 32 + HASH_SEPARATOR.len() + 32,
+    );
+    combined.extend_from_slice(LEDGER_PREFIX);
+    combined.extend_from_slice(HASH_SEPARATOR);
+    combined.extend_from_slice(blake3_root);
+    combined.extend_from_slice(HASH_SEPARATOR);
+    combined.extend_from_slice(poseidon_root_32be);
+    compute_blake3(&combined)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -345,6 +366,86 @@ mod tests {
             let payload_bytes = hex::decode(payload_hex).expect("payload hex must decode");
             let got = hex::encode(compute_ledger_entry_hash(&payload_bytes));
             assert_eq!(got, *expected_hash, "ledger_entry_hash mismatch");
+        }
+    }
+
+    #[test]
+    fn conformance_dual_root_commitment() {
+        // Dual-root commitment conformance vectors generated from the Python reference
+        // implementation. Each case stores:
+        //   blake3_root_hex      : BLAKE3 Merkle root of the document parts
+        //   poseidon_root_32be   : Poseidon root encoded as 32-byte big-endian hex
+        //   expected_dual        : BLAKE3(OLY:LEDGER:V1 | "|" | blake3_root | "|" | poseidon_root_32be)
+        //   expected_blake3_consistent: whether blake3_root matches recomputed root from parts
+        //   document_parts       : UTF-8 document sections used to rebuild the BLAKE3 root
+        //
+        // Note: Poseidon root consistency (expected_valid) requires the full Poseidon hash
+        // implementation and is validated by the Python conformance test only.
+        struct DualRootCommitmentVector {
+            description: &'static str,
+            document_parts: &'static [&'static str],
+            blake3_root_hex: &'static str,
+            poseidon_root_32be_hex: &'static str,
+            expected_dual: &'static str,
+            expected_blake3_consistent: bool,
+        }
+        let cases: &[DualRootCommitmentVector] = &[
+            DualRootCommitmentVector {
+                description: "Valid: both roots from same 3-section document",
+                document_parts: &["section A", "section B", "section C"],
+                blake3_root_hex: "dc401f6a79485ad46fdfa4b7a1a5a33a4042f93b967dc73073889ebf49e7235f",
+                poseidon_root_32be_hex: "25829d08bbc54f0315905794aff98d622bfa371fcac5722b14dbf4a259271471",
+                expected_dual: "7bda8702a6b5ebe60ed7f22fb25cccf886fb0ccdf308c77433b6db0f883dc132",
+                expected_blake3_consistent: true,
+            },
+            DualRootCommitmentVector {
+                description: "Invalid: Poseidon root from unrelated document",
+                document_parts: &["section A", "section B", "section C"],
+                blake3_root_hex: "dc401f6a79485ad46fdfa4b7a1a5a33a4042f93b967dc73073889ebf49e7235f",
+                poseidon_root_32be_hex: "08ce2263d65d7ea15782e3ef9029a934275e4be7b51a35e49a1ad74be1d934c1",
+                expected_dual: "0a7509eb8de93a3ccb86a9a9afc439b99fba7ab27c1f3b6682b6325410d06de7",
+                expected_blake3_consistent: true,
+            },
+            DualRootCommitmentVector {
+                description: "Edge: single-leaf document",
+                document_parts: &["minimal"],
+                blake3_root_hex: "cf57382d603eef611238e86c5d0fc6175326570ecfa4d1a6445d65f8d0b40d7f",
+                poseidon_root_32be_hex: "2c44f64b791f77e8993f0870b1cc451b02dba8139b2ffba6e58ae15d224394de",
+                expected_dual: "cbf457fe5977eac071d9509ca2ab6cf161850081d7079b0531e018e1cd626021",
+                expected_blake3_consistent: true,
+            },
+            DualRootCommitmentVector {
+                description: "Malformed: corrupted BLAKE3 root",
+                document_parts: &["section A", "section B", "section C"],
+                blake3_root_hex: "deadbeefa0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0",
+                poseidon_root_32be_hex: "25829d08bbc54f0315905794aff98d622bfa371fcac5722b14dbf4a259271471",
+                expected_dual: "8b4a68c81726cc105cca2eddfaa3c382c7aef6aa08f131888b87778b96b3735d",
+                expected_blake3_consistent: false,
+            },
+        ];
+
+        for case in cases {
+            // 1. Verify the dual_commitment formula
+            let blake3_root_bytes = hex::decode(case.blake3_root_hex).expect("blake3_root hex");
+            let poseidon_bytes = hex::decode(case.poseidon_root_32be_hex).expect("poseidon hex");
+            let blake3_arr: [u8; 32] = blake3_root_bytes.try_into().expect("32 bytes");
+            let pos_arr: [u8; 32] = poseidon_bytes.try_into().expect("32 bytes");
+            let got_dual = hex::encode(compute_dual_commitment(&blake3_arr, &pos_arr));
+            assert_eq!(
+                got_dual, case.expected_dual,
+                "dual_commitment formula mismatch for {:?}",
+                case.description,
+            );
+
+            // 2. Verify BLAKE3 root consistency with document parts
+            let leaves: Vec<Vec<u8>> = case.document_parts.iter().map(|s| s.as_bytes().to_vec()).collect();
+            let computed_root = compute_merkle_root(&leaves).expect("merkle root");
+            let blake3_consistent = computed_root == case.blake3_root_hex;
+            assert_eq!(
+                blake3_consistent, case.expected_blake3_consistent,
+                "expected_blake3_consistent mismatch for {:?}: computed={}, vector={}",
+                case.description, computed_root, case.blake3_root_hex,
+            );
         }
     }
 }

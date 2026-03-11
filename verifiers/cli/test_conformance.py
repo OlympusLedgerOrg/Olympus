@@ -16,13 +16,21 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).parent.parent.parent
 sys.path.insert(0, str(REPO_ROOT))
 
-from protocol.hashes import HASH_SEPARATOR, LEDGER_PREFIX, NODE_PREFIX, blake3_hash
+from protocol.canonical import normalize_whitespace
+from protocol.hashes import (
+    HASH_SEPARATOR,
+    LEDGER_PREFIX,
+    NODE_PREFIX,
+    blake3_hash,
+    blake3_to_field_element,
+)
 from protocol.merkle import (
     MerkleTree,
     deserialize_merkle_proof,
     merkle_leaf_hash,
     verify_proof,
 )
+from protocol.poseidon_tree import PoseidonMerkleTree
 
 
 VECTORS_PATH = Path(__file__).parent.parent / "test_vectors" / "vectors.json"
@@ -137,6 +145,88 @@ def test_ledger_entry_hash(vectors: dict) -> None:
     print(f"  ✓ ledger_entry_hash: {len(vectors['ledger_entry_hash'])} vectors")
 
 
+def _compute_dual_commitment(blake3_root_hex: str, poseidon_root_decimal: str) -> str:
+    """Compute the dual-root commitment hash.
+
+    Formula: BLAKE3(OLY:LEDGER:V1 | "|" | blake3_root_bytes | "|" | poseidon_root_bytes)
+    where poseidon_root_bytes is the 32-byte big-endian encoding of the decimal integer.
+    """
+    sep = HASH_SEPARATOR.encode("utf-8")
+    b3_bytes = bytes.fromhex(blake3_root_hex)
+    pos_bytes = int(poseidon_root_decimal).to_bytes(32, byteorder="big")
+    return blake3_hash([LEDGER_PREFIX, sep, b3_bytes, sep, pos_bytes]).hex()
+
+
+def test_dual_root_commitment(vectors: dict) -> None:
+    """Test dual-root commitment validation vectors.
+
+    Each vector stores document parts plus the expected BLAKE3 root, Poseidon root,
+    and the combined dual commitment.  The test verifies:
+
+    1. The BLAKE3 Merkle root recomputed from document_parts_utf8 matches blake3_root
+       (iff expected_blake3_consistent is true).
+    2. The Poseidon Merkle root recomputed from document_parts_utf8 matches poseidon_root
+       (iff expected_valid is true).
+    3. The dual_commitment matches the formula:
+       BLAKE3(OLY:LEDGER:V1 | "|" | blake3_root_bytes | "|" | poseidon_root_32be_bytes).
+    4. If a blake3_proof is provided, it verifies correctly against the stored blake3_root.
+
+    Leaf inputs for the BLAKE3 Merkle tree are canonical section bytes (whitespace-
+    normalized UTF-8), passed directly to :class:`~protocol.merkle.MerkleTree` without
+    pre-hashing.  This matches the behaviour of :func:`ComputeMerkleRoot` in the Go,
+    Rust, and JavaScript verifiers.
+    """
+    for vec in vectors["dual_root_commitment"]:
+        desc = vec["description"]
+        parts = vec["document_parts_utf8"]
+
+        # 1. Verify dual_commitment formula is always correct as stored
+        got_dual = _compute_dual_commitment(vec["blake3_root"], vec["poseidon_root"])
+        assert got_dual == vec["dual_commitment"], (
+            f"dual_commitment formula mismatch for {desc!r}: got {got_dual}, want {vec['dual_commitment']}"
+        )
+
+        # 2. Recompute BLAKE3 root from document parts using canonical section bytes
+        # (whitespace-normalized UTF-8) passed directly to MerkleTree – no pre-hashing.
+        canonical_sections = [normalize_whitespace(p).encode("utf-8") for p in parts]
+        tree = MerkleTree(canonical_sections)
+        computed_blake3_root = tree.get_root().hex()
+
+        blake3_matches = computed_blake3_root == vec["blake3_root"]
+        assert blake3_matches == vec["expected_blake3_consistent"], (
+            f"expected_blake3_consistent={vec['expected_blake3_consistent']} "
+            f"but blake3 match={blake3_matches} for {desc!r}"
+        )
+
+        # 3. Recompute Poseidon root and verify full expected_valid
+        pos_leaves = [int(blake3_to_field_element(s)) for s in canonical_sections]
+        pos_tree = PoseidonMerkleTree(pos_leaves, depth=4)
+        computed_poseidon_root = pos_tree.get_root()
+
+        poseidon_matches = computed_poseidon_root == vec["poseidon_root"]
+        is_valid = blake3_matches and poseidon_matches
+        assert is_valid == vec["expected_valid"], (
+            f"expected_valid={vec['expected_valid']} but full check={is_valid} for {desc!r}"
+        )
+
+        # 4. Verify blake3_proof when present
+        if vec.get("blake3_proof") is not None:
+            proof_data = {
+                "leaf_hash": vec["blake3_proof"]["leaf_hash"],
+                "leaf_index": vec["blake3_proof"]["leaf_index"],
+                "siblings": [
+                    [s["hash"], s["position"]] for s in vec["blake3_proof"]["siblings"]
+                ],
+                "root_hash": vec["blake3_proof"]["root_hash"],
+            }
+            proof = deserialize_merkle_proof(proof_data)
+            assert verify_proof(proof), (
+                f"blake3_proof verification failed for {desc!r}"
+            )
+
+    print(f"  ✓ dual_root_commitment: {len(vectors['dual_root_commitment'])} vectors")
+
+
 def main() -> None:
     print("Running Python conformance tests against vectors.json\n")
     vectors = load_vectors()
@@ -147,6 +237,7 @@ def main() -> None:
     test_merkle_proof(vectors)
     test_canonicalizer_hash_vectors()
     test_ledger_entry_hash(vectors)
+    test_dual_root_commitment(vectors)
     print("\n✓ All Python conformance tests passed!")
 
 

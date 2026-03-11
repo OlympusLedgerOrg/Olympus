@@ -1775,5 +1775,146 @@
       },
       "hash": "3ae8c0a8a49facc64d67adba15901af53d01c7b50652024d41f51358588f23b5"
     }
+  ],
+  "dual_root_commitment": [
+    {
+      "description": "Valid: both BLAKE3 and Poseidon roots derived from the same 3-section document",
+      "document_parts_utf8": [
+        "section A",
+        "section B",
+        "section C"
+      ],
+      "blake3_root": "dc401f6a79485ad46fdfa4b7a1a5a33a4042f93b967dc73073889ebf49e7235f",
+      "poseidon_root": "16966349325632632397312376922088694495392670393893196781525891005049137992817",
+      "dual_commitment": "7bda8702a6b5ebe60ed7f22fb25cccf886fb0ccdf308c77433b6db0f883dc132",
+      "blake3_proof": {
+        "leaf_hash": "e284fdc2ac4d3399fbb88862a2f227c4fe83f4a290d16a4b8c1341e31acc0b13",
+        "leaf_index": 1,
+        "siblings": [
+          {
+            "hash": "d0a71c1619272286c40875c2cb4cdc317b46cebbfb70bedac73a26237fbcff69",
+            "position": "left"
+          },
+          {
+            "hash": "94efbb1fa74c9c60f513c007c2961a2bb315436e490da55548183e882f2db9d3",
+            "position": "right"
+          }
+        ],
+        "root_hash": "dc401f6a79485ad46fdfa4b7a1a5a33a4042f93b967dc73073889ebf49e7235f"
+      },
+      "poseidon_proof": {
+        "root": "16966349325632632397312376922088694495392670393893196781525891005049137992817",
+        "leaf": "16542717015824565589467399246298213053303079320782849641074809031369543169849",
+        "leaf_index": 1,
+        "path_elements": [
+          "13788250797888784613446607777639528255924250654409383833287243171701222507935",
+          "15948094813735606604975766945244864646282142791445314152717455322267375140708",
+          "7423237065226347324353380772367382631490014989348495481811164164159255474657",
+          "11286972368698509976183087595462810875513684078608517520839298933882497716792"
+        ],
+        "path_indices": [
+          1,
+          0,
+          0,
+          0
+        ]
+      },
+      "expected_valid": true,
+      "expected_blake3_consistent": true
+    },
+    {
+      "description": "Invalid: BLAKE3 root from document A, Poseidon root from unrelated document B",
+      "document_parts_utf8": [
+        "section A",
+        "section B",
+        "section C"
+      ],
+      "blake3_root": "dc401f6a79485ad46fdfa4b7a1a5a33a4042f93b967dc73073889ebf49e7235f",
+      "poseidon_root": "3982710634996281090944547644333147865669900206036754387708868841669211534529",
+      "dual_commitment": "0a7509eb8de93a3ccb86a9a9afc439b99fba7ab27c1f3b6682b6325410d06de7",
+      "blake3_proof": {
+        "leaf_hash": "e284fdc2ac4d3399fbb88862a2f227c4fe83f4a290d16a4b8c1341e31acc0b13",
+        "leaf_index": 1,
+        "siblings": [
+          {
+            "hash": "d0a71c1619272286c40875c2cb4cdc317b46cebbfb70bedac73a26237fbcff69",
+            "position": "left"
+          },
+          {
+            "hash": "94efbb1fa74c9c60f513c007c2961a2bb315436e490da55548183e882f2db9d3",
+            "position": "right"
+          }
+        ],
+        "root_hash": "dc401f6a79485ad46fdfa4b7a1a5a33a4042f93b967dc73073889ebf49e7235f"
+      },
+      "poseidon_proof": null,
+      "expected_valid": false,
+      "expected_blake3_consistent": true
+    },
+    {
+      "description": "Edge: single-leaf (minimal) document with valid dual-root commitment",
+      "document_parts_utf8": [
+        "minimal"
+      ],
+      "blake3_root": "cf57382d603eef611238e86c5d0fc6175326570ecfa4d1a6445d65f8d0b40d7f",
+      "poseidon_root": "20023610802421694375714735638304952096158522427592593482612537821768852935902",
+      "dual_commitment": "cbf457fe5977eac071d9509ca2ab6cf161850081d7079b0531e018e1cd626021",
+      "blake3_proof": {
+        "leaf_hash": "cf57382d603eef611238e86c5d0fc6175326570ecfa4d1a6445d65f8d0b40d7f",
+        "leaf_index": 0,
+        "siblings": [],
+        "root_hash": "cf57382d603eef611238e86c5d0fc6175326570ecfa4d1a6445d65f8d0b40d7f"
+      },
+      "poseidon_proof": {
+        "root": "20023610802421694375714735638304952096158522427592593482612537821768852935902",
+        "leaf": "2465326051839382131711306949610151275435414232716700903415674559105518028871",
+        "leaf_index": 0,
+        "path_elements": [
+          "0",
+          "14744269619966411208579211824598458697587494354926760081771325075741142829156",
+          "7423237065226347324353380772367382631490014989348495481811164164159255474657",
+          "11286972368698509976183087595462810875513684078608517520839298933882497716792"
+        ],
+        "path_indices": [
+          0,
+          0,
+          0,
+          0
+        ]
+      },
+      "expected_valid": true,
+      "expected_blake3_consistent": true
+    },
+    {
+      "description": "Malformed: corrupted BLAKE3 root does not match recomputed hash from document parts",
+      "document_parts_utf8": [
+        "section A",
+        "section B",
+        "section C"
+      ],
+      "blake3_root": "deadbeefa0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0",
+      "poseidon_root": "16966349325632632397312376922088694495392670393893196781525891005049137992817",
+      "dual_commitment": "8b4a68c81726cc105cca2eddfaa3c382c7aef6aa08f131888b87778b96b3735d",
+      "blake3_proof": null,
+      "poseidon_proof": {
+        "root": "16966349325632632397312376922088694495392670393893196781525891005049137992817",
+        "leaf": "16542717015824565589467399246298213053303079320782849641074809031369543169849",
+        "leaf_index": 1,
+        "path_elements": [
+          "13788250797888784613446607777639528255924250654409383833287243171701222507935",
+          "15948094813735606604975766945244864646282142791445314152717455322267375140708",
+          "7423237065226347324353380772367382631490014989348495481811164164159255474657",
+          "11286972368698509976183087595462810875513684078608517520839298933882497716792"
+        ],
+        "path_indices": [
+          1,
+          0,
+          0,
+          0
+        ]
+      },
+      "expected_valid": false,
+      "expected_blake3_consistent": false
+    }
   ]
 }

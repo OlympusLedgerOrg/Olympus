@@ -17,6 +17,7 @@ const {
   computeMerkleRoot,
   verifyMerkleProof,
   computeLedgerEntryHash,
+  computeDualCommitment,
 } = require('./verifier');
 
 const VECTORS_PATH = path.join(__dirname, '..', 'test_vectors', 'vectors.json');
@@ -125,6 +126,55 @@ function testLedgerEntryHash(vectors) {
   console.log(`  ✓ ledger_entry_hash: ${vectors.ledger_entry_hash.length} vectors`);
 }
 
+/**
+ * Validate dual-root commitment vectors.
+ *
+ * For each vector this test:
+ * 1. Recomputes the BLAKE3 Merkle root from document_parts_utf8 and checks it
+ *    matches blake3_root iff expected_blake3_consistent is true.
+ * 2. Recomputes the dual_commitment from the stored blake3_root + poseidon_root
+ *    and verifies it matches the committed dual_commitment value.
+ * 3. If a blake3_proof is present, verifies it is valid against the stored root.
+ *
+ * Note: Poseidon root consistency (expected_valid) is only checked by the Python
+ * conformance test which has access to the full Poseidon hash implementation.
+ */
+function testDualRootCommitment(vectors) {
+  console.log('Testing conformance: dual_root_commitment...');
+  for (const vec of vectors.dual_root_commitment) {
+    // 1. Recompute BLAKE3 root from document parts
+    const parts = vec.document_parts_utf8.map(s => new TextEncoder().encode(s));
+    const computedRoot = computeMerkleRoot(parts);
+    const blake3Consistent = computedRoot === vec.blake3_root;
+    assert(
+      blake3Consistent === vec.expected_blake3_consistent,
+      `expected_blake3_consistent=${vec.expected_blake3_consistent} but computed=${blake3Consistent} ` +
+      `for "${vec.description}":\n  computed: ${computedRoot}\n  vector:   ${vec.blake3_root}`
+    );
+
+    // 2. Verify the dual_commitment formula using the stored blake3_root + poseidon_root
+    const gotDual = computeDualCommitment(vec.blake3_root, vec.poseidon_root);
+    assert(
+      gotDual === vec.dual_commitment,
+      `dual_commitment mismatch for "${vec.description}": got ${gotDual}, want ${vec.dual_commitment}`
+    );
+
+    // 3. Verify blake3_proof when present
+    if (vec.blake3_proof !== null && vec.blake3_proof !== undefined) {
+      const proof = {
+        leafHash: fromHex(vec.blake3_proof.leaf_hash),
+        siblings: vec.blake3_proof.siblings.map(s => ({ hash: s.hash, position: s.position })),
+        rootHash: vec.blake3_proof.root_hash,
+      };
+      assert(
+        verifyMerkleProof(proof),
+        `blake3_proof verification failed for "${vec.description}"`
+      );
+    }
+  }
+  console.log(`  ✓ dual_root_commitment: ${vectors.dual_root_commitment.length} vectors`);
+}
+
 function runConformanceTests() {
   console.log('Running JavaScript conformance tests against vectors.json\n');
   const vectors = loadVectors();
@@ -136,6 +186,7 @@ function runConformanceTests() {
   testMerkleProof(vectors);
   testCanonicalizerHash(canonicalizerVectors);
   testLedgerEntryHash(vectors);
+  testDualRootCommitment(vectors);
   console.log('\n✓ All JavaScript conformance tests passed!');
 }
 
