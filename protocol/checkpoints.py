@@ -253,7 +253,10 @@ def build_checkpoint_quorum_certificate(
         registry=registry,
     )
     if len(valid_signatures) < registry.quorum_threshold():
-        raise ValueError("Insufficient valid federation signatures for checkpoint quorum")
+        raise ValueError(
+            "Insufficient valid federation signatures for checkpoint quorum "
+            f"(got {len(valid_signatures)}, need {registry.quorum_threshold()})"
+        )
     signature_by_node = {signature.node_id: signature for signature in valid_signatures}
     active_node_ids = sorted(node.node_id for node in registry.active_nodes())
     signer_bitmap_bits: list[str] = []
@@ -267,7 +270,10 @@ def build_checkpoint_quorum_certificate(
         else:
             signer_bitmap_bits.append("0")
     if len(ordered_signatures) < registry.quorum_threshold():
-        raise ValueError("Insufficient valid federation signatures for checkpoint quorum")
+        raise ValueError(
+            "Insufficient valid federation signatures after bitmap ordering "
+            f"(got {len(ordered_signatures)}, need {registry.quorum_threshold()})"
+        )
     validator_set_hash = registry.membership_hash()
     return {
         "checkpoint_hash": checkpoint_hash,
@@ -460,16 +466,25 @@ def create_checkpoint(
         if previous_checkpoint_hash:
             raise ValueError("Genesis checkpoints must not include previous_checkpoint_hash")
         if consistency_proof:
-            raise ValueError("Genesis checkpoints must not include a consistency proof")
+            raise ValueError(
+                "Genesis checkpoints (sequence=0) must not include a consistency proof "
+                "because there is no previous checkpoint to verify"
+            )
     else:
         if not previous_checkpoint_hash:
             raise ValueError("Non-genesis checkpoints must include previous_checkpoint_hash")
         if not consistency_proof:
             raise ValueError("Non-genesis checkpoints must include a consistency proof")
     if signatures and signing_keys:
-        raise ValueError("Provide either signing_keys or signatures, not both")
+        raise ValueError(
+            "Provide either signing_keys (local signing) or signatures "
+            "(pre-signed certificates), not both"
+        )
     if signatures is None and signing_keys is None:
-        raise ValueError("Checkpoint creation requires federation signatures")
+        raise ValueError(
+            "Checkpoint creation requires federation signatures via signing_keys or "
+            "signatures"
+        )
 
     timestamp = current_timestamp()
     consistency_proof = consistency_proof or []
