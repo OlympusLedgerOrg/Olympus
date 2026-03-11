@@ -56,11 +56,11 @@ def test_canonicalize_document_normalizes_whitespace():
 
 def test_canonicalize_document_with_list():
     """Test canonicalization of documents containing lists."""
-    doc = {"items": ["apple", "banana", "cherry"]}
+    doc = {"items": ["apple", "banana", "cherry", "cafe\u0301"]}
     result = canonicalize_document(doc)
 
     # List order should be preserved
-    assert result["items"] == ["apple", "banana", "cherry"]
+    assert result["items"] == ["apple", "banana", "cherry", "café"]
 
 
 def test_canonicalize_document_list_with_dicts():
@@ -140,6 +140,13 @@ def test_canonicalize_document_idempotent_with_unicode():
     assert first["meta"]["author"] == "Zoë Ångström"
     assert first["sections"][0]["heading"] == "Intro 🌟"
     assert first["sections"][0]["body"] == "Hello world"
+
+
+def test_document_to_bytes_normalizes_unicode_nfc():
+    """Document bytes must be stable for canonically equivalent Unicode strings."""
+    precomposed = {"name": "café"}
+    decomposed = {"name": "cafe\u0301"}
+    assert document_to_bytes(precomposed) == document_to_bytes(decomposed)
 
 
 def test_canonicalize_json():
