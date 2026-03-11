@@ -226,6 +226,20 @@ To avoid ambiguous authority during membership changes:
    - new headers after rotation must verify with the active key.
 4. Registry epoch is part of every vote and quorum certificate. This binds signatures to a specific membership snapshot and prevents stale-epoch replay.
 
+## VRF-Based Selections
+
+The federation prototype now exposes deterministic VRF-style selection helpers
+for committee and leader choice in a round:
+
+- Selection seed binds `(shard_id, round_number, epoch, membership_hash)` using
+  BLAKE3 domain separation (`OLY:VRF-SELECTION:V1`).
+- Each active node receives a deterministic score from the seed and `node_id`.
+- Committee selection picks the lowest `k` scores; leader selection picks the
+  first committee member (`k=1`).
+
+Because the seed includes epoch and membership hash, membership changes or epoch
+advances produce a new selection ordering and prevent stale selection replay.
+
 ## Safety and Liveness Notes
 
 ### Safety

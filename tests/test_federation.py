@@ -21,10 +21,13 @@ from protocol.federation import (
     is_replay_epoch,
     quorum_certificate_hash,
     resolve_canonical_fork,
+    select_vrf_committee,
+    select_vrf_leader,
     serialize_vote_message,
     sign_federated_header,
     verify_federated_header_signatures,
     verify_quorum_certificate,
+    vrf_selection_scores,
 )
 from protocol.ledger import Ledger
 from protocol.shards import (
@@ -733,6 +736,74 @@ def test_resolve_canonical_fork_rejects_stale_epoch_candidates() -> None:
         resolve_canonical_fork([(header, certificate)], registry, current_epoch=registry.epoch + 1)
         is None
     )
+
+
+def test_vrf_selection_scores_are_deterministic() -> None:
+    """VRF selection scores should be deterministic for fixed inputs."""
+    registry = FederationRegistry.from_file(REGISTRY_PATH)
+    first = vrf_selection_scores(
+        shard_id="records/city-a", round_number=4, registry=registry, epoch=registry.epoch
+    )
+    second = vrf_selection_scores(
+        shard_id="records/city-a", round_number=4, registry=registry, epoch=registry.epoch
+    )
+    assert first == second
+    assert first == sorted(first, key=lambda item: (item[1], item[0]))
+
+
+def test_vrf_selection_changes_with_round_number() -> None:
+    """Changing round number should produce a distinct VRF ordering."""
+    registry = FederationRegistry.from_file(REGISTRY_PATH)
+    round_zero = vrf_selection_scores(shard_id="records/city-a", round_number=0, registry=registry)
+    round_one = vrf_selection_scores(shard_id="records/city-a", round_number=1, registry=registry)
+    assert round_zero != round_one
+
+
+def test_select_vrf_committee_and_leader() -> None:
+    """VRF helpers should return deterministic leader and committee prefixes."""
+    registry = FederationRegistry.from_file(REGISTRY_PATH)
+    committee = select_vrf_committee(
+        shard_id="records/city-a",
+        round_number=3,
+        registry=registry,
+        committee_size=2,
+    )
+    leader = select_vrf_leader(
+        shard_id="records/city-a",
+        round_number=3,
+        registry=registry,
+    )
+    assert len(committee) == 2
+    assert len(set(committee)) == 2
+    assert leader == committee[0]
+
+
+def test_select_vrf_committee_rejects_invalid_sizes() -> None:
+    """Committee size must be positive and not exceed active members."""
+    registry = FederationRegistry.from_file(REGISTRY_PATH)
+    with pytest.raises(ValueError, match="positive"):
+        select_vrf_committee(
+            shard_id="records/city-a",
+            round_number=1,
+            registry=registry,
+            committee_size=0,
+        )
+    with pytest.raises(ValueError, match="cannot exceed"):
+        select_vrf_committee(
+            shard_id="records/city-a",
+            round_number=1,
+            registry=registry,
+            committee_size=10,
+        )
+
+
+def test_vrf_selection_rejects_negative_round_or_epoch() -> None:
+    """VRF scoring should reject invalid negative round and epoch values."""
+    registry = FederationRegistry.from_file(REGISTRY_PATH)
+    with pytest.raises(ValueError, match="Round number"):
+        vrf_selection_scores(shard_id="records/city-a", round_number=-1, registry=registry)
+    with pytest.raises(ValueError, match="Epoch"):
+        vrf_selection_scores(shard_id="records/city-a", round_number=0, registry=registry, epoch=-1)
 
 
 def test_node_key_rotation_with_superseding_signature() -> None:

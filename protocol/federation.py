@@ -13,7 +13,13 @@ import nacl.exceptions
 import nacl.signing
 
 from protocol.canonical_json import canonical_json_bytes
-from protocol.hashes import HASH_SEPARATOR, hash_bytes, shard_header_hash
+from protocol.hashes import (
+    HASH_SEPARATOR,
+    VRF_SELECTION_PREFIX,
+    blake3_hash,
+    hash_bytes,
+    shard_header_hash,
+)
 from protocol.ledger import Ledger, LedgerEntry
 
 
@@ -795,6 +801,81 @@ def resolve_canonical_fork(
         return None
     _, selected_header, selected_certificate = min(eligible, key=lambda item: item[0])
     return selected_header, selected_certificate
+
+
+def vrf_selection_scores(
+    *,
+    shard_id: str,
+    round_number: int,
+    registry: FederationRegistry,
+    epoch: int | None = None,
+) -> list[tuple[str, int]]:
+    """Return deterministic VRF-style selection scores for active federation nodes."""
+    if round_number < 0:
+        raise ValueError("Round number must be non-negative")
+    effective_epoch = registry.epoch if epoch is None else int(epoch)
+    if effective_epoch < 0:
+        raise ValueError("Epoch must be non-negative")
+    membership_hash = registry.membership_hash()
+    selection_seed = blake3_hash(
+        [
+            VRF_SELECTION_PREFIX,
+            HASH_SEPARATOR.encode("utf-8").join(
+                [
+                    str(shard_id).encode("utf-8"),
+                    str(round_number).encode("utf-8"),
+                    str(effective_epoch).encode("utf-8"),
+                    membership_hash.encode("utf-8"),
+                ]
+            ),
+        ]
+    )
+    scores: list[tuple[str, int]] = []
+    for node in registry.active_nodes():
+        score_bytes = blake3_hash([selection_seed, node.node_id.encode("utf-8")])
+        score = int.from_bytes(score_bytes[:8], byteorder="big", signed=False)
+        scores.append((node.node_id, score))
+    return sorted(scores, key=lambda item: (item[1], item[0]))
+
+
+def select_vrf_committee(
+    *,
+    shard_id: str,
+    round_number: int,
+    registry: FederationRegistry,
+    committee_size: int,
+    epoch: int | None = None,
+) -> list[str]:
+    """Select a deterministic VRF-style committee from active federation nodes."""
+    if committee_size <= 0:
+        raise ValueError("Committee size must be positive")
+    scores = vrf_selection_scores(
+        shard_id=shard_id,
+        round_number=round_number,
+        registry=registry,
+        epoch=epoch,
+    )
+    if committee_size > len(scores):
+        raise ValueError("Committee size cannot exceed active federation members")
+    return [node_id for node_id, _ in scores[:committee_size]]
+
+
+def select_vrf_leader(
+    *,
+    shard_id: str,
+    round_number: int,
+    registry: FederationRegistry,
+    epoch: int | None = None,
+) -> str:
+    """Select a deterministic VRF-style leader from active federation nodes."""
+    committee = select_vrf_committee(
+        shard_id=shard_id,
+        round_number=round_number,
+        registry=registry,
+        committee_size=1,
+        epoch=epoch,
+    )
+    return committee[0]
 
 
 def append_quorum_certificate_to_ledger(
