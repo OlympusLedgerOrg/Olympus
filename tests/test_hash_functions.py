@@ -6,11 +6,13 @@ import pytest
 
 from protocol.hashes import (
     blake3_hash,
+    create_dual_root_commitment,
     forest_root,
     hash_bytes,
     leaf_hash,
     merkle_root,
     node_hash,
+    parse_dual_root_commitment,
     record_key,
     shard_header_hash,
 )
@@ -269,3 +271,114 @@ def test_forest_root_invalid_hash_length():
 
     with pytest.raises(ValueError, match="must be 32 bytes"):
         forest_root(headers)
+
+
+# ---------------------------------------------------------------------------
+# Dual-root commitment tests
+# ---------------------------------------------------------------------------
+
+
+def test_create_dual_root_commitment_returns_bytes():
+    """create_dual_root_commitment must return bytes."""
+    b3 = hash_bytes(b"blake3 root")
+    pos = hash_bytes(b"poseidon root")
+    commitment = create_dual_root_commitment(b3, pos)
+    assert isinstance(commitment, bytes)
+
+
+def test_create_dual_root_commitment_deterministic():
+    """Same inputs must always produce the same commitment."""
+    b3 = hash_bytes(b"blake3 root")
+    pos = hash_bytes(b"poseidon root")
+    assert create_dual_root_commitment(b3, pos) == create_dual_root_commitment(b3, pos)
+
+
+def test_create_dual_root_commitment_rejects_empty_blake3_root():
+    """Empty blake3_root must raise ValueError."""
+    with pytest.raises(ValueError, match="blake3_root"):
+        create_dual_root_commitment(b"", hash_bytes(b"poseidon root"))
+
+
+def test_create_dual_root_commitment_rejects_empty_poseidon_root():
+    """Empty poseidon_root must raise ValueError."""
+    with pytest.raises(ValueError, match="poseidon_root"):
+        create_dual_root_commitment(hash_bytes(b"blake3 root"), b"")
+
+
+def test_parse_dual_root_commitment_round_trip():
+    """create → parse must return the original roots unchanged."""
+    b3 = hash_bytes(b"blake3 root")
+    pos = hash_bytes(b"poseidon root")
+    commitment = create_dual_root_commitment(b3, pos)
+    extracted_b3, extracted_pos = parse_dual_root_commitment(commitment)
+    assert extracted_b3 == b3
+    assert extracted_pos == pos
+
+
+def test_parse_dual_root_commitment_round_trip_variable_lengths():
+    """Round-trip must work for roots that are not exactly 32 bytes."""
+    b3 = b"short"
+    pos = b"also-short"
+    commitment = create_dual_root_commitment(b3, pos)
+    extracted_b3, extracted_pos = parse_dual_root_commitment(commitment)
+    assert extracted_b3 == b3
+    assert extracted_pos == pos
+
+
+def test_parse_dual_root_commitment_rejects_too_short():
+    """Commitments that are too short must raise ValueError."""
+    with pytest.raises(ValueError, match="too short"):
+        parse_dual_root_commitment(b"tiny")
+
+
+def test_parse_dual_root_commitment_rejects_tampered_binding_hash():
+    """Commitments with a corrupted binding hash must raise ValueError."""
+    b3 = hash_bytes(b"blake3 root")
+    pos = hash_bytes(b"poseidon root")
+    commitment = bytearray(create_dual_root_commitment(b3, pos))
+    # Flip the last byte of the binding hash
+    commitment[-1] ^= 0xFF
+    with pytest.raises(ValueError, match="binding hash verification failed"):
+        parse_dual_root_commitment(bytes(commitment))
+
+
+def test_parse_dual_root_commitment_rejects_tampered_root():
+    """Commitments with a corrupted root must fail binding hash verification."""
+    b3 = hash_bytes(b"blake3 root")
+    pos = hash_bytes(b"poseidon root")
+    commitment = bytearray(create_dual_root_commitment(b3, pos))
+    # Flip a byte inside the blake3_root portion (after the 2-byte length prefix)
+    commitment[2] ^= 0xFF
+    with pytest.raises(ValueError, match="binding hash verification failed"):
+        parse_dual_root_commitment(bytes(commitment))
+
+
+def test_dual_root_commitment_domain_separation():
+    """Different root pairs must produce different commitments."""
+    b3_a = hash_bytes(b"doc A blake3 root")
+    pos_a = hash_bytes(b"doc A poseidon root")
+    b3_b = hash_bytes(b"doc B blake3 root")
+    pos_b = hash_bytes(b"doc B poseidon root")
+
+    commitment_a = create_dual_root_commitment(b3_a, pos_a)
+    commitment_b = create_dual_root_commitment(b3_b, pos_b)
+    assert commitment_a != commitment_b
+
+
+def test_dual_root_commitment_order_matters():
+    """Swapping blake3_root and poseidon_root must produce a different commitment."""
+    b3 = hash_bytes(b"blake3 root")
+    pos = hash_bytes(b"poseidon root")
+    commitment_ab = create_dual_root_commitment(b3, pos)
+    commitment_ba = create_dual_root_commitment(pos, b3)
+    assert commitment_ab != commitment_ba
+
+
+def test_parse_dual_root_commitment_rejects_truncated_commitment():
+    """A commitment truncated before the binding hash must raise ValueError."""
+    b3 = hash_bytes(b"blake3 root")
+    pos = hash_bytes(b"poseidon root")
+    commitment = create_dual_root_commitment(b3, pos)
+    # Drop the last 10 bytes (part of the binding hash)
+    with pytest.raises(ValueError):
+        parse_dual_root_commitment(commitment[:-10])

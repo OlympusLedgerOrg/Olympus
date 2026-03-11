@@ -185,6 +185,109 @@ def merkle_parent_hash(left: bytes, right: bytes) -> bytes:
     return node_hash(left, right)
 
 
+def create_dual_root_commitment(blake3_root: bytes, poseidon_root: bytes) -> bytes:
+    """
+    Create an atomic commitment that binds a BLAKE3 Merkle root to a Poseidon Merkle root.
+
+    Prevents verification attacks where valid proofs from different documents could be
+    mixed by tying both roots together under a single BLAKE3 binding hash.  The returned
+    bytes encode both roots and their binding hash so that
+    :func:`parse_dual_root_commitment` can later extract and re-verify them.
+
+    Format (binary)::
+
+        [2-byte big-endian len(blake3_root)]
+        [blake3_root bytes]
+        [2-byte big-endian len(poseidon_root)]
+        [poseidon_root bytes]
+        [32-byte binding_hash]
+
+    where ``binding_hash = blake3_hash([LEDGER_PREFIX, blake3_root, _SEP, poseidon_root])``.
+
+    Args:
+        blake3_root: BLAKE3 Merkle root bytes (typically 32 bytes).
+        poseidon_root: Poseidon Merkle root bytes (typically 32 bytes).
+
+    Returns:
+        Serialized commitment bytes containing both roots and the binding hash.
+
+    Raises:
+        ValueError: If either root is empty.
+    """
+    if not blake3_root:
+        raise ValueError("blake3_root must not be empty")
+    if not poseidon_root:
+        raise ValueError("poseidon_root must not be empty")
+
+    binding_hash = blake3_hash([LEDGER_PREFIX, blake3_root, _SEP, poseidon_root])
+
+    b3_len = len(blake3_root).to_bytes(2, byteorder="big")
+    pos_len = len(poseidon_root).to_bytes(2, byteorder="big")
+
+    return b3_len + blake3_root + pos_len + poseidon_root + binding_hash
+
+
+def parse_dual_root_commitment(commitment: bytes) -> tuple[bytes, bytes]:
+    """
+    Parse a dual-root commitment to extract the BLAKE3 and Poseidon roots.
+
+    Re-derives the binding hash from the extracted roots and compares it to the
+    stored hash, ensuring the commitment has not been tampered with.
+
+    Args:
+        commitment: Bytes returned by :func:`create_dual_root_commitment`.
+
+    Returns:
+        Tuple of ``(blake3_root, poseidon_root)`` as originally supplied.
+
+    Raises:
+        ValueError: If the commitment is malformed or the binding hash is invalid.
+    """
+    # Minimum valid size: 2 (b3_len) + 1 (blake3_root) + 2 (pos_len) + 1 (poseidon_root) + 32 (hash)
+    _MIN_SIZE = 2 + 1 + 2 + 1 + 32
+    if len(commitment) < _MIN_SIZE:
+        raise ValueError(
+            f"Commitment too short: expected at least {_MIN_SIZE} bytes, got {len(commitment)}"
+        )
+
+    offset = 0
+
+    # Extract blake3_root
+    b3_len = int.from_bytes(commitment[offset : offset + 2], byteorder="big")
+    offset += 2
+    if b3_len == 0:
+        raise ValueError("Commitment contains empty blake3_root")
+    if offset + b3_len > len(commitment):
+        raise ValueError("Commitment is malformed: blake3_root length exceeds available bytes")
+    blake3_root = commitment[offset : offset + b3_len]
+    offset += b3_len
+
+    # Extract poseidon_root
+    if offset + 2 > len(commitment):
+        raise ValueError("Commitment is malformed: missing poseidon_root length")
+    pos_len = int.from_bytes(commitment[offset : offset + 2], byteorder="big")
+    offset += 2
+    if pos_len == 0:
+        raise ValueError("Commitment contains empty poseidon_root")
+    if offset + pos_len > len(commitment):
+        raise ValueError("Commitment is malformed: poseidon_root length exceeds available bytes")
+    poseidon_root = commitment[offset : offset + pos_len]
+    offset += pos_len
+
+    # Extract and verify binding hash — must be exactly 32 bytes at the end
+    if len(commitment) - offset != 32:
+        raise ValueError("Commitment is malformed: unexpected trailing bytes after binding hash")
+    stored_hash = commitment[offset:]
+
+    expected_hash = blake3_hash([LEDGER_PREFIX, blake3_root, _SEP, poseidon_root])
+    if stored_hash != expected_hash:
+        raise ValueError(
+            "Commitment binding hash verification failed: commitment may be tampered with"
+        )
+
+    return blake3_root, poseidon_root
+
+
 def blake3_to_field_element(seed: bytes) -> str:
     """
     Hash raw seed material with BLAKE3 and map it into the BN128 scalar field.
