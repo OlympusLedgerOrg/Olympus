@@ -33,7 +33,7 @@ def test_poseidon_merkle_proof_roundtrip(leaves):
     target_index = 1 if len(leaves) > 1 else 0
     path_elements, path_indices = tree.get_proof(target_index)
     reconstructed = _recompute_root(
-        int(blake3_to_field_element(leaves[target_index])),
+        _to_field_int(leaves[target_index], index=target_index),
         path_elements,
         path_indices,
     )
@@ -47,7 +47,8 @@ def test_build_poseidon_witness_inputs_matches_tree():
 
     recomputed = _recompute_root(int(proof.leaf), proof.path_elements, proof.path_indices)
     assert recomputed == root
-    assert proof.leaf == blake3_to_field_element(leaves[0])
+    # The leaf value should match the position-bound normalization
+    assert proof.leaf == str(_to_field_int(leaves[0], index=0))
 
 
 def test_to_field_int_with_int():
@@ -99,3 +100,36 @@ def test_poseidon_merkle_tree_get_proof_rejects_invalid_index():
     tree = PoseidonMerkleTree([b"a", b"b"])
     with pytest.raises(ValueError, match="Invalid leaf index"):
         tree.get_proof(-1)
+
+
+def test_identical_bytes_at_different_positions_produce_different_field_elements():
+    """
+    Identical byte payloads at different positions must produce different field elements.
+
+    This prevents order-insensitivity bugs in symmetric trees like [A, B, A].
+    """
+    # Two identical payloads at positions 0 and 2
+    payload = b"\x00\x00"
+
+    # Normalize the same payload at different indices
+    fe_at_0 = _to_field_int(payload, index=0)
+    fe_at_1 = _to_field_int(payload, index=1)
+    fe_at_2 = _to_field_int(payload, index=2)
+
+    # All must be different due to position binding
+    assert fe_at_0 != fe_at_1, "Same payload at indices 0 and 1 must produce different field elements"
+    assert fe_at_0 != fe_at_2, "Same payload at indices 0 and 2 must produce different field elements"
+    assert fe_at_1 != fe_at_2, "Same payload at indices 1 and 2 must produce different field elements"
+
+    # Also verify that this prevents order collision in asymmetric trees
+    # Use [A, A, B] which is different from [B, A, A] after reversal
+    leaves = [b"\x00\x00", b"\x00\x00", b"\x00"]
+    tree1 = PoseidonMerkleTree(leaves)
+    root1 = tree1.get_root()
+
+    reversed_leaves = list(reversed(leaves))
+    tree2 = PoseidonMerkleTree(reversed_leaves)
+    root2 = tree2.get_root()
+
+    assert root1 != root2, "Trees with different orderings must have different roots"
+

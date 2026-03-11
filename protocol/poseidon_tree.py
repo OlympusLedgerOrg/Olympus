@@ -9,12 +9,25 @@ from .hashes import SNARK_SCALAR_FIELD, blake3_to_field_element
 from .poseidon_bn128 import poseidon_hash_bn128
 
 
-def _to_field_int(value: int | str | bytes) -> int:
+def _to_field_int(value: int | str | bytes, index: int = 0) -> int:
     """
     Normalize a value into the BN128 field as an integer.
+
+    Args:
+        value: The value to normalize (bytes, decimal string, or int).
+        index: Leaf position index (only used for bytes to prevent collisions).
+
+    For bytes inputs, the leaf is bound to its position by hashing
+    [leaf_bytes || index] before mapping to the field. This ensures
+    identical byte payloads at different positions produce distinct
+    field elements, preventing order-insensitivity in symmetric trees.
     """
     if isinstance(value, bytes):
-        return int(blake3_to_field_element(value))
+        # Bind leaf to position to prevent collision
+        import blake3
+        position_bound = blake3.blake3(value + index.to_bytes(4, byteorder="big")).digest()
+        big_int = int.from_bytes(position_bound, byteorder="big")
+        return big_int % SNARK_SCALAR_FIELD
     if isinstance(value, str):
         return int(value) % SNARK_SCALAR_FIELD
     if isinstance(value, int):
@@ -82,7 +95,8 @@ class PoseidonMerkleTree:
         Raises:
             ValueError: If no leaves provided or too many leaves for specified depth
         """
-        normalized = [_to_field_int(leaf) for leaf in leaves]
+        leaves_list = list(leaves)
+        normalized = [_to_field_int(leaf, index=i) for i, leaf in enumerate(leaves_list)]
         if not normalized:
             raise ValueError("Cannot create Poseidon Merkle tree with no leaves")
 
@@ -176,13 +190,16 @@ def build_poseidon_witness_inputs(
     Returns:
         PoseidonProof with root, leaf, path elements, and indices ready for witness JSON.
     """
-    leaves = [blake3_to_field_element(chunk) for chunk in document_leaves]
-    tree = PoseidonMerkleTree(leaves, depth=depth)
+    # Normalize leaves with position binding
+    leaves_as_field_elements = [
+        str(_to_field_int(chunk, index=i)) for i, chunk in enumerate(document_leaves)
+    ]
+    tree = PoseidonMerkleTree(document_leaves, depth=depth)
     path_elements, path_indices = tree.get_proof(target_index)
 
     return PoseidonProof(
         root=tree.get_root(),
-        leaf=leaves[target_index],
+        leaf=leaves_as_field_elements[target_index],
         leaf_index=target_index,
         path_elements=path_elements,
         path_indices=path_indices,
