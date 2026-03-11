@@ -235,8 +235,8 @@ def create_dual_root_commitment(blake3_root: bytes, poseidon_root: bytes) -> byt
             unsigned integer (BN128 field element).
 
     Returns:
-        32-byte commitment hash binding both roots under LEDGER_PREFIX domain
-        separation.
+        Length-prefixed, self-verifying commitment wire format:
+        [2B len(blake3_root)][blake3_root][2B len(poseidon_root)][poseidon_root][32B binding_hash]
 
     Raises:
         ValueError: If either root is not exactly 32 bytes.
@@ -245,31 +245,61 @@ def create_dual_root_commitment(blake3_root: bytes, poseidon_root: bytes) -> byt
         raise ValueError(f"BLAKE3 root must be 32 bytes, got {len(blake3_root)}")
     if len(poseidon_root) != 32:
         raise ValueError(f"Poseidon root must be 32 bytes, got {len(poseidon_root)}")
-    return blake3_hash([LEDGER_PREFIX, blake3_root, _SEP, poseidon_root])
+
+    binding_hash = blake3_hash([LEDGER_PREFIX, blake3_root, _SEP, poseidon_root])
+    return b"".join(
+        [
+            len(blake3_root).to_bytes(2, byteorder="big"),
+            blake3_root,
+            len(poseidon_root).to_bytes(2, byteorder="big"),
+            poseidon_root,
+            binding_hash,
+        ]
+    )
 
 
 def parse_dual_root_commitment(commitment: bytes) -> tuple[bytes, bytes]:
     """
     Parse a serialized dual-root commitment into its constituent roots.
 
-    The serialized commitment is the raw concatenation of the BLAKE3 root and
-    the Poseidon root (64 bytes total). This encoding is stored alongside the
-    commitment hash and allows reconstruction of the individual roots without
-    re-hashing.
+    The serialized commitment is the length-prefixed wire format produced by
+    :func:`create_dual_root_commitment`, which includes a binding hash so the
+    payload is self-verifying.
 
     Args:
-        commitment: 64-byte concatenation of blake3_root (first 32 bytes) and
-            poseidon_root (last 32 bytes).
+        commitment: Commitment wire format produced by :func:`create_dual_root_commitment`.
 
     Returns:
         Tuple of ``(blake3_root, poseidon_root)``, each exactly 32 bytes.
 
     Raises:
-        ValueError: If ``commitment`` is not exactly 64 bytes.
+        ValueError: If ``commitment`` is malformed or fails integrity verification.
     """
-    if len(commitment) != 64:
-        raise ValueError(f"Dual root commitment must be 64 bytes, got {len(commitment)}")
-    return commitment[:32], commitment[32:]
+    expected_length = 2 + 32 + 2 + 32 + 32
+    if len(commitment) != expected_length:
+        raise ValueError(f"Dual root commitment must be {expected_length} bytes, got {len(commitment)}")
+
+    idx = 0
+    blake3_len = int.from_bytes(commitment[idx : idx + 2], byteorder="big")
+    idx += 2
+    blake3_root = commitment[idx : idx + blake3_len]
+    idx += blake3_len
+    poseidon_len = int.from_bytes(commitment[idx : idx + 2], byteorder="big")
+    idx += 2
+    poseidon_root = commitment[idx : idx + poseidon_len]
+    idx += poseidon_len
+    binding_hash = commitment[idx:]
+
+    if blake3_len != len(blake3_root) or poseidon_len != len(poseidon_root):
+        raise ValueError("Dual root commitment length metadata is invalid")
+    if blake3_len != 32 or poseidon_len != 32 or len(binding_hash) != 32:
+        raise ValueError("Dual root commitment length metadata is invalid")
+
+    expected_binding_hash = blake3_hash([LEDGER_PREFIX, blake3_root, _SEP, poseidon_root])
+    if binding_hash != expected_binding_hash:
+        raise ValueError("tampered commitment")
+
+    return blake3_root, poseidon_root
 
 
 def federation_vote_hash(

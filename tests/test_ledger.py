@@ -596,8 +596,8 @@ def test_ledger_append_without_poseidon_root_field_is_none():
 
 
 def test_ledger_dual_root_entry_hash_uses_dual_commitment():
-    """Entry hash for dual-root entries must equal create_dual_root_commitment output."""
-    from protocol.hashes import create_dual_root_commitment
+    """Entry hash for dual-root entries must hash payload plus poseidon bytes."""
+    from protocol.hashes import LEDGER_PREFIX, _SEP, blake3_hash, canonical_json_bytes
 
     ledger = Ledger()
     entry = ledger.append(
@@ -607,9 +607,17 @@ def test_ledger_dual_root_entry_hash_uses_dual_commitment():
         canonicalization=_canonicalization(),
         poseidon_root=_SAMPLE_POSEIDON_ROOT,
     )
-    expected = create_dual_root_commitment(
-        bytes.fromhex(_SAMPLE_BLAKE3_ROOT),
-        _poseidon_root_bytes(_SAMPLE_POSEIDON_ROOT),
+    payload = {
+        "ts": entry.ts,
+        "record_hash": "hash1",
+        "shard_id": "shard1",
+        "shard_root": _SAMPLE_BLAKE3_ROOT,
+        "canonicalization": _canonicalization(),
+        "prev_entry_hash": "",
+        "poseidon_root": _SAMPLE_POSEIDON_ROOT,
+    }
+    expected = blake3_hash(
+        [LEDGER_PREFIX, canonical_json_bytes(payload), _SEP, _poseidon_root_bytes(_SAMPLE_POSEIDON_ROOT)]
     ).hex()
     assert entry.entry_hash == expected
 
