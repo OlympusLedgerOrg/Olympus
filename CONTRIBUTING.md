@@ -36,7 +36,7 @@ All code changes **must** go through pull requests — direct pushes to `main` a
 
 ### Prerequisites
 
-- **Python 3.12+**
+- **Python 3.10+** (3.12 recommended)
 - **PostgreSQL 16+** (required for development and E2E tests)
 
 ### Installing PostgreSQL

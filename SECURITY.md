@@ -23,14 +23,8 @@ protocol-hardening period.
 We follow a **coordinated disclosure** model:
 
 1. **Report privately** — Do **not** open a public GitHub issue for security
-   vulnerabilities. Instead, e-mail the security team at:
-
-   ```
-   security@olympus-ledger.example   (replace with real address before launch)
-   ```
-
-   Alternatively, use the GitHub **"Report a vulnerability"** button in the
-   Security tab of this repository (GitHub Private Security Advisory).
+   vulnerabilities. Instead, use the GitHub **"Report a vulnerability"** button
+   in the Security tab of this repository (GitHub Private Security Advisory).
 
 2. **Include in your report:**
    - A short description of the class of vulnerability (e.g. hash-length
