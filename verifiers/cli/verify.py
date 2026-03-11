@@ -10,11 +10,18 @@ import json
 import sys
 from pathlib import Path
 
+
 # Add parent directory to path to import protocol modules
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
-from protocol.hashes import blake3_hash, blake3_to_field_element
-from protocol.merkle import MerkleTree, verify_proof, MerkleProof
+from protocol.hashes import blake3_hash
+from protocol.merkle import (
+    MERKLE_VERSION,
+    PROOF_VERSION,
+    MerkleTree,
+    deserialize_merkle_proof,
+    verify_proof,
+)
 from protocol.poseidon_tree import PoseidonMerkleTree
 
 
@@ -94,13 +101,18 @@ def merkle_proof_command(args):
     """Verify a Merkle inclusion proof."""
     proof_data = json.loads(Path(args.proof).read_text())
 
-    # Reconstruct proof object
-    proof = MerkleProof(
-        leaf_hash=bytes.fromhex(proof_data['leaf_hash']),
-        leaf_index=proof_data['leaf_index'],
-        siblings=[(bytes.fromhex(s['hash']), s['position']) for s in proof_data['siblings']],
-        root_hash=bytes.fromhex(proof_data['root_hash']),
-    )
+    # Reconstruct proof object, handling both legacy and current sibling formats.
+    # Legacy proofs use a list-of-dicts siblings format; current proofs use
+    # [hash, is_right] pairs.  deserialize_merkle_proof handles both via its
+    # existing normalisation logic for the [hash, is_right] form; the
+    # dict-of-{hash, position} form used by this verifier is normalized here.
+    if proof_data.get("siblings") and isinstance(proof_data["siblings"][0], dict):
+        # Convert {"hash": ..., "position": ...} → [hash_hex, position]
+        proof_data = dict(proof_data)
+        proof_data["siblings"] = [
+            [s["hash"], s["position"]] for s in proof_data["siblings"]
+        ]
+    proof = deserialize_merkle_proof(proof_data)
 
     # Verify the proof
     is_valid = verify_proof(proof)
@@ -110,13 +122,33 @@ def merkle_proof_command(args):
             "command": "merkle-proof",
             "valid": is_valid,
             "leaf_index": proof.leaf_index,
-            "root_hash": proof_data['root_hash'],
+            "root_hash": proof.root_hash.hex(),
+            "proof_version": proof.proof_version,
+            "tree_version": proof.tree_version,
+            "epoch": proof.epoch,
+            "tree_size": proof.tree_size,
         }
         print(json.dumps(result, indent=2))
     else:
-        print(f"Leaf Index: {proof.leaf_index}")
-        print(f"Root Hash:  {proof_data['root_hash']}")
-        print(f"Valid:      {'✓ YES' if is_valid else '✗ NO'}")
+        print(f"Leaf Index:    {proof.leaf_index}")
+        print(f"Root Hash:     {proof.root_hash.hex()}")
+        print(f"proof_version: {proof.proof_version}")
+        print(f"tree_version:  {proof.tree_version}")
+        print(f"epoch:         {proof.epoch}")
+        print(f"tree_size:     {proof.tree_size}")
+        if proof.proof_version != PROOF_VERSION:
+            print(
+                f"Warning: proof_version '{proof.proof_version}' does not match "
+                f"current '{PROOF_VERSION}'",
+                file=sys.stderr,
+            )
+        if proof.tree_version != MERKLE_VERSION:
+            print(
+                f"Warning: tree_version '{proof.tree_version}' does not match "
+                f"current '{MERKLE_VERSION}'",
+                file=sys.stderr,
+            )
+        print(f"Valid:         {'✓ YES' if is_valid else '✗ NO'}")
 
     sys.exit(0 if is_valid else 1)
 
