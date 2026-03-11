@@ -140,9 +140,7 @@ def create_checkpoint(
     }
 
     # Compute checkpoint hash with domain separation
-    checkpoint_hash_bytes = hash_bytes(
-        CHECKPOINT_PREFIX + canonical_json_bytes(payload)
-    )
+    checkpoint_hash_bytes = hash_bytes(CHECKPOINT_PREFIX + canonical_json_bytes(payload))
     checkpoint_hash = checkpoint_hash_bytes.hex()
 
     # Sign the checkpoint hash
@@ -192,9 +190,7 @@ def verify_checkpoint(
             "shard_roots": checkpoint.shard_roots,
             "consistency_proof": checkpoint.consistency_proof,
         }
-        expected_hash = hash_bytes(
-            CHECKPOINT_PREFIX + canonical_json_bytes(payload)
-        ).hex()
+        expected_hash = hash_bytes(CHECKPOINT_PREFIX + canonical_json_bytes(payload)).hex()
 
         if checkpoint.checkpoint_hash != expected_hash:
             return False

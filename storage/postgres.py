@@ -22,11 +22,16 @@ TRANSACTION BOUNDARIES:
 - append_record(): Single atomic transaction across all four tables
 - get_*(): Read-only operations, automatic rollback on exit
 
+Environment Variables:
+- OLYMPUS_CB_THRESHOLD: Circuit breaker failure threshold (default: 5)
+- OLYMPUS_CB_TIMEOUT_SECONDS: Circuit breaker timeout in seconds (default: 30.0)
+
 See docs/08_database_strategy.md for complete database strategy documentation.
 """
 
 import json
 import logging
+import os
 import time
 from collections.abc import Iterator, Mapping
 from contextlib import contextmanager
@@ -75,8 +80,8 @@ class StorageLayer:
         connection_retries: int = 3,
         retry_base_delay_seconds: float = 0.1,
         retry_max_delay_seconds: float = 2.0,
-        circuit_breaker_threshold: int = 5,
-        circuit_breaker_timeout_seconds: float = 30.0,
+        circuit_breaker_threshold: int | None = None,
+        circuit_breaker_timeout_seconds: float | None = None,
     ):
         """
         Initialize storage layer.
@@ -89,7 +94,9 @@ class StorageLayer:
             retry_base_delay_seconds: Initial exponential backoff delay in seconds.
             retry_max_delay_seconds: Maximum retry backoff delay in seconds.
             circuit_breaker_threshold: Consecutive transient failures before opening breaker.
+                If None, reads from OLYMPUS_CB_THRESHOLD env var (default: 5).
             circuit_breaker_timeout_seconds: Breaker open duration in seconds.
+                If None, reads from OLYMPUS_CB_TIMEOUT_SECONDS env var (default: 30.0).
         """
         if pool_min_size < 1:
             raise ValueError("pool_min_size must be >= 1")
@@ -101,6 +108,15 @@ class StorageLayer:
             raise ValueError("retry_base_delay_seconds must be > 0")
         if retry_max_delay_seconds < retry_base_delay_seconds:
             raise ValueError("retry_max_delay_seconds must be >= retry_base_delay_seconds")
+
+        # Load circuit breaker parameters from environment if not provided
+        if circuit_breaker_threshold is None:
+            circuit_breaker_threshold = int(os.environ.get("OLYMPUS_CB_THRESHOLD", "5"))
+        if circuit_breaker_timeout_seconds is None:
+            circuit_breaker_timeout_seconds = float(
+                os.environ.get("OLYMPUS_CB_TIMEOUT_SECONDS", "30.0")
+            )
+
         if circuit_breaker_threshold < 1:
             raise ValueError("circuit_breaker_threshold must be >= 1")
         if circuit_breaker_timeout_seconds <= 0:
@@ -293,6 +309,10 @@ class StorageLayer:
 
         # BEGIN TRANSACTION (implicit via context manager)
         with self._get_connection() as conn, conn.cursor(row_factory=dict_row) as cur:
+            # Set SERIALIZABLE isolation level to prevent phantom reads
+            # under concurrent writes, particularly for shard header chain linkage
+            conn.execute("SET TRANSACTION ISOLATION LEVEL SERIALIZABLE")
+
             # Load current tree state
             tree = self._load_tree_state(cur, shard_id)
 
@@ -828,17 +848,30 @@ class StorageLayer:
 
             return history
 
-    def get_root_diff(self, shard_id: str, from_seq: int, to_seq: int) -> dict[str, Any]:
+    def get_root_diff(
+        self,
+        shard_id: str,
+        from_seq: int,
+        to_seq: int,
+        key_range_start: bytes | None = None,
+        key_range_end: bytes | None = None,
+    ) -> dict[str, Any]:
         """
         Compare two historical shard states reconstructed from header timestamps.
+
+        For large ledgers with millions of leaves, use key_range_start and key_range_end
+        to compute diffs in bounded batches to avoid memory exhaustion.
 
         Args:
             shard_id: Shard identifier
             from_seq: Baseline shard header sequence
             to_seq: Target shard header sequence
+            key_range_start: Inclusive lower bound for key range (optional)
+            key_range_end: Exclusive upper bound for key range (optional)
 
         Returns:
             Root hashes and leaf-level additions, changes, and removals
+            within the specified key range
 
         Raises:
             ValueError: If either sequence does not exist
@@ -854,7 +887,9 @@ class StorageLayer:
 
             from_tree = self._load_tree_state(cur, shard_id, up_to_ts=from_header["ts"])
             to_tree = self._load_tree_state(cur, shard_id, up_to_ts=to_header["ts"])
-            diff = diff_sparse_merkle_trees(from_tree, to_tree)
+            diff = diff_sparse_merkle_trees(
+                from_tree, to_tree, key_range_start=key_range_start, key_range_end=key_range_end
+            )
 
             return {
                 "from_root_hash": bytes(from_header["root"]).hex(),

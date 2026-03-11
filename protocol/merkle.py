@@ -11,7 +11,7 @@ from dataclasses import dataclass
 from typing import Any, Optional
 
 from .events import CanonicalEvent
-from .hashes import HASH_SEPARATOR, LEAF_PREFIX, blake3_hash, merkle_root, node_hash
+from .hashes import HASH_SEPARATOR, LEAF_PREFIX, blake3_hash, node_hash
 
 
 # Merkle tree version - DO NOT CHANGE

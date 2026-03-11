@@ -178,9 +178,7 @@ def verify_header(
         True if header hash is correct and signature is valid
     """
     # Verify header hash
-    header_without_hash = {
-        k: v for k, v in header.items() if k not in _HEADER_EXCLUDED_FIELDS
-    }
+    header_without_hash = {k: v for k, v in header.items() if k not in _HEADER_EXCLUDED_FIELDS}
     expected_hash = shard_header_hash(header_without_hash).hex()
 
     if header.get("header_hash") != expected_hash:
