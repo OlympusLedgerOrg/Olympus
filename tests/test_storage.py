@@ -42,6 +42,7 @@ import pytest
 from protocol.hashes import hash_bytes
 from protocol.shards import create_shard_header
 from protocol.ssmf import verify_proof
+from protocol.timestamps import current_timestamp
 from storage.postgres import StorageLayer
 
 
@@ -799,7 +800,7 @@ def test_smt_nodes_reject_delete(storage, signing_key):
 def _store_ingestion_batch(storage: StorageLayer) -> tuple[str, str]:
     batch_id = f"test_ingestion_batch_{uuid.uuid4()}"
     proof_id = str(uuid.uuid4())
-    timestamp = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+    timestamp = current_timestamp()
     record = {
         "proof_id": proof_id,
         "record_id": "doc-ingest",

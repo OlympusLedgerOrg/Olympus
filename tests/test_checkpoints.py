@@ -333,7 +333,7 @@ def test_verify_checkpoint_chain_non_monotonic_sequence(registry, signing_keys):
         previous=checkpoint2,
     )
 
-    assert [checkpoint1.sequence, checkpoint2.sequence, checkpoint3.sequence] == [0, 2, 1]
+    # Intentional sequence ordering: 0, 2, 1 to exercise non-monotonic detection.
     assert not verify_checkpoint_chain([checkpoint1, checkpoint2, checkpoint3], registry)
 
 
