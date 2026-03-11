@@ -221,6 +221,57 @@ def event_id(shard_id: str, header_hash: str, timestamp: str) -> str:
     return blake3_hash([EVENT_PREFIX, _SEP, event_data.encode("utf-8")]).hex()
 
 
+def create_dual_root_commitment(blake3_root: bytes, poseidon_root: bytes) -> bytes:
+    """
+    Create an atomic dual-root commitment binding a BLAKE3 and Poseidon Merkle root.
+
+    This commitment is used as the primary entry hash for ledger entries that
+    include both a BLAKE3 SMT root and a Poseidon Merkle root. It ensures that
+    both roots are atomically bound together and cannot be swapped independently.
+
+    Args:
+        blake3_root: 32-byte BLAKE3 Merkle root (e.g., shard root from the SMT).
+        poseidon_root: 32-byte Poseidon Merkle root encoded as a big-endian
+            unsigned integer (BN128 field element).
+
+    Returns:
+        32-byte commitment hash binding both roots under LEDGER_PREFIX domain
+        separation.
+
+    Raises:
+        ValueError: If either root is not exactly 32 bytes.
+    """
+    if len(blake3_root) != 32:
+        raise ValueError(f"BLAKE3 root must be 32 bytes, got {len(blake3_root)}")
+    if len(poseidon_root) != 32:
+        raise ValueError(f"Poseidon root must be 32 bytes, got {len(poseidon_root)}")
+    return blake3_hash([LEDGER_PREFIX, blake3_root, _SEP, poseidon_root])
+
+
+def parse_dual_root_commitment(commitment: bytes) -> tuple[bytes, bytes]:
+    """
+    Parse a serialized dual-root commitment into its constituent roots.
+
+    The serialized commitment is the raw concatenation of the BLAKE3 root and
+    the Poseidon root (64 bytes total). This encoding is stored alongside the
+    commitment hash and allows reconstruction of the individual roots without
+    re-hashing.
+
+    Args:
+        commitment: 64-byte concatenation of blake3_root (first 32 bytes) and
+            poseidon_root (last 32 bytes).
+
+    Returns:
+        Tuple of ``(blake3_root, poseidon_root)``, each exactly 32 bytes.
+
+    Raises:
+        ValueError: If ``commitment`` is not exactly 64 bytes.
+    """
+    if len(commitment) != 64:
+        raise ValueError(f"Dual root commitment must be 64 bytes, got {len(commitment)}")
+    return commitment[:32], commitment[32:]
+
+
 def federation_vote_hash(
     node_id: str,
     shard_id: str,
