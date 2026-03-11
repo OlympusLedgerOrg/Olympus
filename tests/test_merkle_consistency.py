@@ -2,6 +2,9 @@
 Tests for Merkle consistency proofs.
 """
 
+from hypothesis import given, settings
+import hypothesis.strategies as st
+
 from protocol.hashes import node_hash
 from protocol.merkle import (
     MERKLE_VERSION,

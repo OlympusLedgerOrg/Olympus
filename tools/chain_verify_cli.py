@@ -29,7 +29,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from protocol.canonical_json import canonical_json_bytes
-from protocol.hashes import LEDGER_PREFIX, blake3_hash
+from protocol.hashes import LEDGER_PREFIX, _SEP, blake3_hash
 from protocol.ledger import Ledger, LedgerEntry
 
 
@@ -97,8 +97,21 @@ def cmd_verify(args: argparse.Namespace) -> int:
             "shard_root": entry.shard_root,
             "canonicalization": entry.canonicalization,
             "prev_entry_hash": entry.prev_entry_hash,
+            "poseidon_root": entry.poseidon_root,
         }
-        expected_hash = blake3_hash([LEDGER_PREFIX, canonical_json_bytes(payload)]).hex()
+        normalized_certificate = ledger._canonicalize_quorum_certificate(
+            entry.federation_quorum_certificate
+        )
+        if normalized_certificate is not None:
+            payload["federation_quorum_certificate"] = normalized_certificate
+
+        if entry.poseidon_root is not None:
+            poseidon_int = int(entry.poseidon_root)
+            poseidon_bytes = poseidon_int.to_bytes(32, byteorder="big")
+        else:
+            poseidon_bytes = b""
+
+        expected_hash = blake3_hash([LEDGER_PREFIX, canonical_json_bytes(payload), _SEP, poseidon_bytes]).hex()
 
         if entry.entry_hash != expected_hash:
             errors.append(
