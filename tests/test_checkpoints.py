@@ -259,10 +259,18 @@ def test_verify_checkpoint_chain_valid(registry, signing_keys):
         sequence=0, height=1, registry=registry, signing_keys=signing_keys
     )
     checkpoint2 = _build_checkpoint(
-        sequence=1, height=2, registry=registry, signing_keys=signing_keys, previous=checkpoint1
+        sequence=1,
+        height=2,
+        registry=registry,
+        signing_keys=signing_keys,
+        previous=checkpoint1,
     )
     checkpoint3 = _build_checkpoint(
-        sequence=2, height=3, registry=registry, signing_keys=signing_keys, previous=checkpoint2
+        sequence=2,
+        height=3,
+        registry=registry,
+        signing_keys=signing_keys,
+        previous=checkpoint2,
     )
 
     assert verify_checkpoint_chain([checkpoint1, checkpoint2, checkpoint3], registry)
@@ -311,10 +319,18 @@ def test_verify_checkpoint_chain_non_monotonic_sequence(registry, signing_keys):
         sequence=0, height=1, registry=registry, signing_keys=signing_keys
     )
     checkpoint2 = _build_checkpoint(
-        sequence=2, height=2, registry=registry, signing_keys=signing_keys, previous=checkpoint1
+        sequence=2,
+        height=2,
+        registry=registry,
+        signing_keys=signing_keys,
+        previous=checkpoint1,
     )
     checkpoint3 = _build_checkpoint(
-        sequence=1, height=3, registry=registry, signing_keys=signing_keys, previous=checkpoint2
+        sequence=1,
+        height=3,
+        registry=registry,
+        signing_keys=signing_keys,
+        previous=checkpoint2,
     )
 
     assert not verify_checkpoint_chain([checkpoint1, checkpoint2, checkpoint3], registry)
@@ -349,7 +365,11 @@ def test_verify_checkpoint_chain_rejects_invalid_consistency_proof(registry, sig
         sequence=0, height=2, registry=registry, signing_keys=signing_keys
     )
     checkpoint2 = _build_checkpoint(
-        sequence=1, height=4, registry=registry, signing_keys=signing_keys, previous=checkpoint1
+        sequence=1,
+        height=4,
+        registry=registry,
+        signing_keys=signing_keys,
+        previous=checkpoint1,
     )
 
     # Tamper with the proof
@@ -364,10 +384,18 @@ def test_detect_checkpoint_fork_same_sequence(registry, signing_keys):
         sequence=0, height=1, registry=registry, signing_keys=signing_keys
     )
     checkpoint1 = _build_checkpoint(
-        sequence=1, height=2, registry=registry, signing_keys=signing_keys, previous=parent
+        sequence=1,
+        height=2,
+        registry=registry,
+        signing_keys=signing_keys,
+        previous=parent,
     )
     checkpoint2 = _build_checkpoint(
-        sequence=1, height=3, registry=registry, signing_keys=signing_keys, previous=parent
+        sequence=1,
+        height=3,
+        registry=registry,
+        signing_keys=signing_keys,
+        previous=parent,
     )
 
     assert detect_checkpoint_fork(checkpoint1, checkpoint2)
@@ -435,7 +463,11 @@ def test_checkpoint_registry_add_checkpoint(registry, signing_keys):
     assert len(registry_store.checkpoints) == 1
 
     checkpoint2 = _build_checkpoint(
-        sequence=1, height=2, registry=registry, signing_keys=signing_keys, previous=checkpoint1
+        sequence=1,
+        height=2,
+        registry=registry,
+        signing_keys=signing_keys,
+        previous=checkpoint1,
     )
 
     assert registry_store.add_checkpoint(checkpoint2)
@@ -498,7 +530,11 @@ def test_checkpoint_registry_verify(registry, signing_keys):
     registry_store.add_checkpoint(checkpoint1)
 
     checkpoint2 = _build_checkpoint(
-        sequence=1, height=2, registry=registry, signing_keys=signing_keys, previous=checkpoint1
+        sequence=1,
+        height=2,
+        registry=registry,
+        signing_keys=signing_keys,
+        previous=checkpoint1,
     )
     registry_store.add_checkpoint(checkpoint2)
 
@@ -513,7 +549,11 @@ def test_checkpoint_registry_get_checkpoint(registry, signing_keys):
         sequence=0, height=1, registry=registry, signing_keys=signing_keys
     )
     checkpoint = _build_checkpoint(
-        sequence=5, height=2, registry=registry, signing_keys=signing_keys, previous=parent
+        sequence=5,
+        height=2,
+        registry=registry,
+        signing_keys=signing_keys,
+        previous=parent,
     )
     registry_store.add_checkpoint(checkpoint)
 

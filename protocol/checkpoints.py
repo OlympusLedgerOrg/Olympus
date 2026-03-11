@@ -238,7 +238,12 @@ def build_checkpoint_quorum_certificate(
     signatures: list[NodeSignature],
     registry: FederationRegistry,
 ) -> dict[str, Any]:
-    """Build a quorum certificate for a federation-signed checkpoint."""
+    """Build a quorum certificate for a federation-signed checkpoint.
+
+    The certificate includes both membership_hash and validator_set_hash (which
+    are identical today) to mirror federation header certificates and preserve
+    compatibility with existing verification expectations.
+    """
     valid_signatures = verify_federated_checkpoint_signatures(
         checkpoint_hash=checkpoint_hash,
         sequence=sequence,
@@ -348,7 +353,9 @@ def verify_checkpoint_quorum_certificate(
     if not isinstance(signer_bitmap, str):
         return False
     active_node_ids = sorted(node.node_id for node in registry.active_nodes())
-    if len(signer_bitmap) != len(active_node_ids) or set(signer_bitmap) - {"0", "1"}:
+    if len(signer_bitmap) != len(active_node_ids):
+        return False
+    if set(signer_bitmap) - {"0", "1"}:
         return False
     expected_signer_ids = [
         node_id
