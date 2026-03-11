@@ -70,6 +70,11 @@ identical outputs against these vectors:
 | Rust       | inline in `verifiers/rust/src/lib.rs`        |
 | JavaScript | `verifiers/javascript/test_conformance.js`   |
 
+In addition to the fixed vectors above, the cross-language determinism harness
+(`verifiers/cli/test_cross_language_determinism.py`) generates thousands of
+deterministic random records, hashes them in Python/Go/Rust/JavaScript, and
+fails on any divergence.
+
 ## Usage
 
 See individual README files in each subdirectory for language-specific instructions.
@@ -82,4 +87,4 @@ All verifiers produce identical results for the same inputs, demonstrating:
 - Implementation independence
 
 A dedicated CI workflow (`.github/workflows/verifier-conformance.yml`) runs all
-language test suites on every commit touching `verifiers/` or the core hash/Merkle modules.
+language test suites plus the random determinism harness on every commit and PR.
