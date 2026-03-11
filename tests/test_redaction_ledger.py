@@ -7,6 +7,7 @@ Coverage:
 - RedactionProofWithLedger construction and verify_smt_anchor
 - verify_all with and without a pluggable ZK verifier
 - Tamper detection: modified ZK public input root, modified SMT value
+- Tamper detection: dual-root commitment integrity
 """
 
 from unittest.mock import patch
@@ -15,7 +16,7 @@ import pytest
 
 from protocol.hashes import SNARK_SCALAR_FIELD, blake3_to_field_element, record_key
 from protocol.poseidon_tree import PoseidonMerkleTree
-from protocol.redaction import RedactionProtocol
+from protocol.redaction import RedactionProof, RedactionProtocol
 from protocol.redaction_ledger import (
     POSEIDON_ROOT_RECORD_TYPE,
     RedactionProofWithLedger,
@@ -481,3 +482,295 @@ def test_commit_document_dual_rejects_poseidon_root_mismatch():
             version=1,
             zk_proof={},
         )
+
+
+# ---------------------------------------------------------------------------
+# Dual-root commitment integrity: tamper-detection tests
+# ---------------------------------------------------------------------------
+
+
+def test_commit_document_dual_blake3_root_matches_returned_tree():
+    """
+    Structural invariant: commitment.blake3_root must equal tree.get_root().hex().
+
+    An adversary who replaces commitment.blake3_root with a value from a
+    different document is immediately detectable because the returned tree's
+    root still reflects the authentic document.
+    """
+    parts = ["authentic section one", "authentic section two"]
+    poseidon_root = _poseidon_root_for_parts(parts)
+    smt = SparseMerkleTree()
+
+    tree, commitment = RedactionProtocol.commit_document_dual(
+        document_parts=parts,
+        poseidon_root=poseidon_root,
+        smt=smt,
+        document_id="docTamper1",
+        version=1,
+    )
+
+    assert commitment.blake3_root == tree.get_root().hex()
+
+
+def test_commit_document_dual_poseidon_root_matches_smt_value():
+    """
+    Structural invariant: commitment.poseidon_root must equal the value stored
+    in the SMT under the document's key.
+
+    An adversary who replaces commitment.poseidon_root with a forged value
+    is detectable because the SMT still stores the authentic Poseidon root.
+    """
+    parts = ["authentic section one", "authentic section two"]
+    poseidon_root = _poseidon_root_for_parts(parts)
+    smt = SparseMerkleTree()
+
+    _, commitment = RedactionProtocol.commit_document_dual(
+        document_parts=parts,
+        poseidon_root=poseidon_root,
+        smt=smt,
+        document_id="docTamper2",
+        version=1,
+    )
+
+    key = poseidon_root_record_key("docTamper2", 1)
+    stored_bytes = smt.get(key)
+    assert stored_bytes is not None
+    assert poseidon_root_from_bytes(stored_bytes) == commitment.poseidon_root
+
+
+def test_tampered_blake3_root_detected_in_redaction_proof_verification():
+    """
+    Cross-document blake3_root substitution is detected during proof verification.
+
+    If an adversary replaces the original_root in a RedactionProof with the
+    blake3_root from a different document, the Merkle inclusion proofs (which
+    were generated from the authentic tree) contain root_hash values that differ
+    from the tampered root, causing verify_redaction_proof to return False.
+    """
+    parts_authentic = ["sensitive section A", "public section B"]
+    parts_other = ["completely different content", "unrelated second part"]
+
+    tree_authentic, root_authentic = RedactionProtocol.commit_document(parts_authentic)
+    _, root_other = RedactionProtocol.commit_document(parts_other)
+
+    # Sanity: the two documents produce different roots.
+    assert root_authentic != root_other
+
+    # Build a legitimate proof for the authentic document.
+    proof = RedactionProtocol.create_redaction_proof(tree_authentic, [0])
+
+    # Tamper: substitute the other document's blake3 root as the claimed root.
+    tampered_proof = RedactionProof(
+        original_root=root_other,
+        revealed_indices=proof.revealed_indices,
+        revealed_hashes=proof.revealed_hashes,
+        merkle_proofs=proof.merkle_proofs,
+    )
+
+    # The Merkle inclusion proofs embed root_authentic as root_hash, but
+    # tampered_proof.original_root == root_other → mismatch → fails.
+    assert RedactionProtocol.verify_redaction_proof(tampered_proof, [parts_authentic[0]]) is False
+
+
+def test_cross_document_poseidon_root_substitution_fails_smt_anchor():
+    """
+    Substituting a Poseidon root from a different document into the ZK public
+    inputs is detected by verify_smt_anchor.
+
+    The SMT stores the authentic document's Poseidon root.  If the ZK public
+    inputs claim a different root (from another document), the value_hash in
+    the SMT proof won't match the expected serialization of the tampered root.
+    """
+    parts_authentic = ["real section one", "real section two"]
+    parts_other = ["adversarial section one", "adversarial section two"]
+
+    poseidon_root_authentic = _poseidon_root_for_parts(parts_authentic)
+    poseidon_root_other = _poseidon_root_for_parts(parts_other)
+
+    # Sanity: the two documents yield different Poseidon roots.
+    assert poseidon_root_authentic != poseidon_root_other
+
+    smt = SparseMerkleTree()
+    RedactionProtocol.commit_document_dual(
+        document_parts=parts_authentic,
+        poseidon_root=poseidon_root_authentic,
+        smt=smt,
+        document_id="docTamper3",
+        version=1,
+    )
+    smt_root = smt.get_root()
+
+    # Build an SMT existence proof for the authentic document's key.
+    key = poseidon_root_record_key("docTamper3", 1)
+    smt_proof = smt.prove_existence(key)
+
+    # Adversary wraps the authentic SMT proof but substitutes the other
+    # document's Poseidon root as the ZK public input.
+    tampered_wrapped = RedactionProofWithLedger(
+        smt_proof=smt_proof,
+        zk_proof={},
+        zk_public_inputs=ZKPublicInputs(
+            original_root=poseidon_root_other,  # tampered: different document
+            redacted_commitment="0",
+            revealed_count=0,
+        ),
+    )
+
+    # The SMT proof's value_hash encodes poseidon_root_authentic, but
+    # verify_smt_anchor expects poseidon_root_to_bytes(poseidon_root_other) → fails.
+    assert tampered_wrapped.verify_smt_anchor(smt_root) is False
+
+
+def test_stale_smt_proof_invalidated_after_new_entry_appended():
+    """
+    Append-only integrity: an SMT existence proof captured at version N is
+    invalidated once version N+1 is committed, because appending a new entry
+    changes the SMT root hash.
+
+    This prevents an adversary from replaying an old proof against a newer
+    ledger state.
+    """
+    parts = ["versioned section one"]
+    poseidon_root = _poseidon_root_for_parts(parts)
+    smt = SparseMerkleTree()
+
+    # Commit version 1 and capture the existence proof immediately.
+    RedactionProtocol.commit_document_dual(
+        document_parts=parts,
+        poseidon_root=poseidon_root,
+        smt=smt,
+        document_id="docTamper4",
+        version=1,
+    )
+    key_v1 = poseidon_root_record_key("docTamper4", 1)
+    smt_proof_v1 = smt.prove_existence(key_v1)
+    smt_root_after_v1 = smt.get_root()
+
+    # The v1 proof verifies correctly against the v1 SMT root.
+    wrapped_v1 = RedactionProofWithLedger(
+        smt_proof=smt_proof_v1,
+        zk_proof={},
+        zk_public_inputs=ZKPublicInputs(
+            original_root=poseidon_root,
+            redacted_commitment="0",
+            revealed_count=0,
+        ),
+    )
+    assert wrapped_v1.verify_smt_anchor(smt_root_after_v1) is True
+
+    # Commit version 2, which mutates the SMT root.
+    RedactionProtocol.commit_document_dual(
+        document_parts=parts,
+        poseidon_root=poseidon_root,
+        smt=smt,
+        document_id="docTamper4",
+        version=2,
+    )
+    smt_root_after_v2 = smt.get_root()
+
+    # The two SMT roots must be different (version 2 added a new leaf).
+    assert smt_root_after_v1 != smt_root_after_v2
+
+    # The stale v1 proof must NOT verify against the newer SMT root.
+    assert wrapped_v1.verify_smt_anchor(smt_root_after_v2) is False
+
+
+def test_commit_document_dual_is_deterministic():
+    """
+    The DualHashCommitment is fully deterministic: identical inputs always
+    produce the same blake3_root and poseidon_root regardless of the SMT
+    instance used.
+    """
+    parts = ["alpha", "beta", "gamma"]
+    poseidon_root = _poseidon_root_for_parts(parts)
+
+    smt1 = SparseMerkleTree()
+    _, commitment1 = RedactionProtocol.commit_document_dual(
+        document_parts=parts,
+        poseidon_root=poseidon_root,
+        smt=smt1,
+        document_id="docTamper5",
+        version=1,
+    )
+
+    smt2 = SparseMerkleTree()
+    _, commitment2 = RedactionProtocol.commit_document_dual(
+        document_parts=parts,
+        poseidon_root=poseidon_root,
+        smt=smt2,
+        document_id="docTamper5",
+        version=1,
+    )
+
+    assert commitment1.blake3_root == commitment2.blake3_root
+    assert commitment1.poseidon_root == commitment2.poseidon_root
+
+
+def test_commit_document_dual_distinct_for_different_documents():
+    """
+    Two distinct documents must produce different blake3_root AND poseidon_root
+    values.  This ensures that commitments cannot be confused across documents.
+    """
+    parts_a = ["unique content A part one", "unique content A part two"]
+    parts_b = ["unique content B part one", "unique content B part two"]
+
+    poseidon_root_a = _poseidon_root_for_parts(parts_a)
+    poseidon_root_b = _poseidon_root_for_parts(parts_b)
+
+    smt = SparseMerkleTree()
+    _, commitment_a = RedactionProtocol.commit_document_dual(
+        document_parts=parts_a,
+        poseidon_root=poseidon_root_a,
+        smt=smt,
+        document_id="docTamper6",
+        version=1,
+    )
+    _, commitment_b = RedactionProtocol.commit_document_dual(
+        document_parts=parts_b,
+        poseidon_root=poseidon_root_b,
+        smt=smt,
+        document_id="docTamper6",
+        version=2,
+    )
+
+    assert commitment_a.blake3_root != commitment_b.blake3_root
+    assert commitment_a.poseidon_root != commitment_b.poseidon_root
+
+
+def test_forged_commit_document_dual_cannot_satisfy_both_verification_paths():
+    """
+    An adversary who forges a DualHashCommitment by mixing roots from two
+    different documents cannot satisfy both verification paths simultaneously.
+
+    - Using document A's blake3_root with document B's poseidon_root:
+      The BLAKE3 Merkle proofs for document A carry root_hash == blake3_root_A,
+      which won't match if the adversary claims blake3_root_B instead.  And the
+      SMT anchor check will fail because the SMT stores poseidon_root_A under
+      document A's key, not poseidon_root_B.
+
+    This test exercises the first path (BLAKE3 Merkle proof mismatch).
+    The SMT anchor path is covered by
+    test_cross_document_poseidon_root_substitution_fails_smt_anchor.
+    """
+    parts_a = ["original government report section 1", "original government report section 2"]
+    parts_b = ["replacement document section 1", "replacement document section 2"]
+
+    tree_a, blake3_root_a = RedactionProtocol.commit_document(parts_a)
+    _, blake3_root_b = RedactionProtocol.commit_document(parts_b)
+
+    assert blake3_root_a != blake3_root_b
+
+    # Build a proof for doc A; the Merkle proofs encode blake3_root_a as root_hash.
+    proof_a = RedactionProtocol.create_redaction_proof(tree_a, [0])
+
+    # Forged commitment: replace the claimed root with doc B's blake3 root.
+    forged_proof = RedactionProof(
+        original_root=blake3_root_b,
+        revealed_indices=proof_a.revealed_indices,
+        revealed_hashes=proof_a.revealed_hashes,
+        merkle_proofs=proof_a.merkle_proofs,
+    )
+
+    # Verification must fail: merkle_proofs[0].root_hash.hex() == blake3_root_a
+    # but forged_proof.original_root == blake3_root_b.
+    assert RedactionProtocol.verify_redaction_proof(forged_proof, [parts_a[0]]) is False
