@@ -242,6 +242,15 @@ def _parse_timestamp(timestamp: str) -> datetime:
     return datetime.fromisoformat(timestamp.replace("Z", "+00:00"))
 
 
+def is_replay_epoch(candidate_epoch: int, current_epoch: int) -> bool:
+    """Return whether ``candidate_epoch`` is stale relative to ``current_epoch``.
+
+    Federation replay protection rejects any quorum certificate/root candidate
+    whose epoch is lower than the receiver's current epoch.
+    """
+    return candidate_epoch < current_epoch
+
+
 def _extract_round_and_height(header: dict[str, Any]) -> tuple[int, int]:
     """Return validated round/height metadata required for federation vote binding."""
     try:
@@ -632,7 +641,13 @@ def verify_quorum_certificate(
         return False
     if certificate["event_id"] != _federation_vote_event_id(header, registry):
         return False
-    if int(certificate["federation_epoch"]) != registry.epoch:
+    try:
+        certificate_epoch = int(certificate["federation_epoch"])
+    except (TypeError, ValueError):
+        return False
+    if is_replay_epoch(certificate_epoch, registry.epoch):
+        return False
+    if certificate_epoch != registry.epoch:
         return False
     validator_set_hash = registry.membership_hash()
     if str(certificate["membership_hash"]) != validator_set_hash:
@@ -725,6 +740,61 @@ def verify_quorum_certificate(
 
     # Quorum is counted against the number of *unique* verified signers.
     return len(unique_verified_nodes) >= registry.quorum_threshold()
+
+
+def resolve_canonical_fork(
+    candidates: list[tuple[dict[str, Any], dict[str, Any]]],
+    registry: FederationRegistry,
+    *,
+    current_epoch: int | None = None,
+) -> tuple[dict[str, Any], dict[str, Any]] | None:
+    """Return the deterministic canonical root candidate among competing forks.
+
+    The resolver applies these deterministic rules:
+    1. Only candidates with valid quorum certificates are eligible.
+    2. Replay protection rejects candidates whose federation epoch is lower than
+       ``current_epoch`` (default: ``registry.epoch``).
+    3. Prefer the candidate with the highest number of valid signer approvals.
+    4. If signer counts tie, prefer the earliest certificate timestamp.
+    5. If still tied (simultaneous roots), choose the lexicographically lowest
+       header hash.
+    """
+    if not candidates:
+        return None
+    effective_epoch = registry.epoch if current_epoch is None else int(current_epoch)
+    if effective_epoch < 0:
+        raise ValueError("Current federation epoch must be non-negative")
+
+    eligible: list[tuple[tuple[int, datetime, str], dict[str, Any], dict[str, Any]]] = []
+    slot: tuple[str, int, int] | None = None
+    for header, certificate in candidates:
+        cert_epoch = _to_int(certificate.get("federation_epoch"))
+        if cert_epoch is None or is_replay_epoch(cert_epoch, effective_epoch):
+            continue
+        if not verify_quorum_certificate(certificate, header, registry):
+            continue
+
+        candidate_slot = (
+            str(certificate["shard_id"]),
+            int(certificate["height"]),
+            int(certificate["round"]),
+        )
+        if slot is None:
+            slot = candidate_slot
+        elif candidate_slot != slot:
+            raise ValueError(
+                "Fork candidates must reference the same shard_id, height, and round"
+            )
+
+        signer_count = len(certificate["signatures"])
+        certificate_timestamp = _parse_timestamp(str(certificate["timestamp"]))
+        header_hash = str(certificate["header_hash"])
+        eligible.append(((-signer_count, certificate_timestamp, header_hash), header, certificate))
+
+    if not eligible:
+        return None
+    _, selected_header, selected_certificate = min(eligible, key=lambda item: item[0])
+    return selected_header, selected_certificate
 
 
 def append_quorum_certificate_to_ledger(
