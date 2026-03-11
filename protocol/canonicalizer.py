@@ -67,6 +67,37 @@ class CanonicalizationError(Exception):
     """Raised when an artifact fails deterministic constraints."""
 
 
+class ArtifactProcessingError(CanonicalizationError):
+    """Base class for ingestion-level failures."""
+
+
+class UnsupportedMimeTypeError(ArtifactProcessingError):
+    """Raised when process_artifact is asked to handle an unknown MIME type."""
+
+
+class ArtifactCanonicalizationError(ArtifactProcessingError):
+    """Raised when canonicalization for a supported MIME type fails."""
+
+
+class ArtifactIdempotencyError(ArtifactProcessingError):
+    """Raised when a canonicalization pipeline is not byte-idempotent."""
+
+
+def _should_strip_attribute(attr_name: str, attr_value: str) -> bool:
+    """Return True when an HTML attribute is unsafe and should be removed."""
+    name = attr_name.lower()
+    if name.startswith("on"):
+        return True
+
+    if name in {"href", "src", "xlink:href", "formaction", "action"}:
+        # Reject javascript: URLs even with whitespace obfuscation
+        value = attr_value.strip().lower()
+        if value.startswith("javascript:"):
+            return True
+
+    return False
+
+
 class Canonicalizer:
     """
     Olympus C-Pipe: Hardened Deterministic Canonicalization.
@@ -233,16 +264,20 @@ class Canonicalizer:
         except Exception as e:
             raise CanonicalizationError(f"HTML Parse Failure: {e!s}")
 
-        # Remove volatile active tags
+        # Remove volatile active tags (and their contents/tails)
         for tag in ["script", "style", "iframe", "object", "embed", "applet", "meta"]:
             for el in root.xpath(f"//{tag}"):
                 if el.getparent() is not None:
+                    el.text = None
+                    el.tail = None
                     el.getparent().remove(el)
 
         def walk(el: Any) -> None:
             if el.attrib:
                 # Sort attributes by name
-                items = sorted(el.attrib.items())
+                items = sorted(
+                    (k, v) for k, v in el.attrib.items() if not _should_strip_attribute(k, v)
+                )
                 el.attrib.clear()
                 for k, v in items:
                     el.attrib[k] = v
@@ -386,48 +421,80 @@ def process_artifact(
     Returns:
         Dictionary containing raw_hash, canonical_hash, mode, version,
         and related metadata.
+    Raises:
+        UnsupportedMimeTypeError: If the MIME type is not supported.
+        ArtifactCanonicalizationError: If canonicalization for the MIME type fails.
+        ArtifactIdempotencyError: If a canonicalized artifact fails byte-idempotency checks.
     """
     c = Canonicalizer()
-    mode: str = "byte_preserved"
-    reason: str | None = None
-    processed: bytes = raw_data
-
-    try:
-        if "json" in mime_type:
+    if "json" in mime_type:
+        try:
             processed = c.json_jcs(raw_data)
-            mode = "jcs_v1"
-            # Determinism Guard: C(x) == C(C(x))
-            if processed != c.json_jcs(processed):
-                raise CanonicalizationError("JCS Byte-Idempotency Violation")
+        except CanonicalizationError as exc:
+            raise ArtifactCanonicalizationError(f"JSON canonicalization failed: {exc!s}") from exc
 
-        elif "html" in mime_type:
+        if processed != c.json_jcs(processed):
+            raise ArtifactIdempotencyError("JCS Byte-Idempotency Violation")
+
+        return {
+            "raw_hash": c.get_hash(raw_data).hex(),
+            "canonical_hash": c.get_hash(processed).hex(),
+            "mode": "jcs_v1",
+            "fallback_reason": None,
+            "version": CANONICALIZER_VERSIONS["jcs"],
+            "witness_anchor": witness_anchor,
+            "lxml_pinned": LXML_VERSION,
+        }
+
+    if "html" in mime_type:
+        try:
             processed = c.html_v1(raw_data)
-            mode = "html_v1"
-            if processed != c.html_v1(processed):
-                raise CanonicalizationError("HTML Byte-Idempotency Violation")
+        except CanonicalizationError as exc:
+            raise ArtifactCanonicalizationError(f"HTML canonicalization failed: {exc!s}") from exc
 
-        elif "vnd.openxmlformats-officedocument.wordprocessingml.document" in mime_type:
+        if processed != c.html_v1(processed):
+            raise ArtifactIdempotencyError("HTML Byte-Idempotency Violation")
+
+        return {
+            "raw_hash": c.get_hash(raw_data).hex(),
+            "canonical_hash": c.get_hash(processed).hex(),
+            "mode": "html_v1",
+            "fallback_reason": None,
+            "version": CANONICALIZER_VERSIONS["html"],
+            "witness_anchor": witness_anchor,
+            "lxml_pinned": LXML_VERSION,
+        }
+
+    if "vnd.openxmlformats-officedocument.wordprocessingml.document" in mime_type:
+        try:
             canon_hash = c.docx_v1(raw_data)
-            return {
-                "raw_hash": c.get_hash(raw_data).hex(),
-                "canonical_hash": canon_hash.hex(),
-                "mode": "docx_v1",
-                "version": CANONICALIZER_VERSIONS["docx"],
-                "witness_anchor": witness_anchor,
-            }
+        except CanonicalizationError as exc:
+            raise ArtifactCanonicalizationError(f"DOCX canonicalization failed: {exc!s}") from exc
 
-        elif "pdf" in mime_type:
-            processed, mode = c.pdf_normalize(raw_data)
+        return {
+            "raw_hash": c.get_hash(raw_data).hex(),
+            "canonical_hash": canon_hash.hex(),
+            "mode": "docx_v1",
+            "fallback_reason": None,
+            "version": CANONICALIZER_VERSIONS["docx"],
+            "witness_anchor": witness_anchor,
+            "lxml_pinned": LXML_VERSION,
+        }
 
-    except Exception as e:
-        mode, reason, processed = "byte_preserved", f"canonical_error: {e!s}", raw_data
+    if "pdf" in mime_type:
+        try:
+            processed, pdf_mode = c.pdf_normalize(raw_data)
+        except CanonicalizationError as exc:
+            raise ArtifactCanonicalizationError(f"PDF canonicalization failed: {exc!s}") from exc
 
-    return {
-        "raw_hash": c.get_hash(raw_data).hex(),
-        "canonical_hash": c.get_hash(processed).hex(),
-        "mode": mode,
-        "fallback_reason": reason,
-        "version": CANONICALIZER_VERSIONS.get(mode.split("_")[0], "0.0.0"),
-        "witness_anchor": witness_anchor,
-        "lxml_pinned": LXML_VERSION,
-    }
+        return {
+            "raw_hash": c.get_hash(raw_data).hex(),
+            "canonical_hash": c.get_hash(processed).hex(),
+            "mode": pdf_mode,
+            "fallback_reason": None,
+            "version": CANONICALIZER_VERSIONS["pdf"],
+            "witness_anchor": witness_anchor,
+            "lxml_pinned": LXML_VERSION,
+        }
+
+    raise UnsupportedMimeTypeError(f"Unsupported MIME type: {mime_type}")
