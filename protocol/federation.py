@@ -498,6 +498,7 @@ def build_quorum_certificate(
     active_node_ids = sorted(node.node_id for node in registry.active_nodes())
     signer_bitmap_bits: list[str] = []
     ordered_signatures: list[NodeSignature] = []
+    validator_count = len(active_node_ids)
     for node_id in active_node_ids:
         signature = signature_by_node.get(node_id)
         if signature is not None:
@@ -508,7 +509,7 @@ def build_quorum_certificate(
     signer_bitmap = "".join(signer_bitmap_bits)
     if len(ordered_signatures) < registry.quorum_threshold():
         raise ValueError("Insufficient valid federation signatures for quorum certificate")
-    return {
+    certificate = {
         "shard_id": str(header["shard_id"]),
         "height": height,
         "round": round_number,
@@ -518,11 +519,43 @@ def build_quorum_certificate(
         "federation_epoch": registry.epoch,
         "membership_hash": validator_set_hash,
         "validator_set_hash": validator_set_hash,
+        "validator_count": validator_count,
         "quorum_threshold": registry.quorum_threshold(),
         "scheme": _CERTIFICATE_SIGNATURE_SCHEME_ED25519,
         "signer_bitmap": signer_bitmap,
         "signatures": [signature.to_dict() for signature in ordered_signatures],
     }
+    certificate_hash = quorum_certificate_hash(certificate)
+    header["quorum_certificate_hash"] = certificate_hash
+    return certificate
+
+
+def quorum_certificate_hash(certificate: dict[str, Any]) -> str:
+    """Return the deterministic hash commitment for a quorum certificate."""
+    canonical_certificate = {
+        "event_id": str(certificate.get("event_id", "")),
+        "federation_epoch": int(certificate.get("federation_epoch", 0)),
+        "height": int(certificate.get("height", 0)),
+        "header_hash": str(certificate.get("header_hash", "")),
+        "membership_hash": str(certificate.get("membership_hash", "")),
+        "validator_set_hash": str(certificate.get("validator_set_hash", "")),
+        "validator_count": int(certificate.get("validator_count", 0)),
+        "quorum_threshold": int(certificate.get("quorum_threshold", 0)),
+        "round": int(certificate.get("round", 0)),
+        "scheme": str(certificate.get("scheme", "")),
+        "shard_id": str(certificate.get("shard_id", "")),
+        "signer_bitmap": str(certificate.get("signer_bitmap", "")),
+        "timestamp": str(certificate.get("timestamp", "")),
+        "signatures": sorted(
+            (
+                {"node_id": str(item["node_id"]), "signature": str(item["signature"])}
+                for item in certificate.get("signatures", [])
+                if isinstance(item, dict) and "node_id" in item and "signature" in item
+            ),
+            key=lambda item: (item["node_id"], item["signature"]),
+        ),
+    }
+    return hash_bytes(canonical_json_bytes(canonical_certificate)).hex()
 
 
 def verify_quorum_certificate(
@@ -562,12 +595,19 @@ def verify_quorum_certificate(
         "federation_epoch",
         "membership_hash",
         "validator_set_hash",
+        "validator_count",
         "quorum_threshold",
         "scheme",
         "signer_bitmap",
         "signatures",
     }
     if not required_fields.issubset(certificate):
+        return False
+    header_quorum_hash = header.get("quorum_certificate_hash")
+    expected_certificate_hash = quorum_certificate_hash(certificate)
+    if header_quorum_hash is None:
+        return False
+    if str(header_quorum_hash) != expected_certificate_hash:
         return False
     if certificate["shard_id"] != header.get("shard_id"):
         return False
@@ -597,7 +637,15 @@ def verify_quorum_certificate(
         return False
     if str(certificate["validator_set_hash"]) != validator_set_hash:
         return False
-    if int(certificate["quorum_threshold"]) != registry.quorum_threshold():
+    try:
+        validator_count = int(certificate["validator_count"])
+        quorum_threshold = int(certificate["quorum_threshold"])
+    except (TypeError, ValueError):
+        return False
+    if validator_count != len(registry.active_nodes()):
+        return False
+    expected_threshold = math.ceil((2 * validator_count) / 3)
+    if quorum_threshold != expected_threshold:
         return False
     if certificate.get("scheme") != _CERTIFICATE_SIGNATURE_SCHEME_ED25519:
         return False

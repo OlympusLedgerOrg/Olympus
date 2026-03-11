@@ -20,7 +20,9 @@ from .hashes import hash_bytes, shard_header_hash
 
 
 # Fields excluded from the canonical commitment bytes (derived or post-commitment metadata)
-_HEADER_EXCLUDED_FIELDS: frozenset[str] = frozenset({"header_hash", "signature", "timestamp_token"})
+_HEADER_EXCLUDED_FIELDS: frozenset[str] = frozenset(
+    {"header_hash", "signature", "timestamp_token", "quorum_certificate_hash"}
+)
 
 # HKDF domain separation constants for key derivation.
 # salt provides domain separation from other HKDF usages; info labels bind
@@ -132,7 +134,7 @@ def create_shard_header(
 
     # Compute header hash
     header["header_hash"] = shard_header_hash(
-        {k: v for k, v in header.items() if k != "header_hash"}
+        {k: v for k, v in header.items() if k not in _HEADER_EXCLUDED_FIELDS}
     ).hex()
 
     # Attach RFC 3161 timestamp token after hash commitment (not part of the hash)
@@ -177,7 +179,7 @@ def verify_header(
     """
     # Verify header hash
     header_without_hash = {
-        k: v for k, v in header.items() if k not in ["header_hash", "signature", "timestamp_token"]
+        k: v for k, v in header.items() if k not in _HEADER_EXCLUDED_FIELDS
     }
     expected_hash = shard_header_hash(header_without_hash).hex()
 

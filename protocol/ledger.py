@@ -81,6 +81,7 @@ class Ledger:
             "height": int(certificate.get("height", 0)),
             "header_hash": str(certificate.get("header_hash", "")),
             "membership_hash": str(certificate.get("membership_hash", "")),
+            "validator_count": int(certificate.get("validator_count", 0)),
             "quorum_threshold": int(certificate.get("quorum_threshold", 0)),
             "round": int(certificate.get("round", 0)),
             "scheme": str(certificate.get("scheme", "")),
