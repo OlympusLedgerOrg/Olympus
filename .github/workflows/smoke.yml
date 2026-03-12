@@ -39,6 +39,15 @@ jobs:
     - name: Validate JSON schemas
       run: python tools/validate_schemas.py
 
+    - name: Ruff lint
+      run: ruff check protocol/ storage/ api/ app_testonly/ tests/ --output-format=github
+
+    - name: Ruff format check
+      run: ruff format --check protocol/ storage/ api/ app_testonly/ tests/
+
+    - name: MyPy type check
+      run: mypy protocol/ storage/ api/
+
     - name: Run smoke tests (unit, no database)
       run: pytest tests/ -v --tb=short -m "smoke and not postgres"
 

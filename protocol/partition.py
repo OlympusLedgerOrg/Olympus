@@ -1,10 +1,23 @@
 """
 Partition awareness and fork resolution utilities.
 
+⚠️  **Phase 1+ only — not implemented in v1.0.**
+
 These helpers implement dynamic quorum detection with frozen watermarks and a
 deterministic fork-choice rule that combines elapsed rounds, quorum weight, and
 a VRF-style tie-breaker. Chains are validated for proof-of-elapsed-time using
 consensus round progression (block height), not wall-clock ordering.
+<<<<<<< claude/fix-merge-conflict-and-update
+=======
+
+To mitigate eclipse-style isolation, the partition detector supports random peer
+sampling, peer-group diversity checks, and optional cross-network verification
+before marking the network as healthy.
+
+This module is part of the Guardian replication protocol and is NOT part of the
+v1.0 single-node ledger. Civic tech partners should not assume live consensus
+is available in production deployments until Phase 1+ is explicitly announced.
+>>>>>>> main
 """
 
 from __future__ import annotations
@@ -17,6 +30,9 @@ from math import ceil
 
 from .hashes import hash_bytes
 from .timestamps import current_timestamp
+from .telemetry import PARTITION_EVENTS, get_tracer
+
+_partition_tracer = get_tracer("olympus.partition")
 
 
 @dataclass(frozen=True)
@@ -276,36 +292,48 @@ def resolve_partition_fork(
     validate_proof_of_wait(chain_a)
     validate_proof_of_wait(chain_b)
 
-    elapsed_rounds_a = proof_of_elapsed_rounds(chain_a)
-    elapsed_rounds_b = proof_of_elapsed_rounds(chain_b)
+    with _partition_tracer.start_as_current_span("partition.resolve_fork") as span:
+        elapsed_rounds_a = proof_of_elapsed_rounds(chain_a)
+        elapsed_rounds_b = proof_of_elapsed_rounds(chain_b)
+        span.set_attribute("chain_a_length", len(chain_a))
+        span.set_attribute("chain_b_length", len(chain_b))
+        span.set_attribute("elapsed_rounds_a", elapsed_rounds_a)
+        span.set_attribute("elapsed_rounds_b", elapsed_rounds_b)
 
-    if elapsed_rounds_a > elapsed_rounds_b:
-        return tuple(chain_a)
-    if elapsed_rounds_b > elapsed_rounds_a:
-        return tuple(chain_b)
-    if len(chain_a) > len(chain_b):
-        return tuple(chain_a)
-    if len(chain_b) > len(chain_a):
-        return tuple(chain_b)
-    if chain_a == chain_b:
-        return tuple(chain_a)
+        selected = "a"
+        fork_round: int | None = None
 
-    fork_round = find_first_divergent_round(chain_a, chain_b)
-    if fork_round >= len(chain_a) or fork_round >= len(chain_b):
-        # One chain is a strict prefix; length equality handled above.
-        return tuple(chain_a)
+        if elapsed_rounds_a > elapsed_rounds_b:
+            selected = "a"
+        elif elapsed_rounds_b > elapsed_rounds_a:
+            selected = "b"
+        elif len(chain_a) > len(chain_b):
+            selected = "a"
+        elif len(chain_b) > len(chain_a):
+            selected = "b"
+        elif chain_a == chain_b:
+            selected = "a"
+        else:
+            fork_round = find_first_divergent_round(chain_a, chain_b)
+            if fork_round >= len(chain_a) or fork_round >= len(chain_b):
+                selected = "a"
+            else:
+                weight_a = chain_a[fork_round].quorum_weight
+                weight_b = chain_b[fork_round].quorum_weight
+                if weight_a != weight_b:
+                    selected = "a" if weight_a > weight_b else "b"
+                else:
+                    vrf_index = fork_round + 1
+                    if vrf_index >= len(chain_a) or vrf_index >= len(chain_b):
+                        vrf_index = fork_round
+                    vrf_a = chain_a[vrf_index].vrf_hash
+                    vrf_b = chain_b[vrf_index].vrf_hash
+                    selected = "a" if vrf_a <= vrf_b else "b"
 
-    weight_a = chain_a[fork_round].quorum_weight
-    weight_b = chain_b[fork_round].quorum_weight
-    if weight_a != weight_b:
-        return tuple(chain_a) if weight_a > weight_b else tuple(chain_b)
-
-    vrf_index = fork_round + 1
-    if vrf_index >= len(chain_a) or vrf_index >= len(chain_b):
-        vrf_index = fork_round
-    vrf_a = chain_a[vrf_index].vrf_hash
-    vrf_b = chain_b[vrf_index].vrf_hash
-    return tuple(chain_a) if vrf_a <= vrf_b else tuple(chain_b)
+        if fork_round is not None:
+            span.set_attribute("fork_round", fork_round)
+        span.set_attribute("selected_chain", selected)
+        return tuple(chain_a) if selected == "a" else tuple(chain_b)
 
 
 def select_random_peers(nodes: Sequence[str], sample_size: int) -> tuple[str, ...]:
@@ -360,33 +388,50 @@ class PartitionDetector:
         if not nodes:
             raise ValueError("current_nodes cannot be empty")
 
-        sample_size = len(nodes) if self._sample_size is None else self._sample_size
-        if sample_size <= 0:
-            raise ValueError("sample_size must be a positive integer")
-        if sample_size > len(nodes):
-            sample_size = len(nodes)
-        sampled_nodes = self._peer_selector(nodes, sample_size)
+        with _partition_tracer.start_as_current_span("partition.check_network_health") as span:
+            span.set_attribute("round_num", round_num)
+            span.set_attribute("active_nodes", len(nodes))
 
-        if self._peer_groups and self._min_peer_group_diversity > 1:
-            sampled_groups = {
-                self._peer_groups[node_id]
-                for node_id in sampled_nodes
-                if node_id in self._peer_groups
-            }
-            if len(sampled_groups) < self._min_peer_group_diversity:
+            sample_size = len(nodes) if self._sample_size is None else self._sample_size
+            if sample_size <= 0:
+                raise ValueError("sample_size must be a positive integer")
+            if sample_size > len(nodes):
+                sample_size = len(nodes)
+            sampled_nodes = self._peer_selector(nodes, sample_size)
+            span.set_attribute("sample_size", len(sampled_nodes))
+
+            if self._peer_groups and self._min_peer_group_diversity > 1:
+                sampled_groups = {
+                    self._peer_groups[node_id]
+                    for node_id in sampled_nodes
+                    if node_id in self._peer_groups
+                }
+                span.set_attribute("sampled_group_count", len(sampled_groups))
+                if len(sampled_groups) < self._min_peer_group_diversity:
+                    self.frozen_watermarks[round_num] = self._get_current_state()
+                    span.set_attribute("quorum_status", "insufficient_peer_group_diversity")
+                    PARTITION_EVENTS.labels(event="quorum_lost").inc()
+                    return False
+
+            reachable = self._ping_nodes(sampled_nodes)
+            required = ceil(2 * len(sampled_nodes) / 3)
+            span.set_attribute("reachable_nodes", len(reachable))
+            span.set_attribute("required_quorum", required)
+            if len(reachable) < required:
                 self.frozen_watermarks[round_num] = self._get_current_state()
+                span.set_attribute("quorum_status", "unhealthy")
+                PARTITION_EVENTS.labels(event="quorum_lost").inc()
+                return False
+            if self._cross_network_verifier is not None and not self._cross_network_verifier(reachable):
+                self.frozen_watermarks[round_num] = self._get_current_state()
+                span.set_attribute("quorum_status", "cross_network_rejection")
+                PARTITION_EVENTS.labels(event="quorum_lost").inc()
                 return False
 
-        reachable = self._ping_nodes(sampled_nodes)
-        required = ceil(2 * len(sampled_nodes) / 3)
-        if len(reachable) < required:
-            self.frozen_watermarks[round_num] = self._get_current_state()
-            return False
-        if self._cross_network_verifier is not None and not self._cross_network_verifier(reachable):
-            self.frozen_watermarks[round_num] = self._get_current_state()
-            return False
-        self.last_quorum_time[round_num] = current_timestamp()
-        return True
+            self.last_quorum_time[round_num] = current_timestamp()
+            span.set_attribute("quorum_status", "healthy")
+            PARTITION_EVENTS.labels(event="quorum_healthy").inc()
+            return True
 
     def recover_from_partition(self, healed_round: int) -> ConsensusChainState:
         """
@@ -413,7 +458,11 @@ class PartitionDetector:
             self.frozen_watermarks.pop(round_num, None)
 
         self.last_quorum_time[healed_round] = current_timestamp()
-        return winner
+        with _partition_tracer.start_as_current_span("partition.recover_from_partition") as span:
+            span.set_attribute("healed_round", healed_round)
+            span.set_attribute("candidate_count", len(candidates))
+            PARTITION_EVENTS.labels(event="quorum_recovered").inc()
+            return winner
 
 
 def vrf_hash_from_seed(seed: str) -> str:
