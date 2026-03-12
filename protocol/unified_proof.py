@@ -331,9 +331,7 @@ class UnifiedProofVerifier:
             return True  # Skip if no registry provided
 
         try:
-            return verify_checkpoint_quorum_certificate(
-                checkpoint=proof.checkpoint, registry=self.registry
-            )
+            return verify_checkpoint_quorum_certificate(proof.checkpoint, self.registry)
         except (ValueError, KeyError, AttributeError):
             return False
 
