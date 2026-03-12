@@ -27,8 +27,8 @@ Olympus allows documents to be redacted while providing cryptographic proof that
   and latency goals. Trusted setup risk is mitigated with a public, multi-party
   Phase 2 ceremony.
 - **Optional (High-Assurance paths)**: Halo2 can be slotted in for special cases
-  such as superseding signatures or “final appeal” proofs when maximal
-  trustlessness is required; circuits should still be versioned and pinned.
+  such as superseding signatures or “final appeal” proofs when minimal trust
+  assumptions are required; circuits should still be versioned and pinned.
 - Batch verification is supported at the proof layer.
 
 ## Dual-Anchor Strategy

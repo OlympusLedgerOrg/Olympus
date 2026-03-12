@@ -1,4 +1,4 @@
-# ADR 0002: Zero-Knowledge Proof System Selection — Groth16 Primary, Halo2 Optional
+# ADR 0002: Zero-Knowledge Proof System Selection - Groth16 Primary, Halo2 Optional
 
 ## Context
 - Olympus needs a production-grade ZK proving system for redaction proofs.
