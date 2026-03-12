@@ -107,10 +107,19 @@ that the state grew append-only.
 ## Fork Detection
 
 ```python
-from protocol.checkpoints import detect_checkpoint_fork
+from protocol.checkpoints import (
+    detect_checkpoint_fork,
+    detect_gossip_checkpoint_forks,
+)
 
 # Returns True if checkpoints represent a fork
 is_fork = detect_checkpoint_fork(checkpoint_a, checkpoint_b)
+
+# Gossip helpers surface equivocations reported by peers
+evidence = detect_gossip_checkpoint_forks(
+    observations={"peer-a": checkpoint_a, "peer-b": checkpoint_b},
+    registry=registry,  # optional, but recommended for verification
+)
 ```
 
 A fork is detected when two checkpoints have:
