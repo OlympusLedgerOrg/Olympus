@@ -612,7 +612,7 @@ def test_detect_gossip_checkpoint_forks_rejects_invalid(registry, signing_keys):
         signing_keys=signing_keys,
         previous=genesis,
     )
-    invalid.checkpoint_hash = "00"
+    invalid.checkpoint_hash = "not-a-valid-checkpoint-hash"
 
     with pytest.raises(ValueError, match="peer-b"):
         detect_gossip_checkpoint_forks(
