@@ -127,6 +127,7 @@ python_functions = ["test_*"]
 markers = [
     "postgres: marks tests as requiring PostgreSQL (deselect with '-m \"not postgres\"')",
     "smoke: marks tests as part of the fast smoke suite (critical path only)",
+    "slow: marks long-running or nightly scenarios",
 ]
 
 [tool.coverage.run]

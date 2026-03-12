@@ -43,6 +43,14 @@ minimal failing shuffle sequence.
 
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor
+from pathlib import Path
+from types import SimpleNamespace
+import os
+import pickle
+import random
+import threading
+
 import hypothesis.strategies as st
 import pytest
 from hypothesis import assume, given, settings
@@ -307,6 +315,154 @@ def test_watermark_convergence_across_n_nodes_with_random_orderings(
 
 
 # ============================================================================
+# Network Propagation Variants
+# ============================================================================
+
+
+@given(
+    all_rounds=st.sets(st.integers(min_value=0, max_value=80), min_size=5, max_size=20),
+    node_count=st.integers(min_value=2, max_value=4),
+    node_orderings=st.data(),
+)
+@settings(max_examples=50, deadline=None)
+def test_partial_gossip_converges_after_reconciliation(
+    all_rounds: set[int], node_count: int, node_orderings: st.DataObject
+) -> None:
+    """
+    Property: Nodes that initially see only partial gossip but eventually receive the
+    union of rounds must converge to identical state.
+    """
+    assume(all_rounds)
+    registry = ValidatorRegistry({"node1", "node2", "node3"}, epoch=0)
+    sorted_rounds = sorted(all_rounds)
+
+    nodes: list[ConsensusState] = []
+    visible_rounds: list[set[int]] = []
+
+    # Each node starts with a partial view delivered in a randomized order
+    for _ in range(node_count):
+        mask = node_orderings.draw(
+            st.lists(st.booleans(), min_size=len(sorted_rounds), max_size=len(sorted_rounds))
+        )
+        subset = [round_num for round_num, seen in zip(sorted_rounds, mask) if seen]
+        if not subset:
+            subset = [sorted_rounds[0]]
+
+        permutation = node_orderings.draw(st.permutations(subset))
+        consensus = ConsensusState(max_watermark_window=25)
+        for round_num in permutation:
+            consensus.start_round(round_num=round_num, start_epoch=round_num, registry=registry)
+
+        nodes.append(consensus)
+        visible_rounds.append(set(subset))
+
+    # Reconcile missing rounds to simulate delayed gossip arrival
+    full_set = set(sorted_rounds)
+    for consensus, seen in zip(nodes, visible_rounds):
+        missing = sorted(full_set - seen)
+        shuffled_missing = node_orderings.draw(st.permutations(missing)) if missing else ()
+        for round_num in shuffled_missing:
+            consensus.start_round(round_num=round_num, start_epoch=round_num, registry=registry)
+        consensus.advance_watermark(sorted_rounds[-1])
+
+    reference = nodes[0]
+    for idx, node in enumerate(nodes[1:], start=1):
+        assert node.low_watermark == reference.low_watermark, (
+            f"Node {idx} low_watermark={node.low_watermark} differs from "
+            f"reference {reference.low_watermark}"
+        )
+        assert node.high_watermark == reference.high_watermark, (
+            f"Node {idx} high_watermark={node.high_watermark} differs from "
+            f"reference {reference.high_watermark}"
+        )
+        assert set(node.voting_rounds.keys()) == set(reference.voting_rounds.keys()), (
+            f"Node {idx} active rounds {set(node.voting_rounds.keys())} differ from "
+            f"reference {set(reference.voting_rounds.keys())}"
+        )
+
+
+def test_concurrent_round_application_is_deterministic() -> None:
+    """
+    Concurrently starting unique rounds on the same state should converge to the
+    same result as sequential application.
+    """
+    registry = ValidatorRegistry({"nodeA", "nodeB"}, epoch=0)
+    consensus = ConsensusState(max_watermark_window=120)
+
+    all_rounds = list(range(120))
+    worker_count = 4
+    chunks = [all_rounds[i::worker_count] for i in range(worker_count)]
+    barrier = threading.Barrier(parties=worker_count)
+
+    def apply_rounds(round_chunk: list[int]) -> None:
+        barrier.wait()
+        for round_num in round_chunk:
+            consensus.start_round(round_num=round_num, start_epoch=round_num, registry=registry)
+
+    with ThreadPoolExecutor(max_workers=worker_count) as executor:
+        for chunk in chunks:
+            executor.submit(apply_rounds, chunk)
+
+    consensus.advance_watermark(max(all_rounds))
+
+    assert consensus.low_watermark == 0
+    assert consensus.high_watermark == max(all_rounds)
+    assert set(consensus.voting_rounds.keys()) == set(all_rounds)
+
+
+def test_state_serialization_round_trip_preserves_determinism(tmp_path: Path) -> None:
+    """
+    Persisting consensus and registry state to disk and reloading it should not
+    change deterministic behaviour when additional operations are applied.
+    """
+    registry = ValidatorRegistry({"v1", "v2", "v3"}, epoch=0)
+    registry.apply_change(epoch=3, added_members={"v4"}, removed_members={"v1"})
+
+    consensus = ConsensusState(max_watermark_window=30)
+    initial_rounds = (0, 1, 2, 4, 6)
+    for round_num in initial_rounds:
+        consensus.start_round(round_num=round_num, start_epoch=round_num, registry=registry)
+    consensus.advance_watermark(max(initial_rounds))
+
+    state_payload = {"registry": registry, "consensus": consensus}
+    state_file = tmp_path / "consensus_state.pkl"
+    with state_file.open("wb") as fh:
+        pickle.dump(state_payload, fh)
+
+    with state_file.open("rb") as fh:
+        restored_first = pickle.load(fh)
+    with state_file.open("rb") as fh:
+        restored_second = pickle.load(fh)
+
+    additional_rounds = (7, 8, 9, 10)
+    replicas = (state_payload, restored_first, restored_second)
+    for replica in replicas:
+        replica_registry: ValidatorRegistry = replica["registry"]
+        replica_consensus: ConsensusState = replica["consensus"]
+        for round_num in additional_rounds:
+            replica_consensus.start_round(
+                round_num=round_num, start_epoch=round_num, registry=replica_registry
+            )
+        replica_consensus.advance_watermark(additional_rounds[-1])
+
+    reference = replicas[0]["consensus"]
+    for idx, replica in enumerate(replicas[1:], start=1):
+        candidate = replica["consensus"]
+        assert candidate.low_watermark == reference.low_watermark, (
+            f"Replica {idx} low_watermark={candidate.low_watermark} "
+            f"!= reference {reference.low_watermark}"
+        )
+        assert candidate.high_watermark == reference.high_watermark, (
+            f"Replica {idx} high_watermark={candidate.high_watermark} "
+            f"!= reference {reference.high_watermark}"
+        )
+        assert set(candidate.voting_rounds.keys()) == set(reference.voting_rounds.keys()), (
+            f"Replica {idx} rounds {set(candidate.voting_rounds.keys())} "
+            f"!= reference {set(reference.voting_rounds.keys())}"
+        )
+
+
+# ============================================================================
 # Cross-Node Determinism: Transaction Inclusion List Ordering
 # ============================================================================
 
@@ -561,6 +717,47 @@ def test_grace_period_validation_is_deterministic_across_nodes(
                 round2.is_signature_valid(sig, check_epoch)
 
 
+@given(
+    start_epoch=st.integers(min_value=1, max_value=30),
+    grace_epochs=st.integers(min_value=0, max_value=5),
+)
+@settings(max_examples=50, deadline=None)
+def test_membership_flaps_at_epoch_boundary_are_consistent(start_epoch: int, grace_epochs: int) -> None:
+    """
+    Property: Validators added or removed at the exact round epoch behave consistently
+    across nodes regardless of whether the change arrived just before or just after
+    the round started.
+    """
+    initial_members = {"v1", "v2", "v3"}
+    removed = "v1"
+    added = "v4"
+
+    # Node A starts the round before seeing the change.
+    registry_before = ValidatorRegistry(initial_members, epoch=0)
+    snapshot_before = registry_before.get_snapshot(start_epoch)
+    round_before = VotingRound(
+        round_num=1, start_epoch=start_epoch, registry_snapshot=snapshot_before, grace_epochs=grace_epochs
+    )
+
+    # Node B incorporates the change at the epoch boundary before starting the round.
+    registry_after = ValidatorRegistry(initial_members, epoch=0)
+    registry_after.apply_change(epoch=start_epoch, added_members={added}, removed_members={removed})
+    snapshot_after = registry_after.get_snapshot(start_epoch)
+    round_after = VotingRound(
+        round_num=1, start_epoch=start_epoch, registry_snapshot=snapshot_after, grace_epochs=grace_epochs
+    )
+
+    removed_sig = SimpleNamespace(node_id=removed)
+    added_sig = SimpleNamespace(node_id=added)
+
+    # Removed validator is only admitted for the node that had it in the snapshot.
+    assert round_before.is_signature_valid(removed_sig, current_epoch=start_epoch)
+    assert not round_after.is_signature_valid(removed_sig, current_epoch=start_epoch)
+
+    # Newly added validator is rejected by the stale snapshot but accepted by the updated one.
+    assert not round_before.is_signature_valid(added_sig, current_epoch=start_epoch)
+    assert round_after.is_signature_valid(added_sig, current_epoch=start_epoch)
+
 # ============================================================================
 # Cross-Node Determinism: Combined State Transitions
 # ============================================================================
@@ -638,3 +835,38 @@ def test_combined_state_transitions_produce_identical_final_state(
         assert round_a.round_num == round_b.round_num
         assert round_a.start_epoch == round_b.start_epoch
         assert round_a.grace_period_end == round_b.grace_period_end
+
+
+# ============================================================================
+# Nightly-Scale Determinism
+# ============================================================================
+
+
+@pytest.mark.slow
+@pytest.mark.skipif(
+    not os.environ.get("OLYMPUS_RUN_SLOW"), reason="Set OLYMPUS_RUN_SLOW=1 to run long sequences"
+)
+def test_long_sequence_convergence_over_hundreds_of_rounds() -> None:
+    """
+    Deterministic convergence across many rounds (500+) for slow/nightly runs.
+    """
+    registry = ValidatorRegistry({"n1", "n2", "n3"}, epoch=0)
+    total_rounds = 600
+    all_rounds = list(range(total_rounds))
+
+    consensus_a = ConsensusState(max_watermark_window=total_rounds)
+    for round_num in all_rounds:
+        consensus_a.start_round(round_num=round_num, start_epoch=round_num, registry=registry)
+
+    consensus_b = ConsensusState(max_watermark_window=total_rounds)
+    shuffled = list(all_rounds)
+    random.Random(1337).shuffle(shuffled)
+    for round_num in shuffled:
+        consensus_b.start_round(round_num=round_num, start_epoch=round_num, registry=registry)
+
+    consensus_a.advance_watermark(total_rounds - 1)
+    consensus_b.advance_watermark(total_rounds - 1)
+
+    assert consensus_a.low_watermark == consensus_b.low_watermark
+    assert consensus_a.high_watermark == consensus_b.high_watermark
+    assert set(consensus_a.voting_rounds.keys()) == set(consensus_b.voting_rounds.keys())
