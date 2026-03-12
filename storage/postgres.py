@@ -617,6 +617,15 @@ class StorageLayer:
                 (batch_id,),
             )
 
+            # Batch-check which content_hashes already exist to avoid N+1 queries
+            # and prevent unique-constraint violations on the append-only table.
+            all_content_hash_bytes = [bytes.fromhex(r["content_hash"]) for r in records]
+            cur.execute(
+                "SELECT content_hash FROM ingestion_proofs WHERE content_hash = ANY(%s)",
+                (all_content_hash_bytes,),
+            )
+            existing_hashes = {bytes(row["content_hash"]) for row in cur.fetchall()}
+
             for idx, record in enumerate(records):
                 content_hash_bytes = bytes.fromhex(record["content_hash"])
 
@@ -626,11 +635,7 @@ class StorageLayer:
                 # append-only tables cannot be updated or deleted.  Treating a
                 # duplicate content_hash as already-persisted is correct: the
                 # content is immutable once committed.
-                cur.execute(
-                    "SELECT proof_id FROM ingestion_proofs WHERE content_hash = %s LIMIT 1",
-                    (content_hash_bytes,),
-                )
-                if cur.fetchone() is not None:
+                if content_hash_bytes in existing_hashes:
                     continue
 
                 cur.execute(

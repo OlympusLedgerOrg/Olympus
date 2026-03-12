@@ -942,13 +942,16 @@ def test_verify_state_replay_detects_header_root_divergence(storage, signing_key
     # threat vector that the replay verifier must detect.
     forged_key = hash_bytes(b"forged-leaf-key")
     forged_value = hash_bytes(b"forged-leaf-value")
+    # Use a large version number that cannot collide with any version stored by
+    # append_record (which starts at 1 and increments).
+    forged_version = 9999
     with storage._get_connection() as conn, conn.cursor() as cur:
         cur.execute(
             """
             INSERT INTO smt_leaves (shard_id, key, version, value_hash, ts)
             VALUES (%s, %s, %s, %s, NOW())
             """,
-            (shard_id, forged_key, 1, forged_value),
+            (shard_id, forged_key, forged_version, forged_value),
         )
         conn.commit()
 
