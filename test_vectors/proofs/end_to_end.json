@@ -10,7 +10,7 @@
   "merkle": {
     "leaf_hash_hex": "6627e4d65914949e1101ee9c24b1f6869e22e5a775b86ebd4f1dd829ba114c10",
     "root_hex": "6627e4d65914949e1101ee9c24b1f6869e22e5a775b86ebd4f1dd829ba114c10",
-    "path": []
+    "siblings": []
   },
   "ledger": {
     "head_entry_hash": "f60dc54bb0e8b702677b4a1bc7a58f98ceff51753db4b344736483d677c345cb",

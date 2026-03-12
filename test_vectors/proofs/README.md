@@ -25,7 +25,7 @@ pipeline:
   "merkle": {
     "leaf_hash_hex": "domain-separated leaf hash",
     "root_hex": "Merkle root for the tree",
-    "path": [
+    "siblings": [
       { "hash": "sibling hash hex", "position": "left|right" }
     ]
   },
@@ -46,5 +46,5 @@ The values are produced directly by `protocol.canonicalizer`, `protocol.merkle`,
 and `protocol.ledger` in the Python reference implementation with a fixed
 timestamp to keep the ledger hash deterministic.
 
-`path` is empty for single-leaf trees (like the published vector) and contains
-the ordered sibling list when additional leaves are present.
+`siblings` is empty for single-leaf trees (like the published vector) and
+contains the ordered sibling list when additional leaves are present.

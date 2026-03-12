@@ -38,6 +38,7 @@ def test_end_to_end_vector_matches_reference_outputs() -> None:
     assert leaf_hash.hex() == vector["merkle"]["leaf_hash_hex"]
     tree = MerkleTree([canonical_bytes])
     assert tree.get_root().hex() == vector["merkle"]["root_hex"]
+    assert vector["merkle"]["siblings"] == vector["proof"]["siblings"]
     proof = tree.generate_proof(0)
     assert proof.leaf_index == vector["proof"]["leaf_index"]
     assert proof.siblings == []
