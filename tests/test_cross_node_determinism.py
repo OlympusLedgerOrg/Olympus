@@ -43,9 +43,9 @@ minimal failing shuffle sequence.
 
 from __future__ import annotations
 
+import json
 import os
 import pickle
-import platform
 import random
 import threading
 from concurrent.futures import ThreadPoolExecutor
@@ -388,18 +388,14 @@ def test_partial_gossip_converges_after_reconciliation(
         )
 
 
-def test_concurrent_round_application_is_illustrative_only() -> None:
+def test_concurrent_round_application() -> None:
     """
-    Illustrative-only smoke test for CPython's current GIL behaviour.
+    Thread-safety test: concurrent ``start_round`` calls from multiple threads
+    must not corrupt shared state.
 
-    ConsensusState is not thread-safe, so this test must not be treated as a
-    proof that concurrent mutation is deterministic.
+    ConsensusState now holds an internal ``RLock`` so this test is valid on any
+    Python runtime (CPython, PyPy, etc.).
     """
-    if platform.python_implementation() != "CPython":
-        pytest.skip(
-            "ConsensusState is not thread-safe; this illustrative test relies on CPython's GIL"
-        )
-
     registry = ValidatorRegistry({"nodeA", "nodeB"}, epoch=0)
     consensus = ConsensusState(max_watermark_window=120)
 
@@ -414,14 +410,80 @@ def test_concurrent_round_application_is_illustrative_only() -> None:
             consensus.start_round(round_num=round_num, start_epoch=round_num, registry=registry)
 
     with ThreadPoolExecutor(max_workers=worker_count) as executor:
-        for chunk in chunks:
-            executor.submit(apply_rounds, chunk)
+        futures = [executor.submit(apply_rounds, chunk) for chunk in chunks]
+        for fut in futures:
+            fut.result()
 
     consensus.advance_watermark(max(all_rounds))
 
     assert consensus.low_watermark == 0
     assert consensus.high_watermark == max(all_rounds)
     assert set(consensus.voting_rounds.keys()) == set(all_rounds)
+
+
+def test_concurrent_start_round_and_gc() -> None:
+    """
+    Thread-safety: interleaved ``start_round`` and ``gc_old_rounds`` from
+    different threads must leave the state consistent.
+    """
+    registry = ValidatorRegistry({"v1", "v2"}, epoch=0)
+    consensus = ConsensusState(max_watermark_window=200)
+    barrier = threading.Barrier(parties=2)
+
+    def writer() -> None:
+        barrier.wait()
+        for rn in range(200):
+            consensus.start_round(round_num=rn, start_epoch=rn, registry=registry)
+
+    def gcer() -> None:
+        barrier.wait()
+        for cutoff in range(0, 200, 10):
+            consensus.gc_old_rounds(cutoff)
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        f1 = pool.submit(writer)
+        f2 = pool.submit(gcer)
+        f1.result()
+        f2.result()
+
+    # After all rounds are inserted and some GC'd, state must be internally
+    # consistent: every round in voting_rounds is ≥ low_watermark.
+    for rn in consensus.voting_rounds:
+        assert rn >= consensus.low_watermark, (
+            f"Round {rn} below low_watermark {consensus.low_watermark}"
+        )
+    assert consensus.high_watermark == 199
+
+
+def test_concurrent_advance_watermark() -> None:
+    """
+    Thread-safety: concurrent ``advance_watermark`` calls must not corrupt
+    watermarks.
+    """
+    registry = ValidatorRegistry({"v1", "v2"}, epoch=0)
+    consensus = ConsensusState(max_watermark_window=500)
+    for rn in range(500):
+        consensus.start_round(round_num=rn, start_epoch=rn, registry=registry)
+
+    barrier = threading.Barrier(parties=4)
+
+    def advancer(targets: list[int]) -> None:
+        barrier.wait()
+        for t in targets:
+            try:
+                consensus.advance_watermark(t)
+            except ValueError:
+                pass  # another thread already advanced past this value
+
+    targets = list(range(0, 500, 2))
+    chunks = [targets[i::4] for i in range(4)]
+
+    with ThreadPoolExecutor(max_workers=4) as pool:
+        futures = [pool.submit(advancer, chunk) for chunk in chunks]
+        for fut in futures:
+            fut.result()
+
+    assert consensus.high_watermark >= max(targets) - 1
 
 
 def test_state_serialization_round_trip_preserves_determinism(tmp_path: Path) -> None:
@@ -899,6 +961,279 @@ def test_long_sequence_convergence_over_hundreds_of_rounds() -> None:
 
     consensus_a.advance_watermark(total_rounds - 1)
     consensus_b.advance_watermark(total_rounds - 1)
+
+    assert consensus_a.low_watermark == consensus_b.low_watermark
+    assert consensus_a.high_watermark == consensus_b.high_watermark
+    assert set(consensus_a.voting_rounds.keys()) == set(consensus_b.voting_rounds.keys())
+
+
+# ============================================================================
+# Network / Fault Injection Testing
+# ============================================================================
+
+
+def test_partition_and_rejoin_produces_consistent_state() -> None:
+    """
+    Simulate a network partition where two groups of rounds are applied
+    independently and then merged: final state after seeing all rounds must
+    be identical regardless of partition grouping.
+    """
+    registry = ValidatorRegistry({"a", "b", "c"}, epoch=0)
+    all_rounds = list(range(30))
+    rng = random.Random(42)
+
+    # Partition A sees first half, partition B sees second half, then they
+    # exchange and each applies the missing rounds.
+    split = len(all_rounds) // 2
+    partition_a_first = all_rounds[:split]
+    partition_b_first = all_rounds[split:]
+
+    consensus_a = ConsensusState(max_watermark_window=40)
+    for rn in partition_a_first:
+        consensus_a.start_round(round_num=rn, start_epoch=rn, registry=registry)
+    for rn in partition_b_first:
+        consensus_a.start_round(round_num=rn, start_epoch=rn, registry=registry)
+
+    # Partition B sees the reverse order of partitions.
+    consensus_b = ConsensusState(max_watermark_window=40)
+    rng.shuffle(partition_b_first)
+    for rn in partition_b_first:
+        consensus_b.start_round(round_num=rn, start_epoch=rn, registry=registry)
+    rng.shuffle(partition_a_first)
+    for rn in partition_a_first:
+        consensus_b.start_round(round_num=rn, start_epoch=rn, registry=registry)
+
+    consensus_a.advance_watermark(max(all_rounds))
+    consensus_b.advance_watermark(max(all_rounds))
+
+    assert consensus_a.low_watermark == consensus_b.low_watermark
+    assert consensus_a.high_watermark == consensus_b.high_watermark
+    assert set(consensus_a.voting_rounds.keys()) == set(consensus_b.voting_rounds.keys())
+
+
+def test_delayed_message_ordering_does_not_affect_determinism() -> None:
+    """
+    Rounds arriving out of order (simulating delayed network messages) must
+    converge to the same state as in-order delivery.
+    """
+    registry = ValidatorRegistry({"x", "y"}, epoch=0)
+    ordered = list(range(40))
+    delayed = list(ordered)
+    random.Random(99).shuffle(delayed)
+
+    consensus_ordered = ConsensusState(max_watermark_window=50)
+    for rn in ordered:
+        consensus_ordered.start_round(round_num=rn, start_epoch=rn, registry=registry)
+
+    consensus_delayed = ConsensusState(max_watermark_window=50)
+    for rn in delayed:
+        consensus_delayed.start_round(round_num=rn, start_epoch=rn, registry=registry)
+
+    consensus_ordered.advance_watermark(max(ordered))
+    consensus_delayed.advance_watermark(max(ordered))
+
+    assert consensus_ordered.low_watermark == consensus_delayed.low_watermark
+    assert consensus_ordered.high_watermark == consensus_delayed.high_watermark
+    assert set(consensus_ordered.voting_rounds.keys()) == set(
+        consensus_delayed.voting_rounds.keys()
+    )
+
+
+def test_simultaneous_validator_join_and_leave() -> None:
+    """
+    Applying a validator join and leave at the same epoch on two nodes
+    (in different ordering) must produce identical registry snapshots.
+    """
+    reg_a = ValidatorRegistry({"v1", "v2", "v3"}, epoch=0)
+    reg_b = ValidatorRegistry({"v1", "v2", "v3"}, epoch=0)
+
+    # Node A applies add then remove at epoch 5
+    reg_a.apply_change(epoch=5, added_members={"v4"})
+    reg_a.apply_change(epoch=5, removed_members={"v1"})
+
+    # Node B applies remove then add at epoch 5
+    reg_b.apply_change(epoch=5, removed_members={"v1"})
+    reg_b.apply_change(epoch=5, added_members={"v4"})
+
+    snap_a = reg_a.get_snapshot(snapshot_epoch=5)
+    snap_b = reg_b.get_snapshot(snapshot_epoch=5)
+
+    for node_id in ("v1", "v2", "v3", "v4"):
+        assert snap_a.is_member_at_epoch(node_id, 5) == snap_b.is_member_at_epoch(node_id, 5), (
+            f"Membership for {node_id} diverges between nodes at epoch 5"
+        )
+
+
+def test_concurrent_validator_join_leave_during_rounds() -> None:
+    """
+    One thread inserts rounds while another mutates the registry.  Because
+    each ``start_round`` captures a snapshot, the resulting consensus state
+    must remain internally consistent (no crashes, no missing rounds).
+    """
+    registry = ValidatorRegistry({"v1", "v2", "v3"}, epoch=0)
+    consensus = ConsensusState(max_watermark_window=200)
+    barrier = threading.Barrier(parties=2)
+
+    def round_inserter() -> None:
+        barrier.wait()
+        for rn in range(100):
+            consensus.start_round(round_num=rn, start_epoch=rn, registry=registry)
+
+    def registry_mutator() -> None:
+        barrier.wait()
+        for epoch in range(1, 50):
+            try:
+                registry.apply_change(epoch=epoch, added_members={f"v_new_{epoch}"})
+            except ValueError:
+                pass
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        f1 = pool.submit(round_inserter)
+        f2 = pool.submit(registry_mutator)
+        f1.result()
+        f2.result()
+
+    assert set(consensus.voting_rounds.keys()) == set(range(100))
+    assert consensus.high_watermark == 99
+
+
+# ============================================================================
+# Serialization / Persistence Testing
+# ============================================================================
+
+
+def test_json_round_trip_preserves_determinism() -> None:
+    """
+    Manually JSON-serializable fields of ConsensusState must survive a
+    JSON round-trip and produce identical behaviour when new rounds are added.
+    """
+    registry = ValidatorRegistry({"v1", "v2", "v3"}, epoch=0)
+    consensus = ConsensusState(max_watermark_window=30)
+    for rn in range(10):
+        consensus.start_round(round_num=rn, start_epoch=rn, registry=registry)
+    consensus.advance_watermark(9)
+
+    # Serialize to JSON-safe dict (lock and snapshots excluded).
+    state_dict = {
+        "max_watermark_window": consensus.max_watermark_window,
+        "low_watermark": consensus.low_watermark,
+        "high_watermark": consensus.high_watermark,
+        "round_nums": sorted(consensus.voting_rounds.keys()),
+    }
+    blob = json.dumps(state_dict, sort_keys=True, separators=(",", ":"))
+    restored = json.loads(blob)
+
+    # Rebuild from persisted scalars.
+    rebuilt = ConsensusState(max_watermark_window=restored["max_watermark_window"])
+    rebuilt.low_watermark = restored["low_watermark"]
+    rebuilt.high_watermark = restored["high_watermark"]
+    for rn in restored["round_nums"]:
+        rebuilt.voting_rounds[rn] = consensus.voting_rounds[rn]
+
+    # Apply additional rounds on both and compare.
+    for rn in range(10, 15):
+        consensus.start_round(round_num=rn, start_epoch=rn, registry=registry)
+        rebuilt.start_round(round_num=rn, start_epoch=rn, registry=registry)
+
+    consensus.advance_watermark(14)
+    rebuilt.advance_watermark(14)
+
+    assert consensus.low_watermark == rebuilt.low_watermark
+    assert consensus.high_watermark == rebuilt.high_watermark
+    assert set(consensus.voting_rounds.keys()) == set(rebuilt.voting_rounds.keys())
+
+
+def test_multiple_pickle_cycles_preserve_determinism(tmp_path: Path) -> None:
+    """
+    State must survive multiple pickle save/load cycles without drift.
+    """
+    registry = ValidatorRegistry({"v1", "v2"}, epoch=0)
+    consensus = ConsensusState(max_watermark_window=60)
+    for rn in range(20):
+        consensus.start_round(round_num=rn, start_epoch=rn, registry=registry)
+    consensus.advance_watermark(19)
+
+    payload: dict[str, object] = {"registry": registry, "consensus": consensus}
+
+    for cycle in range(5):
+        state_file = tmp_path / f"state_cycle_{cycle}.pkl"
+        with state_file.open("wb") as fh:
+            pickle.dump(payload, fh)
+        with state_file.open("rb") as fh:
+            payload = pickle.load(fh)
+
+    restored_consensus: ConsensusState = payload["consensus"]  # type: ignore[assignment]
+    assert restored_consensus.low_watermark == consensus.low_watermark
+    assert restored_consensus.high_watermark == consensus.high_watermark
+    assert set(restored_consensus.voting_rounds.keys()) == set(consensus.voting_rounds.keys())
+
+    # Ensure the restored instance is still functional (lock recreated).
+    restored_registry: ValidatorRegistry = payload["registry"]  # type: ignore[assignment]
+    restored_consensus.start_round(round_num=20, start_epoch=20, registry=restored_registry)
+    assert 20 in restored_consensus.voting_rounds
+
+
+def test_snapshot_persistence_determinism(tmp_path: Path) -> None:
+    """
+    Registry snapshots captured before and after a save/load cycle must
+    produce identical membership queries.
+    """
+    registry = ValidatorRegistry({"v1", "v2", "v3"}, epoch=0)
+    registry.apply_change(epoch=3, added_members={"v4"}, removed_members={"v1"})
+    registry.apply_change(epoch=7, removed_members={"v2"})
+
+    snap_before = registry.get_snapshot(snapshot_epoch=5)
+
+    state_file = tmp_path / "registry.pkl"
+    with state_file.open("wb") as fh:
+        pickle.dump(registry, fh)
+    with state_file.open("rb") as fh:
+        restored: ValidatorRegistry = pickle.load(fh)
+
+    snap_after = restored.get_snapshot(snapshot_epoch=5)
+
+    for node_id in ("v1", "v2", "v3", "v4"):
+        for epoch in range(10):
+            assert snap_before.is_member_at_epoch(node_id, epoch) == snap_after.is_member_at_epoch(
+                node_id, epoch
+            ), f"Membership divergence for {node_id} at epoch {epoch} after restore"
+
+
+@given(
+    round_numbers=st.lists(
+        st.integers(min_value=0, max_value=30), min_size=3, max_size=10, unique=True
+    ),
+    max_window=st.integers(min_value=5, max_value=15),
+)
+@settings(max_examples=50, deadline=None)
+def test_pickle_round_trip_then_advance_is_deterministic(
+    round_numbers: list[int], max_window: int
+) -> None:
+    """
+    Property: serialise -> deserialise -> apply more operations must yield
+    the same state as applying everything on the original instance.
+    """
+    registry = ValidatorRegistry({"v1", "v2"}, epoch=0)
+
+    consensus_a = ConsensusState(max_watermark_window=max_window)
+    for rn in sorted(round_numbers):
+        consensus_a.start_round(round_num=rn, start_epoch=rn, registry=registry)
+    consensus_a.advance_watermark(max(round_numbers))
+
+    consensus_b: ConsensusState = pickle.loads(pickle.dumps(consensus_a))
+
+    extra = max(round_numbers) + 1
+    consensus_a.start_round(round_num=extra, start_epoch=extra, registry=registry)
+    consensus_b.start_round(round_num=extra, start_epoch=extra, registry=registry)
+
+    try:
+        consensus_a.advance_watermark(extra)
+    except ValueError:
+        pass
+    try:
+        consensus_b.advance_watermark(extra)
+    except ValueError:
+        pass
 
     assert consensus_a.low_watermark == consensus_b.low_watermark
     assert consensus_a.high_watermark == consensus_b.high_watermark
