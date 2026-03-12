@@ -44,6 +44,7 @@ SUPPORTED_CIRCUITS = frozenset(
         "document_existence",
         "non_existence",
         "redaction_validity",
+        "unified_canonicalization_inclusion_root_sign",
     }
 )
 
