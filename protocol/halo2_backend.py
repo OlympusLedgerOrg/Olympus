@@ -39,7 +39,7 @@ future Halo2 implementation can be added without changing protocol-layer code.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
@@ -170,6 +170,32 @@ class Halo2Verifier:
             "Current implementation uses Groth16 for throughput optimization."
         )
 
+    def verify_recursive(
+        self,
+        proof: RecursiveRedactionProof,
+    ) -> bool:
+        """
+        Verify a recursive redaction proof using the Halo2 backend.
+
+        In Phase 1+ this will cryptographically verify the compressed
+        recursive proof in a single operation, confirming ledger inclusion
+        and validity of all folded redaction events.
+
+        Args:
+            proof: The recursive redaction proof to verify.
+
+        Returns:
+            True if all components verified, False otherwise.
+
+        Raises:
+            NotImplementedError: Halo2 recursive verification not yet
+                                 implemented.
+        """
+        raise NotImplementedError(
+            "Halo2 recursive proof verification is planned for Phase 1+. "
+            "Use verify_recursive_redaction_proof() for structural checks."
+        )
+
 
 class Halo2Prover:
     """
@@ -216,6 +242,32 @@ class Halo2Prover:
         raise NotImplementedError(
             "Halo2 proof generation is planned for Phase 1+. "
             "Use Groth16 backend for current deployments."
+        )
+
+    def prove_recursive(
+        self,
+        events: list[RedactionEvent],
+        ledger_root: str,
+    ) -> RecursiveRedactionProof:
+        """
+        Generate a recursive Halo2 proof folding multiple redaction events.
+
+        In Phase 1+ this will invoke the Halo2 recursive prover to compress
+        the full chain of per-event ZK proofs into a single IPA/KZG proof.
+
+        Args:
+            events: Ordered list of redaction events to fold.
+            ledger_root: SMT root (hex) for ledger inclusion.
+
+        Returns:
+            RecursiveRedactionProof
+
+        Raises:
+            NotImplementedError: Halo2 recursive proving not yet implemented.
+        """
+        raise NotImplementedError(
+            "Halo2 recursive proof generation is planned for Phase 1+. "
+            "Use RecursiveProofAccumulator.finalize() for structural proofs."
         )
 
 

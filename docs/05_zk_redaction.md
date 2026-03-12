@@ -156,3 +156,29 @@ Values outside [0, SNARK_SCALAR_FIELD) are rejected with `ValueError`.
   `component main {public [...]}` declaration.
 * Integration test coverage: `tests/test_proof_generator.py::test_redaction_validity_round_trip_verification`
   exercises input generation → witness → proof → verification end to end.
+
+## Recursive Proof Composition (Phase 1+)
+
+Documents with multiple redaction events can have their entire history
+compressed into a **single verification artifact** using Halo2 recursive
+proof composition.  Instead of replaying every per-event ZK proof, a
+verifier checks one `RecursiveRedactionProof` and is convinced of:
+
+1. **Ledger inclusion** — the document's Poseidon root is committed in the SMT.
+2. **Redaction validity** — every redaction event is individually valid.
+3. **History consistency** — the event chain is append-only and tamper-evident.
+
+### Data model
+
+| Component | Location |
+|-----------|----------|
+| `RedactionEvent` | `protocol/halo2_backend.py` |
+| `RecursiveRedactionProof` | `protocol/halo2_backend.py` |
+| `RecursiveProofAccumulator` | `protocol/halo2_backend.py` |
+| `verify_recursive_redaction_proof` | `protocol/halo2_backend.py` |
+| Tests | `tests/test_recursive_redaction_proof.py` |
+
+Structural verification (event hash consistency and chain linkage) is
+available now.  Cryptographic recursive verification via Halo2 is
+deferred to Phase 1+.  See [ADR 0004](adr/0004-recursive-redaction-proofs.md)
+for the full design rationale.
