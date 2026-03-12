@@ -4,6 +4,8 @@ Canonical JSON encoder for Olympus protocol.
 Provides a single deterministic encoding used across ledger hashing, shard
 header hashing, and policy hashing. Number formatting is pinned to avoid
 cross-language divergence:
+* Normalize all object keys and string values to Unicode NFC
+* Reject language-native float values (require Decimal for non-integers)
 * Reject NaN/±Infinity
 * Integers emitted in base-10 without leading zeros
 * Non-integers trimmed of insignificant trailing zeros
@@ -14,7 +16,8 @@ cross-language divergence:
 """
 
 import math
-from decimal import Decimal, InvalidOperation
+import unicodedata
+from decimal import Decimal
 from json.encoder import py_encode_basestring_ascii
 from typing import Any
 
@@ -27,7 +30,8 @@ def canonical_json_encode(obj: Any) -> str:
     - UTF-8 encoding (ASCII-escaped)
     - Sorted keys
     - No whitespace (compact separators)
-    - Reject NaN and Infinity
+    - Unicode NFC normalization for all keys and string values
+    - Reject language-native floats, NaN, and Infinity
     - Deterministic, stable numeric formatting (see module docstring)
 
     Args:
@@ -40,8 +44,8 @@ def canonical_json_encode(obj: Any) -> str:
         ValueError: If object contains NaN or Infinity
         TypeError: If object is not JSON-serializable
     """
-    _validate_no_special_floats(obj)
-    return _encode_value(obj)
+    normalized = _normalize_for_canonical_json(obj)
+    return _encode_value(normalized)
 
 
 def canonical_json_bytes(obj: Any) -> bytes:
@@ -57,30 +61,52 @@ def canonical_json_bytes(obj: Any) -> bytes:
     return canonical_json_encode(obj).encode("utf-8")
 
 
-def _validate_no_special_floats(obj: Any) -> None:
+def _normalize_for_canonical_json(obj: Any) -> Any:
     """
-    Recursively validate that object contains no NaN or Infinity values.
+    Normalize object values before canonical JSON encoding.
 
     Args:
-        obj: Object to validate
+        obj: Object to normalize.
+
+    Returns:
+        Object transformed into normalized canonical values.
 
     Raises:
-        ValueError: If NaN or Infinity found
+        ValueError: If non-finite values or floats are found, or if normalized
+            dictionary keys collide.
+        TypeError: If dictionary keys are not strings.
     """
+    if obj is None or isinstance(obj, bool):
+        return obj
+    if isinstance(obj, str):
+        return unicodedata.normalize("NFC", obj)
+    if isinstance(obj, int):
+        return obj
+    if isinstance(obj, Decimal):
+        if not obj.is_finite():
+            raise ValueError("Infinity is not allowed in canonical JSON")
+        return obj
     if isinstance(obj, float):
         if math.isnan(obj):
             raise ValueError("NaN is not allowed in canonical JSON")
         if math.isinf(obj):
             raise ValueError("Infinity is not allowed in canonical JSON")
-    elif isinstance(obj, Decimal):
-        if not obj.is_finite():
-            raise ValueError("Infinity is not allowed in canonical JSON")
-    elif isinstance(obj, dict):
-        for value in obj.values():
-            _validate_no_special_floats(value)
-    elif isinstance(obj, list | tuple):
-        for item in obj:
-            _validate_no_special_floats(item)
+        raise ValueError("Float values are not allowed in canonical JSON; use Decimal")
+    if isinstance(obj, list | tuple):
+        return [_normalize_for_canonical_json(item) for item in obj]
+    if isinstance(obj, dict):
+        normalized_obj: dict[str, Any] = {}
+        for key, value in obj.items():
+            if not isinstance(key, str):
+                raise TypeError("Object keys must be strings for canonical JSON")
+            normalized_key = unicodedata.normalize("NFC", key)
+            if normalized_key in normalized_obj:
+                raise ValueError(
+                    f"Duplicate key after NFC normalization: {normalized_key!r}"
+                )
+            normalized_obj[normalized_key] = _normalize_for_canonical_json(value)
+        return normalized_obj
+    return obj
 
 
 def _encode_value(value: Any) -> str:
@@ -104,7 +130,7 @@ def _encode_value(value: Any) -> str:
         return "false"
     if isinstance(value, str):
         return py_encode_basestring_ascii(value)
-    if isinstance(value, int | Decimal | float) and not isinstance(value, bool):
+    if isinstance(value, int | Decimal) and not isinstance(value, bool):
         return _encode_number(value)
     if isinstance(value, list | tuple):
         return "[" + ",".join(_encode_value(item) for item in value) + "]"
@@ -118,7 +144,7 @@ def _encode_value(value: Any) -> str:
     raise TypeError(f"Type {type(value)} is not JSON-serializable")
 
 
-def _encode_number(value: int | float | Decimal) -> str:
+def _encode_number(value: int | Decimal) -> str:
     """
     Encode a number to canonical JSON format.
 
@@ -152,7 +178,7 @@ def _encode_number(value: int | float | Decimal) -> str:
     return sign + formatted
 
 
-def _to_decimal(value: int | float | Decimal) -> Decimal:
+def _to_decimal(value: int | Decimal) -> Decimal:
     """
     Convert a numeric value to Decimal for precise formatting.
 
@@ -167,14 +193,12 @@ def _to_decimal(value: int | float | Decimal) -> Decimal:
     """
     if isinstance(value, Decimal):
         return value
-    if isinstance(value, float):
-        if not math.isfinite(value):
-            raise ValueError("Infinity is not allowed in canonical JSON")
-        try:
-            return Decimal(str(value))
-        except InvalidOperation as exc:  # pragma: no cover - defensive
-            raise ValueError("Invalid float value for canonical JSON") from exc
-    return Decimal(value)
+    if isinstance(value, int):
+        return Decimal(value)
+    raise ValueError(
+        "Only int and Decimal numeric values are allowed for canonical JSON, "
+        f"got {type(value).__name__}"
+    )
 
 
 def _format_fixed(digits: str, exponent: int) -> str:

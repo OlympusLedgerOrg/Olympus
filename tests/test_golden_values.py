@@ -14,6 +14,7 @@ Golden vectors serve three purposes:
 """
 
 import json
+from decimal import Decimal
 
 import blake3 as _blake3
 
@@ -75,10 +76,10 @@ class TestJsonCanonicalGoldenValues:
         assert canonical_json_encode(42) == "42"
         assert canonical_json_encode(-1) == "-1"
 
-        # Float
-        assert canonical_json_encode(3.14) == "3.14"
-        assert canonical_json_encode(1.0) == "1"
-        assert canonical_json_encode(-0.0) == "0"
+        # Decimal
+        assert canonical_json_encode(Decimal("3.14")) == "3.14"
+        assert canonical_json_encode(Decimal("1.0")) == "1"
+        assert canonical_json_encode(Decimal("-0.0")) == "0"
 
         # Boolean
         assert canonical_json_encode(True) == "true"
@@ -99,13 +100,13 @@ class TestJsonCanonicalGoldenValues:
     def test_scientific_notation_boundary(self):
         """Pin the fixed/scientific notation boundary values."""
         # Fixed notation: -6 <= adjusted_exponent <= 20
-        assert canonical_json_encode(0.000001) == "0.000001"  # 1e-6 in fixed
-        assert canonical_json_encode(1e-7) == "1e-7"  # 1e-7 in scientific
+        assert canonical_json_encode(Decimal("0.000001")) == "0.000001"  # 1e-6 in fixed
+        assert canonical_json_encode(Decimal("1e-7")) == "1e-7"  # 1e-7 in scientific
 
         # Upper boundary
         expected_1e20 = "1" + "0" * 20
-        assert canonical_json_encode(1e20) == expected_1e20  # 1e20 in fixed
-        assert canonical_json_encode(1e21) == "1e+21"  # 1e21 in scientific
+        assert canonical_json_encode(Decimal("1e20")) == expected_1e20  # 1e20 in fixed
+        assert canonical_json_encode(Decimal("1e21")) == "1e+21"  # 1e21 in scientific
 
 
 # ---------------------------------------------------------------------------

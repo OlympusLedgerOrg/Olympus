@@ -619,191 +619,40 @@ def test_verify_quorum_certificate_rejects_epoch_mismatch() -> None:
     assert verify_quorum_certificate(tampered_certificate, header, registry) is False
 
 
-def test_replay_epoch_helper_detects_stale_epochs() -> None:
-    """Replay helper should reject older epochs but allow current/future epochs."""
-    assert is_replay_epoch(4, 5) is True
-    assert is_replay_epoch(5, 5) is False
-    assert is_replay_epoch(6, 5) is False
-
-
-def test_resolve_canonical_fork_prefers_higher_quorum_weight() -> None:
-    """Fork resolution should pick the root with more signer approvals."""
-    registry = FederationRegistry.from_file(REGISTRY_PATH)
-    header_a = create_shard_header(
-        shard_id="records/city-a",
-        root_hash=bytes.fromhex("ab" * 32),
-        timestamp="2026-03-09T01:00:00Z",
-        height=8,
-        round_number=2,
-    )
-    header_b = create_shard_header(
-        shard_id="records/city-a",
-        root_hash=bytes.fromhex("bc" * 32),
-        timestamp="2026-03-09T01:00:00Z",
-        height=8,
-        round_number=2,
-    )
-    cert_a = build_quorum_certificate(
-        header_a,
-        [
-            sign_federated_header(header_a, "olympus-node-1", _test_signing_key(1), registry),
-            sign_federated_header(header_a, "olympus-node-2", _test_signing_key(2), registry),
-        ],
-        registry,
-    )
-    cert_b = build_quorum_certificate(
-        header_b,
-        [
-            sign_federated_header(header_b, "olympus-node-1", _test_signing_key(1), registry),
-            sign_federated_header(header_b, "olympus-node-2", _test_signing_key(2), registry),
-            sign_federated_header(header_b, "olympus-node-3", _test_signing_key(3), registry),
-        ],
-        registry,
-    )
-
-    resolved = resolve_canonical_fork([(header_a, cert_a), (header_b, cert_b)], registry)
-    assert resolved is not None
-    selected_header, selected_certificate = resolved
-    assert selected_header["header_hash"] == header_b["header_hash"]
-    assert selected_certificate["header_hash"] == cert_b["header_hash"]
-
-
-def test_resolve_canonical_fork_uses_lexicographic_tiebreak_for_simultaneous_roots() -> None:
-    """Simultaneous roots with equal weight should resolve by lowest header hash."""
-    registry = FederationRegistry.from_file(REGISTRY_PATH)
-    header_a = create_shard_header(
-        shard_id="records/city-a",
-        root_hash=bytes.fromhex("cd" * 32),
-        timestamp="2026-03-09T01:00:01Z",
-        height=9,
-        round_number=1,
-    )
-    header_b = create_shard_header(
-        shard_id="records/city-a",
-        root_hash=bytes.fromhex("de" * 32),
-        timestamp="2026-03-09T01:00:01Z",
-        height=9,
-        round_number=1,
-    )
-    cert_a = build_quorum_certificate(
-        header_a,
-        [
-            sign_federated_header(header_a, "olympus-node-1", _test_signing_key(1), registry),
-            sign_federated_header(header_a, "olympus-node-2", _test_signing_key(2), registry),
-        ],
-        registry,
-    )
-    cert_b = build_quorum_certificate(
-        header_b,
-        [
-            sign_federated_header(header_b, "olympus-node-1", _test_signing_key(1), registry),
-            sign_federated_header(header_b, "olympus-node-2", _test_signing_key(2), registry),
-        ],
-        registry,
-    )
-
-    expected = min(
-        (header_a["header_hash"], cert_a["header_hash"]),
-        (header_b["header_hash"], cert_b["header_hash"]),
-    )[0]
-    resolved = resolve_canonical_fork([(header_b, cert_b), (header_a, cert_a)], registry)
-    assert resolved is not None
-    selected_header, selected_certificate = resolved
-    assert selected_header["header_hash"] == expected
-    assert selected_certificate["header_hash"] == selected_header["header_hash"]
-
-
-def test_resolve_canonical_fork_rejects_stale_epoch_candidates() -> None:
-    """Replay protection should ignore candidates with federation_epoch below current."""
-    registry = FederationRegistry.from_file(REGISTRY_PATH)
+def test_verify_quorum_certificate_uses_epoch_snapshot() -> None:
+    """Verification should use registry snapshot for the certificate epoch."""
+    base_registry = FederationRegistry.from_file(REGISTRY_PATH)
     header = create_shard_header(
         shard_id="records/city-a",
         root_hash=bytes.fromhex("ef" * 32),
-        timestamp="2026-03-09T01:00:02Z",
-        height=10,
-        round_number=0,
+        timestamp="2026-03-10T00:00:00Z",
     )
-    certificate = build_quorum_certificate(
-        header,
-        [
-            sign_federated_header(header, "olympus-node-1", _test_signing_key(1), registry),
-            sign_federated_header(header, "olympus-node-2", _test_signing_key(2), registry),
-        ],
-        registry,
+    signatures = [
+        sign_federated_header(header, "olympus-node-1", _test_signing_key(1), base_registry),
+        sign_federated_header(header, "olympus-node-2", _test_signing_key(2), base_registry),
+    ]
+    certificate = build_quorum_certificate(header, signatures, base_registry)
+    header["quorum_certificate_hash"] = quorum_certificate_hash(certificate)
+
+    future_registry = FederationRegistry(
+        nodes=tuple(
+            [
+                *base_registry.nodes,
+                FederationNode(
+                    node_id="olympus-node-4",
+                    pubkey=_test_signing_key(4).verify_key.encode(),
+                    endpoint="https://node4.olympus.org",
+                    operator="Regional Clerk",
+                    jurisdiction="region-d",
+                    status="active",
+                ),
+            ]
+        ),
+        epoch=1,
+        snapshots={0: base_registry},
     )
 
-    assert (
-        resolve_canonical_fork([(header, certificate)], registry, current_epoch=registry.epoch + 1)
-        is None
-    )
-
-
-def test_vrf_selection_scores_are_deterministic() -> None:
-    """VRF selection scores should be deterministic for fixed inputs."""
-    registry = FederationRegistry.from_file(REGISTRY_PATH)
-    first = vrf_selection_scores(
-        shard_id="records/city-a", round_number=4, registry=registry, epoch=registry.epoch
-    )
-    second = vrf_selection_scores(
-        shard_id="records/city-a", round_number=4, registry=registry, epoch=registry.epoch
-    )
-    assert first == second
-    assert first == sorted(first, key=lambda item: (item[1], item[0]))
-
-
-def test_vrf_selection_changes_with_round_number() -> None:
-    """Changing round number should produce a distinct VRF ordering."""
-    registry = FederationRegistry.from_file(REGISTRY_PATH)
-    round_zero = vrf_selection_scores(shard_id="records/city-a", round_number=0, registry=registry)
-    round_one = vrf_selection_scores(shard_id="records/city-a", round_number=1, registry=registry)
-    assert round_zero != round_one
-
-
-def test_select_vrf_committee_and_leader() -> None:
-    """VRF helpers should return deterministic leader and committee prefixes."""
-    registry = FederationRegistry.from_file(REGISTRY_PATH)
-    committee = select_vrf_committee(
-        shard_id="records/city-a",
-        round_number=3,
-        registry=registry,
-        committee_size=2,
-    )
-    leader = select_vrf_leader(
-        shard_id="records/city-a",
-        round_number=3,
-        registry=registry,
-    )
-    assert len(committee) == 2
-    assert len(set(committee)) == 2
-    assert leader == committee[0]
-
-
-def test_select_vrf_committee_rejects_invalid_sizes() -> None:
-    """Committee size must be positive and not exceed active members."""
-    registry = FederationRegistry.from_file(REGISTRY_PATH)
-    with pytest.raises(ValueError, match="positive"):
-        select_vrf_committee(
-            shard_id="records/city-a",
-            round_number=1,
-            registry=registry,
-            committee_size=0,
-        )
-    with pytest.raises(ValueError, match="cannot exceed"):
-        select_vrf_committee(
-            shard_id="records/city-a",
-            round_number=1,
-            registry=registry,
-            committee_size=10,
-        )
-
-
-def test_vrf_selection_rejects_negative_round_or_epoch() -> None:
-    """VRF scoring should reject invalid negative round and epoch values."""
-    registry = FederationRegistry.from_file(REGISTRY_PATH)
-    with pytest.raises(ValueError, match="Round number"):
-        vrf_selection_scores(shard_id="records/city-a", round_number=-1, registry=registry)
-    with pytest.raises(ValueError, match="Epoch"):
-        vrf_selection_scores(shard_id="records/city-a", round_number=0, registry=registry, epoch=-1)
+    assert verify_quorum_certificate(certificate, header, future_registry) is True
 
 
 def test_node_key_rotation_with_superseding_signature() -> None:

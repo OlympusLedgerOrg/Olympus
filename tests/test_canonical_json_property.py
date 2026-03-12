@@ -1,19 +1,26 @@
 """Property-based tests for canonical JSON encoding invariants."""
 
 import json
-import math
+import unicodedata
 from decimal import Decimal
 
 from hypothesis import given, strategies as st
 
 from protocol.canonical_json import canonical_json_encode
 
+decimal_values = st.decimals(
+    allow_nan=False,
+    allow_infinity=False,
+    places=10,
+    min_value=Decimal("-1e20"),
+    max_value=Decimal("1e20"),
+)
 
 json_scalars = st.one_of(
     st.none(),
     st.booleans(),
     st.integers(),
-    st.floats(allow_nan=False, allow_infinity=False),
+    decimal_values,
     st.text(),
 )
 json_values = st.recursive(
@@ -44,15 +51,14 @@ def test_canonical_json_encode_unicode_roundtrip(value):
     """Unicode strings should be ASCII-safe and JSON round-trippable."""
     encoded = canonical_json_encode({"value": value})
     encoded.encode("ascii")
-    assert json.loads(encoded) == {"value": value}
+    assert json.loads(encoded) == {"value": unicodedata.normalize("NFC", value)}
 
 
-@given(st.floats(allow_nan=False, allow_infinity=False))
-def test_canonical_json_encode_float_roundtrip(value):
-    """Finite floats should round-trip through canonical JSON."""
+@given(decimal_values)
+def test_canonical_json_encode_decimal_roundtrip(value):
+    """Finite Decimal values should round-trip through canonical JSON."""
     encoded = canonical_json_encode({"value": value})
-    decoded = json.loads(encoded)["value"]
-    if math.copysign(1.0, value) < 0 and value == 0.0:
-        assert decoded == 0
-    else:
-        assert Decimal(str(decoded)) == Decimal(str(value))
+    decoded = json.loads(encoded, parse_float=Decimal, parse_int=Decimal)["value"]
+    # Canonical JSON normalizes both +0 and -0 to 0.
+    expected = Decimal("0") if value == 0 else value.normalize()
+    assert decoded == expected

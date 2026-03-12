@@ -94,11 +94,37 @@ Unknown MIME types are rejected with `UnsupportedMimeTypeError`, and canonicaliz
 
 A separate deterministic JSON encoder used internally for protocol operations (ledger hashing, shard headers, policy hashing):
 
+- All object keys and string values are normalized to Unicode **NFC** before serialization
+- Finite **Decimal** and integer numeric types only (`float` inputs are rejected)
 - Rejects NaN and ±Infinity
 - Integers emitted without leading zeros
 - Non-integers trimmed of trailing zeros
 - Fixed notation for `-6 <= exp10 <= 20`; scientific notation otherwise
 - `-0` normalized to `0`
+- Duplicate keys created by NFC normalization are rejected
+
+## Formal Canonicalization Specification (Normative)
+
+All implementations MUST follow these rules before hashing canonical payload bytes:
+
+1. **Unicode normalization**
+   - Every JSON key and every string value MUST be normalized to NFC.
+   - Canonical-equivalent strings (e.g., `"\u00E9"` and `"e\u0301"`) MUST serialize identically.
+2. **Numeric normalization**
+   - Numeric values MUST be represented using arbitrary-precision decimal semantics.
+   - Implementations MUST reject language-native binary floating-point values for canonical protocol encoding.
+   - Non-finite numeric values (NaN, +Infinity, -Infinity) MUST be rejected.
+3. **Structural determinism**
+   - Object keys MUST be sorted lexicographically.
+   - If NFC normalization causes key collisions, canonicalization MUST fail.
+   - Arrays MUST preserve input order.
+4. **Serialization determinism**
+   - JSON serialization MUST be compact (no insignificant whitespace).
+   - Output bytes MUST be UTF-8 encoded.
+   - Number formatting MUST follow the fixed/scientific threshold used by `protocol/canonical_json.py`.
+5. **Hash input**
+   - Hashing MUST consume canonical bytes only (`canonical_json_bytes(...)` output).
+   - Hash domain separation prefixes (`OLY:*`) remain mandatory.
 
 ## Version Pinning
 
@@ -174,9 +200,9 @@ No secret keys or proprietary algorithms are required for verification.
 
 ## Canonicalization Rules Summary
 
-- Whitespace normalization (Unicode NFKC + residual NBSP mapping + collapse)
+- String normalization (Unicode NFC for all keys/values before serialization)
+- Whitespace normalization for text content (residual NBSP mapping + collapse)
 - Consistent encoding (UTF-8)
-- Unicode NFC normalization (for JSON/HTML content)
 - Deterministic ordering of keys and attributes
 - Line ending normalization (CRLF/CR → LF)
 - Removal of non-semantic metadata

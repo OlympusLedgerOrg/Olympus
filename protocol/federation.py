@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 import math
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -137,6 +137,15 @@ class FederationRegistry:
 
     nodes: tuple[FederationNode, ...]
     epoch: int = 0
+    snapshots: dict[int, FederationRegistry] | tuple[FederationRegistry, ...] | None = field(
+        default=None, repr=False, compare=False
+    )
+
+    def __post_init__(self) -> None:
+        snapshot_cache = {self.epoch: self}
+        extra_snapshots = self._normalize_snapshots(self.snapshots)
+        snapshot_cache.update(extra_snapshots)
+        object.__setattr__(self, "_snapshot_cache", snapshot_cache)
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> FederationRegistry:
@@ -163,7 +172,9 @@ class FederationRegistry:
         if epoch < 0:
             raise ValueError("Federation registry epoch must be non-negative")
 
-        return cls(nodes=nodes, epoch=epoch)
+        raw_snapshots = data.get("snapshots")
+
+        return cls(nodes=nodes, epoch=epoch, snapshots=raw_snapshots)
 
     @classmethod
     def from_file(cls, path: str | Path) -> FederationRegistry:
@@ -174,6 +185,54 @@ class FederationRegistry:
     def to_dict(self) -> dict[str, Any]:
         """Serialize the registry to JSON-friendly data."""
         return {"nodes": [node.to_dict() for node in self.nodes], "epoch": self.epoch}
+
+    @staticmethod
+    def _coerce_snapshot(snapshot: Any) -> FederationRegistry:
+        """Normalize snapshot inputs into FederationRegistry instances."""
+        if isinstance(snapshot, FederationRegistry):
+            return snapshot
+        if isinstance(snapshot, dict):
+            return FederationRegistry.from_dict(snapshot)
+        raise ValueError("Registry snapshots must be FederationRegistry instances or dicts")
+
+    def _normalize_snapshots(
+        self, snapshots: dict[int, FederationRegistry] | tuple[FederationRegistry, ...] | None
+    ) -> dict[int, FederationRegistry]:
+        """Return a normalized mapping of epoch -> registry snapshots."""
+        if snapshots is None:
+            return {}
+
+        normalized: dict[int, FederationRegistry] = {}
+        if isinstance(snapshots, dict):
+            items = snapshots.items()
+        else:
+            items = ((None, snapshot) for snapshot in snapshots)
+
+        for key, snapshot in items:
+            registry_snapshot = self._coerce_snapshot(snapshot)
+            epoch = registry_snapshot.epoch if key is None else int(key)
+            if epoch < 0:
+                raise ValueError("Federation registry epoch must be non-negative")
+            if epoch != registry_snapshot.epoch:
+                raise ValueError("Snapshot epoch key does not match snapshot epoch value")
+            normalized[epoch] = registry_snapshot
+
+        return normalized
+
+    def get_snapshot(self, epoch: int) -> FederationRegistry:
+        """Return the registry snapshot for a specific epoch."""
+        try:
+            epoch_int = int(epoch)
+        except (TypeError, ValueError) as exc:
+            raise ValueError(f"Invalid epoch value: {epoch}") from exc
+        if epoch_int < 0:
+            raise ValueError("Federation registry epoch must be non-negative")
+
+        cache: dict[int, FederationRegistry] = getattr(self, "_snapshot_cache", {})
+        if epoch_int in cache:
+            return cache[epoch_int]
+
+        raise ValueError(f"No registry snapshot available for epoch {epoch_int}")
 
     def get_node(self, node_id: str) -> FederationNode:
         """Return the registry entry for a node id."""
@@ -620,6 +679,14 @@ def verify_quorum_certificate(
     }
     if not required_fields.issubset(certificate):
         return False
+    try:
+        certificate_epoch = int(certificate["federation_epoch"])
+    except (TypeError, ValueError):
+        return False
+    try:
+        registry_snapshot = registry.get_snapshot(certificate_epoch)
+    except ValueError:
+        return False
     header_quorum_hash = header.get("quorum_certificate_hash")
     expected_certificate_hash = quorum_certificate_hash(certificate)
     if header_quorum_hash is None:
@@ -645,17 +712,11 @@ def verify_quorum_certificate(
         return False
     if cert_round != header_round:
         return False
-    if certificate["event_id"] != _federation_vote_event_id(header, registry):
+    if certificate["event_id"] != _federation_vote_event_id(header, registry_snapshot):
         return False
-    try:
-        certificate_epoch = int(certificate["federation_epoch"])
-    except (TypeError, ValueError):
+    if int(certificate["federation_epoch"]) != registry_snapshot.epoch:
         return False
-    if is_replay_epoch(certificate_epoch, registry.epoch):
-        return False
-    if certificate_epoch != registry.epoch:
-        return False
-    validator_set_hash = registry.membership_hash()
+    validator_set_hash = registry_snapshot.membership_hash()
     if str(certificate["membership_hash"]) != validator_set_hash:
         return False
     if str(certificate["validator_set_hash"]) != validator_set_hash:
@@ -665,7 +726,7 @@ def verify_quorum_certificate(
         quorum_threshold = int(certificate["quorum_threshold"])
     except (TypeError, ValueError):
         return False
-    if validator_count != len(registry.active_nodes()):
+    if validator_count != len(registry_snapshot.active_nodes()):
         return False
     expected_threshold = math.ceil((2 * validator_count) / 3)
     if quorum_threshold != expected_threshold:
@@ -676,7 +737,7 @@ def verify_quorum_certificate(
     serialized_signatures = certificate.get("signatures")
     if not isinstance(serialized_signatures, list):
         return False
-    active_node_ids = sorted(node.node_id for node in registry.active_nodes())
+    active_node_ids = sorted(node.node_id for node in registry_snapshot.active_nodes())
     signer_bitmap = certificate.get("signer_bitmap")
     if not isinstance(signer_bitmap, str):
         return False
@@ -714,14 +775,14 @@ def verify_quorum_certificate(
         # Explicit registry key lookup — identity flows from the registry, not
         # from any field inside the certificate.
         try:
-            node = registry.get_node(node_id)
+            node = registry_snapshot.get_node(node_id)
         except ValueError:
             return False
         if not node.active:
             return False
 
         # Build the canonical vote message and assert the domain tag.
-        msg = _build_federation_vote_message(header, node_id, registry)
+        msg = _build_federation_vote_message(header, node_id, registry_snapshot)
         if msg.domain != FEDERATION_DOMAIN_TAG:
             return False
         vote_hash = hash_bytes(serialize_vote_message(msg))
@@ -745,7 +806,7 @@ def verify_quorum_certificate(
         unique_verified_nodes.add(node_id)
 
     # Quorum is counted against the number of *unique* verified signers.
-    return len(unique_verified_nodes) >= registry.quorum_threshold()
+    return len(unique_verified_nodes) >= registry_snapshot.quorum_threshold()
 
 
 def resolve_canonical_fork(
