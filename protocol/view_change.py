@@ -1,10 +1,16 @@
 """View-change watermarks and grace-period validation helpers.
 
+⚠️  **Phase 1+ only — not implemented in v1.0.**
+
 This module models the moving consensus window described in the problem
 statement: voting rounds begin with a registry snapshot and allow a short
 grace period where recently removed nodes can still participate.  A
 watermark tracker keeps only the active window of rounds so replicas can
 garbage-collect finalized state.
+
+This module is part of the Guardian replication protocol and is NOT part of the
+v1.0 single-node ledger. Civic tech partners should not assume live consensus
+is available in production deployments until Phase 1+ is explicitly announced.
 """
 
 from __future__ import annotations
