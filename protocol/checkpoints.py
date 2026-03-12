@@ -11,6 +11,7 @@ Based on Certificate Transparency's Signed Tree Head (STH) design.
 from __future__ import annotations
 
 from collections.abc import Mapping
+from itertools import combinations
 from dataclasses import asdict, dataclass
 from typing import Any
 
@@ -709,6 +710,109 @@ def detect_checkpoint_fork(
         return checkpoint_a.checkpoint_hash != checkpoint_b.checkpoint_hash
 
     return False
+
+
+@dataclass(frozen=True)
+class GossipForkEvidence:
+    """Fork evidence derived from gossiping checkpoints between peers."""
+
+    sequence: int
+    previous_checkpoint_hash: str
+    peer_ids: tuple[str, ...]
+    checkpoint_hashes: tuple[str, ...]
+
+    def __post_init__(self) -> None:
+        if self.sequence < 0:
+            raise ValueError("sequence must be non-negative")
+        if not self.peer_ids or len(self.peer_ids) < 2:
+            raise ValueError("peer_ids must include at least two peers")
+        if len(set(self.peer_ids)) != len(self.peer_ids):
+            raise ValueError("peer_ids must be unique")
+        if not self.checkpoint_hashes or len(self.checkpoint_hashes) < 2:
+            raise ValueError("checkpoint_hashes must include at least two hashes")
+        if len(set(self.checkpoint_hashes)) != len(self.checkpoint_hashes):
+            raise ValueError("checkpoint_hashes must be unique")
+
+
+def detect_gossip_checkpoint_forks(
+    *,
+    observations: Mapping[str, SignedCheckpoint],
+    registry: FederationRegistry | None = None,
+) -> tuple[GossipForkEvidence, ...]:
+    """
+    Detect forks by comparing gossiped checkpoints from multiple peers.
+
+    This helper is intended for witness clients that exchange checkpoints
+    over a gossip layer. If two peers present checkpoints that conflict
+    according to `detect_checkpoint_fork`, fork evidence is emitted that
+    identifies the conflicting peers and checkpoint hashes.
+
+    Args:
+        observations: Mapping of peer identifier -> SignedCheckpoint observed
+        registry: Optional federation registry used to verify each checkpoint
+
+    Returns:
+        Tuple of GossipForkEvidence objects describing detected forks.
+
+    Raises:
+        ValueError: If any provided checkpoint fails verification when a
+            registry is supplied.
+    """
+    if not observations:
+        return ()
+
+    peer_items = sorted(observations.items(), key=lambda item: item[0])
+    if registry is not None:
+        for peer_id, checkpoint in peer_items:
+            if not verify_checkpoint(checkpoint, registry):
+                raise ValueError(f"Invalid checkpoint from peer {peer_id}")
+
+    class _ForkAccumulator:
+        def __init__(self, sequence: int, previous_checkpoint_hash: str) -> None:
+            self.sequence = sequence
+            self.previous_checkpoint_hash = previous_checkpoint_hash
+            self.peer_ids: set[str] = set()
+            self.checkpoint_hashes: set[str] = set()
+
+        def add(self, peer_id: str, checkpoint: SignedCheckpoint) -> None:
+            self.peer_ids.add(peer_id)
+            self.checkpoint_hashes.add(checkpoint.checkpoint_hash)
+
+    accumulators: dict[tuple[int, str], _ForkAccumulator] = {}
+    for (peer_a, checkpoint_a), (peer_b, checkpoint_b) in combinations(peer_items, 2):
+        if not detect_checkpoint_fork(checkpoint_a, checkpoint_b):
+            continue
+
+        if checkpoint_a.previous_checkpoint_hash == checkpoint_b.previous_checkpoint_hash:
+            previous_hash = checkpoint_a.previous_checkpoint_hash
+        else:
+            previous_hash = ""
+
+        sequence = (
+            checkpoint_a.sequence
+            if checkpoint_a.sequence == checkpoint_b.sequence
+            else max(checkpoint_a.sequence, checkpoint_b.sequence)
+        )
+
+        key = (sequence, previous_hash)
+        accumulator = accumulators.get(key)
+        if accumulator is None:
+            accumulator = _ForkAccumulator(sequence, previous_hash)
+            accumulators[key] = accumulator
+
+        accumulator.add(peer_a, checkpoint_a)
+        accumulator.add(peer_b, checkpoint_b)
+
+    evidences = [
+        GossipForkEvidence(
+            sequence=sequence,
+            previous_checkpoint_hash=previous_hash,
+            peer_ids=tuple(sorted(acc.peer_ids)),
+            checkpoint_hashes=tuple(sorted(acc.checkpoint_hashes)),
+        )
+        for (sequence, previous_hash), acc in sorted(accumulators.items())
+    ]
+    return tuple(evidences)
 
 
 class CheckpointRegistry:
