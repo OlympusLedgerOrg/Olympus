@@ -7,8 +7,6 @@ These helpers implement dynamic quorum detection with frozen watermarks and a
 deterministic fork-choice rule that combines elapsed rounds, quorum weight, and
 a VRF-style tie-breaker. Chains are validated for proof-of-elapsed-time using
 consensus round progression (block height), not wall-clock ordering.
-<<<<<<< claude/fix-merge-conflict-and-update
-=======
 
 To mitigate eclipse-style isolation, the partition detector supports random peer
 sampling, peer-group diversity checks, and optional cross-network verification
@@ -17,7 +15,6 @@ before marking the network as healthy.
 This module is part of the Guardian replication protocol and is NOT part of the
 v1.0 single-node ledger. Civic tech partners should not assume live consensus
 is available in production deployments until Phase 1+ is explicitly announced.
->>>>>>> main
 """
 
 from __future__ import annotations
@@ -29,8 +26,9 @@ from datetime import datetime
 from math import ceil
 
 from .hashes import hash_bytes
-from .timestamps import current_timestamp
 from .telemetry import PARTITION_EVENTS, get_tracer
+from .timestamps import current_timestamp
+
 
 _partition_tracer = get_tracer("olympus.partition")
 
@@ -422,7 +420,9 @@ class PartitionDetector:
                 span.set_attribute("quorum_status", "unhealthy")
                 PARTITION_EVENTS.labels(event="quorum_lost").inc()
                 return False
-            if self._cross_network_verifier is not None and not self._cross_network_verifier(reachable):
+            if self._cross_network_verifier is not None and not self._cross_network_verifier(
+                reachable
+            ):
                 self.frozen_watermarks[round_num] = self._get_current_state()
                 span.set_attribute("quorum_status", "cross_network_rejection")
                 PARTITION_EVENTS.labels(event="quorum_lost").inc()
