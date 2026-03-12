@@ -16,12 +16,12 @@ VECTOR_PATH = (
 )
 
 
-def _load_vector() -> dict:
+def _load_end_to_end_vector() -> dict:
     return json.loads(VECTOR_PATH.read_text(encoding="utf-8"))
 
 
 def test_end_to_end_vector_matches_reference_outputs() -> None:
-    vector = _load_vector()
+    vector = _load_end_to_end_vector()
 
     # Canonicalization
     raw_bytes = json.dumps(vector["input_record"], separators=(",", ":")).encode("utf-8")
@@ -40,7 +40,7 @@ def test_end_to_end_vector_matches_reference_outputs() -> None:
     assert proof.siblings == []
 
     # Proof verification against serialized vector
-    serialized_proof = MerkleProof(
+    reconstructed_proof = MerkleProof(
         leaf_hash=bytes.fromhex(vector["merkle"]["leaf_hash_hex"]),
         leaf_index=vector["proof"]["leaf_index"],
         siblings=[
@@ -49,7 +49,7 @@ def test_end_to_end_vector_matches_reference_outputs() -> None:
         root_hash=bytes.fromhex(vector["proof"]["root_hash_hex"]),
         tree_size=1,
     )
-    assert verify_proof(serialized_proof) is vector["proof"]["expected_valid"]
+    assert verify_proof(reconstructed_proof) == vector["proof"]["expected_valid"]
 
     # Ledger chain verification
     ledger = Ledger()
