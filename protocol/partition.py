@@ -2,9 +2,9 @@
 Partition awareness and fork resolution utilities.
 
 These helpers implement dynamic quorum detection with frozen watermarks and a
-deterministic fork-choice rule that combines chain length, quorum weight, and a
-VRF-style tie-breaker. Chains are validated for proof-of-wait by requiring
-monotonic timestamps and strictly increasing round numbers.
+deterministic fork-choice rule that combines elapsed rounds, quorum weight, and
+a VRF-style tie-breaker. Chains are validated for proof-of-elapsed-time using
+consensus round progression (block height), not wall-clock ordering.
 """
 
 from __future__ import annotations
@@ -63,21 +63,23 @@ def validate_proof_of_wait(chain: Sequence[ConsensusBlock]) -> None:
     """
     Assert that a chain carries a valid proof-of-wait.
 
-    Proof-of-wait requires strictly increasing round numbers and monotonic
-    timestamps so that a winner can demonstrate elapsed time during a partition.
+    Proof-of-elapsed-time is based on consensus round progression (height), not
+    wall-clock timestamps. A valid chain must advance by exactly one round at
+    each step so elapsed rounds cannot be fabricated by timestamp skew.
     """
     if not chain:
         raise ValueError("chain cannot be empty")
     previous_round = -1
-    previous_timestamp: datetime | None = None
     for block in chain:
-        if block.round_number <= previous_round:
-            raise ValueError("round numbers must be strictly increasing")
-        current_ts = datetime.fromisoformat(block.timestamp.replace("Z", "+00:00"))
-        if previous_timestamp is not None and current_ts <= previous_timestamp:
-            raise ValueError("timestamps must be strictly increasing for proof-of-wait")
+        if previous_round != -1 and block.round_number != previous_round + 1:
+            raise ValueError("round numbers must advance by exactly one per block")
         previous_round = block.round_number
-        previous_timestamp = current_ts
+
+
+def proof_of_elapsed_rounds(chain: Sequence[ConsensusBlock]) -> int:
+    """Return the elapsed consensus rounds proved by a validated chain."""
+    validate_proof_of_wait(chain)
+    return chain[-1].round_number - chain[0].round_number
 
 
 def find_first_divergent_round(
@@ -98,13 +100,20 @@ def resolve_partition_fork(
     Resolve a fork between two chains after a healed partition.
 
     Preference order:
-    1. Longer chain (more elapsed rounds)
+    1. Larger proof-of-elapsed-rounds value
     2. Higher quorum weight at the divergent round
     3. VRF tiebreaker on the first block after the fork
     """
     validate_proof_of_wait(chain_a)
     validate_proof_of_wait(chain_b)
 
+    elapsed_rounds_a = proof_of_elapsed_rounds(chain_a)
+    elapsed_rounds_b = proof_of_elapsed_rounds(chain_b)
+
+    if elapsed_rounds_a > elapsed_rounds_b:
+        return tuple(chain_a)
+    if elapsed_rounds_b > elapsed_rounds_a:
+        return tuple(chain_b)
     if len(chain_a) > len(chain_b):
         return tuple(chain_a)
     if len(chain_b) > len(chain_a):
