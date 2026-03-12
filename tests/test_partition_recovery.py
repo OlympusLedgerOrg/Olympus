@@ -6,6 +6,11 @@ from protocol.partition import (
     ConsensusBlock,
     ConsensusChainState,
     PartitionDetector,
+    PublishedVote,
+    TransactionBroadcast,
+    VotePublication,
+    build_inclusion_list,
+    detect_slashable_equivocations,
     find_first_divergent_round,
     proof_of_elapsed_rounds,
     resolve_partition_fork,
@@ -211,3 +216,79 @@ def test_find_first_divergent_round_identifies_first_difference() -> None:
     idx = find_first_divergent_round(chain_a, chain_b)
 
     assert idx == 1
+
+
+def test_detect_slashable_equivocations_requires_conflicting_published_votes() -> None:
+    vote_a = PublishedVote(
+        node_id="guardian-1",
+        shard_id="records/a",
+        round_number=7,
+        chain_id="chain-a",
+        publication=VotePublication(
+            vote_hash=vrf_hash_from_seed("guardian-1-chain-a"),
+            published_at="2026-03-10T00:01:00Z",
+            witnesses=("w1", "w2"),
+        ),
+    )
+    vote_b = PublishedVote(
+        node_id="guardian-1",
+        shard_id="records/a",
+        round_number=7,
+        chain_id="chain-b",
+        publication=VotePublication(
+            vote_hash=vrf_hash_from_seed("guardian-1-chain-b"),
+            published_at="2026-03-10T00:01:01Z",
+            witnesses=("w1", "w3"),
+        ),
+    )
+
+    evidence = detect_slashable_equivocations((vote_a, vote_b))
+
+    assert len(evidence) == 1
+    assert evidence[0].node_id == "guardian-1"
+    assert evidence[0].conflicting_chain_ids == ("chain-a", "chain-b")
+
+
+def test_select_rotating_leader_rotates_every_round() -> None:
+    leaders = ("n1", "n2", "n3")
+
+    assert select_rotating_leader(0, leaders) == "n1"
+    assert select_rotating_leader(1, leaders) == "n2"
+    assert select_rotating_leader(2, leaders) == "n3"
+    assert select_rotating_leader(3, leaders) == "n1"
+
+
+def test_build_inclusion_list_filters_on_broadcast_witness_quorum() -> None:
+    broadcasts = (
+        TransactionBroadcast(
+            tx_id="tx-1",
+            round_number=1,
+            broadcast_at="2026-03-10T00:01:00Z",
+            witnesses=("n1", "n2"),
+        ),
+        TransactionBroadcast(
+            tx_id="tx-2",
+            round_number=1,
+            broadcast_at="2026-03-10T00:01:01Z",
+            witnesses=("n1",),
+        ),
+        TransactionBroadcast(
+            tx_id="tx-3",
+            round_number=1,
+            broadcast_at="2026-03-10T00:01:02Z",
+            witnesses=("n1", "n2", "n3"),
+        ),
+    )
+
+    inclusion_list = build_inclusion_list(broadcasts, minimum_witnesses=2)
+
+    assert inclusion_list == ("tx-1", "tx-3")
+
+
+def test_missing_inclusion_entries_reports_omissions() -> None:
+    inclusion_list = ("tx-1", "tx-2", "tx-3")
+    proposed_transactions = ("tx-1", "tx-3")
+
+    missing = missing_inclusion_entries(inclusion_list, proposed_transactions)
+
+    assert missing == ("tx-2",)
