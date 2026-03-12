@@ -60,7 +60,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from .hashes import hash_string
+from .hashes import HASH_SEPARATOR, hash_string
 from .timestamps import current_timestamp
 
 
@@ -393,11 +393,18 @@ class RedactionEvent:
         Returns:
             64-character hex-encoded BLAKE3 hash.
         """
-        payload = (
-            f"{self.event_index}|{self.document_id}|{self.version}|"
-            f"{','.join(str(i) for i in sorted(self.revealed_indices))}|"
-            f"{self.original_root}|{self.redacted_commitment}|"
-            f"{self.revealed_count}|{self.timestamp}|{self.previous_event_hash}"
+        payload = HASH_SEPARATOR.join(
+            [
+                str(self.event_index),
+                self.document_id,
+                str(self.version),
+                ",".join(str(i) for i in sorted(self.revealed_indices)),
+                self.original_root,
+                self.redacted_commitment,
+                str(self.revealed_count),
+                self.timestamp,
+                self.previous_event_hash,
+            ]
         )
         return hash_string(payload).hex()
 
@@ -433,7 +440,7 @@ class RedactionEvent:
         )
 
 
-@dataclass
+@dataclass(frozen=True)
 class RecursiveRedactionProof:
     """
     A single verification artifact that proves ledger inclusion **and** the

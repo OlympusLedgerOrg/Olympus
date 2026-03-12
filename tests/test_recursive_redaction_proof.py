@@ -350,21 +350,53 @@ class TestVerifyRecursiveRedactionProof:
     def test_rejects_mismatched_event_count(self):
         """Proof is rejected when event_count != len(event_hashes)."""
         _, proof = self._make_accumulator_and_proof()
-        # Tamper: claim there are 2 events but keep 3 hashes
-        proof.event_count = 2
-        assert verify_recursive_redaction_proof(proof) is False
+        # Create a tampered copy with wrong event_count
+        tampered = RecursiveRedactionProof(
+            document_id=proof.document_id,
+            event_count=2,  # wrong: should be 3
+            current_state_hash=proof.current_state_hash,
+            original_root=proof.original_root,
+            ledger_root=proof.ledger_root,
+            recursive_proof=proof.recursive_proof,
+            proof_version=proof.proof_version,
+            timestamp=proof.timestamp,
+            event_hashes=proof.event_hashes,
+        )
+        assert verify_recursive_redaction_proof(tampered) is False
 
     def test_rejects_wrong_current_state_hash(self):
         """Proof is rejected when current_state_hash doesn't match last hash."""
         _, proof = self._make_accumulator_and_proof()
-        proof.current_state_hash = "tampered"
-        assert verify_recursive_redaction_proof(proof) is False
+        tampered = RecursiveRedactionProof(
+            document_id=proof.document_id,
+            event_count=proof.event_count,
+            current_state_hash="tampered",
+            original_root=proof.original_root,
+            ledger_root=proof.ledger_root,
+            recursive_proof=proof.recursive_proof,
+            proof_version=proof.proof_version,
+            timestamp=proof.timestamp,
+            event_hashes=proof.event_hashes,
+        )
+        assert verify_recursive_redaction_proof(tampered) is False
 
     def test_rejects_tampered_event_hash(self):
         """Verification fails if an event hash in the proof was tampered."""
         events, proof = self._make_accumulator_and_proof()
-        proof.event_hashes[1] = "bad_hash"
-        assert verify_recursive_redaction_proof(proof, events=events) is False
+        tampered_hashes = list(proof.event_hashes)
+        tampered_hashes[1] = "bad_hash"
+        tampered = RecursiveRedactionProof(
+            document_id=proof.document_id,
+            event_count=proof.event_count,
+            current_state_hash=proof.current_state_hash,
+            original_root=proof.original_root,
+            ledger_root=proof.ledger_root,
+            recursive_proof=proof.recursive_proof,
+            proof_version=proof.proof_version,
+            timestamp=proof.timestamp,
+            event_hashes=tampered_hashes,
+        )
+        assert verify_recursive_redaction_proof(tampered, events=events) is False
 
     def test_rejects_wrong_event_list_length(self):
         """Verification fails if event list length doesn't match."""
