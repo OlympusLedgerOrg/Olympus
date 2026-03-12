@@ -8,7 +8,7 @@ from dataclasses import asdict, dataclass
 from typing import Any
 
 from .canonical_json import canonical_json_bytes
-from .hashes import LEDGER_PREFIX, _SEP, blake3_hash
+from .hashes import _SEP, LEDGER_PREFIX, blake3_hash
 from .timestamps import current_timestamp
 
 
