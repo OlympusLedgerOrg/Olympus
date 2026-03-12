@@ -399,6 +399,7 @@ class TestEpochAndEvents:
 # ---------------------------------------------------------------------------
 
 
+@pytest.mark.smoke
 class TestPipelineSmokeTest:
     """Verify the full pipeline can execute end-to-end."""
 
