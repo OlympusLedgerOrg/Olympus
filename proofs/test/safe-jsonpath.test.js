@@ -47,3 +47,9 @@ test('rejects unsupported selectors', () => {
   assert.throws(() => parse('$..foo'), /Unsupported/)
   assert.throws(() => parse('$[?(@.a>1)]'), /Unsupported/)
 })
+
+test('rejects executable syntax', () => {
+  assert.throws(() => parse('$.foo()'), /unsafe JSONPath syntax/)
+  assert.throws(() => parse("$.payload['script:alert']"), /unsafe JSONPath syntax/)
+  assert.throws(() => parse('$.payload[(1)]'), /unsafe JSONPath syntax/)
+})

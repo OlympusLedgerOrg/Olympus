@@ -16,6 +16,9 @@ function parse (path) {
   }
 
   const trimmed = path.trim()
+  if (/[()]/.test(trimmed) || /script\s*:/i.test(trimmed)) {
+    throw new Error('Unsupported or unsafe JSONPath syntax')
+  }
   if (!trimmed.startsWith('$')) {
     throw new Error('Only absolute JSONPath expressions starting with "$" are supported')
   }
