@@ -144,9 +144,9 @@ boto3==1.42.63 \
     --hash=sha256:cd008cfd0d7ea30f1c5e22daf0998c55b7c6c68cb68eea05110e33fe641173d5 \
     --hash=sha256:d502a89a0acc701692ae020d15981f2a82e9eb3485acc651cfd0cf1a3afe79ee
     # via olympus (pyproject.toml)
-botocore==1.42.63 \
-    --hash=sha256:1fdfc33cff58d21e8622cf620ba2bba3cff324557932aaf935b5374e4610f059 \
-    --hash=sha256:83f39d04f2b316bdfc59a3cac2d12238bde7126ac99d9a57d910dbd86d58c528
+botocore==1.42.66 \
+    --hash=sha256:39756a21142b646de552d798dde2105759b0b8fa0d881a34c26d15bd4c9448fa \
+    --hash=sha256:ac48af1ab527dfa08c4617c387413ca56a7f87780d7bfc1da34ef847a59219a5
     # via
     #   boto3
     #   s3transfer
