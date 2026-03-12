@@ -12,9 +12,11 @@ from protocol.partition import (
     build_inclusion_list,
     detect_slashable_equivocations,
     find_first_divergent_round,
+    missing_inclusion_entries,
     proof_of_elapsed_rounds,
     resolve_partition_fork,
     select_random_peers,
+    select_rotating_leader,
     validate_proof_of_wait,
     vrf_hash_from_seed,
 )
