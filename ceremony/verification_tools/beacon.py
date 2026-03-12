@@ -33,7 +33,7 @@ import blake3
 # DRAND mainnet configuration
 DRAND_MAINNET_URL = "https://api.drand.sh"
 DRAND_CHAIN_HASH = "8990e7a9aaed2ffed73dbd7092123d6f289930540d7651336225dc172e51b2ce"
-DRAND_GENESIS_TIME = 1595431050
+DRAND_GENESIS_TIME = 1595431050  # 2020-07-22T21:50:50Z (League of Entropy mainnet launch)
 DRAND_PERIOD = 30  # seconds
 
 

@@ -166,7 +166,7 @@ def compute_artifact_hash(artifact_path: Path) -> str:
     """
     hasher = blake3.blake3()
     with open(artifact_path, "rb") as f:
-        while chunk := f.read(65536):  # 64KB chunks
+        while chunk := f.read(65536):  # 64 KiB chunks
             hasher.update(chunk)
     return hasher.hexdigest()
 
@@ -185,7 +185,7 @@ def compute_artifact_sha256(artifact_path: Path) -> str:
     """
     hasher = hashlib.sha256()
     with open(artifact_path, "rb") as f:
-        while chunk := f.read(65536):  # 64KB chunks
+        while chunk := f.read(65536):  # 64 KiB chunks
             hasher.update(chunk)
     return hasher.hexdigest()
 

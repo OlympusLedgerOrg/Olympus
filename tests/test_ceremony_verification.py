@@ -426,6 +426,45 @@ class TestTranscript:
         transcript.advance_to_phase2()
         assert transcript.phase == CeremonyPhase.PHASE2
 
+    def test_phase1_contribution_rejected_in_phase2(
+        self, sample_keypair: tuple[str, str], sample_participant: Participant
+    ) -> None:
+        """Test that Phase 1 contributions are rejected after advancing to Phase 2."""
+        private_key, pubkey = sample_keypair
+        transcript = create_transcript(
+            circuit_name="test_circuit",
+            circuit_version="1.0.0",
+        )
+
+        transcript.add_participant(sample_participant)
+
+        # Add Phase 1 contribution and advance to Phase 2
+        contrib1 = create_contribution(
+            phase=ContributionPhase.PHASE1_PTAU,
+            sequence_number=1,
+            participant_id=sample_participant.participant_id,
+            participant_pubkey=pubkey,
+            previous_hash=GENESIS_HASH,
+            artifact_hash="d" * 64,
+            signing_key_hex=private_key,
+        )
+        transcript.add_contribution(contrib1)
+        transcript.advance_to_phase2()
+
+        # Try to add another Phase 1 contribution - should fail
+        contrib2 = create_contribution(
+            phase=ContributionPhase.PHASE1_PTAU,
+            sequence_number=2,
+            participant_id=sample_participant.participant_id,
+            participant_pubkey=pubkey,
+            previous_hash=GENESIS_HASH,
+            artifact_hash="e" * 64,
+            signing_key_hex=private_key,
+        )
+
+        with pytest.raises(ValueError, match="Phase 1 contributions only allowed in Phase 1"):
+            transcript.add_contribution(contrib2)
+
     def test_advance_to_phase2_without_contributions_raises(self) -> None:
         """Test that advancing without contributions raises."""
         transcript = create_transcript(

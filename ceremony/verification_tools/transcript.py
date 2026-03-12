@@ -241,7 +241,7 @@ class CeremonyTranscript:
         # Get expected previous hash and entries list
         if contribution.phase == ContributionPhase.PHASE1_PTAU:
             entries = self.phase1_entries
-            if self.phase not in (CeremonyPhase.PHASE1, CeremonyPhase.PHASE2):
+            if self.phase != CeremonyPhase.PHASE1:
                 raise ValueError("Phase 1 contributions only allowed in Phase 1")
         else:
             entries = self.phase2_entries

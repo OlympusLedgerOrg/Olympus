@@ -33,6 +33,20 @@ from pathlib import Path
 from .transcript import CeremonyPhase, load_transcript, verify_transcript
 
 
+def format_key_display(key: str) -> str:
+    """Format a hex key for display by showing prefix and suffix."""
+    if len(key) <= 24:
+        return key
+    return f"{key[:16]}...{key[-8:]}"
+
+
+def format_hash_display(hash_hex: str) -> str:
+    """Format a hash for display by showing prefix and suffix."""
+    if len(hash_hex) <= 32:
+        return hash_hex
+    return f"{hash_hex[:32]}..."
+
+
 def print_header(text: str) -> None:
     """Print a section header."""
     print(f"\n{'=' * 60}")
@@ -104,7 +118,7 @@ def verify_ceremony_verbose(transcript_path: Path, *, require_production: bool =
 
     for i, participant in enumerate(transcript.participants, 1):
         print_info(f"  {i}. {participant.name} ({participant.participant_id})")
-        print_info(f"     Key: {participant.pubkey[:16]}...{participant.pubkey[-8:]}")
+        print_info(f"     Key: {format_key_display(participant.pubkey)}")
         if participant.attestation_url:
             print_info(f"     Attestation: {participant.attestation_url}")
 
@@ -124,9 +138,7 @@ def verify_ceremony_verbose(transcript_path: Path, *, require_production: bool =
                     break
 
             print_info(f"  {i}. {participant_name}")
-            print_info(
-                f"     Hash: {entry.contribution_hash[:16]}...{entry.contribution_hash[-8:]}"
-            )
+            print_info(f"     Hash: {format_key_display(entry.contribution_hash)}")
             print_info(f"     Time: {contrib.timestamp}")
             if contrib.beacon_round:
                 print_info(f"     Beacon: round {contrib.beacon_round.round_number}")
@@ -147,9 +159,7 @@ def verify_ceremony_verbose(transcript_path: Path, *, require_production: bool =
                     break
 
             print_info(f"  {i}. {participant_name}")
-            print_info(
-                f"     Hash: {entry.contribution_hash[:16]}...{entry.contribution_hash[-8:]}"
-            )
+            print_info(f"     Hash: {format_key_display(entry.contribution_hash)}")
             print_info(f"     Time: {contrib.timestamp}")
             if contrib.beacon_round:
                 print_info(f"     Beacon: round {contrib.beacon_round.round_number}")
@@ -160,7 +170,9 @@ def verify_ceremony_verbose(transcript_path: Path, *, require_production: bool =
     if transcript.phase == CeremonyPhase.FINALIZED:
         print_success("Ceremony is finalized")
         print_info(f"  End time: {transcript.ceremony_end}")
-        print_info(f"  Verification key hash: {transcript.final_verification_key_hash[:32]}...")
+        print_info(
+            f"  Verification key hash: {format_hash_display(transcript.final_verification_key_hash)}"
+        )
         if transcript.final_beacon_anchor:
             print_info(f"  Final beacon: round {transcript.final_beacon_anchor.round_number}")
     else:
