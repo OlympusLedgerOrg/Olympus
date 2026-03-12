@@ -15,6 +15,30 @@ This catches:
 - Timestamp-based non-determinism
 - Hash map iteration order dependencies
 - Race conditions in state updates
+
+Hypothesis counterexample shape
+--------------------------------
+If a test in this module fails, Hypothesis will print a minimal counterexample
+similar to the following (exact values vary):
+
+    Falsifying example: test_watermark_state_is_deterministic_regardless_of_round_arrival_order(
+        round_numbers=[0, 5, 3],
+        max_window=3,
+    )
+    AssertionError: VotingRound contents differ for round 3:
+      round_a.grace_period_end=5, round_b.grace_period_end=7
+
+This would indicate that two nodes initialised the same round number with
+different internal state (e.g. a different grace-period end epoch), meaning
+the round's initialisation path is order-dependent.  The audit trail for
+such a counterexample should show:
+- The exact round numbers and insertion order that expose the divergence
+- Which VotingRound field(s) differ between the two nodes
+- The specific ``max_watermark_window`` value that triggered GC behaviour
+
+For the N-node quorum test the counterexample additionally includes the per-node
+insertion permutation (``node_orderings``) so that the reviewer can reproduce the
+minimal failing shuffle sequence.
 """
 
 from __future__ import annotations
@@ -161,18 +185,125 @@ def test_watermark_state_is_deterministic_regardless_of_round_arrival_order(
     assert consensus_a.low_watermark == consensus_b.low_watermark
     assert consensus_a.high_watermark == consensus_b.high_watermark
 
-    # Both should have same set of active rounds
+    # Both should have same set of active rounds and identical round contents
     assert set(consensus_a.voting_rounds.keys()) == set(consensus_b.voting_rounds.keys())
+    for k in consensus_a.voting_rounds:
+        round_a = consensus_a.voting_rounds[k]
+        round_b = consensus_b.voting_rounds[k]
+        assert round_a.round_num == round_b.round_num, (
+            f"VotingRound contents differ for round {k}: "
+            f"round_a.round_num={round_a.round_num}, round_b.round_num={round_b.round_num}"
+        )
+        assert round_a.start_epoch == round_b.start_epoch, (
+            f"VotingRound contents differ for round {k}: "
+            f"round_a.start_epoch={round_a.start_epoch}, round_b.start_epoch={round_b.start_epoch}"
+        )
+        assert round_a.grace_period_end == round_b.grace_period_end, (
+            f"VotingRound contents differ for round {k}: "
+            f"round_a.grace_period_end={round_a.grace_period_end}, "
+            f"round_b.grace_period_end={round_b.grace_period_end}"
+        )
 
     # Advance watermarks to highest round - should trigger identical GC
     max_round = max(round_numbers)
     consensus_a.advance_watermark(max_round)
     consensus_b.advance_watermark(max_round)
 
-    # After GC, both should still have identical state
+    # After GC, both should still have identical state including round contents
     assert consensus_a.low_watermark == consensus_b.low_watermark
     assert consensus_a.high_watermark == consensus_b.high_watermark
     assert set(consensus_a.voting_rounds.keys()) == set(consensus_b.voting_rounds.keys())
+    for k in consensus_a.voting_rounds:
+        round_a = consensus_a.voting_rounds[k]
+        round_b = consensus_b.voting_rounds[k]
+        assert round_a.round_num == round_b.round_num
+        assert round_a.start_epoch == round_b.start_epoch
+        assert round_a.grace_period_end == round_b.grace_period_end
+
+
+# ============================================================================
+# Cross-Node Determinism: N-Node Quorum with Random Orderings
+# ============================================================================
+
+
+@given(
+    round_numbers=st.lists(st.integers(min_value=0, max_value=50), min_size=3, max_size=12, unique=True),
+    max_window=st.integers(min_value=3, max_value=10),
+    node_count=st.integers(min_value=3, max_value=5),
+    node_orderings=st.data(),
+)
+@settings(max_examples=100, deadline=None)
+def test_watermark_convergence_across_n_nodes_with_random_orderings(
+    round_numbers: list[int],
+    max_window: int,
+    node_count: int,
+    node_orderings: st.DataObject,
+) -> None:
+    """
+    Property: N nodes (3-5) each receiving rounds in an independently shuffled
+    order must all converge to identical watermark state and identical VotingRound
+    contents after processing all rounds.
+
+    This tests the quorum-convergence property: not just pairwise commutativity
+    but convergence across the full combinatorial space of N independent orderings.
+    Two-node tests prove commutativity for a pair; this test proves it for a quorum.
+
+    A Hypothesis counterexample would include the ``node_orderings`` (one per node)
+    that expose the divergence, making the failure fully reproducible.
+    """
+    # The ValidatorRegistry represents the set of validator *identities* participating
+    # in consensus rounds. It is intentionally decoupled from `node_count`, which
+    # represents the number of independent replica nodes each tracking the same rounds.
+    # A single registry with 3 validators is sufficient regardless of how many replicas
+    # participate in this convergence test.
+    registry = ValidatorRegistry({"node1", "node2", "node3"}, epoch=0)
+    sorted_rounds = sorted(round_numbers)
+
+    # Each node processes rounds in a different random permutation
+    nodes: list[ConsensusState] = []
+    for _ in range(node_count):
+        permutation = node_orderings.draw(st.permutations(sorted_rounds))
+        consensus = ConsensusState(max_watermark_window=max_window)
+        for round_num in permutation:
+            consensus.start_round(round_num=round_num, start_epoch=round_num, registry=registry)
+        nodes.append(consensus)
+
+    # Advance all nodes to the same high watermark
+    max_round = max(round_numbers)
+    for consensus in nodes:
+        consensus.advance_watermark(max_round)
+
+    # All nodes must have identical watermarks
+    reference = nodes[0]
+    for i, node in enumerate(nodes[1:], start=1):
+        assert node.low_watermark == reference.low_watermark, (
+            f"Node {i} low_watermark={node.low_watermark} differs from "
+            f"node 0 low_watermark={reference.low_watermark}"
+        )
+        assert node.high_watermark == reference.high_watermark, (
+            f"Node {i} high_watermark={node.high_watermark} differs from "
+            f"node 0 high_watermark={reference.high_watermark}"
+        )
+        assert set(node.voting_rounds.keys()) == set(reference.voting_rounds.keys()), (
+            f"Node {i} active rounds {set(node.voting_rounds.keys())} differ from "
+            f"node 0 active rounds {set(reference.voting_rounds.keys())}"
+        )
+        # Verify contents of each surviving VotingRound are identical
+        for k in reference.voting_rounds:
+            ref_round = reference.voting_rounds[k]
+            node_round = node.voting_rounds[k]
+            assert node_round.round_num == ref_round.round_num, (
+                f"Node {i} round {k}: round_num={node_round.round_num} "
+                f"!= node 0 round_num={ref_round.round_num}"
+            )
+            assert node_round.start_epoch == ref_round.start_epoch, (
+                f"Node {i} round {k}: start_epoch={node_round.start_epoch} "
+                f"!= node 0 start_epoch={ref_round.start_epoch}"
+            )
+            assert node_round.grace_period_end == ref_round.grace_period_end, (
+                f"Node {i} round {k}: grace_period_end={node_round.grace_period_end} "
+                f"!= node 0 grace_period_end={ref_round.grace_period_end}"
+            )
 
 
 # ============================================================================
