@@ -24,6 +24,7 @@ def test_end_to_end_vector_matches_reference_outputs() -> None:
     vector = _load_end_to_end_vector()
 
     # Canonicalization
+    # Serialize deterministically so the pre-canonical bytes are pinned and repeatable
     raw_bytes = json.dumps(
         vector["input_record"], sort_keys=True, separators=(",", ":"), ensure_ascii=True
     ).encode("utf-8")
