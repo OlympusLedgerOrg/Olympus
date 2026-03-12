@@ -568,6 +568,27 @@ npm run groth16:setup
 - The proving key (`.zkey`) contains toxic waste from the setup; do not share it.
 - No private randomness or secrets are checked into the repository.
 
+### Production ceremony infrastructure
+
+For production deployments, use the ceremony infrastructure in `ceremony/`:
+
+```bash
+# Verify a ceremony transcript
+python -m ceremony.verification_tools.verify_ceremony --production ceremony/transcript/<id>.json
+
+# Output verification result as JSON
+python -m ceremony.verification_tools.verify_ceremony --json ceremony/transcript/<id>.json
+```
+
+The ceremony verification tools check:
+- Chain integrity (each contribution builds on the previous)
+- Signature validity (all contributions are properly signed)
+- Beacon binding (randomness anchored to drand beacon)
+- Hash consistency (all hashes match their computed values)
+- Minimum contributor requirements (≥3 per phase for production)
+
+See `ceremony/README.md` for full ceremony documentation.
+
 ### Smoke test (prove + verify)
 
 After running the setup, validate everything works end-to-end:

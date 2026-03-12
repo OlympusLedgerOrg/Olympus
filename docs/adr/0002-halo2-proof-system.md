@@ -33,3 +33,25 @@
   sensitive verifications without destabilizing the core path.
 - Python-facing Halo2 integration (`py-halo2`) remains less mature; Rust
   toolchain is primary for those optional circuits.
+
+## Ceremony Infrastructure
+
+The `ceremony/` directory provides the full trusted setup ceremony framework:
+
+- `ceremony/transcript/` - Append-only ceremony transcripts
+- `ceremony/participant_keys/` - Participant identity public keys
+- `ceremony/contributions/` - Individual contribution files
+- `ceremony/verification_tools/` - Python tools for independent verification
+
+Key verification properties:
+1. **Chain integrity**: Each contribution cryptographically binds to the previous
+2. **Identity binding**: All contributions are Ed25519-signed by registered participants
+3. **Beacon binding**: Contributions incorporate drand randomness (anti-grinding)
+4. **Hash consistency**: BLAKE3 hashes ensure artifact integrity
+
+Verification command:
+```bash
+python -m ceremony.verification_tools.verify_ceremony --production transcript.json
+```
+
+See `ceremony/README.md` for full ceremony protocol documentation.
