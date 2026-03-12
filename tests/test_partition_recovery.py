@@ -7,6 +7,7 @@ from protocol.partition import (
     ConsensusChainState,
     PartitionDetector,
     find_first_divergent_round,
+    proof_of_elapsed_rounds,
     resolve_partition_fork,
     validate_proof_of_wait,
     vrf_hash_from_seed,
@@ -60,7 +61,7 @@ def test_resolve_partition_fork_uses_vrf_tiebreaker() -> None:
     assert winner == (chain_a if post_a.vrf_hash < post_b.vrf_hash else chain_b)
 
 
-def test_validate_proof_of_wait_rejects_nonmonotonic_timestamps() -> None:
+def test_validate_proof_of_wait_accepts_nonmonotonic_timestamps() -> None:
     block_a = _block(0, 1, "seed-0")
     block_b = ConsensusBlock(
         round_number=1,
@@ -69,8 +70,18 @@ def test_validate_proof_of_wait_rejects_nonmonotonic_timestamps() -> None:
         timestamp=block_a.timestamp,  # non-monotonic
     )
 
-    with pytest.raises(ValueError):
-        validate_proof_of_wait((block_a, block_b))
+    validate_proof_of_wait((block_a, block_b))
+
+
+def test_validate_proof_of_wait_rejects_round_gaps() -> None:
+    with pytest.raises(ValueError, match="advance by exactly one"):
+        validate_proof_of_wait((_block(0, 1, "seed-0"), _block(2, 1, "seed-2")))
+
+
+def test_proof_of_elapsed_rounds_uses_round_numbers() -> None:
+    elapsed_rounds = proof_of_elapsed_rounds((_block(4, 2, "seed-4"), _block(5, 2, "seed-5")))
+
+    assert elapsed_rounds == 1
 
 
 def test_partition_detector_freezes_watermark_on_quorum_loss() -> None:
