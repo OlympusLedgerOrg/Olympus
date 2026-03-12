@@ -244,6 +244,47 @@ Each threat is mitigated through a combination of cryptographic primitives, prot
 
 ---
 
+### 11. Nothing-at-Stake Equivocation
+
+**Threat:** During a partition, a validator signs both competing chains "just in case," making honest behavior indistinguishable after healing.
+
+**Adversary Type:** Byzantine validator, colluding federation operator
+
+**Mitigations:**
+
+| Mitigation | Evidence | Status |
+|------------|----------|--------|
+| Slashable equivocation detector over `(node_id, shard_id, round)` | [`protocol/partition.py`](../protocol/partition.py) — `detect_slashable_equivocations()` | ✅ Implemented |
+| Proof-of-publication witness records bound to vote hash | [`protocol/partition.py`](../protocol/partition.py) — `VotePublication`, `PublishedVote` | ✅ Implemented |
+| Deterministic evidence artifact for audit/review tooling | [`protocol/partition.py`](../protocol/partition.py) — `SlashingEvidence` | ✅ Implemented |
+
+**Detection:** If two published votes from the same node target different chain IDs in the same round, `detect_slashable_equivocations()` emits deterministic slashing evidence.
+
+**Security Property:** Accountable safety — equivocation is provable and attributable.
+
+---
+
+### 12. Censorship Attacks
+
+**Threat:** A malicious leader drops valid transactions and claims they were never received.
+
+**Adversary Type:** Byzantine leader, censoring operator
+
+**Mitigations:**
+
+| Mitigation | Evidence | Status |
+|------------|----------|--------|
+| Frequent deterministic leader rotation | [`protocol/partition.py`](../protocol/partition.py) — `select_rotating_leader()` | ✅ Implemented |
+| Broadcast witness receipts for transaction publication | [`protocol/partition.py`](../protocol/partition.py) — `TransactionBroadcast` | ✅ Implemented |
+| Witness-quorum inclusion list generation | [`protocol/partition.py`](../protocol/partition.py) — `build_inclusion_list()` | ✅ Implemented |
+| Omission detection against required inclusion list | [`protocol/partition.py`](../protocol/partition.py) — `missing_inclusion_entries()` | ✅ Implemented |
+
+**Detection:** A transaction with sufficient broadcast witnesses that is absent from a proposal appears in `missing_inclusion_entries()`, giving objective omission evidence.
+
+**Security Property:** Auditable liveness — censorship claims become testable and attributable.
+
+---
+
 ## Chaos Engineering Coverage
 
 Olympus includes automated fault injection tests for the following failure modes:
