@@ -614,6 +614,42 @@ def test_verify_quorum_certificate_rejects_epoch_mismatch() -> None:
     assert verify_quorum_certificate(tampered_certificate, header, registry) is False
 
 
+def test_verify_quorum_certificate_uses_epoch_snapshot() -> None:
+    """Verification should use registry snapshot for the certificate epoch."""
+    base_registry = FederationRegistry.from_file(REGISTRY_PATH)
+    header = create_shard_header(
+        shard_id="records/city-a",
+        root_hash=bytes.fromhex("ef" * 32),
+        timestamp="2026-03-10T00:00:00Z",
+    )
+    signatures = [
+        sign_federated_header(header, "olympus-node-1", _test_signing_key(1), base_registry),
+        sign_federated_header(header, "olympus-node-2", _test_signing_key(2), base_registry),
+    ]
+    certificate = build_quorum_certificate(header, signatures, base_registry)
+    header["quorum_certificate_hash"] = quorum_certificate_hash(certificate)
+
+    future_registry = FederationRegistry(
+        nodes=tuple(
+            [
+                *base_registry.nodes,
+                FederationNode(
+                    node_id="olympus-node-4",
+                    pubkey=_test_signing_key(4).verify_key.encode(),
+                    endpoint="https://node4.olympus.org",
+                    operator="Regional Clerk",
+                    jurisdiction="region-d",
+                    status="active",
+                ),
+            ]
+        ),
+        epoch=1,
+        snapshots={0: base_registry},
+    )
+
+    assert verify_quorum_certificate(certificate, header, future_registry) is True
+
+
 def test_node_key_rotation_with_superseding_signature() -> None:
     """Compromised node key rotation should preserve old-header verification via supersession."""
     old_key = _test_signing_key(1)
