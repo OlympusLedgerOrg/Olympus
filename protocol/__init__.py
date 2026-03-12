@@ -15,6 +15,9 @@ Pipeline stages (Ingest → Canonicalize → Hash → Commit → Prove → [Repl
 
 Dependency order (imports must flow down, never up):
   canonical_json, timestamps  →  hashes, canonical  →  events  →  merkle, ledger, shards, ...
+
+Phase 1+ modules (Guardian replication; not part of v1.0):
+  protocol.federation, protocol.partition, protocol.view_change
 """
 
 __version__ = "0.1.0"
@@ -39,6 +42,8 @@ __all__ = [
     "redaction",
     "redaction_ledger",
     "zkp",
-    # Federation prototype (Phase 1+)
+    # Guardian replication (Phase 1+ only; not part of v1.0)
     "federation",
+    "partition",
+    "view_change",
 ]

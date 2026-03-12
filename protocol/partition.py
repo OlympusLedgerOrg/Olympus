@@ -1,20 +1,20 @@
 """
 Partition awareness and fork resolution utilities.
 
+⚠️  **Phase 1+ only — not implemented in v1.0.**
+
 These helpers implement dynamic quorum detection with frozen watermarks and a
-<<<<<<< copilot/fix-eclipse-long-range-attacks
-deterministic fork-choice rule that combines chain length, quorum weight, and a
-VRF-style tie-breaker. Chains are validated for proof-of-wait by requiring
-monotonic timestamps and strictly increasing round numbers.
+deterministic fork-choice rule that combines elapsed rounds, quorum weight, and
+a VRF-style tie-breaker. Chains are validated for proof-of-elapsed-time using
+consensus round progression (block height), not wall-clock ordering.
 
 To mitigate eclipse-style isolation, the partition detector supports random peer
 sampling, peer-group diversity checks, and optional cross-network verification
 before marking the network as healthy.
-=======
-deterministic fork-choice rule that combines elapsed rounds, quorum weight, and
-a VRF-style tie-breaker. Chains are validated for proof-of-elapsed-time using
-consensus round progression (block height), not wall-clock ordering.
->>>>>>> main
+
+This module is part of the Guardian replication protocol and is NOT part of the
+v1.0 single-node ledger. Civic tech partners should not assume live consensus
+is available in production deployments until Phase 1+ is explicitly announced.
 """
 
 from __future__ import annotations
