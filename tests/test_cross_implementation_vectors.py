@@ -24,7 +24,9 @@ def test_end_to_end_vector_matches_reference_outputs() -> None:
     vector = _load_end_to_end_vector()
 
     # Canonicalization
-    raw_bytes = json.dumps(vector["input_record"], separators=(",", ":")).encode("utf-8")
+    raw_bytes = json.dumps(
+        vector["input_record"], sort_keys=True, separators=(",", ":"), ensure_ascii=True
+    ).encode("utf-8")
     canonicalizer = Canonicalizer()
     canonical_bytes = canonicalizer.json_jcs(raw_bytes)
     assert canonical_bytes.hex() == vector["canonicalized_bytes_hex"]
