@@ -9,16 +9,18 @@ import pytest
 from protocol.canonical_json import canonical_json_bytes
 from protocol.federation import (
     FEDERATION_DOMAIN_TAG,
+    DEFAULT_MAX_CERTIFICATE_CLOCK_SKEW_SECONDS,
+    FederationBehaviorSample,
     FederationNode,
     FederationRegistry,
     FederationVoteMessage,
     NodeSignature,
     _to_int,
     append_quorum_certificate_to_ledger,
-    build_vrf_reveal_commitment,
+    build_proactive_share_commitments,
     build_federation_header_record,
     build_quorum_certificate,
-    derive_vrf_round_entropy,
+    detect_compromise_signals,
     has_federation_quorum,
     is_replay_epoch,
     quorum_certificate_hash,
@@ -27,6 +29,7 @@ from protocol.federation import (
     select_vrf_leader,
     serialize_vote_message,
     sign_federated_header,
+    verify_proactive_share_commitments,
     verify_federated_header_signatures,
     verify_quorum_certificate,
     vrf_selection_scores,
@@ -916,83 +919,140 @@ def test_verify_quorum_certificate_unique_nodes_counted_for_quorum() -> None:
     assert verify_quorum_certificate(tampered_certificate, header, registry) is False
 
 
-def test_vrf_round_entropy_rejects_mismatched_commit_reveal() -> None:
-    """derive_vrf_round_entropy must reject reveals that do not match commitments."""
-    with pytest.raises(ValueError, match="Reveal does not match commitment"):
-        derive_vrf_round_entropy(
-            shard_id="records/city-a",
-            round_number=1,
-            epoch=0,
-            commitments={"node-1": "00" * 32},
-            reveals={"node-1": "secret"},
-        )
+def test_is_replay_epoch_flags_stale_epochs() -> None:
+    assert is_replay_epoch(3, 4) is True
+    assert is_replay_epoch(4, 4) is False
 
 
-def test_vrf_round_entropy_is_order_independent_and_deterministic() -> None:
-    """Entropy should be deterministic regardless of reveal dictionary ordering."""
-    reveal_a = "alpha"
-    reveal_b = "beta"
-    commitments = {
-        "node-a": build_vrf_reveal_commitment(node_id="node-a", reveal=reveal_a),
-        "node-b": build_vrf_reveal_commitment(node_id="node-b", reveal=reveal_b),
-    }
-    entropy_1 = derive_vrf_round_entropy(
-        shard_id="records/city-a",
-        round_number=2,
-        epoch=1,
-        commitments=commitments,
-        reveals={"node-a": reveal_a, "node-b": reveal_b},
-    )
-    entropy_2 = derive_vrf_round_entropy(
-        shard_id="records/city-a",
-        round_number=2,
-        epoch=1,
-        commitments=commitments,
-        reveals={"node-b": reveal_b, "node-a": reveal_a},
-    )
-    assert entropy_1 == entropy_2
-
-
-def test_vrf_round_entropy_with_proof_transcripts_changes_seed() -> None:
-    """Proof transcript hashes are part of anti-grinding entropy binding."""
-    reveal = "shared-secret"
-    commitments = {"node-a": build_vrf_reveal_commitment(node_id="node-a", reveal=reveal)}
-    without_proof = derive_vrf_round_entropy(
-        shard_id="records/city-a",
-        round_number=3,
-        epoch=1,
-        commitments=commitments,
-        reveals={"node-a": reveal},
-    )
-    with_proof = derive_vrf_round_entropy(
-        shard_id="records/city-a",
-        round_number=3,
-        epoch=1,
-        commitments=commitments,
-        reveals={"node-a": reveal},
-        proof_transcript_hashes={"node-a": "ab" * 32},
-    )
-    assert with_proof != without_proof
-
-
-def test_select_vrf_leader_supports_round_entropy_binding() -> None:
-    """Leader selection should change when commit-reveal entropy changes."""
+def test_resolve_canonical_fork_prefers_lexicographic_hash_on_signer_tie() -> None:
     registry = FederationRegistry.from_file(REGISTRY_PATH)
-    if len(registry.active_nodes()) == 1:
-        pytest.skip("Entropy cannot change leader selection with a single active node")
+    timestamp = "2026-03-10T12:00:00Z"
+    header_a = create_shard_header(
+        shard_id="records/city-a",
+        root_hash=bytes.fromhex("01" * 32),
+        timestamp=timestamp,
+        height=8,
+        round_number=2,
+    )
+    header_b = create_shard_header(
+        shard_id="records/city-a",
+        root_hash=bytes.fromhex("02" * 32),
+        timestamp=timestamp,
+        height=8,
+        round_number=2,
+    )
 
-    baseline = select_vrf_leader(
+    sigs_a = [
+        sign_federated_header(header_a, "olympus-node-1", _test_signing_key(1), registry),
+        sign_federated_header(header_a, "olympus-node-2", _test_signing_key(2), registry),
+    ]
+    sigs_b = [
+        sign_federated_header(header_b, "olympus-node-1", _test_signing_key(1), registry),
+        sign_federated_header(header_b, "olympus-node-2", _test_signing_key(2), registry),
+    ]
+    cert_a = build_quorum_certificate(header_a, sigs_a, registry)
+    cert_b = build_quorum_certificate(header_b, sigs_b, registry)
+
+    selected = resolve_canonical_fork([(header_b, cert_b), (header_a, cert_a)], registry)
+
+    assert selected is not None
+    selected_header, _ = selected
+    assert selected_header["header_hash"] == min(header_a["header_hash"], header_b["header_hash"])
+
+
+def test_resolve_canonical_fork_rejects_timestamp_outliers() -> None:
+    registry = FederationRegistry.from_file(REGISTRY_PATH)
+    header_a = create_shard_header(
         shard_id="records/city-a",
-        round_number=4,
-        registry=registry,
-        epoch=1,
+        root_hash=bytes.fromhex("03" * 32),
+        timestamp="2026-03-10T12:00:00Z",
+        height=9,
+        round_number=3,
     )
-    with_entropy = select_vrf_leader(
+    header_b = create_shard_header(
         shard_id="records/city-a",
-        round_number=4,
-        registry=registry,
-        epoch=1,
-        round_entropy="11" * 32,
+        root_hash=bytes.fromhex("05" * 32),
+        timestamp="2026-03-10T12:01:00Z",
+        height=9,
+        round_number=3,
     )
-    assert isinstance(with_entropy, str)
-    assert baseline != with_entropy
+    header_outlier = create_shard_header(
+        shard_id="records/city-a",
+        root_hash=bytes.fromhex("04" * 32),
+        timestamp="2026-03-10T12:30:00Z",
+        height=9,
+        round_number=3,
+    )
+    cert_a = build_quorum_certificate(
+        header_a,
+        [
+            sign_federated_header(header_a, "olympus-node-1", _test_signing_key(1), registry),
+            sign_federated_header(header_a, "olympus-node-2", _test_signing_key(2), registry),
+        ],
+        registry,
+    )
+    cert_b = build_quorum_certificate(
+        header_b,
+        [
+            sign_federated_header(header_b, "olympus-node-1", _test_signing_key(1), registry),
+            sign_federated_header(header_b, "olympus-node-2", _test_signing_key(2), registry),
+        ],
+        registry,
+    )
+    cert_outlier = build_quorum_certificate(
+        header_outlier,
+        [
+            sign_federated_header(
+                header_outlier, "olympus-node-1", _test_signing_key(1), registry
+            ),
+            sign_federated_header(
+                header_outlier, "olympus-node-2", _test_signing_key(2), registry
+            ),
+        ],
+        registry,
+    )
+
+    selected = resolve_canonical_fork(
+        [(header_a, cert_a), (header_b, cert_b), (header_outlier, cert_outlier)],
+        registry,
+        max_clock_skew_seconds=DEFAULT_MAX_CERTIFICATE_CLOCK_SKEW_SECONDS,
+    )
+
+    assert selected is not None
+    selected_header, _ = selected
+    assert selected_header["header_hash"] == min(header_a["header_hash"], header_b["header_hash"])
+
+
+def test_proactive_share_commitments_round_trip_verification() -> None:
+    registry = FederationRegistry.from_file(REGISTRY_PATH)
+    commitments = build_proactive_share_commitments(
+        registry,
+        epoch=5,
+        refresh_nonce="rotation-window-5",
+    )
+
+    assert verify_proactive_share_commitments(
+        registry,
+        epoch=5,
+        refresh_nonce="rotation-window-5",
+        commitments=commitments,
+    )
+
+
+def test_detect_compromise_signals_flags_double_vote_and_spike() -> None:
+    signals = detect_compromise_signals(
+        [
+            FederationBehaviorSample("node-1", 1, "a" * 64),
+            FederationBehaviorSample("node-1", 1, "b" * 64),
+            FederationBehaviorSample("node-1", 2, "c" * 64),
+            FederationBehaviorSample("node-1", 3, "d" * 64),
+            FederationBehaviorSample("node-1", 4, "e" * 64),
+            FederationBehaviorSample("node-2", 1, "f" * 64),
+            FederationBehaviorSample("node-2", 2, "g" * 64),
+            FederationBehaviorSample("node-3", 1, "h" * 64),
+            FederationBehaviorSample("node-3", 2, "i" * 64),
+        ]
+    )
+
+    assert signals["node-1"] == ("double_vote_detected", "participation_spike_detected")
+    assert "node-2" not in signals

@@ -207,8 +207,11 @@ The prototype uses **quorum acknowledgment consensus**, not blind leader trust:
 - If two distinct headers claim the same `(shard_id, height, round)`, the system has detected a fork.
 - Deterministic fork resolution order:
   1. prefer the candidate with the highest number of valid signer approvals,
-  2. then prefer the earliest valid certificate timestamp,
+  2. reject timestamp outliers outside the allowed NTP-skew window around the median candidate timestamp,
   3. then prefer the lexicographically lowest `header_hash` (stable tie-break for simultaneous roots).
+- Nothing-at-stake hardening:
+  - Guardian votes are expected to be publicly gossiped with proof-of-publication witnesses.
+  - Nodes that publish conflicting votes for the same `(node_id, shard_id, round)` are slashable once both published vote hashes are observed.
 - Replay protection:
   - Nodes reject any candidate root or quorum certificate whose `federation_epoch` is lower than the node's current epoch.
   - In addition, certificates must bind exactly to the current registry epoch and membership hash before they are accepted.
@@ -226,6 +229,14 @@ To avoid ambiguous authority during membership changes:
    - new headers after rotation must verify with the active key.
 4. Registry epoch is part of every vote and quorum certificate. This binds signatures to a specific membership snapshot and prevents stale-epoch replay.
 
+### Proactive Secret-Share Rotation and Compromise Signals
+
+- Federation operators can derive deterministic per-epoch share commitments for active nodes via `build_proactive_share_commitments(...)`.
+- Verifiers can check commitment integrity with `verify_proactive_share_commitments(...)` before accepting an epoch refresh bundle.
+- Behavioral compromise signals are surfaced via `detect_compromise_signals(...)`, including:
+  - double-vote evidence (same node, same round, different header hash),
+  - participation spikes relative to the cohort median.
+
 ## VRF-Based Selections
 
 The federation prototype now exposes deterministic VRF-style selection helpers
@@ -239,6 +250,18 @@ for committee and leader choice in a round:
 
 Because the seed includes epoch and membership hash, membership changes or epoch
 advances produce a new selection ordering and prevent stale selection replay.
+With per-round leader selection (`k=1`), leadership rotates every round by default.
+
+## Censorship Resistance Controls
+
+To reduce censorship risk in leader-based rounds, the prototype requires three
+complementary controls:
+
+1. **Frequent leader rotation**: leader assignment is recomputed every round.
+2. **Censorship-proof transaction broadcast**: transactions can carry witness
+   receipts proving they were publicly broadcast.
+3. **Inclusion lists**: when witness quorum is met, transactions are added to a
+   deterministic inclusion list and omission is auditable.
 
 ### Grinding-Attack Mitigation (Phase 1+ hardening)
 

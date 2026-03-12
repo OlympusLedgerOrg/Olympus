@@ -24,13 +24,14 @@ This document defines the governance model for a federated Olympus deployment. v
 - **Protocol Upgrades**: Require supermajority Steward approval (≥2/3) and a cutover height. Upgrades are additive; legacy verification remains valid.
 - **Key Rotation**: Stewards publish revocation and superseding attestations (see `docs/04_ledger_protocol.md`). Guardians reject headers signed with revoked keys after the effective timestamp.
 - **Guardian Quorum**: A shard state is final when acknowledged by at least **Q = ⌈2N/3⌉** active Guardians in the current epoch. Acknowledgments are signed and stored as append-only metadata.
-- **Dispute Resolution**: Forks at the same `(shard_id, height, round)` are resolved by selecting the candidate with (1) highest Guardian quorum weight, then (2) earliest certificate timestamp, then (3) lowest lexicographic shard header hash as a deterministic tie-breaker.
+- **Dispute Resolution**: Forks at the same `(shard_id, height, round)` are resolved by selecting the candidate with (1) highest Guardian quorum weight, (2) NTP-hardened timestamp sanity checks against candidate median time, then (3) lowest lexicographic shard header hash as a deterministic tie-breaker.
 
 ## Operational Controls
 
 - **Transparency**: All governance actions (admit, evict, rotate, upgrade) are recorded as ledger events with canonical JSON bodies.
 - **Separation of Duties**: Steward keys used for protocol operations must be distinct from operational access keys (SSH/K8s/etc.).
 - **Monitoring**: Guardians publish liveness beacons; missing beacons trigger replication backoff but do not allow history rewrites.
+- **Stealth Compromise Detection**: Guardians track behavior anomalies (double-votes and signing-rate spikes) and trigger proactive key-share refresh windows before emergency rotation thresholds are reached.
 - **Auditability**: Auditors verify that every finalized shard header has the required Guardian acknowledgments and, when present, valid external anchors.
 
 ## Incident Response

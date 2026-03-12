@@ -78,6 +78,15 @@ from protocol.checkpoints import verify_checkpoint_chain
 
 checkpoints = [checkpoint1, checkpoint2, checkpoint3]
 is_valid = verify_checkpoint_chain(checkpoints, registry)
+
+# Optional: bind verification to out-of-band/social finality anchors
+is_valid_with_finality = verify_checkpoint_chain(
+    checkpoints,
+    registry,
+    finality_anchors={
+        1000: "f2c6...anchored-checkpoint-hash...",
+    },
+)
 ```
 
 Chain verification ensures:
@@ -87,6 +96,8 @@ Chain verification ensures:
 4. Ledger heights are monotonically increasing
 5. Merkle consistency proofs demonstrate that each new ledger root extends the
    previous root (no truncation forks)
+6. Optional out-of-band finality anchors match exact checkpoint hashes at
+   specific sequences
 
 Each checkpoint carries a `consistency_proof` containing the ordered leaf
 hashes for the current tree. Verifiers recompute the prior root over the first
@@ -178,6 +189,8 @@ Signed checkpoints provide:
 4. **Append-only guarantee**: Checkpoint chain ensures history cannot be rewritten
    and consistency proofs prevent history truncation forks
 5. **Public verifiability**: Anyone can verify checkpoint signatures
+6. **Long-range resistance**: Out-of-band finality anchors prevent alternate
+   deep history from replacing socially finalized checkpoints
 
 ## Domain Separation
 

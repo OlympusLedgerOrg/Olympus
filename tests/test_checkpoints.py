@@ -307,6 +307,59 @@ def test_verify_checkpoint_chain_valid(registry, signing_keys):
     assert verify_checkpoint_chain([checkpoint1, checkpoint2, checkpoint3], registry)
 
 
+def test_verify_checkpoint_chain_with_matching_finality_anchor(registry, signing_keys):
+    """Out-of-band finality anchors should validate when they match the chain."""
+    checkpoint1 = _build_checkpoint(
+        sequence=0, height=1, registry=registry, signing_keys=signing_keys
+    )
+    checkpoint2 = _build_checkpoint(
+        sequence=1,
+        height=2,
+        registry=registry,
+        signing_keys=signing_keys,
+        previous=checkpoint1,
+    )
+
+    assert verify_checkpoint_chain(
+        [checkpoint1, checkpoint2],
+        registry,
+        finality_anchors={0: checkpoint1.checkpoint_hash},
+    )
+
+
+def test_verify_checkpoint_chain_rejects_mismatched_finality_anchor(registry, signing_keys):
+    """Finality anchors must match checkpoint hashes exactly."""
+    checkpoint1 = _build_checkpoint(
+        sequence=0, height=1, registry=registry, signing_keys=signing_keys
+    )
+    checkpoint2 = _build_checkpoint(
+        sequence=1,
+        height=2,
+        registry=registry,
+        signing_keys=signing_keys,
+        previous=checkpoint1,
+    )
+
+    assert not verify_checkpoint_chain(
+        [checkpoint1, checkpoint2],
+        registry,
+        finality_anchors={0: "00" * 32},
+    )
+
+
+def test_verify_checkpoint_chain_rejects_missing_finality_anchor_sequence(registry, signing_keys):
+    """Finality anchors for unavailable sequence numbers must fail verification."""
+    checkpoint = _build_checkpoint(
+        sequence=0, height=1, registry=registry, signing_keys=signing_keys
+    )
+
+    assert not verify_checkpoint_chain(
+        [checkpoint],
+        registry,
+        finality_anchors={5: checkpoint.checkpoint_hash},
+    )
+
+
 def test_verify_checkpoint_chain_invalid_genesis(registry, signing_keys):
     """Test that non-empty previous_checkpoint_hash in genesis is rejected."""
     with pytest.raises(ValueError, match="Genesis checkpoints .* previous_checkpoint_hash"):
@@ -571,6 +624,7 @@ def test_checkpoint_registry_verify(registry, signing_keys):
     registry_store.add_checkpoint(checkpoint2)
 
     assert registry_store.verify_registry()
+    assert registry_store.verify_registry(finality_anchors={0: checkpoint1.checkpoint_hash})
 
 
 def test_checkpoint_registry_get_checkpoint(registry, signing_keys):
