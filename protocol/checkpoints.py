@@ -595,6 +595,7 @@ def verify_checkpoint(
 def verify_checkpoint_chain(
     checkpoints: list[SignedCheckpoint],
     registry: FederationRegistry,
+    finality_anchors: Mapping[int, str] | None = None,
 ) -> bool:
     """
     Verify the integrity of a chain of checkpoints.
@@ -608,12 +609,15 @@ def verify_checkpoint_chain(
     Args:
         checkpoints: List of checkpoints in chronological order
         registry: Federation registry used to verify quorum certificates
+        finality_anchors: Optional out-of-band finality anchors mapping
+            checkpoint sequence -> checkpoint_hash. When provided, every anchor
+            must be present in the local chain and match exactly.
 
     Returns:
         True if the entire chain is valid, False otherwise
     """
     if not checkpoints:
-        return True
+        return not finality_anchors
 
     # Verify genesis checkpoint
     if checkpoints[0].previous_checkpoint_hash != "":
@@ -660,6 +664,19 @@ def verify_checkpoint_chain(
         elif checkpoint.consistency_proof:
             # A genesis checkpoint must not carry a consistency proof
             return False
+
+    if finality_anchors:
+        checkpoints_by_sequence = {checkpoint.sequence: checkpoint for checkpoint in checkpoints}
+        for sequence, checkpoint_hash in finality_anchors.items():
+            try:
+                seq = int(sequence)
+            except (TypeError, ValueError):
+                return False
+            anchored = checkpoints_by_sequence.get(seq)
+            if anchored is None:
+                return False
+            if anchored.checkpoint_hash != checkpoint_hash:
+                return False
 
     return True
 
@@ -748,14 +765,18 @@ class CheckpointRegistry:
         self.checkpoints.sort(key=lambda c: c.sequence)
         return True
 
-    def verify_registry(self) -> bool:
+    def verify_registry(self, finality_anchors: Mapping[int, str] | None = None) -> bool:
         """
         Verify the entire checkpoint registry.
 
         Returns:
             True if all checkpoints form a valid chain
         """
-        return verify_checkpoint_chain(self.checkpoints, self.registry)
+        return verify_checkpoint_chain(
+            self.checkpoints,
+            self.registry,
+            finality_anchors=finality_anchors,
+        )
 
     def get_checkpoint(self, sequence: int) -> SignedCheckpoint | None:
         """

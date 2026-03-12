@@ -8,6 +8,7 @@ from protocol.partition import (
     PartitionDetector,
     find_first_divergent_round,
     resolve_partition_fork,
+    select_random_peers,
     validate_proof_of_wait,
     vrf_hash_from_seed,
 )
@@ -129,6 +130,67 @@ def test_partition_detector_recovers_with_fork_choice() -> None:
     assert winner == long_chain
     assert 1 not in detector.frozen_watermarks
     assert 10 in detector.last_quorum_time
+
+
+def test_select_random_peers_enforces_bounds() -> None:
+    with pytest.raises(ValueError, match="sample_size must be positive"):
+        select_random_peers(("n1", "n2"), 0)
+    with pytest.raises(ValueError, match="cannot exceed"):
+        select_random_peers(("n1", "n2"), 3)
+
+
+def test_partition_detector_uses_peer_sampling() -> None:
+    frozen_state = ConsensusChainState(round_number=1, chain=_chain(_block(0, 2, "base")))
+    seen_nodes: list[tuple[str, ...]] = []
+
+    class _State:
+        def get(self) -> ConsensusChainState:
+            return frozen_state
+
+    detector = PartitionDetector(
+        ping_nodes=lambda nodes: seen_nodes.append(tuple(nodes)) or tuple(nodes),
+        get_current_state=_State().get,
+        sample_size=2,
+        peer_selector=lambda nodes, sample_size: tuple(nodes[:sample_size]),
+    )
+
+    assert detector.check_network_health(7, ("n1", "n2", "n3", "n4")) is True
+    assert seen_nodes == [("n1", "n2")]
+
+
+def test_partition_detector_freezes_on_insufficient_diversity() -> None:
+    frozen_state = ConsensusChainState(round_number=2, chain=_chain(_block(0, 2, "base")))
+
+    class _State:
+        def get(self) -> ConsensusChainState:
+            return frozen_state
+
+    detector = PartitionDetector(
+        ping_nodes=lambda nodes: tuple(nodes),
+        get_current_state=_State().get,
+        peer_groups={"n1": "asn-a", "n2": "asn-a", "n3": "asn-a"},
+        min_peer_group_diversity=2,
+    )
+
+    assert detector.check_network_health(8, ("n1", "n2", "n3")) is False
+    assert detector.frozen_watermarks[8] == frozen_state
+
+
+def test_partition_detector_freezes_when_cross_network_verification_fails() -> None:
+    frozen_state = ConsensusChainState(round_number=2, chain=_chain(_block(0, 2, "base")))
+
+    class _State:
+        def get(self) -> ConsensusChainState:
+            return frozen_state
+
+    detector = PartitionDetector(
+        ping_nodes=lambda nodes: tuple(nodes),
+        get_current_state=_State().get,
+        cross_network_verifier=lambda reachable: False,
+    )
+
+    assert detector.check_network_health(9, ("n1", "n2", "n3")) is False
+    assert detector.frozen_watermarks[9] == frozen_state
 
 
 def test_find_first_divergent_round_identifies_first_difference() -> None:
