@@ -50,7 +50,7 @@ include "./lib/merkleProof.circom";
 include "./lib/poseidon.circom";
 
 // Range-checked Num2Bits converter
-template Num2BitsUnified(n) {
+template Num2BitsStrict(n) {
     signal input in;
     signal output out[n];
     var sum = 0;
@@ -65,11 +65,11 @@ template Num2BitsUnified(n) {
 }
 
 // LessThan comparator with range check
-template LessThanUnified(n) {
+template LessThanBounded(n) {
     signal input in[2];
     signal output out;
 
-    component diff = Num2BitsUnified(n + 1);
+    component diff = Num2BitsStrict(n + 1);
     diff.in <== in[1] - in[0] + (1 << n);
 
     out <== diff.out[n];
@@ -86,7 +86,7 @@ template Mux1() {
 }
 
 // Domain-separated Poseidon hash: Poseidon(Poseidon(domain, left), right)
-template DomainPoseidonUnified(domain) {
+template DomainPoseidon(domain) {
     signal input left;
     signal input right;
     signal output out;
@@ -133,17 +133,17 @@ template UnifiedCanonicalizationInclusionRootSign(maxSections, merkleDepth, smtD
     //               acc = DomainPoseidon(3)(acc, sectionHash_i)
 
     // Range check: sectionCount fits in 16 bits
-    component sectionCountBits = Num2BitsUnified(16);
+    component sectionCountBits = Num2BitsStrict(16);
     sectionCountBits.in <== sectionCount;
 
     // Validate sectionCount is in valid range (< maxSections + 1)
-    component sectionRangeCheck = LessThanUnified(16);
+    component sectionRangeCheck = LessThanBounded(16);
     sectionRangeCheck.in[0] <== sectionCount;
     sectionRangeCheck.in[1] <== maxSections + 1;
     sectionRangeCheck.out === 1;
 
     // Range check: leafIndex fits in merkleDepth bits
-    component leafIndexRangeBits = Num2BitsUnified(merkleDepth);
+    component leafIndexRangeBits = Num2BitsStrict(merkleDepth);
     leafIndexRangeBits.in <== leafIndex;
 
     // Structured canonicalization chain with domain-separated Poseidon
@@ -155,17 +155,17 @@ template UnifiedCanonicalizationInclusionRootSign(maxSections, merkleDepth, smtD
 
     for (var i = 0; i < maxSections; i++) {
         // Range check each sectionLength (32-bit max)
-        component lengthBits = Num2BitsUnified(32);
+        component lengthBits = Num2BitsStrict(32);
         lengthBits.in <== sectionLengths[i];
 
         // Chain: acc = DomainPoseidon(3)(acc, sectionLength_i)
-        lengthHashers[i] = DomainPoseidonUnified(3);
+        lengthHashers[i] = DomainPoseidon(3);
         lengthHashers[i].left <== structuredHashes[2 * i];
         lengthHashers[i].right <== sectionLengths[i];
         structuredHashes[2 * i + 1] <== lengthHashers[i].out;
 
         // Chain: acc = DomainPoseidon(3)(acc, sectionHash_i)
-        sectionHashHashers[i] = DomainPoseidonUnified(3);
+        sectionHashHashers[i] = DomainPoseidon(3);
         sectionHashHashers[i].left <== structuredHashes[2 * i + 1];
         sectionHashHashers[i].right <== sectionHashes[i];
         structuredHashes[2 * i + 2] <== sectionHashHashers[i].out;
@@ -232,7 +232,7 @@ template UnifiedCanonicalizationInclusionRootSign(maxSections, merkleDepth, smtD
     treeSizeIsPositive <== treeSize * treeSizeInv;
     treeSizeIsPositive * (1 - treeSizeIsPositive) === 0;
 
-    component boundsCheck = LessThanUnified(merkleDepth);
+    component boundsCheck = LessThanBounded(merkleDepth);
     boundsCheck.in[0] <== leafIndex;
     boundsCheck.in[1] <== treeSize;
     (1 - boundsCheck.out) * treeSizeIsPositive === 0;

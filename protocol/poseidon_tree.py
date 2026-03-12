@@ -266,10 +266,11 @@ def build_poseidon_witness_inputs(
     """
     tree = PoseidonMerkleTree(document_leaves, depth=depth)
 
-    # Index bounds check: leafIndex must be < treeSize
-    if target_index < 0 or target_index >= tree.tree_size:
+    # Index bounds check: leafIndex must be < number of actual document leaves
+    if target_index < 0 or target_index >= len(document_leaves):
         raise ValueError(
-            f"target_index {target_index} is out of bounds for tree with {tree.tree_size} leaves"
+            f"target_index {target_index} is out of bounds for "
+            f"{len(document_leaves)} document leaves"
         )
 
     # Normalize leaves with position binding
