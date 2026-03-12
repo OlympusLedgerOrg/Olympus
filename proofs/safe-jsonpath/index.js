@@ -16,7 +16,7 @@ function parse (path) {
   }
 
   const trimmed = path.trim()
-  if (/[()]/.test(trimmed) || /script\s*:/i.test(trimmed)) {
+  if (hasUnsafeParentheses(trimmed) || hasScriptSyntax(trimmed)) {
     throw new Error('Unsafe JSONPath syntax')
   }
   if (!trimmed.startsWith('$')) {
@@ -70,6 +70,14 @@ function nextSeparator (input, start) {
     }
   }
   return -1
+}
+
+function hasUnsafeParentheses (input) {
+  return /[()]/.test(input)
+}
+
+function hasScriptSyntax (input) {
+  return /script\s*:/i.test(input)
 }
 
 function buildSegment (raw, operation) {
