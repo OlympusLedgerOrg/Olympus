@@ -1516,9 +1516,9 @@ python-dateutil==2.9.0.post0 \
     # via
     #   botocore
     #   rfc3161ng
-python-discovery==1.1.1 \
-    --hash=sha256:584c08b141c5b7029f206b4e8b78b1a1764b22121e21519b89dec56936e95b0a \
-    --hash=sha256:69f11073fa2392251e405d4e847d60ffffd25fd762a0dc4d1a7d6b9c3f79f1a3
+python-discovery==1.1.3 \
+    --hash=sha256:7acca36e818cd88e9b2ba03e045ad7e93e1713e29c6bbfba5d90202310b7baa5 \
+    --hash=sha256:90e795f0121bc84572e737c9aa9966311b9fde44ffb88a5953b3ec9b31c6945e
     # via virtualenv
 python-dotenv==1.2.2 \
     --hash=sha256:1d8214789a24de455a8b8bd8ae6fe3c6b69a5e3d64aa8a8e5d68e694bbcb285a \
