@@ -643,8 +643,7 @@ class RedactionProtocol:
 
         # Redacted Poseidon: replace redacted leaves with 0
         redacted_poseidon_leaves = [
-            poseidon_leaves[i] if i in revealed_set else 0
-            for i in range(_POSEIDON_MAX_LEAVES)
+            poseidon_leaves[i] if i in revealed_set else 0 for i in range(_POSEIDON_MAX_LEAVES)
         ]
         redacted_poseidon_tree = PoseidonMerkleTree(
             redacted_poseidon_leaves, depth=_POSEIDON_TREE_DEPTH
@@ -652,13 +651,15 @@ class RedactionProtocol:
         redacted_poseidon_root = redacted_poseidon_tree.get_root()
 
         # Bind all four roots together
-        binding_data = HASH_SEPARATOR.join([
-            orig_blake3_root,
-            redacted_blake3_root,
-            orig_poseidon_root,
-            redacted_poseidon_root,
-            ",".join(str(i) for i in sorted(revealed_indices)),
-        ])
+        binding_data = HASH_SEPARATOR.join(
+            [
+                orig_blake3_root,
+                redacted_blake3_root,
+                orig_poseidon_root,
+                redacted_poseidon_root,
+                ",".join(str(i) for i in sorted(revealed_indices)),
+            ]
+        )
         binding_hash = hash_bytes(binding_data.encode("utf-8")).hex()
 
         return RedactionCorrectnessProof(
@@ -688,12 +689,14 @@ class RedactionProtocol:
         """
         from .hashes import HASH_SEPARATOR
 
-        binding_data = HASH_SEPARATOR.join([
-            proof.original_blake3_root,
-            proof.redacted_blake3_root,
-            proof.original_poseidon_root,
-            proof.redacted_poseidon_root,
-            ",".join(str(i) for i in sorted(proof.revealed_indices)),
-        ])
+        binding_data = HASH_SEPARATOR.join(
+            [
+                proof.original_blake3_root,
+                proof.redacted_blake3_root,
+                proof.original_poseidon_root,
+                proof.redacted_poseidon_root,
+                ",".join(str(i) for i in sorted(proof.revealed_indices)),
+            ]
+        )
         expected = hash_bytes(binding_data.encode("utf-8")).hex()
         return expected == proof.binding_hash

@@ -1,7 +1,6 @@
 import pytest
 
 from protocol.hashes import SNARK_SCALAR_FIELD, blake3_to_field_element
-from protocol.poseidon_bn128 import poseidon_hash_bn128
 from protocol.poseidon_tree import (
     POSEIDON_DOMAIN_NODE,
     PoseidonMerkleTree,
@@ -124,9 +123,15 @@ def test_identical_bytes_at_different_positions_produce_different_field_elements
     fe_at_2 = _to_field_int(payload, index=2)
 
     # All must be different due to position binding
-    assert fe_at_0 != fe_at_1, "Same payload at indices 0 and 1 must produce different field elements"
-    assert fe_at_0 != fe_at_2, "Same payload at indices 0 and 2 must produce different field elements"
-    assert fe_at_1 != fe_at_2, "Same payload at indices 1 and 2 must produce different field elements"
+    assert fe_at_0 != fe_at_1, (
+        "Same payload at indices 0 and 1 must produce different field elements"
+    )
+    assert fe_at_0 != fe_at_2, (
+        "Same payload at indices 0 and 2 must produce different field elements"
+    )
+    assert fe_at_1 != fe_at_2, (
+        "Same payload at indices 1 and 2 must produce different field elements"
+    )
 
     # Also verify that this prevents order collision in asymmetric trees
     # Use [A, A, B] which is different from [B, A, A] after reversal
@@ -139,4 +144,3 @@ def test_identical_bytes_at_different_positions_produce_different_field_elements
     root2 = tree2.get_root()
 
     assert root1 != root2, "Trees with different orderings must have different roots"
-

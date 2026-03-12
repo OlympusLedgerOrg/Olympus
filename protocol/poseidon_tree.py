@@ -17,6 +17,7 @@ from dataclasses import dataclass
 from .hashes import SNARK_SCALAR_FIELD
 from .poseidon_bn128 import poseidon_hash_bn128
 
+
 # Domain separation tags for Poseidon hashing.
 # These are injected as additive offsets to the capacity element of the
 # Poseidon state before the permutation, ensuring that a hash produced in
@@ -268,8 +269,7 @@ def build_poseidon_witness_inputs(
     # Index bounds check: leafIndex must be < treeSize
     if target_index < 0 or target_index >= tree.tree_size:
         raise ValueError(
-            f"target_index {target_index} is out of bounds for tree with "
-            f"{tree.tree_size} leaves"
+            f"target_index {target_index} is out of bounds for tree with {tree.tree_size} leaves"
         )
 
     # Normalize leaves with position binding
