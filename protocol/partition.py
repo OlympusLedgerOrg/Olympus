@@ -187,7 +187,7 @@ class PartitionDetector:
         if not nodes:
             raise ValueError("current_nodes cannot be empty")
 
-        sample_size = len(nodes) if self._sample_size is None else int(self._sample_size)
+        sample_size = len(nodes) if self._sample_size is None else self._sample_size
         if sample_size <= 0:
             raise ValueError("sample_size must be a positive integer")
         if sample_size > len(nodes):

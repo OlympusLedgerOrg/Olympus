@@ -668,11 +668,7 @@ def verify_checkpoint_chain(
     if finality_anchors:
         checkpoints_by_sequence = {checkpoint.sequence: checkpoint for checkpoint in checkpoints}
         for sequence, checkpoint_hash in finality_anchors.items():
-            try:
-                seq = int(sequence)
-            except (TypeError, ValueError):
-                return False
-            anchored = checkpoints_by_sequence.get(seq)
+            anchored = checkpoints_by_sequence.get(sequence)
             if anchored is None:
                 return False
             if anchored.checkpoint_hash != checkpoint_hash:
