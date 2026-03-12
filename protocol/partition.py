@@ -2,14 +2,25 @@
 Partition awareness and fork resolution utilities.
 
 These helpers implement dynamic quorum detection with frozen watermarks and a
+<<<<<<< copilot/fix-eclipse-long-range-attacks
+deterministic fork-choice rule that combines chain length, quorum weight, and a
+VRF-style tie-breaker. Chains are validated for proof-of-wait by requiring
+monotonic timestamps and strictly increasing round numbers.
+
+To mitigate eclipse-style isolation, the partition detector supports random peer
+sampling, peer-group diversity checks, and optional cross-network verification
+before marking the network as healthy.
+=======
 deterministic fork-choice rule that combines elapsed rounds, quorum weight, and
 a VRF-style tie-breaker. Chains are validated for proof-of-elapsed-time using
 consensus round progression (block height), not wall-clock ordering.
+>>>>>>> main
 """
 
 from __future__ import annotations
 
-from collections.abc import Callable, Collection, Iterable, Sequence
+import secrets
+from collections.abc import Callable, Collection, Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime
 from math import ceil
@@ -139,6 +150,17 @@ def resolve_partition_fork(
     return tuple(chain_a) if vrf_a <= vrf_b else tuple(chain_b)
 
 
+def select_random_peers(nodes: Sequence[str], sample_size: int) -> tuple[str, ...]:
+    """Return a cryptographically random subset of peers for health checks."""
+    if sample_size <= 0:
+        raise ValueError("sample_size must be positive")
+    if sample_size > len(nodes):
+        raise ValueError("sample_size cannot exceed number of available nodes")
+    if sample_size == len(nodes):
+        return tuple(nodes)
+    return tuple(secrets.SystemRandom().sample(list(nodes), sample_size))
+
+
 class PartitionDetector:
     """
     Detect quorum loss, freeze watermarks, and recover deterministically.
@@ -153,9 +175,19 @@ class PartitionDetector:
         *,
         ping_nodes: Callable[[Iterable[str]], Collection[str]],
         get_current_state: Callable[[], ConsensusChainState],
+        sample_size: int | None = None,
+        peer_groups: Mapping[str, str] | None = None,
+        min_peer_group_diversity: int = 1,
+        cross_network_verifier: Callable[[Collection[str]], bool] | None = None,
+        peer_selector: Callable[[Sequence[str], int], tuple[str, ...]] = select_random_peers,
     ) -> None:
         self._ping_nodes = ping_nodes
         self._get_current_state = get_current_state
+        self._sample_size = sample_size
+        self._peer_groups = dict(peer_groups or {})
+        self._min_peer_group_diversity = min_peer_group_diversity
+        self._cross_network_verifier = cross_network_verifier
+        self._peer_selector = peer_selector
         self.last_quorum_time: dict[int, str] = {}
         self.frozen_watermarks: dict[int, ConsensusChainState] = {}
 
@@ -169,9 +201,30 @@ class PartitionDetector:
         nodes = tuple(current_nodes)
         if not nodes:
             raise ValueError("current_nodes cannot be empty")
-        reachable = self._ping_nodes(nodes)
-        required = ceil(2 * len(nodes) / 3)
+
+        sample_size = len(nodes) if self._sample_size is None else self._sample_size
+        if sample_size <= 0:
+            raise ValueError("sample_size must be a positive integer")
+        if sample_size > len(nodes):
+            sample_size = len(nodes)
+        sampled_nodes = self._peer_selector(nodes, sample_size)
+
+        if self._peer_groups and self._min_peer_group_diversity > 1:
+            sampled_groups = {
+                self._peer_groups[node_id]
+                for node_id in sampled_nodes
+                if node_id in self._peer_groups
+            }
+            if len(sampled_groups) < self._min_peer_group_diversity:
+                self.frozen_watermarks[round_num] = self._get_current_state()
+                return False
+
+        reachable = self._ping_nodes(sampled_nodes)
+        required = ceil(2 * len(sampled_nodes) / 3)
         if len(reachable) < required:
+            self.frozen_watermarks[round_num] = self._get_current_state()
+            return False
+        if self._cross_network_verifier is not None and not self._cross_network_verifier(reachable):
             self.frozen_watermarks[round_num] = self._get_current_state()
             return False
         self.last_quorum_time[round_num] = current_timestamp()

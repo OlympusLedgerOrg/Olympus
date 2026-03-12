@@ -244,6 +244,46 @@ Each threat is mitigated through a combination of cryptographic primitives, prot
 
 ---
 
+### 11. Eclipse Attack / Peer Isolation
+
+**Threat:** An attacker surrounds an honest node with malicious peers so the node only sees the attacker's view and may falsely infer quorum.
+
+**Adversary Type:** Network attacker controlling routing or peer connectivity
+
+**Mitigations:**
+
+| Mitigation | Evidence | Status |
+|------------|----------|--------|
+| Random peer sampling for health probes | [`protocol/partition.py:137-146`](../protocol/partition.py#L137-L146) | ✅ Implemented |
+| Peer-group diversity checks before accepting network health | [`protocol/partition.py:188-206`](../protocol/partition.py#L188-L206) | ✅ Implemented |
+| Cross-network verification hook prior to quorum acceptance | [`protocol/partition.py:213-219`](../protocol/partition.py#L213-L219) | ✅ Implemented |
+
+**Detection:** If sampled peers fail diversity requirements or cross-network verification, the node freezes a watermark and rejects the network as healthy.
+
+**Security Property:** Isolation resistance — a single peer enclave cannot trivially satisfy liveness checks.
+
+---
+
+### 12. Long-Range History Rewrite
+
+**Threat:** An attacker with old private keys attempts to replay from genesis and present an alternative long history.
+
+**Adversary Type:** Key thief with historical key material
+
+**Mitigations:**
+
+| Mitigation | Evidence | Status |
+|------------|----------|--------|
+| Key-evolving verification via key history validity windows | [`protocol/federation.py:120-131`](../protocol/federation.py#L120-L131) | ✅ Implemented |
+| Signed checkpoint chain with consistency proofs | [`protocol/checkpoints.py:595-680`](../protocol/checkpoints.py#L595-L680) | ✅ Implemented |
+| Out-of-band/social finality anchors enforced during chain verification | [`protocol/checkpoints.py:664-678`](../protocol/checkpoints.py#L664-L678) | ✅ Implemented |
+
+**Detection:** Verification fails when an alternate chain conflicts with an externally finalized checkpoint hash at the anchored sequence.
+
+**Security Property:** Deep-history rewrite resistance once social finality is established.
+
+---
+
 ## Chaos Engineering Coverage
 
 Olympus includes automated fault injection tests for the following failure modes:
