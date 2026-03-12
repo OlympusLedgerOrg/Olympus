@@ -916,7 +916,7 @@ def test_verify_quorum_certificate_unique_nodes_counted_for_quorum() -> None:
     assert verify_quorum_certificate(tampered_certificate, header, registry) is False
 
 
-def test_vrf_round_entropy_requires_valid_commit_reveal_bindings() -> None:
+def test_vrf_round_entropy_rejects_mismatched_commit_reveal() -> None:
     """derive_vrf_round_entropy must reject reveals that do not match commitments."""
     with pytest.raises(ValueError, match="Reveal does not match commitment"):
         derive_vrf_round_entropy(
@@ -978,6 +978,9 @@ def test_vrf_round_entropy_with_proof_transcripts_changes_seed() -> None:
 def test_select_vrf_leader_supports_round_entropy_binding() -> None:
     """Leader selection should change when commit-reveal entropy changes."""
     registry = FederationRegistry.from_file(REGISTRY_PATH)
+    if len(registry.active_nodes()) == 1:
+        pytest.skip("Entropy cannot change leader selection with a single active node")
+
     baseline = select_vrf_leader(
         shard_id="records/city-a",
         round_number=4,
@@ -992,4 +995,4 @@ def test_select_vrf_leader_supports_round_entropy_binding() -> None:
         round_entropy="11" * 32,
     )
     assert isinstance(with_entropy, str)
-    assert baseline != with_entropy or len(registry.active_nodes()) == 1
+    assert baseline != with_entropy

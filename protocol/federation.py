@@ -891,7 +891,7 @@ def vrf_selection_scores(
     entropy_bytes = b""
     if round_entropy is not None:
         try:
-            entropy_bytes = bytes.fromhex(str(round_entropy))
+            entropy_bytes = bytes.fromhex(round_entropy)
         except ValueError as exc:
             raise ValueError("Round entropy must be a valid hex string") from exc
     membership_hash = registry.membership_hash()
@@ -964,7 +964,7 @@ def select_vrf_leader(
 def build_vrf_reveal_commitment(*, node_id: str, reveal: str) -> str:
     """Build a deterministic commit-reveal binding for VRF anti-grinding rounds."""
     payload = HASH_SEPARATOR.encode("utf-8").join(
-        [str(node_id).encode("utf-8"), str(reveal).encode("utf-8")]
+        [node_id.encode("utf-8"), reveal.encode("utf-8")]
     )
     return blake3_hash([_VRF_COMMIT_REVEAL_PREFIX, payload]).hex()
 
@@ -997,7 +997,8 @@ def derive_vrf_round_entropy(
         if commitment is None:
             raise ValueError(f"Missing commitment for node_id: {node_id}")
         expected_commitment = build_vrf_reveal_commitment(node_id=node_id, reveal=reveal)
-        if str(commitment).lower() != expected_commitment:
+        normalized_commitment = commitment.lower()
+        if normalized_commitment != expected_commitment.lower():
             raise ValueError(f"Reveal does not match commitment for node_id: {node_id}")
 
         proof_hash = ""
@@ -1009,8 +1010,8 @@ def derive_vrf_round_entropy(
         reveal_chunks.append(
             separator.join(
                 [
-                    str(node_id).encode("utf-8"),
-                    str(reveal).encode("utf-8"),
+                    node_id.encode("utf-8"),
+                    reveal.encode("utf-8"),
                     proof_hash.encode("utf-8"),
                 ]
             )
@@ -1018,7 +1019,7 @@ def derive_vrf_round_entropy(
 
     context = separator.join(
         [
-            str(shard_id).encode("utf-8"),
+            shard_id.encode("utf-8"),
             str(round_number).encode("utf-8"),
             str(epoch).encode("utf-8"),
         ]

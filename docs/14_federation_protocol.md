@@ -280,10 +280,12 @@ Even with quorum certificates, finality assumptions can fail under:
 
 The federation roadmap addresses this with:
 
-- post-quantum signature migration paths for quorum attestations,
-- synchronous fallback operating modes when asynchronous liveness collapses,
+- post-quantum signature migration paths for quorum attestations *(planned, not
+  yet implemented in this repository)*,
+- synchronous fallback operating modes when asynchronous liveness collapses
+  *(planned, not yet implemented in this repository)*,
 - continuous monitoring, rotation, and incident response ("eternal vigilance")
-  as an operational requirement, not an optional add-on.
+  as an operational requirement across all phases.
 
 ## Explicit Non-Goals of the Prototype
 
