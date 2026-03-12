@@ -1,0 +1,140 @@
+from __future__ import annotations
+
+import pytest
+
+from protocol.partition import (
+    ConsensusBlock,
+    ConsensusChainState,
+    PartitionDetector,
+    find_first_divergent_round,
+    resolve_partition_fork,
+    validate_proof_of_wait,
+    vrf_hash_from_seed,
+)
+
+
+def _block(round_number: int, quorum_weight: int, seed: str) -> ConsensusBlock:
+    return ConsensusBlock(
+        round_number=round_number,
+        quorum_weight=quorum_weight,
+        vrf_hash=vrf_hash_from_seed(seed),
+        timestamp=f"2026-03-10T00:00:{round_number:02d}Z",
+    )
+
+
+def _chain(*blocks: ConsensusBlock) -> tuple[ConsensusBlock, ...]:
+    return tuple(blocks)
+
+
+def test_resolve_partition_fork_prefers_longer_chain() -> None:
+    shared = [_block(0, 3, "shared-0"), _block(1, 3, "shared-1")]
+    longer = _chain(*shared, _block(2, 3, "a-2"))
+    shorter = _chain(*shared)
+
+    winner = resolve_partition_fork(longer, shorter)
+
+    assert winner == longer
+
+
+def test_resolve_partition_fork_prefers_higher_quorum_at_fork() -> None:
+    prefix = [_block(0, 2, "p-0")]
+    chain_a = _chain(*prefix, _block(1, 5, "a-1"), _block(2, 5, "a-2"))
+    chain_b = _chain(*prefix, _block(1, 3, "b-1"), _block(2, 5, "b-2"))
+
+    winner = resolve_partition_fork(chain_a, chain_b)
+
+    assert winner == chain_a
+
+
+def test_resolve_partition_fork_uses_vrf_tiebreaker() -> None:
+    prefix = [_block(0, 2, "p-0")]
+    diverge_a = _block(1, 4, "aaa")
+    diverge_b = _block(1, 4, "bbb")
+    post_a = _block(2, 4, "a-2")
+    post_b = _block(2, 4, "b-2")
+    chain_a = _chain(*prefix, diverge_a, post_a)
+    chain_b = _chain(*prefix, diverge_b, post_b)
+
+    winner = resolve_partition_fork(chain_a, chain_b)
+
+    assert winner == (chain_a if post_a.vrf_hash < post_b.vrf_hash else chain_b)
+
+
+def test_validate_proof_of_wait_rejects_nonmonotonic_timestamps() -> None:
+    block_a = _block(0, 1, "seed-0")
+    block_b = ConsensusBlock(
+        round_number=1,
+        quorum_weight=1,
+        vrf_hash=vrf_hash_from_seed("seed-1"),
+        timestamp=block_a.timestamp,  # non-monotonic
+    )
+
+    with pytest.raises(ValueError):
+        validate_proof_of_wait((block_a, block_b))
+
+
+def test_partition_detector_freezes_watermark_on_quorum_loss() -> None:
+    frozen_state = ConsensusChainState(round_number=2, chain=_chain(_block(0, 2, "f-0")))
+
+    class _State:
+        def __init__(self) -> None:
+            self.state = frozen_state
+
+        def get(self) -> ConsensusChainState:
+            return self.state
+
+    state_source = _State()
+    detector = PartitionDetector(
+        ping_nodes=lambda nodes: nodes[:1],
+        get_current_state=state_source.get,
+    )
+
+    result = detector.check_network_health(5, ("n1", "n2", "n3"))
+
+    assert result is False
+    assert detector.frozen_watermarks[5] == frozen_state
+
+
+def test_partition_detector_recovers_with_fork_choice() -> None:
+    short_chain = ConsensusChainState(
+        round_number=1,
+        chain=_chain(_block(0, 2, "s-0"), _block(1, 2, "s-1")),
+    )
+    long_chain = ConsensusChainState(
+        round_number=3,
+        chain=_chain(
+            _block(0, 2, "l-0"),
+            _block(1, 2, "l-1"),
+            _block(2, 2, "l-2"),
+        ),
+    )
+
+    class _State:
+        def __init__(self) -> None:
+            self.state = short_chain
+
+        def get(self) -> ConsensusChainState:
+            return self.state
+
+    state_source = _State()
+    detector = PartitionDetector(
+        ping_nodes=lambda nodes: nodes,  # recovered paths should see full quorum
+        get_current_state=state_source.get,
+    )
+    detector.frozen_watermarks[1] = short_chain
+    state_source.state = long_chain
+
+    winner = detector.recover_from_partition(healed_round=10)
+
+    assert winner == long_chain
+    assert 1 not in detector.frozen_watermarks
+    assert 10 in detector.last_quorum_time
+
+
+def test_find_first_divergent_round_identifies_first_difference() -> None:
+    chain_a = _chain(_block(0, 1, "x"), _block(1, 1, "y"), _block(2, 1, "z"))
+    chain_b = _chain(_block(0, 1, "x"), _block(1, 2, "different"), _block(2, 1, "z"))
+
+    idx = find_first_divergent_round(chain_a, chain_b)
+
+    assert idx == 1
