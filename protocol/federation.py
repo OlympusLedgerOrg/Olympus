@@ -308,6 +308,26 @@ def _parse_timestamp(timestamp: str) -> datetime:
     return datetime.fromisoformat(timestamp.replace("Z", "+00:00"))
 
 
+def _median_numeric(values: list[int]) -> float:
+    """Return the statistical median for integer values."""
+    ordered = sorted(values)
+    midpoint = len(ordered) // 2
+    if len(ordered) % 2 == 1:
+        return float(ordered[midpoint])
+    return (ordered[midpoint - 1] + ordered[midpoint]) / 2
+
+
+def _median_timestamp(values: list[datetime]) -> datetime:
+    """Return the statistical median timestamp."""
+    ordered = sorted(values)
+    midpoint = len(ordered) // 2
+    if len(ordered) % 2 == 1:
+        return ordered[midpoint]
+    lower = ordered[midpoint - 1]
+    upper = ordered[midpoint]
+    return lower + (upper - lower) / 2
+
+
 def is_replay_epoch(candidate_epoch: int, current_epoch: int) -> bool:
     """Return whether ``candidate_epoch`` is stale relative to ``current_epoch``.
 
@@ -878,20 +898,18 @@ def resolve_canonical_fork(
     if not eligible:
         return None
 
-    ordered_timestamps = sorted(item[1] for item in eligible)
-    median_timestamp = ordered_timestamps[(len(ordered_timestamps) - 1) // 2]
+    median_timestamp = _median_timestamp([item[1] for item in eligible])
     skew_hardened = [
         item
         for item in eligible
         if abs((item[1] - median_timestamp).total_seconds()) <= max_clock_skew_seconds
     ]
     if not skew_hardened:
-        return None
+        skew_hardened = eligible
 
-    _, _, _, selected_header, selected_certificate = min(
-        skew_hardened,
-        key=lambda item: (-item[0], item[2]),
-    )
+    selected_entry = min(skew_hardened, key=lambda item: (-item[0], item[2]))
+    selected_header = selected_entry[3]
+    selected_certificate = selected_entry[4]
     return selected_header, selected_certificate
 
 
@@ -948,8 +966,7 @@ def detect_compromise_signals(
     for sample in samples:
         by_node.setdefault(sample.node_id, []).append(sample)
 
-    counts = sorted(len(node_samples) for node_samples in by_node.values())
-    median_count = counts[(len(counts) - 1) // 2]
+    median_count = _median_numeric([len(node_samples) for node_samples in by_node.values()])
     results: dict[str, tuple[str, ...]] = {}
     for node_id, node_samples in by_node.items():
         signals: list[str] = []

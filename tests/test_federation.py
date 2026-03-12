@@ -962,46 +962,65 @@ def test_resolve_canonical_fork_prefers_lexicographic_hash_on_signer_tie() -> No
 
 def test_resolve_canonical_fork_rejects_timestamp_outliers() -> None:
     registry = FederationRegistry.from_file(REGISTRY_PATH)
-    header_fast = create_shard_header(
+    header_a = create_shard_header(
         shard_id="records/city-a",
         root_hash=bytes.fromhex("03" * 32),
         timestamp="2026-03-10T12:00:00Z",
         height=9,
         round_number=3,
     )
-    header_slow = create_shard_header(
+    header_b = create_shard_header(
+        shard_id="records/city-a",
+        root_hash=bytes.fromhex("05" * 32),
+        timestamp="2026-03-10T12:01:00Z",
+        height=9,
+        round_number=3,
+    )
+    header_outlier = create_shard_header(
         shard_id="records/city-a",
         root_hash=bytes.fromhex("04" * 32),
         timestamp="2026-03-10T12:30:00Z",
         height=9,
         round_number=3,
     )
-    fast_cert = build_quorum_certificate(
-        header_fast,
+    cert_a = build_quorum_certificate(
+        header_a,
         [
-            sign_federated_header(header_fast, "olympus-node-1", _test_signing_key(1), registry),
-            sign_federated_header(header_fast, "olympus-node-2", _test_signing_key(2), registry),
+            sign_federated_header(header_a, "olympus-node-1", _test_signing_key(1), registry),
+            sign_federated_header(header_a, "olympus-node-2", _test_signing_key(2), registry),
         ],
         registry,
     )
-    slow_cert = build_quorum_certificate(
-        header_slow,
+    cert_b = build_quorum_certificate(
+        header_b,
         [
-            sign_federated_header(header_slow, "olympus-node-1", _test_signing_key(1), registry),
-            sign_federated_header(header_slow, "olympus-node-2", _test_signing_key(2), registry),
+            sign_federated_header(header_b, "olympus-node-1", _test_signing_key(1), registry),
+            sign_federated_header(header_b, "olympus-node-2", _test_signing_key(2), registry),
+        ],
+        registry,
+    )
+    cert_outlier = build_quorum_certificate(
+        header_outlier,
+        [
+            sign_federated_header(
+                header_outlier, "olympus-node-1", _test_signing_key(1), registry
+            ),
+            sign_federated_header(
+                header_outlier, "olympus-node-2", _test_signing_key(2), registry
+            ),
         ],
         registry,
     )
 
     selected = resolve_canonical_fork(
-        [(header_fast, fast_cert), (header_slow, slow_cert)],
+        [(header_a, cert_a), (header_b, cert_b), (header_outlier, cert_outlier)],
         registry,
         max_clock_skew_seconds=DEFAULT_MAX_CERTIFICATE_CLOCK_SKEW_SECONDS,
     )
 
     assert selected is not None
     selected_header, _ = selected
-    assert selected_header["header_hash"] == header_fast["header_hash"]
+    assert selected_header["header_hash"] == min(header_a["header_hash"], header_b["header_hash"])
 
 
 def test_proactive_share_commitments_round_trip_verification() -> None:
@@ -1030,7 +1049,10 @@ def test_detect_compromise_signals_flags_double_vote_and_spike() -> None:
             FederationBehaviorSample("node-1", 4, "e" * 64),
             FederationBehaviorSample("node-2", 1, "f" * 64),
             FederationBehaviorSample("node-2", 2, "g" * 64),
+            FederationBehaviorSample("node-3", 1, "h" * 64),
+            FederationBehaviorSample("node-3", 2, "i" * 64),
         ]
     )
 
     assert signals["node-1"] == ("double_vote_detected", "participation_spike_detected")
+    assert "node-2" not in signals

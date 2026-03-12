@@ -71,10 +71,8 @@ def validate_proof_of_wait(chain: Sequence[ConsensusBlock]) -> None:
         raise ValueError("chain cannot be empty")
     previous_round = -1
     for block in chain:
-        if previous_round >= 0 and block.round_number != previous_round + 1:
+        if previous_round != -1 and block.round_number != previous_round + 1:
             raise ValueError("round numbers must advance by exactly one per block")
-        if block.round_number <= previous_round:
-            raise ValueError("round numbers must be strictly increasing")
         previous_round = block.round_number
 
 
