@@ -5,7 +5,7 @@ from __future__ import annotations
 from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
 
-from .hashes import SNARK_SCALAR_FIELD, blake3_to_field_element
+from .hashes import SNARK_SCALAR_FIELD
 from .poseidon_bn128 import poseidon_hash_bn128
 
 

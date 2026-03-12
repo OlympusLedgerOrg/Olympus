@@ -9,7 +9,7 @@ Pipeline stages (Ingest → Canonicalize → Hash → Commit → Prove → [Repl
   Canonicalize: protocol.canonical, protocol.canonical_json, protocol.timestamps
   Hash:         protocol.hashes
   Commit:       protocol.merkle, protocol.shards, protocol.ledger, protocol.ssmf
-  Prove:        protocol.merkle, protocol.redaction, protocol.zkp
+  Prove:        protocol.merkle, protocol.redaction, protocol.zkp, protocol.proof_interface
   Replicate:    *** Phase 1+ only — not implemented in v1.0 ***
   Verify:       protocol.merkle, protocol.redaction, protocol.shards, protocol.ledger
 
@@ -18,6 +18,11 @@ Dependency order (imports must flow down, never up):
 
 Phase 1+ modules (Guardian replication; not part of v1.0):
   protocol.federation, protocol.partition, protocol.view_change
+
+Proof System Interface:
+  protocol.proof_interface defines the strict protocol boundary for all proof backends.
+  protocol.groth16_backend implements the interface for Groth16 proofs.
+  protocol.halo2_backend implements the interface for Halo2 proofs (Phase 1+).
 """
 
 __version__ = "1.0.0"
@@ -42,6 +47,9 @@ __all__ = [
     "redaction",
     "redaction_ledger",
     "zkp",
+    "proof_interface",
+    "groth16_backend",
+    "halo2_backend",
     # Guardian replication (Phase 1+ only; not part of v1.0)
     "federation",
     "partition",

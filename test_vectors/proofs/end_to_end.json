@@ -1,0 +1,47 @@
+{
+  "description": "Single-record end-to-end pipeline vector",
+  "input_record": {
+    "title": "Olympus cross-implementation vector",
+    "body": "Document content for end-to-end vector",
+    "version": 1
+  },
+  "canonicalized_bytes_hex": "7b22626f6479223a22446f63756d656e7420636f6e74656e7420666f7220656e642d746f2d656e6420766563746f72222c227469746c65223a224f6c796d7075732063726f73732d696d706c656d656e746174696f6e20766563746f72222c2276657273696f6e223a317d",
+  "record_hash_hex": "7a4f2b0151457bcdeda10e25cbe070289b1aab8ff615c0457d60a4526e9000d3",
+  "merkle": {
+    "leaf_hash_hex": "6627e4d65914949e1101ee9c24b1f6869e22e5a775b86ebd4f1dd829ba114c10",
+    "root_hex": "6627e4d65914949e1101ee9c24b1f6869e22e5a775b86ebd4f1dd829ba114c10",
+    "siblings": []
+  },
+  "ledger": {
+    "head_entry_hash": "f60dc54bb0e8b702677b4a1bc7a58f98ceff51753db4b344736483d677c345cb",
+    "entries": [
+      {
+        "ts": "2024-01-01T00:00:00Z",
+        "record_hash": "7a4f2b0151457bcdeda10e25cbe070289b1aab8ff615c0457d60a4526e9000d3",
+        "shard_id": "shard-0",
+        "shard_root": "6627e4d65914949e1101ee9c24b1f6869e22e5a775b86ebd4f1dd829ba114c10",
+        "canonicalization": {
+          "format": "application/json",
+          "normalization_mode": "canonical_v1",
+          "fallback_reason": null,
+          "canonicalizer_versions": {
+            "jcs": "1.2.0-strict-numeric",
+            "html": "1.0.1-lxml-pinned-nfc",
+            "docx": "1.1.0-c14n-strict",
+            "pdf": "1.4.0-pikepdf-10.3.0-linearized"
+          }
+        },
+        "prev_entry_hash": "",
+        "entry_hash": "f60dc54bb0e8b702677b4a1bc7a58f98ceff51753db4b344736483d677c345cb",
+        "federation_quorum_certificate": null,
+        "poseidon_root": null
+      }
+    ]
+  },
+  "proof": {
+    "leaf_index": 0,
+    "siblings": [],
+    "root_hash_hex": "6627e4d65914949e1101ee9c24b1f6869e22e5a775b86ebd4f1dd829ba114c10",
+    "expected_valid": true
+  }
+}

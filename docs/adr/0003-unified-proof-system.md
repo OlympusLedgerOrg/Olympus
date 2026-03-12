@@ -106,8 +106,56 @@ Provides placeholder interface for future Halo2 implementation:
 - `Halo2Proof` - Container for Halo2 proof artifacts
 - `Halo2Verifier` - Verification interface (raises NotImplementedError)
 - `Halo2Prover` - Proving interface (raises NotImplementedError)
+- `Halo2Backend` - Protocol-compliant backend implementing `ProofBackendProtocol`
 
 Halo2 circuits will mirror the Groth16 structure with identical public inputs, ensuring protocol compatibility.
+
+### Proof System Interface (Protocol Boundary)
+
+**Module**: `protocol/proof_interface.py`
+
+Defines the strict contract that all proof backends must implement:
+
+```python
+class ProofBackendProtocol(Protocol):
+    def generate(self, statement: Statement, witness: Witness) -> Proof:
+        """Generate a cryptographic proof."""
+        ...
+
+    def verify(self, statement: Statement, proof: Proof) -> bool:
+        """Verify a cryptographic proof."""
+        ...
+
+    @property
+    def proof_system_type(self) -> ProofSystemType:
+        """Return the proof system type."""
+        ...
+
+    def is_available(self) -> bool:
+        """Check if backend is available."""
+        ...
+```
+
+**Key Data Structures**:
+- `Statement` - Public statement (circuit + public inputs)
+- `Witness` - Private witness (private inputs + auxiliary data)
+- `Proof` - Cryptographic proof artifact
+- `ProofSystemType` - Enum (GROTH16, HALO2, PLONKY2, STARK)
+
+**Benefits of Interface**:
+1. Protocol layer never touches proving system directly
+2. Future backends (Plonky2, STARKs) can be added without protocol changes
+3. Clear audit boundary for cryptographic modularity
+4. Dependency injection for testing
+
+### Groth16 Backend
+
+**Module**: `protocol/groth16_backend.py`
+
+Implements `ProofBackendProtocol` for Groth16 proofs using snarkjs:
+- `Groth16Backend` - Protocol-compliant backend class
+- High throughput, low latency
+- Requires trusted setup (mitigated by ceremony)
 
 ## Alternatives Considered
 

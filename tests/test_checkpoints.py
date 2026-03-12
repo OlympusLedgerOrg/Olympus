@@ -15,6 +15,7 @@ from protocol.checkpoints import (
     SignedCheckpoint,
     create_checkpoint,
     detect_checkpoint_fork,
+    detect_gossip_checkpoint_forks,
     verify_checkpoint,
     verify_checkpoint_chain,
 )
@@ -534,6 +535,93 @@ def test_detect_checkpoint_fork_no_fork(registry, signing_keys):
     )
 
     assert not detect_checkpoint_fork(checkpoint1, checkpoint2)
+
+
+def test_detect_gossip_checkpoint_forks_conflict(registry, signing_keys):
+    """Gossip should surface conflicting checkpoints from different peers."""
+    genesis = _build_checkpoint(
+        sequence=0, height=1, registry=registry, signing_keys=signing_keys
+    )
+    peer_one_checkpoint = _build_checkpoint(
+        sequence=1,
+        height=2,
+        registry=registry,
+        signing_keys=signing_keys,
+        previous=genesis,
+    )
+    peer_two_checkpoint = _build_checkpoint(
+        sequence=1,
+        height=3,
+        registry=registry,
+        signing_keys=signing_keys,
+        previous=genesis,
+    )
+
+    evidence = detect_gossip_checkpoint_forks(
+        observations={
+            "peer-a": peer_one_checkpoint,
+            "peer-b": peer_two_checkpoint,
+        },
+        registry=registry,
+    )
+
+    assert len(evidence) == 1
+    fork = evidence[0]
+    assert fork.sequence == 1
+    assert fork.previous_checkpoint_hash == genesis.checkpoint_hash
+    assert set(fork.peer_ids) == {"peer-a", "peer-b"}
+    assert set(fork.checkpoint_hashes) == {
+        peer_one_checkpoint.checkpoint_hash,
+        peer_two_checkpoint.checkpoint_hash,
+    }
+
+
+def test_detect_gossip_checkpoint_forks_no_conflict(registry, signing_keys):
+    """Gossip should remain quiet when peers agree."""
+    genesis = _build_checkpoint(
+        sequence=0, height=1, registry=registry, signing_keys=signing_keys
+    )
+    peer_checkpoint = _build_checkpoint(
+        sequence=1,
+        height=2,
+        registry=registry,
+        signing_keys=signing_keys,
+        previous=genesis,
+    )
+
+    evidence = detect_gossip_checkpoint_forks(
+        observations={
+            "peer-a": peer_checkpoint,
+            "peer-b": peer_checkpoint,
+        },
+        registry=registry,
+    )
+
+    assert evidence == ()
+
+
+def test_detect_gossip_checkpoint_forks_rejects_invalid(registry, signing_keys):
+    """Gossip verification should reject invalid checkpoints."""
+    genesis = _build_checkpoint(
+        sequence=0, height=1, registry=registry, signing_keys=signing_keys
+    )
+    invalid = _build_checkpoint(
+        sequence=1,
+        height=2,
+        registry=registry,
+        signing_keys=signing_keys,
+        previous=genesis,
+    )
+    invalid.checkpoint_hash = "not-a-valid-checkpoint-hash"
+
+    with pytest.raises(ValueError, match="peer-b"):
+        detect_gossip_checkpoint_forks(
+            observations={
+                "peer-a": genesis,
+                "peer-b": invalid,
+            },
+            registry=registry,
+        )
 
 
 def test_checkpoint_registry_add_checkpoint(registry, signing_keys):

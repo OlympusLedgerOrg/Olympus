@@ -14,6 +14,10 @@ for throughput while maintaining cryptographic guarantees.
 An optional Halo2 backend is available for high-assurance contexts where
 eliminating trusted setup risk is critical.
 
+The proof system interacts with backends exclusively through the ProofBackendProtocol
+interface, ensuring that future backend changes (Plonky2, STARKs, etc.) do not ripple
+across ledger logic.
+
 Usage::
 
     from protocol.unified_proof import UnifiedProofVerifier, UnifiedProof
@@ -39,6 +43,16 @@ from typing import Any
 
 from .checkpoints import SignedCheckpoint, verify_checkpoint_quorum_certificate
 from .federation import FederationRegistry
+from .groth16_backend import Groth16Backend
+from .halo2_backend import Halo2Backend
+from .proof_interface import (
+    BackendNotAvailableError,
+    Proof,
+    ProofBackendProtocol,
+    ProofSystemType,
+    ProofVerificationError,
+    Statement,
+)
 from .zkp import Groth16Prover, ZKProof
 
 
@@ -150,10 +164,13 @@ class UnifiedProofVerifier:
     Verifier for unified proofs combining ZK proof + federation signatures.
 
     This class coordinates verification of all four proof components:
-    1. ZK proof verification (Groth16 or Halo2)
+    1. ZK proof verification (Groth16 or Halo2) via ProofBackendProtocol
     2. Checkpoint structure validation
     3. Checkpoint chain consistency
     4. Federation quorum certificate verification
+
+    The verifier interacts with proof backends exclusively through the
+    ProofBackendProtocol interface, ensuring cryptographic modularity.
 
     Example::
 
@@ -172,6 +189,8 @@ class UnifiedProofVerifier:
         registry: FederationRegistry | None = None,
         circuits_dir: Path | None = None,
         snarkjs_bin: str = "npx",
+        groth16_backend: ProofBackendProtocol | None = None,
+        halo2_backend: ProofBackendProtocol | None = None,
     ) -> None:
         """
         Initialize the unified proof verifier.
@@ -181,11 +200,40 @@ class UnifiedProofVerifier:
                       If None, federation checks are skipped.
             circuits_dir: Path to circuits directory. If None, uses default.
             snarkjs_bin: snarkjs launcher command (default: "npx")
+            groth16_backend: Custom Groth16 backend (for testing/override)
+            halo2_backend: Custom Halo2 backend (for testing/override)
         """
         self.registry = registry
         self.circuits_dir = circuits_dir or (Path(__file__).parent.parent / "proofs" / "circuits")
         self.snarkjs_bin = snarkjs_bin
+
+        # Use provided backends or create defaults
+        # This allows dependency injection for testing and customization
+        self._groth16_backend: ProofBackendProtocol = groth16_backend or Groth16Backend(
+            circuits_dir=self.circuits_dir,
+            snarkjs_bin=snarkjs_bin,
+        )
+        self._halo2_backend: ProofBackendProtocol = halo2_backend or Halo2Backend()
+
+        # Legacy prover for backward compatibility
         self._groth16_prover = Groth16Prover(self.circuits_dir, snarkjs_bin=snarkjs_bin)
+
+    def get_backend(self, backend_type: ProofBackend) -> ProofBackendProtocol:
+        """
+        Get the proof backend for the specified type.
+
+        Args:
+            backend_type: The proof backend type (GROTH16 or HALO2)
+
+        Returns:
+            The appropriate ProofBackendProtocol implementation
+        """
+        if backend_type == ProofBackend.GROTH16:
+            return self._groth16_backend
+        elif backend_type == ProofBackend.HALO2:
+            return self._halo2_backend
+        else:
+            raise ValueError(f"Unknown backend type: {backend_type}")
 
     def verify(self, proof: UnifiedProof) -> VerificationResult:
         """
@@ -202,7 +250,7 @@ class UnifiedProofVerifier:
         Returns:
             VerificationResult indicating success or specific failure mode
         """
-        # Component 1-3: Verify ZK proof
+        # Component 1-3: Verify ZK proof via backend interface
         zk_result = self._verify_zk_proof(proof)
         if not zk_result:
             return VerificationResult.INVALID_ZK_PROOF
@@ -222,22 +270,88 @@ class UnifiedProofVerifier:
 
     def _verify_zk_proof(self, proof: UnifiedProof) -> bool:
         """
-        Verify the cryptographic ZK proof (Groth16 or Halo2).
+        Verify the cryptographic ZK proof via ProofBackendProtocol.
 
         This verifies components 1-3:
         - Document canonicalization
         - Merkle inclusion
         - Ledger root commitment
+
+        The backend is selected based on proof.backend and verification
+        is performed through the uniform ProofBackendProtocol interface.
         """
         if proof.backend == ProofBackend.GROTH16:
-            return self._verify_groth16(proof)
+            return self._verify_via_backend(proof, self._groth16_backend)
         elif proof.backend == ProofBackend.HALO2:
-            return self._verify_halo2(proof)
+            return self._verify_via_backend(proof, self._halo2_backend)
         else:
             return False
 
+    def _verify_via_backend(self, proof: UnifiedProof, backend: ProofBackendProtocol) -> bool:
+        """
+        Verify proof using the specified backend via ProofBackendProtocol.
+
+        This is the unified verification path that works with any backend
+        implementing ProofBackendProtocol.
+
+        Args:
+            proof: The unified proof to verify
+            backend: The proof backend to use
+
+        Returns:
+            True if verification succeeds, False otherwise
+        """
+        try:
+            if not backend.is_available():
+                return False
+
+            # Create Statement from public inputs
+            statement = Statement(
+                circuit="unified_canonicalization_inclusion_root_sign",
+                public_inputs={
+                    "canonical_hash": proof.public_inputs.canonical_hash,
+                    "merkle_root": proof.public_inputs.merkle_root,
+                    "ledger_root": proof.public_inputs.ledger_root,
+                    "checkpoint_hash": proof.public_inputs.checkpoint_hash,
+                },
+            )
+
+            # Create Proof from zk_proof
+            proof_system_type = (
+                ProofSystemType.GROTH16
+                if proof.backend == ProofBackend.GROTH16
+                else ProofSystemType.HALO2
+            )
+            interface_proof = Proof(
+                proof_data=proof.zk_proof,
+                proof_system=proof_system_type,
+                circuit="unified_canonicalization_inclusion_root_sign",
+                public_signals=[
+                    str(int(proof.public_inputs.canonical_hash)),
+                    str(int(proof.public_inputs.merkle_root)),
+                    str(int(proof.public_inputs.ledger_root)),
+                    str(int(proof.public_inputs.checkpoint_hash)),
+                ],
+            )
+
+            return backend.verify(statement, interface_proof)
+
+        except (
+            ValueError,
+            KeyError,
+            FileNotFoundError,
+            OSError,
+            BackendNotAvailableError,
+            ProofVerificationError,
+        ):
+            return False
+
     def _verify_groth16(self, proof: UnifiedProof) -> bool:
-        """Verify Groth16 proof using snarkjs."""
+        """
+        Verify Groth16 proof using snarkjs (legacy method).
+
+        Kept for backward compatibility. New code should use _verify_via_backend.
+        """
         try:
             # Convert public inputs to list format expected by snarkjs
             public_signals = [
@@ -331,7 +445,9 @@ class UnifiedProofVerifier:
             return True  # Skip if no registry provided
 
         try:
-            return verify_checkpoint_quorum_certificate(proof.checkpoint, self.registry)
+            return verify_checkpoint_quorum_certificate(
+                checkpoint=proof.checkpoint, registry=self.registry
+            )
         except (ValueError, KeyError, AttributeError):
             return False
 
