@@ -32,6 +32,9 @@ Design notes:
 - Public inputs remain identical (maintaining protocol compatibility)
 - Verifiers can accept either Groth16 or Halo2 proofs transparently
 - Circuit versions are pinned and versioned independently
+
+This module implements the ProofBackendProtocol interface, ensuring that
+future Halo2 implementation can be added without changing protocol-layer code.
 """
 
 from __future__ import annotations
@@ -39,6 +42,15 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
+
+from .proof_interface import (
+    BackendNotAvailableError,
+    Proof,
+    ProofBackendProtocol,
+    ProofSystemType,
+    Statement,
+    Witness,
+)
 
 
 @dataclass
@@ -264,3 +276,93 @@ def get_halo2_version() -> str | None:
         None (Halo2 not available in v1.0)
     """
     return None
+
+
+class Halo2Backend(ProofBackendProtocol):
+    """
+    Halo2 proof backend implementing ProofBackendProtocol.
+
+    This class implements the ProofBackendProtocol for Halo2 proofs.
+    Currently a placeholder that raises NotImplementedError for all operations.
+    Implementation is planned for Phase 1+.
+
+    When implemented, this backend will provide:
+    - No trusted setup requirement
+    - Larger proof sizes but still efficient verification
+    - Support for recursive proof composition
+    - Python bindings via py-halo2 or Rust FFI
+
+    Usage (future)::
+
+        from protocol.halo2_backend import Halo2Backend
+        from protocol.proof_interface import Statement, Witness
+
+        backend = Halo2Backend()
+        if backend.is_available():
+            proof = backend.generate(statement, witness)
+            is_valid = backend.verify(statement, proof)
+    """
+
+    def __init__(self, circuit_params_path: Path | None = None) -> None:
+        """
+        Initialize Halo2 backend.
+
+        Args:
+            circuit_params_path: Path to Halo2 circuit parameters.
+                                When implemented, this would load verifying keys.
+        """
+        self.circuit_params_path = circuit_params_path
+
+    @property
+    def proof_system_type(self) -> ProofSystemType:
+        """Return Halo2 proof system type."""
+        return ProofSystemType.HALO2
+
+    def is_available(self) -> bool:
+        """
+        Check if Halo2 backend is available.
+
+        Returns:
+            bool: False (Halo2 not implemented in v1.0)
+        """
+        return is_halo2_available()
+
+    def generate(self, statement: Statement, witness: Witness) -> Proof:
+        """
+        Generate a Halo2 proof (not yet implemented).
+
+        Args:
+            statement: The public statement to prove
+            witness: The private witness
+
+        Returns:
+            Proof: A Halo2 proof
+
+        Raises:
+            BackendNotAvailableError: Halo2 is not yet implemented
+        """
+        raise BackendNotAvailableError(
+            "Halo2 proof generation is planned for Phase 1+. "
+            "Use Groth16 backend for current deployments. "
+            "See ADR 0002 for Halo2 integration roadmap."
+        )
+
+    def verify(self, statement: Statement, proof: Proof) -> bool:
+        """
+        Verify a Halo2 proof (not yet implemented).
+
+        Args:
+            statement: The public statement that was proven
+            proof: The Halo2 proof to verify
+
+        Returns:
+            bool: True if valid, False otherwise
+
+        Raises:
+            BackendNotAvailableError: Halo2 is not yet implemented
+        """
+        raise BackendNotAvailableError(
+            "Halo2 verification is planned for Phase 1+. "
+            "For now, use Groth16 backend for production proofs. "
+            "See ADR 0002 for Halo2 integration roadmap."
+        )
