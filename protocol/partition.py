@@ -2,19 +2,9 @@
 Partition awareness and fork resolution utilities.
 
 These helpers implement dynamic quorum detection with frozen watermarks and a
-<<<<<<< copilot/fix-eclipse-long-range-attacks
-deterministic fork-choice rule that combines chain length, quorum weight, and a
-VRF-style tie-breaker. Chains are validated for proof-of-wait by requiring
-monotonic timestamps and strictly increasing round numbers.
-
-To mitigate eclipse-style isolation, the partition detector supports random peer
-sampling, peer-group diversity checks, and optional cross-network verification
-before marking the network as healthy.
-=======
 deterministic fork-choice rule that combines elapsed rounds, quorum weight, and
 a VRF-style tie-breaker. Chains are validated for proof-of-elapsed-time using
 consensus round progression (block height), not wall-clock ordering.
->>>>>>> main
 """
 
 from __future__ import annotations
@@ -188,7 +178,9 @@ def detect_slashable_equivocations(votes: Sequence[PublishedVote]) -> tuple[Slas
     return tuple(evidence)
 
 
-def select_rotating_leader(round_number: int, leaders: Sequence[str], *, rotation_window: int = 1) -> str:
+def select_rotating_leader(
+    round_number: int, leaders: Sequence[str], *, rotation_window: int = 1
+) -> str:
     """Return the scheduled leader with deterministic frequent round-robin rotation."""
     if round_number < 0:
         raise ValueError("round_number must be non-negative")

@@ -17,7 +17,7 @@ Dependency order (imports must flow down, never up):
   canonical_json, timestamps  →  hashes, canonical  →  events  →  merkle, ledger, shards, ...
 """
 
-__version__ = "0.1.0"
+__version__ = "1.0.0"
 
 __all__ = [
     # Canonicalize
@@ -41,4 +41,6 @@ __all__ = [
     "zkp",
     # Federation prototype (Phase 1+)
     "federation",
+    "partition",
+    "view_change",
 ]
