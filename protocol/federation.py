@@ -31,6 +31,7 @@ _HEADER_EXCLUDED_FIELDS: frozenset[str] = frozenset(
     {"header_hash", "signature", "timestamp_token", "quorum_certificate_hash"}
 )
 _CERTIFICATE_SIGNATURE_SCHEME_ED25519 = "ed25519"
+DEFAULT_MAX_CERTIFICATE_CLOCK_SKEW_SECONDS = 120
 
 
 def _to_int(value: Any) -> int | None:
@@ -307,6 +308,26 @@ def _parse_timestamp(timestamp: str) -> datetime:
     return datetime.fromisoformat(timestamp.replace("Z", "+00:00"))
 
 
+def _median_numeric(values: list[int]) -> float:
+    """Return the statistical median for integer values."""
+    ordered = sorted(values)
+    midpoint = len(ordered) // 2
+    if len(ordered) % 2 == 1:
+        return float(ordered[midpoint])
+    return (ordered[midpoint - 1] + ordered[midpoint]) / 2
+
+
+def _median_timestamp(values: list[datetime]) -> datetime:
+    """Return the statistical median timestamp."""
+    ordered = sorted(values)
+    midpoint = len(ordered) // 2
+    if len(ordered) % 2 == 1:
+        return ordered[midpoint]
+    lower = ordered[midpoint - 1]
+    upper = ordered[midpoint]
+    return lower + (upper - lower) / 2
+
+
 def is_replay_epoch(candidate_epoch: int, current_epoch: int) -> bool:
     """Return whether ``candidate_epoch`` is stale relative to ``current_epoch``.
 
@@ -338,6 +359,15 @@ class NodeSignature:
     def to_dict(self) -> dict[str, str]:
         """Serialize to JSON-friendly data."""
         return {"node_id": self.node_id, "signature": self.signature}
+
+
+@dataclass(frozen=True)
+class FederationBehaviorSample:
+    """Observed federation-signing behavior used for compromise detection."""
+
+    node_id: str
+    round_number: int
+    header_hash: str
 
 
 @dataclass(frozen=True)
@@ -814,6 +844,7 @@ def resolve_canonical_fork(
     registry: FederationRegistry,
     *,
     current_epoch: int | None = None,
+    max_clock_skew_seconds: int = DEFAULT_MAX_CERTIFICATE_CLOCK_SKEW_SECONDS,
 ) -> tuple[dict[str, Any], dict[str, Any]] | None:
     """Return the deterministic canonical root candidate among competing forks.
 
@@ -822,17 +853,19 @@ def resolve_canonical_fork(
     2. Replay protection rejects candidates whose federation epoch is lower than
        ``current_epoch`` (default: ``registry.epoch``).
     3. Prefer the candidate with the highest number of valid signer approvals.
-    4. If signer counts tie, prefer the earliest certificate timestamp.
-    5. If still tied (simultaneous roots), choose the lexicographically lowest
-       header hash.
+    4. Apply NTP hardening by rejecting certificate timestamps that are outliers
+       relative to the median candidate timestamp.
+    5. If signer counts tie, choose the lexicographically lowest header hash.
     """
     if not candidates:
         return None
     effective_epoch = registry.epoch if current_epoch is None else int(current_epoch)
     if effective_epoch < 0:
         raise ValueError("Current federation epoch must be an integer >= 0")
+    if max_clock_skew_seconds < 0:
+        raise ValueError("max_clock_skew_seconds must be >= 0")
 
-    eligible: list[tuple[tuple[int, datetime, str], dict[str, Any], dict[str, Any]]] = []
+    eligible: list[tuple[int, datetime, str, dict[str, Any], dict[str, Any]]] = []
     slot: tuple[str, int, int] | None = None
     for header, certificate in candidates:
         cert_epoch = _to_int(certificate.get("federation_epoch"))
@@ -860,12 +893,93 @@ def resolve_canonical_fork(
             # Malformed timestamp: treat this candidate as ineligible for canonical fork resolution.
             continue
         header_hash = str(header["header_hash"])
-        eligible.append(((-signer_count, certificate_timestamp, header_hash), header, certificate))
+        eligible.append((signer_count, certificate_timestamp, header_hash, header, certificate))
 
     if not eligible:
         return None
-    _, selected_header, selected_certificate = min(eligible, key=lambda item: item[0])
+
+    median_timestamp = _median_timestamp([item[1] for item in eligible])
+    skew_hardened = [
+        item
+        for item in eligible
+        if abs((item[1] - median_timestamp).total_seconds()) <= max_clock_skew_seconds
+    ]
+    if not skew_hardened:
+        skew_hardened = eligible
+
+    selected_entry = min(skew_hardened, key=lambda item: (-item[0], item[2]))
+    selected_header = selected_entry[3]
+    selected_certificate = selected_entry[4]
     return selected_header, selected_certificate
+
+
+def build_proactive_share_commitments(
+    registry: FederationRegistry, *, epoch: int, refresh_nonce: str
+) -> dict[str, str]:
+    """Return deterministic proactive secret-share commitments for active nodes."""
+    if epoch < 0:
+        raise ValueError("Epoch must be non-negative")
+    if not refresh_nonce:
+        raise ValueError("refresh_nonce must be non-empty")
+    commitments: dict[str, str] = {}
+    for node in registry.active_nodes():
+        payload = HASH_SEPARATOR.join(
+            [
+                node.node_id,
+                node.pubkey.hex(),
+                str(epoch),
+                refresh_nonce,
+            ]
+        ).encode("utf-8")
+        commitments[node.node_id] = hash_bytes(payload).hex()
+    return commitments
+
+
+def verify_proactive_share_commitments(
+    registry: FederationRegistry,
+    *,
+    epoch: int,
+    refresh_nonce: str,
+    commitments: dict[str, str],
+) -> bool:
+    """Return whether proactive share commitments match deterministic expectations."""
+    expected = build_proactive_share_commitments(
+        registry,
+        epoch=epoch,
+        refresh_nonce=refresh_nonce,
+    )
+    return commitments == expected
+
+
+def detect_compromise_signals(
+    samples: list[FederationBehaviorSample],
+    *,
+    spike_multiplier: float = 2.0,
+) -> dict[str, tuple[str, ...]]:
+    """Return per-node behavioral compromise signals from observed vote samples."""
+    if spike_multiplier < 1.0:
+        raise ValueError("spike_multiplier must be >= 1.0")
+    if not samples:
+        return {}
+
+    by_node: dict[str, list[FederationBehaviorSample]] = {}
+    for sample in samples:
+        by_node.setdefault(sample.node_id, []).append(sample)
+
+    median_count = _median_numeric([len(node_samples) for node_samples in by_node.values()])
+    results: dict[str, tuple[str, ...]] = {}
+    for node_id, node_samples in by_node.items():
+        signals: list[str] = []
+        seen_round_hashes: dict[int, set[str]] = {}
+        for sample in node_samples:
+            seen_round_hashes.setdefault(sample.round_number, set()).add(sample.header_hash)
+        if any(len(round_hashes) > 1 for round_hashes in seen_round_hashes.values()):
+            signals.append("double_vote_detected")
+        if median_count > 0 and len(node_samples) > median_count * spike_multiplier:
+            signals.append("participation_spike_detected")
+        if signals:
+            results[node_id] = tuple(sorted(signals))
+    return results
 
 
 def vrf_selection_scores(

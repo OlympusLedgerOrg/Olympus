@@ -207,7 +207,7 @@ The prototype uses **quorum acknowledgment consensus**, not blind leader trust:
 - If two distinct headers claim the same `(shard_id, height, round)`, the system has detected a fork.
 - Deterministic fork resolution order:
   1. prefer the candidate with the highest number of valid signer approvals,
-  2. then prefer the earliest valid certificate timestamp,
+  2. reject timestamp outliers outside the allowed NTP-skew window around the median candidate timestamp,
   3. then prefer the lexicographically lowest `header_hash` (stable tie-break for simultaneous roots).
 - Replay protection:
   - Nodes reject any candidate root or quorum certificate whose `federation_epoch` is lower than the node's current epoch.
@@ -225,6 +225,14 @@ To avoid ambiguous authority during membership changes:
    - historical headers may verify with a key from `key_history` only when `header.timestamp <= valid_until`,
    - new headers after rotation must verify with the active key.
 4. Registry epoch is part of every vote and quorum certificate. This binds signatures to a specific membership snapshot and prevents stale-epoch replay.
+
+### Proactive Secret-Share Rotation and Compromise Signals
+
+- Federation operators can derive deterministic per-epoch share commitments for active nodes via `build_proactive_share_commitments(...)`.
+- Verifiers can check commitment integrity with `verify_proactive_share_commitments(...)` before accepting an epoch refresh bundle.
+- Behavioral compromise signals are surfaced via `detect_compromise_signals(...)`, including:
+  - double-vote evidence (same node, same round, different header hash),
+  - participation spikes relative to the cohort median.
 
 ## VRF-Based Selections
 
