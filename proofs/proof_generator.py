@@ -229,11 +229,7 @@ class ProofGenerator:
         """Load a proof from a JSON file previously written by export_proof()."""
         with path.open("r", encoding="utf-8") as fh:
             data = json.load(fh)
-        return ZKProof(
-            proof=data["proof"],
-            public_signals=data["public_signals"],
-            circuit=data["circuit"],
-        )
+        return ZKProof.from_dict(data)
 
     # Keep this in sync with circuit signal names
     _REQUIRED_INPUTS: dict[str, list[str]] = {

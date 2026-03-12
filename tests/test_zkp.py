@@ -5,6 +5,8 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
+from protocol.canonical_json import canonical_json_bytes
+from protocol.hashes import hash_bytes
 from protocol.zkp import Groth16Prover, ZKProof
 
 
@@ -13,7 +15,67 @@ _GROTH16_PROOF = {"pi_a": [], "pi_b": [], "pi_c": []}
 
 def test_zkproof_to_dict_round_trip():
     proof = ZKProof(proof={"a": 1}, public_signals=[1, 2, 3], circuit="example")
-    assert proof.to_dict() == {"proof": {"a": 1}, "public_signals": [1, 2, 3], "circuit": "example"}
+    proof_bytes_hex = canonical_json_bytes({"a": 1}).hex()
+    public_hash = hash_bytes(canonical_json_bytes([1, 2, 3])).hex()
+    result = proof.to_dict()
+
+    assert result["proof_type"] == "groth16"
+    assert result["circuit_id"] == "example"
+    assert result["public_inputs_hash"] == public_hash
+    assert result["proof_bytes"] == proof_bytes_hex
+    # Backwards-compatibility fields remain present
+    assert result["proof"] == {"a": 1}
+    assert result["public_signals"] == [1, 2, 3]
+    assert result["circuit"] == "example"
+
+
+def test_zkproof_proof_bytes_are_canonical():
+    proof = ZKProof(proof={"a": 1}, public_signals=[], circuit="example")
+    assert proof.proof_bytes == canonical_json_bytes({"a": 1})
+
+
+def test_zkproof_from_dict_validates_hash():
+    proof_dict = {
+        "proof_type": "groth16",
+        "circuit_id": "example",
+        "public_inputs_hash": hash_bytes(canonical_json_bytes([1, 2, 3])).hex(),
+        "proof_bytes": canonical_json_bytes({"a": 1}).hex(),
+        "protocol_version": "1",
+        "public_signals": [1, 2, 3],
+    }
+    proof = ZKProof.from_dict(proof_dict)
+    assert proof.circuit == "example"
+    assert proof.proof == {"a": 1}
+    assert proof.public_signals == [1, 2, 3]
+
+
+def test_zkproof_from_dict_rejects_mismatched_hash():
+    proof_dict = {
+        "proof_type": "groth16",
+        "circuit_id": "example",
+        "public_inputs_hash": "invalid_hash",
+        "proof_bytes": canonical_json_bytes({"a": 1}).hex(),
+        "protocol_version": "1",
+        "public_signals": [1, 2, 3],
+    }
+    with pytest.raises(
+        ValueError, match=r"public_inputs_hash.*expected [0-9a-f]+, got invalid_hash"
+    ):
+        ZKProof.from_dict(proof_dict)
+
+
+def test_zkproof_from_dict_rejects_mismatched_proof_bytes():
+    proof_dict = {
+        "proof_type": "groth16",
+        "circuit_id": "example",
+        "public_inputs_hash": hash_bytes(canonical_json_bytes([1, 2, 3])).hex(),
+        "proof_bytes": canonical_json_bytes({"a": 2}).hex(),
+        "protocol_version": "1",
+        "public_signals": [1, 2, 3],
+        "proof": {"a": 1},
+    }
+    with pytest.raises(ValueError, match=r"Canonical proof bytes mismatch"):
+        ZKProof.from_dict(proof_dict)
 
 
 def test_groth16_prover_requires_snarkjs():
