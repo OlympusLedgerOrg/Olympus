@@ -15,6 +15,7 @@ is available in production deployments until Phase 1+ is explicitly announced.
 
 from __future__ import annotations
 
+import threading
 from collections.abc import Iterable, Sequence
 from dataclasses import dataclass, field
 
@@ -153,15 +154,27 @@ class VotingRound:
 class ConsensusState:
     """Track active voting rounds with low/high watermarks.
 
-    ConsensusState mutates shared watermark and round-tracking state in place
-    and is not thread-safe; callers must provide their own synchronization when
-    accessing it from multiple threads.
+    All public methods acquire an internal ``threading.Lock`` so the object is
+    safe to share across threads.  The lock is reentrant (``RLock``) because
+    ``advance_watermark`` may call ``gc_old_rounds`` internally.
     """
 
     max_watermark_window: int = MAX_WATERMARK_WINDOW
     low_watermark: int = 0
     high_watermark: int = 0
     voting_rounds: dict[int, VotingRound] = field(default_factory=dict)
+    _lock: threading.RLock = field(default_factory=threading.RLock, repr=False, compare=False)
+
+    def __getstate__(self) -> dict[str, object]:
+        """Exclude the unpicklable lock from serialized state."""
+        state = self.__dict__.copy()
+        state.pop("_lock", None)
+        return state
+
+    def __setstate__(self, state: dict[str, object]) -> None:
+        """Restore state and recreate the lock after deserialization."""
+        self.__dict__.update(state)
+        self._lock = threading.RLock()
 
     def start_round(
         self,
@@ -172,64 +185,69 @@ class ConsensusState:
         grace_epochs: int | None = None,
     ) -> VotingRound:
         """Create and register a new voting round."""
-        if round_num in self.voting_rounds:
-            raise ValueError(f"Round {round_num} already exists")
+        with self._lock:
+            if round_num in self.voting_rounds:
+                raise ValueError(f"Round {round_num} already exists")
 
-        with _view_tracer.start_as_current_span("view_change.start_round") as span:
-            span.set_attribute("round_num", round_num)
-            span.set_attribute("start_epoch", start_epoch)
-            span.set_attribute(
-                "grace_epochs", GRACE_EPOCHS if grace_epochs is None else grace_epochs
-            )
-            span.set_attribute("registry_epoch", registry.current_epoch)
+            with _view_tracer.start_as_current_span("view_change.start_round") as span:
+                span.set_attribute("round_num", round_num)
+                span.set_attribute("start_epoch", start_epoch)
+                span.set_attribute(
+                    "grace_epochs", GRACE_EPOCHS if grace_epochs is None else grace_epochs
+                )
+                span.set_attribute("registry_epoch", registry.current_epoch)
 
-            snapshot = registry.get_snapshot(start_epoch)
-            voting_round = VotingRound(
-                round_num=round_num,
-                start_epoch=start_epoch,
-                registry_snapshot=snapshot,
-                grace_epochs=GRACE_EPOCHS if grace_epochs is None else grace_epochs,
-            )
-            had_rounds = bool(self.voting_rounds)
-            self.voting_rounds[round_num] = voting_round
-            if not had_rounds:
-                self.low_watermark = round_num
-            else:
-                self.low_watermark = min(self.low_watermark, round_num)
-            self.high_watermark = max(self.high_watermark, round_num)
+                snapshot = registry.get_snapshot(start_epoch)
+                voting_round = VotingRound(
+                    round_num=round_num,
+                    start_epoch=start_epoch,
+                    registry_snapshot=snapshot,
+                    grace_epochs=GRACE_EPOCHS if grace_epochs is None else grace_epochs,
+                )
+                had_rounds = bool(self.voting_rounds)
+                self.voting_rounds[round_num] = voting_round
+                if not had_rounds:
+                    self.low_watermark = round_num
+                else:
+                    self.low_watermark = min(self.low_watermark, round_num)
+                self.high_watermark = max(self.high_watermark, round_num)
 
-            VIEW_CHANGE_WATERMARK.labels(bound="low").set(self.low_watermark)
-            VIEW_CHANGE_WATERMARK.labels(bound="high").set(self.high_watermark)
-            return voting_round
+                VIEW_CHANGE_WATERMARK.labels(bound="low").set(self.low_watermark)
+                VIEW_CHANGE_WATERMARK.labels(bound="high").set(self.high_watermark)
+                return voting_round
 
     def gc_old_rounds(self, cutoff_round: int) -> None:
         """Drop rounds older than ``cutoff_round`` and advance the low watermark."""
-        with _view_tracer.start_as_current_span("view_change.gc_old_rounds") as span:
-            span.set_attribute("cutoff_round", cutoff_round)
+        with self._lock:
+            with _view_tracer.start_as_current_span("view_change.gc_old_rounds") as span:
+                span.set_attribute("cutoff_round", cutoff_round)
 
-            removable = [round_num for round_num in self.voting_rounds if round_num < cutoff_round]
-            span.set_attribute("removed_rounds", len(removable))
-            for round_num in removable:
-                self.voting_rounds.pop(round_num, None)
-            if self.voting_rounds:
-                self.low_watermark = min(self.voting_rounds.keys())
-            else:
-                self.low_watermark = cutoff_round
+                removable = [
+                    round_num for round_num in self.voting_rounds if round_num < cutoff_round
+                ]
+                span.set_attribute("removed_rounds", len(removable))
+                for round_num in removable:
+                    self.voting_rounds.pop(round_num, None)
+                if self.voting_rounds:
+                    self.low_watermark = min(self.voting_rounds.keys())
+                else:
+                    self.low_watermark = cutoff_round
 
-            VIEW_CHANGE_WATERMARK.labels(bound="low").set(self.low_watermark)
-            VIEW_CHANGE_WATERMARK.labels(bound="high").set(self.high_watermark)
+                VIEW_CHANGE_WATERMARK.labels(bound="low").set(self.low_watermark)
+                VIEW_CHANGE_WATERMARK.labels(bound="high").set(self.high_watermark)
 
     def advance_watermark(self, new_high: int) -> None:
         """Advance the high watermark while enforcing the maximum window size."""
-        with _view_tracer.start_as_current_span("view_change.advance_watermark") as span:
-            span.set_attribute("previous_high", self.high_watermark)
-            span.set_attribute("requested_high", new_high)
-            if new_high < self.high_watermark:
-                raise ValueError("High watermark cannot move backwards")
-            if new_high - self.low_watermark > self.max_watermark_window:
-                cutoff = new_high - self.max_watermark_window
-                span.set_attribute("gc_cutoff", cutoff)
-                self.gc_old_rounds(cutoff)
-            self.high_watermark = new_high
-            VIEW_CHANGE_WATERMARK.labels(bound="high").set(self.high_watermark)
-            VIEW_CHANGE_WATERMARK.labels(bound="low").set(self.low_watermark)
+        with self._lock:
+            with _view_tracer.start_as_current_span("view_change.advance_watermark") as span:
+                span.set_attribute("previous_high", self.high_watermark)
+                span.set_attribute("requested_high", new_high)
+                if new_high < self.high_watermark:
+                    raise ValueError("High watermark cannot move backwards")
+                if new_high - self.low_watermark > self.max_watermark_window:
+                    cutoff = new_high - self.max_watermark_window
+                    span.set_attribute("gc_cutoff", cutoff)
+                    self.gc_old_rounds(cutoff)
+                self.high_watermark = new_high
+                VIEW_CHANGE_WATERMARK.labels(bound="high").set(self.high_watermark)
+                VIEW_CHANGE_WATERMARK.labels(bound="low").set(self.low_watermark)
