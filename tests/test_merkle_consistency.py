@@ -2,23 +2,26 @@
 Tests for Merkle consistency proofs.
 """
 
-from hypothesis import given, settings
 import hypothesis.strategies as st
+from hypothesis import given
 
-from protocol.hashes import node_hash
+from protocol.hashes import hash_bytes, node_hash
 from protocol.merkle import (
     MERKLE_VERSION,
     PROOF_VERSION,
     MerkleTree,
+    ct_merkle_root,
     deserialize_merkle_proof,
+    generate_consistency_proof,
     merkle_leaf_hash,
+    verify_consistency_proof,
     verify_proof,
 )
 
 
 def test_merkle_consistency_proof_round_trip():
     """Generated consistency proofs should verify."""
-    leaves = [hash_bytes(f"leaf-{i}".encode("utf-8")) for i in range(6)]
+    leaves = [hash_bytes(f"leaf-{i}".encode()) for i in range(6)]
     old_size = 3
     new_size = 6
 
@@ -31,7 +34,7 @@ def test_merkle_consistency_proof_round_trip():
 
 def test_merkle_consistency_proof_detects_tampering():
     """Tampering with the proof should invalidate verification."""
-    leaves = [hash_bytes(f"leaf-{i}".encode("utf-8")) for i in range(5)]
+    leaves = [hash_bytes(f"leaf-{i}".encode()) for i in range(5)]
     old_size = 2
     new_size = 5
 
@@ -41,6 +44,8 @@ def test_merkle_consistency_proof_detects_tampering():
 
     bad_proof = proof.copy()
     bad_proof[0] = hash_bytes(b"tamper")
+
+    assert not verify_consistency_proof(old_root, new_root, bad_proof, old_size, new_size)
 
 
 def test_merkle_leaf_prefix_applied():

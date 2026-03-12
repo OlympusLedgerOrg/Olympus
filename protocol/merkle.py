@@ -273,6 +273,20 @@ def verify_proof(proof: MerkleProof) -> bool:
                 f"got {actual_depth}"
             )
 
+    # Validate sibling positions against the leaf_index path when tree_size is known.
+    # At each level k, the node's index determines whether it is a left or right child:
+    #   even index → left child → sibling must be "right"
+    #   odd  index → right child → sibling must be "left"
+    # Without this check, an attacker could swap positions in proofs where a node's
+    # sibling is itself (odd-level boundary duplication) and still pass verification.
+    if proof.tree_size > 0:
+        index = proof.leaf_index
+        for k, (_sibling_hash, position) in enumerate(proof.siblings):
+            expected_pos = "right" if index % 2 == 0 else "left"
+            if position != expected_pos:
+                return False
+            index //= 2
+
     # Compute the root hash by walking up the tree
     current_hash = proof.leaf_hash
 
