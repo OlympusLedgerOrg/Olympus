@@ -5,7 +5,7 @@
  */
 
 // Use @noble/hashes for BLAKE3 (production) or fallback to simple implementation
-const { blake3 } = require('@noble/hashes/blake3');
+const { blake3 } = require('@noble/hashes/blake3.js');
 
 /**
  * Compute BLAKE3 hash of data

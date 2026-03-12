@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import math
+from collections.abc import Iterator
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
@@ -14,6 +15,7 @@ import nacl.signing
 
 from protocol.canonical_json import canonical_json_bytes
 from protocol.hashes import (
+    _VRF_COMMIT_REVEAL_PREFIX,
     HASH_SEPARATOR,
     VRF_SELECTION_PREFIX,
     blake3_hash,
@@ -204,8 +206,9 @@ class FederationRegistry:
             return {}
 
         normalized: dict[int, FederationRegistry] = {}
+        items: Iterator[tuple[int | None, FederationRegistry]]
         if isinstance(snapshots, dict):
-            items = snapshots.items()
+            items = iter(snapshots.items())
         else:
             items = ((None, snapshot) for snapshot in snapshots)
 

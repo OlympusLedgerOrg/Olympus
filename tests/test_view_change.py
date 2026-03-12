@@ -7,9 +7,9 @@ import pytest
 from hypothesis import assume, given, settings
 
 from protocol.view_change import (
-    ConsensusState,
     GRACE_EPOCHS,
     MAX_WATERMARK_WINDOW,
+    ConsensusState,
     ValidatorRegistry,
     VotingRound,
 )

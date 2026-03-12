@@ -9,8 +9,8 @@ import pytest
 from protocol.telemetry import (
     INGEST_TOTAL,
     LEDGER_HEIGHT,
-    PROOF_LATENCY,
     PARTITION_EVENTS,
+    PROOF_LATENCY,
     SMT_DIVERGENCE_TOTAL,
     VIEW_CHANGE_WATERMARK,
     _NoOpSpan,

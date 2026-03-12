@@ -162,8 +162,6 @@ class ShardHeaderResponse(BaseModel):
     header_hash: str  # Hex-encoded 32-byte header hash
     previous_header_hash: str  # Hex-encoded (empty for genesis)
     timestamp: str  # ISO 8601
-    height: int = 0  # Consensus height (default 0)
-    round: int = 0  # Consensus round (default 0)
     signature: str  # Hex-encoded 64-byte Ed25519 signature
     pubkey: str  # Hex-encoded 32-byte Ed25519 public key
     canonical_header_json: str  # For offline verification
@@ -362,14 +360,11 @@ async def get_latest_header(shard_id: str) -> ShardHeaderResponse:
 
         header = header_data["header"]
 
-        # Create canonical header JSON for verification — must include all
-        # fields that contribute to the header hash (height and round included).
+        # Create canonical header JSON for verification
         canonical_header = {
             "shard_id": header["shard_id"],
             "root_hash": header["root_hash"],
             "timestamp": header["timestamp"],
-            "height": header.get("height", 0),
-            "round": header.get("round", 0),
             "previous_header_hash": header["previous_header_hash"],
         }
         canonical_json = canonical_json_encode(canonical_header)
@@ -381,8 +376,6 @@ async def get_latest_header(shard_id: str) -> ShardHeaderResponse:
             header_hash=header["header_hash"],
             previous_header_hash=header["previous_header_hash"],
             timestamp=header["timestamp"],
-            height=header.get("height", 0),
-            round=header.get("round", 0),
             signature=header_data["signature"],
             pubkey=header_data["pubkey"],
             canonical_header_json=canonical_json,
@@ -430,8 +423,6 @@ async def get_proof(
             "shard_id": header["shard_id"],
             "root_hash": header["root_hash"],
             "timestamp": header["timestamp"],
-            "height": header.get("height", 0),
-            "round": header.get("round", 0),
             "previous_header_hash": header["previous_header_hash"],
         }
         canonical_json = canonical_json_encode(canonical_header)
@@ -443,8 +434,6 @@ async def get_proof(
             header_hash=header["header_hash"],
             previous_header_hash=header["previous_header_hash"],
             timestamp=header["timestamp"],
-            height=header.get("height", 0),
-            round=header.get("round", 0),
             signature=header_data["signature"],
             pubkey=header_data["pubkey"],
             canonical_header_json=canonical_json,
