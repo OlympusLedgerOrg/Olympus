@@ -793,7 +793,11 @@ def resolve_canonical_fork(
             )
 
         signer_count = len(certificate["signatures"])
-        certificate_timestamp = _parse_timestamp(str(certificate["timestamp"]))
+        try:
+            certificate_timestamp = _parse_timestamp(str(certificate["timestamp"]))
+        except ValueError:
+            # Malformed timestamp: treat this candidate as ineligible for canonical fork resolution.
+            continue
         header_hash = str(header["header_hash"])
         eligible.append(((-signer_count, certificate_timestamp, header_hash), header, certificate))
 
