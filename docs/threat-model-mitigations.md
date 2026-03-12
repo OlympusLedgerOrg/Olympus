@@ -244,44 +244,43 @@ Each threat is mitigated through a combination of cryptographic primitives, prot
 
 ---
 
-### 11. Nothing-at-Stake Equivocation
+### 11. Eclipse Attack / Peer Isolation
 
-**Threat:** During a partition, a validator signs both competing chains "just in case," making honest behavior indistinguishable after healing.
+**Threat:** An attacker surrounds an honest node with malicious peers so the node only sees the attacker's view and may falsely infer quorum.
 
-**Adversary Type:** Byzantine validator, colluding federation operator
+**Adversary Type:** Network attacker controlling routing or peer connectivity
 
 **Mitigations:**
 
 | Mitigation | Evidence | Status |
 |------------|----------|--------|
-| Slashable equivocation detector over `(node_id, shard_id, round)` | [`protocol/partition.py`](../protocol/partition.py) — `detect_slashable_equivocations()` | ✅ Implemented |
-| Proof-of-publication witness records bound to vote hash | [`protocol/partition.py`](../protocol/partition.py) — `VotePublication`, `PublishedVote` | ✅ Implemented |
-| Deterministic evidence artifact for audit/review tooling | [`protocol/partition.py`](../protocol/partition.py) — `SlashingEvidence` | ✅ Implemented |
+| Random peer sampling for health probes | [`protocol/partition.py:137-146`](../protocol/partition.py#L137-L146) | ✅ Implemented |
+| Peer-group diversity checks before accepting network health | [`protocol/partition.py:188-206`](../protocol/partition.py#L188-L206) | ✅ Implemented |
+| Cross-network verification hook prior to quorum acceptance | [`protocol/partition.py:213-219`](../protocol/partition.py#L213-L219) | ✅ Implemented |
 
-**Detection:** If two published votes from the same node target different chain IDs in the same round, `detect_slashable_equivocations()` emits deterministic slashing evidence.
+**Detection:** If sampled peers fail diversity requirements or cross-network verification, the node freezes a watermark and rejects the network as healthy.
 
-**Security Property:** Accountable safety — equivocation is provable and attributable.
+**Security Property:** Isolation resistance — a single peer enclave cannot trivially satisfy liveness checks.
 
 ---
 
-### 12. Censorship Attacks
+### 12. Long-Range History Rewrite
 
-**Threat:** A malicious leader drops valid transactions and claims they were never received.
+**Threat:** An attacker with old private keys attempts to replay from genesis and present an alternative long history.
 
-**Adversary Type:** Byzantine leader, censoring operator
+**Adversary Type:** Key thief with historical key material
 
 **Mitigations:**
 
 | Mitigation | Evidence | Status |
 |------------|----------|--------|
-| Frequent deterministic leader rotation | [`protocol/partition.py`](../protocol/partition.py) — `select_rotating_leader()` | ✅ Implemented |
-| Broadcast witness receipts for transaction publication | [`protocol/partition.py`](../protocol/partition.py) — `TransactionBroadcast` | ✅ Implemented |
-| Witness-quorum inclusion list generation | [`protocol/partition.py`](../protocol/partition.py) — `build_inclusion_list()` | ✅ Implemented |
-| Omission detection against required inclusion list | [`protocol/partition.py`](../protocol/partition.py) — `missing_inclusion_entries()` | ✅ Implemented |
+| Key-evolving verification via key history validity windows | [`protocol/federation.py:120-131`](../protocol/federation.py#L120-L131) | ✅ Implemented |
+| Signed checkpoint chain with consistency proofs | [`protocol/checkpoints.py:595-680`](../protocol/checkpoints.py#L595-L680) | ✅ Implemented |
+| Out-of-band/social finality anchors enforced during chain verification | [`protocol/checkpoints.py:664-678`](../protocol/checkpoints.py#L664-L678) | ✅ Implemented |
 
-**Detection:** A transaction with sufficient broadcast witnesses that is absent from a proposal appears in `missing_inclusion_entries()`, giving objective omission evidence.
+**Detection:** Verification fails when an alternate chain conflicts with an externally finalized checkpoint hash at the anchored sequence.
 
-**Security Property:** Auditable liveness — censorship claims become testable and attributable.
+**Security Property:** Deep-history rewrite resistance once social finality is established.
 
 ---
 
