@@ -286,14 +286,11 @@ def test_end_to_end_audit_flow(storage, signing_key, client):
     assert response.status_code == 200
     header_data = response.json()
 
-    # Reconstruct header for verification — must include height and round so
-    # that shard_header_hash produces the same value that was originally signed.
+    # Reconstruct header for verification
     header_for_verification = {
         "shard_id": header_data["shard_id"],
         "root_hash": header_data["root_hash"],
         "timestamp": header_data["timestamp"],
-        "height": header_data.get("height", 0),
-        "round": header_data.get("round", 0),
         "previous_header_hash": header_data["previous_header_hash"],
         "header_hash": header_data["header_hash"],
     }
