@@ -52,7 +52,9 @@ class RegistrySnapshot:
             raise ValueError("Snapshot epoch must be non-negative")
         if not history:
             raise ValueError("Registry history cannot be empty")
-        self._history: tuple[RegistryState, ...] = tuple(sorted(history, key=lambda item: item.epoch))
+        self._history: tuple[RegistryState, ...] = tuple(
+            sorted(history, key=lambda item: item.epoch)
+        )
         self.snapshot_epoch = snapshot_epoch
 
     def _membership_at_epoch(self, epoch: int) -> frozenset[str]:
@@ -149,7 +151,12 @@ class VotingRound:
 
 @dataclass
 class ConsensusState:
-    """Track active voting rounds with low/high watermarks."""
+    """Track active voting rounds with low/high watermarks.
+
+    ConsensusState mutates shared watermark and round-tracking state in place
+    and is not thread-safe; callers must provide their own synchronization when
+    accessing it from multiple threads.
+    """
 
     max_watermark_window: int = MAX_WATERMARK_WINDOW
     low_watermark: int = 0
@@ -171,7 +178,9 @@ class ConsensusState:
         with _view_tracer.start_as_current_span("view_change.start_round") as span:
             span.set_attribute("round_num", round_num)
             span.set_attribute("start_epoch", start_epoch)
-            span.set_attribute("grace_epochs", GRACE_EPOCHS if grace_epochs is None else grace_epochs)
+            span.set_attribute(
+                "grace_epochs", GRACE_EPOCHS if grace_epochs is None else grace_epochs
+            )
             span.set_attribute("registry_epoch", registry.current_epoch)
 
             snapshot = registry.get_snapshot(start_epoch)

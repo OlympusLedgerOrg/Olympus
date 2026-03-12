@@ -43,13 +43,14 @@ minimal failing shuffle sequence.
 
 from __future__ import annotations
 
+import os
+import pickle
+import platform
+import random
+import threading
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from types import SimpleNamespace
-import os
-import pickle
-import random
-import threading
 
 import hypothesis.strategies as st
 import pytest
@@ -76,7 +77,9 @@ from protocol.view_change import (
 
 
 @given(
-    initial_members=st.sets(st.sampled_from(["n1", "n2", "n3", "n4", "n5"]), min_size=2, max_size=4),
+    initial_members=st.sets(
+        st.sampled_from(["n1", "n2", "n3", "n4", "n5"]), min_size=2, max_size=4
+    ),
     membership_changes=st.lists(
         st.tuples(
             st.integers(min_value=1, max_value=20),  # epoch
@@ -163,7 +166,9 @@ def test_registry_changes_are_deterministic_regardless_of_application_order(
 
 
 @given(
-    round_numbers=st.lists(st.integers(min_value=0, max_value=50), min_size=3, max_size=15, unique=True),
+    round_numbers=st.lists(
+        st.integers(min_value=0, max_value=50), min_size=3, max_size=15, unique=True
+    ),
     max_window=st.integers(min_value=3, max_value=10),
 )
 @settings(max_examples=100, deadline=None)
@@ -235,7 +240,9 @@ def test_watermark_state_is_deterministic_regardless_of_round_arrival_order(
 
 
 @given(
-    round_numbers=st.lists(st.integers(min_value=0, max_value=50), min_size=3, max_size=12, unique=True),
+    round_numbers=st.lists(
+        st.integers(min_value=0, max_value=50), min_size=3, max_size=12, unique=True
+    ),
     max_window=st.integers(min_value=3, max_value=10),
     node_count=st.integers(min_value=3, max_value=5),
     node_orderings=st.data(),
@@ -381,11 +388,18 @@ def test_partial_gossip_converges_after_reconciliation(
         )
 
 
-def test_concurrent_round_application_is_deterministic() -> None:
+def test_concurrent_round_application_is_illustrative_only() -> None:
     """
-    Concurrently starting unique rounds on the same state should converge to the
-    same result as sequential application.
+    Illustrative-only smoke test for CPython's current GIL behaviour.
+
+    ConsensusState is not thread-safe, so this test must not be treated as a
+    proof that concurrent mutation is deterministic.
     """
+    if platform.python_implementation() != "CPython":
+        pytest.skip(
+            "ConsensusState is not thread-safe; this illustrative test relies on CPython's GIL"
+        )
+
     registry = ValidatorRegistry({"nodeA", "nodeB"}, epoch=0)
     consensus = ConsensusState(max_watermark_window=120)
 
@@ -590,7 +604,9 @@ def test_fork_resolution_is_deterministic_across_nodes(
     winner_node2 = resolve_partition_fork(tuple(chain_b), tuple(chain_a))
 
     # Node 3 re-resolves using the winner from node 1
-    winner_node3 = resolve_partition_fork(winner_node1, tuple(chain_b if winner_node1 == tuple(chain_a) else chain_a))
+    winner_node3 = resolve_partition_fork(
+        winner_node1, tuple(chain_b if winner_node1 == tuple(chain_a) else chain_a)
+    )
 
     # All nodes must select the same winner
     # Note: fork resolution may return either chain_a or chain_b, but all nodes must agree
@@ -659,7 +675,9 @@ def test_leader_selection_is_deterministic_across_nodes(
 
 
 @given(
-    initial_members=st.sets(st.sampled_from(["n1", "n2", "n3", "n4", "n5"]), min_size=2, max_size=4),
+    initial_members=st.sets(
+        st.sampled_from(["n1", "n2", "n3", "n4", "n5"]), min_size=2, max_size=4
+    ),
     removal_epoch=st.integers(min_value=5, max_value=20),
     removed_node=st.sampled_from(["n1", "n2", "n3"]),
     check_epochs=st.lists(st.integers(min_value=0, max_value=25), min_size=3, max_size=10),
@@ -690,10 +708,14 @@ def test_grace_period_validation_is_deterministic_across_nodes(
 
     # Both create voting rounds with same parameters
     snapshot1 = registry_node1.get_snapshot(snapshot_epoch=3)
-    round1 = VotingRound(round_num=1, start_epoch=3, registry_snapshot=snapshot1, grace_epochs=grace_epochs)
+    round1 = VotingRound(
+        round_num=1, start_epoch=3, registry_snapshot=snapshot1, grace_epochs=grace_epochs
+    )
 
     snapshot2 = registry_node2.get_snapshot(snapshot_epoch=3)
-    round2 = VotingRound(round_num=1, start_epoch=3, registry_snapshot=snapshot2, grace_epochs=grace_epochs)
+    round2 = VotingRound(
+        round_num=1, start_epoch=3, registry_snapshot=snapshot2, grace_epochs=grace_epochs
+    )
 
     # Create a test signature object
     class TestSignature:
@@ -722,7 +744,9 @@ def test_grace_period_validation_is_deterministic_across_nodes(
     grace_epochs=st.integers(min_value=0, max_value=5),
 )
 @settings(max_examples=50, deadline=None)
-def test_membership_flaps_at_epoch_boundary_are_consistent(start_epoch: int, grace_epochs: int) -> None:
+def test_membership_flaps_at_epoch_boundary_are_consistent(
+    start_epoch: int, grace_epochs: int
+) -> None:
     """
     Property: Validators added or removed at the exact round epoch behave consistently
     across nodes regardless of whether the change arrived just before or just after
@@ -736,7 +760,10 @@ def test_membership_flaps_at_epoch_boundary_are_consistent(start_epoch: int, gra
     registry_before = ValidatorRegistry(initial_members, epoch=0)
     snapshot_before = registry_before.get_snapshot(start_epoch)
     round_before = VotingRound(
-        round_num=1, start_epoch=start_epoch, registry_snapshot=snapshot_before, grace_epochs=grace_epochs
+        round_num=1,
+        start_epoch=start_epoch,
+        registry_snapshot=snapshot_before,
+        grace_epochs=grace_epochs,
     )
 
     # Node B incorporates the change at the epoch boundary before starting the round.
@@ -744,7 +771,10 @@ def test_membership_flaps_at_epoch_boundary_are_consistent(start_epoch: int, gra
     registry_after.apply_change(epoch=start_epoch, added_members={added}, removed_members={removed})
     snapshot_after = registry_after.get_snapshot(start_epoch)
     round_after = VotingRound(
-        round_num=1, start_epoch=start_epoch, registry_snapshot=snapshot_after, grace_epochs=grace_epochs
+        round_num=1,
+        start_epoch=start_epoch,
+        registry_snapshot=snapshot_after,
+        grace_epochs=grace_epochs,
     )
 
     removed_sig = SimpleNamespace(node_id=removed)
@@ -757,6 +787,7 @@ def test_membership_flaps_at_epoch_boundary_are_consistent(start_epoch: int, gra
     # Newly added validator is rejected by the stale snapshot but accepted by the updated one.
     assert not round_before.is_signature_valid(added_sig, current_epoch=start_epoch)
     assert round_after.is_signature_valid(added_sig, current_epoch=start_epoch)
+
 
 # ============================================================================
 # Cross-Node Determinism: Combined State Transitions
@@ -826,7 +857,9 @@ def test_combined_state_transitions_produce_identical_final_state(
     # Both nodes must have identical final state
     assert consensus_a.low_watermark == consensus_b.low_watermark, "Low watermarks differ"
     assert consensus_a.high_watermark == consensus_b.high_watermark, "High watermarks differ"
-    assert set(consensus_a.voting_rounds.keys()) == set(consensus_b.voting_rounds.keys()), "Active rounds differ"
+    assert set(consensus_a.voting_rounds.keys()) == set(consensus_b.voting_rounds.keys()), (
+        "Active rounds differ"
+    )
 
     # Verify each voting round has identical properties
     for round_num in consensus_a.voting_rounds:
