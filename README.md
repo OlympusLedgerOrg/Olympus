@@ -1,9 +1,25 @@
 # Olympus
 
-Olympus is an append-only public ledger for government documents. The repository
-is focused on protocol hardening: deterministic canonicalization, Merkle
-commitments, verifiable proofs, and developer tooling for inspecting and
-validating those primitives.
+Olympus is a fully deterministic, verifiable consensus protocol and append-only
+public ledger. The repository is focused on protocol hardening: deterministic
+canonicalization, Merkle commitments, verifiable proofs, and developer tooling
+for inspecting and validating those primitives.
+
+## The Vision
+
+A layered cryptographic infrastructure for real-world applications that require:
+
+- **Legal/regulatory compliance** — immutable, independently auditable records
+  for government documents, court records, and regulatory filings.
+- **Auditable data provenance** — end-to-end verifiable data lineage for supply
+  chains, financial audits, and any domain where chain-of-custody matters.
+- **Privacy with accountability** — selective redaction capabilities
+  (GDPR-compatible) that preserve cryptographic proofs of what was disclosed and
+  what was withheld.
+- **Cross-institutional consensus** — a federation of independent trusted
+  parties that reaches quorum without requiring trust in any single
+  institution. *(Basic federation quorum signing is prototyped in v1.0;
+  full Guardian multi-node replication is a Phase 1+ roadmap item.)*
 
 ## Technical architecture
 
