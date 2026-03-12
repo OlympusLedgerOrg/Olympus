@@ -20,7 +20,7 @@ Phase 1+ modules (Guardian replication; not part of v1.0):
   protocol.federation, protocol.partition, protocol.view_change
 """
 
-__version__ = "0.1.0"
+__version__ = "1.0.0"
 
 __all__ = [
     # Canonicalize

@@ -7,6 +7,8 @@ These helpers implement dynamic quorum detection with frozen watermarks and a
 deterministic fork-choice rule that combines elapsed rounds, quorum weight, and
 a VRF-style tie-breaker. Chains are validated for proof-of-elapsed-time using
 consensus round progression (block height), not wall-clock ordering.
+<<<<<<< claude/fix-merge-conflict-and-update
+=======
 
 To mitigate eclipse-style isolation, the partition detector supports random peer
 sampling, peer-group diversity checks, and optional cross-network verification
@@ -15,6 +17,7 @@ before marking the network as healthy.
 This module is part of the Guardian replication protocol and is NOT part of the
 v1.0 single-node ledger. Civic tech partners should not assume live consensus
 is available in production deployments until Phase 1+ is explicitly announced.
+>>>>>>> main
 """
 
 from __future__ import annotations
@@ -191,7 +194,9 @@ def detect_slashable_equivocations(votes: Sequence[PublishedVote]) -> tuple[Slas
     return tuple(evidence)
 
 
-def select_rotating_leader(round_number: int, leaders: Sequence[str], *, rotation_window: int = 1) -> str:
+def select_rotating_leader(
+    round_number: int, leaders: Sequence[str], *, rotation_window: int = 1
+) -> str:
     """Return the scheduled leader with deterministic frequent round-robin rotation."""
     if round_number < 0:
         raise ValueError("round_number must be non-negative")
