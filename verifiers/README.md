@@ -75,6 +75,11 @@ In addition to the fixed vectors above, the cross-language determinism harness
 deterministic random records, hashes them in Python/Go/Rust/JavaScript, and
 fails on any divergence.
 
+An end-to-end pipeline vector (canonicalization → Merkle → ledger → proof) is
+published in `test_vectors/proofs/end_to_end.json` to give other ecosystems a
+single, human-readable artifact that can be verified without pulling in the
+verifier packages.
+
 ## Usage
 
 See individual README files in each subdirectory for language-specific instructions.
