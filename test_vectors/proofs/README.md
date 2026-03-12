@@ -45,3 +45,6 @@ pipeline:
 The values are produced directly by `protocol.canonicalizer`, `protocol.merkle`,
 and `protocol.ledger` in the Python reference implementation with a fixed
 timestamp to keep the ledger hash deterministic.
+
+`path` is empty for single-leaf trees (like the published vector) and contains
+the ordered sibling list when additional leaves are present.
