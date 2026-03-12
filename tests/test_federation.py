@@ -15,8 +15,10 @@ from protocol.federation import (
     NodeSignature,
     _to_int,
     append_quorum_certificate_to_ledger,
+    build_vrf_reveal_commitment,
     build_federation_header_record,
     build_quorum_certificate,
+    derive_vrf_round_entropy,
     has_federation_quorum,
     is_replay_epoch,
     quorum_certificate_hash,
@@ -912,3 +914,82 @@ def test_verify_quorum_certificate_unique_nodes_counted_for_quorum() -> None:
     tampered_certificate = {**certificate, "signatures": dup_signatures}
 
     assert verify_quorum_certificate(tampered_certificate, header, registry) is False
+
+
+def test_vrf_round_entropy_requires_valid_commit_reveal_bindings() -> None:
+    """derive_vrf_round_entropy must reject reveals that do not match commitments."""
+    with pytest.raises(ValueError, match="Reveal does not match commitment"):
+        derive_vrf_round_entropy(
+            shard_id="records/city-a",
+            round_number=1,
+            epoch=0,
+            commitments={"node-1": "00" * 32},
+            reveals={"node-1": "secret"},
+        )
+
+
+def test_vrf_round_entropy_is_order_independent_and_deterministic() -> None:
+    """Entropy should be deterministic regardless of reveal dictionary ordering."""
+    reveal_a = "alpha"
+    reveal_b = "beta"
+    commitments = {
+        "node-a": build_vrf_reveal_commitment(node_id="node-a", reveal=reveal_a),
+        "node-b": build_vrf_reveal_commitment(node_id="node-b", reveal=reveal_b),
+    }
+    entropy_1 = derive_vrf_round_entropy(
+        shard_id="records/city-a",
+        round_number=2,
+        epoch=1,
+        commitments=commitments,
+        reveals={"node-a": reveal_a, "node-b": reveal_b},
+    )
+    entropy_2 = derive_vrf_round_entropy(
+        shard_id="records/city-a",
+        round_number=2,
+        epoch=1,
+        commitments=commitments,
+        reveals={"node-b": reveal_b, "node-a": reveal_a},
+    )
+    assert entropy_1 == entropy_2
+
+
+def test_vrf_round_entropy_with_proof_transcripts_changes_seed() -> None:
+    """Proof transcript hashes are part of anti-grinding entropy binding."""
+    reveal = "shared-secret"
+    commitments = {"node-a": build_vrf_reveal_commitment(node_id="node-a", reveal=reveal)}
+    without_proof = derive_vrf_round_entropy(
+        shard_id="records/city-a",
+        round_number=3,
+        epoch=1,
+        commitments=commitments,
+        reveals={"node-a": reveal},
+    )
+    with_proof = derive_vrf_round_entropy(
+        shard_id="records/city-a",
+        round_number=3,
+        epoch=1,
+        commitments=commitments,
+        reveals={"node-a": reveal},
+        proof_transcript_hashes={"node-a": "ab" * 32},
+    )
+    assert with_proof != without_proof
+
+
+def test_select_vrf_leader_supports_round_entropy_binding() -> None:
+    """Leader selection should change when commit-reveal entropy changes."""
+    registry = FederationRegistry.from_file(REGISTRY_PATH)
+    baseline = select_vrf_leader(
+        shard_id="records/city-a",
+        round_number=4,
+        registry=registry,
+        epoch=1,
+    )
+    with_entropy = select_vrf_leader(
+        shard_id="records/city-a",
+        round_number=4,
+        registry=registry,
+        epoch=1,
+        round_entropy="11" * 32,
+    )
+    assert isinstance(with_entropy, str)
+    assert baseline != with_entropy or len(registry.active_nodes()) == 1
