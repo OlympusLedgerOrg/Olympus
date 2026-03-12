@@ -23,8 +23,8 @@ This document defines the governance model for a federated Olympus deployment. v
 
 - **Protocol Upgrades**: Require supermajority Steward approval (≥2/3) and a cutover height. Upgrades are additive; legacy verification remains valid.
 - **Key Rotation**: Stewards publish revocation and superseding attestations (see `docs/04_ledger_protocol.md`). Guardians reject headers signed with revoked keys after the effective timestamp.
-- **Guardian Quorum**: A shard state is final when acknowledged by at least **Q** Guardians (Q ≥ ⌈2N/3⌉ recommended). Acknowledgments are signed and stored as append-only metadata.
-- **Dispute Resolution**: Forks are resolved by selecting the chain with (1) highest Guardian quorum weight, then (2) earliest anchor timestamp, then (3) lowest lexicographic shard header hash as a deterministic tie-breaker.
+- **Guardian Quorum**: A shard state is final when acknowledged by at least **Q = ⌈2N/3⌉** active Guardians in the current epoch. Acknowledgments are signed and stored as append-only metadata.
+- **Dispute Resolution**: Forks at the same `(shard_id, height, round)` are resolved by selecting the candidate with (1) highest Guardian quorum weight, then (2) earliest certificate timestamp, then (3) lowest lexicographic shard header hash as a deterministic tie-breaker.
 
 ## Operational Controls
 

@@ -200,13 +200,45 @@ The prototype uses **quorum acknowledgment consensus**, not blind leader trust:
 
 - The originating Steward signs the shard header hash first.
 - Guardians independently verify the header and sign acknowledgments over that exact `header_hash`.
-- Finality threshold:
-  - minimum prototype threshold: `Q >= floor(N / 2) + 1`
-  - recommended Byzantine threshold: `Q >= ceil(2N / 3)`
-- If two distinct headers claim the same `(shard_id, seq)` or the same `previous_header_hash`, the system has detected a fork.
-- Fork resolution follows `docs/10_federation_governance.md`: highest Guardian quorum weight, then earliest valid anchor, then lowest lexicographic `header_hash`.
+- Deterministic finality threshold:
+  - Let `N` be the count of **active** federation members in the current registry epoch.
+  - A root becomes canonical only when `Q = ceil(2N / 3)` distinct node signatures are present for the same `(shard_id, height, round, header_hash)`.
+  - This rule supersedes earlier prototype discussions of `floor(N/2)+1`; the implementation uses only `FederationRegistry.quorum_threshold()`.
+- If two distinct headers claim the same `(shard_id, height, round)`, the system has detected a fork.
+- Deterministic fork resolution order:
+  1. prefer the candidate with the highest number of valid signer approvals,
+  2. then prefer the earliest valid certificate timestamp,
+  3. then prefer the lexicographically lowest `header_hash` (stable tie-break for simultaneous roots).
+- Replay protection:
+  - Nodes reject any candidate root or quorum certificate whose `federation_epoch` is lower than the node's current epoch.
+  - In addition, certificates must bind exactly to the current registry epoch and membership hash before they are accepted.
 
 This makes header signing decentralized in the narrow protocol sense: no single Steward signature is sufficient for federation finality after the Phase 1+ cutover.
+
+## Node Identity and Key Rotation Procedure
+
+To avoid ambiguous authority during membership changes:
+
+1. Node identity is always bound to `node_id` in the federation registry; verifiers must resolve verification keys from the registry, never from untrusted message payloads.
+2. Key rotation appends the prior key to `key_history` with a `valid_until` timestamp and installs the new active key for the node.
+3. Signature verification is timestamp-aware:
+   - historical headers may verify with a key from `key_history` only when `header.timestamp <= valid_until`,
+   - new headers after rotation must verify with the active key.
+4. Registry epoch is part of every vote and quorum certificate. This binds signatures to a specific membership snapshot and prevents stale-epoch replay.
+
+## VRF-Based Selections
+
+The federation prototype now exposes deterministic VRF-style selection helpers
+for committee and leader choice in a round:
+
+- Selection seed binds `(shard_id, round_number, epoch, membership_hash)` using
+  BLAKE3 domain separation (`OLY:VRF-SELECTION:V1`).
+- Each active node receives a deterministic score from the seed and `node_id`.
+- Committee selection picks the lowest `k` scores; leader selection picks the
+  first committee member (`k=1`).
+
+Because the seed includes epoch and membership hash, membership changes or epoch
+advances produce a new selection ordering and prevent stale selection replay.
 
 ## Safety and Liveness Notes
 

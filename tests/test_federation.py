@@ -18,11 +18,16 @@ from protocol.federation import (
     build_federation_header_record,
     build_quorum_certificate,
     has_federation_quorum,
+    is_replay_epoch,
     quorum_certificate_hash,
+    resolve_canonical_fork,
+    select_vrf_committee,
+    select_vrf_leader,
     serialize_vote_message,
     sign_federated_header,
     verify_federated_header_signatures,
     verify_quorum_certificate,
+    vrf_selection_scores,
 )
 from protocol.ledger import Ledger
 from protocol.shards import (

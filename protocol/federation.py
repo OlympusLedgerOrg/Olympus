@@ -13,7 +13,13 @@ import nacl.exceptions
 import nacl.signing
 
 from protocol.canonical_json import canonical_json_bytes
-from protocol.hashes import HASH_SEPARATOR, hash_bytes, shard_header_hash
+from protocol.hashes import (
+    HASH_SEPARATOR,
+    VRF_SELECTION_PREFIX,
+    blake3_hash,
+    hash_bytes,
+    shard_header_hash,
+)
 from protocol.ledger import Ledger, LedgerEntry
 
 
@@ -299,6 +305,15 @@ class FederationRegistry:
 def _parse_timestamp(timestamp: str) -> datetime:
     """Parse an ISO 8601 timestamp that may use a ``Z`` suffix as timezone-aware datetime."""
     return datetime.fromisoformat(timestamp.replace("Z", "+00:00"))
+
+
+def is_replay_epoch(candidate_epoch: int, current_epoch: int) -> bool:
+    """Return whether ``candidate_epoch`` is stale relative to ``current_epoch``.
+
+    Federation replay protection rejects any quorum certificate/root candidate
+    whose epoch is lower than the receiver's current epoch.
+    """
+    return candidate_epoch < current_epoch
 
 
 def _extract_round_and_height(header: dict[str, Any]) -> tuple[int, int]:
@@ -792,6 +807,140 @@ def verify_quorum_certificate(
 
     # Quorum is counted against the number of *unique* verified signers.
     return len(unique_verified_nodes) >= registry_snapshot.quorum_threshold()
+
+
+def resolve_canonical_fork(
+    candidates: list[tuple[dict[str, Any], dict[str, Any]]],
+    registry: FederationRegistry,
+    *,
+    current_epoch: int | None = None,
+) -> tuple[dict[str, Any], dict[str, Any]] | None:
+    """Return the deterministic canonical root candidate among competing forks.
+
+    The resolver applies these deterministic rules:
+    1. Only candidates with valid quorum certificates are eligible.
+    2. Replay protection rejects candidates whose federation epoch is lower than
+       ``current_epoch`` (default: ``registry.epoch``).
+    3. Prefer the candidate with the highest number of valid signer approvals.
+    4. If signer counts tie, prefer the earliest certificate timestamp.
+    5. If still tied (simultaneous roots), choose the lexicographically lowest
+       header hash.
+    """
+    if not candidates:
+        return None
+    effective_epoch = registry.epoch if current_epoch is None else int(current_epoch)
+    if effective_epoch < 0:
+        raise ValueError("Current federation epoch must be an integer >= 0")
+
+    eligible: list[tuple[tuple[int, datetime, str], dict[str, Any], dict[str, Any]]] = []
+    slot: tuple[str, int, int] | None = None
+    for header, certificate in candidates:
+        cert_epoch = _to_int(certificate.get("federation_epoch"))
+        if cert_epoch is None or is_replay_epoch(cert_epoch, effective_epoch):
+            continue
+        if not verify_quorum_certificate(certificate, header, registry):
+            continue
+
+        candidate_slot = (
+            str(certificate["shard_id"]),
+            int(certificate["height"]),
+            int(certificate["round"]),
+        )
+        if slot is None:
+            slot = candidate_slot
+        elif candidate_slot != slot:
+            raise ValueError(
+                "Fork candidates must reference the same shard_id, height, and round"
+            )
+
+        signer_count = len(certificate["signatures"])
+        try:
+            certificate_timestamp = _parse_timestamp(str(certificate["timestamp"]))
+        except ValueError:
+            # Malformed timestamp: treat this candidate as ineligible for canonical fork resolution.
+            continue
+        header_hash = str(header["header_hash"])
+        eligible.append(((-signer_count, certificate_timestamp, header_hash), header, certificate))
+
+    if not eligible:
+        return None
+    _, selected_header, selected_certificate = min(eligible, key=lambda item: item[0])
+    return selected_header, selected_certificate
+
+
+def vrf_selection_scores(
+    *,
+    shard_id: str,
+    round_number: int,
+    registry: FederationRegistry,
+    epoch: int | None = None,
+) -> list[tuple[str, int]]:
+    """Return deterministic VRF-style selection scores for active federation nodes."""
+    if round_number < 0:
+        raise ValueError("Round number must be non-negative")
+    effective_epoch = registry.epoch if epoch is None else int(epoch)
+    if effective_epoch < 0:
+        raise ValueError("Epoch must be non-negative")
+    membership_hash = registry.membership_hash()
+    selection_seed = blake3_hash(
+        [
+            VRF_SELECTION_PREFIX,
+            HASH_SEPARATOR.encode("utf-8").join(
+                [
+                    str(shard_id).encode("utf-8"),
+                    str(round_number).encode("utf-8"),
+                    str(effective_epoch).encode("utf-8"),
+                    membership_hash.encode("utf-8"),
+                ]
+            ),
+        ]
+    )
+    scores: list[tuple[str, int]] = []
+    for node in registry.active_nodes():
+        score_bytes = blake3_hash([selection_seed, node.node_id.encode("utf-8")])
+        score = int.from_bytes(score_bytes[:8], byteorder="big", signed=False)
+        scores.append((node.node_id, score))
+    return sorted(scores, key=lambda item: (item[1], item[0]))
+
+
+def select_vrf_committee(
+    *,
+    shard_id: str,
+    round_number: int,
+    registry: FederationRegistry,
+    committee_size: int,
+    epoch: int | None = None,
+) -> list[str]:
+    """Select a deterministic VRF-style committee from active federation nodes."""
+    if committee_size <= 0:
+        raise ValueError("Committee size must be positive")
+    scores = vrf_selection_scores(
+        shard_id=shard_id,
+        round_number=round_number,
+        registry=registry,
+        epoch=epoch,
+    )
+    if committee_size > len(scores):
+        raise ValueError("Committee size cannot exceed active federation members")
+    return [node_id for node_id, _ in scores[:committee_size]]
+
+
+def select_vrf_leader(
+    *,
+    shard_id: str,
+    round_number: int,
+    registry: FederationRegistry,
+    epoch: int | None = None,
+) -> str:
+    """Select a deterministic VRF-style leader from active federation nodes."""
+    committee = select_vrf_committee(
+        shard_id=shard_id,
+        round_number=round_number,
+        registry=registry,
+        committee_size=1,
+        epoch=epoch,
+    )
+    return committee[0]
 
 
 def append_quorum_certificate_to_ledger(
