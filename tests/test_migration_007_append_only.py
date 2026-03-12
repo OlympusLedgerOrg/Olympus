@@ -62,6 +62,10 @@ def test_ingestion_tables_reject_updates_and_deletes() -> None:
                 b"\x03" * 32,
             ),
         )
+        # Commit so the rows are visible to the subsequent UPDATE/DELETE tests;
+        # without this the connection context manager rolls back the transaction
+        # on exit and the trigger never fires (no matching rows to mutate).
+        conn.commit()
 
     with pytest.raises(
         psycopg.errors.ReadOnlySqlTransaction, match=r"ingestion_batches is append-only"

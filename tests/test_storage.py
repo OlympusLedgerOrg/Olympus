@@ -807,10 +807,12 @@ def _store_ingestion_batch(storage: StorageLayer) -> tuple[str, str]:
         "record_type": "document",
         "version": 1,
         "shard_id": f"ingest/{batch_id}",
-        "content_hash": hash_bytes(b"ingest-content").hex(),
-        "merkle_root": hash_bytes(b"ingest-root").hex(),
+        # Include batch_id so each call produces a distinct content_hash, preventing
+        # unique-constraint violations when multiple tests share the same database.
+        "content_hash": hash_bytes(f"ingest-content-{batch_id}".encode()).hex(),
+        "merkle_root": hash_bytes(f"ingest-root-{batch_id}".encode()).hex(),
         "merkle_proof": {"siblings": []},
-        "ledger_entry_hash": hash_bytes(b"ingest-ledger").hex(),
+        "ledger_entry_hash": hash_bytes(f"ingest-ledger-{batch_id}".encode()).hex(),
         "timestamp": timestamp,
         "canonicalization": {"type": "ingest-test"},
         "persisted": True,
@@ -904,7 +906,15 @@ def test_verify_state_replay_matches_headers_and_ledger(storage, signing_key):
 
 
 def test_verify_state_replay_detects_header_root_divergence(storage, signing_key):
-    """Replay must fail if a persisted root deviates from recomputed SMT state."""
+    """Replay must fail if the persisted SMT state deviates from the shard headers.
+
+    Since shard_headers is append-only (UPDATE/DELETE are rejected by trigger),
+    we simulate divergence by inserting a forged leaf directly into smt_leaves
+    outside of append_record.  This changes the tree state without creating a
+    corresponding header, so:
+    - verify_state_replay detects a count mismatch (more leaves than headers).
+    - get_latest_header detects a root mismatch via _assert_root_matches_state.
+    """
     shard_id = (
         f"test_verify_state_replay_detects_divergence_{datetime.now(timezone.utc).timestamp()}"
     )
@@ -926,23 +936,27 @@ def test_verify_state_replay_detects_header_root_divergence(storage, signing_key
         signing_key=signing_key,
     )
 
-    # Tamper with the latest shard header root to simulate a divergence
+    # Simulate state divergence by inserting a forged leaf that was never
+    # recorded through append_record.  smt_leaves is append-only (UPDATE/DELETE
+    # are blocked), but plain INSERTs are permitted, so this is a realistic
+    # threat vector that the replay verifier must detect.
+    forged_key = hash_bytes(b"forged-leaf-key")
+    forged_value = hash_bytes(b"forged-leaf-value")
     with storage._get_connection() as conn, conn.cursor() as cur:
         cur.execute(
             """
-            UPDATE shard_headers
-            SET root = %s
-            WHERE shard_id = %s AND seq = (
-                SELECT MAX(seq) FROM shard_headers WHERE shard_id = %s
-            )
+            INSERT INTO smt_leaves (shard_id, key, version, value_hash, ts)
+            VALUES (%s, %s, %s, %s, NOW())
             """,
-            (b"\x00" * 32, shard_id, shard_id),
+            (shard_id, forged_key, 1, forged_value),
         )
         conn.commit()
 
-    with pytest.raises(ValueError, match="root mismatch"):
+    # verify_state_replay should detect the discrepancy (count or root mismatch).
+    with pytest.raises(ValueError, match="mismatch"):
         storage.verify_state_replay(shard_id)
 
-    # get_latest_header should also reject the corrupted state
+    # get_latest_header should also reject the diverged state because the
+    # recomputed tree root no longer matches the persisted header root.
     with pytest.raises(ValueError, match="Computed root"):
         storage.get_latest_header(shard_id)

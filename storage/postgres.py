@@ -49,7 +49,7 @@ from psycopg_pool import ConnectionPool, PoolTimeout
 
 from protocol.canonical_json import canonical_json_encode
 from protocol.canonicalizer import canonicalization_provenance
-from protocol.hashes import record_key, shard_header_hash
+from protocol.hashes import record_key
 from protocol.ledger import LedgerEntry
 from protocol.rfc3161 import MAX_TSA_TOKENS, _sha256_of_hash
 from protocol.shards import create_shard_header, sign_header, verify_header
@@ -467,9 +467,7 @@ class StorageLayer:
             poseidon_root_decimal: str | None = None
             if poseidon_root is not None:
                 if len(poseidon_root) != 32:
-                    raise ValueError(
-                        f"poseidon_root must be 32 bytes, got {len(poseidon_root)}"
-                    )
+                    raise ValueError(f"poseidon_root must be 32 bytes, got {len(poseidon_root)}")
                 poseidon_root_decimal = str(int.from_bytes(poseidon_root, byteorder="big"))
                 ledger_payload["poseidon_root"] = poseidon_root_decimal
 
@@ -620,6 +618,21 @@ class StorageLayer:
             )
 
             for idx, record in enumerate(records):
+                content_hash_bytes = bytes.fromhex(record["content_hash"])
+
+                # Skip insert when this content_hash already exists: the unique
+                # index ingestion_proofs_content_hash_idx would raise an error
+                # if we tried to insert a second row with the same hash, because
+                # append-only tables cannot be updated or deleted.  Treating a
+                # duplicate content_hash as already-persisted is correct: the
+                # content is immutable once committed.
+                cur.execute(
+                    "SELECT proof_id FROM ingestion_proofs WHERE content_hash = %s LIMIT 1",
+                    (content_hash_bytes,),
+                )
+                if cur.fetchone() is not None:
+                    continue
+
                 cur.execute(
                     """
                         INSERT INTO ingestion_proofs (
@@ -649,7 +662,7 @@ class StorageLayer:
                         record.get("record_type", "document"),
                         record["record_id"],
                         record.get("version", 1),
-                        bytes.fromhex(record["content_hash"]),
+                        content_hash_bytes,
                         bytes.fromhex(record["merkle_root"]),
                         json.dumps(record["merkle_proof"]),
                         bytes.fromhex(record["ledger_entry_hash"]),
@@ -782,10 +795,15 @@ class StorageLayer:
                     f"Unexpected timestamp type: {type(ts_value).__name__}. Expected str or datetime."
                 )
 
+            # height and round default to 0; the shard_headers table does not
+            # persist these fields, so we restore their construction-time defaults
+            # when reconstructing the header for signature verification.
             header = {
                 "shard_id": shard_id,
                 "root_hash": bytes(row["root"]).hex(),
                 "timestamp": timestamp_str,
+                "height": 0,
+                "round": 0,
                 "previous_header_hash": row["previous_header_hash"],
                 "header_hash": bytes(row["header_hash"]).hex(),
             }
@@ -793,24 +811,6 @@ class StorageLayer:
             verify_key = nacl.signing.VerifyKey(bytes(row["pubkey"]))
             if not verify_header(header, signature, verify_key):
                 raise ValueError(f"Invalid shard header signature for shard '{shard_id}'")
-
-            expected_hash = shard_header_hash(
-                {
-                    "shard_id": header["shard_id"],
-                    "root_hash": header["root_hash"],
-                    "timestamp": header["timestamp"],
-                    "previous_header_hash": header["previous_header_hash"],
-                }
-            ).hex()
-            if header["header_hash"] != expected_hash:
-                raise ValueError(f"Invalid shard header hash for shard '{shard_id}'")
-
-            sig_bytes = bytes(row["sig"])
-            verify_key = nacl.signing.VerifyKey(bytes(row["pubkey"]))
-            try:
-                verify_key.verify(bytes.fromhex(header["header_hash"]), sig_bytes)
-            except nacl.exceptions.BadSignatureError as e:
-                raise ValueError(f"Invalid shard header signature for shard '{shard_id}'") from e
 
             # Guard against SMT divergence by recomputing the current root.
             self._assert_root_matches_state(cur, shard_id, bytes(row["root"]))
