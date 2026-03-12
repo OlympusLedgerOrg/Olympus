@@ -10,7 +10,9 @@ from protocol.telemetry import (
     INGEST_TOTAL,
     LEDGER_HEIGHT,
     PROOF_LATENCY,
+    PARTITION_EVENTS,
     SMT_DIVERGENCE_TOTAL,
+    VIEW_CHANGE_WATERMARK,
     _NoOpSpan,
     _NoOpTracer,
     get_tracer,
@@ -110,6 +112,19 @@ def test_ingest_total_labels_and_inc() -> None:
     INGEST_TOTAL.labels(outcome="committed").inc()
     INGEST_TOTAL.labels(outcome="deduplicated").inc()
     INGEST_TOTAL.labels(outcome="error").inc()
+
+
+def test_partition_events_labels_and_inc() -> None:
+    """PARTITION_EVENTS.labels(...).inc() does not raise."""
+    PARTITION_EVENTS.labels(event="quorum_lost").inc()
+    PARTITION_EVENTS.labels(event="quorum_recovered").inc()
+    PARTITION_EVENTS.labels(event="quorum_healthy").inc()
+
+
+def test_view_change_watermark_labels_and_set() -> None:
+    """VIEW_CHANGE_WATERMARK.labels(...).set() does not raise."""
+    VIEW_CHANGE_WATERMARK.labels(bound="low").set(0)
+    VIEW_CHANGE_WATERMARK.labels(bound="high").set(5)
 
 
 # ---------------------------------------------------------------------------

@@ -164,6 +164,18 @@ try:  # pragma: no cover
         labelnames=["outcome"],  # "committed", "deduplicated", "error"
     )
 
+    PARTITION_EVENTS = _prom.Counter(
+        "olympus_partition_events_total",
+        "Partition detector events by outcome",
+        labelnames=["event"],  # "quorum_lost", "quorum_recovered", "quorum_healthy"
+    )
+
+    VIEW_CHANGE_WATERMARK = _prom.Gauge(
+        "olympus_view_change_watermark",
+        "Current view-change watermarks by bound",
+        labelnames=["bound"],  # "low", "high"
+    )
+
     _PROM_AVAILABLE = True
 
 except ImportError:
@@ -185,6 +197,8 @@ except ImportError:
     LEDGER_HEIGHT = _NullMetric()
     SMT_DIVERGENCE_TOTAL = _NullMetric()
     INGEST_TOTAL = _NullMetric()
+    PARTITION_EVENTS = _NullMetric()
+    VIEW_CHANGE_WATERMARK = _NullMetric()
 
 
 def prometheus_available() -> bool:
