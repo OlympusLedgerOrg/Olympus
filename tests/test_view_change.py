@@ -2,7 +2,9 @@
 
 from types import SimpleNamespace
 
+import hypothesis.strategies as st
 import pytest
+from hypothesis import assume, given, settings
 
 from protocol.view_change import (
     ConsensusState,
@@ -68,3 +70,214 @@ def test_watermark_rejects_backward_motion() -> None:
     consensus.advance_watermark(2)
     with pytest.raises(ValueError):
         consensus.advance_watermark(1)
+
+
+# Property-based tests for watermark GC, grace period math, and epoch boundary logic
+
+
+@given(
+    round_sequence=st.lists(st.integers(min_value=0, max_value=100), min_size=1, max_size=20, unique=True),
+    max_window=st.integers(min_value=1, max_value=10),
+)
+@settings(max_examples=100, deadline=None)
+def test_watermark_gc_maintains_window_invariant(round_sequence: list[int], max_window: int) -> None:
+    """
+    Property: After advancing watermark, low/high gap never exceeds max_watermark_window.
+    """
+    registry = ValidatorRegistry({"a", "b"}, epoch=0)
+    consensus = ConsensusState(max_watermark_window=max_window)
+
+    # Start rounds in sorted order
+    for round_num in sorted(round_sequence):
+        consensus.start_round(round_num=round_num, start_epoch=round_num, registry=registry)
+
+    # Advance to highest round
+    highest = max(round_sequence)
+    consensus.advance_watermark(highest)
+
+    # Verify window constraint
+    gap = consensus.high_watermark - consensus.low_watermark
+    assert gap <= max_window, f"Gap {gap} exceeds max_window {max_window}"
+
+    # Verify no rounds below cutoff remain
+    cutoff = highest - max_window
+    for round_num in consensus.voting_rounds:
+        assert round_num >= cutoff, f"Round {round_num} below cutoff {cutoff} should be GC'd"
+
+
+@given(
+    round_sequence=st.lists(st.integers(min_value=0, max_value=50), min_size=2, max_size=15, unique=True),
+    watermark_advances=st.lists(st.integers(min_value=0, max_value=50), min_size=1, max_size=10),
+)
+@settings(max_examples=100, deadline=None)
+def test_watermark_never_moves_backward(round_sequence: list[int], watermark_advances: list[int]) -> None:
+    """
+    Property: High watermark must be monotonically increasing.
+    """
+    registry = ValidatorRegistry({"x", "y"}, epoch=0)
+    consensus = ConsensusState()
+
+    sorted_rounds = sorted(round_sequence)
+    for round_num in sorted_rounds:
+        consensus.start_round(round_num=round_num, start_epoch=round_num, registry=registry)
+
+    current_high = consensus.high_watermark
+    for new_high in watermark_advances:
+        if new_high >= current_high:
+            consensus.advance_watermark(new_high)
+            assert consensus.high_watermark == new_high
+            current_high = new_high
+        else:
+            # Attempting backward motion should raise
+            with pytest.raises(ValueError, match="cannot move backwards"):
+                consensus.advance_watermark(new_high)
+
+
+@given(
+    grace_epochs=st.integers(min_value=0, max_value=10),
+    start_epoch=st.integers(min_value=0, max_value=50),
+    check_epochs=st.lists(st.integers(min_value=0, max_value=60), min_size=1, max_size=10),
+)
+@settings(max_examples=100, deadline=None)
+def test_grace_period_boundary_is_start_plus_grace(
+    grace_epochs: int, start_epoch: int, check_epochs: list[int]
+) -> None:
+    """
+    Property: Grace period end is exactly start_epoch + grace_epochs.
+    Within grace period (current_epoch <= grace_period_end), check membership at start_epoch.
+    After grace period, check membership at current_epoch.
+    """
+    registry = ValidatorRegistry({"node-a", "node-b"}, epoch=0)
+    # Remove node-b at an epoch after start
+    removal_epoch = start_epoch + grace_epochs + 2
+    registry.apply_change(epoch=removal_epoch, removed_members={"node-b"})
+
+    snapshot = registry.get_snapshot(start_epoch)
+    round_state = VotingRound(
+        round_num=1, start_epoch=start_epoch, registry_snapshot=snapshot, grace_epochs=grace_epochs
+    )
+
+    expected_grace_end = start_epoch + grace_epochs
+    assert round_state.grace_period_end == expected_grace_end
+
+    signature_a = SimpleNamespace(node_id="node-a")
+    signature_b = SimpleNamespace(node_id="node-b")
+
+    for current_epoch in check_epochs:
+        if current_epoch < start_epoch:
+            # Before round start is invalid
+            with pytest.raises(ValueError, match="cannot precede round start"):
+                round_state.is_signature_valid(signature_a, current_epoch)
+            continue
+
+        # node-a is always valid (member from epoch 0)
+        assert round_state.is_signature_valid(signature_a, current_epoch)
+
+        if current_epoch <= expected_grace_end:
+            # During grace period: node-b valid because it was member at start_epoch
+            assert round_state.is_signature_valid(signature_b, current_epoch)
+        elif current_epoch < removal_epoch:
+            # After grace but before removal: node-b still valid
+            assert round_state.is_signature_valid(signature_b, current_epoch)
+        else:
+            # After removal: node-b invalid
+            assert not round_state.is_signature_valid(signature_b, current_epoch)
+
+
+@given(
+    membership_changes=st.lists(
+        st.tuples(
+            st.integers(min_value=0, max_value=100),  # epoch
+            st.sets(st.sampled_from(["n1", "n2", "n3", "n4", "n5"]), min_size=1, max_size=3),  # members
+        ),
+        min_size=1,
+        max_size=10,
+    ),
+    query_epochs=st.lists(st.integers(min_value=0, max_value=100), min_size=1, max_size=5),
+)
+@settings(max_examples=100, deadline=None)
+def test_registry_snapshot_membership_reflects_history(
+    membership_changes: list[tuple[int, set[str]]], query_epochs: list[int]
+) -> None:
+    """
+    Property: RegistrySnapshot.is_member_at_epoch returns membership based on history up to that epoch.
+    """
+    # Start with initial members
+    initial_members = membership_changes[0][1]
+    assume(len(initial_members) > 0)
+
+    registry = ValidatorRegistry(initial_members, epoch=0)
+
+    # Apply changes in epoch order
+    sorted_changes = sorted(membership_changes[1:], key=lambda x: x[0])
+    for change_epoch, new_members in sorted_changes:
+        if change_epoch == 0:
+            continue
+        # Calculate delta
+        current = set(registry._history[-1].members)
+        added = new_members - current
+        removed = current - new_members
+        if not (new_members - removed):  # Would empty the registry
+            continue
+        try:
+            registry.apply_change(epoch=change_epoch, added_members=added, removed_members=removed)
+        except ValueError:
+            # Skip invalid changes (non-monotonic epochs)
+            pass
+
+    snapshot = registry.get_snapshot(snapshot_epoch=max(query_epochs, default=0))
+
+    for query_epoch in query_epochs:
+        if query_epoch < 0:
+            continue
+
+        # Find expected members: use the most recent state <= query_epoch
+        expected_members = registry._history[0].members
+        for state in registry._history:
+            if state.epoch > query_epoch:
+                break
+            expected_members = state.members
+
+        # Verify snapshot returns correct membership
+        for node_id in expected_members:
+            assert snapshot.is_member_at_epoch(node_id, query_epoch), (
+                f"Node {node_id} should be member at epoch {query_epoch}"
+            )
+
+
+@given(
+    rounds_to_start=st.lists(st.integers(min_value=0, max_value=20), min_size=5, max_size=15, unique=True),
+    window_size=st.integers(min_value=2, max_value=8),
+)
+@settings(max_examples=100, deadline=None)
+def test_gc_old_rounds_removes_only_old_rounds(
+    rounds_to_start: list[int], window_size: int
+) -> None:
+    """
+    Property: gc_old_rounds(cutoff) removes exactly those rounds with round_num < cutoff.
+    """
+    registry = ValidatorRegistry({"node"}, epoch=0)
+    consensus = ConsensusState(max_watermark_window=window_size)
+
+    for round_num in sorted(rounds_to_start):
+        consensus.start_round(round_num=round_num, start_epoch=round_num, registry=registry)
+
+    # Pick a cutoff in the middle of the range
+    sorted_rounds = sorted(rounds_to_start)
+    cutoff = sorted_rounds[len(sorted_rounds) // 2] if len(sorted_rounds) > 1 else sorted_rounds[0] + 1
+
+    # Determine expected remaining rounds
+    expected_remaining = {r for r in rounds_to_start if r >= cutoff}
+
+    # Execute GC
+    consensus.gc_old_rounds(cutoff)
+
+    # Verify only rounds >= cutoff remain
+    assert set(consensus.voting_rounds.keys()) == expected_remaining
+
+    # Verify low_watermark updated correctly
+    if expected_remaining:
+        assert consensus.low_watermark == min(expected_remaining)
+    else:
+        assert consensus.low_watermark == cutoff
+
