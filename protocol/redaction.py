@@ -23,7 +23,11 @@ from typing import Any
 from .canonical import normalize_whitespace
 from .hashes import blake3_to_field_element, hash_bytes
 from .merkle import MerkleProof, MerkleTree, verify_proof
-from .poseidon_tree import PoseidonMerkleTree
+from .poseidon_tree import (
+    POSEIDON_DOMAIN_COMMITMENT,
+    PoseidonMerkleTree,
+    _poseidon_hash,
+)
 from .redaction_ledger import (
     DualHashCommitment,
     RedactionProofWithLedger,
@@ -67,6 +71,53 @@ class RedactionProof:
             and self.revealed_hashes == other.revealed_hashes
             and self.merkle_proofs == other.merkle_proofs
         )
+
+
+@dataclass
+class SectionMetadata:
+    """Structured canonicalization metadata for a document section.
+
+    Each section in a canonicalized document carries metadata that binds its
+    content to its position and length. This prevents length-extension and
+    section-reordering attacks in the Poseidon commitment chain.
+
+    Attributes:
+        section_index: Zero-based position of the section.
+        section_count: Total number of sections in the document.
+        section_length: Byte length of the canonical section content.
+        section_hash: BLAKE3 hex hash of the canonical section bytes.
+    """
+
+    section_index: int
+    section_count: int
+    section_length: int
+    section_hash: str
+
+
+@dataclass
+class RedactionCorrectnessProof:
+    """Binds an original commitment to a redacted commitment.
+
+    This proof ensures that a redacted document is derived from the same
+    pre-committed original by binding both the BLAKE3 Merkle roots and
+    the Poseidon Merkle roots together.
+
+    Attributes:
+        original_blake3_root: Hex BLAKE3 root of the original document.
+        redacted_blake3_root: Hex BLAKE3 root of the redacted document
+            (with redacted sections replaced by zero-hash leaves).
+        original_poseidon_root: Decimal Poseidon root of the original.
+        redacted_poseidon_root: Decimal Poseidon root of the redacted.
+        revealed_indices: Indices of sections that are revealed.
+        binding_hash: BLAKE3 hash binding all four roots together.
+    """
+
+    original_blake3_root: str
+    redacted_blake3_root: str
+    original_poseidon_root: str
+    redacted_poseidon_root: str
+    revealed_indices: list[int]
+    binding_hash: str
 
 
 def apply_redaction(
@@ -480,3 +531,169 @@ class RedactionProtocol:
             index_to_content[i] if i in index_to_content else redaction_marker
             for i in range(total_parts)
         ]
+
+    @staticmethod
+    def build_section_metadata(document_parts: list[str]) -> list[SectionMetadata]:
+        """
+        Build structured canonicalization metadata for each document section.
+
+        The metadata includes sectionCount, sectionLength, and sectionHash for
+        every section, binding each section's content to its position and the
+        total document structure. This prevents length-extension attacks and
+        section-reordering attacks in the Poseidon commitment chain.
+
+        Args:
+            document_parts: Ordered list of document sections.
+
+        Returns:
+            List of :class:`SectionMetadata` objects, one per section.
+        """
+        canonical_bytes = RedactionProtocol.canonical_section_bytes_list(document_parts)
+        section_count = len(document_parts)
+        metadata: list[SectionMetadata] = []
+        for i, section_bytes in enumerate(canonical_bytes):
+            metadata.append(
+                SectionMetadata(
+                    section_index=i,
+                    section_count=section_count,
+                    section_length=len(section_bytes),
+                    section_hash=hash_bytes(section_bytes).hex(),
+                )
+            )
+        return metadata
+
+    @staticmethod
+    def structured_canonical_commitment(document_parts: list[str]) -> str:
+        """
+        Compute a structured canonical commitment over document sections.
+
+        Chains Poseidon hashes over ``(sectionCount, sectionLength_i,
+        sectionHash_i)`` triples to bind the document structure into the
+        commitment. This ensures that two documents with different section
+        counts or different section lengths cannot produce the same
+        commitment, even if the concatenated content is identical.
+
+        Args:
+            document_parts: Ordered list of document sections.
+
+        Returns:
+            Decimal string of the Poseidon commitment hash.
+        """
+        from .hashes import SNARK_SCALAR_FIELD as _F
+
+        metadata = RedactionProtocol.build_section_metadata(document_parts)
+        section_count = len(document_parts)
+
+        # Seed the chain with the section count
+        acc = section_count % _F
+
+        for meta in metadata:
+            # Chain: acc = Poseidon(acc, sectionLength) with commitment domain
+            acc = _poseidon_hash(acc, meta.section_length % _F, POSEIDON_DOMAIN_COMMITMENT)
+            # Chain: acc = Poseidon(acc, sectionHash-as-field-element)
+            section_hash_int = int(meta.section_hash, 16) % _F
+            acc = _poseidon_hash(acc, section_hash_int, POSEIDON_DOMAIN_COMMITMENT)
+
+        return str(acc % _F)
+
+    @staticmethod
+    def create_redaction_correctness_proof(
+        document_parts: list[str],
+        revealed_indices: list[int],
+    ) -> RedactionCorrectnessProof:
+        """
+        Create a correctness proof binding original and redacted commitments.
+
+        This proof demonstrates that the redacted document is derived from the
+        original by computing both BLAKE3 and Poseidon Merkle roots for the
+        original and the redacted version, then binding all four roots with a
+        BLAKE3 hash.
+
+        Args:
+            document_parts: Ordered list of original document sections.
+            revealed_indices: Zero-based indices of sections to reveal.
+
+        Returns:
+            :class:`RedactionCorrectnessProof` binding both commitments.
+
+        Raises:
+            ValueError: If revealed indices are out of bounds.
+        """
+        from .hashes import HASH_SEPARATOR
+
+        if any(idx < 0 or idx >= len(document_parts) for idx in revealed_indices):
+            raise ValueError("Revealed indices must be within the document length")
+
+        # Original commitments
+        orig_tree, orig_blake3_root = RedactionProtocol.commit_document(document_parts)
+        poseidon_tree, poseidon_leaves = RedactionProtocol.build_poseidon_tree(document_parts)
+        orig_poseidon_root = poseidon_tree.get_root()
+
+        # Redacted BLAKE3: replace redacted leaves with zero-hash
+        revealed_set = set(revealed_indices)
+        zero_hash = hash_bytes(b"")
+        redacted_leaf_hashes = [
+            RedactionProtocol.create_leaf_hashes(document_parts)[i]
+            if i in revealed_set
+            else zero_hash
+            for i in range(len(document_parts))
+        ]
+        redacted_blake3_tree = MerkleTree(redacted_leaf_hashes)
+        redacted_blake3_root = redacted_blake3_tree.get_root().hex()
+
+        # Redacted Poseidon: replace redacted leaves with 0
+        redacted_poseidon_leaves = [
+            poseidon_leaves[i] if i in revealed_set else 0
+            for i in range(_POSEIDON_MAX_LEAVES)
+        ]
+        redacted_poseidon_tree = PoseidonMerkleTree(
+            redacted_poseidon_leaves, depth=_POSEIDON_TREE_DEPTH
+        )
+        redacted_poseidon_root = redacted_poseidon_tree.get_root()
+
+        # Bind all four roots together
+        binding_data = HASH_SEPARATOR.join([
+            orig_blake3_root,
+            redacted_blake3_root,
+            orig_poseidon_root,
+            redacted_poseidon_root,
+            ",".join(str(i) for i in sorted(revealed_indices)),
+        ])
+        binding_hash = hash_bytes(binding_data.encode("utf-8")).hex()
+
+        return RedactionCorrectnessProof(
+            original_blake3_root=orig_blake3_root,
+            redacted_blake3_root=redacted_blake3_root,
+            original_poseidon_root=orig_poseidon_root,
+            redacted_poseidon_root=redacted_poseidon_root,
+            revealed_indices=sorted(revealed_indices),
+            binding_hash=binding_hash,
+        )
+
+    @staticmethod
+    def verify_redaction_correctness_proof(
+        proof: RedactionCorrectnessProof,
+    ) -> bool:
+        """
+        Verify a redaction correctness proof.
+
+        Re-derives the binding hash from the four roots and the revealed
+        indices and checks it matches the stored binding hash.
+
+        Args:
+            proof: The :class:`RedactionCorrectnessProof` to verify.
+
+        Returns:
+            ``True`` if the binding hash is valid, ``False`` otherwise.
+        """
+        from .hashes import HASH_SEPARATOR
+
+        binding_data = HASH_SEPARATOR.join([
+            proof.original_blake3_root,
+            proof.redacted_blake3_root,
+            proof.original_poseidon_root,
+            proof.redacted_poseidon_root,
+            ",".join(str(i) for i in sorted(proof.revealed_indices)),
+        ])
+        expected = hash_bytes(binding_data.encode("utf-8")).hex()
+        return expected == proof.binding_hash

@@ -2,7 +2,13 @@ import pytest
 
 from protocol.hashes import SNARK_SCALAR_FIELD, blake3_to_field_element
 from protocol.poseidon_bn128 import poseidon_hash_bn128
-from protocol.poseidon_tree import PoseidonMerkleTree, _to_field_int, build_poseidon_witness_inputs
+from protocol.poseidon_tree import (
+    POSEIDON_DOMAIN_NODE,
+    PoseidonMerkleTree,
+    _to_field_int,
+    build_poseidon_witness_inputs,
+    poseidon_hash_with_domain,
+)
 
 
 def test_blake3_to_field_element_deterministic_and_bounded():
@@ -14,13 +20,14 @@ def test_blake3_to_field_element_deterministic_and_bounded():
 
 
 def _recompute_root(leaf: int, path_elements: list[str], path_indices: list[int]) -> int:
+    """Recompute Merkle root using domain-separated Poseidon hashing."""
     current = leaf
     for sibling, idx in zip(path_elements, path_indices):
         sib = int(sibling)
         if idx == 0:
-            current = poseidon_hash_bn128(current, sib)
+            current = poseidon_hash_with_domain(current, sib, POSEIDON_DOMAIN_NODE)
         else:
-            current = poseidon_hash_bn128(sib, current)
+            current = poseidon_hash_with_domain(sib, current, POSEIDON_DOMAIN_NODE)
         current %= SNARK_SCALAR_FIELD
     return current % SNARK_SCALAR_FIELD
 

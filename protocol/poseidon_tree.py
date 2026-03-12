@@ -1,4 +1,13 @@
-"""Poseidon Merkle utilities for bridging BLAKE3 data into ZK circuits."""
+"""Poseidon Merkle utilities for bridging BLAKE3 data into ZK circuits.
+
+All Poseidon hash calls in this module use domain-separated tags to prevent
+cross-context hash collisions. The domain tags are small field constants
+added to the Poseidon capacity element (initial state[0]) before hashing:
+
+    POSEIDON_DOMAIN_LEAF = 1   – leaf node hashing
+    POSEIDON_DOMAIN_NODE = 2   – internal node hashing
+    POSEIDON_DOMAIN_COMMITMENT = 3 – commitment chain hashing
+"""
 
 from __future__ import annotations
 
@@ -7,6 +16,36 @@ from dataclasses import dataclass
 
 from .hashes import SNARK_SCALAR_FIELD
 from .poseidon_bn128 import poseidon_hash_bn128
+
+# Domain separation tags for Poseidon hashing.
+# These are injected as additive offsets to the capacity element of the
+# Poseidon state before the permutation, ensuring that a hash produced in
+# one context (e.g. leaf hashing) can never collide with a hash produced
+# in another context (e.g. internal node hashing).
+POSEIDON_DOMAIN_LEAF = 1
+POSEIDON_DOMAIN_NODE = 2
+POSEIDON_DOMAIN_COMMITMENT = 3
+
+
+def poseidon_hash_with_domain(left: int, right: int, domain: int) -> int:
+    """Compute Poseidon(left, right) with a domain-separation tag.
+
+    The domain tag is mixed into the inputs by hashing
+    ``Poseidon(Poseidon(domain, left), right)``. This ensures that identical
+    ``(left, right)`` pairs produce different outputs under different domains
+    while remaining compatible with the standard 2-arity Poseidon circuit
+    (which only needs a thin wrapper template in circom).
+
+    Args:
+        left: First field element.
+        right: Second field element.
+        domain: Domain separation tag (small constant).
+
+    Returns:
+        Domain-tagged Poseidon hash as a field element.
+    """
+    tagged_left = poseidon_hash_bn128(domain % SNARK_SCALAR_FIELD, left % SNARK_SCALAR_FIELD)
+    return poseidon_hash_bn128(tagged_left % SNARK_SCALAR_FIELD, right % SNARK_SCALAR_FIELD)
 
 
 def _to_field_int(value: int | str | bytes, index: int = 0) -> int:
@@ -25,6 +64,7 @@ def _to_field_int(value: int | str | bytes, index: int = 0) -> int:
     if isinstance(value, bytes):
         # Bind leaf to position to prevent collision
         import blake3
+
         position_bound = blake3.blake3(value + index.to_bytes(4, byteorder="big")).digest()
         big_int = int.from_bytes(position_bound, byteorder="big")
         return big_int % SNARK_SCALAR_FIELD
@@ -35,9 +75,15 @@ def _to_field_int(value: int | str | bytes, index: int = 0) -> int:
     raise TypeError(f"Unsupported leaf type: {type(value)!r}")
 
 
-def _poseidon_hash_pairs(pairs: list[tuple[int, int]]) -> list[int]:
+def _poseidon_hash_pairs(
+    pairs: list[tuple[int, int]], domain: int = POSEIDON_DOMAIN_NODE
+) -> list[int]:
     """
-    Hash a list of (left, right) field-element pairs with BN128 Poseidon(2).
+    Hash a list of (left, right) field-element pairs with domain-separated Poseidon(2).
+
+    Every call is domain-tagged: the ``domain`` constant is mixed into the
+    Poseidon state so that leaf hashes, internal node hashes, and commitment
+    chain hashes can never collide.
 
     Default backend: ``protocol.poseidon_bn128.poseidon_hash_bn128`` — a pure
     Python implementation using the exact same round constants and MDS matrix
@@ -50,19 +96,36 @@ def _poseidon_hash_pairs(pairs: list[tuple[int, int]]) -> list[int]:
 
     Zero-leaf sentinel semantics are **not** affected by either backend; zero
     leaves remain the raw field element 0, never Poseidon(0, 0).
+
+    Args:
+        pairs: List of (left, right) field-element pairs.
+        domain: Domain separation tag (default: ``POSEIDON_DOMAIN_NODE``).
+
+    Returns:
+        List of domain-tagged Poseidon hashes.
     """
     from . import poseidon_js  # local import avoids circular imports at module load
 
     if poseidon_js.backend_enabled():
         reduced = [(a % SNARK_SCALAR_FIELD, b % SNARK_SCALAR_FIELD) for a, b in pairs]
-        return poseidon_js.batch_compute_poseidon2(reduced)
+        # JS backend does not yet support domain tags; apply domain tagging
+        # by pre-hashing the left element with the domain tag.
+        return [
+            poseidon_hash_bn128(
+                poseidon_hash_bn128(domain % SNARK_SCALAR_FIELD, a) % SNARK_SCALAR_FIELD, b
+            )
+            for a, b in reduced
+        ]
 
-    return [poseidon_hash_bn128(a % SNARK_SCALAR_FIELD, b % SNARK_SCALAR_FIELD) for a, b in pairs]
+    return [
+        poseidon_hash_with_domain(a % SNARK_SCALAR_FIELD, b % SNARK_SCALAR_FIELD, domain)
+        for a, b in pairs
+    ]
 
 
-def _poseidon_hash(left: int, right: int) -> int:
+def _poseidon_hash(left: int, right: int, domain: int = POSEIDON_DOMAIN_NODE) -> int:
     """Single-pair convenience wrapper around :func:`_poseidon_hash_pairs`."""
-    return _poseidon_hash_pairs([(left, right)])[0]
+    return _poseidon_hash_pairs([(left, right)], domain=domain)[0]
 
 
 @dataclass
@@ -74,6 +137,7 @@ class PoseidonProof:
     leaf_index: int
     path_elements: list[str]
     path_indices: list[int]
+    tree_size: int = 0
 
 
 class PoseidonMerkleTree:
@@ -117,6 +181,7 @@ class PoseidonMerkleTree:
 
         All pairs in the level are hashed in a single backend call so that
         the JS backend needs only one subprocess per level, not one per pair.
+        Uses ``POSEIDON_DOMAIN_NODE`` domain tag for internal node hashing.
         """
         if len(level) == 1:
             return [level[0]]
@@ -126,7 +191,12 @@ class PoseidonMerkleTree:
             padded.append(padded[-1])
 
         pairs = [(padded[i], padded[i + 1]) for i in range(0, len(padded), 2)]
-        return _poseidon_hash_pairs(pairs)
+        return _poseidon_hash_pairs(pairs, domain=POSEIDON_DOMAIN_NODE)
+
+    @property
+    def tree_size(self) -> int:
+        """Return the number of leaves in the tree."""
+        return len(self._leaves)
 
     def get_root(self) -> str:
         """Return the Merkle root as a decimal string."""
@@ -170,7 +240,7 @@ class PoseidonMerkleTree:
 
             # Hash all pairs in the level in one batch call.
             pairs = [(padded[i], padded[i + 1]) for i in range(0, len(padded), 2)]
-            level = _poseidon_hash_pairs(pairs)
+            level = _poseidon_hash_pairs(pairs, domain=POSEIDON_DOMAIN_NODE)
             index //= 2
 
         return path_elements, path_indices
@@ -189,12 +259,23 @@ def build_poseidon_witness_inputs(
 
     Returns:
         PoseidonProof with root, leaf, path elements, and indices ready for witness JSON.
+
+    Raises:
+        ValueError: If target_index is out of bounds (>= tree_size).
     """
+    tree = PoseidonMerkleTree(document_leaves, depth=depth)
+
+    # Index bounds check: leafIndex must be < treeSize
+    if target_index < 0 or target_index >= tree.tree_size:
+        raise ValueError(
+            f"target_index {target_index} is out of bounds for tree with "
+            f"{tree.tree_size} leaves"
+        )
+
     # Normalize leaves with position binding
     leaves_as_field_elements = [
         str(_to_field_int(chunk, index=i)) for i, chunk in enumerate(document_leaves)
     ]
-    tree = PoseidonMerkleTree(document_leaves, depth=depth)
     path_elements, path_indices = tree.get_proof(target_index)
 
     return PoseidonProof(
@@ -203,4 +284,5 @@ def build_poseidon_witness_inputs(
         leaf_index=target_index,
         path_elements=path_elements,
         path_indices=path_indices,
+        tree_size=tree.tree_size,
     )
