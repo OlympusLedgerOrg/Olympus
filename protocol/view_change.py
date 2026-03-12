@@ -9,8 +9,10 @@ garbage-collect finalized state.
 
 from __future__ import annotations
 
+from collections.abc import Iterable, Sequence
 from dataclasses import dataclass, field
-from typing import Iterable, Sequence
+
+from .telemetry import VIEW_CHANGE_WATERMARK, get_tracer
 
 
 # Inclusive grace-period length applied to every voting round unless a custom
@@ -20,6 +22,8 @@ GRACE_EPOCHS = 2
 # Maximum gap allowed between low/high watermarks before old rounds must be
 # garbage-collected.
 MAX_WATERMARK_WINDOW = 50
+
+_view_tracer = get_tracer("olympus.view_change")
 
 
 @dataclass(frozen=True)
@@ -157,37 +161,60 @@ class ConsensusState:
         """Create and register a new voting round."""
         if round_num in self.voting_rounds:
             raise ValueError(f"Round {round_num} already exists")
-        snapshot = registry.get_snapshot(start_epoch)
-        voting_round = VotingRound(
-            round_num=round_num,
-            start_epoch=start_epoch,
-            registry_snapshot=snapshot,
-            grace_epochs=GRACE_EPOCHS if grace_epochs is None else grace_epochs,
-        )
-        had_rounds = bool(self.voting_rounds)
-        self.voting_rounds[round_num] = voting_round
-        if not had_rounds:
-            self.low_watermark = round_num
-        else:
-            self.low_watermark = min(self.low_watermark, round_num)
-        self.high_watermark = max(self.high_watermark, round_num)
-        return voting_round
+
+        with _view_tracer.start_as_current_span("view_change.start_round") as span:
+            span.set_attribute("round_num", round_num)
+            span.set_attribute("start_epoch", start_epoch)
+            span.set_attribute("grace_epochs", GRACE_EPOCHS if grace_epochs is None else grace_epochs)
+            span.set_attribute("registry_epoch", registry.current_epoch)
+
+            snapshot = registry.get_snapshot(start_epoch)
+            voting_round = VotingRound(
+                round_num=round_num,
+                start_epoch=start_epoch,
+                registry_snapshot=snapshot,
+                grace_epochs=GRACE_EPOCHS if grace_epochs is None else grace_epochs,
+            )
+            had_rounds = bool(self.voting_rounds)
+            self.voting_rounds[round_num] = voting_round
+            if not had_rounds:
+                self.low_watermark = round_num
+            else:
+                self.low_watermark = min(self.low_watermark, round_num)
+            self.high_watermark = max(self.high_watermark, round_num)
+
+            VIEW_CHANGE_WATERMARK.labels(bound="low").set(self.low_watermark)
+            VIEW_CHANGE_WATERMARK.labels(bound="high").set(self.high_watermark)
+            return voting_round
 
     def gc_old_rounds(self, cutoff_round: int) -> None:
         """Drop rounds older than ``cutoff_round`` and advance the low watermark."""
-        removable = [round_num for round_num in self.voting_rounds if round_num < cutoff_round]
-        for round_num in removable:
-            self.voting_rounds.pop(round_num, None)
-        if self.voting_rounds:
-            self.low_watermark = min(self.voting_rounds.keys())
-        else:
-            self.low_watermark = cutoff_round
+        with _view_tracer.start_as_current_span("view_change.gc_old_rounds") as span:
+            span.set_attribute("cutoff_round", cutoff_round)
+
+            removable = [round_num for round_num in self.voting_rounds if round_num < cutoff_round]
+            span.set_attribute("removed_rounds", len(removable))
+            for round_num in removable:
+                self.voting_rounds.pop(round_num, None)
+            if self.voting_rounds:
+                self.low_watermark = min(self.voting_rounds.keys())
+            else:
+                self.low_watermark = cutoff_round
+
+            VIEW_CHANGE_WATERMARK.labels(bound="low").set(self.low_watermark)
+            VIEW_CHANGE_WATERMARK.labels(bound="high").set(self.high_watermark)
 
     def advance_watermark(self, new_high: int) -> None:
         """Advance the high watermark while enforcing the maximum window size."""
-        if new_high < self.high_watermark:
-            raise ValueError("High watermark cannot move backwards")
-        if new_high - self.low_watermark > self.max_watermark_window:
-            cutoff = new_high - self.max_watermark_window
-            self.gc_old_rounds(cutoff)
-        self.high_watermark = new_high
+        with _view_tracer.start_as_current_span("view_change.advance_watermark") as span:
+            span.set_attribute("previous_high", self.high_watermark)
+            span.set_attribute("requested_high", new_high)
+            if new_high < self.high_watermark:
+                raise ValueError("High watermark cannot move backwards")
+            if new_high - self.low_watermark > self.max_watermark_window:
+                cutoff = new_high - self.max_watermark_window
+                span.set_attribute("gc_cutoff", cutoff)
+                self.gc_old_rounds(cutoff)
+            self.high_watermark = new_high
+            VIEW_CHANGE_WATERMARK.labels(bound="high").set(self.high_watermark)
+            VIEW_CHANGE_WATERMARK.labels(bound="low").set(self.low_watermark)

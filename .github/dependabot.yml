@@ -10,6 +10,36 @@ updates:
     labels:
       - "dependencies"
       - "security"
+  - package-ecosystem: "gomod"
+    directory: "/verifiers/go"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 10
+    reviewers:
+      - "wombatvagina69-crypto"
+    labels:
+      - "dependencies"
+      - "security"
+  - package-ecosystem: "cargo"
+    directory: "/verifiers/rust"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 10
+    reviewers:
+      - "wombatvagina69-crypto"
+    labels:
+      - "dependencies"
+      - "security"
+  - package-ecosystem: "npm"
+    directory: "/verifiers/javascript"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 10
+    reviewers:
+      - "wombatvagina69-crypto"
+    labels:
+      - "dependencies"
+      - "security"
   - package-ecosystem: "github-actions"
     directory: "/"
     schedule:
