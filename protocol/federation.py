@@ -988,13 +988,25 @@ def vrf_selection_scores(
     round_number: int,
     registry: FederationRegistry,
     epoch: int | None = None,
+    round_entropy: str | None = None,
 ) -> list[tuple[str, int]]:
-    """Return deterministic VRF-style selection scores for active federation nodes."""
+    """Return deterministic VRF-style selection scores for active federation nodes.
+
+    Optional ``round_entropy`` lets callers bind commit-reveal randomness (and any
+    associated non-interactive proof transcript hash) into the selection seed to
+    mitigate VRF grinding by adaptive participants.
+    """
     if round_number < 0:
         raise ValueError("Round number must be non-negative")
     effective_epoch = registry.epoch if epoch is None else int(epoch)
     if effective_epoch < 0:
         raise ValueError("Epoch must be non-negative")
+    entropy_bytes = b""
+    if round_entropy is not None:
+        try:
+            entropy_bytes = bytes.fromhex(round_entropy)
+        except ValueError as exc:
+            raise ValueError("Round entropy must be a valid hex string") from exc
     membership_hash = registry.membership_hash()
     selection_seed = blake3_hash(
         [
@@ -1005,6 +1017,7 @@ def vrf_selection_scores(
                     str(round_number).encode("utf-8"),
                     str(effective_epoch).encode("utf-8"),
                     membership_hash.encode("utf-8"),
+                    entropy_bytes,
                 ]
             ),
         ]
@@ -1024,6 +1037,7 @@ def select_vrf_committee(
     registry: FederationRegistry,
     committee_size: int,
     epoch: int | None = None,
+    round_entropy: str | None = None,
 ) -> list[str]:
     """Select a deterministic VRF-style committee from active federation nodes."""
     if committee_size <= 0:
@@ -1033,6 +1047,7 @@ def select_vrf_committee(
         round_number=round_number,
         registry=registry,
         epoch=epoch,
+        round_entropy=round_entropy,
     )
     if committee_size > len(scores):
         raise ValueError("Committee size cannot exceed active federation members")
@@ -1045,6 +1060,7 @@ def select_vrf_leader(
     round_number: int,
     registry: FederationRegistry,
     epoch: int | None = None,
+    round_entropy: str | None = None,
 ) -> str:
     """Select a deterministic VRF-style leader from active federation nodes."""
     committee = select_vrf_committee(
@@ -1053,8 +1069,75 @@ def select_vrf_leader(
         registry=registry,
         committee_size=1,
         epoch=epoch,
+        round_entropy=round_entropy,
     )
     return committee[0]
+
+
+def build_vrf_reveal_commitment(*, node_id: str, reveal: str) -> str:
+    """Build a deterministic commit-reveal binding for VRF anti-grinding rounds."""
+    payload = HASH_SEPARATOR.encode("utf-8").join(
+        [node_id.encode("utf-8"), reveal.encode("utf-8")]
+    )
+    return blake3_hash([_VRF_COMMIT_REVEAL_PREFIX, payload]).hex()
+
+
+def derive_vrf_round_entropy(
+    *,
+    shard_id: str,
+    round_number: int,
+    epoch: int,
+    commitments: dict[str, str],
+    reveals: dict[str, str],
+    proof_transcript_hashes: dict[str, str] | None = None,
+) -> str:
+    """Derive round entropy from commit-reveal data and optional ZK proof bindings.
+
+    The optional ``proof_transcript_hashes`` map allows callers to bind each
+    participant's non-interactive proof transcript hash into the final entropy.
+    """
+    if round_number < 0:
+        raise ValueError("Round number must be non-negative")
+    if epoch < 0:
+        raise ValueError("Epoch must be non-negative")
+    if not reveals:
+        raise ValueError("At least one reveal is required")
+
+    reveal_chunks: list[bytes] = []
+    separator = HASH_SEPARATOR.encode("utf-8")
+    for node_id, reveal in sorted(reveals.items()):
+        commitment = commitments.get(node_id)
+        if commitment is None:
+            raise ValueError(f"Missing commitment for node_id: {node_id}")
+        expected_commitment = build_vrf_reveal_commitment(node_id=node_id, reveal=reveal)
+        normalized_commitment = commitment.lower()
+        if normalized_commitment != expected_commitment.lower():
+            raise ValueError(f"Reveal does not match commitment for node_id: {node_id}")
+
+        proof_hash = ""
+        if proof_transcript_hashes is not None:
+            proof_hash = str(proof_transcript_hashes.get(node_id, ""))
+            if not proof_hash:
+                raise ValueError(f"Missing proof transcript hash for node_id: {node_id}")
+
+        reveal_chunks.append(
+            separator.join(
+                [
+                    node_id.encode("utf-8"),
+                    reveal.encode("utf-8"),
+                    proof_hash.encode("utf-8"),
+                ]
+            )
+        )
+
+    context = separator.join(
+        [
+            shard_id.encode("utf-8"),
+            str(round_number).encode("utf-8"),
+            str(epoch).encode("utf-8"),
+        ]
+    )
+    return blake3_hash([_VRF_COMMIT_REVEAL_PREFIX, context, *reveal_chunks]).hex()
 
 
 def append_quorum_certificate_to_ledger(

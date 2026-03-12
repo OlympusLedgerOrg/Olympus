@@ -263,6 +263,22 @@ complementary controls:
 3. **Inclusion lists**: when witness quorum is met, transactions are added to a
    deterministic inclusion list and omission is auditable.
 
+### Grinding-Attack Mitigation (Phase 1+ hardening)
+
+Deterministic VRF scoring alone is vulnerable to grinding when an adaptive
+adversary can generate many candidate proofs and reveal only favorable ones.
+To harden this path, selection rounds support an additional entropy binding:
+
+- participants publish a commitment to a private reveal value,
+- participants later reveal the value,
+- the protocol derives round entropy only from commitment-consistent reveals,
+- optional non-interactive proof transcript hashes can be bound into the same
+  entropy derivation so reveal material and proof context are coupled.
+
+This commit-reveal entropy is then mixed into the VRF selection seed. The
+result is still deterministic for verifiers, but no single party can bias the
+seed by withholding unsuccessful local samples after seeing others' outputs.
+
 ## Safety and Liveness Notes
 
 ### Safety
@@ -276,6 +292,23 @@ complementary controls:
 - A temporarily unavailable Guardian delays quorum but cannot rewrite prior committed history.
 - Replication is pull-friendly: Guardians can recover after downtime by requesting the missing range.
 - Auditors can reconstruct quorum status from public APIs plus signed acknowledgment artifacts.
+
+### Finality Gadget Failure Modes (Layer 12 hardening notes)
+
+Even with quorum certificates, finality assumptions can fail under:
+
+- fully asynchronous network partitions (no timing guarantees),
+- adaptive adversaries that target the currently leading set,
+- cryptanalytic breaks (including quantum attacks on deployed signatures).
+
+The federation roadmap addresses this with:
+
+- post-quantum signature migration paths for quorum attestations *(planned, not
+  yet implemented in this repository)*,
+- synchronous fallback operating modes when asynchronous liveness collapses
+  *(planned, not yet implemented in this repository)*,
+- continuous monitoring, rotation, and incident response ("eternal vigilance")
+  as an operational requirement across all phases.
 
 ## Explicit Non-Goals of the Prototype
 
