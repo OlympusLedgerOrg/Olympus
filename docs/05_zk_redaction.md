@@ -23,8 +23,12 @@ Olympus allows documents to be redacted while providing cryptographic proof that
 
 ## Proof System
 
-- **Recommended (Phase 0.5+)**: Halo2 (no trusted setup; production-proven in Zcash/Scroll). Python bindings exist (`py-halo2`) though less mature than Rust; circuits should be versioned with explicit parameter pins.
-- Current reference: circom circuits for Merkle inclusion and structural validity.
+- **Primary (Core Ledger)**: Groth16 (circom circuits + snarkjs) to meet throughput
+  and latency goals. Trusted setup risk is mitigated with a public, multi-party
+  Phase 2 ceremony.
+- **Optional (High-Assurance paths)**: Halo2 can be slotted in for special cases
+  such as superseding signatures or “final appeal” proofs when minimal trust
+  assumptions are required; circuits should still be versioned and pinned.
 - Batch verification is supported at the proof layer.
 
 ## Dual-Anchor Strategy

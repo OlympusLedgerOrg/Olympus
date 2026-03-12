@@ -83,7 +83,7 @@ verifier to confirm claims without trusting the server.
 | `protocol/redaction.py` | `RedactionProtocol.commit_document()`, `RedactionProtocol.create_redaction_proof()`, `RedactionProof` |
 | `protocol/ssmf.py` | `ExistenceProof`, `NonExistenceProof` |
 | `protocol/zkp.py` | ZK proof wrappers |
-| `proofs/` | Circom circuits, proving keys, Groth16 verifier |
+| `proofs/` | Circom circuits, proving keys, Groth16 verifier (primary); boundary allows optional Halo2 circuits for high-assurance flows |
 
 ### 6. Replicate *(Phase 1+ only — not in v1.0)*
 
