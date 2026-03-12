@@ -15,6 +15,12 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from .canonical_json import canonical_json_bytes
+from .hashes import hash_bytes
+
+OLYMPUS_DEFAULT_PROOF_TYPE = "groth16"
+OLYMPUS_DEFAULT_PROTOCOL_VERSION = "1"
+SUPPORTED_PROOF_PROTOCOL_VERSIONS = {OLYMPUS_DEFAULT_PROTOCOL_VERSION}
 
 @dataclass
 class ZKProof:
@@ -23,10 +29,113 @@ class ZKProof:
     proof: dict[str, Any]
     public_signals: list[Any]
     circuit: str
+    proof_type: str = OLYMPUS_DEFAULT_PROOF_TYPE
+    protocol_version: str = OLYMPUS_DEFAULT_PROTOCOL_VERSION
+
+    @property
+    def proof_bytes(self) -> bytes:
+        """Return canonicalized proof bytes suitable for transport or hashing."""
+        return canonical_json_bytes(self.proof)
+
+    @property
+    def public_inputs_hash(self) -> str:
+        """Hash public signals using canonical JSON + BLAKE3 (hex encoded)."""
+        return self._hash_public_inputs(self.public_signals)
+
+    @staticmethod
+    def _hash_public_inputs(public_signals: list[Any]) -> str:
+        """Compute canonicalized BLAKE3 hash for public inputs list."""
+        return hash_bytes(canonical_json_bytes(public_signals)).hex()
+
+    @staticmethod
+    def _load_proof_from_bytes(encoded_hex: str) -> dict[str, Any]:
+        """Decode a hex-encoded canonical JSON proof."""
+        try:
+            decoded = bytes.fromhex(encoded_hex)
+        except ValueError as exc:
+            raise ValueError("proof_bytes must be valid hex-encoded string") from exc
+        try:
+            return json.loads(decoded.decode("utf-8"))
+        except json.JSONDecodeError as exc:
+            raise ValueError("proof_bytes did not decode to valid JSON proof object") from exc
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> "ZKProof":
+        """
+        Deserialize a proof from dictionary form (metadata wrapper or legacy dict).
+
+        Accepts the new metadata wrapper keys (proof_type, circuit_id, proof_bytes,
+        public_inputs_hash, protocol_version) while remaining backward compatible
+        with the previous shape containing only proof/public_signals/circuit.
+        """
+        if "circuit_id" in data:
+            circuit = data.get("circuit_id")
+        else:
+            circuit = data.get("circuit")
+        if circuit is None:
+            raise ValueError("Proof dictionary must include 'circuit_id' or 'circuit'")
+
+        proof_bytes_hex = data.get("proof_bytes")
+        proof_obj = data.get("proof")
+        if proof_obj is None:
+            if proof_bytes_hex is None:
+                raise ValueError("Proof dictionary must include 'proof' or 'proof_bytes'")
+            proof_obj = cls._load_proof_from_bytes(proof_bytes_hex)
+        elif proof_bytes_hex is not None:
+            provided_bytes = bytes.fromhex(proof_bytes_hex)
+            canonical_bytes = canonical_json_bytes(proof_obj)
+            if canonical_bytes != provided_bytes:
+                expected_digest = hash_bytes(canonical_bytes).hex()
+                provided_digest = hash_bytes(provided_bytes).hex()
+                raise ValueError(
+                    "Canonical proof bytes mismatch for "
+                    f"circuit '{circuit}' (non-canonical encoding or tampering). "
+                    f"expected_digest={expected_digest}, provided_digest={provided_digest}"
+                )
+
+        public_signals = data.get("public_signals", [])
+        provided_hash = data.get("public_inputs_hash")
+        computed_hash = cls._hash_public_inputs(public_signals)
+        if provided_hash is not None and provided_hash != computed_hash:
+            raise ValueError(
+                "public_inputs_hash does not match provided public_signals "
+                f"(expected {computed_hash}, got {provided_hash})"
+            )
+
+        raw_protocol_version = data.get("protocol_version")
+        if raw_protocol_version is None:
+            raw_protocol_version = OLYMPUS_DEFAULT_PROTOCOL_VERSION
+        elif not isinstance(raw_protocol_version, str):
+            raise ValueError(
+                'protocol_version must be a string (e.g., "1"); '
+                f"got {type(raw_protocol_version).__name__}"
+            )
+        elif not raw_protocol_version.strip():
+            raise ValueError("protocol_version must be a non-empty string")
+        elif raw_protocol_version not in SUPPORTED_PROOF_PROTOCOL_VERSIONS:
+            raise ValueError(
+                f"Unsupported protocol_version '{raw_protocol_version}'. "
+                f"Supported versions: {sorted(SUPPORTED_PROOF_PROTOCOL_VERSIONS)}"
+            )
+
+        return cls(
+            proof=proof_obj,
+            public_signals=public_signals,
+            circuit=circuit,
+            proof_type=data.get("proof_type", OLYMPUS_DEFAULT_PROOF_TYPE),
+            protocol_version=raw_protocol_version,
+        )
 
     def to_dict(self) -> dict[str, Any]:
-        """Serialize proof to a dictionary."""
+        """Serialize proof to a self-describing metadata wrapper."""
+        proof_hex = self.proof_bytes.hex()
         return {
+            "proof_type": self.proof_type,
+            "circuit_id": self.circuit,
+            "public_inputs_hash": self.public_inputs_hash,
+            "proof_bytes": proof_hex,
+            "protocol_version": self.protocol_version,
+            # Backward-compatibility fields
             "proof": self.proof,
             "public_signals": self.public_signals,
             "circuit": self.circuit,
