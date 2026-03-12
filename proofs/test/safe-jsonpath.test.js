@@ -45,11 +45,11 @@ test('parses array access with wildcard', () => {
 test('rejects unsupported selectors', () => {
   assert.throws(() => parse('foo'), /absolute JSONPath/)
   assert.throws(() => parse('$..foo'), /Unsupported/)
-  assert.throws(() => parse('$[?(@.a>1)]'), /Unsupported/)
+  assert.throws(() => parse('$[?(@.a>1)]'), /Unsafe JSONPath syntax/)
 })
 
 test('rejects executable syntax', () => {
-  assert.throws(() => parse('$.foo()'), /unsafe JSONPath syntax/)
-  assert.throws(() => parse("$.payload['script:alert']"), /unsafe JSONPath syntax/)
-  assert.throws(() => parse('$.payload[(1)]'), /unsafe JSONPath syntax/)
+  assert.throws(() => parse('$.foo()'), /Unsafe JSONPath syntax/)
+  assert.throws(() => parse("$.payload['script:alert']"), /Unsafe JSONPath syntax/)
+  assert.throws(() => parse('$.payload[(1)]'), /Unsafe JSONPath syntax/)
 })
