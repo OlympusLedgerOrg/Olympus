@@ -21,6 +21,9 @@ bash setup_circuits.sh
 
 # 3) Smoke test — end-to-end prove + verify for each circuit
 bash smoke_test.sh
+
+# 4) Constraint-level checks ("formal verification" fast lane)
+bash formal_verify.sh
 ````
 
 ---
@@ -131,7 +134,18 @@ If the PTAU download is unavailable, the script falls back to generating a dev P
 
   1. generates the witness (`generate_witness.js` + WASM),
   2. creates a Groth16 proof (`snarkjs groth16 prove`),
-  3. verifies the proof (`snarkjs groth16 verify`).
+   3. verifies the proof (`snarkjs groth16 verify`).
+
+---
+
+### `formal_verify.sh`
+
+* Generates fresh witness inputs for all primary circuits.
+* Uses `snarkjs wtns check` to validate each witness against its `.r1cs`
+  constraints.
+* Acts as a deterministic "no accidental proof leakage path" guardrail by
+  confirming only circuit-constrained relations are satisfied before proof
+  generation.
 
 ---
 
@@ -186,9 +200,14 @@ These circuits are reference implementations used for protocol development and t
 **Development keys are NOT suitable for production.** Production usage requires:
 
 * Formal review / security audit
+* Constraint-audit workflow (`bash formal_verify.sh`) in addition to smoke proofs
 * A Phase 2 ceremony with ≥ 3 independent contributors
 * Publicly published verification keys and ceremony transcript
 * Parameter tuning / performance evaluation
+
+For higher-assurance proving systems, Halo2/KZG remains an explicit migration
+path via the modular backend boundary (see `protocol/halo2_backend.py` and
+`docs/adr/0002-halo2-proof-system.md`).
 
 **Setup provenance (required):**
 

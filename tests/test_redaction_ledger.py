@@ -14,7 +14,10 @@ from unittest.mock import patch
 
 import pytest
 
-from protocol.hashes import SNARK_SCALAR_FIELD, blake3_to_field_element, record_key
+from protocol.canonical import CANONICAL_VERSION, canonicalize_document, document_to_bytes
+from protocol.canonicalizer import canonicalization_provenance
+from protocol.hashes import SNARK_SCALAR_FIELD, blake3_to_field_element, hash_bytes, record_key
+from protocol.ledger import Ledger
 from protocol.poseidon_tree import PoseidonMerkleTree
 from protocol.redaction import RedactionProof, RedactionProtocol
 from protocol.redaction_ledger import (
@@ -421,6 +424,69 @@ def test_commit_to_zk_proof_round_trip_binding_poseidon_root():
         return VerificationResult.VALID
 
     assert wrapped.verify_all(smt.get_root(), zk_verifier=zk_verifier) is VerificationResult.VALID
+
+
+def test_full_dual_proof_workflow_with_selective_disclosure():
+    """
+    End-to-end: ingest → canonicalize → commit dual roots → prove → verify.
+    """
+    raw_document = {
+        "document_id": "doc-e2e-1",
+        "parts": [" Public section ", "Classified section", "Public appendix  "],
+    }
+    canonical_document = canonicalize_document(raw_document)
+    canonical_bytes = document_to_bytes(canonical_document)
+    parts = canonical_document["parts"]
+
+    poseidon_root = _poseidon_root_for_parts(parts)
+    smt = SparseMerkleTree()
+    tree, commitment = RedactionProtocol.commit_document_dual(
+        document_parts=parts,
+        poseidon_root=poseidon_root,
+        smt=smt,
+        document_id=canonical_document["document_id"],
+        version=1,
+    )
+
+    revealed_indices = [0, 2]
+    wrapped = RedactionProtocol.create_redaction_proof_with_ledger(
+        document_parts=parts,
+        revealed_indices=revealed_indices,
+        poseidon_root=commitment.poseidon_root,
+        smt=smt,
+        document_id=canonical_document["document_id"],
+        version=1,
+        zk_proof={"pi_a": [], "pi_b": [], "pi_c": []},
+    )
+    correctness_proof = RedactionProtocol.create_redaction_correctness_proof(
+        document_parts=parts,
+        revealed_indices=revealed_indices,
+    )
+
+    assert RedactionProtocol.verify_redaction_correctness_proof(correctness_proof) is True
+    assert wrapped.zk_public_inputs.original_root == correctness_proof.original_poseidon_root
+    assert wrapped.zk_public_inputs.redacted_commitment == correctness_proof.redacted_poseidon_root
+
+    selective_disclosure_proof = RedactionProtocol.create_redaction_proof(tree, revealed_indices)
+    revealed_content = [parts[idx] for idx in revealed_indices]
+    assert RedactionProtocol.verify_redaction_proof(selective_disclosure_proof, revealed_content) is True
+
+    smt_root = smt.get_root()
+    assert wrapped.verify_smt_anchor(smt_root) is True
+    assert wrapped.verify_all(smt_root, zk_verifier=lambda _p, _i: VerificationResult.VALID) is (
+        VerificationResult.VALID
+    )
+
+    ledger = Ledger()
+    entry = ledger.append(
+        record_hash=hash_bytes(canonical_bytes).hex(),
+        shard_id="shard-e2e",
+        shard_root=smt_root.hex(),
+        canonicalization=canonicalization_provenance("application/json", CANONICAL_VERSION),
+        poseidon_root=commitment.poseidon_root,
+    )
+    assert entry.poseidon_root == wrapped.zk_public_inputs.original_root
+    assert ledger.verify_chain() is True
 
 
 def test_append_only_versioning_via_dual_anchor():

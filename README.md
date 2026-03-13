@@ -193,3 +193,13 @@ Sigstore: transparency logs, multiple operators, and independent verification.
   running the UI directly.
 - The public verification portal remains available at `/verification-portal`
   even when debug-only routes are disabled.
+
+## External Security Review
+
+Olympus is designed to be audit-friendly, and external review is encouraged:
+
+- Security policy and coordinated disclosure: [`SECURITY.md`](SECURITY.md)
+- Penetration-test scope for third-party auditors:
+  [`docs/pentest-scope.md`](docs/pentest-scope.md)
+- Public bug-bounty intake channel (HackerOne):
+  <https://hackerone.com/olympus>

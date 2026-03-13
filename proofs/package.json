@@ -8,6 +8,7 @@
     "groth16:setup": "bash setup_circuits.sh",
     "setup": "bash setup_circuits.sh",
     "smoke": "bash smoke_test.sh",
+    "formal:verify": "bash formal_verify.sh",
     "test:jsonpath": "node --test"
   },
   "dependencies": {

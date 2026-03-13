@@ -12,6 +12,7 @@ from decimal import Decimal
 
 import pikepdf
 import pytest
+from hypothesis import given, settings, strategies as st
 
 from protocol.canonicalizer import (
     CANONICALIZER_VERSIONS,
@@ -131,6 +132,38 @@ class TestJsonJcs:
         precomposed = '{"key":"\u00e9"}'.encode()
         decomposed = '{"key":"e\u0301"}'.encode()
         assert Canonicalizer.json_jcs(precomposed) == Canonicalizer.json_jcs(decomposed)
+
+    @given(
+        st.recursive(
+            st.one_of(
+                st.none(),
+                st.booleans(),
+                st.integers(),
+                st.floats(allow_nan=False, allow_infinity=False),
+                st.text(),
+            ),
+            lambda children: st.one_of(
+                st.lists(children, max_size=5),
+                st.dictionaries(st.text(), children, max_size=5),
+            ),
+            max_leaves=20,
+        )
+    )
+    @settings(max_examples=100)
+    def test_json_jcs_property_deterministic(self, value):
+        """Property: canonicalization output is deterministic for valid JSON payloads."""
+        raw = json.dumps(value, ensure_ascii=False).encode("utf-8")
+        first = Canonicalizer.json_jcs(raw)
+        second = Canonicalizer.json_jcs(raw)
+        assert first == second
+
+    @given(st.binary(min_size=1, max_size=256))
+    @settings(max_examples=100)
+    def test_json_jcs_fuzz_malformed_json(self, random_payload: bytes):
+        """Malformed JSON fuzzing should always raise CanonicalizationError."""
+        malformed = b'{"payload":' + random_payload + b",}"
+        with pytest.raises(CanonicalizationError, match="JSON Ingest Failure"):
+            Canonicalizer.json_jcs(malformed)
 
 
 # ---------------------------------------------------------------------------
