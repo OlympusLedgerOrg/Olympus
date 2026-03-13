@@ -20,6 +20,7 @@ import json
 import logging
 import os
 import uuid
+from collections import OrderedDict
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from time import monotonic
@@ -334,15 +335,20 @@ _rate_limit_policy: dict[str, tuple[float, float]] = {
     "commit": (30.0, 0.5),
     "verify": (120.0, 2.0),
 }
-_rate_limit_key_buckets: dict[str, dict[str, TokenBucket]] = {
-    "ingest": {},
-    "commit": {},
-    "verify": {},
+
+# L5-B: Maximum number of entries in rate-limit buckets to prevent memory leaks
+_RATE_LIMIT_LRU_CAP = 10_000
+
+# Use OrderedDict to implement LRU eviction when cap is reached
+_rate_limit_key_buckets: dict[str, OrderedDict[str, TokenBucket]] = {
+    "ingest": OrderedDict(),
+    "commit": OrderedDict(),
+    "verify": OrderedDict(),
 }
-_rate_limit_ip_buckets: dict[str, dict[str, TokenBucket]] = {
-    "ingest": {},
-    "commit": {},
-    "verify": {},
+_rate_limit_ip_buckets: dict[str, OrderedDict[str, TokenBucket]] = {
+    "ingest": OrderedDict(),
+    "commit": OrderedDict(),
+    "verify": OrderedDict(),
 }
 
 
@@ -543,11 +549,25 @@ def _extract_api_key(request: Request, body_api_key: str | None = None) -> str:
     raise HTTPException(status_code=401, detail="API key is required")
 
 
-def _get_bucket(buckets: dict[str, TokenBucket], subject: str, action: str) -> TokenBucket:
-    """Get/create a token bucket for the subject and action."""
+def _get_bucket(buckets: OrderedDict[str, TokenBucket], subject: str, action: str) -> TokenBucket:
+    """
+    Get/create a token bucket for the subject and action.
+    
+    L5-B: Implements LRU eviction when the bucket count exceeds _RATE_LIMIT_LRU_CAP.
+    Existing buckets are moved to the end (most recently used) when accessed.
+    When creating a new bucket and the cap is exceeded, the oldest (least recently
+    used) bucket is removed.
+    """
     existing = buckets.get(subject)
     if existing is not None:
+        # Move to end (mark as recently used)
+        buckets.move_to_end(subject)
         return existing
+    
+    # L5-B: Evict oldest entries if at capacity
+    while len(buckets) >= _RATE_LIMIT_LRU_CAP:
+        buckets.popitem(last=False)  # Remove oldest (first) entry
+    
     capacity, refill = _rate_limit_policy[action]
     created = TokenBucket(
         capacity=capacity,

@@ -2,7 +2,7 @@
   "nodes": [
     {
       "node_id": "olympus-node-1",
-      "pubkey": "10d7472a02f7338b0c7aeee1b81e447ee7c91081c2b190b89f05b7149ca934a7",
+      "pubkey": "3e86f08f516951ff0c69815cfc4ed7cf1f0b44651aa5c7472f67623449c09425",
       "endpoint": "https://node1.olympus.org",
       "operator": "City Records Office",
       "jurisdiction": "city-a",
@@ -10,7 +10,7 @@
     },
     {
       "node_id": "olympus-node-2",
-      "pubkey": "cedcdf080f99c4c8ff8d0e0e87ba6ead3ceb3a670fa23ad85940aadb6068d83b",
+      "pubkey": "55eddc76b50224b6701642c28f43351c61b914e134468a8989b7029e4a877d0b",
       "endpoint": "https://node2.olympus.org",
       "operator": "County Archive",
       "jurisdiction": "county-b",
@@ -18,7 +18,7 @@
     },
     {
       "node_id": "olympus-node-3",
-      "pubkey": "851e322907c4a21c6de6f921dd735bc345aea20848d40846980cd15fc8fba3cd",
+      "pubkey": "d77ddcf78cfa5da809eaeca9203ad2e6c47f5f242941ad064f589b1b00e2911e",
       "endpoint": "https://node3.olympus.org",
       "operator": "State Auditor",
       "jurisdiction": "state-c",

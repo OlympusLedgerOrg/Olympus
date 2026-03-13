@@ -256,15 +256,53 @@ class Groth16Prover:
         """
         Generate a Groth16 proof for document existence.
 
+        .. deprecated:: 1.0
+            This legacy method is deprecated and will be removed in a future release.
+            Use :meth:`prove` with ``circuit="document_existence"`` instead.
+
         NOTE: leaf/root/path_* are not used by snarkjs prove once witness exists;
         they remain here for API compatibility with earlier code.
+
+        Args:
+            leaf: Not used (legacy parameter).
+            root: Not used (legacy parameter).
+            path_elements: Not used (legacy parameter).
+            path_indices: Not used (legacy parameter).
+            witness_path: Path to pre-computed witness file (required).
+            zkey_path: Path to proving key.
+            proof_path: Output path for proof.
+            public_path: Output path for public signals.
+
+        Returns:
+            ZKProof containing the Groth16 proof.
+
+        Raises:
+            DeprecationWarning: This method is deprecated.
+            FileNotFoundError: If the witness file does not exist.
         """
+        import warnings
+
+        # L5-C: Emit deprecation warning
+        warnings.warn(
+            "prove_existence is deprecated and will be removed in a future release. "
+            "Use Groth16Prover.prove(circuit='document_existence', ...) instead.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
+
         witness = witness_path or (self.circuits_dir / "build" / "document_existence.wtns")
         zkey = zkey_path or (self.circuits_dir / "build" / "document_existence_final.zkey")
         proof_file = proof_path or (self.circuits_dir / "build" / "document_existence_proof.json")
         public_file = public_path or (
             self.circuits_dir / "build" / "document_existence_public.json"
         )
+
+        # L5-C: Enforce witness file existence before proceeding
+        if not witness.exists():
+            raise FileNotFoundError(
+                f"Witness file not found: {witness}. "
+                f"Generate the witness using the circuit's WASM witness generator first."
+            )
 
         return self.prove(
             circuit="document_existence",

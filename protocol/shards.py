@@ -29,7 +29,10 @@ _HEADER_EXCLUDED_FIELDS: frozenset[str] = frozenset(
 # salt provides domain separation from other HKDF usages; info labels bind
 # each derived key to its specific purpose.  These values are protocol-critical:
 # changing them will produce different keys for the same inputs.
-_HKDF_SALT: bytes = b"olympus"
+#
+# L5-A: _HKDF_SALT is now a 32-byte domain-separated constant for proper HKDF
+# salt size alignment with BLAKE3/SHA-256 output lengths.
+_HKDF_SALT: bytes = b"olympus:hkdf:salt:v1" + b"\x00" * 12  # Pad to 32 bytes
 _HKDF_INFO_SEED_KEY: bytes = b"OLY:SEED-KEY:V1"
 _HKDF_INFO_NODE_KEY: bytes = b"OLY:NODE-KEY:V1"
 _HKDF_INFO_SHARD_SIGNING_KEY: bytes = b"OLY:SHARD-SIGNING-KEY:V1"
