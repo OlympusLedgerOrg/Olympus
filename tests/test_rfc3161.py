@@ -5,7 +5,14 @@ Network calls to the TSA are mocked so that these tests run fully offline.
 """
 
 import hashlib
-from datetime import datetime, timezone
+from datetime import datetime
+
+try:
+    from datetime import UTC
+except ImportError:  # Python < 3.11
+    from datetime import timezone
+
+    UTC = timezone.utc
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -179,7 +186,7 @@ def _build_mock_tst_bytes(hash_hex: str) -> bytes:
 def test_request_timestamp_returns_timestamp_token():
     hash_hex = "a" * 64
     fake_tst_bytes = b"\x30\x82\x01\x00" + b"\x00" * 256
-    fake_ts = datetime(2026, 2, 21, 2, 28, 25, tzinfo=timezone.utc)
+    fake_ts = datetime(2026, 2, 21, 2, 28, 25, tzinfo=UTC)
 
     stamper_mock = MagicMock(return_value=fake_tst_bytes)
     with (
@@ -200,7 +207,7 @@ def test_request_timestamp_returns_timestamp_token():
 def test_request_timestamp_uses_default_tsa_when_no_url_given():
     hash_hex = "b" * 64
     fake_tst_bytes = b"\x30\x00"
-    fake_ts = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    fake_ts = datetime(2026, 1, 1, tzinfo=UTC)
 
     stamper_mock = MagicMock(return_value=fake_tst_bytes)
     with (
@@ -221,7 +228,7 @@ def test_request_timestamp_passes_digest_to_stamper():
     hash_hex = "c" * 64
     expected_digest = _sha256_of_hash(hash_hex)
     fake_tst_bytes = b"\x30\x00"
-    fake_ts = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    fake_ts = datetime(2026, 1, 1, tzinfo=UTC)
 
     stamper_mock = MagicMock(return_value=fake_tst_bytes)
     with (
@@ -241,7 +248,7 @@ def test_request_timestamp_rejects_invalid_hash_hex():
 def test_request_timestamp_timestamp_uses_z_suffix():
     hash_hex = "d" * 64
     fake_tst_bytes = b"\x30\x00"
-    fake_ts = datetime(2026, 6, 15, 12, 0, 0, tzinfo=timezone.utc)
+    fake_ts = datetime(2026, 6, 15, 12, 0, 0, tzinfo=UTC)
 
     stamper_mock = MagicMock(return_value=fake_tst_bytes)
     with (
@@ -470,7 +477,7 @@ def test_timestamp_watchdog_status_alerts_for_stale_or_missing_tsa():
         [token],
         required_tsa_urls=(DEFAULT_TSA_URL, DIGICERT_TSA_URL),
         stale_after_seconds=60,
-        now=datetime(2026, 3, 1, 0, 2, 0, tzinfo=timezone.utc),
+        now=datetime(2026, 3, 1, 0, 2, 0, tzinfo=UTC),
     )
 
     assert status["healthy"] is False

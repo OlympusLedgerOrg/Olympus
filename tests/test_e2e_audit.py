@@ -33,7 +33,13 @@ See docs/08_database_strategy.md for complete database strategy documentation.
 """
 
 import os
-from datetime import datetime, timezone
+from datetime import datetime
+try:
+    from datetime import UTC
+except ImportError:  # Python < 3.11
+    from datetime import timezone
+
+    UTC = timezone.utc
 from urllib.parse import urlparse, urlunparse
 from uuid import uuid4
 
@@ -165,7 +171,7 @@ def test_end_to_end_audit_flow(storage, signing_key, client):
     6. Verifies signatures offline
     7. Verifies ledger chain offline
     """
-    shard_id = f"audit_test_shard_{datetime.now(timezone.utc).timestamp()}"
+    shard_id = f"audit_test_shard_{datetime.now(UTC).timestamp()}"
 
     # Step 1: Append multiple records
     print(f"\n=== Step 1: Appending records to shard {shard_id} ===")
@@ -345,7 +351,7 @@ def test_nonexistence_proof_via_api(storage, signing_key, client):
     """
     Test that non-existence proofs work via the API.
     """
-    shard_id = f"nonexist_test_shard_{datetime.now(timezone.utc).timestamp()}"
+    shard_id = f"nonexist_test_shard_{datetime.now(UTC).timestamp()}"
 
     # Append one record to create the shard
     storage.append_record(
@@ -380,8 +386,8 @@ def test_list_shards_via_api(storage, signing_key, client):
     Test that listing shards works via the API.
     """
     # Create two shards
-    shard1 = f"list_test_shard_1_{datetime.now(timezone.utc).timestamp()}"
-    shard2 = f"list_test_shard_2_{datetime.now(timezone.utc).timestamp()}"
+    shard1 = f"list_test_shard_1_{datetime.now(UTC).timestamp()}"
+    shard2 = f"list_test_shard_2_{datetime.now(UTC).timestamp()}"
 
     storage.append_record(
         shard_id=shard1,
