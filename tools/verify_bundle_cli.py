@@ -28,7 +28,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 
 import nacl.signing
 
-from protocol.epochs import EpochRecord, compute_epoch_head
+from protocol.epochs import EpochRecord, SignedTreeHead, compute_epoch_head
 from protocol.events import CanonicalEvent
 from protocol.hashes import shard_header_hash
 from protocol.merkle import MerkleProof, MerkleTree, merkle_leaf_hash, verify_proof
@@ -323,6 +323,41 @@ def _check_epoch_record(epoch_record: dict[str, Any], root_hash_hex: str) -> tup
     return True, f"Epoch record valid (head={record.epoch_head})"
 
 
+def _check_signed_tree_head(
+    signed_tree_head: dict[str, Any],
+    *,
+    root_hash_hex: str,
+    leaf_count: int,
+    epoch_record: dict[str, Any] | None = None,
+) -> tuple[bool, str]:
+    """Validate the Signed Tree Head binding and signature."""
+    try:
+        sth = SignedTreeHead.from_dict(signed_tree_head)
+    except Exception as exc:
+        return False, f"Signed Tree Head malformed: {exc}"
+
+    if sth.merkle_root.lower() != root_hash_hex.lower():
+        return False, (
+            f"Signed Tree Head Merkle root mismatch: {sth.merkle_root} != shard root {root_hash_hex}"
+        )
+    if sth.tree_size != leaf_count:
+        return False, (
+            f"Signed Tree Head tree size mismatch: {sth.tree_size} != bundle leaf count {leaf_count}"
+        )
+    if epoch_record is not None:
+        try:
+            record = EpochRecord.from_dict(epoch_record)
+        except Exception as exc:
+            return False, f"Signed Tree Head epoch linkage invalid: {exc}"
+        if sth.epoch_id != record.epoch_index:
+            return False, (
+                f"Signed Tree Head epoch mismatch: {sth.epoch_id} != epoch record {record.epoch_index}"
+            )
+    if not sth.verify():
+        return False, "Signed Tree Head signature INVALID"
+    return True, f"Signed Tree Head valid (epoch={sth.epoch_id}, tree_size={sth.tree_size})"
+
+
 def verify_bundle(
     bundle: dict[str, Any],
     *,
@@ -353,6 +388,7 @@ def verify_bundle(
         signature_hex = bundle["signature"]
         pubkey_hex = bundle["pubkey"]
         epoch_record = bundle.get("epoch_record")
+        signed_tree_head = bundle.get("signed_tree_head")
     except KeyError as exc:
         return False, [(False, f"Missing required field: {exc}")]
 
@@ -385,6 +421,19 @@ def verify_bundle(
         results.append((False, "Epoch record missing"))
     else:
         results.append(_check_epoch_record(epoch_record, header["root_hash"]))
+
+    # 2.7 Signed Tree Head accountability for the committed root
+    if signed_tree_head is None:
+        results.append((False, "Signed Tree Head missing"))
+    else:
+        results.append(
+            _check_signed_tree_head(
+                signed_tree_head,
+                root_hash_hex=header["root_hash"],
+                leaf_count=len(leaf_hashes),
+                epoch_record=epoch_record,
+            )
+        )
 
     # 3. Timestamp token (optional)
     if "timestamp_token" in bundle and bundle["timestamp_token"] is not None:

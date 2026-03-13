@@ -9,6 +9,7 @@ from protocol.hashes import (
     LEDGER_PREFIX,
     NODE_PREFIX,
     POLICY_PREFIX,
+    TREE_HEAD_PREFIX,
 )
 
 
@@ -27,3 +28,4 @@ def test_hash_domain_prefixes_are_frozen():
     assert FEDERATION_PREFIX == b"OLY:FEDERATION:V1"
     assert EVENT_PREFIX == b"OLY:EVENT:V1"
     assert CHECKPOINT_PREFIX == b"OLY:CHECKPOINT:V1"
+    assert TREE_HEAD_PREFIX == b"OLY:TREE-HEAD:V1"

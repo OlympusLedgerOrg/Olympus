@@ -47,6 +47,19 @@
       "description": "Hex-encoded 32-byte Ed25519 public key",
       "pattern": "^[0-9a-f]{64}$"
     },
+    "signed_tree_head": {
+      "type": "object",
+      "description": "Optional Signed Tree Head binding an epoch, tree size, and Merkle root to an Ed25519 signature",
+      "required": ["epoch_id", "tree_size", "merkle_root", "timestamp", "signature", "signer_pubkey"],
+      "properties": {
+        "epoch_id": { "type": "integer", "minimum": 0 },
+        "tree_size": { "type": "integer", "minimum": 0 },
+        "merkle_root": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+        "timestamp": { "type": "string" },
+        "signature": { "type": "string", "pattern": "^[0-9a-f]{128}$" },
+        "signer_pubkey": { "type": "string", "pattern": "^[0-9a-f]{64}$" }
+      }
+    },
     "timestamp_token": {
       "type": "object",
       "description": "Optional RFC 3161 timestamp token for the header hash",
