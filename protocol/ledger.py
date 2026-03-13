@@ -49,6 +49,7 @@ class Ledger:
     def __init__(self) -> None:
         """Initialize an empty ledger."""
         self.entries: list[LedgerEntry] = []
+        self._index: dict[str, LedgerEntry] = {}
 
     @staticmethod
     def _canonicalize_quorum_certificate(
@@ -126,6 +127,14 @@ class Ledger:
         """
         ts = current_timestamp()
         prev_entry_hash = self.entries[-1].entry_hash if self.entries else ""
+        if self.entries:
+            from datetime import datetime
+
+            last_ts = self.entries[-1].ts
+            last_dt = datetime.fromisoformat(last_ts.replace("Z", "+00:00"))
+            current_dt = datetime.fromisoformat(ts.replace("Z", "+00:00"))
+            if current_dt <= last_dt:
+                raise ValueError("Ledger timestamps must be strictly increasing")
 
         normalized_certificate = self._canonicalize_quorum_certificate(
             federation_quorum_certificate
@@ -173,6 +182,7 @@ class Ledger:
         )
 
         self.entries.append(entry)
+        self._index[entry.entry_hash] = entry
         return entry
 
     def get_entry(self, entry_hash: str) -> LedgerEntry | None:
@@ -185,9 +195,16 @@ class Ledger:
         Returns:
             The entry if found, None otherwise
         """
-        for entry in self.entries:
-            if entry.entry_hash == entry_hash:
-                return entry
+        entry = self._index.get(entry_hash)
+        if entry is not None:
+            return entry
+
+        # Fallback for ledgers populated via direct list assignment (tests/fixtures)
+        for item in self.entries:
+            if item.entry_hash not in self._index:
+                self._index[item.entry_hash] = item
+            if item.entry_hash == entry_hash:
+                return item
         return None
 
     def verify_chain(self) -> bool:

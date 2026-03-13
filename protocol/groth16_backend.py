@@ -33,6 +33,7 @@ Usage::
 from __future__ import annotations
 
 import json
+import re
 import shutil
 import subprocess  # nosec B404
 import tempfile
@@ -88,6 +89,45 @@ class Groth16Backend(ProofBackendProtocol):
         self.keys_dir = keys_dir or (self.circuits_dir.parent / "keys")
         self.snarkjs_bin = snarkjs_bin
 
+    @staticmethod
+    def _resolve_node_bin() -> str:
+        """Return absolute path to the Node.js binary or raise."""
+        node_path = shutil.which("node")
+        if node_path is None:
+            raise BackendNotAvailableError(
+                "Node.js binary 'node' not found in PATH. "
+                "Install Node >= 18 to run circom witness generators."
+            )
+        return node_path
+
+    def _resolve_snarkjs_bin(self) -> str:
+        """Return absolute path to the snarkjs launcher (snarkjs or npx)."""
+        snarkjs_path = shutil.which(self.snarkjs_bin)
+        if snarkjs_path is None:
+            raise BackendNotAvailableError(
+                f"snarkjs binary '{self.snarkjs_bin}' not found. "
+                "Install Node.js/npm (for npx) or install snarkjs globally."
+            )
+        return snarkjs_path
+
+    def _validate_artifact_path(self, path: Path, *, kind: str) -> Path:
+        """Resolve and validate circuit artifacts to avoid traversal."""
+        resolved = path.resolve()
+        base_dirs = {self.build_dir.resolve(), self.circuits_dir.resolve()}
+        if not any(base in resolved.parents or resolved == base for base in base_dirs):
+            raise ProofGenerationError(
+                f"{kind} path {resolved} is outside expected circuits directories"
+            )
+        if not resolved.exists():
+            raise ProofGenerationError(f"{kind} not found: {resolved}")
+        return resolved
+
+    @staticmethod
+    def _validate_circuit_name(circuit: str) -> None:
+        """Restrict circuit identifiers to simple file-stem tokens."""
+        if not re.fullmatch(r"[A-Za-z0-9_-]+", circuit):
+            raise ValueError(f"Invalid circuit identifier: {circuit!r}")
+
     @property
     def proof_system_type(self) -> ProofSystemType:
         """Return Groth16 proof system type."""
@@ -130,22 +170,25 @@ class Groth16Backend(ProofBackendProtocol):
             )
 
         circuit = statement.circuit
+        self._validate_circuit_name(circuit)
+        node_bin = self._resolve_node_bin()
 
         # Determine paths
-        zkey_path = self.build_dir / f"{circuit}_final.zkey"
-        if not zkey_path.exists():
-            raise ProofGenerationError(f"ZKey file not found: {zkey_path}")
+        zkey_path = self._validate_artifact_path(
+            self.build_dir / f"{circuit}_final.zkey", kind="ZKey file"
+        )
 
-        wasm_dir = self.build_dir / f"{circuit}_js"
-        wasm_file = wasm_dir / f"{circuit}.wasm"
-        generate_witness_js = wasm_dir / "generate_witness.js"
-
-        if not wasm_file.exists():
-            raise ProofGenerationError(f"WASM circuit file not found: {wasm_file}")
-        if not generate_witness_js.exists():
-            raise ProofGenerationError(f"Witness generator not found: {generate_witness_js}")
+        wasm_dir = (self.build_dir / f"{circuit}_js").resolve()
+        wasm_file = self._validate_artifact_path(wasm_dir / f"{circuit}.wasm", kind="WASM circuit")
+        generate_witness_js = self._validate_artifact_path(
+            wasm_dir / "generate_witness.js", kind="Witness generator"
+        )
 
         # Merge public inputs and private inputs for witness generation
+        if not isinstance(statement.public_inputs, dict) or not isinstance(
+            witness.private_inputs, dict
+        ):
+            raise ProofGenerationError("public_inputs and private_inputs must be dictionaries")
         all_inputs: dict[str, Any] = {}
         all_inputs.update(statement.public_inputs)
         all_inputs.update(witness.private_inputs)
@@ -156,14 +199,14 @@ class Groth16Backend(ProofBackendProtocol):
             # Write input JSON
             input_path = tmp_path / "input.json"
             with input_path.open("w", encoding="utf-8") as f:
-                json.dump(all_inputs, f)
+                json.dump(all_inputs, f, allow_nan=False)
 
             # Generate witness
             witness_path = tmp_path / "witness.wtns"
             try:
                 subprocess.run(  # nosec B603
                     [
-                        "node",
+                        node_bin,
                         str(generate_witness_js),
                         str(wasm_file),
                         str(input_path),
@@ -232,6 +275,7 @@ class Groth16Backend(ProofBackendProtocol):
             raise ProofVerificationError(f"Expected Groth16 proof, got {proof.proof_system.value}")
 
         circuit = proof.circuit
+        self._validate_circuit_name(circuit)
 
         # Find verification key
         vkey_path = self._find_verification_key(circuit)
@@ -271,10 +315,11 @@ class Groth16Backend(ProofBackendProtocol):
         Raises:
             subprocess.CalledProcessError: If command fails
         """
+        launcher = self._resolve_snarkjs_bin()
         if self.snarkjs_bin == "npx":
-            cmd = ["npx", "snarkjs", *args]
+            cmd = [launcher, "snarkjs", *args]
         else:
-            cmd = [self.snarkjs_bin, *args]
+            cmd = [launcher, *args]
 
         return subprocess.run(  # nosec B603
             cmd,

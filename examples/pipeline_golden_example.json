@@ -18,8 +18,8 @@
     "canonical_json": "{\"agency\":\"NARA\",\"body\":\"This record was filed on 2024-01-15.\",\"classification\":\"UNCLASSIFIED\",\"id\":\"DOC-2024-00001\",\"title\":\"Example Government Record\"}"
   },
   "stage_3_hash": {
-    "description": "BLAKE3 hash of canonical JSON bytes (UTF-8)",
-    "document_hash_blake3": "b3e714baa89952032eea617ea1b38623be2d620b724a42dca94fda8daeeb48c1"
+    "description": "Domain-separated BLAKE3 hash of canonical JSON bytes (UTF-8)",
+    "document_hash_blake3": "1518bebdaf7a4fdccdcc5f01466894cc1a5f95ab9d0f11aa78d76c4da4b05aec"
   },
   "stage_4_commit": {
     "description": "Merkle tree commitment over document sections. Leaf hashes use domain prefix OLY:LEAF:V1.",
@@ -37,13 +37,13 @@
     "ledger_entry": {
       "payload": {
         "prev_entry_hash": "",
-        "record_hash": "b3e714baa89952032eea617ea1b38623be2d620b724a42dca94fda8daeeb48c1",
+        "record_hash": "1518bebdaf7a4fdccdcc5f01466894cc1a5f95ab9d0f11aa78d76c4da4b05aec",
         "shard_id": "shard-examples",
         "shard_root": "a2abbad59496d2669283b5a1ad017e0efdd637694696a5570ed060204cbaebbe",
         "ts": "2024-01-15T00:00:00Z"
       },
-      "payload_canonical_json": "{\"prev_entry_hash\":\"\",\"record_hash\":\"b3e714baa89952032eea617ea1b38623be2d620b724a42dca94fda8daeeb48c1\",\"shard_id\":\"shard-examples\",\"shard_root\":\"a2abbad59496d2669283b5a1ad017e0efdd637694696a5570ed060204cbaebbe\",\"ts\":\"2024-01-15T00:00:00Z\"}",
-      "entry_hash": "3ccee8cef9b11c7b7e755099272cefb7b4bade362fe8f861baeec2af70e1187c",
+      "payload_canonical_json": "{\"prev_entry_hash\":\"\",\"record_hash\":\"1518bebdaf7a4fdccdcc5f01466894cc1a5f95ab9d0f11aa78d76c4da4b05aec\",\"shard_id\":\"shard-examples\",\"shard_root\":\"a2abbad59496d2669283b5a1ad017e0efdd637694696a5570ed060204cbaebbe\",\"ts\":\"2024-01-15T00:00:00Z\"}",
+      "entry_hash": "7f08a08fbf77bbd07da2047e483a021e78a5c23937a6eb3bdfded0e4156cab65",
       "entry_hash_domain": "OLY:LEDGER:V1"
     }
   },
