@@ -43,6 +43,7 @@ from typing import Any
 import nacl.exceptions
 import nacl.signing
 import psycopg
+import psycopg.errors
 from psycopg import OperationalError
 from psycopg.pq import TransactionStatus
 from psycopg.rows import dict_row
@@ -1083,8 +1084,8 @@ class StorageLayer:
                 """,
                 (shard_id, from_seq, to_seq),
             )
-        except Exception:
-            # Table may not exist yet (migration not applied)
+        except psycopg.errors.UndefinedTable:
+            # Table does not exist yet (migration 009 not applied)
             return None
 
         rows = cur.fetchall()

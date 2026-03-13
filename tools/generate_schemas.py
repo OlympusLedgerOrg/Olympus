@@ -49,9 +49,14 @@ def discover_models() -> list[tuple[str, type[BaseModel]]]:
             cls = getattr(mod, class_name)
             if isinstance(cls, type) and issubclass(cls, BaseModel):
                 results.append((filename, cls))
-        except Exception:
-            # Module may not be importable outside of API context
-            pass
+        except Exception as exc:
+            # Modules like api.ingest may not be importable outside the
+            # API context (missing env vars, database, etc.).  Log and skip.
+            import logging
+
+            logging.getLogger(__name__).debug(
+                "Skipping %s.%s: %s", module_path, class_name, exc
+            )
     return results
 
 

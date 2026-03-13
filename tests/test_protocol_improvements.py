@@ -397,7 +397,8 @@ class TestSMTSpec:
         spec_path = os.path.join(
             os.path.dirname(os.path.dirname(__file__)), "docs", "smt_specification.md"
         )
-        content = open(spec_path).read()
+        with open(spec_path) as f:
+            content = f.read()
         for section in [
             "Hashing Rules",
             "Path Encoding",
