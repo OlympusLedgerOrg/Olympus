@@ -9,14 +9,11 @@ Usage::
 
     from proofs.proof_generator import ProofGenerator
 
-    generator = ProofGenerator("document_existence")
+    generator = ProofGenerator("non_existence")
     witness = generator.generate_witness(
-        root="123",
-        leafIndex="0",
-        treeSize="1048576",
-        leaf="42",
-        pathElements=["0"] * 20,
-        pathIndices=[0] * 20,
+        root="<poseidon_smt_root_as_field_element>",
+        key=[0xde, 0xad, 0xbe, 0xef] + [0] * 28,  # exactly 32 bytes
+        pathElements=["0"] * 256,                   # 256 sibling hashes
     )
     proof = generator.prove(witness)
     verified = generator.verify(proof, public_inputs=proof.public_signals)
@@ -80,7 +77,7 @@ class CircuitConfig:
     def default(cls) -> "CircuitConfig":
         return cls(
             document_merkle_depth=20,
-            non_existence_merkle_depth=20,
+            non_existence_merkle_depth=256,
             redaction_max_leaves=16,
             redaction_merkle_depth=4,
             unified_max_sections=8,
@@ -374,8 +371,8 @@ class ProofGenerator:
             "pathElements",
             "pathIndices",
         ],
-        # UPDATED: indexed non-existence now uses leafIndex (public) and does NOT take emptyLeaf.
-        "non_existence": ["root", "leafIndex", "treeSize", "pathElements", "pathIndices"],
+        # UPDATED: keyed non-existence uses key[32] (public) and derives path internally.
+        "non_existence": ["root", "key", "pathElements"],
         "redaction_validity": [
             "originalRoot",
             "redactedCommitment",
@@ -421,12 +418,28 @@ class ProofGenerator:
                 "pathIndices", inputs.get("pathIndices"), config.document_merkle_depth
             )
         elif self.circuit == "non_existence":
+            # key must be a 32-element list of integers in [0, 255]
+            if not isinstance(inputs.get("key"), list) or len(inputs["key"]) != 32:
+                raise ValueError("non_existence 'key' must be a list of exactly 32 integers")
+            for idx, byte_val in enumerate(inputs["key"]):
+                if not isinstance(byte_val, int) or not (0 <= byte_val <= 255):
+                    raise ValueError(
+                        f"non_existence key[{idx}] = {byte_val!r} is not an integer in [0, 255]"
+                    )
             self._require_length(
                 "pathElements", inputs.get("pathElements"), config.non_existence_merkle_depth
             )
-            self._require_length(
-                "pathIndices", inputs.get("pathIndices"), config.non_existence_merkle_depth
-            )
+            # pathIndices is no longer a caller input — the circuit derives it from key.
+            # Reject it explicitly if supplied to catch callers using the old API:
+            if "pathIndices" in inputs:
+                raise ValueError(
+                    "non_existence no longer accepts pathIndices — the circuit derives "
+                    "path bits from the key. Remove pathIndices from your call."
+                )
+            if "leafIndex" in inputs:
+                raise ValueError(
+                    "non_existence no longer accepts leafIndex — use key=[32 bytes] instead."
+                )
         elif self.circuit == "redaction_validity":
             self._require_length(
                 "originalLeaves", inputs.get("originalLeaves"), config.redaction_max_leaves
