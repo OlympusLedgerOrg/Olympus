@@ -12,8 +12,8 @@ Usage::
     generator = ProofGenerator("non_existence")
     witness = generator.generate_witness(
         root="<poseidon_smt_root_as_field_element>",
-        key=[0xde, 0xad, 0xbe, 0xef, ...],  # 32-byte key as list of ints
-        pathElements=["0"] * 256,            # 256 sibling hashes
+        key=[0xde, 0xad, 0xbe, 0xef] + [0] * 28,  # exactly 32 bytes
+        pathElements=["0"] * 256,                   # 256 sibling hashes
     )
     proof = generator.prove(witness)
     verified = generator.verify(proof, public_inputs=proof.public_signals)

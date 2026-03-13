@@ -35,6 +35,6 @@ def test_key_to_path_bits_matches_circuit_derivation():
     assert python_bits == circuit_bits, (
         "Bit ordering mismatch between ssmf._key_to_path_bits and "
         "non_existence.circom path derivation. First divergence at bit "
-        f"{next(i for i, (a, b) in enumerate(zip(python_bits, circuit_bits)) if a != b)}"
+        f"{next((i for i, (a, b) in enumerate(zip(python_bits, circuit_bits)) if a != b), -1)}"
     )
     assert len(python_bits) == 256
