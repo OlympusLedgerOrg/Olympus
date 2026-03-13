@@ -16,6 +16,9 @@ function parse (path) {
   }
 
   const trimmed = path.trim()
+  if (hasUnsafeParentheses(trimmed) || hasScriptSyntax(trimmed)) {
+    throw new Error('Unsafe JSONPath syntax')
+  }
   if (!trimmed.startsWith('$')) {
     throw new Error('Only absolute JSONPath expressions starting with "$" are supported')
   }
@@ -67,6 +70,14 @@ function nextSeparator (input, start) {
     }
   }
   return -1
+}
+
+function hasUnsafeParentheses (input) {
+  return /[()]/.test(input)
+}
+
+function hasScriptSyntax (input) {
+  return /script\s*:/i.test(input)
 }
 
 function buildSegment (raw, operation) {
