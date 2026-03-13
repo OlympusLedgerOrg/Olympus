@@ -129,6 +129,8 @@ markers = [
     "postgres: marks tests as requiring PostgreSQL (deselect with '-m \"not postgres\"')",
     "smoke: marks tests as part of the fast smoke suite (critical path only)",
     "slow: marks long-running or nightly scenarios",
+    "layer4: marks layer-4 (ZK circuit) tests",
+    "circuits: marks tests that inspect or exercise ZK circuit source/behavior",
 ]
 
 [tool.coverage.run]
