@@ -4,6 +4,8 @@ Thank you for your interest in contributing to Olympus!
 
 This guide explains how to set up your development environment and run tests.
 
+For security reports or vulnerability discussions, please follow the process in [`SECURITY.md`](SECURITY.md) (do **not** file public issues).
+
 ---
 
 ## Branching Strategy

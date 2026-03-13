@@ -1,0 +1,17 @@
+{
+  "contribution_id": "cb2804535aa775e4",
+  "phase": "phase2_circuit",
+  "sequence_number": 1,
+  "participant_id": "dev-alpha",
+  "participant_pubkey": "33bcbb4a2c0d52b0cb6fa494201b017b6a44a4391702f6a27fe73adf25c93f91",
+  "timestamp": "2026-03-13T22:22:04.966323Z",
+  "previous_hash": "76ca22c4bbf17077de1499a67048a7d3008c49fe1286f6b3a6660e07e1c07208",
+  "artifact_hash": "458e30ffcd8004dc76a7bac75a944b0b71d3b45d59e894558710688447c10b96",
+  "beacon_round": null,
+  "signature": "93646036f6dd08a1f65f7a90290c676cb46b99a5c03639a1d5eaa5117cb8fb81a95a901cab186e357a2adb1cab9b8c7383b44d9fa819263ae2203dd0339fb10e",
+  "metadata": {
+    "artifact": "dev_redaction_validity_final.zkey",
+    "circuit": "redaction_validity",
+    "toxicity_note": "dev-only placeholder"
+  }
+}

@@ -1,0 +1,25 @@
+{
+  "generated_at": "2026-03-13T22:22:04.966618Z",
+  "label": "development ceremony (non-production)",
+  "participants": [
+    "dev-alpha"
+  ],
+  "artifacts": {
+    "phase1_ptau": {
+      "file": "dev_powers_of_tau.ptau",
+      "blake3": "76ca22c4bbf17077de1499a67048a7d3008c49fe1286f6b3a6660e07e1c07208"
+    },
+    "phase2_redaction_validity_zkey": {
+      "file": "dev_redaction_validity_final.zkey",
+      "blake3": "458e30ffcd8004dc76a7bac75a944b0b71d3b45d59e894558710688447c10b96"
+    }
+  },
+  "contributions": [
+    "dev-alpha-phase1.json",
+    "dev-alpha-phase2.json"
+  ],
+  "trust_warnings": [
+    "This transcript is for development only. It MUST NOT be used for production proving or verification.",
+    "Private randomness for dev-alpha was derived from a deterministic seed and destroyed after signing."
+  ]
+}

@@ -53,6 +53,13 @@ We follow a **coordinated disclosure** model:
 5. **Scope** — See [`docs/pentest-scope.md`](docs/pentest-scope.md) for the
    full penetration-test scope and out-of-scope areas.
 
+### Contact + PGP
+
+- **Email:** `security@olympus.dev`
+- **PGP (ASCII-armored):** [`docs/security-contact-pubkey.asc`](docs/security-contact-pubkey.asc)
+- **Fingerprint:** `0A30 DAE5 44D7 63AA E044  9827 2F31 D2AF 780F FDB6`
+- For sensitive reports, encrypt to the PGP key and attach to the GitHub Security Advisory.
+
 ---
 
 ## External Audits and Bug Bounty
