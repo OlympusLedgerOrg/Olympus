@@ -233,22 +233,23 @@ class PoseidonMerkleTree:
         index = leaf_index
 
         while len(level) > 1:
-            padded = list(level)
-            if len(padded) % 2 == 1:
-                padded.append(padded[-1])
+            # CT-style: check if this node is promoted (lone node at odd level)
+            is_last = (index == len(level) - 1)
+            is_promoted = is_last and (len(level) % 2 == 1)
+            
+            if not is_promoted:
+                # Normal case: there's a sibling
+                if index % 2 == 0:
+                    sibling = level[index + 1]
+                    path_indices.append(0)
+                else:
+                    sibling = level[index - 1]
+                    path_indices.append(1)
+                path_elements.append(str(sibling % SNARK_SCALAR_FIELD))
+            # If promoted, no sibling is added at this level
 
-            if index % 2 == 0:
-                sibling = padded[index + 1]
-                path_indices.append(0)
-            else:
-                sibling = padded[index - 1]
-                path_indices.append(1)
-
-            path_elements.append(str(sibling % SNARK_SCALAR_FIELD))
-
-            # Hash all pairs in the level in one batch call.
-            pairs = [(padded[i], padded[i + 1]) for i in range(0, len(padded), 2)]
-            level = _poseidon_hash_pairs(pairs, domain=POSEIDON_DOMAIN_NODE)
+            # Build next level using CT-style promotion (must match _build_level)
+            level = self._build_level(level)
             index //= 2
 
         return path_elements, path_indices

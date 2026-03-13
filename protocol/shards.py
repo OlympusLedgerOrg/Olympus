@@ -32,7 +32,10 @@ _HEADER_EXCLUDED_FIELDS: frozenset[str] = frozenset(
 #
 # L5-A: _HKDF_SALT is now a 32-byte domain-separated constant for proper HKDF
 # salt size alignment with BLAKE3/SHA-256 output lengths.
-_HKDF_SALT: bytes = b"olympus:hkdf:salt:v1" + b"\x00" * 12  # Pad to 32 bytes
+_HKDF_SALT_DOMAIN = b"olympus:hkdf:salt:v1"  # 20 bytes
+_HKDF_SALT: bytes = _HKDF_SALT_DOMAIN + b"\x00" * (32 - len(_HKDF_SALT_DOMAIN))
+assert len(_HKDF_SALT) == 32, f"_HKDF_SALT must be 32 bytes, got {len(_HKDF_SALT)}"
+
 _HKDF_INFO_SEED_KEY: bytes = b"OLY:SEED-KEY:V1"
 _HKDF_INFO_NODE_KEY: bytes = b"OLY:NODE-KEY:V1"
 _HKDF_INFO_SHARD_SIGNING_KEY: bytes = b"OLY:SHARD-SIGNING-KEY:V1"

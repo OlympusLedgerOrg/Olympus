@@ -33,17 +33,18 @@
       "7fd0876eb743dc0ef20b4fc848b9f2aa30c96a09bfe55d93b3ba2824f0cc5605",
       "e2578ff3d3760c1393b39accece25a55d87932418e209f895b5ab19f105a914e"
     ],
-    "merkle_root": "a2abbad59496d2669283b5a1ad017e0efdd637694696a5570ed060204cbaebbe",
+    "merkle_root": "05301898f9f8557a5cdbc4c7e46decdf29995f79310a8bba1ad62df9e46ed962",
+    "merkle_note": "CT-style promotion: odd-leaf trees promote lone nodes without hashing",
     "ledger_entry": {
       "payload": {
         "prev_entry_hash": "",
         "record_hash": "1518bebdaf7a4fdccdcc5f01466894cc1a5f95ab9d0f11aa78d76c4da4b05aec",
         "shard_id": "shard-examples",
-        "shard_root": "a2abbad59496d2669283b5a1ad017e0efdd637694696a5570ed060204cbaebbe",
+        "shard_root": "05301898f9f8557a5cdbc4c7e46decdf29995f79310a8bba1ad62df9e46ed962",
         "ts": "2024-01-15T00:00:00Z"
       },
-      "payload_canonical_json": "{\"prev_entry_hash\":\"\",\"record_hash\":\"1518bebdaf7a4fdccdcc5f01466894cc1a5f95ab9d0f11aa78d76c4da4b05aec\",\"shard_id\":\"shard-examples\",\"shard_root\":\"a2abbad59496d2669283b5a1ad017e0efdd637694696a5570ed060204cbaebbe\",\"ts\":\"2024-01-15T00:00:00Z\"}",
-      "entry_hash": "7f08a08fbf77bbd07da2047e483a021e78a5c23937a6eb3bdfded0e4156cab65",
+      "payload_canonical_json": "{\"prev_entry_hash\":\"\",\"record_hash\":\"1518bebdaf7a4fdccdcc5f01466894cc1a5f95ab9d0f11aa78d76c4da4b05aec\",\"shard_id\":\"shard-examples\",\"shard_root\":\"05301898f9f8557a5cdbc4c7e46decdf29995f79310a8bba1ad62df9e46ed962\",\"ts\":\"2024-01-15T00:00:00Z\"}",
+      "entry_hash": "4a1e6d67469944a8d39930ec1696fefcd9290d3b43ec895ff15deda2ee5435a0",
       "entry_hash_domain": "OLY:LEDGER:V1"
     }
   },

@@ -177,6 +177,10 @@ class ProofSubmissionResponse(IngestionProofResponse):
 _storage: StorageLayer | None = None
 _signing_key: nacl.signing.SigningKey | None = None
 
+# L4-F: Test mode flag to allow in-memory storage for tests only
+# Production deployments MUST set DATABASE_URL
+_TEST_MODE: bool = False
+
 # Legacy in-memory stores (kept for backward compatibility during migration)
 # proof_id → ingestion metadata
 _ingestion_store: dict[str, dict[str, Any]] = {}
@@ -223,11 +227,14 @@ def _get_storage() -> StorageLayer | None:
     # Check if PostgreSQL is configured
     database_url = os.environ.get("DATABASE_URL")
     if not database_url:
-        # L4-F: Raise RuntimeError instead of falling back to insecure in-memory storage
-        raise RuntimeError(
-            "DATABASE_URL not set - in-memory storage is not allowed. "
-            "Configure DATABASE_URL for production-safe persistence."
-        )
+        # L4-F: In production, require DATABASE_URL; allow in-memory for tests only
+        if not _TEST_MODE:
+            raise RuntimeError(
+                "DATABASE_URL not set - in-memory storage is not allowed. "
+                "Configure DATABASE_URL for production-safe persistence."
+            )
+        logger.warning("DATABASE_URL not set - using in-memory storage (test mode only)")
+        return None
 
     # Check if signing key is configured
     signing_key_hex = os.environ.get("OLYMPUS_INGEST_SIGNING_KEY")
@@ -376,6 +383,13 @@ def _constant_time_api_key_lookup(key_hash: str) -> ApiKeyRecord | None:
     attacker could measure response times to determine how many characters
     of a key hash match.
     
+    Note: This function deliberately iterates through ALL stored keys even
+    after finding a match, to ensure constant-time execution regardless of
+    key position. This is O(n) where n is the number of API keys, which is
+    acceptable for typical deployments (<1000 keys). For deployments with
+    significantly more keys, consider alternative constant-time lookup 
+    strategies or rate-limiting at the network layer.
+    
     Args:
         key_hash: Hex-encoded BLAKE3 hash of the API key.
         
@@ -472,8 +486,10 @@ def _register_hashed_api_key(
 
 
 def _reset_ingest_state_for_tests() -> None:  # pragma: no cover - test utility
-    """Reset in-memory ingestion, auth, and rate-limit state."""
-    global _write_ledger, _api_keys_loaded, _storage, _signing_key
+    """Reset in-memory ingestion, auth, and rate-limit state and enable test mode."""
+    global _write_ledger, _api_keys_loaded, _storage, _signing_key, _TEST_MODE
+    # L4-F: Enable test mode to allow in-memory storage
+    _TEST_MODE = True
     storage = _storage
     _ingestion_store.clear()
     _content_index.clear()
