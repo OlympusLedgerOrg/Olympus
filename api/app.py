@@ -608,9 +608,19 @@ async def verify_latest_header(shard_id: str) -> HeaderVerificationResponse:
 
         header = header_data["header"]
         header_hash = header["header_hash"]
+        signature = header_data["signature"]
+        pubkey_hex = header_data["pubkey"]
 
-        # Signature is already verified by get_latest_header (raises ValueError if invalid)
-        signature_valid = True
+        # Explicitly verify the header signature (don't rely on implicit validation)
+        import nacl.signing
+
+        from protocol.shards import verify_header
+
+        try:
+            verify_key = nacl.signing.VerifyKey(bytes.fromhex(pubkey_hex))
+            signature_valid = verify_header(header, signature, verify_key)
+        except Exception:
+            signature_valid = False
 
         # Retrieve timestamp token if stored
         token_dict = storage.get_timestamp_token(shard_id, header_hash)

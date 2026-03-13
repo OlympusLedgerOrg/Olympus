@@ -348,9 +348,10 @@ def generate_consistency_proof(
     Generate a Merkle consistency proof demonstrating that a tree of ``new_size``
     leaves extends a prior tree of ``old_size`` leaves.
 
-    This proof contains the ordered leaf hashes for the newer tree. The verifier
-    recomputes both the previous root (over the first ``old_size`` leaves) and
-    the current root (over all ``new_size`` leaves) to confirm append-only growth.
+    This implements RFC 6962 Certificate Transparency style consistency proofs.
+    The proof contains a minimal set of subtree hashes (O(log n)) that allows
+    the verifier to reconstruct both the old and new roots, confirming that
+    the tree has grown in an append-only manner.
 
     Args:
         leaf_hashes: Pre-hashed Merkle leaves (32-byte hashes).
@@ -369,10 +370,63 @@ def generate_consistency_proof(
         raise ValueError("old_size cannot exceed new_size")
     if new_size > len(leaf_hashes):
         raise ValueError("Not enough leaf hashes to build the requested tree")
-    if old_size == 0 or old_size == new_size:
-        return list(leaf_hashes[:new_size])
 
-    return list(leaf_hashes[:new_size])
+    # Trivial cases
+    if old_size == 0:
+        return []
+    if old_size == new_size:
+        return []
+
+    # Compute RFC 6962 style consistency proof
+    return _subproof_ct(leaf_hashes, old_size, new_size, True)
+
+
+def _subproof_ct(
+    leaf_hashes: Sequence[bytes], old_size: int, new_size: int, is_root: bool
+) -> list[bytes]:
+    """
+    Recursive helper for RFC 6962 consistency proof generation.
+
+    Args:
+        leaf_hashes: All leaf hashes (size >= new_size)
+        old_size: Size of the old tree (m in RFC 6962)
+        new_size: Size of the new tree (n in RFC 6962)
+        is_root: True if we're at the tree root
+
+    Returns:
+        List of subtree hashes needed for the consistency proof
+    """
+    # Base case: trees are identical
+    if old_size == new_size:
+        if is_root:
+            return []
+        else:
+            # Not at root - need the subtree root
+            return [ct_merkle_root(list(leaf_hashes[:old_size]))]
+
+    # Find largest power of 2 less than new_size (k in RFC 6962)
+    k = 1
+    while k * 2 < new_size:
+        k *= 2
+
+    if old_size <= k:
+        # old_size is in the left subtree
+        # Need: SUBPROOF(old_size, k, False) + [right_subtree_root]
+        # When we recurse into a subtree, is_root should be False
+        left_proof = _subproof_ct(leaf_hashes[:k], old_size, k, False)
+        if new_size > k:
+            right_root = ct_merkle_root(list(leaf_hashes[k:new_size]))
+            return left_proof + [right_root]
+        else:
+            return left_proof
+    else:
+        # old_size is in the right subtree (old_size > k)
+        # Need: [left_subtree_root] + SUBPROOF(old_size - k, new_size - k, False)
+        left_root = ct_merkle_root(list(leaf_hashes[:k]))
+        right_proof = _subproof_ct(
+            leaf_hashes[k:], old_size - k, new_size - k, False
+        )
+        return [left_root] + right_proof
 
 
 def verify_consistency_proof(
@@ -386,6 +440,10 @@ def verify_consistency_proof(
     Verify that ``new_root`` represents a Merkle tree that extends the tree with
     root ``old_root``.
 
+    This implements RFC 6962 Certificate Transparency style consistency proof
+    verification. The proof contains O(log n) subtree hashes that allow
+    reconstruction of both the old and new tree roots.
+
     Args:
         old_root: Merkle root of the prior tree (size ``old_size``).
         new_root: Merkle root of the newer tree (size ``new_size``).
@@ -398,18 +456,110 @@ def verify_consistency_proof(
     """
     if old_size < 0 or new_size < 0 or old_size > new_size:
         return False
+
+    # Trivial cases
     if old_size == 0:
         return True
-    if not proof or len(proof) < new_size:
-        return False
+    if old_size == new_size:
+        return old_root == new_root
 
     try:
-        computed_old_root = ct_merkle_root(list(proof[:old_size]))
-        computed_new_root = ct_merkle_root(list(proof[:new_size]))
-    except ValueError:
+        # Verify RFC 6962 consistency proof
+        computed_old, computed_new, proof_consumed = _verify_subproof_ct(
+            proof, 0, old_size, new_size, True
+        )
+
+        # Ensure all proof nodes were consumed
+        if proof_consumed != len(proof):
+            return False
+
+        return computed_old == old_root and computed_new == new_root
+    except (ValueError, IndexError):
         return False
 
-    return computed_old_root == old_root and computed_new_root == new_root
+
+def _verify_subproof_ct(
+    proof: Sequence[bytes],
+    proof_index: int,
+    old_size: int,
+    new_size: int,
+    is_root: bool,
+) -> tuple[bytes, bytes, int]:
+    """
+    Recursive helper for RFC 6962 consistency proof verification.
+
+    Args:
+        proof: List of subtree hashes
+        proof_index: Current position in the proof
+        old_size: Size of the old tree (m in RFC 6962)
+        new_size: Size of the new tree (n in RFC 6962)
+        is_root: True if we're at the tree root
+
+    Returns:
+        Tuple of (old_root, new_root, next_proof_index)
+    """
+    # Base case: trees are identical
+    if old_size == new_size:
+        if is_root:
+            # At root with identical trees - this shouldn't happen in non-trivial cases
+            # but can occur in recursive calls when a subtree is unchanged
+            # We need to consume one node from the proof
+            if proof_index >= len(proof):
+                # No proof node available - trees must be truly identical (trivial case)
+                # This shouldn't happen as trivial cases are handled in verify_consistency_proof
+                raise ValueError("Proof exhausted in identical-size subtree")
+            root = proof[proof_index]
+            return root, root, proof_index + 1
+        else:
+            # Both roots are the same subtree root from proof
+            if proof_index >= len(proof):
+                raise ValueError("Proof exhausted prematurely")
+            root = proof[proof_index]
+            return root, root, proof_index + 1
+
+    # Find largest power of 2 less than new_size (k in RFC 6962)
+    k = 1
+    while k * 2 < new_size:
+        k *= 2
+
+    if old_size <= k:
+        # old_size is in the left subtree
+        # Recurse left, then consume right root if new tree extends beyond k
+        # When we recurse into a subtree, is_root should be False
+        old_root_left, new_root_left, idx = _verify_subproof_ct(
+            proof, proof_index, old_size, k, False
+        )
+
+        if new_size > k:
+            # New tree has right subtree
+            if idx >= len(proof):
+                raise ValueError("Proof exhausted, expected right subtree root")
+            right_root = proof[idx]
+            idx += 1
+            old_root = old_root_left
+            new_root = node_hash(new_root_left, right_root)
+        else:
+            # New tree = left subtree only (new_size = k)
+            old_root = old_root_left
+            new_root = new_root_left
+
+        return old_root, new_root, idx
+    else:
+        # old_size > k: both old and new trees have right subtrees
+        # Consume left root, then recurse right
+        if proof_index >= len(proof):
+            raise ValueError("Proof exhausted, expected left subtree root")
+        left_root = proof[proof_index]
+        proof_index += 1
+
+        old_root_right, new_root_right, idx = _verify_subproof_ct(
+            proof, proof_index, old_size - k, new_size - k, False
+        )
+
+        old_root = node_hash(left_root, old_root_right)
+        new_root = node_hash(left_root, new_root_right)
+
+        return old_root, new_root, idx
 
 
 def deserialize_merkle_proof(proof_data: dict[str, Any]) -> MerkleProof:

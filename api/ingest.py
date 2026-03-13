@@ -606,7 +606,19 @@ async def ingest_batch(batch: BatchIngestionRequest, request: Request) -> BatchI
         Ingestion results with proof IDs.
     """
     _authorize_and_rate_limit(request, action="ingest")
+
+    # Validate that all records in the batch have the same shard_id
+    if not batch.records:
+        raise HTTPException(status_code=400, detail="Batch cannot be empty")
+
     shard_id = batch.records[0].shard_id
+    for i, record in enumerate(batch.records[1:], start=1):
+        if record.shard_id != shard_id:
+            raise HTTPException(
+                status_code=400,
+                detail=f"All records in a batch must have the same shard_id. "
+                f"Record 0 has shard_id '{shard_id}', but record {i} has '{record.shard_id}'",
+            )
 
     # Try to get storage layer (returns None if not configured)
     storage = _get_storage()
