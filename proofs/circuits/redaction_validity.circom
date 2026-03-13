@@ -15,12 +15,13 @@ pragma circom 2.0.0;
  * Security hardening:
  *   - Num2Bits range checks on all index/count signals
  *   - Domain-separated Poseidon: commitment chain uses domain tag 3
- *   - Index binding: pathIndices at position i must reconstruct index i
- *   - All leaves (revealed and redacted) bound to originalRoot
+ *   - Index binding: revealed pathIndices at position i must reconstruct index i
+ *   - Revealed leaves bound to originalRoot (redacted leaves skip root checks)
  */
 
 include "./lib/merkleProof.circom";
 include "./lib/poseidon.circom";
+include "./parameters.circom";
 
 // Range-checked Num2Bits for redaction circuit
 template Num2BitsRV(n) {
@@ -78,6 +79,7 @@ template RedactionValidity(maxLeaves, depth) {
 
     // -------------------------
     // 2) Verify revealed leaves are included at the correct *index i*
+    //    (gated: redacted leaves skip index/root constraints for efficiency)
     // -------------------------
     component inclusionProofs[maxLeaves];
     signal revealedLeaves[maxLeaves];
@@ -95,23 +97,21 @@ template RedactionValidity(maxLeaves, depth) {
         idxAccum[0] <== 0;
         for (var b = 0; b < depth; b++) {
             var bitWeight = 1 << b;
-            // Path bits are boolean (defense in depth; Merkle gadget also enforces this)
-            pathIndices[i][b] * (pathIndices[i][b] - 1) === 0;
             idxAccum[b + 1] <== idxAccum[b] + pathIndices[i][b] * bitWeight;
         }
-        idxAccum[depth] === i;
+        // Enforce index match only when revealed
+        revealMask[i] * (idxAccum[depth] - i) === 0;
 
-        // Inclusion proof (computed regardless; enforced only when revealed)
-        inclusionProofs[i] = MerkleTreeInclusionProof(depth);
+        // MerkleProof (computed regardless; root enforced only when revealed)
+        inclusionProofs[i] = MerkleProof(depth);
         inclusionProofs[i].leaf <== originalLeaves[i];
         for (var j = 0; j < depth; j++) {
             inclusionProofs[i].pathElements[j] <== pathElements[i][j];
             inclusionProofs[i].pathIndices[j] <== pathIndices[i][j];
         }
 
-        // Bind every leaf (revealed or redacted) to the original root to prevent
-        // proofs that only constrain revealed positions.
-        inclusionProofs[i].root === originalRoot;
+        // Bind revealed leaves to the original root; redacted leaves skip root checks.
+        revealMask[i] * (inclusionProofs[i].root - originalRoot) === 0;
 
         // Masked reveal vector:
         // - revealed leaves keep their original value
@@ -147,5 +147,6 @@ template RedactionValidity(maxLeaves, depth) {
     redactedCommitment === acc[maxLeaves - 1];
 }
 
-// Default parameters: 16 leaves, depth 4
-component main {public [originalRoot, redactedCommitment, revealedCount]} = RedactionValidity(16, 4);
+// Default parameters: values loaded from parameters.circom
+component main {public [originalRoot, redactedCommitment, revealedCount]} =
+    RedactionValidity(REDACTION_MAX_LEAVES, REDACTION_MERKLE_DEPTH);

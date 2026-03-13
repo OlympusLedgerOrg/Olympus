@@ -55,7 +55,7 @@ This directory contains the implementation of Olympus's unified proof system, wh
   - Main circuit combining all four components
   - Uses Poseidon for arithmetic-friendly hashing
   - Public inputs: canonicalHash, merkleRoot, ledgerRoot, checkpointHash
-  - Parametric: maxSections, merkleDepth, smtDepth
+  - Parametric: maxSections, merkleDepth, smtDepth (defaults in `circuits/parameters.circom`)
 
 ### Python Modules
 

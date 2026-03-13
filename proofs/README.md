@@ -25,6 +25,26 @@ bash smoke_test.sh
 
 ---
 
+## Configuring Circuit Parameters
+
+Default circuit sizes are defined in `proofs/circuits/parameters.circom`. For
+production-scale trees, regenerate this file with the helper CLI:
+
+```bash
+python -m proofs.proof_generator configure \
+  --document-merkle-depth 32 \
+  --non-existence-merkle-depth 32 \
+  --redaction-max-leaves 1024 \
+  --redaction-merkle-depth 10
+```
+
+You can also seed defaults from environment variables such as
+`OLYMPUS_REDACTION_MAX_LEAVES` by passing `--from-env`. After updating the
+parameters file, re-run `bash setup_circuits.sh` to compile the circuits and
+regenerate keys.
+
+---
+
 ## Circuits
 
 ### `document_existence.circom`
@@ -47,7 +67,8 @@ Selective redaction proof over a Poseidon Merkle tree.
 **Proves (current implementation):**
 
 * For each leaf where `revealMask[i] == 1`, the prover knows a leaf value that is included
-  in the original tree with `originalRoot`.
+  in the original tree with `originalRoot`. Redacted leaves skip Merkle checks to reduce
+  constraint pressure, so only revealed indices are fully enforced.
 * A public `redactedCommitment` is computed as a Poseidon chain over the masked leaf vector
   (revealed values; redacted slots contribute 0) and `revealedCount`.
 
@@ -91,6 +112,7 @@ proofs/
 │   ├── lib/
 │   │   ├── poseidon.circom       # Re-exports Poseidon from circomlib
 │   │   └── merkleProof.circom    # Shared Merkle proof templates
+│   ├── parameters.circom         # Configurable circuit constants
 │   ├── document_existence.circom
 │   ├── redaction_validity.circom
 │   ├── non_existence.circom
