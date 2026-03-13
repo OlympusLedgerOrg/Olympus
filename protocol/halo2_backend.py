@@ -202,7 +202,7 @@ class RecursiveRedactionProof:
     recursive_proof: bytes = b""
     proof_version: str = "1.0.0"
     timestamp: str = ""
-    _event_hashes_storage: tuple[str, ...] = field(default_factory=tuple, repr=False, compare=False)
+    _event_hashes: tuple[str, ...] = field(default_factory=tuple, repr=False, compare=False)
 
     def __init__(
         self,
@@ -225,7 +225,7 @@ class RecursiveRedactionProof:
         object.__setattr__(self, "recursive_proof", recursive_proof)
         object.__setattr__(self, "proof_version", proof_version)
         object.__setattr__(self, "timestamp", timestamp)
-        object.__setattr__(self, "_event_hashes_storage", tuple(event_hashes or ()))
+        object.__setattr__(self, "_event_hashes", tuple(event_hashes or ()))
 
     @property
     def event_hashes(self) -> list[str]:
@@ -235,7 +235,7 @@ class RecursiveRedactionProof:
         A new list is returned on each access to prevent external mutation of
         the stored tuple.
         """
-        return list(self._event_hashes_storage)
+        return list(self._event_hashes)
 
     def to_dict(self) -> dict[str, Any]:
         """Serialize to a dictionary with hex-encoded proof bytes."""
@@ -248,7 +248,7 @@ class RecursiveRedactionProof:
             "recursive_proof": self.recursive_proof.hex(),
             "proof_version": self.proof_version,
             "timestamp": self.timestamp,
-            "event_hashes": list(self._event_hashes_storage),
+            "event_hashes": list(self._event_hashes),
         }
 
     @classmethod
