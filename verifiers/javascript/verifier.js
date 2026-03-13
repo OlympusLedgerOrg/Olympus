@@ -124,14 +124,20 @@ function computeMerkleRoot(leaves) {
   // Hash all leaves with domain separation
   let level = leaves.map(leaf => merkleLeafHash(leaf));
 
-  // Build tree bottom-up
+  // Build tree bottom-up using CT-style promotion
   while (level.length > 1) {
     const nextLevel = [];
 
     for (let i = 0; i < level.length; i += 2) {
       const left = level[i];
-      const right = i + 1 < level.length ? level[i + 1] : level[i];
-      nextLevel.push(merkleParentHash(left, right));
+      if (i + 1 < level.length) {
+        // Pair exists: hash left and right
+        const right = level[i + 1];
+        nextLevel.push(merkleParentHash(left, right));
+      } else {
+        // CT-style promotion: lone node is promoted without hashing
+        nextLevel.push(left);
+      }
     }
 
     level = nextLevel;

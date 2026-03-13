@@ -63,7 +63,7 @@ Each stage must be independently verifiable and auditable.
 ### Merkle Trees
 
 1. **Parent Hash**: Use `merkle_parent_hash(left, right)` to compute parent nodes
-2. **Leaf Handling**: Duplicate the last leaf if odd number of leaves
+2. **Leaf Handling**: Use CT-style promotion (lone node promoted without hashing) for odd counts
 3. **Proofs**: Include sibling hashes and their position (left/right) for verification
 
 ### Ledger Protocol

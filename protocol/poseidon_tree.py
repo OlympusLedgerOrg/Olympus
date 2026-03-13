@@ -178,21 +178,28 @@ class PoseidonMerkleTree:
 
     def _build_level(self, level: Sequence[int]) -> list[int]:
         """
-        Hash a level upwards, duplicating the final leaf when odd.
+        Hash a level upwards using CT-style promotion.
 
-        All pairs in the level are hashed in a single backend call so that
-        the JS backend needs only one subprocess per level, not one per pair.
+        When an odd number of nodes exist, the lone node is promoted without
+        hashing (Certificate Transparency style). All pairs in the level are
+        hashed in a single backend call so that the JS backend needs only one
+        subprocess per level, not one per pair.
         Uses ``POSEIDON_DOMAIN_NODE`` domain tag for internal node hashing.
         """
         if len(level) == 1:
             return [level[0]]
 
-        padded = list(level)
-        if len(padded) % 2 == 1:
-            padded.append(padded[-1])
-
-        pairs = [(padded[i], padded[i + 1]) for i in range(0, len(padded), 2)]
-        return _poseidon_hash_pairs(pairs, domain=POSEIDON_DOMAIN_NODE)
+        pairs = []
+        promoted = []
+        for i in range(0, len(level), 2):
+            if i + 1 < len(level):
+                pairs.append((level[i], level[i + 1]))
+            else:
+                # CT-style promotion: lone node is promoted without hashing
+                promoted.append(level[i])
+        
+        hashed = _poseidon_hash_pairs(pairs, domain=POSEIDON_DOMAIN_NODE) if pairs else []
+        return hashed + promoted
 
     @property
     def tree_size(self) -> int:

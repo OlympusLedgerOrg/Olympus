@@ -249,3 +249,78 @@ def test_canonical_json_encode_rejects_duplicate_keys_after_nfc():
     """Reject keys that collide after Unicode NFC normalization."""
     with pytest.raises(ValueError, match="Duplicate key after NFC normalization"):
         canonical_json_encode({"é": 1, "e\u0301": 2})
+
+
+# ---------------------------------------------------------------------------
+# L1-A: Tests for unsupported types (must raise TypeError, not silently fallthrough)
+# ---------------------------------------------------------------------------
+
+
+def test_canonical_json_encode_rejects_datetime():
+    """Test that datetime objects are rejected with TypeError."""
+    from datetime import datetime, timezone
+
+    obj = {"timestamp": datetime(2024, 1, 1, 12, 0, 0, tzinfo=timezone.utc)}
+    with pytest.raises(TypeError, match="datetime"):
+        canonical_json_encode(obj)
+
+
+def test_canonical_json_encode_rejects_uuid():
+    """Test that UUID objects are rejected with TypeError."""
+    import uuid
+
+    obj = {"id": uuid.uuid4()}
+    with pytest.raises(TypeError, match="UUID"):
+        canonical_json_encode(obj)
+
+
+def test_canonical_json_encode_rejects_set():
+    """Test that set objects are rejected with TypeError."""
+    # Sets are not JSON-serializable
+    obj = {"tags": {"a", "b", "c"}}
+    with pytest.raises(TypeError, match="set"):
+        canonical_json_encode(obj)
+
+
+def test_canonical_json_encode_rejects_frozenset():
+    """Test that frozenset objects are rejected with TypeError."""
+    obj = {"tags": frozenset(["x", "y"])}
+    with pytest.raises(TypeError, match="frozenset"):
+        canonical_json_encode(obj)
+
+
+def test_canonical_json_encode_rejects_bytes():
+    """Test that bytes objects are rejected with TypeError."""
+    obj = {"data": b"\x00\x01\x02"}
+    with pytest.raises(TypeError, match="bytes"):
+        canonical_json_encode(obj)
+
+
+def test_canonical_json_encode_rejects_custom_object():
+    """Test that custom objects are rejected with TypeError."""
+
+    class CustomObject:
+        def __init__(self, value: int) -> None:
+            self.value = value
+
+    obj = {"custom": CustomObject(42)}
+    with pytest.raises(TypeError, match="CustomObject"):
+        canonical_json_encode(obj)
+
+
+def test_canonical_json_encode_rejects_nested_unsupported_type():
+    """Test that unsupported types in nested structures are rejected."""
+    import uuid
+
+    obj = {"outer": {"inner": {"id": uuid.uuid4()}}}
+    with pytest.raises(TypeError, match="UUID"):
+        canonical_json_encode(obj)
+
+
+def test_canonical_json_encode_rejects_unsupported_in_array():
+    """Test that unsupported types in arrays are rejected."""
+    from datetime import datetime, timezone
+
+    obj = {"items": [1, "two", datetime.now(timezone.utc)]}
+    with pytest.raises(TypeError, match="datetime"):
+        canonical_json_encode(obj)

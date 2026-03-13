@@ -63,18 +63,20 @@ pub fn compute_merkle_root(leaves: &[Vec<u8>]) -> Result<String, &'static str> {
         .map(|leaf| merkle_leaf_hash(leaf))
         .collect();
 
-    // Build tree bottom-up
+    // Build tree bottom-up using CT-style promotion
     while level.len() > 1 {
         let mut next_level = Vec::with_capacity((level.len() + 1) / 2);
 
         for i in (0..level.len()).step_by(2) {
             let left = &level[i];
-            let right = if i + 1 < level.len() {
-                &level[i + 1]
+            if i + 1 < level.len() {
+                // Pair exists: hash left and right
+                let right = &level[i + 1];
+                next_level.push(merkle_parent_hash(left, right));
             } else {
-                &level[i] // Duplicate last leaf if odd
-            };
-            next_level.push(merkle_parent_hash(left, right));
+                // CT-style promotion: lone node is promoted without hashing
+                next_level.push(*left);
+            }
         }
 
         level = next_level;
