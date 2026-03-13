@@ -33,7 +33,14 @@ See docs/08_database_strategy.md for complete database strategy documentation.
 import json
 import os
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime
+
+try:
+    from datetime import UTC
+except ImportError:  # Python < 3.11
+    from datetime import timezone
+
+    UTC = timezone.utc
 
 import nacl.signing
 import psycopg
@@ -86,7 +93,7 @@ def test_schema_initialization(storage):
 
 def test_append_record_creates_proof(storage, signing_key):
     """Test that appending a record creates a valid proof."""
-    shard_id = f"test_shard_{datetime.now(timezone.utc).timestamp()}"
+    shard_id = f"test_shard_{datetime.now(UTC).timestamp()}"
     value_hash = hash_bytes(b"test value")
 
     root, proof, header, signature, ledger_entry = storage.append_record(
@@ -119,7 +126,7 @@ def test_append_record_creates_proof(storage, signing_key):
 
 def test_append_record_prevents_duplicates(storage, signing_key):
     """Test that appending the same record twice fails."""
-    shard_id = f"test_shard_{datetime.now(timezone.utc).timestamp()}"
+    shard_id = f"test_shard_{datetime.now(UTC).timestamp()}"
     value_hash = hash_bytes(b"test value")
 
     # First append should succeed
@@ -146,7 +153,7 @@ def test_append_record_prevents_duplicates(storage, signing_key):
 
 def test_append_multiple_versions(storage, signing_key):
     """Test that multiple versions of the same document can coexist."""
-    shard_id = f"test_shard_{datetime.now(timezone.utc).timestamp()}"
+    shard_id = f"test_shard_{datetime.now(UTC).timestamp()}"
 
     value_v1 = hash_bytes(b"version 1")
     value_v2 = hash_bytes(b"version 2")
@@ -191,7 +198,7 @@ def test_append_multiple_versions(storage, signing_key):
 
 def test_get_proof_returns_valid_proof(storage, signing_key):
     """Test that get_proof returns a valid proof for existing records."""
-    shard_id = f"test_shard_{datetime.now(timezone.utc).timestamp()}"
+    shard_id = f"test_shard_{datetime.now(UTC).timestamp()}"
     value_hash = hash_bytes(b"test value")
 
     # Append record
@@ -216,7 +223,7 @@ def test_get_proof_returns_valid_proof(storage, signing_key):
 
 def test_get_proof_returns_none_for_nonexistent(storage):
     """Test that get_proof returns None for non-existent records."""
-    shard_id = f"test_shard_{datetime.now(timezone.utc).timestamp()}"
+    shard_id = f"test_shard_{datetime.now(UTC).timestamp()}"
 
     proof = storage.get_proof(
         shard_id=shard_id, record_type="document", record_id="nonexistent", version=1
@@ -227,7 +234,7 @@ def test_get_proof_returns_none_for_nonexistent(storage):
 
 def test_get_latest_header(storage, signing_key):
     """Test that get_latest_header returns the most recent header."""
-    shard_id = f"test_shard_{datetime.now(timezone.utc).timestamp()}"
+    shard_id = f"test_shard_{datetime.now(UTC).timestamp()}"
 
     # Append first record
     root1, _, header1, sig1, _ = storage.append_record(
@@ -260,9 +267,9 @@ def test_get_latest_header(storage, signing_key):
 
 def test_get_latest_header_detects_corrupt_signature(storage, signing_key):
     """Test that get_latest_header fails if persisted signature is corrupted."""
-    shard_id = f"test_shard_corrupt_sig_{datetime.now(timezone.utc).timestamp()}"
+    shard_id = f"test_shard_corrupt_sig_{datetime.now(UTC).timestamp()}"
     root = hash_bytes(f"root-{shard_id}".encode())
-    ts = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+    ts = datetime.now(UTC).isoformat().replace("+00:00", "Z")
     header = create_shard_header(shard_id=shard_id, root_hash=root, timestamp=ts)
     pubkey = signing_key.verify_key.encode()
 
@@ -294,7 +301,7 @@ def test_get_latest_header_detects_corrupt_signature(storage, signing_key):
 
 def test_get_ledger_tail(storage, signing_key):
     """Test that get_ledger_tail returns recent entries."""
-    shard_id = f"test_shard_{datetime.now(timezone.utc).timestamp()}"
+    shard_id = f"test_shard_{datetime.now(UTC).timestamp()}"
 
     # Append multiple records
     entries = []
@@ -321,7 +328,7 @@ def test_get_ledger_tail(storage, signing_key):
 
 def test_verify_persisted_root(storage, signing_key):
     """Test that verify_persisted_root validates root integrity."""
-    shard_id = f"test_shard_{datetime.now(timezone.utc).timestamp()}"
+    shard_id = f"test_shard_{datetime.now(UTC).timestamp()}"
 
     # Append records
     for i in range(3):
@@ -340,7 +347,7 @@ def test_verify_persisted_root(storage, signing_key):
 
 def test_shard_header_chain_linkage(storage, signing_key):
     """Test that shard headers form a proper chain."""
-    shard_id = f"test_shard_{datetime.now(timezone.utc).timestamp()}"
+    shard_id = f"test_shard_{datetime.now(UTC).timestamp()}"
 
     # Append first record
     _, _, header1, _, _ = storage.append_record(
@@ -371,7 +378,7 @@ def test_shard_header_chain_linkage(storage, signing_key):
 
 def test_ledger_chain_linkage(storage, signing_key):
     """Test that ledger entries form a proper chain."""
-    shard_id = f"test_shard_{datetime.now(timezone.utc).timestamp()}"
+    shard_id = f"test_shard_{datetime.now(UTC).timestamp()}"
 
     # Append first record
     _, _, _, _, entry1 = storage.append_record(
@@ -402,9 +409,9 @@ def test_ledger_chain_linkage(storage, signing_key):
 
 def test_get_latest_header_detects_corrupted_signature(storage, signing_key):
     """Test that corrupted shard header signatures are detected on read."""
-    shard_id = f"test_shard_corrupted_sig_{datetime.now(timezone.utc).timestamp()}"
+    shard_id = f"test_shard_corrupted_sig_{datetime.now(UTC).timestamp()}"
     root = hash_bytes(f"root-{shard_id}".encode())
-    ts = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+    ts = datetime.now(UTC).isoformat().replace("+00:00", "Z")
     header = create_shard_header(shard_id=shard_id, root_hash=root, timestamp=ts)
     pubkey = signing_key.verify_key.encode()
 
@@ -436,7 +443,7 @@ def test_get_latest_header_detects_corrupted_signature(storage, signing_key):
 
 def test_ledger_entries_reject_out_of_order_seq(storage, signing_key):
     """Test that out-of-order ledger sequence insertion is rejected."""
-    shard_id = f"test_shard_{datetime.now(timezone.utc).timestamp()}"
+    shard_id = f"test_shard_{datetime.now(UTC).timestamp()}"
 
     _, _, _, _, entry = storage.append_record(
         shard_id=shard_id,
@@ -448,7 +455,7 @@ def test_ledger_entries_reject_out_of_order_seq(storage, signing_key):
     )
 
     payload = {
-        "ts": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+        "ts": datetime.now(UTC).isoformat().replace("+00:00", "Z"),
         "record_hash": hash_bytes(b"forged").hex(),
         "shard_id": shard_id,
         "shard_root": hash_bytes(b"forged root").hex(),
@@ -478,8 +485,8 @@ def test_ledger_entries_reject_out_of_order_seq(storage, signing_key):
 
 def test_ledger_trigger_rejects_out_of_order_insert(storage):
     """Test that DB trigger rejects out-of-order ledger inserts."""
-    shard_id = f"test_shard_{datetime.now(timezone.utc).timestamp()}"
-    ts = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+    shard_id = f"test_shard_{datetime.now(UTC).timestamp()}"
+    ts = datetime.now(UTC).isoformat().replace("+00:00", "Z")
 
     genesis_payload = {
         "ts": ts,
@@ -521,7 +528,7 @@ def test_ledger_trigger_rejects_out_of_order_insert(storage):
 
 def test_get_all_shard_ids(storage, signing_key):
     """Test that get_all_shard_ids returns all shards."""
-    ts = datetime.now(timezone.utc).timestamp()
+    ts = datetime.now(UTC).timestamp()
     shard1 = f"test_shard_1_{ts}"
     shard2 = f"test_shard_2_{ts}"
 
@@ -553,7 +560,7 @@ def test_get_all_shard_ids(storage, signing_key):
 
 def test_deterministic_root_recomputation(storage, signing_key):
     """Test that root can be deterministically recomputed from leaves."""
-    shard_id = f"test_shard_{datetime.now(timezone.utc).timestamp()}"
+    shard_id = f"test_shard_{datetime.now(UTC).timestamp()}"
 
     # Append multiple records
     roots = []
@@ -579,7 +586,7 @@ def test_deterministic_root_recomputation(storage, signing_key):
 
 def test_shard_headers_reject_update(storage, signing_key):
     """Test that UPDATE on shard_headers is rejected by append-only trigger."""
-    shard_id = f"test_shard_reject_update_{datetime.now(timezone.utc).timestamp()}"
+    shard_id = f"test_shard_reject_update_{datetime.now(UTC).timestamp()}"
 
     # Append a record to create a shard header
     storage.append_record(
@@ -608,7 +615,7 @@ def test_shard_headers_reject_update(storage, signing_key):
 
 def test_shard_headers_reject_delete(storage, signing_key):
     """Test that DELETE on shard_headers is rejected by append-only trigger."""
-    shard_id = f"test_shard_reject_delete_{datetime.now(timezone.utc).timestamp()}"
+    shard_id = f"test_shard_reject_delete_{datetime.now(UTC).timestamp()}"
 
     # Append a record to create a shard header
     storage.append_record(
@@ -636,7 +643,7 @@ def test_shard_headers_reject_delete(storage, signing_key):
 
 def test_ledger_entries_reject_update(storage, signing_key):
     """Test that UPDATE on ledger_entries is rejected by append-only trigger."""
-    shard_id = f"test_ledger_reject_update_{datetime.now(timezone.utc).timestamp()}"
+    shard_id = f"test_ledger_reject_update_{datetime.now(UTC).timestamp()}"
 
     # Append a record to create a ledger entry
     storage.append_record(
@@ -665,7 +672,7 @@ def test_ledger_entries_reject_update(storage, signing_key):
 
 def test_ledger_entries_reject_delete(storage, signing_key):
     """Test that DELETE on ledger_entries is rejected by append-only trigger."""
-    shard_id = f"test_ledger_reject_delete_{datetime.now(timezone.utc).timestamp()}"
+    shard_id = f"test_ledger_reject_delete_{datetime.now(UTC).timestamp()}"
 
     # Append a record to create a ledger entry
     storage.append_record(
@@ -693,7 +700,7 @@ def test_ledger_entries_reject_delete(storage, signing_key):
 
 def test_smt_leaves_reject_update(storage, signing_key):
     """Test that UPDATE on smt_leaves is rejected by append-only trigger."""
-    shard_id = f"test_smt_leaves_reject_update_{datetime.now(timezone.utc).timestamp()}"
+    shard_id = f"test_smt_leaves_reject_update_{datetime.now(UTC).timestamp()}"
 
     # Append a record to create an SMT leaf
     storage.append_record(
@@ -720,7 +727,7 @@ def test_smt_leaves_reject_update(storage, signing_key):
 
 def test_smt_leaves_reject_delete(storage, signing_key):
     """Test that DELETE on smt_leaves is rejected by append-only trigger."""
-    shard_id = f"test_smt_leaves_reject_delete_{datetime.now(timezone.utc).timestamp()}"
+    shard_id = f"test_smt_leaves_reject_delete_{datetime.now(UTC).timestamp()}"
 
     # Append a record to create an SMT leaf
     storage.append_record(
@@ -746,7 +753,7 @@ def test_smt_leaves_reject_delete(storage, signing_key):
 
 def test_smt_nodes_reject_update(storage, signing_key):
     """Test that UPDATE on smt_nodes is rejected by append-only trigger."""
-    shard_id = f"test_smt_nodes_reject_update_{datetime.now(timezone.utc).timestamp()}"
+    shard_id = f"test_smt_nodes_reject_update_{datetime.now(UTC).timestamp()}"
 
     # Append a record to create SMT nodes
     storage.append_record(
@@ -773,7 +780,7 @@ def test_smt_nodes_reject_update(storage, signing_key):
 
 def test_smt_nodes_reject_delete(storage, signing_key):
     """Test that DELETE on smt_nodes is rejected by append-only trigger."""
-    shard_id = f"test_smt_nodes_reject_delete_{datetime.now(timezone.utc).timestamp()}"
+    shard_id = f"test_smt_nodes_reject_delete_{datetime.now(UTC).timestamp()}"
 
     # Append a record to create SMT nodes
     storage.append_record(
@@ -889,7 +896,7 @@ def test_ingestion_proofs_reject_delete(storage):
 
 def test_verify_state_replay_matches_headers_and_ledger(storage, signing_key):
     """Full replay should reproduce every persisted shard root."""
-    shard_id = f"test_verify_state_replay_{datetime.now(timezone.utc).timestamp()}"
+    shard_id = f"test_verify_state_replay_{datetime.now(UTC).timestamp()}"
 
     values = [hash_bytes(b"alpha"), hash_bytes(b"beta"), hash_bytes(b"gamma")]
     for idx, value_hash in enumerate(values, start=1):
@@ -916,7 +923,7 @@ def test_verify_state_replay_detects_header_root_divergence(storage, signing_key
     - get_latest_header detects a root mismatch via _assert_root_matches_state.
     """
     shard_id = (
-        f"test_verify_state_replay_detects_divergence_{datetime.now(timezone.utc).timestamp()}"
+        f"test_verify_state_replay_detects_divergence_{datetime.now(UTC).timestamp()}"
     )
 
     storage.append_record(
