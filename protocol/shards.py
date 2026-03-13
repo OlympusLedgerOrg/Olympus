@@ -36,6 +36,7 @@ _HKDF_INFO_SHARD_SIGNING_KEY: bytes = b"OLY:SHARD-SIGNING-KEY:V1"
 
 
 if TYPE_CHECKING:
+    from .federation import FederationRegistry
     from .rfc3161 import TimestampToken
 
 
@@ -117,6 +118,7 @@ def create_shard_header(
     round_number: int = 0,
     previous_header_hash: str = "",
     timestamp_token: TimestampToken | dict[str, str] | None = None,
+    federation_registry: FederationRegistry | None = None,
 ) -> dict[str, Any]:
     """
     Create a shard header dictionary.
@@ -132,6 +134,9 @@ def create_shard_header(
             If provided, the token's serialized form is included in the returned
             header under the ``"timestamp_token"`` key (not part of the hash
             commitment, since the token is obtained after hashing).
+        federation_registry: Optional FederationRegistry for federation-bound headers.
+            If provided, ``federation_epoch`` and ``membership_hash`` are included
+            in the header commitment.
 
     Returns:
         Dictionary containing shard header fields
@@ -154,6 +159,11 @@ def create_shard_header(
         "round": normalized_round,
         "previous_header_hash": previous_header_hash,
     }
+
+    # Include federation fields if registry is provided (L3-A)
+    if federation_registry is not None:
+        header["federation_epoch"] = federation_registry.epoch
+        header["membership_hash"] = federation_registry.membership_hash()
 
     # Compute header hash
     header["header_hash"] = shard_header_hash(

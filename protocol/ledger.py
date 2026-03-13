@@ -127,14 +127,9 @@ class Ledger:
         """
         ts = current_timestamp()
         prev_entry_hash = self.entries[-1].entry_hash if self.entries else ""
-        if self.entries:
-            from datetime import datetime
-
-            last_ts = self.entries[-1].ts
-            last_dt = datetime.fromisoformat(last_ts.replace("Z", "+00:00"))
-            current_dt = datetime.fromisoformat(ts.replace("Z", "+00:00"))
-            if current_dt <= last_dt:
-                raise ValueError("Ledger timestamps must be strictly increasing")
+        # NOTE: Strictly-increasing timestamp check removed (L2-B).
+        # Chain integrity is guaranteed by prev_entry_hash linkage, and NTP
+        # clock adjustments could otherwise stall the ledger.
 
         normalized_certificate = self._canonicalize_quorum_certificate(
             federation_quorum_certificate

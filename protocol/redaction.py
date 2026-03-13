@@ -419,7 +419,16 @@ class RedactionProtocol:
         Build the Poseidon Merkle tree for a document.
 
         Returns both the tree and the padded leaf vector (length 16 for depth-4).
+        
+        Raises:
+            ValueError: If document_parts exceeds 16 sections.
         """
+        # L3-B: Explicit guard before hashing (defense-in-depth)
+        if len(document_parts) > _POSEIDON_MAX_LEAVES:
+            raise ValueError(
+                f"Poseidon tree supports at most {_POSEIDON_MAX_LEAVES} sections; "
+                f"got {len(document_parts)}"
+            )
         canonical_sections = cls.canonical_section_bytes_list(document_parts)
         leaves = cls._poseidon_leaves_from_sections(canonical_sections)
         return PoseidonMerkleTree(leaves, depth=_POSEIDON_TREE_DEPTH), leaves
@@ -617,9 +626,17 @@ class RedactionProtocol:
             :class:`RedactionCorrectnessProof` binding both commitments.
 
         Raises:
-            ValueError: If revealed indices are out of bounds.
+            ValueError: If revealed indices are out of bounds or if document
+                exceeds 16 sections.
         """
         from .hashes import HASH_SEPARATOR
+
+        # L3-B: Explicit guard before hashing
+        if len(document_parts) > _POSEIDON_MAX_LEAVES:
+            raise ValueError(
+                f"Poseidon tree supports at most {_POSEIDON_MAX_LEAVES} sections; "
+                f"got {len(document_parts)}"
+            )
 
         if any(idx < 0 or idx >= len(document_parts) for idx in revealed_indices):
             raise ValueError("Revealed indices must be within the document length")

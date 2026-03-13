@@ -23,6 +23,9 @@ MERKLE_VERSION = "merkle_v1"
 # produced with so verifiers can apply the correct algorithm.
 PROOF_VERSION = "proof_v1"
 
+# Whitelist of recognized proof versions (L3-C)
+SUPPORTED_PROOF_VERSIONS: frozenset[str] = frozenset({"proof_v1"})
+
 _SEP = HASH_SEPARATOR.encode("utf-8")
 logger = logging.getLogger(__name__)
 
@@ -232,6 +235,7 @@ def verify_proof(proof: MerkleProof) -> bool:
     2. Canonical sibling position representation (only "left" or "right" strings, rejects booleans)
     3. Valid tree_size (must be positive for strict verification)
     4. Valid leaf_index (must be within tree bounds when tree_size is known)
+    5. Recognized proof_version (L3-C)
 
     For legacy proofs where tree_size=0 (indicating unknown tree size), the function
     performs basic verification without depth checks. However, new proofs must always
@@ -244,8 +248,16 @@ def verify_proof(proof: MerkleProof) -> bool:
         True if proof is valid, False otherwise
 
     Raises:
-        ValueError: If proof structure is malformed (invalid positions, incorrect depth, etc.)
+        ValueError: If proof structure is malformed (invalid positions, incorrect depth,
+            unknown proof_version, etc.)
     """
+    # L3-C: Validate proof_version against whitelist
+    if proof.proof_version not in SUPPORTED_PROOF_VERSIONS:
+        raise ValueError(
+            f"Unknown proof_version: '{proof.proof_version}'. "
+            f"Supported versions: {sorted(SUPPORTED_PROOF_VERSIONS)}"
+        )
+
     # Strict validation: all sibling positions must be canonical strings ("left" or "right")
     # Reject boolean positions - they should be normalized by MerkleProof.__post_init__
     # during proof construction. If we see booleans here, the proof was constructed incorrectly.
@@ -522,8 +534,20 @@ def _verify_subproof_ct(
 
     Returns:
         Tuple of (old_root, new_root, next_proof_index)
+
+    Raises:
+        ValueError: If proof is malformed or arguments are invalid.
     """
-    # Base case: trees are identical
+    # L3-D: Sanity guards for input validation
+    if old_size < 0 or new_size < 0:
+        raise ValueError("Tree sizes must be non-negative")
+    if old_size > new_size:
+        raise ValueError("old_size cannot exceed new_size in consistency proof")
+
+    # L3-D: Handle identical-size base case before recursion
+    # When old_size == new_size at the root, the proof should be empty and
+    # the roots should be identical - handled in verify_consistency_proof.
+    # But within recursion, identical subtrees need proof nodes.
     if old_size == new_size:
         if is_root:
             # At root with identical trees - this shouldn't happen in non-trivial cases
@@ -605,7 +629,19 @@ def deserialize_merkle_proof(proof_data: dict[str, Any]) -> MerkleProof:
 
     Returns:
         MerkleProof with normalized sibling positions.
+
+    Raises:
+        ValueError: If proof_version is not in the supported whitelist or if
+            other fields are malformed.
     """
+    # L3-C: Validate proof_version against whitelist
+    proof_version = str(proof_data.get("proof_version", PROOF_VERSION))
+    if proof_version not in SUPPORTED_PROOF_VERSIONS:
+        raise ValueError(
+            f"Unknown proof_version: '{proof_version}'. "
+            f"Supported versions: {sorted(SUPPORTED_PROOF_VERSIONS)}"
+        )
+
     normalized_siblings: list[tuple[bytes, str]] = []
     for sibling_hash_hex, is_right in proof_data.get("siblings", []):
         if isinstance(is_right, str):
@@ -635,7 +671,7 @@ def deserialize_merkle_proof(proof_data: dict[str, Any]) -> MerkleProof:
         leaf_index=int(proof_data["leaf_index"]),
         siblings=normalized_siblings,
         root_hash=bytes.fromhex(str(proof_data["root_hash"])),
-        proof_version=str(proof_data.get("proof_version", PROOF_VERSION)),
+        proof_version=proof_version,
         tree_version=str(proof_data.get("tree_version", MERKLE_VERSION)),
         epoch=epoch_val,
         tree_size=tree_size_val,
