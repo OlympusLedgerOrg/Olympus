@@ -60,6 +60,32 @@
         "signer_pubkey": { "type": "string", "pattern": "^[0-9a-f]{64}$" }
       }
     },
+    "previous_sth": {
+      "type": "object",
+      "description": "Optional previous Signed Tree Head for consistency verification",
+      "required": ["epoch_id", "tree_size", "merkle_root", "timestamp", "signature", "signer_pubkey"],
+      "properties": {
+        "epoch_id": { "type": "integer", "minimum": 0 },
+        "tree_size": { "type": "integer", "minimum": 0 },
+        "merkle_root": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+        "timestamp": { "type": "string" },
+        "signature": { "type": "string", "pattern": "^[0-9a-f]{128}$" },
+        "signer_pubkey": { "type": "string", "pattern": "^[0-9a-f]{64}$" }
+      }
+    },
+    "consistency_proof": {
+      "type": "object",
+      "description": "Optional Merkle consistency proof linking previous_sth to signed_tree_head",
+      "required": ["old_tree_size", "new_tree_size", "proof_nodes"],
+      "properties": {
+        "old_tree_size": { "type": "integer", "minimum": 0 },
+        "new_tree_size": { "type": "integer", "minimum": 0 },
+        "proof_nodes": {
+          "type": "array",
+          "items": { "type": "string", "pattern": "^[0-9a-f]{64}$" }
+        }
+      }
+    },
     "timestamp_token": {
       "type": "object",
       "description": "Optional RFC 3161 timestamp token for the header hash",

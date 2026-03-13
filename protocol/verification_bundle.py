@@ -24,6 +24,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any
 
+from .consistency import ConsistencyProof
 from .epochs import SignedTreeHead
 
 
@@ -41,6 +42,8 @@ def create_verification_bundle(
     record_id: str,
     version: int,
     signed_tree_head: SignedTreeHead | dict[str, Any] | None = None,
+    previous_sth: SignedTreeHead | dict[str, Any] | None = None,
+    consistency_proof: ConsistencyProof | dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """
     Assemble a complete verification bundle for a record.
@@ -58,6 +61,11 @@ def create_verification_bundle(
         signed_tree_head: Optional Signed Tree Head for the shard root. When
             supplied, verifiers can bind the inclusion proof to an operator-
             signed epoch commitment.
+        previous_sth: Optional previous Signed Tree Head. When supplied with
+            ``consistency_proof``, allows verifiers to check append-only growth.
+        consistency_proof: Optional Merkle consistency proof linking
+            ``previous_sth`` to ``signed_tree_head``. Must be supplied with
+            ``previous_sth``.
 
     Returns:
         Dictionary conforming to ``schemas/verification_bundle.json``.
@@ -111,6 +119,18 @@ def create_verification_bundle(
             signed_tree_head.to_dict()
             if isinstance(signed_tree_head, SignedTreeHead)
             else dict(signed_tree_head)
+        )
+
+    if previous_sth is not None:
+        bundle["previous_sth"] = (
+            previous_sth.to_dict() if isinstance(previous_sth, SignedTreeHead) else dict(previous_sth)
+        )
+
+    if consistency_proof is not None:
+        bundle["consistency_proof"] = (
+            consistency_proof.to_dict()
+            if isinstance(consistency_proof, ConsistencyProof)
+            else dict(consistency_proof)
         )
 
     # Include SMT proof as smt_proof (key/value based)

@@ -48,6 +48,12 @@ Out of scope: deployment topologies, user interfaces, and non-protocol applicati
   - Canonical serialization: canonical JSON with sorted keys and compact separators
   - Signature: Ed25519 over `BLAKE3(TREE_HEAD_PREFIX || canonical_sth_payload)`
   - Purpose: Bind every proof to a specific operator-signed epoch root and tree size.
+- **Consistency Proof**:
+  - Fields: `old_tree_size`, `new_tree_size`, `proof_nodes` (list of 32-byte subtree hashes)
+  - Demonstrates that a newer tree is an append-only extension of an older tree
+  - Implements RFC 6962 Certificate Transparency style consistency proofs
+  - Verification: Reconstruct both old and new roots from proof_nodes and validate they match the claimed STH roots
+  - Purpose: Enable observers to detect split-view logs by comparing STHs across nodes
 - **Redaction Proof**: Poseidon-backed commitment with sibling positions and revealed indices; max leaves and depth documented in `proofs/circuits/redaction_validity.circom`.
 
 ## Determinism Requirements
@@ -69,6 +75,79 @@ Any verifier must be able to, offline and without secrets:
 5. Walk the ledger chain by `previous_hash` back to genesis.
 6. Validate optional RFC 3161 timestamp tokens against pinned TSA fingerprints.
 7. For redaction proofs, verify Poseidon accumulator consistency and revealed content commitments.
+8. For consistency proofs, verify that newer STHs represent append-only extensions of older STHs using Certificate Transparency-style consistency proofs.
+
+## Signed Tree Head Consistency Proofs
+
+Olympus implements RFC 6962 Certificate Transparency-style consistency proofs to ensure append-only growth and enable detection of split-view logs.
+
+### Append-Only Guarantees
+
+A consistency proof demonstrates that a newer Merkle tree (with root `R_new` and size `n`) is an append-only extension of an older tree (with root `R_old` and size `m` where `m ≤ n`). The proof contains O(log n) subtree hashes that allow a verifier to:
+
+1. Reconstruct `R_old` from the proof nodes
+2. Reconstruct `R_new` from the proof nodes
+3. Confirm both reconstructions match the claimed roots
+
+If verification succeeds, the verifier knows that:
+- No leaves from the old tree were modified
+- No leaves from the old tree were removed
+- Only new leaves were appended after position `m`
+
+### Split-View Detection
+
+Observers can detect split-view logs by:
+
+1. **Collecting STHs**: Use the `/protocol/sth/latest` and `/protocol/sth/history` endpoints to collect Signed Tree Heads from multiple nodes
+2. **Comparing Roots**: For the same epoch, all nodes must serve STHs with identical `merkle_root` values
+3. **Verifying Consistency**: Between epochs, verify that newer STHs are append-only extensions of older STHs using consistency proofs
+4. **Cross-Node Gossip**: Compare STHs across nodes; any discrepancy indicates a split-view attack
+
+### Verification Protocol
+
+To verify STH consistency:
+
+```python
+def verify_sth_consistency(old_sth, new_sth, proof):
+    # Rule 1: Tree size must not decrease
+    if new_sth.tree_size < old_sth.tree_size:
+        return False
+
+    # Rule 2: Both STH signatures must be valid
+    if not old_sth.verify() or not new_sth.verify():
+        return False
+
+    # Rule 3: Merkle consistency proof must validate
+    old_root = bytes.fromhex(old_sth.merkle_root)
+    new_root = bytes.fromhex(new_sth.merkle_root)
+    return verify_consistency_proof(old_root, new_root, proof)
+```
+
+### Gossip Endpoints
+
+Two public endpoints (no authentication required) enable independent monitoring:
+
+- `GET /protocol/sth/latest?shard_id={shard}` — Returns the latest STH for a shard
+- `GET /protocol/sth/history?shard_id={shard}&n={count}` — Returns recent STH history (up to 100 entries)
+
+Monitors should:
+1. Poll these endpoints regularly from multiple nodes
+2. Verify consistency between sequential STHs
+3. Alert on any inconsistencies (different roots for same epoch, missing consistency proofs, verification failures)
+
+### Security Properties
+
+**What the system guarantees:**
+- If STH consistency verification passes, the tree has grown in an append-only manner
+- If two nodes serve different STHs for the same epoch, observers will detect it via gossip
+- Operators cannot hide or rollback committed records without detection
+
+**What the system does NOT guarantee:**
+- Completeness (operators may omit records from the tree entirely)
+- Timeliness (operators may delay publishing STHs)
+- Single source of truth (multiple valid forks may exist; observers must choose which to trust)
+
+See `protocol/consistency.py` and `protocol/epochs.py` for implementation details.
 
 ## Forward Compatibility (Phase 1+ Hooks)
 

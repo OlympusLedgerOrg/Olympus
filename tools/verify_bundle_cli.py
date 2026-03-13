@@ -28,7 +28,8 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 
 import nacl.signing
 
-from protocol.epochs import EpochRecord, SignedTreeHead, compute_epoch_head
+from protocol.consistency import ConsistencyProof
+from protocol.epochs import EpochRecord, SignedTreeHead, compute_epoch_head, verify_sth_consistency
 from protocol.events import CanonicalEvent
 from protocol.hashes import shard_header_hash
 from protocol.merkle import MerkleProof, MerkleTree, merkle_leaf_hash, verify_proof
@@ -358,6 +359,33 @@ def _check_signed_tree_head(
     return True, f"Signed Tree Head valid (epoch={sth.epoch_id}, tree_size={sth.tree_size})"
 
 
+def _check_sth_consistency(
+    previous_sth: dict[str, Any],
+    signed_tree_head: dict[str, Any],
+    consistency_proof: dict[str, Any],
+) -> tuple[bool, str]:
+    """Verify consistency between two Signed Tree Heads using a consistency proof."""
+    try:
+        old_sth = SignedTreeHead.from_dict(previous_sth)
+        new_sth = SignedTreeHead.from_dict(signed_tree_head)
+        proof = ConsistencyProof.from_dict(consistency_proof)
+    except Exception as exc:
+        return False, f"STH consistency check failed: malformed data - {exc}"
+
+    if not verify_sth_consistency(old_sth, new_sth, proof):
+        return False, (
+            f"STH consistency INVALID: append-only violation detected between "
+            f"epoch {old_sth.epoch_id} (size {old_sth.tree_size}) and "
+            f"epoch {new_sth.epoch_id} (size {new_sth.tree_size})"
+        )
+
+    return True, (
+        f"STH consistency valid: append-only growth from "
+        f"epoch {old_sth.epoch_id} (size {old_sth.tree_size}) to "
+        f"epoch {new_sth.epoch_id} (size {new_sth.tree_size})"
+    )
+
+
 def verify_bundle(
     bundle: dict[str, Any],
     *,
@@ -451,6 +479,18 @@ def verify_bundle(
     proof_entries = bundle.get("inclusion_proofs") or bundle.get("merkle_proofs")
     if proof_entries:
         results.extend(_check_merkle_proofs(header["root_hash"], proof_entries))
+
+    # 5. STH consistency proof (optional)
+    previous_sth = bundle.get("previous_sth")
+    consistency_proof = bundle.get("consistency_proof")
+    if previous_sth is not None and consistency_proof is not None and signed_tree_head is not None:
+        results.append(_check_sth_consistency(previous_sth, signed_tree_head, consistency_proof))
+    elif previous_sth is not None or consistency_proof is not None:
+        # Warn if only one is present
+        if previous_sth is not None:
+            results.append((False, "Consistency proof missing (previous_sth present but no proof)"))
+        if consistency_proof is not None:
+            results.append((False, "Previous STH missing (consistency_proof present but no previous_sth)"))
 
     all_passed = all(passed for passed, _ in results)
     return all_passed, results
