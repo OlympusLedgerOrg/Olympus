@@ -73,6 +73,7 @@ include = [
     "schemas*",
     "storage*",
     "proofs*",
+    "integrations*",
 ]
 # Common excludes not meant for distribution wheels
 exclude = [

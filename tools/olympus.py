@@ -5,6 +5,7 @@ Unified Olympus CLI.
 Currently supports:
     olympus canon <input.json> [--hash] [--format json|bytes|hex] [-o output]
     olympus commit <file> --api-key <key> [--namespace ns] [--id id] [--api-url url]
+    olympus ingest <file> [--generate-proof] [--verify] [--json]
 """
 
 import argparse
@@ -23,6 +24,64 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 from protocol.canonical import canonicalize_document, document_to_bytes
 from protocol.federation import FederationRegistry
 from protocol.hashes import hash_bytes
+
+
+def _read_file_bytes(path: str) -> bytes:
+    """Read a file from disk and emit CLI-friendly errors on failure."""
+    file_path = Path(path)
+    try:
+        return file_path.read_bytes()
+    except FileNotFoundError as exc:
+        raise ValueError(f"File not found: {path}") from exc
+    except OSError as exc:
+        raise ValueError(f"Error reading file: {exc}") from exc
+
+
+def _fetch_json_request(
+    url: str, *, method: str = "GET", payload: dict | None = None, api_key: str = ""
+) -> dict:
+    """Send a JSON HTTP request and return the decoded JSON response."""
+    data = None
+    headers = {"Content-Type": "application/json"}
+    if api_key:
+        headers["X-API-Key"] = api_key
+    if payload is not None:
+        data = json.dumps(payload).encode("utf-8")
+    request = Request(url, data=data, headers=headers, method=method)
+    try:
+        with urlopen(request, timeout=30) as response:  # noqa: S310
+            return json.loads(response.read().decode("utf-8"))
+    except HTTPError as exc:
+        body = exc.read().decode("utf-8", errors="replace")
+        raise ValueError(f"Olympus API returned HTTP {exc.code}: {body}") from exc
+    except URLError as exc:
+        raise ValueError(f"Could not reach Olympus API at {url}: {exc.reason}") from exc
+    except json.JSONDecodeError as exc:
+        raise ValueError(f"Olympus API returned invalid JSON for {url}") from exc
+    except Exception as exc:
+        raise ValueError(f"Olympus API call failed: {exc}") from exc
+
+
+def _commit_artifact(
+    *, file_path: str, namespace: str, artifact_id: str, api_key: str, api_url: str
+) -> tuple[str, dict]:
+    """Hash a file and commit it to the Olympus ingest API."""
+    file_bytes = _read_file_bytes(file_path)
+    artifact_hash = hash_bytes(file_bytes).hex()
+    payload: dict[str, str] = {
+        "artifact_hash": artifact_hash,
+        "namespace": namespace,
+        "id": artifact_id,
+    }
+    if api_key:
+        payload["api_key"] = api_key
+
+    endpoint = f"{api_url.rstrip('/')}/ingest/commit"
+    result = _fetch_json_request(endpoint, method="POST", payload=payload, api_key=api_key)
+    proof_id = result.get("proof_id", "")
+    if not proof_id:
+        raise ValueError("Olympus API returned no proof_id")
+    return artifact_hash, result
 
 
 def _cmd_canon(args: argparse.Namespace) -> int:
@@ -71,57 +130,67 @@ def _cmd_canon(args: argparse.Namespace) -> int:
 
 def _cmd_commit(args: argparse.Namespace) -> int:
     """Compute the BLAKE3 hash of a file and commit it to the Olympus ledger."""
-    file_path = Path(args.file)
     try:
-        file_bytes = file_path.read_bytes()
-    except FileNotFoundError:
-        print(f"Error: File not found: {args.file}", file=sys.stderr)
-        return 1
-    except OSError as exc:
-        print(f"Error reading file: {exc}", file=sys.stderr)
-        return 1
-
-    artifact_hash = hash_bytes(file_bytes).hex()
-
-    payload: dict = {
-        "artifact_hash": artifact_hash,
-        "namespace": args.namespace,
-        "id": args.id,
-    }
-    if args.api_key:
-        payload["api_key"] = args.api_key
-
-    api_url = args.api_url.rstrip("/")
-    endpoint = f"{api_url}/ingest/commit"
-
-    try:
-        data = json.dumps(payload).encode("utf-8")
-        req = Request(
-            endpoint,
-            data=data,
-            headers={"Content-Type": "application/json"},
-            method="POST",
+        _, result = _commit_artifact(
+            file_path=args.file,
+            namespace=args.namespace,
+            artifact_id=args.id,
+            api_key=args.api_key,
+            api_url=args.api_url,
         )
-        with urlopen(req, timeout=30) as response:  # noqa: S310
-            result = json.loads(response.read().decode("utf-8"))
-    except HTTPError as exc:
-        body = exc.read().decode("utf-8", errors="replace")
-        print(f"Error: Olympus API returned HTTP {exc.code}: {body}", file=sys.stderr)
-        return 1
-    except URLError as exc:
-        print(f"Error: Could not reach Olympus API at {endpoint}: {exc.reason}", file=sys.stderr)
-        return 1
-    except Exception as exc:
-        print(f"Error: Olympus API call failed: {exc}", file=sys.stderr)
+        print(result["proof_id"])
+        return 0
+    except ValueError as exc:
+        print(f"Error: {exc}", file=sys.stderr)
         return 1
 
-    proof_id = result.get("proof_id", "")
-    if not proof_id:
-        print("Error: Olympus API returned no proof_id", file=sys.stderr)
-        return 1
 
-    print(proof_id)
-    return 0
+def _cmd_ingest(args: argparse.Namespace) -> int:
+    """Commit a file and optionally retrieve and verify its proof bundle."""
+    artifact_id = args.id or Path(args.file).name
+    try:
+        artifact_hash, commit_result = _commit_artifact(
+            file_path=args.file,
+            namespace=args.namespace,
+            artifact_id=artifact_id,
+            api_key=args.api_key,
+            api_url=args.api_url,
+        )
+        output: dict[str, object] = {
+            "file": str(Path(args.file)),
+            "artifact_hash": artifact_hash,
+            "commit": commit_result,
+        }
+        api_url = args.api_url.rstrip("/")
+        proof_id = str(commit_result["proof_id"])
+
+        if args.generate_proof:
+            output["proof"] = _fetch_json_request(
+                f"{api_url}/ingest/records/{proof_id}/proof",
+                api_key=args.api_key,
+            )
+        if args.verify:
+            output["verification"] = _fetch_json_request(
+                f"{api_url}/ingest/records/hash/{artifact_hash}/verify",
+                api_key=args.api_key,
+            )
+
+        if args.json:
+            print(json.dumps(output, indent=2))
+        else:
+            print(f"Committed: {args.file}")
+            print(f"Proof ID: {proof_id}")
+            print(f"Artifact Hash: {artifact_hash}")
+            if "proof" in output:
+                print("Generated proof bundle: yes")
+            if "verification" in output:
+                verification = output["verification"]
+                assert isinstance(verification, dict)
+                print(f"Server verification: {verification.get('merkle_proof_valid', False)}")
+        return 0
+    except ValueError as exc:
+        print(f"Error: {exc}", file=sys.stderr)
+        return 1
 
 
 def _default_registry_path() -> Path:
@@ -285,6 +354,51 @@ def main() -> int:
         help="Base URL of the Olympus API (or set OLYMPUS_API_URL env var)",
     )
 
+    ingest_parser = subparsers.add_parser(
+        "ingest",
+        help="Commit a file and optionally retrieve and verify the resulting proof bundle",
+    )
+    ingest_parser.add_argument("file", type=str, help="Path to the document or artifact to ingest")
+    ingest_parser.add_argument(
+        "--api-key",
+        type=str,
+        default=os.environ.get("OLYMPUS_API_KEY", ""),
+        help="Olympus API key (or set OLYMPUS_API_KEY env var)",
+    )
+    ingest_parser.add_argument(
+        "--namespace",
+        type=str,
+        default="demo",
+        help="Namespace for the artifact (default: demo)",
+    )
+    ingest_parser.add_argument(
+        "--id",
+        type=str,
+        default="",
+        help="Artifact identifier (defaults to the file name)",
+    )
+    ingest_parser.add_argument(
+        "--api-url",
+        type=str,
+        default=os.environ.get("OLYMPUS_API_URL", "http://localhost:8000"),
+        help="Base URL of the Olympus API (or set OLYMPUS_API_URL env var)",
+    )
+    ingest_parser.add_argument(
+        "--generate-proof",
+        action="store_true",
+        help="Fetch the proof bundle after the commitment is recorded",
+    )
+    ingest_parser.add_argument(
+        "--verify",
+        action="store_true",
+        help="Call the API verification endpoint for the committed content hash",
+    )
+    ingest_parser.add_argument(
+        "--json",
+        action="store_true",
+        help="Emit the full ingest transcript as JSON",
+    )
+
     node_parser = subparsers.add_parser("node", help="Manage federation node configuration")
     node_subparsers = node_parser.add_subparsers(dest="node_command", required=True)
 
@@ -336,6 +450,8 @@ def main() -> int:
         return _cmd_canon(args)
     if args.command == "commit":
         return _cmd_commit(args)
+    if args.command == "ingest":
+        return _cmd_ingest(args)
     if args.command == "node":
         if args.node_command == "list":
             return _cmd_node_list(args)
