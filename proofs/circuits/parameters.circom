@@ -4,7 +4,7 @@ pragma circom 2.0.0;
 // Keep these defaults aligned with protocol docs and test inputs.
 
 var DOCUMENT_MERKLE_DEPTH = 20;
-var NON_EXISTENCE_MERKLE_DEPTH = 20;
+var NON_EXISTENCE_MERKLE_DEPTH = 256;  // 256 for 32-byte key sparse Merkle tree
 var REDACTION_MAX_LEAVES = 16;
 var REDACTION_MERKLE_DEPTH = 4;
 var UNIFIED_MAX_SECTIONS = 8;

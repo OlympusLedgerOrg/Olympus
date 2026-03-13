@@ -87,16 +87,15 @@ Selective redaction proof over a Poseidon Merkle tree.
 
 ### `non_existence.circom`
 
-Indexed “absence-at-index” proof for an **indexed Merkle tree**.
+Keyed non-membership proof for a **sparse Merkle tree**.
 
-**Proves:** “The leaf at public `leafIndex` is the empty value `0` in the Poseidon Merkle tree
-with public `root`.”
+**Proves:** "The leaf at the position derived from public 32-byte `key` is the empty value `0` in the Poseidon Merkle tree with public `root`."
 
-**Not a full sparse Merkle keyed non-membership proof.**
-This circuit does not accept a key/value pair or prove divergence; it proves emptiness at a specific index.
+**Key-to-path derivation:** The circuit converts the 32-byte key to a 256-bit path by extracting bits MSB-first from each byte (matching `protocol/ssmf.py` semantics). This ensures the proof is cryptographically bound to the specific key, not an arbitrary index chosen by the prover.
+
+**Semantics alignment:** This circuit now provides the same cryptographic guarantee as the Python SSMF layer: proof of non-existence for a specific key in a sparse Merkle tree.
 
 **Does NOT prove:**
-- Non-existence of an arbitrary key in a sparse Merkle tree
 - Any linkage to an Olympus ledger entry without external validation
 
 ---

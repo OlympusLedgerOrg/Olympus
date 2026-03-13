@@ -100,6 +100,21 @@ class TestInputValidation:
         with pytest.raises(ValueError, match="Missing required inputs"):
             gen.generate_witness(root="1")
 
+    def test_non_existence_valid_inputs(self, tmp_path: Path):
+        gen = ProofGenerator(
+            "non_existence",
+            build_dir=tmp_path,
+            snarkjs_bin="nonexistent-snarkjs",
+        )
+        witness = gen.generate_witness(
+            root="123",
+            key=[0] * 32,  # 32-byte key as array of field elements
+            pathElements=["0"] * 256,
+        )
+        assert witness.circuit == "non_existence"
+        assert witness.inputs["root"] == "123"
+        assert witness.inputs["key"] == [0] * 32
+
     def test_redaction_validity_missing_inputs(self, tmp_path: Path):
         gen = ProofGenerator("redaction_validity", build_dir=tmp_path)
         with pytest.raises(ValueError, match="Missing required inputs"):

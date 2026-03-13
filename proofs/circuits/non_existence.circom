@@ -1,12 +1,19 @@
 pragma circom 2.0.0;
 
 /*
- * Sparse Merkle Tree non-membership proof with default hash chain.
+ * Sparse Merkle Tree non-membership proof with keyed path derivation.
  *
  * Statement proved:
- *   Given a public Poseidon Merkle root `root` and a public `leafIndex`,
- *   the prover knows a Merkle authentication path such that the leaf at
- *   that index is the empty sentinel value 0.
+ *   Given a public Poseidon Merkle root `root` and a public 32-byte `key`,
+ *   the prover knows a Merkle authentication path from the key-derived
+ *   position to the root such that the leaf at that position is the empty
+ *   sentinel value 0.
+ *
+ * Key-to-path derivation:
+ *   The 32-byte key is converted to a 256-bit path by extracting bits
+ *   MSB-first from each byte (matching protocol/ssmf.py semantics).
+ *   This ensures the circuit proves non-existence at the cryptographically
+ *   bound position hash(key), not at an arbitrary index chosen by the prover.
  *
  * Default hash chain semantics:
  *   An empty subtree at height h has hash DEFAULT[h], where:
@@ -17,8 +24,8 @@ pragma circom 2.0.0;
  *   Merkle path recomputes to `root` starting from leaf = 0.
  *
  * Security hardening:
- *   - Num2Bits range check on leafIndex
- *   - Index bounds: leafIndex < treeSize (when treeSize > 0)
+ *   - Num2Bits range check on each key byte (ensures 0-255 range)
+ *   - Key-to-path derivation inside the circuit (prevents index malleability)
  *   - Domain-separated Poseidon via MerkleTreeInclusionProof
  */
 
@@ -41,58 +48,53 @@ template Num2BitsStrictNE(n) {
     sum === in;
 }
 
-// LessThan comparator with range check
-template LessThanBoundedNE(n) {
-    signal input in[2];
-    signal output out;
+// Convert a single byte (0-255) to 8 bits MSB-first
+template ByteToBitsMSB() {
+    signal input byte;
+    signal output bits[8];
 
-    component diff = Num2BitsStrictNE(n + 1);
-    diff.in <== in[1] - in[0] + (1 << n);
+    // Range check: byte must fit in 8 bits (0-255)
+    component byteBits = Num2BitsStrictNE(8);
+    byteBits.in <== byte;
 
-    out <== diff.out[n];
+    // Reverse bit order from LSB-first to MSB-first
+    // byteBits.out[0] is LSB, bits[7] is LSB in our output
+    // byteBits.out[7] is MSB, bits[0] is MSB in our output
+    for (var i = 0; i < 8; i++) {
+        bits[i] <== byteBits.out[7 - i];
+    }
 }
 
 template NonExistence(depth) {
     // ---- Public inputs ----
     signal input root;
-    signal input leafIndex;
-    signal input treeSize;   // Number of leaves; when > 0 enforces leafIndex < treeSize
+    signal input key[32];  // 32-byte key (each element 0-255)
 
     // ---- Private inputs ----
     signal input pathElements[depth];
-    signal input pathIndices[depth]; // LSB-first direction bits
+    // Note: pathIndices is derived from key, not a private input anymore
 
-    // --- Range check: leafIndex fits in `depth` bits ---
-    component leafIndexBits = Num2BitsStrictNE(depth);
-    leafIndexBits.in <== leafIndex;
+    // --- Derive path from key ---
+    // Convert 32 bytes to 256 bits MSB-first (matching protocol/ssmf.py)
+    component keyBits[32];
+    signal pathIndices[depth];
 
-    // Enforce pathIndices encode the provided leafIndex (LSB-first)
-    signal indexAccum[depth + 1];
-    indexAccum[0] <== 0;
+    for (var b = 0; b < 32; b++) {
+        keyBits[b] = ByteToBitsMSB();
+        keyBits[b].byte <== key[b];
 
-    var pow2 = 1;
-    for (var i = 0; i < depth; i++) {
-        // Boolean constraint for path bit
-        pathIndices[i] * (pathIndices[i] - 1) === 0;
-
-        indexAccum[i + 1] <== indexAccum[i] + pathIndices[i] * pow2;
-        pow2 = pow2 * 2;
+        // Copy the 8 bits from this byte into pathIndices
+        for (var bit = 0; bit < 8; bit++) {
+            pathIndices[b * 8 + bit] <== keyBits[b].bits[bit];
+        }
     }
-    leafIndex === indexAccum[depth];
 
-    // --- Index bounds: leafIndex < treeSize (when treeSize > 0) ---
-    signal treeSizeInv;
-    treeSizeInv <-- (treeSize != 0) ? (1 / treeSize) : 0;
-    signal treeSizeIsPositive;
-    treeSizeIsPositive <== treeSize * treeSizeInv;
-    treeSizeIsPositive * (1 - treeSizeIsPositive) === 0;
+    // --- Verify all pathIndices are binary (redundant but explicit) ---
+    for (var i = 0; i < depth; i++) {
+        pathIndices[i] * (pathIndices[i] - 1) === 0;
+    }
 
-    component boundsCheck = LessThanBoundedNE(depth);
-    boundsCheck.in[0] <== leafIndex;
-    boundsCheck.in[1] <== treeSize;
-    (1 - boundsCheck.out) * treeSizeIsPositive === 0;
-
-    // Prove inclusion of the empty leaf (0) at that index
+    // --- Prove inclusion of the empty leaf (0) at the key-derived path ---
     // This is the default hash chain: starting from sentinel value 0
     component merkle = MerkleTreeInclusionProof(depth);
     merkle.root <== root;
@@ -104,4 +106,4 @@ template NonExistence(depth) {
     }
 }
 
-component main { public [root, leafIndex, treeSize] } = NonExistence(NON_EXISTENCE_MERKLE_DEPTH);
+component main { public [root, key] } = NonExistence(NON_EXISTENCE_MERKLE_DEPTH);

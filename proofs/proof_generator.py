@@ -21,6 +21,14 @@ Usage::
     proof = generator.prove(witness)
     verified = generator.verify(proof, public_inputs=proof.public_signals)
 
+    # Non-existence proof with key-based derivation
+    ne_generator = ProofGenerator("non_existence")
+    ne_witness = ne_generator.generate_witness(
+        root="123",
+        key=[0] * 32,  # 32-byte key as array of field elements
+        pathElements=["0"] * 256,
+    )
+
     # Configure circuit parameters (writes proofs/circuits/parameters.circom)
     # python -m proofs.proof_generator configure --document-merkle-depth 32
 
@@ -80,7 +88,7 @@ class CircuitConfig:
     def default(cls) -> "CircuitConfig":
         return cls(
             document_merkle_depth=20,
-            non_existence_merkle_depth=20,
+            non_existence_merkle_depth=256,  # 256 for 32-byte key sparse Merkle tree
             redaction_max_leaves=16,
             redaction_merkle_depth=4,
             unified_max_sections=8,
@@ -374,8 +382,9 @@ class ProofGenerator:
             "pathElements",
             "pathIndices",
         ],
-        # UPDATED: indexed non-existence now uses leafIndex (public) and does NOT take emptyLeaf.
-        "non_existence": ["root", "leafIndex", "treeSize", "pathElements", "pathIndices"],
+        # UPDATED: keyed non-existence now uses key[32] (public) instead of leafIndex/treeSize.
+        # pathIndices is derived from key inside the circuit, so it's not an input.
+        "non_existence": ["root", "key", "pathElements"],
         "redaction_validity": [
             "originalRoot",
             "redactedCommitment",
@@ -421,11 +430,10 @@ class ProofGenerator:
                 "pathIndices", inputs.get("pathIndices"), config.document_merkle_depth
             )
         elif self.circuit == "non_existence":
+            # key must be an array of 32 bytes (field elements 0-255)
+            self._require_length("key", inputs.get("key"), 32)
             self._require_length(
                 "pathElements", inputs.get("pathElements"), config.non_existence_merkle_depth
-            )
-            self._require_length(
-                "pathIndices", inputs.get("pathIndices"), config.non_existence_merkle_depth
             )
         elif self.circuit == "redaction_validity":
             self._require_length(

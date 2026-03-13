@@ -116,20 +116,22 @@ _CIRCUIT_VISUALIZER = {
         ],
     },
     "non_existence": {
-        "title": "Indexed non-existence proof",
-        "public_inputs": ["root", "leafIndex"],
-        "private_inputs": ["pathElements[depth]", "pathIndices[depth]"],
+        "title": "Keyed non-existence proof",
+        "public_inputs": ["root", "key[32]"],
+        "private_inputs": ["pathElements[depth]"],
         "constraints": [
             {
-                "label": "Index bits are boolean and bind the path to leafIndex",
+                "label": "Key is converted to path bits MSB-first",
                 "explanation": (
-                    "The circuit reconstructs the public leafIndex from LSB-first "
-                    "path bits so the witness cannot prove emptiness at a "
-                    "different position."
+                    "Each of the 32 key bytes is converted to 8 bits MSB-first using "
+                    "ByteToBitsMSB, yielding 256 path bits that uniquely determine the "
+                    "Merkle tree position. This prevents the prover from choosing an "
+                    "arbitrary index - the path is cryptographically bound to the key."
                 ),
                 "source_snippets": [
-                    "pathIndices[i] * (pathIndices[i] - 1) === 0;",
-                    "leafIndex === indexAccum[depth];",
+                    "component keyBits[32];",
+                    "keyBits[b] = ByteToBitsMSB();",
+                    "pathIndices[b * 8 + bit] <== keyBits[b].bits[bit];",
                 ],
             },
             {
@@ -137,7 +139,8 @@ _CIRCUIT_VISUALIZER = {
                 "explanation": (
                     "Instead of taking a private leaf input, the Merkle proof "
                     "gadget is wired to the constant 0, so only an empty slot can "
-                    "satisfy the proof."
+                    "satisfy the proof. Combined with key-to-path derivation, this "
+                    "proves that the specific key does not exist in the tree."
                 ),
                 "source_snippets": [
                     "component merkle = MerkleTreeInclusionProof(depth);",
