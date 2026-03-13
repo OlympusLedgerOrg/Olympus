@@ -164,10 +164,10 @@ class CircuitConfig:
     def validate(self) -> None:
         """Validate cross-parameter constraints."""
         max_leaves_capacity = 1 << self.redaction_merkle_depth
-        if self.redaction_max_leaves != max_leaves_capacity:
+        if self.redaction_max_leaves > max_leaves_capacity:
             raise ValueError(
-                "redaction_max_leaves must equal 2^redaction_merkle_depth "
-                f"(expected {max_leaves_capacity})."
+                "redaction_max_leaves must be <= 2^redaction_merkle_depth "
+                f"(max {max_leaves_capacity})."
             )
         selective_capacity = 1 << self.selective_disclosure_depth
         if self.selective_disclosure_k > selective_capacity:

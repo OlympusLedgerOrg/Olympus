@@ -102,7 +102,7 @@ template RedactionValidity(maxLeaves, depth) {
         // Enforce index match only when revealed
         revealMask[i] * (idxAccum[depth] - i) === 0;
 
-        // Inclusion proof (computed regardless; root enforced only when revealed)
+        // MerkleProof (computed regardless; root enforced only when revealed)
         inclusionProofs[i] = MerkleProof(depth);
         inclusionProofs[i].leaf <== originalLeaves[i];
         for (var j = 0; j < depth; j++) {

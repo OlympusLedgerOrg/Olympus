@@ -63,6 +63,7 @@ def _estimate_gas(constraints: int | None) -> dict[str, Any]:
     if constraints is None:
         return {"estimate": None, "method": "heuristic_constraints", "note": "constraints unavailable"}
     base_gas = 21_000
+    # Approximate per-constraint gas based on typical Groth16 verifier profiling on Ethereum.
     per_constraint = 18
     return {
         "estimate": base_gas + constraints * per_constraint,
