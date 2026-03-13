@@ -35,8 +35,7 @@ from enum import Enum
 
 from .hashes import SNARK_SCALAR_FIELD
 from .merkle import MerkleProof, verify_proof as _verify_blake3_proof
-from .poseidon_bn128 import poseidon_hash_bn128
-from .poseidon_tree import PoseidonProof
+from .poseidon_tree import POSEIDON_DOMAIN_NODE, PoseidonProof, poseidon_hash_with_domain
 from .redaction_ledger import POSEIDON_ROOT_VALUE_SIZE, DualHashCommitment
 
 
@@ -197,14 +196,12 @@ def _reconstruct_poseidon_root(poseidon_proof: PoseidonProof) -> int | None:
     """
     try:
         current = int(poseidon_proof.leaf) % SNARK_SCALAR_FIELD
-        for sibling_str, is_right in zip(
-            poseidon_proof.path_elements, poseidon_proof.path_indices
-        ):
+        for sibling_str, is_right in zip(poseidon_proof.path_elements, poseidon_proof.path_indices):
             sibling = int(sibling_str) % SNARK_SCALAR_FIELD
             if is_right == 0:
-                current = poseidon_hash_bn128(current, sibling)
+                current = poseidon_hash_with_domain(current, sibling, POSEIDON_DOMAIN_NODE)
             else:
-                current = poseidon_hash_bn128(sibling, current)
+                current = poseidon_hash_with_domain(sibling, current, POSEIDON_DOMAIN_NODE)
         return current % SNARK_SCALAR_FIELD
     except (ValueError, TypeError, AttributeError):
         return None

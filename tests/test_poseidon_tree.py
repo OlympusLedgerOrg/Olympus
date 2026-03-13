@@ -1,8 +1,13 @@
 import pytest
 
 from protocol.hashes import SNARK_SCALAR_FIELD, blake3_to_field_element
-from protocol.poseidon_bn128 import poseidon_hash_bn128
-from protocol.poseidon_tree import PoseidonMerkleTree, _to_field_int, build_poseidon_witness_inputs
+from protocol.poseidon_tree import (
+    POSEIDON_DOMAIN_NODE,
+    PoseidonMerkleTree,
+    _to_field_int,
+    build_poseidon_witness_inputs,
+    poseidon_hash_with_domain,
+)
 
 
 def test_blake3_to_field_element_deterministic_and_bounded():
@@ -14,13 +19,14 @@ def test_blake3_to_field_element_deterministic_and_bounded():
 
 
 def _recompute_root(leaf: int, path_elements: list[str], path_indices: list[int]) -> int:
+    """Recompute Merkle root using domain-separated Poseidon hashing."""
     current = leaf
     for sibling, idx in zip(path_elements, path_indices):
         sib = int(sibling)
         if idx == 0:
-            current = poseidon_hash_bn128(current, sib)
+            current = poseidon_hash_with_domain(current, sib, POSEIDON_DOMAIN_NODE)
         else:
-            current = poseidon_hash_bn128(sib, current)
+            current = poseidon_hash_with_domain(sib, current, POSEIDON_DOMAIN_NODE)
         current %= SNARK_SCALAR_FIELD
     return current % SNARK_SCALAR_FIELD
 
@@ -117,9 +123,15 @@ def test_identical_bytes_at_different_positions_produce_different_field_elements
     fe_at_2 = _to_field_int(payload, index=2)
 
     # All must be different due to position binding
-    assert fe_at_0 != fe_at_1, "Same payload at indices 0 and 1 must produce different field elements"
-    assert fe_at_0 != fe_at_2, "Same payload at indices 0 and 2 must produce different field elements"
-    assert fe_at_1 != fe_at_2, "Same payload at indices 1 and 2 must produce different field elements"
+    assert fe_at_0 != fe_at_1, (
+        "Same payload at indices 0 and 1 must produce different field elements"
+    )
+    assert fe_at_0 != fe_at_2, (
+        "Same payload at indices 0 and 2 must produce different field elements"
+    )
+    assert fe_at_1 != fe_at_2, (
+        "Same payload at indices 1 and 2 must produce different field elements"
+    )
 
     # Also verify that this prevents order collision in asymmetric trees
     # Use [A, A, B] which is different from [B, A, A] after reversal
@@ -132,4 +144,3 @@ def test_identical_bytes_at_different_positions_produce_different_field_elements
     root2 = tree2.get_root()
 
     assert root1 != root2, "Trees with different orderings must have different roots"
-

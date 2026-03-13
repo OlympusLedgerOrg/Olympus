@@ -419,7 +419,15 @@ def verify_proof(proof: ExistenceProof) -> bool:
 
 def verify_nonexistence_proof(proof: NonExistenceProof) -> bool:
     """
-    Verify a non-existence proof.
+    Verify a non-existence proof using the default hash chain.
+
+    The proof demonstrates that the leaf at the given key position is the
+    empty sentinel ``b"\\x00" * 32``. Verification reconstructs the root by
+    hashing upward from the empty leaf through the provided sibling chain
+    and checks that the result matches ``proof.root_hash``.
+
+    The precomputed ``EMPTY_HASHES`` chain ensures that default (empty)
+    subtrees have deterministic hashes at every level of the sparse tree.
 
     Args:
         proof: Non-existence proof to verify
@@ -442,7 +450,7 @@ def verify_nonexistence_proof(proof: NonExistenceProof) -> bool:
     # Compute path from key using shared function
     path = _key_to_path_bits(proof.key)
 
-    # For non-existence, we start with empty leaf hash
+    # For non-existence, we start with empty leaf hash (default hash chain)
     current_hash = EMPTY_HASHES[0]
 
     for level in range(256):
