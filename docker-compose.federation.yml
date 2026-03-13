@@ -57,6 +57,8 @@ services:
     container_name: olympus-node1-app
     environment:
       DATABASE_URL: postgresql://${POSTGRES_USER:-olympus}:${POSTGRES_PASSWORD:-olympus}@node1-db:5432/${POSTGRES_DB:-olympus}
+      OLYMPUS_API_KEYS_JSON: >-
+        [{"api_key":"demo-key","key_id":"demo-key","scopes":["ingest","commit","verify"],"expires_at":"2099-01-01T00:00:00Z"}]
     depends_on:
       node1-db:
         condition: service_healthy
@@ -75,6 +77,8 @@ services:
     container_name: olympus-node2-app
     environment:
       DATABASE_URL: postgresql://${POSTGRES_USER:-olympus}:${POSTGRES_PASSWORD:-olympus}@node2-db:5432/${POSTGRES_DB:-olympus}
+      OLYMPUS_API_KEYS_JSON: >-
+        [{"api_key":"demo-key","key_id":"demo-key","scopes":["ingest","commit","verify"],"expires_at":"2099-01-01T00:00:00Z"}]
     depends_on:
       node2-db:
         condition: service_healthy
@@ -93,6 +97,8 @@ services:
     container_name: olympus-node3-app
     environment:
       DATABASE_URL: postgresql://${POSTGRES_USER:-olympus}:${POSTGRES_PASSWORD:-olympus}@node3-db:5432/${POSTGRES_DB:-olympus}
+      OLYMPUS_API_KEYS_JSON: >-
+        [{"api_key":"demo-key","key_id":"demo-key","scopes":["ingest","commit","verify"],"expires_at":"2099-01-01T00:00:00Z"}]
     depends_on:
       node3-db:
         condition: service_healthy

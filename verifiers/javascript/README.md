@@ -34,11 +34,31 @@ const root = verifyMerkleRoot(leaves);
 </script>
 ```
 
+### REST SDK
+
+```javascript
+const { OlympusClient } = require('./client');
+
+const client = new OlympusClient({
+  baseUrl: 'http://127.0.0.1:8000',
+  apiKey: 'test-key',
+});
+
+const result = await client.ingestFile({
+  fileBytes: Buffer.from('Important document'),
+  namespace: 'web-demo',
+  id: 'document.txt',
+  generateProof: true,
+  verify: true,
+});
+```
+
 ## Features
 
 - ✅ BLAKE3 hash verification
 - ✅ Merkle tree root computation
 - ✅ Inclusion proof verification
+- ✅ REST client for ingest/proof retrieval/verification workflows
 - ✅ Works in Node.js and browsers
 - ✅ Zero dependencies (uses Web Crypto API)
 
