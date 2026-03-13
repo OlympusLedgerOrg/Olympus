@@ -39,6 +39,8 @@ from fastapi import FastAPI, HTTPException, Query, Request
 from pydantic import BaseModel
 
 from api.ingest import _authorize_and_rate_limit, router as ingest_router
+from api.sth import router as sth_router
+from api.sth import set_storage as set_sth_storage
 from protocol.canonical_json import canonical_json_encode
 from protocol.telemetry import opentelemetry_available, prometheus_available, record_smt_divergence
 
@@ -117,6 +119,10 @@ def _get_storage() -> "StorageLayer":
                 )
 
         _storage = storage
+
+        # Inject storage into STH router
+        set_sth_storage(storage)
+
         return _storage
 
     except Exception as e:
@@ -282,6 +288,9 @@ app = FastAPI(
 # Register write/ingest endpoints
 app.include_router(ingest_router)
 
+# Register STH gossip/monitoring endpoints
+app.include_router(sth_router)
+
 
 @app.get("/")
 async def root() -> dict[str, Any]:
@@ -304,6 +313,8 @@ async def root() -> dict[str, Any]:
             "/ingest/proofs",
             "/ingest/proofs/verify",
             "/ingest/commit",
+            "/protocol/sth/latest",
+            "/protocol/sth/history",
             "/health",
         ],
     }
@@ -710,6 +721,8 @@ async def health() -> dict[str, Any]:
             "/ingest/proofs",
             "/ingest/proofs/verify",
             "/ingest/commit",
+            "/protocol/sth/latest",
+            "/protocol/sth/history",
             "/metrics",
         ],
     }

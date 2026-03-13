@@ -17,6 +17,7 @@ import nacl.exceptions
 import nacl.signing
 
 from .canonical_json import canonical_json_bytes
+from .consistency import ConsistencyProof, verify_consistency_proof
 from .hashes import HASH_SEPARATOR, TREE_HEAD_PREFIX, blake3_hash
 from .timestamps import current_timestamp
 
@@ -279,3 +280,80 @@ class SignedTreeHead:
             signature=data["signature"],
             signer_pubkey=data["signer_pubkey"],
         )
+
+
+def verify_sth_consistency(
+    old_sth: SignedTreeHead,
+    new_sth: SignedTreeHead,
+    proof: ConsistencyProof,
+) -> bool:
+    """
+    Verify consistency between two Signed Tree Heads.
+
+    This function ensures that:
+    1. The new STH has a tree size >= old STH tree size (append-only)
+    2. Both STH signatures are cryptographically valid
+    3. The Merkle consistency proof between their roots is valid
+
+    This allows observers to detect split-view logs by comparing STHs across
+    different nodes or epochs. If two nodes serve different STHs for the same
+    epoch, or if an STH is rolled back, this verification will fail.
+
+    Args:
+        old_sth: Earlier Signed Tree Head.
+        new_sth: Later Signed Tree Head (must have tree_size >= old_sth.tree_size).
+        proof: Merkle consistency proof linking the two roots.
+
+    Returns:
+        True if all checks pass and the STHs are consistent.
+
+    Example:
+        >>> import nacl.signing
+        >>> from protocol.merkle import MerkleTree
+        >>> from protocol.hashes import hash_bytes
+        >>> from protocol.consistency import generate_consistency_proof
+        >>>
+        >>> # Create a signing key
+        >>> signing_key = nacl.signing.SigningKey.generate()
+        >>>
+        >>> # Build two trees with append-only growth
+        >>> leaves = [hash_bytes(f"leaf-{i}".encode()) for i in range(10)]
+        >>> old_tree = MerkleTree(leaves[:5])
+        >>> new_tree = MerkleTree(leaves[:10])
+        >>>
+        >>> # Create STHs
+        >>> old_sth = SignedTreeHead.create(
+        ...     epoch_id=1, tree_size=5, merkle_root=old_tree.get_root(),
+        ...     signing_key=signing_key
+        ... )
+        >>> new_sth = SignedTreeHead.create(
+        ...     epoch_id=2, tree_size=10, merkle_root=new_tree.get_root(),
+        ...     signing_key=signing_key
+        ... )
+        >>>
+        >>> # Generate and verify consistency proof
+        >>> proof = generate_consistency_proof(5, 10, new_tree)
+        >>> verify_sth_consistency(old_sth, new_sth, proof)
+        True
+    """
+    # Rule 1: new_sth.tree_size >= old_sth.tree_size
+    if new_sth.tree_size < old_sth.tree_size:
+        return False
+
+    # Rule 2: Verify both STH signatures
+    if not old_sth.verify():
+        return False
+    if not new_sth.verify():
+        return False
+
+    # Rule 3: Verify Merkle consistency between their roots
+    old_root = bytes.fromhex(old_sth.merkle_root)
+    new_root = bytes.fromhex(new_sth.merkle_root)
+
+    # Validate that the proof sizes match the STH tree sizes
+    if proof.old_tree_size != old_sth.tree_size:
+        return False
+    if proof.new_tree_size != new_sth.tree_size:
+        return False
+
+    return verify_consistency_proof(old_root, new_root, proof)
