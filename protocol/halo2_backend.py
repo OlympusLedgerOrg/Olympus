@@ -44,7 +44,7 @@ from pathlib import Path
 from typing import Any, Sequence
 
 from .canonical_json import canonical_json_bytes
-from .hashes import EVENT_PREFIX, HASH_SEPARATOR, hash_string
+from .hashes import EVENT_PREFIX, HASH_SEPARATOR, hash_bytes
 from .timestamps import current_timestamp
 
 from .proof_interface import (
@@ -58,7 +58,6 @@ from .proof_interface import (
 
 
 RECURSIVE_REDACTION_CIRCUIT = "recursive_redaction_composition"
-EVENT_PREFIX_STR = EVENT_PREFIX.decode("utf-8")
 
 
 @dataclass(frozen=True)
@@ -123,22 +122,31 @@ class RedactionEvent:
         Uses HASH_SEPARATOR to join stringified fields; revealed_indices and
         zk_proof are canonicalized JSON for determinism.
         """
-        revealed_indices_json = canonical_json_bytes(list(self.revealed_indices)).decode("utf-8")
-        zk_proof_json = canonical_json_bytes(self.zk_proof).decode("utf-8")
-        components = [
-            str(self.event_index),
-            self.document_id,
-            str(self.version),
-            revealed_indices_json,
-            self.original_root,
-            self.redacted_commitment,
-            str(self.revealed_count),
-            self.timestamp,
-            zk_proof_json,
-            self.previous_event_hash,
+        sep = HASH_SEPARATOR.encode("utf-8")
+        components: list[bytes] = [
+            EVENT_PREFIX,
+            sep,
+            str(self.event_index).encode("utf-8"),
+            sep,
+            self.document_id.encode("utf-8"),
+            sep,
+            str(self.version).encode("utf-8"),
+            sep,
+            canonical_json_bytes(list(self.revealed_indices)),
+            sep,
+            self.original_root.encode("utf-8"),
+            sep,
+            self.redacted_commitment.encode("utf-8"),
+            sep,
+            str(self.revealed_count).encode("utf-8"),
+            sep,
+            self.timestamp.encode("utf-8"),
+            sep,
+            canonical_json_bytes(self.zk_proof),
+            sep,
+            self.previous_event_hash.encode("utf-8"),
         ]
-        concatenated = HASH_SEPARATOR.join(components)
-        return hash_string(HASH_SEPARATOR.join([EVENT_PREFIX_STR, concatenated])).hex()
+        return hash_bytes(b"".join(components)).hex()
 
 
 @dataclass(frozen=True)
