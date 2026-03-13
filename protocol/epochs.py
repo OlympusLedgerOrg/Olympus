@@ -151,7 +151,7 @@ class EpochRecord:
         )
 
 
-def _tree_head_payload(
+def _build_tree_head_payload(
     *,
     epoch_id: int,
     tree_size: int,
@@ -182,7 +182,7 @@ def signed_tree_head_hash(
     timestamp: str,
 ) -> bytes:
     """Return the domain-separated BLAKE3 hash of a Signed Tree Head payload."""
-    payload = _tree_head_payload(
+    payload = _build_tree_head_payload(
         epoch_id=epoch_id,
         tree_size=tree_size,
         merkle_root=merkle_root,
@@ -223,7 +223,7 @@ class SignedTreeHead:
     ) -> "SignedTreeHead":
         """Build and sign a Signed Tree Head."""
         normalized_timestamp = timestamp or current_timestamp()
-        payload = _tree_head_payload(
+        payload = _build_tree_head_payload(
             epoch_id=epoch_id,
             tree_size=tree_size,
             merkle_root=merkle_root,
