@@ -24,6 +24,7 @@ pragma circom 2.0.0;
 
 include "./lib/merkleProof.circom";
 include "./lib/poseidon.circom";
+include "./parameters.circom";
 
 // Range-checked Num2Bits converter
 template Num2BitsStrictNE(n) {
@@ -103,4 +104,4 @@ template NonExistence(depth) {
     }
 }
 
-component main { public [root, leafIndex, treeSize] } = NonExistence(20);
+component main { public [root, leafIndex, treeSize] } = NonExistence(NON_EXISTENCE_MERKLE_DEPTH);

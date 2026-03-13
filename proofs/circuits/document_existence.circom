@@ -15,6 +15,7 @@ pragma circom 2.0.0;
 
 include "./lib/merkleProof.circom";
 include "./lib/poseidon.circom";
+include "./parameters.circom";
 
 // Range-checked Num2Bits converter
 template Num2BitsStrict(n) {
@@ -95,5 +96,5 @@ template DocumentExistence(depth) {
 
 }
 
-// Default depth 20 (sparse tree friendly)
-component main {public [root, leafIndex, treeSize]} = DocumentExistence(20);
+// Default depth from parameters.circom (sparse tree friendly)
+component main {public [root, leafIndex, treeSize]} = DocumentExistence(DOCUMENT_MERKLE_DEPTH);

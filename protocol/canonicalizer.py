@@ -10,11 +10,14 @@ Designed for 100% byte-stability without external system dependencies.
 
 import io
 import json
+import os
 import re
 import unicodedata
 import zipfile
+from concurrent.futures import ProcessPoolExecutor
+from dataclasses import dataclass
 from decimal import Decimal
-from typing import Any
+from typing import Any, Sequence
 
 import blake3 as _blake3
 import pikepdf
@@ -81,6 +84,15 @@ class ArtifactCanonicalizationError(ArtifactProcessingError):
 
 class ArtifactIdempotencyError(ArtifactProcessingError):
     """Raised when a canonicalization pipeline is not byte-idempotent."""
+
+
+@dataclass(frozen=True)
+class ArtifactPayload:
+    """Payload describing a single artifact for concurrent processing."""
+
+    raw_data: bytes
+    mime_type: str
+    witness_anchor: str | None = None
 
 
 def _should_strip_attribute(attr_name: str, attr_value: str) -> bool:
@@ -498,3 +510,35 @@ def process_artifact(
         }
 
     raise UnsupportedMimeTypeError(f"Unsupported MIME type: {mime_type}")
+
+
+def _process_payload(payload: ArtifactPayload) -> dict[str, Any]:
+    return process_artifact(
+        payload.raw_data,
+        payload.mime_type,
+        witness_anchor=payload.witness_anchor,
+    )
+
+
+def process_artifacts_concurrently(
+    artifacts: Sequence[ArtifactPayload],
+    *,
+    max_workers: int | None = None,
+) -> list[dict[str, Any]]:
+    """
+    Canonicalize multiple artifacts concurrently using multiprocessing.
+
+    Args:
+        artifacts: Sequence of ArtifactPayload items to process.
+        max_workers: Optional worker count; when <= 1, processing is sequential.
+
+    Returns:
+        List of canonicalization results in the same order as the input payloads.
+    """
+    if max_workers is None:
+        max_workers = os.cpu_count() or 1
+    if max_workers <= 1:
+        return [_process_payload(payload) for payload in artifacts]
+
+    with ProcessPoolExecutor(max_workers=max_workers) as executor:
+        return list(executor.map(_process_payload, artifacts))

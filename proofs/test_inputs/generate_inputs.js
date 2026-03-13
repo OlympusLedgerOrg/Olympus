@@ -16,6 +16,17 @@ const path = require("path");
 
 const BUILD_DIR = path.join(__dirname, "..", "build");
 
+function envInt(name, fallback) {
+  if (!process.env[name]) {
+    return fallback;
+  }
+  const value = Number.parseInt(process.env[name], 10);
+  if (!Number.isFinite(value) || value <= 0) {
+    throw new Error(`Invalid ${name} value: ${process.env[name]}`);
+  }
+  return value;
+}
+
 // -----------------------------------------------------------------------
 // Build a depth-N Merkle tree from leaves using Poseidon(2)
 // Returns { root, layers } where layers[0] = leaves
@@ -66,12 +77,13 @@ async function main() {
   fs.mkdirSync(BUILD_DIR, { recursive: true });
 
   // =====================================================================
-  // 1. document_existence  (depth = 20, prove leaf at index 0)
+  // 1. document_existence  (configurable depth, prove leaf at index 0)
   // =====================================================================
   {
-    const depth = 20;
+    const depth = envInt("OLYMPUS_DOCUMENT_MERKLE_DEPTH", 20);
     const leafValue = BigInt(42);
     const leafIndex = 0;
+    const treeSize = 1 << depth;
 
     const { root, layers } = buildMerkleTree(poseidon, F, [leafValue], depth);
     const { pathElements, pathIndices } = getMerkleProof(layers, leafIndex, depth);
@@ -79,6 +91,7 @@ async function main() {
     const input = {
       root: root.toString(),
       leafIndex: leafIndex.toString(),
+      treeSize: treeSize.toString(),
       leaf: leafValue.toString(),
       pathElements: pathElements.map((e) => e.toString()),
       pathIndices: pathIndices.map((e) => e.toString()),
@@ -90,12 +103,13 @@ async function main() {
   }
 
   // =====================================================================
-  // 2. non_existence  (depth = 20, prove leaf at index 5 is empty (0))
+  // 2. non_existence  (configurable depth, prove leaf at index 5 is empty (0))
   //    NOTE: For smoke tests we use an all-zero tree, so every index is empty.
   // =====================================================================
   {
-    const depth = 20;
+    const depth = envInt("OLYMPUS_NON_EXISTENCE_MERKLE_DEPTH", 20);
     const leafIndex = 5;
+    const treeSize = 1 << depth;
 
     const { root, layers } = buildMerkleTree(poseidon, F, [], depth);
     const { pathElements, pathIndices } = getMerkleProof(layers, leafIndex, depth);
@@ -103,6 +117,7 @@ async function main() {
     const input = {
       root: root.toString(),
       leafIndex: leafIndex.toString(),
+      treeSize: treeSize.toString(),
       pathElements: pathElements.map((e) => e.toString()),
       pathIndices: pathIndices.map((e) => e.toString()),
     };
@@ -113,12 +128,18 @@ async function main() {
   }
 
   // =====================================================================
-  // 3. redaction_validity  (maxLeaves = 16, depth = 4)
+  // 3. redaction_validity  (configurable maxLeaves + depth)
   //    Reveal leaves 0 and 2 out of 4 set leaves
   // =====================================================================
   {
-    const maxLeaves = 16;
-    const depth = 4;
+    const maxLeaves = envInt("OLYMPUS_REDACTION_MAX_LEAVES", 16);
+    const depth = envInt("OLYMPUS_REDACTION_MERKLE_DEPTH", 4);
+    const capacity = 1 << depth;
+    if (maxLeaves > capacity) {
+      throw new Error(
+        `OLYMPUS_REDACTION_MAX_LEAVES (${maxLeaves}) exceeds tree capacity (${capacity}).`
+      );
+    }
 
     // Build a tree with some non-zero leaves
     const rawLeaves = [BigInt(100), BigInt(200), BigInt(300), BigInt(400)];

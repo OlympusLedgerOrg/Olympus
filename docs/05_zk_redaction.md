@@ -53,7 +53,8 @@ canonical_section = normalize_whitespace(section).encode("utf-8")
 (`blake3_root`, `poseidon_root`) into the SMT. No Poseidon tree structure is
 stored or exposed. Poseidon tree construction now happens on the proof path:
 `create_redaction_proof_with_ledger` rebuilds the Poseidon tree from the same
-canonical bytes (depth 4, padded to 16 leaves) and enforces the binding check
+canonical bytes (defaults: depth 4, 16 leaves; configurable via
+`proofs/circuits/parameters.circom`) and enforces the binding check
 from the previous PR:
 
 ```
@@ -68,8 +69,10 @@ Groth16 circuit while reducing the public commitment to two hashes.
 
 The Groth16 redaction circuit (`proofs/circuits/redaction_validity.circom`) uses
 Poseidon as its internal hash, because Poseidon is efficient inside an arithmetic
-constraint system.  The rest of the Olympus protocol uses BLAKE3 for the
-256-height Sparse Merkle Tree (SMT) that underpins ledger commitments.
+constraint system.  To reduce constraint pressure, Merkle checks are enforced
+only for revealed leaves; redacted leaves are masked to zero in the commitment
+chain and skip root constraints. The rest of the Olympus protocol uses BLAKE3
+for the 256-height Sparse Merkle Tree (SMT) that underpins ledger commitments.
 
 Rather than building a BLAKE3→Poseidon bridge circuit (which would be large
 and maintenance-heavy), the **Poseidon Merkle root** (`originalRoot` in the
@@ -143,8 +146,9 @@ Values outside [0, SNARK_SCALAR_FIELD) are rejected with `ValueError`.
 ### Witness generation pipeline (redaction_validity)
 
 * Input construction lives in `proofs/test_inputs/generate_inputs.js`, which
-  builds Poseidon Merkle trees (depth 4, 16 leaves), derives per-leaf sibling
-  paths, and writes circuit-ready JSON inputs to `proofs/build/redaction_validity_input.json`.
+  builds Poseidon Merkle trees (defaults: depth 4, 16 leaves via
+  `OLYMPUS_REDACTION_*` overrides), derives per-leaf sibling paths, and writes
+  circuit-ready JSON inputs to `proofs/build/redaction_validity_input.json`.
 * Python witness/proof helpers live in `proofs/proof_generator.py`:
   * `ProofGenerator.generate_witness()` writes the JSON inputs and calls the
     circuit's WASM witness generator (`proofs/build/redaction_validity_js/generate_witness.js`)

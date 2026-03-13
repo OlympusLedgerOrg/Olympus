@@ -7,6 +7,7 @@ import pytest
 
 from protocol.hashes import hash_bytes
 from protocol.shards import (
+    ShardNamespacePartitioner,
     canonical_header,
     create_key_revocation_record,
     create_shard_header,
@@ -37,6 +38,30 @@ def test_create_shard_header():
     assert header["previous_header_hash"] == ""
     assert "header_hash" in header
     assert len(bytes.fromhex(header["header_hash"])) == 32
+
+
+def test_namespace_partitioner_deterministic_mapping() -> None:
+    partitioner = ShardNamespacePartitioner(shard_count=4)
+    first = partitioner.shard_id_for_namespace("permits")
+    second = partitioner.shard_id_for_namespace("permits")
+    assert first == second
+    assert first.startswith("shard-")
+
+
+def test_namespace_partitioner_bounds() -> None:
+    partitioner = ShardNamespacePartitioner(shard_count=8, prefix="ns")
+    shard_id = partitioner.shard_id_for_namespace("licenses")
+    assert shard_id.startswith("ns-")
+    index = int(shard_id.split("-", maxsplit=1)[1])
+    assert 0 <= index < 8
+
+
+def test_namespace_partitioner_rejects_invalid_inputs() -> None:
+    with pytest.raises(ValueError, match="shard_count"):
+        ShardNamespacePartitioner(shard_count=0)
+    partitioner = ShardNamespacePartitioner(shard_count=2)
+    with pytest.raises(ValueError, match="namespace"):
+        partitioner.shard_id_for_namespace("")
 
 
 def test_create_shard_header_with_previous():

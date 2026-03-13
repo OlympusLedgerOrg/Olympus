@@ -14,13 +14,15 @@ import pikepdf
 import pytest
 
 from protocol.canonicalizer import (
-    CANONICALIZER_VERSIONS,
     ArtifactCanonicalizationError,
     ArtifactIdempotencyError,
+    ArtifactPayload,
+    CANONICALIZER_VERSIONS,
     CanonicalizationError,
     Canonicalizer,
     UnsupportedMimeTypeError,
     process_artifact,
+    process_artifacts_concurrently,
 )
 
 
@@ -248,6 +250,22 @@ class TestProcessArtifact:
         assert result["mode"] == "docx_v1"
         assert result["raw_hash"]
         assert result["canonical_hash"]
+
+
+class TestConcurrentProcessing:
+    def test_process_artifacts_concurrently_preserves_order(self):
+        payloads = [
+            ArtifactPayload(
+                raw_data=json.dumps({"i": i}).encode("utf-8"),
+                mime_type="application/json",
+            )
+            for i in range(3)
+        ]
+        expected = [process_artifact(payload.raw_data, payload.mime_type) for payload in payloads]
+        results = process_artifacts_concurrently(payloads, max_workers=2)
+        assert [item["canonical_hash"] for item in results] == [
+            item["canonical_hash"] for item in expected
+        ]
 
 
 # ---------------------------------------------------------------------------

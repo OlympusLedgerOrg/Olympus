@@ -48,6 +48,7 @@ pragma circom 2.0.0;
 
 include "./lib/merkleProof.circom";
 include "./lib/poseidon.circom";
+include "./parameters.circom";
 
 // Range-checked Num2Bits converter
 template Num2BitsStrict(n) {
@@ -264,6 +265,10 @@ template UnifiedCanonicalizationInclusionRootSign(maxSections, merkleDepth, smtD
     checkpointExists * 0 === 0;  // Dummy constraint to use the signal
 }
 
-// Default instantiation: 8 sections, Merkle depth 20, SMT depth 256
+// Default instantiation: values loaded from parameters.circom
 component main {public [canonicalHash, merkleRoot, ledgerRoot, checkpointHash, treeSize]} =
-    UnifiedCanonicalizationInclusionRootSign(8, 20, 256);
+    UnifiedCanonicalizationInclusionRootSign(
+        UNIFIED_MAX_SECTIONS,
+        UNIFIED_MERKLE_DEPTH,
+        UNIFIED_SMT_DEPTH
+    );

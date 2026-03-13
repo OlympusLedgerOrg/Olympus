@@ -73,6 +73,19 @@ pytest tests/test_canonical_json.py -v
 pytest tests/test_canonical_json.py::test_canonical_json_encode -v
 ```
 
+## Benchmarks
+
+```bash
+# Merkle proof generation timing
+python benchmarks/bench_proofs.py
+
+# Groth16 proof generation + circuit metrics (requires snarkjs + circuits)
+python benchmarks/bench_zk_proofs.py
+
+# Canonicalization throughput (PDF normalization)
+python benchmarks/bench_canonicalizer.py --copies 8 --workers 4
+```
+
 ## Code Quality Checks
 
 ### Run all checks (as done in CI)
