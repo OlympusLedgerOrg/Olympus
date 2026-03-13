@@ -1,0 +1,6 @@
+{
+  "participant_id": "dev-alpha",
+  "pubkey": "33bcbb4a2c0d52b0cb6fa494201b017b6a44a4391702f6a27fe73adf25c93f91",
+  "contact": "security@olympus.dev (dev-only mailbox)",
+  "note": "Development ceremony key; private key was used only to sign the sample transcript."
+}

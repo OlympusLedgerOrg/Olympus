@@ -25,7 +25,7 @@ from protocol.cross_root_validation import (
 )
 from protocol.hashes import SNARK_SCALAR_FIELD, blake3_to_field_element, hash_bytes
 from protocol.merkle import MerkleProof, MerkleTree
-from protocol.poseidon_tree import PoseidonMerkleTree, PoseidonProof
+from protocol.poseidon_tree import PoseidonMerkleTree, PoseidonProof, _to_field_int
 from protocol.redaction import RedactionProtocol
 from protocol.redaction_ledger import DualHashCommitment
 
@@ -58,6 +58,7 @@ def _make_poseidon_proof(
         leaf_index=leaf_index,
         path_elements=path_elements,
         path_indices=path_indices,
+        tree_size=tree.tree_size,
     )
     return proof, tree.get_root()
 
@@ -316,6 +317,24 @@ def test_verify_poseidon_proof_tampered_path_element():
     assert _verify_poseidon_proof(bad_proof) is False
 
 
+def test_verify_poseidon_proof_rejects_truncated_palindrome_path():
+    """
+    Palindromic trees must still require full-depth paths; truncated siblings must fail.
+    """
+    leaves = [b"A", b"B", b"A"]
+    tree = PoseidonMerkleTree([_to_field_int(s, index=i) for i, s in enumerate(leaves)], depth=2)
+    path_elements, path_indices = tree.get_proof(0)
+    truncated = PoseidonProof(
+        root=tree.get_root(),
+        leaf=str(tree._leaves[0]),
+        leaf_index=0,
+        path_elements=path_elements[:-1],
+        path_indices=path_indices[:-1],
+        tree_size=tree.tree_size,
+    )
+    assert _verify_poseidon_proof(truncated) is False
+
+
 def test_verify_poseidon_proof_malformed_leaf():
     proof, _ = _make_poseidon_proof(PARTS_A)
     bad_proof = PoseidonProof(
@@ -405,6 +424,23 @@ def test_validate_proof_consistency_invalid_poseidon_proof():
     assert validate_proof_consistency(blake3_proof, bad_poseidon, commitment) is False
 
 
+def test_validate_proof_consistency_rejects_empty_path_for_multi_leaf_tree():
+    """Poseidon proofs with empty siblings for non-trivial trees must be rejected."""
+    commitment = _make_dual_commitment(PARTS_A)
+    blake3_proof, _ = _make_blake3_proof(PARTS_A)
+    poseidon_proof, _ = _make_poseidon_proof(PARTS_A)
+
+    tampered_poseidon = PoseidonProof(
+        root=poseidon_proof.root,
+        leaf=poseidon_proof.leaf,
+        leaf_index=poseidon_proof.leaf_index,
+        path_elements=[],  # stripped siblings
+        path_indices=[],
+        tree_size=poseidon_proof.tree_size,
+    )
+    assert validate_proof_consistency(blake3_proof, tampered_poseidon, commitment) is False
+
+
 def test_validate_proof_consistency_none_inputs_return_false():
     """None inputs must return False, not raise."""
     commitment = _make_dual_commitment(PARTS_A)
@@ -414,6 +450,35 @@ def test_validate_proof_consistency_none_inputs_return_false():
     assert validate_proof_consistency(None, poseidon_proof, commitment) is False  # type: ignore[arg-type]
     assert validate_proof_consistency(blake3_proof, None, commitment) is False  # type: ignore[arg-type]
     assert validate_proof_consistency(blake3_proof, poseidon_proof, None) is False  # type: ignore[arg-type]
+
+
+def test_validate_batch_consistency_reports_failures():
+    """Batch consistency must surface any failing proof."""
+    commitment_ok = _make_dual_commitment(PARTS_A)
+    good_b3, _ = _make_blake3_proof(PARTS_A)
+    good_poseidon, _ = _make_poseidon_proof(PARTS_A)
+
+    commitment_bad = _make_dual_commitment(PARTS_B)
+    bad_poseidon = PoseidonProof(
+        root="1",
+        leaf="0",
+        leaf_index=0,
+        path_elements=[],
+        path_indices=[],
+        tree_size=1,
+    )
+
+    from protocol.cross_root_validation import validate_batch_consistency
+
+    report = validate_batch_consistency(
+        [
+            (good_b3, good_poseidon, commitment_ok),
+            (good_b3, bad_poseidon, commitment_bad),
+        ]
+    )
+
+    assert report.is_consistent is False
+    assert len(report.failures) == 1
 
 
 # ---------------------------------------------------------------------------

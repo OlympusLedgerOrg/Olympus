@@ -71,6 +71,14 @@ class ConsistencyResult:
         return self.is_consistent
 
 
+@dataclass
+class BatchConsistencyReport:
+    """Aggregate outcome for validating multiple dual-anchor proofs."""
+
+    is_consistent: bool
+    failures: list[ConsistencyResult]
+
+
 def extract_blake3_root(blake3_proof: MerkleProof) -> bytes:
     """Extract the BLAKE3 Merkle root from a BLAKE3 inclusion proof.
 
@@ -217,6 +225,50 @@ def _verify_poseidon_proof(poseidon_proof: PoseidonProof) -> bool:
         ``True`` if the reconstructed root matches the proof's claimed root;
         ``False`` otherwise (including malformed inputs).
     """
+    # Structural checks
+    if len(poseidon_proof.path_elements) != len(poseidon_proof.path_indices):
+        return False
+
+    if poseidon_proof.tree_size > 0:
+        try:
+            leaf_index = int(poseidon_proof.leaf_index)
+        except (TypeError, ValueError):
+            return False
+
+        tree_size = poseidon_proof.tree_size
+        if leaf_index < 0 or leaf_index >= tree_size:
+            return False
+
+        expected_max_depth = 0 if tree_size == 1 else (tree_size - 1).bit_length()
+        if len(poseidon_proof.path_indices) > expected_max_depth:
+            return False
+
+        # Validate sibling positions against the implied tree walk (CT-style promotion)
+        level_size = tree_size
+        index = leaf_index
+        sibling_idx = 0
+
+        while level_size > 1 and sibling_idx <= len(poseidon_proof.path_indices):
+            is_last = index == level_size - 1
+            is_promoted = is_last and (level_size % 2 == 1)
+
+            if not is_promoted:
+                if sibling_idx >= len(poseidon_proof.path_indices):
+                    return False
+                position = poseidon_proof.path_indices[sibling_idx]
+                if position not in (0, 1):
+                    return False
+                expected_pos = 0 if index % 2 == 0 else 1  # 0 == left child, 1 == right child
+                if position != expected_pos:
+                    return False
+                sibling_idx += 1
+
+            level_size = (level_size + 1) // 2
+            index //= 2
+
+        if sibling_idx != len(poseidon_proof.path_indices):
+            return False
+
     reconstructed = _reconstruct_poseidon_root(poseidon_proof)
     if reconstructed is None:
         return False
@@ -375,3 +427,29 @@ def validate_proof_consistency(
         return check_proof_consistency(blake3_proof, poseidon_proof, dual_commitment).is_consistent
     except Exception:
         return False
+
+
+def validate_batch_consistency(
+    proof_triplets: list[tuple[MerkleProof, PoseidonProof, DualHashCommitment]]
+) -> BatchConsistencyReport:
+    """
+    Validate multiple dual-anchor proof pairs in one call.
+
+    This is intended for cross-shard or batch verification flows where a caller
+    needs an aggregated answer and a list of individual failures rather than
+    stopping at the first error.
+
+    Args:
+        proof_triplets: List of (BLAKE3 proof, Poseidon proof, dual commitment)
+            tuples to validate.
+
+    Returns:
+        BatchConsistencyReport indicating whether all proofs are consistent and
+        detailed failures (if any).
+    """
+    failures: list[ConsistencyResult] = []
+    for blake3_proof, poseidon_proof, commitment in proof_triplets:
+        result = check_proof_consistency(blake3_proof, poseidon_proof, commitment)
+        if not result.is_consistent:
+            failures.append(result)
+    return BatchConsistencyReport(is_consistent=not failures, failures=failures)

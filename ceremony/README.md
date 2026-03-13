@@ -89,6 +89,18 @@ python -m ceremony.verification_tools.verify_contribution \
 python -m ceremony.verification_tools.beacon --verify-round 12345
 ```
 
+## Development Transcript (non-production)
+
+A development-only transcript is checked into this repository to prove the pipeline runs end to end:
+
+- `transcript/dev-transcript.json` — index of artifacts and contributions
+- `transcript/dev_powers_of_tau.ptau` — placeholder Phase 1 artifact (not trusted)
+- `transcript/dev_redaction_validity_final.zkey` — placeholder Phase 2 artifact (not trusted)
+- `contributions/dev-alpha-phase1.json` / `dev-alpha-phase2.json` — signed sample contributions
+- `participant_keys/dev-alpha.json` — public key for the dev participant
+
+⚠️ **Not production**: the signing key was generated from a deterministic seed for reproducibility and destroyed after signing. Run a fresh multi-party ceremony for any real deployment.
+
 ## Security Properties
 
 A valid ceremony transcript guarantees:

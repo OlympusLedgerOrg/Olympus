@@ -39,6 +39,17 @@ Specifies the format of a shard commitment, including the Merkle root, timestamp
 ### source_proof.json
 Defines the structure of a source authenticity proof, including agency signatures and metadata. Used by external verifiers to validate document provenance.
 
+### verification_bundle.json
+Defines the offline verification bundle used by `protocol/verification_bundle.py` and `tools/verify_bundle_cli.py`. Each bundle contains the SMT proof, shard header, signature, and optional timestamp token so third parties can verify inclusion without database access.
+
+## Ownership Map
+
+- `protocol/verification_bundle.py` ⇄ `verification_bundle.json`
+- `protocol/merkle.py` / API proof responses ⇄ `leaf_record.json`
+- Shard header and federation flows (`protocol/shards.py`, storage layer) ⇄ `shard_commit.json`
+- Canonicalization pipeline (`protocol/canonical_*`, `tools/canonicalize_cli.py`) ⇄ `canonical_document.json`
+- Provenance ingestion (`api/ingest.py`, `protocol/redaction.py`) ⇄ `source_proof.json`
+
 ## Maintaining Schema Alignment
 
 While the schemas are not used for runtime validation, they MUST remain aligned with the Pydantic models in the codebase. This is enforced by:

@@ -52,6 +52,9 @@ htmlcov/
 *.zkey
 *.ptau
 *.wtns
+# Allow tracked dev ceremony placeholders
+!ceremony/transcript/dev_powers_of_tau.ptau
+!ceremony/transcript/dev_redaction_validity_final.zkey
 # Allow circom helper libraries
 !proofs/circuits/lib/
 !proofs/circuits/lib/*.circom

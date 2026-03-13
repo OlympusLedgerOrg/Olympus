@@ -5,6 +5,14 @@ public ledger. The repository is focused on protocol hardening: deterministic
 canonicalization, Merkle commitments, verifiable proofs, and developer tooling
 for inspecting and validating those primitives.
 
+## Trust & Threat Model (60-second summary)
+
+- **Adversaries:** malicious submitters, compromised operators, and network attackers who can observe and modify traffic but cannot break modern cryptography.
+- **What we defend:** append-only ledger integrity (BLAKE3 SMT + shard headers), verifiable provenance, and non-malleable redaction proofs (Poseidon + Groth16).
+- **What we do not promise:** availability under single-operator failure (Guardian replication is Phase 1+), confidentiality of submitted content, or completeness of all possible public records.
+- **Why it holds:** dual-root commitments bind BLAKE3 ledger roots to Poseidon circuit roots; deterministic canonicalization removes parser ambiguity; shard headers are Ed25519-signed and timestamp-tokened; verification bundles allow offline re-validation.
+- See [`docs/threat_model.md`](docs/threat_model.md) and [`docs/07_non_goals.md`](docs/07_non_goals.md) for the full threat/assurance boundaries.
+
 ## The Vision
 
 A layered cryptographic infrastructure for real-world applications that require:
@@ -83,6 +91,7 @@ suite.
 See [`docs/README.md`](docs/README.md) for a full index of the documentation.
 See [`docs/architecture.md`](docs/architecture.md) for the pipeline → module
 map and developer entrypoints.
+- Governance & sustainability plan: [`GOVERNANCE.md`](GOVERNANCE.md)
 
 ## Repository scaffold
 
