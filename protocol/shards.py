@@ -6,6 +6,7 @@ This module implements shard header hashing and signature verification.
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from datetime import datetime
 from typing import TYPE_CHECKING, Any
 
@@ -16,7 +17,7 @@ from cryptography.hazmat.primitives.kdf.hkdf import HKDF
 
 from .canonical_json import canonical_json_bytes
 from .events import CanonicalEvent
-from .hashes import hash_bytes, shard_header_hash
+from .hashes import HASH_SEPARATOR, hash_bytes, shard_header_hash
 
 
 # Fields excluded from the canonical commitment bytes (derived or post-commitment metadata)
@@ -36,6 +37,28 @@ _HKDF_INFO_SHARD_SIGNING_KEY: bytes = b"OLY:SHARD-SIGNING-KEY:V1"
 
 if TYPE_CHECKING:
     from .rfc3161 import TimestampToken
+
+
+@dataclass(frozen=True)
+class ShardNamespacePartitioner:
+    """Deterministically map namespace strings to shard identifiers."""
+
+    shard_count: int
+    prefix: str = "shard"
+
+    def __post_init__(self) -> None:
+        if self.shard_count <= 0:
+            raise ValueError("shard_count must be a positive integer")
+        if not isinstance(self.prefix, str) or not self.prefix:
+            raise ValueError("prefix must be a non-empty string")
+
+    def shard_id_for_namespace(self, namespace: str) -> str:
+        if not isinstance(namespace, str) or not namespace:
+            raise ValueError("namespace must be a non-empty string")
+        payload = HASH_SEPARATOR.join([self.prefix, namespace]).encode("utf-8")
+        digest = hash_bytes(payload)
+        index = int.from_bytes(digest, byteorder="big") % self.shard_count
+        return f"{self.prefix}-{index}"
 
 
 def _hkdf_derive(ikm: bytes, info: bytes, length: int = 32) -> bytearray:

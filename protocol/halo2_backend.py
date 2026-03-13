@@ -40,13 +40,13 @@ future Halo2 implementation can be added without changing protocol-layer code.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from types import MappingProxyType
 from pathlib import Path
-from typing import Any, Sequence
+from typing import Any
+from collections.abc import Mapping, Sequence
 
 from .canonical_json import canonical_json_bytes
-from .hashes import EVENT_PREFIX, HASH_SEPARATOR, hash_bytes
-from .timestamps import current_timestamp
-
+from .hashes import EVENT_PREFIX, HASH_SEPARATOR, blake3_hash
 from .proof_interface import (
     BackendNotAvailableError,
     Proof,
@@ -55,6 +55,10 @@ from .proof_interface import (
     Statement,
     Witness,
 )
+from .timestamps import current_timestamp
+
+
+RECURSIVE_REDACTION_CIRCUIT = "recursive_redaction_composition"
 
 
 RECURSIVE_REDACTION_CIRCUIT = "recursive_redaction_composition"
@@ -189,9 +193,107 @@ class Halo2Proof:
 
 
 @dataclass(frozen=True)
+class RedactionEvent:
+    """
+    Hash-linked record of a single redaction operation.
+
+    Attributes:
+        event_index: Zero-based index in the redaction chain.
+        document_id: Document identifier the event applies to.
+        version: Document version (append-only).
+        revealed_indices: Indices of leaves revealed in this redaction.
+        original_root: Poseidon root of the original document.
+        redacted_commitment: Commitment to the redacted view.
+        revealed_count: Number of revealed leaves.
+        timestamp: RFC3339 timestamp for the event.
+        zk_proof: Per-event ZK proof payload (Groth16 or Halo2 when available).
+        previous_event_hash: Hash of the prior event in the chain ("" for first).
+    """
+
+    event_index: int
+    document_id: str
+    version: int
+    revealed_indices: tuple[int, ...]
+    original_root: str
+    redacted_commitment: str
+    revealed_count: int
+    timestamp: str
+    zk_proof: Mapping[str, Any]
+    previous_event_hash: str
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "revealed_indices", tuple(self.revealed_indices))
+        object.__setattr__(self, "zk_proof", MappingProxyType(dict(self.zk_proof)))
+
+    def compute_hash(self) -> str:
+        """
+        Compute a deterministic BLAKE3 hash of the event.
+
+        The hash covers all fields with domain separation and a fixed separator.
+        Returns a hex-encoded string.
+        """
+        payload_fields = [
+            str(self.event_index),
+            self.document_id,
+            str(self.version),
+            canonical_json_bytes(self.revealed_indices).decode("utf-8"),
+            self.original_root,
+            self.redacted_commitment,
+            str(self.revealed_count),
+            self.timestamp,
+            self.previous_event_hash,
+            canonical_json_bytes(dict(self.zk_proof)).decode("utf-8"),
+        ]
+        payload = HASH_SEPARATOR.join(payload_fields).encode("utf-8")
+        return blake3_hash([EVENT_PREFIX, HASH_SEPARATOR.encode("utf-8"), payload]).hex()
+
+    def to_dict(self) -> dict[str, Any]:
+        """Serialize the event to a dictionary."""
+        return {
+            "event_index": self.event_index,
+            "document_id": self.document_id,
+            "version": self.version,
+            "revealed_indices": list(self.revealed_indices),
+            "original_root": self.original_root,
+            "redacted_commitment": self.redacted_commitment,
+            "revealed_count": self.revealed_count,
+            "timestamp": self.timestamp,
+            "zk_proof": dict(self.zk_proof),
+            "previous_event_hash": self.previous_event_hash,
+        }
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> RedactionEvent:
+        """Deserialize an event from a dictionary."""
+        return cls(
+            event_index=data["event_index"],
+            document_id=data["document_id"],
+            version=data["version"],
+            revealed_indices=tuple(data["revealed_indices"]),
+            original_root=data["original_root"],
+            redacted_commitment=data["redacted_commitment"],
+            revealed_count=data["revealed_count"],
+            timestamp=data["timestamp"],
+            zk_proof=data["zk_proof"],
+            previous_event_hash=data["previous_event_hash"],
+        )
+
+
+@dataclass(frozen=True)
 class RecursiveRedactionProof:
     """
-    Compressed recursive proof for a document's full redaction history.
+    Compressed recursive redaction proof (Phase 1+ placeholder).
+
+    Attributes:
+        document_id: Identifier of the document.
+        event_count: Number of events folded into the proof.
+        current_state_hash: Hash of the latest event (chain head).
+        original_root: Poseidon root of the original document.
+        ledger_root: SMT root anchoring ledger inclusion.
+        recursive_proof: Halo2 recursive proof bytes (empty in Phase 0).
+        proof_version: Semantic version of the proof format.
+        timestamp: Generation time of the recursive proof.
+        event_hashes: List of per-event hashes for auditability.
     """
 
     document_id: str
@@ -199,46 +301,13 @@ class RecursiveRedactionProof:
     current_state_hash: str
     original_root: str
     ledger_root: str
-    recursive_proof: bytes = b""
+    recursive_proof: bytes
     proof_version: str = "1.0.0"
     timestamp: str = ""
-    _event_hashes: tuple[str, ...] = field(default_factory=tuple, repr=False, compare=False)
-
-    def __init__(
-        self,
-        *,
-        document_id: str,
-        event_count: int,
-        current_state_hash: str,
-        original_root: str,
-        ledger_root: str,
-        recursive_proof: bytes = b"",
-        proof_version: str = "1.0.0",
-        timestamp: str = "",
-        event_hashes: Sequence[str] | None = None,
-    ) -> None:
-        object.__setattr__(self, "document_id", document_id)
-        object.__setattr__(self, "event_count", event_count)
-        object.__setattr__(self, "current_state_hash", current_state_hash)
-        object.__setattr__(self, "original_root", original_root)
-        object.__setattr__(self, "ledger_root", ledger_root)
-        object.__setattr__(self, "recursive_proof", recursive_proof)
-        object.__setattr__(self, "proof_version", proof_version)
-        object.__setattr__(self, "timestamp", timestamp)
-        object.__setattr__(self, "_event_hashes", tuple(event_hashes or ()))
-
-    @property
-    def event_hashes(self) -> list[str]:
-        """
-        Expose event hashes as a defensive copy.
-
-        A new list is returned on each access to prevent external mutation of
-        the stored tuple.
-        """
-        return list(self._event_hashes)
+    event_hashes: list[str] = field(default_factory=list)
 
     def to_dict(self) -> dict[str, Any]:
-        """Serialize to a dictionary with hex-encoded proof bytes."""
+        """Serialize the proof to a dictionary."""
         return {
             "document_id": self.document_id,
             "event_count": self.event_count,
@@ -248,31 +317,34 @@ class RecursiveRedactionProof:
             "recursive_proof": self.recursive_proof.hex(),
             "proof_version": self.proof_version,
             "timestamp": self.timestamp,
-            "event_hashes": list(self._event_hashes),
+            "event_hashes": self.event_hashes,
         }
 
     @classmethod
-    def from_dict(cls, data: dict[str, Any]) -> "RecursiveRedactionProof":
-        """Deserialize from dictionary data."""
-        recursive_proof = data.get("recursive_proof", b"")
-        if isinstance(recursive_proof, str):
-            recursive_proof = bytes.fromhex(recursive_proof)
+    def from_dict(cls, data: dict[str, Any]) -> RecursiveRedactionProof:
+        """Deserialize a proof from a dictionary."""
+        proof_bytes_raw = data.get("recursive_proof", b"")
+        proof_bytes = (
+            bytes.fromhex(proof_bytes_raw)
+            if isinstance(proof_bytes_raw, str)
+            else bytes(proof_bytes_raw)
+        )
         return cls(
-            document_id=str(data["document_id"]),
-            event_count=int(data.get("event_count", 0)),
-            current_state_hash=str(data.get("current_state_hash", "")),
-            original_root=str(data.get("original_root", "")),
-            ledger_root=str(data.get("ledger_root", "")),
-            recursive_proof=recursive_proof,
-            proof_version=str(data.get("proof_version", "1.0.0")),
-            timestamp=str(data.get("timestamp", "")),
+            document_id=data["document_id"],
+            event_count=data["event_count"],
+            current_state_hash=data["current_state_hash"],
+            original_root=data["original_root"],
+            ledger_root=data["ledger_root"],
+            recursive_proof=proof_bytes,
+            proof_version=data.get("proof_version", "1.0.0"),
+            timestamp=data.get("timestamp", ""),
             event_hashes=list(data.get("event_hashes", [])),
         )
 
 
 class RecursiveProofAccumulator:
     """
-    Builder that chains redaction events and produces a recursive proof.
+    Builder that chains redaction events and produces a recursive proof container.
     """
 
     def __init__(self, *, document_id: str, original_root: str, version: int = 1) -> None:
@@ -283,36 +355,8 @@ class RecursiveProofAccumulator:
 
     @property
     def event_count(self) -> int:
-        """Number of accumulated events."""
+        """Return the number of accumulated events."""
         return len(self._events)
-
-    def get_events(self) -> list[RedactionEvent]:
-        """Return a shallow copy of accumulated events (each event is frozen)."""
-        return list(self._events)
-
-    def _create_event(
-        self,
-        *,
-        revealed_indices: Sequence[int],
-        redacted_commitment: str,
-        revealed_count: int,
-        zk_proof: dict[str, Any],
-        timestamp: str | None,
-    ) -> RedactionEvent:
-        """Internal helper to build a RedactionEvent with linkage."""
-        previous_hash = self._events[-1].compute_hash() if self._events else ""
-        return RedactionEvent(
-            event_index=self.event_count,
-            document_id=self.document_id,
-            version=self.version,
-            revealed_indices=tuple(revealed_indices),
-            original_root=self.original_root,
-            redacted_commitment=redacted_commitment,
-            revealed_count=revealed_count,
-            timestamp=timestamp or current_timestamp(),
-            zk_proof=zk_proof,
-            previous_event_hash=previous_hash,
-        )
 
     def add_event(
         self,
@@ -324,76 +368,82 @@ class RecursiveProofAccumulator:
         timestamp: str | None = None,
     ) -> RedactionEvent:
         """
-        Add a new redaction event to the accumulator.
+        Append a redaction event to the chain.
 
         Raises:
-            ValueError: If revealed_indices is empty or revealed_count negative.
+            ValueError: If revealed_indices is empty or revealed_count is negative.
         """
         if not revealed_indices:
             raise ValueError("revealed_indices must be non-empty")
         if revealed_count < 0:
             raise ValueError("revealed_count must be non-negative")
 
-        event = self._create_event(
+        event_index = len(self._events)
+        previous_event_hash = self._events[-1].compute_hash() if self._events else ""
+        event_timestamp = timestamp or current_timestamp()
+
+        event = RedactionEvent(
+            event_index=event_index,
+            document_id=self.document_id,
+            version=self.version,
             revealed_indices=revealed_indices,
+            original_root=self.original_root,
             redacted_commitment=redacted_commitment,
             revealed_count=revealed_count,
+            timestamp=event_timestamp,
             zk_proof=zk_proof,
-            timestamp=timestamp,
+            previous_event_hash=previous_event_hash,
         )
         self._events.append(event)
         return event
 
-    def finalize(self, *, ledger_root: str) -> RecursiveRedactionProof:
+    def finalize(
+        self,
+        *,
+        ledger_root: str,
+        proof_version: str = "1.0.0",
+        recursive_proof: bytes | None = None,
+        timestamp: str | None = None,
+    ) -> RecursiveRedactionProof:
         """
-        Finalize accumulated events into a RecursiveRedactionProof.
+        Finalize the accumulated events into a RecursiveRedactionProof container.
+
+        Raises:
+            ValueError: If no events have been added.
         """
         if not self._events:
             raise ValueError("Cannot finalize recursive proof with no redaction events")
 
-        event_hashes = [event.compute_hash() for event in self._events]
-        proof_timestamp = current_timestamp()
+        event_hashes = [e.compute_hash() for e in self._events]
+        proof_timestamp = timestamp or current_timestamp()
         return RecursiveRedactionProof(
             document_id=self.document_id,
             event_count=len(event_hashes),
             current_state_hash=event_hashes[-1],
             original_root=self.original_root,
             ledger_root=ledger_root,
-            recursive_proof=b"",  # Phase 1+ placeholder
-            proof_version="1.0.0",
+            recursive_proof=recursive_proof or b"",
+            proof_version=proof_version,
             timestamp=proof_timestamp,
             event_hashes=event_hashes,
         )
 
-
-def _validate_chain_linkage(events: Sequence[RedactionEvent]) -> bool:
-    """Ensure previous_event_hash pointers form a proper linked list."""
-    if not events:
-        return True
-    if events[0].previous_event_hash != "":
-        return False
-    for idx in range(1, len(events)):
-        prev = events[idx - 1]
-        curr = events[idx]
-        if curr.previous_event_hash != prev.compute_hash():
-            return False
-    return True
+    def get_events(self) -> list[RedactionEvent]:
+        """Return a shallow copy of accumulated events."""
+        return list(self._events)
 
 
 def verify_recursive_redaction_proof(
-    proof: RecursiveRedactionProof,
-    *,
-    events: Sequence[RedactionEvent] | None = None,
+    proof: RecursiveRedactionProof, *, events: Sequence[RedactionEvent] | None = None
 ) -> bool:
     """
     Perform structural verification of a recursive redaction proof.
 
-    Cryptographic verification of the recursive proof bytes is deferred to
-    Phase 1+. This function confirms hash consistency and chain linkage.
+    Checks event count consistency, chain linkage, and hash integrity.
+    Cryptographic verification of inner proofs is deferred to Phase 1+.
     """
     if proof.event_count <= 0:
         return False
-    # Defensive: ensure persisted proofs still respect the event_count invariant.
     if len(proof.event_hashes) != proof.event_count:
         return False
     if proof.current_state_hash != proof.event_hashes[-1]:
@@ -405,11 +455,23 @@ def verify_recursive_redaction_proof(
     if len(events) != proof.event_count:
         return False
 
-    if not _validate_chain_linkage(events):
+    computed_hashes = [e.compute_hash() for e in events]
+    if computed_hashes != list(proof.event_hashes):
         return False
 
-    computed_hashes = [event.compute_hash() for event in events]
-    return computed_hashes == proof.event_hashes
+    for idx, event in enumerate(events):
+        if event.event_index != idx:
+            return False
+        if event.document_id != proof.document_id:
+            return False
+        if event.original_root != proof.original_root:
+            return False
+        if idx == 0 and event.previous_event_hash != "":
+            return False
+        if idx > 0 and event.previous_event_hash != computed_hashes[idx - 1]:
+            return False
+
+    return True
 
 
 class Halo2Verifier:

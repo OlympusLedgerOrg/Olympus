@@ -1,6 +1,7 @@
 pragma circom 2.1.6;
 
 include "circomlib/poseidon.circom";
+include "./circuits/parameters.circom";
 
 /*
  * MerkleVerify — verify a single leaf against a Poseidon Merkle root.
@@ -114,10 +115,10 @@ template SelectiveDisclosure(depth, k, preimageLen) {
 }
 
 // ---------------------------------------------------------------------------
-// Lock for Phase 0.2:
-//   depth       = 20  (Supports 1,048,576 leaves per document)
-//   k           = 8   (Max 8 redactions proven per single proof bundle)
-//   preimageLen = 6   (doc_id_fe, idx, type, page, text_hash_hi, text_hash_lo)
+// Defaults (configured via proofs/circuits/parameters.circom):
+//   SELECTIVE_DISCLOSURE_DEPTH       = 20
+//   SELECTIVE_DISCLOSURE_K           = 8
+//   SELECTIVE_DISCLOSURE_PREIMAGE_LEN = 6
 // ---------------------------------------------------------------------------
 
 component main {
@@ -128,4 +129,8 @@ component main {
         pathElements,
         pathIndices
     ]
-} = SelectiveDisclosure(20, 8, 6);
+} = SelectiveDisclosure(
+    SELECTIVE_DISCLOSURE_DEPTH,
+    SELECTIVE_DISCLOSURE_K,
+    SELECTIVE_DISCLOSURE_PREIMAGE_LEN
+);

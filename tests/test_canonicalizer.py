@@ -12,15 +12,18 @@ from decimal import Decimal
 
 import pikepdf
 import pytest
+from hypothesis import given, settings, strategies as st
 
 from protocol.canonicalizer import (
-    CANONICALIZER_VERSIONS,
     ArtifactCanonicalizationError,
     ArtifactIdempotencyError,
+    ArtifactPayload,
+    CANONICALIZER_VERSIONS,
     CanonicalizationError,
     Canonicalizer,
     UnsupportedMimeTypeError,
     process_artifact,
+    process_artifacts_concurrently,
 )
 
 
@@ -131,6 +134,61 @@ class TestJsonJcs:
         precomposed = '{"key":"\u00e9"}'.encode()
         decomposed = '{"key":"e\u0301"}'.encode()
         assert Canonicalizer.json_jcs(precomposed) == Canonicalizer.json_jcs(decomposed)
+
+    @given(
+        st.recursive(
+            st.one_of(
+                st.none(),
+                st.booleans(),
+                st.integers(min_value=-(2**53), max_value=2**53),
+                st.floats(allow_nan=False, allow_infinity=False),
+                st.text(),
+            ),
+            lambda children: st.one_of(
+                st.lists(children, max_size=5),
+                st.dictionaries(st.text(), children, max_size=5),
+            ),
+            max_leaves=20,
+        )
+    )
+    @settings(max_examples=100)
+    def test_json_jcs_property_deterministic(self, value):
+        """Property: canonicalization output is deterministic for valid JSON payloads."""
+        raw = json.dumps(value, ensure_ascii=False).encode("utf-8")
+        first = Canonicalizer.json_jcs(raw)
+        second = Canonicalizer.json_jcs(raw)
+        assert first == second
+
+    @given(st.binary(min_size=1, max_size=256))
+    @settings(max_examples=100)
+    def test_json_jcs_fuzz_malformed_json(self, random_payload: bytes):
+        """Malformed JSON fuzzing should always raise CanonicalizationError."""
+        malformed = b'{"payload":' + random_payload + b",}"
+        with pytest.raises(CanonicalizationError, match="JSON Ingest Failure"):
+            Canonicalizer.json_jcs(malformed)
+
+    @given(st.binary(min_size=1, max_size=256))
+    @settings(max_examples=100)
+    def test_json_jcs_fuzz_random_bytes_no_crash(self, random_payload: bytes):
+        """Random byte fuzzing should either canonicalize or raise CanonicalizationError."""
+        try:
+            canonical = Canonicalizer.json_jcs(random_payload)
+        except CanonicalizationError:
+            return
+
+        assert canonical == Canonicalizer.json_jcs(canonical)
+
+    @given(
+        st.binary(min_size=1, max_size=64).filter(
+            lambda b: any(byte not in b" \t\r\n" for byte in b)
+        )
+    )
+    @settings(max_examples=100)
+    def test_json_jcs_fuzz_rejects_trailing_bytes(self, trailing: bytes):
+        """Valid JSON plus non-whitespace trailing bytes must be rejected."""
+        malformed = b'{"payload":1}' + trailing
+        with pytest.raises(CanonicalizationError, match="JSON Ingest Failure"):
+            Canonicalizer.json_jcs(malformed)
 
 
 # ---------------------------------------------------------------------------
@@ -248,6 +306,22 @@ class TestProcessArtifact:
         assert result["mode"] == "docx_v1"
         assert result["raw_hash"]
         assert result["canonical_hash"]
+
+
+class TestConcurrentProcessing:
+    def test_process_artifacts_concurrently_preserves_order(self):
+        payloads = [
+            ArtifactPayload(
+                raw_data=json.dumps({"i": i}).encode("utf-8"),
+                mime_type="application/json",
+            )
+            for i in range(3)
+        ]
+        expected = [process_artifact(payload.raw_data, payload.mime_type) for payload in payloads]
+        results = process_artifacts_concurrently(payloads, max_workers=2)
+        assert [item["canonical_hash"] for item in results] == [
+            item["canonical_hash"] for item in expected
+        ]
 
 
 # ---------------------------------------------------------------------------

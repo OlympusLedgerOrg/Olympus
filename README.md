@@ -91,6 +91,7 @@ api/        FastAPI application and ingestion routes
 app_testonly/  test-only application wiring used by smoke/dev flows
 docs/       protocol notes, threat model material, and walkthroughs
 examples/   sample artifacts and notebook examples
+integrations/ interoperability helpers for Ethereum/IPFS-style bridges
 proofs/     Circom circuits, proving assets, and JS-based proof tooling
 protocol/   reference implementations of hashing, Merkle, and redaction logic
 schemas/    JSON schema definitions validated by tools/validate_schemas.py
@@ -170,7 +171,9 @@ Useful prototype commands:
 ```bash
 python tools/olympus.py node list
 python tools/olympus.py federation status
+python tools/olympus.py ingest examples/pipeline_golden_example.json --api-key demo-key --generate-proof --verify --json
 make federation-dev
+bash examples/run_local_testnet_demo.sh
 ```
 
 Olympus is influenced by the operational model of Certificate Transparency and
@@ -181,8 +184,10 @@ Sigstore: transparency logs, multiple operators, and independent verification.
 - API application: `api/app.py`
 - Debug UI / verification portal: `ui/app.py`
 - Canonicalization + verification CLIs: `tools/canonicalize_cli.py`,
-  `tools/verify_cli.py`, and `tools/verify_bundle_cli.py`
+  `tools/verify_cli.py`, `tools/verify_bundle_cli.py`, and `tools/olympus.py`
 - Zero-knowledge proof setup and smoke docs: `proofs/README.md`
+- Runnable demos: `examples/README.md`
+- Interoperability helpers: `integrations/README.md`
 - Extended setup guide: `QUICKSTART.md`
 - Contribution workflow: `CONTRIBUTING.md`
 
@@ -193,3 +198,13 @@ Sigstore: transparency logs, multiple operators, and independent verification.
   running the UI directly.
 - The public verification portal remains available at `/verification-portal`
   even when debug-only routes are disabled.
+
+## External Security Review
+
+Olympus is designed to be audit-friendly, and external review is encouraged:
+
+- Security policy and coordinated disclosure: [`SECURITY.md`](SECURITY.md)
+- Penetration-test scope for third-party auditors:
+  [`docs/pentest-scope.md`](docs/pentest-scope.md)
+- Public bug-bounty intake channel (HackerOne):
+  <https://hackerone.com/olympus>

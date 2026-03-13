@@ -190,6 +190,28 @@ def test_olympus_commit_unreachable_api_returns_nonzero(tmp_path: Path) -> None:
     assert result.returncode != 0
 
 
+def test_olympus_commit_rejects_non_http_api_url(tmp_path: Path) -> None:
+    """commit should reject non-http(s) API URLs before making a request."""
+    artifact = tmp_path / "artifact.bin"
+    artifact.write_bytes(b"data")
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            str(CLI_PATH),
+            "commit",
+            str(artifact),
+            "--api-url",
+            "ftp://127.0.0.1:8000",
+        ],
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode != 0
+    assert "http or https" in result.stderr.lower()
+
+
 def test_olympus_commit_accepts_api_key(tmp_path: Path) -> None:
     """commit should forward --api-key in the request payload."""
     artifact = tmp_path / "artifact.zip"
@@ -245,3 +267,121 @@ def test_olympus_commit_accepts_api_key(tmp_path: Path) -> None:
     assert payload["namespace"] == "github"
     assert payload["id"] == "org/repo/v2.0.0"
     assert len(payload["artifact_hash"]) == 64  # 32-byte BLAKE3 hex
+
+
+def test_olympus_ingest_can_generate_proof_and_verify(tmp_path: Path) -> None:
+    """ingest should orchestrate commit, proof retrieval, and verification."""
+    artifact = tmp_path / "document.pdf"
+    artifact.write_bytes(b"demo document payload")
+    expected_proof_id = str(uuid.uuid4())
+
+    class _Handler(BaseHTTPRequestHandler):
+        def do_POST(self) -> None:  # noqa: N802
+            if self.path != "/ingest/commit":
+                self.send_response(404)
+                self.end_headers()
+                return
+            length = int(self.headers.get("Content-Length", 0))
+            self.rfile.read(length)
+            body = json.dumps({"proof_id": expected_proof_id}).encode()
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+        def do_GET(self) -> None:  # noqa: N802
+            if self.path == f"/ingest/records/{expected_proof_id}/proof":
+                body = json.dumps(
+                    {
+                        "proof_id": expected_proof_id,
+                        "record_id": "document.pdf",
+                        "shard_id": "demo",
+                        "content_hash": "ab" * 32,
+                        "merkle_root": "cd" * 32,
+                        "merkle_proof": {
+                            "leaf_hash": "ef" * 32,
+                            "leaf_index": 0,
+                            "siblings": [],
+                            "root_hash": "cd" * 32,
+                            "proof_version": "1.0",
+                            "tree_version": "1.0",
+                            "epoch": 0,
+                            "tree_size": 1,
+                        },
+                        "ledger_entry_hash": "12" * 32,
+                        "timestamp": "2026-01-01T00:00:00Z",
+                        "canonicalization": {"content_type": "application/octet-stream"},
+                        "batch_id": "demo-batch",
+                        "poseidon_root": None,
+                    }
+                ).encode()
+            elif self.path.startswith("/ingest/records/hash/") and self.path.endswith("/verify"):
+                body = json.dumps(
+                    {
+                        "proof_id": expected_proof_id,
+                        "record_id": "document.pdf",
+                        "shard_id": "demo",
+                        "content_hash": "ab" * 32,
+                        "merkle_root": "cd" * 32,
+                        "merkle_proof": {
+                            "leaf_hash": "ef" * 32,
+                            "leaf_index": 0,
+                            "siblings": [],
+                            "root_hash": "cd" * 32,
+                            "proof_version": "1.0",
+                            "tree_version": "1.0",
+                            "epoch": 0,
+                            "tree_size": 1,
+                        },
+                        "ledger_entry_hash": "12" * 32,
+                        "timestamp": "2026-01-01T00:00:00Z",
+                        "canonicalization": {"content_type": "application/octet-stream"},
+                        "batch_id": "demo-batch",
+                        "poseidon_root": None,
+                        "merkle_proof_valid": True,
+                    }
+                ).encode()
+            else:
+                self.send_response(404)
+                self.end_headers()
+                return
+
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+        def log_message(self, *args: object) -> None:
+            pass
+
+    server = HTTPServer(("127.0.0.1", 0), _Handler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    port = server.server_address[1]
+
+    try:
+        result = subprocess.run(
+            [
+                sys.executable,
+                str(CLI_PATH),
+                "ingest",
+                str(artifact),
+                "--api-url",
+                f"http://127.0.0.1:{port}",
+                "--generate-proof",
+                "--verify",
+                "--json",
+            ],
+            capture_output=True,
+            text=True,
+        )
+    finally:
+        server.shutdown()
+
+    assert result.returncode == 0
+    data = json.loads(result.stdout)
+    assert data["commit"]["proof_id"] == expected_proof_id
+    assert data["proof"]["proof_id"] == expected_proof_id
+    assert data["verification"]["merkle_proof_valid"] is True

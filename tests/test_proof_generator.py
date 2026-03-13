@@ -7,7 +7,13 @@ from pathlib import Path
 
 import pytest
 
-from proofs.proof_generator import SUPPORTED_CIRCUITS, ProofGenerator, Witness
+from proofs.proof_generator import (
+    CircuitConfig,
+    ProofGenerator,
+    SUPPORTED_CIRCUITS,
+    Witness,
+    write_circuit_parameters,
+)
 from protocol.redaction_ledger import VerificationResult, ZKPublicInputs, verify_zk_redaction
 from protocol.zkp import ZKProof
 
@@ -81,6 +87,7 @@ class TestInputValidation:
             root="123",
             leaf="42",
             leafIndex="0",
+            treeSize="1048576",
             pathElements=["0"] * 20,
             pathIndices=[0] * 20,
         )
@@ -97,6 +104,19 @@ class TestInputValidation:
         gen = ProofGenerator("redaction_validity", build_dir=tmp_path)
         with pytest.raises(ValueError, match="Missing required inputs"):
             gen.generate_witness(originalRoot="1")
+
+    def test_redaction_validity_rejects_mismatched_lengths(self, tmp_path: Path):
+        gen = ProofGenerator("redaction_validity", build_dir=tmp_path)
+        with pytest.raises(ValueError, match="originalLeaves must be a list"):
+            gen.generate_witness(
+                originalRoot="1",
+                redactedCommitment="2",
+                revealedCount="1",
+                originalLeaves=["1"],
+                revealMask=["1"],
+                pathElements=[["0"] * 4],
+                pathIndices=[["0"] * 4],
+            )
 
 
 # ---------------------------------------------------------------------------
@@ -115,6 +135,7 @@ class TestWitnessGeneration:
             root="123",
             leaf="42",
             leafIndex="0",
+            treeSize="1048576",
             pathElements=["0"] * 20,
             pathIndices=[0] * 20,
         )
@@ -125,6 +146,24 @@ class TestWitnessGeneration:
         assert data["leaf"] == "42"
         # No WASM generator available, so witness_path is None
         assert witness.witness_path is None
+
+
+class TestCircuitConfig:
+    def test_from_env_overrides(self, monkeypatch):
+        monkeypatch.setenv("OLYMPUS_DOCUMENT_MERKLE_DEPTH", "32")
+        monkeypatch.setenv("OLYMPUS_REDACTION_MAX_LEAVES", "32")
+        monkeypatch.setenv("OLYMPUS_REDACTION_MERKLE_DEPTH", "5")
+        config = CircuitConfig.from_env()
+        assert config.document_merkle_depth == 32
+        assert config.redaction_max_leaves == 32
+        assert config.redaction_merkle_depth == 5
+
+    def test_write_circuit_parameters(self, tmp_path: Path):
+        config = CircuitConfig.default()
+        output_path = write_circuit_parameters(config, tmp_path / "params.circom")
+        text = output_path.read_text(encoding="utf-8")
+        assert "DOCUMENT_MERKLE_DEPTH" in text
+        assert str(config.document_merkle_depth) in text
 
 
 # ---------------------------------------------------------------------------

@@ -5,6 +5,8 @@ from fastapi.testclient import TestClient
 
 from api import ingest as ingest_api
 from api.app import app
+from protocol.hashes import hash_bytes
+from protocol.merkle import MerkleTree
 
 
 @pytest.fixture()
@@ -219,7 +221,111 @@ class TestHealthEndpoint:
         data = resp.json()
         assert "/ingest/records" in data["endpoints"]
         assert "/ingest/records/hash/{content_hash}/verify" in data["endpoints"]
+        assert "/ingest/proofs" in data["endpoints"]
+        assert "/ingest/proofs/verify" in data["endpoints"]
         assert "/ingest/commit" in data["endpoints"]
+
+
+class TestSubmittedProofBundles:
+    def test_verify_submitted_proof_bundle(self, client: TestClient):
+        payload = {
+            "records": [
+                {
+                    "shard_id": "shard-submitted-proof",
+                    "record_type": "document",
+                    "record_id": "doc-submitted-proof",
+                    "version": 1,
+                    "content": {"proof_bundle": "present"},
+                }
+            ]
+        }
+        ingest_resp = client.post("/ingest/records", json=payload)
+        proof_id = ingest_resp.json()["results"][0]["proof_id"]
+        proof_bundle = client.get(f"/ingest/records/{proof_id}/proof").json()
+
+        verify_resp = client.post(
+            "/ingest/proofs/verify",
+            json={
+                "proof_id": proof_bundle["proof_id"],
+                "content_hash": proof_bundle["content_hash"],
+                "merkle_root": proof_bundle["merkle_root"],
+                "merkle_proof": proof_bundle["merkle_proof"],
+                "poseidon_root": proof_bundle["poseidon_root"],
+            },
+        )
+
+        assert verify_resp.status_code == 200
+        data = verify_resp.json()
+        assert data["proof_id"] == proof_id
+        assert data["content_hash_matches_proof"] is True
+        assert data["merkle_proof_valid"] is True
+        assert data["known_to_server"] is True
+
+    def test_submit_valid_external_proof_bundle(self, client: TestClient):
+        content_hash_bytes = hash_bytes(b"external-proof-bundle")
+        tree = MerkleTree([content_hash_bytes])
+        merkle_proof = tree.generate_proof(0)
+
+        resp = client.post(
+            "/ingest/proofs",
+            json={
+                "record_id": "external-doc",
+                "shard_id": "shard-external-proof",
+                "content_hash": content_hash_bytes.hex(),
+                "merkle_root": tree.get_root().hex(),
+                "merkle_proof": {
+                    "leaf_hash": merkle_proof.leaf_hash.hex(),
+                    "leaf_index": merkle_proof.leaf_index,
+                    "siblings": [],
+                    "root_hash": merkle_proof.root_hash.hex(),
+                    "proof_version": merkle_proof.proof_version,
+                    "tree_version": merkle_proof.tree_version,
+                    "epoch": merkle_proof.epoch,
+                    "tree_size": merkle_proof.tree_size,
+                },
+                "ledger_entry_hash": "ab" * 32,
+                "timestamp": "2026-01-01T00:00:00Z",
+                "canonicalization": {"content_type": "application/octet-stream"},
+                "batch_id": "external-batch",
+            },
+        )
+
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["submitted"] is True
+        assert data["deduplicated"] is False
+        assert data["content_hash"] == content_hash_bytes.hex()
+        assert data["merkle_root"] == tree.get_root().hex()
+
+    def test_submit_invalid_external_proof_bundle_rejected(self, client: TestClient):
+        content_hash_bytes = hash_bytes(b"invalid-external-proof")
+        tree = MerkleTree([content_hash_bytes])
+        merkle_proof = tree.generate_proof(0)
+
+        resp = client.post(
+            "/ingest/proofs",
+            json={
+                "record_id": "external-doc-invalid",
+                "shard_id": "shard-external-proof",
+                "content_hash": ("00" * 32),
+                "merkle_root": tree.get_root().hex(),
+                "merkle_proof": {
+                    "leaf_hash": merkle_proof.leaf_hash.hex(),
+                    "leaf_index": merkle_proof.leaf_index,
+                    "siblings": [],
+                    "root_hash": merkle_proof.root_hash.hex(),
+                    "proof_version": merkle_proof.proof_version,
+                    "tree_version": merkle_proof.tree_version,
+                    "epoch": merkle_proof.epoch,
+                    "tree_size": merkle_proof.tree_size,
+                },
+                "ledger_entry_hash": "cd" * 32,
+                "timestamp": "2026-01-01T00:00:00Z",
+                "canonicalization": {"content_type": "application/octet-stream"},
+            },
+        )
+
+        assert resp.status_code == 400
 
 
 # ---------------------------------------------------------------------------

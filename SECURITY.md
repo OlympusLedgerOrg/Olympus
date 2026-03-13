@@ -55,6 +55,21 @@ We follow a **coordinated disclosure** model:
 
 ---
 
+## External Audits and Bug Bounty
+
+We welcome independent audits of Olympus protocol and implementation layers
+(`protocol/`, `proofs/`, `api/`, `storage/`).
+
+- **Audit coordination:** Open a private GitHub Security Advisory first so we
+  can share test vectors and scope details safely.
+- **Bug bounty intake (HackerOne):** <https://hackerone.com/olympus>
+- **Audit scope baseline:** [`docs/pentest-scope.md`](docs/pentest-scope.md)
+
+Post-audit remediations are tracked as regular pull requests so fixes remain
+publicly reviewable and reproducible.
+
+---
+
 ## Threat Model Summary
 
 The threat model is described in detail in:

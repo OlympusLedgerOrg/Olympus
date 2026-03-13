@@ -4,6 +4,17 @@
   "description": "JavaScript/TypeScript verifier for Olympus commitments",
   "main": "verifier.js",
   "types": "verifier.d.ts",
+  "exports": {
+    ".": "./verifier.js",
+    "./client": "./client.js"
+  },
+  "typesVersions": {
+    "*": {
+      "client": [
+        "client.d.ts"
+      ]
+    }
+  },
   "scripts": {
     "test": "node test.js && node test_conformance.js"
   },

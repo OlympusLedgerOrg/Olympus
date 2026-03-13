@@ -32,7 +32,13 @@ from protocol.canonical import CANONICAL_VERSION, canonicalize_document, documen
 from protocol.canonicalizer import canonicalization_provenance
 from protocol.hashes import hash_bytes
 from protocol.ledger import Ledger
-from protocol.merkle import MerkleProof, MerkleTree, deserialize_merkle_proof, verify_proof
+from protocol.merkle import (
+    MerkleProof,
+    MerkleTree,
+    deserialize_merkle_proof,
+    merkle_leaf_hash,
+    verify_proof,
+)
 from protocol.redaction_ledger import poseidon_root_to_bytes
 from protocol.ssmf import ExistenceProof
 from protocol.telemetry import INGEST_TOTAL, LEDGER_HEIGHT, timed_operation
@@ -115,6 +121,48 @@ class HashVerificationResponse(IngestionProofResponse):
     """Verification result for a committed content hash."""
 
     merkle_proof_valid: bool
+
+
+class ProofVerificationRequest(BaseModel):
+    """Request body for server-side verification of a proof bundle."""
+
+    proof_id: str | None = Field(None, description="Optional client-side proof identifier")
+    content_hash: str = Field(..., description="Hex-encoded BLAKE3 hash committed by Olympus")
+    merkle_root: str = Field(..., description="Hex-encoded Merkle root anchoring the content hash")
+    merkle_proof: dict[str, Any] = Field(..., description="Serialized Merkle proof bundle")
+    poseidon_root: str | None = Field(
+        None, description="Optional Poseidon root bound to the same commitment"
+    )
+
+
+class ProofVerificationResponse(BaseModel):
+    """Server-side verification result for a submitted proof bundle."""
+
+    proof_id: str | None
+    content_hash: str
+    merkle_root: str
+    content_hash_matches_proof: bool
+    merkle_proof_valid: bool
+    known_to_server: bool
+    poseidon_root: str | None = None
+
+
+class ProofSubmissionRequest(ProofVerificationRequest):
+    """Proof bundle payload that can be submitted to the API for later retrieval."""
+
+    record_id: str = Field(..., description="Record identifier associated with the proof bundle")
+    shard_id: str = Field(..., description="Shard identifier associated with the proof bundle")
+    ledger_entry_hash: str = Field(..., description="Ledger entry anchoring the proof bundle")
+    timestamp: str = Field(..., description="ISO 8601 timestamp associated with the bundle")
+    canonicalization: dict[str, Any] = Field(..., description="Canonicalization provenance metadata")
+    batch_id: str | None = Field(None, description="Optional batch identifier for the proof bundle")
+
+
+class ProofSubmissionResponse(IngestionProofResponse):
+    """Response body for a proof bundle submitted to the ingest API."""
+
+    submitted: bool
+    deduplicated: bool
 
 
 # ---------------------------------------------------------------------------
@@ -472,6 +520,42 @@ def _merkle_proof_from_store(data: dict[str, Any]) -> MerkleProof:
     return deserialize_merkle_proof(proof_data)
 
 
+def _normalize_merkle_root(merkle_root: str) -> str:
+    """Validate and normalize a hex-encoded Merkle root."""
+    try:
+        raw = bytes.fromhex(merkle_root)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail="merkle_root must be valid hex") from exc
+    if len(raw) != 32:
+        raise HTTPException(status_code=400, detail="merkle_root must be a 32-byte hash")
+    return raw.hex()
+
+
+def _evaluate_proof_bundle(
+    content_hash: str, merkle_root: str, merkle_proof_data: dict[str, Any]
+) -> tuple[str, str, bool, bool]:
+    """Validate and verify a submitted proof bundle."""
+    normalized_hash = _parse_content_hash(content_hash).hex()
+    normalized_root = _normalize_merkle_root(merkle_root)
+    try:
+        merkle_proof = deserialize_merkle_proof(merkle_proof_data)
+    except (KeyError, TypeError, ValueError) as exc:
+        raise HTTPException(status_code=400, detail=f"Invalid merkle_proof: {exc}") from exc
+
+    content_hash_matches_proof = merkle_proof.leaf_hash == merkle_leaf_hash(
+        bytes.fromhex(normalized_hash)
+    )
+    if merkle_proof.root_hash.hex() != normalized_root:
+        return normalized_hash, normalized_root, content_hash_matches_proof, False
+
+    try:
+        merkle_proof_valid = content_hash_matches_proof and verify_proof(merkle_proof)
+    except ValueError:
+        merkle_proof_valid = False
+
+    return normalized_hash, normalized_root, content_hash_matches_proof, merkle_proof_valid
+
+
 def _smt_proof_to_merkle_proof_dict(proof: ExistenceProof, leaf_hash: bytes) -> dict[str, Any]:
     """
     Convert an SMT ExistenceProof to Merkle proof dict format.
@@ -782,6 +866,66 @@ async def verify_ingested_content_hash(
         merkle_proof_valid = verify_proof(_merkle_proof_from_store(record))
         span.set_attribute("merkle_proof_valid", merkle_proof_valid)
         return HashVerificationResponse(**record, merkle_proof_valid=merkle_proof_valid)
+
+
+@router.post("/proofs/verify", response_model=ProofVerificationResponse)
+async def verify_submitted_proof_bundle(
+    proof_request: ProofVerificationRequest, request: Request
+) -> ProofVerificationResponse:
+    """Verify an externally supplied proof bundle without persisting it."""
+    _authorize_and_rate_limit(request, action="verify")
+    normalized_hash, normalized_root, content_hash_matches, merkle_proof_valid = _evaluate_proof_bundle(
+        proof_request.content_hash,
+        proof_request.merkle_root,
+        proof_request.merkle_proof,
+    )
+    record = _fetch_by_content_hash(normalized_hash)
+    return ProofVerificationResponse(
+        proof_id=record["proof_id"] if record is not None else proof_request.proof_id,
+        content_hash=normalized_hash,
+        merkle_root=normalized_root,
+        content_hash_matches_proof=content_hash_matches,
+        merkle_proof_valid=merkle_proof_valid,
+        known_to_server=record is not None,
+        poseidon_root=proof_request.poseidon_root if record is None else record.get("poseidon_root"),
+    )
+
+
+@router.post("/proofs", response_model=ProofSubmissionResponse)
+async def submit_proof_bundle(
+    proof_request: ProofSubmissionRequest, request: Request
+) -> ProofSubmissionResponse:
+    """Accept a verified proof bundle so it can be retrieved through the API later."""
+    _authorize_and_rate_limit(request, action="verify")
+    normalized_hash, normalized_root, content_hash_matches, merkle_proof_valid = _evaluate_proof_bundle(
+        proof_request.content_hash,
+        proof_request.merkle_root,
+        proof_request.merkle_proof,
+    )
+    if not content_hash_matches or not merkle_proof_valid:
+        raise HTTPException(status_code=400, detail="Submitted proof bundle failed verification")
+
+    existing = _fetch_by_content_hash(normalized_hash)
+    if existing is not None:
+        return ProofSubmissionResponse(**existing, submitted=False, deduplicated=True)
+
+    proof_id = proof_request.proof_id or str(uuid.uuid4())
+    stored_entry = {
+        "proof_id": proof_id,
+        "record_id": proof_request.record_id,
+        "shard_id": proof_request.shard_id,
+        "content_hash": normalized_hash,
+        "merkle_root": normalized_root,
+        "merkle_proof": proof_request.merkle_proof,
+        "ledger_entry_hash": proof_request.ledger_entry_hash,
+        "timestamp": proof_request.timestamp,
+        "canonicalization": proof_request.canonicalization,
+        "batch_id": proof_request.batch_id,
+        "poseidon_root": proof_request.poseidon_root,
+        "persisted": False,
+    }
+    _cache_ingestion_record(stored_entry)
+    return ProofSubmissionResponse(**stored_entry, submitted=True, deduplicated=False)
 
 
 # ---------------------------------------------------------------------------

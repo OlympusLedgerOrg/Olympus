@@ -21,7 +21,30 @@ bash setup_circuits.sh
 
 # 3) Smoke test — end-to-end prove + verify for each circuit
 bash smoke_test.sh
+
+# 4) Constraint-level checks ("formal verification" fast lane)
+bash formal_verify.sh
 ````
+
+---
+
+## Configuring Circuit Parameters
+
+Default circuit sizes are defined in `proofs/circuits/parameters.circom`. For
+production-scale trees, regenerate this file with the helper CLI:
+
+```bash
+python -m proofs.proof_generator configure \
+  --document-merkle-depth 32 \
+  --non-existence-merkle-depth 32 \
+  --redaction-max-leaves 1024 \
+  --redaction-merkle-depth 10
+```
+
+You can also seed defaults from environment variables such as
+`OLYMPUS_REDACTION_MAX_LEAVES` by passing `--from-env`. After updating the
+parameters file, re-run `bash setup_circuits.sh` to compile the circuits and
+regenerate keys.
 
 ---
 
@@ -47,7 +70,8 @@ Selective redaction proof over a Poseidon Merkle tree.
 **Proves (current implementation):**
 
 * For each leaf where `revealMask[i] == 1`, the prover knows a leaf value that is included
-  in the original tree with `originalRoot`.
+  in the original tree with `originalRoot`. Redacted leaves skip Merkle checks to reduce
+  constraint pressure, so only revealed indices are fully enforced.
 * A public `redactedCommitment` is computed as a Poseidon chain over the masked leaf vector
   (revealed values; redacted slots contribute 0) and `revealedCount`.
 
@@ -91,6 +115,7 @@ proofs/
 │   ├── lib/
 │   │   ├── poseidon.circom       # Re-exports Poseidon from circomlib
 │   │   └── merkleProof.circom    # Shared Merkle proof templates
+│   ├── parameters.circom         # Configurable circuit constants
 │   ├── document_existence.circom
 │   ├── redaction_validity.circom
 │   ├── non_existence.circom
@@ -131,7 +156,18 @@ If the PTAU download is unavailable, the script falls back to generating a dev P
 
   1. generates the witness (`generate_witness.js` + WASM),
   2. creates a Groth16 proof (`snarkjs groth16 prove`),
-  3. verifies the proof (`snarkjs groth16 verify`).
+   3. verifies the proof (`snarkjs groth16 verify`).
+
+---
+
+### `formal_verify.sh`
+
+* Generates fresh witness inputs for all primary circuits.
+* Uses `snarkjs wtns check` to validate each witness against its `.r1cs`
+  constraints.
+* Acts as a deterministic "no accidental proof leakage path" guardrail by
+  confirming only circuit-constrained relations are satisfied before proof
+  generation.
 
 ---
 
@@ -186,9 +222,14 @@ These circuits are reference implementations used for protocol development and t
 **Development keys are NOT suitable for production.** Production usage requires:
 
 * Formal review / security audit
+* Constraint-audit workflow (`bash formal_verify.sh`) in addition to smoke proofs
 * A Phase 2 ceremony with ≥ 3 independent contributors
 * Publicly published verification keys and ceremony transcript
 * Parameter tuning / performance evaluation
+
+For higher-assurance proving systems, Halo2/KZG remains an explicit migration
+path via the modular backend boundary (see `protocol/halo2_backend.py` and
+`docs/adr/0002-halo2-proof-system.md`).
 
 **Setup provenance (required):**
 
