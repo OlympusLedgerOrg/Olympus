@@ -202,7 +202,7 @@ class RecursiveRedactionProof:
     recursive_proof: bytes = b""
     proof_version: str = "1.0.0"
     timestamp: str = ""
-    _event_hashes: tuple[str, ...] = field(default_factory=tuple, repr=False, compare=False)
+    _event_hashes_tuple: tuple[str, ...] = field(default_factory=tuple, repr=False, compare=False)
 
     def __init__(
         self,
@@ -225,12 +225,12 @@ class RecursiveRedactionProof:
         object.__setattr__(self, "recursive_proof", recursive_proof)
         object.__setattr__(self, "proof_version", proof_version)
         object.__setattr__(self, "timestamp", timestamp)
-        object.__setattr__(self, "_event_hashes", tuple(event_hashes or ()))
+        object.__setattr__(self, "_event_hashes_tuple", tuple(event_hashes or ()))
 
     @property
     def event_hashes(self) -> list[str]:
         """Expose event hashes as an immutable copy for callers."""
-        return list(self._event_hashes)
+        return list(self._event_hashes_tuple)
 
     def to_dict(self) -> dict[str, Any]:
         """Serialize to a dictionary with hex-encoded proof bytes."""
@@ -243,7 +243,7 @@ class RecursiveRedactionProof:
             "recursive_proof": self.recursive_proof.hex(),
             "proof_version": self.proof_version,
             "timestamp": self.timestamp,
-            "event_hashes": list(self._event_hashes),
+            "event_hashes": list(self._event_hashes_tuple),
         }
 
     @classmethod
@@ -388,6 +388,7 @@ def verify_recursive_redaction_proof(
     """
     if proof.event_count <= 0:
         return False
+    # Defensive: ensure persisted proofs still respect the event_count invariant.
     if len(proof.event_hashes) != proof.event_count:
         return False
     if proof.current_state_hash != proof.event_hashes[-1]:
