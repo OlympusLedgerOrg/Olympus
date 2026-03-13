@@ -40,6 +40,8 @@ Phase 0.1 Institutional Pinning — multi-format artifact ingestion with byte-st
 - Deterministic number serialization (ECMA-262 compliant)
 - Lexicographic key sorting
 - Idempotency guard: `C(x) == C(C(x))`
+- Maximum nesting depth (`MAX_JSON_DEPTH = 128`) to prevent stack overflow
+- Input size limit (`MAX_INPUT_SIZE = 256 MiB`) to prevent resource exhaustion
 
 #### HTML
 
@@ -48,8 +50,12 @@ Phase 0.1 Institutional Pinning — multi-format artifact ingestion with byte-st
 - Requires `lxml` (version-pinned in production)
 - Unicode NFC normalization
 - Attribute sorting by name
-- Active content stripping (`<script>`, `<style>`, `<iframe>`, etc.)
+- Active content stripping (`<script>`, `<style>`, `<iframe>`, `<object>`, `<embed>`, `<applet>`, `<meta>`, `<base>`, `<link>`, `<form>`, `<noscript>`)
+- Event handler attribute stripping (`on*` attributes)
+- Dangerous URI scheme blocking (`javascript:`, `vbscript:`, `data:`) with whitespace-collapse obfuscation resistance
+- Style attribute stripping to prevent CSS-based data exfiltration
 - Whitespace normalization within text nodes
+- Input size limit (`MAX_INPUT_SIZE = 256 MiB`)
 
 #### DOCX
 
@@ -60,6 +66,10 @@ Phase 0.1 Institutional Pinning — multi-format artifact ingestion with byte-st
 - Volatile metadata stripping (timestamps, thumbnails, `docProps/core.xml`)
 - Exclusive XML Canonicalization (C14N) for XML parts
 - Returns BLAKE3 digest of canonical content stream
+- ZIP bomb protection: max entries (`MAX_DOCX_ENTRIES = 10,000`), max decompressed size (`MAX_DOCX_DECOMPRESSED = 512 MiB`)
+- XXE (XML External Entity) prevention via `resolve_entities=False`, `no_network=True`
+- Idempotency verification in `process_artifact()`: re-hash produces identical digest
+- Input size limit (`MAX_INPUT_SIZE = 256 MiB`)
 
 #### PDF
 
@@ -69,6 +79,8 @@ Phase 0.1 Institutional Pinning — multi-format artifact ingestion with byte-st
 - Strips volatile metadata keys (CreationDate, ModDate, Producer, Creator, Title, Subject, Author, Keywords) and clears XMP packets
 - Forces deterministic document IDs (`static_id=True`) and linearized output for stable byte order
 - Line ending normalization to LF
+- Idempotency verification in `process_artifact()`: re-normalization produces identical bytes
+- Input size limit (`MAX_INPUT_SIZE = 256 MiB`)
 
 ## Artifact Ingestion
 
@@ -197,6 +209,30 @@ A third party can independently verify any document's hash by:
 4. Comparing the result against the committed hash in the ledger
 
 No secret keys or proprietary algorithms are required for verification.
+
+### Why Input Size Limits?
+
+**Threat:** An attacker submits an extremely large artifact to exhaust memory or CPU, causing denial of service.
+
+**Mitigation:** All canonicalization pipelines enforce `MAX_INPUT_SIZE` (256 MiB). The DOCX pipeline additionally limits ZIP entry count (`MAX_DOCX_ENTRIES = 10,000`) and total decompressed size (`MAX_DOCX_DECOMPRESSED = 512 MiB`) to prevent ZIP bombs.
+
+### Why JSON Depth Limits?
+
+**Threat:** Deeply nested JSON structures cause stack overflow or excessive recursion during canonicalization.
+
+**Mitigation:** `json_jcs()` enforces `MAX_JSON_DEPTH` (128 levels) during recursive encoding.
+
+### Why XXE Prevention?
+
+**Threat:** Malicious DOCX files contain XML External Entity declarations that reference local files or network resources, enabling information disclosure.
+
+**Mitigation:** DOCX XML parsing uses `resolve_entities=False` and `no_network=True` to prevent entity resolution.
+
+### Why Expanded HTML Tag Stripping?
+
+**Threat:** Tags like `<base>`, `<link>`, `<form>`, and `<noscript>` can be used for URL hijacking, resource loading, data exfiltration, or content smuggling in a canonicalized document.
+
+**Mitigation:** These tags are stripped along with `<script>`, `<style>`, `<iframe>`, `<object>`, `<embed>`, `<applet>`, and `<meta>`. Dangerous URI schemes (`javascript:`, `vbscript:`, `data:`) are detected even through whitespace obfuscation. Style attributes are stripped to prevent CSS-based data exfiltration.
 
 ## Canonicalization Rules Summary
 

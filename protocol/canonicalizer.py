@@ -56,6 +56,14 @@ def canonicalization_provenance(
     }
 
 
+# ---------------------------------------------------------------------------
+# Safety limits — prevent resource exhaustion from malicious inputs
+# ---------------------------------------------------------------------------
+MAX_INPUT_SIZE: int = 256 * 1024 * 1024  # 256 MiB per artifact
+MAX_JSON_DEPTH: int = 128  # Maximum nesting depth for JSON structures
+MAX_DOCX_ENTRIES: int = 10_000  # Maximum ZIP entries in a DOCX file
+MAX_DOCX_DECOMPRESSED: int = 512 * 1024 * 1024  # 512 MiB total decompressed
+
 try:
     from lxml import etree, html as lxml_html
 
@@ -96,15 +104,27 @@ class ArtifactPayload:
 
 
 def _should_strip_attribute(attr_name: str, attr_value: str) -> bool:
-    """Return True when an HTML attribute is unsafe and should be removed."""
+    """Return True when an HTML attribute is unsafe and should be removed.
+
+    Strips event handlers (on*), dangerous URI schemes (javascript:,
+    vbscript:, data:) even when obfuscated with embedded whitespace or
+    mixed-case, and any ``style`` attribute to prevent CSS-based data
+    exfiltration.
+    """
     name = attr_name.lower()
     if name.startswith("on"):
         return True
 
+    # Strip style attributes to prevent CSS-based data exfiltration
+    if name == "style":
+        return True
+
     if name in {"href", "src", "xlink:href", "formaction", "action"}:
-        # Reject javascript: URLs even with whitespace obfuscation
-        value = attr_value.strip().lower()
-        if value.startswith("javascript:"):
+        # Collapse all whitespace (tabs, newlines, etc.) before checking
+        # the protocol scheme — attackers can inject control characters to
+        # bypass naive prefix checks.
+        value = re.sub(r"\s+", "", attr_value).lower()
+        if value.startswith(("javascript:", "vbscript:", "data:")):
             return True
 
     return False
@@ -205,8 +225,14 @@ class Canonicalizer:
             Canonical JSON as UTF-8 bytes.
 
         Raises:
-            CanonicalizationError: If the JSON is invalid or contains duplicates.
+            CanonicalizationError: If the JSON is invalid, contains duplicates,
+                exceeds the nesting depth limit, or exceeds the input size limit.
         """
+        if len(data) > MAX_INPUT_SIZE:
+            raise CanonicalizationError(
+                f"Input size {len(data)} exceeds limit of {MAX_INPUT_SIZE} bytes"
+            )
+
         try:
             # Step 1: Normalize Unicode to NFC to resolve glyph ambiguity
             decoded = data.decode("utf-8")
@@ -222,20 +248,24 @@ class Canonicalizer:
         except (json.JSONDecodeError, UnicodeDecodeError) as e:
             raise CanonicalizationError(f"JSON Ingest Failure: {e!s}")
 
-        def encode_recursive(item: Any) -> str:
+        def encode_recursive(item: Any, depth: int = 0) -> str:
+            if depth > MAX_JSON_DEPTH:
+                raise CanonicalizationError(
+                    f"JSON nesting depth exceeds limit of {MAX_JSON_DEPTH}"
+                )
             if isinstance(item, dict):
                 # Lexicographical sort of keys (UTF-16 code units)
                 sorted_keys = sorted(item.keys())
                 return (
                     "{"
                     + ",".join(
-                        f"{json.dumps(k, ensure_ascii=False)}:{encode_recursive(item[k])}"
+                        f"{json.dumps(k, ensure_ascii=False)}:{encode_recursive(item[k], depth + 1)}"
                         for k in sorted_keys
                     )
                     + "}"
                 )
             elif isinstance(item, list):
-                return "[" + ",".join(encode_recursive(x) for x in item) + "]"
+                return "[" + ",".join(encode_recursive(x, depth + 1) for x in item) + "]"
             elif isinstance(item, Decimal):
                 return Canonicalizer._serialize_jcs_number(item)
             elif isinstance(item, str):
@@ -262,10 +292,15 @@ class Canonicalizer:
 
         Raises:
             ImportError: If lxml is not installed.
-            CanonicalizationError: If the HTML is unparseable.
+            CanonicalizationError: If the HTML is unparseable or exceeds size limit.
         """
         if lxml_html is None:
             raise ImportError("lxml required for HTML canonicalization.")
+
+        if len(data) > MAX_INPUT_SIZE:
+            raise CanonicalizationError(
+                f"Input size {len(data)} exceeds limit of {MAX_INPUT_SIZE} bytes"
+            )
 
         parser = lxml_html.HTMLParser(
             remove_comments=True, remove_pis=True, encoding="utf-8", recover=False
@@ -276,8 +311,13 @@ class Canonicalizer:
         except Exception as e:
             raise CanonicalizationError(f"HTML Parse Failure: {e!s}")
 
-        # Remove volatile active tags (and their contents/tails)
-        for tag in ["script", "style", "iframe", "object", "embed", "applet", "meta"]:
+        # Remove volatile active tags and data-exfiltration vectors
+        # (along with their contents and tails)
+        _STRIPPED_TAGS = [
+            "script", "style", "iframe", "object", "embed", "applet", "meta",
+            "base", "link", "form", "noscript",
+        ]
+        for tag in _STRIPPED_TAGS:
             for el in root.xpath(f"//{tag}"):
                 if el.getparent() is not None:
                     el.text = None
@@ -315,16 +355,44 @@ class Canonicalizer:
             32-byte BLAKE3 digest of the canonical DOCX content.
 
         Raises:
-            CanonicalizationError: If the DOCX is malformed or unparseable.
+            CanonicalizationError: If the DOCX is malformed, unparseable,
+                exceeds size limits, or contains too many entries (ZIP bomb
+                protection).
         """
         if etree is None:
             raise ImportError("lxml required for DOCX canonicalization.")
+
+        if len(data) > MAX_INPUT_SIZE:
+            raise CanonicalizationError(
+                f"Input size {len(data)} exceeds limit of {MAX_INPUT_SIZE} bytes"
+            )
 
         try:
             with zipfile.ZipFile(io.BytesIO(data)) as z_in:
                 # Lexicographical sort for archive entry order independence
                 namelist = sorted(z_in.namelist())
+
+                # ZIP bomb protection: limit entry count
+                if len(namelist) > MAX_DOCX_ENTRIES:
+                    raise CanonicalizationError(
+                        f"DOCX contains {len(namelist)} entries, "
+                        f"exceeding limit of {MAX_DOCX_ENTRIES}"
+                    )
+
+                # ZIP bomb protection: check total decompressed size
+                total_size = sum(info.file_size for info in z_in.infolist())
+                if total_size > MAX_DOCX_DECOMPRESSED:
+                    raise CanonicalizationError(
+                        f"DOCX decompressed size {total_size} exceeds "
+                        f"limit of {MAX_DOCX_DECOMPRESSED} bytes"
+                    )
+
                 hasher = _blake3.blake3()
+                # XXE-safe XML parser: disable entity resolution and network access
+                xml_parser = etree.XMLParser(
+                    resolve_entities=False,
+                    no_network=True,
+                )
                 for name in namelist:
                     # Strip non-deterministic timestamps and metadata parts
                     if any(
@@ -343,7 +411,7 @@ class Canonicalizer:
                     if name.endswith(".xml") or name.endswith(".rels"):
                         try:
                             # Apply Exclusive XML Canonicalization (C14N)
-                            xml_root = etree.fromstring(content)
+                            xml_root = etree.fromstring(content, parser=xml_parser)
                             content = etree.tostring(
                                 xml_root, method="xml", exclusive=True, with_comments=False
                             )
@@ -353,6 +421,8 @@ class Canonicalizer:
                     hasher.update(name.encode("utf-8"))
                     hasher.update(content)
                 return hasher.digest()
+        except CanonicalizationError:
+            raise
         except Exception as e:
             raise CanonicalizationError(f"DOCX C14N failure: {e!s}")
 
@@ -372,8 +442,14 @@ class Canonicalizer:
             Tuple of (normalized bytes, mode string).
 
         Raises:
-            CanonicalizationError: If the PDF cannot be parsed or normalized.
+            CanonicalizationError: If the PDF cannot be parsed, normalized,
+                or exceeds the input size limit.
         """
+        if len(data) > MAX_INPUT_SIZE:
+            raise CanonicalizationError(
+                f"Input size {len(data)} exceeds limit of {MAX_INPUT_SIZE} bytes"
+            )
+
         volatile_keys = [
             "/CreationDate",
             "/ModDate",
@@ -483,6 +559,10 @@ def process_artifact(
         except CanonicalizationError as exc:
             raise ArtifactCanonicalizationError(f"DOCX canonicalization failed: {exc!s}") from exc
 
+        # DOCX idempotency: re-hashing the same input must produce the same digest
+        if canon_hash != c.docx_v1(raw_data):
+            raise ArtifactIdempotencyError("DOCX Byte-Idempotency Violation")
+
         return {
             "raw_hash": c.get_hash(raw_data).hex(),
             "canonical_hash": canon_hash.hex(),
@@ -498,6 +578,11 @@ def process_artifact(
             processed, pdf_mode = c.pdf_normalize(raw_data)
         except CanonicalizationError as exc:
             raise ArtifactCanonicalizationError(f"PDF canonicalization failed: {exc!s}") from exc
+
+        # PDF idempotency: normalizing the already-normalized output must be stable
+        re_processed, _ = c.pdf_normalize(processed)
+        if processed != re_processed:
+            raise ArtifactIdempotencyError("PDF Byte-Idempotency Violation")
 
         return {
             "raw_hash": c.get_hash(raw_data).hex(),
