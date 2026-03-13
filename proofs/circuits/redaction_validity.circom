@@ -4,19 +4,20 @@ pragma circom 2.0.0;
  * Redaction validity proof (domain-separated Poseidon).
  *
  * Proves:
- *   1) For each i where revealMask[i] == 1, the leaf at *position i* is included
- *      in the original Merkle tree with root originalRoot.
+ *   1) ALL leaves (including redacted ones) are included in the original
+ *      Merkle tree with root originalRoot at their respective index i (L4-C).
  *   2) revealedCount equals the number of revealed leaves (sum of revealMask).
  *   3) redactedCommitment is Poseidon-chained over (revealedCount, revealedLeaves[]),
  *      where revealedLeaves[i] = originalLeaves[i] if revealed, else 0.
  *   4) Redaction correctness: originalRoot and redactedCommitment are bound
  *      together via a binding hash (verified in the public inputs).
  *
- * Security hardening:
+ * Security hardening (L4-C):
  *   - Num2Bits range checks on all index/count signals
  *   - Domain-separated Poseidon: commitment chain uses domain tag 3
- *   - Index binding: revealed pathIndices at position i must reconstruct index i
- *   - Revealed leaves bound to originalRoot (redacted leaves skip root checks)
+ *   - Index binding: pathIndices at position i must reconstruct index i (ALL leaves)
+ *   - ALL leaves bound to originalRoot (including redacted ones)
+ *   - originalLeaves must contain actual leaf values for ALL positions
  */
 
 include "./lib/merkleProof.circom";
@@ -62,8 +63,8 @@ template RedactionValidity(maxLeaves, depth) {
     signal input revealedCount;
 
     // Private inputs
-    signal input originalLeaves[maxLeaves];
-    signal input revealMask[maxLeaves]; // 1 = revealed, 0 = redacted
+    signal input originalLeaves[maxLeaves];   // ALL leaf values (including redacted ones)
+    signal input revealMask[maxLeaves];       // 1 = revealed, 0 = redacted
     signal input pathElements[maxLeaves][depth];
     signal input pathIndices[maxLeaves][depth];
 
@@ -78,8 +79,8 @@ template RedactionValidity(maxLeaves, depth) {
     maskSum[0] <== 0;
 
     // -------------------------
-    // 2) Verify revealed leaves are included at the correct *index i*
-    //    (gated: redacted leaves skip index/root constraints for efficiency)
+    // 2) L4-C: Force ALL leaves through Merkle inclusion check (including redacted ones)
+    //    This ensures the prover cannot claim arbitrary values for redacted leaves.
     // -------------------------
     component inclusionProofs[maxLeaves];
     signal revealedLeaves[maxLeaves];
@@ -99,10 +100,10 @@ template RedactionValidity(maxLeaves, depth) {
             var bitWeight = 1 << b;
             idxAccum[b + 1] <== idxAccum[b] + pathIndices[i][b] * bitWeight;
         }
-        // Enforce index match only when revealed
-        revealMask[i] * (idxAccum[depth] - i) === 0;
+        // L4-C: Enforce index match for ALL leaves (not just revealed)
+        idxAccum[depth] === i;
 
-        // MerkleProof (computed regardless; root enforced only when revealed)
+        // MerkleProof (computed for ALL leaves)
         inclusionProofs[i] = MerkleProof(depth);
         inclusionProofs[i].leaf <== originalLeaves[i];
         for (var j = 0; j < depth; j++) {
@@ -110,8 +111,10 @@ template RedactionValidity(maxLeaves, depth) {
             inclusionProofs[i].pathIndices[j] <== pathIndices[i][j];
         }
 
-        // Bind revealed leaves to the original root; redacted leaves skip root checks.
-        revealMask[i] * (inclusionProofs[i].root - originalRoot) === 0;
+        // L4-C: Force ALL leaves through Merkle inclusion check to prevent
+        // prover from claiming arbitrary values for redacted leaves.
+        // This removes the "redacted leaves skip root checks" optimization.
+        inclusionProofs[i].root === originalRoot;
 
         // Masked reveal vector:
         // - revealed leaves keep their original value

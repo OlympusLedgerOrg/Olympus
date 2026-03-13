@@ -15,6 +15,7 @@ All write operations are append-only and maintain ledger chain integrity.
 
 from __future__ import annotations
 
+import hmac
 import json
 import logging
 import os
@@ -189,6 +190,16 @@ _write_ledger = Ledger()
 _api_key_store: dict[str, ApiKeyRecord] = {}
 _api_keys_loaded = False
 
+# L4-E: Trusted proxy IPs for X-Forwarded-For parsing
+# Only parse X-Forwarded-For header when the direct peer is a known trusted proxy.
+# This prevents IP spoofing attacks where a client sets a fake X-Forwarded-For header.
+# Configure via OLYMPUS_TRUSTED_PROXY_IPS environment variable (comma-separated).
+TRUSTED_PROXY_IPS: frozenset[str] = frozenset(
+    ip.strip()
+    for ip in os.environ.get("OLYMPUS_TRUSTED_PROXY_IPS", "").split(",")
+    if ip.strip()
+)
+
 # Hard fail when persistence is configured without a signing key
 if os.environ.get("DATABASE_URL") and not os.environ.get("OLYMPUS_INGEST_SIGNING_KEY"):
     raise RuntimeError(
@@ -211,8 +222,11 @@ def _get_storage() -> StorageLayer | None:
     # Check if PostgreSQL is configured
     database_url = os.environ.get("DATABASE_URL")
     if not database_url:
-        logger.warning("DATABASE_URL not set - using in-memory storage (not production-safe)")
-        return None
+        # L4-F: Raise RuntimeError instead of falling back to insecure in-memory storage
+        raise RuntimeError(
+            "DATABASE_URL not set - in-memory storage is not allowed. "
+            "Configure DATABASE_URL for production-safe persistence."
+        )
 
     # Check if signing key is configured
     signing_key_hex = os.environ.get("OLYMPUS_INGEST_SIGNING_KEY")
@@ -241,7 +255,7 @@ def _get_storage() -> StorageLayer | None:
         return _storage
     except Exception as e:
         logger.error(f"Failed to initialize storage layer: {e}")
-        return None
+        raise RuntimeError(f"Storage layer initialization failed: {e}") from e
 
 
 def _cache_ingestion_record(entry: dict[str, Any]) -> None:
@@ -346,6 +360,30 @@ def _parse_timestamp(raw: str) -> datetime:
 def _hash_api_key(api_key: str) -> str:
     """Hash API key material for at-rest storage."""
     return hash_bytes(api_key.encode("utf-8")).hex()
+
+
+def _constant_time_api_key_lookup(key_hash: str) -> ApiKeyRecord | None:
+    """
+    Lookup API key record using constant-time comparison (L4-D).
+    
+    Uses hmac.compare_digest to prevent timing oracle attacks where an
+    attacker could measure response times to determine how many characters
+    of a key hash match.
+    
+    Args:
+        key_hash: Hex-encoded BLAKE3 hash of the API key.
+        
+    Returns:
+        ApiKeyRecord if found, None otherwise.
+    """
+    # Iterate through all stored keys and use constant-time comparison
+    # This prevents timing attacks based on early dictionary key rejection
+    found_record: ApiKeyRecord | None = None
+    for stored_hash, record in _api_key_store.items():
+        # hmac.compare_digest is constant-time for equal-length strings
+        if hmac.compare_digest(stored_hash, key_hash):
+            found_record = record
+    return found_record
 
 
 def _append_security_audit_event(event: str, details: dict[str, Any]) -> None:
@@ -463,9 +501,33 @@ def _set_rate_limit_for_tests(
 
 
 def _client_ip(request: Request) -> str:
-    """Resolve the caller IP address for abuse controls."""
-    host = request.client.host if request.client else None
-    return host or "unknown"
+    """
+    Resolve the caller IP address for abuse controls.
+    
+    L4-E: Only parses X-Forwarded-For if the direct peer is a trusted proxy.
+    This prevents IP spoofing attacks where a malicious client sets a fake
+    X-Forwarded-For header to bypass rate limiting.
+    
+    Args:
+        request: The incoming HTTP request.
+        
+    Returns:
+        The client IP address (from X-Forwarded-For if behind a trusted proxy,
+        otherwise the direct peer IP).
+    """
+    peer_ip = request.client.host if request.client else None
+    
+    # Only parse X-Forwarded-For if the peer is a trusted proxy
+    if peer_ip and peer_ip in TRUSTED_PROXY_IPS:
+        xff = request.headers.get("x-forwarded-for")
+        if xff:
+            # X-Forwarded-For format: "client, proxy1, proxy2, ..."
+            # The leftmost IP is the original client
+            forwarded_ip = xff.split(",")[0].strip()
+            if forwarded_ip:
+                return forwarded_ip
+    
+    return peer_ip or "unknown"
 
 
 def _extract_api_key(request: Request, body_api_key: str | None = None) -> str:
@@ -548,7 +610,8 @@ def _authorize_and_rate_limit(
     _load_api_keys_from_env()
     api_key = _extract_api_key(request, body_api_key=body_api_key)
     key_hash = _hash_api_key(api_key)
-    record = _api_key_store.get(key_hash)
+    # L4-D: Use constant-time lookup to prevent timing oracle attacks
+    record = _constant_time_api_key_lookup(key_hash)
     client_ip = _client_ip(request)
     if record is None:
         _append_security_audit_event("api_key_invalid", {"client_ip": client_ip, "action": action})
