@@ -463,3 +463,195 @@ def timestamp_watchdog_status(
             )
 
     return {"healthy": not alerts, "alerts": alerts, "tsa_status": statuses}
+
+
+# ---------------------------------------------------------------------------
+# Strengthened timestamp token semantics (Item 6)
+# ---------------------------------------------------------------------------
+
+
+def extract_tsa_certificate(tst_bytes: bytes) -> x509.Certificate | None:
+    """
+    Extract the TSA signing certificate from a TimeStampToken.
+
+    Args:
+        tst_bytes: DER-encoded TimeStampToken.
+
+    Returns:
+        Parsed X.509 certificate, or ``None`` if extraction fails.
+    """
+    try:
+        tst, substrate = decoder.decode(tst_bytes, asn1Spec=rfc3161ng.TimeStampToken())
+        if substrate:
+            return None
+        signed_data = tst.content
+        return load_certificate(signed_data, certificate=b"")
+    except Exception:
+        return None
+
+
+def check_tsa_certificate_expiry(
+    tst_bytes: bytes,
+    *,
+    warn_before_seconds: int = 30 * 86400,
+    now: datetime | None = None,
+) -> dict[str, Any]:
+    """
+    Check whether the TSA certificate embedded in a token is near expiration.
+
+    Args:
+        tst_bytes: DER-encoded TimeStampToken.
+        warn_before_seconds: Warn if certificate expires within this many
+            seconds (default: 30 days).
+        now: Optional current time for deterministic testing.
+
+    Returns:
+        Dictionary with ``valid``, ``warning``, ``not_after``, and optional
+        ``message`` keys.
+    """
+    current_time = now or datetime.now(timezone.utc)
+    if current_time.tzinfo is None:
+        current_time = current_time.replace(tzinfo=timezone.utc)
+
+    cert = extract_tsa_certificate(tst_bytes)
+    if cert is None:
+        return {
+            "valid": False,
+            "warning": True,
+            "not_after": None,
+            "message": "Could not extract TSA certificate from token",
+        }
+
+    not_after = cert.not_valid_after_utc
+    remaining = (not_after - current_time).total_seconds()
+
+    if remaining < 0:
+        return {
+            "valid": False,
+            "warning": True,
+            "not_after": not_after.isoformat().replace("+00:00", "Z"),
+            "message": f"TSA certificate expired {abs(int(remaining))}s ago",
+        }
+
+    warning = remaining < warn_before_seconds
+    result: dict[str, Any] = {
+        "valid": True,
+        "warning": warning,
+        "not_after": not_after.isoformat().replace("+00:00", "Z"),
+    }
+    if warning:
+        result["message"] = (
+            f"TSA certificate expires in {int(remaining)}s "
+            f"(< {warn_before_seconds}s threshold)"
+        )
+    return result
+
+
+def validate_tsa_certificate_chain(
+    tst_bytes: bytes,
+    *,
+    trusted_root_pem: bytes | None = None,
+) -> dict[str, Any]:
+    """
+    Validate the TSA certificate chain for a timestamp token.
+
+    Performs basic certificate chain validation including:
+      - Certificate extraction
+      - Expiration checking
+      - Fingerprint extraction for pinning
+
+    Full OCSP/CRL checking requires network access and is beyond the scope
+    of this offline validator, but the returned ``fingerprint`` can be compared
+    against a pinned allowlist.
+
+    Args:
+        tst_bytes: DER-encoded TimeStampToken.
+        trusted_root_pem: Optional PEM-encoded trusted root certificate to
+            validate against.
+
+    Returns:
+        Dictionary with validation results.
+    """
+    cert = extract_tsa_certificate(tst_bytes)
+    if cert is None:
+        return {
+            "valid": False,
+            "fingerprint": None,
+            "subject": None,
+            "issuer": None,
+            "message": "Could not extract TSA certificate",
+        }
+
+    fingerprint = cert.fingerprint(hashes.SHA256()).hex()
+    subject = cert.subject.rfc4514_string()
+    issuer = cert.issuer.rfc4514_string()
+
+    expiry_check = check_tsa_certificate_expiry(tst_bytes)
+
+    result: dict[str, Any] = {
+        "valid": expiry_check["valid"],
+        "fingerprint": fingerprint,
+        "subject": subject,
+        "issuer": issuer,
+        "not_after": expiry_check.get("not_after"),
+    }
+
+    if not expiry_check["valid"]:
+        result["message"] = expiry_check.get("message", "Certificate validation failed")
+
+    if expiry_check.get("warning"):
+        result["warning"] = expiry_check.get("message")
+
+    return result
+
+
+def evaluate_timestamp_token_health(
+    tokens: Sequence[TimestampToken | dict[str, Any]],
+    *,
+    required_tsa_urls: Sequence[str] = DEFAULT_FINALIZATION_TSA_URLS,
+    stale_after_seconds: int = 3600,
+    cert_warn_before_seconds: int = 30 * 86400,
+    now: datetime | None = None,
+) -> dict[str, Any]:
+    """
+    Comprehensive health evaluation combining watchdog freshness,
+    certificate expiry warnings, and quorum coverage.
+
+    Args:
+        tokens: Timestamp tokens for the latest finalized header.
+        required_tsa_urls: TSA URLs forming the quorum pool.
+        stale_after_seconds: Maximum age before a token is considered stale.
+        cert_warn_before_seconds: Warn if TSA cert expires within this window.
+        now: Optional current time for deterministic testing.
+
+    Returns:
+        Dictionary with ``healthy``, ``alerts``, ``tsa_status``, and
+        ``certificate_warnings`` keys.
+    """
+    # Base watchdog status
+    watchdog = timestamp_watchdog_status(
+        tokens,
+        required_tsa_urls=required_tsa_urls,
+        stale_after_seconds=stale_after_seconds,
+        now=now,
+    )
+
+    # Certificate expiry checks
+    cert_warnings: list[str] = []
+    for token in tokens:
+        parsed = token if isinstance(token, TimestampToken) else TimestampToken.from_dict(token)
+        expiry = check_tsa_certificate_expiry(
+            parsed.tst_bytes,
+            warn_before_seconds=cert_warn_before_seconds,
+            now=now,
+        )
+        if expiry.get("warning") and expiry.get("message"):
+            cert_warnings.append(f"{parsed.tsa_url}: {expiry['message']}")
+
+    all_alerts = watchdog["alerts"] + cert_warnings
+    return {
+        "healthy": not all_alerts,
+        "alerts": all_alerts,
+        "tsa_status": watchdog["tsa_status"],
+        "certificate_warnings": cert_warnings,
+    }

@@ -33,6 +33,7 @@ import json
 import logging
 import os
 import time
+from collections import OrderedDict
 from collections.abc import Iterator, Mapping
 from contextlib import contextmanager
 from datetime import datetime, timezone
@@ -71,6 +72,9 @@ class StorageLayer:
     All operations are append-only and deterministic.
     """
 
+    # Default maximum number of cached Merkle node entries.
+    DEFAULT_NODE_CACHE_SIZE: int = 4096
+
     def __init__(
         self,
         connection_string: str,
@@ -82,6 +86,7 @@ class StorageLayer:
         retry_max_delay_seconds: float = 2.0,
         circuit_breaker_threshold: int | None = None,
         circuit_breaker_timeout_seconds: float | None = None,
+        node_cache_size: int | None = None,
     ):
         """
         Initialize storage layer.
@@ -97,6 +102,9 @@ class StorageLayer:
                 If None, reads from OLYMPUS_CB_THRESHOLD env var (default: 5).
             circuit_breaker_timeout_seconds: Breaker open duration in seconds.
                 If None, reads from OLYMPUS_CB_TIMEOUT_SECONDS env var (default: 30.0).
+            node_cache_size: Maximum number of entries in the in-memory Merkle node
+                cache.  Set to 0 to disable caching.  Defaults to
+                :data:`DEFAULT_NODE_CACHE_SIZE`.
         """
         if pool_min_size < 1:
             raise ValueError("pool_min_size must be >= 1")
@@ -139,6 +147,14 @@ class StorageLayer:
             kwargs={"autocommit": False, "row_factory": dict_row},
         )
 
+        # In-memory LRU cache for Merkle nodes keyed by (shard_id, level, path_bytes).
+        # SMT nodes are immutable once written so caching is safe.
+        self._node_cache_max = (
+            node_cache_size if node_cache_size is not None else self.DEFAULT_NODE_CACHE_SIZE
+        )
+        self._node_cache: OrderedDict[tuple[str, int, bytes], bytes] = OrderedDict()
+        self._node_cache_lock = Lock()
+
     @contextmanager
     def _get_connection(self) -> Iterator[psycopg.Connection[dict[str, Any]]]:
         """
@@ -167,6 +183,39 @@ class StorageLayer:
     def close(self) -> None:
         """Close all pooled database connections."""
         self._pool.close()
+
+    # ------------------------------------------------------------------
+    # Merkle node cache helpers
+    # ------------------------------------------------------------------
+
+    def _cache_get(self, shard_id: str, level: int, path_bytes: bytes) -> bytes | None:
+        """Return cached node hash or ``None`` on miss."""
+        if self._node_cache_max <= 0:
+            return None
+        key = (shard_id, level, path_bytes)
+        with self._node_cache_lock:
+            value = self._node_cache.get(key)
+            if value is not None:
+                self._node_cache.move_to_end(key)
+            return value
+
+    def _cache_put(self, shard_id: str, level: int, path_bytes: bytes, hash_value: bytes) -> None:
+        """Insert a node into the cache, evicting the oldest entry if full."""
+        if self._node_cache_max <= 0:
+            return
+        key = (shard_id, level, path_bytes)
+        with self._node_cache_lock:
+            if key in self._node_cache:
+                self._node_cache.move_to_end(key)
+            else:
+                if len(self._node_cache) >= self._node_cache_max:
+                    self._node_cache.popitem(last=False)
+                self._node_cache[key] = hash_value
+
+    def _cache_clear(self) -> None:
+        """Clear the entire Merkle node cache."""
+        with self._node_cache_lock:
+            self._node_cache.clear()
 
     def _acquire_connection_with_retry(self) -> psycopg.Connection[dict[str, Any]]:
         """Acquire a pooled connection with retry and circuit-breaker protection."""
@@ -482,6 +531,15 @@ class StorageLayer:
                     prev_header_hash,
                     ts,
                 ),
+            )
+
+            # Record change in the diff journal for O(changes) diffs
+            cur.execute(
+                """
+                    INSERT INTO smt_change_journal (shard_id, key, old_value, new_value, header_seq, ts)
+                    VALUES (%s, %s, %s, %s, %s, %s)
+                    """,
+                (shard_id, key, None, value_hash, seq, ts),
             )
 
             # Create ledger entry
@@ -947,10 +1005,11 @@ class StorageLayer:
         key_range_end: bytes | None = None,
     ) -> dict[str, Any]:
         """
-        Compare two historical shard states reconstructed from header timestamps.
+        Compare two historical shard states.
 
-        For large ledgers with millions of leaves, use key_range_start and key_range_end
-        to compute diffs in bounded batches to avoid memory exhaustion.
+        When a change journal is available the diff is computed in O(changes)
+        without reconstructing full SMTs.  Falls back to the original
+        full-tree reconstruction when journal coverage is incomplete.
 
         Args:
             shard_id: Shard identifier
@@ -975,6 +1034,16 @@ class StorageLayer:
             if to_header is None:
                 raise ValueError(f"Shard header not found: {shard_id}@{to_seq}")
 
+            # Fast path: use change journal when available
+            journal_diff = self._diff_from_journal(
+                cur, shard_id, from_seq, to_seq, key_range_start, key_range_end
+            )
+            if journal_diff is not None:
+                journal_diff["from_root_hash"] = bytes(from_header["root"]).hex()
+                journal_diff["to_root_hash"] = bytes(to_header["root"]).hex()
+                return journal_diff
+
+            # Slow path: reconstruct full trees
             from_tree = self._load_tree_state(cur, shard_id, up_to_ts=from_header["ts"])
             to_tree = self._load_tree_state(cur, shard_id, up_to_ts=to_header["ts"])
             diff = diff_sparse_merkle_trees(
@@ -988,6 +1057,83 @@ class StorageLayer:
                 "changed": [entry.to_dict() for entry in diff["changed"]],
                 "removed": [entry.to_dict() for entry in diff["removed"]],
             }
+
+    def _diff_from_journal(
+        self,
+        cur: psycopg.Cursor[Any],
+        shard_id: str,
+        from_seq: int,
+        to_seq: int,
+        key_range_start: bytes | None,
+        key_range_end: bytes | None,
+    ) -> dict[str, Any] | None:
+        """
+        Attempt to compute a diff from the change journal.
+
+        Returns None when the journal table does not exist or has no
+        coverage for the requested range.
+        """
+        try:
+            cur.execute(
+                """
+                SELECT key, old_value, new_value
+                FROM smt_change_journal
+                WHERE shard_id = %s AND header_seq > %s AND header_seq <= %s
+                ORDER BY id ASC
+                """,
+                (shard_id, from_seq, to_seq),
+            )
+        except Exception:
+            # Table may not exist yet (migration not applied)
+            return None
+
+        rows = cur.fetchall()
+        if not rows:
+            # No journal rows — either nothing changed or journal not populated
+            return None
+
+        added: list[dict[str, str | None]] = []
+        changed: list[dict[str, str | None]] = []
+        # Removed entries are not possible in an append-only ledger but
+        # the schema supports them for completeness.
+        removed: list[dict[str, str | None]] = []
+
+        for row in rows:
+            key = bytes(row["key"])
+            if key_range_start is not None and key < key_range_start:
+                continue
+            if key_range_end is not None and key >= key_range_end:
+                continue
+
+            old_val = row["old_value"]
+            new_val = bytes(row["new_value"]) if row["new_value"] else None
+
+            if old_val is None:
+                added.append(
+                    {
+                        "key": key.hex(),
+                        "before_value_hash": None,
+                        "after_value_hash": new_val.hex() if new_val else None,
+                    }
+                )
+            elif new_val is None:
+                removed.append(
+                    {
+                        "key": key.hex(),
+                        "before_value_hash": bytes(old_val).hex(),
+                        "after_value_hash": None,
+                    }
+                )
+            else:
+                changed.append(
+                    {
+                        "key": key.hex(),
+                        "before_value_hash": bytes(old_val).hex(),
+                        "after_value_hash": new_val.hex(),
+                    }
+                )
+
+        return {"added": added, "changed": changed, "removed": removed}
 
     def get_ledger_tail(self, shard_id: str, n: int = 10) -> list[LedgerEntry]:
         """
@@ -1323,6 +1469,107 @@ class StorageLayer:
 
             return persisted_root == computed_root
 
+    # ------------------------------------------------------------------
+    # Shard compaction (checkpoint roots)
+    # ------------------------------------------------------------------
+
+    def create_checkpoint(self, shard_id: str) -> dict[str, Any] | None:
+        """
+        Store a checkpoint root for the current shard state.
+
+        Checkpoints record periodic snapshots of the SMT root so that
+        historical state can be reconstructed from a recent checkpoint
+        instead of replaying from genesis.
+
+        Returns:
+            Checkpoint metadata dict, or None if the shard has no headers.
+        """
+        with self._get_connection() as conn, conn.cursor(row_factory=dict_row) as cur:
+            cur.execute(
+                """
+                SELECT seq, root FROM shard_headers
+                WHERE shard_id = %s
+                ORDER BY seq DESC
+                LIMIT 1
+                """,
+                (shard_id,),
+            )
+            row = cur.fetchone()
+            if row is None:
+                return None
+
+            header_seq = row["seq"]
+            root_hash = bytes(row["root"])
+
+            cur.execute(
+                "SELECT COUNT(*) AS cnt FROM smt_leaves WHERE shard_id = %s",
+                (shard_id,),
+            )
+            count_row = cur.fetchone()
+            leaf_count = int(count_row["cnt"]) if count_row else 0
+
+            ts = datetime.now(timezone.utc)
+            cur.execute(
+                """
+                INSERT INTO smt_checkpoints (shard_id, header_seq, root_hash, leaf_count, ts)
+                VALUES (%s, %s, %s, %s, %s)
+                ON CONFLICT (shard_id, header_seq) DO NOTHING
+                """,
+                (shard_id, header_seq, root_hash, leaf_count, ts),
+            )
+            conn.commit()
+
+            return {
+                "shard_id": shard_id,
+                "header_seq": header_seq,
+                "root_hash": root_hash.hex(),
+                "leaf_count": leaf_count,
+                "ts": ts.isoformat().replace("+00:00", "Z"),
+            }
+
+    def get_checkpoints(self, shard_id: str, n: int = 10) -> list[dict[str, Any]]:
+        """
+        Retrieve the last N checkpoints for a shard.
+
+        Args:
+            shard_id: Shard identifier
+            n: Maximum number of checkpoints to return
+
+        Returns:
+            List of checkpoint dicts (most recent first)
+        """
+        with self._get_connection() as conn, conn.cursor(row_factory=dict_row) as cur:
+            cur.execute(
+                """
+                SELECT header_seq, root_hash, leaf_count, ts
+                FROM smt_checkpoints
+                WHERE shard_id = %s
+                ORDER BY header_seq DESC
+                LIMIT %s
+                """,
+                (shard_id, n),
+            )
+            rows = cur.fetchall()
+
+        results: list[dict[str, Any]] = []
+        for row in rows:
+            ts_val = row["ts"]
+            ts_str = (
+                ts_val.isoformat().replace("+00:00", "Z")
+                if isinstance(ts_val, datetime)
+                else str(ts_val)
+            )
+            results.append(
+                {
+                    "shard_id": shard_id,
+                    "header_seq": row["header_seq"],
+                    "root_hash": bytes(row["root_hash"]).hex(),
+                    "leaf_count": row["leaf_count"],
+                    "ts": ts_str,
+                }
+            )
+        return results
+
     def _row_get(self, row: Any, key: str, idx: int) -> Any:
         """
         Get value from row, supporting both dict and tuple rows.
@@ -1454,7 +1701,7 @@ class StorageLayer:
         self, cur: psycopg.Cursor[Any], shard_id: str, tree: SparseMerkleTree
     ) -> None:
         """
-        Persist tree nodes to database.
+        Persist tree nodes to database and populate the node cache.
 
         Only inserts new nodes (append-only).
         Node insertion failures are acceptable - they indicate the node already exists.
@@ -1479,16 +1726,31 @@ class StorageLayer:
                 (shard_id, level, path_bytes, hash_value, datetime.now(timezone.utc)),
             )
 
-    def _encode_path(self, path: tuple[int, ...]) -> bytes:
+            # Populate cache with freshly persisted nodes
+            self._cache_put(shard_id, level, path_bytes, hash_value)
+
+    @staticmethod
+    def _encode_path(path: tuple[int, ...]) -> bytes:
         """
-        Encode path tuple as bytes.
+        Encode path tuple as packed bytes.
+
+        Each bit in the path is packed into bytes (MSB first), giving an 8×
+        reduction compared to the naive one-byte-per-bit encoding.  A 256-bit
+        path becomes 32 bytes instead of 256.  The encoding is deterministic
+        and compatible with the standard SMT key representation.
 
         Args:
-            path: Tuple of 0s and 1s
+            path: Tuple of 0s and 1s (up to 256 elements)
 
         Returns:
-            Bytes representation
+            Packed bytes representation (ceil(len(path) / 8) bytes)
         """
-        # Simple encoding: each bit becomes a byte (0 or 1)
-        # This is inefficient but maximally clear and deterministic
-        return bytes(path)
+        if not path:
+            return b""
+        n = len(path)
+        num_bytes = (n + 7) // 8
+        result = bytearray(num_bytes)
+        for i, bit in enumerate(path):
+            if bit:
+                result[i >> 3] |= 1 << (7 - (i & 7))
+        return bytes(result)
