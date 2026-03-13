@@ -41,10 +41,10 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Iterable, Sequence
+from typing import Any, Sequence
 
 from .canonical_json import canonical_json_bytes
-from .hashes import EVENT_PREFIX, HASH_SEPARATOR, hash_bytes, hash_string
+from .hashes import EVENT_PREFIX, HASH_SEPARATOR, hash_string
 from .timestamps import current_timestamp
 
 from .proof_interface import (
@@ -58,6 +58,7 @@ from .proof_interface import (
 
 
 RECURSIVE_REDACTION_CIRCUIT = "recursive_redaction_composition"
+_EVENT_PREFIX_STR = EVENT_PREFIX.decode("utf-8")
 
 
 @dataclass(frozen=True)
@@ -72,13 +73,17 @@ class RedactionEvent:
     event_index: int
     document_id: str
     version: int
-    revealed_indices: list[int]
+    revealed_indices: tuple[int, ...]
     original_root: str
     redacted_commitment: str
     revealed_count: int
     timestamp: str
     zk_proof: dict[str, Any]
     previous_event_hash: str
+
+    def __post_init__(self) -> None:
+        # Ensure immutable tuple storage even if caller passes a list.
+        object.__setattr__(self, "revealed_indices", tuple(self.revealed_indices))
 
     def to_dict(self) -> dict[str, Any]:
         """Serialize to a dictionary for transport or storage."""
@@ -102,7 +107,7 @@ class RedactionEvent:
             event_index=int(data["event_index"]),
             document_id=str(data["document_id"]),
             version=int(data.get("version", 1)),
-            revealed_indices=list(data.get("revealed_indices", [])),
+            revealed_indices=tuple(data.get("revealed_indices", [])),
             original_root=str(data["original_root"]),
             redacted_commitment=str(data["redacted_commitment"]),
             revealed_count=int(data.get("revealed_count", 0)),
@@ -118,7 +123,7 @@ class RedactionEvent:
         Uses HASH_SEPARATOR to join stringified fields; revealed_indices and
         zk_proof are canonicalized JSON for determinism.
         """
-        revealed_indices_json = canonical_json_bytes(self.revealed_indices).decode("utf-8")
+        revealed_indices_json = canonical_json_bytes(list(self.revealed_indices)).decode("utf-8")
         zk_proof_json = canonical_json_bytes(self.zk_proof).decode("utf-8")
         components = [
             str(self.event_index),
@@ -133,7 +138,7 @@ class RedactionEvent:
             self.previous_event_hash,
         ]
         concatenated = HASH_SEPARATOR.join(components)
-        return hash_string(EVENT_PREFIX.decode("utf-8") + HASH_SEPARATOR + concatenated).hex()
+        return hash_string(_EVENT_PREFIX_STR + HASH_SEPARATOR + concatenated).hex()
 
 
 @dataclass(frozen=True)
@@ -257,7 +262,7 @@ class RecursiveProofAccumulator:
             event_index=self.event_count,
             document_id=self.document_id,
             version=self.version,
-            revealed_indices=list(revealed_indices),
+            revealed_indices=tuple(revealed_indices),
             original_root=self.original_root,
             redacted_commitment=redacted_commitment,
             revealed_count=revealed_count,
@@ -318,11 +323,6 @@ class RecursiveProofAccumulator:
         )
 
 
-def _compute_event_hash(event: RedactionEvent) -> str:
-    """Helper wrapper to compute hash, kept for clarity in verification."""
-    return event.compute_hash()
-
-
 def _validate_chain_linkage(events: Sequence[RedactionEvent]) -> bool:
     """Ensure previous_event_hash pointers form a proper linked list."""
     if not events:
@@ -330,7 +330,7 @@ def _validate_chain_linkage(events: Sequence[RedactionEvent]) -> bool:
     if events[0].previous_event_hash != "":
         return False
     for prev, curr in zip(events, events[1:]):
-        if curr.previous_event_hash != _compute_event_hash(prev):
+        if curr.previous_event_hash != prev.compute_hash():
             return False
     return True
 
@@ -362,8 +362,8 @@ def verify_recursive_redaction_proof(
     if not _validate_chain_linkage(events):
         return False
 
-    computed_hashes = [_compute_event_hash(event) for event in events]
-    return computed_hashes == list(proof.event_hashes)
+    computed_hashes = [event.compute_hash() for event in events]
+    return computed_hashes == proof.event_hashes
 
 
 class Halo2Verifier:
