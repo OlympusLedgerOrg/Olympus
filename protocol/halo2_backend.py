@@ -58,6 +58,9 @@ from .proof_interface import (
 
 
 RECURSIVE_REDACTION_CIRCUIT = "recursive_redaction_composition"
+# Identifier for the future Halo2 recursive composition circuit (Phase 1+).
+
+_HASH_SEPARATOR_BYTES = HASH_SEPARATOR.encode("utf-8")
 
 
 @dataclass(frozen=True)
@@ -122,28 +125,27 @@ class RedactionEvent:
         Uses HASH_SEPARATOR to join stringified fields; revealed_indices and
         zk_proof are canonicalized JSON for determinism.
         """
-        sep = HASH_SEPARATOR.encode("utf-8")
         components: list[bytes] = [
             EVENT_PREFIX,
-            sep,
+            _HASH_SEPARATOR_BYTES,
             str(self.event_index).encode("utf-8"),
-            sep,
+            _HASH_SEPARATOR_BYTES,
             self.document_id.encode("utf-8"),
-            sep,
+            _HASH_SEPARATOR_BYTES,
             str(self.version).encode("utf-8"),
-            sep,
+            _HASH_SEPARATOR_BYTES,
             canonical_json_bytes(list(self.revealed_indices)),
-            sep,
+            _HASH_SEPARATOR_BYTES,
             self.original_root.encode("utf-8"),
-            sep,
+            _HASH_SEPARATOR_BYTES,
             self.redacted_commitment.encode("utf-8"),
-            sep,
+            _HASH_SEPARATOR_BYTES,
             str(self.revealed_count).encode("utf-8"),
-            sep,
+            _HASH_SEPARATOR_BYTES,
             self.timestamp.encode("utf-8"),
-            sep,
+            _HASH_SEPARATOR_BYTES,
             canonical_json_bytes(self.zk_proof),
-            sep,
+            _HASH_SEPARATOR_BYTES,
             self.previous_event_hash.encode("utf-8"),
         ]
         return hash_bytes(b"".join(components)).hex()
@@ -200,7 +202,35 @@ class RecursiveRedactionProof:
     recursive_proof: bytes = b""
     proof_version: str = "1.0.0"
     timestamp: str = ""
-    event_hashes: list[str] = field(default_factory=list)
+    _event_hashes: tuple[str, ...] = field(default_factory=tuple, repr=False, compare=False)
+
+    def __init__(
+        self,
+        *,
+        document_id: str,
+        event_count: int,
+        current_state_hash: str,
+        original_root: str,
+        ledger_root: str,
+        recursive_proof: bytes = b"",
+        proof_version: str = "1.0.0",
+        timestamp: str = "",
+        event_hashes: Sequence[str] | None = None,
+    ) -> None:
+        object.__setattr__(self, "document_id", document_id)
+        object.__setattr__(self, "event_count", event_count)
+        object.__setattr__(self, "current_state_hash", current_state_hash)
+        object.__setattr__(self, "original_root", original_root)
+        object.__setattr__(self, "ledger_root", ledger_root)
+        object.__setattr__(self, "recursive_proof", recursive_proof)
+        object.__setattr__(self, "proof_version", proof_version)
+        object.__setattr__(self, "timestamp", timestamp)
+        object.__setattr__(self, "_event_hashes", tuple(event_hashes or ()))
+
+    @property
+    def event_hashes(self) -> list[str]:
+        """Expose event hashes as an immutable copy for callers."""
+        return list(self._event_hashes)
 
     def to_dict(self) -> dict[str, Any]:
         """Serialize to a dictionary with hex-encoded proof bytes."""
@@ -213,7 +243,7 @@ class RecursiveRedactionProof:
             "recursive_proof": self.recursive_proof.hex(),
             "proof_version": self.proof_version,
             "timestamp": self.timestamp,
-            "event_hashes": list(self.event_hashes),
+            "event_hashes": list(self._event_hashes),
         }
 
     @classmethod
