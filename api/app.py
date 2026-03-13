@@ -35,10 +35,10 @@ import os
 from typing import TYPE_CHECKING, Any
 from urllib.parse import urlparse
 
-from fastapi import FastAPI, HTTPException, Query
+from fastapi import FastAPI, HTTPException, Query, Request
 from pydantic import BaseModel
 
-from api.ingest import router as ingest_router
+from api.ingest import _authorize_and_rate_limit, router as ingest_router
 from protocol.canonical_json import canonical_json_encode
 from protocol.telemetry import opentelemetry_available, prometheus_available, record_smt_divergence
 
@@ -754,6 +754,7 @@ async def metrics() -> Any:
 @app.post("/shards/{shard_id}/alert/smt-divergence")
 async def alert_smt_divergence(
     shard_id: str,
+    request: Request,
     local_root: str = Query(..., description="Hex-encoded local SMT root"),
     remote_root: str = Query(..., description="Hex-encoded remote SMT root"),
     remote_node: str = Query(..., description="Remote node identifier (URL or node ID)"),
@@ -772,9 +773,10 @@ async def alert_smt_divergence(
         remote_root: Hex-encoded SMT root reported by the remote peer.
         remote_node: Identifier of the remote peer.
 
-    Returns:
-        Confirmation that the divergence event was recorded.
-    """
+        Returns:
+            Confirmation that the divergence event was recorded.
+        """
+    _authorize_and_rate_limit(request, action="verify")
     record_smt_divergence(
         shard_id=shard_id,
         local_root=local_root,

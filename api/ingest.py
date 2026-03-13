@@ -30,11 +30,13 @@ from pydantic import BaseModel, Field
 
 from protocol.canonical import CANONICAL_VERSION, canonicalize_document, document_to_bytes
 from protocol.canonicalizer import canonicalization_provenance
-from protocol.hashes import hash_bytes
+from protocol.hashes import hash_bytes, leaf_hash
 from protocol.ledger import Ledger
 from protocol.merkle import (
     MerkleProof,
     MerkleTree,
+    MERKLE_VERSION,
+    PROOF_VERSION,
     deserialize_merkle_proof,
     merkle_leaf_hash,
     verify_proof,
@@ -187,6 +189,13 @@ _write_ledger = Ledger()
 _api_key_store: dict[str, ApiKeyRecord] = {}
 _api_keys_loaded = False
 
+# Hard fail when persistence is configured without a signing key
+if os.environ.get("DATABASE_URL") and not os.environ.get("OLYMPUS_INGEST_SIGNING_KEY"):
+    raise RuntimeError(
+        "DATABASE_URL is set but OLYMPUS_INGEST_SIGNING_KEY is missing - "
+        "ingest persistence cannot start without a signing key"
+    )
+
 
 def _get_storage() -> StorageLayer | None:
     """
@@ -208,8 +217,10 @@ def _get_storage() -> StorageLayer | None:
     # Check if signing key is configured
     signing_key_hex = os.environ.get("OLYMPUS_INGEST_SIGNING_KEY")
     if not signing_key_hex:
-        logger.warning("OLYMPUS_INGEST_SIGNING_KEY not set - using in-memory storage")
-        return None
+        logger.critical(
+            "DATABASE_URL is configured but OLYMPUS_INGEST_SIGNING_KEY is missing - refusing to start"
+        )
+        raise RuntimeError("OLYMPUS_INGEST_SIGNING_KEY is required when DATABASE_URL is set")
 
     try:
         from storage.postgres import StorageLayer
@@ -364,8 +375,13 @@ def _load_api_keys_from_env() -> None:
     except json.JSONDecodeError as exc:
         raise ValueError("OLYMPUS_API_KEYS_JSON must be valid JSON") from exc
     for item in raw:
-        _register_api_key_for_tests(
-            api_key=item["api_key"],
+        if "key_hash" not in item:
+            raise ValueError(
+                "OLYMPUS_API_KEYS_JSON must contain hashed API keys under 'key_hash' "
+                "(hex-encoded). Raw API keys are not accepted."
+            )
+        _register_hashed_api_key(
+            key_hash=item["key_hash"],
             key_id=item.get("key_id", "default"),
             scopes=set(item.get("scopes", ["ingest", "commit", "verify"])),
             expires_at=item.get("expires_at", "2099-01-01T00:00:00Z"),
@@ -389,9 +405,32 @@ def _register_api_key_for_tests(
     )
 
 
+def _register_hashed_api_key(
+    key_hash: str, key_id: str, scopes: set[str], expires_at: str
+) -> None:
+    """Register a pre-hashed API key (preferred for production bootstrap)."""
+    try:
+        decoded = bytes.fromhex(key_hash)
+    except ValueError as exc:
+        raise ValueError("key_hash must be hex-encoded") from exc
+    if len(decoded) != 32:
+        raise ValueError("key_hash must be 32 bytes (64 hex characters)")
+    _api_key_store[key_hash] = ApiKeyRecord(
+        key_id=key_id,
+        key_hash=key_hash,
+        scopes=scopes,
+        expires_at=_parse_timestamp(expires_at),
+    )
+    _append_security_audit_event(
+        "api_key_registered",
+        {"key_id": key_id, "scopes": sorted(scopes), "expires_at": expires_at},
+    )
+
+
 def _reset_ingest_state_for_tests() -> None:  # pragma: no cover - test utility
     """Reset in-memory ingestion, auth, and rate-limit state."""
     global _write_ledger, _api_keys_loaded, _storage, _signing_key
+    storage = _storage
     _ingestion_store.clear()
     _content_index.clear()
     _api_key_store.clear()
@@ -401,6 +440,11 @@ def _reset_ingest_state_for_tests() -> None:  # pragma: no cover - test utility
     for action in _rate_limit_key_buckets:
         _rate_limit_key_buckets[action].clear()
         _rate_limit_ip_buckets[action].clear()
+    if storage is not None:
+        try:
+            storage.clear_rate_limits()
+        except Exception:
+            logger.warning("Failed to clear persisted rate limits during reset", exc_info=True)
     _write_ledger = Ledger()
 
 
@@ -411,6 +455,11 @@ def _set_rate_limit_for_tests(
     _rate_limit_policy[action] = (capacity, refill_rate_per_second)
     _rate_limit_key_buckets[action].clear()
     _rate_limit_ip_buckets[action].clear()
+    if _storage is not None:
+        try:
+            _storage.clear_rate_limits()
+        except Exception:
+            logger.warning("Failed to clear persisted rate limits during test setup", exc_info=True)
 
 
 def _client_ip(request: Request) -> str:
@@ -448,6 +497,50 @@ def _get_bucket(buckets: dict[str, TokenBucket], subject: str, action: str) -> T
     return created
 
 
+def _consume_rate_limit(subject_type: str, subject: str, action: str) -> bool:
+    """
+    Consume a token for the given subject/action, preferring the shared storage backend.
+
+    Falls back to process-local buckets if storage is unavailable or errors.
+    """
+    capacity, refill = _rate_limit_policy[action]
+    storage = None
+    try:
+        storage = _get_storage()
+    except RuntimeError:
+        # Configuration errors should propagate; let caller handle.
+        raise
+    except Exception as exc:  # pragma: no cover - defensive
+        logger.error(
+            "rate_limit_storage_unavailable",
+            extra={"action": action, "subject_type": subject_type, "error": str(exc)},
+        )
+
+    if storage is not None:
+        try:
+            return storage.consume_rate_limit(
+                subject_type=subject_type,
+                subject=subject,
+                action=action,
+                capacity=capacity,
+                refill_rate_per_second=refill,
+            )
+        except Exception as exc:  # pragma: no cover - defensive
+            logger.error(
+                "rate_limit_storage_error",
+                extra={
+                    "action": action,
+                    "subject_type": subject_type,
+                    "subject": subject,
+                    "error": str(exc),
+                },
+            )
+
+    buckets = _rate_limit_key_buckets if subject_type == "api_key" else _rate_limit_ip_buckets
+    bucket = _get_bucket(buckets[action], subject, action)
+    return bucket.consume()
+
+
 def _authorize_and_rate_limit(
     request: Request, action: str, body_api_key: str | None = None
 ) -> ApiKeyRecord:
@@ -472,8 +565,7 @@ def _authorize_and_rate_limit(
         )
         raise HTTPException(status_code=403, detail=f"API key lacks required scope: {action}")
 
-    key_bucket = _get_bucket(_rate_limit_key_buckets[action], record.key_id, action)
-    if not key_bucket.consume():
+    if not _consume_rate_limit("api_key", record.key_id, action):
         logger.warning(
             "rate_limit_hit",
             extra={"dimension": "api_key", "key_id": record.key_id, "action": action},
@@ -489,8 +581,7 @@ def _authorize_and_rate_limit(
         )
         raise HTTPException(status_code=429, detail="Rate limit exceeded for API key")
 
-    ip_bucket = _get_bucket(_rate_limit_ip_buckets[action], client_ip, action)
-    if not ip_bucket.consume():
+    if not _consume_rate_limit("ip", client_ip, action):
         logger.warning(
             "rate_limit_hit",
             extra={"dimension": "ip", "client_ip": client_ip, "action": action},
@@ -542,9 +633,21 @@ def _evaluate_proof_bundle(
     except (KeyError, TypeError, ValueError) as exc:
         raise HTTPException(status_code=400, detail=f"Invalid merkle_proof: {exc}") from exc
 
-    content_hash_matches_proof = merkle_proof.leaf_hash == merkle_leaf_hash(
-        bytes.fromhex(normalized_hash)
-    )
+    content_hash_bytes = bytes.fromhex(normalized_hash)
+    expected_leaf_hash = merkle_leaf_hash(content_hash_bytes)
+    smt_key_hex = merkle_proof_data.get("smt_key")
+    if smt_key_hex is not None:
+        try:
+            smt_key = bytes.fromhex(str(smt_key_hex))
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail="smt_key must be valid hex") from exc
+        if len(smt_key) != 32:
+            raise HTTPException(
+                status_code=400, detail="smt_key must be a 32-byte key (64 hex chars)"
+            )
+        expected_leaf_hash = leaf_hash(smt_key, content_hash_bytes)
+
+    content_hash_matches_proof = merkle_proof.leaf_hash == expected_leaf_hash
     if merkle_proof.root_hash.hex() != normalized_root:
         return normalized_hash, normalized_root, content_hash_matches_proof, False
 
@@ -556,28 +659,43 @@ def _evaluate_proof_bundle(
     return normalized_hash, normalized_root, content_hash_matches_proof, merkle_proof_valid
 
 
-def _smt_proof_to_merkle_proof_dict(proof: ExistenceProof, leaf_hash: bytes) -> dict[str, Any]:
+def _smt_proof_to_merkle_proof_dict(proof: ExistenceProof, value_hash: bytes) -> dict[str, Any]:
     """
-    Convert an SMT ExistenceProof to Merkle proof dict format.
-
-    The ingest API currently uses a simplified Merkle tree format, while the storage
-    layer uses Sparse Merkle Trees. This helper bridges the two formats.
+    Convert a sparse Merkle proof to the MerkleProof serialization used by the ingest API.
 
     Args:
         proof: SMT existence proof from storage layer
-        leaf_hash: The leaf hash being proven
+        value_hash: The value hash bound to the SMT leaf
 
     Returns:
         Dict with merkle_proof structure expected by ingest API
     """
-    # SMT proofs have a different structure - convert siblings format
-    # For now, we'll create a simplified representation
-    # TODO: Enhance this once we unify the proof formats
+    if len(value_hash) != 32:
+        raise ValueError("value_hash must be 32 bytes")
+    if len(proof.key) != 32:
+        raise ValueError("proof.key must be 32 bytes")
+    if len(proof.root_hash) != 32:
+        raise ValueError("proof.root_hash must be 32 bytes")
+
+    leaf_index = int.from_bytes(proof.key, byteorder="big", signed=False)
+    siblings_with_positions: list[list[str | bool]] = []
+    for level, sibling_hash in enumerate(proof.siblings):
+        if len(sibling_hash) != 32:
+            raise ValueError(f"sibling at level {level} must be 32 bytes")
+        is_right = ((leaf_index >> level) & 1) == 0
+        siblings_with_positions.append([sibling_hash.hex(), is_right])
+
+    smt_leaf_hash = leaf_hash(proof.key, value_hash)
+
     return {
-        "leaf_hash": leaf_hash.hex(),
-        "leaf_index": 0,  # SMT proofs don't have leaf indices
-        "siblings": [],  # Simplified for now
+        "leaf_hash": smt_leaf_hash.hex(),
+        "leaf_index": str(leaf_index),
+        "siblings": siblings_with_positions,
         "root_hash": proof.root_hash.hex(),
+        "tree_size": str(1 << 256),
+        "proof_version": PROOF_VERSION,
+        "tree_version": MERKLE_VERSION,
+        "smt_key": proof.key.hex(),
     }
 
 

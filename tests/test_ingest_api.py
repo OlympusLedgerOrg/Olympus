@@ -5,8 +5,9 @@ from fastapi.testclient import TestClient
 
 from api import ingest as ingest_api
 from api.app import app
-from protocol.hashes import hash_bytes
-from protocol.merkle import MerkleTree
+from protocol.hashes import hash_bytes, record_key
+from protocol.merkle import MerkleTree, deserialize_merkle_proof, verify_proof
+from protocol.ssmf import SparseMerkleTree
 
 
 @pytest.fixture()
@@ -625,3 +626,71 @@ class TestAuthAndRateLimiting:
         assert rate_limited.status_code == 429
         assert len(ingest_api._write_ledger.entries) == ledger_len_before + 1
         assert ingest_api._write_ledger.entries[-1].shard_id == "audit/security"
+
+
+def test_smt_proof_conversion_verifies_round_trip():
+    """Sparse Merkle proofs should convert to valid MerkleProof bundles."""
+    tree = SparseMerkleTree()
+    key = record_key("document", "doc-smt", 1)
+    value_hash = hash_bytes(b"deterministic-smt-payload")
+    tree.update(key, value_hash)
+    proof = tree.prove_existence(key)
+
+    merkle_dict = ingest_api._smt_proof_to_merkle_proof_dict(proof, value_hash)
+    merkle_proof = deserialize_merkle_proof(merkle_dict)
+
+    assert verify_proof(merkle_proof)
+
+    normalized_hash, normalized_root, matches, valid = ingest_api._evaluate_proof_bundle(
+        value_hash.hex(), merkle_dict["root_hash"], merkle_dict
+    )
+    assert normalized_hash == value_hash.hex()
+    assert normalized_root == proof.root_hash.hex()
+    assert matches is True
+    assert valid is True
+
+
+def test_load_api_keys_from_env_requires_hashed_keys(monkeypatch):
+    """Raw API keys in the environment must be rejected."""
+    ingest_api._reset_ingest_state_for_tests()
+    monkeypatch.setenv(
+        "OLYMPUS_API_KEYS_JSON",
+        '[{"api_key":"plaintext","key_id":"raw","scopes":["verify"],"expires_at":"2099-01-01T00:00:00Z"}]',
+    )
+    with pytest.raises(ValueError):
+        ingest_api._load_api_keys_from_env()
+
+
+def test_load_api_keys_from_env_accepts_hashes(monkeypatch):
+    """Hashed API keys should register successfully."""
+    ingest_api._reset_ingest_state_for_tests()
+    key_hash = hash_bytes(b"hashed-secret").hex()
+    monkeypatch.setenv(
+        "OLYMPUS_API_KEYS_JSON",
+        f'[{{"key_hash":"{key_hash}","key_id":"hashed","scopes":["verify"],"expires_at":"2099-01-01T00:00:00Z"}}]',
+    )
+    ingest_api._load_api_keys_from_env()
+    assert key_hash in ingest_api._api_key_store
+    assert ingest_api._api_key_store[key_hash].key_id == "hashed"
+
+
+def test_smt_divergence_alert_requires_api_key():
+    ingest_api._reset_ingest_state_for_tests()
+    ingest_api._register_api_key_for_tests(
+        api_key="alert-key",
+        key_id="alert-key",
+        scopes={"verify"},
+        expires_at="2099-01-01T00:00:00Z",
+    )
+    params = {
+        "local_root": "00" * 32,
+        "remote_root": "11" * 32,
+        "remote_node": "peer-1",
+    }
+
+    unauthenticated = TestClient(app).post("/shards/shard-1/alert/smt-divergence", params=params)
+    assert unauthenticated.status_code == 401
+
+    authed = TestClient(app, headers={"X-API-Key": "alert-key"})
+    authorized = authed.post("/shards/shard-1/alert/smt-divergence", params=params)
+    assert authorized.status_code == 200
