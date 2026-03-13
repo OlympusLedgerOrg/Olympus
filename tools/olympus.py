@@ -37,6 +37,16 @@ def _read_file_bytes(path: str) -> bytes:
         raise ValueError(f"Error reading file: {exc}") from exc
 
 
+def _normalize_api_url(api_url: str) -> str:
+    """Validate the API base URL before sending network requests."""
+    parsed = urlparse(api_url.rstrip("/"))
+    if parsed.scheme not in {"http", "https"}:
+        raise ValueError("api_url must use http or https")
+    if not parsed.netloc:
+        raise ValueError("api_url must include a hostname")
+    return api_url.rstrip("/")
+
+
 def _fetch_json_request(
     url: str, *, method: str = "GET", payload: dict | None = None, api_key: str = ""
 ) -> dict:
@@ -68,6 +78,7 @@ def _commit_artifact(
     """Hash a file and commit it to the Olympus ingest API."""
     file_bytes = _read_file_bytes(file_path)
     artifact_hash = hash_bytes(file_bytes).hex()
+    normalized_api_url = _normalize_api_url(api_url)
     payload: dict[str, str] = {
         "artifact_hash": artifact_hash,
         "namespace": namespace,
@@ -76,7 +87,7 @@ def _commit_artifact(
     if api_key:
         payload["api_key"] = api_key
 
-    endpoint = f"{api_url.rstrip('/')}/ingest/commit"
+    endpoint = f"{normalized_api_url}/ingest/commit"
     result = _fetch_json_request(endpoint, method="POST", payload=payload, api_key=api_key)
     proof_id = result.get("proof_id", "")
     if not proof_id:
@@ -161,7 +172,7 @@ def _cmd_ingest(args: argparse.Namespace) -> int:
             "artifact_hash": artifact_hash,
             "commit": commit_result,
         }
-        api_url = args.api_url.rstrip("/")
+        api_url = _normalize_api_url(args.api_url)
         proof_id = str(commit_result["proof_id"])
 
         if args.generate_proof:

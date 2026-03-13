@@ -190,6 +190,28 @@ def test_olympus_commit_unreachable_api_returns_nonzero(tmp_path: Path) -> None:
     assert result.returncode != 0
 
 
+def test_olympus_commit_rejects_non_http_api_url(tmp_path: Path) -> None:
+    """commit should reject non-http(s) API URLs before making a request."""
+    artifact = tmp_path / "artifact.bin"
+    artifact.write_bytes(b"data")
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            str(CLI_PATH),
+            "commit",
+            str(artifact),
+            "--api-url",
+            "ftp://127.0.0.1:8000",
+        ],
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode != 0
+    assert "http or https" in result.stderr.lower()
+
+
 def test_olympus_commit_accepts_api_key(tmp_path: Path) -> None:
     """commit should forward --api-key in the request payload."""
     artifact = tmp_path / "artifact.zip"

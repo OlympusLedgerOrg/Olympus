@@ -22,7 +22,13 @@ def build_ipfs_proof_envelope(proof_bundle: dict[str, Any]) -> bytes:
 
 
 def compute_ipfs_cidv1(proof_bundle: dict[str, Any]) -> str:
-    """Compute a CIDv1 base32 preview for a proof bundle without talking to IPFS."""
+    """
+    Compute a CIDv1 base32 preview for a proof bundle without talking to IPFS.
+
+    This follows the CIDv1 layout using the dag-json codec and a SHA-256
+    multihash. It is intended as a deterministic preview for Olympus bundles,
+    not as a replacement for pinning via a full IPFS implementation.
+    """
     payload = build_ipfs_proof_envelope(proof_bundle)
     digest = hashlib.sha256(payload).digest()
     multihash = _SHA256_CODE + _SHA256_LENGTH + digest
