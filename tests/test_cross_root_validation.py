@@ -322,7 +322,9 @@ def test_verify_poseidon_proof_rejects_truncated_palindrome_path():
     Palindromic trees must still require full-depth paths; truncated siblings must fail.
     """
     leaves = [b"A", b"B", b"A"]
-    tree = PoseidonMerkleTree([_to_field_int(s, index=i) for i, s in enumerate(leaves)], depth=2)
+    tree = PoseidonMerkleTree(
+        [_to_field_int(leaf_bytes, index=i) for i, leaf_bytes in enumerate(leaves)], depth=2
+    )
     path_elements, path_indices = tree.get_proof(0)
     truncated = PoseidonProof(
         root=tree.get_root(),
@@ -345,6 +347,28 @@ def test_verify_poseidon_proof_malformed_leaf():
         path_indices=proof.path_indices,
     )
     assert _verify_poseidon_proof(bad_proof) is False
+
+
+def test_verify_poseidon_proof_rejects_missing_or_wrong_tree_size():
+    proof, _ = _make_poseidon_proof(PARTS_A)
+    missing_size = PoseidonProof(
+        root=proof.root,
+        leaf=proof.leaf,
+        leaf_index=proof.leaf_index,
+        path_elements=proof.path_elements,
+        path_indices=proof.path_indices,
+        tree_size=0,
+    )
+    wrong_size = PoseidonProof(
+        root=proof.root,
+        leaf=proof.leaf,
+        leaf_index=proof.leaf_index,
+        path_elements=proof.path_elements,
+        path_indices=proof.path_indices,
+        tree_size=1,  # inconsistent with path depth
+    )
+    assert _verify_poseidon_proof(missing_size) is False
+    assert _verify_poseidon_proof(wrong_size) is False
 
 
 # ---------------------------------------------------------------------------

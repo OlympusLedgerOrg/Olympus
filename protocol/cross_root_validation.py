@@ -229,45 +229,47 @@ def _verify_poseidon_proof(poseidon_proof: PoseidonProof) -> bool:
     if len(poseidon_proof.path_elements) != len(poseidon_proof.path_indices):
         return False
 
-    if poseidon_proof.tree_size > 0:
-        try:
-            leaf_index = int(poseidon_proof.leaf_index)
-        except (TypeError, ValueError):
-            return False
+    if poseidon_proof.tree_size <= 0:
+        return False
 
-        tree_size = poseidon_proof.tree_size
-        if leaf_index < 0 or leaf_index >= tree_size:
-            return False
+    try:
+        leaf_index = int(poseidon_proof.leaf_index)
+    except (TypeError, ValueError):
+        return False
 
-        expected_max_depth = 0 if tree_size == 1 else (tree_size - 1).bit_length()
-        if len(poseidon_proof.path_indices) > expected_max_depth:
-            return False
+    tree_size = poseidon_proof.tree_size
+    if leaf_index < 0 or leaf_index >= tree_size:
+        return False
 
-        # Validate sibling positions against the implied tree walk (CT-style promotion)
-        level_size = tree_size
-        index = leaf_index
-        sibling_idx = 0
+    expected_max_depth = 0 if tree_size == 1 else (tree_size - 1).bit_length()
+    if len(poseidon_proof.path_indices) > expected_max_depth:
+        return False
 
-        while level_size > 1 and sibling_idx <= len(poseidon_proof.path_indices):
-            is_last = index == level_size - 1
-            is_promoted = is_last and (level_size % 2 == 1)
+    # Validate sibling positions against the implied tree walk (CT-style promotion)
+    level_size = tree_size
+    index = leaf_index
+    sibling_idx = 0
 
-            if not is_promoted:
-                if sibling_idx >= len(poseidon_proof.path_indices):
-                    return False
-                position = poseidon_proof.path_indices[sibling_idx]
-                if position not in (0, 1):
-                    return False
-                expected_pos = 0 if index % 2 == 0 else 1  # 0 == left child, 1 == right child
-                if position != expected_pos:
-                    return False
-                sibling_idx += 1
+    while level_size > 1:
+        is_last = index == level_size - 1
+        is_promoted = is_last and (level_size % 2 == 1)
 
-            level_size = (level_size + 1) // 2
-            index //= 2
+        if not is_promoted:
+            if sibling_idx >= len(poseidon_proof.path_indices):
+                return False
+            position = poseidon_proof.path_indices[sibling_idx]
+            if position not in (0, 1):
+                return False
+            expected_pos = 0 if index % 2 == 0 else 1  # 0 == left child, 1 == right child
+            if position != expected_pos:
+                return False
+            sibling_idx += 1
 
-        if sibling_idx != len(poseidon_proof.path_indices):
-            return False
+        level_size = (level_size + 1) // 2
+        index //= 2
+
+    if sibling_idx != len(poseidon_proof.path_indices):
+        return False
 
     reconstructed = _reconstruct_poseidon_root(poseidon_proof)
     if reconstructed is None:
