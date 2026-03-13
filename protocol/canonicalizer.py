@@ -14,10 +14,11 @@ import os
 import re
 import unicodedata
 import zipfile
+from collections.abc import Sequence
 from concurrent.futures import ProcessPoolExecutor
 from dataclasses import dataclass
 from decimal import Decimal
-from typing import Any, Sequence
+from typing import Any
 
 import blake3 as _blake3
 import pikepdf
@@ -63,6 +64,13 @@ MAX_INPUT_SIZE: int = 256 * 1024 * 1024  # 256 MiB per artifact
 MAX_JSON_DEPTH: int = 128  # Maximum nesting depth for JSON structures
 MAX_DOCX_ENTRIES: int = 10_000  # Maximum ZIP entries in a DOCX file
 MAX_DOCX_DECOMPRESSED: int = 512 * 1024 * 1024  # 512 MiB total decompressed
+
+# HTML tags stripped during canonicalization — active content, data-exfiltration
+# vectors, and volatile metadata tags.
+_STRIPPED_HTML_TAGS: list[str] = [
+    "script", "style", "iframe", "object", "embed", "applet", "meta",
+    "base", "link", "form", "noscript",
+]
 
 try:
     from lxml import etree, html as lxml_html
@@ -313,11 +321,7 @@ class Canonicalizer:
 
         # Remove volatile active tags and data-exfiltration vectors
         # (along with their contents and tails)
-        _STRIPPED_TAGS = [
-            "script", "style", "iframe", "object", "embed", "applet", "meta",
-            "base", "link", "form", "noscript",
-        ]
-        for tag in _STRIPPED_TAGS:
+        for tag in _STRIPPED_HTML_TAGS:
             for el in root.xpath(f"//{tag}"):
                 if el.getparent() is not None:
                     el.text = None
