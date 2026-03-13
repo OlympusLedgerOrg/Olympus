@@ -58,7 +58,7 @@ from .proof_interface import (
 
 
 RECURSIVE_REDACTION_CIRCUIT = "recursive_redaction_composition"
-_EVENT_PREFIX_STR = EVENT_PREFIX.decode("utf-8")
+EVENT_PREFIX_STR = EVENT_PREFIX.decode("utf-8")
 
 
 @dataclass(frozen=True)
@@ -138,7 +138,7 @@ class RedactionEvent:
             self.previous_event_hash,
         ]
         concatenated = HASH_SEPARATOR.join(components)
-        return hash_string(_EVENT_PREFIX_STR + HASH_SEPARATOR + concatenated).hex()
+        return hash_string(HASH_SEPARATOR.join([EVENT_PREFIX_STR, concatenated])).hex()
 
 
 @dataclass(frozen=True)
@@ -329,7 +329,9 @@ def _validate_chain_linkage(events: Sequence[RedactionEvent]) -> bool:
         return True
     if events[0].previous_event_hash != "":
         return False
-    for prev, curr in zip(events, events[1:]):
+    for idx in range(1, len(events)):
+        prev = events[idx - 1]
+        curr = events[idx]
         if curr.previous_event_hash != prev.compute_hash():
             return False
     return True
