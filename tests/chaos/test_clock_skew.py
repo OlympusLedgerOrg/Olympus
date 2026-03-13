@@ -92,19 +92,23 @@ def test_ledger_accepts_timestamp_far_in_future(fresh_ledger: Ledger) -> None:
     assert fresh_ledger.verify_chain()
 
 
-def test_chain_rejects_non_monotonic_timestamps(fresh_ledger: Ledger) -> None:
+def test_chain_accepts_non_monotonic_timestamps(fresh_ledger: Ledger) -> None:
     """
-    A backwards clock jump is rejected to keep timestamps strictly increasing.
+    Chain now accepts backwards clock jumps (L2-B change).
+    
+    Chain integrity is guaranteed by prev_entry_hash linkage, and strictly
+    increasing timestamps could cause stalls during NTP clock adjustments.
     """
     first_hash = _append_with_ts(fresh_ledger, 0, "2026-06-01T12:00:00Z")
     assert first_hash == fresh_ledger.entries[0].entry_hash
 
+    # Backwards timestamp is now accepted
     with patch.object(ledger_module, "current_timestamp", return_value="2025-01-01T00:00:00Z"):
-        with pytest.raises(ValueError, match="strictly increasing"):
-            _append_with_ts(fresh_ledger, 1, "2025-01-01T00:00:00Z")
-
-    # Ledger should remain unchanged and verifiable after rejection
-    assert len(fresh_ledger.entries) == 1
+        second_hash = _append_with_ts(fresh_ledger, 1, "2025-01-01T00:00:00Z")
+    
+    # Ledger should now have two entries and remain verifiable
+    assert len(fresh_ledger.entries) == 2
+    assert fresh_ledger.entries[1].entry_hash == second_hash
     assert fresh_ledger.verify_chain()
 
 

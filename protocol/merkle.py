@@ -23,6 +23,9 @@ MERKLE_VERSION = "merkle_v1"
 # produced with so verifiers can apply the correct algorithm.
 PROOF_VERSION = "proof_v1"
 
+# Whitelist of recognized proof versions (L3-C)
+SUPPORTED_PROOF_VERSIONS: frozenset[str] = frozenset({"proof_v1"})
+
 _SEP = HASH_SEPARATOR.encode("utf-8")
 logger = logging.getLogger(__name__)
 
@@ -126,7 +129,7 @@ class MerkleTree:
         raise ValueError("Leaves must be bytes or CanonicalEvent instances")
 
     def _build_tree(self, nodes: list[MerkleNode]) -> MerkleNode:
-        """Build tree from bottom up."""
+        """Build tree from bottom up using CT-style promotion."""
         if len(nodes) == 1:
             return nodes[0]
 
@@ -134,15 +137,20 @@ class MerkleTree:
         parents = []
         for i in range(0, len(nodes), 2):
             left_node = nodes[i]
-            right_node = nodes[i + 1] if i + 1 < len(nodes) else nodes[i]
-            parent_hash = node_hash(left_node.hash, right_node.hash)
-            parents.append(
-                MerkleNode(
-                    hash=parent_hash,
-                    left=left_node,
-                    right=right_node,
+            if i + 1 < len(nodes):
+                # Pair exists: hash left and right
+                right_node = nodes[i + 1]
+                parent_hash = node_hash(left_node.hash, right_node.hash)
+                parents.append(
+                    MerkleNode(
+                        hash=parent_hash,
+                        left=left_node,
+                        right=right_node,
+                    )
                 )
-            )
+            else:
+                # CT-style promotion: lone node is promoted without hashing
+                parents.append(left_node)
 
         return self._build_tree(parents)
 
@@ -175,26 +183,33 @@ class MerkleTree:
         leaf_hash = self._leaf_hashes[leaf_index]
         siblings: list[tuple[bytes, str]] = []
 
-        # Collect siblings along path to root
+        # Collect siblings along path to root using CT-style promotion
         current_level: list[MerkleNode] = [MerkleNode(hash=h) for h in self._leaf_hashes]
         index = leaf_index
 
         while len(current_level) > 1:
-            if index % 2 == 0:
+            # Check if this index is at the promoted (odd) position
+            if index == len(current_level) - 1 and len(current_level) % 2 == 1:
+                # Lone node is promoted - no sibling at this level
+                pass
+            elif index % 2 == 0:
                 # Left child, sibling is on right
-                sibling_index = index + 1 if index + 1 < len(current_level) else index
-                siblings.append((current_level[sibling_index].hash, "right"))
+                siblings.append((current_level[index + 1].hash, "right"))
             else:
                 # Right child, sibling is on left
                 siblings.append((current_level[index - 1].hash, "left"))
 
-            # Move to parent level
+            # Move to parent level using CT-style promotion
             new_level: list[MerkleNode] = []
             for i in range(0, len(current_level), 2):
                 left = current_level[i]
-                right = current_level[i + 1] if i + 1 < len(current_level) else current_level[i]
-                new_hash = node_hash(left.hash, right.hash)
-                new_level.append(MerkleNode(hash=new_hash, left=left, right=right))
+                if i + 1 < len(current_level):
+                    right = current_level[i + 1]
+                    new_hash = node_hash(left.hash, right.hash)
+                    new_level.append(MerkleNode(hash=new_hash, left=left, right=right))
+                else:
+                    # CT-style promotion: lone node is promoted without hashing
+                    new_level.append(left)
 
             current_level = new_level
             index = index // 2
@@ -220,6 +235,7 @@ def verify_proof(proof: MerkleProof) -> bool:
     2. Canonical sibling position representation (only "left" or "right" strings, rejects booleans)
     3. Valid tree_size (must be positive for strict verification)
     4. Valid leaf_index (must be within tree bounds when tree_size is known)
+    5. Recognized proof_version (L3-C)
 
     For legacy proofs where tree_size=0 (indicating unknown tree size), the function
     performs basic verification without depth checks. However, new proofs must always
@@ -232,8 +248,16 @@ def verify_proof(proof: MerkleProof) -> bool:
         True if proof is valid, False otherwise
 
     Raises:
-        ValueError: If proof structure is malformed (invalid positions, incorrect depth, etc.)
+        ValueError: If proof structure is malformed (invalid positions, incorrect depth,
+            unknown proof_version, etc.)
     """
+    # L3-C: Validate proof_version against whitelist
+    if proof.proof_version not in SUPPORTED_PROOF_VERSIONS:
+        raise ValueError(
+            f"Unknown proof_version: '{proof.proof_version}'. "
+            f"Supported versions: {sorted(SUPPORTED_PROOF_VERSIONS)}"
+        )
+
     # Strict validation: all sibling positions must be canonical strings ("left" or "right")
     # Reject boolean positions - they should be normalized by MerkleProof.__post_init__
     # during proof construction. If we see booleans here, the proof was constructed incorrectly.
@@ -258,34 +282,47 @@ def verify_proof(proof: MerkleProof) -> bool:
                 f"Invalid leaf_index: {proof.leaf_index} (must be in range [0, {proof.tree_size}))"
             )
 
-        # Calculate expected proof depth from tree_size
-        # For a tree with n leaves, depth = ceil(log2(n)) for n > 1, else 0
+        # For CT-style trees, the number of siblings depends on where the leaf
+        # is in the tree. Promoted leaves have fewer siblings.
+        # Maximum depth is ceil(log2(n)) for n > 1
         if proof.tree_size == 1:
-            expected_depth = 0
+            expected_max_depth = 0
         else:
-            expected_depth = (proof.tree_size - 1).bit_length()
+            expected_max_depth = (proof.tree_size - 1).bit_length()
 
-        # Strict validation: proof must have exactly the expected number of siblings
         actual_depth = len(proof.siblings)
-        if actual_depth != expected_depth:
+        # In CT-style, proof depth can be less than max depth due to promotion
+        if actual_depth > expected_max_depth:
             raise ValueError(
-                f"Invalid proof depth: expected {expected_depth} siblings for tree_size={proof.tree_size}, "
-                f"got {actual_depth}"
+                f"Invalid proof depth: got {actual_depth} siblings but max expected "
+                f"for tree_size={proof.tree_size} is {expected_max_depth}"
             )
 
     # Validate sibling positions against the leaf_index path when tree_size is known.
     # At each level k, the node's index determines whether it is a left or right child:
     #   even index → left child → sibling must be "right"
     #   odd  index → right child → sibling must be "left"
-    # Without this check, an attacker could swap positions in proofs where a node's
-    # sibling is itself (odd-level boundary duplication) and still pass verification.
-    if proof.tree_size > 0:
+    if proof.tree_size > 0 and proof.siblings:
         index = proof.leaf_index
-        for k, (_sibling_hash, position) in enumerate(proof.siblings):
-            expected_pos = "right" if index % 2 == 0 else "left"
-            if position != expected_pos:
-                return False
-            index //= 2
+        level_size = proof.tree_size
+        sibling_idx = 0
+        
+        while level_size > 1 and sibling_idx < len(proof.siblings):
+            # Check if this node is the lone node at this level (CT-style promoted)
+            is_last = (index == level_size - 1)
+            is_promoted = is_last and (level_size % 2 == 1)
+            
+            if not is_promoted:
+                # There should be a sibling at this level
+                _sibling_hash, position = proof.siblings[sibling_idx]
+                expected_pos = "right" if index % 2 == 0 else "left"
+                if position != expected_pos:
+                    return False
+                sibling_idx += 1
+            
+            # Move to next level
+            level_size = (level_size + 1) // 2
+            index = index // 2
 
     # Compute the root hash by walking up the tree
     current_hash = proof.leaf_hash
@@ -497,8 +534,20 @@ def _verify_subproof_ct(
 
     Returns:
         Tuple of (old_root, new_root, next_proof_index)
+
+    Raises:
+        ValueError: If proof is malformed or arguments are invalid.
     """
-    # Base case: trees are identical
+    # L3-D: Sanity guards for input validation
+    if old_size < 0 or new_size < 0:
+        raise ValueError("Tree sizes must be non-negative")
+    if old_size > new_size:
+        raise ValueError("old_size cannot exceed new_size in consistency proof")
+
+    # L3-D: Handle identical-size base case before recursion
+    # When old_size == new_size at the root, the proof should be empty and
+    # the roots should be identical - handled in verify_consistency_proof.
+    # But within recursion, identical subtrees need proof nodes.
     if old_size == new_size:
         if is_root:
             # At root with identical trees - this shouldn't happen in non-trivial cases
@@ -580,7 +629,19 @@ def deserialize_merkle_proof(proof_data: dict[str, Any]) -> MerkleProof:
 
     Returns:
         MerkleProof with normalized sibling positions.
+
+    Raises:
+        ValueError: If proof_version is not in the supported whitelist or if
+            other fields are malformed.
     """
+    # L3-C: Validate proof_version against whitelist
+    proof_version = str(proof_data.get("proof_version", PROOF_VERSION))
+    if proof_version not in SUPPORTED_PROOF_VERSIONS:
+        raise ValueError(
+            f"Unknown proof_version: '{proof_version}'. "
+            f"Supported versions: {sorted(SUPPORTED_PROOF_VERSIONS)}"
+        )
+
     normalized_siblings: list[tuple[bytes, str]] = []
     for sibling_hash_hex, is_right in proof_data.get("siblings", []):
         if isinstance(is_right, str):
@@ -610,7 +671,7 @@ def deserialize_merkle_proof(proof_data: dict[str, Any]) -> MerkleProof:
         leaf_index=int(proof_data["leaf_index"]),
         siblings=normalized_siblings,
         root_hash=bytes.fromhex(str(proof_data["root_hash"])),
-        proof_version=str(proof_data.get("proof_version", PROOF_VERSION)),
+        proof_version=proof_version,
         tree_version=str(proof_data.get("tree_version", MERKLE_VERSION)),
         epoch=epoch_val,
         tree_size=tree_size_val,

@@ -28,13 +28,13 @@ Out of scope: deployment topologies, user interfaces, and non-protocol applicati
 - **Hashing**: BLAKE3 with domain separation. No SHA-256 fallback is permitted in the protocol.
 - **Signatures**: Ed25519 for ledger/shard headers. Threshold signatures (e.g., FROST) are a Phase 1+ extension point.
 - **Timestamping**: RFC 3161 timestamp tokens over Merkle or ledger roots; TSA certificate fingerprints are part of the evidence.
-- **Merkle Trees**: Binary trees with leaf duplication on odd counts; Sparse Merkle Forest uses fixed-depth Poseidon/BLAKE3 hybrids.
+- **Merkle Trees**: Binary trees with CT-style promotion (lone nodes promoted without hashing on odd counts); Sparse Merkle Forest uses fixed-depth Poseidon/BLAKE3 hybrids.
 
 ## Data Structures (Canonical)
 
 - **Canonical Artifact**: Tuple of `(mode, version, canonical_bytes, canonical_hash, raw_hash, witness_anchor?)`. Emitted by `process_artifact()`.
 - **Merkle Leaf**: `leaf_hash = leaf_hash(prefix || key || value_hash)` with `LEAF_PREFIX`.
-- **Merkle Node**: `node_hash = node_hash(NODE_PREFIX || left || right)`. If odd leaf count, duplicate the last leaf.
+- **Merkle Node**: `node_hash = node_hash(NODE_PREFIX || left || right)`. If odd leaf count, the lone node is promoted without hashing (CT-style).
 - **Shard Header**:
   - Fields: `shard_id`, `seq`, `root_hash`, `previous_header_hash`, `timestamp`, `pubkey`, `signature`
   - Canonical serialization: canonical JSON with sorted keys and compact separators

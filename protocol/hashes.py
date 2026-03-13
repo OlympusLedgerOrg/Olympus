@@ -86,8 +86,8 @@ def node_hash(left: bytes, right: bytes) -> bytes:
 
 def merkle_root(leaves: list[bytes]) -> bytes:
     """
-    Compute Merkle root from leaf hashes.
-    Duplicates last leaf if odd number of leaves.
+    Compute Merkle root from leaf hashes using CT-style promotion.
+    If an odd number of leaves, the lone node is promoted without hashing.
 
     Args:
         leaves: List of 32-byte leaf hashes
@@ -108,9 +108,13 @@ def merkle_root(leaves: list[bytes]) -> bytes:
         next_level = []
         for i in range(0, len(current_level), 2):
             left = current_level[i]
-            # Duplicate last leaf if odd number
-            right = current_level[i + 1] if i + 1 < len(current_level) else current_level[i]
-            next_level.append(node_hash(left, right))
+            if i + 1 < len(current_level):
+                # Pair exists: hash left and right
+                right = current_level[i + 1]
+                next_level.append(node_hash(left, right))
+            else:
+                # CT-style promotion: lone node is promoted without hashing
+                next_level.append(left)
         current_level = next_level
 
     return current_level[0]

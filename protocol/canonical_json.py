@@ -106,7 +106,10 @@ def _normalize_for_canonical_json(obj: Any) -> Any:
                 )
             normalized_obj[normalized_key] = _normalize_for_canonical_json(value)
         return normalized_obj
-    return obj
+    # Reject all other types explicitly - prevents silent type fallthrough
+    raise TypeError(
+        f"Type {type(obj).__name__} is not JSON-serializable for canonical JSON"
+    )
 
 
 def _encode_value(value: Any) -> str:

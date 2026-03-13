@@ -258,14 +258,30 @@ class FederationRegistry:
         return math.ceil((2 * active_count) / 3)
 
     def membership_hash(self) -> str:
-        """Return the deterministic hash commitment for active federation membership."""
+        """Return the deterministic hash commitment for active federation membership.
+        
+        Uses length-prefixed encoding to prevent injection attacks when node_id
+        or pubkey_hex contain literal pipe characters or colons.
+        """
         active_members = sorted(
             ((node.node_id, node.pubkey.hex()) for node in self.active_nodes()),
             key=lambda item: (item[0], item[1]),
         )
-        payload = HASH_SEPARATOR.join(
-            [f"{node_id}:{pubkey_hex}" for node_id, pubkey_hex in active_members]
-        ).encode("utf-8")
+        # Length-prefixed encoding: each field is encoded as
+        # [4-byte big-endian length] || [UTF-8 bytes]
+        domain = "olympus.federation.membership.v1"
+        fields = [domain]
+        for node_id, pubkey_hex in active_members:
+            fields.append(node_id)
+            fields.append(pubkey_hex)
+        
+        encoded_fields = []
+        for value in fields:
+            field_bytes = value.encode("utf-8")
+            encoded_fields.append(len(field_bytes).to_bytes(4, byteorder="big"))
+            encoded_fields.append(field_bytes)
+        
+        payload = b"".join(encoded_fields)
         return hash_bytes(payload).hex()
 
     def rotate_node_key(

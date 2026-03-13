@@ -371,7 +371,8 @@ class ProofGenerator:
             "pathElements",
             "pathIndices",
         ],
-        # UPDATED: keyed non-existence uses key[32] (public) and derives path internally.
+        # L4-B: keyed non-existence uses key[32] (PRIVATE) and derives path internally.
+        # Only root is public; key and pathElements are private inputs.
         "non_existence": ["root", "key", "pathElements"],
         "redaction_validity": [
             "originalRoot",

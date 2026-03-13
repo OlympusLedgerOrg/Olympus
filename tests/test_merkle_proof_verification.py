@@ -37,7 +37,9 @@ def test_valid_proofs_verify_for_all_leaves_and_tree_sizes(tree_size: int, seed:
         # Verify the proof structure
         assert proof.tree_size == tree_size
         assert proof.leaf_index == leaf_index
-        assert len(proof.siblings) == (0 if tree_size == 1 else (tree_size - 1).bit_length())
+        # With CT-style promotion, proof depth can be <= ceil(log2(n)) due to promoted nodes
+        max_depth = 0 if tree_size == 1 else (tree_size - 1).bit_length()
+        assert len(proof.siblings) <= max_depth
 
         # Verify the proof validates correctly
         assert verify_proof(proof), f"Valid proof for leaf {leaf_index} should verify"
@@ -46,7 +48,8 @@ def test_valid_proofs_verify_for_all_leaves_and_tree_sizes(tree_size: int, seed:
 @given(tree_size=tree_sizes, leaf_index=st.integers(min_value=0, max_value=99))
 def test_proof_with_wrong_depth_rejected(tree_size: int, leaf_index: int):
     """
-    Property: Proofs with incorrect depth (too few or too many siblings) should be rejected.
+    Property: Proofs with too many siblings (exceeding max depth) should be rejected.
+    With CT-style promotion, shorter proofs are valid for promoted leaves.
     """
     assume(leaf_index < tree_size)
 
@@ -54,26 +57,21 @@ def test_proof_with_wrong_depth_rejected(tree_size: int, leaf_index: int):
     tree = MerkleTree(leaves)
     proof = tree.generate_proof(leaf_index)
 
-    # Test with too few siblings (drop the last one)
-    if len(proof.siblings) > 0:
-        short_proof = MerkleProof(
-            leaf_hash=proof.leaf_hash,
-            leaf_index=proof.leaf_index,
-            siblings=proof.siblings[:-1],  # Remove last sibling
-            root_hash=proof.root_hash,
-            tree_size=proof.tree_size,
-        )
-
-        with pytest.raises(ValueError, match="Invalid proof depth"):
-            verify_proof(short_proof)
-
-    # Test with too many siblings (duplicate the last one)
-    if len(proof.siblings) > 0:
-        extra_sibling = proof.siblings[-1]
+    # Test with too many siblings (exceeding max depth)
+    if tree_size > 1:
+        max_depth = (tree_size - 1).bit_length()
+        # Add enough siblings to exceed max depth
+        extra_siblings = list(proof.siblings)
+        while len(extra_siblings) <= max_depth:
+            if proof.siblings:
+                extra_siblings.append(proof.siblings[-1])
+            else:
+                extra_siblings.append((b"\x00" * 32, "right"))
+        
         long_proof = MerkleProof(
             leaf_hash=proof.leaf_hash,
             leaf_index=proof.leaf_index,
-            siblings=list(proof.siblings) + [extra_sibling],  # Add extra sibling
+            siblings=extra_siblings,
             root_hash=proof.root_hash,
             tree_size=proof.tree_size,
         )
@@ -309,25 +307,26 @@ def test_proof_depth_calculation_matches_expected_formula():
 
 def test_rejection_of_mismatched_tree_size():
     """
-    Test that verification rejects proofs where the claimed tree_size doesn't match
-    the actual proof depth.
+    Test that verification rejects proofs where siblings exceed max depth for tree_size.
+    With CT-style, shorter proofs are valid, but longer proofs are rejected.
     """
-    leaves = [b"a", b"b", b"c", b"d"]  # 4 leaves, depth should be 2
+    leaves = [b"a", b"b", b"c", b"d"]  # 4 leaves, max depth should be 2
     tree = MerkleTree(leaves)
     proof = tree.generate_proof(0)
 
-    # Create proof claiming wrong tree size
-    wrong_size_proof = MerkleProof(
+    # Create proof claiming smaller tree size (proof has too many siblings for this size)
+    # For tree_size=2, max depth is 1, but we have depth 2
+    too_small_size_proof = MerkleProof(
         leaf_hash=proof.leaf_hash,
         leaf_index=proof.leaf_index,
         siblings=proof.siblings,
         root_hash=proof.root_hash,
-        tree_size=8,  # Claim 8 leaves when we actually have 4
+        tree_size=2,  # Claim 2 leaves but proof has depth for 4 leaves
     )
 
-    # This should fail because depth=2 is wrong for tree_size=8 (should be 3)
+    # This should fail because depth=2 exceeds max for tree_size=2 (should be 1)
     with pytest.raises(ValueError, match="Invalid proof depth"):
-        verify_proof(wrong_size_proof)
+        verify_proof(too_small_size_proof)
 
 
 def test_legacy_proof_without_tree_size_still_verifies():

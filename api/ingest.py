@@ -15,10 +15,12 @@ All write operations are append-only and maintain ledger chain integrity.
 
 from __future__ import annotations
 
+import hmac
 import json
 import logging
 import os
 import uuid
+from collections import OrderedDict
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from time import monotonic
@@ -175,6 +177,10 @@ class ProofSubmissionResponse(IngestionProofResponse):
 _storage: StorageLayer | None = None
 _signing_key: nacl.signing.SigningKey | None = None
 
+# L4-F: Test mode flag to allow in-memory storage for tests only
+# Production deployments MUST set DATABASE_URL
+_TEST_MODE: bool = False
+
 # Legacy in-memory stores (kept for backward compatibility during migration)
 # proof_id → ingestion metadata
 _ingestion_store: dict[str, dict[str, Any]] = {}
@@ -188,6 +194,16 @@ _write_ledger = Ledger()
 # API key hash -> key record
 _api_key_store: dict[str, ApiKeyRecord] = {}
 _api_keys_loaded = False
+
+# L4-E: Trusted proxy IPs for X-Forwarded-For parsing
+# Only parse X-Forwarded-For header when the direct peer is a known trusted proxy.
+# This prevents IP spoofing attacks where a client sets a fake X-Forwarded-For header.
+# Configure via OLYMPUS_TRUSTED_PROXY_IPS environment variable (comma-separated).
+TRUSTED_PROXY_IPS: frozenset[str] = frozenset(
+    ip.strip()
+    for ip in os.environ.get("OLYMPUS_TRUSTED_PROXY_IPS", "").split(",")
+    if ip.strip()
+)
 
 # Hard fail when persistence is configured without a signing key
 if os.environ.get("DATABASE_URL") and not os.environ.get("OLYMPUS_INGEST_SIGNING_KEY"):
@@ -211,7 +227,13 @@ def _get_storage() -> StorageLayer | None:
     # Check if PostgreSQL is configured
     database_url = os.environ.get("DATABASE_URL")
     if not database_url:
-        logger.warning("DATABASE_URL not set - using in-memory storage (not production-safe)")
+        # L4-F: In production, require DATABASE_URL; allow in-memory for tests only
+        if not _TEST_MODE:
+            raise RuntimeError(
+                "DATABASE_URL not set - in-memory storage is not allowed. "
+                "Configure DATABASE_URL for production-safe persistence."
+            )
+        logger.warning("DATABASE_URL not set - using in-memory storage (test mode only)")
         return None
 
     # Check if signing key is configured
@@ -241,7 +263,7 @@ def _get_storage() -> StorageLayer | None:
         return _storage
     except Exception as e:
         logger.error(f"Failed to initialize storage layer: {e}")
-        return None
+        raise RuntimeError(f"Storage layer initialization failed: {e}") from e
 
 
 def _cache_ingestion_record(entry: dict[str, Any]) -> None:
@@ -320,15 +342,20 @@ _rate_limit_policy: dict[str, tuple[float, float]] = {
     "commit": (30.0, 0.5),
     "verify": (120.0, 2.0),
 }
-_rate_limit_key_buckets: dict[str, dict[str, TokenBucket]] = {
-    "ingest": {},
-    "commit": {},
-    "verify": {},
+
+# L5-B: Maximum number of entries in rate-limit buckets to prevent memory leaks
+_RATE_LIMIT_LRU_CAP = 10_000
+
+# Use OrderedDict to implement LRU eviction when cap is reached
+_rate_limit_key_buckets: dict[str, OrderedDict[str, TokenBucket]] = {
+    "ingest": OrderedDict(),
+    "commit": OrderedDict(),
+    "verify": OrderedDict(),
 }
-_rate_limit_ip_buckets: dict[str, dict[str, TokenBucket]] = {
-    "ingest": {},
-    "commit": {},
-    "verify": {},
+_rate_limit_ip_buckets: dict[str, OrderedDict[str, TokenBucket]] = {
+    "ingest": OrderedDict(),
+    "commit": OrderedDict(),
+    "verify": OrderedDict(),
 }
 
 
@@ -346,6 +373,37 @@ def _parse_timestamp(raw: str) -> datetime:
 def _hash_api_key(api_key: str) -> str:
     """Hash API key material for at-rest storage."""
     return hash_bytes(api_key.encode("utf-8")).hex()
+
+
+def _constant_time_api_key_lookup(key_hash: str) -> ApiKeyRecord | None:
+    """
+    Lookup API key record using constant-time comparison (L4-D).
+    
+    Uses hmac.compare_digest to prevent timing oracle attacks where an
+    attacker could measure response times to determine how many characters
+    of a key hash match.
+    
+    Note: This function deliberately iterates through ALL stored keys even
+    after finding a match, to ensure constant-time execution regardless of
+    key position. This is O(n) where n is the number of API keys, which is
+    acceptable for typical deployments (<1000 keys). For deployments with
+    significantly more keys, consider alternative constant-time lookup 
+    strategies or rate-limiting at the network layer.
+    
+    Args:
+        key_hash: Hex-encoded BLAKE3 hash of the API key.
+        
+    Returns:
+        ApiKeyRecord if found, None otherwise.
+    """
+    # Iterate through all stored keys and use constant-time comparison
+    # This prevents timing attacks based on early dictionary key rejection
+    found_record: ApiKeyRecord | None = None
+    for stored_hash, record in _api_key_store.items():
+        # hmac.compare_digest is constant-time for equal-length strings
+        if hmac.compare_digest(stored_hash, key_hash):
+            found_record = record
+    return found_record
 
 
 def _append_security_audit_event(event: str, details: dict[str, Any]) -> None:
@@ -428,8 +486,10 @@ def _register_hashed_api_key(
 
 
 def _reset_ingest_state_for_tests() -> None:  # pragma: no cover - test utility
-    """Reset in-memory ingestion, auth, and rate-limit state."""
-    global _write_ledger, _api_keys_loaded, _storage, _signing_key
+    """Reset in-memory ingestion, auth, and rate-limit state and enable test mode."""
+    global _write_ledger, _api_keys_loaded, _storage, _signing_key, _TEST_MODE
+    # L4-F: Enable test mode to allow in-memory storage
+    _TEST_MODE = True
     storage = _storage
     _ingestion_store.clear()
     _content_index.clear()
@@ -463,9 +523,33 @@ def _set_rate_limit_for_tests(
 
 
 def _client_ip(request: Request) -> str:
-    """Resolve the caller IP address for abuse controls."""
-    host = request.client.host if request.client else None
-    return host or "unknown"
+    """
+    Resolve the caller IP address for abuse controls.
+    
+    L4-E: Only parses X-Forwarded-For if the direct peer is a trusted proxy.
+    This prevents IP spoofing attacks where a malicious client sets a fake
+    X-Forwarded-For header to bypass rate limiting.
+    
+    Args:
+        request: The incoming HTTP request.
+        
+    Returns:
+        The client IP address (from X-Forwarded-For if behind a trusted proxy,
+        otherwise the direct peer IP).
+    """
+    peer_ip = request.client.host if request.client else None
+    
+    # Only parse X-Forwarded-For if the peer is a trusted proxy
+    if peer_ip and peer_ip in TRUSTED_PROXY_IPS:
+        xff = request.headers.get("x-forwarded-for")
+        if xff:
+            # X-Forwarded-For format: "client, proxy1, proxy2, ..."
+            # The leftmost IP is the original client
+            forwarded_ip = xff.split(",")[0].strip()
+            if forwarded_ip:
+                return forwarded_ip
+    
+    return peer_ip or "unknown"
 
 
 def _extract_api_key(request: Request, body_api_key: str | None = None) -> str:
@@ -481,11 +565,25 @@ def _extract_api_key(request: Request, body_api_key: str | None = None) -> str:
     raise HTTPException(status_code=401, detail="API key is required")
 
 
-def _get_bucket(buckets: dict[str, TokenBucket], subject: str, action: str) -> TokenBucket:
-    """Get/create a token bucket for the subject and action."""
+def _get_bucket(buckets: OrderedDict[str, TokenBucket], subject: str, action: str) -> TokenBucket:
+    """
+    Get/create a token bucket for the subject and action.
+    
+    L5-B: Implements LRU eviction when the bucket count exceeds _RATE_LIMIT_LRU_CAP.
+    Existing buckets are moved to the end (most recently used) when accessed.
+    When creating a new bucket and the cap is exceeded, the oldest (least recently
+    used) bucket is removed.
+    """
     existing = buckets.get(subject)
     if existing is not None:
+        # Move to end (mark as recently used)
+        buckets.move_to_end(subject)
         return existing
+    
+    # L5-B: Evict oldest entries if at capacity
+    while len(buckets) >= _RATE_LIMIT_LRU_CAP:
+        buckets.popitem(last=False)  # Remove oldest (first) entry
+    
     capacity, refill = _rate_limit_policy[action]
     created = TokenBucket(
         capacity=capacity,
@@ -548,7 +646,8 @@ def _authorize_and_rate_limit(
     _load_api_keys_from_env()
     api_key = _extract_api_key(request, body_api_key=body_api_key)
     key_hash = _hash_api_key(api_key)
-    record = _api_key_store.get(key_hash)
+    # L4-D: Use constant-time lookup to prevent timing oracle attacks
+    record = _constant_time_api_key_lookup(key_hash)
     client_ip = _client_ip(request)
     if record is None:
         _append_security_audit_event("api_key_invalid", {"client_ip": client_ip, "action": action})

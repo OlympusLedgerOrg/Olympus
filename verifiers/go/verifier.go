@@ -67,20 +67,21 @@ func ComputeMerkleRoot(leaves [][]byte) (string, error) {
 		level[i] = MerkleLeafHash(leaf)
 	}
 
-	// Build tree bottom-up
+	// Build tree bottom-up using CT-style promotion
 	for len(level) > 1 {
 		nextLevel := make([][]byte, 0, (len(level)+1)/2)
 
 		for i := 0; i < len(level); i += 2 {
 			left := level[i]
-			var right []byte
 			if i+1 < len(level) {
-				right = level[i+1]
+				// Pair exists: hash left and right
+				right := level[i+1]
+				parent := MerkleParentHash(left, right)
+				nextLevel = append(nextLevel, parent)
 			} else {
-				right = level[i] // Duplicate last leaf if odd
+				// CT-style promotion: lone node is promoted without hashing
+				nextLevel = append(nextLevel, left)
 			}
-			parent := MerkleParentHash(left, right)
-			nextLevel = append(nextLevel, parent)
 		}
 
 		level = nextLevel
