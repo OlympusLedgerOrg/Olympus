@@ -39,11 +39,11 @@ future Halo2 implementation can be added without changing protocol-layer code.
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
-from types import MappingProxyType
-from pathlib import Path
-from typing import Any
 from collections.abc import Mapping, Sequence
+from dataclasses import dataclass, field
+from pathlib import Path
+from types import MappingProxyType
+from typing import Any
 
 from .canonical_json import canonical_json_bytes
 from .hashes import EVENT_PREFIX, HASH_SEPARATOR, blake3_hash
@@ -59,100 +59,9 @@ from .timestamps import current_timestamp
 
 
 RECURSIVE_REDACTION_CIRCUIT = "recursive_redaction_composition"
-
-
-RECURSIVE_REDACTION_CIRCUIT = "recursive_redaction_composition"
 # Identifier for the future Halo2 recursive composition circuit (Phase 1+).
 
 _HASH_SEPARATOR_BYTES = HASH_SEPARATOR.encode("utf-8")
-
-
-@dataclass(frozen=True)
-class RedactionEvent:
-    """
-    Immutable record of a single redaction operation.
-
-    The event hash commits to all fields plus the previous event hash to make
-    the chain tamper-evident.
-    """
-
-    event_index: int
-    document_id: str
-    version: int
-    revealed_indices: tuple[int, ...]
-    original_root: str
-    redacted_commitment: str
-    revealed_count: int
-    timestamp: str
-    zk_proof: dict[str, Any]
-    previous_event_hash: str
-
-    def __post_init__(self) -> None:
-        # Ensure immutable tuple storage even if caller passes a list.
-        object.__setattr__(self, "revealed_indices", tuple(self.revealed_indices))
-
-    def to_dict(self) -> dict[str, Any]:
-        """Serialize to a dictionary for transport or storage."""
-        return {
-            "event_index": self.event_index,
-            "document_id": self.document_id,
-            "version": self.version,
-            "revealed_indices": list(self.revealed_indices),
-            "original_root": self.original_root,
-            "redacted_commitment": self.redacted_commitment,
-            "revealed_count": self.revealed_count,
-            "timestamp": self.timestamp,
-            "zk_proof": self.zk_proof,
-            "previous_event_hash": self.previous_event_hash,
-        }
-
-    @classmethod
-    def from_dict(cls, data: dict[str, Any]) -> "RedactionEvent":
-        """Deserialize from dictionary data."""
-        return cls(
-            event_index=int(data["event_index"]),
-            document_id=str(data["document_id"]),
-            version=int(data.get("version", 1)),
-            revealed_indices=tuple(data.get("revealed_indices", [])),
-            original_root=str(data["original_root"]),
-            redacted_commitment=str(data["redacted_commitment"]),
-            revealed_count=int(data.get("revealed_count", 0)),
-            timestamp=str(data.get("timestamp", "")),
-            zk_proof=data.get("zk_proof", {}),
-            previous_event_hash=str(data.get("previous_event_hash", "")),
-        )
-
-    def compute_hash(self) -> str:
-        """
-        Compute deterministic BLAKE3 hash of the event.
-
-        Uses HASH_SEPARATOR to join stringified fields; revealed_indices and
-        zk_proof are canonicalized JSON for determinism.
-        """
-        components: list[bytes] = [
-            EVENT_PREFIX,
-            _HASH_SEPARATOR_BYTES,
-            str(self.event_index).encode("utf-8"),
-            _HASH_SEPARATOR_BYTES,
-            self.document_id.encode("utf-8"),
-            _HASH_SEPARATOR_BYTES,
-            str(self.version).encode("utf-8"),
-            _HASH_SEPARATOR_BYTES,
-            canonical_json_bytes(list(self.revealed_indices)),
-            _HASH_SEPARATOR_BYTES,
-            self.original_root.encode("utf-8"),
-            _HASH_SEPARATOR_BYTES,
-            self.redacted_commitment.encode("utf-8"),
-            _HASH_SEPARATOR_BYTES,
-            str(self.revealed_count).encode("utf-8"),
-            _HASH_SEPARATOR_BYTES,
-            self.timestamp.encode("utf-8"),
-            _HASH_SEPARATOR_BYTES,
-            canonical_json_bytes(self.zk_proof),
-            _HASH_SEPARATOR_BYTES,
-            self.previous_event_hash.encode("utf-8"),
-        ]
-        return hash_bytes(b"".join(components)).hex()
 
 
 @dataclass(frozen=True)
