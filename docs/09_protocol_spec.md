@@ -26,7 +26,7 @@ Out of scope: deployment topologies, user interfaces, and non-protocol applicati
 ## Cryptographic Primitives
 
 - **Hashing**: BLAKE3 with domain separation. No SHA-256 fallback is permitted in the protocol.
-- **Signatures**: Ed25519 for ledger/shard headers. Threshold signatures (e.g., FROST) are a Phase 1+ extension point.
+- **Signatures**: Ed25519 for ledger/shard headers and Signed Tree Heads (STHs). Threshold signatures (e.g., FROST) are a Phase 1+ extension point.
 - **Timestamping**: RFC 3161 timestamp tokens over Merkle or ledger roots; TSA certificate fingerprints are part of the evidence.
 - **Merkle Trees**: Binary trees with CT-style promotion (lone nodes promoted without hashing on odd counts); Sparse Merkle Forest uses fixed-depth Poseidon/BLAKE3 hybrids.
 
@@ -43,6 +43,11 @@ Out of scope: deployment topologies, user interfaces, and non-protocol applicati
   - Fields: `timestamp`, `document_hash`, `merkle_root`, `shard_id`, `source_signature`, `previous_hash`, optional `anchor` token reference
   - `entry_hash = hash_bytes(HASH_SEPARATOR.join([...]))`
   - Append-only; `previous_hash` is empty for genesis.
+- **Signed Tree Head (STH)**:
+  - Fields: `epoch_id`, `tree_size`, `merkle_root`, `timestamp`, `signature`, `signer_pubkey`
+  - Canonical serialization: canonical JSON with sorted keys and compact separators
+  - Signature: Ed25519 over `BLAKE3(TREE_HEAD_PREFIX || canonical_sth_payload)`
+  - Purpose: Bind every proof to a specific operator-signed epoch root and tree size.
 - **Redaction Proof**: Poseidon-backed commitment with sibling positions and revealed indices; max leaves and depth documented in `proofs/circuits/redaction_validity.circom`.
 
 ## Determinism Requirements

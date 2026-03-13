@@ -16,6 +16,7 @@ undocumented changes early.
 import dataclasses
 import inspect
 
+import nacl.signing
 import pytest
 
 from protocol.canonical import (
@@ -32,7 +33,7 @@ from protocol.canonicalizer import (
     canonicalization_provenance,
     process_artifact,
 )
-from protocol.epochs import EpochRecord, compute_epoch_head
+from protocol.epochs import EpochRecord, SignedTreeHead, compute_epoch_head, signed_tree_head_hash
 from protocol.events import CanonicalEvent
 from protocol.hashes import (
     FOREST_PREFIX,
@@ -392,6 +393,41 @@ class TestEpochAndEvents:
                 merkle_root=b"tooshort",
                 metadata_hash=hash_bytes(b"meta"),
             )
+
+    def test_signed_tree_head_signs_epoch_root_and_size(self):
+        """SignedTreeHead binds epoch id, tree size, root, and timestamp to a signature."""
+        signing_key = nacl.signing.SigningKey.generate()
+        merkle_root = hash_bytes(b"root")
+        tree_head = SignedTreeHead.create(
+            epoch_id=3,
+            tree_size=5,
+            merkle_root=merkle_root,
+            signing_key=signing_key,
+            timestamp="2026-03-13T00:00:00Z",
+        )
+
+        assert tree_head.verify()
+        assert tree_head.merkle_root == merkle_root.hex()
+        assert tree_head.payload_hash() == signed_tree_head_hash(
+            epoch_id=3,
+            tree_size=5,
+            merkle_root=merkle_root,
+            timestamp="2026-03-13T00:00:00Z",
+        )
+
+    def test_signed_tree_head_rejects_tampering(self):
+        """Changing the bound Merkle root invalidates the Signed Tree Head signature."""
+        signing_key = nacl.signing.SigningKey.generate()
+        tree_head = SignedTreeHead.create(
+            epoch_id=1,
+            tree_size=2,
+            merkle_root=hash_bytes(b"root"),
+            signing_key=signing_key,
+            timestamp="2026-03-13T00:00:00Z",
+        )
+        tampered = dataclasses.replace(tree_head, merkle_root=hash_bytes(b"other-root").hex())
+
+        assert not tampered.verify()
 
 
 # ---------------------------------------------------------------------------

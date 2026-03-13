@@ -13,7 +13,7 @@ from unittest.mock import patch
 import nacl.signing
 
 from protocol.canonicalizer import CANONICALIZER_VERSIONS
-from protocol.epochs import EpochRecord
+from protocol.epochs import EpochRecord, SignedTreeHead
 from protocol.events import CanonicalEvent
 from protocol.hashes import hash_bytes
 from protocol.merkle import MerkleTree, merkle_leaf_hash
@@ -42,6 +42,10 @@ def _make_bundle(
     tamper_signature: bool = False,
     tamper_token_hash: bool = False,
     tamper_merkle_root: bool = False,
+    omit_signed_tree_head: bool = False,
+    tamper_signed_tree_head_signature: bool = False,
+    tamper_signed_tree_head_tree_size: bool = False,
+    tamper_signed_tree_head_root: bool = False,
 ):
     """Build a valid (or selectively tampered) verification bundle dict."""
     signing_key = nacl.signing.SigningKey.generate()
@@ -83,6 +87,13 @@ def _make_bundle(
             ).encode("utf-8")
         ),
     ).to_dict()
+    signed_tree_head = SignedTreeHead.create(
+        epoch_id=epoch_record["epoch_index"],
+        tree_size=len(canonical_events),
+        merkle_root=root_hash,
+        signing_key=signing_key,
+        timestamp=ts,
+    ).to_dict()
 
     bundle: dict = {
         "bundle_version": "1.0.0",
@@ -97,11 +108,23 @@ def _make_bundle(
         "pubkey": pubkey_hex,
     }
 
+    if not omit_signed_tree_head:
+        bundle["signed_tree_head"] = signed_tree_head
+
     if tamper_header:
         header["header_hash"] = "ff" * 32
 
     if tamper_signature:
         bundle["signature"] = "00" * 64
+
+    if tamper_signed_tree_head_signature and "signed_tree_head" in bundle:
+        bundle["signed_tree_head"]["signature"] = "00" * 64
+
+    if tamper_signed_tree_head_tree_size and "signed_tree_head" in bundle:
+        bundle["signed_tree_head"]["tree_size"] += 1
+
+    if tamper_signed_tree_head_root and "signed_tree_head" in bundle:
+        bundle["signed_tree_head"]["merkle_root"] = "11" * 32
 
     # Optional timestamp token (mock – no real TSA)
     if include_token:
@@ -200,6 +223,38 @@ def test_missing_required_field():
     passed, results = verify_bundle({"signature": "aa" * 64, "pubkey": "bb" * 32})
     assert passed is False
     assert any("Missing" in msg for _, msg in results)
+
+
+def test_missing_signed_tree_head_fails():
+    """Bundles without a Signed Tree Head are rejected."""
+    bundle = _make_bundle(omit_signed_tree_head=True)
+    passed, results = verify_bundle(bundle)
+    assert passed is False
+    assert any("Signed Tree Head missing" in msg for _, msg in results)
+
+
+def test_tampered_signed_tree_head_signature_fails():
+    """Tampering with the Signed Tree Head signature is detected."""
+    bundle = _make_bundle(tamper_signed_tree_head_signature=True)
+    passed, results = verify_bundle(bundle)
+    assert passed is False
+    assert any("Signed Tree Head signature INVALID" in msg for _, msg in results)
+
+
+def test_signed_tree_head_tree_size_mismatch_fails():
+    """Signed Tree Head tree size must match the bundle leaf count."""
+    bundle = _make_bundle(tamper_signed_tree_head_tree_size=True)
+    passed, results = verify_bundle(bundle)
+    assert passed is False
+    assert any("tree size mismatch" in msg.lower() for _, msg in results)
+
+
+def test_signed_tree_head_root_mismatch_fails():
+    """Signed Tree Head root must match the verified shard root."""
+    bundle = _make_bundle(tamper_signed_tree_head_root=True)
+    passed, results = verify_bundle(bundle)
+    assert passed is False
+    assert any("signed tree head merkle root mismatch" in msg.lower() for _, msg in results)
 
 
 def test_header_validation_requires_consensus_fields():

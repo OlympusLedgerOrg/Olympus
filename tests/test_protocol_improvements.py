@@ -5,12 +5,11 @@ These tests validate the new functionality without requiring PostgreSQL.
 
 from __future__ import annotations
 
-import threading
 import time
-from collections import OrderedDict
 from types import SimpleNamespace
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock
 
+import nacl.signing
 import pytest
 from psycopg.pq import TransactionStatus
 
@@ -374,6 +373,52 @@ class TestVerificationBundle:
         assert "smt_proof" in bundle
         assert bundle["canonicalization"] == {"format": "json"}
 
+    def test_create_bundle_includes_signed_tree_head(self) -> None:
+        from protocol.epochs import SignedTreeHead
+        from protocol.verification_bundle import create_verification_bundle
+
+        signing_key = nacl.signing.SigningKey.generate()
+        signed_tree_head = SignedTreeHead.create(
+            epoch_id=7,
+            tree_size=1,
+            merkle_root=b"\xaa" * 32,
+            signing_key=signing_key,
+            timestamp="2025-01-01T00:00:00Z",
+        )
+
+        mock_proof = MagicMock()
+        mock_proof.to_dict.return_value = {"exists": True, "key": "abc"}
+
+        mock_entry = MagicMock()
+        mock_entry.canonicalization = {"format": "json"}
+
+        mock_storage = MagicMock()
+        mock_storage.get_proof.return_value = mock_proof
+        mock_storage.get_latest_header.return_value = {
+            "header": {
+                "shard_id": "s",
+                "root_hash": "a" * 64,
+                "timestamp": "2025-01-01T00:00:00Z",
+                "previous_header_hash": "",
+                "header_hash": "b" * 64,
+            },
+            "signature": "c" * 128,
+            "pubkey": "d" * 64,
+        }
+        mock_storage.get_ledger_tail.return_value = [mock_entry]
+        mock_storage.get_timestamp_token.return_value = None
+
+        bundle = create_verification_bundle(
+            mock_storage,
+            shard_id="s",
+            record_type="document",
+            record_id="doc-1",
+            version=1,
+            signed_tree_head=signed_tree_head,
+        )
+
+        assert bundle["signed_tree_head"] == signed_tree_head.to_dict()
+
 
 # ---------------------------------------------------------------------------
 # 🔥 Item 10: SMT specification
@@ -421,8 +466,9 @@ class TestSchemaGeneration:
     """Verify schema generation tool imports and runs."""
 
     def test_generate_json_schema(self) -> None:
-        from tools.generate_schemas import generate_json_schema
         from pydantic import BaseModel, Field
+
+        from tools.generate_schemas import generate_json_schema
 
         class SampleModel(BaseModel):
             name: str = Field(..., description="A name")

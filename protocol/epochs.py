@@ -1,15 +1,24 @@
 """
-Epoch chaining utilities for Olympus.
+Epoch chaining and Signed Tree Head utilities for Olympus.
 
 Epoch heads provide optional linkage across Merkle roots by hashing the
 previous epoch head, the current Merkle root, and associated metadata hash
 with a fixed separator for structural disambiguation.
+
+Signed Tree Heads (STHs) add cryptographic accountability for a specific
+epoch root by signing the epoch identifier, tree size, Merkle root, and
+timestamp.
 """
 
 from dataclasses import dataclass
 from typing import Any
 
-from .hashes import HASH_SEPARATOR, blake3_hash
+import nacl.exceptions
+import nacl.signing
+
+from .canonical_json import canonical_json_bytes
+from .hashes import HASH_SEPARATOR, TREE_HEAD_PREFIX, blake3_hash
+from .timestamps import current_timestamp
 
 
 _SEP = HASH_SEPARATOR.encode("utf-8")
@@ -139,4 +148,134 @@ class EpochRecord:
             metadata_hash=data["metadata_hash"],
             previous_epoch_head=data.get("previous_epoch_head", ""),
             epoch_head=data["epoch_head"],
+        )
+
+
+def _build_tree_head_payload(
+    *,
+    epoch_id: int,
+    tree_size: int,
+    merkle_root: bytes | str,
+    timestamp: str,
+) -> dict[str, Any]:
+    """Build the canonical Signed Tree Head payload."""
+    if epoch_id < 0:
+        raise ValueError("epoch_id must be non-negative")
+    if tree_size < 0:
+        raise ValueError("tree_size must be non-negative")
+    root_bytes = _normalize_hash(merkle_root)
+    if not isinstance(timestamp, str) or not timestamp:
+        raise ValueError("timestamp must be a non-empty string")
+    return {
+        "epoch_id": epoch_id,
+        "tree_size": tree_size,
+        "merkle_root": root_bytes.hex(),
+        "timestamp": timestamp,
+    }
+
+
+def signed_tree_head_hash(
+    *,
+    epoch_id: int,
+    tree_size: int,
+    merkle_root: bytes | str,
+    timestamp: str,
+) -> bytes:
+    """Return the domain-separated BLAKE3 hash of a Signed Tree Head payload."""
+    payload = _build_tree_head_payload(
+        epoch_id=epoch_id,
+        tree_size=tree_size,
+        merkle_root=merkle_root,
+        timestamp=timestamp,
+    )
+    return blake3_hash([TREE_HEAD_PREFIX, canonical_json_bytes(payload)])
+
+
+@dataclass(frozen=True)
+class SignedTreeHead:
+    """Signed commitment to an epoch root and tree size.
+
+    Attributes:
+        epoch_id: Monotonic epoch identifier.
+        tree_size: Number of leaves committed by ``merkle_root``.
+        merkle_root: Hex-encoded Merkle root for the epoch.
+        timestamp: ISO 8601 creation timestamp.
+        signature: Hex-encoded Ed25519 signature over the STH payload hash.
+        signer_pubkey: Hex-encoded Ed25519 public key used to verify ``signature``.
+    """
+
+    epoch_id: int
+    tree_size: int
+    merkle_root: str
+    timestamp: str
+    signature: str
+    signer_pubkey: str
+
+    @classmethod
+    def create(
+        cls,
+        *,
+        epoch_id: int,
+        tree_size: int,
+        merkle_root: bytes | str,
+        signing_key: nacl.signing.SigningKey,
+        timestamp: str | None = None,
+    ) -> "SignedTreeHead":
+        """Build and sign a Signed Tree Head."""
+        normalized_timestamp = timestamp or current_timestamp()
+        payload = _build_tree_head_payload(
+            epoch_id=epoch_id,
+            tree_size=tree_size,
+            merkle_root=merkle_root,
+            timestamp=normalized_timestamp,
+        )
+        payload_hash = blake3_hash([TREE_HEAD_PREFIX, canonical_json_bytes(payload)])
+        return cls(
+            epoch_id=payload["epoch_id"],
+            tree_size=payload["tree_size"],
+            merkle_root=payload["merkle_root"],
+            timestamp=normalized_timestamp,
+            signature=signing_key.sign(payload_hash).signature.hex(),
+            signer_pubkey=signing_key.verify_key.encode().hex(),
+        )
+
+    def payload_hash(self) -> bytes:
+        """Return the BLAKE3 hash of this Signed Tree Head payload."""
+        return signed_tree_head_hash(
+            epoch_id=self.epoch_id,
+            tree_size=self.tree_size,
+            merkle_root=self.merkle_root,
+            timestamp=self.timestamp,
+        )
+
+    def verify(self) -> bool:
+        """Verify the Signed Tree Head signature and payload encoding."""
+        try:
+            verify_key = nacl.signing.VerifyKey(bytes.fromhex(self.signer_pubkey))
+            verify_key.verify(self.payload_hash(), bytes.fromhex(self.signature))
+        except (ValueError, nacl.exceptions.BadSignatureError):
+            return False
+        return True
+
+    def to_dict(self) -> dict[str, Any]:
+        """Serialize the Signed Tree Head to a dictionary."""
+        return {
+            "epoch_id": self.epoch_id,
+            "tree_size": self.tree_size,
+            "merkle_root": self.merkle_root,
+            "timestamp": self.timestamp,
+            "signature": self.signature,
+            "signer_pubkey": self.signer_pubkey,
+        }
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> "SignedTreeHead":
+        """Deserialize a Signed Tree Head from a dictionary."""
+        return cls(
+            epoch_id=int(data["epoch_id"]),
+            tree_size=int(data["tree_size"]),
+            merkle_root=data["merkle_root"],
+            timestamp=data["timestamp"],
+            signature=data["signature"],
+            signer_pubkey=data["signer_pubkey"],
         )

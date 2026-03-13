@@ -24,6 +24,9 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any
 
+from .epochs import SignedTreeHead
+
+
 if TYPE_CHECKING:
     from storage.postgres import StorageLayer
 
@@ -37,6 +40,7 @@ def create_verification_bundle(
     record_type: str,
     record_id: str,
     version: int,
+    signed_tree_head: SignedTreeHead | dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """
     Assemble a complete verification bundle for a record.
@@ -51,6 +55,9 @@ def create_verification_bundle(
         record_type: Record type (e.g. ``"document"``).
         record_id: Unique record identifier.
         version: Record version (≥ 1).
+        signed_tree_head: Optional Signed Tree Head for the shard root. When
+            supplied, verifiers can bind the inclusion proof to an operator-
+            signed epoch commitment.
 
     Returns:
         Dictionary conforming to ``schemas/verification_bundle.json``.
@@ -98,6 +105,13 @@ def create_verification_bundle(
 
     if timestamp_token is not None:
         bundle["timestamp_token"] = timestamp_token
+
+    if signed_tree_head is not None:
+        bundle["signed_tree_head"] = (
+            signed_tree_head.to_dict()
+            if isinstance(signed_tree_head, SignedTreeHead)
+            else dict(signed_tree_head)
+        )
 
     # Include SMT proof as smt_proof (key/value based)
     bundle["smt_proof"] = proof.to_dict()
