@@ -49,6 +49,7 @@ pragma circom 2.0.0;
 include "./lib/merkleProof.circom";
 include "./lib/poseidon.circom";
 include "./parameters.circom";
+include "../node_modules/circomlib/circuits/iszero.circom";
 
 // Range-checked Num2Bits converter
 template Num2BitsStrict(n) {
@@ -227,10 +228,10 @@ template UnifiedCanonicalizationInclusionRootSign(maxSections, merkleDepth, smtD
     leafIndex === leafIndexSum[merkleDepth];
 
     // --- Index bounds: leafIndex < treeSize (when treeSize > 0) ---
-    signal treeSizeInv;
-    treeSizeInv <-- (treeSize != 0) ? (1 / treeSize) : 0;
+    component treeSizeIsZero = IsZero();
+    treeSizeIsZero.in <== treeSize;
     signal treeSizeIsPositive;
-    treeSizeIsPositive <== treeSize * treeSizeInv;
+    treeSizeIsPositive <== 1 - treeSizeIsZero.out;
     treeSizeIsPositive * (1 - treeSizeIsPositive) === 0;
 
     component boundsCheck = LessThanBounded(merkleDepth);
