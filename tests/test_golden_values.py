@@ -27,7 +27,9 @@ from protocol.canonical import (
 )
 from protocol.canonical_json import canonical_json_bytes, canonical_json_encode
 from protocol.hashes import (
+    HASH_SEPARATOR,
     LEDGER_PREFIX,
+    LEGACY_BYTES_PREFIX,
     blake3_hash,
     hash_bytes,
     leaf_hash,
@@ -206,8 +208,8 @@ class TestHashGoldenValues:
     def test_hash_bytes_known_value(self):
         """Pin hash_bytes output for b"hello"."""
         result = hash_bytes(b"hello")
-        # Compute expected value using reference BLAKE3
-        expected = _blake3.blake3(b"hello").digest()
+        # Compute expected value using reference BLAKE3 with domain separation
+        expected = _blake3.blake3(LEGACY_BYTES_PREFIX + b"hello").digest()
         assert result == expected
         # Pin the hex value
         assert result.hex() == expected.hex()
@@ -446,5 +448,7 @@ class TestPipelineGoldenArtifact:
         actual_canonical = canonical_json_encode(entry["payload"])
         assert actual_canonical == expected_canonical_json
         # Reproduce entry hash
-        actual_hash = blake3_hash([LEDGER_PREFIX, actual_canonical.encode("utf-8")]).hex()
+        actual_hash = blake3_hash(
+            [LEDGER_PREFIX, actual_canonical.encode("utf-8"), HASH_SEPARATOR.encode(), b""]
+        ).hex()
         assert actual_hash == expected_entry_hash

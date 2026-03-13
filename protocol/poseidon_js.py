@@ -55,6 +55,7 @@ from __future__ import annotations
 
 import atexit
 import collections
+import functools
 import json
 import os
 import queue
@@ -73,12 +74,28 @@ _NODE_MODULES = _SCRIPT.parent / "node_modules"
 _REQUEST_TIMEOUT = 30.0  # seconds
 
 
+@functools.lru_cache(maxsize=1)
+def _resolve_node_path() -> str:
+    """Return absolute path to node or raise RuntimeError."""
+    node_path = shutil.which("node")
+    if node_path is None:
+        raise RuntimeError(
+            "OLY_POSEIDON_BACKEND=js requires Node.js on PATH. "
+            "Install Node >= 18 or switch back to the default Python backend."
+        )
+    return node_path
+
+
 # ---------------------------------------------------------------------------
 # Prerequisites
 # ---------------------------------------------------------------------------
 def _node_available() -> bool:
     """Return True if the ``node`` binary is on PATH."""
-    return shutil.which("node") is not None
+    try:
+        _resolve_node_path()
+    except RuntimeError:
+        return False
+    return True
 
 
 def _check_prerequisites() -> None:
@@ -128,13 +145,56 @@ class _PoseidonNodeProcess:
     # Internal helpers
     # ------------------------------------------------------------------
 
+    @staticmethod
+    def _validate_field_value(value: object, *, field: str) -> None:
+        """
+        Ensure Poseidon inputs are decimal strings (no control characters/newlines).
+
+        The Node helper expects decimal-encoded field elements; rejecting other
+        types prevents accidental injection of control characters into the
+        line-delimited JSON protocol.
+        """
+        if not isinstance(value, str) or not value.isdecimal():
+            raise ValueError(f"Poseidon payload field '{field}' must be a decimal string")
+
+    def _validate_payload(self, payload: dict) -> None:
+        """Validate the outbound JSON payload before sending to node."""
+        if not isinstance(payload, dict):
+            raise ValueError("Poseidon payload must be a dictionary")
+
+        op = payload.get("op")
+        if op not in {"hash2", "batch_hash2", "merkle_root"}:
+            raise ValueError(f"Unsupported poseidon_js op: {op!r}")
+
+        if op == "hash2":
+            self._validate_field_value(payload.get("a"), field="a")
+            self._validate_field_value(payload.get("b"), field="b")
+        elif op == "batch_hash2":
+            pairs = payload.get("pairs")
+            if not isinstance(pairs, list) or not pairs:
+                raise ValueError("batch_hash2 requires a non-empty 'pairs' list")
+            for pair in pairs:
+                if not isinstance(pair, dict):
+                    raise ValueError("Each pair in batch_hash2 payload must be a dict")
+                self._validate_field_value(pair.get("a"), field="pairs[i].a")
+                self._validate_field_value(pair.get("b"), field="pairs[i].b")
+        elif op == "merkle_root":
+            leaves = payload.get("leaves")
+            if not isinstance(leaves, list) or not leaves:
+                raise ValueError("merkle_root requires a non-empty 'leaves' list")
+            for idx, leaf in enumerate(leaves):
+                self._validate_field_value(leaf, field=f"leaves[{idx}]")
+            depth = payload.get("depth")
+            if depth is not None and not isinstance(depth, int):
+                raise ValueError("merkle_root depth must be an integer if provided")
+
     def _start(self) -> None:
         """Spawn a fresh Node.js process and start reader threads."""
         _check_prerequisites()
         self._stdout_queue = queue.Queue()
         self._stderr_buf.clear()
         proc = subprocess.Popen(  # nosec B603 B607
-            ["node", str(self._script)],
+            [_resolve_node_path(), str(self._script.resolve())],
             stdin=subprocess.PIPE,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
@@ -194,6 +254,7 @@ class _PoseidonNodeProcess:
         Raises:
             RuntimeError: On Node.js error, process exit, or timeout.
         """
+        self._validate_payload(payload)
         # Compact separators ensure the payload fits on a single line;
         # json.dumps also escapes all control characters in string values.
         line = json.dumps(payload, separators=(",", ":")) + "\n"

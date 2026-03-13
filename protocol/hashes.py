@@ -29,6 +29,8 @@ _SEP = HASH_SEPARATOR.encode("utf-8")
 
 # Hash domain separation prefixes - DO NOT CHANGE
 # These prefixes are protocol-critical. Changing them breaks all historical proofs.
+LEGACY_BYTES_PREFIX = b"OLY:LEGACY-BYTES:V1"
+LEGACY_STRING_PREFIX = b"OLY:LEGACY-STRING:V1"
 KEY_PREFIX = b"OLY:KEY:V1"
 LEAF_PREFIX = b"OLY:LEAF:V1"
 NODE_PREFIX = b"OLY:NODE:V1"
@@ -156,11 +158,14 @@ def forest_root(header_hashes: list[bytes]) -> bytes:
 # Legacy compatibility - these will be removed in future versions
 # For now, keep them to avoid breaking existing code
 def hash_bytes(payload: bytes) -> bytes:
-    return blake3.blake3(payload).digest()
+    """Legacy raw-bytes hashing with explicit domain separation."""
+    return blake3.blake3(LEGACY_BYTES_PREFIX + payload).digest()
 
 
 def hash_string(text: str) -> bytes:
-    return hash_bytes(text.encode("utf-8"))
+    """Legacy UTF-8 string hashing with explicit domain separation."""
+    payload = text.encode("utf-8")
+    return blake3.blake3(LEGACY_STRING_PREFIX + payload).digest()
 
 
 def merkle_parent_hash(left: bytes, right: bytes) -> bytes:

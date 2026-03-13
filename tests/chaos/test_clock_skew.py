@@ -7,10 +7,11 @@ without corrupting ledger chain integrity.
 
 Expected system behaviour
 --------------------------
-- Timestamps are stored as ISO 8601 strings; the protocol does not require
-  monotonic ordering of ``ts`` fields across entries.
-- Chain ordering is enforced by hash linkage (``prev_entry_hash``), not by
-  wall-clock time, so a clock skew cannot break chain verification.
+- Timestamps are stored as ISO 8601 strings and must be strictly monotonic for
+  in-memory and Postgres-backed ledgers; a backwards clock jump is rejected at
+  append time.
+- Chain ordering is enforced by hash linkage (``prev_entry_hash``) and the
+  monotonic timestamp guard prevents silently accepting re-ordered entries.
 - ISO 8601 serialisation is unaffected regardless of the clock value.
 - An extreme skew (e.g. year 1970 or year 9999) does not cause an exception
   in the canonicalization or hashing pipeline.
@@ -22,6 +23,7 @@ import re
 from datetime import datetime, timezone
 from unittest.mock import patch
 
+import pytest
 import protocol.ledger as ledger_module
 from protocol.hashes import hash_bytes
 from protocol.ledger import Ledger
@@ -83,30 +85,20 @@ def test_ledger_accepts_timestamp_far_in_future(fresh_ledger: Ledger) -> None:
     assert fresh_ledger.verify_chain()
 
 
-def test_chain_integrity_with_non_monotonic_timestamps(fresh_ledger: Ledger) -> None:
+def test_chain_rejects_non_monotonic_timestamps(fresh_ledger: Ledger) -> None:
     """
-    Chain integrity is maintained even when timestamps go backwards (clock skew).
-
-    Appends three entries with decreasing timestamps to simulate a backwards
-    clock jump, then verifies the hash chain is still valid.
+    A backwards clock jump is rejected to keep timestamps strictly increasing.
     """
-    fake_timestamps = [
-        "2026-06-01T12:00:00Z",
-        "2025-01-01T00:00:00Z",  # backwards jump
-        "2024-03-15T08:30:00Z",  # further back
-    ]
+    first_hash = _append_with_ts(fresh_ledger, 0, "2026-06-01T12:00:00Z")
+    assert first_hash == fresh_ledger.entries[0].entry_hash
 
-    for i, ts in enumerate(fake_timestamps):
-        _append_with_ts(fresh_ledger, i, ts)
+    with patch.object(ledger_module, "current_timestamp", return_value="2025-01-01T00:00:00Z"):
+        with pytest.raises(ValueError, match="strictly increasing"):
+            _append_with_ts(fresh_ledger, 1, "2025-01-01T00:00:00Z")
 
-    assert len(fresh_ledger.entries) == 3
-
-    # Hash chain must be valid despite non-monotonic timestamps
+    # Ledger should remain unchanged and verifiable after rejection
+    assert len(fresh_ledger.entries) == 1
     assert fresh_ledger.verify_chain()
-
-    # Timestamps must be stored exactly as provided
-    for i, expected_ts in enumerate(fake_timestamps):
-        assert fresh_ledger.entries[i].ts == expected_ts
 
 
 def test_large_clock_skew_does_not_affect_entry_hash(fresh_ledger: Ledger) -> None:

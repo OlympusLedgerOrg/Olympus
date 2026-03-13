@@ -158,15 +158,19 @@ class Groth16Prover:
     def __init__(self, circuits_dir: Path, snarkjs_bin: str = "npx") -> None:
         self.circuits_dir = circuits_dir
         self.snarkjs_bin = snarkjs_bin
+        self._snarkjs_path: str | None = None
 
-    def _check_snarkjs(self) -> None:
-        """Ensure snarkjs launcher is available (snarkjs or npx)."""
-        if shutil.which(self.snarkjs_bin) is None:
+    def _check_snarkjs(self) -> str:
+        """Ensure snarkjs launcher is available (snarkjs or npx) and cache absolute path."""
+        resolved = shutil.which(self.snarkjs_bin)
+        if resolved is None:
             raise FileNotFoundError(
                 f"snarkjs binary '{self.snarkjs_bin}' not found in PATH. "
                 "Install Node.js/npm (for npx) or install snarkjs globally, "
                 "or provide an explicit path."
             )
+        self._snarkjs_path = resolved
+        return resolved
 
     def _build_cmd(self, args: list[str]) -> list[str]:
         """
@@ -175,9 +179,10 @@ class Groth16Prover:
         If snarkjs_bin == "npx", we run: npx snarkjs <args...>
         Else we run: <snarkjs_bin> <args...>
         """
+        launcher = self._snarkjs_path or self._check_snarkjs()
         if self.snarkjs_bin == "npx":
-            return ["npx", "snarkjs", *args]
-        return [self.snarkjs_bin, *args]
+            return [launcher, "snarkjs", *args]
+        return [launcher, *args]
 
     def _run(self, args: list[str], cwd: Path | None = None) -> subprocess.CompletedProcess[str]:
         """Execute a snarkjs command and return the completed process."""
