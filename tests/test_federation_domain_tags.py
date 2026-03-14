@@ -65,12 +65,13 @@ def test_event_id_prevents_field_injection() -> None:
     """Length-prefixing prevents '|' injection collisions across event_id fields."""
     timestamp = "2026-03-09T00:00:00Z"
 
-    def legacy_separator_event_id(shard_id: str, header_hash: str, timestamp_value: str) -> str:
+    def vulnerable_separator_event_id(shard_id: str, header_hash: str, timestamp_value: str) -> str:
         event_data = HASH_SEPARATOR.join([shard_id, header_hash, timestamp_value])
         return blake3_hash([EVENT_PREFIX, _SEP, event_data.encode("utf-8")]).hex()
 
-    colliding_legacy = legacy_separator_event_id("X|Y", "Z", timestamp)
-    assert colliding_legacy == legacy_separator_event_id("X", "Y|Z", timestamp)
+    colliding_legacy = vulnerable_separator_event_id("X|Y", "Z", timestamp)
+    assert colliding_legacy == vulnerable_separator_event_id("X", "Y|Z", timestamp)
+    # Regression constant from the legacy separator-based encoding.
     assert colliding_legacy == "d1630eba4512d26c098cedbb2f7f7379eb0a698d7872d37e6d35a911dc43ed0e"
 
     event_id_with_pipe_in_shard = event_id("X|Y", "Z", timestamp)
