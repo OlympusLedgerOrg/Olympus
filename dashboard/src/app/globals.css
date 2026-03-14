@@ -1,0 +1,28 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* ── Theme CSS variable definitions ─────────────────────────────────── */
+@import "../styles/themes/fight-club.css";
+@import "../styles/themes/professional.css";
+@import "../styles/themes/minimal.css";
+@import "../styles/themes/accessibility.css";
+
+/* ── Base styles ────────────────────────────────────────────────────── */
+body {
+  color: var(--color-text);
+  background: var(--color-background);
+  font-family: var(--font-body);
+  transition: background-color 0.3s ease, color 0.3s ease;
+}
+
+code,
+pre {
+  font-family: var(--font-mono);
+}
+
+@layer utilities {
+  .text-balance {
+    text-wrap: balance;
+  }
+}
