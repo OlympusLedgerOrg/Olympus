@@ -429,19 +429,29 @@ def _extract_bill_highlights(text: str) -> dict[str, list[str]]:
     }
 
 
+def _wrap_legislation_block(normalized_text: str) -> str:
+    """Wrap normalized bill text in explicit delimiters for LLM prompts."""
+    sanitized = normalized_text.replace("<legislation>", "<legislation_escaped>")
+    sanitized = sanitized.replace("</legislation>", "</legislation_escaped>")
+    return f"<legislation>\n{sanitized}\n</legislation>"
+
+
 def _build_plain_english_summary(text: str) -> dict[str, Any]:
     """Produce a deterministic bill summary and prompt chain."""
     normalized = _normalize_whitespace(text)
     if not normalized:
         raise ValueError("Bill text is required.")
+    document_block = _wrap_legislation_block(normalized)
     highlights = _extract_bill_highlights(normalized)
     prompt_chain = [
         {
             "stage": "extract_obligations",
             "prompt": (
-                "Read the legislation and list the actors, required actions, deadlines, money, and"
-                " enforcement hooks."
+                "Read the legislation. The document is delimited by <legislation> and </legislation>"
+                " tags and provided separately as a data block. List the actors, required actions,"
+                " deadlines, money, and enforcement hooks."
             ),
+            "document": document_block,
             "output": {
                 "actions": highlights["actions"],
                 "dates": highlights["dates"],
@@ -452,16 +462,20 @@ def _build_plain_english_summary(text: str) -> dict[str, Any]:
             "stage": "translate_for_constituents",
             "prompt": (
                 "Rewrite the obligations in direct plain English, replace legalese with everyday"
-                " terms, and keep uncertainty visible."
+                " terms, and keep uncertainty visible. Use only the text inside the delimited"
+                " <legislation> block provided separately."
             ),
+            "document": document_block,
             "output": highlights["sentences"][:3],
         },
         {
             "stage": "flag_open_questions",
             "prompt": (
                 "List what a resident, reporter, or advocate should still verify in the full text"
-                " before relying on the summary."
+                " before relying on the summary. Base your reasoning only on the delimited"
+                " <legislation> block provided separately."
             ),
+            "document": document_block,
             "output": [
                 "Confirm fiscal effects in the enrolled bill text."
                 if highlights["amounts"]
@@ -474,6 +488,7 @@ def _build_plain_english_summary(text: str) -> dict[str, Any]:
     ]
     summary_lines = highlights["sentences"][:2] or [normalized[:240]]
     return {
+        "document_block": document_block,
         "plain_english_summary": " ".join(summary_lines),
         "key_actions": highlights["actions"],
         "dates": highlights["dates"],
