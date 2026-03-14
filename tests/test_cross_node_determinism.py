@@ -64,7 +64,7 @@ from protocol.partition import (
     select_rotating_leader,
     vrf_hash_from_seed,
 )
-from protocol.view_change import (
+from scaffolding.view_change import (
     ConsensusState,
     ValidatorRegistry,
     VotingRound,

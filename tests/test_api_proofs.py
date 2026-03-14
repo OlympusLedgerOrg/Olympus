@@ -7,8 +7,8 @@ IN-MEMORY PROOF LOGIC TESTING (NO DATABASE)
 This test validates proof generation logic using in-memory SparseMerkleTree instances.
 It does NOT test the production storage layer or database transactions.
 
-DATABASE: None (in-memory state via app_testonly/state.py)
-CODE PATH: app_testonly/main.py (test API) + app_testonly/state.py (in-memory)
+DATABASE: None (in-memory state via scaffolding/app_testonly/state.py)
+CODE PATH: scaffolding/app_testonly/main.py (test API) + scaffolding/app_testonly/state.py (in-memory)
 WHAT IS TESTED:
   ✅ protocol/ssmf.py proof generation logic
   ✅ Unified proof behavior (exists field)
@@ -20,7 +20,7 @@ WHAT IS TESTED:
 For production storage layer testing, see test_storage.py and test_e2e_audit.py.
 
 NOTE: The 'SQLite' file path created in setup_test_db() is VESTIGIAL and NOT USED.
-The test API (app_testonly/main.py) uses in-memory SparseMerkleTree instances, not a database.
+The test API (scaffolding/app_testonly/main.py) uses in-memory SparseMerkleTree instances, not a database.
 
 See docs/08_database_strategy.md for complete database strategy documentation.
 """
@@ -40,7 +40,7 @@ def setup_test_db():
     Create a temporary database file path for tests.
 
     NOTE: This file path is VESTIGIAL and NOT USED for actual database operations.
-    The test API (app_testonly/main.py) uses in-memory SparseMerkleTree instances.
+    The test API (scaffolding/app_testonly/main.py) uses in-memory SparseMerkleTree instances.
     No database reads or writes occur.
 
     This fixture exists for API compatibility only.
@@ -62,7 +62,7 @@ def setup_test_db():
 def client():
     """Create a test client for the FastAPI app."""
     # Import here to ensure the environment variable is set
-    from app_testonly.main import app
+    from scaffolding.app_testonly.main import app
 
     return TestClient(app)
 
@@ -117,7 +117,7 @@ def test_proof_existence_endpoint_returns_existence_proof_for_existing_key(clien
     """
     # First, we need to add a key to the shard
     # Since we don't have a write endpoint, we'll access the state directly
-    from app_testonly.main import state
+    from scaffolding.app_testonly.main import state
 
     key = record_key("document", "doc1", 1)
     value_hash = hash_bytes(b"test value")
@@ -153,7 +153,7 @@ def test_proof_nonexistence_endpoint_returns_existence_proof_for_existing_key(cl
     Key point: Both endpoints return the same unified proof structure.
     """
     # Add a key to the shard
-    from app_testonly.main import state
+    from scaffolding.app_testonly.main import state
 
     key = record_key("document", "doc2", 1)
     value_hash = hash_bytes(b"another value")
@@ -202,7 +202,7 @@ def test_database_is_file_backed():
     share the same database.
     """
     # Import after setting the environment variable
-    from app_testonly.main import state
+    from scaffolding.app_testonly.main import state
 
     # Check that the database path is NOT :memory:
     assert state.db_path != ":memory:"
@@ -216,7 +216,7 @@ def test_database_is_file_backed():
 def test_roots_endpoint(client):
     """Test the /roots endpoint returns global and shard roots."""
     # Add some data to create shards
-    from app_testonly.main import state
+    from scaffolding.app_testonly.main import state
 
     key1 = record_key("document", "doc1", 1)
     value_hash1 = hash_bytes(b"value1")
@@ -244,7 +244,7 @@ def test_roots_endpoint(client):
 def test_list_shards_endpoint(client):
     """Test the /shards endpoint returns list of shard IDs."""
     # Add some shards
-    from app_testonly.main import state
+    from scaffolding.app_testonly.main import state
 
     key1 = record_key("document", "doc_x", 1)
     value_hash1 = hash_bytes(b"value_x")
@@ -276,7 +276,7 @@ def test_shard_header_latest_returns_404_for_nonexistent_shard(client):
 
 def test_shard_header_latest_returns_header_for_existing_shard(client):
     """Test that /shards/{shard_id}/header/latest returns header for existing shard."""
-    from app_testonly.main import state
+    from scaffolding.app_testonly.main import state
 
     # Create a shard with data
     key = record_key("document", "doc_header", 1)
@@ -305,7 +305,7 @@ def test_proof_nonexistence_invalid_key_returns_400(client):
 def test_list_shards_when_empty(client):
     """Test that list_shards returns empty list when no shards exist."""
     # Create a fresh state with no shards
-    from app_testonly.state import OlympusState
+    from scaffolding.app_testonly.state import OlympusState
 
     # Create new state temporarily
     fresh_state = OlympusState("/tmp/test_empty.sqlite")
@@ -316,7 +316,7 @@ def test_list_shards_when_empty(client):
 
 def test_header_latest_returns_none_for_missing_shard():
     """Test that header_latest returns None when shard doesn't exist."""
-    from app_testonly.state import OlympusState
+    from scaffolding.app_testonly.state import OlympusState
 
     state = OlympusState("/tmp/test_header.sqlite")
     header = state.header_latest("nonexistent_shard")

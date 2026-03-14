@@ -17,7 +17,8 @@ Dependency order (imports must flow down, never up):
   canonical_json, timestamps  →  hashes, canonical  →  events  →  merkle, ledger, shards, ...
 
 Phase 1+ modules (Guardian replication; not part of v1.0):
-  protocol.federation, protocol.partition, protocol.view_change
+  protocol.federation, protocol.partition
+  See scaffolding.view_change for the non-production view-change helper.
 
 Proof System Interface:
   protocol.proof_interface defines the strict protocol boundary for all proof backends.
@@ -53,5 +54,4 @@ __all__ = [
     # Guardian replication (Phase 1+ only; not part of v1.0)
     "federation",
     "partition",
-    "view_change",
 ]

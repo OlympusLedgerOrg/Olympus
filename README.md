@@ -97,7 +97,7 @@ map and developer entrypoints.
 
 ```text
 api/        FastAPI application and ingestion routes
-app_testonly/  test-only application wiring used by smoke/dev flows
+scaffolding/ non-production helpers (test-only FastAPI wiring, view-change scaffolding)
 docs/       protocol notes, threat model material, and walkthroughs
 examples/   sample artifacts and notebook examples
 integrations/ interoperability helpers for Ethereum/IPFS-style bridges

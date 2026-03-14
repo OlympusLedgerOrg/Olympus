@@ -6,7 +6,7 @@ import hypothesis.strategies as st
 import pytest
 from hypothesis import assume, given, settings
 
-from protocol.view_change import (
+from scaffolding.view_change import (
     GRACE_EPOCHS,
     MAX_WATERMARK_WINDOW,
     ConsensusState,
@@ -280,4 +280,3 @@ def test_gc_old_rounds_removes_only_old_rounds(
         assert consensus.low_watermark == min(expected_remaining)
     else:
         assert consensus.low_watermark == cutoff
-

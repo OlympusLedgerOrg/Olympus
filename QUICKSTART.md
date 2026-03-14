@@ -128,7 +128,7 @@ python -c "from psycopg import connect; connect('$DATABASE_URL'); print('Connect
 python tools/validate_schemas.py
 
 # Run linting
-ruff check protocol/ storage/ api/ app_testonly/ tests/
+ruff check protocol/ storage/ api/ scaffolding/ tests/
 
 # Run type checking
 mypy protocol/ storage/ api/
@@ -151,16 +151,16 @@ pytest tests/ -v
 
 ```bash
 # Check code style
-ruff check protocol/ storage/ api/ app_testonly/ tests/
+ruff check protocol/ storage/ api/ scaffolding/ tests/
 
 # Auto-fix issues
-ruff check protocol/ storage/ api/ app_testonly/ tests/ --fix
+ruff check protocol/ storage/ api/ scaffolding/ tests/ --fix
 
 # Format code
-ruff format protocol/ storage/ api/ app_testonly/ tests/
+ruff format protocol/ storage/ api/ scaffolding/ tests/
 
 # Check formatting (without changing)
-ruff format --check protocol/ storage/ api/ app_testonly/ tests/
+ruff format --check protocol/ storage/ api/ scaffolding/ tests/
 ```
 
 ### Type Checking
@@ -181,7 +181,7 @@ pytest tests/test_ledger.py -v
 
 # Run with coverage
 pytest tests/ -m "not postgres" \
-  --cov=protocol --cov=storage --cov=api --cov=app_testonly \
+  --cov=protocol --cov=storage --cov=api --cov=scaffolding \
   --cov-report=term-missing --cov-report=html
 
 # View coverage report
@@ -193,10 +193,10 @@ xdg-open htmlcov/index.html  # Linux
 
 ```bash
 # Run bandit security scan
-bandit -r protocol/ storage/ api/ app_testonly/
+bandit -r protocol/ storage/ api/ scaffolding/
 
 # Generate baseline (optional)
-bandit-baseline -r protocol/ storage/ api/ app_testonly/
+bandit-baseline -r protocol/ storage/ api/ scaffolding/
 ```
 
 ---
@@ -373,20 +373,20 @@ echo "🔍 Validating schemas..."
 python tools/validate_schemas.py
 
 echo "🔍 Running ruff linting..."
-ruff check protocol/ storage/ api/ app_testonly/ tests/
+ruff check protocol/ storage/ api/ scaffolding/ tests/
 
 echo "🔍 Running ruff format check..."
-ruff format --check protocol/ storage/ api/ app_testonly/ tests/
+ruff format --check protocol/ storage/ api/ scaffolding/ tests/
 
 echo "🔍 Running mypy type checking..."
 mypy protocol/ storage/ api/
 
 echo "🔍 Running bandit security scan..."
-bandit -r protocol/ storage/ api/ app_testonly/ || true
+bandit -r protocol/ storage/ api/ scaffolding/ || true
 
 echo "🔍 Running pytest (fast lane)..."
 pytest tests/ -m "not postgres" \
-  --cov=protocol --cov=storage --cov=api --cov=app_testonly \
+  --cov=protocol --cov=storage --cov=api --cov=scaffolding \
   --cov-report=term-missing
 
 echo "✅ All checks passed!"
@@ -649,10 +649,10 @@ mypy protocol/ storage/ api/
 pytest tests/ -v
 
 # Coverage
-pytest --cov=protocol --cov=app_testonly
+pytest --cov=protocol --cov=scaffolding
 
 # Security
-bandit -r protocol/ storage/ api/ app_testonly/
+bandit -r protocol/ storage/ api/ scaffolding/
 
 # Run app
 uvicorn api.app:app --reload
