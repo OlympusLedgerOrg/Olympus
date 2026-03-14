@@ -109,6 +109,16 @@ docker compose exec db pg_isready -U olympus -d olympus
 python -c "from psycopg import connect; connect('$DATABASE_URL'); print('Connected!')"
 ```
 
+### Environment Variable Reference
+
+| Variable | Required | Description |
+|---|---|---|
+| `DATABASE_URL` | Yes (API/DB tests) | PostgreSQL connection string |
+| `TEST_DATABASE_URL` | No | Separate connection string for test runs |
+| `LOG_LEVEL` | No | Python log level (`DEBUG`, `INFO`, …) |
+| `OLYMPUS_DEBUG_UI` | No | Set to `true` to enable the debug UI |
+| `OLYMPUS_HALO2_ENABLED` | No | Set to `true` to enable the Halo2 proof backend. **Intentionally a no-op in v1.0** — Halo2 support is planned for Phase 1+. The flag exists so deployment tooling can reference it before the backend ships. |
+
 ---
 
 ## 3. Verify Installation

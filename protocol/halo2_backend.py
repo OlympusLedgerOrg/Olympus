@@ -39,6 +39,7 @@ future Halo2 implementation can be added without changing protocol-layer code.
 
 from __future__ import annotations
 
+import os
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -295,7 +296,7 @@ class RecursiveProofAccumulator:
             event_index=event_index,
             document_id=self.document_id,
             version=self.version,
-            revealed_indices=revealed_indices,
+            revealed_indices=tuple(revealed_indices),
             original_root=self.original_root,
             redacted_commitment=redacted_commitment,
             revealed_count=revealed_count,
@@ -607,10 +608,14 @@ def is_halo2_available() -> bool:
     """
     Check if Halo2 backend is available.
 
+    Controlled by the ``OLYMPUS_HALO2_ENABLED`` environment variable.
+    The flag is intentionally a no-op in v1.0 — Halo2 support is planned
+    for Phase 1+.
+
     Returns:
         False (Halo2 not implemented in v1.0)
     """
-    return False
+    return os.environ.get("OLYMPUS_HALO2_ENABLED", "").lower() == "true"
 
 
 def get_halo2_version() -> str | None:

@@ -486,11 +486,12 @@ class UnifiedProofGenerator:
             UnifiedProof
 
         Raises:
-            NotImplementedError: Generation not yet implemented
+            BackendNotAvailableError: Generation not yet implemented
         """
-        raise NotImplementedError(
+        raise BackendNotAvailableError(
             "Unified proof generation is planned for Phase 1+. "
-            "Currently in protocol hardening phase (verification focus)."
+            "Use UnifiedProofVerifier for verification of existing proofs. "
+            "See docs/09_protocol_spec.md for the current protocol scope."
         )
 
 

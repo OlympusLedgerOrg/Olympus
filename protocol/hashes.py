@@ -12,7 +12,6 @@ Protocol notes:
   contain literal ``|`` characters.
 """
 
-import warnings
 from typing import Any
 
 import blake3
@@ -171,30 +170,6 @@ def hash_string(text: str) -> bytes:
     """Legacy UTF-8 string hashing with explicit domain separation."""
     payload = text.encode("utf-8")
     return blake3.blake3(LEGACY_STRING_PREFIX + payload).digest()
-
-
-def merkle_parent_hash(left: bytes, right: bytes) -> bytes:
-    """
-    Legacy: Compute parent hash in Merkle tree.
-    This function is more lenient for backward compatibility.
-    It accepts any byte strings, not just 32-byte hashes.
-
-    Deprecated: will be removed in a future release (merkle_v2). Use
-    :func:`node_hash` directly for domain-separated internal nodes.
-    """
-    warnings.warn(
-        "merkle_parent_hash is deprecated and will be removed in merkle_v2; "
-        "use node_hash(left, right) instead.",
-        DeprecationWarning,
-        stacklevel=2,
-    )
-    # For legacy compatibility, accept any byte strings
-    # Hash them first if they're not already 32 bytes
-    if len(left) != 32:
-        left = hash_bytes(left)
-    if len(right) != 32:
-        right = hash_bytes(right)
-    return node_hash(left, right)
 
 
 def blake3_to_field_element(seed: bytes) -> str:

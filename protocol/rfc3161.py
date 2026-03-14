@@ -485,7 +485,8 @@ def extract_tsa_certificate(tst_bytes: bytes) -> x509.Certificate | None:
         if substrate:
             return None
         signed_data = tst.content
-        return load_certificate(signed_data, certificate=b"")
+        cert: x509.Certificate | None = load_certificate(signed_data, certificate=b"")
+        return cert
     except Exception:
         return None
 

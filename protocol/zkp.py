@@ -55,9 +55,12 @@ class ZKProof:
         except ValueError as exc:
             raise ValueError("proof_bytes must be valid hex-encoded string") from exc
         try:
-            return json.loads(decoded.decode("utf-8"))
+            result = json.loads(decoded.decode("utf-8"))
         except json.JSONDecodeError as exc:
             raise ValueError("proof_bytes did not decode to valid JSON proof object") from exc
+        if not isinstance(result, dict):
+            raise ValueError("proof_bytes did not decode to a JSON object")
+        return result
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> "ZKProof":
