@@ -10,12 +10,19 @@ import {
 import {
   DEFAULT_THEME,
   THEME_STORAGE_KEY,
+  themes,
   type ThemeName,
 } from "@/config/theme.config";
 
 export interface ThemeContextValue {
   theme: ThemeName;
   setTheme: (theme: ThemeName) => void;
+}
+
+const validThemeNames = new Set<string>(themes.map((t) => t.name));
+
+function isValidTheme(value: string): value is ThemeName {
+  return validThemeNames.has(value);
 }
 
 export const ThemeContext = createContext<ThemeContextValue | null>(null);
@@ -31,12 +38,7 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     try {
       const stored = localStorage.getItem(THEME_STORAGE_KEY);
-      if (
-        stored === "fight-club" ||
-        stored === "professional" ||
-        stored === "minimal" ||
-        stored === "accessibility"
-      ) {
+      if (stored && isValidTheme(stored)) {
         setThemeState(stored);
       }
     } catch {

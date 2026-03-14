@@ -35,7 +35,10 @@ export const themes: ThemeConfig[] = [
 
 export const DEFAULT_THEME: ThemeName = "fight-club";
 
-/** Characters used in the glyph rain animation. */
+/**
+ * Characters used in the glyph rain animation.
+ * Binary digits mixed with katakana evoke the Matrix "digital rain" aesthetic.
+ */
 export const GLYPH_CHARS = "01アイウエオカキクケコ";
 
 /** Glyph rain canvas opacity. */

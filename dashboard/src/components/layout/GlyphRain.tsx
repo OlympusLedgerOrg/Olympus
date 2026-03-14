@@ -19,6 +19,11 @@ export function GlyphRain() {
   const animRef = useRef<number>(0);
   const dropsRef = useRef<number[]>([]);
 
+  const initDrops = useCallback((width: number) => {
+    const columns = Math.floor(width / GLYPH_FONT_SIZE);
+    dropsRef.current = new Array(columns).fill(1);
+  }, []);
+
   const draw = useCallback(() => {
     const canvas = canvasRef.current;
     if (!canvas) return;
@@ -30,7 +35,7 @@ export function GlyphRain() {
 
     /* Initialise drops array if column count changed */
     if (dropsRef.current.length !== columns) {
-      dropsRef.current = new Array(columns).fill(1);
+      initDrops(canvas.width);
     }
 
     const drops = dropsRef.current;
@@ -56,7 +61,7 @@ export function GlyphRain() {
     }
 
     animRef.current = requestAnimationFrame(draw);
-  }, []);
+  }, [initDrops]);
 
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -65,9 +70,7 @@ export function GlyphRain() {
     const resize = () => {
       canvas.width = window.innerWidth;
       canvas.height = window.innerHeight;
-      dropsRef.current = new Array(
-        Math.floor(canvas.width / GLYPH_FONT_SIZE)
-      ).fill(1);
+      initDrops(canvas.width);
     };
 
     resize();
@@ -78,7 +81,7 @@ export function GlyphRain() {
       window.removeEventListener("resize", resize);
       cancelAnimationFrame(animRef.current);
     };
-  }, [draw]);
+  }, [draw, initDrops]);
 
   return (
     <canvas
