@@ -46,3 +46,67 @@ def test_anchor_commitment_invalid_hash_rejected():
         metadata={},
     )
     assert not bad.verify(expected_root="00" * 32)
+
+
+def test_anchor_commitment_normalizes_anchored_at_equivalents():
+    ts_with_offset = "2025-01-01T00:00:00+00:00"
+    ts_with_z = "2025-01-01T00:00:00Z"
+
+    anchor_offset = AnchorCommitment.create(
+        anchor_chain="bitcoin",
+        merkle_root="00" * 32,
+        anchor_reference="txid123",
+        anchored_at=ts_with_offset,
+        metadata={"block_height": 100},
+    )
+    anchor_z = AnchorCommitment.create(
+        anchor_chain="bitcoin",
+        merkle_root="00" * 32,
+        anchor_reference="txid123",
+        anchored_at=ts_with_z,
+        metadata={"block_height": 100},
+    )
+
+    assert anchor_offset.anchored_at == "2025-01-01T00:00:00Z"
+    assert anchor_z.anchored_at == "2025-01-01T00:00:00Z"
+    assert anchor_offset.commitment_hash == anchor_z.commitment_hash
+    assert anchor_offset.verify(expected_root="00" * 32)
+    assert anchor_z.verify(expected_root="00" * 32)
+
+
+def test_anchor_commitment_metadata_ordering_is_canonical():
+    metadata_alpha_first = {"alpha": 1, "beta": 2, "gamma": "x"}
+    metadata_gamma_first = {"gamma": "x", "beta": 2, "alpha": 1}
+
+    anchor_alpha = AnchorCommitment.create(
+        anchor_chain="ethereum",
+        merkle_root="11" * 32,
+        anchor_reference="0xabc",
+        anchored_at="2025-02-02T12:00:00Z",
+        metadata=metadata_alpha_first,
+    )
+    anchor_gamma = AnchorCommitment.create(
+        anchor_chain="ethereum",
+        merkle_root="11" * 32,
+        anchor_reference="0xabc",
+        anchored_at="2025-02-02T12:00:00Z",
+        metadata=metadata_gamma_first,
+    )
+
+    assert anchor_alpha.commitment_hash == anchor_gamma.commitment_hash
+    assert anchor_alpha.verify(expected_root="11" * 32)
+    assert anchor_gamma.verify(expected_root="11" * 32)
+
+
+def test_anchor_commitment_handles_large_metadata():
+    metadata = {f"key_{i}": i for i in range(200)}
+
+    anchor = AnchorCommitment.create(
+        anchor_chain="bitcoin",
+        merkle_root="22" * 32,
+        anchor_reference="txid-large",
+        anchored_at="2026-03-14T00:00:00Z",
+        metadata=metadata,
+    )
+
+    assert anchor.verify(expected_root="22" * 32)
