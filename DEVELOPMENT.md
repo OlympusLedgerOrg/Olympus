@@ -42,7 +42,7 @@ This guide covers common development workflows for the Olympus project.
    | `TEST_DATABASE_URL` | No | Separate connection string for test runs |
    | `LOG_LEVEL` | No | Python log level (`DEBUG`, `INFO`, …) |
    | `OLYMPUS_DEBUG_UI` | No | Set to `true` to enable the debug UI |
-   | `OLYMPUS_HALO2_ENABLED` | No | Set to `true` to enable the Halo2 proof backend. **No-op in v1.0** — Halo2 support is planned for Phase 1+. |
+   | `OLYMPUS_HALO2_ENABLED` | No | Set to `true` to enable the Halo2 proof backend. **Intentionally a no-op in v1.0** — Halo2 support is planned for Phase 1+. The flag exists so deployment tooling can reference it before the backend ships. |
 
 5. **Start PostgreSQL** (if using Docker)
    ```bash
