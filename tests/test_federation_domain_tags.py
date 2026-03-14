@@ -64,16 +64,16 @@ def test_event_id_prevents_field_injection() -> None:
     """Length-prefixing prevents '|' injection collisions across event_id fields."""
     timestamp = "2026-03-09T00:00:00Z"
 
-    def vulnerable_event_id(shard_id: str, header_hash: str) -> str:
+    def legacy_separator_based_event_id(shard_id: str, header_hash: str) -> str:
         event_data = HASH_SEPARATOR.join([shard_id, header_hash, timestamp])
         return blake3_hash([EVENT_PREFIX, b"|", event_data.encode("utf-8")]).hex()
 
-    colliding_legacy = vulnerable_event_id("X|Y", "Z")
-    assert colliding_legacy == vulnerable_event_id("X", "Y|Z")
+    colliding_legacy = legacy_separator_based_event_id("X|Y", "Z")
+    assert colliding_legacy == legacy_separator_based_event_id("X", "Y|Z")
 
-    secure_a = event_id("X|Y", "Z", timestamp)
-    secure_b = event_id("X", "Y|Z", timestamp)
-    assert secure_a != secure_b
+    event_id_with_pipe_in_shard = event_id("X|Y", "Z", timestamp)
+    event_id_with_pipe_in_header = event_id("X", "Y|Z", timestamp)
+    assert event_id_with_pipe_in_shard != event_id_with_pipe_in_header
 
 
 def test_federation_vote_hash_includes_all_required_fields() -> None:

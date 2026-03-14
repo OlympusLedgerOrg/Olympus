@@ -196,7 +196,7 @@ def event_id(shard_id: str, header_hash: str, timestamp: str) -> str:
     commitment using domain separation. It is computed as:
         hash(concat(EVENT_PREFIX, "|", payload))
 
-    Payload encoding (version 2):
+    Payload encoding (length-prefixed):
         - each field is encoded as: [4-byte big-endian length] || [UTF-8 bytes]
         - payload = concat(shard_id, header_hash, timestamp)
 
