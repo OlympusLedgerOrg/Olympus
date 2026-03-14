@@ -43,6 +43,7 @@ CHECKPOINT_PREFIX = b"OLY:CHECKPOINT:V1"
 TREE_HEAD_PREFIX = b"OLY:TREE-HEAD:V1"
 VRF_SELECTION_PREFIX = b"OLY:VRF-SELECTION:V1"
 _VRF_COMMIT_REVEAL_PREFIX = b"OLY:VRF-COMMIT-REVEAL:V1"
+EVENT_ID_FIELD_NAMES = ("shard_id", "header_hash", "timestamp")
 
 
 def blake3_hash(parts: list[bytes]) -> bytes:
@@ -211,11 +212,8 @@ def event_id(shard_id: str, header_hash: str, timestamp: str) -> str:
     Returns:
         Hex-encoded event ID
     """
-    fields = [
-        ("shard_id", shard_id),
-        ("header_hash", header_hash),
-        ("timestamp", timestamp),
-    ]
+    field_values = (shard_id, header_hash, timestamp)
+    fields = zip(EVENT_ID_FIELD_NAMES, field_values)
     max_field_length = (1 << 32) - 1
     encoded_fields: list[bytes] = []
     for field_name, value in fields:
