@@ -2,7 +2,6 @@ import pytest
 
 from protocol.hashes import (
     HASH_SEPARATOR,
-    LEDGER_PREFIX,
     blake3_hash,
     create_dual_root_commitment,
     hash_bytes,
@@ -92,7 +91,7 @@ def test_dual_root_commitment_preserves_length_prefixes() -> None:
     assert len(commitment) == 100
     assert int.from_bytes(commitment[:2], "big") == 32
     second_length_offset = 2 + len(blake3_root)
-    assert int.from_bytes(commitment[second_length_offset:second_length_offset + 2], "big") == 32
+    assert int.from_bytes(commitment[second_length_offset : second_length_offset + 2], "big") == 32
 
 
 def test_parse_dual_root_commitment_error_message_for_tampering() -> None:

@@ -44,9 +44,7 @@ def _make_blake3_proof(parts: list[str], leaf_index: int = 0) -> tuple[MerklePro
     return proof, tree.get_root()
 
 
-def _make_poseidon_proof(
-    parts: list[str], leaf_index: int = 0
-) -> tuple[PoseidonProof, str]:
+def _make_poseidon_proof(parts: list[str], leaf_index: int = 0) -> tuple[PoseidonProof, str]:
     """Return (PoseidonProof, poseidon_root_decimal) for the given document parts."""
     canonical = RedactionProtocol.canonical_section_bytes_list(parts)
     leaves = [int(blake3_to_field_element(c)) for c in canonical]

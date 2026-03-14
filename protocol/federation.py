@@ -901,9 +901,7 @@ def resolve_canonical_fork(
         if slot is None:
             slot = candidate_slot
         elif candidate_slot != slot:
-            raise ValueError(
-                "Fork candidates must reference the same shard_id, height, and round"
-            )
+            raise ValueError("Fork candidates must reference the same shard_id, height, and round")
 
         signer_count = len(certificate["signatures"])
         try:
@@ -1095,9 +1093,7 @@ def select_vrf_leader(
 
 def build_vrf_reveal_commitment(*, node_id: str, reveal: str) -> str:
     """Build a deterministic commit-reveal binding for VRF anti-grinding rounds."""
-    payload = HASH_SEPARATOR.encode("utf-8").join(
-        [node_id.encode("utf-8"), reveal.encode("utf-8")]
-    )
+    payload = HASH_SEPARATOR.encode("utf-8").join([node_id.encode("utf-8"), reveal.encode("utf-8")])
     return blake3_hash([_VRF_COMMIT_REVEAL_PREFIX, payload]).hex()
 
 
@@ -1362,14 +1358,16 @@ def registry_forest_commitment(registry: FederationRegistry) -> str:
         f"membership:{registry.membership_hash()}".encode(),
     ]
     for node in active_nodes:
-        node_commitment = HASH_SEPARATOR.join([
-            node.node_id,
-            node.pubkey.hex(),
-            node.endpoint,
-            node.operator,
-            node.jurisdiction,
-            node.status,
-        ]).encode("utf-8")
+        node_commitment = HASH_SEPARATOR.join(
+            [
+                node.node_id,
+                node.pubkey.hex(),
+                node.endpoint,
+                node.operator,
+                node.jurisdiction,
+                node.status,
+            ]
+        ).encode("utf-8")
         commitment_parts.append(node_commitment)
 
     return hash_bytes(b"\n".join(commitment_parts)).hex()
@@ -1433,13 +1431,15 @@ class DataAvailabilityChallenge:
 
     def challenge_hash(self) -> str:
         """Return deterministic hash of the challenge for binding responses."""
-        payload = HASH_SEPARATOR.join([
-            self.shard_id,
-            self.header_hash,
-            self.challenger_id,
-            self.challenge_nonce,
-            self.issued_at,
-        ]).encode("utf-8")
+        payload = HASH_SEPARATOR.join(
+            [
+                self.shard_id,
+                self.header_hash,
+                self.challenger_id,
+                self.challenge_nonce,
+                self.issued_at,
+            ]
+        ).encode("utf-8")
         return hash_bytes(payload).hex()
 
 
@@ -1501,15 +1501,17 @@ class ReplicationProof:
 
     def proof_payload_hash(self) -> str:
         """Return the hash of the proof payload (excluding signature)."""
-        payload = HASH_SEPARATOR.join([
-            self.challenge_hash,
-            self.guardian_id,
-            self.ledger_tail_hash,
-            str(self.merkle_root_verified),
-            ",".join(str(i) for i in self.proof_sample_indices),
-            ",".join(self.proof_sample_hashes),
-            self.replicated_at,
-        ]).encode("utf-8")
+        payload = HASH_SEPARATOR.join(
+            [
+                self.challenge_hash,
+                self.guardian_id,
+                self.ledger_tail_hash,
+                str(self.merkle_root_verified),
+                ",".join(str(i) for i in self.proof_sample_indices),
+                ",".join(self.proof_sample_hashes),
+                self.replicated_at,
+            ]
+        ).encode("utf-8")
         return hash_bytes(payload).hex()
 
 
@@ -1782,15 +1784,17 @@ class RecursiveChainProof:
 
     def proof_commitment_hash(self) -> str:
         """Return a deterministic hash commitment for this proof."""
-        payload = HASH_SEPARATOR.join([
-            self.proof_type,
-            self.previous_root,
-            self.current_root,
-            str(self.epoch_start),
-            str(self.epoch_end),
-            str(self.transition_count),
-            self.verification_key_hash,
-        ]).encode("utf-8")
+        payload = HASH_SEPARATOR.join(
+            [
+                self.proof_type,
+                self.previous_root,
+                self.current_root,
+                str(self.epoch_start),
+                str(self.epoch_end),
+                str(self.transition_count),
+                self.verification_key_hash,
+            ]
+        ).encode("utf-8")
         return hash_bytes(payload).hex()
 
 
@@ -1919,13 +1923,15 @@ def verify_epoch_key_rotation(
         True if the rotation is valid, False otherwise
     """
     # Verify the rotation signature by the old key
-    rotation_payload = HASH_SEPARATOR.join([
-        record.node_id,
-        str(record.epoch),
-        record.old_pubkey_hash,
-        record.new_pubkey_hash,
-        record.rotated_at,
-    ]).encode("utf-8")
+    rotation_payload = HASH_SEPARATOR.join(
+        [
+            record.node_id,
+            str(record.epoch),
+            record.old_pubkey_hash,
+            record.new_pubkey_hash,
+            record.rotated_at,
+        ]
+    ).encode("utf-8")
     rotation_hash = hash_bytes(rotation_payload)
 
     try:

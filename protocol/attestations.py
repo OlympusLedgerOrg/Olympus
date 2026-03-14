@@ -6,7 +6,20 @@ signed credentials without storing sensitive identity documents. An
 attestation binds an issuer, a subject wallet, and structured claims to
 an Ed25519 signature. Verifiers check the signature, wallet binding, and
 expiration before accepting a credential.
+
+Issuer Identifier Strategy:
+    - The issuer field is a string identifier for the attestation issuer.
+    - For human-readable contexts, use domain names like "notary.example".
+    - For federation contexts, use the issuer's public key as the identifier
+      via :func:`issuer_id_from_pubkey` to bind issuer identity cryptographically.
+    - Both patterns are supported; the choice is a policy decision.
+
+Credential Binding:
+    - The credential_id field is included in the signed payload (via _payload())
+      to cryptographically bind the credential identifier to the attestation.
+    - This prevents an attacker from reusing a signature with a different credential_id.
 """
+
 from __future__ import annotations
 
 from collections.abc import Mapping
@@ -23,6 +36,35 @@ from .timestamps import current_timestamp
 
 
 _SEP = HASH_SEPARATOR.encode("utf-8")
+
+
+def issuer_id_from_pubkey(pubkey: bytes | nacl.signing.VerifyKey) -> str:
+    """
+    Derive an issuer identifier from a public key.
+
+    In federation contexts, using the issuer's public key as the identifier
+    provides cryptographic binding of issuer identity. This function returns
+    the hex-encoded representation of the public key for use as an issuer field.
+
+    Args:
+        pubkey: Ed25519 public key (raw bytes or VerifyKey).
+
+    Returns:
+        Hex-encoded public key string suitable for use as an issuer identifier.
+
+    Example:
+        >>> verify_key = signing_key.verify_key
+        >>> issuer = issuer_id_from_pubkey(verify_key)
+        >>> attestation = sign_attestation(
+        ...     issuer=issuer,
+        ...     subject_wallet="wallet-123",
+        ...     claims={"resident": True},
+        ...     signing_key=signing_key,
+        ... )
+    """
+    if isinstance(pubkey, nacl.signing.VerifyKey):
+        return bytes(pubkey).hex()
+    return pubkey.hex()
 
 
 def _normalize_timestamp(value: str | None) -> str | None:

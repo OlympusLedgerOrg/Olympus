@@ -39,8 +39,7 @@ from fastapi import FastAPI, HTTPException, Query, Request
 from pydantic import BaseModel
 
 from api.ingest import _authorize_and_rate_limit, router as ingest_router
-from api.sth import router as sth_router
-from api.sth import set_storage as set_sth_storage
+from api.sth import router as sth_router, set_storage as set_sth_storage
 from protocol.shards import canonical_header
 from protocol.telemetry import opentelemetry_available, prometheus_available, record_smt_divergence
 
@@ -778,7 +777,7 @@ async def alert_smt_divergence(
 
         Returns:
             Confirmation that the divergence event was recorded.
-        """
+    """
     _authorize_and_rate_limit(request, action="verify")
     record_smt_divergence(
         shard_id=shard_id,

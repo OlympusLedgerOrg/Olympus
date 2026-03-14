@@ -92,8 +92,8 @@ class TestHtmlSanitizationHardening:
         """Safe attributes like id and class must be preserved."""
         html = b"<html><body><div class='c' id='d'>x</div></body></html>"
         result = Canonicalizer.html_v1(html)
-        assert b'class=' in result
-        assert b'id=' in result
+        assert b"class=" in result
+        assert b"id=" in result
 
 
 class TestShouldStripAttribute:
@@ -422,12 +422,7 @@ class TestCrossLanguageEdgeCases:
 
     def test_html_preserves_content_through_tag_stripping(self):
         """Content outside stripped tags must survive."""
-        html = (
-            b"<html><body>"
-            b"<noscript>hidden</noscript>"
-            b"<p>visible</p>"
-            b"</body></html>"
-        )
+        html = b"<html><body><noscript>hidden</noscript><p>visible</p></body></html>"
         result = Canonicalizer.html_v1(html)
         assert b"visible" in result
         assert b"hidden" not in result

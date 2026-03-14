@@ -123,7 +123,9 @@ def create_verification_bundle(
 
     if previous_sth is not None:
         bundle["previous_sth"] = (
-            previous_sth.to_dict() if isinstance(previous_sth, SignedTreeHead) else dict(previous_sth)
+            previous_sth.to_dict()
+            if isinstance(previous_sth, SignedTreeHead)
+            else dict(previous_sth)
         )
 
     if consistency_proof is not None:

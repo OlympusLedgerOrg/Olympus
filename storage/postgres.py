@@ -598,9 +598,7 @@ class StorageLayer:
             poseidon_root_decimal: str | None = None
             if poseidon_root is not None:
                 if len(poseidon_root) != 32:
-                    raise ValueError(
-                        f"poseidon_root must be 32 bytes, got {len(poseidon_root)}"
-                    )
+                    raise ValueError(f"poseidon_root must be 32 bytes, got {len(poseidon_root)}")
                 poseidon_root_decimal = str(int.from_bytes(poseidon_root, byteorder="big"))
                 ledger_payload["poseidon_root"] = poseidon_root_decimal
 

@@ -432,7 +432,7 @@ def validate_proof_consistency(
 
 
 def validate_batch_consistency(
-    proof_triplets: list[tuple[MerkleProof, PoseidonProof, DualHashCommitment]]
+    proof_triplets: list[tuple[MerkleProof, PoseidonProof, DualHashCommitment]],
 ) -> BatchConsistencyReport:
     """
     Validate multiple dual-anchor proof pairs in one call.

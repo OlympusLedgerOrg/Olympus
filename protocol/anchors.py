@@ -6,6 +6,7 @@ Anchors publish Merkle roots or ledger heads to external immutable systems
 anchored chain, reference (txid or receipt ID), timestamp, and a
 domain-separated commitment hash that verifiers can recompute locally.
 """
+
 from __future__ import annotations
 
 from dataclasses import dataclass

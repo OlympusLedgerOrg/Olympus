@@ -8,9 +8,9 @@ from pathlib import Path
 import pytest
 
 from proofs.proof_generator import (
+    SUPPORTED_CIRCUITS,
     CircuitConfig,
     ProofGenerator,
-    SUPPORTED_CIRCUITS,
     Witness,
     write_circuit_parameters,
 )
@@ -290,35 +290,41 @@ class TestNonExistenceInputValidation:
     def test_rejects_old_leaf_index_input(self):
         gen = ProofGenerator("non_existence")
         with pytest.raises(ValueError, match="leafIndex"):
-            gen._validate_inputs({"root": "1", "key": [0] * 32, "leafIndex": "5",
-                                  "pathElements": ["0"] * 256})
+            gen._validate_inputs(
+                {"root": "1", "key": [0] * 32, "leafIndex": "5", "pathElements": ["0"] * 256}
+            )
 
     def test_rejects_old_path_indices_input(self):
         gen = ProofGenerator("non_existence")
         with pytest.raises(ValueError, match="pathIndices"):
-            gen._validate_inputs({"root": "1", "key": [0] * 32,
-                                  "pathElements": ["0"] * 256,
-                                  "pathIndices": [0] * 256})
+            gen._validate_inputs(
+                {
+                    "root": "1",
+                    "key": [0] * 32,
+                    "pathElements": ["0"] * 256,
+                    "pathIndices": [0] * 256,
+                }
+            )
 
     def test_rejects_key_wrong_length(self):
         gen = ProofGenerator("non_existence")
         with pytest.raises(ValueError, match="32"):
-            gen._validate_inputs({"root": "1", "key": [0] * 31,
-                                  "pathElements": ["0"] * 256})
+            gen._validate_inputs({"root": "1", "key": [0] * 31, "pathElements": ["0"] * 256})
 
     def test_rejects_key_byte_out_of_range(self):
         gen = ProofGenerator("non_existence")
         bad_key = [0] * 32
         bad_key[5] = 256  # out of range
         with pytest.raises(ValueError, match=r"key\[5\]"):
-            gen._validate_inputs({"root": "1", "key": bad_key,
-                                  "pathElements": ["0"] * 256})
+            gen._validate_inputs({"root": "1", "key": bad_key, "pathElements": ["0"] * 256})
 
     def test_accepts_valid_non_existence_inputs(self):
         gen = ProofGenerator("non_existence")
         # Should not raise
-        gen._validate_inputs({
-            "root": "12345",
-            "key": list(range(32)),
-            "pathElements": ["0"] * 256,
-        })
+        gen._validate_inputs(
+            {
+                "root": "12345",
+                "key": list(range(32)),
+                "pathElements": ["0"] * 256,
+            }
+        )

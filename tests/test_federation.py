@@ -1011,12 +1011,8 @@ def test_resolve_canonical_fork_rejects_timestamp_outliers() -> None:
     cert_outlier = build_quorum_certificate(
         header_outlier,
         [
-            sign_federated_header(
-                header_outlier, "olympus-node-1", _test_signing_key(1), registry
-            ),
-            sign_federated_header(
-                header_outlier, "olympus-node-2", _test_signing_key(2), registry
-            ),
+            sign_federated_header(header_outlier, "olympus-node-1", _test_signing_key(1), registry),
+            sign_federated_header(header_outlier, "olympus-node-2", _test_signing_key(2), registry),
         ],
         registry,
     )
@@ -1529,13 +1525,15 @@ def test_verify_epoch_key_rotation_validates_signature() -> None:
     new_pubkey_hash = hash_bytes(new_key.verify_key.encode()).hex()
 
     # Create the rotation payload
-    rotation_payload = HASH_SEPARATOR.join([
-        "olympus-node-1",
-        "5",
-        old_pubkey_hash,
-        new_pubkey_hash,
-        "2026-03-14T12:00:00Z",
-    ]).encode()
+    rotation_payload = HASH_SEPARATOR.join(
+        [
+            "olympus-node-1",
+            "5",
+            old_pubkey_hash,
+            new_pubkey_hash,
+            "2026-03-14T12:00:00Z",
+        ]
+    ).encode()
     rotation_hash = hash_bytes(rotation_payload)
 
     # Sign with old key

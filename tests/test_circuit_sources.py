@@ -92,21 +92,24 @@ class TestB5NonExistenceKeyBased:
 
     def test_non_existence_path_derivation_is_internal(self):
         src = (REPO_ROOT / "proofs" / "circuits" / "non_existence.circom").read_text()
-        assert "signal input pathIndices" not in src, \
+        assert "signal input pathIndices" not in src, (
             "pathIndices must be internal (derived from key), not a prover input"
+        )
         assert "signal pathIndices" in src, "internal pathIndices signal not found"
 
     def test_non_existence_msb_first_bit_ordering(self):
         # Verify the circuit comment documents MSB-first and references ssmf.py.
         src = (REPO_ROOT / "proofs" / "circuits" / "non_existence.circom").read_text()
         assert "MSB" in src, "MSB-first ordering not documented in circuit"
-        assert "ssmf.py" in src or "_key_to_path_bits" in src, \
+        assert "ssmf.py" in src or "_key_to_path_bits" in src, (
             "Circuit must reference ssmf.py to make the bit-ordering contract explicit"
+        )
 
     def test_non_existence_depth_is_256(self):
         src = (REPO_ROOT / "proofs" / "circuits" / "parameters.circom").read_text()
-        assert "NON_EXISTENCE_MERKLE_DEPTH = 256" in src, \
+        assert "NON_EXISTENCE_MERKLE_DEPTH = 256" in src, (
             "NON_EXISTENCE_MERKLE_DEPTH must be 256 for a 256-bit sparse Merkle tree"
+        )
 
     def test_non_existence_iszero_still_not_needed(self):
         # The new design removes treeSize entirely so there is no treeSizeIsPositive

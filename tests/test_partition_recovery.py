@@ -524,8 +524,12 @@ def test_fork_resolution_uses_quorum_weight_at_divergence(
 
     # Divergent blocks with different weights at fork point
     fork_round = shared_length
-    chain_a = shared + [_block(fork_round + i, weight_a, f"a-{fork_round + i}") for i in range(post_fork_length)]
-    chain_b = shared + [_block(fork_round + i, weight_b, f"b-{fork_round + i}") for i in range(post_fork_length)]
+    chain_a = shared + [
+        _block(fork_round + i, weight_a, f"a-{fork_round + i}") for i in range(post_fork_length)
+    ]
+    chain_b = shared + [
+        _block(fork_round + i, weight_b, f"b-{fork_round + i}") for i in range(post_fork_length)
+    ]
 
     winner = resolve_partition_fork(tuple(chain_a), tuple(chain_b))
 
@@ -557,8 +561,12 @@ def test_fork_resolution_vrf_tiebreaker_is_deterministic(
 
     # Equal weight, different VRF hashes
     fork_round = shared_length
-    chain_a = shared + [_block(fork_round + i, 3, f"{seed_a}-{fork_round + i}") for i in range(post_fork_length)]
-    chain_b = shared + [_block(fork_round + i, 3, f"{seed_b}-{fork_round + i}") for i in range(post_fork_length)]
+    chain_a = shared + [
+        _block(fork_round + i, 3, f"{seed_a}-{fork_round + i}") for i in range(post_fork_length)
+    ]
+    chain_b = shared + [
+        _block(fork_round + i, 3, f"{seed_b}-{fork_round + i}") for i in range(post_fork_length)
+    ]
 
     winner = resolve_partition_fork(tuple(chain_a), tuple(chain_b))
 
@@ -583,7 +591,10 @@ def test_fork_resolution_vrf_tiebreaker_is_deterministic(
                 lambda i: f"2026-03-10T00:00:{i:02d}Z"
             ),
             witnesses=st.lists(
-                st.text(alphabet="nN123456789", min_size=2, max_size=4), min_size=1, max_size=5, unique=True
+                st.text(alphabet="nN123456789", min_size=2, max_size=4),
+                min_size=1,
+                max_size=5,
+                unique=True,
             ).map(tuple),
         ),
         min_size=1,
@@ -613,7 +624,9 @@ def test_build_inclusion_list_filters_by_witness_threshold(
         )
 
     # Verify all eligible tx_ids are included
-    eligible = {tx_id for tx_id, witnesses in witness_counts.items() if len(witnesses) >= minimum_witnesses}
+    eligible = {
+        tx_id for tx_id, witnesses in witness_counts.items() if len(witnesses) >= minimum_witnesses
+    }
     assert set(inclusion_list) == eligible
 
 
@@ -657,7 +670,11 @@ def test_build_inclusion_list_sorts_by_timestamp_then_broadcast_order(
         timestamp_next, index_next = tx_order[tx_next]
 
         # Current should be <= next in sort order
-        assert (timestamp_current, index_current, tx_current) <= (timestamp_next, index_next, tx_next)
+        assert (timestamp_current, index_current, tx_current) <= (
+            timestamp_next,
+            index_next,
+            tx_next,
+        )
 
 
 @given(
@@ -689,7 +706,9 @@ def test_proof_of_elapsed_rounds_matches_last_minus_first(
 
 
 @given(
-    round_sequence=st.lists(st.integers(min_value=0, max_value=100), min_size=1, max_size=15, unique=True),
+    round_sequence=st.lists(
+        st.integers(min_value=0, max_value=100), min_size=1, max_size=15, unique=True
+    ),
     leader_count=st.integers(min_value=1, max_value=5),
     rotation_window=st.integers(min_value=1, max_value=3),
 )
@@ -720,8 +739,8 @@ def test_select_rotating_leader_cycles_through_all_leaders(
         sequential_rounds = list(range(min_round, min_round + full_cycle_size))
 
         cycle_leaders = {
-            select_rotating_leader(r, leaders, rotation_window=rotation_window) for r in sequential_rounds
+            select_rotating_leader(r, leaders, rotation_window=rotation_window)
+            for r in sequential_rounds
         }
         # Should see all leaders when we go through a full cycle of sequential rounds
         assert len(cycle_leaders) == leader_count
-

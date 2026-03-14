@@ -287,7 +287,9 @@ def parse_dual_root_commitment(commitment: bytes) -> tuple[bytes, bytes]:
     """
     expected_length = 2 + 32 + 2 + 32 + 32
     if len(commitment) != expected_length:
-        raise ValueError(f"Dual root commitment must be {expected_length} bytes, got {len(commitment)}")
+        raise ValueError(
+            f"Dual root commitment must be {expected_length} bytes, got {len(commitment)}"
+        )
 
     idx = 0
     blake3_len = int.from_bytes(commitment[idx : idx + 2], byteorder="big")

@@ -35,6 +35,7 @@ import os
 import uuid
 from datetime import datetime
 
+
 try:
     from datetime import UTC
 except ImportError:  # Python < 3.11
@@ -924,9 +925,7 @@ def test_verify_state_replay_detects_header_root_divergence(storage, signing_key
     - verify_state_replay detects a count mismatch (more leaves than headers).
     - get_latest_header detects a root mismatch via _assert_root_matches_state.
     """
-    shard_id = (
-        f"test_verify_state_replay_detects_divergence_{datetime.now(UTC).timestamp()}"
-    )
+    shard_id = f"test_verify_state_replay_detects_divergence_{datetime.now(UTC).timestamp()}"
 
     storage.append_record(
         shard_id=shard_id,

@@ -3,10 +3,10 @@
 from __future__ import annotations
 
 from protocol.hashes import (
+    _SEP,
     EVENT_PREFIX,
     FEDERATION_PREFIX,
     HASH_SEPARATOR,
-    _SEP,
     blake3_hash,
     event_id,
     federation_vote_hash,

@@ -469,7 +469,10 @@ def test_full_dual_proof_workflow_with_selective_disclosure():
 
     selective_disclosure_proof = RedactionProtocol.create_redaction_proof(tree, revealed_indices)
     revealed_content = [parts[idx] for idx in revealed_indices]
-    assert RedactionProtocol.verify_redaction_proof(selective_disclosure_proof, revealed_content) is True
+    assert (
+        RedactionProtocol.verify_redaction_proof(selective_disclosure_proof, revealed_content)
+        is True
+    )
 
     smt_root = smt.get_root()
     assert wrapped.verify_smt_anchor(smt_root) is True

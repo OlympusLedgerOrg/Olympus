@@ -11,9 +11,7 @@ from protocol.ledger import Ledger, LedgerEntry
 from protocol.merkle import MerkleProof, MerkleTree, merkle_leaf_hash, verify_proof
 
 
-VECTOR_PATH = (
-    Path(__file__).resolve().parent.parent / "test_vectors" / "proofs" / "end_to_end.json"
-)
+VECTOR_PATH = Path(__file__).resolve().parent.parent / "test_vectors" / "proofs" / "end_to_end.json"
 
 
 def _load_end_to_end_vector() -> dict:

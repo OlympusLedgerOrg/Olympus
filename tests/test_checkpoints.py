@@ -106,9 +106,7 @@ def test_create_checkpoint_basic(registry, signing_keys):
 
 def test_create_checkpoint_with_shards(registry, signing_keys):
     """Test checkpoint creation with shard roots."""
-    genesis = _build_checkpoint(
-        sequence=0, height=4, registry=registry, signing_keys=signing_keys
-    )
+    genesis = _build_checkpoint(sequence=0, height=4, registry=registry, signing_keys=signing_keys)
     shard_roots = {
         "shard1": "root1",
         "shard2": "root2",
@@ -466,9 +464,7 @@ def test_verify_checkpoint_chain_rejects_invalid_consistency_proof(registry, sig
 
 def test_detect_checkpoint_fork_same_sequence(registry, signing_keys):
     """Test fork detection for checkpoints with same sequence."""
-    parent = _build_checkpoint(
-        sequence=0, height=1, registry=registry, signing_keys=signing_keys
-    )
+    parent = _build_checkpoint(sequence=0, height=1, registry=registry, signing_keys=signing_keys)
     checkpoint1 = _build_checkpoint(
         sequence=1,
         height=2,
@@ -539,9 +535,7 @@ def test_detect_checkpoint_fork_no_fork(registry, signing_keys):
 
 def test_detect_gossip_checkpoint_forks_conflict(registry, signing_keys):
     """Gossip should surface conflicting checkpoints from different peers."""
-    genesis = _build_checkpoint(
-        sequence=0, height=1, registry=registry, signing_keys=signing_keys
-    )
+    genesis = _build_checkpoint(sequence=0, height=1, registry=registry, signing_keys=signing_keys)
     peer_one_checkpoint = _build_checkpoint(
         sequence=1,
         height=2,
@@ -578,9 +572,7 @@ def test_detect_gossip_checkpoint_forks_conflict(registry, signing_keys):
 
 def test_detect_gossip_checkpoint_forks_no_conflict(registry, signing_keys):
     """Gossip should remain quiet when peers agree."""
-    genesis = _build_checkpoint(
-        sequence=0, height=1, registry=registry, signing_keys=signing_keys
-    )
+    genesis = _build_checkpoint(sequence=0, height=1, registry=registry, signing_keys=signing_keys)
     peer_checkpoint = _build_checkpoint(
         sequence=1,
         height=2,
@@ -602,9 +594,7 @@ def test_detect_gossip_checkpoint_forks_no_conflict(registry, signing_keys):
 
 def test_detect_gossip_checkpoint_forks_rejects_invalid(registry, signing_keys):
     """Gossip verification should reject invalid checkpoints."""
-    genesis = _build_checkpoint(
-        sequence=0, height=1, registry=registry, signing_keys=signing_keys
-    )
+    genesis = _build_checkpoint(sequence=0, height=1, registry=registry, signing_keys=signing_keys)
     invalid = _build_checkpoint(
         sequence=1,
         height=2,
@@ -719,9 +709,7 @@ def test_checkpoint_registry_get_checkpoint(registry, signing_keys):
     """Test retrieving checkpoints by sequence."""
     registry_store = CheckpointRegistry(registry)
 
-    parent = _build_checkpoint(
-        sequence=0, height=1, registry=registry, signing_keys=signing_keys
-    )
+    parent = _build_checkpoint(sequence=0, height=1, registry=registry, signing_keys=signing_keys)
     registry_store.add_checkpoint(parent)
 
     checkpoint = _build_checkpoint(

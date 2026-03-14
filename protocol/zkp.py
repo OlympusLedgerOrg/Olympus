@@ -18,9 +18,11 @@ from typing import Any
 from .canonical_json import canonical_json_bytes
 from .hashes import hash_bytes
 
+
 OLYMPUS_DEFAULT_PROOF_TYPE = "groth16"
 OLYMPUS_DEFAULT_PROTOCOL_VERSION = "1"
 SUPPORTED_PROOF_PROTOCOL_VERSIONS = {OLYMPUS_DEFAULT_PROTOCOL_VERSION}
+
 
 @dataclass
 class ZKProof:
@@ -63,7 +65,7 @@ class ZKProof:
         return result
 
     @classmethod
-    def from_dict(cls, data: dict[str, Any]) -> "ZKProof":
+    def from_dict(cls, data: dict[str, Any]) -> ZKProof:
         """
         Deserialize a proof from dictionary form (metadata wrapper or legacy dict).
 
