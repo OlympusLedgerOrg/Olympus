@@ -6,6 +6,7 @@ from protocol.hashes import (
     EVENT_PREFIX,
     FEDERATION_PREFIX,
     HASH_SEPARATOR,
+    _SEP,
     blake3_hash,
     event_id,
     federation_vote_hash,
@@ -58,6 +59,24 @@ def test_event_id_binds_to_shard_header_and_timestamp() -> None:
 
     # Different headers should have different event IDs
     assert event_id_1 != event_id_2
+
+
+def test_event_id_prevents_field_injection() -> None:
+    """Length-prefixing prevents '|' injection collisions across event_id fields."""
+    timestamp = "2026-03-09T00:00:00Z"
+
+    def separator_based_event_id(shard_id: str, header_hash: str, timestamp: str) -> str:
+        event_data = HASH_SEPARATOR.join([shard_id, header_hash, timestamp])
+        return blake3_hash([EVENT_PREFIX, _SEP, event_data.encode("utf-8")]).hex()
+
+    colliding_legacy = separator_based_event_id("X|Y", "Z", timestamp)
+    assert colliding_legacy == separator_based_event_id("X", "Y|Z", timestamp)
+    # Hardcoded hash proves the collision occurs with separator-based encoding.
+    assert colliding_legacy == "d1630eba4512d26c098cedbb2f7f7379eb0a698d7872d37e6d35a911dc43ed0e"
+
+    event_id_with_pipe_in_shard = event_id("X|Y", "Z", timestamp)
+    event_id_with_pipe_in_header = event_id("X", "Y|Z", timestamp)
+    assert event_id_with_pipe_in_shard != event_id_with_pipe_in_header
 
 
 def test_federation_vote_hash_includes_all_required_fields() -> None:

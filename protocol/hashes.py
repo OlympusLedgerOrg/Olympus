@@ -43,6 +43,8 @@ CHECKPOINT_PREFIX = b"OLY:CHECKPOINT:V1"
 TREE_HEAD_PREFIX = b"OLY:TREE-HEAD:V1"
 VRF_SELECTION_PREFIX = b"OLY:VRF-SELECTION:V1"
 _VRF_COMMIT_REVEAL_PREFIX = b"OLY:VRF-COMMIT-REVEAL:V1"
+EVENT_ID_FIELD_NAMES = ("shard_id", "header_hash", "timestamp")
+MAX_EVENT_ID_FIELD_LENGTH = (1 << 32) - 1
 
 
 def blake3_hash(parts: list[bytes]) -> bytes:
@@ -194,7 +196,14 @@ def event_id(shard_id: str, header_hash: str, timestamp: str) -> str:
 
     The event ID binds a federation signature to a specific shard header
     commitment using domain separation. It is computed as:
-        hash(EVENT_PREFIX || shard_id || "|" || header_hash || "|" || timestamp)
+        hash(concat(EVENT_PREFIX, "|", payload))
+
+    Payload encoding (length-prefixed):
+        - each field is encoded as: [4-byte big-endian length] followed by UTF-8 bytes
+        - payload concatenates the length-prefixed shard_id, header_hash, and timestamp in order
+
+    Length-prefixing prevents field-injection collisions when ``|`` characters
+    appear inside shard identifiers or other fields.
 
     Args:
         shard_id: Shard identifier
@@ -204,8 +213,20 @@ def event_id(shard_id: str, header_hash: str, timestamp: str) -> str:
     Returns:
         Hex-encoded event ID
     """
-    event_data = HASH_SEPARATOR.join([shard_id, header_hash, timestamp])
-    return blake3_hash([EVENT_PREFIX, _SEP, event_data.encode("utf-8")]).hex()
+    field_values = (shard_id, header_hash, timestamp)
+    encoded_fields: list[bytes] = []
+    for field_name, value in zip(EVENT_ID_FIELD_NAMES, field_values):
+        field_bytes = value.encode("utf-8")
+        if len(field_bytes) > MAX_EVENT_ID_FIELD_LENGTH:
+            raise ValueError(
+                f"event_id field '{field_name}' length {len(field_bytes)} exceeds 4-byte limit "
+                f"{MAX_EVENT_ID_FIELD_LENGTH}"
+            )
+        encoded_fields.append(len(field_bytes).to_bytes(4, byteorder="big"))
+        encoded_fields.append(field_bytes)
+
+    payload = b"".join(encoded_fields)
+    return blake3_hash([EVENT_PREFIX, _SEP, payload]).hex()
 
 
 def create_dual_root_commitment(blake3_root: bytes, poseidon_root: bytes) -> bytes:
