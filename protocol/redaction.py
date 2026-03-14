@@ -17,7 +17,7 @@ Independence guarantee: verification requires only the proof and the
 revealed content — no access to the original document or private keys.
 """
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any
 
 from .canonical import normalize_whitespace
@@ -42,6 +42,48 @@ from .telemetry import get_tracer
 # Poseidon redaction circuit parameters (16 leaves, depth 4)
 _POSEIDON_TREE_DEPTH = 4
 _POSEIDON_MAX_LEAVES = 1 << _POSEIDON_TREE_DEPTH
+
+
+def _poseidon_capacity_error(max_leaves: int, actual: int) -> ValueError:
+    """Return a :class:`ValueError` for exceeding the Poseidon tree capacity."""
+    return ValueError(f"Poseidon tree supports at most {max_leaves} sections; got {actual}")
+
+
+@dataclass
+class RedactionProofRequest:
+    """Request object for :meth:`RedactionProtocol.create_redaction_proof_with_ledger`.
+
+    Encapsulates all parameters needed to create a
+    :class:`~protocol.redaction_ledger.RedactionProofWithLedger`, improving
+    readability at call sites and enabling forward-compatible extension.
+
+    Attributes:
+        document_parts: Ordered list of document sections (same canonical bytes
+            used at commit time).
+        revealed_indices: Zero-based indices of sections to reveal.
+        poseidon_root: Decimal string of the Poseidon root (must match what was
+            inserted via :meth:`~RedactionProtocol.commit_document_dual`).
+        smt: The SMT containing the Poseidon root record.
+        document_id: Document identifier (same as passed to
+            :meth:`~RedactionProtocol.commit_document_dual`).
+        version: Version number (same as passed to
+            :meth:`~RedactionProtocol.commit_document_dual`).
+        zk_proof: Opaque Groth16 proof dict (snarkjs JSON format with keys
+            ``"pi_a"``, ``"pi_b"``, ``"pi_c"``, and ``"protocol"``).
+        poseidon_tree_depth: Depth of the Poseidon Merkle tree.  Determines the
+            maximum number of sections (``2**poseidon_tree_depth``).  Defaults
+            to :data:`_POSEIDON_TREE_DEPTH` (4 → 16 leaves).  Increase this
+            value when documents may exceed that section count.
+    """
+
+    document_parts: list[str]
+    revealed_indices: list[int]
+    poseidon_root: str
+    smt: "SparseMerkleTree"
+    document_id: str
+    version: int
+    zk_proof: "dict[str, Any]"
+    poseidon_tree_depth: int = field(default=_POSEIDON_TREE_DEPTH)
 
 
 @dataclass
@@ -335,6 +377,7 @@ class RedactionProtocol:
         smt: "SparseMerkleTree",
         document_id: str,
         version: int,
+        poseidon_tree_depth: int = _POSEIDON_TREE_DEPTH,
     ) -> tuple["MerkleTree", DualHashCommitment]:
         """
         Commit a document using the dual-anchor strategy.
@@ -365,6 +408,10 @@ class RedactionProtocol:
             document_id: Unique identifier for this document (used in key
                          derivation; see :func:`~protocol.redaction_ledger.poseidon_root_record_key`).
             version: Version number for append-only key derivation.
+            poseidon_tree_depth: Depth of the Poseidon Merkle tree used to
+                produce *poseidon_root*.  Determines the maximum number of
+                sections (``2**poseidon_tree_depth``).  Defaults to
+                :data:`_POSEIDON_TREE_DEPTH`.
 
         Returns:
             Tuple of ``(tree, DualHashCommitment)``. The commitment contains
@@ -373,11 +420,9 @@ class RedactionProtocol:
         Raises:
             ValueError: If *poseidon_root* is not a valid field element.
         """
-        if len(document_parts) > _POSEIDON_MAX_LEAVES:
-            raise ValueError(
-                f"Poseidon tree supports at most {_POSEIDON_MAX_LEAVES} sections; "
-                f"got {len(document_parts)}"
-            )
+        max_leaves = 1 << poseidon_tree_depth
+        if len(document_parts) > max_leaves:
+            raise _poseidon_capacity_error(max_leaves, len(document_parts))
 
         canonical_sections = RedactionProtocol.canonical_section_bytes_list(document_parts)
 
@@ -400,48 +445,66 @@ class RedactionProtocol:
         return tree, commitment
 
     @staticmethod
-    def _poseidon_leaves_from_sections(canonical_sections: list[bytes]) -> list[int]:
-        """Derive Poseidon field elements from canonical section bytes with padding."""
-        if len(canonical_sections) > _POSEIDON_MAX_LEAVES:
-            raise ValueError(
-                f"Poseidon tree supports at most {_POSEIDON_MAX_LEAVES} sections; "
-                f"got {len(canonical_sections)}"
-            )
+    def _poseidon_leaves_from_sections(
+        canonical_sections: list[bytes],
+        depth: int = _POSEIDON_TREE_DEPTH,
+    ) -> list[int]:
+        """Derive Poseidon field elements from canonical section bytes with padding.
+
+        Args:
+            canonical_sections: Canonical byte representations of document sections.
+            depth: Poseidon tree depth; determines the padded leaf count
+                (``2**depth``).  Defaults to :data:`_POSEIDON_TREE_DEPTH`.
+
+        Raises:
+            ValueError: If the number of sections exceeds ``2**depth``.
+        """
+        max_leaves = 1 << depth
+        if len(canonical_sections) > max_leaves:
+            raise _poseidon_capacity_error(max_leaves, len(canonical_sections))
 
         leaves = [int(blake3_to_field_element(part_bytes)) for part_bytes in canonical_sections]
-        if len(leaves) < _POSEIDON_MAX_LEAVES:
-            leaves.extend([0] * (_POSEIDON_MAX_LEAVES - len(leaves)))
+        if len(leaves) < max_leaves:
+            leaves.extend([0] * (max_leaves - len(leaves)))
         return leaves
 
     @classmethod
-    def build_poseidon_tree(cls, document_parts: list[str]) -> tuple[PoseidonMerkleTree, list[int]]:
+    def build_poseidon_tree(
+        cls,
+        document_parts: list[str],
+        depth: int = _POSEIDON_TREE_DEPTH,
+    ) -> tuple[PoseidonMerkleTree, list[int]]:
         """
         Build the Poseidon Merkle tree for a document.
 
-        Returns both the tree and the padded leaf vector (length 16 for depth-4).
+        Returns both the tree and the padded leaf vector (``2**depth`` leaves).
+
+        Args:
+            document_parts: Ordered list of document sections.
+            depth: Poseidon tree depth; the tree supports ``2**depth`` sections.
+                Defaults to :data:`_POSEIDON_TREE_DEPTH` (4 → 16 sections).
 
         Raises:
-            ValueError: If document_parts exceeds 16 sections.
+            ValueError: If ``document_parts`` exceeds ``2**depth`` sections.
         """
+        max_leaves = 1 << depth
         # L3-B: Explicit guard before hashing (defense-in-depth)
-        if len(document_parts) > _POSEIDON_MAX_LEAVES:
-            raise ValueError(
-                f"Poseidon tree supports at most {_POSEIDON_MAX_LEAVES} sections; "
-                f"got {len(document_parts)}"
-            )
+        if len(document_parts) > max_leaves:
+            raise _poseidon_capacity_error(max_leaves, len(document_parts))
         canonical_sections = cls.canonical_section_bytes_list(document_parts)
-        leaves = cls._poseidon_leaves_from_sections(canonical_sections)
-        return PoseidonMerkleTree(leaves, depth=_POSEIDON_TREE_DEPTH), leaves
+        leaves = cls._poseidon_leaves_from_sections(canonical_sections, depth=depth)
+        return PoseidonMerkleTree(leaves, depth=depth), leaves
 
     @staticmethod
     def create_redaction_proof_with_ledger(
-        document_parts: list[str],
-        revealed_indices: list[int],
-        poseidon_root: str,
-        smt: "SparseMerkleTree",
-        document_id: str,
-        version: int,
-        zk_proof: "dict[str, Any]",
+        document_parts: "RedactionProofRequest | list[str]",
+        revealed_indices: list[int] | None = None,
+        poseidon_root: str | None = None,
+        smt: "SparseMerkleTree | None" = None,
+        document_id: str | None = None,
+        version: int | None = None,
+        zk_proof: "dict[str, Any] | None" = None,
+        poseidon_tree_depth: int = _POSEIDON_TREE_DEPTH,
     ) -> "RedactionProofWithLedger":
         """
         Create a :class:`~protocol.redaction_ledger.RedactionProofWithLedger`.
@@ -450,27 +513,73 @@ class RedactionProtocol:
         previously inserted by :meth:`commit_document_dual`, then wraps it
         together with the ZK proof blob and its public inputs.
 
+        This method accepts either a :class:`RedactionProofRequest` object as
+        the sole positional argument (via *document_parts*), or the individual
+        keyword/positional arguments for backwards compatibility.
+
         Args:
-            document_parts: Ordered list of document sections (same canonical
-                             bytes used at commit time).
-            revealed_indices: Zero-based indices of sections to reveal (used to
-                              build the inner :class:`RedactionProof`).
+            document_parts: A :class:`RedactionProofRequest` that bundles all
+                parameters, **or** the ordered list of document sections (same
+                canonical bytes used at commit time) when passing arguments
+                individually.
+            revealed_indices: Zero-based indices of sections to reveal.  Must
+                be provided when *document_parts* is a list.
             poseidon_root: Decimal string of the Poseidon root (must match what
-                           was inserted via :meth:`commit_document_dual`).
-            smt: The SMT containing the Poseidon root record.
+                was inserted via :meth:`commit_document_dual`).  Must be
+                provided when *document_parts* is a list.
+            smt: The SMT containing the Poseidon root record.  Must be provided
+                when *document_parts* is a list.
             document_id: Document identifier (same as passed to
-                         :meth:`commit_document_dual`).
+                :meth:`commit_document_dual`).  Must be provided when
+                *document_parts* is a list.
             version: Version number (same as passed to
-                     :meth:`commit_document_dual`).
-            zk_proof: Opaque Groth16 proof dict. The expected structure follows
-                      the snarkjs JSON format with keys ``"pi_a"``, ``"pi_b"``,
-                      ``"pi_c"``, and ``"protocol"``. This layer treats the
-                      dict as opaque and passes it through to the ZK verifier.
+                :meth:`commit_document_dual`).  Must be provided when
+                *document_parts* is a list.
+            zk_proof: Opaque Groth16 proof dict.  The expected structure
+                follows the snarkjs JSON format with keys ``"pi_a"``,
+                ``"pi_b"``, ``"pi_c"``, and ``"protocol"``.  This layer treats
+                the dict as opaque and passes it through to the ZK verifier.
+                Must be provided when *document_parts* is a list.
+            poseidon_tree_depth: Depth of the Poseidon Merkle tree when passing
+                arguments individually.  Ignored when a
+                :class:`RedactionProofRequest` is provided (use
+                :attr:`RedactionProofRequest.poseidon_tree_depth` instead).
+                Defaults to :data:`_POSEIDON_TREE_DEPTH`.
+
         Returns:
             A :class:`~protocol.redaction_ledger.RedactionProofWithLedger`
             ready for transport and verification.
         """
-        poseidon_tree, poseidon_leaves = RedactionProtocol.build_poseidon_tree(document_parts)
+        # Unpack from a request object if one was provided
+        if isinstance(document_parts, RedactionProofRequest):
+            req = document_parts
+            document_parts = req.document_parts
+            revealed_indices = req.revealed_indices
+            poseidon_root = req.poseidon_root
+            smt = req.smt
+            document_id = req.document_id
+            version = req.version
+            zk_proof = req.zk_proof
+            depth = req.poseidon_tree_depth
+        else:
+            if (
+                revealed_indices is None
+                or poseidon_root is None
+                or smt is None
+                or document_id is None
+                or version is None
+                or zk_proof is None
+            ):
+                raise ValueError(
+                    "All of revealed_indices, poseidon_root, smt, document_id, version, "
+                    "and zk_proof must be provided when document_parts is passed as a list"
+                )
+            depth = poseidon_tree_depth
+
+        max_leaves = 1 << depth
+        poseidon_tree, poseidon_leaves = RedactionProtocol.build_poseidon_tree(
+            document_parts, depth=depth
+        )
         computed_poseidon_root = poseidon_tree.get_root()
         normalized_poseidon_root = str(int(poseidon_root))
         poseidon_root_to_bytes(normalized_poseidon_root)
@@ -486,9 +595,9 @@ class RedactionProtocol:
 
         revealed_set = set(revealed_indices)
         nullified_leaves = [
-            poseidon_leaves[i] if i in revealed_set else 0 for i in range(_POSEIDON_MAX_LEAVES)
+            poseidon_leaves[i] if i in revealed_set else 0 for i in range(max_leaves)
         ]
-        redacted_tree = PoseidonMerkleTree(nullified_leaves, depth=_POSEIDON_TREE_DEPTH)
+        redacted_tree = PoseidonMerkleTree(nullified_leaves, depth=depth)
         redacted_commitment = redacted_tree.get_root()
         revealed_count = len(revealed_set)
 
@@ -609,6 +718,7 @@ class RedactionProtocol:
     def create_redaction_correctness_proof(
         document_parts: list[str],
         revealed_indices: list[int],
+        poseidon_tree_depth: int = _POSEIDON_TREE_DEPTH,
     ) -> RedactionCorrectnessProof:
         """
         Create a correctness proof binding original and redacted commitments.
@@ -621,29 +731,33 @@ class RedactionProtocol:
         Args:
             document_parts: Ordered list of original document sections.
             revealed_indices: Zero-based indices of sections to reveal.
+            poseidon_tree_depth: Depth of the Poseidon Merkle tree.  Determines
+                the maximum number of sections (``2**poseidon_tree_depth``).
+                Defaults to :data:`_POSEIDON_TREE_DEPTH`.
 
         Returns:
             :class:`RedactionCorrectnessProof` binding both commitments.
 
         Raises:
             ValueError: If revealed indices are out of bounds or if document
-                exceeds 16 sections.
+                exceeds ``2**poseidon_tree_depth`` sections.
         """
         from .hashes import HASH_SEPARATOR
 
+        max_leaves = 1 << poseidon_tree_depth
+
         # L3-B: Explicit guard before hashing
-        if len(document_parts) > _POSEIDON_MAX_LEAVES:
-            raise ValueError(
-                f"Poseidon tree supports at most {_POSEIDON_MAX_LEAVES} sections; "
-                f"got {len(document_parts)}"
-            )
+        if len(document_parts) > max_leaves:
+            raise _poseidon_capacity_error(max_leaves, len(document_parts))
 
         if any(idx < 0 or idx >= len(document_parts) for idx in revealed_indices):
             raise ValueError("Revealed indices must be within the document length")
 
         # Original commitments
         orig_tree, orig_blake3_root = RedactionProtocol.commit_document(document_parts)
-        poseidon_tree, poseidon_leaves = RedactionProtocol.build_poseidon_tree(document_parts)
+        poseidon_tree, poseidon_leaves = RedactionProtocol.build_poseidon_tree(
+            document_parts, depth=poseidon_tree_depth
+        )
         orig_poseidon_root = poseidon_tree.get_root()
 
         # Redacted BLAKE3: replace redacted leaves with zero-hash
@@ -660,10 +774,10 @@ class RedactionProtocol:
 
         # Redacted Poseidon: replace redacted leaves with 0
         redacted_poseidon_leaves = [
-            poseidon_leaves[i] if i in revealed_set else 0 for i in range(_POSEIDON_MAX_LEAVES)
+            poseidon_leaves[i] if i in revealed_set else 0 for i in range(max_leaves)
         ]
         redacted_poseidon_tree = PoseidonMerkleTree(
-            redacted_poseidon_leaves, depth=_POSEIDON_TREE_DEPTH
+            redacted_poseidon_leaves, depth=poseidon_tree_depth
         )
         redacted_poseidon_root = redacted_poseidon_tree.get_root()
 
