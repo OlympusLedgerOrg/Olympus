@@ -15,6 +15,8 @@ export interface ProofRecord {
   details: string[];
 }
 
+const MOCK_HASH_MULTIPLIER = 2654435761;
+
 const proofTemplates: Array<
   Omit<ProofRecord, "id" | "createdAt" | "hash"> & { timestampOffsetMinutes: number }
 > = [
@@ -148,8 +150,8 @@ const proofTemplates: Array<
   },
 ];
 
-function buildHash(seed: number): string {
-  return `0x${(seed * 2654435761).toString(16).padStart(16, "0").slice(0, 16)}${seed
+function generateMockProofHash(seed: number): string {
+  return `0x${(seed * MOCK_HASH_MULTIPLIER).toString(16).padStart(16, "0").slice(0, 16)}${seed
     .toString(16)
     .padStart(8, "0")}`;
 }
@@ -158,7 +160,7 @@ export const mockProofs: ProofRecord[] = proofTemplates.map((proof, index) => ({
   ...proof,
   id: `proof-${index + 1}`,
   createdAt: new Date(Date.now() - proof.timestampOffsetMinutes * 60 * 1000).toISOString(),
-  hash: buildHash(index + 17),
+  hash: generateMockProofHash(index + 17),
 }));
 
 export function createRealtimeProof(seed: number): ProofRecord {
@@ -169,7 +171,7 @@ export function createRealtimeProof(seed: number): ProofRecord {
     ...template,
     id: `proof-live-${seed}-${now.getTime()}`,
     createdAt: now.toISOString(),
-    hash: buildHash(seed + 97),
+    hash: generateMockProofHash(seed + 97),
     title: `${template.title} · live`,
     summary: `Realtime relay: ${template.summary.toLowerCase()}`,
     status: "verified",

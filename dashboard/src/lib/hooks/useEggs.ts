@@ -10,6 +10,7 @@ import {
 export function useEggs() {
   const [pendingRewards, setPendingRewards] = useState(mockEggVaultMeta.pendingRewards);
   const [lastClaimAmount, setLastClaimAmount] = useState<number | null>(null);
+  const [claimAnnouncement, setClaimAnnouncement] = useState("");
 
   const totalEggs = useMemo(
     () => mockEggTiers.reduce((sum, tier) => sum + tier.count, 0),
@@ -42,13 +43,16 @@ export function useEggs() {
       return;
     }
 
+    // Mock-only claim flow: reflect a successful payout locally without backend I/O.
     setLastClaimAmount(pendingRewards);
+    setClaimAnnouncement(`Rewards claimed for $${pendingRewards.toFixed(2)}.`);
     setPendingRewards(0);
   };
 
   return {
     activeLocation: mockEggVaultMeta.activeLocation,
     claimRewards,
+    claimAnnouncement,
     lastClaimAmount,
     nextUnlock,
     payoutPreview,

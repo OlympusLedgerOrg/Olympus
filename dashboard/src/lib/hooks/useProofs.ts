@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   createRealtimeProof,
   mockProofs,
@@ -12,6 +12,7 @@ export type ProofFilter = "all" | ProofType;
 
 const PAGE_SIZE = 5;
 const LIVE_REFRESH_MS = 9000;
+const MAX_PROOFS = 24;
 
 export function useProofs() {
   const [proofs, setProofs] = useState<ProofRecord[]>(mockProofs);
@@ -19,10 +20,17 @@ export function useProofs() {
   const [visibleCount, setVisibleCount] = useState(PAGE_SIZE);
   const [selectedProofId, setSelectedProofId] = useState<string | null>(null);
   const [liveCount, setLiveCount] = useState(0);
+  const liveSeedRef = useRef(mockProofs.length + 1);
 
   useEffect(() => {
     const interval = window.setInterval(() => {
-      setProofs((current) => [createRealtimeProof(current.length + 1), ...current].slice(0, 24));
+      setProofs((current) => {
+        const nextProof = createRealtimeProof(liveSeedRef.current);
+        liveSeedRef.current += 1;
+        return current.length < MAX_PROOFS
+          ? [nextProof, ...current]
+          : [nextProof, ...current.slice(0, MAX_PROOFS - 1)];
+      });
       setLiveCount((count) => count + 1);
     }, LIVE_REFRESH_MS);
 

@@ -124,6 +124,9 @@ export function EggVault({ vault }: { vault: UseEggsResult }) {
               Mock claim completed for {formatCurrency(vault.lastClaimAmount)}.
             </p>
           ) : null}
+          <p className="sr-only" aria-live="polite">
+            {vault.claimAnnouncement}
+          </p>
         </div>
       </div>
 

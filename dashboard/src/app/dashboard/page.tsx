@@ -8,8 +8,11 @@ import { ProofStream } from "@/components/dashboard/ProofStream";
 import { QuickStats } from "@/components/dashboard/QuickStats";
 import { useEggs } from "@/lib/hooks/useEggs";
 import { useProofs } from "@/lib/hooks/useProofs";
+import { mockProofs } from "@/lib/mocks/proofs";
 import { useTheme } from "@/lib/hooks/useTheme";
 import { formatCurrency, formatNumber } from "@/lib/utils/formatting";
+
+const FALLBACK_ACTIVITY_TIMESTAMP = mockProofs[0]?.createdAt ?? "2026-01-01T00:00:00.000Z";
 
 export default function DashboardPage() {
   const { theme } = useTheme();
@@ -31,7 +34,9 @@ export default function DashboardPage() {
       title: "Rewards preview refreshed",
       description: `Pending payout recalculated for ${eggVault.activeLocation}.`,
       timestamp:
-        proofStream.visibleProofs[0]?.createdAt ?? proofStream.filteredProofs[0]?.createdAt,
+        proofStream.visibleProofs[0]?.createdAt ??
+        proofStream.filteredProofs[0]?.createdAt ??
+        FALLBACK_ACTIVITY_TIMESTAMP,
       category: "egg vault",
       metric: "location-adjusted",
       amount: eggVault.pendingRewards,
