@@ -116,7 +116,11 @@ class EpochRecord:
 
         root_bytes = _normalize_hash(merkle_root)
         metadata_bytes = _normalize_hash(metadata_hash)
-        if previous_epoch_head is None or previous_epoch_head == "":
+        if previous_epoch_head in (None, ""):
+            if epoch_index != 0:
+                raise ValueError(
+                    "previous_epoch_head can only be empty for genesis epoch (index 0)"
+                )
             prev_head_bytes = b""
         else:
             prev_head_bytes = _normalize_hash(previous_epoch_head, allow_empty=True)
