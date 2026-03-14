@@ -216,7 +216,6 @@ def event_id(shard_id: str, header_hash: str, timestamp: str) -> str:
     encoded_fields: list[bytes] = []
     for value in fields:
         field_bytes = value.encode("utf-8")
-        # Prefix each field with its 4-byte big-endian length.
         encoded_fields.append(len(field_bytes).to_bytes(4, byteorder="big"))
         encoded_fields.append(field_bytes)
 
