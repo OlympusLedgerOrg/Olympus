@@ -447,6 +447,7 @@ class StorageLayer:
             # Update tree
             tree.update(key, value_hash)
             root_hash = tree.get_root()
+            tree_size = len(tree.leaves)
 
             # Generate proof
             proof = tree.prove_existence(key)
@@ -504,6 +505,7 @@ class StorageLayer:
                 shard_id=shard_id,
                 root_hash=root_hash,
                 timestamp=ts,
+                tree_size=tree_size,
                 previous_header_hash=prev_header_hash,
             )
 
@@ -519,13 +521,14 @@ class StorageLayer:
             # Insert shard header
             cur.execute(
                 """
-                    INSERT INTO shard_headers (shard_id, seq, root, header_hash, sig, pubkey, previous_header_hash, ts)
-                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+                    INSERT INTO shard_headers (shard_id, seq, root, tree_size, header_hash, sig, pubkey, previous_header_hash, ts)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
                     """,
                 (
                     shard_id,
                     seq,
                     root_hash,
+                    tree_size,
                     bytes.fromhex(header["header_hash"]),
                     bytes.fromhex(signature),
                     pubkey,
@@ -883,7 +886,7 @@ class StorageLayer:
         with self._get_connection() as conn, conn.cursor(row_factory=dict_row) as cur:
             cur.execute(
                 """
-                    SELECT root, header_hash, sig, pubkey, previous_header_hash, ts, seq
+                    SELECT root, tree_size, header_hash, sig, pubkey, previous_header_hash, ts, seq
                     FROM shard_headers
                     WHERE shard_id = %s
                     ORDER BY seq DESC
@@ -913,7 +916,10 @@ class StorageLayer:
             header = {
                 "shard_id": shard_id,
                 "root_hash": bytes(row["root"]).hex(),
+                "tree_size": int(row["tree_size"]),
                 "timestamp": timestamp_str,
+                "height": 0,
+                "round": 0,
                 "previous_header_hash": row["previous_header_hash"],
                 "header_hash": bytes(row["header_hash"]).hex(),
             }
@@ -923,12 +929,7 @@ class StorageLayer:
                 raise ValueError(f"Invalid shard header signature for shard '{shard_id}'")
 
             expected_hash = shard_header_hash(
-                {
-                    "shard_id": header["shard_id"],
-                    "root_hash": header["root_hash"],
-                    "timestamp": header["timestamp"],
-                    "previous_header_hash": header["previous_header_hash"],
-                }
+                {k: v for k, v in header.items() if k != "header_hash"}
             ).hex()
             if header["header_hash"] != expected_hash:
                 raise ValueError(f"Invalid shard header hash for shard '{shard_id}'")
@@ -964,7 +965,7 @@ class StorageLayer:
         with self._get_connection() as conn, conn.cursor(row_factory=dict_row) as cur:
             cur.execute(
                 """
-                    SELECT seq, root, header_hash, previous_header_hash, ts
+                    SELECT seq, root, tree_size, header_hash, previous_header_hash, ts
                     FROM shard_headers
                     WHERE shard_id = %s
                     ORDER BY seq DESC
@@ -989,8 +990,15 @@ class StorageLayer:
                     {
                         "seq": row["seq"],
                         "root_hash": bytes(row["root"]).hex(),
+                        "tree_size": int(row["tree_size"]),
+                        "height": 0,
+                        "round": 0,
                         "header_hash": bytes(row["header_hash"]).hex(),
-                        "previous_header_hash": bytes(row["previous_header_hash"]).hex(),
+                        "previous_header_hash": (
+                            row["previous_header_hash"]
+                            if isinstance(row["previous_header_hash"], str)
+                            else bytes(row["previous_header_hash"]).hex()
+                        ),
                         "timestamp": timestamp_str,
                     }
                 )
@@ -1571,6 +1579,33 @@ class StorageLayer:
             )
         return results
 
+    def get_leaf_count(self, shard_id: str, *, up_to_ts: str | datetime | None = None) -> int:
+        """
+        Return the number of SMT leaves for a shard.
+
+        Args:
+            shard_id: Shard identifier.
+            up_to_ts: Optional ISO 8601 timestamp (or datetime) to bound the count.
+
+        Returns:
+            Count of leaves for the shard, optionally filtered by timestamp.
+        """
+        query = "SELECT COUNT(*) AS cnt FROM smt_leaves WHERE shard_id = %s"
+        params: list[object] = [shard_id]
+        if up_to_ts is not None:
+            ts_val = (
+                up_to_ts
+                if isinstance(up_to_ts, datetime)
+                else datetime.fromisoformat(str(up_to_ts).replace("Z", "+00:00"))
+            )
+            query += " AND ts <= %s"
+            params.append(ts_val)
+
+        with self._get_connection() as conn, conn.cursor(row_factory=dict_row) as cur:
+            cur.execute(query, params)
+            row = cur.fetchone()
+        return int(row["cnt"]) if row else 0
+
     def _row_get(self, row: Any, key: str, idx: int) -> Any:
         """
         Get value from row, supporting both dict and tuple rows.
@@ -1690,7 +1725,7 @@ class StorageLayer:
         """
         cur.execute(
             """
-            SELECT seq, root, header_hash, previous_header_hash, ts
+            SELECT seq, root, tree_size, header_hash, previous_header_hash, ts
             FROM shard_headers
             WHERE shard_id = %s AND seq = %s
             """,

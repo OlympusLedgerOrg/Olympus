@@ -122,6 +122,7 @@ def create_shard_header(
     timestamp: str,
     height: int = 0,
     round_number: int = 0,
+    tree_size: int | None = None,
     previous_header_hash: str = "",
     timestamp_token: TimestampToken | dict[str, str] | None = None,
     federation_registry: FederationRegistry | None = None,
@@ -135,6 +136,7 @@ def create_shard_header(
         timestamp: ISO 8601 timestamp
         height: Consensus height for the shard header (non-negative integer)
         round_number: Consensus round for the shard header (non-negative integer)
+        tree_size: Number of leaves committed by ``root_hash`` (non-negative integer)
         previous_header_hash: Hex-encoded hash of previous header (empty for genesis)
         timestamp_token: Optional RFC 3161 timestamp token for the header hash.
             If provided, the token's serialized form is included in the returned
@@ -156,6 +158,9 @@ def create_shard_header(
         raise ValueError("height and round_number must be integers") from exc
     if normalized_height < 0 or normalized_round < 0:
         raise ValueError("height and round_number must be non-negative")
+    normalized_tree_size = 0 if tree_size is None else int(tree_size)
+    if normalized_tree_size < 0:
+        raise ValueError("tree_size must be non-negative")
 
     header: dict[str, Any] = {
         "shard_id": shard_id,
@@ -163,6 +168,7 @@ def create_shard_header(
         "timestamp": timestamp,
         "height": normalized_height,
         "round": normalized_round,
+        "tree_size": normalized_tree_size,
         "previous_header_hash": previous_header_hash,
     }
 

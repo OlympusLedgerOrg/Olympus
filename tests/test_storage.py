@@ -279,13 +279,14 @@ def test_get_latest_header_detects_corrupt_signature(storage, signing_key):
         cur.execute(
             """
             INSERT INTO shard_headers
-                (shard_id, seq, root, header_hash, sig, pubkey, previous_header_hash, ts)
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+                (shard_id, seq, root, tree_size, header_hash, sig, pubkey, previous_header_hash, ts)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
             """,
             (
                 shard_id,
                 0,
                 root,
+                header["tree_size"],
                 bytes.fromhex(header["header_hash"]),
                 b"\x00" * 64,
                 pubkey,
@@ -421,13 +422,14 @@ def test_get_latest_header_detects_corrupted_signature(storage, signing_key):
         cur.execute(
             """
             INSERT INTO shard_headers
-                (shard_id, seq, root, header_hash, sig, pubkey, previous_header_hash, ts)
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+                (shard_id, seq, root, tree_size, header_hash, sig, pubkey, previous_header_hash, ts)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
             """,
             (
                 shard_id,
                 0,
                 root,
+                header["tree_size"],
                 bytes.fromhex(header["header_hash"]),
                 b"\x00" * 64,
                 pubkey,

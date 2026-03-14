@@ -47,6 +47,7 @@ CREATE TABLE IF NOT EXISTS shard_headers (
     shard_id TEXT NOT NULL,
     seq BIGINT NOT NULL,  -- Sequence number (monotonically increasing)
     root BYTEA NOT NULL,  -- 32-byte shard root hash
+    tree_size BIGINT NOT NULL DEFAULT 0,  -- Number of leaves committed by the root
     header_hash BYTEA NOT NULL,  -- 32-byte hash of canonical header JSON
     sig BYTEA NOT NULL,  -- 64-byte Ed25519 signature
     pubkey BYTEA NOT NULL,  -- 32-byte Ed25519 public key
@@ -65,7 +66,8 @@ CREATE TABLE IF NOT EXISTS shard_headers (
     CONSTRAINT shard_headers_header_hash_length CHECK (octet_length(header_hash) = 32),
     CONSTRAINT shard_headers_sig_length CHECK (octet_length(sig) = 64),
     CONSTRAINT shard_headers_pubkey_length CHECK (octet_length(pubkey) = 32),
-    CONSTRAINT shard_headers_seq_positive CHECK (seq >= 0)
+    CONSTRAINT shard_headers_seq_positive CHECK (seq >= 0),
+    CONSTRAINT shard_headers_tree_size_non_negative CHECK (tree_size >= 0)
 );
 
 -- Index for finding latest header

@@ -37,6 +37,7 @@ Out of scope: deployment topologies, user interfaces, and non-protocol applicati
 - **Merkle Node**: `node_hash = node_hash(NODE_PREFIX || left || right)`. If odd leaf count, the lone node is promoted without hashing (CT-style).
 - **Shard Header**:
   - Fields: `shard_id`, `seq`, `root_hash`, `previous_header_hash`, `timestamp`, `pubkey`, `signature`
+  - `tree_size`: Number of SMT leaves committed by `root_hash` (binds size to the header)
   - Canonical serialization: canonical JSON with sorted keys and compact separators
   - Signature: Ed25519 over `shard_header_hash` (BLAKE3 of canonical header JSON)
 - **Ledger Entry**:
