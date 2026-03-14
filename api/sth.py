@@ -18,8 +18,6 @@ from typing import Any
 from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel
 
-from protocol.epochs import SignedTreeHead
-
 
 logger = logging.getLogger(__name__)
 
@@ -108,10 +106,12 @@ async def get_latest_sth(
         # 2. Have a background process that generates STHs periodically
         # 3. Track epoch_id separately from shard sequence numbers
 
+        tree_size = storage.get_leaf_count(shard_id, up_to_ts=header["timestamp"])
+
         # For now, return a basic response based on the header
         return STHResponse(
             epoch_id=header_data["seq"],  # Using seq as epoch_id for now
-            tree_size=0,  # Would need to be tracked separately
+            tree_size=tree_size,
             merkle_root=header["root_hash"],
             timestamp=header["timestamp"],
             signature=header_data["signature"],
@@ -169,12 +169,13 @@ async def get_sth_history(
         # stored and retrieved directly
         sths = []
         for entry in history:
+            tree_size = storage.get_leaf_count(shard_id, up_to_ts=entry["timestamp"])
             # Get the full header data for each historical entry
             # For now, we'll construct a minimal STH from the history entry
             sths.append(
                 STHResponse(
                     epoch_id=entry["seq"],  # Using seq as epoch_id
-                    tree_size=0,  # Would need to be tracked separately
+                    tree_size=tree_size,
                     merkle_root=entry["root_hash"],
                     timestamp=entry["timestamp"],
                     signature="",  # Would need to retrieve from full header

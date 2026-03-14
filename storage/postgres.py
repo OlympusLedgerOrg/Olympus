@@ -1571,6 +1571,33 @@ class StorageLayer:
             )
         return results
 
+    def get_leaf_count(self, shard_id: str, *, up_to_ts: str | datetime | None = None) -> int:
+        """
+        Return the number of SMT leaves for a shard.
+
+        Args:
+            shard_id: Shard identifier.
+            up_to_ts: Optional ISO 8601 timestamp (or datetime) to bound the count.
+
+        Returns:
+            Count of leaves for the shard, optionally filtered by timestamp.
+        """
+        query = "SELECT COUNT(*) AS cnt FROM smt_leaves WHERE shard_id = %s"
+        params: list[object] = [shard_id]
+        if up_to_ts is not None:
+            ts_val = (
+                up_to_ts
+                if isinstance(up_to_ts, datetime)
+                else datetime.fromisoformat(str(up_to_ts).replace("Z", "+00:00"))
+            )
+            query += " AND ts <= %s"
+            params.append(ts_val)
+
+        with self._get_connection() as conn, conn.cursor(row_factory=dict_row) as cur:
+            cur.execute(query, params)
+            row = cur.fetchone()
+        return int(row["cnt"]) if row else 0
+
     def _row_get(self, row: Any, key: str, idx: int) -> Any:
         """
         Get value from row, supporting both dict and tuple rows.
