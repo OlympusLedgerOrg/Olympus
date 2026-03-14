@@ -41,7 +41,7 @@ from pydantic import BaseModel
 from api.ingest import _authorize_and_rate_limit, router as ingest_router
 from api.sth import router as sth_router
 from api.sth import set_storage as set_sth_storage
-from protocol.canonical_json import canonical_json_encode
+from protocol.shards import canonical_header
 from protocol.telemetry import opentelemetry_available, prometheus_available, record_smt_divergence
 
 
@@ -165,6 +165,7 @@ class ShardHeaderResponse(BaseModel):
     shard_id: str
     seq: int
     root_hash: str  # Hex-encoded 32-byte root
+    tree_size: int
     header_hash: str  # Hex-encoded 32-byte header hash
     previous_header_hash: str  # Hex-encoded (empty for genesis)
     timestamp: str  # ISO 8601
@@ -373,19 +374,13 @@ async def get_latest_header(shard_id: str) -> ShardHeaderResponse:
 
         header = header_data["header"]
 
-        # Create canonical header JSON for verification
-        canonical_header = {
-            "shard_id": header["shard_id"],
-            "root_hash": header["root_hash"],
-            "timestamp": header["timestamp"],
-            "previous_header_hash": header["previous_header_hash"],
-        }
-        canonical_json = canonical_json_encode(canonical_header)
+        canonical_json = canonical_header(header).decode("utf-8")
 
         return ShardHeaderResponse(
             shard_id=header["shard_id"],
             seq=header_data["seq"],
             root_hash=header["root_hash"],
+            tree_size=header["tree_size"],
             header_hash=header["header_hash"],
             previous_header_hash=header["previous_header_hash"],
             timestamp=header["timestamp"],
@@ -432,18 +427,13 @@ async def get_proof(
 
         # Build header response
         header = header_data["header"]
-        canonical_header = {
-            "shard_id": header["shard_id"],
-            "root_hash": header["root_hash"],
-            "timestamp": header["timestamp"],
-            "previous_header_hash": header["previous_header_hash"],
-        }
-        canonical_json = canonical_json_encode(canonical_header)
+        canonical_json = canonical_header(header).decode("utf-8")
 
         shard_header = ShardHeaderResponse(
             shard_id=header["shard_id"],
             seq=header_data["seq"],
             root_hash=header["root_hash"],
+            tree_size=header["tree_size"],
             header_hash=header["header_hash"],
             previous_header_hash=header["previous_header_hash"],
             timestamp=header["timestamp"],

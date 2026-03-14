@@ -35,6 +35,7 @@ def test_create_shard_header():
     assert header["shard_id"] == "shard1"
     assert header["root_hash"] == root_hash.hex()
     assert header["timestamp"] == timestamp
+    assert header["tree_size"] == 0
     assert header["previous_header_hash"] == ""
     assert "header_hash" in header
     assert len(bytes.fromhex(header["header_hash"])) == 32

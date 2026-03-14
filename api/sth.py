@@ -106,7 +106,9 @@ async def get_latest_sth(
         # 2. Have a background process that generates STHs periodically
         # 3. Track epoch_id separately from shard sequence numbers
 
-        tree_size = storage.get_leaf_count(shard_id, up_to_ts=header["timestamp"])
+        tree_size = header.get("tree_size")
+        if tree_size is None:
+            tree_size = storage.get_leaf_count(shard_id, up_to_ts=header["timestamp"])
 
         # For now, return a basic response based on the header
         return STHResponse(
@@ -169,7 +171,9 @@ async def get_sth_history(
         # stored and retrieved directly
         sths = []
         for entry in history:
-            tree_size = storage.get_leaf_count(shard_id, up_to_ts=entry["timestamp"])
+            tree_size = entry.get("tree_size")
+            if tree_size is None:
+                tree_size = storage.get_leaf_count(shard_id, up_to_ts=entry["timestamp"])
             # Get the full header data for each historical entry
             # For now, we'll construct a minimal STH from the history entry
             sths.append(

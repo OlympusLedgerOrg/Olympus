@@ -36,6 +36,7 @@ class ShardHeaderResponse(BaseModel):
     shard_id: str
     seq: int
     root_hash: str
+    tree_size: int
     header_hash: str
     previous_header_hash: str
     timestamp: str
@@ -115,6 +116,7 @@ class TestSchemaAlignment:
             shard_id="test_shard",
             seq=1,
             root_hash="a" * 64,  # 32 bytes hex
+            tree_size=5,
             header_hash="b" * 64,
             previous_header_hash="c" * 64,
             timestamp="2024-01-01T00:00:00Z",
@@ -271,6 +273,7 @@ class TestSchemaAlignment:
             shard_id="test",
             seq=1,
             root_hash="a" * 64,
+            tree_size=0,
             header_hash="b" * 64,
             previous_header_hash="c" * 64,
             timestamp="2024-01-01T00:00:00Z",
