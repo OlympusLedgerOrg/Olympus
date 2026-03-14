@@ -6,6 +6,7 @@ from protocol.hashes import (
     EVENT_PREFIX,
     FEDERATION_PREFIX,
     HASH_SEPARATOR,
+    _SEP,
     blake3_hash,
     event_id,
     federation_vote_hash,
@@ -66,7 +67,7 @@ def test_event_id_prevents_field_injection() -> None:
 
     def legacy_separator_based_event_id(shard_id: str, header_hash: str) -> str:
         event_data = HASH_SEPARATOR.join([shard_id, header_hash, timestamp])
-        return blake3_hash([EVENT_PREFIX, b"|", event_data.encode("utf-8")]).hex()
+        return blake3_hash([EVENT_PREFIX, _SEP, event_data.encode("utf-8")]).hex()
 
     colliding_legacy = legacy_separator_based_event_id("X|Y", "Z")
     assert colliding_legacy == legacy_separator_based_event_id("X", "Y|Z")

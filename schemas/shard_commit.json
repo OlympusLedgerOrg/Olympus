@@ -15,6 +15,7 @@
     "shard_id": {
       "type": "string",
       "description": "Unique identifier for this shard (must not contain '|')",
+      "minLength": 1,
       "pattern": "^[^|]+$"
     },
     "merkle_root": {
