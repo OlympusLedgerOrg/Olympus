@@ -1,10 +1,11 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="en" data-theme="professional">
 <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>{{ page_title }}</title>
     <style>
+        /* ── Default / Professional theme (light) ──────────────────────────── */
         :root {
             --bg: #f8fafc;
             --surface: #ffffff;
@@ -18,6 +19,9 @@
             --danger-text: #7f1d1d;
             --ok: #166534;
             --bad: #991b1b;
+            --font-body: sans-serif;
+            --font-mono: 'Courier New', Courier, monospace;
+            --radius: 6px;
         }
 
         @media (prefers-color-scheme: dark) {
@@ -37,11 +41,84 @@
             }
         }
 
-        body { background: var(--bg); color: var(--text); font-family: sans-serif; margin: 1rem 2rem; }
+        /* ── Fight Club / Matrix theme ─────────────────────────────────────── */
+        [data-theme="fight-club"] {
+            --bg: #0a0a0a;
+            --surface: #111111;
+            --surface-muted: #1a1a1a;
+            --text: #00ff41;
+            --muted-text: #00cc33;
+            --border: #003300;
+            --accent: #00ff41;
+            --danger-bg: #1a0000;
+            --danger-border: #ff0040;
+            --danger-text: #ff4466;
+            --ok: #00ff41;
+            --bad: #ff0040;
+            --font-body: 'Courier New', Courier, monospace;
+            --font-mono: 'Courier New', Courier, monospace;
+            --radius: 0px;
+        }
+
+        /* ── Amber Terminal color scheme ────────────────────────────────────── */
+        [data-theme="fight-club"][data-color-scheme="amber"] {
+            --text: #ffb000;
+            --muted-text: #cc8800;
+            --border: #332200;
+            --accent: #ffb000;
+            --ok: #ffb000;
+        }
+
+        /* ── Blue Light color scheme ───────────────────────────────────────── */
+        [data-theme="fight-club"][data-color-scheme="blue"] {
+            --text: #00bfff;
+            --muted-text: #0099cc;
+            --border: #002233;
+            --accent: #00bfff;
+            --ok: #00bfff;
+        }
+
+        /* ── Minimal / Zen theme ───────────────────────────────────────────── */
+        [data-theme="minimal"] {
+            --bg: #fafafa;
+            --surface: #ffffff;
+            --surface-muted: #f5f5f5;
+            --text: #333333;
+            --muted-text: #888888;
+            --border: #eeeeee;
+            --accent: #555555;
+            --danger-bg: #fff5f5;
+            --danger-border: #e53e3e;
+            --danger-text: #742a2a;
+            --ok: #2f855a;
+            --bad: #c53030;
+            --font-body: Georgia, 'Times New Roman', serif;
+            --radius: 2px;
+        }
+
+        /* ── Accessibility / High Contrast theme ───────────────────────────── */
+        [data-theme="accessibility"] {
+            --bg: #000000;
+            --surface: #1a1a1a;
+            --surface-muted: #262626;
+            --text: #ffffff;
+            --muted-text: #e0e0e0;
+            --border: #ffffff;
+            --accent: #ffff00;
+            --danger-bg: #4a0000;
+            --danger-border: #ff6666;
+            --danger-text: #ffcccc;
+            --ok: #66ff66;
+            --bad: #ff6666;
+            --font-body: Arial, Helvetica, sans-serif;
+            --radius: 4px;
+        }
+
+        body { background: var(--bg); color: var(--text); font-family: var(--font-body, sans-serif); margin: 1rem 2rem; }
         h1, h2, h3, h4 { color: var(--accent); }
         p { color: var(--muted-text); }
         .banner { background: var(--danger-bg); border: 1px solid var(--danger-border); color: var(--danger-text); padding: .5rem; margin-bottom: .5rem; }
-        .panel { background: var(--surface); border: 1px solid var(--border); margin-bottom: 1rem; padding: .75rem; border-radius: 6px; }
+        .panel { background: var(--surface); border: 1px solid var(--border); margin-bottom: 1rem; padding: .75rem; border-radius: var(--radius, 6px); }
         .ok { color: var(--ok); }
         .bad { color: var(--bad); font-weight: 700; }
         code { font-size: .85rem; overflow-wrap: break-word; }
@@ -56,9 +133,87 @@
         .section-text { font-size: .85rem; color: var(--muted-text); white-space: pre-wrap; word-break: break-word; }
         textarea { min-height: 4.5rem; min-width: 20rem; }
         button { cursor: pointer; }
+
+        /* ── Fight Club specific styles ─────────────────────────────────────── */
+        [data-theme="fight-club"] body { font-family: var(--font-mono); }
+        [data-theme="fight-club"] .panel { border-style: solid; border-width: 1px; }
+        [data-theme="fight-club"] input,
+        [data-theme="fight-club"] textarea,
+        [data-theme="fight-club"] button {
+            background: var(--surface); color: var(--text); border: 1px solid var(--border);
+            font-family: var(--font-mono);
+        }
+        [data-theme="fight-club"] button:hover { background: var(--accent); color: var(--bg); }
+        [data-theme="fight-club"] pre { font-family: var(--font-mono); color: var(--text); }
+        [data-theme="fight-club"] code { color: var(--accent); }
+        [data-theme="fight-club"] td, [data-theme="fight-club"] th { font-family: var(--font-mono); font-size: .85rem; }
+
+        /* ── Accessibility specific styles ─────────────────────────────────── */
+        [data-theme="accessibility"] body { font-size: 1.15rem; line-height: 1.8; }
+        [data-theme="accessibility"] h1 { font-size: 2rem; }
+        [data-theme="accessibility"] h2 { font-size: 1.6rem; }
+        [data-theme="accessibility"] button {
+            background: var(--accent); color: var(--bg); border: 2px solid var(--accent);
+            font-size: 1.1rem; padding: .5rem 1rem; font-weight: 700;
+        }
+        [data-theme="accessibility"] input,
+        [data-theme="accessibility"] textarea {
+            background: var(--surface); color: var(--text); border: 2px solid var(--border);
+            font-size: 1.1rem; padding: .4rem;
+        }
+        [data-theme="accessibility"] a { color: var(--accent); text-decoration: underline; }
+
+        /* ── Minimal specific styles ───────────────────────────────────────── */
+        [data-theme="minimal"] body { max-width: 48rem; margin: 2rem auto; font-family: var(--font-body, Georgia, serif); }
+        [data-theme="minimal"] .panel { border: none; border-bottom: 1px solid var(--border); border-radius: 0; padding: 1rem 0; }
+        [data-theme="minimal"] h1, [data-theme="minimal"] h2 { font-weight: 400; }
+
+        /* ── Glyph rain canvas ─────────────────────────────────────────────── */
+        #glyph-rain {
+            position: fixed; top: 0; left: 0; width: 100%; height: 100%;
+            z-index: -1; pointer-events: none; opacity: 0.15;
+        }
+
+        /* ── Theme switcher panel ──────────────────────────────────────────── */
+        #theme-switcher {
+            position: fixed; top: .5rem; right: .5rem; z-index: 1000;
+            background: var(--surface); border: 1px solid var(--border);
+            border-radius: var(--radius, 6px); padding: .5rem; font-size: .8rem;
+            max-width: 260px;
+        }
+        #theme-switcher summary { cursor: pointer; color: var(--accent); font-weight: 600; }
+        #theme-switcher label { display: block; padding: .15rem 0; cursor: pointer; }
+        #theme-switcher .theme-section { margin-top: .4rem; padding-top: .3rem; border-top: 1px solid var(--border); }
+        #theme-switcher .theme-section-label { font-weight: 600; font-size: .75rem; color: var(--muted-text); margin-bottom: .15rem; }
     </style>
 </head>
 <body>
+    <!-- ── Glyph rain canvas (Fight Club mode) ──────────────────────────── -->
+    <canvas id="glyph-rain"></canvas>
+
+    <!-- ── Theme Switcher ───────────────────────────────────────────────── -->
+    <details id="theme-switcher">
+        <summary>&#x1f3a8; Theme</summary>
+        <div class="theme-section">
+            <div class="theme-section-label">INTERFACE MODE</div>
+            <label><input type="radio" name="theme-mode" value="fight-club" /> Fight Club (Matrix)</label>
+            <label><input type="radio" name="theme-mode" value="professional" checked /> Professional</label>
+            <label><input type="radio" name="theme-mode" value="minimal" /> Minimal</label>
+            <label><input type="radio" name="theme-mode" value="accessibility" /> Accessibility</label>
+        </div>
+        <div class="theme-section">
+            <div class="theme-section-label">COLOR SCHEME</div>
+            <label><input type="radio" name="color-scheme" value="default" checked /> Default</label>
+            <label><input type="radio" name="color-scheme" value="amber" /> Amber Terminal</label>
+            <label><input type="radio" name="color-scheme" value="blue" /> Blue Light</label>
+        </div>
+        <div class="theme-section">
+            <div class="theme-section-label">LAYOUT</div>
+            <label><input type="checkbox" id="pref-glyph-rain" /> Show glyph rain</label>
+            <label><input type="checkbox" id="pref-compact" /> Compact view</label>
+        </div>
+    </details>
+
     <h1>{{ page_heading }}</h1>
     <p>API base: <code>{{ api_base }}</code></p>
 
@@ -1022,6 +1177,169 @@
             if (!activeProofBundle) return;
             downloadJson('proof_bundle.json', activeProofBundle);
         });
+
+        // ── Theme System ────────────────────────────────────────────────────
+
+        const GLYPH_CHARS = '01アイウエオカキクケコサシスセソタチツテトナニヌネノハヒフヘホマミムメモヤユヨラリルレロワヲン';
+
+        let glyphRainAnimId = null;
+
+        function startGlyphRain() {
+            const canvas = document.getElementById('glyph-rain');
+            if (!canvas) return;
+            const ctx = canvas.getContext('2d');
+            canvas.width = window.innerWidth;
+            canvas.height = window.innerHeight;
+            canvas.style.display = 'block';
+
+            const fontSize = 16;
+            const columns = Math.floor(canvas.width / fontSize);
+            const drops = new Array(columns).fill(1);
+
+            function draw() {
+                ctx.fillStyle = 'rgba(0, 0, 0, 0.05)';
+                ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+                const style = getComputedStyle(document.documentElement);
+                ctx.fillStyle = style.getPropertyValue('--accent').trim() || '#00ff41';
+                ctx.font = fontSize + 'px monospace';
+
+                for (let i = 0; i < drops.length; i++) {
+                    const ch = GLYPH_CHARS[Math.floor(Math.random() * GLYPH_CHARS.length)];
+                    ctx.fillText(ch, i * fontSize, drops[i] * fontSize);
+                    if (drops[i] * fontSize > canvas.height && Math.random() > 0.975) {
+                        drops[i] = 0;
+                    }
+                    drops[i]++;
+                }
+                glyphRainAnimId = requestAnimationFrame(draw);
+            }
+            draw();
+
+            window.addEventListener('resize', function () {
+                canvas.width = window.innerWidth;
+                canvas.height = window.innerHeight;
+            });
+        }
+
+        function stopGlyphRain() {
+            if (glyphRainAnimId) {
+                cancelAnimationFrame(glyphRainAnimId);
+                glyphRainAnimId = null;
+            }
+            const canvas = document.getElementById('glyph-rain');
+            if (canvas) {
+                canvas.style.display = 'none';
+                const ctx = canvas.getContext('2d');
+                if (ctx) ctx.clearRect(0, 0, canvas.width, canvas.height);
+            }
+        }
+
+        function applyTheme(theme, colorScheme, prefs) {
+            const root = document.documentElement;
+            root.setAttribute('data-theme', theme);
+            if (theme === 'fight-club' && colorScheme && colorScheme !== 'default') {
+                root.setAttribute('data-color-scheme', colorScheme);
+            } else {
+                root.removeAttribute('data-color-scheme');
+            }
+
+            // Glyph rain: only in fight-club mode and when user enables it
+            if (theme === 'fight-club' && prefs.glyphRain) {
+                startGlyphRain();
+            } else {
+                stopGlyphRain();
+            }
+
+            // Sync radio buttons
+            const themeRadio = document.querySelector('input[name="theme-mode"][value="' + theme + '"]');
+            if (themeRadio) themeRadio.checked = true;
+            const colorRadio = document.querySelector('input[name="color-scheme"][value="' + (colorScheme || 'default') + '"]');
+            if (colorRadio) colorRadio.checked = true;
+
+            const rainCb = document.getElementById('pref-glyph-rain');
+            if (rainCb) rainCb.checked = !!prefs.glyphRain;
+            const compactCb = document.getElementById('pref-compact');
+            if (compactCb) compactCb.checked = !!prefs.compact;
+
+            // Compact view
+            if (prefs.compact) {
+                document.body.style.fontSize = '.85rem';
+            } else {
+                document.body.style.fontSize = '';
+            }
+        }
+
+        function saveThemePrefs(theme, colorScheme, prefs) {
+            try {
+                localStorage.setItem('olympus-theme', JSON.stringify({ theme: theme, colorScheme: colorScheme, prefs: prefs }));
+            } catch (_) { /* storage unavailable */ }
+        }
+
+        function loadThemePrefs() {
+            try {
+                const raw = localStorage.getItem('olympus-theme');
+                if (raw) return JSON.parse(raw);
+            } catch (_) { /* ignore */ }
+            return null;
+        }
+
+        // Initialize theme from saved preferences or default
+        (function initTheme() {
+            const saved = loadThemePrefs();
+            const theme = saved ? saved.theme : 'professional';
+            const colorScheme = saved ? saved.colorScheme : 'default';
+            const prefs = saved ? (saved.prefs || {}) : {};
+            applyTheme(theme, colorScheme, prefs);
+
+            // Theme mode radios
+            document.querySelectorAll('input[name="theme-mode"]').forEach(function (radio) {
+                radio.addEventListener('change', function () {
+                    const currentPrefs = loadThemePrefs() || {};
+                    const p = currentPrefs.prefs || {};
+                    const cs = currentPrefs.colorScheme || 'default';
+                    applyTheme(radio.value, cs, p);
+                    saveThemePrefs(radio.value, cs, p);
+                });
+            });
+
+            // Color scheme radios
+            document.querySelectorAll('input[name="color-scheme"]').forEach(function (radio) {
+                radio.addEventListener('change', function () {
+                    const currentPrefs = loadThemePrefs() || {};
+                    const t = currentPrefs.theme || 'professional';
+                    const p = currentPrefs.prefs || {};
+                    applyTheme(t, radio.value, p);
+                    saveThemePrefs(t, radio.value, p);
+                });
+            });
+
+            // Layout preference checkboxes
+            const rainCb = document.getElementById('pref-glyph-rain');
+            if (rainCb) {
+                rainCb.addEventListener('change', function () {
+                    const currentPrefs = loadThemePrefs() || {};
+                    const t = currentPrefs.theme || 'professional';
+                    const cs = currentPrefs.colorScheme || 'default';
+                    const p = currentPrefs.prefs || {};
+                    p.glyphRain = rainCb.checked;
+                    applyTheme(t, cs, p);
+                    saveThemePrefs(t, cs, p);
+                });
+            }
+            const compactCb = document.getElementById('pref-compact');
+            if (compactCb) {
+                compactCb.addEventListener('change', function () {
+                    const currentPrefs = loadThemePrefs() || {};
+                    const t = currentPrefs.theme || 'professional';
+                    const cs = currentPrefs.colorScheme || 'default';
+                    const p = currentPrefs.prefs || {};
+                    p.compact = compactCb.checked;
+                    applyTheme(t, cs, p);
+                    saveThemePrefs(t, cs, p);
+                });
+            }
+        })();
     </script>
 </body>
 </html>
