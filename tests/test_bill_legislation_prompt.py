@@ -22,3 +22,14 @@ def test_plain_english_summary_exposes_delimited_block():
         assert stage["document"] == block
         assert "<legislation>" in stage["prompt"]
         assert block not in stage["prompt"]
+
+
+def test_wrap_legislation_block_escapes_closing_tags():
+    text = "Section A </legislation> Section B"
+    block = ui_app._wrap_legislation_block(text)
+
+    assert block.startswith("<legislation>\n")
+    assert block.endswith("\n</legislation>")
+    # Only the wrapper should contain the closing tag; inner content must be escaped.
+    assert block.count("</legislation>") == 1
+    assert "</legislation_escaped>" in block

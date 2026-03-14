@@ -431,7 +431,9 @@ def _extract_bill_highlights(text: str) -> dict[str, list[str]]:
 
 def _wrap_legislation_block(normalized_text: str) -> str:
     """Wrap normalized bill text in explicit delimiters for LLM prompts."""
-    return f"<legislation>\n{normalized_text}\n</legislation>"
+    sanitized = normalized_text.replace("<legislation>", "<legislation_escaped>")
+    sanitized = sanitized.replace("</legislation>", "</legislation_escaped>")
+    return f"<legislation>\n{sanitized}\n</legislation>"
 
 
 def _build_plain_english_summary(text: str) -> dict[str, Any]:
