@@ -88,6 +88,7 @@ export const VERIFICATION_METHOD_LABELS: Record<VerificationMethod, string> = {
 export const MOCK_SBT_ADDRESS =
   "0x00000000000000000000000000000000C1C1C0";
 export const MOCK_SBT_CHAIN_ID = 11155111;
+// Matches protocol.hashes.HASH_SEPARATOR for cross-layer commitments.
 export const HASH_SEPARATOR = "|";
 
 export const MOCK_SBT_ABI = [
@@ -135,6 +136,14 @@ export function formatWalletAddress(address?: string | null): string {
     return "";
   }
   return `${address.slice(0, 6)}…${address.slice(-4)}`;
+}
+
+export function normalizeWalletAddress(address: string): string {
+  return address.trim().toLowerCase();
+}
+
+export function isSameWalletAddress(left: string, right: string): boolean {
+  return normalizeWalletAddress(left) === normalizeWalletAddress(right);
 }
 
 export function validateWalletAddress(address: string): boolean {
@@ -211,20 +220,43 @@ export function sanitizeProof(
   };
 }
 
-export async function hashString(payload: string): Promise<string> {
+export function canonicalizeProof(proof: VerificationProof): string {
+  const ordered = Object.keys(proof)
+    .sort()
+    .reduce<Record<string, unknown>>((accumulator, key) => {
+      const value = proof[key as keyof VerificationProof];
+      if (value !== undefined) {
+        accumulator[key] = value;
+      }
+      return accumulator;
+    }, {});
+  return JSON.stringify(ordered);
+}
+
+/**
+ * Deterministic BLAKE3 hashing (hex) aligned with protocol.hashes.hash_string().
+ */
+export function hashString(payload: string): string {
   return bytesToHex(blake3(utf8ToBytes(payload)));
 }
 
-export async function createLocationClaim(
+/**
+ * Deterministic hashing of structured fields joined with HASH_SEPARATOR.
+ */
+export function hashStructuredFields(...fields: string[]): string {
+  return hashString(fields.join(HASH_SEPARATOR));
+}
+
+export function createLocationClaim(
   zip: string,
   salt = DEFAULT_LOCATION_SALT,
-): Promise<LocationClaim> {
+): LocationClaim {
   const normalized = normalizeZipCode(zip);
   if (normalized.length < 5) {
     throw new Error("ZIP code must include five digits.");
   }
   const zip3 = normalized.slice(0, 3);
-  const locationHash = await hashString([salt, zip3].join(HASH_SEPARATOR));
+  const locationHash = hashStructuredFields(salt, zip3);
   return {
     precision: "zip3",
     locationHash,
@@ -232,19 +264,17 @@ export async function createLocationClaim(
   };
 }
 
-export async function createPersonhoodCommitment(
+export function createPersonhoodCommitment(
   method: VerificationMethod,
   proof: VerificationProof,
-): Promise<string> {
-  const proofHash = await hashString(JSON.stringify(proof));
-  return hashString(["personhood", method, proofHash].join(HASH_SEPARATOR));
+): string {
+  const proofHash = hashString(canonicalizeProof(proof));
+  return hashStructuredFields("personhood", method, proofHash);
 }
 
-export async function createVerificationId(
+export function createVerificationId(
   walletAddress: string,
   personhoodId: string,
-): Promise<string> {
-  return hashString(
-    ["verification", walletAddress, personhoodId].join(HASH_SEPARATOR),
-  );
+): string {
+  return hashStructuredFields("verification", walletAddress, personhoodId);
 }

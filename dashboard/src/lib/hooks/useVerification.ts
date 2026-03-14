@@ -50,7 +50,7 @@ export function useVerification() {
 
       setState({ status: "submitting" });
       try {
-        const location = await createLocationClaim(submission.locationZip);
+        const location = createLocationClaim(submission.locationZip);
         const payload: VerificationRequestPayload = {
           walletAddress,
           method: submission.method,

@@ -8,6 +8,7 @@ import { useAuth } from "@/lib/hooks/useAuth";
 import { useVerification } from "@/lib/hooks/useVerification";
 import {
   VERIFICATION_METHODS,
+  VERIFICATION_METHOD_LABELS,
   maskZip,
   isValidZipCode,
   sanitizeProof,
@@ -45,7 +46,7 @@ export function VerificationWizard() {
     [method, proof],
   );
   const zipValid = isValidZipCode(locationZip);
-  const sanitizedProof = useMemo(() => sanitizeProof(method, proof), [method, proof]);
+  const sanitizedProof = sanitizeProof(method, proof);
 
   const canAdvance = [
     isConnected,
@@ -437,7 +438,7 @@ export function VerificationWizard() {
                   color: "var(--color-text-muted)",
                 }}
               >
-                <p>Method: {method.replace("-", " ")}</p>
+                <p>Method: {VERIFICATION_METHOD_LABELS[method]}</p>
                 <p>Location hint: {maskZip(locationZip)}</p>
                 <p>Proof fields: {Object.keys(sanitizedProof).length}</p>
               </div>

@@ -10,7 +10,7 @@ import {
   useState,
 } from "react";
 import { useAccount } from "wagmi";
-import type { VerificationRecord } from "@/lib/utils/verification";
+import { isSameWalletAddress, type VerificationRecord } from "@/lib/utils/verification";
 
 type VerificationStatus = "loading" | "unverified" | "verified";
 
@@ -23,6 +23,7 @@ type AuthContextValue = {
   clearVerification: () => Promise<void>;
 };
 
+// Local storage keeps UI context; httpOnly cookies guard middleware access.
 const STORAGE_KEY = "olympus.verification";
 
 const AuthContext = createContext<AuthContextValue | undefined>(undefined);
@@ -59,7 +60,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       return;
     }
     if (verificationRecord && address) {
-      if (verificationRecord.walletAddress.toLowerCase() !== address.toLowerCase()) {
+      if (!isSameWalletAddress(verificationRecord.walletAddress, address)) {
         setVerificationRecord(null);
         setVerificationStatus("unverified");
         if (typeof window !== "undefined") {

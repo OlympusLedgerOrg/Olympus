@@ -1,6 +1,6 @@
 "use client";
 
-import type { ReactNode } from "react";
+import { type ReactNode, useEffect } from "react";
 import {
   ConnectButton,
   RainbowKitProvider,
@@ -10,8 +10,9 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { WagmiProvider } from "wagmi";
 import { mainnet, sepolia } from "wagmi/chains";
 
+const DEFAULT_DEMO_PROJECT_ID = "olympus-civic-demo";
 const projectId =
-  process.env.NEXT_PUBLIC_WALLETCONNECT_PROJECT_ID ?? "olympus-civic-demo";
+  process.env.NEXT_PUBLIC_WALLETCONNECT_PROJECT_ID ?? DEFAULT_DEMO_PROJECT_ID;
 
 const config = getDefaultConfig({
   appName: "Olympus Civic",
@@ -34,7 +35,15 @@ export function WalletConnectProvider({ children }: { children: ReactNode }) {
 
 export function WalletConnect() {
   const usingDemoProjectId =
-    projectId === "olympus-civic-demo" || projectId.trim().length === 0;
+    projectId === DEFAULT_DEMO_PROJECT_ID || projectId.trim().length === 0;
+
+  useEffect(() => {
+    if (usingDemoProjectId) {
+      console.warn(
+        "Olympus Civic: using demo WalletConnect project ID. Set NEXT_PUBLIC_WALLETCONNECT_PROJECT_ID for production.",
+      );
+    }
+  }, [usingDemoProjectId]);
 
   return (
     <div className="space-y-3">

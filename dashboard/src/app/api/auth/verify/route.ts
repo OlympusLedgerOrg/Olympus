@@ -2,10 +2,11 @@ import { NextResponse, type NextRequest } from "next/server";
 import {
   MOCK_SBT_ADDRESS,
   MOCK_SBT_CHAIN_ID,
-  HASH_SEPARATOR,
   createPersonhoodCommitment,
   createVerificationId,
-  hashString,
+  hashStructuredFields,
+  isSameWalletAddress,
+  normalizeWalletAddress,
   sanitizeProof,
   validateVerificationProof,
   validateWalletAddress,
@@ -81,8 +82,8 @@ export async function POST(request: NextRequest) {
     );
   }
 
-  const walletAddress = payload.walletAddress.toLowerCase();
-  const personhoodId = await createPersonhoodCommitment(
+  const walletAddress = normalizeWalletAddress(payload.walletAddress);
+  const personhoodId = createPersonhoodCommitment(
     payload.method,
     sanitizedProof,
   );
@@ -90,7 +91,7 @@ export async function POST(request: NextRequest) {
   const existingPersonhood = registry.byPersonhood.get(personhoodId);
   if (
     existingPersonhood &&
-    existingPersonhood.walletAddress.toLowerCase() !== walletAddress
+    !isSameWalletAddress(existingPersonhood.walletAddress, walletAddress)
   ) {
     return NextResponse.json(
       { error: "This proof of personhood is already linked to a wallet." },
@@ -110,9 +111,10 @@ export async function POST(request: NextRequest) {
     return buildVerificationResponse(existingPersonhood, "already_verified");
   }
 
-  const verificationId = await createVerificationId(walletAddress, personhoodId);
-  const tokenSeed = await hashString(["sbt", verificationId].join(HASH_SEPARATOR));
-  const txSeed = await hashString(["tx", verificationId].join(HASH_SEPARATOR));
+  const verificationId = createVerificationId(walletAddress, personhoodId);
+  // Canonical seed format: label | verificationId (deterministic mock metadata).
+  const tokenSeed = hashStructuredFields("sbt", verificationId);
+  const txSeed = hashStructuredFields("tx", verificationId);
 
   const record: VerificationRecord = {
     verificationId,
