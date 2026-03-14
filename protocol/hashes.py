@@ -211,13 +211,20 @@ def event_id(shard_id: str, header_hash: str, timestamp: str) -> str:
     Returns:
         Hex-encoded event ID
     """
-    fields = [shard_id, header_hash, timestamp]
+    fields = [
+        ("shard_id", shard_id),
+        ("header_hash", header_hash),
+        ("timestamp", timestamp),
+    ]
     max_field_length = (1 << 32) - 1
     encoded_fields: list[bytes] = []
-    for value in fields:
+    for field_name, value in fields:
         field_bytes = value.encode("utf-8")
         if len(field_bytes) > max_field_length:
-            raise ValueError("event_id fields must fit within a 4-byte length prefix")
+            raise ValueError(
+                f"event_id field '{field_name}' length {len(field_bytes)} exceeds 4-byte limit "
+                f"{max_field_length}"
+            )
         encoded_fields.append(len(field_bytes).to_bytes(4, byteorder="big"))
         encoded_fields.append(field_bytes)
 
