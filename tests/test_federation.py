@@ -8,31 +8,40 @@ import pytest
 
 from protocol.canonical_json import canonical_json_bytes
 from protocol.federation import (
-    FEDERATION_DOMAIN_TAG,
     DEFAULT_MAX_CERTIFICATE_CLOCK_SKEW_SECONDS,
+    FEDERATION_DOMAIN_TAG,
+    DataAvailabilityChallenge,
+    EpochKeyRotationRecord,
     FederationBehaviorSample,
+    FederationFinalityStatus,
     FederationNode,
     FederationRegistry,
     FederationVoteMessage,
+    GossipedShardHeader,
     NodeSignature,
+    RecursiveChainProof,
+    ShardHeaderForkEvidence,
     _to_int,
     append_quorum_certificate_to_ledger,
-    build_proactive_share_commitments,
     build_federation_header_record,
+    build_proactive_share_commitments,
     build_quorum_certificate,
+    create_replication_proof,
     detect_compromise_signals,
+    detect_shard_header_forks,
     has_federation_quorum,
     is_replay_epoch,
     quorum_certificate_hash,
+    registry_forest_commitment,
     resolve_canonical_fork,
-    select_vrf_committee,
-    select_vrf_leader,
     serialize_vote_message,
     sign_federated_header,
-    verify_proactive_share_commitments,
+    verify_data_availability,
+    verify_epoch_key_rotation,
     verify_federated_header_signatures,
+    verify_proactive_share_commitments,
     verify_quorum_certificate,
-    vrf_selection_scores,
+    verify_recursive_chain_proof,
 )
 from protocol.ledger import Ledger
 from protocol.shards import (
@@ -1056,3 +1065,536 @@ def test_detect_compromise_signals_flags_double_vote_and_spike() -> None:
 
     assert signals["node-1"] == ("double_vote_detected", "participation_spike_detected")
     assert "node-2" not in signals
+
+
+# =============================================================================
+# T1: Steward-Guardian Equivocation Detection Tests (Shadow Ledger Mitigation)
+# =============================================================================
+
+
+def test_shard_header_fork_evidence_validates_fields() -> None:
+    """ShardHeaderForkEvidence should reject invalid field values."""
+    sig1 = NodeSignature(node_id="node-1", signature="ab" * 32)
+    sig2 = NodeSignature(node_id="node-2", signature="cd" * 32)
+
+    # Valid evidence should pass
+    evidence = ShardHeaderForkEvidence(
+        shard_id="records/city-a",
+        seq=42,
+        conflicting_header_hashes=("aa" * 32, "bb" * 32),
+        observer_ids=("peer-1", "peer-2"),
+        signatures_a=(sig1,),
+        signatures_b=(sig2,),
+        detected_at="2026-03-14T12:00:00Z",
+    )
+    assert evidence.shard_id == "records/city-a"
+    assert evidence.seq == 42
+
+    # Should reject empty shard_id
+    with pytest.raises(ValueError, match="shard_id"):
+        ShardHeaderForkEvidence(
+            shard_id="",
+            seq=42,
+            conflicting_header_hashes=("aa" * 32, "bb" * 32),
+            observer_ids=("peer-1",),
+            signatures_a=(),
+            signatures_b=(),
+            detected_at="2026-03-14T12:00:00Z",
+        )
+
+    # Should reject less than 2 conflicting hashes
+    with pytest.raises(ValueError, match="conflicting_header_hashes"):
+        ShardHeaderForkEvidence(
+            shard_id="records/city-a",
+            seq=42,
+            conflicting_header_hashes=("aa" * 32,),
+            observer_ids=("peer-1",),
+            signatures_a=(),
+            signatures_b=(),
+            detected_at="2026-03-14T12:00:00Z",
+        )
+
+
+def test_shard_header_fork_evidence_detects_colluding_guardians() -> None:
+    """colluding_guardians() should return nodes that signed both conflicting headers."""
+    sig1_a = NodeSignature(node_id="node-1", signature="aa" * 32)
+    sig2_a = NodeSignature(node_id="node-2", signature="bb" * 32)
+    sig1_b = NodeSignature(node_id="node-1", signature="cc" * 32)  # Same node signed both
+    sig3_b = NodeSignature(node_id="node-3", signature="dd" * 32)
+
+    evidence = ShardHeaderForkEvidence(
+        shard_id="records/city-a",
+        seq=42,
+        conflicting_header_hashes=("aa" * 32, "bb" * 32),
+        observer_ids=("peer-1", "peer-2"),
+        signatures_a=(sig1_a, sig2_a),
+        signatures_b=(sig1_b, sig3_b),
+        detected_at="2026-03-14T12:00:00Z",
+    )
+
+    colluders = evidence.colluding_guardians()
+    assert colluders == ("node-1",)  # node-1 signed both headers
+
+
+def test_detect_shard_header_forks_finds_equivocation() -> None:
+    """detect_shard_header_forks should detect conflicting headers at same seq."""
+    sig1 = NodeSignature(node_id="node-1", signature="aa" * 32)
+    sig2 = NodeSignature(node_id="node-2", signature="bb" * 32)
+
+    observations = {
+        "peer-1": GossipedShardHeader(
+            peer_id="peer-1",
+            shard_id="records/city-a",
+            seq=42,
+            header_hash="11" * 32,
+            root_hash="aa" * 32,
+            timestamp="2026-03-14T12:00:00Z",
+            signatures=(sig1,),
+        ),
+        "peer-2": GossipedShardHeader(
+            peer_id="peer-2",
+            shard_id="records/city-a",
+            seq=42,
+            header_hash="22" * 32,  # Different header hash at same seq
+            root_hash="bb" * 32,
+            timestamp="2026-03-14T12:00:01Z",
+            signatures=(sig2,),
+        ),
+    }
+
+    evidences = detect_shard_header_forks(observations)
+
+    assert len(evidences) == 1
+    evidence = evidences[0]
+    assert evidence.shard_id == "records/city-a"
+    assert evidence.seq == 42
+    assert set(evidence.conflicting_header_hashes) == {"11" * 32, "22" * 32}
+
+
+def test_detect_shard_header_forks_no_conflict_when_hashes_match() -> None:
+    """detect_shard_header_forks should not report forks when headers agree."""
+    sig1 = NodeSignature(node_id="node-1", signature="aa" * 32)
+    sig2 = NodeSignature(node_id="node-2", signature="bb" * 32)
+
+    observations = {
+        "peer-1": GossipedShardHeader(
+            peer_id="peer-1",
+            shard_id="records/city-a",
+            seq=42,
+            header_hash="11" * 32,
+            root_hash="aa" * 32,
+            timestamp="2026-03-14T12:00:00Z",
+            signatures=(sig1,),
+        ),
+        "peer-2": GossipedShardHeader(
+            peer_id="peer-2",
+            shard_id="records/city-a",
+            seq=42,
+            header_hash="11" * 32,  # Same header hash = no conflict
+            root_hash="aa" * 32,
+            timestamp="2026-03-14T12:00:01Z",
+            signatures=(sig2,),
+        ),
+    }
+
+    evidences = detect_shard_header_forks(observations)
+    assert len(evidences) == 0
+
+
+def test_registry_forest_commitment_is_deterministic() -> None:
+    """registry_forest_commitment should produce deterministic commitments."""
+    registry = FederationRegistry.from_file(REGISTRY_PATH)
+
+    commitment1 = registry_forest_commitment(registry)
+    commitment2 = registry_forest_commitment(registry)
+
+    assert commitment1 == commitment2
+    assert len(commitment1) == 64  # 32 bytes hex-encoded
+
+
+def test_registry_forest_commitment_changes_with_membership() -> None:
+    """registry_forest_commitment should change when membership changes."""
+    registry = FederationRegistry.from_file(REGISTRY_PATH)
+    commitment_before = registry_forest_commitment(registry)
+
+    rotated_registry = registry.rotate_node_key(
+        node_id="olympus-node-1",
+        new_pubkey=_test_signing_key(9).verify_key.encode(),
+        rotated_at="2026-03-14T12:00:00Z",
+    )
+    commitment_after = registry_forest_commitment(rotated_registry)
+
+    assert commitment_before != commitment_after
+
+
+# =============================================================================
+# T2: State Suppression Tests (Missing Shard Attack Mitigation)
+# =============================================================================
+
+
+def test_data_availability_challenge_validation() -> None:
+    """DataAvailabilityChallenge should validate all required fields."""
+    challenge = DataAvailabilityChallenge(
+        shard_id="records/city-a",
+        header_hash="aa" * 32,
+        challenger_id="guardian-1",
+        challenge_nonce="nonce-123",
+        issued_at="2026-03-14T12:00:00Z",
+        response_deadline="2026-03-14T12:05:00Z",
+    )
+    assert challenge.shard_id == "records/city-a"
+    assert len(challenge.challenge_hash()) == 64
+
+    with pytest.raises(ValueError, match="shard_id"):
+        DataAvailabilityChallenge(
+            shard_id="",
+            header_hash="aa" * 32,
+            challenger_id="guardian-1",
+            challenge_nonce="nonce-123",
+            issued_at="2026-03-14T12:00:00Z",
+            response_deadline="2026-03-14T12:05:00Z",
+        )
+
+
+def test_replication_proof_creation_and_verification() -> None:
+    """create_replication_proof and verify_data_availability should work together."""
+    registry = FederationRegistry.from_file(REGISTRY_PATH)
+    signing_key = _test_signing_key(1)
+
+    challenge = DataAvailabilityChallenge(
+        shard_id="records/city-a",
+        header_hash="aa" * 32,
+        challenger_id="guardian-2",
+        challenge_nonce="nonce-456",
+        issued_at="2026-03-14T12:00:00Z",
+        response_deadline="2026-03-14T12:05:00Z",
+    )
+
+    proof = create_replication_proof(
+        challenge=challenge,
+        guardian_id="olympus-node-1",
+        signing_key=signing_key,
+        ledger_tail_hash="bb" * 32,
+        proof_sample_indices=(0, 5, 10),
+        proof_sample_hashes=("cc" * 32, "dd" * 32, "ee" * 32),
+        replicated_at="2026-03-14T12:01:00Z",
+    )
+
+    assert proof.guardian_id == "olympus-node-1"
+    assert proof.merkle_root_verified is True
+    assert verify_data_availability(challenge, proof, registry) is True
+
+
+def test_replication_proof_rejects_wrong_challenge() -> None:
+    """verify_data_availability should reject proofs for different challenges."""
+    registry = FederationRegistry.from_file(REGISTRY_PATH)
+    signing_key = _test_signing_key(1)
+
+    challenge1 = DataAvailabilityChallenge(
+        shard_id="records/city-a",
+        header_hash="aa" * 32,
+        challenger_id="guardian-2",
+        challenge_nonce="nonce-111",
+        issued_at="2026-03-14T12:00:00Z",
+        response_deadline="2026-03-14T12:05:00Z",
+    )
+
+    challenge2 = DataAvailabilityChallenge(
+        shard_id="records/city-a",
+        header_hash="aa" * 32,
+        challenger_id="guardian-2",
+        challenge_nonce="nonce-222",  # Different nonce
+        issued_at="2026-03-14T12:00:00Z",
+        response_deadline="2026-03-14T12:05:00Z",
+    )
+
+    proof = create_replication_proof(
+        challenge=challenge1,
+        guardian_id="olympus-node-1",
+        signing_key=signing_key,
+        ledger_tail_hash="bb" * 32,
+        proof_sample_indices=(0,),
+        proof_sample_hashes=("cc" * 32,),
+        replicated_at="2026-03-14T12:01:00Z",
+    )
+
+    # Should fail because proof was for challenge1, not challenge2
+    assert verify_data_availability(challenge2, proof, registry) is False
+
+
+def test_federation_finality_status_tracks_state() -> None:
+    """FederationFinalityStatus should track header finalization progress."""
+    status = FederationFinalityStatus(
+        shard_id="records/city-a",
+        seq=42,
+        header_hash="aa" * 32,
+        status=FederationFinalityStatus.STATUS_PROPOSED,
+        availability_proofs=(),
+        quorum_signatures=(),
+        finalized_at=None,
+    )
+
+    assert status.is_final() is False
+    assert status.status == "PROPOSED"
+
+    # Verify finalized status
+    final_status = FederationFinalityStatus(
+        shard_id="records/city-a",
+        seq=42,
+        header_hash="aa" * 32,
+        status=FederationFinalityStatus.STATUS_FEDERATION_FINAL,
+        availability_proofs=(),
+        quorum_signatures=(),
+        finalized_at="2026-03-14T12:10:00Z",
+    )
+
+    assert final_status.is_final() is True
+
+
+def test_federation_finality_availability_threshold() -> None:
+    """availability_threshold_met should require 2/3 of Guardians."""
+    registry = FederationRegistry.from_file(REGISTRY_PATH)
+    signing_key1 = _test_signing_key(1)
+    signing_key2 = _test_signing_key(2)
+
+    challenge = DataAvailabilityChallenge(
+        shard_id="records/city-a",
+        header_hash="aa" * 32,
+        challenger_id="external",
+        challenge_nonce="nonce-789",
+        issued_at="2026-03-14T12:00:00Z",
+        response_deadline="2026-03-14T12:05:00Z",
+    )
+
+    proof1 = create_replication_proof(
+        challenge=challenge,
+        guardian_id="olympus-node-1",
+        signing_key=signing_key1,
+        ledger_tail_hash="bb" * 32,
+        proof_sample_indices=(),
+        proof_sample_hashes=(),
+        replicated_at="2026-03-14T12:01:00Z",
+    )
+
+    proof2 = create_replication_proof(
+        challenge=challenge,
+        guardian_id="olympus-node-2",
+        signing_key=signing_key2,
+        ledger_tail_hash="bb" * 32,
+        proof_sample_indices=(),
+        proof_sample_hashes=(),
+        replicated_at="2026-03-14T12:01:00Z",
+    )
+
+    # With 3 nodes and 2/3 threshold, need 2 proofs
+    status_one_proof = FederationFinalityStatus(
+        shard_id="records/city-a",
+        seq=42,
+        header_hash="aa" * 32,
+        status=FederationFinalityStatus.STATUS_AVAILABILITY_PENDING,
+        availability_proofs=(proof1,),
+        quorum_signatures=(),
+        finalized_at=None,
+    )
+    assert status_one_proof.availability_threshold_met(registry) is False
+
+    status_two_proofs = FederationFinalityStatus(
+        shard_id="records/city-a",
+        seq=42,
+        header_hash="aa" * 32,
+        status=FederationFinalityStatus.STATUS_AVAILABILITY_VERIFIED,
+        availability_proofs=(proof1, proof2),
+        quorum_signatures=(),
+        finalized_at=None,
+    )
+    assert status_two_proofs.availability_threshold_met(registry) is True
+
+
+# =============================================================================
+# T3: Long-Range Key Compromise Tests (Recursive SNARK Chain Proofs)
+# =============================================================================
+
+
+def test_recursive_chain_proof_validation() -> None:
+    """RecursiveChainProof should validate all required fields."""
+    proof = RecursiveChainProof(
+        proof_type=RecursiveChainProof.PROOF_TYPE_GROTH16,
+        previous_root="aa" * 32,
+        current_root="bb" * 32,
+        epoch_start=5,
+        epoch_end=10,
+        transition_count=100,
+        proof_data="proof-data-hex",
+        public_inputs=("aa" * 32, "bb" * 32, "5", "10"),
+        verification_key_hash="cc" * 32,
+        created_at="2026-03-14T12:00:00Z",
+    )
+
+    assert proof.proof_type == "groth16"
+    assert proof.transition_count == 100
+    assert len(proof.proof_commitment_hash()) == 64
+
+    # Should reject invalid proof type
+    with pytest.raises(ValueError, match="proof_type"):
+        RecursiveChainProof(
+            proof_type="invalid",
+            previous_root="aa" * 32,
+            current_root="bb" * 32,
+            epoch_start=5,
+            epoch_end=10,
+            transition_count=100,
+            proof_data="proof-data-hex",
+            public_inputs=(),
+            verification_key_hash="cc" * 32,
+            created_at="2026-03-14T12:00:00Z",
+        )
+
+    # Should reject epoch_end < epoch_start
+    with pytest.raises(ValueError, match="epoch_end"):
+        RecursiveChainProof(
+            proof_type="groth16",
+            previous_root="aa" * 32,
+            current_root="bb" * 32,
+            epoch_start=10,
+            epoch_end=5,
+            transition_count=100,
+            proof_data="proof-data-hex",
+            public_inputs=(),
+            verification_key_hash="cc" * 32,
+            created_at="2026-03-14T12:00:00Z",
+        )
+
+
+def test_recursive_chain_proof_commitment_is_deterministic() -> None:
+    """proof_commitment_hash should be deterministic."""
+    proof = RecursiveChainProof(
+        proof_type="groth16",
+        previous_root="aa" * 32,
+        current_root="bb" * 32,
+        epoch_start=5,
+        epoch_end=10,
+        transition_count=100,
+        proof_data="proof-data-hex",
+        public_inputs=(),
+        verification_key_hash="cc" * 32,
+        created_at="2026-03-14T12:00:00Z",
+    )
+
+    hash1 = proof.proof_commitment_hash()
+    hash2 = proof.proof_commitment_hash()
+
+    assert hash1 == hash2
+
+
+def test_epoch_key_rotation_record_validation() -> None:
+    """EpochKeyRotationRecord should validate fields correctly."""
+    sig1 = NodeSignature(node_id="witness-1", signature="aa" * 32)
+
+    record = EpochKeyRotationRecord(
+        node_id="guardian-1",
+        epoch=5,
+        old_pubkey_hash="11" * 32,
+        new_pubkey_hash="22" * 32,
+        rotated_at="2026-03-14T12:00:00Z",
+        rotation_signature="signature-hex",
+        witness_signatures=(sig1,),
+    )
+
+    assert record.node_id == "guardian-1"
+    assert record.epoch == 5
+
+    # Should reject same old and new pubkey hash
+    with pytest.raises(ValueError, match="new_pubkey_hash"):
+        EpochKeyRotationRecord(
+            node_id="guardian-1",
+            epoch=5,
+            old_pubkey_hash="11" * 32,
+            new_pubkey_hash="11" * 32,  # Same as old
+            rotated_at="2026-03-14T12:00:00Z",
+            rotation_signature="signature-hex",
+            witness_signatures=(),
+        )
+
+
+def test_verify_epoch_key_rotation_validates_signature() -> None:
+    """verify_epoch_key_rotation should validate the rotation signature."""
+    registry = FederationRegistry.from_file(REGISTRY_PATH)
+    old_key = _test_signing_key(1)
+    new_key = _test_signing_key(9)
+
+    # Compute expected hashes
+    from protocol.hashes import HASH_SEPARATOR, hash_bytes
+
+    old_pubkey_hash = hash_bytes(old_key.verify_key.encode()).hex()
+    new_pubkey_hash = hash_bytes(new_key.verify_key.encode()).hex()
+
+    # Create the rotation payload
+    rotation_payload = HASH_SEPARATOR.join([
+        "olympus-node-1",
+        "5",
+        old_pubkey_hash,
+        new_pubkey_hash,
+        "2026-03-14T12:00:00Z",
+    ]).encode()
+    rotation_hash = hash_bytes(rotation_payload)
+
+    # Sign with old key
+    signed = old_key.sign(rotation_hash)
+    rotation_signature = signed.signature.hex()
+
+    # Create witness signature
+    witness_key = _test_signing_key(2)
+    witness_signed = witness_key.sign(rotation_hash)
+    witness_sig = NodeSignature(
+        node_id="olympus-node-2",
+        signature=witness_signed.signature.hex(),
+    )
+
+    record = EpochKeyRotationRecord(
+        node_id="olympus-node-1",
+        epoch=5,
+        old_pubkey_hash=old_pubkey_hash,
+        new_pubkey_hash=new_pubkey_hash,
+        rotated_at="2026-03-14T12:00:00Z",
+        rotation_signature=rotation_signature,
+        witness_signatures=(witness_sig,),
+    )
+
+    result = verify_epoch_key_rotation(
+        record=record,
+        old_verify_key=old_key.verify_key,
+        registry=registry,
+        min_witnesses=1,
+    )
+
+    assert result is True
+
+
+def test_verify_recursive_chain_proof_checks_vk_hash() -> None:
+    """verify_recursive_chain_proof should verify verification key hash."""
+    from protocol.canonical_json import canonical_json_bytes
+    from protocol.hashes import hash_bytes
+
+    vk = {"type": "groth16", "curve": "bn128"}
+    vk_hash = hash_bytes(canonical_json_bytes(vk)).hex()
+
+    proof = RecursiveChainProof(
+        proof_type="groth16",
+        previous_root="aa" * 32,
+        current_root="bb" * 32,
+        epoch_start=5,
+        epoch_end=10,
+        transition_count=100,
+        proof_data="proof-data-hex",
+        public_inputs=("aa" * 32, "bb" * 32, "5", "10"),
+        verification_key_hash=vk_hash,
+        created_at="2026-03-14T12:00:00Z",
+    )
+
+    # Should pass with correct VK hash
+    result = verify_recursive_chain_proof(proof, vk, vk_hash)
+    assert result is True
+
+    # Should fail with wrong VK hash
+    result_wrong = verify_recursive_chain_proof(proof, vk, "wrong" * 16)
+    assert result_wrong is False
