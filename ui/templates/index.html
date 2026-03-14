@@ -1286,18 +1286,18 @@
 
         // Initialize theme from saved preferences or default
         (function initTheme() {
-            var saved = loadThemePrefs();
-            var theme = saved ? saved.theme : 'professional';
-            var colorScheme = saved ? saved.colorScheme : 'default';
-            var prefs = saved ? (saved.prefs || {}) : {};
+            const saved = loadThemePrefs();
+            const theme = saved ? saved.theme : 'professional';
+            const colorScheme = saved ? saved.colorScheme : 'default';
+            const prefs = saved ? (saved.prefs || {}) : {};
             applyTheme(theme, colorScheme, prefs);
 
             // Theme mode radios
             document.querySelectorAll('input[name="theme-mode"]').forEach(function (radio) {
                 radio.addEventListener('change', function () {
-                    var currentPrefs = loadThemePrefs() || {};
-                    var p = currentPrefs.prefs || {};
-                    var cs = currentPrefs.colorScheme || 'default';
+                    const currentPrefs = loadThemePrefs() || {};
+                    const p = currentPrefs.prefs || {};
+                    const cs = currentPrefs.colorScheme || 'default';
                     applyTheme(radio.value, cs, p);
                     saveThemePrefs(radio.value, cs, p);
                 });
@@ -1306,34 +1306,34 @@
             // Color scheme radios
             document.querySelectorAll('input[name="color-scheme"]').forEach(function (radio) {
                 radio.addEventListener('change', function () {
-                    var currentPrefs = loadThemePrefs() || {};
-                    var t = currentPrefs.theme || 'professional';
-                    var p = currentPrefs.prefs || {};
+                    const currentPrefs = loadThemePrefs() || {};
+                    const t = currentPrefs.theme || 'professional';
+                    const p = currentPrefs.prefs || {};
                     applyTheme(t, radio.value, p);
                     saveThemePrefs(t, radio.value, p);
                 });
             });
 
             // Layout preference checkboxes
-            var rainCb = document.getElementById('pref-glyph-rain');
+            const rainCb = document.getElementById('pref-glyph-rain');
             if (rainCb) {
                 rainCb.addEventListener('change', function () {
-                    var currentPrefs = loadThemePrefs() || {};
-                    var t = currentPrefs.theme || 'professional';
-                    var cs = currentPrefs.colorScheme || 'default';
-                    var p = currentPrefs.prefs || {};
+                    const currentPrefs = loadThemePrefs() || {};
+                    const t = currentPrefs.theme || 'professional';
+                    const cs = currentPrefs.colorScheme || 'default';
+                    const p = currentPrefs.prefs || {};
                     p.glyphRain = rainCb.checked;
                     applyTheme(t, cs, p);
                     saveThemePrefs(t, cs, p);
                 });
             }
-            var compactCb = document.getElementById('pref-compact');
+            const compactCb = document.getElementById('pref-compact');
             if (compactCb) {
                 compactCb.addEventListener('change', function () {
-                    var currentPrefs = loadThemePrefs() || {};
-                    var t = currentPrefs.theme || 'professional';
-                    var cs = currentPrefs.colorScheme || 'default';
-                    var p = currentPrefs.prefs || {};
+                    const currentPrefs = loadThemePrefs() || {};
+                    const t = currentPrefs.theme || 'professional';
+                    const cs = currentPrefs.colorScheme || 'default';
+                    const p = currentPrefs.prefs || {};
                     p.compact = compactCb.checked;
                     applyTheme(t, cs, p);
                     saveThemePrefs(t, cs, p);
