@@ -44,6 +44,7 @@ TREE_HEAD_PREFIX = b"OLY:TREE-HEAD:V1"
 VRF_SELECTION_PREFIX = b"OLY:VRF-SELECTION:V1"
 _VRF_COMMIT_REVEAL_PREFIX = b"OLY:VRF-COMMIT-REVEAL:V1"
 EVENT_ID_FIELD_NAMES = ("shard_id", "header_hash", "timestamp")
+MAX_EVENT_ID_FIELD_LENGTH = (1 << 32) - 1
 
 
 def blake3_hash(parts: list[bytes]) -> bytes:
@@ -212,16 +213,13 @@ def event_id(shard_id: str, header_hash: str, timestamp: str) -> str:
     Returns:
         Hex-encoded event ID
     """
-    field_values = (shard_id, header_hash, timestamp)
-    fields = zip(EVENT_ID_FIELD_NAMES, field_values)
-    max_field_length = (1 << 32) - 1
     encoded_fields: list[bytes] = []
-    for field_name, value in fields:
+    for field_name, value in zip(EVENT_ID_FIELD_NAMES, (shard_id, header_hash, timestamp)):
         field_bytes = value.encode("utf-8")
-        if len(field_bytes) > max_field_length:
+        if len(field_bytes) > MAX_EVENT_ID_FIELD_LENGTH:
             raise ValueError(
                 f"event_id field '{field_name}' length {len(field_bytes)} exceeds 4-byte limit "
-                f"{max_field_length}"
+                f"{MAX_EVENT_ID_FIELD_LENGTH}"
             )
         encoded_fields.append(len(field_bytes).to_bytes(4, byteorder="big"))
         encoded_fields.append(field_bytes)
