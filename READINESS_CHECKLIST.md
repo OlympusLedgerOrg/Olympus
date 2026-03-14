@@ -24,16 +24,16 @@ python -c "from protocol import hashes; print('✓ Protocol imports working')"
 ### 1. Code Linting & Formatting
 ```bash
 # Check code quality (E, W, F, I, UP rules)
-ruff check protocol/ storage/ api/ app_testonly/ tests/
+ruff check protocol/ storage/ api/ scaffolding/ tests/
 
 # Auto-fix issues
-ruff check protocol/ storage/ api/ app_testonly/ tests/ --fix
+ruff check protocol/ storage/ api/ scaffolding/ tests/ --fix
 
 # Check formatting
-ruff format --check protocol/ storage/ api/ app_testonly/ tests/
+ruff format --check protocol/ storage/ api/ scaffolding/ tests/
 
 # Auto-format code
-ruff format protocol/ storage/ api/ app_testonly/ tests/
+ruff format protocol/ storage/ api/ scaffolding/ tests/
 ```
 
 ### 2. Type Checking
@@ -45,7 +45,7 @@ mypy protocol/ storage/ api/
 ### 3. Security Scanning
 ```bash
 # Bandit security scan
-bandit -r protocol/ storage/ api/ app_testonly/ -f txt
+bandit -r protocol/ storage/ api/ scaffolding/ -f txt
 
 # Check dependencies for known vulnerabilities
 pip-audit -r requirements.txt
@@ -154,11 +154,11 @@ The GitHub Actions workflow automatically runs on push and PR:
 python -m pip install --upgrade pip
 pip install -e ".[dev]"
 python tools/validate_schemas.py
-ruff check protocol/ storage/ api/ app_testonly/ tests/
-ruff format --check protocol/ storage/ api/ app_testonly/ tests/
+ruff check protocol/ storage/ api/ scaffolding/ tests/
+ruff format --check protocol/ storage/ api/ scaffolding/ tests/
 mypy protocol/ storage/ api/
-bandit -r protocol/ storage/ api/ app_testonly/ -f txt
-pytest -q -m "not postgres" --cov=protocol --cov=storage --cov=api --cov=app_testonly
+bandit -r protocol/ storage/ api/ scaffolding/ -f txt
+pytest -q -m "not postgres" --cov=protocol --cov=storage --cov=api --cov=scaffolding
 ```
 
 ## 🔐 Security Best Practices
@@ -189,8 +189,8 @@ ruff check . && ruff format --check . && mypy protocol/ storage/ api/ && pytest 
 ```bash
 # Full quality check with coverage
 ruff check . && ruff format --check . && mypy protocol/ storage/ api/ && \
-pytest -q -m "not postgres" --cov=protocol --cov=storage --cov=api --cov=app_testonly --cov-report=term && \
-bandit -r protocol/ storage/ api/ app_testonly/
+pytest -q -m "not postgres" --cov=protocol --cov=storage --cov=api --cov=scaffolding --cov-report=term && \
+bandit -r protocol/ storage/ api/ scaffolding/
 ```
 
 ## 📚 Additional Resources

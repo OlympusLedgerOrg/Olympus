@@ -12,5 +12,5 @@ docker compose up -d db
 python -m pip install -r requirements-dev.txt
 python -m pip install ruff
 python -c "import os; from storage.postgres import StorageLayer; StorageLayer(os.environ['DATABASE_URL']).init_schema()"
-python -c "import app_testonly"
+python -c "import scaffolding.app_testonly"
 pytest tests/ -v --tb=short -m "postgres"

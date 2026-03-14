@@ -19,7 +19,7 @@ import threading
 from collections.abc import Iterable, Sequence
 from dataclasses import dataclass, field
 
-from .telemetry import VIEW_CHANGE_WATERMARK, get_tracer
+from protocol.telemetry import VIEW_CHANGE_WATERMARK, get_tracer
 
 
 # Inclusive grace-period length applied to every voting round unless a custom

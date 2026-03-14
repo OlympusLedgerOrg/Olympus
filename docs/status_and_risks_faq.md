@@ -4,7 +4,7 @@ This note answers the outstanding questions raised about protocol gaps, AI autho
 
 ## Set 1 — Protocol Gaps & Known Risks
 - **STH signer key pinning:** Today `verify_sth_consistency` only checks signature validity. Before Phase 1 ships we will bind STH verification to the federation registry and reject STHs whose `signer_pubkey` is not present in the active registry snapshot. This is a Phase 1 gate item; until then the threat model treats unpinned STH signers as a detectable-but-not-blocking risk for gossip monitors.
-- **Other accepted gaps:** The STH API still synthesizes history signatures/public keys from headers and the `view_change` helpers are flagged as Phase 1+ scaffolding. These are documented compatibility stubs rather than shipped functionality.
+- **Other accepted gaps:** The STH API still synthesizes history signatures/public keys from headers and the `scaffolding.view_change` helpers are flagged as Phase 1+ scaffolding. These are documented compatibility stubs rather than shipped functionality.
 - **Guardian serves an inconsistent STH:** Detection is explicit—witnesses should treat mismatched STH roots or consistency failures as fork evidence and stop replication from that peer. There is no auto-rollback; operators are expected to quarantine the peer and publish fork evidence.
 
 ## Set 2 — AI Authorship & Correctness Confidence
@@ -21,7 +21,7 @@ This note answers the outstanding questions raised about protocol gaps, AI autho
 ## Set 4 — Federation & the Guardian Model
 - **Quorum loss:** v1.0 runs single-operator by design; if Guardians are offline the Steward can still emit headers, but they are not federation-final (no quorum certificate). Monitors should flag missing acknowledgments rather than stall the ledger.
 - **Registry evolution:** Static `examples/federation_registry.json` is a prototype; Phase 1 promotes it to an append-only, Steward-signed registry (≥2/3 Stewards) recorded as ledger/governance events per `docs/10_federation_governance.md`.
-- **`view_change.py` scope:** It is a membership/window helper for Phase 1+ (grace periods, watermarks). It is not a complete view-change protocol and does not run in v1.0.
+- **`scaffolding/view_change.py` scope:** It is a membership/window helper for Phase 1+ (grace periods, watermarks). It is not a complete view-change protocol and does not run in v1.0.
 
 ## Set 5 — Sustainability & Governance Document
 - **Funder/steward status:** No committed funder or steward institution yet; conversations are focused on civic/open-government grantmakers and watchdog NGOs, but no agreements are in place.

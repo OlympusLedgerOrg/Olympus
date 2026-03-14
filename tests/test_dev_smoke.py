@@ -9,7 +9,7 @@ def test_dev_smoke_script_includes_required_steps():
     assert "pip install -r requirements-dev.txt" in script
     assert "pip install ruff" in script
     assert ".init_schema()" in script
-    assert "import app_testonly" in script
+    assert "import scaffolding.app_testonly" in script
     assert 'pytest tests/ -v --tb=short -m "postgres"' in script
 
 

@@ -119,8 +119,8 @@ python tools/validate_schemas.py
 
 **Lint and format code:**
 ```bash
-ruff check protocol/ storage/ api/ app_testonly/ tests/
-ruff format protocol/ storage/ api/ app_testonly/ tests/
+ruff check protocol/ storage/ api/ scaffolding/ tests/
+ruff format protocol/ storage/ api/ scaffolding/ tests/
 ```
 
 **Type checking:**
@@ -130,7 +130,7 @@ mypy protocol/ storage/ api/
 
 **Security scanning:**
 ```bash
-bandit -r protocol/ storage/ api/ app_testonly/ -f txt
+bandit -r protocol/ storage/ api/ scaffolding/ -f txt
 ```
 
 ## Running the Application

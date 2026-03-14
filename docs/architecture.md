@@ -98,7 +98,7 @@ Prototype federation components present in this repo (for local testing only):
 |------|---------|
 | `protocol/federation.py` | Node identity, static registry, ≥2/3 quorum model |
 | `protocol/partition.py` | Partition detection, fork resolution, proof-of-elapsed-rounds validation |
-| `protocol/view_change.py` | View-change watermarks, grace-period validation, registry snapshots |
+| `scaffolding/view_change.py` | View-change watermarks, grace-period validation, registry snapshots (test scaffolding) |
 | `examples/federation_registry.json` | Static registry for local dev/tests |
 | `docker-compose.federation.yml` | Local three-node simulation |
 
@@ -143,7 +143,7 @@ protocol/redaction.py           (depends on: merkle, hashes)
 protocol/ssmf.py                (depends on: hashes)
 protocol/federation.py          (depends on: hashes, timestamps) — Phase 1+ only
 protocol/partition.py           (depends on: hashes, timestamps) — Phase 1+ only
-protocol/view_change.py         (depends on: none, standalone dataclasses) — Phase 1+ only
+scaffolding/view_change.py         (depends on: none, standalone dataclasses) — Phase 1+ only (test scaffolding)
     ↓
 protocol/canonicalizer.py       (depends on: above; also third-party: pikepdf, lxml)
 ```
@@ -157,7 +157,7 @@ Run `make boundary-check` to verify the dependency boundaries are intact.
 
 ```
 api/            FastAPI application — ingestion routes, auth, rate limiting
-app_testonly/   Test-only app wiring used by smoke/integration flows
+scaffolding/app_testonly/   Test-only app wiring used by smoke/integration flows
 docs/           Protocol specs, threat model, ADRs (you are here)
 examples/       Known-good artifacts: golden vectors, sample documents, notebooks
 migrations/     SQL schema migrations

@@ -13,7 +13,7 @@ CONCURRENCY: Not supported (single process only)
 PRODUCTION USE: ❌ NO - Use storage/postgres.py instead
 
 This module is used ONLY by:
-- app_testonly/main.py (test API)
+- scaffolding/app_testonly/main.py (test API)
 - tests/test_api_proofs.py (proof logic tests)
 
 For production storage with PostgreSQL, use storage.postgres.StorageLayer.
