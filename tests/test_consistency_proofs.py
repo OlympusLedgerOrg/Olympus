@@ -14,7 +14,7 @@ from protocol.consistency import (
     generate_consistency_proof,
     verify_consistency_proof,
 )
-from protocol.epochs import SignedTreeHead, verify_sth_consistency
+from protocol.epochs import SignedTreeHead, advance_epoch, verify_sth_consistency
 from protocol.hashes import hash_bytes
 from protocol.merkle import MerkleTree, ct_merkle_root
 
@@ -446,3 +446,201 @@ def test_consistency_proof_odd_tree_sizes():
     old_root = ct_merkle_root(tree._leaf_hashes[:7])
     proof = generate_consistency_proof(7, 15, tree)
     assert verify_consistency_proof(old_root, new_root, proof)
+
+
+# ---------------------------------------------------------------------------
+# advance_epoch: enforced epoch transition tests
+# ---------------------------------------------------------------------------
+
+
+def test_advance_epoch_genesis_returns_sth_without_proof():
+    """advance_epoch with no previous STH creates a valid STH and returns None proof."""
+    signing_key = nacl.signing.SigningKey.generate()
+    leaves = [hash_bytes(f"leaf-{i}".encode()) for i in range(5)]
+    tree = MerkleTree(leaves)
+
+    sth, proof = advance_epoch(
+        previous_sth=None,
+        new_tree=tree,
+        epoch_id=1,
+        signing_key=signing_key,
+    )
+
+    assert proof is None
+    assert sth.epoch_id == 1
+    assert sth.tree_size == 5
+    assert sth.merkle_root == tree.get_root().hex()
+    assert sth.verify()
+
+
+def test_advance_epoch_valid_growth_enforces_consistency():
+    """advance_epoch automatically generates and verifies a consistency proof."""
+    signing_key = nacl.signing.SigningKey.generate()
+    leaves = [hash_bytes(f"leaf-{i}".encode()) for i in range(10)]
+
+    genesis_tree = MerkleTree(leaves[:5])
+    genesis_sth, genesis_proof = advance_epoch(
+        previous_sth=None,
+        new_tree=genesis_tree,
+        epoch_id=1,
+        signing_key=signing_key,
+    )
+    assert genesis_proof is None
+
+    next_tree = MerkleTree(leaves[:10])
+    next_sth, proof = advance_epoch(
+        previous_sth=genesis_sth,
+        new_tree=next_tree,
+        epoch_id=2,
+        signing_key=signing_key,
+    )
+
+    assert proof is not None
+    assert proof.old_tree_size == 5
+    assert proof.new_tree_size == 10
+    assert next_sth.epoch_id == 2
+    assert next_sth.tree_size == 10
+    assert next_sth.verify()
+    # The returned proof must verify between the two STH roots.
+    assert verify_sth_consistency(genesis_sth, next_sth, proof)
+
+
+def test_advance_epoch_proof_is_independently_verifiable():
+    """The consistency proof returned by advance_epoch can be verified offline."""
+    signing_key = nacl.signing.SigningKey.generate()
+    leaves = [hash_bytes(f"leaf-{i}".encode()) for i in range(8)]
+
+    old_tree = MerkleTree(leaves[:3])
+    old_sth, _ = advance_epoch(
+        previous_sth=None,
+        new_tree=old_tree,
+        epoch_id=0,
+        signing_key=signing_key,
+    )
+
+    new_tree = MerkleTree(leaves[:8])
+    new_sth, proof = advance_epoch(
+        previous_sth=old_sth,
+        new_tree=new_tree,
+        epoch_id=1,
+        signing_key=signing_key,
+    )
+
+    assert proof is not None
+    old_root = bytes.fromhex(old_sth.merkle_root)
+    new_root = bytes.fromhex(new_sth.merkle_root)
+    assert verify_consistency_proof(old_root, new_root, proof)
+
+
+def test_advance_epoch_rejects_tree_size_decrease():
+    """advance_epoch raises ValueError when the new tree is smaller than the previous one."""
+    signing_key = nacl.signing.SigningKey.generate()
+    leaves = [hash_bytes(f"leaf-{i}".encode()) for i in range(10)]
+
+    big_tree = MerkleTree(leaves[:10])
+    big_sth, _ = advance_epoch(
+        previous_sth=None,
+        new_tree=big_tree,
+        epoch_id=1,
+        signing_key=signing_key,
+    )
+
+    small_tree = MerkleTree(leaves[:5])
+    with pytest.raises(ValueError, match="append-only"):
+        advance_epoch(
+            previous_sth=big_sth,
+            new_tree=small_tree,
+            epoch_id=2,
+            signing_key=signing_key,
+        )
+
+
+def test_advance_epoch_rejects_non_monotonic_epoch_id():
+    """advance_epoch raises ValueError when epoch_id does not strictly increase."""
+    signing_key = nacl.signing.SigningKey.generate()
+    leaves = [hash_bytes(f"leaf-{i}".encode()) for i in range(10)]
+
+    old_tree = MerkleTree(leaves[:5])
+    old_sth, _ = advance_epoch(
+        previous_sth=None,
+        new_tree=old_tree,
+        epoch_id=5,
+        signing_key=signing_key,
+    )
+
+    new_tree = MerkleTree(leaves[:10])
+
+    # Same epoch_id is rejected.
+    with pytest.raises(ValueError, match="epoch_id"):
+        advance_epoch(
+            previous_sth=old_sth,
+            new_tree=new_tree,
+            epoch_id=5,
+            signing_key=signing_key,
+        )
+
+    # Lower epoch_id is also rejected.
+    with pytest.raises(ValueError, match="epoch_id"):
+        advance_epoch(
+            previous_sth=old_sth,
+            new_tree=new_tree,
+            epoch_id=3,
+            signing_key=signing_key,
+        )
+
+
+def test_advance_epoch_identical_tree_sizes_allowed():
+    """advance_epoch allows old_tree_size == new_tree_size (no new leaves added)."""
+    signing_key = nacl.signing.SigningKey.generate()
+    leaves = [hash_bytes(f"leaf-{i}".encode()) for i in range(5)]
+
+    tree = MerkleTree(leaves)
+    old_sth, _ = advance_epoch(
+        previous_sth=None,
+        new_tree=tree,
+        epoch_id=1,
+        signing_key=signing_key,
+    )
+
+    # Re-sign the same tree at the next epoch (no new leaves).
+    new_sth, proof = advance_epoch(
+        previous_sth=old_sth,
+        new_tree=tree,
+        epoch_id=2,
+        signing_key=signing_key,
+    )
+
+    assert proof is not None
+    assert proof.proof_nodes == []  # Identity proof is empty.
+    assert new_sth.tree_size == 5
+    # Explicitly verify that the empty identity proof validates the roots.
+    old_root = bytes.fromhex(old_sth.merkle_root)
+    new_root = bytes.fromhex(new_sth.merkle_root)
+    assert verify_consistency_proof(old_root, new_root, proof)
+    assert verify_sth_consistency(old_sth, new_sth, proof)
+
+
+def test_advance_epoch_multi_step_chain():
+    """advance_epoch can be chained across multiple epoch transitions."""
+    signing_key = nacl.signing.SigningKey.generate()
+    leaves = [hash_bytes(f"leaf-{i}".encode()) for i in range(20)]
+
+    checkpoints = [5, 10, 15, 20]
+    previous_sth: SignedTreeHead | None = None
+
+    for epoch_id, size in enumerate(checkpoints, start=1):
+        tree = MerkleTree(leaves[:size])
+        sth, proof = advance_epoch(
+            previous_sth=previous_sth,
+            new_tree=tree,
+            epoch_id=epoch_id,
+            signing_key=signing_key,
+        )
+        assert sth.tree_size == size
+        assert sth.verify()
+        if previous_sth is not None:
+            assert proof is not None
+            assert verify_sth_consistency(previous_sth, sth, proof)
+        else:
+            assert proof is None
+        previous_sth = sth

@@ -17,8 +17,9 @@ import nacl.exceptions
 import nacl.signing
 
 from .canonical_json import canonical_json_bytes
-from .consistency import ConsistencyProof, verify_consistency_proof
+from .consistency import ConsistencyProof, generate_consistency_proof, verify_consistency_proof
 from .hashes import HASH_SEPARATOR, TREE_HEAD_PREFIX, blake3_hash
+from .merkle import MerkleTree
 from .timestamps import current_timestamp
 
 
@@ -361,3 +362,125 @@ def verify_sth_consistency(
         return False
 
     return verify_consistency_proof(old_root, new_root, proof)
+
+
+def advance_epoch(
+    *,
+    previous_sth: SignedTreeHead | None,
+    new_tree: MerkleTree,
+    epoch_id: int,
+    signing_key: nacl.signing.SigningKey,
+    timestamp: str | None = None,
+) -> tuple[SignedTreeHead, ConsistencyProof | None]:
+    """
+    Advance to a new epoch while automatically enforcing append-only consistency.
+
+    This function is the protocol-level entry point for epoch transitions.  It
+    creates a new :class:`SignedTreeHead` for the given epoch and, whenever a
+    previous STH is supplied, automatically generates and verifies a Merkle
+    consistency proof.  The consistency guarantee is therefore enforced
+    unconditionally: a new epoch is only created when the new tree is a valid
+    append-only extension of the previous tree.
+
+    For the genesis epoch (``previous_sth=None``), no consistency proof is
+    required and ``None`` is returned as the second element.
+
+    Args:
+        previous_sth: The :class:`SignedTreeHead` from the immediately preceding
+            epoch, or ``None`` for the genesis epoch.
+        new_tree: :class:`~protocol.merkle.MerkleTree` instance representing
+            the full set of leaves for the new epoch.  It must contain all
+            leaves that were present in the previous epoch plus any newly
+            appended ones.
+        epoch_id: Monotonic epoch identifier for the new epoch.  Must be
+            strictly greater than ``previous_sth.epoch_id`` when a previous
+            STH is provided.
+        signing_key: Ed25519 signing key used to sign the new STH.
+        timestamp: Optional ISO 8601 timestamp; defaults to
+            :func:`~protocol.timestamps.current_timestamp` when omitted.
+
+    Returns:
+        A 2-tuple ``(new_sth, consistency_proof)`` where:
+
+        * ``new_sth`` is the :class:`SignedTreeHead` for the new epoch.
+        * ``consistency_proof`` is the :class:`~protocol.consistency.ConsistencyProof`
+          linking the previous tree root to the new tree root, or ``None`` for
+          the genesis epoch.
+
+    Raises:
+        ValueError: If ``epoch_id`` is not strictly greater than
+            ``previous_sth.epoch_id`` (when applicable), if the new tree has
+            fewer leaves than the previous epoch (rollback detected), or if the
+            generated consistency proof fails to verify.
+
+    Example:
+        >>> import nacl.signing
+        >>> from protocol.merkle import MerkleTree
+        >>> from protocol.hashes import hash_bytes
+        >>>
+        >>> signing_key = nacl.signing.SigningKey.generate()
+        >>> leaves = [hash_bytes(f"leaf-{i}".encode()) for i in range(10)]
+        >>>
+        >>> # Genesis epoch
+        >>> genesis_tree = MerkleTree(leaves[:5])
+        >>> genesis_sth, genesis_proof = advance_epoch(
+        ...     previous_sth=None,
+        ...     new_tree=genesis_tree,
+        ...     epoch_id=1,
+        ...     signing_key=signing_key,
+        ... )
+        >>> assert genesis_proof is None
+        >>>
+        >>> # Subsequent epoch: consistency enforced automatically
+        >>> next_tree = MerkleTree(leaves[:10])
+        >>> next_sth, proof = advance_epoch(
+        ...     previous_sth=genesis_sth,
+        ...     new_tree=next_tree,
+        ...     epoch_id=2,
+        ...     signing_key=signing_key,
+        ... )
+        >>> assert proof is not None
+        >>> assert verify_sth_consistency(genesis_sth, next_sth, proof)
+    """
+    new_tree_size = len(new_tree.leaves)
+    new_root = new_tree.get_root()
+
+    if previous_sth is not None:
+        # Enforce monotonically increasing epoch identifiers.
+        if epoch_id <= previous_sth.epoch_id:
+            raise ValueError(
+                f"epoch_id {epoch_id} must be greater than previous epoch_id "
+                f"{previous_sth.epoch_id}"
+            )
+
+        old_tree_size = previous_sth.tree_size
+
+        # Enforce append-only invariant: the tree must not shrink.
+        if new_tree_size < old_tree_size:
+            raise ValueError(
+                f"New tree size {new_tree_size} is smaller than previous tree "
+                f"size {old_tree_size}; epoch transitions must be append-only"
+            )
+
+        # Generate and immediately verify the consistency proof so that a new
+        # STH is only issued when the append-only property holds.
+        proof_inner: ConsistencyProof = generate_consistency_proof(
+            old_tree_size, new_tree_size, new_tree
+        )
+        old_root = bytes.fromhex(previous_sth.merkle_root)
+        if not verify_consistency_proof(old_root, new_root, proof_inner):
+            raise ValueError("Consistency proof verification failed; epoch transition rejected")
+        proof: ConsistencyProof | None = proof_inner
+    else:
+        # Genesis epoch: no prior tree to be consistent with.
+        proof = None
+
+    new_sth = SignedTreeHead.create(
+        epoch_id=epoch_id,
+        tree_size=new_tree_size,
+        merkle_root=new_root,
+        signing_key=signing_key,
+        timestamp=timestamp,
+    )
+
+    return new_sth, proof

@@ -124,6 +124,36 @@ def verify_sth_consistency(old_sth, new_sth, proof):
     return verify_consistency_proof(old_root, new_root, proof)
 ```
 
+### Enforced Epoch Transitions
+
+Consistency is enforced automatically at the protocol level via `advance_epoch()`
+(`protocol.epochs`).  All epoch transitions **must** use this function rather than
+calling `SignedTreeHead.create()` directly.  `advance_epoch()` rejects any
+transition where the new tree violates append-only growth:
+
+1. **Non-decreasing tree size** — raises `ValueError` if the new tree has fewer
+   leaves than the previous epoch.
+2. **Monotonic epoch identifier** — raises `ValueError` if `epoch_id` does not
+   strictly exceed the previous `epoch_id`.
+3. **Automatic consistency proof generation and verification** — a
+   `ConsistencyProof` is generated from the previous tree size to the new tree
+   size and immediately verified against both STH roots.  The new STH is only
+   signed and returned if verification succeeds.
+
+```python
+# Preferred way to transition between epochs
+new_sth, proof = advance_epoch(
+    previous_sth=previous_sth,  # None for genesis
+    new_tree=new_tree,
+    epoch_id=next_epoch_id,
+    signing_key=signing_key,
+)
+# proof is None for genesis; a verified ConsistencyProof otherwise
+```
+
+For the genesis epoch `previous_sth=None` is passed; no consistency proof is
+required and `None` is returned as the second element.
+
 ### Gossip Endpoints
 
 Two public endpoints (no authentication required) enable independent monitoring:
@@ -140,6 +170,8 @@ Monitors should:
 
 **What the system guarantees:**
 - If STH consistency verification passes, the tree has grown in an append-only manner
+- Epoch transitions created via `advance_epoch()` are rejected unless the new tree
+  provably extends the previous tree (append-only enforced at the protocol boundary)
 - If two nodes serve different STHs for the same epoch, observers will detect it via gossip
 - Operators cannot hide or rollback committed records without detection
 
@@ -147,6 +179,7 @@ Monitors should:
 - Completeness (operators may omit records from the tree entirely)
 - Timeliness (operators may delay publishing STHs)
 - Single source of truth (multiple valid forks may exist; observers must choose which to trust)
+
 
 See `protocol/consistency.py` and `protocol/epochs.py` for implementation details.
 
