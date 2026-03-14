@@ -843,3 +843,178 @@ def test_forged_commit_document_dual_cannot_satisfy_both_verification_paths():
     # Verification must fail: merkle_proofs[0].root_hash.hex() == blake3_root_a
     # but forged_proof.original_root == blake3_root_b.
     assert RedactionProtocol.verify_redaction_proof(forged_proof, [parts_a[0]]) is False
+
+
+# ---------------------------------------------------------------------------
+# RedactionProofRequest builder object
+# ---------------------------------------------------------------------------
+
+
+def test_redaction_proof_request_object_produces_same_result():
+    """
+    Using RedactionProofRequest produces the same result as passing individual
+    keyword arguments.
+    """
+    from protocol.redaction import RedactionProofRequest
+
+    parts = ["alpha", "beta", "gamma"]
+    poseidon_root = _poseidon_root_for_parts(parts)
+    smt_a = SparseMerkleTree()
+    smt_b = SparseMerkleTree()
+
+    for smt in (smt_a, smt_b):
+        RedactionProtocol.commit_document_dual(
+            document_parts=parts,
+            poseidon_root=poseidon_root,
+            smt=smt,
+            document_id="docReq",
+            version=1,
+        )
+
+    # Using keyword arguments (legacy call style)
+    wrapped_legacy = RedactionProtocol.create_redaction_proof_with_ledger(
+        document_parts=parts,
+        revealed_indices=[0, 2],
+        poseidon_root=poseidon_root,
+        smt=smt_a,
+        document_id="docReq",
+        version=1,
+        zk_proof={"pi_a": [], "pi_b": [], "pi_c": []},
+    )
+
+    # Using the request object
+    request = RedactionProofRequest(
+        document_parts=parts,
+        revealed_indices=[0, 2],
+        poseidon_root=poseidon_root,
+        smt=smt_b,
+        document_id="docReq",
+        version=1,
+        zk_proof={"pi_a": [], "pi_b": [], "pi_c": []},
+    )
+    wrapped_request = RedactionProtocol.create_redaction_proof_with_ledger(request)
+
+    assert wrapped_request.zk_public_inputs == wrapped_legacy.zk_public_inputs
+
+
+def test_redaction_proof_request_default_depth_is_4():
+    """RedactionProofRequest defaults to poseidon_tree_depth=4."""
+    from protocol.redaction import _POSEIDON_TREE_DEPTH, RedactionProofRequest
+
+    parts = ["a", "b"]
+    smt = SparseMerkleTree()
+    req = RedactionProofRequest(
+        document_parts=parts,
+        revealed_indices=[0],
+        poseidon_root="0",
+        smt=smt,
+        document_id="docDefault",
+        version=1,
+        zk_proof={},
+    )
+    assert req.poseidon_tree_depth == _POSEIDON_TREE_DEPTH
+
+
+def test_redaction_proof_request_missing_individual_args_raises():
+    """
+    Passing a list as document_parts but omitting required keyword args
+    raises ValueError.
+    """
+    with pytest.raises(ValueError, match="must be provided"):
+        RedactionProtocol.create_redaction_proof_with_ledger(
+            document_parts=["a", "b"],
+            revealed_indices=[0],
+            # poseidon_root, smt, document_id, version, zk_proof all omitted
+        )
+
+
+# ---------------------------------------------------------------------------
+# Configurable Poseidon tree depth
+# ---------------------------------------------------------------------------
+
+
+def _poseidon_root_for_parts_at_depth(parts: list[str], depth: int) -> str:
+    canonical = RedactionProtocol.canonical_section_bytes_list(parts)
+    leaves = [int(blake3_to_field_element(part)) for part in canonical]
+    return PoseidonMerkleTree(leaves, depth=depth).get_root()
+
+
+def test_build_poseidon_tree_configurable_depth():
+    """build_poseidon_tree respects a caller-supplied depth."""
+    parts = ["a"] * 20  # more than 16, requires depth >= 5
+    tree, leaves = RedactionProtocol.build_poseidon_tree(parts, depth=5)
+    assert tree.tree_size == 32  # 2**5
+    assert len(leaves) == 32
+
+
+def test_build_poseidon_tree_exceeds_depth_raises():
+    """build_poseidon_tree raises ValueError when section count exceeds 2**depth."""
+    parts = ["x"] * 17  # exceeds depth-4 capacity (16)
+    with pytest.raises(ValueError, match="at most 16 sections"):
+        RedactionProtocol.build_poseidon_tree(parts, depth=4)
+
+
+def test_create_redaction_proof_with_ledger_custom_depth_round_trip():
+    """
+    create_redaction_proof_with_ledger works correctly with a larger tree depth.
+    """
+    depth = 5  # supports up to 32 sections
+    parts = [f"section_{i}" for i in range(20)]
+    poseidon_root = _poseidon_root_for_parts_at_depth(parts, depth)
+    smt = SparseMerkleTree()
+
+    RedactionProtocol.commit_document_dual(
+        document_parts=parts,
+        poseidon_root=poseidon_root,
+        smt=smt,
+        document_id="docDepth5",
+        version=1,
+        poseidon_tree_depth=depth,
+    )
+
+    wrapped = RedactionProtocol.create_redaction_proof_with_ledger(
+        document_parts=parts,
+        revealed_indices=[0, 5, 10],
+        poseidon_root=poseidon_root,
+        smt=smt,
+        document_id="docDepth5",
+        version=1,
+        zk_proof={},
+        poseidon_tree_depth=depth,
+    )
+
+    assert isinstance(wrapped, RedactionProofWithLedger)
+    assert wrapped.zk_public_inputs.revealed_count == 3
+    assert wrapped.verify_smt_anchor(smt.get_root()) is True
+
+
+def test_commit_document_dual_custom_depth_rejects_too_many_sections():
+    """commit_document_dual raises ValueError when sections exceed 2**poseidon_tree_depth."""
+    parts = [f"s{i}" for i in range(17)]  # 17 > 16 (depth=4)
+    smt = SparseMerkleTree()
+    with pytest.raises(ValueError, match="at most 16 sections"):
+        RedactionProtocol.commit_document_dual(
+            document_parts=parts,
+            poseidon_root="0",
+            smt=smt,
+            document_id="docOver",
+            version=1,
+            poseidon_tree_depth=4,
+        )
+
+
+def test_create_redaction_correctness_proof_custom_depth():
+    """create_redaction_correctness_proof accepts a configurable depth."""
+    depth = 5
+    parts = [f"section_{i}" for i in range(20)]
+
+    proof = RedactionProtocol.create_redaction_correctness_proof(
+        document_parts=parts,
+        revealed_indices=[0, 10, 19],
+        poseidon_tree_depth=depth,
+    )
+
+    assert proof.original_poseidon_root.isdigit()
+    assert proof.redacted_poseidon_root.isdigit()
+    assert proof.revealed_indices == [0, 10, 19]
+    assert RedactionProtocol.verify_redaction_correctness_proof(proof)
