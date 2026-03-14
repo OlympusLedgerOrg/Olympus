@@ -170,6 +170,7 @@ class TestModuleSeparation:
             load_tree_state,
             persist_tree_nodes,
         )
+
         assert callable(encode_path)
         assert callable(load_tree_state)
         assert callable(persist_tree_nodes)
@@ -185,6 +186,7 @@ class TestModuleSeparation:
             store_ingestion_batch,
             store_timestamp_token,
         )
+
         assert callable(consume_rate_limit)
         assert callable(clear_rate_limits)
         assert callable(store_ingestion_batch)
@@ -354,7 +356,13 @@ class TestVerificationBundle:
         mock_storage = MagicMock()
         mock_storage.get_proof.return_value = mock_proof
         mock_storage.get_latest_header.return_value = {
-            "header": {"shard_id": "s", "root_hash": "a" * 64, "timestamp": "2025-01-01T00:00:00Z", "previous_header_hash": "", "header_hash": "b" * 64},
+            "header": {
+                "shard_id": "s",
+                "root_hash": "a" * 64,
+                "timestamp": "2025-01-01T00:00:00Z",
+                "previous_header_hash": "",
+                "header_hash": "b" * 64,
+            },
             "signature": "c" * 128,
             "pubkey": "d" * 64,
         }

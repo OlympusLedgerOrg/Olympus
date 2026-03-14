@@ -101,15 +101,11 @@ def _normalize_for_canonical_json(obj: Any) -> Any:
                 raise TypeError("Object keys must be strings for canonical JSON")
             normalized_key = unicodedata.normalize("NFC", key)
             if normalized_key in normalized_obj:
-                raise ValueError(
-                    f"Duplicate key after NFC normalization: {normalized_key!r}"
-                )
+                raise ValueError(f"Duplicate key after NFC normalization: {normalized_key!r}")
             normalized_obj[normalized_key] = _normalize_for_canonical_json(value)
         return normalized_obj
     # Reject all other types explicitly - prevents silent type fallthrough
-    raise TypeError(
-        f"Type {type(obj).__name__} is not JSON-serializable for canonical JSON"
-    )
+    raise TypeError(f"Type {type(obj).__name__} is not JSON-serializable for canonical JSON")
 
 
 def _encode_value(value: Any) -> str:

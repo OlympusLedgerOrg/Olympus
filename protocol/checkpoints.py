@@ -279,9 +279,7 @@ def build_checkpoint_quorum_certificate(
         "sequence": sequence,
         "ledger_height": ledger_height,
         "timestamp": timestamp,
-        "event_id": _checkpoint_vote_event_id(
-            checkpoint_hash, sequence, ledger_height, registry
-        ),
+        "event_id": _checkpoint_vote_event_id(checkpoint_hash, sequence, ledger_height, registry),
         "federation_epoch": registry.epoch,
         "membership_hash": validator_set_hash,
         "validator_set_hash": validator_set_hash,
@@ -476,9 +474,7 @@ def create_checkpoint(
                 "Genesis checkpoints (sequence=0) cannot have previous_checkpoint_hash"
             )
         if consistency_proof:
-            raise ValueError(
-                "Genesis checkpoints (sequence=0) cannot have consistency_proof"
-            )
+            raise ValueError("Genesis checkpoints (sequence=0) cannot have consistency_proof")
     else:
         if not previous_checkpoint_hash:
             raise ValueError("Non-genesis checkpoints must include previous_checkpoint_hash")
@@ -490,8 +486,7 @@ def create_checkpoint(
         )
     if signatures is None and signing_keys is None:
         raise ValueError(
-            "Checkpoint creation requires federation signatures via signing_keys or "
-            "signatures"
+            "Checkpoint creation requires federation signatures via signing_keys or signatures"
         )
 
     timestamp = current_timestamp()

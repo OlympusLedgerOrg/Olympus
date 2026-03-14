@@ -1,5 +1,6 @@
 from datetime import datetime
 
+
 try:
     from datetime import UTC
 except ImportError:  # Python < 3.11

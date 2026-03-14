@@ -19,10 +19,10 @@ from __future__ import annotations
 
 import logging
 import threading
-import time
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING
+
 
 if TYPE_CHECKING:
     from storage.postgres import StorageLayer
@@ -43,9 +43,7 @@ class ConsistencyResult:
 
     def __post_init__(self) -> None:
         if not self.checked_at:
-            self.checked_at = (
-                datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
-            )
+            self.checked_at = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
 
 
 @dataclass
@@ -115,9 +113,7 @@ class SMTConsistencyChecker:
             shard_ids = self._storage.get_all_shard_ids()
         except Exception as exc:
             logger.error("Failed to enumerate shards: %s", exc)
-            report.results.append(
-                ConsistencyResult(shard_id="*", consistent=False, error=str(exc))
-            )
+            report.results.append(ConsistencyResult(shard_id="*", consistent=False, error=str(exc)))
             return report
 
         for shard_id in shard_ids:
@@ -163,9 +159,7 @@ class SMTConsistencyChecker:
             try:
                 report = self.run_all()
                 if not report.all_consistent:
-                    logger.warning(
-                        "Divergent shards detected: %s", report.divergent_shards
-                    )
+                    logger.warning("Divergent shards detected: %s", report.divergent_shards)
             except Exception:
                 logger.exception("Unhandled error in consistency checker loop")
             self._stop_event.wait(interval)

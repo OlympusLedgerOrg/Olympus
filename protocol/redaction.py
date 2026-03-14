@@ -419,7 +419,7 @@ class RedactionProtocol:
         Build the Poseidon Merkle tree for a document.
 
         Returns both the tree and the padded leaf vector (length 16 for depth-4).
-        
+
         Raises:
             ValueError: If document_parts exceeds 16 sections.
         """

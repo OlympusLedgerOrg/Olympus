@@ -9,7 +9,11 @@ detection of split-view logs.
 import nacl.signing
 import pytest
 
-from protocol.consistency import ConsistencyProof, generate_consistency_proof, verify_consistency_proof
+from protocol.consistency import (
+    ConsistencyProof,
+    generate_consistency_proof,
+    verify_consistency_proof,
+)
 from protocol.epochs import SignedTreeHead, verify_sth_consistency
 from protocol.hashes import hash_bytes
 from protocol.merkle import MerkleTree, ct_merkle_root

@@ -585,9 +585,7 @@ def _get_bucket(buckets: OrderedDict[str, TokenBucket], subject: str, action: st
     The assertion below will catch violations during testing/development.
     """
     # L5-C: Assert lock is held to catch programming errors early
-    assert _rate_limit_lock.locked(), (
-        "_get_bucket must be called while holding _rate_limit_lock"
-    )
+    assert _rate_limit_lock.locked(), "_get_bucket must be called while holding _rate_limit_lock"
 
     existing = buckets.get(subject)
     if existing is not None:

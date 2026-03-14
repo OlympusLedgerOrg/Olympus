@@ -46,9 +46,7 @@ def test_quorum_certificate_binding_is_unique(
         round_number=round_number,
     )
     signatures = [
-        sign_federated_header(
-            header, f"olympus-node-{seed}", _test_signing_key(seed), registry
-        )
+        sign_federated_header(header, f"olympus-node-{seed}", _test_signing_key(seed), registry)
         for seed in signer_seeds
     ]
     certificate = build_quorum_certificate(header, signatures, registry)

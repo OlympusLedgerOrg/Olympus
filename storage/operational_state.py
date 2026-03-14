@@ -25,6 +25,7 @@ from psycopg.rows import dict_row
 
 from protocol.rfc3161 import MAX_TSA_TOKENS, _sha256_of_hash
 
+
 if TYPE_CHECKING:
     import psycopg
 
@@ -163,9 +164,7 @@ def store_ingestion_batch(
         conn.commit()
 
 
-def get_ingestion_proof(
-    conn: psycopg.Connection[Any], proof_id: str
-) -> dict[str, Any] | None:
+def get_ingestion_proof(conn: psycopg.Connection[Any], proof_id: str) -> dict[str, Any] | None:
     """Retrieve a persisted ingestion proof mapping by proof_id."""
     with conn.cursor(row_factory=dict_row) as cur:
         cur.execute(
@@ -236,9 +235,7 @@ def store_timestamp_token(
 
     hash_hex = token.hash_hex if hasattr(token, "hash_hex") else token["hash_hex"]
     tsa_url = token.tsa_url if hasattr(token, "tsa_url") else token["tsa_url"]
-    tst_bytes = (
-        token.tst_bytes if hasattr(token, "tst_bytes") else bytes.fromhex(token["tst_hex"])
-    )
+    tst_bytes = token.tst_bytes if hasattr(token, "tst_bytes") else bytes.fromhex(token["tst_hex"])
     tsa_cert_fingerprint = (
         token.tsa_cert_fingerprint
         if hasattr(token, "tsa_cert_fingerprint")

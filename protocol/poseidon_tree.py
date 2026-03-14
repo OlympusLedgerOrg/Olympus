@@ -197,7 +197,7 @@ class PoseidonMerkleTree:
             else:
                 # CT-style promotion: lone node is promoted without hashing
                 promoted.append(level[i])
-        
+
         hashed = _poseidon_hash_pairs(pairs, domain=POSEIDON_DOMAIN_NODE) if pairs else []
         return hashed + promoted
 
@@ -234,9 +234,9 @@ class PoseidonMerkleTree:
 
         while len(level) > 1:
             # CT-style: check if this node is promoted (lone node at odd level)
-            is_last = (index == len(level) - 1)
+            is_last = index == len(level) - 1
             is_promoted = is_last and (len(level) % 2 == 1)
-            
+
             if not is_promoted:
                 # Normal case: there's a sibling
                 if index % 2 == 0:

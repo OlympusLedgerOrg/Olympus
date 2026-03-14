@@ -13,8 +13,11 @@ provides the structured API defined in the Olympus protocol specification.
 from dataclasses import dataclass
 from typing import Any
 
-from .merkle import MerkleTree, generate_consistency_proof as _merkle_generate_proof
-from .merkle import verify_consistency_proof as _merkle_verify_proof
+from .merkle import (
+    MerkleTree,
+    generate_consistency_proof as _merkle_generate_proof,
+    verify_consistency_proof as _merkle_verify_proof,
+)
 
 
 @dataclass(frozen=True)
@@ -108,9 +111,7 @@ def generate_consistency_proof(
     if old_tree_size > new_tree_size:
         raise ValueError("old_tree_size cannot exceed new_tree_size")
     if new_tree_size > len(tree.leaves):
-        raise ValueError(
-            f"Tree has {len(tree.leaves)} leaves but new_tree_size is {new_tree_size}"
-        )
+        raise ValueError(f"Tree has {len(tree.leaves)} leaves but new_tree_size is {new_tree_size}")
 
     # Use the internal Merkle leaf hashes (with LEAF_PREFIX applied)
     leaf_hashes = tree._leaf_hashes

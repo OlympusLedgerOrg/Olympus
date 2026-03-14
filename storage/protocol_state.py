@@ -16,15 +16,13 @@ radius of bugs in operational code (rate limiting, ingestion batches, etc.).
 
 from __future__ import annotations
 
-import json
 import logging
 from collections.abc import Mapping
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Any
 
-from psycopg.rows import dict_row
-
 from protocol.ssmf import SparseMerkleTree
+
 
 if TYPE_CHECKING:
     import psycopg
@@ -150,9 +148,7 @@ def encode_path(path: tuple[int, ...]) -> bytes:
 # ---------------------------------------------------------------------------
 
 
-def get_header_by_seq(
-    cur: psycopg.Cursor[Any], shard_id: str, seq: int
-) -> dict[str, Any] | None:
+def get_header_by_seq(cur: psycopg.Cursor[Any], shard_id: str, seq: int) -> dict[str, Any] | None:
     """Retrieve a shard header row by sequence number."""
     cur.execute(
         """

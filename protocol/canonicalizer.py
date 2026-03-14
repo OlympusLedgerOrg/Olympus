@@ -68,8 +68,17 @@ MAX_DOCX_DECOMPRESSED: int = 512 * 1024 * 1024  # 512 MiB total decompressed
 # HTML tags stripped during canonicalization — active content, data-exfiltration
 # vectors, and volatile metadata tags.
 _STRIPPED_HTML_TAGS: list[str] = [
-    "script", "style", "iframe", "object", "embed", "applet", "meta",
-    "base", "link", "form", "noscript",
+    "script",
+    "style",
+    "iframe",
+    "object",
+    "embed",
+    "applet",
+    "meta",
+    "base",
+    "link",
+    "form",
+    "noscript",
 ]
 
 try:
@@ -258,9 +267,7 @@ class Canonicalizer:
 
         def encode_recursive(item: Any, depth: int = 0) -> str:
             if depth > MAX_JSON_DEPTH:
-                raise CanonicalizationError(
-                    f"JSON nesting depth exceeds limit of {MAX_JSON_DEPTH}"
-                )
+                raise CanonicalizationError(f"JSON nesting depth exceeds limit of {MAX_JSON_DEPTH}")
             if isinstance(item, dict):
                 # Lexicographical sort of keys (UTF-16 code units)
                 sorted_keys = sorted(item.keys())

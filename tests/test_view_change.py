@@ -76,11 +76,15 @@ def test_watermark_rejects_backward_motion() -> None:
 
 
 @given(
-    round_sequence=st.lists(st.integers(min_value=0, max_value=100), min_size=1, max_size=20, unique=True),
+    round_sequence=st.lists(
+        st.integers(min_value=0, max_value=100), min_size=1, max_size=20, unique=True
+    ),
     max_window=st.integers(min_value=1, max_value=10),
 )
 @settings(max_examples=100, deadline=None)
-def test_watermark_gc_maintains_window_invariant(round_sequence: list[int], max_window: int) -> None:
+def test_watermark_gc_maintains_window_invariant(
+    round_sequence: list[int], max_window: int
+) -> None:
     """
     Property: After advancing watermark, low/high gap never exceeds max_watermark_window.
     """
@@ -106,11 +110,15 @@ def test_watermark_gc_maintains_window_invariant(round_sequence: list[int], max_
 
 
 @given(
-    round_sequence=st.lists(st.integers(min_value=0, max_value=50), min_size=2, max_size=15, unique=True),
+    round_sequence=st.lists(
+        st.integers(min_value=0, max_value=50), min_size=2, max_size=15, unique=True
+    ),
     watermark_advances=st.lists(st.integers(min_value=0, max_value=50), min_size=1, max_size=10),
 )
 @settings(max_examples=100, deadline=None)
-def test_watermark_never_moves_backward(round_sequence: list[int], watermark_advances: list[int]) -> None:
+def test_watermark_never_moves_backward(
+    round_sequence: list[int], watermark_advances: list[int]
+) -> None:
     """
     Property: High watermark must be monotonically increasing.
     """
@@ -188,7 +196,9 @@ def test_grace_period_boundary_is_start_plus_grace(
     membership_changes=st.lists(
         st.tuples(
             st.integers(min_value=0, max_value=100),  # epoch
-            st.sets(st.sampled_from(["n1", "n2", "n3", "n4", "n5"]), min_size=1, max_size=3),  # members
+            st.sets(
+                st.sampled_from(["n1", "n2", "n3", "n4", "n5"]), min_size=1, max_size=3
+            ),  # members
         ),
         min_size=1,
         max_size=10,
@@ -246,7 +256,9 @@ def test_registry_snapshot_membership_reflects_history(
 
 
 @given(
-    rounds_to_start=st.lists(st.integers(min_value=0, max_value=20), min_size=5, max_size=15, unique=True),
+    rounds_to_start=st.lists(
+        st.integers(min_value=0, max_value=20), min_size=5, max_size=15, unique=True
+    ),
     window_size=st.integers(min_value=2, max_value=8),
 )
 @settings(max_examples=100, deadline=None)
@@ -264,7 +276,9 @@ def test_gc_old_rounds_removes_only_old_rounds(
 
     # Pick a cutoff in the middle of the range
     sorted_rounds = sorted(rounds_to_start)
-    cutoff = sorted_rounds[len(sorted_rounds) // 2] if len(sorted_rounds) > 1 else sorted_rounds[0] + 1
+    cutoff = (
+        sorted_rounds[len(sorted_rounds) // 2] if len(sorted_rounds) > 1 else sorted_rounds[0] + 1
+    )
 
     # Determine expected remaining rounds
     expected_remaining = {r for r in rounds_to_start if r >= cutoff}

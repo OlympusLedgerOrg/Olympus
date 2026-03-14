@@ -8,7 +8,9 @@ from protocol.merkle import MerkleTree
 from protocol.monitoring import LogMonitor, SplitViewEvidence
 
 
-def _build_sth(signing_key: nacl.signing.SigningKey, leaves: list[bytes], epoch: int) -> SignedTreeHead:
+def _build_sth(
+    signing_key: nacl.signing.SigningKey, leaves: list[bytes], epoch: int
+) -> SignedTreeHead:
     tree = MerkleTree(leaves)
     return SignedTreeHead.create(
         epoch_id=epoch,

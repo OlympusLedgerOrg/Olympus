@@ -22,6 +22,7 @@ from __future__ import annotations
 import re
 from datetime import datetime
 
+
 try:
     from datetime import UTC
 except ImportError:  # Python < 3.11
@@ -30,7 +31,6 @@ except ImportError:  # Python < 3.11
     UTC = timezone.utc
 from unittest.mock import patch
 
-import pytest
 import protocol.ledger as ledger_module
 from protocol.hashes import hash_bytes
 from protocol.ledger import Ledger
@@ -95,7 +95,7 @@ def test_ledger_accepts_timestamp_far_in_future(fresh_ledger: Ledger) -> None:
 def test_chain_accepts_non_monotonic_timestamps(fresh_ledger: Ledger) -> None:
     """
     Chain now accepts backwards clock jumps (L2-B change).
-    
+
     Chain integrity is guaranteed by prev_entry_hash linkage, and strictly
     increasing timestamps could cause stalls during NTP clock adjustments.
     """
@@ -105,7 +105,7 @@ def test_chain_accepts_non_monotonic_timestamps(fresh_ledger: Ledger) -> None:
     # Backwards timestamp is now accepted
     with patch.object(ledger_module, "current_timestamp", return_value="2025-01-01T00:00:00Z"):
         second_hash = _append_with_ts(fresh_ledger, 1, "2025-01-01T00:00:00Z")
-    
+
     # Ledger should now have two entries and remain verifiable
     assert len(fresh_ledger.entries) == 2
     assert fresh_ledger.entries[1].entry_hash == second_hash

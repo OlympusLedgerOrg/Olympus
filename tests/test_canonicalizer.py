@@ -15,10 +15,10 @@ import pytest
 from hypothesis import given, settings, strategies as st
 
 from protocol.canonicalizer import (
+    CANONICALIZER_VERSIONS,
     ArtifactCanonicalizationError,
     ArtifactIdempotencyError,
     ArtifactPayload,
-    CANONICALIZER_VERSIONS,
     CanonicalizationError,
     Canonicalizer,
     UnsupportedMimeTypeError,

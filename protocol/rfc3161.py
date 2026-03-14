@@ -542,8 +542,7 @@ def check_tsa_certificate_expiry(
     }
     if warning:
         result["message"] = (
-            f"TSA certificate expires in {int(remaining)}s "
-            f"(< {warn_before_seconds}s threshold)"
+            f"TSA certificate expires in {int(remaining)}s (< {warn_before_seconds}s threshold)"
         )
     return result
 

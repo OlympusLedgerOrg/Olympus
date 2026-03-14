@@ -7,6 +7,7 @@ Network calls to the TSA are mocked so that these tests run fully offline.
 import hashlib
 from datetime import datetime
 
+
 try:
     from datetime import UTC
 except ImportError:  # Python < 3.11

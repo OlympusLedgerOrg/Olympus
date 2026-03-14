@@ -8,6 +8,7 @@ from hypothesis import given, strategies as st
 
 from protocol.canonical_json import canonical_json_encode
 
+
 decimal_values = st.decimals(
     allow_nan=False,
     allow_infinity=False,

@@ -136,9 +136,7 @@ class LogMonitor:
         considered.
         """
         shard_views: dict[str, SignedTreeHead] = {
-            node_id: sth
-            for (node_id, shard), sth in self._latest.items()
-            if shard == shard_id
+            node_id: sth for (node_id, shard), sth in self._latest.items() if shard == shard_id
         }
         if len(shard_views) < 2:
             return ()

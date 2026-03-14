@@ -143,6 +143,7 @@ def test_ledger_entry_hash_computation():
         "poseidon_root": None,
     }
     from protocol.hashes import _SEP
+
     expected_hash = blake3_hash([LEDGER_PREFIX, canonical_json_bytes(payload), _SEP, b""]).hex()
 
     assert entry.entry_hash == expected_hash
@@ -181,6 +182,7 @@ def test_ledger_entry_hash_includes_federation_quorum_certificate_when_present()
         "federation_quorum_certificate": entry.federation_quorum_certificate,
     }
     from protocol.hashes import _SEP
+
     expected_hash = blake3_hash([LEDGER_PREFIX, canonical_json_bytes(payload), _SEP, b""]).hex()
     assert entry.entry_hash == expected_hash
 
@@ -601,7 +603,7 @@ def test_ledger_append_without_poseidon_root_field_is_none():
 
 def test_ledger_dual_root_entry_hash_uses_dual_commitment():
     """Entry hash for dual-root entries must hash payload plus poseidon bytes."""
-    from protocol.hashes import LEDGER_PREFIX, _SEP, blake3_hash, canonical_json_bytes
+    from protocol.hashes import _SEP, LEDGER_PREFIX, blake3_hash, canonical_json_bytes
 
     ledger = Ledger()
     entry = ledger.append(
@@ -621,7 +623,12 @@ def test_ledger_dual_root_entry_hash_uses_dual_commitment():
         "poseidon_root": _SAMPLE_POSEIDON_ROOT,
     }
     expected = blake3_hash(
-        [LEDGER_PREFIX, canonical_json_bytes(payload), _SEP, _poseidon_root_bytes(_SAMPLE_POSEIDON_ROOT)]
+        [
+            LEDGER_PREFIX,
+            canonical_json_bytes(payload),
+            _SEP,
+            _poseidon_root_bytes(_SAMPLE_POSEIDON_ROOT),
+        ]
     ).hex()
     assert entry.entry_hash == expected
 
