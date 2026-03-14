@@ -213,8 +213,9 @@ def event_id(shard_id: str, header_hash: str, timestamp: str) -> str:
     Returns:
         Hex-encoded event ID
     """
+    field_values = (shard_id, header_hash, timestamp)
     encoded_fields: list[bytes] = []
-    for field_name, value in zip(EVENT_ID_FIELD_NAMES, (shard_id, header_hash, timestamp)):
+    for field_name, value in zip(EVENT_ID_FIELD_NAMES, field_values):
         field_bytes = value.encode("utf-8")
         if len(field_bytes) > MAX_EVENT_ID_FIELD_LENGTH:
             raise ValueError(
