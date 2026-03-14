@@ -760,13 +760,14 @@ class RedactionProtocol:
         )
         orig_poseidon_root = poseidon_tree.get_root()
 
-        # Redacted BLAKE3: replace redacted leaves with zero-hash
+        # Redacted BLAKE3: replace redacted leaves with a domain-separated marker
+        # to avoid collision with legitimately empty document sections.
         revealed_set = set(revealed_indices)
-        zero_hash = hash_bytes(b"")
+        redacted_leaf_hash = hash_bytes(b"OLY:REDACTED-SECTION")
         redacted_leaf_hashes = [
             RedactionProtocol.create_leaf_hashes(document_parts)[i]
             if i in revealed_set
-            else zero_hash
+            else redacted_leaf_hash
             for i in range(len(document_parts))
         ]
         redacted_blake3_tree = MerkleTree(redacted_leaf_hashes)
