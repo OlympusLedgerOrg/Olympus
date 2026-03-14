@@ -5,6 +5,8 @@ import { AnimatePresence, motion } from "framer-motion";
 import { ThemeProvider } from "@/components/layout/ThemeProvider";
 import { GlyphRain } from "@/components/layout/GlyphRain";
 import { ThemeSwitcher } from "@/components/ui/ThemeSwitcher";
+import { WalletConnectProvider } from "@/components/auth/WalletConnect";
+import { AuthProvider } from "@/lib/hooks/useAuth";
 import { useTheme } from "@/lib/hooks/useTheme";
 
 function LayoutContent({ children }: { children: ReactNode }) {
@@ -38,7 +40,11 @@ function LayoutContent({ children }: { children: ReactNode }) {
 export function LayoutShell({ children }: { children: ReactNode }) {
   return (
     <ThemeProvider>
-      <LayoutContent>{children}</LayoutContent>
+      <WalletConnectProvider>
+        <AuthProvider>
+          <LayoutContent>{children}</LayoutContent>
+        </AuthProvider>
+      </WalletConnectProvider>
     </ThemeProvider>
   );
 }

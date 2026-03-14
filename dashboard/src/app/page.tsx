@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { motion } from "framer-motion";
 import { useTheme } from "@/lib/hooks/useTheme";
 
@@ -74,6 +75,31 @@ export default function Home() {
             Active theme:{" "}
             <code style={{ color: "var(--color-primary)" }}>{theme}</code>
           </p>
+        </div>
+
+        <div className="flex flex-wrap gap-3 text-sm">
+          <Link
+            href="/auth"
+            className="border px-4 py-2 font-semibold"
+            style={{
+              borderColor: "var(--color-border)",
+              borderRadius: "var(--radius)",
+              color: "var(--color-primary)",
+            }}
+          >
+            Verify humanity
+          </Link>
+          <Link
+            href="/dashboard"
+            className="border px-4 py-2"
+            style={{
+              borderColor: "var(--color-border)",
+              borderRadius: "var(--radius)",
+              color: "var(--color-text-muted)",
+            }}
+          >
+            Go to dashboard
+          </Link>
         </div>
       </motion.div>
     </main>

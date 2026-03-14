@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 import localFont from "next/font/local";
+import "@rainbow-me/rainbowkit/styles.css";
 import "./globals.css";
 import { LayoutShell } from "@/components/layout/LayoutShell";
 
