@@ -198,7 +198,8 @@ def event_id(shard_id: str, header_hash: str, timestamp: str) -> str:
 
     Payload encoding (length-prefixed):
         - each field is encoded as: [4-byte big-endian length] || [UTF-8 bytes]
-        - payload = concat(shard_id, header_hash, timestamp)
+        - payload = [len(shard_id)]||shard_id || [len(header_hash)]||header_hash
+          || [len(timestamp)]||timestamp
 
     Length-prefixing prevents field-injection collisions when ``|`` characters
     appear inside shard identifiers or other fields.
