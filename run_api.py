@@ -12,10 +12,6 @@ Environment variables:
 import os
 import sys
 
-import uvicorn
-
-from api.app import app
-
 
 if __name__ == "__main__":
     import argparse
@@ -31,6 +27,10 @@ if __name__ == "__main__":
     if not database_url:
         print("DATABASE_URL is required", file=sys.stderr)
         raise SystemExit(1)
+
+    import uvicorn
+
+    from api.app import app
 
     print(f"Starting Olympus Public Audit API on {args.host}:{args.port}")
     print(f"Database: {database_url}")

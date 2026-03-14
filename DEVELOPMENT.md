@@ -34,6 +34,16 @@ This guide covers common development workflows for the Olympus project.
    # Edit .env with your configuration
    ```
 
+   Key environment variables:
+
+   | Variable | Required | Description |
+   |---|---|---|
+   | `DATABASE_URL` | Yes (API/DB tests) | PostgreSQL connection string |
+   | `TEST_DATABASE_URL` | No | Separate connection string for test runs |
+   | `LOG_LEVEL` | No | Python log level (`DEBUG`, `INFO`, …) |
+   | `OLYMPUS_DEBUG_UI` | No | Set to `true` to enable the debug UI |
+   | `OLYMPUS_HALO2_ENABLED` | No | Set to `true` to enable the Halo2 proof backend. **No-op in v1.0** — Halo2 support is planned for Phase 1+. |
+
 5. **Start PostgreSQL** (if using Docker)
    ```bash
    docker compose up -d
@@ -195,6 +205,16 @@ make dev
 - Record dependency changes in `requirements.txt` and `requirements-dev.txt`.
 - **If publishing Docker images**, sign them with `cosign` and publish the
   signature alongside the image tag.
+
+## Environment Variables
+
+| Variable | Required | Description |
+|---|---|---|
+| `DATABASE_URL` | Yes (API/DB tests) | PostgreSQL connection string |
+| `TEST_DATABASE_URL` | No | Separate connection string for test runs |
+| `LOG_LEVEL` | No | Python log level (`DEBUG`, `INFO`, …) |
+| `OLYMPUS_DEBUG_UI` | No | Set to `true` to enable the debug UI |
+| `OLYMPUS_HALO2_ENABLED` | No | Set to `true` to enable the Halo2 proof backend. **Intentionally a no-op in v1.0** — Halo2 support is planned for Phase 1+. The flag exists so deployment tooling can reference it before the backend ships. |
 
 ## Debugging
 

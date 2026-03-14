@@ -697,3 +697,78 @@ def test_validate_proof_consistency_does_not_raise_on_garbage():
     assert validate_proof_consistency(object(), object(), object()) is False  # type: ignore[arg-type]
     assert validate_proof_consistency(1, 2, 3) is False  # type: ignore[arg-type]
     assert validate_proof_consistency([], {}, ()) is False  # type: ignore[arg-type]
+
+
+# ---------------------------------------------------------------------------
+# validate_batch_consistency – extended coverage
+# ---------------------------------------------------------------------------
+
+
+def test_validate_batch_consistency_all_pass():
+    """All-pass batch must report is_consistent=True with no failures."""
+    from protocol.cross_root_validation import validate_batch_consistency
+
+    commitment_a = _make_dual_commitment(PARTS_A)
+    b3_a, _ = _make_blake3_proof(PARTS_A)
+    pos_a, _ = _make_poseidon_proof(PARTS_A)
+
+    commitment_b = _make_dual_commitment(PARTS_B)
+    b3_b, _ = _make_blake3_proof(PARTS_B)
+    pos_b, _ = _make_poseidon_proof(PARTS_B)
+
+    report = validate_batch_consistency(
+        [
+            (b3_a, pos_a, commitment_a),
+            (b3_b, pos_b, commitment_b),
+        ]
+    )
+
+    assert report.is_consistent is True
+    assert len(report.failures) == 0
+
+
+def test_validate_batch_consistency_empty_input():
+    """Empty input list must report is_consistent=True with no failures."""
+    from protocol.cross_root_validation import validate_batch_consistency
+
+    report = validate_batch_consistency([])
+
+    assert report.is_consistent is True
+    assert len(report.failures) == 0
+
+
+def test_validate_batch_consistency_mixed_results():
+    """Mixed batch with one good and one bad proof must report the failure."""
+    from protocol.cross_root_validation import validate_batch_consistency
+
+    commitment_ok = _make_dual_commitment(PARTS_A)
+    good_b3, _ = _make_blake3_proof(PARTS_A)
+    good_poseidon, _ = _make_poseidon_proof(PARTS_A)
+
+    # Second triplet: valid proofs but against wrong commitment → should fail
+    commitment_wrong = _make_dual_commitment(PARTS_B)
+
+    report = validate_batch_consistency(
+        [
+            (good_b3, good_poseidon, commitment_ok),
+            (good_b3, good_poseidon, commitment_wrong),
+        ]
+    )
+
+    assert report.is_consistent is False
+    assert len(report.failures) == 1
+    assert report.failures[0].is_consistent is False
+
+
+def test_validate_batch_consistency_single_pass():
+    """Single passing triplet must report is_consistent=True."""
+    from protocol.cross_root_validation import validate_batch_consistency
+
+    commitment = _make_dual_commitment(PARTS_A)
+    b3, _ = _make_blake3_proof(PARTS_A)
+    pos, _ = _make_poseidon_proof(PARTS_A)
+
+    report = validate_batch_consistency([(b3, pos, commitment)])
+
+    assert report.is_consistent is True
+    assert len(report.failures) == 0
