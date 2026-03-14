@@ -136,3 +136,57 @@ The following are **by design** outside the current threat model:
   to the raw content is a deployment concern.
 - **Single-operator availability** — Guardian replication (Phase 1) is not yet
   implemented; a single operator deletion of the only copy destroys history.
+
+---
+
+## Deployment Security Requirements
+
+The following operational security practices are **required** for production deployments:
+
+### Signing Key Protection
+
+The `OLYMPUS_INGEST_SIGNING_KEY` environment variable contains the Ed25519 private key
+for signing shard headers. **This key must be protected with the following controls:**
+
+1. **Never commit to source control** — Use secret managers (HashiCorp Vault, AWS
+   Secrets Manager, Azure Key Vault, or GCP Secret Manager).
+2. **Rotate periodically** — Generate new keys at least annually or immediately
+   after any potential compromise. Use the key history mechanism in
+   `protocol/federation.py` to maintain historical key acceptance.
+3. **Restrict process access** — Run the Olympus API in a container or VM with
+   restricted process listing (`hidepid=2` for procfs) to prevent key extraction
+   from `/proc/PID/environ`.
+4. **Audit access** — Log all access to the secret manager containing the key.
+5. **Hardware security modules (HSM)** — For high-assurance deployments, consider
+   using an HSM or cloud KMS for key material (integration is future work).
+
+### API Key Management
+
+API keys for the `/ingest/*` endpoints must be:
+
+1. **Pre-hashed** — Store only BLAKE3 hashes of API keys in `OLYMPUS_API_KEYS_JSON`.
+   Never store raw API key values.
+2. **Scoped** — Assign minimal required scopes (`ingest`, `commit`, `verify`) per key.
+3. **Expiring** — Set realistic `expires_at` timestamps and rotate before expiry.
+4. **Audited** — All key registrations are logged to the security audit ledger.
+
+### Request Size Limits
+
+Deploy Olympus behind a reverse proxy (nginx, HAProxy, AWS ALB) configured with:
+
+- **Maximum request body size:** 10 MB (prevents payload-based DoS)
+- **Connection timeouts:** 30-60 seconds (prevents slowloris attacks)
+- **Rate limiting at network layer:** Additional protection against distributed DoS
+
+### Database Security
+
+- **TLS required** — Use `?sslmode=require` or `?sslmode=verify-full` in `DATABASE_URL`.
+- **Least privilege** — The Olympus service account needs only INSERT and SELECT
+  permissions (no UPDATE, DELETE, or DDL).
+- **Connection encryption** — Ensure all connections are encrypted in transit.
+
+### CORS Configuration
+
+If the API is accessed from browser-based clients, configure CORS via your reverse
+proxy or add the `CORSMiddleware` to the FastAPI application. The default configuration
+does not include CORS headers to prevent unintended cross-origin access.

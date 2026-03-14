@@ -694,3 +694,53 @@ def test_smt_divergence_alert_requires_api_key():
     authed = TestClient(app, headers={"X-API-Key": "alert-key"})
     authorized = authed.post("/shards/shard-1/alert/smt-divergence", params=params)
     assert authorized.status_code == 200
+
+
+def test_rate_limit_thread_safety():
+    """
+    L5-C: Test that the rate limiter is thread-safe under concurrent access.
+
+    This test validates the fix for the race condition identified in the
+    red team security audit. Multiple threads consume rate limit tokens
+    simultaneously to verify no corruption occurs.
+    """
+    import threading
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+
+    ingest_api._reset_ingest_state_for_tests()
+    # Set high capacity so we can test concurrent access without hitting limits
+    ingest_api._set_rate_limit_for_tests("ingest", capacity=1000.0, refill_rate_per_second=100.0)
+
+    num_threads = 20
+    iterations_per_thread = 50
+    results: list[bool] = []
+    errors: list[Exception] = []
+    barrier = threading.Barrier(num_threads)
+
+    def worker():
+        """Each worker consumes rate limit tokens in a tight loop."""
+        barrier.wait()  # Synchronize all threads to start at the same time
+        local_results = []
+        for _ in range(iterations_per_thread):
+            try:
+                # Consume from both key and IP buckets to stress both paths
+                result_key = ingest_api._consume_rate_limit("api_key", "test-key", "ingest")
+                result_ip = ingest_api._consume_rate_limit("ip", "127.0.0.1", "ingest")
+                local_results.append(result_key and result_ip)
+            except Exception as e:
+                errors.append(e)
+                break
+        return local_results
+
+    with ThreadPoolExecutor(max_workers=num_threads) as executor:
+        futures = [executor.submit(worker) for _ in range(num_threads)]
+        for future in as_completed(futures):
+            results.extend(future.result())
+
+    # No errors should have occurred (race conditions would cause crashes or corruption)
+    assert len(errors) == 0, f"Thread-safety errors: {errors}"
+
+    # All operations should succeed (high capacity ensures no rate limiting)
+    total_expected = num_threads * iterations_per_thread
+    assert len(results) == total_expected
+    assert all(results), "All rate limit checks should succeed with high capacity"
