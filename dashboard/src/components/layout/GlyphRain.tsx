@@ -1,7 +1,14 @@
 "use client";
 
 import { useCallback, useEffect, useRef } from "react";
-import { GLYPH_CHARS, GLYPH_RAIN_OPACITY } from "@/config/theme.config";
+import {
+  GLYPH_CHARS,
+  GLYPH_FONT_SIZE,
+  GLYPH_RAIN_COLOR,
+  GLYPH_RAIN_OPACITY,
+  GLYPH_RESET_THRESHOLD,
+  GLYPH_TRAIL_FADE,
+} from "@/config/theme.config";
 
 /**
  * Full-viewport canvas that renders falling green glyphs.
@@ -19,8 +26,7 @@ export function GlyphRain() {
     const ctx = canvas.getContext("2d");
     if (!ctx) return;
 
-    const fontSize = 16;
-    const columns = Math.floor(canvas.width / fontSize);
+    const columns = Math.floor(canvas.width / GLYPH_FONT_SIZE);
 
     /* Initialise drops array if column count changed */
     if (dropsRef.current.length !== columns) {
@@ -29,16 +35,21 @@ export function GlyphRain() {
 
     const drops = dropsRef.current;
 
-    ctx.fillStyle = "rgba(0, 0, 0, 0.05)";
+    ctx.fillStyle = `rgba(0, 0, 0, ${GLYPH_TRAIL_FADE})`;
     ctx.fillRect(0, 0, canvas.width, canvas.height);
 
-    ctx.fillStyle = "#00ff41";
-    ctx.font = `${fontSize}px monospace`;
+    const style = getComputedStyle(document.documentElement);
+    ctx.fillStyle =
+      style.getPropertyValue("--color-primary").trim() || GLYPH_RAIN_COLOR;
+    ctx.font = `${GLYPH_FONT_SIZE}px monospace`;
 
     for (let i = 0; i < drops.length; i++) {
       const ch = GLYPH_CHARS[Math.floor(Math.random() * GLYPH_CHARS.length)];
-      ctx.fillText(ch, i * fontSize, drops[i] * fontSize);
-      if (drops[i] * fontSize > canvas.height && Math.random() > 0.975) {
+      ctx.fillText(ch, i * GLYPH_FONT_SIZE, drops[i] * GLYPH_FONT_SIZE);
+      if (
+        drops[i] * GLYPH_FONT_SIZE > canvas.height &&
+        Math.random() > GLYPH_RESET_THRESHOLD
+      ) {
         drops[i] = 0;
       }
       drops[i]++;
@@ -55,7 +66,7 @@ export function GlyphRain() {
       canvas.width = window.innerWidth;
       canvas.height = window.innerHeight;
       dropsRef.current = new Array(
-        Math.floor(canvas.width / 16)
+        Math.floor(canvas.width / GLYPH_FONT_SIZE)
       ).fill(1);
     };
 

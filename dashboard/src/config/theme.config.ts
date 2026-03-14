@@ -40,3 +40,15 @@ export const GLYPH_CHARS = "01アイウエオカキクケコ";
 
 /** Glyph rain canvas opacity. */
 export const GLYPH_RAIN_OPACITY = 0.15;
+
+/** Font size in pixels for glyph rain characters. */
+export const GLYPH_FONT_SIZE = 16;
+
+/** Alpha for the trailing fade rectangle (lower = longer trails). */
+export const GLYPH_TRAIL_FADE = 0.05;
+
+/** Probability threshold for resetting a glyph column (higher = longer columns). */
+export const GLYPH_RESET_THRESHOLD = 0.975;
+
+/** Fallback color for glyph rain when CSS variable is unavailable. */
+export const GLYPH_RAIN_COLOR = "#00ff41";
