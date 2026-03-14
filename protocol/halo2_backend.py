@@ -296,7 +296,7 @@ class RecursiveProofAccumulator:
             event_index=event_index,
             document_id=self.document_id,
             version=self.version,
-            revealed_indices=revealed_indices,
+            revealed_indices=tuple(revealed_indices),
             original_root=self.original_root,
             redacted_commitment=redacted_commitment,
             revealed_count=revealed_count,

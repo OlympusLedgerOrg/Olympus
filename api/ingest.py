@@ -1154,7 +1154,21 @@ async def submit_proof_bundle(
         "persisted": False,
     }
     _cache_ingestion_record(stored_entry)
-    return ProofSubmissionResponse(**stored_entry, submitted=True, deduplicated=False)
+    return ProofSubmissionResponse(
+        proof_id=proof_id,
+        record_id=proof_request.record_id,
+        shard_id=proof_request.shard_id,
+        content_hash=normalized_hash,
+        merkle_root=normalized_root,
+        merkle_proof=proof_request.merkle_proof,
+        ledger_entry_hash=proof_request.ledger_entry_hash,
+        timestamp=proof_request.timestamp,
+        canonicalization=proof_request.canonicalization,
+        batch_id=proof_request.batch_id,
+        poseidon_root=proof_request.poseidon_root,
+        submitted=True,
+        deduplicated=False,
+    )
 
 
 # ---------------------------------------------------------------------------
