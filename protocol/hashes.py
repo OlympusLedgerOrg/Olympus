@@ -194,7 +194,7 @@ def event_id(shard_id: str, header_hash: str, timestamp: str) -> str:
 
     The event ID binds a federation signature to a specific shard header
     commitment using domain separation. It is computed as:
-        hash(EVENT_PREFIX || "|" || payload)
+        hash(concat(EVENT_PREFIX, "|", payload))
 
     Payload encoding (version 2):
         - each field is encoded as: [4-byte big-endian length] || [UTF-8 bytes]
