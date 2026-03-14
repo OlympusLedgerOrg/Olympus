@@ -1,3 +1,6 @@
+import { blake3 } from "@noble/hashes/blake3.js";
+import { bytesToHex, utf8ToBytes } from "@noble/hashes/utils.js";
+
 export type VerificationMethod = "world-id" | "gitcoin-passport" | "social-graph";
 
 export type LocationPrecision = "zip3";
@@ -85,6 +88,7 @@ export const VERIFICATION_METHOD_LABELS: Record<VerificationMethod, string> = {
 export const MOCK_SBT_ADDRESS =
   "0x00000000000000000000000000000000C1C1C0";
 export const MOCK_SBT_CHAIN_ID = 11155111;
+export const HASH_SEPARATOR = "|";
 
 export const MOCK_SBT_ABI = [
   {
@@ -208,16 +212,7 @@ export function sanitizeProof(
 }
 
 export async function hashString(payload: string): Promise<string> {
-  if (globalThis.crypto?.subtle) {
-    const encoder = new TextEncoder();
-    const data = encoder.encode(payload);
-    const digest = await globalThis.crypto.subtle.digest("SHA-256", data);
-    return Array.from(new Uint8Array(digest))
-      .map((byte) => byte.toString(16).padStart(2, "0"))
-      .join("");
-  }
-  const { createHash } = await import("crypto");
-  return createHash("sha256").update(payload).digest("hex");
+  return bytesToHex(blake3(utf8ToBytes(payload)));
 }
 
 export async function createLocationClaim(
@@ -229,7 +224,7 @@ export async function createLocationClaim(
     throw new Error("ZIP code must include five digits.");
   }
   const zip3 = normalized.slice(0, 3);
-  const locationHash = await hashString(`${salt}:${zip3}`);
+  const locationHash = await hashString([salt, zip3].join(HASH_SEPARATOR));
   return {
     precision: "zip3",
     locationHash,
@@ -242,12 +237,14 @@ export async function createPersonhoodCommitment(
   proof: VerificationProof,
 ): Promise<string> {
   const proofHash = await hashString(JSON.stringify(proof));
-  return hashString(`personhood:${method}:${proofHash}`);
+  return hashString(["personhood", method, proofHash].join(HASH_SEPARATOR));
 }
 
 export async function createVerificationId(
   walletAddress: string,
   personhoodId: string,
 ): Promise<string> {
-  return hashString(`verification:${walletAddress}:${personhoodId}`);
+  return hashString(
+    ["verification", walletAddress, personhoodId].join(HASH_SEPARATOR),
+  );
 }

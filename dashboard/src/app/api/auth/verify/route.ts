@@ -2,6 +2,7 @@ import { NextResponse, type NextRequest } from "next/server";
 import {
   MOCK_SBT_ADDRESS,
   MOCK_SBT_CHAIN_ID,
+  HASH_SEPARATOR,
   createPersonhoodCommitment,
   createVerificationId,
   hashString,
@@ -110,8 +111,8 @@ export async function POST(request: NextRequest) {
   }
 
   const verificationId = await createVerificationId(walletAddress, personhoodId);
-  const tokenSeed = await hashString(`sbt:${verificationId}`);
-  const txSeed = await hashString(`tx:${verificationId}`);
+  const tokenSeed = await hashString(["sbt", verificationId].join(HASH_SEPARATOR));
+  const txSeed = await hashString(["tx", verificationId].join(HASH_SEPARATOR));
 
   const record: VerificationRecord = {
     verificationId,
