@@ -219,6 +219,130 @@ def test_console_uses_theme_tokens(monkeypatch):
     assert "color: var(--accent);" in response.text
 
 
+def test_theme_switcher_present(monkeypatch):
+    """Root page should include the theme switcher UI component."""
+    monkeypatch.setattr(ui_app, "DEBUG_UI_ENABLED", True)
+    monkeypatch.setattr(ui_app, "_fetch_json", lambda path: [])
+
+    response = client.get("/")
+
+    assert response.status_code == 200
+    assert "theme-switcher" in response.text
+    assert 'name="theme-mode"' in response.text
+    assert 'value="fight-club"' in response.text
+    assert 'value="professional"' in response.text
+    assert 'value="minimal"' in response.text
+    assert 'value="accessibility"' in response.text
+
+
+def test_theme_fight_club_css_present(monkeypatch):
+    """Root page should include Fight Club / Matrix theme CSS variables."""
+    monkeypatch.setattr(ui_app, "DEBUG_UI_ENABLED", True)
+    monkeypatch.setattr(ui_app, "_fetch_json", lambda path: [])
+
+    response = client.get("/")
+
+    assert response.status_code == 200
+    assert '[data-theme="fight-club"]' in response.text
+    assert "#00ff41" in response.text  # matrix green
+
+
+def test_theme_accessibility_css_present(monkeypatch):
+    """Root page should include Accessibility / High Contrast theme CSS."""
+    monkeypatch.setattr(ui_app, "DEBUG_UI_ENABLED", True)
+    monkeypatch.setattr(ui_app, "_fetch_json", lambda path: [])
+
+    response = client.get("/")
+
+    assert response.status_code == 200
+    assert '[data-theme="accessibility"]' in response.text
+    assert "#ffff00" in response.text  # high contrast yellow accent
+
+
+def test_theme_minimal_css_present(monkeypatch):
+    """Root page should include Minimal / Zen theme CSS."""
+    monkeypatch.setattr(ui_app, "DEBUG_UI_ENABLED", True)
+    monkeypatch.setattr(ui_app, "_fetch_json", lambda path: [])
+
+    response = client.get("/")
+
+    assert response.status_code == 200
+    assert '[data-theme="minimal"]' in response.text
+
+
+def test_glyph_rain_canvas_present(monkeypatch):
+    """Root page should include the glyph rain canvas element."""
+    monkeypatch.setattr(ui_app, "DEBUG_UI_ENABLED", True)
+    monkeypatch.setattr(ui_app, "_fetch_json", lambda path: [])
+
+    response = client.get("/")
+
+    assert response.status_code == 200
+    assert 'id="glyph-rain"' in response.text
+    assert "startGlyphRain" in response.text
+    assert "stopGlyphRain" in response.text
+
+
+def test_color_scheme_options_present(monkeypatch):
+    """Root page should include color scheme radio options."""
+    monkeypatch.setattr(ui_app, "DEBUG_UI_ENABLED", True)
+    monkeypatch.setattr(ui_app, "_fetch_json", lambda path: [])
+
+    response = client.get("/")
+
+    assert response.status_code == 200
+    assert 'name="color-scheme"' in response.text
+    assert 'value="amber"' in response.text
+    assert 'value="blue"' in response.text
+    assert '[data-color-scheme="amber"]' in response.text
+    assert '[data-color-scheme="blue"]' in response.text
+
+
+def test_layout_preferences_present(monkeypatch):
+    """Root page should include layout preference checkboxes."""
+    monkeypatch.setattr(ui_app, "DEBUG_UI_ENABLED", True)
+    monkeypatch.setattr(ui_app, "_fetch_json", lambda path: [])
+
+    response = client.get("/")
+
+    assert response.status_code == 200
+    assert 'id="pref-glyph-rain"' in response.text
+    assert 'id="pref-compact"' in response.text
+
+
+def test_theme_persistence_js_present(monkeypatch):
+    """Root page should include localStorage-based theme persistence code."""
+    monkeypatch.setattr(ui_app, "DEBUG_UI_ENABLED", True)
+    monkeypatch.setattr(ui_app, "_fetch_json", lambda path: [])
+
+    response = client.get("/")
+
+    assert response.status_code == 200
+    assert "olympus-theme" in response.text
+    assert "saveThemePrefs" in response.text
+    assert "loadThemePrefs" in response.text
+    assert "applyTheme" in response.text
+
+
+def test_data_theme_attribute_on_html(monkeypatch):
+    """HTML element should have a data-theme attribute for CSS targeting."""
+    monkeypatch.setattr(ui_app, "DEBUG_UI_ENABLED", True)
+    monkeypatch.setattr(ui_app, "_fetch_json", lambda path: [])
+
+    response = client.get("/")
+
+    assert response.status_code == 200
+    assert 'data-theme=' in response.text
+
+
+def test_verification_portal_has_theme_switcher(monkeypatch):
+    """Verification portal page should also include theme switcher."""
+    response = client.get("/verification-portal")
+
+    assert response.status_code == 200
+    assert "theme-switcher" in response.text
+
+
 # ── Commit Document endpoint ────────────────────────────────────────────────
 
 
