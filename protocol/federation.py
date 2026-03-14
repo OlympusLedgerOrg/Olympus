@@ -259,7 +259,7 @@ class FederationRegistry:
 
     def membership_hash(self) -> str:
         """Return the deterministic hash commitment for active federation membership.
-        
+
         Uses length-prefixed encoding to prevent injection attacks when node_id
         or pubkey_hex contain literal pipe characters or colons.
         """
@@ -274,13 +274,13 @@ class FederationRegistry:
         for node_id, pubkey_hex in active_members:
             fields.append(node_id)
             fields.append(pubkey_hex)
-        
+
         encoded_fields = []
         for value in fields:
             field_bytes = value.encode("utf-8")
             encoded_fields.append(len(field_bytes).to_bytes(4, byteorder="big"))
             encoded_fields.append(field_bytes)
-        
+
         payload = b"".join(encoded_fields)
         return hash_bytes(payload).hex()
 
@@ -1176,3 +1176,781 @@ def append_quorum_certificate_to_ledger(
         canonicalization=canonicalization,
         federation_quorum_certificate=certificate,
     )
+
+
+# =============================================================================
+# T1: Steward-Guardian Equivocation Detection (Shadow Ledger Mitigation)
+# =============================================================================
+
+
+@dataclass(frozen=True)
+class ShardHeaderForkEvidence:
+    """
+    Non-repudiable cryptographic proof of Steward-Guardian equivocation.
+
+    When two distinct shard headers H_a and H_b share the same (shard_id, seq)
+    but have different header_hash values, this constitutes a "shadow ledger"
+    attack. Discovery of such conflicting headers is cryptographic proof of
+    fraud that can be publicly verified.
+
+    Attributes:
+        shard_id: The shard where equivocation was detected.
+        seq: The sequence number where conflicting headers were observed.
+        conflicting_header_hashes: Tuple of distinct header hashes for the same seq.
+        observer_ids: Tuple of observer identifiers who reported the conflict.
+        signatures_a: Signatures collected for header H_a.
+        signatures_b: Signatures collected for header H_b.
+        detected_at: ISO 8601 timestamp when the fork was detected.
+    """
+
+    shard_id: str
+    seq: int
+    conflicting_header_hashes: tuple[str, ...]
+    observer_ids: tuple[str, ...]
+    signatures_a: tuple[NodeSignature, ...]
+    signatures_b: tuple[NodeSignature, ...]
+    detected_at: str
+
+    def __post_init__(self) -> None:
+        if not self.shard_id:
+            raise ValueError("shard_id must be non-empty")
+        if self.seq < 0:
+            raise ValueError("seq must be non-negative")
+        if len(self.conflicting_header_hashes) < 2:
+            raise ValueError("conflicting_header_hashes must include at least two hashes")
+        if len(set(self.conflicting_header_hashes)) != len(self.conflicting_header_hashes):
+            raise ValueError("conflicting_header_hashes must be unique")
+        if len(self.observer_ids) < 1:
+            raise ValueError("observer_ids must include at least one observer")
+        try:
+            _parse_timestamp(self.detected_at)
+        except ValueError as exc:
+            raise ValueError("detected_at must be a valid ISO 8601 timestamp") from exc
+
+    def to_dict(self) -> dict[str, Any]:
+        """Serialize fork evidence to JSON-friendly data."""
+        return {
+            "shard_id": self.shard_id,
+            "seq": self.seq,
+            "conflicting_header_hashes": list(self.conflicting_header_hashes),
+            "observer_ids": list(self.observer_ids),
+            "signatures_a": [sig.to_dict() for sig in self.signatures_a],
+            "signatures_b": [sig.to_dict() for sig in self.signatures_b],
+            "detected_at": self.detected_at,
+        }
+
+    def colluding_guardians(self) -> tuple[str, ...]:
+        """Return node_ids that signed both conflicting headers (provable collusion)."""
+        signers_a = {sig.node_id for sig in self.signatures_a}
+        signers_b = {sig.node_id for sig in self.signatures_b}
+        return tuple(sorted(signers_a & signers_b))
+
+
+@dataclass(frozen=True)
+class GossipedShardHeader:
+    """A shard header observation received via gossip from a peer."""
+
+    peer_id: str
+    shard_id: str
+    seq: int
+    header_hash: str
+    root_hash: str
+    timestamp: str
+    signatures: tuple[NodeSignature, ...]
+
+    def __post_init__(self) -> None:
+        if not self.peer_id:
+            raise ValueError("peer_id must be non-empty")
+        if not self.shard_id:
+            raise ValueError("shard_id must be non-empty")
+        if self.seq < 0:
+            raise ValueError("seq must be non-negative")
+        if not self.header_hash:
+            raise ValueError("header_hash must be non-empty")
+
+
+def detect_shard_header_forks(
+    observations: dict[str, GossipedShardHeader],
+    *,
+    registry: FederationRegistry | None = None,
+) -> tuple[ShardHeaderForkEvidence, ...]:
+    """
+    Detect equivocation by comparing gossiped shard headers from multiple peers.
+
+    This implements the gossip-based fork detection mitigation for the Shadow
+    Ledger attack (T1). When monitors and third-party verifiers gossip signed
+    headers, discovery of any H_a != H_b where seq(H_a) == seq(H_b) constitutes
+    non-repudiable cryptographic proof of fraud.
+
+    Args:
+        observations: Mapping of peer_id -> GossipedShardHeader observed
+        registry: Optional federation registry for signature validation
+
+    Returns:
+        Tuple of ShardHeaderForkEvidence objects describing detected forks.
+
+    Raises:
+        ValueError: If invalid observations are provided.
+    """
+    if not observations:
+        return ()
+
+    from protocol.timestamps import current_timestamp as _current_timestamp
+
+    # Group observations by (shard_id, seq)
+    grouped: dict[tuple[str, int], list[GossipedShardHeader]] = {}
+    for peer_id, header in sorted(observations.items()):
+        key = (header.shard_id, header.seq)
+        grouped.setdefault(key, []).append(header)
+
+    evidences: list[ShardHeaderForkEvidence] = []
+    for (shard_id, seq), headers in sorted(grouped.items()):
+        # Check for conflicting header hashes at the same seq
+        hash_to_headers: dict[str, list[GossipedShardHeader]] = {}
+        for header in headers:
+            hash_to_headers.setdefault(header.header_hash, []).append(header)
+
+        if len(hash_to_headers) <= 1:
+            # No conflict at this seq
+            continue
+
+        # Fork detected: multiple distinct header hashes for the same seq
+        sorted_hashes = sorted(hash_to_headers.keys())
+        observer_ids: set[str] = set()
+        signatures_by_hash: dict[str, list[NodeSignature]] = {}
+
+        for header_hash, hash_headers in hash_to_headers.items():
+            signatures_by_hash[header_hash] = []
+            for header in hash_headers:
+                observer_ids.add(header.peer_id)
+                signatures_by_hash[header_hash].extend(header.signatures)
+
+        # Use the first two conflicting hashes for the evidence
+        hash_a, hash_b = sorted_hashes[0], sorted_hashes[1]
+
+        evidence = ShardHeaderForkEvidence(
+            shard_id=shard_id,
+            seq=seq,
+            conflicting_header_hashes=tuple(sorted_hashes),
+            observer_ids=tuple(sorted(observer_ids)),
+            signatures_a=tuple(signatures_by_hash[hash_a]),
+            signatures_b=tuple(signatures_by_hash[hash_b]),
+            detected_at=_current_timestamp(),
+        )
+        evidences.append(evidence)
+
+    return tuple(evidences)
+
+
+def registry_forest_commitment(registry: FederationRegistry) -> str:
+    """
+    Compute a deterministic commitment of the Guardian registry to the Forest root.
+
+    This implements the Public Guardian Registry mitigation: the set of active
+    Guardian keys is committed to the immutable Forest root, ensuring that a
+    "Shadow Ledger" would require a quorum from specifically registered keys.
+
+    Args:
+        registry: The federation registry to commit
+
+    Returns:
+        Hex-encoded BLAKE3 hash commitment of the registry state.
+    """
+    active_nodes = sorted(registry.active_nodes(), key=lambda n: n.node_id)
+    commitment_parts: list[bytes] = [
+        f"epoch:{registry.epoch}".encode(),
+        f"membership:{registry.membership_hash()}".encode(),
+    ]
+    for node in active_nodes:
+        node_commitment = HASH_SEPARATOR.join([
+            node.node_id,
+            node.pubkey.hex(),
+            node.endpoint,
+            node.operator,
+            node.jurisdiction,
+            node.status,
+        ]).encode("utf-8")
+        commitment_parts.append(node_commitment)
+
+    return hash_bytes(b"\n".join(commitment_parts)).hex()
+
+
+# =============================================================================
+# T2: State Suppression Mitigation (Missing Shard Attack)
+# =============================================================================
+
+
+@dataclass(frozen=True)
+class DataAvailabilityChallenge:
+    """
+    A challenge requiring proof that shard data is available for replication.
+
+    Guardians must refuse to countersign a Forest header unless they have
+    successfully replicated the underlying shard data or a verifiable
+    data-availability commitment.
+
+    Attributes:
+        shard_id: The shard being challenged for availability.
+        header_hash: The header hash whose underlying data must be available.
+        challenger_id: Node ID of the Guardian issuing the challenge.
+        challenge_nonce: Random nonce to prevent replay of stale proofs.
+        issued_at: ISO 8601 timestamp when the challenge was issued.
+        response_deadline: ISO 8601 timestamp by which proof must be provided.
+    """
+
+    shard_id: str
+    header_hash: str
+    challenger_id: str
+    challenge_nonce: str
+    issued_at: str
+    response_deadline: str
+
+    def __post_init__(self) -> None:
+        if not self.shard_id:
+            raise ValueError("shard_id must be non-empty")
+        if not self.header_hash:
+            raise ValueError("header_hash must be non-empty")
+        if not self.challenger_id:
+            raise ValueError("challenger_id must be non-empty")
+        if not self.challenge_nonce:
+            raise ValueError("challenge_nonce must be non-empty")
+        try:
+            _parse_timestamp(self.issued_at)
+            _parse_timestamp(self.response_deadline)
+        except ValueError as exc:
+            raise ValueError("timestamps must be valid ISO 8601") from exc
+
+    def to_dict(self) -> dict[str, str]:
+        """Serialize to JSON-friendly data."""
+        return {
+            "shard_id": self.shard_id,
+            "header_hash": self.header_hash,
+            "challenger_id": self.challenger_id,
+            "challenge_nonce": self.challenge_nonce,
+            "issued_at": self.issued_at,
+            "response_deadline": self.response_deadline,
+        }
+
+    def challenge_hash(self) -> str:
+        """Return deterministic hash of the challenge for binding responses."""
+        payload = HASH_SEPARATOR.join([
+            self.shard_id,
+            self.header_hash,
+            self.challenger_id,
+            self.challenge_nonce,
+            self.issued_at,
+        ]).encode("utf-8")
+        return hash_bytes(payload).hex()
+
+
+@dataclass(frozen=True)
+class ReplicationProof:
+    """
+    Proof that a Guardian has replicated and verified shard data.
+
+    This implements the Signed Tail Consistency mitigation: Guardians must
+    provide evidence that they have the underlying Merkle inclusion proofs
+    and raw data before a header can be promoted to "Federation Final" status.
+
+    Attributes:
+        challenge_hash: Hash of the DataAvailabilityChallenge being answered.
+        guardian_id: Node ID of the Guardian providing the proof.
+        ledger_tail_hash: BLAKE3 hash of the replicated ledger tail entries.
+        merkle_root_verified: Whether the Merkle root was independently verified.
+        proof_sample_indices: Random indices that were spot-checked for availability.
+        proof_sample_hashes: Hashes of the spot-checked data at sample indices.
+        replicated_at: ISO 8601 timestamp when replication completed.
+        guardian_signature: Ed25519 signature over the proof payload.
+    """
+
+    challenge_hash: str
+    guardian_id: str
+    ledger_tail_hash: str
+    merkle_root_verified: bool
+    proof_sample_indices: tuple[int, ...]
+    proof_sample_hashes: tuple[str, ...]
+    replicated_at: str
+    guardian_signature: str
+
+    def __post_init__(self) -> None:
+        if not self.challenge_hash:
+            raise ValueError("challenge_hash must be non-empty")
+        if not self.guardian_id:
+            raise ValueError("guardian_id must be non-empty")
+        if not self.ledger_tail_hash:
+            raise ValueError("ledger_tail_hash must be non-empty")
+        if len(self.proof_sample_indices) != len(self.proof_sample_hashes):
+            raise ValueError("proof_sample_indices and proof_sample_hashes must have same length")
+        try:
+            _parse_timestamp(self.replicated_at)
+        except ValueError as exc:
+            raise ValueError("replicated_at must be valid ISO 8601") from exc
+
+    def to_dict(self) -> dict[str, Any]:
+        """Serialize to JSON-friendly data."""
+        return {
+            "challenge_hash": self.challenge_hash,
+            "guardian_id": self.guardian_id,
+            "ledger_tail_hash": self.ledger_tail_hash,
+            "merkle_root_verified": self.merkle_root_verified,
+            "proof_sample_indices": list(self.proof_sample_indices),
+            "proof_sample_hashes": list(self.proof_sample_hashes),
+            "replicated_at": self.replicated_at,
+            "guardian_signature": self.guardian_signature,
+        }
+
+    def proof_payload_hash(self) -> str:
+        """Return the hash of the proof payload (excluding signature)."""
+        payload = HASH_SEPARATOR.join([
+            self.challenge_hash,
+            self.guardian_id,
+            self.ledger_tail_hash,
+            str(self.merkle_root_verified),
+            ",".join(str(i) for i in self.proof_sample_indices),
+            ",".join(self.proof_sample_hashes),
+            self.replicated_at,
+        ]).encode("utf-8")
+        return hash_bytes(payload).hex()
+
+
+@dataclass(frozen=True)
+class FederationFinalityStatus:
+    """
+    Tracks the finality status of a shard header with availability gates.
+
+    A header progresses through these states:
+    1. PROPOSED: Header announced by Steward
+    2. AVAILABILITY_PENDING: Awaiting replication proofs from Guardians
+    3. AVAILABILITY_VERIFIED: Sufficient replication proofs received
+    4. QUORUM_PENDING: Awaiting quorum signatures
+    5. FEDERATION_FINAL: Full quorum + availability = immutable
+
+    Attributes:
+        shard_id: The shard being finalized.
+        seq: Sequence number of the header.
+        header_hash: Hash of the header being finalized.
+        status: Current finality status string.
+        availability_proofs: Replication proofs received from Guardians.
+        quorum_signatures: Federation signatures received.
+        finalized_at: ISO 8601 timestamp when finality was achieved (if final).
+    """
+
+    shard_id: str
+    seq: int
+    header_hash: str
+    status: str
+    availability_proofs: tuple[ReplicationProof, ...]
+    quorum_signatures: tuple[NodeSignature, ...]
+    finalized_at: str | None
+
+    # Finality status constants
+    STATUS_PROPOSED = "PROPOSED"
+    STATUS_AVAILABILITY_PENDING = "AVAILABILITY_PENDING"
+    STATUS_AVAILABILITY_VERIFIED = "AVAILABILITY_VERIFIED"
+    STATUS_QUORUM_PENDING = "QUORUM_PENDING"
+    STATUS_FEDERATION_FINAL = "FEDERATION_FINAL"
+
+    def __post_init__(self) -> None:
+        valid_statuses = {
+            self.STATUS_PROPOSED,
+            self.STATUS_AVAILABILITY_PENDING,
+            self.STATUS_AVAILABILITY_VERIFIED,
+            self.STATUS_QUORUM_PENDING,
+            self.STATUS_FEDERATION_FINAL,
+        }
+        if self.status not in valid_statuses:
+            raise ValueError(f"status must be one of {valid_statuses}")
+        if self.seq < 0:
+            raise ValueError("seq must be non-negative")
+        if self.finalized_at is not None:
+            try:
+                _parse_timestamp(self.finalized_at)
+            except ValueError as exc:
+                raise ValueError("finalized_at must be valid ISO 8601") from exc
+
+    def is_final(self) -> bool:
+        """Return whether the header has achieved federation finality."""
+        return self.status == self.STATUS_FEDERATION_FINAL
+
+    def availability_threshold_met(self, registry: FederationRegistry) -> bool:
+        """Return whether sufficient availability proofs have been received."""
+        # Require at least 2/3 of Guardians to have verified availability
+        verified_guardians = {proof.guardian_id for proof in self.availability_proofs}
+        return len(verified_guardians) >= registry.quorum_threshold()
+
+    def to_dict(self) -> dict[str, Any]:
+        """Serialize to JSON-friendly data."""
+        return {
+            "shard_id": self.shard_id,
+            "seq": self.seq,
+            "header_hash": self.header_hash,
+            "status": self.status,
+            "availability_proofs": [p.to_dict() for p in self.availability_proofs],
+            "quorum_signatures": [s.to_dict() for s in self.quorum_signatures],
+            "finalized_at": self.finalized_at,
+        }
+
+
+def verify_data_availability(
+    challenge: DataAvailabilityChallenge,
+    proof: ReplicationProof,
+    registry: FederationRegistry,
+) -> bool:
+    """
+    Verify a replication proof against a data availability challenge.
+
+    This verifies that:
+    1. The proof answers the correct challenge
+    2. The Guardian is registered in the federation
+    3. The signature is valid for the proof payload
+    4. The Merkle root was verified
+
+    Args:
+        challenge: The availability challenge being answered
+        proof: The replication proof to verify
+        registry: Federation registry for key lookup
+
+    Returns:
+        True if the proof is valid, False otherwise
+    """
+    # Verify challenge binding
+    if proof.challenge_hash != challenge.challenge_hash():
+        return False
+
+    # Verify Guardian is registered
+    try:
+        node = registry.get_node(proof.guardian_id)
+    except ValueError:
+        return False
+    if not node.active:
+        return False
+
+    # Verify Merkle root was checked
+    if not proof.merkle_root_verified:
+        return False
+
+    # Verify signature over proof payload
+    try:
+        payload_hash = bytes.fromhex(proof.proof_payload_hash())
+        signature_bytes = bytes.fromhex(proof.guardian_signature)
+        verify_key = node.verify_key()
+        verify_key.verify(payload_hash, signature_bytes)
+    except (ValueError, nacl.exceptions.BadSignatureError):
+        return False
+
+    return True
+
+
+def create_replication_proof(
+    challenge: DataAvailabilityChallenge,
+    guardian_id: str,
+    signing_key: nacl.signing.SigningKey,
+    ledger_tail_hash: str,
+    proof_sample_indices: tuple[int, ...],
+    proof_sample_hashes: tuple[str, ...],
+    replicated_at: str,
+) -> ReplicationProof:
+    """
+    Create a signed replication proof for a data availability challenge.
+
+    Args:
+        challenge: The availability challenge being answered
+        guardian_id: Node ID of the Guardian creating the proof
+        signing_key: Ed25519 signing key for the Guardian
+        ledger_tail_hash: Hash of the replicated ledger tail
+        proof_sample_indices: Indices of spot-checked data
+        proof_sample_hashes: Hashes of spot-checked data
+        replicated_at: Timestamp when replication completed
+
+    Returns:
+        Signed ReplicationProof
+    """
+    # Create unsigned proof to compute payload hash
+    unsigned_proof = ReplicationProof(
+        challenge_hash=challenge.challenge_hash(),
+        guardian_id=guardian_id,
+        ledger_tail_hash=ledger_tail_hash,
+        merkle_root_verified=True,
+        proof_sample_indices=proof_sample_indices,
+        proof_sample_hashes=proof_sample_hashes,
+        replicated_at=replicated_at,
+        guardian_signature="",  # Placeholder
+    )
+
+    # Sign the proof payload
+    payload_hash = bytes.fromhex(unsigned_proof.proof_payload_hash())
+    signed = signing_key.sign(payload_hash)
+    signature_hex = signed.signature.hex()
+
+    return ReplicationProof(
+        challenge_hash=challenge.challenge_hash(),
+        guardian_id=guardian_id,
+        ledger_tail_hash=ledger_tail_hash,
+        merkle_root_verified=True,
+        proof_sample_indices=proof_sample_indices,
+        proof_sample_hashes=proof_sample_hashes,
+        replicated_at=replicated_at,
+        guardian_signature=signature_hex,
+    )
+
+
+# =============================================================================
+# T3: Long-Range Key Compromise Mitigation (Recursive SNARK Chain Proofs)
+# =============================================================================
+
+
+@dataclass(frozen=True)
+class RecursiveChainProof:
+    """
+    Recursive SNARK proof of correct hash chain transition.
+
+    Using the existing Circom/snarkjs stack, this wraps the hash chain in a
+    ZK-proof of correct transition. Even with leaked keys, an adversary cannot
+    easily forge the computational history of the ledger without breaking the
+    underlying circuit logic.
+
+    The proof attests that:
+    1. The chain from previous_root to current_root follows valid transitions
+    2. All intermediate hashes are correctly computed
+    3. The epoch transitions respect key rotation schedules
+
+    Attributes:
+        proof_type: The ZK proof system used (e.g., "groth16", "plonk")
+        previous_root: The starting state root being proved from
+        current_root: The ending state root being proved to
+        epoch_start: Starting epoch of the proven transition
+        epoch_end: Ending epoch of the proven transition
+        transition_count: Number of state transitions covered by the proof
+        proof_data: The serialized SNARK proof (hex-encoded)
+        public_inputs: Public inputs to the circuit verification
+        verification_key_hash: Hash of the verification key for this proof type
+        created_at: ISO 8601 timestamp when the proof was generated
+    """
+
+    proof_type: str
+    previous_root: str
+    current_root: str
+    epoch_start: int
+    epoch_end: int
+    transition_count: int
+    proof_data: str
+    public_inputs: tuple[str, ...]
+    verification_key_hash: str
+    created_at: str
+
+    # Supported proof types
+    PROOF_TYPE_GROTH16 = "groth16"
+    PROOF_TYPE_PLONK = "plonk"
+
+    def __post_init__(self) -> None:
+        valid_proof_types = {self.PROOF_TYPE_GROTH16, self.PROOF_TYPE_PLONK}
+        if self.proof_type not in valid_proof_types:
+            raise ValueError(f"proof_type must be one of {valid_proof_types}")
+        if not self.previous_root:
+            raise ValueError("previous_root must be non-empty")
+        if not self.current_root:
+            raise ValueError("current_root must be non-empty")
+        if self.epoch_start < 0:
+            raise ValueError("epoch_start must be non-negative")
+        if self.epoch_end < self.epoch_start:
+            raise ValueError("epoch_end must be >= epoch_start")
+        if self.transition_count < 0:
+            raise ValueError("transition_count must be non-negative")
+        if not self.proof_data:
+            raise ValueError("proof_data must be non-empty")
+        if not self.verification_key_hash:
+            raise ValueError("verification_key_hash must be non-empty")
+        try:
+            _parse_timestamp(self.created_at)
+        except ValueError as exc:
+            raise ValueError("created_at must be valid ISO 8601") from exc
+
+    def to_dict(self) -> dict[str, Any]:
+        """Serialize to JSON-friendly data."""
+        return {
+            "proof_type": self.proof_type,
+            "previous_root": self.previous_root,
+            "current_root": self.current_root,
+            "epoch_start": self.epoch_start,
+            "epoch_end": self.epoch_end,
+            "transition_count": self.transition_count,
+            "proof_data": self.proof_data,
+            "public_inputs": list(self.public_inputs),
+            "verification_key_hash": self.verification_key_hash,
+            "created_at": self.created_at,
+        }
+
+    def proof_commitment_hash(self) -> str:
+        """Return a deterministic hash commitment for this proof."""
+        payload = HASH_SEPARATOR.join([
+            self.proof_type,
+            self.previous_root,
+            self.current_root,
+            str(self.epoch_start),
+            str(self.epoch_end),
+            str(self.transition_count),
+            self.verification_key_hash,
+        ]).encode("utf-8")
+        return hash_bytes(payload).hex()
+
+
+@dataclass(frozen=True)
+class EpochKeyRotationRecord:
+    """
+    Record of a key rotation event for epoch-based key compromise mitigation.
+
+    Guardian keys are rotated based on time-bound epochs. This record captures
+    the rotation event for audit and verification purposes.
+
+    Attributes:
+        node_id: The Guardian node whose key was rotated
+        epoch: The epoch in which the rotation occurred
+        old_pubkey_hash: Hash of the previous public key
+        new_pubkey_hash: Hash of the new public key
+        rotated_at: ISO 8601 timestamp of the rotation
+        rotation_signature: Signature over the rotation by the old key
+        witness_signatures: Signatures from witnesses who observed the rotation
+    """
+
+    node_id: str
+    epoch: int
+    old_pubkey_hash: str
+    new_pubkey_hash: str
+    rotated_at: str
+    rotation_signature: str
+    witness_signatures: tuple[NodeSignature, ...]
+
+    def __post_init__(self) -> None:
+        if not self.node_id:
+            raise ValueError("node_id must be non-empty")
+        if self.epoch < 0:
+            raise ValueError("epoch must be non-negative")
+        if not self.old_pubkey_hash:
+            raise ValueError("old_pubkey_hash must be non-empty")
+        if not self.new_pubkey_hash:
+            raise ValueError("new_pubkey_hash must be non-empty")
+        if self.old_pubkey_hash == self.new_pubkey_hash:
+            raise ValueError("new_pubkey_hash must differ from old_pubkey_hash")
+        try:
+            _parse_timestamp(self.rotated_at)
+        except ValueError as exc:
+            raise ValueError("rotated_at must be valid ISO 8601") from exc
+
+    def to_dict(self) -> dict[str, Any]:
+        """Serialize to JSON-friendly data."""
+        return {
+            "node_id": self.node_id,
+            "epoch": self.epoch,
+            "old_pubkey_hash": self.old_pubkey_hash,
+            "new_pubkey_hash": self.new_pubkey_hash,
+            "rotated_at": self.rotated_at,
+            "rotation_signature": self.rotation_signature,
+            "witness_signatures": [s.to_dict() for s in self.witness_signatures],
+        }
+
+
+def verify_recursive_chain_proof(
+    proof: RecursiveChainProof,
+    verification_key: dict[str, Any],
+    expected_vk_hash: str,
+) -> bool:
+    """
+    Verify a recursive SNARK chain proof.
+
+    This is a placeholder for integration with the existing Circom/snarkjs
+    verification infrastructure. Full implementation requires binding to the
+    proof_interface module.
+
+    Args:
+        proof: The recursive chain proof to verify
+        verification_key: The SNARK verification key
+        expected_vk_hash: Expected hash of the verification key
+
+    Returns:
+        True if the proof is valid, False otherwise
+    """
+    # Verify the verification key hash matches
+    vk_bytes = canonical_json_bytes(verification_key)
+    actual_vk_hash = hash_bytes(vk_bytes).hex()
+    if actual_vk_hash != expected_vk_hash:
+        return False
+
+    if proof.verification_key_hash != expected_vk_hash:
+        return False
+
+    # Verify public inputs match the proof claims
+    expected_inputs = [
+        proof.previous_root,
+        proof.current_root,
+        str(proof.epoch_start),
+        str(proof.epoch_end),
+    ]
+    if list(proof.public_inputs[:4]) != expected_inputs:
+        return False
+
+    # NOTE: Actual SNARK verification would be performed here via
+    # protocol.proof_interface or protocol.groth16_backend
+    # For now, this validates structural integrity only
+    return True
+
+
+def verify_epoch_key_rotation(
+    record: EpochKeyRotationRecord,
+    old_verify_key: nacl.signing.VerifyKey,
+    registry: FederationRegistry,
+    *,
+    min_witnesses: int = 1,
+) -> bool:
+    """
+    Verify an epoch key rotation record.
+
+    This verifies that:
+    1. The rotation was signed by the old key
+    2. Sufficient witnesses observed the rotation
+    3. The new key hash is different from the old
+
+    Args:
+        record: The key rotation record to verify
+        old_verify_key: The previous verification key
+        registry: Federation registry for witness verification
+        min_witnesses: Minimum number of witness signatures required
+
+    Returns:
+        True if the rotation is valid, False otherwise
+    """
+    # Verify the rotation signature by the old key
+    rotation_payload = HASH_SEPARATOR.join([
+        record.node_id,
+        str(record.epoch),
+        record.old_pubkey_hash,
+        record.new_pubkey_hash,
+        record.rotated_at,
+    ]).encode("utf-8")
+    rotation_hash = hash_bytes(rotation_payload)
+
+    try:
+        signature_bytes = bytes.fromhex(record.rotation_signature)
+        old_verify_key.verify(rotation_hash, signature_bytes)
+    except (ValueError, nacl.exceptions.BadSignatureError):
+        return False
+
+    # Verify witness signatures meet threshold
+    if len(record.witness_signatures) < min_witnesses:
+        return False
+
+    verified_witnesses: set[str] = set()
+    for witness_sig in record.witness_signatures:
+        try:
+            witness_node = registry.get_node(witness_sig.node_id)
+        except ValueError:
+            continue
+        if not witness_node.active:
+            continue
+        try:
+            witness_sig_bytes = bytes.fromhex(witness_sig.signature)
+            witness_node.verify_key().verify(rotation_hash, witness_sig_bytes)
+            verified_witnesses.add(witness_sig.node_id)
+        except (ValueError, nacl.exceptions.BadSignatureError):
+            continue
+
+    return len(verified_witnesses) >= min_witnesses

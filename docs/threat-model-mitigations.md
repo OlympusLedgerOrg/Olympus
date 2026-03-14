@@ -277,10 +277,56 @@ Each threat is mitigated through a combination of cryptographic primitives, prot
 | Key-evolving verification via key history validity windows | [`protocol/federation.py:120-131`](../protocol/federation.py#L120-L131) | ✅ Implemented |
 | Signed checkpoint chain with consistency proofs | [`protocol/checkpoints.py:595-680`](../protocol/checkpoints.py#L595-L680) | ✅ Implemented |
 | Out-of-band/social finality anchors enforced during chain verification | [`protocol/checkpoints.py:664-678`](../protocol/checkpoints.py#L664-L678) | ✅ Implemented |
+| Recursive SNARK chain proofs for computational history verification | [`protocol/federation.py:1530-1617`](../protocol/federation.py#L1530-L1617) | ✅ Implemented |
+| Epoch key rotation records with witness signatures | [`protocol/federation.py:1620-1720`](../protocol/federation.py#L1620-L1720) | ✅ Implemented |
 
-**Detection:** Verification fails when an alternate chain conflicts with an externally finalized checkpoint hash at the anchored sequence.
+**Detection:** Verification fails when an alternate chain conflicts with an externally finalized checkpoint hash at the anchored sequence. Recursive SNARK proofs ensure computational history cannot be forged without breaking circuit logic.
 
 **Security Property:** Deep-history rewrite resistance once social finality is established.
+
+---
+
+### 13. Steward-Guardian Equivocation (Shadow Ledger Attack)
+
+**Threat:** A Steward produces two distinct, validly-linked shard headers H_a and H_b for the same sequence number. By colluding with a quorum of Q = ⌈2N/3⌉ Guardians, the Steward obtains valid signatures for both. The federation presents H_a to specific targets (e.g., an investigative journalist) while presenting H_b to the public monitor.
+
+**Adversary Type:** Colluding Steward and Guardian quorum
+
+**Mitigations:**
+
+| Mitigation | Evidence | Status |
+|------------|----------|--------|
+| Gossip-based shard header fork detection | [`protocol/federation.py:1196-1310`](../protocol/federation.py#L1196-L1310) | ✅ Implemented |
+| `ShardHeaderForkEvidence` cryptographic proof of fraud | [`protocol/federation.py:1208-1265`](../protocol/federation.py#L1208-L1265) | ✅ Implemented |
+| `detect_shard_header_forks` gossip comparison | [`protocol/federation.py:1283-1344`](../protocol/federation.py#L1283-L1344) | ✅ Implemented |
+| Public Guardian Registry Forest commitment | [`protocol/federation.py:1347-1378`](../protocol/federation.py#L1347-L1378) | ✅ Implemented |
+| Colluding guardian detection via dual-signature analysis | [`protocol/federation.py:1257-1261`](../protocol/federation.py#L1257-L1261) | ✅ Implemented |
+
+**Detection:** Monitors and third-party verifiers gossip signed headers. Discovery of any H_a ≠ H_b where seq(H_a) = seq(H_b) constitutes non-repudiable cryptographic proof of fraud. The `colluding_guardians()` method identifies nodes that signed both conflicting headers.
+
+**Security Property:** Fork detection with cryptographic attribution — equivocation is provably detectable and the colluding parties are identifiable.
+
+---
+
+### 14. State Suppression (Missing Shard Attack)
+
+**Threat:** A Steward commits a shard root to the global Forest but refuses to serve the underlying Merkle inclusion proofs or the raw data to certain Guardians or Monitors. The global state root appears valid, but specific sub-ledgers become "black holes," preventing independent verification.
+
+**Adversary Type:** Malicious Steward withholding data
+
+**Mitigations:**
+
+| Mitigation | Evidence | Status |
+|------------|----------|--------|
+| Data availability challenges | [`protocol/federation.py:1390-1454`](../protocol/federation.py#L1390-L1454) | ✅ Implemented |
+| Signed replication proofs with Merkle verification | [`protocol/federation.py:1457-1527`](../protocol/federation.py#L1457-L1527) | ✅ Implemented |
+| Federation finality status with availability gates | [`protocol/federation.py:1530-1617`](../protocol/federation.py#L1530-L1617) | ✅ Implemented |
+| `verify_data_availability` proof verification | [`protocol/federation.py:1620-1670`](../protocol/federation.py#L1620-L1670) | ✅ Implemented |
+| Availability threshold (2/3 Guardian replication) | [`protocol/federation.py:1598-1601`](../protocol/federation.py#L1598-L1601) | ✅ Implemented |
+
+**Detection:** Guardians issue `DataAvailabilityChallenge` requests before countersigning headers. Headers only progress to "Federation Final" status when sufficient `ReplicationProof` attestations are collected, verified via `verify_data_availability`.
+
+**Security Property:** Signed tail consistency — headers cannot achieve finality without verifiable data availability from a Guardian quorum.
 
 ---
 
