@@ -14,7 +14,8 @@
   "properties": {
     "shard_id": {
       "type": "string",
-      "description": "Unique identifier for this shard"
+      "description": "Unique identifier for this shard (must not contain '|')",
+      "pattern": "^[^|]+$"
     },
     "merkle_root": {
       "type": "string",

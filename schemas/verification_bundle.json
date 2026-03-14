@@ -30,7 +30,10 @@
       "description": "Shard header fields (header_hash is recomputed for verification)",
       "required": ["shard_id", "root_hash", "timestamp", "previous_header_hash", "header_hash"],
       "properties": {
-        "shard_id": { "type": "string" },
+        "shard_id": {
+          "type": "string",
+          "pattern": "^[^|]+$"
+        },
         "root_hash": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
         "timestamp": { "type": "string" },
         "previous_header_hash": { "type": "string" },

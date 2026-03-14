@@ -194,7 +194,14 @@ def event_id(shard_id: str, header_hash: str, timestamp: str) -> str:
 
     The event ID binds a federation signature to a specific shard header
     commitment using domain separation. It is computed as:
-        hash(EVENT_PREFIX || shard_id || "|" || header_hash || "|" || timestamp)
+        hash(EVENT_PREFIX || "|" || payload)
+
+    Payload encoding (version 2):
+        - each field is encoded as: [4-byte big-endian length] || [UTF-8 bytes]
+        - payload = concat(shard_id, header_hash, timestamp)
+
+    Length-prefixing prevents field-injection collisions when ``|`` characters
+    appear inside shard identifiers or other fields.
 
     Args:
         shard_id: Shard identifier
@@ -204,8 +211,15 @@ def event_id(shard_id: str, header_hash: str, timestamp: str) -> str:
     Returns:
         Hex-encoded event ID
     """
-    event_data = HASH_SEPARATOR.join([shard_id, header_hash, timestamp])
-    return blake3_hash([EVENT_PREFIX, _SEP, event_data.encode("utf-8")]).hex()
+    fields = [shard_id, header_hash, timestamp]
+    encoded_fields: list[bytes] = []
+    for value in fields:
+        field_bytes = value.encode("utf-8")
+        encoded_fields.append(len(field_bytes).to_bytes(4, byteorder="big"))
+        encoded_fields.append(field_bytes)
+
+    payload = b"".join(encoded_fields)
+    return blake3_hash([EVENT_PREFIX, _SEP, payload]).hex()
 
 
 def create_dual_root_commitment(blake3_root: bytes, poseidon_root: bytes) -> bytes:

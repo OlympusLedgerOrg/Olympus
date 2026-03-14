@@ -60,6 +60,22 @@ def test_event_id_binds_to_shard_header_and_timestamp() -> None:
     assert event_id_1 != event_id_2
 
 
+def test_event_id_prevents_field_injection() -> None:
+    """Length-prefixing prevents '|' injection collisions across event_id fields."""
+    timestamp = "2026-03-09T00:00:00Z"
+
+    def legacy_event_id(shard_id: str, header_hash: str) -> str:
+        event_data = HASH_SEPARATOR.join([shard_id, header_hash, timestamp])
+        return blake3_hash([EVENT_PREFIX, b"|", event_data.encode("utf-8")]).hex()
+
+    colliding_legacy = legacy_event_id("X|Y", "Z")
+    assert colliding_legacy == legacy_event_id("X", "Y|Z")
+
+    secure_a = event_id("X|Y", "Z", timestamp)
+    secure_b = event_id("X", "Y|Z", timestamp)
+    assert secure_a != secure_b
+
+
 def test_federation_vote_hash_includes_all_required_fields() -> None:
     """Federation vote hashes should include domain, node_id, shard_id, header_hash, timestamp, and event_id."""
     node_id = "test-node-1"
