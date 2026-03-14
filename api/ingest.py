@@ -23,6 +23,7 @@ import uuid
 from collections import OrderedDict
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from threading import Lock
 from time import monotonic
 from typing import TYPE_CHECKING, Any
 
@@ -35,10 +36,10 @@ from protocol.canonicalizer import canonicalization_provenance
 from protocol.hashes import hash_bytes, leaf_hash
 from protocol.ledger import Ledger
 from protocol.merkle import (
-    MerkleProof,
-    MerkleTree,
     MERKLE_VERSION,
     PROOF_VERSION,
+    MerkleProof,
+    MerkleTree,
     deserialize_merkle_proof,
     merkle_leaf_hash,
     verify_proof,
@@ -158,7 +159,9 @@ class ProofSubmissionRequest(ProofVerificationRequest):
     shard_id: str = Field(..., description="Shard identifier associated with the proof bundle")
     ledger_entry_hash: str = Field(..., description="Ledger entry anchoring the proof bundle")
     timestamp: str = Field(..., description="ISO 8601 timestamp associated with the bundle")
-    canonicalization: dict[str, Any] = Field(..., description="Canonicalization provenance metadata")
+    canonicalization: dict[str, Any] = Field(
+        ..., description="Canonicalization provenance metadata"
+    )
     batch_id: str | None = Field(None, description="Optional batch identifier for the proof bundle")
 
 
@@ -200,9 +203,7 @@ _api_keys_loaded = False
 # This prevents IP spoofing attacks where a client sets a fake X-Forwarded-For header.
 # Configure via OLYMPUS_TRUSTED_PROXY_IPS environment variable (comma-separated).
 TRUSTED_PROXY_IPS: frozenset[str] = frozenset(
-    ip.strip()
-    for ip in os.environ.get("OLYMPUS_TRUSTED_PROXY_IPS", "").split(",")
-    if ip.strip()
+    ip.strip() for ip in os.environ.get("OLYMPUS_TRUSTED_PROXY_IPS", "").split(",") if ip.strip()
 )
 
 # Hard fail when persistence is configured without a signing key
@@ -358,6 +359,10 @@ _rate_limit_ip_buckets: dict[str, OrderedDict[str, TokenBucket]] = {
     "verify": OrderedDict(),
 }
 
+# L5-C: Thread lock for rate-limit bucket access to prevent race conditions
+# in concurrent request handling (identified in red team security audit).
+_rate_limit_lock = Lock()
+
 
 def _parse_timestamp(raw: str) -> datetime:
     """Parse ISO-8601 timestamp with optional Z suffix."""
@@ -378,21 +383,21 @@ def _hash_api_key(api_key: str) -> str:
 def _constant_time_api_key_lookup(key_hash: str) -> ApiKeyRecord | None:
     """
     Lookup API key record using constant-time comparison (L4-D).
-    
+
     Uses hmac.compare_digest to prevent timing oracle attacks where an
     attacker could measure response times to determine how many characters
     of a key hash match.
-    
+
     Note: This function deliberately iterates through ALL stored keys even
     after finding a match, to ensure constant-time execution regardless of
     key position. This is O(n) where n is the number of API keys, which is
     acceptable for typical deployments (<1000 keys). For deployments with
-    significantly more keys, consider alternative constant-time lookup 
+    significantly more keys, consider alternative constant-time lookup
     strategies or rate-limiting at the network layer.
-    
+
     Args:
         key_hash: Hex-encoded BLAKE3 hash of the API key.
-        
+
     Returns:
         ApiKeyRecord if found, None otherwise.
     """
@@ -463,9 +468,7 @@ def _register_api_key_for_tests(
     )
 
 
-def _register_hashed_api_key(
-    key_hash: str, key_id: str, scopes: set[str], expires_at: str
-) -> None:
+def _register_hashed_api_key(key_hash: str, key_id: str, scopes: set[str], expires_at: str) -> None:
     """Register a pre-hashed API key (preferred for production bootstrap)."""
     try:
         decoded = bytes.fromhex(key_hash)
@@ -497,9 +500,11 @@ def _reset_ingest_state_for_tests() -> None:  # pragma: no cover - test utility
     _api_keys_loaded = False
     _storage = None
     _signing_key = None
-    for action in _rate_limit_key_buckets:
-        _rate_limit_key_buckets[action].clear()
-        _rate_limit_ip_buckets[action].clear()
+    # L5-C: Acquire lock when clearing rate-limit buckets
+    with _rate_limit_lock:
+        for action in _rate_limit_key_buckets:
+            _rate_limit_key_buckets[action].clear()
+            _rate_limit_ip_buckets[action].clear()
     if storage is not None:
         try:
             storage.clear_rate_limits()
@@ -513,8 +518,10 @@ def _set_rate_limit_for_tests(
 ) -> None:  # pragma: no cover - test utility
     """Override rate-limit policy for tests."""
     _rate_limit_policy[action] = (capacity, refill_rate_per_second)
-    _rate_limit_key_buckets[action].clear()
-    _rate_limit_ip_buckets[action].clear()
+    # L5-C: Acquire lock when clearing rate-limit buckets
+    with _rate_limit_lock:
+        _rate_limit_key_buckets[action].clear()
+        _rate_limit_ip_buckets[action].clear()
     if _storage is not None:
         try:
             _storage.clear_rate_limits()
@@ -525,20 +532,20 @@ def _set_rate_limit_for_tests(
 def _client_ip(request: Request) -> str:
     """
     Resolve the caller IP address for abuse controls.
-    
+
     L4-E: Only parses X-Forwarded-For if the direct peer is a trusted proxy.
     This prevents IP spoofing attacks where a malicious client sets a fake
     X-Forwarded-For header to bypass rate limiting.
-    
+
     Args:
         request: The incoming HTTP request.
-        
+
     Returns:
         The client IP address (from X-Forwarded-For if behind a trusted proxy,
         otherwise the direct peer IP).
     """
     peer_ip = request.client.host if request.client else None
-    
+
     # Only parse X-Forwarded-For if the peer is a trusted proxy
     if peer_ip and peer_ip in TRUSTED_PROXY_IPS:
         xff = request.headers.get("x-forwarded-for")
@@ -548,7 +555,7 @@ def _client_ip(request: Request) -> str:
             forwarded_ip = xff.split(",")[0].strip()
             if forwarded_ip:
                 return forwarded_ip
-    
+
     return peer_ip or "unknown"
 
 
@@ -568,22 +575,30 @@ def _extract_api_key(request: Request, body_api_key: str | None = None) -> str:
 def _get_bucket(buckets: OrderedDict[str, TokenBucket], subject: str, action: str) -> TokenBucket:
     """
     Get/create a token bucket for the subject and action.
-    
+
     L5-B: Implements LRU eviction when the bucket count exceeds _RATE_LIMIT_LRU_CAP.
     Existing buckets are moved to the end (most recently used) when accessed.
     When creating a new bucket and the cap is exceeded, the oldest (least recently
     used) bucket is removed.
+
+    IMPORTANT: This function must be called while holding _rate_limit_lock (L5-C).
+    The assertion below will catch violations during testing/development.
     """
+    # L5-C: Assert lock is held to catch programming errors early
+    assert _rate_limit_lock.locked(), (
+        "_get_bucket must be called while holding _rate_limit_lock"
+    )
+
     existing = buckets.get(subject)
     if existing is not None:
         # Move to end (mark as recently used)
         buckets.move_to_end(subject)
         return existing
-    
+
     # L5-B: Evict oldest entries if at capacity
     while len(buckets) >= _RATE_LIMIT_LRU_CAP:
         buckets.popitem(last=False)  # Remove oldest (first) entry
-    
+
     capacity, refill = _rate_limit_policy[action]
     created = TokenBucket(
         capacity=capacity,
@@ -634,9 +649,13 @@ def _consume_rate_limit(subject_type: str, subject: str, action: str) -> bool:
                 },
             )
 
-    buckets = _rate_limit_key_buckets if subject_type == "api_key" else _rate_limit_ip_buckets
-    bucket = _get_bucket(buckets[action], subject, action)
-    return bucket.consume()
+    # L5-C: Acquire lock before accessing in-memory rate-limit buckets.
+    # This prevents race conditions where concurrent requests could corrupt
+    # the OrderedDict state or read inconsistent token values.
+    with _rate_limit_lock:
+        buckets = _rate_limit_key_buckets if subject_type == "api_key" else _rate_limit_ip_buckets
+        bucket = _get_bucket(buckets[action], subject, action)
+        return bucket.consume()
 
 
 def _authorize_and_rate_limit(
@@ -1103,10 +1122,12 @@ async def verify_submitted_proof_bundle(
 ) -> ProofVerificationResponse:
     """Verify an externally supplied proof bundle without persisting it."""
     _authorize_and_rate_limit(request, action="verify")
-    normalized_hash, normalized_root, content_hash_matches, merkle_proof_valid = _evaluate_proof_bundle(
-        proof_request.content_hash,
-        proof_request.merkle_root,
-        proof_request.merkle_proof,
+    normalized_hash, normalized_root, content_hash_matches, merkle_proof_valid = (
+        _evaluate_proof_bundle(
+            proof_request.content_hash,
+            proof_request.merkle_root,
+            proof_request.merkle_proof,
+        )
     )
     record = _fetch_by_content_hash(normalized_hash)
     return ProofVerificationResponse(
@@ -1116,7 +1137,9 @@ async def verify_submitted_proof_bundle(
         content_hash_matches_proof=content_hash_matches,
         merkle_proof_valid=merkle_proof_valid,
         known_to_server=record is not None,
-        poseidon_root=proof_request.poseidon_root if record is None else record.get("poseidon_root"),
+        poseidon_root=proof_request.poseidon_root
+        if record is None
+        else record.get("poseidon_root"),
     )
 
 
@@ -1126,10 +1149,12 @@ async def submit_proof_bundle(
 ) -> ProofSubmissionResponse:
     """Accept a verified proof bundle so it can be retrieved through the API later."""
     _authorize_and_rate_limit(request, action="verify")
-    normalized_hash, normalized_root, content_hash_matches, merkle_proof_valid = _evaluate_proof_bundle(
-        proof_request.content_hash,
-        proof_request.merkle_root,
-        proof_request.merkle_proof,
+    normalized_hash, normalized_root, content_hash_matches, merkle_proof_valid = (
+        _evaluate_proof_bundle(
+            proof_request.content_hash,
+            proof_request.merkle_root,
+            proof_request.merkle_proof,
+        )
     )
     if not content_hash_matches or not merkle_proof_valid:
         raise HTTPException(status_code=400, detail="Submitted proof bundle failed verification")

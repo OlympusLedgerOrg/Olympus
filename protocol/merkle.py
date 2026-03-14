@@ -26,6 +26,11 @@ PROOF_VERSION = "proof_v1"
 # Whitelist of recognized proof versions (L3-C)
 SUPPORTED_PROOF_VERSIONS: frozenset[str] = frozenset({"proof_v1"})
 
+# L5-D: Maximum allowed proof depth to prevent algorithmic complexity DoS.
+# For sparse Merkle trees, 256 is the maximum (256-bit key space).
+# For standard Merkle trees, this is still a generous limit (2^256 leaves).
+MAX_PROOF_DEPTH = 256
+
 _SEP = HASH_SEPARATOR.encode("utf-8")
 logger = logging.getLogger(__name__)
 
@@ -306,12 +311,12 @@ def verify_proof(proof: MerkleProof) -> bool:
         index = proof.leaf_index
         level_size = proof.tree_size
         sibling_idx = 0
-        
+
         while level_size > 1 and sibling_idx < len(proof.siblings):
             # Check if this node is the lone node at this level (CT-style promoted)
-            is_last = (index == level_size - 1)
+            is_last = index == level_size - 1
             is_promoted = is_last and (level_size % 2 == 1)
-            
+
             if not is_promoted:
                 # There should be a sibling at this level
                 _sibling_hash, position = proof.siblings[sibling_idx]
@@ -319,7 +324,7 @@ def verify_proof(proof: MerkleProof) -> bool:
                 if position != expected_pos:
                     return False
                 sibling_idx += 1
-            
+
             # Move to next level
             level_size = (level_size + 1) // 2
             index = index // 2
@@ -460,9 +465,7 @@ def _subproof_ct(
         # old_size is in the right subtree (old_size > k)
         # Need: [left_subtree_root] + SUBPROOF(old_size - k, new_size - k, False)
         left_root = ct_merkle_root(list(leaf_hashes[:k]))
-        right_proof = _subproof_ct(
-            leaf_hashes[k:], old_size - k, new_size - k, False
-        )
+        right_proof = _subproof_ct(leaf_hashes[k:], old_size - k, new_size - k, False)
         return [left_root] + right_proof
 
 
@@ -642,8 +645,18 @@ def deserialize_merkle_proof(proof_data: dict[str, Any]) -> MerkleProof:
             f"Supported versions: {sorted(SUPPORTED_PROOF_VERSIONS)}"
         )
 
+    # L5-D: Validate proof depth to prevent algorithmic complexity DoS.
+    # This check is performed early to reject malicious proofs before parsing
+    # all sibling data.
+    siblings_data = proof_data.get("siblings", [])
+    if len(siblings_data) > MAX_PROOF_DEPTH:
+        raise ValueError(
+            f"Proof depth {len(siblings_data)} exceeds maximum allowed depth "
+            f"of {MAX_PROOF_DEPTH}. This may indicate a malformed or malicious proof."
+        )
+
     normalized_siblings: list[tuple[bytes, str]] = []
-    for sibling_hash_hex, is_right in proof_data.get("siblings", []):
+    for sibling_hash_hex, is_right in siblings_data:
         if isinstance(is_right, str):
             normalized_flag = is_right.lower() == "right"
             logger.debug("Normalized legacy sibling format", extra={"is_right": is_right})

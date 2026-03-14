@@ -67,7 +67,7 @@ def test_proof_with_wrong_depth_rejected(tree_size: int, leaf_index: int):
                 extra_siblings.append(proof.siblings[-1])
             else:
                 extra_siblings.append((b"\x00" * 32, "right"))
-        
+
         long_proof = MerkleProof(
             leaf_hash=proof.leaf_hash,
             leaf_index=proof.leaf_index,
@@ -271,9 +271,9 @@ def test_swapped_sibling_positions_causes_verification_failure(tree_size: int, l
     # should result in a different root hash, so verification must fail.
     # While theoretically a hash collision could make this pass, the probability is
     # negligible (2^-256 for BLAKE3), so we assert it always fails.
-    assert not verify_proof(
-        swapped_proof
-    ), "Swapping sibling positions should always fail verification"
+    assert not verify_proof(swapped_proof), (
+        "Swapping sibling positions should always fail verification"
+    )
 
 
 def test_proof_depth_calculation_matches_expected_formula():
@@ -385,3 +385,52 @@ def test_canonical_position_normalization_in_merkle_proof_init():
 
     # Normalized proof should verify
     assert verify_proof(normalized_proof)
+
+
+def test_deserialize_merkle_proof_rejects_excessive_depth():
+    """
+    L5-D: Test that deserialize_merkle_proof rejects proofs exceeding MAX_PROOF_DEPTH.
+
+    This prevents algorithmic complexity DoS attacks where an attacker submits
+    a proof with an unreasonably large number of siblings.
+    """
+    from protocol.merkle import MAX_PROOF_DEPTH, deserialize_merkle_proof
+
+    # Create a minimal valid proof structure
+    valid_leaf_hash = "a" * 64  # 32 bytes as hex
+    valid_root_hash = "b" * 64
+    valid_sibling = ["c" * 64, "right"]
+
+    # Test at the boundary: exactly MAX_PROOF_DEPTH siblings should be accepted
+    proof_at_limit = {
+        "leaf_hash": valid_leaf_hash,
+        "leaf_index": 0,
+        "siblings": [valid_sibling] * MAX_PROOF_DEPTH,
+        "root_hash": valid_root_hash,
+        "tree_size": 0,  # tree_size=0 disables depth validation in verify_proof
+    }
+    # Should not raise - parsing succeeds (verification may fail separately)
+    proof = deserialize_merkle_proof(proof_at_limit)
+    assert len(proof.siblings) == MAX_PROOF_DEPTH
+
+    # Test exceeding the limit: MAX_PROOF_DEPTH + 1 should be rejected
+    proof_over_limit = {
+        "leaf_hash": valid_leaf_hash,
+        "leaf_index": 0,
+        "siblings": [valid_sibling] * (MAX_PROOF_DEPTH + 1),
+        "root_hash": valid_root_hash,
+        "tree_size": 0,
+    }
+    with pytest.raises(ValueError, match="exceeds maximum allowed depth"):
+        deserialize_merkle_proof(proof_over_limit)
+
+    # Test way over the limit (potential DoS payload)
+    proof_malicious = {
+        "leaf_hash": valid_leaf_hash,
+        "leaf_index": 0,
+        "siblings": [valid_sibling] * 10000,  # Absurdly large
+        "root_hash": valid_root_hash,
+        "tree_size": 0,
+    }
+    with pytest.raises(ValueError, match="exceeds maximum allowed depth"):
+        deserialize_merkle_proof(proof_malicious)
