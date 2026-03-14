@@ -1,0 +1,23 @@
+/* Minimal theme – stripped-down chrome */
+[data-theme="minimal"] {
+  --color-primary: #18181b;
+  --color-primary-dim: #3f3f46;
+  --color-background: #fafafa;
+  --color-surface: #ffffff;
+  --color-surface-muted: #f5f5f5;
+  --color-text: #18181b;
+  --color-text-muted: #71717a;
+  --color-border: #e4e4e7;
+  --color-accent: #18181b;
+  --color-danger: #dc2626;
+  --color-danger-bg: #fef2f2;
+  --color-ok: #16a34a;
+  --font-body: var(--font-geist-sans), "Inter", sans-serif;
+  --font-mono: var(--font-geist-mono), "Courier New", Courier, monospace;
+  --radius: 0px;
+}
+
+[data-theme="minimal"] h1,
+[data-theme="minimal"] h2 {
+  font-weight: 400;
+}

@@ -1,0 +1,28 @@
+/* Accessibility theme – high contrast, large text */
+[data-theme="accessibility"] {
+  --color-primary: #0000ee;
+  --color-primary-dim: #551a8b;
+  --color-background: #ffffff;
+  --color-surface: #ffffff;
+  --color-surface-muted: #f0f0f0;
+  --color-text: #000000;
+  --color-text-muted: #333333;
+  --color-border: #000000;
+  --color-accent: #0000ee;
+  --color-danger: #cc0000;
+  --color-danger-bg: #ffe0e0;
+  --color-ok: #006600;
+  --font-body: var(--font-geist-sans), "Inter", sans-serif;
+  --font-mono: var(--font-geist-mono), "Courier New", Courier, monospace;
+  --radius: 4px;
+}
+
+[data-theme="accessibility"] * {
+  font-size: 1.05em;
+  line-height: 1.6;
+}
+
+[data-theme="accessibility"] :focus-visible {
+  outline: 3px solid var(--color-primary);
+  outline-offset: 2px;
+}

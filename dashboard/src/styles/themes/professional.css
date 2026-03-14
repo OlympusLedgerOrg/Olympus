@@ -1,0 +1,18 @@
+/* Professional theme – clean, modern interface */
+[data-theme="professional"] {
+  --color-primary: #0f766e;
+  --color-primary-dim: #0d9488;
+  --color-background: #f8fafc;
+  --color-surface: #ffffff;
+  --color-surface-muted: #f1f5f9;
+  --color-text: #0f172a;
+  --color-text-muted: #334155;
+  --color-border: #cbd5e1;
+  --color-accent: #0f766e;
+  --color-danger: #ef4444;
+  --color-danger-bg: #fee2e2;
+  --color-ok: #166534;
+  --font-body: var(--font-geist-sans), "Inter", sans-serif;
+  --font-mono: var(--font-geist-mono), "Courier New", Courier, monospace;
+  --radius: 6px;
+}
