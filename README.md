@@ -35,13 +35,14 @@ This model allows the protocol to remain transparent and auditable while providi
 
 ### Revenue Distribution
 Commercial revenue follows a transparent distribution model (see [`GOVERNANCE.md`](GOVERNANCE.md) and [`schemas/revenue_distribution.json`](schemas/revenue_distribution.json)):
-- **40%** to operations (infrastructure, personnel, growth)
+- **40%** to operations (infrastructure, personnel, growth) — prioritized first
 - **10%** to founder (project creation and leadership)
-- **10%** to civic base (guaranteed public good allocation)
-- **10%** to R&D (protocol enhancements, subject to periodic review)
-- **30%** to civic remainder (all funds remaining after R&D allocation)
+- **30%** to the Antman Civic Fund (founder-directed civic allocator; inflows/outflows recorded on-ledger, includes the 20% remainder)
+- **20%** to R&D (protocol enhancements, reviewed quarterly; allocation may be adjusted based on the review)
 
-**Total civic fund: 40%** - This ensures civic initiatives receive guaranteed base funding plus all residual revenue.
+**Antman Civic Fund control:** A for-profit allocator 100% controlled by the founder or a founder-appointed steward; inflows/outflows and purposes are recorded on-ledger while the founder directs destinations.
+
+**Civic-purpose allocations: 30%** (all via the founder-directed Antman Civic Fund with on-ledger transparency).
 
 ## Trust & Threat Model (60-second summary)
 

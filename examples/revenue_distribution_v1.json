@@ -17,28 +17,16 @@
       "percentage": 10,
       "description": "Allocation to founder for project creation, vision, and ongoing leadership"
     },
-    "civic": {
-      "percentage": 40,
-      "description": "Allocation to civic initiatives, public good projects, and community engagement. This includes base civic fund allocation (10%) plus remainder (30%) after R&D budget allocation, ensuring civic mission receives all residual revenue.",
-      "breakdown": {
-        "base_allocation": 10,
-        "remainder_after_rd": 30
-      },
-      "initiatives": [
-        "Open source protocol development",
-        "Educational programs on government transparency",
-        "Public records accessibility initiatives",
-        "Civic tech community grants",
-        "Public interest litigation support",
-        "Democracy infrastructure projects",
-        "Community-driven transparency tools",
-        "Open data advocacy and access programs"
-      ]
+    "antman_civic_fund": {
+      "percentage": 30,
+      "description": "Allocation to the Antman Civic Fund, a for-profit allocator fully controlled by the founder or a founder-appointed steward. All inflows and outflows, plus their purposes, are recorded on-ledger while the founder directs destinations. This includes the 20% remainder previously directed to a general civic fund.",
+      "stewardship": "Founder or founder-appointed steward retains 100% control of the allocator",
+      "ledger_recording": "All inflows/outflows and purposes are recorded on-ledger for transparency"
     },
     "research_and_development": {
-      "percentage": 10,
-      "description": "Allocation to R&D for cryptographic improvements and protocol enhancements. This budget is subject to periodic review, with any unallocated remainder flowing to the civic fund.",
-      "budget_status": "subject to periodic review",
+      "percentage": 20,
+      "description": "Allocation to R&D for cryptographic improvements and protocol enhancements. This budget is reviewed quarterly for need; allocation adjustments are applied in that quarterly review cycle based on findings, with any reductions flowing to the civic remainder.",
+      "budget_status": "reviewed quarterly",
       "focus_areas": [
         "Zero-knowledge proof optimization",
         "Advanced redaction protocols",
@@ -46,9 +34,14 @@
         "Cross-chain interoperability",
         "Performance benchmarking and optimization"
       ]
+    },
+    "civic": {
+      "percentage": 0,
+      "description": "General civic remainder set to 0% because the 20% remainder is directed to the Antman Civic Fund.",
+      "initiatives": []
     }
   },
   "total_percentage": 100,
-  "notes": "This revenue distribution model prioritizes operational sustainability (40%) while ensuring strong civic commitment (40% total: 10% base + 30% remainder). The R&D budget (10%) is subject to periodic review, with any unallocated funds flowing to the civic fund. This ensures operations are funded first, founder receives fair compensation (10%), and civic initiatives receive guaranteed base funding plus all residual revenue. All percentages are subject to review based on business needs and market conditions.",
-  "review_period": "annually"
+  "notes": "Operations are funded first (40%), followed by founder (10%) and the founder-directed but fully ledger-recorded Antman Civic Fund (30%, inclusive of the 20% remainder). R&D receives 20% with quarterly review. Antman Civic Fund inflows/outflows and purposes are fully recorded on-ledger; other allocations follow standard ledger budget recording for transparency.",
+  "review_period": "quarterly"
 }
