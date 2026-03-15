@@ -40,9 +40,7 @@
           "properties": {
             "percentage": {
               "type": "number",
-              "minimum": 0,
-              "maximum": 100,
-              "default": 10,
+              "const": 10,
               "description": "Percentage allocated to founder"
             },
             "description": {
@@ -62,9 +60,7 @@
           "properties": {
             "percentage": {
               "type": "number",
-              "minimum": 0,
-              "maximum": 100,
-              "default": 40,
+              "const": 40,
               "description": "Percentage allocated to operations"
             },
             "description": {
@@ -111,9 +107,7 @@
           "properties": {
             "percentage": {
               "type": "number",
-              "minimum": 0,
-              "maximum": 100,
-              "default": 10,
+              "const": 10,
               "description": "Percentage allocated to the Antman Civic Fund"
             },
             "description": {
@@ -137,9 +131,7 @@
           "properties": {
             "percentage": {
               "type": "number",
-              "minimum": 0,
-              "maximum": 100,
-              "default": 20,
+              "const": 20,
               "description": "Percentage allocated to general civic initiatives after operations, founder, Antman Civic Fund, and R&D allocations"
             },
             "description": {
@@ -162,9 +154,7 @@
           "properties": {
             "percentage": {
               "type": "number",
-              "minimum": 0,
-              "maximum": 100,
-              "default": 20,
+              "const": 20,
               "description": "Percentage allocated to R&D"
             },
             "description": {

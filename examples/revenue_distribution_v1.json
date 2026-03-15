@@ -25,7 +25,7 @@
     },
     "research_and_development": {
       "percentage": 20,
-      "description": "Allocation to R&D for cryptographic improvements and protocol enhancements. This budget is reviewed quarterly for need; allocation adjustments are applied in that quarterly review cycle based on findings.",
+      "description": "Allocation to R&D for cryptographic improvements and protocol enhancements. This budget is reviewed quarterly for need; allocation adjustments are applied in that quarterly review cycle based on findings, with any reductions flowing to the civic remainder.",
       "budget_status": "reviewed quarterly",
       "focus_areas": [
         "Zero-knowledge proof optimization",
@@ -51,6 +51,6 @@
     }
   },
   "total_percentage": 100,
-  "notes": "Operations are funded first (40%), followed by founder (10%) and the founder-directed but fully ledger-recorded Antman Civic Fund (10%). R&D receives 20% with quarterly review. The remaining 20% flows to civic initiatives. Antman Civic Fund inflows/outflows and purposes are fully recorded on-ledger; other allocations follow standard ledger budget recording for transparency.",
+  "notes": "Operations are funded first (40%), followed by founder (10%) and the founder-directed but fully ledger-recorded Antman Civic Fund (10%). R&D receives 20% with quarterly review. The remaining 20% flows to civic initiatives. Antman Civic Fund inflows/outflows and purposes are fully recorded on-ledger; other allocations follow standard ledger budget recording for transparency. \"Antman\" denotes the founder-directed civic allocator codename.",
   "review_period": "quarterly"
 }
