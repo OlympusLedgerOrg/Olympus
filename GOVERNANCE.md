@@ -32,15 +32,15 @@ Olympus is entering a protocol-hardening phase with an explicit plan for long-te
 Olympus operates under a dual licensing model (see `LICENSE` and `LICENSE-COMMERCIAL.md`). Revenue from commercial licensing follows a transparent distribution model that balances operational sustainability with civic responsibility.
 
 ### Distribution Structure
-- **40% Operations**: Prioritized allocation for infrastructure, personnel, and platform growth
-- **10% Founder**: Compensation for project creation, vision, and ongoing leadership
-- **10% Civic (base)**: Guaranteed base allocation for public good initiatives
-- **10% R&D**: Research and development budget (subject to periodic review)
-- **30% Civic (remainder)**: All remaining funds after R&D allocation flow to civic initiatives
+- **40% Operations**: Prioritized allocation for infrastructure, personnel, and platform growth (funded first).
+- **10% Founder**: Compensation for project creation, vision, and ongoing leadership.
+- **10% Antman Civic Fund**: A for-profit allocator 100% controlled by the founder or a founder-appointed steward. All funds received, allocated, and their purposes are recorded on-ledger; the founder directs destinations.
+- **20% R&D**: Research and development budget, reviewed quarterly for need; scope may be adjusted based on review.
+- **20% Civic (remainder)**: All remaining funds after the above allocations flow to broader civic initiatives.
 
-**Total Civic Fund: 40%** (10% base + 30% remainder)
+**Total civic-directed funds: 30%** (10% Antman Civic Fund + 20% civic remainder), with ledger-transparent receipts and allocations.
 
-This structure ensures operations are funded first (40%), founder receives fair compensation (10%), and civic initiatives receive a guaranteed base (10%) plus all residual revenue (30%). The R&D budget is reviewed periodically, ensuring resources are allocated efficiently while any unspent or unallocated R&D funds flow to the civic fund.
+This structure ensures operations are funded first (40%), the founder receives fair compensation (10%), the founder-directed Antman Civic Fund is transparently tracked on-ledger (10%), R&D receives a quarterly-reviewed budget (20%), and the remaining 20% flows to civic initiatives.
 
 The distribution is documented in `schemas/revenue_distribution.json` with a reference implementation in `examples/revenue_distribution_v1.json`. The distribution model is reviewed annually and may be adjusted based on business needs and market conditions.
 

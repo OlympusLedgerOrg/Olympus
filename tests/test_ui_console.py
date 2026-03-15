@@ -332,7 +332,7 @@ def test_data_theme_attribute_on_html(monkeypatch):
     response = client.get("/")
 
     assert response.status_code == 200
-    assert 'data-theme=' in response.text
+    assert "data-theme=" in response.text
 
 
 def test_verification_portal_has_theme_switcher(monkeypatch):

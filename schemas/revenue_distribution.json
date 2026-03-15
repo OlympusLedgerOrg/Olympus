@@ -28,6 +28,7 @@
       "required": [
         "founder",
         "operations",
+        "antman_civic_fund",
         "civic",
         "research_and_development"
       ],
@@ -41,7 +42,7 @@
               "type": "number",
               "minimum": 0,
               "maximum": 100,
-              "default": 40,
+              "default": 10,
               "description": "Percentage allocated to founder"
             },
             "description": {
@@ -103,9 +104,9 @@
             }
           }
         },
-        "civic": {
+        "antman_civic_fund": {
           "type": "object",
-          "description": "Allocation to civic initiatives and public good",
+          "description": "Allocation to the Antman Civic Fund (founder-directed but fully ledger-recorded)",
           "required": ["percentage", "description"],
           "properties": {
             "percentage": {
@@ -113,7 +114,33 @@
               "minimum": 0,
               "maximum": 100,
               "default": 10,
-              "description": "Percentage allocated to civic initiatives"
+              "description": "Percentage allocated to the Antman Civic Fund"
+            },
+            "description": {
+              "type": "string",
+              "description": "Description of Antman Civic Fund allocation and stewardship"
+            },
+            "stewardship": {
+              "type": "string",
+              "description": "Control statement (founder or founder-appointed steward with 100% control of the for-profit allocator)"
+            },
+            "ledger_recording": {
+              "type": "string",
+              "description": "How inflows/outflows are recorded on-ledger for transparency"
+            }
+          }
+        },
+        "civic": {
+          "type": "object",
+          "description": "Allocation to civic initiatives and public good (remainder after dedicated funds)",
+          "required": ["percentage", "description"],
+          "properties": {
+            "percentage": {
+              "type": "number",
+              "minimum": 0,
+              "maximum": 100,
+              "default": 20,
+              "description": "Percentage allocated to general civic initiatives after the Antman Civic Fund and other allocations"
             },
             "description": {
               "type": "string",
@@ -137,7 +164,7 @@
               "type": "number",
               "minimum": 0,
               "maximum": 100,
-              "default": 10,
+              "default": 20,
               "description": "Percentage allocated to R&D"
             },
             "description": {

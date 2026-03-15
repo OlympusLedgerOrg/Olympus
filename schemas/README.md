@@ -43,7 +43,7 @@ Defines the structure of a source authenticity proof, including agency signature
 Defines the offline verification bundle used by `protocol/verification_bundle.py` and `tools/verify_bundle_cli.py`. Each bundle contains the SMT proof, shard header, signature, and optional timestamp token so third parties can verify inclusion without database access.
 
 ### revenue_distribution.json
-Specifies the revenue allocation model for Olympus commercial operations. Defines the distribution of commercial licensing revenue across founder compensation (40%), operations (40%), civic initiatives (10%), and R&D (10%). This schema ensures transparency in how commercial revenue supports both the project and public good. See `examples/revenue_distribution_v1.json` for the current distribution model.
+Specifies the revenue allocation model for Olympus commercial operations. Defines the distribution of commercial licensing revenue across operations (40%), founder compensation (10%), Antman Civic Fund (10%, founder- or steward-controlled with on-ledger transparency), R&D (20%, reviewed quarterly), and the civic remainder (20%). See `examples/revenue_distribution_v1.json` for the current distribution model.
 
 ## Ownership Map
 
