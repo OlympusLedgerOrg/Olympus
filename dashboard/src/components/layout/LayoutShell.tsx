@@ -1,6 +1,6 @@
 "use client";
 
-import { type ReactNode } from "react";
+import { type ReactNode, useState } from "react";
 import { AnimatePresence, motion } from "framer-motion";
 import { ThemeProvider } from "@/components/layout/ThemeProvider";
 import { GlyphRain } from "@/components/layout/GlyphRain";
@@ -8,9 +8,17 @@ import { ThemeSwitcher } from "@/components/ui/ThemeSwitcher";
 import { WalletConnectProvider } from "@/components/auth/WalletConnect";
 import { AuthProvider } from "@/lib/hooks/useAuth";
 import { useTheme } from "@/lib/hooks/useTheme";
+import { TerminalOverlay } from "@/components/terminal/TerminalOverlay";
+import { useTerminalHotkey } from "@/components/terminal/useTerminalHotkey";
 
 function LayoutContent({ children }: { children: ReactNode }) {
   const { theme } = useTheme();
+  const [terminalOpen, setTerminalOpen] = useState(false);
+
+  useTerminalHotkey(
+    () => setTerminalOpen(true),
+    () => setTerminalOpen(false),
+  );
 
   return (
     <>
@@ -29,6 +37,7 @@ function LayoutContent({ children }: { children: ReactNode }) {
       </AnimatePresence>
       <ThemeSwitcher />
       {children}
+      <TerminalOverlay open={terminalOpen} />
     </>
   );
 }
