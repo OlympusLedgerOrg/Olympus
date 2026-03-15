@@ -19,7 +19,7 @@
     },
     "antman_civic_fund": {
       "percentage": 10,
-      "description": "Allocation to the Antman Civic Fund, a for-profit allocator fully controlled by the founder or a founder-appointed steward. All receipts and disbursements, plus their purposes, are recorded on-ledger while the founder directs destinations.",
+      "description": "Allocation to the Antman Civic Fund, a for-profit allocator fully controlled by the founder or a founder-appointed steward. All inflows and outflows, plus their purposes, are recorded on-ledger while the founder directs destinations.",
       "stewardship": "Founder or founder-appointed steward retains 100% control of the allocator",
       "ledger_recording": "All inflows/outflows and purposes are recorded on-ledger for transparency"
     },
