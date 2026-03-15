@@ -2,13 +2,9 @@
   "version": "1.0.0",
   "effective_date": "2026-03-15",
   "distribution": {
-    "founder": {
-      "percentage": 10,
-      "description": "Allocation to founder for project creation, vision, and ongoing leadership"
-    },
     "operations": {
-      "percentage": 10,
-      "description": "Allocation to operational expenses with room for growth as the platform scales",
+      "percentage": 40,
+      "description": "Allocation to operational expenses with room for growth as the platform scales. Operations are prioritized to ensure sustainable infrastructure and team growth.",
       "subcategories": {
         "infrastructure": 40,
         "personnel": 35,
@@ -17,9 +13,17 @@
         "other": 5
       }
     },
+    "founder": {
+      "percentage": 10,
+      "description": "Allocation to founder for project creation, vision, and ongoing leadership"
+    },
     "civic": {
-      "percentage": 70,
-      "description": "Allocation to civic initiatives, public good projects, and community engagement. This represents the majority of revenue (10% base + 60% remainder) dedicated to civic mission and public good.",
+      "percentage": 40,
+      "description": "Allocation to civic initiatives, public good projects, and community engagement. This includes base civic fund allocation (10%) plus remainder (30%) after R&D budget allocation, ensuring civic mission receives all residual revenue.",
+      "breakdown": {
+        "base_allocation": 10,
+        "remainder_after_rd": 30
+      },
       "initiatives": [
         "Open source protocol development",
         "Educational programs on government transparency",
@@ -33,7 +37,8 @@
     },
     "research_and_development": {
       "percentage": 10,
-      "description": "Allocation to R&D for cryptographic improvements and protocol enhancements",
+      "description": "Allocation to R&D for cryptographic improvements and protocol enhancements. This budget is subject to periodic review, with any unallocated remainder flowing to the civic fund.",
+      "budget_status": "subject to periodic review",
       "focus_areas": [
         "Zero-knowledge proof optimization",
         "Advanced redaction protocols",
@@ -44,6 +49,6 @@
     }
   },
   "total_percentage": 100,
-  "notes": "This revenue distribution model prioritizes civic responsibility and public good (70% to civic fund), while maintaining minimal founder compensation (10%), operational sustainability (10%), and continuous innovation (10% R&D). The civic-first allocation ensures Olympus serves the public interest above all else. All percentages are subject to review based on business needs and market conditions.",
+  "notes": "This revenue distribution model prioritizes operational sustainability (40%) while ensuring strong civic commitment (40% total: 10% base + 30% remainder). The R&D budget (10%) is subject to periodic review, with any unallocated funds flowing to the civic fund. This ensures operations are funded first, founder receives fair compensation (10%), and civic initiatives receive guaranteed base funding plus all residual revenue. All percentages are subject to review based on business needs and market conditions.",
   "review_period": "annually"
 }

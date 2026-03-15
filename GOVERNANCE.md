@@ -29,15 +29,20 @@ Olympus is entering a protocol-hardening phase with an explicit plan for long-te
 
 ## Revenue Distribution Model
 
-Olympus operates under a dual licensing model (see `LICENSE` and `LICENSE-COMMERCIAL.md`). Revenue from commercial licensing follows a transparent distribution model that prioritizes civic responsibility and public good.
+Olympus operates under a dual licensing model (see `LICENSE` and `LICENSE-COMMERCIAL.md`). Revenue from commercial licensing follows a transparent distribution model that balances operational sustainability with civic responsibility.
 
 ### Distribution Structure
-- **10% Founder**: Minimal compensation for project creation, vision, and ongoing leadership
-- **10% Operations**: Operational expenses with room for growth (infrastructure, personnel, marketing, legal, etc.)
-- **70% Civic**: Public good initiatives, open source development, education, community grants, and democracy infrastructure projects
-- **10% R&D**: Protocol enhancements, cryptographic improvements, and innovation
+- **40% Operations**: Prioritized allocation for infrastructure, personnel, and platform growth
+- **10% Founder**: Compensation for project creation, vision, and ongoing leadership
+- **10% Civic (base)**: Guaranteed base allocation for public good initiatives
+- **10% R&D**: Research and development budget (subject to periodic review)
+- **30% Civic (remainder)**: All remaining funds after R&D allocation flow to civic initiatives
 
-This civic-first structure ensures that the majority of commercial revenue (70%) directly serves the public interest. The distribution is documented in `schemas/revenue_distribution.json` with a reference implementation in `examples/revenue_distribution_v1.json`. The distribution model is reviewed annually and may be adjusted based on business needs and market conditions.
+**Total Civic Fund: 40%** (10% base + 30% remainder)
+
+This structure ensures operations are funded first (40%), founder receives fair compensation (10%), and civic initiatives receive a guaranteed base (10%) plus all residual revenue (30%). The R&D budget is reviewed periodically, ensuring resources are allocated efficiently while any unspent or unallocated R&D funds flow to the civic fund.
+
+The distribution is documented in `schemas/revenue_distribution.json` with a reference implementation in `examples/revenue_distribution_v1.json`. The distribution model is reviewed annually and may be adjusted based on business needs and market conditions.
 
 ## Sustainability Signals
 - ADR coverage for critical design decisions (hash separation, dual commitments, ledger vs redaction path).

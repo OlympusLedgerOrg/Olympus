@@ -34,13 +34,14 @@ The application layer and enterprise features require a **commercial license** (
 This model allows the protocol to remain transparent and auditable while providing sustainable revenue through hosting, dashboards, integrations, and enterprise support.
 
 ### Revenue Distribution
-Commercial revenue follows a **civic-first** transparent distribution model (see [`GOVERNANCE.md`](GOVERNANCE.md) and [`schemas/revenue_distribution.json`](schemas/revenue_distribution.json)):
+Commercial revenue follows a transparent distribution model (see [`GOVERNANCE.md`](GOVERNANCE.md) and [`schemas/revenue_distribution.json`](schemas/revenue_distribution.json)):
+- **40%** to operations (infrastructure, personnel, growth)
 - **10%** to founder (project creation and leadership)
-- **10%** to operations (infrastructure, personnel, growth)
-- **70%** to civic initiatives (public good, education, community, democracy infrastructure)
-- **10%** to R&D (protocol enhancements, cryptographic innovation)
+- **10%** to civic base (guaranteed public good allocation)
+- **10%** to R&D (protocol enhancements, subject to periodic review)
+- **30%** to civic remainder (all funds remaining after R&D allocation)
 
-This ensures the majority of commercial revenue directly serves the public interest.
+**Total civic fund: 40%** - This ensures civic initiatives receive guaranteed base funding plus all residual revenue.
 
 ## Trust & Threat Model (60-second summary)
 
