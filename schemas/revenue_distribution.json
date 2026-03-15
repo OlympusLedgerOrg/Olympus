@@ -26,11 +26,11 @@
       "type": "object",
       "description": "Revenue allocation percentages",
       "required": [
-        "founder",
         "operations",
-        "civic",
+        "founder",
+        "antman_civic_fund",
         "research_and_development",
-        "antman_civic_fund"
+        "civic"
       ],
       "properties": {
         "founder": {

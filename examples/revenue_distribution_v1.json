@@ -51,6 +51,6 @@
     }
   },
   "total_percentage": 100,
-  "notes": "Operations are funded first (40%), followed by founder (10%) and the founder-directed but fully ledger-recorded Antman Civic Fund (10%). R&D receives 20% with quarterly review. The remaining 20% flows to civic initiatives. All allocations, receipts, and disbursements are recorded on-ledger for transparency.",
+  "notes": "Operations are funded first (40%), followed by founder (10%) and the founder-directed but fully ledger-recorded Antman Civic Fund (10%). R&D receives 20% with quarterly review. The remaining 20% flows to civic initiatives. Antman Civic Fund inflows/outflows and purposes are fully recorded on-ledger; other allocations follow standard ledger budget recording for transparency.",
   "review_period": "quarterly"
 }
