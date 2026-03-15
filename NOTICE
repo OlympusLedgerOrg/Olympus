@@ -1,0 +1,62 @@
+Olympus Core
+Copyright 2024-2026 Olympus Contributors
+
+This product includes software developed as part of the Olympus project.
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
+
+================================================================================
+
+This distribution includes the following open-source components:
+
+Protocol Implementation (protocol/)
+  - Cryptographic primitives (BLAKE3, Ed25519)
+  - Merkle tree implementations
+  - Sparse Merkle Tree (SMT) structures
+  - Canonicalization pipeline
+  - Zero-knowledge proof protocols
+
+Storage Layer (storage/)
+  - PostgreSQL persistence layer
+  - Protocol state management
+  - Operational state management
+
+Zero-Knowledge Circuits (proofs/)
+  - Circom circuit definitions
+  - Poseidon hash implementations
+  - Groth16 proving system integration
+
+Schemas (schemas/)
+  - JSON schema definitions
+  - Canonical data formats
+
+Verification Tools (verifiers/)
+  - CLI verification tools
+  - Multi-language verifier implementations (Go, JavaScript, Rust)
+
+Examples and Test Vectors (examples/, test_vectors/)
+  - Reference implementations
+  - Golden test artifacts
+  - Integration examples
+
+================================================================================
+
+Note on Proprietary Components:
+
+Certain components of this repository are NOT covered by the Apache 2.0 license:
+  - Web Application (dashboard/)
+  - Debug UI (ui/)
+  - API Gateway (api/)
+
+These components are proprietary and require a separate commercial license.
+For commercial licensing inquiries, please contact the Olympus team.

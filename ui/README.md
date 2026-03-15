@@ -2,6 +2,14 @@
 
 Minimal FastAPI + Jinja2 developer console for integrity inspection.
 
+## License
+
+**This component is proprietary software** and is NOT covered by the Apache 2.0 license that governs the Olympus Core.
+
+Use of this software requires a commercial license. See [`../LICENSE-COMMERCIAL.md`](../LICENSE-COMMERCIAL.md) for details.
+
+For commercial licensing inquiries, please contact the Olympus team.
+
 ## Run
 
 ```bash
