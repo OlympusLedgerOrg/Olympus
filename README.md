@@ -1,12 +1,12 @@
 # Olympus
 
-**Olympus is a verifiable public-records ledger.**
+**Olympus is a verifiable ledger for sensitive information.**
 
-It's a Sharded Sparse Merkle Forest (SSMF) that turns government data, civic actions, and oversight decisions into **cryptographically provable facts**—not press releases, not dashboards, not trust-me PDFs.
+It's a Sharded Sparse Merkle Forest (SSMF) that turns institutional data, compliance actions, and oversight decisions into **cryptographically provable facts**—not dashboards, not trust-me PDFs, not promises.
 
 At its core, Olympus answers one question with mathematical certainty:
 
-> **"Can any citizen independently verify that this record exists, hasn't changed, and is part of the official public state?"**
+> **"Can any party independently verify that this record existed at a specific time, hasn't been altered, and is part of the official state?"**
 
 The answer is **yes**, offline, forever.
 
@@ -56,7 +56,7 @@ Commercial revenue follows a transparent distribution model (see [`GOVERNANCE.md
 
 - **Adversaries:** malicious submitters, compromised operators, and network attackers who can observe and modify traffic but cannot break modern cryptography.
 - **What we defend:** append-only ledger integrity (BLAKE3 SMT + shard headers), verifiable provenance, and non-malleable redaction proofs (Poseidon + Groth16).
-- **What we do not promise:** availability under single-operator failure (Guardian replication is Phase 1+), confidentiality of submitted content, or completeness of all possible public records.
+- **What we do not promise:** availability under single-operator failure (Guardian replication is Phase 1+), confidentiality of submitted content, or completeness of all possible records.
 - **Why it holds:** dual-root commitments bind BLAKE3 ledger roots to Poseidon circuit roots; deterministic canonicalization removes parser ambiguity; shard headers are Ed25519-signed and timestamp-tokened; verification bundles allow offline re-validation.
 - See [`docs/threat_model.md`](docs/threat_model.md) and [`docs/07_non_goals.md`](docs/07_non_goals.md) for the full threat/assurance boundaries.
 
@@ -65,7 +65,7 @@ Commercial revenue follows a transparent distribution model (see [`GOVERNANCE.md
 A layered cryptographic infrastructure for real-world applications that require:
 
 - **Legal/regulatory compliance** — immutable, independently auditable records
-  for government documents, court records, and regulatory filings.
+  for institutional documents, court records, and regulatory filings.
 - **Auditable data provenance** — end-to-end verifiable data lineage for supply
   chains, financial audits, and any domain where chain-of-custody matters.
 - **Privacy with accountability** — selective redaction capabilities

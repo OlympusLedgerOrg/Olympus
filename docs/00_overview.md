@@ -2,7 +2,7 @@
 
 This document provides an overview of the Olympus protocol.
 
-Olympus is an append-only public ledger for government documents with planned federation capabilities, designed to provide cryptographic guarantees about the integrity and provenance of public records.
+Olympus is an append-only ledger for institutional documents with planned federation capabilities, designed to provide cryptographic guarantees about the integrity and provenance of sensitive records.
 
 ## Core Principles
 

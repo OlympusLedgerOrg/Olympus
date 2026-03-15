@@ -36,7 +36,7 @@ export const mockBillFeed: BillFeed = {
   bills: [
     {
       id: "hr-2041",
-      title: "Public Records API Reliability Act",
+      title: "Records API Reliability Act",
       level: "federal",
       status: "active",
       introducedAt: "2026-03-10T12:00:00.000Z",
@@ -46,7 +46,7 @@ export const mockBillFeed: BillFeed = {
       repName: "Rep. Marina Soto",
       repVote: "yea",
       plainEnglishSummary:
-        "This bill requires agencies to publish machine-readable response logs for public records requests within strict time windows.",
+        "This bill requires agencies to publish machine-readable response logs for records requests within strict time windows.",
       areaImpact:
         "For your district, this would shorten records request wait times and expose delay patterns for local oversight teams.",
       districtTotals: {
