@@ -1,25 +1,21 @@
 # Docker Compose configuration for Olympus development environment
 # Provides PostgreSQL 16 database for local development and testing
 #
-# SECURITY NOTE: This configuration uses default credentials (olympus/olympus)
-# for LOCAL DEVELOPMENT ONLY. For production deployments:
-# - Use environment variables or Docker secrets for credentials
-# - Never commit production credentials to version control
-# - Consider using a .env file (add to .gitignore) for local overrides
+# SETUP: Copy .env.example to .env and adjust values for your environment.
+# The .env file is gitignored to prevent accidental secret commits.
  
 services:
   db:
     image: postgres:16
     container_name: olympus-postgres
     environment:
-      # Default credentials for local development only
-      POSTGRES_USER: ${POSTGRES_USER:-olympus}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-olympus}
-      POSTGRES_DB: ${POSTGRES_DB:-olympus}
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
     ports:
       - "5432:5432"
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-olympus} -d ${POSTGRES_DB:-olympus}"]
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
       interval: 2s
       timeout: 3s
       retries: 30
@@ -35,12 +31,9 @@ services:
     ports:
       - "8000:8000"
     environment:
-      DATABASE_URL: postgresql://${POSTGRES_USER:-olympus}:${POSTGRES_PASSWORD:-olympus}@db:5432/${POSTGRES_DB:-olympus}
-      # Dev-only signing key generation (do not use in production)
-      OLYMPUS_DEV_SIGNING_KEY: "true"
-      # Demo API key (hash of "demo-key") for local ingest flows
-      OLYMPUS_API_KEYS_JSON: >-
-        [{"key_hash":"84d53ce2f18ae4856edfe631810f984b8c78bf3c0e136bac89e45642c5c85b37","key_id":"demo-key","scopes":["ingest","commit","verify"],"expires_at":"2099-01-01T00:00:00Z"}]
+      DATABASE_URL: ${DATABASE_URL}
+      OLYMPUS_DEV_SIGNING_KEY: ${OLYMPUS_DEV_SIGNING_KEY}
+      OLYMPUS_API_KEYS_JSON: ${OLYMPUS_API_KEYS_JSON}
     depends_on:
       db:
         condition: service_healthy
@@ -57,7 +50,7 @@ services:
     container_name: olympus-ui
     command: ["uvicorn", "ui.app:app", "--host", "0.0.0.0", "--port", "8080"]
     environment:
-      UI_API_BASE: http://app:8000
+      UI_API_BASE: ${UI_API_BASE}
     depends_on:
       app:
         condition: service_healthy
