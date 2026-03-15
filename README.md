@@ -44,7 +44,7 @@ This model allows the protocol to remain transparent and auditable while providi
 Commercial revenue follows a transparent distribution model (see [`GOVERNANCE.md`](GOVERNANCE.md) and [`schemas/revenue_distribution.json`](schemas/revenue_distribution.json)):
 - **40%** to operations (infrastructure, personnel, growth) — funded first
 - **10%** to founder (project creation and leadership)
-- **30%** to the Antman Civic Fund (founder-directed for-profit allocator; all inflows/outflows and purposes recorded on-ledger, includes the 20% remainder previously allocated to general civic)
+- **30%** to the Antman Civic Fund (founder-directed for-profit allocator; all inflows/outflows and purposes recorded on-ledger)
 - **20%** to R&D (protocol enhancements, reviewed quarterly; may be adjusted based on findings with reductions flowing to civic remainder)
 - **0%** to general civic (remainder is directed to the Antman Civic Fund)
 
@@ -129,7 +129,7 @@ stage-to-module mapping and dependency flow.
 - **API/UI framework:** FastAPI + Starlette + Uvicorn (API), Next.js 15 + React 19 (Dashboard)
 - **Cryptography:** BLAKE3 hashing, Ed25519 signatures (PyNaCl), RFC3161
   timestamping support, Poseidon hashing (BN128) for ZK circuits
-- **Zero-knowledge proofs:** Circom circuits, Groth16 backend (primary), Halo2 backend (optional high-assurance)
+- **Zero-knowledge proofs:** Circom circuits, Groth16 backend (primary), Halo2 backend (alternative for recursive proofs)
 - **Data/storage:** PostgreSQL integration via psycopg/psycopg-pool
 - **Proof tooling:** Merkle and redaction primitives in `protocol/`, sparse Merkle trees (`protocol/ssmf.py`), epochs and checkpoints, attestations and anchors
 - **Quality tooling:** Ruff, mypy, Bandit, pytest, Hypothesis
