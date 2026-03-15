@@ -102,7 +102,7 @@
         },
         "antman_civic_fund": {
           "type": "object",
-          "description": "Allocation to the Antman Civic Fund (founder-directed but fully ledger-recorded)",
+          "description": "Allocation to the Antman Civic Fund, a founder-directed for-profit allocation vehicle with full on-ledger recording",
           "required": ["percentage", "description"],
           "properties": {
             "percentage": {

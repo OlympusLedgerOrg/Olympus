@@ -38,7 +38,7 @@ Olympus operates under a dual licensing model (see `LICENSE` and `LICENSE-COMMER
 - **20% R&D**: Research and development budget, reviewed quarterly for need; scope may be adjusted based on review.
 - **20% Civic (remainder)**: All remaining funds after the above allocations flow to broader civic initiatives.
 
-**Civic-purpose allocations: 30%** (10% founder-directed Antman Civic Fund with on-ledger transparency + 20% civic remainder under broader governance oversight), ensuring civic outcomes are tracked while recognizing founder stewardship of the Antman fund.
+**Civic-purpose allocations: 30%** (10% founder-directed Antman Civic Fund with on-ledger transparency + 20% civic remainder under broader governance oversight), ensuring fund flows and stated civic purposes are recorded while recognizing founder stewardship of the Antman fund.
 
 This structure ensures operations are funded first (40%), the founder receives fair compensation (10%), the founder-directed Antman Civic Fund is transparently tracked on-ledger (10%), R&D receives a quarterly-reviewed budget (20%), and the remaining 20% flows to civic initiatives.
 

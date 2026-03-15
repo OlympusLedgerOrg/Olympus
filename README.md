@@ -43,7 +43,7 @@ Commercial revenue follows a transparent distribution model (see [`GOVERNANCE.md
 
 **Antman Civic Fund control:** A for-profit allocator 100% controlled by the founder or a founder-appointed steward; inflows/outflows and purposes are recorded on-ledger while the founder directs destinations.
 
-**Civic-purpose allocations: 30%** (10% founder-directed Antman Civic Fund with on-ledger transparency + 20% civic remainder under broader governance oversight), with full ledger transparency of receipts and allocations.
+**Civic-purpose allocations: 30%** (10% founder-directed Antman Civic Fund with on-ledger transparency + 20% civic remainder under broader governance oversight), with on-ledger transparency.
 
 ## Trust & Threat Model (60-second summary)
 
