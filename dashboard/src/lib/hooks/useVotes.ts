@@ -38,7 +38,7 @@ type VoteResponse = {
   };
 };
 
-const REFRESH_MS = 5000;
+const VOTE_POLL_INTERVAL_MS = 5000;
 const DEFAULT_DISTRICT = "WA-01";
 
 export function useVotes(billId?: string) {
@@ -91,7 +91,7 @@ export function useVotes(billId?: string) {
     void loadVotes();
     const interval = window.setInterval(() => {
       void loadVotes();
-    }, REFRESH_MS);
+    }, VOTE_POLL_INTERVAL_MS);
 
     return () => {
       window.clearInterval(interval);

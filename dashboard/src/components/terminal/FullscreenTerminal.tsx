@@ -2,6 +2,11 @@
 
 import { useState } from "react";
 
+type HistoryLine = {
+  id: string;
+  text: string;
+};
+
 const COMMANDS: Record<string, string> = {
   help: "Commands: scan, hack, nodes, status, clear",
   scan: "Scanning global network nodes...",
@@ -11,10 +16,10 @@ const COMMANDS: Record<string, string> = {
 };
 
 export function FullscreenTerminal() {
-  const [history, setHistory] = useState<string[]>([
-    "Matrix OS v3.1",
-    "Press ESC to exit",
-    "Type 'help' for commands",
+  const [history, setHistory] = useState<HistoryLine[]>([
+    { id: "boot-1", text: "Matrix OS v3.1" },
+    { id: "boot-2", text: "Press ESC to exit" },
+    { id: "boot-3", text: "Type 'help' for commands" },
   ]);
   const [input, setInput] = useState("");
 
@@ -28,14 +33,19 @@ export function FullscreenTerminal() {
       return;
     }
     const response = COMMANDS[normalized] ?? "Unknown command";
-    setHistory((previous) => [...previous, `> ${normalized}`, response]);
+    const marker = `${Date.now()}-${Math.random().toString(16).slice(2)}`;
+    setHistory((previous) => [
+      ...previous,
+      { id: `${marker}-cmd`, text: `> ${normalized}` },
+      { id: `${marker}-res`, text: response },
+    ]);
   }
 
   return (
     <div className="flex h-full flex-col font-mono text-sm">
       <div className="mb-4 flex-1 space-y-1 overflow-y-auto">
-        {history.map((line, index) => (
-          <div key={`${line}-${index}`}>{line}</div>
+        {history.map((line) => (
+          <div key={line.id}>{line.text}</div>
         ))}
       </div>
       <input
