@@ -140,7 +140,7 @@
               "minimum": 0,
               "maximum": 100,
               "default": 20,
-              "description": "Percentage allocated to general civic initiatives after the Antman Civic Fund and other allocations"
+              "description": "Percentage allocated to general civic initiatives after operations, founder, Antman Civic Fund, and R&D allocations"
             },
             "description": {
               "type": "string",
