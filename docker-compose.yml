@@ -36,6 +36,11 @@ services:
       - "8000:8000"
     environment:
       DATABASE_URL: postgresql://${POSTGRES_USER:-olympus}:${POSTGRES_PASSWORD:-olympus}@db:5432/${POSTGRES_DB:-olympus}
+      # Dev-only signing key generation (do not use in production)
+      OLYMPUS_DEV_SIGNING_KEY: "true"
+      # Demo API key (hash of "demo-key") for local ingest flows
+      OLYMPUS_API_KEYS_JSON: >-
+        [{"key_hash":"84d53ce2f18ae4856edfe631810f984b8c78bf3c0e136bac89e45642c5c85b37","key_id":"demo-key","scopes":["ingest","commit","verify"],"expires_at":"2099-01-01T00:00:00Z"}]
     depends_on:
       db:
         condition: service_healthy

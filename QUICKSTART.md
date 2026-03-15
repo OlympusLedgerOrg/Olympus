@@ -268,12 +268,14 @@ docker run -it --rm \
   -p 8000:8000 \
   -v $(pwd):/app \
   -e DATABASE_URL='postgresql://olympus:olympus@host.docker.internal:5432/olympus' \
+  -e OLYMPUS_DEV_SIGNING_KEY=true \
   olympus:dev
 
 # Production mode
 docker run -d \
   -p 8000:8000 \
   -e DATABASE_URL='postgresql://olympus:olympus@host.docker.internal:5432/olympus' \
+  -e OLYMPUS_INGEST_SIGNING_KEY='your-64-hex-char-signing-key' \
   --name olympus-app \
   olympus:prod
 
@@ -302,6 +304,10 @@ docker compose logs -f
 # Stop all services
 docker compose down
 ```
+
+The Docker Compose configs enable `OLYMPUS_DEV_SIGNING_KEY` to generate an ephemeral
+signing key for local-only runs. For production deployments, supply a persistent
+`OLYMPUS_INGEST_SIGNING_KEY` instead and disable the dev flag.
 
 ### Three-node federation demo
 

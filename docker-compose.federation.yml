@@ -57,6 +57,8 @@ services:
     container_name: olympus-node1-app
     environment:
       DATABASE_URL: postgresql://${POSTGRES_USER:-olympus}:${POSTGRES_PASSWORD:-olympus}@node1-db:5432/${POSTGRES_DB:-olympus}
+      # Dev-only signing key generation (do not use in production)
+      OLYMPUS_DEV_SIGNING_KEY: "true"
       OLYMPUS_API_KEYS_JSON: >-
         [{"key_hash":"84d53ce2f18ae4856edfe631810f984b8c78bf3c0e136bac89e45642c5c85b37","key_id":"demo-key","scopes":["ingest","commit","verify"],"expires_at":"2099-01-01T00:00:00Z"}]
     depends_on:
@@ -77,6 +79,8 @@ services:
     container_name: olympus-node2-app
     environment:
       DATABASE_URL: postgresql://${POSTGRES_USER:-olympus}:${POSTGRES_PASSWORD:-olympus}@node2-db:5432/${POSTGRES_DB:-olympus}
+      # Dev-only signing key generation (do not use in production)
+      OLYMPUS_DEV_SIGNING_KEY: "true"
       OLYMPUS_API_KEYS_JSON: >-
         [{"key_hash":"84d53ce2f18ae4856edfe631810f984b8c78bf3c0e136bac89e45642c5c85b37","key_id":"demo-key","scopes":["ingest","commit","verify"],"expires_at":"2099-01-01T00:00:00Z"}]
     depends_on:
@@ -97,6 +101,8 @@ services:
     container_name: olympus-node3-app
     environment:
       DATABASE_URL: postgresql://${POSTGRES_USER:-olympus}:${POSTGRES_PASSWORD:-olympus}@node3-db:5432/${POSTGRES_DB:-olympus}
+      # Dev-only signing key generation (do not use in production)
+      OLYMPUS_DEV_SIGNING_KEY: "true"
       OLYMPUS_API_KEYS_JSON: >-
         [{"key_hash":"84d53ce2f18ae4856edfe631810f984b8c78bf3c0e136bac89e45642c5c85b37","key_id":"demo-key","scopes":["ingest","commit","verify"],"expires_at":"2099-01-01T00:00:00Z"}]
     depends_on:
