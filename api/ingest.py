@@ -206,11 +206,26 @@ TRUSTED_PROXY_IPS: frozenset[str] = frozenset(
     ip.strip() for ip in os.environ.get("OLYMPUS_TRUSTED_PROXY_IPS", "").split(",") if ip.strip()
 )
 
+def _dev_signing_key_enabled() -> bool:
+    """Return True when dev-mode auto signing key generation is enabled."""
+    return os.environ.get("OLYMPUS_DEV_SIGNING_KEY", "").strip().lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }
+
+
 # Hard fail when persistence is configured without a signing key
 if os.environ.get("DATABASE_URL") and not os.environ.get("OLYMPUS_INGEST_SIGNING_KEY"):
-    raise RuntimeError(
+    if not _dev_signing_key_enabled():
+        raise RuntimeError(
+            "DATABASE_URL is set but OLYMPUS_INGEST_SIGNING_KEY is missing - "
+            "ingest persistence cannot start without a signing key"
+        )
+    logger.warning(
         "DATABASE_URL is set but OLYMPUS_INGEST_SIGNING_KEY is missing - "
-        "ingest persistence cannot start without a signing key"
+        "using a dev-generated signing key (OLYMPUS_DEV_SIGNING_KEY enabled)"
     )
 
 
@@ -240,10 +255,17 @@ def _get_storage() -> StorageLayer | None:
     # Check if signing key is configured
     signing_key_hex = os.environ.get("OLYMPUS_INGEST_SIGNING_KEY")
     if not signing_key_hex:
-        logger.critical(
-            "DATABASE_URL is configured but OLYMPUS_INGEST_SIGNING_KEY is missing - refusing to start"
+        if not _dev_signing_key_enabled():
+            logger.critical(
+                "DATABASE_URL is configured but OLYMPUS_INGEST_SIGNING_KEY is missing - "
+                "refusing to start"
+            )
+            raise RuntimeError("OLYMPUS_INGEST_SIGNING_KEY is required when DATABASE_URL is set")
+        logger.warning(
+            "OLYMPUS_INGEST_SIGNING_KEY is missing - using a dev-generated signing key "
+            "(OLYMPUS_DEV_SIGNING_KEY enabled)"
         )
-        raise RuntimeError("OLYMPUS_INGEST_SIGNING_KEY is required when DATABASE_URL is set")
+        _signing_key = nacl.signing.SigningKey.generate()
 
     try:
         from storage.postgres import StorageLayer
@@ -253,11 +275,12 @@ def _get_storage() -> StorageLayer | None:
         storage.init_schema()
         storage.check_ingestion_schema()
 
-        # Initialize signing key
-        signing_key_bytes = bytes.fromhex(signing_key_hex)
-        if len(signing_key_bytes) != 32:
-            raise ValueError("OLYMPUS_INGEST_SIGNING_KEY must be 32 bytes (64 hex chars)")
-        _signing_key = nacl.signing.SigningKey(signing_key_bytes)
+        if signing_key_hex:
+            # Initialize signing key
+            signing_key_bytes = bytes.fromhex(signing_key_hex)
+            if len(signing_key_bytes) != 32:
+                raise ValueError("OLYMPUS_INGEST_SIGNING_KEY must be 32 bytes (64 hex chars)")
+            _signing_key = nacl.signing.SigningKey(signing_key_bytes)
 
         logger.info("PostgreSQL storage layer initialized for ingest persistence")
         _storage = storage
