@@ -3,11 +3,11 @@
   "effective_date": "2026-03-15",
   "distribution": {
     "founder": {
-      "percentage": 40,
+      "percentage": 10,
       "description": "Allocation to founder for project creation, vision, and ongoing leadership"
     },
     "operations": {
-      "percentage": 40,
+      "percentage": 10,
       "description": "Allocation to operational expenses with room for growth as the platform scales",
       "subcategories": {
         "infrastructure": 40,
@@ -18,13 +18,17 @@
       }
     },
     "civic": {
-      "percentage": 10,
-      "description": "Allocation to civic initiatives, public good projects, and community engagement",
+      "percentage": 70,
+      "description": "Allocation to civic initiatives, public good projects, and community engagement. This represents the majority of revenue (10% base + 60% remainder) dedicated to civic mission and public good.",
       "initiatives": [
         "Open source protocol development",
         "Educational programs on government transparency",
         "Public records accessibility initiatives",
-        "Civic tech community grants"
+        "Civic tech community grants",
+        "Public interest litigation support",
+        "Democracy infrastructure projects",
+        "Community-driven transparency tools",
+        "Open data advocacy and access programs"
       ]
     },
     "research_and_development": {
@@ -40,6 +44,6 @@
     }
   },
   "total_percentage": 100,
-  "notes": "This revenue distribution model balances founder compensation, operational sustainability, civic responsibility, and continuous innovation. The operations allocation is designed with room for growth as the platform scales. All percentages are subject to review based on business needs and market conditions.",
+  "notes": "This revenue distribution model prioritizes civic responsibility and public good (70% to civic fund), while maintaining minimal founder compensation (10%), operational sustainability (10%), and continuous innovation (10% R&D). The civic-first allocation ensures Olympus serves the public interest above all else. All percentages are subject to review based on business needs and market conditions.",
   "review_period": "annually"
 }

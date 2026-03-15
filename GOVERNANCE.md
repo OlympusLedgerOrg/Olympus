@@ -29,15 +29,15 @@ Olympus is entering a protocol-hardening phase with an explicit plan for long-te
 
 ## Revenue Distribution Model
 
-Olympus operates under a dual licensing model (see `LICENSE` and `LICENSE-COMMERCIAL.md`). Revenue from commercial licensing follows a transparent distribution model designed to balance founder compensation, operational sustainability, civic responsibility, and continuous innovation.
+Olympus operates under a dual licensing model (see `LICENSE` and `LICENSE-COMMERCIAL.md`). Revenue from commercial licensing follows a transparent distribution model that prioritizes civic responsibility and public good.
 
 ### Distribution Structure
-- **40% Founder**: Compensation for project creation, vision, and ongoing leadership
-- **40% Operations**: Operational expenses with room for growth (infrastructure, personnel, marketing, legal, etc.)
-- **10% Civic**: Public good initiatives, open source development, education, and community grants
+- **10% Founder**: Minimal compensation for project creation, vision, and ongoing leadership
+- **10% Operations**: Operational expenses with room for growth (infrastructure, personnel, marketing, legal, etc.)
+- **70% Civic**: Public good initiatives, open source development, education, community grants, and democracy infrastructure projects
 - **10% R&D**: Protocol enhancements, cryptographic improvements, and innovation
 
-This structure is documented in `schemas/revenue_distribution.json` with a reference implementation in `examples/revenue_distribution_v1.json`. The distribution model is reviewed annually and may be adjusted based on business needs and market conditions.
+This civic-first structure ensures that the majority of commercial revenue (70%) directly serves the public interest. The distribution is documented in `schemas/revenue_distribution.json` with a reference implementation in `examples/revenue_distribution_v1.json`. The distribution model is reviewed annually and may be adjusted based on business needs and market conditions.
 
 ## Sustainability Signals
 - ADR coverage for critical design decisions (hash separation, dual commitments, ledger vs redaction path).
