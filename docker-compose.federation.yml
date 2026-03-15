@@ -70,6 +70,7 @@ services:
       test: ["CMD-SHELL", "curl -fsS http://localhost:8000/health || exit 1"]
       interval: 10s
       timeout: 5s
+      start_period: 10s
       retries: 5
 
   node2-app:
@@ -92,6 +93,7 @@ services:
       test: ["CMD-SHELL", "curl -fsS http://localhost:8000/health || exit 1"]
       interval: 10s
       timeout: 5s
+      start_period: 10s
       retries: 5
 
   node3-app:
@@ -114,6 +116,7 @@ services:
       test: ["CMD-SHELL", "curl -fsS http://localhost:8000/health || exit 1"]
       interval: 10s
       timeout: 5s
+      start_period: 10s
       retries: 5
 
   federation-ui:

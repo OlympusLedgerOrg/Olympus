@@ -52,6 +52,7 @@ COPY --chown=olympus:olympus storage /app/storage
 COPY --chown=olympus:olympus api /app/api
 COPY --chown=olympus:olympus ui /app/ui
 COPY --chown=olympus:olympus schemas /app/schemas
+COPY --chown=olympus:olympus migrations /app/migrations
 
 # Security: Set explicit file permissions (read-only for all, directories executable)
 RUN find /app -type f -exec chmod 444 {} \; \
@@ -59,9 +60,6 @@ RUN find /app -type f -exec chmod 444 {} \; \
 
 # Security: Switch to non-root user
 USER olympus
-
-# Set environment variables
-ENV DATABASE_URL=postgresql://olympus:olympus@postgres:5432/olympus
 
 # Health check
 HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
