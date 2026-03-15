@@ -1,9 +1,16 @@
 # Olympus
 
-Olympus is a fully deterministic, verifiable consensus protocol and append-only
-public ledger. The repository is focused on protocol hardening: deterministic
-canonicalization, Merkle commitments, verifiable proofs, and developer tooling
-for inspecting and validating those primitives.
+**Olympus is a verifiable public-records ledger.**
+
+It's a Sharded Sparse Merkle Forest (SSMF) that turns government data, civic actions, and oversight decisions into **cryptographically provable facts**—not press releases, not dashboards, not trust-me PDFs.
+
+At its core, Olympus answers one question with mathematical certainty:
+
+> **"Can any citizen independently verify that this record exists, hasn't changed, and is part of the official public state?"**
+
+The answer is **yes**, offline, forever.
+
+The repository is focused on protocol hardening: deterministic canonicalization, Merkle commitments, verifiable proofs, and developer tooling for inspecting and validating those primitives.
 
 ## Licensing
 
@@ -35,14 +42,15 @@ This model allows the protocol to remain transparent and auditable while providi
 
 ### Revenue Distribution
 Commercial revenue follows a transparent distribution model (see [`GOVERNANCE.md`](GOVERNANCE.md) and [`schemas/revenue_distribution.json`](schemas/revenue_distribution.json)):
-- **40%** to operations (infrastructure, personnel, growth) — prioritized first
+- **40%** to operations (infrastructure, personnel, growth) — funded first
 - **10%** to founder (project creation and leadership)
-- **30%** to the Antman Civic Fund (founder-directed civic allocator; inflows/outflows recorded on-ledger, includes the 20% remainder)
-- **20%** to R&D (protocol enhancements, reviewed quarterly; allocation may be adjusted based on the review)
+- **30%** to the Antman Civic Fund (founder-directed for-profit allocator; all inflows/outflows and purposes recorded on-ledger)
+- **20%** to R&D (protocol enhancements, reviewed quarterly; may be adjusted based on findings with reductions flowing to civic remainder)
+- **0%** to general civic (remainder is directed to the Antman Civic Fund)
 
-**Antman Civic Fund control:** A for-profit allocator 100% controlled by the founder or a founder-appointed steward; inflows/outflows and purposes are recorded on-ledger while the founder directs destinations.
+**Antman Civic Fund control:** A for-profit allocator 100% controlled by the founder or a founder-appointed steward. All inflows/outflows and their purposes are recorded on-ledger while the founder directs destinations.
 
-**Civic-purpose allocations: 30%** (all via the founder-directed Antman Civic Fund with on-ledger transparency).
+**Total civic-purpose allocations: 30%** (all via the founder-directed Antman Civic Fund with full on-ledger transparency).
 
 ## Trust & Threat Model (60-second summary)
 
@@ -70,6 +78,29 @@ A layered cryptographic infrastructure for real-world applications that require:
 
 ## Technical architecture
 
+Olympus is built on a **Sharded Sparse Merkle Forest (SSMF)** architecture:
+
+### 1. Shards (Local Truth)
+Each jurisdiction and data stream (e.g. `watauga:2025:budget`) has its own **Sparse Merkle Tree**:
+- Records are committed as cryptographic leaves
+- Each shard has its own root hash
+- Updates are append-only and ordered
+
+### 2. Forest (Global Truth)
+All shard roots are committed into a second Sparse Merkle Tree—the **Forest**:
+- `forest_key = hash(shard_id)`
+- `forest_value = shard_root`
+- The forest root represents the **entire system state**
+
+This creates a single, deterministic **global state root**.
+
+### 3. Signatures (Authority Without Trust)
+Every state update produces a **signed header**:
+- Ed25519 signature over the shard root and forest root
+- Anyone can verify authenticity without trusting the operator
+
+### Pipeline
+
 Olympus follows a strict, auditable pipeline:
 
 ```text
@@ -84,7 +115,7 @@ Core technical guarantees:
 
 - Deterministic canonicalization for stable, reproducible document bytes
 - Domain-separated BLAKE3 hashing for collision-resistant commitments
-- Merkle and sparse Merkle structures for inclusion/non-membership proofs
+- Sparse Merkle structures for inclusion/non-membership proofs
 - Append-only ledger linkage for tamper-evident history
 - Independent verification paths through CLI tools and cross-language verifiers
 
@@ -94,12 +125,13 @@ stage-to-module mapping and dependency flow.
 ## Technology stack
 
 - **Language/runtime:** Python 3.10+ (3.12 in CI/dev tooling)
-- **API/UI framework:** FastAPI + Starlette + Uvicorn
+- **Core architecture:** Sharded Sparse Merkle Forest (SSMF) with dual-root commitments (BLAKE3 + Poseidon)
+- **API/UI framework:** FastAPI + Starlette + Uvicorn (API), Next.js 15 + React 19 (Dashboard)
 - **Cryptography:** BLAKE3 hashing, Ed25519 signatures (PyNaCl), RFC3161
-  timestamping support
+  timestamping support, Poseidon hashing (BN128) for ZK circuits
+- **Zero-knowledge proofs:** Circom circuits, Groth16 backend (primary), Halo2 backend (alternative for recursive proofs)
 - **Data/storage:** PostgreSQL integration via psycopg/psycopg-pool
-- **Proof tooling:** Merkle and redaction primitives in `protocol/`, Circom
-  assets in `proofs/`
+- **Proof tooling:** Merkle and redaction primitives in `protocol/`, sparse Merkle trees (`protocol/ssmf.py`), epochs and checkpoints, attestations and anchors
 - **Quality tooling:** Ruff, mypy, Bandit, pytest, Hypothesis
 
 ## Current repository state
@@ -135,18 +167,20 @@ map and developer entrypoints.
 ## Repository scaffold
 
 ```text
-api/        FastAPI application and ingestion routes
+api/         FastAPI application and ingestion routes (Commercial License)
+dashboard/   Next.js 15 + React 19 web application (Commercial License)
+ui/          FastAPI debug console and public verification portal (Commercial License)
 scaffolding/ non-production helpers (test-only FastAPI wiring, view-change scaffolding)
-docs/       protocol notes, threat model material, and walkthroughs
-examples/   sample artifacts and notebook examples
+docs/        protocol notes, threat model material, and walkthroughs
+examples/    sample artifacts and notebook examples
 integrations/ interoperability helpers for Ethereum/IPFS-style bridges
-proofs/     Circom circuits, proving assets, and JS-based proof tooling
-protocol/   reference implementations of hashing, Merkle, and redaction logic
-schemas/    JSON schema definitions validated by tools/validate_schemas.py
-storage/    persistence layer implementations and schema bootstrap logic
-tests/      regression tests for protocol, API, UI, and smoke/dev workflows
-tools/      command-line helpers, schema validation, and dev smoke script
-ui/         FastAPI debug console and public verification portal
+proofs/      Circom circuits, proving assets, and JS-based proof tooling (Apache 2.0)
+protocol/    reference implementations of hashing, Merkle, SSMF, and redaction logic (Apache 2.0)
+schemas/     JSON schema definitions validated by tools/validate_schemas.py (Apache 2.0)
+storage/     persistence layer implementations and schema bootstrap logic (Apache 2.0)
+tests/       regression tests for protocol, API, UI, and smoke/dev workflows
+tools/       command-line helpers, schema validation, and dev smoke script (Apache 2.0)
+verifiers/   cross-language verifier implementations (Python, Go, JS, Rust) (Apache 2.0)
 ```
 
 ## Quick start
