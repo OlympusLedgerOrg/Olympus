@@ -28,9 +28,9 @@
       "required": [
         "founder",
         "operations",
-        "antman_civic_fund",
         "civic",
-        "research_and_development"
+        "research_and_development",
+        "antman_civic_fund"
       ],
       "properties": {
         "founder": {

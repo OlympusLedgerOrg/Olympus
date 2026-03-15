@@ -38,7 +38,7 @@ Commercial revenue follows a transparent distribution model (see [`GOVERNANCE.md
 - **40%** to operations (infrastructure, personnel, growth) — prioritized first
 - **10%** to founder (project creation and leadership)
 - **10%** to the Antman Civic Fund (for-profit allocator 100% controlled by the founder or a founder-appointed steward; all inflows/outflows and purposes are recorded on-ledger while the founder directs allocations)
-- **20%** to R&D (protocol enhancements, reviewed quarterly; unused capacity may be re-scoped)
+- **20%** to R&D (protocol enhancements, reviewed quarterly; allocation may be adjusted based on the review)
 - **20%** to civic remainder (all remaining funds after the above allocations)
 
 **Total civic-directed funds: 30%** (10% Antman Civic Fund + 20% civic remainder), with full ledger transparency of receipts and allocations.

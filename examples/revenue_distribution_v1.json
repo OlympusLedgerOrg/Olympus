@@ -25,7 +25,7 @@
     },
     "research_and_development": {
       "percentage": 20,
-      "description": "Allocation to R&D for cryptographic improvements and protocol enhancements. This budget is reviewed quarterly for need; scope may be re-scoped based on findings.",
+      "description": "Allocation to R&D for cryptographic improvements and protocol enhancements. This budget is reviewed quarterly for need; allocation may be adjusted based on findings.",
       "budget_status": "reviewed quarterly",
       "focus_areas": [
         "Zero-knowledge proof optimization",
