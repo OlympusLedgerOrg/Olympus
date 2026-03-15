@@ -4,7 +4,7 @@
 
 Olympus is a federated, append-only public ledger for government documents. It provides cryptographic guarantees about document integrity and provenance without being a blockchain, DAO, or token system. This is a civic integrity primitive built around deterministic canonicalization, Merkle commitments, and verifiable proofs.
 
-**Core Purpose:** Make it cryptographically obvious when public records are created, changed, hidden, or over-redacted.
+**Core Purpose:** Make it cryptographically obvious when sensitive records are created, changed, hidden, or over-redacted.
 
 ## Architectural Principles
 
@@ -85,7 +85,7 @@ Each stage must be independently verifiable and auditable.
 
 Olympus intentionally does NOT:
 - Assert that governments are honest
-- Guarantee completeness of public records
+- Guarantee completeness of records
 - Decide what should be redacted
 - Require trust in a single institution
 

@@ -6,8 +6,8 @@
 
 ## What Problem Are We Solving?
 
-Government records — budgets, contracts, FOIA responses, meeting minutes — are
-supposed to be public and permanent.  In practice, they can be quietly edited,
+Institutional records — budgets, contracts, audit responses, meeting minutes — are
+supposed to be trustworthy and permanent.  In practice, they can be quietly edited,
 deleted, or buried without anyone noticing.  Olympus is designed to make such
 tampering **detectable**, even by someone who was not watching when the original
 document was published.
@@ -18,7 +18,7 @@ document was published.
 
 | Adversary | What they might do |
 |-----------|-------------------|
-| **Government official or contractor** | Edit or delete a previously published document to hide inconvenient information. |
+| **Institutional official or contractor** | Edit or delete a previously published document to hide inconvenient information. |
 | **Database or server administrator** | Directly modify stored records in a way that bypasses application-level controls. |
 | **Malicious document submitter** | Submit a forged or altered document and claim it is the authentic original. |
 | **External attacker** | Compromise the server hosting the ledger and rewrite history. |
@@ -48,10 +48,10 @@ check the signature independently and confirm no documents were added or removed
 after signing.
 
 ### 4. Over-Redaction or Secret Redaction
-When a document is released under FOIA with portions redacted, Olympus can prove
+When a document is released with portions redacted, Olympus can prove
 that the redacted version is derived from the same original that was committed
-before the FOIA request arrived.  This prevents an agency from retroactively
-changing what was in the document before redacting it.
+before the redaction request arrived.  This prevents retroactive
+changing of what was in the document before redacting it.
 
 ---
 
@@ -152,7 +152,7 @@ repository, with links to the relevant source evidence.
 
 ## Summary
 
-Olympus is a **tamper-evident audit trail** for public records.  It cannot
+Olympus is a **tamper-evident audit trail** for sensitive records.  It cannot
 prevent a bad actor from withholding documents, but it makes it cryptographically
 impossible to alter or delete a committed document without that fact being
 detectable by any independent verifier who has the original commitment hash.

@@ -2,12 +2,12 @@
 
 ## Olympus — Executive Summary
 
-**Olympus is a verifiable public-records ledger.**  
-It turns government data, civic actions, and oversight decisions into **cryptographically provable facts**—not press releases, not dashboards, not trust-me PDFs.
+**Olympus is a verifiable ledger for sensitive information.**  
+It turns institutional data, compliance actions, and oversight decisions into **cryptographically provable facts**—not dashboards, not trust-me PDFs, not promises.
 
 At its core, Olympus answers one question with mathematical certainty:
 
-> **“Can any citizen independently verify that this record exists, hasn’t changed, and is part of the official public state?”**
+> **"Can any party independently verify that this record existed at a specific time, hasn't been altered, and is part of the official state?"**
 
 The answer is **yes**, offline, forever.
 
@@ -15,15 +15,15 @@ The answer is **yes**, offline, forever.
 
 ## What Olympus Is
 
-Olympus is a **Sharded Sparse Merkle Forest (SSMF)**–backed civic ledger that provides:
+Olympus is a **Sharded Sparse Merkle Forest (SSMF)**–backed integrity ledger that provides:
 
-- **Append-only public records** (no silent edits, no deletions)
+- **Append-only records** (no silent edits, no deletions)
 - **Cryptographic proofs** of existence and non-existence
 - **Jurisdictional sharding** (county, period, stream)
 - **A global state root** that commits *all* shards into one verifiable snapshot
 - **Offline verification** using modern cryptography (BLAKE3 + Ed25519)
 
-Think of it as **Certificate Transparency for government**, generalized to *any* civic record.
+Think of it as **Certificate Transparency for institutions**, generalized to *any* sensitive record.
 
 ---
 
@@ -33,8 +33,8 @@ Today’s public accountability failures are not abstract—they are structural:
 
 - Records quietly edited or “corrected”
 - FOIA responses that can’t be independently verified
-- Audits that rely on institutional trust instead of proof
-- Citizens forced to believe screenshots, PDFs, or officials
+- Reviews that rely on institutional trust instead of proof
+- Stakeholders forced to believe screenshots, PDFs, or assurances
 
 Olympus replaces **trust** with **verification**.
 
@@ -106,11 +106,11 @@ It **eliminates the need for it**.
 
 ## Who This Is For
 
-- **Citizens** who want proof, not promises
-- **Journalists** who need receipts that survive scrutiny
-- **Auditors & watchdogs** who don’t trust PDFs
-- **Local governments** that want credibility without political risk
-- **Courts & regulators** who need verifiable timelines
+- **Stakeholders** who want proof, not promises
+- **Auditors** who need receipts that survive scrutiny
+- **Oversight bodies** who don’t trust PDFs
+- **Institutions** that want credibility without reputational risk
+- **Regulators** who need verifiable timelines
 
 ---
 
@@ -130,7 +130,7 @@ The Olympus protocol implementation includes:
 
 Olympus is built on a simple idea:
 
-> **If a government action matters, it should be provable.**
+> **If an institutional action matters, it should be provable.**
 
 No hype.  
 No tokens.  

@@ -1,6 +1,6 @@
 # Public Explorer Interface
 
-The public explorer is a **read-only**, zero-auth interface for citizens, auditors, and journalists to inspect Olympus state. It consumes protocol artifacts without adding new trust assumptions.
+The public explorer is a **read-only**, zero-auth interface for stakeholders, auditors, and oversight bodies to inspect Olympus state. It consumes protocol artifacts without adding new trust assumptions.
 
 ## Goals
 

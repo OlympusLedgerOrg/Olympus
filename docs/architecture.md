@@ -1,6 +1,6 @@
 # Olympus Architecture
 
-Olympus is an append-only public ledger for government documents.  It provides
+Olympus is an append-only ledger for institutional documents.  It provides
 cryptographic guarantees about document integrity and provenance via deterministic
 canonicalization, Merkle commitments, and verifiable proofs.
 
