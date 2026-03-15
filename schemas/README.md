@@ -42,6 +42,9 @@ Defines the structure of a source authenticity proof, including agency signature
 ### verification_bundle.json
 Defines the offline verification bundle used by `protocol/verification_bundle.py` and `tools/verify_bundle_cli.py`. Each bundle contains the SMT proof, shard header, signature, and optional timestamp token so third parties can verify inclusion without database access.
 
+### revenue_distribution.json
+Specifies the revenue allocation model for Olympus commercial operations. Defines the distribution of commercial licensing revenue across founder compensation (40%), operations (40%), civic initiatives (10%), and R&D (10%). This schema ensures transparency in how commercial revenue supports both the project and public good. See `examples/revenue_distribution_v1.json` for the current distribution model.
+
 ## Ownership Map
 
 - `protocol/verification_bundle.py` ⇄ `verification_bundle.json`

@@ -5,6 +5,44 @@ public ledger. The repository is focused on protocol hardening: deterministic
 canonicalization, Merkle commitments, verifiable proofs, and developer tooling
 for inspecting and validating those primitives.
 
+## Licensing
+
+Olympus uses a **two-layer licensing model** to balance openness and sustainability:
+
+### Open Source Core (Apache 2.0)
+The cryptographic core and protocol implementation are licensed under **Apache License 2.0**:
+- Protocol implementations (`protocol/`)
+- Zero-knowledge circuits (`proofs/`)
+- Storage layer (`storage/`)
+- Schemas (`schemas/`)
+- Verification tools (`verifiers/`)
+- CLI tools (`tools/`)
+- Examples and test vectors (`examples/`, `test_vectors/`)
+
+**Why Apache 2.0?** Strong patent protection, enterprise-friendly, and protects cryptographic IP from patent trolls.
+
+### Proprietary Components (Commercial License)
+The application layer and enterprise features require a **commercial license** (see [`LICENSE-COMMERCIAL.md`](LICENSE-COMMERCIAL.md)):
+- Web Application (`dashboard/`)
+- Debug UI (`ui/`)
+- API Gateway (`api/`)
+- Cloud Service (hosted deployments)
+- Enterprise features (SAML, audit exports, retention policies, etc.)
+
+**For commercial licensing inquiries**, please contact the Olympus team.
+
+This model allows the protocol to remain transparent and auditable while providing sustainable revenue through hosting, dashboards, integrations, and enterprise support.
+
+### Revenue Distribution
+Commercial revenue follows a transparent distribution model (see [`GOVERNANCE.md`](GOVERNANCE.md) and [`schemas/revenue_distribution.json`](schemas/revenue_distribution.json)):
+- **40%** to operations (infrastructure, personnel, growth)
+- **10%** to founder (project creation and leadership)
+- **10%** to civic base (guaranteed public good allocation)
+- **10%** to R&D (protocol enhancements, subject to periodic review)
+- **30%** to civic remainder (all funds remaining after R&D allocation)
+
+**Total civic fund: 40%** - This ensures civic initiatives receive guaranteed base funding plus all residual revenue.
+
 ## Trust & Threat Model (60-second summary)
 
 - **Adversaries:** malicious submitters, compromised operators, and network attackers who can observe and modify traffic but cannot break modern cryptography.
