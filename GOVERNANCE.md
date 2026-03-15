@@ -42,7 +42,7 @@ Olympus operates under a dual licensing model (see `LICENSE` and `LICENSE-COMMER
 
 This structure ensures operations are funded first (40%), the founder receives fair compensation (10%), the founder-directed Antman Civic Fund is transparently tracked on-ledger (10%), R&D receives a quarterly-reviewed budget (20%), and the remaining 20% flows to civic initiatives.
 
-The distribution is documented in `schemas/revenue_distribution.json` with a reference implementation in `examples/revenue_distribution_v1.json`. The distribution model is reviewed annually and may be adjusted based on business needs and market conditions.
+The distribution is documented in `schemas/revenue_distribution.json` with a reference implementation in `examples/revenue_distribution_v1.json`. The distribution model is reviewed quarterly for R&D need (and adjusted as necessary) while remaining subject to broader governance review based on business needs and market conditions.
 
 ## Sustainability Signals
 - ADR coverage for critical design decisions (hash separation, dual commitments, ledger vs redaction path).
