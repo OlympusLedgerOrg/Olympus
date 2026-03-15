@@ -117,7 +117,7 @@ class EpochRecord:
 
         root_bytes = _normalize_hash(merkle_root)
         metadata_bytes = _normalize_hash(metadata_hash)
-        if previous_epoch_head is None or previous_epoch_head == "":
+        if not previous_epoch_head:
             if epoch_index != 0:
                 raise ValueError(
                     "previous_epoch_head can only be empty for genesis epoch (index 0)"
