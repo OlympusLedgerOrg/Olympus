@@ -276,15 +276,15 @@ docker run -d \
   -p 8000:8000 \
   -e DATABASE_URL='postgresql://olympus:olympus@host.docker.internal:5432/olympus' \
   -e OLYMPUS_INGEST_SIGNING_KEY='your-64-hex-char-signing-key' \
-  --name olympus-app \
+  --name olympus-api \
   olympus:prod
 
 # View logs
-docker logs -f olympus-app
+docker logs -f olympus-api
 
 # Stop container
-docker stop olympus-app
-docker rm olympus-app
+docker stop olympus-api
+docker rm olympus-api
 ```
 
 ### Docker Compose

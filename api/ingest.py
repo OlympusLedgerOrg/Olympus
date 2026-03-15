@@ -206,6 +206,7 @@ TRUSTED_PROXY_IPS: frozenset[str] = frozenset(
     ip.strip() for ip in os.environ.get("OLYMPUS_TRUSTED_PROXY_IPS", "").split(",") if ip.strip()
 )
 
+
 def _dev_signing_key_enabled() -> bool:
     """Return True when dev-mode auto signing key generation is enabled."""
     return os.environ.get("OLYMPUS_DEV_SIGNING_KEY", "").strip().lower() in {
@@ -607,8 +608,9 @@ def _get_bucket(buckets: OrderedDict[str, TokenBucket], subject: str, action: st
     IMPORTANT: This function must be called while holding _rate_limit_lock (L5-C).
     The assertion below will catch violations during testing/development.
     """
-    # L5-C: Assert lock is held to catch programming errors early
-    assert _rate_limit_lock.locked(), "_get_bucket must be called while holding _rate_limit_lock"
+    # L5-C: Ensure lock is held to catch programming errors early
+    if not _rate_limit_lock.locked():
+        raise RuntimeError("_get_bucket must be called while holding _rate_limit_lock")
 
     existing = buckets.get(subject)
     if existing is not None:

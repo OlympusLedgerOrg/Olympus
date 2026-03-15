@@ -24,10 +24,11 @@ _SEP = HASH_SEPARATOR.encode("utf-8")
 def _normalize_hash(value: bytes | str) -> bytes:
     """Normalize a hex or byte hash to raw bytes."""
     if isinstance(value, str):
+        hex_input = value
         try:
             value = bytes.fromhex(value)
         except ValueError as exc:  # pragma: no cover - defensive
-            raise ValueError(f"Invalid hex value: {value}") from exc
+            raise ValueError(f"Invalid hex value: {hex_input}") from exc
     if not isinstance(value, (bytes, bytearray)):
         raise ValueError("Hash must be bytes or hex string")
     if len(value) != 32:
@@ -79,12 +80,13 @@ class AnchorCommitment:
         """Build an :class:`AnchorCommitment` with a deterministic commitment hash."""
         root_bytes = _normalize_hash(merkle_root)
         normalized_ts = _normalize_timestamp(anchored_at)
-        payload = {
+        metadata_payload: dict[str, Any] = metadata or {}
+        payload: dict[str, Any] = {
             "anchor_chain": anchor_chain,
             "anchor_reference": anchor_reference,
             "anchored_at": normalized_ts,
             "merkle_root": root_bytes.hex(),
-            "metadata": metadata or {},
+            "metadata": metadata_payload,
         }
         commitment_hash = blake3_hash([ANCHOR_PREFIX, _SEP, canonical_json_bytes(payload)]).hex()
         return cls(
@@ -93,7 +95,7 @@ class AnchorCommitment:
             anchor_reference=anchor_reference,
             anchored_at=normalized_ts,
             commitment_hash=commitment_hash,
-            metadata=payload["metadata"],
+            metadata=metadata_payload,
         )
 
     def to_dict(self) -> dict[str, Any]:

@@ -33,7 +33,7 @@ services:
     build:
       context: .
       target: production
-    container_name: olympus-app
+    container_name: olympus-api
     ports:
       - "8000:8000"
     environment:
