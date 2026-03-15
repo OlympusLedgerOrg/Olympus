@@ -41,7 +41,7 @@
             "percentage": {
               "type": "number",
               "const": 10,
-              "description": "Percentage allocated to founder"
+              "description": "Percentage allocated to founder (fixed at 10% per current governance; changes require schema/governance update)"
             },
             "description": {
               "type": "string",
