@@ -29,10 +29,10 @@ Think of it as **Certificate Transparency for institutions**, generalized to *an
 
 ## What Problem It Solves
 
-Today’s public accountability failures are not abstract—they are structural:
+Today’s institutional accountability failures are not abstract—they are structural:
 
 - Records quietly edited or “corrected”
-- FOIA responses that can’t be independently verified
+- Audit responses that can’t be independently verified
 - Reviews that rely on institutional trust instead of proof
 - Stakeholders forced to believe screenshots, PDFs, or assurances
 
