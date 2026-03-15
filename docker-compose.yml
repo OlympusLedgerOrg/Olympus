@@ -7,8 +7,6 @@
 # - Never commit production credentials to version control
 # - Consider using a .env file (add to .gitignore) for local overrides
  
-version: "2.4"
-
 services:
   db:
     image: postgres:16
