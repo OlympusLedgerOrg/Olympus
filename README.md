@@ -33,6 +33,13 @@ The application layer and enterprise features require a **commercial license** (
 
 This model allows the protocol to remain transparent and auditable while providing sustainable revenue through hosting, dashboards, integrations, and enterprise support.
 
+### Revenue Distribution
+Commercial revenue follows a transparent distribution model (see [`GOVERNANCE.md`](GOVERNANCE.md) and [`schemas/revenue_distribution.json`](schemas/revenue_distribution.json)):
+- **40%** to founder (project creation and leadership)
+- **40%** to operations (infrastructure, personnel, growth)
+- **10%** to civic initiatives (public good, education, community)
+- **10%** to R&D (protocol enhancements, cryptographic innovation)
+
 ## Trust & Threat Model (60-second summary)
 
 - **Adversaries:** malicious submitters, compromised operators, and network attackers who can observe and modify traffic but cannot break modern cryptography.

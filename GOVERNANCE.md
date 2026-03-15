@@ -27,11 +27,24 @@ Olympus is entering a protocol-hardening phase with an explicit plan for long-te
 - **Phase 1:** Guardian replication and federation hygiene; stronger availability guarantees.
 - **Phase 1+:** optional Halo2 / recursive proofs for high-assurance contexts.
 
+## Revenue Distribution Model
+
+Olympus operates under a dual licensing model (see `LICENSE` and `LICENSE-COMMERCIAL.md`). Revenue from commercial licensing follows a transparent distribution model designed to balance founder compensation, operational sustainability, civic responsibility, and continuous innovation.
+
+### Distribution Structure
+- **40% Founder**: Compensation for project creation, vision, and ongoing leadership
+- **40% Operations**: Operational expenses with room for growth (infrastructure, personnel, marketing, legal, etc.)
+- **10% Civic**: Public good initiatives, open source development, education, and community grants
+- **10% R&D**: Protocol enhancements, cryptographic improvements, and innovation
+
+This structure is documented in `schemas/revenue_distribution.json` with a reference implementation in `examples/revenue_distribution_v1.json`. The distribution model is reviewed annually and may be adjusted based on business needs and market conditions.
+
 ## Sustainability Signals
 - ADR coverage for critical design decisions (hash separation, dual commitments, ledger vs redaction path).
 - Public threat model and security scope (see `docs/threat_model.md` and `docs/pentest-scope.md`).
 - Documented trusted-setup process with dev transcripts (`ceremony/`), emphasizing non-production status.
 - Clear intake for security reports with a PGP key (`SECURITY.md`).
+- Transparent revenue distribution model ensuring civic engagement and R&D investment.
 
 ## Escalation & Succession
 - If a maintainer becomes unavailable, remaining maintainers (or designated stewards) will:

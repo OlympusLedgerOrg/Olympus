@@ -1,0 +1,45 @@
+{
+  "version": "1.0.0",
+  "effective_date": "2026-03-15",
+  "distribution": {
+    "founder": {
+      "percentage": 40,
+      "description": "Allocation to founder for project creation, vision, and ongoing leadership"
+    },
+    "operations": {
+      "percentage": 40,
+      "description": "Allocation to operational expenses with room for growth as the platform scales",
+      "subcategories": {
+        "infrastructure": 40,
+        "personnel": 35,
+        "marketing": 10,
+        "legal_compliance": 10,
+        "other": 5
+      }
+    },
+    "civic": {
+      "percentage": 10,
+      "description": "Allocation to civic initiatives, public good projects, and community engagement",
+      "initiatives": [
+        "Open source protocol development",
+        "Educational programs on government transparency",
+        "Public records accessibility initiatives",
+        "Civic tech community grants"
+      ]
+    },
+    "research_and_development": {
+      "percentage": 10,
+      "description": "Allocation to R&D for cryptographic improvements and protocol enhancements",
+      "focus_areas": [
+        "Zero-knowledge proof optimization",
+        "Advanced redaction protocols",
+        "Scalability improvements",
+        "Cross-chain interoperability",
+        "Performance benchmarking and optimization"
+      ]
+    }
+  },
+  "total_percentage": 100,
+  "notes": "This revenue distribution model balances founder compensation, operational sustainability, civic responsibility, and continuous innovation. The operations allocation is designed with room for growth as the platform scales. All percentages are subject to review based on business needs and market conditions.",
+  "review_period": "annually"
+}

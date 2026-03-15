@@ -1,0 +1,175 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://olympus-protocol.org/schemas/revenue_distribution.json",
+  "title": "Olympus Civic Revenue Distribution",
+  "description": "Schema defining revenue allocation for Olympus commercial operations",
+  "type": "object",
+  "required": [
+    "version",
+    "distribution",
+    "total_percentage",
+    "effective_date"
+  ],
+  "properties": {
+    "version": {
+      "type": "string",
+      "description": "Schema version",
+      "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$",
+      "default": "1.0.0"
+    },
+    "effective_date": {
+      "type": "string",
+      "format": "date",
+      "description": "Date when this revenue distribution becomes effective"
+    },
+    "distribution": {
+      "type": "object",
+      "description": "Revenue allocation percentages",
+      "required": [
+        "founder",
+        "operations",
+        "civic",
+        "research_and_development"
+      ],
+      "properties": {
+        "founder": {
+          "type": "object",
+          "description": "Allocation to founder",
+          "required": ["percentage", "description"],
+          "properties": {
+            "percentage": {
+              "type": "number",
+              "minimum": 0,
+              "maximum": 100,
+              "default": 40,
+              "description": "Percentage allocated to founder"
+            },
+            "description": {
+              "type": "string",
+              "description": "Description of founder allocation"
+            },
+            "wallet_address": {
+              "type": "string",
+              "description": "Optional cryptocurrency wallet address for distributions"
+            }
+          }
+        },
+        "operations": {
+          "type": "object",
+          "description": "Allocation to operations (with room for growth)",
+          "required": ["percentage", "description"],
+          "properties": {
+            "percentage": {
+              "type": "number",
+              "minimum": 0,
+              "maximum": 100,
+              "default": 40,
+              "description": "Percentage allocated to operations"
+            },
+            "description": {
+              "type": "string",
+              "description": "Description of operations allocation"
+            },
+            "subcategories": {
+              "type": "object",
+              "description": "Optional breakdown of operations spending",
+              "properties": {
+                "infrastructure": {
+                  "type": "number",
+                  "minimum": 0,
+                  "maximum": 100
+                },
+                "personnel": {
+                  "type": "number",
+                  "minimum": 0,
+                  "maximum": 100
+                },
+                "marketing": {
+                  "type": "number",
+                  "minimum": 0,
+                  "maximum": 100
+                },
+                "legal_compliance": {
+                  "type": "number",
+                  "minimum": 0,
+                  "maximum": 100
+                },
+                "other": {
+                  "type": "number",
+                  "minimum": 0,
+                  "maximum": 100
+                }
+              }
+            }
+          }
+        },
+        "civic": {
+          "type": "object",
+          "description": "Allocation to civic initiatives and public good",
+          "required": ["percentage", "description"],
+          "properties": {
+            "percentage": {
+              "type": "number",
+              "minimum": 0,
+              "maximum": 100,
+              "default": 10,
+              "description": "Percentage allocated to civic initiatives"
+            },
+            "description": {
+              "type": "string",
+              "description": "Description of civic allocation"
+            },
+            "initiatives": {
+              "type": "array",
+              "description": "Specific civic initiatives funded",
+              "items": {
+                "type": "string"
+              }
+            }
+          }
+        },
+        "research_and_development": {
+          "type": "object",
+          "description": "Allocation to R&D for protocol improvements",
+          "required": ["percentage", "description"],
+          "properties": {
+            "percentage": {
+              "type": "number",
+              "minimum": 0,
+              "maximum": 100,
+              "default": 10,
+              "description": "Percentage allocated to R&D"
+            },
+            "description": {
+              "type": "string",
+              "description": "Description of R&D allocation"
+            },
+            "focus_areas": {
+              "type": "array",
+              "description": "Specific R&D focus areas",
+              "items": {
+                "type": "string"
+              }
+            }
+          }
+        }
+      }
+    },
+    "total_percentage": {
+      "type": "number",
+      "description": "Total of all percentages (must equal 100)",
+      "minimum": 100,
+      "maximum": 100,
+      "default": 100
+    },
+    "notes": {
+      "type": "string",
+      "description": "Additional notes about the revenue distribution model"
+    },
+    "review_period": {
+      "type": "string",
+      "description": "How often this distribution should be reviewed (e.g., 'quarterly', 'annually')",
+      "enum": ["monthly", "quarterly", "semi-annually", "annually"]
+    }
+  }
+}
