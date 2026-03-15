@@ -102,12 +102,12 @@
         },
         "antman_civic_fund": {
           "type": "object",
-          "description": "Allocation to the Antman Civic Fund, a founder-directed for-profit allocation vehicle with full on-ledger recording",
+          "description": "Allocation to the Antman Civic Fund, a founder-directed for-profit allocation vehicle with full on-ledger recording (includes remainder previously directed to general civic)",
           "required": ["percentage", "description"],
           "properties": {
             "percentage": {
               "type": "number",
-              "const": 10,
+              "const": 30,
               "description": "Percentage allocated to the Antman Civic Fund"
             },
             "description": {
@@ -126,13 +126,13 @@
         },
         "civic": {
           "type": "object",
-          "description": "Allocation to civic initiatives and public good (remainder after dedicated funds)",
+          "description": "Allocation to civic initiatives and public good (set to 0% because remainder flows to the Antman Civic Fund)",
           "required": ["percentage", "description"],
           "properties": {
             "percentage": {
               "type": "number",
-              "const": 20,
-              "description": "Percentage allocated to general civic initiatives after operations, founder, Antman Civic Fund, and R&D allocations"
+              "const": 0,
+              "description": "Percentage allocated to general civic initiatives (0%; remainder is redirected to the Antman Civic Fund)"
             },
             "description": {
               "type": "string",

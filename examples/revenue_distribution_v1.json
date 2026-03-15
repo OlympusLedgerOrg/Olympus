@@ -18,8 +18,8 @@
       "description": "Allocation to founder for project creation, vision, and ongoing leadership"
     },
     "antman_civic_fund": {
-      "percentage": 10,
-      "description": "Allocation to the Antman Civic Fund, a for-profit allocator fully controlled by the founder or a founder-appointed steward. All inflows and outflows, plus their purposes, are recorded on-ledger while the founder directs destinations.",
+      "percentage": 30,
+      "description": "Allocation to the Antman Civic Fund, a for-profit allocator fully controlled by the founder or a founder-appointed steward. All inflows and outflows, plus their purposes, are recorded on-ledger while the founder directs destinations. This includes the 20% remainder previously directed to a general civic fund.",
       "stewardship": "Founder or founder-appointed steward retains 100% control of the allocator",
       "ledger_recording": "All inflows/outflows and purposes are recorded on-ledger for transparency"
     },
@@ -36,21 +36,12 @@
       ]
     },
     "civic": {
-      "percentage": 20,
-      "description": "Allocation to civic initiatives, public good projects, and community engagement after dedicated allocations (operations, founder, Antman Civic Fund, R&D).",
-      "initiatives": [
-        "Open source protocol development",
-        "Educational programs on government transparency",
-        "Public records accessibility initiatives",
-        "Civic tech community grants",
-        "Public interest litigation support",
-        "Democracy infrastructure projects",
-        "Community-driven transparency tools",
-        "Open data advocacy and access programs"
-      ]
+      "percentage": 0,
+      "description": "General civic remainder set to 0% because the 20% remainder is directed to the Antman Civic Fund.",
+      "initiatives": []
     }
   },
   "total_percentage": 100,
-  "notes": "Operations are funded first (40%), followed by founder (10%) and the founder-directed but fully ledger-recorded Antman Civic Fund (10%). R&D receives 20% with quarterly review. The remaining 20% flows to civic initiatives. Antman Civic Fund inflows/outflows and purposes are fully recorded on-ledger; other allocations follow standard ledger budget recording for transparency.",
+  "notes": "Operations are funded first (40%), followed by founder (10%) and the founder-directed but fully ledger-recorded Antman Civic Fund (30%, inclusive of the 20% remainder). R&D receives 20% with quarterly review. Antman Civic Fund inflows/outflows and purposes are fully recorded on-ledger; other allocations follow standard ledger budget recording for transparency.",
   "review_period": "quarterly"
 }
