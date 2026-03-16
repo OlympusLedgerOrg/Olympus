@@ -33,7 +33,8 @@ services:
       - /bin/sh
       - -c
       - >
-        python -c "import os; from storage.postgres import StorageLayer; StorageLayer(os.environ['DATABASE_URL']).init_schema()"
+        for i in $$(seq 1 30); do python -c "import os; from storage.postgres import StorageLayer; StorageLayer(os.environ['DATABASE_URL']).init_schema()" && break;
+        echo "Waiting for database initialization... ($$i/30)"; sleep 1; if [ "$$i" -eq 30 ]; then echo "Database initialization failed"; exit 1; fi; done
         && exec uvicorn api.app:app --host 0.0.0.0 --port 8000
     ports:
       - "8000:8000"
