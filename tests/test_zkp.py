@@ -85,6 +85,7 @@ def test_groth16_prover_requires_snarkjs():
         prover.verify(dummy_proof, verification_key_path=Path("/tmp/vkey.json"))
 
 
+@pytest.mark.filterwarnings("ignore::DeprecationWarning")
 def test_prove_existence_requires_snarkjs(tmp_path: Path):
     build_dir = tmp_path / "build"
     build_dir.mkdir()
@@ -107,6 +108,7 @@ def test_prove_existence_requires_snarkjs(tmp_path: Path):
         )
 
 
+@pytest.mark.filterwarnings("ignore::DeprecationWarning")
 def test_prove_existence_missing_witness(tmp_path: Path):
     """prove_existence raises FileNotFoundError when witness file is absent."""
     build_dir = tmp_path / "build"
@@ -127,6 +129,7 @@ def test_prove_existence_missing_witness(tmp_path: Path):
             )
 
 
+@pytest.mark.filterwarnings("ignore::DeprecationWarning")
 def test_prove_existence_missing_zkey(tmp_path: Path):
     """prove_existence raises FileNotFoundError when zkey file is absent."""
     build_dir = tmp_path / "build"
@@ -147,6 +150,7 @@ def test_prove_existence_missing_zkey(tmp_path: Path):
             )
 
 
+@pytest.mark.filterwarnings("ignore::DeprecationWarning")
 def test_prove_existence_success(tmp_path: Path):
     """prove_existence returns a ZKProof when snarkjs succeeds."""
     build_dir = tmp_path / "build"

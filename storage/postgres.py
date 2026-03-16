@@ -276,8 +276,10 @@ class StorageLayer:
         """
         Initialize database schema.
 
-        Reads and executes all schema migration SQL files in order.
-        All DDL statements execute in a single transaction.
+        Reads and executes schema migration SQL files in order, skipping any
+        that have already been recorded in the ``applied_migrations`` tracking
+        table.  The tracking table itself is created unconditionally (using
+        ``IF NOT EXISTS``) so that existing databases are upgraded seamlessly.
         """
         import os
 
@@ -288,15 +290,33 @@ class StorageLayer:
 
         migration_files = sorted(f for f in os.listdir(migrations_dir) if f.endswith(".sql"))
 
-        # BEGIN TRANSACTION (implicit via context manager)
         with self._get_connection() as conn:
             with conn.cursor(row_factory=dict_row) as cur:
+                # Ensure the tracking table exists
+                cur.execute(
+                    """
+                    CREATE TABLE IF NOT EXISTS applied_migrations (
+                        filename TEXT PRIMARY KEY,
+                        applied_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+                    )
+                    """
+                )
+
+                # Determine which migrations have already been applied
+                cur.execute("SELECT filename FROM applied_migrations")
+                applied = {row["filename"] for row in cur.fetchall()}
+
                 for migration_file in migration_files:
+                    if migration_file in applied:
+                        continue
                     with open(os.path.join(migrations_dir, migration_file)) as f:
                         cur.execute(f.read())
-            # COMMIT TRANSACTION (explicit)
+                    cur.execute(
+                        "INSERT INTO applied_migrations (filename) VALUES (%s)",
+                        (migration_file,),
+                    )
+
             conn.commit()
-        # END TRANSACTION (implicit via context manager exit)
 
     def check_ingestion_schema(self) -> None:
         """

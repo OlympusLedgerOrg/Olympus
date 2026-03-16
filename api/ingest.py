@@ -262,9 +262,12 @@ def _get_storage() -> StorageLayer | None:
                 "refusing to start"
             )
             raise RuntimeError("OLYMPUS_INGEST_SIGNING_KEY is required when DATABASE_URL is set")
-        logger.warning(
+        logger.critical(
+            "*** DEV SIGNING KEY IN USE *** "
             "OLYMPUS_INGEST_SIGNING_KEY is missing - using a dev-generated signing key "
-            "(OLYMPUS_DEV_SIGNING_KEY enabled)"
+            "(OLYMPUS_DEV_SIGNING_KEY enabled). "
+            "All previously signed shard headers will become unverifiable after restart. "
+            "Do NOT use this in production."
         )
         _signing_key = nacl.signing.SigningKey.generate()
 
