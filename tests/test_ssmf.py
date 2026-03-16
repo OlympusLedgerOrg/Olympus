@@ -72,6 +72,35 @@ def test_ssmf_existence_proof():
     assert verify_proof(proof) is True
 
 
+def test_ssmf_existence_proof_size_is_constant_across_tree_sizes():
+    """Existence proofs should stay fixed-width regardless of tree cardinality."""
+    expected_proof_size = (
+        32  # key
+        + 32  # value_hash
+        + (256 * 32)  # fixed sibling path for 256-bit SMT
+        + 32  # root_hash
+    )
+    proof_sizes: list[int] = []
+
+    for tree_size in (1, 4, 64):
+        tree = SparseMerkleTree()
+        keys = [record_key("document", f"doc-{idx}", 1) for idx in range(tree_size)]
+        values = [hash_bytes(f"value-{idx}".encode()) for idx in range(tree_size)]
+
+        for key, value in zip(keys, values, strict=True):
+            tree.update(key, value)
+
+        proof = tree.prove_existence(keys[-1])
+        proof_sizes.append(
+            len(proof.key)
+            + len(proof.value_hash)
+            + sum(len(sibling) for sibling in proof.siblings)
+            + len(proof.root_hash)
+        )
+
+    assert proof_sizes == [expected_proof_size, expected_proof_size, expected_proof_size]
+
+
 def test_ssmf_existence_proof_for_nonexistent_key():
     """Test that proving existence of non-existent key fails."""
     tree = SparseMerkleTree()

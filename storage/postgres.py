@@ -34,7 +34,7 @@ import logging
 import os
 import time
 from collections import OrderedDict
-from collections.abc import Iterator, Mapping
+from collections.abc import Iterable, Iterator, Mapping
 from contextlib import contextmanager
 from datetime import datetime, timezone
 from threading import Lock
@@ -75,6 +75,7 @@ class StorageLayer:
 
     # Default maximum number of cached Merkle node entries.
     DEFAULT_NODE_CACHE_SIZE: int = 4096
+    DEFAULT_FLUSH_BATCH_SIZE: int = 10_000
 
     def __init__(
         self,
@@ -217,6 +218,81 @@ class StorageLayer:
         """Clear the entire Merkle node cache."""
         with self._node_cache_lock:
             self._node_cache.clear()
+
+    @staticmethod
+    def _iter_batches(items: Iterable[Any], batch_size: int) -> Iterator[list[Any]]:
+        """
+        Yield items in fixed-size batches.
+
+        Args:
+            items: Source iterable to batch lazily.
+            batch_size: Maximum number of items per yielded batch.
+
+        Yields:
+            Lists containing up to ``batch_size`` items from ``items``.
+        """
+        if batch_size <= 0:
+            raise ValueError("batch_size must be a positive integer")
+
+        batch: list[Any] = []
+        for item in items:
+            batch.append(item)
+            if len(batch) >= batch_size:
+                yield batch
+                batch = []
+
+        if batch:
+            yield batch
+
+    @staticmethod
+    def _iter_ingestion_proof_rows(
+        batch_id: str, records: list[dict[str, Any]]
+    ) -> Iterator[tuple[Any, ...]]:
+        """
+        Yield ingestion proof rows ready for append-only persistence.
+
+        Args:
+            batch_id: Durable identifier shared by the ingestion batch.
+            records: Ingestion proof metadata dictionaries to serialize.
+
+        Yields:
+            Tuples matching the ``ingestion_proofs`` insert column order.
+        """
+        for idx, record in enumerate(records):
+            yield (
+                record["proof_id"],
+                batch_id,
+                record.get("batch_index", idx),
+                record["shard_id"],
+                record.get("record_type", "document"),
+                record["record_id"],
+                record.get("version", 1),
+                bytes.fromhex(record["content_hash"]),
+                bytes.fromhex(record["merkle_root"]),
+                json.dumps(record["merkle_proof"]),
+                bytes.fromhex(record["ledger_entry_hash"]),
+                record["timestamp"],
+                json.dumps(record.get("canonicalization")),
+                record.get("persisted", True),
+            )
+
+    def _iter_tree_node_rows(
+        self, shard_id: str, tree: SparseMerkleTree, ts: datetime
+    ) -> Iterator[tuple[str, int, bytes, bytes, datetime]]:
+        """
+        Yield sparse Merkle node rows ready for append-only persistence.
+
+        Args:
+            shard_id: Identifier for the shard being persisted.
+            tree: Sparse Merkle tree whose internal nodes should be written.
+            ts: Timestamp applied to each emitted row in the flush.
+
+        Yields:
+            Tuples matching the ``smt_nodes`` insert column order.
+        """
+        for path, hash_value in tree.nodes.items():
+            path_bytes = self._encode_path(path)
+            yield (shard_id, len(path), path_bytes, hash_value, ts)
 
     def _acquire_connection_with_retry(self) -> psycopg.Connection[dict[str, Any]]:
         """Acquire a pooled connection with retry and circuit-breaker protection."""
@@ -769,8 +845,11 @@ class StorageLayer:
                 (batch_id,),
             )
 
-            for idx, record in enumerate(records):
-                cur.execute(
+            for row_batch in self._iter_batches(
+                self._iter_ingestion_proof_rows(batch_id, records),
+                self.DEFAULT_FLUSH_BATCH_SIZE,
+            ):
+                cur.executemany(
                     """
                         INSERT INTO ingestion_proofs (
                             proof_id,
@@ -791,22 +870,7 @@ class StorageLayer:
                         VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                         ON CONFLICT (proof_id) DO NOTHING
                     """,
-                    (
-                        record["proof_id"],
-                        batch_id,
-                        record.get("batch_index", idx),
-                        record["shard_id"],
-                        record.get("record_type", "document"),
-                        record["record_id"],
-                        record.get("version", 1),
-                        bytes.fromhex(record["content_hash"]),
-                        bytes.fromhex(record["merkle_root"]),
-                        json.dumps(record["merkle_proof"]),
-                        bytes.fromhex(record["ledger_entry_hash"]),
-                        record["timestamp"],
-                        json.dumps(record.get("canonicalization")),
-                        record.get("persisted", True),
-                    ),
+                    row_batch,
                 )
 
             conn.commit()
@@ -1766,23 +1830,22 @@ class StorageLayer:
             shard_id: Shard identifier
             tree: SparseMerkleTree to persist
         """
-        # Insert all nodes from tree
-        for path, hash_value in tree.nodes.items():
-            # Encode path as bytes
-            path_bytes = self._encode_path(path)
-            level = len(path)
-
-            cur.execute(
+        ts = datetime.now(timezone.utc)
+        for row_batch in self._iter_batches(
+            self._iter_tree_node_rows(shard_id, tree, ts),
+            self.DEFAULT_FLUSH_BATCH_SIZE,
+        ):
+            cur.executemany(
                 """
                 INSERT INTO smt_nodes (shard_id, level, index, hash, ts)
                 VALUES (%s, %s, %s, %s, %s)
                 ON CONFLICT (shard_id, level, index) DO NOTHING
                 """,
-                (shard_id, level, path_bytes, hash_value, datetime.now(timezone.utc)),
+                row_batch,
             )
 
-            # Populate cache with freshly persisted nodes
-            self._cache_put(shard_id, level, path_bytes, hash_value)
+            for _, level, path_bytes, hash_value, _ in row_batch:
+                self._cache_put(shard_id, level, path_bytes, hash_value)
 
     @staticmethod
     def _encode_path(path: tuple[int, ...]) -> bytes:
