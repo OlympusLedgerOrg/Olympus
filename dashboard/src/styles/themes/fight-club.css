@@ -31,10 +31,7 @@
 [data-theme="fight-club"] body::before {
   content: "";
   position: fixed;
-  top: 0;
-  left: 0;
-  width: 100%;
-  height: 100%;
+  inset: 0;
   z-index: 9999;
   pointer-events: none;
   background: repeating-linear-gradient(
@@ -47,13 +44,11 @@
 }
 
 /* ── CRT vignette (screen curvature) ─────────────────────────────────── */
+/* 150% stop extends the gradient beyond bounds for a subtler edge fade */
 [data-theme="fight-club"] body::after {
   content: "";
   position: fixed;
-  top: 0;
-  left: 0;
-  width: 100%;
-  height: 100%;
+  inset: 0;
   z-index: 9998;
   pointer-events: none;
   background: radial-gradient(
