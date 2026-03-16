@@ -1,4 +1,4 @@
-# ADR 0001: PDF Normalization via pikepdf (v1.4.0-pikepdf-10.3.0-linearized)
+# ADR 0008: PDF Normalization via pikepdf (v1.4.0-pikepdf-10.3.0-linearized)
 
 ## Context
 - Olympus needs byte-stable PDF canonicalization.

@@ -129,7 +129,7 @@ stage-to-module mapping and dependency flow.
 - **API/UI framework:** FastAPI + Starlette + Uvicorn (API), Next.js 15 + React 19 (Dashboard)
 - **Cryptography:** BLAKE3 hashing, Ed25519 signatures (PyNaCl), RFC3161
   timestamping support, Poseidon hashing (BN128) for ZK circuits
-- **Zero-knowledge proofs:** Circom circuits, Groth16 backend (primary), Halo2 backend (alternative for recursive proofs)
+- **Zero-knowledge proofs:** Circom circuits, Groth16 backend (production), Halo2 backend (deferred to Phase 1+; not yet implemented)
 - **Data/storage:** PostgreSQL integration via psycopg/psycopg-pool
 - **Proof tooling:** Merkle and redaction primitives in `protocol/`, sparse Merkle trees (`protocol/ssmf.py`), epochs and checkpoints, attestations and anchors
 - **Quality tooling:** Ruff, mypy, Bandit, pytest, Hypothesis
