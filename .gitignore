@@ -1,3 +1,6 @@
+# Environment variables (never commit secrets)
+.env
+
 # Python
 __pycache__/
 *.py[cod]
@@ -67,3 +70,6 @@ verifiers/rust/target/
 
 # Benchmark results
 benchmarks/results/
+
+# Local environment variables (copy .env.example to .env)
+.env
