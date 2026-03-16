@@ -81,7 +81,10 @@ def test_persist_tree_nodes_flushes_in_chunks() -> None:
     storage._persist_tree_nodes(cursor, "shard-batch", tree)
 
     flushed_rows = sum(len(rows) for _, rows in cursor.executemany_calls)
-    assert len(cursor.executemany_calls) > 1
+    expected_batches = (len(tree.nodes) + storage.DEFAULT_FLUSH_BATCH_SIZE - 1) // (
+        storage.DEFAULT_FLUSH_BATCH_SIZE
+    )
+    assert len(cursor.executemany_calls) == expected_batches
     assert flushed_rows == len(tree.nodes)
     assert len(cached_nodes) == len(tree.nodes)
 

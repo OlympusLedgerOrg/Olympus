@@ -221,7 +221,16 @@ class StorageLayer:
 
     @staticmethod
     def _iter_batches(items: Iterable[Any], batch_size: int) -> Iterator[list[Any]]:
-        """Yield items in fixed-size batches."""
+        """
+        Yield items in fixed-size batches.
+
+        Args:
+            items: Source iterable to batch lazily.
+            batch_size: Maximum number of items per yielded batch.
+
+        Yields:
+            Lists containing up to ``batch_size`` items from ``items``.
+        """
         if batch_size <= 0:
             raise ValueError("batch_size must be a positive integer")
 
@@ -239,7 +248,16 @@ class StorageLayer:
     def _iter_ingestion_proof_rows(
         batch_id: str, records: list[dict[str, Any]]
     ) -> Iterator[tuple[Any, ...]]:
-        """Yield ingestion proof rows ready for append-only persistence."""
+        """
+        Yield ingestion proof rows ready for append-only persistence.
+
+        Args:
+            batch_id: Durable identifier shared by the ingestion batch.
+            records: Ingestion proof metadata dictionaries to serialize.
+
+        Yields:
+            Tuples matching the ``ingestion_proofs`` insert column order.
+        """
         for idx, record in enumerate(records):
             yield (
                 record["proof_id"],
@@ -261,7 +279,17 @@ class StorageLayer:
     def _iter_tree_node_rows(
         self, shard_id: str, tree: SparseMerkleTree, ts: datetime
     ) -> Iterator[tuple[str, int, bytes, bytes, datetime]]:
-        """Yield sparse Merkle node rows ready for append-only persistence."""
+        """
+        Yield sparse Merkle node rows ready for append-only persistence.
+
+        Args:
+            shard_id: Identifier for the shard being persisted.
+            tree: Sparse Merkle tree whose internal nodes should be written.
+            ts: Timestamp applied to each emitted row in the flush.
+
+        Yields:
+            Tuples matching the ``smt_nodes`` insert column order.
+        """
         for path, hash_value in tree.nodes.items():
             path_bytes = self._encode_path(path)
             yield (shard_id, len(path), path_bytes, hash_value, ts)

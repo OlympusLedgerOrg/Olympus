@@ -74,6 +74,12 @@ def test_ssmf_existence_proof():
 
 def test_ssmf_existence_proof_size_is_constant_across_tree_sizes():
     """Existence proofs should stay fixed-width regardless of tree cardinality."""
+    expected_proof_size = (
+        32  # key
+        + 32  # value_hash
+        + (256 * 32)  # fixed sibling path for 256-bit SMT
+        + 32  # root_hash
+    )
     proof_sizes: list[int] = []
 
     for tree_size in (1, 4, 64):
@@ -81,7 +87,7 @@ def test_ssmf_existence_proof_size_is_constant_across_tree_sizes():
         keys = [record_key("document", f"doc-{idx}", 1) for idx in range(tree_size)]
         values = [hash_bytes(f"value-{idx}".encode()) for idx in range(tree_size)]
 
-        for key, value in zip(keys, values, strict=False):
+        for key, value in zip(keys, values, strict=True):
             tree.update(key, value)
 
         proof = tree.prove_existence(keys[-1])
@@ -92,7 +98,7 @@ def test_ssmf_existence_proof_size_is_constant_across_tree_sizes():
             + len(proof.root_hash)
         )
 
-    assert proof_sizes == [8288, 8288, 8288]
+    assert proof_sizes == [expected_proof_size, expected_proof_size, expected_proof_size]
 
 
 def test_ssmf_existence_proof_for_nonexistent_key():
