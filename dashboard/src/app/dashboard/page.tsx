@@ -52,12 +52,12 @@ export default function DashboardPage() {
     {
       label: "Egg count",
       value: formatNumber(eggVault.totalEggs),
-      detail: "Bronze through mythic vault holdings",
+      detail: "Civic plus music-themed soulbound discoveries",
     },
     {
       label: "Pending rewards",
       value: formatCurrency(eggVault.pendingRewards),
-      detail: "Mock claimable value at current location",
+      detail: "Rarity × difficulty burn value at current location",
     },
     {
       label: "Active theme",

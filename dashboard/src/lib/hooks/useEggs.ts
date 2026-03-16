@@ -2,31 +2,85 @@
 
 import { useMemo, useState } from "react";
 import {
-  mockEggTiers,
+  buildTierSummaries,
+  calculateCollectionValue,
+  calculateEggPayoutValue,
+  mockEggCollection,
+  mockEggLeaderboard,
   mockEggVaultMeta,
   mockPayoutPreview,
 } from "@/lib/mocks/eggs";
 
 export function useEggs() {
-  const [pendingRewards, setPendingRewards] = useState(mockEggVaultMeta.pendingRewards);
+  const [claimedAt, setClaimedAt] = useState<string | null>(null);
   const [lastClaimAmount, setLastClaimAmount] = useState<number | null>(null);
+  const [lastBurnCount, setLastBurnCount] = useState(0);
   const [claimAnnouncement, setClaimAnnouncement] = useState("");
 
-  const totalEggs = useMemo(
-    () => mockEggTiers.reduce((sum, tier) => sum + tier.count, 0),
-    [],
+  const eggs = useMemo(
+    () =>
+      mockEggCollection.map((egg) =>
+        claimedAt
+          ? {
+              ...egg,
+              claimedAt,
+              burnedInTx: `0xburn${egg.tokenId.replace(/[^0-9]/g, "").padStart(4, "0")}`,
+            }
+          : egg,
+      ),
+    [claimedAt],
   );
 
-  const totalValue = useMemo(
-    () => mockEggTiers.reduce((sum, tier) => sum + tier.count * tier.unitValue, 0),
-    [],
+  const eligibleEggs = useMemo(() => eggs.filter((egg) => !egg.claimedAt), [eggs]);
+
+  const totalCollectionValue = useMemo(
+    () => calculateCollectionValue(eggs, mockEggVaultMeta.activeLocation),
+    [eggs],
+  );
+
+  const claimableCollectionValue = useMemo(
+    () => calculateCollectionValue(eligibleEggs, mockEggVaultMeta.activeLocation),
+    [eligibleEggs],
+  );
+
+  const totalEggs = useMemo(() => eggs.length, [eggs]);
+
+  const totalValue = totalCollectionValue.total;
+
+  const tiers = useMemo(
+    () => buildTierSummaries(eggs, mockEggVaultMeta.activeLocation),
+    [eggs],
   );
 
   const nextUnlock = useMemo(
+    () => tiers.find((tier) => tier.progressCurrent < tier.progressTarget) ?? tiers[tiers.length - 1],
+    [tiers],
+  );
+
+  const pendingRewards = claimableCollectionValue.total;
+  const canPayout = claimableCollectionValue.canPayout;
+
+  const featuredEggs = useMemo(
     () =>
-      mockEggTiers.find((tier) => tier.progressCurrent < tier.progressTarget) ??
-      mockEggTiers[mockEggTiers.length - 1],
-    [],
+      eggs
+        .map((egg) => ({
+          ...egg,
+          estimatedPayout: calculateEggPayoutValue(egg, mockEggVaultMeta.activeLocation),
+        }))
+        .sort((left, right) => right.estimatedPayout - left.estimatedPayout)
+        .slice(0, 4),
+    [eggs],
+  );
+
+  const rarityBreakdown = useMemo(
+    () =>
+      (Object.entries(totalCollectionValue.breakdown.byRarity) as Array<[string, number]>)
+        .map(([rarity, value]) => ({
+          rarity,
+          value,
+        }))
+        .sort((left, right) => right.value - left.value),
+    [totalCollectionValue],
   );
 
   const payoutPreview = useMemo(
@@ -39,25 +93,33 @@ export function useEggs() {
   );
 
   const claimRewards = () => {
-    if (pendingRewards <= 0) {
+    if (!canPayout || claimedAt) {
       return;
     }
 
-    // Mock-only claim flow: reflect a successful payout locally without backend I/O.
     setLastClaimAmount(pendingRewards);
-    setClaimAnnouncement(`Rewards claimed for $${pendingRewards.toFixed(2)}.`);
-    setPendingRewards(0);
+    setLastBurnCount(eligibleEggs.length);
+    setClaimedAt(new Date().toISOString());
+    setClaimAnnouncement(
+      `Burned ${eligibleEggs.length} soulbound eggs for $${pendingRewards.toFixed(2)}.`,
+    );
   };
 
   return {
     activeLocation: mockEggVaultMeta.activeLocation,
+    canPayout,
     claimRewards,
     claimAnnouncement,
+    featuredEggs,
     lastClaimAmount,
+    lastBurnCount,
+    leaderboard: mockEggLeaderboard,
+    minimumPayout: mockEggVaultMeta.minimumPayout,
     nextUnlock,
     payoutPreview,
     pendingRewards,
-    tiers: mockEggTiers,
+    rarityBreakdown,
+    tiers,
     totalEggs,
     totalValue,
   };
