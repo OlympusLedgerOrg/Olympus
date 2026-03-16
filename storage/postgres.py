@@ -308,6 +308,7 @@ class StorageLayer:
 
                 for migration_file in migration_files:
                     if migration_file in applied:
+                        logger.debug("Skipping already-applied migration: %s", migration_file)
                         continue
                     with open(os.path.join(migrations_dir, migration_file)) as f:
                         cur.execute(f.read())
