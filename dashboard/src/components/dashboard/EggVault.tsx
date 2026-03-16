@@ -200,7 +200,7 @@ export function EggVault({ vault }: { vault: UseEggsResult }) {
             Featured discoveries
           </p>
           <p className="text-xs" style={{ color: "var(--color-text-muted)" }}>
-            Legally generic, culturally obvious
+            Generic music cues with fan-recognizable patterns
           </p>
         </div>
         <div className="mt-3 space-y-3">
@@ -326,7 +326,7 @@ export function EggVault({ vault }: { vault: UseEggsResult }) {
               <div className="flex items-center gap-2">
                 <span
                   className="h-2.5 w-2.5 rounded-full"
-                  style={{ background: rarityColors[item.rarity as keyof typeof rarityColors] }}
+                  style={{ background: rarityColors[item.rarity] }}
                 />
                 <span className="text-xs uppercase tracking-[0.2em]">{item.rarity}</span>
               </div>

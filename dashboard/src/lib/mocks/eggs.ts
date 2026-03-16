@@ -44,7 +44,7 @@ export interface MusicEggDefinition {
   description: string;
   hint: string;
   discoveryMethod: string;
-  rewardMultiplier: number;
+  payoutMultiplier: number;
   secretNumber: number;
   vibe: string;
   aesthetic: EggAesthetic;
@@ -131,16 +131,9 @@ const DIFFICULTY_MULTIPLIERS: Record<DiscoveryDifficulty, number> = {
   5: 5,
 };
 
-const AESTHETIC_MULTIPLIERS: Record<EggAesthetic, number> = {
-  "first-light": 1.13,
-  lucky: 1.13,
-  manuscript: 1.13,
-  polaroid: 1.13,
-  romance: 1.13,
-  serpent: 1.13,
-  twilight: 1.13,
+const DEFAULT_AESTHETIC_MULTIPLIER = 1.13;
+const AESTHETIC_MULTIPLIER_EXCEPTIONS: Partial<Record<EggAesthetic, number>> = {
   vault: 2.13,
-  woodland: 1.13,
 };
 
 const TIER_META: Record<
@@ -190,12 +183,26 @@ const TIER_META: Record<
   },
 };
 
-const PAYOUT_CAPS: Record<string, number> = {
-  "ZIP3 · 021": 65000,
-  "ZIP3 · 606": 65000,
-};
+const DEFAULT_PAYOUT_CAP = 65000;
 
-export const MUSIC_EGGS: MusicEggDefinition[] = [
+function calculateEggPayoutMultiplier(profile: {
+  rarity: EggRarity;
+  discoveryDifficulty: DiscoveryDifficulty;
+  aesthetic?: EggAesthetic;
+}): number {
+  let multiplier =
+    RARITY_MULTIPLIERS[profile.rarity] *
+    DIFFICULTY_MULTIPLIERS[profile.discoveryDifficulty];
+
+  if (profile.aesthetic) {
+    multiplier *=
+      AESTHETIC_MULTIPLIER_EXCEPTIONS[profile.aesthetic] ?? DEFAULT_AESTHETIC_MULTIPLIER;
+  }
+
+  return multiplier;
+}
+
+const musicEggDefinitions: MusicEggDefinition[] = [
   {
     id: "lucky-13",
     name: "The Lucky Number",
@@ -205,7 +212,7 @@ export const MUSIC_EGGS: MusicEggDefinition[] = [
     description: "Found at the perfect moment.",
     hint: "Some numbers are luckier than others.",
     discoveryMethod: "Click during the perfect moment of any minute.",
-    rewardMultiplier: 5,
+    payoutMultiplier: 5,
     secretNumber: 13,
     vibe: "A feeling of youthful confusion and defiance.",
     aesthetic: "lucky",
@@ -221,7 +228,7 @@ export const MUSIC_EGGS: MusicEggDefinition[] = [
     description: "Found by true believers.",
     hint: "The year that changed everything.",
     discoveryMethod: "Show your dedication 1989 times.",
-    rewardMultiplier: 8,
+    payoutMultiplier: 8,
     secretNumber: 1989,
     vibe: "Youthful freedom in a vibrant city.",
     aesthetic: "polaroid",
@@ -237,7 +244,7 @@ export const MUSIC_EGGS: MusicEggDefinition[] = [
     description: "Rise from the ashes.",
     hint: "Leave the old version behind.",
     discoveryMethod: "Score 13 in the hidden snake game.",
-    rewardMultiplier: 7.5,
+    payoutMultiplier: 7.5,
     secretNumber: 13,
     vibe: "A declaration that past versions of oneself are gone.",
     aesthetic: "serpent",
@@ -253,7 +260,7 @@ export const MUSIC_EGGS: MusicEggDefinition[] = [
     description: "Something old, something new.",
     hint: "Comfort can hide in unexpected places.",
     discoveryMethod: "Find the 1-in-a-million brown glyph.",
-    rewardMultiplier: 13,
+    payoutMultiplier: 13,
     secretNumber: 1,
     vibe: "Comfort found in unexpected places.",
     aesthetic: "woodland",
@@ -269,7 +276,7 @@ export const MUSIC_EGGS: MusicEggDefinition[] = [
     description: "What remains when everything else is gone.",
     hint: "The only thing left is the record.",
     discoveryMethod: 'Type "the manuscript" in the document viewer.',
-    rewardMultiplier: 6,
+    payoutMultiplier: 6,
     secretNumber: 13,
     vibe: "Quiet closure after a long chapter.",
     aesthetic: "manuscript",
@@ -285,7 +292,7 @@ export const MUSIC_EGGS: MusicEggDefinition[] = [
     description: "It only opens when you least expect it.",
     hint: "The witching hour has its own rules.",
     discoveryMethod: "Click the mysterious door at 3 AM or 3 PM.",
-    rewardMultiplier: 5.5,
+    payoutMultiplier: 5.5,
     secretNumber: 3,
     vibe: "A quiet detour into a colder season.",
     aesthetic: "twilight",
@@ -301,7 +308,7 @@ export const MUSIC_EGGS: MusicEggDefinition[] = [
     description: "Some people have all the luck.",
     hint: "The thirteenth time changes everything.",
     discoveryMethod: "Visit the site 13 times.",
-    rewardMultiplier: 4,
+    payoutMultiplier: 4,
     secretNumber: 13,
     vibe: "A red-hot streak of sudden fortune.",
     aesthetic: "lucky",
@@ -317,7 +324,7 @@ export const MUSIC_EGGS: MusicEggDefinition[] = [
     description: "Say it now or lose the moment.",
     hint: "A sudden interruption changes the room.",
     discoveryMethod: "Hover over the title 13 times.",
-    rewardMultiplier: 5,
+    payoutMultiplier: 5,
     secretNumber: 13,
     vibe: "A bold decision made without permission.",
     aesthetic: "manuscript",
@@ -333,7 +340,7 @@ export const MUSIC_EGGS: MusicEggDefinition[] = [
     description: "The late-night version has extra secrets.",
     hint: "Look for 13 hidden tracks after midnight.",
     discoveryMethod: "Find all 13 hidden tracks at the witching hour.",
-    rewardMultiplier: 8,
+    payoutMultiplier: 8,
     secretNumber: 3,
     vibe: "Restless thoughts in a city that never sleeps.",
     aesthetic: "twilight",
@@ -349,7 +356,7 @@ export const MUSIC_EGGS: MusicEggDefinition[] = [
     description: "A date that turns into lore.",
     hint: "The 89th day is the one to watch.",
     discoveryMethod: "Visit on the 89th day of the year.",
-    rewardMultiplier: 7.5,
+    payoutMultiplier: 7.5,
     secretNumber: 89,
     vibe: "A flashbulb memory of reinvention.",
     aesthetic: "polaroid",
@@ -365,7 +372,7 @@ export const MUSIC_EGGS: MusicEggDefinition[] = [
     description: "The first of many.",
     hint: "Be among the first and stay curious.",
     discoveryMethod: "Be among the first 1000 users.",
-    rewardMultiplier: 3.5,
+    payoutMultiplier: 3.5,
     secretNumber: 2006,
     vibe: "Small-town optimism at the start of something bigger.",
     aesthetic: "first-light",
@@ -381,7 +388,7 @@ export const MUSIC_EGGS: MusicEggDefinition[] = [
     description: "Love in the time of civic engagement.",
     hint: "Share the proof with someone you trust.",
     discoveryMethod: "Share a verified vote with someone.",
-    rewardMultiplier: 3.5,
+    payoutMultiplier: 3.5,
     secretNumber: 14,
     vibe: "A bright, open-hearted celebration.",
     aesthetic: "romance",
@@ -397,7 +404,7 @@ export const MUSIC_EGGS: MusicEggDefinition[] = [
     description: "Things kept hidden, finally revealed.",
     hint: "Look in the most unexpected place.",
     discoveryMethod: "Find the secret vault in the codebase.",
-    rewardMultiplier: 13,
+    payoutMultiplier: 13,
     secretNumber: 13,
     vibe: "A lost recording uncovered after years in storage.",
     aesthetic: "vault",
@@ -406,19 +413,21 @@ export const MUSIC_EGGS: MusicEggDefinition[] = [
   },
 ];
 
-export function calculateEggPayoutValue(egg: EggSBT, userLocation: string): number {
-  let value = TIER_VALUES[egg.tier];
-  value *= RARITY_MULTIPLIERS[egg.rarity];
-  value *= DIFFICULTY_MULTIPLIERS[egg.discoveryDifficulty];
+export const MUSIC_EGGS: MusicEggDefinition[] = musicEggDefinitions.map((egg) => ({
+  ...egg,
+  payoutMultiplier: calculateEggPayoutMultiplier({
+    rarity: egg.rarity,
+    discoveryDifficulty: egg.difficulty,
+    aesthetic: egg.aesthetic,
+  }),
+}));
 
-  if (egg.aesthetic) {
-    value *= AESTHETIC_MULTIPLIERS[egg.aesthetic];
-  }
-
-  return Math.min(value, PAYOUT_CAPS[userLocation] ?? 65000);
+export function calculateEggPayoutValue(egg: EggSBT): number {
+  const value = TIER_VALUES[egg.tier] * egg.payoutMultiplier;
+  return Math.min(value, DEFAULT_PAYOUT_CAP);
 }
 
-export function calculateCollectionValue(eggs: EggSBT[], userLocation: string): CollectionValue {
+export function calculateCollectionValue(eggs: EggSBT[]): CollectionValue {
   const breakdown: CollectionValueBreakdown = {
     byTier: {},
     byRarity: {},
@@ -426,7 +435,7 @@ export function calculateCollectionValue(eggs: EggSBT[], userLocation: string): 
   };
 
   const total = eggs.reduce((sum, egg) => {
-    const value = calculateEggPayoutValue(egg, userLocation);
+    const value = calculateEggPayoutValue(egg);
 
     breakdown.byTier[egg.tier] = (breakdown.byTier[egg.tier] ?? 0) + value;
     breakdown.byRarity[egg.rarity] = (breakdown.byRarity[egg.rarity] ?? 0) + value;
@@ -443,11 +452,11 @@ export function calculateCollectionValue(eggs: EggSBT[], userLocation: string): 
   };
 }
 
-export function buildTierSummaries(eggs: EggSBT[], userLocation: string): EggTierSummary[] {
+export function buildTierSummaries(eggs: EggSBT[]): EggTierSummary[] {
   return (Object.keys(TIER_META) as EggTier[]).map((tier) => {
     const tierEggs = eggs.filter((egg) => egg.tier === tier);
-    const tierValue = tierEggs.reduce(
-      (sum, egg) => sum + calculateEggPayoutValue(egg, userLocation),
+      const tierValue = tierEggs.reduce(
+      (sum, egg) => sum + calculateEggPayoutValue(egg),
       0,
     );
     const meta = TIER_META[tier];
@@ -473,7 +482,7 @@ export function buildTierSummaries(eggs: EggSBT[], userLocation: string): EggTie
 
 const now = Date.now();
 
-export const mockEggCollection: EggSBT[] = [
+const mockEggCollectionDefinitions: EggSBT[] = [
   {
     tokenId: "egg-sbt-001",
     eggId: "ballot-witness",
@@ -628,6 +637,15 @@ export const mockEggCollection: EggSBT[] = [
   },
 ];
 
+export const mockEggCollection: EggSBT[] = mockEggCollectionDefinitions.map((egg) => ({
+  ...egg,
+  payoutMultiplier: calculateEggPayoutMultiplier({
+    rarity: egg.rarity,
+    discoveryDifficulty: egg.discoveryDifficulty,
+    aesthetic: egg.aesthetic,
+  }),
+}));
+
 export const mockEggVaultMeta = {
   activeLocation: "ZIP3 · 021",
   minimumPayout: 100,
@@ -635,13 +653,9 @@ export const mockEggVaultMeta = {
 
 export const mockEggTiers = buildTierSummaries(
   mockEggCollection,
-  mockEggVaultMeta.activeLocation,
 );
 
-export const mockCollectionValue = calculateCollectionValue(
-  mockEggCollection,
-  mockEggVaultMeta.activeLocation,
-);
+export const mockCollectionValue = calculateCollectionValue(mockEggCollection);
 
 export const mockPayoutPreview: LocationPayoutPreview[] = [
   {

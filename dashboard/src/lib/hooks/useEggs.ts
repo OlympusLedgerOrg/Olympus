@@ -9,7 +9,18 @@ import {
   mockEggLeaderboard,
   mockEggVaultMeta,
   mockPayoutPreview,
+  type EggRarity,
 } from "@/lib/mocks/eggs";
+
+function createMockBurnTxHash(tokenId: string): string {
+  const tokenHex = tokenId
+    .split("")
+    .map((character) => character.charCodeAt(0).toString(16).padStart(2, "0"))
+    .join("")
+    .slice(0, 64);
+
+  return `0x${tokenHex.padEnd(64, "0")}`;
+}
 
 export function useEggs() {
   const [claimedAt, setClaimedAt] = useState<string | null>(null);
@@ -24,7 +35,7 @@ export function useEggs() {
           ? {
               ...egg,
               claimedAt,
-              burnedInTx: `0xburn${egg.tokenId.replace(/[^0-9]/g, "").padStart(4, "0")}`,
+              burnedInTx: createMockBurnTxHash(egg.tokenId),
             }
           : egg,
       ),
@@ -34,12 +45,12 @@ export function useEggs() {
   const eligibleEggs = useMemo(() => eggs.filter((egg) => !egg.claimedAt), [eggs]);
 
   const totalCollectionValue = useMemo(
-    () => calculateCollectionValue(eggs, mockEggVaultMeta.activeLocation),
+    () => calculateCollectionValue(eggs),
     [eggs],
   );
 
   const claimableCollectionValue = useMemo(
-    () => calculateCollectionValue(eligibleEggs, mockEggVaultMeta.activeLocation),
+    () => calculateCollectionValue(eligibleEggs),
     [eligibleEggs],
   );
 
@@ -48,7 +59,7 @@ export function useEggs() {
   const totalValue = totalCollectionValue.total;
 
   const tiers = useMemo(
-    () => buildTierSummaries(eggs, mockEggVaultMeta.activeLocation),
+    () => buildTierSummaries(eggs),
     [eggs],
   );
 
@@ -65,7 +76,7 @@ export function useEggs() {
       eggs
         .map((egg) => ({
           ...egg,
-          estimatedPayout: calculateEggPayoutValue(egg, mockEggVaultMeta.activeLocation),
+          estimatedPayout: calculateEggPayoutValue(egg),
         }))
         .sort((left, right) => right.estimatedPayout - left.estimatedPayout)
         .slice(0, 4),
@@ -74,7 +85,7 @@ export function useEggs() {
 
   const rarityBreakdown = useMemo(
     () =>
-      (Object.entries(totalCollectionValue.breakdown.byRarity) as Array<[string, number]>)
+      (Object.entries(totalCollectionValue.breakdown.byRarity) as Array<[EggRarity, number]>)
         .map(([rarity, value]) => ({
           rarity,
           value,
@@ -93,7 +104,15 @@ export function useEggs() {
   );
 
   const claimRewards = () => {
-    if (!canPayout || claimedAt) {
+    if (claimedAt) {
+      setClaimAnnouncement("Soulbound payout already completed for this mock collection.");
+      return;
+    }
+
+    if (!canPayout) {
+      setClaimAnnouncement(
+        `You need at least $${mockEggVaultMeta.minimumPayout.toFixed(2)} to burn for payout.`,
+      );
       return;
     }
 
