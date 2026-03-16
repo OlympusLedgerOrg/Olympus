@@ -1,53 +1,69 @@
-/* Fight Club theme – Matrix / terminal aesthetic */
+/* Fight Club theme – Gold Standard Matrix / terminal aesthetic */
 [data-theme="fight-club"] {
-  --color-primary: #00ff41;
-  --color-primary-dim: #00cc33;
-  --color-background: #0c0c0c;
-  --color-surface: #1a1a1a;
-  --color-surface-muted: #111111;
+  /* ── The Matrix has you... ──────────────────────────────────────────── */
+  --color-primary: #00ff41;          /* matrix-green */
+  --color-primary-dim: #00cc33;      /* matrix-green-dim */
+  --color-background: #0c0c0c;      /* matrix-black */
+  --color-surface: #1a1a1a;         /* matrix-gray */
+  --color-surface-muted: #2a2a2a;   /* matrix-light-gray */
   --color-text: #00ff41;
   --color-text-muted: #00cc33;
-  --color-border: #003300;
+  --color-border: #003300;           /* matrix-green-dark */
   --color-accent: #00ff41;
-  --color-danger: #ff0040;
+  --color-danger: #ff0040;           /* crimson */
   --color-danger-bg: #1a0000;
+  --color-warning: #ffb000;          /* amber */
   --color-ok: #00ff41;
-  --font-body: var(--font-geist-sans), "Share Tech Mono", "Inter", sans-serif;
-  --font-mono: var(--font-geist-mono), "Share Tech Mono", "Courier New", monospace;
+
+  /* ── Terminal fonts that scream "I AM IN THE SYSTEM" ────────────────── */
+  --font-body: "Share Tech Mono", var(--font-geist-mono), "Inter", monospace;
+  --font-mono: "Share Tech Mono", var(--font-geist-mono), "Courier New", monospace;
   --radius: 0px;
 }
 
-/* ── Scanlines overlay ──────────────────────────────────────────────── */
+/* ── Terminal text – all caps for that terminal feel ──────────────────── */
+[data-theme="fight-club"] .terminal-text {
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+/* ── Scanlines overlay (CRT effect) ──────────────────────────────────── */
 [data-theme="fight-club"] body::before {
   content: "";
   position: fixed;
-  inset: 0;
-  z-index: 9998;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  z-index: 9999;
   pointer-events: none;
   background: repeating-linear-gradient(
     0deg,
-    rgba(0, 0, 0, 0.12) 0px,
-    rgba(0, 0, 0, 0.12) 1px,
+    rgba(0, 0, 0, 0.15) 0px,
+    rgba(0, 0, 0, 0.15) 1px,
     transparent 1px,
     transparent 3px
   );
 }
 
-/* ── CRT vignette ───────────────────────────────────────────────────── */
+/* ── CRT vignette (screen curvature) ─────────────────────────────────── */
 [data-theme="fight-club"] body::after {
   content: "";
   position: fixed;
-  inset: 0;
-  z-index: 9997;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  z-index: 9998;
   pointer-events: none;
   background: radial-gradient(
     ellipse at center,
     transparent 60%,
-    rgba(0, 0, 0, 0.45) 100%
+    rgba(0, 0, 0, 0.6) 150%
   );
 }
 
-/* ── Text flicker animation ─────────────────────────────────────────── */
+/* ── Phosphor flicker animation (burn-in effect) ─────────────────────── */
 @keyframes flicker {
   0%, 100% { opacity: 1; }
   92% { opacity: 1; }
@@ -61,4 +77,77 @@
 [data-theme="fight-club"] h2 {
   animation: flicker 4s infinite;
   font-family: var(--font-mono);
+}
+
+[data-theme="fight-club"] .title-bar,
+[data-theme="fight-club"] .status-bar {
+  animation: flicker 4s infinite;
+}
+
+/* ── Buttons that feel like keyboard keys ─────────────────────────────── */
+[data-theme="fight-club"] button,
+[data-theme="fight-club"] .btn {
+  background: var(--color-background);
+  border: 1px solid var(--color-primary);
+  color: var(--color-primary);
+  font-family: var(--font-mono);
+  text-transform: uppercase;
+  padding: 8px 16px;
+  position: relative;
+  box-shadow: 0 0 5px rgba(0, 255, 65, 0.3);
+  transition: all 0.1s ease;
+  cursor: pointer;
+}
+
+[data-theme="fight-club"] button:hover,
+[data-theme="fight-club"] .btn:hover {
+  background: var(--color-primary);
+  color: var(--color-background);
+  box-shadow: 0 0 15px var(--color-primary);
+  text-shadow: 0 0 5px var(--color-background);
+}
+
+[data-theme="fight-club"] button:active,
+[data-theme="fight-club"] .btn:active {
+  transform: translateY(2px);
+  box-shadow: 0 0 20px var(--color-primary);
+}
+
+/* ── Inputs with terminal styling ─────────────────────────────────────── */
+[data-theme="fight-club"] input,
+[data-theme="fight-club"] textarea,
+[data-theme="fight-club"] select {
+  background: var(--color-background);
+  color: var(--color-primary);
+  border: 1px solid var(--color-border);
+  font-family: var(--font-mono);
+}
+
+[data-theme="fight-club"] input:focus,
+[data-theme="fight-club"] textarea:focus,
+[data-theme="fight-club"] select:focus {
+  outline: none;
+  border-color: var(--color-primary);
+  box-shadow: 0 0 5px rgba(0, 255, 65, 0.3);
+}
+
+/* ── Terminal prompt styling ──────────────────────────────────────────── */
+[data-theme="fight-club"] .prompt::before {
+  content: "$ ";
+  color: var(--color-primary);
+}
+
+/* ── Panel glow on hover ──────────────────────────────────────────────── */
+[data-theme="fight-club"] .panel:hover {
+  box-shadow: 0 0 8px rgba(0, 255, 65, 0.15);
+}
+
+/* ── Links ────────────────────────────────────────────────────────────── */
+[data-theme="fight-club"] a {
+  color: var(--color-primary);
+  text-decoration: none;
+}
+
+[data-theme="fight-club"] a:hover {
+  text-shadow: 0 0 8px rgba(0, 255, 65, 0.5);
 }

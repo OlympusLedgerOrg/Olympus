@@ -41,11 +41,11 @@
             }
         }
 
-        /* ── Fight Club / Matrix theme ─────────────────────────────────────── */
+        /* ── Fight Club / Gold Standard Matrix theme ────────────────────────── */
         [data-theme="fight-club"] {
-            --bg: #0a0a0a;
-            --surface: #111111;
-            --surface-muted: #1a1a1a;
+            --bg: #0c0c0c;
+            --surface: #1a1a1a;
+            --surface-muted: #2a2a2a;
             --text: #00ff41;
             --muted-text: #00cc33;
             --border: #003300;
@@ -55,8 +55,9 @@
             --danger-text: #ff4466;
             --ok: #00ff41;
             --bad: #ff0040;
-            --font-body: 'Courier New', Courier, monospace;
-            --font-mono: 'Courier New', Courier, monospace;
+            --warning: #ffb000;
+            --font-body: 'Share Tech Mono', 'Courier New', monospace;
+            --font-mono: 'Share Tech Mono', 'Courier New', monospace;
             --radius: 0px;
         }
 
@@ -134,19 +135,53 @@
         textarea { min-height: 4.5rem; min-width: 20rem; }
         button { cursor: pointer; }
 
-        /* ── Fight Club specific styles ─────────────────────────────────────── */
+        /* ── Fight Club specific styles (Gold Standard) ──────────────────────── */
         [data-theme="fight-club"] body { font-family: var(--font-mono); }
         [data-theme="fight-club"] .panel { border-style: solid; border-width: 1px; }
+        [data-theme="fight-club"] .terminal-text { text-transform: uppercase; letter-spacing: 0.05em; }
         [data-theme="fight-club"] input,
-        [data-theme="fight-club"] textarea,
-        [data-theme="fight-club"] button {
-            background: var(--surface); color: var(--text); border: 1px solid var(--border);
+        [data-theme="fight-club"] textarea {
+            background: var(--bg); color: var(--text); border: 1px solid var(--border);
             font-family: var(--font-mono);
         }
-        [data-theme="fight-club"] button:hover { background: var(--accent); color: var(--bg); }
+        [data-theme="fight-club"] input:focus,
+        [data-theme="fight-club"] textarea:focus {
+            outline: none; border-color: var(--accent);
+            box-shadow: 0 0 5px rgba(0, 255, 65, 0.3);
+        }
+        [data-theme="fight-club"] button {
+            background: var(--bg); color: var(--accent); border: 1px solid var(--accent);
+            font-family: var(--font-mono); text-transform: uppercase;
+            padding: 8px 16px; box-shadow: 0 0 5px rgba(0, 255, 65, 0.3);
+            transition: all 0.1s ease; cursor: pointer;
+        }
+        [data-theme="fight-club"] button:hover {
+            background: var(--accent); color: var(--bg);
+            box-shadow: 0 0 15px var(--accent);
+            text-shadow: 0 0 5px var(--bg);
+        }
+        [data-theme="fight-club"] button:active {
+            transform: translateY(2px);
+            box-shadow: 0 0 20px var(--accent);
+        }
         [data-theme="fight-club"] pre { font-family: var(--font-mono); color: var(--text); }
         [data-theme="fight-club"] code { color: var(--accent); }
         [data-theme="fight-club"] td, [data-theme="fight-club"] th { font-family: var(--font-mono); font-size: .85rem; }
+        [data-theme="fight-club"] a { color: var(--accent); text-decoration: none; }
+        [data-theme="fight-club"] a:hover { text-shadow: 0 0 8px rgba(0, 255, 65, 0.5); }
+        [data-theme="fight-club"] .panel:hover { box-shadow: 0 0 8px rgba(0, 255, 65, 0.15); }
+
+        /* ── Fight Club CRT effects ───────────────────────────────────────── */
+        @keyframes fc-flicker {
+            0%, 100% { opacity: 1; }
+            92% { opacity: 1; }
+            93% { opacity: 0.8; }
+            94% { opacity: 1; }
+            96% { opacity: 0.9; }
+            97% { opacity: 1; }
+        }
+        [data-theme="fight-club"] h1,
+        [data-theme="fight-club"] h2 { animation: fc-flicker 4s infinite; }
 
         /* ── Accessibility specific styles ─────────────────────────────────── */
         [data-theme="accessibility"] body { font-size: 1.15rem; line-height: 1.8; }
