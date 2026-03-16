@@ -62,6 +62,10 @@ def _get_storage() -> "StorageLayer":
     """
     Get the storage layer, initializing lazily on first use.
 
+    Each call retries initialization if a previous attempt failed, so that
+    transient failures (e.g. Postgres not yet ready) do not permanently
+    block the application.
+
     Returns:
         StorageLayer instance
 
@@ -73,16 +77,11 @@ def _get_storage() -> "StorageLayer":
     if _storage is not None:
         return _storage
 
-    if _db_error is not None:
-        raise HTTPException(
-            status_code=503,
-            detail=f"Database not available: {_db_error}",
-        )
+    # Reset previous error so we retry the connection
+    _db_error = None
 
     # Try to initialize the storage layer
     try:
-        from psycopg import connect
-
         from storage.postgres import StorageLayer
 
         # Get database connection string from environment
@@ -106,8 +105,8 @@ def _get_storage() -> "StorageLayer":
         storage.init_schema()
         logger.info("Database schema initialized successfully")
 
-        # Quick connectivity check
-        with connect(DATABASE_URL) as conn, conn.cursor() as cur:
+        # Quick connectivity check (uses the pool, not a raw connection)
+        with storage._get_connection() as conn, conn.cursor() as cur:
             cur.execute("SELECT 1")
             result = cur.fetchone()
             if result and result[0] == 1:
@@ -673,18 +672,14 @@ async def health() -> dict[str, Any]:
         "connected" if _storage is not None else ("error" if _db_error else "not_initialized")
     )
 
-    # Attempt a lightweight DB connectivity check when connected
+    # Attempt a lightweight DB connectivity check when connected (uses pool)
     db_check = False
     if _storage is not None:
         try:
-            from psycopg import connect
-
-            DATABASE_URL = os.environ.get("DATABASE_URL", "")
-            if DATABASE_URL:
-                with connect(DATABASE_URL) as conn, conn.cursor() as cur:
-                    cur.execute("SELECT 1")
-                    result = cur.fetchone()
-                    db_check = result is not None and result[0] == 1
+            with _storage._get_connection() as conn, conn.cursor() as cur:
+                cur.execute("SELECT 1")
+                result = cur.fetchone()
+                db_check = result is not None and result[0] == 1
         except Exception:
             db_check = False
             db_status = "degraded"
