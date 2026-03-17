@@ -825,7 +825,7 @@ def test_inspect_proof_bundle_rejects_non_hex_root_hash(monkeypatch):
     assert response.status_code == 400
     data = response.json()
     assert data["ok"] is False
-    assert "must be a hex string" in data["error"]
+    assert "must be a valid hex string" in data["error"]
 
 
 def test_inspect_proof_bundle_rejects_invalid_zk_public_inputs(monkeypatch):
@@ -954,3 +954,83 @@ def test_inspect_proof_bundle_accepts_minimal_bundle(monkeypatch):
     assert response.status_code == 200
     data = response.json()
     assert data["ok"] is True
+
+
+def test_inspect_proof_bundle_rejects_unexpected_top_level_keys(monkeypatch):
+    """Endpoint should reject bundles with typos like 'zk_prooof' instead of 'zk_proof'."""
+    monkeypatch.setattr(ui_app, "DEBUG_UI_ENABLED", True)
+
+    bundle = {
+        "smt_proof": {
+            "root_hash": "0" * 64,
+            "key": "0" * 64,
+            "value_hash": "0" * 64,
+            "siblings": [],
+        },
+        "zk_prooof": {},  # typo: should be zk_proof
+    }
+    response = client.post("/inspect-proof-bundle", json=bundle)
+    assert response.status_code == 400
+    data = response.json()
+    assert data["ok"] is False
+    assert "Unexpected top-level keys" in data["error"]
+    assert "zk_prooof" in data["error"]
+
+
+def test_inspect_proof_bundle_rejects_malformed_hex_string(monkeypatch):
+    """Endpoint should reject root_hash with non-hex characters like 'not-hex-at-all'."""
+    monkeypatch.setattr(ui_app, "DEBUG_UI_ENABLED", True)
+
+    bundle = {
+        "smt_proof": {
+            "root_hash": "not-hex-at-all",
+            "key": "0" * 64,
+            "value_hash": "0" * 64,
+            "siblings": [],
+        }
+    }
+    response = client.post("/inspect-proof-bundle", json=bundle)
+    assert response.status_code == 400
+    data = response.json()
+    assert data["ok"] is False
+    assert "must be a valid hex string" in data["error"]
+
+
+def test_inspect_proof_bundle_rejects_revealed_count_mismatch(monkeypatch):
+    """Endpoint should reject bundles where revealed_count != len(revealed_indices)."""
+    monkeypatch.setattr(ui_app, "DEBUG_UI_ENABLED", True)
+
+    bundle = {
+        "zk_public_inputs": {
+            "original_root": "123",
+            "redacted_commitment": "456",
+            "revealed_count": 5,  # claims 5 revealed parts
+        },
+        "revealed_indices": [0, 1, 2],  # but only 3 indices provided
+    }
+    response = client.post("/inspect-proof-bundle", json=bundle)
+    assert response.status_code == 400
+    data = response.json()
+    assert data["ok"] is False
+    assert "Semantic mismatch" in data["error"]
+    assert "revealed_count (5)" in data["error"]
+    assert "len(revealed_indices) (3)" in data["error"]
+
+
+def test_inspect_proof_bundle_accepts_matching_revealed_count(monkeypatch):
+    """Endpoint should accept bundles where revealed_count matches len(revealed_indices)."""
+    monkeypatch.setattr(ui_app, "DEBUG_UI_ENABLED", True)
+
+    bundle = {
+        "zk_public_inputs": {
+            "original_root": "123",
+            "redacted_commitment": "456",
+            "revealed_count": 3,
+        },
+        "revealed_indices": [0, 1, 2],
+    }
+    response = client.post("/inspect-proof-bundle", json=bundle)
+    assert response.status_code == 200
+    data = response.json()
+    assert data["ok"] is True
+

@@ -1579,6 +1579,12 @@ def _validate_proof_bundle_schema(bundle: Any) -> tuple[bool, str | None]:
     if not isinstance(bundle, dict):
         return False, "Proof bundle must be a JSON object"
 
+    # Validate top-level keys: reject unexpected keys to catch typos like "zk_prooof"
+    allowed_top_level_keys = {"smt_proof", "zk_public_inputs", "zk_proof", "revealed_indices"}
+    unexpected_keys = set(bundle.keys()) - allowed_top_level_keys
+    if unexpected_keys:
+        return False, f"Unexpected top-level keys in bundle: {sorted(unexpected_keys)}"
+
     # Validate SMT proof structure
     if "smt_proof" in bundle:
         smt_proof = bundle["smt_proof"]
@@ -1595,8 +1601,10 @@ def _validate_proof_bundle_schema(bundle: Any) -> tuple[bool, str | None]:
         root_hash = smt_proof.get("root_hash")
         if not isinstance(root_hash, str):
             return False, "smt_proof.root_hash must be a string"
-        if not all(c in "0123456789abcdefABCDEF" for c in root_hash):
-            return False, "smt_proof.root_hash must be a hex string"
+        try:
+            bytes.fromhex(root_hash)
+        except ValueError:
+            return False, "smt_proof.root_hash must be a valid hex string"
 
         # Validate siblings is a list
         if not isinstance(smt_proof.get("siblings"), list):
@@ -1649,6 +1657,17 @@ def _validate_proof_bundle_schema(bundle: Any) -> tuple[bool, str | None]:
                 return False, f"revealed_indices[{idx}] must be an integer, got {type(item).__name__}"
             if item < 0:
                 return False, f"revealed_indices[{idx}] must be non-negative"
+
+    # Semantic validation: revealed_count should match len(revealed_indices)
+    if "zk_public_inputs" in bundle and "revealed_indices" in bundle:
+        revealed_count = bundle["zk_public_inputs"].get("revealed_count")
+        revealed_indices = bundle["revealed_indices"]
+        if isinstance(revealed_count, int) and isinstance(revealed_indices, list):
+            if revealed_count != len(revealed_indices):
+                return False, (
+                    f"Semantic mismatch: zk_public_inputs.revealed_count ({revealed_count}) "
+                    f"does not match len(revealed_indices) ({len(revealed_indices)})"
+                )
 
     return True, None
 
