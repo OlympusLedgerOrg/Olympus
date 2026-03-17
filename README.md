@@ -14,43 +14,20 @@ The repository is focused on protocol hardening: deterministic canonicalization,
 
 ## Licensing
 
-Olympus uses a **two-layer licensing model** to balance openness and sustainability:
+Olympus is licensed under **Apache License 2.0**.
 
-### Open Source Core (Apache 2.0)
-The cryptographic core and protocol implementation are licensed under **Apache License 2.0**:
+All components of the project are open source:
 - Protocol implementations (`protocol/`)
 - Zero-knowledge circuits (`proofs/`)
 - Storage layer (`storage/`)
+- API Gateway (`api/`)
+- Debug UI (`ui/`)
 - Schemas (`schemas/`)
 - Verification tools (`verifiers/`)
 - CLI tools (`tools/`)
 - Examples and test vectors (`examples/`, `test_vectors/`)
 
 **Why Apache 2.0?** Strong patent protection, enterprise-friendly, and protects cryptographic IP from patent trolls.
-
-### Proprietary Components (Commercial License)
-The application layer and enterprise features require a **commercial license** (see [`LICENSE-COMMERCIAL.md`](LICENSE-COMMERCIAL.md)):
-- Web Application (`dashboard/`)
-- Debug UI (`ui/`)
-- API Gateway (`api/`)
-- Cloud Service (hosted deployments)
-- Enterprise features (SAML, audit exports, retention policies, etc.)
-
-**For commercial licensing inquiries**, please contact the Olympus team.
-
-This model allows the protocol to remain transparent and auditable while providing sustainable revenue through hosting, dashboards, integrations, and enterprise support.
-
-### Revenue Distribution
-Commercial revenue follows a transparent distribution model (see [`GOVERNANCE.md`](GOVERNANCE.md) and [`schemas/revenue_distribution.json`](schemas/revenue_distribution.json)):
-- **40%** to operations (infrastructure, personnel, growth) — funded first
-- **10%** to founder (project creation and leadership)
-- **30%** to the Antman Civic Fund (founder-directed for-profit allocator; all inflows/outflows and purposes recorded on-ledger)
-- **20%** to R&D (protocol enhancements, reviewed quarterly; may be adjusted based on findings with reductions flowing to civic remainder)
-- **0%** to general civic (remainder is directed to the Antman Civic Fund)
-
-**Antman Civic Fund control:** A for-profit allocator 100% controlled by the founder or a founder-appointed steward. All inflows/outflows and their purposes are recorded on-ledger while the founder directs destinations.
-
-**Total civic-purpose allocations: 30%** (all via the founder-directed Antman Civic Fund with full on-ledger transparency).
 
 ## Trust & Threat Model (60-second summary)
 
@@ -167,20 +144,19 @@ map and developer entrypoints.
 ## Repository scaffold
 
 ```text
-api/         FastAPI application and ingestion routes (Commercial License)
-dashboard/   Next.js 15 + React 19 web application (Commercial License)
-ui/          FastAPI debug console and public verification portal (Commercial License)
+api/         FastAPI application and ingestion routes
+ui/          FastAPI debug console and public verification portal
 scaffolding/ non-production helpers (test-only FastAPI wiring, view-change scaffolding)
 docs/        protocol notes, threat model material, and walkthroughs
 examples/    sample artifacts and notebook examples
 integrations/ interoperability helpers for Ethereum/IPFS-style bridges
-proofs/      Circom circuits, proving assets, and JS-based proof tooling (Apache 2.0)
-protocol/    reference implementations of hashing, Merkle, SSMF, and redaction logic (Apache 2.0)
-schemas/     JSON schema definitions validated by tools/validate_schemas.py (Apache 2.0)
-storage/     persistence layer implementations and schema bootstrap logic (Apache 2.0)
+proofs/      Circom circuits, proving assets, and JS-based proof tooling
+protocol/    reference implementations of hashing, Merkle, SSMF, and redaction logic
+schemas/     JSON schema definitions validated by tools/validate_schemas.py
+storage/     persistence layer implementations and schema bootstrap logic
 tests/       regression tests for protocol, API, UI, and smoke/dev workflows
-tools/       command-line helpers, schema validation, and dev smoke script (Apache 2.0)
-verifiers/   cross-language verifier implementations (Python, Go, JS, Rust) (Apache 2.0)
+tools/       command-line helpers, schema validation, and dev smoke script
+verifiers/   cross-language verifier implementations (Python, Go, JS, Rust)
 ```
 
 ## Quick start

@@ -1,5 +1,8 @@
 # ADR 0002: Zero-Knowledge Proof System Selection - Groth16 Primary, Halo2 Optional
 
+> **NOTE**: Halo2 integration is deferred to Phase 1+. The v1.0 release uses Groth16 exclusively.
+> Halo2 backend scaffolding exists in the codebase but is not yet production-ready.
+
 ## Context
 - Olympus needs a production-grade ZK proving system for redaction proofs.
 - Goals: high throughput/low latency for the core ledger, mitigation of trusted

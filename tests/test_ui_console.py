@@ -769,3 +769,271 @@ def test_index_has_foia_and_embargo_panels(monkeypatch):
     assert "foia-request-form" in response.text
     assert "Embargo Management" in response.text
     assert "embargo-doc-id" in response.text
+
+
+# ── /inspect-proof-bundle validation ─────────────────────────────────────────
+
+
+def test_inspect_proof_bundle_rejects_non_object(monkeypatch):
+    """Endpoint should reject non-object input with schema error."""
+    monkeypatch.setattr(ui_app, "DEBUG_UI_ENABLED", True)
+
+    response = client.post("/inspect-proof-bundle", json="not an object")
+    assert response.status_code == 400
+    data = response.json()
+    assert data["ok"] is False
+    assert "Proof bundle must be a JSON object" in data["error"]
+
+
+def test_inspect_proof_bundle_rejects_invalid_smt_proof_type(monkeypatch):
+    """Endpoint should reject smt_proof that is not an object."""
+    monkeypatch.setattr(ui_app, "DEBUG_UI_ENABLED", True)
+
+    bundle = {"smt_proof": "not an object"}
+    response = client.post("/inspect-proof-bundle", json=bundle)
+    assert response.status_code == 400
+    data = response.json()
+    assert data["ok"] is False
+    assert "smt_proof must be an object" in data["error"]
+
+
+def test_inspect_proof_bundle_rejects_missing_smt_fields(monkeypatch):
+    """Endpoint should reject smt_proof missing required fields."""
+    monkeypatch.setattr(ui_app, "DEBUG_UI_ENABLED", True)
+
+    bundle = {"smt_proof": {"root_hash": "abc123"}}  # missing key, value_hash, siblings
+    response = client.post("/inspect-proof-bundle", json=bundle)
+    assert response.status_code == 400
+    data = response.json()
+    assert data["ok"] is False
+    assert "missing required field" in data["error"]
+
+
+def test_inspect_proof_bundle_rejects_non_hex_root_hash(monkeypatch):
+    """Endpoint should reject smt_proof.root_hash that is not hex."""
+    monkeypatch.setattr(ui_app, "DEBUG_UI_ENABLED", True)
+
+    bundle = {
+        "smt_proof": {
+            "root_hash": "not-hex!",
+            "key": "0" * 64,
+            "value_hash": "0" * 64,
+            "siblings": [],
+        }
+    }
+    response = client.post("/inspect-proof-bundle", json=bundle)
+    assert response.status_code == 400
+    data = response.json()
+    assert data["ok"] is False
+    assert "must be a valid hex string" in data["error"]
+
+
+def test_inspect_proof_bundle_rejects_invalid_zk_public_inputs(monkeypatch):
+    """Endpoint should reject zk_public_inputs that is not an object."""
+    monkeypatch.setattr(ui_app, "DEBUG_UI_ENABLED", True)
+
+    bundle = {"zk_public_inputs": "not an object"}
+    response = client.post("/inspect-proof-bundle", json=bundle)
+    assert response.status_code == 400
+    data = response.json()
+    assert data["ok"] is False
+    assert "zk_public_inputs must be an object" in data["error"]
+
+
+def test_inspect_proof_bundle_rejects_missing_zk_fields(monkeypatch):
+    """Endpoint should reject zk_public_inputs missing required fields."""
+    monkeypatch.setattr(ui_app, "DEBUG_UI_ENABLED", True)
+
+    bundle = {"zk_public_inputs": {"original_root": "123"}}  # missing redacted_commitment, revealed_count
+    response = client.post("/inspect-proof-bundle", json=bundle)
+    assert response.status_code == 400
+    data = response.json()
+    assert data["ok"] is False
+    assert "missing required field" in data["error"]
+
+
+def test_inspect_proof_bundle_rejects_non_numeric_field_elements(monkeypatch):
+    """Endpoint should reject field elements that are not numeric strings."""
+    monkeypatch.setattr(ui_app, "DEBUG_UI_ENABLED", True)
+
+    bundle = {
+        "zk_public_inputs": {
+            "original_root": "not-a-number",
+            "redacted_commitment": "456",
+            "revealed_count": 3,
+        }
+    }
+    response = client.post("/inspect-proof-bundle", json=bundle)
+    assert response.status_code == 400
+    data = response.json()
+    assert data["ok"] is False
+    assert "must be a decimal integer string" in data["error"]
+
+
+def test_inspect_proof_bundle_rejects_negative_field_elements(monkeypatch):
+    """Endpoint should reject negative field elements."""
+    monkeypatch.setattr(ui_app, "DEBUG_UI_ENABLED", True)
+
+    bundle = {
+        "zk_public_inputs": {
+            "original_root": "-123",
+            "redacted_commitment": "456",
+            "revealed_count": 3,
+        }
+    }
+    response = client.post("/inspect-proof-bundle", json=bundle)
+    assert response.status_code == 400
+    data = response.json()
+    assert data["ok"] is False
+    assert "must be non-negative" in data["error"]
+
+
+def test_inspect_proof_bundle_rejects_invalid_revealed_count(monkeypatch):
+    """Endpoint should reject revealed_count that is not an integer."""
+    monkeypatch.setattr(ui_app, "DEBUG_UI_ENABLED", True)
+
+    bundle = {
+        "zk_public_inputs": {
+            "original_root": "123",
+            "redacted_commitment": "456",
+            "revealed_count": "not-an-int",
+        }
+    }
+    response = client.post("/inspect-proof-bundle", json=bundle)
+    assert response.status_code == 400
+    data = response.json()
+    assert data["ok"] is False
+    assert "must be an integer" in data["error"]
+
+
+def test_inspect_proof_bundle_rejects_invalid_revealed_indices(monkeypatch):
+    """Endpoint should reject revealed_indices with non-integer elements."""
+    monkeypatch.setattr(ui_app, "DEBUG_UI_ENABLED", True)
+
+    bundle = {"revealed_indices": [0, "not-an-int", 2]}
+    response = client.post("/inspect-proof-bundle", json=bundle)
+    assert response.status_code == 400
+    data = response.json()
+    assert data["ok"] is False
+    assert "must be an integer" in data["error"]
+
+
+def test_inspect_proof_bundle_accepts_valid_bundle(monkeypatch):
+    """Endpoint should accept a well-formed proof bundle."""
+    monkeypatch.setattr(ui_app, "DEBUG_UI_ENABLED", True)
+
+    bundle = {
+        "smt_proof": {
+            "root_hash": "0" * 64,
+            "key": "0" * 64,
+            "value_hash": "0" * 64,
+            "siblings": [],
+        },
+        "zk_public_inputs": {
+            "original_root": "123",
+            "redacted_commitment": "456",
+            "revealed_count": 3,
+        },
+        "zk_proof": {},
+        "revealed_indices": [0, 1, 2],
+    }
+    response = client.post("/inspect-proof-bundle", json=bundle)
+    assert response.status_code == 200
+    data = response.json()
+    assert data["ok"] is True
+    assert "checks" in data
+    assert "fields" in data
+
+
+def test_inspect_proof_bundle_accepts_minimal_bundle(monkeypatch):
+    """Endpoint should accept an empty bundle (all fields optional)."""
+    monkeypatch.setattr(ui_app, "DEBUG_UI_ENABLED", True)
+
+    bundle = {}
+    response = client.post("/inspect-proof-bundle", json=bundle)
+    assert response.status_code == 200
+    data = response.json()
+    assert data["ok"] is True
+
+
+def test_inspect_proof_bundle_accepts_forward_compatible_fields(monkeypatch):
+    """Endpoint should accept bundles with additional unknown fields for forward compatibility.
+
+    This ensures newer clients can send additional metadata (e.g., bundle_version,
+    zk_proof_version, timestamps) without breaking existing integrations.
+    """
+    monkeypatch.setattr(ui_app, "DEBUG_UI_ENABLED", True)
+
+    bundle = {
+        "smt_proof": {
+            "root_hash": "0" * 64,
+            "key": "0" * 64,
+            "value_hash": "0" * 64,
+            "siblings": [],
+        },
+        "bundle_version": "2.0.0",  # future field
+        "metadata": {"client": "olympus-cli-v2"},  # future field
+    }
+    response = client.post("/inspect-proof-bundle", json=bundle)
+    assert response.status_code == 200
+    data = response.json()
+    assert data["ok"] is True
+
+
+def test_inspect_proof_bundle_rejects_malformed_hex_string(monkeypatch):
+    """Endpoint should reject root_hash with non-hex characters like 'not-hex-at-all'."""
+    monkeypatch.setattr(ui_app, "DEBUG_UI_ENABLED", True)
+
+    bundle = {
+        "smt_proof": {
+            "root_hash": "not-hex-at-all",
+            "key": "0" * 64,
+            "value_hash": "0" * 64,
+            "siblings": [],
+        }
+    }
+    response = client.post("/inspect-proof-bundle", json=bundle)
+    assert response.status_code == 400
+    data = response.json()
+    assert data["ok"] is False
+    assert "must be a valid hex string" in data["error"]
+
+
+def test_inspect_proof_bundle_rejects_revealed_count_mismatch(monkeypatch):
+    """Endpoint should reject bundles where revealed_count != len(revealed_indices)."""
+    monkeypatch.setattr(ui_app, "DEBUG_UI_ENABLED", True)
+
+    bundle = {
+        "zk_public_inputs": {
+            "original_root": "123",
+            "redacted_commitment": "456",
+            "revealed_count": 5,  # claims 5 revealed parts
+        },
+        "revealed_indices": [0, 1, 2],  # but only 3 indices provided
+    }
+    response = client.post("/inspect-proof-bundle", json=bundle)
+    assert response.status_code == 400
+    data = response.json()
+    assert data["ok"] is False
+    assert "Semantic mismatch" in data["error"]
+    assert "revealed_count (5)" in data["error"]
+    assert "len(revealed_indices) (3)" in data["error"]
+
+
+def test_inspect_proof_bundle_accepts_matching_revealed_count(monkeypatch):
+    """Endpoint should accept bundles where revealed_count matches len(revealed_indices)."""
+    monkeypatch.setattr(ui_app, "DEBUG_UI_ENABLED", True)
+
+    bundle = {
+        "zk_public_inputs": {
+            "original_root": "123",
+            "redacted_commitment": "456",
+            "revealed_count": 3,
+        },
+        "revealed_indices": [0, 1, 2],
+    }
+    response = client.post("/inspect-proof-bundle", json=bundle)
+    assert response.status_code == 200
+    data = response.json()
+    assert data["ok"] is True
+

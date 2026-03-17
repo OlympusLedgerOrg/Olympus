@@ -262,6 +262,44 @@
     </div>
     {% endif %}
 
+    <!-- ── Hash Verification Panel ──────────────────────────────────────── -->
+    <div class="panel">
+        <h2>Hash Verification</h2>
+        <p>Verify a content hash against the committed ledger. Paste a BLAKE3 hash to check if it's been committed and retrieve the cryptographic proof.</p>
+        <form id="hash-verify-form">
+            <div class="row">
+                <input type="text" id="content-hash" placeholder="BLAKE3 content hash (hex)" required />
+                <button type="submit">Verify Hash</button>
+            </div>
+        </form>
+        <pre id="hash-verify-result">Enter a content hash to verify.</pre>
+    </div>
+
+    <!-- ── Live Node Health Panel ──────────────────────────────────────── -->
+    {% if federation.configured %}
+    <div class="panel">
+        <h2>Live Node Health</h2>
+        <p>Real-time health status of federation nodes. Auto-refreshes every 30 seconds.</p>
+        <button id="refresh-health" type="button">Refresh Now</button>
+        <table>
+            <thead>
+                <tr>
+                    <th>Node</th>
+                    <th>Status</th>
+                    <th>Latest Seq</th>
+                    <th>Latest Root</th>
+                    <th>Last Seen</th>
+                </tr>
+            </thead>
+            <tbody id="node-health-tbody">
+                <tr>
+                    <td colspan="5" style="text-align:center;">Loading...</td>
+                </tr>
+            </tbody>
+        </table>
+    </div>
+    {% endif %}
+
     <!-- ── Commit Document ──────────────────────────────────────────────── -->
     <div class="panel">
         <h2>Commit Document</h2>
@@ -557,6 +595,74 @@
     {% endif %}
 
     <script>
+        // ── Global Variables ────────────────────────────────────────────────
+        let activeCommitReceipt = null;
+        let activeFoiaDelayProof = null;
+        let activeProofBundle = null;
+        let activeConstantsNotebook = null;
+        let activeCircuitVisualizer = null;
+
+        // ── Helper Functions ────────────────────────────────────────────────
+        function renderChecks(checks) {
+            const container = document.createElement('div');
+            checks.forEach(check => {
+                const item = document.createElement('div');
+                item.style.marginBottom = '0.5rem';
+                const mark = check.passed ? '✓' : '✗';
+                const className = check.passed ? 'ok' : 'bad';
+                const labelSpan = document.createElement('span');
+                labelSpan.className = className;
+                labelSpan.textContent = `${mark} ${check.label}`;
+                item.appendChild(labelSpan);
+                if (check.detail) {
+                    const detail = document.createElement('div');
+                    detail.style.marginLeft = '1rem';
+                    detail.style.fontSize = '0.85rem';
+                    detail.style.color = 'var(--muted-text)';
+                    detail.textContent = check.detail;
+                    item.appendChild(detail);
+                }
+                container.appendChild(item);
+            });
+            return container;
+        }
+
+        function renderFieldTable(fields) {
+            const table = document.createElement('table');
+            table.style.width = '100%';
+            const thead = document.createElement('thead');
+            const headerRow = document.createElement('tr');
+            ['Field', 'Value', 'Type'].forEach(headerText => {
+                const th = document.createElement('th');
+                th.textContent = headerText;
+                headerRow.appendChild(th);
+            });
+            thead.appendChild(headerRow);
+            table.appendChild(thead);
+
+            const tbody = document.createElement('tbody');
+            fields.forEach(field => {
+                const row = document.createElement('tr');
+                const fieldCell = document.createElement('td');
+                fieldCell.textContent = field.field;
+                const valueCell = document.createElement('td');
+                const valueCode = document.createElement('code');
+                valueCode.textContent = field.value;
+                valueCode.style.fontSize = '0.75rem';
+                valueCode.style.wordBreak = 'break-all';
+                valueCell.appendChild(valueCode);
+                const typeCell = document.createElement('td');
+                typeCell.textContent = field.type;
+                typeCell.style.fontSize = '0.85rem';
+                row.appendChild(fieldCell);
+                row.appendChild(valueCell);
+                row.appendChild(typeCell);
+                tbody.appendChild(row);
+            });
+            table.appendChild(tbody);
+            return table;
+        }
+
         // ── Public Verification Portal ──────────────────────────────────────
         const hashVerifyForm = document.getElementById('hash-verify-form');
         if (hashVerifyForm) {
@@ -594,8 +700,6 @@
         // ── Proof Explorer ──────────────────────────────────────────────────
         const form = document.getElementById('proof-form');
         const out = document.getElementById('proof-result');
-        let activeCommitReceipt = null;
-        let activeFoiaDelayProof = null;
         form.addEventListener('submit', async (event) => {
             event.preventDefault();
             const params = new URLSearchParams(new FormData(form));
@@ -645,8 +749,10 @@
                 } else {
                     commitResult.textContent = `✗ Error: ${data.error}`;
                 }
-            });
-        }
+            } catch (err) {
+                commitResult.textContent = `✗ Failed: ${err}`;
+            }
+        });
 
         document.getElementById('download-receipt-link').addEventListener('click', (event) => {
             event.preventDefault();
@@ -1074,7 +1180,6 @@
         });
 
         // ── Redaction Interface ─────────────────────────────────────────────
-        let activeProofBundle = null;
 
         async function loadRedactDocument() {
             const docId = document.getElementById('redact-doc-id').value.trim();
@@ -1340,6 +1445,29 @@
                 });
             }
         })();
+
+        // ── Live Node Health ─────────────────────────────────────────────────
+        const nodeHealthTbody = document.getElementById('node-health-tbody');
+        const refreshHealthButton = document.getElementById('refresh-health');
+
+        async function refreshNodeHealth() {
+            if (!nodeHealthTbody) return;
+
+            try {
+                // This would call a backend endpoint that checks federation node status
+                // For now, show placeholder until backend route is implemented
+                nodeHealthTbody.innerHTML = '<tr><td colspan="5" style="text-align:center;">Node health monitoring requires backend implementation</td></tr>';
+            } catch (err) {
+                nodeHealthTbody.innerHTML = `<tr><td colspan="5" style="text-align:center;">Failed to load: ${err}</td></tr>`;
+            }
+        }
+
+        if (refreshHealthButton) {
+            refreshHealthButton.addEventListener('click', refreshNodeHealth);
+            // Auto-refresh every 30 seconds
+            refreshNodeHealth();
+            setInterval(refreshNodeHealth, 30000);
+        }
     </script>
 </body>
 </html>
