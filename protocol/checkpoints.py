@@ -585,7 +585,7 @@ def verify_checkpoint(
             checkpoint=checkpoint,
             registry=registry,
         )
-    except Exception:
+    except (TypeError, ValueError):
         return False
 
 
@@ -647,7 +647,7 @@ def verify_checkpoint_chain(
                 previous_root = bytes.fromhex(checkpoints[i - 1].ledger_head_hash)
                 current_root = bytes.fromhex(checkpoint.ledger_head_hash)
                 proof_bytes = [bytes.fromhex(p) for p in checkpoint.consistency_proof]
-            except Exception:
+            except (TypeError, ValueError):
                 return False
 
             if not verify_consistency_proof(

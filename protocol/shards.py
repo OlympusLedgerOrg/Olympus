@@ -11,6 +11,7 @@ from datetime import datetime
 from typing import TYPE_CHECKING, Any
 
 import nacl.encoding
+import nacl.exceptions
 import nacl.signing
 from cryptography.hazmat.primitives import hashes
 from cryptography.hazmat.primitives.kdf.hkdf import HKDF
@@ -236,7 +237,7 @@ def verify_header(
         signature_bytes = bytes.fromhex(signature)
         verify_key.verify(header_hash_bytes, signature_bytes)
         return True
-    except Exception:
+    except (TypeError, ValueError, nacl.exceptions.BadSignatureError):
         return False
 
 
@@ -259,7 +260,7 @@ def _verify_rotation_payload(
         payload_hash = hash_bytes(canonical_json_bytes(payload))
         verify_key.verify(payload_hash, bytes.fromhex(signature))
         return True
-    except Exception:
+    except (TypeError, ValueError, nacl.exceptions.BadSignatureError):
         return False
 
 
@@ -333,7 +334,7 @@ def verify_key_revocation_record(record: dict[str, Any]) -> bool:
         _parse_timestamp(record["compromise_timestamp"])
         if int(record["last_good_sequence"]) < 0:
             return False
-    except Exception:
+    except (TypeError, ValueError):
         return False
     payload = {key: record[key] for key in required_fields if key != "signature"}
     return _verify_rotation_payload(payload, record["signature"], verify_key)
@@ -417,7 +418,7 @@ def verify_superseding_signature(
         return False
     try:
         verify_key = nacl.signing.VerifyKey(bytes.fromhex(superseding_signature["new_pubkey"]))
-    except Exception:
+    except (TypeError, ValueError):
         return False
     payload = {key: superseding_signature[key] for key in required_fields if key != "signature"}
     return _verify_rotation_payload(payload, superseding_signature["signature"], verify_key)

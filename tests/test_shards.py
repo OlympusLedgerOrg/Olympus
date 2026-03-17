@@ -156,6 +156,22 @@ def test_verify_header_rejects_non_hex_signature():
     assert verify_header(header, "not-hex", verify_key) is False
 
 
+def test_verify_header_propagates_unexpected_verifier_errors():
+    """Unexpected verifier implementation errors should not be masked as invalid signatures."""
+    signing_key = nacl.signing.SigningKey.generate()
+    root_hash = hash_bytes(b"test root")
+    timestamp = current_timestamp()
+    header = create_shard_header(shard_id="shard1", root_hash=root_hash, timestamp=timestamp)
+    signature = sign_header(header, signing_key)
+
+    class _BuggyVerifyKey:
+        def verify(self, *_args: object, **_kwargs: object) -> None:
+            raise RuntimeError("unexpected verifier bug")
+
+    with pytest.raises(RuntimeError, match="unexpected verifier bug"):
+        verify_header(header, signature, _BuggyVerifyKey())  # type: ignore[arg-type]
+
+
 def test_verify_header_with_tampered_hash():
     """Test that verification fails with tampered header hash."""
     signing_key = nacl.signing.SigningKey.generate()
