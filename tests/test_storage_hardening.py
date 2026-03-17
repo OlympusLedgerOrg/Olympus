@@ -62,6 +62,9 @@ class _FakeCursor:
     def execute(self, sql: str, _params: object) -> None:
         self.statements.append(" ".join(sql.split()))
 
+    def executemany(self, sql: str, _params: object) -> None:
+        self.statements.append(" ".join(sql.split()))
+
 
 class _FakeTree:
     def __init__(self) -> None:

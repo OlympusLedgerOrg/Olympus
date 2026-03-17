@@ -208,16 +208,16 @@ class TestHashGoldenValues:
     def test_hash_bytes_known_value(self):
         """Pin hash_bytes output for b"hello"."""
         result = hash_bytes(b"hello")
+        assert result.hex() == "2fb63604f5db190f79feb9782811b6bfb88dc5ded7a81bd41f67fd886adfdc85"
         # Compute expected value using reference BLAKE3 with domain separation
         expected = _blake3.blake3(LEGACY_BYTES_PREFIX + b"hello").digest()
         assert result == expected
-        # Pin the hex value
-        assert result.hex() == expected.hex()
 
     def test_blake3_hash_concatenation(self):
         """Pin blake3_hash for concatenated parts."""
         parts = [b"hello", b"world"]
         result = blake3_hash(parts)
+        assert result.hex() == "7bb205244d808356318ec65d0ae54f32ee3a7bab5dfaf431b01e567e03baab4f"
         expected = _blake3.blake3(b"helloworld").digest()
         assert result == expected
 
@@ -225,12 +225,14 @@ class TestHashGoldenValues:
         """Pin domain-separated hashing for LEDGER_PREFIX."""
         payload = b"test_payload"
         result = blake3_hash([LEDGER_PREFIX, payload])
+        assert result.hex() == "ede31d066f20ad398f75fc2f4112faa4aad4901b35ddb4f9a6b4d291961bb0ec"
         expected = _blake3.blake3(LEDGER_PREFIX + payload).digest()
         assert result == expected
 
     def test_record_key_golden(self):
         """Pin record_key output for known inputs."""
         key = record_key("document", "doc-001", 1)
+        assert key.hex() == "cfecc3fd1ab6d4ed32193c35868a01706f6e2ab2c8db8dcdcb88b7882256c5b2"
         assert len(key) == 32
         # Verify determinism
         assert key == record_key("document", "doc-001", 1)
@@ -242,6 +244,7 @@ class TestHashGoldenValues:
         key = record_key("document", "doc-001", 1)
         value = hash_bytes(b"document content")
         leaf = leaf_hash(key, value)
+        assert leaf.hex() == "1e8d6d47ef41dcc8f0553f7482a6d765cd75344bb588f15119b7914a798c05c2"
         assert len(leaf) == 32
         # Verify determinism
         assert leaf == leaf_hash(key, value)
@@ -251,6 +254,7 @@ class TestHashGoldenValues:
         left = hash_bytes(b"left")
         right = hash_bytes(b"right")
         node = node_hash(left, right)
+        assert node.hex() == "d1c58795e8dce38add178fb3a9a7b2cec02a10fc8b84f01e78be9bd4d24fa2f0"
         assert len(node) == 32
         # Order matters
         assert node != node_hash(right, left)
@@ -263,6 +267,7 @@ class TestHashGoldenValues:
             "timestamp": "2024-01-01T00:00:00Z",
         }
         result = shard_header_hash(header)
+        assert result.hex() == "ce9042233d5e6ad6d0a89a17149bdd58127be8c711b1a1a8feb072acca6cf42c"
         assert len(result) == 32
 
         # Recompute independently to verify
