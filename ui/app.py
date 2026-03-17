@@ -1569,12 +1569,99 @@ async def revoke_embargo_recipient(request: Request):
     return JSONResponse({"ok": True, "embargo": _embargo_summary(entry)})
 
 
+def _validate_proof_bundle_schema(bundle: Any) -> tuple[bool, str | None]:
+    """
+    Validate proof bundle schema before running invariant checks.
+
+    Returns:
+        (is_valid, error_message) tuple. error_message is None if valid.
+    """
+    if not isinstance(bundle, dict):
+        return False, "Proof bundle must be a JSON object"
+
+    # Validate SMT proof structure
+    if "smt_proof" in bundle:
+        smt_proof = bundle["smt_proof"]
+        if not isinstance(smt_proof, dict):
+            return False, "smt_proof must be an object"
+
+        # Required fields for ExistenceProof
+        required_smt_fields = ["root_hash", "key", "value_hash", "siblings"]
+        for field in required_smt_fields:
+            if field not in smt_proof:
+                return False, f"smt_proof missing required field: {field}"
+
+        # Validate root_hash is hex string (should be 32 bytes / 64 hex chars)
+        root_hash = smt_proof.get("root_hash")
+        if not isinstance(root_hash, str):
+            return False, "smt_proof.root_hash must be a string"
+        if not all(c in "0123456789abcdefABCDEF" for c in root_hash):
+            return False, "smt_proof.root_hash must be a hex string"
+
+        # Validate siblings is a list
+        if not isinstance(smt_proof.get("siblings"), list):
+            return False, "smt_proof.siblings must be an array"
+
+    # Validate ZK public inputs structure
+    if "zk_public_inputs" in bundle:
+        zk_public = bundle["zk_public_inputs"]
+        if not isinstance(zk_public, dict):
+            return False, "zk_public_inputs must be an object"
+
+        # Required fields for ZKPublicInputs
+        required_zk_fields = ["original_root", "redacted_commitment", "revealed_count"]
+        for field in required_zk_fields:
+            if field not in zk_public:
+                return False, f"zk_public_inputs missing required field: {field}"
+
+        # Validate field element strings are numeric
+        for field in ["original_root", "redacted_commitment"]:
+            value = zk_public.get(field)
+            if not isinstance(value, str):
+                return False, f"zk_public_inputs.{field} must be a string"
+            try:
+                int_val = int(value)
+                if int_val < 0:
+                    return False, f"zk_public_inputs.{field} must be non-negative"
+            except (ValueError, TypeError):
+                return False, f"zk_public_inputs.{field} must be a decimal integer string"
+
+        # Validate revealed_count is an integer
+        revealed_count = zk_public.get("revealed_count")
+        if not isinstance(revealed_count, int):
+            return False, "zk_public_inputs.revealed_count must be an integer"
+        if revealed_count < 0:
+            return False, "zk_public_inputs.revealed_count must be non-negative"
+
+    # Validate ZK proof structure (if present)
+    if "zk_proof" in bundle:
+        zk_proof = bundle["zk_proof"]
+        if not isinstance(zk_proof, dict):
+            return False, "zk_proof must be an object"
+
+    # Validate revealed indices (if present)
+    if "revealed_indices" in bundle:
+        revealed = bundle["revealed_indices"]
+        if not isinstance(revealed, list):
+            return False, "revealed_indices must be an array"
+        for idx, item in enumerate(revealed):
+            if not isinstance(item, int):
+                return False, f"revealed_indices[{idx}] must be an integer, got {type(item).__name__}"
+            if item < 0:
+                return False, f"revealed_indices[{idx}] must be non-negative"
+
+    return True, None
+
+
 @app.post("/inspect-proof-bundle")
 async def inspect_proof_bundle(request: Request):
     """
     Inspect a proof bundle and return decoded fields + invariant checks.
 
     This endpoint supports the Proof Bundle Inspector panel in the debug UI.
+
+    The bundle is validated against the expected schema before running invariant
+    checks to prevent malformed input from producing misleading check output.
     """
     _require_debug_ui()
 
@@ -1583,6 +1670,14 @@ async def inspect_proof_bundle(request: Request):
     except Exception as exc:
         return JSONResponse(
             status_code=400, content={"ok": False, "error": f"Invalid JSON: {exc}"}
+        )
+
+    # Validate bundle schema before running checks
+    is_valid, error_msg = _validate_proof_bundle_schema(bundle)
+    if not is_valid:
+        return JSONResponse(
+            status_code=400,
+            content={"ok": False, "error": f"Invalid proof bundle schema: {error_msg}"}
         )
 
     # Extract and validate core fields
