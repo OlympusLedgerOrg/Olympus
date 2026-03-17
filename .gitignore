@@ -73,3 +73,7 @@ benchmarks/results/
 
 # Local environment variables (copy .env.example to .env)
 .env
+
+# Olympus FOIA dev SQLite database
+*.db
+olympus_foia.db
