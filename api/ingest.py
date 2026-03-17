@@ -15,6 +15,7 @@ All write operations are append-only and maintain ledger chain integrity.
 
 from __future__ import annotations
 
+import asyncio
 import hmac
 import json
 import logging
@@ -185,11 +186,11 @@ _signing_key: nacl.signing.SigningKey | None = None
 _TEST_MODE: bool = False
 
 # Legacy in-memory stores (kept for backward compatibility during migration)
-# proof_id → ingestion metadata
-_ingestion_store: dict[str, dict[str, Any]] = {}
+# proof_id → ingestion metadata (LRU-bounded to prevent OOM)
+_ingestion_store: OrderedDict[str, dict[str, Any]] = OrderedDict()
 
-# content_hash → proof_id (dedup index)
-_content_index: dict[str, str] = {}
+# content_hash → proof_id (dedup index, LRU-bounded to prevent OOM)
+_content_index: OrderedDict[str, str] = OrderedDict()
 
 # Shared ledger for write path (legacy, unused when storage is enabled)
 _write_ledger = Ledger()
@@ -295,7 +296,13 @@ def _get_storage() -> StorageLayer | None:
 
 
 def _cache_ingestion_record(entry: dict[str, Any]) -> None:
-    """Cache ingestion metadata in memory for fast lookups."""
+    """
+    Cache ingestion metadata in memory for fast lookups with LRU eviction.
+
+    Implements LRU eviction to prevent unbounded memory growth under sustained
+    ingestion load. When the cache exceeds _INGESTION_CACHE_LRU_CAP entries,
+    the oldest entries are evicted.
+    """
     poseidon_root = entry.get("poseidon_root")
     if poseidon_root is None:
         canonicalization = entry.get("canonicalization") or {}
@@ -303,8 +310,21 @@ def _cache_ingestion_record(entry: dict[str, Any]) -> None:
         if poseidon_root is not None:
             entry["poseidon_root"] = poseidon_root
     proof_id = entry["proof_id"]
+    content_hash = entry["content_hash"]
+
+    # Evict oldest entries if at capacity (applies to both stores)
+    while len(_ingestion_store) >= _INGESTION_CACHE_LRU_CAP:
+        oldest_proof_id, oldest_entry = _ingestion_store.popitem(last=False)
+        # Also remove from content_index if it still points to this proof_id
+        oldest_content_hash = oldest_entry.get("content_hash")
+        if oldest_content_hash and _content_index.get(oldest_content_hash) == oldest_proof_id:
+            _content_index.pop(oldest_content_hash, None)
+
+    while len(_content_index) >= _INGESTION_CACHE_LRU_CAP:
+        _content_index.popitem(last=False)
+
     _ingestion_store[proof_id] = entry
-    _content_index[entry["content_hash"]] = proof_id
+    _content_index[content_hash] = proof_id
 
 
 def _fetch_persisted_proof(proof_id: str) -> dict[str, Any] | None:
@@ -373,6 +393,9 @@ _rate_limit_policy: dict[str, tuple[float, float]] = {
 
 # L5-B: Maximum number of entries in rate-limit buckets to prevent memory leaks
 _RATE_LIMIT_LRU_CAP = 10_000
+
+# Maximum number of entries in ingestion caches to prevent OOM under sustained load
+_INGESTION_CACHE_LRU_CAP = 50_000
 
 # Use OrderedDict to implement LRU eviction when cap is reached
 _rate_limit_key_buckets: dict[str, OrderedDict[str, TokenBucket]] = {
@@ -844,6 +867,50 @@ def _smt_proof_to_merkle_proof_dict(proof: ExistenceProof, value_hash: bytes) ->
 
 
 # ---------------------------------------------------------------------------
+# Async helpers for CPU-bound operations
+# ---------------------------------------------------------------------------
+
+
+async def _async_canonicalize_and_hash(content: dict[str, Any]) -> tuple[bytes, str]:
+    """
+    Canonicalize document and compute hash asynchronously.
+
+    Runs the CPU-bound canonicalization and hashing in a thread pool executor
+    to avoid blocking the async event loop, which is critical when processing
+    large batches of documents.
+
+    Args:
+        content: Document content to canonicalize and hash
+
+    Returns:
+        Tuple of (canonical_bytes, content_hash_hex)
+    """
+    loop = asyncio.get_running_loop()
+
+    # Run canonicalization in executor to avoid blocking event loop
+    canonical = await loop.run_in_executor(None, canonicalize_document, content)
+    content_bytes = document_to_bytes(canonical)
+    content_hash = hash_bytes(content_bytes).hex()
+
+    return content_bytes, content_hash
+
+
+async def _process_record_canonicalization(
+    record: RecordInput, batch_id: str
+) -> tuple[RecordInput, str, bytes, str]:
+    """
+    Process a single record's canonicalization asynchronously.
+
+    Returns:
+        Tuple of (record, content_hash_hex, content_hash_bytes, proof_id)
+    """
+    content_bytes, content_hash = await _async_canonicalize_and_hash(record.content)
+    content_hash_bytes = bytes.fromhex(content_hash)
+    proof_id = str(uuid.uuid4())
+    return record, content_hash, content_hash_bytes, proof_id
+
+
+# ---------------------------------------------------------------------------
 # Endpoints
 # ---------------------------------------------------------------------------
 
@@ -858,6 +925,10 @@ async def ingest_batch(batch: BatchIngestionRequest, request: Request) -> BatchI
     to the ledger.  The response includes proof IDs for async proof
     retrieval.
 
+    Supports multi-shard batches by grouping records by shard_id and
+    processing each group separately. Canonicalization is parallelized
+    across the batch to maximize throughput on training dataset scale.
+
     If PostgreSQL is configured (DATABASE_URL and OLYMPUS_INGEST_SIGNING_KEY),
     records are persisted durably. Otherwise, they are stored in-memory only.
 
@@ -869,226 +940,256 @@ async def ingest_batch(batch: BatchIngestionRequest, request: Request) -> BatchI
     """
     _authorize_and_rate_limit(request, action="ingest")
 
-    # Validate that all records in the batch have the same shard_id
+    # Validate batch is not empty
     if not batch.records:
         raise HTTPException(status_code=400, detail="Batch cannot be empty")
 
-    shard_id = batch.records[0].shard_id
-    for i, record in enumerate(batch.records[1:], start=1):
-        if record.shard_id != shard_id:
-            raise HTTPException(
-                status_code=400,
-                detail=f"All records in a batch must have the same shard_id. "
-                f"Record 0 has shard_id '{shard_id}', but record {i} has '{record.shard_id}'",
-            )
+    # Group records by shard_id for multi-shard support
+    from collections import defaultdict
+
+    shard_groups: dict[str, list[tuple[int, RecordInput]]] = defaultdict(list)
+    for original_idx, record in enumerate(batch.records):
+        shard_groups[record.shard_id].append((original_idx, record))
 
     # Try to get storage layer (returns None if not configured)
     storage = _get_storage()
-
     batch_id = str(uuid.uuid4())
 
-    with timed_operation("commit", shard_id=shard_id) as span:
-        span.set_attribute("batch_size", len(batch.records))
-        span.set_attribute("using_postgres", storage is not None)
-        results: list[IngestionResult] = []
-        new_hashes: list[bytes] = []
-        dedup_count = 0
-        persist_queue: list[dict[str, Any]] = []
-        canonicalization = canonicalization_provenance(
-            "application/json",
-            CANONICAL_VERSION,
-        )
-        ts = current_timestamp()
-        ledger_entry_hash = ""
+    # Parallelize canonicalization across all records in the batch
+    # This is the key optimization for training dataset scale (thousands of documents)
+    canonicalization_tasks = [
+        _process_record_canonicalization(record, batch_id) for record in batch.records
+    ]
+    canonicalized_results = await asyncio.gather(*canonicalization_tasks)
 
-        for record in batch.records:
-            # Canonicalize and hash
-            canonical = canonicalize_document(record.content)
-            content_bytes = document_to_bytes(canonical)
-            content_hash = hash_bytes(content_bytes).hex()
-            content_hash_bytes = bytes.fromhex(content_hash)
+    # Build a map from original index to canonicalized data
+    record_data_map: dict[int, tuple[str, bytes, str]] = {
+        i: (content_hash, content_hash_bytes, proof_id)
+        for i, (_, content_hash, content_hash_bytes, proof_id) in enumerate(canonicalized_results)
+    }
 
-            # Dedup check (in-memory or persisted)
-            existing_record = _fetch_by_content_hash(content_hash)
-            if existing_record is not None:
-                results.append(
-                    IngestionResult(
-                        proof_id=existing_record["proof_id"],
-                        record_id=existing_record["record_id"],
-                        shard_id=existing_record["shard_id"],
-                        content_hash=existing_record["content_hash"],
-                        deduplicated=True,
-                    )
-                )
-                dedup_count += 1
-                ledger_entry_hash = existing_record.get("ledger_entry_hash", ledger_entry_hash)
-                INGEST_TOTAL.labels(outcome="deduplicated").inc()
-                continue
+    # Now process each shard group
+    all_results: list[tuple[int, IngestionResult]] = []
+    total_dedup_count = 0
+    canonicalization = canonicalization_provenance("application/json", CANONICAL_VERSION)
+    ts = current_timestamp()
+    final_ledger_entry_hash = ""
 
-            proof_id = str(uuid.uuid4())
+    for shard_id, shard_records in shard_groups.items():
+        with timed_operation("commit", shard_id=shard_id) as span:
+            span.set_attribute("batch_size", len(shard_records))
+            span.set_attribute("using_postgres", storage is not None)
 
-            # If PostgreSQL is configured, persist record durably
-            if storage is not None and _signing_key is not None:
-                try:
-                    root_hash, proof, header, signature, ledger_entry = storage.append_record(
-                        shard_id=record.shard_id,
-                        record_type=record.record_type,
-                        record_id=record.record_id,
-                        version=record.version,
-                        value_hash=content_hash_bytes,
-                        signing_key=_signing_key,
-                        canonicalization=canonicalization,
-                    )
+            results: list[tuple[int, IngestionResult]] = []
+            new_hashes: list[bytes] = []
+            dedup_count = 0
+            persist_queue: list[dict[str, Any]] = []
+            ledger_entry_hash = ""
 
-                    # Store mapping from proof_id to record coordinates for later retrieval
-                    ingestion_entry = {
-                        "proof_id": proof_id,
-                        "record_id": record.record_id,
-                        "shard_id": record.shard_id,
-                        "record_type": record.record_type,
-                        "version": record.version,
-                        "content_hash": content_hash,
-                        "merkle_root": root_hash.hex(),
-                        "merkle_proof": _smt_proof_to_merkle_proof_dict(proof, content_hash_bytes),
-                        "ledger_entry_hash": ledger_entry.entry_hash,
-                        "timestamp": ledger_entry.ts,
-                        "canonicalization": canonicalization,
-                        "persisted": True,
-                        "batch_id": batch_id,
-                        "batch_index": len(persist_queue),
-                    }
-                    _cache_ingestion_record(ingestion_entry)
-                    persist_queue.append(ingestion_entry)
-                    ts = ledger_entry.ts
-                    ledger_entry_hash = ledger_entry.entry_hash
-                    logger.info(f"Record {record.record_id} persisted to PostgreSQL")
-                except ValueError as e:
-                    if "Record already exists" in str(e):
-                        # Record exists in database, treat as dedup and hydrate mapping
-                        existing_record = _fetch_by_content_hash(content_hash)
-                        existing_proof_id = (
-                            existing_record["proof_id"] if existing_record else proof_id
-                        )
-                        results.append(
+            for original_idx, record in shard_records:
+                content_hash, content_hash_bytes, proof_id = record_data_map[original_idx]
+
+                # Dedup check (in-memory or persisted)
+                existing_record = _fetch_by_content_hash(content_hash)
+                if existing_record is not None:
+                    results.append(
+                        (
+                            original_idx,
                             IngestionResult(
-                                proof_id=existing_proof_id,
-                                record_id=record.record_id,
-                                shard_id=record.shard_id,
-                                content_hash=content_hash,
+                                proof_id=existing_record["proof_id"],
+                                record_id=existing_record["record_id"],
+                                shard_id=existing_record["shard_id"],
+                                content_hash=existing_record["content_hash"],
                                 deduplicated=True,
-                            )
+                            ),
                         )
-                        dedup_count += 1
-                        INGEST_TOTAL.labels(outcome="deduplicated").inc()
-                        if existing_record:
-                            ledger_entry_hash = existing_record.get(
-                                "ledger_entry_hash", ledger_entry_hash
+                    )
+                    dedup_count += 1
+                    ledger_entry_hash = existing_record.get("ledger_entry_hash", ledger_entry_hash)
+                    INGEST_TOTAL.labels(outcome="deduplicated").inc()
+                    continue
+
+                # If PostgreSQL is configured, persist record durably
+                if storage is not None and _signing_key is not None:
+                    try:
+                        root_hash, proof, header, signature, ledger_entry = storage.append_record(
+                            shard_id=record.shard_id,
+                            record_type=record.record_type,
+                            record_id=record.record_id,
+                            version=record.version,
+                            value_hash=content_hash_bytes,
+                            signing_key=_signing_key,
+                            canonicalization=canonicalization,
+                        )
+
+                        # Store mapping from proof_id to record coordinates for later retrieval
+                        ingestion_entry = {
+                            "proof_id": proof_id,
+                            "record_id": record.record_id,
+                            "shard_id": record.shard_id,
+                            "record_type": record.record_type,
+                            "version": record.version,
+                            "content_hash": content_hash,
+                            "merkle_root": root_hash.hex(),
+                            "merkle_proof": _smt_proof_to_merkle_proof_dict(
+                                proof, content_hash_bytes
+                            ),
+                            "ledger_entry_hash": ledger_entry.entry_hash,
+                            "timestamp": ledger_entry.ts,
+                            "canonicalization": canonicalization,
+                            "persisted": True,
+                            "batch_id": batch_id,
+                            "batch_index": len(persist_queue),
+                        }
+                        _cache_ingestion_record(ingestion_entry)
+                        persist_queue.append(ingestion_entry)
+                        ts = ledger_entry.ts
+                        ledger_entry_hash = ledger_entry.entry_hash
+                        logger.info(f"Record {record.record_id} persisted to PostgreSQL")
+                    except ValueError as e:
+                        if "Record already exists" in str(e):
+                            # Record exists in database, treat as dedup and hydrate mapping
+                            existing_record = _fetch_by_content_hash(content_hash)
+                            existing_proof_id = (
+                                existing_record["proof_id"] if existing_record else proof_id
                             )
-                        continue
-                    else:
-                        raise
-            else:
-                # Fall back to in-memory storage
-                new_hashes.append(content_hash_bytes)
+                            results.append(
+                                (
+                                    original_idx,
+                                    IngestionResult(
+                                        proof_id=existing_proof_id,
+                                        record_id=record.record_id,
+                                        shard_id=record.shard_id,
+                                        content_hash=content_hash,
+                                        deduplicated=True,
+                                    ),
+                                )
+                            )
+                            dedup_count += 1
+                            INGEST_TOTAL.labels(outcome="deduplicated").inc()
+                            if existing_record:
+                                ledger_entry_hash = existing_record.get(
+                                    "ledger_entry_hash", ledger_entry_hash
+                                )
+                            continue
+                        else:
+                            raise
+                else:
+                    # Fall back to in-memory storage
+                    new_hashes.append(content_hash_bytes)
 
-            results.append(
-                IngestionResult(
-                    proof_id=proof_id,
-                    record_id=record.record_id,
-                    shard_id=record.shard_id,
-                    content_hash=content_hash,
-                    deduplicated=False,
+                results.append(
+                    (
+                        original_idx,
+                        IngestionResult(
+                            proof_id=proof_id,
+                            record_id=record.record_id,
+                            shard_id=record.shard_id,
+                            content_hash=content_hash,
+                            deduplicated=False,
+                        ),
+                    )
                 )
-            )
 
-            _content_index[content_hash] = proof_id
+                _content_index[content_hash] = proof_id
 
-        # Build Merkle tree from new content hashes (in-memory path only)
-        ingested_count = len(batch.records) - dedup_count
-        ts = current_timestamp()
-        if new_hashes and storage is None:
-            # In-memory path: build batch Merkle tree and ledger
-            tree = MerkleTree(new_hashes)
-            merkle_root = tree.get_root().hex()
+            # Build Merkle tree from new content hashes (in-memory path only)
+            ingested_count = len(shard_records) - dedup_count
+            if new_hashes and storage is None:
+                # In-memory path: build batch Merkle tree and ledger
+                tree = MerkleTree(new_hashes)
+                merkle_root = tree.get_root().hex()
 
-            # Append to ledger
-            ledger_entry = _write_ledger.append(
-                record_hash=merkle_root,
-                shard_id=shard_id,
-                shard_root=merkle_root,
-                canonicalization=canonicalization,
-            )
-            ledger_entry_hash = ledger_entry.entry_hash
-            ledger_height = len(_write_ledger.entries)
-            LEDGER_HEIGHT.labels(shard_id=shard_id).set(ledger_height)
-            span.set_attribute("ledger_height", ledger_height)
+                # Append to ledger
+                ledger_entry = _write_ledger.append(
+                    record_hash=merkle_root,
+                    shard_id=shard_id,
+                    shard_root=merkle_root,
+                    canonicalization=canonicalization,
+                )
+                ledger_entry_hash = ledger_entry.entry_hash
+                ledger_height = len(_write_ledger.entries)
+                LEDGER_HEIGHT.labels(shard_id=shard_id).set(ledger_height)
+                span.set_attribute("ledger_height", ledger_height)
 
-            # Store proof metadata for each new record
-            for i, result in enumerate(results):
-                if not result.deduplicated:
-                    # Find this record's index among new records
-                    new_idx = sum(1 for r in results[: i + 1] if not r.deduplicated) - 1
-                    merkle_proof = tree.generate_proof(new_idx)
-                    _ingestion_store[result.proof_id] = {
-                        "proof_id": result.proof_id,
-                        "record_id": result.record_id,
-                        "shard_id": result.shard_id,
-                        "content_hash": result.content_hash,
-                        "merkle_root": merkle_root,
-                        "merkle_proof": {
-                            "leaf_hash": merkle_proof.leaf_hash.hex(),
-                            "leaf_index": merkle_proof.leaf_index,
-                            "siblings": [
-                                [h.hex(), is_right == "right"]
-                                for h, is_right in merkle_proof.siblings
-                            ],
-                            "root_hash": merkle_proof.root_hash.hex(),
-                            "proof_version": merkle_proof.proof_version,
-                            "tree_version": merkle_proof.tree_version,
-                            "epoch": merkle_proof.epoch,
-                            "tree_size": merkle_proof.tree_size,
-                        },
-                        "ledger_entry_hash": ledger_entry_hash,
-                        "timestamp": ts,
-                        "canonicalization": canonicalization,
-                        "persisted": False,
-                        "batch_id": batch_id,
-                        "batch_index": sum(1 for r in results[: i + 1] if not r.deduplicated) - 1,
-                    }
-                    _cache_ingestion_record(_ingestion_store[result.proof_id])
-                    INGEST_TOTAL.labels(outcome="committed").inc()
-        elif storage is not None:
-            # PostgreSQL path: records already persisted individually
-            if persist_queue:
-                storage.store_ingestion_batch(batch_id, persist_queue)
-            # Get the latest ledger entry hash for response
-            for result in results:
-                if not result.deduplicated and result.proof_id in _ingestion_store:
-                    ledger_entry_hash = _ingestion_store[result.proof_id]["ledger_entry_hash"]
-                    INGEST_TOTAL.labels(outcome="committed").inc()
-        else:
-            ledger_entry_hash = (
-                _write_ledger.entries[-1].entry_hash if _write_ledger.entries else ""
-            )
+                # Store proof metadata for each new record
+                new_record_counter = 0
+                for original_idx, result in results:
+                    if not result.deduplicated:
+                        merkle_proof = tree.generate_proof(new_record_counter)
+                        _ingestion_store[result.proof_id] = {
+                            "proof_id": result.proof_id,
+                            "record_id": result.record_id,
+                            "shard_id": result.shard_id,
+                            "content_hash": result.content_hash,
+                            "merkle_root": merkle_root,
+                            "merkle_proof": {
+                                "leaf_hash": merkle_proof.leaf_hash.hex(),
+                                "leaf_index": merkle_proof.leaf_index,
+                                "siblings": [
+                                    [h.hex(), is_right == "right"]
+                                    for h, is_right in merkle_proof.siblings
+                                ],
+                                "root_hash": merkle_proof.root_hash.hex(),
+                                "proof_version": merkle_proof.proof_version,
+                                "tree_version": merkle_proof.tree_version,
+                                "epoch": merkle_proof.epoch,
+                                "tree_size": merkle_proof.tree_size,
+                            },
+                            "ledger_entry_hash": ledger_entry_hash,
+                            "timestamp": ts,
+                            "canonicalization": canonicalization,
+                            "persisted": False,
+                            "batch_id": batch_id,
+                            "batch_index": new_record_counter,
+                        }
+                        _cache_ingestion_record(_ingestion_store[result.proof_id])
+                        INGEST_TOTAL.labels(outcome="committed").inc()
+                        new_record_counter += 1
+            elif storage is not None:
+                # PostgreSQL path: records already persisted individually
+                if persist_queue:
+                    storage.store_ingestion_batch(batch_id, persist_queue)
+                # Get the latest ledger entry hash for response
+                for original_idx, result in results:
+                    if not result.deduplicated and result.proof_id in _ingestion_store:
+                        ledger_entry_hash = _ingestion_store[result.proof_id]["ledger_entry_hash"]
+                        INGEST_TOTAL.labels(outcome="committed").inc()
+            else:
+                ledger_entry_hash = (
+                    _write_ledger.entries[-1].entry_hash if _write_ledger.entries else ""
+                )
 
-        span.set_attribute("ingested", ingested_count)
-        span.set_attribute("deduplicated", dedup_count)
+            span.set_attribute("ingested", ingested_count)
+            span.set_attribute("deduplicated", dedup_count)
+
+            all_results.extend(results)
+            total_dedup_count += dedup_count
+            if ledger_entry_hash:
+                final_ledger_entry_hash = ledger_entry_hash
+
+    # Sort results back to original order
+    all_results.sort(key=lambda x: x[0])
+    ordered_results = [result for _, result in all_results]
+
+    total_ingested = len(batch.records) - total_dedup_count
 
     logger.info(
         "batch_ingested",
         extra={
-            "ingested": ingested_count,
-            "deduplicated": dedup_count,
+            "ingested": total_ingested,
+            "deduplicated": total_dedup_count,
             "total": len(batch.records),
+            "shard_count": len(shard_groups),
             "using_postgres": storage is not None,
         },
     )
 
     return BatchIngestionResponse(
-        ingested=ingested_count,
-        deduplicated=dedup_count,
-        results=results,
-        ledger_entry_hash=ledger_entry_hash,
+        ingested=total_ingested,
+        deduplicated=total_dedup_count,
+        results=ordered_results,
+        ledger_entry_hash=final_ledger_entry_hash,
         timestamp=ts,
         canonicalization=canonicalization,
         batch_id=batch_id,
