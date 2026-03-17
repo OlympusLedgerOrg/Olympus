@@ -207,26 +207,32 @@ class TestHashGoldenValues:
 
     def test_hash_bytes_known_value(self):
         """Pin hash_bytes output for b"hello"."""
+        expected_hex = "2fb63604f5db190f79feb9782811b6bfb88dc5ded7a81bd41f67fd886adfdc85"
         result = hash_bytes(b"hello")
-        assert result.hex() == "2fb63604f5db190f79feb9782811b6bfb88dc5ded7a81bd41f67fd886adfdc85"
+        assert result.hex() == expected_hex
         # Compute expected value using reference BLAKE3 with domain separation
         expected = _blake3.blake3(LEGACY_BYTES_PREFIX + b"hello").digest()
+        assert expected.hex() == expected_hex
         assert result == expected
 
     def test_blake3_hash_concatenation(self):
         """Pin blake3_hash for concatenated parts."""
+        expected_hex = "7bb205244d808356318ec65d0ae54f32ee3a7bab5dfaf431b01e567e03baab4f"
         parts = [b"hello", b"world"]
         result = blake3_hash(parts)
-        assert result.hex() == "7bb205244d808356318ec65d0ae54f32ee3a7bab5dfaf431b01e567e03baab4f"
+        assert result.hex() == expected_hex
         expected = _blake3.blake3(b"helloworld").digest()
+        assert expected.hex() == expected_hex
         assert result == expected
 
     def test_domain_separated_hash(self):
         """Pin domain-separated hashing for LEDGER_PREFIX."""
+        expected_hex = "ede31d066f20ad398f75fc2f4112faa4aad4901b35ddb4f9a6b4d291961bb0ec"
         payload = b"test_payload"
         result = blake3_hash([LEDGER_PREFIX, payload])
-        assert result.hex() == "ede31d066f20ad398f75fc2f4112faa4aad4901b35ddb4f9a6b4d291961bb0ec"
+        assert result.hex() == expected_hex
         expected = _blake3.blake3(LEDGER_PREFIX + payload).digest()
+        assert expected.hex() == expected_hex
         assert result == expected
 
     def test_record_key_golden(self):
