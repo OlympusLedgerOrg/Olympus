@@ -18,6 +18,10 @@ def _canonicalization() -> dict[str, str]:
     return canonicalization_provenance("application/json", CANONICAL_VERSION)
 
 
+def _tamper_signature(signature: bytes) -> bytes:
+    return signature[:-1] + bytes([signature[-1] ^ 0x01])
+
+
 def test_key_evolution_chain_valid() -> None:
     old_key = _signing_key(1)
     new_key = _signing_key(2)
@@ -58,7 +62,7 @@ def test_key_evolution_chain_broken_signature() -> None:
         new_pubkey=record.new_pubkey,
         epoch=record.epoch,
         timestamp=record.timestamp,
-        signature_by_old=record.signature_by_old[:-1] + bytes([record.signature_by_old[-1] ^ 0x01]),
+        signature_by_old=_tamper_signature(record.signature_by_old),
         signature_by_new=record.signature_by_new,
     )
 

@@ -101,7 +101,7 @@ class KeyRotationRecord:
             ValueError: If epoch is negative.
         """
         if epoch < 0:
-            raise ValueError("epoch must be non-negative")
+            raise ValueError("epoch cannot be negative")
         old_pubkey = old_signing_key.verify_key.encode()
         new_pubkey = new_signing_key.verify_key.encode()
         payload_hash = key_rotation_payload_hash(

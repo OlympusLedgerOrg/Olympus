@@ -1,5 +1,7 @@
 """Tests for deterministic Merkle rebuild from journal entries."""
 
+import pytest
+
 from protocol.canonical import CANONICAL_VERSION
 from protocol.canonicalizer import canonicalization_provenance
 from protocol.ledger import Ledger
@@ -23,12 +25,8 @@ def _build_ledger(count: int) -> Ledger:
 
 
 def test_rebuild_empty_journal() -> None:
-    try:
+    with pytest.raises(ValueError, match="empty journal"):
         rebuild_merkle_from_journal([])
-    except ValueError as exc:
-        assert "empty journal" in str(exc)
-    else:  # pragma: no cover - defensive guard
-        raise AssertionError("Expected ValueError for empty journal")
 
 
 def test_rebuild_single_entry() -> None:

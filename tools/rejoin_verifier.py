@@ -24,10 +24,16 @@ from protocol.epochs import signed_tree_head_hash
 from protocol.merkle import ct_merkle_root, merkle_leaf_hash, verify_consistency_proof
 
 
+_HTTP_TIMEOUT_SECONDS = 10.0
+
+
 def _fetch_json(node_url: str, path: str, params: dict[str, Any]) -> Any:
+    parsed = urllib.parse.urlparse(node_url)
+    if parsed.scheme not in {"http", "https"}:
+        raise ValueError("node_url must use http or https")
     query = urllib.parse.urlencode(params)
     url = f"{node_url.rstrip('/')}{path}?{query}" if query else f"{node_url.rstrip('/')}{path}"
-    with urllib.request.urlopen(url) as response:  # noqa: S310
+    with urllib.request.urlopen(url, timeout=_HTTP_TIMEOUT_SECONDS) as response:  # noqa: S310
         return json.loads(response.read().decode("utf-8"))
 
 
@@ -124,9 +130,13 @@ def verify_rejoin(*, node_url: str, shard_id: str, verbose: bool = False) -> str
         "/ledger/entries",
         {"start": 0, "shard_id": shard_id},
     )
-    entries = entries_payload.get("entries", entries_payload if isinstance(entries_payload, list) else [])
-    if not isinstance(entries, list):
-        return "DIVERGED"
+    if isinstance(entries_payload, list):
+        entries = entries_payload
+    elif isinstance(entries_payload, dict):
+        candidate = entries_payload.get("entries", [])
+        entries = candidate if isinstance(candidate, list) else []
+    else:
+        entries = []
 
     if len(entries) < latest["tree_size"]:
         return "CATCHING_UP"
@@ -134,8 +144,6 @@ def verify_rejoin(*, node_url: str, shard_id: str, verbose: bool = False) -> str
         return "HEALTHY"
 
     leaf_hashes = _entries_to_leaf_hashes(entries[: latest["tree_size"]])
-    if not leaf_hashes:
-        return "DIVERGED"
     recomputed_root = ct_merkle_root(leaf_hashes).hex()
     if recomputed_root != latest["merkle_root"]:
         if verbose:
