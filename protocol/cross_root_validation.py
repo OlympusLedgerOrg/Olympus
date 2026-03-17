@@ -422,8 +422,13 @@ def validate_proof_consistency(
 
     Returns:
         ``True`` if both proofs are cryptographically valid and their roots are
-        consistent with *dual_commitment*; ``False`` for any failure or
-        malformed input.
+        consistent with *dual_commitment*; ``False`` for invalid or malformed
+        proof data.
+
+    Raises:
+        Any exception raised by internal verifiers: Unexpected lower-level
+            verification errors are intentionally propagated to avoid masking
+            programmer bugs as ordinary proof rejection.
     """
     return check_proof_consistency(blake3_proof, poseidon_proof, dual_commitment).is_consistent
 
