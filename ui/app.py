@@ -1573,17 +1573,21 @@ def _validate_proof_bundle_schema(bundle: Any) -> tuple[bool, str | None]:
     """
     Validate proof bundle schema before running invariant checks.
 
+    Forward-compatible validation: accepts unknown top-level fields to support
+    future schema additions (e.g., zk_proof_version, metadata). This follows
+    Olympus protocol principle: "Schema evolution is append-only; prior
+    canonical forms remain valid indefinitely" (docs/09_protocol_spec.md).
+
     Returns:
         (is_valid, error_message) tuple. error_message is None if valid.
     """
     if not isinstance(bundle, dict):
         return False, "Proof bundle must be a JSON object"
 
-    # Validate top-level keys: reject unexpected keys to catch typos like "zk_prooof"
-    allowed_top_level_keys = {"smt_proof", "zk_public_inputs", "zk_proof", "revealed_indices"}
-    unexpected_keys = set(bundle.keys()) - allowed_top_level_keys
-    if unexpected_keys:
-        return False, f"Unexpected top-level keys in bundle: {sorted(unexpected_keys)}"
+    # Forward-compatible: allow additional fields for future schema evolution.
+    # Only validate structure of known fields; unknown fields are ignored.
+    # This prevents breaking existing integrations when newer clients send
+    # additional metadata (e.g., bundle_version, timestamps, or audit trails).
 
     # Validate SMT proof structure
     if "smt_proof" in bundle:

@@ -956,8 +956,12 @@ def test_inspect_proof_bundle_accepts_minimal_bundle(monkeypatch):
     assert data["ok"] is True
 
 
-def test_inspect_proof_bundle_rejects_unexpected_top_level_keys(monkeypatch):
-    """Endpoint should reject bundles with typos like 'zk_prooof' instead of 'zk_proof'."""
+def test_inspect_proof_bundle_accepts_forward_compatible_fields(monkeypatch):
+    """Endpoint should accept bundles with additional unknown fields for forward compatibility.
+
+    This ensures newer clients can send additional metadata (e.g., bundle_version,
+    zk_proof_version, timestamps) without breaking existing integrations.
+    """
     monkeypatch.setattr(ui_app, "DEBUG_UI_ENABLED", True)
 
     bundle = {
@@ -967,14 +971,13 @@ def test_inspect_proof_bundle_rejects_unexpected_top_level_keys(monkeypatch):
             "value_hash": "0" * 64,
             "siblings": [],
         },
-        "zk_prooof": {},  # typo: should be zk_proof
+        "bundle_version": "2.0.0",  # future field
+        "metadata": {"client": "olympus-cli-v2"},  # future field
     }
     response = client.post("/inspect-proof-bundle", json=bundle)
-    assert response.status_code == 400
+    assert response.status_code == 200
     data = response.json()
-    assert data["ok"] is False
-    assert "Unexpected top-level keys" in data["error"]
-    assert "zk_prooof" in data["error"]
+    assert data["ok"] is True
 
 
 def test_inspect_proof_bundle_rejects_malformed_hex_string(monkeypatch):
