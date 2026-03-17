@@ -402,8 +402,10 @@ class UnifiedProofVerifier:
         Returns:
             False (not yet implemented)
         """
-        # TODO: Implement Halo2 verification when high-assurance mode is needed
-        # This would use py-halo2 bindings or call Rust verifier
+        # [DEFERRED — Phase 1+] Halo2 verification not yet implemented.
+        # Halo2 eliminates trusted setup risk and is the target high-assurance backend.
+        # Until implemented, all calls to this path return False (verification fails
+        # closed). See docs/adr/0003-unified-proof-system.md for rationale.
         return False
 
     def _verify_checkpoint_structure(self, proof: UnifiedProof) -> bool:

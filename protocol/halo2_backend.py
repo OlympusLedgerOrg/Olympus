@@ -1,4 +1,9 @@
 """
+STATUS: DEFERRED (Phase 1+). All methods in this module raise
+NotImplementedError. This backend is architecturally wired but not yet
+implemented. Production deployments use the Groth16 backend exclusively.
+See ADR-0003 for the trusted-setup trade-off rationale.
+
 Halo2 Proof Backend (Optional High-Assurance Mode)
 
 This module provides a placeholder interface for Halo2 proof verification,
