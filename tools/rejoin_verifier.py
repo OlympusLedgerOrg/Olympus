@@ -13,6 +13,7 @@ import nacl.exceptions
 import nacl.signing
 
 
+# Import protocol modules when running as a standalone script from tools/.
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from protocol.canonical_json import canonical_json_bytes
@@ -27,6 +28,7 @@ STATUS_CATCHING_UP = "CATCHING_UP"
 STATUS_DIVERGED = "DIVERGED"
 STATUS_UNREACHABLE = "UNREACHABLE"
 STATUS_NO_HISTORY = "NO_HISTORY"
+DEFAULT_TIMEOUT_SECONDS = 10.0
 
 
 @dataclass(frozen=True)
@@ -45,9 +47,16 @@ class _HTTPClient(Protocol):
 
 
 def _verify_sth_signature(sth: dict[str, Any]) -> bool:
-    """Verify Signed Tree Head signature when signature fields are populated."""
-    signature_hex = str(sth.get("signature", ""))
-    pubkey_hex = str(sth.get("signer_pubkey", ""))
+    """Verify Signed Tree Head signature when signature fields are populated.
+
+    Historical STH records may currently omit signature fields in deployments
+    where history is reconstructed from shard headers. In that case we treat
+    signature validation as unavailable and continue with other checks.
+    """
+    signature = sth.get("signature", "")
+    pubkey = sth.get("signer_pubkey", "")
+    signature_hex = signature if isinstance(signature, str) else ""
+    pubkey_hex = pubkey if isinstance(pubkey, str) else ""
     if not signature_hex and not pubkey_hex:
         return True
     if not signature_hex or not pubkey_hex:
@@ -78,7 +87,12 @@ def _extract_proof_nodes(proof_data: dict[str, Any]) -> list[bytes]:
 
 
 def _compute_replayed_root(entries: list[dict[str, Any]]) -> bytes:
-    """Recompute CT-style Merkle root from canonicalized ledger entries."""
+    """Recompute CT-style Merkle root from canonicalized ledger entries.
+
+    Each entry should follow the serialized ``LedgerEntry`` shape returned by
+    the API (ts, record_hash, shard_id, shard_root, canonicalization,
+    prev_entry_hash, entry_hash, and optional extras).
+    """
     if not entries:
         raise ValueError("no entries to replay")
     leaf_hashes = [merkle_leaf_hash(canonical_json_bytes(entry)) for entry in entries]
@@ -98,8 +112,8 @@ def evaluate_rejoin_health(
     ordered_sths = sorted(sths, key=lambda sth: int(sth["epoch_id"]))
 
     for index, sth in enumerate(ordered_sths):
-        if index > 0:
-            previous = ordered_sths[index - 1]
+        previous = ordered_sths[index - 1] if index > 0 else None
+        if previous is not None:
             if int(sth["tree_size"]) < int(previous["tree_size"]):
                 return RejoinReport(
                     status=STATUS_DIVERGED,
@@ -113,6 +127,7 @@ def evaluate_rejoin_health(
                 status=STATUS_DIVERGED,
                 details=f"Invalid STH signature at epoch {sth.get('epoch_id')}",
             )
+        if previous is not None:
             prev_key = str(previous.get("signer_pubkey", ""))
             curr_key = str(sth.get("signer_pubkey", ""))
             if prev_key and curr_key and prev_key != curr_key:
@@ -188,15 +203,19 @@ def evaluate_rejoin_health(
 
 
 def run_rejoin_verifier(
-    *, node_url: str, shard_id: str, client: _HTTPClient | None = None
+    *,
+    node_url: str,
+    shard_id: str,
+    history_limit: int = 100,
+    client: _HTTPClient | None = None,
 ) -> RejoinReport:
     """Fetch node state over HTTP and evaluate rejoin health."""
-    http_client = client or httpx.Client(timeout=10.0)
+    http_client = client or httpx.Client(timeout=DEFAULT_TIMEOUT_SECONDS)
     close_client = client is None
     try:
         history_resp = http_client.get(
             f"{node_url.rstrip('/')}/protocol/sth/history",
-            params={"shard_id": shard_id, "n": 100},
+            params={"shard_id": shard_id, "n": history_limit},
         )
         history_resp.raise_for_status()
         history_payload = history_resp.json()
@@ -246,6 +265,12 @@ def main() -> int:
     parser = argparse.ArgumentParser(description="Olympus rejoin verification tool")
     parser.add_argument("--node-url", required=True, help="Node base URL")
     parser.add_argument("--shard-id", required=True, help="Shard ID to verify")
+    parser.add_argument(
+        "--history-limit",
+        type=int,
+        default=100,
+        help="Number of STH history records to fetch (default: 100)",
+    )
     parser.add_argument("--verbose", action="store_true", help="Enable debug logging")
     args = parser.parse_args()
 
@@ -254,7 +279,11 @@ def main() -> int:
         format="%(levelname)s %(message)s",
     )
 
-    report = run_rejoin_verifier(node_url=args.node_url, shard_id=args.shard_id)
+    report = run_rejoin_verifier(
+        node_url=args.node_url,
+        shard_id=args.shard_id,
+        history_limit=args.history_limit,
+    )
     print(f"{report.status}: {report.details}")
 
     if report.status in {STATUS_HEALTHY, STATUS_CATCHING_UP}:

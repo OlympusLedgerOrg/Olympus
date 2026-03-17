@@ -85,7 +85,9 @@ class KeyEvolutionChain:
             ValueError: If epoch is non-monotonic relative to existing records.
         """
         if self.rotations and epoch <= self.rotations[-1].epoch:
-            raise ValueError("epoch must be strictly increasing")
+            raise ValueError(
+                f"epoch {epoch} must be greater than previous epoch {self.rotations[-1].epoch}"
+            )
 
         old_pubkey = bytes(old_signing_key.verify_key)
         new_pubkey = bytes(new_signing_key.verify_key)
@@ -166,5 +168,7 @@ class KeyEvolutionChain:
         if self.rotations:
             return self.rotations[-1].new_pubkey
         if self._genesis_pubkey is None:
-            raise ValueError("genesis pubkey is unknown; verify() has not been called")
+            raise ValueError(
+                "genesis pubkey is unknown; establish it via verify() or the first rotation"
+            )
         return self._genesis_pubkey
