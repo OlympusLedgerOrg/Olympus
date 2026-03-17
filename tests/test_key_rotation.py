@@ -1,152 +1,109 @@
-"""Tests for key rotation evolution chains."""
+"""Tests for protocol.key_rotation."""
 
+from dataclasses import replace
+
+import hypothesis.strategies as st
 import nacl.signing
-from hypothesis import given, strategies as st
+import pytest
+from hypothesis import given
 
-from protocol.canonical import CANONICAL_VERSION
-from protocol.canonicalizer import canonicalization_provenance
-from protocol.key_rotation import KeyEvolutionChain, KeyRotationRecord
-from protocol.ledger import Ledger
-from protocol.shards import get_signing_key_from_seed
+from protocol.key_rotation import KeyEvolutionChain
 
 
-def _signing_key(seed_byte: int) -> nacl.signing.SigningKey:
-    return get_signing_key_from_seed(bytes([seed_byte]) * 32)
+def test_valid_chain_three_rotations() -> None:
+    genesis = nacl.signing.SigningKey.generate()
+    second = nacl.signing.SigningKey.generate()
+    third = nacl.signing.SigningKey.generate()
+    fourth = nacl.signing.SigningKey.generate()
+
+    chain = KeyEvolutionChain()
+    chain.rotate(genesis, second, epoch=1)
+    chain.rotate(second, third, epoch=2)
+    chain.rotate(third, fourth, epoch=4)
+
+    assert chain.verify(bytes(genesis.verify_key))
+    assert chain.current_pubkey() == bytes(fourth.verify_key)
 
 
-def _canonicalization() -> dict[str, str]:
-    return canonicalization_provenance("application/json", CANONICAL_VERSION)
+def test_broken_signature_fails_verification() -> None:
+    first = nacl.signing.SigningKey.generate()
+    second = nacl.signing.SigningKey.generate()
+
+    chain = KeyEvolutionChain()
+    record = chain.rotate(first, second, epoch=1)
+    chain.rotations[0] = replace(record, signature_by_old=b"\x00" * 64)
+
+    assert not chain.verify(bytes(first.verify_key))
 
 
-def _tamper_signature(signature: bytes) -> bytes:
-    return signature[:-1] + bytes([signature[-1] ^ 0x01])
+def test_out_of_order_epoch_skip_is_valid() -> None:
+    first = nacl.signing.SigningKey.generate()
+    second = nacl.signing.SigningKey.generate()
+    third = nacl.signing.SigningKey.generate()
+
+    chain = KeyEvolutionChain()
+    chain.rotate(first, second, epoch=1)
+    chain.rotate(second, third, epoch=3)
+
+    assert chain.verify(bytes(first.verify_key))
 
 
-def test_key_evolution_chain_valid() -> None:
-    old_key = _signing_key(1)
-    new_key = _signing_key(2)
-    newest_key = _signing_key(3)
+def test_non_monotonic_epoch_fails() -> None:
+    first = nacl.signing.SigningKey.generate()
+    second = nacl.signing.SigningKey.generate()
+    third = nacl.signing.SigningKey.generate()
 
-    chain = KeyEvolutionChain(
-        records=[
-            KeyRotationRecord.create(
-                old_signing_key=old_key,
-                new_signing_key=new_key,
-                epoch=1,
-                timestamp="2026-03-17T00:00:00Z",
-            ),
-            KeyRotationRecord.create(
-                old_signing_key=new_key,
-                new_signing_key=newest_key,
-                epoch=2,
-                timestamp="2026-03-17T00:10:00Z",
-            ),
-        ]
-    )
+    chain = KeyEvolutionChain()
+    chain.rotate(first, second, epoch=1)
+    record = chain.rotate(second, third, epoch=3)
+    chain.rotations[1] = replace(record, epoch=0)
 
-    assert chain.verify(old_key.verify_key.encode())
+    assert not chain.verify(bytes(first.verify_key))
 
 
-def test_key_evolution_chain_broken_signature() -> None:
-    old_key = _signing_key(1)
-    new_key = _signing_key(2)
+def test_wrong_genesis_fails_verification() -> None:
+    first = nacl.signing.SigningKey.generate()
+    second = nacl.signing.SigningKey.generate()
+    wrong_genesis = nacl.signing.SigningKey.generate()
 
-    record = KeyRotationRecord.create(
-        old_signing_key=old_key,
-        new_signing_key=new_key,
-        epoch=1,
-        timestamp="2026-03-17T00:00:00Z",
-    )
-    tampered = KeyRotationRecord(
-        old_pubkey=record.old_pubkey,
-        new_pubkey=record.new_pubkey,
-        epoch=record.epoch,
-        timestamp=record.timestamp,
-        signature_by_old=_tamper_signature(record.signature_by_old),
-        signature_by_new=record.signature_by_new,
-    )
+    chain = KeyEvolutionChain()
+    chain.rotate(first, second, epoch=7)
 
-    chain = KeyEvolutionChain(records=[tampered])
-    assert not chain.verify(old_key.verify_key.encode())
+    assert not chain.verify(bytes(wrong_genesis.verify_key))
 
 
-def test_key_evolution_chain_out_of_order_epoch() -> None:
-    old_key = _signing_key(1)
-    mid_key = _signing_key(2)
-    new_key = _signing_key(3)
+def test_single_rotation_verifies() -> None:
+    first = nacl.signing.SigningKey.generate()
+    second = nacl.signing.SigningKey.generate()
 
-    chain = KeyEvolutionChain(
-        records=[
-            KeyRotationRecord.create(
-                old_signing_key=old_key,
-                new_signing_key=mid_key,
-                epoch=2,
-                timestamp="2026-03-17T00:00:00Z",
-            ),
-            KeyRotationRecord.create(
-                old_signing_key=mid_key,
-                new_signing_key=new_key,
-                epoch=1,
-                timestamp="2026-03-17T00:10:00Z",
-            ),
-        ]
-    )
+    chain = KeyEvolutionChain()
+    chain.rotate(first, second, epoch=1)
 
-    assert not chain.verify(old_key.verify_key.encode())
+    assert chain.verify(bytes(first.verify_key))
+    assert chain.current_pubkey() == bytes(second.verify_key)
 
 
-def test_key_evolution_chain_verify_from_genesis() -> None:
-    genesis = _signing_key(11)
-    key2 = _signing_key(12)
-    chain = KeyEvolutionChain(
-        records=[
-            KeyRotationRecord.create(
-                old_signing_key=genesis,
-                new_signing_key=key2,
-                epoch=1,
-                timestamp="2026-03-17T01:00:00Z",
-            )
-        ]
-    )
-
-    assert chain.verify(genesis.verify_key.encode())
-    assert not chain.verify(_signing_key(99).verify_key.encode())
+def test_empty_chain_verify_true() -> None:
+    genesis = nacl.signing.SigningKey.generate()
+    chain = KeyEvolutionChain()
+    assert chain.verify(bytes(genesis.verify_key))
+    assert chain.current_pubkey() == bytes(genesis.verify_key)
 
 
-def test_key_rotation_record_can_commit_to_ledger() -> None:
-    ledger = Ledger()
-    old_key = _signing_key(21)
-    new_key = _signing_key(22)
-    record = KeyRotationRecord.create(
-        old_signing_key=old_key,
-        new_signing_key=new_key,
-        epoch=1,
-        timestamp="2026-03-17T00:00:00Z",
-    )
+@given(st.integers(min_value=1, max_value=20))
+def test_hypothesis_arbitrary_chain_lengths_verify(length: int) -> None:
+    keys = [nacl.signing.SigningKey.generate() for _ in range(length + 1)]
+    chain = KeyEvolutionChain()
 
-    entry = record.append_to_ledger(
-        ledger=ledger,
-        shard_id="rotation/shard-a",
-        shard_root="00" * 32,
-        canonicalization=_canonicalization(),
-    )
+    epoch = 10
+    for index in range(length):
+        chain.rotate(keys[index], keys[index + 1], epoch=epoch)
+        epoch += 2
 
-    assert entry.record_hash == record.record_hash().hex()
-    assert ledger.verify_chain()
+    assert chain.verify(bytes(keys[0].verify_key))
 
 
-@given(length=st.integers(min_value=0, max_value=12))
-def test_key_evolution_chain_hypothesis_lengths(length: int) -> None:
-    keys = [_signing_key(i + 1) for i in range(length + 1)]
-    records = [
-        KeyRotationRecord.create(
-            old_signing_key=keys[i],
-            new_signing_key=keys[i + 1],
-            epoch=i + 1,
-            timestamp=f"2026-03-17T00:{i:02d}:00Z",
-        )
-        for i in range(length)
-    ]
-
-    chain = KeyEvolutionChain(records=records)
-    assert chain.verify(keys[0].verify_key.encode())
+def test_current_pubkey_requires_known_genesis_if_no_rotations() -> None:
+    chain = KeyEvolutionChain()
+    with pytest.raises(ValueError, match="genesis pubkey is unknown"):
+        chain.current_pubkey()
