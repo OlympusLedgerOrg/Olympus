@@ -41,7 +41,9 @@ __all__ = [
     "epochs",
     "events",
     "ledger",
+    "key_rotation",
     "merkle",
+    "rebuild",
     "shards",
     "ssmf",
     # Prove
