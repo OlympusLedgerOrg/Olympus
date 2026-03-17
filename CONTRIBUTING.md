@@ -10,29 +10,17 @@ For security reports or vulnerability discussions, please follow the process in 
 
 ## Licensing and Contributions
 
-Olympus uses a **two-layer licensing model**:
-
-### Open Source Core (Apache 2.0)
-Contributions to the core protocol and infrastructure are licensed under **Apache License 2.0**:
+Olympus is licensed under **Apache License 2.0** for all components:
 - Protocol implementations (`protocol/`)
 - Zero-knowledge circuits (`proofs/`)
 - Storage layer (`storage/`)
+- API Gateway (`api/`)
+- Debug UI (`ui/`)
 - Schemas (`schemas/`)
 - Verification tools (`verifiers/`)
 - CLI tools (`tools/`)
 
-**By submitting a pull request to these components**, you agree to license your contributions under Apache 2.0.
-
-### Proprietary Components (Commercial License)
-The following components are proprietary and governed by a commercial license:
-- Web Application (`dashboard/`)
-- Debug UI (`ui/`)
-- API Gateway (`api/`)
-
-**Contributions to these components** are subject to separate contributor agreements. Please contact the Olympus team before submitting contributions to proprietary components.
-
-### Contributor License Agreement (CLA)
-For significant contributions, you may be asked to sign a Contributor License Agreement (CLA) that allows the project to use your contributions under both the Apache 2.0 license (for core components) and commercial licensing arrangements (for proprietary components).
+**By submitting a pull request**, you agree to license your contributions under Apache 2.0.
 
 ---
 
