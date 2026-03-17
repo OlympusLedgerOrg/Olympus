@@ -10,6 +10,7 @@ from pathlib import Path
 import nacl.signing
 import pytest
 
+import protocol.checkpoints as checkpoints_module
 from protocol.checkpoints import (
     CheckpointRegistry,
     SignedCheckpoint,
@@ -216,6 +217,27 @@ def test_verify_checkpoint_invalid_signature(registry, signing_keys):
 
     checkpoint.federation_quorum_certificate["signatures"][0]["signature"] = "00"
     assert not verify_checkpoint(checkpoint, registry)
+
+
+def test_verify_checkpoint_propagates_unexpected_quorum_verifier_errors(
+    monkeypatch: pytest.MonkeyPatch, registry, signing_keys
+):
+    """Unexpected verifier bugs should surface instead of being silently rejected."""
+    checkpoint = create_checkpoint(
+        sequence=0,
+        ledger_head_hash="abc123",
+        ledger_height=1,
+        registry=registry,
+        signing_keys=signing_keys,
+    )
+
+    def _boom(*_args: object, **_kwargs: object) -> bool:
+        raise RuntimeError("unexpected quorum verifier failure")
+
+    monkeypatch.setattr(checkpoints_module, "verify_checkpoint_quorum_certificate", _boom)
+
+    with pytest.raises(RuntimeError, match="unexpected quorum verifier failure"):
+        verify_checkpoint(checkpoint, registry)
 
 
 def test_verify_checkpoint_uses_epoch_snapshot(registry, signing_keys):

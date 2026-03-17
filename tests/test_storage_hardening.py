@@ -62,6 +62,9 @@ class _FakeCursor:
     def execute(self, sql: str, _params: object) -> None:
         self.statements.append(" ".join(sql.split()))
 
+    def executemany(self, sql: str, _params: object) -> None:
+        self.statements.append(" ".join(sql.split()))
+
 
 class _FakeTree:
     def __init__(self) -> None:
@@ -144,3 +147,11 @@ def test_persist_tree_nodes_uses_upsert_without_precheck(monkeypatch: pytest.Mon
     assert all(
         "ON CONFLICT (shard_id, level, index) DO NOTHING" in sql for sql in cursor.statements
     )
+
+
+def test_fake_cursor_executemany_records_normalized_sql() -> None:
+    """Fake cursor tracks batched statements for persistence-path assertions."""
+    cursor = _FakeCursor()
+    cursor.executemany("INSERT INTO foo  (a)\nVALUES (%s)", [(1,), (2,)])
+
+    assert cursor.statements == ["INSERT INTO foo (a) VALUES (%s)"]

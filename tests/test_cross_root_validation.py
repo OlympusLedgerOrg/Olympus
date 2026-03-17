@@ -13,6 +13,7 @@ Coverage:
 
 import pytest
 
+import protocol.cross_root_validation as cross_root_validation_module
 from protocol.cross_root_validation import (
     ConsistencyError,
     ConsistencyResult,
@@ -25,7 +26,7 @@ from protocol.cross_root_validation import (
 )
 from protocol.hashes import SNARK_SCALAR_FIELD, blake3_to_field_element, hash_bytes
 from protocol.merkle import MerkleProof, MerkleTree
-from protocol.poseidon_tree import PoseidonMerkleTree, PoseidonProof, _to_field_int
+from protocol.poseidon_tree import PoseidonMerkleTree, PoseidonProof
 from protocol.redaction import RedactionProtocol
 from protocol.redaction_ledger import DualHashCommitment
 
@@ -718,6 +719,23 @@ def test_validate_proof_consistency_does_not_raise_on_garbage():
     assert validate_proof_consistency(object(), object(), object()) is False  # type: ignore[arg-type]
     assert validate_proof_consistency(1, 2, 3) is False  # type: ignore[arg-type]
     assert validate_proof_consistency([], {}, ()) is False  # type: ignore[arg-type]
+
+
+def test_validate_proof_consistency_propagates_unexpected_internal_errors(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """Unexpected verifier bugs should surface instead of being silently mapped to False."""
+    blake3_proof, _ = _make_blake3_proof(PARTS_A)
+    poseidon_proof, _ = _make_poseidon_proof(PARTS_A)
+    commitment = _make_dual_commitment(PARTS_A)
+
+    def _boom(*_args: object, **_kwargs: object) -> bool:
+        raise RuntimeError("unexpected internal failure")
+
+    monkeypatch.setattr(cross_root_validation_module, "_verify_blake3_proof", _boom)
+
+    with pytest.raises(RuntimeError, match="unexpected internal failure"):
+        validate_proof_consistency(blake3_proof, poseidon_proof, commitment)
 
 
 # ---------------------------------------------------------------------------

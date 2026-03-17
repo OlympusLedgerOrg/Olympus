@@ -353,7 +353,7 @@ def check_proof_consistency(
     # 4. Verify BLAKE3 proof cryptographically.
     try:
         blake3_valid = _verify_blake3_proof(blake3_proof)
-    except Exception:
+    except (TypeError, ValueError):
         blake3_valid = False
     if not blake3_valid:
         return ConsistencyResult(
@@ -422,13 +422,15 @@ def validate_proof_consistency(
 
     Returns:
         ``True`` if both proofs are cryptographically valid and their roots are
-        consistent with *dual_commitment*; ``False`` for any failure or
-        malformed input.
+        consistent with *dual_commitment*; ``False`` for invalid or malformed
+        proof data.
+
+    Raises:
+        Any exception raised by internal verifiers: Unexpected lower-level
+            verification errors are intentionally propagated to avoid masking
+            programmer bugs as ordinary proof rejection.
     """
-    try:
-        return check_proof_consistency(blake3_proof, poseidon_proof, dual_commitment).is_consistent
-    except Exception:
-        return False
+    return check_proof_consistency(blake3_proof, poseidon_proof, dual_commitment).is_consistent
 
 
 def validate_batch_consistency(
