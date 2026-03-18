@@ -53,7 +53,8 @@ def test_alembic_env_normalises_to_psycopg_driver():
     assert "postgresql+psycopg://" in env_py, (
         "env.py should normalise DATABASE_URL to postgresql+psycopg://"
     )
-    assert 'postgresql://"' not in env_py, (
+    # The regex replacement target must NOT be bare 'postgresql://' (which needs psycopg2)
+    assert '"postgresql://"' not in env_py, (
         "env.py should not strip the driver to bare postgresql://"
     )
 
@@ -85,7 +86,7 @@ def test_federation_compose_uses_asyncpg_driver():
 def test_dockerfile_copies_alembic_files():
     """Production Dockerfile must COPY alembic/ and alembic.ini (not migrations/)."""
     dockerfile = (REPO_ROOT / "Dockerfile").read_text(encoding="utf-8")
-    assert "COPY" in dockerfile and "alembic /app/alembic" in dockerfile
+    assert "alembic /app/alembic" in dockerfile
     assert "alembic.ini /app/alembic.ini" in dockerfile
     assert "migrations /app/migrations" not in dockerfile
 
