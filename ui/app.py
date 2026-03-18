@@ -965,6 +965,239 @@ def _parse_proof_bundle(
     return proof, smt_root, revealed_indices, revealed_content, total_parts
 
 
+# ── Public Records Request Proxies ───────────────────────────────────────
+
+
+@app.get("/public-records/requests")
+def proxy_list_requests(request: Request):
+    """Proxy GET /requests to the unified API."""
+    _require_debug_ui()
+    try:
+        query = request.url.query
+        path = f"/requests?{query}" if query else "/requests"
+        data = _fetch_json(path)
+        return JSONResponse(data)
+    except (HTTPError, URLError) as exc:
+        status = getattr(exc, 'code', 502) or 502
+        return JSONResponse(status_code=status, content={"error": str(exc)})
+
+
+@app.post("/public-records/requests")
+async def proxy_create_request(request: Request):
+    """Proxy POST /requests to the unified API."""
+    _require_debug_ui()
+    try:
+        body = await request.json()
+        import json as _json
+        req_data = _json.dumps(body).encode('utf-8')
+        req = UrlRequest(
+            f"{API_BASE}/requests",
+            data=req_data,
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        with urlopen(req, timeout=10) as resp:  # noqa: S310
+            result = _json.loads(resp.read().decode('utf-8'))
+        return JSONResponse(status_code=201, content=result)
+    except HTTPError as exc:
+        error_body = exc.read().decode('utf-8') if exc.fp else str(exc)
+        return JSONResponse(status_code=exc.code, content={"error": error_body})
+    except (URLError, Exception) as exc:
+        return JSONResponse(status_code=502, content={"error": str(exc)})
+
+
+@app.get("/public-records/requests/{display_id}")
+def proxy_get_request(display_id: str):
+    """Proxy GET /requests/{display_id} to the unified API."""
+    _require_debug_ui()
+    try:
+        data = _fetch_json(f"/requests/{quote(display_id)}")
+        return JSONResponse(data)
+    except HTTPError as exc:
+        return JSONResponse(status_code=exc.code, content={"error": str(exc)})
+    except (URLError, Exception) as exc:
+        return JSONResponse(status_code=502, content={"error": str(exc)})
+
+
+@app.get("/public-records/verify/{display_id}")
+def proxy_verify_record(display_id: str):
+    """Look up a request and fetch its cryptographic proof from the unified API."""
+    _require_debug_ui()
+    try:
+        req_data = _expect_json_object(_fetch_json(f"/requests/{quote(display_id)}"))
+        shard_id = req_data.get("shard_id", "")
+        commit_hash = req_data.get("commit_hash", "")
+        if not shard_id:
+            return JSONResponse(status_code=404, content={"error": "No shard_id found on request"})
+
+        # Fetch cryptographic proof from the unified API
+        proof_path = (
+            f"/shards/{quote(shard_id)}/proof"
+            f"?record_type=document&record_id={quote(display_id)}&version=1"
+        )
+        try:
+            proof_data = _expect_json_object(_fetch_json(proof_path))
+        except (HTTPError, URLError):
+            # Proof may not exist if the record was never ingested into the SMT
+            proof_data = None
+
+        return JSONResponse({
+            "request": req_data,
+            "proof": proof_data,
+            "commit_hash": commit_hash,
+        })
+    except HTTPError as exc:
+        return JSONResponse(status_code=exc.code, content={"error": str(exc)})
+    except (URLError, Exception) as exc:
+        return JSONResponse(status_code=502, content={"error": str(exc)})
+
+
+# ── Oracle AI Endpoints ──────────────────────────────────────────────────
+
+
+@app.post("/oracle/refine")
+async def oracle_refine_request(request: Request):
+    """Use Claude to refine a public records request description."""
+    _require_debug_ui()
+    api_key = os.environ.get("ANTHROPIC_API_KEY", "")
+    if not api_key:
+        return JSONResponse(status_code=503, content={
+            "error": "ANTHROPIC_API_KEY not configured. Set it as an environment variable."
+        })
+
+    try:
+        body = await request.json()
+        subject = body.get("subject", "")
+        description = body.get("description", "")
+        agency = body.get("agency", "")
+        request_type = body.get("request_type", "NC_PUBLIC_RECORDS")
+
+        if request_type == "NC_PUBLIC_RECORDS":
+            statute = "NC General Statute § 132 (NC Public Records Act)"
+        elif request_type == "FOIA":
+            statute = "5 U.S.C. § 552 (Federal Freedom of Information Act)"
+        else:
+            statute = request_type
+
+        system_prompt = (
+            "You are a legal assistant specializing in public records requests. "
+            f"The user is filing a request under {statute}. "
+            f"Agency: {agency or 'not specified'}. "
+            "Refine their request to be more specific, legally precise, and likely to succeed. "
+            "Keep the same intent but improve clarity and completeness. "
+            "Output ONLY the refined request text, no preamble."
+        )
+
+        user_msg = f"Subject: {subject}\n\nDescription: {description}"
+
+        payload = json.dumps({
+            "model": "claude-sonnet-4-20250514",
+            "max_tokens": 1024,
+            "system": system_prompt,
+            "messages": [{"role": "user", "content": user_msg}],
+        }).encode("utf-8")
+
+        api_req = UrlRequest(
+            "https://api.anthropic.com/v1/messages",
+            data=payload,
+            headers={
+                "Content-Type": "application/json",
+                "x-api-key": api_key,
+                "anthropic-version": "2023-06-01",
+            },
+            method="POST",
+        )
+        with urlopen(api_req, timeout=30) as resp:  # noqa: S310
+            result = json.loads(resp.read().decode("utf-8"))
+
+        text = ""
+        for block in result.get("content", []):
+            if block.get("type") == "text":
+                text += block.get("text", "")
+
+        return JSONResponse({"refined": text})
+    except HTTPError as exc:
+        error_body = exc.read().decode("utf-8") if exc.fp else str(exc)
+        return JSONResponse(status_code=502, content={"error": f"Claude API error: {error_body}"})
+    except Exception as exc:
+        return JSONResponse(status_code=500, content={"error": str(exc)})
+
+
+@app.post("/oracle/appeal")
+async def oracle_draft_appeal(request: Request):
+    """Use Claude to draft an appeal letter for a denied public records request."""
+    _require_debug_ui()
+    api_key = os.environ.get("ANTHROPIC_API_KEY", "")
+    if not api_key:
+        return JSONResponse(status_code=503, content={
+            "error": "ANTHROPIC_API_KEY not configured. Set it as an environment variable."
+        })
+
+    try:
+        body = await request.json()
+        subject = body.get("subject", "")
+        description = body.get("description", "")
+        agency = body.get("agency", "")
+        request_type = body.get("request_type", "NC_PUBLIC_RECORDS")
+        denial_reason = body.get("denial_reason", "")
+        display_id = body.get("display_id", "")
+
+        if request_type == "NC_PUBLIC_RECORDS":
+            statute = "NC General Statute § 132 (NC Public Records Act)"
+        elif request_type == "FOIA":
+            statute = "5 U.S.C. § 552 (Federal Freedom of Information Act)"
+        else:
+            statute = request_type
+
+        system_prompt = (
+            "You are a legal assistant specializing in public records law. "
+            f"Draft a formal appeal letter for a denied request under {statute}. "
+            f"Agency: {agency or 'not specified'}. "
+            "The letter should be professional, cite relevant legal authority, "
+            "and argue why the denial should be overturned. "
+            "Output ONLY the appeal letter text."
+        )
+
+        user_msg = (
+            f"Request ID: {display_id}\n"
+            f"Subject: {subject}\n"
+            f"Original Description: {description}\n"
+            f"Denial Reason: {denial_reason or 'Not stated'}"
+        )
+
+        payload = json.dumps({
+            "model": "claude-sonnet-4-20250514",
+            "max_tokens": 2048,
+            "system": system_prompt,
+            "messages": [{"role": "user", "content": user_msg}],
+        }).encode("utf-8")
+
+        api_req = UrlRequest(
+            "https://api.anthropic.com/v1/messages",
+            data=payload,
+            headers={
+                "Content-Type": "application/json",
+                "x-api-key": api_key,
+                "anthropic-version": "2023-06-01",
+            },
+            method="POST",
+        )
+        with urlopen(api_req, timeout=30) as resp:  # noqa: S310
+            result = json.loads(resp.read().decode("utf-8"))
+
+        text = ""
+        for block in result.get("content", []):
+            if block.get("type") == "text":
+                text += block.get("text", "")
+
+        return JSONResponse({"appeal": text})
+    except HTTPError as exc:
+        error_body = exc.read().decode("utf-8") if exc.fp else str(exc)
+        return JSONResponse(status_code=502, content={"error": f"Claude API error: {error_body}"})
+    except Exception as exc:
+        return JSONResponse(status_code=500, content={"error": str(exc)})
+
+
 @app.get("/")
 def debug_console(request: Request):
     """Render the debug console view."""
