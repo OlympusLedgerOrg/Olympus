@@ -634,7 +634,11 @@ def _require_debug_ui() -> None:
 
 
 def _check_oracle_rate_limit(request: Request) -> None:
-    """Enforce per-IP rate limiting for Oracle endpoints using a sliding window."""
+    """Enforce per-IP rate limiting for Oracle endpoints using a sliding window.
+
+    This limiter is intentionally in-memory and process-local for single-node
+    debug/developer deployments.
+    """
     try:
         limit = int(os.environ.get("ORACLE_RATE_LIMIT_REQUESTS", "10"))
     except ValueError:
