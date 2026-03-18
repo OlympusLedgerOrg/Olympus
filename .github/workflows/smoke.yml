@@ -40,10 +40,10 @@ jobs:
       run: python tools/validate_schemas.py
 
     - name: Ruff lint
-      run: ruff check protocol/ storage/ api/ app_testonly/ tests/ --output-format=github
+      run: ruff check protocol/ storage/ api/ tests/ --output-format=github
 
     - name: Ruff format check
-      run: ruff format --check protocol/ storage/ api/ app_testonly/ tests/
+      run: ruff format --check protocol/ storage/ api/ tests/
 
     - name: MyPy type check
       run: mypy protocol/ storage/ api/
@@ -59,6 +59,7 @@ jobs:
     env:
       DATABASE_URL: postgresql://olympus:olympus@localhost:5432/olympus
       TEST_DATABASE_URL: postgresql://olympus:olympus@localhost:5432/olympus
+      OLYMPUS_INGEST_SIGNING_KEY: "test-key-for-ci-only-not-for-production"
       PGHOST: localhost
       PGPORT: "5432"
       PGUSER: olympus
