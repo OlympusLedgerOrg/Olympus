@@ -7,9 +7,10 @@ Uses an in-memory SQLite database via pytest fixtures.
 from __future__ import annotations
 
 import hashlib
+
 import pytest
 import pytest_asyncio
-from httpx import AsyncClient, ASGITransport
+from httpx import ASGITransport, AsyncClient
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
 from api.deps import get_db

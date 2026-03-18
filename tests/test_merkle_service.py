@@ -11,7 +11,7 @@ import hashlib
 
 import pytest
 
-from api.services.merkle import MerkleProof, MerkleRoot, build_tree, generate_proof, verify_proof
+from api.services.merkle import MerkleProof, build_tree, generate_proof, verify_proof
 
 
 def _h(s: str) -> str:

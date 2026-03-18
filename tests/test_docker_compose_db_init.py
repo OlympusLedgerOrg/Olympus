@@ -1,5 +1,5 @@
-from pathlib import Path
 import re
+from pathlib import Path
 
 
 EXPECTED_FEDERATION_NODES = 3

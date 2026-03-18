@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import pytest
 import pytest_asyncio
-from httpx import AsyncClient, ASGITransport
+from httpx import ASGITransport, AsyncClient
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
 from api.deps import get_db
@@ -174,7 +174,8 @@ async def test_appeal_fulfilled_request_rejected(client):
 async def test_deadline_nc_public_records():
     """NC Public Records deadline should be ~30 business days from filing."""
     from datetime import datetime
-    from api.services.deadline import compute_deadline, STATUTORY_NC_FULFILL_DAYS
+
+    from api.services.deadline import compute_deadline
 
     filed_at = datetime(2024, 1, 15, 9, 0, 0)
     deadline = compute_deadline(filed_at, "NC_PUBLIC_RECORDS")
@@ -186,6 +187,7 @@ async def test_deadline_nc_public_records():
 async def test_deadline_federal_foia():
     """Federal FOIA deadline should be ~20 business days from filing."""
     from datetime import datetime
+
     from api.services.deadline import compute_deadline
 
     filed_at = datetime(2024, 1, 15, 9, 0, 0)

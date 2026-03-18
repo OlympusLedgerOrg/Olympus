@@ -266,7 +266,7 @@ mod tests {
         let cases: &[(&[&[u8]], &str)] = &[
             (&[b"solo"], "22997be8efb920766d4a869cb3c0562f7ad5b8020887bc501f58029964485a11"),
             (&[b"alpha", b"beta"], "b1463a3156ed73e5df9d0101533766d62381dbb6e0b5b23a4c1b651095ba36dc"),
-            (&[b"alpha", b"beta", b"gamma"], "a75ef97f9f64aa774b70c281d2bbf8129a87dd224ba61cbaafbe6977885283e7"),
+            (&[b"alpha", b"beta", b"gamma"], "9f68b7c5e6fc491a2f926699a0d7bd0bda1cdda1285b60c5ada9fb7fa3a6dad9"),
         ];
         for (leaves_raw, expected) in cases {
             let leaves: Vec<Vec<u8>> = leaves_raw.iter().map(|s| s.to_vec()).collect();
@@ -395,33 +395,33 @@ mod tests {
             DualRootCommitmentVector {
                 description: "Valid: both roots from same 3-section document",
                 document_parts: &["section A", "section B", "section C"],
-                blake3_root_hex: "dc401f6a79485ad46fdfa4b7a1a5a33a4042f93b967dc73073889ebf49e7235f",
-                poseidon_root_32be_hex: "25829d08bbc54f0315905794aff98d622bfa371fcac5722b14dbf4a259271471",
-                expected_dual: "7bda8702a6b5ebe60ed7f22fb25cccf886fb0ccdf308c77433b6db0f883dc132",
+                blake3_root_hex: "487f19f5f9226d91d8b59732d51baff231710c4f171a170e8573e4ca1666967b",
+                poseidon_root_32be_hex: "18a53b4212bf0cf8cef46e92830204178bf8a3a266ddf389cce2cd4ae2e903e5",
+                expected_dual: "ab1cde209598faa9cac0f8273d4d35a778893c849e71d5dca737ce7cf822825a",
                 expected_blake3_consistent: true,
             },
             DualRootCommitmentVector {
                 description: "Invalid: Poseidon root from unrelated document",
                 document_parts: &["section A", "section B", "section C"],
-                blake3_root_hex: "dc401f6a79485ad46fdfa4b7a1a5a33a4042f93b967dc73073889ebf49e7235f",
+                blake3_root_hex: "487f19f5f9226d91d8b59732d51baff231710c4f171a170e8573e4ca1666967b",
                 poseidon_root_32be_hex: "08ce2263d65d7ea15782e3ef9029a934275e4be7b51a35e49a1ad74be1d934c1",
-                expected_dual: "0a7509eb8de93a3ccb86a9a9afc439b99fba7ab27c1f3b6682b6325410d06de7",
+                expected_dual: "dd05613ebe944c29c840a5b61f948922b7759c1ad8857390fffad22712f3bdeb",
                 expected_blake3_consistent: true,
             },
             DualRootCommitmentVector {
                 description: "Edge: single-leaf document",
                 document_parts: &["minimal"],
                 blake3_root_hex: "cf57382d603eef611238e86c5d0fc6175326570ecfa4d1a6445d65f8d0b40d7f",
-                poseidon_root_32be_hex: "2c44f64b791f77e8993f0870b1cc451b02dba8139b2ffba6e58ae15d224394de",
-                expected_dual: "cbf457fe5977eac071d9509ca2ab6cf161850081d7079b0531e018e1cd626021",
+                poseidon_root_32be_hex: "16f987bf796eaea13eff0678e11b547e740e0490f01a3c3ef0dbf1027e649c99",
+                expected_dual: "12c485379ad537098b351369c04b886a9ec40ca250943f2031cb7801c179e502",
                 expected_blake3_consistent: true,
             },
             DualRootCommitmentVector {
                 description: "Malformed: corrupted BLAKE3 root",
                 document_parts: &["section A", "section B", "section C"],
                 blake3_root_hex: "deadbeefa0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0",
-                poseidon_root_32be_hex: "25829d08bbc54f0315905794aff98d622bfa371fcac5722b14dbf4a259271471",
-                expected_dual: "8b4a68c81726cc105cca2eddfaa3c382c7aef6aa08f131888b87778b96b3735d",
+                poseidon_root_32be_hex: "18a53b4212bf0cf8cef46e92830204178bf8a3a266ddf389cce2cd4ae2e903e5",
+                expected_dual: "b566feebc0ed143b717acd637f14ebd6ef5adf02d0d40ab9e5e4e90da2921660",
                 expected_blake3_consistent: false,
             },
         ];

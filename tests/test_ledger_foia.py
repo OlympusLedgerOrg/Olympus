@@ -7,9 +7,10 @@ Covers: commit → ledger state, per-shard state, and proof retrieval.
 from __future__ import annotations
 
 import hashlib
+
 import pytest
 import pytest_asyncio
-from httpx import AsyncClient, ASGITransport
+from httpx import ASGITransport, AsyncClient
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
 from api.deps import get_db
@@ -111,9 +112,7 @@ async def test_empty_shard_state_root():
     """compute_state_root returns 64 zeros for an empty shard."""
     from unittest.mock import AsyncMock, MagicMock
 
-    from sqlalchemy import select
     from api.services.shard import compute_state_root
-    from api.models.document import DocCommit
 
     # Mock a DB session that returns no results
     mock_result = MagicMock()
