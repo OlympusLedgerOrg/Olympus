@@ -60,6 +60,10 @@ services:
     command: ["uvicorn", "ui.app:app", "--host", "0.0.0.0", "--port", "8080"]
     environment:
       UI_API_BASE: ${UI_API_BASE}
+      OLYMPUS_DEBUG_UI: ${OLYMPUS_DEBUG_UI:-true}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY}
+      ORACLE_RATE_LIMIT_REQUESTS: ${ORACLE_RATE_LIMIT_REQUESTS:-10}
+      ORACLE_RATE_LIMIT_WINDOW_SECONDS: ${ORACLE_RATE_LIMIT_WINDOW_SECONDS:-60}
     depends_on:
       app:
         condition: service_healthy

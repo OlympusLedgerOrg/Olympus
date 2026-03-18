@@ -3,6 +3,7 @@
 import json
 import os
 import re
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, cast
@@ -10,6 +11,7 @@ from urllib.error import HTTPError, URLError
 from urllib.parse import quote, urlencode, urlparse
 from urllib.request import Request as UrlRequest, urlopen
 
+import httpx
 import nacl.exceptions
 import nacl.signing
 from fastapi import FastAPI, File, Form, HTTPException, Query, Request, UploadFile
@@ -46,6 +48,7 @@ RAY_CAST_EPSILON = 1e-12
 
 # Debug UI is disabled by default; set OLYMPUS_DEBUG_UI=true to enable.
 DEBUG_UI_ENABLED = os.environ.get("OLYMPUS_DEBUG_UI", "false").lower() == "true"
+_oracle_rate_limit: dict[str, list[float]] = {}
 
 
 def _load_federation_nodes() -> dict[str, str]:
@@ -630,6 +633,34 @@ def _require_debug_ui() -> None:
         raise HTTPException(status_code=404, detail="Debug UI is disabled in this environment.")
 
 
+def _check_oracle_rate_limit(request: Request) -> None:
+    """Enforce per-IP rate limiting for Oracle endpoints using a sliding window."""
+    try:
+        limit = int(os.environ.get("ORACLE_RATE_LIMIT_REQUESTS", "10"))
+    except ValueError:
+        limit = 10
+    if limit <= 0:
+        limit = 10
+
+    try:
+        window_seconds = int(os.environ.get("ORACLE_RATE_LIMIT_WINDOW_SECONDS", "60"))
+    except ValueError:
+        window_seconds = 60
+    if window_seconds <= 0:
+        window_seconds = 60
+
+    client_ip = request.client.host if request.client else "unknown"
+    now = time.time()
+    cutoff = now - window_seconds
+    timestamps = _oracle_rate_limit.setdefault(client_ip, [])
+    timestamps[:] = [ts for ts in timestamps if ts > cutoff]
+
+    if len(timestamps) >= limit:
+        raise HTTPException(status_code=429, detail="Oracle rate limit exceeded. Try again later.")
+
+    timestamps.append(now)
+
+
 def _normalize_timestamp(value: str, field_name: str) -> str:
     """Parse an ISO 8601 timestamp and normalize it to a Z-suffixed UTC string."""
     return _parse_timestamp(value, field_name).isoformat().replace("+00:00", "Z")
@@ -1059,6 +1090,7 @@ def proxy_verify_record(display_id: str):
 async def oracle_refine_request(request: Request):
     """Use Claude to refine a public records request description."""
     _require_debug_ui()
+    _check_oracle_rate_limit(request)
     api_key = os.environ.get("ANTHROPIC_API_KEY", "")
     if not api_key:
         return JSONResponse(status_code=503, content={
@@ -1097,18 +1129,18 @@ async def oracle_refine_request(request: Request):
             "messages": [{"role": "user", "content": user_msg}],
         }).encode("utf-8")
 
-        api_req = UrlRequest(
-            "https://api.anthropic.com/v1/messages",
-            data=payload,
-            headers={
-                "Content-Type": "application/json",
-                "x-api-key": api_key,
-                "anthropic-version": "2023-06-01",
-            },
-            method="POST",
-        )
-        with urlopen(api_req, timeout=30) as resp:  # noqa: S310
-            result = json.loads(resp.read().decode("utf-8"))
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            resp = await client.post(
+                "https://api.anthropic.com/v1/messages",
+                headers={
+                    "Content-Type": "application/json",
+                    "x-api-key": api_key,
+                    "anthropic-version": "2023-06-01",
+                },
+                content=payload,
+            )
+            resp.raise_for_status()
+            result = resp.json()
 
         text = ""
         for block in result.get("content", []):
@@ -1116,9 +1148,14 @@ async def oracle_refine_request(request: Request):
                 text += block.get("text", "")
 
         return JSONResponse({"refined": text})
-    except HTTPError as exc:
-        error_body = exc.read().decode("utf-8") if exc.fp else str(exc)
+    except httpx.HTTPStatusError as exc:
+        error_body = exc.response.text
         return JSONResponse(status_code=502, content={"error": f"Claude API error: {error_body}"})
+    except httpx.RequestError as exc:
+        return JSONResponse(
+            status_code=502,
+            content={"error": f"Claude API request failed: {exc}"},
+        )
     except Exception as exc:
         return JSONResponse(status_code=500, content={"error": str(exc)})
 
@@ -1127,6 +1164,7 @@ async def oracle_refine_request(request: Request):
 async def oracle_draft_appeal(request: Request):
     """Use Claude to draft an appeal letter for a denied public records request."""
     _require_debug_ui()
+    _check_oracle_rate_limit(request)
     api_key = os.environ.get("ANTHROPIC_API_KEY", "")
     if not api_key:
         return JSONResponse(status_code=503, content={
@@ -1172,18 +1210,18 @@ async def oracle_draft_appeal(request: Request):
             "messages": [{"role": "user", "content": user_msg}],
         }).encode("utf-8")
 
-        api_req = UrlRequest(
-            "https://api.anthropic.com/v1/messages",
-            data=payload,
-            headers={
-                "Content-Type": "application/json",
-                "x-api-key": api_key,
-                "anthropic-version": "2023-06-01",
-            },
-            method="POST",
-        )
-        with urlopen(api_req, timeout=30) as resp:  # noqa: S310
-            result = json.loads(resp.read().decode("utf-8"))
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            resp = await client.post(
+                "https://api.anthropic.com/v1/messages",
+                headers={
+                    "Content-Type": "application/json",
+                    "x-api-key": api_key,
+                    "anthropic-version": "2023-06-01",
+                },
+                content=payload,
+            )
+            resp.raise_for_status()
+            result = resp.json()
 
         text = ""
         for block in result.get("content", []):
@@ -1191,9 +1229,14 @@ async def oracle_draft_appeal(request: Request):
                 text += block.get("text", "")
 
         return JSONResponse({"appeal": text})
-    except HTTPError as exc:
-        error_body = exc.read().decode("utf-8") if exc.fp else str(exc)
+    except httpx.HTTPStatusError as exc:
+        error_body = exc.response.text
         return JSONResponse(status_code=502, content={"error": f"Claude API error: {error_body}"})
+    except httpx.RequestError as exc:
+        return JSONResponse(
+            status_code=502,
+            content={"error": f"Claude API request failed: {exc}"},
+        )
     except Exception as exc:
         return JSONResponse(status_code=500, content={"error": str(exc)})
 
@@ -2064,4 +2107,3 @@ async def circuit_constraints():
         })
 
     return JSONResponse({"ok": True, "circuits": circuits})
-
