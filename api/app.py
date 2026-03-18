@@ -301,7 +301,7 @@ settings = get_settings()
 app = FastAPI(
     title="Olympus Public Audit API",
     description=(
-        "Unified Olympus API — public audit endpoints, FOIA/public-records "
+        "Unified Olympus API — public audit endpoints, FOIA/public records "
         "request management, and cryptographic ledger verification."
     ),
     version="0.5.0",
