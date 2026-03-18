@@ -42,6 +42,12 @@ Defines the structure of a source authenticity proof, including agency signature
 ### verification_bundle.json
 Defines the offline verification bundle used by `protocol/verification_bundle.py` and `tools/verify_bundle_cli.py`. Each bundle contains the SMT proof, shard header, signature, and optional timestamp token so third parties can verify inclusion without database access.
 
+### proof_asset.json
+Defines the versioned envelope for a proof asset. It wraps a `verification_bundle` with stable fields (`asset_id`, `canonical_claim`, `merkle_root`, `zk_public_inputs`) so the asset contract can be implemented later without schema churn.
+
+### dataset_asset.json
+Defines the versioned envelope for dataset-level assets. It provides dataset descriptors and the same core commitment fields used by proof assets, while preserving the existing verification bundle as a nested primitive.
+
 ## Governance Artifacts
 
 ### revenue_distribution.json (moved to docs/)
@@ -50,6 +56,7 @@ The revenue distribution schema has been moved to `docs/revenue_distribution.jso
 ## Ownership Map
 
 - `protocol/verification_bundle.py` ⇄ `verification_bundle.json`
+- `assets/model.py` (stub) ⇄ `proof_asset.json`, `dataset_asset.json`
 - `protocol/merkle.py` / API proof responses ⇄ `leaf_record.json`
 - Shard header and federation flows (`protocol/shards.py`, storage layer) ⇄ `shard_commit.json`
 - Canonicalization pipeline (`protocol/canonical_*`, `tools/canonicalize_cli.py`) ⇄ `canonical_document.json`

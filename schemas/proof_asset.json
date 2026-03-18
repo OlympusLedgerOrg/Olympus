@@ -1,0 +1,78 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://olympus-protocol.org/schemas/proof_asset.json",
+  "title": "Proof Asset",
+  "description": "Versioned contract for proof assets that wrap a verification bundle with stable asset metadata.",
+  "type": "object",
+  "required": [
+    "version",
+    "asset_kind",
+    "asset_id",
+    "canonical_claim",
+    "merkle_root",
+    "zk_public_inputs",
+    "verification_bundle"
+  ],
+  "$defs": {
+    "semver": {
+      "type": "string",
+      "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$"
+    },
+    "asset_id": {
+      "type": "object",
+      "required": ["version", "algorithm", "digest"],
+      "properties": {
+        "version": { "$ref": "#/$defs/semver" },
+        "algorithm": { "type": "string", "enum": ["blake3"] },
+        "digest": {
+          "type": "string",
+          "description": "Hex-encoded 32-byte BLAKE3 digest",
+          "pattern": "^[0-9a-f]{64}$"
+        }
+      }
+    }
+  },
+  "properties": {
+    "version": {
+      "$ref": "#/$defs/semver",
+      "description": "Proof asset schema version"
+    },
+    "asset_kind": {
+      "type": "string",
+      "const": "proof"
+    },
+    "asset_id": {
+      "$ref": "#/$defs/asset_id"
+    },
+    "canonical_claim": {
+      "type": "object",
+      "description": "Canonical claim payload that the proof asset attests to"
+    },
+    "merkle_root": {
+      "type": "string",
+      "description": "Hex-encoded Merkle root anchoring the claim",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "zk_public_inputs": {
+      "type": "object",
+      "description": "Public inputs bound to the zero-knowledge proof"
+    },
+    "verification_bundle": {
+      "type": "object",
+      "description": "Embedded verification bundle; must conform to schemas/verification_bundle.json",
+      "required": ["bundle_version", "canonicalization", "shard_header", "signature", "pubkey"],
+      "properties": {
+        "bundle_version": { "$ref": "#/$defs/semver" },
+        "canonicalization": { "type": "object" },
+        "shard_header": { "type": "object" },
+        "signature": { "type": "string", "pattern": "^[0-9a-f]{128}$" },
+        "pubkey": { "type": "string", "pattern": "^[0-9a-f]{64}$" }
+      }
+    },
+    "metadata": {
+      "type": "object",
+      "description": "Optional metadata for indexing and discovery",
+      "additionalProperties": true
+    }
+  }
+}
