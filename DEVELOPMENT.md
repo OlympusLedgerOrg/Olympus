@@ -51,9 +51,7 @@ This guide covers common development workflows for the Olympus project.
 
 6. **Apply database migrations**
    ```bash
-   for migration in $(ls migrations/*.sql | sort); do
-     psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f "$migration"
-   done
+   python -m alembic upgrade head
    ```
 
 ## Running Tests
