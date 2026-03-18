@@ -3,8 +3,8 @@
 from typing import Any
 
 from .canonical_json import canonical_json_bytes
-from .ledger import LedgerEntry
 from .hashes import HASH_SEPARATOR, LEDGER_PREFIX, SNARK_SCALAR_FIELD, blake3_hash
+from .ledger import LedgerEntry
 from .merkle import MerkleTree
 
 

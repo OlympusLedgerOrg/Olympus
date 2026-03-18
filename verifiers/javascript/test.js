@@ -20,7 +20,7 @@ function testBlake3Verification() {
   console.log('Testing BLAKE3 verification...');
 
   const data = new TextEncoder().encode('Hello, Olympus!');
-  const hash = require('@noble/hashes/blake3').blake3(data);
+  const hash = require('@noble/hashes/blake3.js').blake3(data);
   const hexHash = toHex(hash);
 
   assert(verifyBlake3Hash(data, hexHash), 'BLAKE3 hash should verify');
