@@ -3,6 +3,7 @@
 import json
 from urllib.error import HTTPError
 
+import httpx
 from fastapi.testclient import TestClient
 
 import ui.app as ui_app
@@ -99,6 +100,99 @@ def test_debug_ui_disabled_by_default(monkeypatch):
         == 404
     )
     assert client.get("/state-diff?shard_id=s&from_seq=1&to_seq=2").status_code == 404
+
+
+def test_oracle_refine_rate_limited_per_ip(monkeypatch):
+    """Oracle refine endpoint enforces per-IP sliding-window limits."""
+    monkeypatch.setattr(ui_app, "DEBUG_UI_ENABLED", True)
+    monkeypatch.setattr(ui_app, "_oracle_rate_limit", {})
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
+    monkeypatch.setenv("ORACLE_RATE_LIMIT_REQUESTS", "1")
+    monkeypatch.setenv("ORACLE_RATE_LIMIT_WINDOW_SECONDS", "60")
+    calls = {"count": 0}
+
+    class FakeAsyncClient:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+        async def post(self, url: str, *, headers=None, content=None):  # noqa: ARG002
+            calls["count"] += 1
+            return httpx.Response(
+                status_code=200,
+                json={"content": [{"type": "text", "text": "Refined body"}]},
+                request=httpx.Request("POST", url),
+            )
+
+    monkeypatch.setattr(ui_app.httpx, "AsyncClient", lambda *args, **kwargs: FakeAsyncClient())
+
+    payload = {"subject": "Budget", "description": "Need records", "agency": "City"}
+    first = client.post("/oracle/refine", json=payload)
+    second = client.post("/oracle/refine", json=payload)
+
+    assert first.status_code == 200
+    assert first.json()["refined"] == "Refined body"
+    assert second.status_code == 429
+    assert second.json()["detail"] == "Oracle rate limit exceeded. Try again later."
+    assert calls["count"] == 1
+
+
+def test_oracle_refine_maps_http_status_errors(monkeypatch):
+    """Oracle refine endpoint maps Anthropic HTTP errors to 502 with body text."""
+    monkeypatch.setattr(ui_app, "DEBUG_UI_ENABLED", True)
+    monkeypatch.setattr(ui_app, "_oracle_rate_limit", {})
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
+    monkeypatch.setenv("ORACLE_RATE_LIMIT_REQUESTS", "10")
+    monkeypatch.setenv("ORACLE_RATE_LIMIT_WINDOW_SECONDS", "60")
+
+    class FakeAsyncClient:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+        async def post(self, url: str, *, headers=None, content=None):  # noqa: ARG002
+            return httpx.Response(
+                status_code=401,
+                text="unauthorized",
+                request=httpx.Request("POST", url),
+            )
+
+    monkeypatch.setattr(ui_app.httpx, "AsyncClient", lambda *args, **kwargs: FakeAsyncClient())
+
+    response = client.post("/oracle/refine", json={"subject": "A", "description": "B"})
+
+    assert response.status_code == 502
+    assert response.json()["error"] == "Claude API error: unauthorized"
+
+
+def test_oracle_appeal_maps_request_errors(monkeypatch):
+    """Oracle appeal endpoint maps Anthropic request failures to 502."""
+    monkeypatch.setattr(ui_app, "DEBUG_UI_ENABLED", True)
+    monkeypatch.setattr(ui_app, "_oracle_rate_limit", {})
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
+    monkeypatch.setenv("ORACLE_RATE_LIMIT_REQUESTS", "10")
+    monkeypatch.setenv("ORACLE_RATE_LIMIT_WINDOW_SECONDS", "60")
+
+    class FakeAsyncClient:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+        async def post(self, url: str, *, headers=None, content=None):  # noqa: ARG002
+            raise httpx.RequestError("connection failed", request=httpx.Request("POST", url))
+
+    monkeypatch.setattr(ui_app.httpx, "AsyncClient", lambda *args, **kwargs: FakeAsyncClient())
+
+    response = client.post("/oracle/appeal", json={"subject": "A", "description": "B"})
+
+    assert response.status_code == 502
+    assert response.json()["error"] == "Claude API request failed: connection failed"
 
 
 def test_console_shows_federation_dashboard(monkeypatch):
@@ -1036,4 +1130,3 @@ def test_inspect_proof_bundle_accepts_matching_revealed_count(monkeypatch):
     assert response.status_code == 200
     data = response.json()
     assert data["ok"] is True
-
