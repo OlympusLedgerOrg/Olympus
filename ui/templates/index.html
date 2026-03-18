@@ -367,6 +367,109 @@
         <pre id="foia-result">Commit a FOIA request to start tracking it.</pre>
     </div>
 
+    <!-- ── Public Records Requests ───────────────────────────────────────── -->
+    <div class="panel">
+        <h2>Public Records Requests</h2>
+        <p>File and track public records requests. Requests are anchored to the cryptographic ledger with a SHA-256 commit hash.</p>
+
+        <details open>
+            <summary><strong>File New Request</strong></summary>
+            <form id="submit-request-form">
+                <div class="row">
+                    <input type="text" id="req-subject" placeholder="Subject (e.g., Body camera footage — incident 2024-01-15)" required style="flex:2" />
+                    <input type="text" id="req-agency" placeholder="Agency ID (optional)" />
+                </div>
+                <div class="row">
+                    <textarea id="req-description" placeholder="Full description of the records you are requesting…" required style="min-height:60px"></textarea>
+                </div>
+                <div class="row">
+                    <select id="req-type">
+                        <option value="NC_PUBLIC_RECORDS">NC Public Records (G.S. § 132)</option>
+                        <option value="FOIA">Federal FOIA (5 U.S.C. § 552)</option>
+                        <option value="FERPA">FERPA</option>
+                    </select>
+                    <select id="req-priority">
+                        <option value="STANDARD">Standard Priority</option>
+                        <option value="EXPEDITED">Expedited</option>
+                    </select>
+                    <button type="submit">Submit Request</button>
+                    <button type="button" id="btn-refine" onclick="refineRequest()">✨ Refine My Request</button>
+                </div>
+            </form>
+            <pre id="submit-request-result">Fill out the form above to submit a public records request.</pre>
+        </details>
+
+        <details open>
+            <summary><strong>Existing Requests</strong></summary>
+            <button type="button" onclick="loadRequests()" style="margin-bottom:0.5rem">↻ Refresh</button>
+            <table id="requests-table">
+                <thead>
+                    <tr>
+                        <th>ID</th>
+                        <th>Subject</th>
+                        <th>Agency</th>
+                        <th>Type</th>
+                        <th>Status</th>
+                        <th>Filed</th>
+                        <th>Deadline</th>
+                        <th>Commit Hash</th>
+                        <th>Actions</th>
+                    </tr>
+                </thead>
+                <tbody id="requests-tbody">
+                    <tr><td colspan="9" style="text-align:center">Loading…</td></tr>
+                </tbody>
+            </table>
+        </details>
+    </div>
+
+    <!-- ── Verify Record ─────────────────────────────────────────────────── -->
+    <div class="panel">
+        <h2>Verify Record</h2>
+        <p>Look up a public records request by its display ID and retrieve the cryptographic proof from the ledger. This returns <em>real</em> Sparse Merkle Tree proof data — not simulated.</p>
+        <form id="verify-record-form">
+            <div class="row">
+                <input type="text" id="verify-display-id" placeholder="Display ID (e.g. OLY-0001)" required />
+                <button type="submit">Verify Record</button>
+            </div>
+        </form>
+        <pre id="verify-record-result">Enter a display ID to verify its ledger commitment.</pre>
+    </div>
+
+    <!-- ── Oracle AI Assistant ────────────────────────────────────────────── -->
+    <div class="panel">
+        <h2>Oracle AI Assistant</h2>
+        <p>AI-powered tools for public records requests. Uses Claude to refine requests and draft appeal letters based on the applicable statute and agency context.</p>
+
+        <details>
+            <summary><strong>Draft Appeal Letter</strong></summary>
+            <form id="appeal-form">
+                <div class="row">
+                    <input type="text" id="appeal-display-id" placeholder="Request Display ID (e.g. OLY-0001)" />
+                    <input type="text" id="appeal-agency" placeholder="Agency" />
+                </div>
+                <div class="row">
+                    <input type="text" id="appeal-subject" placeholder="Original request subject" />
+                </div>
+                <div class="row">
+                    <textarea id="appeal-description" placeholder="Original request description"></textarea>
+                </div>
+                <div class="row">
+                    <textarea id="appeal-denial-reason" placeholder="Denial reason (if known)"></textarea>
+                </div>
+                <div class="row">
+                    <select id="appeal-type">
+                        <option value="NC_PUBLIC_RECORDS">NC Public Records (G.S. § 132)</option>
+                        <option value="FOIA">Federal FOIA (5 U.S.C. § 552)</option>
+                        <option value="FERPA">FERPA</option>
+                    </select>
+                    <button type="submit">📝 Draft Appeal Letter</button>
+                </div>
+            </form>
+            <pre id="appeal-result">Fill out the fields above and click "Draft Appeal Letter" to generate a formal appeal.</pre>
+        </details>
+    </div>
+
     <!-- ── Embargo Management ──────────────────────────────────────────────── -->
     <div class="panel">
         <h2>Embargo Management</h2>
@@ -601,6 +704,212 @@
         let activeProofBundle = null;
         let activeConstantsNotebook = null;
         let activeCircuitVisualizer = null;
+
+        // ── Public Records Requests ─────────────────────────────────────────
+        async function loadRequests() {
+            const tbody = document.getElementById('requests-tbody');
+            if (!tbody) return;
+            tbody.innerHTML = '<tr><td colspan="9" style="text-align:center">Loading…</td></tr>';
+            try {
+                const resp = await fetch('/public-records/requests');
+                if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+                const data = await resp.json();
+                const items = data.items || data || [];
+                if (items.length === 0) {
+                    tbody.innerHTML = '<tr><td colspan="9" style="text-align:center">No requests found. Submit one above.</td></tr>';
+                    return;
+                }
+                tbody.innerHTML = '';
+                items.forEach(req => {
+                    const tr = document.createElement('tr');
+                    const filedDate = req.filed_at ? new Date(req.filed_at).toLocaleDateString() : '—';
+                    const deadlineDate = req.deadline ? new Date(req.deadline).toLocaleDateString() : '—';
+                    const shortHash = req.commit_hash ? req.commit_hash.substring(0, 12) + '…' : '—';
+                    tr.innerHTML = `
+                        <td><code>${req.display_id || '—'}</code></td>
+                        <td>${req.subject || '—'}</td>
+                        <td>${req.agency_id || '—'}</td>
+                        <td>${req.request_type || '—'}</td>
+                        <td>${req.status || '—'}</td>
+                        <td>${filedDate}</td>
+                        <td>${deadlineDate}</td>
+                        <td><code title="${req.commit_hash || ''}">${shortHash}</code></td>
+                        <td><button class="verify-btn">Verify</button></td>
+                    `;
+                    const btn = tr.querySelector('.verify-btn');
+                    btn.addEventListener('click', () => verifyRecord(req.display_id));
+                    tbody.appendChild(tr);
+                });
+            } catch (err) {
+                tbody.innerHTML = `<tr><td colspan="9" style="text-align:center">Failed to load: ${err}</td></tr>`;
+            }
+        }
+
+        async function submitRequest() {
+            const result = document.getElementById('submit-request-result');
+            result.textContent = 'Submitting request…';
+            try {
+                const body = {
+                    subject: document.getElementById('req-subject').value.trim(),
+                    description: document.getElementById('req-description').value.trim(),
+                    agency_id: document.getElementById('req-agency').value.trim() || null,
+                    request_type: document.getElementById('req-type').value,
+                    priority: document.getElementById('req-priority').value,
+                    response_format: 'electronic',
+                };
+                if (!body.subject || !body.description) {
+                    result.textContent = '✗ Subject and description are required.';
+                    return;
+                }
+                const resp = await fetch('/public-records/requests', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(body),
+                });
+                const data = await resp.json();
+                if (!resp.ok) {
+                    result.textContent = `✗ Error: ${data.error || data.detail || JSON.stringify(data)}`;
+                    return;
+                }
+                result.textContent =
+                    `✓ Request submitted successfully.\n\n` +
+                    `Display ID       : ${data.display_id}\n` +
+                    `Subject          : ${data.subject}\n` +
+                    `Status           : ${data.status}\n` +
+                    `Commit Hash      : ${data.commit_hash}\n` +
+                    `Shard ID         : ${data.shard_id}\n` +
+                    `Filed At         : ${data.filed_at}\n` +
+                    `Deadline         : ${data.deadline || 'N/A'}`;
+                loadRequests();
+            } catch (err) {
+                result.textContent = `✗ Failed: ${err}`;
+            }
+        }
+
+        async function verifyRecord(displayId) {
+            if (!displayId) {
+                displayId = document.getElementById('verify-display-id')?.value?.trim();
+            }
+            const result = document.getElementById('verify-record-result');
+            if (!displayId) {
+                result.textContent = '✗ Enter a display ID first.';
+                return;
+            }
+            result.textContent = `Verifying ${displayId}…`;
+            try {
+                const resp = await fetch(`/public-records/verify/${encodeURIComponent(displayId)}`);
+                const data = await resp.json();
+                if (!resp.ok) {
+                    result.textContent = `✗ Error: ${data.error || 'Unknown error'}`;
+                    return;
+                }
+                const req = data.request || {};
+                const proof = data.proof;
+                let output =
+                    `✓ Record found: ${displayId}\n\n` +
+                    `── Request Details ──────────────────────────\n` +
+                    `Subject          : ${req.subject || '—'}\n` +
+                    `Agency           : ${req.agency_id || '—'}\n` +
+                    `Status           : ${req.status || '—'}\n` +
+                    `Commit Hash      : ${data.commit_hash || '—'}\n` +
+                    `Shard ID         : ${req.shard_id || '—'}\n` +
+                    `Filed At         : ${req.filed_at || '—'}\n`;
+
+                if (proof) {
+                    output +=
+                        `\n── Cryptographic Proof ──────────────────────\n` +
+                        `Key              : ${proof.key || '—'}\n` +
+                        `Value Hash       : ${proof.value_hash || '—'}\n` +
+                        `Root Hash        : ${proof.root_hash || '—'}\n` +
+                        `Siblings         : ${(proof.siblings || []).length} entries in Merkle path\n`;
+
+                    if (proof.shard_header) {
+                        output +=
+                            `\n── Shard Header ────────────────────────────\n` +
+                            `Shard            : ${proof.shard_header.shard_id || '—'}\n` +
+                            `Seq              : ${proof.shard_header.seq || '—'}\n` +
+                            `Root Hash        : ${proof.shard_header.root_hash || '—'}\n` +
+                            `Header Hash      : ${proof.shard_header.header_hash || '—'}\n` +
+                            `Signature        : ${(proof.shard_header.signature || '').substring(0, 32)}…\n` +
+                            `Timestamp        : ${proof.shard_header.timestamp || '—'}\n`;
+                    }
+
+                    if (proof.siblings && proof.siblings.length > 0) {
+                        const nonEmpty = proof.siblings.filter(s => s !== '0'.repeat(64));
+                        output += `\nNon-zero siblings: ${nonEmpty.length} of ${proof.siblings.length}\n`;
+                        if (nonEmpty.length > 0) {
+                            output += `First non-zero   : ${nonEmpty[0].substring(0, 32)}…\n`;
+                        }
+                    }
+                } else {
+                    output += `\n⚠ No SMT proof available — record may not have been ingested into the Sparse Merkle Tree yet.\n`;
+                    output += `The commit hash above is the SHA-256 anchor computed at filing time.\n`;
+                }
+
+                result.textContent = output;
+            } catch (err) {
+                result.textContent = `✗ Failed: ${err}`;
+            }
+        }
+
+        async function refineRequest() {
+            const result = document.getElementById('submit-request-result');
+            const subject = document.getElementById('req-subject').value.trim();
+            const description = document.getElementById('req-description').value.trim();
+            const agency = document.getElementById('req-agency').value.trim();
+            const requestType = document.getElementById('req-type').value;
+
+            if (!subject && !description) {
+                result.textContent = '✗ Enter a subject and/or description first.';
+                return;
+            }
+
+            result.textContent = '✨ Refining your request with Oracle AI…';
+            try {
+                const resp = await fetch('/oracle/refine', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ subject, description, agency, request_type: requestType }),
+                });
+                const data = await resp.json();
+                if (!resp.ok) {
+                    result.textContent = `✗ Oracle error: ${data.error || 'Unknown error'}`;
+                    return;
+                }
+                document.getElementById('req-description').value = data.refined || description;
+                result.textContent = '✓ Request refined by Oracle AI. Review the updated description above.';
+            } catch (err) {
+                result.textContent = `✗ Oracle failed: ${err}`;
+            }
+        }
+
+        async function draftAppeal() {
+            const result = document.getElementById('appeal-result');
+            result.textContent = '📝 Drafting appeal letter with Oracle AI…';
+            try {
+                const body = {
+                    display_id: document.getElementById('appeal-display-id').value.trim(),
+                    subject: document.getElementById('appeal-subject').value.trim(),
+                    description: document.getElementById('appeal-description').value.trim(),
+                    agency: document.getElementById('appeal-agency').value.trim(),
+                    denial_reason: document.getElementById('appeal-denial-reason').value.trim(),
+                    request_type: document.getElementById('appeal-type').value,
+                };
+                const resp = await fetch('/oracle/appeal', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(body),
+                });
+                const data = await resp.json();
+                if (!resp.ok) {
+                    result.textContent = `✗ Oracle error: ${data.error || 'Unknown error'}`;
+                    return;
+                }
+                result.textContent = data.appeal || '(No appeal text returned)';
+            } catch (err) {
+                result.textContent = `✗ Oracle failed: ${err}`;
+            }
+        }
 
         // ── Helper Functions ────────────────────────────────────────────────
         function renderChecks(checks) {
@@ -877,6 +1186,36 @@
             if (!activeFoiaDelayProof) return;
             downloadJson('foia_delay_proof.json', activeFoiaDelayProof);
         });
+
+        // ── Public Records Request Form ──────────────────────────────────────
+        const submitRequestForm = document.getElementById('submit-request-form');
+        if (submitRequestForm) {
+            submitRequestForm.addEventListener('submit', (event) => {
+                event.preventDefault();
+                submitRequest();
+            });
+        }
+
+        // Load requests on page load
+        loadRequests();
+
+        // ── Verify Record Form ────────────────────────────────────────────
+        const verifyRecordForm = document.getElementById('verify-record-form');
+        if (verifyRecordForm) {
+            verifyRecordForm.addEventListener('submit', (event) => {
+                event.preventDefault();
+                verifyRecord();
+            });
+        }
+
+        // ── Appeal Form ──────────────────────────────────────────────────
+        const appealForm = document.getElementById('appeal-form');
+        if (appealForm) {
+            appealForm.addEventListener('submit', (event) => {
+                event.preventDefault();
+                draftAppeal();
+            });
+        }
 
         // ── Embargo Management ──────────────────────────────────────────────
         async function loadEmbargo() {
