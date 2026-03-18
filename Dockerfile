@@ -44,7 +44,7 @@ COPY --chown=olympus:olympus storage /app/storage
 COPY --chown=olympus:olympus api /app/api
 COPY --chown=olympus:olympus ui /app/ui
 COPY --chown=olympus:olympus schemas /app/schemas
-COPY --chown=olympus:olympus migrations /app/migrations
+COPY --chown=olympus:olympus migrations/ /app/migrations/
 
 # Security: Set explicit file permissions (read-only for all, directories executable)
 RUN find /app -type f -exec chmod 444 {} \; \
