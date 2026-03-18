@@ -9,6 +9,17 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
+from protocol.hashes import HASH_SEPARATOR
+
+
+# NOT IMPLEMENTED - see ADR-0009.
+# This module intentionally defines only data contracts.
+# Asset minting/transfer/valuation logic is intentionally deferred.
+
+
+ASSET_ID_SEPARATOR = HASH_SEPARATOR
+ASSET_ID_SEPARATOR_BYTES = ASSET_ID_SEPARATOR.encode("utf-8")
+
 
 @dataclass(frozen=True)
 class AssetID:

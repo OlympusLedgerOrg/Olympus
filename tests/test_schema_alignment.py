@@ -17,7 +17,13 @@ import pytest
 from jsonschema.validators import validator_for
 from pydantic import BaseModel, ValidationError
 
-from assets.model import AssetID, DatasetAsset, ProofAsset
+from assets.model import (
+    ASSET_ID_SEPARATOR,
+    ASSET_ID_SEPARATOR_BYTES,
+    AssetID,
+    DatasetAsset,
+    ProofAsset,
+)
 
 
 # Define test models that mirror the API models to avoid importing api.app
@@ -257,6 +263,13 @@ class TestSchemaAlignment:
 
         validator_cls(schema).validate(verification_bundle)
 
+        verification_bundle_legacy_version = {
+            **verification_bundle,
+            "bundle_version": "1.0",
+            "schema_version": "1.0",
+        }
+        validator_cls(schema).validate(verification_bundle_legacy_version)
+
     def test_proof_asset_schema_is_valid(self):
         """Verify proof_asset.json is a valid JSON schema and sample contract."""
         schema = load_schema("proof_asset.json")
@@ -425,6 +438,8 @@ class TestSchemaAlignment:
     def test_asset_dataclass_stubs_exist(self):
         """Verify asset model dataclass stubs are importable and structurally usable."""
         asset_id = AssetID(version="1.0.0", algorithm="blake3", digest="a" * 64)
+        assert ASSET_ID_SEPARATOR == "|"
+        assert ASSET_ID_SEPARATOR_BYTES == b"|"
 
         proof = ProofAsset(
             version="1.0.0",
