@@ -513,10 +513,15 @@ class UnifiedProofGenerator:
             canonicalizer.get_hash(b"".join(leaf_hashes)) if leaf_hashes else canonicalizer.get_hash(b"")
         )
         poseidon_root = str(smt.get_root())
-        try:
-            checkpoint_hash = str(int(checkpoint.checkpoint_hash, 16))
-        except ValueError:
+        if checkpoint.checkpoint_hash.isdigit():
             checkpoint_hash = checkpoint.checkpoint_hash
+        else:
+            try:
+                checkpoint_hash = str(int(checkpoint.checkpoint_hash, 16))
+            except ValueError as exc:
+                raise ValueError(
+                    "checkpoint.checkpoint_hash must be a decimal or hex-encoded string"
+                ) from exc
         return UnifiedProof(
             zk_proof={"witness": witness.inputs},
             public_inputs=UnifiedPublicInputs(
