@@ -5,11 +5,21 @@
   "description": "Self-contained bundle for offline verification of an Olympus shard commitment. Contains canonicalization provenance, the shard header, Ed25519 signature, optional RFC 3161 timestamp token, and optional Merkle inclusion proofs.",
   "type": "object",
   "required": ["bundle_version", "canonicalization", "shard_header", "signature", "pubkey"],
+  "$defs": {
+    "semver": {
+      "type": "string",
+      "pattern": "^[0-9]+\\.[0-9]+(\\.[0-9]+)?$"
+    }
+  },
   "properties": {
     "bundle_version": {
-      "type": "string",
+      "$ref": "#/$defs/semver",
       "description": "Verification bundle schema version",
-      "pattern": "^[0-9]+\\.[0-9]+(\\.[0-9]+)?$"
+      "examples": ["1.0.0"]
+    },
+    "schema_version": {
+      "$ref": "#/$defs/semver",
+      "description": "Schema version used when canonicalizing events in this bundle"
     },
     "canonicalization": {
       "type": "object",
@@ -33,6 +43,7 @@
         "shard_id": {
           "type": "string",
           "minLength": 1,
+          "description": "Shard identifier without '|' to avoid ambiguity in hash preimages that use HASH_SEPARATOR",
           "pattern": "^[^|]+$"
         },
         "root_hash": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
@@ -40,6 +51,23 @@
         "previous_header_hash": { "type": "string" },
         "header_hash": { "type": "string", "pattern": "^[0-9a-f]{64}$" }
       }
+    },
+    "canonical_events": {
+      "type": "array",
+      "description": "Canonicalized events used to derive Merkle leaves and merkle_root",
+      "items": {
+        "type": "object"
+      }
+    },
+    "leaf_hashes": {
+      "type": "array",
+      "description": "Hex-encoded BLAKE3 Merkle leaf hashes derived from canonical_events",
+      "items": { "type": "string", "pattern": "^[0-9a-f]{64}$" }
+    },
+    "merkle_root": {
+      "type": "string",
+      "description": "Hex-encoded BLAKE3 Merkle root derived from leaf_hashes",
+      "pattern": "^[0-9a-f]{64}$"
     },
     "signature": {
       "type": "string",
@@ -75,6 +103,18 @@
         "timestamp": { "type": "string" },
         "signature": { "type": "string", "pattern": "^[0-9a-f]{128}$" },
         "signer_pubkey": { "type": "string", "pattern": "^[0-9a-f]{64}$" }
+      }
+    },
+    "epoch_record": {
+      "type": "object",
+      "description": "Optional epoch chaining record for tamper-evident replication validation",
+      "required": ["epoch_index", "previous_epoch_head", "merkle_root", "metadata_hash", "epoch_head"],
+      "properties": {
+        "epoch_index": { "type": "integer", "minimum": 0 },
+        "previous_epoch_head": { "type": "string", "pattern": "^[0-9a-f]{64}$|^$" },
+        "merkle_root": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+        "metadata_hash": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+        "epoch_head": { "type": "string", "pattern": "^[0-9a-f]{64}$" }
       }
     },
     "consistency_proof": {
@@ -126,6 +166,10 @@
           "root_hash": { "type": "string", "pattern": "^[0-9a-f]{64}$" }
         }
       }
+    },
+    "smt_proof": {
+      "type": "object",
+      "description": "Optional sparse Merkle tree proof payload emitted by protocol.verification_bundle.create_verification_bundle"
     }
   }
 }

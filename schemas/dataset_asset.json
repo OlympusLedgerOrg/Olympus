@@ -1,0 +1,90 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://olympus-protocol.org/schemas/dataset_asset.json",
+  "$comment": "NOT IMPLEMENTED - see docs/adr/0009-asset-id-derivation-and-versioned-asset-contracts.md. This schema locks contract shape before asset-layer logic exists.",
+  "title": "Dataset Asset",
+  "description": "Versioned contract for dataset assets that wrap a verification bundle with stable dataset metadata.",
+  "type": "object",
+  "required": [
+    "version",
+    "asset_kind",
+    "asset_id",
+    "dataset_descriptor",
+    "canonical_claim",
+    "merkle_root",
+    "zk_public_inputs",
+    "verification_bundle"
+  ],
+  "$defs": {
+    "semver": {
+      "type": "string",
+      "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$"
+    },
+    "asset_id": {
+      "type": "object",
+      "required": ["version", "algorithm", "digest"],
+      "properties": {
+        "version": { "$ref": "#/$defs/semver" },
+        "algorithm": { "type": "string", "enum": ["blake3"] },
+        "digest": {
+          "type": "string",
+          "description": "Hex-encoded 32-byte BLAKE3 digest",
+          "pattern": "^[0-9a-f]{64}$"
+        }
+      }
+    }
+  },
+  "properties": {
+    "version": {
+      "$ref": "#/$defs/semver",
+      "description": "Dataset asset schema version"
+    },
+    "asset_kind": {
+      "type": "string",
+      "const": "dataset"
+    },
+    "asset_id": {
+      "$ref": "#/$defs/asset_id"
+    },
+    "dataset_descriptor": {
+      "type": "object",
+      "description": "Dataset-level metadata used to identify and summarize the corpus",
+      "required": ["dataset_id", "shard_id", "record_count"],
+      "properties": {
+        "dataset_id": { "type": "string", "minLength": 1 },
+        "shard_id": { "type": "string", "minLength": 1 },
+        "record_count": { "type": "integer", "minimum": 0 }
+      }
+    },
+    "canonical_claim": {
+      "type": "object",
+      "description": "Canonical claim payload that the dataset asset attests to"
+    },
+    "merkle_root": {
+      "type": "string",
+      "description": "Hex-encoded Merkle root anchoring the dataset claim",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "zk_public_inputs": {
+      "type": ["object", "null"],
+      "description": "Proof-system public inputs. Use null when no ZK statement is attached."
+    },
+    "verification_bundle": {
+      "type": "object",
+      "description": "Embedded verification bundle; must conform to schemas/verification_bundle.json",
+      "required": ["bundle_version", "canonicalization", "shard_header", "signature", "pubkey"],
+      "properties": {
+        "bundle_version": { "$ref": "#/$defs/semver" },
+        "canonicalization": { "type": "object" },
+        "shard_header": { "type": "object" },
+        "signature": { "type": "string", "pattern": "^[0-9a-f]{128}$" },
+        "pubkey": { "type": "string", "pattern": "^[0-9a-f]{64}$" }
+      }
+    },
+    "metadata": {
+      "type": "object",
+      "description": "Optional metadata for indexing and discovery",
+      "additionalProperties": true
+    }
+  }
+}

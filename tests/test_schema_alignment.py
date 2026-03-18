@@ -17,6 +17,14 @@ import pytest
 from jsonschema.validators import validator_for
 from pydantic import BaseModel, ValidationError
 
+from assets.model import (
+    ASSET_ID_SEPARATOR,
+    ASSET_ID_SEPARATOR_BYTES,
+    AssetID,
+    DatasetAsset,
+    ProofAsset,
+)
+
 
 # Define test models that mirror the API models to avoid importing api.app
 # which would trigger database initialization
@@ -223,6 +231,120 @@ class TestSchemaAlignment:
         # Validate against schema
         validator_cls(schema).validate(source_proof)
 
+    def test_verification_bundle_schema_supports_versioned_core_fields(self):
+        """Verify verification_bundle.json captures current versioned bundle fields."""
+        schema = load_schema("verification_bundle.json")
+        validator_cls = validator_for(schema)
+        validator_cls.check_schema(schema)
+
+        verification_bundle = {
+            "bundle_version": "1.0.0",
+            "schema_version": "1.0.0",
+            "canonical_events": [{"title": "Example", "body": "Hello world"}],
+            "leaf_hashes": ["a" * 64],
+            "merkle_root": "b" * 64,
+            "canonicalization": {
+                "format": "application/json",
+                "normalization_mode": "canonical_v1",
+                "canonicalizer_versions": {"jcs": "1.2.0"},
+                "fallback_reason": None,
+            },
+            "pubkey": "c" * 64,
+            "shard_header": {
+                "header_hash": "d" * 64,
+                "previous_header_hash": "",
+                "root_hash": "b" * 64,
+                "shard_id": "example-shard",
+                "timestamp": "2026-02-22T21:18:41Z",
+            },
+            "signature": "e" * 128,
+            "smt_proof": {"exists": True, "key": "f" * 64},
+        }
+
+        validator_cls(schema).validate(verification_bundle)
+
+        verification_bundle_legacy_version = {
+            **verification_bundle,
+            "bundle_version": "1.0",
+            "schema_version": "1.0",
+        }
+        validator_cls(schema).validate(verification_bundle_legacy_version)
+
+    def test_proof_asset_schema_is_valid(self):
+        """Verify proof_asset.json is a valid JSON schema and sample contract."""
+        schema = load_schema("proof_asset.json")
+        validator_cls = validator_for(schema)
+        validator_cls.check_schema(schema)
+
+        proof_asset = {
+            "version": "1.0.0",
+            "asset_kind": "proof",
+            "asset_id": {"version": "1.0.0", "algorithm": "blake3", "digest": "a" * 64},
+            "canonical_claim": {"claim_id": "claim-1"},
+            "merkle_root": "b" * 64,
+            "zk_public_inputs": {"original_root": "123", "revealed_count": 2},
+            "verification_bundle": {
+                "bundle_version": "1.0.0",
+                "canonicalization": {
+                    "format": "application/json",
+                    "normalization_mode": "canonical_v1",
+                    "canonicalizer_versions": {"jcs": "1.2.0"},
+                    "fallback_reason": None,
+                },
+                "shard_header": {
+                    "shard_id": "example-shard",
+                    "root_hash": "b" * 64,
+                    "timestamp": "2026-02-22T21:18:41Z",
+                    "previous_header_hash": "",
+                    "header_hash": "c" * 64,
+                },
+                "signature": "d" * 128,
+                "pubkey": "e" * 64,
+            },
+        }
+
+        validator_cls(schema).validate(proof_asset)
+
+    def test_dataset_asset_schema_is_valid(self):
+        """Verify dataset_asset.json is a valid JSON schema and sample contract."""
+        schema = load_schema("dataset_asset.json")
+        validator_cls = validator_for(schema)
+        validator_cls.check_schema(schema)
+
+        dataset_asset = {
+            "version": "1.0.0",
+            "asset_kind": "dataset",
+            "asset_id": {"version": "1.0.0", "algorithm": "blake3", "digest": "a" * 64},
+            "dataset_descriptor": {
+                "dataset_id": "foia-2026-q1",
+                "shard_id": "us-gov-foia",
+                "record_count": 42,
+            },
+            "canonical_claim": {"claim_id": "dataset-claim-1"},
+            "merkle_root": "b" * 64,
+            "zk_public_inputs": None,
+            "verification_bundle": {
+                "bundle_version": "1.0.0",
+                "canonicalization": {
+                    "format": "application/json",
+                    "normalization_mode": "canonical_v1",
+                    "canonicalizer_versions": {"jcs": "1.2.0"},
+                    "fallback_reason": None,
+                },
+                "shard_header": {
+                    "shard_id": "us-gov-foia",
+                    "root_hash": "b" * 64,
+                    "timestamp": "2026-02-22T21:18:41Z",
+                    "previous_header_hash": "",
+                    "header_hash": "c" * 64,
+                },
+                "signature": "d" * 128,
+                "pubkey": "e" * 64,
+            },
+        }
+
+        validator_cls(schema).validate(dataset_asset)
+
     def test_ledger_entry_response_has_required_fields(self):
         """Verify LedgerEntryResponse has fields that would be in a ledger schema."""
         # Create a valid LedgerEntryResponse
@@ -312,3 +434,30 @@ class TestSchemaAlignment:
         assert "runtime validation" in readme_content.lower()
         assert "pydantic" in readme_content.lower()
         assert "external" in readme_content.lower() or "interoperability" in readme_content.lower()
+
+    def test_asset_dataclass_stubs_exist(self):
+        """Verify asset model dataclass stubs are importable and structurally usable."""
+        asset_id = AssetID(version="1.0.0", algorithm="blake3", digest="a" * 64)
+        assert ASSET_ID_SEPARATOR == "|"
+        assert ASSET_ID_SEPARATOR_BYTES == b"|"
+
+        proof = ProofAsset(
+            version="1.0.0",
+            asset_id=asset_id,
+            canonical_claim={"claim_id": "claim-1"},
+            merkle_root="b" * 64,
+            zk_public_inputs={"revealed_count": 2},
+            verification_bundle={"bundle_version": "1.0.0"},
+        )
+        assert proof.asset_id.algorithm == "blake3"
+
+        dataset = DatasetAsset(
+            version="1.0.0",
+            asset_id=asset_id,
+            dataset_descriptor={"dataset_id": "ds-1", "shard_id": "s", "record_count": 1},
+            canonical_claim={"claim_id": "claim-2"},
+            merkle_root="c" * 64,
+            zk_public_inputs=None,
+            verification_bundle={"bundle_version": "1.0.0"},
+        )
+        assert dataset.dataset_descriptor["dataset_id"] == "ds-1"
