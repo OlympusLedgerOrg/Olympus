@@ -21,7 +21,7 @@ class AssetID:
 
 @dataclass(frozen=True)
 class ProofAsset:
-    """Schema-aligned proof asset shape."""
+    """Schema-aligned proof asset shape with required non-null ZK public inputs."""
 
     version: str
     asset_id: AssetID

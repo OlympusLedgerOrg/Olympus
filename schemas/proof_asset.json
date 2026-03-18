@@ -55,7 +55,7 @@
     },
     "zk_public_inputs": {
       "type": "object",
-      "description": "Public inputs bound to the zero-knowledge proof"
+      "description": "Required non-null public inputs bound to the zero-knowledge proof"
     },
     "verification_bundle": {
       "type": "object",

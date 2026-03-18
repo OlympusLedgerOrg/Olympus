@@ -19,7 +19,8 @@ Accepted
 
 ### Normative Asset ID Formula
 - Canonicalize `canonical_claim` and `zk_public_inputs` with Olympus JSON canonicalization rules:
-  - `json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=True)`
+  - `json.dumps(value, sort_keys=True, separators=(',', ':'), ensure_ascii=True)`
+- When `zk_public_inputs` is null (allowed for dataset assets), canonicalize it as the literal JSON token `null` (i.e., the direct output of `json.dumps(None, ...)`).
 - Build preimage bytes by joining UTF-8 values in this exact order using `HASH_SEPARATOR` from `protocol.hashes`:
   - `canonical_claim_json`
   - `merkle_root`

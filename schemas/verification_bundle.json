@@ -8,7 +8,7 @@
   "$defs": {
     "semver": {
       "type": "string",
-      "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$"
+      "pattern": "^[0-9]+\\.[0-9]+(\\.[0-9]+)?$"
     }
   },
   "properties": {
@@ -43,6 +43,7 @@
         "shard_id": {
           "type": "string",
           "minLength": 1,
+          "description": "Shard identifier without '|' to avoid ambiguity in hash preimages that use HASH_SEPARATOR",
           "pattern": "^[^|]+$"
         },
         "root_hash": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
