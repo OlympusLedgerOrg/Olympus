@@ -51,7 +51,7 @@ def benchmark_merkle_tree_memory(num_leaves: int) -> dict:
     """
 
     def build_tree():
-        leaves = [f"leaf_{i}".encode("utf-8") for i in range(num_leaves)]
+        leaves = [f"leaf_{i}".encode() for i in range(num_leaves)]
         tree = MerkleTree(leaves)
         _ = tree.get_root()
 
@@ -69,7 +69,7 @@ def benchmark_poseidon_tree_memory(num_leaves: int) -> dict:
     """
 
     def build_tree():
-        leaves = [f"leaf_{i}".encode("utf-8") for i in range(num_leaves)]
+        leaves = [f"leaf_{i}".encode() for i in range(num_leaves)]
         tree = PoseidonMerkleTree(leaves)
         _ = tree.get_root()
 
@@ -85,7 +85,7 @@ def benchmark_proof_memory(num_leaves: int) -> dict:
     Returns:
         Memory usage statistics
     """
-    leaves = [f"leaf_{i}".encode("utf-8") for i in range(num_leaves)]
+    leaves = [f"leaf_{i}".encode() for i in range(num_leaves)]
     tree = MerkleTree(leaves)
 
     def generate_proofs():

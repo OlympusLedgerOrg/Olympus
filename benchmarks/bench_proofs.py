@@ -29,7 +29,7 @@ def benchmark_blake3_proof_generation(tree_sizes: list[int], proofs_per_size: in
 
     for size in tree_sizes:
         # Generate test tree
-        leaves = [f"leaf_{i}".encode("utf-8") for i in range(size)]
+        leaves = [f"leaf_{i}".encode() for i in range(size)]
         tree = MerkleTree(leaves)
 
         # Measure proof generation
@@ -76,7 +76,7 @@ def benchmark_poseidon_proof_generation(tree_sizes: list[int], proofs_per_size: 
 
     for size in tree_sizes:
         # Generate test tree
-        leaves = [f"leaf_{i}".encode("utf-8") for i in range(size)]
+        leaves = [f"leaf_{i}".encode() for i in range(size)]
         tree = PoseidonMerkleTree(leaves)
 
         # Measure proof generation

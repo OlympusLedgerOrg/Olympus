@@ -29,7 +29,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from protocol.canonical_json import canonical_json_bytes
-from protocol.hashes import LEDGER_PREFIX, _SEP, blake3_hash
+from protocol.hashes import _SEP, LEDGER_PREFIX, blake3_hash
 from protocol.ledger import Ledger, LedgerEntry
 
 
