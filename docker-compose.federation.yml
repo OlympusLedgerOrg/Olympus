@@ -59,9 +59,10 @@ services:
       - /bin/sh
       - -c
       - >
-        for i in $$(seq 1 30); do python -c "import os; from storage.postgres import StorageLayer; StorageLayer(os.environ['DATABASE_URL']).init_schema()" && break;
-        echo "Waiting for database initialization... ($$i/30)"; sleep 1; if [ "$$i" -eq 30 ]; then echo "Database initialization failed"; exit 1; fi; done
-        && exec uvicorn api.app:app --host 0.0.0.0 --port 8000
+        echo "Waiting for database..." &&
+        sleep 2 &&
+        alembic upgrade head &&
+        exec uvicorn api.app:app --host 0.0.0.0 --port 8000
     environment:
       DATABASE_URL: postgresql://${POSTGRES_USER:-olympus}:${POSTGRES_PASSWORD:-olympus}@node1-db:5432/${POSTGRES_DB:-olympus}
       # Dev-only signing key generation (do not use in production)
@@ -89,9 +90,10 @@ services:
       - /bin/sh
       - -c
       - >
-        for i in $$(seq 1 30); do python -c "import os; from storage.postgres import StorageLayer; StorageLayer(os.environ['DATABASE_URL']).init_schema()" && break;
-        echo "Waiting for database initialization... ($$i/30)"; sleep 1; if [ "$$i" -eq 30 ]; then echo "Database initialization failed"; exit 1; fi; done
-        && exec uvicorn api.app:app --host 0.0.0.0 --port 8000
+        echo "Waiting for database..." &&
+        sleep 2 &&
+        alembic upgrade head &&
+        exec uvicorn api.app:app --host 0.0.0.0 --port 8000
     environment:
       DATABASE_URL: postgresql://${POSTGRES_USER:-olympus}:${POSTGRES_PASSWORD:-olympus}@node2-db:5432/${POSTGRES_DB:-olympus}
       # Dev-only signing key generation (do not use in production)
@@ -119,9 +121,10 @@ services:
       - /bin/sh
       - -c
       - >
-        for i in $$(seq 1 30); do python -c "import os; from storage.postgres import StorageLayer; StorageLayer(os.environ['DATABASE_URL']).init_schema()" && break;
-        echo "Waiting for database initialization... ($$i/30)"; sleep 1; if [ "$$i" -eq 30 ]; then echo "Database initialization failed"; exit 1; fi; done
-        && exec uvicorn api.app:app --host 0.0.0.0 --port 8000
+        echo "Waiting for database..." &&
+        sleep 2 &&
+        alembic upgrade head &&
+        exec uvicorn api.app:app --host 0.0.0.0 --port 8000
     environment:
       DATABASE_URL: postgresql://${POSTGRES_USER:-olympus}:${POSTGRES_PASSWORD:-olympus}@node3-db:5432/${POSTGRES_DB:-olympus}
       # Dev-only signing key generation (do not use in production)
