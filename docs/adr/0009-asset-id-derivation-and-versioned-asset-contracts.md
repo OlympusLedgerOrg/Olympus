@@ -36,7 +36,7 @@ Accepted
   - `zk_public_inputs = null`
   - `version = "1.0.0"`
 - Canonicalized parts:
-  - `canonical_claim_json = {"claim_id":"dataset-claim-1","records":2}`
+  - `canonical_claim_json = {"claim_id":"dataset-claim-1","records":2}` (exact `json.dumps(..., separators=(',', ':'))` output)
   - `zk_public_inputs_json = null`
 - Preimage UTF-8 string:
   - `{"claim_id":"dataset-claim-1","records":2}|0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef|null|1.0.0`
