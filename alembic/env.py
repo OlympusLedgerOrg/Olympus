@@ -1,4 +1,6 @@
 from logging.config import fileConfig
+import os
+import re
 
 from sqlalchemy import engine_from_config, pool
 
@@ -12,6 +14,13 @@ config = context.config
 
 if config.config_file_name is not None:
     fileConfig(config.config_file_name)
+
+# Override sqlalchemy.url with DATABASE_URL env var when available (e.g. in Docker/production)
+db_url = os.environ.get("DATABASE_URL")
+if db_url:
+    # Alembic requires a synchronous driver; strip any async driver suffix (e.g. +asyncpg, +aiopg)
+    db_url = re.sub(r"postgresql\+\w+://", "postgresql://", db_url)
+    config.set_main_option("sqlalchemy.url", db_url)
 
 target_metadata = Base.metadata
 

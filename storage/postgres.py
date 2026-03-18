@@ -364,6 +364,10 @@ class StorageLayer:
         repo_root = os.path.dirname(storage_dir)
         migrations_dir = os.path.join(repo_root, "migrations")
 
+        if not os.path.isdir(migrations_dir):
+            # Alembic manages schema; no custom SQL migrations to apply
+            return
+
         migration_files = sorted(f for f in os.listdir(migrations_dir) if f.endswith(".sql"))
 
         with self._get_connection() as conn:
