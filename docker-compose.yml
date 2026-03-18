@@ -37,7 +37,7 @@ services:
       - >
         echo "Waiting for database..." &&
         sleep 2 &&
-        alembic upgrade head &&
+        python -m alembic upgrade head &&
         exec uvicorn api.app:app --host 0.0.0.0 --port 8000
     ports:
       - "8000:8000"
@@ -52,7 +52,7 @@ services:
       test: ["CMD-SHELL", "curl -fsS http://localhost:8000/health || exit 1"]
       interval: 10s
       timeout: 5s
-      start_period: 10s
+      start_period: 30s
       retries: 5
 
   ui:
@@ -60,6 +60,8 @@ services:
       context: .
       target: production
     container_name: olympus-ui
+    env_file:
+      - .env
     command: ["uvicorn", "ui.app:app", "--host", "0.0.0.0", "--port", "8080"]
     environment:
       UI_API_BASE: ${UI_API_BASE}

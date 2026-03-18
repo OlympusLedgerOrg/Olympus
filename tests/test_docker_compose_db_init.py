@@ -9,7 +9,7 @@ REPO_ROOT = Path(__file__).parent.parent
 def test_primary_docker_compose_initializes_schema_before_starting_api():
     compose = (REPO_ROOT / "docker-compose.yml").read_text(encoding="utf-8")
 
-    alembic_match = re.search(r"alembic\s+upgrade\s+head", compose)
+    alembic_match = re.search(r"python\s+-m\s+alembic\s+upgrade\s+head", compose)
     uvicorn_match = re.search(
         r"exec\s+uvicorn\s+api\.app:app\s+--host\s+0\.0\.0\.0\s+--port\s+8000", compose
     )
@@ -62,7 +62,19 @@ def test_alembic_env_normalises_to_psycopg_driver():
 def test_docker_compose_app_has_env_file():
     """The app service in docker-compose.yml must load .env."""
     compose = (REPO_ROOT / "docker-compose.yml").read_text(encoding="utf-8")
-    assert "env_file:" in compose
+    assert re.search(r"app:\n(?:\s{2}.+\n)*\s{4}env_file:\n\s{6}- \.env", compose)
+
+
+def test_docker_compose_ui_has_env_file():
+    """The ui service in docker-compose.yml must load .env."""
+    compose = (REPO_ROOT / "docker-compose.yml").read_text(encoding="utf-8")
+    assert re.search(r"ui:\n(?:\s{2}.+\n)*\s{4}env_file:\n\s{6}- \.env", compose)
+
+
+def test_docker_compose_app_healthcheck_start_period_allows_migrations():
+    """The app healthcheck must allow enough startup time for alembic + uvicorn."""
+    compose = (REPO_ROOT / "docker-compose.yml").read_text(encoding="utf-8")
+    assert "start_period: 30s" in compose
 
 
 def test_docker_compose_app_does_not_use_init_schema():
