@@ -73,16 +73,16 @@ class TestDomainSeparatedPoseidon:
         domain_tagged = poseidon_hash_with_domain(left, right, POSEIDON_DOMAIN_NODE)
         assert raw != domain_tagged, "Domain-separated hash must differ from raw Poseidon"
 
-    def test_merkle_tree_uses_domain_separation(self):
-        """PoseidonMerkleTree must use POSEIDON_DOMAIN_NODE for internal nodes."""
+    def test_merkle_tree_uses_plain_poseidon(self):
+        """PoseidonMerkleTree must use plain Poseidon(2) for internal nodes (matching circuit)."""
         leaves = [10, 20]
         tree = PoseidonMerkleTree(leaves)
         root = int(tree.get_root())
 
-        # Manually compute with domain separation
+        # Manually compute with plain Poseidon (matching merkleProof.circom)
         left = 10 % SNARK_SCALAR_FIELD
         right = 20 % SNARK_SCALAR_FIELD
-        expected = poseidon_hash_with_domain(left, right, POSEIDON_DOMAIN_NODE)
+        expected = poseidon_hash_bn128(left, right)
         assert root == expected % SNARK_SCALAR_FIELD
 
     def test_domain_constants_are_distinct(self):
@@ -355,27 +355,27 @@ class TestRedactionCorrectnessProof:
 
 
 class TestDomainSeparationIntegration:
-    """Integration tests verifying domain separation in tree operations."""
+    """Integration tests verifying Poseidon tree operations."""
 
-    def test_proof_roundtrip_with_domain_separation(self):
-        """Full proof roundtrip with domain-separated hashing."""
+    def test_proof_roundtrip_with_plain_poseidon(self):
+        """Full proof roundtrip using plain Poseidon (matching circuit)."""
         leaves = [b"doc_part_1", b"doc_part_2", b"doc_part_3", b"doc_part_4"]
         proof = build_poseidon_witness_inputs(leaves, target_index=2)
 
-        # Verify proof by reconstructing root
+        # Verify proof by reconstructing root using plain Poseidon (matching circuit)
         current = int(proof.leaf) % SNARK_SCALAR_FIELD
         for sibling, idx in zip(proof.path_elements, proof.path_indices):
             sib = int(sibling) % SNARK_SCALAR_FIELD
             if idx == 0:
-                current = poseidon_hash_with_domain(current, sib, POSEIDON_DOMAIN_NODE)
+                current = poseidon_hash_bn128(current, sib)
             else:
-                current = poseidon_hash_with_domain(sib, current, POSEIDON_DOMAIN_NODE)
+                current = poseidon_hash_bn128(sib, current)
             current %= SNARK_SCALAR_FIELD
 
         assert str(current % SNARK_SCALAR_FIELD) == proof.root
 
     def test_poseidon_tree_root_deterministic(self):
-        """Same leaves always produce the same root with domain separation."""
+        """Same leaves always produce the same root."""
         leaves = [b"a", b"b", b"c"]
         t1 = PoseidonMerkleTree(leaves)
         t2 = PoseidonMerkleTree(leaves)
