@@ -18,8 +18,8 @@ if config.config_file_name is not None:
 # Override sqlalchemy.url with DATABASE_URL env var when available (e.g. in Docker/production)
 db_url = os.environ.get("DATABASE_URL")
 if db_url:
-    # Alembic requires a synchronous driver; strip any async driver suffix (e.g. +asyncpg, +aiopg)
-    db_url = re.sub(r"postgresql\+\w+://", "postgresql://", db_url)
+    # Alembic requires a synchronous driver; normalise to psycopg v3
+    db_url = re.sub(r"postgresql(?:\+\w+)?://", "postgresql+psycopg://", db_url)
     config.set_main_option("sqlalchemy.url", db_url)
 
 target_metadata = Base.metadata

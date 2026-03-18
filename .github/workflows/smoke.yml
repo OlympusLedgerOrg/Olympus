@@ -96,10 +96,7 @@ jobs:
         pip install -e . --no-deps
 
     - name: Apply database migrations
-      run: |
-        for migration in $(ls migrations/*.sql | sort); do
-          psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f "$migration"
-        done
+      run: python -m alembic upgrade head
 
     - name: Run smoke tests (PostgreSQL integration)
       run: pytest tests/test_e2e_audit.py -v --tb=short

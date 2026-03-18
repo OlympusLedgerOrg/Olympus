@@ -55,6 +55,8 @@ services:
       context: .
       target: production
     container_name: olympus-node1-app
+    env_file:
+      - .env
     command:
       - /bin/sh
       - -c
@@ -64,7 +66,7 @@ services:
         alembic upgrade head &&
         exec uvicorn api.app:app --host 0.0.0.0 --port 8000
     environment:
-      DATABASE_URL: postgresql://${POSTGRES_USER:-olympus}:${POSTGRES_PASSWORD:-olympus}@node1-db:5432/${POSTGRES_DB:-olympus}
+      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-olympus}:${POSTGRES_PASSWORD:-olympus}@node1-db:5432/${POSTGRES_DB:-olympus}
       # Dev-only signing key generation (do not use in production)
       OLYMPUS_DEV_SIGNING_KEY: "true"
       OLYMPUS_API_KEYS_JSON: >-
@@ -86,6 +88,8 @@ services:
       context: .
       target: production
     container_name: olympus-node2-app
+    env_file:
+      - .env
     command:
       - /bin/sh
       - -c
@@ -95,7 +99,7 @@ services:
         alembic upgrade head &&
         exec uvicorn api.app:app --host 0.0.0.0 --port 8000
     environment:
-      DATABASE_URL: postgresql://${POSTGRES_USER:-olympus}:${POSTGRES_PASSWORD:-olympus}@node2-db:5432/${POSTGRES_DB:-olympus}
+      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-olympus}:${POSTGRES_PASSWORD:-olympus}@node2-db:5432/${POSTGRES_DB:-olympus}
       # Dev-only signing key generation (do not use in production)
       OLYMPUS_DEV_SIGNING_KEY: "true"
       OLYMPUS_API_KEYS_JSON: >-
@@ -117,6 +121,8 @@ services:
       context: .
       target: production
     container_name: olympus-node3-app
+    env_file:
+      - .env
     command:
       - /bin/sh
       - -c
@@ -126,7 +132,7 @@ services:
         alembic upgrade head &&
         exec uvicorn api.app:app --host 0.0.0.0 --port 8000
     environment:
-      DATABASE_URL: postgresql://${POSTGRES_USER:-olympus}:${POSTGRES_PASSWORD:-olympus}@node3-db:5432/${POSTGRES_DB:-olympus}
+      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-olympus}:${POSTGRES_PASSWORD:-olympus}@node3-db:5432/${POSTGRES_DB:-olympus}
       # Dev-only signing key generation (do not use in production)
       OLYMPUS_DEV_SIGNING_KEY: "true"
       OLYMPUS_API_KEYS_JSON: >-
