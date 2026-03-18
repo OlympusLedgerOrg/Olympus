@@ -7,14 +7,21 @@ ZK circuit infrastructure.
 
 Usage::
 
+    from protocol.poseidon_smt import PoseidonSMT
     from proofs.proof_generator import ProofGenerator
 
+    key1 = bytes.fromhex("01" * 32)
+    key2 = bytes.fromhex("02" * 32)
+    value_hash1 = int.from_bytes(bytes.fromhex("10" * 32), byteorder="big")
+    value_hash2 = int.from_bytes(bytes.fromhex("20" * 32), byteorder="big")
+    key_to_prove_absent = bytes.fromhex("03" * 32)
+
+    smt = PoseidonSMT()
+    smt.update(key1, value_hash1)
+    smt.update(key2, value_hash2)
+
+    witness = ProofGenerator.witness_from_smt(smt, key_to_prove_absent)
     generator = ProofGenerator("non_existence")
-    witness = generator.generate_witness(
-        root="<poseidon_smt_root_as_field_element>",
-        key=[0xde, 0xad, 0xbe, 0xef] + [0] * 28,  # exactly 32 bytes
-        pathElements=["0"] * 256,                   # 256 sibling hashes
-    )
     proof = generator.prove(witness)
     verified = generator.verify(proof, public_inputs=proof.public_signals)
 
@@ -35,11 +42,16 @@ import os
 import shutil
 import subprocess
 import uuid
+from collections.abc import Mapping
 from dataclasses import dataclass, field, replace
 from pathlib import Path
-from typing import Any, Mapping
+from typing import TYPE_CHECKING, Any
 
 from protocol.zkp import Groth16Prover, ZKProof
+
+
+if TYPE_CHECKING:
+    from protocol.poseidon_smt import PoseidonSMT
 
 
 SUPPORTED_CIRCUITS = frozenset(
@@ -74,7 +86,7 @@ class CircuitConfig:
     selective_disclosure_preimage_len: int
 
     @classmethod
-    def default(cls) -> "CircuitConfig":
+    def default(cls) -> CircuitConfig:
         return cls(
             document_merkle_depth=20,
             non_existence_merkle_depth=256,
@@ -89,7 +101,7 @@ class CircuitConfig:
         )
 
     @classmethod
-    def from_env(cls, environ: Mapping[str, str] | None = None) -> "CircuitConfig":
+    def from_env(cls, environ: Mapping[str, str] | None = None) -> CircuitConfig:
         env = environ or os.environ
         defaults = cls.default()
 
@@ -360,6 +372,98 @@ class ProofGenerator:
         with path.open("r", encoding="utf-8") as fh:
             data = json.load(fh)
         return ZKProof.from_dict(data)
+
+    @classmethod
+    def witness_from_smt(
+        cls,
+        smt: PoseidonSMT,
+        key: bytes,
+        *,
+        circuit_config: CircuitConfig | None = None,
+        snarkjs_bin: str = "npx",
+    ) -> Witness:
+        """
+        Generate a non-existence witness directly from a PoseidonSMT.
+
+        Args:
+            smt: Poseidon sparse Merkle tree populated with the authoritative
+                key/value pairs for the proof target.
+            key: 32-byte key to prove absent.
+            circuit_config: Optional circuit configuration override.
+            snarkjs_bin: snarkjs launcher command.
+
+        Returns:
+            Witness ready for non_existence proof generation.
+
+        Raises:
+            ValueError: If the key is already present in the SMT.
+        """
+        config = replace(circuit_config or CircuitConfig.from_env(), non_existence_merkle_depth=256)
+        generator = cls(
+            "non_existence",
+            circuit_config=config,
+            snarkjs_bin=snarkjs_bin,
+        )
+        nonexistence_witness = smt.prove_nonexistence(key)
+        return generator.generate_witness(
+            root=nonexistence_witness.root,
+            key=[int(byte) for byte in nonexistence_witness.key],
+            pathElements=nonexistence_witness.path_elements,
+        )
+
+    @classmethod
+    def witness_from_smt_existence(
+        cls,
+        smt: PoseidonSMT,
+        key: bytes,
+        *,
+        circuit_config: CircuitConfig | None = None,
+        snarkjs_bin: str = "npx",
+    ) -> Witness:
+        """
+        Generate a document_existence witness directly from a PoseidonSMT.
+
+        Args:
+            smt: Poseidon sparse Merkle tree populated with the authoritative
+                key/value pairs for the proof target.
+            key: 32-byte key to prove present.
+            circuit_config: Optional circuit configuration override.
+            snarkjs_bin: snarkjs launcher command.
+
+        Returns:
+            Witness ready for document_existence proof generation.
+
+        Raises:
+            ValueError: If the key is absent from the SMT.
+        """
+        from protocol.hashes import SNARK_SCALAR_FIELD
+        from protocol.poseidon_bn128 import poseidon_hash_bn128
+
+        value = smt.get(key)
+        if value is None:
+            raise ValueError("Key is absent from the SMT; use witness_from_smt for absence")
+
+        config = replace(circuit_config or CircuitConfig.from_env(), document_merkle_depth=256)
+
+        path = smt._key_to_path(key)
+        path_elements = [str(sibling) for sibling in smt._collect_siblings(path)]
+        path_indices = list(reversed(path))
+        key_int = int.from_bytes(key, byteorder="big") % SNARK_SCALAR_FIELD
+        leaf = poseidon_hash_bn128(key_int, value % SNARK_SCALAR_FIELD) % SNARK_SCALAR_FIELD
+
+        generator = cls(
+            "document_existence",
+            circuit_config=config,
+            snarkjs_bin=snarkjs_bin,
+        )
+        return generator.generate_witness(
+            root=str(smt.get_root()),
+            leaf=str(leaf),
+            leafIndex=str(int.from_bytes(key, byteorder="big")),
+            treeSize=str(1 << len(path_indices)),
+            pathElements=path_elements,
+            pathIndices=path_indices,
+        )
 
     # Keep this in sync with circuit signal names
     _REQUIRED_INPUTS: dict[str, list[str]] = {

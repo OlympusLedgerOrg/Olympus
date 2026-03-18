@@ -34,7 +34,7 @@ from pydantic import BaseModel, Field
 
 from protocol.canonical import CANONICAL_VERSION, canonicalize_document, document_to_bytes
 from protocol.canonicalizer import canonicalization_provenance
-from protocol.hashes import hash_bytes, leaf_hash
+from protocol.hashes import hash_bytes, leaf_hash, record_key
 from protocol.ledger import Ledger
 from protocol.merkle import (
     MERKLE_VERSION,
@@ -52,6 +52,7 @@ from protocol.timestamps import current_timestamp
 
 
 if TYPE_CHECKING:
+    from protocol.poseidon_smt import PoseidonSMT
     from storage.postgres import StorageLayer
 
 
@@ -789,6 +790,26 @@ def _normalize_merkle_root(merkle_root: str) -> str:
     return raw.hex()
 
 
+def _value_hash_to_poseidon_field(value_hash: bytes) -> int:
+    """Convert a 32-byte value hash into the BN128 field element used by PoseidonSMT."""
+    if len(value_hash) != 32:
+        raise ValueError(f"value_hash must be 32 bytes, got {len(value_hash)}")
+    return int.from_bytes(value_hash, byteorder="big")
+
+
+def _build_poseidon_smt_for_storage_shard(storage: StorageLayer, shard_id: str) -> PoseidonSMT:
+    """Rebuild the current PoseidonSMT view for a shard from persisted SMT leaves."""
+    from protocol.poseidon_smt import PoseidonSMT
+
+    with storage._get_connection() as conn, conn.cursor() as cur:
+        tree = storage._load_tree_state(cur, shard_id)
+
+    poseidon_smt = PoseidonSMT()
+    for key, value_hash in tree.leaves.items():
+        poseidon_smt.update(key, _value_hash_to_poseidon_field(value_hash))
+    return poseidon_smt
+
+
 def _evaluate_proof_bundle(
     content_hash: str, merkle_root: str, merkle_proof_data: dict[str, Any]
 ) -> tuple[str, str, bool, bool]:
@@ -977,6 +998,8 @@ async def ingest_batch(batch: BatchIngestionRequest, request: Request) -> BatchI
 
     for shard_id, shard_records in shard_groups.items():
         with timed_operation("commit", shard_id=shard_id) as span:
+            from protocol.poseidon_smt import PoseidonSMT
+
             span.set_attribute("batch_size", len(shard_records))
             span.set_attribute("using_postgres", storage is not None)
 
@@ -985,9 +1008,15 @@ async def ingest_batch(batch: BatchIngestionRequest, request: Request) -> BatchI
             dedup_count = 0
             persist_queue: list[dict[str, Any]] = []
             ledger_entry_hash = ""
+            poseidon_smt = (
+                _build_poseidon_smt_for_storage_shard(storage, shard_id)
+                if storage is not None
+                else PoseidonSMT()
+            )
 
             for original_idx, record in shard_records:
                 content_hash, content_hash_bytes, proof_id = record_data_map[original_idx]
+                record_smt_key = record_key(record.record_type, record.record_id, record.version)
 
                 # Dedup check (in-memory or persisted)
                 existing_record = _fetch_by_content_hash(content_hash)
@@ -1012,14 +1041,23 @@ async def ingest_batch(batch: BatchIngestionRequest, request: Request) -> BatchI
                 # If PostgreSQL is configured, persist record durably
                 if storage is not None and _signing_key is not None:
                     try:
-                        root_hash, proof, header, signature, ledger_entry = storage.append_record(
+                        poseidon_smt.update(
+                            record_smt_key, _value_hash_to_poseidon_field(content_hash_bytes)
+                        )
+                        poseidon_root = str(poseidon_smt.get_root())
+                        canonicalization_with_poseidon = {
+                            **canonicalization,
+                            "poseidon_root": poseidon_root,
+                        }
+                        root_hash, proof, _header, _signature, ledger_entry = storage.append_record(
                             shard_id=record.shard_id,
                             record_type=record.record_type,
                             record_id=record.record_id,
                             version=record.version,
                             value_hash=content_hash_bytes,
                             signing_key=_signing_key,
-                            canonicalization=canonicalization,
+                            canonicalization=canonicalization_with_poseidon,
+                            poseidon_root=int(poseidon_root).to_bytes(32, byteorder="big"),
                         )
 
                         # Store mapping from proof_id to record coordinates for later retrieval
@@ -1036,10 +1074,11 @@ async def ingest_batch(batch: BatchIngestionRequest, request: Request) -> BatchI
                             ),
                             "ledger_entry_hash": ledger_entry.entry_hash,
                             "timestamp": ledger_entry.ts,
-                            "canonicalization": canonicalization,
+                            "canonicalization": canonicalization_with_poseidon,
                             "persisted": True,
                             "batch_id": batch_id,
                             "batch_index": len(persist_queue),
+                            "poseidon_root": poseidon_root,
                         }
                         _cache_ingestion_record(ingestion_entry)
                         persist_queue.append(ingestion_entry)
@@ -1049,6 +1088,7 @@ async def ingest_batch(batch: BatchIngestionRequest, request: Request) -> BatchI
                     except ValueError as e:
                         if "Record already exists" in str(e):
                             # Record exists in database, treat as dedup and hydrate mapping
+                            poseidon_smt = _build_poseidon_smt_for_storage_shard(storage, shard_id)
                             existing_record = _fetch_by_content_hash(content_hash)
                             existing_proof_id = (
                                 existing_record["proof_id"] if existing_record else proof_id
@@ -1077,6 +1117,7 @@ async def ingest_batch(batch: BatchIngestionRequest, request: Request) -> BatchI
                 else:
                     # Fall back to in-memory storage
                     new_hashes.append(content_hash_bytes)
+                    poseidon_smt.update(record_smt_key, _value_hash_to_poseidon_field(content_hash_bytes))
 
                 results.append(
                     (
@@ -1099,13 +1140,19 @@ async def ingest_batch(batch: BatchIngestionRequest, request: Request) -> BatchI
                 # In-memory path: build batch Merkle tree and ledger
                 tree = MerkleTree(new_hashes)
                 merkle_root = tree.get_root().hex()
+                poseidon_root = str(poseidon_smt.get_root())
+                canonicalization_with_poseidon = {
+                    **canonicalization,
+                    "poseidon_root": poseidon_root,
+                }
 
                 # Append to ledger
                 ledger_entry = _write_ledger.append(
                     record_hash=merkle_root,
                     shard_id=shard_id,
                     shard_root=merkle_root,
-                    canonicalization=canonicalization,
+                    canonicalization=canonicalization_with_poseidon,
+                    poseidon_root=poseidon_root,
                 )
                 ledger_entry_hash = ledger_entry.entry_hash
                 ledger_height = len(_write_ledger.entries)
@@ -1138,10 +1185,11 @@ async def ingest_batch(batch: BatchIngestionRequest, request: Request) -> BatchI
                             },
                             "ledger_entry_hash": ledger_entry_hash,
                             "timestamp": ts,
-                            "canonicalization": canonicalization,
+                            "canonicalization": canonicalization_with_poseidon,
                             "persisted": False,
                             "batch_id": batch_id,
                             "batch_index": new_record_counter,
+                            "poseidon_root": poseidon_root,
                         }
                         _cache_ingestion_record(_ingestion_store[result.proof_id])
                         INGEST_TOTAL.labels(outcome="committed").inc()
@@ -1425,6 +1473,16 @@ async def commit_artifact(
             )
 
         proof_id = str(uuid.uuid4())
+        artifact_key = record_key("artifact", request.id, 1)
+        if poseidon_root_normalized is None:
+            if storage is not None:
+                poseidon_smt = _build_poseidon_smt_for_storage_shard(storage, shard_id)
+            else:
+                from protocol.poseidon_smt import PoseidonSMT
+
+                poseidon_smt = PoseidonSMT()
+            poseidon_smt.update(artifact_key, _value_hash_to_poseidon_field(artifact_hash_bytes))
+            poseidon_root_normalized = str(poseidon_smt.get_root())
         canonicalization = canonicalization_provenance(
             "application/octet-stream", CANONICAL_VERSION
         )
@@ -1443,7 +1501,7 @@ async def commit_artifact(
                         32, byteorder="big"
                     )
 
-                root_hash, proof, header, signature, ledger_entry = storage.append_record(
+                root_hash, proof, _header, _signature, ledger_entry = storage.append_record(
                     shard_id=shard_id,
                     record_type="artifact",
                     record_id=request.id,

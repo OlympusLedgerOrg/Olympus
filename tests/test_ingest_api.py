@@ -131,6 +131,28 @@ class TestBatchIngestion:
         assert "timestamp" in data
         assert data["timestamp"].endswith("Z") or "+" in data["timestamp"]
 
+    def test_ingest_computes_poseidon_root_for_stored_proof(self, client: TestClient):
+        payload = {
+            "records": [
+                {
+                    "shard_id": "shard-poseidon",
+                    "record_type": "document",
+                    "record_id": "doc-poseidon",
+                    "version": 1,
+                    "content": {"poseidon": "root"},
+                }
+            ]
+        }
+        resp = client.post("/ingest/records", json=payload)
+        proof_id = resp.json()["results"][0]["proof_id"]
+
+        proof_resp = client.get(f"/ingest/records/{proof_id}/proof")
+        assert proof_resp.status_code == 200
+        proof_data = proof_resp.json()
+        assert proof_data["poseidon_root"] is not None
+        assert proof_data["poseidon_root"].isdigit()
+        assert ingest_api._write_ledger.entries[-1].poseidon_root == proof_data["poseidon_root"]
+
 
 # ---------------------------------------------------------------------------
 # GET /ingest/records/{proof_id}/proof
@@ -350,7 +372,8 @@ class TestArtifactCommit:
         assert data["id"] == "org/repo/v1.0.0"
         assert data["committed_at"]
         assert data["ledger_entry_hash"]
-        assert data["poseidon_root"] is None
+        assert data["poseidon_root"] is not None
+        assert data["poseidon_root"].isdigit()
 
     def test_commit_with_poseidon_root_returns_dual_hash(self, client: TestClient):
         """Optional poseidon_root should be echoed back and persisted."""
@@ -397,7 +420,8 @@ class TestArtifactCommit:
         )
         assert resp2.status_code == 200
         assert resp2.json()["proof_id"] == proof_id_1
-        assert resp2.json()["poseidon_root"] is None
+        assert resp2.json()["poseidon_root"] is not None
+        assert resp2.json()["poseidon_root"].isdigit()
 
     def test_commit_conflicting_poseidon_root_rejected(self, client: TestClient):
         """A conflicting poseidon_root for the same hash should be rejected."""

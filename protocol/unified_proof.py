@@ -36,6 +36,7 @@ Usage::
 
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
@@ -456,15 +457,13 @@ class UnifiedProofVerifier:
 
 class UnifiedProofGenerator:
     """
-    Generator for unified proofs (placeholder for future implementation).
+    Generator for minimal unified proof bundles.
 
-    This class would coordinate:
+    This class coordinates:
     1. Document canonicalization
     2. Witness generation for ZK circuit
-    3. Proof generation (Groth16 or Halo2)
-    4. Checkpoint retrieval and bundling
-
-    Currently out of scope for protocol hardening phase.
+    3. Minimal proof payload construction for downstream proving
+    4. Checkpoint bundling
     """
 
     def __init__(self, backend: ProofBackend = ProofBackend.GROTH16) -> None:
@@ -477,7 +476,7 @@ class UnifiedProofGenerator:
         checkpoint: SignedCheckpoint,
     ) -> UnifiedProof:
         """
-        Generate a unified proof (not yet implemented).
+        Generate a minimal unified proof bundle.
 
         Args:
             document_sections: Canonicalized document sections
@@ -486,14 +485,48 @@ class UnifiedProofGenerator:
 
         Returns:
             UnifiedProof
-
-        Raises:
-            BackendNotAvailableError: Generation not yet implemented
         """
-        raise BackendNotAvailableError(
-            "Unified proof generation is planned for Phase 1+. "
-            "Use UnifiedProofVerifier for verification of existing proofs. "
-            "See docs/09_protocol_spec.md for the current protocol scope."
+        from proofs.proof_generator import ProofGenerator
+        from protocol.canonicalizer import Canonicalizer
+        from protocol.hashes import blake3_hash
+        from protocol.poseidon_smt import PoseidonSMT
+
+        del merkle_proof  # Minimal implementation does not yet bind a BLAKE3 proof transcript.
+        if not document_sections:
+            raise ValueError("document_sections must contain at least one section")
+
+        canonicalizer = Canonicalizer()
+        leaf_hashes = [
+            canonicalizer.get_hash(canonicalizer.json_jcs(json.dumps(section).encode("utf-8")))
+            for section in document_sections
+        ]
+
+        smt = PoseidonSMT()
+        for index, leaf_hash in enumerate(leaf_hashes):
+            key = blake3_hash([str(index).encode("utf-8")])
+            smt.update(key, int.from_bytes(leaf_hash, byteorder="big"))
+
+        target_key = blake3_hash([b"0"])
+        witness = ProofGenerator.witness_from_smt_existence(smt, target_key)
+
+        canonical_hash = (
+            canonicalizer.get_hash(b"".join(leaf_hashes)) if leaf_hashes else canonicalizer.get_hash(b"")
+        )
+        poseidon_root = str(smt.get_root())
+        try:
+            checkpoint_hash = str(int(checkpoint.checkpoint_hash, 16))
+        except ValueError:
+            checkpoint_hash = checkpoint.checkpoint_hash
+        return UnifiedProof(
+            zk_proof={"witness": witness.inputs},
+            public_inputs=UnifiedPublicInputs(
+                canonical_hash=str(int.from_bytes(canonical_hash, byteorder="big")),
+                merkle_root=poseidon_root,
+                ledger_root=poseidon_root,
+                checkpoint_hash=checkpoint_hash,
+            ),
+            checkpoint=checkpoint,
+            backend=self.backend,
         )
 
 

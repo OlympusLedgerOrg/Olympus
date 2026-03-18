@@ -18,6 +18,7 @@ from protocol.halo2_backend import Halo2Verifier, is_halo2_available
 from protocol.unified_proof import (
     ProofBackend,
     UnifiedProof,
+    UnifiedProofGenerator,
     UnifiedProofVerifier,
     UnifiedPublicInputs,
     VerificationResult,
@@ -210,6 +211,31 @@ class TestUnifiedProofVerifier:
 
         result = verifier._verify_checkpoint_structure(proof)
         assert not result
+
+
+class TestUnifiedProofGenerator:
+    """Test UnifiedProofGenerator."""
+
+    def test_generate_returns_witness_backed_proof(self):
+        checkpoint = SignedCheckpoint(
+            sequence=1,
+            timestamp="2026-03-12T18:00:00Z",
+            ledger_head_hash="abc123",
+            previous_checkpoint_hash="",
+            ledger_height=100,
+            shard_roots={},
+            consistency_proof=[],
+            checkpoint_hash="def456",
+            federation_quorum_certificate={},
+        )
+
+        generator = UnifiedProofGenerator()
+        proof = generator.generate(["section 0", "section 1"], merkle_proof={}, checkpoint=checkpoint)
+
+        assert proof.backend == ProofBackend.GROTH16
+        assert proof.checkpoint == checkpoint
+        assert proof.public_inputs.merkle_root == proof.public_inputs.ledger_root
+        assert proof.zk_proof["witness"]["root"] == proof.public_inputs.merkle_root
 
 
 class TestProofBackendSelection:
