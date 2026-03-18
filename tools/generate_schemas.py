@@ -17,12 +17,12 @@ from __future__ import annotations
 
 import importlib
 import json
-import os
 import sys
 from pathlib import Path
 from typing import Any
 
 from pydantic import BaseModel
+
 
 # ---------------------------------------------------------------------------
 # Registry of models to export

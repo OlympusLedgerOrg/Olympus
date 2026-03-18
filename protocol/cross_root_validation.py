@@ -35,7 +35,7 @@ from enum import Enum
 
 from .hashes import SNARK_SCALAR_FIELD
 from .merkle import MerkleProof, verify_proof as _verify_blake3_proof
-from .poseidon_tree import POSEIDON_DOMAIN_NODE, PoseidonProof, poseidon_hash_with_domain
+from .poseidon_tree import PoseidonProof
 from .redaction_ledger import POSEIDON_ROOT_VALUE_SIZE, DualHashCommitment
 
 

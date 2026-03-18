@@ -29,7 +29,7 @@ def benchmark_merkle_generation(tree_sizes: list[int]) -> list[dict]:
 
     for size in tree_sizes:
         # Generate test leaves
-        leaves = [f"leaf_{i}".encode("utf-8") for i in range(size)]
+        leaves = [f"leaf_{i}".encode() for i in range(size)]
 
         # Measure tree construction
         start = time.perf_counter()
@@ -75,7 +75,7 @@ def benchmark_poseidon_merkle_generation(tree_sizes: list[int]) -> list[dict]:
 
     for size in tree_sizes:
         # Generate test leaves
-        leaves = [f"leaf_{i}".encode("utf-8") for i in range(size)]
+        leaves = [f"leaf_{i}".encode() for i in range(size)]
 
         # Measure tree construction
         start = time.perf_counter()

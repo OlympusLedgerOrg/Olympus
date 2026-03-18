@@ -19,12 +19,12 @@ SCRIPT_DIR = Path(__file__).resolve().parent
 
 def check_database_urls() -> bool:
     """Check all Python files for database URL configurations."""
-    
+
     print("=" * 70)
     print("PostgreSQL Database Configuration Validation")
     print("=" * 70)
     print()
-    
+
     # Files to check
     files_to_check = [
         "tests/test_storage.py",
@@ -32,27 +32,27 @@ def check_database_urls() -> bool:
         "api/app.py",
         ".github/workflows/ci.yml",
     ]
-    
+
     # Patterns to look for
     incorrect_patterns = [
         (r"postgresql://root:", "root user"),
         (r"postgresql://postgres:", "postgres user (in non-doc context)"),
     ]
-    
+
     correct_pattern = r"postgresql://olympus:olympus"
-    
+
     issues_found = []
     files_checked = 0
-    
+
     for file_path in files_to_check:
         full_path = SCRIPT_DIR / file_path
         if not full_path.exists():
             print(f"⚠️  File not found: {file_path}")
             continue
-            
+
         files_checked += 1
         print(f"✓ Checking {file_path}...")
-        
+
         content = full_path.read_text(encoding="utf-8")
 
         # Check for incorrect patterns
@@ -71,10 +71,10 @@ def check_database_urls() -> bool:
         if "test_" in file_path or "api/app.py" in file_path:
             if correct_pattern in content:
                 print("  ✓ Correct credentials found (olympus:olympus)")
-    
+
     print()
     print("=" * 70)
-    
+
     if issues_found:
         print("❌ ISSUES FOUND:")
         print()
@@ -88,8 +88,8 @@ def check_database_urls() -> bool:
         print("✅ ALL CHECKS PASSED!")
         print()
         print(f"  Files checked: {files_checked}")
-        print(f"  No incorrect database credentials found")
-        print(f"  All test files use olympus:olympus credentials")
+        print("  No incorrect database credentials found")
+        print("  All test files use olympus:olympus credentials")
         print()
         return True
 

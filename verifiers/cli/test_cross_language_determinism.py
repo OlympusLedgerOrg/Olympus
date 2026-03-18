@@ -15,10 +15,12 @@ import subprocess
 import sys
 from pathlib import Path
 
+
 REPO_ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO_ROOT))
 
-from protocol.hashes import blake3_hash
+from protocol.hashes import blake3_hash  # noqa: E402
+
 
 VECTORS_PATH = REPO_ROOT / "verifiers" / "test_vectors" / "vectors.json"
 RANDOM_CASES = int(os.environ.get("OLYMPUS_DETERMINISM_CASES", "5000"))

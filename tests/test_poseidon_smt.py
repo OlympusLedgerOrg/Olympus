@@ -292,7 +292,7 @@ def test_leaf_hash_matches_circuit():
     value = 42
 
     key_int = int.from_bytes(key, byteorder="big") % SNARK_SCALAR_FIELD
-    expected_leaf_hash = poseidon_hash_bn128(key_int, value)
+    _expected_leaf_hash = poseidon_hash_bn128(key_int, value)
 
     tree = PoseidonSMT()
     tree.update(key, value)

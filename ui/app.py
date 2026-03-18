@@ -21,8 +21,8 @@ from protocol.hashes import HASH_SEPARATOR, hash_bytes
 from protocol.redaction import RedactionProtocol
 from protocol.redaction_ledger import (
     RedactionProofWithLedger,
-    ZKPublicInputs,
     VerificationResult,
+    ZKPublicInputs,
     verify_zk_redaction,
 )
 from protocol.ssmf import ExistenceProof, SparseMerkleTree
@@ -1815,7 +1815,7 @@ async def circuit_constraints():
 
         # Read first 50 lines for source excerpt
         try:
-            with open(circuit_path, "r", encoding="utf-8") as f:
+            with open(circuit_path, encoding="utf-8") as f:
                 lines = f.readlines()[:50]
                 source_excerpt = "".join(lines)
         except Exception:
