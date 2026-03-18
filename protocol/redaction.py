@@ -26,7 +26,7 @@ from .merkle import MerkleProof, MerkleTree, verify_proof
 from .poseidon_tree import (
     POSEIDON_DOMAIN_COMMITMENT,
     PoseidonMerkleTree,
-    _poseidon_hash,
+    poseidon_hash_with_domain,
 )
 from .redaction_ledger import (
     DualHashCommitment,
@@ -707,10 +707,10 @@ class RedactionProtocol:
 
         for meta in metadata:
             # Chain: acc = Poseidon(acc, sectionLength) with commitment domain
-            acc = _poseidon_hash(acc, meta.section_length % _F, POSEIDON_DOMAIN_COMMITMENT)
+            acc = poseidon_hash_with_domain(acc, meta.section_length % _F, POSEIDON_DOMAIN_COMMITMENT)
             # Chain: acc = Poseidon(acc, sectionHash-as-field-element)
             section_hash_int = int(meta.section_hash, 16) % _F
-            acc = _poseidon_hash(acc, section_hash_int, POSEIDON_DOMAIN_COMMITMENT)
+            acc = poseidon_hash_with_domain(acc, section_hash_int, POSEIDON_DOMAIN_COMMITMENT)
 
         return str(acc % _F)
 

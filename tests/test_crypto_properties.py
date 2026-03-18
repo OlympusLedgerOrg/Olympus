@@ -201,6 +201,7 @@ def test_merkle_proof_verifies_for_all_leaves(leaves: list[bytes], seed: int):
 @given(leaf_lists, st.integers(min_value=0))
 def test_poseidon_merkle_proof_verifies_for_all_leaves(leaves: list[bytes], seed: int):
     """Every leaf in a Poseidon Merkle tree must have a valid inclusion proof."""
+    from protocol.poseidon_bn128 import poseidon_hash_bn128
     from protocol.poseidon_tree import _to_field_int
 
     tree = PoseidonMerkleTree(leaves)
@@ -209,20 +210,17 @@ def test_poseidon_merkle_proof_verifies_for_all_leaves(leaves: list[bytes], seed
     leaf_index = seed % len(leaves)
     path_elements, path_indices = tree.get_proof(leaf_index)
 
-    # Manually verify the proof by reconstructing the root
-    from protocol.poseidon_tree import POSEIDON_DOMAIN_NODE, poseidon_hash_with_domain
-
     # Get the leaf value with position binding
     leaf_int = _to_field_int(leaves[leaf_index], index=leaf_index)
 
-    # Reconstruct root from proof using domain-separated Poseidon
+    # Reconstruct root from proof using plain Poseidon (matching circuit)
     current = leaf_int
     for sibling, is_left in zip(path_elements, path_indices):
         sibling_int = int(sibling)
         if is_left == 0:  # Current node is left child
-            current = poseidon_hash_with_domain(current, sibling_int, POSEIDON_DOMAIN_NODE)
+            current = poseidon_hash_bn128(current, sibling_int)
         else:  # Current node is right child
-            current = poseidon_hash_with_domain(sibling_int, current, POSEIDON_DOMAIN_NODE)
+            current = poseidon_hash_bn128(sibling_int, current)
         current %= SNARK_SCALAR_FIELD
 
     reconstructed_root = str(current % SNARK_SCALAR_FIELD)

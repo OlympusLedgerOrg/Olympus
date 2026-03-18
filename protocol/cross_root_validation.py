@@ -191,6 +191,7 @@ def verify_against_dual_commitment(
 def _reconstruct_poseidon_root(poseidon_proof: PoseidonProof) -> int | None:
     """Reconstruct the Poseidon root by traversing the proof path.
 
+    Uses plain Poseidon(2) matching the circuit behavior in merkleProof.circom.
     Follows the circom convention: ``path_indices[i] == 0`` means the current
     node is the **left** child; ``path_indices[i] == 1`` means it is the
     **right** child.
@@ -202,14 +203,16 @@ def _reconstruct_poseidon_root(poseidon_proof: PoseidonProof) -> int | None:
         The reconstructed root as an integer reduced modulo the BN128 field,
         or ``None`` if any value is malformed.
     """
+    from .poseidon_bn128 import poseidon_hash_bn128
+
     try:
         current = int(poseidon_proof.leaf) % SNARK_SCALAR_FIELD
         for sibling_str, is_right in zip(poseidon_proof.path_elements, poseidon_proof.path_indices):
             sibling = int(sibling_str) % SNARK_SCALAR_FIELD
             if is_right == 0:
-                current = poseidon_hash_with_domain(current, sibling, POSEIDON_DOMAIN_NODE)
+                current = poseidon_hash_bn128(current, sibling)
             else:
-                current = poseidon_hash_with_domain(sibling, current, POSEIDON_DOMAIN_NODE)
+                current = poseidon_hash_bn128(sibling, current)
         return current % SNARK_SCALAR_FIELD
     except (ValueError, TypeError, AttributeError):
         return None

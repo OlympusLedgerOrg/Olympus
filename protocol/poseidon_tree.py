@@ -1,11 +1,17 @@
 """Poseidon Merkle utilities for bridging BLAKE3 data into ZK circuits.
 
-All Poseidon hash calls in this module use domain-separated tags to prevent
-cross-context hash collisions. The domain tags are small field constants
-added to the Poseidon capacity element (initial state[0]) before hashing:
+The core tree functions (_poseidon_hash, _build_level, PoseidonMerkleTree) use
+plain Poseidon(2) matching the circuit behavior in merkleProof.circom exactly.
+This ensures that Python-generated Merkle roots and circuit-verified roots agree.
 
-    POSEIDON_DOMAIN_LEAF = 1   – leaf node hashing
-    POSEIDON_DOMAIN_NODE = 2   – internal node hashing
+poseidon_hash_with_domain() is retained as a utility function for commitment
+chains where domain separation is safe to introduce outside the Merkle path.
+
+Domain separation tags (POSEIDON_DOMAIN_*) are defined for contexts outside
+the Merkle tree verification path where they can be safely used:
+
+    POSEIDON_DOMAIN_LEAF = 1   – leaf node hashing (external use)
+    POSEIDON_DOMAIN_NODE = 2   – internal node hashing (external use)
     POSEIDON_DOMAIN_COMMITMENT = 3 – commitment chain hashing
 """
 
@@ -76,20 +82,18 @@ def _to_field_int(value: int | str | bytes, index: int = 0) -> int:
     raise TypeError(f"Unsupported leaf type: {type(value)!r}")
 
 
-def _poseidon_hash_pairs(
-    pairs: list[tuple[int, int]], domain: int = POSEIDON_DOMAIN_NODE
-) -> list[int]:
+def _poseidon_hash_pairs(pairs: list[tuple[int, int]]) -> list[int]:
     """
-    Hash a list of (left, right) field-element pairs with domain-separated Poseidon(2).
+    Hash a list of (left, right) field-element pairs with plain Poseidon(2).
 
-    Every call is domain-tagged: the ``domain`` constant is mixed into the
-    Poseidon state so that leaf hashes, internal node hashes, and commitment
-    chain hashes can never collide.
+    This function uses plain Poseidon(left, right) — matching the circuit
+    behavior in merkleProof.circom exactly. No domain tags are applied to
+    internal node hashing, ensuring Python-generated Merkle roots are
+    bit-for-bit identical to circuit-verified roots.
 
     Default backend: ``protocol.poseidon_bn128.poseidon_hash_bn128`` — a pure
     Python implementation using the exact same round constants and MDS matrix
-    as circomlibjs / the circom circuit, so Python Merkle roots are
-    bit-for-bit identical to what the circuit computes.
+    as circomlibjs / the circom circuit.
 
     When ``OLY_POSEIDON_BACKEND=js`` is set, all pairs are sent to the
     persistent Node.js process in a **single IPC round-trip** via
@@ -100,33 +104,24 @@ def _poseidon_hash_pairs(
 
     Args:
         pairs: List of (left, right) field-element pairs.
-        domain: Domain separation tag (default: ``POSEIDON_DOMAIN_NODE``).
 
     Returns:
-        List of domain-tagged Poseidon hashes.
+        List of plain Poseidon(2) hashes.
     """
     from . import poseidon_js  # local import avoids circular imports at module load
 
     if poseidon_js.backend_enabled():
         reduced = [(a % SNARK_SCALAR_FIELD, b % SNARK_SCALAR_FIELD) for a, b in pairs]
-        # JS backend does not yet support domain tags; apply domain tagging
-        # by pre-hashing the left element with the domain tag.
-        return [
-            poseidon_hash_bn128(
-                poseidon_hash_bn128(domain % SNARK_SCALAR_FIELD, a) % SNARK_SCALAR_FIELD, b
-            )
-            for a, b in reduced
-        ]
+        return [poseidon_hash_bn128(a, b) for a, b in reduced]
 
     return [
-        poseidon_hash_with_domain(a % SNARK_SCALAR_FIELD, b % SNARK_SCALAR_FIELD, domain)
-        for a, b in pairs
+        poseidon_hash_bn128(a % SNARK_SCALAR_FIELD, b % SNARK_SCALAR_FIELD) for a, b in pairs
     ]
 
 
-def _poseidon_hash(left: int, right: int, domain: int = POSEIDON_DOMAIN_NODE) -> int:
+def _poseidon_hash(left: int, right: int) -> int:
     """Single-pair convenience wrapper around :func:`_poseidon_hash_pairs`."""
-    return _poseidon_hash_pairs([(left, right)], domain=domain)[0]
+    return _poseidon_hash_pairs([(left, right)])[0]
 
 
 @dataclass
@@ -184,7 +179,8 @@ class PoseidonMerkleTree:
         hashing (Certificate Transparency style). All pairs in the level are
         hashed in a single backend call so that the JS backend needs only one
         subprocess per level, not one per pair.
-        Uses ``POSEIDON_DOMAIN_NODE`` domain tag for internal node hashing.
+
+        Uses plain Poseidon(2) matching merkleProof.circom exactly.
         """
         if len(level) == 1:
             return [level[0]]
@@ -198,7 +194,7 @@ class PoseidonMerkleTree:
                 # CT-style promotion: lone node is promoted without hashing
                 promoted.append(level[i])
 
-        hashed = _poseidon_hash_pairs(pairs, domain=POSEIDON_DOMAIN_NODE) if pairs else []
+        hashed = _poseidon_hash_pairs(pairs) if pairs else []
         return hashed + promoted
 
     @property
