@@ -29,6 +29,8 @@ services:
       context: .
       target: production
     container_name: olympus-api
+    env_file:
+      - .env
     command:
       - /bin/sh
       - -c
@@ -39,9 +41,9 @@ services:
     ports:
       - "8000:8000"
     environment:
-      DATABASE_URL: ${DATABASE_URL}
-      OLYMPUS_DEV_SIGNING_KEY: ${OLYMPUS_DEV_SIGNING_KEY}
-      OLYMPUS_API_KEYS_JSON: ${OLYMPUS_API_KEYS_JSON}
+      DATABASE_URL: ${DATABASE_URL:-postgresql+asyncpg://olympus:olympus@db:5432/olympus}
+      OLYMPUS_DEV_SIGNING_KEY: ${OLYMPUS_DEV_SIGNING_KEY:-dev-signing-key-change-in-prod}
+      OLYMPUS_API_KEYS_JSON: '${OLYMPUS_API_KEYS_JSON:-{"dev":"dev-api-key-change-in-prod"}}'
     depends_on:
       db:
         condition: service_healthy
