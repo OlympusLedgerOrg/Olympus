@@ -32,13 +32,20 @@ All responses include everything required for offline verification.
 
 import logging
 import os
+from contextlib import asynccontextmanager
 from typing import TYPE_CHECKING, Any
 from urllib.parse import urlparse
 
 from fastapi import FastAPI, HTTPException, Query, Request
+from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
+from api.config import get_settings
+from api.db import engine
 from api.ingest import _authorize_and_rate_limit, router as ingest_router
+from api.models import Base  # noqa: F401 — ensures all models are registered
+from api.routers import agencies, appeals, documents, keys, ledger
+from api.routers import requests as requests_router
 from api.sth import router as sth_router, set_storage as set_sth_storage
 from protocol.shards import canonical_header
 from protocol.telemetry import opentelemetry_available, prometheus_available, record_smt_divergence
@@ -277,11 +284,38 @@ class StateRootDiffResponse(BaseModel):
     summary: dict[str, int]
 
 
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """Create FOIA database tables on startup and dispose the engine on shutdown."""
+    logger.info("Initialising SQLAlchemy FOIA tables …")
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+    logger.info("FOIA database schema ready.")
+    yield
+    await engine.dispose()
+    logger.info("SQLAlchemy engine disposed; shutdown complete.")
+
+
 # Initialize FastAPI app
+settings = get_settings()
 app = FastAPI(
     title="Olympus Public Audit API",
-    description="API for verifying and ingesting Olympus ledger records, proofs, and signatures",
+    description=(
+        "Unified Olympus API — public audit endpoints, FOIA/public-records "
+        "request management, and cryptographic ledger verification."
+    ),
     version="0.5.0",
+    lifespan=lifespan,
+)
+
+# CORS
+_cors_origins = [o.strip() for o in settings.cors_origins.split(",")]
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=_cors_origins,
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
 )
 
 # Register write/ingest endpoints
@@ -290,6 +324,14 @@ app.include_router(ingest_router)
 # Register STH gossip/monitoring endpoints
 app.include_router(sth_router)
 
+# Register FOIA / public-records routers (previously in api.main only)
+app.include_router(documents.router)
+app.include_router(ledger.router)
+app.include_router(requests_router.router)
+app.include_router(agencies.router)
+app.include_router(appeals.router)
+app.include_router(keys.router)
+
 
 @app.get("/")
 async def root() -> dict[str, Any]:
@@ -297,7 +339,7 @@ async def root() -> dict[str, Any]:
     return {
         "name": "Olympus Public Audit API",
         "version": "0.5.0",
-        "description": "API for verifying and ingesting Olympus protocol records",
+        "description": "Unified Olympus API — audit, FOIA requests, and cryptographic verification",
         "endpoints": [
             "/shards",
             "/shards/{shard_id}/header/latest",
@@ -314,6 +356,10 @@ async def root() -> dict[str, Any]:
             "/ingest/commit",
             "/protocol/sth/latest",
             "/protocol/sth/history",
+            "/requests",
+            "/documents",
+            "/agencies",
+            "/appeals",
             "/health",
         ],
     }
@@ -707,6 +753,10 @@ async def health() -> dict[str, Any]:
             "/ingest/commit",
             "/protocol/sth/latest",
             "/protocol/sth/history",
+            "/requests",
+            "/documents",
+            "/agencies",
+            "/appeals",
             "/metrics",
         ],
     }
