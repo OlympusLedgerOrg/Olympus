@@ -91,6 +91,15 @@ def test_docker_compose_app_healthcheck_start_period_allows_migrations():
     assert compose["services"]["app"]["healthcheck"]["start_period"] == "30s"
 
 
+def test_docker_compose_app_dev_signing_key_default_is_truthy():
+    """docker-compose.yml must default OLYMPUS_DEV_SIGNING_KEY to a truthy value."""
+    compose = _load_primary_compose()
+    assert (
+        compose["services"]["app"]["environment"]["OLYMPUS_DEV_SIGNING_KEY"]
+        == "${OLYMPUS_DEV_SIGNING_KEY:-true}"
+    )
+
+
 def test_docker_compose_app_does_not_use_init_schema():
     """docker-compose.yml must not call the legacy init_schema runner."""
     compose = (REPO_ROOT / "docker-compose.yml").read_text(encoding="utf-8")
