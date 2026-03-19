@@ -12,6 +12,7 @@
     "test:jsonpath": "node --test"
   },
   "dependencies": {
+    "blake3": "^2.1.7",
     "circomlib": "^2.0.5",
     "circomlibjs": "^0.1.7",
     "jsonpath": "file:./safe-jsonpath",

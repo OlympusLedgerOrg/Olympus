@@ -487,6 +487,21 @@ class ProofGenerator:
             "pathElements",
             "pathIndices",
         ],
+        "unified_canonicalization_inclusion_root_sign": [
+            "canonicalHash",
+            "merkleRoot",
+            "ledgerRoot",
+            "treeSize",
+            "documentSections",
+            "sectionCount",
+            "sectionLengths",
+            "sectionHashes",
+            "merklePath",
+            "merkleIndices",
+            "leafIndex",
+            "ledgerPathElements",
+            "ledgerPathIndices",
+        ],
     }
 
     @staticmethod
@@ -563,6 +578,31 @@ class ProofGenerator:
                 inputs.get("pathIndices"),
                 config.redaction_max_leaves,
                 config.redaction_merkle_depth,
+            )
+        elif self.circuit == "unified_canonicalization_inclusion_root_sign":
+            # Validate structured canonicalization inputs
+            self._require_length(
+                "documentSections", inputs.get("documentSections"), config.unified_max_sections
+            )
+            self._require_length(
+                "sectionLengths", inputs.get("sectionLengths"), config.unified_max_sections
+            )
+            self._require_length(
+                "sectionHashes", inputs.get("sectionHashes"), config.unified_max_sections
+            )
+            # Validate Merkle inclusion proof inputs
+            self._require_length(
+                "merklePath", inputs.get("merklePath"), config.unified_merkle_depth
+            )
+            self._require_length(
+                "merkleIndices", inputs.get("merkleIndices"), config.unified_merkle_depth
+            )
+            # Validate SMT ledger proof inputs
+            self._require_length(
+                "ledgerPathElements", inputs.get("ledgerPathElements"), config.unified_smt_depth
+            )
+            self._require_length(
+                "ledgerPathIndices", inputs.get("ledgerPathIndices"), config.unified_smt_depth
             )
 
 

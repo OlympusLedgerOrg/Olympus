@@ -478,21 +478,65 @@ class UnifiedProofGenerator:
         Generate a minimal unified proof bundle.
 
         Args:
-            document_sections: Canonicalized document sections
+            document_sections: Canonicalized document sections (UTF-8 strings)
             merkle_proof: Merkle inclusion proof
             checkpoint: Signed checkpoint
 
         Returns:
-            UnifiedProof
+            UnifiedProof with structured canonicalization
         """
-        from proofs.proof_generator import ProofGenerator
-        from protocol.canonicalizer import Canonicalizer
-        from protocol.hashes import blake3_hash
-        from protocol.poseidon_smt import PoseidonSMT
+        from protocol.hashes import blake3_to_field_element
+        from protocol.poseidon_tree import (
+            POSEIDON_DOMAIN_COMMITMENT,
+            poseidon_hash_with_domain,
+        )
 
         del merkle_proof  # Minimal implementation does not yet bind a BLAKE3 proof transcript.
         if not document_sections:
             raise ValueError("document_sections must contain at least one section")
+
+        # Compute section_lengths (byte lengths) and section_hashes (BLAKE3 as field elements)
+        section_lengths = []
+        section_hashes = []
+
+        for section in document_sections:
+            section_bytes = section.encode("utf-8")
+
+            # Compute byte length
+            section_lengths.append(len(section_bytes))
+
+            # Compute BLAKE3 hash and map to field element
+            field_element = blake3_to_field_element(section_bytes)
+            section_hashes.append(int(field_element))
+
+        # Pad to maxSections (8, matching circuit parameter)
+        max_sections = 8
+        while len(section_lengths) < max_sections:
+            section_lengths.append(0)
+            section_hashes.append(0)
+
+        # Compute canonical_hash using structured DomainPoseidon(3) chain
+        # Chain: acc = sectionCount
+        #   for each i: acc = DomainPoseidon(3)(acc, sectionLength_i)
+        #               acc = DomainPoseidon(3)(acc, sectionHash_i)
+        canonical_hash = len(document_sections)
+
+        for i in range(max_sections):
+            # acc = DomainPoseidon(3)(acc, sectionLength_i)
+            canonical_hash = poseidon_hash_with_domain(
+                canonical_hash, section_lengths[i], POSEIDON_DOMAIN_COMMITMENT
+            )
+
+            # acc = DomainPoseidon(3)(acc, sectionHash_i)
+            canonical_hash = poseidon_hash_with_domain(
+                canonical_hash, section_hashes[i], POSEIDON_DOMAIN_COMMITMENT
+            )
+
+        # For minimal witness-backed proof, use simple SMT structure
+        from proofs.proof_generator import ProofGenerator
+        from protocol.canonicalizer import Canonicalizer
+        from protocol.hashes import blake3_hash
+        from protocol.poseidon_smt import PoseidonSMT
 
         canonicalizer = Canonicalizer()
         leaf_hashes = [
@@ -508,14 +552,18 @@ class UnifiedProofGenerator:
         target_key = blake3_hash([b"0"])
         witness = ProofGenerator.witness_from_smt_existence(smt, target_key)
 
-        canonical_hash = (
-            canonicalizer.get_hash(b"".join(leaf_hashes)) if leaf_hashes else canonicalizer.get_hash(b"")
-        )
         poseidon_root = str(smt.get_root())
         return UnifiedProof(
-            zk_proof={"witness": witness.inputs},
+            zk_proof={
+                "witness": {
+                    **witness.inputs,
+                    "sectionLengths": [str(length) for length in section_lengths],
+                    "sectionHashes": [str(hash_val) for hash_val in section_hashes],
+                    "canonicalHash": str(canonical_hash),
+                }
+            },
             public_inputs=UnifiedPublicInputs(
-                canonical_hash=str(int.from_bytes(canonical_hash, byteorder="big")),
+                canonical_hash=str(canonical_hash),
                 merkle_root=poseidon_root,
                 ledger_root=poseidon_root,
             ),
