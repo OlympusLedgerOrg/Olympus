@@ -108,7 +108,12 @@ def _get_storage() -> "StorageLayer":
             f"db={parsed_url.path.lstrip('/') if parsed_url.path else 'unknown'}"
         )
 
-        storage = StorageLayer(DATABASE_URL)
+        psycopg_database_url = (
+            "postgresql://" + DATABASE_URL[len("postgresql+asyncpg://") :]
+            if DATABASE_URL.startswith("postgresql+asyncpg://")
+            else DATABASE_URL
+        )
+        storage = StorageLayer(psycopg_database_url)
         storage.init_schema()
         logger.info("Database schema initialized successfully")
 

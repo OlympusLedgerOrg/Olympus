@@ -1052,7 +1052,7 @@ def proxy_list_requests(request: Request):
         path = f"/requests?{query}" if query else "/requests"
         data = _fetch_json(path)
         return JSONResponse(data)
-    except (HTTPError, URLError) as exc:
+    except (HTTPError, URLError, TimeoutError) as exc:
         status = getattr(exc, 'code', 502) or 502
         return JSONResponse(status_code=status, content={"error": str(exc)})
 
@@ -1112,7 +1112,7 @@ def proxy_verify_record(display_id: str):
         )
         try:
             proof_data = _expect_json_object(_fetch_json(proof_path))
-        except (HTTPError, URLError):
+        except (HTTPError, URLError, TimeoutError):
             # Proof may not exist if the record was never ingested into the SMT
             proof_data = None
 
@@ -1299,7 +1299,7 @@ def debug_console(request: Request):
             return templates.TemplateResponse(request, "index.html", context)
         context["banners"].append(f"API error: HTTP {exc.code}")
         return templates.TemplateResponse(request, "index.html", context)
-    except URLError:
+    except (URLError, TimeoutError):
         context["banners"].append("API unavailable (connection failed).")
         return templates.TemplateResponse(request, "index.html", context)
 
@@ -1327,7 +1327,7 @@ def debug_console(request: Request):
             try:
                 history = _expect_json_object(_fetch_json(f"/shards/{quote(shard_id)}/history?n=5"))
                 shard_row["history"] = history.get("headers", [])
-            except (HTTPError, URLError, TypeError, ValueError):
+            except (HTTPError, URLError, TimeoutError, TypeError, ValueError):
                 shard_row["history"] = []
             if _is_chain_broken(entries):
                 context["banners"].append(f"Chain linkage broken in shard {shard_id} ledger tail.")
@@ -1336,7 +1336,7 @@ def debug_console(request: Request):
                 context["banners"].append("Database unavailable (503).")
             else:
                 context["banners"].append(f"Shard {shard_id} query failed (HTTP {exc.code}).")
-        except URLError:
+        except (URLError, TimeoutError):
             context["banners"].append(f"Shard {shard_id} query failed (connection error).")
 
         context["shards"].append(shard_row)
@@ -1365,7 +1365,7 @@ def verification_portal_hash(content_hash: str):
             status_code=exc.code,
             content={"ok": False, "error": f"Hash verification failed (HTTP {exc.code})."},
         )
-    except URLError:
+    except (URLError, TimeoutError):
         return JSONResponse(status_code=503, content={"ok": False, "error": "API unavailable."})
 
 
@@ -1390,7 +1390,7 @@ def proof_explorer(
             status_code=exc.code,
             content={"ok": False, "error": f"Proof query failed (HTTP {exc.code})."},
         )
-    except URLError:
+    except (URLError, TimeoutError):
         return JSONResponse(status_code=503, content={"ok": False, "error": "API unavailable."})
 
 
@@ -1413,7 +1413,7 @@ def state_diff_viewer(
             status_code=exc.code,
             content={"ok": False, "error": f"State diff query failed (HTTP {exc.code})."},
         )
-    except URLError:
+    except (URLError, TimeoutError):
         return JSONResponse(status_code=503, content={"ok": False, "error": "API unavailable."})
 
 
