@@ -55,6 +55,7 @@ Phase 0.1 Institutional Pinning — multi-format artifact ingestion with byte-st
 - Dangerous URI scheme blocking (`javascript:`, `vbscript:`, `data:`) with whitespace-collapse obfuscation resistance
 - Style attribute stripping to prevent CSS-based data exfiltration
 - Whitespace normalization within text nodes
+- lxml parser configured with `huge_tree` to avoid hidden nesting depth caps
 - Input size limit (`MAX_INPUT_SIZE = 256 MiB`)
 
 #### DOCX

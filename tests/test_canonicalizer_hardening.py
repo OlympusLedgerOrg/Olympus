@@ -95,6 +95,25 @@ class TestHtmlSanitizationHardening:
         assert b"class=" in result
         assert b"id=" in result
 
+    def test_preserves_tail_text_after_stripping(self):
+        """Tail text after stripped tags must survive."""
+        html = (
+            b"<html><body><p>alpha</p>"
+            b"<script>alert('x')</script>beta</body></html>"
+        )
+        result = Canonicalizer.html_v1(html)
+        assert b"alpha" in result
+        assert b"beta" in result
+        assert b"alert" not in result
+
+    def test_allows_deeply_nested_html(self):
+        """HTML deeper than lxml's default limit should still parse."""
+        depth = 300
+        inner = "<div>" * depth + "ok" + "</div>" * depth
+        html = f"<html><body>{inner}</body></html>".encode()
+        result = Canonicalizer.html_v1(html)
+        assert b"ok" in result
+
 
 class TestShouldStripAttribute:
     """Unit tests for the _should_strip_attribute helper."""

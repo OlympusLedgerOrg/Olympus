@@ -318,7 +318,11 @@ class Canonicalizer:
             )
 
         parser = lxml_html.HTMLParser(
-            remove_comments=True, remove_pis=True, encoding="utf-8", recover=False
+            remove_comments=True,
+            remove_pis=True,
+            encoding="utf-8",
+            recover=False,
+            huge_tree=True,
         )
         try:
             raw_nfc = unicodedata.normalize("NFC", data.decode("utf-8"))
@@ -328,12 +332,26 @@ class Canonicalizer:
 
         # Remove volatile active tags and data-exfiltration vectors
         # (along with their contents and tails)
+        def _strip_element(el: Any) -> None:
+            """Remove a stripped element while preserving its tail text."""
+            parent = el.getparent()
+            if parent is None:
+                el.clear()
+                return
+
+            tail = el.tail
+            if tail:
+                previous = el.getprevious()
+                if previous is None:
+                    parent.text = (parent.text or "") + tail
+                else:
+                    previous.tail = (previous.tail or "") + tail
+
+            parent.remove(el)
+
         for tag in _STRIPPED_HTML_TAGS:
             for el in root.xpath(f"//{tag}"):
-                if el.getparent() is not None:
-                    el.text = None
-                    el.tail = None
-                    el.getparent().remove(el)
+                _strip_element(el)
 
         def walk(el: Any) -> None:
             if el.attrib:
