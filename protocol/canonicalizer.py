@@ -333,12 +333,13 @@ class Canonicalizer:
         # Remove volatile active tags and data-exfiltration vectors
         # (along with their contents and tails)
         def _strip_element(el: Any) -> None:
-            """Remove a stripped element while preserving its tail text."""
-            parent = el.getparent()
-            if parent is None:
-                el.clear()
-                return
+            """Remove a stripped element while preserving its tail text.
 
+            Note: lxml's HTMLParser always wraps content in <html><body>,
+            so stripped tags (script, style, etc.) always have a parent.
+            The parent.remove(el) call below is always safe.
+            """
+            parent = el.getparent()
             tail = el.tail
             if tail:
                 previous = el.getprevious()
