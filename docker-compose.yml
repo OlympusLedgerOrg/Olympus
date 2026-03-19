@@ -41,7 +41,7 @@ services:
       - "8000:8000"
     environment:
       DATABASE_URL: ${DATABASE_URL:-postgresql+asyncpg://olympus:olympus@db:5432/olympus}
-      OLYMPUS_DEV_SIGNING_KEY: ${OLYMPUS_DEV_SIGNING_KEY:-dev-signing-key-change-in-prod}
+      OLYMPUS_DEV_SIGNING_KEY: ${OLYMPUS_DEV_SIGNING_KEY:-true}
       OLYMPUS_API_KEYS_JSON: '${OLYMPUS_API_KEYS_JSON:-[]}'
     depends_on:
       db:
