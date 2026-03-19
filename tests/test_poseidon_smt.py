@@ -346,3 +346,49 @@ def test_zero_value():
     tree.update(key, value)
     assert tree.get(key) == 0  # Exists with value 0
     assert tree.get(b"\x00" * 31 + b"\x01") is None  # Does not exist
+
+
+# --- SMT root edge-case regression tests (fix-12) ---
+
+
+def test_single_insert_root_is_not_empty_hash():
+    """After a single insert the root must differ from the empty-tree root."""
+    tree = PoseidonSMT()
+    tree.update(b"\x00" * 31 + b"\x01", 1)
+    assert tree.get_root() != POSEIDON_EMPTY_HASHES[256]
+
+
+def test_nonexistence_witness_root_matches_tree_root():
+    """Non-existence witness root must match the tree root after insertions."""
+    tree = PoseidonSMT()
+    tree.update(b"\x00" * 31 + b"\x01", 100)
+    tree.update(b"\x00" * 31 + b"\x02", 200)
+
+    absent_key = b"\x00" * 31 + b"\xFF"
+    witness = tree.prove_nonexistence(absent_key)
+
+    # The witness root must equal the live tree root
+    assert witness.root == str(tree.get_root())
+
+
+def test_empty_tree_nonexistence_witness_verifies():
+    """Non-existence witness against an empty tree must verify."""
+    tree = PoseidonSMT()
+    key = b"\xAB" * 32
+    witness = tree.prove_nonexistence(key)
+
+    assert verify_poseidon_nonexistence_witness(witness)
+    assert witness.root == str(POSEIDON_EMPTY_HASHES[256])
+
+
+def test_root_after_update_equals_root_from_fresh_insert():
+    """Updating a key then re-inserting from scratch must yield same root."""
+    key = b"\x00" * 31 + b"\x01"
+    tree1 = PoseidonSMT()
+    tree1.update(key, 1)
+    tree1.update(key, 2)
+
+    tree2 = PoseidonSMT()
+    tree2.update(key, 2)
+
+    assert tree1.get_root() == tree2.get_root()
