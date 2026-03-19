@@ -57,6 +57,7 @@ from .proof_interface import (
     ProofVerificationError,
     Statement,
 )
+from .redaction import RedactionProtocol
 from .zkp import Groth16Prover, ZKProof
 
 
@@ -500,7 +501,7 @@ class UnifiedProofGenerator:
         section_hashes = []
 
         for section in document_sections:
-            section_bytes = section.encode("utf-8")
+            section_bytes = RedactionProtocol.canonical_section_bytes(section)
 
             # Compute byte length
             section_lengths.append(len(section_bytes))
@@ -534,13 +535,11 @@ class UnifiedProofGenerator:
 
         # For minimal witness-backed proof, use simple SMT structure
         from proofs.proof_generator import ProofGenerator
-        from protocol.canonicalizer import Canonicalizer
         from protocol.hashes import blake3_hash
         from protocol.poseidon_smt import PoseidonSMT
 
-        canonicalizer = Canonicalizer()
         leaf_hashes = [
-            canonicalizer.get_hash(canonicalizer.json_jcs(json.dumps(section).encode("utf-8")))
+            blake3_hash([RedactionProtocol.canonical_section_bytes(section)])
             for section in document_sections
         ]
 
