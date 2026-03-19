@@ -1,14 +1,13 @@
 pragma circom 2.0.0;
 
 /*
- * Document existence proof with domain-separated Poseidon.
+ * Document existence proof with Poseidon Merkle inclusion.
  *
- * Verifies a domain-tagged Poseidon Merkle path from a leaf to a public root.
+ * Verifies a Poseidon Merkle path from a leaf to a public root.
  * The leaf index is exposed as a public input to anchor ledger position
  * without revealing the leaf value.
  *
  * Security hardening:
- *   - Domain-separated Poseidon hashing (domain tag mixed into left input)
  *   - Num2Bits range check on leafIndex
  *   - Index bounds: leafIndex < treeSize (when treeSize > 0)
  */
