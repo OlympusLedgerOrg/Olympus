@@ -1,14 +1,13 @@
 pragma circom 2.0.0;
 
 /*
- * Unified Proof: Canonicalization + Inclusion + Root + Signature Verification
+ * Unified Proof: Canonicalization + Inclusion + Root Verification
  *
- * This circuit provides a single proof that verifies four critical properties:
+ * This circuit provides a single proof that verifies three critical properties:
  *   1) Document canonicalization - the document sections are properly canonicalized
  *      with structured metadata (sectionCount, sectionLength, sectionHash)
  *   2) Merkle inclusion - the document is included in the ledger Merkle tree
- *   3) Ledger root commitment - the Merkle root is committed in a checkpoint
- *   4) Federation signatures - (verified outside circuit at Python layer)
+ *   3) Ledger root commitment - the Merkle root is committed in an SMT
  *
  * Security hardening:
  *   - Domain-separated Poseidon hashing with domain tags
@@ -22,11 +21,10 @@ pragma circom 2.0.0;
  *   POSEIDON_DOMAIN_NODE = 2
  *   POSEIDON_DOMAIN_COMMITMENT = 3
  *
- * Public inputs (5):
- *   - canonicalHash: Poseidon hash of canonicalized document sections
+ * Public inputs (4):
+ *   - canonicalHash: Structured metadata commitment (sectionCount + sectionLengths + sectionHashes via DomainPoseidon(3))
  *   - merkleRoot: Root of the ledger Merkle tree
  *   - ledgerRoot: SMT root hash from checkpoint
- *   - checkpointHash: Hash of the checkpoint containing ledger state
  *   - treeSize: Number of leaves in the Merkle tree (for bounds checking)
  *
  * Private inputs:
@@ -40,10 +38,11 @@ pragma circom 2.0.0;
  *   - ledgerPathElements[smt_depth]: SMT path for ledger root
  *   - ledgerPathIndices[smt_depth]: SMT path indices
  *
- * Note: Federation signatures are verified outside the circuit because:
- *   - Ed25519 signature verification is expensive in circuits
- *   - Federation membership may change between proof generation and verification
- *   - Python layer can efficiently verify quorum certificates
+ * Note on checkpoint verification:
+ *   Checkpoint integrity (including federation signatures) is verified at the Python
+ *   layer, not in-circuit. Python checkpoints are BLAKE3-hashed, federation-signed
+ *   structs that cannot be efficiently verified in BN128. The circuit proves the
+ *   ledger root commitment; the Python layer proves the checkpoint quorum certificate.
  */
 
 include "./lib/merkleProof.circom";
@@ -77,15 +76,6 @@ template LessThanBounded(n) {
     out <== diff.out[n];
 }
 
-// 2-to-1 multiplexer
-template Mux1() {
-    signal input c[2];
-    signal input s;
-    signal output out;
-
-    s * (1 - s) === 0;  // Binary constraint on selector
-    out <== c[0] * (1 - s) + c[1] * s;
-}
 
 // Domain-separated Poseidon hash: Poseidon(Poseidon(domain, left), right)
 template DomainPoseidon(domain) {
@@ -109,7 +99,6 @@ template UnifiedCanonicalizationInclusionRootSign(maxSections, merkleDepth, smtD
     signal input canonicalHash;     // Poseidon hash of canonical document
     signal input merkleRoot;        // Root of ledger Merkle tree
     signal input ledgerRoot;        // SMT root from checkpoint
-    signal input checkpointHash;    // Hash of checkpoint commitment
     signal input treeSize;          // Number of leaves for bounds checking
 
     // ===== PRIVATE INPUTS =====
@@ -173,33 +162,8 @@ template UnifiedCanonicalizationInclusionRootSign(maxSections, merkleDepth, smtD
         structuredHashes[2 * i + 2] <== sectionHashHashers[i].out;
     }
 
-    // Also chain-hash document sections for backward compatibility
-    signal sectionContentHashes[maxSections];
-    component sectionContentHashers[maxSections];
-
-    // First section: Poseidon(1)(section)
-    component firstHash = Poseidon(1);
-    firstHash.inputs[0] <== documentSections[0];
-    sectionContentHashes[0] <== firstHash.out;
-
-    // Subsequent sections: Poseidon(2)(prev, section)
-    for (var i = 1; i < maxSections; i++) {
-        sectionContentHashers[i] = Poseidon(2);
-        sectionContentHashers[i].inputs[0] <== sectionContentHashes[i - 1];
-        sectionContentHashers[i].inputs[1] <== documentSections[i];
-        sectionContentHashes[i] <== sectionContentHashers[i].out;
-    }
-
-    // Final canonical hash (content chain)
-    signal finalCanonicalHash;
-    component selectHash = Mux1();
-    selectHash.c[0] <== sectionContentHashes[maxSections - 1];
-    selectHash.c[1] <== sectionContentHashes[maxSections - 1];
-    selectHash.s <== 0;
-    finalCanonicalHash <== selectHash.out;
-
-    // Constrain: computed canonical hash must equal public input
-    canonicalHash === finalCanonicalHash;
+    // Bind public canonicalHash to the structured metadata chain
+    canonicalHash === structuredHashes[2 * maxSections];
 
     // ===== COMPONENT 2: MERKLE INCLUSION VERIFICATION =====
 
@@ -254,23 +218,10 @@ template UnifiedCanonicalizationInclusionRootSign(maxSections, merkleDepth, smtD
 
     // Constrain: computed SMT root must match public ledger root
     ledgerSMTProof.root === ledgerRoot;
-
-    // ===== COMPONENT 4: CHECKPOINT BINDING =====
-
-    component checkpointCommitment = Poseidon(2);
-    checkpointCommitment.inputs[0] <== ledgerRoot;
-    checkpointCommitment.inputs[1] <== 0;  // Domain separator for checkpoints
-
-    signal computedCheckpointHash;
-    computedCheckpointHash <== checkpointCommitment.out;
-
-    signal checkpointExists;
-    checkpointExists <== checkpointHash * checkpointHash;
-    checkpointExists * 0 === 0;  // Dummy constraint to use the signal
 }
 
 // Default instantiation: values loaded from parameters.circom
-component main {public [canonicalHash, merkleRoot, ledgerRoot, checkpointHash, treeSize]} =
+component main {public [canonicalHash, merkleRoot, ledgerRoot, treeSize]} =
     UnifiedCanonicalizationInclusionRootSign(
         UNIFIED_MAX_SECTIONS,
         UNIFIED_MERKLE_DEPTH,

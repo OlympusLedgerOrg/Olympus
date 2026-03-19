@@ -69,9 +69,18 @@ template DocumentExistence(depth) {
         indexAccum[i + 1] <== indexAccum[i] + pathIndices[i] * pow2;
         pow2 = pow2 * 2;
     }
+    // NOTE: For depth=256, indexAccum overflows the BN128 field and this
+    // constraint is vacuous (both sides reduce to the same field element).
+    // Soundness is guaranteed by the Merkle root check alone, not this constraint.
+    // This constraint is retained for clarity at smaller tree depths where it is meaningful.
     leafIndex === indexAccum[depth];
 
     // --- Index bounds: leafIndex < treeSize (when treeSize > 0) ---
+    // VERIFIER RESPONSIBILITY: When treeSize=0, the bounds check below is
+    // disabled (correct for an empty tree). Off-chain verifiers MUST reject
+    // proofs where treeSize=0 but the supplied root is not the known empty-tree
+    // root. The circuit cannot enforce this because the empty-tree root is not
+    // a circuit parameter.
     // Constrained: treeSizeIsPositive = 1 iff treeSize != 0
     // Uses circomlib IsZero rather than an unconstrained division hint.
     component treeSizeIsZero = IsZero();

@@ -7,7 +7,9 @@
  * 1. Document canonicalization (Poseidon hash over sections)
  * 2. Merkle inclusion in ledger tree
  * 3. Ledger root commitment in SMT
- * 4. Checkpoint binding
+ *
+ * Note: Checkpoint integrity is verified at the Python layer via federation
+ * signatures, not in the circuit.
  *
  * Usage:
  *   node generate_unified_inputs.js > unified_input.json
@@ -18,12 +20,60 @@
 const poseidon = require('circomlibjs').poseidon;
 const { buildPoseidon } = require('circomlibjs');
 const fs = require('fs');
+const { hash } = require('blake3');
+
+// BN128 scalar field prime (alt_bn128) used by Circom/snarkjs
+const SNARK_SCALAR_FIELD = 21888242871839275222246405745257275088548364400416034343698204186575808495617n;
+
+// Domain separation tag for structured canonicalization (matches protocol/poseidon_tree.py)
+const POSEIDON_DOMAIN_COMMITMENT = 3;
+
+/**
+ * Convert BLAKE3 hash to BN128 field element (matching protocol/hashes.py:blake3_to_field_element)
+ *
+ * @param {Buffer} blake3Hash - 32-byte BLAKE3 hash
+ * @returns {string} Field element as decimal string
+ */
+function blake3ToFieldElement(blake3Hash) {
+    // Convert 32-byte hash to big integer (big-endian)
+    let bigInt = 0n;
+    for (let i = 0; i < blake3Hash.length; i++) {
+        bigInt = (bigInt << 8n) | BigInt(blake3Hash[i]);
+    }
+    // Reduce into BN128 scalar field
+    const fieldElement = bigInt % SNARK_SCALAR_FIELD;
+    return fieldElement.toString();
+}
+
+/**
+ * Compute domain-separated Poseidon hash: Poseidon(Poseidon(domain, left), right)
+ * Matches protocol/poseidon_tree.py:poseidon_hash_with_domain and circuit DomainPoseidon template
+ *
+ * @param {*} poseidonHash - Poseidon hash function from circomlibjs
+ * @param {number} domain - Domain separation tag (e.g., 3 for POSEIDON_DOMAIN_COMMITMENT)
+ * @param {BigInt|string} left - Left input as BigInt or decimal string
+ * @param {BigInt|string} right - Right input as BigInt or decimal string
+ * @returns {string} Hash output as decimal string
+ */
+function domainPoseidon(poseidonHash, domain, left, right) {
+    // Convert inputs to BigInt
+    const leftBig = typeof left === 'string' ? BigInt(left) : left;
+    const rightBig = typeof right === 'string' ? BigInt(right) : right;
+
+    // Inner hash: Poseidon(domain, left)
+    const innerHash = poseidonHash([BigInt(domain), leftBig]);
+
+    // Outer hash: Poseidon(innerHash, right)
+    const outerHash = poseidonHash([innerHash, rightBig]);
+
+    return poseidonHash.F.toString(outerHash);
+}
 
 /**
  * Generate witness inputs for unified proof circuit
  *
  * @param {Object} params - Input parameters
- * @param {Array<string>} params.documentSections - Canonicalized document sections as decimal strings
+ * @param {Array<string>} params.documentSections - Canonicalized document sections as UTF-8 strings
  * @param {number} params.sectionCount - Number of actual sections (rest are padding)
  * @param {string} params.merkleRoot - Expected Merkle root as decimal string
  * @param {Array<string>} params.merklePath - Merkle proof siblings as decimal strings
@@ -32,7 +82,6 @@ const fs = require('fs');
  * @param {string} params.ledgerRoot - SMT root hash as decimal string
  * @param {Array<string>} params.ledgerPathElements - SMT path siblings as decimal strings
  * @param {Array<number>} params.ledgerPathIndices - SMT path indices
- * @param {string} params.checkpointHash - Checkpoint hash as decimal string
  * @returns {Object} Circuit inputs in circom format
  */
 async function generateUnifiedInputs(params) {
@@ -56,20 +105,56 @@ async function generateUnifiedInputs(params) {
         throw new Error(`Invalid SMT path length: ${params.ledgerPathElements.length} != ${smtDepth}`);
     }
 
-    // Pad document sections to maxSections with zeros
+    // Compute sectionLengths and sectionHashes for actual sections
+    const sectionLengths = [];
+    const sectionHashes = [];
+
+    for (let i = 0; i < params.documentSections.length; i++) {
+        const section = params.documentSections[i];
+        const sectionBytes = Buffer.from(section, 'utf-8');
+
+        // Compute byte length
+        sectionLengths.push(sectionBytes.length.toString());
+
+        // Compute BLAKE3 hash and map to field element
+        const blake3Hash = hash(sectionBytes);
+        const fieldElement = blake3ToFieldElement(blake3Hash);
+        sectionHashes.push(fieldElement);
+    }
+
+    // Pad sectionLengths and sectionHashes to maxSections with zeros
+    while (sectionLengths.length < maxSections) {
+        sectionLengths.push("0");
+        sectionHashes.push("0");
+    }
+
+    // Pad document sections to maxSections with zeros (for backward compatibility)
     const paddedSections = [...params.documentSections];
     while (paddedSections.length < maxSections) {
         paddedSections.push("0");
     }
 
-    // Compute canonical hash by chaining Poseidon hashes
-    // First section: hash(section[0])
-    let canonicalHash = poseidonHash.F.toString(poseidonHash([paddedSections[0]]));
+    // Compute canonicalHash using structured DomainPoseidon(3) chain
+    // Chain: acc = sectionCount
+    //   for each i: acc = DomainPoseidon(3)(acc, sectionLength_i)
+    //               acc = DomainPoseidon(3)(acc, sectionHash_i)
+    let canonicalHash = params.sectionCount.toString();
 
-    // Chain subsequent sections: hash(prev_hash, section[i])
-    for (let i = 1; i < maxSections; i++) {
-        canonicalHash = poseidonHash.F.toString(
-            poseidonHash([BigInt(canonicalHash), BigInt(paddedSections[i])])
+    for (let i = 0; i < maxSections; i++) {
+        // acc = DomainPoseidon(3)(acc, sectionLength_i)
+        canonicalHash = domainPoseidon(
+            poseidonHash,
+            POSEIDON_DOMAIN_COMMITMENT,
+            canonicalHash,
+            sectionLengths[i]
+        );
+
+        // acc = DomainPoseidon(3)(acc, sectionHash_i)
+        canonicalHash = domainPoseidon(
+            poseidonHash,
+            POSEIDON_DOMAIN_COMMITMENT,
+            canonicalHash,
+            sectionHashes[i]
         );
     }
 
@@ -79,11 +164,12 @@ async function generateUnifiedInputs(params) {
         canonicalHash: canonicalHash,
         merkleRoot: params.merkleRoot,
         ledgerRoot: params.ledgerRoot,
-        checkpointHash: params.checkpointHash,
 
         // Private inputs - document canonicalization
         documentSections: paddedSections,
         sectionCount: params.sectionCount.toString(),
+        sectionLengths: sectionLengths,
+        sectionHashes: sectionHashes,
 
         // Private inputs - Merkle inclusion
         merklePath: params.merklePath,
@@ -128,7 +214,6 @@ async function generateExample() {
         ledgerRoot: "98765432109876543210",
         ledgerPathElements: ledgerPathElements,
         ledgerPathIndices: ledgerPathIndices,
-        checkpointHash: "11111111111111111111",
     };
 
     return await generateUnifiedInputs(params);

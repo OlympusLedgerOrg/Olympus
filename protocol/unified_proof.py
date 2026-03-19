@@ -1,11 +1,14 @@
 """
 Unified Proof System for Olympus
 
-This module provides a single proof that verifies four critical properties:
+This module provides a single proof that verifies three critical properties:
 1. Document canonicalization - proves document sections are properly canonicalized
 2. Merkle inclusion - proves document is included in the ledger Merkle tree
 3. Ledger root commitment - proves Merkle root is in a signed checkpoint
-4. Federation signatures - verifies quorum certificate over checkpoint
+
+Checkpoint integrity (component 4) is verified at the Python layer via federation
+signatures. Python checkpoints are BLAKE3-hashed, federation-signed structs that
+cannot be efficiently verified in BN128 circuits.
 
 The system uses Groth16 for the cryptographic proof (components 1-3) and verifies
 federation signatures at the Python layer (component 4). This design is optimized
@@ -31,7 +34,7 @@ Usage::
 
     result = verifier.verify(proof)
     if result.is_valid:
-        print("All four components verified successfully")
+        print("All components verified successfully")
 """
 
 from __future__ import annotations
@@ -117,7 +120,6 @@ class UnifiedProof:
                 "canonical_hash": self.public_inputs.canonical_hash,
                 "merkle_root": self.public_inputs.merkle_root,
                 "ledger_root": self.public_inputs.ledger_root,
-                "checkpoint_hash": self.public_inputs.checkpoint_hash,
             },
             "checkpoint": self.checkpoint.to_dict(),
             "backend": self.backend.value,
@@ -132,7 +134,6 @@ class UnifiedProof:
                 canonical_hash=data["public_inputs"]["canonical_hash"],
                 merkle_root=data["public_inputs"]["merkle_root"],
                 ledger_root=data["public_inputs"]["ledger_root"],
-                checkpoint_hash=data["public_inputs"]["checkpoint_hash"],
             ),
             checkpoint=SignedCheckpoint.from_dict(data["checkpoint"]),
             backend=ProofBackend(data.get("backend", "groth16")),
@@ -144,20 +145,21 @@ class UnifiedPublicInputs:
     """
     Public inputs for the unified proof circuit.
 
-    These four values are cryptographically bound in the ZK proof:
+    These three values are cryptographically bound in the ZK proof:
     - canonical_hash: Poseidon hash of canonicalized document sections
     - merkle_root: Root of the ledger Merkle tree
     - ledger_root: SMT root hash from checkpoint
-    - checkpoint_hash: Hash of the signed checkpoint
 
     All values are represented as decimal strings for compatibility with
     the BN128 scalar field used in Groth16 circuits.
+
+    Note: Checkpoint integrity is verified at the Python layer via federation
+    signatures, not in the circuit.
     """
 
     canonical_hash: str  # Poseidon hash as decimal string
     merkle_root: str  # Merkle root as decimal string
     ledger_root: str  # SMT root as decimal string
-    checkpoint_hash: str  # Checkpoint hash as decimal string
 
 
 class UnifiedProofVerifier:
@@ -313,7 +315,6 @@ class UnifiedProofVerifier:
                     "canonical_hash": proof.public_inputs.canonical_hash,
                     "merkle_root": proof.public_inputs.merkle_root,
                     "ledger_root": proof.public_inputs.ledger_root,
-                    "checkpoint_hash": proof.public_inputs.checkpoint_hash,
                 },
             )
 
@@ -331,7 +332,6 @@ class UnifiedProofVerifier:
                     str(int(proof.public_inputs.canonical_hash)),
                     str(int(proof.public_inputs.merkle_root)),
                     str(int(proof.public_inputs.ledger_root)),
-                    str(int(proof.public_inputs.checkpoint_hash)),
                 ],
             )
 
@@ -359,7 +359,6 @@ class UnifiedProofVerifier:
                 str(int(proof.public_inputs.canonical_hash)),
                 str(int(proof.public_inputs.merkle_root)),
                 str(int(proof.public_inputs.ledger_root)),
-                str(int(proof.public_inputs.checkpoint_hash)),
             ]
 
             zk_proof = ZKProof(
@@ -479,21 +478,65 @@ class UnifiedProofGenerator:
         Generate a minimal unified proof bundle.
 
         Args:
-            document_sections: Canonicalized document sections
+            document_sections: Canonicalized document sections (UTF-8 strings)
             merkle_proof: Merkle inclusion proof
             checkpoint: Signed checkpoint
 
         Returns:
-            UnifiedProof
+            UnifiedProof with structured canonicalization
         """
-        from proofs.proof_generator import ProofGenerator
-        from protocol.canonicalizer import Canonicalizer
-        from protocol.hashes import blake3_hash
-        from protocol.poseidon_smt import PoseidonSMT
+        from protocol.hashes import blake3_to_field_element
+        from protocol.poseidon_tree import (
+            POSEIDON_DOMAIN_COMMITMENT,
+            poseidon_hash_with_domain,
+        )
 
         del merkle_proof  # Minimal implementation does not yet bind a BLAKE3 proof transcript.
         if not document_sections:
             raise ValueError("document_sections must contain at least one section")
+
+        # Compute section_lengths (byte lengths) and section_hashes (BLAKE3 as field elements)
+        section_lengths = []
+        section_hashes = []
+
+        for section in document_sections:
+            section_bytes = section.encode("utf-8")
+
+            # Compute byte length
+            section_lengths.append(len(section_bytes))
+
+            # Compute BLAKE3 hash and map to field element
+            field_element = blake3_to_field_element(section_bytes)
+            section_hashes.append(int(field_element))
+
+        # Pad to maxSections (8, matching circuit parameter)
+        max_sections = 8
+        while len(section_lengths) < max_sections:
+            section_lengths.append(0)
+            section_hashes.append(0)
+
+        # Compute canonical_hash using structured DomainPoseidon(3) chain
+        # Chain: acc = sectionCount
+        #   for each i: acc = DomainPoseidon(3)(acc, sectionLength_i)
+        #               acc = DomainPoseidon(3)(acc, sectionHash_i)
+        canonical_hash = len(document_sections)
+
+        for i in range(max_sections):
+            # acc = DomainPoseidon(3)(acc, sectionLength_i)
+            canonical_hash = poseidon_hash_with_domain(
+                canonical_hash, section_lengths[i], POSEIDON_DOMAIN_COMMITMENT
+            )
+
+            # acc = DomainPoseidon(3)(acc, sectionHash_i)
+            canonical_hash = poseidon_hash_with_domain(
+                canonical_hash, section_hashes[i], POSEIDON_DOMAIN_COMMITMENT
+            )
+
+        # For minimal witness-backed proof, use simple SMT structure
+        from proofs.proof_generator import ProofGenerator
+        from protocol.canonicalizer import Canonicalizer
+        from protocol.hashes import blake3_hash
+        from protocol.poseidon_smt import PoseidonSMT
 
         canonicalizer = Canonicalizer()
         leaf_hashes = [
@@ -509,26 +552,20 @@ class UnifiedProofGenerator:
         target_key = blake3_hash([b"0"])
         witness = ProofGenerator.witness_from_smt_existence(smt, target_key)
 
-        canonical_hash = (
-            canonicalizer.get_hash(b"".join(leaf_hashes)) if leaf_hashes else canonicalizer.get_hash(b"")
-        )
         poseidon_root = str(smt.get_root())
-        if checkpoint.checkpoint_hash.isdigit():
-            checkpoint_hash = checkpoint.checkpoint_hash
-        else:
-            try:
-                checkpoint_hash = str(int(checkpoint.checkpoint_hash, 16))
-            except ValueError as exc:
-                raise ValueError(
-                    "checkpoint.checkpoint_hash must be a decimal or hex-encoded string"
-                ) from exc
         return UnifiedProof(
-            zk_proof={"witness": witness.inputs},
+            zk_proof={
+                "witness": {
+                    **witness.inputs,
+                    "sectionLengths": [str(length) for length in section_lengths],
+                    "sectionHashes": [str(hash_val) for hash_val in section_hashes],
+                    "canonicalHash": str(canonical_hash),
+                }
+            },
             public_inputs=UnifiedPublicInputs(
-                canonical_hash=str(int.from_bytes(canonical_hash, byteorder="big")),
+                canonical_hash=str(canonical_hash),
                 merkle_root=poseidon_root,
                 ledger_root=poseidon_root,
-                checkpoint_hash=checkpoint_hash,
             ),
             checkpoint=checkpoint,
             backend=self.backend,
