@@ -42,6 +42,11 @@ dependencies = [
     "aiosqlite==0.22.1",
     "alembic==1.18.4",
     "typer==0.24.1",
+    # --- previously missing ---
+    "asyncpg>=0.29.0",
+    "httpx>=0.28.1",
+    "cryptography>=46.0.0",
+    "pyasn1>=0.6.0",
 ]
 
 [project.optional-dependencies]
@@ -53,7 +58,6 @@ dev = [
     "ruff==0.15.5",
     "mypy==1.19.1",
     "pre-commit==4.5.1",
-    "httpx==0.28.1",
     "jsonschema==4.26.0",
     "coverage==7.13.4",
     "bandit==1.9.4",
