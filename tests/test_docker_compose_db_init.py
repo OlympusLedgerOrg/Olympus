@@ -77,6 +77,14 @@ def test_docker_compose_ui_has_env_file():
     assert compose["services"]["ui"]["env_file"] == [".env"]
 
 
+def test_docker_compose_ui_exposes_psycopg_url():
+    """The ui service in docker-compose.yml must expose PSYCOPG_URL for psycopg."""
+    compose = _load_primary_compose()
+    assert compose["services"]["ui"]["environment"]["PSYCOPG_URL"].startswith(
+        "${PSYCOPG_URL:-postgresql://"
+    )
+
+
 def test_docker_compose_app_healthcheck_start_period_allows_migrations():
     """The app healthcheck must allow enough startup time for alembic + uvicorn."""
     compose = _load_primary_compose()
@@ -113,6 +121,12 @@ def test_env_example_has_asyncpg_database_url():
     """.env.example must specify postgresql+asyncpg in DATABASE_URL."""
     env_example = (REPO_ROOT / ".env.example").read_text(encoding="utf-8")
     assert "postgresql+asyncpg://" in env_example
+
+
+def test_env_example_has_plain_psycopg_url():
+    """.env.example must provide PSYCOPG_URL without the asyncpg driver suffix."""
+    env_example = (REPO_ROOT / ".env.example").read_text(encoding="utf-8")
+    assert "PSYCOPG_URL=postgresql://" in env_example
 
 
 def test_env_example_is_not_corrupted_with_sql_filenames():
