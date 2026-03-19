@@ -278,7 +278,12 @@ def _get_storage() -> StorageLayer | None:
         from storage.postgres import StorageLayer
 
         # Initialize storage
-        storage = StorageLayer(database_url)
+        psycopg_database_url = (
+            "postgresql://" + database_url[len("postgresql+asyncpg://") :]
+            if database_url.startswith("postgresql+asyncpg://")
+            else database_url
+        )
+        storage = StorageLayer(psycopg_database_url)
         storage.init_schema()
         storage.check_ingestion_schema()
 

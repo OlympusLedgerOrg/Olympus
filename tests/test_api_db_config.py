@@ -4,6 +4,7 @@ import importlib
 import os
 import subprocess
 import sys
+from contextlib import contextmanager
 from pathlib import Path
 
 import pytest
@@ -39,3 +40,55 @@ def test_run_api_requires_database_url():
 
     assert result.returncode != 0
     assert "DATABASE_URL is required" in (result.stderr + result.stdout)
+
+
+def test_get_storage_normalizes_asyncpg_url_for_psycopg(monkeypatch):
+    """Storage init should strip +asyncpg driver suffix before psycopg use."""
+    captured: dict[str, str] = {}
+
+    class _DummyCursor:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+        def execute(self, _query: str) -> None:
+            return None
+
+        def fetchone(self):
+            return (1,)
+
+    class _DummyConnection:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+        def cursor(self):
+            return _DummyCursor()
+
+    class _FakeStorageLayer:
+        def __init__(self, connection_string: str):
+            captured["connection_string"] = connection_string
+
+        def init_schema(self) -> None:
+            return None
+
+        @contextmanager
+        def _get_connection(self):
+            yield _DummyConnection()
+
+    monkeypatch.setenv(
+        "DATABASE_URL",
+        "postgresql+asyncpg://user:pass@localhost:5432/olympus",
+    )
+    monkeypatch.setattr(api_app, "_storage", None)
+    monkeypatch.setattr(api_app, "_db_error", None)
+    monkeypatch.setattr("storage.postgres.StorageLayer", _FakeStorageLayer)
+
+    storage = api_app._get_storage()
+
+    assert storage is not None
+    assert captured["connection_string"] == "postgresql://user:pass@localhost:5432/olympus"

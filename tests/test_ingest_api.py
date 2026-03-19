@@ -154,6 +154,35 @@ class TestBatchIngestion:
         assert ingest_api._write_ledger.entries[-1].poseidon_root == proof_data["poseidon_root"]
 
 
+def test_ingest_storage_normalizes_asyncpg_url_for_psycopg(monkeypatch):
+    """Ingest storage init should strip +asyncpg driver suffix before psycopg use."""
+    captured: dict[str, str] = {}
+
+    class _FakeStorageLayer:
+        def __init__(self, connection_string: str):
+            captured["connection_string"] = connection_string
+
+        def init_schema(self) -> None:
+            return None
+
+        def check_ingestion_schema(self) -> None:
+            return None
+
+    monkeypatch.setenv(
+        "DATABASE_URL",
+        "postgresql+asyncpg://user:pass@localhost:5432/olympus",
+    )
+    monkeypatch.setenv("OLYMPUS_INGEST_SIGNING_KEY", "00" * 32)
+    monkeypatch.setattr(ingest_api, "_storage", None)
+    monkeypatch.setattr(ingest_api, "_signing_key", None)
+    monkeypatch.setattr("storage.postgres.StorageLayer", _FakeStorageLayer)
+
+    storage = ingest_api._get_storage()
+
+    assert storage is not None
+    assert captured["connection_string"] == "postgresql://user:pass@localhost:5432/olympus"
+
+
 # ---------------------------------------------------------------------------
 # GET /ingest/records/{proof_id}/proof
 # ---------------------------------------------------------------------------

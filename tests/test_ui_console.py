@@ -27,6 +27,21 @@ def test_console_shows_db_unavailable_banner(monkeypatch):
     assert "Database unavailable (503)." in response.text
 
 
+def test_console_shows_api_unavailable_banner_on_timeout(monkeypatch):
+    """Root page should show API unavailable banner on timeout."""
+    monkeypatch.setattr(ui_app, "DEBUG_UI_ENABLED", True)
+
+    def raise_timeout(path: str):  # noqa: ARG001
+        raise TimeoutError("timed out")
+
+    monkeypatch.setattr(ui_app, "_fetch_json", raise_timeout)
+
+    response = client.get("/")
+
+    assert response.status_code == 200
+    assert "API unavailable (connection failed)." in response.text
+
+
 def test_console_shows_chain_broken_banner(monkeypatch):
     """Root page should show chain broken banner when tail linkage is invalid."""
     monkeypatch.setattr(ui_app, "DEBUG_UI_ENABLED", True)
@@ -100,6 +115,21 @@ def test_debug_ui_disabled_by_default(monkeypatch):
         == 404
     )
     assert client.get("/state-diff?shard_id=s&from_seq=1&to_seq=2").status_code == 404
+
+
+def test_public_records_requests_timeout_returns_502(monkeypatch):
+    """Request proxy should map timeout to a non-500 error response."""
+    monkeypatch.setattr(ui_app, "DEBUG_UI_ENABLED", True)
+
+    def raise_timeout(path: str):  # noqa: ARG001
+        raise TimeoutError("timed out")
+
+    monkeypatch.setattr(ui_app, "_fetch_json", raise_timeout)
+
+    response = client.get("/public-records/requests")
+
+    assert response.status_code == 502
+    assert "timed out" in response.json()["error"]
 
 
 def test_oracle_refine_rate_limited_per_ip(monkeypatch):
