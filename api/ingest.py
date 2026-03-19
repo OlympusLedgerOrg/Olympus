@@ -420,11 +420,11 @@ _rate_limit_lock = Lock()
 # independent token buckets, so the effective limits are multiplied by the
 # number of workers.  A distributed backend (e.g. Redis) is needed to
 # enforce consistent per-key / per-IP limits across processes.
-logger = logging.getLogger(__name__)
-logger.warning(
+warnings.warn(
     "Rate limiting is in-process only. In multi-worker/multi-node deployments "
     "effective limits are multiplied by the number of workers. Consider a "
-    "distributed rate-limit backend (e.g. Redis) for production."
+    "distributed rate-limit backend (e.g. Redis) for production.",
+    stacklevel=1,
 )
 
 
