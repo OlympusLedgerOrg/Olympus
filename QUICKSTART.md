@@ -309,6 +309,19 @@ The Docker Compose configs enable `OLYMPUS_DEV_SIGNING_KEY` to generate an ephem
 signing key for local-only runs. For production deployments, supply a persistent
 `OLYMPUS_INGEST_SIGNING_KEY` instead and disable the dev flag.
 
+### Windows/PowerShell Notes
+
+- Ensure text files use **LF** line endings inside the repo. In VS Code, check the bottom-right
+  status bar (shows `LF` or `CRLF`). If it shows `CRLF`, click it, switch to `LF`, and save.
+- The `.env` file **must** use LF line endings (CRLF can break Docker builds in Linux containers).
+
+PowerShell equivalents for `export`:
+
+```powershell
+$env:DATABASE_URL="postgresql://olympus:olympus@localhost:5432/olympus"
+$env:TEST_DATABASE_URL=$env:DATABASE_URL
+```
+
 ### Three-node federation demo
 
 For a Dockerized federation-style deployment with three independent API nodes and a shared observer UI, use the included `docker-compose.federation.yml`:
