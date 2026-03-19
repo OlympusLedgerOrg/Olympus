@@ -1,5 +1,7 @@
 """FastAPI + Jinja2 developer debug console for Olympus."""
 
+import base64
+import hmac
 import json
 import os
 import re
@@ -48,6 +50,9 @@ RAY_CAST_EPSILON = 1e-12
 
 # Debug UI is disabled by default; set OLYMPUS_DEBUG_UI=true to enable.
 DEBUG_UI_ENABLED = os.environ.get("OLYMPUS_DEBUG_UI", "false").lower() == "true"
+# Optional HTTP Basic Auth password; when set, every debug console request
+# must include a valid Authorization header.
+_DEBUG_CONSOLE_PASSWORD = os.environ.get("OLYMPUS_DEBUG_CONSOLE_PASSWORD", "")
 _oracle_rate_limit: dict[str, list[float]] = {}
 
 
@@ -77,6 +82,41 @@ def _load_federation_nodes() -> dict[str, str]:
 FEDERATION_NODES = _load_federation_nodes()
 
 app = FastAPI(title="Olympus Debug Console", version="0.1.0")
+
+
+@app.middleware("http")
+async def _debug_console_basic_auth(
+    request: Request, call_next: Any
+) -> JSONResponse:
+    """Enforce HTTP Basic Auth when ``OLYMPUS_DEBUG_CONSOLE_PASSWORD`` is set."""
+    if _DEBUG_CONSOLE_PASSWORD:
+        auth_header = request.headers.get("authorization", "")
+        if not auth_header.startswith("Basic "):
+            return JSONResponse(
+                status_code=401,
+                content={"detail": "Authentication required"},
+                headers={"WWW-Authenticate": 'Basic realm="Olympus Debug Console"'},
+            )
+        try:
+            decoded = base64.b64decode(auth_header[6:]).decode("utf-8")
+            _, _, password = decoded.partition(":")
+        except Exception:
+            return JSONResponse(
+                status_code=401,
+                content={"detail": "Invalid credentials"},
+                headers={"WWW-Authenticate": 'Basic realm="Olympus Debug Console"'},
+            )
+        if not hmac.compare_digest(
+            password.encode("utf-8"), _DEBUG_CONSOLE_PASSWORD.encode("utf-8")
+        ):
+            return JSONResponse(
+                status_code=401,
+                content={"detail": "Invalid credentials"},
+                headers={"WWW-Authenticate": 'Basic realm="Olympus Debug Console"'},
+            )
+    return await call_next(request)
+
+
 templates = Jinja2Templates(directory="ui/templates")
 REPO_ROOT = Path(__file__).resolve().parent.parent
 _POSEIDON_VECTORS_SCRIPT = REPO_ROOT / "proofs" / "test_inputs" / "poseidon_vectors.js"

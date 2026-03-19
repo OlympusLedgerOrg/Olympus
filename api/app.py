@@ -308,12 +308,14 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
-# CORS
+# CORS — wildcard origin must not be combined with credentials (browsers
+# reject this per the Fetch spec, and it is a security finding).
 _cors_origins = [o.strip() for o in settings.cors_origins.split(",")]
+_cors_credentials = "*" not in _cors_origins
 app.add_middleware(
     CORSMiddleware,
     allow_origins=_cors_origins,
-    allow_credentials=True,
+    allow_credentials=_cors_credentials,
     allow_methods=["*"],
     allow_headers=["*"],
 )

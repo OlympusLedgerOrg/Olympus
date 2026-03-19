@@ -21,6 +21,7 @@ import json
 import logging
 import os
 import uuid
+import warnings
 from collections import OrderedDict
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -413,6 +414,18 @@ _rate_limit_ip_buckets: dict[str, OrderedDict[str, TokenBucket]] = {
 # L5-C: Thread lock for rate-limit bucket access to prevent race conditions
 # in concurrent request handling (identified in red team security audit).
 _rate_limit_lock = Lock()
+
+# fix-07: Warn operators that rate limiting is in-process only.  In a
+# multi-process or multi-node deployment each worker maintains its own
+# independent token buckets, so the effective limits are multiplied by the
+# number of workers.  A distributed backend (e.g. Redis) is needed to
+# enforce consistent per-key / per-IP limits across processes.
+warnings.warn(
+    "Rate limiting is in-process only. In multi-worker/multi-node deployments "
+    "effective limits are multiplied by the number of workers. Consider a "
+    "distributed rate-limit backend (e.g. Redis) for production.",
+    stacklevel=1,
+)
 
 
 def _parse_timestamp(raw: str) -> datetime:

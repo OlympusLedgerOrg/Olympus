@@ -459,8 +459,8 @@ class ProofGenerator:
         return generator.generate_witness(
             root=str(smt.get_root()),
             leaf=str(leaf),
-            leafIndex=str(int.from_bytes(key, byteorder="big")),
-            treeSize=str(1 << len(path_indices)),
+            leafIndex=str(int.from_bytes(key, byteorder="big") % SNARK_SCALAR_FIELD),
+            treeSize=str((1 << len(path_indices)) % SNARK_SCALAR_FIELD),
             pathElements=path_elements,
             pathIndices=path_indices,
         )

@@ -9,12 +9,28 @@ Note on algorithm choice
 The existing ``protocol.merkle`` module uses BLAKE3 (consistent with the
 protocol layer).  This service uses SHA-256 as specified in the FOIA backend
 problem statement.  A future integration milestone will reconcile the two.
+
+.. deprecated::
+   This module is **quarantined** pending migration to BLAKE3.  All new
+   callers should use ``protocol.hashes.merkle_root`` (BLAKE3) instead.
+   Existing FOIA tests may continue to exercise this service until the
+   migration is complete.
 """
 
 from __future__ import annotations
 
 import hashlib
+import warnings
 from dataclasses import dataclass, field
+
+# Emit a deprecation notice on first import so operators can audit usage.
+warnings.warn(
+    "api.services.merkle uses SHA-256, which diverges from the protocol-standard "
+    "BLAKE3 Merkle tree.  Use protocol.hashes.merkle_root for new code.  "
+    "See fix-04 in the pre-public audit remediation.",
+    DeprecationWarning,
+    stacklevel=2,
+)
 
 
 @dataclass
