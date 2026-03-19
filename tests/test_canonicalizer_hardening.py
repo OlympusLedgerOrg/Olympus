@@ -106,6 +106,35 @@ class TestHtmlSanitizationHardening:
         assert b"beta" in result
         assert b"alert" not in result
 
+    def test_stripped_tag_outer_tail_survives_inner_tail_removed(self):
+        """Stripped tags: outer tail survives, inner tail is removed.
+
+        When a stripped tag like <script> contains nested elements with tail text,
+        the tail text AFTER the closing </script> (outer tail) must survive,
+        while any tail text INSIDE the <script> tag (inner tail) must be removed.
+        This verifies the correct behavior of _strip_element and confirms that
+        lxml's HTMLParser always wraps content in <html><body>, meaning stripped
+        tags always have a parent (making the parent is None branch dead code).
+        """
+        html = (
+            b"<html><body>"
+            b"<p>before</p>"
+            b"<script>var x = 1;<span>inner</span>innerTail</script>OUTER-TAIL"
+            b"<p>after</p>"
+            b"</body></html>"
+        )
+        result = Canonicalizer.html_v1(html)
+
+        # Outer content should survive
+        assert b"before" in result
+        assert b"after" in result
+        assert b"OUTER-TAIL" in result
+
+        # Inner content should be removed (everything inside <script> is gone)
+        assert b"var x" not in result
+        assert b"inner" not in result
+        assert b"innerTail" not in result
+
     def test_allows_deeply_nested_html(self):
         """HTML deeper than lxml's default limit should still parse."""
         depth = 300
