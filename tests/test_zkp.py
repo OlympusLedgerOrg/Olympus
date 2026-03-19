@@ -226,3 +226,21 @@ def test_verify_failure(tmp_path: Path):
     with patch("shutil.which", return_value="/usr/bin/snarkjs"):
         with patch("subprocess.run", side_effect=subprocess.CalledProcessError(1, "snarkjs")):
             assert prover.verify(dummy_proof, verification_key_path=vkey) is False
+
+
+# --- CI gate: verification key presence (fix-11) ---
+
+
+def test_committed_verification_keys_present():
+    """CI gate: committed verification keys must exist in the repository."""
+    repo_root = Path(__file__).resolve().parent.parent
+    vkeys_dir = repo_root / "proofs" / "keys" / "verification_keys"
+    assert vkeys_dir.is_dir(), f"Verification keys directory missing: {vkeys_dir}"
+
+    vkey_file = vkeys_dir / "document_existence_vkey.json"
+    assert vkey_file.is_file(), f"Verification key missing: {vkey_file}"
+
+    # Ensure the key is valid JSON with expected structure
+    data = json.loads(vkey_file.read_text(encoding="utf-8"))
+    assert "protocol" in data, "Verification key missing 'protocol' field"
+    assert "curve" in data, "Verification key missing 'curve' field"
