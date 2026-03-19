@@ -63,6 +63,7 @@ services:
     command: ["uvicorn", "ui.app:app", "--host", "0.0.0.0", "--port", "8080"]
     environment:
       UI_API_BASE: ${UI_API_BASE}
+      PSYCOPG_URL: ${PSYCOPG_URL:-postgresql://olympus:olympus@db:5432/olympus}
       OLYMPUS_DEBUG_UI: ${OLYMPUS_DEBUG_UI:-true}
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY}
       ORACLE_RATE_LIMIT_REQUESTS: ${ORACLE_RATE_LIMIT_REQUESTS:-10}
