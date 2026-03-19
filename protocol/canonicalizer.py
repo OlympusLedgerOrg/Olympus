@@ -333,6 +333,7 @@ class Canonicalizer:
         # Remove volatile active tags and data-exfiltration vectors
         # (along with their contents and tails)
         def _strip_element(el: Any) -> None:
+            """Remove a stripped element while preserving its tail text."""
             parent = el.getparent()
             if parent is None:
                 el.clear()
@@ -342,9 +343,9 @@ class Canonicalizer:
             if tail:
                 previous = el.getprevious()
                 if previous is None:
-                    parent.text = f"{parent.text or ''}{tail}"
+                    parent.text = (parent.text or "") + tail
                 else:
-                    previous.tail = f"{previous.tail or ''}{tail}"
+                    previous.tail = (previous.tail or "") + tail
 
             parent.remove(el)
 
