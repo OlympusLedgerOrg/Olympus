@@ -23,10 +23,10 @@ pragma circom 2.0.0;
  *   POSEIDON_DOMAIN_COMMITMENT = 3
  *
  * Public inputs (5):
- *   - canonicalHash: Poseidon hash of canonicalized document sections
+ *   - canonicalHash: Structured metadata commitment (sectionCount + sectionLengths + sectionHashes via DomainPoseidon(3))
  *   - merkleRoot: Root of the ledger Merkle tree
  *   - ledgerRoot: SMT root hash from checkpoint
- *   - checkpointHash: Hash of the checkpoint containing ledger state
+ *   - checkpointHash: Hash of the checkpoint containing ledger state (Poseidon(ledgerRoot, 0))
  *   - treeSize: Number of leaves in the Merkle tree (for bounds checking)
  *
  * Private inputs:
@@ -77,15 +77,6 @@ template LessThanBounded(n) {
     out <== diff.out[n];
 }
 
-// 2-to-1 multiplexer
-template Mux1() {
-    signal input c[2];
-    signal input s;
-    signal output out;
-
-    s * (1 - s) === 0;  // Binary constraint on selector
-    out <== c[0] * (1 - s) + c[1] * s;
-}
 
 // Domain-separated Poseidon hash: Poseidon(Poseidon(domain, left), right)
 template DomainPoseidon(domain) {
@@ -173,33 +164,8 @@ template UnifiedCanonicalizationInclusionRootSign(maxSections, merkleDepth, smtD
         structuredHashes[2 * i + 2] <== sectionHashHashers[i].out;
     }
 
-    // Also chain-hash document sections for backward compatibility
-    signal sectionContentHashes[maxSections];
-    component sectionContentHashers[maxSections];
-
-    // First section: Poseidon(1)(section)
-    component firstHash = Poseidon(1);
-    firstHash.inputs[0] <== documentSections[0];
-    sectionContentHashes[0] <== firstHash.out;
-
-    // Subsequent sections: Poseidon(2)(prev, section)
-    for (var i = 1; i < maxSections; i++) {
-        sectionContentHashers[i] = Poseidon(2);
-        sectionContentHashers[i].inputs[0] <== sectionContentHashes[i - 1];
-        sectionContentHashers[i].inputs[1] <== documentSections[i];
-        sectionContentHashes[i] <== sectionContentHashers[i].out;
-    }
-
-    // Final canonical hash (content chain)
-    signal finalCanonicalHash;
-    component selectHash = Mux1();
-    selectHash.c[0] <== sectionContentHashes[maxSections - 1];
-    selectHash.c[1] <== sectionContentHashes[maxSections - 1];
-    selectHash.s <== 0;
-    finalCanonicalHash <== selectHash.out;
-
-    // Constrain: computed canonical hash must equal public input
-    canonicalHash === finalCanonicalHash;
+    // Bind public canonicalHash to the structured metadata chain
+    canonicalHash === structuredHashes[2 * maxSections];
 
     // ===== COMPONENT 2: MERKLE INCLUSION VERIFICATION =====
 
@@ -264,9 +230,8 @@ template UnifiedCanonicalizationInclusionRootSign(maxSections, merkleDepth, smtD
     signal computedCheckpointHash;
     computedCheckpointHash <== checkpointCommitment.out;
 
-    signal checkpointExists;
-    checkpointExists <== checkpointHash * checkpointHash;
-    checkpointExists * 0 === 0;  // Dummy constraint to use the signal
+    // Constrain: public checkpointHash must equal Poseidon(ledgerRoot, 0)
+    checkpointHash === computedCheckpointHash;
 }
 
 // Default instantiation: values loaded from parameters.circom

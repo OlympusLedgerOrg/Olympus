@@ -18,7 +18,9 @@ This directory contains the implementation of Olympus's unified proof system, wh
                   ▼
 ┌─────────────────────────────────────────────────────────────┐
 │         Component 1: Canonicalization Verification          │
-│  Poseidon hash over document sections                       │
+│  Structured metadata commitment:                            │
+│  DomainPoseidon(3) chain over sectionCount, sectionLengths, │
+│  and sectionHashes (BLAKE3 hashes)                          │
 │  Public input: canonicalHash                                │
 └─────────────────┬───────────────────────────────────────────┘
                   │
@@ -53,9 +55,10 @@ This directory contains the implementation of Olympus's unified proof system, wh
 
 - **`circuits/unified_canonicalization_inclusion_root_sign.circom`**
   - Main circuit combining all four components
-  - Uses Poseidon for arithmetic-friendly hashing
-  - Public inputs: canonicalHash, merkleRoot, ledgerRoot, checkpointHash
+  - Uses domain-separated Poseidon for structured canonicalization
+  - Public inputs: canonicalHash (structured metadata commitment), merkleRoot, ledgerRoot, checkpointHash, treeSize
   - Parametric: maxSections, merkleDepth, smtDepth (defaults in `circuits/parameters.circom`)
+  - canonicalHash is computed as DomainPoseidon(3) chain over: sectionCount → sectionLengths[0..N] → sectionHashes[0..N]
 
 ### Python Modules
 
@@ -201,9 +204,10 @@ The unified proof protects against:
 The system uses two hash functions with clear domain separation:
 
 1. **Poseidon (in-circuit)**
-   - Used for: Document canonicalization, Merkle trees inside ZK proof
+   - Used for: Structured document canonicalization (metadata commitment via DomainPoseidon(3)), Merkle trees inside ZK proof
    - Reason: Arithmetic-friendly for BN128 field
    - Domain: ZK circuit constraints
+   - canonicalHash binds sectionCount, sectionLengths[], and sectionHashes[] (BLAKE3 hashes as field elements)
 
 2. **BLAKE3 (ledger layer)**
    - Used for: Ledger entries, SMT nodes, checkpoint hashing
