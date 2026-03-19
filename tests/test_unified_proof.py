@@ -5,7 +5,9 @@ This module tests the unified proof that verifies:
 1. Document canonicalization
 2. Merkle inclusion in ledger
 3. Ledger root commitment in checkpoint
-4. Federation quorum signatures
+
+Checkpoint integrity (component 4 - federation quorum signatures) is verified
+at the Python layer, not in the circuit.
 
 Tests cover both Groth16 and Halo2 backends (when available).
 """
@@ -35,18 +37,16 @@ class TestUnifiedProofStructure:
             canonical_hash="12345",
             merkle_root="67890",
             ledger_root="11111",
-            checkpoint_hash="22222",
         )
 
         assert inputs.canonical_hash == "12345"
         assert inputs.merkle_root == "67890"
         assert inputs.ledger_root == "11111"
-        assert inputs.checkpoint_hash == "22222"
 
     def test_unified_proof_creation(self):
         """Test creating UnifiedProof with all components."""
         public_inputs = UnifiedPublicInputs(
-            canonical_hash="1", merkle_root="2", ledger_root="3", checkpoint_hash="4"
+            canonical_hash="1", merkle_root="2", ledger_root="3"
         )
 
         checkpoint = SignedCheckpoint(
@@ -74,7 +74,7 @@ class TestUnifiedProofStructure:
     def test_unified_proof_serialization(self):
         """Test proof serialization to/from dict."""
         public_inputs = UnifiedPublicInputs(
-            canonical_hash="1", merkle_root="2", ledger_root="3", checkpoint_hash="4"
+            canonical_hash="1", merkle_root="2", ledger_root="3"
         )
 
         checkpoint = SignedCheckpoint(
@@ -157,7 +157,7 @@ class TestUnifiedProofVerifier:
         verifier = UnifiedProofVerifier()
 
         public_inputs = UnifiedPublicInputs(
-            canonical_hash="1", merkle_root="2", ledger_root="3", checkpoint_hash="4"
+            canonical_hash="1", merkle_root="2", ledger_root="3"
         )
 
         checkpoint = SignedCheckpoint(
@@ -187,7 +187,7 @@ class TestUnifiedProofVerifier:
         verifier = UnifiedProofVerifier()
 
         public_inputs = UnifiedPublicInputs(
-            canonical_hash="1", merkle_root="2", ledger_root="3", checkpoint_hash="4"
+            canonical_hash="1", merkle_root="2", ledger_root="3"
         )
 
         # Checkpoint with empty hash (invalid)
@@ -244,7 +244,7 @@ class TestProofBackendSelection:
     def test_groth16_backend_default(self):
         """Groth16 should be the default backend."""
         public_inputs = UnifiedPublicInputs(
-            canonical_hash="1", merkle_root="2", ledger_root="3", checkpoint_hash="4"
+            canonical_hash="1", merkle_root="2", ledger_root="3"
         )
 
         checkpoint = SignedCheckpoint(
@@ -270,7 +270,7 @@ class TestProofBackendSelection:
     def test_halo2_backend_selection(self):
         """Can explicitly select Halo2 backend."""
         public_inputs = UnifiedPublicInputs(
-            canonical_hash="1", merkle_root="2", ledger_root="3", checkpoint_hash="4"
+            canonical_hash="1", merkle_root="2", ledger_root="3"
         )
 
         checkpoint = SignedCheckpoint(
@@ -317,7 +317,7 @@ class TestConvenienceFunctions:
     def test_verify_unified_proof_function(self):
         """Test the verify_unified_proof convenience function."""
         public_inputs = UnifiedPublicInputs(
-            canonical_hash="1", merkle_root="2", ledger_root="3", checkpoint_hash="4"
+            canonical_hash="1", merkle_root="2", ledger_root="3"
         )
 
         checkpoint = SignedCheckpoint(
@@ -365,7 +365,6 @@ class TestIntegrationScenarios:
             canonical_hash="1000000",
             merkle_root="2000000",
             ledger_root="3000000",
-            checkpoint_hash="4000000",
         )
 
         checkpoint = SignedCheckpoint(
@@ -399,7 +398,7 @@ class TestIntegrationScenarios:
         """Test example from module docstring works."""
         # This tests the example usage pattern from the docstring
         public_inputs = UnifiedPublicInputs(
-            canonical_hash="1", merkle_root="2", ledger_root="3", checkpoint_hash="4"
+            canonical_hash="1", merkle_root="2", ledger_root="3"
         )
 
         checkpoint = SignedCheckpoint(

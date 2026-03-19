@@ -1,11 +1,12 @@
 # Unified Proof System
 
-This directory contains the implementation of Olympus's unified proof system, which cryptographically verifies four critical properties in a single proof:
+This directory contains the implementation of Olympus's unified proof system, which cryptographically verifies three critical properties in a single proof:
 
 1. **Document Canonicalization** - Proves document sections are properly normalized
 2. **Merkle Inclusion** - Proves document is in the ledger Merkle tree
 3. **Ledger Root Commitment** - Proves Merkle root is in a signed checkpoint
-4. **Federation Signatures** - Verifies quorum certificate over checkpoint
+
+**Checkpoint integrity (federation signatures) is verified at the Python layer**, not in-circuit. Python checkpoints are BLAKE3-hashed, federation-signed structs that cannot be efficiently verified in BN128 circuits.
 
 ## Architecture Overview
 
@@ -41,8 +42,9 @@ This directory contains the implementation of Olympus's unified proof system, wh
                   ▼
 ┌─────────────────────────────────────────────────────────────┐
 │         Component 4: Federation Signatures                  │
-│  Verifies Ed25519 quorum certificate (Python layer)         │
-│  Public input: checkpointHash                               │
+│  (Verified at Python layer, not in circuit)                 │
+│  Verifies Ed25519 quorum certificate over checkpoint        │
+│  Note: BLAKE3-hashed checkpoints cannot be verified in BN128│
 └─────────────────────────────────────────────────────────────┘
                   │
                   ▼
@@ -54,11 +56,12 @@ This directory contains the implementation of Olympus's unified proof system, wh
 ### Circuits
 
 - **`circuits/unified_canonicalization_inclusion_root_sign.circom`**
-  - Main circuit combining all four components
+  - Main circuit combining canonicalization, inclusion, and root commitment
   - Uses domain-separated Poseidon for structured canonicalization
-  - Public inputs: canonicalHash (structured metadata commitment), merkleRoot, ledgerRoot, checkpointHash, treeSize
+  - Public inputs: canonicalHash (structured metadata commitment), merkleRoot, ledgerRoot, treeSize
   - Parametric: maxSections, merkleDepth, smtDepth (defaults in `circuits/parameters.circom`)
   - canonicalHash is computed as DomainPoseidon(3) chain over: sectionCount → sectionLengths[0..N] → sectionHashes[0..N]
+  - **Note**: Checkpoint integrity is verified at the Python layer via federation signatures
 
 ### Python Modules
 
@@ -179,8 +182,8 @@ const inputs = await generateUnifiedInputs({
 The unified proof protects against:
 1. **Document tampering** - Canonicalization ensures normalized form
 2. **Ledger forgery** - Merkle inclusion proves presence in ledger
-3. **Checkpoint manipulation** - Ledger root binding prevents fake checkpoints
-4. **Split-view attacks** - Federation quorum prevents presenting different histories
+3. **Checkpoint manipulation** - Ledger root binding prevents fake checkpoints (verified in circuit)
+4. **Split-view attacks** - Federation quorum prevents presenting different histories (verified in Python layer)
 
 ### Trust Assumptions
 
@@ -210,11 +213,11 @@ The system uses two hash functions with clear domain separation:
    - canonicalHash binds sectionCount, sectionLengths[], and sectionHashes[] (BLAKE3 hashes as field elements)
 
 2. **BLAKE3 (ledger layer)**
-   - Used for: Ledger entries, SMT nodes, checkpoint hashing
+   - Used for: Ledger entries, SMT nodes, checkpoint hashing (verified at Python layer)
    - Reason: Fast, collision-resistant, post-quantum candidate
    - Domain: Python protocol layer
 
-No hash function composition is required; the Poseidon root is simply stored as a value in the BLAKE3-based SMT.
+No hash function composition is required; the Poseidon root is simply stored as a value in the BLAKE3-based SMT. Checkpoint integrity is verified via Ed25519 federation signatures at the Python layer, not in-circuit.
 
 ## Development
 

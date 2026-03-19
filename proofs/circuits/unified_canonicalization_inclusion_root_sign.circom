@@ -1,14 +1,13 @@
 pragma circom 2.0.0;
 
 /*
- * Unified Proof: Canonicalization + Inclusion + Root + Signature Verification
+ * Unified Proof: Canonicalization + Inclusion + Root Verification
  *
- * This circuit provides a single proof that verifies four critical properties:
+ * This circuit provides a single proof that verifies three critical properties:
  *   1) Document canonicalization - the document sections are properly canonicalized
  *      with structured metadata (sectionCount, sectionLength, sectionHash)
  *   2) Merkle inclusion - the document is included in the ledger Merkle tree
- *   3) Ledger root commitment - the Merkle root is committed in a checkpoint
- *   4) Federation signatures - (verified outside circuit at Python layer)
+ *   3) Ledger root commitment - the Merkle root is committed in an SMT
  *
  * Security hardening:
  *   - Domain-separated Poseidon hashing with domain tags
@@ -22,11 +21,10 @@ pragma circom 2.0.0;
  *   POSEIDON_DOMAIN_NODE = 2
  *   POSEIDON_DOMAIN_COMMITMENT = 3
  *
- * Public inputs (5):
+ * Public inputs (4):
  *   - canonicalHash: Structured metadata commitment (sectionCount + sectionLengths + sectionHashes via DomainPoseidon(3))
  *   - merkleRoot: Root of the ledger Merkle tree
  *   - ledgerRoot: SMT root hash from checkpoint
- *   - checkpointHash: Hash of the checkpoint containing ledger state (Poseidon(ledgerRoot, 0))
  *   - treeSize: Number of leaves in the Merkle tree (for bounds checking)
  *
  * Private inputs:
@@ -40,10 +38,11 @@ pragma circom 2.0.0;
  *   - ledgerPathElements[smt_depth]: SMT path for ledger root
  *   - ledgerPathIndices[smt_depth]: SMT path indices
  *
- * Note: Federation signatures are verified outside the circuit because:
- *   - Ed25519 signature verification is expensive in circuits
- *   - Federation membership may change between proof generation and verification
- *   - Python layer can efficiently verify quorum certificates
+ * Note on checkpoint verification:
+ *   Checkpoint integrity (including federation signatures) is verified at the Python
+ *   layer, not in-circuit. Python checkpoints are BLAKE3-hashed, federation-signed
+ *   structs that cannot be efficiently verified in BN128. The circuit proves the
+ *   ledger root commitment; the Python layer proves the checkpoint quorum certificate.
  */
 
 include "./lib/merkleProof.circom";
@@ -100,7 +99,6 @@ template UnifiedCanonicalizationInclusionRootSign(maxSections, merkleDepth, smtD
     signal input canonicalHash;     // Poseidon hash of canonical document
     signal input merkleRoot;        // Root of ledger Merkle tree
     signal input ledgerRoot;        // SMT root from checkpoint
-    signal input checkpointHash;    // Hash of checkpoint commitment
     signal input treeSize;          // Number of leaves for bounds checking
 
     // ===== PRIVATE INPUTS =====
@@ -220,22 +218,10 @@ template UnifiedCanonicalizationInclusionRootSign(maxSections, merkleDepth, smtD
 
     // Constrain: computed SMT root must match public ledger root
     ledgerSMTProof.root === ledgerRoot;
-
-    // ===== COMPONENT 4: CHECKPOINT BINDING =====
-
-    component checkpointCommitment = Poseidon(2);
-    checkpointCommitment.inputs[0] <== ledgerRoot;
-    checkpointCommitment.inputs[1] <== 0;  // Domain separator for checkpoints
-
-    signal computedCheckpointHash;
-    computedCheckpointHash <== checkpointCommitment.out;
-
-    // Constrain: public checkpointHash must equal Poseidon(ledgerRoot, 0)
-    checkpointHash === computedCheckpointHash;
 }
 
 // Default instantiation: values loaded from parameters.circom
-component main {public [canonicalHash, merkleRoot, ledgerRoot, checkpointHash, treeSize]} =
+component main {public [canonicalHash, merkleRoot, ledgerRoot, treeSize]} =
     UnifiedCanonicalizationInclusionRootSign(
         UNIFIED_MAX_SECTIONS,
         UNIFIED_MERKLE_DEPTH,

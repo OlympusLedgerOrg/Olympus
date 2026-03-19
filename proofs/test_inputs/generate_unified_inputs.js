@@ -7,7 +7,9 @@
  * 1. Document canonicalization (Poseidon hash over sections)
  * 2. Merkle inclusion in ledger tree
  * 3. Ledger root commitment in SMT
- * 4. Checkpoint binding
+ *
+ * Note: Checkpoint integrity is verified at the Python layer via federation
+ * signatures, not in the circuit.
  *
  * Usage:
  *   node generate_unified_inputs.js > unified_input.json
@@ -32,7 +34,6 @@ const fs = require('fs');
  * @param {string} params.ledgerRoot - SMT root hash as decimal string
  * @param {Array<string>} params.ledgerPathElements - SMT path siblings as decimal strings
  * @param {Array<number>} params.ledgerPathIndices - SMT path indices
- * @param {string} params.checkpointHash - Checkpoint hash as decimal string
  * @returns {Object} Circuit inputs in circom format
  */
 async function generateUnifiedInputs(params) {
@@ -79,7 +80,6 @@ async function generateUnifiedInputs(params) {
         canonicalHash: canonicalHash,
         merkleRoot: params.merkleRoot,
         ledgerRoot: params.ledgerRoot,
-        checkpointHash: params.checkpointHash,
 
         // Private inputs - document canonicalization
         documentSections: paddedSections,
@@ -128,7 +128,6 @@ async function generateExample() {
         ledgerRoot: "98765432109876543210",
         ledgerPathElements: ledgerPathElements,
         ledgerPathIndices: ledgerPathIndices,
-        checkpointHash: "11111111111111111111",
     };
 
     return await generateUnifiedInputs(params);

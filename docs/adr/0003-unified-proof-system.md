@@ -5,17 +5,31 @@ Accepted
 
 ## Context
 
-Olympus requires cryptographic guarantees about four critical properties:
+Olympus requires cryptographic guarantees about three critical properties verified in-circuit:
 1. **Document canonicalization** - Documents are properly normalized before hashing
 2. **Merkle inclusion** - Documents are included in the ledger Merkle tree
 3. **Ledger root commitment** - The Merkle root is committed in a signed checkpoint
-4. **Federation signatures** - The checkpoint has a valid quorum certificate
+
+Additionally, checkpoint integrity (component 4) is verified at the Python layer via federation signatures:
+4. **Federation quorum certificate** - The checkpoint has valid Ed25519 signatures from federation nodes
 
 Previously, these verifications were performed separately, requiring multiple proof artifacts and verification steps. This increased complexity for verifiers and created opportunities for integration errors.
 
+**Design rationale**: Checkpoint integrity uses BLAKE3 hashing and Ed25519 signatures, which cannot be efficiently verified in BN128 circuits. The circuit proves the ledger root commitment; the Python layer proves the checkpoint quorum certificate.
+
 ## Decision
 
-We implement a **unified proof system** that verifies all four components in a single cryptographic proof with modular backend support:
+We implement a **unified proof system** that verifies three components in-circuit and one at the Python layer:
+
+**In-circuit (ZK proof)**:
+1. Canonicalization (Poseidon hash over document sections)
+2. Merkle Inclusion (in ledger tree)
+3. Ledger Root (SMT commitment in checkpoint)
+
+**Python layer**:
+4. Federation Signatures (Ed25519 quorum certificate)
+
+This design provides modular backend support for the ZK components:
 
 ### Architecture
 
@@ -47,11 +61,10 @@ We implement a **unified proof system** that verifies all four components in a s
 
 **Circuit**: `unified_canonicalization_inclusion_root_sign.circom`
 
-**Public Inputs** (4):
+**Public Inputs** (3 in-circuit):
 - `canonicalHash`: Poseidon hash of canonicalized document sections
 - `merkleRoot`: Root of ledger Merkle tree
 - `ledgerRoot`: SMT root from checkpoint
-- `checkpointHash`: Hash of signed checkpoint
 
 **Private Inputs**:
 - Document sections (canonicalized)
@@ -62,7 +75,7 @@ We implement a **unified proof system** that verifies all four components in a s
 **Key Design Choices**:
 1. **Poseidon for circuit hashing** - Arithmetic-friendly for BN128 field
 2. **BLAKE3 for ledger layer** - Post-quantum candidate, efficient
-3. **Federation signatures outside circuit** - Ed25519 verification is expensive in circuits
+3. **Federation signatures at Python layer** - Ed25519 verification is expensive in circuits; BLAKE3-hashed checkpoints cannot be efficiently verified in BN128
 4. **Modular proof boundary** - Allows Groth16 ↔ Halo2 swap without protocol changes
 
 ### Python Integration
@@ -71,8 +84,8 @@ We implement a **unified proof system** that verifies all four components in a s
 
 **Key Classes**:
 - `UnifiedProof` - Container for ZK proof + checkpoint + signatures
-- `UnifiedProofVerifier` - Verifies all four components
-- `UnifiedPublicInputs` - Public circuit inputs
+- `UnifiedProofVerifier` - Verifies all components (3 in circuit, 1 in Python)
+- `UnifiedPublicInputs` - Public circuit inputs (3 values)
 - `ProofBackend` - Enum for Groth16 vs Halo2 selection
 
 **Verification Flow**:
@@ -81,11 +94,11 @@ verifier = UnifiedProofVerifier(registry=federation_registry)
 result = verifier.verify(proof)
 
 if result.is_valid:
-    # All four components verified:
-    # ✓ Canonicalization
-    # ✓ Merkle inclusion
-    # ✓ Ledger root
-    # ✓ Federation quorum
+    # All components verified:
+    # ✓ Canonicalization (circuit)
+    # ✓ Merkle inclusion (circuit)
+    # ✓ Ledger root (circuit)
+    # ✓ Federation quorum (Python layer)
 ```
 
 ### Witness Generation
@@ -96,7 +109,8 @@ Generates circuit inputs from:
 - Canonicalized document sections
 - Merkle proof (from ledger)
 - SMT proof (from checkpoint)
-- Checkpoint metadata
+
+Note: Checkpoint hash verification is performed at the Python layer.
 
 ### Halo2 Backend (Phase 1+)
 
