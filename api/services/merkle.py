@@ -10,7 +10,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
-import blake3 as _blake3
+import blake3
 
 
 @dataclass
@@ -49,7 +49,7 @@ class MerkleProof:
 def _blake3_pair(left: str, right: str) -> str:
     """Compute BLAKE3(left_bytes || right_bytes) over hex-encoded inputs."""
     data = bytes.fromhex(left) + bytes.fromhex(right)
-    return _blake3.blake3(data).hexdigest()
+    return blake3.blake3(data).hexdigest()
 
 
 def build_tree(leaf_hashes: list[str]) -> MerkleRoot:

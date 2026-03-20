@@ -50,14 +50,14 @@ async def client(db_engine):
         yield ac
 
 
-def _sha256(s: str) -> str:
+def _b3(s: str) -> str:
     return blake3.blake3(s.encode()).hexdigest()
 
 
 @pytest.mark.asyncio
 async def test_commit_document(client):
     """POST /doc/commit should return 201 with a commit_id."""
-    doc_hash = _sha256("my government document")
+    doc_hash = _b3("my government document")
     resp = await client.post("/doc/commit", json={"doc_hash": doc_hash})
     assert resp.status_code == 201
     data = resp.json()
@@ -69,7 +69,7 @@ async def test_commit_document(client):
 @pytest.mark.asyncio
 async def test_verify_by_commit_id(client):
     """Commit then verify by commit_id — should return verified: true."""
-    doc_hash = _sha256("verify by commit_id test")
+    doc_hash = _b3("verify by commit_id test")
     commit_resp = await client.post("/doc/commit", json={"doc_hash": doc_hash})
     commit_id = commit_resp.json()["commit_id"]
 
@@ -83,7 +83,7 @@ async def test_verify_by_commit_id(client):
 @pytest.mark.asyncio
 async def test_verify_by_doc_hash(client):
     """Commit then verify by doc_hash — should return verified: true."""
-    doc_hash = _sha256("verify by doc_hash test")
+    doc_hash = _b3("verify by doc_hash test")
     await client.post("/doc/commit", json={"doc_hash": doc_hash})
 
     verify_resp = await client.post("/doc/verify", json={"doc_hash": doc_hash})
@@ -110,7 +110,7 @@ async def test_verify_missing_both_fields(client):
 @pytest.mark.asyncio
 async def test_hash_consistency(client):
     """The same doc_hash committed twice should produce different commit_ids."""
-    doc_hash = _sha256("duplicate hash test")
+    doc_hash = _b3("duplicate hash test")
     r1 = await client.post("/doc/commit", json={"doc_hash": doc_hash})
     r2 = await client.post("/doc/commit", json={"doc_hash": doc_hash})
     assert r1.status_code == 201
@@ -121,7 +121,7 @@ async def test_hash_consistency(client):
 @pytest.mark.asyncio
 async def test_commit_includes_merkle_root(client):
     """After the second commit the merkle_root should be non-null."""
-    doc_hash = _sha256("merkle root check")
+    doc_hash = _b3("merkle root check")
     resp = await client.post("/doc/commit", json={"doc_hash": doc_hash})
     assert resp.status_code == 201
     # merkle_root may be null on the very first commit in a fresh DB,
@@ -133,7 +133,7 @@ async def test_commit_includes_merkle_root(client):
 @pytest.mark.asyncio
 async def test_verify_includes_zk_proof_stub(client):
     """Verification response should include the ZK proof stub."""
-    doc_hash = _sha256("zk proof stub check")
+    doc_hash = _b3("zk proof stub check")
     commit_resp = await client.post("/doc/commit", json={"doc_hash": doc_hash})
     commit_id = commit_resp.json()["commit_id"]
 
