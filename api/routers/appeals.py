@@ -17,6 +17,7 @@ import blake3
 from fastapi import APIRouter, HTTPException, status
 from sqlalchemy import select
 
+from api.auth import RequireAPIKey, RateLimit
 from api.deps import DBSession
 from api.models.appeal import Appeal, AppealStatus
 from api.models.request import PublicRecordsRequest, RequestStatus
@@ -44,7 +45,7 @@ def _hash_appeal(request_id: str, grounds: str, statement: str, filed_at: dateti
 
 
 @router.post("", response_model=AppealResponse, status_code=status.HTTP_201_CREATED)
-async def file_appeal(body: AppealCreate, db: DBSession):
+async def file_appeal(body: AppealCreate, db: DBSession, _api_key: RequireAPIKey, _rl: RateLimit):
     """File an appeal against an agency response.
 
     Rejects the appeal if the underlying request has already been fulfilled.
@@ -96,7 +97,7 @@ async def file_appeal(body: AppealCreate, db: DBSession):
 
 
 @router.get("", response_model=list[AppealResponse])
-async def list_appeals(db: DBSession):
+async def list_appeals(db: DBSession, _rl: RateLimit):
     """Return all appeals.
 
     Args:
@@ -110,7 +111,7 @@ async def list_appeals(db: DBSession):
 
 
 @router.get("/{appeal_id}", response_model=AppealResponse)
-async def get_appeal(appeal_id: str, db: DBSession):
+async def get_appeal(appeal_id: str, db: DBSession, _rl: RateLimit):
     """Return a single appeal by ID.
 
     Args:

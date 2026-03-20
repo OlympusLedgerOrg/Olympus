@@ -13,6 +13,7 @@ from datetime import datetime, timezone
 from fastapi import APIRouter, HTTPException, status
 from sqlalchemy import select
 
+from api.auth import RequireAPIKey, RateLimit
 from api.deps import DBSession
 from api.models.credential import KeyCredential
 from api.schemas.credential import CredentialCreate, CredentialResponse
@@ -24,7 +25,7 @@ router = APIRouter(prefix="/key", tags=["keys"])
 
 
 @router.post("/credential", response_model=CredentialResponse, status_code=status.HTTP_201_CREATED)
-async def issue_credential(body: CredentialCreate, db: DBSession):
+async def issue_credential(body: CredentialCreate, db: DBSession, _api_key: RequireAPIKey, _rl: RateLimit):
     """Issue a new SBT-style non-transferable credential.
 
     Anchors the credential issuance to the ledger via a generated commit_id.
@@ -53,7 +54,7 @@ async def issue_credential(body: CredentialCreate, db: DBSession):
 
 
 @router.delete("/credential/{credential_id}", status_code=status.HTTP_204_NO_CONTENT)
-async def revoke_credential(credential_id: str, db: DBSession):
+async def revoke_credential(credential_id: str, db: DBSession, _api_key: RequireAPIKey, _rl: RateLimit):
     """Revoke a credential by setting its revoked_at timestamp.
 
     The credential record is retained for audit purposes; Olympus is an

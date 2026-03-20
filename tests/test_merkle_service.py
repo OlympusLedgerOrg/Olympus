@@ -29,9 +29,8 @@ class TestBuildTree:
     def test_two_leaves(self):
         a, b = _b3("a"), _b3("b")
         tree = build_tree([a, b])
-        # Leaves are sorted; compute expected root manually
-        sorted_leaves = sorted([a, b])
-        expected = blake3.blake3(bytes.fromhex(sorted_leaves[0]) + bytes.fromhex(sorted_leaves[1])).hexdigest()
+        # Leaves used in insertion order; compute expected root manually
+        expected = blake3.blake3(bytes.fromhex(a) + bytes.fromhex(b)).hexdigest()
         assert tree.root_hash == expected
 
     def test_four_leaves(self):
@@ -40,13 +39,18 @@ class TestBuildTree:
         assert isinstance(tree.root_hash, str)
         assert len(tree.root_hash) == 64
 
-    def test_deterministic_regardless_of_insertion_order(self):
+    def test_order_matters(self):
+        """Different insertion orders should produce different roots."""
+        a, b, c = _b3("x"), _b3("y"), _b3("z")
+        tree1 = build_tree([a, b, c])
+        tree2 = build_tree([c, b, a])
+        assert tree1.root_hash != tree2.root_hash
+
+    def test_same_order_is_deterministic(self):
+        """Same insertion order always produces the same root."""
         leaves = [_b3(s) for s in ["x", "y", "z"]]
-        import random
-        shuffled = leaves[:]
-        random.shuffle(shuffled)
         tree1 = build_tree(leaves)
-        tree2 = build_tree(shuffled)
+        tree2 = build_tree(list(leaves))
         assert tree1.root_hash == tree2.root_hash
 
     def test_empty_raises(self):

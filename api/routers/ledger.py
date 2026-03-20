@@ -13,6 +13,7 @@ import logging
 from fastapi import APIRouter, HTTPException, status
 from sqlalchemy import func, select
 
+from api.auth import RateLimit
 from api.deps import DBSession
 from api.models.document import DocCommit
 from api.schemas.ledger import (
@@ -31,7 +32,7 @@ router = APIRouter(prefix="/ledger", tags=["ledger"])
 
 
 @router.get("/state", response_model=LedgerStateResponse)
-async def get_ledger_state(db: DBSession):
+async def get_ledger_state(db: DBSession, _rl: RateLimit):
     """Return the global ledger state.
 
     Aggregates the state roots of all shards (currently a single shard) and
@@ -71,7 +72,7 @@ async def get_ledger_state(db: DBSession):
 
 
 @router.get("/shard/{shard_id}", response_model=ShardStateResponse)
-async def get_shard_state(shard_id: str, db: DBSession):
+async def get_shard_state(shard_id: str, db: DBSession, _rl: RateLimit):
     """Return the state of a single shard.
 
     Args:
@@ -113,7 +114,7 @@ async def get_shard_state(shard_id: str, db: DBSession):
 
 
 @router.get("/proof/{commit_id}", response_model=ProofResponse)
-async def get_commit_proof(commit_id: str, db: DBSession):
+async def get_commit_proof(commit_id: str, db: DBSession, _rl: RateLimit):
     """Return the Merkle inclusion proof and ZK proof stub for a commit.
 
     Args:
@@ -135,7 +136,9 @@ async def get_commit_proof(commit_id: str, db: DBSession):
         )
 
     all_result = await db.execute(
-        select(DocCommit.doc_hash).where(DocCommit.shard_id == commit.shard_id)
+        select(DocCommit.doc_hash)
+        .where(DocCommit.shard_id == commit.shard_id)
+        .order_by(DocCommit.epoch_timestamp)
     )
     all_hashes = list(all_result.scalars().all())
 

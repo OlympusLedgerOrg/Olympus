@@ -24,6 +24,9 @@ class Settings(BaseSettings):
         default_shard_id: Hex shard identifier used for all commits in Phase 0.
         statutory_window_nc_days: Business-day window for NC Public Records (G.S. § 132).
         statutory_window_foia_days: Business-day window for Federal FOIA (5 U.S.C. § 552).
+
+    See also:
+        OLYMPUS_FOIA_API_KEYS — JSON array of hashed API key records (see api/auth.py).
     """
 
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")

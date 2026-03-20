@@ -12,6 +12,7 @@ import logging
 from fastapi import APIRouter, HTTPException, status
 from sqlalchemy import select
 
+from api.auth import RequireAPIKey, RateLimit
 from api.deps import DBSession
 from api.models.document import DocCommit
 from api.schemas.document import (
@@ -31,7 +32,7 @@ router = APIRouter(prefix="/doc", tags=["documents"])
 
 
 @router.post("/commit", response_model=DocCommitResponse, status_code=status.HTTP_201_CREATED)
-async def commit_document(body: DocCommitRequest, db: DBSession):
+async def commit_document(body: DocCommitRequest, db: DBSession, _api_key: RequireAPIKey, _rl: RateLimit):
     """Anchor a document hash to the Olympus ledger.
 
     Generates a unique commit identifier, assigns the commit to the default
@@ -79,7 +80,7 @@ async def commit_document(body: DocCommitRequest, db: DBSession):
 
 
 @router.post("/verify", response_model=DocVerifyResponse)
-async def verify_document(body: DocVerifyRequest, db: DBSession):
+async def verify_document(body: DocVerifyRequest, db: DBSession, _rl: RateLimit):
     """Verify a previously committed document hash.
 
     Looks up the commit by ``commit_id`` or ``doc_hash`` (at least one is
@@ -113,7 +114,9 @@ async def verify_document(body: DocVerifyRequest, db: DBSession):
 
     # Rebuild the Merkle tree for the shard and generate an inclusion proof
     all_hashes_result = await db.execute(
-        select(DocCommit.doc_hash).where(DocCommit.shard_id == commit.shard_id)
+        select(DocCommit.doc_hash)
+        .where(DocCommit.shard_id == commit.shard_id)
+        .order_by(DocCommit.epoch_timestamp)
     )
     all_hashes = list(all_hashes_result.scalars().all())
 

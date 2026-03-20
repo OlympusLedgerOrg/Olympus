@@ -12,6 +12,7 @@ import logging
 from fastapi import APIRouter, HTTPException, Query, status
 from sqlalchemy import select
 
+from api.auth import RequireAPIKey, RateLimit
 from api.deps import DBSession
 from api.models.agency import Agency
 from api.schemas.agency import AgencyCreate, AgencyResponse
@@ -21,8 +22,13 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/agencies", tags=["agencies"])
 
 
+def _escape_like(value: str) -> str:
+    """Escape SQL LIKE/ILIKE wildcard characters."""
+    return value.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+
+
 @router.post("", response_model=AgencyResponse, status_code=status.HTTP_201_CREATED)
-async def create_agency(body: AgencyCreate, db: DBSession):
+async def create_agency(body: AgencyCreate, db: DBSession, _api_key: RequireAPIKey, _rl: RateLimit):
     """Create a new agency record.
 
     Args:
@@ -47,6 +53,7 @@ async def create_agency(body: AgencyCreate, db: DBSession):
 @router.get("", response_model=list[AgencyResponse])
 async def list_agencies(
     db: DBSession,
+    _rl: RateLimit,
     level: str | None = Query(None),
     search: str | None = Query(None),
 ):
@@ -64,14 +71,14 @@ async def list_agencies(
     if level:
         q = q.where(Agency.level == level)
     if search:
-        q = q.where(Agency.name.ilike(f"%{search}%"))
+        q = q.where(Agency.name.ilike(f"%{_escape_like(search)}%"))
 
     result = await db.execute(q)
     return list(result.scalars().all())
 
 
 @router.get("/{agency_id}", response_model=AgencyResponse)
-async def get_agency(agency_id: str, db: DBSession):
+async def get_agency(agency_id: str, db: DBSession, _rl: RateLimit):
     """Return full details of an agency.
 
     Args:
