@@ -1,8 +1,3 @@
 """
-API module init.
+API package for the Olympus FOIA backend.
 """
-
-from .app import app
-
-
-__all__ = ["app"]
