@@ -64,7 +64,7 @@ services:
         echo "Waiting for database..." &&
         sleep 2 &&
         alembic upgrade head &&
-        exec uvicorn api.app:app --host 0.0.0.0 --port 8000
+        exec uvicorn api.main:app --host 0.0.0.0 --port 8000
     environment:
       DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-olympus}:${POSTGRES_PASSWORD:-olympus}@node1-db:5432/${POSTGRES_DB:-olympus}
       # Dev-only signing key generation (do not use in production)
@@ -97,7 +97,7 @@ services:
         echo "Waiting for database..." &&
         sleep 2 &&
         alembic upgrade head &&
-        exec uvicorn api.app:app --host 0.0.0.0 --port 8000
+        exec uvicorn api.main:app --host 0.0.0.0 --port 8000
     environment:
       DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-olympus}:${POSTGRES_PASSWORD:-olympus}@node2-db:5432/${POSTGRES_DB:-olympus}
       # Dev-only signing key generation (do not use in production)
@@ -130,7 +130,7 @@ services:
         echo "Waiting for database..." &&
         sleep 2 &&
         alembic upgrade head &&
-        exec uvicorn api.app:app --host 0.0.0.0 --port 8000
+        exec uvicorn api.main:app --host 0.0.0.0 --port 8000
     environment:
       DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-olympus}:${POSTGRES_PASSWORD:-olympus}@node3-db:5432/${POSTGRES_DB:-olympus}
       # Dev-only signing key generation (do not use in production)

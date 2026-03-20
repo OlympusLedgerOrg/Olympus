@@ -17,7 +17,7 @@ def test_primary_docker_compose_initializes_schema_before_starting_api():
 
     alembic_match = re.search(r"python\s+-m\s+alembic\s+upgrade\s+head", compose)
     uvicorn_match = re.search(
-        r"exec\s+uvicorn\s+api\.app:app\s+--host\s+0\.0\.0\.0\s+--port\s+8000", compose
+        r"exec\s+uvicorn\s+api\.main:app\s+--host\s+0\.0\.0\.0\s+--port\s+8000", compose
     )
 
     assert alembic_match is not None
@@ -32,7 +32,7 @@ def test_federation_docker_compose_initializes_schema_before_starting_each_api_n
 
     assert compose.count("alembic upgrade head") == EXPECTED_FEDERATION_NODES
     uvicorn_matches = list(
-        re.finditer(r"exec\s+uvicorn\s+api\.app:app\s+--host\s+0\.0\.0\.0\s+--port\s+8000", compose)
+        re.finditer(r"exec\s+uvicorn\s+api\.main:app\s+--host\s+0\.0\.0\.0\s+--port\s+8000", compose)
     )
 
     assert len(uvicorn_matches) == EXPECTED_FEDERATION_NODES

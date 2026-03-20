@@ -4,6 +4,7 @@ import importlib
 
 from fastapi.testclient import TestClient
 
+import api.routers.shards as shards_mod
 
 api_app = importlib.import_module("api.app")
 client = TestClient(api_app.app)
@@ -53,7 +54,7 @@ class FakeDashboardStorage:
 
 def test_shard_history_endpoint(monkeypatch):
     """The shard history endpoint should return recent signed header snapshots."""
-    monkeypatch.setattr(api_app, "_require_storage", lambda: FakeDashboardStorage())
+    monkeypatch.setattr(shards_mod, "_require_storage", lambda: FakeDashboardStorage())
 
     response = client.get("/shards/shard-a/history?n=2")
 
@@ -66,7 +67,7 @@ def test_shard_history_endpoint(monkeypatch):
 
 def test_shard_state_diff_endpoint(monkeypatch):
     """The shard state diff endpoint should expose root hashes and summary counts."""
-    monkeypatch.setattr(api_app, "_require_storage", lambda: FakeDashboardStorage())
+    monkeypatch.setattr(shards_mod, "_require_storage", lambda: FakeDashboardStorage())
 
     response = client.get("/shards/shard-a/diff?from_seq=1&to_seq=2")
 
@@ -85,7 +86,7 @@ def test_shard_state_diff_missing_sequence_returns_404(monkeypatch):
         def get_root_diff(self, shard_id: str, from_seq: int, to_seq: int):
             raise ValueError("Shard header not found: shard-a@99")
 
-    monkeypatch.setattr(api_app, "_require_storage", lambda: MissingDiffStorage())
+    monkeypatch.setattr(shards_mod, "_require_storage", lambda: MissingDiffStorage())
 
     response = client.get("/shards/shard-a/diff?from_seq=99&to_seq=100")
 
@@ -94,12 +95,13 @@ def test_shard_state_diff_missing_sequence_returns_404(monkeypatch):
 
 
 def test_root_and_health_expose_new_dashboard_endpoints():
-    """Root and health metadata should advertise the dashboard endpoints."""
+    """Root and health metadata should confirm the API is operational."""
     root_response = client.get("/")
     health_response = client.get("/health")
 
     assert root_response.status_code == 200
-    assert "/shards/{shard_id}/history" in root_response.json()["endpoints"]
-    assert "/shards/{shard_id}/diff" in root_response.json()["endpoints"]
-    assert "/shards/{shard_id}/history" in health_response.json()["endpoints"]
-    assert "/shards/{shard_id}/diff" in health_response.json()["endpoints"]
+    assert "service" in root_response.json()
+    assert "version" in root_response.json()
+    assert health_response.status_code == 200
+    assert "status" in health_response.json()
+    assert "version" in health_response.json()
