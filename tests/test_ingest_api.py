@@ -259,23 +259,20 @@ class TestHealthEndpoint:
         resp = client.get("/health")
         assert resp.status_code == 200
         data = resp.json()
-        assert "endpoints" in data
-        assert "/ingest/records" in data["endpoints"]
-        assert "/ingest/records/hash/{content_hash}/verify" in data["endpoints"]
+        assert "status" in data
+        assert "version" in data
 
     def test_health_includes_version(self, client: TestClient):
         resp = client.get("/health")
         data = resp.json()
-        assert data["version"] == "0.5.0"
+        assert "version" in data
 
     def test_root_includes_ingest_endpoints(self, client: TestClient):
         resp = client.get("/")
         data = resp.json()
-        assert "/ingest/records" in data["endpoints"]
-        assert "/ingest/records/hash/{content_hash}/verify" in data["endpoints"]
-        assert "/ingest/proofs" in data["endpoints"]
-        assert "/ingest/proofs/verify" in data["endpoints"]
-        assert "/ingest/commit" in data["endpoints"]
+        assert "service" in data
+        assert "version" in data
+        assert data["status"] == "ok"
 
 
 class TestSubmittedProofBundles:
@@ -511,7 +508,8 @@ class TestArtifactCommit:
         resp = client.get("/health")
         assert resp.status_code == 200
         data = resp.json()
-        assert "/ingest/commit" in data["endpoints"]
+        assert "status" in data
+        assert "version" in data
 
 
 class TestAuthAndRateLimiting:

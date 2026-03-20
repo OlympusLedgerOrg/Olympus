@@ -29,7 +29,7 @@ RUN pip install --no-cache-dir -r requirements-dev.txt
 
 COPY . .
 
-CMD ["uvicorn", "api.app:app", "--host", "0.0.0.0", "--port", "8000", "--reload"]
+CMD ["uvicorn", "api.main:app", "--host", "0.0.0.0", "--port", "8000", "--reload"]
 
 # Production stage
 FROM base AS production
@@ -68,4 +68,4 @@ LABEL org.opencontainers.image.licenses="Apache-2.0"
 LABEL security.non-root="true"
 
 # Run the application
-CMD ["uvicorn", "api.app:app", "--host", "0.0.0.0", "--port", "8000"]
+CMD ["uvicorn", "api.main:app", "--host", "0.0.0.0", "--port", "8000"]

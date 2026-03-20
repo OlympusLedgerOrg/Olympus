@@ -10,6 +10,7 @@ from pathlib import Path
 import pytest
 from fastapi import HTTPException
 
+import api.services.storage_layer as storage_layer_mod
 
 api_app = importlib.import_module("api.app")
 
@@ -17,8 +18,8 @@ api_app = importlib.import_module("api.app")
 def test_get_storage_rejects_missing_database_url(monkeypatch):
     """DB-backed endpoints must reject requests when DATABASE_URL is unset."""
     monkeypatch.delenv("DATABASE_URL", raising=False)
-    monkeypatch.setattr(api_app, "_storage", None)
-    monkeypatch.setattr(api_app, "_db_error", None)
+    monkeypatch.setattr(storage_layer_mod, "_storage", None)
+    monkeypatch.setattr(storage_layer_mod, "_db_error", None)
 
     with pytest.raises(HTTPException, match="DATABASE_URL is required"):
         api_app._get_storage()
@@ -84,8 +85,8 @@ def test_get_storage_normalizes_asyncpg_url_for_psycopg(monkeypatch):
         "DATABASE_URL",
         "postgresql+asyncpg://user:pass@localhost:5432/olympus",
     )
-    monkeypatch.setattr(api_app, "_storage", None)
-    monkeypatch.setattr(api_app, "_db_error", None)
+    monkeypatch.setattr(storage_layer_mod, "_storage", None)
+    monkeypatch.setattr(storage_layer_mod, "_db_error", None)
     monkeypatch.setattr("storage.postgres.StorageLayer", _FakeStorageLayer)
 
     storage = api_app._get_storage()

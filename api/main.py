@@ -1,11 +1,14 @@
 """
-Olympus FOIA Ledger — FastAPI application entry point.
+Olympus Unified API — single FastAPI entry point.
+
+Combines FOIA/public-records management with protocol-layer audit,
+ingest, and cryptographic verification endpoints.
 
 Start with:
     uvicorn api.main:app --reload
 
 Environment variables (see api/config.py for full list):
-    DATABASE_URL — async SQLAlchemy URL (default: sqlite+aiosqlite:///./olympus_foia.db)
+    DATABASE_URL  — async SQLAlchemy URL (default: sqlite+aiosqlite:///./olympus_foia.db)
     CORS_ORIGINS  — comma-separated allowed origins (default: *)
 """
 
@@ -13,14 +16,18 @@ from __future__ import annotations
 
 import logging
 from contextlib import asynccontextmanager
+from typing import Any
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from api.config import get_settings
 from api.db import engine
+from api.ingest import router as ingest_router
 from api.models import Base  # noqa: F401 — ensures all models are registered
 from api.routers import agencies, appeals, documents, keys, ledger, requests as requests_router
+from api.routers.shards import router as shards_router
+from api.sth import router as sth_router
 
 
 logging.basicConfig(
@@ -34,7 +41,7 @@ logger = logging.getLogger(__name__)
 async def lifespan(app: FastAPI):
     """Create database tables on startup and dispose the engine on shutdown."""
     settings = get_settings()
-    logger.info("Starting Olympus FOIA Ledger v%s", settings.app_version)
+    logger.info("Starting Olympus API v%s", settings.app_version)
 
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
@@ -47,7 +54,7 @@ async def lifespan(app: FastAPI):
 
 
 def create_app() -> FastAPI:
-    """Build and configure the FastAPI application.
+    """Build and configure the unified FastAPI application.
 
     Returns:
         Configured FastAPI instance.
@@ -58,23 +65,25 @@ def create_app() -> FastAPI:
         title=settings.app_title,
         version=settings.app_version,
         description=(
-            "Append-only cryptographic ledger for NC Public Records (G.S. § 132) "
-            "and Federal FOIA (5 U.S.C. § 552) requests."
+            "Unified Olympus API — append-only cryptographic ledger for "
+            "NC Public Records (G.S. § 132) and Federal FOIA (5 U.S.C. § 552) "
+            "requests, plus protocol-layer audit and verification."
         ),
         lifespan=lifespan,
     )
 
-    # CORS
+    # CORS — wildcard origin must not be combined with credentials
     origins = [o.strip() for o in settings.cors_origins.split(",")]
+    credentials = "*" not in origins
     app.add_middleware(
         CORSMiddleware,
         allow_origins=origins,
-        allow_credentials=True,
+        allow_credentials=credentials,
         allow_methods=["*"],
         allow_headers=["*"],
     )
 
-    # Routers
+    # FOIA routers
     app.include_router(documents.router)
     app.include_router(ledger.router)
     app.include_router(requests_router.router)
@@ -82,9 +91,14 @@ def create_app() -> FastAPI:
     app.include_router(appeals.router)
     app.include_router(keys.router)
 
+    # Protocol-layer routers
+    app.include_router(shards_router)
+    app.include_router(ingest_router)
+    app.include_router(sth_router)
+
     @app.get("/", tags=["health"])
-    async def root():
-        """Health check / version endpoint."""
+    async def root() -> dict[str, Any]:
+        """API root with version info."""
         return {
             "service": settings.app_title,
             "version": settings.app_version,
@@ -92,9 +106,22 @@ def create_app() -> FastAPI:
         }
 
     @app.get("/health", tags=["health"])
-    async def health():
-        """Liveness probe."""
-        return {"status": "ok"}
+    async def health() -> dict[str, Any]:
+        """Health check with optional database status."""
+        result: dict[str, Any] = {
+            "status": "ok",
+            "version": settings.app_version,
+        }
+        try:
+            from api.services.storage_layer import get_storage_status
+            db_status, db_check = get_storage_status()
+            result["database"] = db_status
+            result["db_check"] = db_check
+            if db_status == "error":
+                result["status"] = "degraded"
+        except ImportError:
+            pass
+        return result
 
     return app
 
