@@ -28,7 +28,7 @@ def test_dns_checkpoint_record_format() -> None:
     parsed = DNSCheckpointRecord.from_txt_record("oly-v1 seq=1 hash=abc123")
     assert parsed.sequence == 1
     assert parsed.checkpoint_hash == "abc123"
-    assert parsed.timestamp == ""
+    assert parsed.timestamp is None
 
 
 def test_dns_checkpoint_record_legacy_format() -> None:
