@@ -4,43 +4,31 @@ HTTP transport layer for witness protocol.
 This module provides HTTP client utilities for witnesses to fetch Signed Tree
 Heads (STHs) and consistency proofs from remote Olympus nodes. Witnesses use
 these to monitor multiple nodes and detect split-view attacks.
-
-This is a Phase 1+ feature implementing the witness protocol described in
-docs/17_signed_checkpoints.md.
 """
 
 from __future__ import annotations
 
-import logging
+import asyncio
 from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Awaitable, TypeVar
 
-try:
-    import httpx
-except ImportError:
-    httpx = None  # type: ignore
+import httpx
 
-from .consistency import ConsistencyProof
-from .epochs import SignedTreeHead
+from protocol.consistency import ConsistencyProof
+from protocol.epochs import SignedTreeHead
+from protocol.monitoring import LogMonitor
 
-
-logger = logging.getLogger(__name__)
+T = TypeVar("T")
 
 
 @dataclass(frozen=True)
 class NodeEndpoint:
-    """Configuration for a monitored Olympus node endpoint."""
+    """Configuration for a monitored Olympus node endpoint (default timeout 10s)."""
 
     node_id: str
     base_url: str
-    timeout_seconds: float = 30.0
-
-
-class WitnessTransportError(Exception):
-    """Base exception for witness transport errors."""
-
-    pass
+    timeout_seconds: float = 10.0  # Default timeout in seconds.
 
 
 class WitnessHTTPTransport:
@@ -52,166 +40,48 @@ class WitnessHTTPTransport:
     """
 
     def __init__(
-        self,
-        endpoints: list[NodeEndpoint],
-        *,
-        http_client: Any | None = None,
-        verify_ssl: bool = True,
+        self, endpoints: list[NodeEndpoint], http_client: httpx.AsyncClient | None = None
     ) -> None:
         """
         Initialize witness transport with node endpoints.
 
         Args:
-            endpoints: List of node endpoints to monitor
-            http_client: Optional httpx client (for testing). If None, creates one.
-            verify_ssl: Whether to verify SSL certificates (default True)
-
-        Raises:
-            ImportError: If httpx is not installed
+            endpoints: List of node endpoints to monitor.
+            http_client: Optional async HTTP client for testing or reuse.
         """
-        if httpx is None:
-            raise ImportError(
-                "httpx is required for witness transport. Install with: pip install httpx"
-            )
+        self.endpoints = {endpoint.node_id: endpoint for endpoint in endpoints}
+        self._client = http_client or httpx.AsyncClient()
+        self._owns_client = http_client is None
 
-        self.endpoints = {ep.node_id: ep for ep in endpoints}
-        self.verify_ssl = verify_ssl
+    async def close(self) -> None:
+        """Close the HTTP client if owned by this transport."""
+        if self._owns_client:
+            await self._client.aclose()
 
-        if http_client is None:
-            self._client = httpx.Client(verify=verify_ssl)
-            self._owns_client = True
-        else:
-            self._client = http_client
-            self._owns_client = False
+    def _require_endpoint(self, node_id: str) -> NodeEndpoint:
+        endpoint = self.endpoints.get(node_id)
+        if endpoint is None:
+            raise ValueError(f"Unknown node_id: {node_id}")
+        return endpoint
 
-    def __enter__(self) -> WitnessHTTPTransport:
-        """Context manager entry."""
-        return self
-
-    def __exit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> None:
-        """Context manager exit - close client if we own it."""
-        if self._owns_client and self._client is not None:
-            self._client.close()
-
-    def close(self) -> None:
-        """Close the HTTP client if we own it."""
-        if self._owns_client and self._client is not None:
-            self._client.close()
-
-    def fetch_sth(self, node_id: str, shard_id: str) -> SignedTreeHead:
+    async def fetch_sth(self, node_id: str, shard_id: str) -> SignedTreeHead:
         """
         Fetch the latest Signed Tree Head from a node.
 
         Args:
-            node_id: Identifier of the node to query
-            shard_id: Shard identifier
+            node_id: Identifier of the node to query.
+            shard_id: Shard identifier.
 
         Returns:
-            Latest SignedTreeHead for the shard
-
-        Raises:
-            WitnessTransportError: If the fetch fails or response is invalid
-            ValueError: If node_id is not in configured endpoints
+            Latest SignedTreeHead for the shard.
         """
-        endpoint = self.endpoints.get(node_id)
-        if endpoint is None:
-            raise ValueError(f"Unknown node_id: {node_id}")
+        endpoint = self._require_endpoint(node_id)
+        url = f"{endpoint.base_url}/witness/sth/{shard_id}"
+        response = await self._client.get(url, timeout=endpoint.timeout_seconds)
+        response.raise_for_status()
+        return SignedTreeHead.from_dict(response.json())
 
-        url = f"{endpoint.base_url}/protocol/sth/latest"
-        params = {"shard_id": shard_id}
-
-        try:
-            response = self._client.get(
-                url,
-                params=params,
-                timeout=endpoint.timeout_seconds,
-            )
-            response.raise_for_status()
-            data = response.json()
-
-            # Convert response to SignedTreeHead
-            # Note: The actual STH response format from api/sth.py uses a different
-            # structure than protocol/epochs.py SignedTreeHead. This is a simplified
-            # adapter that would need proper mapping in production.
-            return SignedTreeHead(
-                epoch_id=data["epoch_id"],
-                tree_size=data["tree_size"],
-                merkle_root=data["merkle_root"],
-                timestamp=data["timestamp"],
-                signature=data["signature"],
-                signer_pubkey=data["signer_pubkey"],
-            )
-
-        except httpx.HTTPError as e:
-            raise WitnessTransportError(
-                f"Failed to fetch STH from {node_id} for shard {shard_id}: {e}"
-            ) from e
-        except (KeyError, ValueError) as e:
-            raise WitnessTransportError(
-                f"Invalid STH response from {node_id} for shard {shard_id}: {e}"
-            ) from e
-
-    def fetch_sth_history(
-        self,
-        node_id: str,
-        shard_id: str,
-        count: int = 10,
-    ) -> list[SignedTreeHead]:
-        """
-        Fetch recent STH history from a node.
-
-        Args:
-            node_id: Identifier of the node to query
-            shard_id: Shard identifier
-            count: Number of historical STHs to retrieve (default 10)
-
-        Returns:
-            List of SignedTreeHeads in reverse chronological order
-
-        Raises:
-            WitnessTransportError: If the fetch fails or response is invalid
-            ValueError: If node_id is not in configured endpoints
-        """
-        endpoint = self.endpoints.get(node_id)
-        if endpoint is None:
-            raise ValueError(f"Unknown node_id: {node_id}")
-
-        url = f"{endpoint.base_url}/protocol/sth/history"
-        params = {"shard_id": shard_id, "n": count}
-
-        try:
-            response = self._client.get(
-                url,
-                params=params,
-                timeout=endpoint.timeout_seconds,
-            )
-            response.raise_for_status()
-            data = response.json()
-
-            sths = []
-            for sth_data in data.get("sths", []):
-                sths.append(
-                    SignedTreeHead(
-                        epoch_id=sth_data["epoch_id"],
-                        tree_size=sth_data["tree_size"],
-                        merkle_root=sth_data["merkle_root"],
-                        timestamp=sth_data["timestamp"],
-                        signature=sth_data["signature"],
-                        signer_pubkey=sth_data["signer_pubkey"],
-                    )
-                )
-            return sths
-
-        except httpx.HTTPError as e:
-            raise WitnessTransportError(
-                f"Failed to fetch STH history from {node_id} for shard {shard_id}: {e}"
-            ) from e
-        except (KeyError, ValueError) as e:
-            raise WitnessTransportError(
-                f"Invalid STH history response from {node_id} for shard {shard_id}: {e}"
-            ) from e
-
-    def fetch_consistency_proof(
+    async def fetch_consistency_proof(
         self,
         node_id: str,
         shard_id: str,
@@ -222,66 +92,61 @@ class WitnessHTTPTransport:
         Fetch a Merkle consistency proof from a node.
 
         Args:
-            node_id: Identifier of the node to query
-            shard_id: Shard identifier
-            old_size: Tree size of the older STH
-            new_size: Tree size of the newer STH
+            node_id: Identifier of the node to query.
+            shard_id: Shard identifier.
+            old_size: Tree size of the older STH.
+            new_size: Tree size of the newer STH.
 
         Returns:
-            ConsistencyProof demonstrating append-only growth
-
-        Raises:
-            WitnessTransportError: If the fetch fails or response is invalid
-            ValueError: If node_id is not in configured endpoints
+            ConsistencyProof demonstrating append-only growth.
         """
-        endpoint = self.endpoints.get(node_id)
-        if endpoint is None:
-            raise ValueError(f"Unknown node_id: {node_id}")
+        endpoint = self._require_endpoint(node_id)
+        url = f"{endpoint.base_url}/witness/consistency/{shard_id}"
+        params = {"from": old_size, "to": new_size}
+        response = await self._client.get(
+            url,
+            params=params,
+            timeout=endpoint.timeout_seconds,
+        )
+        response.raise_for_status()
+        return ConsistencyProof.from_dict(response.json())
 
-        # Note: This endpoint doesn't exist in the current API but would be needed
-        # for full witness protocol implementation
-        url = f"{endpoint.base_url}/protocol/consistency-proof"
-        params = {
-            "shard_id": shard_id,
-            "old_size": old_size,
-            "new_size": new_size,
-        }
-
+    def _run_sync(self, coro: Awaitable[T]) -> T:
+        loop, owns_loop = self._select_loop()
+        if loop.is_running():
+            raise RuntimeError("Cannot use sync wrapper while an event loop is running")
         try:
-            response = self._client.get(
-                url,
-                params=params,
-                timeout=endpoint.timeout_seconds,
-            )
-            response.raise_for_status()
-            data = response.json()
+            return loop.run_until_complete(coro)
+        finally:
+            if owns_loop:
+                loop.close()
+                asyncio.set_event_loop(None)
 
-            # Convert hex-encoded proof elements to bytes
-            proof_hashes = [bytes.fromhex(h) for h in data["proof"]]
-
-            return ConsistencyProof(
-                old_size=data["old_size"],
-                new_size=data["new_size"],
-                proof=proof_hashes,
-            )
-
-        except httpx.HTTPError as e:
-            raise WitnessTransportError(
-                f"Failed to fetch consistency proof from {node_id}: {e}"
-            ) from e
-        except (KeyError, ValueError) as e:
-            raise WitnessTransportError(
-                f"Invalid consistency proof response from {node_id}: {e}"
-            ) from e
+    def _select_loop(self) -> tuple[asyncio.AbstractEventLoop, bool]:
+        try:
+            loop = asyncio.get_event_loop()
+        except RuntimeError:
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+            return loop, True
+        if loop.is_closed():
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+            return loop, True
+        return loop, False
 
     def create_sth_fetcher(self) -> Callable[[str, str], SignedTreeHead]:
         """
         Create an STH fetcher callback for use with LogMonitor.
 
         Returns:
-            Callable that fetches STH for (node_id, shard_id) pairs
+            Callable that fetches STH for (node_id, shard_id) pairs.
         """
-        return self.fetch_sth
+
+        def _fetch(node_id: str, shard_id: str) -> SignedTreeHead:
+            return self._run_sync(self.fetch_sth(node_id, shard_id))
+
+        return _fetch
 
     def create_consistency_fetcher(
         self,
@@ -290,43 +155,38 @@ class WitnessHTTPTransport:
         Create a consistency proof fetcher callback for use with LogMonitor.
 
         Returns:
-            Callable that fetches consistency proofs
+            Callable that fetches consistency proofs.
         """
-        return self.fetch_consistency_proof
+
+        def _fetch(
+            node_id: str, shard_id: str, old_size: int, new_size: int
+        ) -> ConsistencyProof:
+            return self._run_sync(
+                self.fetch_consistency_proof(node_id, shard_id, old_size, new_size)
+            )
+
+        return _fetch
 
 
-def create_witness_transport(
-    endpoints: list[dict[str, Any]],
-    **kwargs: Any,
-) -> WitnessHTTPTransport:
+def create_witness_transport(endpoints: list[dict[str, Any]]) -> WitnessHTTPTransport:
     """
     Factory function to create a WitnessHTTPTransport from configuration.
 
     Args:
         endpoints: List of endpoint configurations with keys:
-            - node_id: Node identifier
-            - base_url: Base URL of the node API
-            - timeout_seconds: Optional timeout (default 30.0)
-        **kwargs: Additional arguments passed to WitnessHTTPTransport
+            - node_id: Node identifier.
+            - base_url: Base URL of the node API.
+            - timeout_seconds: Optional timeout (default 10.0).
 
     Returns:
-        Configured WitnessHTTPTransport instance
-
-    Example:
-        >>> endpoints = [
-        ...     {"node_id": "node-1", "base_url": "https://olympus1.example.com"},
-        ...     {"node_id": "node-2", "base_url": "https://olympus2.example.com"},
-        ... ]
-        >>> transport = create_witness_transport(endpoints)
-        >>> with transport:
-        ...     sth = transport.fetch_sth("node-1", "shard-0")
+        Configured WitnessHTTPTransport instance.
     """
     node_endpoints = [
         NodeEndpoint(
-            node_id=ep["node_id"],
-            base_url=ep["base_url"],
-            timeout_seconds=ep.get("timeout_seconds", 30.0),
+            node_id=endpoint["node_id"],
+            base_url=endpoint["base_url"],
+            timeout_seconds=endpoint.get("timeout_seconds", 10.0),
         )
-        for ep in endpoints
+        for endpoint in endpoints
     ]
-    return WitnessHTTPTransport(node_endpoints, **kwargs)
+    return WitnessHTTPTransport(node_endpoints)
