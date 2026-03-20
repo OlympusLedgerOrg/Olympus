@@ -86,10 +86,8 @@ def test_fetcher_factories_work_with_log_monitor():
         return httpx.Response(404)
 
     mock_transport = httpx.MockTransport(handler)
-    loop = asyncio.new_event_loop()
-    asyncio.set_event_loop(loop)
     transport = WitnessHTTPTransport([NodeEndpoint(node_id="node-1", base_url="https://node")])
-    loop.run_until_complete(transport._client.aclose())
+    asyncio.run(transport._client.aclose())
     transport._client = httpx.AsyncClient(transport=mock_transport)
 
     try:
@@ -102,6 +100,4 @@ def test_fetcher_factories_work_with_log_monitor():
         observations = list(monitor.observed())
         assert observations[0].sth.tree_size == 5
     finally:
-        loop.run_until_complete(transport._client.aclose())
-        loop.close()
-        asyncio.set_event_loop(None)
+        asyncio.run(transport._client.aclose())
