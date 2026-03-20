@@ -19,7 +19,7 @@ class MerkleRoot:
 
     Attributes:
         root_hash: Hex-encoded BLAKE3 root of the tree.
-        leaf_hashes: Sorted list of leaf hashes used to build the tree.
+        leaf_hashes: Ordered list of leaf hashes used to build the tree.
         levels: Internal structure — each element is one level of the tree,
                 starting from the leaves (index 0) up to the root (last index).
     """
@@ -53,10 +53,11 @@ def _blake3_pair(left: str, right: str) -> str:
 
 
 def build_tree(leaf_hashes: list[str]) -> MerkleRoot:
-    """Build a binary Merkle tree from a list of leaf hashes.
+    """Build a binary Merkle tree from an ordered list of leaf hashes.
 
-    Leaves are sorted before building so the tree is deterministic regardless
-    of insertion order.  Lone nodes at any level are promoted without rehashing
+    Leaves are used in the order provided (append-only / CT-style).
+    Callers must pass leaves in deterministic order (e.g. by epoch timestamp).
+    Lone nodes at any level are promoted without rehashing
     (CT-style / RFC 6962 behaviour).
 
     Args:
@@ -71,7 +72,7 @@ def build_tree(leaf_hashes: list[str]) -> MerkleRoot:
     if not leaf_hashes:
         raise ValueError("Cannot build a Merkle tree from an empty leaf list.")
 
-    current = sorted(leaf_hashes)
+    current = list(leaf_hashes)
     levels: list[list[str]] = [list(current)]
 
     while len(current) > 1:
@@ -87,7 +88,7 @@ def build_tree(leaf_hashes: list[str]) -> MerkleRoot:
         current = next_level
         levels.append(list(current))
 
-    return MerkleRoot(root_hash=current[0], leaf_hashes=sorted(leaf_hashes), levels=levels)
+    return MerkleRoot(root_hash=current[0], leaf_hashes=list(leaf_hashes), levels=levels)
 
 
 def generate_proof(leaf_hash: str, tree: MerkleRoot) -> MerkleProof:

@@ -6,6 +6,9 @@ Uses an in-memory SQLite database via pytest fixtures.
 
 from __future__ import annotations
 
+import json
+import os
+
 import blake3
 
 import pytest
@@ -150,3 +153,32 @@ async def test_commit_rejects_invalid_hash(client):
     for bad_hash in ["hello", "ZZZZ", "abc", "A" * 64, ""]:
         resp = await client.post("/doc/commit", json={"doc_hash": bad_hash})
         assert resp.status_code == 422, f"Expected 422 for doc_hash={bad_hash!r}, got {resp.status_code}"
+
+
+@pytest.mark.asyncio
+async def test_commit_requires_auth_when_keys_configured(client):
+    """POST /doc/commit should return 401 when API keys are configured but none provided."""
+    import api.auth as auth_module
+
+    original_loaded = auth_module._keys_loaded
+    original_store = dict(auth_module._key_store)
+    original_env = os.environ.get("OLYMPUS_FOIA_API_KEYS")
+
+    try:
+        auth_module._keys_loaded = False
+        auth_module._key_store.clear()
+
+        test_key_hash = blake3.blake3(b"test-key-1234").hexdigest()
+        os.environ["OLYMPUS_FOIA_API_KEYS"] = json.dumps([{"key_hash": test_key_hash, "key_id": "test"}])
+
+        doc_hash = _b3("auth test doc")
+        resp = await client.post("/doc/commit", json={"doc_hash": doc_hash})
+        assert resp.status_code == 401
+    finally:
+        auth_module._keys_loaded = original_loaded
+        auth_module._key_store.clear()
+        auth_module._key_store.update(original_store)
+        if original_env is None:
+            os.environ.pop("OLYMPUS_FOIA_API_KEYS", None)
+        else:
+            os.environ["OLYMPUS_FOIA_API_KEYS"] = original_env

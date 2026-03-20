@@ -54,7 +54,9 @@ async def compute_state_root(shard_id: str, db: AsyncSession) -> str:
     from api.models.document import DocCommit  # noqa: PLC0415
 
     result = await db.execute(
-        select(DocCommit.doc_hash).where(DocCommit.shard_id == shard_id)
+        select(DocCommit.doc_hash)
+        .where(DocCommit.shard_id == shard_id)
+        .order_by(DocCommit.epoch_timestamp)
     )
     hashes = list(result.scalars().all())
 

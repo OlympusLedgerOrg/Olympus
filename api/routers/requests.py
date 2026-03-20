@@ -16,6 +16,7 @@ from fastapi import APIRouter, HTTPException, Query, status
 from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 
+from api.auth import RequireAPIKey, RateLimit
 from api.deps import DBSession
 from api.models.request import PublicRecordsRequest, RequestStatus
 from api.schemas.request import RequestCreate, RequestResponse, RequestStatusUpdate
@@ -26,6 +27,11 @@ from api.services.shard import DEFAULT_SHARD_ID
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/requests", tags=["requests"])
+
+
+def _escape_like(value: str) -> str:
+    """Escape SQL LIKE/ILIKE wildcard characters."""
+    return value.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
 
 
 _DISPLAY_ID_MAX_RETRIES = 5
@@ -52,7 +58,7 @@ async def _next_display_id(db) -> str:
 
 
 @router.post("", response_model=RequestResponse, status_code=status.HTTP_201_CREATED)
-async def file_request(body: RequestCreate, db: DBSession):
+async def file_request(body: RequestCreate, db: DBSession, _api_key: RequireAPIKey, _rl: RateLimit):
     """File a new public-records or FOIA request.
 
     Computes a BLAKE3 commit hash over the canonical request content,
@@ -111,6 +117,7 @@ async def file_request(body: RequestCreate, db: DBSession):
 @router.get("", response_model=list[RequestResponse])
 async def list_requests(
     db: DBSession,
+    _rl: RateLimit,
     status: str | None = Query(None),
     agency_id: str | None = Query(None),
     search: str | None = Query(None),
@@ -136,7 +143,7 @@ async def list_requests(
     if agency_id:
         q = q.where(PublicRecordsRequest.agency_id == agency_id)
     if search:
-        q = q.where(PublicRecordsRequest.subject.ilike(f"%{search}%"))
+        q = q.where(PublicRecordsRequest.subject.ilike(f"%{_escape_like(search)}%"))
     q = q.offset((page - 1) * per_page).limit(per_page)
 
     result = await db.execute(q)
@@ -151,7 +158,7 @@ async def list_requests(
 
 
 @router.get("/{display_id}", response_model=RequestResponse)
-async def get_request(display_id: str, db: DBSession):
+async def get_request(display_id: str, db: DBSession, _rl: RateLimit):
     """Return full details of a public-records request.
 
     Args:
@@ -182,7 +189,7 @@ async def get_request(display_id: str, db: DBSession):
 
 
 @router.patch("/{display_id}/status", response_model=RequestResponse)
-async def update_request_status(display_id: str, body: RequestStatusUpdate, db: DBSession):
+async def update_request_status(display_id: str, body: RequestStatusUpdate, db: DBSession, _api_key: RequireAPIKey, _rl: RateLimit):
     """Update the status of a request and anchor the change to the ledger.
 
     Args:
