@@ -25,7 +25,7 @@ from api.config import get_settings
 from api.db import engine
 from api.ingest import router as ingest_router
 from api.models import Base  # noqa: F401 — ensures all models are registered
-from api.routers import agencies, appeals, documents, keys, ledger, requests as requests_router
+from api.routers import agencies, appeals, documents, keys, ledger, requests as requests_router, witness
 from api.routers.shards import router as shards_router
 from api.sth import router as sth_router
 
@@ -90,6 +90,7 @@ def create_app() -> FastAPI:
     app.include_router(agencies.router)
     app.include_router(appeals.router)
     app.include_router(keys.router)
+    app.include_router(witness.router)
 
     # Protocol-layer routers
     app.include_router(shards_router)
