@@ -35,7 +35,8 @@ class DNSCheckpointRecord:
     encoded in a machine-readable format. The timestamp is retained on the
     dataclass for internal consumers but is not included in the DNS TXT
     serialization format; when parsing DNS records without timestamps it
-    defaults to an empty string.
+    defaults to an empty string. Use from_checkpoint() to preserve the
+    checkpoint timestamp in-memory.
     """
 
     sequence: int
@@ -333,6 +334,7 @@ class DNSBackend(ABC):
         Create or update a DNS TXT record.
 
         This is a compatibility wrapper around publish() for legacy callers.
+        New implementations should call publish() directly.
 
         Args:
             fqdn: Fully qualified domain name
