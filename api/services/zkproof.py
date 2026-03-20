@@ -60,6 +60,6 @@ def generate_proof_stub(commit_id: str, doc_hash: str) -> dict:
             ],
         },
         "public_signals": [commit_id, doc_hash],
-        "verified": True,
+        "verified": False,
         "note": "STUB — Circom circuit integration pending",
     }

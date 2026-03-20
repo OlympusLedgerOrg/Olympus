@@ -14,6 +14,7 @@ from datetime import datetime, timezone
 
 from fastapi import APIRouter, HTTPException, Query, status
 from sqlalchemy import func, select
+from sqlalchemy.exc import IntegrityError
 
 from api.deps import DBSession
 from api.models.request import PublicRecordsRequest, RequestStatus
@@ -27,11 +28,27 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/requests", tags=["requests"])
 
 
+_DISPLAY_ID_MAX_RETRIES = 5
+
+
 async def _next_display_id(db) -> str:
-    """Generate the next sequential display ID (e.g. ``"OLY-0042"``)."""
-    result = await db.execute(select(func.count()).select_from(PublicRecordsRequest))
-    count = (result.scalar() or 0) + 1
-    return f"OLY-{count:04d}"
+    """Generate the next sequential display ID (e.g. ``"OLY-0042"``).
+
+    Uses MAX(display_id) to find the current highest ID, avoiding collisions
+    from concurrent row-count reads.
+    """
+    result = await db.execute(
+        select(func.max(PublicRecordsRequest.display_id))
+    )
+    max_id = result.scalar()
+    if max_id is None:
+        return "OLY-0001"
+    # Parse the numeric suffix and increment
+    try:
+        num = int(max_id.split("-")[1]) + 1
+    except (IndexError, ValueError):
+        num = 1
+    return f"OLY-{num:04d}"
 
 
 @router.post("", response_model=RequestResponse, status_code=status.HTTP_201_CREATED)
@@ -53,30 +70,42 @@ async def file_request(body: RequestCreate, db: DBSession):
     agency_name = body.agency_id or ""
     commit_hash = hash_request(body.subject, body.description, agency_name, filed_at)
     deadline = compute_deadline(filed_at, body.request_type)
-    display_id = await _next_display_id(db)
 
-    req = PublicRecordsRequest(
-        display_id=display_id,
-        subject=body.subject,
-        description=body.description,
-        agency_id=body.agency_id,
-        request_type=body.request_type,
-        status=RequestStatus.PENDING.value,
-        date_from=body.date_from,
-        date_to=body.date_to,
-        response_format=body.response_format,
-        fee_waiver_basis=body.fee_waiver_basis,
-        priority=body.priority,
-        filed_at=filed_at,
-        deadline=deadline,
-        commit_hash=commit_hash,
-        shard_id=DEFAULT_SHARD_ID,
+    last_exc: Exception | None = None
+    for _attempt in range(_DISPLAY_ID_MAX_RETRIES):
+        display_id = await _next_display_id(db)
+        req = PublicRecordsRequest(
+            display_id=display_id,
+            subject=body.subject,
+            description=body.description,
+            agency_id=body.agency_id,
+            request_type=body.request_type,
+            status=RequestStatus.PENDING.value,
+            date_from=body.date_from,
+            date_to=body.date_to,
+            response_format=body.response_format,
+            fee_waiver_basis=body.fee_waiver_basis,
+            priority=body.priority,
+            filed_at=filed_at,
+            deadline=deadline,
+            commit_hash=commit_hash,
+            shard_id=DEFAULT_SHARD_ID,
+        )
+        db.add(req)
+        try:
+            await db.commit()
+            await db.refresh(req)
+            logger.info("Filed request %s (commit=%s)", req.display_id, commit_hash)
+            return req
+        except IntegrityError as exc:
+            last_exc = exc
+            await db.rollback()
+            logger.warning("display_id collision on %s, retrying", display_id)
+
+    raise HTTPException(
+        status_code=status.HTTP_409_CONFLICT,
+        detail={"detail": "Could not generate unique display_id after retries.", "code": "DISPLAY_ID_CONFLICT"},
     )
-    db.add(req)
-    await db.commit()
-    await db.refresh(req)
-    logger.info("Filed request %s (commit=%s)", req.display_id, commit_hash)
-    return req
 
 
 @router.get("", response_model=list[RequestResponse])
@@ -113,12 +142,10 @@ async def list_requests(
     result = await db.execute(q)
     requests = list(result.scalars().all())
 
-    # Auto-transition overdue requests
+    # Compute overdue status in-memory for the response (no persistence)
     for req in requests:
         if is_overdue(req):
             req.status = RequestStatus.OVERDUE.value
-    if any(is_overdue(r) for r in requests):
-        await db.commit()
 
     return requests
 
@@ -147,10 +174,9 @@ async def get_request(display_id: str, db: DBSession):
             detail={"detail": f"Request {display_id!r} not found.", "code": "REQUEST_NOT_FOUND"},
         )
 
-    # Check for overdue transition
+    # Compute overdue status in-memory for the response (no persistence)
     if is_overdue(req):
         req.status = RequestStatus.OVERDUE.value
-        await db.commit()
 
     return req
 

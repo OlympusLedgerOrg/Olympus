@@ -28,5 +28,6 @@ class CredentialResponse(BaseModel):
     issuer: str
     sbt_nontransferable: bool
     commit_id: str
+    revocation_commit_id: str | None = None
 
     model_config = {"from_attributes": True}

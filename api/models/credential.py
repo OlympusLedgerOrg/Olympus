@@ -26,7 +26,8 @@ class KeyCredential(Base):
         revoked_at: UTC timestamp of revocation, or ``None`` if still active.
         issuer: Identifier of the issuing authority.
         sbt_nontransferable: Always ``True``; credentials cannot be transferred.
-        commit_id: Ledger commit ID that anchors this credential.
+        commit_id: Ledger commit ID that anchors the issuance of this credential.
+        revocation_commit_id: Ledger commit ID that anchors the revocation, or ``None`` if active.
     """
 
     __tablename__ = "key_credentials"
@@ -41,3 +42,4 @@ class KeyCredential(Base):
     issuer: Mapped[str] = mapped_column(String(256), nullable=False)
     sbt_nontransferable: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
     commit_id: Mapped[str] = mapped_column(String(64), nullable=False, default="")
+    revocation_commit_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
