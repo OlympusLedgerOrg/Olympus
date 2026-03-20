@@ -37,7 +37,7 @@ class DNSCheckpointRecord:
 
     sequence: int
     checkpoint_hash: str
-    timestamp: str | None = None
+    timestamp: str = ""
 
     def to_txt_record(self) -> str:
         """
@@ -66,8 +66,8 @@ class DNSCheckpointRecord:
 
         Accepts both the current "oly-v1" space-delimited format and the
         legacy "oly-chk" semicolon-delimited format by normalizing ";" to
-        whitespace before parsing. Records that omit timestamps set timestamp
-        to None.
+        whitespace before parsing, collapsing consecutive delimiters. Records
+        that omit timestamps use an empty string for timestamp.
 
         Raises:
             ValueError: If the TXT record format is invalid
@@ -95,7 +95,7 @@ class DNSCheckpointRecord:
         return cls(
             sequence=sequence,
             checkpoint_hash=parsed["hash"],
-            timestamp=parsed.get("ts"),
+            timestamp=parsed.get("ts", ""),
         )
 
     @classmethod
@@ -360,7 +360,9 @@ class DryRunBackend(DNSBackend):
     """
     DNS backend that logs operations without making actual DNS changes.
 
-    Useful for testing and development.
+    Useful for testing and development. Records are stored as a single TXT
+    string per name; query_txt_record returns a list for compatibility with
+    DNS APIs that may return multiple TXT values.
     """
 
     def __init__(self) -> None:
