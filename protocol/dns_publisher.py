@@ -76,7 +76,7 @@ class DNSCheckpointRecord:
         """
         normalized = txt_value.replace(";", " ")
         parts = [part for part in normalized.split() if part]
-        if len(parts) < 3 or parts[0] not in {"oly-v1", "oly-chk"}:
+        if not parts or parts[0] not in {"oly-v1", "oly-chk"}:
             raise ValueError(f"Invalid DNS checkpoint record format: {txt_value}")
 
         parsed: dict[str, str] = {}
@@ -363,8 +363,9 @@ class DryRunBackend(DNSBackend):
     DNS backend that logs operations without making actual DNS changes.
 
     Useful for testing and development. Records are stored as a single TXT
-    string per name; query_txt_record returns a list for compatibility with
-    DNS APIs that may return multiple TXT values.
+    string per name to reflect Olympus checkpoint usage (one value per name).
+    query_txt_record returns a list for compatibility with DNS APIs that may
+    return multiple TXT values.
     """
 
     def __init__(self) -> None:
