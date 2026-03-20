@@ -37,7 +37,7 @@ class DNSCheckpointRecord:
 
     sequence: int
     checkpoint_hash: str
-    timestamp: str | None = None
+    timestamp: str = ""
 
     def to_txt_record(self) -> str:
         """
@@ -63,6 +63,9 @@ class DNSCheckpointRecord:
 
         Returns:
             Parsed DNSCheckpointRecord
+
+        Accepts both the current "oly-v1" space-delimited format and the
+        legacy "oly-chk" semicolon-delimited format for compatibility.
 
         Raises:
             ValueError: If the TXT record format is invalid
@@ -90,7 +93,7 @@ class DNSCheckpointRecord:
         return cls(
             sequence=sequence,
             checkpoint_hash=parsed["hash"],
-            timestamp=parsed.get("ts"),
+            timestamp=parsed.get("ts", ""),
         )
 
     @classmethod
