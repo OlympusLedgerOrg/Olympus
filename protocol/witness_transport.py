@@ -11,6 +11,7 @@ from __future__ import annotations
 import asyncio
 from collections.abc import Callable
 from dataclasses import dataclass
+from typing import Any, Awaitable, TypeVar
 
 import httpx
 
@@ -18,14 +19,16 @@ from protocol.consistency import ConsistencyProof
 from protocol.epochs import SignedTreeHead
 from protocol.monitoring import LogMonitor
 
+T = TypeVar("T")
+
 
 @dataclass(frozen=True)
 class NodeEndpoint:
-    """Configuration for a monitored Olympus node endpoint."""
+    """Configuration for a monitored Olympus node endpoint (default timeout 10s)."""
 
     node_id: str
     base_url: str
-    timeout_seconds: float = 10.0
+    timeout_seconds: float = 10.0  # Default timeout in seconds.
 
 
 class WitnessHTTPTransport:
@@ -36,15 +39,24 @@ class WitnessHTTPTransport:
     witnesses to collect and compare STHs from multiple nodes.
     """
 
-    def __init__(self, endpoints: list[NodeEndpoint]) -> None:
+    def __init__(
+        self, endpoints: list[NodeEndpoint], http_client: httpx.AsyncClient | None = None
+    ) -> None:
         """
         Initialize witness transport with node endpoints.
 
         Args:
             endpoints: List of node endpoints to monitor.
+            http_client: Optional async HTTP client for testing or reuse.
         """
         self.endpoints = {endpoint.node_id: endpoint for endpoint in endpoints}
-        self._client = httpx.AsyncClient()
+        self._client = http_client or httpx.AsyncClient()
+        self._owns_client = http_client is None
+
+    async def close(self) -> None:
+        """Close the HTTP client if owned by this transport."""
+        if self._owns_client:
+            await self._client.aclose()
 
     def _require_endpoint(self, node_id: str) -> NodeEndpoint:
         endpoint = self.endpoints.get(node_id)
@@ -99,6 +111,30 @@ class WitnessHTTPTransport:
         response.raise_for_status()
         return ConsistencyProof.from_dict(response.json())
 
+    def _run_sync(self, coro: Awaitable[T]) -> T:
+        loop, owns_loop = self._select_loop()
+        if loop.is_running():
+            raise RuntimeError("Cannot use sync wrapper while an event loop is running")
+        try:
+            return loop.run_until_complete(coro)
+        finally:
+            if owns_loop:
+                loop.close()
+                asyncio.set_event_loop(None)
+
+    def _select_loop(self) -> tuple[asyncio.AbstractEventLoop, bool]:
+        try:
+            loop = asyncio.get_event_loop()
+        except RuntimeError:
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+            return loop, True
+        if loop.is_closed():
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+            return loop, True
+        return loop, False
+
     def create_sth_fetcher(self) -> Callable[[str, str], SignedTreeHead]:
         """
         Create an STH fetcher callback for use with LogMonitor.
@@ -108,21 +144,7 @@ class WitnessHTTPTransport:
         """
 
         def _fetch(node_id: str, shard_id: str) -> SignedTreeHead:
-            try:
-                loop = asyncio.get_event_loop()
-            except RuntimeError:
-                loop = asyncio.new_event_loop()
-                try:
-                    return loop.run_until_complete(self.fetch_sth(node_id, shard_id))
-                finally:
-                    loop.close()
-            if loop.is_running():
-                loop = asyncio.new_event_loop()
-                try:
-                    return loop.run_until_complete(self.fetch_sth(node_id, shard_id))
-                finally:
-                    loop.close()
-            return loop.run_until_complete(self.fetch_sth(node_id, shard_id))
+            return self._run_sync(self.fetch_sth(node_id, shard_id))
 
         return _fetch
 
@@ -139,36 +161,14 @@ class WitnessHTTPTransport:
         def _fetch(
             node_id: str, shard_id: str, old_size: int, new_size: int
         ) -> ConsistencyProof:
-            try:
-                loop = asyncio.get_event_loop()
-            except RuntimeError:
-                loop = asyncio.new_event_loop()
-                try:
-                    return loop.run_until_complete(
-                        self.fetch_consistency_proof(
-                            node_id, shard_id, old_size, new_size
-                        )
-                    )
-                finally:
-                    loop.close()
-            if loop.is_running():
-                loop = asyncio.new_event_loop()
-                try:
-                    return loop.run_until_complete(
-                        self.fetch_consistency_proof(
-                            node_id, shard_id, old_size, new_size
-                        )
-                    )
-                finally:
-                    loop.close()
-            return loop.run_until_complete(
+            return self._run_sync(
                 self.fetch_consistency_proof(node_id, shard_id, old_size, new_size)
             )
 
         return _fetch
 
 
-def create_witness_transport(endpoints: list[dict]) -> WitnessHTTPTransport:
+def create_witness_transport(endpoints: list[dict[str, Any]]) -> WitnessHTTPTransport:
     """
     Factory function to create a WitnessHTTPTransport from configuration.
 

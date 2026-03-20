@@ -27,15 +27,17 @@ async def test_fetch_sth_parses_response():
         return httpx.Response(200, json=sth.to_dict())
 
     mock_transport = httpx.MockTransport(handler)
-    transport = WitnessHTTPTransport([NodeEndpoint(node_id="node-1", base_url="https://node")])
-    await transport._client.aclose()
-    transport._client = httpx.AsyncClient(transport=mock_transport)
+    client = httpx.AsyncClient(transport=mock_transport)
+    transport = WitnessHTTPTransport(
+        [NodeEndpoint(node_id="node-1", base_url="https://node")], http_client=client
+    )
 
     try:
         fetched = await transport.fetch_sth("node-1", "shard-1")
         assert fetched == sth
     finally:
-        await transport._client.aclose()
+        await client.aclose()
+        await transport.close()
 
 
 @pytest.mark.asyncio
@@ -52,15 +54,17 @@ async def test_fetch_consistency_proof_parses_response():
         return httpx.Response(200, json=proof.to_dict())
 
     mock_transport = httpx.MockTransport(handler)
-    transport = WitnessHTTPTransport([NodeEndpoint(node_id="node-1", base_url="https://node")])
-    await transport._client.aclose()
-    transport._client = httpx.AsyncClient(transport=mock_transport)
+    client = httpx.AsyncClient(transport=mock_transport)
+    transport = WitnessHTTPTransport(
+        [NodeEndpoint(node_id="node-1", base_url="https://node")], http_client=client
+    )
 
     try:
         fetched = await transport.fetch_consistency_proof("node-1", "shard-2", 2, 4)
         assert fetched == proof
     finally:
-        await transport._client.aclose()
+        await client.aclose()
+        await transport.close()
 
 
 def test_fetcher_factories_work_with_log_monitor():
@@ -86,9 +90,10 @@ def test_fetcher_factories_work_with_log_monitor():
         return httpx.Response(404)
 
     mock_transport = httpx.MockTransport(handler)
-    transport = WitnessHTTPTransport([NodeEndpoint(node_id="node-1", base_url="https://node")])
-    asyncio.run(transport._client.aclose())
-    transport._client = httpx.AsyncClient(transport=mock_transport)
+    client = httpx.AsyncClient(transport=mock_transport)
+    transport = WitnessHTTPTransport(
+        [NodeEndpoint(node_id="node-1", base_url="https://node")], http_client=client
+    )
 
     try:
         monitor = LogMonitor(
@@ -100,4 +105,8 @@ def test_fetcher_factories_work_with_log_monitor():
         observations = list(monitor.observed())
         assert observations[0].sth.tree_size == 5
     finally:
-        asyncio.run(transport._client.aclose())
+        async def _close() -> None:
+            await client.aclose()
+            await transport.close()
+
+        asyncio.run(_close())
