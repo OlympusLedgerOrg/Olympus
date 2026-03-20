@@ -110,9 +110,13 @@ class WitnessHTTPTransport:
         def _fetch(node_id: str, shard_id: str) -> SignedTreeHead:
             try:
                 loop = asyncio.get_event_loop()
-                if loop.is_running():
-                    raise RuntimeError("Event loop is already running")
             except RuntimeError:
+                loop = asyncio.new_event_loop()
+                try:
+                    return loop.run_until_complete(self.fetch_sth(node_id, shard_id))
+                finally:
+                    loop.close()
+            if loop.is_running():
                 loop = asyncio.new_event_loop()
                 try:
                     return loop.run_until_complete(self.fetch_sth(node_id, shard_id))
@@ -137,9 +141,17 @@ class WitnessHTTPTransport:
         ) -> ConsistencyProof:
             try:
                 loop = asyncio.get_event_loop()
-                if loop.is_running():
-                    raise RuntimeError("Event loop is already running")
             except RuntimeError:
+                loop = asyncio.new_event_loop()
+                try:
+                    return loop.run_until_complete(
+                        self.fetch_consistency_proof(
+                            node_id, shard_id, old_size, new_size
+                        )
+                    )
+                finally:
+                    loop.close()
+            if loop.is_running():
                 loop = asyncio.new_event_loop()
                 try:
                     return loop.run_until_complete(

@@ -75,11 +75,11 @@ def test_fetcher_factories_work_with_log_monitor():
         epoch_id=2, tree_size=5, merkle_root=tree_5.get_root(), signing_key=signing_key
     )
     proof = generate_consistency_proof(3, 5, tree_5)
-    sth_responses = [sth_3, sth_5]
+    sth_sequence = [sth_3, sth_5]
 
     def handler(request: httpx.Request) -> httpx.Response:
         if request.url.path.startswith("/witness/sth/"):
-            response = sth_responses.pop(0)
+            response = sth_sequence.pop(0)
             return httpx.Response(200, json=response.to_dict())
         if request.url.path.startswith("/witness/consistency/"):
             return httpx.Response(200, json=proof.to_dict())
