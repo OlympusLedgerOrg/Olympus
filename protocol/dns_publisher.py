@@ -32,7 +32,9 @@ class DNSCheckpointRecord:
     DNS TXT record content for checkpoint publication.
 
     Format follows CT log DNS publication: checkpoint hash + sequence number
-    encoded in a machine-readable format.
+    encoded in a machine-readable format. The timestamp is retained on the
+    dataclass for internal consumers but is not included in the DNS TXT
+    serialization format.
     """
 
     sequence: int
@@ -310,7 +312,7 @@ class DNSBackend(ABC):
         Raises:
             DNSPublisherError: If the operation fails
         """
-        raise NotImplementedError
+        ...
 
     @abstractmethod
     def delete(self, name: str) -> None:
@@ -323,7 +325,7 @@ class DNSBackend(ABC):
         Raises:
             DNSPublisherError: If the operation fails
         """
-        raise NotImplementedError
+        ...
 
     def create_or_update_txt_record(self, fqdn: str, value: str) -> None:
         """
