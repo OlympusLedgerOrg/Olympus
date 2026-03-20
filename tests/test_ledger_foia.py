@@ -6,7 +6,7 @@ Covers: commit → ledger state, per-shard state, and proof retrieval.
 
 from __future__ import annotations
 
-import hashlib
+import blake3
 
 import pytest
 import pytest_asyncio
@@ -50,8 +50,8 @@ async def client(db_engine):
         yield ac
 
 
-def _h(s: str) -> str:
-    return hashlib.sha256(s.encode()).hexdigest()
+def _b3(s: str) -> str:
+    return blake3.blake3(s.encode()).hexdigest()
 
 
 @pytest.mark.asyncio
@@ -67,7 +67,7 @@ async def test_ledger_state_empty(client):
 @pytest.mark.asyncio
 async def test_ledger_state_after_commit(client):
     """State root changes after a commit is added."""
-    await client.post("/doc/commit", json={"doc_hash": _h("ledger state test")})
+    await client.post("/doc/commit", json={"doc_hash": _b3("ledger state test")})
     resp = await client.get("/ledger/state")
     data = resp.json()
     assert data["total_commits"] >= 1
@@ -77,7 +77,7 @@ async def test_ledger_state_after_commit(client):
 @pytest.mark.asyncio
 async def test_shard_state(client):
     """GET /ledger/shard/{shard_id} returns the state for the default shard."""
-    await client.post("/doc/commit", json={"doc_hash": _h("shard state test")})
+    await client.post("/doc/commit", json={"doc_hash": _b3("shard state test")})
     resp = await client.get("/ledger/shard/0x4F3A")
     assert resp.status_code == 200
     data = resp.json()
@@ -89,7 +89,7 @@ async def test_shard_state(client):
 @pytest.mark.asyncio
 async def test_proof_endpoint(client):
     """GET /ledger/proof/{commit_id} returns a proof for an existing commit."""
-    doc_hash = _h("proof endpoint test")
+    doc_hash = _b3("proof endpoint test")
     commit_resp = await client.post("/doc/commit", json={"doc_hash": doc_hash})
     commit_id = commit_resp.json()["commit_id"]
 

@@ -38,7 +38,7 @@ async def _next_display_id(db) -> str:
 async def file_request(body: RequestCreate, db: DBSession):
     """File a new public-records or FOIA request.
 
-    Computes a SHA-256 commit hash over the canonical request content,
+    Computes a BLAKE3 commit hash over the canonical request content,
     assigns the request to the default ledger shard, and calculates the
     statutory deadline.
 

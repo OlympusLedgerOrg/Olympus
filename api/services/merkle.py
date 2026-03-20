@@ -1,36 +1,16 @@
 """
 Binary Merkle-tree construction and inclusion-proof generation.
 
-Uses SHA-256 for internal nodes.  Lone nodes at any level are promoted
-without rehashing (CT-style promotion), matching the behaviour of RFC 6962.
-
-Note on algorithm choice
-------------------------
-The existing ``protocol.merkle`` module uses BLAKE3 (consistent with the
-protocol layer).  This service uses SHA-256 as specified in the FOIA backend
-problem statement.  A future integration milestone will reconcile the two.
-
-.. deprecated::
-   This module is **quarantined** pending migration to BLAKE3.  All new
-   callers should use ``protocol.hashes.merkle_root`` (BLAKE3) instead.
-   Existing FOIA tests may continue to exercise this service until the
-   migration is complete.
+Uses BLAKE3 for internal nodes via ``protocol.hashes``, consistent with the
+Olympus protocol layer.  Lone nodes at any level are promoted without
+rehashing (CT-style promotion), matching the behaviour of RFC 6962.
 """
 
 from __future__ import annotations
 
-import hashlib
-import warnings
 from dataclasses import dataclass, field
 
-# Emit a deprecation notice on first import so operators can audit usage.
-warnings.warn(
-    "api.services.merkle uses SHA-256, which diverges from the protocol-standard "
-    "BLAKE3 Merkle tree.  Use protocol.hashes.merkle_root for new code.  "
-    "See fix-04 in the pre-public audit remediation.",
-    DeprecationWarning,
-    stacklevel=2,
-)
+import blake3
 
 
 @dataclass
@@ -38,7 +18,7 @@ class MerkleRoot:
     """The root of a Merkle tree built from a set of leaf hashes.
 
     Attributes:
-        root_hash: Hex-encoded SHA-256 root of the tree.
+        root_hash: Hex-encoded BLAKE3 root of the tree.
         leaf_hashes: Sorted list of leaf hashes used to build the tree.
         levels: Internal structure — each element is one level of the tree,
                 starting from the leaves (index 0) up to the root (last index).
@@ -66,10 +46,10 @@ class MerkleProof:
     siblings: list[tuple[str, str]] = field(default_factory=list)
 
 
-def _sha256_pair(left: str, right: str) -> str:
-    """Compute SHA-256(left_bytes || right_bytes) over hex-encoded inputs."""
+def _blake3_pair(left: str, right: str) -> str:
+    """Compute BLAKE3(left_bytes || right_bytes) over hex-encoded inputs."""
     data = bytes.fromhex(left) + bytes.fromhex(right)
-    return hashlib.sha256(data).hexdigest()
+    return blake3.blake3(data).hexdigest()
 
 
 def build_tree(leaf_hashes: list[str]) -> MerkleRoot:
@@ -80,7 +60,7 @@ def build_tree(leaf_hashes: list[str]) -> MerkleRoot:
     (CT-style / RFC 6962 behaviour).
 
     Args:
-        leaf_hashes: Hex-encoded SHA-256 leaf hashes.
+        leaf_hashes: Hex-encoded BLAKE3 leaf hashes.
 
     Returns:
         A :class:`MerkleRoot` containing the computed root and internal levels.
@@ -100,7 +80,7 @@ def build_tree(leaf_hashes: list[str]) -> MerkleRoot:
             left = current[i]
             if i + 1 < len(current):
                 right = current[i + 1]
-                next_level.append(_sha256_pair(left, right))
+                next_level.append(_blake3_pair(left, right))
             else:
                 # CT-style lone-node promotion
                 next_level.append(left)
@@ -159,7 +139,7 @@ def verify_proof(leaf_hash: str, proof: MerkleProof, root: str) -> bool:
     current = leaf_hash
     for sibling_hash, direction in proof.siblings:
         if direction == "left":
-            current = _sha256_pair(sibling_hash, current)
+            current = _blake3_pair(sibling_hash, current)
         else:
-            current = _sha256_pair(current, sibling_hash)
+            current = _blake3_pair(current, sibling_hash)
     return current == root

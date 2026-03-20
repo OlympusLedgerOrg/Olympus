@@ -39,7 +39,7 @@ async def commit_document(body: DocCommitRequest, db: DBSession):
     Olympus stores hashes only — the underlying document is never submitted.
 
     Args:
-        body: Commit request containing the SHA-256 doc_hash.
+        body: Commit request containing the BLAKE3 doc_hash.
         db: Injected async database session.
 
     Returns:
