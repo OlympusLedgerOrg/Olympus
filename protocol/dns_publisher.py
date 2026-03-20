@@ -16,6 +16,7 @@ Based on RFC 6962 (Certificate Transparency) DNS publication patterns.
 from __future__ import annotations
 
 import logging
+from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from typing import Any
 
@@ -36,25 +37,21 @@ class DNSCheckpointRecord:
 
     sequence: int
     checkpoint_hash: str
-    timestamp: str
+    timestamp: str | None = None
 
     def to_txt_record(self) -> str:
         """
         Convert to DNS TXT record value.
 
         Returns:
-            DNS TXT record string in format: "oly-v1 seq=N hash=... ts=..."
+            DNS TXT record string in format: "oly-v1 seq=N hash=..."
 
         Example:
-            >>> record = DNSCheckpointRecord(
-            ...     sequence=42,
-            ...     checkpoint_hash="abc123",
-            ...     timestamp="2026-03-20T19:00:00Z"
-            ... )
+            >>> record = DNSCheckpointRecord(sequence=42, checkpoint_hash="abc123")
             >>> record.to_txt_record()
-            'oly-v1 seq=42 hash=abc123 ts=2026-03-20T19:00:00Z'
+            'oly-v1 seq=42 hash=abc123'
         """
-        return f"oly-v1 seq={self.sequence} hash={self.checkpoint_hash} ts={self.timestamp}"
+        return f"oly-v1 seq={self.sequence} hash={self.checkpoint_hash}"
 
     @classmethod
     def from_txt_record(cls, txt_value: str) -> DNSCheckpointRecord:
@@ -70,8 +67,9 @@ class DNSCheckpointRecord:
         Raises:
             ValueError: If the TXT record format is invalid
         """
-        parts = txt_value.split()
-        if len(parts) < 4 or parts[0] != "oly-v1":
+        normalized = txt_value.replace(";", " ")
+        parts = [part for part in normalized.split() if part]
+        if len(parts) < 3 or parts[0] not in {"oly-v1", "oly-chk"}:
             raise ValueError(f"Invalid DNS checkpoint record format: {txt_value}")
 
         parsed: dict[str, str] = {}
@@ -81,7 +79,7 @@ class DNSCheckpointRecord:
             key, value = part.split("=", 1)
             parsed[key] = value
 
-        if "seq" not in parsed or "hash" not in parsed or "ts" not in parsed:
+        if "seq" not in parsed or "hash" not in parsed:
             raise ValueError(f"Missing required fields in DNS checkpoint record: {txt_value}")
 
         try:
@@ -92,7 +90,7 @@ class DNSCheckpointRecord:
         return cls(
             sequence=sequence,
             checkpoint_hash=parsed["hash"],
-            timestamp=parsed["ts"],
+            timestamp=parsed.get("ts"),
         )
 
     @classmethod
@@ -111,6 +109,27 @@ class DNSCheckpointRecord:
             checkpoint_hash=checkpoint.checkpoint_hash,
             timestamp=checkpoint.timestamp,
         )
+
+
+def checkpoint_record_set(
+    checkpoint: SignedCheckpoint, domain: str, label: str | None = None
+) -> tuple[str, str]:
+    """
+    Build the DNS record set for a signed checkpoint.
+
+    Args:
+        checkpoint: Signed checkpoint to publish
+        domain: Base domain for checkpoint records
+        label: Optional label override (defaults to "seq-N")
+
+    Returns:
+        Tuple of (fqdn, txt_value) for DNS publication
+    """
+    record = DNSCheckpointRecord.from_checkpoint(checkpoint)
+    txt_value = record.to_txt_record()
+    record_label = label or f"seq-{checkpoint.sequence}"
+    fqdn = f"{record_label}.{domain}"
+    return fqdn, txt_value
 
 
 class DNSPublisher:
@@ -164,32 +183,46 @@ class DNSPublisher:
         """
         return f"latest.{self.domain}"
 
-    def publish_checkpoint(self, checkpoint: SignedCheckpoint) -> None:
+    def publish_checkpoint(self, checkpoint: SignedCheckpoint, label: str | None = None) -> str:
         """
         Publish a checkpoint to DNS.
 
-        Creates two TXT records:
-        1. seq-N.domain - Permanent record for this sequence
-        2. latest.domain - Updated pointer to most recent checkpoint
-
         Args:
             checkpoint: Signed checkpoint to publish
+            label: Optional label override (defaults to "seq-N")
 
         Raises:
             DNSPublisherError: If DNS update fails
+
+        Returns:
+            Fully qualified domain name for the published record
         """
-        record = DNSCheckpointRecord.from_checkpoint(checkpoint)
-        txt_value = record.to_txt_record()
+        fqdn, txt_value = checkpoint_record_set(checkpoint, self.domain, label)
+        self.backend.publish(fqdn, txt_value)
+        logger.info(f"Published checkpoint {checkpoint.sequence} to DNS: {fqdn}")
 
-        # Publish sequence-specific record
-        seq_subdomain = self.checkpoint_subdomain(checkpoint.sequence)
-        self.backend.create_or_update_txt_record(seq_subdomain, txt_value)
-        logger.info(f"Published checkpoint {checkpoint.sequence} to DNS: {seq_subdomain}")
+        if label is None:
+            latest_fqdn, latest_txt_value = checkpoint_record_set(
+                checkpoint, self.domain, label="latest"
+            )
+            self.backend.publish(latest_fqdn, latest_txt_value)
+            logger.info(f"Updated latest checkpoint pointer to sequence {checkpoint.sequence}")
 
-        # Update latest pointer
-        latest_subdomain = self.latest_subdomain()
-        self.backend.create_or_update_txt_record(latest_subdomain, txt_value)
-        logger.info(f"Updated latest checkpoint pointer to sequence {checkpoint.sequence}")
+        return fqdn
+
+    def delete_checkpoint(self, sequence: int) -> None:
+        """
+        Delete a checkpoint DNS record for a sequence.
+
+        Args:
+            sequence: Checkpoint sequence number to delete
+
+        Raises:
+            DNSPublisherError: If DNS deletion fails
+        """
+        subdomain = self.checkpoint_subdomain(sequence)
+        self.backend.delete(subdomain)
+        logger.info(f"Deleted checkpoint {sequence} DNS record: {subdomain}")
 
     def query_checkpoint(self, sequence: int) -> DNSCheckpointRecord | None:
         """
@@ -205,6 +238,8 @@ class DNSPublisher:
             ValueError: If the DNS record format is invalid
         """
         subdomain = self.checkpoint_subdomain(sequence)
+        if not hasattr(self.backend, "query_txt_record"):
+            raise DNSPublisherError("DNS backend does not support TXT record queries")
         txt_values = self.backend.query_txt_record(subdomain)
 
         if not txt_values:
@@ -231,6 +266,8 @@ class DNSPublisher:
             ValueError: If the DNS record format is invalid
         """
         subdomain = self.latest_subdomain()
+        if not hasattr(self.backend, "query_txt_record"):
+            raise DNSPublisherError("DNS backend does not support TXT record queries")
         txt_values = self.backend.query_txt_record(subdomain)
 
         if not txt_values:
@@ -252,13 +289,40 @@ class DNSPublisherError(Exception):
     pass
 
 
-class DNSBackend:
+class DNSBackend(ABC):
     """
     Abstract base class for DNS backend implementations.
 
     Concrete implementations should provide methods for creating/updating
     TXT records and querying existing records.
     """
+
+    @abstractmethod
+    def publish(self, name: str, txt: str) -> None:
+        """
+        Publish a DNS TXT record.
+
+        Args:
+            name: Fully qualified domain name
+            txt: TXT record value
+
+        Raises:
+            DNSPublisherError: If the operation fails
+        """
+        raise NotImplementedError
+
+    @abstractmethod
+    def delete(self, name: str) -> None:
+        """
+        Delete a DNS TXT record.
+
+        Args:
+            name: Fully qualified domain name
+
+        Raises:
+            DNSPublisherError: If the operation fails
+        """
+        raise NotImplementedError
 
     def create_or_update_txt_record(self, fqdn: str, value: str) -> None:
         """
@@ -271,7 +335,7 @@ class DNSBackend:
         Raises:
             DNSPublisherError: If the operation fails
         """
-        raise NotImplementedError
+        self.publish(fqdn, value)
 
     def query_txt_record(self, fqdn: str) -> list[str]:
         """
@@ -298,18 +362,28 @@ class DryRunBackend(DNSBackend):
 
     def __init__(self) -> None:
         """Initialize dry-run backend with in-memory storage."""
-        self.records: dict[str, list[str]] = {}
+        self.records: dict[str, str] = {}
 
-    def create_or_update_txt_record(self, fqdn: str, value: str) -> None:
+    def publish(self, name: str, txt: str) -> None:
         """
         Log TXT record creation without making DNS changes.
 
         Args:
-            fqdn: Fully qualified domain name
-            value: TXT record value
+            name: Fully qualified domain name
+            txt: TXT record value
         """
-        logger.info(f"[DRY RUN] Would create/update TXT record: {fqdn} -> {value}")
-        self.records[fqdn] = [value]
+        logger.info(f"[DRY RUN] Would publish TXT record: {name} -> {txt}")
+        self.records[name] = txt
+
+    def delete(self, name: str) -> None:
+        """
+        Log TXT record deletion without making DNS changes.
+
+        Args:
+            name: Fully qualified domain name
+        """
+        logger.info(f"[DRY RUN] Would delete TXT record: {name}")
+        self.records.pop(name, None)
 
     def query_txt_record(self, fqdn: str) -> list[str]:
         """
@@ -321,7 +395,8 @@ class DryRunBackend(DNSBackend):
         Returns:
             List of TXT record values from in-memory storage
         """
-        records = self.records.get(fqdn, [])
+        record = self.records.get(fqdn)
+        records = [record] if record is not None else []
         logger.info(f"[DRY RUN] Query TXT record: {fqdn} -> {records}")
         return records
 
