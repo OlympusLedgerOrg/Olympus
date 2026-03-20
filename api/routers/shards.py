@@ -430,8 +430,8 @@ async def alert_smt_divergence(
         remote_root: Hex-encoded SMT root reported by the remote peer.
         remote_node: Identifier of the remote peer.
 
-        Returns:
-            Confirmation that the divergence event was recorded.
+    Returns:
+        Confirmation that the divergence event was recorded.
     """
     _authorize_and_rate_limit(request, action="verify")
     record_smt_divergence(
