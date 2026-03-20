@@ -34,7 +34,8 @@ class DNSCheckpointRecord:
     Format follows CT log DNS publication: checkpoint hash + sequence number
     encoded in a machine-readable format. The timestamp is retained on the
     dataclass for internal consumers but is not included in the DNS TXT
-    serialization format.
+    serialization format; when parsing DNS records without timestamps it
+    defaults to an empty string.
     """
 
     sequence: int
