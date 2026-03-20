@@ -8,10 +8,11 @@ GET  /appeals/{id} — single appeal detail
 
 from __future__ import annotations
 
-import hashlib
 import json
 import logging
 from datetime import datetime, timezone
+
+import blake3
 
 from fastapi import APIRouter, HTTPException, status
 from sqlalchemy import select
@@ -27,7 +28,7 @@ router = APIRouter(prefix="/appeals", tags=["appeals"])
 
 
 def _hash_appeal(request_id: str, grounds: str, statement: str, filed_at: datetime) -> str:
-    """Compute a deterministic SHA-256 hash of the appeal content."""
+    """Compute a deterministic BLAKE3 hash of the appeal content."""
     canonical = json.dumps(
         {
             "filed_at": filed_at.isoformat(),
@@ -39,7 +40,7 @@ def _hash_appeal(request_id: str, grounds: str, statement: str, filed_at: dateti
         separators=(",", ":"),
         ensure_ascii=True,
     )
-    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+    return blake3.blake3(canonical.encode("utf-8")).hexdigest()
 
 
 @router.post("", response_model=AppealResponse, status_code=status.HTTP_201_CREATED)

@@ -55,7 +55,7 @@ class RequestPriority(str, enum.Enum):
 class PublicRecordsRequest(Base):
     """A public-records or FOIA request anchored to the Olympus ledger.
 
-    The ``commit_hash`` field contains the SHA-256 of the canonical request
+    The ``commit_hash`` field contains the BLAKE3 hash of the canonical request
     content at filing time, giving a tamper-evident record of the original
     request.  Olympus stores hashes only — never the underlying documents.
 
@@ -75,7 +75,7 @@ class PublicRecordsRequest(Base):
         filed_at: Timestamp the request was filed (UTC).
         deadline: Computed statutory deadline (UTC).
         fulfilled_at: Timestamp of fulfillment, if applicable.
-        commit_hash: SHA-256 hex of the canonical request at filing time.
+        commit_hash: BLAKE3 hex of the canonical request at filing time.
         shard_id: Ledger shard this request is anchored to.
     """
 

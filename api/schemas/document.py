@@ -12,7 +12,7 @@ from pydantic import BaseModel, Field
 class DocCommitRequest(BaseModel):
     """Request body for POST /doc/commit."""
 
-    doc_hash: str = Field(..., description="SHA-256 hex hash of the document.")
+    doc_hash: str = Field(..., description="BLAKE3 hex hash of the document.")
     request_id: str | None = Field(None, description="Optional FK to a PublicRecordsRequest.")
     embargo_until: datetime | None = Field(None, description="Optional embargo expiry timestamp.")
     is_multi_recipient: bool = Field(False, description="True if multiple recipients share this commit.")

@@ -6,7 +6,7 @@ Covers: commit → ledger state, per-shard state, and proof retrieval.
 
 from __future__ import annotations
 
-import hashlib
+import blake3
 
 import pytest
 import pytest_asyncio
@@ -51,7 +51,7 @@ async def client(db_engine):
 
 
 def _h(s: str) -> str:
-    return hashlib.sha256(s.encode()).hexdigest()
+    return blake3.blake3(s.encode()).hexdigest()
 
 
 @pytest.mark.asyncio

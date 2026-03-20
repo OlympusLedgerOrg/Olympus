@@ -48,7 +48,7 @@ async def compute_state_root(shard_id: str, db: AsyncSession) -> str:
         db: Async SQLAlchemy session.
 
     Returns:
-        Hex-encoded SHA-256 Merkle root, or 64 zeros if the shard is empty.
+        Hex-encoded BLAKE3 Merkle root, or 64 zeros if the shard is empty.
     """
     # Import here to avoid circular imports at module level
     from api.models.document import DocCommit  # noqa: PLC0415

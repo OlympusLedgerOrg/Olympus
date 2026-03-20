@@ -6,7 +6,7 @@ Uses an in-memory SQLite database via pytest fixtures.
 
 from __future__ import annotations
 
-import hashlib
+import blake3
 
 import pytest
 import pytest_asyncio
@@ -51,7 +51,7 @@ async def client(db_engine):
 
 
 def _sha256(s: str) -> str:
-    return hashlib.sha256(s.encode()).hexdigest()
+    return blake3.blake3(s.encode()).hexdigest()
 
 
 @pytest.mark.asyncio

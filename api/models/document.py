@@ -27,7 +27,7 @@ class DocCommit(Base):
     Attributes:
         id: UUID primary key.
         request_id: Optional FK to the originating PublicRecordsRequest.
-        doc_hash: SHA-256 hex hash of the document content.
+        doc_hash: BLAKE3 hex hash of the document content.
         commit_id: Unique ``0x``-prefixed hex commit identifier.
         epoch_timestamp: UTC timestamp of the commitment.
         shard_id: Ledger shard this commit belongs to.

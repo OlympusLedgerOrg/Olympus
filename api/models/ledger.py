@@ -24,7 +24,7 @@ class MerkleNode(Base):
         shard_id: The ledger shard this node belongs to.
         level: 0 = leaf, increasing = parent.
         position: Left-to-right position at this level.
-        hash: Hex-encoded SHA-256 hash of this node.
+        hash: Hex-encoded BLAKE3 hash of this node.
         left_child_id: FK to the left child node.
         right_child_id: FK to the right child node.
         created_at: When this node was persisted.

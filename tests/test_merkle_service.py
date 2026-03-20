@@ -7,7 +7,7 @@ using known inputs.
 
 from __future__ import annotations
 
-import hashlib
+import blake3
 
 import pytest
 
@@ -15,8 +15,8 @@ from api.services.merkle import MerkleProof, build_tree, generate_proof, verify_
 
 
 def _h(s: str) -> str:
-    """Hex SHA-256 of a UTF-8 string."""
-    return hashlib.sha256(s.encode()).hexdigest()
+    """Hex BLAKE3 of a UTF-8 string."""
+    return blake3.blake3(s.encode()).hexdigest()
 
 
 class TestBuildTree:
@@ -31,7 +31,7 @@ class TestBuildTree:
         tree = build_tree([a, b])
         # Leaves are sorted; compute expected root manually
         sorted_leaves = sorted([a, b])
-        expected = hashlib.sha256(bytes.fromhex(sorted_leaves[0]) + bytes.fromhex(sorted_leaves[1])).hexdigest()
+        expected = blake3.blake3(bytes.fromhex(sorted_leaves[0]) + bytes.fromhex(sorted_leaves[1])).hexdigest()
         assert tree.root_hash == expected
 
     def test_four_leaves(self):

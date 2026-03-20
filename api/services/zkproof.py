@@ -28,7 +28,7 @@ def generate_proof_stub(commit_id: str, doc_hash: str) -> dict:
 
     Args:
         commit_id: Hex commit identifier (e.g. ``"0xc7d4a2f8e1b3095d"``).
-        doc_hash: SHA-256 hex hash of the committed document.
+        doc_hash: BLAKE3 hex hash of the committed document.
 
     Returns:
         A dict shaped like a snarkjs Groth16 proof JSON export.

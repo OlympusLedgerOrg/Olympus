@@ -2,7 +2,7 @@
 Appeal ORM model.
 
 An appeal challenges an agency response (or non-response) to a public-records
-request.  Each appeal is anchored to the ledger via a SHA-256 commit hash.
+request.  Each appeal is anchored to the ledger via a BLAKE3 commit hash.
 """
 
 from __future__ import annotations
@@ -51,7 +51,7 @@ class Appeal(Base):
         statement: Narrative statement supporting the appeal.
         filed_at: UTC timestamp of filing.
         status: Current review status.
-        commit_hash: SHA-256 hex of the canonical appeal at filing time.
+        commit_hash: BLAKE3 hex of the canonical appeal at filing time.
     """
 
     __tablename__ = "appeals"
