@@ -27,6 +27,7 @@ from api.ingest import router as ingest_router
 from api.models import Base  # noqa: F401 — ensures all models are registered
 from api.routers import agencies, appeals, documents, keys, ledger, requests as requests_router
 from api.routers.shards import router as shards_router
+from api.routers.witness import router as witness_router
 from api.sth import router as sth_router
 
 
@@ -95,6 +96,7 @@ def create_app() -> FastAPI:
     app.include_router(shards_router)
     app.include_router(ingest_router)
     app.include_router(sth_router)
+    app.include_router(witness_router)
 
     @app.get("/", tags=["health"])
     async def root() -> dict[str, Any]:
