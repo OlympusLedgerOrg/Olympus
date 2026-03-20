@@ -238,8 +238,6 @@ class DNSPublisher:
             ValueError: If the DNS record format is invalid
         """
         subdomain = self.checkpoint_subdomain(sequence)
-        if not hasattr(self.backend, "query_txt_record"):
-            raise DNSPublisherError("DNS backend does not support TXT record queries")
         txt_values = self.backend.query_txt_record(subdomain)
 
         if not txt_values:
@@ -266,8 +264,6 @@ class DNSPublisher:
             ValueError: If the DNS record format is invalid
         """
         subdomain = self.latest_subdomain()
-        if not hasattr(self.backend, "query_txt_record"):
-            raise DNSPublisherError("DNS backend does not support TXT record queries")
         txt_values = self.backend.query_txt_record(subdomain)
 
         if not txt_values:
@@ -327,6 +323,8 @@ class DNSBackend(ABC):
     def create_or_update_txt_record(self, fqdn: str, value: str) -> None:
         """
         Create or update a DNS TXT record.
+
+        This is a compatibility wrapper around publish() for legacy callers.
 
         Args:
             fqdn: Fully qualified domain name

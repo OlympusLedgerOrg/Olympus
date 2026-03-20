@@ -38,6 +38,21 @@ def test_dns_checkpoint_record_legacy_format() -> None:
     assert parsed.checkpoint_hash == "def456"
 
 
+def test_dns_checkpoint_record_normalizes_separators() -> None:
+    parsed = DNSCheckpointRecord.from_txt_record("oly-chk  seq=4;;hash=abc123;;;")
+
+    assert parsed.sequence == 4
+    assert parsed.checkpoint_hash == "abc123"
+
+
+def test_dns_checkpoint_record_from_checkpoint_keeps_timestamp() -> None:
+    checkpoint = _checkpoint(5)
+    record = DNSCheckpointRecord.from_checkpoint(checkpoint)
+
+    assert record.timestamp == checkpoint.timestamp
+    assert record.to_txt_record() == "oly-v1 seq=5 hash=hash-5"
+
+
 def test_dns_publisher_publish_and_delete() -> None:
     backend = DryRunBackend()
     publisher = DNSPublisher("checkpoints.example.com", backend)
