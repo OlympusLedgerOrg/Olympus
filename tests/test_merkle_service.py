@@ -48,9 +48,10 @@ class TestBuildTree:
 
     def test_same_order_is_deterministic(self):
         """Same insertion order always produces the same root."""
-        leaves = [_b3(s) for s in ["x", "y", "z"]]
-        tree1 = build_tree(leaves)
-        tree2 = build_tree(list(leaves))
+        leaves1 = [_b3(s) for s in ["x", "y", "z"]]
+        leaves2 = [_b3(s) for s in ["x", "y", "z"]]
+        tree1 = build_tree(leaves1)
+        tree2 = build_tree(leaves2)
         assert tree1.root_hash == tree2.root_hash
 
     def test_empty_raises(self):
