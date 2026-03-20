@@ -12,7 +12,11 @@ from pydantic import BaseModel, Field
 class DocCommitRequest(BaseModel):
     """Request body for POST /doc/commit."""
 
-    doc_hash: str = Field(..., description="BLAKE3 hex hash of the document.")
+    doc_hash: str = Field(
+        ...,
+        pattern=r"^[0-9a-f]{64}$",
+        description="BLAKE3 hex hash of the document (64 lowercase hex characters).",
+    )
     request_id: str | None = Field(None, description="Optional FK to a PublicRecordsRequest.")
     embargo_until: datetime | None = Field(None, description="Optional embargo expiry timestamp.")
     is_multi_recipient: bool = Field(False, description="True if multiple recipients share this commit.")
@@ -34,8 +38,16 @@ class DocVerifyRequest(BaseModel):
     At least one of ``commit_id`` or ``doc_hash`` must be provided.
     """
 
-    commit_id: str | None = None
-    doc_hash: str | None = None
+    commit_id: str | None = Field(
+        None,
+        pattern=r"^0x[0-9a-f]{40}$",
+        description="Hex commit identifier (0x + 40 hex characters).",
+    )
+    doc_hash: str | None = Field(
+        None,
+        pattern=r"^[0-9a-f]{64}$",
+        description="BLAKE3 hex hash to look up (64 lowercase hex characters).",
+    )
 
 
 class DocVerifyResponse(BaseModel):

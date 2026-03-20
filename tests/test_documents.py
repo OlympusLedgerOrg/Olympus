@@ -95,7 +95,7 @@ async def test_verify_by_doc_hash(client):
 @pytest.mark.asyncio
 async def test_verify_nonexistent_returns_false(client):
     """Verifying a non-existent commit should return verified: false, not 404."""
-    resp = await client.post("/doc/verify", json={"commit_id": "0xdeadbeef00000000dead"})
+    resp = await client.post("/doc/verify", json={"commit_id": "0xdeadbeef00000000deadbeef00000000deadbeef"})
     assert resp.status_code == 200
     assert resp.json()["verified"] is False
 
@@ -142,3 +142,11 @@ async def test_verify_includes_zk_proof_stub(client):
     assert data["zk_proof"] is not None
     assert data["zk_proof"]["protocol"] == "groth16"
     assert "STUB" in data["zk_proof"]["note"]
+
+
+@pytest.mark.asyncio
+async def test_commit_rejects_invalid_hash(client):
+    """POST /doc/commit with a non-hex or wrong-length hash should return 422."""
+    for bad_hash in ["hello", "ZZZZ", "abc", "A" * 64, ""]:
+        resp = await client.post("/doc/commit", json={"doc_hash": bad_hash})
+        assert resp.status_code == 422, f"Expected 422 for doc_hash={bad_hash!r}, got {resp.status_code}"

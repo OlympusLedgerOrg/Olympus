@@ -83,6 +83,6 @@ async def revoke_credential(credential_id: str, db: DBSession):
         )
 
     cred.revoked_at = datetime.now(timezone.utc)
-    cred.commit_id = generate_commit_id()  # Anchor the revocation event
+    cred.revocation_commit_id = generate_commit_id()  # Anchor the revocation event
     await db.commit()
     logger.info("Revoked credential %s", credential_id)

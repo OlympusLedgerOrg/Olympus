@@ -48,8 +48,6 @@ async def commit_document(body: DocCommitRequest, db: DBSession):
     commit_id = generate_commit_id()
     shard_id = DEFAULT_SHARD_ID
 
-    merkle_root = await compute_state_root(shard_id, db)
-
     commit = DocCommit(
         doc_hash=body.doc_hash,
         commit_id=commit_id,
@@ -57,16 +55,17 @@ async def commit_document(body: DocCommitRequest, db: DBSession):
         request_id=body.request_id,
         embargo_until=body.embargo_until,
         is_multi_recipient=body.is_multi_recipient,
-        merkle_root=merkle_root if merkle_root != "0" * 64 else None,
+        merkle_root=None,
     )
     db.add(commit)
-    await db.commit()
-    await db.refresh(commit)
+    await db.flush()  # Assign PK and make visible to queries within this txn
 
-    # Rebuild tree now that the new commit is persisted
+    # Compute the root now that the new hash is in the session
     new_root = await compute_state_root(shard_id, db)
     commit.merkle_root = new_root
+
     await db.commit()
+    await db.refresh(commit)
 
     logger.info("Committed doc_hash=%s as commit_id=%s", body.doc_hash, commit_id)
 
