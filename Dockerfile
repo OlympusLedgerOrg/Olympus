@@ -46,10 +46,13 @@ COPY --chown=olympus:olympus ui /app/ui
 COPY --chown=olympus:olympus schemas /app/schemas
 COPY --chown=olympus:olympus alembic /app/alembic
 COPY --chown=olympus:olympus alembic.ini /app/alembic.ini
+COPY --chown=olympus:olympus scripts /app/scripts
 
 # Security: Set explicit file permissions (read-only for all, directories executable)
+# Make startup script executable (555) after the blanket read-only pass.
 RUN find /app -type f -exec chmod 444 {} \; \
-    && find /app -type d -exec chmod 555 {} \;
+    && find /app -type d -exec chmod 555 {} \; \
+    && chmod 555 /app/scripts/startup.sh
 
 # Security: Switch to non-root user
 USER olympus

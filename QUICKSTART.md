@@ -322,6 +322,60 @@ $env:DATABASE_URL="postgresql://olympus:olympus@localhost:5432/olympus"
 $env:TEST_DATABASE_URL=$env:DATABASE_URL
 ```
 
+#### Windows Docker Setup (Full Stack)
+
+Use `curl.exe` (not the PowerShell `curl` alias) and `docker compose` (V2 CLI):
+
+```powershell
+# 1. Copy the example env file (use LF line endings — see note above)
+copy .env.example .env
+
+# 2. Start all services
+docker compose up -d
+
+# 3. Verify containers are running
+docker compose ps
+
+# 4. Check API health (use curl.exe to avoid PowerShell's Invoke-WebRequest alias)
+curl.exe http://localhost:8000/health
+
+# 5. Confirm database tables were created
+docker compose exec db psql -U olympus -d olympus -c "\dt"
+```
+
+The `app` container runs `scripts/startup.sh` on boot, which:
+1. Waits for PostgreSQL to accept connections.
+2. Runs Alembic migrations and prints results.
+3. Starts the API server only if migrations succeed.
+
+#### Troubleshooting database not initializing
+
+If `curl.exe http://localhost:8000/health` returns `"database":"not_initialized"`:
+
+```powershell
+# Check app container logs for migration errors
+docker compose logs app
+
+# Re-run migrations manually
+docker compose exec app python -m alembic upgrade head
+
+# Verify the database has the expected tables
+docker compose exec db psql -U olympus -d olympus -c "\dt"
+
+# Full clean restart (removes the postgres volume)
+docker compose down -v
+docker compose up -d
+```
+
+Common causes on Windows:
+- **CRLF line endings in `.env`**: Open `.env` in your editor and convert line endings to LF
+  (in VS Code: click `CRLF` in the bottom-right status bar and change to `LF`; in other
+  editors look for an "End of Line" or "Line Endings" setting). Then `docker compose down -v && docker compose up -d`.
+- **Port 5432 already in use**: A local PostgreSQL instance may be binding the port. Stop it
+  or change the `db` port mapping in `docker-compose.yml`.
+- **Docker Desktop not running**: Make sure Docker Desktop is started before running
+  `docker compose` commands.
+
 ### Three-node federation demo
 
 For a Dockerized federation-style deployment with three independent API nodes and a shared observer UI, use the included `docker-compose.federation.yml`:
