@@ -130,6 +130,12 @@ async def submit_observation(request: WitnessAnnounceRequest) -> WitnessAnnounce
     witness API-key scope) before exposing it publicly. Without authentication
     an adversary can flood fake "no-conflict" announcements to suppress a real
     split-view detection.  See api/auth.py for the RequireAPIKey dependency.
+    Adding the dependency is a one-line change:
+        async def submit_observation(request: …, _key: RequireAPIKey):
+    Before doing so, record an ADR that decides whether witness nodes share
+    the same OLYMPUS_FOIA_API_KEYS key pool as ingest clients or use a
+    separate credential scope — the answer affects key rotation and audit
+    surface.
     """
     key = f"{request.origin}:{request.checkpoint.sequence}"
     if key in _observations:
@@ -141,7 +147,11 @@ async def submit_observation(request: WitnessAnnounceRequest) -> WitnessAnnounce
             ),
         )
 
-    announcement = WitnessAnnouncement.model_validate(request.model_dump())
+    # Use an explicit constructor rather than model_validate(request.model_dump())
+    # so that future fields added to WitnessAnnouncement (e.g. a server-assigned
+    # received_at for replay-resistance) are not silently dropped when the two
+    # schemas diverge.
+    announcement = WitnessAnnouncement(origin=request.origin, checkpoint=request.checkpoint)
     _observations[key] = announcement
 
     logger.info(
