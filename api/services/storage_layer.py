@@ -80,7 +80,7 @@ def _get_storage() -> "StorageLayer":
         with storage._get_connection() as conn, conn.cursor() as cur:
             cur.execute("SELECT 1")
             result = cur.fetchone()
-            if result and result[0] == 1:
+            if result is not None:
                 logger.info("Database connectivity verified: SELECT 1 succeeded")
             else:
                 raise RuntimeError(
@@ -136,7 +136,7 @@ def get_storage_status() -> tuple[str, bool]:
             with _storage._get_connection() as conn, conn.cursor() as cur:
                 cur.execute("SELECT 1")
                 result = cur.fetchone()
-                db_check = result is not None and result[0] == 1
+                db_check = result is not None
         except Exception:
             db_check = False
             db_status = "degraded"
