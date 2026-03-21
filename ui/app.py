@@ -1127,6 +1127,70 @@ def proxy_verify_record(display_id: str):
         return JSONResponse(status_code=502, content={"error": str(exc)})
 
 
+# ── User-Friendly Ledger Proxies ─────────────────────────────────────────────
+
+
+@app.get("/ledger/activity")
+async def proxy_ledger_activity(request: Request):
+    """Proxy GET /ledger/activity to the unified API."""
+    _require_debug_ui()
+    try:
+        query = request.url.query
+        path = f"/ledger/activity?{query}" if query else "/ledger/activity"
+        data = _fetch_json(path)
+        return JSONResponse(data)
+    except HTTPError as exc:
+        return JSONResponse(status_code=exc.code, content={"error": str(exc)})
+    except (URLError, Exception) as exc:
+        return JSONResponse(status_code=502, content={"error": str(exc)})
+
+
+@app.post("/ledger/ingest/simple")
+async def proxy_ledger_ingest_simple(request: Request):
+    """Proxy POST /ledger/ingest/simple to the unified API (multipart)."""
+    _require_debug_ui()
+    try:
+        body = await request.body()
+        content_type = request.headers.get("content-type", "")
+        async with httpx.AsyncClient(timeout=60.0) as client:
+            resp = await client.post(
+                f"{API_BASE}/ledger/ingest/simple",
+                content=body,
+                headers={"content-type": content_type},
+            )
+            resp.raise_for_status()
+            return JSONResponse(resp.json())
+    except httpx.HTTPStatusError as exc:
+        return JSONResponse(status_code=exc.response.status_code, content=exc.response.json())
+    except httpx.RequestError as exc:
+        return JSONResponse(status_code=502, content={"error": str(exc)})
+    except Exception as exc:
+        return JSONResponse(status_code=500, content={"error": str(exc)})
+
+
+@app.post("/ledger/verify/simple")
+async def proxy_ledger_verify_simple(request: Request):
+    """Proxy POST /ledger/verify/simple to the unified API (multipart or form)."""
+    _require_debug_ui()
+    try:
+        body = await request.body()
+        content_type = request.headers.get("content-type", "")
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            resp = await client.post(
+                f"{API_BASE}/ledger/verify/simple",
+                content=body,
+                headers={"content-type": content_type},
+            )
+            resp.raise_for_status()
+            return JSONResponse(resp.json())
+    except httpx.HTTPStatusError as exc:
+        return JSONResponse(status_code=exc.response.status_code, content=exc.response.json())
+    except httpx.RequestError as exc:
+        return JSONResponse(status_code=502, content={"error": str(exc)})
+    except Exception as exc:
+        return JSONResponse(status_code=500, content={"error": str(exc)})
+
+
 # ── Oracle AI Endpoints ──────────────────────────────────────────────────
 
 

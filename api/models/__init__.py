@@ -13,6 +13,7 @@ from api.models.base import Base
 from api.models.credential import KeyCredential
 from api.models.document import DocCommit
 from api.models.ledger import MerkleNode
+from api.models.ledger_activity import LedgerActivity
 from api.models.request import PublicRecordsRequest
 
 
@@ -22,6 +23,7 @@ __all__ = [
     "Appeal",
     "DocCommit",
     "KeyCredential",
+    "LedgerActivity",
     "MerkleNode",
     "PublicRecordsRequest",
 ]
