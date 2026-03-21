@@ -108,6 +108,7 @@ async def list_checkpoints(
     return sorted_announcements[offset : offset + limit]
 
 
+# TODO: auth gate — see docstring
 @router.post(
     "/observations",
     response_model=WitnessAnnounceResponse,

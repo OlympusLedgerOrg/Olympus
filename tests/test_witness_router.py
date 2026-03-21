@@ -223,7 +223,33 @@ def test_gossip_ignores_single_origin_at_sequence() -> None:
     assert resp.json() == []
 
 
-def test_gossip_multiple_sequences_only_flags_conflicts() -> None:
+def test_gossip_conflict_with_128_char_hash() -> None:
+    # 128 hex chars (max boundary) — conflict detection must still fire correctly.
+    hash_x = "a1" * 64  # 128-char lowercase hex
+    hash_y = "b2" * 64  # 128-char lowercase hex, different value
+    client.post("/witness/observations", json=_announcement_payload("origin-x", 20, hash_x))
+    client.post("/witness/observations", json=_announcement_payload("origin-y", 20, hash_y))
+    resp = client.get("/witness/gossip")
+    assert resp.status_code == 200
+    conflicts = resp.json()
+    assert len(conflicts) == 1
+    assert conflicts[0]["sequence"] == 20
+    assert set(conflicts[0]["conflicting_origins"]) == {"origin-x", "origin-y"}
+    assert conflicts[0]["hashes"]["origin-x"] == hash_x
+    assert conflicts[0]["hashes"]["origin-y"] == hash_y
+
+
+def test_gossip_no_conflict_when_128_char_hashes_match() -> None:
+    # Two origins at same sequence with identical 128-char hashes → no conflict.
+    hash_val = "c3" * 64
+    client.post("/witness/observations", json=_announcement_payload("origin-p", 30, hash_val))
+    client.post("/witness/observations", json=_announcement_payload("origin-q", 30, hash_val))
+    resp = client.get("/witness/gossip")
+    assert resp.status_code == 200
+    assert resp.json() == []
+
+
+
     hash_a = "aa" * 32
     hash_b = "bb" * 32
     # Sequence 1: conflict
