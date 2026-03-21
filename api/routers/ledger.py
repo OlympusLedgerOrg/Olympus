@@ -1,29 +1,39 @@
 """
 Ledger state and proof endpoints.
 
-GET /ledger/state           — global state root
-GET /ledger/shard/{shard_id} — per-shard state
-GET /ledger/proof/{commit_id} — inclusion proof for a commit
+GET  /ledger/state                — global state root
+GET  /ledger/shard/{shard_id}     — per-shard state
+GET  /ledger/proof/{commit_id}    — inclusion proof for a commit
+GET  /ledger/activity             — human-readable activity feed
+POST /ledger/ingest/simple        — user-friendly document ingestion
+POST /ledger/verify/simple        — user-friendly document verification
 """
 
 from __future__ import annotations
 
 import logging
 
-from fastapi import APIRouter, HTTPException, status
+from fastapi import APIRouter, File, Form, HTTPException, Query, UploadFile, status
 from sqlalchemy import func, select
 
-from api.auth import RateLimit
+from api.auth import RateLimit, RequireAPIKey
 from api.deps import DBSession
 from api.models.document import DocCommit
+from api.models.ledger_activity import LedgerActivity
 from api.schemas.ledger import (
+    ActivityFeedResponse,
+    ActivityItem,
     CommitSummary,
     LedgerStateResponse,
     ProofResponse,
     ShardStateResponse,
+    SimpleIngestionResponse,
+    SimpleVerificationResponse,
 )
+from api.services.ingestion import ingest_document
 from api.services.merkle import MerkleProof, build_tree, generate_proof
 from api.services.shard import compute_state_root
+from api.services.verification import verify_by_commit_id, verify_by_doc_hash, verify_by_file
 from api.services.zkproof import generate_proof_stub
 
 
@@ -160,3 +170,152 @@ async def get_commit_proof(commit_id: str, db: DBSession, _rl: RateLimit):
         shard_id=commit.shard_id,
         epoch=commit.epoch_timestamp,
     )
+
+
+# ── User-friendly endpoints ───────────────────────────────────────────────────
+
+
+@router.get("/activity", response_model=ActivityFeedResponse)
+async def get_ledger_activity(
+    db: DBSession,
+    _rl: RateLimit,
+    limit: int = Query(50, ge=1, le=200),
+    activity_type: str | None = Query(None),
+) -> ActivityFeedResponse:
+    """Return a human-readable feed of recent ledger events.
+
+    Returns plain-English descriptions of what has been happening in the
+    ledger — document submissions, verifications, and errors — suitable
+    for display to non-technical users.
+
+    Args:
+        db: Injected async database session.
+        limit: Maximum number of items to return (1–200, default 50).
+        activity_type: Optional filter by activity type
+            (e.g. ``"DOCUMENT_SUBMITTED"``, ``"VERIFICATION_SUCCESS"``).
+
+    Returns:
+        :class:`ActivityFeedResponse` with items ordered newest first.
+    """
+    query = select(LedgerActivity).order_by(LedgerActivity.timestamp.desc())
+    if activity_type:
+        query = query.where(LedgerActivity.activity_type == activity_type.upper())
+
+    count_query = select(func.count()).select_from(LedgerActivity)
+    if activity_type:
+        count_query = count_query.where(LedgerActivity.activity_type == activity_type.upper())
+
+    result = await db.execute(query.limit(limit))
+    activities = list(result.scalars().all())
+
+    count_result = await db.execute(count_query)
+    total = count_result.scalar() or 0
+
+    return ActivityFeedResponse(
+        items=[
+            ActivityItem(
+                id=a.id,
+                timestamp=a.timestamp,
+                activity_type=a.activity_type,
+                title=a.title,
+                description=a.description,
+                related_commit_id=a.related_commit_id,
+                related_request_id=a.related_request_id,
+                user_friendly_status=a.user_friendly_status,
+            )
+            for a in activities
+        ],
+        total=total,
+    )
+
+
+@router.post("/ingest/simple", response_model=SimpleIngestionResponse)
+async def simple_document_ingest(
+    db: DBSession,
+    _rl: RateLimit,
+    _key: RequireAPIKey,
+    file: UploadFile = File(...),
+    request_id: str | None = Form(None),
+    description: str | None = Form(None),
+) -> SimpleIngestionResponse:
+    """Upload a document to the ledger with guided step-by-step feedback.
+
+    Accepts any common document format (PDF, Word, plain text, images) and
+    returns a plain-English summary of each processing step so non-technical
+    users understand exactly what happened.
+
+    Args:
+        db: Injected async database session.
+        file: The document to submit.
+        request_id: Optional FOIA request ID to associate with this document.
+        description: Optional short description of the document.
+
+    Returns:
+        :class:`SimpleIngestionResponse` with numbered steps and outcome.
+    """
+    file_bytes = await file.read()
+    return await ingest_document(
+        file_bytes=file_bytes,
+        filename=file.filename or "upload",
+        content_type=file.content_type,
+        request_id=request_id,
+        description=description,
+        db=db,
+    )
+
+
+@router.post("/verify/simple", response_model=SimpleVerificationResponse)
+async def simple_document_verify(
+    db: DBSession,
+    _rl: RateLimit,
+    file: UploadFile | None = File(None),
+    commit_id: str | None = Form(None),
+    doc_hash: str | None = Form(None),
+) -> SimpleVerificationResponse:
+    """Verify whether a document is recorded in the ledger.
+
+    Accepts three verification methods:
+
+    1. **Upload file** — computes the fingerprint and checks the ledger.
+    2. **Record ID** — looks up by permanent record ID (``OLY-NNNN``) or raw commit ID.
+    3. **Document hash** — looks up directly by BLAKE3 hex hash.
+
+    Returns a plain-English verdict with step-by-step proof details.
+
+    Args:
+        db: Injected async database session.
+        file: Optional uploaded file to verify by content.
+        commit_id: Optional record ID or raw commit ID.
+        doc_hash: Optional pre-computed BLAKE3 hex hash.
+
+    Returns:
+        :class:`SimpleVerificationResponse` with a clear verified/not-found verdict.
+
+    Raises:
+        HTTPException 400: If none of the three inputs are provided.
+    """
+    if file is not None and file.filename:
+        file_bytes = await file.read()
+        return await verify_by_file(
+            file_bytes=file_bytes,
+            filename=file.filename,
+            db=db,
+        )
+
+    if commit_id:
+        return await verify_by_commit_id(commit_id=commit_id, db=db)
+
+    if doc_hash:
+        return await verify_by_doc_hash(doc_hash=doc_hash, db=db)
+
+    raise HTTPException(
+        status_code=status.HTTP_400_BAD_REQUEST,
+        detail={
+            "detail": (
+                "Please provide one of: a file to upload, a record ID (e.g. OLY-0123), "
+                "or a document hash."
+            ),
+            "code": "MISSING_INPUT",
+        },
+    )
+
