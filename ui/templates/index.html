@@ -194,6 +194,18 @@
             line-height: 1.6;
         }
 
+        /* How This Works guide */
+        .foia-steps {
+            margin: 0.5rem 0 1rem 1.25rem;
+            padding: 0;
+            line-height: 1.8;
+            font-size: 0.975rem;
+        }
+        .foia-steps li { margin-bottom: 0.4rem; }
+
+        /* Hash verification result container */
+        .hash-verify-result { margin-top: 0.75rem; }
+
         /* Process steps */
         .foia-step {
             display: flex;
@@ -387,15 +399,20 @@
 
     <!-- ── Hash Verification Panel ──────────────────────────────────────── -->
     <div class="panel">
-        <h2>Hash Verification</h2>
-        <p>Verify a content hash against the committed ledger. Paste a BLAKE3 hash to check if it's been committed and retrieve the cryptographic proof.</p>
+        <h2>🔍 Check if a Document is on Record</h2>
+        <p class="foia-help-text">
+            Already have a document fingerprint? Paste it below to confirm whether this
+            document has been permanently recorded and see when it was submitted.
+        </p>
         <form id="hash-verify-form">
             <div class="row">
-                <input type="text" id="content-hash" placeholder="BLAKE3 content hash (hex)" required />
-                <button type="submit">Verify Hash</button>
+                <input type="text" id="content-hash"
+                       placeholder="Document fingerprint (64-character code)"
+                       aria-label="Document fingerprint" required />
+                <button type="submit">Check Record</button>
             </div>
         </form>
-        <pre id="hash-verify-result">Enter a content hash to verify.</pre>
+        <div id="hash-verify-result" aria-live="assertive" class="hash-verify-result"></div>
     </div>
 
     <!-- ── Live Node Health Panel ──────────────────────────────────────── -->
@@ -423,7 +440,8 @@
     </div>
     {% endif %}
 
-    <!-- ── Commit Document ──────────────────────────────────────────────── -->
+    {% if show_debug_tools %}
+    <!-- ── Commit Document (debug only — uses in-memory dual-anchor) ─────── -->
     <div class="panel">
         <h2>Commit Document</h2>
         <p>Upload a plain-text file (one section per line) or a JSON array of strings.
@@ -450,6 +468,7 @@
         </div>
         <pre id="commit-result">Upload a document to commit.</pre>
     </div>
+    {% endif %}
 
     <!-- ── FOIA Request Tracker ────────────────────────────────────────────── -->
     <div class="panel">
@@ -821,6 +840,18 @@
     {% endif %}
 
     <!-- ── User-Friendly FOIA Ledger ─────────────────────────────────────── -->
+
+    <div class="panel" id="panel-how-it-works">
+        <h2>🎓 How This Works</h2>
+        <ol class="foia-steps">
+            <li><strong>Submit a Document</strong> — Upload your FOIA request, response, or related document below.</li>
+            <li><strong>Get a Receipt</strong> — We create a permanent, cryptographically-secure record with a unique ID.</li>
+            <li><strong>Verify Anytime</strong> — Use the verification panel to prove the document hasn't been tampered with.</li>
+        </ol>
+        <p class="foia-help-text">
+            💡 We never store your actual document — only a unique fingerprint that proves it existed at a specific moment in time.
+        </p>
+    </div>
 
     <div class="panel" id="panel-submit-document">
         <h2>📤 Submit a Document to the Permanent Record</h2>
@@ -1210,29 +1241,52 @@
                 event.preventDefault();
                 const verifyResult = document.getElementById('hash-verify-result');
                 const contentHash = document.getElementById('content-hash').value.trim();
-                verifyResult.textContent = 'Resolving committed hash…';
+                verifyResult.innerHTML = '<p class="foia-help-text">Checking record…</p>';
+                const formData = new FormData();
+                formData.append('doc_hash', contentHash);
                 try {
-                    const response = await fetch(
-                        `/verification-portal/hash/${encodeURIComponent(contentHash)}`
-                    );
+                    const response = await fetch('/ledger/verify/simple', {
+                        method: 'POST',
+                        body: formData,
+                    });
                     const data = await response.json();
-                    if (!data.ok) {
-                        verifyResult.textContent = `✗ Error: ${data.error}`;
+                    if (!response.ok) {
+                        const msg = typeof data.detail === 'object'
+                            ? (data.detail.detail || JSON.stringify(data.detail))
+                            : (data.detail || 'Unknown error.');
+                        verifyResult.innerHTML =
+                            '<div class="foia-result foia-result-error">' +
+                            '<h3>❌ Verification error</h3>' +
+                            `<p class="foia-explanation">${escHtml(msg)}</p></div>`;
                         return;
                     }
-                    const verification = data.verification;
-                    verifyResult.textContent =
-                        `✓ Committed hash located\n\n` +
-                        `Content hash       : ${verification.content_hash}\n` +
-                        `Proof ID           : ${verification.proof_id}\n` +
-                        `Shard ID           : ${verification.shard_id}\n` +
-                        `Merkle root        : ${verification.merkle_root}\n` +
-                        `Ledger entry hash  : ${verification.ledger_entry_hash}\n` +
-                        `Merkle proof valid : ${verification.merkle_proof_valid}\n\n` +
-                        `Use the proof payload below for independent offline replay:\n` +
-                        `${JSON.stringify(verification.merkle_proof, null, 2)}`;
+                    const cls = data.verified ? 'foia-result foia-verified' : 'foia-result foia-notfound';
+                    const icon = data.verified ? '✅' : '❌';
+                    const dateHtml = data.recorded_date
+                        ? `<p><strong>Submitted:</strong> ${new Date(data.recorded_date).toLocaleString()}</p>`
+                        : '';
+                    const reqHtml = data.related_request
+                        ? `<p><strong>Related request:</strong> ${escHtml(data.related_request)}</p>`
+                        : '';
+                    const proofStepsHtml = (data.proof_details || []).map(s =>
+                        `<div class="foia-proof-step">${escHtml(s.icon || '')} <strong>${escHtml(s.title || '')}</strong>: ${escHtml(s.message || '')}</div>`
+                    ).join('');
+                    verifyResult.innerHTML =
+                        `<div class="${cls}">` +
+                        `<h3>${icon} ${escHtml(data.summary || '')}</h3>` +
+                        `<p class="foia-explanation">${escHtml(data.what_this_means || '')}</p>` +
+                        `<div class="foia-importance">${escHtml(data.why_this_matters || '')}</div>` +
+                        dateHtml + reqHtml +
+                        (proofStepsHtml
+                            ? `<details style="margin-top:.75rem;"><summary style="cursor:pointer;color:var(--accent);">How we verified this</summary><div style="margin-top:.5rem;">${proofStepsHtml}</div></details>`
+                            : '') +
+                        '</div>';
                 } catch (err) {
-                    verifyResult.textContent = `✗ Failed: ${err}`;
+                    verifyResult.innerHTML =
+                        '<div class="foia-result foia-result-error">' +
+                        '<h3>❌ Could not reach server</h3>' +
+                        '<p class="foia-explanation">Please check your connection and try again.</p>' +
+                        `<div class="foia-error-help">💡 ${escHtml(String(err))}</div></div>`;
                 }
             });
         }
