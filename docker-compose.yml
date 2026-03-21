@@ -31,12 +31,7 @@ services:
     container_name: olympus-api
     env_file:
       - .env
-    command:
-      - /bin/sh
-      - -c
-      - >
-        python -m alembic upgrade head &&
-        exec uvicorn api.main:app --host 0.0.0.0 --port 8000
+    command: ["/app/scripts/startup.sh"]
     ports:
       - "8000:8000"
     environment:
