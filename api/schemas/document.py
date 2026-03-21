@@ -17,7 +17,13 @@ class DocCommitRequest(BaseModel):
         pattern=r"^[0-9a-f]{64}$",
         description="BLAKE3 hex hash of the document (64 lowercase hex characters).",
     )
-    request_id: str | None = Field(None, description="Optional FK to a PublicRecordsRequest.")
+    request_id: str | None = Field(
+        None,
+        description=(
+            "UUID of an existing public records request (from POST /requests or GET /requests). "
+            "Links this document commit to that request. Returns 404 if the UUID is not found."
+        ),
+    )
     embargo_until: datetime | None = Field(None, description="Optional embargo expiry timestamp.")
     is_multi_recipient: bool = Field(False, description="True if multiple recipients share this commit.")
 

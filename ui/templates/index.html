@@ -370,7 +370,7 @@
     <!-- ── Public Records Requests ───────────────────────────────────────── -->
     <div class="panel">
         <h2>Public Records Requests</h2>
-        <p>File and track public records requests. Requests are anchored to the cryptographic ledger with a SHA-256 commit hash.</p>
+        <p>File and track public records requests. Requests are anchored to the cryptographic ledger with a BLAKE3 commit hash.</p>
 
         <details open>
             <summary><strong>File New Request</strong></summary>
@@ -774,12 +774,14 @@
                 result.textContent =
                     `✓ Request submitted successfully.\n\n` +
                     `Display ID       : ${data.display_id}\n` +
+                    `Request UUID     : ${data.id}\n` +
                     `Subject          : ${data.subject}\n` +
                     `Status           : ${data.status}\n` +
                     `Commit Hash      : ${data.commit_hash}\n` +
                     `Shard ID         : ${data.shard_id}\n` +
                     `Filed At         : ${data.filed_at}\n` +
-                    `Deadline         : ${data.deadline || 'N/A'}`;
+                    `Deadline         : ${data.deadline || 'N/A'}\n\n` +
+                    `💡 Use "Request UUID" as the request_id when anchoring a document via POST /doc/commit.`;
                 loadRequests();
             } catch (err) {
                 result.textContent = `✗ Failed: ${err}`;
@@ -808,6 +810,7 @@
                 let output =
                     `✓ Record found: ${displayId}\n\n` +
                     `── Request Details ──────────────────────────\n` +
+                    `Request UUID     : ${req.id || '—'}\n` +
                     `Subject          : ${req.subject || '—'}\n` +
                     `Agency           : ${req.agency_id || '—'}\n` +
                     `Status           : ${req.status || '—'}\n` +
@@ -843,7 +846,7 @@
                     }
                 } else {
                     output += `\n⚠ No SMT proof available — record may not have been ingested into the Sparse Merkle Tree yet.\n`;
-                    output += `The commit hash above is the SHA-256 anchor computed at filing time.\n`;
+                    output += `The commit hash above is the BLAKE3 anchor computed at filing time.\n`;
                 }
 
                 result.textContent = output;

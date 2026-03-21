@@ -156,6 +156,18 @@ async def test_commit_rejects_invalid_hash(client):
 
 
 @pytest.mark.asyncio
+async def test_commit_nonexistent_request_id_returns_404(client):
+    """POST /doc/commit with a request_id that does not exist should return 404."""
+    doc_hash = _b3("request id not found test")
+    resp = await client.post(
+        "/doc/commit",
+        json={"doc_hash": doc_hash, "request_id": "00000000-0000-0000-0000-000000000000"},
+    )
+    assert resp.status_code == 404
+    assert resp.json()["detail"]["code"] == "REQUEST_NOT_FOUND"
+
+
+@pytest.mark.asyncio
 async def test_commit_requires_auth_when_keys_configured(client):
     """POST /doc/commit should return 401 when API keys are configured but none provided."""
     import api.auth as auth_module

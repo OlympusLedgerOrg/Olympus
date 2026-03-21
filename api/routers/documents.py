@@ -10,11 +10,12 @@ from __future__ import annotations
 import logging
 
 from fastapi import APIRouter, HTTPException, status
-from sqlalchemy import select
+from sqlalchemy import exists, select
 
 from api.auth import RequireAPIKey, RateLimit
 from api.deps import DBSession
 from api.models.document import DocCommit
+from api.models.request import PublicRecordsRequest
 from api.schemas.document import (
     DocCommitRequest,
     DocCommitResponse,
@@ -31,7 +32,12 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/doc", tags=["documents"])
 
 
-@router.post("/commit", response_model=DocCommitResponse, status_code=status.HTTP_201_CREATED)
+@router.post(
+    "/commit",
+    response_model=DocCommitResponse,
+    status_code=status.HTTP_201_CREATED,
+    responses={status.HTTP_404_NOT_FOUND: {"description": "The request_id does not match any existing public records request."}},
+)
 async def commit_document(body: DocCommitRequest, db: DBSession, _api_key: RequireAPIKey, _rl: RateLimit):
     """Anchor a document hash to the Olympus ledger.
 
@@ -45,7 +51,20 @@ async def commit_document(body: DocCommitRequest, db: DBSession, _api_key: Requi
 
     Returns:
         Commit confirmation with commit_id, epoch, shard, and Merkle root.
+
+    Raises:
+        HTTPException 404: If request_id is provided but no matching public records request exists.
     """
+    if body.request_id is not None:
+        result = await db.execute(
+            select(exists().where(PublicRecordsRequest.id == body.request_id))
+        )
+        if not result.scalar():
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail={"detail": f"Request {body.request_id!r} not found.", "code": "REQUEST_NOT_FOUND"},
+            )
+
     commit_id = generate_commit_id()
     shard_id = DEFAULT_SHARD_ID
 
