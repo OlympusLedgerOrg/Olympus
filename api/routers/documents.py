@@ -15,6 +15,7 @@ from sqlalchemy import select
 from api.auth import RequireAPIKey, RateLimit
 from api.deps import DBSession
 from api.models.document import DocCommit
+from api.models.request import PublicRecordsRequest
 from api.schemas.document import (
     DocCommitRequest,
     DocCommitResponse,
@@ -46,6 +47,16 @@ async def commit_document(body: DocCommitRequest, db: DBSession, _api_key: Requi
     Returns:
         Commit confirmation with commit_id, epoch, shard, and Merkle root.
     """
+    if body.request_id is not None:
+        result = await db.execute(
+            select(PublicRecordsRequest).where(PublicRecordsRequest.id == body.request_id)
+        )
+        if result.scalars().first() is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail={"detail": f"Request {body.request_id!r} not found.", "code": "REQUEST_NOT_FOUND"},
+            )
+
     commit_id = generate_commit_id()
     shard_id = DEFAULT_SHARD_ID
 
