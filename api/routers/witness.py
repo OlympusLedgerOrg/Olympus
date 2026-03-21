@@ -42,6 +42,10 @@ router = APIRouter(prefix="/witness", tags=["witness"])
 # Key: f"{announcement.origin}:{announcement.checkpoint.sequence}"
 # Upgrade path: replace this dict with an async DB-backed repository that
 # implements the same get/set interface used below.
+# WARNING: this store is not safe for multi-worker deployments. Running
+# uvicorn with --workers > 1 splits the store across processes silently,
+# causing each worker to see only a fraction of observations. Ensure
+# workers=1 (single-process mode) until the DB upgrade is complete.
 # ---------------------------------------------------------------------------
 _observations: dict[str, WitnessAnnouncement] = {}
 
@@ -121,6 +125,11 @@ async def submit_observation(request: WitnessAnnounceRequest) -> WitnessAnnounce
     Raises:
         409: If an announcement from the same origin at the same sequence
              already exists.
+
+    TODO: Gate this endpoint behind api.auth.RequireAPIKey (or a dedicated
+    witness API-key scope) before exposing it publicly. Without authentication
+    an adversary can flood fake "no-conflict" announcements to suppress a real
+    split-view detection.  See api/auth.py for the RequireAPIKey dependency.
     """
     key = f"{request.origin}:{request.checkpoint.sequence}"
     if key in _observations:
@@ -132,7 +141,7 @@ async def submit_observation(request: WitnessAnnounceRequest) -> WitnessAnnounce
             ),
         )
 
-    announcement = WitnessAnnouncement.create(request)
+    announcement = WitnessAnnouncement.model_validate(request.model_dump())
     _observations[key] = announcement
 
     logger.info(

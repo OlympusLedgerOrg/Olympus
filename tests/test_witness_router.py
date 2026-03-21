@@ -48,13 +48,15 @@ def test_submit_observation_returns_201() -> None:
 
 def test_submit_observation_stores_entry() -> None:
     payload = _announcement_payload("node-beta", 5, "cd" * 32)
-    client.post("/witness/observations", json=payload)
-    key = "node-beta:5"
-    assert key in witness_module._observations
-    stored = witness_module._observations[key]
-    assert stored.origin == "node-beta"
-    assert stored.checkpoint.sequence == 5
-    assert stored.checkpoint.checkpoint_hash == "cd" * 32
+    resp = client.post("/witness/observations", json=payload)
+    assert resp.status_code == 201
+    # Verify via the public API rather than the internal store
+    get_resp = client.get("/witness/checkpoints/5")
+    assert get_resp.status_code == 200
+    body = get_resp.json()
+    assert body["origin"] == "node-beta"
+    assert body["checkpoint"]["sequence"] == 5
+    assert body["checkpoint"]["checkpoint_hash"] == "cd" * 32
 
 
 def test_submit_observation_duplicate_returns_409() -> None:
@@ -69,6 +71,42 @@ def test_submit_observation_same_origin_different_sequence_allowed() -> None:
     client.post("/witness/observations", json=_announcement_payload("node-delta", 1))
     resp = client.post("/witness/observations", json=_announcement_payload("node-delta", 2))
     assert resp.status_code == 201
+
+
+# ---------------------------------------------------------------------------
+# checkpoint_hash validation
+# ---------------------------------------------------------------------------
+
+def test_submit_observation_rejects_too_short_hash() -> None:
+    payload = _announcement_payload("node-short", 1, "ab" * 10)  # only 20 hex chars
+    resp = client.post("/witness/observations", json=payload)
+    assert resp.status_code == 422
+
+
+def test_submit_observation_rejects_empty_hash() -> None:
+    payload = _announcement_payload("node-empty", 1, "")
+    resp = client.post("/witness/observations", json=payload)
+    assert resp.status_code == 422
+
+
+def test_submit_observation_rejects_non_hex_hash() -> None:
+    payload = _announcement_payload("node-invalid", 1, "zz" * 32)  # non-hex chars
+    resp = client.post("/witness/observations", json=payload)
+    assert resp.status_code == 422
+
+
+def test_submit_observation_accepts_128_char_hash() -> None:
+    # 128 hex chars (512-bit hash) should be accepted
+    long_hash = "a1" * 64
+    payload = _announcement_payload("node-long", 1, long_hash)
+    resp = client.post("/witness/observations", json=payload)
+    assert resp.status_code == 201
+
+
+def test_submit_observation_rejects_too_long_hash() -> None:
+    payload = _announcement_payload("node-toolong", 1, "ab" * 65)  # 130 hex chars
+    resp = client.post("/witness/observations", json=payload)
+    assert resp.status_code == 422
 
 
 # ---------------------------------------------------------------------------
