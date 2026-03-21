@@ -9,291 +9,191 @@ This is a Phase 1+ feature implementing the witness protocol described in
 docs/17_signed_checkpoints.md.
 
 Endpoints:
-    GET /witness/checkpoints/latest - Get latest checkpoint for verification
-    GET /witness/checkpoints/{sequence} - Get checkpoint by sequence number
-    GET /witness/checkpoints - List recent checkpoints
-    POST /witness/observations - Submit checkpoint observations from other nodes
-    GET /witness/gossip - Get gossip state for split-view detection
+    GET  /witness/checkpoints/latest   - Latest announced checkpoint
+    GET  /witness/checkpoints/{seq}    - Announcement by sequence number
+    GET  /witness/checkpoints          - Paginated list sorted by sequence desc
+    POST /witness/observations         - Submit a checkpoint announcement
+    GET  /witness/gossip               - Split-view evidence across origins
+    GET  /witness/health               - Service health
 """
 
 from __future__ import annotations
 
 import logging
-from typing import Any
+from collections import defaultdict
 
 from fastapi import APIRouter, HTTPException, Query, status
-from pydantic import BaseModel, Field
+
+from api.schemas.witness import (
+    GossipConflictEntry,
+    WitnessAnnounceRequest,
+    WitnessAnnounceResponse,
+    WitnessAnnouncement,
+    WitnessHealthResponse,
+)
 
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/witness", tags=["witness"])
 
-
-# Response Models
-class CheckpointResponse(BaseModel):
-    """Checkpoint response for witness verification."""
-
-    sequence: int = Field(..., description="Checkpoint sequence number")
-    timestamp: str = Field(..., description="ISO 8601 timestamp")
-    ledger_head_hash: str = Field(..., description="Hash of latest ledger entry")
-    previous_checkpoint_hash: str = Field(..., description="Hash of previous checkpoint")
-    ledger_height: int = Field(..., description="Total number of ledger entries")
-    shard_roots: dict[str, str] = Field(
-        default_factory=dict, description="Shard-specific root hashes"
-    )
-    consistency_proof: list[str] = Field(
-        default_factory=list, description="Merkle consistency proof"
-    )
-    checkpoint_hash: str = Field(..., description="Hash of checkpoint payload")
-    federation_quorum_certificate: dict[str, Any] = Field(
-        ..., description="Federation quorum certificate"
-    )
+# ---------------------------------------------------------------------------
+# In-process observation store (Phase 1 — no DB).
+# Key: f"{announcement.origin}:{announcement.checkpoint.sequence}"
+# Upgrade path: replace this dict with an async DB-backed repository that
+# implements the same get/set interface used below.
+# ---------------------------------------------------------------------------
+_observations: dict[str, WitnessAnnouncement] = {}
 
 
-class CheckpointListResponse(BaseModel):
-    """List of recent checkpoints."""
-
-    checkpoints: list[CheckpointResponse]
-    count: int
-
-
-class ObservationRequest(BaseModel):
-    """Request body for submitting checkpoint observations."""
-
-    node_id: str = Field(..., description="Identifier of the observed node")
-    checkpoint: CheckpointResponse = Field(..., description="Observed checkpoint")
-
-
-class GossipStateResponse(BaseModel):
-    """Current gossip state showing observations from multiple nodes."""
-
-    observations: dict[str, CheckpointResponse] = Field(
-        ..., description="Mapping of node_id to latest observed checkpoint"
-    )
-    fork_evidence: list[dict[str, Any]] = Field(
-        default_factory=list, description="Detected fork evidence"
-    )
-
-
-# In-memory storage for witness state (would use persistent storage in production)
-_checkpoint_registry: list[dict[str, Any]] = []
-_observations: dict[str, dict[str, Any]] = {}
-
-
-@router.get("/checkpoints/latest", response_model=CheckpointResponse)
-async def get_latest_checkpoint() -> CheckpointResponse:
-    """
-    Get the latest checkpoint for witness verification.
-
-    This endpoint returns the most recent checkpoint created by this node.
-    Witnesses can use this to compare against other nodes and detect split views.
-
-    Returns:
-        Latest checkpoint
+@router.get("/checkpoints/latest", response_model=WitnessAnnouncement)
+async def get_latest_checkpoint() -> WitnessAnnouncement:
+    """Return the announcement with the highest checkpoint sequence.
 
     Raises:
-        404: If no checkpoints exist
-        503: If checkpoint service is not initialized
+        404: If no announcements have been stored yet.
     """
-    if not _checkpoint_registry:
+    if not _observations:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="No checkpoints available",
         )
-
-    latest = _checkpoint_registry[-1]
-    return CheckpointResponse(**latest)
+    return max(_observations.values(), key=lambda a: a.checkpoint.sequence)
 
 
-@router.get("/checkpoints/{sequence}", response_model=CheckpointResponse)
-async def get_checkpoint_by_sequence(sequence: int) -> CheckpointResponse:
-    """
-    Get a specific checkpoint by sequence number.
+@router.get("/checkpoints/{sequence}", response_model=WitnessAnnouncement)
+async def get_checkpoint_by_sequence(sequence: int) -> WitnessAnnouncement:
+    """Return any stored announcement whose checkpoint.sequence matches.
 
     Args:
-        sequence: Checkpoint sequence number
-
-    Returns:
-        Checkpoint with the specified sequence
+        sequence: Checkpoint sequence number to look up.
 
     Raises:
-        404: If checkpoint not found
-        503: If checkpoint service is not initialized
-    """
-    for checkpoint in _checkpoint_registry:
-        if checkpoint["sequence"] == sequence:
-            return CheckpointResponse(**checkpoint)
+        404: If no announcement for that sequence exists.
 
+    Note:
+        O(n) linear scan over the in-process store is acceptable for Phase 1.
+        The DB-backed upgrade path should add a secondary index on
+        checkpoint.sequence.
+    """
+    for announcement in _observations.values():
+        if announcement.checkpoint.sequence == sequence:
+            return announcement
     raise HTTPException(
         status_code=status.HTTP_404_NOT_FOUND,
-        detail=f"Checkpoint with sequence {sequence} not found",
+        detail=f"No announcement found for sequence {sequence}",
     )
 
 
-@router.get("/checkpoints", response_model=CheckpointListResponse)
+@router.get("/checkpoints", response_model=list[WitnessAnnouncement])
 async def list_checkpoints(
-    limit: int = Query(10, ge=1, le=100, description="Maximum number of checkpoints to return"),
-    offset: int = Query(0, ge=0, description="Number of checkpoints to skip"),
-) -> CheckpointListResponse:
-    """
-    List recent checkpoints in reverse chronological order.
-
-    Witnesses can use this to verify checkpoint chain integrity and detect
-    any inconsistencies with other nodes.
+    limit: int = Query(20, ge=1, le=100, description="Maximum number of results to return"),
+    offset: int = Query(0, ge=0, description="Number of results to skip"),
+) -> list[WitnessAnnouncement]:
+    """Return a paginated list of announcements sorted by sequence descending.
 
     Args:
-        limit: Maximum number of checkpoints to return (1-100)
-        offset: Number of checkpoints to skip
-
-    Returns:
-        List of checkpoints with pagination metadata
+        limit: Maximum number of results (default 20).
+        offset: Number of results to skip for pagination.
     """
-    # Return checkpoints in reverse chronological order (most recent first)
-    start = len(_checkpoint_registry) - offset - 1
-    end = max(start - limit, -1)
-
-    checkpoints = []
-    for i in range(start, end, -1):
-        if i >= 0 and i < len(_checkpoint_registry):
-            checkpoints.append(CheckpointResponse(**_checkpoint_registry[i]))
-
-    return CheckpointListResponse(
-        checkpoints=checkpoints,
-        count=len(checkpoints),
+    sorted_announcements = sorted(
+        _observations.values(),
+        key=lambda a: a.checkpoint.sequence,
+        reverse=True,
     )
+    return sorted_announcements[offset : offset + limit]
 
 
 @router.post(
     "/observations",
-    response_model=dict[str, str],
+    response_model=WitnessAnnounceResponse,
     status_code=status.HTTP_201_CREATED,
 )
-async def submit_observation(observation: ObservationRequest) -> dict[str, str]:
-    """
-    Submit a checkpoint observation from another node.
-
-    Witnesses use this endpoint to share checkpoint observations from other
-    nodes they are monitoring. The local witness can then compare these
-    observations to detect split views.
+async def submit_observation(request: WitnessAnnounceRequest) -> WitnessAnnounceResponse:
+    """Submit a checkpoint announcement from an origin node.
 
     Args:
-        observation: Checkpoint observation from another node
+        request: Announcement containing the origin identifier and checkpoint.
 
     Returns:
-        Confirmation message
+        201 confirmation with origin, sequence, and status.
 
-    Note:
-        In production, this endpoint would:
-        1. Verify the checkpoint signature
-        2. Check for fork evidence against local state
-        3. Store observation in persistent storage
-        4. Trigger alerts if forks are detected
+    Raises:
+        409: If an announcement from the same origin at the same sequence
+             already exists.
     """
-    node_id = observation.node_id
-    checkpoint_data = observation.checkpoint.model_dump()
+    key = f"{request.origin}:{request.checkpoint.sequence}"
+    if key in _observations:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=(
+                f"Announcement from origin '{request.origin}' at sequence "
+                f"{request.checkpoint.sequence} already exists"
+            ),
+        )
 
-    # Store observation (in production, would use persistent storage)
-    _observations[node_id] = checkpoint_data
+    announcement = WitnessAnnouncement.create(request)
+    _observations[key] = announcement
 
     logger.info(
-        f"Recorded checkpoint observation from {node_id}: "
-        f"seq={checkpoint_data['sequence']}, hash={checkpoint_data['checkpoint_hash']}"
+        "Stored announcement %s: seq=%d hash=%s",
+        key,
+        announcement.checkpoint.sequence,
+        announcement.checkpoint.checkpoint_hash,
     )
 
-    # TODO: Check for fork evidence
-    # from protocol.checkpoints import detect_checkpoint_fork
-    # for existing_node_id, existing_checkpoint in _observations.items():
-    #     if existing_node_id != node_id:
-    #         if detect_checkpoint_fork(checkpoint_data, existing_checkpoint):
-    #             logger.warning(f"Fork detected between {node_id} and {existing_node_id}")
-
-    return {
-        "status": "recorded",
-        "node_id": node_id,
-        "sequence": str(checkpoint_data["sequence"]),
-    }
-
-
-@router.get("/gossip", response_model=GossipStateResponse)
-async def get_gossip_state() -> GossipStateResponse:
-    """
-    Get current gossip state showing observations from multiple nodes.
-
-    This endpoint returns all checkpoint observations collected from other
-    nodes, along with any detected fork evidence. Witnesses use this to
-    monitor the global state and detect split views.
-
-    Returns:
-        Current gossip state with observations and fork evidence
-
-    Note:
-        In production, this would:
-        1. Return observations from persistent storage
-        2. Include computed fork evidence
-        3. Filter by time window for recent observations
-    """
-    observations_response = {
-        node_id: CheckpointResponse(**checkpoint)
-        for node_id, checkpoint in _observations.items()
-    }
-
-    # TODO: Compute fork evidence
-    # from protocol.checkpoints import detect_gossip_checkpoint_forks
-    # from protocol.federation import FederationRegistry
-    #
-    # registry = ...  # Load registry
-    # evidence = detect_gossip_checkpoint_forks(
-    #     observations=_observations,
-    #     registry=registry
-    # )
-
-    fork_evidence: list[dict[str, Any]] = []
-
-    return GossipStateResponse(
-        observations=observations_response,
-        fork_evidence=fork_evidence,
+    return WitnessAnnounceResponse(
+        origin=announcement.origin,
+        sequence=announcement.checkpoint.sequence,
+        status="recorded",
     )
 
 
-@router.get("/health", response_model=dict[str, str])
-async def witness_health() -> dict[str, str]:
-    """
-    Health check for witness service.
+@router.get("/gossip", response_model=list[GossipConflictEntry])
+async def get_gossip_state() -> list[GossipConflictEntry]:
+    """Return split-view evidence detected across stored announcements.
+
+    Groups announcements by checkpoint.sequence.  Any sequence where two or
+    more distinct origins reported differing checkpoint_hash values is
+    considered a conflict.
 
     Returns:
-        Service health status
+        List of conflict entries (empty if no conflicts exist).
     """
-    return {
-        "status": "ok",
-        "checkpoints": str(len(_checkpoint_registry)),
-        "observations": str(len(_observations)),
-    }
+    # Group by sequence: sequence -> {origin -> checkpoint_hash}
+    by_sequence: dict[int, dict[str, str]] = defaultdict(dict)
+    for announcement in _observations.values():
+        seq = announcement.checkpoint.sequence
+        by_sequence[seq][announcement.origin] = announcement.checkpoint.checkpoint_hash
+
+    conflicts: list[GossipConflictEntry] = []
+    for seq, origin_hashes in by_sequence.items():
+        unique_hashes = set(origin_hashes.values())
+        if len(origin_hashes) >= 2 and len(unique_hashes) > 1:
+            conflicts.append(
+                GossipConflictEntry(
+                    sequence=seq,
+                    conflicting_origins=sorted(origin_hashes.keys()),
+                    hashes=origin_hashes,
+                )
+            )
+
+    return sorted(conflicts, key=lambda c: c.sequence)
 
 
-# Admin/internal endpoints (would be protected in production)
-def register_checkpoint(checkpoint_data: dict[str, Any]) -> None:
-    """
-    Register a checkpoint in the witness service.
-
-    This is an internal function called when new checkpoints are created.
-    In production, this would be triggered by the checkpoint creation process.
-
-    Args:
-        checkpoint_data: Checkpoint data to register
-    """
-    _checkpoint_registry.append(checkpoint_data)
-    logger.info(
-        f"Registered checkpoint {checkpoint_data['sequence']} with hash "
-        f"{checkpoint_data['checkpoint_hash']}"
+@router.get("/health", response_model=WitnessHealthResponse)
+async def witness_health() -> WitnessHealthResponse:
+    """Return service health and current observation count."""
+    return WitnessHealthResponse(
+        status="ok",
+        observation_count=len(_observations),
     )
 
 
 def clear_observations() -> None:
-    """
-    Clear all observations (for testing/maintenance).
+    """Clear all stored observations.
 
-    This is an internal function for maintenance operations.
+    Intended for use in tests and maintenance operations.
     """
     _observations.clear()
-    logger.info("Cleared all checkpoint observations")
+    logger.info("Cleared all witness observations")
