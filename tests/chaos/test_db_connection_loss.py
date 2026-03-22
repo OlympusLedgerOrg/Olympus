@@ -150,8 +150,9 @@ def test_api_returns_503_when_db_unavailable() -> None:
     """
     The FastAPI app returns HTTP 503 when the database backend is unavailable.
 
-    This test patches ``_require_storage`` in ``api.app`` to raise HTTP 503,
-    matching the real behaviour when DATABASE_URL is unset or PostgreSQL is down.
+    This test patches ``_require_storage`` in ``api.services.storage_layer``
+    (where the shards router imports it) to raise HTTP 503, matching the real
+    behaviour when DATABASE_URL is unset or PostgreSQL is down.
     Uses the sync httpx TestClient (no asyncio required).
     """
     from unittest.mock import patch
@@ -164,7 +165,36 @@ def test_api_returns_503_when_db_unavailable() -> None:
     def _raise_503() -> None:
         raise HTTPException(status_code=503, detail="Database not available: test")
 
-    with patch("api.app._require_storage", side_effect=_raise_503):
+    with patch("api.services.storage_layer._require_storage", side_effect=_raise_503):
+        client = TestClient(app, raise_server_exceptions=False)
+        response = client.get("/shards")
+
+    assert response.status_code == 503
+    body = response.json()
+    assert "detail" in body
+
+
+def test_api_returns_503_on_mid_operation_db_failure() -> None:
+    """
+    The FastAPI app returns HTTP 503 (not 500) when the database connection
+    is lost *after* the StorageLayer has already been initialized.
+
+    This exercises the path where ``_require_storage()`` succeeds but a
+    subsequent storage call raises a ``RuntimeError`` from the pool retry logic
+    (e.g. ``"Failed to acquire PostgreSQL connection after retries"``).
+    """
+    from unittest.mock import MagicMock, patch
+
+    from fastapi.testclient import TestClient
+
+    from api.app import app
+
+    fake_storage = MagicMock()
+    fake_storage.get_all_shard_ids.side_effect = RuntimeError(
+        "Failed to acquire PostgreSQL connection after retries"
+    )
+
+    with patch("api.services.storage_layer._require_storage", return_value=fake_storage):
         client = TestClient(app, raise_server_exceptions=False)
         response = client.get("/shards")
 
