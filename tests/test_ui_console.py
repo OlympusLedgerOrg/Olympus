@@ -105,16 +105,9 @@ def test_console_shows_invalid_signature_banner(monkeypatch):
     assert "Invalid signature detected for shard s1." in response.text
 
 
-def test_debug_ui_disabled_by_default(monkeypatch):
-    """Debug console and proof explorer return 404 when OLYMPUS_DEBUG_UI is not set."""
-    monkeypatch.setattr(ui_app, "DEBUG_UI_ENABLED", False)
-
-    assert client.get("/").status_code == 404
-    assert (
-        client.get("/proof-explorer?shard_id=s&record_type=t&record_id=r&version=1").status_code
-        == 404
-    )
-    assert client.get("/state-diff?shard_id=s&from_seq=1&to_seq=2").status_code == 404
+def test_debug_ui_enabled_by_default(monkeypatch):
+    """Debug console routes are accessible by default without any environment variable."""
+    assert ui_app.DEBUG_UI_ENABLED is True
 
 
 def test_public_records_requests_timeout_returns_502(monkeypatch):
@@ -527,9 +520,9 @@ def test_commit_empty_file_returns_error(monkeypatch):
     assert response.json()["ok"] is False
 
 
-def test_commit_disabled_returns_404(monkeypatch):
-    """POST /commit returns 404 when debug UI is disabled."""
-    monkeypatch.setattr(ui_app, "DEBUG_UI_ENABLED", False)
+def test_commit_always_accessible(monkeypatch):
+    """POST /commit is always accessible regardless of DEBUG_UI_ENABLED."""
+    ui_app._commit_store.clear()
 
     response = client.post(
         "/commit",
@@ -537,7 +530,7 @@ def test_commit_disabled_returns_404(monkeypatch):
         files={"file": ("doc.txt", b"hello", "text/plain")},
     )
 
-    assert response.status_code == 404
+    assert response.status_code == 200
 
 
 # ── Committed sections endpoint ─────────────────────────────────────────────
@@ -676,12 +669,10 @@ def test_verify_invalid_bundle(monkeypatch):
     assert response.json()["ok"] is False
 
 
-def test_verify_disabled_returns_404(monkeypatch):
-    """POST /verify returns 404 when debug UI is disabled."""
-    monkeypatch.setattr(ui_app, "DEBUG_UI_ENABLED", False)
-
+def test_verify_always_accessible():
+    """POST /verify is always accessible regardless of DEBUG_UI_ENABLED."""
     response = client.post("/verify", json={})
-    assert response.status_code == 404
+    assert response.status_code in (200, 400, 422)
 
 
 # ── Receipt + embargo management ──────────────────────────────────────────────

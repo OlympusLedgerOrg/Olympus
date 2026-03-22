@@ -31,7 +31,7 @@ services:
     container_name: olympus-api
     env_file:
       - .env
-    command: ["/app/scripts/startup.sh"]
+    command: ["/bin/sh", "/app/scripts/startup.sh"]
     ports:
       - "8000:8000"
     environment:
@@ -45,7 +45,7 @@ services:
       test: ["CMD-SHELL", "curl -fsS http://localhost:8000/health || exit 1"]
       interval: 10s
       timeout: 5s
-      start_period: 30s
+      start_period: 40s
       retries: 5
 
   ui:

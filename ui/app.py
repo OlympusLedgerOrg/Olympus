@@ -48,8 +48,8 @@ if (
 
 RAY_CAST_EPSILON = 1e-12
 
-# Debug UI is disabled by default; set OLYMPUS_DEBUG_UI=true to enable.
-DEBUG_UI_ENABLED = os.environ.get("OLYMPUS_DEBUG_UI", "false").lower() == "true"
+# Debug UI is always enabled. Use OLYMPUS_DEBUG_CONSOLE_PASSWORD to protect it.
+DEBUG_UI_ENABLED = True
 # Optional HTTP Basic Auth password; when set, every debug console request
 # must include a valid Authorization header.
 _DEBUG_CONSOLE_PASSWORD = os.environ.get("OLYMPUS_DEBUG_CONSOLE_PASSWORD", "")
@@ -668,9 +668,10 @@ def _is_chain_broken(entries: list[dict[str, Any]]) -> bool:
 
 
 def _require_debug_ui() -> None:
-    """Raise 404 when the debug console is disabled."""
-    if not DEBUG_UI_ENABLED:
-        raise HTTPException(status_code=404, detail="Debug UI is disabled in this environment.")
+    """No-op stub retained for backward compatibility.
+
+    Debug UI is always enabled; use OLYMPUS_DEBUG_CONSOLE_PASSWORD to restrict access.
+    """
 
 
 def _check_oracle_rate_limit(request: Request) -> None:
@@ -1465,9 +1466,6 @@ def state_diff_viewer(
     to_seq: int = Query(..., ge=0),
 ):
     """Proxy state-root diff requests to the API."""
-    if not DEBUG_UI_ENABLED:
-        raise HTTPException(status_code=404, detail="Debug UI is disabled in this environment.")
-
     path = f"/shards/{quote(shard_id)}/diff?from_seq={from_seq}&to_seq={to_seq}"
     try:
         diff = _fetch_json(path)
