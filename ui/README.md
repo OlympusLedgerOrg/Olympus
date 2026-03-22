@@ -10,7 +10,6 @@ This component is licensed under **Apache License 2.0**, consistent with all oth
 
 ```bash
 export DATABASE_URL='postgresql://olympus:olympus@localhost:5432/olympus'
-export OLYMPUS_DEBUG_UI=true
 export OPENSTATES_API_KEY='your-openstates-api-key'  # required for live voting lookups
 make dev
 ```
@@ -18,9 +17,8 @@ make dev
 - API: http://127.0.0.1:8000
 - UI: http://127.0.0.1:8080
 
-> **Note:** `OLYMPUS_DEBUG_UI=true` is required to enable the debug console.
-> Without it, all UI routes return HTTP 404. This prevents accidental exposure
-> in production.
+> **Note:** The debug UI is always enabled by default. To restrict access, set
+> `OLYMPUS_DEBUG_CONSOLE_PASSWORD` to a strong random string.
 
 ## UX spec (wireframe text)
 
