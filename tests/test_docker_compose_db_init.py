@@ -13,16 +13,31 @@ def _load_primary_compose() -> dict:
 
 
 def test_primary_docker_compose_initializes_schema_before_starting_api():
-    compose = (REPO_ROOT / "docker-compose.yml").read_text(encoding="utf-8")
+    """
+    The primary compose stack must run alembic migrations before starting uvicorn.
 
-    alembic_match = re.search(r"python\s+-m\s+alembic\s+upgrade\s+head", compose)
-    uvicorn_match = re.search(
-        r"exec\s+uvicorn\s+api\.main:app\s+--host\s+0\.0\.0\.0\s+--port\s+8000", compose
+    docker-compose.yml delegates startup to scripts/startup.sh, so we verify:
+    1. The app service command references startup.sh.
+    2. startup.sh contains 'alembic upgrade head' before 'exec uvicorn'.
+    """
+    # Verify docker-compose.yml references startup.sh
+    compose_text = (REPO_ROOT / "docker-compose.yml").read_text(encoding="utf-8")
+    assert "startup.sh" in compose_text, (
+        "docker-compose.yml app command must reference startup.sh"
     )
 
-    assert alembic_match is not None
-    assert uvicorn_match is not None
-    assert alembic_match.start() < uvicorn_match.start()
+    # Verify startup.sh runs alembic before uvicorn
+    startup = (REPO_ROOT / "scripts" / "startup.sh").read_text(encoding="utf-8")
+    alembic_match = re.search(r"python\s+-m\s+alembic\s+upgrade\s+head", startup)
+    uvicorn_match = re.search(
+        r"exec\s+uvicorn\s+api\.main:app\s+--host\s+0\.0\.0\.0\s+--port\s+8000", startup
+    )
+
+    assert alembic_match is not None, "startup.sh must call 'python -m alembic upgrade head'"
+    assert uvicorn_match is not None, "startup.sh must call 'exec uvicorn api.main:app ...'"
+    assert alembic_match.start() < uvicorn_match.start(), (
+        "alembic upgrade head must appear before exec uvicorn in startup.sh"
+    )
 
 
 def test_federation_docker_compose_initializes_schema_before_starting_each_api_node():
@@ -88,7 +103,8 @@ def test_docker_compose_ui_exposes_psycopg_url():
 def test_docker_compose_app_healthcheck_start_period_allows_migrations():
     """The app healthcheck must allow enough startup time for alembic + uvicorn."""
     compose = _load_primary_compose()
-    assert compose["services"]["app"]["healthcheck"]["start_period"] == "30s"
+    start_period = compose["services"]["app"]["healthcheck"]["start_period"]
+    assert start_period == "40s"
 
 
 def test_docker_compose_app_dev_signing_key_default_is_truthy():

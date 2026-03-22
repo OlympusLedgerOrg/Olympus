@@ -27,7 +27,7 @@ from api.schemas.shards import (
     StateRootDiffResponse,
     TimestampTokenResponse,
 )
-from api.services.storage_layer import _require_storage
+from api.services.storage_layer import _require_storage, db_op
 from protocol.shards import canonical_header
 from protocol.telemetry import opentelemetry_available, prometheus_available, record_smt_divergence
 
@@ -45,7 +45,7 @@ async def list_shards() -> list[ShardInfo]:
         List of shard information
     """
     storage = _require_storage()
-    try:
+    with db_op("list shards"):
         shard_ids = storage.get_all_shard_ids()
         result = []
 
@@ -61,10 +61,6 @@ async def list_shards() -> list[ShardInfo]:
                 )
 
         return result
-    except HTTPException:
-        raise
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to list shards: {str(e)}") from e
 
 
 @router.get("/shards/{shard_id}/header/latest", response_model=ShardHeaderResponse)
@@ -81,7 +77,7 @@ async def get_latest_header(shard_id: str) -> ShardHeaderResponse:
         Latest shard header with signature and canonical JSON
     """
     storage = _require_storage()
-    try:
+    with db_op("get header"):
         header_data = storage.get_latest_header(shard_id)
 
         if header_data is None:
@@ -103,10 +99,6 @@ async def get_latest_header(shard_id: str) -> ShardHeaderResponse:
             pubkey=header_data["pubkey"],
             canonical_header_json=canonical_json,
         )
-    except HTTPException:
-        raise
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to get header: {str(e)}") from e
 
 
 @router.get("/shards/{shard_id}/proof")
@@ -131,7 +123,7 @@ async def get_proof(
         Existence proof if record exists, non-existence proof otherwise
     """
     storage = _require_storage()
-    try:
+    with db_op("get proof"):
         # Try to get existence proof
         proof = storage.get_proof(shard_id, record_type, record_id, version)
 
@@ -183,10 +175,6 @@ async def get_proof(
                 root_hash=non_proof.root_hash.hex(),
                 shard_header=shard_header,
             )
-    except HTTPException:
-        raise
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to get proof: {str(e)}") from e
 
 
 @router.get("/ledger/{shard_id}/tail", response_model=LedgerTailResponse)
@@ -207,7 +195,7 @@ async def get_ledger_tail(
         List of ledger entries
     """
     storage = _require_storage()
-    try:
+    with db_op("get ledger tail"):
         entries = storage.get_ledger_tail(shard_id, n)
 
         return LedgerTailResponse(
@@ -225,10 +213,6 @@ async def get_ledger_tail(
                 for entry in entries
             ],
         )
-    except HTTPException:
-        raise
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to get ledger tail: {str(e)}") from e
 
 
 @router.get("/shards/{shard_id}/history", response_model=ShardHistoryResponse)
@@ -246,16 +230,12 @@ async def get_shard_history(
         Recent shard header snapshots in reverse chronological order
     """
     storage = _require_storage()
-    try:
+    with db_op("get shard history"):
         history = storage.get_header_history(shard_id, n)
         return ShardHistoryResponse(
             shard_id=shard_id,
             headers=[ShardHistoryEntryResponse(**entry) for entry in history],
         )
-    except HTTPException:
-        raise
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to get shard history: {str(e)}") from e
 
 
 @router.get("/shards/{shard_id}/diff", response_model=StateRootDiffResponse)
@@ -276,8 +256,11 @@ async def get_shard_state_diff(
         Root hashes plus added, changed, and removed leaf keys
     """
     storage = _require_storage()
-    try:
-        diff = storage.get_root_diff(shard_id, from_seq, to_seq)
+    with db_op("diff shard state"):
+        try:
+            diff = storage.get_root_diff(shard_id, from_seq, to_seq)
+        except ValueError as e:
+            raise HTTPException(status_code=404, detail=str(e)) from e
         return StateRootDiffResponse(
             shard_id=shard_id,
             from_seq=from_seq,
@@ -293,12 +276,6 @@ async def get_shard_state_diff(
                 "removed": len(diff["removed"]),
             },
         )
-    except ValueError as e:
-        raise HTTPException(status_code=404, detail=str(e)) from e
-    except HTTPException:
-        raise
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to diff shard state: {str(e)}") from e
 
 
 @router.get("/shards/{shard_id}/header/latest/verify", response_model=HeaderVerificationResponse)
@@ -317,7 +294,7 @@ async def verify_latest_header(shard_id: str) -> HeaderVerificationResponse:
         timestamp validity.
     """
     storage = _require_storage()
-    try:
+    with db_op("verify header"):
         header_data = storage.get_latest_header(shard_id)
         if header_data is None:
             raise HTTPException(status_code=404, detail=f"Shard not found: {shard_id}")
@@ -368,10 +345,6 @@ async def verify_latest_header(shard_id: str) -> HeaderVerificationResponse:
             timestamp_token=timestamp_token,
             timestamp_valid=timestamp_valid,
         )
-    except HTTPException:
-        raise
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to verify header: {str(e)}") from e
 
 
 @router.get("/metrics")

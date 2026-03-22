@@ -44,10 +44,16 @@ async def lifespan(app: FastAPI):
     settings = get_settings()
     logger.info("Starting Olympus API v%s", settings.app_version)
 
-    async with engine.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all)
+    try:
+        async with engine.begin() as conn:
+            await conn.run_sync(Base.metadata.create_all)
+        logger.info("Database schema ready.")
+    except Exception as exc:
+        logger.warning(
+            "Database unavailable at startup; schema init deferred — app starting in degraded mode: %s",
+            exc,
+        )
 
-    logger.info("Database schema ready.")
     yield
 
     await engine.dispose()

@@ -10,21 +10,25 @@ from __future__ import annotations
 
 import logging
 import os
+from contextlib import contextmanager
 from typing import TYPE_CHECKING
 from urllib.parse import urlparse
 
 from fastapi import HTTPException
 
+
 if TYPE_CHECKING:
+    from collections.abc import Generator
+
     from storage.postgres import StorageLayer
 
 logger = logging.getLogger(__name__)
 
-_storage: "StorageLayer | None" = None
+_storage: StorageLayer | None = None
 _db_error: str | None = None
 
 
-def _get_storage() -> "StorageLayer":
+def _get_storage() -> StorageLayer:
     """
     Get the storage layer, initializing lazily on first use.
 
@@ -105,7 +109,7 @@ def _get_storage() -> "StorageLayer":
         ) from e
 
 
-def _require_storage() -> "StorageLayer":
+def _require_storage() -> StorageLayer:
     """
     Get storage layer, raising 503 if not available.
 
@@ -119,6 +123,76 @@ def _require_storage() -> "StorageLayer":
             detail="Database not available: storage not initialized",
         )
     return storage
+
+
+# Error message fragments emitted by StorageLayer._acquire_connection_with_retry.
+# Defined as module-level constants so that _is_db_unavailable_error stays in
+# sync if the underlying messages ever change.
+_RETRIES_EXHAUSTED_MSG = "failed to acquire postgresql connection"
+_CIRCUIT_BREAKER_MSG = "circuit breaker"
+
+
+def _is_db_unavailable_error(exc: BaseException) -> bool:
+    """Return True when *exc* indicates a PostgreSQL connection or availability failure.
+
+    Used by endpoint handlers to distinguish transient DB-down conditions
+    (which should surface as HTTP 503) from genuine application bugs (HTTP 500).
+
+    Args:
+        exc: The exception to inspect.
+
+    Returns:
+        True if the exception is a DB connectivity failure, False otherwise.
+    """
+    try:
+        from psycopg import OperationalError
+        from psycopg_pool import PoolTimeout
+
+        if isinstance(exc, (OperationalError, PoolTimeout)):
+            return True
+    except ImportError:
+        pass
+
+    if isinstance(exc, RuntimeError):
+        msg = str(exc).lower()
+        return _RETRIES_EXHAUSTED_MSG in msg or _CIRCUIT_BREAKER_MSG in msg
+
+    return False
+
+
+@contextmanager
+def db_op(description: str) -> Generator[None, None, None]:
+    """Context manager that converts DB-connection errors to HTTP 503.
+
+    Wrap storage operations inside this context manager so that a mid-operation
+    connection loss (pool exhaustion, circuit breaker, psycopg OperationalError)
+    is reported as HTTP 503 rather than an unhandled HTTP 500.
+
+    ``HTTPException`` instances are always re-raised unchanged so that the 503
+    raised by ``_require_storage()`` is not accidentally double-wrapped.
+
+    Args:
+        description: Short human-readable label used in the 503 detail message
+            (e.g. ``"list shards"``).
+
+    Yields:
+        Nothing — the context manager only provides error translation.
+
+    Raises:
+        HTTPException: 503 when a DB connection/availability failure is detected;
+            re-raised unchanged for any other ``HTTPException``.
+    """
+    try:
+        yield
+    except HTTPException:
+        raise
+    except Exception as exc:
+        if _is_db_unavailable_error(exc):
+            raise HTTPException(
+                status_code=503,
+                detail=f"Database unavailable ({description}): {exc}",
+            ) from exc
+        raise
 
 
 def get_storage_status() -> tuple[str, bool]:
