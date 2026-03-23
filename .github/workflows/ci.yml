@@ -181,9 +181,6 @@ jobs:
     - name: Verify dependency consistency
       run: pip check
 
-    - name: Apply database migrations
-      run: python -m alembic upgrade head
-
     - name: Run integration tests
       run: |
         pytest tests/ -v --tb=short -m "postgres"

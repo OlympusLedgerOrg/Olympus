@@ -95,8 +95,5 @@ jobs:
         pip install --require-hashes -r requirements-dev.txt
         pip install -e . --no-deps
 
-    - name: Apply database migrations
-      run: python -m alembic upgrade head
-
     - name: Run smoke tests (PostgreSQL integration)
       run: pytest tests/test_e2e_audit.py -v --tb=short

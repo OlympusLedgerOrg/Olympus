@@ -1,9 +1,9 @@
 #!/bin/sh
 # Olympus API startup script
 #
-# Runs Alembic migrations with retry/diagnostic logic before launching
-# the API server. Exits non-zero on migration failure so the container
-# is marked unhealthy instead of silently serving a broken state.
+# Waits for the database to accept connections, then launches the API server.
+# Database schema is created automatically at startup — no manual migration
+# step is required.
 #
 # Usage (set as the command in docker-compose.yml or Dockerfile CMD):
 #   /app/scripts/startup.sh
@@ -42,19 +42,8 @@ if [ -n "${DATABASE_URL}" ]; then
     log "Database is accepting connections."
 fi
 
-# Run Alembic migrations and capture output.
-log "Running database migrations (alembic upgrade head)..."
-if ! python -m alembic upgrade head; then
-    log "ERROR: Migration failed — the API will not start."
-    log "  Possible causes:"
-    log "    - DATABASE_URL has incorrect credentials or host"
-    log "    - The .env file uses CRLF line endings (use LF on Windows)"
-    log "    - A migration script has a syntax error"
-    log "  Re-run with: docker compose exec app python -m alembic upgrade head"
-    exit 1
-fi
-log "Migrations completed successfully."
-
 # Hand off to the API server.
+# Schema is created automatically on first request via StorageLayer.init_schema()
+# (protocol tables) and Base.metadata.create_all (FOIA tables in api/main.py).
 log "Starting uvicorn (api.main:app) on 0.0.0.0:8000..."
 exec uvicorn api.main:app --host 0.0.0.0 --port 8000
