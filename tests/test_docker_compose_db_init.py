@@ -12,13 +12,11 @@ def _load_primary_compose() -> dict:
     return yaml.safe_load((REPO_ROOT / "docker-compose.yml").read_text(encoding="utf-8"))
 
 
-def test_primary_docker_compose_initializes_schema_before_starting_api():
+def test_primary_docker_compose_starts_api_without_migrations():
     """
-    The primary compose stack must run alembic migrations before starting uvicorn.
-
-    docker-compose.yml delegates startup to scripts/startup.sh, so we verify:
-    1. The app service command references startup.sh.
-    2. startup.sh contains 'alembic upgrade head' before 'exec uvicorn'.
+    The primary compose stack must start uvicorn directly without a separate
+    migration step.  Schema is created automatically at first request via
+    StorageLayer.init_schema() and Base.metadata.create_all().
     """
     # Verify docker-compose.yml references startup.sh
     compose_text = (REPO_ROOT / "docker-compose.yml").read_text(encoding="utf-8")
@@ -26,35 +24,34 @@ def test_primary_docker_compose_initializes_schema_before_starting_api():
         "docker-compose.yml app command must reference startup.sh"
     )
 
-    # Verify startup.sh runs alembic before uvicorn
+    # Verify startup.sh runs uvicorn and does NOT call alembic
     startup = (REPO_ROOT / "scripts" / "startup.sh").read_text(encoding="utf-8")
-    alembic_match = re.search(r"python\s+-m\s+alembic\s+upgrade\s+head", startup)
     uvicorn_match = re.search(
         r"exec\s+uvicorn\s+api\.main:app\s+--host\s+0\.0\.0\.0\s+--port\s+8000", startup
     )
+    alembic_match = re.search(r"python\s+-m\s+alembic\s+upgrade\s+head", startup)
 
-    assert alembic_match is not None, "startup.sh must call 'python -m alembic upgrade head'"
     assert uvicorn_match is not None, "startup.sh must call 'exec uvicorn api.main:app ...'"
-    assert alembic_match.start() < uvicorn_match.start(), (
-        "alembic upgrade head must appear before exec uvicorn in startup.sh"
+    assert alembic_match is None, (
+        "startup.sh must not call 'alembic upgrade head'; "
+        "schema is created automatically by init_schema() and Base.metadata.create_all()"
     )
 
 
-def test_federation_docker_compose_initializes_schema_before_starting_each_api_node():
+def test_federation_docker_compose_starts_each_api_node_without_migrations():
     compose = (REPO_ROOT / "docker-compose.federation.yml").read_text(
         encoding="utf-8"
     )
 
-    assert compose.count("alembic upgrade head") == EXPECTED_FEDERATION_NODES
+    assert "alembic upgrade head" not in compose, (
+        "docker-compose.federation.yml must not call 'alembic upgrade head'; "
+        "schema is created automatically by init_schema() and Base.metadata.create_all()"
+    )
     uvicorn_matches = list(
         re.finditer(r"exec\s+uvicorn\s+api\.main:app\s+--host\s+0\.0\.0\.0\s+--port\s+8000", compose)
     )
 
     assert len(uvicorn_matches) == EXPECTED_FEDERATION_NODES
-
-    alembic_positions = [match.start() for match in re.finditer(r"alembic\s+upgrade\s+head", compose)]
-    assert len(alembic_positions) == EXPECTED_FEDERATION_NODES
-    assert all(alembic_pos < uvicorn_match.start() for alembic_pos, uvicorn_match in zip(alembic_positions, uvicorn_matches))
 
 
 # ---------------------------------------------------------------------------
@@ -160,9 +157,10 @@ def test_env_example_is_not_corrupted_with_sql_filenames():
     assert ".sql" not in env_example
 
 
-def test_ci_workflows_use_alembic_not_sql_loop():
-    """CI workflows must use 'alembic upgrade head', not the old SQL migration loop."""
+def test_ci_workflows_do_not_use_alembic_or_sql_loop():
+    """CI workflows must not use 'alembic upgrade head' or the old SQL migration loop.
+    Schema is created automatically by init_schema() and Base.metadata.create_all()."""
     for wf_name in ("ci.yml", "smoke.yml"):
         wf = (REPO_ROOT / ".github" / "workflows" / wf_name).read_text(encoding="utf-8")
-        assert "alembic upgrade head" in wf, f"{wf_name} missing 'alembic upgrade head'"
+        assert "alembic upgrade head" not in wf, f"{wf_name} still calls 'alembic upgrade head'"
         assert "migrations/*.sql" not in wf, f"{wf_name} still uses old SQL migration loop"
