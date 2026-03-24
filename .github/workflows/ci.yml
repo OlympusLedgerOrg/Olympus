@@ -47,13 +47,13 @@ jobs:
       run: python tools/validate_schemas.py
 
     - name: Ruff lint
-      run: ruff check protocol/ storage/ api/ app_testonly/ tests/ --output-format=github
+      run: ruff check protocol/ storage/ api/ tests/ --output-format=github
 
     - name: Ruff format check
-      run: ruff format --check protocol/ storage/ api/ app_testonly/ tests/
+      run: ruff format --check protocol/ storage/ api/ tests/
 
     - name: Bandit scan
-      run: bandit -r protocol/ storage/ api/ app_testonly/ -f txt
+      run: bandit -r protocol/ storage/ api/ -f txt
 
   typecheck:
     name: typecheck (py${{ matrix.python-version }}, ${{ matrix.os }})
@@ -126,7 +126,7 @@ jobs:
     - name: Run unit tests with coverage floor
       run: |
         pytest tests/ -v --tb=short -m "not postgres" \
-          --cov=protocol --cov=app_testonly --cov=storage --cov=api \
+          --cov=protocol --cov=storage --cov=api \
           --cov-report=xml \
           --cov-fail-under=85
 
@@ -144,6 +144,7 @@ jobs:
     env:
       DATABASE_URL: postgresql://olympus:olympus@localhost:5432/olympus
       TEST_DATABASE_URL: postgresql://olympus:olympus@localhost:5432/olympus
+      OLYMPUS_INGEST_SIGNING_KEY: "0000000000000000000000000000000000000000000000000000000000000000"
       PGHOST: localhost
       PGPORT: "5432"
       PGUSER: olympus
