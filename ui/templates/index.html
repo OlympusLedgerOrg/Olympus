@@ -855,7 +855,7 @@ function escapeHtml(str) {
 function runConnectivityCheck() {
     setLoading('connectivity-output');
     var fd = new FormData();
-    fd.append('content_hash', '0000000000000000000000000000000000000000000000000000000000000000');
+    fd.append('doc_hash', '0000000000000000000000000000000000000000000000000000000000000000');
     safeFetch('/ledger/verify/simple', { method: 'POST', body: fd }).then(function(result) {
         if (result.ok) {
             setOutput('connectivity-output',
@@ -874,7 +874,7 @@ function verifyHash() {
     if (!hash) { setOutput('hash-verify-output', 'ERROR: No hash provided.', true); return; }
     setLoading('hash-verify-output');
     var fd = new FormData();
-    fd.append('content_hash', hash);
+    fd.append('doc_hash', hash);
     safeFetch('/ledger/verify/simple', { method: 'POST', body: fd }).then(function(result) {
         if (result.ok) {
             setOutput('hash-verify-output',
