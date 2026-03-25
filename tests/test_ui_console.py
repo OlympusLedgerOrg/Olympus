@@ -366,7 +366,7 @@ def test_terminal_theme_css_present(monkeypatch):
     response = client.get("/")
 
     assert response.status_code == 200
-    assert '#data-theme="terminal"' in response.text or 'data-theme="terminal"' in response.text
+    assert 'data-theme="terminal"' in response.text
     assert "#00ff41" in response.text  # phosphor green
 
 
