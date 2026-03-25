@@ -16,7 +16,6 @@ Exit codes:
 """
 
 import argparse
-import hashlib
 import json
 import sys
 from pathlib import Path
@@ -122,10 +121,9 @@ def _check_timestamp_token(
             f"expected {header_hash_hex}, got {token['hash_hex']}"
         )
 
-    # 2. Verify the imprint scheme: SHA-256(blake3_bytes)
+    # 2. Validate that header_hash_hex is well-formed hex before proceeding.
     try:
-        blake3_bytes = bytes.fromhex(header_hash_hex)
-        hashlib.sha256(blake3_bytes).digest()
+        bytes.fromhex(header_hash_hex)
     except ValueError as exc:
         return False, f"Invalid header hash hex: {exc}"
 
