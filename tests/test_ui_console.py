@@ -109,6 +109,127 @@ def test_debug_ui_enabled_by_default(monkeypatch):
     assert ui_app.DEBUG_UI_ENABLED is True
 
 
+# ── Direct unit tests for shared helpers ─────────────────────────────────────
+
+
+def test_verify_signature_accepts_valid_ed25519():
+    """_verify_signature should return True for a correctly signed header."""
+    import nacl.signing
+
+    signing_key = nacl.signing.SigningKey.generate()
+    verify_key = signing_key.verify_key
+    header_hash = ("ab" * 32)
+    signature = signing_key.sign(bytes.fromhex(header_hash)).signature
+
+    header = {
+        "pubkey": verify_key.encode().hex(),
+        "header_hash": header_hash,
+        "signature": signature.hex(),
+    }
+    assert ui_app._verify_signature(header) is True
+
+
+def test_verify_signature_rejects_bad_signature():
+    """_verify_signature should return False when signature does not match."""
+    import nacl.signing
+
+    signing_key = nacl.signing.SigningKey.generate()
+    verify_key = signing_key.verify_key
+    header_hash = ("ab" * 32)
+    # Sign the hash then corrupt one byte of the signature
+    signature = bytearray(signing_key.sign(bytes.fromhex(header_hash)).signature)
+    signature[0] ^= 0xFF
+
+    header = {
+        "pubkey": verify_key.encode().hex(),
+        "header_hash": header_hash,
+        "signature": bytes(signature).hex(),
+    }
+    assert ui_app._verify_signature(header) is False
+
+
+def test_verify_signature_rejects_wrong_key():
+    """_verify_signature should return False when pubkey doesn't match signer."""
+    import nacl.signing
+
+    signer = nacl.signing.SigningKey.generate()
+    wrong_key = nacl.signing.SigningKey.generate().verify_key
+    header_hash = ("cd" * 32)
+    signature = signer.sign(bytes.fromhex(header_hash)).signature
+
+    header = {
+        "pubkey": wrong_key.encode().hex(),
+        "header_hash": header_hash,
+        "signature": signature.hex(),
+    }
+    assert ui_app._verify_signature(header) is False
+
+
+def test_verify_signature_returns_false_on_missing_key():
+    """_verify_signature should return False when header lacks required keys."""
+    assert ui_app._verify_signature({}) is False
+    assert ui_app._verify_signature({"pubkey": "aa" * 32}) is False
+
+
+def test_verify_signature_returns_false_on_bad_hex():
+    """_verify_signature should return False for non-hex values."""
+    header = {
+        "pubkey": "not-valid-hex",
+        "header_hash": "ab" * 32,
+        "signature": "cd" * 64,
+    }
+    assert ui_app._verify_signature(header) is False
+
+
+def test_is_chain_broken_empty_entries():
+    """_is_chain_broken should return False for an empty list."""
+    assert ui_app._is_chain_broken([]) is False
+
+
+def test_is_chain_broken_single_entry():
+    """_is_chain_broken should return False for a single entry (no pairs to check)."""
+    assert ui_app._is_chain_broken([{"prev_entry_hash": "a", "entry_hash": "b"}]) is False
+
+
+def test_is_chain_broken_valid_chain():
+    """_is_chain_broken should return False when chain linkage is correct."""
+    entries = [
+        {"prev_entry_hash": "e1", "entry_hash": "e2"},
+        {"prev_entry_hash": "e0", "entry_hash": "e1"},
+    ]
+    assert ui_app._is_chain_broken(entries) is False
+
+
+def test_is_chain_broken_detects_break():
+    """_is_chain_broken should return True when a link is broken."""
+    entries = [
+        {"prev_entry_hash": "wrong", "entry_hash": "e2"},
+        {"prev_entry_hash": "e0", "entry_hash": "e1"},
+    ]
+    assert ui_app._is_chain_broken(entries) is True
+
+
+def test_is_chain_broken_multi_entry_valid():
+    """_is_chain_broken should validate all pairs in a longer chain."""
+    entries = [
+        {"prev_entry_hash": "e2", "entry_hash": "e3"},
+        {"prev_entry_hash": "e1", "entry_hash": "e2"},
+        {"prev_entry_hash": "e0", "entry_hash": "e1"},
+    ]
+    assert ui_app._is_chain_broken(entries) is False
+
+
+def test_is_chain_broken_break_in_middle():
+    """_is_chain_broken should detect a break in the middle of a chain."""
+    entries = [
+        {"prev_entry_hash": "e2", "entry_hash": "e3"},
+        {"prev_entry_hash": "TAMPERED", "entry_hash": "e2"},
+        {"prev_entry_hash": "e0", "entry_hash": "e1"},
+    ]
+    # entries[1]["prev_entry_hash"] ("TAMPERED") != entries[2]["entry_hash"] ("e1")
+    assert ui_app._is_chain_broken(entries) is True
+
+
 def test_console_shows_federation_dashboard(monkeypatch):
     """Root page should render federation agreement details when nodes are configured."""
     monkeypatch.setattr(ui_app, "DEBUG_UI_ENABLED", True)
