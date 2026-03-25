@@ -815,7 +815,7 @@ async def commit_document(
     Args:
         document_id: Human-readable document identifier.
         version: Positive document version number.
-        file: UTF-8 plain text or JSON array of strings to commit.
+        file: UTF-8 plain text, JSON array of strings, or any binary file to commit.
         release_at: Optional embargo expiry in ISO 8601 format.
         recipient_keys: Optional comma/newline separated access-recipient keys.
     """
@@ -825,23 +825,22 @@ async def commit_document(
     try:
         text = raw.decode("utf-8")
     except UnicodeDecodeError:
-        return JSONResponse(
-            status_code=400, content={"ok": False, "error": "File must be valid UTF-8."}
-        )
-
-    # Accept JSON array of strings or plain text (one section per non-empty line).
-    parts: list[str] = []
-    try:
-        parsed = json.loads(text)
-        if isinstance(parsed, list):
-            parts = [str(item) for item in parsed if str(item).strip()]
-        else:
-            return JSONResponse(
-                status_code=400,
-                content={"ok": False, "error": "JSON file must be an array of strings."},
-            )
-    except json.JSONDecodeError:
-        parts = [line for line in text.splitlines() if line.strip()]
+        # Binary file: treat the whole file as a single section keyed by its BLAKE3 hash.
+        parts: list[str] = [hash_bytes(raw).hex()]
+    else:
+        # Accept JSON array of strings or plain text (one section per non-empty line).
+        parts = []
+        try:
+            parsed = json.loads(text)
+            if isinstance(parsed, list):
+                parts = [str(item) for item in parsed if str(item).strip()]
+            else:
+                return JSONResponse(
+                    status_code=400,
+                    content={"ok": False, "error": "JSON file must be an array of strings."},
+                )
+        except json.JSONDecodeError:
+            parts = [line for line in text.splitlines() if line.strip()]
 
     if not parts:
         return JSONResponse(

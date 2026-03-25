@@ -522,6 +522,26 @@ def test_commit_empty_file_returns_error(monkeypatch):
     assert response.json()["ok"] is False
 
 
+def test_commit_binary_file(monkeypatch):
+    """POST /commit with a binary (non-UTF-8) file should succeed with one section."""
+    monkeypatch.setattr(ui_app, "DEBUG_UI_ENABLED", True)
+    ui_app._commit_store.clear()
+
+    binary_content = bytes(range(256))  # contains non-UTF-8 bytes
+    response = client.post(
+        "/commit",
+        data={"document_id": "binfile", "version": 1},
+        files={"file": ("data.bin", binary_content, "application/octet-stream")},
+    )
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["ok"] is True
+    assert data["sections_count"] == 1
+    assert len(data["blake3_root"]) == 64
+    assert data["poseidon_root"].isdigit()
+
+
 def test_commit_always_accessible(monkeypatch):
     """POST /commit is always accessible regardless of DEBUG_UI_ENABLED."""
     ui_app._commit_store.clear()
