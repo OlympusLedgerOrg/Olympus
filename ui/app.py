@@ -19,6 +19,7 @@ from fastapi.responses import JSONResponse
 from fastapi.templating import Jinja2Templates
 
 from protocol.canonical_json import canonical_json_bytes
+from protocol.canonicalizer import CanonicalizationError, Canonicalizer, canonicalization_provenance
 from protocol.hashes import hash_bytes
 from protocol.redaction import RedactionProtocol
 from protocol.redaction_ledger import (
@@ -347,6 +348,53 @@ def _build_receipt(receipt_type: str, payload: dict[str, Any]) -> dict[str, Any]
     }
 
 
+def _canonical_section_from_binary(
+    raw: bytes, content_type: str | None, filename: str | None
+) -> tuple[str, dict[str, Any]]:
+    """Return a deterministic hex section string and its canonicalization provenance.
+
+    PDF and DOCX files are normalized through the C-Pipe canonicalizer so that
+    volatile metadata (timestamps, revision counters, producer strings, etc.)
+    does not affect the commitment.  All other binary types fall back to the
+    BLAKE3 hash of the raw bytes.
+
+    Args:
+        raw: Raw file bytes.
+        content_type: MIME type reported by the upload, if any.
+        filename: Original filename, used as a fallback for type detection.
+
+    Returns:
+        Tuple of (hex-encoded BLAKE3 section string, canonicalization provenance dict).
+    """
+    ct = (content_type or "").lower()
+    ext = (filename or "").lower().rsplit(".", 1)[-1] if filename else ""
+
+    canonicalizer = Canonicalizer()
+
+    if "pdf" in ct or ext == "pdf":
+        try:
+            normalized, mode = canonicalizer.pdf_normalize(raw)
+            return hash_bytes(normalized).hex(), canonicalization_provenance("application/pdf", mode)
+        except CanonicalizationError:
+            pass  # fall through to raw hash on canonicalization failure
+
+    if (
+        "vnd.openxmlformats-officedocument.wordprocessingml.document" in ct
+        or ext in {"docx", "docm"}
+    ):
+        try:
+            return canonicalizer.docx_v1(raw).hex(), canonicalization_provenance(
+                "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                "docx_v1",
+            )
+        except CanonicalizationError:
+            pass  # fall through to raw hash on canonicalization failure
+
+    return hash_bytes(raw).hex(), canonicalization_provenance(
+        ct or "application/octet-stream", "blake3_raw"
+    )
+
+
 def _commit_parts(
     document_id: str,
     version: int,
@@ -356,6 +404,7 @@ def _commit_parts(
     release_at: str | None = None,
     recipient_keys: list[str] | None = None,
     metadata: dict[str, Any] | None = None,
+    canon_provenance: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Commit document parts and persist the local debug-console state."""
     if not parts:
@@ -385,6 +434,8 @@ def _commit_parts(
     commit_key = f"{document_id}:{version}"
     entry_metadata = dict(metadata or {})
     entry_metadata["committed_at"] = committed_at
+    if canon_provenance is not None:
+        entry_metadata["canon_provenance"] = canon_provenance
     receipt_payload = {
         "document_id": document_id,
         "version": version,
@@ -422,6 +473,7 @@ def _commit_parts(
         "poseidon_root": commitment.poseidon_root,
         "sections_count": len(parts),
         "receipt": receipt,
+        "canon_provenance": canon_provenance,
     }
 
 
@@ -825,8 +877,9 @@ async def commit_document(
     try:
         text = raw.decode("utf-8")
     except UnicodeDecodeError:
-        # Binary file: treat the whole file as a single section keyed by its BLAKE3 hash.
-        parts: list[str] = [hash_bytes(raw).hex()]
+        # Binary file: derive a deterministic section via format-aware canonicalization.
+        section, canon_prov = _canonical_section_from_binary(raw, file.content_type, file.filename)
+        parts: list[str] = [section]
     else:
         # Accept JSON array of strings or plain text (one section per non-empty line).
         parts = []
@@ -834,6 +887,7 @@ async def commit_document(
             parsed = json.loads(text)
             if isinstance(parsed, list):
                 parts = [str(item) for item in parsed if str(item).strip()]
+                canon_prov = canonicalization_provenance("application/json", "json_array_v1")
             else:
                 return JSONResponse(
                     status_code=400,
@@ -841,6 +895,7 @@ async def commit_document(
                 )
         except json.JSONDecodeError:
             parts = [line for line in text.splitlines() if line.strip()]
+            canon_prov = canonicalization_provenance("text/plain", "plaintext_lines_v1")
 
     if not parts:
         return JSONResponse(
@@ -856,6 +911,7 @@ async def commit_document(
             file_name=file.filename,
             release_at=release_at,
             recipient_keys=recipients,
+            canon_provenance=canon_prov,
         )
     except ValueError as exc:
         return JSONResponse(status_code=400, content={"ok": False, "error": str(exc)})
@@ -884,6 +940,7 @@ async def commit_document(
             "sections_count": commit_result["sections_count"],
             "commit_key": commit_result["commit_key"],
             "receipt": commit_result["receipt"],
+            "canon_provenance": commit_result["canon_provenance"],
             "embargo": _embargo_summary(entry),
             "ledger_commit_id": ledger_commit_id,
         }
