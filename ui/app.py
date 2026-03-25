@@ -804,6 +804,18 @@ async def commit_document(
 
     entry = _commit_store[commit_result["commit_key"]]
 
+    ledger_commit_id: str | None = None
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as api_client:
+            api_resp = await api_client.post(
+                f"{API_BASE}/doc/commit",
+                json={"doc_hash": commit_result["blake3_root"]},
+            )
+            api_resp.raise_for_status()
+            ledger_commit_id = api_resp.json().get("commit_id")
+    except Exception:
+        pass
+
     return JSONResponse(
         {
             "ok": True,
@@ -815,6 +827,7 @@ async def commit_document(
             "commit_key": commit_result["commit_key"],
             "receipt": commit_result["receipt"],
             "embargo": _embargo_summary(entry),
+            "ledger_commit_id": ledger_commit_id,
         }
     )
 
