@@ -1228,3 +1228,87 @@ def test_inspect_proof_bundle_accepts_matching_revealed_count(monkeypatch):
     assert response.status_code == 200
     data = response.json()
     assert data["ok"] is True
+
+
+# ── Ledger Verification Proxy ────────────────────────────────────────────
+
+
+def test_proxy_verify_simple_forwards_doc_hash(monkeypatch):
+    """Proxy should forward doc_hash using httpx native data= parameter."""
+    monkeypatch.setattr(ui_app, "DEBUG_UI_ENABLED", True)
+
+    mock_response = unittest.mock.MagicMock()
+    mock_response.json.return_value = {"verified": False, "confidence": "none"}
+    mock_response.raise_for_status = unittest.mock.MagicMock()
+
+    mock_client = unittest.mock.AsyncMock()
+    mock_client.__aenter__ = unittest.mock.AsyncMock(return_value=mock_client)
+    mock_client.__aexit__ = unittest.mock.AsyncMock(return_value=False)
+    mock_client.post = unittest.mock.AsyncMock(return_value=mock_response)
+
+    monkeypatch.setattr(ui_app.httpx, "AsyncClient", lambda **kwargs: mock_client)
+
+    response = client.post(
+        "/ledger/verify/simple",
+        data={"doc_hash": "ab" * 32},
+    )
+
+    assert response.status_code == 200
+    call_kwargs = mock_client.post.call_args
+    assert call_kwargs.kwargs["data"] == {"doc_hash": "ab" * 32}
+    assert call_kwargs.kwargs["files"] is None
+
+
+def test_proxy_verify_simple_forwards_file_upload(monkeypatch):
+    """Proxy should forward file uploads using httpx native files= parameter."""
+    monkeypatch.setattr(ui_app, "DEBUG_UI_ENABLED", True)
+
+    mock_response = unittest.mock.MagicMock()
+    mock_response.json.return_value = {"verified": True, "confidence": "certain"}
+    mock_response.raise_for_status = unittest.mock.MagicMock()
+
+    mock_client = unittest.mock.AsyncMock()
+    mock_client.__aenter__ = unittest.mock.AsyncMock(return_value=mock_client)
+    mock_client.__aexit__ = unittest.mock.AsyncMock(return_value=False)
+    mock_client.post = unittest.mock.AsyncMock(return_value=mock_response)
+
+    monkeypatch.setattr(ui_app.httpx, "AsyncClient", lambda **kwargs: mock_client)
+
+    response = client.post(
+        "/ledger/verify/simple",
+        files={"file": ("test.txt", b"hello", "text/plain")},
+    )
+
+    assert response.status_code == 200
+    call_kwargs = mock_client.post.call_args
+    sent_files = call_kwargs.kwargs["files"]
+    assert "file" in sent_files
+    filename, content, ctype = sent_files["file"]
+    assert filename == "test.txt"
+    assert content == b"hello"
+    assert ctype == "text/plain"
+
+
+def test_proxy_verify_simple_handles_api_error(monkeypatch):
+    """Proxy should relay HTTP error status and body from the API."""
+    monkeypatch.setattr(ui_app, "DEBUG_UI_ENABLED", True)
+
+    error_resp = unittest.mock.MagicMock()
+    error_resp.status_code = 400
+    error_resp.json.return_value = {"detail": {"code": "MISSING_INPUT"}}
+
+    mock_client = unittest.mock.AsyncMock()
+    mock_client.__aenter__ = unittest.mock.AsyncMock(return_value=mock_client)
+    mock_client.__aexit__ = unittest.mock.AsyncMock(return_value=False)
+    mock_client.post = unittest.mock.AsyncMock(
+        side_effect=ui_app.httpx.HTTPStatusError(
+            "400", request=unittest.mock.MagicMock(), response=error_resp
+        )
+    )
+
+    monkeypatch.setattr(ui_app.httpx, "AsyncClient", lambda **kwargs: mock_client)
+
+    response = client.post("/ledger/verify/simple", data={"doc_hash": "ff" * 32})
+
+    assert response.status_code == 400
+    assert response.json()["detail"]["code"] == "MISSING_INPUT"

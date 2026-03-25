@@ -707,13 +707,21 @@ async def proxy_ledger_verify_simple(request: Request):
     """Proxy POST /ledger/verify/simple to the unified API (multipart or form)."""
     _require_debug_ui()
     try:
-        body = await request.body()
-        content_type = request.headers.get("content-type", "")
+        form = await request.form()
+        data: dict[str, str] = {}
+        upload_files: dict[str, tuple[str, bytes, str]] = {}
+        for key in form:
+            value = form[key]
+            if hasattr(value, "read"):
+                file_bytes = await value.read()
+                upload_files[key] = (value.filename or key, file_bytes, value.content_type or "application/octet-stream")
+            else:
+                data[key] = str(value)
         async with httpx.AsyncClient(timeout=30.0) as client:
             resp = await client.post(
                 f"{API_BASE}/ledger/verify/simple",
-                content=body,
-                headers={"content-type": content_type},
+                data=data or None,
+                files=upload_files or None,
             )
             resp.raise_for_status()
             return JSONResponse(resp.json())
