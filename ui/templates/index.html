@@ -1,2347 +1,1253 @@
 <!DOCTYPE html>
-<html lang="en" data-theme="professional">
+<html lang="en" data-theme="terminal">
 <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>{{ page_title }}</title>
     <style>
-        /* ── Default / Professional theme (light) ──────────────────────────── */
+        @import url('https://fonts.googleapis.com/css2?family=Share+Tech+Mono&display=swap');
+
+        /* CSS Custom Properties */
         :root {
-            --bg: #f8fafc;
-            --surface: #ffffff;
-            --surface-muted: #f1f5f9;
-            --text: #0f172a;
-            --muted-text: #334155;
-            --border: #cbd5e1;
-            --accent: #0f766e;
-            --danger-bg: #fee2e2;
-            --danger-border: #ef4444;
-            --danger-text: #7f1d1d;
-            --ok: #166534;
-            --bad: #991b1b;
-            --font-body: sans-serif;
-            --font-mono: 'Courier New', Courier, monospace;
-            --radius: 6px;
-        }
-
-        @media (prefers-color-scheme: dark) {
-            :root {
-                --bg: #020617;
-                --surface: #0f172a;
-                --surface-muted: #111827;
-                --text: #e2e8f0;
-                --muted-text: #94a3b8;
-                --border: #334155;
-                --accent: #2dd4bf;
-                --danger-bg: #450a0a;
-                --danger-border: #dc2626;
-                --danger-text: #fecaca;
-                --ok: #4ade80;
-                --bad: #f87171;
-            }
-        }
-
-        /* ── Fight Club / Matrix theme ─────────────────────────────────────── */
-        [data-theme="fight-club"] {
             --bg: #0a0a0a;
             --surface: #111111;
             --surface-muted: #1a1a1a;
             --text: #00ff41;
             --muted-text: #00cc33;
-            --border: #003300;
             --accent: #00ff41;
-            --danger-bg: #1a0000;
-            --danger-border: #ff0040;
+            --border: rgba(0, 255, 65, 0.3);
+            --danger: #ff0040;
             --danger-text: #ff4466;
-            --ok: #00ff41;
-            --bad: #ff0040;
-            --font-body: 'Courier New', Courier, monospace;
-            --font-mono: 'Courier New', Courier, monospace;
-            --radius: 0px;
+            --glow: 0 0 5px var(--accent);
+            --font: 'Share Tech Mono', monospace;
         }
 
-        /* ── Amber Terminal color scheme ────────────────────────────────────── */
-        [data-theme="fight-club"][data-color-scheme="amber"] {
-            --text: #ffb000;
-            --muted-text: #cc8800;
-            --border: #332200;
-            --accent: #ffb000;
-            --ok: #ffb000;
-        }
+        *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 
-        /* ── Blue Light color scheme ───────────────────────────────────────── */
-        [data-theme="fight-club"][data-color-scheme="blue"] {
-            --text: #00bfff;
-            --muted-text: #0099cc;
-            --border: #002233;
-            --accent: #00bfff;
-            --ok: #00bfff;
-        }
-
-        /* ── Minimal / Zen theme ───────────────────────────────────────────── */
-        [data-theme="minimal"] {
-            --bg: #fafafa;
-            --surface: #ffffff;
-            --surface-muted: #f5f5f5;
-            --text: #333333;
-            --muted-text: #888888;
-            --border: #eeeeee;
-            --accent: #555555;
-            --danger-bg: #fff5f5;
-            --danger-border: #e53e3e;
-            --danger-text: #742a2a;
-            --ok: #2f855a;
-            --bad: #c53030;
-            --font-body: Georgia, 'Times New Roman', serif;
-            --radius: 2px;
-        }
-
-        /* ── Accessibility / High Contrast theme ───────────────────────────── */
-        [data-theme="accessibility"] {
-            --bg: #000000;
-            --surface: #1a1a1a;
-            --surface-muted: #262626;
-            --text: #ffffff;
-            --muted-text: #e0e0e0;
-            --border: #ffffff;
-            --accent: #ffff00;
-            --danger-bg: #4a0000;
-            --danger-border: #ff6666;
-            --danger-text: #ffcccc;
-            --ok: #66ff66;
-            --bad: #ff6666;
-            --font-body: Arial, Helvetica, sans-serif;
-            --radius: 4px;
-        }
-
-        body { background: var(--bg); color: var(--text); font-family: var(--font-body, sans-serif); margin: 1rem 2rem; }
-        h1, h2, h3, h4 { color: var(--accent); }
-        p { color: var(--muted-text); }
-        .banner { background: var(--danger-bg); border: 1px solid var(--danger-border); color: var(--danger-text); padding: .5rem; margin-bottom: .5rem; }
-        .panel { background: var(--surface); border: 1px solid var(--border); margin-bottom: 1rem; padding: .75rem; border-radius: var(--radius, 6px); }
-        .ok { color: var(--ok); }
-        .bad { color: var(--bad); font-weight: 700; }
-        code { font-size: .85rem; overflow-wrap: break-word; }
-        table { width: 100%; border-collapse: collapse; }
-        td, th { border: 1px solid var(--border); padding: .25rem .4rem; text-align: left; }
-        input, textarea { margin-right: .5rem; }
-        pre { background: var(--surface-muted); border: 1px solid var(--border); padding: .75rem; overflow: auto; }
-        .row { display: flex; flex-wrap: wrap; gap: .5rem; align-items: center; margin-bottom: .5rem; }
-        .section-list { margin: .5rem 0; }
-        .section-item { display: flex; align-items: flex-start; gap: .5rem; margin-bottom: .25rem; }
-        .section-item input[type=checkbox] { margin-top: .2rem; flex-shrink: 0; }
-        .section-text { font-size: .85rem; color: var(--muted-text); white-space: pre-wrap; word-break: break-word; }
-        textarea { min-height: 4.5rem; min-width: 20rem; }
-        button { cursor: pointer; }
-
-        /* ── Fight Club specific styles ─────────────────────────────────────── */
-        [data-theme="fight-club"] body { font-family: var(--font-mono); }
-        [data-theme="fight-club"] .panel { border-style: solid; border-width: 1px; }
-        [data-theme="fight-club"] input,
-        [data-theme="fight-club"] textarea,
-        [data-theme="fight-club"] button {
-            background: var(--surface); color: var(--text); border: 1px solid var(--border);
-            font-family: var(--font-mono);
-        }
-        [data-theme="fight-club"] button:hover { background: var(--accent); color: var(--bg); }
-        [data-theme="fight-club"] pre { font-family: var(--font-mono); color: var(--text); }
-        [data-theme="fight-club"] code { color: var(--accent); }
-        [data-theme="fight-club"] td, [data-theme="fight-club"] th { font-family: var(--font-mono); font-size: .85rem; }
-
-        /* ── Accessibility specific styles ─────────────────────────────────── */
-        [data-theme="accessibility"] body { font-size: 1.15rem; line-height: 1.8; }
-        [data-theme="accessibility"] h1 { font-size: 2rem; }
-        [data-theme="accessibility"] h2 { font-size: 1.6rem; }
-        [data-theme="accessibility"] button {
-            background: var(--accent); color: var(--bg); border: 2px solid var(--accent);
-            font-size: 1.1rem; padding: .5rem 1rem; font-weight: 700;
-        }
-        [data-theme="accessibility"] input,
-        [data-theme="accessibility"] textarea {
-            background: var(--surface); color: var(--text); border: 2px solid var(--border);
-            font-size: 1.1rem; padding: .4rem;
-        }
-        [data-theme="accessibility"] a { color: var(--accent); text-decoration: underline; }
-
-        /* ── Minimal specific styles ───────────────────────────────────────── */
-        [data-theme="minimal"] body { max-width: 48rem; margin: 2rem auto; font-family: var(--font-body, Georgia, serif); }
-        [data-theme="minimal"] .panel { border: none; border-bottom: 1px solid var(--border); border-radius: 0; padding: 1rem 0; }
-        [data-theme="minimal"] h1, [data-theme="minimal"] h2 { font-weight: 400; }
-
-        /* ── Glyph rain canvas ─────────────────────────────────────────────── */
-        #glyph-rain {
-            position: fixed; top: 0; left: 0; width: 100%; height: 100%;
-            z-index: -1; pointer-events: none; opacity: 0.15;
-        }
-
-        /* ── Theme switcher panel ──────────────────────────────────────────── */
-        #theme-switcher {
-            position: fixed; top: .5rem; right: .5rem; z-index: 1000;
-            background: var(--surface); border: 1px solid var(--border);
-            border-radius: var(--radius, 6px); padding: .5rem; font-size: .8rem;
-            max-width: 260px;
-        }
-        #theme-switcher summary { cursor: pointer; color: var(--accent); font-weight: 600; }
-        #theme-switcher label { display: block; padding: .15rem 0; cursor: pointer; }
-        #theme-switcher .theme-section { margin-top: .4rem; padding-top: .3rem; border-top: 1px solid var(--border); }
-        #theme-switcher .theme-section-label { font-weight: 600; font-size: .75rem; color: var(--muted-text); margin-bottom: .15rem; }
-
-        /* ── User-friendly FOIA Ledger styles ────────────────────────────── */
-        .foia-help-text {
-            color: var(--muted-text);
-            font-size: .95rem;
-            margin-bottom: 1rem;
-            line-height: 1.6;
-        }
-
-        /* How This Works guide */
-        .foia-steps {
-            margin: 0.5rem 0 1rem 1.25rem;
-            padding: 0;
-            line-height: 1.8;
-            font-size: 0.975rem;
-        }
-        .foia-steps li { margin-bottom: 0.4rem; }
-
-        /* Hash verification result container */
-        .hash-verify-result { margin-top: 0.75rem; }
-
-        /* Process steps */
-        .foia-step {
-            display: flex;
-            gap: 1rem;
-            padding: .75rem 1rem;
-            margin: .35rem 0;
-            border-left: 3px solid var(--border);
-            border-radius: 0 var(--radius) var(--radius) 0;
-            background: var(--surface-muted);
-        }
-        .foia-step-complete { border-left-color: #22c55e; background: rgba(34,197,94,.08); }
-        .foia-step-failed   { border-left-color: #ef4444; background: rgba(239,68,68,.08); }
-        .foia-step-in_progress { border-left-color: #3b82f6; background: rgba(59,130,246,.08); }
-        .foia-step-icon { font-size: 1.25rem; flex-shrink: 0; }
-        .foia-step-content strong { display: block; margin-bottom: .15rem; }
-        .foia-step-content p { margin: 0; font-size: .9rem; color: var(--muted-text); }
-        .foia-step-content details { margin-top: .35rem; }
-        .foia-step-content details summary { font-size: .8rem; cursor: pointer; color: var(--accent); }
-        .foia-step-content details pre { font-size: .75rem; overflow-x: auto; margin: .35rem 0 0; }
-
-        /* Result cards */
-        .foia-result {
-            padding: 1.25rem 1.5rem;
-            border-radius: var(--radius);
-            margin: 1rem 0;
-        }
-        .foia-result-success { background: rgba(34,197,94,.08); border: 2px solid #22c55e; }
-        .foia-result-error   { background: rgba(239,68,68,.08); border: 2px solid #ef4444; }
-        .foia-result h3 { margin: 0 0 .5rem; }
-        .foia-explanation { font-size: 1rem; margin: .75rem 0; line-height: 1.6; }
-        .foia-record-id {
-            font-family: var(--font-mono);
-            background: var(--surface);
-            padding: .35rem .6rem;
-            border-radius: var(--radius);
-            border: 1px solid var(--border);
-            display: inline-block;
-            margin: .35rem 0;
-        }
-        .foia-next-steps { margin: .5rem 0; font-size: .95rem; }
-        .foia-error-help {
-            background: rgba(245,158,11,.12);
-            padding: .75rem 1rem;
-            border-radius: var(--radius);
-            border-left: 4px solid #f59e0b;
-            margin-top: .75rem;
-            font-size: .9rem;
-        }
-
-        /* Verification */
-        .foia-verified   { background: rgba(34,197,94,.08); border: 3px solid #22c55e; }
-        .foia-notfound   { background: rgba(239,68,68,.08); border: 3px solid #ef4444; }
-        .foia-importance {
-            background: rgba(59,130,246,.08);
-            padding: .75rem 1rem;
-            border-radius: var(--radius);
-            font-style: italic;
-            margin: .75rem 0;
-            font-size: .9rem;
-        }
-        .foia-proof-step { margin: .25rem 0; font-size: .875rem; color: var(--muted-text); }
-
-        /* Verification method cards */
-        .foia-verify-methods {
-            display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
-            gap: 1rem;
-            margin-bottom: 1rem;
-        }
-        .foia-method {
-            padding: 1rem;
-            border: 1px solid var(--border);
-            border-radius: var(--radius);
-        }
-        .foia-method h4 { margin: 0 0 .35rem; font-size: .95rem; }
-        .foia-method input[type=file],
-        .foia-method input[type=text] { width: 100%; margin-bottom: .5rem; box-sizing: border-box; }
-        .foia-method button { width: 100%; }
-
-        /* Activity feed */
-        .foia-filter-bar { display: flex; gap: .5rem; flex-wrap: wrap; margin-bottom: 1rem; }
-        .foia-filter-btn {
-            padding: .3rem .75rem;
-            border-radius: 9999px;
-            border: 1px solid var(--border);
-            background: var(--surface-muted);
-            cursor: pointer;
-            font-size: .85rem;
+        body {
+            background: var(--bg);
             color: var(--text);
+            font-family: var(--font);
+            font-size: 14px;
+            line-height: 1.6;
+            min-height: 100vh;
+            overflow-x: hidden;
         }
-        .foia-filter-btn:hover { border-color: var(--accent); color: var(--accent); }
-        .foia-filter-active { border-color: var(--accent); background: var(--accent); color: var(--surface); }
 
-        .foia-activity-item {
-            display: grid;
-            grid-template-columns: 90px 2rem 1fr auto;
-            gap: .75rem;
-            padding: .75rem 0;
-            border-bottom: 1px solid var(--border);
-            align-items: start;
+        /* CRT Scanlines */
+        #crt-overlay {
+            position: fixed;
+            top: 0; left: 0; right: 0; bottom: 0;
+            pointer-events: none;
+            z-index: 9999;
+            background: repeating-linear-gradient(
+                0deg,
+                transparent,
+                transparent 2px,
+                rgba(0, 0, 0, 0.08) 2px,
+                rgba(0, 0, 0, 0.08) 4px
+            );
         }
-        .foia-activity-time { font-size: .8rem; color: var(--muted-text); padding-top: .1rem; }
-        .foia-activity-icon { font-size: 1.2rem; text-align: center; }
-        .foia-activity-content h4 { margin: 0 0 .2rem; font-size: .95rem; }
-        .foia-activity-content p  { margin: 0; font-size: .85rem; color: var(--muted-text); line-height: 1.4; }
-        .foia-status-badge {
-            display: inline-block;
-            padding: .15rem .5rem;
-            border-radius: 9999px;
-            font-size: .75rem;
-            font-weight: 600;
-            border: 1px solid var(--border);
+
+        /* Vignette */
+        #vignette-overlay {
+            position: fixed;
+            top: 0; left: 0; right: 0; bottom: 0;
+            pointer-events: none;
+            z-index: 9998;
+            box-shadow: inset 0 0 150px 60px rgba(0, 0, 0, 0.7);
+        }
+
+        /* Matrix Rain Canvas */
+        #matrix-canvas {
+            position: fixed;
+            top: 0; left: 0;
+            width: 100%; height: 100%;
+            z-index: 0;
+            opacity: 0;
+            pointer-events: none;
+            transition: opacity 0.5s ease;
+        }
+        #matrix-canvas.active { opacity: 0.08; }
+
+        /* Boot Sequence */
+        #boot-screen {
+            position: fixed;
+            top: 0; left: 0; right: 0; bottom: 0;
+            background: #0a0a0a;
+            z-index: 10000;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            transition: opacity 0.8s ease;
+        }
+        #boot-screen.fade-out { opacity: 0; }
+        #boot-content {
+            max-width: 700px;
+            width: 90%;
+            padding: 2rem;
+        }
+        .boot-line {
+            opacity: 0;
             white-space: nowrap;
+            overflow: hidden;
+            color: var(--accent);
+            text-shadow: var(--glow);
+            font-size: 13px;
+            line-height: 1.8;
+        }
+        .boot-line.visible { opacity: 1; }
+        .boot-line.title {
+            font-size: 16px;
+            letter-spacing: 0.15em;
+            margin-bottom: 0.25rem;
+        }
+        .boot-line.separator { margin-bottom: 0.5rem; }
+        .boot-ok { color: var(--accent); }
+        .boot-line.ready { margin-top: 0.5rem; }
+        .boot-line.ready.visible { animation: blink 0.8s step-end infinite; }
+        @keyframes blink { 50% { opacity: 0; } }
+
+        /* Main App */
+        #app {
+            display: none;
+            position: relative;
+            z-index: 1;
+            min-height: 100vh;
+        }
+        #app.visible { display: block; }
+
+        /* Top Bar */
+        .top-bar {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 0.5rem 1rem;
+            border-bottom: 1px solid var(--border);
+            background: var(--surface);
+            flex-wrap: wrap;
+            gap: 0.5rem;
+        }
+        .top-bar-left { display: flex; align-items: center; gap: 1rem; }
+        .top-bar-title {
+            font-size: 13px;
+            text-transform: uppercase;
+            letter-spacing: 0.15em;
+            color: var(--accent);
+            text-shadow: var(--glow);
+        }
+        .top-bar-right { display: flex; align-items: center; gap: 0.5rem; flex-wrap: wrap; }
+        .color-btn {
+            background: transparent;
+            border: 1px solid var(--border);
+            color: var(--muted-text);
+            padding: 0.2rem 0.5rem;
+            font-family: var(--font);
+            font-size: 11px;
+            cursor: pointer;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+            transition: all 0.2s;
+        }
+        .color-btn:hover, .color-btn.active {
+            border-color: var(--accent);
+            color: var(--accent);
+            text-shadow: var(--glow);
+        }
+        .color-btn.active { background: rgba(0, 255, 65, 0.1); }
+        .matrix-toggle {
+            background: transparent;
+            border: 1px solid var(--border);
+            color: var(--muted-text);
+            padding: 0.2rem 0.5rem;
+            font-family: var(--font);
+            font-size: 11px;
+            cursor: pointer;
+            text-transform: uppercase;
+            transition: all 0.2s;
+        }
+        .matrix-toggle.active {
+            border-color: var(--accent);
+            color: var(--accent);
+            text-shadow: var(--glow);
+        }
+
+        /* Tab Navigation */
+        .tab-bar {
+            display: flex;
+            border-bottom: 1px solid var(--border);
+            background: var(--bg);
+            overflow-x: auto;
+        }
+        .tab-btn {
+            background: transparent;
+            border: none;
+            border-bottom: 2px solid transparent;
+            color: var(--muted-text);
+            padding: 0.6rem 1.2rem;
+            font-family: var(--font);
+            font-size: 13px;
+            cursor: pointer;
+            text-transform: uppercase;
+            letter-spacing: 0.1em;
+            white-space: nowrap;
+            transition: all 0.2s;
+        }
+        .tab-btn::before { content: '> '; opacity: 0.4; }
+        .tab-btn:hover {
+            color: var(--accent);
+            background: rgba(0, 255, 65, 0.03);
+        }
+        .tab-btn.active {
+            color: var(--accent);
+            border-bottom-color: var(--accent);
+            text-shadow: var(--glow);
+        }
+        .tab-btn.active::before { opacity: 1; }
+
+        /* Tab Content */
+        .tab-panel { display: none; padding: 1.5rem; max-width: 1100px; }
+        .tab-panel.active { display: block; }
+
+        /* Section Headers */
+        .section-title {
+            font-size: 14px;
+            text-transform: uppercase;
+            letter-spacing: 0.15em;
+            color: var(--accent);
+            text-shadow: var(--glow);
+            margin-bottom: 0.75rem;
+            border-bottom: 1px solid var(--border);
+            padding-bottom: 0.5rem;
+        }
+        .section-block { margin-bottom: 2rem; }
+
+        /* Banners */
+        .banner {
+            background: rgba(255, 0, 64, 0.1);
+            border: 1px solid var(--danger);
+            color: var(--danger-text);
+            padding: 0.6rem 1rem;
+            margin-bottom: 0.75rem;
+            font-size: 13px;
+        }
+        .banner::before { content: '[!] '; font-weight: bold; }
+
+        /* Tables */
+        table { width: 100%; border-collapse: collapse; margin-bottom: 1rem; font-size: 13px; }
+        th, td { text-align: left; padding: 0.4rem 0.75rem; border-bottom: 1px solid var(--border); }
+        th { color: var(--accent); text-transform: uppercase; font-size: 11px; letter-spacing: 0.1em; }
+        td { color: var(--text); }
+        .ok { color: var(--accent); }
+        .bad { color: var(--danger); }
+
+        /* Forms */
+        .form-group { margin-bottom: 1rem; }
+        .form-group label {
+            display: block;
+            font-size: 11px;
+            text-transform: uppercase;
+            letter-spacing: 0.1em;
+            color: var(--muted-text);
+            margin-bottom: 0.3rem;
+        }
+        input[type="text"],
+        input[type="number"],
+        input[type="datetime-local"],
+        input[type="file"],
+        textarea,
+        select {
+            width: 100%;
+            max-width: 500px;
+            background: var(--bg);
+            border: 1px solid var(--border);
+            color: var(--text);
+            padding: 0.5rem 0.75rem;
+            font-family: var(--font);
+            font-size: 13px;
+            outline: none;
+            transition: border-color 0.2s;
+        }
+        input:focus, textarea:focus, select:focus {
+            border-color: var(--accent);
+            box-shadow: 0 0 5px rgba(0, 255, 65, 0.2);
+        }
+        textarea { min-height: 120px; resize: vertical; }
+        input[type="file"] { padding: 0.4rem; }
+        input[type="file"]::file-selector-button {
+            background: transparent;
+            color: var(--accent);
+            border: 1px solid var(--accent);
+            padding: 0.3rem 0.6rem;
+            font-family: var(--font);
+            font-size: 12px;
+            cursor: pointer;
+            text-transform: uppercase;
+            margin-right: 0.5rem;
+        }
+
+        /* Buttons */
+        button, .btn {
+            background: transparent;
+            color: var(--accent);
+            border: 1px solid var(--accent);
+            padding: 0.5rem 1rem;
+            font-family: var(--font);
+            font-size: 13px;
+            text-transform: uppercase;
+            cursor: pointer;
+            letter-spacing: 0.1em;
+            transition: all 0.15s;
+            text-shadow: var(--glow);
+        }
+        button:hover, .btn:hover {
+            background: var(--accent);
+            color: var(--bg);
+            text-shadow: none;
+        }
+        button:disabled { opacity: 0.3; cursor: not-allowed; }
+        button:disabled:hover { background: transparent; color: var(--accent); }
+        .btn-danger { border-color: var(--danger); color: var(--danger); text-shadow: 0 0 5px var(--danger); }
+        .btn-danger:hover { background: var(--danger); color: var(--bg); }
+        .btn-row { display: flex; gap: 0.5rem; flex-wrap: wrap; margin-top: 0.5rem; }
+
+        /* Output Blocks */
+        .output-block {
+            background: var(--bg);
+            border-left: 3px solid var(--accent);
+            padding: 1rem;
+            font-family: var(--font);
+            font-size: 13px;
+            white-space: pre-wrap;
+            word-break: break-all;
+            overflow-x: auto;
+            text-shadow: var(--glow);
+            margin-top: 0.75rem;
+            min-height: 2rem;
+            max-height: 500px;
+            overflow-y: auto;
+        }
+        .output-block.error { border-left-color: var(--danger); color: var(--danger-text); }
+        .output-block.success { border-left-color: var(--accent); color: var(--accent); }
+        .output-block:empty::before { content: 'Awaiting input...'; opacity: 0.3; }
+
+        /* Section Checkbox List */
+        .section-check-list { list-style: none; margin: 0.5rem 0; }
+        .section-check-list li { padding: 0.3rem 0; border-bottom: 1px solid rgba(0, 255, 65, 0.08); }
+        .section-check-list label { cursor: pointer; display: flex; align-items: flex-start; gap: 0.5rem; }
+        .section-check-list input[type="checkbox"] { accent-color: var(--accent); margin-top: 0.25rem; }
+        .section-text { font-size: 12px; color: var(--muted-text); word-break: break-word; }
+
+        /* Expandable Blocks */
+        details { margin-bottom: 0.5rem; border: 1px solid var(--border); padding: 0.5rem 0.75rem; }
+        details summary { cursor: pointer; color: var(--accent); text-transform: uppercase; font-size: 12px; letter-spacing: 0.05em; }
+        details[open] summary { margin-bottom: 0.5rem; }
+
+        /* Federation Status */
+        .fed-status { padding: 0.5rem; border: 1px solid var(--border); background: var(--surface); margin-bottom: 1rem; }
+        .fed-status .label { font-size: 11px; text-transform: uppercase; color: var(--muted-text); }
+
+        /* Inline Code */
+        code { background: var(--surface); padding: 0.1rem 0.4rem; font-family: var(--font); font-size: 12px; border: 1px solid var(--border); }
+
+        /* Scrollbar */
+        ::-webkit-scrollbar { width: 6px; height: 6px; }
+        ::-webkit-scrollbar-track { background: var(--bg); }
+        ::-webkit-scrollbar-thumb { background: var(--border); }
+        ::-webkit-scrollbar-thumb:hover { background: var(--accent); }
+
+        /* Spinner */
+        .spinner {
+            display: inline-block;
+            width: 12px; height: 12px;
+            border: 2px solid var(--border);
+            border-top-color: var(--accent);
+            border-radius: 50%;
+            animation: spin 0.6s linear infinite;
+            margin-right: 0.4rem;
+            vertical-align: middle;
+        }
+        @keyframes spin { to { transform: rotate(360deg); } }
+
+        /* Responsive */
+        @media (max-width: 700px) {
+            .top-bar { flex-direction: column; align-items: flex-start; }
+            .tab-btn { padding: 0.5rem 0.8rem; font-size: 12px; }
+            .tab-panel { padding: 1rem; }
+            input[type="text"], input[type="number"], textarea { max-width: 100%; }
         }
     </style>
 </head>
 <body>
-    <!-- ── Glyph rain canvas (Fight Club mode) ──────────────────────────── -->
-    <canvas id="glyph-rain"></canvas>
 
-    <!-- ── Theme Switcher ───────────────────────────────────────────────── -->
-    <details id="theme-switcher">
-        <summary>&#x1f3a8; Theme</summary>
-        <div class="theme-section">
-            <div class="theme-section-label">INTERFACE MODE</div>
-            <label><input type="radio" name="theme-mode" value="fight-club" /> Fight Club (Matrix)</label>
-            <label><input type="radio" name="theme-mode" value="professional" checked /> Professional</label>
-            <label><input type="radio" name="theme-mode" value="minimal" /> Minimal</label>
-            <label><input type="radio" name="theme-mode" value="accessibility" /> Accessibility</label>
-        </div>
-        <div class="theme-section">
-            <div class="theme-section-label">COLOR SCHEME</div>
-            <label><input type="radio" name="color-scheme" value="default" checked /> Default</label>
-            <label><input type="radio" name="color-scheme" value="amber" /> Amber Terminal</label>
-            <label><input type="radio" name="color-scheme" value="blue" /> Blue Light</label>
-        </div>
-        <div class="theme-section">
-            <div class="theme-section-label">LAYOUT</div>
-            <label><input type="checkbox" id="pref-glyph-rain" /> Show glyph rain</label>
-            <label><input type="checkbox" id="pref-compact" /> Compact view</label>
-        </div>
-    </details>
+<!-- CRT Scanlines -->
+<div id="crt-overlay"></div>
+<!-- Vignette -->
+<div id="vignette-overlay"></div>
+<!-- Matrix Rain -->
+<canvas id="matrix-canvas"></canvas>
 
-    <h1>{{ page_heading }}</h1>
-    <p>API base: <code>{{ api_base }}</code></p>
+<!-- BOOT SEQUENCE -->
+<div id="boot-screen">
+    <div id="boot-content">
+        <div class="boot-line title" data-delay="0">OLYMPUS CRYPTOGRAPHIC LEDGER v2.0</div>
+        <div class="boot-line separator" data-delay="200">═══════════════════════════════════════════</div>
+        <div class="boot-line" data-delay="600">[INIT] Loading BLAKE3 hash engine.............. <span class="boot-ok">OK</span></div>
+        <div class="boot-line" data-delay="950">[INIT] Initializing Poseidon BN128 circuit..... <span class="boot-ok">OK</span></div>
+        <div class="boot-line" data-delay="1300">[INIT] Mounting Sparse Merkle Tree............. <span class="boot-ok">OK</span></div>
+        <div class="boot-line" data-delay="1600">[INIT] Verifying Ed25519 key ring.............. <span class="boot-ok">OK</span></div>
+        <div class="boot-line" data-delay="1900">[INIT] Connecting to ledger nodes.............. <span class="boot-ok">OK</span></div>
+        <div class="boot-line" data-delay="2200">[INIT] Chain integrity check................... <span class="boot-ok">OK</span></div>
+        <div class="boot-line ready" data-delay="2600">[BOOT] System ready. Welcome, operator.  █</div>
+    </div>
+</div>
 
-    {% for banner in banners %}
+<!-- MAIN APPLICATION -->
+<div id="app">
+
+    <!-- Top Bar -->
+    <div class="top-bar">
+        <div class="top-bar-left">
+            <span class="top-bar-title">◉ {{ page_heading }}</span>
+            <span style="font-size:11px;color:var(--muted-text)">API: <code>{{ api_base }}</code></span>
+        </div>
+        <div class="top-bar-right">
+            <button class="color-btn active" data-color="green" onclick="setColorScheme('green')">[GREEN]</button>
+            <button class="color-btn" data-color="amber" onclick="setColorScheme('amber')">[AMBER]</button>
+            <button class="color-btn" data-color="blue" onclick="setColorScheme('blue')">[BLUE]</button>
+            <button class="color-btn" data-color="white" onclick="setColorScheme('white')">[WHITE]</button>
+            <button class="matrix-toggle" id="matrixToggle" onclick="toggleMatrix()">[MATRIX: OFF]</button>
+        </div>
+    </div>
+
+    <!-- Tab Bar -->
+    <div class="tab-bar">
+        <button class="tab-btn active" data-tab="status">STATUS</button>
+        <button class="tab-btn" data-tab="commit">COMMIT</button>
+        <button class="tab-btn" data-tab="redact">REDACT</button>
+        <button class="tab-btn" data-tab="verify">VERIFY</button>
+        <button class="tab-btn" data-tab="inspect">INSPECT</button>
+        {% if show_debug_tools %}<button class="tab-btn" data-tab="debug">DEBUG</button>{% endif %}
+    </div>
+
+    <!-- STATUS TAB -->
+    <div class="tab-panel active" id="tab-status">
+        {% for banner in banners %}
         <div class="banner">{{ banner }}</div>
-    {% endfor %}
+        {% endfor %}
 
-    {% if federation.configured %}
-    <div class="panel">
-        <h2>Federation Health Dashboard</h2>
-        <p>Cross-node observer view for shard sync, chain integrity, and node agreement. Quorum is a simple majority of the configured nodes.</p>
-        <table>
-            <thead>
-                <tr>
-                    <th>Shard</th>
-                    <th>Agreement</th>
-                    <th>Quorum</th>
-                    <th>Agreement Root</th>
-                    <th>Nodes</th>
-                </tr>
-            </thead>
-            <tbody>
-            {% for shard in federation.shards %}
-                <tr>
-                    <td>{{ shard.shard_id }}</td>
-                    <td>{% if shard.quorum_met %}<span class="ok">{{ shard.agreement_count }} node(s)</span>{% else %}<span class="bad">{{ shard.agreement_count }} node(s)</span>{% endif %}</td>
-                    <td>{{ shard.quorum }}</td>
-                    <td><code>{{ shard.agreement_root }}</code></td>
-                    <td>
-                        <ul class="mini-list">
-                        {% for state in shard.states %}
-                            <li>
-                                <strong>{{ state.node }}</strong> —
-                                seq {{ state.latest_seq }},
-                                {{ state.sync_status }},
-                                signature {% if state.signature_valid %}<span class="ok">ok</span>{% else %}<span class="bad">bad</span>{% endif %},
-                                chain {% if state.chain_ok %}<span class="ok">ok</span>{% else %}<span class="bad">broken</span>{% endif %}
-                            </li>
-                        {% endfor %}
-                        </ul>
-                    </td>
-                </tr>
-            {% endfor %}
-            </tbody>
-        </table>
-    </div>
-    {% endif %}
-
-    <!-- ── Hash Verification Panel ──────────────────────────────────────── -->
-    <div class="panel">
-        <h2>🔍 Check if a Document is on Record</h2>
-        <p class="foia-help-text">
-            Already have a document fingerprint? Paste it below to confirm whether this
-            document has been permanently recorded and see when it was submitted.
-        </p>
-        <form id="hash-verify-form">
-            <div class="row">
-                <input type="text" id="content-hash"
-                       placeholder="Document fingerprint (64-character code)"
-                       aria-label="Document fingerprint" required />
-                <button type="submit">Check Record</button>
+        {% if federation.configured %}
+        <div class="section-block">
+            <h2 class="section-title">▸ Federation Status</h2>
+            <div class="fed-status">
+                <span class="label">Mode:</span> FEDERATED &mdash; Consensus Required
             </div>
-        </form>
-        <div id="hash-verify-result" aria-live="assertive" class="hash-verify-result"></div>
-    </div>
-
-    <!-- ── Live Node Health Panel ──────────────────────────────────────── -->
-    {% if federation.configured %}
-    <div class="panel">
-        <h2>Live Node Health</h2>
-        <p>Real-time health status of federation nodes. Auto-refreshes every 30 seconds.</p>
-        <button id="refresh-health" type="button">Refresh Now</button>
-        <table>
-            <thead>
-                <tr>
-                    <th>Node</th>
-                    <th>Status</th>
-                    <th>Latest Seq</th>
-                    <th>Latest Root</th>
-                    <th>Last Seen</th>
-                </tr>
-            </thead>
-            <tbody id="node-health-tbody">
-                <tr>
-                    <td colspan="5" style="text-align:center;">Loading...</td>
-                </tr>
-            </tbody>
-        </table>
-    </div>
-    {% endif %}
-
-    {% if show_debug_tools %}
-    <!-- ── Commit Document (debug only — uses in-memory dual-anchor) ─────── -->
-    <div class="panel">
-        <h2>Commit Document</h2>
-        <p>Upload a plain-text file (one section per line) or a JSON array of strings.
-           The panel calls <code>commit_document_dual()</code> and displays the BLAKE3 root and Poseidon root.</p>
-        <form id="commit-form" enctype="multipart/form-data">
-            <div class="row">
-                <label>File (.txt or .json):</label>
-                <input type="file" name="file" accept=".txt,.json" required />
-            </div>
-            <div class="row">
-                <input type="text" name="document_id" placeholder="document_id" required />
-                <input type="number" name="version" placeholder="version" value="1" min="1" />
-                <input type="text" name="release_at" placeholder="scheduled_release_at (optional ISO 8601)" />
-                <button type="submit">Commit</button>
-            </div>
-            <div class="row">
-                <textarea name="recipient_keys" placeholder="recipient keys (optional, comma or newline separated)"></textarea>
-            </div>
-        </form>
-        <div class="row">
-            <a id="download-receipt-link" style="display:none">
-                <button type="button">Download Receipt</button>
-            </a>
-        </div>
-        <pre id="commit-result">Upload a document to commit.</pre>
-    </div>
-    {% endif %}
-
-    <!-- ── FOIA Request Tracker ────────────────────────────────────────────── -->
-    <div class="panel">
-        <h2>FOIA Request Tracker</h2>
-        <p>Commit request submissions, record response timestamps, and download a hashed delay proof.</p>
-        <form id="foia-request-form">
-            <div class="row">
-                <input type="text" name="request_id" placeholder="request_id" required />
-                <input type="text" name="agency" placeholder="agency" required />
-                <input type="text" name="requester" placeholder="requester" required />
-            </div>
-            <div class="row">
-                <input type="text" name="submitted_at" placeholder="submitted_at (ISO 8601)" required />
-                <input type="text" name="response_due_at" placeholder="response_due_at (optional ISO 8601)" />
-            </div>
-            <div class="row">
-                <textarea name="description" placeholder="request description" required></textarea>
-            </div>
-            <div class="row">
-                <button type="submit">Commit Request</button>
-                <a id="download-foia-proof-link" style="display:none">
-                    <button type="button">Download Delay Proof</button>
-                </a>
-            </div>
-        </form>
-        <div class="row">
-            <input type="text" id="foia-response-request-id" placeholder="request_id" />
-            <input type="text" id="foia-response-timestamp" placeholder="response_received_at (ISO 8601)" />
-            <button onclick="logFoiaResponse()">Log Response</button>
-        </div>
-        <div class="row">
-            <textarea id="foia-response-summary" placeholder="response summary (optional)"></textarea>
-        </div>
-        <div class="row">
-            <input type="text" id="foia-proof-request-id" placeholder="request_id" />
-            <button onclick="refreshFoiaDelayProof()">Refresh Delay Proof</button>
-        </div>
-        <pre id="foia-result">Commit a FOIA request to start tracking it.</pre>
-    </div>
-
-    <!-- ── Public Records Requests ───────────────────────────────────────── -->
-    <div class="panel">
-        <h2>Public Records Requests</h2>
-        <p>File and track public records requests. Requests are anchored to the cryptographic ledger with a BLAKE3 commit hash.</p>
-
-        <details open>
-            <summary><strong>File New Request</strong></summary>
-            <form id="submit-request-form">
-                <div class="row">
-                    <input type="text" id="req-subject" placeholder="Subject (e.g., Body camera footage — incident 2024-01-15)" required style="flex:2" />
-                    <input type="text" id="req-agency" placeholder="Agency ID (optional)" />
-                </div>
-                <div class="row">
-                    <textarea id="req-description" placeholder="Full description of the records you are requesting…" required style="min-height:60px"></textarea>
-                </div>
-                <div class="row">
-                    <select id="req-type">
-                        <option value="NC_PUBLIC_RECORDS">NC Public Records (G.S. § 132)</option>
-                        <option value="FOIA">Federal FOIA (5 U.S.C. § 552)</option>
-                        <option value="FERPA">FERPA</option>
-                    </select>
-                    <select id="req-priority">
-                        <option value="STANDARD">Standard Priority</option>
-                        <option value="EXPEDITED">Expedited</option>
-                    </select>
-                    <button type="submit">Submit Request</button>
-                    <button type="button" id="btn-refine" onclick="refineRequest()">✨ Refine My Request</button>
-                </div>
-            </form>
-            <pre id="submit-request-result">Fill out the form above to submit a public records request.</pre>
-        </details>
-
-        <details open>
-            <summary><strong>Existing Requests</strong></summary>
-            <button type="button" onclick="loadRequests()" style="margin-bottom:0.5rem">↻ Refresh</button>
-            <table id="requests-table">
+            <table>
                 <thead>
-                    <tr>
-                        <th>ID</th>
-                        <th>Subject</th>
-                        <th>Agency</th>
-                        <th>Type</th>
-                        <th>Status</th>
-                        <th>Filed</th>
-                        <th>Deadline</th>
-                        <th>Commit Hash</th>
-                        <th>Actions</th>
-                    </tr>
+                    <tr><th>Shard</th><th>Quorum</th><th>Threshold</th><th>Root</th></tr>
                 </thead>
-                <tbody id="requests-tbody">
-                    <tr><td colspan="9" style="text-align:center">Loading…</td></tr>
+                <tbody>
+                    {% for shard in federation.shards %}
+                    <tr>
+                        <td>{{ shard.shard_id }}</td>
+                        <td>{% if shard.quorum_met %}<span class="ok">{{ shard.agreement_count }} node(s)</span>{% else %}<span class="bad">{{ shard.agreement_count }} node(s)</span>{% endif %}</td>
+                        <td>{{ shard.quorum }}</td>
+                        <td><code>{{ shard.agreement_root }}</code></td>
+                    </tr>
+                    <tr>
+                        <td colspan="4" style="padding-left:2rem;font-size:12px;">
+                            {% for state in shard.states %}
+                            <strong>{{ state.node }}</strong> &mdash;
+                            seq {{ state.latest_seq }},
+                            {{ state.sync_status }},
+                            signature {% if state.signature_valid %}<span class="ok">ok</span>{% else %}<span class="bad">bad</span>{% endif %},
+                            chain {% if state.chain_ok %}<span class="ok">ok</span>{% else %}<span class="bad">broken</span>{% endif %}<br>
+                            {% endfor %}
+                        </td>
+                    </tr>
+                    {% endfor %}
                 </tbody>
             </table>
-        </details>
-    </div>
+        </div>
+        {% endif %}
 
-    <!-- ── Verify Record ─────────────────────────────────────────────────── -->
-    <div class="panel">
-        <h2>Verify Record</h2>
-        <p>Look up a public records request by its display ID and retrieve the cryptographic proof from the ledger. This returns <em>real</em> Sparse Merkle Tree proof data — not simulated.</p>
-        <form id="verify-record-form">
-            <div class="row">
-                <input type="text" id="verify-display-id" placeholder="Display ID (e.g. OLY-0001)" required />
-                <button type="submit">Verify Record</button>
+        <div class="section-block">
+            <h2 class="section-title">▸ Shard Health</h2>
+            <table>
+                <thead>
+                    <tr><th>Shard ID</th><th>Seq</th><th>Root</th><th>Signature</th><th>Chain</th><th>History</th></tr>
+                </thead>
+                <tbody>
+                    {% for row in shards %}
+                    <tr>
+                        <td>{{ row.shard.shard_id }}</td>
+                        <td>{{ row.shard.latest_seq }}</td>
+                        <td><code>{{ row.shard.latest_root }}</code></td>
+                        <td>{% if row.signature_valid %}<span class="ok">✓ valid</span>{% else %}<span class="bad">✗ invalid</span>{% endif %}</td>
+                        <td>{% if row.chain_ok %}<span class="ok">✓ ok</span>{% else %}<span class="bad">✗ broken</span>{% endif %}</td>
+                        <td>
+                            {% for header in row.history %}
+                            <span style="font-size:11px;">seq {{ header.seq }} → <code>{{ header.root_hash }}</code></span><br>
+                            {% endfor %}
+                        </td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+
+        <div class="section-block">
+            <h2 class="section-title">▸ Connectivity Check</h2>
+            <button onclick="runConnectivityCheck()">[ Run Connectivity Check ]</button>
+            <div id="connectivity-output" class="output-block"></div>
+        </div>
+
+        <div class="section-block">
+            <h2 class="section-title">▸ Hash Verification</h2>
+            <div class="form-group">
+                <label>Content Hash (BLAKE3 hex)</label>
+                <input type="text" id="status-hash-input" placeholder="paste a BLAKE3 hash...">
             </div>
-        </form>
-        <pre id="verify-record-result">Enter a display ID to verify its ledger commitment.</pre>
+            <button onclick="verifyHash()">[ Verify Hash ]</button>
+            <div id="hash-verify-output" class="output-block"></div>
+        </div>
     </div>
 
-    <!-- ── Oracle AI Assistant ────────────────────────────────────────────── -->
-    <div class="panel">
-        <h2>Oracle AI Assistant</h2>
-        <p>AI-powered tools for public records requests. Uses Claude to refine requests and draft appeal letters based on the applicable statute and agency context.</p>
-
-        <details>
-            <summary><strong>Draft Appeal Letter</strong></summary>
-            <form id="appeal-form">
-                <div class="row">
-                    <input type="text" id="appeal-display-id" placeholder="Request Display ID (e.g. OLY-0001)" />
-                    <input type="text" id="appeal-agency" placeholder="Agency" />
-                </div>
-                <div class="row">
-                    <input type="text" id="appeal-subject" placeholder="Original request subject" />
-                </div>
-                <div class="row">
-                    <textarea id="appeal-description" placeholder="Original request description"></textarea>
-                </div>
-                <div class="row">
-                    <textarea id="appeal-denial-reason" placeholder="Denial reason (if known)"></textarea>
-                </div>
-                <div class="row">
-                    <select id="appeal-type">
-                        <option value="NC_PUBLIC_RECORDS">NC Public Records (G.S. § 132)</option>
-                        <option value="FOIA">Federal FOIA (5 U.S.C. § 552)</option>
-                        <option value="FERPA">FERPA</option>
-                    </select>
-                    <button type="submit">📝 Draft Appeal Letter</button>
-                </div>
-            </form>
-            <pre id="appeal-result">Fill out the fields above and click "Draft Appeal Letter" to generate a formal appeal.</pre>
-        </details>
-    </div>
-
-    <!-- ── Embargo Management ──────────────────────────────────────────────── -->
-    <div class="panel">
-        <h2>Embargo Management</h2>
-        <p>Set release dates, update multi-recipient access lists, and revoke specific recipients.</p>
-        <div class="row">
-            <input type="text" id="embargo-doc-id" placeholder="document_id" />
-            <input type="number" id="embargo-version" placeholder="version" value="1" min="1" />
-            <button onclick="loadEmbargo()">Load Embargo State</button>
-        </div>
-        <div class="row">
-            <input type="text" id="embargo-release-at" placeholder="scheduled_release_at (ISO 8601)" />
-        </div>
-        <div class="row">
-            <textarea id="embargo-recipient-keys" placeholder="recipient keys (comma or newline separated)"></textarea>
-        </div>
-        <div class="row">
-            <button onclick="saveEmbargo()">Save Embargo Settings</button>
-        </div>
-        <div class="row">
-            <input type="text" id="embargo-revoke-key" placeholder="recipient key to revoke" />
-            <button onclick="revokeEmbargoRecipient()">Revoke Access</button>
-        </div>
-        <pre id="embargo-result">Load a committed document to manage embargo settings.</pre>
-    </div>
-
-    <!-- ── Verify Proof ─────────────────────────────────────────────────── -->
-    <div class="panel">
-        <h2>Verify Proof</h2>
-        <p>Upload a proof bundle JSON file. The panel checks the SMT anchor and ZK proof,
-           then displays the revealed sections.</p>
-        <form id="verify-form">
-            <div class="row">
-                <label>Proof bundle (.json):</label>
-                <input type="file" id="verify-file" accept=".json" required />
-                <button type="submit">Verify</button>
+    <!-- COMMIT TAB -->
+    <div class="tab-panel" id="tab-commit">
+        <div class="section-block">
+            <h2 class="section-title">▸ Document Commit</h2>
+            <div class="form-group">
+                <label>Document ID</label>
+                <input type="text" id="commit-doc-id" placeholder="e.g. GOV-2025-001">
             </div>
-        </form>
-        <pre id="verify-result">Upload a proof bundle to verify.</pre>
-    </div>
-
-    <div class="panel">
-        <h2>Proof Bundle Inspector</h2>
-        <p>Paste any <code>proof_bundle.json</code> to decode every field and explain each invariant check. Proofs generated below are copied here automatically for inspection.</p>
-        <div class="button-row">
-            <button type="button" id="inspect-proof-button">Inspect pasted bundle</button>
-            <button type="button" id="load-proof-file-button">Load from file chooser</button>
-        </div>
-        <textarea id="proof-bundle-input" spellcheck="false" placeholder='{"smt_proof": {...}, "zk_public_inputs": {...}}'></textarea>
-        <div class="grid-two">
-            <div>
-                <h3>Checks</h3>
-                <div id="proof-inspector-checks" class="muted">Paste a bundle and inspect it.</div>
+            <div class="form-group">
+                <label>Version</label>
+                <input type="number" id="commit-version" value="1" min="1">
             </div>
-            <div>
-                <h3>Decoded Fields</h3>
-                <div id="proof-inspector-fields" class="muted">Decoded field metadata will appear here.</div>
+            <div class="form-group">
+                <label>File</label>
+                <input type="file" id="commit-file">
             </div>
+            <div class="form-group">
+                <label>Release At (optional, ISO 8601)</label>
+                <input type="datetime-local" id="commit-release-at">
+            </div>
+            <div class="form-group">
+                <label>Recipient Keys (optional, one per line)</label>
+                <textarea id="commit-recipient-keys" rows="3" placeholder="paste public keys, one per line..."></textarea>
+            </div>
+            <button onclick="executeCommit()">[ Execute Commit ]</button>
+            <div id="commit-output" class="output-block"></div>
         </div>
     </div>
 
-    <div class="panel">
-        <h2>Constants Provenance Notebook</h2>
-        <p>Render the Poseidon BN128 constants provenance chain from circomlibjs source metadata through the exported Python constants, then download the full JSON notebook.</p>
-        <div class="button-row">
-            <button type="button" id="load-constants-button">Load notebook</button>
-            <button type="button" id="download-constants-button" disabled>Download notebook JSON</button>
-        </div>
-        <div id="constants-summary" class="muted">Load the notebook to inspect constants provenance.</div>
-        <pre id="constants-export">Notebook JSON will appear here.</pre>
-    </div>
-
-    <div class="panel">
-        <h2>Circuit Constraint Visualizer</h2>
-        <p>Render a human-readable summary of what each Circom circuit is constraining, backed by exact source snippets.</p>
-        <div class="button-row">
-            <button type="button" id="load-circuits-button">Load circuit summaries</button>
-            <button type="button" id="download-circuits-button" disabled>Download circuit JSON</button>
-        </div>
-        <div id="circuit-visualizer" class="muted">Load the circuit summaries to inspect constraints.</div>
-    </div>
-
-    <!-- ── Redaction Interface ───────────────────────────────────────────── -->
-    <div class="panel">
-        <h2>Redaction Interface</h2>
-        <p>Load a committed document, select the sections to reveal, generate a proof bundle,
-           and download it.</p>
-        <div class="row">
-            <input type="text" id="redact-doc-id" placeholder="document_id" />
-            <input type="number" id="redact-version" placeholder="version" value="1" min="1" />
-            <button onclick="loadRedactDocument()">Load Document</button>
-        </div>
-        <div id="redact-sections" class="section-list"></div>
-        <div id="redact-controls" style="display:none">
-            <div class="row">
-                <button onclick="generateRedactionProof()">Generate Proof</button>
-                <a id="download-proof-link" style="display:none">
-                    <button type="button">Download Proof Bundle</button>
-                </a>
+    <!-- REDACT TAB -->
+    <div class="tab-panel" id="tab-redact">
+        <div class="section-block">
+            <h2 class="section-title">▸ Redaction Workflow</h2>
+            <p style="font-size:12px;color:var(--muted-text);margin-bottom:1rem;">Step 1: Load document sections. Step 2: Select sections to reveal. Step 3: Execute redaction.</p>
+            <div class="form-group">
+                <label>Document ID</label>
+                <input type="text" id="redact-doc-id" placeholder="e.g. GOV-2025-001">
             </div>
+            <div class="form-group">
+                <label>Version</label>
+                <input type="number" id="redact-version" value="1" min="1">
+            </div>
+            <div class="btn-row">
+                <button onclick="loadSections()">[ Load Sections ]</button>
+                <button onclick="executeRedact()" id="redact-execute-btn" disabled>[ Execute Redaction ]</button>
+            </div>
+            <div id="sections-list" style="margin-top:1rem;"></div>
+            <div id="redact-output" class="output-block"></div>
         </div>
-        <pre id="redact-result">Load a committed document to select sections.</pre>
     </div>
 
-    <!-- ── Civic Tooling Prototypes ───────────────────────────────────────── -->
-    <div class="panel">
-        <h2>Representative Voting Record Tracker</h2>
-        <p>Look up a legislator by name and jurisdiction, then pull recent recorded votes from the OpenStates API.</p>
-        <form id="votes-form">
-            <div class="row">
-                <input type="text" name="name" placeholder="Representative name" required />
-                <input type="text" name="jurisdiction" placeholder="Jurisdiction (e.g. Texas)" required />
-                <input type="text" name="chamber" placeholder="Chamber (optional)" />
-                <button type="submit">Load votes</button>
+    <!-- VERIFY TAB -->
+    <div class="tab-panel" id="tab-verify">
+        <div class="section-block">
+            <h2 class="section-title">▸ Proof Bundle Verification</h2>
+            <div class="form-group">
+                <label>Paste JSON Proof Bundle</label>
+                <textarea id="verify-bundle" rows="12" placeholder='{"smt_proof": {...}, "zk_proof": {...}, ...}'></textarea>
             </div>
-        </form>
-        <pre id="votes-result">Search OpenStates for a representative to see recent votes.</pre>
+            <button onclick="executeVerify()">[ Execute Verify ]</button>
+            <div id="verify-output" class="output-block"></div>
+        </div>
     </div>
 
-    <div class="panel">
-        <h2>Bill Text Simplifier Pipeline</h2>
-        <p>Paste bill text, generate a deterministic plain-English summary, and inspect the prompt chain used for each stage.</p>
-        <form id="simplify-form">
-            <textarea id="simplify-text" placeholder="Paste bill text here..." required></textarea>
-            <div class="row">
-                <button type="submit">Simplify bill text</button>
+    <!-- INSPECT TAB -->
+    <div class="tab-panel" id="tab-inspect">
+        <div class="section-block">
+            <h2 class="section-title">▸ Proof Bundle Inspector</h2>
+            <div class="form-group">
+                <label>Paste JSON Proof Bundle</label>
+                <textarea id="inspect-bundle" rows="8" placeholder='{"smt_proof": {...}, "zk_public_inputs": {...}, ...}'></textarea>
             </div>
-        </form>
-        <pre id="simplify-result">Paste bill text to produce a plain-English summary.</pre>
+            <button onclick="inspectBundle()">[ Inspect Bundle ]</button>
+            <div id="inspect-output" class="output-block"></div>
+        </div>
+
+        <div class="section-block">
+            <h2 class="section-title">▸ Constants Provenance</h2>
+            <button onclick="loadProvenance()">[ Load Provenance Data ]</button>
+            <div id="provenance-output" class="output-block"></div>
+        </div>
+
+        <div class="section-block">
+            <h2 class="section-title">▸ Circuit Constraints</h2>
+            <button onclick="loadCircuits()">[ Load Circuit Constraints ]</button>
+            <div id="circuits-output" class="output-block"></div>
+        </div>
     </div>
 
-    <div class="panel">
-        <h2>Geofence Boundary Visualizer</h2>
-        <p>Paste district GeoJSON plus constituent coordinates to render the boundary and show who falls inside the district.</p>
-        <form id="geofence-form">
-            <label for="district-geojson">District GeoJSON</label>
-            <textarea id="district-geojson" placeholder='{"type":"Polygon","coordinates":[[[-97.8,30.2],[-97.7,30.2],[-97.7,30.3],[-97.8,30.3],[-97.8,30.2]]]}'
-                required></textarea>
-            <label for="constituents-json">Constituents JSON</label>
-            <textarea id="constituents-json" placeholder='[{"name":"Alice","lat":30.25,"lon":-97.75},{"name":"Bob","lat":30.31,"lon":-97.75}]'
-                required></textarea>
-            <div class="row">
-                <button type="submit">Render overlap</button>
-            </div>
-        </form>
-        <div id="geofence-map" class="map-preview"></div>
-        <pre id="geofence-result">Paste GeoJSON and constituent points to visualize overlap.</pre>
-    </div>
-
-    <!-- ── Proof Explorer ───────────────────────────────────────────────── -->
-    <div class="panel">
-        <h2>Proof Explorer</h2>
-        <form id="proof-form">
-            <input type="text" name="shard_id" placeholder="shard_id" required />
-            <input type="text" name="record_type" placeholder="record_type" value="document" required />
-            <input type="text" name="record_id" placeholder="record_id" required />
-            <input type="number" name="version" placeholder="version" value="1" min="1" required />
-            <button type="submit">Fetch proof</button>
-        </form>
-        <pre id="proof-result">Submit query to inspect proof payload.</pre>
-    </div>
+    <!-- DEBUG TAB -->
     {% if show_debug_tools %}
-    <div class="panel">
-        <h2>SMT Diff Viewer</h2>
-        <p>Compare two historical shard header sequences and inspect which SMT keys were added, changed, or removed between the two state roots.</p>
-        <form id="diff-form">
-            <div class="row">
-                <input type="text" name="shard_id" placeholder="shard_id" required />
-                <input type="number" name="from_seq" placeholder="from_seq" min="0" required />
-                <input type="number" name="to_seq" placeholder="to_seq" min="0" required />
-                <button type="submit">Compare roots</button>
+    <div class="tab-panel" id="tab-debug">
+        <div class="section-block">
+            <h2 class="section-title">▸ Proof Explorer</h2>
+            <div class="form-group">
+                <label>Shard ID (hex)</label>
+                <input type="text" id="debug-shard-id" placeholder="e.g. a1b2c3...">
             </div>
-        </form>
-        <pre id="diff-result">Submit two shard header sequences to inspect state root differences.</pre>
-    </div>
-
-    <div class="panel">
-        <h2>Shard List</h2>
-        <table>
-            <thead>
-                <tr>
-                    <th>Shard</th>
-                    <th>Latest Seq</th>
-                    <th>Latest Root</th>
-                    <th>Signature</th>
-                    <th>Chain</th>
-                    <th>History</th>
-                </tr>
-            </thead>
-            <tbody>
-            {% for row in shards %}
-                <tr>
-                    <td>{{ row.shard.shard_id }}</td>
-                    <td>{{ row.shard.latest_seq }}</td>
-                    <td><code>{{ row.shard.latest_root }}</code></td>
-                    <td>{% if row.signature_valid %}<span class="ok">valid</span>{% else %}<span class="bad">invalid</span>{% endif %}</td>
-                    <td>{% if row.chain_ok %}<span class="ok">ok</span>{% else %}<span class="bad">broken</span>{% endif %}</td>
-                    <td>
-                        <ul class="mini-list">
-                        {% for header in row.history %}
-                            <li>seq {{ header.seq }} → <code>{{ header.root_hash }}</code></li>
-                        {% endfor %}
-                        </ul>
-                    </td>
-                </tr>
-            {% endfor %}
-            </tbody>
-        </table>
-    </div>
-
-    {% for row in shards %}
-        <div class="panel">
-            <h3>Latest Header: {{ row.shard.shard_id }}</h3>
-            {% if row.header %}
-                <code>{{ row.header }}</code>
-            {% else %}
-                <p>No header available.</p>
-            {% endif %}
-            <h4>Ledger Tail</h4>
-            {% if row.ledger_tail %}
-                <pre>{{ row.ledger_tail }}</pre>
-            {% else %}
-                <p>No ledger entries.</p>
-            {% endif %}
+            <div class="form-group">
+                <label>Record Type</label>
+                <input type="text" id="debug-record-type" placeholder="e.g. document">
+            </div>
+            <div class="form-group">
+                <label>Record ID</label>
+                <input type="text" id="debug-record-id" placeholder="e.g. GOV-2025-001">
+            </div>
+            <div class="form-group">
+                <label>Version</label>
+                <input type="number" id="debug-version" value="1" min="1">
+            </div>
+            <button onclick="proofExplorer()">[ Explore Proof ]</button>
+            <div id="proof-explorer-output" class="output-block"></div>
         </div>
-    {% endfor %}
+
+        <div class="section-block">
+            <h2 class="section-title">▸ SMT Diff Viewer</h2>
+            <div class="form-group">
+                <label>Shard ID (hex)</label>
+                <input type="text" id="diff-shard-id" placeholder="e.g. a1b2c3...">
+            </div>
+            <div class="form-group">
+                <label>From Sequence</label>
+                <input type="number" id="diff-from-seq" value="0" min="0">
+            </div>
+            <div class="form-group">
+                <label>To Sequence</label>
+                <input type="number" id="diff-to-seq" value="1" min="0">
+            </div>
+            <button onclick="loadStateDiff()">[ Load Diff ]</button>
+            <div id="diff-output" class="output-block"></div>
+        </div>
+
+        <div class="section-block">
+            <h2 class="section-title">▸ Embargo Management</h2>
+            <div class="form-group">
+                <label>Document ID</label>
+                <input type="text" id="embargo-doc-id" placeholder="e.g. GOV-2025-001">
+            </div>
+            <div class="form-group">
+                <label>Version</label>
+                <input type="number" id="embargo-version" value="1" min="1">
+            </div>
+            <div class="btn-row">
+                <button onclick="loadEmbargo()">[ Load Embargo ]</button>
+                <button onclick="saveEmbargo()">[ Save Embargo ]</button>
+                <button class="btn-danger" onclick="revokeEmbargo()">[ Revoke Key ]</button>
+            </div>
+            <div class="form-group" style="margin-top:1rem;">
+                <label>Release At (optional, ISO 8601)</label>
+                <input type="datetime-local" id="embargo-release-at">
+            </div>
+            <div class="form-group">
+                <label>Recipient Keys (one per line)</label>
+                <textarea id="embargo-keys" rows="3" placeholder="paste public keys..."></textarea>
+            </div>
+            <div class="form-group">
+                <label>Key to Revoke</label>
+                <input type="text" id="embargo-revoke-key" placeholder="paste key to revoke...">
+            </div>
+            <div id="embargo-output" class="output-block"></div>
+        </div>
+
+        <div class="section-block">
+            <h2 class="section-title">▸ Shard Data</h2>
+            <table>
+                <thead>
+                    <tr><th>Shard ID</th><th>Seq</th><th>Root</th><th>Signature</th><th>Chain</th></tr>
+                </thead>
+                <tbody>
+                    {% for row in shards %}
+                    <tr>
+                        <td>{{ row.shard.shard_id }}</td>
+                        <td>{{ row.shard.latest_seq }}</td>
+                        <td><code>{{ row.shard.latest_root }}</code></td>
+                        <td>{% if row.signature_valid %}<span class="ok">✓ valid</span>{% else %}<span class="bad">✗ invalid</span>{% endif %}</td>
+                        <td>{% if row.chain_ok %}<span class="ok">✓ ok</span>{% else %}<span class="bad">✗ broken</span>{% endif %}</td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+            {% for row in shards %}
+            <details>
+                <summary>Shard Detail: {{ row.shard.shard_id }}</summary>
+                <div style="margin-top:0.5rem;">
+                    <strong>Latest Header:</strong>
+                    {% if row.header %}
+                    <pre style="font-size:12px;margin-top:0.25rem;color:var(--muted-text);">{{ row.header }}</pre>
+                    {% else %}
+                    <span style="color:var(--muted-text);">No header available</span>
+                    {% endif %}
+                    <strong>Ledger Tail:</strong>
+                    {% if row.ledger_tail %}
+                    <pre style="font-size:12px;margin-top:0.25rem;color:var(--muted-text);">{{ row.ledger_tail }}</pre>
+                    {% else %}
+                    <span style="color:var(--muted-text);">No ledger tail available</span>
+                    {% endif %}
+                </div>
+            </details>
+            {% endfor %}
+        </div>
+    </div>
     {% endif %}
 
-    <!-- ── User-Friendly FOIA Ledger ─────────────────────────────────────── -->
+</div>
 
-    <div class="panel" id="panel-how-it-works">
-        <h2>🎓 How This Works</h2>
-        <ol class="foia-steps">
-            <li><strong>Submit a Document</strong> — Upload your FOIA request, response, or related document below.</li>
-            <li><strong>Get a Receipt</strong> — We create a permanent, cryptographically-secure record with a unique ID.</li>
-            <li><strong>Verify Anytime</strong> — Use the verification panel to prove the document hasn't been tampered with.</li>
-        </ol>
-        <p class="foia-help-text">
-            💡 We never store your actual document — only a unique fingerprint that proves it existed at a specific moment in time.
-        </p>
-    </div>
+<script>
+/* Color Schemes */
+var COLOR_SCHEMES = {
+    green:  { accent: '#00ff41', text: '#00ff41', muted: '#00cc33', border: 'rgba(0,255,65,0.3)' },
+    amber:  { accent: '#ffb000', text: '#ffb000', muted: '#cc8e00', border: 'rgba(255,176,0,0.3)' },
+    blue:   { accent: '#00bfff', text: '#00bfff', muted: '#0099cc', border: 'rgba(0,191,255,0.3)' },
+    white:  { accent: '#e0e0e0', text: '#e0e0e0', muted: '#aaaaaa', border: 'rgba(224,224,224,0.3)' }
+};
 
-    <div class="panel" id="panel-submit-document">
-        <h2>📤 Submit a Document to the Permanent Record</h2>
-        <p class="foia-help-text">
-            Upload any FOIA-related document. We'll create a permanent, tamper-proof
-            record that proves this document existed at this exact moment in time.
-            Supported formats: PDF, Word (.doc/.docx), plain text, PNG, JPEG, TIFF.
-        </p>
+function setColorScheme(name) {
+    var scheme = COLOR_SCHEMES[name];
+    if (!scheme) return;
+    var r = document.documentElement.style;
+    r.setProperty('--accent', scheme.accent);
+    r.setProperty('--text', scheme.text);
+    r.setProperty('--muted-text', scheme.muted);
+    r.setProperty('--border', scheme.border);
+    r.setProperty('--glow', '0 0 5px ' + scheme.accent);
+    document.querySelectorAll('.color-btn').forEach(function(b) {
+        b.classList.toggle('active', b.dataset.color === name);
+    });
+    localStorage.setItem('olympus-color', name);
+}
 
-        <form id="simple-upload-form" enctype="multipart/form-data" onsubmit="return false;">
-            <div class="row">
-                <label for="doc-file" style="font-weight:600;">Choose document</label>
-            </div>
-            <div class="row">
-                <input type="file" id="doc-file" accept=".pdf,.doc,.docx,.txt,.html,.png,.jpg,.jpeg,.tif,.tiff"
-                       aria-label="Select a document to submit" />
-            </div>
-            <div class="row">
-                <input type="text" id="doc-request-id" placeholder="Related Request ID (optional, e.g. OLY-0001)"
-                       aria-label="Related FOIA request ID" style="flex:1;" />
-                <textarea id="doc-description" placeholder="Brief description of this document (optional)"
-                          aria-label="Document description" style="flex:2; min-height:48px;"></textarea>
-            </div>
-            <div class="row">
-                <button type="button" id="btn-submit-document" onclick="submitDocument()">
-                    Submit Document
-                </button>
-            </div>
-        </form>
+/* Matrix Rain */
+var matrixActive = false;
+var matrixAnimId = null;
+var matrixDraw = null;
 
-        <div id="upload-progress" style="display:none;" aria-live="polite">
-            <h3>Processing Your Document…</h3>
-            <div id="progress-steps" role="list"></div>
-        </div>
+function initMatrix() {
+    var canvas = document.getElementById('matrix-canvas');
+    var ctx = canvas.getContext('2d');
+    canvas.width = window.innerWidth;
+    canvas.height = window.innerHeight;
+    var katakana = '\u30A2\u30A4\u30A6\u30A8\u30AA\u30AB\u30AD\u30AF\u30B1\u30B3\u30B5\u30B7\u30B9\u30BB\u30BD\u30BF\u30C1\u30C4\u30C6\u30C8\u30CA\u30CB\u30CC\u30CD\u30CE\u30CF\u30D2\u30D5\u30D8\u30DB\u30DE\u30DF\u30E0\u30E1\u30E2\u30E4\u30E6\u30E8\u30E9\u30EA\u30EB\u30EC\u30ED\u30EF\u30F2\u30F3';
+    var digits = '0123456789';
+    var chars = katakana + digits;
+    var fontSize = 14;
+    var columns = Math.floor(canvas.width / fontSize);
+    var drops = [];
+    for (var i = 0; i < columns; i++) drops[i] = 1;
 
-        <div id="upload-result" style="display:none;" aria-live="assertive"></div>
-    </div>
+    window.addEventListener('resize', function() {
+        canvas.width = window.innerWidth;
+        canvas.height = window.innerHeight;
+    });
 
-    <div class="panel" id="panel-verify-document">
-        <h2>🔍 Verify a Document</h2>
-        <p class="foia-help-text">
-            Check whether a document is in the permanent record. You can verify by
-            uploading the original file, entering a record ID, or pasting a document hash.
-        </p>
-
-        <div class="foia-verify-methods">
-            <div class="foia-method">
-                <h4>Method 1: Upload File</h4>
-                <p class="foia-help-text">Upload the original document — we'll check if its fingerprint is on record.</p>
-                <input type="file" id="verify-file"
-                       accept=".pdf,.doc,.docx,.txt,.html,.png,.jpg,.jpeg,.tif,.tiff"
-                       aria-label="Select a file to verify" />
-                <button type="button" onclick="verifyByFile()" aria-label="Verify by uploaded file">
-                    Verify This File
-                </button>
-            </div>
-
-            <div class="foia-method">
-                <h4>Method 2: Enter Record ID</h4>
-                <p class="foia-help-text">Enter the permanent record ID you received when the document was submitted.</p>
-                <input type="text" id="verify-record-id" placeholder="e.g. OLY-0123"
-                       aria-label="Permanent record ID" />
-                <button type="button" onclick="verifyByRecordId()" aria-label="Verify by record ID">
-                    Verify by ID
-                </button>
-            </div>
-
-            <div class="foia-method">
-                <h4>Method 3: Enter Document Hash</h4>
-                <p class="foia-help-text">For technical users — paste the BLAKE3 hex hash of the document.</p>
-                <input type="text" id="verify-hash" placeholder="64-character hex hash"
-                       aria-label="Document BLAKE3 hash" />
-                <button type="button" onclick="verifyByHash()" aria-label="Verify by document hash">
-                    Verify by Hash
-                </button>
-            </div>
-        </div>
-
-        <div id="verify-result" aria-live="assertive" style="margin-top:1rem;"></div>
-    </div>
-
-    <div class="panel" id="panel-activity-feed">
-        <h2>📋 Recent Ledger Activity</h2>
-        <p class="foia-help-text">
-            See what's been happening in the ledger recently — document submissions,
-            verifications, and any issues that need attention.
-        </p>
-
-        <div class="foia-filter-bar" role="group" aria-label="Filter activity">
-            <button type="button" class="foia-filter-btn foia-filter-active"
-                    onclick="filterActivity('all', this)">All Activity</button>
-            <button type="button" class="foia-filter-btn"
-                    onclick="filterActivity('DOCUMENT_SUBMITTED', this)">📄 Submissions</button>
-            <button type="button" class="foia-filter-btn"
-                    onclick="filterActivity('VERIFICATION_SUCCESS', this)">✓ Verifications</button>
-            <button type="button" class="foia-filter-btn"
-                    onclick="filterActivity('ERROR', this)">⚠ Errors</button>
-        </div>
-
-        <div id="activity-feed" role="feed" aria-label="Ledger activity feed">
-            <p class="foia-help-text" style="text-align:center;padding:1rem;">Loading activity…</p>
-        </div>
-    </div>
-
-    <script>
-        // ── Global Variables ────────────────────────────────────────────────
-        let activeCommitReceipt = null;
-        let activeFoiaDelayProof = null;
-        let activeProofBundle = null;
-        let activeConstantsNotebook = null;
-        let activeCircuitVisualizer = null;
-
-        // ── Public Records Requests ─────────────────────────────────────────
-        async function loadRequests() {
-            const tbody = document.getElementById('requests-tbody');
-            if (!tbody) return;
-            tbody.innerHTML = '<tr><td colspan="9" style="text-align:center">Loading…</td></tr>';
-            try {
-                const resp = await fetch('/public-records/requests');
-                if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
-                const data = await resp.json();
-                const items = data.items || data || [];
-                if (items.length === 0) {
-                    tbody.innerHTML = '<tr><td colspan="9" style="text-align:center">No requests found. Submit one above.</td></tr>';
-                    return;
-                }
-                tbody.innerHTML = '';
-                items.forEach(req => {
-                    const tr = document.createElement('tr');
-                    const filedDate = req.filed_at ? new Date(req.filed_at).toLocaleDateString() : '—';
-                    const deadlineDate = req.deadline ? new Date(req.deadline).toLocaleDateString() : '—';
-                    const shortHash = req.commit_hash ? req.commit_hash.substring(0, 12) + '…' : '—';
-                    tr.innerHTML = `
-                        <td><code>${req.display_id || '—'}</code></td>
-                        <td>${req.subject || '—'}</td>
-                        <td>${req.agency_id || '—'}</td>
-                        <td>${req.request_type || '—'}</td>
-                        <td>${req.status || '—'}</td>
-                        <td>${filedDate}</td>
-                        <td>${deadlineDate}</td>
-                        <td><code title="${req.commit_hash || ''}">${shortHash}</code></td>
-                        <td><button class="verify-btn">Verify</button></td>
-                    `;
-                    const btn = tr.querySelector('.verify-btn');
-                    btn.addEventListener('click', () => verifyRecord(req.display_id));
-                    tbody.appendChild(tr);
-                });
-            } catch (err) {
-                tbody.innerHTML = `<tr><td colspan="9" style="text-align:center">Failed to load: ${err}</td></tr>`;
+    function draw() {
+        ctx.fillStyle = 'rgba(10, 10, 10, 0.05)';
+        ctx.fillRect(0, 0, canvas.width, canvas.height);
+        var accentColor = getComputedStyle(document.documentElement).getPropertyValue('--accent').trim() || '#00ff41';
+        ctx.fillStyle = accentColor;
+        ctx.font = fontSize + 'px monospace';
+        for (var i = 0; i < drops.length; i++) {
+            var text = chars[Math.floor(Math.random() * chars.length)];
+            ctx.fillText(text, i * fontSize, drops[i] * fontSize);
+            if (drops[i] * fontSize > canvas.height && Math.random() > 0.975) {
+                drops[i] = 0;
             }
+            drops[i]++;
         }
+        matrixAnimId = requestAnimationFrame(draw);
+    }
+    return draw;
+}
 
-        async function submitRequest() {
-            const result = document.getElementById('submit-request-result');
-            result.textContent = 'Submitting request…';
-            try {
-                const body = {
-                    subject: document.getElementById('req-subject').value.trim(),
-                    description: document.getElementById('req-description').value.trim(),
-                    agency_id: document.getElementById('req-agency').value.trim() || null,
-                    request_type: document.getElementById('req-type').value,
-                    priority: document.getElementById('req-priority').value,
-                    response_format: 'electronic',
-                };
-                if (!body.subject || !body.description) {
-                    result.textContent = '✗ Subject and description are required.';
-                    return;
-                }
-                const resp = await fetch('/public-records/requests', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify(body),
-                });
-                const data = await resp.json();
-                if (!resp.ok) {
-                    result.textContent = `✗ Error: ${data.error || data.detail || JSON.stringify(data)}`;
-                    return;
-                }
-                result.textContent =
-                    `✓ Request submitted successfully.\n\n` +
-                    `Display ID       : ${data.display_id}\n` +
-                    `Request UUID     : ${data.id}\n` +
-                    `Subject          : ${data.subject}\n` +
-                    `Status           : ${data.status}\n` +
-                    `Commit Hash      : ${data.commit_hash}\n` +
-                    `Shard ID         : ${data.shard_id}\n` +
-                    `Filed At         : ${data.filed_at}\n` +
-                    `Deadline         : ${data.deadline || 'N/A'}\n\n` +
-                    `💡 Use "Request UUID" as the request_id when anchoring a document via POST /doc/commit.`;
-                loadRequests();
-            } catch (err) {
-                result.textContent = `✗ Failed: ${err}`;
-            }
+function toggleMatrix() {
+    var canvas = document.getElementById('matrix-canvas');
+    var btn = document.getElementById('matrixToggle');
+    matrixActive = !matrixActive;
+    if (matrixActive) {
+        canvas.classList.add('active');
+        btn.classList.add('active');
+        btn.textContent = '[MATRIX: ON]';
+        if (!matrixDraw) matrixDraw = initMatrix();
+        matrixDraw();
+    } else {
+        canvas.classList.remove('active');
+        btn.classList.remove('active');
+        btn.textContent = '[MATRIX: OFF]';
+        if (matrixAnimId) { cancelAnimationFrame(matrixAnimId); matrixAnimId = null; }
+    }
+    localStorage.setItem('olympus-matrix', matrixActive ? 'on' : 'off');
+}
+
+/* Tab Navigation */
+document.addEventListener('click', function(e) {
+    if (!e.target.classList.contains('tab-btn')) return;
+    var tabName = e.target.dataset.tab;
+    document.querySelectorAll('.tab-btn').forEach(function(b) { b.classList.remove('active'); });
+    document.querySelectorAll('.tab-panel').forEach(function(p) { p.classList.remove('active'); });
+    e.target.classList.add('active');
+    var panel = document.getElementById('tab-' + tabName);
+    if (panel) panel.classList.add('active');
+});
+
+/* Utility Functions */
+function setOutput(id, text, isError) {
+    var el = document.getElementById(id);
+    if (!el) return;
+    el.textContent = text;
+    el.className = 'output-block' + (isError ? ' error' : ' success');
+}
+
+function setLoading(id) {
+    var el = document.getElementById(id);
+    if (!el) return;
+    el.innerHTML = '<span class="spinner"></span> Processing...';
+    el.className = 'output-block';
+}
+
+function safeFetch(url, options) {
+    return fetch(url, options).then(function(resp) {
+        return resp.text().then(function(text) {
+            var data;
+            try { data = JSON.parse(text); } catch(e) { data = text; }
+            return { ok: resp.ok, status: resp.status, data: data };
+        });
+    }).catch(function(err) {
+        return { ok: false, status: 0, data: { error: err.message } };
+    });
+}
+
+function formatJSON(obj) {
+    return typeof obj === 'string' ? obj : JSON.stringify(obj, null, 2);
+}
+
+function escapeHtml(str) {
+    var div = document.createElement('div');
+    div.textContent = str;
+    return div.innerHTML;
+}
+
+/* STATUS Tab */
+function runConnectivityCheck() {
+    setLoading('connectivity-output');
+    var fd = new FormData();
+    fd.append('content_hash', '0000000000000000000000000000000000000000000000000000000000000000');
+    safeFetch('/ledger/verify/simple', { method: 'POST', body: fd }).then(function(result) {
+        if (result.ok) {
+            setOutput('connectivity-output',
+                '[ CONNECTIVITY CHECK ]\n' +
+                '\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\n' +
+                'Status: ENDPOINT RESPONDING\nEndpoint: /ledger/verify/simple\nResponse:\n' + formatJSON(result.data), false);
+        } else {
+            setOutput('connectivity-output',
+                '[ CONNECTIVITY CHECK ]\n\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\nStatus: ERROR (' + result.status + ')\n' + formatJSON(result.data), true);
         }
+    });
+}
 
-        async function verifyRecord(displayId) {
-            if (!displayId) {
-                displayId = document.getElementById('verify-display-id')?.value?.trim();
-            }
-            const result = document.getElementById('verify-record-result');
-            if (!displayId) {
-                result.textContent = '✗ Enter a display ID first.';
+function verifyHash() {
+    var hash = document.getElementById('status-hash-input').value.trim();
+    if (!hash) { setOutput('hash-verify-output', 'ERROR: No hash provided.', true); return; }
+    setLoading('hash-verify-output');
+    var fd = new FormData();
+    fd.append('content_hash', hash);
+    safeFetch('/ledger/verify/simple', { method: 'POST', body: fd }).then(function(result) {
+        if (result.ok) {
+            setOutput('hash-verify-output',
+                '[ HASH VERIFICATION ]\n\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\n' + formatJSON(result.data), false);
+        } else {
+            setOutput('hash-verify-output',
+                '[ HASH VERIFICATION FAILED ]\n\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\n' + formatJSON(result.data), true);
+        }
+    });
+}
+
+/* COMMIT Tab */
+function executeCommit() {
+    var docId = document.getElementById('commit-doc-id').value.trim();
+    var version = document.getElementById('commit-version').value;
+    var fileInput = document.getElementById('commit-file');
+    var releaseAt = document.getElementById('commit-release-at').value;
+    var recipientKeys = document.getElementById('commit-recipient-keys').value.trim();
+    if (!docId) { setOutput('commit-output', 'ERROR: Document ID is required.', true); return; }
+    if (!fileInput.files.length) { setOutput('commit-output', 'ERROR: File is required.', true); return; }
+    setLoading('commit-output');
+    var fd = new FormData();
+    fd.append('document_id', docId);
+    fd.append('version', version);
+    fd.append('file', fileInput.files[0]);
+    if (releaseAt) fd.append('release_at', releaseAt);
+    if (recipientKeys) fd.append('recipient_keys', recipientKeys);
+    safeFetch('/commit', { method: 'POST', body: fd }).then(function(result) {
+        if (result.ok && result.data.ok) {
+            var d = result.data;
+            setOutput('commit-output',
+                '[ COMMIT SUCCESSFUL ]\n\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\n' +
+                'BLAKE3 Root:     ' + (d.blake3_root || 'N/A') + '\n' +
+                'Poseidon Root:   ' + (d.poseidon_root || 'N/A') + '\n' +
+                'Sections Count:  ' + (d.sections_count || 'N/A') + '\n' +
+                '\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\nFull Response:\n' + formatJSON(d), false);
+        } else {
+            setOutput('commit-output', '[ COMMIT FAILED ]\n\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\n' + formatJSON(result.data), true);
+        }
+    });
+}
+
+/* REDACT Tab */
+var loadedSections = [];
+
+function loadSections() {
+    var docId = document.getElementById('redact-doc-id').value.trim();
+    var version = document.getElementById('redact-version').value;
+    if (!docId) { setOutput('redact-output', 'ERROR: Document ID is required.', true); return; }
+    setLoading('redact-output');
+    document.getElementById('sections-list').innerHTML = '';
+    loadedSections = [];
+    document.getElementById('redact-execute-btn').disabled = true;
+    safeFetch('/committed/' + encodeURIComponent(docId) + '/' + version + '/sections').then(function(result) {
+        if (result.ok && result.data.ok) {
+            loadedSections = result.data.sections || [];
+            if (loadedSections.length === 0) {
+                setOutput('redact-output', 'No sections found for this document.', true);
                 return;
             }
-            result.textContent = `Verifying ${displayId}…`;
-            try {
-                const resp = await fetch(`/public-records/verify/${encodeURIComponent(displayId)}`);
-                const data = await resp.json();
-                if (!resp.ok) {
-                    result.textContent = `✗ Error: ${data.error || 'Unknown error'}`;
-                    return;
-                }
-                const req = data.request || {};
-                const proof = data.proof;
-                let output =
-                    `✓ Record found: ${displayId}\n\n` +
-                    `── Request Details ──────────────────────────\n` +
-                    `Request UUID     : ${req.id || '—'}\n` +
-                    `Subject          : ${req.subject || '—'}\n` +
-                    `Agency           : ${req.agency_id || '—'}\n` +
-                    `Status           : ${req.status || '—'}\n` +
-                    `Commit Hash      : ${data.commit_hash || '—'}\n` +
-                    `Shard ID         : ${req.shard_id || '—'}\n` +
-                    `Filed At         : ${req.filed_at || '—'}\n`;
-
-                if (proof) {
-                    output +=
-                        `\n── Cryptographic Proof ──────────────────────\n` +
-                        `Key              : ${proof.key || '—'}\n` +
-                        `Value Hash       : ${proof.value_hash || '—'}\n` +
-                        `Root Hash        : ${proof.root_hash || '—'}\n` +
-                        `Siblings         : ${(proof.siblings || []).length} entries in Merkle path\n`;
-
-                    if (proof.shard_header) {
-                        output +=
-                            `\n── Shard Header ────────────────────────────\n` +
-                            `Shard            : ${proof.shard_header.shard_id || '—'}\n` +
-                            `Seq              : ${proof.shard_header.seq || '—'}\n` +
-                            `Root Hash        : ${proof.shard_header.root_hash || '—'}\n` +
-                            `Header Hash      : ${proof.shard_header.header_hash || '—'}\n` +
-                            `Signature        : ${(proof.shard_header.signature || '').substring(0, 32)}…\n` +
-                            `Timestamp        : ${proof.shard_header.timestamp || '—'}\n`;
-                    }
-
-                    if (proof.siblings && proof.siblings.length > 0) {
-                        const nonEmpty = proof.siblings.filter(s => s !== '0'.repeat(64));
-                        output += `\nNon-zero siblings: ${nonEmpty.length} of ${proof.siblings.length}\n`;
-                        if (nonEmpty.length > 0) {
-                            output += `First non-zero   : ${nonEmpty[0].substring(0, 32)}…\n`;
-                        }
-                    }
-                } else {
-                    output += `\n⚠ No SMT proof available — record may not have been ingested into the Sparse Merkle Tree yet.\n`;
-                    output += `The commit hash above is the BLAKE3 anchor computed at filing time.\n`;
-                }
-
-                result.textContent = output;
-            } catch (err) {
-                result.textContent = `✗ Failed: ${err}`;
-            }
+            var html = '<h3 class="section-title" style="font-size:12px;">Select sections to REVEAL:</h3>';
+            html += '<ul class="section-check-list">';
+            loadedSections.forEach(function(sec, i) {
+                var preview = (typeof sec === 'string' ? sec : JSON.stringify(sec)).substring(0, 120);
+                html += '<li><label><input type="checkbox" class="reveal-check" value="' + i + '"> ' +
+                        '<span>[' + i + ']</span> <span class="section-text">' + escapeHtml(preview) + '</span></label></li>';
+            });
+            html += '</ul>';
+            document.getElementById('sections-list').innerHTML = html;
+            document.getElementById('redact-execute-btn').disabled = false;
+            setOutput('redact-output', 'Loaded ' + loadedSections.length + ' sections. Select which to reveal, then execute.', false);
+        } else {
+            setOutput('redact-output', '[ LOAD SECTIONS FAILED ]\n\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\n' + formatJSON(result.data), true);
         }
+    });
+}
 
-        async function refineRequest() {
-            const result = document.getElementById('submit-request-result');
-            const subject = document.getElementById('req-subject').value.trim();
-            const description = document.getElementById('req-description').value.trim();
-            const agency = document.getElementById('req-agency').value.trim();
-            const requestType = document.getElementById('req-type').value;
+function executeRedact() {
+    var docId = document.getElementById('redact-doc-id').value.trim();
+    var version = parseInt(document.getElementById('redact-version').value);
+    var checks = document.querySelectorAll('.reveal-check:checked');
+    var revealedIndices = Array.from(checks).map(function(c) { return parseInt(c.value); });
+    if (revealedIndices.length === 0) {
+        setOutput('redact-output', 'ERROR: Select at least one section to reveal.', true);
+        return;
+    }
+    setLoading('redact-output');
+    safeFetch('/redact', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ document_id: docId, version: version, revealed_indices: revealedIndices })
+    }).then(function(result) {
+        if (result.ok && result.data.ok) {
+            setOutput('redact-output',
+                '[ REDACTION COMPLETE ]\n\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\n' +
+                'Revealed indices: [' + revealedIndices.join(', ') + ']\n\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\n' +
+                'Proof Bundle:\n' + formatJSON(result.data.bundle || result.data), false);
+        } else {
+            setOutput('redact-output', '[ REDACTION FAILED ]\n\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\n' + formatJSON(result.data), true);
+        }
+    });
+}
 
-            if (!subject && !description) {
-                result.textContent = '✗ Enter a subject and/or description first.';
-                return;
-            }
-
-            result.textContent = '✨ Refining your request with Oracle AI…';
-            try {
-                const resp = await fetch('/oracle/refine', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ subject, description, agency, request_type: requestType }),
+/* VERIFY Tab */
+function executeVerify() {
+    var raw = document.getElementById('verify-bundle').value.trim();
+    if (!raw) { setOutput('verify-output', 'ERROR: Paste a proof bundle.', true); return; }
+    var bundle;
+    try { bundle = JSON.parse(raw); } catch(e) {
+        setOutput('verify-output', 'ERROR: Invalid JSON \u2014 ' + e.message, true);
+        return;
+    }
+    setLoading('verify-output');
+    safeFetch('/verify', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(bundle)
+    }).then(function(result) {
+        if (result.ok) {
+            var d = result.data;
+            var smtOk = d.smt_anchor_verified;
+            var zkOk = d.zk_verified;
+            var overall = d.verified;
+            var output =
+                '[ VERIFICATION RESULT ]\n\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\n' +
+                'SMT Anchor:  ' + (smtOk ? '\u2713 VERIFIED' : '\u2717 FAILED') + '\n' +
+                'ZK Proof:    ' + (zkOk ? '\u2713 VERIFIED' : '\u2717 FAILED') + '\n' +
+                'Overall:     ' + (overall ? '\u2713 VERIFIED' : '\u2717 FAILED') + '\n';
+            if (d.zk_status) output += 'ZK Status:   ' + d.zk_status + '\n';
+            if (d.revealed_sections && d.revealed_sections.length) {
+                output += '\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\nRevealed Sections:\n';
+                d.revealed_sections.forEach(function(s, i) {
+                    output += '  [' + i + '] ' + (typeof s === 'string' ? s.substring(0, 100) : JSON.stringify(s)) + '\n';
                 });
-                const data = await resp.json();
-                if (!resp.ok) {
-                    result.textContent = `✗ Oracle error: ${data.error || 'Unknown error'}`;
-                    return;
-                }
-                document.getElementById('req-description').value = data.refined || description;
-                result.textContent = '✓ Request refined by Oracle AI. Review the updated description above.';
-            } catch (err) {
-                result.textContent = `✗ Oracle failed: ${err}`;
             }
+            if (d.total_parts) output += 'Total Parts: ' + d.total_parts + '\n';
+            setOutput('verify-output', output, !overall);
+        } else {
+            setOutput('verify-output', '[ VERIFICATION ERROR ]\n\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\n' + formatJSON(result.data), true);
         }
+    });
+}
 
-        async function draftAppeal() {
-            const result = document.getElementById('appeal-result');
-            result.textContent = '📝 Drafting appeal letter with Oracle AI…';
-            try {
-                const body = {
-                    display_id: document.getElementById('appeal-display-id').value.trim(),
-                    subject: document.getElementById('appeal-subject').value.trim(),
-                    description: document.getElementById('appeal-description').value.trim(),
-                    agency: document.getElementById('appeal-agency').value.trim(),
-                    denial_reason: document.getElementById('appeal-denial-reason').value.trim(),
-                    request_type: document.getElementById('appeal-type').value,
-                };
-                const resp = await fetch('/oracle/appeal', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify(body),
+/* INSPECT Tab */
+function inspectBundle() {
+    var raw = document.getElementById('inspect-bundle').value.trim();
+    if (!raw) { setOutput('inspect-output', 'ERROR: Paste a proof bundle.', true); return; }
+    var bundle;
+    try { bundle = JSON.parse(raw); } catch(e) {
+        setOutput('inspect-output', 'ERROR: Invalid JSON \u2014 ' + e.message, true);
+        return;
+    }
+    setLoading('inspect-output');
+    safeFetch('/inspect-proof-bundle', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(bundle)
+    }).then(function(result) {
+        if (result.ok && result.data.ok) {
+            var d = result.data;
+            var output = '[ PROOF BUNDLE INSPECTION ]\n\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\n';
+            if (d.checks) {
+                output += 'Invariant Checks:\n';
+                d.checks.forEach(function(c) {
+                    output += '  ' + (c.passed ? '\u2713' : '\u2717') + ' ' + c.label + '\n';
+                    if (c.detail) output += '    \u2514\u2500 ' + c.detail + '\n';
                 });
-                const data = await resp.json();
-                if (!resp.ok) {
-                    result.textContent = `✗ Oracle error: ${data.error || 'Unknown error'}`;
-                    return;
-                }
-                result.textContent = data.appeal || '(No appeal text returned)';
-            } catch (err) {
-                result.textContent = `✗ Oracle failed: ${err}`;
             }
+            if (d.fields) {
+                output += '\nDecoded Fields:\n';
+                d.fields.forEach(function(f) {
+                    output += '  ' + f.field + ': ' + f.value + ' (' + f.type + ')\n';
+                });
+            }
+            setOutput('inspect-output', output, false);
+        } else {
+            setOutput('inspect-output', '[ INSPECTION FAILED ]\n\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\n' + formatJSON(result.data), true);
         }
+    });
+}
 
-        // ── Helper Functions ────────────────────────────────────────────────
-        function renderChecks(checks) {
-            const container = document.createElement('div');
-            checks.forEach(check => {
-                const item = document.createElement('div');
-                item.style.marginBottom = '0.5rem';
-                const mark = check.passed ? '✓' : '✗';
-                const className = check.passed ? 'ok' : 'bad';
-                const labelSpan = document.createElement('span');
-                labelSpan.className = className;
-                labelSpan.textContent = `${mark} ${check.label}`;
-                item.appendChild(labelSpan);
-                if (check.detail) {
-                    const detail = document.createElement('div');
-                    detail.style.marginLeft = '1rem';
-                    detail.style.fontSize = '0.85rem';
-                    detail.style.color = 'var(--muted-text)';
-                    detail.textContent = check.detail;
-                    item.appendChild(detail);
+function loadProvenance() {
+    setLoading('provenance-output');
+    safeFetch('/constants-provenance').then(function(result) {
+        if (result.ok && result.data.ok) {
+            var nb = result.data.notebook;
+            var output = '[ CONSTANTS PROVENANCE ]\n\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\n';
+            if (nb) {
+                output += 'Verified Identical: ' + (nb.verified_identical ? '\u2713 YES' : '\u2717 NO') + '\n';
+                if (nb.parameters) {
+                    output += 'Source: ' + (nb.parameters.source || 'N/A') + '\n';
+                    output += 'Field: ' + (nb.parameters.field || 'N/A') + '\n';
+                    output += 'Round Constants: ' + (nb.parameters.round_constants_count || 'N/A') + '\n';
+                    output += 'MDS: ' + (nb.parameters.mds_rows || '?') + '\u00D7' + (nb.parameters.mds_cols || '?') + '\n';
                 }
-                container.appendChild(item);
-            });
-            return container;
+                if (nb.parity) {
+                    output += 'Parity Status: ' + (nb.parity.status || 'N/A') + '\n';
+                    output += 'Vectors Checked: ' + (nb.parity.vectors_checked || 'N/A') + '\n';
+                }
+            }
+            output += '\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\nFull Data:\n' + formatJSON(nb);
+            setOutput('provenance-output', output, false);
+        } else {
+            setOutput('provenance-output', '[ PROVENANCE LOAD FAILED ]\n' + formatJSON(result.data), true);
         }
+    });
+}
 
-        function renderFieldTable(fields) {
-            const table = document.createElement('table');
-            table.style.width = '100%';
-            const thead = document.createElement('thead');
-            const headerRow = document.createElement('tr');
-            ['Field', 'Value', 'Type'].forEach(headerText => {
-                const th = document.createElement('th');
-                th.textContent = headerText;
-                headerRow.appendChild(th);
-            });
-            thead.appendChild(headerRow);
-            table.appendChild(thead);
-
-            const tbody = document.createElement('tbody');
-            fields.forEach(field => {
-                const row = document.createElement('tr');
-                const fieldCell = document.createElement('td');
-                fieldCell.textContent = field.field;
-                const valueCell = document.createElement('td');
-                const valueCode = document.createElement('code');
-                valueCode.textContent = field.value;
-                valueCode.style.fontSize = '0.75rem';
-                valueCode.style.wordBreak = 'break-all';
-                valueCell.appendChild(valueCode);
-                const typeCell = document.createElement('td');
-                typeCell.textContent = field.type;
-                typeCell.style.fontSize = '0.85rem';
-                row.appendChild(fieldCell);
-                row.appendChild(valueCell);
-                row.appendChild(typeCell);
-                tbody.appendChild(row);
-            });
-            table.appendChild(tbody);
-            return table;
-        }
-
-        // ── Public Verification Portal ──────────────────────────────────────
-        const hashVerifyForm = document.getElementById('hash-verify-form');
-        if (hashVerifyForm) {
-            hashVerifyForm.addEventListener('submit', async (event) => {
-                event.preventDefault();
-                const verifyResult = document.getElementById('hash-verify-result');
-                const contentHash = document.getElementById('content-hash').value.trim();
-                verifyResult.innerHTML = '<p class="foia-help-text">Checking record…</p>';
-                const formData = new FormData();
-                formData.append('doc_hash', contentHash);
-                try {
-                    const response = await fetch('/ledger/verify/simple', {
-                        method: 'POST',
-                        body: formData,
+function loadCircuits() {
+    setLoading('circuits-output');
+    safeFetch('/circuit-constraints').then(function(result) {
+        if (result.ok && result.data.ok) {
+            var circuits = result.data.circuits || [];
+            var output = '[ CIRCUIT CONSTRAINTS ]\n\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\n' +
+                         circuits.length + ' circuit(s) found\n\n';
+            circuits.forEach(function(circuit) {
+                output += '\u2554\u2550 ' + circuit.title + ' \u2550\u2557\n';
+                output += 'Source: ' + (circuit.source_path || 'N/A') + '\n';
+                if (circuit.public_inputs) output += 'Public Inputs: ' + circuit.public_inputs.join(', ') + '\n';
+                if (circuit.private_inputs) output += 'Private Inputs: ' + circuit.private_inputs.join(', ') + '\n';
+                if (circuit.constraints) {
+                    output += 'Constraints:\n';
+                    circuit.constraints.forEach(function(c) {
+                        output += '  \u25B8 ' + c.label + '\n';
+                        if (c.explanation) output += '    ' + c.explanation + '\n';
                     });
-                    const data = await response.json();
-                    if (!response.ok) {
-                        const msg = typeof data.detail === 'object'
-                            ? (data.detail.detail || JSON.stringify(data.detail))
-                            : (data.detail || 'Unknown error.');
-                        verifyResult.innerHTML =
-                            '<div class="foia-result foia-result-error">' +
-                            '<h3>❌ Verification error</h3>' +
-                            `<p class="foia-explanation">${escHtml(msg)}</p></div>`;
-                        return;
-                    }
-                    const cls = data.verified ? 'foia-result foia-verified' : 'foia-result foia-notfound';
-                    const icon = data.verified ? '✅' : '❌';
-                    const dateHtml = data.recorded_date
-                        ? `<p><strong>Submitted:</strong> ${new Date(data.recorded_date).toLocaleString()}</p>`
-                        : '';
-                    const reqHtml = data.related_request
-                        ? `<p><strong>Related request:</strong> ${escHtml(data.related_request)}</p>`
-                        : '';
-                    const proofStepsHtml = (data.proof_details || []).map(s =>
-                        `<div class="foia-proof-step">${escHtml(s.icon || '')} <strong>${escHtml(s.title || '')}</strong>: ${escHtml(s.message || '')}</div>`
-                    ).join('');
-                    verifyResult.innerHTML =
-                        `<div class="${cls}">` +
-                        `<h3>${icon} ${escHtml(data.summary || '')}</h3>` +
-                        `<p class="foia-explanation">${escHtml(data.what_this_means || '')}</p>` +
-                        `<div class="foia-importance">${escHtml(data.why_this_matters || '')}</div>` +
-                        dateHtml + reqHtml +
-                        (proofStepsHtml
-                            ? `<details style="margin-top:.75rem;"><summary style="cursor:pointer;color:var(--accent);">How we verified this</summary><div style="margin-top:.5rem;">${proofStepsHtml}</div></details>`
-                            : '') +
-                        '</div>';
-                } catch (err) {
-                    verifyResult.innerHTML =
-                        '<div class="foia-result foia-result-error">' +
-                        '<h3>❌ Could not reach server</h3>' +
-                        '<p class="foia-explanation">Please check your connection and try again.</p>' +
-                        `<div class="foia-error-help">💡 ${escHtml(String(err))}</div></div>`;
                 }
+                output += '\n';
             });
+            setOutput('circuits-output', output, false);
+        } else {
+            setOutput('circuits-output', '[ CIRCUIT LOAD FAILED ]\n' + formatJSON(result.data), true);
         }
+    });
+}
 
-        // ── Proof Explorer ──────────────────────────────────────────────────
-        const form = document.getElementById('proof-form');
-        const out = document.getElementById('proof-result');
-        form.addEventListener('submit', async (event) => {
-            event.preventDefault();
-            const params = new URLSearchParams(new FormData(form));
-            out.textContent = 'Loading...';
-            const response = await fetch(`/proof-explorer?${params.toString()}`);
-            const data = await response.json();
-            out.textContent = JSON.stringify(data, null, 2);
-        });
-
-        function downloadJson(filename, payload) {
-            const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' });
-            const url = URL.createObjectURL(blob);
-            const a = document.createElement('a');
-            a.href = url;
-            a.download = filename;
-            document.body.appendChild(a);
-            a.click();
-            document.body.removeChild(a);
-            URL.revokeObjectURL(url);
+/* DEBUG Tab */
+function proofExplorer() {
+    var shardId = document.getElementById('debug-shard-id').value.trim();
+    var recordType = document.getElementById('debug-record-type').value.trim();
+    var recordId = document.getElementById('debug-record-id').value.trim();
+    var version = document.getElementById('debug-version').value;
+    if (!shardId || !recordType || !recordId) {
+        setOutput('proof-explorer-output', 'ERROR: All fields are required.', true);
+        return;
+    }
+    setLoading('proof-explorer-output');
+    var params = new URLSearchParams({ shard_id: shardId, record_type: recordType, record_id: recordId, version: version });
+    safeFetch('/proof-explorer?' + params).then(function(result) {
+        if (result.ok && result.data.ok) {
+            setOutput('proof-explorer-output',
+                '[ PROOF EXPLORER ]\n\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\n' + formatJSON(result.data.proof || result.data), false);
+        } else {
+            setOutput('proof-explorer-output',
+                '[ PROOF EXPLORER FAILED ]\n\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\n' + formatJSON(result.data), true);
         }
+    });
+}
 
-        // ── Commit Document ─────────────────────────────────────────────────
-        document.getElementById('commit-form').addEventListener('submit', async (event) => {
-            event.preventDefault();
-            const commitResult = document.getElementById('commit-result');
-            const receiptLink = document.getElementById('download-receipt-link');
-            commitResult.textContent = 'Committing…';
-            activeCommitReceipt = null;
-            receiptLink.style.display = 'none';
-            const formData = new FormData(event.target);
-            try {
-                const resp = await fetch('/commit', { method: 'POST', body: formData });
-                const data = await resp.json();
-                if (data.ok) {
-                    activeCommitReceipt = data.receipt;
-                    receiptLink.style.display = 'inline';
-                    commitResult.textContent =
-                        `✓ Committed successfully!\n\n` +
-                        `Document ID : ${data.document_id}\n` +
-                        `Version     : ${data.version}\n` +
-                        `Sections    : ${data.sections_count}\n\n` +
-                        `BLAKE3 root  : ${data.blake3_root}\n` +
-                        `Poseidon root: ${data.poseidon_root}\n` +
-                        `Receipt hash : ${data.receipt.receipt_hash}\n` +
-                        `Scheduled release: ${data.embargo.release_at || 'none'}\n` +
-                        `Recipients   : ${data.embargo.active_recipient_keys.length}`;
-                } else {
-                    commitResult.textContent = `✗ Error: ${data.error}`;
-                }
-            } catch (err) {
-                commitResult.textContent = `✗ Failed: ${err}`;
-            }
-        });
-
-        document.getElementById('download-receipt-link').addEventListener('click', (event) => {
-            event.preventDefault();
-            if (!activeCommitReceipt) return;
-            downloadJson('commit_receipt.json', activeCommitReceipt);
-        });
-
-        // ── FOIA Tracker ────────────────────────────────────────────────────
-        document.getElementById('foia-request-form').addEventListener('submit', async (event) => {
-            event.preventDefault();
-            const result = document.getElementById('foia-result');
-            const proofLink = document.getElementById('download-foia-proof-link');
-            activeFoiaDelayProof = null;
-            proofLink.style.display = 'none';
-            result.textContent = 'Committing FOIA request…';
-            const formData = new FormData(event.target);
-            const payload = Object.fromEntries(formData.entries());
-            try {
-                const resp = await fetch('/foia/request', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify(payload),
-                });
-                const data = await resp.json();
-                if (!data.ok) {
-                    result.textContent = `✗ Error: ${data.error}`;
-                    return;
-                }
-                activeFoiaDelayProof = data.delay_proof;
-                proofLink.style.display = 'inline';
-                document.getElementById('foia-proof-request-id').value = data.request.request_id;
-                document.getElementById('foia-response-request-id').value = data.request.request_id;
-                result.textContent =
-                    `✓ FOIA request committed.\n\n` +
-                    `Request ID         : ${data.request.request_id}\n` +
-                    `Agency             : ${data.request.agency}\n` +
-                    `Submitted at       : ${data.request.submitted_at}\n` +
-                    `Response due at    : ${data.request.response_due_at || 'not set'}\n` +
-                    `Request receipt    : ${data.request.request_receipt.receipt_hash}\n` +
-                    `Delay proof hash   : ${data.delay_proof.receipt_hash}`;
-            } catch (err) {
-                result.textContent = `✗ Request failed: ${err}`;
-            }
-        });
-
-        async function logFoiaResponse() {
-            const requestId = document.getElementById('foia-response-request-id').value.trim();
-            const responseReceivedAt = document.getElementById('foia-response-timestamp').value.trim();
-            const responseSummary = document.getElementById('foia-response-summary').value.trim();
-            const result = document.getElementById('foia-result');
-            const proofLink = document.getElementById('download-foia-proof-link');
-            if (!requestId || !responseReceivedAt) {
-                result.textContent = 'Enter request_id and response_received_at first.';
-                return;
-            }
-            result.textContent = 'Recording FOIA response…';
-            try {
-                const resp = await fetch('/foia/response', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({
-                        request_id: requestId,
-                        response_received_at: responseReceivedAt,
-                        response_summary: responseSummary,
-                    }),
-                });
-                const data = await resp.json();
-                if (!data.ok) {
-                    result.textContent = `✗ Error: ${data.error}`;
-                    return;
-                }
-                activeFoiaDelayProof = data.delay_proof;
-                proofLink.style.display = 'inline';
-                result.textContent =
-                    `✓ FOIA response recorded.\n\n` +
-                    `Request ID       : ${data.request.request_id}\n` +
-                    `Response at      : ${data.request.response_received_at}\n` +
-                    `Proof mode       : ${data.delay_proof.payload.proof_mode}\n` +
-                    `Elapsed seconds  : ${data.delay_proof.payload.elapsed_seconds}\n` +
-                    `Delayed          : ${data.delay_proof.payload.delayed}\n` +
-                    `Delay seconds    : ${data.delay_proof.payload.delay_seconds}\n` +
-                    `Proof hash       : ${data.delay_proof.receipt_hash}`;
-            } catch (err) {
-                result.textContent = `✗ Failed: ${err}`;
-            }
+function loadStateDiff() {
+    var shardId = document.getElementById('diff-shard-id').value.trim();
+    var fromSeq = document.getElementById('diff-from-seq').value;
+    var toSeq = document.getElementById('diff-to-seq').value;
+    if (!shardId) { setOutput('diff-output', 'ERROR: Shard ID is required.', true); return; }
+    setLoading('diff-output');
+    var params = new URLSearchParams({ shard_id: shardId, from_seq: fromSeq, to_seq: toSeq });
+    safeFetch('/state-diff?' + params).then(function(result) {
+        if (result.ok && result.data.ok) {
+            setOutput('diff-output',
+                '[ SMT DIFF ]\n\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\n' +
+                'Shard: ' + shardId + '\nRange: seq ' + fromSeq + ' \u2192 ' + toSeq + '\n\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\n' +
+                formatJSON(result.data.diff || result.data), false);
+        } else {
+            setOutput('diff-output', '[ DIFF FAILED ]\n\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\n' + formatJSON(result.data), true);
         }
+    });
+}
 
-        async function refreshFoiaDelayProof() {
-            const requestId = document.getElementById('foia-proof-request-id').value.trim();
-            const result = document.getElementById('foia-result');
-            const proofLink = document.getElementById('download-foia-proof-link');
-            if (!requestId) {
-                result.textContent = 'Enter request_id first.';
-                return;
-            }
-            result.textContent = 'Loading FOIA delay proof…';
-            try {
-                const resp = await fetch(`/foia/${encodeURIComponent(requestId)}/delay-proof`);
-                const data = await resp.json();
-                if (!data.ok) {
-                    result.textContent = `✗ Error: ${data.error}`;
-                    return;
-                }
-                activeFoiaDelayProof = data.delay_proof;
-                proofLink.style.display = 'inline';
-                result.textContent =
-                    `✓ Delay proof loaded.\n\n` +
-                    `Request ID       : ${data.request.request_id}\n` +
-                    `Proof mode       : ${data.delay_proof.payload.proof_mode}\n` +
-                    `Pending          : ${data.delay_proof.payload.pending}\n` +
-                    `Elapsed seconds  : ${data.delay_proof.payload.elapsed_seconds}\n` +
-                    `Delayed          : ${data.delay_proof.payload.delayed}\n` +
-                    `Delay seconds    : ${data.delay_proof.payload.delay_seconds}\n` +
-                    `Proof hash       : ${data.delay_proof.receipt_hash}`;
-            } catch (err) {
-                result.textContent = `✗ Failed: ${err}`;
-            }
+function loadEmbargo() {
+    var docId = document.getElementById('embargo-doc-id').value.trim();
+    var version = document.getElementById('embargo-version').value;
+    if (!docId) { setOutput('embargo-output', 'ERROR: Document ID is required.', true); return; }
+    setLoading('embargo-output');
+    safeFetch('/embargo/' + encodeURIComponent(docId) + '/' + version).then(function(result) {
+        if (result.ok && result.data.ok) {
+            var emb = result.data.embargo || {};
+            document.getElementById('embargo-release-at').value = emb.release_at ? emb.release_at.replace('Z', '').split('.')[0] : '';
+            var keys = (emb.recipient_keys || emb.active_recipient_keys || []);
+            document.getElementById('embargo-keys').value = Array.isArray(keys) ? keys.join('\n') : keys;
+            setOutput('embargo-output', '[ EMBARGO LOADED ]\n\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\n' + formatJSON(result.data), false);
+        } else {
+            setOutput('embargo-output', '[ EMBARGO LOAD FAILED ]\n\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\n' + formatJSON(result.data), true);
         }
+    });
+}
 
-        document.getElementById('download-foia-proof-link').addEventListener('click', (event) => {
-            event.preventDefault();
-            if (!activeFoiaDelayProof) return;
-            downloadJson('foia_delay_proof.json', activeFoiaDelayProof);
-        });
-
-        // ── Public Records Request Form ──────────────────────────────────────
-        const submitRequestForm = document.getElementById('submit-request-form');
-        if (submitRequestForm) {
-            submitRequestForm.addEventListener('submit', (event) => {
-                event.preventDefault();
-                submitRequest();
-            });
+function saveEmbargo() {
+    var docId = document.getElementById('embargo-doc-id').value.trim();
+    var version = parseInt(document.getElementById('embargo-version').value);
+    var releaseAt = document.getElementById('embargo-release-at').value;
+    var keys = document.getElementById('embargo-keys').value.trim();
+    if (!docId) { setOutput('embargo-output', 'ERROR: Document ID is required.', true); return; }
+    setLoading('embargo-output');
+    var body = { document_id: docId, version: version };
+    if (releaseAt) body.release_at = releaseAt;
+    if (keys) body.recipient_keys = keys;
+    safeFetch('/embargo/update', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body)
+    }).then(function(result) {
+        if (result.ok && result.data.ok) {
+            setOutput('embargo-output', '[ EMBARGO SAVED ]\n\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\n' + formatJSON(result.data), false);
+        } else {
+            setOutput('embargo-output', '[ EMBARGO SAVE FAILED ]\n\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\n' + formatJSON(result.data), true);
         }
+    });
+}
 
-        // Load requests on page load
-        loadRequests();
-
-        // ── Verify Record Form ────────────────────────────────────────────
-        const verifyRecordForm = document.getElementById('verify-record-form');
-        if (verifyRecordForm) {
-            verifyRecordForm.addEventListener('submit', (event) => {
-                event.preventDefault();
-                verifyRecord();
-            });
+function revokeEmbargo() {
+    var docId = document.getElementById('embargo-doc-id').value.trim();
+    var version = parseInt(document.getElementById('embargo-version').value);
+    var key = document.getElementById('embargo-revoke-key').value.trim();
+    if (!docId || !key) {
+        setOutput('embargo-output', 'ERROR: Document ID and key to revoke are required.', true);
+        return;
+    }
+    setLoading('embargo-output');
+    safeFetch('/embargo/revoke', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ document_id: docId, version: version, recipient_key: key })
+    }).then(function(result) {
+        if (result.ok && result.data.ok) {
+            setOutput('embargo-output', '[ KEY REVOKED ]\n\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\n' + formatJSON(result.data), false);
+        } else {
+            setOutput('embargo-output', '[ REVOKE FAILED ]\n\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\n' + formatJSON(result.data), true);
         }
-
-        // ── Appeal Form ──────────────────────────────────────────────────
-        const appealForm = document.getElementById('appeal-form');
-        if (appealForm) {
-            appealForm.addEventListener('submit', (event) => {
-                event.preventDefault();
-                draftAppeal();
-            });
-        }
-
-        // ── Embargo Management ──────────────────────────────────────────────
-        async function loadEmbargo() {
-            const docId = document.getElementById('embargo-doc-id').value.trim();
-            const version = document.getElementById('embargo-version').value;
-            const result = document.getElementById('embargo-result');
-            if (!docId) {
-                result.textContent = 'Enter document_id first.';
-                return;
-            }
-            result.textContent = 'Loading embargo state…';
-            try {
-                const resp = await fetch(`/embargo/${encodeURIComponent(docId)}/${version}`);
-                const data = await resp.json();
-                if (!data.ok) {
-                    result.textContent = `✗ Error: ${data.error}`;
-                    return;
-                }
-                document.getElementById('embargo-release-at').value = data.embargo.release_at || '';
-                document.getElementById('embargo-recipient-keys').value = data.embargo.recipient_keys.join('\n');
-                result.textContent =
-                    `✓ Embargo loaded.\n\n` +
-                    `Released         : ${data.embargo.is_released}\n` +
-                    `Scheduled release: ${data.embargo.release_at || 'none'}\n` +
-                    `Active recipients: ${data.embargo.active_recipient_keys.join(', ') || 'none'}\n` +
-                    `Revoked recipients: ${data.embargo.revoked_recipient_keys.join(', ') || 'none'}`;
-            } catch (err) {
-                result.textContent = `✗ Failed: ${err}`;
-            }
-        }
-
-        async function saveEmbargo() {
-            const documentId = document.getElementById('embargo-doc-id').value.trim();
-            const version = parseInt(document.getElementById('embargo-version').value, 10);
-            const releaseAt = document.getElementById('embargo-release-at').value.trim();
-            const recipientKeys = document.getElementById('embargo-recipient-keys').value;
-            const result = document.getElementById('embargo-result');
-            if (!documentId) {
-                result.textContent = 'Enter document_id first.';
-                return;
-            }
-            result.textContent = 'Saving embargo settings…';
-            try {
-                const resp = await fetch('/embargo/update', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({
-                        document_id: documentId,
-                        version,
-                        release_at: releaseAt || null,
-                        recipient_keys: recipientKeys,
-                    }),
-                });
-                const data = await resp.json();
-                if (!data.ok) {
-                    result.textContent = `✗ Error: ${data.error}`;
-                    return;
-                }
-                result.textContent =
-                    `✓ Embargo saved.\n\n` +
-                    `Scheduled release: ${data.embargo.release_at || 'none'}\n` +
-                    `Active recipients: ${data.embargo.active_recipient_keys.join(', ') || 'none'}\n` +
-                    `Revoked recipients: ${data.embargo.revoked_recipient_keys.join(', ') || 'none'}\n` +
-                    `Receipt hash     : ${data.receipt.receipt_hash}`;
-            } catch (err) {
-                result.textContent = `✗ Failed: ${err}`;
-            }
-        }
-
-        async function revokeEmbargoRecipient() {
-            const documentId = document.getElementById('embargo-doc-id').value.trim();
-            const version = parseInt(document.getElementById('embargo-version').value, 10);
-            const recipientKey = document.getElementById('embargo-revoke-key').value.trim();
-            const result = document.getElementById('embargo-result');
-            if (!documentId || !recipientKey) {
-                result.textContent = 'Enter document_id and recipient key first.';
-                return;
-            }
-            result.textContent = 'Revoking recipient access…';
-            try {
-                const resp = await fetch('/embargo/revoke', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({
-                        document_id: documentId,
-                        version,
-                        recipient_key: recipientKey,
-                    }),
-                });
-                const data = await resp.json();
-                if (!data.ok) {
-                    result.textContent = `✗ Error: ${data.error}`;
-                    return;
-                }
-                result.textContent =
-                    `✓ Recipient revoked.\n\n` +
-                    `Active recipients: ${data.embargo.active_recipient_keys.join(', ') || 'none'}\n` +
-                    `Revoked recipients: ${data.embargo.revoked_recipient_keys.join(', ') || 'none'}`;
-            } catch (err) {
-                result.textContent = `✗ Failed: ${err}`;
-            }
-        }
-
-        // ── Verify Proof ────────────────────────────────────────────────────
-        const verifyForm = document.getElementById('verify-form');
-        if (verifyForm) {
-            verifyForm.addEventListener('submit', async (event) => {
-                event.preventDefault();
-                const verifyResult = document.getElementById('verify-result');
-                verifyResult.textContent = 'Verifying…';
-                const fileInput = document.getElementById('verify-file');
-                if (!fileInput.files.length) {
-                    verifyResult.textContent = 'No file selected.';
-                    return;
-                }
-                try {
-                    const text = await fileInput.files[0].text();
-                    const bundle = JSON.parse(text);
-                    const resp = await fetch('/verify', {
-                        method: 'POST',
-                        headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify(bundle),
-                    });
-                    const data = await resp.json();
-                    if (!data.ok) {
-                        verifyResult.textContent = `✗ Error: ${data.error}`;
-                        return;
-                    }
-                    const overallMark = data.verified ? '✓' : '✗';
-                    const smtMark = data.smt_anchor_verified ? '✓' : '✗';
-                    const zkMark = data.zk_verified ? '✓' : '✗';
-                    let verificationOutput = `${overallMark} Overall verification: ${data.verified ? 'PASSED' : 'FAILED'}\n\n` +
-                                `${smtMark} SMT anchor verified : ${data.smt_anchor_verified}\n` +
-                                `${zkMark} ZK proof verified   : ${data.zk_verified}` +
-                                ` (requires snarkjs; placeholder proof will show false)\n\n`;
-                    if (data.revealed_sections.length > 0) {
-                        verificationOutput += `Revealed sections (${data.revealed_sections.length} of ${data.total_parts}):\n`;
-                        data.revealed_sections.forEach(s => {
-                            verificationOutput += `  [${s.index}] ${s.content}\n`;
-                        });
-                    } else {
-                        verificationOutput += 'No revealed sections in bundle.';
-                    }
-                    verifyResult.textContent = verificationOutput;
-                } catch (err) {
-                    verifyResult.textContent = `✗ Failed: ${err}`;
-                }
-            });
-        }
-
-        // ── Proof Bundle Inspector ──────────────────────────────────────────
-        async function inspectProofBundleText(rawText) {
-            const checksContainer = document.getElementById('proof-inspector-checks');
-            const fieldsContainer = document.getElementById('proof-inspector-fields');
-            checksContainer.textContent = 'Inspecting…';
-            fieldsContainer.textContent = '';
-            try {
-                const bundle = JSON.parse(rawText);
-                const resp = await fetch('/inspect-proof-bundle', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify(bundle),
-                });
-                const data = await resp.json();
-                if (!data.ok) {
-                    checksContainer.textContent = `✗ ${data.error}`;
-                    return;
-                }
-                checksContainer.innerHTML = '';
-                fieldsContainer.innerHTML = '';
-                checksContainer.appendChild(renderChecks(data.checks));
-                fieldsContainer.appendChild(renderFieldTable(data.fields));
-            } catch (err) {
-                checksContainer.textContent = `✗ Failed: ${err}`;
-            }
-        }
-
-        document.getElementById('inspect-proof-button').addEventListener('click', async () => {
-            const rawText = document.getElementById('proof-bundle-input').value.trim();
-            if (!rawText) {
-                document.getElementById('proof-inspector-checks').textContent = 'Paste a proof bundle first.';
-                return;
-            }
-            await inspectProofBundleText(rawText);
-        });
-
-        document.getElementById('load-proof-file-button').addEventListener('click', async () => {
-            const fileInput = document.getElementById('verify-file');
-            if (!fileInput.files.length) {
-                document.getElementById('proof-inspector-checks').textContent = 'Choose a proof bundle file in the Verify Proof panel first.';
-                return;
-            }
-            const rawText = await fileInput.files[0].text();
-            document.getElementById('proof-bundle-input').value = rawText;
-            await inspectProofBundleText(rawText);
-        });
-
-        // ── Constants Provenance Notebook ───────────────────────────────────
-        document.getElementById('load-constants-button').addEventListener('click', async () => {
-            const summary = document.getElementById('constants-summary');
-            const exportPane = document.getElementById('constants-export');
-            summary.textContent = 'Loading…';
-            exportPane.textContent = '';
-            try {
-                const resp = await fetch('/constants-provenance');
-                const data = await resp.json();
-                if (!data.ok) {
-                    summary.textContent = `✗ ${data.error}`;
-                    return;
-                }
-                activeConstantsNotebook = data.notebook;
-                const parity = data.notebook.parity;
-                const paritySummary = parity.status === 'passed'
-                    ? `Verified identical against ${parity.vectors_checked} circomlibjs vector(s).`
-                    : `Parity status: ${parity.status}${parity.reason ? ` — ${parity.reason}` : ''}`;
-                summary.innerHTML = '';
-                const status = document.createElement('span');
-                status.className = data.notebook.verified_identical ? 'ok' : 'bad';
-                status.textContent = data.notebook.verified_identical ? 'VERIFIED' : 'NOT VERIFIED';
-                summary.appendChild(status);
-                summary.appendChild(document.createElement('br'));
-                const sourceLine = document.createElement('div');
-                sourceLine.textContent = `Source: ${data.notebook.parameters.source}`;
-                summary.appendChild(sourceLine);
-                const fieldLine = document.createElement('div');
-                fieldLine.textContent = `Field: ${data.notebook.parameters.field}`;
-                summary.appendChild(fieldLine);
-                const roundLine = document.createElement('div');
-                roundLine.textContent = `Round constants: ${data.notebook.parameters.round_constants_count}`;
-                summary.appendChild(roundLine);
-                const mdsLine = document.createElement('div');
-                mdsLine.textContent = `MDS dimensions: ${data.notebook.parameters.mds_rows} × ${data.notebook.parameters.mds_cols}`;
-                summary.appendChild(mdsLine);
-                const parityLine = document.createElement('div');
-                parityLine.textContent = paritySummary;
-                summary.appendChild(parityLine);
-                exportPane.textContent = JSON.stringify(data.notebook, null, 2);
-                document.getElementById('download-constants-button').disabled = false;
-            } catch (err) {
-                summary.textContent = `✗ Failed: ${err}`;
-            }
-        });
-
-        document.getElementById('download-constants-button').addEventListener('click', () => {
-            if (!activeConstantsNotebook) return;
-            downloadJson('poseidon_constants_notebook.json', activeConstantsNotebook);
-        });
-
-        // ── Circuit Constraint Visualizer ───────────────────────────────────
-        document.getElementById('load-circuits-button').addEventListener('click', async () => {
-            const container = document.getElementById('circuit-visualizer');
-            container.textContent = 'Loading…';
-            try {
-                const resp = await fetch('/circuit-constraints');
-                const data = await resp.json();
-                if (!data.ok) {
-                    container.textContent = `✗ ${data.error}`;
-                    return;
-                }
-                activeCircuitVisualizer = data;
-                container.innerHTML = '';
-                data.circuits.forEach((circuit) => {
-                    const block = document.createElement('div');
-                    block.className = 'panel';
-                    const constraintList = renderChecks(
-                        circuit.constraints.map((constraint) => ({
-                            passed: constraint.source_verified,
-                            label: constraint.label,
-                            detail: `${constraint.explanation}\nSource snippets: ${constraint.source_snippets.join(' | ')}`,
-                        }))
-                    );
-                    const title = document.createElement('h3');
-                    title.textContent = circuit.title;
-                    block.appendChild(title);
-                    const path = document.createElement('p');
-                    const pathCode = document.createElement('code');
-                    pathCode.textContent = circuit.source_path;
-                    path.appendChild(pathCode);
-                    block.appendChild(path);
-                    const publicInputs = document.createElement('p');
-                    publicInputs.textContent = `Public inputs: ${circuit.public_inputs.join(', ')}`;
-                    block.appendChild(publicInputs);
-                    const privateInputs = document.createElement('p');
-                    privateInputs.textContent = `Private inputs: ${circuit.private_inputs.join(', ')}`;
-                    block.appendChild(privateInputs);
-                    block.appendChild(constraintList);
-                    const source = document.createElement('pre');
-                    source.textContent = circuit.source_excerpt;
-                    block.appendChild(source);
-                    container.appendChild(block);
-                });
-                document.getElementById('download-circuits-button').disabled = false;
-            } catch (err) {
-                container.textContent = `✗ Failed: ${err}`;
-            }
-        });
-
-        document.getElementById('download-circuits-button').addEventListener('click', () => {
-            if (!activeCircuitVisualizer) return;
-            downloadJson('circuit_constraint_visualizer.json', activeCircuitVisualizer);
-        });
-
-        // ── Redaction Interface ─────────────────────────────────────────────
-
-        async function loadRedactDocument() {
-            const docId = document.getElementById('redact-doc-id').value.trim();
-            const version = document.getElementById('redact-version').value;
-            const sectionsDiv = document.getElementById('redact-sections');
-            const controls = document.getElementById('redact-controls');
-            const result = document.getElementById('redact-result');
-            const downloadLink = document.getElementById('download-proof-link');
-
-            activeProofBundle = null;
-            downloadLink.style.display = 'none';
-            sectionsDiv.innerHTML = '';
-            controls.style.display = 'none';
-            result.textContent = 'Loading…';
-
-            if (!docId) { result.textContent = 'Enter a document_id first.'; return; }
-
-            try {
-                const resp = await fetch(`/committed/${encodeURIComponent(docId)}/${version}/sections`);
-                const data = await resp.json();
-                if (!data.ok) {
-                    result.textContent = `✗ ${data.error}`;
-                    return;
-                }
-                result.textContent =
-                    `Loaded: ${data.sections.length} section(s)\n` +
-                    `BLAKE3 root  : ${data.blake3_root}\n` +
-                    `Poseidon root: ${data.poseidon_root}\n\n` +
-                    `Select the sections to reveal, then click Generate Proof.`;
-
-                sectionsDiv.innerHTML = '<strong>Sections (check to reveal):</strong>';
-                data.sections.forEach((section, idx) => {
-                    const item = document.createElement('div');
-                    item.className = 'section-item';
-                    const cb = document.createElement('input');
-                    cb.type = 'checkbox';
-                    cb.id = `section-${idx}`;
-                    cb.value = idx;
-                    const label = document.createElement('label');
-                    label.htmlFor = `section-${idx}`;
-                    label.className = 'section-text';
-                    label.textContent = `[${idx}] ${section}`;
-                    item.appendChild(cb);
-                    item.appendChild(label);
-                    sectionsDiv.appendChild(item);
-                });
-                controls.style.display = 'block';
-            } catch (err) {
-                result.textContent = `✗ Failed: ${err}`;
-            }
-        }
-
-        async function generateRedactionProof() {
-            const docId = document.getElementById('redact-doc-id').value.trim();
-            const version = parseInt(document.getElementById('redact-version').value, 10);
-            const result = document.getElementById('redact-result');
-            const downloadLink = document.getElementById('download-proof-link');
-
-            const checked = Array.from(
-                document.querySelectorAll('#redact-sections input[type=checkbox]:checked')
-            ).map(cb => parseInt(cb.value, 10));
-
-            if (checked.length === 0) {
-                result.textContent = 'Select at least one section to reveal.';
-                return;
-            }
-
-            result.textContent = 'Generating proof…';
-            activeProofBundle = null;
-            downloadLink.style.display = 'none';
-
-            try {
-                const resp = await fetch('/redact', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ document_id: docId, version, revealed_indices: checked }),
-                });
-                const data = await resp.json();
-                if (!data.ok) {
-                    result.textContent = `✗ Error: ${data.error}`;
-                    return;
-                }
-                activeProofBundle = data.bundle;
-                document.getElementById('proof-bundle-input').value = JSON.stringify(activeProofBundle, null, 2);
-                result.textContent =
-                    `✓ Proof generated!\n\n` +
-                    `Revealed indices  : [${data.bundle.revealed_indices.join(', ')}]\n` +
-                    `Redacted commitment: ${data.bundle.zk_public_inputs.redacted_commitment}\n` +
-                    `Poseidon root      : ${data.bundle.zk_public_inputs.original_root}\n\n` +
-                    `Click "Download Proof Bundle" to save the proof JSON.`;
-                downloadLink.href = '#';
-                downloadLink.style.display = 'inline';
-            } catch (err) {
-                result.textContent = `✗ Failed: ${err}`;
-            }
-        }
-
-        document.getElementById('download-proof-link').addEventListener('click', (event) => {
-            event.preventDefault();
-            if (!activeProofBundle) return;
-            downloadJson('proof_bundle.json', activeProofBundle);
-        });
-
-        // ── Theme System ────────────────────────────────────────────────────
-
-        const GLYPH_CHARS = '01アイウエオカキクケコサシスセソタチツテトナニヌネノハヒフヘホマミムメモヤユヨラリルレロワヲン';
-
-        let glyphRainAnimId = null;
-
-        function startGlyphRain() {
-            const canvas = document.getElementById('glyph-rain');
-            if (!canvas) return;
-            const ctx = canvas.getContext('2d');
-            canvas.width = window.innerWidth;
-            canvas.height = window.innerHeight;
-            canvas.style.display = 'block';
-
-            const fontSize = 16;
-            const columns = Math.floor(canvas.width / fontSize);
-            const drops = new Array(columns).fill(1);
-
-            function draw() {
-                ctx.fillStyle = 'rgba(0, 0, 0, 0.05)';
-                ctx.fillRect(0, 0, canvas.width, canvas.height);
-
-                const style = getComputedStyle(document.documentElement);
-                ctx.fillStyle = style.getPropertyValue('--accent').trim() || '#00ff41';
-                ctx.font = fontSize + 'px monospace';
-
-                for (let i = 0; i < drops.length; i++) {
-                    const ch = GLYPH_CHARS[Math.floor(Math.random() * GLYPH_CHARS.length)];
-                    ctx.fillText(ch, i * fontSize, drops[i] * fontSize);
-                    if (drops[i] * fontSize > canvas.height && Math.random() > 0.975) {
-                        drops[i] = 0;
-                    }
-                    drops[i]++;
-                }
-                glyphRainAnimId = requestAnimationFrame(draw);
-            }
-            draw();
-
-            window.addEventListener('resize', function () {
-                canvas.width = window.innerWidth;
-                canvas.height = window.innerHeight;
-            });
-        }
-
-        function stopGlyphRain() {
-            if (glyphRainAnimId) {
-                cancelAnimationFrame(glyphRainAnimId);
-                glyphRainAnimId = null;
-            }
-            const canvas = document.getElementById('glyph-rain');
-            if (canvas) {
-                canvas.style.display = 'none';
-                const ctx = canvas.getContext('2d');
-                if (ctx) ctx.clearRect(0, 0, canvas.width, canvas.height);
-            }
-        }
-
-        function applyTheme(theme, colorScheme, prefs) {
-            const root = document.documentElement;
-            root.setAttribute('data-theme', theme);
-            if (theme === 'fight-club' && colorScheme && colorScheme !== 'default') {
-                root.setAttribute('data-color-scheme', colorScheme);
-            } else {
-                root.removeAttribute('data-color-scheme');
-            }
-
-            // Glyph rain: only in fight-club mode and when user enables it
-            if (theme === 'fight-club' && prefs.glyphRain) {
-                startGlyphRain();
-            } else {
-                stopGlyphRain();
-            }
-
-            // Sync radio buttons
-            const themeRadio = document.querySelector('input[name="theme-mode"][value="' + theme + '"]');
-            if (themeRadio) themeRadio.checked = true;
-            const colorRadio = document.querySelector('input[name="color-scheme"][value="' + (colorScheme || 'default') + '"]');
-            if (colorRadio) colorRadio.checked = true;
-
-            const rainCb = document.getElementById('pref-glyph-rain');
-            if (rainCb) rainCb.checked = !!prefs.glyphRain;
-            const compactCb = document.getElementById('pref-compact');
-            if (compactCb) compactCb.checked = !!prefs.compact;
-
-            // Compact view
-            if (prefs.compact) {
-                document.body.style.fontSize = '.85rem';
-            } else {
-                document.body.style.fontSize = '';
-            }
-        }
-
-        function saveThemePrefs(theme, colorScheme, prefs) {
-            try {
-                localStorage.setItem('olympus-theme', JSON.stringify({ theme: theme, colorScheme: colorScheme, prefs: prefs }));
-            } catch (_) { /* storage unavailable */ }
-        }
-
-        function loadThemePrefs() {
-            try {
-                const raw = localStorage.getItem('olympus-theme');
-                if (raw) return JSON.parse(raw);
-            } catch (_) { /* ignore */ }
-            return null;
-        }
-
-        // Initialize theme from saved preferences or default
-        (function initTheme() {
-            const saved = loadThemePrefs();
-            const theme = saved ? saved.theme : 'professional';
-            const colorScheme = saved ? saved.colorScheme : 'default';
-            const prefs = saved ? (saved.prefs || {}) : {};
-            applyTheme(theme, colorScheme, prefs);
-
-            // Theme mode radios
-            document.querySelectorAll('input[name="theme-mode"]').forEach(function (radio) {
-                radio.addEventListener('change', function () {
-                    const currentPrefs = loadThemePrefs() || {};
-                    const p = currentPrefs.prefs || {};
-                    const cs = currentPrefs.colorScheme || 'default';
-                    applyTheme(radio.value, cs, p);
-                    saveThemePrefs(radio.value, cs, p);
-                });
-            });
-
-            // Color scheme radios
-            document.querySelectorAll('input[name="color-scheme"]').forEach(function (radio) {
-                radio.addEventListener('change', function () {
-                    const currentPrefs = loadThemePrefs() || {};
-                    const t = currentPrefs.theme || 'professional';
-                    const p = currentPrefs.prefs || {};
-                    applyTheme(t, radio.value, p);
-                    saveThemePrefs(t, radio.value, p);
-                });
-            });
-
-            // Layout preference checkboxes
-            const rainCb = document.getElementById('pref-glyph-rain');
-            if (rainCb) {
-                rainCb.addEventListener('change', function () {
-                    const currentPrefs = loadThemePrefs() || {};
-                    const t = currentPrefs.theme || 'professional';
-                    const cs = currentPrefs.colorScheme || 'default';
-                    const p = currentPrefs.prefs || {};
-                    p.glyphRain = rainCb.checked;
-                    applyTheme(t, cs, p);
-                    saveThemePrefs(t, cs, p);
-                });
-            }
-            const compactCb = document.getElementById('pref-compact');
-            if (compactCb) {
-                compactCb.addEventListener('change', function () {
-                    const currentPrefs = loadThemePrefs() || {};
-                    const t = currentPrefs.theme || 'professional';
-                    const cs = currentPrefs.colorScheme || 'default';
-                    const p = currentPrefs.prefs || {};
-                    p.compact = compactCb.checked;
-                    applyTheme(t, cs, p);
-                    saveThemePrefs(t, cs, p);
-                });
-            }
-        })();
-
-        // ── Live Node Health ─────────────────────────────────────────────────
-        const nodeHealthTbody = document.getElementById('node-health-tbody');
-        const refreshHealthButton = document.getElementById('refresh-health');
-
-        async function refreshNodeHealth() {
-            if (!nodeHealthTbody) return;
-
-            try {
-                // This would call a backend endpoint that checks federation node status
-                // For now, show placeholder until backend route is implemented
-                nodeHealthTbody.innerHTML = '<tr><td colspan="5" style="text-align:center;">Node health monitoring requires backend implementation</td></tr>';
-            } catch (err) {
-                nodeHealthTbody.innerHTML = `<tr><td colspan="5" style="text-align:center;">Failed to load: ${err}</td></tr>`;
-            }
-        }
-
-        if (refreshHealthButton) {
-            refreshHealthButton.addEventListener('click', refreshNodeHealth);
-            // Auto-refresh every 30 seconds
-            refreshNodeHealth();
-            setInterval(refreshNodeHealth, 30000);
-        }
-
-        // ── User-Friendly FOIA Ledger ────────────────────────────────────────
-
-        // Submit a document via the simple ingestion endpoint
-        async function submitDocument() {
-            const fileInput = document.getElementById('doc-file');
-            const requestId = document.getElementById('doc-request-id').value.trim();
-            const description = document.getElementById('doc-description').value.trim();
-
-            if (!fileInput.files || fileInput.files.length === 0) {
-                alert('Please select a file to submit.');
-                return;
-            }
-
-            const progressDiv = document.getElementById('upload-progress');
-            const resultDiv = document.getElementById('upload-result');
-            progressDiv.style.display = 'block';
-            resultDiv.style.display = 'none';
-            document.getElementById('progress-steps').innerHTML =
-                '<div class="foia-step foia-step-in_progress"><span class="foia-step-icon">⏳</span>' +
-                '<div class="foia-step-content"><strong>Uploading…</strong><p>Sending your document to the server.</p></div></div>';
-
-            const formData = new FormData();
-            formData.append('file', fileInput.files[0]);
-            if (requestId) formData.append('request_id', requestId);
-            if (description) formData.append('description', description);
-
-            try {
-                const resp = await fetch('/ledger/ingest/simple', { method: 'POST', body: formData });
-                const data = await resp.json();
-                renderUploadResult(data);
-            } catch (err) {
-                renderUploadError(String(err));
-            }
-        }
-
-        function renderUploadResult(result) {
-            const progressDiv = document.getElementById('upload-progress');
-            const stepsDiv = document.getElementById('progress-steps');
-            const resultDiv = document.getElementById('upload-result');
-
-            stepsDiv.innerHTML = '';
-            (result.steps || []).forEach(step => {
-                const el = document.createElement('div');
-                el.className = 'foia-step foia-step-' + (step.status || 'complete');
-                el.setAttribute('role', 'listitem');
-                const detailsHtml = step.details
-                    ? `<details><summary>Technical details</summary><pre>${escHtml(JSON.stringify(step.details, null, 2))}</pre></details>`
-                    : '';
-                el.innerHTML =
-                    `<span class="foia-step-icon" aria-hidden="true">${escHtml(step.icon || '')}</span>` +
-                    `<div class="foia-step-content"><strong>${escHtml(step.title || '')}</strong>` +
-                    `<p>${escHtml(step.message || '')}</p>${detailsHtml}</div>`;
-                stepsDiv.appendChild(el);
-            });
-
-            resultDiv.style.display = 'block';
-            const cls = result.success ? 'foia-result foia-result-success' : 'foia-result foia-result-error';
-            const recordIdHtml = result.permanent_record_id
-                ? `<p>Permanent Record ID: <span class="foia-record-id">${escHtml(result.permanent_record_id)}</span></p>`
-                : '';
-            const nextHtml = result.next_steps
-                ? `<p class="foia-next-steps">${escHtml(result.next_steps)}</p>`
-                : '';
-            const errHtml = result.error_help
-                ? `<div class="foia-error-help">💡 ${escHtml(result.error_help)}</div>`
-                : '';
-
-            resultDiv.innerHTML =
-                `<div class="${cls}">` +
-                `<h3>${result.success ? '✅' : '❌'} ${escHtml(result.summary || '')}</h3>` +
-                `<p class="foia-explanation">${escHtml(result.what_this_means || '')}</p>` +
-                recordIdHtml + nextHtml + errHtml +
-                '</div>';
-
-            // Refresh activity feed
-            loadActivityFeed(null);
-        }
-
-        function renderUploadError(msg) {
-            const resultDiv = document.getElementById('upload-result');
-            resultDiv.style.display = 'block';
-            resultDiv.innerHTML =
-                '<div class="foia-result foia-result-error">' +
-                '<h3>❌ Upload failed</h3>' +
-                `<p class="foia-explanation">Could not reach the server. Please check your connection and try again.</p>` +
-                `<div class="foia-error-help">💡 ${escHtml(msg)}</div>` +
-                '</div>';
-        }
-
-        // Verify by uploading a file
-        async function verifyByFile() {
-            const fileInput = document.getElementById('verify-file');
-            if (!fileInput.files || fileInput.files.length === 0) {
-                alert('Please select a file to verify.');
-                return;
-            }
-            const formData = new FormData();
-            formData.append('file', fileInput.files[0]);
-            await runVerification(formData);
-        }
-
-        // Verify by record ID (OLY-NNNN or raw commit ID)
-        async function verifyByRecordId() {
-            const id = document.getElementById('verify-record-id').value.trim();
-            if (!id) { alert('Please enter a record ID.'); return; }
-            const formData = new FormData();
-            formData.append('commit_id', id);
-            await runVerification(formData);
-        }
-
-        // Verify by BLAKE3 hash
-        async function verifyByHash() {
-            const hash = document.getElementById('verify-hash').value.trim();
-            if (!hash) { alert('Please enter a document hash.'); return; }
-            const formData = new FormData();
-            formData.append('doc_hash', hash);
-            await runVerification(formData);
-        }
-
-        async function runVerification(formData) {
-            const resultDiv = document.getElementById('verify-result');
-            resultDiv.innerHTML = '<p class="foia-help-text">Verifying…</p>';
-            try {
-                const resp = await fetch('/ledger/verify/simple', { method: 'POST', body: formData });
-                const data = await resp.json();
-                if (!resp.ok) {
-                    resultDiv.innerHTML =
-                        '<div class="foia-result foia-result-error"><h3>❌ Verification error</h3>' +
-                        `<p class="foia-explanation">${escHtml(typeof data.detail === 'object' ? (data.detail.detail || JSON.stringify(data.detail)) : (data.detail || 'Unknown error.'))}</p></div>`;
-                    return;
-                }
-                renderVerificationResult(data);
-            } catch (err) {
-                resultDiv.innerHTML =
-                    '<div class="foia-result foia-result-error"><h3>❌ Could not reach server</h3>' +
-                    `<p class="foia-explanation">Please check your connection and try again.</p>` +
-                    `<div class="foia-error-help">💡 ${escHtml(String(err))}</div></div>`;
-            }
-        }
-
-        function renderVerificationResult(result) {
-            const resultDiv = document.getElementById('verify-result');
-            const cls = result.verified ? 'foia-result foia-verified' : 'foia-result foia-notfound';
-            const icon = result.verified ? '✅' : '❌';
-
-            const dateHtml = result.recorded_date
-                ? `<p><strong>Recorded:</strong> ${new Date(result.recorded_date).toLocaleString()}</p>`
-                : '';
-            const reqHtml = result.related_request
-                ? `<p><strong>Related request:</strong> ${escHtml(result.related_request)}</p>`
-                : '';
-
-            const proofStepsHtml = (result.proof_details || []).map(s =>
-                `<div class="foia-proof-step">${escHtml(s.icon || '')} <strong>${escHtml(s.title || '')}</strong>: ${escHtml(s.message || '')}</div>`
-            ).join('');
-
-            resultDiv.innerHTML =
-                `<div class="${cls}">` +
-                `<h3>${icon} ${escHtml(result.summary || '')}</h3>` +
-                `<p class="foia-explanation">${escHtml(result.what_this_means || '')}</p>` +
-                `<div class="foia-importance">${escHtml(result.why_this_matters || '')}</div>` +
-                dateHtml + reqHtml +
-                (proofStepsHtml
-                    ? `<details style="margin-top:.75rem;"><summary style="cursor:pointer;color:var(--accent);">How we verified this</summary><div style="margin-top:.5rem;">${proofStepsHtml}</div></details>`
-                    : '') +
-                '</div>';
-        }
-
-        // Activity feed
-        let _currentActivityFilter = null;
-
-        async function loadActivityFeed(filter) {
-            _currentActivityFilter = filter;
-            const feedDiv = document.getElementById('activity-feed');
-            if (!feedDiv) return;
-            const url = filter && filter !== 'all'
-                ? `/ledger/activity?activity_type=${encodeURIComponent(filter)}&limit=30`
-                : '/ledger/activity?limit=30';
-            try {
-                const resp = await fetch(url);
-                if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
-                const data = await resp.json();
-                renderActivityFeed(data.items || []);
-            } catch (err) {
-                feedDiv.innerHTML = `<p class="foia-help-text">Could not load activity: ${escHtml(String(err))}</p>`;
-            }
-        }
-
-        function filterActivity(type, btn) {
-            // Update button states
-            document.querySelectorAll('.foia-filter-btn').forEach(b => b.classList.remove('foia-filter-active'));
-            if (btn) btn.classList.add('foia-filter-active');
-            loadActivityFeed(type === 'all' ? null : type);
-        }
-
-        function renderActivityFeed(items) {
-            const feedDiv = document.getElementById('activity-feed');
-            if (!items || items.length === 0) {
-                feedDiv.innerHTML = '<p class="foia-help-text" style="text-align:center;padding:1rem;">No activity yet.</p>';
-                return;
-            }
-            feedDiv.innerHTML = items.map(item => {
-                const icon = getActivityIcon(item.activity_type);
-                const timeAgo = formatTimeAgo(item.timestamp);
-                return `<div class="foia-activity-item">` +
-                    `<span class="foia-activity-time">${escHtml(timeAgo)}</span>` +
-                    `<span class="foia-activity-icon" aria-hidden="true">${icon}</span>` +
-                    `<div class="foia-activity-content">` +
-                    `<h4>${escHtml(item.title)}</h4>` +
-                    `<p>${escHtml(item.description)}</p>` +
-                    `</div>` +
-                    `<span class="foia-status-badge">${escHtml(item.user_friendly_status)}</span>` +
-                    `</div>`;
-            }).join('');
-        }
-
-        function getActivityIcon(type) {
-            const icons = {
-                DOCUMENT_SUBMITTED: '📄',
-                VERIFICATION_SUCCESS: '✅',
-                ERROR: '⚠️',
-            };
-            return icons[type] || '📋';
-        }
-
-        function formatTimeAgo(isoString) {
-            const then = new Date(isoString);
-            const now = new Date();
-            const diffMs = now - then;
-            const diffSec = Math.floor(diffMs / 1000);
-            if (diffSec < 60) return 'just now';
-            const diffMin = Math.floor(diffSec / 60);
-            if (diffMin < 60) return `${diffMin}m ago`;
-            const diffHr = Math.floor(diffMin / 60);
-            if (diffHr < 24) return `${diffHr}h ago`;
-            const diffDay = Math.floor(diffHr / 24);
-            if (diffDay < 7) return `${diffDay}d ago`;
-            return then.toLocaleDateString();
-        }
-
-        function escHtml(str) {
-            if (typeof str !== 'string') return '';
-            return str.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
-                      .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
-        }
-
-        // Auto-load activity feed on page load and refresh every 60s
-        loadActivityFeed(null);
-        setInterval(() => loadActivityFeed(_currentActivityFilter), 60000);
-    </script>
+    });
+}
+
+/* Boot Sequence + Initialization */
+document.addEventListener('DOMContentLoaded', function() {
+    var savedColor = localStorage.getItem('olympus-color');
+    if (savedColor && COLOR_SCHEMES[savedColor]) {
+        setColorScheme(savedColor);
+    }
+
+    var bootLines = document.querySelectorAll('.boot-line');
+    bootLines.forEach(function(line) {
+        var delay = parseInt(line.dataset.delay) || 0;
+        setTimeout(function() { line.classList.add('visible'); }, delay);
+    });
+
+    var maxDelay = 0;
+    bootLines.forEach(function(l) {
+        var d = parseInt(l.dataset.delay) || 0;
+        if (d > maxDelay) maxDelay = d;
+    });
+    setTimeout(function() {
+        var boot = document.getElementById('boot-screen');
+        boot.classList.add('fade-out');
+        setTimeout(function() {
+            boot.style.display = 'none';
+            document.getElementById('app').classList.add('visible');
+        }, 800);
+    }, maxDelay + 800);
+
+    var savedMatrix = localStorage.getItem('olympus-matrix');
+    if (savedMatrix === 'on') {
+        toggleMatrix();
+    }
+});
+</script>
 </body>
 </html>

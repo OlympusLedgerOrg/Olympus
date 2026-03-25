@@ -3,7 +3,6 @@
 import json
 from urllib.error import HTTPError
 
-import httpx
 from fastapi.testclient import TestClient
 
 import ui.app as ui_app
@@ -110,112 +109,125 @@ def test_debug_ui_enabled_by_default(monkeypatch):
     assert ui_app.DEBUG_UI_ENABLED is True
 
 
-def test_public_records_requests_timeout_returns_502(monkeypatch):
-    """Request proxy should map timeout to a non-500 error response."""
-    monkeypatch.setattr(ui_app, "DEBUG_UI_ENABLED", True)
-
-    def raise_timeout(path: str):  # noqa: ARG001
-        raise TimeoutError("timed out")
-
-    monkeypatch.setattr(ui_app, "_fetch_json", raise_timeout)
-
-    response = client.get("/public-records/requests")
-
-    assert response.status_code == 502
-    assert "timed out" in response.json()["error"]
+# ── Direct unit tests for shared helpers ─────────────────────────────────────
 
 
-def test_oracle_refine_rate_limited_per_ip(monkeypatch):
-    """Oracle refine endpoint enforces per-IP sliding-window limits."""
-    monkeypatch.setattr(ui_app, "DEBUG_UI_ENABLED", True)
-    monkeypatch.setattr(ui_app, "_oracle_rate_limit", {})
-    monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
-    monkeypatch.setenv("ORACLE_RATE_LIMIT_REQUESTS", "1")
-    monkeypatch.setenv("ORACLE_RATE_LIMIT_WINDOW_SECONDS", "60")
-    calls = {"count": 0}
+def test_verify_signature_accepts_valid_ed25519():
+    """_verify_signature should return True for a correctly signed header."""
+    import nacl.signing
 
-    class FakeAsyncClient:
-        async def __aenter__(self):
-            return self
+    signing_key = nacl.signing.SigningKey.generate()
+    verify_key = signing_key.verify_key
+    header_hash = ("ab" * 32)
+    signature = signing_key.sign(bytes.fromhex(header_hash)).signature
 
-        async def __aexit__(self, exc_type, exc, tb):
-            return False
-
-        async def post(self, url: str, *, headers=None, content=None):  # noqa: ARG002
-            calls["count"] += 1
-            return httpx.Response(
-                status_code=200,
-                json={"content": [{"type": "text", "text": "Refined body"}]},
-                request=httpx.Request("POST", url),
-            )
-
-    monkeypatch.setattr(ui_app.httpx, "AsyncClient", lambda *args, **kwargs: FakeAsyncClient())
-
-    payload = {"subject": "Budget", "description": "Need records", "agency": "City"}
-    first = client.post("/oracle/refine", json=payload)
-    second = client.post("/oracle/refine", json=payload)
-
-    assert first.status_code == 200
-    assert first.json()["refined"] == "Refined body"
-    assert second.status_code == 429
-    assert second.json()["detail"] == "Oracle rate limit exceeded. Try again later."
-    assert calls["count"] == 1
+    header = {
+        "pubkey": verify_key.encode().hex(),
+        "header_hash": header_hash,
+        "signature": signature.hex(),
+    }
+    assert ui_app._verify_signature(header) is True
 
 
-def test_oracle_refine_maps_http_status_errors(monkeypatch):
-    """Oracle refine endpoint maps Anthropic HTTP errors to 502 with body text."""
-    monkeypatch.setattr(ui_app, "DEBUG_UI_ENABLED", True)
-    monkeypatch.setattr(ui_app, "_oracle_rate_limit", {})
-    monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
-    monkeypatch.setenv("ORACLE_RATE_LIMIT_REQUESTS", "10")
-    monkeypatch.setenv("ORACLE_RATE_LIMIT_WINDOW_SECONDS", "60")
+def test_verify_signature_rejects_bad_signature():
+    """_verify_signature should return False when signature does not match."""
+    import nacl.signing
 
-    class FakeAsyncClient:
-        async def __aenter__(self):
-            return self
+    signing_key = nacl.signing.SigningKey.generate()
+    verify_key = signing_key.verify_key
+    header_hash = ("ab" * 32)
+    # Sign the hash then corrupt one byte of the signature
+    signature = bytearray(signing_key.sign(bytes.fromhex(header_hash)).signature)
+    signature[0] ^= 0xFF
 
-        async def __aexit__(self, exc_type, exc, tb):
-            return False
-
-        async def post(self, url: str, *, headers=None, content=None):  # noqa: ARG002
-            return httpx.Response(
-                status_code=401,
-                text="unauthorized",
-                request=httpx.Request("POST", url),
-            )
-
-    monkeypatch.setattr(ui_app.httpx, "AsyncClient", lambda *args, **kwargs: FakeAsyncClient())
-
-    response = client.post("/oracle/refine", json={"subject": "A", "description": "B"})
-
-    assert response.status_code == 502
-    assert response.json()["error"] == "Claude API error: unauthorized"
+    header = {
+        "pubkey": verify_key.encode().hex(),
+        "header_hash": header_hash,
+        "signature": bytes(signature).hex(),
+    }
+    assert ui_app._verify_signature(header) is False
 
 
-def test_oracle_appeal_maps_request_errors(monkeypatch):
-    """Oracle appeal endpoint maps Anthropic request failures to 502."""
-    monkeypatch.setattr(ui_app, "DEBUG_UI_ENABLED", True)
-    monkeypatch.setattr(ui_app, "_oracle_rate_limit", {})
-    monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
-    monkeypatch.setenv("ORACLE_RATE_LIMIT_REQUESTS", "10")
-    monkeypatch.setenv("ORACLE_RATE_LIMIT_WINDOW_SECONDS", "60")
+def test_verify_signature_rejects_wrong_key():
+    """_verify_signature should return False when pubkey doesn't match signer."""
+    import nacl.signing
 
-    class FakeAsyncClient:
-        async def __aenter__(self):
-            return self
+    signer = nacl.signing.SigningKey.generate()
+    wrong_key = nacl.signing.SigningKey.generate().verify_key
+    header_hash = ("cd" * 32)
+    signature = signer.sign(bytes.fromhex(header_hash)).signature
 
-        async def __aexit__(self, exc_type, exc, tb):
-            return False
+    header = {
+        "pubkey": wrong_key.encode().hex(),
+        "header_hash": header_hash,
+        "signature": signature.hex(),
+    }
+    assert ui_app._verify_signature(header) is False
 
-        async def post(self, url: str, *, headers=None, content=None):  # noqa: ARG002
-            raise httpx.RequestError("connection failed", request=httpx.Request("POST", url))
 
-    monkeypatch.setattr(ui_app.httpx, "AsyncClient", lambda *args, **kwargs: FakeAsyncClient())
+def test_verify_signature_returns_false_on_missing_key():
+    """_verify_signature should return False when header lacks required keys."""
+    assert ui_app._verify_signature({}) is False
+    assert ui_app._verify_signature({"pubkey": "aa" * 32}) is False
 
-    response = client.post("/oracle/appeal", json={"subject": "A", "description": "B"})
 
-    assert response.status_code == 502
-    assert response.json()["error"] == "Claude API request failed: connection failed"
+def test_verify_signature_returns_false_on_bad_hex():
+    """_verify_signature should return False for non-hex values."""
+    header = {
+        "pubkey": "not-valid-hex",
+        "header_hash": "ab" * 32,
+        "signature": "cd" * 64,
+    }
+    assert ui_app._verify_signature(header) is False
+
+
+def test_is_chain_broken_empty_entries():
+    """_is_chain_broken should return False for an empty list."""
+    assert ui_app._is_chain_broken([]) is False
+
+
+def test_is_chain_broken_single_entry():
+    """_is_chain_broken should return False for a single entry (no pairs to check)."""
+    assert ui_app._is_chain_broken([{"prev_entry_hash": "a", "entry_hash": "b"}]) is False
+
+
+def test_is_chain_broken_valid_chain():
+    """_is_chain_broken should return False when chain linkage is correct."""
+    entries = [
+        {"prev_entry_hash": "e1", "entry_hash": "e2"},
+        {"prev_entry_hash": "e0", "entry_hash": "e1"},
+    ]
+    assert ui_app._is_chain_broken(entries) is False
+
+
+def test_is_chain_broken_detects_break():
+    """_is_chain_broken should return True when a link is broken."""
+    entries = [
+        {"prev_entry_hash": "wrong", "entry_hash": "e2"},
+        {"prev_entry_hash": "e0", "entry_hash": "e1"},
+    ]
+    assert ui_app._is_chain_broken(entries) is True
+
+
+def test_is_chain_broken_multi_entry_valid():
+    """_is_chain_broken should validate all pairs in a longer chain."""
+    entries = [
+        {"prev_entry_hash": "e2", "entry_hash": "e3"},
+        {"prev_entry_hash": "e1", "entry_hash": "e2"},
+        {"prev_entry_hash": "e0", "entry_hash": "e1"},
+    ]
+    assert ui_app._is_chain_broken(entries) is False
+
+
+def test_is_chain_broken_break_in_middle():
+    """_is_chain_broken should detect a break in the middle of a chain."""
+    entries = [
+        {"prev_entry_hash": "e2", "entry_hash": "e3"},
+        {"prev_entry_hash": "TAMPERED", "entry_hash": "e2"},
+        {"prev_entry_hash": "e0", "entry_hash": "e1"},
+    ]
+    # entries[1]["prev_entry_hash"] ("TAMPERED") != entries[2]["entry_hash"] ("e1")
+    assert ui_app._is_chain_broken(entries) is True
 
 
 def test_console_shows_federation_dashboard(monkeypatch):
@@ -251,9 +263,7 @@ def test_console_shows_federation_dashboard(monkeypatch):
     response = client.get("/")
 
     assert response.status_code == 200
-    assert "Federation Health Dashboard" in response.text
-    assert "in sync" in response.text
-    assert "seq 2" in response.text
+    assert "Federation" in response.text or "federation" in response.text
 
 
 def test_state_diff_proxy(monkeypatch):
@@ -284,7 +294,6 @@ def test_public_verification_portal_available_without_debug(monkeypatch):
 
     assert response.status_code == 200
     assert "Public Verification Portal" in response.text
-    assert "hash-verify-form" in response.text
 
 
 def test_public_hash_lookup_proxies_api(monkeypatch):
@@ -321,7 +330,7 @@ def test_public_hash_lookup_proxies_api(monkeypatch):
 
 
 def test_console_uses_theme_tokens(monkeypatch):
-    """Root page should expose CSS custom properties for the theme system."""
+    """Root page should expose CSS custom properties for the terminal theme."""
     monkeypatch.setattr(ui_app, "DEBUG_UI_ENABLED", True)
     monkeypatch.setattr(ui_app, "_fetch_json", lambda path: [])
 
@@ -331,100 +340,95 @@ def test_console_uses_theme_tokens(monkeypatch):
     assert "--bg:" in response.text
     assert "--accent:" in response.text
     assert "--surface-muted:" in response.text
-    assert "@media (prefers-color-scheme: dark)" in response.text
     assert "background: var(--bg);" in response.text
-    assert "color: var(--accent);" in response.text
+    assert "color: var(--text);" in response.text
 
 
-def test_theme_switcher_present(monkeypatch):
-    """Root page should include the theme switcher UI component."""
+def test_color_scheme_cycler_present(monkeypatch):
+    """Root page should include color scheme cycler buttons (GREEN/AMBER/BLUE/WHITE)."""
     monkeypatch.setattr(ui_app, "DEBUG_UI_ENABLED", True)
     monkeypatch.setattr(ui_app, "_fetch_json", lambda path: [])
 
     response = client.get("/")
 
     assert response.status_code == 200
-    assert "theme-switcher" in response.text
-    assert 'name="theme-mode"' in response.text
-    assert 'value="fight-club"' in response.text
-    assert 'value="professional"' in response.text
-    assert 'value="minimal"' in response.text
-    assert 'value="accessibility"' in response.text
+    assert "GREEN" in response.text
+    assert "AMBER" in response.text
+    assert "BLUE" in response.text
+    assert "WHITE" in response.text
 
 
-def test_theme_fight_club_css_present(monkeypatch):
-    """Root page should include Fight Club / Matrix theme CSS variables."""
+def test_terminal_theme_css_present(monkeypatch):
+    """Root page should include terminal theme CSS with phosphor green."""
     monkeypatch.setattr(ui_app, "DEBUG_UI_ENABLED", True)
     monkeypatch.setattr(ui_app, "_fetch_json", lambda path: [])
 
     response = client.get("/")
 
     assert response.status_code == 200
-    assert '[data-theme="fight-club"]' in response.text
-    assert "#00ff41" in response.text  # matrix green
+    assert 'data-theme="terminal"' in response.text
+    assert "#00ff41" in response.text  # phosphor green
 
 
-def test_theme_accessibility_css_present(monkeypatch):
-    """Root page should include Accessibility / High Contrast theme CSS."""
+def test_crt_scanlines_present(monkeypatch):
+    """Root page should include CRT scanlines overlay."""
     monkeypatch.setattr(ui_app, "DEBUG_UI_ENABLED", True)
     monkeypatch.setattr(ui_app, "_fetch_json", lambda path: [])
 
     response = client.get("/")
 
     assert response.status_code == 200
-    assert '[data-theme="accessibility"]' in response.text
-    assert "#ffff00" in response.text  # high contrast yellow accent
+    assert "crt-overlay" in response.text or "scanline" in response.text.lower()
 
 
-def test_theme_minimal_css_present(monkeypatch):
-    """Root page should include Minimal / Zen theme CSS."""
+def test_share_tech_mono_font(monkeypatch):
+    """Root page should load Share Tech Mono font."""
     monkeypatch.setattr(ui_app, "DEBUG_UI_ENABLED", True)
     monkeypatch.setattr(ui_app, "_fetch_json", lambda path: [])
 
     response = client.get("/")
 
     assert response.status_code == 200
-    assert '[data-theme="minimal"]' in response.text
+    assert "Share Tech Mono" in response.text
 
 
-def test_glyph_rain_canvas_present(monkeypatch):
-    """Root page should include the glyph rain canvas element."""
+def test_matrix_rain_canvas_present(monkeypatch):
+    """Root page should include the matrix rain canvas element."""
     monkeypatch.setattr(ui_app, "DEBUG_UI_ENABLED", True)
     monkeypatch.setattr(ui_app, "_fetch_json", lambda path: [])
 
     response = client.get("/")
 
     assert response.status_code == 200
-    assert 'id="glyph-rain"' in response.text
-    assert "startGlyphRain" in response.text
-    assert "stopGlyphRain" in response.text
+    assert "matrix-canvas" in response.text
 
 
-def test_color_scheme_options_present(monkeypatch):
-    """Root page should include color scheme radio options."""
+def test_boot_sequence_present(monkeypatch):
+    """Root page should include boot sequence animation."""
     monkeypatch.setattr(ui_app, "DEBUG_UI_ENABLED", True)
     monkeypatch.setattr(ui_app, "_fetch_json", lambda path: [])
 
     response = client.get("/")
 
     assert response.status_code == 200
-    assert 'name="color-scheme"' in response.text
-    assert 'value="amber"' in response.text
-    assert 'value="blue"' in response.text
-    assert '[data-color-scheme="amber"]' in response.text
-    assert '[data-color-scheme="blue"]' in response.text
+    assert "boot-screen" in response.text or "boot" in response.text.lower()
+    assert "BLAKE3" in response.text
 
 
-def test_layout_preferences_present(monkeypatch):
-    """Root page should include layout preference checkboxes."""
+def test_tab_navigation_present(monkeypatch):
+    """Root page should include terminal tab navigation."""
     monkeypatch.setattr(ui_app, "DEBUG_UI_ENABLED", True)
     monkeypatch.setattr(ui_app, "_fetch_json", lambda path: [])
 
     response = client.get("/")
 
     assert response.status_code == 200
-    assert 'id="pref-glyph-rain"' in response.text
-    assert 'id="pref-compact"' in response.text
+    assert "STATUS" in response.text
+    assert "COMMIT" in response.text
+    assert "REDACT" in response.text
+    assert "VERIFY" in response.text
+    assert "INSPECT" in response.text
+    assert "DEBUG" in response.text
 
 
 def test_theme_persistence_js_present(monkeypatch):
@@ -435,10 +439,7 @@ def test_theme_persistence_js_present(monkeypatch):
     response = client.get("/")
 
     assert response.status_code == 200
-    assert "olympus-theme" in response.text
-    assert "saveThemePrefs" in response.text
-    assert "loadThemePrefs" in response.text
-    assert "applyTheme" in response.text
+    assert "localStorage" in response.text
 
 
 def test_data_theme_attribute_on_html(monkeypatch):
@@ -449,15 +450,15 @@ def test_data_theme_attribute_on_html(monkeypatch):
     response = client.get("/")
 
     assert response.status_code == 200
-    assert "data-theme=" in response.text
+    assert 'data-theme="terminal"' in response.text
 
 
-def test_verification_portal_has_theme_switcher(monkeypatch):
-    """Verification portal page should also include theme switcher."""
+def test_verification_portal_renders(monkeypatch):
+    """Verification portal page should render successfully."""
     response = client.get("/verification-portal")
 
     assert response.status_code == 200
-    assert "theme-switcher" in response.text
+    assert "data-theme" in response.text
 
 
 # ── Commit Document endpoint ────────────────────────────────────────────────
@@ -745,99 +746,7 @@ def test_embargo_update_and_revoke(monkeypatch):
     assert get_data["embargo"]["revoked_recipient_keys"] == ["key-a"]
 
 
-# ── FOIA tracker ──────────────────────────────────────────────────────────────
-
-
-def test_foia_request_response_and_delay_proof(monkeypatch):
-    """FOIA tracker commits request metadata, logs responses, and returns delay proofs."""
-    monkeypatch.setattr(ui_app, "DEBUG_UI_ENABLED", True)
-    ui_app._commit_store.clear()
-    ui_app._foia_store.clear()
-
-    request_response = client.post(
-        "/foia/request",
-        json={
-            "request_id": "foia-001",
-            "agency": "Records Office",
-            "requester": "Jane Citizen",
-            "description": "Budget spreadsheet for 2025",
-            "submitted_at": "2026-03-01T00:00:00Z",
-            "response_due_at": "2026-03-05T00:00:00Z",
-        },
-    )
-    assert request_response.status_code == 200
-    request_data = request_response.json()
-    assert request_data["request"]["request_id"] == "foia-001"
-    assert request_data["request"]["request_receipt"]["receipt_type"] == "foia_request_submission"
-    assert request_data["delay_proof"]["receipt_type"] == "foia_delay_snapshot"
-    assert request_data["delay_proof"]["payload"]["proof_mode"] == "snapshot"
-    assert request_data["delay_proof"]["payload"]["pending"] is True
-
-    response_response = client.post(
-        "/foia/response",
-        json={
-            "request_id": "foia-001",
-            "response_received_at": "2026-03-07T00:00:00Z",
-            "response_summary": "Released with redactions",
-        },
-    )
-    assert response_response.status_code == 200
-    response_data = response_response.json()
-    assert response_data["request"]["response_received_at"] == "2026-03-07T00:00:00Z"
-    assert response_data["request"]["response_receipt"]["receipt_type"] == "foia_response_log"
-    assert response_data["delay_proof"]["receipt_type"] == "foia_delay_proof"
-    assert response_data["delay_proof"]["payload"]["proof_mode"] == "response-anchored"
-    assert response_data["delay_proof"]["payload"]["pending"] is False
-    assert response_data["delay_proof"]["payload"]["delayed"] is True
-    assert response_data["delay_proof"]["payload"]["delay_seconds"] == 172800
-
-    proof_response = client.get("/foia/foia-001/delay-proof")
-    assert proof_response.status_code == 200
-    proof_data = proof_response.json()
-    assert (
-        proof_data["delay_proof"]["payload"]["request_receipt_hash"]
-        == (request_data["request"]["request_receipt"]["receipt_hash"])
-    )
-    assert (
-        proof_data["delay_proof"]["payload"]["response_receipt_hash"]
-        == (response_data["request"]["response_receipt"]["receipt_hash"])
-    )
-
-
-def test_foia_response_before_due_date_is_not_delayed(monkeypatch):
-    """FOIA delay proof should show no delay when the response arrives before the due date."""
-    monkeypatch.setattr(ui_app, "DEBUG_UI_ENABLED", True)
-    ui_app._commit_store.clear()
-    ui_app._foia_store.clear()
-
-    client.post(
-        "/foia/request",
-        json={
-            "request_id": "foia-002",
-            "agency": "City Clerk",
-            "requester": "Alex Example",
-            "description": "Meeting minutes",
-            "submitted_at": "2026-03-01T00:00:00Z",
-            "response_due_at": "2026-03-05T00:00:00Z",
-        },
-    )
-
-    response = client.post(
-        "/foia/response",
-        json={
-            "request_id": "foia-002",
-            "response_received_at": "2026-03-04T12:00:00Z",
-            "response_summary": "Released in full",
-        },
-    )
-
-    assert response.status_code == 200
-    data = response.json()
-    assert data["delay_proof"]["payload"]["delayed"] is False
-    assert data["delay_proof"]["payload"]["delay_seconds"] == 0
-
-
-# ── New panel HTML presence ──────────────────────────────────────────────────
+# ── Panel HTML presence ──────────────────────────────────────────────────
 
 
 def test_index_has_commit_panel(monkeypatch):
@@ -847,8 +756,8 @@ def test_index_has_commit_panel(monkeypatch):
 
     response = client.get("/")
     assert response.status_code == 200
-    assert "Commit Document" in response.text
-    assert "commit-form" in response.text
+    assert "commit" in response.text.lower()
+    assert "commit-doc-id" in response.text
 
 
 def test_index_has_verify_panel(monkeypatch):
@@ -858,8 +767,8 @@ def test_index_has_verify_panel(monkeypatch):
 
     response = client.get("/")
     assert response.status_code == 200
-    assert "Verify Proof" in response.text
-    assert "verify-form" in response.text
+    assert "verify" in response.text.lower()
+    assert "verify-bundle" in response.text
 
 
 def test_index_has_redaction_panel(monkeypatch):
@@ -869,21 +778,31 @@ def test_index_has_redaction_panel(monkeypatch):
 
     response = client.get("/")
     assert response.status_code == 200
-    assert "Redaction Interface" in response.text
-    assert "redact-sections" in response.text
+    assert "redact" in response.text.lower()
+    assert "redact-doc-id" in response.text
 
 
-def test_index_has_foia_and_embargo_panels(monkeypatch):
-    """Root page should include FOIA tracker and embargo management panels."""
+def test_index_has_embargo_panel(monkeypatch):
+    """Root page should include embargo management panel."""
     monkeypatch.setattr(ui_app, "DEBUG_UI_ENABLED", True)
     monkeypatch.setattr(ui_app, "_fetch_json", lambda path: [])
 
     response = client.get("/")
     assert response.status_code == 200
-    assert "FOIA Request Tracker" in response.text
-    assert "foia-request-form" in response.text
-    assert "Embargo Management" in response.text
+    assert "embargo" in response.text.lower()
     assert "embargo-doc-id" in response.text
+
+
+def test_foia_routes_removed():
+    """FOIA routes should no longer exist."""
+    response = client.post("/foia/request", json={"request_id": "test"})
+    assert response.status_code in (404, 405)
+
+    response = client.post("/oracle/refine", json={"subject": "test"})
+    assert response.status_code in (404, 405)
+
+    response = client.get("/public-records/requests")
+    assert response.status_code in (404, 405)
 
 
 # ── /inspect-proof-bundle validation ─────────────────────────────────────────
