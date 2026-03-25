@@ -910,6 +910,9 @@ function executeCommit() {
                 'BLAKE3 Root:     ' + (d.blake3_root || 'N/A') + '\n' +
                 'Poseidon Root:   ' + (d.poseidon_root || 'N/A') + '\n' +
                 'Sections Count:  ' + (d.sections_count || 'N/A') + '\n' +
+                'Ledger ID:       ' + (d.ledger_commit_id || '(not persisted \u2014 API unavailable)') + '\n' +
+                '\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\n' +
+                '\u26a0 Paste the BLAKE3 Root above into \u201cCheck Record\u201d to verify this commit.\n' +
                 '\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\nFull Response:\n' + formatJSON(d), false);
         } else {
             setOutput('commit-output', '[ COMMIT FAILED ]\n\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\n' + formatJSON(result.data), true);

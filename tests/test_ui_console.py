@@ -1,6 +1,7 @@
 """Tests for developer debug console UI."""
 
 import json
+import unittest.mock
 from urllib.error import HTTPError
 
 from fastapi.testclient import TestClient
@@ -701,6 +702,64 @@ def test_commit_returns_receipt_and_embargo_metadata(monkeypatch):
     assert data["embargo"]["recipient_keys"] == ["alice-key", "bob-key"]
     assert data["embargo"]["active_recipient_keys"] == ["alice-key", "bob-key"]
     assert data["embargo"]["revoked_recipient_keys"] == []
+
+
+def test_commit_persists_to_ledger_api(monkeypatch):
+    """POST /commit POSTs blake3_root to API /doc/commit and returns ledger_commit_id."""
+    monkeypatch.setattr(ui_app, "DEBUG_UI_ENABLED", True)
+    ui_app._commit_store.clear()
+
+    mock_response = unittest.mock.MagicMock()
+    mock_response.json.return_value = {"commit_id": "ledger-id-abc123"}
+    mock_response.raise_for_status = unittest.mock.MagicMock()
+
+    mock_client = unittest.mock.AsyncMock()
+    mock_client.__aenter__ = unittest.mock.AsyncMock(return_value=mock_client)
+    mock_client.__aexit__ = unittest.mock.AsyncMock(return_value=False)
+    mock_client.post = unittest.mock.AsyncMock(return_value=mock_response)
+
+    monkeypatch.setattr(ui_app.httpx, "AsyncClient", lambda **kwargs: mock_client)
+
+    response = client.post(
+        "/commit",
+        data={"document_id": "docL", "version": 1},
+        files={"file": ("doc.txt", b"Section one\nSection two\n", "text/plain")},
+    )
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["ok"] is True
+    assert data["ledger_commit_id"] == "ledger-id-abc123"
+    mock_client.post.assert_awaited_once_with(
+        f"{ui_app.API_BASE}/doc/commit",
+        json={"doc_hash": data["blake3_root"]},
+    )
+
+
+def test_commit_ledger_api_unavailable_returns_null_commit_id(monkeypatch):
+    """POST /commit returns ledger_commit_id=null gracefully when API is unreachable."""
+    monkeypatch.setattr(ui_app, "DEBUG_UI_ENABLED", True)
+    ui_app._commit_store.clear()
+
+    mock_client = unittest.mock.AsyncMock()
+    mock_client.__aenter__ = unittest.mock.AsyncMock(return_value=mock_client)
+    mock_client.__aexit__ = unittest.mock.AsyncMock(return_value=False)
+    mock_client.post = unittest.mock.AsyncMock(
+        side_effect=ui_app.httpx.ConnectError("connection refused")
+    )
+
+    monkeypatch.setattr(ui_app.httpx, "AsyncClient", lambda **kwargs: mock_client)
+
+    response = client.post(
+        "/commit",
+        data={"document_id": "docM", "version": 1},
+        files={"file": ("doc.txt", b"Alpha\nBeta\n", "text/plain")},
+    )
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["ok"] is True
+    assert data["ledger_commit_id"] is None
 
 
 def test_embargo_update_and_revoke(monkeypatch):

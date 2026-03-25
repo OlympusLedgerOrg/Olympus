@@ -588,6 +588,65 @@ def _parse_proof_bundle(
     return proof, smt_root, revealed_indices, revealed_content, total_parts
 
 
+# ── Legislation prompt helpers ────────────────────────────────────────────
+
+
+def _wrap_legislation_block(normalized: str) -> str:
+    """Wrap normalized text in ``<legislation>`` delimiters.
+
+    Any ``</legislation>`` closing tag that appears inside the content is
+    escaped to ``</legislation_escaped>`` so the wrapper tag remains unique.
+
+    Args:
+        normalized: Pre-normalized text to wrap.
+
+    Returns:
+        String of the form ``<legislation>\\n{content}\\n</legislation>``.
+    """
+    safe = normalized.replace("</legislation>", "</legislation_escaped>")
+    return f"<legislation>\n{safe}\n</legislation>"
+
+
+def _build_plain_english_summary(text: str) -> dict[str, Any]:
+    """Build a plain-English summarization prompt chain for a legislation document.
+
+    Normalizes whitespace in *text*, wraps it in ``<legislation>`` delimiters,
+    and constructs a three-stage prompt chain (extract → simplify → review).
+    Each stage carries the wrapped document block and a prompt that references
+    the ``<legislation>`` tag but does not embed the full block inline.
+
+    Args:
+        text: Raw legislation text (may contain newlines and extra whitespace).
+
+    Returns:
+        Dict with keys:
+        - ``document_block``: the ``<legislation>``-wrapped normalized text.
+        - ``prompt_chain``: list of three stage dicts, each containing
+          ``stage``, ``document``, and ``prompt``.
+    """
+    from protocol.canonical import normalize_whitespace
+
+    document_block = _wrap_legislation_block(normalize_whitespace(text))
+    prompt_chain = [
+        {
+            "stage": "extract",
+            "document": document_block,
+            "prompt": "Extract the key provisions from the legislation in the <legislation> block.",
+        },
+        {
+            "stage": "simplify",
+            "document": document_block,
+            "prompt": "Rewrite the legislation in the <legislation> block in plain English.",
+        },
+        {
+            "stage": "review",
+            "document": document_block,
+            "prompt": "Review the plain-English version of the legislation in the <legislation> block for accuracy.",
+        },
+    ]
+    return {"document_block": document_block, "prompt_chain": prompt_chain}
+
+
 # ── Ledger Verification Proxy ────────────────────────────────────────────
 
 
@@ -804,6 +863,18 @@ async def commit_document(
 
     entry = _commit_store[commit_result["commit_key"]]
 
+    ledger_commit_id: str | None = None
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as api_client:
+            api_resp = await api_client.post(
+                f"{API_BASE}/doc/commit",
+                json={"doc_hash": commit_result["blake3_root"]},
+            )
+            api_resp.raise_for_status()
+            ledger_commit_id = api_resp.json().get("commit_id")
+    except Exception:
+        pass
+
     return JSONResponse(
         {
             "ok": True,
@@ -815,6 +886,7 @@ async def commit_document(
             "commit_key": commit_result["commit_key"],
             "receipt": commit_result["receipt"],
             "embargo": _embargo_summary(entry),
+            "ledger_commit_id": ledger_commit_id,
         }
     )
 
