@@ -522,6 +522,105 @@ def test_commit_empty_file_returns_error(monkeypatch):
     assert response.json()["ok"] is False
 
 
+def test_commit_binary_file(monkeypatch):
+    """POST /commit with a binary (non-UTF-8) file should succeed with one section."""
+    monkeypatch.setattr(ui_app, "DEBUG_UI_ENABLED", True)
+    ui_app._commit_store.clear()
+
+    binary_content = bytes(range(256))  # contains non-UTF-8 bytes
+    response = client.post(
+        "/commit",
+        data={"document_id": "binfile", "version": 1},
+        files={"file": ("data.bin", binary_content, "application/octet-stream")},
+    )
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["ok"] is True
+    assert data["sections_count"] == 1
+    assert len(data["blake3_root"]) == 64
+    assert data["poseidon_root"].isdigit()
+
+
+def test_commit_txt_file_provenance_pinned(monkeypatch):
+    """Plain-text commits must include plaintext_lines_v1 provenance with version pins."""
+    monkeypatch.setattr(ui_app, "DEBUG_UI_ENABLED", True)
+    ui_app._commit_store.clear()
+
+    content = b"Line one\nLine two\nLine three\n"
+    response = client.post(
+        "/commit",
+        data={"document_id": "prov-txt", "version": 1},
+        files={"file": ("doc.txt", content, "text/plain")},
+    )
+
+    assert response.status_code == 200
+    data = response.json()
+    prov = data["canon_provenance"]
+    assert prov["format"] == "text/plain"
+    assert prov["normalization_mode"] == "plaintext_lines_v1"
+    assert prov["fallback_reason"] is None
+    assert "canonicalizer_versions" in prov
+
+
+def test_commit_json_file_provenance_pinned(monkeypatch):
+    """JSON-array commits must include json_array_v1 provenance with version pins."""
+    monkeypatch.setattr(ui_app, "DEBUG_UI_ENABLED", True)
+    ui_app._commit_store.clear()
+
+    content = json.dumps(["Alpha", "Beta"]).encode()
+    response = client.post(
+        "/commit",
+        data={"document_id": "prov-json", "version": 1},
+        files={"file": ("doc.json", content, "application/json")},
+    )
+
+    assert response.status_code == 200
+    data = response.json()
+    prov = data["canon_provenance"]
+    assert prov["format"] == "application/json"
+    assert prov["normalization_mode"] == "json_array_v1"
+    assert "canonicalizer_versions" in prov
+
+
+def test_commit_binary_file_provenance_pinned(monkeypatch):
+    """Generic binary commits must include blake3_raw provenance with version pins."""
+    monkeypatch.setattr(ui_app, "DEBUG_UI_ENABLED", True)
+    ui_app._commit_store.clear()
+
+    binary_content = bytes(range(256))
+    response = client.post(
+        "/commit",
+        data={"document_id": "prov-bin", "version": 1},
+        files={"file": ("data.bin", binary_content, "application/octet-stream")},
+    )
+
+    assert response.status_code == 200
+    data = response.json()
+    prov = data["canon_provenance"]
+    assert prov["normalization_mode"] == "blake3_raw"
+    assert "canonicalizer_versions" in prov
+
+
+def test_commit_provenance_stored_in_receipt(monkeypatch):
+    """Provenance must be embedded in the receipt metadata so it is part of the hash."""
+    monkeypatch.setattr(ui_app, "DEBUG_UI_ENABLED", True)
+    ui_app._commit_store.clear()
+
+    content = b"Section one\nSection two\n"
+    response = client.post(
+        "/commit",
+        data={"document_id": "prov-receipt", "version": 1},
+        files={"file": ("doc.txt", content, "text/plain")},
+    )
+
+    assert response.status_code == 200
+    data = response.json()
+    # The receipt payload metadata must carry the same provenance object
+    receipt_prov = data["receipt"]["payload"]["metadata"]["canon_provenance"]
+    assert receipt_prov == data["canon_provenance"]
+
+
 def test_commit_always_accessible(monkeypatch):
     """POST /commit is always accessible regardless of DEBUG_UI_ENABLED."""
     ui_app._commit_store.clear()
