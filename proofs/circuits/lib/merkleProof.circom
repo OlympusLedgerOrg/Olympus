@@ -2,7 +2,26 @@ pragma circom 2.0.0;
 
 include "./poseidon.circom";
 
+// Domain tag must match POSEIDON_DOMAIN_NODE in protocol/poseidon_smt.py
+// Domain-separated node hash: Poseidon(Poseidon(DOMAIN_NODE, left), right)
+template DomainPoseidonNode() {
+    signal input left;
+    signal input right;
+    signal output out;
+
+    component innerHash = Poseidon(2);
+    innerHash.inputs[0] <== 1;  // POSEIDON_DOMAIN_NODE = 1
+    innerHash.inputs[1] <== left;
+
+    component outerHash = Poseidon(2);
+    outerHash.inputs[0] <== innerHash.out;
+    outerHash.inputs[1] <== right;
+
+    out <== outerHash.out;
+}
+
 // Poseidon-based Merkle proof for a fixed depth binary tree.
+// Uses domain-separated node hashing to prevent second-preimage attacks.
 template MerkleProof(depth) {
     signal input leaf;
     signal input pathElements[depth];
@@ -19,14 +38,14 @@ template MerkleProof(depth) {
         // pathIndices must be boolean
         pathIndices[i] * (pathIndices[i] - 1) === 0;
 
-        hashers[i] = Poseidon(2);
+        hashers[i] = DomainPoseidonNode();
 
         // OPTIMIZATION: Single-multiplication routing (Switcher logic)
         diff[i] <== pathElements[i] - levelHashes[i];
         mux[i] <== pathIndices[i] * diff[i];
 
-        hashers[i].inputs[0] <== levelHashes[i] + mux[i];
-        hashers[i].inputs[1] <== pathElements[i] - mux[i];
+        hashers[i].left <== levelHashes[i] + mux[i];
+        hashers[i].right <== pathElements[i] - mux[i];
 
         levelHashes[i + 1] <== hashers[i].out;
     }

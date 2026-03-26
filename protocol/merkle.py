@@ -31,6 +31,11 @@ SUPPORTED_PROOF_VERSIONS: frozenset[str] = frozenset({"proof_v1"})
 # For standard Merkle trees, this is still a generous limit (2^256 leaves).
 MAX_PROOF_DEPTH = 256
 
+# Canonical empty-tree commitment.  This is the root hash of a tree with
+# zero leaves and MUST be used as the only valid ``old_root`` when
+# ``old_size=0`` in consistency proof verification.
+EMPTY_TREE_HASH = blake3_hash([b"OLY:EMPTY-TREE:V1"])
+
 _SEP = HASH_SEPARATOR.encode("utf-8")
 logger = logging.getLogger(__name__)
 
@@ -499,7 +504,10 @@ def verify_consistency_proof(
 
     # Trivial cases
     if old_size == 0:
-        return True
+        # Empty tree is a known commitment — the root must be the canonical empty hash
+        if old_root != EMPTY_TREE_HASH:
+            return False
+        return True  # Any new_root is consistent with an empty old tree
     if old_size == new_size:
         return old_root == new_root
 

@@ -17,14 +17,20 @@ deterministic proofs without raising exceptions for missing keys.
 
 from dataclasses import dataclass
 
+import blake3
+
 from .hashes import leaf_hash, node_hash
+
+# Domain-separated empty leaf sentinel.  This replaces the former all-zeros
+# sentinel to prevent confusion with naturally-occurring zero values.
+EMPTY_LEAF = blake3.blake3(b"OLY:EMPTY-LEAF:V1").digest()
 
 
 # Precompute empty hashes for sparse Merkle tree (256 levels)
 # EMPTY[i] = hash of empty subtree at height i
 def _precompute_empty_hashes(height: int = 256) -> list[bytes]:
     """Precompute empty node hashes for sparse tree."""
-    empty = [b"\x00" * 32]  # Empty leaf hash
+    empty = [EMPTY_LEAF]
     for i in range(height):
         empty.append(node_hash(empty[i], empty[i]))
     return empty
@@ -422,9 +428,9 @@ def verify_nonexistence_proof(proof: NonExistenceProof) -> bool:
     Verify a non-existence proof using the default hash chain.
 
     The proof demonstrates that the leaf at the given key position is the
-    empty sentinel ``b"\\x00" * 32``. Verification reconstructs the root by
-    hashing upward from the empty leaf through the provided sibling chain
-    and checks that the result matches ``proof.root_hash``.
+    domain-separated empty sentinel ``EMPTY_LEAF``. Verification reconstructs
+    the root by hashing upward from the empty leaf through the provided sibling
+    chain and checks that the result matches ``proof.root_hash``.
 
     The precomputed ``EMPTY_HASHES`` chain ensures that default (empty)
     subtrees have deterministic hashes at every level of the sparse tree.
