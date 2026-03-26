@@ -439,3 +439,62 @@ def test_scrub_homoglyphs_false_preserves_fullwidth() -> None:
     bytes_on = document_to_bytes(doc, scrub_homoglyphs=True)
     bytes_off = document_to_bytes(doc, scrub_homoglyphs=False)
     assert bytes_on != bytes_off
+
+
+# ---------------------------------------------------------------------------
+# Sorted list keys tests (Finding #2 — Red Team Hardening)
+# ---------------------------------------------------------------------------
+
+
+def test_sorted_list_keys_sorts_annotated_field() -> None:
+    """Fields in sorted_list_keys have their arrays sorted."""
+    doc = {"tags": ["banana", "apple", "cherry"]}
+    result = canonicalize_document(doc, sorted_list_keys={"tags"})
+    assert result["tags"] == ["apple", "banana", "cherry"]
+
+
+def test_sorted_list_keys_preserves_unannotated_field() -> None:
+    """Fields NOT in sorted_list_keys preserve original order."""
+    doc = {"sections": ["intro", "body", "conclusion"], "tags": ["b", "a"]}
+    result = canonicalize_document(doc, sorted_list_keys={"tags"})
+    assert result["sections"] == ["intro", "body", "conclusion"]
+    assert result["tags"] == ["a", "b"]
+
+
+def test_sorted_list_keys_none_preserves_all_order() -> None:
+    """Default (None) preserves all list orderings — backward compatible."""
+    doc = {"items": [3, 1, 2]}
+    result = canonicalize_document(doc)
+    assert result["items"] == [3, 1, 2]
+
+
+def test_sorted_list_keys_deterministic_across_orderings() -> None:
+    """Two docs differing only in array order produce identical bytes."""
+    doc_a = {"tags": ["b", "a", "c"], "id": "x"}
+    doc_b = {"tags": ["c", "a", "b"], "id": "x"}
+    assert document_to_bytes(doc_a, sorted_list_keys={"tags"}) == \
+           document_to_bytes(doc_b, sorted_list_keys={"tags"})
+
+
+def test_sorted_list_keys_nested_dict_arrays() -> None:
+    """Sorting works on arrays of dicts using canonical JSON as sort key."""
+    doc = {"records": [{"z": 1}, {"a": 2}]}
+    result = canonicalize_document(doc, sorted_list_keys={"records"})
+    # {"a":2} sorts before {"z":1} lexicographically
+    assert list(result["records"][0].keys()) == ["a"]
+    assert list(result["records"][1].keys()) == ["z"]
+
+
+def test_sorted_list_keys_propagates_to_nested_docs() -> None:
+    """sorted_list_keys applies at any nesting depth."""
+    doc = {"outer": {"tags": ["z", "a"]}}
+    result = canonicalize_document(doc, sorted_list_keys={"tags"})
+    assert result["outer"]["tags"] == ["a", "z"]
+
+
+def test_sorted_list_keys_document_to_bytes() -> None:
+    """sorted_list_keys is forwarded through document_to_bytes."""
+    doc = {"tags": ["b", "a"]}
+    unsorted = document_to_bytes(doc)
+    sorted_ = document_to_bytes(doc, sorted_list_keys={"tags"})
+    assert unsorted != sorted_

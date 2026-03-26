@@ -123,6 +123,7 @@ def canonicalize_document(
     doc: dict[str, Any],
     *,
     scrub_homoglyphs: bool = True,
+    sorted_list_keys: set[str] | None = None,
 ) -> dict[str, Any]:
     """
     Canonicalize a document structure.
@@ -135,6 +136,11 @@ def canonicalize_document(
             whose NFKD decomposition is a single ASCII printable character
             with that ASCII character.  Set to ``False`` only if the corpus
             intentionally uses fullwidth characters as data.
+        sorted_list_keys: Optional set of field names whose array values
+            should be sorted for canonical ordering.  Fields not in this set
+            preserve their original order.  Sorting uses the canonical JSON
+            representation of each element so it is deterministic across
+            types.  Pass ``None`` (default) to skip all list sorting.
 
     Returns:
         Canonicalized document
@@ -142,11 +148,26 @@ def canonicalize_document(
     if not isinstance(doc, dict):
         raise ValueError("Document must be a dictionary")
 
-    def _canonicalize_value(value: Any) -> Any:
+    _sorted_keys = sorted_list_keys or set()
+
+    def _sort_key(item: Any) -> str:
+        """Deterministic sort key for heterogeneous list elements."""
+        if isinstance(item, dict):
+            return canonical_json_encode(item)
+        return canonical_json_encode({"": item})
+
+    def _canonicalize_value(value: Any, *, field_name: str = "") -> Any:
         if isinstance(value, dict):
-            return canonicalize_document(value, scrub_homoglyphs=scrub_homoglyphs)
+            return canonicalize_document(
+                value,
+                scrub_homoglyphs=scrub_homoglyphs,
+                sorted_list_keys=sorted_list_keys,
+            )
         if isinstance(value, list):
-            return [_canonicalize_value(item) for item in value]
+            items = [_canonicalize_value(item) for item in value]
+            if field_name in _sorted_keys:
+                items = sorted(items, key=_sort_key)
+            return items
         if isinstance(value, str):
             normalized = normalize_whitespace(value)
             if scrub_homoglyphs:
@@ -175,7 +196,7 @@ def canonicalize_document(
 
     canonical: dict[str, Any] = {}
     for key in sorted(doc.keys()):
-        canonical[key] = _canonicalize_value(doc[key])
+        canonical[key] = _canonicalize_value(doc[key], field_name=key)
 
     return canonical
 
@@ -184,6 +205,7 @@ def document_to_bytes(
     doc: dict[str, Any],
     *,
     scrub_homoglyphs: bool = True,
+    sorted_list_keys: set[str] | None = None,
 ) -> bytes:
     """
     Convert document to canonical byte representation.
@@ -191,11 +213,16 @@ def document_to_bytes(
     Args:
         doc: Document to convert
         scrub_homoglyphs: Forwarded to :func:`canonicalize_document`.
+        sorted_list_keys: Forwarded to :func:`canonicalize_document`.
 
     Returns:
         Canonical bytes
     """
-    canonical = canonicalize_document(doc, scrub_homoglyphs=scrub_homoglyphs)
+    canonical = canonicalize_document(
+        doc,
+        scrub_homoglyphs=scrub_homoglyphs,
+        sorted_list_keys=sorted_list_keys,
+    )
     json_str = canonicalize_json(canonical)
     return json_str.encode("utf-8")
 
