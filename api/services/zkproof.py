@@ -30,6 +30,11 @@ if not os.getenv("OLYMPUS_ENV"):
     )
 
 
+def _get_env() -> str:
+    """Return the current OLYMPUS_ENV, checking at call time for testability."""
+    return os.getenv("OLYMPUS_ENV", "production")
+
+
 def generate_proof_stub(commit_id: str, doc_hash: str) -> dict:
     """Return a mock Groth16 proof anchoring a commit to a document hash.
 
@@ -48,7 +53,7 @@ def generate_proof_stub(commit_id: str, doc_hash: str) -> dict:
     Raises:
         RuntimeError: If ``OLYMPUS_ENV`` is not ``"development"``.
     """
-    if _ENV != "development":
+    if _get_env() != "development":
         raise RuntimeError(
             "ZK proof stub is disabled in production. "
             "Set OLYMPUS_ENV=development or configure a real Groth16 backend."
@@ -98,6 +103,6 @@ def verify_proof_type(proof: dict) -> tuple[bool, str | None]:
         A tuple of ``(accepted, failure_reason)``.  ``accepted`` is True if
         the proof is allowed, False otherwise.
     """
-    if proof.get("proof_type") == "stub" and _ENV != "development":
+    if proof.get("proof_type") == "stub" and _get_env() != "development":
         return False, "stub_proof_rejected_in_production"
     return True, None
