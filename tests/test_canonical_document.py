@@ -6,13 +6,16 @@ canonicalization utilities in protocol/canonical.py.
 """
 
 import pytest
+from hypothesis import given, strategies as st
 
 from protocol.canonical import (
+    _scrub_homoglyphs,
     canonicalize_document,
     canonicalize_json,
     document_to_bytes,
     normalize_whitespace,
 )
+from protocol.canonicalizer import CanonicalizationError
 
 
 def test_canonicalize_document_simple_dict():
@@ -81,14 +84,15 @@ def test_canonicalize_document_list_with_dicts():
 
 
 def test_canonicalize_document_preserves_non_string_values():
-    """Test that non-string values are preserved."""
+    """Test that non-string values are preserved (numerics are normalized)."""
     doc = {"number": 42, "boolean": True, "null": None, "float": 3.14}
     result = canonicalize_document(doc)
 
     assert result["number"] == 42
     assert result["boolean"] is True
     assert result["null"] is None
-    assert result["float"] == 3.14
+    # float 3.14 is normalized to Decimal for deterministic representation
+    assert float(result["float"]) == pytest.approx(3.14)
 
 
 def test_canonicalize_document_rejects_non_dict():
@@ -322,3 +326,175 @@ def test_document_to_bytes_thin_space_identical_to_regular_space():
     doc_with_thin = {"text": f"hello{thin}world"}
     doc_with_space = {"text": "hello world"}
     assert document_to_bytes(doc_with_thin) == document_to_bytes(doc_with_space)
+
+
+# ---------------------------------------------------------------------------
+# Numeric canonicalization tests (Finding #1 — Red Team Hardening)
+# ---------------------------------------------------------------------------
+
+
+@given(st.integers(min_value=-(2**53), max_value=2**53))
+def test_int_and_equivalent_float_same_hash(n: int) -> None:
+    """{"amount": n} and {"amount": float(n)} must produce identical canonical bytes.
+
+    Restricted to the range where float can represent the integer exactly
+    (within IEEE 754 double-precision 53-bit mantissa).
+    """
+    int_doc = canonicalize_document({"amount": n})
+    float_doc = canonicalize_document({"amount": float(n)})
+    assert document_to_bytes(int_doc) == document_to_bytes(float_doc)
+
+
+@given(st.floats(allow_nan=False, allow_infinity=False))
+def test_whole_floats_canonicalize_to_int(f: float) -> None:
+    """If float(f) == int(f), canonical output must equal that of the int."""
+    try:
+        i = int(f)
+    except (OverflowError, ValueError):
+        return
+    if f != i:
+        return
+    float_doc = canonicalize_document({"value": f})
+    int_doc = canonicalize_document({"value": i})
+    assert document_to_bytes(float_doc) == document_to_bytes(int_doc)
+
+
+def test_nan_raises() -> None:
+    """NaN values must raise CanonicalizationError."""
+    with pytest.raises(CanonicalizationError):
+        canonicalize_document({"value": float("nan")})
+
+
+def test_inf_raises() -> None:
+    """Infinity values must raise CanonicalizationError."""
+    with pytest.raises(CanonicalizationError):
+        canonicalize_document({"value": float("inf")})
+
+
+def test_neg_inf_raises() -> None:
+    """Negative infinity values must raise CanonicalizationError."""
+    with pytest.raises(CanonicalizationError):
+        canonicalize_document({"value": float("-inf")})
+
+
+def test_numeric_equivalence_basic() -> None:
+    """Semantically identical numeric representations must produce the same bytes."""
+    assert document_to_bytes({"amount": 100}) == document_to_bytes({"amount": 100.0})
+    assert document_to_bytes({"amount": 100}) == document_to_bytes({"amount": 1e2})
+
+
+def test_non_whole_float_preserved() -> None:
+    """Non-whole floats are preserved as Decimal, not coerced to int."""
+    doc = canonicalize_document({"value": 3.14})
+    assert doc["value"] != 3  # should not become int
+    assert float(doc["value"]) == pytest.approx(3.14)
+
+
+def test_bool_not_coerced_to_int() -> None:
+    """Booleans must not be treated as integers during canonicalization."""
+    doc = canonicalize_document({"flag": True, "other": False})
+    assert doc["flag"] is True
+    assert doc["other"] is False
+
+
+# ---------------------------------------------------------------------------
+# Homoglyph scrub tests (Finding #3 — Red Team Hardening Round 2)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "variant,expected",
+    [
+        ("US\uff24", "USD"),  # fullwidth D
+        ("\U0001d414\U0001d412\U0001d403", "USD"),  # mathematical bold
+        ("\uff35\uff33\uff24", "USD"),  # all fullwidth
+        ("USD", "USD"),  # already clean — no change
+    ],
+)
+def test_homoglyph_scrub_normalizes_to_ascii(variant: str, expected: str) -> None:
+    assert _scrub_homoglyphs(variant) == expected
+
+
+def test_homoglyph_variants_produce_identical_canonical_bytes() -> None:
+    base = {"invoice_id": "INV-8842", "amount": 100}
+    variants = [
+        {**base, "currency": "USD"},
+        {**base, "currency": "US\uff24"},
+        {**base, "currency": "\U0001d414\U0001d412\U0001d403"},
+        {**base, "currency": "\uff35\uff33\uff24"},
+    ]
+    hashes = [document_to_bytes(v) for v in variants]
+    assert len(set(hashes)) == 1, "Homoglyph variants produced divergent bytes"
+
+
+def test_non_ascii_legitimate_content_survives_scrub() -> None:
+    """Arabic, CJK, accented Latin must not be destroyed."""
+    assert _scrub_homoglyphs("\u0645\u0631\u062d\u0628\u0627") == "\u0645\u0631\u062d\u0628\u0627"
+    assert _scrub_homoglyphs("\u65e5\u672c\u8a9e") == "\u65e5\u672c\u8a9e"
+    assert _scrub_homoglyphs("caf\u00e9") == "caf\u00e9"
+
+
+def test_scrub_homoglyphs_false_preserves_fullwidth() -> None:
+    doc = {"currency": "\uff35\uff33\uff24"}
+    bytes_on = document_to_bytes(doc, scrub_homoglyphs=True)
+    bytes_off = document_to_bytes(doc, scrub_homoglyphs=False)
+    assert bytes_on != bytes_off
+
+
+# ---------------------------------------------------------------------------
+# Sorted list keys tests (Finding #2 — Red Team Hardening)
+# ---------------------------------------------------------------------------
+
+
+def test_sorted_list_keys_sorts_annotated_field() -> None:
+    """Fields in sorted_list_keys have their arrays sorted."""
+    doc = {"tags": ["banana", "apple", "cherry"]}
+    result = canonicalize_document(doc, sorted_list_keys={"tags"})
+    assert result["tags"] == ["apple", "banana", "cherry"]
+
+
+def test_sorted_list_keys_preserves_unannotated_field() -> None:
+    """Fields NOT in sorted_list_keys preserve original order."""
+    doc = {"sections": ["intro", "body", "conclusion"], "tags": ["b", "a"]}
+    result = canonicalize_document(doc, sorted_list_keys={"tags"})
+    assert result["sections"] == ["intro", "body", "conclusion"]
+    assert result["tags"] == ["a", "b"]
+
+
+def test_sorted_list_keys_none_preserves_all_order() -> None:
+    """Default (None) preserves all list orderings — backward compatible."""
+    doc = {"items": [3, 1, 2]}
+    result = canonicalize_document(doc)
+    assert result["items"] == [3, 1, 2]
+
+
+def test_sorted_list_keys_deterministic_across_orderings() -> None:
+    """Two docs differing only in array order produce identical bytes."""
+    doc_a = {"tags": ["b", "a", "c"], "id": "x"}
+    doc_b = {"tags": ["c", "a", "b"], "id": "x"}
+    assert document_to_bytes(doc_a, sorted_list_keys={"tags"}) == \
+           document_to_bytes(doc_b, sorted_list_keys={"tags"})
+
+
+def test_sorted_list_keys_nested_dict_arrays() -> None:
+    """Sorting works on arrays of dicts using canonical JSON as sort key."""
+    doc = {"records": [{"z": 1}, {"a": 2}]}
+    result = canonicalize_document(doc, sorted_list_keys={"records"})
+    # {"a":2} sorts before {"z":1} lexicographically
+    assert list(result["records"][0].keys()) == ["a"]
+    assert list(result["records"][1].keys()) == ["z"]
+
+
+def test_sorted_list_keys_propagates_to_nested_docs() -> None:
+    """sorted_list_keys applies at any nesting depth."""
+    doc = {"outer": {"tags": ["z", "a"]}}
+    result = canonicalize_document(doc, sorted_list_keys={"tags"})
+    assert result["outer"]["tags"] == ["a", "z"]
+
+
+def test_sorted_list_keys_document_to_bytes() -> None:
+    """sorted_list_keys is forwarded through document_to_bytes."""
+    doc = {"tags": ["b", "a"]}
+    unsorted = document_to_bytes(doc)
+    sorted_ = document_to_bytes(doc, sorted_list_keys={"tags"})
+    assert unsorted != sorted_

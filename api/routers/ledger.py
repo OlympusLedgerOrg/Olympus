@@ -155,7 +155,7 @@ async def get_commit_proof(commit_id: str, db: DBSession, _rl: RateLimit):
     merkle_proof_data: list[dict] = []
     if all_hashes:
         try:
-            tree = build_tree(all_hashes)
+            tree = build_tree(all_hashes, preserve_order=True)
             proof: MerkleProof = generate_proof(commit.doc_hash, tree)
             merkle_proof_data = [{"hash": h, "direction": d} for h, d in proof.siblings]
         except ValueError:

@@ -795,3 +795,85 @@ def test_rate_limit_thread_safety():
     total_expected = num_threads * iterations_per_thread
     assert len(results) == total_expected
     assert all(results), "All rate limit checks should succeed with high capacity"
+
+
+# ---------------------------------------------------------------------------
+# Idempotency gate tests (Finding #5 — Red Team Hardening Round 2)
+# ---------------------------------------------------------------------------
+
+
+class TestIdempotencyGate:
+    def test_duplicate_submission_returns_existing_record(self, client: TestClient):
+        record = {
+            "shard_id": "shard-idem",
+            "record_type": "document",
+            "record_id": "doc-idem-001",
+            "version": 1,
+            "content": {"invoice_id": "INV-0001", "amount": 100, "currency": "USD"},
+        }
+        r1 = client.post("/ingest/records", json={"records": [record]})
+        r2 = client.post("/ingest/records", json={"records": [record]})
+
+        assert r1.status_code == 200
+        assert r2.status_code == 200
+        assert r1.json()["results"][0]["proof_id"] == r2.json()["results"][0]["proof_id"]
+        assert r2.json()["results"][0]["idempotent"] is True
+        assert r2.json()["results"][0]["deduplicated"] is True
+
+    def test_fresh_insert_is_not_idempotent(self, client: TestClient):
+        record = {
+            "shard_id": "shard-fresh",
+            "record_type": "document",
+            "record_id": "doc-fresh-001",
+            "version": 1,
+            "content": {"invoice_id": "INV-FRESH", "amount": 42, "currency": "EUR"},
+        }
+        r = client.post("/ingest/records", json={"records": [record]})
+        assert r.status_code == 200
+        assert r.json()["results"][0]["idempotent"] is False
+        assert r.json()["results"][0]["deduplicated"] is False
+
+    def test_semantic_numeric_variant_is_deduplicated(self):
+        """Post Round-1 fix: 100 and 100.0 must canonicalize identically."""
+        from protocol.canonical import canonicalize_document, document_to_bytes
+
+        payload_a = {"invoice_id": "INV-0003", "amount": 100, "currency": "USD"}
+        payload_b = {"invoice_id": "INV-0003", "amount": 100.0, "currency": "USD"}
+        assert document_to_bytes(canonicalize_document(payload_a)) == \
+               document_to_bytes(canonicalize_document(payload_b)), \
+               "Numeric fix must be applied before idempotency gate is meaningful"
+
+
+# ---------------------------------------------------------------------------
+# Crypto isolation tests (Finding #6 — Red Team Hardening)
+# ---------------------------------------------------------------------------
+
+
+class TestConstantTimeEquals:
+    """Verify _constant_time_equals wrapper behaviour."""
+
+    def test_equal_strings(self):
+        from api.ingest import _constant_time_equals
+
+        assert _constant_time_equals("abc", "abc") is True
+
+    def test_unequal_strings(self):
+        from api.ingest import _constant_time_equals
+
+        assert _constant_time_equals("abc", "xyz") is False
+
+    def test_empty_strings(self):
+        from api.ingest import _constant_time_equals
+
+        assert _constant_time_equals("", "") is True
+
+    def test_hex_hash_comparison(self):
+        """Simulates real-world use: comparing hex-encoded BLAKE3 hashes."""
+        from api.ingest import _constant_time_equals
+        from protocol.hashes import hash_bytes
+
+        h1 = hash_bytes(b"test-key").hex()
+        h2 = hash_bytes(b"test-key").hex()
+        h3 = hash_bytes(b"other-key").hex()
+        assert _constant_time_equals(h1, h2) is True
+        assert _constant_time_equals(h1, h3) is False

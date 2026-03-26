@@ -49,6 +49,10 @@ from typing import TYPE_CHECKING, Any
 
 from protocol.zkp import Groth16Prover, ZKProof
 
+from protocol.hashes import SNARK_SCALAR_FIELD
+from protocol.poseidon_bn128 import poseidon_hash_bn128
+from protocol.poseidon_tree import POSEIDON_DOMAIN_COMMITMENT
+
 
 if TYPE_CHECKING:
     from protocol.poseidon_smt import PoseidonSMT
@@ -603,6 +607,85 @@ class ProofGenerator:
             )
             self._require_length(
                 "ledgerPathIndices", inputs.get("ledgerPathIndices"), config.unified_smt_depth
+            )
+
+            # Finding #11/#12: Validate BLAKE3/Poseidon canonical-hash binding.
+            # The circuit computes a Poseidon chain from sectionCount,
+            # sectionLengths, and sectionHashes and asserts that the result
+            # equals the public canonicalHash.  We replicate that computation
+            # here so that a mismatched canonicalHash is rejected *before*
+            # expensive witness/proof generation.
+            self._validate_canonical_hash_binding(inputs, config.unified_max_sections)
+
+    @staticmethod
+    def recompute_canonical_hash(
+        section_count: int | str,
+        section_lengths: list[int | str],
+        section_hashes: list[int | str],
+        max_sections: int,
+    ) -> str:
+        """Recompute the Poseidon canonical hash from structured metadata.
+
+        Mirrors the circuit's DomainPoseidon(3, ...) chain exactly:
+
+        1. ``current = sectionCount``
+        2. For each section ``i`` in ``[0, maxSections)``:
+           ``current = DomainPoseidon(3, current, sectionLengths[i])``
+           ``current = DomainPoseidon(3, current, sectionHashes[i])``
+        3. Return ``current`` as a decimal string.
+
+        Args:
+            section_count: Number of real sections (field element).
+            section_lengths: List of section byte-lengths (field elements).
+            section_hashes: List of BLAKE3 section hashes as field elements.
+            max_sections: Circuit-fixed max section count.
+
+        Returns:
+            Canonical hash as a decimal string matching the circuit's
+            ``canonicalHash`` public signal.
+        """
+        F = SNARK_SCALAR_FIELD
+        domain = POSEIDON_DOMAIN_COMMITMENT
+
+        current = int(section_count) % F
+        for i in range(max_sections):
+            length_val = int(section_lengths[i]) % F
+            hash_val = int(section_hashes[i]) % F
+
+            # DomainPoseidon(3, current, length) = Poseidon(Poseidon(3, current), length)
+            tagged = poseidon_hash_bn128(domain % F, current % F) % F
+            current = poseidon_hash_bn128(tagged, length_val) % F
+
+            # DomainPoseidon(3, current, sectionHash)
+            tagged = poseidon_hash_bn128(domain % F, current % F) % F
+            current = poseidon_hash_bn128(tagged, hash_val) % F
+
+        return str(current)
+
+    @classmethod
+    def _validate_canonical_hash_binding(
+        cls,
+        inputs: dict[str, Any],
+        max_sections: int,
+    ) -> None:
+        """Verify that canonicalHash matches the Poseidon chain of section metadata.
+
+        Raises:
+            ValueError: If the recomputed hash does not match ``canonicalHash``.
+        """
+        expected = cls.recompute_canonical_hash(
+            section_count=inputs["sectionCount"],
+            section_lengths=inputs["sectionLengths"],
+            section_hashes=inputs["sectionHashes"],
+            max_sections=max_sections,
+        )
+        supplied = str(inputs["canonicalHash"])
+        if expected != supplied:
+            raise ValueError(
+                f"BLAKE3/Poseidon binding mismatch: recomputed canonicalHash "
+                f"({expected}) does not match supplied value ({supplied}). "
+                f"This means the witness inputs are inconsistent — the circuit "
+                f"would reject the proof."
             )
 
 

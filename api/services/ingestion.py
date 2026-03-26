@@ -223,7 +223,7 @@ async def ingest_document(
         )
         existing_hashes = list(existing_hashes_result.scalars().all())
         all_hashes = existing_hashes + [doc_hash]
-        merkle_root = build_tree(all_hashes).root_hash
+        merkle_root = build_tree(all_hashes, preserve_order=True).root_hash
 
         commit = DocCommit(
             id=str(uuid.uuid4()),

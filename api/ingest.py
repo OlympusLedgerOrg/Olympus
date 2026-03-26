@@ -16,7 +16,7 @@ All write operations are append-only and maintain ledger chain integrity.
 from __future__ import annotations
 
 import asyncio
-import hmac
+import hmac as _hmac_module  # used ONLY for hmac.compare_digest (timing-safe comparison)
 import json
 import logging
 import os
@@ -93,6 +93,14 @@ class IngestionResult(BaseModel):
     shard_id: str
     content_hash: str = Field(..., description="BLAKE3 content hash (hex)")
     deduplicated: bool = Field(False, description="True if record was already present")
+    idempotent: bool = Field(
+        False,
+        description=(
+            "True when this response returns an existing record instead of "
+            "creating a new one. Callers can use this to distinguish a fresh "
+            "insert from a deduplicated return."
+        ),
+    )
 
 
 class BatchIngestionResponse(BaseModel):
@@ -449,6 +457,22 @@ def _hash_api_key(api_key: str) -> str:
     return hash_bytes(api_key.encode("utf-8")).hex()
 
 
+def _constant_time_equals(a: str, b: str) -> bool:
+    """Timing-safe string equality check.
+
+    Wraps :func:`hmac.compare_digest` to make intent explicit: this is
+    a **constant-time comparison**, not an HMAC/MAC computation.  The
+    ``hmac`` stdlib module is used solely because it provides the only
+    timing-safe comparator in the Python standard library.
+
+    All cryptographic hashing in Olympus uses BLAKE3 (via
+    ``protocol.hashes``); Ed25519 signing uses ``nacl``.  This function
+    is **not** part of either cryptographic path — it exists only to
+    prevent timing oracle attacks on hash comparisons.
+    """
+    return _hmac_module.compare_digest(a, b)
+
+
 def _constant_time_api_key_lookup(key_hash: str) -> ApiKeyRecord | None:
     """
     Lookup API key record using constant-time comparison (L4-D).
@@ -474,8 +498,7 @@ def _constant_time_api_key_lookup(key_hash: str) -> ApiKeyRecord | None:
     # This prevents timing attacks based on early dictionary key rejection
     found_record: ApiKeyRecord | None = None
     for stored_hash, record in _api_key_store.items():
-        # hmac.compare_digest is constant-time for equal-length strings
-        if hmac.compare_digest(stored_hash, key_hash):
+        if _constant_time_equals(stored_hash, key_hash):
             found_record = record
     return found_record
 
@@ -926,7 +949,16 @@ async def _async_canonicalize_and_hash(content: dict[str, Any]) -> tuple[bytes, 
     """
     loop = asyncio.get_running_loop()
 
-    # Run canonicalization in executor to avoid blocking event loop
+    # AUDIT(doc_hash provenance): content_hash is the authoritative document
+    # fingerprint for the ingest path.  It is derived exclusively from
+    # canonical_v2 bytes:
+    #   1. canonicalize_document() — applies NFC, homoglyph scrub, numeric
+    #      normalization, sorted keys (canonical_v2 pipeline).
+    #   2. document_to_bytes()     — deterministic JSON encoding (RFC 8785-
+    #      style compact separators, ensure_ascii).
+    #   3. hash_bytes()            — BLAKE3 with LEGACY_BYTES_PREFIX domain
+    #      separation.
+    # The resulting hex digest becomes the Merkle leaf in build_tree().
     canonical = await loop.run_in_executor(None, canonicalize_document, content)
     content_bytes = document_to_bytes(canonical)
     content_hash = hash_bytes(content_bytes).hex()
@@ -1048,6 +1080,7 @@ async def ingest_batch(batch: BatchIngestionRequest, request: Request) -> BatchI
                                 shard_id=existing_record["shard_id"],
                                 content_hash=existing_record["content_hash"],
                                 deduplicated=True,
+                                idempotent=True,
                             ),
                         )
                     )
@@ -1120,6 +1153,7 @@ async def ingest_batch(batch: BatchIngestionRequest, request: Request) -> BatchI
                                         shard_id=record.shard_id,
                                         content_hash=content_hash,
                                         deduplicated=True,
+                                        idempotent=True,
                                     ),
                                 )
                             )
