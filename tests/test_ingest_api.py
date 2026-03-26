@@ -842,3 +842,38 @@ class TestIdempotencyGate:
         assert document_to_bytes(canonicalize_document(payload_a)) == \
                document_to_bytes(canonicalize_document(payload_b)), \
                "Numeric fix must be applied before idempotency gate is meaningful"
+
+
+# ---------------------------------------------------------------------------
+# Crypto isolation tests (Finding #6 — Red Team Hardening)
+# ---------------------------------------------------------------------------
+
+
+class TestConstantTimeEquals:
+    """Verify _constant_time_equals wrapper behaviour."""
+
+    def test_equal_strings(self):
+        from api.ingest import _constant_time_equals
+
+        assert _constant_time_equals("abc", "abc") is True
+
+    def test_unequal_strings(self):
+        from api.ingest import _constant_time_equals
+
+        assert _constant_time_equals("abc", "xyz") is False
+
+    def test_empty_strings(self):
+        from api.ingest import _constant_time_equals
+
+        assert _constant_time_equals("", "") is True
+
+    def test_hex_hash_comparison(self):
+        """Simulates real-world use: comparing hex-encoded BLAKE3 hashes."""
+        from api.ingest import _constant_time_equals
+        from protocol.hashes import hash_bytes
+
+        h1 = hash_bytes(b"test-key").hex()
+        h2 = hash_bytes(b"test-key").hex()
+        h3 = hash_bytes(b"other-key").hex()
+        assert _constant_time_equals(h1, h2) is True
+        assert _constant_time_equals(h1, h3) is False

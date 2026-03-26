@@ -17,7 +17,7 @@ Usage in routers:
 
 from __future__ import annotations
 
-import hmac
+import hmac as _hmac_module  # used ONLY for hmac.compare_digest (timing-safe comparison)
 import json
 import logging
 import os
@@ -105,11 +105,22 @@ def _extract_key(request: Request) -> str:
     )
 
 
+def _constant_time_equals(a: str, b: str) -> bool:
+    """Timing-safe string equality check.
+
+    Wraps :func:`hmac.compare_digest` — this is a **constant-time
+    comparison**, not an HMAC/MAC computation.  All cryptographic hashing
+    in Olympus uses BLAKE3; this wrapper exists only to prevent timing
+    oracle attacks on hash comparisons.
+    """
+    return _hmac_module.compare_digest(a, b)
+
+
 def _constant_time_lookup(key_hash: str) -> _APIKeyRecord | None:
     """Constant-time key lookup to prevent timing oracle attacks."""
     found: _APIKeyRecord | None = None
     for stored_hash, record in _key_store.items():
-        if hmac.compare_digest(stored_hash, key_hash):
+        if _constant_time_equals(stored_hash, key_hash):
             found = record
     return found
 
