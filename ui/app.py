@@ -15,7 +15,8 @@ import httpx
 import nacl.exceptions
 import nacl.signing
 from fastapi import FastAPI, File, Form, Query, Request, UploadFile
-from fastapi.responses import JSONResponse
+from fastapi.responses import FileResponse, JSONResponse
+from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
 from protocol.canonical_json import canonical_json_bytes
@@ -70,6 +71,9 @@ def _load_federation_nodes() -> dict[str, str]:
 FEDERATION_NODES = _load_federation_nodes()
 
 app = FastAPI(title="Olympus Debug Console", version="0.1.0")
+
+_STATIC_DIR = Path(__file__).resolve().parent / "static"
+app.mount("/static", StaticFiles(directory=str(_STATIC_DIR)), name="static")
 
 
 @app.middleware("http")
@@ -731,6 +735,25 @@ async def proxy_ledger_verify_simple(request: Request):
         return JSONResponse(status_code=502, content={"error": str(exc)})
     except Exception as exc:
         return JSONResponse(status_code=500, content={"error": str(exc)})
+
+
+@app.get("/sw.js")
+def service_worker() -> FileResponse:
+    """Serve service worker from root so its scope covers the entire origin."""
+    return FileResponse(
+        str(_STATIC_DIR / "sw.js"),
+        media_type="application/javascript",
+        headers={"Cache-Control": "no-store"},
+    )
+
+
+@app.get("/manifest.json")
+def manifest() -> FileResponse:
+    """Serve PWA manifest from root for Android install prompts."""
+    return FileResponse(
+        str(_STATIC_DIR / "manifest.json"),
+        media_type="application/manifest+json",
+    )
 
 
 @app.get("/")

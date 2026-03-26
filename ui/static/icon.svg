@@ -1,0 +1,23 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
+  <rect width="512" height="512" rx="96" fill="#050a14"/>
+  <g fill="none" stroke="#00e5ff" stroke-width="12" stroke-linecap="round" stroke-linejoin="round">
+    <!-- pediment (triangle) -->
+    <polygon points="256,100 120,200 392,200"/>
+    <!-- entablature -->
+    <line x1="100" y1="210" x2="412" y2="210"/>
+    <!-- columns -->
+    <line x1="150" y1="210" x2="150" y2="370"/>
+    <line x1="220" y1="210" x2="220" y2="370"/>
+    <line x1="292" y1="210" x2="292" y2="370"/>
+    <line x1="362" y1="210" x2="362" y2="370"/>
+    <!-- base -->
+    <line x1="100" y1="370" x2="412" y2="370"/>
+    <line x1="90" y1="385" x2="422" y2="385"/>
+  </g>
+  <!-- lock symbol in pediment -->
+  <g fill="#00e5ff">
+    <rect x="243" y="155" width="26" height="22" rx="4"/>
+    <path d="M248,155 v-10 a8,8 0 0 1 16,0 v10" fill="none" stroke="#00e5ff" stroke-width="6"/>
+    <circle cx="256" cy="166" r="3"/>
+  </g>
+</svg>

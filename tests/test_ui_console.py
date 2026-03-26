@@ -1312,3 +1312,44 @@ def test_proxy_verify_simple_handles_api_error(monkeypatch):
 
     assert response.status_code == 400
     assert response.json()["detail"]["code"] == "MISSING_INPUT"
+
+
+# ── PWA integration tests ──
+
+
+def test_sw_js_served_from_root():
+    """Service worker must be served from / for full-scope registration."""
+    response = client.get("/sw.js")
+    assert response.status_code == 200
+    assert "application/javascript" in response.headers["content-type"]
+    assert "CACHE_NAME" in response.text
+
+
+def test_manifest_json_served_from_root():
+    """Web app manifest must be served from root for Android install prompts."""
+    response = client.get("/manifest.json")
+    assert response.status_code == 200
+    assert "manifest" in response.headers["content-type"]
+    data = response.json()
+    assert data["display"] == "standalone"
+    assert data["start_url"] == "/"
+    assert any(icon["sizes"] == "192x192" for icon in data["icons"])
+    assert any(icon["sizes"] == "512x512" for icon in data["icons"])
+
+
+def test_static_icons_served():
+    """PWA icon assets must be reachable via the /static mount."""
+    for path in ["/static/icon.svg", "/static/icon-192.png", "/static/icon-512.png"]:
+        response = client.get(path)
+        assert response.status_code == 200, f"{path} returned {response.status_code}"
+
+
+def test_pwa_head_tags_in_html():
+    """HTML must include manifest link, apple-touch-icon, and SW registration."""
+    response = client.get("/verification-portal")
+    assert response.status_code == 200
+    assert 'rel="manifest"' in response.text
+    assert 'href="/manifest.json"' in response.text
+    assert 'rel="apple-touch-icon"' in response.text
+    assert 'href="/static/icon-192.png"' in response.text
+    assert 'register("/sw.js")' in response.text
