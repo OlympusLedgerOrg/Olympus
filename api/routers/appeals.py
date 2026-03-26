@@ -20,6 +20,7 @@ from api.deps import DBSession
 from api.models.appeal import Appeal, AppealStatus
 from api.models.request import PublicRecordsRequest, RequestStatus
 from api.schemas.appeal import AppealCreate, AppealResponse
+from protocol.hashes import hash_bytes
 
 
 logger = logging.getLogger(__name__)
@@ -39,7 +40,6 @@ def _hash_appeal(request_id: str, grounds: str, statement: str, filed_at: dateti
         separators=(",", ":"),
         ensure_ascii=True,
     )
-    from protocol.hashes import hash_bytes
     return hash_bytes(canonical.encode("utf-8")).hex()
 
 

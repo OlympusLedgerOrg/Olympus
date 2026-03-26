@@ -291,7 +291,7 @@ def test_values_reduced_to_field():
 
 
 def test_leaf_hash_matches_circuit():
-    """Leaf hash computation matches circuit: DomainPoseidon(DOMAIN_LEAF, key_int, value_int)."""
+    """Leaf hash uses domain-separated Poseidon: Poseidon(Poseidon(DOMAIN_LEAF, key_int), value_int)."""
     from protocol.poseidon_smt import _poseidon_hash_leaf
 
     key = b"\x00" * 31 + b"\x05"

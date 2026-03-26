@@ -307,19 +307,9 @@ async def _build_verification_response(
 
     step_n += 1
 
-    # Chain integrity check: recompute the document hash and compare to stored
-    tamper_detected = False
-    try:
-        stored_hash = commit.doc_hash
-        recomputed_hash = hash_document(b"")  # placeholder — we don't have file bytes here
-        # We can only verify the chain linkage (commit exists and is unique)
-        # and Merkle proof above covers content integrity.  If Merkle proof
-        # already failed, that implies tampering.
-        if not proof_valid:
-            tamper_detected = True
-    except Exception:
-        logger.exception("Tamper check failed for commit %s", commit.commit_id)
-        tamper_detected = True
+    # Chain integrity check: Merkle proof validity implies content integrity.
+    # If the Merkle proof failed, we consider that evidence of tampering.
+    tamper_detected = not proof_valid
 
     if tamper_detected:
         failure_reason = failure_reason or "tamper_detected"

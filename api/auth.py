@@ -30,6 +30,8 @@ from typing import Annotated
 
 from fastapi import Depends, HTTPException, Request, status
 
+from protocol.hashes import hash_bytes
+
 logger = logging.getLogger(__name__)
 
 _keys_loaded = False
@@ -48,7 +50,6 @@ class _APIKeyRecord:
 
 def _hash_key(raw_key: str) -> str:
     """BLAKE3 hash of raw API key material."""
-    from protocol.hashes import hash_bytes
     return hash_bytes(raw_key.encode("utf-8")).hex()
 
 
