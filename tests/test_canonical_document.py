@@ -6,6 +6,7 @@ canonicalization utilities in protocol/canonical.py.
 """
 
 import pytest
+from hypothesis import given, strategies as st
 
 from protocol.canonical import (
     canonicalize_document,
@@ -13,6 +14,7 @@ from protocol.canonical import (
     document_to_bytes,
     normalize_whitespace,
 )
+from protocol.canonicalizer import CanonicalizationError
 
 
 def test_canonicalize_document_simple_dict():
@@ -81,14 +83,15 @@ def test_canonicalize_document_list_with_dicts():
 
 
 def test_canonicalize_document_preserves_non_string_values():
-    """Test that non-string values are preserved."""
+    """Test that non-string values are preserved (numerics are normalized)."""
     doc = {"number": 42, "boolean": True, "null": None, "float": 3.14}
     result = canonicalize_document(doc)
 
     assert result["number"] == 42
     assert result["boolean"] is True
     assert result["null"] is None
-    assert result["float"] == 3.14
+    # float 3.14 is normalized to Decimal for deterministic representation
+    assert float(result["float"]) == pytest.approx(3.14)
 
 
 def test_canonicalize_document_rejects_non_dict():
@@ -322,3 +325,72 @@ def test_document_to_bytes_thin_space_identical_to_regular_space():
     doc_with_thin = {"text": f"hello{thin}world"}
     doc_with_space = {"text": "hello world"}
     assert document_to_bytes(doc_with_thin) == document_to_bytes(doc_with_space)
+
+
+# ---------------------------------------------------------------------------
+# Numeric canonicalization tests (Finding #1 — Red Team Hardening)
+# ---------------------------------------------------------------------------
+
+
+@given(st.integers(min_value=-(2**53), max_value=2**53))
+def test_int_and_equivalent_float_same_hash(n: int) -> None:
+    """{"amount": n} and {"amount": float(n)} must produce identical canonical bytes.
+
+    Restricted to the range where float can represent the integer exactly
+    (within IEEE 754 double-precision 53-bit mantissa).
+    """
+    int_doc = canonicalize_document({"amount": n})
+    float_doc = canonicalize_document({"amount": float(n)})
+    assert document_to_bytes(int_doc) == document_to_bytes(float_doc)
+
+
+@given(st.floats(allow_nan=False, allow_infinity=False))
+def test_whole_floats_canonicalize_to_int(f: float) -> None:
+    """If float(f) == int(f), canonical output must equal that of the int."""
+    try:
+        i = int(f)
+    except (OverflowError, ValueError):
+        return
+    if f != i:
+        return
+    float_doc = canonicalize_document({"value": f})
+    int_doc = canonicalize_document({"value": i})
+    assert document_to_bytes(float_doc) == document_to_bytes(int_doc)
+
+
+def test_nan_raises() -> None:
+    """NaN values must raise CanonicalizationError."""
+    with pytest.raises(CanonicalizationError):
+        canonicalize_document({"value": float("nan")})
+
+
+def test_inf_raises() -> None:
+    """Infinity values must raise CanonicalizationError."""
+    with pytest.raises(CanonicalizationError):
+        canonicalize_document({"value": float("inf")})
+
+
+def test_neg_inf_raises() -> None:
+    """Negative infinity values must raise CanonicalizationError."""
+    with pytest.raises(CanonicalizationError):
+        canonicalize_document({"value": float("-inf")})
+
+
+def test_numeric_equivalence_basic() -> None:
+    """Semantically identical numeric representations must produce the same bytes."""
+    assert document_to_bytes({"amount": 100}) == document_to_bytes({"amount": 100.0})
+    assert document_to_bytes({"amount": 100}) == document_to_bytes({"amount": 1e2})
+
+
+def test_non_whole_float_preserved() -> None:
+    """Non-whole floats are preserved as Decimal, not coerced to int."""
+    doc = canonicalize_document({"value": 3.14})
+    assert doc["value"] != 3  # should not become int
+    assert float(doc["value"]) == pytest.approx(3.14)
+
+
+def test_bool_not_coerced_to_int() -> None:
+    """Booleans must not be treated as integers during canonicalization."""
+    doc = canonicalize_document({"flag": True, "other": False})
+    assert doc["flag"] is True
+    assert doc["other"] is False

@@ -10,10 +10,13 @@ ingestion (JCS/RFC 8785, HTML, DOCX, PDF) with version-pinned pipelines,
 see protocol/canonicalizer.py instead.
 """
 
+import math
 import unicodedata
+from decimal import Decimal
 from typing import Any
 
 from .canonical_json import canonical_json_encode
+from .canonicalizer import CanonicalizationError
 
 
 # Unicode space-like characters that unicodedata.normalize("NFKC", ...) does NOT
@@ -93,6 +96,22 @@ def canonicalize_document(doc: dict[str, Any]) -> dict[str, Any]:
             return [_canonicalize_value(item) for item in value]
         if isinstance(value, str):
             return normalize_whitespace(value)
+        if isinstance(value, bool):
+            # bool is a subclass of int; must be checked before int
+            return value
+        if isinstance(value, int):
+            return value
+        if isinstance(value, float):
+            if math.isnan(value):
+                raise CanonicalizationError("NaN is not allowed in canonical documents")
+            if math.isinf(value):
+                raise CanonicalizationError(
+                    "Infinity is not allowed in canonical documents"
+                )
+            if value == int(value):
+                return int(value)
+            # Non-whole float: normalize via Decimal for deterministic representation
+            return Decimal(str(value))
         return value
 
     if any(not isinstance(key, str) for key in doc.keys()):
