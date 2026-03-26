@@ -7,6 +7,9 @@
 <meta name="mobile-web-app-capable" content="yes"/>
 <meta name="apple-mobile-web-app-capable" content="yes"/>
 <title>{{ page_title }}</title>
+<link rel="manifest" href="/manifest.json"/>
+<link rel="icon" href="/static/icon.svg" type="image/svg+xml"/>
+<link rel="apple-touch-icon" href="/static/icon-192.png"/>
 <link rel="preconnect" href="https://fonts.googleapis.com"/>
 <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@300;400;500;700&family=Rajdhani:wght@400;500;600;700&display=swap" rel="stylesheet"/>
 <style>
@@ -1451,5 +1454,6 @@ document.addEventListener('DOMContentLoaded', function() {
   setTimeout(runConnectivityCheck, 500);
 });
 </script>
+<script>if("serviceWorker" in navigator){navigator.serviceWorker.register("/sw.js").catch(function(){})}</script>
 </body>
 </html>
