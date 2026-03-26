@@ -236,10 +236,10 @@ async def test_simple_verify_by_commit_id(client):
 @pytest.mark.asyncio
 async def test_simple_verify_by_hash(client):
     """POST /ledger/verify/simple verifies by BLAKE3 doc_hash."""
-    import blake3
+    from protocol.hashes import hash_bytes
 
     content = b"Document for hash-based verification test."
-    doc_hash = blake3.blake3(content).hexdigest()
+    doc_hash = hash_bytes(content).hex()
 
     # Ingest first
     await client.post(

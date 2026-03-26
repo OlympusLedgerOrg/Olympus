@@ -181,14 +181,17 @@ def blake3_to_field_element(seed: bytes) -> str:
     """
     Hash raw seed material with BLAKE3 and map it into the BN128 scalar field.
 
+    Uses domain-separated hashing with ``OLY:FIELD-ELEMENT:V1`` prefix to
+    ensure the mapping is context-specific and non-invertible across domains.
+
     Args:
         seed: Raw bytes to hash.
 
     Returns:
         Decimal string representation of the field element (required by snarkjs).
     """
-    digest = blake3.blake3(seed).digest()
-    big_int = int.from_bytes(digest, byteorder="big")
+    tagged = blake3.blake3(b"OLY:FIELD-ELEMENT:V1" + seed).digest()
+    big_int = int.from_bytes(tagged, byteorder="big")
     field_element = big_int % SNARK_SCALAR_FIELD
     return str(field_element)
 

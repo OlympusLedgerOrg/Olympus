@@ -1,10 +1,11 @@
 """
 Poseidon Sparse Merkle Tree for ZK witness generation.
 
-This module implements a 256-height Poseidon SMT using plain Poseidon(2)
-for all node hashes, matching the circuit behavior in non_existence.circom
-exactly. It is a parallel tree to protocol/ssmf.py (BLAKE3 SMT) — built
-from the same key/value pairs to generate ZK witness inputs.
+This module implements a 256-height Poseidon SMT using domain-separated
+Poseidon(2) hashes for leaf and internal node computations, matching the
+circuit behavior in non_existence.circom exactly. It is a parallel tree
+to protocol/ssmf.py (BLAKE3 SMT) — built from the same key/value pairs
+to generate ZK witness inputs.
 
 IMPORTANT: This is NOT the authoritative ledger state. protocol/ssmf.py
 (BLAKE3 SMT) is the source of truth. This module is exclusively for
@@ -14,8 +15,8 @@ Key properties:
 - Tree height: 256
 - Key path: MSB-first bit decomposition (identical to ssmf._key_to_path_bits)
 - Empty leaf sentinel: 0 (matches non_existence.circom: merkle.leaf <== 0)
-- Node hash: poseidon_hash_bn128(left, right) — plain Poseidon(2), no domain tag
-- Leaf hash: poseidon_hash_bn128(key_int, value_int)
+- Node hash: domain-separated Poseidon — Poseidon(Poseidon(DOMAIN_NODE, left), right)
+- Leaf hash: domain-separated Poseidon — Poseidon(Poseidon(DOMAIN_LEAF, key_int), value_int)
 """
 
 from __future__ import annotations
@@ -25,6 +26,22 @@ from dataclasses import dataclass
 from .hashes import SNARK_SCALAR_FIELD
 from .poseidon_bn128 import poseidon_hash_bn128
 
+# Domain separation constants for Poseidon hashing.
+# These MUST match the corresponding constants in the Circom circuits
+# (proofs/circuits/lib/merkleProof.circom and non_existence.circom).
+POSEIDON_DOMAIN_LEAF = 0
+POSEIDON_DOMAIN_NODE = 1
+
+
+def _poseidon_hash_leaf(a: int, b: int) -> int:
+    """Domain-separated Poseidon leaf hash: Poseidon(Poseidon(DOMAIN_LEAF, a), b)."""
+    return poseidon_hash_bn128(poseidon_hash_bn128(POSEIDON_DOMAIN_LEAF, a), b)
+
+
+def _poseidon_hash_node(left: int, right: int) -> int:
+    """Domain-separated Poseidon node hash: Poseidon(Poseidon(DOMAIN_NODE, left), right)."""
+    return poseidon_hash_bn128(poseidon_hash_bn128(POSEIDON_DOMAIN_NODE, left), right)
+
 
 # Precompute empty hashes for Poseidon sparse Merkle tree (256 levels)
 # EMPTY[i] = hash of empty subtree at height i
@@ -32,7 +49,7 @@ def _precompute_poseidon_empty_hashes(height: int = 256) -> list[int]:
     """Precompute empty node hashes for Poseidon sparse tree."""
     empty = [0]  # Empty leaf sentinel (matches non_existence.circom)
     for i in range(height):
-        empty.append(poseidon_hash_bn128(empty[i], empty[i]))
+        empty.append(_poseidon_hash_node(empty[i], empty[i]))
     return empty
 
 
@@ -69,7 +86,7 @@ class PoseidonSMT:
     A 256-height Poseidon sparse Merkle tree for ZK witness generation.
 
     Keys are 32 bytes, values are field elements (int).
-    All hashing uses plain Poseidon(2) matching non_existence.circom.
+    All hashing uses domain-separated Poseidon(2) matching non_existence.circom.
     """
 
     def __init__(self) -> None:
@@ -124,9 +141,9 @@ class PoseidonSMT:
         # Compute path from key (each bit determines left/right)
         path = self._key_to_path(key)
 
-        # Compute leaf hash: Poseidon(key_int, value_int)
+        # Compute leaf hash: DomainPoseidon(DOMAIN_LEAF, key_int, value_int)
         key_int = int.from_bytes(key, byteorder="big") % SNARK_SCALAR_FIELD
-        current_hash = poseidon_hash_bn128(key_int, value)
+        current_hash = _poseidon_hash_leaf(key_int, value)
 
         # Go from leaf level (255) up to root (0)
         for level in range(256):
@@ -143,13 +160,13 @@ class PoseidonSMT:
                 else POSEIDON_EMPTY_HASHES[level]
             )
 
-            # Compute parent hash using plain Poseidon(2)
+            # Compute parent hash using domain-separated Poseidon(2)
             if path[bit_pos] == 0:
                 # Current is left child
-                parent_hash = poseidon_hash_bn128(current_hash, sibling_hash)
+                parent_hash = _poseidon_hash_node(current_hash, sibling_hash)
             else:
                 # Current is right child
-                parent_hash = poseidon_hash_bn128(sibling_hash, current_hash)
+                parent_hash = _poseidon_hash_node(sibling_hash, current_hash)
 
             # Store parent at path up to bit_pos
             parent_path = () if bit_pos == 0 else path[:bit_pos]
@@ -247,7 +264,7 @@ def verify_poseidon_nonexistence_witness(witness: PoseidonNonExistenceWitness) -
     # Start with empty leaf sentinel (0)
     current = 0
 
-    # Reconstruct root using exact circuit logic
+    # Reconstruct root using exact circuit logic (domain-separated)
     # Siblings are ordered from leaf to root (level 0, 1, 2...)
     # Path bits are ordered from root to leaf (bit 0, 1, 2...)
     for level in range(256):
@@ -256,9 +273,9 @@ def verify_poseidon_nonexistence_witness(witness: PoseidonNonExistenceWitness) -
         bit = path_bits[bit_pos]
 
         if bit == 0:
-            current = poseidon_hash_bn128(current, sibling)
+            current = _poseidon_hash_node(current, sibling)
         else:
-            current = poseidon_hash_bn128(sibling, current)
+            current = _poseidon_hash_node(sibling, current)
         current %= SNARK_SCALAR_FIELD
 
     return str(current) == witness.root

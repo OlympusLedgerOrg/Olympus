@@ -12,7 +12,14 @@ import psycopg
 
 
 def pytest_configure(config):
-    """Set TEST_DATABASE_URL if PostgreSQL is reachable and not already set."""
+    """Set TEST_DATABASE_URL if PostgreSQL is reachable and not already set.
+
+    Also ensures OLYMPUS_ENV=development for tests so that ZK proof stubs
+    are available (they are disabled in production).
+    """
+    if not os.environ.get("OLYMPUS_ENV"):
+        os.environ["OLYMPUS_ENV"] = "development"
+
     if os.environ.get("TEST_DATABASE_URL"):
         return
 

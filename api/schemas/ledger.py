@@ -113,9 +113,10 @@ class SimpleVerificationResponse(BaseModel):
 
     verified: bool
     summary: str
-    confidence: Literal["certain", "uncertain"]
+    confidence: Literal["certain", "uncertain", "none"]
     recorded_date: datetime | None = None
     related_request: str | None = None
+    failure_reason: str | None = None
     proof_details: list[ProcessStep]
     what_this_means: str
     why_this_matters: str

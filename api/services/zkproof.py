@@ -17,6 +17,23 @@ integration is a separate workstream.
 
 from __future__ import annotations
 
+import logging
+import os
+
+logger = logging.getLogger(__name__)
+
+_ENV = os.getenv("OLYMPUS_ENV", "production")
+if not os.getenv("OLYMPUS_ENV"):
+    logger.warning(
+        "OLYMPUS_ENV is not set — defaulting to 'production'. "
+        "Set OLYMPUS_ENV=development to enable ZK proof stubs."
+    )
+
+
+def _get_env() -> str:
+    """Return the current OLYMPUS_ENV, checking at call time for testability."""
+    return os.getenv("OLYMPUS_ENV", "production")
+
 
 def generate_proof_stub(commit_id: str, doc_hash: str) -> dict:
     """Return a mock Groth16 proof anchoring a commit to a document hash.
@@ -32,10 +49,20 @@ def generate_proof_stub(commit_id: str, doc_hash: str) -> dict:
 
     Returns:
         A dict shaped like a snarkjs Groth16 proof JSON export.
+
+    Raises:
+        RuntimeError: If ``OLYMPUS_ENV`` is not ``"development"``.
     """
+    if _get_env() != "development":
+        raise RuntimeError(
+            "ZK proof stub is disabled in production. "
+            "Set OLYMPUS_ENV=development or configure a real Groth16 backend."
+        )
+
     return {
         "protocol": "groth16",
         "curve": "bn128",
+        "proof_type": "stub",
         "proof": {
             "pi_a": [
                 "21831381940491799887451961494797590068761498990054021688008189310956935432206",
@@ -63,3 +90,19 @@ def generate_proof_stub(commit_id: str, doc_hash: str) -> dict:
         "verified": False,
         "note": "STUB — Circom circuit integration pending",
     }
+
+
+def verify_proof_type(proof: dict) -> tuple[bool, str | None]:
+    """Check if a proof is acceptable for the current environment.
+
+    Args:
+        proof: A proof dictionary (as returned by ``generate_proof_stub`` or
+               a real Groth16 backend).
+
+    Returns:
+        A tuple of ``(accepted, failure_reason)``.  ``accepted`` is True if
+        the proof is allowed, False otherwise.
+    """
+    if proof.get("proof_type") == "stub" and _get_env() != "development":
+        return False, "stub_proof_rejected_in_production"
+    return True, None

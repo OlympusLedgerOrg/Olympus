@@ -260,6 +260,7 @@ async def _build_verification_response(
 
     # Merkle proof verification
     proof_valid = False
+    failure_reason: str | None = None
     try:
         all_hashes_result = await db.execute(
             select(DocCommit.doc_hash)
@@ -272,8 +273,14 @@ async def _build_verification_response(
             tree = build_tree(all_hashes, preserve_order=True)
             proof = generate_proof(commit.doc_hash, tree)
             proof_valid = verify_proof(commit.doc_hash, proof, tree.root_hash)
+            if not proof_valid:
+                failure_reason = "merkle_proof_failed"
+        else:
+            failure_reason = "merkle_proof_failed"
     except Exception:
         logger.exception("Merkle proof verification failed for commit %s", commit.commit_id)
+        proof_valid = False
+        failure_reason = "merkle_proof_failed"
 
     if proof_valid:
         steps.append(
@@ -292,22 +299,44 @@ async def _build_verification_response(
             _make_step(
                 step_n,
                 "Cryptographic Proof",
-                "complete",
-                "The document record was found in the ledger.",
+                "failed",
+                "Merkle proof verification failed — the document's position in the "
+                "tamper-proof tree could not be confirmed.",
             )
         )
 
     step_n += 1
 
-    # Chain integrity check (simple: commit_id exists and is unique)
-    steps.append(
-        _make_step(
-            step_n,
-            "Tamper Check",
-            "complete",
-            "The permanent record has not been modified since it was created.",
+    # Chain integrity check: Merkle proof validity implies content integrity.
+    # If the Merkle proof failed, we consider that evidence of tampering.
+    tamper_detected = not proof_valid
+
+    if tamper_detected:
+        failure_reason = failure_reason or "tamper_detected"
+        steps.append(
+            _make_step(
+                step_n,
+                "Tamper Check",
+                "failed",
+                "Potential tampering detected — the record's integrity could not be fully confirmed.",
+            )
         )
-    )
+    else:
+        steps.append(
+            _make_step(
+                step_n,
+                "Tamper Check",
+                "complete",
+                "The permanent record has not been modified since it was created.",
+            )
+        )
+
+    # Determine overall verification result
+    verified = proof_valid and not tamper_detected
+    if verified:
+        confidence: str = "certain"
+    else:
+        confidence = "none"
 
     # Resolve related request display ID
     related_request: str | None = None
@@ -326,13 +355,20 @@ async def _build_verification_response(
 
     # Log the verification activity
     try:
+        activity_type = "VERIFICATION_SUCCESS" if verified else "VERIFICATION_FAILURE"
+        activity_title = "Document Verified" if verified else "Document Verification Failed"
+        activity_desc = (
+            f"Document with commit '{commit.commit_id}' was successfully verified. Recorded on {epoch_str}."
+            if verified
+            else f"Document with commit '{commit.commit_id}' failed verification. Reason: {failure_reason}."
+        )
         activity = LedgerActivity(
-            activity_type="VERIFICATION_SUCCESS",
-            title="Document Verified",
-            description=f"Document with commit '{commit.commit_id}' was successfully verified. Recorded on {epoch_str}.",
+            activity_type=activity_type,
+            title=activity_title,
+            description=activity_desc,
             related_commit_id=commit.commit_id,
             related_request_id=commit.request_id,
-            user_friendly_status="✓ Complete",
+            user_friendly_status="✓ Complete" if verified else "✗ Failed",
         )
         db.add(activity)
         await db.commit()
@@ -340,20 +376,36 @@ async def _build_verification_response(
         logger.exception("Failed to log verification activity for commit %s", commit.commit_id)
         await db.rollback()
 
-    return SimpleVerificationResponse(
-        verified=True,
-        summary=f"VERIFIED: This document was permanently recorded on {epoch_str}.",
-        confidence="certain",
-        recorded_date=epoch,
-        related_request=related_request,
-        proof_details=steps,
-        what_this_means=(
-            f"This document was permanently recorded in the Olympus ledger on {epoch_str}. "
-            "Its cryptographic fingerprint has been verified against the tamper-proof Merkle tree, "
-            "confirming that the document has not been altered since it was submitted."
-        ),
-        why_this_matters=_why_matters(),
-    )
+    if verified:
+        return SimpleVerificationResponse(
+            verified=True,
+            summary=f"VERIFIED: This document was permanently recorded on {epoch_str}.",
+            confidence="certain",
+            recorded_date=epoch,
+            related_request=related_request,
+            proof_details=steps,
+            what_this_means=(
+                f"This document was permanently recorded in the Olympus ledger on {epoch_str}. "
+                "Its cryptographic fingerprint has been verified against the tamper-proof Merkle tree, "
+                "confirming that the document has not been altered since it was submitted."
+            ),
+            why_this_matters=_why_matters(),
+        )
+    else:
+        return SimpleVerificationResponse(
+            verified=False,
+            summary="VERIFICATION FAILED: The document's integrity could not be confirmed.",
+            confidence="none",
+            recorded_date=epoch,
+            related_request=related_request,
+            failure_reason=failure_reason,
+            proof_details=steps,
+            what_this_means=(
+                "The document was found in the ledger but its cryptographic integrity "
+                "could not be fully verified. This may indicate tampering or data corruption."
+            ),
+            why_this_matters=_why_matters(),
+        )
 
 
 def _why_matters() -> str:
