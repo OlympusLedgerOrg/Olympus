@@ -68,6 +68,17 @@ async def commit_document(body: DocCommitRequest, db: DBSession, _api_key: Requi
     commit_id = generate_commit_id()
     shard_id = DEFAULT_SHARD_ID
 
+    # AUDIT(doc_hash provenance): doc_hash is client-provided via the
+    # DocCommitRequest schema (validated as 64 lowercase hex chars).  The
+    # /doc/commit endpoint is a *commitment* API — the server never sees the
+    # underlying document, only its BLAKE3 fingerprint.  For records ingested
+    # via /ingest/records, doc_hash (stored as content_hash) is computed
+    # server-side from canonical_v2 bytes:
+    #   canonicalize_document(content) → document_to_bytes() → hash_bytes()
+    # Both paths feed into build_tree(preserve_order=True) via
+    # compute_state_root(), so the Merkle tree anchor is only as strong as
+    # the hash fed into it.  Client-submitted hashes are accepted on trust;
+    # the ingest path enforces canonical computation.
     commit = DocCommit(
         doc_hash=body.doc_hash,
         commit_id=commit_id,

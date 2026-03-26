@@ -949,7 +949,16 @@ async def _async_canonicalize_and_hash(content: dict[str, Any]) -> tuple[bytes, 
     """
     loop = asyncio.get_running_loop()
 
-    # Run canonicalization in executor to avoid blocking event loop
+    # AUDIT(doc_hash provenance): content_hash is the authoritative document
+    # fingerprint for the ingest path.  It is derived exclusively from
+    # canonical_v2 bytes:
+    #   1. canonicalize_document() — applies NFC, homoglyph scrub, numeric
+    #      normalization, sorted keys (canonical_v2 pipeline).
+    #   2. document_to_bytes()     — deterministic JSON encoding (RFC 8785-
+    #      style compact separators, ensure_ascii).
+    #   3. hash_bytes()            — BLAKE3 with LEGACY_BYTES_PREFIX domain
+    #      separation.
+    # The resulting hex digest becomes the Merkle leaf in build_tree().
     canonical = await loop.run_in_executor(None, canonicalize_document, content)
     content_bytes = document_to_bytes(canonical)
     content_hash = hash_bytes(content_bytes).hex()
