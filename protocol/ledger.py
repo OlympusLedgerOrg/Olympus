@@ -9,6 +9,7 @@ from typing import Any
 
 from .canonical_json import canonical_json_bytes
 from .hashes import _SEP, LEDGER_PREFIX, blake3_hash
+from .hlc import HLC_ZERO, HLCTimestamp, advance_hlc
 from .timestamps import current_timestamp
 
 
@@ -27,6 +28,7 @@ class LedgerEntry:
         None  # Optional signed federation quorum certificate
     )
     poseidon_root: str | None = None  # Optional Poseidon Merkle root (decimal string)
+    hlc_bytes: str | None = None  # Hex-encoded HLC timestamp bytes (12 bytes)
 
     def to_dict(self) -> dict[str, Any]:
         """Convert to dictionary."""
@@ -50,6 +52,7 @@ class Ledger:
         """Initialize an empty ledger."""
         self.entries: list[LedgerEntry] = []
         self._index: dict[str, LedgerEntry] = {}
+        self._last_hlc: HLCTimestamp = HLC_ZERO
 
     @staticmethod
     def _canonicalize_quorum_certificate(
@@ -127,9 +130,10 @@ class Ledger:
         """
         ts = current_timestamp()
         prev_entry_hash = self.entries[-1].entry_hash if self.entries else ""
-        # NOTE: Strictly-increasing timestamp check removed (L2-B).
-        # Chain integrity is guaranteed by prev_entry_hash linkage, and NTP
-        # clock adjustments could otherwise stall the ledger.
+
+        # Advance the hybrid logical clock to guarantee strict monotonicity.
+        new_hlc = advance_hlc(self._last_hlc)
+        hlc_raw = new_hlc.to_bytes()
 
         normalized_certificate = self._canonicalize_quorum_certificate(
             federation_quorum_certificate
@@ -161,7 +165,7 @@ class Ledger:
             poseidon_bytes = b""
 
         entry_hash = blake3_hash(
-            [LEDGER_PREFIX, canonical_json_bytes(payload), _SEP, poseidon_bytes]
+            [LEDGER_PREFIX, canonical_json_bytes(payload), _SEP, poseidon_bytes, _SEP, hlc_raw]
         ).hex()
 
         entry = LedgerEntry(
@@ -174,10 +178,12 @@ class Ledger:
             prev_entry_hash=prev_entry_hash,
             entry_hash=entry_hash,
             poseidon_root=poseidon_root,
+            hlc_bytes=hlc_raw.hex(),
         )
 
         self.entries.append(entry)
         self._index[entry.entry_hash] = entry
+        self._last_hlc = new_hlc
         return entry
 
     def get_entry(self, entry_hash: str) -> LedgerEntry | None:
@@ -207,7 +213,8 @@ class Ledger:
         Verify the integrity of the entire ledger chain.
 
         Supports both legacy entries (single BLAKE3 root) and new entries
-        that use the dual-root commitment formula.
+        that use the dual-root commitment formula.  Entries with HLC timestamps
+        are checked for strict monotonicity.
 
         Returns:
             True if chain is valid
@@ -218,6 +225,8 @@ class Ledger:
         # Check genesis entry
         if self.entries[0].prev_entry_hash != "":
             return False
+
+        prev_hlc: HLCTimestamp | None = None
 
         # Check each entry
         for i, entry in enumerate(self.entries):
@@ -250,9 +259,27 @@ class Ledger:
             else:
                 poseidon_bytes = b""
 
-            expected_hash = blake3_hash(
-                [LEDGER_PREFIX, canonical_json_bytes(payload), _SEP, poseidon_bytes]
-            ).hex()
+            # Determine HLC bytes for hash computation
+            if entry.hlc_bytes is not None:
+                try:
+                    hlc_raw = bytes.fromhex(entry.hlc_bytes)
+                    entry_hlc = HLCTimestamp.from_bytes(hlc_raw)
+                except (ValueError, TypeError):
+                    return False
+
+                # Verify strict HLC monotonicity
+                if prev_hlc is not None and entry_hlc <= prev_hlc:
+                    return False
+                prev_hlc = entry_hlc
+
+                expected_hash = blake3_hash(
+                    [LEDGER_PREFIX, canonical_json_bytes(payload), _SEP, poseidon_bytes, _SEP, hlc_raw]
+                ).hex()
+            else:
+                # Legacy entry without HLC — use original hash formula
+                expected_hash = blake3_hash(
+                    [LEDGER_PREFIX, canonical_json_bytes(payload), _SEP, poseidon_bytes]
+                ).hex()
 
             if entry.entry_hash != expected_hash:
                 return False

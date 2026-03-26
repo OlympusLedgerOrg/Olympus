@@ -6,6 +6,7 @@ This module implements shard header hashing and signature verification.
 
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass
 from datetime import datetime
 from typing import TYPE_CHECKING, Any
@@ -19,6 +20,13 @@ from cryptography.hazmat.primitives.kdf.hkdf import HKDF
 from .canonical_json import canonical_json_bytes
 from .events import CanonicalEvent
 from .hashes import HASH_SEPARATOR, hash_bytes, shard_header_hash
+from .hlc import HLCTimestamp
+
+logger = logging.getLogger(__name__)
+
+# Maximum allowed clock skew between a shard header HLC and the verifier's
+# current HLC (milliseconds).  Configurable via api/config.py for deployment.
+MAX_TIMESTAMP_SKEW_MS: int = 30_000
 
 
 # Fields excluded from the canonical commitment bytes (derived or post-commitment metadata)
@@ -211,18 +219,33 @@ def sign_header(header: dict[str, Any], signing_key: nacl.signing.SigningKey) ->
 
 
 def verify_header(
-    header: dict[str, Any], signature: str, verify_key: nacl.signing.VerifyKey
+    header: dict[str, Any],
+    signature: str,
+    verify_key: nacl.signing.VerifyKey,
+    *,
+    prev_sequence: int | None = None,
+    now_hlc: HLCTimestamp | None = None,
+    max_skew_ms: int = MAX_TIMESTAMP_SKEW_MS,
 ) -> bool:
     """
     Verify a shard header's hash and Ed25519 signature.
 
+    When *prev_sequence* is provided, the header's ``sequence_number`` (if
+    present) must be strictly greater than *prev_sequence* to reject replays.
+
+    When *now_hlc* is provided and the header includes ``timestamp_hlc``,
+    the absolute clock skew must be within *max_skew_ms* milliseconds.
+
     Args:
-        header: Shard header dictionary
-        signature: Hex-encoded Ed25519 signature
-        verify_key: Ed25519 verification key
+        header: Shard header dictionary.
+        signature: Hex-encoded Ed25519 signature.
+        verify_key: Ed25519 verification key.
+        prev_sequence: Previous shard header sequence for replay detection.
+        now_hlc: Current HLC timestamp for timestamp skew validation.
+        max_skew_ms: Maximum allowed timestamp skew in milliseconds.
 
     Returns:
-        True if header hash is correct and signature is valid
+        True if header hash is correct and signature is valid.
     """
     # Verify header hash
     header_without_hash = {k: v for k, v in header.items() if k not in _HEADER_EXCLUDED_FIELDS}
@@ -230,6 +253,27 @@ def verify_header(
 
     if header.get("header_hash") != expected_hash:
         return False
+
+    # Replay protection: sequence must be strictly monotonic
+    if prev_sequence is not None and "sequence_number" in header:
+        if header["sequence_number"] <= prev_sequence:
+            logger.warning(
+                "Shard header replay detected: seq=%d prev=%d",
+                header["sequence_number"],
+                prev_sequence,
+            )
+            return False
+
+    # Timestamp skew check
+    if now_hlc is not None and "timestamp_hlc" in header:
+        try:
+            header_hlc = HLCTimestamp.from_bytes(bytes.fromhex(header["timestamp_hlc"]))
+        except (ValueError, TypeError):
+            return False
+        skew_ms = abs(now_hlc.wall_ms - header_hlc.wall_ms)
+        if skew_ms > max_skew_ms:
+            logger.warning("Shard header timestamp out of bounds: skew=%dms", skew_ms)
+            return False
 
     # Verify signature
     try:
@@ -271,13 +315,19 @@ def create_key_revocation_record(
     compromise_timestamp: str,
     last_good_sequence: int,
     reason: str = "compromise",
+    old_signing_key: nacl.signing.SigningKey | None = None,
 ) -> dict[str, Any]:
     """
     Create a signed Ed25519 key revocation record.
 
-    The revocation record is signed by the replacement key and references the
-    compromised public key, the effective compromise timestamp, and the last
-    header sequence that verifiers may still accept from the old key.
+    The revocation record is always signed by the replacement key and
+    references the compromised public key, the effective compromise
+    timestamp, and the last header sequence that verifiers may still
+    accept from the old key.
+
+    When *old_signing_key* is available the record is **dual-signed** by
+    both the old and new keys, providing stronger proof of authorized
+    rotation.
 
     Args:
         old_verify_key: Compromised Ed25519 verification key.
@@ -285,6 +335,7 @@ def create_key_revocation_record(
         compromise_timestamp: Effective compromise timestamp in ISO 8601 format.
         last_good_sequence: Last accepted shard header sequence signed by the old key.
         reason: Human-readable reason code for the rotation.
+        old_signing_key: Optional old Ed25519 signing key for dual-signature.
 
     Returns:
         Signed revocation record dictionary.
@@ -299,22 +350,33 @@ def create_key_revocation_record(
         "last_good_sequence": last_good_sequence,
         "reason": reason,
     }
-    return {
+    record: dict[str, Any] = {
         **payload,
         "signature": _sign_rotation_payload(payload, new_signing_key),
+        "dual_signed": old_signing_key is not None,
     }
+    if old_signing_key is not None:
+        record["old_key_signature"] = _sign_rotation_payload(payload, old_signing_key)
+    return record
 
 
 def verify_key_revocation_record(record: dict[str, Any]) -> bool:
     """
     Verify a signed Ed25519 key revocation record.
 
+    When the record is dual-signed (``dual_signed=True``), both the new-key
+    and old-key signatures are verified.  A dual-signed record with an
+    invalid old-key signature is rejected.
+
+    Single-signed records (old key unavailable at revocation time) are
+    accepted but a warning is logged.
+
     Args:
         record: Revocation record produced by :func:`create_key_revocation_record`.
 
     Returns:
-        ``True`` when the record is well-formed and the replacement key's
-        signature is valid.
+        ``True`` when the record is well-formed and all required signatures
+        are valid.
     """
     required_fields = {
         "event_type",
@@ -330,14 +392,39 @@ def verify_key_revocation_record(record: dict[str, Any]) -> bool:
     if record.get("event_type") != "key_revocation":
         return False
     try:
-        verify_key = nacl.signing.VerifyKey(bytes.fromhex(record["new_pubkey"]))
+        new_verify_key = nacl.signing.VerifyKey(bytes.fromhex(record["new_pubkey"]))
         _parse_timestamp(record["compromise_timestamp"])
         if int(record["last_good_sequence"]) < 0:
             return False
     except (TypeError, ValueError):
         return False
+
     payload = {key: record[key] for key in required_fields if key != "signature"}
-    return _verify_rotation_payload(payload, record["signature"], verify_key)
+
+    # New-key signature is always required
+    if not _verify_rotation_payload(payload, record["signature"], new_verify_key):
+        return False
+
+    # Dual-signature verification
+    if record.get("dual_signed"):
+        old_key_sig = record.get("old_key_signature")
+        if not old_key_sig:
+            return False
+        try:
+            old_verify_key = nacl.signing.VerifyKey(bytes.fromhex(record["old_pubkey"]))
+        except (TypeError, ValueError):
+            return False
+        if not _verify_rotation_payload(payload, old_key_sig, old_verify_key):
+            return False
+    else:
+        # Single-signed revocation — old key was unavailable (possibly compromised)
+        logger.warning(
+            "Revocation record for key %s is not dual-signed. "
+            "Old key may have been compromised.",
+            record.get("old_pubkey", "unknown"),
+        )
+
+    return True
 
 
 def create_superseding_signature(
