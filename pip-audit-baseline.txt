@@ -1,2 +1,8 @@
 # Known vulnerability IDs to ignore during pip-audit.
 # Keep this file sorted and prefer removing IDs as dependencies are upgraded.
+#
+# CVE-2026-4539 — pygments <= 2.19.2 ReDoS in AdlLexer (archetype.py).
+# Local-access only; no fix version available as of 2026-03-26.
+# pygments is a transitive dep via rich and pytest; Olympus does not call
+# AdlLexer.  Remove this entry once pygments ships a patched release.
+CVE-2026-4539
