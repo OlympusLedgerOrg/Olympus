@@ -63,11 +63,15 @@ class MerkleProof:
         siblings: List of (hash, direction) pairs along the path from the leaf
                   to the root.  ``direction`` is "left" if the sibling is on
                   the left side, "right" if on the right.
+        tree_size: Number of leaves in the tree that produced this proof.
+                   Used by the verifier for strict depth validation.  A value
+                   of ``0`` disables depth checks (legacy compatibility).
     """
 
     leaf_hash: str
     root_hash: str
     siblings: list[tuple[str, str]] = field(default_factory=list)
+    tree_size: int = 0
 
 
 def _blake3_leaf(data: bytes) -> str:
@@ -187,11 +191,38 @@ def generate_proof(leaf_hash: str, tree: MerkleRoot) -> MerkleProof:
             siblings.append((level[sibling_index], "left"))
         index //= 2
 
-    return MerkleProof(leaf_hash=leaf_hash, root_hash=tree.root_hash, siblings=siblings)
+    return MerkleProof(
+        leaf_hash=leaf_hash,
+        root_hash=tree.root_hash,
+        siblings=siblings,
+        tree_size=len(tree.leaf_hashes),
+    )
+
+
+_VALID_DIRECTIONS = frozenset({"left", "right"})
+
+
+def _expected_proof_depth(tree_size: int) -> int:
+    """Return the expected number of siblings for a tree with *tree_size* leaves.
+
+    With the self-pair policy (lone nodes are duplicated, not promoted) every
+    leaf always has a sibling at every level, so the depth is deterministic:
+
+    - 1 leaf  → 1 (the self-pair level)
+    - n > 1   → ceil(log2(n))
+    """
+    if tree_size <= 1:
+        return 1
+    return (tree_size - 1).bit_length()
 
 
 def verify_proof(leaf_hash: str, proof: MerkleProof, root: str) -> bool:
     """Verify a Merkle inclusion proof against a known root.
+
+    Enforces:
+    1. Sibling direction strings must be exactly ``"left"`` or ``"right"``.
+    2. When ``proof.tree_size > 0``, the number of siblings must match the
+       expected depth for the declared tree size.
 
     Args:
         leaf_hash: Hex-encoded leaf hash to verify.
@@ -200,7 +231,29 @@ def verify_proof(leaf_hash: str, proof: MerkleProof, root: str) -> bool:
 
     Returns:
         ``True`` if the proof is valid, ``False`` otherwise.
+
+    Raises:
+        ValueError: If sibling direction is invalid or proof depth does not
+            match the declared ``tree_size``.
     """
+    # Validate direction strings
+    for _hash, direction in proof.siblings:
+        if direction not in _VALID_DIRECTIONS:
+            raise ValueError(
+                f"Invalid sibling direction {direction!r} "
+                f"(must be exactly 'left' or 'right')"
+            )
+
+    # Strict depth validation when tree_size is known
+    if proof.tree_size > 0:
+        expected = _expected_proof_depth(proof.tree_size)
+        actual = len(proof.siblings)
+        if actual != expected:
+            raise ValueError(
+                f"Proof depth mismatch: got {actual} siblings but expected "
+                f"{expected} for tree_size={proof.tree_size}"
+            )
+
     current = leaf_hash
     for sibling_hash, direction in proof.siblings:
         if direction == "left":

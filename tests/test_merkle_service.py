@@ -19,6 +19,7 @@ from api.services.merkle import (
     _LEAF_PREFIX,
     _blake3_leaf,
     _blake3_pair,
+    _expected_proof_depth,
     build_tree,
     generate_proof,
     verify_proof,
@@ -226,3 +227,94 @@ class TestVerifyProof:
         tree = build_tree([leaf])
         proof = generate_proof(leaf, tree)
         assert verify_proof(leaf, proof, tree.root_hash) is True
+
+    # -------------------------------------------------------------------
+    # Finding #9 — proof depth / direction validation tests
+    # -------------------------------------------------------------------
+    def test_proof_includes_tree_size(self):
+        """generate_proof must populate tree_size on the proof."""
+        leaves = [_b3(s) for s in ["a", "b", "c"]]
+        tree = build_tree(leaves)
+        proof = generate_proof(tree.leaf_hashes[0], tree)
+        assert proof.tree_size == 3
+
+    def test_invalid_direction_raises(self):
+        """Sibling direction must be exactly 'left' or 'right'."""
+        leaves = [_b3(s) for s in ["a", "b"]]
+        tree = build_tree(leaves)
+        proof = generate_proof(tree.leaf_hashes[0], tree)
+        bad_proof = MerkleProof(
+            leaf_hash=proof.leaf_hash,
+            root_hash=proof.root_hash,
+            siblings=[(proof.siblings[0][0], "up")],
+            tree_size=proof.tree_size,
+        )
+        with pytest.raises(ValueError, match="Invalid sibling direction"):
+            verify_proof(bad_proof.leaf_hash, bad_proof, tree.root_hash)
+
+    def test_boolean_direction_raises(self):
+        """Boolean direction values must be rejected."""
+        leaves = [_b3(s) for s in ["a", "b"]]
+        tree = build_tree(leaves)
+        proof = generate_proof(tree.leaf_hashes[0], tree)
+        bad_proof = MerkleProof(
+            leaf_hash=proof.leaf_hash,
+            root_hash=proof.root_hash,
+            siblings=[(proof.siblings[0][0], True)],  # type: ignore[list-item]
+            tree_size=proof.tree_size,
+        )
+        with pytest.raises(ValueError, match="Invalid sibling direction"):
+            verify_proof(bad_proof.leaf_hash, bad_proof, tree.root_hash)
+
+    def test_too_many_siblings_rejected(self):
+        """Proof with more siblings than expected depth must be rejected."""
+        leaves = [_b3(s) for s in ["a", "b"]]
+        tree = build_tree(leaves)
+        proof = generate_proof(tree.leaf_hashes[0], tree)
+        # Add an extra sibling
+        extra_siblings = list(proof.siblings) + [(_b3("extra"), "right")]
+        bad_proof = MerkleProof(
+            leaf_hash=proof.leaf_hash,
+            root_hash=proof.root_hash,
+            siblings=extra_siblings,
+            tree_size=proof.tree_size,
+        )
+        with pytest.raises(ValueError, match="Proof depth mismatch"):
+            verify_proof(bad_proof.leaf_hash, bad_proof, tree.root_hash)
+
+    def test_too_few_siblings_rejected(self):
+        """Proof with fewer siblings than expected depth must be rejected."""
+        leaves = [_b3(s) for s in ["a", "b", "c", "d"]]
+        tree = build_tree(leaves)
+        proof = generate_proof(tree.leaf_hashes[0], tree)
+        # Remove a sibling
+        fewer_siblings = list(proof.siblings)[:-1]
+        bad_proof = MerkleProof(
+            leaf_hash=proof.leaf_hash,
+            root_hash=proof.root_hash,
+            siblings=fewer_siblings,
+            tree_size=proof.tree_size,
+        )
+        with pytest.raises(ValueError, match="Proof depth mismatch"):
+            verify_proof(bad_proof.leaf_hash, bad_proof, tree.root_hash)
+
+    def test_legacy_tree_size_zero_skips_depth_check(self):
+        """tree_size=0 (legacy) skips depth validation."""
+        leaves = [_b3(s) for s in ["a", "b"]]
+        tree = build_tree(leaves)
+        proof = generate_proof(tree.leaf_hashes[0], tree)
+        # Override tree_size to 0 (legacy)
+        legacy_proof = MerkleProof(
+            leaf_hash=proof.leaf_hash,
+            root_hash=proof.root_hash,
+            siblings=proof.siblings,
+            tree_size=0,
+        )
+        assert verify_proof(legacy_proof.leaf_hash, legacy_proof, tree.root_hash) is True
+
+    @pytest.mark.parametrize("n,expected_depth", [
+        (1, 1), (2, 1), (3, 2), (4, 2), (5, 3), (8, 3), (9, 4), (16, 4),
+    ])
+    def test_expected_proof_depth(self, n: int, expected_depth: int):
+        """_expected_proof_depth matches the actual generated proof depth."""
+        assert _expected_proof_depth(n) == expected_depth
