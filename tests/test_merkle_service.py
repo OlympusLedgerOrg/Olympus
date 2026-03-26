@@ -150,6 +150,18 @@ class TestVerifyProof:
         )
         assert verify_proof(leaf, bad_proof, tree.root_hash) is False
 
+    def test_tampered_sibling_fails_preserve_order(self):
+        """Tamper detection must also work for preserve_order=True trees."""
+        leaves = [_b3(s) for s in ["1", "2", "3", "4"]]
+        tree = build_tree(leaves, preserve_order=True)
+        leaf = tree.leaf_hashes[0]
+        proof = generate_proof(leaf, tree)
+        bad_siblings = [(_b3("evil"), proof.siblings[0][1])] + list(proof.siblings[1:])
+        bad_proof = MerkleProof(
+            leaf_hash=leaf, root_hash=proof.root_hash, siblings=bad_siblings
+        )
+        assert verify_proof(leaf, bad_proof, tree.root_hash) is False
+
     def test_wrong_root_fails(self):
         leaves = [_b3(s) for s in ["a", "b"]]
         tree = build_tree(leaves)
