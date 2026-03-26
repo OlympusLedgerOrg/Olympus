@@ -2,7 +2,36 @@
 
 All notable changes to the Olympus protocol are documented in this file.
 
-## canonical_v2 — 2026-03-26
+## canonical_v2 (Round 2) — 2026-03-26
+
+### Breaking Changes
+
+- **Merkle tree: 0x00/0x01 domain separation** (`api/services/merkle.py`)
+  Internal node hashes are now computed as `H(0x01 || left || right)` and
+  leaf hashes as `H(0x00 || data)`, following RFC 6962 conventions.  This
+  prevents a crafted leaf value from colliding with an internal node hash
+  and eliminates structural ambiguity in the tree.  All Merkle roots change.
+  Pre-launch determination: no stored proofs reference unprefixed roots in
+  a way that cannot be regenerated, so no `CANONICAL_VERSION` bump is needed.
+
+### Fixes
+
+- **Unicode homoglyph scrub** (`protocol/canonical.py`)
+  `_scrub_homoglyphs()` replaces Unicode characters whose NFKD form is a
+  single ASCII printable character with that ASCII character.  This catches
+  fullwidth Latin (`Ａ` → `A`), mathematical bold/italic (`𝐔` → `U`), and
+  enclosed alphanumerics without touching legitimate non-ASCII (Arabic, CJK,
+  accented Latin).  Controlled via `scrub_homoglyphs=True/False` parameter
+  on `canonicalize_document()` and `document_to_bytes()`.
+
+- **Idempotency gate** (`api/ingest.py`)
+  `IngestionResult` now includes an `idempotent: bool` field, set `True`
+  when a duplicate submission returns the existing record instead of creating
+  a new ledger entry.  The existing content-hash dedup check was already
+  enforced before any ledger write; this field lets callers distinguish fresh
+  inserts from deduplicated returns.
+
+## canonical_v2 (Round 1) — 2026-03-26
 
 ### Breaking Changes
 
