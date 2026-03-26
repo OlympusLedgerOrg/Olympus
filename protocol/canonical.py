@@ -41,7 +41,8 @@ Version history:
 - ``canonical_v2`` — (current) lone Merkle nodes are self-paired instead of
   promoted, preventing batching-boundary root divergence.  Float values are
   normalised to ``int`` when whole, or to ``Decimal`` otherwise; NaN / Inf
-  are rejected.
+  are rejected.  Homoglyph scrub collapses fullwidth Latin, mathematical
+  alphanumerics, and enclosed alphanumerics to their ASCII equivalents.
 
 Cross-version verification: the verifier accepts proofs generated under any
 version listed in :data:`SUPPORTED_VERSIONS`.  ``canonical_v1`` proofs emit
@@ -50,6 +51,33 @@ a deprecation warning.  A full migration layer is tracked separately.
 
 SUPPORTED_VERSIONS = ["canonical_v1", "canonical_v2"]
 """All canonical versions the verifier is willing to accept."""
+
+
+def _scrub_homoglyphs(text: str) -> str:
+    """Replace Unicode characters whose NFKD form is a single ASCII printable char.
+
+    This catches fullwidth Latin (U+FF01–U+FF5E), mathematical bold/italic/
+    script/fraktur alphanumerics, and enclosed alphanumerics — all visually
+    similar to ASCII but distinct under NFC.
+
+    Legitimate non-ASCII content (Arabic, CJK, accented Latin such as ``é``)
+    is left untouched because its NFKD decomposition either maps to multiple
+    characters or to a codepoint outside the ASCII printable range.
+
+    Args:
+        text: Input string (should already be NFC-normalised).
+
+    Returns:
+        String with ASCII-equivalent homoglyphs replaced.
+    """
+    out: list[str] = []
+    for ch in text:
+        decomposed = unicodedata.normalize("NFKD", ch)
+        if len(decomposed) == 1 and 0x20 <= ord(decomposed) <= 0x7E:
+            out.append(decomposed)
+        else:
+            out.append(ch)
+    return "".join(out)
 
 
 def canonicalize_json(data: dict[str, Any]) -> str:
@@ -91,7 +119,11 @@ def normalize_whitespace(text: str) -> str:
     return " ".join(text.split())
 
 
-def canonicalize_document(doc: dict[str, Any]) -> dict[str, Any]:
+def canonicalize_document(
+    doc: dict[str, Any],
+    *,
+    scrub_homoglyphs: bool = True,
+) -> dict[str, Any]:
     """
     Canonicalize a document structure.
 
@@ -99,6 +131,10 @@ def canonicalize_document(doc: dict[str, Any]) -> dict[str, Any]:
 
     Args:
         doc: Document to canonicalize
+        scrub_homoglyphs: If ``True`` (default), replace Unicode characters
+            whose NFKD decomposition is a single ASCII printable character
+            with that ASCII character.  Set to ``False`` only if the corpus
+            intentionally uses fullwidth characters as data.
 
     Returns:
         Canonicalized document
@@ -108,11 +144,14 @@ def canonicalize_document(doc: dict[str, Any]) -> dict[str, Any]:
 
     def _canonicalize_value(value: Any) -> Any:
         if isinstance(value, dict):
-            return canonicalize_document(value)
+            return canonicalize_document(value, scrub_homoglyphs=scrub_homoglyphs)
         if isinstance(value, list):
             return [_canonicalize_value(item) for item in value]
         if isinstance(value, str):
-            return normalize_whitespace(value)
+            normalized = normalize_whitespace(value)
+            if scrub_homoglyphs:
+                normalized = _scrub_homoglyphs(normalized)
+            return normalized
         if isinstance(value, bool):
             # bool is a subclass of int; must be checked before int
             return value
@@ -141,17 +180,22 @@ def canonicalize_document(doc: dict[str, Any]) -> dict[str, Any]:
     return canonical
 
 
-def document_to_bytes(doc: dict[str, Any]) -> bytes:
+def document_to_bytes(
+    doc: dict[str, Any],
+    *,
+    scrub_homoglyphs: bool = True,
+) -> bytes:
     """
     Convert document to canonical byte representation.
 
     Args:
         doc: Document to convert
+        scrub_homoglyphs: Forwarded to :func:`canonicalize_document`.
 
     Returns:
         Canonical bytes
     """
-    canonical = canonicalize_document(doc)
+    canonical = canonicalize_document(doc, scrub_homoglyphs=scrub_homoglyphs)
     json_str = canonicalize_json(canonical)
     return json_str.encode("utf-8")
 

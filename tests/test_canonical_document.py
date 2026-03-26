@@ -9,6 +9,7 @@ import pytest
 from hypothesis import given, strategies as st
 
 from protocol.canonical import (
+    _scrub_homoglyphs,
     canonicalize_document,
     canonicalize_json,
     document_to_bytes,
@@ -394,3 +395,47 @@ def test_bool_not_coerced_to_int() -> None:
     doc = canonicalize_document({"flag": True, "other": False})
     assert doc["flag"] is True
     assert doc["other"] is False
+
+
+# ---------------------------------------------------------------------------
+# Homoglyph scrub tests (Finding #3 — Red Team Hardening Round 2)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "variant,expected",
+    [
+        ("US\uff24", "USD"),  # fullwidth D
+        ("\U0001d414\U0001d412\U0001d403", "USD"),  # mathematical bold
+        ("\uff35\uff33\uff24", "USD"),  # all fullwidth
+        ("USD", "USD"),  # already clean — no change
+    ],
+)
+def test_homoglyph_scrub_normalizes_to_ascii(variant: str, expected: str) -> None:
+    assert _scrub_homoglyphs(variant) == expected
+
+
+def test_homoglyph_variants_produce_identical_canonical_bytes() -> None:
+    base = {"invoice_id": "INV-8842", "amount": 100}
+    variants = [
+        {**base, "currency": "USD"},
+        {**base, "currency": "US\uff24"},
+        {**base, "currency": "\U0001d414\U0001d412\U0001d403"},
+        {**base, "currency": "\uff35\uff33\uff24"},
+    ]
+    hashes = [document_to_bytes(v) for v in variants]
+    assert len(set(hashes)) == 1, "Homoglyph variants produced divergent bytes"
+
+
+def test_non_ascii_legitimate_content_survives_scrub() -> None:
+    """Arabic, CJK, accented Latin must not be destroyed."""
+    assert _scrub_homoglyphs("\u0645\u0631\u062d\u0628\u0627") == "\u0645\u0631\u062d\u0628\u0627"
+    assert _scrub_homoglyphs("\u65e5\u672c\u8a9e") == "\u65e5\u672c\u8a9e"
+    assert _scrub_homoglyphs("caf\u00e9") == "caf\u00e9"
+
+
+def test_scrub_homoglyphs_false_preserves_fullwidth() -> None:
+    doc = {"currency": "\uff35\uff33\uff24"}
+    bytes_on = document_to_bytes(doc, scrub_homoglyphs=True)
+    bytes_off = document_to_bytes(doc, scrub_homoglyphs=False)
+    assert bytes_on != bytes_off
