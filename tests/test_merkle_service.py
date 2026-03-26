@@ -85,6 +85,25 @@ class TestBuildTree:
             assert len(w) == 1
             assert "preserve_order" in str(w[0].message)
 
+    # -------------------------------------------------------------------
+    # Finding #8 — lone-node self-pair tests
+    # -------------------------------------------------------------------
+    def test_odd_and_padded_even_differ_from_unpadded(self):
+        """Three leaves must produce a different root than two of them."""
+        leaves_3 = [_b3(s) for s in ["a", "b", "c"]]
+        leaves_2 = [_b3(s) for s in ["a", "b"]]
+        assert build_tree(leaves_3).root_hash != build_tree(leaves_2).root_hash
+
+    def test_lone_node_is_rehashed_not_promoted(self):
+        """Single-leaf tree root should be H(H(leaf) || H(leaf)), not H(leaf)."""
+        leaf = _b3("only_leaf")
+        tree = build_tree([leaf])
+        # The root must differ from the raw leaf hash because the lone node
+        # is self-paired: root = BLAKE3(leaf || leaf).
+        assert tree.root_hash != leaf
+        expected = blake3.blake3(bytes.fromhex(leaf) + bytes.fromhex(leaf)).hexdigest()
+        assert tree.root_hash == expected
+
 
 class TestGenerateProof:
     def test_proof_for_each_leaf(self):

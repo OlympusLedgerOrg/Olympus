@@ -103,6 +103,13 @@ def build_tree(
     current = list(ordered)
     levels: list[list[str]] = [list(current)]
 
+    # Single-leaf tree: self-pair to ensure the root differs from the leaf
+    # (prevents trivial root == leaf identity, consistent with duplicate-and-hash
+    # behaviour for lone nodes at every level).
+    if len(current) == 1:
+        current = [_blake3_pair(current[0], current[0])]
+        levels.append(list(current))
+
     while len(current) > 1:
         next_level: list[str] = []
         for i in range(0, len(current), 2):
@@ -111,8 +118,9 @@ def build_tree(
                 right = current[i + 1]
                 next_level.append(_blake3_pair(left, right))
             else:
-                # CT-style lone-node promotion
-                next_level.append(left)
+                # Duplicate-and-hash: lone node is self-paired to prevent
+                # batching-boundary root divergence (RFC 6962 / Bitcoin pattern).
+                next_level.append(_blake3_pair(left, left))
         current = next_level
         levels.append(list(current))
 
@@ -144,7 +152,9 @@ def generate_proof(leaf_hash: str, tree: MerkleRoot) -> MerkleProof:
             sibling_index = index + 1
             if sibling_index < len(level):
                 siblings.append((level[sibling_index], "right"))
-            # Lone node — no sibling to append
+            else:
+                # Lone node — self-paired; sibling is itself
+                siblings.append((level[index], "right"))
         else:
             # Current node is right child; sibling is on the left
             sibling_index = index - 1

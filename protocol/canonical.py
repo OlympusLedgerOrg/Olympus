@@ -30,9 +30,26 @@ _RESIDUAL_UNICODE_SPACES = str.maketrans(
 )
 
 
-# Canonical format version - DO NOT CHANGE
-# Changing this breaks all historical document proofs
-CANONICAL_VERSION = "canonical_v1"
+CANONICAL_VERSION = "canonical_v2"
+"""Current canonical format version.
+
+Version history:
+
+- ``canonical_v1`` — original format.  Merkle trees used CT-style lone-node
+  promotion (no rehash for odd-count levels) and numeric values in documents
+  were passed through without normalization.
+- ``canonical_v2`` — (current) lone Merkle nodes are self-paired instead of
+  promoted, preventing batching-boundary root divergence.  Float values are
+  normalised to ``int`` when whole, or to ``Decimal`` otherwise; NaN / Inf
+  are rejected.
+
+Cross-version verification: the verifier accepts proofs generated under any
+version listed in :data:`SUPPORTED_VERSIONS`.  ``canonical_v1`` proofs emit
+a deprecation warning.  A full migration layer is tracked separately.
+"""
+
+SUPPORTED_VERSIONS = ["canonical_v1", "canonical_v2"]
+"""All canonical versions the verifier is willing to accept."""
 
 
 def canonicalize_json(data: dict[str, Any]) -> str:
