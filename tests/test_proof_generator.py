@@ -328,3 +328,110 @@ class TestNonExistenceInputValidation:
                 "pathElements": ["0"] * 256,
             }
         )
+
+
+# ---------------------------------------------------------------------------
+# BLAKE3/Poseidon canonical-hash binding (Finding #11/#12)
+# ---------------------------------------------------------------------------
+
+
+class TestCanonicalHashBinding:
+    """Verify that recompute_canonical_hash matches the circuit's Poseidon chain."""
+
+    @staticmethod
+    def _build_unified_inputs(
+        section_count: int,
+        section_lengths: list[int],
+        section_hashes: list[int],
+        canonical_hash: str,
+        max_sections: int = 8,
+    ) -> dict:
+        """Helper to build a minimal valid unified circuit input dict."""
+        config = CircuitConfig.default()
+        return {
+            "canonicalHash": canonical_hash,
+            "merkleRoot": "0",
+            "ledgerRoot": "0",
+            "treeSize": "0",
+            "documentSections": ["0"] * config.unified_max_sections,
+            "sectionCount": str(section_count),
+            "sectionLengths": [str(v) for v in section_lengths]
+                + ["0"] * (config.unified_max_sections - len(section_lengths)),
+            "sectionHashes": [str(v) for v in section_hashes]
+                + ["0"] * (config.unified_max_sections - len(section_hashes)),
+            "merklePath": ["0"] * config.unified_merkle_depth,
+            "merkleIndices": [0] * config.unified_merkle_depth,
+            "leafIndex": "0",
+            "ledgerPathElements": ["0"] * config.unified_smt_depth,
+            "ledgerPathIndices": [0] * config.unified_smt_depth,
+        }
+
+    def test_recompute_canonical_hash_deterministic(self):
+        """Same inputs always produce the same canonical hash."""
+        config = CircuitConfig.default()
+        h1 = ProofGenerator.recompute_canonical_hash(
+            section_count=2,
+            section_lengths=[100, 200] + [0] * (config.unified_max_sections - 2),
+            section_hashes=[42, 99] + [0] * (config.unified_max_sections - 2),
+            max_sections=config.unified_max_sections,
+        )
+        h2 = ProofGenerator.recompute_canonical_hash(
+            section_count=2,
+            section_lengths=[100, 200] + [0] * (config.unified_max_sections - 2),
+            section_hashes=[42, 99] + [0] * (config.unified_max_sections - 2),
+            max_sections=config.unified_max_sections,
+        )
+        assert h1 == h2
+
+    def test_recompute_changes_with_different_section_count(self):
+        """Different sectionCount → different canonical hash."""
+        config = CircuitConfig.default()
+        lengths = [100] + [0] * (config.unified_max_sections - 1)
+        hashes = [42] + [0] * (config.unified_max_sections - 1)
+        h1 = ProofGenerator.recompute_canonical_hash(1, lengths, hashes, config.unified_max_sections)
+        h2 = ProofGenerator.recompute_canonical_hash(2, lengths, hashes, config.unified_max_sections)
+        assert h1 != h2
+
+    def test_recompute_changes_with_different_section_hashes(self):
+        """Different sectionHashes → different canonical hash."""
+        config = CircuitConfig.default()
+        lengths = [100] + [0] * (config.unified_max_sections - 1)
+        h1 = ProofGenerator.recompute_canonical_hash(
+            1, lengths, [42] + [0] * (config.unified_max_sections - 1), config.unified_max_sections
+        )
+        h2 = ProofGenerator.recompute_canonical_hash(
+            1, lengths, [99] + [0] * (config.unified_max_sections - 1), config.unified_max_sections
+        )
+        assert h1 != h2
+
+    def test_validate_rejects_mismatched_canonical_hash(self):
+        """Mismatched canonicalHash must raise ValueError."""
+        config = CircuitConfig.default()
+        inputs = self._build_unified_inputs(
+            section_count=1,
+            section_lengths=[100],
+            section_hashes=[42],
+            canonical_hash="9999999999999999",  # wrong value
+        )
+        gen = ProofGenerator("unified_canonicalization_inclusion_root_sign")
+        with pytest.raises(ValueError, match="BLAKE3/Poseidon binding mismatch"):
+            gen._validate_inputs(inputs)
+
+    def test_validate_accepts_correct_canonical_hash(self):
+        """Correctly computed canonicalHash must pass validation."""
+        config = CircuitConfig.default()
+        # Compute the correct hash first
+        lengths = [100] + [0] * (config.unified_max_sections - 1)
+        hashes = [42] + [0] * (config.unified_max_sections - 1)
+        correct = ProofGenerator.recompute_canonical_hash(
+            1, lengths, hashes, config.unified_max_sections
+        )
+        inputs = self._build_unified_inputs(
+            section_count=1,
+            section_lengths=[100],
+            section_hashes=[42],
+            canonical_hash=correct,
+        )
+        gen = ProofGenerator("unified_canonicalization_inclusion_root_sign")
+        # Should not raise
+        gen._validate_inputs(inputs)
