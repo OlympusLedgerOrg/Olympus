@@ -214,7 +214,7 @@ async def update_request_status(display_id: str, body: RequestStatusUpdate, db: 
         )
 
     req.status = body.status
-    if body.status == RequestStatus.FULFILLED.value:
+    if body.status == RequestStatus.FULFILLED:
         req.fulfilled_at = datetime.now(timezone.utc)
 
     await db.commit()

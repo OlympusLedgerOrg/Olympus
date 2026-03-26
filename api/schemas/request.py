@@ -8,26 +8,28 @@ from datetime import datetime
 
 from pydantic import BaseModel, Field
 
+from api.models.request import RequestStatus
+
 
 class RequestCreate(BaseModel):
     """Request body for POST /requests."""
 
-    subject: str = Field(..., min_length=1)
-    description: str = Field(..., min_length=1)
-    agency_id: str | None = None
-    request_type: str = "NC_PUBLIC_RECORDS"
+    subject: str = Field(..., min_length=1, max_length=200)
+    description: str = Field(..., min_length=1, max_length=10000)
+    agency_id: str | None = Field(None, max_length=100)
+    request_type: str = Field("NC_PUBLIC_RECORDS", max_length=50)
     date_from: datetime | None = None
     date_to: datetime | None = None
-    response_format: str = "electronic"
-    fee_waiver_basis: str | None = None
-    priority: str = "STANDARD"
+    response_format: str = Field("electronic", max_length=128)
+    fee_waiver_basis: str | None = Field(None, max_length=2000)
+    priority: str = Field("STANDARD", max_length=50)
 
 
 class RequestStatusUpdate(BaseModel):
     """Request body for PATCH /requests/{display_id}/status."""
 
-    status: str
-    note: str | None = None
+    status: RequestStatus
+    note: str | None = Field(None, max_length=2000)
 
 
 class RequestResponse(BaseModel):

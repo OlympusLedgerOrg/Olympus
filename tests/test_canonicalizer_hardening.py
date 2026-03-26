@@ -135,9 +135,17 @@ class TestHtmlSanitizationHardening:
         assert b"inner" not in result
         assert b"innerTail" not in result
 
-    def test_allows_deeply_nested_html(self):
-        """HTML deeper than lxml's default limit should still parse."""
+    def test_rejects_deeply_nested_html(self):
+        """HTML deeper than lxml's default depth limit should be rejected."""
         depth = 300
+        inner = "<div>" * depth + "ok" + "</div>" * depth
+        html = f"<html><body>{inner}</body></html>".encode()
+        with pytest.raises(CanonicalizationError, match="HTML Parse Failure"):
+            Canonicalizer.html_v1(html)
+
+    def test_allows_moderately_nested_html(self):
+        """HTML within lxml's default depth limit should still parse."""
+        depth = 200
         inner = "<div>" * depth + "ok" + "</div>" * depth
         html = f"<html><body>{inner}</body></html>".encode()
         result = Canonicalizer.html_v1(html)
@@ -231,9 +239,11 @@ class TestInputSizeLimits:
             Canonicalizer.json_jcs(oversized)
 
     def test_html_size_limit(self):
-        """HTML input exceeding MAX_INPUT_SIZE must be rejected."""
-        oversized = b"<html><body>" + b"x" * (MAX_INPUT_SIZE + 1) + b"</body></html>"
-        with pytest.raises(CanonicalizationError, match="exceeds limit"):
+        """HTML input exceeding MAX_HTML_BYTES must be rejected."""
+        from protocol.canonicalizer import MAX_HTML_BYTES
+
+        oversized = b"<html><body>" + b"x" * (MAX_HTML_BYTES + 1) + b"</body></html>"
+        with pytest.raises(CanonicalizationError, match="exceeds maximum canonicalization size"):
             Canonicalizer.html_v1(oversized)
 
     def test_docx_size_limit(self):

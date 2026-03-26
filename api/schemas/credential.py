@@ -6,15 +6,15 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 
 class CredentialCreate(BaseModel):
     """Request body for POST /key/credential."""
 
-    holder_key: str
-    credential_type: str
-    issuer: str
+    holder_key: str = Field(..., min_length=1, max_length=512)
+    credential_type: str = Field(..., min_length=1, max_length=64, pattern=r"^[a-zA-Z0-9_\-]+$")
+    issuer: str = Field(..., min_length=1, max_length=500)
 
 
 class CredentialResponse(BaseModel):

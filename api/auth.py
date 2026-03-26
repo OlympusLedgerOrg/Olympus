@@ -396,3 +396,9 @@ async def rate_limit(request: Request) -> None:
 
 
 RateLimit = Annotated[None, Depends(rate_limit)]
+
+
+def _reset_rate_limit_backend_for_tests() -> None:  # pragma: no cover — test utility
+    """Reset the rate limit backend singleton (test helper)."""
+    global _rate_limit_backend
+    _rate_limit_backend = None

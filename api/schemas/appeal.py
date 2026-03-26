@@ -12,9 +12,9 @@ from pydantic import BaseModel, Field
 class AppealCreate(BaseModel):
     """Request body for POST /appeals."""
 
-    request_id: str
-    grounds: str = Field(..., description="AppealGrounds enum value.")
-    statement: str = Field(..., min_length=1)
+    request_id: str = Field(..., min_length=1, max_length=100)
+    grounds: str = Field(..., min_length=1, max_length=100, description="AppealGrounds enum value.")
+    statement: str = Field(..., min_length=1, max_length=10000)
 
 
 class AppealResponse(BaseModel):

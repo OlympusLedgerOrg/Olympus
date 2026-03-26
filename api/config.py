@@ -44,6 +44,9 @@ class Settings(BaseSettings):
     rate_limit_backend: str = "memory"  # Options: "memory", "redis"
     rate_limit_redis_url: str = ""
 
+    # Maximum upload file size in bytes (default 256 MB)
+    max_upload_bytes: int = 256 * 1024 * 1024
+
     # Statutory deadlines (business days)
     # NC Public Records: no explicit limit; flag overdue after these thresholds
     statutory_window_nc_ack_days: int = 14   # G.S. § 132 — acknowledgment

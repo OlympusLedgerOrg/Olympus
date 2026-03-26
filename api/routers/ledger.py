@@ -17,6 +17,7 @@ from fastapi import APIRouter, File, Form, HTTPException, Query, UploadFile, sta
 from sqlalchemy import func, select
 
 from api.auth import RateLimit, RequireAPIKey
+from api.config import get_settings
 from api.deps import DBSession
 from api.models.document import DocCommit
 from api.models.ledger_activity import LedgerActivity
@@ -33,6 +34,7 @@ from api.schemas.ledger import (
 from api.services.ingestion import ingest_document
 from api.services.merkle import MerkleProof, build_tree, generate_proof
 from api.services.shard import compute_state_root
+from api.services.upload_validation import validate_file_magic
 from api.services.verification import verify_by_commit_id, verify_by_doc_hash, verify_by_file
 from api.services.zkproof import generate_proof_stub
 
@@ -254,6 +256,14 @@ async def simple_document_ingest(
         :class:`SimpleIngestionResponse` with numbered steps and outcome.
     """
     file_bytes = await file.read()
+    settings = get_settings()
+    if len(file_bytes) > settings.max_upload_bytes:
+        max_mb = settings.max_upload_bytes // 1024 // 1024
+        raise HTTPException(
+            status_code=413,
+            detail=f"File exceeds maximum size of {max_mb} MB.",
+        )
+    validate_file_magic(file_bytes, file.content_type or "application/octet-stream")
     return await ingest_document(
         file_bytes=file_bytes,
         filename=file.filename or "upload",
@@ -296,6 +306,14 @@ async def simple_document_verify(
     """
     if file is not None and file.filename:
         file_bytes = await file.read()
+        settings = get_settings()
+        if len(file_bytes) > settings.max_upload_bytes:
+            max_mb = settings.max_upload_bytes // 1024 // 1024
+            raise HTTPException(
+                status_code=413,
+                detail=f"File exceeds maximum size of {max_mb} MB.",
+            )
+        validate_file_magic(file_bytes, file.content_type or "application/octet-stream")
         return await verify_by_file(
             file_bytes=file_bytes,
             filename=file.filename,

@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="en" data-theme="terminal">
 <head>
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no,viewport-fit=cover"/>
@@ -11,7 +11,7 @@
 <link rel="icon" href="/static/icon.svg" type="image/svg+xml"/>
 <link rel="apple-touch-icon" href="/static/icon-192.png"/>
 <link rel="preconnect" href="https://fonts.googleapis.com"/>
-<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@300;400;500;700&family=Rajdhani:wght@400;500;600;700&display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@300;400;500;700&family=Rajdhani:wght@400;500;600;700&family=Share+Tech+Mono&display=swap" rel="stylesheet"/>
 <style>
 /* ─────────────────────────────────────────────
    DESIGN TOKENS — Electric Navy / Cyan Hacker
@@ -21,6 +21,7 @@
   --surface-1:   #0b1221;
   --surface-2:   #101827;
   --surface-3:   #18263a;
+  --surface-muted: #0b1221;
   --accent:      #00e5ff;
   --accent-dim:  #0099b3;
   --accent-glow: rgba(0,229,255,0.15);
@@ -31,6 +32,7 @@
   --err-soft:    rgba(255,23,68,0.12);
   --warn:        #ffab00;
   --warn-soft:   rgba(255,171,0,0.12);
+  --text:        #e8f4ff;
   --text-hi:     #e8f4ff;
   --text-md:     #8baac8;
   --text-lo:     #3d5a78;
@@ -41,7 +43,7 @@
   --nav-h:       64px;
   --header-h:    56px;
   --font-ui:     'Rajdhani', sans-serif;
-  --font-mono:   'JetBrains Mono', monospace;
+  --font-mono:   'JetBrains Mono', 'Share Tech Mono', monospace;
   --radius:      10px;
   --radius-sm:   6px;
   --radius-lg:   16px;
@@ -49,7 +51,7 @@
 
 /* ─── Reset ─── */
 *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; -webkit-tap-highlight-color: transparent; }
-html { background: var(--bg); height: 100%; overflow-x: hidden; }
+html { background: var(--bg); color: var(--text); height: 100%; overflow-x: hidden; }
 body {
   font-family: var(--font-ui);
   font-size: 15px;
@@ -637,9 +639,28 @@ input[type="checkbox"] {
   pointer-events: none;
 }
 .shard-row:active::after { opacity: 1; }
+
+/* ─── CRT Scanlines Overlay ─── */
+.crt-overlay {
+  pointer-events: none;
+  position: fixed;
+  top: 0; left: 0; right: 0; bottom: 0;
+  z-index: 9999;
+  background: repeating-linear-gradient(
+    0deg,
+    rgba(0,0,0,0.03) 0px,
+    rgba(0,0,0,0.03) 1px,
+    transparent 1px,
+    transparent 2px
+  );
+  opacity: 0.4;
+}
 </style>
 </head>
 <body>
+
+<!-- ── CRT SCANLINES ── -->
+<div class="crt-overlay"></div>
 
 <!-- ── MATRIX CANVAS ── -->
 <canvas id="matrix-canvas"></canvas>
@@ -678,9 +699,11 @@ input[type="checkbox"] {
   </div>
   <div class="header-actions">
     <div class="color-picker">
-      <div class="color-dot active" data-color="cyan"  style="background:#00e5ff" onclick="setColorScheme('cyan')"  title="Cyan"></div>
-      <div class="color-dot"        data-color="green" style="background:#00e676" onclick="setColorScheme('green')" title="Green"></div>
-      <div class="color-dot"        data-color="amber" style="background:#ffab00" onclick="setColorScheme('amber')" title="Amber"></div>
+      <div class="color-dot active" data-color="cyan"  style="background:#00e5ff" onclick="setColorScheme('cyan')"  title="Cyan">CYAN</div>
+      <div class="color-dot"        data-color="green" style="background:#00ff41" onclick="setColorScheme('green')" title="GREEN">GREEN</div>
+      <div class="color-dot"        data-color="amber" style="background:#ffab00" onclick="setColorScheme('amber')" title="AMBER">AMBER</div>
+      <div class="color-dot"        data-color="blue"  style="background:#448aff" onclick="setColorScheme('blue')"  title="BLUE">BLUE</div>
+      <div class="color-dot"        data-color="white" style="background:#e0e0e0" onclick="setColorScheme('white')" title="WHITE">WHITE</div>
     </div>
     <button class="icon-btn" id="matrixBtn" onclick="toggleMatrix()" title="Matrix rain">⋮</button>
   </div>
@@ -1040,8 +1063,10 @@ input[type="checkbox"] {
 /* ─── Color Schemes ─── */
 var COLOR_SCHEMES = {
   cyan:  { accent:'#00e5ff', ok:'#00e676', err:'#ff1744', glow:'rgba(0,229,255,0.15)', border:'rgba(0,229,255,0.12)', borderHi:'rgba(0,229,255,0.28)', soft:'rgba(0,229,255,0.08)' },
-  green: { accent:'#00e676', ok:'#69ff47', err:'#ff1744', glow:'rgba(0,230,118,0.15)', border:'rgba(0,230,118,0.12)', borderHi:'rgba(0,230,118,0.28)', soft:'rgba(0,230,118,0.08)' },
+  green: { accent:'#00ff41', ok:'#69ff47', err:'#ff1744', glow:'rgba(0,255,65,0.15)', border:'rgba(0,255,65,0.12)', borderHi:'rgba(0,255,65,0.28)', soft:'rgba(0,255,65,0.08)' },
   amber: { accent:'#ffab00', ok:'#c6ff00', err:'#ff3d00', glow:'rgba(255,171,0,0.15)',  border:'rgba(255,171,0,0.12)',  borderHi:'rgba(255,171,0,0.28)',  soft:'rgba(255,171,0,0.08)'  },
+  blue:  { accent:'#448aff', ok:'#69f0ae', err:'#ff1744', glow:'rgba(68,138,255,0.15)', border:'rgba(68,138,255,0.12)', borderHi:'rgba(68,138,255,0.28)', soft:'rgba(68,138,255,0.08)' },
+  white: { accent:'#e0e0e0', ok:'#a5d6a7', err:'#ef5350', glow:'rgba(224,224,224,0.15)', border:'rgba(224,224,224,0.12)', borderHi:'rgba(224,224,224,0.28)', soft:'rgba(224,224,224,0.08)' },
 };
 
 function setColorScheme(name) {
