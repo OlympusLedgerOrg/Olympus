@@ -136,8 +136,8 @@ class TestHtmlSanitizationHardening:
         assert b"innerTail" not in result
 
     def test_rejects_deeply_nested_html(self):
-        """HTML deeper than lxml's default depth limit should be rejected."""
-        depth = 300
+        """HTML deeper than lxml's default depth limit (256) should be rejected."""
+        depth = 300  # lxml's default max depth is 256 when huge_tree=False
         inner = "<div>" * depth + "ok" + "</div>" * depth
         html = f"<html><body>{inner}</body></html>".encode()
         with pytest.raises(CanonicalizationError, match="HTML Parse Failure"):

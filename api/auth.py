@@ -289,14 +289,17 @@ def _create_rate_limit_backend() -> MemoryRateLimitBackend | RedisRateLimitBacke
 
     # Warn if memory backend is used with multiple workers
     workers = os.environ.get("WEB_CONCURRENCY", "")
-    if workers and int(workers) > 1:
-        logger.warning(
-            "RATE_LIMIT_BACKEND=memory with WEB_CONCURRENCY=%s — "
-            "rate limits are per-process; effective limit is %s× configured value. "
-            "Consider switching to RATE_LIMIT_BACKEND=redis for shared state.",
-            workers,
-            workers,
-        )
+    try:
+        if workers and int(workers) > 1:
+            logger.warning(
+                "RATE_LIMIT_BACKEND=memory with WEB_CONCURRENCY=%s — "
+                "rate limits are per-process; effective limit is %s× configured value. "
+                "Consider switching to RATE_LIMIT_BACKEND=redis for shared state.",
+                workers,
+                workers,
+            )
+    except ValueError:
+        pass
 
     return MemoryRateLimitBackend()
 
