@@ -145,19 +145,13 @@ async def test_simple_ingest_duplicate_returns_success(client):
 
 @pytest.mark.asyncio
 async def test_simple_ingest_unsupported_type(client):
-    """POST /ledger/ingest/simple rejects unsupported file types."""
+    """POST /ledger/ingest/simple rejects unsupported file types with HTTP 415."""
     content = b"\x00\x01\x02\x03unsupported binary"
     resp = await client.post(
         "/ledger/ingest/simple",
         files={"file": ("malware.exe", content, "application/octet-stream")},
     )
-    assert resp.status_code == 200
-    data = resp.json()
-    assert data["success"] is False
-    assert data["error_help"] is not None
-    # The failed step should be visible
-    failed_steps = [s for s in data["steps"] if s["status"] == "failed"]
-    assert len(failed_steps) >= 1
+    assert resp.status_code == 415
 
 
 @pytest.mark.asyncio

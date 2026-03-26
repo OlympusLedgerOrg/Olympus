@@ -61,6 +61,7 @@ def canonicalization_provenance(
 # Safety limits — prevent resource exhaustion from malicious inputs
 # ---------------------------------------------------------------------------
 MAX_INPUT_SIZE: int = 256 * 1024 * 1024  # 256 MiB per artifact
+MAX_HTML_BYTES: int = 50 * 1024 * 1024  # 50 MiB maximum for HTML canonicalization
 MAX_JSON_DEPTH: int = 128  # Maximum nesting depth for JSON structures
 MAX_DOCX_ENTRIES: int = 10_000  # Maximum ZIP entries in a DOCX file
 MAX_DOCX_DECOMPRESSED: int = 512 * 1024 * 1024  # 512 MiB total decompressed
@@ -312,9 +313,10 @@ class Canonicalizer:
         if lxml_html is None:
             raise ImportError("lxml required for HTML canonicalization.")
 
-        if len(data) > MAX_INPUT_SIZE:
+        if len(data) > MAX_HTML_BYTES:
             raise CanonicalizationError(
-                f"Input size {len(data)} exceeds limit of {MAX_INPUT_SIZE} bytes"
+                f"HTML document size {len(data)} exceeds maximum canonicalization "
+                f"size of {MAX_HTML_BYTES // 1024 // 1024} MB"
             )
 
         parser = lxml_html.HTMLParser(
@@ -322,7 +324,6 @@ class Canonicalizer:
             remove_pis=True,
             encoding="utf-8",
             recover=False,
-            huge_tree=True,
         )
         try:
             raw_nfc = unicodedata.normalize("NFC", data.decode("utf-8"))

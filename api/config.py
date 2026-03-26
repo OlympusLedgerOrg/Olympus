@@ -34,8 +34,18 @@ class Settings(BaseSettings):
     database_url: str = "sqlite+aiosqlite:///./olympus_foia.db"
     app_title: str = "Olympus FOIA Ledger"
     app_version: str = "0.1.0"
-    cors_origins: str = "*"
+    cors_origins: str = ""  # No default — must be explicitly configured
     default_shard_id: str = "0x4F3A"
+
+    # Trusted proxy IPs/CIDRs for X-Forwarded-For parsing
+    trusted_proxy_ips: list[str] = []  # e.g. ["10.0.0.1", "172.16.0.0/12"]
+
+    # Rate limit backend configuration
+    rate_limit_backend: str = "memory"  # Options: "memory", "redis"
+    rate_limit_redis_url: str = ""
+
+    # Maximum upload file size in bytes (default 256 MB)
+    max_upload_bytes: int = 256 * 1024 * 1024
 
     # Statutory deadlines (business days)
     # NC Public Records: no explicit limit; flag overdue after these thresholds

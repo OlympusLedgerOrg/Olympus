@@ -9,12 +9,13 @@ Start with:
 
 Environment variables (see api/config.py for full list):
     DATABASE_URL  — async SQLAlchemy URL (default: sqlite+aiosqlite:///./olympus_foia.db)
-    CORS_ORIGINS  — comma-separated allowed origins (default: *)
+    CORS_ORIGINS  — comma-separated allowed origins (default: empty; must be configured)
 """
 
 from __future__ import annotations
 
 import logging
+import os
 from contextlib import asynccontextmanager
 from typing import Any
 
@@ -79,15 +80,24 @@ def create_app() -> FastAPI:
         lifespan=lifespan,
     )
 
-    # CORS — wildcard origin must not be combined with credentials
-    origins = [o.strip() for o in settings.cors_origins.split(",")]
-    credentials = "*" not in origins
+    # CORS — restrict origins; no wildcard default (H4)
+    origins = [o.strip() for o in settings.cors_origins.split(",") if o.strip()]
+
+    _env = os.environ.get("OLYMPUS_ENV", "production")
+    if not origins:
+        if _env == "development":
+            origins = ["http://localhost:3000", "http://localhost:8000"]
+            logger.warning("CORS_ORIGINS not set — using localhost defaults for development.")
+        else:
+            origins = []  # No CORS in production unless explicitly configured
+            logger.warning("CORS_ORIGINS not set — cross-origin requests will be rejected.")
+
     app.add_middleware(
         CORSMiddleware,
         allow_origins=origins,
-        allow_credentials=credentials,
-        allow_methods=["*"],
-        allow_headers=["*"],
+        allow_credentials=True,
+        allow_methods=["GET", "POST", "PATCH", "DELETE"],
+        allow_headers=["Authorization", "Content-Type"],
     )
 
     # FOIA routers

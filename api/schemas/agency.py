@@ -4,16 +4,16 @@ Pydantic v2 schemas for agency endpoints.
 
 from __future__ import annotations
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 
 class AgencyBase(BaseModel):
     """Shared fields for agency read/write."""
 
-    name: str
-    short_name: str = ""
-    level: str = "STATE"
-    category: str = ""
+    name: str = Field(..., min_length=1, max_length=200)
+    short_name: str = Field("", max_length=100)
+    level: str = Field("STATE", max_length=50)
+    category: str = Field("", max_length=100)
 
 
 class AgencyCreate(AgencyBase):

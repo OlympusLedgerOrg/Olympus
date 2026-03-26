@@ -9,6 +9,7 @@ is accessible (e.g., via docker-compose or CI service containers).
 import os
 
 import psycopg
+import pytest
 
 
 def pytest_configure(config):
@@ -30,4 +31,21 @@ def pytest_configure(config):
                 cur.execute("SELECT 1")
         os.environ["TEST_DATABASE_URL"] = candidate
     except Exception:
+        pass
+
+
+@pytest.fixture(autouse=True)
+def _reset_rate_limit_state():
+    """Reset the auth module rate-limit backend between tests.
+
+    Prevents rate-limit bucket state from leaking across test functions,
+    which can cause spurious HTTP 429 failures when many tests share the
+    same TestClient peer IP.
+    """
+    yield
+    try:
+        from api.auth import _reset_rate_limit_backend_for_tests
+
+        _reset_rate_limit_backend_for_tests()
+    except ImportError:
         pass
