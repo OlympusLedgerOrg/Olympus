@@ -13,7 +13,16 @@ import blake3
 
 import pytest
 
-from api.services.merkle import MerkleProof, build_tree, generate_proof, verify_proof
+from api.services.merkle import (
+    MerkleProof,
+    _INTERNAL_PREFIX,
+    _LEAF_PREFIX,
+    _blake3_leaf,
+    _blake3_pair,
+    build_tree,
+    generate_proof,
+    verify_proof,
+)
 
 
 def _b3(s: str) -> str:
@@ -31,8 +40,10 @@ class TestBuildTree:
     def test_two_leaves_preserve_order(self):
         a, b = _b3("a"), _b3("b")
         tree = build_tree([a, b], preserve_order=True)
-        # Leaves used in insertion order; compute expected root manually
-        expected = blake3.blake3(bytes.fromhex(a) + bytes.fromhex(b)).hexdigest()
+        # Domain-separated internal node: H(0x01 || a || b)
+        expected = blake3.blake3(
+            _INTERNAL_PREFIX + bytes.fromhex(a) + bytes.fromhex(b)
+        ).hexdigest()
         assert tree.root_hash == expected
 
     def test_four_leaves(self):
@@ -95,14 +106,57 @@ class TestBuildTree:
         assert build_tree(leaves_3).root_hash != build_tree(leaves_2).root_hash
 
     def test_lone_node_is_rehashed_not_promoted(self):
-        """Single-leaf tree root should be H(H(leaf) || H(leaf)), not H(leaf)."""
+        """Single-leaf tree root should be H(0x01 || leaf || leaf), not leaf."""
         leaf = _b3("only_leaf")
         tree = build_tree([leaf])
-        # The root must differ from the raw leaf hash because the lone node
-        # is self-paired: root = BLAKE3(leaf || leaf).
         assert tree.root_hash != leaf
-        expected = blake3.blake3(bytes.fromhex(leaf) + bytes.fromhex(leaf)).hexdigest()
+        # Domain-separated self-pair: H(0x01 || leaf || leaf)
+        expected = blake3.blake3(
+            _INTERNAL_PREFIX + bytes.fromhex(leaf) + bytes.fromhex(leaf)
+        ).hexdigest()
         assert tree.root_hash == expected
+
+    # -------------------------------------------------------------------
+    # Finding #10 — domain separation tests
+    # -------------------------------------------------------------------
+    def test_leaf_and_internal_prefixes_are_distinct(self):
+        assert _LEAF_PREFIX != _INTERNAL_PREFIX
+
+    def test_leaf_hash_differs_from_internal_hash_of_same_bytes(self):
+        data = b"some_leaf_data"
+        leaf = _blake3_leaf(data)
+        # Construct an "internal" hash using the same leaf as both children
+        pseudo_internal = _blake3_pair(leaf, leaf)
+        assert leaf != pseudo_internal, "Leaf and internal node hashes must not collide"
+
+    def test_crafted_leaf_cannot_collide_with_internal_node(self):
+        """No leaf hash should equal any internal node hash in a tree."""
+        leaves_raw = [b"a", b"b", b"c", b"d"]
+        leaf_hashes = [_blake3_leaf(l) for l in leaves_raw]
+        tree = build_tree(leaf_hashes)
+
+        # Collect all internal node hashes from all levels above the leaves
+        internal_nodes: set[str] = set()
+        for level in tree.levels[1:]:
+            internal_nodes.update(level)
+
+        assert not (set(leaf_hashes) & internal_nodes), \
+            "Collision between leaf and internal node — domain separation failed"
+
+    def test_proof_verification_fails_with_wrong_prefix(self):
+        """Old (no-prefix) proof must not verify against new (prefixed) root."""
+        leaf_data = b"test_document"
+        # Old scheme: no prefix
+        old_leaf_hash = blake3.blake3(leaf_data).hexdigest()
+        # New scheme: 0x00 prefix
+        new_leaf_hash = _blake3_leaf(leaf_data)
+
+        new_tree = build_tree([new_leaf_hash])
+        old_tree = build_tree([old_leaf_hash])
+        old_proof = generate_proof(old_leaf_hash, old_tree)
+
+        assert not verify_proof(old_leaf_hash, old_proof, new_tree.root_hash), \
+            "Old-scheme proof must not verify against new-scheme root"
 
 
 class TestGenerateProof:
@@ -133,17 +187,14 @@ class TestVerifyProof:
         leaves = [_b3(s) for s in ["m", "n", "o"]]
         tree = build_tree(leaves)
         proof = generate_proof(leaves[0], tree)
-        # Replace the leaf with a different hash
         tampered_leaf = _b3("tampered")
         assert verify_proof(tampered_leaf, proof, tree.root_hash) is False
 
     def test_tampered_sibling_fails(self):
         leaves = [_b3(s) for s in ["1", "2", "3", "4"]]
         tree = build_tree(leaves)
-        # Use leaf from sorted order (which is what the tree uses)
         leaf = tree.leaf_hashes[0]
         proof = generate_proof(leaf, tree)
-        # Tamper with the first sibling hash
         bad_siblings = [(_b3("evil"), proof.siblings[0][1])] + list(proof.siblings[1:])
         bad_proof = MerkleProof(
             leaf_hash=leaf, root_hash=proof.root_hash, siblings=bad_siblings

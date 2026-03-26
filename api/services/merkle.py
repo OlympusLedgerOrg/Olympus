@@ -9,6 +9,18 @@ log proofs) may pass ``preserve_order=True`` to bypass the sort.
 
 Lone nodes at any level are duplicated and hashed (RFC 6962 / Bitcoin pattern)
 to prevent batching-boundary attacks on the Merkle root.
+
+Domain separation (Finding #10):
+  leaf node:     H(0x00 || leaf_data)
+  internal node: H(0x01 || left_hash || right_hash)
+  self-pair:     H(0x01 || lone_hash || lone_hash)
+
+This is a **breaking change** to all Merkle roots produced by this module.
+Pre-launch determination: no stored proofs exist that reference unprefixed
+roots in a way that cannot be regenerated — all verification paths rebuild
+the tree on demand from ``DocCommit.doc_hash`` values.  Therefore no
+``CANONICAL_VERSION`` bump is required; the existing ``canonical_v2`` version
+covers this change.
 """
 
 from __future__ import annotations
@@ -17,6 +29,12 @@ import warnings
 from dataclasses import dataclass, field
 
 import blake3
+
+# RFC 6962-style domain separation prefixes.
+# Leaf and internal node hashes use distinct single-byte prefixes so that a
+# crafted leaf value can never collide with an internal node hash.
+_LEAF_PREFIX = b"\x00"
+_INTERNAL_PREFIX = b"\x01"
 
 
 @dataclass
@@ -52,9 +70,17 @@ class MerkleProof:
     siblings: list[tuple[str, str]] = field(default_factory=list)
 
 
+def _blake3_leaf(data: bytes) -> str:
+    """Compute a domain-separated leaf hash: ``BLAKE3(0x00 || data)``."""
+    return blake3.blake3(_LEAF_PREFIX + data).hexdigest()
+
+
 def _blake3_pair(left: str, right: str) -> str:
-    """Compute BLAKE3(left_bytes || right_bytes) over hex-encoded inputs."""
-    data = bytes.fromhex(left) + bytes.fromhex(right)
+    """Compute a domain-separated internal node hash.
+
+    ``BLAKE3(0x01 || left_bytes || right_bytes)`` over hex-encoded inputs.
+    """
+    data = _INTERNAL_PREFIX + bytes.fromhex(left) + bytes.fromhex(right)
     return blake3.blake3(data).hexdigest()
 
 
