@@ -93,6 +93,14 @@ class IngestionResult(BaseModel):
     shard_id: str
     content_hash: str = Field(..., description="BLAKE3 content hash (hex)")
     deduplicated: bool = Field(False, description="True if record was already present")
+    idempotent: bool = Field(
+        False,
+        description=(
+            "True when this response returns an existing record instead of "
+            "creating a new one. Callers can use this to distinguish a fresh "
+            "insert from a deduplicated return."
+        ),
+    )
 
 
 class BatchIngestionResponse(BaseModel):
@@ -1048,6 +1056,7 @@ async def ingest_batch(batch: BatchIngestionRequest, request: Request) -> BatchI
                                 shard_id=existing_record["shard_id"],
                                 content_hash=existing_record["content_hash"],
                                 deduplicated=True,
+                                idempotent=True,
                             ),
                         )
                     )
@@ -1120,6 +1129,7 @@ async def ingest_batch(batch: BatchIngestionRequest, request: Request) -> BatchI
                                         shard_id=record.shard_id,
                                         content_hash=content_hash,
                                         deduplicated=True,
+                                        idempotent=True,
                                     ),
                                 )
                             )
