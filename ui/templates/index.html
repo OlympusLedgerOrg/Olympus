@@ -1,1255 +1,1454 @@
 <!DOCTYPE html>
-<html lang="en" data-theme="terminal">
+<html lang="en">
 <head>
-    <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>{{ page_title }}</title>
-    <style>
-        @import url('https://fonts.googleapis.com/css2?family=Share+Tech+Mono&display=swap');
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no,viewport-fit=cover"/>
+<meta name="theme-color" content="#050a14"/>
+<meta name="mobile-web-app-capable" content="yes"/>
+<meta name="apple-mobile-web-app-capable" content="yes"/>
+<title>{{ page_title }}</title>
+<link rel="preconnect" href="https://fonts.googleapis.com"/>
+<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@300;400;500;700&family=Rajdhani:wght@400;500;600;700&display=swap" rel="stylesheet"/>
+<style>
+/* ─────────────────────────────────────────────
+   DESIGN TOKENS — Electric Navy / Cyan Hacker
+───────────────────────────────────────────── */
+:root {
+  --bg:          #050a14;
+  --surface-1:   #0b1221;
+  --surface-2:   #101827;
+  --surface-3:   #18263a;
+  --accent:      #00e5ff;
+  --accent-dim:  #0099b3;
+  --accent-glow: rgba(0,229,255,0.15);
+  --accent-soft: rgba(0,229,255,0.08);
+  --ok:          #00e676;
+  --ok-soft:     rgba(0,230,118,0.12);
+  --err:         #ff1744;
+  --err-soft:    rgba(255,23,68,0.12);
+  --warn:        #ffab00;
+  --warn-soft:   rgba(255,171,0,0.12);
+  --text-hi:     #e8f4ff;
+  --text-md:     #8baac8;
+  --text-lo:     #3d5a78;
+  --border:      rgba(0,229,255,0.12);
+  --border-hi:   rgba(0,229,255,0.28);
+  --shadow:      0 4px 24px rgba(0,0,0,0.5);
+  --shadow-hi:   0 8px 40px rgba(0,229,255,0.08);
+  --nav-h:       64px;
+  --header-h:    56px;
+  --font-ui:     'Rajdhani', sans-serif;
+  --font-mono:   'JetBrains Mono', monospace;
+  --radius:      10px;
+  --radius-sm:   6px;
+  --radius-lg:   16px;
+}
 
-        /* CSS Custom Properties */
-        :root {
-            --bg: #0a0a0a;
-            --surface: #111111;
-            --surface-muted: #1a1a1a;
-            --text: #00ff41;
-            --muted-text: #00cc33;
-            --accent: #00ff41;
-            --border: rgba(0, 255, 65, 0.3);
-            --danger: #ff0040;
-            --danger-text: #ff4466;
-            --glow: 0 0 5px var(--accent);
-            --font: 'Share Tech Mono', monospace;
-        }
+/* ─── Reset ─── */
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; -webkit-tap-highlight-color: transparent; }
+html { background: var(--bg); height: 100%; overflow-x: hidden; }
+body {
+  font-family: var(--font-ui);
+  font-size: 15px;
+  color: var(--text-hi);
+  background: var(--bg);
+  min-height: 100%;
+  padding-bottom: calc(var(--nav-h) + env(safe-area-inset-bottom));
+  overflow-x: hidden;
+}
 
-        *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+/* ─── Boot Screen ─── */
+#boot {
+  position: fixed; inset: 0; z-index: 9999;
+  background: var(--bg);
+  display: flex; flex-direction: column;
+  align-items: center; justify-content: center;
+  gap: 0;
+  transition: opacity .5s ease;
+}
+#boot.fade { opacity: 0; pointer-events: none; }
+.boot-logo {
+  font-family: var(--font-mono);
+  font-size: clamp(9px, 2.5vw, 13px);
+  color: var(--accent);
+  white-space: pre;
+  line-height: 1.15;
+  text-shadow: 0 0 20px var(--accent), 0 0 40px rgba(0,229,255,0.4);
+  letter-spacing: .05em;
+  animation: logoGlow 2s ease-in-out infinite alternate;
+}
+@keyframes logoGlow {
+  from { text-shadow: 0 0 10px var(--accent), 0 0 30px rgba(0,229,255,0.3); }
+  to   { text-shadow: 0 0 20px var(--accent), 0 0 60px rgba(0,229,255,0.6), 0 0 80px rgba(0,229,255,0.2); }
+}
+.boot-log {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--text-md);
+  width: min(400px, 90vw);
+  margin-top: 2rem;
+  height: 140px;
+  overflow: hidden;
+}
+.boot-log-line {
+  opacity: 0;
+  transform: translateX(-8px);
+  transition: opacity .2s, transform .2s;
+  padding: 1px 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.boot-log-line.show { opacity: 1; transform: none; }
+.boot-log-line.ok-line { color: var(--ok); }
+.boot-log-line.ready-line { color: var(--accent); font-weight: 500; }
 
-        body {
-            background: var(--bg);
-            color: var(--text);
-            font-family: var(--font);
-            font-size: 14px;
-            line-height: 1.6;
-            min-height: 100vh;
-            overflow-x: hidden;
-        }
+/* ─── Matrix Canvas ─── */
+#matrix-canvas {
+  position: fixed; inset: 0; z-index: 0;
+  opacity: 0; pointer-events: none;
+  transition: opacity .5s;
+}
+#matrix-canvas.active { opacity: .06; }
 
-        /* CRT Scanlines */
-        #crt-overlay {
-            position: fixed;
-            top: 0; left: 0; right: 0; bottom: 0;
-            pointer-events: none;
-            z-index: 9999;
-            background: repeating-linear-gradient(
-                0deg,
-                transparent,
-                transparent 2px,
-                rgba(0, 0, 0, 0.08) 2px,
-                rgba(0, 0, 0, 0.08) 4px
-            );
-        }
+/* ─── Header ─── */
+#header {
+  position: sticky; top: 0; z-index: 100;
+  height: var(--header-h);
+  background: linear-gradient(180deg, var(--surface-1) 0%, rgba(11,18,33,.97) 100%);
+  border-bottom: 1px solid var(--border);
+  display: flex; align-items: center;
+  padding: 0 1rem;
+  gap: .75rem;
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+}
+.header-icon {
+  width: 32px; height: 32px;
+  border: 1.5px solid var(--accent);
+  border-radius: 8px;
+  display: flex; align-items: center; justify-content: center;
+  font-size: 16px; flex-shrink: 0;
+  box-shadow: 0 0 10px var(--accent-glow);
+}
+.header-title {
+  font-family: var(--font-mono);
+  font-size: 14px;
+  font-weight: 700;
+  color: var(--accent);
+  letter-spacing: .12em;
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.header-node {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--text-lo);
+  white-space: nowrap;
+}
+.header-actions {
+  display: flex; gap: .35rem; align-items: center;
+}
+.icon-btn {
+  width: 36px; height: 36px;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  color: var(--text-md);
+  font-size: 16px;
+  display: flex; align-items: center; justify-content: center;
+  cursor: pointer;
+  transition: all .15s;
+  flex-shrink: 0;
+}
+.icon-btn:active { background: var(--accent-soft); color: var(--accent); }
+.icon-btn.active { background: var(--accent-soft); color: var(--accent); border-color: var(--border-hi); }
 
-        /* Vignette */
-        #vignette-overlay {
-            position: fixed;
-            top: 0; left: 0; right: 0; bottom: 0;
-            pointer-events: none;
-            z-index: 9998;
-            box-shadow: inset 0 0 150px 60px rgba(0, 0, 0, 0.7);
-        }
+/* ─── Banners ─── */
+.banner {
+  margin: .5rem 1rem 0;
+  padding: .6rem .8rem;
+  background: var(--err-soft);
+  border: 1px solid rgba(255,23,68,.3);
+  border-radius: var(--radius-sm);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--err);
+}
 
-        /* Matrix Rain Canvas */
-        #matrix-canvas {
-            position: fixed;
-            top: 0; left: 0;
-            width: 100%; height: 100%;
-            z-index: 0;
-            opacity: 0;
-            pointer-events: none;
-            transition: opacity 0.5s ease;
-        }
-        #matrix-canvas.active { opacity: 0.08; }
+/* ─── Tab Content ─── */
+#app { position: relative; z-index: 1; }
+.tab-panel { display: none; padding: 1rem; animation: fadeIn .2s ease; }
+.tab-panel.active { display: block; }
+@keyframes fadeIn { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
 
-        /* Boot Sequence */
-        #boot-screen {
-            position: fixed;
-            top: 0; left: 0; right: 0; bottom: 0;
-            background: #0a0a0a;
-            z-index: 10000;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            transition: opacity 0.8s ease;
-        }
-        #boot-screen.fade-out { opacity: 0; }
-        #boot-content {
-            max-width: 700px;
-            width: 90%;
-            padding: 2rem;
-        }
-        .boot-line {
-            opacity: 0;
-            white-space: nowrap;
-            overflow: hidden;
-            color: var(--accent);
-            text-shadow: var(--glow);
-            font-size: 13px;
-            line-height: 1.8;
-        }
-        .boot-line.visible { opacity: 1; }
-        .boot-line.title {
-            font-size: 16px;
-            letter-spacing: 0.15em;
-            margin-bottom: 0.25rem;
-        }
-        .boot-line.separator { margin-bottom: 0.5rem; }
-        .boot-ok { color: var(--accent); }
-        .boot-line.ready { margin-top: 0.5rem; }
-        .boot-line.ready.visible { animation: blink 0.8s step-end infinite; }
-        @keyframes blink { 50% { opacity: 0; } }
+/* ─── Bottom Navigation ─── */
+#bottom-nav {
+  position: fixed; bottom: 0; left: 0; right: 0;
+  z-index: 200;
+  height: var(--nav-h);
+  padding-bottom: env(safe-area-inset-bottom);
+  background: linear-gradient(0deg, var(--surface-1) 0%, rgba(11,18,33,.98) 100%);
+  border-top: 1px solid var(--border);
+  display: flex; align-items: stretch;
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+}
+.nav-item {
+  flex: 1;
+  display: flex; flex-direction: column;
+  align-items: center; justify-content: center;
+  gap: 3px;
+  cursor: pointer;
+  padding: .4rem 0;
+  border: none; background: none;
+  color: var(--text-lo);
+  transition: color .15s;
+  position: relative;
+  min-width: 0;
+  -webkit-tap-highlight-color: transparent;
+}
+.nav-item::before {
+  content: '';
+  position: absolute; top: 0; left: 20%; right: 20%; height: 2px;
+  background: var(--accent);
+  border-radius: 0 0 2px 2px;
+  transform: scaleX(0);
+  transition: transform .2s;
+}
+.nav-item.active { color: var(--accent); }
+.nav-item.active::before { transform: scaleX(1); }
+.nav-icon { font-size: 20px; line-height: 1; }
+.nav-label {
+  font-family: var(--font-ui);
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: .06em;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+.nav-badge {
+  position: absolute; top: 6px; right: calc(50% - 18px);
+  background: var(--err); color: white;
+  border-radius: 50%; width: 8px; height: 8px;
+  border: 1.5px solid var(--bg);
+}
 
-        /* Main App */
-        #app {
-            display: none;
-            position: relative;
-            z-index: 1;
-            min-height: 100vh;
-        }
-        #app.visible { display: block; }
+/* ─── Cards ─── */
+.card {
+  background: var(--surface-1);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  margin-bottom: .75rem;
+  overflow: hidden;
+}
+.card-header {
+  display: flex; align-items: center;
+  padding: .75rem 1rem;
+  gap: .6rem;
+  cursor: pointer;
+  border-bottom: 1px solid transparent;
+  transition: background .15s;
+  user-select: none;
+}
+.card-header:active { background: var(--accent-soft); }
+.card-header.open { border-bottom-color: var(--border); }
+.card-icon { font-size: 18px; flex-shrink: 0; }
+.card-title {
+  font-family: var(--font-ui);
+  font-size: 14px;
+  font-weight: 600;
+  letter-spacing: .08em;
+  text-transform: uppercase;
+  color: var(--text-hi);
+  flex: 1;
+}
+.card-chevron {
+  color: var(--text-lo);
+  font-size: 12px;
+  transition: transform .2s;
+  flex-shrink: 0;
+}
+.card-header.open .card-chevron { transform: rotate(180deg); }
+.card-body { display: none; padding: 1rem; }
+.card-body.open { display: block; }
 
-        /* Top Bar */
-        .top-bar {
-            display: flex;
-            align-items: center;
-            justify-content: space-between;
-            padding: 0.5rem 1rem;
-            border-bottom: 1px solid var(--border);
-            background: var(--surface);
-            flex-wrap: wrap;
-            gap: 0.5rem;
-        }
-        .top-bar-left { display: flex; align-items: center; gap: 1rem; }
-        .top-bar-title {
-            font-size: 13px;
-            text-transform: uppercase;
-            letter-spacing: 0.15em;
-            color: var(--accent);
-            text-shadow: var(--glow);
-        }
-        .top-bar-right { display: flex; align-items: center; gap: 0.5rem; flex-wrap: wrap; }
-        .color-btn {
-            background: transparent;
-            border: 1px solid var(--border);
-            color: var(--muted-text);
-            padding: 0.2rem 0.5rem;
-            font-family: var(--font);
-            font-size: 11px;
-            cursor: pointer;
-            text-transform: uppercase;
-            letter-spacing: 0.05em;
-            transition: all 0.2s;
-        }
-        .color-btn:hover, .color-btn.active {
-            border-color: var(--accent);
-            color: var(--accent);
-            text-shadow: var(--glow);
-        }
-        .color-btn.active { background: rgba(0, 255, 65, 0.1); }
-        .matrix-toggle {
-            background: transparent;
-            border: 1px solid var(--border);
-            color: var(--muted-text);
-            padding: 0.2rem 0.5rem;
-            font-family: var(--font);
-            font-size: 11px;
-            cursor: pointer;
-            text-transform: uppercase;
-            transition: all 0.2s;
-        }
-        .matrix-toggle.active {
-            border-color: var(--accent);
-            color: var(--accent);
-            text-shadow: var(--glow);
-        }
+/* ─── Status Chips ─── */
+.chip-row { display: flex; flex-wrap: wrap; gap: .4rem; margin-bottom: .75rem; }
+.chip {
+  display: inline-flex; align-items: center; gap: .3rem;
+  padding: .25rem .6rem;
+  border-radius: 20px;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-weight: 500;
+  border: 1px solid;
+  white-space: nowrap;
+}
+.chip-ok  { background: var(--ok-soft);   color: var(--ok);   border-color: rgba(0,230,118,.3); }
+.chip-err { background: var(--err-soft);  color: var(--err);  border-color: rgba(255,23,68,.3); }
+.chip-warn{ background: var(--warn-soft); color: var(--warn); border-color: rgba(255,171,0,.3); }
+.chip-info{ background: var(--accent-soft); color: var(--accent); border-color: var(--border-hi); }
 
-        /* Tab Navigation */
-        .tab-bar {
-            display: flex;
-            border-bottom: 1px solid var(--border);
-            background: var(--bg);
-            overflow-x: auto;
-        }
-        .tab-btn {
-            background: transparent;
-            border: none;
-            border-bottom: 2px solid transparent;
-            color: var(--muted-text);
-            padding: 0.6rem 1.2rem;
-            font-family: var(--font);
-            font-size: 13px;
-            cursor: pointer;
-            text-transform: uppercase;
-            letter-spacing: 0.1em;
-            white-space: nowrap;
-            transition: all 0.2s;
-        }
-        .tab-btn::before { content: '> '; opacity: 0.4; }
-        .tab-btn:hover {
-            color: var(--accent);
-            background: rgba(0, 255, 65, 0.03);
-        }
-        .tab-btn.active {
-            color: var(--accent);
-            border-bottom-color: var(--accent);
-            text-shadow: var(--glow);
-        }
-        .tab-btn.active::before { opacity: 1; }
+/* ─── Shard List ─── */
+.shard-row {
+  background: var(--surface-2);
+  border-radius: var(--radius-sm);
+  padding: .7rem .8rem;
+  margin-bottom: .5rem;
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: .25rem .75rem;
+  align-items: start;
+}
+.shard-id {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--accent);
+  font-weight: 500;
+  grid-column: 1;
+}
+.shard-status { grid-column: 2; display: flex; gap: .3rem; align-items: center; }
+.shard-meta {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--text-md);
+  grid-column: 1 / -1;
+  word-break: break-all;
+}
+.shard-history {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--text-lo);
+  grid-column: 1 / -1;
+  margin-top: .25rem;
+}
 
-        /* Tab Content */
-        .tab-panel { display: none; padding: 1.5rem; max-width: 1100px; }
-        .tab-panel.active { display: block; }
+/* ─── Forms ─── */
+.form-group { margin-bottom: .75rem; }
+.form-label {
+  display: block;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  font-weight: 500;
+  color: var(--text-md);
+  letter-spacing: .1em;
+  text-transform: uppercase;
+  margin-bottom: .35rem;
+}
+.form-input,
+.form-textarea,
+.form-select {
+  width: 100%;
+  background: var(--surface-2);
+  border: 1px solid var(--border-hi);
+  border-radius: var(--radius-sm);
+  color: var(--text-hi);
+  font-family: var(--font-mono);
+  font-size: 13px;
+  padding: .75rem .8rem;
+  outline: none;
+  transition: border-color .15s, box-shadow .15s;
+  -webkit-appearance: none;
+  appearance: none;
+}
+.form-input:focus,
+.form-textarea:focus,
+.form-select:focus {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-glow);
+}
+.form-input::placeholder,
+.form-textarea::placeholder { color: var(--text-lo); }
+.form-textarea { min-height: 90px; resize: vertical; }
+.form-select { cursor: pointer; }
+.form-select option { background: var(--surface-2); }
 
-        /* Section Headers */
-        .section-title {
-            font-size: 14px;
-            text-transform: uppercase;
-            letter-spacing: 0.15em;
-            color: var(--accent);
-            text-shadow: var(--glow);
-            margin-bottom: 0.75rem;
-            border-bottom: 1px solid var(--border);
-            padding-bottom: 0.5rem;
-        }
-        .section-block { margin-bottom: 2rem; }
+input[type="file"] {
+  width: 100%;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--text-md);
+  background: var(--surface-2);
+  border: 1px dashed var(--border-hi);
+  border-radius: var(--radius-sm);
+  padding: .75rem .8rem;
+  cursor: pointer;
+}
+input[type="datetime-local"] {
+  color-scheme: dark;
+}
+input[type="checkbox"] {
+  accent-color: var(--accent);
+  width: 18px; height: 18px;
+  cursor: pointer;
+  flex-shrink: 0;
+}
 
-        /* Banners */
-        .banner {
-            background: rgba(255, 0, 64, 0.1);
-            border: 1px solid var(--danger);
-            color: var(--danger-text);
-            padding: 0.6rem 1rem;
-            margin-bottom: 0.75rem;
-            font-size: 13px;
-        }
-        .banner::before { content: '[!] '; font-weight: bold; }
+/* ─── Buttons ─── */
+.btn {
+  display: inline-flex; align-items: center; justify-content: center;
+  gap: .4rem;
+  padding: .75rem 1.25rem;
+  border-radius: var(--radius-sm);
+  font-family: var(--font-ui);
+  font-size: 14px;
+  font-weight: 600;
+  letter-spacing: .06em;
+  text-transform: uppercase;
+  cursor: pointer;
+  border: 1px solid;
+  transition: all .15s;
+  min-height: 48px;
+  white-space: nowrap;
+  -webkit-tap-highlight-color: transparent;
+}
+.btn-primary {
+  background: var(--accent);
+  color: var(--bg);
+  border-color: var(--accent);
+  box-shadow: 0 0 20px rgba(0,229,255,0.25);
+}
+.btn-primary:active { background: var(--accent-dim); box-shadow: none; transform: scale(.98); }
+.btn-secondary {
+  background: var(--surface-2);
+  color: var(--accent);
+  border-color: var(--border-hi);
+}
+.btn-secondary:active { background: var(--accent-soft); }
+.btn-danger {
+  background: var(--err-soft);
+  color: var(--err);
+  border-color: rgba(255,23,68,.35);
+}
+.btn-danger:active { background: rgba(255,23,68,.25); }
+.btn:disabled { opacity: .4; cursor: not-allowed; }
+.btn-block { width: 100%; }
+.btn-row { display: flex; gap: .5rem; flex-wrap: wrap; margin-top: .75rem; }
+.btn-row .btn { flex: 1; }
 
-        /* Tables */
-        table { width: 100%; border-collapse: collapse; margin-bottom: 1rem; font-size: 13px; }
-        th, td { text-align: left; padding: 0.4rem 0.75rem; border-bottom: 1px solid var(--border); }
-        th { color: var(--accent); text-transform: uppercase; font-size: 11px; letter-spacing: 0.1em; }
-        td { color: var(--text); }
-        .ok { color: var(--accent); }
-        .bad { color: var(--danger); }
+/* ─── Output Blocks ─── */
+.output-block {
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: .75rem .8rem;
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+  color: var(--text-md);
+  white-space: pre-wrap;
+  word-break: break-all;
+  overflow: auto;
+  max-height: 320px;
+  margin-top: .75rem;
+  line-height: 1.6;
+  border-left: 3px solid var(--border);
+  display: none;
+}
+.output-block.visible { display: block; }
+.output-block.success {
+  border-left-color: var(--ok);
+  background: linear-gradient(135deg, var(--ok-soft) 0%, var(--surface-2) 40%);
+  color: var(--text-hi);
+}
+.output-block.error {
+  border-left-color: var(--err);
+  background: linear-gradient(135deg, var(--err-soft) 0%, var(--surface-2) 40%);
+  color: var(--err);
+}
+.output-block.loading { display: block; color: var(--text-lo); }
 
-        /* Forms */
-        .form-group { margin-bottom: 1rem; }
-        .form-group label {
-            display: block;
-            font-size: 11px;
-            text-transform: uppercase;
-            letter-spacing: 0.1em;
-            color: var(--muted-text);
-            margin-bottom: 0.3rem;
-        }
-        input[type="text"],
-        input[type="number"],
-        input[type="datetime-local"],
-        input[type="file"],
-        textarea,
-        select {
-            width: 100%;
-            max-width: 500px;
-            background: var(--bg);
-            border: 1px solid var(--border);
-            color: var(--text);
-            padding: 0.5rem 0.75rem;
-            font-family: var(--font);
-            font-size: 13px;
-            outline: none;
-            transition: border-color 0.2s;
-        }
-        input:focus, textarea:focus, select:focus {
-            border-color: var(--accent);
-            box-shadow: 0 0 5px rgba(0, 255, 65, 0.2);
-        }
-        textarea { min-height: 120px; resize: vertical; }
-        input[type="file"] { padding: 0.4rem; }
-        input[type="file"]::file-selector-button {
-            background: transparent;
-            color: var(--accent);
-            border: 1px solid var(--accent);
-            padding: 0.3rem 0.6rem;
-            font-family: var(--font);
-            font-size: 12px;
-            cursor: pointer;
-            text-transform: uppercase;
-            margin-right: 0.5rem;
-        }
+/* ─── Section Check List (Redact) ─── */
+.section-check-list { list-style: none; margin-top: .5rem; }
+.section-check-list li {
+  display: flex; align-items: flex-start; gap: .6rem;
+  padding: .6rem .5rem;
+  border-bottom: 1px solid var(--border);
+}
+.section-check-list li:last-child { border-bottom: none; }
+.section-check-list label {
+  display: flex; align-items: flex-start; gap: .6rem;
+  cursor: pointer; flex: 1; font-family: var(--font-mono); font-size: 12px;
+}
+.section-check-list .section-text { color: var(--text-md); line-height: 1.5; }
+.section-check-list [data-idx] { color: var(--accent); flex-shrink: 0; font-size: 10px; padding-top: 2px; }
 
-        /* Buttons */
-        button, .btn {
-            background: transparent;
-            color: var(--accent);
-            border: 1px solid var(--accent);
-            padding: 0.5rem 1rem;
-            font-family: var(--font);
-            font-size: 13px;
-            text-transform: uppercase;
-            cursor: pointer;
-            letter-spacing: 0.1em;
-            transition: all 0.15s;
-            text-shadow: var(--glow);
-        }
-        button:hover, .btn:hover {
-            background: var(--accent);
-            color: var(--bg);
-            text-shadow: none;
-        }
-        button:disabled { opacity: 0.3; cursor: not-allowed; }
-        button:disabled:hover { background: transparent; color: var(--accent); }
-        .btn-danger { border-color: var(--danger); color: var(--danger); text-shadow: 0 0 5px var(--danger); }
-        .btn-danger:hover { background: var(--danger); color: var(--bg); }
-        .btn-row { display: flex; gap: 0.5rem; flex-wrap: wrap; margin-top: 0.5rem; }
+/* ─── Snackbar ─── */
+#snackbar {
+  position: fixed; bottom: calc(var(--nav-h) + env(safe-area-inset-bottom) + .75rem);
+  left: 1rem; right: 1rem; z-index: 500;
+  background: var(--surface-3);
+  border: 1px solid var(--border-hi);
+  border-radius: var(--radius-sm);
+  padding: .75rem 1rem;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--text-hi);
+  box-shadow: var(--shadow);
+  transform: translateY(120%);
+  transition: transform .25s cubic-bezier(.34,1.56,.64,1);
+  display: flex; align-items: center; gap: .5rem;
+}
+#snackbar.show { transform: translateY(0); }
+#snackbar.snack-ok  { border-color: rgba(0,230,118,.5); }
+#snackbar.snack-err { border-color: rgba(255,23,68,.5); }
 
-        /* Output Blocks */
-        .output-block {
-            background: var(--bg);
-            border-left: 3px solid var(--accent);
-            padding: 1rem;
-            font-family: var(--font);
-            font-size: 13px;
-            white-space: pre-wrap;
-            word-break: break-all;
-            overflow-x: auto;
-            text-shadow: var(--glow);
-            margin-top: 0.75rem;
-            min-height: 2rem;
-            max-height: 500px;
-            overflow-y: auto;
-        }
-        .output-block.error { border-left-color: var(--danger); color: var(--danger-text); }
-        .output-block.success { border-left-color: var(--accent); color: var(--accent); }
-        .output-block:empty::before { content: 'Awaiting input...'; opacity: 0.3; }
+/* ─── Summary Stats Row ─── */
+.stats-row {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: .5rem;
+  margin-bottom: .75rem;
+}
+.stat-card {
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: .6rem .7rem;
+  text-align: center;
+}
+.stat-value {
+  font-family: var(--font-mono);
+  font-size: 20px;
+  font-weight: 700;
+  color: var(--accent);
+  display: block;
+  line-height: 1.1;
+}
+.stat-label {
+  font-family: var(--font-mono);
+  font-size: 9px;
+  color: var(--text-lo);
+  letter-spacing: .1em;
+  text-transform: uppercase;
+  margin-top: .15rem;
+  display: block;
+}
 
-        /* Section Checkbox List */
-        .section-check-list { list-style: none; margin: 0.5rem 0; }
-        .section-check-list li { padding: 0.3rem 0; border-bottom: 1px solid rgba(0, 255, 65, 0.08); }
-        .section-check-list label { cursor: pointer; display: flex; align-items: flex-start; gap: 0.5rem; }
-        .section-check-list input[type="checkbox"] { accent-color: var(--accent); margin-top: 0.25rem; }
-        .section-text { font-size: 12px; color: var(--muted-text); word-break: break-word; }
+/* ─── Connectivity Indicator ─── */
+.conn-row {
+  display: flex; align-items: center; gap: .5rem;
+  padding: .5rem .6rem;
+  background: var(--surface-2);
+  border-radius: var(--radius-sm);
+  margin-bottom: .5rem;
+  font-family: var(--font-mono);
+  font-size: 11px;
+}
+.conn-dot {
+  width: 8px; height: 8px; border-radius: 50%;
+  background: var(--text-lo); flex-shrink: 0;
+  transition: background .3s;
+}
+.conn-dot.ok  { background: var(--ok);  box-shadow: 0 0 6px var(--ok); }
+.conn-dot.err { background: var(--err); box-shadow: 0 0 6px var(--err); }
+.conn-label { color: var(--text-md); }
+.conn-url { color: var(--text-lo); margin-left: auto; font-size: 10px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 50%; }
 
-        /* Expandable Blocks */
-        details { margin-bottom: 0.5rem; border: 1px solid var(--border); padding: 0.5rem 0.75rem; }
-        details summary { cursor: pointer; color: var(--accent); text-transform: uppercase; font-size: 12px; letter-spacing: 0.05em; }
-        details[open] summary { margin-bottom: 0.5rem; }
+/* ─── Hash Verify Result ─── */
+.verify-result {
+  border-radius: var(--radius-sm);
+  padding: .75rem;
+  margin-top: .6rem;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  line-height: 1.6;
+}
+.verify-result.ok  { background: var(--ok-soft);  border: 1px solid rgba(0,230,118,.3); color: var(--ok); }
+.verify-result.err { background: var(--err-soft); border: 1px solid rgba(255,23,68,.3);  color: var(--err); }
 
-        /* Federation Status */
-        .fed-status { padding: 0.5rem; border: 1px solid var(--border); background: var(--surface); margin-bottom: 1rem; }
-        .fed-status .label { font-size: 11px; text-transform: uppercase; color: var(--muted-text); }
+/* ─── Section divider ─── */
+.section-label {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--text-lo);
+  letter-spacing: .12em;
+  text-transform: uppercase;
+  margin: 1rem 0 .5rem;
+  display: flex; align-items: center; gap: .5rem;
+}
+.section-label::after {
+  content: ''; flex: 1; height: 1px; background: var(--border);
+}
 
-        /* Inline Code */
-        code { background: var(--surface); padding: 0.1rem 0.4rem; font-family: var(--font); font-size: 12px; border: 1px solid var(--border); }
+/* ─── Debug detail panels ─── */
+.debug-section {
+  background: var(--surface-1);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  margin-bottom: .6rem;
+  overflow: hidden;
+}
+.debug-section-head {
+  padding: .7rem .9rem;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--accent);
+  letter-spacing: .1em;
+  text-transform: uppercase;
+  background: linear-gradient(90deg, var(--accent-soft) 0%, transparent 100%);
+  border-bottom: 1px solid var(--border);
+  font-weight: 500;
+}
 
-        /* Scrollbar */
-        ::-webkit-scrollbar { width: 6px; height: 6px; }
-        ::-webkit-scrollbar-track { background: var(--bg); }
-        ::-webkit-scrollbar-thumb { background: var(--border); }
-        ::-webkit-scrollbar-thumb:hover { background: var(--accent); }
+/* ─── Color scheme picker ─── */
+.color-picker {
+  display: flex; gap: .4rem;
+}
+.color-dot {
+  width: 24px; height: 24px; border-radius: 50%;
+  cursor: pointer; border: 2px solid transparent;
+  transition: all .15s;
+}
+.color-dot:active { transform: scale(.9); }
+.color-dot.active { border-color: white; box-shadow: 0 0 8px currentColor; }
 
-        /* Spinner */
-        .spinner {
-            display: inline-block;
-            width: 12px; height: 12px;
-            border: 2px solid var(--border);
-            border-top-color: var(--accent);
-            border-radius: 50%;
-            animation: spin 0.6s linear infinite;
-            margin-right: 0.4rem;
-            vertical-align: middle;
-        }
-        @keyframes spin { to { transform: rotate(360deg); } }
+/* ─── Responsive desktop ─── */
+@media (min-width: 600px) {
+  .tab-panel { max-width: 640px; margin: 0 auto; }
+  #header { padding: 0 1.5rem; }
+  #bottom-nav { max-width: 640px; left: 50%; transform: translateX(-50%); }
+}
 
-        /* Responsive */
-        @media (max-width: 700px) {
-            .top-bar { flex-direction: column; align-items: flex-start; }
-            .tab-btn { padding: 0.5rem 0.8rem; font-size: 12px; }
-            .tab-panel { padding: 1rem; }
-            input[type="text"], input[type="number"], textarea { max-width: 100%; }
-        }
-    </style>
+/* ─── Spinner ─── */
+@keyframes spin { to { transform: rotate(360deg); } }
+.spinner {
+  display: inline-block; width: 14px; height: 14px;
+  border: 2px solid var(--border-hi);
+  border-top-color: var(--accent);
+  border-radius: 50%;
+  animation: spin .7s linear infinite;
+  vertical-align: middle; margin-right: .4rem;
+}
+
+/* ─── Scroll shimmer on shard blocks ─── */
+.shard-row { position: relative; overflow: hidden; }
+.shard-row::after {
+  content: ''; position: absolute; inset: 0;
+  background: linear-gradient(90deg, transparent 0%, var(--accent-soft) 50%, transparent 100%);
+  opacity: 0;
+  transition: opacity .4s;
+  pointer-events: none;
+}
+.shard-row:active::after { opacity: 1; }
+</style>
 </head>
 <body>
 
-<!-- CRT Scanlines -->
-<div id="crt-overlay"></div>
-<!-- Vignette -->
-<div id="vignette-overlay"></div>
-<!-- Matrix Rain -->
+<!-- ── MATRIX CANVAS ── -->
 <canvas id="matrix-canvas"></canvas>
 
-<!-- BOOT SEQUENCE -->
-<div id="boot-screen">
-    <div id="boot-content">
-        <div class="boot-line title" data-delay="0">OLYMPUS CRYPTOGRAPHIC LEDGER v2.0</div>
-        <div class="boot-line separator" data-delay="200">═══════════════════════════════════════════</div>
-        <div class="boot-line" data-delay="600">[INIT] Loading BLAKE3 hash engine.............. <span class="boot-ok">OK</span></div>
-        <div class="boot-line" data-delay="950">[INIT] Initializing Poseidon BN128 circuit..... <span class="boot-ok">OK</span></div>
-        <div class="boot-line" data-delay="1300">[INIT] Mounting Sparse Merkle Tree............. <span class="boot-ok">OK</span></div>
-        <div class="boot-line" data-delay="1600">[INIT] Verifying Ed25519 key ring.............. <span class="boot-ok">OK</span></div>
-        <div class="boot-line" data-delay="1900">[INIT] Connecting to ledger nodes.............. <span class="boot-ok">OK</span></div>
-        <div class="boot-line" data-delay="2200">[INIT] Chain integrity check................... <span class="boot-ok">OK</span></div>
-        <div class="boot-line ready" data-delay="2600">[BOOT] System ready. Welcome, operator.  █</div>
-    </div>
+<!-- ── BOOT SCREEN ── -->
+<div id="boot">
+  <div class="boot-logo">
+  ██████╗ ██╗  ██╗   ██╗███╗   ███╗██████╗ ██╗   ██╗███████╗
+ ██╔═══██╗██║  ╚██╗ ██╔╝████╗ ████║██╔══██╗██║   ██║██╔════╝
+ ██║   ██║██║   ╚████╔╝ ██╔████╔██║██████╔╝██║   ██║███████╗
+ ██║   ██║██║    ╚██╔╝  ██║╚██╔╝██║██╔═══╝ ██║   ██║╚════██║
+ ╚██████╔╝███████╗██║   ██║ ╚═╝ ██║██║     ╚██████╔╝███████║
+  ╚═════╝ ╚══════╝╚═╝   ╚═╝     ╚═╝╚═╝      ╚═════╝ ╚══════╝</div>
+  <div class="boot-log">
+    <div class="boot-log-line" data-delay="200">[INIT] BLAKE3 hash engine ............... <span style="color:var(--ok)">OK</span></div>
+    <div class="boot-log-line" data-delay="380">[INIT] Ed25519 signing module ........... <span style="color:var(--ok)">OK</span></div>
+    <div class="boot-log-line" data-delay="530">[INIT] Poseidon BN128 circuit ........... <span style="color:var(--ok)">OK</span></div>
+    <div class="boot-log-line" data-delay="670">[INIT] Sparse Merkle Tree forest ........ <span style="color:var(--ok)">OK</span></div>
+    <div class="boot-log-line" data-delay="800">[INIT] Groth16 proof interface .......... <span style="color:var(--ok)">OK</span></div>
+    <div class="boot-log-line" data-delay="920">[INIT] Federation registry .............. <span style="color:var(--ok)">OK</span></div>
+    <div class="boot-log-line" data-delay="1060">[INIT] RFC 3161 timestamp anchors ....... <span style="color:var(--ok)">OK</span></div>
+    <div class="boot-log-line" data-delay="1180">[CONN] API endpoint: {{ api_base }}</div>
+    <div class="boot-log-line ready-line" data-delay="1400">[ OLYMPUS DEBUG CONSOLE — ONLINE ]</div>
+  </div>
 </div>
 
-<!-- MAIN APPLICATION -->
+<!-- ── SNACKBAR ── -->
+<div id="snackbar"><span id="snackbar-text"></span></div>
+
+<!-- ── HEADER ── -->
+<div id="header">
+  <div class="header-icon">⬡</div>
+  <div style="flex:1;min-width:0">
+    <div class="header-title">OLYMPUS</div>
+    <div class="header-node">{{ api_base }}</div>
+  </div>
+  <div class="header-actions">
+    <div class="color-picker">
+      <div class="color-dot active" data-color="cyan"  style="background:#00e5ff" onclick="setColorScheme('cyan')"  title="Cyan"></div>
+      <div class="color-dot"        data-color="green" style="background:#00e676" onclick="setColorScheme('green')" title="Green"></div>
+      <div class="color-dot"        data-color="amber" style="background:#ffab00" onclick="setColorScheme('amber')" title="Amber"></div>
+    </div>
+    <button class="icon-btn" id="matrixBtn" onclick="toggleMatrix()" title="Matrix rain">⋮</button>
+  </div>
+</div>
+
+<!-- ── BANNERS ── -->
+{% for banner in banners %}
+<div class="banner">⚠ {{ banner }}</div>
+{% endfor %}
+
+<!-- ════════════════════════════════════════════════════
+     APP PANELS
+════════════════════════════════════════════════════ -->
 <div id="app">
 
-    <!-- Top Bar -->
-    <div class="top-bar">
-        <div class="top-bar-left">
-            <span class="top-bar-title">◉ {{ page_heading }}</span>
-            <span style="font-size:11px;color:var(--muted-text)">API: <code>{{ api_base }}</code></span>
-        </div>
-        <div class="top-bar-right">
-            <button class="color-btn active" data-color="green" onclick="setColorScheme('green')">[GREEN]</button>
-            <button class="color-btn" data-color="amber" onclick="setColorScheme('amber')">[AMBER]</button>
-            <button class="color-btn" data-color="blue" onclick="setColorScheme('blue')">[BLUE]</button>
-            <button class="color-btn" data-color="white" onclick="setColorScheme('white')">[WHITE]</button>
-            <button class="matrix-toggle" id="matrixToggle" onclick="toggleMatrix()">[MATRIX: OFF]</button>
-        </div>
+<!-- ───────── STATUS ───────── -->
+<div class="tab-panel active" id="tab-status">
+
+  <!-- Stats row -->
+  <div class="stats-row">
+    <div class="stat-card">
+      <span class="stat-value" id="stat-shards">{{ shards|length }}</span>
+      <span class="stat-label">Shards</span>
     </div>
-
-    <!-- Tab Bar -->
-    <div class="tab-bar">
-        <button class="tab-btn active" data-tab="status">STATUS</button>
-        <button class="tab-btn" data-tab="commit">COMMIT</button>
-        <button class="tab-btn" data-tab="redact">REDACT</button>
-        <button class="tab-btn" data-tab="verify">VERIFY</button>
-        <button class="tab-btn" data-tab="inspect">INSPECT</button>
-        {% if show_debug_tools %}<button class="tab-btn" data-tab="debug">DEBUG</button>{% endif %}
+    <div class="stat-card">
+      <span class="stat-value" id="stat-health">
+        {% set bad = [] %}{% for row in shards %}{% if not row.chain_ok or not row.signature_valid %}{% set _ = bad.append(1) %}{% endif %}{% endfor %}
+        {% if bad|length == 0 %}<span style="color:var(--ok)">✓</span>{% else %}<span style="color:var(--err)">{{ bad|length }}</span>{% endif %}
+      </span>
+      <span class="stat-label">Issues</span>
     </div>
-
-    <!-- STATUS TAB -->
-    <div class="tab-panel active" id="tab-status">
-        {% for banner in banners %}
-        <div class="banner">{{ banner }}</div>
-        {% endfor %}
-
-        {% if federation.configured %}
-        <div class="section-block">
-            <h2 class="section-title">▸ Federation Status</h2>
-            <div class="fed-status">
-                <span class="label">Mode:</span> FEDERATED &mdash; Consensus Required
-            </div>
-            <table>
-                <thead>
-                    <tr><th>Shard</th><th>Quorum</th><th>Threshold</th><th>Root</th></tr>
-                </thead>
-                <tbody>
-                    {% for shard in federation.shards %}
-                    <tr>
-                        <td>{{ shard.shard_id }}</td>
-                        <td>{% if shard.quorum_met %}<span class="ok">{{ shard.agreement_count }} node(s)</span>{% else %}<span class="bad">{{ shard.agreement_count }} node(s)</span>{% endif %}</td>
-                        <td>{{ shard.quorum }}</td>
-                        <td><code>{{ shard.agreement_root }}</code></td>
-                    </tr>
-                    <tr>
-                        <td colspan="4" style="padding-left:2rem;font-size:12px;">
-                            {% for state in shard.states %}
-                            <strong>{{ state.node }}</strong> &mdash;
-                            seq {{ state.latest_seq }},
-                            {{ state.sync_status }},
-                            signature {% if state.signature_valid %}<span class="ok">ok</span>{% else %}<span class="bad">bad</span>{% endif %},
-                            chain {% if state.chain_ok %}<span class="ok">ok</span>{% else %}<span class="bad">broken</span>{% endif %}<br>
-                            {% endfor %}
-                        </td>
-                    </tr>
-                    {% endfor %}
-                </tbody>
-            </table>
-        </div>
-        {% endif %}
-
-        <div class="section-block">
-            <h2 class="section-title">▸ Shard Health</h2>
-            <table>
-                <thead>
-                    <tr><th>Shard ID</th><th>Seq</th><th>Root</th><th>Signature</th><th>Chain</th><th>History</th></tr>
-                </thead>
-                <tbody>
-                    {% for row in shards %}
-                    <tr>
-                        <td>{{ row.shard.shard_id }}</td>
-                        <td>{{ row.shard.latest_seq }}</td>
-                        <td><code>{{ row.shard.latest_root }}</code></td>
-                        <td>{% if row.signature_valid %}<span class="ok">✓ valid</span>{% else %}<span class="bad">✗ invalid</span>{% endif %}</td>
-                        <td>{% if row.chain_ok %}<span class="ok">✓ ok</span>{% else %}<span class="bad">✗ broken</span>{% endif %}</td>
-                        <td>
-                            {% for header in row.history %}
-                            <span style="font-size:11px;">seq {{ header.seq }} → <code>{{ header.root_hash }}</code></span><br>
-                            {% endfor %}
-                        </td>
-                    </tr>
-                    {% endfor %}
-                </tbody>
-            </table>
-        </div>
-
-        <div class="section-block">
-            <h2 class="section-title">▸ Connectivity Check</h2>
-            <button onclick="runConnectivityCheck()">[ Run Connectivity Check ]</button>
-            <div id="connectivity-output" class="output-block"></div>
-        </div>
-
-        <div class="section-block">
-            <h2 class="section-title">▸ Hash Verification</h2>
-            <div class="form-group">
-                <label>Content Hash (BLAKE3 hex)</label>
-                <input type="text" id="status-hash-input" placeholder="paste a BLAKE3 hash...">
-            </div>
-            <button onclick="verifyHash()">[ Verify Hash ]</button>
-            <div id="hash-verify-output" class="output-block"></div>
-        </div>
+    <div class="stat-card">
+      <span class="stat-value" id="stat-mode">
+        {% if federation.configured %}<span style="font-size:12px;color:var(--accent)">FED</span>{% else %}<span style="font-size:12px;color:var(--text-lo)">SOLO</span>{% endif %}
+      </span>
+      <span class="stat-label">Mode</span>
     </div>
+  </div>
 
-    <!-- COMMIT TAB -->
-    <div class="tab-panel" id="tab-commit">
-        <div class="section-block">
-            <h2 class="section-title">▸ Document Commit</h2>
-            <div class="form-group">
-                <label>Document ID</label>
-                <input type="text" id="commit-doc-id" placeholder="e.g. GOV-2025-001">
-            </div>
-            <div class="form-group">
-                <label>Version</label>
-                <input type="number" id="commit-version" value="1" min="1">
-            </div>
-            <div class="form-group">
-                <label>File</label>
-                <input type="file" id="commit-file">
-            </div>
-            <div class="form-group">
-                <label>Release At (optional, ISO 8601)</label>
-                <input type="datetime-local" id="commit-release-at">
-            </div>
-            <div class="form-group">
-                <label>Recipient Keys (optional, one per line)</label>
-                <textarea id="commit-recipient-keys" rows="3" placeholder="paste public keys, one per line..."></textarea>
-            </div>
-            <button onclick="executeCommit()">[ Execute Commit ]</button>
-            <div id="commit-output" class="output-block"></div>
-        </div>
+  <!-- Connectivity -->
+  <div class="section-label">Connectivity</div>
+  <div class="conn-row">
+    <div class="conn-dot" id="conn-dot"></div>
+    <span class="conn-label" id="conn-label">Checking…</span>
+    <span class="conn-url">{{ api_base }}</span>
+  </div>
+  <button class="btn btn-secondary btn-block" onclick="runConnectivityCheck()" style="margin-bottom:.75rem">
+    ↺ &nbsp;Run Connectivity Check
+  </button>
+
+  {% if federation.configured %}
+  <!-- Federation -->
+  <div class="section-label">Federation</div>
+  {% for shard in federation.shards %}
+  <div class="card" style="margin-bottom:.5rem">
+    <div style="padding:.7rem .9rem;display:flex;align-items:center;gap:.6rem;border-bottom:1px solid var(--border)">
+      <span style="font-family:var(--font-mono);font-size:12px;color:var(--accent);flex:1">{{ shard.shard_id }}</span>
+      {% if shard.quorum_met %}
+        <span class="chip chip-ok">✓ QUORUM {{ shard.agreement_count }}</span>
+      {% else %}
+        <span class="chip chip-err">✗ NO QUORUM {{ shard.agreement_count }}</span>
+      {% endif %}
     </div>
-
-    <!-- REDACT TAB -->
-    <div class="tab-panel" id="tab-redact">
-        <div class="section-block">
-            <h2 class="section-title">▸ Redaction Workflow</h2>
-            <p style="font-size:12px;color:var(--muted-text);margin-bottom:1rem;">Step 1: Load document sections. Step 2: Select sections to reveal. Step 3: Execute redaction.</p>
-            <div class="form-group">
-                <label>Document ID</label>
-                <input type="text" id="redact-doc-id" placeholder="e.g. GOV-2025-001">
-            </div>
-            <div class="form-group">
-                <label>Version</label>
-                <input type="number" id="redact-version" value="1" min="1">
-            </div>
-            <div class="btn-row">
-                <button onclick="loadSections()">[ Load Sections ]</button>
-                <button onclick="executeRedact()" id="redact-execute-btn" disabled>[ Execute Redaction ]</button>
-            </div>
-            <div id="sections-list" style="margin-top:1rem;"></div>
-            <div id="redact-output" class="output-block"></div>
-        </div>
+    <div style="padding:.6rem .9rem;font-family:var(--font-mono);font-size:10px;color:var(--text-lo)">
+      THRESHOLD: {{ shard.quorum }} &nbsp;·&nbsp; ROOT: {{ shard.agreement_root[:16] }}…
     </div>
-
-    <!-- VERIFY TAB -->
-    <div class="tab-panel" id="tab-verify">
-        <div class="section-block">
-            <h2 class="section-title">▸ Proof Bundle Verification</h2>
-            <div class="form-group">
-                <label>Paste JSON Proof Bundle</label>
-                <textarea id="verify-bundle" rows="12" placeholder='{"smt_proof": {...}, "zk_proof": {...}, ...}'></textarea>
-            </div>
-            <button onclick="executeVerify()">[ Execute Verify ]</button>
-            <div id="verify-output" class="output-block"></div>
-        </div>
+    {% for state in shard.states %}
+    <div style="padding:.4rem .9rem;display:flex;align-items:center;gap:.5rem;border-top:1px solid var(--border);font-family:var(--font-mono);font-size:11px">
+      <span style="color:var(--text-hi);flex:1">{{ state.node }}</span>
+      <span class="chip {% if state.signature_valid %}chip-ok{% else %}chip-err{% endif %}">SIG</span>
+      <span class="chip {% if state.chain_ok %}chip-ok{% else %}chip-err{% endif %}">CHAIN</span>
     </div>
+    {% endfor %}
+  </div>
+  {% endfor %}
+  {% endif %}
 
-    <!-- INSPECT TAB -->
-    <div class="tab-panel" id="tab-inspect">
-        <div class="section-block">
-            <h2 class="section-title">▸ Proof Bundle Inspector</h2>
-            <div class="form-group">
-                <label>Paste JSON Proof Bundle</label>
-                <textarea id="inspect-bundle" rows="8" placeholder='{"smt_proof": {...}, "zk_public_inputs": {...}, ...}'></textarea>
-            </div>
-            <button onclick="inspectBundle()">[ Inspect Bundle ]</button>
-            <div id="inspect-output" class="output-block"></div>
-        </div>
-
-        <div class="section-block">
-            <h2 class="section-title">▸ Constants Provenance</h2>
-            <button onclick="loadProvenance()">[ Load Provenance Data ]</button>
-            <div id="provenance-output" class="output-block"></div>
-        </div>
-
-        <div class="section-block">
-            <h2 class="section-title">▸ Circuit Constraints</h2>
-            <button onclick="loadCircuits()">[ Load Circuit Constraints ]</button>
-            <div id="circuits-output" class="output-block"></div>
-        </div>
+  <!-- Shard health -->
+  <div class="section-label">Shard Health</div>
+  {% for row in shards %}
+  <div class="shard-row">
+    <span class="shard-id">{{ row.shard.shard_id }}</span>
+    <div class="shard-status">
+      {% if row.signature_valid %}<span class="chip chip-ok">SIG</span>{% else %}<span class="chip chip-err">SIG</span>{% endif %}
+      {% if row.chain_ok %}<span class="chip chip-ok">CHAIN</span>{% else %}<span class="chip chip-err">CHAIN</span>{% endif %}
     </div>
-
-    <!-- DEBUG TAB -->
-    {% if show_debug_tools %}
-    <div class="tab-panel" id="tab-debug">
-        <div class="section-block">
-            <h2 class="section-title">▸ Proof Explorer</h2>
-            <div class="form-group">
-                <label>Shard ID (hex)</label>
-                <input type="text" id="debug-shard-id" placeholder="e.g. a1b2c3...">
-            </div>
-            <div class="form-group">
-                <label>Record Type</label>
-                <input type="text" id="debug-record-type" placeholder="e.g. document">
-            </div>
-            <div class="form-group">
-                <label>Record ID</label>
-                <input type="text" id="debug-record-id" placeholder="e.g. GOV-2025-001">
-            </div>
-            <div class="form-group">
-                <label>Version</label>
-                <input type="number" id="debug-version" value="1" min="1">
-            </div>
-            <button onclick="proofExplorer()">[ Explore Proof ]</button>
-            <div id="proof-explorer-output" class="output-block"></div>
-        </div>
-
-        <div class="section-block">
-            <h2 class="section-title">▸ SMT Diff Viewer</h2>
-            <div class="form-group">
-                <label>Shard ID (hex)</label>
-                <input type="text" id="diff-shard-id" placeholder="e.g. a1b2c3...">
-            </div>
-            <div class="form-group">
-                <label>From Sequence</label>
-                <input type="number" id="diff-from-seq" value="0" min="0">
-            </div>
-            <div class="form-group">
-                <label>To Sequence</label>
-                <input type="number" id="diff-to-seq" value="1" min="0">
-            </div>
-            <button onclick="loadStateDiff()">[ Load Diff ]</button>
-            <div id="diff-output" class="output-block"></div>
-        </div>
-
-        <div class="section-block">
-            <h2 class="section-title">▸ Embargo Management</h2>
-            <div class="form-group">
-                <label>Document ID</label>
-                <input type="text" id="embargo-doc-id" placeholder="e.g. GOV-2025-001">
-            </div>
-            <div class="form-group">
-                <label>Version</label>
-                <input type="number" id="embargo-version" value="1" min="1">
-            </div>
-            <div class="btn-row">
-                <button onclick="loadEmbargo()">[ Load Embargo ]</button>
-                <button onclick="saveEmbargo()">[ Save Embargo ]</button>
-                <button class="btn-danger" onclick="revokeEmbargo()">[ Revoke Key ]</button>
-            </div>
-            <div class="form-group" style="margin-top:1rem;">
-                <label>Release At (optional, ISO 8601)</label>
-                <input type="datetime-local" id="embargo-release-at">
-            </div>
-            <div class="form-group">
-                <label>Recipient Keys (one per line)</label>
-                <textarea id="embargo-keys" rows="3" placeholder="paste public keys..."></textarea>
-            </div>
-            <div class="form-group">
-                <label>Key to Revoke</label>
-                <input type="text" id="embargo-revoke-key" placeholder="paste key to revoke...">
-            </div>
-            <div id="embargo-output" class="output-block"></div>
-        </div>
-
-        <div class="section-block">
-            <h2 class="section-title">▸ Shard Data</h2>
-            <table>
-                <thead>
-                    <tr><th>Shard ID</th><th>Seq</th><th>Root</th><th>Signature</th><th>Chain</th></tr>
-                </thead>
-                <tbody>
-                    {% for row in shards %}
-                    <tr>
-                        <td>{{ row.shard.shard_id }}</td>
-                        <td>{{ row.shard.latest_seq }}</td>
-                        <td><code>{{ row.shard.latest_root }}</code></td>
-                        <td>{% if row.signature_valid %}<span class="ok">✓ valid</span>{% else %}<span class="bad">✗ invalid</span>{% endif %}</td>
-                        <td>{% if row.chain_ok %}<span class="ok">✓ ok</span>{% else %}<span class="bad">✗ broken</span>{% endif %}</td>
-                    </tr>
-                    {% endfor %}
-                </tbody>
-            </table>
-            {% for row in shards %}
-            <details>
-                <summary>Shard Detail: {{ row.shard.shard_id }}</summary>
-                <div style="margin-top:0.5rem;">
-                    <strong>Latest Header:</strong>
-                    {% if row.header %}
-                    <pre style="font-size:12px;margin-top:0.25rem;color:var(--muted-text);">{{ row.header }}</pre>
-                    {% else %}
-                    <span style="color:var(--muted-text);">No header available</span>
-                    {% endif %}
-                    <strong>Ledger Tail:</strong>
-                    {% if row.ledger_tail %}
-                    <pre style="font-size:12px;margin-top:0.25rem;color:var(--muted-text);">{{ row.ledger_tail }}</pre>
-                    {% else %}
-                    <span style="color:var(--muted-text);">No ledger tail available</span>
-                    {% endif %}
-                </div>
-            </details>
-            {% endfor %}
-        </div>
+    <div class="shard-meta">seq {{ row.shard.latest_seq }} · {{ row.shard.latest_root }}</div>
+    {% if row.history %}
+    <div class="shard-history">
+      {% for h in row.history %}↳ seq {{ h.seq }} {{ h.root_hash[:20] }}… {% endfor %}
     </div>
     {% endif %}
+  </div>
+  {% else %}
+  <div style="text-align:center;padding:2rem;font-family:var(--font-mono);font-size:12px;color:var(--text-lo)">
+    No shards registered — API may be unavailable
+  </div>
+  {% endfor %}
+
+  <!-- Hash quick-check -->
+  <div class="section-label">Quick Hash Check</div>
+  <div class="form-group">
+    <label class="form-label">BLAKE3 Fingerprint (64 hex chars)</label>
+    <input class="form-input" type="text" id="status-hash-input" placeholder="Paste a BLAKE3 hash to verify…" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false"/>
+  </div>
+  <button class="btn btn-secondary btn-block" onclick="verifyHash()">🔍 &nbsp;Verify Hash</button>
+  <div id="hash-verify-output" class="output-block"></div>
+</div>
+
+<!-- ───────── COMMIT ───────── -->
+<div class="tab-panel" id="tab-commit">
+  <div class="section-label">Document Commit</div>
+  <div class="card">
+    <div class="card-body open" style="display:block">
+      <div class="form-group">
+        <label class="form-label">Document ID</label>
+        <input class="form-input" type="text" id="commit-doc-id" placeholder="e.g. DOC-2025-001" autocorrect="off" autocapitalize="off"/>
+      </div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:.5rem">
+        <div class="form-group">
+          <label class="form-label">Version</label>
+          <input class="form-input" type="number" id="commit-version" value="1" min="1"/>
+        </div>
+        <div class="form-group">
+          <label class="form-label">Release At</label>
+          <input class="form-input" type="datetime-local" id="commit-release-at"/>
+        </div>
+      </div>
+      <div class="form-group">
+        <label class="form-label">File (.txt or .json)</label>
+        <input type="file" id="commit-file" accept=".txt,.json"/>
+      </div>
+      <div class="form-group">
+        <label class="form-label">Recipient Keys (optional, one per line)</label>
+        <textarea class="form-textarea" id="commit-recipient-keys" placeholder="Paste Ed25519 public keys…" rows="3"></textarea>
+      </div>
+      <button class="btn btn-primary btn-block" onclick="executeCommit()">⬆ &nbsp;Execute Commit</button>
+      <div id="commit-output" class="output-block"></div>
+    </div>
+  </div>
+
+  <div class="section-label">Embargo Management</div>
+  <div class="card">
+    <div class="card-body open" style="display:block">
+      <div style="display:grid;grid-template-columns:2fr 1fr;gap:.5rem">
+        <div class="form-group">
+          <label class="form-label">Document ID</label>
+          <input class="form-input" type="text" id="embargo-doc-id" placeholder="e.g. DOC-2025-001" autocorrect="off" autocapitalize="off"/>
+        </div>
+        <div class="form-group">
+          <label class="form-label">Version</label>
+          <input class="form-input" type="number" id="embargo-version" value="1" min="1"/>
+        </div>
+      </div>
+      <button class="btn btn-secondary btn-block" onclick="loadEmbargo()" style="margin-bottom:.75rem">⬇ &nbsp;Load Embargo State</button>
+      <div class="form-group">
+        <label class="form-label">Release At</label>
+        <input class="form-input" type="datetime-local" id="embargo-release-at"/>
+      </div>
+      <div class="form-group">
+        <label class="form-label">Recipient Keys</label>
+        <textarea class="form-textarea" id="embargo-keys" placeholder="One public key per line…" rows="3"></textarea>
+      </div>
+      <div class="btn-row">
+        <button class="btn btn-secondary" onclick="saveEmbargo()">💾 &nbsp;Save</button>
+        <button class="btn btn-danger" onclick="revokeEmbargo()">✕ &nbsp;Revoke</button>
+      </div>
+      <div class="form-group" style="margin-top:.75rem">
+        <label class="form-label">Key to Revoke</label>
+        <input class="form-input" type="text" id="embargo-revoke-key" placeholder="Paste key to revoke…" autocorrect="off" autocapitalize="off"/>
+      </div>
+      <div id="embargo-output" class="output-block"></div>
+    </div>
+  </div>
+</div>
+
+<!-- ───────── REDACT ───────── -->
+<div class="tab-panel" id="tab-redact">
+  <div class="section-label">Selective Disclosure</div>
+  <div style="font-family:var(--font-mono);font-size:11px;color:var(--text-lo);margin-bottom:.75rem;line-height:1.6">
+    Load a committed document → select sections to reveal → generate ZK proof bundle.<br>
+    <span style="color:var(--accent)">The proof travels. The document stays yours.</span>
+  </div>
+  <div class="card">
+    <div class="card-body open" style="display:block">
+      <div style="display:grid;grid-template-columns:2fr 1fr;gap:.5rem">
+        <div class="form-group">
+          <label class="form-label">Document ID</label>
+          <input class="form-input" type="text" id="redact-doc-id" placeholder="e.g. DOC-2025-001" autocorrect="off" autocapitalize="off"/>
+        </div>
+        <div class="form-group">
+          <label class="form-label">Version</label>
+          <input class="form-input" type="number" id="redact-version" value="1" min="1"/>
+        </div>
+      </div>
+      <button class="btn btn-secondary btn-block" onclick="loadSections()" style="margin-bottom:.75rem">⬇ &nbsp;Load Sections</button>
+      <div id="sections-list"></div>
+      <button class="btn btn-primary btn-block" onclick="executeRedact()" id="redact-execute-btn" disabled>⚡ &nbsp;Generate Proof Bundle</button>
+      <div id="redact-output" class="output-block"></div>
+    </div>
+  </div>
+</div>
+
+<!-- ───────── VERIFY ───────── -->
+<div class="tab-panel" id="tab-verify">
+  <div class="section-label">Proof Bundle Verification</div>
+  <div class="card">
+    <div class="card-body open" style="display:block">
+      <div class="form-group">
+        <label class="form-label">Proof Bundle JSON</label>
+        <textarea class="form-textarea" id="verify-bundle" rows="10" placeholder='{"smt_proof": {...}, "zk_proof": {...}, ...}' autocorrect="off" autocapitalize="off" spellcheck="false"></textarea>
+      </div>
+      <button class="btn btn-primary btn-block" onclick="executeVerify()">✓ &nbsp;Verify Bundle</button>
+      <div id="verify-output" class="output-block"></div>
+    </div>
+  </div>
+</div>
+
+<!-- ───────── DEBUG ───────── -->
+<div class="tab-panel" id="tab-debug">
+
+  <div class="debug-section">
+    <div class="debug-section-head">▸ PROOF BUNDLE INSPECTOR</div>
+    <div style="padding:.8rem">
+      <div class="form-group">
+        <label class="form-label">Proof Bundle JSON</label>
+        <textarea class="form-textarea" id="inspect-bundle" rows="8" placeholder='{"smt_proof": {...}, "zk_public_inputs": {...}, ...}' autocorrect="off" autocapitalize="off" spellcheck="false"></textarea>
+      </div>
+      <button class="btn btn-secondary btn-block" onclick="inspectBundle()">🔬 &nbsp;Inspect Bundle</button>
+      <div id="inspect-output" class="output-block"></div>
+    </div>
+  </div>
+
+  <div class="debug-section">
+    <div class="debug-section-head">▸ CONSTANTS PROVENANCE</div>
+    <div style="padding:.8rem">
+      <div style="font-family:var(--font-mono);font-size:11px;color:var(--text-lo);margin-bottom:.6rem">
+        Poseidon BN128 constants — circomlibjs → Python audit chain
+      </div>
+      <button class="btn btn-secondary btn-block" onclick="loadProvenance()">⬇ &nbsp;Load Provenance Data</button>
+      <div id="provenance-output" class="output-block"></div>
+    </div>
+  </div>
+
+  <div class="debug-section">
+    <div class="debug-section-head">▸ CIRCUIT CONSTRAINTS</div>
+    <div style="padding:.8rem">
+      <button class="btn btn-secondary btn-block" onclick="loadCircuits()">⬇ &nbsp;Load Circuit Constraints</button>
+      <div id="circuits-output" class="output-block"></div>
+    </div>
+  </div>
+
+  <div class="debug-section">
+    <div class="debug-section-head">▸ PROOF EXPLORER</div>
+    <div style="padding:.8rem">
+      <div class="form-group">
+        <label class="form-label">Shard ID</label>
+        <input class="form-input" type="text" id="debug-shard-id" placeholder="hex shard ID" autocorrect="off" autocapitalize="off"/>
+      </div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:.5rem">
+        <div class="form-group">
+          <label class="form-label">Record Type</label>
+          <input class="form-input" type="text" id="debug-record-type" value="document" autocorrect="off" autocapitalize="off"/>
+        </div>
+        <div class="form-group">
+          <label class="form-label">Version</label>
+          <input class="form-input" type="number" id="debug-version" value="1" min="1"/>
+        </div>
+      </div>
+      <div class="form-group">
+        <label class="form-label">Record ID</label>
+        <input class="form-input" type="text" id="debug-record-id" placeholder="e.g. DOC-2025-001" autocorrect="off" autocapitalize="off"/>
+      </div>
+      <button class="btn btn-secondary btn-block" onclick="proofExplorer()">🔍 &nbsp;Explore Proof</button>
+      <div id="proof-explorer-output" class="output-block"></div>
+    </div>
+  </div>
+
+  <div class="debug-section">
+    <div class="debug-section-head">▸ SMT DIFF VIEWER</div>
+    <div style="padding:.8rem">
+      <div class="form-group">
+        <label class="form-label">Shard ID</label>
+        <input class="form-input" type="text" id="diff-shard-id" placeholder="hex shard ID" autocorrect="off" autocapitalize="off"/>
+      </div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:.5rem">
+        <div class="form-group">
+          <label class="form-label">From Seq</label>
+          <input class="form-input" type="number" id="diff-from-seq" value="0" min="0"/>
+        </div>
+        <div class="form-group">
+          <label class="form-label">To Seq</label>
+          <input class="form-input" type="number" id="diff-to-seq" value="1" min="0"/>
+        </div>
+      </div>
+      <button class="btn btn-secondary btn-block" onclick="loadStateDiff()">⬇ &nbsp;Load Diff</button>
+      <div id="diff-output" class="output-block"></div>
+    </div>
+  </div>
+
+  {% if show_debug_tools %}
+  <div class="debug-section">
+    <div class="debug-section-head">▸ SHARD DATA (RAW)</div>
+    <div style="padding:.8rem">
+      {% for row in shards %}
+      <details style="margin-bottom:.5rem">
+        <summary style="font-family:var(--font-mono);font-size:11px;color:var(--accent);cursor:pointer;padding:.3rem 0">
+          {{ row.shard.shard_id }} — seq {{ row.shard.latest_seq }}
+        </summary>
+        <div style="margin-top:.4rem">
+          {% if row.header %}
+          <div style="font-family:var(--font-mono);font-size:10px;color:var(--text-lo);margin-bottom:.3rem">LATEST HEADER</div>
+          <pre style="font-family:var(--font-mono);font-size:10px;color:var(--text-md);overflow:auto;padding:.5rem;background:var(--surface-2);border-radius:4px;margin-bottom:.5rem;white-space:pre-wrap;word-break:break-all">{{ row.header }}</pre>
+          {% endif %}
+          {% if row.ledger_tail %}
+          <div style="font-family:var(--font-mono);font-size:10px;color:var(--text-lo);margin-bottom:.3rem">LEDGER TAIL</div>
+          <pre style="font-family:var(--font-mono);font-size:10px;color:var(--text-md);overflow:auto;padding:.5rem;background:var(--surface-2);border-radius:4px;white-space:pre-wrap;word-break:break-all">{{ row.ledger_tail }}</pre>
+          {% endif %}
+        </div>
+      </details>
+      {% endfor %}
+    </div>
+  </div>
+  {% endif %}
 
 </div>
 
+</div><!-- /#app -->
+
+<!-- ── BOTTOM NAVIGATION ── -->
+<nav id="bottom-nav">
+  <button class="nav-item active" data-tab="status" onclick="switchTab('status',this)">
+    <span class="nav-icon">◎</span>
+    <span class="nav-label">Status</span>
+  </button>
+  <button class="nav-item" data-tab="commit" onclick="switchTab('commit',this)">
+    <span class="nav-icon">⬆</span>
+    <span class="nav-label">Commit</span>
+  </button>
+  <button class="nav-item" data-tab="redact" onclick="switchTab('redact',this)">
+    <span class="nav-icon">⚡</span>
+    <span class="nav-label">Redact</span>
+  </button>
+  <button class="nav-item" data-tab="verify" onclick="switchTab('verify',this)">
+    <span class="nav-icon">✓</span>
+    <span class="nav-label">Verify</span>
+  </button>
+  <button class="nav-item" data-tab="debug" onclick="switchTab('debug',this)">
+    <span class="nav-icon">🔬</span>
+    <span class="nav-label">Debug</span>
+  </button>
+</nav>
+
 <script>
-/* Color Schemes */
+'use strict';
+
+/* ─── Color Schemes ─── */
 var COLOR_SCHEMES = {
-    green:  { accent: '#00ff41', text: '#00ff41', muted: '#00cc33', border: 'rgba(0,255,65,0.3)' },
-    amber:  { accent: '#ffb000', text: '#ffb000', muted: '#cc8e00', border: 'rgba(255,176,0,0.3)' },
-    blue:   { accent: '#00bfff', text: '#00bfff', muted: '#0099cc', border: 'rgba(0,191,255,0.3)' },
-    white:  { accent: '#e0e0e0', text: '#e0e0e0', muted: '#aaaaaa', border: 'rgba(224,224,224,0.3)' }
+  cyan:  { accent:'#00e5ff', ok:'#00e676', err:'#ff1744', glow:'rgba(0,229,255,0.15)', border:'rgba(0,229,255,0.12)', borderHi:'rgba(0,229,255,0.28)', soft:'rgba(0,229,255,0.08)' },
+  green: { accent:'#00e676', ok:'#69ff47', err:'#ff1744', glow:'rgba(0,230,118,0.15)', border:'rgba(0,230,118,0.12)', borderHi:'rgba(0,230,118,0.28)', soft:'rgba(0,230,118,0.08)' },
+  amber: { accent:'#ffab00', ok:'#c6ff00', err:'#ff3d00', glow:'rgba(255,171,0,0.15)',  border:'rgba(255,171,0,0.12)',  borderHi:'rgba(255,171,0,0.28)',  soft:'rgba(255,171,0,0.08)'  },
 };
 
 function setColorScheme(name) {
-    var scheme = COLOR_SCHEMES[name];
-    if (!scheme) return;
-    var r = document.documentElement.style;
-    r.setProperty('--accent', scheme.accent);
-    r.setProperty('--text', scheme.text);
-    r.setProperty('--muted-text', scheme.muted);
-    r.setProperty('--border', scheme.border);
-    r.setProperty('--glow', '0 0 5px ' + scheme.accent);
-    document.querySelectorAll('.color-btn').forEach(function(b) {
-        b.classList.toggle('active', b.dataset.color === name);
-    });
-    localStorage.setItem('olympus-color', name);
+  var s = COLOR_SCHEMES[name] || COLOR_SCHEMES.cyan;
+  var r = document.documentElement.style;
+  r.setProperty('--accent', s.accent);
+  r.setProperty('--ok', s.ok);
+  r.setProperty('--err', s.err);
+  r.setProperty('--accent-glow', s.glow);
+  r.setProperty('--border', s.border);
+  r.setProperty('--border-hi', s.borderHi);
+  r.setProperty('--accent-soft', s.soft);
+  document.querySelectorAll('.color-dot').forEach(function(d) {
+    d.classList.toggle('active', d.dataset.color === name);
+  });
+  try { localStorage.setItem('oly-color', name); } catch(_) {}
 }
 
-/* Matrix Rain */
-var matrixActive = false;
-var matrixAnimId = null;
-var matrixDraw = null;
-
-function initMatrix() {
-    var canvas = document.getElementById('matrix-canvas');
-    var ctx = canvas.getContext('2d');
-    canvas.width = window.innerWidth;
-    canvas.height = window.innerHeight;
-    var katakana = '\u30A2\u30A4\u30A6\u30A8\u30AA\u30AB\u30AD\u30AF\u30B1\u30B3\u30B5\u30B7\u30B9\u30BB\u30BD\u30BF\u30C1\u30C4\u30C6\u30C8\u30CA\u30CB\u30CC\u30CD\u30CE\u30CF\u30D2\u30D5\u30D8\u30DB\u30DE\u30DF\u30E0\u30E1\u30E2\u30E4\u30E6\u30E8\u30E9\u30EA\u30EB\u30EC\u30ED\u30EF\u30F2\u30F3';
-    var digits = '0123456789';
-    var chars = katakana + digits;
-    var fontSize = 14;
-    var columns = Math.floor(canvas.width / fontSize);
-    var drops = [];
-    for (var i = 0; i < columns; i++) drops[i] = 1;
-
-    window.addEventListener('resize', function() {
-        canvas.width = window.innerWidth;
-        canvas.height = window.innerHeight;
-    });
-
-    function draw() {
-        ctx.fillStyle = 'rgba(10, 10, 10, 0.05)';
-        ctx.fillRect(0, 0, canvas.width, canvas.height);
-        var accentColor = getComputedStyle(document.documentElement).getPropertyValue('--accent').trim() || '#00ff41';
-        ctx.fillStyle = accentColor;
-        ctx.font = fontSize + 'px monospace';
-        for (var i = 0; i < drops.length; i++) {
-            var text = chars[Math.floor(Math.random() * chars.length)];
-            ctx.fillText(text, i * fontSize, drops[i] * fontSize);
-            if (drops[i] * fontSize > canvas.height && Math.random() > 0.975) {
-                drops[i] = 0;
-            }
-            drops[i]++;
-        }
-        matrixAnimId = requestAnimationFrame(draw);
-    }
-    return draw;
-}
-
+/* ─── Matrix Rain ─── */
+var matrixActive = false, matrixAnimId = null;
 function toggleMatrix() {
-    var canvas = document.getElementById('matrix-canvas');
-    var btn = document.getElementById('matrixToggle');
-    matrixActive = !matrixActive;
-    if (matrixActive) {
-        canvas.classList.add('active');
-        btn.classList.add('active');
-        btn.textContent = '[MATRIX: ON]';
-        if (!matrixDraw) matrixDraw = initMatrix();
-        matrixDraw();
-    } else {
-        canvas.classList.remove('active');
-        btn.classList.remove('active');
-        btn.textContent = '[MATRIX: OFF]';
-        if (matrixAnimId) { cancelAnimationFrame(matrixAnimId); matrixAnimId = null; }
-    }
-    localStorage.setItem('olympus-matrix', matrixActive ? 'on' : 'off');
+  var canvas = document.getElementById('matrix-canvas');
+  var btn = document.getElementById('matrixBtn');
+  matrixActive = !matrixActive;
+  canvas.classList.toggle('active', matrixActive);
+  btn.classList.toggle('active', matrixActive);
+  if (matrixActive) {
+    canvas.width = window.innerWidth; canvas.height = window.innerHeight;
+    var ctx = canvas.getContext('2d');
+    var chars = 'アイウエオカキクケコサシスセソタチツテトナニヌネノハヒフヘホ01234567890ABCDEF';
+    var sz = 13, cols = Math.floor(canvas.width/sz), drops = new Array(cols).fill(1);
+    window.addEventListener('resize', function() { canvas.width=window.innerWidth; canvas.height=window.innerHeight; });
+    (function draw() {
+      ctx.fillStyle = 'rgba(5,10,20,0.05)'; ctx.fillRect(0,0,canvas.width,canvas.height);
+      ctx.fillStyle = getComputedStyle(document.documentElement).getPropertyValue('--accent').trim();
+      ctx.font = sz + 'px monospace';
+      for (var i=0; i<drops.length; i++) {
+        ctx.fillText(chars[Math.floor(Math.random()*chars.length)], i*sz, drops[i]*sz);
+        if (drops[i]*sz > canvas.height && Math.random() > .975) drops[i]=0;
+        drops[i]++;
+      }
+      if (matrixActive) matrixAnimId = requestAnimationFrame(draw);
+    })();
+  } else {
+    if (matrixAnimId) cancelAnimationFrame(matrixAnimId);
+  }
+  try { localStorage.setItem('oly-matrix', matrixActive?'on':'off'); } catch(_) {}
 }
 
-/* Tab Navigation */
-document.addEventListener('click', function(e) {
-    if (!e.target.classList.contains('tab-btn')) return;
-    var tabName = e.target.dataset.tab;
-    document.querySelectorAll('.tab-btn').forEach(function(b) { b.classList.remove('active'); });
-    document.querySelectorAll('.tab-panel').forEach(function(p) { p.classList.remove('active'); });
-    e.target.classList.add('active');
-    var panel = document.getElementById('tab-' + tabName);
-    if (panel) panel.classList.add('active');
-});
+/* ─── Tab Switching ─── */
+function switchTab(name, btn) {
+  document.querySelectorAll('.tab-panel').forEach(function(p) { p.classList.remove('active'); });
+  document.querySelectorAll('.nav-item').forEach(function(b) { b.classList.remove('active'); });
+  var panel = document.getElementById('tab-'+name);
+  if (panel) { panel.classList.add('active'); window.scrollTo(0,0); }
+  if (btn) btn.classList.add('active');
+}
 
-/* Utility Functions */
+/* ─── Snackbar ─── */
+var snackTimer;
+function snack(msg, type) {
+  var el = document.getElementById('snackbar');
+  document.getElementById('snackbar-text').textContent = msg;
+  el.className = 'show' + (type ? ' snack-'+type : '');
+  clearTimeout(snackTimer);
+  snackTimer = setTimeout(function() { el.classList.remove('show'); }, 3000);
+}
+
+/* ─── Output helpers ─── */
 function setOutput(id, text, isError) {
-    var el = document.getElementById(id);
-    if (!el) return;
-    el.textContent = text;
-    el.className = 'output-block' + (isError ? ' error' : ' success');
+  var el = document.getElementById(id);
+  if (!el) return;
+  el.textContent = text;
+  el.className = 'output-block visible ' + (isError ? 'error' : 'success');
 }
-
 function setLoading(id) {
-    var el = document.getElementById(id);
-    if (!el) return;
-    el.innerHTML = '<span class="spinner"></span> Processing...';
-    el.className = 'output-block';
+  var el = document.getElementById(id);
+  if (!el) return;
+  el.innerHTML = '<span class="spinner"></span>Processing…';
+  el.className = 'output-block loading';
 }
 
+/* ─── Safe Fetch ─── */
 function safeFetch(url, options) {
-    return fetch(url, options).then(function(resp) {
-        return resp.text().then(function(text) {
-            var data;
-            try { data = JSON.parse(text); } catch(e) { data = text; }
-            return { ok: resp.ok, status: resp.status, data: data };
-        });
-    }).catch(function(err) {
-        return { ok: false, status: 0, data: { error: err.message } };
+  return fetch(url, options).then(function(resp) {
+    return resp.text().then(function(text) {
+      var data; try { data = JSON.parse(text); } catch(e) { data = text; }
+      return { ok: resp.ok, status: resp.status, data: data };
     });
+  }).catch(function(err) {
+    return { ok: false, status: 0, data: { error: err.message } };
+  });
 }
 
-function formatJSON(obj) {
-    return typeof obj === 'string' ? obj : JSON.stringify(obj, null, 2);
-}
+function formatJSON(obj) { return typeof obj === 'string' ? obj : JSON.stringify(obj, null, 2); }
+function escapeHtml(str) { var d=document.createElement('div'); d.textContent=str; return d.innerHTML; }
 
-function escapeHtml(str) {
-    var div = document.createElement('div');
-    div.textContent = str;
-    return div.innerHTML;
-}
-
-/* STATUS Tab */
+/* ─── STATUS Tab ─── */
 function runConnectivityCheck() {
-    setLoading('connectivity-output');
-    var fd = new FormData();
-    fd.append('doc_hash', '0000000000000000000000000000000000000000000000000000000000000000');
-    safeFetch('/ledger/verify/simple', { method: 'POST', body: fd }).then(function(result) {
-        if (result.ok) {
-            setOutput('connectivity-output',
-                '[ CONNECTIVITY CHECK ]\n' +
-                '\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\n' +
-                'Status: ENDPOINT RESPONDING\nEndpoint: /ledger/verify/simple\nResponse:\n' + formatJSON(result.data), false);
-        } else {
-            setOutput('connectivity-output',
-                '[ CONNECTIVITY CHECK ]\n\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\nStatus: ERROR (' + result.status + ')\n' + formatJSON(result.data), true);
-        }
-    });
+  var dot = document.getElementById('conn-dot');
+  var lbl = document.getElementById('conn-label');
+  dot.className = 'conn-dot'; lbl.textContent = 'Checking…';
+  var fd = new FormData();
+  fd.append('doc_hash', '0000000000000000000000000000000000000000000000000000000000000000');
+  safeFetch('/ledger/verify/simple', { method:'POST', body:fd }).then(function(r) {
+    if (r.ok) {
+      dot.className = 'conn-dot ok'; lbl.textContent = 'API Responding';
+      snack('API endpoint responding', 'ok');
+    } else {
+      dot.className = 'conn-dot err'; lbl.textContent = 'API Error ('+r.status+')';
+      snack('API error: '+r.status, 'err');
+    }
+  }).catch(function() {
+    dot.className = 'conn-dot err'; lbl.textContent = 'Connection Failed';
+    snack('Connection failed', 'err');
+  });
 }
 
 function verifyHash() {
-    var hash = document.getElementById('status-hash-input').value.trim();
-    if (!hash) { setOutput('hash-verify-output', 'ERROR: No hash provided.', true); return; }
-    setLoading('hash-verify-output');
-    var fd = new FormData();
-    fd.append('doc_hash', hash);
-    safeFetch('/ledger/verify/simple', { method: 'POST', body: fd }).then(function(result) {
-        if (result.ok) {
-            setOutput('hash-verify-output',
-                '[ HASH VERIFICATION ]\n\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\n' + formatJSON(result.data), false);
-        } else {
-            setOutput('hash-verify-output',
-                '[ HASH VERIFICATION FAILED ]\n\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\n' + formatJSON(result.data), true);
-        }
-    });
+  var hash = document.getElementById('status-hash-input').value.trim();
+  if (!hash) { snack('Enter a BLAKE3 hash first', 'err'); return; }
+  setLoading('hash-verify-output');
+  var fd = new FormData(); fd.append('doc_hash', hash);
+  safeFetch('/ledger/verify/simple', { method:'POST', body:fd }).then(function(r) {
+    if (r.ok) {
+      setOutput('hash-verify-output', '[ HASH VERIFICATION ]\n────────────────────\n'+formatJSON(r.data), false);
+      snack(r.data.verified ? '✓ Hash found on ledger' : '✗ Hash not found', r.data.verified ? 'ok' : 'err');
+    } else {
+      setOutput('hash-verify-output', '[ VERIFICATION FAILED ]\n────────────────────────\n'+formatJSON(r.data), true);
+      snack('Verification failed', 'err');
+    }
+  });
 }
 
-/* COMMIT Tab */
+/* ─── COMMIT Tab ─── */
 function executeCommit() {
-    var docId = document.getElementById('commit-doc-id').value.trim();
-    var version = document.getElementById('commit-version').value;
-    var fileInput = document.getElementById('commit-file');
-    var releaseAt = document.getElementById('commit-release-at').value;
-    var recipientKeys = document.getElementById('commit-recipient-keys').value.trim();
-    if (!docId) { setOutput('commit-output', 'ERROR: Document ID is required.', true); return; }
-    if (!fileInput.files.length) { setOutput('commit-output', 'ERROR: File is required.', true); return; }
-    setLoading('commit-output');
-    var fd = new FormData();
-    fd.append('document_id', docId);
-    fd.append('version', version);
-    fd.append('file', fileInput.files[0]);
-    if (releaseAt) fd.append('release_at', releaseAt);
-    if (recipientKeys) fd.append('recipient_keys', recipientKeys);
-    safeFetch('/commit', { method: 'POST', body: fd }).then(function(result) {
-        if (result.ok && result.data.ok) {
-            var d = result.data;
-            setOutput('commit-output',
-                '[ COMMIT SUCCESSFUL ]\n\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\n' +
-                'BLAKE3 Root:     ' + (d.blake3_root || 'N/A') + '\n' +
-                'Poseidon Root:   ' + (d.poseidon_root || 'N/A') + '\n' +
-                'Sections Count:  ' + (d.sections_count || 'N/A') + '\n' +
-                'Ledger ID:       ' + (d.ledger_commit_id || '(not persisted \u2014 API unavailable)') + '\n' +
-                '\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\n' +
-                '\u26a0 Paste the BLAKE3 Root above into \u201cCheck Record\u201d to verify this commit.\n' +
-                '\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\nFull Response:\n' + formatJSON(d), false);
-        } else {
-            setOutput('commit-output', '[ COMMIT FAILED ]\n\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\n' + formatJSON(result.data), true);
-        }
-    });
-}
-
-/* REDACT Tab */
-var loadedSections = [];
-
-function loadSections() {
-    var docId = document.getElementById('redact-doc-id').value.trim();
-    var version = document.getElementById('redact-version').value;
-    if (!docId) { setOutput('redact-output', 'ERROR: Document ID is required.', true); return; }
-    setLoading('redact-output');
-    document.getElementById('sections-list').innerHTML = '';
-    loadedSections = [];
-    document.getElementById('redact-execute-btn').disabled = true;
-    safeFetch('/committed/' + encodeURIComponent(docId) + '/' + version + '/sections').then(function(result) {
-        if (result.ok && result.data.ok) {
-            loadedSections = result.data.sections || [];
-            if (loadedSections.length === 0) {
-                setOutput('redact-output', 'No sections found for this document.', true);
-                return;
-            }
-            var html = '<h3 class="section-title" style="font-size:12px;">Select sections to REVEAL:</h3>';
-            html += '<ul class="section-check-list">';
-            loadedSections.forEach(function(sec, i) {
-                var preview = (typeof sec === 'string' ? sec : JSON.stringify(sec)).substring(0, 120);
-                html += '<li><label><input type="checkbox" class="reveal-check" value="' + i + '"> ' +
-                        '<span>[' + i + ']</span> <span class="section-text">' + escapeHtml(preview) + '</span></label></li>';
-            });
-            html += '</ul>';
-            document.getElementById('sections-list').innerHTML = html;
-            document.getElementById('redact-execute-btn').disabled = false;
-            setOutput('redact-output', 'Loaded ' + loadedSections.length + ' sections. Select which to reveal, then execute.', false);
-        } else {
-            setOutput('redact-output', '[ LOAD SECTIONS FAILED ]\n\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\n' + formatJSON(result.data), true);
-        }
-    });
-}
-
-function executeRedact() {
-    var docId = document.getElementById('redact-doc-id').value.trim();
-    var version = parseInt(document.getElementById('redact-version').value);
-    var checks = document.querySelectorAll('.reveal-check:checked');
-    var revealedIndices = Array.from(checks).map(function(c) { return parseInt(c.value); });
-    if (revealedIndices.length === 0) {
-        setOutput('redact-output', 'ERROR: Select at least one section to reveal.', true);
-        return;
+  var docId = document.getElementById('commit-doc-id').value.trim();
+  var version = document.getElementById('commit-version').value;
+  var fileInput = document.getElementById('commit-file');
+  var releaseAt = document.getElementById('commit-release-at').value;
+  var recipientKeys = document.getElementById('commit-recipient-keys').value.trim();
+  if (!docId) { snack('Document ID required', 'err'); return; }
+  if (!fileInput.files.length) { snack('Select a file to commit', 'err'); return; }
+  setLoading('commit-output');
+  var fd = new FormData();
+  fd.append('document_id', docId);
+  fd.append('version', version);
+  fd.append('file', fileInput.files[0]);
+  if (releaseAt) fd.append('release_at', releaseAt);
+  if (recipientKeys) fd.append('recipient_keys', recipientKeys);
+  safeFetch('/commit', { method:'POST', body:fd }).then(function(r) {
+    if (r.ok && r.data.ok) {
+      var d = r.data;
+      setOutput('commit-output',
+        '[ COMMIT SUCCESSFUL ]\n────────────────────────\n'+
+        'BLAKE3 Root:   '+( d.blake3_root||'N/A')+'\n'+
+        'Poseidon Root: '+(d.poseidon_root||'N/A')+'\n'+
+        'Sections:      '+(d.sections_count||'N/A')+'\n'+
+        'Ledger ID:     '+(d.ledger_commit_id||'(API unavailable)')+'\n\n'+
+        '⚠ Copy the BLAKE3 Root above to verify in STATUS tab.\n\nFull response:\n'+formatJSON(d), false);
+      snack('✓ Committed — BLAKE3 root: '+((d.blake3_root||'').slice(0,16))+'…', 'ok');
+    } else {
+      setOutput('commit-output', '[ COMMIT FAILED ]\n─────────────────\n'+formatJSON(r.data), true);
+      snack('Commit failed', 'err');
     }
-    setLoading('redact-output');
-    safeFetch('/redact', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ document_id: docId, version: version, revealed_indices: revealedIndices })
-    }).then(function(result) {
-        if (result.ok && result.data.ok) {
-            setOutput('redact-output',
-                '[ REDACTION COMPLETE ]\n\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\n' +
-                'Revealed indices: [' + revealedIndices.join(', ') + ']\n\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\n' +
-                'Proof Bundle:\n' + formatJSON(result.data.bundle || result.data), false);
-        } else {
-            setOutput('redact-output', '[ REDACTION FAILED ]\n\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\n' + formatJSON(result.data), true);
-        }
-    });
+  });
 }
 
-/* VERIFY Tab */
-function executeVerify() {
-    var raw = document.getElementById('verify-bundle').value.trim();
-    if (!raw) { setOutput('verify-output', 'ERROR: Paste a proof bundle.', true); return; }
-    var bundle;
-    try { bundle = JSON.parse(raw); } catch(e) {
-        setOutput('verify-output', 'ERROR: Invalid JSON \u2014 ' + e.message, true);
-        return;
-    }
-    setLoading('verify-output');
-    safeFetch('/verify', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(bundle)
-    }).then(function(result) {
-        if (result.ok) {
-            var d = result.data;
-            var smtOk = d.smt_anchor_verified;
-            var zkOk = d.zk_verified;
-            var overall = d.verified;
-            var output =
-                '[ VERIFICATION RESULT ]\n\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\n' +
-                'SMT Anchor:  ' + (smtOk ? '\u2713 VERIFIED' : '\u2717 FAILED') + '\n' +
-                'ZK Proof:    ' + (zkOk ? '\u2713 VERIFIED' : '\u2717 FAILED') + '\n' +
-                'Overall:     ' + (overall ? '\u2713 VERIFIED' : '\u2717 FAILED') + '\n';
-            if (d.zk_status) output += 'ZK Status:   ' + d.zk_status + '\n';
-            if (d.revealed_sections && d.revealed_sections.length) {
-                output += '\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\nRevealed Sections:\n';
-                d.revealed_sections.forEach(function(s, i) {
-                    output += '  [' + i + '] ' + (typeof s === 'string' ? s.substring(0, 100) : JSON.stringify(s)) + '\n';
-                });
-            }
-            if (d.total_parts) output += 'Total Parts: ' + d.total_parts + '\n';
-            setOutput('verify-output', output, !overall);
-        } else {
-            setOutput('verify-output', '[ VERIFICATION ERROR ]\n\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\n' + formatJSON(result.data), true);
-        }
-    });
-}
-
-/* INSPECT Tab */
-function inspectBundle() {
-    var raw = document.getElementById('inspect-bundle').value.trim();
-    if (!raw) { setOutput('inspect-output', 'ERROR: Paste a proof bundle.', true); return; }
-    var bundle;
-    try { bundle = JSON.parse(raw); } catch(e) {
-        setOutput('inspect-output', 'ERROR: Invalid JSON \u2014 ' + e.message, true);
-        return;
-    }
-    setLoading('inspect-output');
-    safeFetch('/inspect-proof-bundle', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(bundle)
-    }).then(function(result) {
-        if (result.ok && result.data.ok) {
-            var d = result.data;
-            var output = '[ PROOF BUNDLE INSPECTION ]\n\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\n';
-            if (d.checks) {
-                output += 'Invariant Checks:\n';
-                d.checks.forEach(function(c) {
-                    output += '  ' + (c.passed ? '\u2713' : '\u2717') + ' ' + c.label + '\n';
-                    if (c.detail) output += '    \u2514\u2500 ' + c.detail + '\n';
-                });
-            }
-            if (d.fields) {
-                output += '\nDecoded Fields:\n';
-                d.fields.forEach(function(f) {
-                    output += '  ' + f.field + ': ' + f.value + ' (' + f.type + ')\n';
-                });
-            }
-            setOutput('inspect-output', output, false);
-        } else {
-            setOutput('inspect-output', '[ INSPECTION FAILED ]\n\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\n' + formatJSON(result.data), true);
-        }
-    });
-}
-
-function loadProvenance() {
-    setLoading('provenance-output');
-    safeFetch('/constants-provenance').then(function(result) {
-        if (result.ok && result.data.ok) {
-            var nb = result.data.notebook;
-            var output = '[ CONSTANTS PROVENANCE ]\n\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\n';
-            if (nb) {
-                output += 'Verified Identical: ' + (nb.verified_identical ? '\u2713 YES' : '\u2717 NO') + '\n';
-                if (nb.parameters) {
-                    output += 'Source: ' + (nb.parameters.source || 'N/A') + '\n';
-                    output += 'Field: ' + (nb.parameters.field || 'N/A') + '\n';
-                    output += 'Round Constants: ' + (nb.parameters.round_constants_count || 'N/A') + '\n';
-                    output += 'MDS: ' + (nb.parameters.mds_rows || '?') + '\u00D7' + (nb.parameters.mds_cols || '?') + '\n';
-                }
-                if (nb.parity) {
-                    output += 'Parity Status: ' + (nb.parity.status || 'N/A') + '\n';
-                    output += 'Vectors Checked: ' + (nb.parity.vectors_checked || 'N/A') + '\n';
-                }
-            }
-            output += '\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\nFull Data:\n' + formatJSON(nb);
-            setOutput('provenance-output', output, false);
-        } else {
-            setOutput('provenance-output', '[ PROVENANCE LOAD FAILED ]\n' + formatJSON(result.data), true);
-        }
-    });
-}
-
-function loadCircuits() {
-    setLoading('circuits-output');
-    safeFetch('/circuit-constraints').then(function(result) {
-        if (result.ok && result.data.ok) {
-            var circuits = result.data.circuits || [];
-            var output = '[ CIRCUIT CONSTRAINTS ]\n\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\n' +
-                         circuits.length + ' circuit(s) found\n\n';
-            circuits.forEach(function(circuit) {
-                output += '\u2554\u2550 ' + circuit.title + ' \u2550\u2557\n';
-                output += 'Source: ' + (circuit.source_path || 'N/A') + '\n';
-                if (circuit.public_inputs) output += 'Public Inputs: ' + circuit.public_inputs.join(', ') + '\n';
-                if (circuit.private_inputs) output += 'Private Inputs: ' + circuit.private_inputs.join(', ') + '\n';
-                if (circuit.constraints) {
-                    output += 'Constraints:\n';
-                    circuit.constraints.forEach(function(c) {
-                        output += '  \u25B8 ' + c.label + '\n';
-                        if (c.explanation) output += '    ' + c.explanation + '\n';
-                    });
-                }
-                output += '\n';
-            });
-            setOutput('circuits-output', output, false);
-        } else {
-            setOutput('circuits-output', '[ CIRCUIT LOAD FAILED ]\n' + formatJSON(result.data), true);
-        }
-    });
-}
-
-/* DEBUG Tab */
-function proofExplorer() {
-    var shardId = document.getElementById('debug-shard-id').value.trim();
-    var recordType = document.getElementById('debug-record-type').value.trim();
-    var recordId = document.getElementById('debug-record-id').value.trim();
-    var version = document.getElementById('debug-version').value;
-    if (!shardId || !recordType || !recordId) {
-        setOutput('proof-explorer-output', 'ERROR: All fields are required.', true);
-        return;
-    }
-    setLoading('proof-explorer-output');
-    var params = new URLSearchParams({ shard_id: shardId, record_type: recordType, record_id: recordId, version: version });
-    safeFetch('/proof-explorer?' + params).then(function(result) {
-        if (result.ok && result.data.ok) {
-            setOutput('proof-explorer-output',
-                '[ PROOF EXPLORER ]\n\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\n' + formatJSON(result.data.proof || result.data), false);
-        } else {
-            setOutput('proof-explorer-output',
-                '[ PROOF EXPLORER FAILED ]\n\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\n' + formatJSON(result.data), true);
-        }
-    });
-}
-
-function loadStateDiff() {
-    var shardId = document.getElementById('diff-shard-id').value.trim();
-    var fromSeq = document.getElementById('diff-from-seq').value;
-    var toSeq = document.getElementById('diff-to-seq').value;
-    if (!shardId) { setOutput('diff-output', 'ERROR: Shard ID is required.', true); return; }
-    setLoading('diff-output');
-    var params = new URLSearchParams({ shard_id: shardId, from_seq: fromSeq, to_seq: toSeq });
-    safeFetch('/state-diff?' + params).then(function(result) {
-        if (result.ok && result.data.ok) {
-            setOutput('diff-output',
-                '[ SMT DIFF ]\n\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\n' +
-                'Shard: ' + shardId + '\nRange: seq ' + fromSeq + ' \u2192 ' + toSeq + '\n\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\n' +
-                formatJSON(result.data.diff || result.data), false);
-        } else {
-            setOutput('diff-output', '[ DIFF FAILED ]\n\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\n' + formatJSON(result.data), true);
-        }
-    });
-}
-
+/* ─── Embargo ─── */
 function loadEmbargo() {
-    var docId = document.getElementById('embargo-doc-id').value.trim();
-    var version = document.getElementById('embargo-version').value;
-    if (!docId) { setOutput('embargo-output', 'ERROR: Document ID is required.', true); return; }
-    setLoading('embargo-output');
-    safeFetch('/embargo/' + encodeURIComponent(docId) + '/' + version).then(function(result) {
-        if (result.ok && result.data.ok) {
-            var emb = result.data.embargo || {};
-            document.getElementById('embargo-release-at').value = emb.release_at ? emb.release_at.replace('Z', '').split('.')[0] : '';
-            var keys = (emb.recipient_keys || emb.active_recipient_keys || []);
-            document.getElementById('embargo-keys').value = Array.isArray(keys) ? keys.join('\n') : keys;
-            setOutput('embargo-output', '[ EMBARGO LOADED ]\n\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\n' + formatJSON(result.data), false);
-        } else {
-            setOutput('embargo-output', '[ EMBARGO LOAD FAILED ]\n\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\n' + formatJSON(result.data), true);
-        }
-    });
+  var docId = document.getElementById('embargo-doc-id').value.trim();
+  var version = document.getElementById('embargo-version').value;
+  if (!docId) { snack('Document ID required', 'err'); return; }
+  setLoading('embargo-output');
+  safeFetch('/embargo/'+encodeURIComponent(docId)+'/'+version).then(function(r) {
+    if (r.ok && r.data.ok) {
+      var emb = r.data.embargo||{};
+      document.getElementById('embargo-release-at').value = emb.release_at ? emb.release_at.replace('Z','').split('.')[0] : '';
+      var keys = emb.recipient_keys||emb.active_recipient_keys||[];
+      document.getElementById('embargo-keys').value = Array.isArray(keys) ? keys.join('\n') : keys;
+      setOutput('embargo-output', '[ EMBARGO LOADED ]\n──────────────────\n'+formatJSON(r.data), false);
+      snack('Embargo loaded', 'ok');
+    } else {
+      setOutput('embargo-output', '[ LOAD FAILED ]\n───────────────\n'+formatJSON(r.data), true);
+      snack('Embargo load failed', 'err');
+    }
+  });
 }
 
 function saveEmbargo() {
-    var docId = document.getElementById('embargo-doc-id').value.trim();
-    var version = parseInt(document.getElementById('embargo-version').value);
-    var releaseAt = document.getElementById('embargo-release-at').value;
-    var keys = document.getElementById('embargo-keys').value.trim();
-    if (!docId) { setOutput('embargo-output', 'ERROR: Document ID is required.', true); return; }
-    setLoading('embargo-output');
-    var body = { document_id: docId, version: version };
-    if (releaseAt) body.release_at = releaseAt;
-    if (keys) body.recipient_keys = keys;
-    safeFetch('/embargo/update', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(body)
-    }).then(function(result) {
-        if (result.ok && result.data.ok) {
-            setOutput('embargo-output', '[ EMBARGO SAVED ]\n\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\n' + formatJSON(result.data), false);
-        } else {
-            setOutput('embargo-output', '[ EMBARGO SAVE FAILED ]\n\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\n' + formatJSON(result.data), true);
-        }
-    });
+  var docId = document.getElementById('embargo-doc-id').value.trim();
+  var version = parseInt(document.getElementById('embargo-version').value);
+  var releaseAt = document.getElementById('embargo-release-at').value;
+  var keys = document.getElementById('embargo-keys').value.trim();
+  if (!docId) { snack('Document ID required', 'err'); return; }
+  setLoading('embargo-output');
+  var body = { document_id:docId, version:version };
+  if (releaseAt) body.release_at = releaseAt;
+  if (keys) body.recipient_keys = keys;
+  safeFetch('/embargo/update', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(body) }).then(function(r) {
+    if (r.ok && r.data.ok) {
+      setOutput('embargo-output', '[ EMBARGO SAVED ]\n──────────────────\n'+formatJSON(r.data), false);
+      snack('Embargo saved', 'ok');
+    } else {
+      setOutput('embargo-output', '[ SAVE FAILED ]\n────────────────\n'+formatJSON(r.data), true);
+      snack('Save failed', 'err');
+    }
+  });
 }
 
 function revokeEmbargo() {
-    var docId = document.getElementById('embargo-doc-id').value.trim();
-    var version = parseInt(document.getElementById('embargo-version').value);
-    var key = document.getElementById('embargo-revoke-key').value.trim();
-    if (!docId || !key) {
-        setOutput('embargo-output', 'ERROR: Document ID and key to revoke are required.', true);
-        return;
+  var docId = document.getElementById('embargo-doc-id').value.trim();
+  var version = parseInt(document.getElementById('embargo-version').value);
+  var key = document.getElementById('embargo-revoke-key').value.trim();
+  if (!docId||!key) { snack('Document ID and key required', 'err'); return; }
+  setLoading('embargo-output');
+  safeFetch('/embargo/revoke', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({document_id:docId,version:version,recipient_key:key}) }).then(function(r) {
+    if (r.ok && r.data.ok) {
+      setOutput('embargo-output', '[ KEY REVOKED ]\n────────────────\n'+formatJSON(r.data), false);
+      snack('Key revoked', 'ok');
+    } else {
+      setOutput('embargo-output', '[ REVOKE FAILED ]\n──────────────────\n'+formatJSON(r.data), true);
+      snack('Revoke failed', 'err');
     }
-    setLoading('embargo-output');
-    safeFetch('/embargo/revoke', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ document_id: docId, version: version, recipient_key: key })
-    }).then(function(result) {
-        if (result.ok && result.data.ok) {
-            setOutput('embargo-output', '[ KEY REVOKED ]\n\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\n' + formatJSON(result.data), false);
-        } else {
-            setOutput('embargo-output', '[ REVOKE FAILED ]\n\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\n' + formatJSON(result.data), true);
-        }
-    });
+  });
 }
 
-/* Boot Sequence + Initialization */
+/* ─── REDACT Tab ─── */
+var loadedSections = [];
+function loadSections() {
+  var docId = document.getElementById('redact-doc-id').value.trim();
+  var version = document.getElementById('redact-version').value;
+  if (!docId) { snack('Document ID required', 'err'); return; }
+  setLoading('redact-output');
+  document.getElementById('sections-list').innerHTML = '';
+  loadedSections = [];
+  document.getElementById('redact-execute-btn').disabled = true;
+  safeFetch('/committed/'+encodeURIComponent(docId)+'/'+version+'/sections').then(function(r) {
+    if (r.ok && r.data.ok) {
+      loadedSections = r.data.sections||[];
+      if (!loadedSections.length) { setOutput('redact-output','No sections found.',true); return; }
+      var ul = document.createElement('ul'); ul.className='section-check-list';
+      loadedSections.forEach(function(sec,i) {
+        var preview = (typeof sec==='string'?sec:JSON.stringify(sec)).substring(0,100);
+        var li = document.createElement('li');
+        var lbl = document.createElement('label');
+        var cb = document.createElement('input'); cb.type='checkbox'; cb.className='reveal-check'; cb.value=i;
+        var idx = document.createElement('span'); idx.setAttribute('data-idx',''); idx.textContent='['+i+']';
+        var txt = document.createElement('span'); txt.className='section-text'; txt.textContent=preview;
+        lbl.appendChild(cb); lbl.appendChild(idx); lbl.appendChild(txt);
+        li.appendChild(lbl); ul.appendChild(li);
+      });
+      document.getElementById('sections-list').innerHTML = '';
+      document.getElementById('sections-list').appendChild(ul);
+      document.getElementById('redact-execute-btn').disabled = false;
+      setOutput('redact-output', 'Loaded '+loadedSections.length+' sections. Select which to reveal.', false);
+      snack('Loaded '+loadedSections.length+' sections', 'ok');
+    } else {
+      setOutput('redact-output', '[ LOAD FAILED ]\n───────────────\n'+formatJSON(r.data), true);
+      snack('Load sections failed', 'err');
+    }
+  });
+}
+
+function executeRedact() {
+  var docId = document.getElementById('redact-doc-id').value.trim();
+  var version = parseInt(document.getElementById('redact-version').value);
+  var indices = Array.from(document.querySelectorAll('.reveal-check:checked')).map(function(c){return parseInt(c.value);});
+  if (!indices.length) { snack('Select at least one section', 'err'); return; }
+  setLoading('redact-output');
+  safeFetch('/redact', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({document_id:docId,version:version,revealed_indices:indices}) }).then(function(r) {
+    if (r.ok && r.data.ok) {
+      setOutput('redact-output', '[ PROOF GENERATED ]\n───────────────────\nRevealed: ['+indices.join(', ')+']\n\nProof Bundle:\n'+formatJSON(r.data.bundle||r.data), false);
+      snack('✓ Proof bundle generated', 'ok');
+    } else {
+      setOutput('redact-output', '[ REDACTION FAILED ]\n────────────────────\n'+formatJSON(r.data), true);
+      snack('Redaction failed', 'err');
+    }
+  });
+}
+
+/* ─── VERIFY Tab ─── */
+function executeVerify() {
+  var raw = document.getElementById('verify-bundle').value.trim();
+  if (!raw) { snack('Paste a proof bundle', 'err'); return; }
+  var bundle; try { bundle=JSON.parse(raw); } catch(e) { snack('Invalid JSON: '+e.message,'err'); return; }
+  setLoading('verify-output');
+  safeFetch('/verify', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(bundle) }).then(function(r) {
+    if (r.ok) {
+      var d=r.data, smtOk=d.smt_anchor_verified, zkOk=d.zk_verified, overall=d.verified;
+      var out = '[ VERIFICATION RESULT ]\n────────────────────────\n'+
+        'SMT Anchor: '+(smtOk?'✓ VERIFIED':'✗ FAILED')+'\n'+
+        'ZK Proof:   '+(zkOk?'✓ VERIFIED':'✗ FAILED')+'\n'+
+        'Overall:    '+(overall?'✓ VERIFIED':'✗ FAILED')+'\n';
+      if (d.zk_status) out += 'ZK Status:  '+d.zk_status+'\n';
+      if (d.revealed_sections&&d.revealed_sections.length) {
+        out += '\nRevealed Sections:\n';
+        d.revealed_sections.forEach(function(s,i) { out+='  ['+i+'] '+(typeof s==='string'?s.substring(0,100):JSON.stringify(s))+'\n'; });
+      }
+      if (d.total_parts) out += 'Total Parts: '+d.total_parts+'\n';
+      setOutput('verify-output', out, !overall);
+      snack(overall?'✓ Proof verified':'✗ Verification failed', overall?'ok':'err');
+    } else {
+      setOutput('verify-output', '[ ERROR ]\n─────────\n'+formatJSON(r.data), true);
+      snack('Verification error', 'err');
+    }
+  });
+}
+
+/* ─── DEBUG Tab ─── */
+function inspectBundle() {
+  var raw = document.getElementById('inspect-bundle').value.trim();
+  if (!raw) { snack('Paste a proof bundle','err'); return; }
+  var bundle; try { bundle=JSON.parse(raw); } catch(e) { snack('Invalid JSON','err'); return; }
+  setLoading('inspect-output');
+  safeFetch('/inspect-proof-bundle', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(bundle) }).then(function(r) {
+    if (r.ok && r.data.ok) {
+      var d=r.data, out='[ INSPECTION ]\n───────────────\n';
+      if (d.checks) { out+='Invariant Checks:\n'; d.checks.forEach(function(c) { out+='  '+(c.passed?'✓':'✗')+' '+c.label+'\n'; if (c.detail) out+='    └─ '+c.detail+'\n'; }); }
+      if (d.fields) { out+='\nDecoded Fields:\n'; d.fields.forEach(function(f) { out+='  '+f.field+': '+f.value+' ('+f.type+')\n'; }); }
+      setOutput('inspect-output', out, false); snack('Inspection complete','ok');
+    } else {
+      setOutput('inspect-output', '[ FAILED ]\n──────────\n'+formatJSON(r.data), true); snack('Inspection failed','err');
+    }
+  });
+}
+
+function loadProvenance() {
+  setLoading('provenance-output');
+  safeFetch('/constants-provenance').then(function(r) {
+    if (r.ok && r.data.ok) {
+      var nb=r.data.notebook, out='[ CONSTANTS PROVENANCE ]\n─────────────────────────\n';
+      if (nb) {
+        out+='Verified: '+(nb.verified_identical?'✓ YES':'✗ NO')+'\n';
+        if (nb.parameters) { out+='Source: '+(nb.parameters.source||'N/A')+'\nField: '+(nb.parameters.field||'N/A')+'\nRound constants: '+(nb.parameters.round_constants_count||'N/A')+'\nMDS: '+(nb.parameters.mds_rows||'?')+'×'+(nb.parameters.mds_cols||'?')+'\n'; }
+        if (nb.parity) { out+='Parity: '+(nb.parity.status||'N/A')+' ('+( nb.parity.vectors_checked||0)+' vectors)\n'; }
+      }
+      setOutput('provenance-output', out+'\nFull data:\n'+formatJSON(nb), false); snack('Provenance loaded','ok');
+    } else { setOutput('provenance-output','[ FAILED ]\n'+formatJSON(r.data),true); snack('Load failed','err'); }
+  });
+}
+
+function loadCircuits() {
+  setLoading('circuits-output');
+  safeFetch('/circuit-constraints').then(function(r) {
+    if (r.ok && r.data.ok) {
+      var circuits=r.data.circuits||[], out='[ CIRCUIT CONSTRAINTS ]\n────────────────────────\n'+circuits.length+' circuit(s)\n\n';
+      circuits.forEach(function(c) {
+        out+='╔═ '+c.title+' ═╗\nSource: '+(c.source_path||'N/A')+'\n';
+        if (c.public_inputs) out+='Public: '+c.public_inputs.join(', ')+'\n';
+        if (c.private_inputs) out+='Private: '+c.private_inputs.join(', ')+'\n';
+        if (c.constraints) { out+='Constraints:\n'; c.constraints.forEach(function(cn) { out+='  ▸ '+cn.label+'\n'; if (cn.explanation) out+='    '+cn.explanation+'\n'; }); }
+        out+='\n';
+      });
+      setOutput('circuits-output', out, false); snack('Circuits loaded','ok');
+    } else { setOutput('circuits-output','[ FAILED ]\n'+formatJSON(r.data),true); snack('Load failed','err'); }
+  });
+}
+
+function proofExplorer() {
+  var shardId=document.getElementById('debug-shard-id').value.trim();
+  var recordType=document.getElementById('debug-record-type').value.trim();
+  var recordId=document.getElementById('debug-record-id').value.trim();
+  var version=document.getElementById('debug-version').value;
+  if (!shardId||!recordType||!recordId) { snack('All fields required','err'); return; }
+  setLoading('proof-explorer-output');
+  var params=new URLSearchParams({shard_id:shardId,record_type:recordType,record_id:recordId,version:version});
+  safeFetch('/proof-explorer?'+params).then(function(r) {
+    if (r.ok && r.data.ok) { setOutput('proof-explorer-output','[ PROOF EXPLORER ]\n──────────────────\n'+formatJSON(r.data.proof||r.data),false); snack('Proof loaded','ok'); }
+    else { setOutput('proof-explorer-output','[ FAILED ]\n'+formatJSON(r.data),true); snack('Proof lookup failed','err'); }
+  });
+}
+
+function loadStateDiff() {
+  var shardId=document.getElementById('diff-shard-id').value.trim();
+  var fromSeq=document.getElementById('diff-from-seq').value;
+  var toSeq=document.getElementById('diff-to-seq').value;
+  if (!shardId) { snack('Shard ID required','err'); return; }
+  setLoading('diff-output');
+  var params=new URLSearchParams({shard_id:shardId,from_seq:fromSeq,to_seq:toSeq});
+  safeFetch('/state-diff?'+params).then(function(r) {
+    if (r.ok && r.data.ok) { setOutput('diff-output','[ SMT DIFF ]\n────────────\nShard: '+shardId+'\nRange: seq '+fromSeq+' → '+toSeq+'\n\n'+formatJSON(r.data.diff||r.data),false); snack('Diff loaded','ok'); }
+    else { setOutput('diff-output','[ FAILED ]\n'+formatJSON(r.data),true); snack('Diff failed','err'); }
+  });
+}
+
+/* ─── Boot + Init ─── */
 document.addEventListener('DOMContentLoaded', function() {
-    var savedColor = localStorage.getItem('olympus-color');
-    if (savedColor && COLOR_SCHEMES[savedColor]) {
-        setColorScheme(savedColor);
-    }
+  // Restore color scheme
+  try { var c=localStorage.getItem('oly-color'); if (c&&COLOR_SCHEMES[c]) setColorScheme(c); } catch(_){}
 
-    var bootLines = document.querySelectorAll('.boot-line');
-    bootLines.forEach(function(line) {
-        var delay = parseInt(line.dataset.delay) || 0;
-        setTimeout(function() { line.classList.add('visible'); }, delay);
-    });
+  // Boot sequence
+  var lines = document.querySelectorAll('.boot-log-line');
+  lines.forEach(function(line) {
+    var delay = parseInt(line.dataset.delay)||0;
+    setTimeout(function() { line.classList.add('show'); }, delay);
+  });
+  var maxDelay = 0;
+  lines.forEach(function(l) { var d=parseInt(l.dataset.delay)||0; if (d>maxDelay) maxDelay=d; });
+  setTimeout(function() {
+    var boot = document.getElementById('boot');
+    boot.classList.add('fade');
+    setTimeout(function() { boot.style.display='none'; }, 550);
+  }, maxDelay + 600);
 
-    var maxDelay = 0;
-    bootLines.forEach(function(l) {
-        var d = parseInt(l.dataset.delay) || 0;
-        if (d > maxDelay) maxDelay = d;
-    });
-    setTimeout(function() {
-        var boot = document.getElementById('boot-screen');
-        boot.classList.add('fade-out');
-        setTimeout(function() {
-            boot.style.display = 'none';
-            document.getElementById('app').classList.add('visible');
-        }, 800);
-    }, maxDelay + 800);
+  // Restore matrix
+  try { if (localStorage.getItem('oly-matrix')==='on') toggleMatrix(); } catch(_){}
 
-    var savedMatrix = localStorage.getItem('olympus-matrix');
-    if (savedMatrix === 'on') {
-        toggleMatrix();
-    }
+  // Auto connectivity check
+  setTimeout(runConnectivityCheck, 500);
 });
 </script>
 </body>
