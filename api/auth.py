@@ -28,7 +28,6 @@ from threading import Lock
 from time import monotonic
 from typing import Annotated
 
-import blake3
 from fastapi import Depends, HTTPException, Request, status
 
 logger = logging.getLogger(__name__)
@@ -49,7 +48,8 @@ class _APIKeyRecord:
 
 def _hash_key(raw_key: str) -> str:
     """BLAKE3 hash of raw API key material."""
-    return blake3.blake3(raw_key.encode("utf-8")).hexdigest()
+    from protocol.hashes import hash_bytes
+    return hash_bytes(raw_key.encode("utf-8")).hex()
 
 
 def _load_keys() -> None:

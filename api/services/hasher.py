@@ -11,7 +11,7 @@ import json
 import os
 from datetime import datetime
 
-import blake3
+from protocol.hashes import hash_bytes
 
 
 def hash_request(
@@ -47,7 +47,7 @@ def hash_request(
         separators=(",", ":"),
         ensure_ascii=True,
     )
-    return blake3.blake3(canonical.encode("utf-8")).hexdigest()
+    return hash_bytes(canonical.encode("utf-8")).hex()
 
 
 def hash_document(file_bytes: bytes) -> str:
@@ -61,7 +61,7 @@ def hash_document(file_bytes: bytes) -> str:
     Returns:
         Hex-encoded BLAKE3 digest.
     """
-    return blake3.blake3(file_bytes).hexdigest()
+    return hash_bytes(file_bytes).hex()
 
 
 def generate_commit_id() -> str:

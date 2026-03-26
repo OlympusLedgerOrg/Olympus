@@ -12,8 +12,6 @@ import json
 import logging
 from datetime import datetime, timezone
 
-import blake3
-
 from fastapi import APIRouter, HTTPException, status
 from sqlalchemy import select
 
@@ -41,7 +39,8 @@ def _hash_appeal(request_id: str, grounds: str, statement: str, filed_at: dateti
         separators=(",", ":"),
         ensure_ascii=True,
     )
-    return blake3.blake3(canonical.encode("utf-8")).hexdigest()
+    from protocol.hashes import hash_bytes
+    return hash_bytes(canonical.encode("utf-8")).hex()
 
 
 @router.post("", response_model=AppealResponse, status_code=status.HTTP_201_CREATED)
