@@ -64,6 +64,6 @@ async def compute_state_root(shard_id: str, db: AsyncSession) -> str:
         logger.debug("Shard %s is empty; returning zero root.", shard_id)
         return "0" * 64
 
-    tree = build_tree(hashes)
+    tree = build_tree(hashes, preserve_order=True)
     logger.debug("Computed state root %s for shard %s.", tree.root_hash, shard_id)
     return tree.root_hash

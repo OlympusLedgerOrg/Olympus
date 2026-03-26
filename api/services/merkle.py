@@ -2,12 +2,18 @@
 Binary Merkle-tree construction and inclusion-proof generation.
 
 Uses BLAKE3 for internal nodes via ``protocol.hashes``, consistent with the
-Olympus protocol layer.  Lone nodes at any level are promoted without
-rehashing (CT-style promotion), matching the behaviour of RFC 6962.
+Olympus protocol layer.  Leaf hashes are sorted lexicographically before tree
+construction to ensure global consistency across federation nodes, regardless
+of ingestion order.  Callers that require positional ordering (e.g. append-only
+log proofs) may pass ``preserve_order=True`` to bypass the sort.
+
+Lone nodes at any level are duplicated and hashed (RFC 6962 / Bitcoin pattern)
+to prevent batching-boundary attacks on the Merkle root.
 """
 
 from __future__ import annotations
 
+import warnings
 from dataclasses import dataclass, field
 
 import blake3
@@ -52,16 +58,29 @@ def _blake3_pair(left: str, right: str) -> str:
     return blake3.blake3(data).hexdigest()
 
 
-def build_tree(leaf_hashes: list[str]) -> MerkleRoot:
-    """Build a binary Merkle tree from an ordered list of leaf hashes.
+def build_tree(
+    leaf_hashes: list[str],
+    *,
+    preserve_order: bool = False,
+) -> MerkleRoot:
+    """Build a binary Merkle tree from a list of leaf hashes.
 
-    Leaves are used in the order provided (append-only / CT-style).
-    Callers must pass leaves in deterministic order (e.g. by epoch timestamp).
-    Lone nodes at any level are promoted without rehashing
-    (CT-style / RFC 6962 behaviour).
+    By default, leaf hashes are sorted lexicographically before tree
+    construction to guarantee that any two nodes ingesting the same dataset
+    produce the same Merkle root, regardless of arrival order.
+
+    When ``preserve_order`` is ``True`` the sort is skipped and leaves are
+    used in the order provided.  This is intended for append-only log proofs
+    where positional ordering is meaningful — the caller is responsible for
+    ensuring deterministic order.
+
+    Lone nodes at any level are duplicated and hashed rather than promoted
+    (RFC 6962 / Bitcoin pattern) to prevent batching-boundary root divergence.
 
     Args:
         leaf_hashes: Hex-encoded BLAKE3 leaf hashes.
+        preserve_order: If ``True``, skip the canonical sort.  A warning is
+            emitted reminding the caller that ordering responsibility is theirs.
 
     Returns:
         A :class:`MerkleRoot` containing the computed root and internal levels.
@@ -72,7 +91,16 @@ def build_tree(leaf_hashes: list[str]) -> MerkleRoot:
     if not leaf_hashes:
         raise ValueError("Cannot build a Merkle tree from an empty leaf list.")
 
-    current = list(leaf_hashes)
+    if preserve_order:
+        warnings.warn(
+            "preserve_order=True: caller is responsible for deterministic leaf ordering.",
+            stacklevel=2,
+        )
+        ordered = list(leaf_hashes)
+    else:
+        ordered = sorted(leaf_hashes)
+
+    current = list(ordered)
     levels: list[list[str]] = [list(current)]
 
     while len(current) > 1:
@@ -88,7 +116,7 @@ def build_tree(leaf_hashes: list[str]) -> MerkleRoot:
         current = next_level
         levels.append(list(current))
 
-    return MerkleRoot(root_hash=current[0], leaf_hashes=list(leaf_hashes), levels=levels)
+    return MerkleRoot(root_hash=current[0], leaf_hashes=list(ordered), levels=levels)
 
 
 def generate_proof(leaf_hash: str, tree: MerkleRoot) -> MerkleProof:

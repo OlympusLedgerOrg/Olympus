@@ -269,7 +269,7 @@ async def _build_verification_response(
         all_hashes = list(all_hashes_result.scalars().all())
 
         if all_hashes and commit.doc_hash in all_hashes:
-            tree = build_tree(all_hashes)
+            tree = build_tree(all_hashes, preserve_order=True)
             proof = generate_proof(commit.doc_hash, tree)
             proof_valid = verify_proof(commit.doc_hash, proof, tree.root_hash)
     except Exception:

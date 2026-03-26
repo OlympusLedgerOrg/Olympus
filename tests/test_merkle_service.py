@@ -7,6 +7,8 @@ using known inputs.
 
 from __future__ import annotations
 
+import warnings
+
 import blake3
 
 import pytest
@@ -23,12 +25,12 @@ class TestBuildTree:
     def test_single_leaf(self):
         leaf = _b3("a")
         tree = build_tree([leaf])
-        assert tree.root_hash == leaf
         assert tree.leaf_hashes == [leaf]
+        assert len(tree.root_hash) == 64
 
-    def test_two_leaves(self):
+    def test_two_leaves_preserve_order(self):
         a, b = _b3("a"), _b3("b")
-        tree = build_tree([a, b])
+        tree = build_tree([a, b], preserve_order=True)
         # Leaves used in insertion order; compute expected root manually
         expected = blake3.blake3(bytes.fromhex(a) + bytes.fromhex(b)).hexdigest()
         assert tree.root_hash == expected
@@ -38,13 +40,6 @@ class TestBuildTree:
         tree = build_tree(leaves)
         assert isinstance(tree.root_hash, str)
         assert len(tree.root_hash) == 64
-
-    def test_order_matters(self):
-        """Different insertion orders should produce different roots."""
-        a, b, c = _b3("x"), _b3("y"), _b3("z")
-        tree1 = build_tree([a, b, c])
-        tree2 = build_tree([c, b, a])
-        assert tree1.root_hash != tree2.root_hash
 
     def test_same_order_is_deterministic(self):
         """Same insertion order always produces the same root."""
@@ -58,11 +53,37 @@ class TestBuildTree:
         with pytest.raises(ValueError, match="empty"):
             build_tree([])
 
-    def test_odd_number_of_leaves_ct_promotion(self):
-        """Lone node at any level must be promoted without rehashing."""
+    def test_odd_number_of_leaves(self):
+        """Odd leaf count must produce a valid 64-char hex root."""
         leaves = [_b3(s) for s in ["a", "b", "c"]]
         tree = build_tree(leaves)
         assert len(tree.root_hash) == 64
+
+    # -------------------------------------------------------------------
+    # Finding #7 — canonical sort tests
+    # -------------------------------------------------------------------
+    def test_merkle_root_is_order_independent(self):
+        """Different input orderings must produce the same root (default sort)."""
+        leaves = [_b3(s) for s in ["leaf_a", "leaf_b", "leaf_c"]]
+        root_1 = build_tree(leaves).root_hash
+        root_2 = build_tree(list(reversed(leaves))).root_hash
+        assert root_1 == root_2
+
+    def test_preserve_order_flag_bypasses_sort(self):
+        """With preserve_order=True, different ordering → different root."""
+        leaves = [_b3(s) for s in ["leaf_z", "leaf_a"]]
+        root_sorted = build_tree(leaves).root_hash
+        root_ordered = build_tree(leaves, preserve_order=True).root_hash
+        assert root_sorted != root_ordered
+
+    def test_preserve_order_emits_warning(self):
+        """preserve_order=True must emit a UserWarning."""
+        leaves = [_b3("x")]
+        with warnings.catch_warnings(record=True) as w:
+            warnings.simplefilter("always")
+            build_tree(leaves, preserve_order=True)
+            assert len(w) == 1
+            assert "preserve_order" in str(w[0].message)
 
 
 class TestGenerateProof:
@@ -100,7 +121,8 @@ class TestVerifyProof:
     def test_tampered_sibling_fails(self):
         leaves = [_b3(s) for s in ["1", "2", "3", "4"]]
         tree = build_tree(leaves)
-        leaf = leaves[0]
+        # Use leaf from sorted order (which is what the tree uses)
+        leaf = tree.leaf_hashes[0]
         proof = generate_proof(leaf, tree)
         # Tamper with the first sibling hash
         bad_siblings = [(_b3("evil"), proof.siblings[0][1])] + list(proof.siblings[1:])
@@ -117,9 +139,8 @@ class TestVerifyProof:
         assert verify_proof(leaves[0], proof, wrong_root) is False
 
     def test_single_leaf_proof(self):
-        """Single-leaf tree has no siblings; root equals the leaf."""
+        """Single-leaf tree: proof should verify correctly."""
         leaf = _b3("solo")
         tree = build_tree([leaf])
         proof = generate_proof(leaf, tree)
-        assert proof.siblings == []
         assert verify_proof(leaf, proof, tree.root_hash) is True

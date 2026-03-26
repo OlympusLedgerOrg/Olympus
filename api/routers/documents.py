@@ -142,7 +142,7 @@ async def verify_document(body: DocVerifyRequest, db: DBSession, _rl: RateLimit)
     merkle_proof_data: list[dict] | None = None
     if all_hashes:
         try:
-            tree = build_tree(all_hashes)
+            tree = build_tree(all_hashes, preserve_order=True)
             proof: MerkleProof = generate_proof(commit.doc_hash, tree)
             merkle_proof_data = [
                 {"hash": h, "direction": d} for h, d in proof.siblings
