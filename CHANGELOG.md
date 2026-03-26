@@ -24,12 +24,38 @@ All notable changes to the Olympus protocol are documented in this file.
   accented Latin).  Controlled via `scrub_homoglyphs=True/False` parameter
   on `canonicalize_document()` and `document_to_bytes()`.
 
+- **Schema-annotated list sorting** (`protocol/canonical.py`)
+  Added `sorted_list_keys: set[str] | None` parameter to
+  `canonicalize_document()` and `document_to_bytes()`.  Fields named in the
+  set have their array values sorted deterministically using canonical JSON
+  as the sort key.  Default is `None` (preserve order) for backward
+  compatibility.
+
 - **Idempotency gate** (`api/ingest.py`)
   `IngestionResult` now includes an `idempotent: bool` field, set `True`
   when a duplicate submission returns the existing record instead of creating
   a new ledger entry.  The existing content-hash dedup check was already
   enforced before any ledger write; this field lets callers distinguish fresh
   inserts from deduplicated returns.
+
+- **Mixed crypto isolation** (`api/ingest.py`, `api/auth.py`)
+  `hmac.compare_digest` calls replaced with `_constant_time_equals()` wrapper
+  that documents its sole use is timing-safe comparison (not MAC computation).
+  Clarifies the crypto boundary: BLAKE3 for hashing, Ed25519 (nacl) for
+  signing, `hmac.compare_digest` only for constant-time equality.
+
+- **Proof depth validation** (`api/services/merkle.py`)
+  `MerkleProof` now carries `tree_size`; `verify_proof()` validates that
+  proof depth matches `ceil(log2(tree_size))` and rejects invalid sibling
+  direction values.  `tree_size=0` disables the check for legacy proofs.
+
+- **BLAKE3/Poseidon canonical-hash binding** (`proofs/proof_generator.py`)
+  Added `recompute_canonical_hash()` and `_validate_canonical_hash_binding()`
+  to the unified circuit validator.  Before witness generation, the Python
+  layer independently recomputes the Poseidon chain from `sectionCount`,
+  `sectionLengths`, and `sectionHashes`, and rejects inputs where
+  `canonicalHash` does not match.  This closes the binding gap between the
+  BLAKE3 canonicalization layer and the Poseidon ZK circuit.
 
 ## canonical_v2 (Round 1) — 2026-03-26
 
