@@ -986,6 +986,8 @@ async def commit_document(
         logger.error("Debug UI error: %s", exc, exc_info=True)
         return JSONResponse(status_code=400, content={"ok": False, "error": "Invalid input. Check server logs for details."})
 
+    entry = _commit_store[commit_result["commit_key"]]
+
     ledger_commit_id: str | None = None
     try:
         async with httpx.AsyncClient(timeout=10.0) as api_client:
