@@ -24,6 +24,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 from protocol.canonical import canonicalize_document, document_to_bytes
 from protocol.federation import FederationRegistry
 from protocol.hashes import hash_bytes
+from tools.dataset_cli import build_dataset_parser, dispatch_dataset
 
 
 def _read_file_bytes(path: str) -> bytes:
@@ -455,6 +456,13 @@ def main() -> int:
         type=str,
         help="Optional shard id to query from configured node endpoints",
     )
+
+    dataset_parser = subparsers.add_parser(
+        "dataset",
+        help="Dataset provenance tools (ADR-0010)",
+    )
+    build_dataset_parser(dataset_parser)
+
     args = parser.parse_args()
 
     if args.command == "canon":
@@ -470,6 +478,8 @@ def main() -> int:
             return _cmd_node_start(args)
     if args.command == "federation" and args.federation_command == "status":
         return _cmd_federation_status(args)
+    if args.command == "dataset":
+        return dispatch_dataset(args)
 
     parser.error(f"Unknown command: {args.command}")
     return 1
