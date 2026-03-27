@@ -28,9 +28,9 @@ from fastapi import APIRouter, HTTPException, Query, status
 from api.auth import RequireAPIKey
 from api.schemas.witness import (
     GossipConflictEntry,
+    WitnessAnnouncement,
     WitnessAnnounceRequest,
     WitnessAnnounceResponse,
-    WitnessAnnouncement,
     WitnessHealthResponse,
 )
 from protocol.timestamps import current_timestamp

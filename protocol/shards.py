@@ -22,6 +22,7 @@ from .events import CanonicalEvent
 from .hashes import HASH_SEPARATOR, hash_bytes, shard_header_hash
 from .hlc import HLCTimestamp
 
+
 logger = logging.getLogger(__name__)
 
 # Maximum allowed clock skew between a shard header HLC and the verifier's

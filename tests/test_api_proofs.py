@@ -326,7 +326,6 @@ def test_header_latest_returns_none_for_missing_shard():
 @pytest.mark.asyncio
 async def test_proof_endpoint_does_not_crash_in_production_mode(monkeypatch):
     """GET /ledger/proof/{commit_id} must never return 500 in production mode."""
-    import pytest_asyncio
     from httpx import ASGITransport, AsyncClient
     from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 

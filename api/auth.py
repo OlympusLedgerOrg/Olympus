@@ -34,6 +34,7 @@ from fastapi import Depends, HTTPException, Request, status
 from api.config import get_settings
 from protocol.hashes import hash_bytes
 
+
 logger = logging.getLogger(__name__)
 
 _keys_loaded = False

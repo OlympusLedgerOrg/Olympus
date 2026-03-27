@@ -5,7 +5,6 @@ import pytest
 from hypothesis import given
 
 from protocol.hashes import SNARK_SCALAR_FIELD
-from protocol.poseidon_bn128 import poseidon_hash_bn128
 from protocol.poseidon_smt import (
     POSEIDON_EMPTY_HASHES,
     PoseidonSMT,

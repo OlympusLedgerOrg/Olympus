@@ -16,15 +16,12 @@ from __future__ import annotations
 import unittest.mock
 
 import pytest
-from fastapi.testclient import TestClient
-from starlette.testclient import TestClient as StarletteTestClient
 
 from api.auth import (
     MemoryRateLimitBackend,
     _get_client_ip,
     _ip_in_ranges,
     _is_valid_ip,
-    _rate_limit_backend,
     _TokenBucket,
 )
 

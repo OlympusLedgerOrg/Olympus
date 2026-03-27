@@ -51,6 +51,7 @@ from protocol.hashes import (
     dataset_key,
 )
 
+
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/datasets", tags=["datasets"])
 
@@ -87,7 +88,7 @@ def _verify_signature(pubkey_hex: str, commit_id: str, signature_hex: str) -> bo
     return True
 
 
-async def _check_key_not_revoked(db: "DBSession", pubkey_hex: str) -> None:
+async def _check_key_not_revoked(db: DBSession, pubkey_hex: str) -> None:
     """Cross-reference committer_pubkey against key_credentials (D12).
 
     If a credential exists for this pubkey and its ``revoked_at`` is in

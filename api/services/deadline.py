@@ -14,6 +14,11 @@ not yet implemented but is designed in as an extension point.
 from __future__ import annotations
 
 from datetime import date, datetime, timedelta, timezone
+from typing import TYPE_CHECKING
+
+
+if TYPE_CHECKING:
+    from api.models.request import PublicRecordsRequest
 
 
 def _now_utc() -> datetime:
@@ -79,7 +84,7 @@ def compute_deadline(filed_at: datetime, request_type: str) -> datetime:
     return _add_business_days(filed_at, STATUTORY_NC_FULFILL_DAYS)
 
 
-def is_overdue(request) -> bool:
+def is_overdue(request: PublicRecordsRequest) -> bool:
     """Return True if a request should be transitioned to OVERDUE.
 
     Args:

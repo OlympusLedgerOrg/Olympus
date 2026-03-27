@@ -10,6 +10,7 @@ from __future__ import annotations
 import json
 import logging
 from datetime import datetime, timezone
+from typing import Literal
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -128,12 +129,12 @@ async def verify_by_commit_id(
     resolved_commit_id: str | None = None
     if commit_id.upper().startswith("OLY-"):
         # Search activity log for this display ID
-        result = await db.execute(
+        activity_result = await db.execute(
             select(LedgerActivity)
             .where(LedgerActivity.details_json.isnot(None))
             .order_by(LedgerActivity.timestamp.desc())
         )
-        activities = list(result.scalars().all())
+        activities = list(activity_result.scalars().all())
         for act in activities:
             try:
                 details = json.loads(act.details_json or "{}")
@@ -162,10 +163,10 @@ async def verify_by_commit_id(
         resolved_commit_id = commit_id
 
     # Look up the commit directly
-    result = await db.execute(
+    commit_result = await db.execute(
         select(DocCommit).where(DocCommit.commit_id == resolved_commit_id).limit(1)
     )
-    commit = result.scalars().first()
+    commit = commit_result.scalars().first()
 
     if not commit:
         steps.append(
@@ -348,7 +349,7 @@ async def _build_verification_response(
 
     # Determine overall verification result
     verified = proof_valid and not tamper_detected
-    confidence = "certain" if verified else "none"
+    confidence: Literal["certain", "none"] = "certain" if verified else "none"
 
     # Resolve related request display ID
     related_request: str | None = None

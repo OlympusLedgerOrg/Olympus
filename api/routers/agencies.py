@@ -12,7 +12,7 @@ import logging
 from fastapi import APIRouter, HTTPException, Query, status
 from sqlalchemy import select
 
-from api.auth import RequireAPIKey, RateLimit
+from api.auth import RateLimit, RequireAPIKey
 from api.deps import DBSession
 from api.models.agency import Agency
 from api.schemas.agency import AgencyCreate, AgencyResponse

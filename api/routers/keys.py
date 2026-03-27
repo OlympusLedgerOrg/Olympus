@@ -13,7 +13,7 @@ from datetime import datetime, timezone
 from fastapi import APIRouter, HTTPException, status
 from sqlalchemy import select
 
-from api.auth import RequireAPIKey, RateLimit
+from api.auth import RateLimit, RequireAPIKey
 from api.deps import DBSession
 from api.models.credential import KeyCredential
 from api.schemas.credential import CredentialCreate, CredentialResponse

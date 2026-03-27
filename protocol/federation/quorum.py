@@ -13,9 +13,9 @@ from protocol.canonical_json import canonical_json_bytes
 from protocol.hashes import HASH_SEPARATOR, hash_bytes, shard_header_hash
 
 from .identity import (
-    FEDERATION_DOMAIN_TAG,
     _CERTIFICATE_SIGNATURE_SCHEME_ED25519,
     _HEADER_EXCLUDED_FIELDS,
+    FEDERATION_DOMAIN_TAG,
     FederationRegistry,
     _extract_round_and_height,
     _to_int,

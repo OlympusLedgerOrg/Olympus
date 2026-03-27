@@ -15,6 +15,7 @@ from pathlib import Path
 from pydantic import field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+
 _logger = logging.getLogger(__name__)
 
 

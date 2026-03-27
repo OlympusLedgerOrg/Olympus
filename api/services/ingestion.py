@@ -13,15 +13,15 @@ import logging
 import uuid
 from datetime import datetime, timezone
 
-from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from api.models.document import DocCommit
 from api.models.ledger_activity import LedgerActivity
 from api.schemas.ledger import ProcessStep, SimpleIngestionResponse
 from api.services.hasher import generate_commit_id, hash_document
 from api.services.merkle import build_tree
-from api.services.shard import compute_state_root
+
 
 logger = logging.getLogger(__name__)
 
@@ -161,7 +161,7 @@ async def ingest_document(
     # ── Step 3: Cryptographic hash ───────────────────────────────────────────
     try:
         doc_hash = hash_document(file_bytes)
-    except Exception as exc:
+    except Exception:
         logger.exception("Hashing failed for file %s", filename)
         steps.append(
             _make_step(

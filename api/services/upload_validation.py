@@ -12,6 +12,7 @@ import logging
 import magic
 from fastapi import HTTPException
 
+
 logger = logging.getLogger(__name__)
 
 ALLOWED_MIME_TYPES: set[str] = {

@@ -12,7 +12,7 @@ from typing import Any
 
 import nacl.signing
 
-from protocol.hashes import HASH_SEPARATOR, hash_bytes
+from protocol.hashes import hash_bytes
 
 
 # Public domain-separation tag bound to every federation vote message.

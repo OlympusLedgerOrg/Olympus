@@ -12,7 +12,7 @@ import logging
 from fastapi import APIRouter, HTTPException, status
 from sqlalchemy import exists, select
 
-from api.auth import RequireAPIKey, RateLimit
+from api.auth import RateLimit, RequireAPIKey
 from api.deps import DBSession
 from api.models.document import DocCommit
 from api.models.request import PublicRecordsRequest

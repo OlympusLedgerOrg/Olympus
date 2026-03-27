@@ -5,9 +5,9 @@ from __future__ import annotations
 from typing import Any
 
 from protocol.hashes import (
+    _VRF_COMMIT_REVEAL_PREFIX,
     HASH_SEPARATOR,
     VRF_SELECTION_PREFIX,
-    _VRF_COMMIT_REVEAL_PREFIX,
     blake3_hash,
     hash_bytes,
 )
@@ -25,7 +25,6 @@ from .identity import (
 from .quorum import (
     FederationBehaviorSample,
     NodeSignature,
-    _federation_vote_event_id,
     build_quorum_certificate,
     verify_quorum_certificate,
 )

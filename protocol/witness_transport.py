@@ -17,7 +17,7 @@ import httpx
 
 from protocol.consistency import ConsistencyProof
 from protocol.epochs import SignedTreeHead
-from protocol.monitoring import LogMonitor
+
 
 T = TypeVar("T")
 

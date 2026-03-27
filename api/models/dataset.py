@@ -25,6 +25,7 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from api.models.base import Base
 
+
 if TYPE_CHECKING:
     pass
 
@@ -150,7 +151,7 @@ class DatasetArtifact(Base):
     poseidon_hash: Mapped[str | None] = mapped_column(String(78), nullable=True)
 
     # --- Relationships ------------------------------------------------------
-    files: Mapped[list["DatasetArtifactFile"]] = relationship(
+    files: Mapped[list[DatasetArtifactFile]] = relationship(
         back_populates="artifact", cascade="all, delete-orphan"
     )
 
@@ -178,7 +179,7 @@ class DatasetArtifactFile(Base):
     byte_size: Mapped[int] = mapped_column(BigInteger, nullable=False)
     record_count: Mapped[int | None] = mapped_column(Integer, nullable=True)
 
-    artifact: Mapped["DatasetArtifact"] = relationship(back_populates="files")
+    artifact: Mapped[DatasetArtifact] = relationship(back_populates="files")
 
 
 class DatasetLineageEvent(Base):

@@ -26,7 +26,7 @@ from protocol.canonical import CANONICAL_VERSION
 from protocol.canonicalizer import canonicalization_provenance
 from protocol.hashes import hash_bytes
 from protocol.hlc import HLC_ZERO, HLCTimestamp, advance_hlc
-from protocol.ledger import Ledger, LedgerEntry
+from protocol.ledger import Ledger
 from protocol.shards import (
     MAX_TIMESTAMP_SKEW_MS,
     create_key_revocation_record,

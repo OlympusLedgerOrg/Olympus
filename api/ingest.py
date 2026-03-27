@@ -1184,6 +1184,7 @@ async def ingest_batch(batch: BatchIngestionRequest, request: Request) -> BatchI
                             shard_id=record.shard_id,
                             content_hash=content_hash,
                             deduplicated=False,
+                            idempotent=False,
                         ),
                     )
                 )

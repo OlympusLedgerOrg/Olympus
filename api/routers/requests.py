@@ -16,7 +16,7 @@ from fastapi import APIRouter, HTTPException, Query, status
 from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 
-from api.auth import RequireAPIKey, RateLimit
+from api.auth import RateLimit, RequireAPIKey
 from api.deps import DBSession
 from api.models.request import PublicRecordsRequest, RequestStatus
 from api.schemas.request import RequestCreate, RequestResponse, RequestStatusUpdate
@@ -75,7 +75,6 @@ async def file_request(body: RequestCreate, db: DBSession, _api_key: RequireAPIK
     commit_hash = hash_request(body.subject, body.description, agency_name, filed_at)
     deadline = compute_deadline(filed_at, body.request_type)
 
-    last_exc: Exception | None = None
     for _attempt in range(_DISPLAY_ID_MAX_RETRIES):
         display_id = await _next_display_id(db)
         req = PublicRecordsRequest(
@@ -101,8 +100,7 @@ async def file_request(body: RequestCreate, db: DBSession, _api_key: RequireAPIK
             await db.refresh(req)
             logger.info("Filed request %s (commit=%s)", req.display_id, commit_hash)
             return req
-        except IntegrityError as exc:
-            last_exc = exc
+        except IntegrityError:
             await db.rollback()
             logger.warning("display_id collision on %s, retrying", display_id)
 

@@ -30,6 +30,7 @@ from dataclasses import dataclass, field
 
 import blake3
 
+
 # RFC 6962-style domain separation prefixes.
 # Leaf and internal node hashes use distinct single-byte prefixes so that a
 # crafted leaf value can never collide with an internal node hash.

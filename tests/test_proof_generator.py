@@ -410,7 +410,6 @@ class TestCanonicalHashBinding:
 
     def test_validate_rejects_mismatched_canonical_hash(self):
         """Mismatched canonicalHash must raise ValueError."""
-        config = CircuitConfig.default()
         inputs = self._build_unified_inputs(
             section_count=1,
             section_lengths=[100],

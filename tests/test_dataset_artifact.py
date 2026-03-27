@@ -15,7 +15,6 @@ from datetime import datetime, timezone
 
 import pytest
 import pytest_asyncio
-from sqlalchemy import inspect
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
@@ -135,7 +134,6 @@ class TestDatasetArtifactSchema:
         assert col.unique
 
     def test_dataset_id_indexed(self):
-        col = DatasetArtifact.__table__.c.dataset_id
         assert any(
             idx
             for idx in DatasetArtifact.__table__.indexes
