@@ -2,11 +2,14 @@
 
 from __future__ import annotations
 
+import uuid
+
 import pytest
 from fastapi.testclient import TestClient
 
 import api.routers.witness as witness_module
 from api.main import create_app
+from protocol.timestamps import current_timestamp
 
 app = create_app()
 client = TestClient(app, raise_server_exceptions=True)
@@ -22,13 +25,27 @@ def clear_store() -> None:
 # Helpers
 # ---------------------------------------------------------------------------
 
-def _announcement_payload(origin: str, sequence: int, checkpoint_hash: str = "ab" * 32) -> dict:
+def _nonce() -> str:
+    """Generate a unique nonce for replay-resistance."""
+    return uuid.uuid4().hex
+
+
+def _announcement_payload(
+    origin: str,
+    sequence: int,
+    checkpoint_hash: str = "ab" * 32,
+    *,
+    timestamp: str | None = None,
+    nonce: str | None = None,
+) -> dict:
     return {
         "origin": origin,
         "checkpoint": {
             "sequence": sequence,
             "checkpoint_hash": checkpoint_hash,
+            "timestamp": timestamp or current_timestamp(),
         },
+        "nonce": nonce or _nonce(),
     }
 
 
@@ -60,10 +77,13 @@ def test_submit_observation_stores_entry() -> None:
 
 
 def test_submit_observation_duplicate_returns_409() -> None:
-    payload = _announcement_payload("node-gamma", 3)
-    first = client.post("/witness/observations", json=payload)
+    nonce1 = _nonce()
+    nonce2 = _nonce()
+    payload1 = _announcement_payload("node-gamma", 3, nonce=nonce1)
+    payload2 = _announcement_payload("node-gamma", 3, nonce=nonce2)
+    first = client.post("/witness/observations", json=payload1)
     assert first.status_code == 201
-    second = client.post("/witness/observations", json=payload)
+    second = client.post("/witness/observations", json=payload2)
     assert second.status_code == 409
 
 
@@ -283,3 +303,107 @@ def test_health_count_reflects_observations() -> None:
     resp = client.get("/witness/health")
     assert resp.status_code == 200
     assert resp.json()["observation_count"] == 3
+
+
+# ---------------------------------------------------------------------------
+# Auth gate — POST /witness/observations requires authentication
+# ---------------------------------------------------------------------------
+
+def test_submit_observation_requires_auth_when_keys_configured() -> None:
+    """POST /witness/observations returns 401 when API keys are configured
+    but the request has no key."""
+    import api.auth as auth_module
+
+    original_loaded = auth_module._keys_loaded
+    original_store = dict(auth_module._key_store)
+
+    try:
+        auth_module._keys_loaded = False
+        auth_module._key_store.clear()
+
+        from protocol.hashes import hash_bytes
+
+        test_key_hash = hash_bytes(b"witness-test-key").hex()
+        import json, os
+
+        os.environ["OLYMPUS_FOIA_API_KEYS"] = json.dumps(
+            [{"key_hash": test_key_hash, "key_id": "witness-test"}]
+        )
+
+        # Client with NO auth header should be rejected
+        no_auth_client = TestClient(app, raise_server_exceptions=False)
+        payload = _announcement_payload("no-auth-node", 1)
+        resp = no_auth_client.post("/witness/observations", json=payload)
+        assert resp.status_code == 401
+    finally:
+        auth_module._keys_loaded = original_loaded
+        auth_module._key_store.clear()
+        auth_module._key_store.update(original_store)
+        os.environ.pop("OLYMPUS_FOIA_API_KEYS", None)
+
+
+# ---------------------------------------------------------------------------
+# Replay-resistance: timestamp freshness
+# ---------------------------------------------------------------------------
+
+def test_submit_observation_rejects_stale_timestamp() -> None:
+    """Checkpoint timestamp older than _MAX_ANNOUNCE_SKEW_SECONDS is rejected."""
+    stale_ts = "2020-01-01T00:00:00Z"
+    payload = _announcement_payload("stale-node", 1, timestamp=stale_ts)
+    resp = client.post("/witness/observations", json=payload)
+    assert resp.status_code == 422
+    assert "Stale" in resp.json()["detail"]
+
+
+def test_submit_observation_rejects_future_timestamp() -> None:
+    """Checkpoint timestamp far in the future is rejected."""
+    future_ts = "2099-01-01T00:00:00Z"
+    payload = _announcement_payload("future-node", 1, timestamp=future_ts)
+    resp = client.post("/witness/observations", json=payload)
+    assert resp.status_code == 422
+    assert "future" in resp.json()["detail"]
+
+
+def test_submit_observation_accepts_fresh_timestamp() -> None:
+    """Checkpoint with a current timestamp is accepted."""
+    payload = _announcement_payload("fresh-node", 1, timestamp=current_timestamp())
+    resp = client.post("/witness/observations", json=payload)
+    assert resp.status_code == 201
+
+
+# ---------------------------------------------------------------------------
+# Replay-resistance: nonce deduplication
+# ---------------------------------------------------------------------------
+
+def test_submit_observation_rejects_duplicate_nonce() -> None:
+    """Re-using a nonce returns 409 even if origin/sequence differ."""
+    shared_nonce = "a" * 32
+    payload1 = _announcement_payload("nonce-node-a", 1, nonce=shared_nonce)
+    payload2 = _announcement_payload("nonce-node-b", 2, nonce=shared_nonce)
+    first = client.post("/witness/observations", json=payload1)
+    assert first.status_code == 201
+    second = client.post("/witness/observations", json=payload2)
+    assert second.status_code == 409
+    assert "nonce" in second.json()["detail"].lower()
+
+
+def test_submit_observation_rejects_short_nonce() -> None:
+    """Nonces shorter than 16 characters are rejected by schema validation."""
+    payload = _announcement_payload("short-nonce-node", 1, nonce="tooshort")
+    resp = client.post("/witness/observations", json=payload)
+    assert resp.status_code == 422
+
+
+# ---------------------------------------------------------------------------
+# received_at field on stored announcements
+# ---------------------------------------------------------------------------
+
+def test_stored_announcement_has_received_at() -> None:
+    """WitnessAnnouncement returned by GET includes a server-assigned received_at."""
+    payload = _announcement_payload("ts-node", 50)
+    client.post("/witness/observations", json=payload)
+    resp = client.get("/witness/checkpoints/50")
+    assert resp.status_code == 200
+    body = resp.json()
+    assert "received_at" in body
+    assert body["received_at"].endswith("Z")

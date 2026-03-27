@@ -20,10 +20,12 @@ Endpoints:
 from __future__ import annotations
 
 import logging
-from collections import defaultdict
+from collections import OrderedDict, defaultdict
+from datetime import UTC, datetime
 
 from fastapi import APIRouter, HTTPException, Query, status
 
+from api.auth import RequireAPIKey
 from api.schemas.witness import (
     GossipConflictEntry,
     WitnessAnnounceRequest,
@@ -31,11 +33,21 @@ from api.schemas.witness import (
     WitnessAnnouncement,
     WitnessHealthResponse,
 )
+from protocol.timestamps import current_timestamp
 
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/witness", tags=["witness"])
+
+# Maximum allowed age (in seconds) for announcement timestamps.
+# Announcements whose checkpoint.timestamp is older than this are rejected
+# as stale to prevent replay attacks.
+_MAX_ANNOUNCE_SKEW_SECONDS: int = 60
+
+# Maximum number of nonces to track for deduplication.  When the set
+# reaches this size the oldest entries are evicted.
+_MAX_NONCE_ENTRIES: int = 100_000
 
 # ---------------------------------------------------------------------------
 # In-process observation store (Phase 1 — no DB).
@@ -48,6 +60,11 @@ router = APIRouter(prefix="/witness", tags=["witness"])
 # workers=1 (single-process mode) until the DB upgrade is complete.
 # ---------------------------------------------------------------------------
 _observations: dict[str, WitnessAnnouncement] = {}
+
+# Bounded nonce set for replay-resistance.  Tracks recently seen nonces
+# to reject duplicate submissions.  Uses OrderedDict for O(1) lookup and
+# FIFO eviction when the capacity is reached.
+_seen_nonces: OrderedDict[str, None] = OrderedDict()
 
 
 @router.get("/checkpoints/latest", response_model=WitnessAnnouncement)
@@ -108,36 +125,66 @@ async def list_checkpoints(
     return sorted_announcements[offset : offset + limit]
 
 
-# TODO: auth gate — see docstring
 @router.post(
     "/observations",
     response_model=WitnessAnnounceResponse,
     status_code=status.HTTP_201_CREATED,
 )
-async def submit_observation(request: WitnessAnnounceRequest) -> WitnessAnnounceResponse:
+async def submit_observation(
+    request: WitnessAnnounceRequest,
+    _api_key: RequireAPIKey,
+) -> WitnessAnnounceResponse:
     """Submit a checkpoint announcement from an origin node.
 
     Args:
-        request: Announcement containing the origin identifier and checkpoint.
+        request: Announcement containing the origin identifier, checkpoint,
+            and a unique nonce.
+        _api_key: Injected API-key dependency — callers must provide a valid
+            key via ``X-API-Key`` header or ``Authorization: Bearer`` token.
 
     Returns:
         201 confirmation with origin, sequence, and status.
 
     Raises:
         409: If an announcement from the same origin at the same sequence
-             already exists.
-
-    TODO: Gate this endpoint behind api.auth.RequireAPIKey (or a dedicated
-    witness API-key scope) before exposing it publicly. Without authentication
-    an adversary can flood fake "no-conflict" announcements to suppress a real
-    split-view detection.  See api/auth.py for the RequireAPIKey dependency.
-    Adding the dependency is a one-line change:
-        async def submit_observation(request: …, _key: RequireAPIKey):
-    Before doing so, record an ADR that decides whether witness nodes share
-    the same OLYMPUS_FOIA_API_KEYS key pool as ingest clients or use a
-    separate credential scope — the answer affects key rotation and audit
-    surface.
+             already exists, or if the nonce has been seen before.
+        422: If the checkpoint timestamp is stale (older than
+             ``_MAX_ANNOUNCE_SKEW_SECONDS``).
     """
+    # -- Replay-resistance: validate timestamp freshness -----------------
+    try:
+        ts = datetime.fromisoformat(
+            request.checkpoint.timestamp.replace("Z", "+00:00")
+        ).astimezone(UTC)
+    except (ValueError, AttributeError):
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="checkpoint.timestamp must be a valid ISO 8601 UTC string",
+        )
+
+    now = datetime.now(UTC)
+    age_seconds = (now - ts).total_seconds()
+    if age_seconds > _MAX_ANNOUNCE_SKEW_SECONDS:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=(
+                f"Stale announcement: checkpoint.timestamp is {age_seconds:.0f}s old "
+                f"(max {_MAX_ANNOUNCE_SKEW_SECONDS}s)"
+            ),
+        )
+    if age_seconds < -_MAX_ANNOUNCE_SKEW_SECONDS:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="checkpoint.timestamp is too far in the future",
+        )
+
+    # -- Replay-resistance: nonce deduplication --------------------------
+    if request.nonce in _seen_nonces:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Duplicate nonce — possible replay",
+        )
+
     key = f"{request.origin}:{request.checkpoint.sequence}"
     if key in _observations:
         raise HTTPException(
@@ -148,11 +195,16 @@ async def submit_observation(request: WitnessAnnounceRequest) -> WitnessAnnounce
             ),
         )
 
-    # Use an explicit constructor rather than model_validate(request.model_dump())
-    # so that future fields added to WitnessAnnouncement (e.g. a server-assigned
-    # received_at for replay-resistance) are not silently dropped when the two
-    # schemas diverge.
-    announcement = WitnessAnnouncement(origin=request.origin, checkpoint=request.checkpoint)
+    # Record the nonce (evict oldest if at capacity)
+    _seen_nonces[request.nonce] = None
+    while len(_seen_nonces) > _MAX_NONCE_ENTRIES:
+        _seen_nonces.popitem(last=False)
+
+    announcement = WitnessAnnouncement(
+        origin=request.origin,
+        checkpoint=request.checkpoint,
+        received_at=current_timestamp(),
+    )
     _observations[key] = announcement
 
     logger.info(
@@ -211,9 +263,10 @@ async def witness_health() -> WitnessHealthResponse:
 
 
 def clear_observations() -> None:
-    """Clear all stored observations.
+    """Clear all stored observations and nonce tracking.
 
     Intended for use in tests and maintenance operations.
     """
     _observations.clear()
-    logger.info("Cleared all witness observations")
+    _seen_nonces.clear()
+    logger.info("Cleared all witness observations and nonce state")
