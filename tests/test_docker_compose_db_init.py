@@ -125,10 +125,14 @@ def test_federation_compose_nodes_have_env_file():
     assert compose.count("env_file:") >= EXPECTED_FEDERATION_NODES
 
 
-def test_federation_compose_uses_asyncpg_driver():
-    """Federation DATABASE_URLs must include +asyncpg for the async app engine."""
+def test_federation_compose_uses_component_db_config():
+    """Federation nodes must use component-based DB config (not inline DATABASE_URL)."""
     compose = (REPO_ROOT / "docker-compose.federation.yml").read_text(encoding="utf-8")
-    assert compose.count("postgresql+asyncpg://") >= EXPECTED_FEDERATION_NODES
+    # Each node-app should reference DATABASE_HOST, DATABASE_NAME, DATABASE_USER
+    assert compose.count("DATABASE_HOST:") >= EXPECTED_FEDERATION_NODES
+    assert compose.count("DATABASE_NAME:") >= EXPECTED_FEDERATION_NODES
+    assert compose.count("DATABASE_USER:") >= EXPECTED_FEDERATION_NODES
+    assert compose.count("DATABASE_PASSWORD_FILE:") >= EXPECTED_FEDERATION_NODES
 
 
 def test_dockerfile_copies_alembic_files():

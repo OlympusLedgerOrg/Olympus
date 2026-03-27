@@ -1,54 +1,91 @@
+networks:
+  frontend:
+    driver: bridge
+  backend:
+    driver: bridge
+    internal: true  # backend network has no external routing
+
+secrets:
+  db_password:
+    external: true  # created with: docker secret create db_password -
+
 services:
   node1-db:
     image: postgres:16
     container_name: olympus-node1-db
     environment:
-      POSTGRES_USER: ${POSTGRES_USER:-olympus}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-olympus}
-      POSTGRES_DB: ${POSTGRES_DB:-olympus}
+      POSTGRES_USER: ${POSTGRES_USER:?POSTGRES_USER must be set}
+      POSTGRES_PASSWORD_FILE: /run/secrets/db_password
+      POSTGRES_DB: ${POSTGRES_DB:?POSTGRES_DB must be set}
+    secrets:
+      - db_password
     ports:
-      - "5433:5432"
+      - "127.0.0.1:5433:5432"
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-olympus} -d ${POSTGRES_DB:-olympus}"]
-      interval: 2s
-      timeout: 3s
-      retries: 30
-    volumes:
-      - olympus_node1_pgdata:/var/lib/postgresql/data
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
+    networks:
+      - backend
+    # Tune these values for your deployment environment
+    deploy:
+      resources:
+        limits:
+          memory: 1G
+          cpus: "2.0"
+        reservations:
+          memory: 256M
 
   node2-db:
     image: postgres:16
     container_name: olympus-node2-db
     environment:
-      POSTGRES_USER: ${POSTGRES_USER:-olympus}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-olympus}
-      POSTGRES_DB: ${POSTGRES_DB:-olympus}
+      POSTGRES_USER: ${POSTGRES_USER:?POSTGRES_USER must be set}
+      POSTGRES_PASSWORD_FILE: /run/secrets/db_password
+      POSTGRES_DB: ${POSTGRES_DB:?POSTGRES_DB must be set}
+    secrets:
+      - db_password
     ports:
-      - "5434:5432"
+      - "127.0.0.1:5434:5432"
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-olympus} -d ${POSTGRES_DB:-olympus}"]
-      interval: 2s
-      timeout: 3s
-      retries: 30
-    volumes:
-      - olympus_node2_pgdata:/var/lib/postgresql/data
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
+    networks:
+      - backend
+    # Tune these values for your deployment environment
+    deploy:
+      resources:
+        limits:
+          memory: 1G
+          cpus: "2.0"
+        reservations:
+          memory: 256M
 
   node3-db:
     image: postgres:16
     container_name: olympus-node3-db
     environment:
-      POSTGRES_USER: ${POSTGRES_USER:-olympus}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-olympus}
-      POSTGRES_DB: ${POSTGRES_DB:-olympus}
+      POSTGRES_USER: ${POSTGRES_USER:?POSTGRES_USER must be set}
+      POSTGRES_PASSWORD_FILE: /run/secrets/db_password
+      POSTGRES_DB: ${POSTGRES_DB:?POSTGRES_DB must be set}
+    secrets:
+      - db_password
     ports:
-      - "5435:5432"
+      - "127.0.0.1:5435:5432"
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-olympus} -d ${POSTGRES_DB:-olympus}"]
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
       interval: 2s
       timeout: 3s
       retries: 30
     volumes:
       - olympus_node3_pgdata:/var/lib/postgresql/data
+    networks:
+      - backend
+    # Tune these values for your deployment environment
+    deploy:
+      resources:
+        limits:
+          memory: 1G
+          cpus: "2.0"
+        reservations:
+          memory: 256M
 
   node1-app:
     build:
@@ -65,11 +102,16 @@ services:
         sleep 2 &&
         exec uvicorn api.main:app --host 0.0.0.0 --port 8000
     environment:
-      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-olympus}:${POSTGRES_PASSWORD:-olympus}@node1-db:5432/${POSTGRES_DB:-olympus}
+      # Construct URL at runtime from components, not as a single credential-bearing string
+      DATABASE_HOST: node1-db
+      DATABASE_NAME: ${POSTGRES_DB:?POSTGRES_DB must be set}
+      DATABASE_USER: ${POSTGRES_USER:?POSTGRES_USER must be set}
+      DATABASE_PASSWORD_FILE: /run/secrets/db_password
       # Dev-only signing key generation (do not use in production)
       OLYMPUS_DEV_SIGNING_KEY: "true"
-      OLYMPUS_API_KEYS_JSON: >-
-        [{"key_hash":"84d53ce2f18ae4856edfe631810f984b8c78bf3c0e136bac89e45642c5c85b37","key_id":"demo-key","scopes":["ingest","commit","verify"],"expires_at":"2099-01-01T00:00:00Z"}]
+      OLYMPUS_API_KEYS_JSON: ${OLYMPUS_API_KEYS_JSON:?OLYMPUS_API_KEYS_JSON must be set}
+    secrets:
+      - db_password
     depends_on:
       node1-db:
         condition: service_healthy
@@ -81,6 +123,24 @@ services:
       timeout: 5s
       start_period: 10s
       retries: 5
+    networks:
+      - frontend
+      - backend
+    # Tune these values for your deployment environment
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+          cpus: "1.0"
+        reservations:
+          memory: 128M
+          cpus: "0.25"
+    read_only: true
+    security_opt:
+      - no-new-privileges:true
+    tmpfs:
+      - /tmp
+      - /var/run
 
   node2-app:
     build:
@@ -97,11 +157,16 @@ services:
         sleep 2 &&
         exec uvicorn api.main:app --host 0.0.0.0 --port 8000
     environment:
-      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-olympus}:${POSTGRES_PASSWORD:-olympus}@node2-db:5432/${POSTGRES_DB:-olympus}
+      # Construct URL at runtime from components, not as a single credential-bearing string
+      DATABASE_HOST: node2-db
+      DATABASE_NAME: ${POSTGRES_DB:?POSTGRES_DB must be set}
+      DATABASE_USER: ${POSTGRES_USER:?POSTGRES_USER must be set}
+      DATABASE_PASSWORD_FILE: /run/secrets/db_password
       # Dev-only signing key generation (do not use in production)
       OLYMPUS_DEV_SIGNING_KEY: "true"
-      OLYMPUS_API_KEYS_JSON: >-
-        [{"key_hash":"84d53ce2f18ae4856edfe631810f984b8c78bf3c0e136bac89e45642c5c85b37","key_id":"demo-key","scopes":["ingest","commit","verify"],"expires_at":"2099-01-01T00:00:00Z"}]
+      OLYMPUS_API_KEYS_JSON: ${OLYMPUS_API_KEYS_JSON:?OLYMPUS_API_KEYS_JSON must be set}
+    secrets:
+      - db_password
     depends_on:
       node2-db:
         condition: service_healthy
@@ -113,6 +178,24 @@ services:
       timeout: 5s
       start_period: 10s
       retries: 5
+    networks:
+      - frontend
+      - backend
+    # Tune these values for your deployment environment
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+          cpus: "1.0"
+        reservations:
+          memory: 128M
+          cpus: "0.25"
+    read_only: true
+    security_opt:
+      - no-new-privileges:true
+    tmpfs:
+      - /tmp
+      - /var/run
 
   node3-app:
     build:
@@ -129,11 +212,16 @@ services:
         sleep 2 &&
         exec uvicorn api.main:app --host 0.0.0.0 --port 8000
     environment:
-      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-olympus}:${POSTGRES_PASSWORD:-olympus}@node3-db:5432/${POSTGRES_DB:-olympus}
+      # Construct URL at runtime from components, not as a single credential-bearing string
+      DATABASE_HOST: node3-db
+      DATABASE_NAME: ${POSTGRES_DB:?POSTGRES_DB must be set}
+      DATABASE_USER: ${POSTGRES_USER:?POSTGRES_USER must be set}
+      DATABASE_PASSWORD_FILE: /run/secrets/db_password
       # Dev-only signing key generation (do not use in production)
       OLYMPUS_DEV_SIGNING_KEY: "true"
-      OLYMPUS_API_KEYS_JSON: >-
-        [{"key_hash":"84d53ce2f18ae4856edfe631810f984b8c78bf3c0e136bac89e45642c5c85b37","key_id":"demo-key","scopes":["ingest","commit","verify"],"expires_at":"2099-01-01T00:00:00Z"}]
+      OLYMPUS_API_KEYS_JSON: ${OLYMPUS_API_KEYS_JSON:?OLYMPUS_API_KEYS_JSON must be set}
+    secrets:
+      - db_password
     depends_on:
       node3-db:
         condition: service_healthy
@@ -145,6 +233,24 @@ services:
       timeout: 5s
       start_period: 10s
       retries: 5
+    networks:
+      - frontend
+      - backend
+    # Tune these values for your deployment environment
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+          cpus: "1.0"
+        reservations:
+          memory: 128M
+          cpus: "0.25"
+    read_only: true
+    security_opt:
+      - no-new-privileges:true
+    tmpfs:
+      - /tmp
+      - /var/run
 
   federation-ui:
     build:
@@ -166,6 +272,21 @@ services:
         condition: service_healthy
     ports:
       - "8081:8080"
+    networks:
+      - frontend
+    # Tune these values for your deployment environment
+    deploy:
+      resources:
+        limits:
+          memory: 256M
+          cpus: "0.5"
+        reservations:
+          memory: 128M
+    read_only: true
+    security_opt:
+      - no-new-privileges:true
+    tmpfs:
+      - /tmp
 
 volumes:
   olympus_node1_pgdata:

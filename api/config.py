@@ -7,10 +7,40 @@ for development. Use a .env file or environment to override in production.
 
 from __future__ import annotations
 
+import logging
+import os
 from functools import lru_cache
+from pathlib import Path
 
 from pydantic import field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+_logger = logging.getLogger(__name__)
+
+
+def _load_db_password() -> str:
+    """Load database password from Docker secret file or environment variable.
+
+    Prefers ``DATABASE_PASSWORD_FILE`` (Docker secrets).  Falls back to
+    ``DATABASE_PASSWORD`` env var and logs a warning about credential
+    visibility.
+
+    Returns:
+        The database password as a string (may be empty).
+    """
+    password_file = os.getenv("DATABASE_PASSWORD_FILE")
+    if password_file:
+        path = Path(password_file)
+        if path.exists():
+            return path.read_text().strip()
+        _logger.warning("DATABASE_PASSWORD_FILE=%s does not exist — falling back to env var", password_file)
+    password = os.getenv("DATABASE_PASSWORD", "")
+    if password:
+        _logger.warning(
+            "DATABASE_PASSWORD_FILE not configured — credentials visible in environment. "
+            "Use Docker secrets in production."
+        )
+    return password
 
 
 class Settings(BaseSettings):
