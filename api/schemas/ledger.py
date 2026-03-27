@@ -46,6 +46,7 @@ class ProofResponse(BaseModel):
     zk_proof: dict | None
     shard_id: str
     epoch: datetime
+    proof_type: str = "unknown"  # "groth16" | "stub" | "pending" | "unknown"
 
 
 # ── User-friendly schemas ─────────────────────────────────────────────────────
