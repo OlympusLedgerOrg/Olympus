@@ -62,7 +62,7 @@ def _get_storage() -> StorageLayer:
         # Validate DATABASE_URL format
         parsed_url = urlparse(DATABASE_URL)
         if not parsed_url.username:
-            raise RuntimeError(f"DATABASE_URL missing username/password: {DATABASE_URL}")
+            raise RuntimeError("DATABASE_URL missing username/password")
 
         logger.info(
             f"Connecting to database: scheme={parsed_url.scheme}, "
@@ -102,10 +102,10 @@ def _get_storage() -> StorageLayer:
 
     except Exception as e:
         _db_error = str(e)
-        logger.warning(f"Database initialization deferred: {e}")
+        logger.error("Database initialization failed: %s", e, exc_info=True)
         raise HTTPException(
             status_code=503,
-            detail=f"Database not available: {_db_error}",
+            detail="Database temporarily unavailable. Please try again later.",
         ) from e
 
 
@@ -188,9 +188,10 @@ def db_op(description: str) -> Generator[None, None, None]:
         raise
     except Exception as exc:
         if _is_db_unavailable_error(exc):
+            logger.error("Storage layer error (%s): %s", description, exc, exc_info=True)
             raise HTTPException(
                 status_code=503,
-                detail=f"Database unavailable ({description}): {exc}",
+                detail="Database temporarily unavailable. Please try again later.",
             ) from exc
         raise
 

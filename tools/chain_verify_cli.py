@@ -30,6 +30,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from protocol.canonical_json import canonical_json_bytes
 from protocol.hashes import _SEP, LEDGER_PREFIX, blake3_hash
+from protocol.hlc import HLCTimestamp
 from protocol.ledger import Ledger, LedgerEntry
 
 
@@ -88,6 +89,8 @@ def cmd_verify(args: argparse.Namespace) -> int:
     if entries and entries[0].prev_entry_hash != "":
         errors.append("GENESIS ERROR: First entry has non-empty prev_entry_hash")
 
+    prev_hlc: HLCTimestamp | None = None
+
     for i, entry in enumerate(entries):
         # Recompute entry hash
         payload = {
@@ -111,7 +114,30 @@ def cmd_verify(args: argparse.Namespace) -> int:
         else:
             poseidon_bytes = b""
 
-        expected_hash = blake3_hash([LEDGER_PREFIX, canonical_json_bytes(payload), _SEP, poseidon_bytes]).hex()
+        # Include HLC bytes in hash if present (new format), otherwise legacy
+        if getattr(entry, "hlc_bytes", None) is not None:
+            try:
+                hlc_raw = bytes.fromhex(entry.hlc_bytes)
+                entry_hlc = HLCTimestamp.from_bytes(hlc_raw)
+            except (ValueError, TypeError):
+                errors.append(f"INVALID HLC at entry {i}: cannot decode hlc_bytes")
+                continue
+
+            # Check HLC monotonicity
+            if prev_hlc is not None and entry_hlc <= prev_hlc:
+                errors.append(
+                    f"HLC NOT MONOTONIC at entry {i}: "
+                    f"wall_ms={entry_hlc.wall_ms} counter={entry_hlc.counter}"
+                )
+            prev_hlc = entry_hlc
+
+            expected_hash = blake3_hash(
+                [LEDGER_PREFIX, canonical_json_bytes(payload), _SEP, poseidon_bytes, _SEP, hlc_raw]
+            ).hex()
+        else:
+            expected_hash = blake3_hash(
+                [LEDGER_PREFIX, canonical_json_bytes(payload), _SEP, poseidon_bytes]
+            ).hex()
 
         if entry.entry_hash != expected_hash:
             errors.append(

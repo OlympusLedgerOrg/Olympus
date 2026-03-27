@@ -4,6 +4,7 @@ from typing import Any
 
 from .canonical_json import canonical_json_bytes
 from .hashes import HASH_SEPARATOR, LEDGER_PREFIX, SNARK_SCALAR_FIELD, blake3_hash
+from .hlc import HLCTimestamp
 from .ledger import LedgerEntry
 from .merkle import MerkleTree
 
@@ -17,6 +18,8 @@ def _verify_entry_chain(entries: list[LedgerEntry]) -> bool:
         return True
     if entries[0].prev_entry_hash != "":
         return False
+
+    prev_hlc: HLCTimestamp | None = None
 
     for index, entry in enumerate(entries):
         payload: dict[str, Any] = {
@@ -43,7 +46,26 @@ def _verify_entry_chain(entries: list[LedgerEntry]) -> bool:
         else:
             poseidon_bytes = b""
 
-        expected_hash = blake3_hash([LEDGER_PREFIX, canonical_json_bytes(payload), _SEP, poseidon_bytes])
+        # Include HLC bytes in hash if present (new format), otherwise legacy
+        if getattr(entry, "hlc_bytes", None) is not None:
+            try:
+                hlc_raw = bytes.fromhex(entry.hlc_bytes)
+                entry_hlc = HLCTimestamp.from_bytes(hlc_raw)
+            except (ValueError, TypeError):
+                return False
+
+            if prev_hlc is not None and entry_hlc <= prev_hlc:
+                return False
+            prev_hlc = entry_hlc
+
+            expected_hash = blake3_hash(
+                [LEDGER_PREFIX, canonical_json_bytes(payload), _SEP, poseidon_bytes, _SEP, hlc_raw]
+            )
+        else:
+            expected_hash = blake3_hash(
+                [LEDGER_PREFIX, canonical_json_bytes(payload), _SEP, poseidon_bytes]
+            )
+
         if entry.entry_hash != expected_hash.hex():
             return False
         if index > 0 and entry.prev_entry_hash != entries[index - 1].entry_hash:

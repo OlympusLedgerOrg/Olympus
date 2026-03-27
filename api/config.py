@@ -47,6 +47,12 @@ class Settings(BaseSettings):
     # Maximum upload file size in bytes (default 256 MB)
     max_upload_bytes: int = 256 * 1024 * 1024
 
+    # TLS configuration — set to true when terminating TLS at the app layer
+    tls_enabled: bool = False
+
+    # Maximum allowed timestamp skew for shard headers (milliseconds)
+    shard_timestamp_skew_ms: int = 30_000
+
     # Statutory deadlines (business days)
     # NC Public Records: no explicit limit; flag overdue after these thresholds
     statutory_window_nc_ack_days: int = 14   # G.S. § 132 — acknowledgment

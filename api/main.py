@@ -21,6 +21,8 @@ from typing import Any
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from starlette.middleware.base import BaseHTTPMiddleware
+from starlette.requests import Request
 
 from api.config import get_settings
 from api.db import engine
@@ -61,6 +63,32 @@ async def lifespan(app: FastAPI):
     logger.info("Engine disposed; shutdown complete.")
 
 
+class SecurityHeadersMiddleware(BaseHTTPMiddleware):
+    """Add standard security response headers to every API response."""
+
+    async def dispatch(self, request: Request, call_next):  # noqa: ANN001
+        response = await call_next(request)
+        response.headers["X-Content-Type-Options"] = "nosniff"
+        response.headers["X-Frame-Options"] = "DENY"
+        response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
+        response.headers["Permissions-Policy"] = "geolocation=(), camera=(), microphone=()"
+        # Only set HSTS if TLS is configured
+        if getattr(get_settings(), "tls_enabled", False):
+            response.headers["Strict-Transport-Security"] = (
+                "max-age=63072000; includeSubDomains"
+            )
+        # CSP — restrictive default; operators should customize for their frontend origin
+        response.headers["Content-Security-Policy"] = (
+            "default-src 'self'; "
+            "script-src 'self'; "
+            "style-src 'self' 'unsafe-inline'; "  # TODO: Replace unsafe-inline with nonces after frontend refactor
+            "img-src 'self' data:; "
+            "connect-src 'self'; "
+            "frame-ancestors 'none';"
+        )
+        return response
+
+
 def create_app() -> FastAPI:
     """Build and configure the unified FastAPI application.
 
@@ -99,6 +127,8 @@ def create_app() -> FastAPI:
         allow_methods=["GET", "POST", "PATCH", "DELETE"],
         allow_headers=["Authorization", "Content-Type"],
     )
+
+    app.add_middleware(SecurityHeadersMiddleware)
 
     # FOIA routers
     app.include_router(documents.router)

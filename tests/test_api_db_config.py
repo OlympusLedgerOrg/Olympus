@@ -21,7 +21,7 @@ def test_get_storage_rejects_missing_database_url(monkeypatch):
     monkeypatch.setattr(storage_layer_mod, "_storage", None)
     monkeypatch.setattr(storage_layer_mod, "_db_error", None)
 
-    with pytest.raises(HTTPException, match="DATABASE_URL is required"):
+    with pytest.raises(HTTPException, match="Database temporarily unavailable"):
         api_app._get_storage()
 
 

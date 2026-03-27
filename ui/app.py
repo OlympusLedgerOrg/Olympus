@@ -3,6 +3,7 @@
 import base64
 import hmac
 import json
+import logging
 import os
 from datetime import datetime, timezone
 from pathlib import Path
@@ -43,6 +44,10 @@ DEBUG_UI_ENABLED = True
 # Optional HTTP Basic Auth password; when set, every debug console request
 # must include a valid Authorization header.
 _DEBUG_CONSOLE_PASSWORD = os.environ.get("OLYMPUS_DEBUG_CONSOLE_PASSWORD", "")
+
+_ENV = os.environ.get("OLYMPUS_ENV", "production")
+
+logger = logging.getLogger(__name__)
 
 
 def _load_federation_nodes() -> dict[str, str]:
@@ -107,6 +112,31 @@ async def _debug_console_basic_auth(
                 headers={"WWW-Authenticate": 'Basic realm="Olympus Debug Console"'},
             )
     return await call_next(request)
+
+
+_SECURITY_HEADERS: dict[str, str] = {
+    "X-Content-Type-Options": "nosniff",
+    "X-Frame-Options": "DENY",
+    "Referrer-Policy": "strict-origin-when-cross-origin",
+    # TODO: Replace unsafe-inline with nonces after frontend refactor
+    "Content-Security-Policy": (
+        "default-src 'self'; "
+        "script-src 'self'; "
+        "style-src 'self' 'unsafe-inline'; "
+        "img-src 'self' data:; "
+        "connect-src 'self'; "
+        "frame-ancestors 'none';"
+    ),
+}
+
+
+@app.middleware("http")
+async def _security_headers_middleware(request: Request, call_next: Any) -> Any:
+    """Attach security headers to every debug UI response."""
+    response = await call_next(request)
+    for header, value in _SECURITY_HEADERS.items():
+        response.headers[header] = value
+    return response
 
 
 templates = Jinja2Templates(directory="ui/templates")
@@ -732,9 +762,15 @@ async def proxy_ledger_verify_simple(request: Request):
     except httpx.HTTPStatusError as exc:
         return JSONResponse(status_code=exc.response.status_code, content=exc.response.json())
     except httpx.RequestError as exc:
-        return JSONResponse(status_code=502, content={"error": str(exc)})
+        if _ENV == "development":
+            return JSONResponse(status_code=502, content={"error": str(exc)})
+        logger.error("Debug UI proxy error: %s", exc, exc_info=True)
+        return JSONResponse(status_code=502, content={"error": "An internal error occurred. Check server logs for details."})
     except Exception as exc:
-        return JSONResponse(status_code=500, content={"error": str(exc)})
+        if _ENV == "development":
+            return JSONResponse(status_code=500, content={"error": str(exc)})
+        logger.error("Debug UI error: %s", exc, exc_info=True)
+        return JSONResponse(status_code=500, content={"error": "An internal error occurred. Check server logs for details."})
 
 
 @app.get("/sw.js")
@@ -945,7 +981,10 @@ async def commit_document(
             canon_provenance=canon_prov,
         )
     except ValueError as exc:
-        return JSONResponse(status_code=400, content={"ok": False, "error": str(exc)})
+        if _ENV == "development":
+            return JSONResponse(status_code=400, content={"ok": False, "error": str(exc)})
+        logger.error("Debug UI error: %s", exc, exc_info=True)
+        return JSONResponse(status_code=400, content={"ok": False, "error": "Invalid input. Check server logs for details."})
 
     entry = _commit_store[commit_result["commit_key"]]
 
@@ -986,9 +1025,15 @@ def get_committed_sections(doc_id: str, version: int):
     try:
         entry = _get_commit_entry(doc_id, version)
     except ValueError as exc:
+        if _ENV == "development":
+            return JSONResponse(
+                status_code=404,
+                content={"ok": False, "error": str(exc)},
+            )
+        logger.error("Debug UI error: %s", exc, exc_info=True)
         return JSONResponse(
             status_code=404,
-            content={"ok": False, "error": str(exc)},
+            content={"ok": False, "error": "Resource not found. Check server logs for details."},
         )
 
     return JSONResponse(
@@ -1016,16 +1061,27 @@ async def create_redaction(request: Request):
         version = int(body["version"])
         revealed_indices = [int(i) for i in body["revealed_indices"]]
     except (KeyError, TypeError, ValueError) as exc:
+        if _ENV == "development":
+            return JSONResponse(
+                status_code=400, content={"ok": False, "error": f"Invalid request: {exc}"}
+            )
+        logger.error("Debug UI error: %s", exc, exc_info=True)
         return JSONResponse(
-            status_code=400, content={"ok": False, "error": f"Invalid request: {exc}"}
+            status_code=400, content={"ok": False, "error": "Invalid input. Check server logs for details."}
         )
 
     try:
         entry = _get_commit_entry(document_id, version)
     except ValueError as exc:
+        if _ENV == "development":
+            return JSONResponse(
+                status_code=404,
+                content={"ok": False, "error": str(exc)},
+            )
+        logger.error("Debug UI error: %s", exc, exc_info=True)
         return JSONResponse(
             status_code=404,
-            content={"ok": False, "error": str(exc)},
+            content={"ok": False, "error": "Resource not found. Check server logs for details."},
         )
 
     parts: list[str] = entry["parts"]
@@ -1050,7 +1106,10 @@ async def create_redaction(request: Request):
             zk_proof={},
         )
     except ValueError as exc:
-        return JSONResponse(status_code=400, content={"ok": False, "error": str(exc)})
+        if _ENV == "development":
+            return JSONResponse(status_code=400, content={"ok": False, "error": str(exc)})
+        logger.error("Debug UI error: %s", exc, exc_info=True)
+        return JSONResponse(status_code=400, content={"ok": False, "error": "Invalid input. Check server logs for details."})
 
     smt_root_hex = smt.get_root().hex()
     revealed_content = [parts[i] for i in revealed_indices]
@@ -1086,9 +1145,15 @@ async def verify_proof_bundle(request: Request):
         body = await request.json()
         proof, smt_root, revealed_indices, revealed_content, total_parts = _parse_proof_bundle(body)
     except (KeyError, TypeError, ValueError) as exc:
+        if _ENV == "development":
+            return JSONResponse(
+                status_code=400,
+                content={"ok": False, "error": f"Invalid proof bundle: {exc}"},
+            )
+        logger.error("Debug UI error: %s", exc, exc_info=True)
         return JSONResponse(
             status_code=400,
-            content={"ok": False, "error": f"Invalid proof bundle: {exc}"},
+            content={"ok": False, "error": "Invalid input. Check server logs for details."},
         )
 
     smt_anchor_ok = proof.verify_smt_anchor(smt_root)
@@ -1122,7 +1187,10 @@ def get_embargo_state(doc_id: str, version: int):
     try:
         entry = _get_commit_entry(doc_id, version)
     except ValueError as exc:
-        return JSONResponse(status_code=404, content={"ok": False, "error": str(exc)})
+        if _ENV == "development":
+            return JSONResponse(status_code=404, content={"ok": False, "error": str(exc)})
+        logger.error("Debug UI error: %s", exc, exc_info=True)
+        return JSONResponse(status_code=404, content={"ok": False, "error": "Resource not found. Check server logs for details."})
     return JSONResponse(
         {"ok": True, "document_id": doc_id, "version": version, "embargo": _embargo_summary(entry)}
     )
@@ -1144,8 +1212,13 @@ async def update_embargo(request: Request):
         )
         recipient_keys = _parse_recipient_keys(str(body.get("recipient_keys", "")))
     except (KeyError, TypeError, ValueError) as exc:
+        if _ENV == "development":
+            return JSONResponse(
+                status_code=400, content={"ok": False, "error": f"Invalid request: {exc}"}
+            )
+        logger.error("Debug UI error: %s", exc, exc_info=True)
         return JSONResponse(
-            status_code=400, content={"ok": False, "error": f"Invalid request: {exc}"}
+            status_code=400, content={"ok": False, "error": "Invalid input. Check server logs for details."}
         )
 
     entry["release_at"] = normalized_release_at
@@ -1179,8 +1252,13 @@ async def revoke_embargo_recipient(request: Request):
         recipient_key = str(body["recipient_key"]).strip()
         entry = _get_commit_entry(document_id, version)
     except (KeyError, TypeError, ValueError) as exc:
+        if _ENV == "development":
+            return JSONResponse(
+                status_code=400, content={"ok": False, "error": f"Invalid request: {exc}"}
+            )
+        logger.error("Debug UI error: %s", exc, exc_info=True)
         return JSONResponse(
-            status_code=400, content={"ok": False, "error": f"Invalid request: {exc}"}
+            status_code=400, content={"ok": False, "error": "Invalid input. Check server logs for details."}
         )
 
     if recipient_key not in entry.get("recipient_keys", []):
@@ -1316,8 +1394,13 @@ async def inspect_proof_bundle(request: Request):
     try:
         bundle = await request.json()
     except Exception as exc:
+        if _ENV == "development":
+            return JSONResponse(
+                status_code=400, content={"ok": False, "error": f"Invalid JSON: {exc}"}
+            )
+        logger.error("Debug UI error: %s", exc, exc_info=True)
         return JSONResponse(
-            status_code=400, content={"ok": False, "error": f"Invalid JSON: {exc}"}
+            status_code=400, content={"ok": False, "error": "Invalid JSON input."}
         )
 
     # Validate bundle schema before running checks

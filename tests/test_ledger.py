@@ -122,7 +122,7 @@ def test_ledger_chain_linkage():
 
 
 def test_ledger_entry_hash_computation():
-    """Test that entry hash is computed correctly."""
+    """Test that entry hash is computed correctly (including HLC bytes)."""
     ledger = Ledger()
 
     entry = ledger.append(
@@ -132,7 +132,7 @@ def test_ledger_entry_hash_computation():
         canonicalization=_canonicalization(),
     )
 
-    # Recompute the hash to verify
+    # Recompute the hash to verify — new entries include HLC bytes
     payload = {
         "ts": entry.ts,
         "record_hash": entry.record_hash,
@@ -144,7 +144,8 @@ def test_ledger_entry_hash_computation():
     }
     from protocol.hashes import _SEP
 
-    expected_hash = blake3_hash([LEDGER_PREFIX, canonical_json_bytes(payload), _SEP, b""]).hex()
+    hlc_raw = bytes.fromhex(entry.hlc_bytes)
+    expected_hash = blake3_hash([LEDGER_PREFIX, canonical_json_bytes(payload), _SEP, b"", _SEP, hlc_raw]).hex()
 
     assert entry.entry_hash == expected_hash
 
@@ -183,7 +184,8 @@ def test_ledger_entry_hash_includes_federation_quorum_certificate_when_present()
     }
     from protocol.hashes import _SEP
 
-    expected_hash = blake3_hash([LEDGER_PREFIX, canonical_json_bytes(payload), _SEP, b""]).hex()
+    hlc_raw = bytes.fromhex(entry.hlc_bytes)
+    expected_hash = blake3_hash([LEDGER_PREFIX, canonical_json_bytes(payload), _SEP, b"", _SEP, hlc_raw]).hex()
     assert entry.entry_hash == expected_hash
 
 
@@ -622,12 +624,15 @@ def test_ledger_dual_root_entry_hash_uses_dual_commitment():
         "prev_entry_hash": "",
         "poseidon_root": _SAMPLE_POSEIDON_ROOT,
     }
+    hlc_raw = bytes.fromhex(entry.hlc_bytes)
     expected = blake3_hash(
         [
             LEDGER_PREFIX,
             canonical_json_bytes(payload),
             _SEP,
             _poseidon_root_bytes(_SAMPLE_POSEIDON_ROOT),
+            _SEP,
+            hlc_raw,
         ]
     ).hex()
     assert entry.entry_hash == expected
