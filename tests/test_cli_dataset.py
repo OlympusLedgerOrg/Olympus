@@ -396,6 +396,144 @@ def test_commit_manifest_entries_no_sort_key(key_prefix, dataset_dir):
         assert "sort_key" not in entry, f"'sort_key' leaked into manifest entry: {entry}"
 
 
+def test_commit_skips_symlinks(key_prefix, tmp_path):
+    """Symlinks inside the dataset directory must not appear in the manifest.
+
+    Path.is_file() follows symlinks, so without an explicit is_symlink() guard
+    a symlink pointing to a regular file would be silently included as if it
+    were a real file.  The manifest must contain only transferable regular-file
+    content.
+    """
+    ds = tmp_path / "ds"
+    ds.mkdir()
+    real_file = ds / "real.txt"
+    real_file.write_text("actual content")
+    link = ds / "link_to_real.txt"
+    try:
+        link.symlink_to(real_file)
+    except OSError:
+        pytest.skip("filesystem does not support symlinks")
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            str(CLI_PATH),
+            "commit",
+            str(ds),
+            "--private-key", f"{key_prefix}.priv",
+            "--dataset-name", "symlink-test",
+            "--source-uri", "https://example.com",
+            "--namespace", "ns",
+        ],
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 0, result.stderr
+    bundle = json.loads(result.stdout)
+    paths = [e["path"] for e in bundle["manifest"]["files"]]
+    assert "real.txt" in paths, "regular file must be present"
+    assert "link_to_real.txt" not in paths, "symlink must be excluded from manifest"
+    # Exactly one file
+    assert len(paths) == 1, f"expected 1 entry (regular file only), got {paths}"
+
+
+def test_commit_sort_respects_directory_prefix(key_prefix, tmp_path):
+    """Sort must use the full relative POSIX path, not just the filename.
+
+    Without a directory-aware sort, a file at 'sub/alpha.txt' could end up
+    after 'Top.txt' because 'alpha' < 'Top' alphabetically but 'sub/' > 'T'
+    — the sort key must include the directory component.
+    """
+    ds = tmp_path / "ds"
+    ds.mkdir()
+    # These filenames are chosen so that casefold of the full relative path
+    # gives a clear ordering: 'a/z.txt' < 'b/a.txt' < 'c.txt'
+    (ds / "c.txt").write_text("c")
+    subA = ds / "a"
+    subA.mkdir()
+    (subA / "z.txt").write_text("az")
+    subB = ds / "b"
+    subB.mkdir()
+    (subB / "a.txt").write_text("ba")
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            str(CLI_PATH),
+            "commit",
+            str(ds),
+            "--private-key", f"{key_prefix}.priv",
+            "--dataset-name", "dir-sort-test",
+            "--source-uri", "https://example.com",
+            "--namespace", "ns",
+        ],
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 0, result.stderr
+    bundle = json.loads(result.stdout)
+    paths = [e["path"] for e in bundle["manifest"]["files"]]
+    expected = sorted(paths, key=lambda p: (p.casefold(), p))
+    assert paths == expected, (
+        f"Sort does not respect directory component: got {paths}, expected {expected}"
+    )
+    # Also verify the concrete order: a/z.txt < b/a.txt < c.txt
+    assert paths == ["a/z.txt", "b/a.txt", "c.txt"], (
+        f"Unexpected order: {paths}"
+    )
+
+
+def test_commit_sort_unicode_casefold(key_prefix, tmp_path):
+    """casefold() must be used instead of lower() for Unicode correctness.
+
+    German sharp S: 'ß'.casefold() == 'ss', but 'ß'.lower() == 'ß'.
+    Because 'ß' (U+00DF = 223) > 't' (U+0074 = 116) in Unicode,
+    lower()-based sort places ß.txt *after* T.txt.
+    But casefold()-based sort produces 'ss' < 't', placing ß.txt *before* T.txt.
+
+    This test creates S.txt, ß.txt, T.txt and asserts the casefold order:
+        S.txt ('s')  →  ß.txt ('ss')  →  T.txt ('t')
+    """
+    ds = tmp_path / "ds"
+    ds.mkdir()
+    try:
+        (ds / "ß.txt").write_text("sharp-s")
+    except OSError:
+        pytest.skip("filesystem does not support this Unicode filename")
+    (ds / "S.txt").write_text("s-upper")
+    (ds / "T.txt").write_text("t-upper")
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            str(CLI_PATH),
+            "commit",
+            str(ds),
+            "--private-key", f"{key_prefix}.priv",
+            "--dataset-name", "unicode-test",
+            "--source-uri", "https://example.com",
+            "--namespace", "ns",
+        ],
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 0, result.stderr
+    bundle = json.loads(result.stdout)
+    paths = [e["path"] for e in bundle["manifest"]["files"]]
+
+    # casefold order: S.txt → ß.txt → T.txt  (s < ss < t)
+    assert paths == sorted(paths, key=lambda p: (p.casefold(), p)), (
+        f"Files not in casefold order: {paths}"
+    )
+    s_idx = paths.index("S.txt")
+    beta_idx = paths.index("ß.txt")
+    t_idx = paths.index("T.txt")
+    assert s_idx < beta_idx < t_idx, (
+        f"Expected S.txt < ß.txt < T.txt (casefold), got indices "
+        f"S={s_idx}, ß={beta_idx}, T={t_idx} in {paths}"
+    )
+
+
 def test_commit_empty_directory(key_prefix, tmp_path):
     ds = tmp_path / "empty_ds"
     ds.mkdir()

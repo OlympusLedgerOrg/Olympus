@@ -68,6 +68,10 @@ def _scan_files(directory: Path) -> list[dict]:
     POSIX-style relative path, *hash* is the hex-encoded BLAKE3 digest of the
     file bytes, and *size* is the byte count reported by the filesystem.
 
+    Only regular files are included.  Symlinks, directories, device nodes, and
+    any other non-regular filesystem objects are silently skipped so that the
+    manifest represents only transferable file content.
+
     Ordering contract
     -----------------
     Entries are sorted with a two-level key:
@@ -75,7 +79,9 @@ def _scan_files(directory: Path) -> list[dict]:
     1. **Primary**: ``rel_path.casefold()`` — Unicode-aware case-folding
        (a superset of ``.lower()``) ensures identical leaf order on
        case-insensitive filesystems (NTFS, APFS) and case-sensitive filesystems
-       (ext4) when files share identical content.
+       (ext4) when files share identical content.  Unlike ``.lower()``,
+       ``casefold()`` correctly maps German ``ß`` to ``ss``, Greek capital
+       ``Σ`` to ``σ``, etc.
     2. **Secondary**: ``rel_path`` (original POSIX path) — breaks ties that
        arise on case-sensitive filesystems where both ``README.md`` and
        ``readme.md`` can coexist; the secondary key makes the sort strict and
@@ -90,11 +96,14 @@ def _scan_files(directory: Path) -> list[dict]:
 
     Returns:
         List of ``{"path": str, "hash": str, "size": int}`` dicts, sorted by
-        the two-level key described above.
+        the two-level key described above.  Symlinks and special files are not
+        included.
     """
     entries = []
     for f in directory.rglob("*"):
-        if not f.is_file():
+        # Symlinks are excluded even when they point to a regular file:
+        # is_file() follows symlinks, so we must test is_symlink() first.
+        if f.is_symlink() or not f.is_file():
             continue
         rel_posix = f.relative_to(directory).as_posix()
         entries.append({
@@ -360,6 +369,12 @@ def build_dataset_parser(ds_parser: argparse.ArgumentParser) -> None:
     commit_p = ds_sub.add_parser(
         "commit",
         help="Scan a directory, build a signed manifest, and emit a commit bundle",
+        description=(
+            "Recursively scan a directory for regular files, build a canonical manifest "
+            "with a Merkle root, compute a deterministic commit ID, sign it with an "
+            "Ed25519 key, and emit a verifiable commit bundle.  "
+            "Symlinks and non-regular files (devices, sockets, etc.) are skipped."
+        ),
     )
     commit_p.add_argument("directory", help="Path to the dataset directory to scan")
     commit_p.add_argument(
