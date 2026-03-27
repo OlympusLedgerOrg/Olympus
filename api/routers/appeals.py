@@ -82,8 +82,8 @@ async def file_appeal(body: AppealCreate, db: DBSession, _api_key: RequireAPIKey
         )
     # Appeals are only valid against a decision (DENIED) or an overdue request.
     # Filing an appeal on a PENDING or IN_REVIEW request is premature.
-    appealable_statuses = {RequestStatus.DENIED.value, RequestStatus.OVERDUE.value}
-    if req.status not in appealable_statuses:
+    _APPEALABLE_STATUSES = {RequestStatus.DENIED.value, RequestStatus.OVERDUE.value}
+    if req.status not in _APPEALABLE_STATUSES:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail={

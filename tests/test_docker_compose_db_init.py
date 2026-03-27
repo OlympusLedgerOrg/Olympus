@@ -95,6 +95,8 @@ def test_docker_compose_ui_exposes_psycopg_url():
     psycopg_url = compose["services"]["ui"]["environment"]["PSYCOPG_URL"]
     # Must require the env var (fail-closed) — no hardcoded credentials
     assert "PSYCOPG_URL" in psycopg_url
+    # Must not contain a hardcoded connection string with credentials
+    assert "postgresql://" not in psycopg_url
 
 
 def test_docker_compose_app_healthcheck_start_period_allows_migrations():

@@ -31,6 +31,8 @@ router = APIRouter(prefix="/requests", tags=["requests"])
 
 # ── Status transition state machine ──
 # Maps each status to the set of statuses it may transition to.
+# Statuses not present in this mapping are treated as terminal (no transitions
+# allowed) — see the `.get(current, set())` lookup in update_request_status().
 _ALLOWED_TRANSITIONS: dict[str, set[str]] = {
     RequestStatus.PENDING.value: {
         RequestStatus.ACKNOWLEDGED.value,
