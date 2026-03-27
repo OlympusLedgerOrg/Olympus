@@ -1,0 +1,22 @@
+[package]
+name = "olympus_matcher"
+version = "0.1.0"
+edition = "2021"
+description = "DFA-based pattern matcher for Olympus — ReDoS-immune, exposed to Python via PyO3"
+
+[lib]
+name = "olympus_matcher"
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+pyo3 = { version = "0.21", features = ["extension-module"] }
+regex = "1"
+thiserror = "1"
+
+[dev-dependencies]
+proptest = "1"
+criterion = { version = "0.5", features = ["html_reports"] }
+
+[[bench]]
+name = "matcher_bench"
+harness = false
