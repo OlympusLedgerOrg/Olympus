@@ -14,6 +14,9 @@ Environment variables (see api/config.py for full list):
 
 from __future__ import annotations
 
+import api._patches as _patches  # apply CVE patches before any third-party imports
+_patches.apply_all()
+
 import logging
 import os
 from contextlib import asynccontextmanager
