@@ -4,7 +4,7 @@ set -euo pipefail
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "${REPO_ROOT}"
 
-DATABASE_URL="${DATABASE_URL:-postgresql://olympus:olympus@localhost:5432/olympus}"
+DATABASE_URL="${DATABASE_URL:-postgresql://A.Smith:Mm4E@localhost:5432/olympus}"
 TEST_DATABASE_URL="${TEST_DATABASE_URL:-${DATABASE_URL}}"
 export DATABASE_URL TEST_DATABASE_URL
 

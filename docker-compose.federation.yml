@@ -14,15 +14,15 @@ services:
     image: postgres:16
     container_name: olympus-node1-db
     environment:
-      POSTGRES_USER: ${POSTGRES_USER:?POSTGRES_USER must be set}
+      POSTGRES_USER: ${POSTGRES_USER:-A.Smith}
       POSTGRES_PASSWORD_FILE: /run/secrets/db_password
-      POSTGRES_DB: ${POSTGRES_DB:?POSTGRES_DB must be set}
+      POSTGRES_DB: ${POSTGRES_DB:-olympus}
     secrets:
       - db_password
     ports:
       - "127.0.0.1:5433:5432"
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-A.Smith} -d ${POSTGRES_DB:-olympus}"]
     networks:
       - backend
     # Tune these values for your deployment environment
@@ -38,15 +38,15 @@ services:
     image: postgres:16
     container_name: olympus-node2-db
     environment:
-      POSTGRES_USER: ${POSTGRES_USER:?POSTGRES_USER must be set}
+      POSTGRES_USER: ${POSTGRES_USER:-A.Smith}
       POSTGRES_PASSWORD_FILE: /run/secrets/db_password
-      POSTGRES_DB: ${POSTGRES_DB:?POSTGRES_DB must be set}
+      POSTGRES_DB: ${POSTGRES_DB:-olympus}
     secrets:
       - db_password
     ports:
       - "127.0.0.1:5434:5432"
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-A.Smith} -d ${POSTGRES_DB:-olympus}"]
     networks:
       - backend
     # Tune these values for your deployment environment
@@ -62,15 +62,15 @@ services:
     image: postgres:16
     container_name: olympus-node3-db
     environment:
-      POSTGRES_USER: ${POSTGRES_USER:?POSTGRES_USER must be set}
+      POSTGRES_USER: ${POSTGRES_USER:-A.Smith}
       POSTGRES_PASSWORD_FILE: /run/secrets/db_password
-      POSTGRES_DB: ${POSTGRES_DB:?POSTGRES_DB must be set}
+      POSTGRES_DB: ${POSTGRES_DB:-olympus}
     secrets:
       - db_password
     ports:
       - "127.0.0.1:5435:5432"
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-A.Smith} -d ${POSTGRES_DB:-olympus}"]
       interval: 2s
       timeout: 3s
       retries: 30
@@ -104,8 +104,8 @@ services:
     environment:
       # Construct URL at runtime from components, not as a single credential-bearing string
       DATABASE_HOST: node1-db
-      DATABASE_NAME: ${POSTGRES_DB:?POSTGRES_DB must be set}
-      DATABASE_USER: ${POSTGRES_USER:?POSTGRES_USER must be set}
+      DATABASE_NAME: ${POSTGRES_DB:-olympus}
+      DATABASE_USER: ${POSTGRES_USER:-A.Smith}
       DATABASE_PASSWORD_FILE: /run/secrets/db_password
       # Dev-only signing key generation (do not use in production)
       OLYMPUS_DEV_SIGNING_KEY: "true"
@@ -159,8 +159,8 @@ services:
     environment:
       # Construct URL at runtime from components, not as a single credential-bearing string
       DATABASE_HOST: node2-db
-      DATABASE_NAME: ${POSTGRES_DB:?POSTGRES_DB must be set}
-      DATABASE_USER: ${POSTGRES_USER:?POSTGRES_USER must be set}
+      DATABASE_NAME: ${POSTGRES_DB:-olympus}
+      DATABASE_USER: ${POSTGRES_USER:-A.Smith}
       DATABASE_PASSWORD_FILE: /run/secrets/db_password
       # Dev-only signing key generation (do not use in production)
       OLYMPUS_DEV_SIGNING_KEY: "true"
@@ -214,8 +214,8 @@ services:
     environment:
       # Construct URL at runtime from components, not as a single credential-bearing string
       DATABASE_HOST: node3-db
-      DATABASE_NAME: ${POSTGRES_DB:?POSTGRES_DB must be set}
-      DATABASE_USER: ${POSTGRES_USER:?POSTGRES_USER must be set}
+      DATABASE_NAME: ${POSTGRES_DB:-olympus}
+      DATABASE_USER: ${POSTGRES_USER:-A.Smith}
       DATABASE_PASSWORD_FILE: /run/secrets/db_password
       # Dev-only signing key generation (do not use in production)
       OLYMPUS_DEV_SIGNING_KEY: "true"
