@@ -147,13 +147,33 @@ async def require_api_key(request: Request) -> _APIKeyRecord:
     """
     _load_keys()
 
-    # If no keys are configured, auth is disabled (dev mode)
+    # If no keys are configured, allow dev-mode bypass ONLY in development.
+    # In production (or any non-development environment) this is a fatal
+    # misconfiguration — refuse to serve write requests.
     if not _key_store:
+<<<<<<< copilot/fix-ci-linting-dependency-issues
         return _APIKeyRecord(
             key_id="dev",
             key_hash="",
             scopes={"read", "write"},
             expires_at=datetime(2099, 1, 1, tzinfo=UTC),
+=======
+        _env = os.environ.get("OLYMPUS_ENV", "production")
+        if _env == "development":
+            logger.warning("No API keys configured — dev-mode auth bypass active")
+            return _APIKeyRecord(key_id="dev", key_hash="", scopes={"read", "write"}, expires_at=datetime(2099, 1, 1, tzinfo=UTC))
+        logger.error(
+            "OLYMPUS_FOIA_API_KEYS is empty and OLYMPUS_ENV != 'development'. "
+            "Refusing unauthenticated write access. Configure API keys or set "
+            "OLYMPUS_ENV=development for local testing."
+        )
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail={
+                "detail": "Authentication not configured. Contact the system administrator.",
+                "code": "AUTH_NOT_CONFIGURED",
+            },
+>>>>>>> main
         )
 
     raw_key = _extract_key(request)

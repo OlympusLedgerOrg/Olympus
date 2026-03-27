@@ -162,7 +162,7 @@ jobs:
       PGDATABASE: olympus
     services:
       postgres:
-        image: ghcr.io/wombatvagina69-crypto/postgres:16
+        image: postgres:16
         env:
           POSTGRES_USER: olympus
           POSTGRES_PASSWORD: olympus

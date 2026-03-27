@@ -103,4 +103,12 @@ class Settings(BaseSettings):
 @lru_cache(maxsize=1)
 def get_settings() -> Settings:
     """Return the cached singleton Settings instance."""
-    return Settings()
+    settings = Settings()
+    _env = os.getenv("OLYMPUS_ENV", "production")
+    if "sqlite" in settings.database_url and _env != "development":
+        _logger.warning(
+            "DATABASE_URL is not set — falling back to SQLite (%s). "
+            "This is not suitable for production. Set DATABASE_URL to a PostgreSQL connection string.",
+            settings.database_url,
+        )
+    return settings

@@ -97,9 +97,10 @@ class TestAPISecurityHeaders:
         assert "default-src 'self'" in csp
         assert "frame-ancestors 'none'" in csp
 
-    def test_hsts_not_set_without_tls(self):
+    def test_hsts_always_set(self):
+        """HSTS header is always present (safe over HTTP; browsers ignore on non-HTTPS)."""
         r = self.client.get("/")
-        assert "strict-transport-security" not in r.headers
+        assert "strict-transport-security" in r.headers
 
 
 class TestDebugUISecurityHeaders:
