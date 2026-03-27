@@ -4,17 +4,63 @@
 # SETUP: Copy .env.example to .env and adjust values before running.
 # The .env file supplies all credentials and is excluded from version control.
 # For production deployments, use Docker secrets or a secrets manager.
- 
+
+networks:
+  frontend:
+    driver: bridge
+  backend:
+    driver: bridge
+    internal: true  # backend network has no external routing
+
+secrets:
+  db_password:
+    external: true  # created with: docker secret create db_password -
+
 services:
+  traefik:
+    image: traefik:v3.0
+    command:
+      - "--providers.docker=true"
+      - "--providers.docker.exposedbydefault=false"
+      - "--entrypoints.web.address=:80"
+      - "--entrypoints.websecure.address=:443"
+      - "--certificatesresolvers.letsencrypt.acme.tlschallenge=true"
+      - "--certificatesresolvers.letsencrypt.acme.email=${ACME_EMAIL}"
+      - "--certificatesresolvers.letsencrypt.acme.storage=/letsencrypt/acme.json"
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - "/var/run/docker.sock:/var/run/docker.sock:ro"
+      - "letsencrypt:/letsencrypt"
+    networks:
+      - frontend
+    # Tune these values for your deployment environment
+    deploy:
+      resources:
+        limits:
+          memory: 256M
+          cpus: "0.5"
+        reservations:
+          memory: 64M
+          cpus: "0.25"
+    read_only: true
+    security_opt:
+      - no-new-privileges:true
+    tmpfs:
+      - /tmp
+
   db:
     image: postgres:16
     container_name: olympus-postgres
     environment:
       POSTGRES_USER: ${POSTGRES_USER}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_PASSWORD_FILE: /run/secrets/db_password
       POSTGRES_DB: ${POSTGRES_DB}
+    secrets:
+      - db_password
     ports:
-      - "5432:5432"
+      - "127.0.0.1:5432:5432"
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
       interval: 2s
@@ -22,6 +68,16 @@ services:
       retries: 30
     volumes:
       - olympus_pgdata:/var/lib/postgresql/data
+    networks:
+      - backend
+    # Tune these values for your deployment environment
+    deploy:
+      resources:
+        limits:
+          memory: 1G
+          cpus: "2.0"
+        reservations:
+          memory: 256M
 
   # Optional: Application service (use `docker compose up -d app` to run full stack)
   app:
@@ -32,12 +88,23 @@ services:
     env_file:
       - .env
     command: ["/bin/sh", "/app/scripts/startup.sh"]
-    ports:
-      - "8000:8000"
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.api.rule=Host(`${OLYMPUS_DOMAIN}`)"
+      - "traefik.http.routers.api.entrypoints=websecure"
+      - "traefik.http.routers.api.tls.certresolver=letsencrypt"
+      - "traefik.http.middlewares.redirect-to-https.redirectscheme.scheme=https"
+      - "traefik.http.routers.api-http.middlewares=redirect-to-https"
     environment:
-      DATABASE_URL: ${DATABASE_URL:-postgresql+asyncpg://olympus:olympus@db:5432/olympus}
+      # Construct URL at runtime from components, not as a single credential-bearing string
+      DATABASE_HOST: db
+      DATABASE_NAME: ${DATABASE_NAME:?DATABASE_NAME must be set}
+      DATABASE_USER: ${DATABASE_USER:?DATABASE_USER must be set}
+      DATABASE_PASSWORD_FILE: /run/secrets/db_password
       OLYMPUS_DEV_SIGNING_KEY: ${OLYMPUS_DEV_SIGNING_KEY:-true}
       OLYMPUS_API_KEYS_JSON: '${OLYMPUS_API_KEYS_JSON:-[]}'
+    secrets:
+      - db_password
     depends_on:
       db:
         condition: service_healthy
@@ -47,6 +114,24 @@ services:
       timeout: 5s
       start_period: 40s
       retries: 5
+    networks:
+      - frontend
+      - backend
+    # Tune these values for your deployment environment
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+          cpus: "1.0"
+        reservations:
+          memory: 128M
+          cpus: "0.25"
+    read_only: true
+    security_opt:
+      - no-new-privileges:true
+    tmpfs:
+      - /tmp
+      - /var/run
 
   ui:
     build:
@@ -68,6 +153,22 @@ services:
         condition: service_healthy
     ports:
       - "8080:8080"
+    networks:
+      - frontend
+    # Tune these values for your deployment environment
+    deploy:
+      resources:
+        limits:
+          memory: 256M
+          cpus: "0.5"
+        reservations:
+          memory: 128M
+    read_only: true
+    security_opt:
+      - no-new-privileges:true
+    tmpfs:
+      - /tmp
 
 volumes:
   olympus_pgdata:
+  letsencrypt:

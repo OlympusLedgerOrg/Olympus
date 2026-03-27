@@ -2,6 +2,7 @@
 
 import base64
 import hmac
+import ipaddress
 import json
 import logging
 import os
@@ -34,6 +35,18 @@ from protocol.ssmf import ExistenceProof, SparseMerkleTree
 from protocol.timestamps import current_timestamp
 
 
+# RFC 1918 private ranges + loopback + link-local
+_BLOCKED_RANGES = [
+    ipaddress.ip_network("10.0.0.0/8"),
+    ipaddress.ip_network("172.16.0.0/12"),
+    ipaddress.ip_network("192.168.0.0/16"),
+    ipaddress.ip_network("127.0.0.0/8"),
+    ipaddress.ip_network("169.254.0.0/16"),  # link-local
+    ipaddress.ip_network("::1/128"),          # IPv6 loopback
+    ipaddress.ip_network("fc00::/7"),         # IPv6 unique local
+]
+
+
 API_BASE = os.environ.get("UI_API_BASE", "http://127.0.0.1:8000")
 _parsed_api_base = urlparse(API_BASE)
 if _parsed_api_base.scheme not in {"http", "https"} or not _parsed_api_base.netloc:
@@ -48,6 +61,41 @@ _DEBUG_CONSOLE_PASSWORD = os.environ.get("OLYMPUS_DEBUG_CONSOLE_PASSWORD", "")
 _ENV = os.environ.get("OLYMPUS_ENV", "production")
 
 logger = logging.getLogger(__name__)
+
+
+def validate_federation_url(url: str) -> None:
+    """Validate a federation node URL against SSRF blocklists.
+
+    Rejects URLs using non-http(s) schemes and URLs targeting private,
+    loopback, or link-local IP address ranges.  Domain-name hostnames are
+    allowed with a warning since full DNS-rebinding protection requires
+    async resolution.
+
+    Args:
+        url: The federation node URL to validate.
+
+    Raises:
+        ValueError: If the URL fails validation.
+    """
+    parsed = urlparse(url)
+    if parsed.scheme not in ("http", "https"):
+        raise ValueError(f"Federation URL must use http or https scheme, got: {parsed.scheme!r}")
+
+    hostname = parsed.hostname
+    if not hostname:
+        raise ValueError("Federation URL has no hostname.")
+
+    try:
+        addr = ipaddress.ip_address(hostname)
+        for blocked in _BLOCKED_RANGES:
+            if addr in blocked:
+                raise ValueError(f"Federation URL resolves to blocked address range: {addr}")
+    except ValueError as exc:
+        if "Federation URL" in str(exc):
+            raise  # re-raise our own errors
+        # hostname is a domain name, not an IP — DNS resolution check would require async
+        # For now, log a warning that DNS-based SSRF is not fully mitigated
+        logger.warning("Federation URL %s uses a hostname — DNS rebinding SSRF not fully mitigated", url)
 
 
 def _load_federation_nodes() -> dict[str, str]:
@@ -66,9 +114,7 @@ def _load_federation_nodes() -> dict[str, str]:
 
     nodes: dict[str, str] = {}
     for name, base_url in parsed.items():
-        parsed_base = urlparse(str(base_url))
-        if parsed_base.scheme not in {"http", "https"} or not parsed_base.netloc:
-            raise ValueError(f"Federation node '{name}' must use an absolute http(s) URL")
+        validate_federation_url(str(base_url))
         nodes[str(name)] = str(base_url)
     return nodes
 
