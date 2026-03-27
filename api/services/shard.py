@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import logging
 
-from sqlalchemy import select
+from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from api.services.merkle import build_tree
@@ -39,9 +39,10 @@ def assign_shard(request_id: str) -> str:
 async def compute_state_root(shard_id: str, db: AsyncSession) -> str:
     """Compute the Merkle state root for all commits in a shard.
 
-    Retrieves every ``doc_hash`` in the shard, builds a deterministic
-    Merkle tree, and returns the root hash.  Returns a sentinel hash of
-    64 zero characters if the shard is empty.
+    Retrieves every ``doc_hash`` from DocCommit and ``manifest_hash`` from
+    DatasetArtifact in the shard, builds a deterministic Merkle tree, and
+    returns the root hash.  Returns a sentinel hash of 64 zero characters
+    if the shard is empty.
 
     Args:
         shard_id: Hex shard identifier.
@@ -51,14 +52,31 @@ async def compute_state_root(shard_id: str, db: AsyncSession) -> str:
         Hex-encoded BLAKE3 Merkle root, or 64 zeros if the shard is empty.
     """
     # Import here to avoid circular imports at module level
+    from api.models.dataset import DatasetArtifact  # noqa: PLC0415
     from api.models.document import DocCommit  # noqa: PLC0415
 
-    result = await db.execute(
-        select(DocCommit.doc_hash)
+    doc_q = (
+        select(
+            DocCommit.doc_hash.label("hash"),
+            DocCommit.epoch_timestamp.label("ts"),
+        )
         .where(DocCommit.shard_id == shard_id)
-        .order_by(DocCommit.epoch_timestamp)
     )
-    hashes = list(result.scalars().all())
+
+    ds_q = (
+        select(
+            DatasetArtifact.manifest_hash.label("hash"),
+            DatasetArtifact.epoch_timestamp.label("ts"),
+        )
+        .where(DatasetArtifact.shard_id == shard_id)
+    )
+
+    # Deterministic ordering: timestamp first, then hash for tie-breaking.
+    # This ensures identical tree structure across replicas even when
+    # multiple commits share the same millisecond timestamp.
+    union_q = doc_q.union_all(ds_q).order_by(text("ts"), text("hash"))
+    result = await db.execute(union_q)
+    hashes = [row.hash for row in result.all()]
 
     if not hashes:
         logger.debug("Shard %s is empty; returning zero root.", shard_id)
