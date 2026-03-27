@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import logging
 
-from sqlalchemy import select
+from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from api.services.merkle import build_tree
@@ -71,7 +71,10 @@ async def compute_state_root(shard_id: str, db: AsyncSession) -> str:
         .where(DatasetArtifact.shard_id == shard_id)
     )
 
-    union_q = doc_q.union_all(ds_q).order_by("ts", "hash")
+    # Deterministic ordering: timestamp first, then hash for tie-breaking.
+    # This ensures identical tree structure across replicas even when
+    # multiple commits share the same millisecond timestamp.
+    union_q = doc_q.union_all(ds_q).order_by(text("ts"), text("hash"))
     result = await db.execute(union_q)
     hashes = [row.hash for row in result.all()]
 

@@ -98,8 +98,8 @@ async def _check_key_not_revoked(db: "DBSession", pubkey_hex: str) -> None:
             KeyCredential.holder_key == pubkey_hex
         )
     )
-    cred = result.scalars().first()
-    if cred is not None and cred <= datetime.now(timezone.utc):
+    revoked_at = result.scalars().first()
+    if revoked_at is not None and revoked_at <= datetime.now(timezone.utc):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Committer key has been revoked.",
@@ -225,7 +225,7 @@ async def commit_dataset(
     except Exception:
         logger.warning(
             "RFC 3161 timestamp request failed; commit_id=%s status=pending",
-            commit_id,
+            commit_id, exc_info=True,
         )
 
     # 10. Compute totals from files

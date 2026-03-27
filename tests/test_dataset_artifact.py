@@ -230,6 +230,7 @@ class TestDatasetArtifactDefaults:
         await db_session.flush()
         after = datetime.now(timezone.utc)
         assert artifact.epoch_timestamp is not None
+        assert before <= artifact.epoch_timestamp.replace(tzinfo=timezone.utc) <= after
 
     @pytest.mark.asyncio
     async def test_timestamp_status_default_pending(self, db_session: AsyncSession):
