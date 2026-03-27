@@ -80,6 +80,18 @@ async def file_appeal(body: AppealCreate, db: DBSession, _api_key: RequireAPIKey
             status_code=status.HTTP_409_CONFLICT,
             detail={"detail": "An appeal has already been filed for this request.", "code": "APPEAL_EXISTS"},
         )
+    # Appeals are only valid against a decision (DENIED) or an overdue request.
+    # Filing an appeal on a PENDING or IN_REVIEW request is premature.
+    appealable_statuses = {RequestStatus.DENIED.value, RequestStatus.OVERDUE.value}
+    if req.status not in appealable_statuses:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={
+                "detail": f"Cannot appeal a request with status {req.status!r}. "
+                          f"Appeals are only allowed for DENIED or OVERDUE requests.",
+                "code": "APPEAL_NOT_ALLOWED",
+            },
+        )
 
     filed_at = datetime.now(timezone.utc)
     commit_hash = _hash_appeal(body.request_id, body.grounds, body.statement, filed_at)

@@ -200,8 +200,12 @@ async def test_appeal_already_appealed_request_rejected(client):
     """Filing a second appeal on an already-APPEALED request should return 409."""
     create_resp = await client.post("/requests", json=REQUEST_BODY)
     req_id = create_resp.json()["id"]
+    display_id = create_resp.json()["display_id"]
 
-    # First appeal (on PENDING — allowed)
+    # Transition to DENIED first (appeals require DENIED or OVERDUE status)
+    await client.patch(f"/requests/{display_id}/status", json={"status": "DENIED"})
+
+    # First appeal (on DENIED — allowed)
     first_resp = await client.post(
         "/appeals",
         json={
@@ -223,3 +227,38 @@ async def test_appeal_already_appealed_request_rejected(client):
     )
     assert second_resp.status_code == 409
     assert second_resp.json()["detail"]["code"] == "APPEAL_EXISTS"
+
+
+@pytest.mark.asyncio
+async def test_invalid_status_transition_rejected(client):
+    """PATCH /requests/{display_id}/status with invalid transition returns 409."""
+    create_resp = await client.post("/requests", json=REQUEST_BODY)
+    display_id = create_resp.json()["display_id"]
+
+    # PENDING → FULFILLED is allowed
+    await client.patch(f"/requests/{display_id}/status", json={"status": "FULFILLED"})
+
+    # FULFILLED → PENDING is NOT allowed (FULFILLED is terminal)
+    patch_resp = await client.patch(
+        f"/requests/{display_id}/status", json={"status": "PENDING"}
+    )
+    assert patch_resp.status_code == 409
+    assert patch_resp.json()["detail"]["code"] == "INVALID_STATUS_TRANSITION"
+
+
+@pytest.mark.asyncio
+async def test_appeal_pending_request_rejected(client):
+    """Filing an appeal on a PENDING request should return 409."""
+    create_resp = await client.post("/requests", json=REQUEST_BODY)
+    req_id = create_resp.json()["id"]
+
+    appeal_resp = await client.post(
+        "/appeals",
+        json={
+            "request_id": req_id,
+            "grounds": "NO_RESPONSE",
+            "statement": "Should not be allowed on PENDING.",
+        },
+    )
+    assert appeal_resp.status_code == 409
+    assert appeal_resp.json()["detail"]["code"] == "APPEAL_NOT_ALLOWED"

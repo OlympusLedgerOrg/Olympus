@@ -29,6 +29,42 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/requests", tags=["requests"])
 
 
+# ── Status transition state machine ──
+# Maps each status to the set of statuses it may transition to.
+_ALLOWED_TRANSITIONS: dict[str, set[str]] = {
+    RequestStatus.PENDING.value: {
+        RequestStatus.ACKNOWLEDGED.value,
+        RequestStatus.IN_REVIEW.value,
+        RequestStatus.FULFILLED.value,
+        RequestStatus.DENIED.value,
+    },
+    RequestStatus.ACKNOWLEDGED.value: {
+        RequestStatus.IN_REVIEW.value,
+        RequestStatus.FULFILLED.value,
+        RequestStatus.DENIED.value,
+    },
+    RequestStatus.IN_REVIEW.value: {
+        RequestStatus.FULFILLED.value,
+        RequestStatus.DENIED.value,
+    },
+    RequestStatus.FULFILLED.value: set(),  # terminal
+    RequestStatus.DENIED.value: {
+        RequestStatus.APPEALED.value,
+    },
+    RequestStatus.OVERDUE.value: {
+        RequestStatus.ACKNOWLEDGED.value,
+        RequestStatus.IN_REVIEW.value,
+        RequestStatus.FULFILLED.value,
+        RequestStatus.DENIED.value,
+    },
+    RequestStatus.APPEALED.value: {
+        RequestStatus.IN_REVIEW.value,
+        RequestStatus.FULFILLED.value,
+        RequestStatus.DENIED.value,
+    },
+}
+
+
 def _escape_like(value: str) -> str:
     """Escape SQL LIKE/ILIKE wildcard characters."""
     return value.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
@@ -192,6 +228,9 @@ async def get_request(display_id: str, db: DBSession, _rl: RateLimit):
 async def update_request_status(display_id: str, body: RequestStatusUpdate, db: DBSession, _api_key: RequireAPIKey, _rl: RateLimit):
     """Update the status of a request and anchor the change to the ledger.
 
+    Enforces a state-machine on allowed transitions to prevent illegal
+    lifecycle changes (e.g. FULFILLED → PENDING).
+
     Args:
         display_id: Human-readable identifier of the request.
         body: New status and optional note.
@@ -202,6 +241,7 @@ async def update_request_status(display_id: str, body: RequestStatusUpdate, db: 
 
     Raises:
         HTTPException 404: If the request is not found.
+        HTTPException 409: If the transition is not allowed.
     """
     result = await db.execute(
         select(PublicRecordsRequest).where(PublicRecordsRequest.display_id == display_id)
@@ -213,11 +253,34 @@ async def update_request_status(display_id: str, body: RequestStatusUpdate, db: 
             detail={"detail": f"Request {display_id!r} not found.", "code": "REQUEST_NOT_FOUND"},
         )
 
+    current = req.status
+    target = body.status.value if isinstance(body.status, RequestStatus) else body.status
+    allowed = _ALLOWED_TRANSITIONS.get(current, set())
+    if target not in allowed:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={
+                "detail": f"Transition from {current!r} to {target!r} is not allowed.",
+                "code": "INVALID_STATUS_TRANSITION",
+                "current_status": current,
+                "requested_status": target,
+                "allowed_transitions": sorted(allowed),
+            },
+        )
+
+    previous_status = req.status
     req.status = body.status
     if body.status == RequestStatus.FULFILLED:
         req.fulfilled_at = datetime.now(timezone.utc)
 
     await db.commit()
     await db.refresh(req)
-    logger.info("Updated request %s to status %s", display_id, body.status)
+    logger.info(
+        "Status transition on %s: %s → %s (key_id=%s, note=%s)",
+        display_id,
+        previous_status,
+        target,
+        _api_key.key_id,
+        body.note or "",
+    )
     return req
