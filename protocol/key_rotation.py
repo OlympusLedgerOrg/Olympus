@@ -30,9 +30,7 @@ def _rotation_payload(
     }
 
 
-def _rotation_hash(
-    *, old_pubkey: bytes, new_pubkey: bytes, epoch: int, timestamp: str
-) -> bytes:
+def _rotation_hash(*, old_pubkey: bytes, new_pubkey: bytes, epoch: int, timestamp: str) -> bytes:
     """Compute the domain-separated key-rotation payload hash."""
     payload = _rotation_payload(
         old_pubkey=old_pubkey,

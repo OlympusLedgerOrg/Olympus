@@ -419,8 +419,7 @@ def verify_key_revocation_record(record: dict[str, Any]) -> bool:
     else:
         # Single-signed revocation — old key was unavailable (possibly compromised)
         logger.warning(
-            "Revocation record for key %s is not dual-signed. "
-            "Old key may have been compromised.",
+            "Revocation record for key %s is not dual-signed. Old key may have been compromised.",
             record.get("old_pubkey", "unknown"),
         )
 

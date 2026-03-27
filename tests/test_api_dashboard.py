@@ -6,6 +6,7 @@ from fastapi.testclient import TestClient
 
 import api.routers.shards as shards_mod
 
+
 api_app = importlib.import_module("api.app")
 client = TestClient(api_app.app)
 

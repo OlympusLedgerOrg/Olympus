@@ -23,7 +23,7 @@ def _now_utc() -> datetime:
 
 # NC Public Records: no explicit statutory deadline, but we flag OVERDUE
 # after STATUTORY_NC_FULFILL_DAYS business days without fulfilment.
-STATUTORY_NC_ACK_DAYS = 14    # G.S. § 132 — acknowledgment threshold
+STATUTORY_NC_ACK_DAYS = 14  # G.S. § 132 — acknowledgment threshold
 STATUTORY_NC_FULFILL_DAYS = 30  # G.S. § 132 — fulfilment threshold
 
 # Federal FOIA: 20 business days per 5 U.S.C. § 552(a)(6)(A)
@@ -106,4 +106,3 @@ def is_overdue(request) -> bool:
     if deadline.tzinfo is None:
         deadline = deadline.replace(tzinfo=timezone.utc)
     return _now_utc() > deadline
-

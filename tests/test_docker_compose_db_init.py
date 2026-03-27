@@ -20,9 +20,7 @@ def test_primary_docker_compose_starts_api_without_migrations():
     """
     # Verify docker-compose.yml references startup.sh
     compose_text = (REPO_ROOT / "docker-compose.yml").read_text(encoding="utf-8")
-    assert "startup.sh" in compose_text, (
-        "docker-compose.yml app command must reference startup.sh"
-    )
+    assert "startup.sh" in compose_text, "docker-compose.yml app command must reference startup.sh"
 
     # Verify startup.sh runs uvicorn and does NOT call alembic
     startup = (REPO_ROOT / "scripts" / "startup.sh").read_text(encoding="utf-8")
@@ -39,16 +37,16 @@ def test_primary_docker_compose_starts_api_without_migrations():
 
 
 def test_federation_docker_compose_starts_each_api_node_without_migrations():
-    compose = (REPO_ROOT / "docker-compose.federation.yml").read_text(
-        encoding="utf-8"
-    )
+    compose = (REPO_ROOT / "docker-compose.federation.yml").read_text(encoding="utf-8")
 
     assert "alembic upgrade head" not in compose, (
         "docker-compose.federation.yml must not call 'alembic upgrade head'; "
         "schema is created automatically by init_schema() and Base.metadata.create_all()"
     )
     uvicorn_matches = list(
-        re.finditer(r"exec\s+uvicorn\s+api\.main:app\s+--host\s+0\.0\.0\.0\s+--port\s+8000", compose)
+        re.finditer(
+            r"exec\s+uvicorn\s+api\.main:app\s+--host\s+0\.0\.0\.0\s+--port\s+8000", compose
+        )
     )
 
     assert len(uvicorn_matches) == EXPECTED_FEDERATION_NODES

@@ -36,9 +36,15 @@ router = APIRouter(prefix="/doc", tags=["documents"])
     "/commit",
     response_model=DocCommitResponse,
     status_code=status.HTTP_201_CREATED,
-    responses={status.HTTP_404_NOT_FOUND: {"description": "The request_id does not match any existing public records request."}},
+    responses={
+        status.HTTP_404_NOT_FOUND: {
+            "description": "The request_id does not match any existing public records request."
+        }
+    },
 )
-async def commit_document(body: DocCommitRequest, db: DBSession, _api_key: RequireAPIKey, _rl: RateLimit):
+async def commit_document(
+    body: DocCommitRequest, db: DBSession, _api_key: RequireAPIKey, _rl: RateLimit
+):
     """Anchor a document hash to the Olympus ledger.
 
     Generates a unique commit identifier, assigns the commit to the default
@@ -62,7 +68,10 @@ async def commit_document(body: DocCommitRequest, db: DBSession, _api_key: Requi
         if not result.scalar():
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
-                detail={"detail": f"Request {body.request_id!r} not found.", "code": "REQUEST_NOT_FOUND"},
+                detail={
+                    "detail": f"Request {body.request_id!r} not found.",
+                    "code": "REQUEST_NOT_FOUND",
+                },
             )
 
     commit_id = generate_commit_id()
@@ -127,7 +136,10 @@ async def verify_document(body: DocVerifyRequest, db: DBSession, _rl: RateLimit)
     if not body.commit_id and not body.doc_hash:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
-            detail={"detail": "At least one of commit_id or doc_hash is required.", "code": "MISSING_LOOKUP_KEY"},
+            detail={
+                "detail": "At least one of commit_id or doc_hash is required.",
+                "code": "MISSING_LOOKUP_KEY",
+            },
         )
 
     q = select(DocCommit)
@@ -155,9 +167,7 @@ async def verify_document(body: DocVerifyRequest, db: DBSession, _rl: RateLimit)
         try:
             tree = build_tree(all_hashes, preserve_order=True)
             proof: MerkleProof = generate_proof(commit.doc_hash, tree)
-            merkle_proof_data = [
-                {"hash": h, "direction": d} for h, d in proof.siblings
-            ]
+            merkle_proof_data = [{"hash": h, "direction": d} for h, d in proof.siblings]
         except ValueError:
             pass
 

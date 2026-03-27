@@ -140,9 +140,7 @@ class CircuitConfig:
             unified_merkle_depth=env_int(
                 "OLYMPUS_UNIFIED_MERKLE_DEPTH", defaults.unified_merkle_depth
             ),
-            unified_smt_depth=env_int(
-                "OLYMPUS_UNIFIED_SMT_DEPTH", defaults.unified_smt_depth
-            ),
+            unified_smt_depth=env_int("OLYMPUS_UNIFIED_SMT_DEPTH", defaults.unified_smt_depth),
             selective_disclosure_depth=env_int(
                 "OLYMPUS_SELECTIVE_DISCLOSURE_DEPTH", defaults.selective_disclosure_depth
             ),
@@ -711,7 +709,9 @@ def _build_arg_parser() -> argparse.ArgumentParser:
         help="Seed defaults from OLYMPUS_* environment variables.",
     )
     configure.add_argument("--document-merkle-depth", type=int, dest="document_merkle_depth")
-    configure.add_argument("--non-existence-merkle-depth", type=int, dest="non_existence_merkle_depth")
+    configure.add_argument(
+        "--non-existence-merkle-depth", type=int, dest="non_existence_merkle_depth"
+    )
     configure.add_argument("--redaction-max-leaves", type=int, dest="redaction_max_leaves")
     configure.add_argument("--redaction-merkle-depth", type=int, dest="redaction_merkle_depth")
     configure.add_argument("--unified-max-sections", type=int, dest="unified_max_sections")

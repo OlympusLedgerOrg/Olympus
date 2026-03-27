@@ -70,6 +70,7 @@ async def get_ledger_state(db: DBSession, _rl: RateLimit):
     if shard_roots and any(r != "0" * 64 for r in shard_roots):
         # Build a second-level tree over shard roots
         from api.services.merkle import build_tree as _bt  # noqa: PLC0415
+
         global_root = _bt([r for r in shard_roots if r != "0" * 64]).root_hash
     else:
         global_root = "0" * 64
@@ -102,9 +103,7 @@ async def get_shard_state(shard_id: str, db: DBSession, _rl: RateLimit):
     commits = list(result.scalars().all())
 
     state_root = await compute_state_root(shard_id, db)
-    count_result = await db.execute(
-        select(func.count()).where(DocCommit.shard_id == shard_id)
-    )
+    count_result = await db.execute(select(func.count()).where(DocCommit.shard_id == shard_id))
     commit_count = count_result.scalar() or 0
 
     return ShardStateResponse(
@@ -163,9 +162,11 @@ async def get_commit_proof(commit_id: str, db: DBSession, _rl: RateLimit):
             pass
 
     import os as _os
+
     _env = _os.getenv("OLYMPUS_ENV", "production")
     if _env == "development":
         from api.services.zkproof import generate_proof_stub
+
         zk_proof = generate_proof_stub(commit.commit_id, commit.doc_hash)
     else:
         zk_proof = {
@@ -376,4 +377,3 @@ async def simple_document_verify(
             "code": "MISSING_INPUT",
         },
     )
-

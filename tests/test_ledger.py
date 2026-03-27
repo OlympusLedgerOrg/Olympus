@@ -145,7 +145,9 @@ def test_ledger_entry_hash_computation():
     from protocol.hashes import _SEP
 
     hlc_raw = bytes.fromhex(entry.hlc_bytes)
-    expected_hash = blake3_hash([LEDGER_PREFIX, canonical_json_bytes(payload), _SEP, b"", _SEP, hlc_raw]).hex()
+    expected_hash = blake3_hash(
+        [LEDGER_PREFIX, canonical_json_bytes(payload), _SEP, b"", _SEP, hlc_raw]
+    ).hex()
 
     assert entry.entry_hash == expected_hash
 
@@ -185,7 +187,9 @@ def test_ledger_entry_hash_includes_federation_quorum_certificate_when_present()
     from protocol.hashes import _SEP
 
     hlc_raw = bytes.fromhex(entry.hlc_bytes)
-    expected_hash = blake3_hash([LEDGER_PREFIX, canonical_json_bytes(payload), _SEP, b"", _SEP, hlc_raw]).hex()
+    expected_hash = blake3_hash(
+        [LEDGER_PREFIX, canonical_json_bytes(payload), _SEP, b"", _SEP, hlc_raw]
+    ).hex()
     assert entry.entry_hash == expected_hash
 
 

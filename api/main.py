@@ -75,9 +75,7 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
         response.headers["Permissions-Policy"] = "geolocation=(), camera=(), microphone=()"
         # Only set HSTS if TLS is configured
         if getattr(get_settings(), "tls_enabled", False):
-            response.headers["Strict-Transport-Security"] = (
-                "max-age=63072000; includeSubDomains"
-            )
+            response.headers["Strict-Transport-Security"] = "max-age=63072000; includeSubDomains"
         # CSP — restrictive default; operators should customize for their frontend origin
         response.headers["Content-Security-Policy"] = (
             "default-src 'self'; "
@@ -164,6 +162,7 @@ def create_app() -> FastAPI:
         }
         try:
             from api.services.storage_layer import get_storage_status
+
             db_status, db_check = get_storage_status()
             result["database"] = db_status
             result["db_check"] = db_check

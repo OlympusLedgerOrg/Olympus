@@ -400,8 +400,7 @@ def dataset_key(
         64-character hex-encoded BLAKE3 hash.
     """
     key_data = (
-        f"dataset_artifact:{canonical_namespace}:{source_uri}"
-        f":{dataset_name}:{committer_pubkey}"
+        f"dataset_artifact:{canonical_namespace}:{source_uri}:{dataset_name}:{committer_pubkey}"
     ).encode()
     return blake3_hash([DATASET_PREFIX, key_data]).hex()
 
@@ -427,8 +426,5 @@ def compute_dataset_commit_id(
     Returns:
         64-character hex-encoded BLAKE3 hash.
     """
-    payload = (
-        f"{dataset_id}:{parent_commit_id}:{manifest_hash}"
-        f":{committer_pubkey}"
-    )
+    payload = f"{dataset_id}:{parent_commit_id}:{manifest_hash}:{committer_pubkey}"
     return blake3_hash([DATASET_COMMIT_PREFIX, payload.encode()]).hex()

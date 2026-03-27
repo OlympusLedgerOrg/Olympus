@@ -97,10 +97,7 @@ class TestHtmlSanitizationHardening:
 
     def test_preserves_tail_text_after_stripping(self):
         """Tail text after stripped tags must survive."""
-        html = (
-            b"<html><body><p>alpha</p>"
-            b"<script>alert('x')</script>beta</body></html>"
-        )
+        html = b"<html><body><p>alpha</p><script>alert('x')</script>beta</body></html>"
         result = Canonicalizer.html_v1(html)
         assert b"alpha" in result
         assert b"beta" in result

@@ -94,9 +94,7 @@ async def _check_key_not_revoked(db: "DBSession", pubkey_hex: str) -> None:
     the past, reject the request with 403.
     """
     result = await db.execute(
-        select(KeyCredential.revoked_at).where(
-            KeyCredential.holder_key == pubkey_hex
-        )
+        select(KeyCredential.revoked_at).where(KeyCredential.holder_key == pubkey_hex)
     )
     revoked_at = result.scalars().first()
     if revoked_at is not None and revoked_at <= datetime.now(timezone.utc):
@@ -141,9 +139,7 @@ async def commit_dataset(
 
     if body.parent_dataset_id is not None:
         result = await db.execute(
-            select(DatasetArtifact.id).where(
-                DatasetArtifact.dataset_id == body.parent_dataset_id
-            )
+            select(DatasetArtifact.id).where(DatasetArtifact.dataset_id == body.parent_dataset_id)
         )
         if not result.scalars().first():
             raise HTTPException(
@@ -153,9 +149,7 @@ async def commit_dataset(
 
     if parent_commit_id:
         result = await db.execute(
-            select(DatasetArtifact.dataset_id).where(
-                DatasetArtifact.commit_id == parent_commit_id
-            )
+            select(DatasetArtifact.dataset_id).where(DatasetArtifact.commit_id == parent_commit_id)
         )
         parent_row = result.scalars().first()
         if parent_row is None:
@@ -171,13 +165,18 @@ async def commit_dataset(
 
     # 3. dataset_id (includes committer_pubkey to prevent cross-org collision)
     ds_id = dataset_key(
-        body.dataset_name, body.source_uri,
-        body.canonical_namespace, body.committer_pubkey,
+        body.dataset_name,
+        body.source_uri,
+        body.canonical_namespace,
+        body.committer_pubkey,
     )
 
     # 4. commit_id (deterministic, content-only — no timestamp)
     commit_id = compute_dataset_commit_id(
-        ds_id, parent_commit_id, manifest_hash, body.committer_pubkey,
+        ds_id,
+        parent_commit_id,
+        manifest_hash,
+        body.committer_pubkey,
     )
 
     # 5. Check replay: UNIQUE(dataset_id, parent_commit_id, manifest_hash)
@@ -225,14 +224,13 @@ async def commit_dataset(
     except Exception:
         logger.warning(
             "RFC 3161 timestamp request failed; commit_id=%s status=pending",
-            commit_id, exc_info=True,
+            commit_id,
+            exc_info=True,
         )
 
     # 10. Compute totals from files
     total_bytes = sum(f.byte_size for f in body.files)
-    total_records = sum(
-        f.record_count for f in body.files if f.record_count is not None
-    ) or None
+    total_records = sum(f.record_count for f in body.files if f.record_count is not None) or None
 
     # 11. Build usage_restrictions JSON
     usage_json = json.dumps(body.usage_restrictions) if body.usage_restrictions else None
@@ -284,13 +282,15 @@ async def commit_dataset(
 
     # 13. Child file rows
     for f in body.files:
-        db.add(DatasetArtifactFile(
-            artifact_id=artifact.id,
-            path=f.path,
-            content_hash=f.content_hash,
-            byte_size=f.byte_size,
-            record_count=f.record_count,
-        ))
+        db.add(
+            DatasetArtifactFile(
+                artifact_id=artifact.id,
+                path=f.path,
+                content_hash=f.content_hash,
+                byte_size=f.byte_size,
+                record_count=f.record_count,
+            )
+        )
     await db.flush()
 
     # 14. Compute shard state root (deterministic ordering)
@@ -302,7 +302,9 @@ async def commit_dataset(
 
     logger.info(
         "Dataset committed dataset_id=%s commit_id=%s timestamp_status=%s",
-        ds_id, commit_id, timestamp_status,
+        ds_id,
+        commit_id,
+        timestamp_status,
     )
 
     return DatasetCommitResponse(
@@ -395,7 +397,9 @@ async def list_datasets(
 
 @router.get("/{dataset_id}", response_model=DatasetDetailResponse)
 async def get_dataset(
-    dataset_id: str, db: DBSession, _rl: RateLimit,
+    dataset_id: str,
+    db: DBSession,
+    _rl: RateLimit,
 ) -> DatasetDetailResponse:
     """Return the latest commit for a logical dataset."""
     result = await db.execute(
@@ -407,14 +411,13 @@ async def get_dataset(
     artifact = result.scalars().first()
     if artifact is None:
         raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND, detail="Dataset not found.",
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Dataset not found.",
         )
 
     # Load child files
     files_result = await db.execute(
-        select(DatasetArtifactFile).where(
-            DatasetArtifactFile.artifact_id == artifact.id
-        )
+        select(DatasetArtifactFile).where(DatasetArtifactFile.artifact_id == artifact.id)
     )
     files = files_result.scalars().all()
 
@@ -458,7 +461,9 @@ async def get_dataset(
 
 @router.get("/{dataset_id}/verify", response_model=DatasetVerifyResponse)
 async def verify_dataset(
-    dataset_id: str, db: DBSession, _rl: RateLimit,
+    dataset_id: str,
+    db: DBSession,
+    _rl: RateLimit,
 ) -> DatasetVerifyResponse:
     """Run independent verification checks on a committed dataset.
 
@@ -493,7 +498,9 @@ async def verify_dataset(
 
     # 2. Verify signature
     checks["signature_valid"] = _verify_signature(
-        artifact.committer_pubkey, artifact.commit_id, artifact.commit_signature,
+        artifact.committer_pubkey,
+        artifact.commit_id,
+        artifact.commit_signature,
     )
 
     # 3. RFC 3161 status check
@@ -513,17 +520,17 @@ async def verify_dataset(
     current = artifact
     while current.parent_commit_id:
         parent_result = await db.execute(
-            select(DatasetArtifact).where(
-                DatasetArtifact.commit_id == current.parent_commit_id
-            )
+            select(DatasetArtifact).where(DatasetArtifact.commit_id == current.parent_commit_id)
         )
         parent = parent_result.scalars().first()
         if parent is None:
             chain_valid = False
             break
         expected = compute_dataset_commit_id(
-            parent.dataset_id, parent.parent_commit_id,
-            parent.manifest_hash, parent.committer_pubkey,
+            parent.dataset_id,
+            parent.parent_commit_id,
+            parent.manifest_hash,
+            parent.committer_pubkey,
         )
         if expected != parent.commit_id:
             chain_valid = False
@@ -558,9 +565,7 @@ async def verify_dataset(
         try:
             tree = build_tree(all_hashes, preserve_order=True)
             proof: MerkleProof = generate_proof(artifact.manifest_hash, tree)
-            merkle_proof_data = [
-                {"hash": h, "direction": d} for h, d in proof.siblings
-            ]
+            merkle_proof_data = [{"hash": h, "direction": d} for h, d in proof.siblings]
         except ValueError:
             pass
 
@@ -596,7 +601,9 @@ async def verify_dataset(
 
 @router.get("/{dataset_id}/history", response_model=DatasetHistoryResponse)
 async def dataset_history(
-    dataset_id: str, db: DBSession, _rl: RateLimit,
+    dataset_id: str,
+    db: DBSession,
+    _rl: RateLimit,
 ) -> DatasetHistoryResponse:
     """Return ordered version history for a logical dataset."""
     result = await db.execute(
@@ -607,7 +614,8 @@ async def dataset_history(
     rows = result.scalars().all()
     if not rows:
         raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND, detail="Dataset not found.",
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Dataset not found.",
         )
 
     return DatasetHistoryResponse(
@@ -648,9 +656,7 @@ async def commit_lineage(
     """Record that a model consumed this dataset."""
     # 1. Verify dataset exists
     result = await db.execute(
-        select(DatasetArtifact.dataset_id).where(
-            DatasetArtifact.dataset_id == dataset_id
-        ).limit(1)
+        select(DatasetArtifact.dataset_id).where(DatasetArtifact.dataset_id == dataset_id).limit(1)
     )
     if not result.scalars().first():
         raise HTTPException(
@@ -668,10 +674,7 @@ async def commit_lineage(
     )
     parent_commit_id = latest_result.scalars().first() or ""
 
-    payload = (
-        f"{dataset_id}:{parent_commit_id}:{body.model_id}"
-        f":{body.committer_pubkey}"
-    )
+    payload = f"{dataset_id}:{parent_commit_id}:{body.model_id}:{body.committer_pubkey}"
     commit_id = blake3_hash([DATASET_LINEAGE_PREFIX, payload.encode()]).hex()
 
     # 3. Check uniqueness (dataset_id, model_id, event_type, committer_pubkey)

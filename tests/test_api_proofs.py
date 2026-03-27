@@ -350,14 +350,16 @@ async def test_proof_endpoint_does_not_crash_in_production_mode(monkeypatch):
             yield session
 
     from api.main import create_app
+
     app = create_app()
     app.dependency_overrides[get_db] = override_get_db
 
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
         # Any commit_id that doesn't exist should return 404, not 500
         resp = await client.get("/ledger/proof/0xdeadbeef00000000000000000000000000000000")
-        assert resp.status_code in (404, 200), f"Expected 404 or 200, got {resp.status_code} — endpoint is crashing"
+        assert resp.status_code in (404, 200), (
+            f"Expected 404 or 200, got {resp.status_code} — endpoint is crashing"
+        )
         assert resp.status_code != 500
 
     await engine.dispose()
-

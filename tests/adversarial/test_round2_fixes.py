@@ -42,7 +42,7 @@ class TestHomoglyphScrub:
         base = {"invoice_id": "INV-8842", "amount": 100}
         variants = [
             {**base, "currency": "USD"},
-            {**base, "currency": "US\uff24"},       # fullwidth D
+            {**base, "currency": "US\uff24"},  # fullwidth D
             {**base, "currency": "\U0001d414\U0001d412\U0001d403"},  # math bold
             {**base, "currency": "\uff35\uff33\uff24"},  # all fullwidth
         ]
@@ -51,7 +51,9 @@ class TestHomoglyphScrub:
 
     def test_non_ascii_legitimate_content_survives(self) -> None:
         """Arabic, CJK, accented Latin must not be destroyed."""
-        assert _scrub_homoglyphs("\u0645\u0631\u062d\u0628\u0627") == "\u0645\u0631\u062d\u0628\u0627"  # مرحبا
+        assert (
+            _scrub_homoglyphs("\u0645\u0631\u062d\u0628\u0627") == "\u0645\u0631\u062d\u0628\u0627"
+        )  # مرحبا
         assert _scrub_homoglyphs("\u65e5\u672c\u8a9e") == "\u65e5\u672c\u8a9e"  # 日本語
         assert _scrub_homoglyphs("caf\u00e9") == "caf\u00e9"  # café
 
@@ -72,10 +74,15 @@ class TestIdempotencySemanticVariants:
 
     def test_integer_and_float_produce_same_content_hash(self) -> None:
         """100 and 100.0 must produce the same content_hash after canonical_v2."""
-        a = document_to_bytes(canonicalize_document({"invoice_id": "INV-0003", "amount": 100, "currency": "USD"}))
-        b = document_to_bytes(canonicalize_document({"invoice_id": "INV-0003", "amount": 100.0, "currency": "USD"}))
-        assert hash_bytes(a).hex() == hash_bytes(b).hex(), \
+        a = document_to_bytes(
+            canonicalize_document({"invoice_id": "INV-0003", "amount": 100, "currency": "USD"})
+        )
+        b = document_to_bytes(
+            canonicalize_document({"invoice_id": "INV-0003", "amount": 100.0, "currency": "USD"})
+        )
+        assert hash_bytes(a).hex() == hash_bytes(b).hex(), (
             "Numeric fix must be applied before idempotency gate is meaningful"
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -108,7 +115,7 @@ class TestDomainSeparation:
     def test_crafted_leaf_cannot_collide_with_internal_node(self) -> None:
         """Domain separation: no leaf hash should equal any internal node hash."""
         leaves_raw = [b"a", b"b", b"c", b"d"]
-        leaf_hashes = [_blake3_leaf(l) for l in leaves_raw]
+        leaf_hashes = [_blake3_leaf(item_list) for item_list in leaves_raw]
         tree = build_tree(leaf_hashes)
 
         # Collect all internal node hashes from tree levels
@@ -116,8 +123,9 @@ class TestDomainSeparation:
         for level in tree.levels[1:]:  # skip leaf level
             internal_nodes.update(level)
 
-        assert not (set(leaf_hashes) & internal_nodes), \
+        assert not (set(leaf_hashes) & internal_nodes), (
             "Collision between leaf and internal node — domain separation failed"
+        )
 
     def test_old_scheme_proof_fails_against_new_root(self) -> None:
         """A proof built without domain separation must not verify against a prefixed root."""
@@ -125,15 +133,16 @@ class TestDomainSeparation:
 
         leaf_data = b"test_document"
         old_leaf_hash = b3.blake3(leaf_data).hexdigest()  # no prefix
-        new_leaf_hash = _blake3_leaf(leaf_data)            # 0x00 prefix
+        new_leaf_hash = _blake3_leaf(leaf_data)  # 0x00 prefix
 
         new_tree = build_tree([new_leaf_hash])
         old_tree = build_tree([old_leaf_hash])
         old_proof = generate_proof(old_leaf_hash, old_tree)
 
         # Old proof must NOT verify against new root
-        assert not verify_proof(old_leaf_hash, old_proof, new_tree.root_hash), \
+        assert not verify_proof(old_leaf_hash, old_proof, new_tree.root_hash), (
             "Old-scheme proof must not verify against new-scheme root"
+        )
 
 
 # ---------------------------------------------------------------------------

@@ -717,7 +717,9 @@ class RedactionProtocol:
 
         for meta in metadata:
             # Chain: acc = Poseidon(acc, sectionLength) with commitment domain
-            acc = poseidon_hash_with_domain(acc, meta.section_length % _F, POSEIDON_DOMAIN_COMMITMENT)
+            acc = poseidon_hash_with_domain(
+                acc, meta.section_length % _F, POSEIDON_DOMAIN_COMMITMENT
+            )
             # Chain: acc = Poseidon(acc, sectionHash-as-field-element)
             section_hash_int = int(meta.section_hash, 16) % _F
             acc = poseidon_hash_with_domain(acc, section_hash_int, POSEIDON_DOMAIN_COMMITMENT)

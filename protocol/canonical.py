@@ -182,9 +182,7 @@ def canonicalize_document(
             if math.isnan(value):
                 raise CanonicalizationError("NaN is not allowed in canonical documents")
             if math.isinf(value):
-                raise CanonicalizationError(
-                    "Infinity is not allowed in canonical documents"
-                )
+                raise CanonicalizationError("Infinity is not allowed in canonical documents")
             if value == int(value):
                 return int(value)
             # Non-whole float: normalize via Decimal for deterministic representation

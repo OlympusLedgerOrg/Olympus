@@ -16,8 +16,12 @@ import pytest
 from api.services.verification import _build_verification_response
 
 
-def _make_fake_commit(doc_hash: str = "abc123", shard_id: str = "shard-0",
-                      commit_id: str = "0xdead", request_id: str | None = None):
+def _make_fake_commit(
+    doc_hash: str = "abc123",
+    shard_id: str = "shard-0",
+    commit_id: str = "0xdead",
+    request_id: str | None = None,
+):
     """Create a fake DocCommit-like object for testing."""
     commit = MagicMock()
     commit.doc_hash = doc_hash

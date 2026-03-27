@@ -153,9 +153,9 @@ async def submit_observation(
     """
     # -- Replay-resistance: validate timestamp freshness -----------------
     try:
-        ts = datetime.fromisoformat(
-            request.checkpoint.timestamp.replace("Z", "+00:00")
-        ).astimezone(UTC)
+        ts = datetime.fromisoformat(request.checkpoint.timestamp.replace("Z", "+00:00")).astimezone(
+            UTC
+        )
     except (ValueError, AttributeError):
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,

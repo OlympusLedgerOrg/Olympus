@@ -78,7 +78,10 @@ async def file_appeal(body: AppealCreate, db: DBSession, _api_key: RequireAPIKey
     if req.status == RequestStatus.APPEALED.value:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
-            detail={"detail": "An appeal has already been filed for this request.", "code": "APPEAL_EXISTS"},
+            detail={
+                "detail": "An appeal has already been filed for this request.",
+                "code": "APPEAL_EXISTS",
+            },
         )
 
     filed_at = datetime.now(timezone.utc)

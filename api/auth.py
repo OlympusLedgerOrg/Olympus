@@ -110,7 +110,10 @@ def _extract_key(request: Request) -> str:
         return authz[7:].strip()
     raise HTTPException(
         status_code=status.HTTP_401_UNAUTHORIZED,
-        detail={"detail": "API key required. Provide via X-API-Key header or Authorization: Bearer.", "code": "AUTH_REQUIRED"},
+        detail={
+            "detail": "API key required. Provide via X-API-Key header or Authorization: Bearer.",
+            "code": "AUTH_REQUIRED",
+        },
     )
 
 
@@ -145,14 +148,21 @@ async def require_api_key(request: Request) -> _APIKeyRecord:
 
     # If no keys are configured, auth is disabled (dev mode)
     if not _key_store:
-        return _APIKeyRecord(key_id="dev", key_hash="", scopes={"read", "write"}, expires_at=datetime(2099, 1, 1, tzinfo=UTC))
+        return _APIKeyRecord(
+            key_id="dev",
+            key_hash="",
+            scopes={"read", "write"},
+            expires_at=datetime(2099, 1, 1, tzinfo=UTC),
+        )
 
     raw_key = _extract_key(request)
     key_hash = _hash_key(raw_key)
     record = _constant_time_lookup(key_hash)
 
     if record is None:
-        logger.warning("Invalid API key attempt from %s", request.client.host if request.client else "unknown")
+        logger.warning(
+            "Invalid API key attempt from %s", request.client.host if request.client else "unknown"
+        )
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail={"detail": "Invalid API key.", "code": "AUTH_INVALID"},
@@ -283,9 +293,7 @@ def _create_rate_limit_backend() -> MemoryRateLimitBackend | RedisRateLimitBacke
 
     if backend_type == "redis":
         if not settings.rate_limit_redis_url:
-            raise ValueError(
-                "RATE_LIMIT_REDIS_URL must be set when RATE_LIMIT_BACKEND=redis"
-            )
+            raise ValueError("RATE_LIMIT_REDIS_URL must be set when RATE_LIMIT_BACKEND=redis")
         return RedisRateLimitBackend(settings.rate_limit_redis_url)
 
     if backend_type != "memory":

@@ -28,7 +28,7 @@ class RequestType(str, enum.Enum):
     """Legal basis for the request."""
 
     NC_PUBLIC_RECORDS = "NC_PUBLIC_RECORDS"  # G.S. § 132
-    FEDERAL_FOIA = "FEDERAL_FOIA"            # 5 U.S.C. § 552
+    FEDERAL_FOIA = "FEDERAL_FOIA"  # 5 U.S.C. § 552
     FERPA = "FERPA"
 
 
@@ -117,7 +117,5 @@ class PublicRecordsRequest(Base):
 
     # Relationships
     agency: Mapped[Agency | None] = relationship("Agency", back_populates="requests")
-    appeal: Mapped[Appeal | None] = relationship(
-        "Appeal", back_populates="request", uselist=False
-    )
+    appeal: Mapped[Appeal | None] = relationship("Appeal", back_populates="request", uselist=False)
     doc_commits: Mapped[list] = relationship("DocCommit", back_populates="request")

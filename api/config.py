@@ -33,7 +33,9 @@ def _load_db_password() -> str:
         path = Path(password_file)
         if path.exists():
             return path.read_text().strip()
-        _logger.warning("DATABASE_PASSWORD_FILE=%s does not exist — falling back to env var", password_file)
+        _logger.warning(
+            "DATABASE_PASSWORD_FILE=%s does not exist — falling back to env var", password_file
+        )
     password = os.getenv("DATABASE_PASSWORD", "")
     if password:
         _logger.warning(
@@ -85,7 +87,7 @@ class Settings(BaseSettings):
 
     # Statutory deadlines (business days)
     # NC Public Records: no explicit limit; flag overdue after these thresholds
-    statutory_window_nc_ack_days: int = 14   # G.S. § 132 — acknowledgment
+    statutory_window_nc_ack_days: int = 14  # G.S. § 132 — acknowledgment
     statutory_window_nc_fulfill_days: int = 30  # G.S. § 132 — fulfillment
     # Federal FOIA: 20 business days per 5 U.S.C. § 552(a)(6)(A)
     statutory_window_foia_days: int = 20

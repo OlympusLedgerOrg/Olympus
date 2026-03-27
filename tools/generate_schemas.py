@@ -54,9 +54,7 @@ def discover_models() -> list[tuple[str, type[BaseModel]]]:
             # API context (missing env vars, database, etc.).  Log and skip.
             import logging
 
-            logging.getLogger(__name__).debug(
-                "Skipping %s.%s: %s", module_path, class_name, exc
-            )
+            logging.getLogger(__name__).debug("Skipping %s.%s: %s", module_path, class_name, exc)
     return results
 
 

@@ -43,9 +43,7 @@ async def _next_display_id(db) -> str:
     Uses MAX(display_id) to find the current highest ID, avoiding collisions
     from concurrent row-count reads.
     """
-    result = await db.execute(
-        select(func.max(PublicRecordsRequest.display_id))
-    )
+    result = await db.execute(select(func.max(PublicRecordsRequest.display_id)))
     max_id = result.scalar()
     if max_id is None:
         return "OLY-0001"
@@ -110,7 +108,10 @@ async def file_request(body: RequestCreate, db: DBSession, _api_key: RequireAPIK
 
     raise HTTPException(
         status_code=status.HTTP_409_CONFLICT,
-        detail={"detail": "Could not generate unique display_id after retries.", "code": "DISPLAY_ID_CONFLICT"},
+        detail={
+            "detail": "Could not generate unique display_id after retries.",
+            "code": "DISPLAY_ID_CONFLICT",
+        },
     )
 
 
@@ -189,7 +190,13 @@ async def get_request(display_id: str, db: DBSession, _rl: RateLimit):
 
 
 @router.patch("/{display_id}/status", response_model=RequestResponse)
-async def update_request_status(display_id: str, body: RequestStatusUpdate, db: DBSession, _api_key: RequireAPIKey, _rl: RateLimit):
+async def update_request_status(
+    display_id: str,
+    body: RequestStatusUpdate,
+    db: DBSession,
+    _api_key: RequireAPIKey,
+    _rl: RateLimit,
+):
     """Update the status of a request and anchor the change to the ledger.
 
     Args:

@@ -240,8 +240,7 @@ def verify_proof(leaf_hash: str, proof: MerkleProof, root: str) -> bool:
     for _hash, direction in proof.siblings:
         if direction not in _VALID_DIRECTIONS:
             raise ValueError(
-                f"Invalid sibling direction {direction!r} "
-                f"(must be exactly 'left' or 'right')"
+                f"Invalid sibling direction {direction!r} (must be exactly 'left' or 'right')"
             )
 
     # Strict depth validation when tree_size is known

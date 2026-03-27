@@ -21,9 +21,9 @@ _BLAKE3_LENGTH = b"\x20"
 
 def build_ipfs_proof_envelope(proof_bundle: dict[str, Any]) -> bytes:
     """Serialize a proof bundle as deterministic DAG-JSON bytes."""
-    return json.dumps(proof_bundle, sort_keys=True, separators=(",", ":"), ensure_ascii=True).encode(
-        "utf-8"
-    )
+    return json.dumps(
+        proof_bundle, sort_keys=True, separators=(",", ":"), ensure_ascii=True
+    ).encode("utf-8")
 
 
 def compute_ipfs_cidv1(proof_bundle: dict[str, Any]) -> str:

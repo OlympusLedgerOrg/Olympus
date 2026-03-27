@@ -25,7 +25,9 @@ router = APIRouter(prefix="/key", tags=["keys"])
 
 
 @router.post("/credential", response_model=CredentialResponse, status_code=status.HTTP_201_CREATED)
-async def issue_credential(body: CredentialCreate, db: DBSession, _api_key: RequireAPIKey, _rl: RateLimit):
+async def issue_credential(
+    body: CredentialCreate, db: DBSession, _api_key: RequireAPIKey, _rl: RateLimit
+):
     """Issue a new SBT-style non-transferable credential.
 
     Anchors the credential issuance to the ledger via a generated commit_id.
@@ -54,7 +56,9 @@ async def issue_credential(body: CredentialCreate, db: DBSession, _api_key: Requ
 
 
 @router.delete("/credential/{credential_id}", status_code=status.HTTP_204_NO_CONTENT)
-async def revoke_credential(credential_id: str, db: DBSession, _api_key: RequireAPIKey, _rl: RateLimit):
+async def revoke_credential(
+    credential_id: str, db: DBSession, _api_key: RequireAPIKey, _rl: RateLimit
+):
     """Revoke a credential by setting its revoked_at timestamp.
 
     The credential record is retained for audit purposes; Olympus is an
@@ -68,9 +72,7 @@ async def revoke_credential(credential_id: str, db: DBSession, _api_key: Require
         HTTPException 404: If the credential is not found.
         HTTPException 409: If the credential has already been revoked.
     """
-    result = await db.execute(
-        select(KeyCredential).where(KeyCredential.id == credential_id)
-    )
+    result = await db.execute(select(KeyCredential).where(KeyCredential.id == credential_id))
     cred = result.scalars().first()
     if not cred:
         raise HTTPException(

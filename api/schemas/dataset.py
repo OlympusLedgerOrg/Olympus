@@ -59,9 +59,7 @@ class DatasetCommitRequest(BaseModel):
     commit_signature: str = Field(..., pattern=r"^[0-9a-f]{128}$")
 
     # Canonicalization
-    manifest_schema_version: str = Field(
-        default="dataset_manifest_v1", max_length=32
-    )
+    manifest_schema_version: str = Field(default="dataset_manifest_v1", max_length=32)
 
 
 class LineageCommitRequest(BaseModel):

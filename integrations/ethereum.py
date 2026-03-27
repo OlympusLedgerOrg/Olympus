@@ -73,8 +73,7 @@ def validate_anchor_wallet(wallet_address: str) -> None:
     expected = os.environ.get("OLYMPUS_ETH_ANCHOR_ADDRESS", "").strip().lower()
     if expected and wallet_address.strip().lower() != expected:
         raise ValueError(
-            f"Configured wallet {wallet_address} does not match "
-            f"expected anchor address {expected}."
+            f"Configured wallet {wallet_address} does not match expected anchor address {expected}."
         )
 
 

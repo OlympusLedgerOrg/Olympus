@@ -30,7 +30,7 @@ def verify_blake3_command(args):
     if args.stdin:
         data = sys.stdin.buffer.read()
     elif args.data:
-        data = args.data.encode('utf-8')
+        data = args.data.encode("utf-8")
     elif args.file:
         data = Path(args.file).read_bytes()
     else:
@@ -66,7 +66,7 @@ def merkle_root_command(args):
     if args.stdin:
         # Read leaves from stdin (one per line)
         for line in sys.stdin:
-            leaves.append(line.rstrip('\n').encode('utf-8'))
+            leaves.append(line.rstrip("\n").encode("utf-8"))
     elif args.leaves:
         # Read leaves from files
         for leaf_path in args.leaves:
@@ -110,9 +110,7 @@ def merkle_proof_command(args):
     if siblings and isinstance(siblings[0], dict):
         # Convert {"hash": ..., "position": ...} → [hash_hex, position]
         proof_data = dict(proof_data)
-        proof_data["siblings"] = [
-            [s["hash"], s["position"]] for s in siblings
-        ]
+        proof_data["siblings"] = [[s["hash"], s["position"]] for s in siblings]
     proof = deserialize_merkle_proof(proof_data)
 
     # Verify the proof
@@ -166,7 +164,7 @@ def poseidon_command(args):
 
     # Split data into chunks if needed
     chunk_size = args.chunk_size
-    leaves = [data[i:i+chunk_size] for i in range(0, len(data), chunk_size)]
+    leaves = [data[i : i + chunk_size] for i in range(0, len(data), chunk_size)]
 
     # Build Poseidon tree
     tree = PoseidonMerkleTree(leaves)
@@ -199,47 +197,51 @@ def main():
         description="Olympus CLI Verification Tool",
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
-    parser.add_argument('--json', action='store_true', help='Output JSON format')
+    parser.add_argument("--json", action="store_true", help="Output JSON format")
 
-    subparsers = parser.add_subparsers(dest='command', required=True)
+    subparsers = parser.add_subparsers(dest="command", required=True)
 
     # blake3 command
-    blake3_parser = subparsers.add_parser('blake3', help='Verify a BLAKE3 hash')
-    blake3_parser.add_argument('--data', help='Data string to hash')
-    blake3_parser.add_argument('--file', help='File to hash')
-    blake3_parser.add_argument('--stdin', action='store_true', help='Read data from stdin')
-    blake3_parser.add_argument('--hash', required=True, help='Expected hash (hex)')
+    blake3_parser = subparsers.add_parser("blake3", help="Verify a BLAKE3 hash")
+    blake3_parser.add_argument("--data", help="Data string to hash")
+    blake3_parser.add_argument("--file", help="File to hash")
+    blake3_parser.add_argument("--stdin", action="store_true", help="Read data from stdin")
+    blake3_parser.add_argument("--hash", required=True, help="Expected hash (hex)")
 
     # merkle-root command
-    merkle_parser = subparsers.add_parser('merkle-root', help='Compute Merkle root')
-    merkle_parser.add_argument('--leaves', nargs='+', help='Leaf files')
-    merkle_parser.add_argument('--stdin', action='store_true', help='Read leaves from stdin (one per line)')
+    merkle_parser = subparsers.add_parser("merkle-root", help="Compute Merkle root")
+    merkle_parser.add_argument("--leaves", nargs="+", help="Leaf files")
+    merkle_parser.add_argument(
+        "--stdin", action="store_true", help="Read leaves from stdin (one per line)"
+    )
 
     # merkle-proof command
-    proof_parser = subparsers.add_parser('merkle-proof', help='Verify Merkle proof')
-    proof_parser.add_argument('--proof', required=True, help='Proof JSON file')
+    proof_parser = subparsers.add_parser("merkle-proof", help="Verify Merkle proof")
+    proof_parser.add_argument("--proof", required=True, help="Proof JSON file")
 
     # poseidon command
-    poseidon_parser = subparsers.add_parser('poseidon', help='Verify Poseidon commitment')
-    poseidon_parser.add_argument('--file', help='File to commit')
-    poseidon_parser.add_argument('--stdin', action='store_true', help='Read data from stdin')
-    poseidon_parser.add_argument('--root', required=True, help='Expected Poseidon root')
-    poseidon_parser.add_argument('--chunk-size', type=int, default=256, help='Chunk size (default: 256)')
+    poseidon_parser = subparsers.add_parser("poseidon", help="Verify Poseidon commitment")
+    poseidon_parser.add_argument("--file", help="File to commit")
+    poseidon_parser.add_argument("--stdin", action="store_true", help="Read data from stdin")
+    poseidon_parser.add_argument("--root", required=True, help="Expected Poseidon root")
+    poseidon_parser.add_argument(
+        "--chunk-size", type=int, default=256, help="Chunk size (default: 256)"
+    )
 
     args = parser.parse_args()
 
-    if args.command == 'blake3':
+    if args.command == "blake3":
         verify_blake3_command(args)
-    elif args.command == 'merkle-root':
+    elif args.command == "merkle-root":
         merkle_root_command(args)
-    elif args.command == 'merkle-proof':
+    elif args.command == "merkle-proof":
         merkle_proof_command(args)
-    elif args.command == 'poseidon':
+    elif args.command == "poseidon":
         poseidon_command(args)
     else:
         parser.print_help()
         sys.exit(1)
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     main()

@@ -214,15 +214,11 @@ def test_dual_root_commitment(vectors: dict) -> None:
             proof_data = {
                 "leaf_hash": vec["blake3_proof"]["leaf_hash"],
                 "leaf_index": vec["blake3_proof"]["leaf_index"],
-                "siblings": [
-                    [s["hash"], s["position"]] for s in vec["blake3_proof"]["siblings"]
-                ],
+                "siblings": [[s["hash"], s["position"]] for s in vec["blake3_proof"]["siblings"]],
                 "root_hash": vec["blake3_proof"]["root_hash"],
             }
             proof = deserialize_merkle_proof(proof_data)
-            assert verify_proof(proof), (
-                f"blake3_proof verification failed for {desc!r}"
-            )
+            assert verify_proof(proof), f"blake3_proof verification failed for {desc!r}"
 
     print(f"  ✓ dual_root_commitment: {len(vectors['dual_root_commitment'])} vectors")
 

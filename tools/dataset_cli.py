@@ -106,13 +106,15 @@ def _scan_files(directory: Path) -> list[dict]:
         if f.is_symlink() or not f.is_file():
             continue
         rel_posix = f.relative_to(directory).as_posix()
-        entries.append({
-            "path": rel_posix,
-            "hash": _chunked_blake3(f),
-            "size": f.stat().st_size,
-            # Transient sort key — stripped before manifest assembly.
-            "sort_key": rel_posix.casefold(),
-        })
+        entries.append(
+            {
+                "path": rel_posix,
+                "hash": _chunked_blake3(f),
+                "size": f.stat().st_size,
+                # Transient sort key — stripped before manifest assembly.
+                "sort_key": rel_posix.casefold(),
+            }
+        )
 
     # Two-level sort: case-folded primary, original path as tie-breaker.
     entries.sort(key=lambda e: (e["sort_key"], e["path"]))
@@ -236,9 +238,7 @@ def _cmd_dataset_commit(args: argparse.Namespace) -> int:
     manifest_hash = hash_bytes(manifest_bytes).hex()
 
     # 7. Deterministic commit ID — content only, no timestamp (ADR-0010 v4).
-    commit_id = compute_dataset_commit_id(
-        ds_id, args.parent or "", manifest_hash, pubkey_hex
-    )
+    commit_id = compute_dataset_commit_id(ds_id, args.parent or "", manifest_hash, pubkey_hex)
 
     # 8. Sign the commit ID with the Ed25519 signing key.
     signature_hex = signing_key.sign(commit_id.encode()).signature.hex()

@@ -42,8 +42,8 @@ _BLOCKED_RANGES = [
     ipaddress.ip_network("192.168.0.0/16"),
     ipaddress.ip_network("127.0.0.0/8"),
     ipaddress.ip_network("169.254.0.0/16"),  # link-local
-    ipaddress.ip_network("::1/128"),          # IPv6 loopback
-    ipaddress.ip_network("fc00::/7"),         # IPv6 unique local
+    ipaddress.ip_network("::1/128"),  # IPv6 loopback
+    ipaddress.ip_network("fc00::/7"),  # IPv6 unique local
 ]
 
 
@@ -91,11 +91,17 @@ def validate_federation_url(url: str) -> None:
             if addr in blocked:
                 raise ValueError(f"Federation URL resolves to blocked address range: {addr}")
     except ValueError as exc:
-        if "blocked address range" in str(exc) or "must use http" in str(exc) or "has no hostname" in str(exc):
+        if (
+            "blocked address range" in str(exc)
+            or "must use http" in str(exc)
+            or "has no hostname" in str(exc)
+        ):
             raise  # re-raise our own errors
         # hostname is a domain name, not an IP — DNS resolution check would require async
         # For now, log a warning that DNS-based SSRF is not fully mitigated
-        logger.warning("Federation URL %s uses a hostname — DNS rebinding SSRF not fully mitigated", url)
+        logger.warning(
+            "Federation URL %s uses a hostname — DNS rebinding SSRF not fully mitigated", url
+        )
 
 
 def _load_federation_nodes() -> dict[str, str]:
@@ -128,9 +134,7 @@ app.mount("/static", StaticFiles(directory=str(_STATIC_DIR)), name="static")
 
 
 @app.middleware("http")
-async def _debug_console_basic_auth(
-    request: Request, call_next: Any
-) -> JSONResponse:
+async def _debug_console_basic_auth(request: Request, call_next: Any) -> JSONResponse:
     """Enforce HTTP Basic Auth when ``OLYMPUS_DEBUG_CONSOLE_PASSWORD`` is set."""
     if _DEBUG_CONSOLE_PASSWORD:
         auth_header = request.headers.get("authorization", "")
@@ -454,14 +458,16 @@ def _canonical_section_from_binary(
     if "pdf" in ct or ext == "pdf":
         try:
             normalized, mode = canonicalizer.pdf_normalize(raw)
-            return hash_bytes(normalized).hex(), canonicalization_provenance("application/pdf", mode)
+            return hash_bytes(normalized).hex(), canonicalization_provenance(
+                "application/pdf", mode
+            )
         except CanonicalizationError:
             pass  # fall through to raw hash on canonicalization failure
 
-    if (
-        "vnd.openxmlformats-officedocument.wordprocessingml.document" in ct
-        or ext in {"docx", "docm"}
-    ):
+    if "vnd.openxmlformats-officedocument.wordprocessingml.document" in ct or ext in {
+        "docx",
+        "docm",
+    }:
         try:
             return canonicalizer.docx_v1(raw).hex(), canonicalization_provenance(
                 "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
@@ -794,7 +800,11 @@ async def proxy_ledger_verify_simple(request: Request):
             value = form[key]
             if hasattr(value, "read"):
                 file_bytes = await value.read()
-                upload_files[key] = (value.filename or key, file_bytes, value.content_type or "application/octet-stream")
+                upload_files[key] = (
+                    value.filename or key,
+                    file_bytes,
+                    value.content_type or "application/octet-stream",
+                )
             else:
                 data[key] = str(value)
         async with httpx.AsyncClient(timeout=30.0) as client:
@@ -811,12 +821,18 @@ async def proxy_ledger_verify_simple(request: Request):
         if _ENV == "development":
             return JSONResponse(status_code=502, content={"error": str(exc)})
         logger.error("Debug UI proxy error: %s", exc, exc_info=True)
-        return JSONResponse(status_code=502, content={"error": "An internal error occurred. Check server logs for details."})
+        return JSONResponse(
+            status_code=502,
+            content={"error": "An internal error occurred. Check server logs for details."},
+        )
     except Exception as exc:
         if _ENV == "development":
             return JSONResponse(status_code=500, content={"error": str(exc)})
         logger.error("Debug UI error: %s", exc, exc_info=True)
-        return JSONResponse(status_code=500, content={"error": "An internal error occurred. Check server logs for details."})
+        return JSONResponse(
+            status_code=500,
+            content={"error": "An internal error occurred. Check server logs for details."},
+        )
 
 
 @app.get("/sw.js")
@@ -1030,7 +1046,10 @@ async def commit_document(
         if _ENV == "development":
             return JSONResponse(status_code=400, content={"ok": False, "error": str(exc)})
         logger.error("Debug UI error: %s", exc, exc_info=True)
-        return JSONResponse(status_code=400, content={"ok": False, "error": "Invalid input. Check server logs for details."})
+        return JSONResponse(
+            status_code=400,
+            content={"ok": False, "error": "Invalid input. Check server logs for details."},
+        )
 
     entry = _commit_store[commit_result["commit_key"]]
 
@@ -1113,7 +1132,8 @@ async def create_redaction(request: Request):
             )
         logger.error("Debug UI error: %s", exc, exc_info=True)
         return JSONResponse(
-            status_code=400, content={"ok": False, "error": "Invalid input. Check server logs for details."}
+            status_code=400,
+            content={"ok": False, "error": "Invalid input. Check server logs for details."},
         )
 
     try:
@@ -1155,7 +1175,10 @@ async def create_redaction(request: Request):
         if _ENV == "development":
             return JSONResponse(status_code=400, content={"ok": False, "error": str(exc)})
         logger.error("Debug UI error: %s", exc, exc_info=True)
-        return JSONResponse(status_code=400, content={"ok": False, "error": "Invalid input. Check server logs for details."})
+        return JSONResponse(
+            status_code=400,
+            content={"ok": False, "error": "Invalid input. Check server logs for details."},
+        )
 
     smt_root_hex = smt.get_root().hex()
     revealed_content = [parts[i] for i in revealed_indices]
@@ -1236,7 +1259,10 @@ def get_embargo_state(doc_id: str, version: int):
         if _ENV == "development":
             return JSONResponse(status_code=404, content={"ok": False, "error": str(exc)})
         logger.error("Debug UI error: %s", exc, exc_info=True)
-        return JSONResponse(status_code=404, content={"ok": False, "error": "Resource not found. Check server logs for details."})
+        return JSONResponse(
+            status_code=404,
+            content={"ok": False, "error": "Resource not found. Check server logs for details."},
+        )
     return JSONResponse(
         {"ok": True, "document_id": doc_id, "version": version, "embargo": _embargo_summary(entry)}
     )
@@ -1264,7 +1290,8 @@ async def update_embargo(request: Request):
             )
         logger.error("Debug UI error: %s", exc, exc_info=True)
         return JSONResponse(
-            status_code=400, content={"ok": False, "error": "Invalid input. Check server logs for details."}
+            status_code=400,
+            content={"ok": False, "error": "Invalid input. Check server logs for details."},
         )
 
     entry["release_at"] = normalized_release_at
@@ -1304,7 +1331,8 @@ async def revoke_embargo_recipient(request: Request):
             )
         logger.error("Debug UI error: %s", exc, exc_info=True)
         return JSONResponse(
-            status_code=400, content={"ok": False, "error": "Invalid input. Check server logs for details."}
+            status_code=400,
+            content={"ok": False, "error": "Invalid input. Check server logs for details."},
         )
 
     if recipient_key not in entry.get("recipient_keys", []):
@@ -1407,7 +1435,10 @@ def _validate_proof_bundle_schema(bundle: Any) -> tuple[bool, str | None]:
             return False, "revealed_indices must be an array"
         for idx, item in enumerate(revealed):
             if not isinstance(item, int):
-                return False, f"revealed_indices[{idx}] must be an integer, got {type(item).__name__}"
+                return (
+                    False,
+                    f"revealed_indices[{idx}] must be an integer, got {type(item).__name__}",
+                )
             if item < 0:
                 return False, f"revealed_indices[{idx}] must be non-negative"
 
@@ -1445,16 +1476,14 @@ async def inspect_proof_bundle(request: Request):
                 status_code=400, content={"ok": False, "error": f"Invalid JSON: {exc}"}
             )
         logger.error("Debug UI error: %s", exc, exc_info=True)
-        return JSONResponse(
-            status_code=400, content={"ok": False, "error": "Invalid JSON input."}
-        )
+        return JSONResponse(status_code=400, content={"ok": False, "error": "Invalid JSON input."})
 
     # Validate bundle schema before running checks
     is_valid, error_msg = _validate_proof_bundle_schema(bundle)
     if not is_valid:
         return JSONResponse(
             status_code=400,
-            content={"ok": False, "error": f"Invalid proof bundle schema: {error_msg}"}
+            content={"ok": False, "error": f"Invalid proof bundle schema: {error_msg}"},
         )
 
     # Extract and validate core fields
@@ -1464,48 +1493,58 @@ async def inspect_proof_bundle(request: Request):
     # Check SMT proof structure
     smt_proof = bundle.get("smt_proof", {})
     if smt_proof:
-        checks.append({
-            "passed": "root_hash" in smt_proof,
-            "label": "SMT proof has root_hash",
-            "detail": f"Root: {smt_proof.get('root_hash', 'MISSING')}"
-        })
-        fields.append({
-            "field": "smt_proof.root_hash",
-            "value": smt_proof.get("root_hash", "MISSING"),
-            "type": "hex string (32 bytes)"
-        })
+        checks.append(
+            {
+                "passed": "root_hash" in smt_proof,
+                "label": "SMT proof has root_hash",
+                "detail": f"Root: {smt_proof.get('root_hash', 'MISSING')}",
+            }
+        )
+        fields.append(
+            {
+                "field": "smt_proof.root_hash",
+                "value": smt_proof.get("root_hash", "MISSING"),
+                "type": "hex string (32 bytes)",
+            }
+        )
 
     # Check ZK public inputs
     zk_public = bundle.get("zk_public_inputs", {})
     if zk_public:
-        checks.append({
-            "passed": "original_root" in zk_public,
-            "label": "ZK public inputs has original_root",
-            "detail": f"Root: {zk_public.get('original_root', 'MISSING')}"
-        })
-        fields.append({
-            "field": "zk_public_inputs.original_root",
-            "value": zk_public.get("original_root", "MISSING"),
-            "type": "decimal string (BN128 field element)"
-        })
-        fields.append({
-            "field": "zk_public_inputs.redacted_commitment",
-            "value": zk_public.get("redacted_commitment", "MISSING"),
-            "type": "decimal string (BN128 field element)"
-        })
+        checks.append(
+            {
+                "passed": "original_root" in zk_public,
+                "label": "ZK public inputs has original_root",
+                "detail": f"Root: {zk_public.get('original_root', 'MISSING')}",
+            }
+        )
+        fields.append(
+            {
+                "field": "zk_public_inputs.original_root",
+                "value": zk_public.get("original_root", "MISSING"),
+                "type": "decimal string (BN128 field element)",
+            }
+        )
+        fields.append(
+            {
+                "field": "zk_public_inputs.redacted_commitment",
+                "value": zk_public.get("redacted_commitment", "MISSING"),
+                "type": "decimal string (BN128 field element)",
+            }
+        )
 
     # Check revealed indices
     revealed = bundle.get("revealed_indices", [])
-    checks.append({
-        "passed": isinstance(revealed, list) and len(revealed) > 0,
-        "label": "Revealed indices non-empty",
-        "detail": f"Indices: {revealed}"
-    })
-    fields.append({
-        "field": "revealed_indices",
-        "value": str(revealed),
-        "type": "array of integers"
-    })
+    checks.append(
+        {
+            "passed": isinstance(revealed, list) and len(revealed) > 0,
+            "label": "Revealed indices non-empty",
+            "detail": f"Indices: {revealed}",
+        }
+    )
+    fields.append(
+        {"field": "revealed_indices", "value": str(revealed), "type": "array of integers"}
+    )
 
     return JSONResponse({"ok": True, "checks": checks, "fields": fields})
 
@@ -1524,8 +1563,7 @@ async def constants_provenance():
         from protocol.poseidon_constants import POSEIDON_BN128_PARAMS
     except ImportError:
         return JSONResponse(
-            status_code=500,
-            content={"ok": False, "error": "Poseidon constants not available"}
+            status_code=500, content={"ok": False, "error": "Poseidon constants not available"}
         )
 
     # Build provenance notebook
@@ -1536,14 +1574,12 @@ async def constants_provenance():
             "field": "BN128",
             "round_constants_count": len(POSEIDON_BN128_PARAMS.get("C", [])),
             "mds_rows": len(POSEIDON_BN128_PARAMS.get("M", [])),
-            "mds_cols": len(POSEIDON_BN128_PARAMS.get("M", [[]])[0]) if POSEIDON_BN128_PARAMS.get("M") else 0
+            "mds_cols": len(POSEIDON_BN128_PARAMS.get("M", [[]])[0])
+            if POSEIDON_BN128_PARAMS.get("M")
+            else 0,
         },
-        "parity": {
-            "status": "passed",
-            "vectors_checked": 5,
-            "reason": None
-        },
-        "constants": POSEIDON_BN128_PARAMS
+        "parity": {"status": "passed", "vectors_checked": 5, "reason": None},
+        "constants": POSEIDON_BN128_PARAMS,
     }
 
     return JSONResponse({"ok": True, "notebook": notebook})
@@ -1575,13 +1611,15 @@ async def circuit_constraints():
         except Exception:
             source_excerpt = "(source unavailable)"
 
-        circuits.append({
-            "title": circuit_info.get("title", circuit_name),
-            "source_path": str(circuit_path),
-            "public_inputs": circuit_info.get("public_inputs", []),
-            "private_inputs": circuit_info.get("private_inputs", []),
-            "constraints": circuit_info.get("constraints", []),
-            "source_excerpt": source_excerpt
-        })
+        circuits.append(
+            {
+                "title": circuit_info.get("title", circuit_name),
+                "source_path": str(circuit_path),
+                "public_inputs": circuit_info.get("public_inputs", []),
+                "private_inputs": circuit_info.get("private_inputs", []),
+                "constraints": circuit_info.get("constraints", []),
+                "source_excerpt": source_excerpt,
+            }
+        )
 
     return JSONResponse({"ok": True, "circuits": circuits})

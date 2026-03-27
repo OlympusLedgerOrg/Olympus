@@ -31,7 +31,9 @@ def _verify_entry_chain(entries: list[LedgerEntry]) -> bool:
             "prev_entry_hash": entry.prev_entry_hash,
             "poseidon_root": entry.poseidon_root,
         }
-        normalized_certificate = _canonicalize_quorum_certificate(entry.federation_quorum_certificate)
+        normalized_certificate = _canonicalize_quorum_certificate(
+            entry.federation_quorum_certificate
+        )
         if normalized_certificate is not None:
             payload["federation_quorum_certificate"] = normalized_certificate
 

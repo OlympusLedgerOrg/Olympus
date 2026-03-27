@@ -10,7 +10,6 @@ import json
 import os
 
 import blake3
-
 import pytest
 import pytest_asyncio
 from httpx import ASGITransport, AsyncClient
@@ -98,7 +97,9 @@ async def test_verify_by_doc_hash(client):
 @pytest.mark.asyncio
 async def test_verify_nonexistent_returns_false(client):
     """Verifying a non-existent commit should return verified: false, not 404."""
-    resp = await client.post("/doc/verify", json={"commit_id": "0xdeadbeef00000000deadbeef00000000deadbeef"})
+    resp = await client.post(
+        "/doc/verify", json={"commit_id": "0xdeadbeef00000000deadbeef00000000deadbeef"}
+    )
     assert resp.status_code == 200
     assert resp.json()["verified"] is False
 
@@ -152,7 +153,9 @@ async def test_commit_rejects_invalid_hash(client):
     """POST /doc/commit with a non-hex or wrong-length hash should return 422."""
     for bad_hash in ["hello", "ZZZZ", "abc", "A" * 64, ""]:
         resp = await client.post("/doc/commit", json={"doc_hash": bad_hash})
-        assert resp.status_code == 422, f"Expected 422 for doc_hash={bad_hash!r}, got {resp.status_code}"
+        assert resp.status_code == 422, (
+            f"Expected 422 for doc_hash={bad_hash!r}, got {resp.status_code}"
+        )
 
 
 @pytest.mark.asyncio
@@ -181,7 +184,9 @@ async def test_commit_requires_auth_when_keys_configured(client):
         auth_module._key_store.clear()
 
         test_key_hash = blake3.blake3(b"test-key-1234").hexdigest()
-        os.environ["OLYMPUS_FOIA_API_KEYS"] = json.dumps([{"key_hash": test_key_hash, "key_id": "test"}])
+        os.environ["OLYMPUS_FOIA_API_KEYS"] = json.dumps(
+            [{"key_hash": test_key_hash, "key_id": "test"}]
+        )
 
         doc_hash = _b3("auth test doc")
         resp = await client.post("/doc/commit", json={"doc_hash": doc_hash})
