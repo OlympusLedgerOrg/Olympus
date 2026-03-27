@@ -73,17 +73,11 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
         response.headers["X-Frame-Options"] = "DENY"
         response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
         response.headers["Permissions-Policy"] = "geolocation=(), camera=(), microphone=()"
-<<<<<<< copilot/fix-ci-linting-dependency-issues
-        # Only set HSTS if TLS is configured
-        if getattr(get_settings(), "tls_enabled", False):
-            response.headers["Strict-Transport-Security"] = "max-age=63072000; includeSubDomains"
-=======
         # HSTS — always set to protect against SSL stripping attacks.
         # Safe even over HTTP (browsers ignore the header on non-HTTPS).
         response.headers["Strict-Transport-Security"] = (
             "max-age=63072000; includeSubDomains"
         )
->>>>>>> main
         # CSP — restrictive default; operators should customize for their frontend origin
         response.headers["Content-Security-Policy"] = (
             "default-src 'self'; "
