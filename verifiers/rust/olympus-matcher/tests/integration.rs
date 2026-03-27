@@ -218,6 +218,7 @@ mod tests {
             start.elapsed()
         };
 
+        // Guard against division by zero when t_small is essentially instant.
         let ratio = t_large.as_secs_f64() / t_small.as_secs_f64().max(1e-12);
 
         assert!(
