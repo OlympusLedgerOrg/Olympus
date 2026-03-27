@@ -324,7 +324,8 @@ def test_submit_observation_requires_auth_when_keys_configured() -> None:
         from protocol.hashes import hash_bytes
 
         test_key_hash = hash_bytes(b"witness-test-key").hex()
-        import json, os
+        import json
+        import os
 
         os.environ["OLYMPUS_FOIA_API_KEYS"] = json.dumps(
             [{"key_hash": test_key_hash, "key_id": "witness-test"}]
