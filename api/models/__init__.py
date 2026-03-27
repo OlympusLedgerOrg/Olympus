@@ -11,7 +11,7 @@ from api.models.agency import Agency
 from api.models.appeal import Appeal
 from api.models.base import Base
 from api.models.credential import KeyCredential
-from api.models.dataset_artifact import DatasetArtifact
+from api.models.dataset import DatasetArtifact, DatasetArtifactFile, DatasetLineageEvent
 from api.models.document import DocCommit
 from api.models.ledger import MerkleNode
 from api.models.ledger_activity import LedgerActivity
@@ -23,6 +23,8 @@ __all__ = [
     "Agency",
     "Appeal",
     "DatasetArtifact",
+    "DatasetArtifactFile",
+    "DatasetLineageEvent",
     "DocCommit",
     "KeyCredential",
     "LedgerActivity",
