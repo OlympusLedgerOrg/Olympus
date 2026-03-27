@@ -11,14 +11,16 @@ class WitnessCheckpoint(BaseModel):
     """Checkpoint data carried inside a witness announcement."""
 
     sequence: int = Field(..., description="Ledger sequence number")
-    # TODO: add timestamp field for replay-resistance when wiring to
-    # protocol/checkpoints.py SignedCheckpoint.
     checkpoint_hash: str = Field(
         ...,
         min_length=64,
         max_length=128,
         pattern=r"^[0-9a-f]{64,128}$",
         description="Lowercase hex-encoded hash of the checkpoint payload (64–128 chars).",
+    )
+    timestamp: str = Field(
+        ...,
+        description="ISO 8601 UTC timestamp of checkpoint creation, for replay-resistance.",
     )
 
 
@@ -27,6 +29,12 @@ class WitnessAnnounceRequest(BaseModel):
 
     origin: str = Field(..., description="Identifier of the announcing node/origin")
     checkpoint: WitnessCheckpoint = Field(..., description="Checkpoint being announced")
+    nonce: str = Field(
+        ...,
+        min_length=16,
+        max_length=128,
+        description="Unique nonce for replay-resistance. Must not be reused across submissions.",
+    )
 
 
 class WitnessAnnouncement(BaseModel):
@@ -34,6 +42,10 @@ class WitnessAnnouncement(BaseModel):
 
     origin: str = Field(..., description="Identifier of the announcing node/origin")
     checkpoint: WitnessCheckpoint = Field(..., description="Announced checkpoint")
+    received_at: str = Field(
+        ...,
+        description="Server-assigned ISO 8601 UTC timestamp of when the announcement was received.",
+    )
 
 
 class WitnessAnnounceResponse(BaseModel):
