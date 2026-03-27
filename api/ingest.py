@@ -859,8 +859,8 @@ def _evaluate_proof_bundle(
     normalized_root = _normalize_merkle_root(merkle_root)
     try:
         merkle_proof = deserialize_merkle_proof(merkle_proof_data)
-    except (KeyError, TypeError, ValueError) as exc:
-        raise HTTPException(status_code=400, detail=f"Invalid merkle_proof: {exc}") from exc
+    except (KeyError, TypeError, ValueError):
+        raise HTTPException(status_code=400, detail="Invalid merkle_proof: malformed proof data") from None
 
     content_hash_bytes = bytes.fromhex(normalized_hash)
     expected_leaf_hash = merkle_leaf_hash(content_hash_bytes)
@@ -1312,7 +1312,7 @@ async def get_ingestion_proof(proof_id: str) -> IngestionProofResponse:
     """
     data = _ingestion_store.get(proof_id) or _fetch_persisted_proof(proof_id)
     if data is None:
-        raise HTTPException(status_code=404, detail=f"Proof not found: {proof_id}")
+        raise HTTPException(status_code=404, detail="Proof not found")
 
     return IngestionProofResponse(**data)
 
@@ -1335,7 +1335,7 @@ async def verify_ingested_content_hash(
         record = _fetch_by_content_hash(normalized_hash)
         if record is None:
             raise HTTPException(
-                status_code=404, detail=f"Committed hash not found: {normalized_hash}"
+                status_code=404, detail="Content hash not found in the ingestion store"
             )
 
         merkle_proof_valid = verify_proof(_merkle_proof_from_store(record))

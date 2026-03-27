@@ -13,7 +13,7 @@ from __future__ import annotations
 
 import logging
 
-from fastapi import APIRouter, File, Form, HTTPException, Query, UploadFile, status
+from fastapi import APIRouter, File, Form, HTTPException, Query, Request, UploadFile, status
 from sqlalchemy import func, select
 
 from api.auth import RateLimit, RequireAPIKey
@@ -245,6 +245,7 @@ async def get_ledger_activity(
 
 @router.post("/ingest/simple", response_model=SimpleIngestionResponse)
 async def simple_document_ingest(
+    request: Request,
     db: DBSession,
     _rl: RateLimit,
     _key: RequireAPIKey,
@@ -259,6 +260,7 @@ async def simple_document_ingest(
     users understand exactly what happened.
 
     Args:
+        request: Raw HTTP request (used to pre-check Content-Length).
         db: Injected async database session.
         file: The document to submit.
         request_id: Optional FOIA request ID to associate with this document.
@@ -267,10 +269,22 @@ async def simple_document_ingest(
     Returns:
         :class:`SimpleIngestionResponse` with numbered steps and outcome.
     """
-    file_bytes = await file.read()
     settings = get_settings()
+    max_mb = settings.max_upload_bytes // 1024 // 1024
+    # Pre-check Content-Length to avoid reading oversized payloads into memory.
+    content_length = request.headers.get("content-length")
+    if content_length is not None:
+        try:
+            if int(content_length) > settings.max_upload_bytes:
+                raise HTTPException(
+                    status_code=413,
+                    detail=f"File exceeds maximum size of {max_mb} MB.",
+                )
+        except ValueError:
+            pass  # malformed header — let the post-read check catch it
+
+    file_bytes = await file.read()
     if len(file_bytes) > settings.max_upload_bytes:
-        max_mb = settings.max_upload_bytes // 1024 // 1024
         raise HTTPException(
             status_code=413,
             detail=f"File exceeds maximum size of {max_mb} MB.",
@@ -288,6 +302,7 @@ async def simple_document_ingest(
 
 @router.post("/verify/simple", response_model=SimpleVerificationResponse)
 async def simple_document_verify(
+    request: Request,
     db: DBSession,
     _rl: RateLimit,
     file: UploadFile | None = File(None),
@@ -305,6 +320,7 @@ async def simple_document_verify(
     Returns a plain-English verdict with step-by-step proof details.
 
     Args:
+        request: Raw HTTP request (used to pre-check Content-Length).
         db: Injected async database session.
         file: Optional uploaded file to verify by content.
         commit_id: Optional record ID or raw commit ID.
@@ -317,10 +333,22 @@ async def simple_document_verify(
         HTTPException 400: If none of the three inputs are provided.
     """
     if file is not None and file.filename:
-        file_bytes = await file.read()
         settings = get_settings()
+        max_mb = settings.max_upload_bytes // 1024 // 1024
+        # Pre-check Content-Length before buffering the entire upload.
+        content_length = request.headers.get("content-length")
+        if content_length is not None:
+            try:
+                if int(content_length) > settings.max_upload_bytes:
+                    raise HTTPException(
+                        status_code=413,
+                        detail=f"File exceeds maximum size of {max_mb} MB.",
+                    )
+            except ValueError:
+                pass  # malformed header — post-read check will catch it
+
+        file_bytes = await file.read()
         if len(file_bytes) > settings.max_upload_bytes:
-            max_mb = settings.max_upload_bytes // 1024 // 1024
             raise HTTPException(
                 status_code=413,
                 detail=f"File exceeds maximum size of {max_mb} MB.",

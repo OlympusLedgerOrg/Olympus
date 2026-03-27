@@ -286,7 +286,17 @@ class RedactionProtocol:
         Returns:
             A :class:`RedactionProof` containing the original root hash,
             revealed leaf hashes, and Merkle inclusion proofs.
+
+        Raises:
+            ValueError: If any index is out of bounds for the tree.
         """
+        n_leaves = len(tree.leaves)
+        for idx in revealed_indices:
+            if idx < 0 or idx >= n_leaves:
+                raise ValueError(
+                    f"Revealed index {idx} is out of bounds for a tree with "
+                    f"{n_leaves} leaf/leaves (valid range: 0–{n_leaves - 1})"
+                )
         tracer = get_tracer()
         with tracer.start_as_current_span("redaction.create_proof") as span:
             span.set_attribute("revealed_indices_count", len(revealed_indices))

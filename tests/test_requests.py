@@ -193,3 +193,33 @@ async def test_deadline_federal_foia():
     filed_at = datetime(2024, 1, 15, 9, 0, 0)
     deadline = compute_deadline(filed_at, "FEDERAL_FOIA")
     assert deadline > filed_at
+
+
+@pytest.mark.asyncio
+async def test_appeal_already_appealed_request_rejected(client):
+    """Filing a second appeal on an already-APPEALED request should return 409."""
+    create_resp = await client.post("/requests", json=REQUEST_BODY)
+    req_id = create_resp.json()["id"]
+
+    # First appeal (on PENDING — allowed)
+    first_resp = await client.post(
+        "/appeals",
+        json={
+            "request_id": req_id,
+            "grounds": "NO_RESPONSE",
+            "statement": "First appeal.",
+        },
+    )
+    assert first_resp.status_code == 201
+
+    # Second appeal — should be rejected because status is now APPEALED
+    second_resp = await client.post(
+        "/appeals",
+        json={
+            "request_id": req_id,
+            "grounds": "NO_RESPONSE",
+            "statement": "Duplicate appeal attempt.",
+        },
+    )
+    assert second_resp.status_code == 409
+    assert second_resp.json()["detail"]["code"] == "APPEAL_EXISTS"

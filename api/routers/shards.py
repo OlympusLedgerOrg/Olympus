@@ -12,6 +12,7 @@ from typing import Any
 
 from fastapi import APIRouter, HTTPException, Query, Request
 
+from api.auth import RateLimit
 from api.ingest import _authorize_and_rate_limit
 from api.schemas.shards import (
     ExistenceProofResponse,
@@ -37,7 +38,7 @@ router = APIRouter(tags=["shards"])
 
 
 @router.get("/shards", response_model=list[ShardInfo])
-async def list_shards() -> list[ShardInfo]:
+async def list_shards(_rl: RateLimit) -> list[ShardInfo]:
     """
     List all shards with their latest state.
 
@@ -64,7 +65,7 @@ async def list_shards() -> list[ShardInfo]:
 
 
 @router.get("/shards/{shard_id}/header/latest", response_model=ShardHeaderResponse)
-async def get_latest_header(shard_id: str) -> ShardHeaderResponse:
+async def get_latest_header(shard_id: str, _rl: RateLimit) -> ShardHeaderResponse:
     """
     Get the latest shard header with signature.
 
@@ -104,6 +105,7 @@ async def get_latest_header(shard_id: str) -> ShardHeaderResponse:
 @router.get("/shards/{shard_id}/proof")
 async def get_proof(
     shard_id: str,
+    _rl: RateLimit,
     record_type: str = Query(..., description="Type of record (e.g., 'document')"),
     record_id: str = Query(..., description="Record identifier"),
     version: int = Query(..., description="Record version", ge=1),
@@ -179,7 +181,9 @@ async def get_proof(
 
 @router.get("/ledger/{shard_id}/tail", response_model=LedgerTailResponse)
 async def get_ledger_tail(
-    shard_id: str, n: int = Query(10, description="Number of entries to retrieve", ge=1, le=1000)
+    shard_id: str,
+    _rl: RateLimit,
+    n: int = Query(10, description="Number of entries to retrieve", ge=1, le=1000),
 ) -> LedgerTailResponse:
     """
     Get the last N ledger entries for a shard.
@@ -217,7 +221,9 @@ async def get_ledger_tail(
 
 @router.get("/shards/{shard_id}/history", response_model=ShardHistoryResponse)
 async def get_shard_history(
-    shard_id: str, n: int = Query(10, description="Number of headers to retrieve", ge=1, le=1000)
+    shard_id: str,
+    _rl: RateLimit,
+    n: int = Query(10, description="Number of headers to retrieve", ge=1, le=1000),
 ) -> ShardHistoryResponse:
     """
     Get recent historical shard headers for a shard.
@@ -241,6 +247,7 @@ async def get_shard_history(
 @router.get("/shards/{shard_id}/diff", response_model=StateRootDiffResponse)
 async def get_shard_state_diff(
     shard_id: str,
+    _rl: RateLimit,
     from_seq: int = Query(..., description="Baseline shard header sequence", ge=0),
     to_seq: int = Query(..., description="Target shard header sequence", ge=0),
 ) -> StateRootDiffResponse:
@@ -259,8 +266,11 @@ async def get_shard_state_diff(
     with db_op("diff shard state"):
         try:
             diff = storage.get_root_diff(shard_id, from_seq, to_seq)
-        except ValueError as e:
-            raise HTTPException(status_code=404, detail=str(e)) from e
+        except ValueError:
+            raise HTTPException(
+                status_code=404,
+                detail="Shard header not found for the requested shard or sequence range",
+            )
         return StateRootDiffResponse(
             shard_id=shard_id,
             from_seq=from_seq,
@@ -279,7 +289,7 @@ async def get_shard_state_diff(
 
 
 @router.get("/shards/{shard_id}/header/latest/verify", response_model=HeaderVerificationResponse)
-async def verify_latest_header(shard_id: str) -> HeaderVerificationResponse:
+async def verify_latest_header(shard_id: str, _rl: RateLimit) -> HeaderVerificationResponse:
     """
     Verify the Ed25519 signature and RFC 3161 timestamp of the latest shard header.
 
@@ -348,7 +358,7 @@ async def verify_latest_header(shard_id: str) -> HeaderVerificationResponse:
 
 
 @router.get("/metrics")
-async def metrics() -> Any:
+async def metrics(_rl: RateLimit) -> Any:
     """
     Prometheus metrics endpoint.
 

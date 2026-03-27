@@ -38,6 +38,7 @@ logger = logging.getLogger(__name__)
 
 _keys_loaded = False
 _key_store: dict[str, _APIKeyRecord] = {}
+_load_keys_lock = Lock()
 
 
 @dataclass
@@ -56,42 +57,47 @@ def _hash_key(raw_key: str) -> str:
 
 
 def _load_keys() -> None:
-    """Load API keys from OLYMPUS_FOIA_API_KEYS on first call."""
+    """Load API keys from OLYMPUS_FOIA_API_KEYS on first call.
+
+    Thread-safe: a module-level lock prevents duplicate initialisation when
+    multiple threads (e.g. Gunicorn threaded workers) call this concurrently.
+    """
     global _keys_loaded
-    if _keys_loaded:
-        return
-    _keys_loaded = True
+    with _load_keys_lock:
+        if _keys_loaded:
+            return
+        _keys_loaded = True
 
-    raw = os.environ.get("OLYMPUS_FOIA_API_KEYS", "[]")
-    try:
-        entries = json.loads(raw)
-    except json.JSONDecodeError as exc:
-        raise ValueError("OLYMPUS_FOIA_API_KEYS must be valid JSON") from exc
-
-    for entry in entries:
-        key_hash = entry.get("key_hash")
-        if not key_hash:
-            raise ValueError(
-                "Each entry in OLYMPUS_FOIA_API_KEYS must have a 'key_hash' field "
-                "(hex-encoded BLAKE3 hash of the raw API key)."
-            )
-        key_id = entry.get("key_id", "default")
-        scopes = set(entry.get("scopes", ["read", "write"]))
-        expires_at_str = entry.get("expires_at", "2099-01-01T00:00:00Z")
+        raw = os.environ.get("OLYMPUS_FOIA_API_KEYS", "[]")
         try:
-            expires_at = datetime.fromisoformat(
-                expires_at_str.replace("Z", "+00:00")
-            ).astimezone(UTC)
-        except (ValueError, AttributeError) as exc:
-            raise ValueError(f"Invalid expires_at for key {key_id}: {expires_at_str}") from exc
-        _key_store[key_hash] = _APIKeyRecord(
-            key_id=key_id,
-            key_hash=key_hash,
-            scopes=scopes,
-            expires_at=expires_at,
-        )
-    if _key_store:
-        logger.info("Loaded %d FOIA API key(s)", len(_key_store))
+            entries = json.loads(raw)
+        except json.JSONDecodeError as exc:
+            raise ValueError("OLYMPUS_FOIA_API_KEYS must be valid JSON") from exc
+
+        for entry in entries:
+            key_hash = entry.get("key_hash")
+            if not key_hash:
+                raise ValueError(
+                    "Each entry in OLYMPUS_FOIA_API_KEYS must have a 'key_hash' field "
+                    "(hex-encoded BLAKE3 hash of the raw API key)."
+                )
+            key_id = entry.get("key_id", "default")
+            scopes = set(entry.get("scopes", ["read", "write"]))
+            expires_at_str = entry.get("expires_at", "2099-01-01T00:00:00Z")
+            try:
+                expires_at = datetime.fromisoformat(
+                    expires_at_str.replace("Z", "+00:00")
+                ).astimezone(UTC)
+            except (ValueError, AttributeError) as exc:
+                raise ValueError(f"Invalid expires_at for key {key_id}: {expires_at_str}") from exc
+            _key_store[key_hash] = _APIKeyRecord(
+                key_id=key_id,
+                key_hash=key_hash,
+                scopes=scopes,
+                expires_at=expires_at,
+            )
+        if _key_store:
+            logger.info("Loaded %d FOIA API key(s)", len(_key_store))
 
 
 def _extract_key(request: Request) -> str:

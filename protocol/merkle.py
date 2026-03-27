@@ -49,9 +49,12 @@ class MerkleNode:
     right: Optional["MerkleNode"] = None
 
 
-@dataclass
+@dataclass(frozen=True)
 class MerkleProof:
     """A Merkle inclusion proof.
+
+    Immutable after construction (``frozen=True``).  All fields are
+    normalised in ``__post_init__`` via :func:`object.__setattr__`.
 
     Versioning fields
     -----------------
@@ -93,12 +96,13 @@ class MerkleProof:
             if position not in ("left", "right"):
                 raise ValueError("Sibling position must be 'left' or 'right'")
             normalized.append((sibling_hash, position))
-        # Use object.__setattr__ to update the field during initialization while keeping
-        # runtime instances immutable and canonical (always string positions).
+        # Use object.__setattr__ to write through the frozen barrier during
+        # construction only.  After __post_init__ returns the instance is
+        # fully immutable — any subsequent assignment raises FrozenInstanceError.
         object.__setattr__(self, "siblings", normalized)
 
 
-@dataclass
+@dataclass(frozen=True)
 class InclusionProof(MerkleProof):
     """Alias for MerkleProof to match protocol terminology."""
 
@@ -504,10 +508,16 @@ def verify_consistency_proof(
 
     # Trivial cases
     if old_size == 0:
-        # Empty tree is a known commitment — the root must be the canonical empty hash
+        # Empty tree is a known commitment — the root must be the canonical empty hash.
         if old_root != EMPTY_TREE_HASH:
             return False
-        return True  # Any new_root is consistent with an empty old tree
+        # RFC 6962 §2.1: a zero-leaf old tree is vacuously consistent with any
+        # new tree; generate_consistency_proof() returns an empty proof for this
+        # transition so there is nothing to verify cryptographically.  Callers
+        # that need to independently confirm new_root MUST obtain it from a
+        # trusted source (e.g. a signed checkpoint) — this function cannot do
+        # so from the proof alone.
+        return True
     if old_size == new_size:
         return old_root == new_root
 
