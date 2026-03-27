@@ -75,6 +75,13 @@ def advance_hlc(last: HLCTimestamp) -> HLCTimestamp:
     If wall-clock time has advanced past *last.wall_ms*, the counter resets
     to 0.  Otherwise the counter is incremented on the same wall tick.
 
+    .. note::
+
+       Uses ``time.time()`` for wall-clock milliseconds, which is subject to
+       NTP adjustments and backwards jumps.  The counter mechanism ensures
+       monotonicity even when the wall clock goes backward, so this does not
+       compromise the strictly-increasing guarantee.
+
     Args:
         last: The most recent HLC timestamp in the chain.
 
