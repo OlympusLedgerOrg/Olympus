@@ -375,10 +375,18 @@ def federation_vote_hash(
 # ---------------------------------------------------------------------------
 
 
-def dataset_key(dataset_name: str, source_uri: str, canonical_namespace: str) -> str:
+def dataset_key(
+    dataset_name: str,
+    source_uri: str,
+    canonical_namespace: str,
+    committer_pubkey: str,
+) -> str:
     """Deterministic dataset identity.
 
     ``canonical_namespace`` scopes identity to prevent collisions across orgs.
+    ``committer_pubkey`` further scopes identity so two orgs using the same
+    namespace and dataset name never collide.
+
     Examples: ``"commoncrawl.org"``, ``"huggingface.co/datasets"``,
     ``"internal.acme.com"``.
 
@@ -386,11 +394,15 @@ def dataset_key(dataset_name: str, source_uri: str, canonical_namespace: str) ->
         dataset_name: Human-readable dataset name.
         source_uri: Origin URI of the dataset.
         canonical_namespace: Namespace scoping identity.
+        committer_pubkey: Ed25519 public key (hex) of the committer.
 
     Returns:
         64-character hex-encoded BLAKE3 hash.
     """
-    key_data = f"dataset_artifact:{canonical_namespace}:{source_uri}:{dataset_name}".encode()
+    key_data = (
+        f"dataset_artifact:{canonical_namespace}:{source_uri}"
+        f":{dataset_name}:{committer_pubkey}"
+    ).encode()
     return blake3_hash([DATASET_PREFIX, key_data]).hex()
 
 
@@ -399,22 +411,24 @@ def compute_dataset_commit_id(
     parent_commit_id: str,
     manifest_hash: str,
     committer_pubkey: str,
-    epoch_timestamp: str,
 ) -> str:
     """Deterministic commit ID — reproducible by any verifier.
+
+    Identity is derived from **content only**; timestamp is attested
+    separately via RFC 3161.  This prevents clock skew from changing
+    the commit identity.
 
     Args:
         dataset_id: Hex-encoded logical dataset identity.
         parent_commit_id: Previous commit hash (empty string for genesis).
         manifest_hash: BLAKE3 hex of the canonical manifest JSON.
         committer_pubkey: Ed25519 public key (hex).
-        epoch_timestamp: ISO 8601 UTC timestamp string.
 
     Returns:
         64-character hex-encoded BLAKE3 hash.
     """
     payload = (
         f"{dataset_id}:{parent_commit_id}:{manifest_hash}"
-        f":{committer_pubkey}:{epoch_timestamp}"
+        f":{committer_pubkey}"
     )
     return blake3_hash([DATASET_COMMIT_PREFIX, payload.encode()]).hex()

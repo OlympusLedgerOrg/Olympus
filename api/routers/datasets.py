@@ -1,5 +1,5 @@
 """
-Dataset provenance endpoints (ADR-0010).
+Dataset provenance endpoints (ADR-0010 v4).
 
 POST /datasets/commit                     — commit a dataset manifest
 GET  /datasets                            — list datasets (paginated)
@@ -19,9 +19,11 @@ import nacl.exceptions
 import nacl.signing
 from fastapi import APIRouter, HTTPException, Query, status
 from sqlalchemy import func, select
+from sqlalchemy.exc import IntegrityError
 
 from api.auth import RateLimit, RequireAPIKey
 from api.deps import DBSession
+from api.models.credential import KeyCredential
 from api.models.dataset import (
     DatasetArtifact,
     DatasetArtifactFile,
@@ -43,7 +45,7 @@ from api.services.merkle import MerkleProof, build_tree, generate_proof
 from api.services.shard import DEFAULT_SHARD_ID, compute_state_root
 from protocol.canonical_json import canonical_json_bytes
 from protocol.hashes import (
-    DATASET_COMMIT_PREFIX,
+    DATASET_LINEAGE_PREFIX,
     blake3_hash,
     compute_dataset_commit_id,
     dataset_key,
@@ -85,6 +87,32 @@ def _verify_signature(pubkey_hex: str, commit_id: str, signature_hex: str) -> bo
     return True
 
 
+async def _check_key_not_revoked(db: "DBSession", pubkey_hex: str) -> None:
+    """Cross-reference committer_pubkey against key_credentials (D12).
+
+    If a credential exists for this pubkey and its ``revoked_at`` is in
+    the past, reject the request with 403.
+    """
+    result = await db.execute(
+        select(KeyCredential.revoked_at).where(
+            KeyCredential.holder_key == pubkey_hex
+        )
+    )
+    cred = result.scalars().first()
+    if cred is not None and cred <= datetime.now(timezone.utc):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Committer key has been revoked.",
+        )
+
+
+def _is_key_revoked_at(revoked_at: datetime | None, reference: datetime) -> bool:
+    """Return True if the key was revoked before ``reference``."""
+    if revoked_at is None:
+        return False
+    return revoked_at <= reference
+
+
 # ---------------------------------------------------------------------------
 # POST /datasets/commit
 # ---------------------------------------------------------------------------
@@ -103,9 +131,10 @@ async def commit_dataset(
 ) -> DatasetCommitResponse:
     """Anchor a dataset manifest to the Olympus ledger.
 
-    Validates the caller's Ed25519 signature, computes deterministic hashes,
-    requests an RFC 3161 timestamp (non-fatal on failure), and persists the
-    commitment record.
+    Validates the caller's Ed25519 signature, computes deterministic hashes
+    (content-only, no timestamp in identity), checks for replay via
+    uniqueness constraint, requests an RFC 3161 timestamp, and persists
+    the commitment record.
     """
     # 1. Validate parent references
     parent_commit_id = body.parent_commit_id or ""
@@ -140,17 +169,34 @@ async def commit_dataset(
     manifest_bytes = canonical_json_bytes(manifest_dict)
     manifest_hash = blake3_hash([manifest_bytes]).hex()
 
-    # 3. dataset_id
-    ds_id = dataset_key(body.dataset_name, body.source_uri, body.canonical_namespace)
-
-    # 4. epoch_timestamp
-    epoch_ts = datetime.now(timezone.utc)
-
-    # 5. commit_id (deterministic)
-    commit_id = compute_dataset_commit_id(
-        ds_id, parent_commit_id, manifest_hash,
-        body.committer_pubkey, epoch_ts.isoformat().replace("+00:00", "Z"),
+    # 3. dataset_id (includes committer_pubkey to prevent cross-org collision)
+    ds_id = dataset_key(
+        body.dataset_name, body.source_uri,
+        body.canonical_namespace, body.committer_pubkey,
     )
+
+    # 4. commit_id (deterministic, content-only — no timestamp)
+    commit_id = compute_dataset_commit_id(
+        ds_id, parent_commit_id, manifest_hash, body.committer_pubkey,
+    )
+
+    # 5. Check replay: UNIQUE(dataset_id, parent_commit_id, manifest_hash)
+    existing = await db.execute(
+        select(DatasetArtifact.commit_id).where(
+            DatasetArtifact.dataset_id == ds_id,
+            DatasetArtifact.parent_commit_id == parent_commit_id,
+            DatasetArtifact.manifest_hash == manifest_hash,
+        )
+    )
+    existing_commit = existing.scalars().first()
+    if existing_commit is not None:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={
+                "detail": "Duplicate commit: same content already committed.",
+                "existing_commit_id": existing_commit,
+            },
+        )
 
     # 6. Verify Ed25519 signature
     if not _verify_signature(body.committer_pubkey, commit_id, body.commit_signature):
@@ -159,30 +205,41 @@ async def commit_dataset(
             detail="Invalid Ed25519 signature.",
         )
 
-    # 7. RFC 3161 timestamp (non-fatal)
+    # 7. Cross-reference committer key against key_credentials (D12)
+    await _check_key_not_revoked(db, body.committer_pubkey)
+
+    # 8. epoch_timestamp (set AFTER identity computation — not in hash)
+    epoch_ts = datetime.now(timezone.utc)
+
+    # 9. RFC 3161 timestamp with explicit status
     rfc3161_tst_hex: str | None = None
     rfc3161_tsa_url: str | None = None
+    timestamp_status = "pending"
     try:
         from protocol.rfc3161 import DEFAULT_TSA_URL, request_timestamp
 
         token = request_timestamp(commit_id, DEFAULT_TSA_URL)
         rfc3161_tst_hex = token.tst_bytes.hex()
         rfc3161_tsa_url = token.tsa_url
+        timestamp_status = "verified"
     except Exception:
-        logger.warning("RFC 3161 timestamp request failed; continuing without token.")
+        logger.warning(
+            "RFC 3161 timestamp request failed; commit_id=%s status=pending",
+            commit_id,
+        )
 
-    # 8. Compute totals from files
+    # 10. Compute totals from files
     total_bytes = sum(f.byte_size for f in body.files)
     total_records = sum(
         f.record_count for f in body.files if f.record_count is not None
     ) or None
 
-    # 9. Build usage_restrictions JSON
+    # 11. Build usage_restrictions JSON
     usage_json = json.dumps(body.usage_restrictions) if body.usage_restrictions else None
 
     shard_id = DEFAULT_SHARD_ID
 
-    # 10. Create DatasetArtifact
+    # 12. Create DatasetArtifact
     artifact = DatasetArtifact(
         dataset_id=ds_id,
         commit_id=commit_id,
@@ -195,6 +252,7 @@ async def commit_dataset(
         committer_label=body.committer_label,
         rfc3161_tst_hex=rfc3161_tst_hex,
         rfc3161_tsa_url=rfc3161_tsa_url,
+        timestamp_status=timestamp_status,
         dataset_name=body.dataset_name,
         dataset_version=body.dataset_version,
         source_uri=body.source_uri,
@@ -214,9 +272,17 @@ async def commit_dataset(
         transform_description=body.transform_description,
     )
     db.add(artifact)
-    await db.flush()
 
-    # 11. Child file rows
+    try:
+        await db.flush()
+    except IntegrityError:
+        await db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Duplicate commit: same content already committed.",
+        )
+
+    # 13. Child file rows
     for f in body.files:
         db.add(DatasetArtifactFile(
             artifact_id=artifact.id,
@@ -227,7 +293,7 @@ async def commit_dataset(
         ))
     await db.flush()
 
-    # 12. Compute shard state root
+    # 14. Compute shard state root (deterministic ordering)
     new_root = await compute_state_root(shard_id, db)
     artifact.merkle_root = new_root
 
@@ -235,7 +301,8 @@ async def commit_dataset(
     await db.refresh(artifact)
 
     logger.info(
-        "Dataset committed dataset_id=%s commit_id=%s", ds_id, commit_id,
+        "Dataset committed dataset_id=%s commit_id=%s timestamp_status=%s",
+        ds_id, commit_id, timestamp_status,
     )
 
     return DatasetCommitResponse(
@@ -246,6 +313,7 @@ async def commit_dataset(
         shard_id=artifact.shard_id,
         merkle_root=artifact.merkle_root,
         file_count=artifact.file_count,
+        timestamp_status=artifact.timestamp_status,
         rfc3161_tsa_url=artifact.rfc3161_tsa_url,
     )
 
@@ -265,6 +333,7 @@ async def list_datasets(
     search: str | None = Query(None),
     namespace: str | None = Query(None),
     committer: str | None = Query(None),
+    timestamp_status: str | None = Query(None),
     page: int = Query(1, ge=1),
     per_page: int = Query(20, ge=1, le=100),
 ) -> DatasetListResponse:
@@ -285,6 +354,8 @@ async def list_datasets(
         q = q.where(DatasetArtifact.canonical_namespace == namespace)
     if committer is not None:
         q = q.where(DatasetArtifact.committer_pubkey == committer)
+    if timestamp_status is not None:
+        q = q.where(DatasetArtifact.timestamp_status == timestamp_status)
 
     # Total count
     count_q = select(func.count()).select_from(q.subquery())
@@ -306,6 +377,7 @@ async def list_datasets(
                 shard_id=r.shard_id,
                 merkle_root=r.merkle_root,
                 file_count=r.file_count,
+                timestamp_status=r.timestamp_status,
                 rfc3161_tsa_url=r.rfc3161_tsa_url,
             )
             for r in rows
@@ -354,6 +426,7 @@ async def get_dataset(
         shard_id=artifact.shard_id,
         merkle_root=artifact.merkle_root,
         file_count=artifact.file_count,
+        timestamp_status=artifact.timestamp_status,
         rfc3161_tsa_url=artifact.rfc3161_tsa_url,
         dataset_name=artifact.dataset_name,
         dataset_version=artifact.dataset_version,
@@ -390,10 +463,12 @@ async def verify_dataset(
     """Run independent verification checks on a committed dataset.
 
     Checks:
-      1. commit_id matches deterministic recomputation
+      1. commit_id matches deterministic recomputation (no timestamp)
       2. Ed25519 signature is valid
-      3. Commit chain integrity
-      4. Merkle inclusion proof
+      3. RFC 3161 timestamp status is "verified"
+      4. Commit chain integrity
+      5. Key revocation cross-reference
+      6. Merkle inclusion proof
     """
     result = await db.execute(
         select(DatasetArtifact)
@@ -407,14 +482,12 @@ async def verify_dataset(
 
     checks: dict[str, bool] = {}
 
-    # 1. Recompute commit_id
-    ts_str = artifact.epoch_timestamp.isoformat().replace("+00:00", "Z")
+    # 1. Recompute commit_id (content-only — no timestamp)
     expected_commit_id = compute_dataset_commit_id(
         artifact.dataset_id,
         artifact.parent_commit_id,
         artifact.manifest_hash,
         artifact.committer_pubkey,
-        ts_str,
     )
     checks["commit_id_valid"] = expected_commit_id == artifact.commit_id
 
@@ -423,7 +496,19 @@ async def verify_dataset(
         artifact.committer_pubkey, artifact.commit_id, artifact.commit_signature,
     )
 
-    # 3. Chain integrity
+    # 3. RFC 3161 status check
+    rfc3161_valid: bool | None = None
+    if artifact.timestamp_status == "verified" and artifact.rfc3161_tst_hex is not None:
+        rfc3161_valid = True
+        checks["rfc3161_valid"] = True
+    elif artifact.timestamp_status == "pending":
+        rfc3161_valid = False
+        checks["rfc3161_valid"] = False
+    else:
+        rfc3161_valid = False
+        checks["rfc3161_valid"] = False
+
+    # 4. Chain integrity
     chain_valid = True
     current = artifact
     while current.parent_commit_id:
@@ -436,10 +521,9 @@ async def verify_dataset(
         if parent is None:
             chain_valid = False
             break
-        parent_ts = parent.epoch_timestamp.isoformat().replace("+00:00", "Z")
         expected = compute_dataset_commit_id(
             parent.dataset_id, parent.parent_commit_id,
-            parent.manifest_hash, parent.committer_pubkey, parent_ts,
+            parent.manifest_hash, parent.committer_pubkey,
         )
         if expected != parent.commit_id:
             chain_valid = False
@@ -447,11 +531,25 @@ async def verify_dataset(
         current = parent
     checks["chain_valid"] = chain_valid
 
-    # 4. Merkle inclusion proof
+    # 5. Key revocation cross-reference (D12)
+    key_revoked: bool | None = None
+    cred_result = await db.execute(
+        select(KeyCredential.revoked_at).where(
+            KeyCredential.holder_key == artifact.committer_pubkey
+        )
+    )
+    cred_revoked_at = cred_result.scalars().first()
+    if cred_revoked_at is not None:
+        key_revoked = _is_key_revoked_at(cred_revoked_at, artifact.epoch_timestamp)
+    else:
+        key_revoked = False
+    checks["key_not_revoked"] = not key_revoked
+
+    # 6. Merkle inclusion proof
     all_hashes_result = await db.execute(
         select(DatasetArtifact.manifest_hash)
         .where(DatasetArtifact.shard_id == artifact.shard_id)
-        .order_by(DatasetArtifact.epoch_timestamp)
+        .order_by(DatasetArtifact.epoch_timestamp, DatasetArtifact.manifest_hash)
     )
     all_hashes = list(all_hashes_result.scalars().all())
 
@@ -466,11 +564,6 @@ async def verify_dataset(
         except ValueError:
             pass
 
-    # 5. RFC 3161 validity (presence check — full DER verification is offline)
-    rfc3161_valid: bool | None = None
-    if artifact.rfc3161_tst_hex is not None:
-        rfc3161_valid = True  # Token exists; DER verification deferred to offline
-
     verified = all(checks.values())
 
     return DatasetVerifyResponse(
@@ -484,6 +577,7 @@ async def verify_dataset(
             shard_id=artifact.shard_id,
             merkle_root=artifact.merkle_root,
             file_count=artifact.file_count,
+            timestamp_status=artifact.timestamp_status,
             rfc3161_tsa_url=artifact.rfc3161_tsa_url,
         ),
         merkle_proof=merkle_proof_data,
@@ -491,6 +585,7 @@ async def verify_dataset(
         signature_valid=checks.get("signature_valid"),
         commit_id_valid=checks.get("commit_id_valid"),
         chain_valid=checks.get("chain_valid"),
+        key_revoked=key_revoked,
     )
 
 
@@ -563,10 +658,7 @@ async def commit_lineage(
             detail="Dataset not found.",
         )
 
-    # 2. Compute deterministic commit_id for lineage event
-    epoch_ts = datetime.now(timezone.utc)
-    ts_str = epoch_ts.isoformat().replace("+00:00", "Z")
-
+    # 2. Compute deterministic commit_id (content-only, no timestamp)
     # Find parent commit (latest commit for this dataset)
     latest_result = await db.execute(
         select(DatasetArtifact.commit_id)
@@ -578,21 +670,43 @@ async def commit_lineage(
 
     payload = (
         f"{dataset_id}:{parent_commit_id}:{body.model_id}"
-        f":{body.committer_pubkey}:{ts_str}"
+        f":{body.committer_pubkey}"
     )
-    from protocol.hashes import DATASET_LINEAGE_PREFIX
     commit_id = blake3_hash([DATASET_LINEAGE_PREFIX, payload.encode()]).hex()
 
-    # 3. Verify signature
+    # 3. Check uniqueness (dataset_id, model_id, event_type, committer_pubkey)
+    existing = await db.execute(
+        select(DatasetLineageEvent.commit_id).where(
+            DatasetLineageEvent.dataset_id == dataset_id,
+            DatasetLineageEvent.model_id == body.model_id,
+            DatasetLineageEvent.event_type == body.event_type,
+            DatasetLineageEvent.committer_pubkey == body.committer_pubkey,
+        )
+    )
+    existing_commit = existing.scalars().first()
+    if existing_commit is not None:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={
+                "detail": "Duplicate lineage event.",
+                "existing_commit_id": existing_commit,
+            },
+        )
+
+    # 4. Verify signature
     if not _verify_signature(body.committer_pubkey, commit_id, body.commit_signature):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Invalid Ed25519 signature.",
         )
 
+    # 5. Cross-reference key revocation
+    await _check_key_not_revoked(db, body.committer_pubkey)
+
+    epoch_ts = datetime.now(timezone.utc)
     shard_id = DEFAULT_SHARD_ID
 
-    # 4. Create lineage event
+    # 6. Create lineage event
     event = DatasetLineageEvent(
         dataset_id=dataset_id,
         commit_id=commit_id,
@@ -601,13 +715,22 @@ async def commit_lineage(
         shard_id=shard_id,
         committer_pubkey=body.committer_pubkey,
         commit_signature=body.commit_signature,
+        timestamp_status="pending",
         model_id=body.model_id,
         model_version=body.model_version,
         model_org=body.model_org,
         event_type=body.event_type,
     )
     db.add(event)
-    await db.flush()
+
+    try:
+        await db.flush()
+    except IntegrityError:
+        await db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Duplicate lineage event.",
+        )
 
     new_root = await compute_state_root(shard_id, db)
     event.merkle_root = new_root
@@ -620,4 +743,5 @@ async def commit_lineage(
         model_id=event.model_id,
         event_type=event.event_type,
         epoch=event.epoch_timestamp,
+        timestamp_status=event.timestamp_status,
     )

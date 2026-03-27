@@ -1,4 +1,4 @@
-"""add dataset provenance tables (ADR-0010)
+"""add dataset provenance tables (ADR-0010 v4)
 
 Revision ID: a1b2c3d4e5f6
 Revises: 8398af14bd26
@@ -31,9 +31,10 @@ def upgrade() -> None:
         sa.Column('committer_pubkey', sa.String(length=64), nullable=False),
         sa.Column('commit_signature', sa.String(length=128), nullable=False),
         sa.Column('committer_label', sa.String(length=256), nullable=True),
-        # RFC 3161 (D5)
+        # RFC 3161 (D5) with explicit status
         sa.Column('rfc3161_tst_hex', sa.Text(), nullable=True),
         sa.Column('rfc3161_tsa_url', sa.String(length=512), nullable=True),
+        sa.Column('timestamp_status', sa.String(length=16), nullable=False, server_default='pending'),
         # External anchor (D6)
         sa.Column('anchor_tx_hash', sa.String(length=128), nullable=True),
         sa.Column('anchor_network', sa.String(length=32), nullable=True),
@@ -63,6 +64,8 @@ def upgrade() -> None:
         sa.Column('proof_bundle_uri', sa.String(length=2048), nullable=True),
         # ZK stub
         sa.Column('poseidon_hash', sa.String(length=78), nullable=True),
+        # Replay protection (D10)
+        sa.UniqueConstraint('dataset_id', 'parent_commit_id', 'manifest_hash', name='uq_dataset_commit_content'),
     )
     op.create_index('ix_dataset_artifacts_dataset_id', 'dataset_artifacts', ['dataset_id'])
     op.create_index('ix_dataset_artifacts_commit_id', 'dataset_artifacts', ['commit_id'], unique=True)
@@ -94,10 +97,13 @@ def upgrade() -> None:
         sa.Column('merkle_root', sa.String(length=64), nullable=True),
         sa.Column('committer_pubkey', sa.String(length=64), nullable=False),
         sa.Column('commit_signature', sa.String(length=128), nullable=False),
+        sa.Column('timestamp_status', sa.String(length=16), nullable=False, server_default='pending'),
         sa.Column('model_id', sa.String(length=256), nullable=False),
         sa.Column('model_version', sa.String(length=64), nullable=True),
         sa.Column('model_org', sa.String(length=256), nullable=True),
         sa.Column('event_type', sa.String(length=32), nullable=False),
+        # Replay protection
+        sa.UniqueConstraint('dataset_id', 'model_id', 'event_type', 'committer_pubkey', name='uq_lineage_event'),
     )
     op.create_index('ix_dataset_lineage_events_dataset_id', 'dataset_lineage_events', ['dataset_id'])
     op.create_index('ix_dataset_lineage_events_model_id', 'dataset_lineage_events', ['model_id'])

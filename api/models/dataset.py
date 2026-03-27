@@ -20,7 +20,7 @@ import uuid
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING
 
-from sqlalchemy import BigInteger, DateTime, ForeignKey, Integer, String, Text
+from sqlalchemy import BigInteger, DateTime, ForeignKey, Integer, String, Text, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from api.models.base import Base
@@ -33,13 +33,14 @@ class DatasetArtifact(Base):
     """A cryptographic commitment anchoring a dataset manifest to the ledger.
 
     Unlike DocCommit, dataset artifacts carry full cryptographic provenance:
-    deterministic commit IDs, caller Ed25519 signatures, per-record RFC 3161
-    tokens, and optional external blockchain anchoring.
+    deterministic commit IDs (content-addressed, timestamp-excluded), caller
+    Ed25519 signatures, per-record RFC 3161 tokens with explicit status,
+    and optional external blockchain anchoring.
 
     Attributes:
         id: UUID primary key.
-        dataset_id: Logical dataset identity (BLAKE3 of namespace+name+uri).
-        commit_id: Deterministic BLAKE3 hash of commit contents.
+        dataset_id: Logical dataset identity (BLAKE3 of namespace+name+uri+pubkey).
+        commit_id: Deterministic BLAKE3 hash of commit contents (no timestamp).
         parent_commit_id: Hash chain to previous commit (empty for genesis).
         epoch_timestamp: Server-set UTC timestamp.
         shard_id: Ledger shard this commit belongs to.
@@ -50,6 +51,7 @@ class DatasetArtifact(Base):
         committer_label: Optional human-readable committer name.
         rfc3161_tst_hex: DER-encoded RFC 3161 timestamp token (hex).
         rfc3161_tsa_url: TSA that issued the token.
+        timestamp_status: ``"pending"`` | ``"verified"`` | ``"failed"``.
         anchor_tx_hash: Blockchain transaction hash (async backfill).
         anchor_network: Blockchain network name.
         anchor_block_height: Block height for independent lookup.
@@ -75,6 +77,13 @@ class DatasetArtifact(Base):
     """
 
     __tablename__ = "dataset_artifacts"
+
+    __table_args__ = (
+        UniqueConstraint(
+            "dataset_id", "parent_commit_id", "manifest_hash",
+            name="uq_dataset_commit_content",
+        ),
+    )
 
     # --- Core ledger fields -------------------------------------------------
     id: Mapped[str] = mapped_column(
@@ -115,6 +124,9 @@ class DatasetArtifact(Base):
     rfc3161_tst_hex: Mapped[str | None] = mapped_column(Text, nullable=True)
     rfc3161_tsa_url: Mapped[str | None] = mapped_column(
         String(512), nullable=True
+    )
+    timestamp_status: Mapped[str] = mapped_column(
+        String(16), nullable=False, default="pending"
     )
 
     # --- External anchor (D6) -----------------------------------------------
@@ -238,6 +250,13 @@ class DatasetLineageEvent(Base):
 
     __tablename__ = "dataset_lineage_events"
 
+    __table_args__ = (
+        UniqueConstraint(
+            "dataset_id", "model_id", "event_type", "committer_pubkey",
+            name="uq_lineage_event",
+        ),
+    )
+
     id: Mapped[str] = mapped_column(
         String(36), primary_key=True, default=lambda: str(uuid.uuid4())
     )
@@ -266,6 +285,11 @@ class DatasetLineageEvent(Base):
     )
     commit_signature: Mapped[str] = mapped_column(
         String(128), nullable=False
+    )
+
+    # --- Timestamp status ---------------------------------------------------
+    timestamp_status: Mapped[str] = mapped_column(
+        String(16), nullable=False, default="pending"
     )
 
     # --- Lineage payload ----------------------------------------------------

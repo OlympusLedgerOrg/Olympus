@@ -71,7 +71,7 @@ async def compute_state_root(shard_id: str, db: AsyncSession) -> str:
         .where(DatasetArtifact.shard_id == shard_id)
     )
 
-    union_q = doc_q.union_all(ds_q).order_by("ts")
+    union_q = doc_q.union_all(ds_q).order_by("ts", "hash")
     result = await db.execute(union_q)
     hashes = [row.hash for row in result.all()]
 

@@ -91,6 +91,7 @@ class DatasetCommitResponse(BaseModel):
     shard_id: str
     merkle_root: str | None
     file_count: int
+    timestamp_status: str
     rfc3161_tsa_url: str | None = None
     rfc3161_timestamp: str | None = None
 
@@ -123,6 +124,7 @@ class DatasetVerifyResponse(BaseModel):
     signature_valid: bool | None = None
     commit_id_valid: bool | None = None
     chain_valid: bool | None = None
+    key_revoked: bool | None = None
     zk_proof: dict | None = None
 
 
@@ -134,6 +136,7 @@ class LineageCommitResponse(BaseModel):
     model_id: str
     event_type: str
     epoch: datetime
+    timestamp_status: str
 
 
 class DatasetListResponse(BaseModel):
