@@ -91,7 +91,7 @@ def validate_federation_url(url: str) -> None:
             if addr in blocked:
                 raise ValueError(f"Federation URL resolves to blocked address range: {addr}")
     except ValueError as exc:
-        if "Federation URL" in str(exc):
+        if "blocked address range" in str(exc) or "must use http" in str(exc) or "has no hostname" in str(exc):
             raise  # re-raise our own errors
         # hostname is a domain name, not an IP — DNS resolution check would require async
         # For now, log a warning that DNS-based SSRF is not fully mitigated
