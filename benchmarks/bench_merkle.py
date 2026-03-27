@@ -52,8 +52,7 @@ def benchmark_merkle_generation(tree_sizes: list[int]) -> list[dict]:
         )
 
         print(
-            f"  {size:>9} | {elapsed * 1000:>9.2f} | "
-            f"{1/elapsed:>7.1f} | {expected_factor:>8.0f}"
+            f"  {size:>9} | {elapsed * 1000:>9.2f} | {1 / elapsed:>7.1f} | {expected_factor:>8.0f}"
         )
 
     return results
@@ -98,8 +97,7 @@ def benchmark_poseidon_merkle_generation(tree_sizes: list[int]) -> list[dict]:
         )
 
         print(
-            f"  {size:>9} | {elapsed * 1000:>9.2f} | "
-            f"{1/elapsed:>7.1f} | {expected_factor:>8.0f}"
+            f"  {size:>9} | {elapsed * 1000:>9.2f} | {1 / elapsed:>7.1f} | {expected_factor:>8.0f}"
         )
 
     return results

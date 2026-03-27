@@ -839,9 +839,9 @@ class TestIdempotencyGate:
 
         payload_a = {"invoice_id": "INV-0003", "amount": 100, "currency": "USD"}
         payload_b = {"invoice_id": "INV-0003", "amount": 100.0, "currency": "USD"}
-        assert document_to_bytes(canonicalize_document(payload_a)) == \
-               document_to_bytes(canonicalize_document(payload_b)), \
-               "Numeric fix must be applied before idempotency gate is meaningful"
+        assert document_to_bytes(canonicalize_document(payload_a)) == document_to_bytes(
+            canonicalize_document(payload_b)
+        ), "Numeric fix must be applied before idempotency gate is meaningful"
 
 
 # ---------------------------------------------------------------------------

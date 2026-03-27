@@ -114,9 +114,7 @@ async def test_fulfill_request(client):
     create_resp = await client.post("/requests", json=REQUEST_BODY)
     display_id = create_resp.json()["display_id"]
 
-    patch_resp = await client.patch(
-        f"/requests/{display_id}/status", json={"status": "FULFILLED"}
-    )
+    patch_resp = await client.patch(f"/requests/{display_id}/status", json={"status": "FULFILLED"})
     assert patch_resp.status_code == 200
     data = patch_resp.json()
     assert data["status"] == "FULFILLED"

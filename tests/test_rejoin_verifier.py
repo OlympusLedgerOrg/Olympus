@@ -26,7 +26,9 @@ def _entry(index: int) -> dict[str, object]:
     }
 
 
-def _build_sth_chain(entries: list[dict[str, object]]) -> tuple[list[dict[str, object]], dict[tuple[int, int], dict[str, object]]]:
+def _build_sth_chain(
+    entries: list[dict[str, object]],
+) -> tuple[list[dict[str, object]], dict[tuple[int, int], dict[str, object]]]:
     signing_key = nacl.signing.SigningKey.generate()
     leaf_hashes = [merkle_leaf_hash(canonical_json_bytes(entry)) for entry in entries]
 

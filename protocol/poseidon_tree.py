@@ -114,9 +114,7 @@ def _poseidon_hash_pairs(pairs: list[tuple[int, int]]) -> list[int]:
         reduced = [(a % SNARK_SCALAR_FIELD, b % SNARK_SCALAR_FIELD) for a, b in pairs]
         return [poseidon_hash_bn128(a, b) for a, b in reduced]
 
-    return [
-        poseidon_hash_bn128(a % SNARK_SCALAR_FIELD, b % SNARK_SCALAR_FIELD) for a, b in pairs
-    ]
+    return [poseidon_hash_bn128(a % SNARK_SCALAR_FIELD, b % SNARK_SCALAR_FIELD) for a, b in pairs]
 
 
 def _poseidon_hash(left: int, right: int) -> int:

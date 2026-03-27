@@ -16,7 +16,7 @@ from fastapi import APIRouter, HTTPException, Query, status
 from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 
-from api.auth import RequireAPIKey, RateLimit
+from api.auth import RateLimit, RequireAPIKey
 from api.deps import DBSession
 from api.models.request import PublicRecordsRequest, RequestStatus
 from api.schemas.request import RequestCreate, RequestResponse, RequestStatusUpdate
@@ -81,9 +81,7 @@ async def _next_display_id(db) -> str:
     Uses MAX(display_id) to find the current highest ID, avoiding collisions
     from concurrent row-count reads.
     """
-    result = await db.execute(
-        select(func.max(PublicRecordsRequest.display_id))
-    )
+    result = await db.execute(select(func.max(PublicRecordsRequest.display_id)))
     max_id = result.scalar()
     if max_id is None:
         return "OLY-0001"
@@ -115,7 +113,6 @@ async def file_request(body: RequestCreate, db: DBSession, _api_key: RequireAPIK
     commit_hash = hash_request(body.subject, body.description, agency_name, filed_at)
     deadline = compute_deadline(filed_at, body.request_type)
 
-    last_exc: Exception | None = None
     for _attempt in range(_DISPLAY_ID_MAX_RETRIES):
         display_id = await _next_display_id(db)
         req = PublicRecordsRequest(
@@ -141,14 +138,16 @@ async def file_request(body: RequestCreate, db: DBSession, _api_key: RequireAPIK
             await db.refresh(req)
             logger.info("Filed request %s (commit=%s)", req.display_id, commit_hash)
             return req
-        except IntegrityError as exc:
-            last_exc = exc
+        except IntegrityError:
             await db.rollback()
             logger.warning("display_id collision on %s, retrying", display_id)
 
     raise HTTPException(
         status_code=status.HTTP_409_CONFLICT,
-        detail={"detail": "Could not generate unique display_id after retries.", "code": "DISPLAY_ID_CONFLICT"},
+        detail={
+            "detail": "Could not generate unique display_id after retries.",
+            "code": "DISPLAY_ID_CONFLICT",
+        },
     )
 
 
@@ -227,7 +226,13 @@ async def get_request(display_id: str, db: DBSession, _rl: RateLimit):
 
 
 @router.patch("/{display_id}/status", response_model=RequestResponse)
-async def update_request_status(display_id: str, body: RequestStatusUpdate, db: DBSession, _api_key: RequireAPIKey, _rl: RateLimit):
+async def update_request_status(
+    display_id: str,
+    body: RequestStatusUpdate,
+    db: DBSession,
+    _api_key: RequireAPIKey,
+    _rl: RateLimit,
+):
     """Update the status of a request and anchor the change to the ledger.
 
     Enforces a state-machine on allowed transitions to prevent illegal

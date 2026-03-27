@@ -45,9 +45,7 @@ class TestUnifiedProofStructure:
 
     def test_unified_proof_creation(self):
         """Test creating UnifiedProof with all components."""
-        public_inputs = UnifiedPublicInputs(
-            canonical_hash="1", merkle_root="2", ledger_root="3"
-        )
+        public_inputs = UnifiedPublicInputs(canonical_hash="1", merkle_root="2", ledger_root="3")
 
         checkpoint = SignedCheckpoint(
             sequence=1,
@@ -73,9 +71,7 @@ class TestUnifiedProofStructure:
 
     def test_unified_proof_serialization(self):
         """Test proof serialization to/from dict."""
-        public_inputs = UnifiedPublicInputs(
-            canonical_hash="1", merkle_root="2", ledger_root="3"
-        )
+        public_inputs = UnifiedPublicInputs(canonical_hash="1", merkle_root="2", ledger_root="3")
 
         checkpoint = SignedCheckpoint(
             sequence=1,
@@ -156,9 +152,7 @@ class TestUnifiedProofVerifier:
         """Test verification fails gracefully when artifacts missing."""
         verifier = UnifiedProofVerifier()
 
-        public_inputs = UnifiedPublicInputs(
-            canonical_hash="1", merkle_root="2", ledger_root="3"
-        )
+        public_inputs = UnifiedPublicInputs(canonical_hash="1", merkle_root="2", ledger_root="3")
 
         checkpoint = SignedCheckpoint(
             sequence=1,
@@ -186,9 +180,7 @@ class TestUnifiedProofVerifier:
         """Test verifier validates checkpoint structure."""
         verifier = UnifiedProofVerifier()
 
-        public_inputs = UnifiedPublicInputs(
-            canonical_hash="1", merkle_root="2", ledger_root="3"
-        )
+        public_inputs = UnifiedPublicInputs(canonical_hash="1", merkle_root="2", ledger_root="3")
 
         # Checkpoint with empty hash (invalid)
         checkpoint = SignedCheckpoint(
@@ -230,7 +222,9 @@ class TestUnifiedProofGenerator:
         )
 
         generator = UnifiedProofGenerator()
-        proof = generator.generate(["section 0", "section 1"], merkle_proof={}, checkpoint=checkpoint)
+        proof = generator.generate(
+            ["section 0", "section 1"], merkle_proof={}, checkpoint=checkpoint
+        )
 
         assert proof.backend == ProofBackend.GROTH16
         assert proof.checkpoint == checkpoint
@@ -243,9 +237,7 @@ class TestProofBackendSelection:
 
     def test_groth16_backend_default(self):
         """Groth16 should be the default backend."""
-        public_inputs = UnifiedPublicInputs(
-            canonical_hash="1", merkle_root="2", ledger_root="3"
-        )
+        public_inputs = UnifiedPublicInputs(canonical_hash="1", merkle_root="2", ledger_root="3")
 
         checkpoint = SignedCheckpoint(
             sequence=1,
@@ -269,9 +261,7 @@ class TestProofBackendSelection:
 
     def test_halo2_backend_selection(self):
         """Can explicitly select Halo2 backend."""
-        public_inputs = UnifiedPublicInputs(
-            canonical_hash="1", merkle_root="2", ledger_root="3"
-        )
+        public_inputs = UnifiedPublicInputs(canonical_hash="1", merkle_root="2", ledger_root="3")
 
         checkpoint = SignedCheckpoint(
             sequence=1,
@@ -316,9 +306,7 @@ class TestConvenienceFunctions:
 
     def test_verify_unified_proof_function(self):
         """Test the verify_unified_proof convenience function."""
-        public_inputs = UnifiedPublicInputs(
-            canonical_hash="1", merkle_root="2", ledger_root="3"
-        )
+        public_inputs = UnifiedPublicInputs(canonical_hash="1", merkle_root="2", ledger_root="3")
 
         checkpoint = SignedCheckpoint(
             sequence=1,
@@ -397,9 +385,7 @@ class TestIntegrationScenarios:
     def test_documentation_example(self):
         """Test example from module docstring works."""
         # This tests the example usage pattern from the docstring
-        public_inputs = UnifiedPublicInputs(
-            canonical_hash="1", merkle_root="2", ledger_root="3"
-        )
+        public_inputs = UnifiedPublicInputs(canonical_hash="1", merkle_root="2", ledger_root="3")
 
         checkpoint = SignedCheckpoint(
             sequence=1,

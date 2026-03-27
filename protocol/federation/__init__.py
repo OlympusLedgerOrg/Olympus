@@ -18,13 +18,13 @@ from protocol.federation.gossip import (
     vrf_selection_scores,
 )
 from protocol.federation.identity import (
+    _CERTIFICATE_SIGNATURE_SCHEME_ED25519,
+    _HEADER_EXCLUDED_FIELDS,
     DEFAULT_MAX_CERTIFICATE_CLOCK_SKEW_SECONDS,
     FEDERATION_DOMAIN_TAG,
     FederationKeyHistoryEntry,
     FederationNode,
     FederationRegistry,
-    _CERTIFICATE_SIGNATURE_SCHEME_ED25519,
-    _HEADER_EXCLUDED_FIELDS,
     _extract_round_and_height,
     _median_numeric,
     _median_timestamp,
@@ -65,6 +65,7 @@ from protocol.federation.rotation import (
     verify_epoch_key_rotation,
     verify_recursive_chain_proof,
 )
+
 
 __all__ = [
     # identity

@@ -121,6 +121,7 @@ class TestSMTNonMembership:
     def test_nonexistence_starts_with_empty_leaf_sentinel(self):
         """Non-existence uses EMPTY_HASHES[0] as the leaf sentinel."""
         from protocol.ssmf import EMPTY_LEAF
+
         # EMPTY_HASHES[0] should be the domain-separated empty leaf hash
         assert EMPTY_HASHES[0] == EMPTY_LEAF
         assert len(EMPTY_HASHES[0]) == 32

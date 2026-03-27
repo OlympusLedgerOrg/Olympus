@@ -5,7 +5,6 @@ import pytest
 from hypothesis import given
 
 from protocol.hashes import SNARK_SCALAR_FIELD
-from protocol.poseidon_bn128 import poseidon_hash_bn128
 from protocol.poseidon_smt import (
     POSEIDON_EMPTY_HASHES,
     PoseidonSMT,
@@ -126,7 +125,7 @@ def test_key_to_path_bits_all_zeros():
 
 def test_key_to_path_bits_all_ones():
     """All-ones key produces all-ones path."""
-    key = b"\xFF" * 32
+    key = b"\xff" * 32
     path = _key_to_path_bits(key)
     assert all(bit == 1 for bit in path)
 
@@ -205,7 +204,7 @@ def test_verify_poseidon_nonexistence_witness_populated_tree():
     tree.update(b"\x00" * 31 + b"\x03", 300)
 
     # Prove non-existence of key not in tree
-    witness = tree.prove_nonexistence(b"\x00" * 31 + b"\xFF")
+    witness = tree.prove_nonexistence(b"\x00" * 31 + b"\xff")
     assert verify_poseidon_nonexistence_witness(witness)
 
 
@@ -338,7 +337,7 @@ def test_empty_hashes_recursive():
 def test_max_key_value():
     """Tree handles maximum key value (all 0xFF)."""
     tree = PoseidonSMT()
-    key = b"\xFF" * 32
+    key = b"\xff" * 32
     value = SNARK_SCALAR_FIELD - 1
 
     tree.update(key, value)
@@ -372,7 +371,7 @@ def test_nonexistence_witness_root_matches_tree_root():
     tree.update(b"\x00" * 31 + b"\x01", 100)
     tree.update(b"\x00" * 31 + b"\x02", 200)
 
-    absent_key = b"\x00" * 31 + b"\xFF"
+    absent_key = b"\x00" * 31 + b"\xff"
     witness = tree.prove_nonexistence(absent_key)
 
     # The witness root must equal the live tree root
@@ -382,7 +381,7 @@ def test_nonexistence_witness_root_matches_tree_root():
 def test_empty_tree_nonexistence_witness_verifies():
     """Non-existence witness against an empty tree must verify."""
     tree = PoseidonSMT()
-    key = b"\xAB" * 32
+    key = b"\xab" * 32
     witness = tree.prove_nonexistence(key)
 
     assert verify_poseidon_nonexistence_witness(witness)

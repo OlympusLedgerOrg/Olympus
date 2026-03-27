@@ -201,8 +201,7 @@ def get_storage_status() -> tuple[str, bool]:
     global _storage, _db_error
 
     db_status = (
-        "connected" if _storage is not None
-        else ("error" if _db_error else "not_initialized")
+        "connected" if _storage is not None else ("error" if _db_error else "not_initialized")
     )
 
     db_check = False

@@ -58,7 +58,9 @@ def _print_proof(data: dict) -> None:
 
     zk = data.get("zk_proof")
     if zk:
-        typer.echo(f"\n  {BOLD}ZK Proof{RESET} [{zk.get('protocol', '?')} / {zk.get('curve', '?')}]:")
+        typer.echo(
+            f"\n  {BOLD}ZK Proof{RESET} [{zk.get('protocol', '?')} / {zk.get('curve', '?')}]:"
+        )
         typer.echo(f"    Verified    : {zk.get('verified', '?')}")
         typer.echo(f"    Note        : {zk.get('note', '')}")
 
@@ -69,7 +71,9 @@ def _print_proof(data: dict) -> None:
 def verify(
     commit_id: str | None = typer.Option(None, "--commit_id", help="Hex commit identifier."),
     request_id: str | None = typer.Option(None, "--request_id", help="Display ID, e.g. OLY-0041."),
-    doc_hash: str | None = typer.Option(None, "--doc_hash", help="SHA-256 hex (optionally sha256:-prefixed)."),
+    doc_hash: str | None = typer.Option(
+        None, "--doc_hash", help="SHA-256 hex (optionally sha256:-prefixed)."
+    ),
     base_url: str = typer.Option(BASE_URL, "--url", help="Base URL of the Olympus API."),
 ) -> None:
     """Verify an Olympus ledger proof.
@@ -116,9 +120,7 @@ def verify(
         data = verify_resp.json()
 
     except httpx.ConnectError:
-        typer.echo(
-            f"{RED}Cannot connect to {base_url!r}. Is the API running?{RESET}", err=True
-        )
+        typer.echo(f"{RED}Cannot connect to {base_url!r}. Is the API running?{RESET}", err=True)
         raise typer.Exit(code=1)
     except httpx.HTTPStatusError as exc:
         typer.echo(f"{RED}API error: {exc.response.status_code}{RESET}", err=True)

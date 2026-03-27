@@ -10,9 +10,10 @@ from __future__ import annotations
 import json
 import logging
 from datetime import datetime, timezone
+from typing import Literal
 
-from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from api.models.document import DocCommit
 from api.models.ledger_activity import LedgerActivity
@@ -20,6 +21,7 @@ from api.models.request import PublicRecordsRequest
 from api.schemas.ledger import ProcessStep, SimpleVerificationResponse
 from api.services.hasher import hash_document
 from api.services.merkle import build_tree, generate_proof, verify_proof
+
 
 logger = logging.getLogger(__name__)
 
@@ -80,7 +82,9 @@ async def verify_by_file(
         doc_hash = hash_document(file_bytes)
     except Exception:
         logger.exception("Failed to hash file %s during verification", filename)
-        steps.append(_make_step(1, "Computing Document Fingerprint", "failed", "Could not read the file."))
+        steps.append(
+            _make_step(1, "Computing Document Fingerprint", "failed", "Could not read the file.")
+        )
         return SimpleVerificationResponse(
             verified=False,
             summary="Could not process this file.",
@@ -125,12 +129,12 @@ async def verify_by_commit_id(
     resolved_commit_id: str | None = None
     if commit_id.upper().startswith("OLY-"):
         # Search activity log for this display ID
-        result = await db.execute(
+        activity_result = await db.execute(
             select(LedgerActivity)
             .where(LedgerActivity.details_json.isnot(None))
             .order_by(LedgerActivity.timestamp.desc())
         )
-        activities = list(result.scalars().all())
+        activities = list(activity_result.scalars().all())
         for act in activities:
             try:
                 details = json.loads(act.details_json or "{}")
@@ -141,7 +145,9 @@ async def verify_by_commit_id(
                 continue
 
         if not resolved_commit_id:
-            steps.append(_make_step(2, "Record Lookup", "failed", f"No record found with ID '{commit_id}'."))
+            steps.append(
+                _make_step(2, "Record Lookup", "failed", f"No record found with ID '{commit_id}'.")
+            )
             return SimpleVerificationResponse(
                 verified=False,
                 summary=f"No record found with ID '{commit_id}'.",
@@ -157,13 +163,15 @@ async def verify_by_commit_id(
         resolved_commit_id = commit_id
 
     # Look up the commit directly
-    result = await db.execute(
+    commit_result = await db.execute(
         select(DocCommit).where(DocCommit.commit_id == resolved_commit_id).limit(1)
     )
-    commit = result.scalars().first()
+    commit = commit_result.scalars().first()
 
     if not commit:
-        steps.append(_make_step(2, "Record Lookup", "failed", f"No record found with ID '{commit_id}'."))
+        steps.append(
+            _make_step(2, "Record Lookup", "failed", f"No record found with ID '{commit_id}'.")
+        )
         return SimpleVerificationResponse(
             verified=False,
             summary=f"No record found with ID '{commit_id}'.",
@@ -177,7 +185,13 @@ async def verify_by_commit_id(
         )
 
     steps.append(
-        _make_step(2, "Record Found", "complete", "The record exists in the ledger.", details={"commit_id": commit.commit_id})
+        _make_step(
+            2,
+            "Record Found",
+            "complete",
+            "The record exists in the ledger.",
+            details={"commit_id": commit.commit_id},
+        )
     )
 
     return await _build_verification_response(commit, steps, db)
@@ -197,7 +211,11 @@ async def verify_by_doc_hash(
         :class:`SimpleVerificationResponse` with a plain-English verdict.
     """
     steps: list[ProcessStep] = []
-    steps.append(_make_step(1, "Hash Lookup", "complete", "Searching the ledger for this document fingerprint."))
+    steps.append(
+        _make_step(
+            1, "Hash Lookup", "complete", "Searching the ledger for this document fingerprint."
+        )
+    )
     return await _verify_by_hash(doc_hash, steps, db)
 
 
@@ -210,9 +228,7 @@ async def _verify_by_hash(
     db: AsyncSession,
 ) -> SimpleVerificationResponse:
     """Common verification path that looks up a commit by doc_hash."""
-    result = await db.execute(
-        select(DocCommit).where(DocCommit.doc_hash == doc_hash).limit(1)
-    )
+    result = await db.execute(select(DocCommit).where(DocCommit.doc_hash == doc_hash).limit(1))
     commit = result.scalars().first()
 
     if not commit:
@@ -333,16 +349,15 @@ async def _build_verification_response(
 
     # Determine overall verification result
     verified = proof_valid and not tamper_detected
-    if verified:
-        confidence: str = "certain"
-    else:
-        confidence = "none"
+    confidence: Literal["certain", "none"] = "certain" if verified else "none"
 
     # Resolve related request display ID
     related_request: str | None = None
     if commit.request_id:
         req_result = await db.execute(
-            select(PublicRecordsRequest).where(PublicRecordsRequest.id == commit.request_id).limit(1)
+            select(PublicRecordsRequest)
+            .where(PublicRecordsRequest.id == commit.request_id)
+            .limit(1)
         )
         req = req_result.scalars().first()
         if req:
@@ -380,7 +395,7 @@ async def _build_verification_response(
         return SimpleVerificationResponse(
             verified=True,
             summary=f"VERIFIED: This document was permanently recorded on {epoch_str}.",
-            confidence="certain",
+            confidence=confidence,
             recorded_date=epoch,
             related_request=related_request,
             proof_details=steps,
@@ -395,7 +410,7 @@ async def _build_verification_response(
         return SimpleVerificationResponse(
             verified=False,
             summary="VERIFICATION FAILED: The document's integrity could not be confirmed.",
-            confidence="none",
+            confidence=confidence,
             recorded_date=epoch,
             related_request=related_request,
             failure_reason=failure_reason,

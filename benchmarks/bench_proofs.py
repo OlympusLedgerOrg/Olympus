@@ -12,7 +12,9 @@ from protocol.merkle import MerkleTree
 from protocol.poseidon_tree import PoseidonMerkleTree
 
 
-def benchmark_blake3_proof_generation(tree_sizes: list[int], proofs_per_size: int = 100) -> list[dict]:
+def benchmark_blake3_proof_generation(
+    tree_sizes: list[int], proofs_per_size: int = 100
+) -> list[dict]:
     """Benchmark BLAKE3 Merkle proof generation.
 
     Args:
@@ -59,7 +61,9 @@ def benchmark_blake3_proof_generation(tree_sizes: list[int], proofs_per_size: in
     return results
 
 
-def benchmark_poseidon_proof_generation(tree_sizes: list[int], proofs_per_size: int = 100) -> list[dict]:
+def benchmark_poseidon_proof_generation(
+    tree_sizes: list[int], proofs_per_size: int = 100
+) -> list[dict]:
     """Benchmark Poseidon Merkle proof generation.
 
     Args:

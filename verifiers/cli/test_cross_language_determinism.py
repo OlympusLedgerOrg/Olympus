@@ -48,9 +48,7 @@ def _python_hashes(records: list[bytes]) -> list[str]:
 
 
 def _run_batch(command: list[str], records: list[bytes], cwd: Path) -> list[str]:
-    request = {
-        "records_b64": [base64.b64encode(record).decode("ascii") for record in records]
-    }
+    request = {"records_b64": [base64.b64encode(record).decode("ascii") for record in records]}
     proc = subprocess.run(
         command,
         input=json.dumps(request),
@@ -74,14 +72,10 @@ def _run_batch(command: list[str], records: list[bytes], cwd: Path) -> list[str]
 
 def _assert_match(label: str, got: list[str], expected: list[str]) -> None:
     if len(got) != len(expected):
-        raise AssertionError(
-            f"{label} produced {len(got)} hashes, expected {len(expected)}"
-        )
+        raise AssertionError(f"{label} produced {len(got)} hashes, expected {len(expected)}")
     for idx, (actual, exp) in enumerate(zip(got, expected, strict=True)):
         if actual != exp:
-            raise AssertionError(
-                f"{label} diverged at index={idx}: got={actual}, expected={exp}"
-            )
+            raise AssertionError(f"{label} diverged at index={idx}: got={actual}, expected={exp}")
 
 
 def main() -> None:

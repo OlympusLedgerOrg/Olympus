@@ -17,7 +17,6 @@ from __future__ import annotations
 
 import os
 import time
-import unittest.mock
 
 import nacl.signing
 import pytest
@@ -27,7 +26,7 @@ from protocol.canonical import CANONICAL_VERSION
 from protocol.canonicalizer import canonicalization_provenance
 from protocol.hashes import hash_bytes
 from protocol.hlc import HLC_ZERO, HLCTimestamp, advance_hlc
-from protocol.ledger import Ledger, LedgerEntry
+from protocol.ledger import Ledger
 from protocol.shards import (
     MAX_TIMESTAMP_SKEW_MS,
     create_key_revocation_record,
@@ -241,7 +240,6 @@ class TestLedgerHLC:
             shard_root="r1",
             canonicalization=_canonicalization(),
         )
-        original_hash = entry.entry_hash
         # Tamper HLC
         entry.hlc_bytes = HLCTimestamp(wall_ms=1, counter=0).to_bytes().hex()
         # Hash no longer matches
@@ -464,6 +462,8 @@ class TestIPFSVarint:
 
     def test_dag_json_varint_bytes_in_cid(self):
         """The raw CID bytes at position 1-2 must be the varint \\xa9\\x02."""
+        import blake3 as blake3_mod
+
         from integrations.ipfs import (
             _BLAKE3_CODE,
             _BLAKE3_LENGTH,
@@ -471,8 +471,6 @@ class TestIPFSVarint:
             _DAG_JSON_CODEC,
             build_ipfs_proof_envelope,
         )
-
-        import blake3 as blake3_mod
 
         bundle = {"test": "data"}
         payload = build_ipfs_proof_envelope(bundle)

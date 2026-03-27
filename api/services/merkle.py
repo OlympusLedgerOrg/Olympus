@@ -30,6 +30,7 @@ from dataclasses import dataclass, field
 
 import blake3
 
+
 # RFC 6962-style domain separation prefixes.
 # Leaf and internal node hashes use distinct single-byte prefixes so that a
 # crafted leaf value can never collide with an internal node hash.
@@ -240,8 +241,7 @@ def verify_proof(leaf_hash: str, proof: MerkleProof, root: str) -> bool:
     for _hash, direction in proof.siblings:
         if direction not in _VALID_DIRECTIONS:
             raise ValueError(
-                f"Invalid sibling direction {direction!r} "
-                f"(must be exactly 'left' or 'right')"
+                f"Invalid sibling direction {direction!r} (must be exactly 'left' or 'right')"
             )
 
     # Strict depth validation when tree_size is known

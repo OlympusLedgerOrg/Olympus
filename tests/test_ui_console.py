@@ -119,7 +119,7 @@ def test_verify_signature_accepts_valid_ed25519():
 
     signing_key = nacl.signing.SigningKey.generate()
     verify_key = signing_key.verify_key
-    header_hash = ("ab" * 32)
+    header_hash = "ab" * 32
     signature = signing_key.sign(bytes.fromhex(header_hash)).signature
 
     header = {
@@ -136,7 +136,7 @@ def test_verify_signature_rejects_bad_signature():
 
     signing_key = nacl.signing.SigningKey.generate()
     verify_key = signing_key.verify_key
-    header_hash = ("ab" * 32)
+    header_hash = "ab" * 32
     # Sign the hash then corrupt one byte of the signature
     signature = bytearray(signing_key.sign(bytes.fromhex(header_hash)).signature)
     signature[0] ^= 0xFF
@@ -155,7 +155,7 @@ def test_verify_signature_rejects_wrong_key():
 
     signer = nacl.signing.SigningKey.generate()
     wrong_key = nacl.signing.SigningKey.generate().verify_key
-    header_hash = ("cd" * 32)
+    header_hash = "cd" * 32
     signature = signer.sign(bytes.fromhex(header_hash)).signature
 
     header = {
@@ -1036,7 +1036,9 @@ def test_inspect_proof_bundle_rejects_missing_zk_fields(monkeypatch):
     """Endpoint should reject zk_public_inputs missing required fields."""
     monkeypatch.setattr(ui_app, "DEBUG_UI_ENABLED", True)
 
-    bundle = {"zk_public_inputs": {"original_root": "123"}}  # missing redacted_commitment, revealed_count
+    bundle = {
+        "zk_public_inputs": {"original_root": "123"}
+    }  # missing redacted_commitment, revealed_count
     response = client.post("/inspect-proof-bundle", json=bundle)
     assert response.status_code == 400
     data = response.json()

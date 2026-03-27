@@ -13,15 +13,15 @@ import logging
 import uuid
 from datetime import datetime, timezone
 
-from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from api.models.document import DocCommit
 from api.models.ledger_activity import LedgerActivity
 from api.schemas.ledger import ProcessStep, SimpleIngestionResponse
 from api.services.hasher import generate_commit_id, hash_document
 from api.services.merkle import build_tree
-from api.services.shard import compute_state_root
+
 
 logger = logging.getLogger(__name__)
 
@@ -37,7 +37,19 @@ _SUPPORTED_MIME_TYPES = {
     "image/tiff",
 }
 
-_SUPPORTED_EXTENSIONS = {".pdf", ".doc", ".docx", ".txt", ".html", ".htm", ".png", ".jpg", ".jpeg", ".tif", ".tiff"}
+_SUPPORTED_EXTENSIONS = {
+    ".pdf",
+    ".doc",
+    ".docx",
+    ".txt",
+    ".html",
+    ".htm",
+    ".png",
+    ".jpg",
+    ".jpeg",
+    ".tif",
+    ".tiff",
+}
 
 
 def _make_step(
@@ -51,7 +63,9 @@ def _make_step(
 ) -> ProcessStep:
     """Build a :class:`ProcessStep` with a default icon derived from status."""
     if icon is None:
-        icon = {"complete": "✓", "failed": "✗", "in_progress": "⏳", "pending": "○"}.get(status, "○")
+        icon = {"complete": "✓", "failed": "✗", "in_progress": "⏳", "pending": "○"}.get(
+            status, "○"
+        )
     return ProcessStep(
         step_number=number,
         title=title,
@@ -142,17 +156,17 @@ async def ingest_document(
             ),
         )
 
-    steps.append(
-        _make_step(2, "File Type Check", "complete", f"File type '{ext}' is accepted.")
-    )
+    steps.append(_make_step(2, "File Type Check", "complete", f"File type '{ext}' is accepted."))
 
     # ── Step 3: Cryptographic hash ───────────────────────────────────────────
     try:
         doc_hash = hash_document(file_bytes)
-    except Exception as exc:
+    except Exception:
         logger.exception("Hashing failed for file %s", filename)
         steps.append(
-            _make_step(3, "Creating Cryptographic Fingerprint", "failed", "Failed to hash the document.")
+            _make_step(
+                3, "Creating Cryptographic Fingerprint", "failed", "Failed to hash the document."
+            )
         )
         return SimpleIngestionResponse(
             success=False,
@@ -208,7 +222,9 @@ async def ingest_document(
             ),
         )
 
-    steps.append(_make_step(4, "Duplicate Check", "complete", "This document has not been submitted before."))
+    steps.append(
+        _make_step(4, "Duplicate Check", "complete", "This document has not been submitted before.")
+    )
 
     # ── Step 5: Commit to ledger ─────────────────────────────────────────────
     try:
@@ -241,7 +257,12 @@ async def ingest_document(
         logger.exception("Failed to commit document %s to ledger", filename)
         await db.rollback()
         steps.append(
-            _make_step(5, "Adding to Permanent Record", "failed", "Failed to save the document to the ledger.")
+            _make_step(
+                5,
+                "Adding to Permanent Record",
+                "failed",
+                "Failed to save the document to the ledger.",
+            )
         )
         return SimpleIngestionResponse(
             success=False,
@@ -277,7 +298,9 @@ async def ingest_document(
         related_commit_id=commit_id,
         related_request_id=request_id,
         user_friendly_status="✓ Complete",
-        details_json=json.dumps({"filename": filename, "doc_hash": doc_hash, "display_id": display_id}),
+        details_json=json.dumps(
+            {"filename": filename, "doc_hash": doc_hash, "display_id": display_id}
+        ),
     )
     db.add(activity)
     await db.commit()

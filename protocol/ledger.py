@@ -273,7 +273,14 @@ class Ledger:
                 prev_hlc = entry_hlc
 
                 expected_hash = blake3_hash(
-                    [LEDGER_PREFIX, canonical_json_bytes(payload), _SEP, poseidon_bytes, _SEP, hlc_raw]
+                    [
+                        LEDGER_PREFIX,
+                        canonical_json_bytes(payload),
+                        _SEP,
+                        poseidon_bytes,
+                        _SEP,
+                        hlc_raw,
+                    ]
                 ).hex()
             else:
                 # Legacy entry without HLC — use original hash formula

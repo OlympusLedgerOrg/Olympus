@@ -21,6 +21,7 @@ import blake3
 
 from .hashes import leaf_hash, node_hash
 
+
 # Domain-separated empty leaf sentinel.  This replaces the former all-zeros
 # sentinel to prevent confusion with naturally-occurring zero values.
 EMPTY_LEAF = blake3.blake3(b"OLY:EMPTY-LEAF:V1").digest()

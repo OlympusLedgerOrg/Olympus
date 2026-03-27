@@ -10,13 +10,12 @@ from __future__ import annotations
 import warnings
 
 import blake3
-
 import pytest
 
 from api.services.merkle import (
-    MerkleProof,
     _INTERNAL_PREFIX,
     _LEAF_PREFIX,
+    MerkleProof,
     _blake3_leaf,
     _blake3_pair,
     _expected_proof_depth,
@@ -42,9 +41,7 @@ class TestBuildTree:
         a, b = _b3("a"), _b3("b")
         tree = build_tree([a, b], preserve_order=True)
         # Domain-separated internal node: H(0x01 || a || b)
-        expected = blake3.blake3(
-            _INTERNAL_PREFIX + bytes.fromhex(a) + bytes.fromhex(b)
-        ).hexdigest()
+        expected = blake3.blake3(_INTERNAL_PREFIX + bytes.fromhex(a) + bytes.fromhex(b)).hexdigest()
         assert tree.root_hash == expected
 
     def test_four_leaves(self):
@@ -133,7 +130,7 @@ class TestBuildTree:
     def test_crafted_leaf_cannot_collide_with_internal_node(self):
         """No leaf hash should equal any internal node hash in a tree."""
         leaves_raw = [b"a", b"b", b"c", b"d"]
-        leaf_hashes = [_blake3_leaf(l) for l in leaves_raw]
+        leaf_hashes = [_blake3_leaf(item_list) for item_list in leaves_raw]
         tree = build_tree(leaf_hashes)
 
         # Collect all internal node hashes from all levels above the leaves
@@ -141,8 +138,9 @@ class TestBuildTree:
         for level in tree.levels[1:]:
             internal_nodes.update(level)
 
-        assert not (set(leaf_hashes) & internal_nodes), \
+        assert not (set(leaf_hashes) & internal_nodes), (
             "Collision between leaf and internal node — domain separation failed"
+        )
 
     def test_proof_verification_fails_with_wrong_prefix(self):
         """Old (no-prefix) proof must not verify against new (prefixed) root."""
@@ -156,8 +154,9 @@ class TestBuildTree:
         old_tree = build_tree([old_leaf_hash])
         old_proof = generate_proof(old_leaf_hash, old_tree)
 
-        assert not verify_proof(old_leaf_hash, old_proof, new_tree.root_hash), \
+        assert not verify_proof(old_leaf_hash, old_proof, new_tree.root_hash), (
             "Old-scheme proof must not verify against new-scheme root"
+        )
 
 
 class TestGenerateProof:
@@ -197,9 +196,7 @@ class TestVerifyProof:
         leaf = tree.leaf_hashes[0]
         proof = generate_proof(leaf, tree)
         bad_siblings = [(_b3("evil"), proof.siblings[0][1])] + list(proof.siblings[1:])
-        bad_proof = MerkleProof(
-            leaf_hash=leaf, root_hash=proof.root_hash, siblings=bad_siblings
-        )
+        bad_proof = MerkleProof(leaf_hash=leaf, root_hash=proof.root_hash, siblings=bad_siblings)
         assert verify_proof(leaf, bad_proof, tree.root_hash) is False
 
     def test_tampered_sibling_fails_preserve_order(self):
@@ -209,9 +206,7 @@ class TestVerifyProof:
         leaf = tree.leaf_hashes[0]
         proof = generate_proof(leaf, tree)
         bad_siblings = [(_b3("evil"), proof.siblings[0][1])] + list(proof.siblings[1:])
-        bad_proof = MerkleProof(
-            leaf_hash=leaf, root_hash=proof.root_hash, siblings=bad_siblings
-        )
+        bad_proof = MerkleProof(leaf_hash=leaf, root_hash=proof.root_hash, siblings=bad_siblings)
         assert verify_proof(leaf, bad_proof, tree.root_hash) is False
 
     def test_wrong_root_fails(self):
@@ -312,9 +307,19 @@ class TestVerifyProof:
         )
         assert verify_proof(legacy_proof.leaf_hash, legacy_proof, tree.root_hash) is True
 
-    @pytest.mark.parametrize("n,expected_depth", [
-        (1, 1), (2, 1), (3, 2), (4, 2), (5, 3), (8, 3), (9, 4), (16, 4),
-    ])
+    @pytest.mark.parametrize(
+        "n,expected_depth",
+        [
+            (1, 1),
+            (2, 1),
+            (3, 2),
+            (4, 2),
+            (5, 3),
+            (8, 3),
+            (9, 4),
+            (16, 4),
+        ],
+    )
     def test_expected_proof_depth(self, n: int, expected_depth: int):
         """_expected_proof_depth matches the actual generated proof depth."""
         assert _expected_proof_depth(n) == expected_depth

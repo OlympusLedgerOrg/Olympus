@@ -105,6 +105,7 @@ def test_fetcher_factories_work_with_log_monitor():
         observations = list(monitor.observed())
         assert observations[0].sth.tree_size == 5
     finally:
+
         async def _close() -> None:
             await client.aclose()
             await transport.close()

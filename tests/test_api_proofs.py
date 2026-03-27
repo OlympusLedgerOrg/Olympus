@@ -326,7 +326,6 @@ def test_header_latest_returns_none_for_missing_shard():
 @pytest.mark.asyncio
 async def test_proof_endpoint_does_not_crash_in_production_mode(monkeypatch):
     """GET /ledger/proof/{commit_id} must never return 500 in production mode."""
-    import pytest_asyncio
     from httpx import ASGITransport, AsyncClient
     from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
@@ -350,14 +349,16 @@ async def test_proof_endpoint_does_not_crash_in_production_mode(monkeypatch):
             yield session
 
     from api.main import create_app
+
     app = create_app()
     app.dependency_overrides[get_db] = override_get_db
 
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
         # Any commit_id that doesn't exist should return 404, not 500
         resp = await client.get("/ledger/proof/0xdeadbeef00000000000000000000000000000000")
-        assert resp.status_code in (404, 200), f"Expected 404 or 200, got {resp.status_code} — endpoint is crashing"
+        assert resp.status_code in (404, 200), (
+            f"Expected 404 or 200, got {resp.status_code} — endpoint is crashing"
+        )
         assert resp.status_code != 500
 
     await engine.dispose()
-

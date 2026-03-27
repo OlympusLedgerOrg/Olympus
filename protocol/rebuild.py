@@ -31,7 +31,9 @@ def _verify_entry_chain(entries: list[LedgerEntry]) -> bool:
             "prev_entry_hash": entry.prev_entry_hash,
             "poseidon_root": entry.poseidon_root,
         }
-        normalized_certificate = _canonicalize_quorum_certificate(entry.federation_quorum_certificate)
+        normalized_certificate = _canonicalize_quorum_certificate(
+            entry.federation_quorum_certificate
+        )
         if normalized_certificate is not None:
             payload["federation_quorum_certificate"] = normalized_certificate
 
@@ -47,9 +49,10 @@ def _verify_entry_chain(entries: list[LedgerEntry]) -> bool:
             poseidon_bytes = b""
 
         # Include HLC bytes in hash if present (new format), otherwise legacy
-        if getattr(entry, "hlc_bytes", None) is not None:
+        hlc_bytes = getattr(entry, "hlc_bytes", None)
+        if hlc_bytes is not None:
             try:
-                hlc_raw = bytes.fromhex(entry.hlc_bytes)
+                hlc_raw = bytes.fromhex(hlc_bytes)
                 entry_hlc = HLCTimestamp.from_bytes(hlc_raw)
             except (ValueError, TypeError):
                 return False

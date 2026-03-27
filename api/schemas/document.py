@@ -25,7 +25,9 @@ class DocCommitRequest(BaseModel):
         ),
     )
     embargo_until: datetime | None = Field(None, description="Optional embargo expiry timestamp.")
-    is_multi_recipient: bool = Field(False, description="True if multiple recipients share this commit.")
+    is_multi_recipient: bool = Field(
+        False, description="True if multiple recipients share this commit."
+    )
 
 
 class DocCommitResponse(BaseModel):

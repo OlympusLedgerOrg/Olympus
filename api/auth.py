@@ -34,6 +34,7 @@ from fastapi import Depends, HTTPException, Request, status
 from api.config import get_settings
 from protocol.hashes import hash_bytes
 
+
 logger = logging.getLogger(__name__)
 
 _keys_loaded = False
@@ -110,7 +111,10 @@ def _extract_key(request: Request) -> str:
         return authz[7:].strip()
     raise HTTPException(
         status_code=status.HTTP_401_UNAUTHORIZED,
-        detail={"detail": "API key required. Provide via X-API-Key header or Authorization: Bearer.", "code": "AUTH_REQUIRED"},
+        detail={
+            "detail": "API key required. Provide via X-API-Key header or Authorization: Bearer.",
+            "code": "AUTH_REQUIRED",
+        },
     )
 
 
@@ -147,6 +151,13 @@ async def require_api_key(request: Request) -> _APIKeyRecord:
     # In production (or any non-development environment) this is a fatal
     # misconfiguration — refuse to serve write requests.
     if not _key_store:
+<<<<<<< copilot/fix-ci-linting-dependency-issues
+        return _APIKeyRecord(
+            key_id="dev",
+            key_hash="",
+            scopes={"read", "write"},
+            expires_at=datetime(2099, 1, 1, tzinfo=UTC),
+=======
         _env = os.environ.get("OLYMPUS_ENV", "production")
         if _env == "development":
             logger.warning("No API keys configured — dev-mode auth bypass active")
@@ -162,6 +173,7 @@ async def require_api_key(request: Request) -> _APIKeyRecord:
                 "detail": "Authentication not configured. Contact the system administrator.",
                 "code": "AUTH_NOT_CONFIGURED",
             },
+>>>>>>> main
         )
 
     raw_key = _extract_key(request)
@@ -169,7 +181,9 @@ async def require_api_key(request: Request) -> _APIKeyRecord:
     record = _constant_time_lookup(key_hash)
 
     if record is None:
-        logger.warning("Invalid API key attempt from %s", request.client.host if request.client else "unknown")
+        logger.warning(
+            "Invalid API key attempt from %s", request.client.host if request.client else "unknown"
+        )
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail={"detail": "Invalid API key.", "code": "AUTH_INVALID"},
@@ -300,9 +314,7 @@ def _create_rate_limit_backend() -> MemoryRateLimitBackend | RedisRateLimitBacke
 
     if backend_type == "redis":
         if not settings.rate_limit_redis_url:
-            raise ValueError(
-                "RATE_LIMIT_REDIS_URL must be set when RATE_LIMIT_BACKEND=redis"
-            )
+            raise ValueError("RATE_LIMIT_REDIS_URL must be set when RATE_LIMIT_BACKEND=redis")
         return RedisRateLimitBackend(settings.rate_limit_redis_url)
 
     if backend_type != "memory":

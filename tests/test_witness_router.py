@@ -11,6 +11,7 @@ import api.routers.witness as witness_module
 from api.main import create_app
 from protocol.timestamps import current_timestamp
 
+
 app = create_app()
 client = TestClient(app, raise_server_exceptions=True)
 
@@ -24,6 +25,7 @@ def clear_store() -> None:
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
 
 def _nonce() -> str:
     """Generate a unique nonce for replay-resistance."""
@@ -52,6 +54,7 @@ def _announcement_payload(
 # ---------------------------------------------------------------------------
 # POST /witness/observations
 # ---------------------------------------------------------------------------
+
 
 def test_submit_observation_returns_201() -> None:
     payload = _announcement_payload("node-alpha", 1)
@@ -97,6 +100,7 @@ def test_submit_observation_same_origin_different_sequence_allowed() -> None:
 # checkpoint_hash validation
 # ---------------------------------------------------------------------------
 
+
 def test_submit_observation_rejects_too_short_hash() -> None:
     payload = _announcement_payload("node-short", 1, "ab" * 10)  # only 20 hex chars
     resp = client.post("/witness/observations", json=payload)
@@ -133,6 +137,7 @@ def test_submit_observation_rejects_too_long_hash() -> None:
 # GET /witness/checkpoints/latest
 # ---------------------------------------------------------------------------
 
+
 def test_latest_checkpoint_404_when_empty() -> None:
     resp = client.get("/witness/checkpoints/latest")
     assert resp.status_code == 404
@@ -150,6 +155,7 @@ def test_latest_checkpoint_returns_highest_sequence() -> None:
 # GET /witness/checkpoints/{sequence}
 # ---------------------------------------------------------------------------
 
+
 def test_checkpoint_by_sequence_found() -> None:
     client.post("/witness/observations", json=_announcement_payload("node-x", 42))
     resp = client.get("/witness/checkpoints/42")
@@ -165,6 +171,7 @@ def test_checkpoint_by_sequence_404() -> None:
 # ---------------------------------------------------------------------------
 # GET /witness/checkpoints
 # ---------------------------------------------------------------------------
+
 
 def test_list_checkpoints_sorted_descending() -> None:
     for seq in (1, 3, 2):
@@ -198,6 +205,7 @@ def test_list_checkpoints_default_limit_is_20() -> None:
 # ---------------------------------------------------------------------------
 # GET /witness/gossip
 # ---------------------------------------------------------------------------
+
 
 def test_gossip_empty_when_no_observations() -> None:
     resp = client.get("/witness/gossip")
@@ -268,8 +276,6 @@ def test_gossip_no_conflict_when_128_char_hashes_match() -> None:
     assert resp.status_code == 200
     assert resp.json() == []
 
-
-
     hash_a = "aa" * 32
     hash_b = "bb" * 32
     # Sequence 1: conflict
@@ -288,6 +294,7 @@ def test_gossip_no_conflict_when_128_char_hashes_match() -> None:
 # ---------------------------------------------------------------------------
 # GET /witness/health
 # ---------------------------------------------------------------------------
+
 
 def test_health_ok_when_empty() -> None:
     resp = client.get("/witness/health")
@@ -308,6 +315,7 @@ def test_health_count_reflects_observations() -> None:
 # ---------------------------------------------------------------------------
 # Auth gate — POST /witness/observations requires authentication
 # ---------------------------------------------------------------------------
+
 
 def test_submit_observation_requires_auth_when_keys_configured() -> None:
     """POST /witness/observations returns 401 when API keys are configured
@@ -347,6 +355,7 @@ def test_submit_observation_requires_auth_when_keys_configured() -> None:
 # Replay-resistance: timestamp freshness
 # ---------------------------------------------------------------------------
 
+
 def test_submit_observation_rejects_stale_timestamp() -> None:
     """Checkpoint timestamp older than _MAX_ANNOUNCE_SKEW_SECONDS is rejected."""
     stale_ts = "2020-01-01T00:00:00Z"
@@ -376,6 +385,7 @@ def test_submit_observation_accepts_fresh_timestamp() -> None:
 # Replay-resistance: nonce deduplication
 # ---------------------------------------------------------------------------
 
+
 def test_submit_observation_rejects_duplicate_nonce() -> None:
     """Re-using a nonce returns 409 even if origin/sequence differ."""
     shared_nonce = "a" * 32
@@ -398,6 +408,7 @@ def test_submit_observation_rejects_short_nonce() -> None:
 # ---------------------------------------------------------------------------
 # received_at field on stored announcements
 # ---------------------------------------------------------------------------
+
 
 def test_stored_announcement_has_received_at() -> None:
     """WitnessAnnouncement returned by GET includes a server-assigned received_at."""

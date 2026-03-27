@@ -356,9 +356,9 @@ class TestCanonicalHashBinding:
             "documentSections": ["0"] * config.unified_max_sections,
             "sectionCount": str(section_count),
             "sectionLengths": [str(v) for v in section_lengths]
-                + ["0"] * (config.unified_max_sections - len(section_lengths)),
+            + ["0"] * (config.unified_max_sections - len(section_lengths)),
             "sectionHashes": [str(v) for v in section_hashes]
-                + ["0"] * (config.unified_max_sections - len(section_hashes)),
+            + ["0"] * (config.unified_max_sections - len(section_hashes)),
             "merklePath": ["0"] * config.unified_merkle_depth,
             "merkleIndices": [0] * config.unified_merkle_depth,
             "leafIndex": "0",
@@ -388,8 +388,12 @@ class TestCanonicalHashBinding:
         config = CircuitConfig.default()
         lengths = [100] + [0] * (config.unified_max_sections - 1)
         hashes = [42] + [0] * (config.unified_max_sections - 1)
-        h1 = ProofGenerator.recompute_canonical_hash(1, lengths, hashes, config.unified_max_sections)
-        h2 = ProofGenerator.recompute_canonical_hash(2, lengths, hashes, config.unified_max_sections)
+        h1 = ProofGenerator.recompute_canonical_hash(
+            1, lengths, hashes, config.unified_max_sections
+        )
+        h2 = ProofGenerator.recompute_canonical_hash(
+            2, lengths, hashes, config.unified_max_sections
+        )
         assert h1 != h2
 
     def test_recompute_changes_with_different_section_hashes(self):
@@ -406,7 +410,6 @@ class TestCanonicalHashBinding:
 
     def test_validate_rejects_mismatched_canonical_hash(self):
         """Mismatched canonicalHash must raise ValueError."""
-        config = CircuitConfig.default()
         inputs = self._build_unified_inputs(
             section_count=1,
             section_lengths=[100],

@@ -55,21 +55,15 @@ async def compute_state_root(shard_id: str, db: AsyncSession) -> str:
     from api.models.dataset import DatasetArtifact  # noqa: PLC0415
     from api.models.document import DocCommit  # noqa: PLC0415
 
-    doc_q = (
-        select(
-            DocCommit.doc_hash.label("hash"),
-            DocCommit.epoch_timestamp.label("ts"),
-        )
-        .where(DocCommit.shard_id == shard_id)
-    )
+    doc_q = select(
+        DocCommit.doc_hash.label("hash"),
+        DocCommit.epoch_timestamp.label("ts"),
+    ).where(DocCommit.shard_id == shard_id)
 
-    ds_q = (
-        select(
-            DatasetArtifact.manifest_hash.label("hash"),
-            DatasetArtifact.epoch_timestamp.label("ts"),
-        )
-        .where(DatasetArtifact.shard_id == shard_id)
-    )
+    ds_q = select(
+        DatasetArtifact.manifest_hash.label("hash"),
+        DatasetArtifact.epoch_timestamp.label("ts"),
+    ).where(DatasetArtifact.shard_id == shard_id)
 
     # Deterministic ordering: timestamp first, then hash for tie-breaking.
     # This ensures identical tree structure across replicas even when

@@ -20,6 +20,7 @@ from __future__ import annotations
 import logging
 import os
 
+
 logger = logging.getLogger(__name__)
 
 _ENV = os.getenv("OLYMPUS_ENV", "production")

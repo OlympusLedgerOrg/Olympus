@@ -472,8 +472,9 @@ def test_sorted_list_keys_deterministic_across_orderings() -> None:
     """Two docs differing only in array order produce identical bytes."""
     doc_a = {"tags": ["b", "a", "c"], "id": "x"}
     doc_b = {"tags": ["c", "a", "b"], "id": "x"}
-    assert document_to_bytes(doc_a, sorted_list_keys={"tags"}) == \
-           document_to_bytes(doc_b, sorted_list_keys={"tags"})
+    assert document_to_bytes(doc_a, sorted_list_keys={"tags"}) == document_to_bytes(
+        doc_b, sorted_list_keys={"tags"}
+    )
 
 
 def test_sorted_list_keys_nested_dict_arrays() -> None:

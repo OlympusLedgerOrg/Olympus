@@ -22,6 +22,7 @@ from .events import CanonicalEvent
 from .hashes import HASH_SEPARATOR, hash_bytes, shard_header_hash
 from .hlc import HLCTimestamp
 
+
 logger = logging.getLogger(__name__)
 
 # Maximum allowed clock skew between a shard header HLC and the verifier's
@@ -419,8 +420,7 @@ def verify_key_revocation_record(record: dict[str, Any]) -> bool:
     else:
         # Single-signed revocation — old key was unavailable (possibly compromised)
         logger.warning(
-            "Revocation record for key %s is not dual-signed. "
-            "Old key may have been compromised.",
+            "Revocation record for key %s is not dual-signed. Old key may have been compromised.",
             record.get("old_pubkey", "unknown"),
         )
 

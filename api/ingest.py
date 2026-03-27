@@ -860,7 +860,9 @@ def _evaluate_proof_bundle(
     try:
         merkle_proof = deserialize_merkle_proof(merkle_proof_data)
     except (KeyError, TypeError, ValueError):
-        raise HTTPException(status_code=400, detail="Invalid merkle_proof: malformed proof data") from None
+        raise HTTPException(
+            status_code=400, detail="Invalid merkle_proof: malformed proof data"
+        ) from None
 
     content_hash_bytes = bytes.fromhex(normalized_hash)
     expected_leaf_hash = merkle_leaf_hash(content_hash_bytes)
@@ -1169,7 +1171,9 @@ async def ingest_batch(batch: BatchIngestionRequest, request: Request) -> BatchI
                 else:
                     # Fall back to in-memory storage
                     new_hashes.append(content_hash_bytes)
-                    poseidon_smt.update(record_smt_key, _value_hash_to_poseidon_field(content_hash_bytes))
+                    poseidon_smt.update(
+                        record_smt_key, _value_hash_to_poseidon_field(content_hash_bytes)
+                    )
 
                 results.append(
                     (
@@ -1180,6 +1184,7 @@ async def ingest_batch(batch: BatchIngestionRequest, request: Request) -> BatchI
                             shard_id=record.shard_id,
                             content_hash=content_hash,
                             deduplicated=False,
+                            idempotent=False,
                         ),
                     )
                 )

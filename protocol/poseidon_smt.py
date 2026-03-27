@@ -26,6 +26,7 @@ from dataclasses import dataclass
 from .hashes import SNARK_SCALAR_FIELD
 from .poseidon_bn128 import poseidon_hash_bn128
 
+
 # Domain separation constants for Poseidon hashing.
 # These MUST match the corresponding constants in the Circom circuits
 # (proofs/circuits/lib/merkleProof.circom and non_existence.circom).

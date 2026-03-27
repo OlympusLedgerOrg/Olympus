@@ -7,7 +7,6 @@ Covers: commit → ledger state, per-shard state, and proof retrieval.
 from __future__ import annotations
 
 import blake3
-
 import pytest
 import pytest_asyncio
 from httpx import ASGITransport, AsyncClient

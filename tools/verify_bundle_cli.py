@@ -488,7 +488,9 @@ def verify_bundle(
         if previous_sth is not None:
             results.append((False, "Consistency proof missing (previous_sth present but no proof)"))
         if consistency_proof is not None:
-            results.append((False, "Previous STH missing (consistency_proof present but no previous_sth)"))
+            results.append(
+                (False, "Previous STH missing (consistency_proof present but no previous_sth)")
+            )
 
     all_passed = all(passed for passed, _ in results)
     return all_passed, results

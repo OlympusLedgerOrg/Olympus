@@ -94,7 +94,9 @@ class DNSCheckpointRecord:
         try:
             sequence = int(parsed["seq"])
         except ValueError as e:
-            raise ValueError(f"Invalid sequence number in DNS checkpoint record: {parsed['seq']}") from e
+            raise ValueError(
+                f"Invalid sequence number in DNS checkpoint record: {parsed['seq']}"
+            ) from e
 
         return cls(
             sequence=sequence,

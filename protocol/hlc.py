@@ -16,6 +16,7 @@ from __future__ import annotations
 import time
 from dataclasses import dataclass
 
+
 # Size of the canonical HLC byte encoding.
 HLC_BYTE_LENGTH = 12
 

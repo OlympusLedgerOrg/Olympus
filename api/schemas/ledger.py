@@ -157,4 +157,3 @@ class ActivityFeedResponse(BaseModel):
 
     items: list[ActivityItem]
     total: int
-

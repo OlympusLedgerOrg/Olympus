@@ -15,7 +15,7 @@ from datetime import datetime, timezone
 from fastapi import APIRouter, HTTPException, status
 from sqlalchemy import select
 
-from api.auth import RequireAPIKey, RateLimit
+from api.auth import RateLimit, RequireAPIKey
 from api.deps import DBSession
 from api.models.appeal import Appeal, AppealStatus
 from api.models.request import PublicRecordsRequest, RequestStatus
@@ -78,7 +78,10 @@ async def file_appeal(body: AppealCreate, db: DBSession, _api_key: RequireAPIKey
     if req.status == RequestStatus.APPEALED.value:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
-            detail={"detail": "An appeal has already been filed for this request.", "code": "APPEAL_EXISTS"},
+            detail={
+                "detail": "An appeal has already been filed for this request.",
+                "code": "APPEAL_EXISTS",
+            },
         )
     # Appeals are only valid against a decision (DENIED) or an overdue request.
     # Filing an appeal on a PENDING or IN_REVIEW request is premature.

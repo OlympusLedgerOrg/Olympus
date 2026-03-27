@@ -9,15 +9,15 @@ these to monitor multiple nodes and detect split-view attacks.
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
-from typing import Any, Awaitable, TypeVar
+from typing import Any, TypeVar
 
 import httpx
 
 from protocol.consistency import ConsistencyProof
 from protocol.epochs import SignedTreeHead
-from protocol.monitoring import LogMonitor
+
 
 T = TypeVar("T")
 
@@ -158,9 +158,7 @@ class WitnessHTTPTransport:
             Callable that fetches consistency proofs.
         """
 
-        def _fetch(
-            node_id: str, shard_id: str, old_size: int, new_size: int
-        ) -> ConsistencyProof:
+        def _fetch(node_id: str, shard_id: str, old_size: int, new_size: int) -> ConsistencyProof:
             return self._run_sync(
                 self.fetch_consistency_proof(node_id, shard_id, old_size, new_size)
             )

@@ -15,7 +15,6 @@ from datetime import datetime, timezone
 
 import pytest
 import pytest_asyncio
-from sqlalchemy import inspect
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
@@ -77,6 +76,7 @@ def _sample_artifact(**overrides) -> DatasetArtifact:
 
 # ── DatasetArtifact schema tests ─────────────────────────────────────────
 
+
 class TestDatasetArtifactSchema:
     """Verify table name, columns, constraints, and indexes."""
 
@@ -86,18 +86,42 @@ class TestDatasetArtifactSchema:
     def test_expected_columns_present(self):
         col_names = {c.name for c in DatasetArtifact.__table__.columns}
         expected = {
-            "id", "dataset_id", "commit_id", "parent_commit_id",
-            "epoch_timestamp", "shard_id", "merkle_root", "zk_proof",
-            "committer_pubkey", "commit_signature", "committer_label",
-            "rfc3161_tst_hex", "rfc3161_tsa_url", "timestamp_status",
-            "anchor_tx_hash", "anchor_network", "anchor_block_height",
-            "dataset_name", "dataset_version", "source_uri",
-            "canonical_namespace", "granularity",
-            "license_spdx", "license_uri", "usage_restrictions",
-            "manifest_hash", "manifest_schema_version", "canonicalization_method",
-            "total_byte_size", "total_record_count", "file_count", "file_format",
-            "parent_dataset_id", "transform_description",
-            "proof_bundle_uri", "poseidon_hash",
+            "id",
+            "dataset_id",
+            "commit_id",
+            "parent_commit_id",
+            "epoch_timestamp",
+            "shard_id",
+            "merkle_root",
+            "zk_proof",
+            "committer_pubkey",
+            "commit_signature",
+            "committer_label",
+            "rfc3161_tst_hex",
+            "rfc3161_tsa_url",
+            "timestamp_status",
+            "anchor_tx_hash",
+            "anchor_network",
+            "anchor_block_height",
+            "dataset_name",
+            "dataset_version",
+            "source_uri",
+            "canonical_namespace",
+            "granularity",
+            "license_spdx",
+            "license_uri",
+            "usage_restrictions",
+            "manifest_hash",
+            "manifest_schema_version",
+            "canonicalization_method",
+            "total_byte_size",
+            "total_record_count",
+            "file_count",
+            "file_format",
+            "parent_dataset_id",
+            "transform_description",
+            "proof_bundle_uri",
+            "poseidon_hash",
         }
         assert expected == col_names
 
@@ -110,17 +134,16 @@ class TestDatasetArtifactSchema:
         assert col.unique
 
     def test_dataset_id_indexed(self):
-        col = DatasetArtifact.__table__.c.dataset_id
         assert any(
-            idx for idx in DatasetArtifact.__table__.indexes
+            idx
+            for idx in DatasetArtifact.__table__.indexes
             if "dataset_id" in {c.name for c in idx.columns}
         )
 
     def test_unique_constraint_replay_protection(self):
         """D10: UNIQUE(dataset_id, parent_commit_id, manifest_hash)."""
         constraint_names = {
-            c.name for c in DatasetArtifact.__table__.constraints
-            if hasattr(c, "name") and c.name
+            c.name for c in DatasetArtifact.__table__.constraints if hasattr(c, "name") and c.name
         }
         assert "uq_dataset_commit_content" in constraint_names
 
@@ -130,12 +153,21 @@ class TestDatasetArtifactSchema:
 
     def test_nullable_optional_fields(self):
         nullable_cols = {
-            "merkle_root", "zk_proof", "committer_label",
-            "rfc3161_tst_hex", "rfc3161_tsa_url",
-            "anchor_tx_hash", "anchor_network", "anchor_block_height",
-            "license_uri", "usage_restrictions",
-            "total_record_count", "parent_dataset_id",
-            "transform_description", "proof_bundle_uri", "poseidon_hash",
+            "merkle_root",
+            "zk_proof",
+            "committer_label",
+            "rfc3161_tst_hex",
+            "rfc3161_tsa_url",
+            "anchor_tx_hash",
+            "anchor_network",
+            "anchor_block_height",
+            "license_uri",
+            "usage_restrictions",
+            "total_record_count",
+            "parent_dataset_id",
+            "transform_description",
+            "proof_bundle_uri",
+            "poseidon_hash",
         }
         for name in nullable_cols:
             col = DatasetArtifact.__table__.c[name]
@@ -143,13 +175,26 @@ class TestDatasetArtifactSchema:
 
     def test_non_nullable_required_fields(self):
         required_cols = {
-            "id", "dataset_id", "commit_id", "parent_commit_id",
-            "epoch_timestamp", "shard_id",
-            "committer_pubkey", "commit_signature", "timestamp_status",
-            "dataset_name", "dataset_version", "source_uri",
-            "canonical_namespace", "granularity",
-            "license_spdx", "manifest_hash", "manifest_schema_version",
-            "canonicalization_method", "total_byte_size", "file_count",
+            "id",
+            "dataset_id",
+            "commit_id",
+            "parent_commit_id",
+            "epoch_timestamp",
+            "shard_id",
+            "committer_pubkey",
+            "commit_signature",
+            "timestamp_status",
+            "dataset_name",
+            "dataset_version",
+            "source_uri",
+            "canonical_namespace",
+            "granularity",
+            "license_spdx",
+            "manifest_hash",
+            "manifest_schema_version",
+            "canonicalization_method",
+            "total_byte_size",
+            "file_count",
             "file_format",
         }
         for name in required_cols:
@@ -158,6 +203,7 @@ class TestDatasetArtifactSchema:
 
 
 # ── DatasetArtifactFile schema tests ─────────────────────────────────────
+
 
 class TestDatasetArtifactFileSchema:
     def test_tablename(self):
@@ -176,13 +222,15 @@ class TestDatasetArtifactFileSchema:
 
 # ── DatasetLineageEvent schema tests ─────────────────────────────────────
 
+
 class TestDatasetLineageEventSchema:
     def test_tablename(self):
         assert DatasetLineageEvent.__tablename__ == "dataset_lineage_events"
 
     def test_unique_constraint(self):
         constraint_names = {
-            c.name for c in DatasetLineageEvent.__table__.constraints
+            c.name
+            for c in DatasetLineageEvent.__table__.constraints
             if hasattr(c, "name") and c.name
         }
         assert "uq_lineage_event" in constraint_names
@@ -194,15 +242,26 @@ class TestDatasetLineageEventSchema:
     def test_expected_columns(self):
         cols = {c.name for c in DatasetLineageEvent.__table__.columns}
         expected = {
-            "id", "dataset_id", "commit_id", "parent_commit_id",
-            "epoch_timestamp", "shard_id", "merkle_root",
-            "committer_pubkey", "commit_signature", "timestamp_status",
-            "model_id", "model_version", "model_org", "event_type",
+            "id",
+            "dataset_id",
+            "commit_id",
+            "parent_commit_id",
+            "epoch_timestamp",
+            "shard_id",
+            "merkle_root",
+            "committer_pubkey",
+            "commit_signature",
+            "timestamp_status",
+            "model_id",
+            "model_version",
+            "model_org",
+            "event_type",
         }
         assert expected == cols
 
 
 # ── Defaults tests ───────────────────────────────────────────────────────
+
 
 class TestDatasetArtifactDefaults:
     """Verify Python-side defaults after DB flush (SQLAlchemy evaluates defaults at INSERT)."""
@@ -261,6 +320,7 @@ class TestDatasetArtifactDefaults:
 
 # ── Hash functions (v4: no timestamp, pubkey in dataset_key) ─────────────
 
+
 class TestHashFunctions:
     """Verify deterministic hash functions per ADR-0010 v4."""
 
@@ -318,14 +378,20 @@ class TestHashFunctions:
 
 # ── Pydantic schema tests (v4 fields) ───────────────────────────────────
 
+
 class TestPydanticSchemas:
     def test_commit_response_has_timestamp_status(self):
         from api.schemas.dataset import DatasetCommitResponse
 
         resp = DatasetCommitResponse(
-            dataset_id="a" * 64, commit_id="b" * 64, manifest_hash="c" * 64,
-            epoch=datetime.now(timezone.utc), shard_id="0x4F3A",
-            merkle_root=None, file_count=1, timestamp_status="verified",
+            dataset_id="a" * 64,
+            commit_id="b" * 64,
+            manifest_hash="c" * 64,
+            epoch=datetime.now(timezone.utc),
+            shard_id="0x4F3A",
+            merkle_root=None,
+            file_count=1,
+            timestamp_status="verified",
         )
         assert resp.timestamp_status == "verified"
 
@@ -339,14 +405,18 @@ class TestPydanticSchemas:
         from api.schemas.dataset import LineageCommitResponse
 
         resp = LineageCommitResponse(
-            commit_id="d" * 64, dataset_id="a" * 64, model_id="m1",
-            event_type="evaluation", epoch=datetime.now(timezone.utc),
+            commit_id="d" * 64,
+            dataset_id="a" * 64,
+            model_id="m1",
+            event_type="evaluation",
+            epoch=datetime.now(timezone.utc),
             timestamp_status="pending",
         )
         assert resp.timestamp_status == "pending"
 
 
 # ── Round-trip persistence ───────────────────────────────────────────────
+
 
 class TestDatasetArtifactPersistence:
     @pytest.mark.asyncio
@@ -480,11 +550,14 @@ class TestDatasetArtifactPersistence:
 
 # ── Import test ──────────────────────────────────────────────────────────
 
+
 class TestImports:
     def test_import_from_package(self):
-        from api.models import DatasetArtifact as DA
-        from api.models import DatasetArtifactFile as DAF
-        from api.models import DatasetLineageEvent as DLE
+        from api.models import (
+            DatasetArtifact as DA,
+            DatasetArtifactFile as DAF,
+            DatasetLineageEvent as DLE,
+        )
 
         assert DA.__tablename__ == "dataset_artifacts"
         assert DAF.__tablename__ == "dataset_artifact_files"

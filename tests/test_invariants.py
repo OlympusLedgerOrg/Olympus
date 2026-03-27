@@ -1,5 +1,3 @@
-import warnings
-
 from protocol.canonical import CANONICAL_VERSION, SUPPORTED_VERSIONS
 from protocol.merkle import MERKLE_VERSION
 
