@@ -36,7 +36,6 @@ from api.services.merkle import MerkleProof, build_tree, generate_proof
 from api.services.shard import compute_state_root
 from api.services.upload_validation import validate_file_magic
 from api.services.verification import verify_by_commit_id, verify_by_doc_hash, verify_by_file
-from api.services.zkproof import generate_proof_stub
 
 
 logger = logging.getLogger(__name__)
@@ -163,7 +162,19 @@ async def get_commit_proof(commit_id: str, db: DBSession, _rl: RateLimit):
         except ValueError:
             pass
 
-    zk_proof = generate_proof_stub(commit.commit_id, commit.doc_hash)
+    import os as _os
+    _env = _os.getenv("OLYMPUS_ENV", "production")
+    if _env == "development":
+        from api.services.zkproof import generate_proof_stub
+        zk_proof = generate_proof_stub(commit.commit_id, commit.doc_hash)
+    else:
+        zk_proof = {
+            "protocol": "groth16",
+            "curve": "bn128",
+            "proof_type": "pending",
+            "note": "ZK proof generation pending Groth16 trusted setup ceremony.",
+            "verified": False,
+        }
 
     return ProofResponse(
         commit_id=commit.commit_id,
@@ -171,6 +182,7 @@ async def get_commit_proof(commit_id: str, db: DBSession, _rl: RateLimit):
         zk_proof=zk_proof,
         shard_id=commit.shard_id,
         epoch=commit.epoch_timestamp,
+        proof_type=zk_proof.get("proof_type", "unknown"),
     )
 
 
