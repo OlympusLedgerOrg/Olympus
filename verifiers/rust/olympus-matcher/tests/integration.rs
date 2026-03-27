@@ -168,4 +168,97 @@ mod tests {
         let result = m.match_first(&long_input);
         assert!(result.is_none());
     }
+
+    // ── linear-time regression guard ──────────────────────────────────────
+
+    /// Regression guard: assert that matching time scales linearly with
+    /// input size rather than exponentially.
+    ///
+    /// Measures wall-clock time for the `(a+)+b` ReDoS probe at two input
+    /// sizes (SMALL_N and LARGE_N, a 10× increase).  For linear-time
+    /// matching the ratio `t_large / t_small` should stay close to the
+    /// size ratio.  We allow up to MAX_RATIO× to absorb measurement noise,
+    /// JIT warm-up, and cache effects.  Catastrophic backtracking in a PCRE
+    /// engine would produce a ratio >> 1000× for these sizes.
+    #[test]
+    fn redos_linear_time_scaling() {
+        use std::time::Instant;
+
+        const SMALL_N: usize = 10_000;
+        const LARGE_N: usize = 100_000;
+        // A 10× size jump should not produce more than 20× runtime.
+        // True linear is ~10×; we allow 2× headroom for noise.
+        const MAX_RATIO: f64 = 20.0;
+        // How many iterations to average out jitter.
+        const ITERS: u32 = 5;
+
+        let mut m = CoreMatcher::new();
+        m.add_raw_pattern("redos_probe", r"(a+)+b").unwrap();
+
+        let small_input = "a".repeat(SMALL_N);
+        let large_input = "a".repeat(LARGE_N);
+
+        // Warm up.
+        let _ = m.match_first(&small_input);
+        let _ = m.match_first(&large_input);
+
+        let t_small = {
+            let start = Instant::now();
+            for _ in 0..ITERS {
+                let _ = m.match_first(&small_input);
+            }
+            start.elapsed()
+        };
+
+        let t_large = {
+            let start = Instant::now();
+            for _ in 0..ITERS {
+                let _ = m.match_first(&large_input);
+            }
+            start.elapsed()
+        };
+
+        let ratio = t_large.as_secs_f64() / t_small.as_secs_f64().max(1e-12);
+
+        assert!(
+            ratio < MAX_RATIO,
+            "Matching time does not scale linearly! \
+             {SMALL_N}-char: {t_small:?}, {LARGE_N}-char: {t_large:?}, \
+             ratio: {ratio:.1}× (max allowed: {MAX_RATIO}×). \
+             This indicates non-linear (possibly exponential) behaviour."
+        );
+    }
+
+    /// Hard timeout guard: matching the ReDoS probe on a 100k-char input
+    /// must complete within 100 ms total across ITERS iterations.
+    /// Catastrophic backtracking would take minutes/hours on this input.
+    #[test]
+    fn redos_hard_timeout() {
+        use std::time::{Duration, Instant};
+
+        const INPUT_LEN: usize = 100_000;
+        const ITERS: u32 = 10;
+        const MAX_TOTAL: Duration = Duration::from_millis(100);
+
+        let mut m = CoreMatcher::new();
+        m.add_raw_pattern("redos_probe", r"(a+)+b").unwrap();
+
+        let input = "a".repeat(INPUT_LEN);
+
+        // Warm up.
+        let _ = m.match_first(&input);
+
+        let start = Instant::now();
+        for _ in 0..ITERS {
+            let _ = m.match_first(&input);
+        }
+        let elapsed = start.elapsed();
+
+        assert!(
+            elapsed < MAX_TOTAL,
+            "ReDoS probe on {INPUT_LEN}-char input exceeded hard timeout! \
+             {ITERS} iterations took {elapsed:?} (limit: {MAX_TOTAL:?}). \
+             Matching may not be running in linear time."
+        );
+    }
 }

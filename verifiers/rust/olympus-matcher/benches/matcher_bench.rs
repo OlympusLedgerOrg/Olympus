@@ -1,4 +1,4 @@
-use criterion::{black_box, criterion_group, criterion_main, Criterion};
+use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion};
 use olympus_matcher::core::CoreMatcher;
 
 fn build_matcher_single() -> CoreMatcher {
@@ -36,6 +36,24 @@ fn bench_match_first_redos(c: &mut Criterion) {
     });
 }
 
+/// Size-scaling benchmark: run the ReDoS probe at 1k, 10k, and 100k input
+/// sizes.  Comparing wall-clock numbers across these sizes exposes non-linear
+/// scaling — a true DFA will show ~linear growth, while catastrophic
+/// backtracking would show exponential blowup.
+fn bench_redos_scaling(c: &mut Criterion) {
+    let matcher = build_matcher_single();
+    let mut group = c.benchmark_group("redos_scaling");
+    for &size in &[1_000usize, 10_000, 100_000] {
+        let input = "a".repeat(size);
+        group.bench_with_input(BenchmarkId::from_parameter(size), &input, |b, inp| {
+            b.iter(|| {
+                let _ = matcher.match_first(black_box(inp));
+            });
+        });
+    }
+    group.finish();
+}
+
 /// Benchmark `match_all` across 10 patterns on a 1k-char realistic fragment.
 fn bench_match_all_realistic(c: &mut Criterion) {
     let matcher = build_matcher_multi();
@@ -61,5 +79,5 @@ fn bench_match_all_realistic(c: &mut Criterion) {
     });
 }
 
-criterion_group!(benches, bench_match_first_redos, bench_match_all_realistic);
+criterion_group!(benches, bench_match_first_redos, bench_redos_scaling, bench_match_all_realistic);
 criterion_main!(benches);
