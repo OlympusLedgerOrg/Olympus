@@ -6,9 +6,9 @@ the dual-tree structure (per-shard SMTs + forest SMT) into a single global SMT
 with hierarchical key derivation.
 """
 
-import pytest
+import pathlib
 
-from protocol.hashes import global_key, record_key
+from protocol.hashes import _GLOBAL_SMT_KEY_CONTEXT, global_key, record_key
 
 
 class TestGlobalKey:
@@ -47,20 +47,13 @@ class TestGlobalKey:
 
         assert key1 != key2
 
-    def test_global_key_length_validation(self):
-        """global_key() should reject invalid record_key lengths."""
+    def test_global_key_accepts_variable_length_record_key_bytes(self):
+        """global_key() should safely handle arbitrary byte lengths."""
         shard_id = "watauga:2025:budget"
 
-        # Valid 32-byte key should work
-        valid_key = b"a" * 32
-        global_key(shard_id, valid_key)  # Should not raise
-
-        # Invalid lengths should raise ValueError
-        with pytest.raises(ValueError, match="record_key must be 32 bytes"):
-            global_key(shard_id, b"short")
-
-        with pytest.raises(ValueError, match="record_key must be 32 bytes"):
-            global_key(shard_id, b"a" * 33)
+        assert len(global_key(shard_id, b"short")) == 32
+        assert len(global_key(shard_id, b"a" * 32)) == 32
+        assert len(global_key(shard_id, b"a" * 33)) == 32
 
     def test_global_key_returns_32_bytes(self):
         """global_key() should always return exactly 32 bytes."""
@@ -159,7 +152,7 @@ class TestCDHSSMFSemantics:
 
     def test_single_tree_replaces_dual_tree(self):
         """CDHSSMF should eliminate need for separate forest tree."""
-        # Before: needed forest_root(shard_roots) for cross-shard commitment
+        # Before: needed a second cross-shard commitment layer.
         # After: single global SMT root commits to all shards
 
         # This is a semantic/architectural test - we verify that global_key()
@@ -182,3 +175,54 @@ class TestCDHSSMFSemantics:
 
         # This demonstrates that a single SMT with these keys can replace
         # the dual-tree structure (per-shard trees + forest tree)
+
+
+def test_global_key_no_separator_collision():
+    """
+    (shard_id="ab", record_key=b"c") must not equal (shard_id="a", record_key=b"bc").
+    This is the canonical separator-collision check.
+    """
+    k1 = global_key("ab", b"c")
+    k2 = global_key("a", b"bc")
+    assert k1 != k2, "separator collision: shard boundary shift produces same key"
+
+
+def test_global_key_empty_shard():
+    """Empty shard_id is valid and must not collide with non-empty shard_id."""
+    k1 = global_key("", b"abc")
+    k2 = global_key("a", b"bc")
+    k3 = global_key("ab", b"c")
+    assert len({k1, k2, k3}) == 3
+
+
+def test_global_key_determinism():
+    """Same inputs must always produce the same key."""
+    record = b"record-abc"
+    assert global_key("shard-1", record) == global_key("shard-1", record)
+
+
+def test_global_key_is_32_bytes():
+    assert len(global_key("any-shard", b"any-record")) == 32
+
+
+def test_global_key_shard_isolation():
+    """
+    Two records with the same record_key in different shards must produce different
+    global keys — this is the core CDHSSMF isolation guarantee.
+    """
+    record = b"identical-record-key"
+    keys = [global_key(f"shard-{i}", record) for i in range(10)]
+    assert len(set(keys)) == 10, "shard isolation broken: duplicate global keys across shards"
+
+
+def test_global_key_context_uniqueness():
+    """
+    The derive_key context string must not be reused for any other hash in the codebase.
+    This is a static check across repository Python sources.
+    """
+    context = _GLOBAL_SMT_KEY_CONTEXT
+    repo_root = pathlib.Path(".")
+    occurrences = 0
+    for path in repo_root.rglob("*.py"):
+        occurrences += path.read_text().count(context)
+    assert occurrences == 1, "derive_key context string appears more than once"

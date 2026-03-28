@@ -26,7 +26,7 @@ Wires to existing protocol/ssmf.py. Implements unified proof that never raises o
 import os
 import tempfile
 
-from protocol.hashes import forest_root
+from protocol.hashes import merkle_root
 from protocol.ssmf import ExistenceProof, NonExistenceProof, SparseMerkleTree
 
 
@@ -156,10 +156,10 @@ class OlympusState:
         for shard_id, shard in self.shards.items():
             shard_roots[shard_id] = shard.tree.get_root().hex()
 
-        # Compute global root using forest_root over header hashes
-        # For now, use shard roots as a proxy (in full impl, would use actual header hashes)
+        # Compute a deterministic aggregate root for test-only responses.
         header_hashes = [bytes.fromhex(root) for root in shard_roots.values()]
 
-        global_root = forest_root(header_hashes).hex() if header_hashes else (b"\x00" * 32).hex()
+        sorted_hashes = sorted(header_hashes)
+        global_root = merkle_root(sorted_hashes).hex() if sorted_hashes else (b"\x00" * 32).hex()
 
         return {"global_root": global_root, "shards": shard_roots}

@@ -47,9 +47,9 @@ import nacl.signing
 import psycopg
 import pytest
 
-from protocol.hashes import hash_bytes
+from protocol.hashes import global_key, hash_bytes, record_key
 from protocol.shards import create_shard_header
-from protocol.ssmf import verify_proof
+from protocol.ssmf import verify_nonexistence_proof, verify_proof
 from protocol.timestamps import current_timestamp
 from storage.postgres import StorageLayer
 
@@ -231,6 +231,46 @@ def test_get_proof_returns_none_for_nonexistent(storage):
     )
 
     assert proof is None
+
+
+def test_get_nonexistence_proof_returns_valid_proof(storage, signing_key):
+    """Missing records should produce a valid non-existence proof in the global SMT."""
+    shard_id = f"test_shard_nonexistence_{datetime.now(UTC).timestamp()}"
+
+    storage.append_record(
+        shard_id=shard_id,
+        record_type="document",
+        record_id="doc1",
+        version=1,
+        value_hash=hash_bytes(b"value 1"),
+        signing_key=signing_key,
+    )
+
+    proof = storage.get_nonexistence_proof(
+        shard_id=shard_id, record_type="document", record_id="missing", version=1
+    )
+
+    assert verify_nonexistence_proof(proof) is True
+    assert proof.key == global_key(shard_id, record_key("document", "missing", 1))
+
+
+def test_get_nonexistence_proof_rejects_existing_record(storage, signing_key):
+    """Existing records must not return a non-existence proof."""
+    shard_id = f"test_shard_nonexistence_exists_{datetime.now(UTC).timestamp()}"
+
+    storage.append_record(
+        shard_id=shard_id,
+        record_type="document",
+        record_id="doc1",
+        version=1,
+        value_hash=hash_bytes(b"value 1"),
+        signing_key=signing_key,
+    )
+
+    with pytest.raises(ValueError, match="Record exists"):
+        storage.get_nonexistence_proof(
+            shard_id=shard_id, record_type="document", record_id="doc1", version=1
+        )
 
 
 def test_get_latest_header(storage, signing_key):
@@ -948,18 +988,19 @@ def test_verify_state_replay_detects_header_root_divergence(storage, signing_key
     # recorded through append_record.  smt_leaves is append-only (UPDATE/DELETE
     # are blocked), but plain INSERTs are permitted, so this is a realistic
     # threat vector that the replay verifier must detect.
-    forged_key = hash_bytes(b"forged-leaf-key")
-    forged_value = hash_bytes(b"forged-leaf-value")
     # Use a large version number that cannot collide with any version stored by
     # append_record (which starts at 1 and increments).
     forged_version = 9999
+    forged_record_key = record_key("document", "forged-doc", forged_version)
+    forged_key = global_key(shard_id, forged_record_key)
+    forged_value = hash_bytes(b"forged-leaf-value")
     with storage._get_connection() as conn, conn.cursor() as cur:
         cur.execute(
             """
-            INSERT INTO smt_leaves (shard_id, key, version, value_hash, ts)
-            VALUES (%s, %s, %s, %s, NOW())
+            INSERT INTO smt_leaves (key, version, value_hash, ts)
+            VALUES (%s, %s, %s, NOW())
             """,
-            (shard_id, forged_key, forged_version, forged_value),
+            (forged_key, forged_version, forged_value),
         )
         conn.commit()
 
@@ -971,3 +1012,73 @@ def test_verify_state_replay_detects_header_root_divergence(storage, signing_key
     # recomputed tree root no longer matches the persisted header root.
     with pytest.raises(ValueError, match="Computed root"):
         storage.get_latest_header(shard_id)
+
+
+def test_init_schema_renames_legacy_smt_tables(storage):
+    """init_schema should preserve legacy per-shard SMT tables before creating global SMT tables."""
+    with storage._get_connection() as conn, conn.cursor() as cur:
+        cur.execute("DROP TABLE IF EXISTS smt_leaves_legacy_011")
+        cur.execute("DROP TABLE IF EXISTS smt_nodes_legacy_011")
+        cur.execute("DROP TABLE IF EXISTS smt_leaves")
+        cur.execute("DROP TABLE IF EXISTS smt_nodes")
+        cur.execute(
+            """
+            CREATE TABLE smt_leaves (
+                shard_id TEXT NOT NULL,
+                key BYTEA NOT NULL,
+                version INT NOT NULL,
+                value_hash BYTEA NOT NULL,
+                ts TIMESTAMPTZ NOT NULL DEFAULT NOW()
+            )
+            """
+        )
+        cur.execute(
+            """
+            CREATE TABLE smt_nodes (
+                shard_id TEXT NOT NULL,
+                level SMALLINT NOT NULL,
+                index BYTEA NOT NULL,
+                hash BYTEA NOT NULL,
+                ts TIMESTAMPTZ NOT NULL DEFAULT NOW()
+            )
+            """
+        )
+        conn.commit()
+
+    storage.init_schema()
+
+    with storage._get_connection() as conn, conn.cursor() as cur:
+        cur.execute("SELECT 1 FROM smt_leaves_legacy_011 LIMIT 1")
+        assert cur.fetchone() is None
+        cur.execute("SELECT 1 FROM smt_nodes_legacy_011 LIMIT 1")
+        assert cur.fetchone() is None
+
+        cur.execute(
+            """
+            SELECT column_name
+            FROM information_schema.columns
+            WHERE table_name = 'smt_leaves'
+            ORDER BY ordinal_position
+            """
+        )
+        assert [row["column_name"] for row in cur.fetchall()] == [
+            "key",
+            "version",
+            "value_hash",
+            "ts",
+        ]
+
+        cur.execute(
+            """
+            SELECT column_name
+            FROM information_schema.columns
+            WHERE table_name = 'smt_nodes'
+            ORDER BY ordinal_position
+            """
+        )
+        assert [row["column_name"] for row in cur.fetchall()] == [
+            "level",
+            "index",
+            "hash",
+            "ts",
+        ]

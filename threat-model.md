@@ -127,7 +127,7 @@ repository, with links to the relevant source evidence.
 | Property | Mitigation | Evidence |
 |----------|-----------|---------|
 | Ed25519 shard header signature | Batch root signed before ledger append; verifiable with public key | [`protocol/shards.py`](protocol/shards.py) |
-| Federation quorum certificate | Optional M-of-N quorum hash commits to multi-party agreement | [`protocol/federation.py`](protocol/federation.py), [`protocol/ledger.py`](protocol/ledger.py) |
+| Federation quorum certificate | Optional M-of-N quorum hash commits to multi-party agreement | [`protocol/federation/quorum.py`](protocol/federation/quorum.py), [`protocol/ledger.py`](protocol/ledger.py) |
 | RFC 3161 timestamp token | SHA-256(BLAKE3 root) submitted to TSA; token stored alongside header | [`protocol/rfc3161.py`](protocol/rfc3161.py) |
 
 ### T4 — Over-Redaction or Secret Redaction

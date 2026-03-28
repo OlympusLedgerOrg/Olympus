@@ -96,7 +96,7 @@ Prototype federation components present in this repo (for local testing only):
 
 | File | Purpose |
 |------|---------|
-| `protocol/federation.py` | Node identity, static registry, ≥2/3 quorum model |
+| `protocol/federation/` | Node identity, static registry, ≥2/3 quorum model |
 | `protocol/partition.py` | Partition detection, fork resolution, proof-of-elapsed-rounds validation |
 | `scaffolding/view_change.py` | View-change watermarks, grace-period validation, registry snapshots (test scaffolding) |
 | `examples/federation_registry.json` | Static registry for local dev/tests |
@@ -141,7 +141,7 @@ protocol/ledger.py              (depends on: canonical_json, hashes, timestamps)
 protocol/shards.py              (depends on: hashes, timestamps)
 protocol/redaction.py           (depends on: merkle, hashes)
 protocol/ssmf.py                (depends on: hashes)
-protocol/federation.py          (depends on: hashes, timestamps) — Phase 1+ only
+protocol/federation/           (depends on: hashes, timestamps) — Phase 1+ only
 protocol/partition.py           (depends on: hashes, timestamps) — Phase 1+ only
 scaffolding/view_change.py         (depends on: none, standalone dataclasses) — Phase 1+ only (test scaffolding)
     ↓

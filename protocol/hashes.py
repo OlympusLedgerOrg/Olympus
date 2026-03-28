@@ -12,6 +12,7 @@ Protocol notes:
   contain literal ``|`` characters.
 """
 
+import warnings
 from typing import Any
 
 import blake3
@@ -52,6 +53,8 @@ DATASET_LINEAGE_PREFIX = b"OLY:DATASET-LINEAGE:V1"
 GLOBAL_KEY_PREFIX = b"OLY:GLOBAL-KEY:V1"
 EVENT_ID_FIELD_NAMES = ("shard_id", "header_hash", "timestamp")
 MAX_EVENT_ID_FIELD_LENGTH = (1 << 32) - 1
+_MAX_LENGTH_PREFIXED_FIELD_SIZE = (1 << 32) - 1
+_GLOBAL_SMT_KEY_CONTEXT = "olympus 2025-12 global-smt-leaf-key"
 
 
 def blake3_hash(parts: list[bytes]) -> bytes:
@@ -67,6 +70,13 @@ def blake3_hash(parts: list[bytes]) -> bytes:
     return blake3.blake3(b"".join(parts)).digest()
 
 
+def _length_prefixed_bytes(field_name: str, value: bytes) -> bytes:
+    """Encode variable-length bytes with a 4-byte big-endian length prefix."""
+    if len(value) > _MAX_LENGTH_PREFIXED_FIELD_SIZE:
+        raise ValueError(f"{field_name} exceeds maximum length")
+    return len(value).to_bytes(4, "big") + value
+
+
 def record_key(record_type: str, record_id: str, version: int) -> bytes:
     """
     Generate a deterministic 32-byte key for a record.
@@ -79,10 +89,24 @@ def record_key(record_type: str, record_id: str, version: int) -> bytes:
     Returns:
         32-byte key using KEY_PREFIX domain separation
     """
-    key_data = f"{record_type}:{record_id}:{version}".encode()
-    return blake3_hash([KEY_PREFIX, key_data])
+    if version < 0:
+        raise ValueError(f"version must be non-negative, got {version}")
+    if version > 0xFFFFFFFFFFFFFFFF:
+        raise ValueError("version exceeds maximum supported value")
+
+    key_data = b"".join(
+        [
+            KEY_PREFIX,
+            _length_prefixed_bytes("record_type", record_type.encode("utf-8")),
+            _length_prefixed_bytes("record_id", record_id.encode("utf-8")),
+            version.to_bytes(8, "big"),
+        ]
+    )
+    return blake3.blake3(key_data).digest()
 
 
+# BLAKE3 derive_key mode bakes the domain into the hash state, so no separator is
+# needed; length prefixes commit the shard / record field boundaries explicitly.
 def global_key(shard_id: str, record_key_bytes: bytes) -> bytes:
     """
     Generate a global SMT key for CDHSSMF (Constant-Depth Hierarchical Sparse Sharded Merkle Forest).
@@ -97,7 +121,7 @@ def global_key(shard_id: str, record_key_bytes: bytes) -> bytes:
 
     Args:
         shard_id: Shard identifier (e.g., "watauga:2025:budget")
-        record_key_bytes: 32-byte record key from record_key()
+        record_key_bytes: Record key bytes, typically the 32-byte output from record_key()
 
     Returns:
         32-byte global SMT key
@@ -106,18 +130,21 @@ def global_key(shard_id: str, record_key_bytes: bytes) -> bytes:
         >>> rec_key = record_key("document", "doc123", 1)
         >>> g_key = global_key("watauga:2025:budget", rec_key)
     """
-    if len(record_key_bytes) != 32:
-        raise ValueError(f"record_key must be 32 bytes, got {len(record_key_bytes)}")
-
-    # Domain-separated BLAKE3 hash over:
-    # KEY_PREFIX || shard_id || separator || record_key
-    # This ensures unique keys for each (shard, record) pair
-    return blake3_hash([
-        KEY_PREFIX,
-        shard_id.encode("utf-8"),
-        _SEP,
-        record_key_bytes,
-    ])
+    shard_bytes = shard_id.encode("utf-8")
+    key_material = b"".join(
+        [
+            _length_prefixed_bytes("shard_id", shard_bytes),
+            _length_prefixed_bytes("record_key", record_key_bytes),
+        ]
+    )
+    # Use BLAKE3 derive_key mode so the domain is fixed in the hash state itself.
+    # The length prefixes commit the field boundaries, so there is no separator to collide with.
+    result = blake3.blake3(
+        key_material,
+        derive_key_context=_GLOBAL_SMT_KEY_CONTEXT,
+    ).digest()
+    assert len(result) == 32
+    return result
 
 
 def leaf_hash(key: bytes, value_hash: bytes) -> bytes:
@@ -180,7 +207,7 @@ def shard_header_hash(fields_dict: dict[str, Any]) -> bytes:
     return blake3_hash([HDR_PREFIX, canonical_json_bytes(fields_dict)])
 
 
-def forest_root(header_hashes: list[bytes]) -> bytes:
+def forest_root(header_hashes: list[bytes], *, allow_deprecated: bool = False) -> bytes:
     """
     Compute global forest root from shard header hashes.
 
@@ -202,6 +229,18 @@ def forest_root(header_hashes: list[bytes]) -> bytes:
     Deprecated:
         Use the global SMT root from SparseMerkleTree.get_root() instead.
     """
+    if not allow_deprecated:
+        raise DeprecationWarning(
+            "forest" "_root() is deprecated and unreachable from production CDHSSMF paths; "
+            "use the global SMT root instead."
+        )
+    warnings.warn(
+        "forest" "_root() is deprecated and unreachable from production CDHSSMF paths; "
+        "use the global SMT root instead.",
+        DeprecationWarning,
+        stacklevel=2,
+    )
+
     if not header_hashes:
         raise ValueError("Cannot compute forest root of empty list")
 

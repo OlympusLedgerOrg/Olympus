@@ -21,7 +21,7 @@ Role membership, trust roots, and dispute resolution policy are governed by `doc
 
 ## Prototype Assets in This Repository
 
-- `protocol/federation.py` defines the `FederationNode` identity model, static
+- `protocol/federation/` defines the `FederationNode` identity model, static
   registry loader, and `>= 2/3` quorum helpers.
 - `examples/federation_registry.json` is the prototype registry shared by tests
   and CLI commands.
