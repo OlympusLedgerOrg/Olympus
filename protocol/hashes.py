@@ -35,7 +35,7 @@ KEY_ROTATION_PREFIX = b"OLY:KEY-ROTATION:V1"
 LEAF_PREFIX = b"OLY:LEAF:V1"
 NODE_PREFIX = b"OLY:NODE:V1"
 HDR_PREFIX = b"OLY:HDR:V1"
-FOREST_PREFIX = b"OLY:FOREST:V1"
+FOREST_PREFIX = b"OLY:FOREST:V1"  # DEPRECATED: Kept for backwards compatibility with pre-CDHSSMF code
 POLICY_PREFIX = b"OLY:POLICY:V1"
 LEDGER_PREFIX = b"OLY:LEDGER:V1"
 FEDERATION_PREFIX = b"OLY:FEDERATION:V1"
@@ -83,27 +83,41 @@ def record_key(record_type: str, record_id: str, version: int) -> bytes:
     return blake3_hash([KEY_PREFIX, key_data])
 
 
-def global_key(shard_id: str, rec_key: bytes) -> bytes:
+def global_key(shard_id: str, record_key_bytes: bytes) -> bytes:
     """
-    Derive a globally unique 32-byte SMT key for the CDHSSMF.
+    Generate a global SMT key for CDHSSMF (Constant-Depth Hierarchical Sparse Sharded Merkle Forest).
 
-    Collapses shard namespace and record key into a single 256-bit key so that
-    all shards live in one unified SMT rather than separate per-shard trees.
+    This function implements hierarchical key derivation that encodes shard identity into the
+    global SMT key space, enabling a single SMT to replace separate per-shard SMTs and forest SMTs.
+
+    The key derivation uses explicit domain separation with the shard_id and record key to ensure:
+    - Cryptographic isolation between shards
+    - Deterministic mapping from (shard_id, record_key) -> global_key
+    - No collisions between different shards
 
     Args:
-        shard_id: Human-readable shard identifier (e.g. "watauga:2025:budget").
-        rec_key:  32-byte record key (as produced by :func:`record_key`).
+        shard_id: Shard identifier (e.g., "watauga:2025:budget")
+        record_key_bytes: 32-byte record key from record_key()
 
     Returns:
-        32-byte globally unique key using GLOBAL_KEY_PREFIX domain separation.
+        32-byte global SMT key
 
-    Raises:
-        ValueError: If rec_key is not exactly 32 bytes.
+    Example:
+        >>> rec_key = record_key("document", "doc123", 1)
+        >>> g_key = global_key("watauga:2025:budget", rec_key)
     """
-    if len(rec_key) != 32:
-        raise ValueError(f"rec_key must be 32 bytes, got {len(rec_key)}")
-    shard_bytes = shard_id.encode("utf-8")
-    return blake3_hash([GLOBAL_KEY_PREFIX, _SEP, shard_bytes, _SEP, rec_key])
+    if len(record_key_bytes) != 32:
+        raise ValueError(f"record_key must be 32 bytes, got {len(record_key_bytes)}")
+
+    # Domain-separated BLAKE3 hash over:
+    # KEY_PREFIX || shard_id || separator || record_key
+    # This ensures unique keys for each (shard, record) pair
+    return blake3_hash([
+        KEY_PREFIX,
+        shard_id.encode("utf-8"),
+        _SEP,
+        record_key_bytes,
+    ])
 
 
 def leaf_hash(key: bytes, value_hash: bytes) -> bytes:
@@ -170,11 +184,23 @@ def forest_root(header_hashes: list[bytes]) -> bytes:
     """
     Compute global forest root from shard header hashes.
 
+    DEPRECATED: This function is deprecated as of CDHSSMF (Constant-Depth Hierarchical
+    Sparse Sharded Merkle Forest) migration. In the CDHSSMF design, there is no separate
+    "forest" layer - all shards are encoded into a single global SMT via hierarchical
+    key derivation using global_key(shard_id, record_key).
+
+    This function is kept for backwards compatibility with existing code but should
+    not be used in new implementations. The global SMT root is now the authoritative
+    commitment to all shards and records.
+
     Args:
         header_hashes: List of 32-byte shard header hashes
 
     Returns:
         32-byte forest root hash using FOREST_PREFIX domain separation
+
+    Deprecated:
+        Use the global SMT root from SparseMerkleTree.get_root() instead.
     """
     if not header_hashes:
         raise ValueError("Cannot compute forest root of empty list")
