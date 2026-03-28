@@ -6,7 +6,7 @@
 //! either backend as ground-truth.
 
 use pyo3::prelude::*;
-use pyo3::types::PyBytes;
+use pyo3::types::{PyBytes, PyList};
 
 // ---------------------------------------------------------------------------
 // Protocol constants — must stay in sync with protocol/hashes.py
@@ -51,16 +51,21 @@ fn length_prefixed(data: &[u8]) -> Vec<u8> {
 ///
 /// Equivalent to ``blake3.blake3(b"".join(parts)).digest()``.
 ///
+/// Uses BLAKE3's incremental `update()` API with **zero-copy** borrows of the
+/// underlying Python `bytes` buffers — no allocations beyond the 32-byte
+/// output.
+///
 /// # Python signature
 /// ``blake3_hash(parts: list[bytes]) -> bytes``
 #[pyfunction]
-pub fn blake3_hash(py: Python<'_>, parts: Vec<Vec<u8>>) -> PyObject {
+pub fn blake3_hash<'py>(py: Python<'py>, parts: &Bound<'py, PyList>) -> PyResult<Py<PyBytes>> {
     let mut hasher = blake3::Hasher::new();
-    for part in &parts {
-        hasher.update(part);
+    for item in parts.iter() {
+        let b = item.downcast::<PyBytes>()?;
+        hasher.update(b.as_bytes());
     }
     let digest = hasher.finalize();
-    PyBytes::new(py, digest.as_bytes()).into()
+    Ok(PyBytes::new(py, digest.as_bytes()).into())
 }
 
 /// Derive a global SMT leaf key for the CD-HS-SMF.
