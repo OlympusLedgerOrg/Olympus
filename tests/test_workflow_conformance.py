@@ -36,7 +36,6 @@ from protocol.canonicalizer import (
 from protocol.epochs import EpochRecord, SignedTreeHead, compute_epoch_head, signed_tree_head_hash
 from protocol.events import CanonicalEvent
 from protocol.hashes import (
-    FOREST_PREFIX,
     HASH_SEPARATOR,
     HDR_PREFIX,
     KEY_PREFIX,
@@ -178,7 +177,6 @@ class TestHashStage:
         assert LEAF_PREFIX == b"OLY:LEAF:V1"
         assert NODE_PREFIX == b"OLY:NODE:V1"
         assert HDR_PREFIX == b"OLY:HDR:V1"
-        assert FOREST_PREFIX == b"OLY:FOREST:V1"
         assert POLICY_PREFIX == b"OLY:POLICY:V1"
         assert LEDGER_PREFIX == b"OLY:LEDGER:V1"
 

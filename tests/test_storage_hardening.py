@@ -136,7 +136,12 @@ def test_get_connection_rolls_back_before_returning_to_pool(
 
 
 def test_persist_tree_nodes_uses_upsert_without_precheck(monkeypatch: pytest.MonkeyPatch) -> None:
-    """SMT node persistence uses ON CONFLICT DO NOTHING instead of SELECT-before-INSERT."""
+    """SMT node persistence uses ON CONFLICT DO NOTHING instead of SELECT-before-INSERT.
+
+    The global CD-HS-SMF table has no shard_id column (nodes are keyed by
+    level+index in the single global tree), so the conflict target is
+    ``(level, index)`` — not the old per-shard ``(shard_id, level, index)``.
+    """
     monkeypatch.setattr(postgres_module, "ConnectionPool", _RetryPool)
     storage = StorageLayer("postgresql://unused")
     cursor = _FakeCursor()
@@ -145,7 +150,7 @@ def test_persist_tree_nodes_uses_upsert_without_precheck(monkeypatch: pytest.Mon
 
     assert all("SELECT 1 FROM smt_nodes" not in sql for sql in cursor.statements)
     assert all(
-        "ON CONFLICT (shard_id, level, index) DO NOTHING" in sql for sql in cursor.statements
+        "ON CONFLICT (level, index) DO NOTHING" in sql for sql in cursor.statements
     )
 
 

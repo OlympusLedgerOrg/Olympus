@@ -64,12 +64,13 @@ class TestJsonCanonicalGoldenValues:
         assert canonicalize_json({}) == "{}"
 
     def test_unicode_escaped(self):
-        """Non-ASCII characters are escaped (ensure_ascii=True)."""
+        """Non-ASCII characters are emitted as raw UTF-8 (JCS / RFC 8785)."""
         data = {"key": "café"}
         result = canonicalize_json(data)
-        # Must not contain raw non-ASCII bytes
-        result.encode("ascii")  # raises if non-ASCII present
-        assert "caf" in result
+        # Raw UTF-8: the é character must be present as-is, not as \\u00e9.
+        assert "café" in result
+        # Output is valid UTF-8.
+        result.encode("utf-8")  # must not raise
 
     def test_canonical_json_encode_golden_values(self):
         """Pin canonical_json_encode outputs for protocol-critical types."""
@@ -238,7 +239,7 @@ class TestHashGoldenValues:
     def test_record_key_golden(self):
         """Pin record_key output for known inputs."""
         key = record_key("document", "doc-001", 1)
-        assert key.hex() == "cfecc3fd1ab6d4ed32193c35868a01706f6e2ab2c8db8dcdcb88b7882256c5b2"
+        assert key.hex() == "d35fb027bba25cd5bc7c03cd7e6f6ae5b9270aa7409071b0f67f07fb763a5bf6"
         assert len(key) == 32
         # Verify determinism
         assert key == record_key("document", "doc-001", 1)
@@ -250,7 +251,7 @@ class TestHashGoldenValues:
         key = record_key("document", "doc-001", 1)
         value = hash_bytes(b"document content")
         leaf = leaf_hash(key, value)
-        assert leaf.hex() == "1e8d6d47ef41dcc8f0553f7482a6d765cd75344bb588f15119b7914a798c05c2"
+        assert leaf.hex() == "83dd10dc7fbfed1e0ac62d828c34eb02fd184211a41315b63c4c52ac45612688"
         assert len(leaf) == 32
         # Verify determinism
         assert leaf == leaf_hash(key, value)

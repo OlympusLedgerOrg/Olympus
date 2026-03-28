@@ -53,7 +53,6 @@ KEY_ROTATION_PREFIX = b"OLY:KEY-ROTATION:V1"
 LEAF_PREFIX = b"OLY:LEAF:V1"
 NODE_PREFIX = b"OLY:NODE:V1"
 HDR_PREFIX = b"OLY:HDR:V1"
-FOREST_PREFIX = b"OLY:FOREST:V1"  # DEPRECATED: Kept for backwards compatibility with pre-CDHSSMF code
 POLICY_PREFIX = b"OLY:POLICY:V1"
 LEDGER_PREFIX = b"OLY:LEDGER:V1"
 FEDERATION_PREFIX = b"OLY:FEDERATION:V1"
@@ -235,56 +234,6 @@ def shard_header_hash(fields_dict: dict[str, Any]) -> bytes:
     """
     # Canonical JSON: sorted keys, compact separators, ASCII-escaped, NaN/Infinity rejected
     return blake3_hash([HDR_PREFIX, canonical_json_bytes(fields_dict)])
-
-
-def forest_root(header_hashes: list[bytes], *, allow_deprecated: bool = False) -> bytes:
-    """
-    Compute global forest root from shard header hashes.
-
-    DEPRECATED: This function is deprecated as of CDHSSMF (Constant-Depth Hierarchical
-    Sparse Sharded Merkle Forest) migration. In the CDHSSMF design, there is no separate
-    "forest" layer - all shards are encoded into a single global SMT via hierarchical
-    key derivation using global_key(shard_id, record_key).
-
-    This function is kept for backwards compatibility with existing code but should
-    not be used in new implementations. The global SMT root is now the authoritative
-    commitment to all shards and records.
-
-    Args:
-        header_hashes: List of 32-byte shard header hashes
-
-    Returns:
-        32-byte forest root hash using FOREST_PREFIX domain separation
-
-    Deprecated:
-        Use the global SMT root from SparseMerkleTree.get_root() instead.
-    """
-    if not allow_deprecated:
-        raise DeprecationWarning(
-            "forest" "_root() is deprecated and unreachable from production CDHSSMF paths; "
-            "use the global SMT root instead."
-        )
-    warnings.warn(
-        "forest" "_root() is deprecated and unreachable from production CDHSSMF paths; "
-        "use the global SMT root instead.",
-        DeprecationWarning,
-        stacklevel=2,
-    )
-
-    if not header_hashes:
-        raise ValueError("Cannot compute forest root of empty list")
-
-    for h in header_hashes:
-        if len(h) != 32:
-            raise ValueError(f"All header hashes must be 32 bytes, got {len(h)}")
-
-    # Sort header hashes for determinism
-    sorted_hashes = sorted(header_hashes)
-    # Compute Merkle root of sorted hashes
-    root = merkle_root(sorted_hashes)
-    # Apply forest domain prefix
-    return blake3_hash([FOREST_PREFIX, root])
-
 
 # Legacy compatibility - these will be removed in future versions
 # For now, keep them to avoid breaking existing code

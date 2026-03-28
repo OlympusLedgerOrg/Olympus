@@ -136,37 +136,35 @@ fn encode_value(py: Python<'_>, value: &Bound<'_, PyAny>) -> PyResult<String> {
 // String encoding (replicates json.encoder.py_encode_basestring_ascii)
 // ---------------------------------------------------------------------------
 
-/// Encode a Rust ``&str`` as a JSON string literal with ASCII-only output.
+/// Encode a Rust `&str` as a JSON string literal following RFC 8785 / JCS.
 ///
-/// Characters >= U+0080 are escaped as ``\uXXXX``; code points >= U+10000
-/// are split into a UTF-16 surrogate pair (``\uXXXX\uXXXX``), matching the
-/// behaviour of CPython's ``py_encode_basestring_ascii``.
+/// Rules:
+/// - `"` → `\"`  
+/// - `\` → `\\`
+/// - U+0008 → `\b`, U+0009 → `\t`, U+000A → `\n`, U+000C → `\f`, U+000D → `\r`
+/// - U+0000–U+001F (other) → `\uXXXX`
+/// - All other code points (including non-ASCII) are emitted as raw UTF-8.
+///
+/// This intentionally diverges from `ensure_ascii=True` / CPython's
+/// `py_encode_basestring_ascii`.  Emitting raw UTF-8 for non-ASCII characters
+/// makes the output identical to any standard JCS library, which is required
+/// for cross-implementation verifiability of ledger hashes.
 fn encode_str(s: &str) -> String {
     let mut out = String::with_capacity(s.len() + 2);
     out.push('"');
     for c in s.chars() {
         match c {
-            '"' => out.push_str("\\\""),
-            '\\' => out.push_str("\\\\"),
-            '\n' => out.push_str("\\n"),
-            '\r' => out.push_str("\\r"),
-            '\t' => out.push_str("\\t"),
+            '"'     => out.push_str("\\\""),
+            '\\'    => out.push_str("\\\\"),
+            '\x08'  => out.push_str("\\b"),
+            '\t'    => out.push_str("\\t"),
+            '\n'    => out.push_str("\\n"),
+            '\x0C'  => out.push_str("\\f"),
+            '\r'    => out.push_str("\\r"),
             c if (c as u32) < 0x20 => {
-                // ASCII control characters
                 out.push_str(&format!("\\u{:04x}", c as u32));
             }
-            c if (c as u32) >= 0x80 => {
-                let cp = c as u32;
-                if cp >= 0x10000 {
-                    // Surrogate pair encoding (matches CPython json module)
-                    let cp_shifted = cp - 0x10000;
-                    let high = 0xD800u32 | ((cp_shifted >> 10) & 0x3FF);
-                    let low = 0xDC00u32 | (cp_shifted & 0x3FF);
-                    out.push_str(&format!("\\u{high:04x}\\u{low:04x}"));
-                } else {
-                    out.push_str(&format!("\\u{cp:04x}"));
-                }
-            }
+            // Non-ASCII (U+0080 and above) — emit as raw UTF-8, JCS-compliant.
             c => out.push(c),
         }
     }
