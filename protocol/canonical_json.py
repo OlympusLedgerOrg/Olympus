@@ -21,6 +21,19 @@ from decimal import Decimal
 from json.encoder import py_encode_basestring_ascii
 from typing import Any
 
+# ---------------------------------------------------------------------------
+# Optional Rust acceleration — import from olympus_core.canonical if built,
+# fall back to the pure-Python implementation below when it is not present.
+# ---------------------------------------------------------------------------
+try:
+    from olympus_core.canonical import (  # type: ignore[import]
+        canonical_json_encode as _rust_canonical_json_encode,
+    )
+
+    _RUST_CANONICAL_AVAILABLE = True
+except ImportError:
+    _RUST_CANONICAL_AVAILABLE = False
+
 
 def canonical_json_encode(obj: Any) -> str:
     """
@@ -44,6 +57,8 @@ def canonical_json_encode(obj: Any) -> str:
         ValueError: If object contains NaN or Infinity
         TypeError: If object is not JSON-serializable
     """
+    if _RUST_CANONICAL_AVAILABLE:
+        return _rust_canonical_json_encode(obj)
     normalized = _normalize_for_canonical_json(obj)
     return _encode_value(normalized)
 

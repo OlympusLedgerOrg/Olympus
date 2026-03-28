@@ -19,6 +19,23 @@ import blake3
 
 from .canonical_json import canonical_json_bytes
 
+# ---------------------------------------------------------------------------
+# Optional Rust acceleration — import from olympus_core.crypto if built,
+# fall back to pure-Python implementations below when it is not present.
+# ---------------------------------------------------------------------------
+try:
+    from olympus_core.crypto import (  # type: ignore[import]
+        blake3_hash as _rust_blake3_hash,
+        global_key as _rust_global_key,
+        leaf_hash as _rust_leaf_hash,
+        node_hash as _rust_node_hash,
+        record_key as _rust_record_key,
+    )
+
+    _RUST_CRYPTO_AVAILABLE = True
+except ImportError:
+    _RUST_CRYPTO_AVAILABLE = False
+
 
 # BN128 scalar field prime (alt_bn128) used by Circom/snarkjs
 SNARK_SCALAR_FIELD = 21888242871839275222246405745257275088548364400416034343698204186575808495617
@@ -67,6 +84,8 @@ def blake3_hash(parts: list[bytes]) -> bytes:
     Returns:
         32-byte BLAKE3 hash
     """
+    if _RUST_CRYPTO_AVAILABLE:
+        return _rust_blake3_hash(parts)
     return blake3.blake3(b"".join(parts)).digest()
 
 
@@ -93,6 +112,9 @@ def record_key(record_type: str, record_id: str, version: int) -> bytes:
         raise ValueError(f"version must be non-negative, got {version}")
     if version > 0xFFFFFFFFFFFFFFFF:
         raise ValueError("version exceeds maximum supported value")
+
+    if _RUST_CRYPTO_AVAILABLE:
+        return _rust_record_key(record_type, record_id, version)
 
     key_data = b"".join(
         [
@@ -130,6 +152,9 @@ def global_key(shard_id: str, record_key_bytes: bytes) -> bytes:
         >>> rec_key = record_key("document", "doc123", 1)
         >>> g_key = global_key("watauga:2025:budget", rec_key)
     """
+    if _RUST_CRYPTO_AVAILABLE:
+        return _rust_global_key(shard_id, record_key_bytes)
+
     shard_bytes = shard_id.encode("utf-8")
     key_material = b"".join(
         [
@@ -149,12 +174,17 @@ def global_key(shard_id: str, record_key_bytes: bytes) -> bytes:
 
 def leaf_hash(key: bytes, value_hash: bytes) -> bytes:
     """Compute hash of a sparse-tree leaf with domain separation."""
+    if _RUST_CRYPTO_AVAILABLE:
+        return _rust_leaf_hash(key, value_hash)
     return blake3_hash([LEAF_PREFIX, _SEP, key, _SEP, value_hash])
 
 
 def node_hash(left: bytes, right: bytes) -> bytes:
     """Compute hash of an internal Merkle node."""
+    if _RUST_CRYPTO_AVAILABLE:
+        return _rust_node_hash(left, right)
     return blake3_hash([NODE_PREFIX, _SEP, left, _SEP, right])
+
 
 
 def merkle_root(leaves: list[bytes]) -> bytes:
