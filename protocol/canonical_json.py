@@ -15,10 +15,10 @@ cross-language divergence:
 * -0 normalized to 0
 """
 
+import json
 import math
 import unicodedata
 from decimal import Decimal
-from json.encoder import py_encode_basestring_ascii
 from typing import Any
 
 
@@ -79,7 +79,12 @@ def _normalize_for_canonical_json(obj: Any) -> Any:
     if obj is None or isinstance(obj, bool):
         return obj
     if isinstance(obj, str):
-        return unicodedata.normalize("NFC", obj)
+        normalized = unicodedata.normalize("NFC", obj)
+        try:
+            normalized.encode("utf-8")
+        except UnicodeEncodeError:
+            raise ValueError(f"String contains invalid Unicode codepoints: {obj!r}")
+        return normalized
     if isinstance(obj, int):
         return obj
     if isinstance(obj, Decimal):
@@ -100,6 +105,12 @@ def _normalize_for_canonical_json(obj: Any) -> Any:
             if not isinstance(key, str):
                 raise TypeError("Object keys must be strings for canonical JSON")
             normalized_key = unicodedata.normalize("NFC", key)
+            try:
+                normalized_key.encode("utf-8")
+            except UnicodeEncodeError:
+                raise ValueError(
+                    f"String contains invalid Unicode codepoints: {key!r}"
+                )
             if normalized_key in normalized_obj:
                 raise ValueError(f"Duplicate key after NFC normalization: {normalized_key!r}")
             normalized_obj[normalized_key] = _normalize_for_canonical_json(value)
@@ -128,7 +139,7 @@ def _encode_value(value: Any) -> str:
     if value is False:
         return "false"
     if isinstance(value, str):
-        return py_encode_basestring_ascii(value)
+        return json.dumps(value, ensure_ascii=True)
     if isinstance(value, int | Decimal) and not isinstance(value, bool):
         return _encode_number(value)
     if isinstance(value, list | tuple):
@@ -138,7 +149,7 @@ def _encode_value(value: Any) -> str:
         for key in sorted(value.keys()):
             if not isinstance(key, str):
                 raise TypeError("Object keys must be strings for canonical JSON")
-            items.append(f"{py_encode_basestring_ascii(key)}:{_encode_value(value[key])}")
+            items.append(f"{json.dumps(key, ensure_ascii=True)}:{_encode_value(value[key])}")
         return "{" + ",".join(items) + "}"
     raise TypeError(f"Type {type(value)} is not JSON-serializable")
 

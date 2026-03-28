@@ -324,3 +324,32 @@ def test_canonical_json_encode_rejects_unsupported_in_array():
     obj = {"items": [1, "two", datetime.now(timezone.utc)]}
     with pytest.raises(TypeError, match="datetime"):
         canonical_json_encode(obj)
+
+
+# ---------------------------------------------------------------------------
+# Lone surrogate guard: reject strings with U+D800–U+DFFF
+# ---------------------------------------------------------------------------
+
+
+def test_canonical_json_encode_rejects_lone_surrogate_in_value():
+    """Strings with lone surrogates are not valid UTF-8 and must be rejected."""
+    with pytest.raises(ValueError, match="invalid Unicode codepoints"):
+        canonical_json_encode("\ud800")
+
+
+def test_canonical_json_encode_rejects_lone_surrogate_in_key():
+    """Dict keys with lone surrogates are not valid UTF-8 and must be rejected."""
+    with pytest.raises(ValueError, match="invalid Unicode codepoints"):
+        canonical_json_encode({"\ud800": "value"})
+
+
+def test_canonical_json_encode_rejects_surrogate_embedded_in_string():
+    """Surrogates embedded in otherwise-valid text must be rejected."""
+    with pytest.raises(ValueError, match="invalid Unicode codepoints"):
+        canonical_json_encode("hello\ud800world")
+
+
+def test_canonical_json_encode_rejects_low_surrogate():
+    """Low surrogates (U+DC00–U+DFFF) must also be rejected."""
+    with pytest.raises(ValueError, match="invalid Unicode codepoints"):
+        canonical_json_encode("\udc00")
