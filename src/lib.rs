@@ -104,8 +104,22 @@ impl AdlScanner {
     }
 }
 
+mod canonical;
+mod crypto;
+
 #[pymodule]
-fn olympus_core(_py: Python<'_>, m: &Bound<'_, PyModule>) -> PyResult<()> {
+fn olympus_core(py: Python<'_>, m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<AdlScanner>()?;
+
+    // `olympus_core.crypto` — BLAKE3 hash primitives
+    let crypto_mod = PyModule::new(py, "crypto")?;
+    crypto::register(py, &crypto_mod)?;
+    m.add_submodule(&crypto_mod)?;
+
+    // `olympus_core.canonical` — canonical JSON encoder
+    let canonical_mod = PyModule::new(py, "canonical")?;
+    canonical::register(py, &canonical_mod)?;
+    m.add_submodule(&canonical_mod)?;
+
     Ok(())
 }

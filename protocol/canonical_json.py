@@ -2,8 +2,10 @@
 Canonical JSON encoder for Olympus protocol.
 
 Provides a single deterministic encoding used across ledger hashing, shard
-header hashing, and policy hashing. Number formatting is pinned to avoid
-cross-language divergence:
+header hashing, and policy hashing.  The encoding follows RFC 8785 (JCS —
+JSON Canonicalization Scheme) so that any standards-compliant JCS library
+produces byte-for-byte identical output:
+
 * Normalize all object keys and string values to Unicode NFC
 * Reject language-native float values (require Decimal for non-integers)
 * Reject NaN/±Infinity
@@ -13,13 +15,29 @@ cross-language divergence:
 * Scientific notation uses one digit before the decimal and exponent form
   e[+|-]D with no leading zeros
 * -0 normalized to 0
+* Non-ASCII characters emitted as raw UTF-8 (NOT \\uXXXX); control characters
+  U+0000–U+001F use standard JSON escapes (\\b \\t \\n \\f \\r \\uXXXX)
 """
 
+import json
 import math
 import unicodedata
 from decimal import Decimal
-from json.encoder import py_encode_basestring_ascii
 from typing import Any
+
+
+# ---------------------------------------------------------------------------
+# Optional Rust acceleration — import from olympus_core.canonical if built,
+# fall back to the pure-Python implementation below when it is not present.
+# ---------------------------------------------------------------------------
+try:
+    from olympus_core.canonical import (  # type: ignore[import-not-found]
+        canonical_json_encode as _rust_canonical_json_encode,
+    )
+
+    _RUST_CANONICAL_AVAILABLE = True
+except ImportError:
+    _RUST_CANONICAL_AVAILABLE = False
 
 
 def canonical_json_encode(obj: Any) -> str:
@@ -27,7 +45,7 @@ def canonical_json_encode(obj: Any) -> str:
     Encode object to canonical JSON string.
 
     Rules:
-    - UTF-8 encoding (ASCII-escaped)
+    - UTF-8 encoding with raw non-ASCII (JCS / RFC 8785 compliant)
     - Sorted keys
     - No whitespace (compact separators)
     - Unicode NFC normalization for all keys and string values
@@ -44,6 +62,9 @@ def canonical_json_encode(obj: Any) -> str:
         ValueError: If object contains NaN or Infinity
         TypeError: If object is not JSON-serializable
     """
+    if _RUST_CANONICAL_AVAILABLE:
+        result: str = _rust_canonical_json_encode(obj)
+        return result
     normalized = _normalize_for_canonical_json(obj)
     return _encode_value(normalized)
 
@@ -112,6 +133,11 @@ def _encode_value(value: Any) -> str:
     """
     Recursively encode a value to canonical JSON string.
 
+    String values are encoded using ``json.dumps(s, ensure_ascii=False)`` so
+    that non-ASCII code points are emitted as raw UTF-8, matching RFC 8785 /
+    JCS behaviour.  Control characters (U+0000–U+001F) are still escaped with
+    standard JSON sequences.
+
     Args:
         value: Value to encode
 
@@ -128,7 +154,9 @@ def _encode_value(value: Any) -> str:
     if value is False:
         return "false"
     if isinstance(value, str):
-        return py_encode_basestring_ascii(value)
+        # ensure_ascii=False: non-ASCII emitted as raw UTF-8 (JCS-compliant).
+        # json.dumps raises UnicodeEncodeError for lone surrogates — correct.
+        return json.dumps(value, ensure_ascii=False)
     if isinstance(value, int | Decimal) and not isinstance(value, bool):
         return _encode_number(value)
     if isinstance(value, list | tuple):
@@ -138,7 +166,7 @@ def _encode_value(value: Any) -> str:
         for key in sorted(value.keys()):
             if not isinstance(key, str):
                 raise TypeError("Object keys must be strings for canonical JSON")
-            items.append(f"{py_encode_basestring_ascii(key)}:{_encode_value(value[key])}")
+            items.append(f"{json.dumps(key, ensure_ascii=False)}:{_encode_value(value[key])}")
         return "{" + ",".join(items) + "}"
     raise TypeError(f"Type {type(value)} is not JSON-serializable")
 

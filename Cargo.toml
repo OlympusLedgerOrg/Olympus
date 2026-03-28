@@ -18,6 +18,10 @@ pyo3 = { version = "0.24", features = ["extension-module"] }
 # Rust's regex crate uses a DFA/NFA hybrid with strict O(n) matching —
 # it is architecturally immune to catastrophic backtracking.
 regex = "1"
+# BLAKE3 cryptographic hash — used by the crypto and canonical submodules.
+blake3 = "1"
+# Unicode NFC normalisation — required for canonical JSON key/value encoding.
+unicode-normalization = "0.1"
 
 [profile.release]
 lto = true

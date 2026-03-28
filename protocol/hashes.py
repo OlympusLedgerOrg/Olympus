@@ -12,12 +12,29 @@ Protocol notes:
   contain literal ``|`` characters.
 """
 
-import warnings
 from typing import Any
 
 import blake3
 
 from .canonical_json import canonical_json_bytes
+
+
+# ---------------------------------------------------------------------------
+# Optional Rust acceleration — import from olympus_core.crypto if built,
+# fall back to pure-Python implementations below when it is not present.
+# ---------------------------------------------------------------------------
+try:
+    from olympus_core.crypto import (  # type: ignore[import-not-found]
+        blake3_hash as _rust_blake3_hash,
+        global_key as _rust_global_key,
+        leaf_hash as _rust_leaf_hash,
+        node_hash as _rust_node_hash,
+        record_key as _rust_record_key,
+    )
+
+    _RUST_CRYPTO_AVAILABLE = True
+except ImportError:
+    _RUST_CRYPTO_AVAILABLE = False
 
 
 # BN128 scalar field prime (alt_bn128) used by Circom/snarkjs
@@ -36,7 +53,6 @@ KEY_ROTATION_PREFIX = b"OLY:KEY-ROTATION:V1"
 LEAF_PREFIX = b"OLY:LEAF:V1"
 NODE_PREFIX = b"OLY:NODE:V1"
 HDR_PREFIX = b"OLY:HDR:V1"
-FOREST_PREFIX = b"OLY:FOREST:V1"  # DEPRECATED: Kept for backwards compatibility with pre-CDHSSMF code
 POLICY_PREFIX = b"OLY:POLICY:V1"
 LEDGER_PREFIX = b"OLY:LEDGER:V1"
 FEDERATION_PREFIX = b"OLY:FEDERATION:V1"
@@ -67,6 +83,9 @@ def blake3_hash(parts: list[bytes]) -> bytes:
     Returns:
         32-byte BLAKE3 hash
     """
+    if _RUST_CRYPTO_AVAILABLE:
+        result: bytes = _rust_blake3_hash(parts)
+        return result
     return blake3.blake3(b"".join(parts)).digest()
 
 
@@ -93,6 +112,10 @@ def record_key(record_type: str, record_id: str, version: int) -> bytes:
         raise ValueError(f"version must be non-negative, got {version}")
     if version > 0xFFFFFFFFFFFFFFFF:
         raise ValueError("version exceeds maximum supported value")
+
+    if _RUST_CRYPTO_AVAILABLE:
+        result: bytes = _rust_record_key(record_type, record_id, version)
+        return result
 
     key_data = b"".join(
         [
@@ -130,6 +153,10 @@ def global_key(shard_id: str, record_key_bytes: bytes) -> bytes:
         >>> rec_key = record_key("document", "doc123", 1)
         >>> g_key = global_key("watauga:2025:budget", rec_key)
     """
+    if _RUST_CRYPTO_AVAILABLE:
+        result: bytes = _rust_global_key(shard_id, record_key_bytes)
+        return result
+
     shard_bytes = shard_id.encode("utf-8")
     key_material = b"".join(
         [
@@ -149,11 +176,17 @@ def global_key(shard_id: str, record_key_bytes: bytes) -> bytes:
 
 def leaf_hash(key: bytes, value_hash: bytes) -> bytes:
     """Compute hash of a sparse-tree leaf with domain separation."""
+    if _RUST_CRYPTO_AVAILABLE:
+        result: bytes = _rust_leaf_hash(key, value_hash)
+        return result
     return blake3_hash([LEAF_PREFIX, _SEP, key, _SEP, value_hash])
 
 
 def node_hash(left: bytes, right: bytes) -> bytes:
     """Compute hash of an internal Merkle node."""
+    if _RUST_CRYPTO_AVAILABLE:
+        result: bytes = _rust_node_hash(left, right)
+        return result
     return blake3_hash([NODE_PREFIX, _SEP, left, _SEP, right])
 
 
@@ -205,55 +238,6 @@ def shard_header_hash(fields_dict: dict[str, Any]) -> bytes:
     """
     # Canonical JSON: sorted keys, compact separators, ASCII-escaped, NaN/Infinity rejected
     return blake3_hash([HDR_PREFIX, canonical_json_bytes(fields_dict)])
-
-
-def forest_root(header_hashes: list[bytes], *, allow_deprecated: bool = False) -> bytes:
-    """
-    Compute global forest root from shard header hashes.
-
-    DEPRECATED: This function is deprecated as of CDHSSMF (Constant-Depth Hierarchical
-    Sparse Sharded Merkle Forest) migration. In the CDHSSMF design, there is no separate
-    "forest" layer - all shards are encoded into a single global SMT via hierarchical
-    key derivation using global_key(shard_id, record_key).
-
-    This function is kept for backwards compatibility with existing code but should
-    not be used in new implementations. The global SMT root is now the authoritative
-    commitment to all shards and records.
-
-    Args:
-        header_hashes: List of 32-byte shard header hashes
-
-    Returns:
-        32-byte forest root hash using FOREST_PREFIX domain separation
-
-    Deprecated:
-        Use the global SMT root from SparseMerkleTree.get_root() instead.
-    """
-    if not allow_deprecated:
-        raise DeprecationWarning(
-            "forest" "_root() is deprecated and unreachable from production CDHSSMF paths; "
-            "use the global SMT root instead."
-        )
-    warnings.warn(
-        "forest" "_root() is deprecated and unreachable from production CDHSSMF paths; "
-        "use the global SMT root instead.",
-        DeprecationWarning,
-        stacklevel=2,
-    )
-
-    if not header_hashes:
-        raise ValueError("Cannot compute forest root of empty list")
-
-    for h in header_hashes:
-        if len(h) != 32:
-            raise ValueError(f"All header hashes must be 32 bytes, got {len(h)}")
-
-    # Sort header hashes for determinism
-    sorted_hashes = sorted(header_hashes)
-    # Compute Merkle root of sorted hashes
-    root = merkle_root(sorted_hashes)
-    # Apply forest domain prefix
-    return blake3_hash([FOREST_PREFIX, root])
 
 
 # Legacy compatibility - these will be removed in future versions

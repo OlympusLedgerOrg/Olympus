@@ -241,9 +241,4 @@ def test_shard_header_hash_changes_with_content():
     assert hash1 != hash2
 
 
-def test_forest_root_deprecated():
-    """Deprecated forest_root usage is blocked outside explicit deprecation coverage."""
-    from protocol.hashes import forest_root
 
-    with pytest.raises(DeprecationWarning, match="deprecated"):
-        forest_root([hash_bytes(b"header1"), hash_bytes(b"header2")])

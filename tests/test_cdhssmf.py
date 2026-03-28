@@ -217,12 +217,21 @@ def test_global_key_shard_isolation():
 
 def test_global_key_context_uniqueness():
     """
-    The derive_key context string must not be reused for any other hash in the codebase.
-    This is a static check across repository Python sources.
+    The derive_key context string must appear in exactly two places:
+    - ``protocol/hashes.py``   (Python reference implementation)
+    - ``src/crypto.rs``        (Rust acceleration backend)
+
+    Any other file using the same string would indicate an accidental
+    copy-paste or a divergent implementation that could silently produce
+    wrong keys.
     """
     context = _GLOBAL_SMT_KEY_CONTEXT
     repo_root = pathlib.Path(".")
     occurrences = 0
-    for path in repo_root.rglob("*.py"):
-        occurrences += path.read_text().count(context)
-    assert occurrences == 1, "derive_key context string appears more than once"
+    for pattern in ("*.py", "*.rs"):
+        for path in repo_root.rglob(pattern):
+            occurrences += path.read_text().count(context)
+    assert occurrences == 2, (
+        f"derive_key context string found {occurrences} time(s); "
+        "expected exactly 2 (protocol/hashes.py + src/crypto.rs)"
+    )

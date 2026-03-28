@@ -1,0 +1,173 @@
+syntax = "proto3";
+
+package olympus.sequencer.v1;
+
+option go_package = "github.com/wombatvagina69-crypto/olympus/go/sequencer/proto;pb";
+
+// OlympusTree — Trillian-shaped log API for the Olympus append-only ledger.
+//
+// The Go sequencer implements this service, listening on a Unix domain socket
+// (path configurable via --socket flag). It is strictly local-only and MUST
+// NOT be exposed externally. All cryptographic operations are delegated to the
+// Rust CD-HS-SMF service via the cdhs_smf.proto API.
+//
+// Append semantics
+// ----------------
+// Records are identified by (shard_id, record_type, record_id, version).
+// The global SMT key is derived by the Rust service as:
+//   key = H(GLOBAL_KEY_PREFIX || shard_id || record_key)
+// where record_key = H(KEY_PREFIX || record_type || record_id || version).
+//
+// The Go sequencer NEVER computes hashes; all hash computation is delegated.
+service OlympusTree {
+  // BatchUpdate appends one or more records to the global SMT in a single
+  // atomic batch.  The Rust service is called to compute keys, leaf hashes,
+  // and the new root; the Go sequencer persists the resulting node deltas.
+  rpc BatchUpdate(BatchUpdateRequest) returns (BatchUpdateResponse);
+
+  // ProveInclusion returns a Merkle inclusion proof for a record that has
+  // previously been committed to the global SMT.
+  rpc ProveInclusion(ProveInclusionRequest) returns (ProveInclusionResponse);
+
+  // ProveNonInclusion returns a Merkle non-inclusion proof asserting that a
+  // record has NOT been committed to the SMT at a given root.
+  rpc ProveNonInclusion(ProveNonInclusionRequest) returns (ProveNonInclusionResponse);
+
+  // GetRoot returns the current (latest) signed root of the global SMT.
+  rpc GetRoot(GetRootRequest) returns (GetRootResponse);
+}
+
+// ---------------------------------------------------------------------------
+// BatchUpdate
+// ---------------------------------------------------------------------------
+
+message BatchUpdateRequest {
+  // One or more records to append.  All records in a batch are committed
+  // atomically; the sequencer assigns monotone sequence numbers.
+  repeated LeafRecord records = 1;
+}
+
+message LeafRecord {
+  // Shard identifier (e.g. "watauga:2025:budget").
+  string shard_id = 1;
+
+  // Record key components used to derive the global SMT key.
+  RecordKey record_key = 2;
+
+  // Canonical content bytes (already canonicalised by the caller or by
+  // calling the Rust service's Canonicalize RPC first).
+  bytes canonical_content = 3;
+}
+
+message RecordKey {
+  // Record type (e.g. "doc", "dataset", "appeal").
+  string record_type = 1;
+
+  // Record identifier.
+  string record_id = 2;
+
+  // Monotone version counter.
+  uint64 version = 3;
+}
+
+message BatchUpdateResponse {
+  // New root hash after the batch has been applied.
+  bytes new_root = 1;
+
+  // Ed25519 signature over new_root produced by the Rust service.
+  bytes signature = 2;
+
+  // The public key that produced the signature.
+  bytes public_key = 3;
+
+  // Per-record results in the same order as the request.
+  repeated LeafResult results = 4;
+}
+
+message LeafResult {
+  // The global key that was derived for this record.
+  bytes global_key = 1;
+
+  // Hash of the canonical content that was stored as the leaf value.
+  bytes value_hash = 2;
+
+  // Monotone sequence number assigned by the sequencer.
+  uint64 sequence_number = 3;
+}
+
+// ---------------------------------------------------------------------------
+// ProveInclusion
+// ---------------------------------------------------------------------------
+
+message ProveInclusionRequest {
+  // Shard identifier.
+  string shard_id = 1;
+
+  // Record key components.
+  RecordKey record_key = 2;
+
+  // Root to prove against.  If empty the latest signed root is used.
+  bytes root = 3;
+}
+
+message ProveInclusionResponse {
+  // The derived global key.
+  bytes global_key = 1;
+
+  // Hash of the committed leaf value.
+  bytes value_hash = 2;
+
+  // Sibling hashes along the 256-level proof path (one per tree level).
+  repeated bytes siblings = 3;
+
+  // The root hash that the proof is valid against.
+  bytes root = 4;
+}
+
+// ---------------------------------------------------------------------------
+// ProveNonInclusion
+// ---------------------------------------------------------------------------
+
+message ProveNonInclusionRequest {
+  // Shard identifier.
+  string shard_id = 1;
+
+  // Record key components.
+  RecordKey record_key = 2;
+
+  // Root to prove against.  If empty the latest signed root is used.
+  bytes root = 3;
+}
+
+message ProveNonInclusionResponse {
+  // The derived global key.
+  bytes global_key = 1;
+
+  // Sibling hashes along the 256-level proof path to the empty leaf.
+  repeated bytes siblings = 2;
+
+  // The root hash that the non-inclusion proof is valid against.
+  bytes root = 3;
+}
+
+// ---------------------------------------------------------------------------
+// GetRoot
+// ---------------------------------------------------------------------------
+
+message GetRootRequest {
+  // No parameters — always returns the latest committed root.
+}
+
+message GetRootResponse {
+  // Current root hash of the global SMT.
+  bytes root = 1;
+
+  // Number of non-empty leaves in the tree.
+  uint64 tree_size = 2;
+
+  // Ed25519 signature over root produced by the Rust service.
+  bytes signature = 3;
+
+  // The public key that produced the signature.
+  bytes public_key = 4;
+}
