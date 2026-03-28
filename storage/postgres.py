@@ -920,7 +920,7 @@ class StorageLayer:
             conn.execute("SET TRANSACTION ISOLATION LEVEL SERIALIZABLE")
 
             # Load current GLOBAL tree state (all shards)
-            tree = self._load_tree_state(cur, shard_id=None)
+            tree = self._load_tree_state(cur)
 
             # Check if key already exists
             if tree.get(key) is not None:
@@ -1168,7 +1168,7 @@ class StorageLayer:
                 return None
 
             # Load tree and generate proof
-            tree = self._load_tree_state(cur, shard_id=None)
+            tree = self._load_tree_state(cur)
             return tree.prove_existence(key)
 
     def get_nonexistence_proof(
@@ -1209,7 +1209,7 @@ class StorageLayer:
                 raise ValueError("Record exists, cannot generate non-existence proof")
 
             # Load tree and generate proof
-            tree = self._load_tree_state(cur, shard_id=None)
+            tree = self._load_tree_state(cur)
             return tree.prove_nonexistence(key)
 
     def store_ingestion_batch(self, batch_id: str, records: list[dict[str, Any]]) -> None:
@@ -1524,8 +1524,8 @@ class StorageLayer:
                 return journal_diff
 
             # Slow path: reconstruct full trees
-            from_tree = self._load_tree_state(cur, shard_id, up_to_ts=from_header["ts"])
-            to_tree = self._load_tree_state(cur, shard_id, up_to_ts=to_header["ts"])
+            from_tree = self._load_tree_state(cur, up_to_ts=from_header["ts"])
+            to_tree = self._load_tree_state(cur, up_to_ts=to_header["ts"])
             diff = diff_sparse_merkle_trees(
                 from_tree, to_tree, key_range_start=key_range_start, key_range_end=key_range_end
             )
@@ -1726,7 +1726,7 @@ class StorageLayer:
                 )
 
             for idx, header_row in enumerate(headers):
-                tree = self._load_tree_state(cur, shard_id=None, up_to_ts=header_row["ts"])
+                tree = self._load_tree_state(cur, up_to_ts=header_row["ts"])
                 computed_root = tree.get_root()
 
                 header_seq = int(self._row_get(header_row, "seq", 0))
@@ -1755,7 +1755,7 @@ class StorageLayer:
 
             if headers:
                 latest_header_root = bytes(self._row_get(headers[-1], "root", 1))
-                current_tree = self._load_tree_state(cur, shard_id=None)
+                current_tree = self._load_tree_state(cur)
                 current_root = current_tree.get_root()
                 if current_root != latest_header_root:
                     raise ValueError(
@@ -1935,7 +1935,7 @@ class StorageLayer:
             persisted_root = bytes(row["root"])
 
             # Recompute root from leaves
-            tree = self._load_tree_state(cur, shard_id)
+            tree = self._load_tree_state(cur)
             computed_root = tree.get_root()
 
             return persisted_root == computed_root
@@ -2104,7 +2104,7 @@ class StorageLayer:
         Raises:
             ValueError: When the recomputed root diverges from ``expected_root``.
         """
-        tree = self._load_tree_state(cur, shard_id)
+        tree = self._load_tree_state(cur)
         computed_root = tree.get_root()
         if computed_root != expected_root:
             raise ValueError(
@@ -2115,23 +2115,20 @@ class StorageLayer:
     def _load_tree_state(
         self,
         cur: psycopg.Cursor[Any],
-        shard_id: str | None,
         up_to_ts: datetime | str | None = None,
     ) -> SparseMerkleTree:
         """
-        Load sparse Merkle tree state from database.
+        Load the global sparse Merkle tree state from database.
 
         CDHSSMF Design:
         ---------------
-        This function now loads the GLOBAL SMT state. The shard_id parameter is kept
-        for backwards compatibility but is deprecated. Pass None to load the global tree.
+        Loads ALL leaves from the single global SMT.
 
         Read-only helper. Must be called within an existing transaction.
         No writes, no commit.
 
         Args:
             cur: Database cursor
-            shard_id: DEPRECATED - kept for backwards compatibility, should be None
             up_to_ts: Optional inclusive timestamp cutoff for historical snapshots
 
         Returns:
