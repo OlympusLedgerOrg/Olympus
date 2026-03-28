@@ -51,7 +51,7 @@ from psycopg_pool import ConnectionPool, PoolTimeout
 
 from protocol.canonical_json import canonical_json_encode
 from protocol.canonicalizer import canonicalization_provenance
-from protocol.hashes import record_key, shard_header_hash, global_key
+from protocol.hashes import global_key, record_key, shard_header_hash
 from protocol.ledger import LedgerEntry
 from protocol.rfc3161 import MAX_TSA_TOKENS, _sha256_of_hash
 from protocol.shards import create_shard_header, sign_header, verify_header
@@ -363,38 +363,64 @@ class StorageLayer:
             # SMT Leaves
             # ------------------------------------------------------------------
             """
+            DO $$
+            BEGIN
+                IF EXISTS (
+                    SELECT 1
+                    FROM information_schema.columns
+                    WHERE table_schema = 'public'
+                      AND table_name = 'smt_leaves'
+                      AND column_name = 'shard_id'
+                ) AND to_regclass('public.smt_leaves_legacy_011') IS NULL THEN
+                    EXECUTE 'ALTER TABLE smt_leaves RENAME TO smt_leaves_legacy_011';
+                END IF;
+            END $$;
+            """,
+            """
             CREATE TABLE IF NOT EXISTS smt_leaves (
-                shard_id   TEXT        NOT NULL,
                 key        BYTEA       NOT NULL,
                 version    INT         NOT NULL,
                 value_hash BYTEA       NOT NULL,
                 ts         TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-                PRIMARY KEY (shard_id, key, version),
+                PRIMARY KEY (key, version),
                 CONSTRAINT smt_leaves_key_length
                     CHECK (octet_length(key) = 32),
                 CONSTRAINT smt_leaves_value_hash_length
                     CHECK (octet_length(value_hash) = 32)
             )
             """,
-            "CREATE INDEX IF NOT EXISTS smt_leaves_shard_ts_idx ON smt_leaves(shard_id, ts)",
+            "CREATE INDEX IF NOT EXISTS smt_leaves_ts_idx ON smt_leaves(ts)",
             # ------------------------------------------------------------------
             # SMT Nodes
             # ------------------------------------------------------------------
             """
+            DO $$
+            BEGIN
+                IF EXISTS (
+                    SELECT 1
+                    FROM information_schema.columns
+                    WHERE table_schema = 'public'
+                      AND table_name = 'smt_nodes'
+                      AND column_name = 'shard_id'
+                ) AND to_regclass('public.smt_nodes_legacy_011') IS NULL THEN
+                    EXECUTE 'ALTER TABLE smt_nodes RENAME TO smt_nodes_legacy_011';
+                END IF;
+            END $$;
+            """,
+            """
             CREATE TABLE IF NOT EXISTS smt_nodes (
-                shard_id TEXT      NOT NULL,
                 level    SMALLINT  NOT NULL,
                 index    BYTEA     NOT NULL,
                 hash     BYTEA     NOT NULL,
                 ts       TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-                PRIMARY KEY (shard_id, level, index),
+                PRIMARY KEY (level, index),
                 CONSTRAINT smt_nodes_level_range
                     CHECK (level >= 0 AND level <= 256),
                 CONSTRAINT smt_nodes_hash_length
                     CHECK (octet_length(hash) = 32)
             )
             """,
-            "CREATE INDEX IF NOT EXISTS smt_nodes_shard_level_idx ON smt_nodes(shard_id, level)",
+            "CREATE INDEX IF NOT EXISTS smt_nodes_level_idx ON smt_nodes(level)",
             # ------------------------------------------------------------------
             # Shard Headers  (tree_size included from the start)
             # ------------------------------------------------------------------
@@ -1123,7 +1149,8 @@ class StorageLayer:
         Returns:
             Existence proof if record exists, None otherwise
         """
-        key = record_key(record_type, record_id, version)
+        rec_key = record_key(record_type, record_id, version)
+        key = global_key(shard_id, rec_key)
 
         # READ-ONLY: No commit needed, transaction auto-rolls back
         with self._get_connection() as conn, conn.cursor(row_factory=dict_row) as cur:
@@ -1131,9 +1158,9 @@ class StorageLayer:
             cur.execute(
                 """
                     SELECT value_hash FROM smt_leaves
-                    WHERE shard_id = %s AND key = %s AND version = %s
+                    WHERE key = %s AND version = %s
                     """,
-                (shard_id, key, version),
+                (key, version),
             )
             row = cur.fetchone()
 
@@ -1141,7 +1168,7 @@ class StorageLayer:
                 return None
 
             # Load tree and generate proof
-            tree = self._load_tree_state(cur, shard_id)
+            tree = self._load_tree_state(cur, shard_id=None)
             return tree.prove_existence(key)
 
     def get_nonexistence_proof(
@@ -1165,7 +1192,8 @@ class StorageLayer:
         Raises:
             ValueError: If record exists
         """
-        key = record_key(record_type, record_id, version)
+        rec_key = record_key(record_type, record_id, version)
+        key = global_key(shard_id, rec_key)
 
         # READ-ONLY: No commit needed, transaction auto-rolls back
         with self._get_connection() as conn, conn.cursor(row_factory=dict_row) as cur:
@@ -1173,15 +1201,15 @@ class StorageLayer:
             cur.execute(
                 """
                     SELECT 1 FROM smt_leaves
-                    WHERE shard_id = %s AND key = %s AND version = %s
+                    WHERE key = %s AND version = %s
                     """,
-                (shard_id, key, version),
+                (key, version),
             )
             if cur.fetchone() is not None:
                 raise ValueError("Record exists, cannot generate non-existence proof")
 
             # Load tree and generate proof
-            tree = self._load_tree_state(cur, shard_id)
+            tree = self._load_tree_state(cur, shard_id=None)
             return tree.prove_nonexistence(key)
 
     def store_ingestion_batch(self, batch_id: str, records: list[dict[str, Any]]) -> None:
@@ -1654,7 +1682,8 @@ class StorageLayer:
 
     def verify_state_replay(self, shard_id: str) -> bool:
         """
-        Replay shard state from genesis and verify roots against headers and ledger.
+        Replay global SMT state at each shard header timestamp and verify roots against headers
+        and ledger.
 
         Returns True when:
           * Every persisted shard header root matches the recomputed SMT root, and
@@ -1669,18 +1698,7 @@ class StorageLayer:
         with self._get_connection() as conn, conn.cursor(row_factory=dict_row) as cur:
             cur.execute(
                 """
-                SELECT key, value_hash
-                FROM smt_leaves
-                WHERE shard_id = %s
-                ORDER BY ts ASC, key ASC
-                """,
-                (shard_id,),
-            )
-            leaves = cur.fetchall()
-
-            cur.execute(
-                """
-                SELECT seq, root
+                SELECT seq, root, ts
                 FROM shard_headers
                 WHERE shard_id = %s
                 ORDER BY seq ASC
@@ -1700,27 +1718,16 @@ class StorageLayer:
             )
             ledger_rows = cur.fetchall()
 
-            if len(headers) != len(leaves):
-                raise ValueError(
-                    f"Replay mismatch for shard '{shard_id}': {len(headers)} headers vs "
-                    f"{len(leaves)} leaves"
-                )
-
             if len(ledger_rows) != len(headers):
                 raise ValueError(
                     f"Replay mismatch for shard '{shard_id}': {len(ledger_rows)} ledger entries "
                     f"vs {len(headers)} headers"
                 )
 
-            tree = SparseMerkleTree()
-
-            for idx, leaf_row in enumerate(leaves):
-                key = bytes(self._row_get(leaf_row, "key", 0))
-                value_hash = bytes(self._row_get(leaf_row, "value_hash", 1))
-                tree.update(key, value_hash)
+            for idx, header_row in enumerate(headers):
+                tree = self._load_tree_state(cur, shard_id=None, up_to_ts=header_row["ts"])
                 computed_root = tree.get_root()
 
-                header_row = headers[idx]
                 header_seq = int(self._row_get(header_row, "seq", 0))
                 expected_header_root = bytes(self._row_get(header_row, "root", 1))
                 if computed_root != expected_header_root:
@@ -1953,10 +1960,7 @@ class StorageLayer:
             header_seq = row["seq"]
             root_hash = bytes(row["root"])
 
-            cur.execute(
-                "SELECT COUNT(*) AS cnt FROM smt_leaves WHERE shard_id = %s",
-                (shard_id,),
-            )
+            cur.execute("SELECT COUNT(*) AS cnt FROM smt_leaves")
             count_row = cur.fetchone()
             leaf_count = int(count_row["cnt"]) if count_row else 0
 
@@ -2024,24 +2028,24 @@ class StorageLayer:
 
     def get_leaf_count(self, shard_id: str, *, up_to_ts: str | datetime | None = None) -> int:
         """
-        Return the number of SMT leaves for a shard.
+        Return the number of leaves in the global SMT.
 
         Args:
-            shard_id: Shard identifier.
+            shard_id: Deprecated shard identifier retained for API compatibility.
             up_to_ts: Optional ISO 8601 timestamp (or datetime) to bound the count.
 
         Returns:
-            Count of leaves for the shard, optionally filtered by timestamp.
+            Count of global SMT leaves, optionally filtered by timestamp.
         """
-        query = "SELECT COUNT(*) AS cnt FROM smt_leaves WHERE shard_id = %s"
-        params: list[object] = [shard_id]
+        query = "SELECT COUNT(*) AS cnt FROM smt_leaves"
+        params: list[object] = []
         if up_to_ts is not None:
             ts_val = (
                 up_to_ts
                 if isinstance(up_to_ts, datetime)
                 else datetime.fromisoformat(str(up_to_ts).replace("Z", "+00:00"))
             )
-            query += " AND ts <= %s"
+            query += " WHERE ts <= %s"
             params.append(ts_val)
 
         with self._get_connection() as conn, conn.cursor(row_factory=dict_row) as cur:

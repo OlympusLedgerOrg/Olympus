@@ -16,7 +16,10 @@ atomically.
 The CDHSSMF collapses the hierarchy into **one** 256-level SMT by pushing the
 shard identity into the key space via domain-separated hashing::
 
-    global_key = blake3("OLY:GLOBAL-KEY:V1" | "|" | shard_id | "|" | record_key)
+    global_key = blake3_derive_key(
+        <global SMT context string>,
+        len(shard_id) || shard_id || len(record_key) || record_key,
+    )
 
 All records across all shards are leaves in a single global SMT.  Shards are
 now first-class *namespaces* rather than separate authenticated structures:
@@ -43,8 +46,7 @@ rather than a bare ``record_key``.
 
 from dataclasses import dataclass
 
-from .hashes import global_key as _derive_global_key
-from .hashes import record_key as _derive_record_key
+from .hashes import global_key as _derive_global_key, record_key as _derive_record_key
 from .ssmf import (
     ExistenceProof,
     NonExistenceProof,

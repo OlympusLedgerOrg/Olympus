@@ -46,7 +46,6 @@ from protocol.hashes import (
     POLICY_PREFIX,
     blake3_hash,
     blake3_to_field_element,
-    forest_root,
     hash_bytes,
     leaf_hash,
     merkle_root,
@@ -206,10 +205,6 @@ class TestCommitStage:
     def test_merkle_root_exists(self):
         """merkle_root computes Merkle root from leaf hashes."""
         assert callable(merkle_root)
-
-    def test_forest_root_exists(self):
-        """forest_root computes global forest root from shard headers."""
-        assert callable(forest_root)
 
     def test_shard_header_functions_exist(self):
         """Shard header creation and signing functions are available."""

@@ -43,7 +43,10 @@ def global_key(shard_id: str, record_key_bytes: bytes) -> bytes:
     Generate a global SMT key for CDHSSMF.
 
     Encodes shard identity into the key space via:
-    global_key = BLAKE3(KEY_PREFIX || shard_id || "|" || record_key)
+    global_key = BLAKE3_derive_key(
+        <global SMT context string>,
+        len(shard_id) || shard_id || len(record_key) || record_key,
+    )
 
     Returns: 32-byte global key
     """
