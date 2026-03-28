@@ -71,7 +71,7 @@ def _patch_pygments_atomic_groups() -> None:
     Remove this patch once Pygments releases a patched version.
     """
     try:
-        import pygments.lexers.archetype as _archetype
+        import pygments.lexers.archetype as _archetype  # type: ignore[import-not-found]
 
         _REPLACEMENTS = [
             (_archetype.AdlLexer,    'metadata',     _GUID_VULN, _GUID_ATOMIC),
@@ -116,7 +116,7 @@ def _patch_pygments_rust_bridge() -> None:
     character exactly once regardless of input structure.
     """
     try:
-        from olympus_core import AdlScanner  # type: ignore[import]
+        from olympus_core import AdlScanner  # type: ignore[import-not-found]
     except ImportError:
         return  # Extension not built; atomic-group patch remains active.
     except Exception:

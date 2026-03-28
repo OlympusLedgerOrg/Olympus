@@ -15,6 +15,7 @@ Environment variables (see api/config.py for full list):
 from __future__ import annotations
 
 import api._patches as _patches  # apply CVE patches before any third-party imports
+
 _patches.apply_all()
 
 import logging
@@ -31,7 +32,8 @@ from api.config import get_settings
 from api.db import engine
 from api.ingest import router as ingest_router
 from api.models import Base  # noqa: F401 — ensures all models are registered
-from api.routers import agencies, appeals, documents, keys, ledger, requests as requests_router
+from api.routers import agencies, appeals, documents, keys, ledger
+from api.routers import requests as requests_router
 from api.routers.datasets import router as datasets_router
 from api.routers.shards import router as shards_router
 from api.routers.witness import router as witness_router
