@@ -25,12 +25,13 @@ import unicodedata
 from decimal import Decimal
 from typing import Any
 
+
 # ---------------------------------------------------------------------------
 # Optional Rust acceleration — import from olympus_core.canonical if built,
 # fall back to the pure-Python implementation below when it is not present.
 # ---------------------------------------------------------------------------
 try:
-    from olympus_core.canonical import (  # type: ignore[import]
+    from olympus_core.canonical import (  # type: ignore[import-not-found]
         canonical_json_encode as _rust_canonical_json_encode,
     )
 
@@ -44,7 +45,7 @@ def canonical_json_encode(obj: Any) -> str:
     Encode object to canonical JSON string.
 
     Rules:
-    - UTF-8 encoding (ASCII-escaped)
+    - UTF-8 encoding with raw non-ASCII (JCS / RFC 8785 compliant)
     - Sorted keys
     - No whitespace (compact separators)
     - Unicode NFC normalization for all keys and string values
@@ -62,7 +63,8 @@ def canonical_json_encode(obj: Any) -> str:
         TypeError: If object is not JSON-serializable
     """
     if _RUST_CANONICAL_AVAILABLE:
-        return _rust_canonical_json_encode(obj)
+        result: str = _rust_canonical_json_encode(obj)
+        return result
     normalized = _normalize_for_canonical_json(obj)
     return _encode_value(normalized)
 
@@ -164,9 +166,7 @@ def _encode_value(value: Any) -> str:
         for key in sorted(value.keys()):
             if not isinstance(key, str):
                 raise TypeError("Object keys must be strings for canonical JSON")
-            items.append(
-                f"{json.dumps(key, ensure_ascii=False)}:{_encode_value(value[key])}"
-            )
+            items.append(f"{json.dumps(key, ensure_ascii=False)}:{_encode_value(value[key])}")
         return "{" + ",".join(items) + "}"
     raise TypeError(f"Type {type(value)} is not JSON-serializable")
 

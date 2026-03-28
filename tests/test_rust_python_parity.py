@@ -23,7 +23,15 @@ import json
 from decimal import Decimal
 from pathlib import Path
 
+import blake3 as _blake3
 import pytest
+
+from protocol.canonical_json import (
+    _encode_value,
+    _normalize_for_canonical_json,
+)
+from protocol.hashes import _GLOBAL_SMT_KEY_CONTEXT
+
 
 # ---------------------------------------------------------------------------
 # Skip-guard: all tests in this module require the Rust extension.
@@ -43,19 +51,6 @@ pytestmark = pytest.mark.skipif(
 )
 
 # ---------------------------------------------------------------------------
-# Pure-Python reference implementations imported directly so the parity tests
-# are independent of the shim layer in protocol/hashes.py /
-# protocol/canonical_json.py.
-# ---------------------------------------------------------------------------
-
-import blake3 as _blake3
-
-from protocol.canonical_json import (
-    _encode_value,
-    _normalize_for_canonical_json,
-)
-
-# ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
 
@@ -63,7 +58,6 @@ _KEY_PREFIX = b"OLY:KEY:V1"
 _LEAF_PREFIX = b"OLY:LEAF:V1"
 _NODE_PREFIX = b"OLY:NODE:V1"
 _SEP = b"|"
-from protocol.hashes import _GLOBAL_SMT_KEY_CONTEXT
 
 
 def _py_blake3_hash(parts: list[bytes]) -> bytes:
@@ -151,9 +145,8 @@ class TestRecordKeyParity:
         assert _rust_crypto.record_key("t", "i", v) == _py_record_key("t", "i", v)
 
     def test_unicode_fields(self) -> None:
-        assert (
-            _rust_crypto.record_key("doc\u00e9", "id\u4e2d", 5)
-            == _py_record_key("doc\u00e9", "id\u4e2d", 5)
+        assert _rust_crypto.record_key("doc\u00e9", "id\u4e2d", 5) == _py_record_key(
+            "doc\u00e9", "id\u4e2d", 5
         )
 
     def test_output_is_32_bytes(self) -> None:
@@ -247,7 +240,7 @@ class TestCanonicalJsonParity:
         self._assert_parity(-7)
 
     def test_large_integer(self) -> None:
-        self._assert_parity(10 ** 30)
+        self._assert_parity(10**30)
 
     def test_decimal_simple(self) -> None:
         self._assert_parity(Decimal("3.14"))
@@ -284,9 +277,9 @@ class TestCanonicalJsonParity:
 
     def test_string_emoji_raw_utf8(self) -> None:
         # U+1F600 GRINNING FACE — JCS emits raw UTF-8, not surrogate pairs.
-        result = _rust_canonical.canonical_json_encode("\U0001F600")
-        assert result == '"\U0001F600"'
-        self._assert_parity("\U0001F600")
+        result = _rust_canonical.canonical_json_encode("\U0001f600")
+        assert result == '"\U0001f600"'
+        self._assert_parity("\U0001f600")
 
     def test_string_control_chars(self) -> None:
         self._assert_parity("a\nb\tc\rd")
@@ -408,9 +401,7 @@ def test_rust_canonical_golden_vectors() -> None:
             try:
                 rust_bytes = _rust_canonical.canonical_json_encode(obj).encode("utf-8")
             except Exception as exc:
-                mismatches.append(
-                    f"Vector {group_id!r}: Rust raised {type(exc).__name__}: {exc}"
-                )
+                mismatches.append(f"Vector {group_id!r}: Rust raised {type(exc).__name__}: {exc}")
                 total += 1
                 continue
 
@@ -431,6 +422,6 @@ def test_rust_canonical_golden_vectors() -> None:
             total += 1
 
     assert total > 0, "No vectors were processed"
-    assert not mismatches, (
-        f"{len(mismatches)}/{total} vector(s) failed:\n" + "\n".join(mismatches[:10])
+    assert not mismatches, f"{len(mismatches)}/{total} vector(s) failed:\n" + "\n".join(
+        mismatches[:10]
     )

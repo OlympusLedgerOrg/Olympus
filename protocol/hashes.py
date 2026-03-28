@@ -12,19 +12,19 @@ Protocol notes:
   contain literal ``|`` characters.
 """
 
-import warnings
 from typing import Any
 
 import blake3
 
 from .canonical_json import canonical_json_bytes
 
+
 # ---------------------------------------------------------------------------
 # Optional Rust acceleration — import from olympus_core.crypto if built,
 # fall back to pure-Python implementations below when it is not present.
 # ---------------------------------------------------------------------------
 try:
-    from olympus_core.crypto import (  # type: ignore[import]
+    from olympus_core.crypto import (  # type: ignore[import-not-found]
         blake3_hash as _rust_blake3_hash,
         global_key as _rust_global_key,
         leaf_hash as _rust_leaf_hash,
@@ -84,7 +84,8 @@ def blake3_hash(parts: list[bytes]) -> bytes:
         32-byte BLAKE3 hash
     """
     if _RUST_CRYPTO_AVAILABLE:
-        return _rust_blake3_hash(parts)
+        result: bytes = _rust_blake3_hash(parts)
+        return result
     return blake3.blake3(b"".join(parts)).digest()
 
 
@@ -113,7 +114,8 @@ def record_key(record_type: str, record_id: str, version: int) -> bytes:
         raise ValueError("version exceeds maximum supported value")
 
     if _RUST_CRYPTO_AVAILABLE:
-        return _rust_record_key(record_type, record_id, version)
+        result: bytes = _rust_record_key(record_type, record_id, version)
+        return result
 
     key_data = b"".join(
         [
@@ -152,7 +154,8 @@ def global_key(shard_id: str, record_key_bytes: bytes) -> bytes:
         >>> g_key = global_key("watauga:2025:budget", rec_key)
     """
     if _RUST_CRYPTO_AVAILABLE:
-        return _rust_global_key(shard_id, record_key_bytes)
+        result: bytes = _rust_global_key(shard_id, record_key_bytes)
+        return result
 
     shard_bytes = shard_id.encode("utf-8")
     key_material = b"".join(
@@ -174,16 +177,17 @@ def global_key(shard_id: str, record_key_bytes: bytes) -> bytes:
 def leaf_hash(key: bytes, value_hash: bytes) -> bytes:
     """Compute hash of a sparse-tree leaf with domain separation."""
     if _RUST_CRYPTO_AVAILABLE:
-        return _rust_leaf_hash(key, value_hash)
+        result: bytes = _rust_leaf_hash(key, value_hash)
+        return result
     return blake3_hash([LEAF_PREFIX, _SEP, key, _SEP, value_hash])
 
 
 def node_hash(left: bytes, right: bytes) -> bytes:
     """Compute hash of an internal Merkle node."""
     if _RUST_CRYPTO_AVAILABLE:
-        return _rust_node_hash(left, right)
+        result: bytes = _rust_node_hash(left, right)
+        return result
     return blake3_hash([NODE_PREFIX, _SEP, left, _SEP, right])
-
 
 
 def merkle_root(leaves: list[bytes]) -> bytes:
@@ -234,6 +238,7 @@ def shard_header_hash(fields_dict: dict[str, Any]) -> bytes:
     """
     # Canonical JSON: sorted keys, compact separators, ASCII-escaped, NaN/Infinity rejected
     return blake3_hash([HDR_PREFIX, canonical_json_bytes(fields_dict)])
+
 
 # Legacy compatibility - these will be removed in future versions
 # For now, keep them to avoid breaking existing code
