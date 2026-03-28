@@ -2219,13 +2219,19 @@ class StorageLayer:
             tree: SparseMerkleTree to persist
         """
         ts = datetime.now(timezone.utc)
+        # shard_id is deprecated (CDHSSMF uses one global SMT) but the cache
+        # key and _iter_tree_node_rows still require a non-None string.
+        _sid: str = shard_id or ""
         for row_batch in self._iter_batches(
-            self._iter_tree_node_rows(shard_id, tree, ts),
+            self._iter_tree_node_rows(_sid, tree, ts),
             self.DEFAULT_FLUSH_BATCH_SIZE,
         ):
             # CDHSSMF: Insert into global SMT (no shard_id column)
             # Extract just the fields we need (skip shard_id which is first field)
-            global_rows = [(level, index, hash_val, ts_val) for (_, level, index, hash_val, ts_val) in row_batch]
+            global_rows = [
+                (level, index, hash_val, ts_val)
+                for (_, level, index, hash_val, ts_val) in row_batch
+            ]
 
             cur.executemany(
                 """
@@ -2237,7 +2243,7 @@ class StorageLayer:
             )
 
             for _, level, path_bytes, hash_value, _ in row_batch:
-                self._cache_put(shard_id, level, path_bytes, hash_value)
+                self._cache_put(_sid, level, path_bytes, hash_value)
 
     @staticmethod
     def _encode_path(path: tuple[int, ...]) -> bytes:
