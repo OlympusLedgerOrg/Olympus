@@ -49,6 +49,7 @@ ATTESTATION_PREFIX = b"OLY:ATTESTATION:V1"
 DATASET_PREFIX = b"OLY:DATASET:V1"
 DATASET_COMMIT_PREFIX = b"OLY:DATASET-COMMIT:V1"
 DATASET_LINEAGE_PREFIX = b"OLY:DATASET-LINEAGE:V1"
+GLOBAL_KEY_PREFIX = b"OLY:GLOBAL-KEY:V1"
 EVENT_ID_FIELD_NAMES = ("shard_id", "header_hash", "timestamp")
 MAX_EVENT_ID_FIELD_LENGTH = (1 << 32) - 1
 
@@ -80,6 +81,29 @@ def record_key(record_type: str, record_id: str, version: int) -> bytes:
     """
     key_data = f"{record_type}:{record_id}:{version}".encode()
     return blake3_hash([KEY_PREFIX, key_data])
+
+
+def global_key(shard_id: str, rec_key: bytes) -> bytes:
+    """
+    Derive a globally unique 32-byte SMT key for the CDHSSMF.
+
+    Collapses shard namespace and record key into a single 256-bit key so that
+    all shards live in one unified SMT rather than separate per-shard trees.
+
+    Args:
+        shard_id: Human-readable shard identifier (e.g. "watauga:2025:budget").
+        rec_key:  32-byte record key (as produced by :func:`record_key`).
+
+    Returns:
+        32-byte globally unique key using GLOBAL_KEY_PREFIX domain separation.
+
+    Raises:
+        ValueError: If rec_key is not exactly 32 bytes.
+    """
+    if len(rec_key) != 32:
+        raise ValueError(f"rec_key must be 32 bytes, got {len(rec_key)}")
+    shard_bytes = shard_id.encode("utf-8")
+    return blake3_hash([GLOBAL_KEY_PREFIX, _SEP, shard_bytes, _SEP, rec_key])
 
 
 def leaf_hash(key: bytes, value_hash: bytes) -> bytes:
