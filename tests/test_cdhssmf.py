@@ -8,7 +8,7 @@ with hierarchical key derivation.
 
 import pathlib
 
-from protocol.hashes import global_key, record_key
+from protocol.hashes import _GLOBAL_SMT_KEY_CONTEXT, global_key, record_key
 
 
 class TestGlobalKey:
@@ -218,8 +218,11 @@ def test_global_key_shard_isolation():
 def test_global_key_context_uniqueness():
     """
     The derive_key context string must not be reused for any other hash in the codebase.
-    This is a static check — read hashes.py and assert the context string appears once.
+    This is a static check across repository Python sources.
     """
-    src = pathlib.Path("protocol/hashes.py").read_text()
-    context = "olympus " + "2025-12 global-smt-leaf-key"
-    assert src.count(context) == 1, "derive_key context string appears more than once"
+    context = _GLOBAL_SMT_KEY_CONTEXT
+    repo_root = pathlib.Path(".")
+    occurrences = 0
+    for path in repo_root.rglob("*.py"):
+        occurrences += path.read_text().count(context)
+    assert occurrences == 1, "derive_key context string appears more than once"

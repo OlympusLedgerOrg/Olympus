@@ -11,7 +11,9 @@
 -- stored legacy SMT key bytes do not preserve enough structure to do that safely after
 -- the domain-separation hardening, so silently copying them into the global key space
 -- would be incorrect. Legacy tables are preserved under *_legacy_011 names for manual
--- export / re-ingest instead of being dropped.
+-- export / re-ingest instead of being dropped. Operators should export logical
+-- record inputs from application tables, recompute global_key(shard_id, record_key),
+-- and reinsert rebuilt leaves/nodes through current storage tooling.
 
 DO $$
 BEGIN
@@ -61,14 +63,14 @@ CREATE TABLE IF NOT EXISTS smt_nodes (
 CREATE INDEX IF NOT EXISTS smt_nodes_level_idx ON smt_nodes(level);
 
 COMMENT ON TABLE smt_leaves IS 'Global SMT leaf nodes using CDHSSMF. Keys are generated via global_key(shard_id, record_key) with domain-separated key derivation.';
-COMMENT ON TABLE smt_nodes IS 'Global SMT internal nodes using CDHSSMF design. Single tree for all shards with hierarchical key derivation.';
+COMMENT ON TABLE smt_nodes IS 'Global SMT internal nodes using CDHSSMF design. Single tree for all shards with domain-separated key derivation.';
 
 DO $$
 BEGIN
     IF to_regclass('public.smt_leaves_legacy_011') IS NOT NULL THEN
         EXECUTE $sql$
             COMMENT ON TABLE smt_leaves_legacy_011 IS
-            'Legacy pre-CDHSSMF per-shard SMT leaves preserved by migration 011. Rows are intentionally not auto-migrated because safe migration requires recomputing global_key(shard_id, record_key) from original logical record inputs.'
+            'Legacy pre-CDHSSMF per-shard SMT leaves preserved by migration 011. Rows are intentionally not auto-migrated because safe migration requires recomputing global_key(shard_id, record_key) from original logical record inputs and re-ingesting rebuilt leaves through current storage tooling.'
         $sql$;
     END IF;
 

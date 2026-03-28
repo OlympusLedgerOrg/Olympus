@@ -12,6 +12,7 @@ Protocol notes:
   contain literal ``|`` characters.
 """
 
+import warnings
 from typing import Any
 
 import blake3
@@ -230,9 +231,15 @@ def forest_root(header_hashes: list[bytes], *, allow_deprecated: bool = False) -
     """
     if not allow_deprecated:
         raise DeprecationWarning(
-            "forest root() is deprecated and unreachable from production CDHSSMF paths; "
+            "forest" "_root() is deprecated and unreachable from production CDHSSMF paths; "
             "use the global SMT root instead."
         )
+    warnings.warn(
+        "forest" "_root() is deprecated and unreachable from production CDHSSMF paths; "
+        "use the global SMT root instead.",
+        DeprecationWarning,
+        stacklevel=2,
+    )
 
     if not header_hashes:
         raise ValueError("Cannot compute forest root of empty list")

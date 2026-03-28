@@ -2044,6 +2044,10 @@ class StorageLayer:
 
         Args:
             shard_id: Deprecated shard identifier retained for API compatibility.
+                This parameter is ignored because counts are computed over the
+                global SMT. Existing callers may continue passing it unchanged
+                during the deprecation period because the public signature is
+                still shard-oriented, but the value does not affect the result.
             up_to_ts: Optional ISO 8601 timestamp (or datetime) to bound the count.
 
         Returns:
