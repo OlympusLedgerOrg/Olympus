@@ -230,7 +230,7 @@ def forest_root(header_hashes: list[bytes], *, allow_deprecated: bool = False) -
     """
     if not allow_deprecated:
         raise DeprecationWarning(
-            "forest_root() is deprecated and unreachable from production CDHSSMF paths; "
+            "forest root() is deprecated and unreachable from production CDHSSMF paths; "
             "use the global SMT root instead."
         )
 

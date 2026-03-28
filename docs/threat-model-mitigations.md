@@ -34,7 +34,7 @@ Each threat is mitigated through a combination of cryptographic primitives, prot
 | Hash chain linkage via `previous_hash` | [`protocol/ledger.py:52-104`](../protocol/ledger.py#L52-L104) | ✅ Implemented |
 | Deterministic BLAKE3 hashing with domain separation | [`protocol/hashes.py:19-35`](../protocol/hashes.py#L19-L35) | ✅ Implemented |
 | Append-only ledger verification | [`protocol/ledger.py:160-195`](../protocol/ledger.py#L160-L195) | ✅ Implemented |
-| Federation quorum signatures on shard headers | [`protocol/federation.py:182-254`](../protocol/federation.py#L182-L254) | ✅ Implemented |
+| Federation quorum signatures on shard headers | [`protocol/federation/quorum.py`](../protocol/federation/quorum.py) | ✅ Implemented |
 | RFC 3161 external timestamp anchoring | [`protocol/rfc3161.py:33-167`](../protocol/rfc3161.py#L33-L167) | ✅ Implemented |
 | Prometheus SMT root divergence alerting | [`protocol/telemetry.py:248-287`](../protocol/telemetry.py#L248-L287) | ✅ Implemented |
 
@@ -54,7 +54,7 @@ Each threat is mitigated through a combination of cryptographic primitives, prot
 
 | Mitigation | Evidence | Status |
 |------------|----------|--------|
-| Federation replication across independent nodes | [`protocol/federation.py:1-41`](../protocol/federation.py#L1-L41) | ✅ Implemented (Phase 1+) |
+| Federation replication across independent nodes | [`protocol/federation/replication.py`](../protocol/federation/replication.py) | ✅ Implemented (Phase 1+) |
 | Public proof verification (Merkle inclusion proofs) | [`protocol/merkle.py:158-193`](../protocol/merkle.py#L158-L193) | ✅ Implemented |
 | Auditor comparison of shard headers and ledger tails | [`docs/threat_model.md:55-61`](../docs/threat_model.md#L55-L61) | 📄 Documented |
 | Sparse Merkle Tree (SMT) anchoring for shard state | [`storage/postgres.py:1015-1181`](../storage/postgres.py#L1015-L1181) | ✅ Implemented |
@@ -77,9 +77,9 @@ Each threat is mitigated through a combination of cryptographic primitives, prot
 
 | Mitigation | Evidence | Status |
 |------------|----------|--------|
-| Controlled federation registry (static whitelist) | [`protocol/federation.py:8-41`](../protocol/federation.py#L8-L41) | ✅ Implemented |
-| Ed25519 public key pinning per node | [`protocol/federation.py:22-96`](../protocol/federation.py#L22-L96) | ✅ Implemented |
-| Quorum threshold (≥ 2/3 of registered nodes) | [`protocol/federation.py:182-205`](../protocol/federation.py#L182-L205) | ✅ Implemented |
+| Controlled federation registry (static whitelist) | [`protocol/federation/identity.py`](../protocol/federation/identity.py) | ✅ Implemented |
+| Ed25519 public key pinning per node | [`protocol/federation/identity.py`](../protocol/federation/identity.py) | ✅ Implemented |
+| Quorum threshold (≥ 2/3 of registered nodes) | [`protocol/federation/quorum.py`](../protocol/federation/quorum.py) | ✅ Implemented |
 | Institutional node operator vetting | [`docs/threat_model.md:77-82`](../docs/threat_model.md#L77-L82) | 📄 Operational control |
 
 **Detection:** Signature verification rejects any signature from a node not present in the federation registry.
@@ -145,9 +145,9 @@ Each threat is mitigated through a combination of cryptographic primitives, prot
 
 | Mitigation | Evidence | Status |
 |------------|----------|--------|
-| Ed25519 signature verification on all shard headers | [`protocol/federation.py:274-304`](../protocol/federation.py#L274-L304) | ✅ Implemented |
-| Key rotation with validity windows | [`protocol/federation.py:97-108`](../protocol/federation.py#L97-L108) | ✅ Implemented |
-| Historical key acceptance only up to header timestamp | [`protocol/federation.py:293-304`](../protocol/federation.py#L293-L304) | ✅ Implemented |
+| Ed25519 signature verification on all shard headers | [`protocol/federation/quorum.py`](../protocol/federation/quorum.py) | ✅ Implemented |
+| Key rotation with validity windows | [`protocol/federation/identity.py`](../protocol/federation/identity.py) | ✅ Implemented |
+| Historical key acceptance only up to header timestamp | [`protocol/federation/identity.py`](../protocol/federation/identity.py) | ✅ Implemented |
 | Revocation records in governance log | [`protocol/shards.py:248-267`](../protocol/shards.py#L248-L267) | ✅ Implemented |
 | Superseding signatures for post-compromise re-signing | [`protocol/shards.py:318-366`](../protocol/shards.py#L318-L366) | ✅ Implemented |
 
@@ -274,11 +274,11 @@ Each threat is mitigated through a combination of cryptographic primitives, prot
 
 | Mitigation | Evidence | Status |
 |------------|----------|--------|
-| Key-evolving verification via key history validity windows | [`protocol/federation.py:120-131`](../protocol/federation.py#L120-L131) | ✅ Implemented |
+| Key-evolving verification via key history validity windows | [`protocol/federation/identity.py`](../protocol/federation/identity.py) | ✅ Implemented |
 | Signed checkpoint chain with consistency proofs | [`protocol/checkpoints.py:595-680`](../protocol/checkpoints.py#L595-L680) | ✅ Implemented |
 | Out-of-band/social finality anchors enforced during chain verification | [`protocol/checkpoints.py:664-678`](../protocol/checkpoints.py#L664-L678) | ✅ Implemented |
-| Recursive SNARK chain proofs for computational history verification | [`protocol/federation.py:1530-1617`](../protocol/federation.py#L1530-L1617) | ✅ Implemented |
-| Epoch key rotation records with witness signatures | [`protocol/federation.py:1620-1720`](../protocol/federation.py#L1620-L1720) | ✅ Implemented |
+| Recursive SNARK chain proofs for computational history verification | [`protocol/federation/rotation.py`](../protocol/federation/rotation.py) | ✅ Implemented |
+| Epoch key rotation records with witness signatures | [`protocol/federation/rotation.py`](../protocol/federation/rotation.py) | ✅ Implemented |
 
 **Detection:** Verification fails when an alternate chain conflicts with an externally finalized checkpoint hash at the anchored sequence. Recursive SNARK proofs ensure computational history cannot be forged without breaking circuit logic.
 
@@ -296,11 +296,11 @@ Each threat is mitigated through a combination of cryptographic primitives, prot
 
 | Mitigation | Evidence | Status |
 |------------|----------|--------|
-| Gossip-based shard header fork detection | [`protocol/federation.py:1196-1310`](../protocol/federation.py#L1196-L1310) | ✅ Implemented |
-| `ShardHeaderForkEvidence` cryptographic proof of fraud | [`protocol/federation.py:1208-1265`](../protocol/federation.py#L1208-L1265) | ✅ Implemented |
-| `detect_shard_header_forks` gossip comparison | [`protocol/federation.py:1283-1344`](../protocol/federation.py#L1283-L1344) | ✅ Implemented |
-| Public Guardian Registry Forest commitment | [`protocol/federation.py:1347-1378`](../protocol/federation.py#L1347-L1378) | ✅ Implemented |
-| Colluding guardian detection via dual-signature analysis | [`protocol/federation.py:1257-1261`](../protocol/federation.py#L1257-L1261) | ✅ Implemented |
+| Gossip-based shard header fork detection | [`protocol/federation/replication.py`](../protocol/federation/replication.py) | ✅ Implemented |
+| `ShardHeaderForkEvidence` cryptographic proof of fraud | [`protocol/federation/replication.py`](../protocol/federation/replication.py) | ✅ Implemented |
+| `detect_shard_header_forks` gossip comparison | [`protocol/federation/replication.py`](../protocol/federation/replication.py) | ✅ Implemented |
+| Public Guardian Registry Forest commitment | [`protocol/federation/replication.py`](../protocol/federation/replication.py) | ✅ Implemented |
+| Colluding guardian detection via dual-signature analysis | [`protocol/federation/replication.py`](../protocol/federation/replication.py) | ✅ Implemented |
 
 **Detection:** Monitors and third-party verifiers gossip signed headers. Discovery of any H_a ≠ H_b where seq(H_a) = seq(H_b) constitutes non-repudiable cryptographic proof of fraud. The `colluding_guardians()` method identifies nodes that signed both conflicting headers.
 
@@ -318,11 +318,11 @@ Each threat is mitigated through a combination of cryptographic primitives, prot
 
 | Mitigation | Evidence | Status |
 |------------|----------|--------|
-| Data availability challenges | [`protocol/federation.py:1390-1454`](../protocol/federation.py#L1390-L1454) | ✅ Implemented |
-| Signed replication proofs with Merkle verification | [`protocol/federation.py:1457-1527`](../protocol/federation.py#L1457-L1527) | ✅ Implemented |
-| Federation finality status with availability gates | [`protocol/federation.py:1530-1617`](../protocol/federation.py#L1530-L1617) | ✅ Implemented |
-| `verify_data_availability` proof verification | [`protocol/federation.py:1620-1670`](../protocol/federation.py#L1620-L1670) | ✅ Implemented |
-| Availability threshold (2/3 Guardian replication) | [`protocol/federation.py:1598-1601`](../protocol/federation.py#L1598-L1601) | ✅ Implemented |
+| Data availability challenges | [`protocol/federation/replication.py`](../protocol/federation/replication.py) | ✅ Implemented |
+| Signed replication proofs with Merkle verification | [`protocol/federation/replication.py`](../protocol/federation/replication.py) | ✅ Implemented |
+| Federation finality status with availability gates | [`protocol/federation/replication.py`](../protocol/federation/replication.py) | ✅ Implemented |
+| `verify_data_availability` proof verification | [`protocol/federation/replication.py`](../protocol/federation/replication.py) | ✅ Implemented |
+| Availability threshold (2/3 Guardian replication) | [`protocol/federation/replication.py`](../protocol/federation/replication.py) | ✅ Implemented |
 
 **Detection:** Guardians issue `DataAvailabilityChallenge` requests before countersigning headers. Headers only progress to "Federation Final" status when sufficient `ReplicationProof` attestations are collected, verified via `verify_data_availability`.
 

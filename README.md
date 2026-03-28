@@ -197,7 +197,7 @@ history once a federation quorum has acknowledged a header.
 
 Prototype components in this repository:
 
-- `protocol/federation.py` — persistent node identity, static registry loading,
+- `protocol/federation/` — persistent node identity, static registry loading,
   and a simple `>= 2/3` shard-header quorum model
 - `examples/federation_registry.json` — static federation membership for local
   development and tests

@@ -1687,7 +1687,8 @@ class StorageLayer:
 
         Returns True when:
           * Every persisted shard header root matches the recomputed SMT root, and
-          * Every ledger entry payload shard_root matches the same recomputed root.
+          * Every ledger entry payload shard_root matches the same recomputed root, and
+          * The current global SMT state still matches the latest persisted shard header root.
 
         Args:
             shard_id: Shard identifier to replay.
@@ -1750,6 +1751,17 @@ class StorageLayer:
                     raise ValueError(
                         f"Shard '{shard_id}' ledger root mismatch at seq {ledger_seq}: "
                         f"expected {shard_root_hex}, computed {computed_root.hex()}"
+                    )
+
+            if headers:
+                latest_header_root = bytes(self._row_get(headers[-1], "root", 1))
+                current_tree = self._load_tree_state(cur, shard_id=None)
+                current_root = current_tree.get_root()
+                if current_root != latest_header_root:
+                    raise ValueError(
+                        f"Replay mismatch for shard '{shard_id}': latest persisted root "
+                        f"{latest_header_root.hex()} does not match current state "
+                        f"{current_root.hex()}"
                     )
 
             return True

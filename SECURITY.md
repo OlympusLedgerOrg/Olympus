@@ -152,7 +152,7 @@ for signing shard headers. **This key must be protected with the following contr
    Secrets Manager, Azure Key Vault, or GCP Secret Manager).
 2. **Rotate periodically** — Generate new keys at least annually or immediately
    after any potential compromise. Use the key history mechanism in
-   `protocol/federation.py` to maintain historical key acceptance.
+   `protocol/federation/identity.py` to maintain historical key acceptance.
 3. **Restrict process access** — Run the Olympus API in a container or VM with
    restricted process listing (`hidepid=2` for procfs) to prevent key extraction
    from `/proc/PID/environ`.
