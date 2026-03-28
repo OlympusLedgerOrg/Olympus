@@ -1,0 +1,29 @@
+[package]
+name = "olympus-core"
+version = "0.1.0"
+edition = "2021"
+description = "Rust extension for Olympus — O(n) ADL pattern matching via PyO3"
+license = "Apache-2.0"
+
+[lib]
+name = "olympus_core"
+# cdylib produces the .so/.pyd Python extension module
+crate-type = ["cdylib"]
+
+[dependencies]
+# PyO3 0.24 — chosen as the latest stable release line that satisfies the
+# minimum safe version (>= 0.22.4) required to avoid CVE-2024-9979
+# (use-after-free in PyString::from_object, patched in 0.22.4).
+pyo3 = { version = "0.24", features = ["extension-module"] }
+# Rust's regex crate uses a DFA/NFA hybrid with strict O(n) matching —
+# it is architecturally immune to catastrophic backtracking.
+regex = "1"
+
+[profile.release]
+lto = true
+codegen-units = 1
+panic = "abort"
+opt-level = 3
+
+[profile.dev]
+opt-level = 1

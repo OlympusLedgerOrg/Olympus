@@ -62,6 +62,8 @@ dev = [
     "jsonschema==4.26.0",
     "coverage==7.13.4",
     "bandit==1.9.4",
+    # Build tool for the olympus_core Rust extension (CVE-2026-4539 bridge)
+    "maturin>=1.5,<2",
 ]
 observability = [
     "opentelemetry-api==1.40.0",

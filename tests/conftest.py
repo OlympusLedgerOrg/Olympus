@@ -24,7 +24,7 @@ def pytest_configure(config):
     if os.environ.get("TEST_DATABASE_URL"):
         return
 
-    candidate = "postgresql://olympus:olympus@localhost:5432/olympus"
+    candidate = "postgresql://A.Smith:Mm4E@localhost:5432/olympus"
     try:
         with psycopg.connect(candidate, connect_timeout=2) as conn:
             with conn.cursor() as cur:

@@ -3,7 +3,7 @@
 Validation script to verify PostgreSQL database configuration.
 
 This script checks that all database connection strings in the codebase
-use the correct credentials (olympus:olympus) and not incorrect defaults
+use the correct credentials (A.Smith:Mm4E) and not incorrect defaults
 like root:root or postgres:postgres.
 
 Usage:
@@ -39,7 +39,7 @@ def check_database_urls() -> bool:
         (r"postgresql://postgres:", "postgres user (in non-doc context)"),
     ]
 
-    correct_pattern = r"postgresql://olympus:olympus"
+    correct_pattern = r"postgresql://A\.Smith:Mm4E"
 
     issues_found = []
     files_checked = 0
@@ -69,8 +69,8 @@ def check_database_urls() -> bool:
 
         # Check for correct pattern in test files
         if "test_" in file_path or "api/app.py" in file_path:
-            if correct_pattern in content:
-                print("  ✓ Correct credentials found (olympus:olympus)")
+            if re.search(correct_pattern, content):
+                print("  ✓ Correct credentials found (A.Smith:Mm4E)")
 
     print()
     print("=" * 70)
@@ -89,7 +89,7 @@ def check_database_urls() -> bool:
         print()
         print(f"  Files checked: {files_checked}")
         print("  No incorrect database credentials found")
-        print("  All test files use olympus:olympus credentials")
+        print("  All test files use A.Smith:Mm4E credentials")
         print()
         return True
 
