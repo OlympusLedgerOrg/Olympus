@@ -2200,30 +2200,28 @@ class StorageLayer:
         return cur.fetchone()
 
     def _persist_tree_nodes(
-        self, cur: psycopg.Cursor[Any], shard_id: str | None, tree: SparseMerkleTree
+        self, cur: psycopg.Cursor[Any], shard_id: str, tree: SparseMerkleTree
     ) -> None:
         """
         Persist tree nodes to database and populate the node cache.
 
         CDHSSMF Design:
         ---------------
-        This function now persists nodes to the GLOBAL SMT. The shard_id parameter is kept
-        for backwards compatibility with the cache but is not used in the database INSERT.
+        This function persists nodes to the GLOBAL SMT.  The ``shard_id``
+        is used as a cache-key prefix so that node look-ups are correctly
+        namespaced; it is **not** written to the database INSERT.
 
         Only inserts new nodes (append-only).
         Node insertion failures are acceptable - they indicate the node already exists.
 
         Args:
             cur: Database cursor
-            shard_id: DEPRECATED - kept for cache compatibility
+            shard_id: Shard prefix used for the in-memory node cache key
             tree: SparseMerkleTree to persist
         """
         ts = datetime.now(timezone.utc)
-        # shard_id is deprecated (CDHSSMF uses one global SMT) but the cache
-        # key and _iter_tree_node_rows still require a non-None string.
-        _sid: str = shard_id or ""
         for row_batch in self._iter_batches(
-            self._iter_tree_node_rows(_sid, tree, ts),
+            self._iter_tree_node_rows(shard_id, tree, ts),
             self.DEFAULT_FLUSH_BATCH_SIZE,
         ):
             # CDHSSMF: Insert into global SMT (no shard_id column)
@@ -2243,7 +2241,7 @@ class StorageLayer:
             )
 
             for _, level, path_bytes, hash_value, _ in row_batch:
-                self._cache_put(_sid, level, path_bytes, hash_value)
+                self._cache_put(shard_id, level, path_bytes, hash_value)
 
     @staticmethod
     def _encode_path(path: tuple[int, ...]) -> bytes:
