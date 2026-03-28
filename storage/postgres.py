@@ -51,7 +51,7 @@ from psycopg_pool import ConnectionPool, PoolTimeout
 
 from protocol.canonical_json import canonical_json_encode
 from protocol.canonicalizer import canonicalization_provenance
-from protocol.hashes import record_key, shard_header_hash
+from protocol.hashes import record_key, shard_header_hash, global_key
 from protocol.ledger import LedgerEntry
 from protocol.rfc3161 import MAX_TSA_TOKENS, _sha256_of_hash
 from protocol.shards import create_shard_header, sign_header, verify_header
@@ -839,12 +839,19 @@ class StorageLayer:
         poseidon_root: bytes | None = None,
     ) -> tuple[bytes, ExistenceProof, dict[str, Any], str, LedgerEntry]:
         """
-        Append a record to the sparse Merkle tree and update shard header and ledger.
+        Append a record to the global sparse Merkle tree and update shard header and ledger.
+
+        CDHSSMF Design:
+        ---------------
+        This function now uses the GLOBAL SMT with hierarchical key derivation.
+        Keys are generated via global_key(shard_id, record_key(...)) to encode
+        shard identity into the key space, eliminating the need for separate
+        per-shard trees.
 
         This is the main write operation. It:
-        1. Loads the current tree state from DB
-        2. Inserts the new leaf
-        3. Updates affected nodes
+        1. Loads the current GLOBAL tree state from DB
+        2. Inserts the new leaf using global_key()
+        3. Updates affected nodes in the global SMT
         4. Creates and signs a new shard header
         5. Creates a ledger entry
         6. Persists everything atomically
@@ -875,7 +882,10 @@ class StorageLayer:
             raise ValueError(f"Value hash must be 32 bytes, got {len(value_hash)}")
 
         # Generate record key
-        key = record_key(record_type, record_id, version)
+        rec_key = record_key(record_type, record_id, version)
+
+        # CDHSSMF: Generate global key that encodes shard identity
+        key = global_key(shard_id, rec_key)
 
         # BEGIN TRANSACTION (implicit via context manager)
         with self._get_connection() as conn, conn.cursor(row_factory=dict_row) as cur:
@@ -883,8 +893,8 @@ class StorageLayer:
             # under concurrent writes, particularly for shard header chain linkage
             conn.execute("SET TRANSACTION ISOLATION LEVEL SERIALIZABLE")
 
-            # Load current tree state
-            tree = self._load_tree_state(cur, shard_id)
+            # Load current GLOBAL tree state (all shards)
+            tree = self._load_tree_state(cur, shard_id=None)
 
             # Check if key already exists
             if tree.get(key) is not None:
@@ -898,16 +908,17 @@ class StorageLayer:
             # Generate proof
             proof = tree.prove_existence(key)
 
-            # Insert leaf
+            # Insert leaf (CDHSSMF: no shard_id column)
             cur.execute(
                 """
-                    INSERT INTO smt_leaves (shard_id, key, version, value_hash, ts)
-                    VALUES (%s, %s, %s, %s, %s)
+                    INSERT INTO smt_leaves (key, version, value_hash, ts)
+                    VALUES (%s, %s, %s, %s)
                     """,
-                (shard_id, key, version, value_hash, datetime.now(timezone.utc)),
+                (key, version, value_hash, datetime.now(timezone.utc)),
             )
 
             # Insert new affected nodes (append-only, skip if node exists)
+            # CDHSSMF: shard_id is passed for cache compatibility but not used in DB
             self._persist_tree_nodes(cur, shard_id, tree)
 
             # Get previous header
@@ -2084,26 +2095,31 @@ class StorageLayer:
     def _load_tree_state(
         self,
         cur: psycopg.Cursor[Any],
-        shard_id: str,
+        shard_id: str | None,
         up_to_ts: datetime | str | None = None,
     ) -> SparseMerkleTree:
         """
         Load sparse Merkle tree state from database.
+
+        CDHSSMF Design:
+        ---------------
+        This function now loads the GLOBAL SMT state. The shard_id parameter is kept
+        for backwards compatibility but is deprecated. Pass None to load the global tree.
 
         Read-only helper. Must be called within an existing transaction.
         No writes, no commit.
 
         Args:
             cur: Database cursor
-            shard_id: Shard identifier
+            shard_id: DEPRECATED - kept for backwards compatibility, should be None
             up_to_ts: Optional inclusive timestamp cutoff for historical snapshots
 
         Returns:
-            SparseMerkleTree with all leaves loaded
+            SparseMerkleTree with all leaves loaded (global SMT)
         """
         tree = SparseMerkleTree()
 
-        # Load all leaves for this shard
+        # CDHSSMF: Load ALL leaves from the global SMT (no shard_id filter)
         # Secondary ordering by key makes replay deterministic when multiple inserts share
         # the same timestamp, while preserving the primary append order on ts. Without
         # this stable tie-break, historical reconstruction could yield different roots
@@ -2112,10 +2128,8 @@ class StorageLayer:
             cur.execute(
                 """
                 SELECT key, value_hash FROM smt_leaves
-                WHERE shard_id = %s
                 ORDER BY ts ASC, key ASC
-                """,
-                (shard_id,),
+                """
             )
         else:
             cutoff = up_to_ts
@@ -2124,10 +2138,10 @@ class StorageLayer:
             cur.execute(
                 """
                 SELECT key, value_hash FROM smt_leaves
-                WHERE shard_id = %s AND ts <= %s
+                WHERE ts <= %s
                 ORDER BY ts ASC, key ASC
                 """,
-                (shard_id, cutoff),
+                (cutoff,),
             )
         rows = cur.fetchall()
 
@@ -2166,17 +2180,22 @@ class StorageLayer:
         return cur.fetchone()
 
     def _persist_tree_nodes(
-        self, cur: psycopg.Cursor[Any], shard_id: str, tree: SparseMerkleTree
+        self, cur: psycopg.Cursor[Any], shard_id: str | None, tree: SparseMerkleTree
     ) -> None:
         """
         Persist tree nodes to database and populate the node cache.
+
+        CDHSSMF Design:
+        ---------------
+        This function now persists nodes to the GLOBAL SMT. The shard_id parameter is kept
+        for backwards compatibility with the cache but is not used in the database INSERT.
 
         Only inserts new nodes (append-only).
         Node insertion failures are acceptable - they indicate the node already exists.
 
         Args:
             cur: Database cursor
-            shard_id: Shard identifier
+            shard_id: DEPRECATED - kept for cache compatibility
             tree: SparseMerkleTree to persist
         """
         ts = datetime.now(timezone.utc)
@@ -2184,13 +2203,17 @@ class StorageLayer:
             self._iter_tree_node_rows(shard_id, tree, ts),
             self.DEFAULT_FLUSH_BATCH_SIZE,
         ):
+            # CDHSSMF: Insert into global SMT (no shard_id column)
+            # Extract just the fields we need (skip shard_id which is first field)
+            global_rows = [(level, index, hash_val, ts_val) for (_, level, index, hash_val, ts_val) in row_batch]
+
             cur.executemany(
                 """
-                INSERT INTO smt_nodes (shard_id, level, index, hash, ts)
-                VALUES (%s, %s, %s, %s, %s)
-                ON CONFLICT (shard_id, level, index) DO NOTHING
+                INSERT INTO smt_nodes (level, index, hash, ts)
+                VALUES (%s, %s, %s, %s)
+                ON CONFLICT (level, index) DO NOTHING
                 """,
-                row_batch,
+                global_rows,
             )
 
             for _, level, path_bytes, hash_value, _ in row_batch:
