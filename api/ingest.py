@@ -24,7 +24,7 @@ import uuid
 import warnings
 from collections import OrderedDict
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import datetime, timezone
 from threading import Lock
 from time import monotonic
 from typing import TYPE_CHECKING, Any
@@ -476,7 +476,7 @@ def _parse_timestamp(raw: str) -> datetime:
     parsed = datetime.fromisoformat(normalized)
     if parsed.tzinfo is None:
         raise ValueError("expires_at must be timezone-aware")
-    return parsed.astimezone(UTC)
+    return parsed.astimezone(timezone.utc)
 
 
 def _hash_api_key(api_key: str) -> str:
@@ -793,7 +793,7 @@ def _authorize_and_rate_limit(request: Request, action: str) -> ApiKeyRecord:
     if record is None:
         _append_security_audit_event("api_key_invalid", {"client_ip": client_ip, "action": action})
         raise HTTPException(status_code=401, detail="Invalid API key")
-    if datetime.now(UTC) >= record.expires_at:
+    if datetime.now(timezone.utc) >= record.expires_at:
         _append_security_audit_event(
             "api_key_expired", {"key_id": record.key_id, "client_ip": client_ip, "action": action}
         )

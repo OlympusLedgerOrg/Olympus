@@ -24,7 +24,7 @@ import logging
 import os
 from collections import OrderedDict
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import datetime, timezone
 from threading import Lock
 from time import monotonic
 from typing import Annotated, Protocol, runtime_checkable
@@ -91,7 +91,7 @@ def _load_keys_locked() -> None:
         expires_at_str = entry.get("expires_at", "2099-01-01T00:00:00Z")
         try:
             expires_at = datetime.fromisoformat(expires_at_str.replace("Z", "+00:00")).astimezone(
-                UTC
+                timezone.utc
             )
         except (ValueError, AttributeError) as exc:
             raise ValueError(f"Invalid expires_at for key {key_id}: {expires_at_str}") from exc
@@ -180,7 +180,7 @@ async def require_api_key(request: Request) -> _APIKeyRecord:
                 key_id="dev",
                 key_hash="",
                 scopes={"read", "write"},
-                expires_at=datetime(2099, 1, 1, tzinfo=UTC),
+                expires_at=datetime(2099, 1, 1, tzinfo=timezone.utc),
             )
         logger.error(
             "OLYMPUS_FOIA_API_KEYS is empty and OLYMPUS_ENV != 'development'. "
@@ -208,7 +208,7 @@ async def require_api_key(request: Request) -> _APIKeyRecord:
             detail={"detail": "Invalid API key.", "code": "AUTH_INVALID"},
         )
 
-    if datetime.now(UTC) >= record.expires_at:
+    if datetime.now(timezone.utc) >= record.expires_at:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail={"detail": "API key expired.", "code": "AUTH_EXPIRED"},

@@ -762,9 +762,9 @@ def test_smt_leaves_reject_update(storage, signing_key):
                 """
                 UPDATE smt_leaves
                 SET value_hash = %s
-                WHERE shard_id = %s
+                WHERE key = %s AND version = 1
                 """,
-                (hash_bytes(b"modified"), shard_id),
+                (hash_bytes(b"modified"), hash_bytes(shard_id.encode())),
             )
 
 
@@ -788,9 +788,9 @@ def test_smt_leaves_reject_delete(storage, signing_key):
             cur.execute(
                 """
                 DELETE FROM smt_leaves
-                WHERE shard_id = %s
+                WHERE key = %s
                 """,
-                (shard_id,),
+                (hash_bytes(shard_id.encode()),),
             )
 
 
@@ -815,9 +815,9 @@ def test_smt_nodes_reject_update(storage, signing_key):
                 """
                 UPDATE smt_nodes
                 SET hash = %s
-                WHERE shard_id = %s
+                WHERE level = 0 AND index = %s
                 """,
-                (hash_bytes(b"modified"), shard_id),
+                (hash_bytes(b"modified"), hash_bytes(shard_id.encode())),
             )
 
 
@@ -841,9 +841,9 @@ def test_smt_nodes_reject_delete(storage, signing_key):
             cur.execute(
                 """
                 DELETE FROM smt_nodes
-                WHERE shard_id = %s
+                WHERE level = 0 AND index = %s
                 """,
-                (shard_id,),
+                (hash_bytes(shard_id.encode()),),
             )
 
 

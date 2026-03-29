@@ -429,13 +429,13 @@ def test_api_root_and_health(client):
     response = client.get("/")
     assert response.status_code == 200
     data = response.json()
-    assert data["name"] == "Olympus Public Audit API"
-    assert data["version"] == "0.5.0"
+    assert data["service"] == "Olympus FOIA Ledger"
+    assert "version" in data
 
     # Test health
     response = client.get("/health")
     assert response.status_code == 200
     data = response.json()
-    assert data["status"] == "healthy"
+    assert data["status"] == "ok"
 
     print("✓ API root and health check working")

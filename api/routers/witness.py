@@ -22,7 +22,7 @@ from __future__ import annotations
 import logging
 import os
 from collections import OrderedDict, defaultdict
-from datetime import UTC, datetime
+from datetime import datetime, timezone
 
 from fastapi import APIRouter, HTTPException, Query, status
 
@@ -183,7 +183,7 @@ async def submit_observation(
     # -- Replay-resistance: validate timestamp freshness -----------------
     try:
         ts = datetime.fromisoformat(request.checkpoint.timestamp.replace("Z", "+00:00")).astimezone(
-            UTC
+            timezone.utc
         )
     except (ValueError, AttributeError):
         raise HTTPException(
@@ -191,7 +191,7 @@ async def submit_observation(
             detail="checkpoint.timestamp must be a valid ISO 8601 UTC string",
         )
 
-    now = datetime.now(UTC)
+    now = datetime.now(timezone.utc)
     age_seconds = (now - ts).total_seconds()
     if age_seconds > _MAX_ANNOUNCE_SKEW_SECONDS:
         raise HTTPException(
