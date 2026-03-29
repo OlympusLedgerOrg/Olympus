@@ -211,6 +211,10 @@ module = "poseidon_py.*"
 ignore_missing_imports = true
 
 [[tool.mypy.overrides]]
+module = "zstandard.*"
+ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
 module = "opentelemetry.*"
 ignore_missing_imports = true
 

@@ -65,9 +65,7 @@ async def get_ledger_state(db: DBSession, _rl: RateLimit):
     # Fetch distinct shard IDs with a bounded query.
     # Phase 0 deployments use a single shard; this limit is a safety guard
     # until a dedicated shard registry (Phase 1) replaces the full table scan.
-    shard_result = await db.execute(
-        select(DocCommit.shard_id).distinct().limit(1000)
-    )
+    shard_result = await db.execute(select(DocCommit.shard_id).distinct().limit(1000))
     shard_ids = [row[0] for row in shard_result.all()] or ["0x4F3A"]
 
     shard_roots: list[str] = []

@@ -90,9 +90,9 @@ def _load_keys_locked() -> None:
         scopes = set(entry.get("scopes", ["read", "write"]))
         expires_at_str = entry.get("expires_at", "2099-01-01T00:00:00Z")
         try:
-            expires_at = datetime.fromisoformat(
-                expires_at_str.replace("Z", "+00:00")
-            ).astimezone(UTC)
+            expires_at = datetime.fromisoformat(expires_at_str.replace("Z", "+00:00")).astimezone(
+                UTC
+            )
         except (ValueError, AttributeError) as exc:
             raise ValueError(f"Invalid expires_at for key {key_id}: {expires_at_str}") from exc
         _key_store[key_hash] = _APIKeyRecord(

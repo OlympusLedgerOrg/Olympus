@@ -557,7 +557,9 @@ def _load_api_keys_from_env() -> None:
         return
     _api_keys_loaded = True
     # Prefer OLYMPUS_API_KEYS_JSON; fall back to OLYMPUS_FOIA_API_KEYS for consolidated config
-    raw_str = os.environ.get("OLYMPUS_API_KEYS_JSON") or os.environ.get("OLYMPUS_FOIA_API_KEYS", "[]")
+    raw_str = os.environ.get("OLYMPUS_API_KEYS_JSON") or os.environ.get(
+        "OLYMPUS_FOIA_API_KEYS", "[]"
+    )
     try:
         raw = json.loads(raw_str)
     except json.JSONDecodeError as exc:
@@ -780,9 +782,7 @@ def _consume_rate_limit(subject_type: str, subject: str, action: str) -> bool:
         return bucket.consume()
 
 
-def _authorize_and_rate_limit(
-    request: Request, action: str
-) -> ApiKeyRecord:
+def _authorize_and_rate_limit(request: Request, action: str) -> ApiKeyRecord:
     """Authenticate API key, enforce scope/expiry, and apply token buckets."""
     _load_api_keys_from_env()
     api_key = _extract_api_key(request)

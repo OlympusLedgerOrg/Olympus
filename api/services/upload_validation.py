@@ -187,7 +187,7 @@ def validate_zstd_safety(content: bytes) -> None:
         HTTPException 400: Corrupt stream, size limit exceeded, or ratio too high.
     """
     try:
-        import zstandard as zstd  # noqa: PLC0415 — optional dep imported lazily
+        import zstandard as zstd  # noqa: PLC0415
     except ImportError as exc:  # pragma: no cover
         raise HTTPException(
             status_code=415,
@@ -233,8 +233,7 @@ def validate_zstd_safety(content: bytes) -> None:
                     raise HTTPException(
                         status_code=400,
                         detail=(
-                            f"Zstandard total decompressed size exceeds "
-                            f"the {limit_mb} MB limit."
+                            f"Zstandard total decompressed size exceeds the {limit_mb} MB limit."
                         ),
                     )
     except zstd.ZstdError as exc:
