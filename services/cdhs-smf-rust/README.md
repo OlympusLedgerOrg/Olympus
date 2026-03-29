@@ -1,6 +1,6 @@
-# CD-HS-SMF Rust Service
+# CD-HS-ST Rust Service
 
-Constant-Depth Hierarchical Sparse Sharded Merkle Forest service implemented in Rust.
+Constant-Depth Hierarchical Sparse Tree service implemented in Rust.
 
 ## Architecture
 

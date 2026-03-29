@@ -1,4 +1,4 @@
-//! Sparse Merkle Tree implementation for CD-HS-SMF
+//! Sparse Merkle Tree implementation for CD-HS-ST
 //!
 //! This module implements a 256-height sparse Merkle tree with:
 //! - Precomputed empty hashes for efficient sparse operations

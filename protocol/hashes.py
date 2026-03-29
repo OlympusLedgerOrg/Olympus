@@ -132,7 +132,7 @@ def record_key(record_type: str, record_id: str, version: int) -> bytes:
 # needed; length prefixes commit the shard / record field boundaries explicitly.
 def global_key(shard_id: str, record_key_bytes: bytes) -> bytes:
     """
-    Generate a global SMT key for CDHSSMF (Constant-Depth Hierarchical Sparse Sharded Merkle Forest).
+    Generate a global SMT key for CD-HS-ST (Constant-Depth Hierarchical Sparse Tree).
 
     This function implements hierarchical key derivation that encodes shard identity into the
     global SMT key space, enabling a single SMT to replace separate per-shard SMTs and forest SMTs.

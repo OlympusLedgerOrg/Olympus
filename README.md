@@ -23,7 +23,7 @@ All components are open source: protocol implementations (`protocol/`), ZK circu
 ## Trust & Threat Model (60-second summary)
 
 - **Adversaries:** malicious submitters, compromised operators, and network attackers who can observe and modify traffic but cannot break modern cryptography.
-- **What we defend:** append-only ledger integrity (BLAKE3 CD-HS-SMF + shard headers), verifiable provenance, and non-malleable redaction proofs (Poseidon + Groth16).
+- **What we defend:** append-only ledger integrity (BLAKE3 CD-HS-ST + shard headers), verifiable provenance, and non-malleable redaction proofs (Poseidon + Groth16).
 - **What we do not promise:** availability under single-operator failure (Guardian replication is Phase 1+), confidentiality of submitted content, or completeness of all possible records.
 - **Why it holds:** dual-root commitments bind BLAKE3 ledger roots to Poseidon circuit roots; deterministic canonicalization removes parser ambiguity; shard headers are Ed25519-signed and RFC 3161 timestamp-tokened; verification bundles allow offline re-validation.
 - See [`threat-model.md`](threat-model.md) for the full threat/assurance boundaries.
@@ -39,9 +39,9 @@ A layered cryptographic infrastructure for real-world applications that require:
 
 ## Technical Architecture
 
-### CD-HS-SMF: Constant-Depth Hierarchical Sparse Sharded Merkle Forest
+### CD-HS-ST: Constant-Depth Hierarchical Sparse Tree
 
-Olympus is built on the **CD-HS-SMF** — a single global 256-level Sparse Merkle Tree where shard identity is encoded directly into the leaf key rather than maintained as a separate per-shard tree.
+Olympus is built on the **CD-HS-ST** — a single global 256-level Sparse Merkle Tree where shard identity is encoded directly into the leaf key rather than maintained as a separate per-shard tree.
 
 ```
 key = H(GLOBAL_KEY_PREFIX || shard_id || record_key)
@@ -72,7 +72,7 @@ Olympus has three service layers with strict responsibility boundaries:
                     | Protobuf over gRPC
                     v
 +---------------------------------------------------+
-|  Rust CD-HS-SMF Service (services/cdhs-smf-rust/) |
+|  Rust CD-HS-ST Service (services/cdhs-smf-rust/) |
 |  - BLAKE3 hashing (domain-separated)              |
 |  - Composite key generation (length-prefixed)     |
 |  - SMT insert / inclusion-proof / non-membership  |
@@ -97,7 +97,7 @@ All stages are independently verifiable. The canonicalization version is current
 
 | Primitive | Where used |
 |-----------|-----------|
-| BLAKE3 (domain-separated) | All ledger hashing, CD-HS-SMF leaf/node hashes, global keys |
+| BLAKE3 (domain-separated) | All ledger hashing, CD-HS-ST leaf/node hashes, global keys |
 | Ed25519 (PyNaCl / ed25519-dalek) | Shard header signing, federation votes |
 | Poseidon (BN128) | ZK circuit commitments only (separate from BLAKE3 ledger layer) |
 | Groth16 (snarkjs / Circom) | ZK proofs: document existence, redaction validity, non-existence |
@@ -128,7 +128,7 @@ The repository is at **Phase 0** (pre-public protocol hardening). The three phas
 
 **Phase 1** (greenfield, no migration) services are underway:
 - Go sequencer: `services/sequencer-go/` and `go/sequencer/`
-- Rust CD-HS-SMF service: `services/cdhs-smf-rust/`
+- Rust CD-HS-ST service: `services/cdhs-smf-rust/`
 - Shared protobuf definitions: `proto/`
 
 ### Developer Workflows
@@ -162,14 +162,14 @@ proofs/          Circom ZK circuits (document_existence, redaction_validity,
                    non_existence), proving keys, and proof-generation tooling
 proto/           Protobuf definitions shared between Go and Rust services
                    (cdhs_smf.proto, olympus.proto)
-protocol/        Python reference implementations -- hashing, CD-HS-SMF,
+protocol/        Python reference implementations -- hashing, CD-HS-ST,
                    canonicalization, Merkle trees, ledger, redaction, federation,
                    attestations, checkpoints, RFC 3161
 scaffolding/     Non-production test wiring and view-change scaffolding
 schemas/         JSON schema definitions validated by tools/validate_schemas.py
 scripts/         Utility scripts
 services/        Microservices:
-                   cdhs-smf-rust/  -- Rust gRPC CD-HS-SMF cryptographic core
+                   cdhs-smf-rust/  -- Rust gRPC CD-HS-ST cryptographic core
                    sequencer-go/   -- Go gRPC log sequencer
 src/             Rust PyO3 extension (olympus-core) -- accelerated hashing and
                    canonicalization callable from Python
@@ -242,7 +242,7 @@ Olympus is influenced by the operational model of Certificate Transparency and S
 |------|-------|
 | Python API application | `api/app.py` |
 | Debug UI / verification portal | `ui/app.py` |
-| Rust CD-HS-SMF service | `services/cdhs-smf-rust/src/main.rs` |
+| Rust CD-HS-ST service | `services/cdhs-smf-rust/src/main.rs` |
 | Go sequencer service | `services/sequencer-go/` |
 | Protobuf definitions | `proto/cdhs_smf.proto`, `proto/olympus.proto` |
 | Services architecture | `services/README.md` |

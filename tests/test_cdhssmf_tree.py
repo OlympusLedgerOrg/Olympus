@@ -1,7 +1,7 @@
 """
 Tests for CdhssmfTree and ShardRecord from protocol/cdhssmf.py.
 
-This module tests the public API for the CDHSSMF design: CdhssmfTree wraps
+This module tests the public API for the CD-HS-ST design: CdhssmfTree wraps
 SparseMerkleTree with shard-aware methods, and ShardRecord is the logical
 address type for records within shards.
 
@@ -435,7 +435,7 @@ class TestCdhssmfTreeDiff:
 
 
 class TestCdhssmfShardIsolation:
-    """Tests for shard isolation guarantees in CDHSSMF."""
+    """Tests for shard isolation guarantees in CD-HS-ST."""
 
     def test_same_record_key_different_shards_different_global_keys(self):
         """Same record_key in two different shards produces different global keys."""

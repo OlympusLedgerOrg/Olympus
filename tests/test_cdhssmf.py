@@ -1,7 +1,7 @@
 """
-Tests for CDHSSMF (Constant-Depth Hierarchical Sparse Sharded Merkle Forest) implementation.
+Tests for CD-HS-ST (Constant-Depth Hierarchical Sparse Tree) implementation.
 
-This module tests the global_key() function and the CDHSSMF design that collapses
+This module tests the global_key() function and the CD-HS-ST design that collapses
 the dual-tree structure (per-shard SMTs + forest SMT) into a single global SMT
 with hierarchical key derivation.
 """
@@ -12,7 +12,7 @@ from protocol.hashes import _GLOBAL_SMT_KEY_CONTEXT, global_key, record_key
 
 
 class TestGlobalKey:
-    """Test the global_key() function for CDHSSMF hierarchical key derivation."""
+    """Test the global_key() function for CD-HS-ST hierarchical key derivation."""
 
     def test_global_key_deterministic(self):
         """global_key() should produce identical output for identical inputs."""
@@ -124,10 +124,10 @@ class TestGlobalKey:
 
 
 class TestCDHSSMFSemantics:
-    """Test CDHSSMF design semantics and correctness properties."""
+    """Test CD-HS-ST design semantics and correctness properties."""
 
     def test_hierarchical_namespace_encoding(self):
-        """CDHSSMF should encode shards as namespaces in key space."""
+        """CD-HS-ST should encode shards as namespaces in key space."""
         # The key insight: (shard_id, record_key) -> global_key is injective
         # This means no collisions across different (shard, record) pairs
 
@@ -149,7 +149,7 @@ class TestCDHSSMFSemantics:
         assert len(set(global_keys)) == len(test_records)
 
     def test_single_tree_replaces_dual_tree(self):
-        """CDHSSMF should eliminate need for separate forest tree."""
+        """CD-HS-ST should eliminate need for separate forest tree."""
         # Before: needed a second cross-shard commitment layer.
         # After: single global SMT root commits to all shards
 
@@ -206,7 +206,7 @@ def test_global_key_is_32_bytes():
 def test_global_key_shard_isolation():
     """
     Two records with the same record_key in different shards must produce different
-    global keys — this is the core CDHSSMF isolation guarantee.
+    global keys — this is the core CD-HS-ST isolation guarantee.
     """
     record = b"identical-record-key"
     keys = [global_key(f"shard-{i}", record) for i in range(10)]

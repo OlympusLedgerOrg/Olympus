@@ -14,7 +14,7 @@ import (
 func main() {
 	ctx := context.Background()
 
-	// Initialize CD-HS-SMF Rust service client
+	// Initialize CD-HS-ST Rust service client
 	smtClient, err := client.NewCdhsSmfClient("localhost:50051")
 	if err != nil {
 		log.Fatalf("Failed to create SMT client: %v", err)

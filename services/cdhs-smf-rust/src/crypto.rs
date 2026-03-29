@@ -1,4 +1,4 @@
-//! Cryptographic primitives for CD-HS-SMF
+//! Cryptographic primitives for CD-HS-ST
 //!
 //! This module implements:
 //! - BLAKE3 hashing with domain separation
@@ -12,8 +12,14 @@ use std::collections::HashMap;
 
 use crate::proto::olympus::cdhs_smf::v1::RecordKey;
 
-/// Domain separation prefixes for BLAKE3 hashing
-const GLOBAL_KEY_PREFIX: &[u8] = b"OLY:CDHS-SMF:GKEY:V1";
+/// Domain separation prefixes for BLAKE3 hashing.
+///
+/// IMPORTANT: `GLOBAL_KEY_PREFIX` intentionally retains the historical bytes
+/// `b"OLY:CDHS-SMF:GKEY:V1"`.  Changing it would invalidate every existing leaf
+/// hash and break all outstanding inclusion proofs — it is a protocol-critical
+/// constant.  The architecture was later renamed CD-HS-ST but this prefix is
+/// frozen at its original value for backward compatibility.
+const GLOBAL_KEY_PREFIX: &[u8] = b"OLY:CDHS-SMF:GKEY:V1"; // frozen — do not change
 const LEAF_HASH_PREFIX: &[u8] = b"OLY:SMT:LEAF:V1";
 const NODE_HASH_PREFIX: &[u8] = b"OLY:SMT:NODE:V1";
 const EMPTY_LEAF_PREFIX: &[u8] = b"OLY:EMPTY-LEAF:V1";

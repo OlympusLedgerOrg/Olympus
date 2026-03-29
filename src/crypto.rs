@@ -68,7 +68,7 @@ pub fn blake3_hash<'py>(py: Python<'py>, parts: &Bound<'py, PyList>) -> PyResult
     Ok(PyBytes::new(py, digest.as_bytes()).into())
 }
 
-/// Derive a global SMT leaf key for the CD-HS-SMF.
+/// Derive a global SMT leaf key for the CD-HS-ST.
 ///
 /// Uses BLAKE3 ``derive_key`` mode with the protocol-fixed context string so
 /// that the domain is baked into the hash state and no separator can collide
