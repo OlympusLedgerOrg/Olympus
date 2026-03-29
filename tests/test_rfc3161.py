@@ -759,7 +759,7 @@ def test_evaluate_timestamp_token_health_healthy():
     ]
 
     # Mock cert expiry check to return no warnings (tokens are fake)
-    fake_expiry = {"valid": True, "warning": False, "not_after": "2028-01-01T00:00:00Z"}
+    fake_expiry = {"valid": True, "warning": False, "not_after": "2099-01-01T00:00:00Z"}
     with patch("protocol.rfc3161.check_tsa_certificate_expiry", return_value=fake_expiry):
         result = evaluate_timestamp_token_health(tokens, now=now, stale_after_seconds=3600)
     assert result["healthy"] is True

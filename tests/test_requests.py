@@ -406,10 +406,25 @@ async def test_list_with_status_filter(client):
 @pytest.mark.asyncio
 async def test_list_with_search_filter(client):
     """GET /requests?search=... returns only matching requests."""
-    resp = await client.get("/requests", params={"search": "body camera"})
+    # Create a request whose subject matches a unique search term
+    matching_body = {**REQUEST_BODY, "subject": "Quartzy aqueduct inspection reports"}
+    match_resp = await client.post("/requests", json=matching_body)
+    assert match_resp.status_code == 201
+    matching_id = match_resp.json()["display_id"]
+
+    # Create a request whose subject does NOT match
+    non_matching_body = {**REQUEST_BODY, "subject": "Zoning permit application records"}
+    non_match_resp = await client.post("/requests", json=non_matching_body)
+    assert non_match_resp.status_code == 201
+    non_matching_id = non_match_resp.json()["display_id"]
+
+    resp = await client.get("/requests", params={"search": "quartzy aqueduct"})
     assert resp.status_code == 200
-    for r in resp.json():
-        assert "body camera" in r["subject"].lower()
+    results = resp.json()
+    assert len(results) >= 1, "search should return at least the matching request"
+    result_ids = {r["display_id"] for r in results}
+    assert matching_id in result_ids, "matching request must appear in search results"
+    assert non_matching_id not in result_ids, "non-matching request must not appear"
 
 
 @pytest.mark.asyncio
