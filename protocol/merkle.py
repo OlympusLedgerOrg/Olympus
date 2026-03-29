@@ -455,7 +455,20 @@ def _subproof_ct(
             # Not at root - need the subtree root
             return [ct_merkle_root(list(leaf_hashes[:old_size]))]
 
+    # Base case: single-leaf new tree (new_size == 1).
+    # The standard k-derivation loop leaves k == new_size, making the
+    # ``new_size > k`` branch below unreachable and causing infinite
+    # recursion when old_size == 0.  Handle explicitly: the only valid
+    # scenario is old_size == 0 (old_size == new_size is caught above),
+    # and the proof is simply the single-leaf subtree root.
+    if new_size == 1:
+        if is_root:
+            return []
+        return [ct_merkle_root(list(leaf_hashes[:new_size]))]
+
     # Find largest power of 2 less than new_size (k in RFC 6962)
+    # Invariant: after this loop, k < new_size (strictly), so the
+    # ``new_size > k`` test below is always True.
     k = 1
     while k * 2 < new_size:
         k *= 2
@@ -465,11 +478,8 @@ def _subproof_ct(
         # Need: SUBPROOF(old_size, k, False) + [right_subtree_root]
         # When we recurse into a subtree, is_root should be False
         left_proof = _subproof_ct(leaf_hashes[:k], old_size, k, False)
-        if new_size > k:
-            right_root = ct_merkle_root(list(leaf_hashes[k:new_size]))
-            return left_proof + [right_root]
-        else:
-            return left_proof
+        right_root = ct_merkle_root(list(leaf_hashes[k:new_size]))
+        return left_proof + [right_root]
     else:
         # old_size is in the right subtree (old_size > k)
         # Need: [left_subtree_root] + SUBPROOF(old_size - k, new_size - k, False)
@@ -587,7 +597,19 @@ def _verify_subproof_ct(
             root = proof[proof_index]
             return root, root, proof_index + 1
 
+    # Base case: single-leaf new tree (new_size == 1).
+    # Mirrors the guard in _subproof_ct: the k-derivation loop leaves
+    # k == new_size, so the ``new_size > k`` branch below would be
+    # unreachable and old_size == 0 would recurse infinitely.
+    if new_size == 1:
+        if proof_index >= len(proof):
+            raise ValueError("Proof exhausted for single-leaf subtree")
+        root = proof[proof_index]
+        return root, root, proof_index + 1
+
     # Find largest power of 2 less than new_size (k in RFC 6962)
+    # Invariant: after this loop, k < new_size (strictly), so the
+    # ``new_size > k`` test below is always True.
     k = 1
     while k * 2 < new_size:
         k *= 2
@@ -600,18 +622,12 @@ def _verify_subproof_ct(
             proof, proof_index, old_size, k, False
         )
 
-        if new_size > k:
-            # New tree has right subtree
-            if idx >= len(proof):
-                raise ValueError("Proof exhausted, expected right subtree root")
-            right_root = proof[idx]
-            idx += 1
-            old_root = old_root_left
-            new_root = node_hash(new_root_left, right_root)
-        else:
-            # New tree = left subtree only (new_size = k)
-            old_root = old_root_left
-            new_root = new_root_left
+        if idx >= len(proof):
+            raise ValueError("Proof exhausted, expected right subtree root")
+        right_root = proof[idx]
+        idx += 1
+        old_root = old_root_left
+        new_root = node_hash(new_root_left, right_root)
 
         return old_root, new_root, idx
     else:

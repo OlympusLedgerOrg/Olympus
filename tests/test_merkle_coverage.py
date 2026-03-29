@@ -238,3 +238,32 @@ def test_consistency_proof_rejects_tampered_proof():
     if tampered:
         tampered[0][-1] ^= 0xFF
         assert not verify_consistency_proof(old_root, new_root, [bytes(t) for t in tampered], 2, 4)
+
+
+# ---------------------------------------------------------------------------
+# new_size=1 edge case — exercises the single-leaf base case guard
+# ---------------------------------------------------------------------------
+
+
+def test_subproof_new_size_one_not_root():
+    """_subproof_ct with new_size=1, not root, returns the single-leaf root."""
+    leaf = merkle_leaf_hash(b"only-leaf")
+    result = _subproof_ct([leaf], 0, 1, False)
+    assert len(result) == 1
+    assert result[0] == ct_merkle_root([leaf])
+
+
+def test_subproof_new_size_one_at_root():
+    """_subproof_ct with new_size=1, at root, returns empty proof."""
+    leaf = merkle_leaf_hash(b"only-leaf")
+    result = _subproof_ct([leaf], 0, 1, True)
+    assert result == []
+
+
+def test_verify_subproof_new_size_one():
+    """_verify_subproof_ct with new_size=1 consumes one proof node."""
+    h = b"\xaa" * 32
+    old_root, new_root, idx = _verify_subproof_ct([h], 0, 0, 1, False)
+    assert old_root == h
+    assert new_root == h
+    assert idx == 1
