@@ -45,10 +45,18 @@ if str(_REPO_ROOT) not in sys.path:
 # Argument parsing
 # ---------------------------------------------------------------------------
 
-_parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-_parser.add_argument("--records", type=int, default=20_000, help="iterations per benchmark (default: 20000)")
-_parser.add_argument("--warmup", type=int, default=500, help="warmup iterations before timing (default: 500)")
-_parser.add_argument("--no-rust", dest="no_rust", action="store_true", help="skip Rust timings (baseline-only mode)")
+_parser = argparse.ArgumentParser(
+    description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
+)
+_parser.add_argument(
+    "--records", type=int, default=20_000, help="iterations per benchmark (default: 20000)"
+)
+_parser.add_argument(
+    "--warmup", type=int, default=500, help="warmup iterations before timing (default: 500)"
+)
+_parser.add_argument(
+    "--no-rust", dest="no_rust", action="store_true", help="skip Rust timings (baseline-only mode)"
+)
 _ARGS, _UNKNOWN = _parser.parse_known_args()
 
 # ---------------------------------------------------------------------------
@@ -57,6 +65,7 @@ _ARGS, _UNKNOWN = _parser.parse_known_args()
 
 _t_import_start = time.perf_counter()
 import blake3 as _blake3  # noqa: E402
+
 _t_blake3_imported = time.perf_counter()
 
 import unicodedata  # noqa: E402
@@ -69,6 +78,7 @@ _t_rust_import_start = time.perf_counter()
 try:
     import olympus_core.crypto as _rust_crypto
     import olympus_core.canonical as _rust_canonical
+
     _rust_available = True
 except ImportError:
     pass
@@ -79,10 +89,10 @@ _t_rust_imported = time.perf_counter()
 # so we get a clean apples-to-apples comparison)
 # ---------------------------------------------------------------------------
 
-_KEY_PREFIX   = b"OLY:KEY:V1"
-_LEAF_PREFIX  = b"OLY:LEAF:V1"
-_NODE_PREFIX  = b"OLY:NODE:V1"
-_SEP          = b"|"
+_KEY_PREFIX = b"OLY:KEY:V1"
+_LEAF_PREFIX = b"OLY:LEAF:V1"
+_NODE_PREFIX = b"OLY:NODE:V1"
+_SEP = b"|"
 from protocol.hashes import _GLOBAL_SMT_KEY_CONTEXT as _GSK_CONTEXT  # noqa: E402
 
 
@@ -142,11 +152,11 @@ def py_canonical_json_encode(obj: object) -> str:
         adj = len(digs) - 1 + e
         if -6 <= adj <= 20:
             if e >= 0:
-                return f"{sign}{digs}{'0'*e}"
+                return f"{sign}{digs}{'0' * e}"
             idx = len(digs) + e
             if idx > 0:
                 return f"{sign}{digs[:idx]}.{digs[idx:]}"
-            return f"{sign}0.{'0'*(-idx)}{digs}"
+            return f"{sign}0.{'0' * (-idx)}{digs}"
         m = f"{digs[0]}.{digs[1:]}" if len(digs) > 1 else digs
         ep = "+" if adj >= 0 else ""
         return f"{sign}{m}e{ep}{adj}"
@@ -163,11 +173,11 @@ def py_canonical_json_encode(obj: object) -> str:
         adj = len(digs) - 1 + e
         if -6 <= adj <= 20:
             if e >= 0:
-                return f"{sign}{digs}{'0'*e}"
+                return f"{sign}{digs}{'0' * e}"
             idx = len(digs) + e
             if idx > 0:
                 return f"{sign}{digs[:idx]}.{digs[idx:]}"
-            return f"{sign}0.{'0'*(-idx)}{digs}"
+            return f"{sign}0.{'0' * (-idx)}{digs}"
         m = f"{digs[0]}.{digs[1:]}" if len(digs) > 1 else digs
         ep = "+" if adj >= 0 else ""
         return f"{sign}{m}e{ep}{adj}"
@@ -177,20 +187,22 @@ def py_canonical_json_encode(obj: object) -> str:
     if isinstance(obj, (list, tuple)):
         return "[" + ",".join(py_canonical_json_encode(x) for x in obj) + "]"
     if isinstance(obj, dict):
-        items = sorted(
-            (unicodedata.normalize("NFC", k), v)
-            for k, v in obj.items()
+        items = sorted((unicodedata.normalize("NFC", k), v) for k, v in obj.items())
+        return (
+            "{"
+            + ",".join(
+                f"{_json.dumps(k, ensure_ascii=False)}:{py_canonical_json_encode(v)}"
+                for k, v in items
+            )
+            + "}"
         )
-        return "{" + ",".join(
-            f"{_json.dumps(k, ensure_ascii=False)}:{py_canonical_json_encode(v)}"
-            for k, v in items
-        ) + "}"
     raise TypeError(f"not serializable: {type(obj)}")
 
 
 # ---------------------------------------------------------------------------
 # Benchmark harness
 # ---------------------------------------------------------------------------
+
 
 def _bench(fn, n: int, warmup: int) -> tuple[float, float]:
     """Return (throughput_recs_per_sec, first_call_ns)."""
@@ -217,9 +229,9 @@ def _bench(fn, n: int, warmup: int) -> tuple[float, float]:
 # Benchmark payloads
 # ---------------------------------------------------------------------------
 
-_SHARD   = "watauga:2025:budget"
-_RTYPE   = "document"
-_RID     = "doc-abc-001"
+_SHARD = "watauga:2025:budget"
+_RTYPE = "document"
+_RID = "doc-abc-001"
 _VERSION = 42
 
 _SMALL_DOC = {
@@ -251,11 +263,11 @@ _LARGE_DOC = {
 _SMALL_BYTES = b"canonical bytes" * 8  # 128 B
 _LARGE_BYTES = b"canonical bytes" * 512  # 8 KB
 
-_RK       = py_record_key(_RTYPE, _RID, _VERSION)
-_GK       = py_global_key(_SHARD, _RK)
-_VH       = py_blake3_hash([b"value data" * 16])
-_LEFT     = bytes(range(32))
-_RIGHT    = bytes(range(32, 64))
+_RK = py_record_key(_RTYPE, _RID, _VERSION)
+_GK = py_global_key(_SHARD, _RK)
+_VH = py_blake3_hash([b"value data" * 16])
+_LEFT = bytes(range(32))
+_RIGHT = bytes(range(32, 64))
 
 
 # ---------------------------------------------------------------------------
@@ -264,60 +276,81 @@ _RIGHT    = bytes(range(32, 64))
 
 BenchSuite = list  # list of (label, py_fn, rust_fn_or_none)
 
+
 def _make_suite() -> BenchSuite:
     suite: BenchSuite = []
 
     # ── blake3_hash ──────────────────────────────────────────────────────────
-    suite.append((
-        "blake3_hash (128 B)",
-        lambda: py_blake3_hash([_SMALL_BYTES]),
-        (lambda: _rust_crypto.blake3_hash([_SMALL_BYTES])) if _rust_available else None,
-    ))
-    suite.append((
-        "blake3_hash (8 KB)",
-        lambda: py_blake3_hash([_LARGE_BYTES]),
-        (lambda: _rust_crypto.blake3_hash([_LARGE_BYTES])) if _rust_available else None,
-    ))
+    suite.append(
+        (
+            "blake3_hash (128 B)",
+            lambda: py_blake3_hash([_SMALL_BYTES]),
+            (lambda: _rust_crypto.blake3_hash([_SMALL_BYTES])) if _rust_available else None,
+        )
+    )
+    suite.append(
+        (
+            "blake3_hash (8 KB)",
+            lambda: py_blake3_hash([_LARGE_BYTES]),
+            (lambda: _rust_crypto.blake3_hash([_LARGE_BYTES])) if _rust_available else None,
+        )
+    )
 
     # ── record_key ───────────────────────────────────────────────────────────
-    suite.append((
-        "record_key",
-        lambda: py_record_key(_RTYPE, _RID, _VERSION),
-        (lambda: _rust_crypto.record_key(_RTYPE, _RID, _VERSION)) if _rust_available else None,
-    ))
+    suite.append(
+        (
+            "record_key",
+            lambda: py_record_key(_RTYPE, _RID, _VERSION),
+            (lambda: _rust_crypto.record_key(_RTYPE, _RID, _VERSION)) if _rust_available else None,
+        )
+    )
 
     # ── global_key ───────────────────────────────────────────────────────────
-    suite.append((
-        "global_key",
-        lambda: py_global_key(_SHARD, _RK),
-        (lambda: _rust_crypto.global_key(_SHARD, _RK)) if _rust_available else None,
-    ))
+    suite.append(
+        (
+            "global_key",
+            lambda: py_global_key(_SHARD, _RK),
+            (lambda: _rust_crypto.global_key(_SHARD, _RK)) if _rust_available else None,
+        )
+    )
 
     # ── leaf_hash ────────────────────────────────────────────────────────────
-    suite.append((
-        "leaf_hash",
-        lambda: py_leaf_hash(_GK, _VH),
-        (lambda: _rust_crypto.leaf_hash(_GK, _VH)) if _rust_available else None,
-    ))
+    suite.append(
+        (
+            "leaf_hash",
+            lambda: py_leaf_hash(_GK, _VH),
+            (lambda: _rust_crypto.leaf_hash(_GK, _VH)) if _rust_available else None,
+        )
+    )
 
     # ── node_hash ────────────────────────────────────────────────────────────
-    suite.append((
-        "node_hash",
-        lambda: py_node_hash(_LEFT, _RIGHT),
-        (lambda: _rust_crypto.node_hash(_LEFT, _RIGHT)) if _rust_available else None,
-    ))
+    suite.append(
+        (
+            "node_hash",
+            lambda: py_node_hash(_LEFT, _RIGHT),
+            (lambda: _rust_crypto.node_hash(_LEFT, _RIGHT)) if _rust_available else None,
+        )
+    )
 
     # ── canonical_json_encode ────────────────────────────────────────────────
-    suite.append((
-        "canonical_json (small doc)",
-        lambda: py_canonical_json_encode(_SMALL_DOC),
-        (lambda: _rust_canonical.canonical_json_encode(_SMALL_DOC)) if _rust_available else None,
-    ))
-    suite.append((
-        "canonical_json (large doc, 50 items)",
-        lambda: py_canonical_json_encode(_LARGE_DOC),
-        (lambda: _rust_canonical.canonical_json_encode(_LARGE_DOC)) if _rust_available else None,
-    ))
+    suite.append(
+        (
+            "canonical_json (small doc)",
+            lambda: py_canonical_json_encode(_SMALL_DOC),
+            (lambda: _rust_canonical.canonical_json_encode(_SMALL_DOC))
+            if _rust_available
+            else None,
+        )
+    )
+    suite.append(
+        (
+            "canonical_json (large doc, 50 items)",
+            lambda: py_canonical_json_encode(_LARGE_DOC),
+            (lambda: _rust_canonical.canonical_json_encode(_LARGE_DOC))
+            if _rust_available
+            else None,
+        )
+    )
 
     # ── end-to-end pipeline ──────────────────────────────────────────────────
     def _py_pipeline():
@@ -334,11 +367,13 @@ def _make_suite() -> BenchSuite:
         gk = _rust_crypto.global_key(_SHARD, rk)
         return _rust_crypto.leaf_hash(gk, vh)
 
-    suite.append((
-        "── FULL PIPELINE (small doc) ──",
-        _py_pipeline,
-        _rust_pipeline if _rust_available else None,
-    ))
+    suite.append(
+        (
+            "── FULL PIPELINE (small doc) ──",
+            _py_pipeline,
+            _rust_pipeline if _rust_available else None,
+        )
+    )
 
     return suite
 
@@ -347,19 +382,20 @@ def _make_suite() -> BenchSuite:
 # Formatting helpers
 # ---------------------------------------------------------------------------
 
+
 def _fmt_throughput(rps: float) -> str:
     if rps >= 1_000_000:
-        return f"{rps/1_000_000:7.3f}M"
+        return f"{rps / 1_000_000:7.3f}M"
     if rps >= 1_000:
-        return f"{rps/1_000:7.1f}k"
+        return f"{rps / 1_000:7.1f}k"
     return f"{rps:8.1f} "
 
 
 def _fmt_latency_ns(ns: float) -> str:
     if ns >= 1_000_000:
-        return f"{ns/1_000_000:.2f} ms"
+        return f"{ns / 1_000_000:.2f} ms"
     if ns >= 1_000:
-        return f"{ns/1_000:.1f} µs"
+        return f"{ns / 1_000:.1f} µs"
     return f"{ns:.0f} ns"
 
 
@@ -367,29 +403,52 @@ def _fmt_latency_ns(ns: float) -> str:
 # Main
 # ---------------------------------------------------------------------------
 
+
 def run_benchmarks() -> None:
-    n       = _ARGS.records
-    warmup  = _ARGS.warmup
+    n = _ARGS.records
+    warmup = _ARGS.warmup
     no_rust = _ARGS.no_rust or not _rust_available
 
-    W_OP   = 38
-    W_NUM  = 12
-    W_SPD  = 9
+    W_OP = 38
+    W_NUM = 12
+    W_SPD = 9
 
     header_sep = (
-        "┌" + "─"*(W_OP+2) + "┬" + "─"*(W_NUM+2) + "┬" + "─"*(W_NUM+2) + "┬" + "─"*(W_SPD+2) + "┐"
+        "┌"
+        + "─" * (W_OP + 2)
+        + "┬"
+        + "─" * (W_NUM + 2)
+        + "┬"
+        + "─" * (W_NUM + 2)
+        + "┬"
+        + "─" * (W_SPD + 2)
+        + "┐"
     )
     row_sep = (
-        "├" + "─"*(W_OP+2) + "┼" + "─"*(W_NUM+2) + "┼" + "─"*(W_NUM+2) + "┼" + "─"*(W_SPD+2) + "┤"
+        "├"
+        + "─" * (W_OP + 2)
+        + "┼"
+        + "─" * (W_NUM + 2)
+        + "┼"
+        + "─" * (W_NUM + 2)
+        + "┼"
+        + "─" * (W_SPD + 2)
+        + "┤"
     )
     footer_sep = (
-        "└" + "─"*(W_OP+2) + "┴" + "─"*(W_NUM+2) + "┴" + "─"*(W_NUM+2) + "┴" + "─"*(W_SPD+2) + "┘"
+        "└"
+        + "─" * (W_OP + 2)
+        + "┴"
+        + "─" * (W_NUM + 2)
+        + "┴"
+        + "─" * (W_NUM + 2)
+        + "┴"
+        + "─" * (W_SPD + 2)
+        + "┘"
     )
 
     def _row(op, py_val, rust_val, spd):
-        return (
-            f"│ {op:<{W_OP}} │ {py_val:>{W_NUM}} │ {rust_val:>{W_NUM}} │ {spd:>{W_SPD}} │"
-        )
+        return f"│ {op:<{W_OP}} │ {py_val:>{W_NUM}} │ {rust_val:>{W_NUM}} │ {spd:>{W_SPD}} │"
 
     print()
     print("╔══════════════════════════════════════════════════════════════════════════════╗")
@@ -399,7 +458,7 @@ def run_benchmarks() -> None:
     print()
 
     # ── Import timings ───────────────────────────────────────────────────────
-    py_import_ms  = (_t_python_stdlib - _t_import_start) * 1000
+    py_import_ms = (_t_python_stdlib - _t_import_start) * 1000
     rust_import_ms = (_t_rust_imported - _t_rust_import_start) * 1000
 
     print("  Import latency (cold start)")
@@ -418,28 +477,28 @@ def run_benchmarks() -> None:
     print(row_sep)
 
     suite = _make_suite()
-    pipeline_py_rps   = None
+    pipeline_py_rps = None
     pipeline_rust_rps = None
 
     for i, (label, py_fn, rust_fn) in enumerate(suite):
         is_pipeline = "PIPELINE" in label
 
-        py_rps, py_cold_ns   = _bench(py_fn, n, warmup)
-        py_str  = _fmt_throughput(py_rps)
+        py_rps, py_cold_ns = _bench(py_fn, n, warmup)
+        py_str = _fmt_throughput(py_rps)
 
         if not no_rust and rust_fn is not None:
             rust_rps, rust_cold_ns = _bench(rust_fn, n, warmup)
             rust_str = _fmt_throughput(rust_rps)
-            speedup  = rust_rps / py_rps
-            spd_str  = f"{speedup:6.2f}×"
+            speedup = rust_rps / py_rps
+            spd_str = f"{speedup:6.2f}×"
         else:
             rust_rps = None
             rust_str = "     —"
-            spd_str  = "   —"
+            spd_str = "   —"
 
         if is_pipeline:
             print(row_sep)
-            pipeline_py_rps   = py_rps
+            pipeline_py_rps = py_rps
             pipeline_rust_rps = rust_rps
 
         print(_row(label, py_str, rust_str, spd_str))
@@ -457,12 +516,18 @@ def run_benchmarks() -> None:
     # ── Summary ──────────────────────────────────────────────────────────────
     if pipeline_py_rps is not None:
         print("  ┌─ Summary ──────────────────────────────────────────────────┐")
-        print(f"  │  Python pipeline ..... {_fmt_throughput(pipeline_py_rps):>10} rec/s                  │")
+        print(
+            f"  │  Python pipeline ..... {_fmt_throughput(pipeline_py_rps):>10} rec/s                  │"
+        )
         if pipeline_rust_rps is not None:
             overall_speedup = pipeline_rust_rps / pipeline_py_rps
-            print(f"  │  Rust   pipeline ..... {_fmt_throughput(pipeline_rust_rps):>10} rec/s                  │")
+            print(
+                f"  │  Rust   pipeline ..... {_fmt_throughput(pipeline_rust_rps):>10} rec/s                  │"
+            )
             print(f"  │                                                            │")
-            print(f"  │  End-to-end speedup .. {overall_speedup:>8.2f}×                           │")
+            print(
+                f"  │  End-to-end speedup .. {overall_speedup:>8.2f}×                           │"
+            )
         print("  └────────────────────────────────────────────────────────────┘")
         print()
 
