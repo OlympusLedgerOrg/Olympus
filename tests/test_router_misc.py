@@ -56,9 +56,7 @@ async def db_engine():
 @pytest_asyncio.fixture(scope="module")
 async def client(db_engine):
     """Create an async HTTP test client with overridden DB dependency."""
-    session_factory = async_sessionmaker(
-        db_engine, expire_on_commit=False, class_=AsyncSession
-    )
+    session_factory = async_sessionmaker(db_engine, expire_on_commit=False, class_=AsyncSession)
 
     async def override_get_db():
         async with session_factory() as session:
@@ -69,9 +67,7 @@ async def client(db_engine):
         app = create_app()
         app.dependency_overrides[get_db] = override_get_db
 
-        async with AsyncClient(
-            transport=ASGITransport(app=app), base_url="http://test"
-        ) as ac:
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
             yield ac
 
 

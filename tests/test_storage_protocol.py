@@ -6,7 +6,7 @@ Uses mocked psycopg cursor/connection to avoid requiring a real Postgres instanc
 
 import unittest
 from datetime import datetime, timezone
-from unittest.mock import MagicMock, call
+from unittest.mock import MagicMock
 
 from storage.protocol_state import (
     _row_get,
@@ -31,6 +31,7 @@ class TestLoadTreeState(unittest.TestCase):
         cur.execute.assert_called_once()
         # Empty tree should have the precomputed empty root (level 256)
         from protocol.ssmf import EMPTY_HASHES
+
         self.assertEqual(tree.get_root(), EMPTY_HASHES[256])
 
     def test_load_tree_state_with_rows(self):
@@ -57,7 +58,7 @@ class TestLoadTreeState(unittest.TestCase):
         cur = MagicMock()
         cur.fetchall.return_value = []
 
-        tree = load_tree_state(cur, up_to_ts="2024-01-01T00:00:00Z")
+        _tree = load_tree_state(cur, up_to_ts="2024-01-01T00:00:00Z")  # noqa: F841
 
         # Should have called execute with timestamp parameter
         args, kwargs = cur.execute.call_args
@@ -70,7 +71,7 @@ class TestLoadTreeState(unittest.TestCase):
         cur.fetchall.return_value = []
         cutoff = datetime(2024, 1, 1, tzinfo=timezone.utc)
 
-        tree = load_tree_state(cur, up_to_ts=cutoff)
+        _tree = load_tree_state(cur, up_to_ts=cutoff)  # noqa: F841
 
         args, kwargs = cur.execute.call_args
         self.assertIn("WHERE ts <=", args[0])

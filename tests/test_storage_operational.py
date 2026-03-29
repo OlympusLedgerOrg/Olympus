@@ -11,8 +11,8 @@ requiring a real PostgreSQL instance.
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Any
-from unittest.mock import MagicMock, call, patch
+from unittest.mock import MagicMock
+
 
 try:
     from datetime import UTC
@@ -198,15 +198,14 @@ class TestConsumeRateLimit:
 class TestClearRateLimits:
     """Tests for the clear_rate_limits function."""
 
-    def test_basic_operation(
-        self, mock_conn: MagicMock, mock_cursor: MagicMock
-    ) -> None:
+    def test_basic_operation(self, mock_conn: MagicMock, mock_cursor: MagicMock) -> None:
         """Clear all rate limit rows and commit the transaction."""
         clear_rate_limits(mock_conn)
 
         # Verify DELETE was executed
         delete_calls = [
-            c for c in mock_cursor.execute.call_args_list
+            c
+            for c in mock_cursor.execute.call_args_list
             if "DELETE FROM api_rate_limits" in c[0][0]
         ]
         assert len(delete_calls) == 1
@@ -221,9 +220,7 @@ class TestClearRateLimits:
 class TestStoreIngestionBatch:
     """Tests for the store_ingestion_batch function."""
 
-    def test_success_stores_records(
-        self, mock_conn: MagicMock, mock_cursor: MagicMock
-    ) -> None:
+    def test_success_stores_records(self, mock_conn: MagicMock, mock_cursor: MagicMock) -> None:
         """Store a batch with multiple records; verify INSERT calls."""
         batch_id = "batch_001"
         records = [
@@ -294,7 +291,8 @@ class TestStoreIngestionBatch:
 
         # Verify the INSERT was called with defaults
         proof_insert_call = [
-            c for c in mock_cursor.execute.call_args_list
+            c
+            for c in mock_cursor.execute.call_args_list
             if "INSERT INTO ingestion_proofs" in c[0][0]
         ][0]
         params = proof_insert_call[0][1]
@@ -317,9 +315,7 @@ class TestStoreIngestionBatch:
 class TestGetIngestionProof:
     """Tests for the get_ingestion_proof function."""
 
-    def test_found_returns_proof_dict(
-        self, mock_conn: MagicMock, mock_cursor: MagicMock
-    ) -> None:
+    def test_found_returns_proof_dict(self, mock_conn: MagicMock, mock_cursor: MagicMock) -> None:
         """Retrieve an existing proof; verify returned dictionary structure."""
         mock_cursor.fetchone.return_value = {
             "proof_id": "proof_found",
@@ -347,9 +343,7 @@ class TestGetIngestionProof:
         assert result["merkle_root"] == "b" * 64
         assert result["timestamp"] == "2024-01-15T10:30:00Z"
 
-    def test_not_found_returns_none(
-        self, mock_conn: MagicMock, mock_cursor: MagicMock
-    ) -> None:
+    def test_not_found_returns_none(self, mock_conn: MagicMock, mock_cursor: MagicMock) -> None:
         """Proof not found should return None."""
         mock_cursor.fetchone.return_value = None
 
@@ -393,9 +387,7 @@ class TestGetIngestionProof:
 class TestStoreTimestampToken:
     """Tests for the store_timestamp_token function."""
 
-    def test_success_stores_token(
-        self, mock_conn: MagicMock, mock_cursor: MagicMock
-    ) -> None:
+    def test_success_stores_token(self, mock_conn: MagicMock, mock_cursor: MagicMock) -> None:
         """Store a valid timestamp token successfully."""
         # Mock the count check to allow storage
         mock_cursor.fetchone.return_value = {
@@ -420,15 +412,14 @@ class TestStoreTimestampToken:
 
         # Verify INSERT was executed
         insert_calls = [
-            c for c in mock_cursor.execute.call_args_list
+            c
+            for c in mock_cursor.execute.call_args_list
             if "INSERT INTO timestamp_tokens" in c[0][0]
         ]
         assert len(insert_calls) == 1
         mock_conn.commit.assert_called_once()
 
-    def test_success_with_token_object(
-        self, mock_conn: MagicMock, mock_cursor: MagicMock
-    ) -> None:
+    def test_success_with_token_object(self, mock_conn: MagicMock, mock_cursor: MagicMock) -> None:
         """Store a timestamp token passed as an object with attributes."""
         mock_cursor.fetchone.return_value = {
             "token_count": 0,
@@ -480,9 +471,7 @@ class TestStoreTimestampToken:
 
         mock_conn.commit.assert_called_once()
 
-    def test_invalid_hash_length_raises_value_error(
-        self, mock_conn: MagicMock
-    ) -> None:
+    def test_invalid_hash_length_raises_value_error(self, mock_conn: MagicMock) -> None:
         """Raise ValueError when header_hash_hex is not exactly 32 bytes."""
         token = {
             "hash_hex": "a" * 64,
@@ -509,9 +498,7 @@ class TestStoreTimestampToken:
                 token=token,
             )
 
-    def test_max_tokens_limit_enforced(
-        self, mock_conn: MagicMock, mock_cursor: MagicMock
-    ) -> None:
+    def test_max_tokens_limit_enforced(self, mock_conn: MagicMock, mock_cursor: MagicMock) -> None:
         """Raise ValueError when trying to exceed MAX_TSA_TOKENS per header."""
         # Simulate already having MAX_TSA_TOKENS from different TSAs
         mock_cursor.fetchone.return_value = {
@@ -591,9 +578,7 @@ class TestStoreTimestampToken:
 class TestGetTimestampTokens:
     """Tests for the get_timestamp_tokens function."""
 
-    def test_found_returns_token_list(
-        self, mock_conn: MagicMock, mock_cursor: MagicMock
-    ) -> None:
+    def test_found_returns_token_list(self, mock_conn: MagicMock, mock_cursor: MagicMock) -> None:
         """Retrieve existing tokens; verify returned list structure."""
         mock_cursor.fetchall.return_value = [
             {
@@ -650,9 +635,7 @@ class TestGetTimestampTokens:
         assert len(result) == 1
         assert result[0]["timestamp"] == "2024-06-15 18:30:00"
 
-    def test_tst_bytes_converted_to_hex(
-        self, mock_conn: MagicMock, mock_cursor: MagicMock
-    ) -> None:
+    def test_tst_bytes_converted_to_hex(self, mock_conn: MagicMock, mock_cursor: MagicMock) -> None:
         """Verify TST bytes are converted to hex string in output."""
         tst_bytes = bytes([0xDE, 0xAD, 0xBE, 0xEF])
         mock_cursor.fetchall.return_value = [

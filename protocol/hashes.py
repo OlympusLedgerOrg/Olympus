@@ -32,7 +32,7 @@ try:
         record_key as _rust_record_key,
     )
 
-    _RUST_CRYPTO_AVAILABLE = True
+    _RUST_CRYPTO_AVAILABLE = True  # pragma: no cover — requires maturin build
 except ImportError:
     _RUST_CRYPTO_AVAILABLE = False
 
@@ -83,7 +83,7 @@ def blake3_hash(parts: list[bytes]) -> bytes:
     Returns:
         32-byte BLAKE3 hash
     """
-    if _RUST_CRYPTO_AVAILABLE:
+    if _RUST_CRYPTO_AVAILABLE:  # pragma: no cover — Rust FFI path
         result: bytes = _rust_blake3_hash(parts)
         return result
     return blake3.blake3(b"".join(parts)).digest()
@@ -92,7 +92,7 @@ def blake3_hash(parts: list[bytes]) -> bytes:
 def _length_prefixed_bytes(field_name: str, value: bytes) -> bytes:
     """Encode variable-length bytes with a 4-byte big-endian length prefix."""
     if len(value) > _MAX_LENGTH_PREFIXED_FIELD_SIZE:
-        raise ValueError(f"{field_name} exceeds maximum length")
+        raise ValueError(f"{field_name} exceeds maximum length")  # pragma: no cover — 4 GB alloc
     return len(value).to_bytes(4, "big") + value
 
 
@@ -113,7 +113,7 @@ def record_key(record_type: str, record_id: str, version: int) -> bytes:
     if version > 0xFFFFFFFFFFFFFFFF:
         raise ValueError("version exceeds maximum supported value")
 
-    if _RUST_CRYPTO_AVAILABLE:
+    if _RUST_CRYPTO_AVAILABLE:  # pragma: no cover — Rust FFI path
         result: bytes = _rust_record_key(record_type, record_id, version)
         return result
 
@@ -153,7 +153,7 @@ def global_key(shard_id: str, record_key_bytes: bytes) -> bytes:
         >>> rec_key = record_key("document", "doc123", 1)
         >>> g_key = global_key("watauga:2025:budget", rec_key)
     """
-    if _RUST_CRYPTO_AVAILABLE:
+    if _RUST_CRYPTO_AVAILABLE:  # pragma: no cover — Rust FFI path
         result: bytes = _rust_global_key(shard_id, record_key_bytes)
         return result
 
@@ -176,7 +176,7 @@ def global_key(shard_id: str, record_key_bytes: bytes) -> bytes:
 
 def leaf_hash(key: bytes, value_hash: bytes) -> bytes:
     """Compute hash of a sparse-tree leaf with domain separation."""
-    if _RUST_CRYPTO_AVAILABLE:
+    if _RUST_CRYPTO_AVAILABLE:  # pragma: no cover — Rust FFI path
         result: bytes = _rust_leaf_hash(key, value_hash)
         return result
     return blake3_hash([LEAF_PREFIX, _SEP, key, _SEP, value_hash])
@@ -184,7 +184,7 @@ def leaf_hash(key: bytes, value_hash: bytes) -> bytes:
 
 def node_hash(left: bytes, right: bytes) -> bytes:
     """Compute hash of an internal Merkle node."""
-    if _RUST_CRYPTO_AVAILABLE:
+    if _RUST_CRYPTO_AVAILABLE:  # pragma: no cover — Rust FFI path
         result: bytes = _rust_node_hash(left, right)
         return result
     return blake3_hash([NODE_PREFIX, _SEP, left, _SEP, right])
@@ -382,7 +382,9 @@ def parse_dual_root_commitment(commitment: bytes) -> tuple[bytes, bytes]:
     idx += poseidon_len
     binding_hash = commitment[idx:]
 
-    if blake3_len != len(blake3_root) or poseidon_len != len(poseidon_root):
+    if blake3_len != len(blake3_root) or poseidon_len != len(
+        poseidon_root
+    ):  # pragma: no cover — guarded by overall length check
         raise ValueError("Dual root commitment length metadata is invalid")
     if blake3_len != 32 or poseidon_len != 32 or len(binding_hash) != 32:
         raise ValueError("Dual root commitment length metadata is invalid")

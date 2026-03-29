@@ -91,7 +91,7 @@ async def file_appeal(body: AppealCreate, db: DBSession, _api_key: RequireAPIKey
             status_code=status.HTTP_409_CONFLICT,
             detail={
                 "detail": f"Cannot appeal a request with status {req.status!r}. "
-                          f"Appeals are only allowed for DENIED or OVERDUE requests.",
+                f"Appeals are only allowed for DENIED or OVERDUE requests.",
                 "code": "APPEAL_NOT_ALLOWED",
             },
         )

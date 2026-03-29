@@ -149,9 +149,7 @@ def test_persist_tree_nodes_uses_upsert_without_precheck(monkeypatch: pytest.Mon
     storage._persist_tree_nodes(cursor, "shard", _FakeTree())
 
     assert all("SELECT 1 FROM smt_nodes" not in sql for sql in cursor.statements)
-    assert all(
-        "ON CONFLICT (level, index) DO NOTHING" in sql for sql in cursor.statements
-    )
+    assert all("ON CONFLICT (level, index) DO NOTHING" in sql for sql in cursor.statements)
 
 
 def test_fake_cursor_executemany_records_normalized_sql() -> None:
