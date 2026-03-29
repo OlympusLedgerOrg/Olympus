@@ -273,7 +273,6 @@ def test_run_rejoin_verifier_unreachable() -> None:
 
 def test_run_rejoin_verifier_no_history() -> None:
     """run_rejoin_verifier returns NO_HISTORY when node has no STHs."""
-    import json
     from unittest.mock import MagicMock
 
     mock_resp = MagicMock()

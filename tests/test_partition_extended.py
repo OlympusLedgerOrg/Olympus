@@ -2,6 +2,7 @@
 
 import pytest
 
+from protocol.hashes import hash_bytes
 from protocol.partition import (
     ConsensusBlock,
     ConsensusChainState,
@@ -9,18 +10,12 @@ from protocol.partition import (
     PublishedVote,
     TransactionBroadcast,
     VotePublication,
-    build_inclusion_list,
     detect_slashable_equivocations,
-    find_first_divergent_round,
-    missing_inclusion_entries,
-    proof_of_elapsed_rounds,
     resolve_partition_fork,
     select_random_peers,
     select_rotating_leader,
-    validate_proof_of_wait,
     vrf_hash_from_seed,
 )
-from protocol.hashes import hash_bytes
 
 
 def _vrf(seed: str) -> str:

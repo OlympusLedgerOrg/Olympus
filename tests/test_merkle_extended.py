@@ -5,7 +5,6 @@ import pytest
 from protocol.merkle import (
     EMPTY_TREE_HASH,
     MAX_PROOF_DEPTH,
-    MERKLE_VERSION,
     PROOF_VERSION,
     MerkleProof,
     MerkleTree,
@@ -18,7 +17,6 @@ from protocol.merkle import (
     verify_consistency_proof,
     verify_proof,
 )
-from protocol.hashes import blake3_hash
 
 
 # ── MerkleProof __post_init__ (line 97) ──

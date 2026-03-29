@@ -7,7 +7,6 @@ import pytest
 
 from protocol.checkpoints import (
     SignedCheckpoint,
-    build_checkpoint_quorum_certificate,
     create_checkpoint,
     sign_federated_checkpoint,
     verify_checkpoint_quorum_certificate,

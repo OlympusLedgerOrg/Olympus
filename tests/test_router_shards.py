@@ -20,8 +20,8 @@ import pytest
 import pytest_asyncio
 from httpx import ASGITransport, AsyncClient
 
-from api.main import create_app
 import api.services.storage_layer as storage_layer_module
+from api.main import create_app
 
 
 # ---------------------------------------------------------------------------

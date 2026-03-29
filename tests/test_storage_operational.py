@@ -11,8 +11,8 @@ requiring a real PostgreSQL instance.
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Any
-from unittest.mock import MagicMock, call, patch
+from unittest.mock import MagicMock
+
 
 try:
     from datetime import UTC

@@ -1,8 +1,10 @@
 """Extended tests for protocol/federation/replication.py targeting uncovered lines."""
 
-import pytest
 import nacl.signing
+import pytest
 
+from protocol.federation.identity import FederationNode, FederationRegistry
+from protocol.federation.quorum import NodeSignature
 from protocol.federation.replication import (
     DataAvailabilityChallenge,
     FederationFinalityStatus,
@@ -14,8 +16,6 @@ from protocol.federation.replication import (
     registry_forest_commitment,
     verify_data_availability,
 )
-from protocol.federation.quorum import NodeSignature
-from protocol.federation.identity import FederationNode, FederationRegistry
 
 
 def _ts():

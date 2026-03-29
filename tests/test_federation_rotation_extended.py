@@ -1,18 +1,18 @@
 """Extended tests for protocol/federation/rotation.py targeting uncovered lines."""
 
-import pytest
 import nacl.signing
+import pytest
 
-from protocol.federation.rotation import (
-    RecursiveChainProof,
-    EpochKeyRotationRecord,
-    verify_recursive_chain_proof,
-    verify_epoch_key_rotation,
-)
-from protocol.federation.quorum import NodeSignature
-from protocol.federation.identity import FederationNode, FederationRegistry
-from protocol.hashes import HASH_SEPARATOR, hash_bytes
 from protocol.canonical_json import canonical_json_bytes
+from protocol.federation.identity import FederationNode, FederationRegistry
+from protocol.federation.quorum import NodeSignature
+from protocol.federation.rotation import (
+    EpochKeyRotationRecord,
+    RecursiveChainProof,
+    verify_epoch_key_rotation,
+    verify_recursive_chain_proof,
+)
+from protocol.hashes import HASH_SEPARATOR, hash_bytes
 
 
 def _ts():

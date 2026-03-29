@@ -15,12 +15,9 @@ import pytest
 
 from protocol.federation import (
     FederationBehaviorSample,
-    FederationNode,
     FederationRegistry,
-    NodeSignature,
     build_quorum_certificate,
     sign_federated_header,
-    verify_quorum_certificate,
 )
 from protocol.federation.gossip import (
     append_quorum_certificate_to_ledger,

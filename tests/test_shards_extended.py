@@ -1,28 +1,24 @@
 """Extended tests for protocol/shards.py targeting uncovered lines."""
 
-import pytest
 import nacl.signing
+import pytest
 
+from protocol.hlc import HLCTimestamp
 from protocol.shards import (
+    _HKDF_SALT,
     ShardNamespacePartitioner,
-    _hkdf_derive,
-    canonical_header,
+    create_key_revocation_record,
     create_shard_header,
+    create_superseding_signature,
+    derive_scoped_signing_key,
+    get_signing_key_from_seed,
+    rotation_record_to_event,
     sign_header,
     verify_header,
-    create_key_revocation_record,
-    verify_key_revocation_record,
-    create_superseding_signature,
-    verify_superseding_signature,
     verify_header_with_rotation,
-    rotation_record_to_event,
-    get_signing_key_from_seed,
-    derive_scoped_signing_key,
-    get_verify_key_from_signing_key,
-    _HKDF_SALT,
+    verify_key_revocation_record,
+    verify_superseding_signature,
 )
-from protocol.hlc import HLCTimestamp
-from protocol.timestamps import current_timestamp
 
 
 # ── ShardNamespacePartitioner (lines 68-71, 74-79) ──
@@ -107,7 +103,7 @@ class TestVerifyHeader:
         # Actually just test with the original header
         header2 = create_shard_header("s1", b"\x00" * 32, "2025-01-01T00:00:00Z")
         header2["sequence_number"] = 5
-        from protocol.shards import shard_header_hash, _HEADER_EXCLUDED_FIELDS
+        from protocol.shards import _HEADER_EXCLUDED_FIELDS, shard_header_hash
         header2["header_hash"] = shard_header_hash(
             {k: v for k, v in header2.items() if k not in _HEADER_EXCLUDED_FIELDS}
         ).hex()
@@ -120,7 +116,7 @@ class TestVerifyHeader:
         header, sig, vk, sk = self._make_signed_header()
         header["timestamp_hlc"] = "not-hex"
         # Need to recompute hash
-        from protocol.shards import shard_header_hash, _HEADER_EXCLUDED_FIELDS
+        from protocol.shards import _HEADER_EXCLUDED_FIELDS, shard_header_hash
         header["header_hash"] = shard_header_hash(
             {k: v for k, v in header.items() if k not in _HEADER_EXCLUDED_FIELDS}
         ).hex()
