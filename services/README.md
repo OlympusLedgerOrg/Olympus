@@ -1,10 +1,10 @@
-# CD-HS-SMF Architecture Implementation
+# CD-HS-ST Architecture Implementation
 
-This directory contains the Phase 1 greenfield implementation of the Constant-Depth Hierarchical Sparse Sharded Merkle Forest (CD-HS-SMF) architecture.
+This directory contains the Phase 1 greenfield implementation of the Constant-Depth Hierarchical Sparse Tree (CD-HS-ST) architecture.
 
 ## Overview
 
-The CD-HS-SMF system consists of three layers:
+The CD-HS-ST system consists of three layers:
 
 1. **Rust Service** (`cdhs-smf-rust/`): Cryptographic core and SMT operations
 2. **Go Sequencer** (`sequencer-go/`): Log service and storage orchestration
@@ -30,7 +30,7 @@ The CD-HS-SMF system consists of three layers:
                  │ Protobuf over gRPC
                  ▼
 ┌─────────────────────────────────────────────────────────────┐
-│  Rust CD-HS-SMF Service (cdhs-smf-rust/)                    │
+│  Rust CD-HS-ST Service (cdhs-smf-rust/)                    │
 │  - BLAKE3 hashing (domain-separated)                        │
 │  - Composite key generation                                 │
 │  - SMT update/prove operations                              │
@@ -51,7 +51,7 @@ The CD-HS-SMF system consists of three layers:
   Shard Tree 2 → Forest Tree
   Shard Tree 3 → Forest Tree
 
-✅ NEW (CD-HS-SMF):
+✅ NEW (CD-HS-ST):
   Global SMT with composite keys
   key = H(GLOBAL_KEY_PREFIX || shard_id || record_key)
 ```
@@ -241,7 +241,7 @@ CREATE TABLE cdhs_smf_nodes (
 
 ## Poseidon / ZK Separation
 
-The CD-HS-SMF uses **BLAKE3** in the operational layer.
+The CD-HS-ST uses **BLAKE3** in the operational layer.
 
 Poseidon hashing is a **separate layer** for ZK witness generation:
 
@@ -252,7 +252,7 @@ Rust Service (optional endpoint):
 
 Ledger entries can store dual roots:
   {
-    "root_b3": "...",         // CD-HS-SMF root (BLAKE3)
+    "root_b3": "...",         // CD-HS-ST root (BLAKE3)
     "root_poseidon": "...",   // Redaction circuit root (Poseidon)
   }
 ```
@@ -274,7 +274,7 @@ Still needed:
 ### Phase 1 (Greenfield - this implementation)
 
 - ✅ Protobuf definitions (`proto/cdhs_smf.proto`)
-- ✅ Rust CD-HS-SMF service skeleton
+- ✅ Rust CD-HS-ST service skeleton
 - ✅ Go sequencer service skeleton
 - [ ] Integration tests (Rust service)
 - [ ] Integration tests (Go sequencer)

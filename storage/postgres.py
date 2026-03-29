@@ -797,27 +797,34 @@ class StorageLayer:
         """
         Consume a rate-limit token using PostgreSQL for cross-worker coordination.
 
+        All timestamps are sourced from the PostgreSQL server clock (``NOW()``) to
+        prevent clock-skew attacks in distributed deployments where individual
+        Python workers may have drifted clocks.
+
         Returns:
             True if a token was consumed, False if the subject is rate limited.
         """
         if capacity <= 0 or refill_rate_per_second < 0:
             raise ValueError("capacity must be > 0 and refill_rate_per_second must be >= 0")
 
-        now = datetime.now(timezone.utc)
-
         with self._get_connection() as conn, conn.cursor(row_factory=dict_row) as cur:
+            # Use server-side NOW() for the initial insert so the seed timestamp
+            # is always anchored to the database clock, not the application clock.
             cur.execute(
                 """
                     INSERT INTO api_rate_limits (subject_type, subject, action, tokens, last_refill_ts)
-                    VALUES (%s, %s, %s, %s, %s)
+                    VALUES (%s, %s, %s, %s, NOW())
                     ON CONFLICT (subject_type, subject, action) DO NOTHING
                 """,
-                (subject_type, subject, action, capacity, now),
+                (subject_type, subject, action, capacity),
             )
 
+            # Retrieve current token count and the elapsed seconds since last refill,
+            # both computed server-side to avoid clock-skew races.
             cur.execute(
                 """
-                    SELECT tokens, last_refill_ts
+                    SELECT tokens,
+                           EXTRACT(EPOCH FROM (NOW() - last_refill_ts)) AS elapsed_seconds
                     FROM api_rate_limits
                     WHERE subject_type = %s AND subject = %s AND action = %s
                     FOR UPDATE
@@ -828,7 +835,7 @@ class StorageLayer:
             if row is None:
                 raise RuntimeError("Failed to load rate limit state from database")
 
-            elapsed = max(0.0, (now - row["last_refill_ts"]).total_seconds())
+            elapsed = max(0.0, float(row["elapsed_seconds"]))
             tokens = min(capacity, row["tokens"] + elapsed * refill_rate_per_second)
 
             if tokens < 1.0:
@@ -836,13 +843,15 @@ class StorageLayer:
                 return False
 
             tokens -= 1.0
+            # Use NOW() in the UPDATE so last_refill_ts is always the database's
+            # notion of the current time, eliminating Python clock-skew influence.
             cur.execute(
                 """
                     UPDATE api_rate_limits
-                    SET tokens = %s, last_refill_ts = %s
+                    SET tokens = %s, last_refill_ts = NOW()
                     WHERE subject_type = %s AND subject = %s AND action = %s
                 """,
-                (tokens, now, subject_type, subject, action),
+                (tokens, subject_type, subject, action),
             )
             conn.commit()
             return True
@@ -867,7 +876,7 @@ class StorageLayer:
         """
         Append a record to the global sparse Merkle tree and update shard header and ledger.
 
-        CDHSSMF Design:
+        CD-HS-ST Design:
         ---------------
         This function now uses the GLOBAL SMT with hierarchical key derivation.
         Keys are generated via global_key(shard_id, record_key(...)) to encode
@@ -910,7 +919,7 @@ class StorageLayer:
         # Generate record key
         rec_key = record_key(record_type, record_id, version)
 
-        # CDHSSMF: Generate global key that encodes shard identity
+        # CD-HS-ST: Generate global key that encodes shard identity
         key = global_key(shard_id, rec_key)
 
         # BEGIN TRANSACTION (implicit via context manager)
@@ -934,7 +943,7 @@ class StorageLayer:
             # Generate proof
             proof = tree.prove_existence(key)
 
-            # Insert leaf (CDHSSMF: no shard_id column)
+            # Insert leaf (CD-HS-ST: no shard_id column)
             cur.execute(
                 """
                     INSERT INTO smt_leaves (key, version, value_hash, ts)
@@ -944,7 +953,7 @@ class StorageLayer:
             )
 
             # Insert new affected nodes (append-only, skip if node exists)
-            # CDHSSMF: shard_id is passed for cache compatibility but not used in DB
+            # CD-HS-ST: shard_id is passed for cache compatibility but not used in DB
             self._persist_tree_nodes(cur, shard_id, tree)
 
             # Get previous header
@@ -1413,7 +1422,7 @@ class StorageLayer:
                 raise ValueError(f"Invalid shard header signature for shard '{shard_id}'") from e
 
             # Guard against SMT divergence by recomputing the root as of
-            # this header's timestamp.  The global CD-HS-SMF root changes on
+            # this header's timestamp.  The global CD-HS-ST root changes on
             # every append, so we must snapshot to the header's point in time.
             self._assert_root_matches_state(cur, shard_id, bytes(row["root"]), as_of_ts=row["ts"])
 
@@ -2100,7 +2109,7 @@ class StorageLayer:
         Recompute the global SMT root as of *as_of_ts* and ensure it matches
         ``expected_root``.
 
-        Because the CD-HS-SMF is a single global tree, the root changes every
+        Because the CD-HS-ST is a single global tree, the root changes every
         time *any* shard appends a record.  Comparing against the current root
         would fail as soon as a second shard writes after the header was
         created.  Passing the header's own timestamp reconstructs the tree
@@ -2134,7 +2143,7 @@ class StorageLayer:
         """
         Load the global sparse Merkle tree state from database.
 
-        CDHSSMF Design:
+        CD-HS-ST Design:
         ---------------
         Loads ALL leaves from the single global SMT.
 
@@ -2150,7 +2159,7 @@ class StorageLayer:
         """
         tree = SparseMerkleTree()
 
-        # CDHSSMF: Load ALL leaves from the global SMT (no shard_id filter)
+        # CD-HS-ST: Load ALL leaves from the global SMT (no shard_id filter)
         # Secondary ordering by key makes replay deterministic when multiple inserts share
         # the same timestamp, while preserving the primary append order on ts. Without
         # this stable tie-break, historical reconstruction could yield different roots
@@ -2216,7 +2225,7 @@ class StorageLayer:
         """
         Persist tree nodes to database and populate the node cache.
 
-        CDHSSMF Design:
+        CD-HS-ST Design:
         ---------------
         This function persists nodes to the GLOBAL SMT.  The ``shard_id``
         is used as a cache-key prefix so that node look-ups are correctly
@@ -2235,7 +2244,7 @@ class StorageLayer:
             self._iter_tree_node_rows(shard_id, tree, ts),
             self.DEFAULT_FLUSH_BATCH_SIZE,
         ):
-            # CDHSSMF: Insert into global SMT (no shard_id column)
+            # CD-HS-ST: Insert into global SMT (no shard_id column)
             # Extract just the fields we need (skip shard_id which is first field)
             global_rows = [
                 (level, index, hash_val, ts_val)

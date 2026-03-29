@@ -45,7 +45,7 @@ def load_tree_state(
 
     Read-only helper.  Must be called within an existing transaction.
 
-    CDHSSMF Design:
+    CD-HS-ST Design:
     ---------------
     This function now loads the GLOBAL SMT state. The shard_id parameter is kept
     for backwards compatibility but is deprecated. The global SMT contains all shards,
@@ -65,7 +65,7 @@ def load_tree_state(
     """
     tree = SparseMerkleTree()
 
-    # CDHSSMF: Load ALL leaves from the global SMT (no shard_id filter)
+    # CD-HS-ST: Load ALL leaves from the global SMT (no shard_id filter)
     if up_to_ts is None:
         cur.execute(
             """
@@ -105,7 +105,7 @@ def persist_tree_nodes(
     """
     Persist tree nodes to database (append-only).
 
-    CDHSSMF Design:
+    CD-HS-ST Design:
     ---------------
     This function now persists nodes to the GLOBAL SMT. The shard_id parameter is kept
     for backwards compatibility with the cache_put callback but is not used in the
@@ -122,7 +122,7 @@ def persist_tree_nodes(
         path_bytes = encode_path(path)
         level = len(path)
 
-        # CDHSSMF: Insert into global SMT (no shard_id)
+        # CD-HS-ST: Insert into global SMT (no shard_id)
         cur.execute(
             """
             INSERT INTO smt_nodes (level, index, hash, ts)
@@ -191,7 +191,7 @@ def assert_root_matches_state(
     """
     Recompute the current global SMT root and ensure it matches ``expected_root``.
 
-    CDHSSMF Design:
+    CD-HS-ST Design:
     ---------------
     This function now validates the GLOBAL SMT root, not a per-shard root.
     The shard_id parameter is kept for backwards compatibility but is deprecated.

@@ -138,7 +138,7 @@ def test_get_connection_rolls_back_before_returning_to_pool(
 def test_persist_tree_nodes_uses_upsert_without_precheck(monkeypatch: pytest.MonkeyPatch) -> None:
     """SMT node persistence uses ON CONFLICT DO NOTHING instead of SELECT-before-INSERT.
 
-    The global CD-HS-SMF table has no shard_id column (nodes are keyed by
+    The global CD-HS-ST table has no shard_id column (nodes are keyed by
     level+index in the single global tree), so the conflict target is
     ``(level, index)`` — not the old per-shard ``(shard_id, level, index)``.
     """

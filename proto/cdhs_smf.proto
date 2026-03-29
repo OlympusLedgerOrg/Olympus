@@ -2,7 +2,7 @@ syntax = "proto3";
 
 package olympus.cdhs_smf.v1;
 
-// CD-HS-SMF Service: Constant-Depth Hierarchical Sparse Sharded Merkle Forest
+// CD-HS-ST Service: Constant-Depth Hierarchical Sparse Tree
 //
 // This service maintains a single global 256-level Sparse Merkle Tree with
 // composite keys that encode both shard identity and record identity.

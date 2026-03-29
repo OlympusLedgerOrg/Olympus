@@ -41,6 +41,41 @@ from api.services.verification import verify_by_commit_id, verify_by_doc_hash, v
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/ledger", tags=["ledger"])
 
+# Maximum number of bytes read per iteration when streaming an upload.
+# Kept small enough to avoid large in-flight allocations while large enough
+# to amortise per-call overhead (64 KiB is a typical I/O page multiple).
+UPLOAD_CHUNK_SIZE = 65_536
+
+
+async def _read_upload_bounded(file: UploadFile, max_bytes: int, max_mb: int) -> bytes:
+    """Read *file* in fixed-size chunks, aborting if the total exceeds *max_bytes*.
+
+    Args:
+        file: FastAPI UploadFile to read.
+        max_bytes: Hard upper bound on accepted payload size in bytes.
+        max_mb: Human-readable equivalent (for error messages).
+
+    Returns:
+        The full file contents as a single :class:`bytes` object.
+
+    Raises:
+        HTTPException 413: If the payload exceeds *max_bytes* before EOF.
+    """
+    chunks: list[bytes] = []
+    total = 0
+    while True:
+        chunk = await file.read(UPLOAD_CHUNK_SIZE)
+        if not chunk:
+            break
+        total += len(chunk)
+        if total > max_bytes:
+            raise HTTPException(
+                status_code=413,
+                detail=f"File exceeds maximum size of {max_mb} MB.",
+            )
+        chunks.append(chunk)
+    return b"".join(chunks)
+
 
 @router.get("/state", response_model=LedgerStateResponse)
 async def get_ledger_state(db: DBSession, _rl: RateLimit):
@@ -287,14 +322,11 @@ async def simple_document_ingest(
                     detail=f"File exceeds maximum size of {max_mb} MB.",
                 )
         except ValueError:
-            pass  # malformed header — let the post-read check catch it
+            pass  # malformed header — let the streaming check catch it
 
-    file_bytes = await file.read()
-    if len(file_bytes) > settings.max_upload_bytes:
-        raise HTTPException(
-            status_code=413,
-            detail=f"File exceeds maximum size of {max_mb} MB.",
-        )
+    # Stream the upload in fixed-size chunks so that an attacker who omits or
+    # spoofs Content-Length cannot trigger an OOM DoS via a single unbounded read.
+    file_bytes = await _read_upload_bounded(file, settings.max_upload_bytes, max_mb)
     validate_file_magic(file_bytes, file.content_type or "application/octet-stream")
     return await ingest_document(
         file_bytes=file_bytes,
@@ -341,7 +373,7 @@ async def simple_document_verify(
     if file is not None and file.filename:
         settings = get_settings()
         max_mb = settings.max_upload_bytes // 1024 // 1024
-        # Pre-check Content-Length before buffering the entire upload.
+        # Pre-check Content-Length before streaming the upload.
         content_length = request.headers.get("content-length")
         if content_length is not None:
             try:
@@ -351,14 +383,10 @@ async def simple_document_verify(
                         detail=f"File exceeds maximum size of {max_mb} MB.",
                     )
             except ValueError:
-                pass  # malformed header — post-read check will catch it
+                pass  # malformed header — streaming check will catch it
 
-        file_bytes = await file.read()
-        if len(file_bytes) > settings.max_upload_bytes:
-            raise HTTPException(
-                status_code=413,
-                detail=f"File exceeds maximum size of {max_mb} MB.",
-            )
+        # Stream the upload in fixed-size chunks to prevent OOM DoS.
+        file_bytes = await _read_upload_bounded(file, settings.max_upload_bytes, max_mb)
         validate_file_magic(file_bytes, file.content_type or "application/octet-stream")
         return await verify_by_file(
             file_bytes=file_bytes,

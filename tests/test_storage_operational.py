@@ -70,11 +70,10 @@ class TestConsumeRateLimit:
         self, mock_conn: MagicMock, mock_cursor: MagicMock
     ) -> None:
         """Consume a token when capacity is available; should return True."""
-        # Simulate existing row with 5.0 tokens
-        now = datetime.now(UTC)
+        # elapsed_seconds returned by the server-side EXTRACT(EPOCH FROM …) expression
         mock_cursor.fetchone.return_value = {
             "tokens": 5.0,
-            "last_refill_ts": now,
+            "elapsed_seconds": 0.0,
         }
 
         result = consume_rate_limit(
@@ -94,10 +93,9 @@ class TestConsumeRateLimit:
         self, mock_conn: MagicMock, mock_cursor: MagicMock
     ) -> None:
         """Reject when no tokens remain (tokens < 1.0); should return False."""
-        now = datetime.now(UTC)
         mock_cursor.fetchone.return_value = {
             "tokens": 0.5,  # Below 1.0 threshold
-            "last_refill_ts": now,
+            "elapsed_seconds": 0.0,
         }
 
         result = consume_rate_limit(
@@ -118,10 +116,9 @@ class TestConsumeRateLimit:
     ) -> None:
         """First call inserts a new row and succeeds with full capacity."""
         # After INSERT, the SELECT returns the newly inserted row
-        now = datetime.now(UTC)
         mock_cursor.fetchone.return_value = {
             "tokens": 10.0,
-            "last_refill_ts": now,
+            "elapsed_seconds": 0.0,
         }
 
         result = consume_rate_limit(
@@ -138,6 +135,34 @@ class TestConsumeRateLimit:
         calls = mock_cursor.execute.call_args_list
         assert len(calls) >= 3  # INSERT + SELECT + UPDATE
         assert "INSERT INTO api_rate_limits" in calls[0][0][0]
+
+    def test_insert_uses_server_side_now(
+        self, mock_conn: MagicMock, mock_cursor: MagicMock
+    ) -> None:
+        """INSERT and UPDATE must use NOW() (not a Python timestamp parameter)."""
+        mock_cursor.fetchone.return_value = {
+            "tokens": 5.0,
+            "elapsed_seconds": 0.0,
+        }
+
+        consume_rate_limit(
+            mock_conn,
+            subject_type="ip",
+            subject="10.0.0.1",
+            action="ingest",
+            capacity=10.0,
+            refill_rate_per_second=1.0,
+        )
+
+        calls = mock_cursor.execute.call_args_list
+        assert len(calls) >= 3, f"Expected at least 3 SQL calls (INSERT + SELECT + UPDATE), got {len(calls)}"
+        insert_sql = calls[0][0][0]
+        update_sql = calls[2][0][0]
+
+        # The INSERT must use NOW() literal, not a %s placeholder for the timestamp.
+        assert "NOW()" in insert_sql
+        # The UPDATE must also use NOW() literal for last_refill_ts.
+        assert "NOW()" in update_sql
 
     def test_invalid_capacity_raises_value_error(self, mock_conn: MagicMock) -> None:
         """Raise ValueError when capacity is zero or negative."""
@@ -664,13 +689,11 @@ class TestOperationalStateEdgeCases:
         self, mock_conn: MagicMock, mock_cursor: MagicMock
     ) -> None:
         """Verify token refill calculation respects capacity cap."""
-        from datetime import timedelta
-
-        # Simulate elapsed time that would exceed capacity if uncapped
-        past = datetime.now(UTC) - timedelta(seconds=100)
+        # Simulate 100 seconds of elapsed time — would exceed capacity without cap.
+        # elapsed_seconds is now returned by the server-side EXTRACT(EPOCH FROM …).
         mock_cursor.fetchone.return_value = {
             "tokens": 2.0,
-            "last_refill_ts": past,
+            "elapsed_seconds": 100.0,
         }
 
         result = consume_rate_limit(
