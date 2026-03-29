@@ -55,14 +55,19 @@ async def get_ledger_state(db: DBSession, _rl: RateLimit):
     Returns:
         Global state root, shard count, total commits, and last epoch.
     """
-    result = await db.execute(select(DocCommit))
-    commits = list(result.scalars().all())
+    # Use aggregate queries instead of a full table scan to avoid OOM on large tables.
+    total_result = await db.execute(select(func.count()).select_from(DocCommit))
+    total_commits = total_result.scalar() or 0
 
-    total_commits = len(commits)
-    last_epoch = max((c.epoch_timestamp for c in commits), default=None)
+    epoch_result = await db.execute(select(func.max(DocCommit.epoch_timestamp)))
+    last_epoch = epoch_result.scalar()
 
-    # Phase 0: single shard
-    shard_ids = list({c.shard_id for c in commits}) or ["0x4F3A"]
+    # Fetch distinct shard IDs with a bounded query.
+    # Phase 0 deployments use a single shard; this limit is a safety guard
+    # until a dedicated shard registry (Phase 1) replaces the full table scan.
+    shard_result = await db.execute(select(DocCommit.shard_id).distinct().limit(1000))
+    shard_ids = [row[0] for row in shard_result.all()] or ["0x4F3A"]
+
     shard_roots: list[str] = []
     for sid in shard_ids:
         shard_roots.append(await compute_state_root(sid, db))

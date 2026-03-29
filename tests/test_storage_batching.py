@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from contextlib import contextmanager
-from datetime import UTC, datetime
+from datetime import datetime, timezone
 
 from protocol.hashes import hash_bytes, record_key
 from protocol.ssmf import SparseMerkleTree
@@ -95,7 +95,7 @@ def test_store_ingestion_batch_flushes_proofs_in_chunks() -> None:
     connection = _FakeConnection(cursor)
     storage._get_connection = lambda: _fake_connection_scope(connection)  # type: ignore[method-assign]
 
-    timestamp = datetime.now(UTC).isoformat().replace("+00:00", "Z")
+    timestamp = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
     records = [
         {
             "proof_id": f"proof-{idx}",

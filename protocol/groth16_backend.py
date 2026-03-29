@@ -341,6 +341,7 @@ class Groth16Backend(ProofBackendProtocol):
         Returns:
             Path to verification key, or None if not found
         """
+        self._validate_circuit_name(circuit)
         vkey_filename = f"{circuit}_vkey.json"
 
         # Check keys directory first

@@ -24,7 +24,7 @@ import uuid
 import warnings
 from collections import OrderedDict
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import datetime, timezone
 from threading import Lock
 from time import monotonic
 from typing import TYPE_CHECKING, Any
@@ -33,6 +33,7 @@ import nacl.signing
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, Field
 
+from api.auth import _ip_in_ranges
 from protocol.canonical import CANONICAL_VERSION, canonicalize_document, document_to_bytes
 from protocol.canonicalizer import canonicalization_provenance
 from protocol.hashes import hash_bytes, leaf_hash, record_key
@@ -67,12 +68,38 @@ router = APIRouter(prefix="/ingest", tags=["ingest"])
 # ---------------------------------------------------------------------------
 
 
+# Allowlist pattern for identifier fields.  Permits alphanumeric chars plus the
+# small set of punctuation genuinely needed for shard/record/artifact IDs
+# (e.g. "watauga:2025:budget", "org/repo/v1.2.3-rc.1", "doc-001").
+# Deliberately excludes control characters, null bytes, shell metacharacters
+# (\ * ? < > | ; ` $ ! &), and Unicode homoglyphs (pure ASCII allowlist).
+_IDENTIFIER_PATTERN = r"^[a-zA-Z0-9_./:@+\-]+$"
+_IDENTIFIER_MAX_LEN = 256
+# Artifact IDs (e.g. 'org/repo/v1.2.3-rc.1+build.42') are typically longer than shard/record IDs.
+_ARTIFACT_ID_MAX_LEN = 512
+
+
 class RecordInput(BaseModel):
     """A single record to ingest."""
 
-    shard_id: str = Field(..., description="Target shard identifier")
-    record_type: str = Field(..., description="Record type (e.g. 'document')")
-    record_id: str = Field(..., description="Unique record identifier")
+    shard_id: str = Field(
+        ...,
+        description="Target shard identifier",
+        max_length=_IDENTIFIER_MAX_LEN,
+        pattern=_IDENTIFIER_PATTERN,
+    )
+    record_type: str = Field(
+        ...,
+        description="Record type (e.g. 'document')",
+        max_length=_IDENTIFIER_MAX_LEN,
+        pattern=_IDENTIFIER_PATTERN,
+    )
+    record_id: str = Field(
+        ...,
+        description="Unique record identifier",
+        max_length=_IDENTIFIER_MAX_LEN,
+        pattern=_IDENTIFIER_PATTERN,
+    )
     version: int = Field(..., ge=1, description="Record version (≥ 1)")
     content: dict[str, Any] = Field(..., description="Record content (JSON document)")
 
@@ -209,13 +236,13 @@ _write_ledger = Ledger()
 _api_key_store: dict[str, ApiKeyRecord] = {}
 _api_keys_loaded = False
 
-# L4-E: Trusted proxy IPs for X-Forwarded-For parsing
+# L4-E: Trusted proxy IP ranges for X-Forwarded-For parsing.
 # Only parse X-Forwarded-For header when the direct peer is a known trusted proxy.
 # This prevents IP spoofing attacks where a client sets a fake X-Forwarded-For header.
-# Configure via OLYMPUS_TRUSTED_PROXY_IPS environment variable (comma-separated).
-TRUSTED_PROXY_IPS: frozenset[str] = frozenset(
+# Configure via OLYMPUS_TRUSTED_PROXY_IPS environment variable (comma-separated IPs or CIDRs).
+TRUSTED_PROXY_RANGES: list[str] = [
     ip.strip() for ip in os.environ.get("OLYMPUS_TRUSTED_PROXY_IPS", "").split(",") if ip.strip()
-)
+]
 
 
 def _dev_signing_key_enabled() -> bool:
@@ -449,7 +476,7 @@ def _parse_timestamp(raw: str) -> datetime:
     parsed = datetime.fromisoformat(normalized)
     if parsed.tzinfo is None:
         raise ValueError("expires_at must be timezone-aware")
-    return parsed.astimezone(UTC)
+    return parsed.astimezone(timezone.utc)
 
 
 def _hash_api_key(api_key: str) -> str:
@@ -520,19 +547,27 @@ def _append_security_audit_event(event: str, details: dict[str, Any]) -> None:
 
 
 def _load_api_keys_from_env() -> None:
-    """Load API keys once from OLYMPUS_API_KEYS_JSON."""
+    """Load API keys once from OLYMPUS_API_KEYS_JSON or OLYMPUS_FOIA_API_KEYS.
+
+    Checks OLYMPUS_API_KEYS_JSON first; falls back to OLYMPUS_FOIA_API_KEYS so
+    operators only need to configure one variable.
+    """
     global _api_keys_loaded
     if _api_keys_loaded:
         return
     _api_keys_loaded = True
+    # Prefer OLYMPUS_API_KEYS_JSON; fall back to OLYMPUS_FOIA_API_KEYS for consolidated config
+    raw_str = os.environ.get("OLYMPUS_API_KEYS_JSON") or os.environ.get(
+        "OLYMPUS_FOIA_API_KEYS", "[]"
+    )
     try:
-        raw = json.loads(os.environ.get("OLYMPUS_API_KEYS_JSON", "[]"))
+        raw = json.loads(raw_str)
     except json.JSONDecodeError as exc:
-        raise ValueError("OLYMPUS_API_KEYS_JSON must be valid JSON") from exc
+        raise ValueError("API keys env var must be valid JSON") from exc
     for item in raw:
         if "key_hash" not in item:
             raise ValueError(
-                "OLYMPUS_API_KEYS_JSON must contain hashed API keys under 'key_hash' "
+                "API keys must contain hashed API keys under 'key_hash' "
                 "(hex-encoded). Raw API keys are not accepted."
             )
         _register_hashed_api_key(
@@ -638,8 +673,8 @@ def _client_ip(request: Request) -> str:
     """
     peer_ip = request.client.host if request.client else None
 
-    # Only parse X-Forwarded-For if the peer is a trusted proxy
-    if peer_ip and peer_ip in TRUSTED_PROXY_IPS:
+    # Only parse X-Forwarded-For if the peer is a trusted proxy (CIDR-aware check)
+    if peer_ip and TRUSTED_PROXY_RANGES and _ip_in_ranges(peer_ip, TRUSTED_PROXY_RANGES):
         xff = request.headers.get("x-forwarded-for")
         if xff:
             # X-Forwarded-For format: "client, proxy1, proxy2, ..."
@@ -651,16 +686,14 @@ def _client_ip(request: Request) -> str:
     return peer_ip or "unknown"
 
 
-def _extract_api_key(request: Request, body_api_key: str | None = None) -> str:
-    """Extract API key from header, bearer token, or request body fallback."""
+def _extract_api_key(request: Request) -> str:
+    """Extract API key from X-API-Key header or Authorization: Bearer token."""
     header_key = request.headers.get("x-api-key")
     if header_key:
         return header_key
     authz = request.headers.get("authorization", "")
     if authz.lower().startswith("bearer "):
         return authz[7:].strip()
-    if body_api_key:
-        return body_api_key
     raise HTTPException(status_code=401, detail="API key is required")
 
 
@@ -749,12 +782,10 @@ def _consume_rate_limit(subject_type: str, subject: str, action: str) -> bool:
         return bucket.consume()
 
 
-def _authorize_and_rate_limit(
-    request: Request, action: str, body_api_key: str | None = None
-) -> ApiKeyRecord:
+def _authorize_and_rate_limit(request: Request, action: str) -> ApiKeyRecord:
     """Authenticate API key, enforce scope/expiry, and apply token buckets."""
     _load_api_keys_from_env()
-    api_key = _extract_api_key(request, body_api_key=body_api_key)
+    api_key = _extract_api_key(request)
     key_hash = _hash_api_key(api_key)
     # L4-D: Use constant-time lookup to prevent timing oracle attacks
     record = _constant_time_api_key_lookup(key_hash)
@@ -762,7 +793,7 @@ def _authorize_and_rate_limit(
     if record is None:
         _append_security_audit_event("api_key_invalid", {"client_ip": client_ip, "action": action})
         raise HTTPException(status_code=401, detail="Invalid API key")
-    if datetime.now(UTC) >= record.expires_at:
+    if datetime.now(timezone.utc) >= record.expires_at:
         _append_security_audit_event(
             "api_key_expired", {"key_id": record.key_id, "client_ip": client_ip, "action": action}
         )
@@ -1437,8 +1468,18 @@ class ArtifactCommitRequest(BaseModel):
     """Request body for committing a pre-computed artifact hash to the ledger."""
 
     artifact_hash: str = Field(..., description="Hex-encoded BLAKE3 hash of the artifact")
-    namespace: str = Field(..., description="Namespace for the artifact (e.g. 'github')")
-    id: str = Field(..., description="Artifact identifier (e.g. 'org/repo/v1.0.0')")
+    namespace: str = Field(
+        ...,
+        description="Namespace for the artifact (e.g. 'github')",
+        max_length=_IDENTIFIER_MAX_LEN,
+        pattern=_IDENTIFIER_PATTERN,
+    )
+    id: str = Field(
+        ...,
+        description="Artifact identifier (e.g. 'org/repo/v1.0.0')",
+        max_length=_ARTIFACT_ID_MAX_LEN,
+        pattern=_IDENTIFIER_PATTERN,
+    )
     poseidon_root: str | None = Field(
         None,
         description=(
@@ -1446,7 +1487,6 @@ class ArtifactCommitRequest(BaseModel):
             " committed artifact hash"
         ),
     )
-    api_key: str | None = Field(None, description="Optional API key for authentication")
 
 
 class ArtifactCommitResponse(BaseModel):
@@ -1483,7 +1523,7 @@ async def commit_artifact(
     Returns:
         Commitment response with proof_id and ledger anchor details.
     """
-    _authorize_and_rate_limit(http_request, action="commit", body_api_key=request.api_key)
+    _authorize_and_rate_limit(http_request, action="commit")
     shard_id = f"artifacts/{request.namespace}"
     batch_id = str(uuid.uuid4())
     poseidon_root_input = request.poseidon_root

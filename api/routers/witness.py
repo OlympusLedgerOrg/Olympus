@@ -20,8 +20,9 @@ Endpoints:
 from __future__ import annotations
 
 import logging
+import os
 from collections import OrderedDict, defaultdict
-from datetime import UTC, datetime
+from datetime import datetime, timezone
 
 from fastapi import APIRouter, HTTPException, Query, status
 
@@ -49,22 +50,50 @@ _MAX_ANNOUNCE_SKEW_SECONDS: int = 60
 # reaches this size the oldest entries are evicted.
 _MAX_NONCE_ENTRIES: int = 100_000
 
+# Maximum number of observations to store in the in-process store.
+# Prevents unbounded memory growth under sustained load.
+_MAX_OBSERVATIONS: int = 500_000
+
 # ---------------------------------------------------------------------------
 # In-process observation store (Phase 1 — no DB).
 # Key: f"{announcement.origin}:{announcement.checkpoint.sequence}"
-# Upgrade path: replace this dict with an async DB-backed repository that
-# implements the same get/set interface used below.
+#
+# Uses OrderedDict so that FIFO/LRU eviction (popitem(last=False)) removes the
+# oldest entries once _MAX_OBSERVATIONS is reached, preventing unbounded memory
+# growth under sustained load.
+#
+# Upgrade path: replace with an async DB-backed repository that implements the
+# same get/set interface used below.
+#
 # WARNING: this store is not safe for multi-worker deployments. Running
 # uvicorn with --workers > 1 splits the store across processes silently,
 # causing each worker to see only a fraction of observations. Ensure
 # workers=1 (single-process mode) until the DB upgrade is complete.
 # ---------------------------------------------------------------------------
-_observations: dict[str, WitnessAnnouncement] = {}
+_observations: OrderedDict[str, WitnessAnnouncement] = OrderedDict()
 
 # Bounded nonce set for replay-resistance.  Tracks recently seen nonces
 # to reject duplicate submissions.  Uses OrderedDict for O(1) lookup and
 # FIFO eviction when the capacity is reached.
 _seen_nonces: OrderedDict[str, None] = OrderedDict()
+
+# Warn operators if the witness store is running in a multi-worker deployment.
+# Split-view detection requires that all workers share the same store.
+_web_concurrency = os.environ.get("WEB_CONCURRENCY", "")
+try:
+    if _web_concurrency and int(_web_concurrency) > 1:
+        logger.critical(
+            "Witness router: WEB_CONCURRENCY=%s but _observations is in-process only. "
+            "Split-view detection will miss conflicts that land on different workers. "
+            "Use a DB-backed store or run with a single worker (WEB_CONCURRENCY=1).",
+            _web_concurrency,
+        )
+except ValueError:
+    logger.warning(
+        "Witness router: WEB_CONCURRENCY=%r is not a valid integer — "
+        "multi-worker safety check skipped. Set WEB_CONCURRENCY to an integer.",
+        _web_concurrency,
+    )
 
 
 @router.get("/checkpoints/latest", response_model=WitnessAnnouncement)
@@ -154,7 +183,7 @@ async def submit_observation(
     # -- Replay-resistance: validate timestamp freshness -----------------
     try:
         ts = datetime.fromisoformat(request.checkpoint.timestamp.replace("Z", "+00:00")).astimezone(
-            UTC
+            timezone.utc
         )
     except (ValueError, AttributeError):
         raise HTTPException(
@@ -162,7 +191,7 @@ async def submit_observation(
             detail="checkpoint.timestamp must be a valid ISO 8601 UTC string",
         )
 
-    now = datetime.now(UTC)
+    now = datetime.now(timezone.utc)
     age_seconds = (now - ts).total_seconds()
     if age_seconds > _MAX_ANNOUNCE_SKEW_SECONDS:
         raise HTTPException(
@@ -205,6 +234,11 @@ async def submit_observation(
         checkpoint=request.checkpoint,
         received_at=current_timestamp(),
     )
+    # Evict oldest entries when observation store is at capacity (LRU).
+    # ``while`` (not ``if``) guards against concurrent requests that may have
+    # pushed the store past capacity between the check and the insert.
+    while len(_observations) >= _MAX_OBSERVATIONS:
+        _observations.popitem(last=False)
     _observations[key] = announcement
 
     logger.info(

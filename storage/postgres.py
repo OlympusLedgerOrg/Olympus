@@ -1412,8 +1412,10 @@ class StorageLayer:
             except nacl.exceptions.BadSignatureError as e:
                 raise ValueError(f"Invalid shard header signature for shard '{shard_id}'") from e
 
-            # Guard against SMT divergence by recomputing the current root.
-            self._assert_root_matches_state(cur, shard_id, bytes(row["root"]))
+            # Guard against SMT divergence by recomputing the root as of
+            # this header's timestamp.  The global CD-HS-SMF root changes on
+            # every append, so we must snapshot to the header's point in time.
+            self._assert_root_matches_state(cur, shard_id, bytes(row["root"]), as_of_ts=row["ts"])
 
             return {
                 "header": header,
@@ -2092,19 +2094,31 @@ class StorageLayer:
         cur: psycopg.Cursor[Any],
         shard_id: str,
         expected_root: bytes,
+        as_of_ts: datetime | str | None = None,
     ) -> None:
         """
-        Recompute the current shard root and ensure it matches ``expected_root``.
+        Recompute the global SMT root as of *as_of_ts* and ensure it matches
+        ``expected_root``.
+
+        Because the CD-HS-SMF is a single global tree, the root changes every
+        time *any* shard appends a record.  Comparing against the current root
+        would fail as soon as a second shard writes after the header was
+        created.  Passing the header's own timestamp reconstructs the tree
+        state at that point in time.
 
         Args:
             cur: Active database cursor (read-only).
-            shard_id: Shard identifier.
+            shard_id: Shard identifier (used only in error messages).
             expected_root: Root hash from persisted header.
+            as_of_ts: Optional timestamp cutoff forwarded to
+                :meth:`_load_tree_state`.  When *None* the full current state
+                is used (backwards-compatible but only safe for single-shard
+                databases).
 
         Raises:
             ValueError: When the recomputed root diverges from ``expected_root``.
         """
-        tree = self._load_tree_state(cur)
+        tree = self._load_tree_state(cur, up_to_ts=as_of_ts)
         computed_root = tree.get_root()
         if computed_root != expected_root:
             raise ValueError(

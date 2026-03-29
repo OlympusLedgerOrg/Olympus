@@ -330,7 +330,7 @@ def _display_id(commit_id: str) -> str:
     Uses the last 4 hex digits of the commit ID converted to a decimal number.
     """
     try:
-        numeric = int(commit_id.lstrip("0x")[-4:], 16)
-        return f"OLY-{numeric:04d}"
+        numeric = int(commit_id.lstrip("0x")[-8:], 16)
+        return f"OLY-{numeric:08d}"
     except (ValueError, IndexError):
-        return f"OLY-{abs(hash(commit_id)) % 10000:04d}"
+        return f"OLY-{abs(hash(commit_id)) % 100000000:08d}"

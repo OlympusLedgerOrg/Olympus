@@ -24,7 +24,7 @@ import logging
 import os
 from collections import OrderedDict
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import datetime, timezone
 from threading import Lock
 from time import monotonic
 from typing import Annotated, Protocol, runtime_checkable
@@ -67,38 +67,60 @@ def _load_keys() -> None:
     with _load_keys_lock:
         if _keys_loaded:
             return
+        _load_keys_locked()
         _keys_loaded = True
 
-        raw = os.environ.get("OLYMPUS_FOIA_API_KEYS", "[]")
-        try:
-            entries = json.loads(raw)
-        except json.JSONDecodeError as exc:
-            raise ValueError("OLYMPUS_FOIA_API_KEYS must be valid JSON") from exc
 
-        for entry in entries:
-            key_hash = entry.get("key_hash")
-            if not key_hash:
-                raise ValueError(
-                    "Each entry in OLYMPUS_FOIA_API_KEYS must have a 'key_hash' field "
-                    "(hex-encoded BLAKE3 hash of the raw API key)."
-                )
-            key_id = entry.get("key_id", "default")
-            scopes = set(entry.get("scopes", ["read", "write"]))
-            expires_at_str = entry.get("expires_at", "2099-01-01T00:00:00Z")
-            try:
-                expires_at = datetime.fromisoformat(
-                    expires_at_str.replace("Z", "+00:00")
-                ).astimezone(UTC)
-            except (ValueError, AttributeError) as exc:
-                raise ValueError(f"Invalid expires_at for key {key_id}: {expires_at_str}") from exc
-            _key_store[key_hash] = _APIKeyRecord(
-                key_id=key_id,
-                key_hash=key_hash,
-                scopes=scopes,
-                expires_at=expires_at,
+def _load_keys_locked() -> None:
+    """Internal: load keys from env into _key_store. Must be called with _load_keys_lock held."""
+    raw = os.environ.get("OLYMPUS_FOIA_API_KEYS", "[]")
+    try:
+        entries = json.loads(raw)
+    except json.JSONDecodeError as exc:
+        raise ValueError("OLYMPUS_FOIA_API_KEYS must be valid JSON") from exc
+
+    for entry in entries:
+        key_hash = entry.get("key_hash")
+        if not key_hash:
+            raise ValueError(
+                "Each entry in OLYMPUS_FOIA_API_KEYS must have a 'key_hash' field "
+                "(hex-encoded BLAKE3 hash of the raw API key)."
             )
-        if _key_store:
-            logger.info("Loaded %d FOIA API key(s)", len(_key_store))
+        key_id = entry.get("key_id", "default")
+        scopes = set(entry.get("scopes", ["read", "write"]))
+        expires_at_str = entry.get("expires_at", "2099-01-01T00:00:00Z")
+        try:
+            expires_at = datetime.fromisoformat(expires_at_str.replace("Z", "+00:00")).astimezone(
+                timezone.utc
+            )
+        except (ValueError, AttributeError) as exc:
+            raise ValueError(f"Invalid expires_at for key {key_id}: {expires_at_str}") from exc
+        _key_store[key_hash] = _APIKeyRecord(
+            key_id=key_id,
+            key_hash=key_hash,
+            scopes=scopes,
+            expires_at=expires_at,
+        )
+    if _key_store:
+        logger.info("Loaded %d FOIA API key(s)", len(_key_store))
+
+
+def reload_keys() -> int:
+    """Force a reload of API keys from OLYMPUS_FOIA_API_KEYS.
+
+    Clears the current key store and re-reads from the environment variable.
+    Returns the number of keys loaded after the reload.
+
+    This allows hot key rotation and revocation without restarting the process.
+    The reload is protected by the same lock as the initial load.
+    """
+    global _keys_loaded
+    with _load_keys_lock:
+        _key_store.clear()
+        _load_keys_locked()
+        _keys_loaded = True
+    logger.info("API keys reloaded: %d key(s) active", len(_key_store))
+    return len(_key_store)
 
 
 def _extract_key(request: Request) -> str:
@@ -158,7 +180,7 @@ async def require_api_key(request: Request) -> _APIKeyRecord:
                 key_id="dev",
                 key_hash="",
                 scopes={"read", "write"},
-                expires_at=datetime(2099, 1, 1, tzinfo=UTC),
+                expires_at=datetime(2099, 1, 1, tzinfo=timezone.utc),
             )
         logger.error(
             "OLYMPUS_FOIA_API_KEYS is empty and OLYMPUS_ENV != 'development'. "
@@ -186,7 +208,7 @@ async def require_api_key(request: Request) -> _APIKeyRecord:
             detail={"detail": "Invalid API key.", "code": "AUTH_INVALID"},
         )
 
-    if datetime.now(UTC) >= record.expires_at:
+    if datetime.now(timezone.utc) >= record.expires_at:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail={"detail": "API key expired.", "code": "AUTH_EXPIRED"},
@@ -384,9 +406,9 @@ def _get_client_ip(request: Request) -> str:
     """Extract client IP, only trusting ``X-Forwarded-For`` from known proxies.
 
     Only parses the ``X-Forwarded-For`` header when the direct peer IP is
-    in :pydata:`TRUSTED_PROXY_IPS`.  This prevents IP-spoofing attacks where
-    a malicious client sets a fake header to bypass rate limiting (H2) and
-    avoids bucket-eviction DoS via forged IPs (H3).
+    within the configured trusted proxy ranges (``OLYMPUS_TRUSTED_PROXY_IPS``).
+    This prevents IP-spoofing attacks where a malicious client sets a fake
+    header to bypass rate limiting and avoids bucket-eviction DoS via forged IPs.
     """
     peer_ip = request.client.host if request.client else "unknown"
     settings = get_settings()

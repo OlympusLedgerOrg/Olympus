@@ -490,7 +490,7 @@ class TestArtifactCommit:
         assert resp.status_code == 400
 
     def test_commit_with_api_key_accepted(self, client: TestClient):
-        """Providing an api_key field should not cause errors."""
+        """Extra api_key body field is silently ignored; auth uses X-API-Key header."""
         artifact_hash = "ef" * 32
         resp = client.post(
             "/ingest/commit",
