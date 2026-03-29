@@ -55,6 +55,8 @@ logger = logging.getLogger(__name__)
 # exceeds 10:1; values above 50:1 are a reliable bomb indicator).
 _MAX_DECOMPRESSED_BYTES: int = 100 * 1024 * 1024
 _MAX_COMPRESSION_RATIO: float = 50.0
+_MAX_ZSTD_WINDOW_SIZE: int = 2**26  # 64 MB LZ77 back-reference window cap
+_ZSTD_CHUNK_SIZE: int = 65536  # 64 KB streaming read chunks
 
 # Sentinel base used solely for ZIP path-containment checks; never written to disk.
 _ZIP_SAFETY_BASE: str = "/zip_extract_root"
@@ -219,12 +221,12 @@ def validate_zstd_safety(content: bytes) -> None:
     # max_window_size caps the LZ77 back-reference window; a crafted frame with
     # a huge window can allocate gigabytes of memory before any output is
     # produced.  64 MB (2**26) is well above any legitimate document need.
-    dctx = zstd.ZstdDecompressor(max_window_size=2**26)
+    dctx = zstd.ZstdDecompressor(max_window_size=_MAX_ZSTD_WINDOW_SIZE)
     total_decompressed = 0
     try:
         with dctx.stream_reader(io.BytesIO(content), closefd=False) as reader:
             while True:
-                chunk = reader.read(65536)  # 64 KB chunks
+                chunk = reader.read(_ZSTD_CHUNK_SIZE)
                 if not chunk:
                     break
                 total_decompressed += len(chunk)
