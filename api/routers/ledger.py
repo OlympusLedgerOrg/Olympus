@@ -62,7 +62,9 @@ async def get_ledger_state(db: DBSession, _rl: RateLimit):
     epoch_result = await db.execute(select(func.max(DocCommit.epoch_timestamp)))
     last_epoch = epoch_result.scalar()
 
-    # Fetch distinct shard IDs with a bounded query (limit to 1000 shards)
+    # Fetch distinct shard IDs with a bounded query.
+    # Phase 0 deployments use a single shard; this limit is a safety guard
+    # until a dedicated shard registry (Phase 1) replaces the full table scan.
     shard_result = await db.execute(
         select(DocCommit.shard_id).distinct().limit(1000)
     )

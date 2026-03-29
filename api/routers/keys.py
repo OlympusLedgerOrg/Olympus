@@ -7,6 +7,7 @@ DELETE /key/credential/{id}  — revoke a credential
 
 from __future__ import annotations
 
+import hmac as _hmac
 import logging
 import os
 from datetime import datetime, timezone
@@ -110,8 +111,6 @@ async def admin_reload_keys(request: Request) -> dict[str, object]:
             detail={"detail": "Admin key reload not configured.", "code": "ADMIN_NOT_CONFIGURED"},
         )
     provided = request.headers.get("x-admin-key", "")
-    import hmac as _hmac  # noqa: PLC0415
-
     if not _hmac.compare_digest(provided, admin_key):
         logger.warning(
             "Admin key reload rejected from %s",

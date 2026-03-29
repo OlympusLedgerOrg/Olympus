@@ -70,6 +70,8 @@ router = APIRouter(prefix="/ingest", tags=["ingest"])
 
 _IDENTIFIER_PATTERN = r"^[^\x00-\x1f\x7f]+$"
 _IDENTIFIER_MAX_LEN = 256
+# Artifact IDs (e.g. 'org/repo/v1.2.3-rc.1+build.42') are typically longer than shard/record IDs.
+_ARTIFACT_ID_MAX_LEN = 512
 
 
 class RecordInput(BaseModel):
@@ -1470,7 +1472,7 @@ class ArtifactCommitRequest(BaseModel):
     id: str = Field(
         ...,
         description="Artifact identifier (e.g. 'org/repo/v1.0.0')",
-        max_length=512,
+        max_length=_ARTIFACT_ID_MAX_LEN,
         pattern=_IDENTIFIER_PATTERN,
     )
     poseidon_root: str | None = Field(
