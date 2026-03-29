@@ -48,6 +48,12 @@ import magic
 from fastapi import HTTPException
 
 
+try:
+    import zstandard as zstd  # optional: only needed for application/zstd uploads
+except ImportError:  # pragma: no cover
+    zstd = None  # type: ignore[assignment]
+
+
 logger = logging.getLogger(__name__)
 
 # Shared limits applied to both ZIP and Zstandard validation.
@@ -188,13 +194,11 @@ def validate_zstd_safety(content: bytes) -> None:
     Raises:
         HTTPException 400: Corrupt stream, size limit exceeded, or ratio too high.
     """
-    try:
-        import zstandard as zstd  # noqa: PLC0415
-    except ImportError as exc:  # pragma: no cover
+    if zstd is None:  # pragma: no cover
         raise HTTPException(
             status_code=415,
             detail="Zstandard support is not installed on this server.",
-        ) from exc
+        )
 
     compressed_size = len(content)
     if compressed_size == 0:

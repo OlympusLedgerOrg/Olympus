@@ -57,7 +57,7 @@ async def get_ledger_state(db: DBSession, _rl: RateLimit):
     """
     # Use aggregate queries instead of a full table scan to avoid OOM on large tables.
     total_result = await db.execute(select(func.count()).select_from(DocCommit))
-    total_commits: int = total_result.scalar() or 0
+    total_commits = total_result.scalar() or 0
 
     epoch_result = await db.execute(select(func.max(DocCommit.epoch_timestamp)))
     last_epoch = epoch_result.scalar()

@@ -234,7 +234,9 @@ async def submit_observation(
         checkpoint=request.checkpoint,
         received_at=current_timestamp(),
     )
-    # Evict oldest entries when observation store is at capacity (LRU)
+    # Evict oldest entries when observation store is at capacity (LRU).
+    # ``while`` (not ``if``) guards against concurrent requests that may have
+    # pushed the store past capacity between the check and the insert.
     while len(_observations) >= _MAX_OBSERVATIONS:
         _observations.popitem(last=False)
     _observations[key] = announcement

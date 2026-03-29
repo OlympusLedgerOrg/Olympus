@@ -67,8 +67,8 @@ def _load_keys() -> None:
     with _load_keys_lock:
         if _keys_loaded:
             return
-        _keys_loaded = True
         _load_keys_locked()
+        _keys_loaded = True
 
 
 def _load_keys_locked() -> None:
@@ -117,8 +117,8 @@ def reload_keys() -> int:
     global _keys_loaded
     with _load_keys_lock:
         _key_store.clear()
-        _keys_loaded = True
         _load_keys_locked()
+        _keys_loaded = True
     logger.info("API keys reloaded: %d key(s) active", len(_key_store))
     return len(_key_store)
 
