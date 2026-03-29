@@ -294,11 +294,15 @@ def test_end_to_end_audit_flow(storage, signing_key, client):
     assert response.status_code == 200
     header_data = response.json()
 
-    # Reconstruct header for verification
+    # Reconstruct header for verification — must include all fields that
+    # were part of the original hash commitment (tree_size, height, round).
     header_for_verification = {
         "shard_id": header_data["shard_id"],
         "root_hash": header_data["root_hash"],
+        "tree_size": header_data["tree_size"],
         "timestamp": header_data["timestamp"],
+        "height": header_data.get("height", 0),
+        "round": header_data.get("round", 0),
         "previous_header_hash": header_data["previous_header_hash"],
         "header_hash": header_data["header_hash"],
     }
