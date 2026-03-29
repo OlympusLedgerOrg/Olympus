@@ -20,6 +20,7 @@ Endpoints:
 from __future__ import annotations
 
 import logging
+import os
 from collections import OrderedDict, defaultdict
 from datetime import UTC, datetime
 
@@ -49,6 +50,10 @@ _MAX_ANNOUNCE_SKEW_SECONDS: int = 60
 # reaches this size the oldest entries are evicted.
 _MAX_NONCE_ENTRIES: int = 100_000
 
+# Maximum number of observations to store in the in-process store.
+# Prevents unbounded memory growth under sustained load.
+_MAX_OBSERVATIONS: int = 500_000
+
 # ---------------------------------------------------------------------------
 # In-process observation store (Phase 1 — no DB).
 # Key: f"{announcement.origin}:{announcement.checkpoint.sequence}"
@@ -59,12 +64,26 @@ _MAX_NONCE_ENTRIES: int = 100_000
 # causing each worker to see only a fraction of observations. Ensure
 # workers=1 (single-process mode) until the DB upgrade is complete.
 # ---------------------------------------------------------------------------
-_observations: dict[str, WitnessAnnouncement] = {}
+_observations: OrderedDict[str, WitnessAnnouncement] = OrderedDict()
 
 # Bounded nonce set for replay-resistance.  Tracks recently seen nonces
 # to reject duplicate submissions.  Uses OrderedDict for O(1) lookup and
 # FIFO eviction when the capacity is reached.
 _seen_nonces: OrderedDict[str, None] = OrderedDict()
+
+# Warn operators if the witness store is running in a multi-worker deployment.
+# Split-view detection requires that all workers share the same store.
+_web_concurrency = os.environ.get("WEB_CONCURRENCY", "")
+try:
+    if _web_concurrency and int(_web_concurrency) > 1:
+        logger.critical(
+            "Witness router: WEB_CONCURRENCY=%s but _observations is in-process only. "
+            "Split-view detection will miss conflicts that land on different workers. "
+            "Use a DB-backed store or run with a single worker (WEB_CONCURRENCY=1).",
+            _web_concurrency,
+        )
+except ValueError:
+    pass
 
 
 @router.get("/checkpoints/latest", response_model=WitnessAnnouncement)
@@ -205,6 +224,9 @@ async def submit_observation(
         checkpoint=request.checkpoint,
         received_at=current_timestamp(),
     )
+    # Evict oldest entries when observation store is at capacity (LRU)
+    while len(_observations) >= _MAX_OBSERVATIONS:
+        _observations.popitem(last=False)
     _observations[key] = announcement
 
     logger.info(

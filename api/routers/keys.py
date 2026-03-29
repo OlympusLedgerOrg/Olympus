@@ -8,12 +8,13 @@ DELETE /key/credential/{id}  — revoke a credential
 from __future__ import annotations
 
 import logging
+import os
 from datetime import datetime, timezone
 
-from fastapi import APIRouter, HTTPException, status
+from fastapi import APIRouter, HTTPException, Request, status
 from sqlalchemy import select
 
-from api.auth import RateLimit, RequireAPIKey
+from api.auth import RateLimit, RequireAPIKey, reload_keys
 from api.deps import DBSession
 from api.models.credential import KeyCredential
 from api.schemas.credential import CredentialCreate, CredentialResponse
@@ -89,3 +90,37 @@ async def revoke_credential(
     cred.revocation_commit_id = generate_commit_id()  # Anchor the revocation event
     await db.commit()
     logger.info("Revoked credential %s", credential_id)
+
+
+@router.post("/admin/reload-keys", status_code=status.HTTP_200_OK)
+async def admin_reload_keys(request: Request) -> dict[str, object]:
+    """Force a hot reload of FOIA API keys from the environment.
+
+    Protected by a separate ``OLYMPUS_ADMIN_KEY`` secret.  This endpoint
+    allows key rotation and revocation without restarting the API process.
+
+    Raises:
+        HTTPException 401: If ``OLYMPUS_ADMIN_KEY`` is not set or doesn't match.
+        HTTPException 503: If ``OLYMPUS_ADMIN_KEY`` is not configured.
+    """
+    admin_key = os.environ.get("OLYMPUS_ADMIN_KEY", "")
+    if not admin_key:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail={"detail": "Admin key reload not configured.", "code": "ADMIN_NOT_CONFIGURED"},
+        )
+    provided = request.headers.get("x-admin-key", "")
+    import hmac as _hmac  # noqa: PLC0415
+
+    if not _hmac.compare_digest(provided, admin_key):
+        logger.warning(
+            "Admin key reload rejected from %s",
+            request.client.host if request.client else "unknown",
+        )
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail={"detail": "Invalid admin key.", "code": "ADMIN_AUTH_INVALID"},
+        )
+    count = reload_keys()
+    logger.info("Admin-triggered key reload: %d key(s) now active", count)
+    return {"reloaded": True, "key_count": count}

@@ -124,10 +124,14 @@ def create_app() -> FastAPI:
             origins = []  # No CORS in production unless explicitly configured
             logger.warning("CORS_ORIGINS not set — cross-origin requests will be rejected.")
 
+    # Only enable CORS credentials when origins are explicitly configured and non-empty.
+    # allow_credentials=True with broad/unset origins is a credential-stealing vector.
+    allow_credentials = bool(origins) and bool(os.environ.get("CORS_ORIGINS", "").strip())
+
     app.add_middleware(
         CORSMiddleware,
         allow_origins=origins,
-        allow_credentials=True,
+        allow_credentials=allow_credentials,
         allow_methods=["GET", "POST", "PATCH", "DELETE"],
         allow_headers=["Authorization", "Content-Type"],
     )

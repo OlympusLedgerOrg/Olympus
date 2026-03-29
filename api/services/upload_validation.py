@@ -25,7 +25,6 @@ ALLOWED_MIME_TYPES: set[str] = {
     "image/tiff",
     "application/msword",
     "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-    "application/zip",
     "application/xml",
     "text/xml",
 }
