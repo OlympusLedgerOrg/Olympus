@@ -458,9 +458,10 @@ def _subproof_ct(
     # Base case: single-leaf new tree (new_size == 1).
     # The standard k-derivation loop leaves k == new_size, making the
     # ``new_size > k`` branch below unreachable and causing infinite
-    # recursion when old_size == 0.  Handle explicitly: the only valid
-    # scenario is old_size == 0 (old_size == new_size is caught above),
-    # and the proof is simply the single-leaf subtree root.
+    # recursion when old_size == 0.  Handle explicitly: when we reach
+    # here, old_size must be 0 (the old_size == 1 case is already caught
+    # by the old_size == new_size guard above, and old_size > new_size is
+    # a precondition violation).  The proof is the single-leaf subtree root.
     if new_size == 1:
         if is_root:
             return []
@@ -600,7 +601,9 @@ def _verify_subproof_ct(
     # Base case: single-leaf new tree (new_size == 1).
     # Mirrors the guard in _subproof_ct: the k-derivation loop leaves
     # k == new_size, so the ``new_size > k`` branch below would be
-    # unreachable and old_size == 0 would recurse infinitely.
+    # unreachable and old_size == 0 would recurse infinitely.  When we
+    # reach here, old_size must be 0 (old_size == 1 is already caught
+    # by the old_size == new_size guard above).
     if new_size == 1:
         if proof_index >= len(proof):
             raise ValueError("Proof exhausted for single-leaf subtree")
