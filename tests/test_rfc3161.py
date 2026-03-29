@@ -902,3 +902,84 @@ def test_timestamp_watchdog_status_healthy():
 def test_timestamp_watchdog_stale_after_seconds_negative_raises():
     with pytest.raises(ValueError, match="non-negative"):
         timestamp_watchdog_status([], stale_after_seconds=-1)
+
+
+# ---------------------------------------------------------------------------
+# _extract_tsa_cert_fingerprint – invalid inputs
+# ---------------------------------------------------------------------------
+
+
+def test_extract_tsa_cert_fingerprint_empty_bytes():
+    from protocol.rfc3161 import _extract_tsa_cert_fingerprint
+
+    assert _extract_tsa_cert_fingerprint(b"") is None
+
+
+def test_extract_tsa_cert_fingerprint_garbage_bytes():
+    from protocol.rfc3161 import _extract_tsa_cert_fingerprint
+
+    assert _extract_tsa_cert_fingerprint(b"\xff\xff\xff") is None
+
+
+def test_extract_tsa_cert_fingerprint_minimal_asn1():
+    from protocol.rfc3161 import _extract_tsa_cert_fingerprint
+
+    assert _extract_tsa_cert_fingerprint(b"\x30\x00") is None
+
+
+def test_extract_tsa_cert_fingerprint_random_data():
+    from protocol.rfc3161 import _extract_tsa_cert_fingerprint
+
+    assert _extract_tsa_cert_fingerprint(b"\x01\x02\x03\x04\x05") is None
+
+
+# ---------------------------------------------------------------------------
+# _enforce_trust_mode_environment – development (should not raise)
+# ---------------------------------------------------------------------------
+
+
+def test_enforce_trust_mode_environment_development_does_not_raise(monkeypatch):
+    from protocol.rfc3161 import TRUST_MODE_DEV, _enforce_trust_mode_environment
+
+    monkeypatch.setenv("OLYMPUS_ENV", "development")
+    # Should not raise: "development" is NOT in the production set
+    _enforce_trust_mode_environment(TRUST_MODE_DEV)
+
+
+def test_enforce_trust_mode_environment_empty_env_does_not_raise(monkeypatch):
+    from protocol.rfc3161 import TRUST_MODE_DEV, _enforce_trust_mode_environment
+
+    monkeypatch.delenv("OLYMPUS_ENV", raising=False)
+    _enforce_trust_mode_environment(TRUST_MODE_DEV)
+
+
+def test_enforce_trust_mode_environment_staging_does_not_raise(monkeypatch):
+    from protocol.rfc3161 import TRUST_MODE_DEV, _enforce_trust_mode_environment
+
+    monkeypatch.setenv("OLYMPUS_ENV", "staging")
+    # "staging" is not in the production set → no raise
+    _enforce_trust_mode_environment(TRUST_MODE_DEV)
+
+
+def test_enforce_trust_mode_environment_production_raises(monkeypatch):
+    from protocol.rfc3161 import TRUST_MODE_DEV, _enforce_trust_mode_environment
+
+    monkeypatch.setenv("OLYMPUS_ENV", "production")
+    with pytest.raises(RuntimeError, match="DEV trust mode forbidden in production"):
+        _enforce_trust_mode_environment(TRUST_MODE_DEV)
+
+
+def test_enforce_trust_mode_environment_prod_short_raises(monkeypatch):
+    from protocol.rfc3161 import TRUST_MODE_DEV, _enforce_trust_mode_environment
+
+    monkeypatch.setenv("OLYMPUS_ENV", "prod")
+    with pytest.raises(RuntimeError, match="DEV trust mode forbidden in production"):
+        _enforce_trust_mode_environment(TRUST_MODE_DEV)
+
+
+def test_enforce_trust_mode_environment_prod_mode_is_fine_in_production(monkeypatch):
+    from protocol.rfc3161 import TRUST_MODE_PROD, _enforce_trust_mode_environment
+
+    monkeypatch.setenv("OLYMPUS_ENV", "production")
+    # PROD trust mode in production should not raise
+    _enforce_trust_mode_environment(TRUST_MODE_PROD)
