@@ -797,27 +797,34 @@ class StorageLayer:
         """
         Consume a rate-limit token using PostgreSQL for cross-worker coordination.
 
+        All timestamps are sourced from the PostgreSQL server clock (``NOW()``) to
+        prevent clock-skew attacks in distributed deployments where individual
+        Python workers may have drifted clocks.
+
         Returns:
             True if a token was consumed, False if the subject is rate limited.
         """
         if capacity <= 0 or refill_rate_per_second < 0:
             raise ValueError("capacity must be > 0 and refill_rate_per_second must be >= 0")
 
-        now = datetime.now(timezone.utc)
-
         with self._get_connection() as conn, conn.cursor(row_factory=dict_row) as cur:
+            # Use server-side NOW() for the initial insert so the seed timestamp
+            # is always anchored to the database clock, not the application clock.
             cur.execute(
                 """
                     INSERT INTO api_rate_limits (subject_type, subject, action, tokens, last_refill_ts)
-                    VALUES (%s, %s, %s, %s, %s)
+                    VALUES (%s, %s, %s, %s, NOW())
                     ON CONFLICT (subject_type, subject, action) DO NOTHING
                 """,
-                (subject_type, subject, action, capacity, now),
+                (subject_type, subject, action, capacity),
             )
 
+            # Retrieve current token count and the elapsed seconds since last refill,
+            # both computed server-side to avoid clock-skew races.
             cur.execute(
                 """
-                    SELECT tokens, last_refill_ts
+                    SELECT tokens,
+                           EXTRACT(EPOCH FROM (NOW() - last_refill_ts)) AS elapsed_seconds
                     FROM api_rate_limits
                     WHERE subject_type = %s AND subject = %s AND action = %s
                     FOR UPDATE
@@ -828,7 +835,7 @@ class StorageLayer:
             if row is None:
                 raise RuntimeError("Failed to load rate limit state from database")
 
-            elapsed = max(0.0, (now - row["last_refill_ts"]).total_seconds())
+            elapsed = max(0.0, float(row["elapsed_seconds"]))
             tokens = min(capacity, row["tokens"] + elapsed * refill_rate_per_second)
 
             if tokens < 1.0:
@@ -836,13 +843,15 @@ class StorageLayer:
                 return False
 
             tokens -= 1.0
+            # Use NOW() in the UPDATE so last_refill_ts is always the database's
+            # notion of the current time, eliminating Python clock-skew influence.
             cur.execute(
                 """
                     UPDATE api_rate_limits
-                    SET tokens = %s, last_refill_ts = %s
+                    SET tokens = %s, last_refill_ts = NOW()
                     WHERE subject_type = %s AND subject = %s AND action = %s
                 """,
-                (tokens, now, subject_type, subject, action),
+                (tokens, subject_type, subject, action),
             )
             conn.commit()
             return True

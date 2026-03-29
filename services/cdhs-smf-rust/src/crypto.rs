@@ -18,36 +18,50 @@ const LEAF_HASH_PREFIX: &[u8] = b"OLY:SMT:LEAF:V1";
 const NODE_HASH_PREFIX: &[u8] = b"OLY:SMT:NODE:V1";
 const EMPTY_LEAF_PREFIX: &[u8] = b"OLY:EMPTY-LEAF:V1";
 
+/// Encode a byte slice with a 4-byte big-endian length prefix.
+///
+/// This prevents canonicalization collisions where concatenated variable-length
+/// fields could be misinterpreted — e.g. `shard_id="ab"` + `record_key="cd"`
+/// vs. `shard_id="a"` + `record_key="bcd"` would otherwise hash identically.
+fn length_prefixed(data: &[u8]) -> Vec<u8> {
+    let len = data.len() as u32;
+    let mut buf = Vec::with_capacity(4 + data.len());
+    buf.extend_from_slice(&len.to_be_bytes());
+    buf.extend_from_slice(data);
+    buf
+}
+
 /// Compute a global key from shard_id and record_key
 ///
-/// global_key = H(GLOBAL_KEY_PREFIX || shard_id || record_key_components)
+/// global_key = H_derive(len(shard_id) || shard_id || len(record_type) || record_type || ...)
+///
+/// All variable-length fields are length-prefixed to prevent canonicalization
+/// collisions (field-boundary bleeding between shard_id and record_key components).
 pub fn compute_global_key(shard_id: &str, record_key: &RecordKey) -> [u8; 32] {
     let mut hasher = blake3::Hasher::new();
 
     // Domain separation prefix
     hasher.update(GLOBAL_KEY_PREFIX);
 
-    // Shard ID
-    hasher.update(shard_id.as_bytes());
+    // Shard ID — length-prefixed to prevent bleeding into record_type
+    hasher.update(&length_prefixed(shard_id.as_bytes()));
 
-    // Record type
-    hasher.update(record_key.record_type.as_bytes());
+    // Record type — length-prefixed
+    hasher.update(&length_prefixed(record_key.record_type.as_bytes()));
 
-    // Record ID
-    hasher.update(record_key.record_id.as_bytes());
+    // Record ID — length-prefixed
+    hasher.update(&length_prefixed(record_key.record_id.as_bytes()));
 
-    // Version (if present)
-    if !record_key.version.is_empty() {
-        hasher.update(record_key.version.as_bytes());
-    }
+    // Version — length-prefixed (empty version is encoded as 0-length prefix)
+    hasher.update(&length_prefixed(record_key.version.as_bytes()));
 
-    // Metadata (sorted by key for determinism)
+    // Metadata (sorted by key for determinism) — each key and value length-prefixed
     let mut keys: Vec<_> = record_key.metadata.keys().collect();
     keys.sort();
     for key in keys {
-        hasher.update(key.as_bytes());
+        hasher.update(&length_prefixed(key.as_bytes()));
         if let Some(value) = record_key.metadata.get(key) {
-            hasher.update(value.as_bytes());
+            hasher.update(&length_prefixed(value.as_bytes()));
         }
     }
 
@@ -159,6 +173,34 @@ mod tests {
         // Different shard should give different key
         let key3 = compute_global_key("other:shard", &record_key);
         assert_ne!(key1, key3);
+    }
+
+    /// Verify length-prefixing prevents canonicalization / field-bleed collisions.
+    ///
+    /// Without length prefixes the following two inputs would hash identically:
+    ///   shard_id="ab" + record_type="cd..."  vs  shard_id="abcd..." + record_type=""
+    #[test]
+    fn test_compute_global_key_no_field_bleed() {
+        // shard_id="a", record_type="b", record_id="c", version=""
+        let rk1 = RecordKey {
+            record_type: "b".to_string(),
+            record_id: "c".to_string(),
+            version: "".to_string(),
+            metadata: HashMap::new(),
+        };
+        // shard_id="ab", record_type="", record_id="c", version=""
+        // Without length prefixes these concatenate to the same byte sequence.
+        let rk2 = RecordKey {
+            record_type: "".to_string(),
+            record_id: "c".to_string(),
+            version: "".to_string(),
+            metadata: HashMap::new(),
+        };
+
+        let key1 = compute_global_key("a", &rk1);
+        let key2 = compute_global_key("ab", &rk2);
+
+        assert_ne!(key1, key2, "length-prefixing must prevent field-bleed collisions");
     }
 
     #[test]
