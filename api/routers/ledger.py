@@ -44,7 +44,7 @@ router = APIRouter(prefix="/ledger", tags=["ledger"])
 # Maximum number of bytes read per iteration when streaming an upload.
 # Kept small enough to avoid large in-flight allocations while large enough
 # to amortise per-call overhead (64 KiB is a typical I/O page multiple).
-_UPLOAD_CHUNK_SIZE = 65_536
+UPLOAD_CHUNK_SIZE = 65_536
 
 
 async def _read_upload_bounded(file: UploadFile, max_bytes: int, max_mb: int) -> bytes:
@@ -64,7 +64,7 @@ async def _read_upload_bounded(file: UploadFile, max_bytes: int, max_mb: int) ->
     chunks: list[bytes] = []
     total = 0
     while True:
-        chunk = await file.read(_UPLOAD_CHUNK_SIZE)
+        chunk = await file.read(UPLOAD_CHUNK_SIZE)
         if not chunk:
             break
         total += len(chunk)

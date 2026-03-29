@@ -155,6 +155,7 @@ class TestConsumeRateLimit:
         )
 
         calls = mock_cursor.execute.call_args_list
+        assert len(calls) >= 3, f"Expected at least 3 SQL calls (INSERT + SELECT + UPDATE), got {len(calls)}"
         insert_sql = calls[0][0][0]
         update_sql = calls[2][0][0]
 
@@ -688,13 +689,11 @@ class TestOperationalStateEdgeCases:
         self, mock_conn: MagicMock, mock_cursor: MagicMock
     ) -> None:
         """Verify token refill calculation respects capacity cap."""
-        from datetime import timedelta
-
-        # Simulate elapsed time that would exceed capacity if uncapped
-        past = datetime.now(UTC) - timedelta(seconds=100)
+        # Simulate 100 seconds of elapsed time — would exceed capacity without cap.
+        # elapsed_seconds is now returned by the server-side EXTRACT(EPOCH FROM …).
         mock_cursor.fetchone.return_value = {
             "tokens": 2.0,
-            "last_refill_ts": past,
+            "elapsed_seconds": 100.0,
         }
 
         result = consume_rate_limit(
