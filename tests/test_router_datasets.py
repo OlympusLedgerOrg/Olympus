@@ -15,7 +15,6 @@ Uses in-memory SQLite with aiosqlite and mocks RFC 3161 timestamp requests.
 from __future__ import annotations
 
 import os
-from datetime import datetime, timezone
 from unittest.mock import MagicMock, patch
 
 import nacl.signing
@@ -649,7 +648,7 @@ async def test_dataset_history_multi_version_chain(client):
     )
     resp2 = await client.post("/datasets/commit", json=body2)
     assert resp2.status_code == 201
-    commit_id_v2 = resp2.json()["commit_id"]
+    _commit_id_v2 = resp2.json()["commit_id"]  # noqa: F841
 
     # Get history
     resp = await client.get(f"/datasets/{dataset_id}/history")
