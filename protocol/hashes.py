@@ -170,7 +170,8 @@ def global_key(shard_id: str, record_key_bytes: bytes) -> bytes:
         key_material,
         derive_key_context=_GLOBAL_SMT_KEY_CONTEXT,
     ).digest()
-    assert len(result) == 32
+    if len(result) != 32:  # pragma: no cover — BLAKE3 always produces 32 bytes
+        raise ValueError(f"BLAKE3 derive_key returned {len(result)} bytes, expected 32")
     return result
 
 
