@@ -68,7 +68,12 @@ router = APIRouter(prefix="/ingest", tags=["ingest"])
 # ---------------------------------------------------------------------------
 
 
-_IDENTIFIER_PATTERN = r"^[^\x00-\x1f\x7f]+$"
+# Allowlist pattern for identifier fields.  Permits alphanumeric chars plus the
+# small set of punctuation genuinely needed for shard/record/artifact IDs
+# (e.g. "watauga:2025:budget", "org/repo/v1.2.3-rc.1", "doc-001").
+# Deliberately excludes control characters, null bytes, shell metacharacters
+# (\ * ? < > | ; ` $ ! &), and Unicode homoglyphs (pure ASCII allowlist).
+_IDENTIFIER_PATTERN = r"^[a-zA-Z0-9_./:@+\-]+$"
 _IDENTIFIER_MAX_LEN = 256
 # Artifact IDs (e.g. 'org/repo/v1.2.3-rc.1+build.42') are typically longer than shard/record IDs.
 _ARTIFACT_ID_MAX_LEN = 512
@@ -231,11 +236,11 @@ _write_ledger = Ledger()
 _api_key_store: dict[str, ApiKeyRecord] = {}
 _api_keys_loaded = False
 
-# L4-E: Trusted proxy IPs for X-Forwarded-For parsing
+# L4-E: Trusted proxy IP ranges for X-Forwarded-For parsing.
 # Only parse X-Forwarded-For header when the direct peer is a known trusted proxy.
 # This prevents IP spoofing attacks where a client sets a fake X-Forwarded-For header.
 # Configure via OLYMPUS_TRUSTED_PROXY_IPS environment variable (comma-separated IPs or CIDRs).
-TRUSTED_PROXY_IPS: list[str] = [
+TRUSTED_PROXY_RANGES: list[str] = [
     ip.strip() for ip in os.environ.get("OLYMPUS_TRUSTED_PROXY_IPS", "").split(",") if ip.strip()
 ]
 
@@ -667,7 +672,7 @@ def _client_ip(request: Request) -> str:
     peer_ip = request.client.host if request.client else None
 
     # Only parse X-Forwarded-For if the peer is a trusted proxy (CIDR-aware check)
-    if peer_ip and TRUSTED_PROXY_IPS and _ip_in_ranges(peer_ip, TRUSTED_PROXY_IPS):
+    if peer_ip and TRUSTED_PROXY_RANGES and _ip_in_ranges(peer_ip, TRUSTED_PROXY_RANGES):
         xff = request.headers.get("x-forwarded-for")
         if xff:
             # X-Forwarded-For format: "client, proxy1, proxy2, ..."

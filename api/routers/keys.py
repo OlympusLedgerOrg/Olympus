@@ -101,14 +101,14 @@ async def admin_reload_keys(request: Request) -> dict[str, object]:
     allows key rotation and revocation without restarting the API process.
 
     Raises:
-        HTTPException 401: If ``OLYMPUS_ADMIN_KEY`` is not set or doesn't match.
-        HTTPException 503: If ``OLYMPUS_ADMIN_KEY`` is not configured.
+        HTTPException 401: If the provided ``X-Admin-Key`` header is missing or wrong.
+        HTTPException 503: If ``OLYMPUS_ADMIN_KEY`` is not configured on the server.
     """
     admin_key = os.environ.get("OLYMPUS_ADMIN_KEY", "")
     if not admin_key:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail={"detail": "Admin key reload not configured.", "code": "ADMIN_NOT_CONFIGURED"},
+            detail="Admin key reload not configured. Set OLYMPUS_ADMIN_KEY to enable.",
         )
     provided = request.headers.get("x-admin-key", "")
     if not _hmac.compare_digest(provided, admin_key):
@@ -118,7 +118,7 @@ async def admin_reload_keys(request: Request) -> dict[str, object]:
         )
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
-            detail={"detail": "Invalid admin key.", "code": "ADMIN_AUTH_INVALID"},
+            detail="Invalid admin key.",
         )
     count = reload_keys()
     logger.info("Admin-triggered key reload: %d key(s) now active", count)

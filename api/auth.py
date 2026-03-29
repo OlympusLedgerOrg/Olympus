@@ -406,9 +406,9 @@ def _get_client_ip(request: Request) -> str:
     """Extract client IP, only trusting ``X-Forwarded-For`` from known proxies.
 
     Only parses the ``X-Forwarded-For`` header when the direct peer IP is
-    in :pydata:`TRUSTED_PROXY_IPS`.  This prevents IP-spoofing attacks where
-    a malicious client sets a fake header to bypass rate limiting (H2) and
-    avoids bucket-eviction DoS via forged IPs (H3).
+    within the configured trusted proxy ranges (``OLYMPUS_TRUSTED_PROXY_IPS``).
+    This prevents IP-spoofing attacks where a malicious client sets a fake
+    header to bypass rate limiting and avoids bucket-eviction DoS via forged IPs.
     """
     peer_ip = request.client.host if request.client else "unknown"
     settings = get_settings()

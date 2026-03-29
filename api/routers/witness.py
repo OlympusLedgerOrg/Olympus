@@ -57,8 +57,14 @@ _MAX_OBSERVATIONS: int = 500_000
 # ---------------------------------------------------------------------------
 # In-process observation store (Phase 1 — no DB).
 # Key: f"{announcement.origin}:{announcement.checkpoint.sequence}"
-# Upgrade path: replace this dict with an async DB-backed repository that
-# implements the same get/set interface used below.
+#
+# Uses OrderedDict so that FIFO/LRU eviction (popitem(last=False)) removes the
+# oldest entries once _MAX_OBSERVATIONS is reached, preventing unbounded memory
+# growth under sustained load.
+#
+# Upgrade path: replace with an async DB-backed repository that implements the
+# same get/set interface used below.
+#
 # WARNING: this store is not safe for multi-worker deployments. Running
 # uvicorn with --workers > 1 splits the store across processes silently,
 # causing each worker to see only a fraction of observations. Ensure
@@ -83,7 +89,11 @@ try:
             _web_concurrency,
         )
 except ValueError:
-    pass
+    logger.warning(
+        "Witness router: WEB_CONCURRENCY=%r is not a valid integer — "
+        "multi-worker safety check skipped. Set WEB_CONCURRENCY to an integer.",
+        _web_concurrency,
+    )
 
 
 @router.get("/checkpoints/latest", response_model=WitnessAnnouncement)
