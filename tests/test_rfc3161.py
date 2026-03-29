@@ -631,3 +631,274 @@ def test_verify_timestamp_token_skips_imprint_check_when_unextractable():
         patch("protocol.rfc3161.rfc3161ng.check_timestamp", return_value=True),
     ):
         assert verify_timestamp_token(fake_tst_bytes, hash_hex) is True
+
+
+# ---------------------------------------------------------------------------
+# extract_tsa_certificate
+# ---------------------------------------------------------------------------
+
+
+def test_extract_tsa_certificate_returns_none_for_invalid_bytes():
+    from protocol.rfc3161 import extract_tsa_certificate
+
+    assert extract_tsa_certificate(b"\x30\x00") is None
+    assert extract_tsa_certificate(b"") is None
+    assert extract_tsa_certificate(b"\xff\xff") is None
+
+
+# ---------------------------------------------------------------------------
+# check_tsa_certificate_expiry
+# ---------------------------------------------------------------------------
+
+
+def test_check_tsa_certificate_expiry_no_cert_returns_invalid():
+    from protocol.rfc3161 import check_tsa_certificate_expiry
+
+    result = check_tsa_certificate_expiry(b"\x30\x00")
+    assert result["valid"] is False
+    assert result["warning"] is True
+    assert "Could not extract" in result["message"]
+
+
+def test_check_tsa_certificate_expiry_with_mocked_cert():
+    from datetime import timedelta
+
+    from protocol.rfc3161 import check_tsa_certificate_expiry
+
+    fake_cert = MagicMock()
+    fake_cert.not_valid_after_utc = datetime(2026, 6, 1, tzinfo=UTC)
+
+    now = datetime(2026, 3, 1, tzinfo=UTC)
+
+    with patch("protocol.rfc3161.extract_tsa_certificate", return_value=fake_cert):
+        result = check_tsa_certificate_expiry(b"\x30\x00", now=now)
+    assert result["valid"] is True
+    assert "not_after" in result
+
+
+def test_check_tsa_certificate_expiry_expired_cert():
+    from protocol.rfc3161 import check_tsa_certificate_expiry
+
+    fake_cert = MagicMock()
+    fake_cert.not_valid_after_utc = datetime(2025, 1, 1, tzinfo=UTC)
+
+    now = datetime(2026, 3, 1, tzinfo=UTC)
+
+    with patch("protocol.rfc3161.extract_tsa_certificate", return_value=fake_cert):
+        result = check_tsa_certificate_expiry(b"\x30\x00", now=now)
+    assert result["valid"] is False
+    assert "expired" in result["message"]
+
+
+def test_check_tsa_certificate_expiry_near_expiry():
+    from protocol.rfc3161 import check_tsa_certificate_expiry
+
+    fake_cert = MagicMock()
+    # Expires in 10 days (< 30 days default threshold)
+    fake_cert.not_valid_after_utc = datetime(2026, 3, 11, tzinfo=UTC)
+
+    now = datetime(2026, 3, 1, tzinfo=UTC)
+
+    with patch("protocol.rfc3161.extract_tsa_certificate", return_value=fake_cert):
+        result = check_tsa_certificate_expiry(b"\x30\x00", now=now)
+    assert result["valid"] is True
+    assert result["warning"] is True
+    assert "expires" in result["message"]
+
+
+# ---------------------------------------------------------------------------
+# validate_tsa_certificate_chain
+# ---------------------------------------------------------------------------
+
+
+def test_validate_tsa_certificate_chain_no_cert():
+    from protocol.rfc3161 import validate_tsa_certificate_chain
+
+    result = validate_tsa_certificate_chain(b"\x30\x00")
+    assert result["valid"] is False
+    assert result["fingerprint"] is None
+    assert "Could not extract" in result["message"]
+
+
+def test_validate_tsa_certificate_chain_with_mocked_cert():
+    from protocol.rfc3161 import validate_tsa_certificate_chain
+
+    fake_cert = MagicMock()
+    fake_cert.fingerprint.return_value = b"\xaa" * 32
+    fake_cert.subject.rfc4514_string.return_value = "CN=Test TSA"
+    fake_cert.issuer.rfc4514_string.return_value = "CN=Test CA"
+    fake_cert.not_valid_after_utc = datetime(2028, 1, 1, tzinfo=UTC)
+
+    with patch("protocol.rfc3161.extract_tsa_certificate", return_value=fake_cert):
+        result = validate_tsa_certificate_chain(b"\x30\x00")
+    assert result["valid"] is True
+    assert result["fingerprint"] == "aa" * 32
+    assert result["subject"] == "CN=Test TSA"
+    assert result["issuer"] == "CN=Test CA"
+
+
+def test_validate_tsa_certificate_chain_expired():
+    from protocol.rfc3161 import validate_tsa_certificate_chain
+
+    fake_cert = MagicMock()
+    fake_cert.fingerprint.return_value = b"\xbb" * 32
+    fake_cert.subject.rfc4514_string.return_value = "CN=Expired TSA"
+    fake_cert.issuer.rfc4514_string.return_value = "CN=Test CA"
+    fake_cert.not_valid_after_utc = datetime(2020, 1, 1, tzinfo=UTC)
+
+    with patch("protocol.rfc3161.extract_tsa_certificate", return_value=fake_cert):
+        result = validate_tsa_certificate_chain(b"\x30\x00")
+    assert result["valid"] is False
+    assert "message" in result
+
+
+# ---------------------------------------------------------------------------
+# evaluate_timestamp_token_health
+# ---------------------------------------------------------------------------
+
+
+def test_evaluate_timestamp_token_health_healthy():
+    from protocol.rfc3161 import evaluate_timestamp_token_health
+
+    now = datetime(2026, 3, 1, 0, 0, 30, tzinfo=UTC)
+    tokens = [
+        TimestampToken("a" * 64, DEFAULT_TSA_URL, b"\x01", "2026-03-01T00:00:00Z"),
+        TimestampToken("a" * 64, DIGICERT_TSA_URL, b"\x02", "2026-03-01T00:00:00Z"),
+        TimestampToken("a" * 64, SECTIGO_TSA_URL, b"\x03", "2026-03-01T00:00:00Z"),
+    ]
+
+    # Mock cert expiry check to return no warnings (tokens are fake)
+    fake_expiry = {"valid": True, "warning": False, "not_after": "2028-01-01T00:00:00Z"}
+    with patch("protocol.rfc3161.check_tsa_certificate_expiry", return_value=fake_expiry):
+        result = evaluate_timestamp_token_health(tokens, now=now, stale_after_seconds=3600)
+    assert result["healthy"] is True
+    assert result["alerts"] == []
+
+
+def test_evaluate_timestamp_token_health_missing_tsa():
+    from protocol.rfc3161 import evaluate_timestamp_token_health
+
+    now = datetime(2026, 3, 1, 0, 0, 30, tzinfo=UTC)
+    tokens = [
+        TimestampToken("a" * 64, DEFAULT_TSA_URL, b"\x01", "2026-03-01T00:00:00Z"),
+    ]
+
+    result = evaluate_timestamp_token_health(tokens, now=now, stale_after_seconds=3600)
+    assert result["healthy"] is False
+    assert any("missing" in a for a in result["alerts"])
+
+
+def test_evaluate_timestamp_token_health_cert_warning():
+    from protocol.rfc3161 import evaluate_timestamp_token_health
+
+    now = datetime(2026, 3, 1, 0, 0, 30, tzinfo=UTC)
+    tokens = [
+        TimestampToken("a" * 64, DEFAULT_TSA_URL, b"\x01", "2026-03-01T00:00:00Z"),
+        TimestampToken("a" * 64, DIGICERT_TSA_URL, b"\x02", "2026-03-01T00:00:00Z"),
+        TimestampToken("a" * 64, SECTIGO_TSA_URL, b"\x03", "2026-03-01T00:00:00Z"),
+    ]
+
+    # Mock cert expiry to return a warning
+    fake_expiry = {"valid": True, "warning": True, "message": "expires soon", "not_after": "2026-04-01T00:00:00Z"}
+    with patch("protocol.rfc3161.check_tsa_certificate_expiry", return_value=fake_expiry):
+        result = evaluate_timestamp_token_health(tokens, now=now, stale_after_seconds=3600)
+    assert len(result["certificate_warnings"]) >= 1
+
+
+# ---------------------------------------------------------------------------
+# _normalize_tsa_urls
+# ---------------------------------------------------------------------------
+
+
+def test_normalize_tsa_urls_rejects_single_url():
+    from protocol.rfc3161 import _normalize_tsa_urls
+
+    with pytest.raises(ValueError, match="At least two"):
+        _normalize_tsa_urls(("https://only-one.example",))
+
+
+def test_normalize_tsa_urls_rejects_duplicates():
+    from protocol.rfc3161 import _normalize_tsa_urls
+
+    with pytest.raises(ValueError, match="unique"):
+        _normalize_tsa_urls(("https://a.example", "https://a.example"))
+
+
+def test_normalize_tsa_urls_filters_empty_strings():
+    from protocol.rfc3161 import _normalize_tsa_urls
+
+    with pytest.raises(ValueError, match="At least two"):
+        _normalize_tsa_urls(("https://a.example", ""))
+
+
+# ---------------------------------------------------------------------------
+# request_timestamp_quorum – additional paths
+# ---------------------------------------------------------------------------
+
+
+def test_request_timestamp_quorum_default_three_urls():
+    hash_hex = "a" * 64
+    token_a = TimestampToken(hash_hex, DEFAULT_TSA_URL, b"\x01", "2026-03-01T00:00:00Z")
+    token_b = TimestampToken(hash_hex, DIGICERT_TSA_URL, b"\x02", "2026-03-01T00:00:01Z")
+    token_c = TimestampToken(hash_hex, SECTIGO_TSA_URL, b"\x03", "2026-03-01T00:00:02Z")
+
+    with patch(
+        "protocol.rfc3161.request_timestamp",
+        side_effect=[token_a, token_b, token_c],
+    ):
+        tokens = request_timestamp_quorum(hash_hex)
+
+    assert len(tokens) == 3
+    assert tokens[0].tsa_url == DEFAULT_TSA_URL
+    assert tokens[1].tsa_url == DIGICERT_TSA_URL
+    assert tokens[2].tsa_url == SECTIGO_TSA_URL
+
+
+# ---------------------------------------------------------------------------
+# verify_timestamp_quorum – dict token input
+# ---------------------------------------------------------------------------
+
+
+def test_verify_timestamp_quorum_accepts_dict_tokens():
+    hash_hex = "a" * 64
+    token_a = TimestampToken(hash_hex, DEFAULT_TSA_URL, b"\x01", "2026-03-01T00:00:00Z")
+    token_b = TimestampToken(hash_hex, DIGICERT_TSA_URL, b"\x02", "2026-03-01T00:00:01Z")
+
+    with patch("protocol.rfc3161.verify_timestamp_token", side_effect=[True, True]):
+        result = verify_timestamp_quorum(
+            [token_a.to_dict(), token_b.to_dict()],
+            hash_hex,
+        )
+    assert result is True
+
+
+def test_verify_timestamp_quorum_skips_hash_mismatch():
+    hash_hex = "a" * 64
+    token_a = TimestampToken(hash_hex, DEFAULT_TSA_URL, b"\x01", "2026-03-01T00:00:00Z")
+    token_b = TimestampToken("b" * 64, DIGICERT_TSA_URL, b"\x02", "2026-03-01T00:00:01Z")
+
+    with patch("protocol.rfc3161.verify_timestamp_token", side_effect=[True]):
+        result = verify_timestamp_quorum([token_a, token_b], hash_hex)
+    assert result is False
+
+
+# ---------------------------------------------------------------------------
+# timestamp_watchdog_status – stale_after_seconds boundary
+# ---------------------------------------------------------------------------
+
+
+def test_timestamp_watchdog_status_healthy():
+    now = datetime(2026, 3, 1, 0, 0, 30, tzinfo=UTC)
+    tokens = [
+        TimestampToken("a" * 64, DEFAULT_TSA_URL, b"\x01", "2026-03-01T00:00:00Z"),
+        TimestampToken("a" * 64, DIGICERT_TSA_URL, b"\x02", "2026-03-01T00:00:00Z"),
+        TimestampToken("a" * 64, SECTIGO_TSA_URL, b"\x03", "2026-03-01T00:00:00Z"),
+    ]
+    status = timestamp_watchdog_status(tokens, now=now, stale_after_seconds=3600)
+    assert status["healthy"] is True
+    assert status["alerts"] == []
+
+
+def test_timestamp_watchdog_stale_after_seconds_negative_raises():
+    with pytest.raises(ValueError, match="non-negative"):
+        timestamp_watchdog_status([], stale_after_seconds=-1)
