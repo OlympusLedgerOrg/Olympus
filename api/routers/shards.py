@@ -8,9 +8,10 @@ records, proofs, signatures, and ledger integrity.
 from __future__ import annotations
 
 import logging
+import re
 from typing import Any
 
-from fastapi import APIRouter, HTTPException, Query, Request
+from fastapi import APIRouter, HTTPException, Path, Query, Request
 
 from api.auth import RateLimit
 from api.ingest import _authorize_and_rate_limit
@@ -35,6 +36,17 @@ from protocol.telemetry import opentelemetry_available, prometheus_available, re
 
 logger = logging.getLogger(__name__)
 router = APIRouter(tags=["shards"])
+
+# Shard IDs are alphanumeric strings with optional hyphens, colons, and dots.
+# Maximum 128 characters.  This rejects path traversal, SQL injection, and
+# other malformed inputs at the FastAPI validation layer (M5).
+_SHARD_ID_RE = r"^[A-Za-z0-9:._-]{1,128}$"
+_SHARD_ID_PATTERN = re.compile(_SHARD_ID_RE)
+_SHARD_ID_PATH = Path(
+    ...,
+    description="Shard identifier (alphanumeric, hyphens, colons, dots; max 128 chars)",
+    pattern=_SHARD_ID_RE,
+)
 
 
 @router.get("/shards", response_model=list[ShardInfo])
@@ -65,7 +77,9 @@ async def list_shards(_rl: RateLimit) -> list[ShardInfo]:
 
 
 @router.get("/shards/{shard_id}/header/latest", response_model=ShardHeaderResponse)
-async def get_latest_header(shard_id: str, _rl: RateLimit) -> ShardHeaderResponse:
+async def get_latest_header(
+    shard_id: str = _SHARD_ID_PATH, *, _rl: RateLimit
+) -> ShardHeaderResponse:
     """
     Get the latest shard header with signature.
 
@@ -104,8 +118,8 @@ async def get_latest_header(shard_id: str, _rl: RateLimit) -> ShardHeaderRespons
 
 @router.get("/shards/{shard_id}/proof")
 async def get_proof(
-    shard_id: str,
     _rl: RateLimit,
+    shard_id: str = _SHARD_ID_PATH,
     record_type: str = Query(..., description="Type of record (e.g., 'document')"),
     record_id: str = Query(..., description="Record identifier"),
     version: int = Query(..., description="Record version", ge=1),
@@ -181,8 +195,8 @@ async def get_proof(
 
 @router.get("/ledger/{shard_id}/tail", response_model=LedgerTailResponse)
 async def get_ledger_tail(
-    shard_id: str,
     _rl: RateLimit,
+    shard_id: str = _SHARD_ID_PATH,
     n: int = Query(10, description="Number of entries to retrieve", ge=1, le=1000),
 ) -> LedgerTailResponse:
     """
@@ -221,8 +235,8 @@ async def get_ledger_tail(
 
 @router.get("/shards/{shard_id}/history", response_model=ShardHistoryResponse)
 async def get_shard_history(
-    shard_id: str,
     _rl: RateLimit,
+    shard_id: str = _SHARD_ID_PATH,
     n: int = Query(10, description="Number of headers to retrieve", ge=1, le=1000),
 ) -> ShardHistoryResponse:
     """
@@ -246,8 +260,8 @@ async def get_shard_history(
 
 @router.get("/shards/{shard_id}/diff", response_model=StateRootDiffResponse)
 async def get_shard_state_diff(
-    shard_id: str,
     _rl: RateLimit,
+    shard_id: str = _SHARD_ID_PATH,
     from_seq: int = Query(..., description="Baseline shard header sequence", ge=0),
     to_seq: int = Query(..., description="Target shard header sequence", ge=0),
 ) -> StateRootDiffResponse:
@@ -289,7 +303,9 @@ async def get_shard_state_diff(
 
 
 @router.get("/shards/{shard_id}/header/latest/verify", response_model=HeaderVerificationResponse)
-async def verify_latest_header(shard_id: str, _rl: RateLimit) -> HeaderVerificationResponse:
+async def verify_latest_header(
+    shard_id: str = _SHARD_ID_PATH, *, _rl: RateLimit
+) -> HeaderVerificationResponse:
     """
     Verify the Ed25519 signature and RFC 3161 timestamp of the latest shard header.
 
@@ -393,8 +409,8 @@ async def metrics(_rl: RateLimit) -> Any:
 
 @router.post("/shards/{shard_id}/alert/smt-divergence")
 async def alert_smt_divergence(
-    shard_id: str,
     request: Request,
+    shard_id: str = _SHARD_ID_PATH,
     local_root: str = Query(..., description="Hex-encoded local SMT root"),
     remote_root: str = Query(..., description="Hex-encoded remote SMT root"),
     remote_node: str = Query(..., description="Remote node identifier (URL or node ID)"),

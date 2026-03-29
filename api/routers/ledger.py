@@ -185,10 +185,16 @@ async def get_commit_proof(commit_id: str, db: DBSession, _rl: RateLimit):
             detail={"detail": f"Commit {commit_id!r} not found.", "code": "COMMIT_NOT_FOUND"},
         )
 
+    # Guard against unbounded in-memory Merkle tree reconstruction for
+    # large shards: cap the number of leaves loaded.  Shards with more than
+    # _MERKLE_LEAF_LIMIT commits will return an empty proof rather than
+    # triggering an OOM / CPU-DoS on every request.
+    _MERKLE_LEAF_LIMIT = 50_000
     all_result = await db.execute(
         select(DocCommit.doc_hash)
         .where(DocCommit.shard_id == commit.shard_id)
         .order_by(DocCommit.epoch_timestamp)
+        .limit(_MERKLE_LEAF_LIMIT)
     )
     all_hashes = list(all_result.scalars().all())
 
