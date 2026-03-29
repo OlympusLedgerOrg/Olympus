@@ -31,6 +31,7 @@ class TestLoadTreeState(unittest.TestCase):
         cur.execute.assert_called_once()
         # Empty tree should have the precomputed empty root (level 256)
         from protocol.ssmf import EMPTY_HASHES
+
         self.assertEqual(tree.get_root(), EMPTY_HASHES[256])
 
     def test_load_tree_state_with_rows(self):

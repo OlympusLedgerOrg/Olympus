@@ -65,8 +65,7 @@ def test_duplicate_node_signatures_are_skipped(registry, signing_keys):
     # Build NodeSignature objects from the certificate signatures
     cert = checkpoint.federation_quorum_certificate
     sigs = [
-        NodeSignature(node_id=s["node_id"], signature=s["signature"])
-        for s in cert["signatures"]
+        NodeSignature(node_id=s["node_id"], signature=s["signature"]) for s in cert["signatures"]
     ]
     # Add a duplicate of the first signature
     duplicated_sigs = sigs + [sigs[0]]

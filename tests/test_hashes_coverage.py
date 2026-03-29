@@ -181,11 +181,7 @@ def test_parse_dual_root_commitment_bad_length_metadata():
     # Build a 100-byte payload with bad embedded length prefix
     # Expected: 2 + 32 + 2 + 32 + 32 = 100 bytes
     bad = (
-        (0).to_bytes(2, "big")
-        + b"\x00" * 32
-        + (0).to_bytes(2, "big")
-        + b"\x00" * 32
-        + b"\x00" * 32
+        (0).to_bytes(2, "big") + b"\x00" * 32 + (0).to_bytes(2, "big") + b"\x00" * 32 + b"\x00" * 32
     )
     assert len(bad) == 100
     with pytest.raises(ValueError, match="length metadata"):

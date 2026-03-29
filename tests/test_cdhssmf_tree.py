@@ -207,6 +207,7 @@ class TestCdhssmfTreeRoot:
 
     def test_root_deterministic_for_same_inserts(self):
         """Same sequence of updates produces the same root."""
+
         def build_tree():
             tree = CdhssmfTree()
             tree.update("shard1", record_key("doc", "1", 1), hash_bytes(b"a"))

@@ -237,9 +237,7 @@ async def test_invalid_status_transition_rejected(client):
     await client.patch(f"/requests/{display_id}/status", json={"status": "FULFILLED"})
 
     # FULFILLED → PENDING is NOT allowed (FULFILLED is terminal)
-    patch_resp = await client.patch(
-        f"/requests/{display_id}/status", json={"status": "PENDING"}
-    )
+    patch_resp = await client.patch(f"/requests/{display_id}/status", json={"status": "PENDING"})
     assert patch_resp.status_code == 409
     assert patch_resp.json()["detail"]["code"] == "INVALID_STATUS_TRANSITION"
 
@@ -454,9 +452,7 @@ async def test_list_with_agency_id_filter(client):
 @pytest.mark.asyncio
 async def test_update_nonexistent_request_returns_404(client):
     """PATCH /requests/OLY-9999/status returns 404."""
-    resp = await client.patch(
-        "/requests/OLY-9999/status", json={"status": "ACKNOWLEDGED"}
-    )
+    resp = await client.patch("/requests/OLY-9999/status", json={"status": "ACKNOWLEDGED"})
     assert resp.status_code == 404
     assert resp.json()["detail"]["code"] == "REQUEST_NOT_FOUND"
 

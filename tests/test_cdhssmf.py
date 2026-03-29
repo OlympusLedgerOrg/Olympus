@@ -79,9 +79,7 @@ class TestGlobalKey:
         assert key_shard1 != key_shard2
 
         # Hamming distance should be high (cryptographic avalanche)
-        diff_bits = sum(
-            bin(a ^ b).count("1") for a, b in zip(key_shard1, key_shard2)
-        )
+        diff_bits = sum(bin(a ^ b).count("1") for a, b in zip(key_shard1, key_shard2))
         # Expect approximately 50% of bits to differ for good hash function
         assert diff_bits > 100, f"Only {diff_bits}/256 bits differ"
 

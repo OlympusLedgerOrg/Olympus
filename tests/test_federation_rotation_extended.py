@@ -268,13 +268,15 @@ class TestVerifyEpochKeyRotation:
         return old_sk, registry, witnesses
 
     def _sign_rotation(self, old_sk, record):
-        payload = HASH_SEPARATOR.join([
-            record.node_id,
-            str(record.epoch),
-            record.old_pubkey_hash,
-            record.new_pubkey_hash,
-            record.rotated_at,
-        ]).encode("utf-8")
+        payload = HASH_SEPARATOR.join(
+            [
+                record.node_id,
+                str(record.epoch),
+                record.old_pubkey_hash,
+                record.new_pubkey_hash,
+                record.rotated_at,
+            ]
+        ).encode("utf-8")
         rotation_hash = hash_bytes(payload)
         return old_sk.sign(rotation_hash).signature.hex()
 
@@ -293,36 +295,51 @@ class TestVerifyEpochKeyRotation:
 
     def test_insufficient_witnesses(self):
         old_sk, registry, witnesses = self._make_registry_and_keys(1)
-        sig = self._sign_rotation(old_sk, EpochKeyRotationRecord(
-            node_id="node-main", epoch=1,
-            old_pubkey_hash="old", new_pubkey_hash="new",
-            rotated_at=_ts(), rotation_signature="placeholder",
-            witness_signatures=(),
-        ))
+        sig = self._sign_rotation(
+            old_sk,
+            EpochKeyRotationRecord(
+                node_id="node-main",
+                epoch=1,
+                old_pubkey_hash="old",
+                new_pubkey_hash="new",
+                rotated_at=_ts(),
+                rotation_signature="placeholder",
+                witness_signatures=(),
+            ),
+        )
         record = EpochKeyRotationRecord(
-            node_id="node-main", epoch=1,
-            old_pubkey_hash="old", new_pubkey_hash="new",
-            rotated_at=_ts(), rotation_signature=sig,
+            node_id="node-main",
+            epoch=1,
+            old_pubkey_hash="old",
+            new_pubkey_hash="new",
+            rotated_at=_ts(),
+            rotation_signature=sig,
             witness_signatures=(),
         )
-        assert verify_epoch_key_rotation(record, old_sk.verify_key, registry, min_witnesses=1) is False
+        assert (
+            verify_epoch_key_rotation(record, old_sk.verify_key, registry, min_witnesses=1) is False
+        )
 
     def test_valid_rotation_with_witness(self):
         old_sk, registry, witnesses = self._make_registry_and_keys(1)
         wsk, wnode = witnesses[0]
         # Build rotation payload hash for witness signing
         record_kwargs = dict(
-            node_id="node-main", epoch=1,
-            old_pubkey_hash="old", new_pubkey_hash="new",
+            node_id="node-main",
+            epoch=1,
+            old_pubkey_hash="old",
+            new_pubkey_hash="new",
             rotated_at=_ts(),
         )
-        payload = HASH_SEPARATOR.join([
-            record_kwargs["node_id"],
-            str(record_kwargs["epoch"]),
-            record_kwargs["old_pubkey_hash"],
-            record_kwargs["new_pubkey_hash"],
-            record_kwargs["rotated_at"],
-        ]).encode("utf-8")
+        payload = HASH_SEPARATOR.join(
+            [
+                record_kwargs["node_id"],
+                str(record_kwargs["epoch"]),
+                record_kwargs["old_pubkey_hash"],
+                record_kwargs["new_pubkey_hash"],
+                record_kwargs["rotated_at"],
+            ]
+        ).encode("utf-8")
         rotation_hash = hash_bytes(payload)
         rotation_sig = old_sk.sign(rotation_hash).signature.hex()
         witness_sig = wsk.sign(rotation_hash).signature.hex()
@@ -332,16 +349,21 @@ class TestVerifyEpochKeyRotation:
             rotation_signature=rotation_sig,
             witness_signatures=(NodeSignature(node_id=wnode.node_id, signature=witness_sig),),
         )
-        assert verify_epoch_key_rotation(record, old_sk.verify_key, registry, min_witnesses=1) is True
+        assert (
+            verify_epoch_key_rotation(record, old_sk.verify_key, registry, min_witnesses=1) is True
+        )
 
     def test_inactive_witness_ignored(self):
         old_sk, registry, witnesses = self._make_registry_and_keys(1)
         wsk, wnode = witnesses[0]
         # Deactivate the witness
         deactivated = FederationNode(
-            node_id=wnode.node_id, pubkey=wnode.pubkey,
-            endpoint=wnode.endpoint, operator=wnode.operator,
-            jurisdiction=wnode.jurisdiction, status="inactive",
+            node_id=wnode.node_id,
+            pubkey=wnode.pubkey,
+            endpoint=wnode.endpoint,
+            operator=wnode.operator,
+            jurisdiction=wnode.jurisdiction,
+            status="inactive",
         )
         nodes_list = list(registry.nodes)
         for i, n in enumerate(nodes_list):
@@ -349,34 +371,57 @@ class TestVerifyEpochKeyRotation:
                 nodes_list[i] = deactivated
         registry2 = FederationRegistry(nodes=tuple(nodes_list), epoch=1)
 
-        payload = HASH_SEPARATOR.join([
-            "node-main", "1", "old", "new", _ts(),
-        ]).encode("utf-8")
+        payload = HASH_SEPARATOR.join(
+            [
+                "node-main",
+                "1",
+                "old",
+                "new",
+                _ts(),
+            ]
+        ).encode("utf-8")
         rotation_hash = hash_bytes(payload)
         rotation_sig = old_sk.sign(rotation_hash).signature.hex()
         witness_sig = wsk.sign(rotation_hash).signature.hex()
 
         record = EpochKeyRotationRecord(
-            node_id="node-main", epoch=1,
-            old_pubkey_hash="old", new_pubkey_hash="new",
-            rotated_at=_ts(), rotation_signature=rotation_sig,
+            node_id="node-main",
+            epoch=1,
+            old_pubkey_hash="old",
+            new_pubkey_hash="new",
+            rotated_at=_ts(),
+            rotation_signature=rotation_sig,
             witness_signatures=(NodeSignature(node_id=wnode.node_id, signature=witness_sig),),
         )
         # Inactive witness should not count
-        assert verify_epoch_key_rotation(record, old_sk.verify_key, registry2, min_witnesses=1) is False
+        assert (
+            verify_epoch_key_rotation(record, old_sk.verify_key, registry2, min_witnesses=1)
+            is False
+        )
 
     def test_unknown_witness_ignored(self):
         old_sk, registry, witnesses = self._make_registry_and_keys(0)
-        payload = HASH_SEPARATOR.join([
-            "node-main", "1", "old", "new", _ts(),
-        ]).encode("utf-8")
+        payload = HASH_SEPARATOR.join(
+            [
+                "node-main",
+                "1",
+                "old",
+                "new",
+                _ts(),
+            ]
+        ).encode("utf-8")
         rotation_hash = hash_bytes(payload)
         rotation_sig = old_sk.sign(rotation_hash).signature.hex()
 
         record = EpochKeyRotationRecord(
-            node_id="node-main", epoch=1,
-            old_pubkey_hash="old", new_pubkey_hash="new",
-            rotated_at=_ts(), rotation_signature=rotation_sig,
+            node_id="node-main",
+            epoch=1,
+            old_pubkey_hash="old",
+            new_pubkey_hash="new",
+            rotated_at=_ts(),
+            rotation_signature=rotation_sig,
             witness_signatures=(NodeSignature(node_id="unknown-node", signature="aa" * 64),),
         )
-        assert verify_epoch_key_rotation(record, old_sk.verify_key, registry, min_witnesses=1) is False
+        assert (
+            verify_epoch_key_rotation(record, old_sk.verify_key, registry, min_witnesses=1) is False
+        )

@@ -563,8 +563,7 @@ def test_create_checkpoint_with_presigned_signatures(registry, signing_keys):
     # Extract the valid signatures and use them directly
     cert = cp.federation_quorum_certificate
     node_sigs = [
-        NodeSignature(node_id=s["node_id"], signature=s["signature"])
-        for s in cert["signatures"]
+        NodeSignature(node_id=s["node_id"], signature=s["signature"]) for s in cert["signatures"]
     ]
     # Use the same timestamp to ensure consistent hash
     with patch("protocol.checkpoints.current_timestamp", return_value=cp.timestamp):
@@ -740,8 +739,7 @@ def test_verify_signatures_domain_mismatch(registry, signing_keys):
     cp = _build_valid_checkpoint(registry, signing_keys)
     cert = cp.federation_quorum_certificate
     sigs = [
-        NodeSignature(node_id=s["node_id"], signature=s["signature"])
-        for s in cert["signatures"]
+        NodeSignature(node_id=s["node_id"], signature=s["signature"]) for s in cert["signatures"]
     ]
 
     # Mock _build_checkpoint_vote_message to return a message with wrong domain

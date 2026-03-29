@@ -39,11 +39,15 @@ class TestVotePublication:
 
     def test_non_hex_vote_hash(self):
         with pytest.raises(ValueError, match="hex-encoded"):
-            VotePublication(vote_hash="zzzz", published_at="2025-01-01T00:00:00Z", witnesses=("w1",))
+            VotePublication(
+                vote_hash="zzzz", published_at="2025-01-01T00:00:00Z", witnesses=("w1",)
+            )
 
     def test_wrong_length_vote_hash(self):
         with pytest.raises(ValueError, match="32 bytes"):
-            VotePublication(vote_hash="aa" * 16, published_at="2025-01-01T00:00:00Z", witnesses=("w1",))
+            VotePublication(
+                vote_hash="aa" * 16, published_at="2025-01-01T00:00:00Z", witnesses=("w1",)
+            )
 
     def test_bad_timestamp(self):
         with pytest.raises(ValueError, match="ISO 8601"):
@@ -55,14 +59,20 @@ class TestVotePublication:
 
     def test_empty_witness_id(self):
         with pytest.raises(ValueError, match="non-empty strings"):
-            VotePublication(vote_hash="aa" * 32, published_at="2025-01-01T00:00:00Z", witnesses=("",))
+            VotePublication(
+                vote_hash="aa" * 32, published_at="2025-01-01T00:00:00Z", witnesses=("",)
+            )
 
     def test_duplicate_witnesses(self):
         with pytest.raises(ValueError, match="unique"):
-            VotePublication(vote_hash="aa" * 32, published_at="2025-01-01T00:00:00Z", witnesses=("w1", "w1"))
+            VotePublication(
+                vote_hash="aa" * 32, published_at="2025-01-01T00:00:00Z", witnesses=("w1", "w1")
+            )
 
     def test_valid_publication(self):
-        vp = VotePublication(vote_hash="aa" * 32, published_at="2025-01-01T00:00:00Z", witnesses=("w1", "w2"))
+        vp = VotePublication(
+            vote_hash="aa" * 32, published_at="2025-01-01T00:00:00Z", witnesses=("w1", "w2")
+        )
         assert vp.vote_hash == "aa" * 32
 
 
@@ -71,19 +81,27 @@ class TestVotePublication:
 
 class TestPublishedVote:
     def _pub(self):
-        return VotePublication(vote_hash="aa" * 32, published_at="2025-01-01T00:00:00Z", witnesses=("w1",))
+        return VotePublication(
+            vote_hash="aa" * 32, published_at="2025-01-01T00:00:00Z", witnesses=("w1",)
+        )
 
     def test_empty_shard_id(self):
         with pytest.raises(ValueError, match="shard_id"):
-            PublishedVote(node_id="n1", shard_id="", round_number=0, chain_id="c1", publication=self._pub())
+            PublishedVote(
+                node_id="n1", shard_id="", round_number=0, chain_id="c1", publication=self._pub()
+            )
 
     def test_negative_round(self):
         with pytest.raises(ValueError, match="non-negative"):
-            PublishedVote(node_id="n1", shard_id="s1", round_number=-1, chain_id="c1", publication=self._pub())
+            PublishedVote(
+                node_id="n1", shard_id="s1", round_number=-1, chain_id="c1", publication=self._pub()
+            )
 
     def test_empty_chain_id(self):
         with pytest.raises(ValueError, match="chain_id"):
-            PublishedVote(node_id="n1", shard_id="s1", round_number=0, chain_id="", publication=self._pub())
+            PublishedVote(
+                node_id="n1", shard_id="s1", round_number=0, chain_id="", publication=self._pub()
+            )
 
 
 # ── ConsensusBlock validation (lines 108, 110, 112, 118, 121-122) ──
@@ -92,15 +110,27 @@ class TestPublishedVote:
 class TestConsensusBlock:
     def test_negative_quorum_weight(self):
         with pytest.raises(ValueError, match="quorum_weight"):
-            ConsensusBlock(round_number=0, quorum_weight=-1, vrf_hash="aa" * 32, timestamp="2025-01-01T00:00:00Z")
+            ConsensusBlock(
+                round_number=0,
+                quorum_weight=-1,
+                vrf_hash="aa" * 32,
+                timestamp="2025-01-01T00:00:00Z",
+            )
 
     def test_empty_vrf_hash(self):
         with pytest.raises(ValueError, match="non-empty"):
-            ConsensusBlock(round_number=0, quorum_weight=0, vrf_hash="", timestamp="2025-01-01T00:00:00Z")
+            ConsensusBlock(
+                round_number=0, quorum_weight=0, vrf_hash="", timestamp="2025-01-01T00:00:00Z"
+            )
 
     def test_wrong_length_vrf(self):
         with pytest.raises(ValueError, match="32 bytes"):
-            ConsensusBlock(round_number=0, quorum_weight=0, vrf_hash="aa" * 16, timestamp="2025-01-01T00:00:00Z")
+            ConsensusBlock(
+                round_number=0,
+                quorum_weight=0,
+                vrf_hash="aa" * 16,
+                timestamp="2025-01-01T00:00:00Z",
+            )
 
     def test_bad_timestamp(self):
         with pytest.raises(ValueError, match="ISO 8601"):
@@ -122,11 +152,15 @@ class TestConsensusChainState:
 class TestTransactionBroadcast:
     def test_empty_tx_id(self):
         with pytest.raises(ValueError, match="tx_id"):
-            TransactionBroadcast(tx_id="", round_number=0, broadcast_at="2025-01-01T00:00:00Z", witnesses=("w1",))
+            TransactionBroadcast(
+                tx_id="", round_number=0, broadcast_at="2025-01-01T00:00:00Z", witnesses=("w1",)
+            )
 
     def test_negative_round(self):
         with pytest.raises(ValueError, match="non-negative"):
-            TransactionBroadcast(tx_id="tx1", round_number=-1, broadcast_at="2025-01-01T00:00:00Z", witnesses=("w1",))
+            TransactionBroadcast(
+                tx_id="tx1", round_number=-1, broadcast_at="2025-01-01T00:00:00Z", witnesses=("w1",)
+            )
 
     def test_bad_timestamp(self):
         with pytest.raises(ValueError, match="ISO 8601"):
@@ -134,15 +168,24 @@ class TestTransactionBroadcast:
 
     def test_empty_witnesses(self):
         with pytest.raises(ValueError, match="cannot be empty"):
-            TransactionBroadcast(tx_id="tx1", round_number=0, broadcast_at="2025-01-01T00:00:00Z", witnesses=())
+            TransactionBroadcast(
+                tx_id="tx1", round_number=0, broadcast_at="2025-01-01T00:00:00Z", witnesses=()
+            )
 
     def test_empty_witness_string(self):
         with pytest.raises(ValueError, match="non-empty strings"):
-            TransactionBroadcast(tx_id="tx1", round_number=0, broadcast_at="2025-01-01T00:00:00Z", witnesses=("",))
+            TransactionBroadcast(
+                tx_id="tx1", round_number=0, broadcast_at="2025-01-01T00:00:00Z", witnesses=("",)
+            )
 
     def test_duplicate_witnesses(self):
         with pytest.raises(ValueError, match="unique"):
-            TransactionBroadcast(tx_id="tx1", round_number=0, broadcast_at="2025-01-01T00:00:00Z", witnesses=("w1", "w1"))
+            TransactionBroadcast(
+                tx_id="tx1",
+                round_number=0,
+                broadcast_at="2025-01-01T00:00:00Z",
+                witnesses=("w1", "w1"),
+            )
 
 
 # ── detect_slashable_equivocations (line 174-175, 180) ──
@@ -153,21 +196,51 @@ class TestSlashableEquivocations:
         return VotePublication(vote_hash=vh, published_at="2025-01-01T00:00:00Z", witnesses=("w1",))
 
     def test_no_equivocation_single_chain(self):
-        vote = PublishedVote(node_id="n1", shard_id="s1", round_number=0, chain_id="c1", publication=self._pub("aa" * 32))
+        vote = PublishedVote(
+            node_id="n1",
+            shard_id="s1",
+            round_number=0,
+            chain_id="c1",
+            publication=self._pub("aa" * 32),
+        )
         result = detect_slashable_equivocations([vote])
         assert result == ()
 
     def test_equivocation_detected(self):
-        v1 = PublishedVote(node_id="n1", shard_id="s1", round_number=0, chain_id="c1", publication=self._pub("aa" * 32))
-        v2 = PublishedVote(node_id="n1", shard_id="s1", round_number=0, chain_id="c2", publication=self._pub("bb" * 32))
+        v1 = PublishedVote(
+            node_id="n1",
+            shard_id="s1",
+            round_number=0,
+            chain_id="c1",
+            publication=self._pub("aa" * 32),
+        )
+        v2 = PublishedVote(
+            node_id="n1",
+            shard_id="s1",
+            round_number=0,
+            chain_id="c2",
+            publication=self._pub("bb" * 32),
+        )
         result = detect_slashable_equivocations([v1, v2])
         assert len(result) == 1
         assert result[0].node_id == "n1"
 
     def test_conflicting_hash_same_chain(self):
         """Same node, same chain, different vote_hash → keeps min hash."""
-        v1 = PublishedVote(node_id="n1", shard_id="s1", round_number=0, chain_id="c1", publication=self._pub("bb" * 32))
-        v2 = PublishedVote(node_id="n1", shard_id="s1", round_number=0, chain_id="c1", publication=self._pub("aa" * 32))
+        v1 = PublishedVote(
+            node_id="n1",
+            shard_id="s1",
+            round_number=0,
+            chain_id="c1",
+            publication=self._pub("bb" * 32),
+        )
+        v2 = PublishedVote(
+            node_id="n1",
+            shard_id="s1",
+            round_number=0,
+            chain_id="c1",
+            publication=self._pub("aa" * 32),
+        )
         # Only one chain, so no equivocation
         result = detect_slashable_equivocations([v1, v2])
         assert result == ()
@@ -245,7 +318,9 @@ class TestPartitionDetector:
         return ConsensusChainState(round_number=rnd, chain=(_block(rnd),))
 
     def test_empty_nodes_raises(self):
-        det = PartitionDetector(ping_nodes=lambda _: [], get_current_state=lambda: self._make_state())
+        det = PartitionDetector(
+            ping_nodes=lambda _: [], get_current_state=lambda: self._make_state()
+        )
         with pytest.raises(ValueError, match="empty"):
             det.check_network_health(0, [])
 

@@ -86,7 +86,8 @@ class TestShardHeaderForkEvidence:
         sig_a = NodeSignature(node_id="g1", signature="aa")
         sig_b = NodeSignature(node_id="g1", signature="bb")
         e = ShardHeaderForkEvidence(
-            shard_id="s1", seq=0,
+            shard_id="s1",
+            seq=0,
             conflicting_header_hashes=("h1", "h2"),
             observer_ids=("o1",),
             signatures_a=(sig_a,),
@@ -102,19 +103,51 @@ class TestShardHeaderForkEvidence:
 class TestGossipedShardHeader:
     def test_empty_peer_id(self):
         with pytest.raises(ValueError, match="peer_id"):
-            GossipedShardHeader(peer_id="", shard_id="s1", seq=0, header_hash="h", root_hash="r", timestamp=_ts(), signatures=())
+            GossipedShardHeader(
+                peer_id="",
+                shard_id="s1",
+                seq=0,
+                header_hash="h",
+                root_hash="r",
+                timestamp=_ts(),
+                signatures=(),
+            )
 
     def test_empty_shard_id(self):
         with pytest.raises(ValueError, match="shard_id"):
-            GossipedShardHeader(peer_id="p1", shard_id="", seq=0, header_hash="h", root_hash="r", timestamp=_ts(), signatures=())
+            GossipedShardHeader(
+                peer_id="p1",
+                shard_id="",
+                seq=0,
+                header_hash="h",
+                root_hash="r",
+                timestamp=_ts(),
+                signatures=(),
+            )
 
     def test_negative_seq(self):
         with pytest.raises(ValueError, match="seq"):
-            GossipedShardHeader(peer_id="p1", shard_id="s1", seq=-1, header_hash="h", root_hash="r", timestamp=_ts(), signatures=())
+            GossipedShardHeader(
+                peer_id="p1",
+                shard_id="s1",
+                seq=-1,
+                header_hash="h",
+                root_hash="r",
+                timestamp=_ts(),
+                signatures=(),
+            )
 
     def test_empty_header_hash(self):
         with pytest.raises(ValueError, match="header_hash"):
-            GossipedShardHeader(peer_id="p1", shard_id="s1", seq=0, header_hash="", root_hash="r", timestamp=_ts(), signatures=())
+            GossipedShardHeader(
+                peer_id="p1",
+                shard_id="s1",
+                seq=0,
+                header_hash="",
+                root_hash="r",
+                timestamp=_ts(),
+                signatures=(),
+            )
 
 
 # ── detect_shard_header_forks (lines 132, 250, 252, 254, 258-259, 263) ──
@@ -126,15 +159,47 @@ class TestDetectShardHeaderForks:
 
     def test_no_conflict(self):
         obs = {
-            "p1": GossipedShardHeader(peer_id="p1", shard_id="s1", seq=0, header_hash="h1", root_hash="r", timestamp=_ts(), signatures=()),
-            "p2": GossipedShardHeader(peer_id="p2", shard_id="s1", seq=0, header_hash="h1", root_hash="r", timestamp=_ts(), signatures=()),
+            "p1": GossipedShardHeader(
+                peer_id="p1",
+                shard_id="s1",
+                seq=0,
+                header_hash="h1",
+                root_hash="r",
+                timestamp=_ts(),
+                signatures=(),
+            ),
+            "p2": GossipedShardHeader(
+                peer_id="p2",
+                shard_id="s1",
+                seq=0,
+                header_hash="h1",
+                root_hash="r",
+                timestamp=_ts(),
+                signatures=(),
+            ),
         }
         assert detect_shard_header_forks(obs) == ()
 
     def test_fork_detected(self):
         obs = {
-            "p1": GossipedShardHeader(peer_id="p1", shard_id="s1", seq=0, header_hash="h1", root_hash="r", timestamp=_ts(), signatures=()),
-            "p2": GossipedShardHeader(peer_id="p2", shard_id="s1", seq=0, header_hash="h2", root_hash="r", timestamp=_ts(), signatures=()),
+            "p1": GossipedShardHeader(
+                peer_id="p1",
+                shard_id="s1",
+                seq=0,
+                header_hash="h1",
+                root_hash="r",
+                timestamp=_ts(),
+                signatures=(),
+            ),
+            "p2": GossipedShardHeader(
+                peer_id="p2",
+                shard_id="s1",
+                seq=0,
+                header_hash="h2",
+                root_hash="r",
+                timestamp=_ts(),
+                signatures=(),
+            ),
         }
         result = detect_shard_header_forks(obs)
         assert len(result) == 1
@@ -149,8 +214,11 @@ class TestRegistryForestCommitment:
     def test_basic_commitment(self):
         sk = nacl.signing.SigningKey.generate()
         node = FederationNode(
-            node_id="n1", pubkey=sk.verify_key.encode(),
-            endpoint="https://n1.example.com", operator="op1", jurisdiction="US",
+            node_id="n1",
+            pubkey=sk.verify_key.encode(),
+            endpoint="https://n1.example.com",
+            operator="op1",
+            jurisdiction="US",
         )
         registry = FederationRegistry(nodes=(node,), epoch=1)
         result = registry_forest_commitment(registry)
@@ -304,8 +372,11 @@ class TestFederationFinalityStatus:
     def test_availability_threshold(self):
         sk = nacl.signing.SigningKey.generate()
         node = FederationNode(
-            node_id="n1", pubkey=sk.verify_key.encode(),
-            endpoint="https://n1.example.com", operator="op1", jurisdiction="US",
+            node_id="n1",
+            pubkey=sk.verify_key.encode(),
+            endpoint="https://n1.example.com",
+            operator="op1",
+            jurisdiction="US",
         )
         registry = FederationRegistry(nodes=(node,), epoch=1)
         s = FederationFinalityStatus(**self._valid_kwargs())
@@ -325,13 +396,20 @@ class TestVerifyDataAvailability:
     def _make_setup(self):
         sk = nacl.signing.SigningKey.generate()
         node = FederationNode(
-            node_id="guardian1", pubkey=sk.verify_key.encode(),
-            endpoint="https://g1.example.com", operator="op1", jurisdiction="US",
+            node_id="guardian1",
+            pubkey=sk.verify_key.encode(),
+            endpoint="https://g1.example.com",
+            operator="op1",
+            jurisdiction="US",
         )
         registry = FederationRegistry(nodes=(node,), epoch=1)
         challenge = DataAvailabilityChallenge(
-            shard_id="s1", header_hash="hh", challenger_id="c1",
-            challenge_nonce="nonce", issued_at=_ts(), response_deadline=_ts2(),
+            shard_id="s1",
+            header_hash="hh",
+            challenger_id="c1",
+            challenge_nonce="nonce",
+            issued_at=_ts(),
+            response_deadline=_ts2(),
         )
         return sk, node, registry, challenge
 
@@ -352,22 +430,35 @@ class TestVerifyDataAvailability:
     def test_unregistered_guardian(self):
         sk, node, registry, challenge = self._make_setup()
         proof = create_replication_proof(
-            challenge, "unknown-guardian", sk,
-            "lth", (), (), _ts(),
+            challenge,
+            "unknown-guardian",
+            sk,
+            "lth",
+            (),
+            (),
+            _ts(),
         )
         assert verify_data_availability(challenge, proof, registry) is False
 
     def test_inactive_guardian(self):
         sk, node, registry, challenge = self._make_setup()
         inactive_node = FederationNode(
-            node_id="guardian1", pubkey=sk.verify_key.encode(),
-            endpoint="https://g1.example.com", operator="op1",
-            jurisdiction="US", status="inactive",
+            node_id="guardian1",
+            pubkey=sk.verify_key.encode(),
+            endpoint="https://g1.example.com",
+            operator="op1",
+            jurisdiction="US",
+            status="inactive",
         )
         registry2 = FederationRegistry(nodes=(inactive_node,), epoch=1)
         proof = create_replication_proof(
-            challenge, "guardian1", sk,
-            "lth", (), (), _ts(),
+            challenge,
+            "guardian1",
+            sk,
+            "lth",
+            (),
+            (),
+            _ts(),
         )
         assert verify_data_availability(challenge, proof, registry2) is False
 
@@ -415,7 +506,12 @@ class TestVerifyDataAvailability:
     def test_valid_proof(self):
         sk, node, registry, challenge = self._make_setup()
         proof = create_replication_proof(
-            challenge, "guardian1", sk,
-            "lth", (0,), ("sample_hash",), _ts(),
+            challenge,
+            "guardian1",
+            sk,
+            "lth",
+            (0,),
+            ("sample_hash",),
+            _ts(),
         )
         assert verify_data_availability(challenge, proof, registry) is True

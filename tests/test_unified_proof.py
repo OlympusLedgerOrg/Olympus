@@ -756,6 +756,8 @@ class TestVerifyZKProofRouting:
             checkpoint_hash="valid-hash",
             federation_quorum_certificate={"signatures": []},
         )
-        proof = UnifiedProof(zk_proof={"pi_a": []}, public_inputs=public_inputs, checkpoint=checkpoint)
+        proof = UnifiedProof(
+            zk_proof={"pi_a": []}, public_inputs=public_inputs, checkpoint=checkpoint
+        )
         result = verifier.verify(proof)
         assert result == VerificationResult.INVALID_QUORUM

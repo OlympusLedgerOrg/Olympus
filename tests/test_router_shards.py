@@ -109,9 +109,7 @@ def create_mock_storage(
 
     # Configure get_proof
     if proofs:
-        mock.get_proof.side_effect = lambda sid, rt, rid, v: proofs.get(
-            f"{sid}:{rt}:{rid}:{v}"
-        )
+        mock.get_proof.side_effect = lambda sid, rt, rid, v: proofs.get(f"{sid}:{rt}:{rid}:{v}")
     else:
         mock.get_proof.return_value = None
 
@@ -158,9 +156,7 @@ async def client():
     # Set development mode and disable API keys for test bypass
     with patch.dict(os.environ, {"OLYMPUS_ENV": "development", "OLYMPUS_FOIA_API_KEYS": "[]"}):
         app = create_app()
-        async with AsyncClient(
-            transport=ASGITransport(app=app), base_url="http://test"
-        ) as ac:
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
             yield ac
 
 
@@ -186,8 +182,7 @@ async def test_list_shards_multiple(client):
     """GET /shards should return all shards with their latest state."""
     shard_ids = ["watauga:2024:budget", "watauga:2024:contracts", "nc:state:permits"]
     headers = {
-        shard_id: create_mock_header(shard_id, seq=i + 1)
-        for i, shard_id in enumerate(shard_ids)
+        shard_id: create_mock_header(shard_id, seq=i + 1) for i, shard_id in enumerate(shard_ids)
     }
     storage_mock = create_mock_storage(shard_ids=shard_ids, headers=headers)
 
@@ -276,7 +271,7 @@ async def test_get_latest_header_genesis(client):
     storage_mock = create_mock_storage(headers=headers)
 
     with inject_mock_storage(storage_mock):
-        with patch("api.routers.shards.canonical_header", return_value=b'{}'):
+        with patch("api.routers.shards.canonical_header", return_value=b"{}"):
             resp = await client.get(f"/shards/{shard_id}/header/latest")
 
     assert resp.status_code == 200
@@ -310,7 +305,7 @@ async def test_get_proof_existence(client):
     storage_mock = create_mock_storage(headers=headers, proofs=proofs)
 
     with inject_mock_storage(storage_mock):
-        with patch("api.routers.shards.canonical_header", return_value=b'{}'):
+        with patch("api.routers.shards.canonical_header", return_value=b"{}"):
             resp = await client.get(
                 f"/shards/{shard_id}/proof",
                 params={
@@ -353,7 +348,7 @@ async def test_get_proof_nonexistence(client):
     storage_mock = create_mock_storage(headers=headers, proofs={}, non_proofs=non_proofs)
 
     with inject_mock_storage(storage_mock):
-        with patch("api.routers.shards.canonical_header", return_value=b'{}'):
+        with patch("api.routers.shards.canonical_header", return_value=b"{}"):
             resp = await client.get(
                 f"/shards/{shard_id}/proof",
                 params={
@@ -480,7 +475,7 @@ async def test_get_proof_special_characters_in_ids(client):
     storage_mock = create_mock_storage(headers=headers, proofs=proofs)
 
     with inject_mock_storage(storage_mock):
-        with patch("api.routers.shards.canonical_header", return_value=b'{}'):
+        with patch("api.routers.shards.canonical_header", return_value=b"{}"):
             resp = await client.get(
                 f"/shards/{shard_id}/proof",
                 params={"record_type": "document", "record_id": record_id, "version": 1},

@@ -181,14 +181,30 @@ def test_signer_continuity_break_detected() -> None:
     proof_nodes = generate_consistency_proof(leaf_hashes, old_size, new_size)
 
     # Sign each STH with a different key
-    old_sth = SignedTreeHead.create(epoch_id=1, tree_size=old_size, merkle_root=old_root, signing_key=signing_key1)
-    new_sth = SignedTreeHead.create(epoch_id=2, tree_size=new_size, merkle_root=new_root, signing_key=signing_key2)
+    old_sth = SignedTreeHead.create(
+        epoch_id=1, tree_size=old_size, merkle_root=old_root, signing_key=signing_key1
+    )
+    new_sth = SignedTreeHead.create(
+        epoch_id=2, tree_size=new_size, merkle_root=new_root, signing_key=signing_key2
+    )
 
     sths = [
-        {"epoch_id": old_sth.epoch_id, "tree_size": old_sth.tree_size, "merkle_root": old_sth.merkle_root,
-         "timestamp": old_sth.timestamp, "signature": old_sth.signature, "signer_pubkey": old_sth.signer_pubkey},
-        {"epoch_id": new_sth.epoch_id, "tree_size": new_sth.tree_size, "merkle_root": new_sth.merkle_root,
-         "timestamp": new_sth.timestamp, "signature": new_sth.signature, "signer_pubkey": new_sth.signer_pubkey},
+        {
+            "epoch_id": old_sth.epoch_id,
+            "tree_size": old_sth.tree_size,
+            "merkle_root": old_sth.merkle_root,
+            "timestamp": old_sth.timestamp,
+            "signature": old_sth.signature,
+            "signer_pubkey": old_sth.signer_pubkey,
+        },
+        {
+            "epoch_id": new_sth.epoch_id,
+            "tree_size": new_sth.tree_size,
+            "merkle_root": new_sth.merkle_root,
+            "timestamp": new_sth.timestamp,
+            "signature": new_sth.signature,
+            "signer_pubkey": new_sth.signer_pubkey,
+        },
     ]
     proofs = {(old_size, new_size): {"proof_nodes": [node.hex() for node in proof_nodes]}}
 
@@ -218,7 +234,12 @@ def test_invalid_sth_signature_detected() -> None:
 
 def test_verify_sth_signature_no_fields() -> None:
     """STH with no signature/pubkey fields is treated as valid."""
-    sth = {"epoch_id": 1, "tree_size": 1, "merkle_root": "aa" * 32, "timestamp": "2026-03-17T00:00:00Z"}
+    sth = {
+        "epoch_id": 1,
+        "tree_size": 1,
+        "merkle_root": "aa" * 32,
+        "timestamp": "2026-03-17T00:00:00Z",
+    }
     assert rejoin_verifier._verify_sth_signature(sth) is True
 
 
@@ -301,10 +322,22 @@ def test_same_tree_size_sths_skip_consistency_proof() -> None:
     sth2 = SignedTreeHead.create(epoch_id=2, tree_size=2, merkle_root=root, signing_key=signing_key)
 
     sths = [
-        {"epoch_id": sth1.epoch_id, "tree_size": sth1.tree_size, "merkle_root": sth1.merkle_root,
-         "timestamp": sth1.timestamp, "signature": sth1.signature, "signer_pubkey": sth1.signer_pubkey},
-        {"epoch_id": sth2.epoch_id, "tree_size": sth2.tree_size, "merkle_root": sth2.merkle_root,
-         "timestamp": sth2.timestamp, "signature": sth2.signature, "signer_pubkey": sth2.signer_pubkey},
+        {
+            "epoch_id": sth1.epoch_id,
+            "tree_size": sth1.tree_size,
+            "merkle_root": sth1.merkle_root,
+            "timestamp": sth1.timestamp,
+            "signature": sth1.signature,
+            "signer_pubkey": sth1.signer_pubkey,
+        },
+        {
+            "epoch_id": sth2.epoch_id,
+            "tree_size": sth2.tree_size,
+            "merkle_root": sth2.merkle_root,
+            "timestamp": sth2.timestamp,
+            "signature": sth2.signature,
+            "signer_pubkey": sth2.signer_pubkey,
+        },
     ]
 
     report = rejoin_verifier.evaluate_rejoin_health(

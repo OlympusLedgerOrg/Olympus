@@ -382,7 +382,9 @@ def parse_dual_root_commitment(commitment: bytes) -> tuple[bytes, bytes]:
     idx += poseidon_len
     binding_hash = commitment[idx:]
 
-    if blake3_len != len(blake3_root) or poseidon_len != len(poseidon_root):  # pragma: no cover — guarded by overall length check
+    if blake3_len != len(blake3_root) or poseidon_len != len(
+        poseidon_root
+    ):  # pragma: no cover — guarded by overall length check
         raise ValueError("Dual root commitment length metadata is invalid")
     if blake3_len != 32 or poseidon_len != 32 or len(binding_hash) != 32:
         raise ValueError("Dual root commitment length metadata is invalid")

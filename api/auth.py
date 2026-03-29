@@ -154,7 +154,12 @@ async def require_api_key(request: Request) -> _APIKeyRecord:
         _env = os.environ.get("OLYMPUS_ENV", "production")
         if _env == "development":
             logger.warning("No API keys configured — dev-mode auth bypass active")
-            return _APIKeyRecord(key_id="dev", key_hash="", scopes={"read", "write"}, expires_at=datetime(2099, 1, 1, tzinfo=UTC))
+            return _APIKeyRecord(
+                key_id="dev",
+                key_hash="",
+                scopes={"read", "write"},
+                expires_at=datetime(2099, 1, 1, tzinfo=UTC),
+            )
         logger.error(
             "OLYMPUS_FOIA_API_KEYS is empty and OLYMPUS_ENV != 'development'. "
             "Refusing unauthenticated write access. Configure API keys or set "

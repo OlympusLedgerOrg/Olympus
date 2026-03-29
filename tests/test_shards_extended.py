@@ -75,7 +75,9 @@ class TestCreateShardHeader:
 
     def test_with_timestamp_token_dict(self):
         header = create_shard_header(
-            "s1", b"\x00" * 32, "2025-01-01T00:00:00Z",
+            "s1",
+            b"\x00" * 32,
+            "2025-01-01T00:00:00Z",
             timestamp_token={"token": "value"},
         )
         assert header["timestamp_token"] == {"token": "value"}
@@ -104,6 +106,7 @@ class TestVerifyHeader:
         header2 = create_shard_header("s1", b"\x00" * 32, "2025-01-01T00:00:00Z")
         header2["sequence_number"] = 5
         from protocol.shards import _HEADER_EXCLUDED_FIELDS, shard_header_hash
+
         header2["header_hash"] = shard_header_hash(
             {k: v for k, v in header2.items() if k not in _HEADER_EXCLUDED_FIELDS}
         ).hex()
@@ -117,6 +120,7 @@ class TestVerifyHeader:
         header["timestamp_hlc"] = "not-hex"
         # Need to recompute hash
         from protocol.shards import _HEADER_EXCLUDED_FIELDS, shard_header_hash
+
         header["header_hash"] = shard_header_hash(
             {k: v for k, v in header.items() if k not in _HEADER_EXCLUDED_FIELDS}
         ).hex()
@@ -220,7 +224,9 @@ class TestVerifySupersedingSignature:
 
     def test_valid_superseding(self):
         _, _, revocation, header_hash, superseding = self._setup()
-        assert verify_superseding_signature(superseding, header_hash=header_hash, revocation_record=revocation)
+        assert verify_superseding_signature(
+            superseding, header_hash=header_hash, revocation_record=revocation
+        )
 
     def test_missing_fields(self):
         assert verify_superseding_signature({}, header_hash="aa", revocation_record={}) is False
@@ -228,16 +234,31 @@ class TestVerifySupersedingSignature:
     def test_wrong_event_type(self):
         _, _, revocation, header_hash, superseding = self._setup()
         superseding["event_type"] = "wrong"
-        assert verify_superseding_signature(superseding, header_hash=header_hash, revocation_record=revocation) is False
+        assert (
+            verify_superseding_signature(
+                superseding, header_hash=header_hash, revocation_record=revocation
+            )
+            is False
+        )
 
     def test_wrong_header_hash(self):
         _, _, revocation, _, superseding = self._setup()
-        assert verify_superseding_signature(superseding, header_hash="ee" * 32, revocation_record=revocation) is False
+        assert (
+            verify_superseding_signature(
+                superseding, header_hash="ee" * 32, revocation_record=revocation
+            )
+            is False
+        )
 
     def test_wrong_old_pubkey(self):
         _, _, revocation, header_hash, superseding = self._setup()
         revocation["old_pubkey"] = "ff" * 32
-        assert verify_superseding_signature(superseding, header_hash=header_hash, revocation_record=revocation) is False
+        assert (
+            verify_superseding_signature(
+                superseding, header_hash=header_hash, revocation_record=revocation
+            )
+            is False
+        )
 
 
 # ── rotation_record_to_event (lines 539, 543, 551, 594-605) ──
@@ -292,7 +313,12 @@ class TestVerifyHeaderWithRotation:
         )
         header = create_shard_header("s1", b"\x00" * 32, "2025-06-01T00:00:00Z")
         sig = sign_header(header, new_sk)
-        assert verify_header_with_rotation(header, sig, new_sk.verify_key, revocation_record=revocation) is True
+        assert (
+            verify_header_with_rotation(
+                header, sig, new_sk.verify_key, revocation_record=revocation
+            )
+            is True
+        )
 
 
 # ── get_signing_key_from_seed (line 669, 671) ──
