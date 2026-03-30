@@ -1379,6 +1379,35 @@ def test_proxy_verify_simple_handles_api_error(monkeypatch):
     assert response.json()["detail"]["code"] == "MISSING_INPUT"
 
 
+def test_proxy_verify_simple_forwards_auth_headers(monkeypatch):
+    """Proxy should forward X-API-Key and Authorization headers to the API (H2)."""
+    monkeypatch.setattr(ui_app, "DEBUG_UI_ENABLED", True)
+
+    mock_response = unittest.mock.MagicMock()
+    mock_response.json.return_value = {"verified": True, "confidence": "certain"}
+    mock_response.raise_for_status = unittest.mock.MagicMock()
+
+    mock_client = unittest.mock.AsyncMock()
+    mock_client.__aenter__ = unittest.mock.AsyncMock(return_value=mock_client)
+    mock_client.__aexit__ = unittest.mock.AsyncMock(return_value=False)
+    mock_client.post = unittest.mock.AsyncMock(return_value=mock_response)
+
+    monkeypatch.setattr(ui_app.httpx, "AsyncClient", lambda **kwargs: mock_client)
+
+    response = client.post(
+        "/ledger/verify/simple",
+        headers={"X-API-Key": "my-secret-key", "Authorization": "Bearer my-token"},
+        data={"doc_hash": "cd" * 32},
+    )
+
+    assert response.status_code == 200
+    call_kwargs = mock_client.post.call_args
+    forwarded_headers = call_kwargs.kwargs["headers"]
+    assert forwarded_headers is not None
+    assert forwarded_headers["x-api-key"] == "my-secret-key"
+    assert forwarded_headers["authorization"] == "Bearer my-token"
+
+
 # ── PWA integration tests ──
 
 

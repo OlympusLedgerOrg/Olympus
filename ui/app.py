@@ -840,11 +840,13 @@ async def proxy_ledger_verify_simple(request: Request):
                 )
             else:
                 data[key] = str(value)
+        auth_headers = _commit_api_auth_headers(request)
         async with httpx.AsyncClient(timeout=30.0) as client:
             resp = await client.post(
                 f"{API_BASE}/ledger/verify/simple",
                 data=data or None,
                 files=upload_files or None,
+                headers=auth_headers or None,
             )
             resp.raise_for_status()
             return JSONResponse(resp.json())

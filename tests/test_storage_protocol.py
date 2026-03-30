@@ -106,8 +106,8 @@ class TestPersistTreeNodes(unittest.TestCase):
 
         persist_tree_nodes(cur, "test-shard", tree)
 
-        # Should have called execute for each node
-        self.assertEqual(cur.execute.call_count, 2)
+        # 1 SET LOCAL gate + 2 INSERT calls = 3 total
+        self.assertEqual(cur.execute.call_count, 3)
 
     def test_persist_tree_nodes_with_cache_put(self):
         """Calls cache_put callback when provided."""
@@ -137,7 +137,10 @@ class TestPersistTreeNodes(unittest.TestCase):
 
         persist_tree_nodes(cur, None, tree)
 
-        cur.execute.assert_not_called()
+        # Only the SET LOCAL gate call should have been made; no INSERT.
+        self.assertEqual(cur.execute.call_count, 1)
+        gate_sql = cur.execute.call_args_list[0][0][0]
+        self.assertIn("olympus.allow_node_rehash", gate_sql)
 
 
 class TestEncodePath(unittest.TestCase):

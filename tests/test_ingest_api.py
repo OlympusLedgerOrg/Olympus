@@ -726,28 +726,99 @@ def test_load_api_keys_from_env_accepts_hashes(monkeypatch):
 
 
 def test_smt_divergence_alert_requires_api_key():
-    ingest_api._reset_ingest_state_for_tests()
-    ingest_api._register_api_key_for_tests(
-        api_key="alert-key",
-        key_id="alert-key",
-        scopes={"verify"},
-        expires_at="2099-01-01T00:00:00Z",
-    )
-    params = {
-        "local_root": "00" * 32,
-        "remote_root": "11" * 32,
-        "remote_node": "peer-1",
-    }
+    import json
+    import os
 
-    unauthenticated = TestClient(app).post("/shards/shard-1/alert/smt-divergence", params=params)
-    assert unauthenticated.status_code == 401
+    import api.auth as auth_module
 
-    authed = TestClient(app, headers={"X-API-Key": "alert-key"})
-    authorized = authed.post("/shards/shard-1/alert/smt-divergence", params=params)
-    assert authorized.status_code == 200
+    original_loaded = auth_module._keys_loaded
+    original_store = dict(auth_module._key_store)
+    original_env = os.environ.get("OLYMPUS_FOIA_API_KEYS")
+
+    try:
+        auth_module._keys_loaded = False
+        auth_module._key_store.clear()
+
+        test_key = "alert-key-secret"
+        test_key_hash = hash_bytes(test_key.encode("utf-8")).hex()
+        os.environ["OLYMPUS_FOIA_API_KEYS"] = json.dumps(
+            [
+                {
+                    "key_hash": test_key_hash,
+                    "key_id": "alert-key",
+                    "scopes": ["read", "write"],
+                    "expires_at": "2099-01-01T00:00:00Z",
+                }
+            ]
+        )
+
+        params = {
+            "local_root": "00" * 32,
+            "remote_root": "11" * 32,
+            "remote_node": "peer-1",
+        }
+
+        unauthenticated = TestClient(app).post(
+            "/shards/shard-1/alert/smt-divergence", params=params
+        )
+        assert unauthenticated.status_code == 401
+
+        authed = TestClient(app, headers={"X-API-Key": test_key})
+        authorized = authed.post("/shards/shard-1/alert/smt-divergence", params=params)
+        assert authorized.status_code == 200
+    finally:
+        auth_module._keys_loaded = original_loaded
+        auth_module._key_store.clear()
+        auth_module._key_store.update(original_store)
+        if original_env is None:
+            os.environ.pop("OLYMPUS_FOIA_API_KEYS", None)
+        else:
+            os.environ["OLYMPUS_FOIA_API_KEYS"] = original_env
 
 
-def test_rate_limit_thread_safety():
+def test_metrics_endpoint_requires_api_key():
+    """GET /metrics should require API key authentication (H3)."""
+    import json
+    import os
+
+    import api.auth as auth_module
+
+    original_loaded = auth_module._keys_loaded
+    original_store = dict(auth_module._key_store)
+    original_env = os.environ.get("OLYMPUS_FOIA_API_KEYS")
+
+    try:
+        auth_module._keys_loaded = False
+        auth_module._key_store.clear()
+
+        test_key = "metrics-key-secret"
+        test_key_hash = hash_bytes(test_key.encode("utf-8")).hex()
+        os.environ["OLYMPUS_FOIA_API_KEYS"] = json.dumps(
+            [
+                {
+                    "key_hash": test_key_hash,
+                    "key_id": "metrics-key",
+                    "scopes": ["read", "write"],
+                    "expires_at": "2099-01-01T00:00:00Z",
+                }
+            ]
+        )
+
+        unauthenticated = TestClient(app).get("/metrics")
+        assert unauthenticated.status_code == 401
+
+        authed = TestClient(app, headers={"X-API-Key": test_key})
+        authorized = authed.get("/metrics")
+        # 200 if prometheus-client is installed, 503 otherwise — but NOT 401
+        assert authorized.status_code in (200, 503)
+    finally:
+        auth_module._keys_loaded = original_loaded
+        auth_module._key_store.clear()
+        auth_module._key_store.update(original_store)
+        if original_env is None:
+            os.environ.pop("OLYMPUS_FOIA_API_KEYS", None)
+        else:
+            os.environ["OLYMPUS_FOIA_API_KEYS"] = original_env
     """
     L5-C: Test that the rate limiter is thread-safe under concurrent access.
 

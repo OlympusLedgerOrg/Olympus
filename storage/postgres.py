@@ -40,6 +40,7 @@ from datetime import datetime, timezone
 from threading import Lock
 from typing import Any
 
+import blake3
 import nacl.exceptions
 import nacl.signing
 import psycopg
@@ -56,14 +57,23 @@ from protocol.ledger import LedgerEntry
 from protocol.rfc3161 import MAX_TSA_TOKENS, _sha256_of_hash
 from protocol.shards import create_shard_header, sign_header, verify_header
 from protocol.ssmf import (
+    EMPTY_HASHES,
     ExistenceProof,
     NonExistenceProof,
     SparseMerkleTree,
+    _key_to_path_bits,
     diff_sparse_merkle_trees,
 )
 
 
 logger = logging.getLogger(__name__)
+
+# ADR-0001: BLAKE3 domain-separated gate value for the smt_nodes rehash
+# trigger.  _persist_tree_nodes sets this as a session variable before
+# running the upsert; the trigger function checks for it.  Using a hash
+# rather than a plain flag makes accidental bypass harder and follows the
+# project's OLY: domain-separation convention.
+_NODE_REHASH_GATE: str = blake3.blake3(b"OLY:NODE-REHASH-GATE:V1").hexdigest()
 
 
 class StorageLayer:
@@ -589,11 +599,38 @@ class StorageLayer:
             BEFORE DELETE ON smt_leaves
             FOR EACH ROW EXECUTE FUNCTION olympus_reject_mutation()
             """,
+            # ------------------------------------------------------------------
+            # smt_nodes: gated update trigger (ADR-0001)
+            # ------------------------------------------------------------------
+            # Internal SMT nodes are *derived state* — their hashes change
+            # whenever a new leaf is inserted and the path from leaf to root
+            # is rehashed.  _persist_tree_nodes sets the session variable
+            # ``olympus.allow_node_rehash`` to a BLAKE3 domain-separated hash
+            # (via SET LOCAL, scoped to the current transaction) before
+            # running the upsert.  Ad-hoc UPDATE statements that do not set
+            # this variable are still rejected, preserving the security
+            # invariant.  The gate value follows the project's OLY:
+            # domain-separation convention so that a naive ``SET LOCAL ... =
+            # 'on'`` does not bypass the check.
+            f"""
+            CREATE OR REPLACE FUNCTION olympus_allow_node_rehash()
+            RETURNS trigger AS $$
+            BEGIN
+                IF current_setting('olympus.allow_node_rehash', true)
+                        = '{_NODE_REHASH_GATE}' THEN
+                    RETURN NEW;
+                END IF;
+                RAISE EXCEPTION '% is append-only: % is not allowed without rehash context',
+                    TG_TABLE_NAME, TG_OP
+                    USING ERRCODE = '25006';
+            END;
+            $$ LANGUAGE plpgsql
+            """,
             "DROP TRIGGER IF EXISTS smt_nodes_reject_update ON smt_nodes",
             """
             CREATE TRIGGER smt_nodes_reject_update
             BEFORE UPDATE ON smt_nodes
-            FOR EACH ROW EXECUTE FUNCTION olympus_reject_mutation()
+            FOR EACH ROW EXECUTE FUNCTION olympus_allow_node_rehash()
             """,
             "DROP TRIGGER IF EXISTS smt_nodes_reject_delete ON smt_nodes",
             """
@@ -1176,9 +1213,17 @@ class StorageLayer:
             if row is None:
                 return None
 
-            # Load tree and generate proof
-            tree = self._load_tree_state(cur)
-            return tree.prove_existence(key)
+            # ADR-0001 §2: fetch proof path from smt_nodes (O(256)) instead
+            # of rebuilding the full tree from leaves (O(N)).
+            value_hash_bytes = bytes(row["value_hash"])
+            siblings = self._get_proof_path(cur, key)
+            root_hash = self.get_current_root(shard_id)
+            return ExistenceProof(
+                key=key,
+                value_hash=value_hash_bytes,
+                siblings=siblings,
+                root_hash=root_hash,
+            )
 
     def get_nonexistence_proof(
         self, shard_id: str, record_type: str, record_id: str, version: int
@@ -1217,9 +1262,15 @@ class StorageLayer:
             if cur.fetchone() is not None:
                 raise ValueError("Record exists, cannot generate non-existence proof")
 
-            # Load tree and generate proof
-            tree = self._load_tree_state(cur)
-            return tree.prove_nonexistence(key)
+            # ADR-0001 §2: fetch proof path from smt_nodes (O(256)) instead
+            # of rebuilding the full tree from leaves (O(N)).
+            siblings = self._get_proof_path(cur, key)
+            root_hash = self.get_current_root(shard_id)
+            return NonExistenceProof(
+                key=key,
+                siblings=siblings,
+                root_hash=root_hash,
+            )
 
     def store_ingestion_batch(self, batch_id: str, records: list[dict[str, Any]]) -> None:
         """
@@ -1421,10 +1472,39 @@ class StorageLayer:
             except nacl.exceptions.BadSignatureError as e:
                 raise ValueError(f"Invalid shard header signature for shard '{shard_id}'") from e
 
-            # Guard against SMT divergence by recomputing the root as of
-            # this header's timestamp.  The global CD-HS-ST root changes on
-            # every append, so we must snapshot to the header's point in time.
-            self._assert_root_matches_state(cur, shard_id, bytes(row["root"]), as_of_ts=row["ts"])
+            # Guard against SMT divergence.  ADR-0001 Phase 0f′: when this
+            # header is the globally latest write (no other shard has appended
+            # since), the current smt_nodes root is valid and we can use the
+            # O(1) path (as_of_ts=None).  Otherwise fall back to historical
+            # leaf replay.
+            cur.execute(
+                """
+                SELECT EXISTS(
+                    SELECT 1 FROM shard_headers
+                    WHERE ts > %s
+                    LIMIT 1
+                ) AS has_later
+                """,
+                (row["ts"],),
+            )
+            later_row = cur.fetchone()
+            has_later = (
+                later_row["has_later"]
+                if isinstance(later_row, dict)
+                else later_row[0]
+            ) if later_row else False
+
+            if has_later:
+                # Another shard appended after this header — need historical
+                # snapshot for correctness.
+                self._assert_root_matches_state(
+                    cur, shard_id, bytes(row["root"]), as_of_ts=row["ts"]
+                )
+            else:
+                # This header is the globally latest — O(1) path.
+                self._assert_root_matches_state(
+                    cur, shard_id, bytes(row["root"]), as_of_ts=None
+                )
 
             return {
                 "header": header,
@@ -1696,6 +1776,10 @@ class StorageLayer:
         Replay global SMT state at each shard header timestamp and verify roots against headers
         and ledger.
 
+        ADR-0001 §4: delegates to :meth:`replay_tree_incremental` which uses
+        O(N) streaming delta replay instead of the former O(N²) full-load
+        per header.
+
         Returns True when:
           * Every persisted shard header root matches the recomputed SMT root, and
           * Every ledger entry payload shard_root matches the same recomputed root, and
@@ -1707,75 +1791,7 @@ class StorageLayer:
         Raises:
             ValueError: If counts diverge or any root mismatch is detected.
         """
-        with self._get_connection() as conn, conn.cursor(row_factory=dict_row) as cur:
-            cur.execute(
-                """
-                SELECT seq, root, ts
-                FROM shard_headers
-                WHERE shard_id = %s
-                ORDER BY seq ASC
-                """,
-                (shard_id,),
-            )
-            headers = cur.fetchall()
-
-            cur.execute(
-                """
-                SELECT seq, payload
-                FROM ledger_entries
-                WHERE shard_id = %s
-                ORDER BY seq ASC
-                """,
-                (shard_id,),
-            )
-            ledger_rows = cur.fetchall()
-
-            if len(ledger_rows) != len(headers):
-                raise ValueError(
-                    f"Replay mismatch for shard '{shard_id}': {len(ledger_rows)} ledger entries "
-                    f"vs {len(headers)} headers"
-                )
-
-            for idx, header_row in enumerate(headers):
-                tree = self._load_tree_state(cur, up_to_ts=header_row["ts"])
-                computed_root = tree.get_root()
-
-                header_seq = int(self._row_get(header_row, "seq", 0))
-                expected_header_root = bytes(self._row_get(header_row, "root", 1))
-                if computed_root != expected_header_root:
-                    raise ValueError(
-                        f"Shard '{shard_id}' root mismatch at header seq {header_seq}: "
-                        f"expected {expected_header_root.hex()}, computed {computed_root.hex()}"
-                    )
-
-                ledger_row = ledger_rows[idx]
-                ledger_seq = int(self._row_get(ledger_row, "seq", 0))
-                payload = self._row_get(ledger_row, "payload", 1)
-                if isinstance(payload, str):
-                    payload = json.loads(payload)
-                shard_root_hex = payload.get("shard_root")
-                if shard_root_hex is None:
-                    raise ValueError(
-                        f"Ledger entry missing shard_root for shard '{shard_id}' at seq {ledger_seq}"
-                    )
-                if computed_root.hex() != shard_root_hex:
-                    raise ValueError(
-                        f"Shard '{shard_id}' ledger root mismatch at seq {ledger_seq}: "
-                        f"expected {shard_root_hex}, computed {computed_root.hex()}"
-                    )
-
-            if headers:
-                latest_header_root = bytes(self._row_get(headers[-1], "root", 1))
-                current_tree = self._load_tree_state(cur)
-                current_root = current_tree.get_root()
-                if current_root != latest_header_root:
-                    raise ValueError(
-                        f"Replay mismatch for shard '{shard_id}': latest persisted root "
-                        f"{latest_header_root.hex()} does not match current state "
-                        f"{current_root.hex()}"
-                    )
-
-            return True
+        return self.replay_tree_incremental(shard_id)
 
     def store_timestamp_token(
         self,
@@ -1945,9 +1961,17 @@ class StorageLayer:
 
             persisted_root = bytes(row["root"])
 
-            # Recompute root from leaves
-            tree = self._load_tree_state(cur)
-            computed_root = tree.get_root()
+            # ADR-0001 §1: read root from smt_nodes directly (O(1)) instead
+            # of rebuilding from all leaves (O(N)).  The root node lives at
+            # (level=0, index=b'').
+            cur.execute(
+                "SELECT hash FROM smt_nodes WHERE level = 0 AND index = ''::bytea"
+            )
+            node_row = cur.fetchone()
+            if node_row is not None:
+                computed_root = bytes(node_row["hash"])
+            else:
+                computed_root = EMPTY_HASHES[256]
 
             return persisted_root == computed_root
 
@@ -2115,20 +2139,37 @@ class StorageLayer:
         created.  Passing the header's own timestamp reconstructs the tree
         state at that point in time.
 
+        ADR-0001: When *as_of_ts* is ``None`` the root is read directly from
+        ``smt_nodes`` (O(1)) instead of replaying all leaves.  Historical
+        snapshots still require a leaf replay.
+
         Args:
             cur: Active database cursor (read-only).
             shard_id: Shard identifier (used only in error messages).
             expected_root: Root hash from persisted header.
             as_of_ts: Optional timestamp cutoff forwarded to
-                :meth:`_load_tree_state`.  When *None* the full current state
-                is used (backwards-compatible but only safe for single-shard
-                databases).
+                :meth:`_load_tree_state`.  When *None* the current root node
+                is read directly.
 
         Raises:
             ValueError: When the recomputed root diverges from ``expected_root``.
         """
-        tree = self._load_tree_state(cur, up_to_ts=as_of_ts)
-        computed_root = tree.get_root()
+        if as_of_ts is None:
+            # Fast path: read root directly from smt_nodes (O(1)).
+            cur.execute(
+                "SELECT hash FROM smt_nodes WHERE level = 0 AND index = ''::bytea"
+            )
+            node_row = cur.fetchone()
+            computed_root = (
+                bytes(node_row["hash"] if isinstance(node_row, Mapping) else node_row[0])
+                if node_row is not None
+                else EMPTY_HASHES[256]
+            )
+        else:
+            # Historical snapshot — must replay from leaves.
+            tree = self._load_tree_state(cur, up_to_ts=as_of_ts)
+            computed_root = tree.get_root()
+
         if computed_root != expected_root:
             raise ValueError(
                 f"Computed root {computed_root.hex()} does not match persisted root "
@@ -2142,6 +2183,17 @@ class StorageLayer:
     ) -> SparseMerkleTree:
         """
         Load the global sparse Merkle tree state from database.
+
+        .. deprecated::
+            ADR-0001 deprecates this method.  Use purpose-specific helpers:
+            - :meth:`_get_proof_path` for proof generation (O(256) nodes).
+            - :meth:`get_current_root` for root retrieval (O(1) header read).
+            - :meth:`replay_tree_incremental` for streaming audit replay.
+
+            Remaining callers that *must* reconstruct the full tree (e.g.
+            ``set_record_request``, historical ``_assert_root_matches_state``)
+            still use this method until the Rust CD-HS-ST service handles
+            writes natively (Phase 1).
 
         CD-HS-ST Design:
         ---------------
@@ -2195,6 +2247,230 @@ class StorageLayer:
 
         return tree
 
+    # ------------------------------------------------------------------
+    # ADR-0001: Incremental / paginated tree reconstruction helpers
+    # ------------------------------------------------------------------
+
+    def _get_proof_path(
+        self,
+        cur: psycopg.Cursor[Any],
+        key: bytes,
+    ) -> list[bytes]:
+        """
+        Fetch the 256 sibling hashes needed for an inclusion/non-inclusion
+        proof directly from ``smt_nodes``, without loading the full tree.
+
+        ADR-0001 §2 — O(256) node fetches instead of O(N) leaf replay.
+
+        Args:
+            cur: Active database cursor.
+            key: 32-byte SMT leaf key.
+
+        Returns:
+            List of 256 sibling hashes ordered from leaf level to root.
+        """
+        path = tuple(_key_to_path_bits(key))
+
+        # Build the 256 (db_level, db_index) pairs for each sibling.
+        db_levels: list[int] = []
+        db_indices: list[bytes] = []
+        for level in range(256):
+            bit_pos = 255 - level
+            sub_path = path[: bit_pos + 1]
+            sibling_path = sub_path[:-1] + (1 - sub_path[-1],)
+            db_levels.append(len(sibling_path))
+            db_indices.append(self._encode_path(sibling_path))
+
+        # Single round-trip: UNNEST + LEFT JOIN returns rows in ordinal order.
+        cur.execute(
+            """
+            SELECT n.hash
+            FROM UNNEST(
+                %s::SMALLINT[],
+                %s::BYTEA[],
+                %s::INT[]
+            ) AS t(level, index, ord)
+            LEFT JOIN smt_nodes n
+                   ON n.level = t.level AND n.index = t.index
+            ORDER BY t.ord
+            """,
+            (db_levels, db_indices, list(range(256))),
+        )
+        rows = cur.fetchall()
+
+        siblings: list[bytes] = []
+        for i, row in enumerate(rows):
+            raw = row[0] if not isinstance(row, Mapping) else row.get("hash")
+            if raw is not None:
+                siblings.append(bytes(raw))
+            else:
+                siblings.append(EMPTY_HASHES[i])
+        return siblings
+
+    def get_current_root(self, shard_id: str) -> bytes:
+        """
+        Read the current SMT root from the latest shard header.
+
+        ADR-0001 §3 — avoids recomputing the root from leaves.
+
+        Args:
+            shard_id: Shard identifier.
+
+        Returns:
+            32-byte root hash.  Returns the empty-tree sentinel when no
+            headers exist for *shard_id*.
+        """
+        with self._get_connection() as conn, conn.cursor(row_factory=dict_row) as cur:
+            cur.execute(
+                """
+                SELECT root FROM shard_headers
+                WHERE shard_id = %s
+                ORDER BY seq DESC
+                LIMIT 1
+                """,
+                (shard_id,),
+            )
+            row = cur.fetchone()
+            if row is None:
+                return EMPTY_HASHES[256]
+            return bytes(row["root"])
+
+    def replay_tree_incremental(
+        self,
+        shard_id: str,
+        batch_size: int = 10_000,
+    ) -> bool:
+        """
+        Verify shard integrity by streaming leaves in batches and replaying
+        root computation incrementally across headers.
+
+        ADR-0001 §4 — O(N) total work instead of O(N²).
+
+        Each header's root is verified by replaying **only the delta** of
+        leaves inserted since the previous header's timestamp.  The
+        in-memory tree is carried forward between checkpoints rather than
+        being rebuilt from scratch each time.
+
+        Args:
+            shard_id: Shard identifier to replay.
+            batch_size: Number of leaves to fetch per DB round-trip.
+
+        Returns:
+            ``True`` when all headers and ledger entries match.
+
+        Raises:
+            ValueError: On any root mismatch or count divergence.
+        """
+        with self._get_connection() as conn, conn.cursor(row_factory=dict_row) as cur:
+            # Fetch all headers in sequence order.
+            cur.execute(
+                """
+                SELECT seq, root, ts
+                FROM shard_headers
+                WHERE shard_id = %s
+                ORDER BY seq ASC
+                """,
+                (shard_id,),
+            )
+            headers = cur.fetchall()
+
+            # Fetch matching ledger entries.
+            cur.execute(
+                """
+                SELECT seq, payload
+                FROM ledger_entries
+                WHERE shard_id = %s
+                ORDER BY seq ASC
+                """,
+                (shard_id,),
+            )
+            ledger_rows = cur.fetchall()
+
+            if len(ledger_rows) != len(headers):
+                raise ValueError(
+                    f"Replay mismatch for shard '{shard_id}': {len(ledger_rows)} ledger "
+                    f"entries vs {len(headers)} headers"
+                )
+
+            # Incremental replay: carry the tree forward, replaying only
+            # leaves between successive header timestamps.
+            tree = SparseMerkleTree()
+            prev_ts: datetime | None = None
+
+            for idx, header_row in enumerate(headers):
+                header_ts = header_row["ts"]
+                if isinstance(header_ts, str):
+                    header_ts = datetime.fromisoformat(header_ts.replace("Z", "+00:00"))
+
+                # Stream the delta of leaves inserted in (prev_ts, header_ts].
+                if prev_ts is None:
+                    ts_clause = "WHERE ts <= %s"
+                    ts_params: tuple[Any, ...] = (header_ts,)
+                else:
+                    ts_clause = "WHERE ts > %s AND ts <= %s"
+                    ts_params = (prev_ts, header_ts)
+
+                # Paginated fetch for this delta window.
+                offset = 0
+                while True:
+                    cur.execute(
+                        f"""
+                        SELECT key, value_hash FROM smt_leaves
+                        {ts_clause}
+                        ORDER BY ts ASC, key ASC
+                        LIMIT %s OFFSET %s
+                        """,
+                        (*ts_params, batch_size, offset),
+                    )
+                    rows = cur.fetchall()
+                    if not rows:
+                        break
+                    for row in rows:
+                        tree.update(bytes(row["key"]), bytes(row["value_hash"]))
+                    offset += len(rows)
+
+                computed_root = tree.get_root()
+                header_seq = int(self._row_get(header_row, "seq", 0))
+                expected_header_root = bytes(self._row_get(header_row, "root", 1))
+
+                if computed_root != expected_header_root:
+                    raise ValueError(
+                        f"Shard '{shard_id}' root mismatch at header seq {header_seq}: "
+                        f"expected {expected_header_root.hex()}, computed {computed_root.hex()}"
+                    )
+
+                # Cross-check against ledger entry.
+                ledger_row = ledger_rows[idx]
+                ledger_seq = int(self._row_get(ledger_row, "seq", 0))
+                payload = self._row_get(ledger_row, "payload", 1)
+                if isinstance(payload, str):
+                    payload = json.loads(payload)
+                shard_root_hex = payload.get("shard_root")
+                if shard_root_hex is None:
+                    raise ValueError(
+                        f"Ledger entry missing shard_root for shard "
+                        f"'{shard_id}' at seq {ledger_seq}"
+                    )
+                if computed_root.hex() != shard_root_hex:
+                    raise ValueError(
+                        f"Shard '{shard_id}' ledger root mismatch at seq {ledger_seq}: "
+                        f"expected {shard_root_hex}, computed {computed_root.hex()}"
+                    )
+
+                prev_ts = header_ts
+
+            # Final check: current tree matches latest persisted root.
+            if headers:
+                latest_header_root = bytes(self._row_get(headers[-1], "root", 1))
+                if tree.get_root() != latest_header_root:
+                    raise ValueError(
+                        f"Replay mismatch for shard '{shard_id}': latest persisted root "
+                        f"{latest_header_root.hex()} does not match current state "
+                        f"{tree.get_root().hex()}"
+                    )
+
+            return True
+
     def _get_header_by_seq(
         self, cur: psycopg.Cursor[Any], shard_id: str, seq: int
     ) -> dict[str, Any] | None:
@@ -2231,14 +2507,20 @@ class StorageLayer:
         is used as a cache-key prefix so that node look-ups are correctly
         namespaced; it is **not** written to the database INSERT.
 
-        Only inserts new nodes (append-only).
-        Node insertion failures are acceptable - they indicate the node already exists.
+        ADR-0001: Uses ``ON CONFLICT DO UPDATE`` so that rehashed ancestor
+        nodes are kept current.  The ``smt_nodes_reject_update`` trigger
+        requires the session variable ``olympus.allow_node_rehash`` to be
+        set to the BLAKE3 domain-separated gate (``_NODE_REHASH_GATE``)
+        via ``SET LOCAL``, scoped to the enclosing transaction.
 
         Args:
             cur: Database cursor
             shard_id: Shard prefix used for the in-memory node cache key
             tree: SparseMerkleTree to persist
         """
+        # Gate the trigger so the upsert is allowed.
+        cur.execute(f"SET LOCAL olympus.allow_node_rehash = '{_NODE_REHASH_GATE}'")
+
         ts = datetime.now(timezone.utc)
         for row_batch in self._iter_batches(
             self._iter_tree_node_rows(shard_id, tree, ts),
@@ -2255,7 +2537,8 @@ class StorageLayer:
                 """
                 INSERT INTO smt_nodes (level, index, hash, ts)
                 VALUES (%s, %s, %s, %s)
-                ON CONFLICT (level, index) DO NOTHING
+                ON CONFLICT (level, index)
+                DO UPDATE SET hash = EXCLUDED.hash, ts = EXCLUDED.ts
                 """,
                 global_rows,
             )

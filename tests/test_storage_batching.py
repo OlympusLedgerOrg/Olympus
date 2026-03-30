@@ -21,7 +21,7 @@ class _FakeCursor:
     def __exit__(self, exc_type, exc, tb) -> None:
         return None
 
-    def execute(self, sql: str, params: tuple[object, ...]) -> None:
+    def execute(self, sql: str, params: tuple[object, ...] | None = None) -> None:
         self.execute_calls.append((sql, params))
 
     def executemany(self, sql: str, rows: list[tuple[object, ...]]) -> None:

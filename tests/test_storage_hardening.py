@@ -59,10 +59,10 @@ class _FakeCursor:
     def __init__(self) -> None:
         self.statements: list[str] = []
 
-    def execute(self, sql: str, _params: object) -> None:
+    def execute(self, sql: str, _params: object = None) -> None:
         self.statements.append(" ".join(sql.split()))
 
-    def executemany(self, sql: str, _params: object) -> None:
+    def executemany(self, sql: str, _params: object = None) -> None:
         self.statements.append(" ".join(sql.split()))
 
 
@@ -136,7 +136,14 @@ def test_get_connection_rolls_back_before_returning_to_pool(
 
 
 def test_persist_tree_nodes_uses_upsert_without_precheck(monkeypatch: pytest.MonkeyPatch) -> None:
-    """SMT node persistence uses ON CONFLICT DO NOTHING instead of SELECT-before-INSERT.
+    """SMT node persistence uses ON CONFLICT DO UPDATE to keep smt_nodes current.
+
+    ADR-0001: smt_nodes must reflect the latest tree state so that proof
+    generation can read siblings directly (O(256)) instead of rebuilding
+    the entire tree from leaves (O(N)).
+
+    The ``smt_nodes_reject_update`` trigger requires the session variable
+    ``olympus.allow_node_rehash`` to be set before an upsert is attempted.
 
     The global CD-HS-ST table has no shard_id column (nodes are keyed by
     level+index in the single global tree), so the conflict target is
@@ -148,8 +155,21 @@ def test_persist_tree_nodes_uses_upsert_without_precheck(monkeypatch: pytest.Mon
 
     storage._persist_tree_nodes(cursor, "shard", _FakeTree())
 
+    # No SELECT-before-INSERT anti-pattern.
     assert all("SELECT 1 FROM smt_nodes" not in sql for sql in cursor.statements)
-    assert all("ON CONFLICT (level, index) DO NOTHING" in sql for sql in cursor.statements)
+
+    # The first statement must gate the trigger with the BLAKE3 hash.
+    assert cursor.statements[0].startswith("SET LOCAL olympus.allow_node_rehash = '")
+    assert "003e82" in cursor.statements[0]  # prefix of the BLAKE3 gate hash
+
+    # All INSERT statements must use DO UPDATE (not DO NOTHING).
+    insert_stmts = [s for s in cursor.statements if s.startswith("INSERT")]
+    assert insert_stmts, "expected at least one INSERT statement"
+    assert all(
+        "ON CONFLICT (level, index)" in sql
+        and "DO UPDATE SET hash = EXCLUDED.hash" in sql
+        for sql in insert_stmts
+    )
 
 
 def test_fake_cursor_executemany_records_normalized_sql() -> None:
