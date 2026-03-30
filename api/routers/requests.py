@@ -115,7 +115,7 @@ async def file_request(body: RequestCreate, db: DBSession, _api_key: RequireAPIK
     except ValueError as exc:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
-            detail={"detail": str(exc), "code": "INVALID_UNICODE"},
+            detail=[{"msg": str(exc), "type": "unicode", "code": "INVALID_UNICODE"}],
         ) from exc
     deadline = compute_deadline(filed_at, body.request_type)
 

@@ -7,6 +7,8 @@ and appeal filing.
 
 from __future__ import annotations
 
+from unittest.mock import patch
+
 import pytest
 import pytest_asyncio
 from httpx import ASGITransport, AsyncClient
@@ -73,19 +75,18 @@ async def test_create_request(client):
 
 @pytest.mark.asyncio
 async def test_create_request_rejects_lone_surrogate(client):
-    """POST /requests rejects invalid lone surrogate input before hashing."""
-    resp = await client.post(
-        "/requests",
-        content=(
-            '{"subject":"Body camera \\ud800 footage",'
-            '"description":"All body-worn camera recordings related to incident number 2024-0115.",'
-            '"request_type":"NC_PUBLIC_RECORDS","priority":"STANDARD"}'
-        ),
-        headers={"content-type": "application/json"},
-    )
+    """POST /requests surfaces hashing Unicode errors without nested detail."""
+    with patch("api.routers.requests.hash_request", side_effect=ValueError("surrogates not allowed")):
+        resp = await client.post("/requests", json=REQUEST_BODY)
     assert resp.status_code == 422
     detail = resp.json()["detail"]
-    assert any("unicode" in item["type"] for item in detail)
+    assert detail == [
+        {
+            "msg": "surrogates not allowed",
+            "type": "unicode",
+            "code": "INVALID_UNICODE",
+        }
+    ]
 
 
 @pytest.mark.asyncio

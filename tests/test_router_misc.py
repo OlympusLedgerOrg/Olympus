@@ -205,24 +205,30 @@ async def test_file_appeal_success(client):
 
 @pytest.mark.asyncio
 async def test_file_appeal_rejects_lone_surrogate(client):
-    """POST /appeals rejects invalid lone surrogate input before hashing."""
+    """POST /appeals surfaces hashing Unicode errors without nested detail."""
     create_resp = await client.post("/requests", json=REQUEST_BODY)
     req_id = create_resp.json()["id"]
     display_id = create_resp.json()["display_id"]
     await client.patch(f"/requests/{display_id}/status", json={"status": "DENIED"})
 
-    appeal_resp = await client.post(
-        "/appeals",
-        content=(
-            '{"request_id":"'
-            + req_id
-            + '","grounds":"IMPROPER_EXEMPTION","statement":"The agency response was malformed \\ud800"}'
-        ),
-        headers={"content-type": "application/json"},
-    )
+    with patch("api.routers.appeals._hash_appeal", side_effect=ValueError("surrogates not allowed")):
+        appeal_resp = await client.post(
+            "/appeals",
+            json={
+                "request_id": req_id,
+                "grounds": "IMPROPER_EXEMPTION",
+                "statement": "The agency response was malformed",
+            },
+        )
     assert appeal_resp.status_code == 422
     detail = appeal_resp.json()["detail"]
-    assert any("unicode" in item["type"] for item in detail)
+    assert detail == [
+        {
+            "msg": "surrogates not allowed",
+            "type": "unicode",
+            "code": "INVALID_UNICODE",
+        }
+    ]
 
 
 @pytest.mark.asyncio
