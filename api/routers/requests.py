@@ -110,7 +110,13 @@ async def file_request(body: RequestCreate, db: DBSession, _api_key: RequireAPIK
     """
     filed_at = datetime.now(timezone.utc)
     agency_name = body.agency_id or ""
-    commit_hash = hash_request(body.subject, body.description, agency_name, filed_at)
+    try:
+        commit_hash = hash_request(body.subject, body.description, agency_name, filed_at)
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail={"detail": str(exc), "code": "INVALID_UNICODE"},
+        ) from exc
     deadline = compute_deadline(filed_at, body.request_type)
 
     for _attempt in range(_DISPLAY_ID_MAX_RETRIES):

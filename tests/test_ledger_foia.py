@@ -86,6 +86,13 @@ async def test_shard_state(client):
 
 
 @pytest.mark.asyncio
+async def test_shard_state_rejects_invalid_shard_id(client):
+    """GET /ledger/shard/{shard_id} rejects malformed shard identifiers."""
+    resp = await client.get("/ledger/shard/bad^shard")
+    assert resp.status_code == 422
+
+
+@pytest.mark.asyncio
 async def test_proof_endpoint(client):
     """GET /ledger/proof/{commit_id} returns a proof for an existing commit."""
     doc_hash = _b3("proof endpoint test")

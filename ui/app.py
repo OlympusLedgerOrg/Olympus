@@ -591,6 +591,20 @@ def _get_commit_entry(document_id: str, version: int) -> dict[str, Any]:
     return entry
 
 
+def _commit_api_auth_headers(request: Request) -> dict[str, str]:
+    """Return auth headers that are safe to forward to the backend API."""
+    headers: dict[str, str] = {}
+    api_key = request.headers.get("x-api-key")
+    if api_key:
+        headers["x-api-key"] = api_key
+
+    authorization = request.headers.get("authorization", "")
+    if len(authorization) >= 7 and authorization[:7].lower() == "bearer ":
+        headers["authorization"] = authorization
+
+    return headers
+
+
 def _embargo_summary(entry: dict[str, Any]) -> dict[str, Any]:
     """Return derived embargo state for a committed document."""
     release_at = entry.get("release_at")
@@ -1004,6 +1018,7 @@ def state_diff_viewer(
 
 @app.post("/commit")
 async def commit_document(
+    request: Request,
     document_id: str = Form(...),
     version: int = Form(1),
     file: UploadFile = File(...),
@@ -1075,9 +1090,15 @@ async def commit_document(
     ledger_commit_id: str | None = None
     try:
         async with httpx.AsyncClient(timeout=10.0) as api_client:
+            api_request_kwargs: dict[str, Any] = {
+                "json": {"doc_hash": commit_result["blake3_root"]},
+            }
+            auth_headers = _commit_api_auth_headers(request)
+            if auth_headers:
+                api_request_kwargs["headers"] = auth_headers
             api_resp = await api_client.post(
                 f"{API_BASE}/doc/commit",
-                json={"doc_hash": commit_result["blake3_root"]},
+                **api_request_kwargs,
             )
             api_resp.raise_for_status()
             ledger_commit_id = api_resp.json().get("commit_id")

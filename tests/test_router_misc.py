@@ -67,7 +67,10 @@ async def client(db_engine):
         app = create_app()
         app.dependency_overrides[get_db] = override_get_db
 
-        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
+        async with AsyncClient(
+            transport=ASGITransport(app=app, raise_app_exceptions=False),
+            base_url="http://test",
+        ) as ac:
             yield ac
 
 
@@ -198,6 +201,28 @@ async def test_file_appeal_success(client):
     assert data["status"] == "UNDER_REVIEW"
     assert data["request_id"] == req_id
     assert "commit_hash" in data
+
+
+@pytest.mark.asyncio
+async def test_file_appeal_rejects_lone_surrogate(client):
+    """POST /appeals rejects invalid lone surrogate input before hashing."""
+    create_resp = await client.post("/requests", json=REQUEST_BODY)
+    req_id = create_resp.json()["id"]
+    display_id = create_resp.json()["display_id"]
+    await client.patch(f"/requests/{display_id}/status", json={"status": "DENIED"})
+
+    appeal_resp = await client.post(
+        "/appeals",
+        content=(
+            '{"request_id":"'
+            + req_id
+            + '","grounds":"IMPROPER_EXEMPTION","statement":"The agency response was malformed \\ud800"}'
+        ),
+        headers={"content-type": "application/json"},
+    )
+    assert appeal_resp.status_code == 422
+    detail = appeal_resp.json()["detail"]
+    assert any("unicode" in item["type"] for item in detail)
 
 
 @pytest.mark.asyncio
