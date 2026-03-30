@@ -211,7 +211,7 @@ async def test_file_appeal_rejects_lone_surrogate(client):
     display_id = create_resp.json()["display_id"]
     await client.patch(f"/requests/{display_id}/status", json={"status": "DENIED"})
 
-    with patch("api.routers.appeals._hash_appeal", side_effect=ValueError("surrogates not allowed")):
+    with patch("api.routers.appeals.canonical_json_encode", side_effect=ValueError("surrogates not allowed")):
         appeal_resp = await client.post(
             "/appeals",
             json={

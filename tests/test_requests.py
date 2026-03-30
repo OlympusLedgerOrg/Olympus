@@ -7,6 +7,7 @@ and appeal filing.
 
 from __future__ import annotations
 
+from datetime import datetime
 from unittest.mock import patch
 
 import pytest
@@ -17,6 +18,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_asyn
 from api.deps import get_db
 from api.main import create_app
 from api.models import Base
+from api.services.hasher import hash_request
 
 
 TEST_DB_URL = "sqlite+aiosqlite:///:memory:"
@@ -87,6 +89,17 @@ async def test_create_request_rejects_lone_surrogate(client):
             "code": "INVALID_UNICODE",
         }
     ]
+
+
+def test_hash_request_rejects_lone_surrogate() -> None:
+    """hash_request rejects malformed Unicode before hashing."""
+    with pytest.raises(ValueError, match="lone surrogate character"):
+        hash_request(
+            subject="Body camera \ud800 footage",
+            description=REQUEST_BODY["description"],
+            agency="",
+            filed_at=datetime(2024, 1, 15, 9, 0, 0),
+        )
 
 
 @pytest.mark.asyncio
