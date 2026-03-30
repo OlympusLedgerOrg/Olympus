@@ -37,14 +37,13 @@ class OlympusClient {
     return response.json();
   }
 
-  async commitArtifact({ artifactHash, namespace, id, poseidonRoot }) {
+  async commitArtifact({ artifactHash, namespace, id }) {
     return this._request('/ingest/commit', {
       method: 'POST',
       body: {
         artifact_hash: artifactHash,
         namespace,
         id,
-        poseidon_root: poseidonRoot || null,
       },
     });
   }
@@ -81,12 +80,11 @@ class OlympusClient {
     fileBytes,
     namespace = 'demo',
     id = 'artifact',
-    poseidonRoot = null,
     generateProof = false,
     verify = false,
   }) {
     const artifactHash = toHex(computeBlake3(new Uint8Array(fileBytes)));
-    const commit = await this.commitArtifact({ artifactHash, namespace, id, poseidonRoot });
+    const commit = await this.commitArtifact({ artifactHash, namespace, id });
     const result = { artifactHash, commit };
     if (generateProof) {
       result.proof = await this.getProof(commit.proof_id);

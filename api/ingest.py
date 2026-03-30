@@ -53,7 +53,6 @@ from protocol.merkle import (
     merkle_leaf_hash,
     verify_proof,
 )
-from protocol.redaction_ledger import poseidon_root_to_bytes
 from protocol.ssmf import ExistenceProof
 from protocol.telemetry import INGEST_TOTAL, LEDGER_HEIGHT, timed_operation
 from protocol.timestamps import current_timestamp
@@ -1476,13 +1475,6 @@ class ArtifactCommitRequest(BaseModel):
         max_length=_ARTIFACT_ID_MAX_LEN,
         pattern=_IDENTIFIER_PATTERN,
     )
-    poseidon_root: str | None = Field(
-        None,
-        description=(
-            "Optional Poseidon root (decimal string) to bind a ZK circuit root to the"
-            " committed artifact hash"
-        ),
-    )
 
 
 class ArtifactCommitResponse(BaseModel):
@@ -1524,12 +1516,6 @@ async def commit_artifact(
 
     shard_id = f"artifacts/{request.namespace}"
     batch_id = str(uuid.uuid4())
-    poseidon_root_input = request.poseidon_root
-    poseidon_root_normalized: str | None = None
-
-    if poseidon_root_input is not None:
-        poseidon_bytes = poseidon_root_to_bytes(poseidon_root_input)
-        poseidon_root_normalized = str(int.from_bytes(poseidon_bytes, byteorder="big"))
 
     # Try to get storage layer (returns None if not configured)
     storage = _get_storage()
@@ -1546,15 +1532,6 @@ async def commit_artifact(
         # Dedup: if this exact hash has already been committed, return existing proof
         existing = _fetch_by_content_hash(artifact_hash_hex)
         if existing is not None:
-            existing_poseidon = existing.get("poseidon_root")
-            if poseidon_root_normalized is not None and existing_poseidon not in (
-                None,
-                poseidon_root_normalized,
-            ):
-                raise HTTPException(
-                    status_code=400,
-                    detail="Conflicting poseidon_root for existing artifact commitment",
-                )
             existing_proof_id = existing["proof_id"]
             INGEST_TOTAL.labels(outcome="deduplicated").inc()
             return ArtifactCommitResponse(
@@ -1569,32 +1546,30 @@ async def commit_artifact(
 
         proof_id = str(uuid.uuid4())
         artifact_key = record_key("artifact", request.id, 1)
-        if poseidon_root_normalized is None:
-            if storage is not None:
-                poseidon_smt = _build_poseidon_smt_for_storage_shard(storage, shard_id)
-            else:
-                from protocol.poseidon_smt import PoseidonSMT
+        # Always compute Poseidon root server-side (HIGH-02 security fix)
+        if storage is not None:
+            poseidon_smt = _build_poseidon_smt_for_storage_shard(storage, shard_id)
+        else:
+            from protocol.poseidon_smt import PoseidonSMT
 
-                poseidon_smt = PoseidonSMT()
-            poseidon_smt.update(artifact_key, _value_hash_to_poseidon_field(artifact_hash_bytes))
-            poseidon_root_normalized = str(poseidon_smt.get_root())
+            poseidon_smt = PoseidonSMT()
+        poseidon_smt.update(artifact_key, _value_hash_to_poseidon_field(artifact_hash_bytes))
+        poseidon_root_normalized = str(poseidon_smt.get_root())
         canonicalization = canonicalization_provenance(
             "application/octet-stream", CANONICAL_VERSION
         )
-        if poseidon_root_normalized is not None:
-            canonicalization = dict(canonicalization)
-            canonicalization["poseidon_root"] = poseidon_root_normalized
+        # Poseidon root is always computed server-side (HIGH-02 security fix)
+        canonicalization = dict(canonicalization)
+        canonicalization["poseidon_root"] = poseidon_root_normalized
 
         # If PostgreSQL is configured, persist artifact durably
         if storage is not None and _signing_key is not None:
             try:
                 # Convert the normalized Poseidon root decimal string to bytes for the
                 # storage layer, which uses raw 32-byte big-endian encoding.
-                poseidon_root_bytes: bytes | None = None
-                if poseidon_root_normalized is not None:
-                    poseidon_root_bytes = int(poseidon_root_normalized).to_bytes(
-                        32, byteorder="big"
-                    )
+                poseidon_root_bytes = int(poseidon_root_normalized).to_bytes(
+                    32, byteorder="big"
+                )
 
                 root_hash, proof, _header, _signature, ledger_entry = storage.append_record(
                     shard_id=shard_id,

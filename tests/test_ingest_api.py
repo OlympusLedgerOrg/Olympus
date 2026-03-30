@@ -433,22 +433,23 @@ class TestArtifactCommit:
         assert data["poseidon_root"] is not None
         assert data["poseidon_root"].isdigit()
 
-    def test_commit_with_poseidon_root_returns_dual_hash(self, client: TestClient):
-        """Optional poseidon_root should be echoed back and persisted."""
+    def test_commit_computes_poseidon_root_server_side(self, client: TestClient):
+        """Server computes poseidon_root; client-supplied values are ignored."""
         artifact_hash = "aa" * 32
-        poseidon_root = "123456789"
         resp = client.post(
             "/ingest/commit",
             json={
                 "artifact_hash": artifact_hash,
                 "namespace": "zk",
                 "id": "artifact/v1",
-                "poseidon_root": poseidon_root,
             },
         )
         assert resp.status_code == 200
         data = resp.json()
-        assert data["poseidon_root"] == poseidon_root
+        # Server should compute and return a poseidon_root
+        assert data["poseidon_root"] is not None
+        assert data["poseidon_root"].isdigit()
+        first_root = data["poseidon_root"]
 
         # Dedup should return the same poseidon_root
         resp2 = client.post(
@@ -457,11 +458,10 @@ class TestArtifactCommit:
                 "artifact_hash": artifact_hash,
                 "namespace": "zk",
                 "id": "artifact/v1",
-                "poseidon_root": poseidon_root,
             },
         )
         assert resp2.status_code == 200
-        assert resp2.json()["poseidon_root"] == poseidon_root
+        assert resp2.json()["poseidon_root"] == first_root
 
     def test_commit_deduplication_returns_same_proof_id(self, client: TestClient):
         """Committing the same hash twice should return the same proof_id."""
@@ -480,30 +480,6 @@ class TestArtifactCommit:
         assert resp2.json()["proof_id"] == proof_id_1
         assert resp2.json()["poseidon_root"] is not None
         assert resp2.json()["poseidon_root"].isdigit()
-
-    def test_commit_conflicting_poseidon_root_rejected(self, client: TestClient):
-        """A conflicting poseidon_root for the same hash should be rejected."""
-        artifact_hash = "aa" * 32
-        client.post(
-            "/ingest/commit",
-            json={
-                "artifact_hash": artifact_hash,
-                "namespace": "ci",
-                "id": "proj/v2.0.0",
-                "poseidon_root": "42",
-            },
-        )
-
-        resp = client.post(
-            "/ingest/commit",
-            json={
-                "artifact_hash": artifact_hash,
-                "namespace": "ci",
-                "id": "proj/v2.0.0",
-                "poseidon_root": "43",
-            },
-        )
-        assert resp.status_code == 400
 
     def test_commit_invalid_hex_rejected(self, client: TestClient):
         resp = client.post(
