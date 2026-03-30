@@ -136,7 +136,11 @@ def test_get_connection_rolls_back_before_returning_to_pool(
 
 
 def test_persist_tree_nodes_uses_upsert_without_precheck(monkeypatch: pytest.MonkeyPatch) -> None:
-    """SMT node persistence uses ON CONFLICT DO NOTHING instead of SELECT-before-INSERT.
+    """SMT node persistence uses ON CONFLICT DO UPDATE to keep smt_nodes current.
+
+    ADR-0001: smt_nodes must reflect the latest tree state so that proof
+    generation can read siblings directly (O(256)) instead of rebuilding
+    the entire tree from leaves (O(N)).
 
     The global CD-HS-ST table has no shard_id column (nodes are keyed by
     level+index in the single global tree), so the conflict target is
@@ -149,7 +153,11 @@ def test_persist_tree_nodes_uses_upsert_without_precheck(monkeypatch: pytest.Mon
     storage._persist_tree_nodes(cursor, "shard", _FakeTree())
 
     assert all("SELECT 1 FROM smt_nodes" not in sql for sql in cursor.statements)
-    assert all("ON CONFLICT (level, index) DO NOTHING" in sql for sql in cursor.statements)
+    assert all(
+        "ON CONFLICT (level, index)" in sql
+        and "DO UPDATE SET hash = EXCLUDED.hash" in sql
+        for sql in cursor.statements
+    )
 
 
 def test_fake_cursor_executemany_records_normalized_sql() -> None:
