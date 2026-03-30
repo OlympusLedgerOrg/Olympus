@@ -29,7 +29,7 @@ from typing import TYPE_CHECKING, Any
 
 import nacl.signing
 from fastapi import APIRouter, HTTPException, Request
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 from api.auth import (
     RequireCommitScope,
@@ -83,6 +83,76 @@ _IDENTIFIER_MAX_LEN = 256
 # Artifact IDs (e.g. 'org/repo/v1.2.3-rc.1+build.42') are typically longer than shard/record IDs.
 _ARTIFACT_ID_MAX_LEN = 512
 
+# H-3 Fix: Content validation limits (matching canonicalizer limits).
+# These are enforced at Pydantic deserialization time, before the potentially
+# expensive canonicalization step, to prevent DoS via deeply nested JSON.
+_MAX_CONTENT_DEPTH = 128  # Maximum nesting depth for content JSON
+_MAX_CONTENT_SIZE_ESTIMATE = 16 * 1024 * 1024  # 16 MiB rough size limit per record content
+
+
+def _check_json_depth(obj: Any, current_depth: int = 0) -> int:
+    """Check the nesting depth of a JSON-like object.
+
+    Args:
+        obj: The object to check.
+        current_depth: Current recursion depth.
+
+    Returns:
+        Maximum depth found in the object.
+
+    Raises:
+        ValueError: If depth exceeds _MAX_CONTENT_DEPTH.
+    """
+    if current_depth > _MAX_CONTENT_DEPTH:
+        raise ValueError(f"Content nesting depth exceeds limit of {_MAX_CONTENT_DEPTH}")
+
+    max_depth = current_depth
+
+    if isinstance(obj, dict):
+        for value in obj.values():
+            max_depth = max(max_depth, _check_json_depth(value, current_depth + 1))
+    elif isinstance(obj, list):
+        for item in obj:
+            max_depth = max(max_depth, _check_json_depth(item, current_depth + 1))
+
+    return max_depth
+
+
+def _estimate_json_size(obj: Any) -> int:
+    """Estimate the serialized size of a JSON-like object.
+
+    This is a rough estimate based on traversing the object. It's not exact
+    but is good enough to catch obvious DoS attempts before full serialization.
+
+    Args:
+        obj: The object to estimate size for.
+
+    Returns:
+        Estimated size in bytes.
+    """
+    if obj is None:
+        return 4  # "null"
+    elif isinstance(obj, bool):
+        return 5  # "true" or "false"
+    elif isinstance(obj, (int, float)):
+        return len(str(obj))
+    elif isinstance(obj, str):
+        return len(obj) + 2  # quotes
+    elif isinstance(obj, dict):
+        # keys + values + colons + commas + braces
+        size = 2  # {}
+        for key, value in obj.items():
+            size += len(str(key)) + 2 + 1 + _estimate_json_size(value) + 1  # "key": value,
+        return size
+    elif isinstance(obj, list):
+        # items + commas + brackets
+        size = 2  # []
+        for item in obj:
+            size += _estimate_json_size(item) + 1  # item,
+        return size
+    else:
+        return len(str(obj))
+
 
 class RecordInput(BaseModel):
     """A single record to ingest."""
@@ -107,6 +177,30 @@ class RecordInput(BaseModel):
     )
     version: int = Field(..., ge=1, description="Record version (≥ 1)")
     content: dict[str, Any] = Field(..., description="Record content (JSON document)")
+
+    @field_validator("content")
+    @classmethod
+    def validate_content_limits(cls, v: dict[str, Any]) -> dict[str, Any]:
+        """H-3 Fix: Validate content depth and size at Pydantic layer.
+
+        This prevents DoS attacks via deeply nested or very large JSON content
+        before the expensive canonicalization step runs.
+        """
+        # Check depth
+        try:
+            _check_json_depth(v)
+        except ValueError as exc:
+            raise ValueError(str(exc)) from exc
+
+        # Estimate size
+        estimated_size = _estimate_json_size(v)
+        if estimated_size > _MAX_CONTENT_SIZE_ESTIMATE:
+            raise ValueError(
+                f"Content size estimate ({estimated_size} bytes) exceeds limit "
+                f"of {_MAX_CONTENT_SIZE_ESTIMATE} bytes per record"
+            )
+
+        return v
 
 
 class BatchIngestionRequest(BaseModel):

@@ -471,9 +471,15 @@ def _create_rate_limit_backend() -> MemoryRateLimitBackend:
     time.  When a Redis backend is implemented, this function will return the
     appropriate type and the return annotation should be widened accordingly.
 
+    H-2 Fix: In production mode with multiple workers and memory backend,
+    startup is blocked because the rate limiter would be essentially non-functional
+    (each worker maintains independent buckets, so effective limit is N× configured).
+
     Raises:
         ValueError: If ``RATE_LIMIT_BACKEND`` is ``'redis'`` (not yet
             implemented) or an unknown value.
+        RuntimeError: If in production mode with WEB_CONCURRENCY > 1 and
+            RATE_LIMIT_BACKEND=memory.
     """
     settings = get_settings()
     backend_type = settings.rate_limit_backend.lower()
@@ -488,19 +494,35 @@ def _create_rate_limit_backend() -> MemoryRateLimitBackend:
     if backend_type != "memory":
         raise ValueError(f"Unknown RATE_LIMIT_BACKEND: {backend_type!r}. Options: 'memory'")
 
-    # Warn if memory backend is used with multiple workers
-    workers = os.environ.get("WEB_CONCURRENCY", "")
+    # H-2 Fix: Block startup if memory backend with multiple workers in production.
+    # The memory backend is per-process, so with N workers the effective rate limit
+    # is N× the configured value — essentially making rate limiting non-functional.
+    env = os.environ.get("OLYMPUS_ENV", "production")
+    workers_str = os.environ.get("WEB_CONCURRENCY", "")
     try:
-        if workers and int(workers) > 1:
-            logger.warning(
-                "RATE_LIMIT_BACKEND=memory with WEB_CONCURRENCY=%s — "
-                "rate limits are per-process; effective limit is %s× configured value. "
-                "Consider switching to RATE_LIMIT_BACKEND=redis once implemented.",
-                workers,
-                workers,
-            )
+        workers = int(workers_str) if workers_str else 1
     except ValueError:
-        pass
+        workers = 1
+
+    if workers > 1 and env == "production":
+        raise RuntimeError(
+            f"RATE_LIMIT_BACKEND=memory is not effective with WEB_CONCURRENCY={workers}. "
+            "Each worker maintains independent rate limit buckets, so the effective limit "
+            f"would be {workers}× the configured value. "
+            "Options: (1) Set WEB_CONCURRENCY=1, (2) Use a distributed rate limiter "
+            "(RATE_LIMIT_BACKEND=redis once implemented), or (3) Set OLYMPUS_ENV=development "
+            "to disable this check for local testing."
+        )
+
+    if workers > 1:
+        # Non-production with multiple workers: warn but allow
+        logger.warning(
+            "RATE_LIMIT_BACKEND=memory with WEB_CONCURRENCY=%s — "
+            "rate limits are per-process; effective limit is %s× configured value. "
+            "Consider switching to RATE_LIMIT_BACKEND=redis once implemented.",
+            workers,
+            workers,
+        )
 
     return MemoryRateLimitBackend()
 
