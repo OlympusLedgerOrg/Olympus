@@ -69,8 +69,6 @@ def _is_blocked_ip_for_ssrf(
             and blocked_network.network_address.ipv4_mapped is not None
         ):
             mapped_network_address = blocked_network.network_address.ipv4_mapped
-            if mapped_network_address is None:
-                continue
             prefixlen = max(blocked_network.prefixlen - 96, 0)
             blocked_network = ipaddress.ip_network(
                 f"{mapped_network_address}/{prefixlen}", strict=False
@@ -136,7 +134,9 @@ def validate_federation_url(url: str) -> None:
             port = parsed.port or (443 if parsed.scheme == "https" else 80)
             addrinfo = socket.getaddrinfo(hostname, port, type=socket.SOCK_STREAM)
         except socket.gaierror as dns_error:
-            raise ValueError(f"Federation URL hostname could not be resolved: {hostname}") from dns_error
+            raise ValueError(
+                f"Federation URL hostname could not be resolved: {hostname}:{port}"
+            ) from dns_error
 
         resolved_any = False
         for info in addrinfo:

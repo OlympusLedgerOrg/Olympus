@@ -606,6 +606,7 @@ async def test_verify_dataset_requires_api_key_outside_development(monkeypatch, 
     original_env = os.environ.get("OLYMPUS_FOIA_API_KEYS")
     test_key = "dataset-verify-key"
     test_key_hash = hash_bytes(test_key.encode("utf-8")).hex()
+    fake_dataset_id = "0" * 64
     session_factory = async_sessionmaker(db_engine, expire_on_commit=False, class_=AsyncSession)
 
     try:
@@ -633,7 +634,7 @@ async def test_verify_dataset_requires_api_key_outside_development(monkeypatch, 
         app = create_app()
         app.dependency_overrides[get_db] = override_get_db
         async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
-            unauthenticated = await ac.get(f"/datasets/{'0' * 64}/verify")
+            unauthenticated = await ac.get(f"/datasets/{fake_dataset_id}/verify")
             assert unauthenticated.status_code == 401
 
         async with AsyncClient(
@@ -641,7 +642,7 @@ async def test_verify_dataset_requires_api_key_outside_development(monkeypatch, 
             base_url="http://test",
             headers={"X-API-Key": test_key},
         ) as ac:
-            authorized = await ac.get(f"/datasets/{'0' * 64}/verify")
+            authorized = await ac.get(f"/datasets/{fake_dataset_id}/verify")
             assert authorized.status_code == 200
             assert authorized.json()["verified"] is False
     finally:
