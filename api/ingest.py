@@ -103,7 +103,8 @@ def _check_json_depth(obj: Any, current_depth: int = 0) -> int:
     Raises:
         ValueError: If depth exceeds _MAX_CONTENT_DEPTH.
     """
-    if current_depth > _MAX_CONTENT_DEPTH:
+    # Check depth at entry to prevent recursion beyond the limit
+    if current_depth >= _MAX_CONTENT_DEPTH:
         raise ValueError(f"Content nesting depth exceeds limit of {_MAX_CONTENT_DEPTH}")
 
     max_depth = current_depth
@@ -137,12 +138,14 @@ def _estimate_json_size(obj: Any) -> int:
     elif isinstance(obj, (int, float)):
         return len(str(obj))
     elif isinstance(obj, str):
-        return len(obj) + 2  # quotes
+        # Use UTF-8 encoding for accurate size of multi-byte characters
+        return len(obj.encode("utf-8")) + 2  # quotes
     elif isinstance(obj, dict):
         # keys + values + colons + commas + braces
         size = 2  # {}
         for key, value in obj.items():
-            size += len(str(key)) + 2 + 1 + _estimate_json_size(value) + 1  # "key": value,
+            # Keys are also UTF-8 encoded in JSON
+            size += len(str(key).encode("utf-8")) + 2 + 1 + _estimate_json_size(value) + 1
         return size
     elif isinstance(obj, list):
         # items + commas + brackets

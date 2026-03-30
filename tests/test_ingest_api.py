@@ -544,7 +544,11 @@ class TestArtifactCommit:
 
 class TestAuthAndRateLimiting:
     def test_ingest_requires_api_key(self):
-        """Test that ingest endpoint requires an API key when keys are configured."""
+        """Test that ingest endpoint requires authentication.
+
+        This test explicitly registers an API key to disable dev-mode bypass,
+        then attempts access without credentials to verify 401 is returned.
+        """
         ingest_api._reset_ingest_state_for_tests()
         # Register an API key so that dev-mode bypass is not active
         ingest_api._register_api_key_for_tests(

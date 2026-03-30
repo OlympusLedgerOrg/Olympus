@@ -49,3 +49,20 @@ def _reset_rate_limit_state():
         _reset_rate_limit_backend_for_tests()
     except ImportError:
         pass
+
+
+@pytest.fixture(autouse=True)
+def _reset_auth_state():
+    """Reset the auth module API key store between tests.
+
+    Prevents API key state from leaking across test functions, which can
+    cause tests to fail when previous tests registered API keys that
+    subsequent tests don't expect.
+    """
+    yield
+    try:
+        from api.auth import _reset_auth_state_for_tests
+
+        _reset_auth_state_for_tests()
+    except ImportError:
+        pass
