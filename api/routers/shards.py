@@ -11,10 +11,9 @@ import logging
 import re
 from typing import Any
 
-from fastapi import APIRouter, HTTPException, Path, Query, Request
+from fastapi import APIRouter, HTTPException, Path, Query
 
-from api.auth import RateLimit
-from api.ingest import _authorize_and_rate_limit
+from api.auth import RateLimit, RequireAPIKey
 from api.schemas.shards import (
     ExistenceProofResponse,
     HeaderVerificationResponse,
@@ -374,7 +373,7 @@ async def verify_latest_header(
 
 
 @router.get("/metrics")
-async def metrics(_rl: RateLimit) -> Any:
+async def metrics(_api_key: RequireAPIKey, _rl: RateLimit) -> Any:
     """
     Prometheus metrics endpoint.
 
@@ -409,7 +408,8 @@ async def metrics(_rl: RateLimit) -> Any:
 
 @router.post("/shards/{shard_id}/alert/smt-divergence")
 async def alert_smt_divergence(
-    request: Request,
+    _api_key: RequireAPIKey,
+    _rl: RateLimit,
     shard_id: str = _SHARD_ID_PATH,
     local_root: str = Query(..., description="Hex-encoded local SMT root"),
     remote_root: str = Query(..., description="Hex-encoded remote SMT root"),
@@ -432,7 +432,6 @@ async def alert_smt_divergence(
     Returns:
         Confirmation that the divergence event was recorded.
     """
-    _authorize_and_rate_limit(request, action="verify")
     record_smt_divergence(
         shard_id=shard_id,
         local_root=local_root,
