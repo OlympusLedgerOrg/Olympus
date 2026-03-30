@@ -2,7 +2,7 @@
 
 | Field       | Value                                       |
 |-------------|---------------------------------------------|
-| Status      | Proposed                                    |
+| Status      | Accepted                                    |
 | Date        | 2026-03-30                                  |
 | Deciders    | Olympus maintainers                         |
 | Relates to  | C1, C2, C3, H1 (security review findings)  |

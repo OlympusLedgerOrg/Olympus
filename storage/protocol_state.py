@@ -43,6 +43,11 @@ def load_tree_state(
     """
     Load sparse Merkle tree state from database.
 
+    .. deprecated::
+        ADR-0001 deprecates this function.  Production callers should use
+        the purpose-specific helpers on :class:`StorageLayer`:
+        ``_get_proof_path``, ``get_current_root``, ``replay_tree_incremental``.
+
     Read-only helper.  Must be called within an existing transaction.
 
     CD-HS-ST Design:
@@ -127,7 +132,8 @@ def persist_tree_nodes(
             """
             INSERT INTO smt_nodes (level, index, hash, ts)
             VALUES (%s, %s, %s, %s)
-            ON CONFLICT (level, index) DO NOTHING
+            ON CONFLICT (level, index)
+            DO UPDATE SET hash = EXCLUDED.hash, ts = EXCLUDED.ts
             """,
             (level, path_bytes, hash_value, datetime.now(timezone.utc)),
         )
