@@ -599,7 +599,7 @@ def _commit_api_auth_headers(request: Request) -> dict[str, str]:
         headers["x-api-key"] = api_key
 
     authorization = request.headers.get("authorization", "")
-    if authorization.lower().startswith("bearer "):
+    if len(authorization) >= 7 and authorization[:7].lower() == "bearer ":
         headers["authorization"] = authorization
 
     return headers

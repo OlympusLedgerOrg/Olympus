@@ -97,7 +97,7 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
 def _json_safe_validation_detail(value: Any) -> Any:
     """Recursively sanitize validation payloads so JSON rendering cannot fail."""
     if isinstance(value, str):
-        return value.encode("unicode_escape").decode("ascii")
+        return value.encode("utf-8", "backslashreplace").decode("utf-8")
     if isinstance(value, list):
         return [_json_safe_validation_detail(item) for item in value]
     if isinstance(value, tuple):
@@ -106,6 +106,9 @@ def _json_safe_validation_detail(value: Any) -> Any:
         return {
             key: _json_safe_validation_detail(item)
             for key, item in value.items()
+            # FastAPI attaches a documentation URL for each validation error.
+            # It is not needed in API responses here and may contain unsanitized
+            # path data, so we omit it while making the payload JSON-safe.
             if key != "url"
         }
     return value

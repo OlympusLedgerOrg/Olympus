@@ -12,6 +12,7 @@ POST /ledger/verify/simple        — user-friendly document verification
 from __future__ import annotations
 
 import logging
+from typing import Annotated
 
 from fastapi import APIRouter, File, Form, HTTPException, Path, Query, Request, UploadFile, status
 from sqlalchemy import func, select
@@ -131,7 +132,7 @@ async def get_ledger_state(db: DBSession, _rl: RateLimit):
 
 
 @router.get("/shard/{shard_id}", response_model=ShardStateResponse)
-async def get_shard_state(db: DBSession, _rl: RateLimit, shard_id: str = _SHARD_ID_PATH):
+async def get_shard_state(shard_id: Annotated[str, _SHARD_ID_PATH], db: DBSession, _rl: RateLimit):
     """Return the state of a single shard.
 
     Args:
