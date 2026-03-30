@@ -1249,7 +1249,7 @@ async def ingest_batch(batch: BatchIngestionRequest, request: Request) -> BatchI
                 )
                 ledger_entry_hash = ledger_entry.entry_hash
                 ledger_height = len(_write_ledger.entries)
-                LEDGER_HEIGHT.labels(shard_id=shard_id).set(ledger_height)
+                LEDGER_HEIGHT.set(ledger_height)
                 span.set_attribute("ledger_height", ledger_height)
 
                 # Store proof metadata for each new record
@@ -1686,7 +1686,7 @@ async def commit_artifact(
             canonicalization=canonicalization,
         )
         ledger_height = len(_write_ledger.entries)
-        LEDGER_HEIGHT.labels(shard_id=shard_id).set(ledger_height)
+        LEDGER_HEIGHT.set(ledger_height)
         span.set_attribute("ledger_height", ledger_height)
 
         ts = current_timestamp()

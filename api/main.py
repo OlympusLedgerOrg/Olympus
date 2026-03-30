@@ -22,6 +22,7 @@ _patches.apply_all()
 import logging
 import os
 from contextlib import asynccontextmanager
+from pathlib import Path
 from typing import Any
 
 from fastapi import FastAPI, Request
@@ -48,11 +49,37 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
+def _assert_no_dev_zk_stub_artifacts(repo_root: Path | None = None) -> None:
+    """Block production startup when known development ceremony stubs are present."""
+    if os.environ.get("OLYMPUS_ENV", "production") == "development":
+        return
+    if os.environ.get("OLYMPUS_ALLOW_DEV_ZK_ARTIFACTS", "").lower() == "true":
+        logger.warning("OLYMPUS_ALLOW_DEV_ZK_ARTIFACTS=true: allowing dev ZK artifacts")
+        return
+
+    root = repo_root or Path(__file__).resolve().parent.parent
+    stub_paths = (
+        root / "ceremony" / "transcript" / "dev_powers_of_tau.ptau",
+        root / "ceremony" / "transcript" / "dev_redaction_validity_final.zkey",
+    )
+    for stub_path in stub_paths:
+        if not stub_path.exists():
+            continue
+        header = stub_path.read_bytes()[:256].lower()
+        if b"dev placeholder" in header or b"development" in header:
+            raise RuntimeError(
+                "Refusing startup in non-development environment with dev ceremony stub "
+                f"artifact present: {stub_path}. Set OLYMPUS_ALLOW_DEV_ZK_ARTIFACTS=true "
+                "only for non-production test scenarios."
+            )
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Create database tables on startup and dispose the engine on shutdown."""
     settings = get_settings()
     logger.info("Starting Olympus API v%s", settings.app_version)
+    _assert_no_dev_zk_stub_artifacts()
 
     try:
         async with engine.begin() as conn:
@@ -86,7 +113,7 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
         response.headers["Content-Security-Policy"] = (
             "default-src 'self'; "
             "script-src 'self'; "
-            "style-src 'self' 'unsafe-inline'; "  # TODO: Replace unsafe-inline with nonces after frontend refactor
+            "style-src 'self'; "
             "img-src 'self' data:; "
             "connect-src 'self'; "
             "frame-ancestors 'none';"
@@ -103,14 +130,7 @@ def _json_safe_validation_detail(value: Any) -> Any:
     if isinstance(value, tuple):
         return [_json_safe_validation_detail(item) for item in value]
     if isinstance(value, dict):
-        return {
-            key: _json_safe_validation_detail(item)
-            for key, item in value.items()
-            # FastAPI attaches a documentation URL for each validation error.
-            # It is not needed in API responses here and may contain unsanitized
-            # path data, so we omit it while making the payload JSON-safe.
-            if key != "url"
-        }
+        return {key: _json_safe_validation_detail(item) for key, item in value.items()}
     return value
 
 

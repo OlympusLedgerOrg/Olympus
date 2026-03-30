@@ -44,6 +44,13 @@ def test_console_shows_api_unavailable_banner_on_timeout(monkeypatch):
     assert "API unavailable (connection failed)." in response.text
 
 
+def test_debug_ui_csp_disallows_unsafe_inline_styles():
+    response = client.get("/manifest.json")
+    csp = response.headers.get("content-security-policy", "")
+    assert "style-src 'self'" in csp
+    assert "'unsafe-inline'" not in csp
+
+
 def test_console_shows_chain_broken_banner(monkeypatch):
     """Root page should show chain broken banner when tail linkage is invalid."""
     monkeypatch.setattr(ui_app, "DEBUG_UI_ENABLED", True)
