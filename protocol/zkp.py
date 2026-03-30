@@ -159,6 +159,13 @@ class Groth16Prover:
     Notes:
       - For local/dev, prefer snarkjs_bin="npx" so it uses the repo's node_modules.
       - For global installs, snarkjs_bin="snarkjs" is fine.
+      - Subprocess argv values are always passed as list elements (no shell), and
+        circuit identifiers are allowlisted by :meth:`_validate_circuit_name`.
+        In the ingest pipeline, externally supplied artifact identifiers are
+        validated at API boundaries via ``api.ingest._IDENTIFIER_PATTERN`` before
+        any persisted identifier can influence proof artifact lookup or subprocess
+        arguments. This boundary is intentionally documented to support security
+        audits of identifier handling between storage and execution.
     """
 
     def __init__(self, circuits_dir: Path, snarkjs_bin: str = "npx") -> None:

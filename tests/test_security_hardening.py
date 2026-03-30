@@ -23,6 +23,7 @@ from api.auth import (
     MemoryRateLimitBackend,
     _get_client_ip,
     _ip_in_ranges,
+    _is_overly_broad_proxy_range,
     _is_valid_ip,
     _TokenBucket,
 )
@@ -82,6 +83,20 @@ class TestIpInRanges:
         assert _ip_in_ranges("::ffff:127.0.0.1", ["127.0.0.0/8"]) is True
 
 
+class TestTrustedProxyRangeValidation:
+    """Unit tests for overly broad trusted-proxy CIDR detection."""
+
+    def test_rejects_ipv4_any(self):
+        assert _is_overly_broad_proxy_range("0.0.0.0/0") is True
+
+    def test_rejects_ipv6_any(self):
+        assert _is_overly_broad_proxy_range("::/0") is True
+
+    def test_accepts_narrow_ranges(self):
+        assert _is_overly_broad_proxy_range("10.0.0.0/8") is False
+        assert _is_overly_broad_proxy_range("2001:db8::/32") is False
+
+
 class TestGetClientIp:
     """Unit tests for _get_client_ip with trusted proxy validation."""
 
@@ -129,6 +144,13 @@ class TestGetClientIp:
             mock_settings.return_value.trusted_proxy_ips = []
             request = self._make_request("192.168.1.1", xff="1.2.3.4")
             assert _get_client_ip(request) == "192.168.1.1"
+
+    def test_overly_broad_trusted_proxy_range_ignores_xff(self):
+        """If trusted proxy range is global, fail closed to direct peer IP."""
+        with unittest.mock.patch("api.auth.get_settings") as mock_settings:
+            mock_settings.return_value.trusted_proxy_ips = ["0.0.0.0/0"]
+            request = self._make_request("198.51.100.10", xff="203.0.113.50, 198.51.100.10")
+            assert _get_client_ip(request) == "198.51.100.10"
 
 
 # ── H3: Bucket eviction DoS prevention ──────────────────────────────────────

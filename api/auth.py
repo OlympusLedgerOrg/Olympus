@@ -582,6 +582,16 @@ def _ip_in_ranges(ip: str, ranges: list[str]) -> bool:
     return False
 
 
+def _is_overly_broad_proxy_range(range_expr: str) -> bool:
+    """Return True for CIDRs that trust all IPv4/IPv6 addresses."""
+    try:
+        network = ipaddress.ip_network(range_expr, strict=False)
+    except ValueError:
+        logger.warning("Ignoring invalid trusted proxy CIDR/IP expression: %s", range_expr)
+        return False
+    return network.prefixlen == 0
+
+
 def _get_client_ip(request: Request) -> str:
     """Extract client IP, only trusting ``X-Forwarded-For`` from known proxies.
 
@@ -593,6 +603,13 @@ def _get_client_ip(request: Request) -> str:
     peer_ip = request.client.host if request.client else "unknown"
     settings = get_settings()
     trusted = settings.trusted_proxy_ips
+
+    if any(_is_overly_broad_proxy_range(proxy_range) for proxy_range in trusted):
+        logger.error(
+            "Ignoring X-Forwarded-For because OLYMPUS_TRUSTED_PROXY_IPS contains an overly "
+            "broad range (0.0.0.0/0 or ::/0), which allows client IP spoofing."
+        )
+        return peer_ip
 
     if trusted and _ip_in_ranges(peer_ip, trusted):
         forwarded_for = request.headers.get("x-forwarded-for", "")
