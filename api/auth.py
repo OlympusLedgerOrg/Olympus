@@ -4,14 +4,22 @@ API key authentication for the Olympus FOIA backend.
 Write endpoints (POST, PATCH, DELETE) require a valid API key.
 Read endpoints (GET) are public — this is a transparency system.
 
-API keys are stored as BLAKE3 hashes in the OLYMPUS_FOIA_API_KEYS environment
-variable (JSON array). Raw keys are never stored.
+API keys are loaded from OLYMPUS_API_KEYS_JSON (preferred) or OLYMPUS_FOIA_API_KEYS
+(fallback) environment variable. Both should contain a JSON array. Raw keys are
+never stored — only BLAKE3 hashes.
+
+This module provides a unified authentication mechanism for all Olympus endpoints,
+ensuring that key revocation works consistently across all routers.
 
 Usage in routers:
-    from api.auth import require_api_key
+    from api.auth import require_api_key, RequireIngestScope
 
     @router.post("/something")
     async def create_thing(api_key: RequireAPIKey, db: DBSession):
+        ...
+
+    @router.post("/ingest/records")
+    async def ingest_records(api_key: RequireIngestScope):
         ...
 """
 
@@ -27,7 +35,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from threading import Lock
 from time import monotonic
-from typing import Annotated, Protocol, runtime_checkable
+from typing import Annotated, Any, Protocol, runtime_checkable
 
 from fastapi import Depends, HTTPException, Request, status
 
@@ -77,22 +85,30 @@ def _load_keys_locked() -> None:
 
 
 def _load_keys_into(target: dict[str, _APIKeyRecord]) -> None:
-    """Parse OLYMPUS_FOIA_API_KEYS and populate *target*.
+    """Parse API keys from environment and populate *target*.
+
+    Checks OLYMPUS_API_KEYS_JSON first, then falls back to OLYMPUS_FOIA_API_KEYS
+    so operators only need to configure one variable. This unified loading
+    ensures that all authentication paths (FOIA routers and ingest endpoints)
+    share the same canonical key store.
 
     Raises:
         ValueError: On JSON parse error or missing required fields.
     """
-    raw = os.environ.get("OLYMPUS_FOIA_API_KEYS", "[]")
+    # Prefer OLYMPUS_API_KEYS_JSON; fall back to OLYMPUS_FOIA_API_KEYS for consolidated config
+    raw = os.environ.get("OLYMPUS_API_KEYS_JSON") or os.environ.get("OLYMPUS_FOIA_API_KEYS", "[]")
     try:
         entries = json.loads(raw)
     except json.JSONDecodeError as exc:
-        raise ValueError("OLYMPUS_FOIA_API_KEYS must be valid JSON") from exc
+        raise ValueError(
+            "OLYMPUS_API_KEYS_JSON (or OLYMPUS_FOIA_API_KEYS) must be valid JSON"
+        ) from exc
 
     for entry in entries:
         key_hash = entry.get("key_hash")
         if not key_hash:
             raise ValueError(
-                "Each entry in OLYMPUS_FOIA_API_KEYS must have a 'key_hash' field "
+                "Each entry in API keys config must have a 'key_hash' field "
                 "(hex-encoded BLAKE3 hash of the raw API key)."
             )
         key_id = entry.get("key_id", "default")
@@ -115,7 +131,9 @@ def _load_keys_into(target: dict[str, _APIKeyRecord]) -> None:
 
 
 def reload_keys() -> int:
-    """Force a reload of API keys from OLYMPUS_FOIA_API_KEYS.
+    """Force a reload of API keys from environment.
+
+    Checks OLYMPUS_API_KEYS_JSON first, then falls back to OLYMPUS_FOIA_API_KEYS.
 
     Loads keys into a temporary store first, then atomically replaces the
     live store only on success.  If loading fails, the existing keys remain
@@ -244,7 +262,108 @@ async def require_api_key(request: Request) -> _APIKeyRecord:
 RequireAPIKey = Annotated[_APIKeyRecord, Depends(require_api_key)]
 
 
-# ── Per-IP Rate Limiting ──
+def require_api_key_with_scope(required_scope: str) -> Any:
+    """Factory for creating scope-specific API key dependencies.
+
+    This provides a unified authentication mechanism that replaces the duplicate
+    auth logic that was previously in api/ingest.py. All authentication now flows
+    through the same key store, ensuring that key revocation works consistently
+    across all endpoints.
+
+    Args:
+        required_scope: The scope that the API key must have (e.g., 'write', 'ingest',
+            'commit', 'verify').
+
+    Returns:
+        A FastAPI dependency function that validates API keys and checks the
+        required scope.
+
+    Usage:
+        @router.post("/endpoint")
+        async def my_endpoint(api_key: Annotated[_APIKeyRecord, Depends(require_api_key_with_scope("ingest"))]):
+            ...
+    """
+
+    async def _require_scoped_key(request: Request) -> _APIKeyRecord:
+        _load_keys()
+
+        # If no keys are configured, allow dev-mode bypass ONLY in development.
+        if not _key_store:
+            _env = os.environ.get("OLYMPUS_ENV", "production")
+            if _env == "development":
+                logger.warning("No API keys configured — dev-mode auth bypass active")
+                return _APIKeyRecord(
+                    key_id="dev",
+                    key_hash="",
+                    scopes={"read", "write", "ingest", "commit", "verify"},
+                    expires_at=datetime(2099, 1, 1, tzinfo=timezone.utc),
+                )
+            logger.error(
+                "API keys not configured and OLYMPUS_ENV != 'development'. "
+                "Refusing unauthenticated access. Configure API keys or set "
+                "OLYMPUS_ENV=development for local testing."
+            )
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail={
+                    "detail": "Authentication not configured. Contact the system administrator.",
+                    "code": "AUTH_NOT_CONFIGURED",
+                },
+            )
+
+        raw_key = _extract_key(request)
+        key_hash = _hash_key(raw_key)
+        record = _constant_time_lookup(key_hash)
+        client_ip = _get_client_ip(request)
+
+        if record is None:
+            logger.warning(
+                "Invalid API key attempt from %s (scope=%s)",
+                client_ip,
+                required_scope,
+            )
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail={"detail": "Invalid API key.", "code": "AUTH_INVALID"},
+            )
+
+        if datetime.now(timezone.utc) >= record.expires_at:
+            logger.warning(
+                "Expired API key attempt from %s (key_id=%s, scope=%s)",
+                client_ip,
+                record.key_id,
+                required_scope,
+            )
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail={"detail": "API key expired.", "code": "AUTH_EXPIRED"},
+            )
+
+        if required_scope not in record.scopes:
+            logger.warning(
+                "Scope denied for key %s from %s (required=%s, has=%s)",
+                record.key_id,
+                client_ip,
+                required_scope,
+                record.scopes,
+            )
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail={
+                    "detail": f"API key lacks required scope: {required_scope}",
+                    "code": "AUTH_SCOPE",
+                },
+            )
+
+        return record
+
+    return _require_scoped_key
+
+
+# Pre-built dependencies for common ingest scopes
+RequireIngestScope = Annotated[_APIKeyRecord, Depends(require_api_key_with_scope("ingest"))]
+RequireCommitScope = Annotated[_APIKeyRecord, Depends(require_api_key_with_scope("commit"))]
+RequireVerifyScope = Annotated[_APIKeyRecord, Depends(require_api_key_with_scope("verify"))]
 
 
 @dataclass
@@ -498,3 +617,49 @@ def _reset_rate_limit_backend_for_tests() -> None:  # pragma: no cover — test 
     """Reset the rate limit backend singleton (test helper)."""
     global _rate_limit_backend
     _rate_limit_backend = None
+
+
+# ── Test Utilities ──
+
+
+def _reset_auth_state_for_tests() -> None:  # pragma: no cover — test utility
+    """Reset the API key store and reload state (test helper).
+
+    This allows tests to start with a clean authentication state.
+    """
+    global _keys_loaded
+    with _load_keys_lock:
+        _key_store.clear()
+        _keys_loaded = False
+
+
+def _register_api_key_for_tests(
+    api_key: str, key_id: str, scopes: set[str], expires_at: str
+) -> None:  # pragma: no cover — test utility
+    """Register an API key for testing purposes.
+
+    This registers a raw API key (which will be hashed) into the unified key store.
+    Use this in tests to set up authentication without environment variables.
+
+    Args:
+        api_key: The raw API key string.
+        key_id: Identifier for the key.
+        scopes: Set of scopes the key should have (e.g., {'read', 'write', 'ingest'}).
+        expires_at: ISO 8601 expiration timestamp.
+    """
+    global _keys_loaded
+    with _load_keys_lock:
+        key_hash = _hash_key(api_key)
+        try:
+            expires = datetime.fromisoformat(expires_at.replace("Z", "+00:00")).astimezone(
+                timezone.utc
+            )
+        except ValueError as exc:
+            raise ValueError(f"Invalid expires_at: {expires_at}") from exc
+        _key_store[key_hash] = _APIKeyRecord(
+            key_id=key_id,
+            key_hash=key_hash,
+            scopes=scopes,
+            expires_at=expires,
+        )
+        _keys_loaded = True

@@ -16,8 +16,6 @@ All write operations are append-only and maintain ledger chain integrity.
 from __future__ import annotations
 
 import asyncio
-import hmac as _hmac_module  # used ONLY for hmac.compare_digest (timing-safe comparison)
-import json
 import logging
 import os
 import uuid
@@ -33,7 +31,14 @@ import nacl.signing
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, Field
 
-from api.auth import _ip_in_ranges
+from api.auth import (
+    RequireCommitScope,
+    RequireIngestScope,
+    RequireVerifyScope,
+    _ip_in_ranges,
+    _register_api_key_for_tests as _auth_register_api_key_for_tests,
+    _reset_auth_state_for_tests,
+)
 from protocol.canonical import CANONICAL_VERSION, canonicalize_document, document_to_bytes
 from protocol.canonicalizer import canonicalization_provenance
 from protocol.hashes import hash_bytes, leaf_hash, record_key
@@ -237,9 +242,8 @@ _content_index: OrderedDict[str, str] = OrderedDict()
 # Shared ledger for write path (legacy, unused when storage is enabled)
 _write_ledger = Ledger()
 
-# API key hash -> key record
-_api_key_store: dict[str, ApiKeyRecord] = {}
-_api_keys_loaded = False
+# API key store and loaded flag have been removed - authentication is now unified
+# through api.auth module. The key store is maintained by api.auth._key_store.
 
 # L4-E: Trusted proxy IP ranges for X-Forwarded-For parsing.
 # Only parse X-Forwarded-For header when the direct peer is a known trusted proxy.
@@ -402,16 +406,6 @@ def _fetch_by_content_hash(content_hash_hex: str) -> dict[str, Any] | None:
 
 
 @dataclass
-class ApiKeyRecord:
-    """Hashed API key record with scoped permissions and expiry."""
-
-    key_id: str
-    key_hash: str
-    scopes: set[str]
-    expires_at: datetime
-
-
-@dataclass
 class TokenBucket:
     """Simple token-bucket rate limiter state."""
 
@@ -484,57 +478,6 @@ def _parse_timestamp(raw: str) -> datetime:
     return parsed.astimezone(timezone.utc)
 
 
-def _hash_api_key(api_key: str) -> str:
-    """Hash API key material for at-rest storage."""
-    return hash_bytes(api_key.encode("utf-8")).hex()
-
-
-def _constant_time_equals(a: str, b: str) -> bool:
-    """Timing-safe string equality check.
-
-    Wraps :func:`hmac.compare_digest` to make intent explicit: this is
-    a **constant-time comparison**, not an HMAC/MAC computation.  The
-    ``hmac`` stdlib module is used solely because it provides the only
-    timing-safe comparator in the Python standard library.
-
-    All cryptographic hashing in Olympus uses BLAKE3 (via
-    ``protocol.hashes``); Ed25519 signing uses ``nacl``.  This function
-    is **not** part of either cryptographic path — it exists only to
-    prevent timing oracle attacks on hash comparisons.
-    """
-    return _hmac_module.compare_digest(a, b)
-
-
-def _constant_time_api_key_lookup(key_hash: str) -> ApiKeyRecord | None:
-    """
-    Lookup API key record using constant-time comparison (L4-D).
-
-    Uses hmac.compare_digest to prevent timing oracle attacks where an
-    attacker could measure response times to determine how many characters
-    of a key hash match.
-
-    Note: This function deliberately iterates through ALL stored keys even
-    after finding a match, to ensure constant-time execution regardless of
-    key position. This is O(n) where n is the number of API keys, which is
-    acceptable for typical deployments (<1000 keys). For deployments with
-    significantly more keys, consider alternative constant-time lookup
-    strategies or rate-limiting at the network layer.
-
-    Args:
-        key_hash: Hex-encoded BLAKE3 hash of the API key.
-
-    Returns:
-        ApiKeyRecord if found, None otherwise.
-    """
-    # Iterate through all stored keys and use constant-time comparison
-    # This prevents timing attacks based on early dictionary key rejection
-    found_record: ApiKeyRecord | None = None
-    for stored_hash, record in _api_key_store.items():
-        if _constant_time_equals(stored_hash, key_hash):
-            found_record = record
-    return found_record
-
-
 def _append_security_audit_event(event: str, details: dict[str, Any]) -> None:
     """Append a security audit event to the append-only ledger."""
     payload = {
@@ -551,69 +494,15 @@ def _append_security_audit_event(event: str, details: dict[str, Any]) -> None:
     )
 
 
-def _load_api_keys_from_env() -> None:
-    """Load API keys once from OLYMPUS_API_KEYS_JSON or OLYMPUS_FOIA_API_KEYS.
-
-    Checks OLYMPUS_API_KEYS_JSON first; falls back to OLYMPUS_FOIA_API_KEYS so
-    operators only need to configure one variable.
-    """
-    global _api_keys_loaded
-    if _api_keys_loaded:
-        return
-    _api_keys_loaded = True
-    # Prefer OLYMPUS_API_KEYS_JSON; fall back to OLYMPUS_FOIA_API_KEYS for consolidated config
-    raw_str = os.environ.get("OLYMPUS_API_KEYS_JSON") or os.environ.get(
-        "OLYMPUS_FOIA_API_KEYS", "[]"
-    )
-    try:
-        raw = json.loads(raw_str)
-    except json.JSONDecodeError as exc:
-        raise ValueError("API keys env var must be valid JSON") from exc
-    for item in raw:
-        if "key_hash" not in item:
-            raise ValueError(
-                "API keys must contain hashed API keys under 'key_hash' "
-                "(hex-encoded). Raw API keys are not accepted."
-            )
-        _register_hashed_api_key(
-            key_hash=item["key_hash"],
-            key_id=item.get("key_id", "default"),
-            scopes=set(item.get("scopes", ["ingest", "commit", "verify"])),
-            expires_at=item.get("expires_at", "2099-01-01T00:00:00Z"),
-        )
-
-
 def _register_api_key_for_tests(
     api_key: str, key_id: str, scopes: set[str], expires_at: str
 ) -> None:  # pragma: no cover - test utility
-    """Register hashed API key (used by env bootstrap and tests)."""
-    key_hash = _hash_api_key(api_key)
-    _api_key_store[key_hash] = ApiKeyRecord(
-        key_id=key_id,
-        key_hash=key_hash,
-        scopes=scopes,
-        expires_at=_parse_timestamp(expires_at),
-    )
-    _append_security_audit_event(
-        "api_key_registered",
-        {"key_id": key_id, "scopes": sorted(scopes), "expires_at": expires_at},
-    )
+    """Register hashed API key (used by env bootstrap and tests).
 
-
-def _register_hashed_api_key(key_hash: str, key_id: str, scopes: set[str], expires_at: str) -> None:
-    """Register a pre-hashed API key (preferred for production bootstrap)."""
-    try:
-        decoded = bytes.fromhex(key_hash)
-    except ValueError as exc:
-        raise ValueError("key_hash must be hex-encoded") from exc
-    if len(decoded) != 32:
-        raise ValueError("key_hash must be 32 bytes (64 hex characters)")
-    _api_key_store[key_hash] = ApiKeyRecord(
-        key_id=key_id,
-        key_hash=key_hash,
-        scopes=scopes,
-        expires_at=_parse_timestamp(expires_at),
-    )
+    This delegates to the unified auth module's key registration to ensure
+    that all authentication paths share the same key store.
+    """
+    _auth_register_api_key_for_tests(api_key, key_id, scopes, expires_at)
     _append_security_audit_event(
         "api_key_registered",
         {"key_id": key_id, "scopes": sorted(scopes), "expires_at": expires_at},
@@ -622,14 +511,14 @@ def _register_hashed_api_key(key_hash: str, key_id: str, scopes: set[str], expir
 
 def _reset_ingest_state_for_tests() -> None:  # pragma: no cover - test utility
     """Reset in-memory ingestion, auth, and rate-limit state and enable test mode."""
-    global _write_ledger, _api_keys_loaded, _storage, _signing_key, _TEST_MODE
+    global _write_ledger, _storage, _signing_key, _TEST_MODE
     # L4-F: Enable test mode to allow in-memory storage
     _TEST_MODE = True
     storage = _storage
     _ingestion_store.clear()
     _content_index.clear()
-    _api_key_store.clear()
-    _api_keys_loaded = False
+    # Reset the unified auth module's key store
+    _reset_auth_state_for_tests()
     _storage = None
     _signing_key = None
     # L5-C: Acquire lock when clearing rate-limit buckets
@@ -689,17 +578,6 @@ def _client_ip(request: Request) -> str:
                 return forwarded_ip
 
     return peer_ip or "unknown"
-
-
-def _extract_api_key(request: Request) -> str:
-    """Extract API key from X-API-Key header or Authorization: Bearer token."""
-    header_key = request.headers.get("x-api-key")
-    if header_key:
-        return header_key
-    authz = request.headers.get("authorization", "")
-    if authz.lower().startswith("bearer "):
-        return authz[7:].strip()
-    raise HTTPException(status_code=401, detail="API key is required")
 
 
 def _get_bucket(buckets: OrderedDict[str, TokenBucket], subject: str, action: str) -> TokenBucket:
@@ -787,39 +665,32 @@ def _consume_rate_limit(subject_type: str, subject: str, action: str) -> bool:
         return bucket.consume()
 
 
-def _authorize_and_rate_limit(request: Request, action: str) -> ApiKeyRecord:
-    """Authenticate API key, enforce scope/expiry, and apply token buckets."""
-    _load_api_keys_from_env()
-    api_key = _extract_api_key(request)
-    key_hash = _hash_api_key(api_key)
-    # L4-D: Use constant-time lookup to prevent timing oracle attacks
-    record = _constant_time_api_key_lookup(key_hash)
-    client_ip = _client_ip(request)
-    if record is None:
-        _append_security_audit_event("api_key_invalid", {"client_ip": client_ip, "action": action})
-        raise HTTPException(status_code=401, detail="Invalid API key")
-    if datetime.now(timezone.utc) >= record.expires_at:
-        _append_security_audit_event(
-            "api_key_expired", {"key_id": record.key_id, "client_ip": client_ip, "action": action}
-        )
-        raise HTTPException(status_code=401, detail="API key expired")
-    if action not in record.scopes:
-        _append_security_audit_event(
-            "api_key_scope_denied",
-            {"key_id": record.key_id, "client_ip": client_ip, "action": action},
-        )
-        raise HTTPException(status_code=403, detail=f"API key lacks required scope: {action}")
+def _apply_rate_limits(request: Request, api_key_id: str, action: str) -> None:
+    """Apply rate limiting for API key and IP after authentication.
 
-    if not _consume_rate_limit("api_key", record.key_id, action):
+    This function is called after successful authentication to enforce
+    per-key and per-IP rate limits for ingest operations.
+
+    Args:
+        request: The incoming HTTP request.
+        api_key_id: The authenticated API key ID.
+        action: The action being performed (e.g., 'ingest', 'commit', 'verify').
+
+    Raises:
+        HTTPException 429: If rate limit is exceeded.
+    """
+    client_ip = _client_ip(request)
+
+    if not _consume_rate_limit("api_key", api_key_id, action):
         logger.warning(
             "rate_limit_hit",
-            extra={"dimension": "api_key", "key_id": record.key_id, "action": action},
+            extra={"dimension": "api_key", "key_id": api_key_id, "action": action},
         )
         _append_security_audit_event(
             "rate_limit_hit",
             {
                 "dimension": "api_key",
-                "key_id": record.key_id,
+                "key_id": api_key_id,
                 "client_ip": client_ip,
                 "action": action,
             },
@@ -833,10 +704,9 @@ def _authorize_and_rate_limit(request: Request, action: str) -> ApiKeyRecord:
         )
         _append_security_audit_event(
             "rate_limit_hit",
-            {"dimension": "ip", "key_id": record.key_id, "client_ip": client_ip, "action": action},
+            {"dimension": "ip", "key_id": api_key_id, "client_ip": client_ip, "action": action},
         )
         raise HTTPException(status_code=429, detail="Rate limit exceeded for IP address")
-    return record
 
 
 def _parse_content_hash(content_hash: str) -> bytes:
@@ -1025,7 +895,9 @@ async def _process_record_canonicalization(
 
 
 @router.post("/records", response_model=BatchIngestionResponse)
-async def ingest_batch(batch: BatchIngestionRequest, request: Request) -> BatchIngestionResponse:
+async def ingest_batch(
+    batch: BatchIngestionRequest, request: Request, _api_key: RequireIngestScope
+) -> BatchIngestionResponse:
     """
     Atomically ingest a batch of records.
 
@@ -1047,7 +919,8 @@ async def ingest_batch(batch: BatchIngestionRequest, request: Request) -> BatchI
     Returns:
         Ingestion results with proof IDs.
     """
-    _authorize_and_rate_limit(request, action="ingest")
+    # Apply rate limiting after authentication
+    _apply_rate_limits(request, _api_key.key_id, "ingest")
 
     # Validate batch is not empty
     if not batch.records:
@@ -1360,7 +1233,7 @@ async def get_ingestion_proof(proof_id: str) -> IngestionProofResponse:
 
 @router.get("/records/hash/{content_hash}/verify", response_model=HashVerificationResponse)
 async def verify_ingested_content_hash(
-    content_hash: str, request: Request
+    content_hash: str, request: Request, _api_key: RequireVerifyScope
 ) -> HashVerificationResponse:
     """
     Verify that a committed BLAKE3 content hash exists in the ingestion store.
@@ -1369,7 +1242,9 @@ async def verify_ingested_content_hash(
     verification result so public portals can display both the commitment data and
     the verifiable transcript needed for independent re-checking.
     """
-    _authorize_and_rate_limit(request, action="verify")
+    # Apply rate limiting after authentication
+    _apply_rate_limits(request, _api_key.key_id, "verify")
+
     with timed_operation("verify") as span:
         normalized_hash = _parse_content_hash(content_hash).hex()
         span.set_attribute("content_hash", normalized_hash)
@@ -1386,10 +1261,12 @@ async def verify_ingested_content_hash(
 
 @router.post("/proofs/verify", response_model=ProofVerificationResponse)
 async def verify_submitted_proof_bundle(
-    proof_request: ProofVerificationRequest, request: Request
+    proof_request: ProofVerificationRequest, request: Request, _api_key: RequireVerifyScope
 ) -> ProofVerificationResponse:
     """Verify an externally supplied proof bundle without persisting it."""
-    _authorize_and_rate_limit(request, action="verify")
+    # Apply rate limiting after authentication
+    _apply_rate_limits(request, _api_key.key_id, "verify")
+
     normalized_hash, normalized_root, content_hash_matches, merkle_proof_valid = (
         _evaluate_proof_bundle(
             proof_request.content_hash,
@@ -1413,10 +1290,12 @@ async def verify_submitted_proof_bundle(
 
 @router.post("/proofs", response_model=ProofSubmissionResponse)
 async def submit_proof_bundle(
-    proof_request: ProofSubmissionRequest, request: Request
+    proof_request: ProofSubmissionRequest, request: Request, _api_key: RequireVerifyScope
 ) -> ProofSubmissionResponse:
     """Accept a verified proof bundle so it can be retrieved through the API later."""
-    _authorize_and_rate_limit(request, action="verify")
+    # Apply rate limiting after authentication
+    _apply_rate_limits(request, _api_key.key_id, "verify")
+
     normalized_hash, normalized_root, content_hash_matches, merkle_proof_valid = (
         _evaluate_proof_bundle(
             proof_request.content_hash,
@@ -1510,7 +1389,7 @@ class ArtifactCommitResponse(BaseModel):
 
 @router.post("/commit", response_model=ArtifactCommitResponse)
 async def commit_artifact(
-    request: ArtifactCommitRequest, http_request: Request
+    request: ArtifactCommitRequest, http_request: Request, _api_key: RequireCommitScope
 ) -> ArtifactCommitResponse:
     """
     Commit a pre-computed artifact hash to the Olympus ledger.
@@ -1528,7 +1407,9 @@ async def commit_artifact(
     Returns:
         Commitment response with proof_id and ledger anchor details.
     """
-    _authorize_and_rate_limit(http_request, action="commit")
+    # Apply rate limiting after authentication
+    _apply_rate_limits(http_request, _api_key.key_id, "commit")
+
     shard_id = f"artifacts/{request.namespace}"
     batch_id = str(uuid.uuid4())
     poseidon_root_input = request.poseidon_root
