@@ -193,7 +193,12 @@ class ProofVerificationResponse(BaseModel):
 class ProofSubmissionRequest(ProofVerificationRequest):
     """Proof bundle payload that can be submitted to the API for later retrieval."""
 
-    record_id: str = Field(..., description="Record identifier associated with the proof bundle")
+    record_id: str = Field(
+        ...,
+        description="Record identifier associated with the proof bundle",
+        max_length=_IDENTIFIER_MAX_LEN,
+        pattern=_IDENTIFIER_PATTERN,
+    )
     shard_id: str = Field(..., description="Shard identifier associated with the proof bundle")
     ledger_entry_hash: str = Field(..., description="Ledger entry anchoring the proof bundle")
     timestamp: str = Field(..., description="ISO 8601 timestamp associated with the bundle")
@@ -1244,7 +1249,7 @@ async def ingest_batch(batch: BatchIngestionRequest, request: Request) -> BatchI
                 )
                 ledger_entry_hash = ledger_entry.entry_hash
                 ledger_height = len(_write_ledger.entries)
-                LEDGER_HEIGHT.labels(shard_id=shard_id).set(ledger_height)
+                LEDGER_HEIGHT.set(ledger_height)
                 span.set_attribute("ledger_height", ledger_height)
 
                 # Store proof metadata for each new record
@@ -1681,7 +1686,7 @@ async def commit_artifact(
             canonicalization=canonicalization,
         )
         ledger_height = len(_write_ledger.entries)
-        LEDGER_HEIGHT.labels(shard_id=shard_id).set(ledger_height)
+        LEDGER_HEIGHT.set(ledger_height)
         span.set_attribute("ledger_height", ledger_height)
 
         ts = current_timestamp()

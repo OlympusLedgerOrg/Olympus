@@ -376,6 +376,36 @@ class TestSubmittedProofBundles:
 
         assert resp.status_code == 400
 
+    def test_submit_external_proof_bundle_invalid_record_id_returns_422(self, client: TestClient):
+        content_hash_bytes = hash_bytes(b"invalid-record-id-proof")
+        tree = MerkleTree([content_hash_bytes])
+        merkle_proof = tree.generate_proof(0)
+
+        resp = client.post(
+            "/ingest/proofs",
+            json={
+                "record_id": "external-doc$invalid",
+                "shard_id": "shard-external-proof",
+                "content_hash": content_hash_bytes.hex(),
+                "merkle_root": tree.get_root().hex(),
+                "merkle_proof": {
+                    "leaf_hash": merkle_proof.leaf_hash.hex(),
+                    "leaf_index": merkle_proof.leaf_index,
+                    "siblings": [],
+                    "root_hash": merkle_proof.root_hash.hex(),
+                    "proof_version": merkle_proof.proof_version,
+                    "tree_version": merkle_proof.tree_version,
+                    "epoch": merkle_proof.epoch,
+                    "tree_size": merkle_proof.tree_size,
+                },
+                "ledger_entry_hash": "cd" * 32,
+                "timestamp": "2026-01-01T00:00:00Z",
+                "canonicalization": {"content_type": "application/octet-stream"},
+            },
+        )
+
+        assert resp.status_code == 422
+
 
 # ---------------------------------------------------------------------------
 # POST /ingest/commit

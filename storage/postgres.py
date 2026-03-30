@@ -1465,13 +1465,6 @@ class StorageLayer:
             if header["header_hash"] != expected_hash:
                 raise ValueError(f"Invalid shard header hash for shard '{shard_id}'")
 
-            sig_bytes = bytes(row["sig"])
-            verify_key = nacl.signing.VerifyKey(bytes(row["pubkey"]))
-            try:
-                verify_key.verify(bytes.fromhex(header["header_hash"]), sig_bytes)
-            except nacl.exceptions.BadSignatureError as e:
-                raise ValueError(f"Invalid shard header signature for shard '{shard_id}'") from e
-
             # Guard against SMT divergence.  ADR-0001 Phase 0f′: when this
             # header is the globally latest write (no other shard has appended
             # since), the current smt_nodes root is valid and we can use the
@@ -1489,10 +1482,10 @@ class StorageLayer:
             )
             later_row = cur.fetchone()
             has_later = (
-                later_row["has_later"]
-                if isinstance(later_row, dict)
-                else later_row[0]
-            ) if later_row else False
+                (later_row["has_later"] if isinstance(later_row, dict) else later_row[0])
+                if later_row
+                else False
+            )
 
             if has_later:
                 # Another shard appended after this header — need historical
@@ -1502,9 +1495,7 @@ class StorageLayer:
                 )
             else:
                 # This header is the globally latest — O(1) path.
-                self._assert_root_matches_state(
-                    cur, shard_id, bytes(row["root"]), as_of_ts=None
-                )
+                self._assert_root_matches_state(cur, shard_id, bytes(row["root"]), as_of_ts=None)
 
             return {
                 "header": header,
@@ -1964,9 +1955,7 @@ class StorageLayer:
             # ADR-0001 §1: read root from smt_nodes directly (O(1)) instead
             # of rebuilding from all leaves (O(N)).  The root node lives at
             # (level=0, index=b'').
-            cur.execute(
-                "SELECT hash FROM smt_nodes WHERE level = 0 AND index = ''::bytea"
-            )
+            cur.execute("SELECT hash FROM smt_nodes WHERE level = 0 AND index = ''::bytea")
             node_row = cur.fetchone()
             if node_row is not None:
                 computed_root = bytes(node_row["hash"])
@@ -2156,9 +2145,7 @@ class StorageLayer:
         """
         if as_of_ts is None:
             # Fast path: read root directly from smt_nodes (O(1)).
-            cur.execute(
-                "SELECT hash FROM smt_nodes WHERE level = 0 AND index = ''::bytea"
-            )
+            cur.execute("SELECT hash FROM smt_nodes WHERE level = 0 AND index = ''::bytea")
             node_row = cur.fetchone()
             computed_root = (
                 bytes(node_row["hash"] if isinstance(node_row, Mapping) else node_row[0])

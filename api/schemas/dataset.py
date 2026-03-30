@@ -35,7 +35,7 @@ class DatasetCommitRequest(BaseModel):
     # Dataset identity
     dataset_name: str = Field(..., max_length=256)
     dataset_version: str = Field(..., max_length=64)
-    source_uri: str = Field(..., max_length=2048)
+    source_uri: str = Field(..., max_length=2048, pattern=r"^https?://.+")
     canonical_namespace: str = Field(..., max_length=256)
     granularity: Literal["file", "record", "shard"]
 

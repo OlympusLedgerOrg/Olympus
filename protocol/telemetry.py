@@ -32,7 +32,7 @@ Record a completed proof::
     from protocol.telemetry import PROOF_LATENCY, LEDGER_HEIGHT
 
     PROOF_LATENCY.labels(operation="commit").observe(elapsed_seconds)
-    LEDGER_HEIGHT.labels(shard_id=shard_id).set(new_height)
+    LEDGER_HEIGHT.set(new_height)
 
 Alert on SMT root divergence::
 
@@ -142,11 +142,10 @@ try:  # pragma: no cover
         buckets=(0.001, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0),
     )
 
-    # Current ledger height (number of committed entries) per shard.
+    # Current ledger height (number of committed entries).
     LEDGER_HEIGHT = _prom.Gauge(
         "olympus_ledger_height",
-        "Current number of entries in the append-only ledger per shard",
-        labelnames=["shard_id"],
+        "Current number of entries in the append-only ledger",
     )
 
     # Total number of SMT root divergence events detected.
@@ -154,7 +153,6 @@ try:  # pragma: no cover
     SMT_DIVERGENCE_TOTAL = _prom.Counter(
         "olympus_smt_root_divergence_total",
         "Number of times an SMT root mismatch was detected between nodes",
-        labelnames=["shard_id"],
     )
 
     # Total number of ingest operations by outcome.
@@ -260,10 +258,7 @@ def timed_operation(
 
 
 def record_smt_divergence(
-    shard_id: str,
-    local_root: str,
-    remote_root: str,
-    remote_node: str,
+    shard_id: str, local_root: str, remote_root: str, remote_node: str
 ) -> None:
     """
     Record an SMT root divergence event between the local node and a remote peer.
@@ -289,7 +284,7 @@ def record_smt_divergence(
         remote_root: Hex-encoded SMT root reported by the remote node.
         remote_node: Identifier (URL or node ID) of the remote peer.
     """
-    SMT_DIVERGENCE_TOTAL.labels(shard_id=shard_id).inc()
+    SMT_DIVERGENCE_TOTAL.inc()
     logger.warning(
         "smt_root_divergence_detected",
         extra={

@@ -166,8 +166,7 @@ def test_persist_tree_nodes_uses_upsert_without_precheck(monkeypatch: pytest.Mon
     insert_stmts = [s for s in cursor.statements if s.startswith("INSERT")]
     assert insert_stmts, "expected at least one INSERT statement"
     assert all(
-        "ON CONFLICT (level, index)" in sql
-        and "DO UPDATE SET hash = EXCLUDED.hash" in sql
+        "ON CONFLICT (level, index)" in sql and "DO UPDATE SET hash = EXCLUDED.hash" in sql
         for sql in insert_stmts
     )
 

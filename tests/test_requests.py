@@ -78,7 +78,9 @@ async def test_create_request(client):
 @pytest.mark.asyncio
 async def test_create_request_rejects_lone_surrogate(client):
     """POST /requests surfaces hashing Unicode errors without nested detail."""
-    with patch("api.routers.requests.hash_request", side_effect=ValueError("surrogates not allowed")):
+    with patch(
+        "api.routers.requests.hash_request", side_effect=ValueError("surrogates not allowed")
+    ):
         resp = await client.post("/requests", json=REQUEST_BODY)
     assert resp.status_code == 422
     detail = resp.json()["detail"]

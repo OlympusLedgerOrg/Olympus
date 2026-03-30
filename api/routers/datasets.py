@@ -464,6 +464,7 @@ async def get_dataset(
 async def verify_dataset(
     dataset_id: str,
     db: DBSession,
+    _api_key: RequireAPIKey,
     _rl: RateLimit,
 ) -> DatasetVerifyResponse:
     """Run independent verification checks on a committed dataset.

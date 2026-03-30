@@ -155,7 +155,9 @@ class TestConsumeRateLimit:
         )
 
         calls = mock_cursor.execute.call_args_list
-        assert len(calls) >= 3, f"Expected at least 3 SQL calls (INSERT + SELECT + UPDATE), got {len(calls)}"
+        assert len(calls) >= 3, (
+            f"Expected at least 3 SQL calls (INSERT + SELECT + UPDATE), got {len(calls)}"
+        )
         insert_sql = calls[0][0][0]
         update_sql = calls[2][0][0]
 

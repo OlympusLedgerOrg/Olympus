@@ -6,6 +6,7 @@ import ipaddress
 import json
 import logging
 import os
+import socket
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, cast
@@ -45,6 +46,36 @@ _BLOCKED_RANGES = [
     ipaddress.ip_network("::1/128"),  # IPv6 loopback
     ipaddress.ip_network("fc00::/7"),  # IPv6 unique local
 ]
+
+
+def _normalize_ip_for_ssrf_check(
+    addr: ipaddress.IPv4Address | ipaddress.IPv6Address,
+) -> ipaddress.IPv4Address | ipaddress.IPv6Address:
+    """Normalize IP addresses for SSRF range checks."""
+    if isinstance(addr, ipaddress.IPv6Address) and addr.ipv4_mapped is not None:
+        return addr.ipv4_mapped
+    return addr
+
+
+def _is_blocked_ip_for_ssrf(
+    addr: ipaddress.IPv4Address | ipaddress.IPv6Address,
+) -> bool:
+    """Return True when an address is in a blocked SSRF range."""
+    normalized_addr = _normalize_ip_for_ssrf_check(addr)
+    for blocked in _BLOCKED_RANGES:
+        blocked_network: ipaddress.IPv4Network | ipaddress.IPv6Network = blocked
+        if (
+            isinstance(blocked_network, ipaddress.IPv6Network)
+            and blocked_network.network_address.ipv4_mapped is not None
+        ):
+            mapped_network_address = blocked_network.network_address.ipv4_mapped
+            prefixlen = max(blocked_network.prefixlen - 96, 0)
+            blocked_network = ipaddress.ip_network(
+                f"{mapped_network_address}/{prefixlen}", strict=False
+            )
+        if normalized_addr in blocked_network:
+            return True
+    return False
 
 
 API_BASE = os.environ.get("UI_API_BASE", "http://127.0.0.1:8000")
@@ -87,9 +118,11 @@ def validate_federation_url(url: str) -> None:
 
     try:
         addr = ipaddress.ip_address(hostname)
-        for blocked in _BLOCKED_RANGES:
-            if addr in blocked:
-                raise ValueError(f"Federation URL resolves to blocked address range: {addr}")
+        if _is_blocked_ip_for_ssrf(addr):
+            raise ValueError(
+                f"Federation URL resolves to blocked address range: "
+                f"{_normalize_ip_for_ssrf_check(addr)}"
+            )
     except ValueError as exc:
         if (
             "blocked address range" in str(exc)
@@ -97,11 +130,33 @@ def validate_federation_url(url: str) -> None:
             or "has no hostname" in str(exc)
         ):
             raise  # re-raise our own errors
-        # hostname is a domain name, not an IP — DNS resolution check would require async
-        # For now, log a warning that DNS-based SSRF is not fully mitigated
-        logger.warning(
-            "Federation URL %s uses a hostname — DNS rebinding SSRF not fully mitigated", url
-        )
+        try:
+            port = parsed.port or (443 if parsed.scheme == "https" else 80)
+            addrinfo = socket.getaddrinfo(hostname, port, type=socket.SOCK_STREAM)
+        except socket.gaierror as dns_error:
+            raise ValueError(
+                f"Federation URL hostname could not be resolved: {hostname}:{port}"
+            ) from dns_error
+
+        resolved_any = False
+        for info in addrinfo:
+            sockaddr = info[4]
+            if not sockaddr:
+                continue
+            resolved_ip = sockaddr[0]
+            try:
+                resolved_addr = ipaddress.ip_address(resolved_ip)
+            except ValueError:
+                continue
+            resolved_any = True
+            if _is_blocked_ip_for_ssrf(resolved_addr):
+                raise ValueError(
+                    f"Federation URL hostname resolves to blocked address range: "
+                    f"{_normalize_ip_for_ssrf_check(resolved_addr)}"
+                )
+
+        if not resolved_any:
+            raise ValueError(f"Federation URL hostname has no resolvable IP addresses: {hostname}")
 
 
 def _load_federation_nodes() -> dict[str, str]:
@@ -187,11 +242,10 @@ _SECURITY_HEADERS: dict[str, str] = {
     "X-Content-Type-Options": "nosniff",
     "X-Frame-Options": "DENY",
     "Referrer-Policy": "strict-origin-when-cross-origin",
-    # TODO: Replace unsafe-inline with nonces after frontend refactor
     "Content-Security-Policy": (
         "default-src 'self'; "
         "script-src 'self'; "
-        "style-src 'self' 'unsafe-inline'; "
+        "style-src 'self'; "
         "img-src 'self' data:; "
         "connect-src 'self'; "
         "frame-ancestors 'none';"

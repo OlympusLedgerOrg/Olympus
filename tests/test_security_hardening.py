@@ -78,6 +78,9 @@ class TestIpInRanges:
         # Invalid range entries are silently skipped
         assert _ip_in_ranges("10.0.0.1", ["bad-range", "10.0.0.0/8"]) is True
 
+    def test_ipv4_mapped_ipv6_matches_ipv4_range(self):
+        assert _ip_in_ranges("::ffff:127.0.0.1", ["127.0.0.0/8"]) is True
+
 
 class TestGetClientIp:
     """Unit tests for _get_client_ip with trusted proxy validation."""

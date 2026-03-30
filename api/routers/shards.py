@@ -382,7 +382,7 @@ async def metrics(_api_key: RequireAPIKey, _rl: RateLimit) -> Any:
 
     Metrics exposed:
     - ``olympus_proof_generation_seconds`` — histogram of proof latency by operation.
-    - ``olympus_ledger_height`` — current ledger height per shard.
+    - ``olympus_ledger_height`` — current ledger height.
     - ``olympus_smt_root_divergence_total`` — counter of SMT root divergence events.
     - ``olympus_ingest_operations_total`` — counter of ingest outcomes.
 

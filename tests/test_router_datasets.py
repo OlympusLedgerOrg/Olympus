@@ -14,6 +14,7 @@ Uses in-memory SQLite with aiosqlite and mocks RFC 3161 timestamp requests.
 
 from __future__ import annotations
 
+import json
 import os
 from unittest.mock import MagicMock, patch
 
@@ -23,6 +24,7 @@ import pytest_asyncio
 from httpx import ASGITransport, AsyncClient
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
+import api.auth as auth_module
 from api.deps import get_db
 from api.main import create_app
 from api.models import Base
@@ -31,6 +33,7 @@ from protocol.hashes import (
     blake3_hash,
     compute_dataset_commit_id,
     dataset_key,
+    hash_bytes,
 )
 
 
@@ -341,6 +344,16 @@ async def test_commit_dataset_empty_files_returns_422(client):
     assert resp.status_code == 422
 
 
+@pytest.mark.asyncio
+async def test_commit_dataset_invalid_source_uri_scheme_returns_422(client):
+    """POST /datasets/commit rejects source_uri values without http(s) scheme."""
+    pubkey, _, signing_key = create_signing_keypair()
+    body = build_commit_request(pubkey, signing_key, source_uri="ftp://example.com/data.csv")
+
+    resp = await client.post("/datasets/commit", json=body)
+    assert resp.status_code == 422
+
+
 # ---------------------------------------------------------------------------
 # GET /datasets Tests
 # ---------------------------------------------------------------------------
@@ -583,6 +596,63 @@ async def test_verify_dataset_with_rfc3161_status(client):
     data = resp.json()
     # RFC 3161 status should be in checks
     assert "rfc3161_valid" in data["checks"]
+
+
+@pytest.mark.asyncio
+async def test_verify_dataset_requires_api_key_outside_development(monkeypatch, db_engine):
+    """GET /datasets/{dataset_id}/verify requires API key auth in non-development mode."""
+    original_loaded = auth_module._keys_loaded
+    original_store = dict(auth_module._key_store)
+    original_env = os.environ.get("OLYMPUS_FOIA_API_KEYS")
+    test_key = "dataset-verify-key"
+    test_key_hash = hash_bytes(test_key.encode("utf-8")).hex()
+    fake_dataset_id = "0" * 64
+    session_factory = async_sessionmaker(db_engine, expire_on_commit=False, class_=AsyncSession)
+
+    try:
+        auth_module._keys_loaded = False
+        auth_module._key_store.clear()
+        monkeypatch.setenv("OLYMPUS_ENV", "production")
+        monkeypatch.setenv(
+            "OLYMPUS_FOIA_API_KEYS",
+            json.dumps(
+                [
+                    {
+                        "key_hash": test_key_hash,
+                        "key_id": "dataset-verify-key",
+                        "scopes": ["read", "write"],
+                        "expires_at": "2099-01-01T00:00:00Z",
+                    }
+                ]
+            ),
+        )
+
+        async def override_get_db():
+            async with session_factory() as session:
+                yield session
+
+        app = create_app()
+        app.dependency_overrides[get_db] = override_get_db
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
+            unauthenticated = await ac.get(f"/datasets/{fake_dataset_id}/verify")
+            assert unauthenticated.status_code == 401
+
+        async with AsyncClient(
+            transport=ASGITransport(app=app),
+            base_url="http://test",
+            headers={"X-API-Key": test_key},
+        ) as ac:
+            authorized = await ac.get(f"/datasets/{fake_dataset_id}/verify")
+            assert authorized.status_code == 200
+            assert authorized.json()["verified"] is False
+    finally:
+        auth_module._keys_loaded = original_loaded
+        auth_module._key_store.clear()
+        auth_module._key_store.update(original_store)
+        if original_env is None:
+            os.environ.pop("OLYMPUS_FOIA_API_KEYS", None)
+        else:
+            os.environ["OLYMPUS_FOIA_API_KEYS"] = original_env
 
 
 # ---------------------------------------------------------------------------
