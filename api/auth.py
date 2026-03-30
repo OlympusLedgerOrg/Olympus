@@ -73,6 +73,15 @@ def _load_keys() -> None:
 
 def _load_keys_locked() -> None:
     """Internal: load keys from env into _key_store. Must be called with _load_keys_lock held."""
+    _load_keys_into(_key_store)
+
+
+def _load_keys_into(target: dict[str, _APIKeyRecord]) -> None:
+    """Parse OLYMPUS_FOIA_API_KEYS and populate *target*.
+
+    Raises:
+        ValueError: On JSON parse error or missing required fields.
+    """
     raw = os.environ.get("OLYMPUS_FOIA_API_KEYS", "[]")
     try:
         entries = json.loads(raw)
@@ -95,20 +104,23 @@ def _load_keys_locked() -> None:
             )
         except (ValueError, AttributeError) as exc:
             raise ValueError(f"Invalid expires_at for key {key_id}: {expires_at_str}") from exc
-        _key_store[key_hash] = _APIKeyRecord(
+        target[key_hash] = _APIKeyRecord(
             key_id=key_id,
             key_hash=key_hash,
             scopes=scopes,
             expires_at=expires_at,
         )
-    if _key_store:
-        logger.info("Loaded %d FOIA API key(s)", len(_key_store))
+    if target:
+        logger.info("Loaded %d FOIA API key(s)", len(target))
 
 
 def reload_keys() -> int:
     """Force a reload of API keys from OLYMPUS_FOIA_API_KEYS.
 
-    Clears the current key store and re-reads from the environment variable.
+    Loads keys into a temporary store first, then atomically replaces the
+    live store only on success.  If loading fails, the existing keys remain
+    active and the error is propagated to the caller.
+
     Returns the number of keys loaded after the reload.
 
     This allows hot key rotation and revocation without restarting the process.
@@ -116,8 +128,13 @@ def reload_keys() -> int:
     """
     global _keys_loaded
     with _load_keys_lock:
+        # Load into a temporary store so that a parse error does not leave
+        # the live key store empty (clear-then-fail would lock out all callers).
+        _tmp_store: dict[str, _APIKeyRecord] = {}
+        _load_keys_into(_tmp_store)
+        # Swap atomically only after successful load.
         _key_store.clear()
-        _load_keys_locked()
+        _key_store.update(_tmp_store)
         _keys_loaded = True
     logger.info("API keys reloaded: %d key(s) active", len(_key_store))
     return len(_key_store)
@@ -326,19 +343,32 @@ class RedisRateLimitBackend:
         )
 
 
-def _create_rate_limit_backend() -> MemoryRateLimitBackend | RedisRateLimitBackend:
-    """Instantiate the configured rate limit backend."""
+def _create_rate_limit_backend() -> MemoryRateLimitBackend:
+    """Instantiate the rate limit backend for the current configuration.
+
+    Currently only the ``'memory'`` backend is supported.  Requesting
+    ``RATE_LIMIT_BACKEND=redis`` raises :exc:`ValueError` at startup so the
+    misconfiguration is caught early rather than silently failing at request
+    time.  When a Redis backend is implemented, this function will return the
+    appropriate type and the return annotation should be widened accordingly.
+
+    Raises:
+        ValueError: If ``RATE_LIMIT_BACKEND`` is ``'redis'`` (not yet
+            implemented) or an unknown value.
+    """
     settings = get_settings()
     backend_type = settings.rate_limit_backend.lower()
 
     if backend_type == "redis":
-        if not settings.rate_limit_redis_url:
-            raise ValueError("RATE_LIMIT_REDIS_URL must be set when RATE_LIMIT_BACKEND=redis")
-        return RedisRateLimitBackend(settings.rate_limit_redis_url)
+        raise ValueError(
+            "Redis rate limit backend is not yet implemented. "
+            "Use RATE_LIMIT_BACKEND=memory (default) for now. "
+            "Contributions to implement the Redis backend are welcome."
+        )
 
     if backend_type != "memory":
         raise ValueError(
-            f"Unknown RATE_LIMIT_BACKEND: {backend_type!r}. Options: 'memory', 'redis'"
+            f"Unknown RATE_LIMIT_BACKEND: {backend_type!r}. Options: 'memory'"
         )
 
     # Warn if memory backend is used with multiple workers
@@ -348,7 +378,7 @@ def _create_rate_limit_backend() -> MemoryRateLimitBackend | RedisRateLimitBacke
             logger.warning(
                 "RATE_LIMIT_BACKEND=memory with WEB_CONCURRENCY=%s — "
                 "rate limits are per-process; effective limit is %s× configured value. "
-                "Consider switching to RATE_LIMIT_BACKEND=redis for shared state.",
+                "Consider switching to RATE_LIMIT_BACKEND=redis once implemented.",
                 workers,
                 workers,
             )
@@ -358,10 +388,10 @@ def _create_rate_limit_backend() -> MemoryRateLimitBackend | RedisRateLimitBacke
     return MemoryRateLimitBackend()
 
 
-_rate_limit_backend: MemoryRateLimitBackend | RedisRateLimitBackend | None = None
+_rate_limit_backend: MemoryRateLimitBackend | None = None
 
 
-def _get_backend() -> MemoryRateLimitBackend | RedisRateLimitBackend:
+def _get_backend() -> MemoryRateLimitBackend:
     """Lazy-initialise and return the rate limit backend singleton."""
     global _rate_limit_backend
     if _rate_limit_backend is None:

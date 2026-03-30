@@ -62,6 +62,10 @@ _MAX_OBSERVATIONS: int = 500_000
 # oldest entries once _MAX_OBSERVATIONS is reached, preventing unbounded memory
 # growth under sustained load.
 #
+# _observations_by_seq is a secondary index keyed by sequence number for O(1)
+# lookups in get_checkpoint_by_sequence().  It mirrors _observations and is
+# updated atomically with it.
+#
 # Upgrade path: replace with an async DB-backed repository that implements the
 # same get/set interface used below.
 #
@@ -71,6 +75,10 @@ _MAX_OBSERVATIONS: int = 500_000
 # workers=1 (single-process mode) until the DB upgrade is complete.
 # ---------------------------------------------------------------------------
 _observations: OrderedDict[str, WitnessAnnouncement] = OrderedDict()
+
+# Secondary index: sequence number → first WitnessAnnouncement seen for that sequence.
+# Allows O(1) lookups in get_checkpoint_by_sequence() instead of O(n) linear scans.
+_observations_by_seq: dict[int, WitnessAnnouncement] = {}
 
 # Bounded nonce set for replay-resistance.  Tracks recently seen nonces
 # to reject duplicate submissions.  Uses OrderedDict for O(1) lookup and
@@ -120,15 +128,10 @@ async def get_checkpoint_by_sequence(sequence: int) -> WitnessAnnouncement:
 
     Raises:
         404: If no announcement for that sequence exists.
-
-    Note:
-        O(n) linear scan over the in-process store is acceptable for Phase 1.
-        The DB-backed upgrade path should add a secondary index on
-        checkpoint.sequence.
     """
-    for announcement in _observations.values():
-        if announcement.checkpoint.sequence == sequence:
-            return announcement
+    announcement = _observations_by_seq.get(sequence)
+    if announcement is not None:
+        return announcement
     raise HTTPException(
         status_code=status.HTTP_404_NOT_FOUND,
         detail=f"No announcement found for sequence {sequence}",
@@ -238,8 +241,15 @@ async def submit_observation(
     # ``while`` (not ``if``) guards against concurrent requests that may have
     # pushed the store past capacity between the check and the insert.
     while len(_observations) >= _MAX_OBSERVATIONS:
-        _observations.popitem(last=False)
+        _, evicted = _observations.popitem(last=False)
+        # Remove from the secondary index only if it still points to the evicted
+        # announcement (another origin may have registered the same sequence).
+        seq = evicted.checkpoint.sequence
+        if _observations_by_seq.get(seq) is evicted:
+            del _observations_by_seq[seq]
     _observations[key] = announcement
+    # Populate secondary index: first announcement wins per sequence number.
+    _observations_by_seq.setdefault(announcement.checkpoint.sequence, announcement)
 
     logger.info(
         "Stored announcement %s: seq=%d hash=%s",
@@ -302,5 +312,6 @@ def clear_observations() -> None:
     Intended for use in tests and maintenance operations.
     """
     _observations.clear()
+    _observations_by_seq.clear()
     _seen_nonces.clear()
     logger.info("Cleared all witness observations and nonce state")

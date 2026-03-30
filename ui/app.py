@@ -135,32 +135,51 @@ app.mount("/static", StaticFiles(directory=str(_STATIC_DIR)), name="static")
 
 @app.middleware("http")
 async def _debug_console_basic_auth(request: Request, call_next: Any) -> JSONResponse:
-    """Enforce HTTP Basic Auth when ``OLYMPUS_DEBUG_CONSOLE_PASSWORD`` is set."""
-    if _DEBUG_CONSOLE_PASSWORD:
-        auth_header = request.headers.get("authorization", "")
-        if not auth_header.startswith("Basic "):
+    """Enforce HTTP Basic Auth when ``OLYMPUS_DEBUG_CONSOLE_PASSWORD`` is set.
+
+    When running in production mode (``OLYMPUS_ENV != 'development'``) and no
+    password is configured, every request is rejected with HTTP 503 to prevent
+    accidental unauthenticated exposure of the debug console.
+    """
+    if not _DEBUG_CONSOLE_PASSWORD:
+        if _ENV != "development":
             return JSONResponse(
-                status_code=401,
-                content={"detail": "Authentication required"},
-                headers={"WWW-Authenticate": 'Basic realm="Olympus Debug Console"'},
+                status_code=503,
+                content={
+                    "detail": (
+                        "Debug console is not available: "
+                        "OLYMPUS_DEBUG_CONSOLE_PASSWORD must be set in production. "
+                        "Set OLYMPUS_ENV=development to allow unauthenticated local access."
+                    )
+                },
             )
-        try:
-            decoded = base64.b64decode(auth_header[6:]).decode("utf-8")
-            _, _, password = decoded.partition(":")
-        except Exception:
-            return JSONResponse(
-                status_code=401,
-                content={"detail": "Invalid credentials"},
-                headers={"WWW-Authenticate": 'Basic realm="Olympus Debug Console"'},
-            )
-        if not hmac.compare_digest(
-            password.encode("utf-8"), _DEBUG_CONSOLE_PASSWORD.encode("utf-8")
-        ):
-            return JSONResponse(
-                status_code=401,
-                content={"detail": "Invalid credentials"},
-                headers={"WWW-Authenticate": 'Basic realm="Olympus Debug Console"'},
-            )
+        # Development mode with no password: allow unauthenticated access.
+        return await call_next(request)
+
+    auth_header = request.headers.get("authorization", "")
+    if not auth_header.startswith("Basic "):
+        return JSONResponse(
+            status_code=401,
+            content={"detail": "Authentication required"},
+            headers={"WWW-Authenticate": 'Basic realm="Olympus Debug Console"'},
+        )
+    try:
+        decoded = base64.b64decode(auth_header[6:]).decode("utf-8")
+        _, _, password = decoded.partition(":")
+    except Exception:
+        return JSONResponse(
+            status_code=401,
+            content={"detail": "Invalid credentials"},
+            headers={"WWW-Authenticate": 'Basic realm="Olympus Debug Console"'},
+        )
+    if not hmac.compare_digest(
+        password.encode("utf-8"), _DEBUG_CONSOLE_PASSWORD.encode("utf-8")
+    ):
+        return JSONResponse(
+            status_code=401,
+            content={"detail": "Invalid credentials"},
+            headers={"WWW-Authenticate": 'Basic realm="Olympus Debug Console"'},
+        )
     return await call_next(request)
 
 

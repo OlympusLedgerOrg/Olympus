@@ -297,6 +297,7 @@ async def ingest_document(
         ),
         related_commit_id=commit_id,
         related_request_id=request_id,
+        display_id=display_id,
         user_friendly_status="✓ Complete",
         details_json=json.dumps(
             {"filename": filename, "doc_hash": doc_hash, "display_id": display_id}
