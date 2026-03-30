@@ -257,7 +257,9 @@ def timed_operation(
 # ---------------------------------------------------------------------------
 
 
-def record_smt_divergence(shard_id: str, local_root: str, remote_root: str, remote_node: str) -> None:
+def record_smt_divergence(
+    shard_id: str, local_root: str, remote_root: str, remote_node: str
+) -> None:
     """
     Record an SMT root divergence event between the local node and a remote peer.
 

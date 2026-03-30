@@ -367,9 +367,7 @@ def _create_rate_limit_backend() -> MemoryRateLimitBackend:
         )
 
     if backend_type != "memory":
-        raise ValueError(
-            f"Unknown RATE_LIMIT_BACKEND: {backend_type!r}. Options: 'memory'"
-        )
+        raise ValueError(f"Unknown RATE_LIMIT_BACKEND: {backend_type!r}. Options: 'memory'")
 
     # Warn if memory backend is used with multiple workers
     workers = os.environ.get("WEB_CONCURRENCY", "")

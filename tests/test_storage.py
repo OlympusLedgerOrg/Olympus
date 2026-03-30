@@ -33,7 +33,7 @@ See docs/08_database_strategy.md for complete database strategy documentation.
 import json
 import os
 import uuid
-from datetime import datetime
+from datetime import datetime, timedelta
 
 
 try:
@@ -815,9 +815,23 @@ def test_smt_nodes_reject_update(storage, signing_key):
         signing_key=signing_key,
     )
 
-    # Target an actual node that exists — level 0 always has the leaf-level node
-    # whose index equals the global key.
-    actual_key = global_key(shard_id, record_key("document", "doc1", 1))
+    # Target an actual node row that exists.
+    # smt_nodes stores internal nodes keyed by (level, encoded_path_prefix), so
+    # selecting a concrete persisted row is more robust than assuming a specific
+    # level/index representation.
+    with storage._get_connection() as conn, conn.cursor(row_factory=dict_row) as cur:
+        cur.execute(
+            """
+            SELECT level, index
+            FROM smt_nodes
+            ORDER BY level ASC, index ASC
+            LIMIT 1
+            """
+        )
+        row = cur.fetchone()
+    assert row is not None
+    target_level = int(row["level"])
+    target_index = bytes(row["index"])
 
     # Attempt to UPDATE the SMT node should fail
     with pytest.raises(psycopg.errors.ReadOnlySqlTransaction, match=r"smt_nodes is append-only"):
@@ -826,9 +840,9 @@ def test_smt_nodes_reject_update(storage, signing_key):
                 """
                 UPDATE smt_nodes
                 SET hash = %s
-                WHERE level = 0 AND index = %s
+                WHERE level = %s AND index = %s
                 """,
-                (hash_bytes(b"modified"), actual_key),
+                (hash_bytes(b"modified"), target_level, target_index),
             )
 
 
@@ -846,9 +860,20 @@ def test_smt_nodes_reject_delete(storage, signing_key):
         signing_key=signing_key,
     )
 
-    # Target an actual node that exists — level 0 always has the leaf-level node
-    # whose index equals the global key.
-    actual_key = global_key(shard_id, record_key("document", "doc1", 1))
+    # Target an actual node row that exists.
+    with storage._get_connection() as conn, conn.cursor(row_factory=dict_row) as cur:
+        cur.execute(
+            """
+            SELECT level, index
+            FROM smt_nodes
+            ORDER BY level ASC, index ASC
+            LIMIT 1
+            """
+        )
+        row = cur.fetchone()
+    assert row is not None
+    target_level = int(row["level"])
+    target_index = bytes(row["index"])
 
     # Attempt to DELETE the SMT node should fail
     with pytest.raises(psycopg.errors.ReadOnlySqlTransaction, match=r"smt_nodes is append-only"):
@@ -856,9 +881,9 @@ def test_smt_nodes_reject_delete(storage, signing_key):
             cur.execute(
                 """
                 DELETE FROM smt_nodes
-                WHERE level = 0 AND index = %s
+                WHERE level = %s AND index = %s
                 """,
-                (actual_key,),
+                (target_level, target_index),
             )
 
 
@@ -1004,26 +1029,27 @@ def test_verify_state_replay_detects_header_root_divergence(storage, signing_key
     # are blocked), but plain INSERTs are permitted, so this is a realistic
     # threat vector that the replay verifier must detect.
     #
-    # Use the last header's timestamp so the forged leaf falls within the
-    # replay window.  _assert_root_matches_state (called by get_latest_header)
-    # now reconstructs the tree as of the header's timestamp, so the forged
-    # leaf must have ts <= that timestamp to be included in the snapshot.
+    # Backdate the forged leaf to just before the first persisted header so it
+    # is guaranteed to be included in replay and root verification windows.
+    # This avoids boundary flakiness when multiple headers share close
+    # timestamps.
     forged_version = 9999
     forged_record_key = record_key("document", "forged-doc", forged_version)
     forged_key = global_key(shard_id, forged_record_key)
     forged_value = hash_bytes(b"forged-leaf-value")
     with storage._get_connection() as conn, conn.cursor(row_factory=dict_row) as cur:
         cur.execute(
-            "SELECT ts FROM shard_headers WHERE shard_id = %s ORDER BY seq DESC LIMIT 1",
+            "SELECT ts FROM shard_headers WHERE shard_id = %s ORDER BY seq ASC LIMIT 1",
             (shard_id,),
         )
-        last_header_ts = cur.fetchone()["ts"]
+        first_header_ts = cur.fetchone()["ts"]
+        forged_ts = first_header_ts - timedelta(microseconds=1)
         cur.execute(
             """
             INSERT INTO smt_leaves (key, version, value_hash, ts)
             VALUES (%s, %s, %s, %s)
             """,
-            (forged_key, forged_version, forged_value, last_header_ts),
+            (forged_key, forged_version, forged_value, forged_ts),
         )
         conn.commit()
 

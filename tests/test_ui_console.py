@@ -371,7 +371,9 @@ def test_color_scheme_cycler_present(monkeypatch):
 def test_validate_federation_url_blocks_ipv4_mapped_ipv6():
     with unittest.mock.patch(
         "ui.app.socket.getaddrinfo",
-        return_value=[(socket.AF_INET6, socket.SOCK_STREAM, 6, "", ("::ffff:127.0.0.1", 443, 0, 0))],
+        return_value=[
+            (socket.AF_INET6, socket.SOCK_STREAM, 6, "", ("::ffff:127.0.0.1", 443, 0, 0))
+        ],
     ):
         with pytest.raises(ValueError, match="blocked address range"):
             ui_app.validate_federation_url("https://example.invalid")
