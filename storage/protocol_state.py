@@ -22,6 +22,7 @@ from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Any
 
 import blake3
+from psycopg import sql
 
 from protocol.ssmf import SparseMerkleTree
 
@@ -134,7 +135,13 @@ def persist_tree_nodes(
             to populate an in-memory node cache.
     """
     # Gate the trigger so the upsert is allowed.
-    cur.execute(f"SET LOCAL olympus.allow_node_rehash = '{_NODE_REHASH_GATE}'")
+    # H-1 Fix: Use psycopg.sql.Literal to avoid f-string SQL pattern that could
+    # be cargo-culted into dynamic contexts.
+    cur.execute(
+        sql.SQL("SET LOCAL olympus.allow_node_rehash = {}").format(
+            sql.Literal(_NODE_REHASH_GATE)
+        )
+    )
 
     for path, hash_value in tree.nodes.items():
         path_bytes = encode_path(path)

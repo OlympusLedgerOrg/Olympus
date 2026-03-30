@@ -45,7 +45,7 @@ import nacl.exceptions
 import nacl.signing
 import psycopg
 import psycopg.errors
-from psycopg import OperationalError
+from psycopg import OperationalError, sql
 from psycopg.pq import TransactionStatus
 from psycopg.rows import dict_row
 from psycopg_pool import ConnectionPool, PoolTimeout
@@ -2506,7 +2506,13 @@ class StorageLayer:
             tree: SparseMerkleTree to persist
         """
         # Gate the trigger so the upsert is allowed.
-        cur.execute(f"SET LOCAL olympus.allow_node_rehash = '{_NODE_REHASH_GATE}'")
+        # H-1 Fix: Use psycopg.sql.Literal to avoid f-string SQL pattern that could
+        # be cargo-culted into dynamic contexts.
+        cur.execute(
+            sql.SQL("SET LOCAL olympus.allow_node_rehash = {}").format(
+                sql.Literal(_NODE_REHASH_GATE)
+            )
+        )
 
         ts = datetime.now(timezone.utc)
         for row_batch in self._iter_batches(

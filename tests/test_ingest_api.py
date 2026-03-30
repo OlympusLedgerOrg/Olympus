@@ -544,7 +544,20 @@ class TestArtifactCommit:
 
 class TestAuthAndRateLimiting:
     def test_ingest_requires_api_key(self):
+        """Test that ingest endpoint requires authentication.
+
+        This test explicitly registers an API key to disable dev-mode bypass,
+        then attempts access without credentials to verify 401 is returned.
+        """
         ingest_api._reset_ingest_state_for_tests()
+        # Register an API key so that dev-mode bypass is not active
+        ingest_api._register_api_key_for_tests(
+            api_key="valid-key",
+            key_id="valid-key-id",
+            scopes={"ingest"},
+            expires_at="2099-01-01T00:00:00Z",
+        )
+        # Client without API key should get 401
         unauth_client = TestClient(app)
         payload = {
             "records": [
@@ -732,27 +745,38 @@ def test_smt_proof_conversion_verifies_round_trip():
 
 
 def test_load_api_keys_from_env_requires_hashed_keys(monkeypatch):
-    """Raw API keys in the environment must be rejected."""
-    ingest_api._reset_ingest_state_for_tests()
+    """Raw API keys in the environment must be rejected.
+
+    Note: Key loading is now handled by the unified auth module (api.auth).
+    """
+    import api.auth as auth_module
+
+    auth_module._reset_auth_state_for_tests()
     monkeypatch.setenv(
         "OLYMPUS_API_KEYS_JSON",
         '[{"api_key":"plaintext","key_id":"raw","scopes":["verify"],"expires_at":"2099-01-01T00:00:00Z"}]',
     )
     with pytest.raises(ValueError):
-        ingest_api._load_api_keys_from_env()
+        auth_module._load_keys_into({})
 
 
 def test_load_api_keys_from_env_accepts_hashes(monkeypatch):
-    """Hashed API keys should register successfully."""
-    ingest_api._reset_ingest_state_for_tests()
+    """Hashed API keys should register successfully.
+
+    Note: Key loading is now handled by the unified auth module (api.auth).
+    """
+    import api.auth as auth_module
+
+    auth_module._reset_auth_state_for_tests()
     key_hash = hash_bytes(b"hashed-secret").hex()
     monkeypatch.setenv(
         "OLYMPUS_API_KEYS_JSON",
         f'[{{"key_hash":"{key_hash}","key_id":"hashed","scopes":["verify"],"expires_at":"2099-01-01T00:00:00Z"}}]',
     )
-    ingest_api._load_api_keys_from_env()
-    assert key_hash in ingest_api._api_key_store
-    assert ingest_api._api_key_store[key_hash].key_id == "hashed"
+    target: dict = {}
+    auth_module._load_keys_into(target)
+    assert key_hash in target
+    assert target[key_hash].key_id == "hashed"
 
 
 def test_smt_divergence_alert_requires_api_key():
@@ -951,26 +975,29 @@ class TestIdempotencyGate:
 
 
 class TestConstantTimeEquals:
-    """Verify _constant_time_equals wrapper behaviour."""
+    """Verify _constant_time_equals wrapper behaviour.
+
+    Note: This function is now in api.auth (unified authentication module).
+    """
 
     def test_equal_strings(self):
-        from api.ingest import _constant_time_equals
+        from api.auth import _constant_time_equals
 
         assert _constant_time_equals("abc", "abc") is True
 
     def test_unequal_strings(self):
-        from api.ingest import _constant_time_equals
+        from api.auth import _constant_time_equals
 
         assert _constant_time_equals("abc", "xyz") is False
 
     def test_empty_strings(self):
-        from api.ingest import _constant_time_equals
+        from api.auth import _constant_time_equals
 
         assert _constant_time_equals("", "") is True
 
     def test_hex_hash_comparison(self):
         """Simulates real-world use: comparing hex-encoded BLAKE3 hashes."""
-        from api.ingest import _constant_time_equals
+        from api.auth import _constant_time_equals
         from protocol.hashes import hash_bytes
 
         h1 = hash_bytes(b"test-key").hex()

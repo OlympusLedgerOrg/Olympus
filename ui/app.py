@@ -91,6 +91,16 @@ _DEBUG_CONSOLE_PASSWORD = os.environ.get("OLYMPUS_DEBUG_CONSOLE_PASSWORD", "")
 
 _ENV = os.environ.get("OLYMPUS_ENV", "production")
 
+# C-2 Fix: Refuse to start in production mode without a debug console password.
+# This prevents accidental exposure of the debug console when operators forget
+# to set OLYMPUS_DEBUG_CONSOLE_PASSWORD.
+if _ENV == "production" and not _DEBUG_CONSOLE_PASSWORD:
+    raise RuntimeError(
+        "OLYMPUS_DEBUG_CONSOLE_PASSWORD must be set when OLYMPUS_ENV=production. "
+        "The debug console cannot start without authentication configured. "
+        "Either set a strong password or use OLYMPUS_ENV=development for local testing."
+    )
+
 logger = logging.getLogger(__name__)
 
 
@@ -191,6 +201,11 @@ app.mount("/static", StaticFiles(directory=str(_STATIC_DIR)), name="static")
 @app.middleware("http")
 async def _debug_console_basic_auth(request: Request, call_next: Any) -> JSONResponse:
     """Enforce HTTP Basic Auth when ``OLYMPUS_DEBUG_CONSOLE_PASSWORD`` is set.
+
+    Note: The module-level startup check already refuses to import in production
+    mode without a password (see C-2 fix above). This middleware provides an
+    additional runtime safeguard for edge cases where the environment might
+    change after import.
 
     When running in production mode (``OLYMPUS_ENV != 'development'``) and no
     password is configured, every request is rejected with HTTP 503 to prevent
