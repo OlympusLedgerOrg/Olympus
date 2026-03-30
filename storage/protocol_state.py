@@ -21,6 +21,8 @@ from collections.abc import Mapping
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Any
 
+import blake3
+
 from protocol.ssmf import SparseMerkleTree
 
 
@@ -28,6 +30,9 @@ if TYPE_CHECKING:
     import psycopg
 
 logger = logging.getLogger(__name__)
+
+# ADR-0001: BLAKE3 domain-separated gate for the smt_nodes rehash trigger.
+_NODE_REHASH_GATE: str = blake3.blake3(b"OLY:NODE-REHASH-GATE:V1").hexdigest()
 
 
 # ---------------------------------------------------------------------------
@@ -108,13 +113,18 @@ def persist_tree_nodes(
     cache_put: Any | None = None,
 ) -> None:
     """
-    Persist tree nodes to database (append-only).
+    Persist tree nodes to database.
 
     CD-HS-ST Design:
     ---------------
     This function now persists nodes to the GLOBAL SMT. The shard_id parameter is kept
     for backwards compatibility with the cache_put callback but is not used in the
     database INSERT (since the global SMT has no shard_id column).
+
+    ADR-0001: Uses ``ON CONFLICT DO UPDATE`` so that rehashed ancestor
+    nodes are kept current.  The ``smt_nodes_reject_update`` trigger
+    requires the session variable ``olympus.allow_node_rehash`` to be set
+    to the BLAKE3 domain-separated gate (``_NODE_REHASH_GATE``).
 
     Args:
         cur: Database cursor
@@ -123,6 +133,9 @@ def persist_tree_nodes(
         cache_put: Optional callback ``(shard_id, level, path_bytes, hash_value)``
             to populate an in-memory node cache.
     """
+    # Gate the trigger so the upsert is allowed.
+    cur.execute(f"SET LOCAL olympus.allow_node_rehash = '{_NODE_REHASH_GATE}'")
+
     for path, hash_value in tree.nodes.items():
         path_bytes = encode_path(path)
         level = len(path)

@@ -40,6 +40,7 @@ from datetime import datetime, timezone
 from threading import Lock
 from typing import Any
 
+import blake3
 import nacl.exceptions
 import nacl.signing
 import psycopg
@@ -66,6 +67,13 @@ from protocol.ssmf import (
 
 
 logger = logging.getLogger(__name__)
+
+# ADR-0001: BLAKE3 domain-separated gate value for the smt_nodes rehash
+# trigger.  _persist_tree_nodes sets this as a session variable before
+# running the upsert; the trigger function checks for it.  Using a hash
+# rather than a plain flag makes accidental bypass harder and follows the
+# project's OLY: domain-separation convention.
+_NODE_REHASH_GATE: str = blake3.blake3(b"OLY:NODE-REHASH-GATE:V1").hexdigest()
 
 
 class StorageLayer:
@@ -591,11 +599,38 @@ class StorageLayer:
             BEFORE DELETE ON smt_leaves
             FOR EACH ROW EXECUTE FUNCTION olympus_reject_mutation()
             """,
+            # ------------------------------------------------------------------
+            # smt_nodes: gated update trigger (ADR-0001)
+            # ------------------------------------------------------------------
+            # Internal SMT nodes are *derived state* — their hashes change
+            # whenever a new leaf is inserted and the path from leaf to root
+            # is rehashed.  _persist_tree_nodes sets the session variable
+            # ``olympus.allow_node_rehash`` to a BLAKE3 domain-separated hash
+            # (via SET LOCAL, scoped to the current transaction) before
+            # running the upsert.  Ad-hoc UPDATE statements that do not set
+            # this variable are still rejected, preserving the security
+            # invariant.  The gate value follows the project's OLY:
+            # domain-separation convention so that a naive ``SET LOCAL ... =
+            # 'on'`` does not bypass the check.
+            f"""
+            CREATE OR REPLACE FUNCTION olympus_allow_node_rehash()
+            RETURNS trigger AS $$
+            BEGIN
+                IF current_setting('olympus.allow_node_rehash', true)
+                        = '{_NODE_REHASH_GATE}' THEN
+                    RETURN NEW;
+                END IF;
+                RAISE EXCEPTION '% is append-only: % is not allowed without rehash context',
+                    TG_TABLE_NAME, TG_OP
+                    USING ERRCODE = '25006';
+            END;
+            $$ LANGUAGE plpgsql
+            """,
             "DROP TRIGGER IF EXISTS smt_nodes_reject_update ON smt_nodes",
             """
             CREATE TRIGGER smt_nodes_reject_update
             BEFORE UPDATE ON smt_nodes
-            FOR EACH ROW EXECUTE FUNCTION olympus_reject_mutation()
+            FOR EACH ROW EXECUTE FUNCTION olympus_allow_node_rehash()
             """,
             "DROP TRIGGER IF EXISTS smt_nodes_reject_delete ON smt_nodes",
             """
@@ -1437,10 +1472,39 @@ class StorageLayer:
             except nacl.exceptions.BadSignatureError as e:
                 raise ValueError(f"Invalid shard header signature for shard '{shard_id}'") from e
 
-            # Guard against SMT divergence by recomputing the root as of
-            # this header's timestamp.  The global CD-HS-ST root changes on
-            # every append, so we must snapshot to the header's point in time.
-            self._assert_root_matches_state(cur, shard_id, bytes(row["root"]), as_of_ts=row["ts"])
+            # Guard against SMT divergence.  ADR-0001 Phase 0f′: when this
+            # header is the globally latest write (no other shard has appended
+            # since), the current smt_nodes root is valid and we can use the
+            # O(1) path (as_of_ts=None).  Otherwise fall back to historical
+            # leaf replay.
+            cur.execute(
+                """
+                SELECT EXISTS(
+                    SELECT 1 FROM shard_headers
+                    WHERE ts > %s
+                    LIMIT 1
+                ) AS has_later
+                """,
+                (row["ts"],),
+            )
+            later_row = cur.fetchone()
+            has_later = (
+                later_row["has_later"]
+                if isinstance(later_row, dict)
+                else later_row[0]
+            ) if later_row else False
+
+            if has_later:
+                # Another shard appended after this header — need historical
+                # snapshot for correctness.
+                self._assert_root_matches_state(
+                    cur, shard_id, bytes(row["root"]), as_of_ts=row["ts"]
+                )
+            else:
+                # This header is the globally latest — O(1) path.
+                self._assert_root_matches_state(
+                    cur, shard_id, bytes(row["root"]), as_of_ts=None
+                )
 
             return {
                 "header": header,
@@ -2443,14 +2507,20 @@ class StorageLayer:
         is used as a cache-key prefix so that node look-ups are correctly
         namespaced; it is **not** written to the database INSERT.
 
-        Only inserts new nodes (append-only).
-        Node insertion failures are acceptable - they indicate the node already exists.
+        ADR-0001: Uses ``ON CONFLICT DO UPDATE`` so that rehashed ancestor
+        nodes are kept current.  The ``smt_nodes_reject_update`` trigger
+        requires the session variable ``olympus.allow_node_rehash`` to be
+        set to the BLAKE3 domain-separated gate (``_NODE_REHASH_GATE``)
+        via ``SET LOCAL``, scoped to the enclosing transaction.
 
         Args:
             cur: Database cursor
             shard_id: Shard prefix used for the in-memory node cache key
             tree: SparseMerkleTree to persist
         """
+        # Gate the trigger so the upsert is allowed.
+        cur.execute(f"SET LOCAL olympus.allow_node_rehash = '{_NODE_REHASH_GATE}'")
+
         ts = datetime.now(timezone.utc)
         for row_batch in self._iter_batches(
             self._iter_tree_node_rows(shard_id, tree, ts),
