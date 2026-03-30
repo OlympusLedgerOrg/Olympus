@@ -1,9 +1,11 @@
 """Tests for developer debug console UI."""
 
 import json
+import socket
 import unittest.mock
 from urllib.error import HTTPError
 
+import pytest
 from fastapi.testclient import TestClient
 
 import ui.app as ui_app
@@ -357,6 +359,15 @@ def test_color_scheme_cycler_present(monkeypatch):
     assert "AMBER" in response.text
     assert "BLUE" in response.text
     assert "WHITE" in response.text
+
+
+def test_validate_federation_url_blocks_ipv4_mapped_ipv6():
+    with unittest.mock.patch(
+        "ui.app.socket.getaddrinfo",
+        return_value=[(socket.AF_INET6, socket.SOCK_STREAM, 6, "", ("::ffff:127.0.0.1", 443, 0, 0))],
+    ):
+        with pytest.raises(ValueError, match="blocked address range"):
+            ui_app.validate_federation_url("https://example.invalid")
 
 
 def test_terminal_theme_css_present(monkeypatch):

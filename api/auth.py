@@ -420,11 +420,24 @@ def _ip_in_ranges(ip: str, ranges: list[str]) -> bool:
     """
     try:
         addr = ipaddress.ip_address(ip)
+        if isinstance(addr, ipaddress.IPv6Address) and addr.ipv4_mapped is not None:
+            addr = addr.ipv4_mapped
     except ValueError:
         return False
     for r in ranges:
         try:
             network = ipaddress.ip_network(r, strict=False)
+            if (
+                isinstance(network, ipaddress.IPv6Network)
+                and network.network_address.ipv4_mapped is not None
+            ):
+                mapped_network_address = network.network_address.ipv4_mapped
+                if mapped_network_address is None:
+                    continue
+                prefixlen = max(network.prefixlen - 96, 0)
+                network = ipaddress.ip_network(
+                    f"{mapped_network_address}/{prefixlen}", strict=False
+                )
             if addr in network:
                 return True
         except ValueError:

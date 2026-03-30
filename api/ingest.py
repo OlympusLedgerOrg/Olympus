@@ -193,7 +193,12 @@ class ProofVerificationResponse(BaseModel):
 class ProofSubmissionRequest(ProofVerificationRequest):
     """Proof bundle payload that can be submitted to the API for later retrieval."""
 
-    record_id: str = Field(..., description="Record identifier associated with the proof bundle")
+    record_id: str = Field(
+        ...,
+        description="Record identifier associated with the proof bundle",
+        max_length=_IDENTIFIER_MAX_LEN,
+        pattern=_IDENTIFIER_PATTERN,
+    )
     shard_id: str = Field(..., description="Shard identifier associated with the proof bundle")
     ledger_entry_hash: str = Field(..., description="Ledger entry anchoring the proof bundle")
     timestamp: str = Field(..., description="ISO 8601 timestamp associated with the bundle")

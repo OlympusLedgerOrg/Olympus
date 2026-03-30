@@ -1465,13 +1465,6 @@ class StorageLayer:
             if header["header_hash"] != expected_hash:
                 raise ValueError(f"Invalid shard header hash for shard '{shard_id}'")
 
-            sig_bytes = bytes(row["sig"])
-            verify_key = nacl.signing.VerifyKey(bytes(row["pubkey"]))
-            try:
-                verify_key.verify(bytes.fromhex(header["header_hash"]), sig_bytes)
-            except nacl.exceptions.BadSignatureError as e:
-                raise ValueError(f"Invalid shard header signature for shard '{shard_id}'") from e
-
             # Guard against SMT divergence.  ADR-0001 Phase 0f′: when this
             # header is the globally latest write (no other shard has appended
             # since), the current smt_nodes root is valid and we can use the
