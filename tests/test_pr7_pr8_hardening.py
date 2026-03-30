@@ -87,6 +87,35 @@ def test_startup_allows_dev_ceremony_stub_in_development(tmp_path: Path, monkeyp
     _assert_no_dev_zk_stub_artifacts(tmp_path)
 
 
+def test_startup_rejects_dev_signing_key_in_non_development(monkeypatch):
+    from api.main import _assert_no_dev_signing_key_in_non_development
+
+    monkeypatch.setenv("OLYMPUS_ENV", "production")
+    monkeypatch.setenv("OLYMPUS_DEV_SIGNING_KEY", "true")
+
+    with pytest.raises(RuntimeError, match="OLYMPUS_DEV_SIGNING_KEY=true"):
+        _assert_no_dev_signing_key_in_non_development()
+
+
+def test_startup_allows_dev_signing_key_in_development(monkeypatch):
+    from api.main import _assert_no_dev_signing_key_in_non_development
+
+    monkeypatch.setenv("OLYMPUS_ENV", "development")
+    monkeypatch.setenv("OLYMPUS_DEV_SIGNING_KEY", "true")
+    _assert_no_dev_signing_key_in_non_development()
+
+
+def test_create_app_rejects_wildcard_cors_with_credentials(monkeypatch):
+    from api.config import get_settings
+    from api.main import create_app
+
+    monkeypatch.setenv("CORS_ORIGINS", "*")
+    get_settings.cache_clear()
+    with pytest.raises(RuntimeError, match="CORS_ORIGINS contains wildcard"):
+        create_app()
+    get_settings.cache_clear()
+
+
 def test_validation_error_detail_preserves_url_key():
     from api.main import _json_safe_validation_detail
 

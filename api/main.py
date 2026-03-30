@@ -49,6 +49,11 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
+def _env_flag_enabled(name: str) -> bool:
+    """Return True when an environment flag is enabled with common truthy values."""
+    return os.environ.get(name, "").strip().lower() in {"1", "true", "yes", "on"}
+
+
 def _assert_no_dev_zk_stub_artifacts(repo_root: Path | None = None) -> None:
     """Block production startup when known development ceremony stubs are present."""
     if os.environ.get("OLYMPUS_ENV", "production") == "development":
@@ -74,12 +79,25 @@ def _assert_no_dev_zk_stub_artifacts(repo_root: Path | None = None) -> None:
             )
 
 
+def _assert_no_dev_signing_key_in_non_development() -> None:
+    """Block non-development startup when OLYMPUS_DEV_SIGNING_KEY is enabled."""
+    if os.environ.get("OLYMPUS_ENV", "production") == "development":
+        return
+    if _env_flag_enabled("OLYMPUS_DEV_SIGNING_KEY"):
+        raise RuntimeError(
+            "Refusing startup in non-development environment with "
+            "OLYMPUS_DEV_SIGNING_KEY=true. Configure a persistent "
+            "OLYMPUS_INGEST_SIGNING_KEY for production use."
+        )
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Create database tables on startup and dispose the engine on shutdown."""
     settings = get_settings()
     logger.info("Starting Olympus API v%s", settings.app_version)
     _assert_no_dev_zk_stub_artifacts()
+    _assert_no_dev_signing_key_in_non_development()
 
     try:
         async with engine.begin() as conn:
@@ -166,8 +184,15 @@ def create_app() -> FastAPI:
             logger.warning("CORS_ORIGINS not set — cross-origin requests will be rejected.")
 
     # Only enable CORS credentials when origins are explicitly configured and non-empty.
-    # allow_credentials=True with broad/unset origins is a credential-stealing vector.
-    allow_credentials = bool(origins) and bool(os.environ.get("CORS_ORIGINS", "").strip())
+    # Explicit wildcard origins with credentials are rejected as insecure.
+    explicit_cors_origins = bool(os.environ.get("CORS_ORIGINS", "").strip())
+    wildcard_origin_present = any("*" in origin for origin in origins)
+    if explicit_cors_origins and wildcard_origin_present:
+        raise RuntimeError(
+            "CORS_ORIGINS contains wildcard values, which is not allowed with "
+            "credentialed requests. Configure explicit origins instead."
+        )
+    allow_credentials = bool(origins) and explicit_cors_origins
 
     app.add_middleware(
         CORSMiddleware,

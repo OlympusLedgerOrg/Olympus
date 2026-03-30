@@ -36,6 +36,7 @@ from api.auth import (
     RequireIngestScope,
     RequireVerifyScope,
     _ip_in_ranges,
+    _is_overly_broad_proxy_range,
     _register_api_key_for_tests as _auth_register_api_key_for_tests,
     _reset_auth_state_for_tests,
 )
@@ -663,6 +664,13 @@ def _client_ip(request: Request) -> str:
         otherwise the direct peer IP).
     """
     peer_ip = request.client.host if request.client else None
+
+    if any(_is_overly_broad_proxy_range(proxy_range) for proxy_range in TRUSTED_PROXY_RANGES):
+        logger.error(
+            "Ignoring X-Forwarded-For because OLYMPUS_TRUSTED_PROXY_IPS contains an overly "
+            "broad range (0.0.0.0/0 or ::/0), which allows client IP spoofing."
+        )
+        return peer_ip or "unknown"
 
     # Only parse X-Forwarded-For if the peer is a trusted proxy (CIDR-aware check)
     if peer_ip and TRUSTED_PROXY_RANGES and _ip_in_ranges(peer_ip, TRUSTED_PROXY_RANGES):
@@ -1446,7 +1454,14 @@ async def submit_proof_bundle(
 
 
 class ArtifactCommitRequest(BaseModel):
-    """Request body for committing a pre-computed artifact hash to the ledger."""
+    """Request body for committing a pre-computed artifact hash to the ledger.
+
+    Security boundary:
+        ``id`` and ``namespace`` are validated by ``_IDENTIFIER_PATTERN`` at API
+        ingestion time before persistence. This keeps externally supplied
+        artifact identifiers constrained before they can flow into downstream
+        proof tooling and subprocess-based proof backends.
+    """
 
     artifact_hash: str = Field(..., description="Hex-encoded BLAKE3 hash of the artifact")
     namespace: str = Field(
