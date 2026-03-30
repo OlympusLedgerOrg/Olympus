@@ -13,7 +13,10 @@ Covers:
 
 from __future__ import annotations
 
+import json
+import os
 import unittest.mock
+from types import SimpleNamespace
 
 import pytest
 
@@ -201,6 +204,58 @@ class TestRateLimitBackend:
 
             bucket = _TokenBucket(capacity=10, refill_rate=1, tokens=10, last_refill=monotonic())
             backend.set("key", bucket)
+
+    def test_backend_factory_rejects_redis_configuration(self):
+        from api.auth import _create_rate_limit_backend
+
+        with unittest.mock.patch(
+            "api.auth.get_settings",
+            return_value=SimpleNamespace(rate_limit_backend="redis"),
+        ):
+            with pytest.raises(ValueError, match="Redis rate limit backend is not yet implemented"):
+                _create_rate_limit_backend()
+
+
+@pytest.mark.asyncio
+async def test_reload_keys_auth_independent_of_json_entry_order():
+    """Reloaded API keys authenticate identically regardless of JSON entry order."""
+    import api.auth as auth_module
+    from protocol.hashes import hash_bytes
+
+    original_loaded = auth_module._keys_loaded
+    original_store = dict(auth_module._key_store)
+    original_env = os.environ.get("OLYMPUS_FOIA_API_KEYS")
+
+    first_key = "first-key"
+    second_key = "second-key"
+    second_key_hash = hash_bytes(second_key.encode("utf-8")).hex()
+    entries = [
+        {"key_hash": hash_bytes(first_key.encode("utf-8")).hex(), "key_id": "first"},
+        {"key_hash": second_key_hash, "key_id": "second"},
+    ]
+
+    request = unittest.mock.MagicMock()
+    request.headers = {"x-api-key": second_key}
+    request.client.host = "127.0.0.1"
+
+    try:
+        for ordered_entries in (entries, list(reversed(entries))):
+            auth_module._keys_loaded = False
+            auth_module._key_store.clear()
+            os.environ["OLYMPUS_FOIA_API_KEYS"] = json.dumps(ordered_entries)
+            auth_module.reload_keys()
+
+            record = await auth_module.require_api_key(request)
+            assert record.key_id == "second"
+            assert record.key_hash == second_key_hash
+    finally:
+        auth_module._keys_loaded = original_loaded
+        auth_module._key_store.clear()
+        auth_module._key_store.update(original_store)
+        if original_env is None:
+            os.environ.pop("OLYMPUS_FOIA_API_KEYS", None)
+        else:
+            os.environ["OLYMPUS_FOIA_API_KEYS"] = original_env
 
 
 # ── M2: RequestStatusUpdate enum validation ─────────────────────────────────

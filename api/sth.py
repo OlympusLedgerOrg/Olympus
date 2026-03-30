@@ -23,6 +23,8 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/protocol/sth", tags=["sth"])
 
+_SHARD_ID_RE = r"^[A-Za-z0-9:._-]{1,128}$"
+
 
 class STHResponse(BaseModel):
     """Signed Tree Head response."""
@@ -65,7 +67,7 @@ def _require_storage() -> Any:
 
 @router.get("/latest", response_model=STHResponse)
 async def get_latest_sth(
-    shard_id: str = Query(..., description="Shard identifier"),
+    shard_id: str = Query(..., description="Shard identifier", pattern=_SHARD_ID_RE),
 ) -> STHResponse:
     """
     Get the latest Signed Tree Head for a shard.
@@ -132,7 +134,7 @@ async def get_latest_sth(
 
 @router.get("/history", response_model=STHHistoryResponse)
 async def get_sth_history(
-    shard_id: str = Query(..., description="Shard identifier"),
+    shard_id: str = Query(..., description="Shard identifier", pattern=_SHARD_ID_RE),
     n: int = Query(10, description="Number of STHs to retrieve", ge=1, le=100),
 ) -> STHHistoryResponse:
     """

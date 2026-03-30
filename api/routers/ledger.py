@@ -13,7 +13,7 @@ from __future__ import annotations
 
 import logging
 
-from fastapi import APIRouter, File, Form, HTTPException, Query, Request, UploadFile, status
+from fastapi import APIRouter, File, Form, HTTPException, Path, Query, Request, UploadFile, status
 from sqlalchemy import func, select
 
 from api.auth import RateLimit, RequireAPIKey
@@ -40,6 +40,13 @@ from api.services.verification import verify_by_commit_id, verify_by_doc_hash, v
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/ledger", tags=["ledger"])
+
+_SHARD_ID_RE = r"^[A-Za-z0-9:._-]{1,128}$"
+_SHARD_ID_PATH = Path(
+    ...,
+    description="Shard identifier (alphanumeric, hyphens, colons, dots; max 128 chars)",
+    pattern=_SHARD_ID_RE,
+)
 
 # Maximum number of bytes read per iteration when streaming an upload.
 # Kept small enough to avoid large in-flight allocations while large enough
@@ -124,7 +131,7 @@ async def get_ledger_state(db: DBSession, _rl: RateLimit):
 
 
 @router.get("/shard/{shard_id}", response_model=ShardStateResponse)
-async def get_shard_state(shard_id: str, db: DBSession, _rl: RateLimit):
+async def get_shard_state(db: DBSession, _rl: RateLimit, shard_id: str = _SHARD_ID_PATH):
     """Return the state of a single shard.
 
     Args:

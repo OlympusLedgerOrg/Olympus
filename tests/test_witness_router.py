@@ -163,6 +163,32 @@ def test_checkpoint_by_sequence_found() -> None:
     assert resp.json()["checkpoint"]["sequence"] == 42
 
 
+def test_checkpoint_by_sequence_uses_secondary_index(monkeypatch: pytest.MonkeyPatch) -> None:
+    """GET /witness/checkpoints/{sequence} does not need to scan _observations."""
+    announcement = witness_module.WitnessAnnouncement.model_validate(
+        {
+            "origin": "node-index",
+            "checkpoint": {
+                "sequence": 42,
+                "checkpoint_hash": "ab" * 32,
+                "timestamp": current_timestamp(),
+            },
+            "received_at": current_timestamp(),
+        }
+    )
+    witness_module._observations_by_seq[42] = announcement
+
+    class _ForbiddenObservations(dict):
+        def values(self):  # pragma: no cover - should never be reached
+            raise AssertionError("get_checkpoint_by_sequence scanned _observations")
+
+    monkeypatch.setattr(witness_module, "_observations", _ForbiddenObservations())
+
+    resp = client.get("/witness/checkpoints/42")
+    assert resp.status_code == 200
+    assert resp.json()["origin"] == "node-index"
+
+
 def test_checkpoint_by_sequence_404() -> None:
     resp = client.get("/witness/checkpoints/99")
     assert resp.status_code == 404

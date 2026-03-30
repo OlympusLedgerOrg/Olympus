@@ -52,7 +52,10 @@ async def client(db_engine):
     app = create_app()
     app.dependency_overrides[get_db] = override_get_db
 
-    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
+    async with AsyncClient(
+        transport=ASGITransport(app=app, raise_app_exceptions=False),
+        base_url="http://test",
+    ) as ac:
         yield ac
 
 
@@ -66,6 +69,23 @@ async def test_create_request(client):
     assert len(data["commit_hash"]) == 64
     assert data["status"] == "PENDING"
     assert data["deadline"] is not None
+
+
+@pytest.mark.asyncio
+async def test_create_request_rejects_lone_surrogate(client):
+    """POST /requests rejects invalid lone surrogate input before hashing."""
+    resp = await client.post(
+        "/requests",
+        content=(
+            '{"subject":"Body camera \\ud800 footage",'
+            '"description":"All body-worn camera recordings related to incident number 2024-0115.",'
+            '"request_type":"NC_PUBLIC_RECORDS","priority":"STANDARD"}'
+        ),
+        headers={"content-type": "application/json"},
+    )
+    assert resp.status_code == 422
+    detail = resp.json()["detail"]
+    assert any("unicode" in item["type"] for item in detail)
 
 
 @pytest.mark.asyncio

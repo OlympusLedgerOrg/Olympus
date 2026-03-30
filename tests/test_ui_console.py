@@ -835,6 +835,69 @@ def test_commit_persists_to_ledger_api(monkeypatch):
     )
 
 
+def test_commit_forwards_api_auth_headers_to_ledger_api(monkeypatch):
+    """POST /commit forwards API auth headers to the backend commit endpoint."""
+    monkeypatch.setattr(ui_app, "DEBUG_UI_ENABLED", True)
+    ui_app._commit_store.clear()
+
+    mock_response = unittest.mock.MagicMock()
+    mock_response.json.return_value = {"commit_id": "ledger-id-forwarded"}
+    mock_response.raise_for_status = unittest.mock.MagicMock()
+
+    mock_client = unittest.mock.AsyncMock()
+    mock_client.__aenter__ = unittest.mock.AsyncMock(return_value=mock_client)
+    mock_client.__aexit__ = unittest.mock.AsyncMock(return_value=False)
+    mock_client.post = unittest.mock.AsyncMock(return_value=mock_response)
+
+    monkeypatch.setattr(ui_app.httpx, "AsyncClient", lambda **kwargs: mock_client)
+
+    response = client.post(
+        "/commit",
+        headers={"X-API-Key": "ui-test-api-key", "Authorization": "Bearer ledger-token"},
+        data={"document_id": "docAuth", "version": 1},
+        files={"file": ("doc.txt", b"Section one\nSection two\n", "text/plain")},
+    )
+
+    assert response.status_code == 200
+    data = response.json()
+    mock_client.post.assert_awaited_once_with(
+        f"{ui_app.API_BASE}/doc/commit",
+        json={"doc_hash": data["blake3_root"]},
+        headers={"x-api-key": "ui-test-api-key", "authorization": "Bearer ledger-token"},
+    )
+
+
+def test_commit_does_not_forward_basic_auth_to_ledger_api(monkeypatch):
+    """POST /commit must not forward UI basic-auth credentials to the API."""
+    monkeypatch.setattr(ui_app, "DEBUG_UI_ENABLED", True)
+    ui_app._commit_store.clear()
+
+    mock_response = unittest.mock.MagicMock()
+    mock_response.json.return_value = {"commit_id": "ledger-id-basic"}
+    mock_response.raise_for_status = unittest.mock.MagicMock()
+
+    mock_client = unittest.mock.AsyncMock()
+    mock_client.__aenter__ = unittest.mock.AsyncMock(return_value=mock_client)
+    mock_client.__aexit__ = unittest.mock.AsyncMock(return_value=False)
+    mock_client.post = unittest.mock.AsyncMock(return_value=mock_response)
+
+    monkeypatch.setattr(ui_app.httpx, "AsyncClient", lambda **kwargs: mock_client)
+
+    response = client.post(
+        "/commit",
+        headers={"Authorization": "Basic dWk6cGFzcw=="},
+        data={"document_id": "docBasic", "version": 1},
+        files={"file": ("doc.txt", b"Section one\nSection two\n", "text/plain")},
+    )
+
+    assert response.status_code == 200
+    data = response.json()
+    mock_client.post.assert_awaited_once_with(
+        f"{ui_app.API_BASE}/doc/commit",
+        json={"doc_hash": data["blake3_root"]},
+    )
+
+
 def test_commit_ledger_api_unavailable_returns_null_commit_id(monkeypatch):
     """POST /commit returns ledger_commit_id=null gracefully when API is unreachable."""
     monkeypatch.setattr(ui_app, "DEBUG_UI_ENABLED", True)

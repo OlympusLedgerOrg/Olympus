@@ -24,10 +24,11 @@ import os
 from contextlib import asynccontextmanager
 from typing import Any
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
+from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 from starlette.middleware.base import BaseHTTPMiddleware
-from starlette.requests import Request
 
 from api.config import get_settings
 from api.db import engine
@@ -93,6 +94,23 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
         return response
 
 
+def _json_safe_validation_detail(value: Any) -> Any:
+    """Recursively sanitize validation payloads so JSON rendering cannot fail."""
+    if isinstance(value, str):
+        return value.encode("unicode_escape").decode("ascii")
+    if isinstance(value, list):
+        return [_json_safe_validation_detail(item) for item in value]
+    if isinstance(value, tuple):
+        return [_json_safe_validation_detail(item) for item in value]
+    if isinstance(value, dict):
+        return {
+            key: _json_safe_validation_detail(item)
+            for key, item in value.items()
+            if key != "url"
+        }
+    return value
+
+
 def create_app() -> FastAPI:
     """Build and configure the unified FastAPI application.
 
@@ -137,6 +155,16 @@ def create_app() -> FastAPI:
     )
 
     app.add_middleware(SecurityHeadersMiddleware)
+
+    @app.exception_handler(RequestValidationError)
+    async def request_validation_exception_handler(
+        request: Request, exc: RequestValidationError
+    ) -> JSONResponse:
+        """Return validation errors without re-serializing invalid Unicode input."""
+        return JSONResponse(
+            status_code=422,
+            content={"detail": _json_safe_validation_detail(exc.errors())},
+        )
 
     # FOIA routers
     app.include_router(documents.router)

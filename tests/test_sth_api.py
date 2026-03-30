@@ -95,3 +95,13 @@ def test_history_includes_leaf_counts(sth_client: tuple[TestClient, _FakeStorage
 
     assert payload["sths"][0]["tree_size"] == fake_storage.history[0]["tree_size"]
     assert payload["sths"][1]["tree_size"] == fake_storage.history[1]["tree_size"]
+
+
+@pytest.mark.parametrize("path", ["/protocol/sth/latest", "/protocol/sth/history"])
+def test_sth_routes_reject_invalid_shard_id(
+    sth_client: tuple[TestClient, _FakeStorage], path: str
+) -> None:
+    """STH routes reject malformed shard identifiers at validation time."""
+    client, _ = sth_client
+    resp = client.get(path, params={"shard_id": "bad shard!"})
+    assert resp.status_code == 422
