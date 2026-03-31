@@ -1492,6 +1492,16 @@ class ArtifactCommitRequest(BaseModel):
         max_length=_ARTIFACT_ID_MAX_LEN,
         pattern=_IDENTIFIER_PATTERN,
     )
+    source_url: str | None = Field(
+        None,
+        description="Optional http(s) URL describing where the artifact was retrieved from",
+        max_length=2048,
+        pattern=r"^https?://.+",
+    )
+    raw_pdf_hash: str | None = Field(
+        None,
+        description="Optional hex-encoded raw-PDF BLAKE3 hash anchored alongside OCR/text hashes",
+    )
 
 
 class ArtifactCommitResponse(BaseModel):
@@ -1573,6 +1583,10 @@ async def commit_artifact(
         # Poseidon root is always computed server-side (HIGH-02 security fix)
         canonicalization = dict(canonicalization)
         canonicalization["poseidon_root"] = poseidon_root_normalized
+        if request.source_url:
+            canonicalization["source_url"] = request.source_url
+        if request.raw_pdf_hash:
+            canonicalization["raw_pdf_hash"] = _parse_content_hash(request.raw_pdf_hash).hex()
 
         # If PostgreSQL is configured, persist artifact durably
         if storage is not None and _signing_key is not None:

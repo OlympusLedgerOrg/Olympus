@@ -17,6 +17,8 @@ from urllib.error import HTTPError, URLError
 from urllib.parse import urlparse
 from urllib.request import Request, urlopen
 
+import blake3 as _blake3
+
 
 # Add parent directory to path for imports
 sys.path.insert(0, str(Path(__file__).parent.parent))
@@ -48,6 +50,21 @@ def _normalize_api_url(api_url: str) -> str:
     return api_url.rstrip("/")
 
 
+def _normalize_source_url(source_url: str) -> str:
+    """Validate an optional source URL before persisting it."""
+    parsed = urlparse(source_url)
+    if parsed.scheme not in {"http", "https"}:
+        raise ValueError("source_url must use http or https")
+    if not parsed.netloc:
+        raise ValueError("source_url must include a hostname")
+    return source_url
+
+
+def _blake3_hex(payload: bytes) -> str:
+    """Return the raw BLAKE3 hex digest for *payload*."""
+    return _blake3.blake3(payload).hexdigest()
+
+
 def _fetch_json_request(
     url: str, *, method: str = "GET", payload: dict | None = None, api_key: str = ""
 ) -> dict:
@@ -74,17 +91,30 @@ def _fetch_json_request(
 
 
 def _commit_artifact(
-    *, file_path: str, namespace: str, artifact_id: str, api_key: str, api_url: str
-) -> tuple[str, dict]:
+    *,
+    file_path: str,
+    namespace: str,
+    artifact_id: str,
+    api_key: str,
+    api_url: str,
+    source_url: str | None = None,
+    raw_pdf_path: str | None = None,
+) -> tuple[str, str | None, dict]:
     """Hash a file and commit it to the Olympus ingest API."""
     file_bytes = _read_file_bytes(file_path)
-    artifact_hash = hash_bytes(file_bytes).hex()
+    artifact_hash = _blake3_hex(file_bytes)
     normalized_api_url = _normalize_api_url(api_url)
     payload: dict[str, str] = {
         "artifact_hash": artifact_hash,
         "namespace": namespace,
         "id": artifact_id,
     }
+    if source_url:
+        payload["source_url"] = _normalize_source_url(source_url)
+    raw_pdf_hash = None
+    if raw_pdf_path:
+        raw_pdf_hash = _blake3_hex(_read_file_bytes(raw_pdf_path))
+        payload["raw_pdf_hash"] = raw_pdf_hash
     if api_key:
         payload["api_key"] = api_key
 
@@ -93,7 +123,7 @@ def _commit_artifact(
     proof_id = result.get("proof_id", "")
     if not proof_id:
         raise ValueError("Olympus API returned no proof_id")
-    return artifact_hash, result
+    return artifact_hash, raw_pdf_hash, result
 
 
 def _cmd_canon(args: argparse.Namespace) -> int:
@@ -143,7 +173,7 @@ def _cmd_canon(args: argparse.Namespace) -> int:
 def _cmd_commit(args: argparse.Namespace) -> int:
     """Compute the BLAKE3 hash of a file and commit it to the Olympus ledger."""
     try:
-        _, result = _commit_artifact(
+        _, _, result = _commit_artifact(
             file_path=args.file,
             namespace=args.namespace,
             artifact_id=args.id,
@@ -161,18 +191,25 @@ def _cmd_ingest(args: argparse.Namespace) -> int:
     """Commit a file and optionally retrieve and verify its proof bundle."""
     artifact_id = args.id or Path(args.file).name
     try:
-        artifact_hash, commit_result = _commit_artifact(
+        artifact_hash, raw_pdf_hash, commit_result = _commit_artifact(
             file_path=args.file,
             namespace=args.namespace,
             artifact_id=artifact_id,
             api_key=args.api_key,
             api_url=args.api_url,
+            source_url=args.source_url,
+            raw_pdf_path=args.raw_pdf,
         )
         output: dict[str, object] = {
             "file": str(Path(args.file)),
             "artifact_hash": artifact_hash,
+            "blake3_checksum": artifact_hash,
             "commit": commit_result,
         }
+        if args.source_url:
+            output["source_url"] = args.source_url
+        if raw_pdf_hash:
+            output["raw_pdf_hash"] = raw_pdf_hash
         api_url = _normalize_api_url(args.api_url)
         proof_id = str(commit_result["proof_id"])
 
@@ -192,7 +229,11 @@ def _cmd_ingest(args: argparse.Namespace) -> int:
         else:
             print(f"Committed: {args.file}")
             print(f"Proof ID: {proof_id}")
-            print(f"Artifact Hash: {artifact_hash}")
+            print(f"BLAKE3: {artifact_hash}")
+            if args.source_url:
+                print(f"Source URL: {args.source_url}")
+            if raw_pdf_hash:
+                print(f"Raw PDF BLAKE3: {raw_pdf_hash}")
             if "proof" in output:
                 print("Generated proof bundle: yes")
             if "verification" in output:
@@ -394,6 +435,18 @@ def main() -> int:
         type=str,
         default=os.environ.get("OLYMPUS_API_URL", "http://localhost:8000"),
         help="Base URL of the Olympus API (or set OLYMPUS_API_URL env var)",
+    )
+    ingest_parser.add_argument(
+        "--source-url",
+        type=str,
+        default="",
+        help="Optional http(s) URL describing where the artifact was downloaded from",
+    )
+    ingest_parser.add_argument(
+        "--raw-pdf",
+        type=str,
+        default="",
+        help="Optional path to the original PDF so its raw BLAKE3 hash is anchored too",
     )
     ingest_parser.add_argument(
         "--generate-proof",

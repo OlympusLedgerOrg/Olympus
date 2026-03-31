@@ -10,6 +10,8 @@ import uuid
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
 
+import blake3
+
 
 CLI_PATH = Path(__file__).parent.parent / "tools" / "olympus.py"
 REGISTRY_PATH = Path(__file__).parent.parent / "examples" / "federation_registry.json"
@@ -385,3 +387,69 @@ def test_olympus_ingest_can_generate_proof_and_verify(tmp_path: Path) -> None:
     assert data["commit"]["proof_id"] == expected_proof_id
     assert data["proof"]["proof_id"] == expected_proof_id
     assert data["verification"]["merkle_proof_valid"] is True
+
+
+def test_olympus_ingest_forwards_source_url_and_raw_pdf_hash(tmp_path: Path) -> None:
+    """ingest should send source-url/raw-pdf metadata and print raw BLAKE3 checksums."""
+    artifact = tmp_path / "document.txt"
+    artifact.write_bytes(b"ocr text output")
+    raw_pdf = tmp_path / "document.pdf"
+    raw_pdf.write_bytes(b"%PDF-1.7 raw scan bytes")
+    expected_proof_id = str(uuid.uuid4())
+    received_bodies: list[dict[str, object]] = []
+
+    class _Handler(BaseHTTPRequestHandler):
+        def do_POST(self) -> None:  # noqa: N802
+            length = int(self.headers.get("Content-Length", 0))
+            received_bodies.append(json.loads(self.rfile.read(length).decode("utf-8")))
+            body = json.dumps({"proof_id": expected_proof_id}).encode()
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+        def log_message(self, *args: object) -> None:
+            pass
+
+    server = HTTPServer(("127.0.0.1", 0), _Handler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    port = server.server_address[1]
+
+    expected_artifact_hash = blake3.blake3(artifact.read_bytes()).hexdigest()
+    expected_raw_pdf_hash = blake3.blake3(raw_pdf.read_bytes()).hexdigest()
+
+    try:
+        result = subprocess.run(
+            [
+                sys.executable,
+                str(CLI_PATH),
+                "ingest",
+                str(artifact),
+                "--api-url",
+                f"http://127.0.0.1:{port}",
+                "--source-url",
+                "https://example.com/archive/document.pdf",
+                "--raw-pdf",
+                str(raw_pdf),
+                "--json",
+            ],
+            capture_output=True,
+            text=True,
+        )
+    finally:
+        server.shutdown()
+
+    assert result.returncode == 0
+    assert len(received_bodies) == 1
+    payload = received_bodies[0]
+    assert payload["artifact_hash"] == expected_artifact_hash
+    assert payload["source_url"] == "https://example.com/archive/document.pdf"
+    assert payload["raw_pdf_hash"] == expected_raw_pdf_hash
+
+    data = json.loads(result.stdout)
+    assert data["artifact_hash"] == expected_artifact_hash
+    assert data["blake3_checksum"] == expected_artifact_hash
+    assert data["source_url"] == "https://example.com/archive/document.pdf"
+    assert data["raw_pdf_hash"] == expected_raw_pdf_hash

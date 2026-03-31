@@ -522,6 +522,55 @@ class TestArtifactCommit:
         assert resp.status_code == 200
         assert resp.json()["proof_id"]
 
+    def test_commit_persists_source_url_and_raw_pdf_hash_in_proof(self, client: TestClient):
+        """Artifact commits should retain source provenance and raw-PDF anchors in proof metadata."""
+        artifact_hash = "12" * 32
+        raw_pdf_hash = "34" * 32
+        resp = client.post(
+            "/ingest/commit",
+            json={
+                "artifact_hash": artifact_hash,
+                "namespace": "github",
+                "id": "org/repo/v4.0.0",
+                "source_url": "https://example.com/releases/v4.0.0/document.txt",
+                "raw_pdf_hash": raw_pdf_hash,
+            },
+        )
+        assert resp.status_code == 200
+        proof_id = resp.json()["proof_id"]
+
+        proof_resp = client.get(f"/ingest/records/{proof_id}/proof")
+        assert proof_resp.status_code == 200
+        canonicalization = proof_resp.json()["canonicalization"]
+        assert canonicalization["source_url"] == "https://example.com/releases/v4.0.0/document.txt"
+        assert canonicalization["raw_pdf_hash"] == raw_pdf_hash
+
+    def test_commit_invalid_source_url_rejected(self, client: TestClient):
+        """Artifact source URLs must use http(s)."""
+        resp = client.post(
+            "/ingest/commit",
+            json={
+                "artifact_hash": "56" * 32,
+                "namespace": "github",
+                "id": "org/repo/v5.0.0",
+                "source_url": "ftp://example.com/document.txt",
+            },
+        )
+        assert resp.status_code == 422
+
+    def test_commit_invalid_raw_pdf_hash_rejected(self, client: TestClient):
+        """raw_pdf_hash must be a valid 32-byte hex BLAKE3 digest."""
+        resp = client.post(
+            "/ingest/commit",
+            json={
+                "artifact_hash": "78" * 32,
+                "namespace": "github",
+                "id": "org/repo/v6.0.0",
+                "raw_pdf_hash": "not-hex",
+            },
+        )
+        assert resp.status_code == 400
+
     def test_health_includes_commit_endpoint(self, client: TestClient):
         resp = client.get("/health")
         assert resp.status_code == 200
