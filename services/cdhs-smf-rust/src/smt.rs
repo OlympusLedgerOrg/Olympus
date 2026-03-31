@@ -274,7 +274,11 @@ fn key_to_path_bits(key: &[u8; 32]) -> Vec<u8> {
     path
 }
 
-/// Get sibling path bits at a given level
+/// Get sibling path bits at a given level.
+///
+/// Precondition: `level` must be less than `path_bits.len()` (always holds
+/// for the 256-level tree where `path_bits` has exactly 256 elements and
+/// `level` ranges over 0..=255).
 fn sibling_path_bits(path_bits: &[u8], level: usize) -> Vec<u8> {
     let mut sibling = path_bits[0..=level].to_vec();
     sibling[level] = 1 - sibling[level];
