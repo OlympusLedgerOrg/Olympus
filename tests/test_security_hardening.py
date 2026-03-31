@@ -25,6 +25,7 @@ from api.auth import (
     _ip_in_ranges,
     _is_overly_broad_proxy_range,
     _is_valid_ip,
+    _normalize_ip,
     _TokenBucket,
 )
 
@@ -49,6 +50,37 @@ class TestIsValidIp:
 
     def test_cidr_not_valid_as_ip(self):
         assert _is_valid_ip("10.0.0.0/8") is False
+
+
+# ── M1: IPv4-mapped IPv6 normalization ───────────────────────────────────────
+
+
+class TestNormalizeIp:
+    """Unit tests for _normalize_ip."""
+
+    def test_ipv4_mapped_ipv6_normalized_to_ipv4(self):
+        assert _normalize_ip("::ffff:1.2.3.4") == "1.2.3.4"
+
+    def test_plain_ipv4_unchanged(self):
+        assert _normalize_ip("1.2.3.4") == "1.2.3.4"
+
+    def test_plain_ipv6_unchanged(self):
+        assert _normalize_ip("::1") == "::1"
+
+    def test_invalid_ip_returned_unchanged(self):
+        assert _normalize_ip("not-an-ip") == "not-an-ip"
+
+    def test_get_client_ip_same_bucket_for_mapped_and_plain(self):
+        """::ffff:10.0.0.1 and 10.0.0.1 should resolve to the same bucket key."""
+        with unittest.mock.patch("api.auth.get_settings") as mock_settings:
+            mock_settings.return_value.trusted_proxy_ips = []
+            req_mapped = unittest.mock.MagicMock()
+            req_mapped.client.host = "::ffff:10.0.0.1"
+            req_mapped.headers = {}
+            req_plain = unittest.mock.MagicMock()
+            req_plain.client.host = "10.0.0.1"
+            req_plain.headers = {}
+            assert _get_client_ip(req_mapped) == _get_client_ip(req_plain)
 
 
 class TestIpInRanges:
