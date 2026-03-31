@@ -53,6 +53,7 @@ def test_startup_rejects_dev_ceremony_stub_in_non_development(tmp_path: Path, mo
     )
 
     monkeypatch.setenv("OLYMPUS_ENV", "production")
+    monkeypatch.delenv("OLYMPUS_ALLOW_DEV_AUTH", raising=False)
     monkeypatch.delenv("OLYMPUS_ALLOW_DEV_ZK_ARTIFACTS", raising=False)
 
     with pytest.raises(RuntimeError, match="dev ceremony stub artifact"):
@@ -69,6 +70,7 @@ def test_startup_allows_dev_ceremony_stub_with_override(tmp_path: Path, monkeypa
     )
 
     monkeypatch.setenv("OLYMPUS_ENV", "production")
+    monkeypatch.delenv("OLYMPUS_ALLOW_DEV_AUTH", raising=False)
     monkeypatch.setenv("OLYMPUS_ALLOW_DEV_ZK_ARTIFACTS", "true")
     _assert_no_dev_zk_stub_artifacts(tmp_path)
 
@@ -91,6 +93,7 @@ def test_startup_rejects_dev_signing_key_in_non_development(monkeypatch):
     from api.main import _assert_no_dev_signing_key_in_non_development
 
     monkeypatch.setenv("OLYMPUS_ENV", "production")
+    monkeypatch.delenv("OLYMPUS_ALLOW_DEV_AUTH", raising=False)
     monkeypatch.setenv("OLYMPUS_DEV_SIGNING_KEY", "true")
 
     with pytest.raises(RuntimeError, match="OLYMPUS_DEV_SIGNING_KEY=true"):
