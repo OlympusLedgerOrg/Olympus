@@ -31,6 +31,8 @@ from api.services.zkproof import generate_proof_stub
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/doc", tags=["documents"])
 
+_MERKLE_LEAF_LIMIT = 50_000
+
 
 @router.post(
     "/commit",
@@ -119,7 +121,9 @@ async def commit_document(
 
 
 @router.post("/verify", response_model=DocVerifyResponse)
-async def verify_document(body: DocVerifyRequest, db: DBSession, _rl: RateLimit):
+async def verify_document(
+    body: DocVerifyRequest, db: DBSession, _api_key: RequireAPIKey, _rl: RateLimit
+):
     """Verify a previously committed document hash.
 
     Looks up the commit by ``commit_id`` or ``doc_hash`` (at least one is
@@ -159,6 +163,7 @@ async def verify_document(body: DocVerifyRequest, db: DBSession, _rl: RateLimit)
         select(DocCommit.doc_hash)
         .where(DocCommit.shard_id == commit.shard_id)
         .order_by(DocCommit.epoch_timestamp)
+        .limit(_MERKLE_LEAF_LIMIT)
     )
     all_hashes = list(all_hashes_result.scalars().all())
 
