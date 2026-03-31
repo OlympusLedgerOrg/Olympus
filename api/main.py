@@ -91,6 +91,17 @@ def _assert_no_dev_signing_key_in_non_development() -> None:
         )
 
 
+def _assert_dev_auth_flag_restricted_to_development() -> None:
+    """Disallow dev auth bypass flag outside development."""
+    env = os.environ.get("OLYMPUS_ENV", "production")
+    if env == "development":
+        return
+    if os.environ.get("OLYMPUS_ALLOW_DEV_AUTH") == "1":
+        raise RuntimeError(
+            "OLYMPUS_ALLOW_DEV_AUTH=1 is not permitted when OLYMPUS_ENV != 'development'."
+        )
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Create database tables on startup and dispose the engine on shutdown."""
@@ -98,6 +109,7 @@ async def lifespan(app: FastAPI):
     logger.info("Starting Olympus API v%s", settings.app_version)
     _assert_no_dev_zk_stub_artifacts()
     _assert_no_dev_signing_key_in_non_development()
+    _assert_dev_auth_flag_restricted_to_development()
 
     try:
         async with engine.begin() as conn:

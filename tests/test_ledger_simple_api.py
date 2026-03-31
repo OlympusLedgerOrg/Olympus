@@ -306,7 +306,9 @@ async def test_verify_simple_rejects_unauthenticated(db_engine):
 
     original_env = os.environ.pop("OLYMPUS_ENV", None)
     original_keys = os.environ.get("OLYMPUS_FOIA_API_KEYS")
+    original_allow_dev_auth = os.environ.get("OLYMPUS_ALLOW_DEV_AUTH")
     os.environ["OLYMPUS_ENV"] = "production"
+    os.environ["OLYMPUS_ALLOW_DEV_AUTH"] = "0"
     os.environ["OLYMPUS_FOIA_API_KEYS"] = (
         '[{"key_hash":"' + "a" * 64 + '","key_id":"test","scopes":["write"],'
         '"expires_at":"2099-01-01T00:00:00Z"}]'
@@ -338,3 +340,7 @@ async def test_verify_simple_rejects_unauthenticated(db_engine):
             os.environ.pop("OLYMPUS_ENV", None)
         else:
             os.environ["OLYMPUS_ENV"] = original_env
+        if original_allow_dev_auth is None:
+            os.environ.pop("OLYMPUS_ALLOW_DEV_AUTH", None)
+        else:
+            os.environ["OLYMPUS_ALLOW_DEV_AUTH"] = original_allow_dev_auth

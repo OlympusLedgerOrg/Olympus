@@ -18,8 +18,14 @@ def pytest_configure(config):
     Also ensures OLYMPUS_ENV=development for tests so that ZK proof stubs
     are available (they are disabled in production).
     """
-    if not os.environ.get("OLYMPUS_ENV"):
+    env = os.environ.get("OLYMPUS_ENV")
+    if not env:
         os.environ["OLYMPUS_ENV"] = "development"
+        os.environ["OLYMPUS_ALLOW_DEV_AUTH"] = "1"
+    elif env == "development":
+        os.environ.setdefault("OLYMPUS_ALLOW_DEV_AUTH", "1")
+    else:
+        os.environ.pop("OLYMPUS_ALLOW_DEV_AUTH", None)
 
     if os.environ.get("TEST_DATABASE_URL"):
         return

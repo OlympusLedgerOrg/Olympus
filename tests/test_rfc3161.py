@@ -492,6 +492,7 @@ def test_timestamp_watchdog_status_rejects_non_uniform_required_tsa_urls():
 
 def test_verify_timestamp_token_rejects_dev_trust_mode_in_production(monkeypatch):
     monkeypatch.setenv("OLYMPUS_ENV", "production")
+    monkeypatch.delenv("OLYMPUS_ALLOW_DEV_AUTH", raising=False)
     with pytest.raises(RuntimeError, match="DEV trust mode forbidden in production"):
         verify_timestamp_token(b"\x30\x00", "a" * 64)
 
@@ -961,6 +962,7 @@ def test_enforce_trust_mode_environment_production_raises(monkeypatch):
     from protocol.rfc3161 import TRUST_MODE_DEV, _enforce_trust_mode_environment
 
     monkeypatch.setenv("OLYMPUS_ENV", "production")
+    monkeypatch.delenv("OLYMPUS_ALLOW_DEV_AUTH", raising=False)
     with pytest.raises(RuntimeError, match="DEV trust mode forbidden in production"):
         _enforce_trust_mode_environment(TRUST_MODE_DEV)
 
@@ -969,6 +971,7 @@ def test_enforce_trust_mode_environment_prod_short_raises(monkeypatch):
     from protocol.rfc3161 import TRUST_MODE_DEV, _enforce_trust_mode_environment
 
     monkeypatch.setenv("OLYMPUS_ENV", "prod")
+    monkeypatch.delenv("OLYMPUS_ALLOW_DEV_AUTH", raising=False)
     with pytest.raises(RuntimeError, match="DEV trust mode forbidden in production"):
         _enforce_trust_mode_environment(TRUST_MODE_DEV)
 
@@ -977,5 +980,6 @@ def test_enforce_trust_mode_environment_prod_mode_is_fine_in_production(monkeypa
     from protocol.rfc3161 import TRUST_MODE_PROD, _enforce_trust_mode_environment
 
     monkeypatch.setenv("OLYMPUS_ENV", "production")
+    monkeypatch.delenv("OLYMPUS_ALLOW_DEV_AUTH", raising=False)
     # PROD trust mode in production should not raise
     _enforce_trust_mode_environment(TRUST_MODE_PROD)
