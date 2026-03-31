@@ -63,7 +63,10 @@ async def client(db_engine):
             yield session
 
     # Set development mode and no API keys for test bypass
-    with patch.dict(os.environ, {"OLYMPUS_ENV": "development", "OLYMPUS_FOIA_API_KEYS": "[]"}):
+    with patch.dict(
+        os.environ,
+        {"OLYMPUS_ENV": "development", "OLYMPUS_ALLOW_DEV_AUTH": "1", "OLYMPUS_FOIA_API_KEYS": "[]"},
+    ):
         app = create_app()
         app.dependency_overrides[get_db] = override_get_db
 

@@ -71,7 +71,10 @@ async def client(db_engine):
             yield session
 
     # Set development mode and no API keys for test bypass
-    with patch.dict(os.environ, {"OLYMPUS_ENV": "development", "OLYMPUS_FOIA_API_KEYS": "[]"}):
+    with patch.dict(
+        os.environ,
+        {"OLYMPUS_ENV": "development", "OLYMPUS_ALLOW_DEV_AUTH": "1", "OLYMPUS_FOIA_API_KEYS": "[]"},
+    ):
         app = create_app()
         app.dependency_overrides[get_db] = override_get_db
 
@@ -613,6 +616,7 @@ async def test_verify_dataset_requires_api_key_outside_development(monkeypatch, 
         auth_module._keys_loaded = False
         auth_module._key_store.clear()
         monkeypatch.setenv("OLYMPUS_ENV", "production")
+        monkeypatch.setenv("OLYMPUS_ALLOW_DEV_AUTH", "0")
         monkeypatch.setenv(
             "OLYMPUS_FOIA_API_KEYS",
             json.dumps(

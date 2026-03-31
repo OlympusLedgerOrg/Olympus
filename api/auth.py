@@ -209,8 +209,9 @@ async def require_api_key(request: Request) -> _APIKeyRecord:
     # misconfiguration — refuse to serve write requests.
     if not _key_store:
         _env = os.environ.get("OLYMPUS_ENV", "production")
-        if _env == "development":
-            logger.warning("No API keys configured — dev-mode auth bypass active")
+        _allow_dev_auth = os.environ.get("OLYMPUS_ALLOW_DEV_AUTH") == "1"
+        if _env == "development" and _allow_dev_auth:
+            logger.critical("No API keys configured — dev-mode auth bypass active")
             return _APIKeyRecord(
                 key_id="dev",
                 key_hash="",
@@ -218,9 +219,9 @@ async def require_api_key(request: Request) -> _APIKeyRecord:
                 expires_at=datetime(2099, 1, 1, tzinfo=timezone.utc),
             )
         logger.error(
-            "OLYMPUS_FOIA_API_KEYS is empty and OLYMPUS_ENV != 'development'. "
-            "Refusing unauthenticated write access. Configure API keys or set "
-            "OLYMPUS_ENV=development for local testing."
+            "Authentication not configured. Refusing unauthenticated write access. "
+            "Configure API keys or set OLYMPUS_ENV=development and "
+            "OLYMPUS_ALLOW_DEV_AUTH=1 for local testing."
         )
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -290,8 +291,9 @@ def require_api_key_with_scope(required_scope: str) -> Any:
         # If no keys are configured, allow dev-mode bypass ONLY in development.
         if not _key_store:
             _env = os.environ.get("OLYMPUS_ENV", "production")
-            if _env == "development":
-                logger.warning("No API keys configured — dev-mode auth bypass active")
+            _allow_dev_auth = os.environ.get("OLYMPUS_ALLOW_DEV_AUTH") == "1"
+            if _env == "development" and _allow_dev_auth:
+                logger.critical("No API keys configured — dev-mode auth bypass active")
                 return _APIKeyRecord(
                     key_id="dev",
                     key_hash="",
@@ -299,9 +301,9 @@ def require_api_key_with_scope(required_scope: str) -> Any:
                     expires_at=datetime(2099, 1, 1, tzinfo=timezone.utc),
                 )
             logger.error(
-                "API keys not configured and OLYMPUS_ENV != 'development'. "
-                "Refusing unauthenticated access. Configure API keys or set "
-                "OLYMPUS_ENV=development for local testing."
+                "Authentication not configured. Refusing unauthenticated access. "
+                "Configure API keys or set OLYMPUS_ENV=development and "
+                "OLYMPUS_ALLOW_DEV_AUTH=1 for local testing."
             )
             raise HTTPException(
                 status_code=status.HTTP_503_SERVICE_UNAVAILABLE,

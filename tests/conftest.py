@@ -20,6 +20,8 @@ def pytest_configure(config):
     """
     if not os.environ.get("OLYMPUS_ENV"):
         os.environ["OLYMPUS_ENV"] = "development"
+    if not os.environ.get("OLYMPUS_ALLOW_DEV_AUTH"):
+        os.environ["OLYMPUS_ALLOW_DEV_AUTH"] = "1"
 
     if os.environ.get("TEST_DATABASE_URL"):
         return

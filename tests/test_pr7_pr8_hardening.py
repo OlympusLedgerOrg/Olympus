@@ -105,6 +105,25 @@ def test_startup_allows_dev_signing_key_in_development(monkeypatch):
     _assert_no_dev_signing_key_in_non_development()
 
 
+def test_startup_rejects_dev_auth_flag_in_non_development(monkeypatch):
+    from api.main import _assert_dev_auth_flag_restricted_to_development
+
+    monkeypatch.setenv("OLYMPUS_ENV", "production")
+    monkeypatch.setenv("OLYMPUS_ALLOW_DEV_AUTH", "1")
+
+    with pytest.raises(RuntimeError, match="OLYMPUS_ALLOW_DEV_AUTH=1"):
+        _assert_dev_auth_flag_restricted_to_development()
+
+
+def test_startup_allows_dev_auth_flag_in_development(monkeypatch):
+    from api.main import _assert_dev_auth_flag_restricted_to_development
+
+    monkeypatch.setenv("OLYMPUS_ENV", "development")
+    monkeypatch.setenv("OLYMPUS_ALLOW_DEV_AUTH", "1")
+
+    _assert_dev_auth_flag_restricted_to_development()
+
+
 def test_create_app_rejects_wildcard_cors_with_credentials(monkeypatch):
     from api.config import get_settings
     from api.main import create_app
