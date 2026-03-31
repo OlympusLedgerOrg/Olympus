@@ -652,14 +652,14 @@ def test_consistency_proof_rejects_oversized_proof_list():
 
     # Create dummy 32-byte values for the proof list
     dummy_node = b"\x00" * 32
-    
+
     # Create a proof list with exactly 513 nodes (over the limit of 512)
     oversized_proof = [dummy_node] * 513
-    
+
     # Create dummy roots
     old_root = b"\x01" * 32
     new_root = b"\x02" * 32
-    
+
     # Verification should return False without raising an exception
     result = _verify_consistency_proof(old_root, new_root, oversized_proof, 100, 200)
     assert result is False
