@@ -101,8 +101,8 @@ async def test_shard_state_rejects_invalid_shard_id(client):
 
 
 @pytest.mark.asyncio
-async def test_proof_endpoint_pending_in_production(client, monkeypatch):
-    """GET /ledger/proof/{commit_id} returns a pending proof response in production."""
+async def test_proof_endpoint_pending_after_switching_to_production(client, monkeypatch):
+    """GET /ledger/proof/{commit_id} returns pending once the proof fetch runs in production."""
     monkeypatch.setenv("OLYMPUS_ENV", "development")
     monkeypatch.setenv("OLYMPUS_ALLOW_DEV_AUTH", "1")
     doc_hash = _b3("proof endpoint test")
