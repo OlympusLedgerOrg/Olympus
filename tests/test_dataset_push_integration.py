@@ -309,7 +309,8 @@ async def test_proof_bundle_endpoint(tmp_path, client):
     resp = await client.get(f"/datasets/{dataset_id}")
     assert resp.status_code == 200
     detail = resp.json()
-    assert detail["proof_bundle_uri"] == f"/datasets/{dataset_id}/proof-bundle"
+    # proof_bundle_uri should be a full URL (not a relative path)
+    assert detail["proof_bundle_uri"] == f"http://test/datasets/{dataset_id}/proof-bundle"
 
 
 @pytest.mark.asyncio

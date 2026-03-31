@@ -17,7 +17,7 @@ from datetime import datetime, timezone
 
 import nacl.exceptions
 import nacl.signing
-from fastapi import APIRouter, HTTPException, Query, status
+from fastapi import APIRouter, HTTPException, Query, Request, status
 from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 
@@ -56,6 +56,11 @@ from protocol.hashes import (
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/datasets", tags=["datasets"])
+
+# Cap the number of leaves loaded for in-memory Merkle tree reconstruction.
+# Shards with more than this many commits return an empty proof rather than
+# triggering OOM / CPU-DoS.  Same limit used in ledger.py and documents.py.
+_MERKLE_LEAF_LIMIT = 50_000
 
 
 # ---------------------------------------------------------------------------
@@ -561,6 +566,7 @@ async def verify_dataset(
         select(DatasetArtifact.manifest_hash)
         .where(DatasetArtifact.shard_id == artifact.shard_id)
         .order_by(DatasetArtifact.epoch_timestamp, DatasetArtifact.manifest_hash)
+        .limit(_MERKLE_LEAF_LIMIT)
     )
     all_hashes = list(all_hashes_result.scalars().all())
 
@@ -606,6 +612,7 @@ async def verify_dataset(
 @router.get("/{dataset_id}/proof-bundle", response_model=DatasetProofBundleResponse)
 async def get_proof_bundle(
     dataset_id: str,
+    request: Request,
     db: DBSession,
     _rl: RateLimit,
 ) -> DatasetProofBundleResponse:
@@ -616,8 +623,8 @@ async def get_proof_bundle(
     external auditor can independently verify the dataset commitment.
 
     As a side-effect, the ``proof_bundle_uri`` field on the underlying
-    artifact is populated with the canonical request path so that
-    subsequent ``GET /datasets/{dataset_id}`` responses include it.
+    artifact is populated with the full URL so that subsequent
+    ``GET /datasets/{dataset_id}`` responses include it.
     """
     result = await db.execute(
         select(DatasetArtifact)
@@ -654,11 +661,12 @@ async def get_proof_bundle(
         artifact.commit_signature,
     )
 
-    # Merkle inclusion proof
+    # Merkle inclusion proof (bounded to prevent OOM on large shards)
     all_hashes_result = await db.execute(
         select(DatasetArtifact.manifest_hash)
         .where(DatasetArtifact.shard_id == artifact.shard_id)
         .order_by(DatasetArtifact.epoch_timestamp, DatasetArtifact.manifest_hash)
+        .limit(_MERKLE_LEAF_LIMIT)
     )
     all_hashes = list(all_hashes_result.scalars().all())
 
@@ -671,8 +679,8 @@ async def get_proof_bundle(
         except ValueError:
             pass
 
-    # Set proof_bundle_uri on the artifact so it's no longer null.
-    bundle_uri = f"/datasets/{dataset_id}/proof-bundle"
+    # Set proof_bundle_uri to a full URL so external verifiers can use it.
+    bundle_uri = f"{request.base_url}datasets/{dataset_id}/proof-bundle"
     if artifact.proof_bundle_uri is None:
         artifact.proof_bundle_uri = bundle_uri
         await db.commit()
