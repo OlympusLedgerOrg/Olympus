@@ -111,6 +111,25 @@ class DatasetDetailResponse(DatasetCommitResponse):
     proof_bundle_uri: str | None
 
 
+class DatasetProofBundleResponse(BaseModel):
+    """Self-contained verification bundle for a dataset commit."""
+
+    dataset_id: str
+    commit_id: str
+    manifest_hash: str
+    merkle_root: str | None
+    committer_pubkey: str
+    commit_signature: str
+    epoch: datetime
+    shard_id: str
+    dataset_name: str
+    source_uri: str
+    files: list[DatasetFileEntry]
+    merkle_proof: list[dict] | None = None
+    signature_valid: bool
+    commit_id_valid: bool
+
+
 class DatasetVerifyResponse(BaseModel):
     """Response body for GET /datasets/{dataset_id}/verify."""
 
