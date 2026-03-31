@@ -244,7 +244,8 @@ def _cmd_dataset_commit(args: argparse.Namespace) -> int:
     commit_id = compute_dataset_commit_id(ds_id, args.parent or "", manifest_hash, pubkey_hex)
 
     # 8. Sign the commit ID with the Ed25519 signing key.
-    #    Sign raw hash bytes (bytes.fromhex) to match server-side verification.
+    #    The commit_id is a hex string; bytes.fromhex converts it to the raw
+    #    32-byte hash for signing, matching server-side verification convention.
     signature_hex = signing_key.sign(bytes.fromhex(commit_id)).signature.hex()
 
     # 9. Assemble the bundle.
@@ -486,7 +487,7 @@ def _cmd_dataset_push(args: argparse.Namespace) -> int:
     req = Request(url, data=payload, headers=headers, method="POST")
 
     try:
-        with urlopen(req) as resp:  # noqa: S310 — URL comes from CLI arg
+        with urlopen(req) as resp:  # noqa: S310 -- URL comes from CLI arg
             resp_body = json.loads(resp.read().decode("utf-8"))
     except HTTPError as exc:
         try:
