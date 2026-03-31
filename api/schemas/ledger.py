@@ -49,6 +49,17 @@ class ProofResponse(BaseModel):
     proof_type: str = "unknown"  # "groth16" | "stub" | "pending" | "unknown"
 
 
+class PendingProofResponse(BaseModel):
+    """Returned when ZK proof generation is pending ceremony completion."""
+
+    commit_id: str
+    shard_id: str
+    epoch: datetime
+    status: Literal["pending"]
+    reason: str
+    merkle_proof: list[dict] | None = None
+
+
 # ── User-friendly schemas ─────────────────────────────────────────────────────
 
 

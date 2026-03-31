@@ -14,7 +14,18 @@ from __future__ import annotations
 import logging
 from typing import Annotated
 
-from fastapi import APIRouter, File, Form, HTTPException, Path, Query, Request, UploadFile, status
+from fastapi import (
+    APIRouter,
+    File,
+    Form,
+    HTTPException,
+    Path,
+    Query,
+    Request,
+    Response,
+    UploadFile,
+    status,
+)
 from sqlalchemy import func, select
 
 from api.auth import RateLimit, RequireAPIKey
@@ -27,6 +38,7 @@ from api.schemas.ledger import (
     ActivityItem,
     CommitSummary,
     LedgerStateResponse,
+    PendingProofResponse,
     ProofResponse,
     ShardStateResponse,
     SimpleIngestionResponse,
@@ -171,8 +183,19 @@ async def get_shard_state(shard_id: Annotated[str, _SHARD_ID_PATH], db: DBSessio
     )
 
 
-@router.get("/proof/{commit_id}", response_model=ProofResponse)
-async def get_commit_proof(commit_id: str, db: DBSession, _rl: RateLimit):
+@router.get(
+    "/proof/{commit_id}",
+    responses={
+        200: {"model": ProofResponse},
+        202: {"model": PendingProofResponse},
+    },
+)
+async def get_commit_proof(
+    commit_id: str,
+    db: DBSession,
+    response: Response,
+    _rl: RateLimit,
+) -> ProofResponse | PendingProofResponse:
     """Return the Merkle inclusion proof and ZK proof stub for a commit.
 
     Args:
@@ -223,13 +246,19 @@ async def get_commit_proof(commit_id: str, db: DBSession, _rl: RateLimit):
 
         zk_proof = generate_proof_stub(commit.commit_id, commit.doc_hash)
     else:
-        zk_proof = {
-            "protocol": "groth16",
-            "curve": "bn128",
-            "proof_type": "pending",
-            "note": "ZK proof generation pending Groth16 trusted setup ceremony.",
-            "verified": False,
-        }
+        response.status_code = status.HTTP_202_ACCEPTED
+        return PendingProofResponse(
+            commit_id=commit.commit_id,
+            shard_id=commit.shard_id,
+            epoch=commit.epoch_timestamp,
+            status="pending",
+            reason=(
+                "ZK proof generation pending Groth16 trusted setup ceremony. "
+                "This record is anchored in the Merkle ledger but the ZK proof "
+                "is not yet available. Check back after the ceremony is complete."
+            ),
+            merkle_proof=merkle_proof_data or [],
+        )
 
     return ProofResponse(
         commit_id=commit.commit_id,
