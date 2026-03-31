@@ -405,3 +405,27 @@ def test_create_leaf_hashes_unique_per_part():
     hashes = RedactionProtocol.create_leaf_hashes(parts)
 
     assert len(set(hashes)) == len(parts)
+
+
+def test_redaction_proof_rejects_swapped_merkle_proofs():
+    """Test that verification fails when merkle_proofs are swapped (M2 fix)."""
+    document_parts = ["Section A", "Section B", "Section C", "Section D"]
+    revealed_indices = [1, 2]  # Reveal sections 1 and 2
+    revealed_content = ["Section B", "Section C"]
+
+    tree, _ = RedactionProtocol.commit_document(document_parts)
+    proof = RedactionProtocol.create_redaction_proof(tree, revealed_indices)
+
+    # Create a tampered proof with swapped merkle_proofs
+    # proof for index 1 attached to revealed_indices[0] and vice versa
+    tampered_proof = RedactionProof(
+        original_root=proof.original_root,
+        revealed_indices=proof.revealed_indices,  # [1, 2]
+        revealed_hashes=proof.revealed_hashes,  # correct hashes
+        merkle_proofs=[proof.merkle_proofs[1], proof.merkle_proofs[0]],  # swapped!
+    )
+
+    # Verification must fail because leaf_index in merkle_proofs[0] should be 1,
+    # but after swapping it's actually 2
+    is_valid = RedactionProtocol.verify_redaction_proof(tampered_proof, revealed_content)
+    assert is_valid is False
