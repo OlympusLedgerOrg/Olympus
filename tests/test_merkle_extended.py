@@ -212,10 +212,36 @@ class TestVerifyConsistencyProof:
     def test_old_zero_wrong_root(self):
         """old_size=0 with wrong old_root fails."""
         assert verify_consistency_proof(b"\x00" * 32, b"\x01" * 32, [], 0, 1) is False
+        assert (
+            verify_consistency_proof(
+                b"\x00" * 32,
+                b"\x01" * 32,
+                [],
+                0,
+                1,
+                trust_new_root_on_empty=True,
+            )
+            is False
+        )
 
-    def test_old_zero_correct_root(self):
-        """old_size=0 with EMPTY_TREE_HASH succeeds."""
-        assert verify_consistency_proof(EMPTY_TREE_HASH, b"\x01" * 32, [], 0, 1) is True
+    def test_old_zero_requires_trusted_new_root(self):
+        """old_size=0 with EMPTY_TREE_HASH requires explicit trust."""
+        with pytest.raises(ValueError, match="old_size=0 cannot cryptographically"):
+            verify_consistency_proof(EMPTY_TREE_HASH, b"\x01" * 32, [], 0, 1)
+
+    def test_old_zero_trusted_new_root(self):
+        """old_size=0 with EMPTY_TREE_HASH succeeds when trust is explicit."""
+        assert (
+            verify_consistency_proof(
+                EMPTY_TREE_HASH,
+                b"\x01" * 32,
+                [],
+                0,
+                1,
+                trust_new_root_on_empty=True,
+            )
+            is True
+        )
 
     def test_same_size_same_root(self):
         root = b"\xaa" * 32
