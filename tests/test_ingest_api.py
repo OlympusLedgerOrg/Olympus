@@ -556,7 +556,20 @@ class TestArtifactCommit:
                 "source_url": "ftp://example.com/document.txt",
             },
         )
-        assert resp.status_code == 422
+        assert resp.status_code == 400
+
+    def test_commit_source_url_without_hostname_rejected(self, client: TestClient):
+        """Artifact source URLs must include a hostname after scheme validation."""
+        resp = client.post(
+            "/ingest/commit",
+            json={
+                "artifact_hash": "57" * 32,
+                "namespace": "github",
+                "id": "org/repo/v5.1.0",
+                "source_url": "https:///document.txt",
+            },
+        )
+        assert resp.status_code == 400
 
     def test_commit_invalid_raw_pdf_hash_rejected(self, client: TestClient):
         """raw_pdf_hash must be a valid 32-byte hex BLAKE3 digest."""

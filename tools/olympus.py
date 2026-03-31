@@ -17,15 +17,13 @@ from urllib.error import HTTPError, URLError
 from urllib.parse import urlparse
 from urllib.request import Request, urlopen
 
-import blake3 as _blake3
-
 
 # Add parent directory to path for imports
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from protocol.canonical import canonicalize_document, document_to_bytes
 from protocol.federation import FederationRegistry
-from protocol.hashes import hash_bytes
+from protocol.hashes import blake3_hash, hash_bytes
 from tools.dataset_cli import build_dataset_parser, dispatch_dataset
 
 
@@ -62,7 +60,7 @@ def _normalize_source_url(source_url: str) -> str:
 
 def _blake3_hex(payload: bytes) -> str:
     """Return the raw BLAKE3 hex digest for *payload*."""
-    return _blake3.blake3(payload).hexdigest()
+    return blake3_hash([payload]).hex()
 
 
 def _fetch_json_request(
@@ -203,7 +201,6 @@ def _cmd_ingest(args: argparse.Namespace) -> int:
         output: dict[str, object] = {
             "file": str(Path(args.file)),
             "artifact_hash": artifact_hash,
-            "blake3_checksum": artifact_hash,
             "commit": commit_result,
         }
         if args.source_url:

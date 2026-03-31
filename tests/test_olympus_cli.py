@@ -450,6 +450,5 @@ def test_olympus_ingest_forwards_source_url_and_raw_pdf_hash(tmp_path: Path) -> 
 
     data = json.loads(result.stdout)
     assert data["artifact_hash"] == expected_artifact_hash
-    assert data["blake3_checksum"] == expected_artifact_hash
     assert data["source_url"] == "https://example.com/archive/document.pdf"
     assert data["raw_pdf_hash"] == expected_raw_pdf_hash
