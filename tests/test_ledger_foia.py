@@ -53,6 +53,14 @@ def _b3(s: str) -> str:
     return blake3.blake3(s.encode()).hexdigest()
 
 
+def _contains_key(payload: object, needle: str) -> bool:
+    if isinstance(payload, dict):
+        return needle in payload or any(_contains_key(value, needle) for value in payload.values())
+    if isinstance(payload, list):
+        return any(_contains_key(item, needle) for item in payload)
+    return False
+
+
 @pytest.mark.asyncio
 async def test_ledger_state_empty(client):
     """GET /ledger/state on a fresh DB returns total_commits = 0."""
@@ -93,9 +101,43 @@ async def test_shard_state_rejects_invalid_shard_id(client):
 
 
 @pytest.mark.asyncio
-async def test_proof_endpoint(client):
-    """GET /ledger/proof/{commit_id} returns a proof for an existing commit."""
+async def test_proof_endpoint_pending_in_production(client, monkeypatch):
+    """GET /ledger/proof/{commit_id} returns a pending proof response in production."""
+    monkeypatch.setenv("OLYMPUS_ENV", "development")
+    monkeypatch.setenv("OLYMPUS_ALLOW_DEV_AUTH", "1")
     doc_hash = _b3("proof endpoint test")
+    commit_resp = await client.post("/doc/commit", json={"doc_hash": doc_hash})
+    commit_id = commit_resp.json()["commit_id"]
+
+    monkeypatch.delenv("OLYMPUS_ENV", raising=False)
+    proof_resp = await client.get(f"/ledger/proof/{commit_id}")
+    assert proof_resp.status_code == 202
+    assert proof_resp.headers["content-type"].startswith("application/json")
+    data = proof_resp.json()
+    assert data["commit_id"] == commit_id
+    assert data["status"] == "pending"
+
+
+@pytest.mark.asyncio
+async def test_proof_endpoint_pending_response_omits_verified_field(client, monkeypatch):
+    """GET /ledger/proof/{commit_id} omits verified from pending production responses."""
+    monkeypatch.setenv("OLYMPUS_ENV", "development")
+    monkeypatch.setenv("OLYMPUS_ALLOW_DEV_AUTH", "1")
+    doc_hash = _b3("proof pending verified omission")
+    commit_resp = await client.post("/doc/commit", json={"doc_hash": doc_hash})
+    commit_id = commit_resp.json()["commit_id"]
+
+    monkeypatch.delenv("OLYMPUS_ENV", raising=False)
+    proof_resp = await client.get(f"/ledger/proof/{commit_id}")
+    assert proof_resp.status_code == 202
+    assert not _contains_key(proof_resp.json(), "verified")
+
+
+@pytest.mark.asyncio
+async def test_proof_endpoint_stub_in_development(client, monkeypatch):
+    """GET /ledger/proof/{commit_id} keeps the stub proof response in development."""
+    monkeypatch.setenv("OLYMPUS_ENV", "development")
+    doc_hash = _b3("proof endpoint test dev")
     commit_resp = await client.post("/doc/commit", json={"doc_hash": doc_hash})
     commit_id = commit_resp.json()["commit_id"]
 
