@@ -66,21 +66,22 @@ def _validate_endpoint_url(url: str, *, allow_http: bool = False) -> None:
     if not hostname:
         raise ValueError("Witness endpoint URL must include a hostname.")
 
-    # Block private and loopback ranges to prevent SSRF
+    # Block private and loopback ranges to prevent SSRF.
+    # ip_address() raises ValueError for DNS names (not an IP literal) — ignore those.
+    # Only raise when the hostname IS a valid IP that falls in a restricted range.
     try:
         addr = ipaddress.ip_address(hostname)
-        if addr.is_private or addr.is_loopback or addr.is_link_local:
-            _env = os.environ.get("OLYMPUS_ENV", "production")
-            if _env != "development":
-                raise ValueError(
-                    f"Witness endpoint hostname {hostname!r} resolves to a "
-                    f"private/loopback address. This is not permitted in "
-                    f"production to prevent SSRF attacks."
-                )
-    except ValueError as exc:
-        # Re-raise SSRF errors, ignore non-IP hostnames (DNS names are ok)
-        if "private" in str(exc) or "loopback" in str(exc):
-            raise
+    except ValueError:
+        return  # DNS hostname — not an IP literal, no range check needed
+
+    if addr.is_private or addr.is_loopback or addr.is_link_local:
+        _env = os.environ.get("OLYMPUS_ENV", "production")
+        if _env != "development":
+            raise ValueError(
+                f"Witness endpoint hostname {hostname!r} resolves to a "
+                f"private/loopback address. This is not permitted in "
+                f"production to prevent SSRF attacks."
+            )
 
 
 class WitnessHTTPTransport:

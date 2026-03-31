@@ -46,6 +46,7 @@ from api.services.shard import DEFAULT_SHARD_ID, compute_state_root
 from protocol.canonical_json import canonical_json_bytes
 from protocol.hashes import (
     DATASET_LINEAGE_PREFIX,
+    _length_prefixed_bytes,
     blake3_hash,
     compute_dataset_commit_id,
     dataset_key,
@@ -676,8 +677,13 @@ async def commit_lineage(
     )
     parent_commit_id = latest_result.scalars().first() or ""
 
-    payload = f"{dataset_id}:{parent_commit_id}:{body.model_id}:{body.committer_pubkey}"
-    commit_id = blake3_hash([DATASET_LINEAGE_PREFIX, payload.encode()]).hex()
+    key_data = b"".join([
+        _length_prefixed_bytes("dataset_id", dataset_id.encode("utf-8")),
+        _length_prefixed_bytes("parent_commit_id", parent_commit_id.encode("utf-8")),
+        _length_prefixed_bytes("model_id", body.model_id.encode("utf-8")),
+        _length_prefixed_bytes("committer_pubkey", body.committer_pubkey.encode("utf-8")),
+    ])
+    commit_id = blake3_hash([DATASET_LINEAGE_PREFIX, key_data]).hex()
 
     # 3. Check uniqueness (dataset_id, model_id, event_type, committer_pubkey)
     existing = await db.execute(
