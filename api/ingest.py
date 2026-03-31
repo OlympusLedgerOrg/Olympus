@@ -358,6 +358,14 @@ def _dev_signing_key_enabled() -> bool:
     }
 
 
+_EPHEMERAL_KEY_WITH_DB_ERROR = (
+    "OLYMPUS_DEV_SIGNING_KEY=1 is set but DATABASE_URL is also configured. "
+    "Ephemeral signing keys cannot be used with a persistent database — all signed "
+    "shard headers would become permanently unverifiable after restart. "
+    "Either set OLYMPUS_INGEST_SIGNING_KEY to a stable key, or unset DATABASE_URL "
+    "to use in-memory mode only."
+)
+
 # Hard fail when persistence is configured without a signing key
 if os.environ.get("DATABASE_URL") and not os.environ.get("OLYMPUS_INGEST_SIGNING_KEY"):
     if not _dev_signing_key_enabled():
@@ -365,10 +373,7 @@ if os.environ.get("DATABASE_URL") and not os.environ.get("OLYMPUS_INGEST_SIGNING
             "DATABASE_URL is set but OLYMPUS_INGEST_SIGNING_KEY is missing - "
             "ingest persistence cannot start without a signing key"
         )
-    logger.warning(
-        "DATABASE_URL is set but OLYMPUS_INGEST_SIGNING_KEY is missing - "
-        "using a dev-generated signing key (OLYMPUS_DEV_SIGNING_KEY enabled)"
-    )
+    raise RuntimeError(_EPHEMERAL_KEY_WITH_DB_ERROR)
 
 
 def _get_storage() -> StorageLayer | None:
@@ -403,14 +408,7 @@ def _get_storage() -> StorageLayer | None:
                 "refusing to start"
             )
             raise RuntimeError("OLYMPUS_INGEST_SIGNING_KEY is required when DATABASE_URL is set")
-        logger.critical(
-            "*** DEV SIGNING KEY IN USE *** "
-            "OLYMPUS_INGEST_SIGNING_KEY is missing - using a dev-generated signing key "
-            "(OLYMPUS_DEV_SIGNING_KEY enabled). "
-            "All previously signed shard headers will become unverifiable after restart. "
-            "Do NOT use this in production."
-        )
-        _signing_key = nacl.signing.SigningKey.generate()
+        raise RuntimeError(_EPHEMERAL_KEY_WITH_DB_ERROR)
 
     try:
         from storage.postgres import StorageLayer
