@@ -26,6 +26,7 @@ from datetime import datetime, timezone
 from threading import Lock
 from time import monotonic
 from typing import TYPE_CHECKING, Any
+from urllib.parse import urlparse
 
 import nacl.signing
 from fastapi import APIRouter, HTTPException, Request
@@ -836,6 +837,16 @@ def _normalize_merkle_root(merkle_root: str) -> str:
     return raw.hex()
 
 
+def _normalize_source_url(source_url: str) -> str:
+    """Validate and normalize a provenance source URL."""
+    parsed = urlparse(source_url)
+    if parsed.scheme not in {"http", "https"}:
+        raise HTTPException(status_code=400, detail="source_url must use http or https")
+    if not parsed.netloc:
+        raise HTTPException(status_code=400, detail="source_url must include a hostname")
+    return source_url
+
+
 def _value_hash_to_poseidon_field(value_hash: bytes) -> int:
     """Convert a 32-byte value hash into the BN128 field element used by PoseidonSMT."""
     if len(value_hash) != 32:
@@ -1492,6 +1503,18 @@ class ArtifactCommitRequest(BaseModel):
         max_length=_ARTIFACT_ID_MAX_LEN,
         pattern=_IDENTIFIER_PATTERN,
     )
+    source_url: str | None = Field(
+        None,
+        description="Optional http(s) URL describing where the artifact was retrieved from",
+        max_length=2048,
+    )
+    raw_pdf_hash: str | None = Field(
+        None,
+        description=(
+            "Optional 64-character hex-encoded raw-PDF BLAKE3 hash anchored "
+            "alongside OCR/text hashes"
+        ),
+    )
 
 
 class ArtifactCommitResponse(BaseModel):
@@ -1573,6 +1596,10 @@ async def commit_artifact(
         # Poseidon root is always computed server-side (HIGH-02 security fix)
         canonicalization = dict(canonicalization)
         canonicalization["poseidon_root"] = poseidon_root_normalized
+        if request.source_url:
+            canonicalization["source_url"] = _normalize_source_url(request.source_url)
+        if request.raw_pdf_hash:
+            canonicalization["raw_pdf_hash"] = _parse_content_hash(request.raw_pdf_hash).hex()
 
         # If PostgreSQL is configured, persist artifact durably
         if storage is not None and _signing_key is not None:
