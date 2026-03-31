@@ -18,6 +18,14 @@ from storage.protocol_state import (
 )
 
 
+def _normalize_sql(statement: object) -> str:
+    if isinstance(statement, str):
+        text = statement
+    else:
+        text = str(statement)
+    return " ".join(text.split())
+
+
 class TestLoadTreeState(unittest.TestCase):
     """Tests for load_tree_state function."""
 
@@ -139,7 +147,7 @@ class TestPersistTreeNodes(unittest.TestCase):
 
         # Only the SET LOCAL gate call should have been made; no INSERT.
         self.assertEqual(cur.execute.call_count, 1)
-        gate_sql = cur.execute.call_args_list[0][0][0]
+        gate_sql = _normalize_sql(cur.execute.call_args_list[0][0][0])
         self.assertIn("olympus.allow_node_rehash", gate_sql)
 
 

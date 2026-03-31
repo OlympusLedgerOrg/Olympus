@@ -199,14 +199,16 @@ def registry_forest_commitment(registry: FederationRegistry) -> str:
         _length_prefixed_bytes("membership", registry.membership_hash().encode("utf-8")),
     ]
     for node in active_nodes:
-        node_part = b"".join([
-            _length_prefixed_bytes("node_id", node.node_id.encode("utf-8")),
-            _length_prefixed_bytes("pubkey", node.pubkey.hex().encode("utf-8")),
-            _length_prefixed_bytes("endpoint", node.endpoint.encode("utf-8")),
-            _length_prefixed_bytes("operator", node.operator.encode("utf-8")),
-            _length_prefixed_bytes("jurisdiction", node.jurisdiction.encode("utf-8")),
-            _length_prefixed_bytes("status", node.status.encode("utf-8")),
-        ])
+        node_part = b"".join(
+            [
+                _length_prefixed_bytes("node_id", node.node_id.encode("utf-8")),
+                _length_prefixed_bytes("pubkey", node.pubkey.hex().encode("utf-8")),
+                _length_prefixed_bytes("endpoint", node.endpoint.encode("utf-8")),
+                _length_prefixed_bytes("operator", node.operator.encode("utf-8")),
+                _length_prefixed_bytes("jurisdiction", node.jurisdiction.encode("utf-8")),
+                _length_prefixed_bytes("status", node.status.encode("utf-8")),
+            ]
+        )
         parts.append(node_part)
 
     return hash_bytes(b"".join(parts)).hex()

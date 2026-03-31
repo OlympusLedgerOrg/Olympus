@@ -156,7 +156,11 @@ async def client():
     # Set development mode and disable API keys for test bypass
     with patch.dict(
         os.environ,
-        {"OLYMPUS_ENV": "development", "OLYMPUS_ALLOW_DEV_AUTH": "1", "OLYMPUS_FOIA_API_KEYS": "[]"},
+        {
+            "OLYMPUS_ENV": "development",
+            "OLYMPUS_ALLOW_DEV_AUTH": "1",
+            "OLYMPUS_FOIA_API_KEYS": "[]",
+        },
     ):
         app = create_app()
         async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:

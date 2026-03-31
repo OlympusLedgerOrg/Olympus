@@ -1579,9 +1579,7 @@ async def commit_artifact(
             try:
                 # Convert the server-computed Poseidon root decimal string to bytes for the
                 # storage layer, which uses raw 32-byte big-endian encoding.
-                poseidon_root_bytes = int(poseidon_root_normalized).to_bytes(
-                    32, byteorder="big"
-                )
+                poseidon_root_bytes = int(poseidon_root_normalized).to_bytes(32, byteorder="big")
 
                 root_hash, proof, _header, _signature, ledger_entry = storage.append_record(
                     shard_id=shard_id,
