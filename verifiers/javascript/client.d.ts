@@ -43,7 +43,6 @@ export declare class OlympusClient {
     artifactHash: string;
     namespace: string;
     id: string;
-    poseidonRoot?: string | null;
   }): Promise<OlympusCommitResponse>;
 
   getProof(proofId: string): Promise<OlympusProofBundle>;
@@ -54,7 +53,6 @@ export declare class OlympusClient {
     fileBytes: ArrayBuffer | Uint8Array;
     namespace?: string;
     id?: string;
-    poseidonRoot?: string | null;
     generateProof?: boolean;
     verify?: boolean;
   }): Promise<Record<string, unknown>>;

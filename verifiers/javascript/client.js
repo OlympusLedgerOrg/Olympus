@@ -37,14 +37,13 @@ class OlympusClient {
     return response.json();
   }
 
-  async commitArtifact({ artifactHash, namespace, id, poseidonRoot }) {
+  async commitArtifact({ artifactHash, namespace, id }) {
     return this._request('/ingest/commit', {
       method: 'POST',
       body: {
         artifact_hash: artifactHash,
         namespace,
         id,
-        poseidon_root: poseidonRoot || null,
       },
     });
   }
@@ -65,15 +64,16 @@ class OlympusClient {
         content_hash: bundle.content_hash,
         merkle_root: bundle.merkle_root,
         merkle_proof: bundle.merkle_proof,
-        poseidon_root: bundle.poseidon_root || null,
       },
     });
   }
 
   async submitProofBundle(bundle) {
+    // Remove poseidon_root from bundle as it's computed server-side (HIGH-02 security fix)
+    const { poseidon_root: _poseidonRoot, ...bundleWithoutPoseidon } = bundle;
     return this._request('/ingest/proofs', {
       method: 'POST',
-      body: bundle,
+      body: bundleWithoutPoseidon,
     });
   }
 
@@ -81,12 +81,11 @@ class OlympusClient {
     fileBytes,
     namespace = 'demo',
     id = 'artifact',
-    poseidonRoot = null,
     generateProof = false,
     verify = false,
   }) {
     const artifactHash = toHex(computeBlake3(new Uint8Array(fileBytes)));
-    const commit = await this.commitArtifact({ artifactHash, namespace, id, poseidonRoot });
+    const commit = await this.commitArtifact({ artifactHash, namespace, id });
     const result = { artifactHash, commit };
     if (generateProof) {
       result.proof = await this.getProof(commit.proof_id);

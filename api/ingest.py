@@ -53,7 +53,6 @@ from protocol.merkle import (
     merkle_leaf_hash,
     verify_proof,
 )
-from protocol.redaction_ledger import poseidon_root_to_bytes
 from protocol.ssmf import ExistenceProof
 from protocol.telemetry import INGEST_TOTAL, LEDGER_HEIGHT, timed_operation
 from protocol.timestamps import current_timestamp
@@ -276,9 +275,6 @@ class ProofVerificationRequest(BaseModel):
     content_hash: str = Field(..., description="Hex-encoded BLAKE3 hash committed by Olympus")
     merkle_root: str = Field(..., description="Hex-encoded Merkle root anchoring the content hash")
     merkle_proof: dict[str, Any] = Field(..., description="Serialized Merkle proof bundle")
-    poseidon_root: str | None = Field(
-        None, description="Optional Poseidon root bound to the same commitment"
-    )
 
 
 class ProofVerificationResponse(BaseModel):
@@ -862,6 +858,17 @@ def _build_poseidon_smt_for_storage_shard(storage: StorageLayer, shard_id: str) 
     return poseidon_smt
 
 
+def _get_or_build_poseidon_smt(shard_id: str) -> PoseidonSMT:
+    """Get a Poseidon SMT for the given shard, using storage if available."""
+    storage = _get_storage()
+    if storage is not None:
+        return _build_poseidon_smt_for_storage_shard(storage, shard_id)
+    else:
+        from protocol.poseidon_smt import PoseidonSMT
+
+        return PoseidonSMT()
+
+
 def _evaluate_proof_bundle(
     content_hash: str, merkle_root: str, merkle_proof_data: dict[str, Any]
 ) -> tuple[str, str, bool, bool]:
@@ -1380,6 +1387,7 @@ async def verify_submitted_proof_bundle(
         )
     )
     record = _fetch_by_content_hash(normalized_hash)
+    # Return server-known poseidon_root only (HIGH-02 security fix)
     return ProofVerificationResponse(
         proof_id=record["proof_id"] if record is not None else proof_request.proof_id,
         content_hash=normalized_hash,
@@ -1387,9 +1395,7 @@ async def verify_submitted_proof_bundle(
         content_hash_matches_proof=content_hash_matches,
         merkle_proof_valid=merkle_proof_valid,
         known_to_server=record is not None,
-        poseidon_root=proof_request.poseidon_root
-        if record is None
-        else record.get("poseidon_root"),
+        poseidon_root=record.get("poseidon_root") if record is not None else None,
     )
 
 
@@ -1416,6 +1422,18 @@ async def submit_proof_bundle(
         return ProofSubmissionResponse(**existing, submitted=False, deduplicated=True)
 
     proof_id = proof_request.proof_id or str(uuid.uuid4())
+
+    # Compute Poseidon root server-side (HIGH-02 security fix)
+    poseidon_smt = _get_or_build_poseidon_smt(proof_request.shard_id)
+    content_hash_bytes = bytes.fromhex(normalized_hash)
+    proof_key = record_key(
+        proof_request.canonicalization.get("record_type", "document"),
+        proof_request.record_id,
+        1,
+    )
+    poseidon_smt.update(proof_key, _value_hash_to_poseidon_field(content_hash_bytes))
+    poseidon_root_normalized = str(poseidon_smt.get_root())
+
     stored_entry = {
         "proof_id": proof_id,
         "record_id": proof_request.record_id,
@@ -1427,7 +1445,7 @@ async def submit_proof_bundle(
         "timestamp": proof_request.timestamp,
         "canonicalization": proof_request.canonicalization,
         "batch_id": proof_request.batch_id,
-        "poseidon_root": proof_request.poseidon_root,
+        "poseidon_root": poseidon_root_normalized,
         "persisted": False,
     }
     _cache_ingestion_record(stored_entry)
@@ -1442,7 +1460,7 @@ async def submit_proof_bundle(
         timestamp=proof_request.timestamp,
         canonicalization=proof_request.canonicalization,
         batch_id=proof_request.batch_id,
-        poseidon_root=proof_request.poseidon_root,
+        poseidon_root=poseidon_root_normalized,
         submitted=True,
         deduplicated=False,
     )
@@ -1475,13 +1493,6 @@ class ArtifactCommitRequest(BaseModel):
         description="Artifact identifier (e.g. 'org/repo/v1.0.0')",
         max_length=_ARTIFACT_ID_MAX_LEN,
         pattern=_IDENTIFIER_PATTERN,
-    )
-    poseidon_root: str | None = Field(
-        None,
-        description=(
-            "Optional Poseidon root (decimal string) to bind a ZK circuit root to the"
-            " committed artifact hash"
-        ),
     )
 
 
@@ -1524,12 +1535,6 @@ async def commit_artifact(
 
     shard_id = f"artifacts/{request.namespace}"
     batch_id = str(uuid.uuid4())
-    poseidon_root_input = request.poseidon_root
-    poseidon_root_normalized: str | None = None
-
-    if poseidon_root_input is not None:
-        poseidon_bytes = poseidon_root_to_bytes(poseidon_root_input)
-        poseidon_root_normalized = str(int.from_bytes(poseidon_bytes, byteorder="big"))
 
     # Try to get storage layer (returns None if not configured)
     storage = _get_storage()
@@ -1546,15 +1551,6 @@ async def commit_artifact(
         # Dedup: if this exact hash has already been committed, return existing proof
         existing = _fetch_by_content_hash(artifact_hash_hex)
         if existing is not None:
-            existing_poseidon = existing.get("poseidon_root")
-            if poseidon_root_normalized is not None and existing_poseidon not in (
-                None,
-                poseidon_root_normalized,
-            ):
-                raise HTTPException(
-                    status_code=400,
-                    detail="Conflicting poseidon_root for existing artifact commitment",
-                )
             existing_proof_id = existing["proof_id"]
             INGEST_TOTAL.labels(outcome="deduplicated").inc()
             return ArtifactCommitResponse(
@@ -1569,32 +1565,25 @@ async def commit_artifact(
 
         proof_id = str(uuid.uuid4())
         artifact_key = record_key("artifact", request.id, 1)
-        if poseidon_root_normalized is None:
-            if storage is not None:
-                poseidon_smt = _build_poseidon_smt_for_storage_shard(storage, shard_id)
-            else:
-                from protocol.poseidon_smt import PoseidonSMT
-
-                poseidon_smt = PoseidonSMT()
-            poseidon_smt.update(artifact_key, _value_hash_to_poseidon_field(artifact_hash_bytes))
-            poseidon_root_normalized = str(poseidon_smt.get_root())
+        # Always compute Poseidon root server-side (HIGH-02 security fix)
+        poseidon_smt = _get_or_build_poseidon_smt(shard_id)
+        poseidon_smt.update(artifact_key, _value_hash_to_poseidon_field(artifact_hash_bytes))
+        poseidon_root_normalized = str(poseidon_smt.get_root())
         canonicalization = canonicalization_provenance(
             "application/octet-stream", CANONICAL_VERSION
         )
-        if poseidon_root_normalized is not None:
-            canonicalization = dict(canonicalization)
-            canonicalization["poseidon_root"] = poseidon_root_normalized
+        # Poseidon root is always computed server-side (HIGH-02 security fix)
+        canonicalization = dict(canonicalization)
+        canonicalization["poseidon_root"] = poseidon_root_normalized
 
         # If PostgreSQL is configured, persist artifact durably
         if storage is not None and _signing_key is not None:
             try:
-                # Convert the normalized Poseidon root decimal string to bytes for the
+                # Convert the server-computed Poseidon root decimal string to bytes for the
                 # storage layer, which uses raw 32-byte big-endian encoding.
-                poseidon_root_bytes: bytes | None = None
-                if poseidon_root_normalized is not None:
-                    poseidon_root_bytes = int(poseidon_root_normalized).to_bytes(
-                        32, byteorder="big"
-                    )
+                poseidon_root_bytes = int(poseidon_root_normalized).to_bytes(
+                    32, byteorder="big"
+                )
 
                 root_hash, proof, _header, _signature, ledger_entry = storage.append_record(
                     shard_id=shard_id,
