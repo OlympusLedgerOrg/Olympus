@@ -2401,12 +2401,12 @@ class StorageLayer:
                 offset = 0
                 while True:
                     cur.execute(
-                        f"""
+                        sql.SQL("""
                         SELECT key, value_hash FROM smt_leaves
-                        {ts_clause}
+                        {}
                         ORDER BY ts ASC, key ASC
                         LIMIT %s OFFSET %s
-                        """,
+                        """).format(sql.SQL(ts_clause)),
                         (*ts_params, batch_size, offset),
                     )
                     rows = cur.fetchall()
