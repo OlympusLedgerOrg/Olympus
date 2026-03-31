@@ -218,7 +218,7 @@ async def require_api_key(request: Request) -> _APIKeyRecord:
                 scopes={"read", "write"},
                 expires_at=datetime(2099, 1, 1, tzinfo=timezone.utc),
             )
-        logger.error(
+        logger.critical(
             "Authentication not configured. Refusing unauthenticated write access. "
             "Configure API keys or set OLYMPUS_ENV=development and "
             "OLYMPUS_ALLOW_DEV_AUTH=1 for local testing."
@@ -300,7 +300,7 @@ def require_api_key_with_scope(required_scope: str) -> Any:
                     scopes={"read", "write", "ingest", "commit", "verify"},
                     expires_at=datetime(2099, 1, 1, tzinfo=timezone.utc),
                 )
-            logger.error(
+            logger.critical(
                 "Authentication not configured. Refusing unauthenticated access. "
                 "Configure API keys or set OLYMPUS_ENV=development and "
                 "OLYMPUS_ALLOW_DEV_AUTH=1 for local testing."
@@ -552,6 +552,21 @@ def _is_valid_ip(ip: str) -> bool:
         return False
 
 
+def _normalize_ip(ip: str) -> str:
+    """Normalize IPv4-mapped IPv6 addresses to plain IPv4.
+
+    Ensures that ::ffff:1.2.3.4 and 1.2.3.4 map to the same rate-limit
+    bucket key, preventing double-bucket bypass.
+    """
+    try:
+        addr = ipaddress.ip_address(ip)
+        if isinstance(addr, ipaddress.IPv6Address) and addr.ipv4_mapped is not None:
+            return str(addr.ipv4_mapped)
+    except ValueError:
+        pass
+    return ip
+
+
 def _ip_in_ranges(ip: str, ranges: list[str]) -> bool:
     """Return True if *ip* falls within any of the given IP ranges.
 
@@ -611,16 +626,16 @@ def _get_client_ip(request: Request) -> str:
             "Ignoring X-Forwarded-For because OLYMPUS_TRUSTED_PROXY_IPS contains an overly "
             "broad range (0.0.0.0/0 or ::/0), which allows client IP spoofing."
         )
-        return peer_ip
+        return _normalize_ip(peer_ip)
 
     if trusted and _ip_in_ranges(peer_ip, trusted):
         forwarded_for = request.headers.get("x-forwarded-for", "")
         if forwarded_for:
             client_ip = forwarded_for.split(",")[0].strip()
             if _is_valid_ip(client_ip):
-                return client_ip
+                return _normalize_ip(client_ip)
 
-    return peer_ip
+    return _normalize_ip(peer_ip)
 
 
 async def rate_limit(request: Request) -> None:
