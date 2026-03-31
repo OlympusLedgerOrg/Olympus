@@ -64,15 +64,16 @@ class OlympusClient {
         content_hash: bundle.content_hash,
         merkle_root: bundle.merkle_root,
         merkle_proof: bundle.merkle_proof,
-        poseidon_root: bundle.poseidon_root || null,
       },
     });
   }
 
   async submitProofBundle(bundle) {
+    // Remove poseidon_root from bundle as it's computed server-side (HIGH-02 security fix)
+    const { poseidon_root: _ignored, ...bundleWithoutPoseidon } = bundle;
     return this._request('/ingest/proofs', {
       method: 'POST',
-      body: bundle,
+      body: bundleWithoutPoseidon,
     });
   }
 

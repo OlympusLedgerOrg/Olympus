@@ -301,7 +301,6 @@ class TestSubmittedProofBundles:
                 "content_hash": proof_bundle["content_hash"],
                 "merkle_root": proof_bundle["merkle_root"],
                 "merkle_proof": proof_bundle["merkle_proof"],
-                "poseidon_root": proof_bundle["poseidon_root"],
             },
         )
 
@@ -311,6 +310,8 @@ class TestSubmittedProofBundles:
         assert data["content_hash_matches_proof"] is True
         assert data["merkle_proof_valid"] is True
         assert data["known_to_server"] is True
+        # Server returns the known poseidon_root for server-known content
+        assert data["poseidon_root"] == proof_bundle["poseidon_root"]
 
     def test_submit_valid_external_proof_bundle(self, client: TestClient):
         content_hash_bytes = hash_bytes(b"external-proof-bundle")
