@@ -224,6 +224,40 @@ class TestRegistryForestCommitment:
         result = registry_forest_commitment(registry)
         assert len(result) == 64  # hex encoded 32 bytes
 
+    def test_pipe_in_node_id_does_not_collide_with_field_separator(self):
+        """Length-prefixed encoding prevents pipe injection in node fields.
+
+        With naive HASH_SEPARATOR.join(), node_id="a|b" + endpoint="c" would
+        produce the same joined string as node_id="a" + endpoint="|b|c" (if
+        surrounding separators allowed that boundary shift). Length-prefix
+        encoding commits field boundaries, so these registries must produce
+        different commitments.
+        """
+        sk = nacl.signing.SigningKey.generate()
+
+        node_pipe = FederationNode(
+            node_id="a|b",
+            pubkey=sk.verify_key.encode(),
+            endpoint="c",
+            operator="op",
+            jurisdiction="US",
+        )
+        node_plain = FederationNode(
+            node_id="a",
+            pubkey=sk.verify_key.encode(),
+            endpoint="|b|c",
+            operator="op",
+            jurisdiction="US",
+        )
+
+        registry_pipe = FederationRegistry(nodes=(node_pipe,), epoch=1)
+        registry_plain = FederationRegistry(nodes=(node_plain,), epoch=1)
+
+        commitment_pipe = registry_forest_commitment(registry_pipe)
+        commitment_plain = registry_forest_commitment(registry_plain)
+
+        assert commitment_pipe != commitment_plain
+
 
 # ── DataAvailabilityChallenge (lines 248-259) ──
 

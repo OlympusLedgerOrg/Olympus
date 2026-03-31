@@ -30,6 +30,7 @@ from api.main import create_app
 from api.models import Base
 from protocol.hashes import (
     DATASET_LINEAGE_PREFIX,
+    _length_prefixed_bytes,
     blake3_hash,
     compute_dataset_commit_id,
     dataset_key,
@@ -191,16 +192,26 @@ def build_lineage_request(
     """Build a complete LineageCommitRequest body with valid signature.
 
     The commit_id computation matches the server implementation in
-    api/routers/datasets.py (lines 678-679):
-      payload = f"{dataset_id}:{parent_commit_id}:{model_id}:{committer_pubkey}"
-      commit_id = blake3_hash([DATASET_LINEAGE_PREFIX, payload.encode()]).hex()
+    api/routers/datasets.py:
+      key_data = b"".join([
+          _length_prefixed_bytes("dataset_id", dataset_id.encode("utf-8")),
+          _length_prefixed_bytes("parent_commit_id", parent_commit_id.encode("utf-8")),
+          _length_prefixed_bytes("model_id", model_id.encode("utf-8")),
+          _length_prefixed_bytes("committer_pubkey", committer_pubkey.encode("utf-8")),
+      ])
+      commit_id = blake3_hash([DATASET_LINEAGE_PREFIX, key_data]).hex()
 
     Note: event_type is NOT included in commit_id, so different event_types
     for the same (dataset_id, model_id, committer_pubkey) will have the same
     commit_id and fail the unique constraint.
     """
-    payload = f"{dataset_id}:{parent_commit_id}:{model_id}:{pubkey_hex}"
-    commit_id = blake3_hash([DATASET_LINEAGE_PREFIX, payload.encode()]).hex()
+    key_data = b"".join([
+        _length_prefixed_bytes("dataset_id", dataset_id.encode("utf-8")),
+        _length_prefixed_bytes("parent_commit_id", parent_commit_id.encode("utf-8")),
+        _length_prefixed_bytes("model_id", model_id.encode("utf-8")),
+        _length_prefixed_bytes("committer_pubkey", pubkey_hex.encode("utf-8")),
+    ])
+    commit_id = blake3_hash([DATASET_LINEAGE_PREFIX, key_data]).hex()
     signature = sign_commit(signing_key, commit_id)
 
     return {
@@ -943,3 +954,25 @@ async def test_commit_lineage_missing_required_fields_returns_422(client):
     incomplete_body = {"model_id": "incomplete"}
     resp = await client.post(f"/datasets/{dataset_id}/lineage", json=incomplete_body)
     assert resp.status_code == 422
+
+
+def test_lineage_commit_id_prevents_field_injection():
+    """Length-prefixed encoding prevents colon-injection in lineage commit_ids.
+
+    With naive colon-concatenation, dataset_id="a:b", parent="c" would produce
+    the same payload as dataset_id="a", parent="b:c". Length-prefix encoding
+    commits field boundaries explicitly, so these must be distinct.
+    """
+    model_id = "some-model"
+    pubkey = "e" * 64
+
+    def _compute(dataset_id: str, parent_commit_id: str) -> str:
+        key_data = b"".join([
+            _length_prefixed_bytes("dataset_id", dataset_id.encode("utf-8")),
+            _length_prefixed_bytes("parent_commit_id", parent_commit_id.encode("utf-8")),
+            _length_prefixed_bytes("model_id", model_id.encode("utf-8")),
+            _length_prefixed_bytes("committer_pubkey", pubkey.encode("utf-8")),
+        ])
+        return blake3_hash([DATASET_LINEAGE_PREFIX, key_data]).hex()
+
+    assert _compute("a:b", "c") != _compute("a", "b:c")

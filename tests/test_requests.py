@@ -520,3 +520,44 @@ def test_escape_like_wildcards():
     assert _escape_like("under_score") == "under\\_score"
     assert _escape_like("back\\slash") == "back\\\\slash"
     assert _escape_like("normal") == "normal"
+
+
+@pytest.mark.asyncio
+async def test_next_display_id_increments():
+    """_next_display_id() returns an ID one higher on the second call."""
+    from datetime import datetime, timezone
+
+    from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
+
+    from api.models import Base
+    from api.models.request import PublicRecordsRequest, RequestStatus, RequestType
+    from api.routers.requests import _next_display_id
+
+    engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+    factory = async_sessionmaker(engine, expire_on_commit=False, class_=AsyncSession)
+
+    async with factory() as session:
+        first = await _next_display_id(session)
+        assert first == "OLY-0001"
+
+        # Insert a row so the next call sees the current max
+        now = datetime.now(timezone.utc)
+        session.add(
+            PublicRecordsRequest(
+                display_id=first,
+                subject="test",
+                description="test",
+                request_type=RequestType.NC_PUBLIC_RECORDS.value,
+                status=RequestStatus.PENDING.value,
+                filed_at=now,
+                deadline=now,
+            )
+        )
+        await session.commit()
+
+        second = await _next_display_id(session)
+        assert int(second.split("-")[1]) == int(first.split("-")[1]) + 1
+
+    await engine.dispose()
