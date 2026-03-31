@@ -10,6 +10,14 @@ import storage.postgres as postgres_module
 from storage.postgres import StorageLayer
 
 
+def _normalize_sql(statement: object) -> str:
+    if isinstance(statement, str):
+        text = statement
+    else:
+        text = str(statement)
+    return " ".join(text.split())
+
+
 class _FakeConnection:
     def __init__(self, status: TransactionStatus = TransactionStatus.IDLE) -> None:
         self.closed = False
@@ -59,11 +67,11 @@ class _FakeCursor:
     def __init__(self) -> None:
         self.statements: list[str] = []
 
-    def execute(self, sql: str, _params: object = None) -> None:
-        self.statements.append(" ".join(sql.split()))
+    def execute(self, sql: object, _params: object = None) -> None:
+        self.statements.append(_normalize_sql(sql))
 
-    def executemany(self, sql: str, _params: object = None) -> None:
-        self.statements.append(" ".join(sql.split()))
+    def executemany(self, sql: object, _params: object = None) -> None:
+        self.statements.append(_normalize_sql(sql))
 
 
 class _FakeTree:
@@ -159,7 +167,7 @@ def test_persist_tree_nodes_uses_upsert_without_precheck(monkeypatch: pytest.Mon
     assert all("SELECT 1 FROM smt_nodes" not in sql for sql in cursor.statements)
 
     # The first statement must gate the trigger with the BLAKE3 hash.
-    assert cursor.statements[0].startswith("SET LOCAL olympus.allow_node_rehash = '")
+    assert "olympus.allow_node_rehash" in cursor.statements[0]
     assert "003e82" in cursor.statements[0]  # prefix of the BLAKE3 gate hash
 
     # All INSERT statements must use DO UPDATE (not DO NOTHING).

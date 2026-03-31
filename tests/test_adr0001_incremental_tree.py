@@ -39,6 +39,14 @@ def _make_storage() -> StorageLayer:
         return sl
 
 
+def _normalize_sql(statement: object) -> str:
+    if isinstance(statement, str):
+        text = statement
+    else:
+        text = str(statement)
+    return " ".join(text.split())
+
+
 def _build_tree_with_one_leaf() -> tuple[SparseMerkleTree, bytes, bytes]:
     """Insert a single leaf into a fresh SMT and return (tree, key, value_hash)."""
     tree = SparseMerkleTree()
@@ -317,14 +325,14 @@ class TestPersistTreeNodesDoUpdate(unittest.TestCase):
         sl._persist_tree_nodes(cur, "shard-1", tree)
 
         # The first execute call should gate the trigger with the BLAKE3 hash.
-        first_call_sql = cur.execute.call_args_list[0][0][0]
+        first_call_sql = _normalize_sql(cur.execute.call_args_list[0][0][0])
         self.assertIn("olympus.allow_node_rehash", first_call_sql)
         # Must NOT be a simple 'on' — must be the BLAKE3 gate.
         self.assertNotIn("= 'on'", first_call_sql)
 
         # executemany should have been called with SQL containing DO UPDATE
         call_args = cur.executemany.call_args
-        sql = call_args[0][0]
+        sql = _normalize_sql(call_args[0][0])
         self.assertIn("DO UPDATE SET hash = EXCLUDED.hash", sql)
         self.assertNotIn("DO NOTHING", sql)
 
@@ -347,13 +355,13 @@ class TestProtocolStatePersistDoUpdate(unittest.TestCase):
         persist_tree_nodes(cur, None, tree)
 
         # First call must gate the trigger with the BLAKE3 hash.
-        first_call_sql = cur.execute.call_args_list[0][0][0]
+        first_call_sql = _normalize_sql(cur.execute.call_args_list[0][0][0])
         self.assertIn("olympus.allow_node_rehash", first_call_sql)
         self.assertNotIn("= 'on'", first_call_sql)
 
         # Each INSERT call should contain DO UPDATE
         for call in cur.execute.call_args_list:
-            sql = call[0][0]
+            sql = _normalize_sql(call[0][0])
             if "smt_nodes" in sql:
                 self.assertIn("DO UPDATE SET hash = EXCLUDED.hash", sql)
                 self.assertNotIn("DO NOTHING", sql)

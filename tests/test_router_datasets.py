@@ -74,7 +74,11 @@ async def client(db_engine):
     # Set development mode and no API keys for test bypass
     with patch.dict(
         os.environ,
-        {"OLYMPUS_ENV": "development", "OLYMPUS_ALLOW_DEV_AUTH": "1", "OLYMPUS_FOIA_API_KEYS": "[]"},
+        {
+            "OLYMPUS_ENV": "development",
+            "OLYMPUS_ALLOW_DEV_AUTH": "1",
+            "OLYMPUS_FOIA_API_KEYS": "[]",
+        },
     ):
         app = create_app()
         app.dependency_overrides[get_db] = override_get_db
@@ -205,12 +209,14 @@ def build_lineage_request(
     for the same (dataset_id, model_id, committer_pubkey) will have the same
     commit_id and fail the unique constraint.
     """
-    key_data = b"".join([
-        _length_prefixed_bytes("dataset_id", dataset_id.encode("utf-8")),
-        _length_prefixed_bytes("parent_commit_id", parent_commit_id.encode("utf-8")),
-        _length_prefixed_bytes("model_id", model_id.encode("utf-8")),
-        _length_prefixed_bytes("committer_pubkey", pubkey_hex.encode("utf-8")),
-    ])
+    key_data = b"".join(
+        [
+            _length_prefixed_bytes("dataset_id", dataset_id.encode("utf-8")),
+            _length_prefixed_bytes("parent_commit_id", parent_commit_id.encode("utf-8")),
+            _length_prefixed_bytes("model_id", model_id.encode("utf-8")),
+            _length_prefixed_bytes("committer_pubkey", pubkey_hex.encode("utf-8")),
+        ]
+    )
     commit_id = blake3_hash([DATASET_LINEAGE_PREFIX, key_data]).hex()
     signature = sign_commit(signing_key, commit_id)
 
@@ -967,12 +973,14 @@ def test_lineage_commit_id_prevents_field_injection():
     pubkey = "e" * 64
 
     def _compute(dataset_id: str, parent_commit_id: str) -> str:
-        key_data = b"".join([
-            _length_prefixed_bytes("dataset_id", dataset_id.encode("utf-8")),
-            _length_prefixed_bytes("parent_commit_id", parent_commit_id.encode("utf-8")),
-            _length_prefixed_bytes("model_id", model_id.encode("utf-8")),
-            _length_prefixed_bytes("committer_pubkey", pubkey.encode("utf-8")),
-        ])
+        key_data = b"".join(
+            [
+                _length_prefixed_bytes("dataset_id", dataset_id.encode("utf-8")),
+                _length_prefixed_bytes("parent_commit_id", parent_commit_id.encode("utf-8")),
+                _length_prefixed_bytes("model_id", model_id.encode("utf-8")),
+                _length_prefixed_bytes("committer_pubkey", pubkey.encode("utf-8")),
+            ]
+        )
         return blake3_hash([DATASET_LINEAGE_PREFIX, key_data]).hex()
 
     assert _compute("a:b", "c") != _compute("a", "b:c")

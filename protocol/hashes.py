@@ -475,12 +475,14 @@ def dataset_key(
     Returns:
         64-character hex-encoded BLAKE3 hash.
     """
-    key_data = b"".join([
-        _length_prefixed_bytes("canonical_namespace", canonical_namespace.encode("utf-8")),
-        _length_prefixed_bytes("source_uri", source_uri.encode("utf-8")),
-        _length_prefixed_bytes("dataset_name", dataset_name.encode("utf-8")),
-        _length_prefixed_bytes("committer_pubkey", committer_pubkey.encode("utf-8")),
-    ])
+    key_data = b"".join(
+        [
+            _length_prefixed_bytes("canonical_namespace", canonical_namespace.encode("utf-8")),
+            _length_prefixed_bytes("source_uri", source_uri.encode("utf-8")),
+            _length_prefixed_bytes("dataset_name", dataset_name.encode("utf-8")),
+            _length_prefixed_bytes("committer_pubkey", committer_pubkey.encode("utf-8")),
+        ]
+    )
     return blake3_hash([DATASET_PREFIX, key_data]).hex()
 
 
@@ -505,10 +507,12 @@ def compute_dataset_commit_id(
     Returns:
         64-character hex-encoded BLAKE3 hash.
     """
-    key_data = b"".join([
-        _length_prefixed_bytes("dataset_id", dataset_id.encode("utf-8")),
-        _length_prefixed_bytes("parent_commit_id", parent_commit_id.encode("utf-8")),
-        _length_prefixed_bytes("manifest_hash", manifest_hash.encode("utf-8")),
-        _length_prefixed_bytes("committer_pubkey", committer_pubkey.encode("utf-8")),
-    ])
+    key_data = b"".join(
+        [
+            _length_prefixed_bytes("dataset_id", dataset_id.encode("utf-8")),
+            _length_prefixed_bytes("parent_commit_id", parent_commit_id.encode("utf-8")),
+            _length_prefixed_bytes("manifest_hash", manifest_hash.encode("utf-8")),
+            _length_prefixed_bytes("committer_pubkey", committer_pubkey.encode("utf-8")),
+        ]
+    )
     return blake3_hash([DATASET_COMMIT_PREFIX, key_data]).hex()
