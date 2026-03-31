@@ -31,6 +31,11 @@ SUPPORTED_PROOF_VERSIONS: frozenset[str] = frozenset({"proof_v1"})
 # For standard Merkle trees, this is still a generous limit (2^256 leaves).
 MAX_PROOF_DEPTH = 256
 
+# L2: Maximum allowed consistency proof nodes to prevent DoS.
+# Consistency proofs contain O(log n) nodes, but we enforce an upper bound
+# to prevent malformed proofs from causing deep recursion.
+_MAX_CONSISTENCY_PROOF_NODES = 512
+
 # Canonical empty-tree commitment.  This is the root hash of a tree with
 # zero leaves and MUST be used as the only valid ``old_root`` when
 # ``old_size=0`` in consistency proof verification.
@@ -531,6 +536,10 @@ def verify_consistency_proof(
         return True
     if old_size == new_size:
         return old_root == new_root
+
+    # L2: Enforce maximum proof size to prevent DoS via deep recursion
+    if len(proof) > _MAX_CONSISTENCY_PROOF_NODES:
+        return False
 
     try:
         # Verify RFC 6962 consistency proof

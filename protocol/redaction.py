@@ -377,6 +377,13 @@ class RedactionProtocol:
                     span.set_attribute("verification_result", f"failed_root_mismatch_at_{i}")
                     return False
 
+                # 4. Leaf index must match the revealed index
+                if mp.leaf_index != proof.revealed_indices[i]:
+                    span.set_attribute(
+                        "verification_result", f"failed_leaf_index_mismatch_at_{i}"
+                    )
+                    return False
+
             span.set_attribute("verification_result", "success")
             return True
 
