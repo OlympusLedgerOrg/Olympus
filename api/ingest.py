@@ -858,6 +858,17 @@ def _build_poseidon_smt_for_storage_shard(storage: StorageLayer, shard_id: str) 
     return poseidon_smt
 
 
+def _get_or_build_poseidon_smt(shard_id: str) -> PoseidonSMT:
+    """Get a Poseidon SMT for the given shard, using storage if available."""
+    storage = _get_storage()
+    if storage is not None:
+        return _build_poseidon_smt_for_storage_shard(storage, shard_id)
+    else:
+        from protocol.poseidon_smt import PoseidonSMT
+
+        return PoseidonSMT()
+
+
 def _evaluate_proof_bundle(
     content_hash: str, merkle_root: str, merkle_proof_data: dict[str, Any]
 ) -> tuple[str, str, bool, bool]:
@@ -1413,13 +1424,7 @@ async def submit_proof_bundle(
     proof_id = proof_request.proof_id or str(uuid.uuid4())
 
     # Compute Poseidon root server-side (HIGH-02 security fix)
-    storage = _get_storage()
-    if storage is not None:
-        poseidon_smt = _build_poseidon_smt_for_storage_shard(storage, proof_request.shard_id)
-    else:
-        from protocol.poseidon_smt import PoseidonSMT
-
-        poseidon_smt = PoseidonSMT()
+    poseidon_smt = _get_or_build_poseidon_smt(proof_request.shard_id)
     content_hash_bytes = bytes.fromhex(normalized_hash)
     proof_key = record_key(
         proof_request.canonicalization.get("record_type", "document"),
@@ -1561,12 +1566,7 @@ async def commit_artifact(
         proof_id = str(uuid.uuid4())
         artifact_key = record_key("artifact", request.id, 1)
         # Always compute Poseidon root server-side (HIGH-02 security fix)
-        if storage is not None:
-            poseidon_smt = _build_poseidon_smt_for_storage_shard(storage, shard_id)
-        else:
-            from protocol.poseidon_smt import PoseidonSMT
-
-            poseidon_smt = PoseidonSMT()
+        poseidon_smt = _get_or_build_poseidon_smt(shard_id)
         poseidon_smt.update(artifact_key, _value_hash_to_poseidon_field(artifact_hash_bytes))
         poseidon_root_normalized = str(poseidon_smt.get_root())
         canonicalization = canonicalization_provenance(

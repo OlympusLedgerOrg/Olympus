@@ -70,7 +70,7 @@ class OlympusClient {
 
   async submitProofBundle(bundle) {
     // Remove poseidon_root from bundle as it's computed server-side (HIGH-02 security fix)
-    const { poseidon_root: _ignored, ...bundleWithoutPoseidon } = bundle;
+    const { poseidon_root: _poseidonRoot, ...bundleWithoutPoseidon } = bundle;
     return this._request('/ingest/proofs', {
       method: 'POST',
       body: bundleWithoutPoseidon,
