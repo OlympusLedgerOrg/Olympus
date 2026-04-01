@@ -33,20 +33,20 @@ fn verify_groth16_bn254_inner(
     proof_json: &str,
     public_signals: &[String],
 ) -> Option<bool> {
-    let vkey = parse_verifying_key(vkey_json)?;
-    let proof = parse_proof(proof_json)?;
-    let expected_public = parse_n_public(vkey_json)?;
+    let vkey_value: Value = serde_json::from_str(vkey_json).ok()?;
+    let expected_public = parse_n_public(&vkey_value)?;
     if public_signals.len() != expected_public {
         return Some(false);
     }
 
+    let vkey = parse_verifying_key(&vkey_value)?;
+    let proof = parse_proof(proof_json)?;
     let parsed_public_signals = parse_public_signals(public_signals)?;
     let prepared = prepare_verifying_key(&vkey);
     Groth16::<Bn254>::verify_proof(&prepared, &proof, &parsed_public_signals).ok()
 }
 
-fn parse_verifying_key(vkey_json: &str) -> Option<VerifyingKey<Bn254>> {
-    let json: Value = serde_json::from_str(vkey_json).ok()?;
+fn parse_verifying_key(json: &Value) -> Option<VerifyingKey<Bn254>> {
     let ic_key = json.get("IC").or_else(|| json.get("vk_ic"))?;
     let gamma_abc_g1 = ic_key
         .as_array()?
@@ -72,8 +72,7 @@ fn parse_proof(proof_json: &str) -> Option<Proof<Bn254>> {
     })
 }
 
-fn parse_n_public(vkey_json: &str) -> Option<usize> {
-    let json: Value = serde_json::from_str(vkey_json).ok()?;
+fn parse_n_public(json: &Value) -> Option<usize> {
     let n_public = json.get("nPublic")?.as_u64()?;
     usize::try_from(n_public).ok()
 }
