@@ -22,6 +22,15 @@ regex = "1"
 blake3 = "1"
 # Unicode NFC normalisation — required for canonical JSON key/value encoding.
 unicode-normalization = "0.1"
+ark-bn254 = "0.4"
+ark-groth16 = { version = "0.4", features = ["r1cs"] }
+ark-circom = { version = "0.1", default-features = false }
+ark-relations = "0.4"
+ark-ff = "0.4"
+ark-ec = "0.4"
+ark-serialize = "0.4"
+num-bigint = "0.4"
+wasmer = { version = "2.3.0", default-features = false, features = ["sys-default"] }
 
 [profile.release]
 lto = true
