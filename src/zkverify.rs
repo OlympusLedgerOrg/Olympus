@@ -35,6 +35,7 @@ fn verify_groth16_bn254_inner(
 ) -> Option<bool> {
     let vkey_value: Value = serde_json::from_str(vkey_json).ok()?;
     let expected_public = parse_n_public(&vkey_value)?;
+    // SAFETY: reject before prepare_verifying_key — mismatched signal count panics in arkworks.
     if public_signals.len() != expected_public {
         return Some(false);
     }
