@@ -59,6 +59,13 @@ if _env == "development" and _allow_dev_auth:
     logger.warning(
         "DEV AUTH BYPASS ACTIVE — never enable OLYMPUS_ALLOW_DEV_AUTH=1 in production"
     )
+elif _allow_dev_auth:
+    logger.error(
+        "OLYMPUS_ALLOW_DEV_AUTH=1 is set but OLYMPUS_ENV=%s (not 'development'). "
+        "The dev auth bypass is NOT active, but this flag should be removed "
+        "from non-development environments.",
+        _env,
+    )
 
 
 @dataclass
