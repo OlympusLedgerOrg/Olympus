@@ -83,7 +83,7 @@ async def _next_display_id(db) -> str:
         if engine is not None:
             dialect_name = engine.dialect.name
     except Exception:
-        pass
+        logger.debug("dialect detection failed", exc_info=True)
 
     if dialect_name == "sqlite":
         # SQLite fallback for tests

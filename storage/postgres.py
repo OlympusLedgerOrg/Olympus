@@ -1465,37 +1465,12 @@ class StorageLayer:
             if header["header_hash"] != expected_hash:
                 raise ValueError(f"Invalid shard header hash for shard '{shard_id}'")
 
-            # Guard against SMT divergence.  ADR-0001 Phase 0f′: when this
-            # header is the globally latest write (no other shard has appended
-            # since), the current smt_nodes root is valid and we can use the
-            # O(1) path (as_of_ts=None).  Otherwise fall back to historical
-            # leaf replay.
-            cur.execute(
-                """
-                SELECT EXISTS(
-                    SELECT 1 FROM shard_headers
-                    WHERE ts > %s
-                    LIMIT 1
-                ) AS has_later
-                """,
-                (row["ts"],),
-            )
-            later_row = cur.fetchone()
-            has_later = (
-                (later_row["has_later"] if isinstance(later_row, dict) else later_row[0])
-                if later_row
-                else False
-            )
-
-            if has_later:
-                # Another shard appended after this header — need historical
-                # snapshot for correctness.
-                self._assert_root_matches_state(
-                    cur, shard_id, bytes(row["root"]), as_of_ts=row["ts"]
-                )
-            else:
-                # This header is the globally latest — O(1) path.
-                self._assert_root_matches_state(cur, shard_id, bytes(row["root"]), as_of_ts=None)
+            # Guard against SMT divergence.
+            # Always use the historical leaf replay path to verify the
+            # header root.  The O(1) smt_nodes shortcut (as_of_ts=None)
+            # cannot detect forged leaves that were inserted directly into
+            # smt_leaves without going through _persist_tree_nodes.
+            self._assert_root_matches_state(cur, shard_id, bytes(row["root"]), as_of_ts=row["ts"])
 
             return {
                 "header": header,
@@ -2401,12 +2376,12 @@ class StorageLayer:
                 offset = 0
                 while True:
                     cur.execute(
-                        f"""
+                        sql.SQL("""
                         SELECT key, value_hash FROM smt_leaves
-                        {ts_clause}
+                        {}
                         ORDER BY ts ASC, key ASC
                         LIMIT %s OFFSET %s
-                        """,
+                        """).format(sql.SQL(ts_clause)),
                         (*ts_params, batch_size, offset),
                     )
                     rows = cur.fetchall()

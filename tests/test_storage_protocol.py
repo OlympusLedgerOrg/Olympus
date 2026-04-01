@@ -21,6 +21,8 @@ from storage.protocol_state import (
 def _normalize_sql(statement: object) -> str:
     if isinstance(statement, str):
         text = statement
+    elif hasattr(statement, "as_string"):
+        text = statement.as_string(None)
     else:
         text = str(statement)
     return " ".join(text.split())
