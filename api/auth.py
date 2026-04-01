@@ -49,6 +49,17 @@ _keys_loaded = False
 _key_store: dict[str, _APIKeyRecord] = {}
 _load_keys_lock = Lock()
 
+# ── Module-level dev auth bypass detection ──
+# Emit a one-time startup warning when the dev auth bypass is active so
+# operators notice immediately if OLYMPUS_ALLOW_DEV_AUTH leaks to a
+# non-development environment.
+_env = os.environ.get("OLYMPUS_ENV", "production")
+_allow_dev_auth = os.environ.get("OLYMPUS_ALLOW_DEV_AUTH") == "1"
+if _env == "development" and _allow_dev_auth:
+    logger.warning(
+        "DEV AUTH BYPASS ACTIVE — never enable OLYMPUS_ALLOW_DEV_AUTH=1 in production"
+    )
+
 
 @dataclass
 class _APIKeyRecord:
