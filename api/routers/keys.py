@@ -94,7 +94,7 @@ async def revoke_credential(
 
 
 @router.post("/admin/reload-keys", status_code=status.HTTP_200_OK)
-async def admin_reload_keys(request: Request) -> dict[str, object]:
+async def admin_reload_keys(request: Request, _rl: RateLimit) -> dict[str, object]:
     """Force a hot reload of FOIA API keys from the environment.
 
     Protected by a separate ``OLYMPUS_ADMIN_KEY`` secret.  This endpoint

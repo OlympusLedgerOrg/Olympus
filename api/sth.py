@@ -128,7 +128,7 @@ async def get_latest_sth(
         logger.error(f"Failed to get latest STH for shard {shard_id}: {e}")
         raise HTTPException(
             status_code=500,
-            detail=f"Failed to get latest STH: {str(e)}",
+            detail="Failed to retrieve STH. See server logs for details.",
         ) from e
 
 
@@ -184,8 +184,8 @@ async def get_sth_history(
                     tree_size=tree_size,
                     merkle_root=entry["root_hash"],
                     timestamp=entry["timestamp"],
-                    signature="",  # Would need to retrieve from full header
-                    signer_pubkey="",  # Would need to retrieve from full header
+                    signature=entry["signature"],
+                    signer_pubkey=entry["pubkey"],
                 )
             )
 
@@ -197,5 +197,5 @@ async def get_sth_history(
         logger.error(f"Failed to get STH history for shard {shard_id}: {e}")
         raise HTTPException(
             status_code=500,
-            detail=f"Failed to get STH history: {str(e)}",
+            detail="Failed to retrieve STH history. See server logs for details.",
         ) from e

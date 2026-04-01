@@ -33,6 +33,8 @@ class _FakeStorage:
                 "header_hash": "bb" * 32,
                 "previous_header_hash": "",
                 "timestamp": "2026-03-14T00:00:00Z",
+                "signature": "cc" * 32,
+                "pubkey": "dd" * 16,
             },
             {
                 "seq": 1,
@@ -41,6 +43,8 @@ class _FakeStorage:
                 "header_hash": "ff" * 32,
                 "previous_header_hash": "",
                 "timestamp": "2026-03-13T00:00:00Z",
+                "signature": "cc" * 32,
+                "pubkey": "dd" * 16,
             },
         ]
         self.counts = {
