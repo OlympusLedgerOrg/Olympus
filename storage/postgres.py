@@ -2363,6 +2363,8 @@ class StorageLayer:
                 header_ts = header_row["ts"]
                 if isinstance(header_ts, str):
                     header_ts = datetime.fromisoformat(header_ts.replace("Z", "+00:00"))
+                if header_ts.tzinfo is None:
+                    header_ts = header_ts.replace(tzinfo=timezone.utc)
 
                 # Stream the delta of leaves inserted in (prev_ts, header_ts].
                 if prev_ts is None:
@@ -2420,6 +2422,8 @@ class StorageLayer:
                     )
 
                 prev_ts = header_ts
+                if prev_ts.tzinfo is None:
+                    prev_ts = prev_ts.replace(tzinfo=timezone.utc)
 
             # Final check: current tree matches latest persisted root.
             if headers:
