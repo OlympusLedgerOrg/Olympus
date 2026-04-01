@@ -19,11 +19,15 @@ Endpoints:
 
 from __future__ import annotations
 
+import hashlib
+import json
 import logging
 import os
 from collections import OrderedDict, defaultdict
 from datetime import datetime, timezone
 
+import nacl.exceptions
+import nacl.signing
 from fastapi import APIRouter, HTTPException, Query, status
 
 from api.auth import RequireAPIKey
@@ -89,12 +93,12 @@ _seen_nonces: OrderedDict[str, None] = OrderedDict()
 # Split-view detection requires that all workers share the same store.
 _web_concurrency = os.environ.get("WEB_CONCURRENCY", "")
 try:
-    if _web_concurrency and int(_web_concurrency) > 1:
-        logger.critical(
-            "Witness router: WEB_CONCURRENCY=%s but _observations is in-process only. "
-            "Split-view detection will miss conflicts that land on different workers. "
-            "Use a DB-backed store or run with a single worker (WEB_CONCURRENCY=1).",
-            _web_concurrency,
+    if _web_concurrency.strip() and int(_web_concurrency) > 1:
+        raise RuntimeError(
+            f"Witness router: WEB_CONCURRENCY={_web_concurrency} but "
+            "_observations is in-process only. Split-view detection "
+            "silently fails across workers. Set WEB_CONCURRENCY=1 "
+            "or upgrade to a DB-backed observation store."
         )
 except ValueError:
     logger.warning(
@@ -102,6 +106,26 @@ except ValueError:
         "multi-worker safety check skipped. Set WEB_CONCURRENCY to an integer.",
         _web_concurrency,
     )
+
+
+def _resolve_node_pubkey(origin: str) -> str | None:
+    """Return hex pubkey for a registered origin, or None if unknown.
+
+    Reads OLYMPUS_WITNESS_REGISTRY env var as JSON dict:
+        {"origin/string": "hexpubkey", ...}
+
+    In production this should be backed by the federation registry
+    (protocol/federation/identity.py FederationRegistry).
+
+    TODO: Phase 2 — wire this to FederationRegistry.get_node().
+    """
+    registry_json = os.environ.get("OLYMPUS_WITNESS_REGISTRY", "{}")
+    try:
+        registry: dict[str, str] = json.loads(registry_json)
+        return registry.get(origin)
+    except (json.JSONDecodeError, TypeError):
+        logger.error("OLYMPUS_WITNESS_REGISTRY is not valid JSON")
+        return None
 
 
 @router.get("/checkpoints/latest", response_model=WitnessAnnouncement)
@@ -217,7 +241,37 @@ async def submit_observation(
             detail="Duplicate nonce — possible replay",
         )
 
-    key = f"{request.origin}:{request.checkpoint.sequence}"
+    # -- Ed25519 signature verification (C2SP tlog-witness model) --------
+    # Verify the checkpoint signature from the announcing node's registered
+    # public key before accepting the announcement.
+    # Payload: SHA-256(origin:sequence:checkpoint_hash) as bytes.
+    _signed_payload = hashlib.sha256(
+        f"{request.origin}:{request.checkpoint.sequence}:{request.checkpoint.checkpoint_hash}".encode()
+    ).digest()
+
+    try:
+        sig_bytes = bytes.fromhex(request.node_signature)
+        pubkey_hex = _resolve_node_pubkey(request.origin)
+        if pubkey_hex is None:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Unknown origin — node not registered in federation registry.",
+            )
+        verify_key = nacl.signing.VerifyKey(bytes.fromhex(pubkey_hex))
+        verify_key.verify(_signed_payload, sig_bytes)
+    except nacl.exceptions.BadSignatureError:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid checkpoint signature — announcement rejected.",
+        )
+    except (ValueError, KeyError) as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Malformed signature or public key: {exc}",
+        )
+
+    _origin_hash = hashlib.sha256(request.origin.encode()).hexdigest()[:16]
+    key = f"{_origin_hash}:{request.checkpoint.sequence}"
     if key in _observations:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,

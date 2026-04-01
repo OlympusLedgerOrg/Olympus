@@ -2,14 +2,23 @@
 
 from __future__ import annotations
 
+import hashlib
+import json
 import uuid
 
+import nacl.signing
 import pytest
 from fastapi.testclient import TestClient
 
 import api.routers.witness as witness_module
 from api.main import create_app
 from protocol.timestamps import current_timestamp
+
+
+# -- Ed25519 test key pair used to sign all test announcements ----------------
+_TEST_SIGNING_KEY = nacl.signing.SigningKey.generate()
+_TEST_VERIFY_KEY = _TEST_SIGNING_KEY.verify_key
+_TEST_PUBKEY_HEX = _TEST_VERIFY_KEY.encode().hex()
 
 
 app = create_app()
@@ -22,6 +31,78 @@ def clear_store() -> None:
     witness_module.clear_observations()
 
 
+@pytest.fixture(autouse=True)
+def _set_witness_registry(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Register all test origins with the test public key."""
+    # Use a wildcard-style approach: register known test origins.
+    # The _resolve_node_pubkey helper looks up by exact origin string,
+    # so we register a broad set of origins used across tests.
+    origins = [
+        "node-alpha",
+        "node-beta",
+        "node-gamma",
+        "node-delta",
+        "node-short",
+        "node-empty",
+        "node-invalid",
+        "node-long",
+        "node-toolong",
+        "node-1",
+        "node-2",
+        "node-3",
+        "node-4",
+        "node-5",
+        "node-6",
+        "node-7",
+        "n1",
+        "n2",
+        "n3",
+        "n4",
+        "n5",
+        "n6",
+        "n7",
+        "n8",
+        "n9",
+        "n10",
+        "n11",
+        "n12",
+        "n13",
+        "n14",
+        "n15",
+        "n16",
+        "n17",
+        "n18",
+        "n19",
+        "n20",
+        "n21",
+        "n22",
+        "n23",
+        "n24",
+        "n25",
+        "origin-a",
+        "origin-b",
+        "origin-x",
+        "origin-y",
+        "origin-p",
+        "origin-q",
+        "o1",
+        "o2",
+        "node-x",
+        "node-index",
+        "no-auth-node",
+        "stale-node",
+        "future-node",
+        "fresh-node",
+        "nonce-node-a",
+        "nonce-node-b",
+        "short-nonce-node",
+        "ts-node",
+        "only-origin",
+    ]
+    registry = {o: _TEST_PUBKEY_HEX for o in origins}
+    monkeypatch.setenv("OLYMPUS_WITNESS_REGISTRY", json.dumps(registry))
+
+
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
@@ -32,6 +113,12 @@ def _nonce() -> str:
     return uuid.uuid4().hex
 
 
+def _sign_checkpoint(origin: str, sequence: int, checkpoint_hash: str) -> str:
+    """Create an Ed25519 signature over the canonical checkpoint payload."""
+    payload = hashlib.sha256(f"{origin}:{sequence}:{checkpoint_hash}".encode()).digest()
+    return _TEST_SIGNING_KEY.sign(payload).signature.hex()
+
+
 def _announcement_payload(
     origin: str,
     sequence: int,
@@ -39,15 +126,19 @@ def _announcement_payload(
     *,
     timestamp: str | None = None,
     nonce: str | None = None,
+    node_signature: str | None = None,
 ) -> dict:
+    ts = timestamp or current_timestamp()
+    sig = node_signature or _sign_checkpoint(origin, sequence, checkpoint_hash)
     return {
         "origin": origin,
         "checkpoint": {
             "sequence": sequence,
             "checkpoint_hash": checkpoint_hash,
-            "timestamp": timestamp or current_timestamp(),
+            "timestamp": ts,
         },
         "nonce": nonce or _nonce(),
+        "node_signature": sig,
     }
 
 
