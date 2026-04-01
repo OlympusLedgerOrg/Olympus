@@ -161,7 +161,7 @@ def verify_groth16_proof(
         return False, "native_verifier_unavailable"
 
     try:
-        with open(resolved_path) as f:
+        with open(resolved_path, encoding="utf-8") as f:
             vkey_json = f.read()
 
         # Extract the inner proof object (pi_a/pi_b/pi_c), not the
