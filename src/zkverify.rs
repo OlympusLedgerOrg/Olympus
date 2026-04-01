@@ -10,6 +10,12 @@ use num_bigint::BigUint;
 use pyo3::prelude::*;
 use serde_json::Value;
 
+const MAX_DECIMAL_FIELD_DIGITS: usize = 80;
+
+/// Verify a snarkjs Groth16 proof against a snarkjs verification key on BN254.
+///
+/// Returns `false` for invalid proofs, malformed JSON, malformed public signals,
+/// or any panic raised during parsing or verification.
 #[pyfunction]
 pub fn verify_groth16_bn254(
     vkey_json: &str,
@@ -122,6 +128,13 @@ fn parse_json_field<F: PrimeField>(value: &Value) -> Option<F> {
 }
 
 fn parse_decimal_field<F: PrimeField>(value: &str) -> Option<F> {
+    if value.is_empty()
+        || value.len() > MAX_DECIMAL_FIELD_DIGITS
+        || !value.bytes().all(|byte| byte.is_ascii_digit())
+    {
+        return None;
+    }
+
     let bigint = BigUint::parse_bytes(value.as_bytes(), 10)?;
     let repr = F::BigInt::try_from(bigint).ok()?;
     F::from_bigint(repr)

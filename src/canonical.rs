@@ -154,13 +154,13 @@ fn encode_str(s: &str) -> String {
     out.push('"');
     for c in s.chars() {
         match c {
-            '"' => out.push_str("\\\""),
-            '\\' => out.push_str("\\\\"),
-            '\x08' => out.push_str("\\b"),
-            '\t' => out.push_str("\\t"),
-            '\n' => out.push_str("\\n"),
-            '\x0C' => out.push_str("\\f"),
-            '\r' => out.push_str("\\r"),
+            '"'     => out.push_str("\\\""),
+            '\\'    => out.push_str("\\\\"),
+            '\x08'  => out.push_str("\\b"),
+            '\t'    => out.push_str("\\t"),
+            '\n'    => out.push_str("\\n"),
+            '\x0C'  => out.push_str("\\f"),
+            '\r'    => out.push_str("\\r"),
             c if (c as u32) < 0x20 => {
                 out.push_str(&format!("\\u{:04x}", c as u32));
             }

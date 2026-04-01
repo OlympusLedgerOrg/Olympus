@@ -31,6 +31,8 @@ ark-ec = "0.4"
 ark-serialize = "0.4"
 num-bigint = "0.4"
 serde_json = "1"
+# ark-circom 0.1 disables Wasmer defaults, so root feature unification must
+# enable a concrete runtime backend for the transitive wasmer dependency.
 wasmer = { version = "2.3.0", default-features = false, features = ["sys-default"] }
 
 [profile.release]
