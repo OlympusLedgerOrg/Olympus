@@ -1518,7 +1518,8 @@ class StorageLayer:
         with self._get_connection() as conn, conn.cursor(row_factory=dict_row) as cur:
             cur.execute(
                 """
-                    SELECT seq, root, tree_size, header_hash, previous_header_hash, ts
+                    SELECT seq, root, tree_size, header_hash, previous_header_hash, ts,
+                           sig, pubkey
                     FROM shard_headers
                     WHERE shard_id = %s
                     ORDER BY seq DESC
@@ -1553,6 +1554,8 @@ class StorageLayer:
                             else bytes(row["previous_header_hash"]).hex()
                         ),
                         "timestamp": timestamp_str,
+                        "signature": bytes(row["sig"]).hex(),
+                        "pubkey": bytes(row["pubkey"]).hex(),
                     }
                 )
 

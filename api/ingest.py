@@ -1344,7 +1344,10 @@ async def ingest_batch(
 
 
 @router.get("/records/{proof_id}/proof", response_model=IngestionProofResponse)
-async def get_ingestion_proof(proof_id: str) -> IngestionProofResponse:
+async def get_ingestion_proof(
+    proof_id: str,
+    _scope: RequireVerifyScope,
+) -> IngestionProofResponse:
     """
     Retrieve the proof for a previously ingested record.
 

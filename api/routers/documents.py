@@ -8,6 +8,7 @@ POST /doc/verify  — verify a previously committed document hash
 from __future__ import annotations
 
 import logging
+from datetime import datetime, timezone
 
 from fastapi import APIRouter, HTTPException, status
 from sqlalchemy import exists, select
@@ -157,6 +158,13 @@ async def verify_document(
 
     if not commit:
         return DocVerifyResponse(verified=False)
+
+    # Enforce embargo: embargoed documents must not be visible before their release date
+    if commit.embargo_until and commit.embargo_until > datetime.now(timezone.utc):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="This document is under embargo and not yet publicly available.",
+        )
 
     # Rebuild the Merkle tree for the shard and generate an inclusion proof
     all_hashes_result = await db.execute(
