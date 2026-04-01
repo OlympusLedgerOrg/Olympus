@@ -90,7 +90,7 @@ def _verify_signature(pubkey_hex: str, commit_id: str, signature_hex: str) -> bo
     try:
         verify_key = nacl.signing.VerifyKey(bytes.fromhex(pubkey_hex))
         verify_key.verify(bytes.fromhex(commit_id), bytes.fromhex(signature_hex))
-    except (nacl.exceptions.BadSignatureError, ValueError, Exception):
+    except (nacl.exceptions.BadSignatureError, ValueError):
         return False
     return True
 
@@ -577,7 +577,11 @@ async def verify_dataset(
             proof: MerkleProof = generate_proof(artifact.manifest_hash, tree)
             merkle_proof_data = [{"hash": h, "direction": d} for h, d in proof.siblings]
         except ValueError:
-            pass
+            logger.warning(
+                "Merkle proof generation failed for dataset %s",
+                artifact.dataset_id,
+                exc_info=True,
+            )
 
     verified = all(checks.values())
 
@@ -677,7 +681,11 @@ async def get_proof_bundle(
             proof: MerkleProof = generate_proof(artifact.manifest_hash, tree)
             merkle_proof_data = [{"hash": h, "direction": d} for h, d in proof.siblings]
         except ValueError:
-            pass
+            logger.warning(
+                "Merkle proof generation failed for dataset %s",
+                artifact.dataset_id,
+                exc_info=True,
+            )
 
     # Set proof_bundle_uri to a full URL so external verifiers can use it.
     bundle_uri = f"{request.base_url}datasets/{dataset_id}/proof-bundle"
