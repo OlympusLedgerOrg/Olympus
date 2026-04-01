@@ -9,6 +9,11 @@ import (
 	_ "github.com/lib/pq"
 )
 
+// nodeRehashGate is the BLAKE3 domain-separated gate value required
+// before any ON CONFLICT DO UPDATE on smt_nodes. Must match
+// _NODE_REHASH_GATE in storage/postgres.py.
+const nodeRehashGate = "003e82539d8e3b45c15db1f909bf8ea9fc1eb26629bf483f52eba91c8fc48f1b"
+
 // PostgresStorage handles persistent storage for SMT nodes and roots
 type PostgresStorage struct {
 	db *sql.DB
@@ -50,18 +55,29 @@ func (s *PostgresStorage) StoreRoot(ctx context.Context, root []byte, treeSize u
 
 // StoreNodeDelta persists SMT node deltas to the database
 func (s *PostgresStorage) StoreNodeDelta(ctx context.Context, path []byte, level uint32, hash []byte) error {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("begin tx: %w", err)
+	}
+	defer tx.Rollback()
+
+	if _, err := tx.ExecContext(ctx,
+		"SET LOCAL olympus.allow_node_rehash = $1", nodeRehashGate,
+	); err != nil {
+		return fmt.Errorf("set rehash gate: %w", err)
+	}
+
 	query := `
 		INSERT INTO cdhs_smf_nodes (path, level, hash, created_at)
 		VALUES ($1, $2, $3, NOW())
-		ON CONFLICT (path, level) DO UPDATE SET hash = EXCLUDED.hash, created_at = NOW()
+		ON CONFLICT (path, level)
+		DO UPDATE SET hash = EXCLUDED.hash, created_at = NOW()
 	`
-
-	_, err := s.db.ExecContext(ctx, query, path, level, hash)
-	if err != nil {
-		return fmt.Errorf("failed to store node delta: %w", err)
+	if _, err := tx.ExecContext(ctx, query, path, level, hash); err != nil {
+		return fmt.Errorf("store node delta: %w", err)
 	}
 
-	return nil
+	return tx.Commit()
 }
 
 // GetLatestRoot retrieves the most recent root hash
