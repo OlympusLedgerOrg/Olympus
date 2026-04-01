@@ -33,6 +33,7 @@ import json
 import logging
 import os
 import time
+import warnings
 from collections import OrderedDict
 from collections.abc import Iterable, Iterator, Mapping
 from contextlib import contextmanager
@@ -599,6 +600,25 @@ class StorageLayer:
             BEFORE DELETE ON smt_leaves
             FOR EACH ROW EXECUTE FUNCTION olympus_reject_mutation()
             """,
+            "DROP TRIGGER IF EXISTS smt_leaves_reject_insert ON smt_leaves",
+            f"""
+            CREATE OR REPLACE FUNCTION olympus_reject_smt_leaf_direct_insert()
+            RETURNS trigger AS $$
+            BEGIN
+                IF current_setting('olympus.allow_smt_insert', true)
+                        = '{_NODE_REHASH_GATE}' THEN
+                    RETURN NEW;
+                END IF;
+                RAISE EXCEPTION 'smt_leaves is append-only via append_record(): direct INSERT not allowed'
+                    USING ERRCODE = '25006';
+            END;
+            $$ LANGUAGE plpgsql
+            """,
+            """
+            CREATE TRIGGER smt_leaves_reject_insert
+            BEFORE INSERT ON smt_leaves
+            FOR EACH ROW EXECUTE FUNCTION olympus_reject_smt_leaf_direct_insert()
+            """,
             # ------------------------------------------------------------------
             # smt_nodes: gated update trigger (ADR-0001)
             # ------------------------------------------------------------------
@@ -873,7 +893,7 @@ class StorageLayer:
                 raise RuntimeError("Failed to load rate limit state from database")
 
             elapsed = max(0.0, float(row["elapsed_seconds"]))
-            tokens = min(capacity, row["tokens"] + elapsed * refill_rate_per_second)
+            tokens = round(min(capacity, row["tokens"] + elapsed * refill_rate_per_second), 6)
 
             if tokens < 1.0:
                 conn.rollback()
@@ -981,6 +1001,11 @@ class StorageLayer:
             proof = tree.prove_existence(key)
 
             # Insert leaf (CD-HS-ST: no shard_id column)
+            cur.execute(
+                sql.SQL("SET LOCAL olympus.allow_smt_insert = {}").format(
+                    sql.Literal(_NODE_REHASH_GATE)
+                )
+            )
             cur.execute(
                 """
                     INSERT INTO smt_leaves (key, version, value_hash, ts)
@@ -2052,6 +2077,13 @@ class StorageLayer:
         Returns:
             Count of global SMT leaves, optionally filtered by timestamp.
         """
+        if shard_id is not None:
+            warnings.warn(
+                "get_leaf_count() shard_id parameter is deprecated and ignored. "
+                "The global SMT count is returned regardless of shard.",
+                DeprecationWarning,
+                stacklevel=2,
+            )
         query = "SELECT COUNT(*) AS cnt FROM smt_leaves"
         params: list[object] = []
         if up_to_ts is not None:
