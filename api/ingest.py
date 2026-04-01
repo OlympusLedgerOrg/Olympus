@@ -847,11 +847,23 @@ def _normalize_source_url(source_url: str) -> str:
     return source_url
 
 
+_BN128_FIELD_PRIME = (
+    21888242871839275222246405745257275088548364400416034343698204186575808495617
+)
+
+
 def _value_hash_to_poseidon_field(value_hash: bytes) -> int:
-    """Convert a 32-byte value hash into the BN128 field element used by PoseidonSMT."""
+    """Convert a 32-byte value hash into a BN128 field element.
+
+    Applies modular reduction by the BN128 scalar field prime so that
+    the returned value is always a valid field element. Without this
+    reduction, values derived from BLAKE3 hashes can exceed the prime
+    (2^256 - 1 is ~5.3x the BN128 prime), causing incorrect Poseidon
+    hash outputs and enabling hash collisions.
+    """
     if len(value_hash) != 32:
         raise ValueError(f"value_hash must be 32 bytes, got {len(value_hash)}")
-    return int.from_bytes(value_hash, byteorder="big")
+    return int.from_bytes(value_hash, byteorder="big") % _BN128_FIELD_PRIME
 
 
 def _build_poseidon_smt_for_storage_shard(storage: StorageLayer, shard_id: str) -> PoseidonSMT:
@@ -859,7 +871,7 @@ def _build_poseidon_smt_for_storage_shard(storage: StorageLayer, shard_id: str) 
     from protocol.poseidon_smt import PoseidonSMT
 
     with storage._get_connection() as conn, conn.cursor() as cur:
-        tree = storage._load_tree_state(cur, shard_id)
+        tree = storage._load_tree_state(cur)
 
     poseidon_smt = PoseidonSMT()
     for key, value_hash in tree.leaves.items():
