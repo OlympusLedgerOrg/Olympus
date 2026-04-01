@@ -2189,6 +2189,8 @@ class StorageLayer:
             cutoff = up_to_ts
             if isinstance(cutoff, str):
                 cutoff = datetime.fromisoformat(cutoff.replace("Z", "+00:00"))
+            if cutoff.tzinfo is None:
+                cutoff = cutoff.replace(tzinfo=timezone.utc)
             cur.execute(
                 """
                 SELECT key, value_hash FROM smt_leaves
