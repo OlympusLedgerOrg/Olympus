@@ -79,9 +79,7 @@ pub fn blake3_hash<'py>(py: Python<'py>, parts: &Bound<'py, PyList>) -> PyResult
 #[pyfunction]
 pub fn global_key(py: Python<'_>, shard_id: &str, record_key_bytes: &[u8]) -> PyObject {
     let shard_bytes = shard_id.as_bytes();
-    let mut key_material = Vec::with_capacity(
-        4 + shard_bytes.len() + 4 + record_key_bytes.len(),
-    );
+    let mut key_material = Vec::with_capacity(4 + shard_bytes.len() + 4 + record_key_bytes.len());
     key_material.extend_from_slice(&length_prefixed(shard_bytes));
     key_material.extend_from_slice(&length_prefixed(record_key_bytes));
 
@@ -102,17 +100,10 @@ pub fn global_key(py: Python<'_>, shard_id: &str, record_key_bytes: &[u8]) -> Py
 /// # Python signature
 /// ``record_key(record_type: str, record_id: str, version: int) -> bytes``
 #[pyfunction]
-pub fn record_key(
-    py: Python<'_>,
-    record_type: &str,
-    record_id: &str,
-    version: u64,
-) -> PyObject {
+pub fn record_key(py: Python<'_>, record_type: &str, record_id: &str, version: u64) -> PyObject {
     let rt = record_type.as_bytes();
     let ri = record_id.as_bytes();
-    let mut key_data = Vec::with_capacity(
-        KEY_PREFIX.len() + 4 + rt.len() + 4 + ri.len() + 8,
-    );
+    let mut key_data = Vec::with_capacity(KEY_PREFIX.len() + 4 + rt.len() + 4 + ri.len() + 8);
     key_data.extend_from_slice(KEY_PREFIX);
     key_data.extend_from_slice(&length_prefixed(rt));
     key_data.extend_from_slice(&length_prefixed(ri));
