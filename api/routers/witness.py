@@ -270,8 +270,8 @@ async def submit_observation(
             detail=f"Malformed signature or public key: {exc}",
         )
 
-    _origin_hash = hashlib.sha256(request.origin.encode()).hexdigest()[:16]
-    key = f"{_origin_hash}:{request.checkpoint.sequence}"
+    _origin_key_prefix = hashlib.sha256(request.origin.encode()).hexdigest()[:16]
+    key = f"{_origin_key_prefix}:{request.checkpoint.sequence}"
     if key in _observations:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,

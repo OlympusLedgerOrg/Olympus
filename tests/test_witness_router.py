@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import hashlib
-import json
 import uuid
 
 import nacl.signing
@@ -33,74 +32,12 @@ def clear_store() -> None:
 
 @pytest.fixture(autouse=True)
 def _set_witness_registry(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Register all test origins with the test public key."""
-    # Use a wildcard-style approach: register known test origins.
-    # The _resolve_node_pubkey helper looks up by exact origin string,
-    # so we register a broad set of origins used across tests.
-    origins = [
-        "node-alpha",
-        "node-beta",
-        "node-gamma",
-        "node-delta",
-        "node-short",
-        "node-empty",
-        "node-invalid",
-        "node-long",
-        "node-toolong",
-        "node-1",
-        "node-2",
-        "node-3",
-        "node-4",
-        "node-5",
-        "node-6",
-        "node-7",
-        "n1",
-        "n2",
-        "n3",
-        "n4",
-        "n5",
-        "n6",
-        "n7",
-        "n8",
-        "n9",
-        "n10",
-        "n11",
-        "n12",
-        "n13",
-        "n14",
-        "n15",
-        "n16",
-        "n17",
-        "n18",
-        "n19",
-        "n20",
-        "n21",
-        "n22",
-        "n23",
-        "n24",
-        "n25",
-        "origin-a",
-        "origin-b",
-        "origin-x",
-        "origin-y",
-        "origin-p",
-        "origin-q",
-        "o1",
-        "o2",
-        "node-x",
-        "node-index",
-        "no-auth-node",
-        "stale-node",
-        "future-node",
-        "fresh-node",
-        "nonce-node-a",
-        "nonce-node-b",
-        "short-nonce-node",
-        "ts-node",
-        "only-origin",
-    ]
-    registry = {o: _TEST_PUBKEY_HEX for o in origins}
-    monkeypatch.setenv("OLYMPUS_WITNESS_REGISTRY", json.dumps(registry))
+    """Make _resolve_node_pubkey return the test key for any origin."""
+    monkeypatch.setattr(
+        witness_module,
+        "_resolve_node_pubkey",
+        lambda origin: _TEST_PUBKEY_HEX,
+    )
 
 
 # ---------------------------------------------------------------------------
