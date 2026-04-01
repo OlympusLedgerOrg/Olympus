@@ -91,22 +91,26 @@ func (s *PostgresStorage) GetLatestRoot(ctx context.Context) ([]byte, uint64, er
 // InitSchema creates the necessary database tables
 func (s *PostgresStorage) InitSchema(ctx context.Context) error {
 	schema := `
+		-- Note: schema change from TIMESTAMP → TIMESTAMPTZ.
+		-- Existing dev databases require: ALTER TABLE cdhs_smf_roots ALTER COLUMN created_at TYPE TIMESTAMPTZ;
 		CREATE TABLE IF NOT EXISTS cdhs_smf_roots (
 			id SERIAL PRIMARY KEY,
 			root_hash BYTEA NOT NULL,
 			tree_size BIGINT NOT NULL,
 			signature BYTEA,
-			created_at TIMESTAMP NOT NULL DEFAULT NOW()
+			created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 		);
 
 		CREATE INDEX IF NOT EXISTS idx_cdhs_smf_roots_created_at
 			ON cdhs_smf_roots(created_at DESC);
 
+		-- Note: schema change from TIMESTAMP → TIMESTAMPTZ.
+		-- Existing dev databases require: ALTER TABLE cdhs_smf_nodes ALTER COLUMN created_at TYPE TIMESTAMPTZ;
 		CREATE TABLE IF NOT EXISTS cdhs_smf_nodes (
 			path BYTEA NOT NULL,
 			level INTEGER NOT NULL,
 			hash BYTEA NOT NULL,
-			created_at TIMESTAMP NOT NULL DEFAULT NOW(),
+			created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
 			PRIMARY KEY (path, level)
 		);
 
