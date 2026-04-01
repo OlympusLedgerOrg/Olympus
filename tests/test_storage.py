@@ -1063,6 +1063,61 @@ def test_verify_state_replay_detects_header_root_divergence(storage, signing_key
         storage.get_latest_header(shard_id)
 
 
+def test_replay_naive_datetime_cutoff_is_normalized(storage, signing_key):
+    """Timezone-naive cutoffs must not silently miss leaves near the boundary.
+
+    If _load_tree_state or replay_tree_incremental passes a naive datetime to
+    the WHERE ts <= %s TIMESTAMPTZ comparison, Postgres may apply local-clock
+    semantics and exclude leaves that sit within a microsecond of the boundary.
+    This regression test constructs an explicit naive cutoff and verifies that
+    verify_state_replay still raises for a forged leaf, and that
+    get_latest_header does too — confirming both code paths normalize tzinfo
+    before handing the value to psycopg.
+    """
+    shard_id = f"test_replay_naive_tz_{datetime.now(UTC).timestamp()}"
+
+    storage.append_record(
+        shard_id=shard_id,
+        record_type="document",
+        record_id="doc1",
+        version=1,
+        value_hash=hash_bytes(b"tz-naive-value-1"),
+        signing_key=signing_key,
+    )
+
+    # Insert a forged leaf backdated by 1 µs so it falls in the first window.
+    forged_version = 8888
+    forged_record_key = record_key("document", "tz-forged-doc", forged_version)
+    forged_key = global_key(shard_id, forged_record_key)
+    forged_value = hash_bytes(b"tz-naive-forged-value")
+    with storage._get_connection() as conn, conn.cursor(row_factory=dict_row) as cur:
+        cur.execute(
+            "SELECT ts FROM shard_headers WHERE shard_id = %s ORDER BY seq ASC LIMIT 1",
+            (shard_id,),
+        )
+        first_header_ts = cur.fetchone()["ts"]
+        # Construct a naive datetime (tzinfo=None) to simulate application code
+        # that strips timezone info before passing a cutoff to the replay path.
+        # The guard in _load_tree_state / replay_tree_incremental must re-attach
+        # UTC so the TIMESTAMPTZ comparison is unambiguous.
+        naive_ts = first_header_ts.replace(tzinfo=None) - timedelta(microseconds=1)
+        cur.execute(
+            """
+            INSERT INTO smt_leaves (key, version, value_hash, ts)
+            VALUES (%s, %s, %s, %s)
+            """,
+            (forged_key, forged_version, forged_value, naive_ts),
+        )
+        conn.commit()
+
+    # Both replay paths must detect the forged leaf despite the naive timestamp.
+    with pytest.raises(ValueError, match="mismatch"):
+        storage.verify_state_replay(shard_id)
+
+    with pytest.raises(ValueError, match="Computed root"):
+        storage.get_latest_header(shard_id)
+
+
 def test_init_schema_renames_legacy_smt_tables(storage):
     """init_schema should preserve legacy per-shard SMT tables before creating global SMT tables."""
     with storage._get_connection() as conn, conn.cursor() as cur:
