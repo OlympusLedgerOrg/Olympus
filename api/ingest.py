@@ -38,8 +38,7 @@ from api.auth import (
     RequireCommitScope,
     RequireIngestScope,
     RequireVerifyScope,
-    _ip_in_ranges,
-    _is_overly_broad_proxy_range,
+    _get_client_ip,
     _register_api_key_for_tests as _auth_register_api_key_for_tests,
     _reset_auth_state_for_tests,
 )
@@ -380,15 +379,6 @@ _write_ledger = Ledger()
 # API key store and loaded flag have been removed - authentication is now unified
 # through api.auth module. The key store is maintained by api.auth._key_store.
 
-# L4-E: Trusted proxy IP ranges for X-Forwarded-For parsing.
-# Only parse X-Forwarded-For header when the direct peer is a known trusted proxy.
-# This prevents IP spoofing attacks where a client sets a fake X-Forwarded-For header.
-# Configure via OLYMPUS_TRUSTED_PROXY_IPS environment variable (comma-separated IPs or CIDRs).
-TRUSTED_PROXY_RANGES: list[str] = [
-    ip.strip() for ip in os.environ.get("OLYMPUS_TRUSTED_PROXY_IPS", "").split(",") if ip.strip()
-]
-
-
 def _dev_signing_key_enabled() -> bool:
     """Return True when dev-mode auto signing key generation is enabled."""
     return os.environ.get("OLYMPUS_DEV_SIGNING_KEY", "").strip().lower() in {
@@ -683,43 +673,6 @@ def _set_rate_limit_for_tests(
             logger.warning("Failed to clear persisted rate limits during test setup", exc_info=True)
 
 
-def _client_ip(request: Request) -> str:
-    """
-    Resolve the caller IP address for abuse controls.
-
-    L4-E: Only parses X-Forwarded-For if the direct peer is a trusted proxy.
-    This prevents IP spoofing attacks where a malicious client sets a fake
-    X-Forwarded-For header to bypass rate limiting.
-
-    Args:
-        request: The incoming HTTP request.
-
-    Returns:
-        The client IP address (from X-Forwarded-For if behind a trusted proxy,
-        otherwise the direct peer IP).
-    """
-    peer_ip = request.client.host if request.client else None
-
-    if any(_is_overly_broad_proxy_range(proxy_range) for proxy_range in TRUSTED_PROXY_RANGES):
-        logger.error(
-            "Ignoring X-Forwarded-For because OLYMPUS_TRUSTED_PROXY_IPS contains an overly "
-            "broad range (0.0.0.0/0 or ::/0), which allows client IP spoofing."
-        )
-        return peer_ip or "unknown"
-
-    # Only parse X-Forwarded-For if the peer is a trusted proxy (CIDR-aware check)
-    if peer_ip and TRUSTED_PROXY_RANGES and _ip_in_ranges(peer_ip, TRUSTED_PROXY_RANGES):
-        xff = request.headers.get("x-forwarded-for")
-        if xff:
-            # X-Forwarded-For format: "client, proxy1, proxy2, ..."
-            # The leftmost IP is the original client
-            forwarded_ip = xff.split(",")[0].strip()
-            if forwarded_ip:
-                return forwarded_ip
-
-    return peer_ip or "unknown"
-
-
 def _get_bucket(buckets: OrderedDict[str, TokenBucket], subject: str, action: str) -> TokenBucket:
     """
     Get/create a token bucket for the subject and action.
@@ -819,7 +772,7 @@ def _apply_rate_limits(request: Request, api_key_id: str, action: str) -> None:
     Raises:
         HTTPException 429: If rate limit is exceeded.
     """
-    client_ip = _client_ip(request)
+    client_ip = _get_client_ip(request)
 
     if not _consume_rate_limit("api_key", api_key_id, action):
         logger.warning(

@@ -233,3 +233,46 @@ class TestJSBackendEndToEnd:
                 f"batch vs single mismatch for ({a}, {b}): "
                 f"batch={batch_out}, single={single['out']}"
             )
+
+
+# ---------------------------------------------------------------------------
+# Class 3: Poseidon SMT tree-root conformance against circomlibjs
+# ---------------------------------------------------------------------------
+class TestPoseidonSMTTreeConformance:
+    """Verify PoseidonSMT multi-leaf root matches circomlibjs.
+
+    Guards against drift between the Python PoseidonSMT (used for ZK
+    witness generation) and the Circom circuit's Poseidon construction.
+    Divergence would make Python-generated proofs unverifiable.
+    """
+
+    @pytest.mark.skipif(
+        _prerequisite_missing() is not None,
+        reason=_prerequisite_missing() or "",
+    )
+    def test_three_leaf_root_matches_circomlibjs(self):
+        from protocol.poseidon_smt import PoseidonSMT
+
+        script = _REPO_ROOT / "proofs" / "test_inputs" / "poseidon_tree_conformance.js"
+        result = subprocess.run(
+            ["node", str(script)],
+            capture_output=True,
+            text=True,
+            check=True,
+            cwd=str(script.parent),
+            timeout=30,
+        )
+        js_data = json.loads(result.stdout.strip())
+
+        smt = PoseidonSMT()
+        for key_int, value_int in [(1, 100), (2, 200), (3, 300)]:
+            key_bytes = key_int.to_bytes(32, "big")
+            smt.update(key_bytes, value_int)
+
+        py_root = smt.get_root()
+
+        assert str(py_root) == js_data["root"], (
+            f"PoseidonSMT root mismatch — Python={py_root} "
+            f"circomlibjs={js_data['root']}. "
+            "Python-generated ZK witnesses will not verify against the circuit."
+        )
