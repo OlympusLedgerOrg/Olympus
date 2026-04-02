@@ -327,8 +327,7 @@ class ProofVerificationResponse(BaseModel):
 
 
 # DEPRECATED: submit_proof_bundle no longer accepts a JSON body.
-# Retained for any external callers during migration period.
-# Will be removed in a future release.
+# Retained for migration period. Will be removed in a future release.
 class ProofSubmissionRequest(ProofVerificationRequest):
     """Proof bundle payload that can be submitted to the API for later retrieval."""
 
