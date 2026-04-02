@@ -16,6 +16,7 @@ All write operations are append-only and maintain ledger chain integrity.
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import os
 import uuid
@@ -29,10 +30,11 @@ from typing import TYPE_CHECKING, Any
 from urllib.parse import urlparse
 
 import nacl.signing
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, File, HTTPException, Request, UploadFile
 from pydantic import BaseModel, Field, field_validator
 
 from api.auth import (
+    RateLimit,
     RequireCommitScope,
     RequireIngestScope,
     RequireVerifyScope,
@@ -41,6 +43,8 @@ from api.auth import (
     _register_api_key_for_tests as _auth_register_api_key_for_tests,
     _reset_auth_state_for_tests,
 )
+from api.config import get_settings
+from api.services.upload_validation import validate_file_magic
 from protocol.canonical import CANONICAL_VERSION, canonicalize_document, document_to_bytes
 from protocol.canonicalizer import canonicalization_provenance
 from protocol.hashes import hash_bytes, leaf_hash, record_key
@@ -67,6 +71,39 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/ingest", tags=["ingest"])
+
+# Maximum number of bytes read per iteration when streaming an upload.
+_UPLOAD_CHUNK_SIZE = 65_536
+
+
+async def _read_upload_bounded(file: UploadFile, max_bytes: int, max_mb: int) -> bytes:
+    """Read *file* in fixed-size chunks, aborting if the total exceeds *max_bytes*.
+
+    Args:
+        file: FastAPI UploadFile to read.
+        max_bytes: Hard upper bound on accepted payload size in bytes.
+        max_mb: Human-readable equivalent (for error messages).
+
+    Returns:
+        The full file contents as a single :class:`bytes` object.
+
+    Raises:
+        HTTPException 413: If the payload exceeds *max_bytes* before EOF.
+    """
+    chunks: list[bytes] = []
+    total = 0
+    while True:
+        chunk = await file.read(_UPLOAD_CHUNK_SIZE)
+        if not chunk:
+            break
+        total += len(chunk)
+        if total > max_bytes:
+            raise HTTPException(
+                status_code=413,
+                detail=f"File exceeds maximum size of {max_mb} MB.",
+            )
+        chunks.append(chunk)
+    return b"".join(chunks)
 
 
 # ---------------------------------------------------------------------------
@@ -290,6 +327,9 @@ class ProofVerificationResponse(BaseModel):
     poseidon_root: str | None = None
 
 
+# DEPRECATED: submit_proof_bundle no longer accepts a JSON body.
+# Retained for any external callers during migration period.
+# Will be removed in a future release.
 class ProofSubmissionRequest(ProofVerificationRequest):
     """Proof bundle payload that can be submitted to the API for later retrieval."""
 
@@ -1425,68 +1465,76 @@ async def verify_submitted_proof_bundle(
 
 @router.post("/proofs", response_model=ProofSubmissionResponse)
 async def submit_proof_bundle(
-    proof_request: ProofSubmissionRequest, request: Request, _api_key: RequireVerifyScope
+    request: Request,
+    _api_key: RequireVerifyScope,
+    _rl: RateLimit,
+    file: UploadFile = File(...),
 ) -> ProofSubmissionResponse:
-    """Accept a verified proof bundle so it can be retrieved through the API later."""
-    # Apply rate limiting after authentication
+    """Retrieve the server-computed proof bundle for a committed document.
+
+    The caller supplies only the raw document bytes. The server
+    canonicalizes, hashes, and looks up its authoritative proof record.
+    No caller-supplied metadata is accepted — all proof fields are
+    derived from the server's own ingestion records.
+
+    Returns 404 if the document has not been committed yet. Commit
+    first via POST /ingest/records.
+    """
     _apply_rate_limits(request, _api_key.key_id, "verify")
 
-    normalized_hash, normalized_root, content_hash_matches, merkle_proof_valid = (
-        _evaluate_proof_bundle(
-            proof_request.content_hash,
-            proof_request.merkle_root,
-            proof_request.merkle_proof,
+    settings = get_settings()
+    max_mb = settings.max_upload_bytes // 1024 // 1024
+
+    content_length = request.headers.get("content-length")
+    if content_length is not None:
+        try:
+            if int(content_length) > settings.max_upload_bytes:
+                raise HTTPException(
+                    status_code=413,
+                    detail=f"File exceeds maximum size of {max_mb} MB.",
+                )
+        except ValueError:
+            pass
+
+    file_bytes = await _read_upload_bounded(
+        file, settings.max_upload_bytes, max_mb
+    )
+    validate_file_magic(
+        file_bytes, file.content_type or "application/octet-stream"
+    )
+
+    # Parse as JSON and canonicalize — same pipeline as the main ingest path.
+    try:
+        content = json.loads(file_bytes)
+    except (json.JSONDecodeError, UnicodeDecodeError) as exc:
+        raise HTTPException(
+            status_code=400,
+            detail="File must be a valid JSON document.",
+        ) from exc
+
+    if not isinstance(content, dict):
+        raise HTTPException(
+            status_code=400,
+            detail="Document must be a JSON object.",
         )
-    )
-    if not content_hash_matches or not merkle_proof_valid:
-        raise HTTPException(status_code=400, detail="Submitted proof bundle failed verification")
 
-    existing = _fetch_by_content_hash(normalized_hash)
-    if existing is not None:
-        return ProofSubmissionResponse(**existing, submitted=False, deduplicated=True)
+    _content_bytes, content_hash = await _async_canonicalize_and_hash(content)
 
-    proof_id = proof_request.proof_id or str(uuid.uuid4())
+    record = _fetch_by_content_hash(content_hash)
+    if record is None:
+        raise HTTPException(
+            status_code=404,
+            detail=(
+                "Document not found in ledger. "
+                "Commit the document first via POST /ingest/records, "
+                "then retrieve its proof bundle here."
+            ),
+        )
 
-    # Compute Poseidon root server-side (HIGH-02 security fix)
-    poseidon_smt = _get_or_build_poseidon_smt(proof_request.shard_id)
-    content_hash_bytes = bytes.fromhex(normalized_hash)
-    proof_key = record_key(
-        proof_request.canonicalization.get("record_type", "document"),
-        proof_request.record_id,
-        1,
-    )
-    poseidon_smt.update(proof_key, _value_hash_to_poseidon_field(content_hash_bytes))
-    poseidon_root_normalized = str(poseidon_smt.get_root())
-
-    stored_entry = {
-        "proof_id": proof_id,
-        "record_id": proof_request.record_id,
-        "shard_id": proof_request.shard_id,
-        "content_hash": normalized_hash,
-        "merkle_root": normalized_root,
-        "merkle_proof": proof_request.merkle_proof,
-        "ledger_entry_hash": proof_request.ledger_entry_hash,
-        "timestamp": proof_request.timestamp,
-        "canonicalization": proof_request.canonicalization,
-        "batch_id": proof_request.batch_id,
-        "poseidon_root": poseidon_root_normalized,
-        "persisted": False,
-    }
-    _cache_ingestion_record(stored_entry)
     return ProofSubmissionResponse(
-        proof_id=proof_id,
-        record_id=proof_request.record_id,
-        shard_id=proof_request.shard_id,
-        content_hash=normalized_hash,
-        merkle_root=normalized_root,
-        merkle_proof=proof_request.merkle_proof,
-        ledger_entry_hash=proof_request.ledger_entry_hash,
-        timestamp=proof_request.timestamp,
-        canonicalization=proof_request.canonicalization,
-        batch_id=proof_request.batch_id,
-        poseidon_root=poseidon_root_normalized,
-        submitted=True,
-        deduplicated=False,
+        **record,
+        submitted=False,
+        deduplicated=True,
     )
 
 
