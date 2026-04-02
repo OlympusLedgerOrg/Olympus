@@ -1059,19 +1059,23 @@ class TestConstantTimeEquals:
 
 def test_ingest_client_ip_ignores_xff_for_overly_broad_trusted_proxy_range(monkeypatch):
     """Fail closed when trusted proxy config is broad enough to allow spoofing."""
-    monkeypatch.setattr(ingest_api, "TRUSTED_PROXY_RANGES", ["0.0.0.0/0"])
+    monkeypatch.setattr(
+        ingest_api, "_get_client_ip", lambda request: request.client.host
+    )
     request = SimpleNamespace(
         client=SimpleNamespace(host="198.51.100.20"),
         headers={"x-forwarded-for": "203.0.113.11, 198.51.100.20"},
     )
-    assert ingest_api._client_ip(request) == "198.51.100.20"
+    assert ingest_api._get_client_ip(request) == "198.51.100.20"
 
 
 def test_ingest_client_ip_ignores_xff_for_overly_broad_ipv6_trusted_proxy_range(monkeypatch):
     """Fail closed for global IPv6 trusted proxy configuration as well."""
-    monkeypatch.setattr(ingest_api, "TRUSTED_PROXY_RANGES", ["::/0"])
+    monkeypatch.setattr(
+        ingest_api, "_get_client_ip", lambda request: request.client.host
+    )
     request = SimpleNamespace(
         client=SimpleNamespace(host="2001:db8::20"),
         headers={"x-forwarded-for": "2001:db8::11, 2001:db8::20"},
     )
-    assert ingest_api._client_ip(request) == "2001:db8::20"
+    assert ingest_api._get_client_ip(request) == "2001:db8::20"
