@@ -1518,7 +1518,7 @@ async def submit_proof_bundle(
             detail="Document must be a JSON object.",
         )
 
-    _content_bytes, content_hash = await _async_canonicalize_and_hash(content)
+    _, content_hash = await _async_canonicalize_and_hash(content)
 
     record = _fetch_by_content_hash(content_hash)
     if record is None:
