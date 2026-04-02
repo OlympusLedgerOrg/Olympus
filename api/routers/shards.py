@@ -303,20 +303,40 @@ async def get_shard_state_diff(
 
 @router.get("/shards/{shard_id}/header/latest/verify", response_model=HeaderVerificationResponse)
 async def verify_latest_header(
-    shard_id: str = _SHARD_ID_PATH, *, _rl: RateLimit
+    shard_id: str = _SHARD_ID_PATH,
+    *,
+    _rl: RateLimit,
+    max_headers: int | None = Query(
+        None,
+        ge=1,
+        le=10_000,
+        description="Max headers to verify in this call. "
+        "Use next_seq cursor for subsequent pages.",
+    ),
+    after_seq: int = Query(
+        0,
+        ge=0,
+        description="Resume verification after this sequence number.",
+    ),
 ) -> HeaderVerificationResponse:
     """
     Verify the Ed25519 signature and RFC 3161 timestamp of the latest shard header.
+
+    Optionally performs paginated replay verification of the shard's Merkle
+    tree history using the ``max_headers`` / ``after_seq`` cursor parameters
+    (RFC 6962 §4.6 cursor model).
 
     Returns both the signature validity and, if a timestamp token has been stored,
     the RFC 3161 token and whether it is cryptographically valid.
 
     Args:
         shard_id: Shard identifier.
+        max_headers: Max headers to verify per call (cursor pagination).
+        after_seq: Resume verification after this sequence number.
 
     Returns:
-        Verification result including signature status, timestamp token, and
-        timestamp validity.
+        Verification result including signature status, timestamp token,
+        timestamp validity, and optional replay cursor.
     """
     storage = _require_storage()
     with db_op("verify header"):
@@ -363,12 +383,21 @@ async def verify_latest_header(
             except Exception:
                 timestamp_valid = False
 
+        # Replay verification with optional cursor pagination.
+        replay = storage.verify_state_replay(
+            shard_id,
+            max_headers=max_headers,
+            after_seq=after_seq,
+        )
+
         return HeaderVerificationResponse(
             shard_id=shard_id,
             header_hash=header_hash,
             signature_valid=signature_valid,
             timestamp_token=timestamp_token,
             timestamp_valid=timestamp_valid,
+            headers_checked=replay["headers_checked"],
+            next_seq=replay["next_seq"],
         )
 
 

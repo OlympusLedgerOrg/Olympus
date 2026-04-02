@@ -295,12 +295,15 @@ class TestVerifyStateReplayDelegation(unittest.TestCase):
 
     def test_delegates_to_replay_tree_incremental(self):
         sl = _make_storage()
-        sl.replay_tree_incremental = MagicMock(return_value=True)
+        replay_result = {"verified": True, "headers_checked": 3, "next_seq": None}
+        sl.replay_tree_incremental = MagicMock(return_value=replay_result)
 
         result = sl.verify_state_replay("shard-1")
 
-        self.assertTrue(result)
-        sl.replay_tree_incremental.assert_called_once_with("shard-1")
+        self.assertEqual(result, replay_result)
+        sl.replay_tree_incremental.assert_called_once_with(
+            "shard-1", max_headers=None, after_seq=0
+        )
 
 
 # ---------------------------------------------------------------------------
