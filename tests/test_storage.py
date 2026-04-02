@@ -992,7 +992,10 @@ def test_verify_state_replay_matches_headers_and_ledger(storage, signing_key):
             signing_key=signing_key,
         )
 
-    assert storage.verify_state_replay(shard_id) is True
+    result = storage.verify_state_replay(shard_id)
+    assert result["verified"] is True
+    assert result["headers_checked"] == 3
+    assert result["next_seq"] is None
 
 
 def test_verify_state_replay_detects_header_root_divergence(storage, signing_key):
