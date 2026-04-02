@@ -137,7 +137,7 @@ The repository is at **Phase 0** (pre-public protocol hardening). The three phas
 3. **E2E CI integration test against real PostgreSQL** — covered by the `smoke` workflow and `pytest -m postgres`.
 
 **Phase 1** (greenfield, no migration) services are underway:
-- Go sequencer: `services/sequencer-go/` and `go/sequencer/`
+- Go sequencer: `services/sequencer-go/`
 - Rust CD-HS-ST service: `services/cdhs-smf-rust/`
 - Shared protobuf definitions: `proto/`
 
