@@ -1115,7 +1115,12 @@ async def ingest_batch(
                         ledger_entry_hash = ledger_entry.entry_hash
                         logger.info(f"Record {record.record_id} persisted to PostgreSQL")
                     except ValueError as e:
-                        if "Record already exists" in str(e):
+                        error_msg = str(e)
+                        is_dedup = (
+                            "Record already exists" in error_msg
+                            or "Content hash already committed" in error_msg
+                        )
+                        if is_dedup:
                             # Record exists in database, treat as dedup and hydrate mapping
                             poseidon_smt = _build_poseidon_smt_for_storage_shard(storage, shard_id)
                             existing_record = _fetch_by_content_hash(content_hash)
@@ -1619,7 +1624,12 @@ async def commit_artifact(
                     poseidon_root=poseidon_root_normalized,
                 )
             except ValueError as e:
-                if "Record already exists" in str(e):
+                error_msg = str(e)
+                is_dedup = (
+                    "Record already exists" in error_msg
+                    or "Content hash already committed" in error_msg
+                )
+                if is_dedup:
                     existing = _fetch_by_content_hash(artifact_hash_hex) or {}
                     existing_proof_id = existing.get("proof_id", proof_id)
                     INGEST_TOTAL.labels(outcome="deduplicated").inc()
