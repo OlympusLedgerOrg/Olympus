@@ -1005,8 +1005,10 @@ class StorageLayer:
                 big-endian). When provided, the ledger entry hash uses the dual-root
                 commitment formula to atomically bind both the BLAKE3 SMT root and the
                 Poseidon root.
-            max_serialization_retries: Maximum number of retries on PostgreSQL
-                serialization failure (40001). Defaults to 3.
+            max_serialization_retries: Maximum number of additional retry attempts
+                after the initial attempt on PostgreSQL serialization failure (40001).
+                Total attempts = 1 + max_serialization_retries. Defaults to 3 retries
+                (4 total attempts).
 
         Returns:
             Tuple of (root_hash, proof, header, signature, ledger_entry)
@@ -1025,8 +1027,9 @@ class StorageLayer:
         key = global_key(shard_id, rec_key)
 
         # RT-H2: Retry loop for serialization failures
-        last_error: Exception | None = None
-        for attempt in range(max_serialization_retries + 1):
+        # Total attempts = 1 (initial) + max_serialization_retries (retries)
+        max_attempts = 1 + max_serialization_retries
+        for attempt in range(max_attempts):
             try:
                 return self._append_record_inner(
                     shard_id=shard_id,
@@ -1040,8 +1043,8 @@ class StorageLayer:
                     poseidon_root=poseidon_root,
                 )
             except psycopg.errors.SerializationFailure as e:
-                last_error = e
-                if attempt < max_serialization_retries:
+                is_last_attempt = attempt == max_attempts - 1
+                if not is_last_attempt:
                     # Exponential backoff: 0.1s, 0.2s, 0.4s, ...
                     delay = min(
                         self._retry_base_delay_seconds * (2**attempt),
@@ -1051,7 +1054,7 @@ class StorageLayer:
                         "Serialization failure on append_record attempt %d/%d, "
                         "retrying in %.2fs: %s",
                         attempt + 1,
-                        max_serialization_retries + 1,
+                        max_attempts,
                         delay,
                         e,
                     )
@@ -1059,13 +1062,13 @@ class StorageLayer:
                 else:
                     logger.error(
                         "Serialization failure after %d attempts, giving up: %s",
-                        max_serialization_retries + 1,
+                        max_attempts,
                         e,
                     )
                     raise
 
-        # This should never be reached, but satisfy the type checker
-        raise last_error if last_error else RuntimeError("Unexpected retry loop exit")
+        # Unreachable: loop always returns or raises
+        raise RuntimeError("Unexpected retry loop exit")
 
     def _append_record_inner(
         self,
