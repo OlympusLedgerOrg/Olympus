@@ -401,8 +401,6 @@ class StorageLayer:
             )
             """,
             "CREATE INDEX IF NOT EXISTS smt_leaves_ts_idx ON smt_leaves(ts)",
-            # RT-H1: Index for content-based deduplication (value_hash lookup)
-            "CREATE INDEX IF NOT EXISTS smt_leaves_value_hash_idx ON smt_leaves(value_hash)",
             # ------------------------------------------------------------------
             # SMT Nodes
             # ------------------------------------------------------------------
@@ -1096,22 +1094,6 @@ class StorageLayer:
             # Check if key already exists (by record identity)
             if tree.get(key) is not None:
                 raise ValueError(f"Record already exists: {record_type}:{record_id}:{version}")
-
-            # RT-H1: Check if value_hash already exists (content-based deduplication).
-            # This check is now INSIDE the SERIALIZABLE transaction, eliminating the
-            # TOCTOU race condition where concurrent requests could both pass the dedup
-            # check and attempt to insert. The PRIMARY KEY constraint on smt_leaves(key)
-            # also provides a hard guarantee, but this early check gives a cleaner
-            # error message.
-            cur.execute(
-                """
-                SELECT key FROM smt_leaves WHERE value_hash = %s LIMIT 1
-                """,
-                (value_hash,),
-            )
-            existing_by_hash = cur.fetchone()
-            if existing_by_hash is not None:
-                raise ValueError(f"Content hash already committed: {value_hash.hex()}")
 
             # Update tree
             tree.update(key, value_hash)
@@ -1896,7 +1878,7 @@ class StorageLayer:
         self,
         shard_id: str,
         max_headers: int | None = None,
-        after_seq: int = 0,
+        after_seq: int = -1,
     ) -> dict[str, Any]:
         """
         Replay global SMT state at each shard header timestamp and verify roots against headers
@@ -2477,7 +2459,7 @@ class StorageLayer:
         shard_id: str,
         batch_size: int = 10_000,
         max_headers: int | None = None,
-        after_seq: int = 0,
+        after_seq: int = -1,
     ) -> dict[str, Any]:
         """
         Verify shard integrity by streaming leaves in batches and replaying
@@ -2501,6 +2483,7 @@ class StorageLayer:
                 When ``None`` (default) the full history is verified.
             after_seq: Resume verification after this sequence number.
                 Headers with ``seq <= after_seq`` are skipped.
+                Default is ``-1`` (include all headers from seq 0 onwards).
 
         Returns:
             A dict with keys:
@@ -2554,7 +2537,7 @@ class StorageLayer:
             tree = SparseMerkleTree()
             prev_ts: datetime | None = None
 
-            if after_seq > 0:
+            if after_seq >= 0:
                 # Load all leaves up to the timestamp of the header at after_seq
                 # so the tree carries forward correctly.
                 cur.execute(
