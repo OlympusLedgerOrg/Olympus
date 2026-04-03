@@ -314,7 +314,7 @@ class TestSubmittedProofBundles:
         assert data["poseidon_root"] == proof_bundle["poseidon_root"]
 
     def test_submit_valid_external_proof_bundle(self, client: TestClient):
-        import json as _json
+        import json
 
         # Ingest a document so the server has a record of it
         content = {"external_proof_bundle": "test-content"}
@@ -334,7 +334,7 @@ class TestSubmittedProofBundles:
         expected_content_hash = ingest_resp.json()["results"][0]["content_hash"]
 
         # Upload the same document content to retrieve the server-computed proof
-        file_bytes = _json.dumps(content).encode()
+        file_bytes = json.dumps(content).encode()
         resp = client.post(
             "/ingest/proofs",
             files={"file": ("document.json", file_bytes, "application/json")},
