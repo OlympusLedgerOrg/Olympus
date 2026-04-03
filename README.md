@@ -12,6 +12,16 @@ The answer is **yes**, offline, forever.
 
 The repository is in a protocol-hardening phase: deterministic canonicalization, Merkle commitments, verifiable proofs, and developer tooling for inspecting and validating those primitives.
 
+## Start here
+
+| I am a... | Start with |
+|---|---|
+| **Security auditor** | [`threat-model.md`](threat-model.md) → [`storage/postgres.py`](storage/postgres.py) → [`protocol/`](protocol/) |
+| **New contributor** | [`QUICKSTART.md`](QUICKSTART.md) → [`DEVELOPMENT.md`](DEVELOPMENT.md) → [`CONTRIBUTING.md`](CONTRIBUTING.md) |
+| **Integrator / API user** | [`api/routers/`](api/routers/) → [`schemas/`](schemas/) → [`tools/verify_cli.py`](tools/verify_cli.py) |
+| **Operator / deployer** | [`QUICKSTART.md`](QUICKSTART.md) → [`docs/`](docs/) → [`alembic/`](alembic/) |
+| **ZK / circuit reviewer** | [`proofs/circuits/`](proofs/circuits/) → [`ceremony/`](ceremony/) → [`api/services/zkproof.py`](api/services/zkproof.py) |
+
 ## Licensing
 
 Olympus is licensed under **Apache License 2.0**.
@@ -64,7 +74,7 @@ Olympus has three service layers with strict responsibility boundaries:
                     | HTTP / gRPC
                     v
 +---------------------------------------------------+
-|  Go Sequencer  (services/sequencer-go/, go/)      |
+|  Go Sequencer  (services/sequencer-go/)              |
 |  - Trillian-shaped log API                        |
 |  - QueueLeaf, GetLatestRoot, GetInclusionProof    |
 |  - Postgres persistence for SMT node deltas       |
@@ -127,9 +137,22 @@ The repository is at **Phase 0** (pre-public protocol hardening). The three phas
 3. **E2E CI integration test against real PostgreSQL** — covered by the `smoke` workflow and `pytest -m postgres`.
 
 **Phase 1** (greenfield, no migration) services are underway:
-- Go sequencer: `services/sequencer-go/` and `go/sequencer/`
+- Go sequencer: `services/sequencer-go/`
 - Rust CD-HS-ST service: `services/cdhs-smf-rust/`
 - Shared protobuf definitions: `proto/`
+
+> **What is live vs in progress**
+>
+> **Working now:** Python API, PostgreSQL storage, BLAKE3 CD-HS-ST,
+> Ed25519 signing, RFC 3161 timestamps, cross-language verifiers,
+> arkworks BN254 Groth16 verifier (native Rust).
+>
+> **In progress:** Go sequencer → Rust service integration (proto wired,
+> hardened, not yet primary write path). Federation multi-node replication
+> (quorum signing prototyped, Guardian replication Phase 1+).
+>
+> **External dependency:** Groth16 trusted setup ceremony (required before
+> ZK proofs are production-valid). See [`ceremony/`](ceremony/).
 
 ### Developer Workflows
 
@@ -254,6 +277,7 @@ Olympus is influenced by the operational model of Certificate Transparency and S
 | Full developer workflow | [`DEVELOPMENT.md`](DEVELOPMENT.md) |
 | Governance & sustainability | [`GOVERNANCE.md`](GOVERNANCE.md) |
 | Contribution workflow | [`CONTRIBUTING.md`](CONTRIBUTING.md) |
+| Architecture & structural decisions | [`ARCHITECTURE.md`](ARCHITECTURE.md) |
 
 ## Notes
 

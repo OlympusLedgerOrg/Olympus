@@ -27,7 +27,12 @@ class WitnessCheckpoint(BaseModel):
 class WitnessAnnounceRequest(BaseModel):
     """Request body for POST /witness/observations."""
 
-    origin: str = Field(..., description="Identifier of the announcing node/origin")
+    origin: str = Field(
+        ...,
+        description="Transparency log origin identifier (URL-like, e.g. 'example.com/my-log').",
+        pattern=r"^[A-Za-z0-9._/:-]{1,256}$",
+        max_length=256,
+    )
     checkpoint: WitnessCheckpoint = Field(..., description="Checkpoint being announced")
     nonce: str = Field(
         ...,
@@ -35,12 +40,28 @@ class WitnessAnnounceRequest(BaseModel):
         max_length=128,
         description="Unique nonce for replay-resistance. Must not be reused across submissions.",
     )
+    node_signature: str = Field(
+        ...,
+        min_length=128,
+        max_length=128,
+        pattern=r"^[0-9a-f]{128}$",
+        description=(
+            "Hex-encoded Ed25519 signature (64 bytes = 128 hex chars) over "
+            "the canonical checkpoint payload: "
+            "SHA-256(origin || ':' || sequence || ':' || checkpoint_hash)."
+        ),
+    )
 
 
 class WitnessAnnouncement(BaseModel):
     """A recorded checkpoint announcement from a specific origin."""
 
-    origin: str = Field(..., description="Identifier of the announcing node/origin")
+    origin: str = Field(
+        ...,
+        description="Transparency log origin identifier (URL-like, e.g. 'example.com/my-log').",
+        pattern=r"^[A-Za-z0-9._/:-]{1,256}$",
+        max_length=256,
+    )
     checkpoint: WitnessCheckpoint = Field(..., description="Announced checkpoint")
     received_at: str = Field(
         ...,
@@ -51,7 +72,12 @@ class WitnessAnnouncement(BaseModel):
 class WitnessAnnounceResponse(BaseModel):
     """Response body for POST /witness/observations."""
 
-    origin: str = Field(..., description="Identifier of the announcing origin")
+    origin: str = Field(
+        ...,
+        description="Transparency log origin identifier (URL-like, e.g. 'example.com/my-log').",
+        pattern=r"^[A-Za-z0-9._/:-]{1,256}$",
+        max_length=256,
+    )
     sequence: int = Field(..., description="Sequence number of the announcement")
     status: str = Field(..., description="Confirmation status")
 

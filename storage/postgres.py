@@ -1518,7 +1518,8 @@ class StorageLayer:
         with self._get_connection() as conn, conn.cursor(row_factory=dict_row) as cur:
             cur.execute(
                 """
-                    SELECT seq, root, tree_size, header_hash, previous_header_hash, ts
+                    SELECT seq, root, tree_size, header_hash, previous_header_hash, ts,
+                           sig, pubkey
                     FROM shard_headers
                     WHERE shard_id = %s
                     ORDER BY seq DESC
@@ -1553,6 +1554,8 @@ class StorageLayer:
                             else bytes(row["previous_header_hash"]).hex()
                         ),
                         "timestamp": timestamp_str,
+                        "signature": bytes(row["sig"]).hex(),
+                        "pubkey": bytes(row["pubkey"]).hex(),
                     }
                 )
 
@@ -1762,7 +1765,12 @@ class StorageLayer:
             rows = cur.fetchall()
             return [row["shard_id"] for row in rows]
 
-    def verify_state_replay(self, shard_id: str) -> bool:
+    def verify_state_replay(
+        self,
+        shard_id: str,
+        max_headers: int | None = None,
+        after_seq: int = 0,
+    ) -> dict[str, Any]:
         """
         Replay global SMT state at each shard header timestamp and verify roots against headers
         and ledger.
@@ -1771,18 +1779,23 @@ class StorageLayer:
         O(N) streaming delta replay instead of the former O(N²) full-load
         per header.
 
-        Returns True when:
-          * Every persisted shard header root matches the recomputed SMT root, and
-          * Every ledger entry payload shard_root matches the same recomputed root, and
-          * The current global SMT state still matches the latest persisted shard header root.
+        Returns a dict with ``verified``, ``headers_checked``, and
+        ``next_seq`` (``None`` when complete) to support RFC 6962 §4.6
+        cursor-based pagination.
 
         Args:
             shard_id: Shard identifier to replay.
+            max_headers: Maximum headers to verify in this call (optional).
+            after_seq: Resume after this sequence number (default 0).
 
         Raises:
             ValueError: If counts diverge or any root mismatch is detected.
         """
-        return self.replay_tree_incremental(shard_id)
+        return self.replay_tree_incremental(
+            shard_id,
+            max_headers=max_headers,
+            after_seq=after_seq,
+        )
 
     def store_timestamp_token(
         self,
@@ -2335,7 +2348,9 @@ class StorageLayer:
         self,
         shard_id: str,
         batch_size: int = 10_000,
-    ) -> bool:
+        max_headers: int | None = None,
+        after_seq: int = 0,
+    ) -> dict[str, Any]:
         """
         Verify shard integrity by streaming leaves in batches and replaying
         root computation incrementally across headers.
@@ -2347,53 +2362,111 @@ class StorageLayer:
         in-memory tree is carried forward between checkpoints rather than
         being rebuilt from scratch each time.
 
+        When *max_headers* is set the method stops after that many headers
+        and returns a cursor (``next_seq``) so callers can page through the
+        full history — RFC 6962 §4.6 cursor model.
+
         Args:
             shard_id: Shard identifier to replay.
             batch_size: Number of leaves to fetch per DB round-trip.
+            max_headers: Maximum number of headers to verify in this call.
+                When ``None`` (default) the full history is verified.
+            after_seq: Resume verification after this sequence number.
+                Headers with ``seq <= after_seq`` are skipped.
 
         Returns:
-            ``True`` when all headers and ledger entries match.
+            A dict with keys:
+            - ``verified`` (bool): ``True`` when all checked headers match.
+            - ``headers_checked`` (int): Number of headers verified.
+            - ``next_seq`` (int | None): Next unverified sequence number,
+              or ``None`` when verification is complete.
 
         Raises:
             ValueError: On any root mismatch or count divergence.
         """
         with self._get_connection() as conn, conn.cursor(row_factory=dict_row) as cur:
-            # Fetch all headers in sequence order.
+            # Fetch headers in sequence order, applying cursor filter.
             cur.execute(
                 """
                 SELECT seq, root, ts
                 FROM shard_headers
-                WHERE shard_id = %s
+                WHERE shard_id = %s AND seq > %s
                 ORDER BY seq ASC
                 """,
-                (shard_id,),
+                (shard_id, after_seq),
             )
             headers = cur.fetchall()
 
-            # Fetch matching ledger entries.
+            # Fetch matching ledger entries (same cursor filter).
             cur.execute(
                 """
                 SELECT seq, payload
                 FROM ledger_entries
-                WHERE shard_id = %s
+                WHERE shard_id = %s AND seq > %s
                 ORDER BY seq ASC
                 """,
-                (shard_id,),
+                (shard_id, after_seq),
             )
             ledger_rows = cur.fetchall()
 
             if len(ledger_rows) != len(headers):
                 raise ValueError(
                     f"Replay mismatch for shard '{shard_id}': {len(ledger_rows)} ledger "
-                    f"entries vs {len(headers)} headers"
+                    f"entries vs {len(headers)} headers (after_seq={after_seq})"
                 )
 
-            # Incremental replay: carry the tree forward, replaying only
-            # leaves between successive header timestamps.
+            # Determine how many headers to process in this call.
+            if max_headers is not None:
+                headers_to_check = headers[:max_headers]
+                ledger_rows = ledger_rows[:max_headers]
+            else:
+                headers_to_check = headers
+
+            # If resuming, load tree state up to prev header's timestamp.
             tree = SparseMerkleTree()
             prev_ts: datetime | None = None
 
-            for idx, header_row in enumerate(headers):
+            if after_seq > 0:
+                # Load all leaves up to the timestamp of the header at after_seq
+                # so the tree carries forward correctly.
+                cur.execute(
+                    """
+                    SELECT ts FROM shard_headers
+                    WHERE shard_id = %s AND seq = %s
+                    """,
+                    (shard_id, after_seq),
+                )
+                prev_row = cur.fetchone()
+                if prev_row is not None:
+                    prev_ts = prev_row["ts"]
+                    if isinstance(prev_ts, str):
+                        prev_ts = datetime.fromisoformat(prev_ts.replace("Z", "+00:00"))
+                    if prev_ts.tzinfo is None:
+                        prev_ts = prev_ts.replace(tzinfo=timezone.utc)
+                    # Replay all leaves up to prev_ts to restore tree state.
+                    offset = 0
+                    while True:
+                        cur.execute(
+                            sql.SQL("""
+                            SELECT key, value_hash FROM smt_leaves
+                            WHERE ts <= %s
+                            ORDER BY ts ASC, key ASC
+                            LIMIT %s OFFSET %s
+                            """),
+                            (prev_ts, batch_size, offset),
+                        )
+                        rows = cur.fetchall()
+                        if not rows:
+                            break
+                        for row in rows:
+                            tree.update(bytes(row["key"]), bytes(row["value_hash"]))
+                        offset += len(rows)
+
+            # Incremental replay: carry the tree forward, replaying only
+            # leaves between successive header timestamps.
+            headers_checked = 0
+
+            for idx, header_row in enumerate(headers_to_check):
                 header_ts = header_row["ts"]
                 if isinstance(header_ts, str):
                     header_ts = datetime.fromisoformat(header_ts.replace("Z", "+00:00"))
@@ -2458,10 +2531,23 @@ class StorageLayer:
                 prev_ts = header_ts
                 if prev_ts.tzinfo is None:
                     prev_ts = prev_ts.replace(tzinfo=timezone.utc)
+                headers_checked += 1
 
-            # Final check: current tree matches latest persisted root.
-            if headers:
-                latest_header_root = bytes(self._row_get(headers[-1], "root", 1))
+            # Determine whether there are more headers to verify.
+            remaining = len(headers) - len(headers_to_check)
+            if remaining > 0:
+                next_seq = int(
+                    self._row_get(headers_to_check[-1], "seq", 0)
+                )
+            else:
+                next_seq = None
+
+            # Final check: when verification is complete, the current tree
+            # must match the latest persisted root.
+            if next_seq is None and headers:
+                latest_header_root = bytes(
+                    self._row_get(headers[-1], "root", 1)
+                )
                 if tree.get_root() != latest_header_root:
                     raise ValueError(
                         f"Replay mismatch for shard '{shard_id}': latest persisted root "
@@ -2469,7 +2555,11 @@ class StorageLayer:
                         f"{tree.get_root().hex()}"
                     )
 
-            return True
+            return {
+                "verified": True,
+                "headers_checked": headers_checked,
+                "next_seq": next_seq,
+            }
 
     def _get_header_by_seq(
         self, cur: psycopg.Cursor[Any], shard_id: str, seq: int

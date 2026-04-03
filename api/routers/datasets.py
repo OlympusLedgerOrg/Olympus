@@ -729,12 +729,19 @@ async def dataset_history(
     dataset_id: str,
     db: DBSession,
     _rl: RateLimit,
+    n: int = Query(
+        100,
+        ge=1,
+        le=1000,
+        description="Maximum number of versions to return (1-1000).",
+    ),
 ) -> DatasetHistoryResponse:
     """Return ordered version history for a logical dataset."""
     result = await db.execute(
         select(DatasetArtifact)
         .where(DatasetArtifact.dataset_id == dataset_id)
         .order_by(DatasetArtifact.epoch_timestamp.asc())
+        .limit(n)
     )
     rows = result.scalars().all()
     if not rows:

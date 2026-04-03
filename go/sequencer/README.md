@@ -1,3 +1,13 @@
+> **THIS IS A COMPILE-TIME CONTRACT SCAFFOLD — NOT THE ACTIVE SERVICE**
+>
+> All RPC handlers return `codes.Unimplemented`. This package exists
+> to establish the compile-time gRPC contract for the OlympusTree API.
+>
+> **The active sequencer implementation is at
+> [`services/sequencer-go/`](../../services/sequencer-go/).**
+> **All production work, security hardening, and deployable code lives
+> there.**
+
 # go/sequencer — OlympusTree gRPC Sequencer (scaffold)
 
 Trillian-shaped log sequencer for the Olympus append-only ledger.

@@ -16,6 +16,7 @@ All write operations are append-only and maintain ledger chain integrity.
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import os
 import uuid
@@ -29,18 +30,20 @@ from typing import TYPE_CHECKING, Any
 from urllib.parse import urlparse
 
 import nacl.signing
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, File, HTTPException, Request, UploadFile
 from pydantic import BaseModel, Field, field_validator
 
 from api.auth import (
+    RateLimit,
     RequireCommitScope,
     RequireIngestScope,
     RequireVerifyScope,
-    _ip_in_ranges,
-    _is_overly_broad_proxy_range,
+    _get_client_ip,
     _register_api_key_for_tests as _auth_register_api_key_for_tests,
     _reset_auth_state_for_tests,
 )
+from api.config import get_settings
+from api.services.upload_validation import validate_file_magic
 from protocol.canonical import CANONICAL_VERSION, canonicalize_document, document_to_bytes
 from protocol.canonicalizer import canonicalization_provenance
 from protocol.hashes import hash_bytes, leaf_hash, record_key
@@ -67,6 +70,39 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/ingest", tags=["ingest"])
+
+# Maximum number of bytes read per iteration when streaming an upload.
+_UPLOAD_CHUNK_SIZE = 65_536
+
+
+async def _read_upload_bounded(file: UploadFile, max_bytes: int, max_mb: int) -> bytes:
+    """Read *file* in fixed-size chunks, aborting if the total exceeds *max_bytes*.
+
+    Args:
+        file: FastAPI UploadFile to read.
+        max_bytes: Hard upper bound on accepted payload size in bytes.
+        max_mb: Human-readable equivalent (for error messages).
+
+    Returns:
+        The full file contents as a single :class:`bytes` object.
+
+    Raises:
+        HTTPException 413: If the payload exceeds *max_bytes* before EOF.
+    """
+    chunks: list[bytes] = []
+    total = 0
+    while True:
+        chunk = await file.read(_UPLOAD_CHUNK_SIZE)
+        if not chunk:
+            break
+        total += len(chunk)
+        if total > max_bytes:
+            raise HTTPException(
+                status_code=413,
+                detail=f"File exceeds maximum size of {max_mb} MB.",
+            )
+        chunks.append(chunk)
+    return b"".join(chunks)
 
 
 # ---------------------------------------------------------------------------
@@ -290,6 +326,8 @@ class ProofVerificationResponse(BaseModel):
     poseidon_root: str | None = None
 
 
+# DEPRECATED: submit_proof_bundle no longer accepts a JSON body.
+# Retained for migration period. Will be removed in a future release.
 class ProofSubmissionRequest(ProofVerificationRequest):
     """Proof bundle payload that can be submitted to the API for later retrieval."""
 
@@ -339,15 +377,6 @@ _write_ledger = Ledger()
 
 # API key store and loaded flag have been removed - authentication is now unified
 # through api.auth module. The key store is maintained by api.auth._key_store.
-
-# L4-E: Trusted proxy IP ranges for X-Forwarded-For parsing.
-# Only parse X-Forwarded-For header when the direct peer is a known trusted proxy.
-# This prevents IP spoofing attacks where a client sets a fake X-Forwarded-For header.
-# Configure via OLYMPUS_TRUSTED_PROXY_IPS environment variable (comma-separated IPs or CIDRs).
-TRUSTED_PROXY_RANGES: list[str] = [
-    ip.strip() for ip in os.environ.get("OLYMPUS_TRUSTED_PROXY_IPS", "").split(",") if ip.strip()
-]
-
 
 def _dev_signing_key_enabled() -> bool:
     """Return True when dev-mode auto signing key generation is enabled."""
@@ -643,43 +672,6 @@ def _set_rate_limit_for_tests(
             logger.warning("Failed to clear persisted rate limits during test setup", exc_info=True)
 
 
-def _client_ip(request: Request) -> str:
-    """
-    Resolve the caller IP address for abuse controls.
-
-    L4-E: Only parses X-Forwarded-For if the direct peer is a trusted proxy.
-    This prevents IP spoofing attacks where a malicious client sets a fake
-    X-Forwarded-For header to bypass rate limiting.
-
-    Args:
-        request: The incoming HTTP request.
-
-    Returns:
-        The client IP address (from X-Forwarded-For if behind a trusted proxy,
-        otherwise the direct peer IP).
-    """
-    peer_ip = request.client.host if request.client else None
-
-    if any(_is_overly_broad_proxy_range(proxy_range) for proxy_range in TRUSTED_PROXY_RANGES):
-        logger.error(
-            "Ignoring X-Forwarded-For because OLYMPUS_TRUSTED_PROXY_IPS contains an overly "
-            "broad range (0.0.0.0/0 or ::/0), which allows client IP spoofing."
-        )
-        return peer_ip or "unknown"
-
-    # Only parse X-Forwarded-For if the peer is a trusted proxy (CIDR-aware check)
-    if peer_ip and TRUSTED_PROXY_RANGES and _ip_in_ranges(peer_ip, TRUSTED_PROXY_RANGES):
-        xff = request.headers.get("x-forwarded-for")
-        if xff:
-            # X-Forwarded-For format: "client, proxy1, proxy2, ..."
-            # The leftmost IP is the original client
-            forwarded_ip = xff.split(",")[0].strip()
-            if forwarded_ip:
-                return forwarded_ip
-
-    return peer_ip or "unknown"
-
-
 def _get_bucket(buckets: OrderedDict[str, TokenBucket], subject: str, action: str) -> TokenBucket:
     """
     Get/create a token bucket for the subject and action.
@@ -779,7 +771,7 @@ def _apply_rate_limits(request: Request, api_key_id: str, action: str) -> None:
     Raises:
         HTTPException 429: If rate limit is exceeded.
     """
-    client_ip = _client_ip(request)
+    client_ip = _get_client_ip(request)
 
     if not _consume_rate_limit("api_key", api_key_id, action):
         logger.warning(
@@ -847,11 +839,23 @@ def _normalize_source_url(source_url: str) -> str:
     return source_url
 
 
+_BN128_FIELD_PRIME = (
+    21888242871839275222246405745257275088548364400416034343698204186575808495617
+)
+
+
 def _value_hash_to_poseidon_field(value_hash: bytes) -> int:
-    """Convert a 32-byte value hash into the BN128 field element used by PoseidonSMT."""
+    """Convert a 32-byte value hash into a BN128 field element.
+
+    Applies modular reduction by the BN128 scalar field prime so that
+    the returned value is always a valid field element. Without this
+    reduction, values derived from BLAKE3 hashes can exceed the prime
+    (2^256 - 1 is ~5.3x the BN128 prime), causing incorrect Poseidon
+    hash outputs and enabling hash collisions.
+    """
     if len(value_hash) != 32:
         raise ValueError(f"value_hash must be 32 bytes, got {len(value_hash)}")
-    return int.from_bytes(value_hash, byteorder="big")
+    return int.from_bytes(value_hash, byteorder="big") % _BN128_FIELD_PRIME
 
 
 def _build_poseidon_smt_for_storage_shard(storage: StorageLayer, shard_id: str) -> PoseidonSMT:
@@ -859,7 +863,7 @@ def _build_poseidon_smt_for_storage_shard(storage: StorageLayer, shard_id: str) 
     from protocol.poseidon_smt import PoseidonSMT
 
     with storage._get_connection() as conn, conn.cursor() as cur:
-        tree = storage._load_tree_state(cur, shard_id)
+        tree = storage._load_tree_state(cur)
 
     poseidon_smt = PoseidonSMT()
     for key, value_hash in tree.leaves.items():
@@ -1332,7 +1336,10 @@ async def ingest_batch(
 
 
 @router.get("/records/{proof_id}/proof", response_model=IngestionProofResponse)
-async def get_ingestion_proof(proof_id: str) -> IngestionProofResponse:
+async def get_ingestion_proof(
+    proof_id: str,
+    _scope: RequireVerifyScope,
+) -> IngestionProofResponse:
     """
     Retrieve the proof for a previously ingested record.
 
@@ -1410,68 +1417,76 @@ async def verify_submitted_proof_bundle(
 
 @router.post("/proofs", response_model=ProofSubmissionResponse)
 async def submit_proof_bundle(
-    proof_request: ProofSubmissionRequest, request: Request, _api_key: RequireVerifyScope
+    request: Request,
+    _api_key: RequireVerifyScope,
+    _rl: RateLimit,
+    file: UploadFile = File(...),
 ) -> ProofSubmissionResponse:
-    """Accept a verified proof bundle so it can be retrieved through the API later."""
-    # Apply rate limiting after authentication
+    """Retrieve the server-computed proof bundle for a committed document.
+
+    The caller supplies only the raw document bytes. The server
+    canonicalizes, hashes, and looks up its authoritative proof record.
+    No caller-supplied metadata is accepted — all proof fields are
+    derived from the server's own ingestion records.
+
+    Returns 404 if the document has not been committed yet. Commit
+    first via POST /ingest/records.
+    """
     _apply_rate_limits(request, _api_key.key_id, "verify")
 
-    normalized_hash, normalized_root, content_hash_matches, merkle_proof_valid = (
-        _evaluate_proof_bundle(
-            proof_request.content_hash,
-            proof_request.merkle_root,
-            proof_request.merkle_proof,
+    settings = get_settings()
+    max_mb = settings.max_upload_bytes // 1024 // 1024
+
+    content_length = request.headers.get("content-length")
+    if content_length is not None:
+        try:
+            if int(content_length) > settings.max_upload_bytes:
+                raise HTTPException(
+                    status_code=413,
+                    detail=f"File exceeds maximum size of {max_mb} MB.",
+                )
+        except ValueError:
+            pass
+
+    file_bytes = await _read_upload_bounded(
+        file, settings.max_upload_bytes, max_mb
+    )
+    validate_file_magic(
+        file_bytes, file.content_type or "application/octet-stream"
+    )
+
+    # Parse as JSON and canonicalize — same pipeline as the main ingest path.
+    try:
+        content = json.loads(file_bytes)
+    except (json.JSONDecodeError, UnicodeDecodeError) as exc:
+        raise HTTPException(
+            status_code=400,
+            detail="File must be a valid JSON document.",
+        ) from exc
+
+    if not isinstance(content, dict):
+        raise HTTPException(
+            status_code=400,
+            detail="Document must be a JSON object.",
         )
-    )
-    if not content_hash_matches or not merkle_proof_valid:
-        raise HTTPException(status_code=400, detail="Submitted proof bundle failed verification")
 
-    existing = _fetch_by_content_hash(normalized_hash)
-    if existing is not None:
-        return ProofSubmissionResponse(**existing, submitted=False, deduplicated=True)
+    _, content_hash = await _async_canonicalize_and_hash(content)
 
-    proof_id = proof_request.proof_id or str(uuid.uuid4())
+    record = _fetch_by_content_hash(content_hash)
+    if record is None:
+        raise HTTPException(
+            status_code=404,
+            detail=(
+                "Document not found in ledger. "
+                "Commit the document first via POST /ingest/records, "
+                "then retrieve its proof bundle here."
+            ),
+        )
 
-    # Compute Poseidon root server-side (HIGH-02 security fix)
-    poseidon_smt = _get_or_build_poseidon_smt(proof_request.shard_id)
-    content_hash_bytes = bytes.fromhex(normalized_hash)
-    proof_key = record_key(
-        proof_request.canonicalization.get("record_type", "document"),
-        proof_request.record_id,
-        1,
-    )
-    poseidon_smt.update(proof_key, _value_hash_to_poseidon_field(content_hash_bytes))
-    poseidon_root_normalized = str(poseidon_smt.get_root())
-
-    stored_entry = {
-        "proof_id": proof_id,
-        "record_id": proof_request.record_id,
-        "shard_id": proof_request.shard_id,
-        "content_hash": normalized_hash,
-        "merkle_root": normalized_root,
-        "merkle_proof": proof_request.merkle_proof,
-        "ledger_entry_hash": proof_request.ledger_entry_hash,
-        "timestamp": proof_request.timestamp,
-        "canonicalization": proof_request.canonicalization,
-        "batch_id": proof_request.batch_id,
-        "poseidon_root": poseidon_root_normalized,
-        "persisted": False,
-    }
-    _cache_ingestion_record(stored_entry)
     return ProofSubmissionResponse(
-        proof_id=proof_id,
-        record_id=proof_request.record_id,
-        shard_id=proof_request.shard_id,
-        content_hash=normalized_hash,
-        merkle_root=normalized_root,
-        merkle_proof=proof_request.merkle_proof,
-        ledger_entry_hash=proof_request.ledger_entry_hash,
-        timestamp=proof_request.timestamp,
-        canonicalization=proof_request.canonicalization,
-        batch_id=proof_request.batch_id,
-        poseidon_root=poseidon_root_normalized,
-        submitted=True,
-        deduplicated=False,
+        **record,
+        submitted=False,
+        deduplicated=True,
     )
 
 

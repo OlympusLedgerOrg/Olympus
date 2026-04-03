@@ -226,8 +226,6 @@ async def require_api_key(request: Request) -> _APIKeyRecord:
     # In production (or any non-development environment) this is a fatal
     # misconfiguration — refuse to serve write requests.
     if not _key_store:
-        _env = os.environ.get("OLYMPUS_ENV", "production")
-        _allow_dev_auth = os.environ.get("OLYMPUS_ALLOW_DEV_AUTH") == "1"
         if _env == "development" and _allow_dev_auth:
             logger.critical("No API keys configured — dev-mode auth bypass active")
             return _APIKeyRecord(
@@ -308,8 +306,6 @@ def require_api_key_with_scope(required_scope: str) -> Any:
 
         # If no keys are configured, allow dev-mode bypass ONLY in development.
         if not _key_store:
-            _env = os.environ.get("OLYMPUS_ENV", "production")
-            _allow_dev_auth = os.environ.get("OLYMPUS_ALLOW_DEV_AUTH") == "1"
             if _env == "development" and _allow_dev_auth:
                 logger.critical("No API keys configured — dev-mode auth bypass active")
                 return _APIKeyRecord(
