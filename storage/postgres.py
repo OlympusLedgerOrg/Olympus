@@ -2483,7 +2483,9 @@ class StorageLayer:
                 When ``None`` (default) the full history is verified.
             after_seq: Resume verification after this sequence number.
                 Headers with ``seq <= after_seq`` are skipped.
-                Default is ``-1`` (include all headers from seq 0 onwards).
+                Default is ``-1``: since shard-header sequence numbers start at
+                0, ``seq > -1`` (i.e. ``seq >= 0``) includes every header on
+                a fresh replay.  Pass the last verified seq to resume paging.
 
         Returns:
             A dict with keys:
