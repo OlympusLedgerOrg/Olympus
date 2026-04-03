@@ -46,7 +46,7 @@ class DatasetCommitRequest(BaseModel):
 
     # Content
     file_format: str = Field(..., max_length=32)
-    files: list[DatasetFileEntry] = Field(..., min_length=1)
+    files: list[DatasetFileEntry] = Field(..., min_length=1, max_length=10_000)
 
     # Provenance
     parent_dataset_id: str | None = Field(None, pattern=r"^[0-9a-f]{64}$")
