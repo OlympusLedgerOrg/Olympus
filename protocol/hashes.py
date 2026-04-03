@@ -24,7 +24,7 @@ from .canonical_json import canonical_json_bytes
 # fall back to pure-Python implementations below when it is not present.
 # ---------------------------------------------------------------------------
 try:
-    from olympus_core.crypto import (  # type: ignore[import-not-found]
+    from olympus_core.crypto import (
         blake3_hash as _rust_blake3_hash,
         global_key as _rust_global_key,
         leaf_hash as _rust_leaf_hash,

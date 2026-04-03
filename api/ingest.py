@@ -20,11 +20,8 @@ import json
 import logging
 import os
 import uuid
-import warnings
 from collections import OrderedDict
-from dataclasses import dataclass
 from datetime import datetime, timezone
-from threading import Lock
 from time import monotonic
 from typing import TYPE_CHECKING, Any
 from urllib.parse import urlparse
@@ -38,9 +35,12 @@ from api.auth import (
     RequireCommitScope,
     RequireIngestScope,
     RequireVerifyScope,
+    _get_backend as _get_rate_limit_backend,
     _get_client_ip,
     _register_api_key_for_tests as _auth_register_api_key_for_tests,
     _reset_auth_state_for_tests,
+    _reset_rate_limit_backend_for_tests,
+    _TokenBucket as _AuthTokenBucket,
 )
 from api.config import get_settings
 from api.services.upload_validation import validate_file_magic
@@ -388,6 +388,7 @@ _write_ledger = Ledger()
 # API key store and loaded flag have been removed - authentication is now unified
 # through api.auth module. The key store is maintained by api.auth._key_store.
 
+
 def _dev_signing_key_enabled() -> bool:
     """Return True when dev-mode auto signing key generation is enabled."""
     return os.environ.get("OLYMPUS_DEV_SIGNING_KEY", "").strip().lower() in {
@@ -537,26 +538,14 @@ def _fetch_by_content_hash(content_hash_hex: str) -> dict[str, Any] | None:
     return record
 
 
-@dataclass
-class TokenBucket:
-    """Simple token-bucket rate limiter state."""
-
-    capacity: float
-    refill_rate_per_second: float
-    tokens: float
-    last_refill_ts: float
-
-    def consume(self, tokens: float = 1.0) -> bool:
-        """Consume tokens if available."""
-        now = monotonic()
-        elapsed = max(0.0, now - self.last_refill_ts)
-        self.tokens = min(self.capacity, self.tokens + elapsed * self.refill_rate_per_second)
-        self.last_refill_ts = now
-        if self.tokens < tokens:
-            return False
-        self.tokens -= tokens
-        return True
-
+# ---------------------------------------------------------------------------
+# Rate-limit policy (action → capacity, refill_rate_per_second)
+#
+# H-3 Fix: The bucket *storage* is now delegated to the shared auth backend
+# (api.auth._get_backend), eliminating the dual-system vulnerability.  Only
+# the per-action policy table lives here; the actual TokenBucket instances
+# are managed by the single MemoryRateLimitBackend (or future Redis backend).
+# ---------------------------------------------------------------------------
 
 _rate_limit_policy: dict[str, tuple[float, float]] = {
     "ingest": (60.0, 1.0),
@@ -569,34 +558,6 @@ _RATE_LIMIT_LRU_CAP = 10_000
 
 # Maximum number of entries in ingestion caches to prevent OOM under sustained load
 _INGESTION_CACHE_LRU_CAP = 50_000
-
-# Use OrderedDict to implement LRU eviction when cap is reached
-_rate_limit_key_buckets: dict[str, OrderedDict[str, TokenBucket]] = {
-    "ingest": OrderedDict(),
-    "commit": OrderedDict(),
-    "verify": OrderedDict(),
-}
-_rate_limit_ip_buckets: dict[str, OrderedDict[str, TokenBucket]] = {
-    "ingest": OrderedDict(),
-    "commit": OrderedDict(),
-    "verify": OrderedDict(),
-}
-
-# L5-C: Thread lock for rate-limit bucket access to prevent race conditions
-# in concurrent request handling (identified in red team security audit).
-_rate_limit_lock = Lock()
-
-# fix-07: Warn operators that rate limiting is in-process only.  In a
-# multi-process or multi-node deployment each worker maintains its own
-# independent token buckets, so the effective limits are multiplied by the
-# number of workers.  A distributed backend (e.g. Redis) is needed to
-# enforce consistent per-key / per-IP limits across processes.
-warnings.warn(
-    "Rate limiting is in-process only. In multi-worker/multi-node deployments "
-    "effective limits are multiplied by the number of workers. Consider a "
-    "distributed rate-limit backend (e.g. Redis) for production.",
-    stacklevel=1,
-)
 
 
 def _parse_timestamp(raw: str) -> datetime:
@@ -649,15 +610,11 @@ def _reset_ingest_state_for_tests() -> None:  # pragma: no cover - test utility
     storage = _storage
     _ingestion_store.clear()
     _content_index.clear()
-    # Reset the unified auth module's key store
+    # Reset the unified auth module's key store AND rate-limit backend (H-3)
     _reset_auth_state_for_tests()
+    _reset_rate_limit_backend_for_tests()
     _storage = None
     _signing_key = None
-    # L5-C: Acquire lock when clearing rate-limit buckets
-    with _rate_limit_lock:
-        for action in _rate_limit_key_buckets:
-            _rate_limit_key_buckets[action].clear()
-            _rate_limit_ip_buckets[action].clear()
     if storage is not None:
         try:
             storage.clear_rate_limits()
@@ -671,10 +628,8 @@ def _set_rate_limit_for_tests(
 ) -> None:  # pragma: no cover - test utility
     """Override rate-limit policy for tests."""
     _rate_limit_policy[action] = (capacity, refill_rate_per_second)
-    # L5-C: Acquire lock when clearing rate-limit buckets
-    with _rate_limit_lock:
-        _rate_limit_key_buckets[action].clear()
-        _rate_limit_ip_buckets[action].clear()
+    # H-3: Reset the shared auth backend so stale buckets don't survive
+    _reset_rate_limit_backend_for_tests()
     if _storage is not None:
         try:
             _storage.clear_rate_limits()
@@ -682,55 +637,23 @@ def _set_rate_limit_for_tests(
             logger.warning("Failed to clear persisted rate limits during test setup", exc_info=True)
 
 
-def _get_bucket(buckets: OrderedDict[str, TokenBucket], subject: str, action: str) -> TokenBucket:
-    """
-    Get/create a token bucket for the subject and action.
-
-    L5-B: Implements LRU eviction when the bucket count exceeds _RATE_LIMIT_LRU_CAP.
-    Existing buckets are moved to the end (most recently used) when accessed.
-    When creating a new bucket and the cap is exceeded, the oldest (least recently
-    used) bucket is removed.
-
-    IMPORTANT: This function must be called while holding _rate_limit_lock (L5-C).
-    The assertion below will catch violations during testing/development.
-    """
-    # L5-C: Ensure lock is held to catch programming errors early
-    if not _rate_limit_lock.locked():
-        raise RuntimeError("_get_bucket must be called while holding _rate_limit_lock")
-
-    existing = buckets.get(subject)
-    if existing is not None:
-        # Move to end (mark as recently used)
-        buckets.move_to_end(subject)
-        return existing
-
-    # L5-B: Evict oldest entries if at capacity
-    while len(buckets) >= _RATE_LIMIT_LRU_CAP:
-        buckets.popitem(last=False)  # Remove oldest (first) entry
-
-    capacity, refill = _rate_limit_policy[action]
-    created = TokenBucket(
-        capacity=capacity,
-        refill_rate_per_second=refill,
-        tokens=capacity,
-        last_refill_ts=monotonic(),
-    )
-    buckets[subject] = created
-    return created
-
-
 def _consume_rate_limit(subject_type: str, subject: str, action: str) -> bool:
-    """
-    Consume a token for the given subject/action, preferring the shared storage backend.
+    """Consume a token for the given subject/action.
 
-    Falls back to process-local buckets if storage is unavailable or errors.
+    H-3 Fix: Delegates to the shared auth backend (api.auth._get_backend)
+    so that ingest and auth rate limiting share a single bucket store,
+    eliminating the dual-system vulnerability.
+
+    Falls back to the auth backend's in-memory store if the database
+    storage layer is unavailable.
     """
     capacity, refill = _rate_limit_policy[action]
+
+    # Try database-backed rate limiting first (multi-process safe)
     storage = None
     try:
         storage = _get_storage()
     except RuntimeError:
-        # Configuration errors should propagate; let caller handle.
         raise
     except Exception as exc:  # pragma: no cover - defensive
         logger.error(
@@ -758,13 +681,24 @@ def _consume_rate_limit(subject_type: str, subject: str, action: str) -> bool:
                 },
             )
 
-    # L5-C: Acquire lock before accessing in-memory rate-limit buckets.
-    # This prevents race conditions where concurrent requests could corrupt
-    # the OrderedDict state or read inconsistent token values.
-    with _rate_limit_lock:
-        buckets = _rate_limit_key_buckets if subject_type == "api_key" else _rate_limit_ip_buckets
-        bucket = _get_bucket(buckets[action], subject, action)
-        return bucket.consume()
+    # H-3: Fall back to the *shared* auth backend instead of a separate
+    # ingest-local bucket store.  Composite key ensures action/subject
+    # isolation within the single backend.
+    backend = _get_rate_limit_backend()
+    composite_key = f"ingest:{action}:{subject_type}:{subject}"
+    bucket = backend.get(composite_key)
+
+    if bucket is None:
+        bucket = _AuthTokenBucket(
+            capacity=capacity,
+            refill_rate=refill,
+            tokens=capacity,
+            last_refill=monotonic(),
+        )
+
+    allowed = bucket.consume()
+    backend.set(composite_key, bucket)
+    return allowed
 
 
 def _apply_rate_limits(request: Request, api_key_id: str, action: str) -> None:
@@ -849,9 +783,7 @@ def _normalize_source_url(source_url: str) -> str:
     return source_url
 
 
-_BN128_FIELD_PRIME = (
-    21888242871839275222246405745257275088548364400416034343698204186575808495617
-)
+_BN128_FIELD_PRIME = 21888242871839275222246405745257275088548364400416034343698204186575808495617
 
 
 def _value_hash_to_poseidon_field(value_hash: bytes) -> int:
@@ -1347,8 +1279,11 @@ async def ingest_batch(
 
 @router.get("/records/{proof_id}/proof", response_model=IngestionProofResponse)
 async def get_ingestion_proof(
-    proof_id: str = Path(..., pattern=r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"),
-    _scope: RequireVerifyScope = ...,
+    *,
+    proof_id: str = Path(
+        ..., pattern=r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+    ),
+    _scope: RequireVerifyScope,
 ) -> IngestionProofResponse:
     """
     Retrieve the proof for a previously ingested record.
@@ -1458,12 +1393,8 @@ async def submit_proof_bundle(
         except ValueError:
             pass
 
-    file_bytes = await _read_upload_bounded(
-        file, settings.max_upload_bytes, max_mb
-    )
-    validate_file_magic(
-        file_bytes, file.content_type or "application/octet-stream"
-    )
+    file_bytes = await _read_upload_bounded(file, settings.max_upload_bytes, max_mb)
+    validate_file_magic(file_bytes, file.content_type or "application/octet-stream")
 
     # Parse as JSON and canonicalize — same pipeline as the main ingest path.
     try:

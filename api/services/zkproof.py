@@ -169,9 +169,7 @@ def verify_groth16_proof(
         proof_inner = proof.get("proof", proof)
         proof_json = json.dumps(proof_inner)
 
-        public_signals: list[str] = [
-            str(s) for s in proof.get("public_signals", [])
-        ]
+        public_signals: list[str] = [str(s) for s in proof.get("public_signals", [])]
 
         ok = verify_groth16_bn254(vkey_json, proof_json, public_signals)
         return (True, "verified") if ok else (False, "verification_failed")

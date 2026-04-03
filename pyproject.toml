@@ -222,6 +222,14 @@ ignore_missing_imports = true
 module = "prometheus_client.*"
 ignore_missing_imports = true
 
+[[tool.mypy.overrides]]
+module = "olympus_core.*"
+ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+module = "olympus_core"
+ignore_missing_imports = true
+
 [tool.bandit]
 exclude_dirs = ["tests", ".venv", "venv"]
 skips = ["B101"]  # Skip assert_used check (assertions are fine in tests)
