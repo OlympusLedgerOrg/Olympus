@@ -91,7 +91,7 @@ Olympus has three service layers with strict responsibility boundaries:
 +---------------------------------------------------+
 ```
 
-> **Go never computes Merkle hashes itself.** All SMT operations are delegated to the Rust service over protobuf. Python talks to Go/Rust as external services, never as libraries.
+> **Go never computes Merkle hashes itself.** All SMT operations are delegated to the Rust service over protobuf. Python talks to Go/Rust as external services, never as libraries. *(This describes the target Phase 1 architecture. In Phase 0, the Python API path is the primary write path — see [Current Repository State](#current-repository-state) below.)*
 
 ### Pipeline
 

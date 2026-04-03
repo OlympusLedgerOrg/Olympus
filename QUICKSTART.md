@@ -401,7 +401,7 @@ What this demo provides:
 Important protocol note:
 
 - This Docker setup demonstrates **observer-side majority agreement** across three nodes.
-- It does **not** change the v1.0 protocol finality model, which remains single-node signed headers as described in `docs/04_ledger_protocol.md`.
+- It does **not** change the v1.0 protocol finality model, which remains single-node signed headers.
 - Treat the dashboard quorum as an operational visibility tool for federation rollouts, not as a replacement for the Phase 1+ guardian consensus protocol.
 
 ---
@@ -686,7 +686,7 @@ See `proofs/README.md` for full circuit documentation.
 
 ## 12. Next Steps
 
-1. **Read the documentation**: Start with `README.md` and `docs/00_overview.md`
+1. **Read the documentation**: Start with `README.md` and `ARCHITECTURE.md`
 2. **Explore the protocol**: Check `protocol/` for core primitives
 3. **Run examples**: See `examples/` for usage patterns and the new walkthrough notebooks (`*.ipynb`)
 4. **Review tests**: `tests/` shows expected behavior
