@@ -15,12 +15,12 @@ The answer is **yes**, offline, forever.
 
 ## What Olympus Is
 
-Olympus is a **Sharded Sparse Merkle Forest (SSMF)**–backed integrity ledger that provides:
+Olympus is a **CD-HS-ST (Constant-Depth Hierarchical Sparse Tree)**–backed integrity ledger that provides:
 
 - **Append-only records** (no silent edits, no deletions)
 - **Cryptographic proofs** of existence and non-existence
-- **Jurisdictional sharding** (county, period, stream)
-- **A global state root** that commits *all* shards into one verifiable snapshot
+- **Jurisdictional sharding** encoded directly into the key space (county, period, stream)
+- **A single global state root** — one 256-level Sparse Merkle Tree commits all records across all shards
 - **Offline verification** using modern cryptography (BLAKE3 + Ed25519)
 
 Think of it as **Certificate Transparency for institutions**, generalized to *any* sensitive record.
@@ -45,27 +45,33 @@ If it’s missing, Olympus can prove *that too*.
 
 ## Architecture (Plain English)
 
-### 1. Shards (Local Truth)
-Each jurisdiction and data stream (e.g. `watauga:2025:budget`) has its own **Sparse Merkle Tree**:
+### 1. One Global Tree (CD-HS-ST)
+All records across all jurisdictions live in a **single 256-level Sparse Merkle Tree**. Shard identity is encoded directly into the leaf key:
 
-- Records are committed as cryptographic leaves
-- Each shard has its own root hash
-- Updates are append-only and ordered
+```
+key = H(GLOBAL_KEY_PREFIX || shard_id || record_key)
+```
 
-### 2. Forest (Global Truth)
-All shard roots are committed into a second Sparse Merkle Tree—the **Forest**:
+- Each record is a cryptographic leaf in this global tree
+- Shard boundaries are logical (encoded in the key), not physical (no separate per-shard trees)
+- Updates are append-only and ordered within each shard
+- The tree root represents the **entire system state** across all shards
 
-- `forest_key = hash(shard_id)`
-- `forest_value = shard_root`
-- The forest root represents the **entire system state**
+This replaces an earlier two-tree model (per-shard SMT + forest SMT) that had consistency hazards.
 
-This creates a single, deterministic **global state root**.
+### 2. Shard Headers (Jurisdictional Snapshots)
+Each update to a shard produces a **shard header** that captures the tree root at that point:
 
-### 3. Signatures (Authority Without Trust)
-Every state update produces a **signed header**:
-
-- Ed25519 signature over the shard root and forest root
+- Ed25519-signed commitment to the global tree root after the shard update
+- Includes shard-specific metadata (shard ID, sequence number, timestamp)
 - Anyone can verify authenticity without trusting the operator
+
+### 3. Ledger Entries (Tamper-Evident Chain)
+Every commit is recorded as a chained **ledger entry**:
+
+- Each entry includes the hash of the previous entry (chain linkage)
+- The global tree root is cryptographically bound into the entry hash
+- Breaking or reordering the chain is detectable by any observer
 
 ---
 
@@ -118,11 +124,14 @@ It **eliminates the need for it**.
 
 The Olympus protocol implementation includes:
 
-- A working Sharded Sparse Merkle Forest
-- Signed shard and forest headers
-- Proof generation and verification
-- API, database schema, and tests
-- Deterministic, auditable commit logic
+- A working CD-HS-ST (single global 256-level Sparse Merkle Tree)
+- Signed shard headers with Ed25519 and RFC 3161 timestamps
+- Proof generation and verification (existence, non-existence, redaction)
+- FastAPI endpoints, PostgreSQL storage, and comprehensive tests (≥85% coverage)
+- Deterministic, auditable commit logic with SERIALIZABLE transactions
+- Phase 1 Go sequencer and Rust cryptographic service (in progress, not yet primary write path)
+
+The system is in **Phase 0** (protocol hardening). The Python API path is the current primary write path; the Go → Rust service path is being hardened in parallel.
 
 ---
 
