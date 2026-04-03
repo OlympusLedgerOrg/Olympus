@@ -273,9 +273,10 @@ reconstruction. For a shard with millions of leaves, this can exhaust available
 memory. The incremental tree reconstruction (ADR-0001) addresses this for the
 forward path, but historical replay still loads all leaves.
 
-**Cross-reference:** This is related to finding M-7 in the V1 audit report, which
-was marked as verified fixed. The fix introduced paginated reconstruction for the
-forward path but did not address the historical replay case.
+**Cross-reference:** This is related to finding M-7 in the
+[V1 audit report](SECURITY_AUDIT_REPORT.md), which was marked as verified fixed.
+The fix introduced paginated reconstruction for the forward path but did not
+address the historical replay case.
 
 **Recommendation:** Extend ADR-0001's incremental approach to historical replays,
 or enforce a maximum replay window.
@@ -396,8 +397,9 @@ Some error paths include internal details in HTTP error responses (e.g., the
 specific ValueError message from `append_record()`). While this aids debugging,
 it could reveal internal state to an attacker probing the API.
 
-**Cross-reference:** Related to M-3 in the V1 audit. The fix addressed
-exception messages in most paths but some remain in the ingest batch handler.
+**Cross-reference:** Related to M-3 in the
+[V1 audit report](SECURITY_AUDIT_REPORT.md). The fix addressed exception messages
+in most paths but some remain in the ingest batch handler.
 
 **Recommendation:** Ensure all error responses on the ingest path use generic
 messages, logging detailed errors server-side only.
