@@ -1111,9 +1111,7 @@ class StorageLayer:
             )
             existing_by_hash = cur.fetchone()
             if existing_by_hash is not None:
-                raise ValueError(
-                    f"Content hash already committed: {value_hash.hex()}"
-                )
+                raise ValueError(f"Content hash already committed: {value_hash.hex()}")
 
             # Update tree
             tree.update(key, value_hash)
