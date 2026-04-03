@@ -31,7 +31,7 @@ from typing import Any
 # fall back to the pure-Python implementation below when it is not present.
 # ---------------------------------------------------------------------------
 try:
-    from olympus_core.canonical import (  # type: ignore[import-not-found]
+    from olympus_core.canonical import (
         canonical_json_encode as _rust_canonical_json_encode,
     )
 
