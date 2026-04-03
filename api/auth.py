@@ -56,9 +56,7 @@ _load_keys_lock = Lock()
 _env = os.environ.get("OLYMPUS_ENV", "production")
 _allow_dev_auth = os.environ.get("OLYMPUS_ALLOW_DEV_AUTH") == "1"
 if _env == "development" and _allow_dev_auth:
-    logger.warning(
-        "DEV AUTH BYPASS ACTIVE — never enable OLYMPUS_ALLOW_DEV_AUTH=1 in production"
-    )
+    logger.warning("DEV AUTH BYPASS ACTIVE — never enable OLYMPUS_ALLOW_DEV_AUTH=1 in production")
 elif _allow_dev_auth:
     logger.error(
         "OLYMPUS_ALLOW_DEV_AUTH=1 is set but OLYMPUS_ENV=%s (not 'development'). "

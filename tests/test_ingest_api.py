@@ -216,7 +216,7 @@ class TestIngestionProof:
         assert proof_data["ledger_entry_hash"]
 
     def test_get_proof_not_found(self, client: TestClient):
-        resp = client.get("/ingest/records/nonexistent-id/proof")
+        resp = client.get("/ingest/records/00000000-0000-0000-0000-000000000000/proof")
         assert resp.status_code == 404
 
     def test_verify_by_content_hash(self, client: TestClient):
@@ -314,67 +314,43 @@ class TestSubmittedProofBundles:
         assert data["poseidon_root"] == proof_bundle["poseidon_root"]
 
     def test_submit_valid_external_proof_bundle(self, client: TestClient):
-        content_hash_bytes = hash_bytes(b"external-proof-bundle")
-        tree = MerkleTree([content_hash_bytes])
-        merkle_proof = tree.generate_proof(0)
+        import json as _json
 
+        # Ingest a document so the server has a record of it
+        content = {"external_proof_bundle": "test-content"}
+        ingest_payload = {
+            "records": [
+                {
+                    "shard_id": "shard-external-proof",
+                    "record_type": "document",
+                    "record_id": "external-doc",
+                    "version": 1,
+                    "content": content,
+                }
+            ]
+        }
+        ingest_resp = client.post("/ingest/records", json=ingest_payload)
+        assert ingest_resp.status_code == 200
+        expected_content_hash = ingest_resp.json()["results"][0]["content_hash"]
+
+        # Upload the same document content to retrieve the server-computed proof
+        file_bytes = _json.dumps(content).encode()
         resp = client.post(
             "/ingest/proofs",
-            json={
-                "record_id": "external-doc",
-                "shard_id": "shard-external-proof",
-                "content_hash": content_hash_bytes.hex(),
-                "merkle_root": tree.get_root().hex(),
-                "merkle_proof": {
-                    "leaf_hash": merkle_proof.leaf_hash.hex(),
-                    "leaf_index": merkle_proof.leaf_index,
-                    "siblings": [],
-                    "root_hash": merkle_proof.root_hash.hex(),
-                    "proof_version": merkle_proof.proof_version,
-                    "tree_version": merkle_proof.tree_version,
-                    "epoch": merkle_proof.epoch,
-                    "tree_size": merkle_proof.tree_size,
-                },
-                "ledger_entry_hash": "ab" * 32,
-                "timestamp": "2026-01-01T00:00:00Z",
-                "canonicalization": {"content_type": "application/octet-stream"},
-                "batch_id": "external-batch",
-            },
+            files={"file": ("document.json", file_bytes, "application/json")},
         )
 
         assert resp.status_code == 200
         data = resp.json()
-        assert data["submitted"] is True
-        assert data["deduplicated"] is False
-        assert data["content_hash"] == content_hash_bytes.hex()
-        assert data["merkle_root"] == tree.get_root().hex()
+        assert data["submitted"] is False
+        assert data["deduplicated"] is True
+        assert data["content_hash"] == expected_content_hash
 
     def test_submit_invalid_external_proof_bundle_rejected(self, client: TestClient):
-        content_hash_bytes = hash_bytes(b"invalid-external-proof")
-        tree = MerkleTree([content_hash_bytes])
-        merkle_proof = tree.generate_proof(0)
-
+        # Uploading content that is not valid JSON should be rejected with 400
         resp = client.post(
             "/ingest/proofs",
-            json={
-                "record_id": "external-doc-invalid",
-                "shard_id": "shard-external-proof",
-                "content_hash": ("00" * 32),
-                "merkle_root": tree.get_root().hex(),
-                "merkle_proof": {
-                    "leaf_hash": merkle_proof.leaf_hash.hex(),
-                    "leaf_index": merkle_proof.leaf_index,
-                    "siblings": [],
-                    "root_hash": merkle_proof.root_hash.hex(),
-                    "proof_version": merkle_proof.proof_version,
-                    "tree_version": merkle_proof.tree_version,
-                    "epoch": merkle_proof.epoch,
-                    "tree_size": merkle_proof.tree_size,
-                },
-                "ledger_entry_hash": "cd" * 32,
-                "timestamp": "2026-01-01T00:00:00Z",
-                "canonicalization": {"content_type": "application/octet-stream"},
-            },
+            files={"file": ("document.json", b"not valid json content", "application/json")},
         )
 
         assert resp.status_code == 400
@@ -1059,9 +1035,7 @@ class TestConstantTimeEquals:
 
 def test_ingest_client_ip_ignores_xff_for_overly_broad_trusted_proxy_range(monkeypatch):
     """Fail closed when trusted proxy config is broad enough to allow spoofing."""
-    monkeypatch.setattr(
-        ingest_api, "_get_client_ip", lambda request: request.client.host
-    )
+    monkeypatch.setattr(ingest_api, "_get_client_ip", lambda request: request.client.host)
     request = SimpleNamespace(
         client=SimpleNamespace(host="198.51.100.20"),
         headers={"x-forwarded-for": "203.0.113.11, 198.51.100.20"},
@@ -1071,9 +1045,7 @@ def test_ingest_client_ip_ignores_xff_for_overly_broad_trusted_proxy_range(monke
 
 def test_ingest_client_ip_ignores_xff_for_overly_broad_ipv6_trusted_proxy_range(monkeypatch):
     """Fail closed for global IPv6 trusted proxy configuration as well."""
-    monkeypatch.setattr(
-        ingest_api, "_get_client_ip", lambda request: request.client.host
-    )
+    monkeypatch.setattr(ingest_api, "_get_client_ip", lambda request: request.client.host)
     request = SimpleNamespace(
         client=SimpleNamespace(host="2001:db8::20"),
         headers={"x-forwarded-for": "2001:db8::11, 2001:db8::20"},

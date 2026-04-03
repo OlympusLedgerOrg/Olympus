@@ -301,9 +301,7 @@ class TestVerifyStateReplayDelegation(unittest.TestCase):
         result = sl.verify_state_replay("shard-1")
 
         self.assertEqual(result, replay_result)
-        sl.replay_tree_incremental.assert_called_once_with(
-            "shard-1", max_headers=None, after_seq=0
-        )
+        sl.replay_tree_incremental.assert_called_once_with("shard-1", max_headers=None, after_seq=0)
 
 
 # ---------------------------------------------------------------------------

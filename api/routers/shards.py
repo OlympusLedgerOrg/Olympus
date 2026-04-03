@@ -310,8 +310,7 @@ async def verify_latest_header(
         None,
         ge=1,
         le=10_000,
-        description="Max headers to verify in this call. "
-        "Use next_seq cursor for subsequent pages.",
+        description="Max headers to verify in this call. Use next_seq cursor for subsequent pages.",
     ),
     after_seq: int = Query(
         0,

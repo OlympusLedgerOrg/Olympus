@@ -2536,18 +2536,14 @@ class StorageLayer:
             # Determine whether there are more headers to verify.
             remaining = len(headers) - len(headers_to_check)
             if remaining > 0:
-                next_seq = int(
-                    self._row_get(headers_to_check[-1], "seq", 0)
-                )
+                next_seq = int(self._row_get(headers_to_check[-1], "seq", 0))
             else:
                 next_seq = None
 
             # Final check: when verification is complete, the current tree
             # must match the latest persisted root.
             if next_seq is None and headers:
-                latest_header_root = bytes(
-                    self._row_get(headers[-1], "root", 1)
-                )
+                latest_header_root = bytes(self._row_get(headers[-1], "root", 1))
                 if tree.get_root() != latest_header_root:
                     raise ValueError(
                         f"Replay mismatch for shard '{shard_id}': latest persisted root "

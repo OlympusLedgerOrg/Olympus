@@ -388,6 +388,7 @@ _write_ledger = Ledger()
 # API key store and loaded flag have been removed - authentication is now unified
 # through api.auth module. The key store is maintained by api.auth._key_store.
 
+
 def _dev_signing_key_enabled() -> bool:
     """Return True when dev-mode auto signing key generation is enabled."""
     return os.environ.get("OLYMPUS_DEV_SIGNING_KEY", "").strip().lower() in {
@@ -782,9 +783,7 @@ def _normalize_source_url(source_url: str) -> str:
     return source_url
 
 
-_BN128_FIELD_PRIME = (
-    21888242871839275222246405745257275088548364400416034343698204186575808495617
-)
+_BN128_FIELD_PRIME = 21888242871839275222246405745257275088548364400416034343698204186575808495617
 
 
 def _value_hash_to_poseidon_field(value_hash: bytes) -> int:
@@ -1280,8 +1279,10 @@ async def ingest_batch(
 
 @router.get("/records/{proof_id}/proof", response_model=IngestionProofResponse)
 async def get_ingestion_proof(
-    proof_id: str = Path(..., pattern=r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"),
-    _scope: RequireVerifyScope = ...,
+    proof_id: str = Path(
+        ..., pattern=r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+    ),
+    _scope: RequireVerifyScope = None,  # type: ignore[assignment]
 ) -> IngestionProofResponse:
     """
     Retrieve the proof for a previously ingested record.
@@ -1391,12 +1392,8 @@ async def submit_proof_bundle(
         except ValueError:
             pass
 
-    file_bytes = await _read_upload_bounded(
-        file, settings.max_upload_bytes, max_mb
-    )
-    validate_file_magic(
-        file_bytes, file.content_type or "application/octet-stream"
-    )
+    file_bytes = await _read_upload_bounded(file, settings.max_upload_bytes, max_mb)
+    validate_file_magic(file_bytes, file.content_type or "application/octet-stream")
 
     # Parse as JSON and canonicalize — same pipeline as the main ingest path.
     try:
