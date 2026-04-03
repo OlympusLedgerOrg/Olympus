@@ -30,7 +30,7 @@ from typing import TYPE_CHECKING, Any
 from urllib.parse import urlparse
 
 import nacl.signing
-from fastapi import APIRouter, File, HTTPException, Request, UploadFile
+from fastapi import APIRouter, File, HTTPException, Path, Request, UploadFile
 from pydantic import BaseModel, Field, field_validator
 
 from api.auth import (
@@ -130,9 +130,12 @@ _MAX_CONTENT_SIZE_ESTIMATE = 16 * 1024 * 1024  # 16 MiB rough size limit per rec
 def _check_json_depth(obj: Any, current_depth: int = 0) -> int:
     """Check the nesting depth of a JSON-like object.
 
+    Uses an iterative approach (explicit stack) to avoid Python recursion
+    limits on adversarial input (L-4 hardening).
+
     Args:
         obj: The object to check.
-        current_depth: Current recursion depth.
+        current_depth: Initial depth offset (normally 0).
 
     Returns:
         Maximum depth found in the object.
@@ -140,18 +143,25 @@ def _check_json_depth(obj: Any, current_depth: int = 0) -> int:
     Raises:
         ValueError: If depth exceeds _MAX_CONTENT_DEPTH.
     """
-    # Check depth at entry to prevent recursion beyond the limit
-    if current_depth >= _MAX_CONTENT_DEPTH:
-        raise ValueError(f"Content nesting depth exceeds limit of {_MAX_CONTENT_DEPTH}")
-
     max_depth = current_depth
+    # Explicit stack of (value, depth) pairs replaces recursion
+    stack: list[tuple[Any, int]] = [(obj, current_depth)]
 
-    if isinstance(obj, dict):
-        for value in obj.values():
-            max_depth = max(max_depth, _check_json_depth(value, current_depth + 1))
-    elif isinstance(obj, list):
-        for item in obj:
-            max_depth = max(max_depth, _check_json_depth(item, current_depth + 1))
+    while stack:
+        current, depth = stack.pop()
+
+        if depth >= _MAX_CONTENT_DEPTH:
+            raise ValueError(f"Content nesting depth exceeds limit of {_MAX_CONTENT_DEPTH}")
+
+        if depth > max_depth:
+            max_depth = depth
+
+        if isinstance(current, dict):
+            for value in current.values():
+                stack.append((value, depth + 1))
+        elif isinstance(current, list):
+            for item in current:
+                stack.append((item, depth + 1))
 
     return max_depth
 
@@ -1337,8 +1347,8 @@ async def ingest_batch(
 
 @router.get("/records/{proof_id}/proof", response_model=IngestionProofResponse)
 async def get_ingestion_proof(
-    proof_id: str,
-    _scope: RequireVerifyScope,
+    proof_id: str = Path(..., pattern=r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"),
+    _scope: RequireVerifyScope = ...,
 ) -> IngestionProofResponse:
     """
     Retrieve the proof for a previously ingested record.
