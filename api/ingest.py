@@ -1347,7 +1347,7 @@ async def ingest_batch(
 
 @router.get("/records/{proof_id}/proof", response_model=IngestionProofResponse)
 async def get_ingestion_proof(
-    proof_id: str = Path(..., pattern=r"^[0-9a-f-]{32,36}$"),
+    proof_id: str = Path(..., pattern=r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"),
     _scope: RequireVerifyScope = ...,
 ) -> IngestionProofResponse:
     """
