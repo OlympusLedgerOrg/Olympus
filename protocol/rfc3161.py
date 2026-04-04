@@ -108,7 +108,14 @@ def _extract_tsa_cert_fingerprint(tst_bytes: bytes) -> str | None:
         certificate: x509.Certificate = load_certificate(signed_data, certificate=b"")
         fingerprint = certificate.fingerprint(hashes.SHA256())
         return fingerprint.hex()
-    except (PyAsn1Error, AttributeError, ValueError, IndexError, TypeError) as exc:
+    except (
+        PyAsn1Error,
+        AttributeError,
+        ValueError,
+        IndexError,
+        TypeError,
+        rfc3161ng.TimestampingError,
+    ) as exc:
         _logger.warning("Failed to extract TSA certificate fingerprint: %s", exc)
         return None
 
@@ -146,7 +153,14 @@ def _extract_message_imprint(tst_bytes: bytes) -> bytes | None:
         if substrate:  # pragma: no cover — requires crafted DER with trailing bytes
             return None
         return bytes(tstinfo["messageImprint"]["hashedMessage"])
-    except (PyAsn1Error, AttributeError, ValueError, IndexError, TypeError) as exc:
+    except (
+        PyAsn1Error,
+        AttributeError,
+        ValueError,
+        IndexError,
+        TypeError,
+        rfc3161ng.TimestampingError,
+    ) as exc:
         _logger.warning("Failed to extract message imprint from TST: %s", exc)
         return None
 
@@ -494,7 +508,14 @@ def extract_tsa_certificate(tst_bytes: bytes) -> x509.Certificate | None:
         signed_data = tst.content
         cert: x509.Certificate | None = load_certificate(signed_data, certificate=b"")
         return cert
-    except (PyAsn1Error, AttributeError, ValueError, IndexError, TypeError) as exc:
+    except (
+        PyAsn1Error,
+        AttributeError,
+        ValueError,
+        IndexError,
+        TypeError,
+        rfc3161ng.TimestampingError,
+    ) as exc:
         _logger.warning("Failed to extract TSA certificate: %s", exc)
         return None
 
