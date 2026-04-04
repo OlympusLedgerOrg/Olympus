@@ -29,12 +29,12 @@ where docs describe an architecture that does not match the current code.
 
 ### Key Findings
 
-| Risk Level | Count | Description |
-|------------|-------|-------------|
-| **High** | 5 | Concurrency gaps, proof soundness, memory exhaustion |
-| **Medium** | 4 | Missing constraints, unverified hashes, documentation drift |
-| **Low** | 3 | Permissive patterns, minor information leaks |
-| **Documentation** | 4 | Outdated terminology, broken references, misleading architecture claims |
+| Risk Level | Count | Fixed | Description |
+|------------|-------|-------|-------------|
+| **High** | 5 | 3 ✅ | Concurrency gaps (RT-H1, RT-H2, RT-H3 fixed), proof soundness, memory exhaustion |
+| **Medium** | 4 | 0 | Missing constraints, unverified hashes, documentation drift |
+| **Low** | 3 | 0 | Permissive patterns, minor information leaks |
+| **Documentation** | 4 | 3 ✅ | Outdated terminology, broken references, misleading architecture claims |
 
 ---
 
@@ -92,13 +92,15 @@ POST /ingest/records
 
 ### High Severity
 
-#### RT-H1: Deduplication Check Outside Transaction Boundary
+#### RT-H1: Deduplication Check Outside Transaction Boundary — ✅ FIXED
 
 | Attribute | Value |
 |-----------|-------|
 | **Severity** | High |
 | **Exploitability** | Moderate (requires concurrent requests) |
 | **Location** | `api/ingest.py` — `_fetch_by_content_hash()` called before `append_record()` |
+| **Status** | ✅ Fixed |
+| **Fix Location** | `storage/postgres.py:_append_record_inner()` |
 
 **Description:**
 The content-hash deduplication check (`_fetch_by_content_hash()`) executes as a
@@ -128,15 +130,25 @@ the response returned to the second client, not in ledger corruption.
 or add a `SELECT ... FOR UPDATE` advisory lock on the content hash before the
 append attempt.
 
+**Resolution:**
+Added an in-transaction `SELECT key FROM smt_leaves WHERE value_hash = %s` check
+inside `_append_record_inner()`, before the tree update. This check runs within
+the `SERIALIZABLE` transaction, eliminating the TOCTOU race. An index on
+`smt_leaves(value_hash)` was added for efficient lookups. The API error handlers
+in `api/ingest.py` were updated to recognize the new error message
+`"Content hash already committed"` and treat it as a deduplication event.
+
 ---
 
-#### RT-H2: No Serialization Failure Retry on Append Path
+#### RT-H2: No Serialization Failure Retry on Append Path — ✅ FIXED
 
 | Attribute | Value |
 |-----------|-------|
 | **Severity** | High |
 | **Exploitability** | Moderate (concurrent writes to same shard) |
 | **Location** | `api/ingest.py` — error handling around `storage.append_record()` |
+| **Status** | ✅ Fixed |
+| **Fix Location** | `storage/postgres.py:append_record()` |
 
 **Description:**
 PostgreSQL `SERIALIZABLE` transactions may fail with error code `40001`
@@ -154,15 +166,25 @@ would succeed.
 PostgreSQL serialization failures (`40001`), or catch and return HTTP 409 Conflict
 with a `Retry-After` header.
 
+**Resolution:**
+Refactored `append_record()` into an outer method with retry logic and an inner
+`_append_record_inner()` method. The outer method catches
+`psycopg.errors.SerializationFailure` and retries with exponential backoff
+(default 3 retries, using the existing `_retry_base_delay_seconds` and
+`_retry_max_delay_seconds` parameters). Retries are logged at WARNING level;
+exhausted retries are logged at ERROR level before re-raising.
+
 ---
 
-#### RT-H3: Missing UNIQUE Constraint on (shard_id, prev_entry_hash)
+#### RT-H3: Missing UNIQUE Constraint on (shard_id, prev_entry_hash) — ✅ FIXED
 
 | Attribute | Value |
 |-----------|-------|
 | **Severity** | High |
 | **Exploitability** | Complex (requires precise timing of concurrent transactions) |
 | **Location** | `storage/postgres.py` — `ledger_entries` table definition |
+| **Status** | ✅ Fixed |
+| **Fix Location** | `storage/postgres.py` — `ledger_entries` CREATE TABLE |
 
 **Description:**
 The `ledger_entries` table has `PRIMARY KEY (shard_id, seq)` and
@@ -179,6 +201,12 @@ defense-in-depth principles.
 
 **Recommendation:** Add `UNIQUE (shard_id, prev_entry_hash)` constraint as a
 belt-and-suspenders defense against chain forking.
+
+**Resolution:**
+Added `CONSTRAINT ledger_entries_no_chain_fork UNIQUE (shard_id, prev_entry_hash)`
+to the `ledger_entries` CREATE TABLE statement. This provides a database-level
+hard guarantee against chain forking, independent of application-level isolation
+semantics.
 
 ---
 

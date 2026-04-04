@@ -1046,26 +1046,30 @@ async def ingest_batch(
                 content_hash, content_hash_bytes, proof_id = record_data_map[original_idx]
                 record_smt_key = record_key(record.record_type, record.record_id, record.version)
 
-                # Dedup check (in-memory or persisted)
-                existing_record = _fetch_by_content_hash(content_hash)
-                if existing_record is not None:
-                    results.append(
-                        (
-                            original_idx,
-                            IngestionResult(
-                                proof_id=existing_record["proof_id"],
-                                record_id=existing_record["record_id"],
-                                shard_id=existing_record["shard_id"],
-                                content_hash=existing_record["content_hash"],
-                                deduplicated=True,
-                                idempotent=True,
-                            ),
+                # In-memory-only dedup: when no storage is configured, RT-H1
+                # cannot run, so check the in-memory cache here instead.
+                if storage is None:
+                    existing_record = _fetch_by_content_hash(content_hash)
+                    if existing_record is not None:
+                        results.append(
+                            (
+                                original_idx,
+                                IngestionResult(
+                                    proof_id=existing_record["proof_id"],
+                                    record_id=existing_record["record_id"],
+                                    shard_id=existing_record["shard_id"],
+                                    content_hash=existing_record["content_hash"],
+                                    deduplicated=True,
+                                    idempotent=True,
+                                ),
+                            )
                         )
-                    )
-                    dedup_count += 1
-                    ledger_entry_hash = existing_record.get("ledger_entry_hash", ledger_entry_hash)
-                    INGEST_TOTAL.labels(outcome="deduplicated").inc()
-                    continue
+                        dedup_count += 1
+                        ledger_entry_hash = existing_record.get(
+                            "ledger_entry_hash", ledger_entry_hash
+                        )
+                        INGEST_TOTAL.labels(outcome="deduplicated").inc()
+                        continue
 
                 # If PostgreSQL is configured, persist record durably
                 if storage is not None and _signing_key is not None:
@@ -1115,7 +1119,12 @@ async def ingest_batch(
                         ledger_entry_hash = ledger_entry.entry_hash
                         logger.info(f"Record {record.record_id} persisted to PostgreSQL")
                     except ValueError as e:
-                        if "Record already exists" in str(e):
+                        error_msg = str(e)
+                        is_dedup = (
+                            "Record already exists" in error_msg
+                            or "Content hash already committed" in error_msg
+                        )
+                        if is_dedup:
                             # Record exists in database, treat as dedup and hydrate mapping
                             poseidon_smt = _build_poseidon_smt_for_storage_shard(storage, shard_id)
                             existing_record = _fetch_by_content_hash(content_hash)
@@ -1525,20 +1534,22 @@ async def commit_artifact(
         artifact_hash_bytes = _parse_content_hash(request.artifact_hash)
         artifact_hash_hex = artifact_hash_bytes.hex()
 
-        # Dedup: if this exact hash has already been committed, return existing proof
-        existing = _fetch_by_content_hash(artifact_hash_hex)
-        if existing is not None:
-            existing_proof_id = existing["proof_id"]
-            INGEST_TOTAL.labels(outcome="deduplicated").inc()
-            return ArtifactCommitResponse(
-                proof_id=existing_proof_id,
-                artifact_hash=artifact_hash_hex,
-                namespace=existing.get("namespace", request.namespace),
-                id=existing.get("record_id", request.id),
-                committed_at=existing["timestamp"],
-                ledger_entry_hash=existing["ledger_entry_hash"],
-                poseidon_root=existing.get("poseidon_root"),
-            )
+        # In-memory-only dedup: when no storage is configured, RT-H1 cannot
+        # run, so check the in-memory cache here instead.
+        if storage is None:
+            existing = _fetch_by_content_hash(artifact_hash_hex)
+            if existing is not None:
+                existing_proof_id = existing["proof_id"]
+                INGEST_TOTAL.labels(outcome="deduplicated").inc()
+                return ArtifactCommitResponse(
+                    proof_id=existing_proof_id,
+                    artifact_hash=artifact_hash_hex,
+                    namespace=existing.get("namespace", request.namespace),
+                    id=existing.get("record_id", request.id),
+                    committed_at=existing["timestamp"],
+                    ledger_entry_hash=existing["ledger_entry_hash"],
+                    poseidon_root=existing.get("poseidon_root"),
+                )
 
         proof_id = str(uuid.uuid4())
         artifact_key = record_key("artifact", request.id, 1)
@@ -1619,7 +1630,12 @@ async def commit_artifact(
                     poseidon_root=poseidon_root_normalized,
                 )
             except ValueError as e:
-                if "Record already exists" in str(e):
+                error_msg = str(e)
+                is_dedup = (
+                    "Record already exists" in error_msg
+                    or "Content hash already committed" in error_msg
+                )
+                if is_dedup:
                     existing = _fetch_by_content_hash(artifact_hash_hex) or {}
                     existing_proof_id = existing.get("proof_id", proof_id)
                     INGEST_TOTAL.labels(outcome="deduplicated").inc()

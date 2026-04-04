@@ -464,7 +464,10 @@ class StorageLayer:
                     CHECK (tree_size >= 0)
             )
             """,
-            "CREATE INDEX IF NOT EXISTS shard_headers_shard_seq_desc_idx ON shard_headers(shard_id, seq DESC)",
+            """
+            CREATE INDEX IF NOT EXISTS shard_headers_shard_seq_desc_idx
+                ON shard_headers(shard_id, seq DESC)
+            """,
             # ------------------------------------------------------------------
             # Ledger Entries  (poseidon_root included from the start)
             # ------------------------------------------------------------------
@@ -484,10 +487,19 @@ class StorageLayer:
                 CONSTRAINT ledger_entries_entry_hash_length
                     CHECK (octet_length(entry_hash) = 32),
                 CONSTRAINT ledger_entries_seq_positive
-                    CHECK (seq >= 0)
+                    CHECK (seq >= 0),
+                -- RT-H3: Defense-in-depth constraint to prevent chain forks.
+                -- SERIALIZABLE isolation should already prevent two transactions
+                -- from reading the same prev_entry_hash and committing, but this
+                -- constraint provides a hard database-level guarantee.
+                CONSTRAINT ledger_entries_no_chain_fork
+                    UNIQUE (shard_id, prev_entry_hash)
             )
             """,
-            "CREATE INDEX IF NOT EXISTS ledger_entries_shard_seq_desc_idx ON ledger_entries(shard_id, seq DESC)",
+            """
+            CREATE INDEX IF NOT EXISTS ledger_entries_shard_seq_desc_idx
+                ON ledger_entries(shard_id, seq DESC)
+            """,
             "CREATE INDEX IF NOT EXISTS ledger_entries_ts_idx ON ledger_entries(ts)",
             """
             CREATE INDEX IF NOT EXISTS ledger_entries_poseidon_root_idx
@@ -609,7 +621,8 @@ class StorageLayer:
                         = '{_NODE_REHASH_GATE}' THEN
                     RETURN NEW;
                 END IF;
-                RAISE EXCEPTION 'smt_leaves is append-only via append_record(): direct INSERT not allowed'
+                RAISE EXCEPTION
+                    'smt_leaves is append-only via append_record(): direct INSERT not allowed'
                     USING ERRCODE = '25006';
             END;
             $$ LANGUAGE plpgsql
@@ -697,7 +710,10 @@ class StorageLayer:
             END;
             $$
             """,
-            "CREATE INDEX IF NOT EXISTS timestamp_tokens_shard_created_desc_idx ON timestamp_tokens(shard_id, created_at DESC)",
+            """
+            CREATE INDEX IF NOT EXISTS timestamp_tokens_shard_created_desc_idx
+                ON timestamp_tokens(shard_id, created_at DESC)
+            """,
             """
             CREATE OR REPLACE FUNCTION olympus_reject_timestamp_token_mutation()
             RETURNS trigger AS $$
@@ -753,8 +769,14 @@ class StorageLayer:
                     CHECK (octet_length(ledger_entry_hash) = 32)
             )
             """,
-            "CREATE UNIQUE INDEX IF NOT EXISTS ingestion_proofs_content_hash_idx ON ingestion_proofs(content_hash)",
-            "CREATE INDEX IF NOT EXISTS ingestion_proofs_batch_idx ON ingestion_proofs(batch_id, batch_index)",
+            """
+            CREATE UNIQUE INDEX IF NOT EXISTS ingestion_proofs_content_hash_idx
+                ON ingestion_proofs(content_hash)
+            """,
+            """
+            CREATE INDEX IF NOT EXISTS ingestion_proofs_batch_idx
+                ON ingestion_proofs(batch_id, batch_index)
+            """,
             "DROP TRIGGER IF EXISTS ingestion_batches_reject_update ON ingestion_batches",
             """
             CREATE TRIGGER ingestion_batches_reject_update
@@ -806,8 +828,14 @@ class StorageLayer:
                 ts         TIMESTAMPTZ NOT NULL DEFAULT NOW()
             )
             """,
-            "CREATE INDEX IF NOT EXISTS idx_change_journal_shard_seq ON smt_change_journal(shard_id, header_seq)",
-            "CREATE INDEX IF NOT EXISTS idx_change_journal_shard_ts ON smt_change_journal(shard_id, ts)",
+            """
+            CREATE INDEX IF NOT EXISTS idx_change_journal_shard_seq
+                ON smt_change_journal(shard_id, header_seq)
+            """,
+            """
+            CREATE INDEX IF NOT EXISTS idx_change_journal_shard_ts
+                ON smt_change_journal(shard_id, ts)
+            """,
             """
             CREATE TABLE IF NOT EXISTS smt_checkpoints (
                 id         BIGSERIAL   PRIMARY KEY,
@@ -869,7 +897,8 @@ class StorageLayer:
             # is always anchored to the database clock, not the application clock.
             cur.execute(
                 """
-                    INSERT INTO api_rate_limits (subject_type, subject, action, tokens, last_refill_ts)
+                    INSERT INTO api_rate_limits
+                        (subject_type, subject, action, tokens, last_refill_ts)
                     VALUES (%s, %s, %s, %s, NOW())
                     ON CONFLICT (subject_type, subject, action) DO NOTHING
                 """,
@@ -929,6 +958,8 @@ class StorageLayer:
         signing_key: nacl.signing.SigningKey,
         canonicalization: dict[str, Any] | None = None,
         poseidon_root: bytes | None = None,
+        *,
+        max_serialization_retries: int = 3,
     ) -> tuple[bytes, ExistenceProof, dict[str, Any], str, LedgerEntry]:
         """
         Append a record to the global sparse Merkle tree and update shard header and ledger.
@@ -954,6 +985,12 @@ class StorageLayer:
         - commit() finalizes all writes atomically
         - Exceptions trigger automatic rollback via context manager
 
+        Retry semantics (RT-H2):
+        - PostgreSQL SERIALIZABLE transactions may fail with error code 40001
+          when concurrent transactions conflict. This method automatically retries
+          with exponential backoff up to max_serialization_retries times before
+          raising the exception to the caller.
+
         Args:
             shard_id: Shard identifier
             record_type: Type of record
@@ -966,9 +1003,17 @@ class StorageLayer:
                 big-endian). When provided, the ledger entry hash uses the dual-root
                 commitment formula to atomically bind both the BLAKE3 SMT root and the
                 Poseidon root.
+            max_serialization_retries: Maximum number of additional retry attempts
+                after the initial attempt on PostgreSQL serialization failure (40001).
+                Total attempts = 1 + max_serialization_retries. Defaults to 3 retries
+                (4 total attempts).
 
         Returns:
             Tuple of (root_hash, proof, header, signature, ledger_entry)
+
+        Raises:
+            ValueError: If value_hash is not 32 bytes or record already exists.
+            psycopg.errors.SerializationFailure: If retries are exhausted on conflict.
         """
         if len(value_hash) != 32:
             raise ValueError(f"Value hash must be 32 bytes, got {len(value_hash)}")
@@ -979,6 +1024,64 @@ class StorageLayer:
         # CD-HS-ST: Generate global key that encodes shard identity
         key = global_key(shard_id, rec_key)
 
+        # RT-H2: Retry loop for serialization failures
+        # Total attempts = 1 (initial) + max_serialization_retries (retries)
+        max_attempts = 1 + max_serialization_retries
+        for attempt in range(max_attempts):
+            try:
+                return self._append_record_inner(
+                    shard_id=shard_id,
+                    record_type=record_type,
+                    record_id=record_id,
+                    version=version,
+                    key=key,
+                    value_hash=value_hash,
+                    signing_key=signing_key,
+                    canonicalization=canonicalization,
+                    poseidon_root=poseidon_root,
+                )
+            except psycopg.errors.SerializationFailure as e:
+                is_last_attempt = attempt == max_attempts - 1
+                if not is_last_attempt:
+                    # Exponential backoff: 0.1s, 0.2s, 0.4s, ...
+                    delay = min(
+                        self._retry_base_delay_seconds * (2**attempt),
+                        self._retry_max_delay_seconds,
+                    )
+                    logger.warning(
+                        "Serialization failure on append_record attempt %d/%d, "
+                        "retrying in %.2fs: %s",
+                        attempt + 1,
+                        max_attempts,
+                        delay,
+                        e,
+                    )
+                    time.sleep(delay)
+                else:
+                    logger.error(
+                        "Serialization failure after %d attempts, giving up: %s",
+                        max_attempts,
+                        e,
+                    )
+                    raise
+
+        # Unreachable: loop always returns or raises
+        raise RuntimeError("Unexpected retry loop exit")
+
+    def _append_record_inner(
+        self,
+        *,
+        shard_id: str,
+        record_type: str,
+        record_id: str,
+        version: int,
+        key: bytes,
+        value_hash: bytes,
+        signing_key: nacl.signing.SigningKey,
+        canonicalization: dict[str, Any] | None,
+        poseidon_root: bytes | None,
+    ) -> tuple[bytes, ExistenceProof, dict[str, Any], str, LedgerEntry]:
+        """Inner implementation of append_record without retry logic."""
         # BEGIN TRANSACTION (implicit via context manager)
         with self._get_connection() as conn, conn.cursor(row_factory=dict_row) as cur:
             # Set SERIALIZABLE isolation level to prevent phantom reads
@@ -988,7 +1091,7 @@ class StorageLayer:
             # Load current GLOBAL tree state (all shards)
             tree = self._load_tree_state(cur)
 
-            # Check if key already exists
+            # Check if key already exists (by record identity)
             if tree.get(key) is not None:
                 raise ValueError(f"Record already exists: {record_type}:{record_id}:{version}")
 
@@ -1075,7 +1178,9 @@ class StorageLayer:
             # Insert shard header
             cur.execute(
                 """
-                    INSERT INTO shard_headers (shard_id, seq, root, tree_size, header_hash, sig, pubkey, previous_header_hash, ts)
+                    INSERT INTO shard_headers
+                        (shard_id, seq, root, tree_size, header_hash,
+                         sig, pubkey, previous_header_hash, ts)
                     VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
                     """,
                 (
@@ -1094,7 +1199,8 @@ class StorageLayer:
             # Record change in the diff journal for O(changes) diffs
             cur.execute(
                 """
-                    INSERT INTO smt_change_journal (shard_id, key, old_value, new_value, header_seq, ts)
+                    INSERT INTO smt_change_journal
+                        (shard_id, key, old_value, new_value, header_seq, ts)
                     VALUES (%s, %s, %s, %s, %s, %s)
                     """,
                 (shard_id, key, None, value_hash, seq, ts),
@@ -1170,7 +1276,8 @@ class StorageLayer:
             # Insert ledger entry
             cur.execute(
                 """
-                    INSERT INTO ledger_entries (shard_id, seq, entry_hash, prev_entry_hash, payload, ts)
+                    INSERT INTO ledger_entries
+                        (shard_id, seq, entry_hash, prev_entry_hash, payload, ts)
                     VALUES (%s, %s, %s, %s, %s, %s)
                     """,
                 (
@@ -1466,7 +1573,8 @@ class StorageLayer:
             else:
                 # Unexpected type - raise error for clarity
                 raise TypeError(
-                    f"Unexpected timestamp type: {type(ts_value).__name__}. Expected str or datetime."
+                    f"Unexpected timestamp type: {type(ts_value).__name__}. "
+                    "Expected str or datetime."
                 )
 
             header = {
@@ -1537,7 +1645,8 @@ class StorageLayer:
                     timestamp_str = ts_value.isoformat().replace("+00:00", "Z")
                 else:
                     raise TypeError(
-                        f"Unexpected timestamp type: {type(ts_value).__name__}. Expected str or datetime."
+                        f"Unexpected timestamp type: {type(ts_value).__name__}. "
+                        "Expected str or datetime."
                     )
 
                 history.append(
@@ -1769,7 +1878,7 @@ class StorageLayer:
         self,
         shard_id: str,
         max_headers: int | None = None,
-        after_seq: int = 0,
+        after_seq: int = -1,
     ) -> dict[str, Any]:
         """
         Replay global SMT state at each shard header timestamp and verify roots against headers
@@ -1856,7 +1965,8 @@ class StorageLayer:
             cur.execute(
                 """
                 INSERT INTO timestamp_tokens
-                    (shard_id, header_hash, tsa_url, tst, imprint_hash, gen_time, tsa_cert_fingerprint)
+                    (shard_id, header_hash, tsa_url, tst,
+                     imprint_hash, gen_time, tsa_cert_fingerprint)
                 VALUES (%s, %s, %s, %s, %s, %s, %s)
                 ON CONFLICT (shard_id, header_hash, tsa_url) DO NOTHING
                 """,
@@ -2349,7 +2459,7 @@ class StorageLayer:
         shard_id: str,
         batch_size: int = 10_000,
         max_headers: int | None = None,
-        after_seq: int = 0,
+        after_seq: int = -1,
     ) -> dict[str, Any]:
         """
         Verify shard integrity by streaming leaves in batches and replaying
@@ -2373,6 +2483,9 @@ class StorageLayer:
                 When ``None`` (default) the full history is verified.
             after_seq: Resume verification after this sequence number.
                 Headers with ``seq <= after_seq`` are skipped.
+                Default is ``-1``: since shard-header sequence numbers start at
+                0, ``seq > -1`` (i.e. ``seq >= 0``) includes every header on
+                a fresh replay.  Pass the last verified seq to resume paging.
 
         Returns:
             A dict with keys:
@@ -2426,7 +2539,7 @@ class StorageLayer:
             tree = SparseMerkleTree()
             prev_ts: datetime | None = None
 
-            if after_seq > 0:
+            if after_seq >= 0:
                 # Load all leaves up to the timestamp of the header at after_seq
                 # so the tree carries forward correctly.
                 cur.execute(

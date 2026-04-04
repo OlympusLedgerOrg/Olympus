@@ -52,7 +52,7 @@ from protocol.hashes import global_key, hash_bytes, record_key
 from protocol.shards import create_shard_header
 from protocol.ssmf import verify_nonexistence_proof, verify_proof
 from protocol.timestamps import current_timestamp
-from storage.postgres import StorageLayer
+from storage.postgres import _NODE_REHASH_GATE, StorageLayer
 
 
 # Test database connection string
@@ -1047,6 +1047,9 @@ def test_verify_state_replay_detects_header_root_divergence(storage, signing_key
         )
         first_header_ts = cur.fetchone()["ts"]
         forged_ts = first_header_ts - timedelta(microseconds=1)
+        # _NODE_REHASH_GATE is a compile-time BLAKE3 constant; SET LOCAL does
+        # not accept psycopg parameters, so f-string interpolation is safe.
+        cur.execute(f"SET LOCAL olympus.allow_smt_insert = '{_NODE_REHASH_GATE}'")
         cur.execute(
             """
             INSERT INTO smt_leaves (key, version, value_hash, ts)
@@ -1104,6 +1107,9 @@ def test_replay_naive_datetime_cutoff_is_normalized(storage, signing_key):
         # The guard in _load_tree_state / replay_tree_incremental must re-attach
         # UTC so the TIMESTAMPTZ comparison is unambiguous.
         naive_ts = first_header_ts.replace(tzinfo=None) - timedelta(microseconds=1)
+        # _NODE_REHASH_GATE is a compile-time BLAKE3 constant; SET LOCAL does
+        # not accept psycopg parameters, so f-string interpolation is safe.
+        cur.execute(f"SET LOCAL olympus.allow_smt_insert = '{_NODE_REHASH_GATE}'")
         cur.execute(
             """
             INSERT INTO smt_leaves (key, version, value_hash, ts)
