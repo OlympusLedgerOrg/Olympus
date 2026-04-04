@@ -5,6 +5,7 @@ from __future__ import annotations
 import os
 import subprocess
 import sys
+from pathlib import Path
 
 import blake3
 import pytest
@@ -22,6 +23,7 @@ except ImportError:
     HAS_RUST = False
 
 RUST_ONLY = pytest.mark.skipif(not HAS_RUST, reason="Rust extension not built")
+REPO_ROOT = Path(__file__).resolve().parent.parent
 
 _KEY_PREFIX = b"OLY:KEY:V1"
 _LEAF_PREFIX = b"OLY:LEAF:V1"
@@ -287,7 +289,7 @@ def test_standalone_runner_exits_zero():
     env = dict(os.environ)
     result = subprocess.run(
         [sys.executable, "-m", "api.rust_smoke"],
-        cwd="/home/runner/work/Olympus/Olympus",
+        cwd=REPO_ROOT,
         env=env,
         capture_output=True,
         text=True,

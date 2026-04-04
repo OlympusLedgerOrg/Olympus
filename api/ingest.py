@@ -834,11 +834,10 @@ def _build_poseidon_smt_for_storage_shard(
     with storage._get_connection() as conn, conn.cursor() as cur:
         # _OLYMPUS_POSEIDON_CARVE_OUT: this is the only approved O(N)
         # _load_tree_state call in the ingest path.
-        _OLYMPUS_POSEIDON_CARVE_OUT = True
         tree = storage._load_tree_state(
             cur,
             up_to_ts=up_to_ts,
-            _OLYMPUS_POSEIDON_CARVE_OUT=_OLYMPUS_POSEIDON_CARVE_OUT,
+            _OLYMPUS_POSEIDON_CARVE_OUT=True,
         )
 
     poseidon_smt = PoseidonSMT()
