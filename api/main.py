@@ -189,6 +189,35 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
         return response
 
 
+class RequestBodySizeLimitMiddleware(BaseHTTPMiddleware):
+    """Reject requests whose declared Content-Length exceeds the configured maximum.
+
+    This guard fires before any route handler reads the body, providing an
+    early-exit 413 for oversized requests without buffering the full payload.
+    Requests without a Content-Length header are not blocked here; chunked or
+    streaming uploads are bounded by the per-endpoint read helpers in ingest.py.
+    """
+
+    async def dispatch(self, request: Request, call_next):  # noqa: ANN001
+        content_length = request.headers.get("content-length")
+        if content_length is not None:
+            try:
+                length = int(content_length)
+            except ValueError:
+                return JSONResponse(
+                    status_code=400,
+                    content={"detail": "Invalid Content-Length header."},
+                )
+            settings = get_settings()
+            if length > settings.max_upload_bytes:
+                max_mb = settings.max_upload_bytes // (1024 * 1024)
+                return JSONResponse(
+                    status_code=413,
+                    content={"detail": f"Request body too large (limit {max_mb} MB)."},
+                )
+        return await call_next(request)
+
+
 def _json_safe_validation_detail(value: Any) -> Any:
     """Recursively sanitize validation payloads so JSON rendering cannot fail."""
     if isinstance(value, str):
@@ -253,6 +282,7 @@ def create_app() -> FastAPI:
     )
 
     app.add_middleware(SecurityHeadersMiddleware)
+    app.add_middleware(RequestBodySizeLimitMiddleware)
 
     @app.exception_handler(RequestValidationError)
     async def request_validation_exception_handler(
