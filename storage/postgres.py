@@ -1108,7 +1108,7 @@ class StorageLayer:
 
             # --- O(256) sibling fetch from smt_nodes ---
             siblings = self._get_proof_path(cur, key)
-            tree: SparseMerkleTree | None = None
+            fallback_tree: SparseMerkleTree | None = None
 
             # --- O(256) Rust incremental update ---
             try:
@@ -1137,6 +1137,7 @@ class StorageLayer:
                 if tree.get(key) is not None:
                     raise ValueError(f"Record already exists: {record_type}:{record_id}:{version}")
                 tree.update(key, value_hash)
+                fallback_tree = tree
                 root_hash = tree.get_root()
                 proof_siblings = None  # will use tree.prove_existence below
                 node_deltas = None
@@ -1155,10 +1156,11 @@ class StorageLayer:
                     root_hash=root_hash,
                 )
             else:
-                assert tree is not None
-                proof = tree.prove_existence(key)
-                root_hash = tree.get_root()
-                tree_size = len(tree.leaves)
+                if fallback_tree is None:
+                    raise RuntimeError("Fallback SMT tree state unavailable")
+                proof = fallback_tree.prove_existence(key)
+                root_hash = fallback_tree.get_root()
+                tree_size = len(fallback_tree.leaves)
 
             # Insert leaf (CD-HS-ST: no shard_id column)
             cur.execute(
@@ -1199,8 +1201,9 @@ class StorageLayer:
                 for db_level, packed_index, hash_val in node_deltas:
                     self._cache_put(shard_id, db_level, packed_index, hash_val)
             else:
-                assert tree is not None
-                self._persist_tree_nodes(cur, shard_id, tree)
+                if fallback_tree is None:
+                    raise RuntimeError("Fallback SMT tree state unavailable for node persist")
+                self._persist_tree_nodes(cur, shard_id, fallback_tree)
 
             # Get previous header
             cur.execute(
@@ -1364,8 +1367,11 @@ class StorageLayer:
                     all_leaves[key] = value_hash
                     authoritative_poseidon_root = _compute_poseidon_root_from_leaves(all_leaves)
                 else:
-                    assert tree is not None
-                    authoritative_poseidon_root = _compute_poseidon_root_from_leaves(tree.leaves)
+                    if fallback_tree is None:
+                        raise RuntimeError("Fallback SMT tree state unavailable for Poseidon")
+                    authoritative_poseidon_root = _compute_poseidon_root_from_leaves(
+                        fallback_tree.leaves
+                    )
                 poseidon_root_decimal = str(
                     int.from_bytes(authoritative_poseidon_root, byteorder="big")
                 )
