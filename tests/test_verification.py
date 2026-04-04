@@ -28,6 +28,7 @@ def _make_fake_commit(
     commit.commit_id = commit_id
     commit.request_id = request_id
     commit.epoch_timestamp = datetime(2025, 1, 15, 14, 30, tzinfo=timezone.utc)
+    commit.embargo_until = None
     return commit
 
 

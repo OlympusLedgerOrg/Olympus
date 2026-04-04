@@ -12,6 +12,7 @@ Protocol notes:
   contain literal ``|`` characters.
 """
 
+import os
 from typing import Any
 
 import blake3
@@ -35,6 +36,11 @@ try:
     _RUST_CRYPTO_AVAILABLE = True  # pragma: no cover — requires maturin build
 except ImportError:
     _RUST_CRYPTO_AVAILABLE = False
+    if os.getenv("OLYMPUS_REQUIRE_RUST", "").strip().lower() in {"1", "true", "yes", "on"}:
+        raise RuntimeError(
+            "Rust crypto extension required by OLYMPUS_REQUIRE_RUST=1, "
+            "but olympus_core.crypto could not be imported"
+        ) from None
 
 
 # BN128 scalar field prime (alt_bn128) used by Circom/snarkjs

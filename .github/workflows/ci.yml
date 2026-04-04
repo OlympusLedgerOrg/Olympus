@@ -255,6 +255,8 @@ jobs:
 
       - name: Run Go verifier tests
         working-directory: verifiers/go
+        env:
+          GOFLAGS: -mod=vendor
         run: go test ./... -v
 
   rust-verifier:

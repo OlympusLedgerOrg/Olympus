@@ -2,7 +2,9 @@
 API key authentication for the Olympus FOIA backend.
 
 Write endpoints (POST, PATCH, DELETE) require a valid API key.
-Read endpoints (GET) are public — this is a transparency system.
+Read endpoints (GET) and verification endpoints are public — this is a
+transparency system. Verification is a read-semantic operation regardless
+of the HTTP method used.
 
 API keys are loaded from OLYMPUS_API_KEYS_JSON (preferred) or OLYMPUS_FOIA_API_KEYS
 (fallback) environment variable. Both should contain a JSON array. Raw keys are
