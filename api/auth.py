@@ -556,6 +556,31 @@ def _get_backend() -> MemoryRateLimitBackend:
 
 # ── IP Validation Helpers (H2) ──
 
+# Module-level flag set by _assert_xff_default_deny() at startup.
+# When True, _get_client_ip() ignores X-Forwarded-For unconditionally.
+_xff_disabled: bool = False
+
+
+def _assert_xff_default_deny() -> None:
+    """Disable XFF processing at startup when no trusted proxies are configured.
+
+    When ``OLYMPUS_TRUSTED_PROXY_IPS`` is empty or unset there is no
+    trustworthy proxy to read the ``X-Forwarded-For`` header from.  Setting
+    the module-level ``_xff_disabled`` flag here (rather than re-checking on
+    every request) makes the invariant explicit, is logged once at startup,
+    and eliminates the per-request overhead of iterating an empty list.
+    """
+    global _xff_disabled
+    settings = get_settings()
+    if not settings.trusted_proxy_ips:
+        _xff_disabled = True
+        logger.info(
+            "OLYMPUS_TRUSTED_PROXY_IPS is not configured — "
+            "X-Forwarded-For processing is disabled. "
+            "All client IPs are taken from the direct connection peer. "
+            "Set OLYMPUS_TRUSTED_PROXY_IPS to enable XFF-based IP extraction."
+        )
+
 
 def _is_valid_ip(ip: str) -> bool:
     """Return True if *ip* is a syntactically valid IPv4 or IPv6 address."""
@@ -630,8 +655,13 @@ def _get_client_ip(request: Request) -> str:
     within the configured trusted proxy ranges (``OLYMPUS_TRUSTED_PROXY_IPS``).
     This prevents IP-spoofing attacks where a malicious client sets a fake
     header to bypass rate limiting and avoids bucket-eviction DoS via forged IPs.
+
+    When ``_xff_disabled`` is True (set by :func:`_assert_xff_default_deny` at
+    startup), the header is ignored entirely and the direct peer IP is returned.
     """
     peer_ip = request.client.host if request.client else "unknown"
+    if _xff_disabled:
+        return _normalize_ip(peer_ip)
     settings = get_settings()
     trusted = settings.trusted_proxy_ips
 

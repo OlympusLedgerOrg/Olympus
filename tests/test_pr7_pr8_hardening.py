@@ -607,3 +607,106 @@ class TestIPFSVarint:
 
         bundle = {"a": 1, "b": 2}
         assert compute_ipfs_cidv1(bundle) == compute_ipfs_cidv1(bundle)
+
+
+# ── PR-S1: Startup assertions H1 + H2 ─────────────────────────────────
+
+
+def test_startup_rejects_multiworker_memory_backend_in_production(monkeypatch):
+    from api.config import get_settings
+    from api.main import _assert_no_multiworker_with_memory_rate_limit
+
+    monkeypatch.setenv("OLYMPUS_ENV", "production")
+    monkeypatch.setenv("WEB_CONCURRENCY", "4")
+    monkeypatch.delenv("RATE_LIMIT_BACKEND", raising=False)
+    get_settings.cache_clear()
+
+    with pytest.raises(RuntimeError, match="RATE_LIMIT_BACKEND=memory"):
+        _assert_no_multiworker_with_memory_rate_limit()
+
+    get_settings.cache_clear()
+
+
+def test_startup_allows_multiworker_memory_backend_in_development(monkeypatch):
+    from api.config import get_settings
+    from api.main import _assert_no_multiworker_with_memory_rate_limit
+
+    monkeypatch.setenv("OLYMPUS_ENV", "development")
+    monkeypatch.setenv("WEB_CONCURRENCY", "4")
+    get_settings.cache_clear()
+
+    _assert_no_multiworker_with_memory_rate_limit()  # must not raise
+
+    get_settings.cache_clear()
+
+
+def test_startup_allows_single_worker_memory_backend_in_production(monkeypatch):
+    from api.config import get_settings
+    from api.main import _assert_no_multiworker_with_memory_rate_limit
+
+    monkeypatch.setenv("OLYMPUS_ENV", "production")
+    monkeypatch.setenv("WEB_CONCURRENCY", "1")
+    get_settings.cache_clear()
+
+    _assert_no_multiworker_with_memory_rate_limit()  # must not raise
+
+    get_settings.cache_clear()
+
+
+def test_startup_allows_multiworker_when_web_concurrency_unset(monkeypatch):
+    from api.config import get_settings
+    from api.main import _assert_no_multiworker_with_memory_rate_limit
+
+    monkeypatch.setenv("OLYMPUS_ENV", "production")
+    monkeypatch.delenv("WEB_CONCURRENCY", raising=False)
+    get_settings.cache_clear()
+
+    _assert_no_multiworker_with_memory_rate_limit()  # WEB_CONCURRENCY defaults to 1
+
+    get_settings.cache_clear()
+
+
+def test_startup_xff_disabled_when_no_trusted_proxies_configured(monkeypatch):
+    """_assert_xff_default_deny sets _xff_disabled and _get_client_ip ignores XFF."""
+    from unittest.mock import MagicMock, patch
+
+    import api.auth as auth_mod
+
+    auth_mod._xff_disabled = False  # reset before test
+
+    mock_settings = MagicMock()
+    mock_settings.trusted_proxy_ips = []
+
+    with patch("api.auth.get_settings", return_value=mock_settings):
+        auth_mod._assert_xff_default_deny()
+
+    assert auth_mod._xff_disabled is True
+
+    # _get_client_ip must return the peer IP even when XFF header is present
+    request = MagicMock()
+    request.client.host = "10.0.0.1"
+    request.headers.get.return_value = "203.0.113.42"
+
+    ip = auth_mod._get_client_ip(request)
+    assert ip == "10.0.0.1"
+
+    auth_mod._xff_disabled = False  # restore
+
+
+def test_startup_xff_enabled_when_trusted_proxies_configured(monkeypatch):
+    """_assert_xff_default_deny leaves _xff_disabled False when proxies are configured."""
+    from unittest.mock import MagicMock, patch
+
+    import api.auth as auth_mod
+
+    auth_mod._xff_disabled = False
+
+    mock_settings = MagicMock()
+    mock_settings.trusted_proxy_ips = ["10.0.0.1"]
+
+    with patch("api.auth.get_settings", return_value=mock_settings):
+        auth_mod._assert_xff_default_deny()
+
+    assert auth_mod._xff_disabled is False
+
+    auth_mod._xff_disabled = False  # restore
