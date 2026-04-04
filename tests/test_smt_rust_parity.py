@@ -35,7 +35,7 @@ class TestSmtInterfaceContract:
 
     def test_two_inserts_order_independent(self):
         k1, k2 = b"\x01" * 32, b"\x02" * 32
-        v1, v2 = b"\xAA" * 32, b"\xBB" * 32
+        v1, v2 = b"\xaa" * 32, b"\xbb" * 32
 
         t1 = SparseMerkleTree()
         t1.update(k1, v1)
@@ -86,7 +86,7 @@ class TestSmtInterfaceContract:
     def test_nonexistence_proof_verifies(self):
         present = b"\x01" * 32
         absent = b"\x02" * 32
-        val = b"\xAA" * 32
+        val = b"\xaa" * 32
         tree = SparseMerkleTree()
         tree.update(present, val)
         proof = tree.prove_nonexistence(absent)
@@ -122,7 +122,7 @@ class TestSmtInterfaceContract:
     def test_prove_dispatches_correctly(self):
         k1 = b"\x01" * 32
         k2 = b"\x02" * 32
-        val = b"\xAA" * 32
+        val = b"\xaa" * 32
         tree = SparseMerkleTree()
         tree.update(k1, val)
 

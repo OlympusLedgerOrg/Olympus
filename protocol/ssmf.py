@@ -346,17 +346,17 @@ if _RUST_SMT_AVAILABLE:
 
         @property
         def leaves(self) -> dict[bytes, bytes]:
-            return self._inner.leaves  # type: ignore[return-value]
+            return self._inner.leaves  # type: ignore[no-any-return]
 
         @property
         def nodes(self) -> dict[tuple[int, ...], bytes]:
-            return self._inner.nodes  # type: ignore[return-value]
+            return self._inner.nodes  # type: ignore[no-any-return]
 
         def get_root(self) -> bytes:
-            return self._inner.get_root()  # type: ignore[return-value]
+            return self._inner.get_root()  # type: ignore[no-any-return]
 
         def get(self, key: bytes) -> bytes | None:
-            return self._inner.get(key)  # type: ignore[return-value]
+            return self._inner.get(key)  # type: ignore[no-any-return]
 
         def update(self, key: bytes, value_hash: bytes) -> None:
             self._inner.update(key, value_hash)
