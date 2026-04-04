@@ -508,6 +508,11 @@ def create_replication_proof(
     Returns:
         Signed ReplicationProof
     """
+    if len(proof_sample_indices) != len(proof_sample_hashes):
+        raise ValueError(
+            "proof_sample_indices and proof_sample_hashes must have same length"
+        )
+
     # Create unsigned proof to compute payload hash
     unsigned_proof = ReplicationProof(
         challenge_hash=challenge.challenge_hash(),
