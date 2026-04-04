@@ -22,10 +22,8 @@ import pytest
 
 from protocol.federation import (
     DEFAULT_MAX_CERTIFICATE_CLOCK_SKEW_SECONDS,
-    FEDERATION_DOMAIN_TAG,
     DataAvailabilityChallenge,
     FederationBehaviorSample,
-    FederationNode,
     FederationRegistry,
     GossipedShardHeader,
     NodeSignature,
@@ -640,7 +638,6 @@ def test_quorum_certificate_hash_changes_on_mutation() -> None:
 
 def test_create_replication_proof_rejects_mismatched_sample_lengths() -> None:
     """proof_sample_indices and proof_sample_hashes must have the same length."""
-    registry = _three_node_registry()
     challenge = DataAvailabilityChallenge(
         shard_id="records/city-a",
         header_hash="aa" * 32,
