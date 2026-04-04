@@ -15,6 +15,7 @@ Protocol usage:
 """
 
 import hashlib
+import logging
 import os
 from collections.abc import Sequence
 from dataclasses import dataclass
@@ -26,8 +27,12 @@ import rfc3161ng
 from cryptography import x509
 from cryptography.hazmat.primitives import hashes
 from pyasn1.codec.der import decoder  # type: ignore[import-untyped]
+from pyasn1.error import PyAsn1Error  # type: ignore[import-untyped]
 from pyasn1.type import univ as pyasn1_univ  # type: ignore[import-untyped]
 from rfc3161ng.api import load_certificate
+
+
+_logger = logging.getLogger(__name__)
 
 
 # Well-known public TSA endpoints (free, unauthenticated, publicly trusted)
@@ -103,7 +108,8 @@ def _extract_tsa_cert_fingerprint(tst_bytes: bytes) -> str | None:
         certificate: x509.Certificate = load_certificate(signed_data, certificate=b"")
         fingerprint = certificate.fingerprint(hashes.SHA256())
         return fingerprint.hex()
-    except Exception:
+    except (PyAsn1Error, AttributeError, ValueError, IndexError, TypeError) as exc:
+        _logger.warning("Failed to extract TSA certificate fingerprint: %s", exc)
         return None
 
 
@@ -140,7 +146,8 @@ def _extract_message_imprint(tst_bytes: bytes) -> bytes | None:
         if substrate:  # pragma: no cover — requires crafted DER with trailing bytes
             return None
         return bytes(tstinfo["messageImprint"]["hashedMessage"])
-    except Exception:
+    except (PyAsn1Error, AttributeError, ValueError, IndexError, TypeError) as exc:
+        _logger.warning("Failed to extract message imprint from TST: %s", exc)
         return None
 
 
@@ -487,7 +494,8 @@ def extract_tsa_certificate(tst_bytes: bytes) -> x509.Certificate | None:
         signed_data = tst.content
         cert: x509.Certificate | None = load_certificate(signed_data, certificate=b"")
         return cert
-    except Exception:
+    except (PyAsn1Error, AttributeError, ValueError, IndexError, TypeError) as exc:
+        _logger.warning("Failed to extract TSA certificate: %s", exc)
         return None
 
 

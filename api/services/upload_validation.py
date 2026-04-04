@@ -42,6 +42,7 @@ from __future__ import annotations
 import io
 import logging
 import os
+import stat
 import zipfile
 
 import magic
@@ -135,6 +136,17 @@ def validate_zip_safety(content: bytes) -> None:
                         detail=(
                             f"ZIP entry path traversal detected: {info.filename!r} — rejected."
                         ),
+                    )
+
+                # ── Symlink guard ────────────────────────────────────────────
+                # Unix-format external_attr encodes the file mode in the upper
+                # 16 bits.  Symlinks can escape the extraction sandbox even
+                # when the path itself looks safe.
+                unix_mode = info.external_attr >> 16
+                if unix_mode and stat.S_ISLNK(unix_mode):
+                    raise HTTPException(
+                        status_code=400,
+                        detail=(f"ZIP entry is a symlink: {info.filename!r} — rejected."),
                     )
 
                 # ── Ratio guard (zip bomb, per-entry) ────────────────────────
