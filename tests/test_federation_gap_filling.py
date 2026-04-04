@@ -15,6 +15,7 @@ Covers paths not exercised in test_federation.py:
 
 from __future__ import annotations
 
+import dataclasses
 from pathlib import Path
 
 import pytest
@@ -46,6 +47,7 @@ from protocol.shards import create_shard_header, get_signing_key_from_seed
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 REGISTRY_PATH = REPO_ROOT / "examples" / "federation_registry.json"
+MAX_REASONABLE_CLOCK_SKEW_SECONDS = 3600  # 1 hour
 
 
 def _test_signing_key(seed_byte: int):
@@ -87,7 +89,7 @@ def test_default_clock_skew_constant_is_positive_integer() -> None:
 
 def test_default_clock_skew_constant_is_reasonable_bound() -> None:
     """Clock skew should be at most one hour; tighter than that avoids replay windows."""
-    assert DEFAULT_MAX_CERTIFICATE_CLOCK_SKEW_SECONDS <= 3600
+    assert DEFAULT_MAX_CERTIFICATE_CLOCK_SKEW_SECONDS <= MAX_REASONABLE_CLOCK_SKEW_SECONDS
 
 
 # =============================================================================
@@ -716,7 +718,6 @@ def test_verify_data_availability_rejects_tampered_ledger_tail() -> None:
     )
 
     # Tamper: replace ledger_tail_hash with different value
-    import dataclasses
     tampered_proof = dataclasses.replace(proof, ledger_tail_hash="ff" * 32)
 
     assert verify_data_availability(challenge, tampered_proof, registry) is False
