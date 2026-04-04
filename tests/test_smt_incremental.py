@@ -8,6 +8,7 @@ from protocol.ssmf import (
     verify_proof,
 )
 
+
 # Try to import the Rust class directly for staticmethod access.
 try:
     from olympus_core import RustSparseMerkleTree

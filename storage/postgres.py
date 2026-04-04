@@ -62,7 +62,6 @@ from protocol.ssmf import (
     NonExistenceProof,
     SparseMerkleTree,
     _key_to_path_bits,
-    diff_sparse_merkle_trees,
 )
 from storage.gates import derive_node_rehash_gate
 
@@ -1099,20 +1098,53 @@ class StorageLayer:
             # under concurrent writes, particularly for shard header chain linkage
             conn.execute("SET TRANSACTION ISOLATION LEVEL SERIALIZABLE")
 
-            # Load current GLOBAL tree state (all shards)
-            tree = self._load_tree_state(cur)
-
-            # Check if key already exists (by record identity)
-            if tree.get(key) is not None:
+            # --- O(1) duplicate check via smt_leaves index ---
+            cur.execute(
+                "SELECT 1 FROM smt_leaves WHERE key = %s AND version = %s",
+                (key, version),
+            )
+            if cur.fetchone() is not None:
                 raise ValueError(f"Record already exists: {record_type}:{record_id}:{version}")
 
-            # Update tree
-            tree.update(key, value_hash)
-            root_hash = tree.get_root()
-            tree_size = len(tree.leaves)
+            # --- O(256) sibling fetch from smt_nodes ---
+            siblings = self._get_proof_path(cur, key)
 
-            # Generate proof
-            proof = tree.prove_existence(key)
+            # --- O(256) Rust incremental update ---
+            try:
+                from olympus_core import RustSparseMerkleTree
+
+                root_hash, proof_siblings, node_deltas = (
+                    RustSparseMerkleTree.incremental_update(key, value_hash, siblings)
+                )
+            except ImportError:
+                # Fallback: full tree load (pre-Rust build)
+                tree = self._load_tree_state(cur)
+                if tree.get(key) is not None:
+                    raise ValueError(
+                        f"Record already exists: {record_type}:{record_id}:{version}"
+                    )
+                tree.update(key, value_hash)
+                root_hash = tree.get_root()
+                proof_siblings = None  # will use tree.prove_existence below
+                node_deltas = None
+
+            # --- tree_size from DB (O(1) COUNT on smt_leaves) ---
+            cur.execute("SELECT COUNT(*) AS cnt FROM smt_leaves")
+            count_row = cur.fetchone()
+            tree_size = (int(count_row["cnt"]) if count_row else 0) + 1  # +1 for pending insert
+
+            # --- Build proof ---
+            if proof_siblings is not None:
+                proof = ExistenceProof(
+                    key=key,
+                    value_hash=value_hash,
+                    siblings=list(proof_siblings),
+                    root_hash=root_hash,
+                )
+            else:
+                proof = tree.prove_existence(key)  # type: ignore[possibly-undefined]
+                root_hash = tree.get_root()  # type: ignore[possibly-undefined]
+                tree_size = len(tree.leaves)  # type: ignore[possibly-undefined]
 
             # Insert leaf (CD-HS-ST: no shard_id column)
             cur.execute(
@@ -1128,9 +1160,32 @@ class StorageLayer:
                 (key, version, value_hash, datetime.now(timezone.utc)),
             )
 
-            # Insert new affected nodes (append-only, skip if node exists)
-            # CD-HS-ST: shard_id is passed for cache compatibility but not used in DB
-            self._persist_tree_nodes(cur, shard_id, tree)
+            # --- Persist node deltas ---
+            if node_deltas is not None:
+                # O(256) upsert — only the affected path nodes
+                cur.execute(
+                    sql.SQL("SET LOCAL olympus.allow_node_rehash = {}").format(
+                        sql.Literal(_NODE_REHASH_GATE)
+                    )
+                )
+                ts_now = datetime.now(timezone.utc)
+                cur.executemany(
+                    """
+                    INSERT INTO smt_nodes (level, index, hash, ts)
+                    VALUES (%s, %s, %s, %s)
+                    ON CONFLICT (level, index)
+                    DO UPDATE SET hash = EXCLUDED.hash, ts = EXCLUDED.ts
+                    """,
+                    [
+                        (db_level, packed_index, hash_val, ts_now)
+                        for db_level, packed_index, hash_val in node_deltas
+                    ],
+                )
+                # Update cache for each delta
+                for db_level, packed_index, hash_val in node_deltas:
+                    self._cache_put(shard_id, db_level, packed_index, hash_val)
+            else:
+                self._persist_tree_nodes(cur, shard_id, tree)  # type: ignore[possibly-undefined]
 
             # Get previous header
             cur.execute(
@@ -1280,9 +1335,23 @@ class StorageLayer:
             )
 
             if poseidon_root is not None:
-                # Recompute Poseidon root from transaction-authoritative tree state
+                # Recompute Poseidon root from transaction-authoritative leaf state
                 # to prevent stale roots under concurrent writes.
-                authoritative_poseidon_root = _compute_poseidon_root_from_leaves(tree.leaves)
+                # Poseidon root requires all leaves — query from DB when tree is
+                # unavailable (incremental path).  This is O(N) but only runs
+                # when ZK proofs are enabled.
+                if node_deltas is not None:
+                    cur.execute("SELECT key, value_hash FROM smt_leaves ORDER BY key")
+                    all_leaves: dict[bytes, bytes] = {}
+                    for leaf_row in cur.fetchall():
+                        all_leaves[bytes(leaf_row["key"])] = bytes(leaf_row["value_hash"])
+                    # Include the leaf we just inserted
+                    all_leaves[key] = value_hash
+                    authoritative_poseidon_root = _compute_poseidon_root_from_leaves(all_leaves)
+                else:
+                    authoritative_poseidon_root = _compute_poseidon_root_from_leaves(
+                        tree.leaves  # type: ignore[possibly-undefined]
+                    )
                 poseidon_root_decimal = str(
                     int.from_bytes(authoritative_poseidon_root, byteorder="big")
                 )
@@ -1784,19 +1853,55 @@ class StorageLayer:
                 journal_diff["to_root_hash"] = bytes(to_header["root"]).hex()
                 return journal_diff
 
-            # Slow path: reconstruct full trees
-            from_tree = self._load_tree_state(cur, up_to_ts=from_header["ts"])
-            to_tree = self._load_tree_state(cur, up_to_ts=to_header["ts"])
-            diff = diff_sparse_merkle_trees(
-                from_tree, to_tree, key_range_start=key_range_start, key_range_end=key_range_end
+            # Slow path: SQL-level diff on smt_leaves (append-only ledger).
+            # In an append-only system, the diff between two timestamps is
+            # exactly the set of leaves inserted in (from_ts, to_ts].
+            from_ts = from_header["ts"]
+            to_ts = to_header["ts"]
+
+            if isinstance(from_ts, str):
+                from_ts = datetime.fromisoformat(from_ts.replace("Z", "+00:00"))
+            if isinstance(to_ts, str):
+                to_ts = datetime.fromisoformat(to_ts.replace("Z", "+00:00"))
+
+            # Key range filter
+            range_clause = ""
+            range_params: list[Any] = []
+            if key_range_start is not None:
+                range_clause += " AND key >= %s"
+                range_params.append(key_range_start)
+            if key_range_end is not None:
+                range_clause += " AND key < %s"
+                range_params.append(key_range_end)
+
+            cur.execute(
+                sql.SQL(
+                    """
+                    SELECT key, value_hash FROM smt_leaves
+                    WHERE ts > %s AND ts <= %s
+                    {}
+                    ORDER BY key ASC
+                    """
+                ).format(sql.SQL(range_clause)),
+                (from_ts, to_ts, *range_params),
             )
+            added_rows = cur.fetchall()
+
+            added = [
+                {
+                    "key": bytes(r["key"]).hex(),
+                    "before_value_hash": None,
+                    "after_value_hash": bytes(r["value_hash"]).hex(),
+                }
+                for r in added_rows
+            ]
 
             return {
                 "from_root_hash": bytes(from_header["root"]).hex(),
                 "to_root_hash": bytes(to_header["root"]).hex(),
-                "added": [entry.to_dict() for entry in diff["added"]],
-                "changed": [entry.to_dict() for entry in diff["changed"]],
-                "removed": [entry.to_dict() for entry in diff["removed"]],
+                "added": added,
+                "changed": [],  # append-only: no changes possible
+                "removed": [],  # append-only: no removals possible
             }
 
     def _diff_from_journal(
@@ -2350,9 +2455,34 @@ class StorageLayer:
                 else EMPTY_HASHES[256]
             )
         else:
-            # Historical snapshot — must replay from leaves.
-            tree = self._load_tree_state(cur, up_to_ts=as_of_ts)
-            computed_root = tree.get_root()
+            # Historical snapshot — incremental replay from leaves.
+            replay_tree = SparseMerkleTree()
+            cutoff = as_of_ts
+            if isinstance(cutoff, str):
+                cutoff = datetime.fromisoformat(cutoff.replace("Z", "+00:00"))
+            if cutoff.tzinfo is None:
+                cutoff = cutoff.replace(tzinfo=timezone.utc)
+
+            batch_size = self.DEFAULT_FLUSH_BATCH_SIZE
+            offset = 0
+            while True:
+                cur.execute(
+                    """
+                    SELECT key, value_hash FROM smt_leaves
+                    WHERE ts <= %s
+                    ORDER BY ts ASC, key ASC
+                    LIMIT %s OFFSET %s
+                    """,
+                    (cutoff, batch_size, offset),
+                )
+                rows = cur.fetchall()
+                if not rows:
+                    break
+                for row in rows:
+                    replay_tree.update(bytes(row["key"]), bytes(row["value_hash"]))
+                offset += len(rows)
+
+            computed_root = replay_tree.get_root()
 
         if computed_root != expected_root:
             raise ValueError(
@@ -2368,15 +2498,15 @@ class StorageLayer:
         """
         Load the global sparse Merkle tree state from database.
 
-        .. deprecated::
-            ADR-0001 deprecates this method.  Use purpose-specific helpers:
+        .. deprecated:: 0.12
+            All production callers have been migrated to incremental paths.
+            This method is retained only for offline diagnostic use and will
+            be removed in a future release.
+
+            Use purpose-specific helpers instead:
             - :meth:`_get_proof_path` for proof generation (O(256) nodes).
             - :meth:`get_current_root` for root retrieval (O(1) header read).
             - :meth:`replay_tree_incremental` for streaming audit replay.
-
-            Remaining callers that *must* reconstruct the full tree (e.g.
-            ``set_record_request``, historical ``_assert_root_matches_state``)
-            still use this method until the Rust CD-HS-ST service handles
             writes natively (Phase 1).
 
         CD-HS-ST Design:
