@@ -138,9 +138,7 @@ def validate_zip_safety(content: bytes) -> None:
                 if unix_mode and stat.S_ISLNK(unix_mode):
                     raise HTTPException(
                         status_code=400,
-                        detail=(
-                            f"ZIP entry is a symlink: {info.filename!r} — rejected."
-                        ),
+                        detail=(f"ZIP entry is a symlink: {info.filename!r} — rejected."),
                     )
 
                 # ── Path guard (Zip Slip / path traversal) ──────────────────
