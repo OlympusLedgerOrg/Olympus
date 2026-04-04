@@ -1117,6 +1117,20 @@ class StorageLayer:
                     RustSparseMerkleTree.incremental_update(key, value_hash, siblings)
                 )
             except ImportError:
+                if os.getenv("OLYMPUS_REQUIRE_RUST", "").strip().lower() in {
+                    "1",
+                    "true",
+                    "yes",
+                    "on",
+                }:
+                    raise RuntimeError(
+                        "Rust SMT extension required by OLYMPUS_REQUIRE_RUST=1, "
+                        "but olympus_core could not be imported"
+                    ) from None
+                logger.warning(
+                    "olympus_core unavailable; falling back to O(N) _load_tree_state "
+                    "path in _append_record_inner"
+                )
                 # Fallback: full tree load (pre-Rust build)
                 tree = self._load_tree_state(cur)
                 if tree.get(key) is not None:
@@ -2502,12 +2516,14 @@ class StorageLayer:
             All production callers have been migrated to incremental paths.
             This method is retained only for offline diagnostic use and will
             be removed in a future release.
+            Do not use this in insert/update hot paths.
+            The only accepted O(N) carve-out is Poseidon root recomputation
+            when ZK proofs are enabled.
 
             Use purpose-specific helpers instead:
             - :meth:`_get_proof_path` for proof generation (O(256) nodes).
             - :meth:`get_current_root` for root retrieval (O(1) header read).
             - :meth:`replay_tree_incremental` for streaming audit replay.
-            writes natively (Phase 1).
 
         CD-HS-ST Design:
         ---------------
