@@ -489,17 +489,22 @@ def test_rotate_node_key_raises_on_unknown_node_id() -> None:
         )
 
 
-def test_rotate_node_key_raises_on_same_pubkey() -> None:
-    """rotate_node_key must reject a rotation to the same public key."""
+def test_rotate_node_key_updates_history_even_with_same_pubkey() -> None:
+    """rotate_node_key should update history even if rotating to the same key (idempotent)."""
     registry = _three_node_registry()
-    same_key = _test_signing_key(1).verify_key.encode()
+    # Get the current pubkey for olympus-node-1
+    node_1 = next(n for n in registry.nodes if n.node_id == "olympus-node-1")
+    same_key = node_1.pubkey
 
-    with pytest.raises(ValueError):
-        registry.rotate_node_key(
-            node_id="olympus-node-1",
-            new_pubkey=same_key,
-            rotated_at="2026-03-15T00:00:00Z",
-        )
+    new_registry = registry.rotate_node_key(
+        node_id="olympus-node-1",
+        new_pubkey=same_key,
+        rotated_at="2026-03-15T00:00:00Z",
+    )
+
+    # Verify key_history was updated
+    new_node_1 = next(n for n in new_registry.nodes if n.node_id == "olympus-node-1")
+    assert len(new_node_1.key_history) == len(node_1.key_history) + 1
 
 
 # =============================================================================
@@ -557,12 +562,13 @@ def test_resolve_canonical_fork_prefers_higher_signer_count() -> None:
         round_number=1,
     )
 
-    # header_a: 2 signers; header_b: 3 signers
+    # With 4 active nodes, quorum is 3; header_a: 3 signers; header_b: 4 signers
     cert_a = build_quorum_certificate(
         header_a,
         [
             sign_federated_header(header_a, "olympus-node-1", _test_signing_key(1), registry),
             sign_federated_header(header_a, "olympus-node-2", _test_signing_key(2), registry),
+            sign_federated_header(header_a, "olympus-node-3", _test_signing_key(3), registry),
         ],
         registry,
     )
@@ -572,6 +578,7 @@ def test_resolve_canonical_fork_prefers_higher_signer_count() -> None:
             sign_federated_header(header_b, "olympus-node-1", _test_signing_key(1), registry),
             sign_federated_header(header_b, "olympus-node-2", _test_signing_key(2), registry),
             sign_federated_header(header_b, "olympus-node-3", _test_signing_key(3), registry),
+            sign_federated_header(header_b, "olympus-node-4", _test_signing_key(4), registry),
         ],
         registry,
     )
