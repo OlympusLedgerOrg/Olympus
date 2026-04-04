@@ -212,7 +212,14 @@ impl RustSparseMerkleTree {
         let dict = PyDict::new(py);
         for (path, hash) in &state.nodes {
             // Convert Vec<u8> path → Python tuple of ints.
-            let elements: Vec<PyObject> = path.iter().map(|&b| b.into_pyobject(py).unwrap().into()).collect();
+            let elements: Vec<PyObject> = path
+                .iter()
+                .map(|&b| {
+                    // u8 → Python int is infallible; into_pyobject returns Result<_, Infallible>.
+                    let py_int = b.into_pyobject(py).expect("u8 conversion is infallible");
+                    py_int.into()
+                })
+                .collect();
             let key_tuple = PyTuple::new(py, &elements)?;
             dict.set_item(key_tuple, PyBytes::new(py, hash))?;
         }

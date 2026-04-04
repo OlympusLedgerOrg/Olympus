@@ -135,7 +135,7 @@ class TestSmtInterfaceContract:
         assert verify_nonexistence_proof(proof_absent)
 
     def test_size_property(self):
-        """Test size property (available on Rust-backed or via len(leaves))."""
+        """Test size: uses .size property when available, else len(leaves)."""
         tree = SparseMerkleTree()
         # size is a Rust getter; pure-Python class exposes it via len(leaves)
         _size = getattr(tree, "size", None)
