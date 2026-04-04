@@ -102,6 +102,7 @@ async def _read_upload_bounded(file: UploadFile, max_bytes: int, max_mb: int) ->
                 timeout=settings.upload_read_timeout_seconds,
             )
         except TimeoutError as exc:
+            await file.close()
             raise HTTPException(
                 status_code=408,
                 detail="Upload read timed out.",
@@ -123,9 +124,9 @@ async def _read_upload_bounded(file: UploadFile, max_bytes: int, max_mb: int) ->
 # ---------------------------------------------------------------------------
 
 
-# Allowlist pattern for identifier fields.  Permits alphanumeric chars plus the
-# small set of punctuation genuinely needed for shard/record/artifact IDs
-# (e.g. "watauga:2025:budget", "org/repo/v1.2.3-rc.1", "doc-001").
+# Allowlist pattern for identifier fields. Permits alphanumeric chars plus the
+# small set of punctuation needed for record/artifact IDs
+# (e.g. "org/repo/v1.2.3-rc.1", "doc-001").
 # Deliberately excludes control characters, null bytes, shell metacharacters
 # (\ * ? < > | ; ` $ ! &), and Unicode homoglyphs (pure ASCII allowlist).
 _SHARD_ID_PATTERN = r"^[a-zA-Z0-9_.:\-]+$"
@@ -819,6 +820,11 @@ def _value_hash_to_poseidon_field(value_hash: bytes) -> int:
     return int.from_bytes(value_hash, byteorder="big") % _BN128_FIELD_PRIME
 
 
+def _resolved_poseidon_root(persisted_root: str | None, fallback_root: str) -> str:
+    """Resolve persisted Poseidon root with a deterministic fallback."""
+    return persisted_root if persisted_root is not None else fallback_root
+
+
 def _build_poseidon_smt_for_storage_shard(
     storage: StorageLayer, shard_id: str, *, up_to_ts: datetime | str | None = None
 ) -> PoseidonSMT:
@@ -1099,9 +1105,10 @@ async def ingest_batch(
                             record_smt_key, _value_hash_to_poseidon_field(content_hash_bytes)
                         )
                         poseidon_root = str(poseidon_smt.get_root())
+                        persisted_poseidon_root = poseidon_root
                         canonicalization_with_poseidon = {
                             **canonicalization,
-                            "poseidon_root": poseidon_root,
+                            "poseidon_root": persisted_poseidon_root,
                         }
                         root_hash, proof, _header, _signature, ledger_entry = storage.append_record(
                             shard_id=record.shard_id,
@@ -1111,7 +1118,13 @@ async def ingest_batch(
                             value_hash=content_hash_bytes,
                             signing_key=_signing_key,
                             canonicalization=canonicalization_with_poseidon,
-                            poseidon_root=int(poseidon_root).to_bytes(32, byteorder="big"),
+                            poseidon_root=int(persisted_poseidon_root).to_bytes(
+                                32, byteorder="big"
+                            ),
+                        )
+                        persisted_poseidon_root = _resolved_poseidon_root(
+                            ledger_entry.poseidon_root,
+                            persisted_poseidon_root,
                         )
 
                         # Store mapping from proof_id to record coordinates for later retrieval
@@ -1130,12 +1143,12 @@ async def ingest_batch(
                             "timestamp": ledger_entry.ts,
                             "canonicalization": {
                                 **canonicalization,
-                                "poseidon_root": ledger_entry.poseidon_root or poseidon_root,
+                                "poseidon_root": persisted_poseidon_root,
                             },
                             "persisted": True,
                             "batch_id": batch_id,
                             "batch_index": len(persist_queue),
-                            "poseidon_root": ledger_entry.poseidon_root or poseidon_root,
+                            "poseidon_root": persisted_poseidon_root,
                         }
                         _cache_ingestion_record(ingestion_entry)
                         persist_queue.append(ingestion_entry)
@@ -1593,12 +1606,13 @@ async def commit_artifact(
         poseidon_smt = _get_or_build_poseidon_smt(shard_id)
         poseidon_smt.update(artifact_key, _value_hash_to_poseidon_field(artifact_hash_bytes))
         poseidon_root_normalized = str(poseidon_smt.get_root())
+        persisted_poseidon_root = _resolved_poseidon_root(None, poseidon_root_normalized)
         canonicalization = canonicalization_provenance(
             "application/octet-stream", CANONICAL_VERSION
         )
         # Poseidon root is always computed server-side (HIGH-02 security fix)
         canonicalization = dict(canonicalization)
-        canonicalization["poseidon_root"] = poseidon_root_normalized
+        canonicalization["poseidon_root"] = persisted_poseidon_root
         if request.source_url:
             canonicalization["source_url"] = _normalize_source_url(request.source_url)
         if request.raw_pdf_hash:
@@ -1609,7 +1623,7 @@ async def commit_artifact(
             try:
                 # Convert the server-computed Poseidon root decimal string to bytes for the
                 # storage layer, which uses raw 32-byte big-endian encoding.
-                poseidon_root_bytes = int(poseidon_root_normalized).to_bytes(32, byteorder="big")
+                poseidon_root_bytes = int(persisted_poseidon_root).to_bytes(32, byteorder="big")
 
                 root_hash, proof, _header, _signature, ledger_entry = storage.append_record(
                     shard_id=shard_id,
@@ -1620,6 +1634,10 @@ async def commit_artifact(
                     signing_key=_signing_key,
                     canonicalization=canonicalization,
                     poseidon_root=poseidon_root_bytes,
+                )
+                persisted_poseidon_root = _resolved_poseidon_root(
+                    ledger_entry.poseidon_root,
+                    persisted_poseidon_root,
                 )
 
                 # Store mapping from proof_id to record coordinates
@@ -1637,12 +1655,12 @@ async def commit_artifact(
                     "timestamp": ledger_entry.ts,
                     "canonicalization": {
                         **canonicalization,
-                        "poseidon_root": ledger_entry.poseidon_root or poseidon_root_normalized,
+                        "poseidon_root": persisted_poseidon_root,
                     },
                     "persisted": True,
                     "batch_id": batch_id,
                     "batch_index": 0,
-                    "poseidon_root": ledger_entry.poseidon_root or poseidon_root_normalized,
+                    "poseidon_root": persisted_poseidon_root,
                 }
                 _ingestion_store[proof_id] = ingestion_entry
                 _content_index[artifact_hash_hex] = proof_id
@@ -1666,7 +1684,7 @@ async def commit_artifact(
                     id=request.id,
                     committed_at=ledger_entry.ts,
                     ledger_entry_hash=ledger_entry.entry_hash,
-                    poseidon_root=ledger_entry.poseidon_root or poseidon_root_normalized,
+                    poseidon_root=persisted_poseidon_root,
                 )
             except ValueError as e:
                 error_msg = str(e)
@@ -1685,7 +1703,7 @@ async def commit_artifact(
                         id=existing.get("record_id", request.id),
                         committed_at=existing.get("timestamp", current_timestamp()),
                         ledger_entry_hash=existing.get("ledger_entry_hash", ""),
-                        poseidon_root=existing.get("poseidon_root", poseidon_root_normalized),
+                        poseidon_root=existing.get("poseidon_root", persisted_poseidon_root),
                     )
                 else:
                     logger.exception(

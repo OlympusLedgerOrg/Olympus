@@ -85,16 +85,16 @@ async def _read_upload_bounded(file: UploadFile, max_bytes: int, max_mb: int) ->
     settings = get_settings()
     chunks = bytearray()
     total = 0
-    max_chunk = min(UPLOAD_CHUNK_SIZE, max_bytes)
     while True:
         remaining = max_bytes - total
-        read_size = min(max_chunk, remaining + 1)
+        read_size = min(UPLOAD_CHUNK_SIZE, max_bytes, remaining + 1)
         try:
             chunk = await asyncio.wait_for(
                 file.read(read_size),
                 timeout=settings.upload_read_timeout_seconds,
             )
         except TimeoutError as exc:
+            await file.close()
             raise HTTPException(
                 status_code=408,
                 detail="Upload read timed out.",

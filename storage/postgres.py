@@ -41,7 +41,6 @@ from datetime import datetime, timezone
 from threading import Lock
 from typing import Any
 
-import blake3
 import nacl.exceptions
 import nacl.signing
 import psycopg
@@ -65,30 +64,16 @@ from protocol.ssmf import (
     _key_to_path_bits,
     diff_sparse_merkle_trees,
 )
+from storage.gates import derive_node_rehash_gate
 
 
 logger = logging.getLogger(__name__)
 
 
-def _derive_node_rehash_gate() -> str:
-    """Derive the session gate value for SMT trigger-protected writes.
-
-    Mixes a deployment secret when available so the effective gate value is
-    not derivable from source code alone.
-    """
-    hasher = blake3.blake3()
-    hasher.update(b"OLY:NODE-REHASH-GATE:V1")
-    gate_secret = os.getenv("OLYMPUS_NODE_REHASH_GATE_SECRET", "")
-    if gate_secret:
-        hasher.update(b"|")
-        hasher.update(gate_secret.encode("utf-8"))
-    return hasher.hexdigest()
-
-
 # ADR-0001: BLAKE3 domain-separated gate value for the smt_nodes rehash
 # trigger.  _persist_tree_nodes sets this as a session variable before
 # running the upsert; the trigger function checks for it.
-_NODE_REHASH_GATE: str = _derive_node_rehash_gate()
+_NODE_REHASH_GATE: str = derive_node_rehash_gate()
 
 
 def _compute_poseidon_root_from_leaves(leaves: Mapping[bytes, bytes]) -> bytes:
@@ -1285,8 +1270,6 @@ class StorageLayer:
             if poseidon_root is not None:
                 if len(poseidon_root) != 32:
                     raise ValueError(f"poseidon_root must be 32 bytes, got {len(poseidon_root)}")
-                poseidon_root_decimal = str(int.from_bytes(poseidon_root, byteorder="big"))
-                ledger_payload["poseidon_root"] = poseidon_root_decimal
 
             # Compute entry hash using canonical JSON
             from protocol.hashes import (
@@ -1317,9 +1300,6 @@ class StorageLayer:
                 # Legacy format: hash of canonical JSON payload
                 canonical_json = canonical_json_encode(ledger_payload)
                 entry_hash = blake3_hash([LEDGER_PREFIX, canonical_json.encode("utf-8")])
-                verified_entry_hash = blake3_hash([LEDGER_PREFIX, canonical_json.encode("utf-8")])
-                if verified_entry_hash != entry_hash:
-                    raise RuntimeError("Ledger entry hash verification failed")
 
             # Insert ledger entry
             cur.execute(
@@ -1337,6 +1317,45 @@ class StorageLayer:
                     ts,
                 ),
             )
+
+            # Re-verify persisted ledger entry hash from stored payload.
+            cur.execute(
+                """
+                    SELECT entry_hash, payload
+                    FROM ledger_entries
+                    WHERE shard_id = %s AND seq = %s
+                    LIMIT 1
+                """,
+                (shard_id, ledger_seq),
+            )
+            persisted_entry_row = cur.fetchone()
+            if persisted_entry_row is None:
+                raise RuntimeError("Failed to load persisted ledger entry for verification")
+
+            persisted_entry_hash = bytes(persisted_entry_row["entry_hash"])
+            persisted_payload = persisted_entry_row["payload"]
+            if isinstance(persisted_payload, str):
+                persisted_payload = json.loads(persisted_payload)
+
+            if poseidon_root is not None:
+                parsed_b3_root, parsed_poseidon_root = parse_dual_root_commitment(
+                    persisted_entry_hash
+                )
+                if parsed_b3_root != root_hash:
+                    raise RuntimeError("Persisted dual-root commitment BLAKE3 root mismatch")
+                if poseidon_root_decimal is None:
+                    raise RuntimeError("Persisted dual-root commitment missing poseidon root")
+                if int.from_bytes(parsed_poseidon_root, byteorder="big") != int(
+                    poseidon_root_decimal
+                ):
+                    raise RuntimeError("Persisted dual-root commitment Poseidon root mismatch")
+            else:
+                persisted_canonical = canonical_json_encode(persisted_payload)
+                expected_persisted_hash = blake3_hash(
+                    [LEDGER_PREFIX, persisted_canonical.encode("utf-8")]
+                )
+                if persisted_entry_hash != expected_persisted_hash:
+                    raise RuntimeError("Persisted ledger entry hash verification failed")
 
             # Create LedgerEntry object
             ledger_entry = LedgerEntry(
@@ -2375,6 +2394,8 @@ class StorageLayer:
             SparseMerkleTree with all leaves loaded (global SMT)
         """
         tree = SparseMerkleTree()
+        # Reuse flush batch size as a conservative pagination window to avoid
+        # loading unbounded historical replay rows into memory.
         batch_size = self.DEFAULT_FLUSH_BATCH_SIZE
         offset = 0
 
