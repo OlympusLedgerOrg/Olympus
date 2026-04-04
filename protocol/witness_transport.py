@@ -9,9 +9,12 @@ these to monitor multiple nodes and detect split-view attacks.
 from __future__ import annotations
 
 import asyncio
+import ipaddress
+import os
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from typing import Any, TypeVar
+from urllib.parse import urlparse
 
 import httpx
 
@@ -29,6 +32,56 @@ class NodeEndpoint:
     node_id: str
     base_url: str
     timeout_seconds: float = 10.0  # Default timeout in seconds.
+
+    def __post_init__(self) -> None:
+        _env = os.environ.get("OLYMPUS_ENV", "production")
+        _validate_endpoint_url(
+            self.base_url,
+            allow_http=(_env == "development"),
+        )
+
+
+def _validate_endpoint_url(url: str, *, allow_http: bool = False) -> None:
+    """Validate a witness endpoint URL against SSRF risks.
+
+    Args:
+        url: The base URL to validate.
+        allow_http: If True, permit http:// in addition to https://.
+                    Only set True in development/test contexts.
+
+    Raises:
+        ValueError: If the URL scheme is not permitted or the host
+                    resolves to a private/loopback address.
+    """
+    parsed = urlparse(url)
+
+    permitted_schemes = {"https", "http"} if allow_http else {"https"}
+    if parsed.scheme not in permitted_schemes:
+        raise ValueError(
+            f"Witness endpoint URL scheme {parsed.scheme!r} is not permitted. "
+            f"Only {sorted(permitted_schemes)} are allowed."
+        )
+
+    hostname = parsed.hostname
+    if not hostname:
+        raise ValueError("Witness endpoint URL must include a hostname.")
+
+    # Block private and loopback ranges to prevent SSRF.
+    # ip_address() raises ValueError for DNS names (not an IP literal) — ignore those.
+    # Only raise when the hostname IS a valid IP that falls in a restricted range.
+    try:
+        addr = ipaddress.ip_address(hostname)
+    except ValueError:
+        return  # DNS hostname — not an IP literal, no range check needed
+
+    if addr.is_private or addr.is_loopback or addr.is_link_local:
+        _env = os.environ.get("OLYMPUS_ENV", "production")
+        if _env != "development":
+            raise ValueError(
+                f"Witness endpoint hostname {hostname!r} resolves to a "
+                f"private/loopback address. This is not permitted in "
+                f"production to prevent SSRF attacks."
+            )
 
 
 class WitnessHTTPTransport:

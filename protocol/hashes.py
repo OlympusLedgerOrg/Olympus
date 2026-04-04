@@ -24,7 +24,7 @@ from .canonical_json import canonical_json_bytes
 # fall back to pure-Python implementations below when it is not present.
 # ---------------------------------------------------------------------------
 try:
-    from olympus_core.crypto import (  # type: ignore[import-not-found]
+    from olympus_core.crypto import (
         blake3_hash as _rust_blake3_hash,
         global_key as _rust_global_key,
         leaf_hash as _rust_leaf_hash,
@@ -32,7 +32,7 @@ try:
         record_key as _rust_record_key,
     )
 
-    _RUST_CRYPTO_AVAILABLE = True
+    _RUST_CRYPTO_AVAILABLE = True  # pragma: no cover — requires maturin build
 except ImportError:
     _RUST_CRYPTO_AVAILABLE = False
 
@@ -83,7 +83,7 @@ def blake3_hash(parts: list[bytes]) -> bytes:
     Returns:
         32-byte BLAKE3 hash
     """
-    if _RUST_CRYPTO_AVAILABLE:
+    if _RUST_CRYPTO_AVAILABLE:  # pragma: no cover — Rust FFI path
         result: bytes = _rust_blake3_hash(parts)
         return result
     return blake3.blake3(b"".join(parts)).digest()
@@ -92,7 +92,7 @@ def blake3_hash(parts: list[bytes]) -> bytes:
 def _length_prefixed_bytes(field_name: str, value: bytes) -> bytes:
     """Encode variable-length bytes with a 4-byte big-endian length prefix."""
     if len(value) > _MAX_LENGTH_PREFIXED_FIELD_SIZE:
-        raise ValueError(f"{field_name} exceeds maximum length")
+        raise ValueError(f"{field_name} exceeds maximum length")  # pragma: no cover — 4 GB alloc
     return len(value).to_bytes(4, "big") + value
 
 
@@ -113,7 +113,7 @@ def record_key(record_type: str, record_id: str, version: int) -> bytes:
     if version > 0xFFFFFFFFFFFFFFFF:
         raise ValueError("version exceeds maximum supported value")
 
-    if _RUST_CRYPTO_AVAILABLE:
+    if _RUST_CRYPTO_AVAILABLE:  # pragma: no cover — Rust FFI path
         result: bytes = _rust_record_key(record_type, record_id, version)
         return result
 
@@ -132,7 +132,7 @@ def record_key(record_type: str, record_id: str, version: int) -> bytes:
 # needed; length prefixes commit the shard / record field boundaries explicitly.
 def global_key(shard_id: str, record_key_bytes: bytes) -> bytes:
     """
-    Generate a global SMT key for CDHSSMF (Constant-Depth Hierarchical Sparse Sharded Merkle Forest).
+    Generate a global SMT key for CD-HS-ST (Constant-Depth Hierarchical Sparse Tree).
 
     This function implements hierarchical key derivation that encodes shard identity into the
     global SMT key space, enabling a single SMT to replace separate per-shard SMTs and forest SMTs.
@@ -153,7 +153,7 @@ def global_key(shard_id: str, record_key_bytes: bytes) -> bytes:
         >>> rec_key = record_key("document", "doc123", 1)
         >>> g_key = global_key("watauga:2025:budget", rec_key)
     """
-    if _RUST_CRYPTO_AVAILABLE:
+    if _RUST_CRYPTO_AVAILABLE:  # pragma: no cover — Rust FFI path
         result: bytes = _rust_global_key(shard_id, record_key_bytes)
         return result
 
@@ -170,13 +170,14 @@ def global_key(shard_id: str, record_key_bytes: bytes) -> bytes:
         key_material,
         derive_key_context=_GLOBAL_SMT_KEY_CONTEXT,
     ).digest()
-    assert len(result) == 32
+    if len(result) != 32:  # pragma: no cover — BLAKE3 always produces 32 bytes
+        raise ValueError(f"BLAKE3 derive_key returned {len(result)} bytes, expected 32")
     return result
 
 
 def leaf_hash(key: bytes, value_hash: bytes) -> bytes:
     """Compute hash of a sparse-tree leaf with domain separation."""
-    if _RUST_CRYPTO_AVAILABLE:
+    if _RUST_CRYPTO_AVAILABLE:  # pragma: no cover — Rust FFI path
         result: bytes = _rust_leaf_hash(key, value_hash)
         return result
     return blake3_hash([LEAF_PREFIX, _SEP, key, _SEP, value_hash])
@@ -184,7 +185,7 @@ def leaf_hash(key: bytes, value_hash: bytes) -> bytes:
 
 def node_hash(left: bytes, right: bytes) -> bytes:
     """Compute hash of an internal Merkle node."""
-    if _RUST_CRYPTO_AVAILABLE:
+    if _RUST_CRYPTO_AVAILABLE:  # pragma: no cover — Rust FFI path
         result: bytes = _rust_node_hash(left, right)
         return result
     return blake3_hash([NODE_PREFIX, _SEP, left, _SEP, right])
@@ -382,7 +383,9 @@ def parse_dual_root_commitment(commitment: bytes) -> tuple[bytes, bytes]:
     idx += poseidon_len
     binding_hash = commitment[idx:]
 
-    if blake3_len != len(blake3_root) or poseidon_len != len(poseidon_root):
+    if blake3_len != len(blake3_root) or poseidon_len != len(
+        poseidon_root
+    ):  # pragma: no cover — guarded by overall length check
         raise ValueError("Dual root commitment length metadata is invalid")
     if blake3_len != 32 or poseidon_len != 32 or len(binding_hash) != 32:
         raise ValueError("Dual root commitment length metadata is invalid")
@@ -472,9 +475,14 @@ def dataset_key(
     Returns:
         64-character hex-encoded BLAKE3 hash.
     """
-    key_data = (
-        f"dataset_artifact:{canonical_namespace}:{source_uri}:{dataset_name}:{committer_pubkey}"
-    ).encode()
+    key_data = b"".join(
+        [
+            _length_prefixed_bytes("canonical_namespace", canonical_namespace.encode("utf-8")),
+            _length_prefixed_bytes("source_uri", source_uri.encode("utf-8")),
+            _length_prefixed_bytes("dataset_name", dataset_name.encode("utf-8")),
+            _length_prefixed_bytes("committer_pubkey", committer_pubkey.encode("utf-8")),
+        ]
+    )
     return blake3_hash([DATASET_PREFIX, key_data]).hex()
 
 
@@ -499,5 +507,12 @@ def compute_dataset_commit_id(
     Returns:
         64-character hex-encoded BLAKE3 hash.
     """
-    payload = f"{dataset_id}:{parent_commit_id}:{manifest_hash}:{committer_pubkey}"
-    return blake3_hash([DATASET_COMMIT_PREFIX, payload.encode()]).hex()
+    key_data = b"".join(
+        [
+            _length_prefixed_bytes("dataset_id", dataset_id.encode("utf-8")),
+            _length_prefixed_bytes("parent_commit_id", parent_commit_id.encode("utf-8")),
+            _length_prefixed_bytes("manifest_hash", manifest_hash.encode("utf-8")),
+            _length_prefixed_bytes("committer_pubkey", committer_pubkey.encode("utf-8")),
+        ]
+    )
+    return blake3_hash([DATASET_COMMIT_PREFIX, key_data]).hex()

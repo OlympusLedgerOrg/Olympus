@@ -16,23 +16,34 @@ All write operations are append-only and maintain ledger chain integrity.
 from __future__ import annotations
 
 import asyncio
-import hmac as _hmac_module  # used ONLY for hmac.compare_digest (timing-safe comparison)
 import json
 import logging
 import os
 import uuid
-import warnings
 from collections import OrderedDict
-from dataclasses import dataclass
-from datetime import UTC, datetime
-from threading import Lock
+from datetime import datetime, timezone
 from time import monotonic
 from typing import TYPE_CHECKING, Any
+from urllib.parse import urlparse
 
 import nacl.signing
-from fastapi import APIRouter, HTTPException, Request
-from pydantic import BaseModel, Field
+from fastapi import APIRouter, File, HTTPException, Path, Request, UploadFile
+from pydantic import BaseModel, Field, field_validator
 
+from api.auth import (
+    RateLimit,
+    RequireCommitScope,
+    RequireIngestScope,
+    RequireVerifyScope,
+    _get_backend as _get_rate_limit_backend,
+    _get_client_ip,
+    _register_api_key_for_tests as _auth_register_api_key_for_tests,
+    _reset_auth_state_for_tests,
+    _reset_rate_limit_backend_for_tests,
+    _TokenBucket as _AuthTokenBucket,
+)
+from api.config import get_settings
+from api.services.upload_validation import validate_file_magic
 from protocol.canonical import CANONICAL_VERSION, canonicalize_document, document_to_bytes
 from protocol.canonicalizer import canonicalization_provenance
 from protocol.hashes import hash_bytes, leaf_hash, record_key
@@ -46,7 +57,6 @@ from protocol.merkle import (
     merkle_leaf_hash,
     verify_proof,
 )
-from protocol.redaction_ledger import poseidon_root_to_bytes
 from protocol.ssmf import ExistenceProof
 from protocol.telemetry import INGEST_TOTAL, LEDGER_HEIGHT, timed_operation
 from protocol.timestamps import current_timestamp
@@ -61,20 +71,201 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/ingest", tags=["ingest"])
 
+# Maximum number of bytes read per iteration when streaming an upload.
+_UPLOAD_CHUNK_SIZE = 65_536
+
+
+async def _read_upload_bounded(file: UploadFile, max_bytes: int, max_mb: int) -> bytes:
+    """Read *file* in fixed-size chunks, aborting if the total exceeds *max_bytes*.
+
+    Args:
+        file: FastAPI UploadFile to read.
+        max_bytes: Hard upper bound on accepted payload size in bytes.
+        max_mb: Human-readable equivalent (for error messages).
+
+    Returns:
+        The full file contents as a single :class:`bytes` object.
+
+    Raises:
+        HTTPException 413: If the payload exceeds *max_bytes* before EOF.
+    """
+    settings = get_settings()
+    chunks = bytearray()
+    total = 0
+    max_chunk = min(_UPLOAD_CHUNK_SIZE, max_bytes)
+    while True:
+        remaining = max_bytes - total
+        read_size = min(max_chunk, remaining + 1)
+        try:
+            chunk = await asyncio.wait_for(
+                file.read(read_size),
+                timeout=settings.upload_read_timeout_seconds,
+            )
+        except TimeoutError as exc:
+            await file.close()
+            raise HTTPException(
+                status_code=408,
+                detail="Upload read timed out.",
+            ) from exc
+        if not chunk:
+            break
+        total += len(chunk)
+        if total > max_bytes:
+            raise HTTPException(
+                status_code=413,
+                detail=f"File exceeds maximum size of {max_mb} MB.",
+            )
+        chunks.extend(chunk)
+    return bytes(chunks)
+
 
 # ---------------------------------------------------------------------------
 # Request / response models
 # ---------------------------------------------------------------------------
 
 
+# Allowlist pattern for identifier fields. Permits alphanumeric chars plus the
+# small set of punctuation needed for record/artifact IDs
+# (e.g. "org/repo/v1.2.3-rc.1", "doc-001").
+# Deliberately excludes control characters, null bytes, shell metacharacters
+# (\ * ? < > | ; ` $ ! &), and Unicode homoglyphs (pure ASCII allowlist).
+_SHARD_ID_PATTERN = r"^[a-zA-Z0-9_.:\-]+$"
+_IDENTIFIER_PATTERN = r"^[a-zA-Z0-9_./:@+\-]+$"
+_IDENTIFIER_MAX_LEN = 256
+# Artifact IDs (e.g. 'org/repo/v1.2.3-rc.1+build.42') are typically longer than shard/record IDs.
+_ARTIFACT_ID_MAX_LEN = 512
+
+# H-3 Fix: Content validation limits (matching canonicalizer limits).
+# These are enforced at Pydantic deserialization time, before the potentially
+# expensive canonicalization step, to prevent DoS via deeply nested JSON.
+_MAX_CONTENT_DEPTH = 128  # Maximum nesting depth for content JSON
+_MAX_CONTENT_SIZE_ESTIMATE = 16 * 1024 * 1024  # 16 MiB rough size limit per record content
+
+
+def _check_json_depth(obj: Any, current_depth: int = 0) -> int:
+    """Check the nesting depth of a JSON-like object.
+
+    Uses an iterative approach (explicit stack) to avoid Python recursion
+    limits on adversarial input (L-4 hardening).
+
+    Args:
+        obj: The object to check.
+        current_depth: Initial depth offset (normally 0).
+
+    Returns:
+        Maximum depth found in the object.
+
+    Raises:
+        ValueError: If depth exceeds _MAX_CONTENT_DEPTH.
+    """
+    max_depth = current_depth
+    # Explicit stack of (value, depth) pairs replaces recursion
+    stack: list[tuple[Any, int]] = [(obj, current_depth)]
+
+    while stack:
+        current, depth = stack.pop()
+
+        if depth >= _MAX_CONTENT_DEPTH:
+            raise ValueError(f"Content nesting depth exceeds limit of {_MAX_CONTENT_DEPTH}")
+
+        if depth > max_depth:
+            max_depth = depth
+
+        if isinstance(current, dict):
+            for value in current.values():
+                stack.append((value, depth + 1))
+        elif isinstance(current, list):
+            for item in current:
+                stack.append((item, depth + 1))
+
+    return max_depth
+
+
+def _estimate_json_size(obj: Any) -> int:
+    """Estimate the serialized size of a JSON-like object.
+
+    This is a rough estimate based on traversing the object. It's not exact
+    but is good enough to catch obvious DoS attempts before full serialization.
+
+    Args:
+        obj: The object to estimate size for.
+
+    Returns:
+        Estimated size in bytes.
+    """
+    if obj is None:
+        return 4  # "null"
+    elif isinstance(obj, bool):
+        return 5  # "true" or "false"
+    elif isinstance(obj, (int, float)):
+        return len(str(obj))
+    elif isinstance(obj, str):
+        # Use UTF-8 encoding for accurate size of multi-byte characters
+        return len(obj.encode("utf-8")) + 2  # quotes
+    elif isinstance(obj, dict):
+        # keys + values + colons + commas + braces
+        size = 2  # {}
+        for key, value in obj.items():
+            # Keys are also UTF-8 encoded in JSON
+            size += len(str(key).encode("utf-8")) + 2 + 1 + _estimate_json_size(value) + 1
+        return size
+    elif isinstance(obj, list):
+        # items + commas + brackets
+        size = 2  # []
+        for item in obj:
+            size += _estimate_json_size(item) + 1  # item,
+        return size
+    else:
+        return len(str(obj))
+
+
 class RecordInput(BaseModel):
     """A single record to ingest."""
 
-    shard_id: str = Field(..., description="Target shard identifier")
-    record_type: str = Field(..., description="Record type (e.g. 'document')")
-    record_id: str = Field(..., description="Unique record identifier")
+    shard_id: str = Field(
+        ...,
+        description="Target shard identifier",
+        max_length=_IDENTIFIER_MAX_LEN,
+        pattern=_SHARD_ID_PATTERN,
+    )
+    record_type: str = Field(
+        ...,
+        description="Record type (e.g. 'document')",
+        max_length=_IDENTIFIER_MAX_LEN,
+        pattern=_IDENTIFIER_PATTERN,
+    )
+    record_id: str = Field(
+        ...,
+        description="Unique record identifier",
+        max_length=_IDENTIFIER_MAX_LEN,
+        pattern=_IDENTIFIER_PATTERN,
+    )
     version: int = Field(..., ge=1, description="Record version (≥ 1)")
     content: dict[str, Any] = Field(..., description="Record content (JSON document)")
+
+    @field_validator("content")
+    @classmethod
+    def validate_content_limits(cls, v: dict[str, Any]) -> dict[str, Any]:
+        """H-3 Fix: Validate content depth and size at Pydantic layer.
+
+        This prevents DoS attacks via deeply nested or very large JSON content
+        before the expensive canonicalization step runs.
+        """
+        # Check depth
+        try:
+            _check_json_depth(v)
+        except ValueError as exc:
+            raise ValueError(str(exc)) from exc
+
+        # Estimate size
+        estimated_size = _estimate_json_size(v)
+        if estimated_size > _MAX_CONTENT_SIZE_ESTIMATE:
+            raise ValueError(
+                f"Content size estimate ({estimated_size} bytes) exceeds limit "
+                f"of {_MAX_CONTENT_SIZE_ESTIMATE} bytes per record"
+            )
+
+        return v
 
 
 class BatchIngestionRequest(BaseModel):
@@ -146,9 +337,6 @@ class ProofVerificationRequest(BaseModel):
     content_hash: str = Field(..., description="Hex-encoded BLAKE3 hash committed by Olympus")
     merkle_root: str = Field(..., description="Hex-encoded Merkle root anchoring the content hash")
     merkle_proof: dict[str, Any] = Field(..., description="Serialized Merkle proof bundle")
-    poseidon_root: str | None = Field(
-        None, description="Optional Poseidon root bound to the same commitment"
-    )
 
 
 class ProofVerificationResponse(BaseModel):
@@ -163,11 +351,23 @@ class ProofVerificationResponse(BaseModel):
     poseidon_root: str | None = None
 
 
+# DEPRECATED: submit_proof_bundle no longer accepts a JSON body.
+# Retained for migration period. Will be removed in a future release.
 class ProofSubmissionRequest(ProofVerificationRequest):
     """Proof bundle payload that can be submitted to the API for later retrieval."""
 
-    record_id: str = Field(..., description="Record identifier associated with the proof bundle")
-    shard_id: str = Field(..., description="Shard identifier associated with the proof bundle")
+    record_id: str = Field(
+        ...,
+        description="Record identifier associated with the proof bundle",
+        max_length=_IDENTIFIER_MAX_LEN,
+        pattern=_IDENTIFIER_PATTERN,
+    )
+    shard_id: str = Field(
+        ...,
+        description="Shard identifier associated with the proof bundle",
+        max_length=_IDENTIFIER_MAX_LEN,
+        pattern=_SHARD_ID_PATTERN,
+    )
     ledger_entry_hash: str = Field(..., description="Ledger entry anchoring the proof bundle")
     timestamp: str = Field(..., description="ISO 8601 timestamp associated with the bundle")
     canonicalization: dict[str, Any] = Field(
@@ -205,17 +405,8 @@ _content_index: OrderedDict[str, str] = OrderedDict()
 # Shared ledger for write path (legacy, unused when storage is enabled)
 _write_ledger = Ledger()
 
-# API key hash -> key record
-_api_key_store: dict[str, ApiKeyRecord] = {}
-_api_keys_loaded = False
-
-# L4-E: Trusted proxy IPs for X-Forwarded-For parsing
-# Only parse X-Forwarded-For header when the direct peer is a known trusted proxy.
-# This prevents IP spoofing attacks where a client sets a fake X-Forwarded-For header.
-# Configure via OLYMPUS_TRUSTED_PROXY_IPS environment variable (comma-separated).
-TRUSTED_PROXY_IPS: frozenset[str] = frozenset(
-    ip.strip() for ip in os.environ.get("OLYMPUS_TRUSTED_PROXY_IPS", "").split(",") if ip.strip()
-)
+# API key store and loaded flag have been removed - authentication is now unified
+# through api.auth module. The key store is maintained by api.auth._key_store.
 
 
 def _dev_signing_key_enabled() -> bool:
@@ -228,6 +419,14 @@ def _dev_signing_key_enabled() -> bool:
     }
 
 
+_EPHEMERAL_KEY_WITH_DB_ERROR = (
+    "OLYMPUS_DEV_SIGNING_KEY=1 is set but DATABASE_URL is also configured. "
+    "Ephemeral signing keys cannot be used with a persistent database — all signed "
+    "shard headers would become permanently unverifiable after restart. "
+    "Either set OLYMPUS_INGEST_SIGNING_KEY to a stable key, or unset DATABASE_URL "
+    "to use in-memory mode only."
+)
+
 # Hard fail when persistence is configured without a signing key
 if os.environ.get("DATABASE_URL") and not os.environ.get("OLYMPUS_INGEST_SIGNING_KEY"):
     if not _dev_signing_key_enabled():
@@ -235,10 +434,7 @@ if os.environ.get("DATABASE_URL") and not os.environ.get("OLYMPUS_INGEST_SIGNING
             "DATABASE_URL is set but OLYMPUS_INGEST_SIGNING_KEY is missing - "
             "ingest persistence cannot start without a signing key"
         )
-    logger.warning(
-        "DATABASE_URL is set but OLYMPUS_INGEST_SIGNING_KEY is missing - "
-        "using a dev-generated signing key (OLYMPUS_DEV_SIGNING_KEY enabled)"
-    )
+    raise RuntimeError(_EPHEMERAL_KEY_WITH_DB_ERROR)
 
 
 def _get_storage() -> StorageLayer | None:
@@ -273,14 +469,7 @@ def _get_storage() -> StorageLayer | None:
                 "refusing to start"
             )
             raise RuntimeError("OLYMPUS_INGEST_SIGNING_KEY is required when DATABASE_URL is set")
-        logger.critical(
-            "*** DEV SIGNING KEY IN USE *** "
-            "OLYMPUS_INGEST_SIGNING_KEY is missing - using a dev-generated signing key "
-            "(OLYMPUS_DEV_SIGNING_KEY enabled). "
-            "All previously signed shard headers will become unverifiable after restart. "
-            "Do NOT use this in production."
-        )
-        _signing_key = nacl.signing.SigningKey.generate()
+        raise RuntimeError(_EPHEMERAL_KEY_WITH_DB_ERROR)
 
     try:
         from storage.postgres import StorageLayer
@@ -369,36 +558,14 @@ def _fetch_by_content_hash(content_hash_hex: str) -> dict[str, Any] | None:
     return record
 
 
-@dataclass
-class ApiKeyRecord:
-    """Hashed API key record with scoped permissions and expiry."""
-
-    key_id: str
-    key_hash: str
-    scopes: set[str]
-    expires_at: datetime
-
-
-@dataclass
-class TokenBucket:
-    """Simple token-bucket rate limiter state."""
-
-    capacity: float
-    refill_rate_per_second: float
-    tokens: float
-    last_refill_ts: float
-
-    def consume(self, tokens: float = 1.0) -> bool:
-        """Consume tokens if available."""
-        now = monotonic()
-        elapsed = max(0.0, now - self.last_refill_ts)
-        self.tokens = min(self.capacity, self.tokens + elapsed * self.refill_rate_per_second)
-        self.last_refill_ts = now
-        if self.tokens < tokens:
-            return False
-        self.tokens -= tokens
-        return True
-
+# ---------------------------------------------------------------------------
+# Rate-limit policy (action → capacity, refill_rate_per_second)
+#
+# H-3 Fix: The bucket *storage* is now delegated to the shared auth backend
+# (api.auth._get_backend), eliminating the dual-system vulnerability.  Only
+# the per-action policy table lives here; the actual TokenBucket instances
+# are managed by the single MemoryRateLimitBackend (or future Redis backend).
+# ---------------------------------------------------------------------------
 
 _rate_limit_policy: dict[str, tuple[float, float]] = {
     "ingest": (60.0, 1.0),
@@ -412,34 +579,6 @@ _RATE_LIMIT_LRU_CAP = 10_000
 # Maximum number of entries in ingestion caches to prevent OOM under sustained load
 _INGESTION_CACHE_LRU_CAP = 50_000
 
-# Use OrderedDict to implement LRU eviction when cap is reached
-_rate_limit_key_buckets: dict[str, OrderedDict[str, TokenBucket]] = {
-    "ingest": OrderedDict(),
-    "commit": OrderedDict(),
-    "verify": OrderedDict(),
-}
-_rate_limit_ip_buckets: dict[str, OrderedDict[str, TokenBucket]] = {
-    "ingest": OrderedDict(),
-    "commit": OrderedDict(),
-    "verify": OrderedDict(),
-}
-
-# L5-C: Thread lock for rate-limit bucket access to prevent race conditions
-# in concurrent request handling (identified in red team security audit).
-_rate_limit_lock = Lock()
-
-# fix-07: Warn operators that rate limiting is in-process only.  In a
-# multi-process or multi-node deployment each worker maintains its own
-# independent token buckets, so the effective limits are multiplied by the
-# number of workers.  A distributed backend (e.g. Redis) is needed to
-# enforce consistent per-key / per-IP limits across processes.
-warnings.warn(
-    "Rate limiting is in-process only. In multi-worker/multi-node deployments "
-    "effective limits are multiplied by the number of workers. Consider a "
-    "distributed rate-limit backend (e.g. Redis) for production.",
-    stacklevel=1,
-)
-
 
 def _parse_timestamp(raw: str) -> datetime:
     """Parse ISO-8601 timestamp with optional Z suffix."""
@@ -449,58 +588,7 @@ def _parse_timestamp(raw: str) -> datetime:
     parsed = datetime.fromisoformat(normalized)
     if parsed.tzinfo is None:
         raise ValueError("expires_at must be timezone-aware")
-    return parsed.astimezone(UTC)
-
-
-def _hash_api_key(api_key: str) -> str:
-    """Hash API key material for at-rest storage."""
-    return hash_bytes(api_key.encode("utf-8")).hex()
-
-
-def _constant_time_equals(a: str, b: str) -> bool:
-    """Timing-safe string equality check.
-
-    Wraps :func:`hmac.compare_digest` to make intent explicit: this is
-    a **constant-time comparison**, not an HMAC/MAC computation.  The
-    ``hmac`` stdlib module is used solely because it provides the only
-    timing-safe comparator in the Python standard library.
-
-    All cryptographic hashing in Olympus uses BLAKE3 (via
-    ``protocol.hashes``); Ed25519 signing uses ``nacl``.  This function
-    is **not** part of either cryptographic path — it exists only to
-    prevent timing oracle attacks on hash comparisons.
-    """
-    return _hmac_module.compare_digest(a, b)
-
-
-def _constant_time_api_key_lookup(key_hash: str) -> ApiKeyRecord | None:
-    """
-    Lookup API key record using constant-time comparison (L4-D).
-
-    Uses hmac.compare_digest to prevent timing oracle attacks where an
-    attacker could measure response times to determine how many characters
-    of a key hash match.
-
-    Note: This function deliberately iterates through ALL stored keys even
-    after finding a match, to ensure constant-time execution regardless of
-    key position. This is O(n) where n is the number of API keys, which is
-    acceptable for typical deployments (<1000 keys). For deployments with
-    significantly more keys, consider alternative constant-time lookup
-    strategies or rate-limiting at the network layer.
-
-    Args:
-        key_hash: Hex-encoded BLAKE3 hash of the API key.
-
-    Returns:
-        ApiKeyRecord if found, None otherwise.
-    """
-    # Iterate through all stored keys and use constant-time comparison
-    # This prevents timing attacks based on early dictionary key rejection
-    found_record: ApiKeyRecord | None = None
-    for stored_hash, record in _api_key_store.items():
-        if _constant_time_equals(stored_hash, key_hash):
-            found_record = record
-    return found_record
+    return parsed.astimezone(timezone.utc)
 
 
 def _append_security_audit_event(event: str, details: dict[str, Any]) -> None:
@@ -519,61 +607,15 @@ def _append_security_audit_event(event: str, details: dict[str, Any]) -> None:
     )
 
 
-def _load_api_keys_from_env() -> None:
-    """Load API keys once from OLYMPUS_API_KEYS_JSON."""
-    global _api_keys_loaded
-    if _api_keys_loaded:
-        return
-    _api_keys_loaded = True
-    try:
-        raw = json.loads(os.environ.get("OLYMPUS_API_KEYS_JSON", "[]"))
-    except json.JSONDecodeError as exc:
-        raise ValueError("OLYMPUS_API_KEYS_JSON must be valid JSON") from exc
-    for item in raw:
-        if "key_hash" not in item:
-            raise ValueError(
-                "OLYMPUS_API_KEYS_JSON must contain hashed API keys under 'key_hash' "
-                "(hex-encoded). Raw API keys are not accepted."
-            )
-        _register_hashed_api_key(
-            key_hash=item["key_hash"],
-            key_id=item.get("key_id", "default"),
-            scopes=set(item.get("scopes", ["ingest", "commit", "verify"])),
-            expires_at=item.get("expires_at", "2099-01-01T00:00:00Z"),
-        )
-
-
 def _register_api_key_for_tests(
     api_key: str, key_id: str, scopes: set[str], expires_at: str
 ) -> None:  # pragma: no cover - test utility
-    """Register hashed API key (used by env bootstrap and tests)."""
-    key_hash = _hash_api_key(api_key)
-    _api_key_store[key_hash] = ApiKeyRecord(
-        key_id=key_id,
-        key_hash=key_hash,
-        scopes=scopes,
-        expires_at=_parse_timestamp(expires_at),
-    )
-    _append_security_audit_event(
-        "api_key_registered",
-        {"key_id": key_id, "scopes": sorted(scopes), "expires_at": expires_at},
-    )
+    """Register hashed API key (used by env bootstrap and tests).
 
-
-def _register_hashed_api_key(key_hash: str, key_id: str, scopes: set[str], expires_at: str) -> None:
-    """Register a pre-hashed API key (preferred for production bootstrap)."""
-    try:
-        decoded = bytes.fromhex(key_hash)
-    except ValueError as exc:
-        raise ValueError("key_hash must be hex-encoded") from exc
-    if len(decoded) != 32:
-        raise ValueError("key_hash must be 32 bytes (64 hex characters)")
-    _api_key_store[key_hash] = ApiKeyRecord(
-        key_id=key_id,
-        key_hash=key_hash,
-        scopes=scopes,
-        expires_at=_parse_timestamp(expires_at),
-    )
+    This delegates to the unified auth module's key registration to ensure
+    that all authentication paths share the same key store.
+    """
+    _auth_register_api_key_for_tests(api_key, key_id, scopes, expires_at)
     _append_security_audit_event(
         "api_key_registered",
         {"key_id": key_id, "scopes": sorted(scopes), "expires_at": expires_at},
@@ -582,21 +624,17 @@ def _register_hashed_api_key(key_hash: str, key_id: str, scopes: set[str], expir
 
 def _reset_ingest_state_for_tests() -> None:  # pragma: no cover - test utility
     """Reset in-memory ingestion, auth, and rate-limit state and enable test mode."""
-    global _write_ledger, _api_keys_loaded, _storage, _signing_key, _TEST_MODE
+    global _write_ledger, _storage, _signing_key, _TEST_MODE
     # L4-F: Enable test mode to allow in-memory storage
     _TEST_MODE = True
     storage = _storage
     _ingestion_store.clear()
     _content_index.clear()
-    _api_key_store.clear()
-    _api_keys_loaded = False
+    # Reset the unified auth module's key store AND rate-limit backend (H-3)
+    _reset_auth_state_for_tests()
+    _reset_rate_limit_backend_for_tests()
     _storage = None
     _signing_key = None
-    # L5-C: Acquire lock when clearing rate-limit buckets
-    with _rate_limit_lock:
-        for action in _rate_limit_key_buckets:
-            _rate_limit_key_buckets[action].clear()
-            _rate_limit_ip_buckets[action].clear()
     if storage is not None:
         try:
             storage.clear_rate_limits()
@@ -610,10 +648,8 @@ def _set_rate_limit_for_tests(
 ) -> None:  # pragma: no cover - test utility
     """Override rate-limit policy for tests."""
     _rate_limit_policy[action] = (capacity, refill_rate_per_second)
-    # L5-C: Acquire lock when clearing rate-limit buckets
-    with _rate_limit_lock:
-        _rate_limit_key_buckets[action].clear()
-        _rate_limit_ip_buckets[action].clear()
+    # H-3: Reset the shared auth backend so stale buckets don't survive
+    _reset_rate_limit_backend_for_tests()
     if _storage is not None:
         try:
             _storage.clear_rate_limits()
@@ -621,98 +657,23 @@ def _set_rate_limit_for_tests(
             logger.warning("Failed to clear persisted rate limits during test setup", exc_info=True)
 
 
-def _client_ip(request: Request) -> str:
-    """
-    Resolve the caller IP address for abuse controls.
-
-    L4-E: Only parses X-Forwarded-For if the direct peer is a trusted proxy.
-    This prevents IP spoofing attacks where a malicious client sets a fake
-    X-Forwarded-For header to bypass rate limiting.
-
-    Args:
-        request: The incoming HTTP request.
-
-    Returns:
-        The client IP address (from X-Forwarded-For if behind a trusted proxy,
-        otherwise the direct peer IP).
-    """
-    peer_ip = request.client.host if request.client else None
-
-    # Only parse X-Forwarded-For if the peer is a trusted proxy
-    if peer_ip and peer_ip in TRUSTED_PROXY_IPS:
-        xff = request.headers.get("x-forwarded-for")
-        if xff:
-            # X-Forwarded-For format: "client, proxy1, proxy2, ..."
-            # The leftmost IP is the original client
-            forwarded_ip = xff.split(",")[0].strip()
-            if forwarded_ip:
-                return forwarded_ip
-
-    return peer_ip or "unknown"
-
-
-def _extract_api_key(request: Request, body_api_key: str | None = None) -> str:
-    """Extract API key from header, bearer token, or request body fallback."""
-    header_key = request.headers.get("x-api-key")
-    if header_key:
-        return header_key
-    authz = request.headers.get("authorization", "")
-    if authz.lower().startswith("bearer "):
-        return authz[7:].strip()
-    if body_api_key:
-        return body_api_key
-    raise HTTPException(status_code=401, detail="API key is required")
-
-
-def _get_bucket(buckets: OrderedDict[str, TokenBucket], subject: str, action: str) -> TokenBucket:
-    """
-    Get/create a token bucket for the subject and action.
-
-    L5-B: Implements LRU eviction when the bucket count exceeds _RATE_LIMIT_LRU_CAP.
-    Existing buckets are moved to the end (most recently used) when accessed.
-    When creating a new bucket and the cap is exceeded, the oldest (least recently
-    used) bucket is removed.
-
-    IMPORTANT: This function must be called while holding _rate_limit_lock (L5-C).
-    The assertion below will catch violations during testing/development.
-    """
-    # L5-C: Ensure lock is held to catch programming errors early
-    if not _rate_limit_lock.locked():
-        raise RuntimeError("_get_bucket must be called while holding _rate_limit_lock")
-
-    existing = buckets.get(subject)
-    if existing is not None:
-        # Move to end (mark as recently used)
-        buckets.move_to_end(subject)
-        return existing
-
-    # L5-B: Evict oldest entries if at capacity
-    while len(buckets) >= _RATE_LIMIT_LRU_CAP:
-        buckets.popitem(last=False)  # Remove oldest (first) entry
-
-    capacity, refill = _rate_limit_policy[action]
-    created = TokenBucket(
-        capacity=capacity,
-        refill_rate_per_second=refill,
-        tokens=capacity,
-        last_refill_ts=monotonic(),
-    )
-    buckets[subject] = created
-    return created
-
-
 def _consume_rate_limit(subject_type: str, subject: str, action: str) -> bool:
-    """
-    Consume a token for the given subject/action, preferring the shared storage backend.
+    """Consume a token for the given subject/action.
 
-    Falls back to process-local buckets if storage is unavailable or errors.
+    H-3 Fix: Delegates to the shared auth backend (api.auth._get_backend)
+    so that ingest and auth rate limiting share a single bucket store,
+    eliminating the dual-system vulnerability.
+
+    Falls back to the auth backend's in-memory store if the database
+    storage layer is unavailable.
     """
     capacity, refill = _rate_limit_policy[action]
+
+    # Try database-backed rate limiting first (multi-process safe)
     storage = None
     try:
         storage = _get_storage()
     except RuntimeError:
-        # Configuration errors should propagate; let caller handle.
         raise
     except Exception as exc:  # pragma: no cover - defensive
         logger.error(
@@ -740,50 +701,52 @@ def _consume_rate_limit(subject_type: str, subject: str, action: str) -> bool:
                 },
             )
 
-    # L5-C: Acquire lock before accessing in-memory rate-limit buckets.
-    # This prevents race conditions where concurrent requests could corrupt
-    # the OrderedDict state or read inconsistent token values.
-    with _rate_limit_lock:
-        buckets = _rate_limit_key_buckets if subject_type == "api_key" else _rate_limit_ip_buckets
-        bucket = _get_bucket(buckets[action], subject, action)
-        return bucket.consume()
+    # H-3: Fall back to the *shared* auth backend instead of a separate
+    # ingest-local bucket store.  Composite key ensures action/subject
+    # isolation within the single backend.
+    backend = _get_rate_limit_backend()
+    composite_key = f"ingest:{action}:{subject_type}:{subject}"
+    bucket = backend.get(composite_key)
 
-
-def _authorize_and_rate_limit(
-    request: Request, action: str, body_api_key: str | None = None
-) -> ApiKeyRecord:
-    """Authenticate API key, enforce scope/expiry, and apply token buckets."""
-    _load_api_keys_from_env()
-    api_key = _extract_api_key(request, body_api_key=body_api_key)
-    key_hash = _hash_api_key(api_key)
-    # L4-D: Use constant-time lookup to prevent timing oracle attacks
-    record = _constant_time_api_key_lookup(key_hash)
-    client_ip = _client_ip(request)
-    if record is None:
-        _append_security_audit_event("api_key_invalid", {"client_ip": client_ip, "action": action})
-        raise HTTPException(status_code=401, detail="Invalid API key")
-    if datetime.now(UTC) >= record.expires_at:
-        _append_security_audit_event(
-            "api_key_expired", {"key_id": record.key_id, "client_ip": client_ip, "action": action}
+    if bucket is None:
+        bucket = _AuthTokenBucket(
+            capacity=capacity,
+            refill_rate=refill,
+            tokens=capacity,
+            last_refill=monotonic(),
         )
-        raise HTTPException(status_code=401, detail="API key expired")
-    if action not in record.scopes:
-        _append_security_audit_event(
-            "api_key_scope_denied",
-            {"key_id": record.key_id, "client_ip": client_ip, "action": action},
-        )
-        raise HTTPException(status_code=403, detail=f"API key lacks required scope: {action}")
 
-    if not _consume_rate_limit("api_key", record.key_id, action):
+    allowed = bucket.consume()
+    backend.set(composite_key, bucket)
+    return allowed
+
+
+def _apply_rate_limits(request: Request, api_key_id: str, action: str) -> None:
+    """Apply rate limiting for API key and IP after authentication.
+
+    This function is called after successful authentication to enforce
+    per-key and per-IP rate limits for ingest operations.
+
+    Args:
+        request: The incoming HTTP request.
+        api_key_id: The authenticated API key ID.
+        action: The action being performed (e.g., 'ingest', 'commit', 'verify').
+
+    Raises:
+        HTTPException 429: If rate limit is exceeded.
+    """
+    client_ip = _get_client_ip(request)
+
+    if not _consume_rate_limit("api_key", api_key_id, action):
         logger.warning(
             "rate_limit_hit",
-            extra={"dimension": "api_key", "key_id": record.key_id, "action": action},
+            extra={"dimension": "api_key", "key_id": api_key_id, "action": action},
         )
         _append_security_audit_event(
             "rate_limit_hit",
             {
                 "dimension": "api_key",
-                "key_id": record.key_id,
+                "key_id": api_key_id,
                 "client_ip": client_ip,
                 "action": action,
             },
@@ -797,10 +760,9 @@ def _authorize_and_rate_limit(
         )
         _append_security_audit_event(
             "rate_limit_hit",
-            {"dimension": "ip", "key_id": record.key_id, "client_ip": client_ip, "action": action},
+            {"dimension": "ip", "key_id": api_key_id, "client_ip": client_ip, "action": action},
         )
         raise HTTPException(status_code=429, detail="Rate limit exceeded for IP address")
-    return record
 
 
 def _parse_content_hash(content_hash: str) -> bytes:
@@ -831,24 +793,62 @@ def _normalize_merkle_root(merkle_root: str) -> str:
     return raw.hex()
 
 
+def _normalize_source_url(source_url: str) -> str:
+    """Validate and normalize a provenance source URL."""
+    parsed = urlparse(source_url)
+    if parsed.scheme not in {"http", "https"}:
+        raise HTTPException(status_code=400, detail="source_url must use http or https")
+    if not parsed.netloc:
+        raise HTTPException(status_code=400, detail="source_url must include a hostname")
+    return source_url
+
+
+_BN128_FIELD_PRIME = 21888242871839275222246405745257275088548364400416034343698204186575808495617
+
+
 def _value_hash_to_poseidon_field(value_hash: bytes) -> int:
-    """Convert a 32-byte value hash into the BN128 field element used by PoseidonSMT."""
+    """Convert a 32-byte value hash into a BN128 field element.
+
+    Applies modular reduction by the BN128 scalar field prime so that
+    the returned value is always a valid field element. Without this
+    reduction, values derived from BLAKE3 hashes can exceed the prime
+    (2^256 - 1 is ~5.3x the BN128 prime), causing incorrect Poseidon
+    hash outputs and enabling hash collisions.
+    """
     if len(value_hash) != 32:
         raise ValueError(f"value_hash must be 32 bytes, got {len(value_hash)}")
-    return int.from_bytes(value_hash, byteorder="big")
+    return int.from_bytes(value_hash, byteorder="big") % _BN128_FIELD_PRIME
 
 
-def _build_poseidon_smt_for_storage_shard(storage: StorageLayer, shard_id: str) -> PoseidonSMT:
+def _resolved_poseidon_root(persisted_root: str | None, fallback_root: str) -> str:
+    """Resolve persisted Poseidon root with a deterministic fallback."""
+    return persisted_root if persisted_root is not None else fallback_root
+
+
+def _build_poseidon_smt_for_storage_shard(
+    storage: StorageLayer, shard_id: str, *, up_to_ts: datetime | str | None = None
+) -> PoseidonSMT:
     """Rebuild the current PoseidonSMT view for a shard from persisted SMT leaves."""
     from protocol.poseidon_smt import PoseidonSMT
 
     with storage._get_connection() as conn, conn.cursor() as cur:
-        tree = storage._load_tree_state(cur, shard_id)
+        tree = storage._load_tree_state(cur, up_to_ts=up_to_ts)
 
     poseidon_smt = PoseidonSMT()
     for key, value_hash in tree.leaves.items():
         poseidon_smt.update(key, _value_hash_to_poseidon_field(value_hash))
     return poseidon_smt
+
+
+def _get_or_build_poseidon_smt(shard_id: str) -> PoseidonSMT:
+    """Get a Poseidon SMT for the given shard, using storage if available."""
+    storage = _get_storage()
+    if storage is not None:
+        return _build_poseidon_smt_for_storage_shard(storage, shard_id)
+    else:
+        from protocol.poseidon_smt import PoseidonSMT
+
+        return PoseidonSMT()
 
 
 def _evaluate_proof_bundle(
@@ -989,7 +989,9 @@ async def _process_record_canonicalization(
 
 
 @router.post("/records", response_model=BatchIngestionResponse)
-async def ingest_batch(batch: BatchIngestionRequest, request: Request) -> BatchIngestionResponse:
+async def ingest_batch(
+    batch: BatchIngestionRequest, request: Request, _api_key: RequireIngestScope
+) -> BatchIngestionResponse:
     """
     Atomically ingest a batch of records.
 
@@ -1011,7 +1013,8 @@ async def ingest_batch(batch: BatchIngestionRequest, request: Request) -> BatchI
     Returns:
         Ingestion results with proof IDs.
     """
-    _authorize_and_rate_limit(request, action="ingest")
+    # Apply rate limiting after authentication
+    _apply_rate_limits(request, _api_key.key_id, "ingest")
 
     # Validate batch is not empty
     if not batch.records:
@@ -1070,26 +1073,30 @@ async def ingest_batch(batch: BatchIngestionRequest, request: Request) -> BatchI
                 content_hash, content_hash_bytes, proof_id = record_data_map[original_idx]
                 record_smt_key = record_key(record.record_type, record.record_id, record.version)
 
-                # Dedup check (in-memory or persisted)
-                existing_record = _fetch_by_content_hash(content_hash)
-                if existing_record is not None:
-                    results.append(
-                        (
-                            original_idx,
-                            IngestionResult(
-                                proof_id=existing_record["proof_id"],
-                                record_id=existing_record["record_id"],
-                                shard_id=existing_record["shard_id"],
-                                content_hash=existing_record["content_hash"],
-                                deduplicated=True,
-                                idempotent=True,
-                            ),
+                # In-memory-only dedup: when no storage is configured, RT-H1
+                # cannot run, so check the in-memory cache here instead.
+                if storage is None:
+                    existing_record = _fetch_by_content_hash(content_hash)
+                    if existing_record is not None:
+                        results.append(
+                            (
+                                original_idx,
+                                IngestionResult(
+                                    proof_id=existing_record["proof_id"],
+                                    record_id=existing_record["record_id"],
+                                    shard_id=existing_record["shard_id"],
+                                    content_hash=existing_record["content_hash"],
+                                    deduplicated=True,
+                                    idempotent=True,
+                                ),
+                            )
                         )
-                    )
-                    dedup_count += 1
-                    ledger_entry_hash = existing_record.get("ledger_entry_hash", ledger_entry_hash)
-                    INGEST_TOTAL.labels(outcome="deduplicated").inc()
-                    continue
+                        dedup_count += 1
+                        ledger_entry_hash = existing_record.get(
+                            "ledger_entry_hash", ledger_entry_hash
+                        )
+                        INGEST_TOTAL.labels(outcome="deduplicated").inc()
+                        continue
 
                 # If PostgreSQL is configured, persist record durably
                 if storage is not None and _signing_key is not None:
@@ -1098,9 +1105,10 @@ async def ingest_batch(batch: BatchIngestionRequest, request: Request) -> BatchI
                             record_smt_key, _value_hash_to_poseidon_field(content_hash_bytes)
                         )
                         poseidon_root = str(poseidon_smt.get_root())
+                        persisted_poseidon_root = poseidon_root
                         canonicalization_with_poseidon = {
                             **canonicalization,
-                            "poseidon_root": poseidon_root,
+                            "poseidon_root": persisted_poseidon_root,
                         }
                         root_hash, proof, _header, _signature, ledger_entry = storage.append_record(
                             shard_id=record.shard_id,
@@ -1110,7 +1118,13 @@ async def ingest_batch(batch: BatchIngestionRequest, request: Request) -> BatchI
                             value_hash=content_hash_bytes,
                             signing_key=_signing_key,
                             canonicalization=canonicalization_with_poseidon,
-                            poseidon_root=int(poseidon_root).to_bytes(32, byteorder="big"),
+                            poseidon_root=int(persisted_poseidon_root).to_bytes(
+                                32, byteorder="big"
+                            ),
+                        )
+                        persisted_poseidon_root = _resolved_poseidon_root(
+                            ledger_entry.poseidon_root,
+                            persisted_poseidon_root,
                         )
 
                         # Store mapping from proof_id to record coordinates for later retrieval
@@ -1127,11 +1141,14 @@ async def ingest_batch(batch: BatchIngestionRequest, request: Request) -> BatchI
                             ),
                             "ledger_entry_hash": ledger_entry.entry_hash,
                             "timestamp": ledger_entry.ts,
-                            "canonicalization": canonicalization_with_poseidon,
+                            "canonicalization": {
+                                **canonicalization,
+                                "poseidon_root": persisted_poseidon_root,
+                            },
                             "persisted": True,
                             "batch_id": batch_id,
                             "batch_index": len(persist_queue),
-                            "poseidon_root": poseidon_root,
+                            "poseidon_root": persisted_poseidon_root,
                         }
                         _cache_ingestion_record(ingestion_entry)
                         persist_queue.append(ingestion_entry)
@@ -1139,7 +1156,12 @@ async def ingest_batch(batch: BatchIngestionRequest, request: Request) -> BatchI
                         ledger_entry_hash = ledger_entry.entry_hash
                         logger.info(f"Record {record.record_id} persisted to PostgreSQL")
                     except ValueError as e:
-                        if "Record already exists" in str(e):
+                        error_msg = str(e)
+                        is_dedup = (
+                            "Record already exists" in error_msg
+                            or "Content hash already committed" in error_msg
+                        )
+                        if is_dedup:
                             # Record exists in database, treat as dedup and hydrate mapping
                             poseidon_smt = _build_poseidon_smt_for_storage_shard(storage, shard_id)
                             existing_record = _fetch_by_content_hash(content_hash)
@@ -1167,7 +1189,19 @@ async def ingest_batch(batch: BatchIngestionRequest, request: Request) -> BatchI
                                 )
                             continue
                         else:
-                            raise
+                            logger.exception(
+                                "storage_append_record_failed",
+                                extra={
+                                    "shard_id": record.shard_id,
+                                    "record_type": record.record_type,
+                                    "record_id": record.record_id,
+                                    "version": record.version,
+                                },
+                            )
+                            raise HTTPException(
+                                status_code=500,
+                                detail="Failed to persist record.",
+                            ) from e
                 else:
                     # Fall back to in-memory storage
                     new_hashes.append(content_hash_bytes)
@@ -1213,7 +1247,7 @@ async def ingest_batch(batch: BatchIngestionRequest, request: Request) -> BatchI
                 )
                 ledger_entry_hash = ledger_entry.entry_hash
                 ledger_height = len(_write_ledger.entries)
-                LEDGER_HEIGHT.labels(shard_id=shard_id).set(ledger_height)
+                LEDGER_HEIGHT.set(ledger_height)
                 span.set_attribute("ledger_height", ledger_height)
 
                 # Store proof metadata for each new record
@@ -1302,7 +1336,13 @@ async def ingest_batch(batch: BatchIngestionRequest, request: Request) -> BatchI
 
 
 @router.get("/records/{proof_id}/proof", response_model=IngestionProofResponse)
-async def get_ingestion_proof(proof_id: str) -> IngestionProofResponse:
+async def get_ingestion_proof(
+    *,
+    proof_id: str = Path(
+        ..., pattern=r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+    ),
+    _scope: RequireVerifyScope,
+) -> IngestionProofResponse:
     """
     Retrieve the proof for a previously ingested record.
 
@@ -1324,7 +1364,7 @@ async def get_ingestion_proof(proof_id: str) -> IngestionProofResponse:
 
 @router.get("/records/hash/{content_hash}/verify", response_model=HashVerificationResponse)
 async def verify_ingested_content_hash(
-    content_hash: str, request: Request
+    content_hash: str, request: Request, _api_key: RequireVerifyScope
 ) -> HashVerificationResponse:
     """
     Verify that a committed BLAKE3 content hash exists in the ingestion store.
@@ -1333,7 +1373,9 @@ async def verify_ingested_content_hash(
     verification result so public portals can display both the commitment data and
     the verifiable transcript needed for independent re-checking.
     """
-    _authorize_and_rate_limit(request, action="verify")
+    # Apply rate limiting after authentication
+    _apply_rate_limits(request, _api_key.key_id, "verify")
+
     with timed_operation("verify") as span:
         normalized_hash = _parse_content_hash(content_hash).hex()
         span.set_attribute("content_hash", normalized_hash)
@@ -1350,10 +1392,12 @@ async def verify_ingested_content_hash(
 
 @router.post("/proofs/verify", response_model=ProofVerificationResponse)
 async def verify_submitted_proof_bundle(
-    proof_request: ProofVerificationRequest, request: Request
+    proof_request: ProofVerificationRequest, request: Request, _api_key: RequireVerifyScope
 ) -> ProofVerificationResponse:
     """Verify an externally supplied proof bundle without persisting it."""
-    _authorize_and_rate_limit(request, action="verify")
+    # Apply rate limiting after authentication
+    _apply_rate_limits(request, _api_key.key_id, "verify")
+
     normalized_hash, normalized_root, content_hash_matches, merkle_proof_valid = (
         _evaluate_proof_bundle(
             proof_request.content_hash,
@@ -1362,6 +1406,7 @@ async def verify_submitted_proof_bundle(
         )
     )
     record = _fetch_by_content_hash(normalized_hash)
+    # Return server-known poseidon_root only (HIGH-02 security fix)
     return ProofVerificationResponse(
         proof_id=record["proof_id"] if record is not None else proof_request.proof_id,
         content_hash=normalized_hash,
@@ -1369,62 +1414,78 @@ async def verify_submitted_proof_bundle(
         content_hash_matches_proof=content_hash_matches,
         merkle_proof_valid=merkle_proof_valid,
         known_to_server=record is not None,
-        poseidon_root=proof_request.poseidon_root
-        if record is None
-        else record.get("poseidon_root"),
+        poseidon_root=record.get("poseidon_root") if record is not None else None,
     )
 
 
 @router.post("/proofs", response_model=ProofSubmissionResponse)
 async def submit_proof_bundle(
-    proof_request: ProofSubmissionRequest, request: Request
+    request: Request,
+    _api_key: RequireVerifyScope,
+    _rl: RateLimit,
+    file: UploadFile = File(...),
 ) -> ProofSubmissionResponse:
-    """Accept a verified proof bundle so it can be retrieved through the API later."""
-    _authorize_and_rate_limit(request, action="verify")
-    normalized_hash, normalized_root, content_hash_matches, merkle_proof_valid = (
-        _evaluate_proof_bundle(
-            proof_request.content_hash,
-            proof_request.merkle_root,
-            proof_request.merkle_proof,
+    """Retrieve the server-computed proof bundle for a committed document.
+
+    The caller supplies only the raw document bytes. The server
+    canonicalizes, hashes, and looks up its authoritative proof record.
+    No caller-supplied metadata is accepted — all proof fields are
+    derived from the server's own ingestion records.
+
+    Returns 404 if the document has not been committed yet. Commit
+    first via POST /ingest/records.
+    """
+    _apply_rate_limits(request, _api_key.key_id, "verify")
+
+    settings = get_settings()
+    max_mb = settings.max_upload_bytes // 1024 // 1024
+
+    content_length = request.headers.get("content-length")
+    if content_length is not None:
+        try:
+            if int(content_length) > settings.max_upload_bytes:
+                raise HTTPException(
+                    status_code=413,
+                    detail=f"File exceeds maximum size of {max_mb} MB.",
+                )
+        except ValueError:
+            pass
+
+    file_bytes = await _read_upload_bounded(file, settings.max_upload_bytes, max_mb)
+    validate_file_magic(file_bytes, file.content_type or "application/octet-stream")
+
+    # Parse as JSON and canonicalize — same pipeline as the main ingest path.
+    try:
+        content = json.loads(file_bytes)
+    except (json.JSONDecodeError, UnicodeDecodeError) as exc:
+        raise HTTPException(
+            status_code=400,
+            detail="File must be a valid JSON document.",
+        ) from exc
+
+    if not isinstance(content, dict):
+        raise HTTPException(
+            status_code=400,
+            detail="Document must be a JSON object.",
         )
-    )
-    if not content_hash_matches or not merkle_proof_valid:
-        raise HTTPException(status_code=400, detail="Submitted proof bundle failed verification")
 
-    existing = _fetch_by_content_hash(normalized_hash)
-    if existing is not None:
-        return ProofSubmissionResponse(**existing, submitted=False, deduplicated=True)
+    _, content_hash = await _async_canonicalize_and_hash(content)
 
-    proof_id = proof_request.proof_id or str(uuid.uuid4())
-    stored_entry = {
-        "proof_id": proof_id,
-        "record_id": proof_request.record_id,
-        "shard_id": proof_request.shard_id,
-        "content_hash": normalized_hash,
-        "merkle_root": normalized_root,
-        "merkle_proof": proof_request.merkle_proof,
-        "ledger_entry_hash": proof_request.ledger_entry_hash,
-        "timestamp": proof_request.timestamp,
-        "canonicalization": proof_request.canonicalization,
-        "batch_id": proof_request.batch_id,
-        "poseidon_root": proof_request.poseidon_root,
-        "persisted": False,
-    }
-    _cache_ingestion_record(stored_entry)
+    record = _fetch_by_content_hash(content_hash)
+    if record is None:
+        raise HTTPException(
+            status_code=404,
+            detail=(
+                "Document not found in ledger. "
+                "Commit the document first via POST /ingest/records, "
+                "then retrieve its proof bundle here."
+            ),
+        )
+
     return ProofSubmissionResponse(
-        proof_id=proof_id,
-        record_id=proof_request.record_id,
-        shard_id=proof_request.shard_id,
-        content_hash=normalized_hash,
-        merkle_root=normalized_root,
-        merkle_proof=proof_request.merkle_proof,
-        ledger_entry_hash=proof_request.ledger_entry_hash,
-        timestamp=proof_request.timestamp,
-        canonicalization=proof_request.canonicalization,
-        batch_id=proof_request.batch_id,
-        poseidon_root=proof_request.poseidon_root,
-        submitted=True,
-        deduplicated=False,
+        **record,
+        submitted=False,
+        deduplicated=True,
     )
 
 
@@ -1434,19 +1495,40 @@ async def submit_proof_bundle(
 
 
 class ArtifactCommitRequest(BaseModel):
-    """Request body for committing a pre-computed artifact hash to the ledger."""
+    """Request body for committing a pre-computed artifact hash to the ledger.
+
+    Security boundary:
+        ``id`` and ``namespace`` are validated by ``_IDENTIFIER_PATTERN`` at API
+        ingestion time before persistence. This keeps externally supplied
+        artifact identifiers constrained before they can flow into downstream
+        proof tooling and subprocess-based proof backends.
+    """
 
     artifact_hash: str = Field(..., description="Hex-encoded BLAKE3 hash of the artifact")
-    namespace: str = Field(..., description="Namespace for the artifact (e.g. 'github')")
-    id: str = Field(..., description="Artifact identifier (e.g. 'org/repo/v1.0.0')")
-    poseidon_root: str | None = Field(
+    namespace: str = Field(
+        ...,
+        description="Namespace for the artifact (e.g. 'github')",
+        max_length=_IDENTIFIER_MAX_LEN,
+        pattern=_IDENTIFIER_PATTERN,
+    )
+    id: str = Field(
+        ...,
+        description="Artifact identifier (e.g. 'org/repo/v1.0.0')",
+        max_length=_ARTIFACT_ID_MAX_LEN,
+        pattern=_IDENTIFIER_PATTERN,
+    )
+    source_url: str | None = Field(
+        None,
+        description="Optional http(s) URL describing where the artifact was retrieved from",
+        max_length=2048,
+    )
+    raw_pdf_hash: str | None = Field(
         None,
         description=(
-            "Optional Poseidon root (decimal string) to bind a ZK circuit root to the"
-            " committed artifact hash"
+            "Optional 64-character hex-encoded raw-PDF BLAKE3 hash anchored "
+            "alongside OCR/text hashes"
         ),
     )
-    api_key: str | None = Field(None, description="Optional API key for authentication")
 
 
 class ArtifactCommitResponse(BaseModel):
@@ -1465,7 +1547,7 @@ class ArtifactCommitResponse(BaseModel):
 
 @router.post("/commit", response_model=ArtifactCommitResponse)
 async def commit_artifact(
-    request: ArtifactCommitRequest, http_request: Request
+    request: ArtifactCommitRequest, http_request: Request, _api_key: RequireCommitScope
 ) -> ArtifactCommitResponse:
     """
     Commit a pre-computed artifact hash to the Olympus ledger.
@@ -1483,15 +1565,11 @@ async def commit_artifact(
     Returns:
         Commitment response with proof_id and ledger anchor details.
     """
-    _authorize_and_rate_limit(http_request, action="commit", body_api_key=request.api_key)
+    # Apply rate limiting after authentication
+    _apply_rate_limits(http_request, _api_key.key_id, "commit")
+
     shard_id = f"artifacts/{request.namespace}"
     batch_id = str(uuid.uuid4())
-    poseidon_root_input = request.poseidon_root
-    poseidon_root_normalized: str | None = None
-
-    if poseidon_root_input is not None:
-        poseidon_bytes = poseidon_root_to_bytes(poseidon_root_input)
-        poseidon_root_normalized = str(int.from_bytes(poseidon_bytes, byteorder="big"))
 
     # Try to get storage layer (returns None if not configured)
     storage = _get_storage()
@@ -1505,58 +1583,47 @@ async def commit_artifact(
         artifact_hash_bytes = _parse_content_hash(request.artifact_hash)
         artifact_hash_hex = artifact_hash_bytes.hex()
 
-        # Dedup: if this exact hash has already been committed, return existing proof
-        existing = _fetch_by_content_hash(artifact_hash_hex)
-        if existing is not None:
-            existing_poseidon = existing.get("poseidon_root")
-            if poseidon_root_normalized is not None and existing_poseidon not in (
-                None,
-                poseidon_root_normalized,
-            ):
-                raise HTTPException(
-                    status_code=400,
-                    detail="Conflicting poseidon_root for existing artifact commitment",
+        # In-memory-only dedup: when no storage is configured, RT-H1 cannot
+        # run, so check the in-memory cache here instead.
+        if storage is None:
+            existing = _fetch_by_content_hash(artifact_hash_hex)
+            if existing is not None:
+                existing_proof_id = existing["proof_id"]
+                INGEST_TOTAL.labels(outcome="deduplicated").inc()
+                return ArtifactCommitResponse(
+                    proof_id=existing_proof_id,
+                    artifact_hash=artifact_hash_hex,
+                    namespace=existing.get("namespace", request.namespace),
+                    id=existing.get("record_id", request.id),
+                    committed_at=existing["timestamp"],
+                    ledger_entry_hash=existing["ledger_entry_hash"],
+                    poseidon_root=existing.get("poseidon_root"),
                 )
-            existing_proof_id = existing["proof_id"]
-            INGEST_TOTAL.labels(outcome="deduplicated").inc()
-            return ArtifactCommitResponse(
-                proof_id=existing_proof_id,
-                artifact_hash=artifact_hash_hex,
-                namespace=existing.get("namespace", request.namespace),
-                id=existing.get("record_id", request.id),
-                committed_at=existing["timestamp"],
-                ledger_entry_hash=existing["ledger_entry_hash"],
-                poseidon_root=existing.get("poseidon_root"),
-            )
 
         proof_id = str(uuid.uuid4())
         artifact_key = record_key("artifact", request.id, 1)
-        if poseidon_root_normalized is None:
-            if storage is not None:
-                poseidon_smt = _build_poseidon_smt_for_storage_shard(storage, shard_id)
-            else:
-                from protocol.poseidon_smt import PoseidonSMT
-
-                poseidon_smt = PoseidonSMT()
-            poseidon_smt.update(artifact_key, _value_hash_to_poseidon_field(artifact_hash_bytes))
-            poseidon_root_normalized = str(poseidon_smt.get_root())
+        # Always compute Poseidon root server-side (HIGH-02 security fix)
+        poseidon_smt = _get_or_build_poseidon_smt(shard_id)
+        poseidon_smt.update(artifact_key, _value_hash_to_poseidon_field(artifact_hash_bytes))
+        poseidon_root_normalized = str(poseidon_smt.get_root())
+        persisted_poseidon_root = _resolved_poseidon_root(None, poseidon_root_normalized)
         canonicalization = canonicalization_provenance(
             "application/octet-stream", CANONICAL_VERSION
         )
-        if poseidon_root_normalized is not None:
-            canonicalization = dict(canonicalization)
-            canonicalization["poseidon_root"] = poseidon_root_normalized
+        # Poseidon root is always computed server-side (HIGH-02 security fix)
+        canonicalization = dict(canonicalization)
+        canonicalization["poseidon_root"] = persisted_poseidon_root
+        if request.source_url:
+            canonicalization["source_url"] = _normalize_source_url(request.source_url)
+        if request.raw_pdf_hash:
+            canonicalization["raw_pdf_hash"] = _parse_content_hash(request.raw_pdf_hash).hex()
 
         # If PostgreSQL is configured, persist artifact durably
         if storage is not None and _signing_key is not None:
             try:
-                # Convert the normalized Poseidon root decimal string to bytes for the
+                # Convert the server-computed Poseidon root decimal string to bytes for the
                 # storage layer, which uses raw 32-byte big-endian encoding.
-                poseidon_root_bytes: bytes | None = None
-                if poseidon_root_normalized is not None:
-                    poseidon_root_bytes = int(poseidon_root_normalized).to_bytes(
-                        32, byteorder="big"
-                    )
+                poseidon_root_bytes = int(persisted_poseidon_root).to_bytes(32, byteorder="big")
 
                 root_hash, proof, _header, _signature, ledger_entry = storage.append_record(
                     shard_id=shard_id,
@@ -1567,6 +1634,10 @@ async def commit_artifact(
                     signing_key=_signing_key,
                     canonicalization=canonicalization,
                     poseidon_root=poseidon_root_bytes,
+                )
+                persisted_poseidon_root = _resolved_poseidon_root(
+                    ledger_entry.poseidon_root,
+                    persisted_poseidon_root,
                 )
 
                 # Store mapping from proof_id to record coordinates
@@ -1582,11 +1653,14 @@ async def commit_artifact(
                     "merkle_proof": _smt_proof_to_merkle_proof_dict(proof, artifact_hash_bytes),
                     "ledger_entry_hash": ledger_entry.entry_hash,
                     "timestamp": ledger_entry.ts,
-                    "canonicalization": canonicalization,
+                    "canonicalization": {
+                        **canonicalization,
+                        "poseidon_root": persisted_poseidon_root,
+                    },
                     "persisted": True,
                     "batch_id": batch_id,
                     "batch_index": 0,
-                    "poseidon_root": poseidon_root_normalized,
+                    "poseidon_root": persisted_poseidon_root,
                 }
                 _ingestion_store[proof_id] = ingestion_entry
                 _content_index[artifact_hash_hex] = proof_id
@@ -1610,10 +1684,15 @@ async def commit_artifact(
                     id=request.id,
                     committed_at=ledger_entry.ts,
                     ledger_entry_hash=ledger_entry.entry_hash,
-                    poseidon_root=poseidon_root_normalized,
+                    poseidon_root=persisted_poseidon_root,
                 )
             except ValueError as e:
-                if "Record already exists" in str(e):
+                error_msg = str(e)
+                is_dedup = (
+                    "Record already exists" in error_msg
+                    or "Content hash already committed" in error_msg
+                )
+                if is_dedup:
                     existing = _fetch_by_content_hash(artifact_hash_hex) or {}
                     existing_proof_id = existing.get("proof_id", proof_id)
                     INGEST_TOTAL.labels(outcome="deduplicated").inc()
@@ -1624,10 +1703,17 @@ async def commit_artifact(
                         id=existing.get("record_id", request.id),
                         committed_at=existing.get("timestamp", current_timestamp()),
                         ledger_entry_hash=existing.get("ledger_entry_hash", ""),
-                        poseidon_root=existing.get("poseidon_root", poseidon_root_normalized),
+                        poseidon_root=existing.get("poseidon_root", persisted_poseidon_root),
                     )
                 else:
-                    raise
+                    logger.exception(
+                        "artifact_commit_storage_failed",
+                        extra={"namespace": request.namespace, "id": request.id},
+                    )
+                    raise HTTPException(
+                        status_code=500,
+                        detail="Failed to persist artifact commitment.",
+                    ) from e
 
         # Fall back to in-memory storage
         tree = MerkleTree([artifact_hash_bytes])
@@ -1641,7 +1727,7 @@ async def commit_artifact(
             canonicalization=canonicalization,
         )
         ledger_height = len(_write_ledger.entries)
-        LEDGER_HEIGHT.labels(shard_id=shard_id).set(ledger_height)
+        LEDGER_HEIGHT.set(ledger_height)
         span.set_attribute("ledger_height", ledger_height)
 
         ts = current_timestamp()

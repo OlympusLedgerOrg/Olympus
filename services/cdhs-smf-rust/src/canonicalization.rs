@@ -1,4 +1,4 @@
-//! Canonicalization for CD-HS-SMF
+//! Canonicalization for CD-HS-ST
 //!
 //! This module provides deterministic canonicalization for different content types.
 

@@ -239,6 +239,3 @@ def test_shard_header_hash_changes_with_content():
     hash2 = shard_header_hash(fields2)
 
     assert hash1 != hash2
-
-
-

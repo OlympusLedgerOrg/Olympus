@@ -349,3 +349,210 @@ def test_cli_no_args():
         text=True,
     )
     assert result.returncode != 0
+
+
+# ---------------------------------------------------------------------------
+# Extended tests (Step 2k) — sub-check functions
+# ---------------------------------------------------------------------------
+
+
+def test_check_bundle_version_supported():
+    """Supported bundle version passes."""
+    from verify_bundle_cli import _check_bundle_version
+
+    passed, msg = _check_bundle_version("1.0.0")
+    assert passed is True
+    assert "supported" in msg.lower()
+
+
+def test_check_bundle_version_unsupported():
+    """Unsupported bundle version fails."""
+    from verify_bundle_cli import _check_bundle_version
+
+    passed, msg = _check_bundle_version("99.0.0")
+    assert passed is False
+    assert "unsupported" in msg.lower()
+
+
+def test_check_schema_version_supported():
+    """Supported schema version passes."""
+    from verify_bundle_cli import _check_schema_version
+
+    passed, msg = _check_schema_version("1.0.0")
+    assert passed is True
+
+
+def test_check_schema_version_unsupported():
+    """Unsupported schema version fails."""
+    from verify_bundle_cli import _check_schema_version
+
+    passed, msg = _check_schema_version("2.0.0")
+    assert passed is False
+
+
+def test_check_schema_version_empty():
+    """Empty schema version fails."""
+    from verify_bundle_cli import _check_schema_version
+
+    passed, msg = _check_schema_version("")
+    assert passed is False
+    assert "missing" in msg.lower()
+
+
+def test_check_canonicalization_provenance_valid():
+    """Valid canonicalization provenance passes."""
+    from verify_bundle_cli import _check_canonicalization_provenance
+
+    prov = {
+        "format": "application/json",
+        "normalization_mode": "canonical_v1",
+        "canonicalizer_versions": {"python": "1.0.0"},
+        "fallback_reason": None,
+    }
+    passed, msg = _check_canonicalization_provenance(prov)
+    assert passed is True
+
+
+def test_check_canonicalization_provenance_missing_fields():
+    """Missing canonicalization fields fail."""
+    from verify_bundle_cli import _check_canonicalization_provenance
+
+    prov = {"format": "application/json"}
+    passed, msg = _check_canonicalization_provenance(prov)
+    assert passed is False
+    assert "missing" in msg.lower()
+
+
+def test_check_canonicalization_provenance_bad_versions_type():
+    """canonicalizer_versions must be a dict."""
+    from verify_bundle_cli import _check_canonicalization_provenance
+
+    prov = {
+        "format": "application/json",
+        "normalization_mode": "canonical_v1",
+        "canonicalizer_versions": "not-a-dict",
+        "fallback_reason": None,
+    }
+    passed, msg = _check_canonicalization_provenance(prov)
+    assert passed is False
+    assert "dict" in msg.lower()
+
+
+def test_check_root_consistency_matching():
+    """Matching roots pass."""
+    from verify_bundle_cli import _check_root_consistency
+
+    passed, msg = _check_root_consistency("aa" * 32, "aa" * 32)
+    assert passed is True
+
+
+def test_check_root_consistency_case_insensitive():
+    """Root comparison is case-insensitive."""
+    from verify_bundle_cli import _check_root_consistency
+
+    passed, msg = _check_root_consistency("AA" * 32, "aa" * 32)
+    assert passed is True
+
+
+def test_check_root_consistency_mismatch():
+    """Mismatched roots fail."""
+    from verify_bundle_cli import _check_root_consistency
+
+    passed, msg = _check_root_consistency("aa" * 32, "bb" * 32)
+    assert passed is False
+
+
+def test_check_epoch_record_valid():
+    """Valid epoch record passes."""
+    from verify_bundle_cli import _check_epoch_record
+
+    bundle = _make_bundle()
+    epoch_record = bundle["epoch_record"]
+    root_hash_hex = bundle["shard_header"]["root_hash"]
+    passed, msg = _check_epoch_record(epoch_record, root_hash_hex)
+    assert passed is True
+
+
+def test_check_epoch_record_root_mismatch():
+    """Epoch record with wrong root fails."""
+    from verify_bundle_cli import _check_epoch_record
+
+    bundle = _make_bundle()
+    epoch_record = bundle["epoch_record"]
+    passed, msg = _check_epoch_record(epoch_record, "ff" * 32)
+    assert passed is False
+    assert "mismatch" in msg.lower()
+
+
+def test_check_canonical_events_valid():
+    """Valid canonical events and leaf hashes pass."""
+    from verify_bundle_cli import _check_canonical_events
+
+    bundle = _make_bundle()
+    results = _check_canonical_events(
+        bundle["schema_version"],
+        bundle["canonical_events"],
+        bundle["leaf_hashes"],
+        bundle["merkle_root"],
+    )
+    assert all(passed for passed, _ in results)
+
+
+def test_check_canonical_events_leaf_count_mismatch():
+    """Mismatched leaf hash count fails."""
+    from verify_bundle_cli import _check_canonical_events
+
+    bundle = _make_bundle()
+    results = _check_canonical_events(
+        bundle["schema_version"],
+        bundle["canonical_events"],
+        bundle["leaf_hashes"][:1],  # fewer hashes
+        bundle["merkle_root"],
+    )
+    assert any(not passed for passed, _ in results)
+
+
+def test_check_canonical_events_bad_root():
+    """Wrong Merkle root is detected."""
+    from verify_bundle_cli import _check_canonical_events
+
+    bundle = _make_bundle()
+    results = _check_canonical_events(
+        bundle["schema_version"],
+        bundle["canonical_events"],
+        bundle["leaf_hashes"],
+        "ff" * 32,  # wrong root
+    )
+    assert any(not passed for passed, _ in results)
+
+
+def test_check_signed_tree_head_valid():
+    """Valid Signed Tree Head passes."""
+    from verify_bundle_cli import _check_signed_tree_head
+
+    bundle = _make_bundle()
+    passed, msg = _check_signed_tree_head(
+        bundle["signed_tree_head"],
+        root_hash_hex=bundle["shard_header"]["root_hash"],
+        leaf_count=len(bundle["canonical_events"]),
+        epoch_record=bundle["epoch_record"],
+    )
+    assert passed is True
+
+
+def test_verify_bundle_with_consistency_proof():
+    """Bundle verification handles consistency proof field gracefully."""
+    bundle = _make_bundle()
+    passed, results = verify_bundle(bundle)
+    assert passed is True
+
+
+def test_cli_help_text():
+    """CLI --help outputs usage info and exits 0."""
+    result = subprocess.run(
+        [sys.executable, str(CLI_PATH), "--help"],
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 0
+    assert "bundle" in result.stdout.lower() or "usage" in result.stdout.lower()

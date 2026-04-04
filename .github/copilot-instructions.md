@@ -10,15 +10,15 @@ Olympus is a federated, append-only public ledger for government documents. It p
 
 1. **Append-Only Ledger**: All operations are additive; no modifications or deletions
 2. **Deterministic Canonicalization**: Semantically equivalent documents must produce identical hashes
-3. **CD-HS-SMF (Constant-Depth Hierarchical Sparse Sharded Merkle Forest)**: Single global 256-level Sparse Merkle Tree for all record commitments
+3. **CD-HS-ST (Constant-Depth Hierarchical Sparse Tree)**: Single global 256-level Sparse Merkle Tree for all record commitments
 4. **Verifiable Proofs**: All operations must be independently verifiable
 5. **Distributed Replication (Guardian Replication)**: No trust in a single institution required (Phase 1+ only; not in v1.0)
 
-## Core Architecture: CD-HS-SMF (DO NOT CHANGE)
+## Core Architecture: CD-HS-ST (DO NOT CHANGE)
 
-### 1. CD-HS-SMF Structure
+### 1. CD-HS-ST Structure
 
-The **Constant-Depth Hierarchical Sparse Sharded Merkle Forest (CD-HS-SMF)** is the core cryptographic data structure:
+The **Constant-Depth Hierarchical Sparse Tree (CD-HS-ST)** is the core cryptographic data structure:
 
 - A **single global 256-level Sparse Merkle Tree**
 - Keys encode both **shard identity** and **record identity**:
@@ -39,32 +39,32 @@ The **Constant-Depth Hierarchical Sparse Sharded Merkle Forest (CD-HS-SMF)** is 
 - NOT create separate `smt_nodes` vs `forest_nodes` tables
 - NOT implement per-shard SMTs with a separate forest aggregator
 
-### 2. Rust: CD-HS-SMF + Crypto Hot Path (Service)
+### 2. Rust: CD-HS-ST + Crypto Hot Path (Service)
 
 Rust maintains and extends the cryptographic core:
 
 **Responsibilities:**
 - Canonicalization (canonical JSON, NFC normalization, deterministic key order)
 - BLAKE3 hashing with clear domain separation
-- CD-HS-SMF operations:
+- CD-HS-ST operations:
   - `insert/update(global_key, leaf_value) -> (delta, new_root)`
   - `prove_inclusion(global_key, root) -> proof`
   - `verify_inclusion(global_key, leaf_value, proof, root) -> bool`
   - Non-inclusion proofs
 - Ed25519 signing of roots/checkpoints
-- Optional Poseidon support for witness generation (but CD-HS-SMF stays BLAKE3-based)
+- Optional Poseidon support for witness generation (but CD-HS-ST stays BLAKE3-based)
 
 **Adaptation Rule:**
-Existing Rust SMT code must be **adapted to the CD-HS-SMF model** (single global tree, composite key). It must **not** be re-introduced or extended as per-shard trees plus a forest tree. If existing Rust code assumes separate shard trees, refactor it to use the composite `H(GLOBAL_KEY_PREFIX || shard_id || record_key)` key scheme instead.
+Existing Rust SMT code must be **adapted to the CD-HS-ST model** (single global tree, composite key). It must **not** be re-introduced or extended as per-shard trees plus a forest tree. If existing Rust code assumes separate shard trees, refactor it to use the composite `H(GLOBAL_KEY_PREFIX || shard_id || record_key)` key scheme instead.
 
 **Form Factor:**
 - Implement the Rust core as a **standalone binary** exposing a small, stable API over a local socket using **protobuf as the wire format**
 - Do **not** use JSON for the Rust↔Go boundary; protobuf is canonical to avoid double-serialization when Go serves gRPC externally
 - Do **not** add new FFI from Python↔Rust or Go↔Rust; treat Rust as a separate service
 
-### 3. Go: Log / Sequencer Around CD-HS-SMF
+### 3. Go: Log / Sequencer Around CD-HS-ST
 
-Go builds a "Trillian-shaped" log service that **uses CD-HS-SMF in Rust**:
+Go builds a "Trillian-shaped" log service that **uses CD-HS-ST in Rust**:
 
 **Public API (HTTP/gRPC):**
 - `QueueLeaf` (append a record for a given `shard_id`)
@@ -74,7 +74,7 @@ Go builds a "Trillian-shaped" log service that **uses CD-HS-SMF in Rust**:
 
 **Sequencer:**
 - Batches and orders appends
-- Calls the Rust CD-HS-SMF service (over local socket, protobuf) to:
+- Calls the Rust CD-HS-ST service (over local socket, protobuf) to:
   - Canonicalize records
   - Compute `global_key` from `(shard_id, record_id, …)`
   - Update the global SMT
@@ -85,7 +85,7 @@ Go builds a "Trillian-shaped" log service that **uses CD-HS-SMF in Rust**:
 - Use the **same protobuf definitions** as the Rust service; do not introduce a separate JSON shim
 - **Go must never compute Merkle hashes itself.** All SMT operations—leaf hashing, node updates, root computation, proof generation—are delegated to the Rust service
 - Go is a **client** of the Rust service, not a co-implementor of the tree
-- Treat the SMT as **one global tree** (CD-HS-SMF), not per-shard plus forest
+- Treat the SMT as **one global tree** (CD-HS-ST), not per-shard plus forest
 - Do **not** reintroduce separate `smt_nodes` vs `forest_nodes` tables that try to track two trees
 - If sharding metadata is needed, keep it in separate tables (e.g., `shard_meta`), not as separate Merkle trees
 
@@ -112,19 +112,19 @@ Python (FastAPI and jobs) handles high-level concerns:
 
 For ZK / redaction:
 
-- CD-HS-SMF remains **BLAKE3** in the operational layer
+- CD-HS-ST remains **BLAKE3** in the operational layer
 - Poseidon trees and circuits are a **separate layer**:
   - Rust can expose functions/endpoints to:
     - Derive Poseidon leaves from canonicalized records
     - Build Poseidon Merkle paths and roots for a redaction circuit
   - Ledger/log entries can store both:
-    - `root_b3` (CD-HS-SMF root)
+    - `root_b3` (CD-HS-ST root)
     - `root_poseidon` (redaction tree root)
     - or a dual-root commitment
 
 **Constraints:**
-- Keep Poseidon concerns **logically separate** from the CD-HS-SMF implementation
-- Do not try to change the CD-HS-SMF structure to "be Poseidon-native"
+- Keep Poseidon concerns **logically separate** from the CD-HS-ST implementation
+- Do not try to change the CD-HS-ST structure to "be Poseidon-native"
 
 ### 6. Non-Goals / Guardrails
 
@@ -137,7 +137,7 @@ Copilot MUST NOT:
 
 Copilot SHOULD:
 - Generate or refactor code so that:
-  - There is a clear Rust service owning the CD-HS-SMF
+  - There is a clear Rust service owning the CD-HS-ST
   - Go's log/transport layer talks to Rust as a client over protobuf
   - Python uses Go/Rust as external services, never as libraries
 

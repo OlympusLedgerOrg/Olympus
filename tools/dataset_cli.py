@@ -5,6 +5,7 @@ Dataset provenance CLI for Olympus (ADR-0010).
 Implements:
     dataset keygen  -- Generate an Ed25519 signing keypair
     dataset commit  -- Scan a directory, build a signed manifest, emit a commit bundle
+    dataset push    -- Submit a commit bundle to a running Olympus server
     dataset verify  -- Offline verification of a commit bundle
 """
 
@@ -12,6 +13,8 @@ import argparse
 import json
 import sys
 from pathlib import Path
+from urllib.error import HTTPError, URLError
+from urllib.request import Request, urlopen
 
 
 # Allow running as a standalone script or being imported by tools/olympus.py.
@@ -241,7 +244,9 @@ def _cmd_dataset_commit(args: argparse.Namespace) -> int:
     commit_id = compute_dataset_commit_id(ds_id, args.parent or "", manifest_hash, pubkey_hex)
 
     # 8. Sign the commit ID with the Ed25519 signing key.
-    signature_hex = signing_key.sign(commit_id.encode()).signature.hex()
+    #    The commit_id is a hex string; bytes.fromhex converts it to the raw
+    #    32-byte hash for signing, matching server-side verification convention.
+    signature_hex = signing_key.sign(bytes.fromhex(commit_id)).signature.hex()
 
     # 9. Assemble the bundle.
     bundle = {
@@ -251,6 +256,9 @@ def _cmd_dataset_commit(args: argparse.Namespace) -> int:
         "manifest": manifest,
         "committer_pubkey": pubkey_hex,
         "signature": signature_hex,
+        "dataset_name": args.dataset_name,
+        "source_uri": args.source_uri,
+        "namespace": args.namespace,
     }
 
     bundle_json = json.dumps(bundle, indent=2)
@@ -321,7 +329,7 @@ def _cmd_dataset_verify(args: argparse.Namespace) -> int:
         verify_key = nacl.signing.VerifyKey(
             bundle["committer_pubkey"], encoder=nacl.encoding.HexEncoder
         )
-        verify_key.verify(bundle["commit_id"].encode(), bytes.fromhex(bundle["signature"]))
+        verify_key.verify(bytes.fromhex(bundle["commit_id"]), bytes.fromhex(bundle["signature"]))
     except nacl.exceptions.BadSignatureError:
         errors.append("Ed25519 signature invalid")
     except Exception as exc:
@@ -335,6 +343,169 @@ def _cmd_dataset_verify(args: argparse.Namespace) -> int:
     print("\u2713 Merkle root consistent")
     print("\u2713 Commit ID deterministic")
     print("\u2713 Ed25519 signature valid")
+    return 0
+
+
+def _cmd_dataset_push(args: argparse.Namespace) -> int:
+    """Submit a commit bundle to a running Olympus server.
+
+    Reads the JSON bundle produced by ``dataset commit``, builds the
+    server-side canonical manifest, re-computes the deterministic commit ID
+    and signature using the same key, then POSTs the request.
+
+    The CLI and server use different canonical manifest formats, so push
+    bridges them by constructing the API-format manifest from the bundle
+    metadata and re-signing with the original private key.
+
+    Args:
+        args: Parsed CLI arguments.
+
+    Returns:
+        0 on success, 1 on error.
+    """
+    from protocol.canonical_json import canonical_json_bytes
+    from protocol.hashes import blake3_hash
+
+    # 1. Read the bundle.
+    try:
+        bundle = json.loads(Path(args.bundle_file).read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        print(f"Error: Bundle file not found: {args.bundle_file}", file=sys.stderr)
+        return 1
+    except json.JSONDecodeError as exc:
+        print(f"Error: Invalid JSON in bundle file: {exc}", file=sys.stderr)
+        return 1
+
+    # 2. Load signing key (needed to re-sign with the server manifest format).
+    try:
+        signing_key = nacl.signing.SigningKey(
+            Path(args.private_key).read_bytes(), encoder=nacl.encoding.HexEncoder
+        )
+    except FileNotFoundError:
+        print(f"Error: Private key file not found: {args.private_key}", file=sys.stderr)
+        return 1
+    except Exception as exc:
+        print(f"Error loading private key: {exc}", file=sys.stderr)
+        return 1
+
+    pubkey_hex = signing_key.verify_key.encode(nacl.encoding.HexEncoder).decode()
+    if pubkey_hex != bundle.get("committer_pubkey"):
+        print(
+            "Error: Private key does not match committer_pubkey in bundle",
+            file=sys.stderr,
+        )
+        return 1
+
+    # 3. Extract fields from the bundle.
+    manifest = bundle.get("manifest", {})
+    file_entries = manifest.get("files", [])
+
+    # Metadata may be embedded in the bundle (from recent commit) or supplied
+    # via CLI flags.
+    dataset_name = args.dataset_name or bundle.get("dataset_name")
+    source_uri = args.source_uri or bundle.get("source_uri")
+    namespace = args.namespace or bundle.get("namespace", "default")
+
+    if not dataset_name:
+        print(
+            "Error: --dataset-name is required (not found in bundle)",
+            file=sys.stderr,
+        )
+        return 1
+    if not source_uri:
+        print(
+            "Error: --source-uri is required (not found in bundle)",
+            file=sys.stderr,
+        )
+        return 1
+
+    # 4. Map CLI bundle file entries to API format.
+    api_files = []
+    for f in file_entries:
+        api_files.append(
+            {
+                "path": f["path"],
+                "content_hash": f["hash"],
+                "byte_size": f["size"],
+                "record_count": None,
+            }
+        )
+
+    if not api_files:
+        print("Error: Bundle manifest contains no files", file=sys.stderr)
+        return 1
+
+    # 5. Build the server-side canonical manifest and re-compute identifiers.
+    #    The server uses a different manifest schema than the CLI, so we must
+    #    build the server-format manifest to get matching hashes.
+    server_manifest = {
+        "dataset_name": dataset_name,
+        "dataset_version": args.dataset_version,
+        "source_uri": source_uri,
+        "canonical_namespace": namespace,
+        "granularity": args.granularity,
+        "license_spdx": args.license_spdx,
+        "license_uri": None,
+        "usage_restrictions": [],
+        "file_format": args.file_format,
+        "files": api_files,
+        "manifest_schema_version": "dataset_manifest_v1",
+    }
+    server_manifest_hash = blake3_hash([canonical_json_bytes(server_manifest)]).hex()
+
+    ds_id = dataset_key(dataset_name, source_uri, namespace, pubkey_hex)
+    parent_id = bundle.get("parent_id") or ""
+    commit_id = compute_dataset_commit_id(ds_id, parent_id, server_manifest_hash, pubkey_hex)
+
+    # Re-sign the commit ID using the server convention (raw hash bytes).
+    signature_hex = signing_key.sign(bytes.fromhex(commit_id)).signature.hex()
+
+    # 6. Assemble the API request body.
+    request_body = {
+        "dataset_name": dataset_name,
+        "dataset_version": args.dataset_version,
+        "source_uri": source_uri,
+        "canonical_namespace": namespace,
+        "granularity": args.granularity,
+        "license_spdx": args.license_spdx,
+        "file_format": args.file_format,
+        "files": api_files,
+        "parent_commit_id": parent_id or None,
+        "committer_pubkey": pubkey_hex,
+        "commit_signature": signature_hex,
+    }
+
+    # 7. POST to the server.
+    server = args.server.rstrip("/")
+    url = f"{server}/datasets/commit"
+    payload = json.dumps(request_body).encode("utf-8")
+
+    headers: dict[str, str] = {"Content-Type": "application/json"}
+    if args.api_key:
+        headers["X-API-Key"] = args.api_key
+
+    req = Request(url, data=payload, headers=headers, method="POST")
+
+    try:
+        with urlopen(req) as resp:  # noqa: S310 -- URL comes from CLI arg
+            resp_body = json.loads(resp.read().decode("utf-8"))
+    except HTTPError as exc:
+        try:
+            detail = json.loads(exc.read().decode("utf-8"))
+        except Exception:
+            detail = str(exc)
+        print(f"Error: Server returned {exc.code}: {detail}", file=sys.stderr)
+        return 1
+    except URLError as exc:
+        print(f"Error: Could not reach server at {server}: {exc.reason}", file=sys.stderr)
+        return 1
+
+    # 8. Report success.
+    print(f"\u2713 Pushed to {server}")
+    print(f"  dataset_id:  {resp_body.get('dataset_id', 'N/A')}")
+    print(f"  commit_id:   {resp_body.get('commit_id', 'N/A')}")
+    print(f"  merkle_root: {resp_body.get('merkle_root', 'N/A')}")
+    print(f"  shard_id:    {resp_body.get('shard_id', 'N/A')}")
     return 0
 
 
@@ -408,6 +579,69 @@ def build_dataset_parser(ds_parser: argparse.ArgumentParser) -> None:
     )
     verify_p.add_argument("bundle_file", help="Path to the commit bundle JSON file")
 
+    # -- push -----------------------------------------------------------------
+    push_p = ds_sub.add_parser(
+        "push",
+        help="Submit a commit bundle to a running Olympus server",
+        description=(
+            "Read a commit bundle JSON file (produced by 'dataset commit') and "
+            "POST it to a running Olympus server's /datasets/commit endpoint.  "
+            "Metadata fields not present in the bundle can be supplied via flags."
+        ),
+    )
+    push_p.add_argument("bundle_file", help="Path to the commit bundle JSON file")
+    push_p.add_argument(
+        "--server",
+        required=True,
+        help="Base URL of the Olympus server (e.g. http://localhost:8000)",
+    )
+    push_p.add_argument(
+        "--private-key",
+        required=True,
+        help="Path to the .priv key file (same key used for 'dataset commit')",
+    )
+    push_p.add_argument(
+        "--api-key",
+        default="",
+        help="API key for server authentication (sent as X-API-Key header)",
+    )
+    push_p.add_argument(
+        "--dataset-name",
+        default="",
+        help="Dataset name (overrides value from bundle if set)",
+    )
+    push_p.add_argument(
+        "--source-uri",
+        default="",
+        help="Source URI (overrides value from bundle if set)",
+    )
+    push_p.add_argument(
+        "--namespace",
+        default="",
+        help="Canonical namespace (overrides value from bundle if set)",
+    )
+    push_p.add_argument(
+        "--dataset-version",
+        default="1.0.0",
+        help="Dataset version string (default: 1.0.0)",
+    )
+    push_p.add_argument(
+        "--license-spdx",
+        default="MIT",
+        help="SPDX license identifier (default: MIT)",
+    )
+    push_p.add_argument(
+        "--file-format",
+        default="csv",
+        help="Primary file format (default: csv)",
+    )
+    push_p.add_argument(
+        "--granularity",
+        default="file",
+        choices=["file", "record", "shard"],
+        help="Dataset granularity (default: file)",
+    )
+
 
 def dispatch_dataset(args: argparse.Namespace) -> int:
     """Dispatch a parsed ``dataset`` sub-command to the correct handler.
@@ -424,6 +658,8 @@ def dispatch_dataset(args: argparse.Namespace) -> int:
         return _cmd_dataset_commit(args)
     if args.ds_command == "verify":
         return _cmd_dataset_verify(args)
+    if args.ds_command == "push":
+        return _cmd_dataset_push(args)
     print(f"Unknown dataset sub-command: {args.ds_command}", file=sys.stderr)
     return 1
 

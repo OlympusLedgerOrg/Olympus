@@ -98,13 +98,13 @@ def test_proof_latency_labels_and_observe() -> None:
 
 
 def test_ledger_height_labels_and_set() -> None:
-    """LEDGER_HEIGHT.labels(...).set() does not raise."""
-    LEDGER_HEIGHT.labels(shard_id="test-shard").set(42)
+    """LEDGER_HEIGHT.set(...) does not raise."""
+    LEDGER_HEIGHT.set(42)
 
 
 def test_smt_divergence_total_labels_and_inc() -> None:
-    """SMT_DIVERGENCE_TOTAL.labels(...).inc() does not raise."""
-    SMT_DIVERGENCE_TOTAL.labels(shard_id="test-shard").inc()
+    """SMT_DIVERGENCE_TOTAL.inc() does not raise."""
+    SMT_DIVERGENCE_TOTAL.inc()
 
 
 def test_ingest_total_labels_and_inc() -> None:

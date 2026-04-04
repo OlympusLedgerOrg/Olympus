@@ -97,7 +97,7 @@ def _extract_tsa_cert_fingerprint(tst_bytes: bytes) -> str | None:
     """Extract the TSA certificate fingerprint from a TimeStampToken, if present."""
     try:
         tst, substrate = decoder.decode(tst_bytes, asn1Spec=rfc3161ng.TimeStampToken())
-        if substrate:
+        if substrate:  # pragma: no cover — requires crafted DER with trailing bytes
             return None
         signed_data = tst.content
         certificate: x509.Certificate = load_certificate(signed_data, certificate=b"")
@@ -126,7 +126,7 @@ def _extract_message_imprint(tst_bytes: bytes) -> bytes | None:
     """
     try:
         tst, substrate = decoder.decode(tst_bytes, asn1Spec=rfc3161ng.TimeStampToken())
-        if substrate:
+        if substrate:  # pragma: no cover — requires crafted DER with trailing bytes
             return None
         tstinfo_oct = (
             tst.getComponentByName("content").getComponentByPosition(2).getComponentByPosition(1)
@@ -134,10 +134,10 @@ def _extract_message_imprint(tst_bytes: bytes) -> bytes | None:
         tstinfo_oct, substrate = decoder.decode(
             bytes(tstinfo_oct), asn1Spec=pyasn1_univ.OctetString()
         )
-        if substrate:
+        if substrate:  # pragma: no cover — requires crafted DER with trailing bytes
             return None
         tstinfo, substrate = decoder.decode(bytes(tstinfo_oct), asn1Spec=rfc3161ng.TSTInfo())
-        if substrate:
+        if substrate:  # pragma: no cover — requires crafted DER with trailing bytes
             return None
         return bytes(tstinfo["messageImprint"]["hashedMessage"])
     except Exception:
@@ -482,7 +482,7 @@ def extract_tsa_certificate(tst_bytes: bytes) -> x509.Certificate | None:
     """
     try:
         tst, substrate = decoder.decode(tst_bytes, asn1Spec=rfc3161ng.TimeStampToken())
-        if substrate:
+        if substrate:  # pragma: no cover — requires crafted DER with trailing bytes
             return None
         signed_data = tst.content
         cert: x509.Certificate | None = load_certificate(signed_data, certificate=b"")

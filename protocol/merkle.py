@@ -31,6 +31,11 @@ SUPPORTED_PROOF_VERSIONS: frozenset[str] = frozenset({"proof_v1"})
 # For standard Merkle trees, this is still a generous limit (2^256 leaves).
 MAX_PROOF_DEPTH = 256
 
+# L2: Maximum allowed consistency proof nodes to prevent DoS.
+# Consistency proofs contain O(log n) nodes, but we enforce an upper bound
+# to prevent malformed proofs from causing deep recursion.
+_MAX_CONSISTENCY_PROOF_NODES = 512
+
 # Canonical empty-tree commitment.  This is the root hash of a tree with
 # zero leaves and MUST be used as the only valid ``old_root`` when
 # ``old_size=0`` in consistency proof verification.
@@ -455,7 +460,21 @@ def _subproof_ct(
             # Not at root - need the subtree root
             return [ct_merkle_root(list(leaf_hashes[:old_size]))]
 
+    # Base case: single-leaf new tree (new_size == 1).
+    # The standard k-derivation loop leaves k == new_size, making the
+    # ``new_size > k`` branch below unreachable and causing infinite
+    # recursion when old_size == 0.  Handle explicitly: when we reach
+    # here, old_size must be 0 (the old_size == 1 case is already caught
+    # by the old_size == new_size guard above, and old_size > new_size is
+    # a precondition violation).  The proof is the single-leaf subtree root.
+    if new_size == 1:
+        if is_root:
+            return []
+        return [ct_merkle_root(list(leaf_hashes[:new_size]))]
+
     # Find largest power of 2 less than new_size (k in RFC 6962)
+    # Invariant: after this loop, k < new_size (strictly), so the
+    # ``new_size > k`` test below is always True.
     k = 1
     while k * 2 < new_size:
         k *= 2
@@ -465,11 +484,8 @@ def _subproof_ct(
         # Need: SUBPROOF(old_size, k, False) + [right_subtree_root]
         # When we recurse into a subtree, is_root should be False
         left_proof = _subproof_ct(leaf_hashes[:k], old_size, k, False)
-        if new_size > k:
-            right_root = ct_merkle_root(list(leaf_hashes[k:new_size]))
-            return left_proof + [right_root]
-        else:
-            return left_proof
+        right_root = ct_merkle_root(list(leaf_hashes[k:new_size]))
+        return left_proof + [right_root]
     else:
         # old_size is in the right subtree (old_size > k)
         # Need: [left_subtree_root] + SUBPROOF(old_size - k, new_size - k, False)
@@ -484,6 +500,8 @@ def verify_consistency_proof(
     proof: Sequence[bytes],
     old_size: int,
     new_size: int,
+    *,
+    trust_new_root_on_empty: bool = False,
 ) -> bool:
     """
     Verify that ``new_root`` represents a Merkle tree that extends the tree with
@@ -499,6 +517,11 @@ def verify_consistency_proof(
         proof: Consistency proof as produced by :func:`generate_consistency_proof`.
         old_size: Leaf count of the prior tree.
         new_size: Leaf count of the newer tree (must satisfy new_size >= old_size).
+        trust_new_root_on_empty: When old_size=0 the proof is vacuously consistent
+            and new_root cannot be verified cryptographically. Set this to True only
+            when new_root has been independently obtained from a trusted source such
+            as a signed checkpoint. Raises ValueError if False (the default) and
+            old_size=0 to prevent silent acceptance of adversarial new_root values.
 
     Returns:
         True if the proof is valid and demonstrates append-only growth.
@@ -511,15 +534,20 @@ def verify_consistency_proof(
         # Empty tree is a known commitment — the root must be the canonical empty hash.
         if old_root != EMPTY_TREE_HASH:
             return False
-        # RFC 6962 §2.1: a zero-leaf old tree is vacuously consistent with any
-        # new tree; generate_consistency_proof() returns an empty proof for this
-        # transition so there is nothing to verify cryptographically.  Callers
-        # that need to independently confirm new_root MUST obtain it from a
-        # trusted source (e.g. a signed checkpoint) — this function cannot do
-        # so from the proof alone.
+        if not trust_new_root_on_empty:
+            raise ValueError(
+                "verify_consistency_proof: old_size=0 cannot cryptographically "
+                "verify new_root from the proof alone. The caller must obtain "
+                "new_root from a trusted source (e.g. a signed checkpoint) and "
+                "pass trust_new_root_on_empty=True to acknowledge this."
+            )
         return True
     if old_size == new_size:
         return old_root == new_root
+
+    # L2: Enforce maximum proof size to prevent DoS via deep recursion
+    if len(proof) > _MAX_CONSISTENCY_PROOF_NODES:
+        return False
 
     try:
         # Verify RFC 6962 consistency proof
@@ -587,7 +615,21 @@ def _verify_subproof_ct(
             root = proof[proof_index]
             return root, root, proof_index + 1
 
+    # Base case: single-leaf new tree (new_size == 1).
+    # Mirrors the guard in _subproof_ct: the k-derivation loop leaves
+    # k == new_size, so the ``new_size > k`` branch below would be
+    # unreachable and old_size == 0 would recurse infinitely.  When we
+    # reach here, old_size must be 0 (old_size == 1 is already caught
+    # by the old_size == new_size guard above).
+    if new_size == 1:
+        if proof_index >= len(proof):
+            raise ValueError("Proof exhausted for single-leaf subtree")
+        root = proof[proof_index]
+        return root, root, proof_index + 1
+
     # Find largest power of 2 less than new_size (k in RFC 6962)
+    # Invariant: after this loop, k < new_size (strictly), so the
+    # ``new_size > k`` test below is always True.
     k = 1
     while k * 2 < new_size:
         k *= 2
@@ -600,18 +642,12 @@ def _verify_subproof_ct(
             proof, proof_index, old_size, k, False
         )
 
-        if new_size > k:
-            # New tree has right subtree
-            if idx >= len(proof):
-                raise ValueError("Proof exhausted, expected right subtree root")
-            right_root = proof[idx]
-            idx += 1
-            old_root = old_root_left
-            new_root = node_hash(new_root_left, right_root)
-        else:
-            # New tree = left subtree only (new_size = k)
-            old_root = old_root_left
-            new_root = new_root_left
+        if idx >= len(proof):
+            raise ValueError("Proof exhausted, expected right subtree root")
+        right_root = proof[idx]
+        idx += 1
+        old_root = old_root_left
+        new_root = node_hash(new_root_left, right_root)
 
         return old_root, new_root, idx
     else:

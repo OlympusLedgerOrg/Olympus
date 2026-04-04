@@ -17,6 +17,11 @@ from api.config import get_settings
 def _make_engine():
     settings = get_settings()
     url = settings.database_url
+    # Transparently upgrade bare postgresql:// to the asyncpg driver so that
+    # callers can use the standard DATABASE_URL convention without knowing
+    # about SQLAlchemy async dialect prefixes.
+    if url.startswith("postgresql://"):
+        url = url.replace("postgresql://", "postgresql+asyncpg://", 1)
     connect_args = {"check_same_thread": False} if url.startswith("sqlite") else {}
     return create_async_engine(url, connect_args=connect_args, echo=False)
 

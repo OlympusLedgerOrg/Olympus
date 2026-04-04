@@ -2,7 +2,7 @@
 //
 // All handlers currently return codes.Unimplemented.  The package is
 // intentionally kept as a thin scaffold so that the compile-time contract is
-// established before the handlers are wired to the Rust CD-HS-SMF service.
+// established before the handlers are wired to the Rust CD-HS-ST service.
 //
 // Responsibilities (to be implemented in later phases):
 //   - BatchUpdate: batch appends → delegate key/hash derivation to Rust service
@@ -35,7 +35,7 @@ func NewSequencerServer() *SequencerServer {
 
 // BatchUpdate appends one or more records to the global SMT.
 //
-// Stub: returns Unimplemented until the Rust CD-HS-SMF client is wired up.
+// Stub: returns Unimplemented until the Rust CD-HS-ST client is wired up.
 func (s *SequencerServer) BatchUpdate(
 	_ context.Context, _ *pb.BatchUpdateRequest,
 ) (*pb.BatchUpdateResponse, error) {
@@ -44,7 +44,7 @@ func (s *SequencerServer) BatchUpdate(
 
 // ProveInclusion returns a Merkle inclusion proof for a committed record.
 //
-// Stub: returns Unimplemented until the Rust CD-HS-SMF client is wired up.
+// Stub: returns Unimplemented until the Rust CD-HS-ST client is wired up.
 func (s *SequencerServer) ProveInclusion(
 	_ context.Context, _ *pb.ProveInclusionRequest,
 ) (*pb.ProveInclusionResponse, error) {
@@ -53,7 +53,7 @@ func (s *SequencerServer) ProveInclusion(
 
 // ProveNonInclusion returns a Merkle non-inclusion proof for a record.
 //
-// Stub: returns Unimplemented until the Rust CD-HS-SMF client is wired up.
+// Stub: returns Unimplemented until the Rust CD-HS-ST client is wired up.
 func (s *SequencerServer) ProveNonInclusion(
 	_ context.Context, _ *pb.ProveNonInclusionRequest,
 ) (*pb.ProveNonInclusionResponse, error) {
@@ -62,7 +62,7 @@ func (s *SequencerServer) ProveNonInclusion(
 
 // GetRoot returns the current signed root of the global SMT.
 //
-// Stub: returns Unimplemented until the Rust CD-HS-SMF client is wired up.
+// Stub: returns Unimplemented until the Rust CD-HS-ST client is wired up.
 func (s *SequencerServer) GetRoot(
 	_ context.Context, _ *pb.GetRootRequest,
 ) (*pb.GetRootResponse, error) {

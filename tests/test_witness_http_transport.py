@@ -111,3 +111,41 @@ def test_fetcher_factories_work_with_log_monitor():
             await transport.close()
 
         asyncio.run(_close())
+
+
+# ── SSRF validation tests ──────────────────────────────────────────────────
+
+
+def test_node_endpoint_rejects_file_scheme_in_production(monkeypatch):
+    """NodeEndpoint raises ValueError for file:// scheme in production mode."""
+    monkeypatch.setenv("OLYMPUS_ENV", "production")
+    with pytest.raises(ValueError, match="scheme"):
+        NodeEndpoint(node_id="n1", base_url="file:///etc/passwd")
+
+
+def test_node_endpoint_rejects_http_in_production(monkeypatch):
+    """NodeEndpoint raises ValueError for http:// when OLYMPUS_ENV != development."""
+    monkeypatch.setenv("OLYMPUS_ENV", "production")
+    with pytest.raises(ValueError, match="scheme"):
+        NodeEndpoint(node_id="n1", base_url="http://example.com/")
+
+
+def test_node_endpoint_accepts_http_in_development(monkeypatch):
+    """NodeEndpoint accepts http:// when OLYMPUS_ENV=development."""
+    monkeypatch.setenv("OLYMPUS_ENV", "development")
+    endpoint = NodeEndpoint(node_id="n1", base_url="http://example.com/")
+    assert endpoint.base_url == "http://example.com/"
+
+
+def test_node_endpoint_accepts_https_url(monkeypatch):
+    """NodeEndpoint accepts a valid https:// URL."""
+    monkeypatch.setenv("OLYMPUS_ENV", "production")
+    endpoint = NodeEndpoint(node_id="n1", base_url="https://node.example.com/")
+    assert endpoint.base_url == "https://node.example.com/"
+
+
+def test_node_endpoint_rejects_private_ip_in_production(monkeypatch):
+    """NodeEndpoint raises ValueError for private IP base_url in production mode."""
+    monkeypatch.setenv("OLYMPUS_ENV", "production")
+    with pytest.raises(ValueError, match="private/loopback"):
+        NodeEndpoint(node_id="n1", base_url="https://192.168.1.1/")

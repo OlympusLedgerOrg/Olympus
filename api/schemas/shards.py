@@ -92,6 +92,9 @@ class HeaderVerificationResponse(BaseModel):
     signature_valid: bool
     timestamp_token: TimestampTokenResponse | None  # None if not yet timestamped
     timestamp_valid: bool | None  # None if no token available
+    # RFC 6962 §4.6 cursor fields for paginated replay verification
+    headers_checked: int | None = None  # Number of headers verified in this call
+    next_seq: int | None = None  # Next unverified sequence; None = complete
 
 
 class ShardHistoryEntryResponse(BaseModel):

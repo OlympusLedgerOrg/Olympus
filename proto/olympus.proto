@@ -9,7 +9,7 @@ option go_package = "github.com/wombatvagina69-crypto/olympus/go/sequencer/proto
 // The Go sequencer implements this service, listening on a Unix domain socket
 // (path configurable via --socket flag). It is strictly local-only and MUST
 // NOT be exposed externally. All cryptographic operations are delegated to the
-// Rust CD-HS-SMF service via the cdhs_smf.proto API.
+// Rust CD-HS-ST service via the cdhs_smf.proto API.
 //
 // Append semantics
 // ----------------

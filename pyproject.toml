@@ -39,6 +39,7 @@ dependencies = [
     "boto3==1.42.66",
     "python-multipart==0.0.22",
     "python-magic>=0.4.27",
+    "zstandard>=0.23.0",
     "sqlalchemy[asyncio]==2.0.48",
     "aiosqlite==0.22.1",
     "alembic==1.18.4",
@@ -210,11 +211,23 @@ module = "poseidon_py.*"
 ignore_missing_imports = true
 
 [[tool.mypy.overrides]]
+module = "zstandard.*"
+ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
 module = "opentelemetry.*"
 ignore_missing_imports = true
 
 [[tool.mypy.overrides]]
 module = "prometheus_client.*"
+ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+module = "olympus_core.*"
+ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+module = "olympus_core"
 ignore_missing_imports = true
 
 [tool.bandit]

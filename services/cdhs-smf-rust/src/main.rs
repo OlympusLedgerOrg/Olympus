@@ -1,6 +1,6 @@
-//! CD-HS-SMF Service
+//! CD-HS-ST Service
 //!
-//! Constant-Depth Hierarchical Sparse Sharded Merkle Forest service.
+//! Constant-Depth Hierarchical Sparse Tree service.
 //!
 //! This is a standalone Rust binary that maintains a single global 256-level
 //! Sparse Merkle Tree with composite keys encoding both shard identity and
@@ -250,7 +250,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let addr = "[::1]:50051".parse()?;
     let service = CdhsSmfService::new();
 
-    info!("CD-HS-SMF Service starting on {}", addr);
+    info!("CD-HS-ST Service starting on {}", addr);
 
     Server::builder()
         .add_service(CdhsSmfServiceServer::new(service))
