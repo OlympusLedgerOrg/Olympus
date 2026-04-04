@@ -11,11 +11,20 @@
 use std::collections::HashMap;
 use std::sync::RwLock;
 
-use pyo3::exceptions::PyValueError;
+use pyo3::exceptions::{PyRuntimeError, PyValueError};
 use pyo3::prelude::*;
 use pyo3::types::{PyBytes, PyDict, PyList, PyTuple};
 
 use crate::crypto;
+
+/// Map a poisoned `RwLock` error to a Python `RuntimeError`.
+///
+/// A poisoned lock means a prior write-guard holder panicked, leaving the
+/// internal state potentially inconsistent.  Rather than propagating the panic
+/// (which would crash the Python interpreter), we surface a clear error.
+fn lock_err<T>(_e: std::sync::PoisonError<T>) -> PyErr {
+    PyRuntimeError::new_err("RustSparseMerkleTree: internal lock poisoned (prior panic during write)")
+}
 
 // ---------------------------------------------------------------------------
 // Internal helpers (no PyO3 types)
@@ -116,7 +125,7 @@ impl RustSparseMerkleTree {
         let vh32: [u8; 32] = value_hash.try_into().unwrap();
         let path = key_to_path_bits(&key32);
 
-        let mut state = self.state.write().unwrap();
+        let mut state = self.state.write().map_err(lock_err)?;
         state.leaves.insert(key32, vh32);
 
         // Compute leaf hash and walk from leaf to root, exactly matching
@@ -155,8 +164,8 @@ impl RustSparseMerkleTree {
     }
 
     /// Return the 32-byte root hash.
-    fn get_root<'py>(&self, py: Python<'py>) -> PyObject {
-        let state = self.state.read().unwrap();
+    fn get_root<'py>(&self, py: Python<'py>) -> PyResult<PyObject> {
+        let state = self.state.read().map_err(lock_err)?;
         let root = if state.nodes.is_empty() && state.leaves.is_empty() {
             self.empty_hashes[256]
         } else {
@@ -166,7 +175,7 @@ impl RustSparseMerkleTree {
                 .copied()
                 .unwrap_or(self.empty_hashes[256])
         };
-        PyBytes::new(py, &root).into()
+        Ok(PyBytes::new(py, &root).into())
     }
 
     /// Return the value_hash for a key, or ``None`` if absent.
@@ -178,7 +187,7 @@ impl RustSparseMerkleTree {
             )));
         }
         let key32: [u8; 32] = key.try_into().unwrap();
-        let state = self.state.read().unwrap();
+        let state = self.state.read().map_err(lock_err)?;
         Ok(state
             .leaves
             .get(&key32)
@@ -187,14 +196,14 @@ impl RustSparseMerkleTree {
 
     /// Number of non-empty leaves.
     #[getter]
-    fn size(&self) -> usize {
-        self.state.read().unwrap().leaves.len()
+    fn size(&self) -> PyResult<usize> {
+        Ok(self.state.read().map_err(lock_err)?.leaves.len())
     }
 
     /// Snapshot of leaves as ``dict[bytes, bytes]``.
     #[getter]
     fn leaves<'py>(&self, py: Python<'py>) -> PyResult<PyObject> {
-        let state = self.state.read().unwrap();
+        let state = self.state.read().map_err(lock_err)?;
         let dict = PyDict::new(py);
         for (k, v) in &state.leaves {
             dict.set_item(PyBytes::new(py, k), PyBytes::new(py, v))?;
@@ -208,7 +217,7 @@ impl RustSparseMerkleTree {
     /// format where the root is keyed by ``()``.
     #[getter]
     fn nodes<'py>(&self, py: Python<'py>) -> PyResult<PyObject> {
-        let state = self.state.read().unwrap();
+        let state = self.state.read().map_err(lock_err)?;
         let dict = PyDict::new(py);
         for (path, hash) in &state.nodes {
             // Convert Vec<u8> path → Python tuple of ints.
@@ -237,7 +246,7 @@ impl RustSparseMerkleTree {
             )));
         }
         let key32: [u8; 32] = key.try_into().unwrap();
-        let state = self.state.read().unwrap();
+        let state = self.state.read().map_err(lock_err)?;
 
         let value_hash = state
             .leaves
@@ -272,7 +281,7 @@ impl RustSparseMerkleTree {
             )));
         }
         let key32: [u8; 32] = key.try_into().unwrap();
-        let state = self.state.read().unwrap();
+        let state = self.state.read().map_err(lock_err)?;
 
         if state.leaves.contains_key(&key32) {
             return Err(PyValueError::new_err(
