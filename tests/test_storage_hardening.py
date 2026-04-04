@@ -2,6 +2,7 @@
 
 from types import SimpleNamespace
 
+import blake3
 import pytest
 from psycopg import OperationalError
 from psycopg.pq import TransactionStatus
@@ -168,9 +169,10 @@ def test_persist_tree_nodes_uses_upsert_without_precheck(monkeypatch: pytest.Mon
     # No SELECT-before-INSERT anti-pattern.
     assert all("SELECT 1 FROM smt_nodes" not in sql for sql in cursor.statements)
 
-    # The first statement must gate the trigger with the BLAKE3 hash.
+    # The first statement must gate the trigger with the computed BLAKE3 hash.
     assert "olympus.allow_node_rehash" in cursor.statements[0]
-    assert "003e82" in cursor.statements[0]  # prefix of the BLAKE3 gate hash
+    expected_prefix = blake3.blake3(b"OLY:NODE-REHASH-GATE:V1").hexdigest()[:6]
+    assert expected_prefix in cursor.statements[0]
 
     # All INSERT statements must use DO UPDATE (not DO NOTHING).
     insert_stmts = [s for s in cursor.statements if s.startswith("INSERT")]

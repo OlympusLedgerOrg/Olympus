@@ -21,10 +21,10 @@ from collections.abc import Mapping
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Any
 
-import blake3
 from psycopg import sql
 
 from protocol.ssmf import SparseMerkleTree
+from storage.gates import derive_node_rehash_gate
 
 
 if TYPE_CHECKING:
@@ -32,8 +32,9 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
+
 # ADR-0001: BLAKE3 domain-separated gate for the smt_nodes rehash trigger.
-_NODE_REHASH_GATE: str = blake3.blake3(b"OLY:NODE-REHASH-GATE:V1").hexdigest()
+_NODE_REHASH_GATE: str = derive_node_rehash_gate()
 
 
 # ---------------------------------------------------------------------------

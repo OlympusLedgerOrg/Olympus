@@ -80,6 +80,9 @@ class Settings(BaseSettings):
     # Maximum upload file size in bytes (default 256 MB)
     max_upload_bytes: int = 256 * 1024 * 1024
 
+    # Maximum seconds to wait for each upload read chunk before timing out.
+    upload_read_timeout_seconds: float = 5.0
+
     # TLS configuration — set to true when terminating TLS at the app layer
     tls_enabled: bool = False
 
