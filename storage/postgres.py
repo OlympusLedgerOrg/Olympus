@@ -63,6 +63,7 @@ from protocol.ssmf import (
     SparseMerkleTree,
     _key_to_path_bits,
 )
+from protocol.telemetry import LOAD_TREE_STATE_OUTSIDE_POSEIDON_TOTAL
 from storage.gates import derive_node_rehash_gate
 
 
@@ -2520,6 +2521,8 @@ class StorageLayer:
         self,
         cur: psycopg.Cursor[Any],
         up_to_ts: datetime | str | None = None,
+        *,
+        _OLYMPUS_POSEIDON_CARVE_OUT: bool = False,
     ) -> SparseMerkleTree:
         """
         Load the global sparse Merkle tree state from database.
@@ -2547,10 +2550,14 @@ class StorageLayer:
         Args:
             cur: Database cursor
             up_to_ts: Optional inclusive timestamp cutoff for historical snapshots
+            _OLYMPUS_POSEIDON_CARVE_OUT: Sentinel reserved for the Poseidon
+                recomputation carve-out in api.ingest.
 
         Returns:
             SparseMerkleTree with all leaves loaded (global SMT)
         """
+        if not _OLYMPUS_POSEIDON_CARVE_OUT:
+            LOAD_TREE_STATE_OUTSIDE_POSEIDON_TOTAL.inc()
         tree = SparseMerkleTree()
         # Reuse flush batch size as a conservative pagination window to avoid
         # loading unbounded historical replay rows into memory.

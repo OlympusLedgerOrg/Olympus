@@ -9,6 +9,7 @@ import pytest
 from protocol.telemetry import (
     INGEST_TOTAL,
     LEDGER_HEIGHT,
+    LOAD_TREE_STATE_OUTSIDE_POSEIDON_TOTAL,
     PARTITION_EVENTS,
     PROOF_LATENCY,
     SMT_DIVERGENCE_TOTAL,
@@ -105,6 +106,11 @@ def test_ledger_height_labels_and_set() -> None:
 def test_smt_divergence_total_labels_and_inc() -> None:
     """SMT_DIVERGENCE_TOTAL.inc() does not raise."""
     SMT_DIVERGENCE_TOTAL.inc()
+
+
+def test_load_tree_state_outside_poseidon_total_inc() -> None:
+    """LOAD_TREE_STATE_OUTSIDE_POSEIDON_TOTAL.inc() does not raise."""
+    LOAD_TREE_STATE_OUTSIDE_POSEIDON_TOTAL.inc()
 
 
 def test_ingest_total_labels_and_inc() -> None:

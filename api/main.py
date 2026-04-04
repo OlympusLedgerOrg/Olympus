@@ -39,6 +39,7 @@ from api.routers import agencies, appeals, documents, keys, ledger, requests as 
 from api.routers.datasets import router as datasets_router
 from api.routers.shards import router as shards_router
 from api.routers.witness import router as witness_router
+from api.rust_smoke import assert_rust_hot_path
 from api.sth import router as sth_router
 
 
@@ -110,6 +111,7 @@ async def lifespan(app: FastAPI):
     _assert_no_dev_zk_stub_artifacts()
     _assert_no_dev_signing_key_in_non_development()
     _assert_dev_auth_flag_restricted_to_development()
+    assert_rust_hot_path()
 
     try:
         async with engine.begin() as conn:
