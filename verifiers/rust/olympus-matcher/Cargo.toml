@@ -9,7 +9,7 @@ name = "olympus_matcher"
 crate-type = ["cdylib", "rlib"]
 
 [dependencies]
-pyo3 = { version = "0.21", features = ["extension-module"] }
+pyo3 = { version = "0.24", features = ["extension-module"] }
 regex = "1"
 thiserror = "1"
 
