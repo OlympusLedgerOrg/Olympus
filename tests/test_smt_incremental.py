@@ -106,6 +106,15 @@ class TestIncrementalUpdate:
                 b"\x01" * 32, b"\x02" * 32, EMPTY_HASHES[:100]
             )
 
+    def test_bad_sibling_hash_length_raises(self):
+        """Passing a sibling with wrong length raises ValueError."""
+        bad_siblings = list(EMPTY_HASHES[:256])
+        bad_siblings[0] = b"\x01" * 31  # 31 bytes instead of 32
+        with pytest.raises(ValueError, match="32 bytes"):
+            RustSparseMerkleTree.incremental_update(
+                b"\x01" * 32, b"\x02" * 32, bad_siblings
+            )
+
     def test_ten_sequential_inserts(self):
         """Incrementally insert 10 keys, verify each root matches full tree."""
         tree = SparseMerkleTree()

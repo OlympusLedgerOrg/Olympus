@@ -423,7 +423,9 @@ impl RustSparseMerkleTree {
                     sib_slice.len()
                 )));
             }
-            let arr: [u8; 32] = sib_slice.try_into().unwrap();
+            let arr: [u8; 32] = sib_slice
+                .try_into()
+                .expect("sibling slice length already validated to be 32 bytes");
             siblings.push(arr);
         }
 
