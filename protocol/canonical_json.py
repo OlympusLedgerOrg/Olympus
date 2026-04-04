@@ -21,6 +21,7 @@ produces byte-for-byte identical output:
 
 import json
 import math
+import os
 import unicodedata
 from decimal import Decimal
 from typing import Any
@@ -38,6 +39,11 @@ try:
     _RUST_CANONICAL_AVAILABLE = True
 except ImportError:
     _RUST_CANONICAL_AVAILABLE = False
+    if os.getenv("OLYMPUS_REQUIRE_RUST", "").strip().lower() in {"1", "true", "yes", "on"}:
+        raise RuntimeError(
+            "Rust canonical JSON extension required by OLYMPUS_REQUIRE_RUST=1, "
+            "but olympus_core.canonical could not be imported"
+        ) from None
 
 
 def canonical_json_encode(obj: Any) -> str:

@@ -20,6 +20,8 @@ from __future__ import annotations
 import logging
 import os
 
+from fastapi import HTTPException, status
+
 
 logger = logging.getLogger(__name__)
 
@@ -158,7 +160,10 @@ def verify_groth16_proof(
             "olympus_core not available — native ZK verifier unavailable. "
             "Run 'maturin develop' or build the PyO3 extension."
         )
-        return False, "native_verifier_unavailable"
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Native ZK verifier unavailable — olympus_core extension not built.",
+        ) from None
 
     try:
         with open(resolved_path, encoding="utf-8") as f:

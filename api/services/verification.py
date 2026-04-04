@@ -11,6 +11,7 @@ import logging
 from datetime import datetime, timezone
 from typing import Literal
 
+from fastapi import HTTPException, status
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -270,6 +271,17 @@ async def _build_verification_response(
     db: AsyncSession,
 ) -> SimpleVerificationResponse:
     """Build the final response once we have a matching commit."""
+    # Enforce embargo: embargoed documents must not be visible before their release date
+    if commit.embargo_until:
+        embargo = commit.embargo_until
+        if embargo.tzinfo is None:
+            embargo = embargo.replace(tzinfo=timezone.utc)
+        if embargo > datetime.now(timezone.utc):
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="This document is under embargo and not yet publicly available.",
+            )
+
     step_n = len(steps) + 1
 
     # Merkle proof verification
