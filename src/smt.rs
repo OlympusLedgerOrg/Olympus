@@ -66,6 +66,62 @@ fn sibling_path(path: &[u8]) -> Vec<u8> {
     sib
 }
 
+/// Pack a slice of path bits (0s and 1s) into bytes, MSB first.
+///
+/// Matches `StorageLayer._encode_path()` in `storage/postgres.py`.
+/// An empty slice returns an empty Vec. A 256-element slice returns 32 bytes.
+fn pack_path_bits(bits: &[u8]) -> Vec<u8> {
+    if bits.is_empty() {
+        return Vec::new();
+    }
+    let num_bytes = bits.len().div_ceil(8);
+    let mut result = vec![0u8; num_bytes];
+    for (i, &bit) in bits.iter().enumerate() {
+        if bit != 0 {
+            result[i >> 3] |= 1 << (7 - (i & 7));
+        }
+    }
+    result
+}
+
+/// A node delta produced by `incremental_update_raw`: `(db_level, packed_index, hash)`.
+type NodeDelta = (usize, Vec<u8>, [u8; 32]);
+
+/// Pure-Rust incremental update (no PyO3 types).
+///
+/// Computes an SMT update using only the 256 proof-path siblings.
+/// Returns `(new_root, node_deltas)` where deltas are `(db_level, packed_index, hash)`.
+fn incremental_update_raw(
+    key: &[u8; 32],
+    value_hash: &[u8; 32],
+    current_siblings: &[[u8; 32]],
+) -> ([u8; 32], Vec<NodeDelta>) {
+    let path = key_to_path_bits(key);
+    let mut current_hash = crypto::compute_leaf_hash(key, value_hash);
+    let mut deltas = Vec::with_capacity(256);
+
+    for (level, sib_hash) in current_siblings.iter().enumerate().take(256) {
+        let bit_pos = 255 - level;
+
+        let parent_hash = if path[bit_pos] == 0 {
+            crypto::compute_node_hash(&current_hash, sib_hash)
+        } else {
+            crypto::compute_node_hash(sib_hash, &current_hash)
+        };
+
+        let (db_level, packed_index) = if bit_pos == 0 {
+            (0usize, Vec::new())
+        } else {
+            (bit_pos, pack_path_bits(&path[..bit_pos]))
+        };
+
+        deltas.push((db_level, packed_index, parent_hash));
+        current_hash = parent_hash;
+    }
+
+    (current_hash, deltas)
+}
+
 // ---------------------------------------------------------------------------
 // Internal tree state
 // ---------------------------------------------------------------------------
@@ -304,6 +360,102 @@ impl RustSparseMerkleTree {
         let py_root = PyBytes::new(py, &root);
         Ok(PyTuple::new(py, [py_sibs.as_any(), py_root.as_any()])?.into())
     }
+
+    /// Compute an SMT update using only the proof-path siblings.
+    ///
+    /// This replaces the O(N) full-tree-load + update pattern with an O(256)
+    /// path-only computation.  The siblings come from the database
+    /// (``_get_proof_path`` in Python) and need not be loaded into an
+    /// in-memory tree.
+    ///
+    /// Args:
+    ///     key: 32-byte leaf key.
+    ///     value_hash: 32-byte value hash.
+    ///     current_siblings: list of exactly 256 × 32-byte sibling hashes,
+    ///         ordered from leaf level (index 0) to root level (index 255).
+    ///
+    /// Returns:
+    ///     A 3-tuple ``(new_root, proof_siblings, node_deltas)`` where:
+    ///       - ``new_root``: 32-byte new root hash (bytes).
+    ///       - ``proof_siblings``: the same 256-element list passed in.
+    ///       - ``node_deltas``: list of ``(db_level, packed_index, hash)``
+    ///         tuples with exactly 256 entries (db_levels 0 through 255).
+    #[staticmethod]
+    fn incremental_update<'py>(
+        py: Python<'py>,
+        key: &[u8],
+        value_hash: &[u8],
+        current_siblings: &Bound<'py, PyList>,
+    ) -> PyResult<PyObject> {
+        if key.len() != 32 {
+            return Err(PyValueError::new_err(format!(
+                "key must be 32 bytes, got {}",
+                key.len()
+            )));
+        }
+        if value_hash.len() != 32 {
+            return Err(PyValueError::new_err(format!(
+                "value_hash must be 32 bytes, got {}",
+                value_hash.len()
+            )));
+        }
+        if current_siblings.len() != 256 {
+            return Err(PyValueError::new_err(format!(
+                "current_siblings must have exactly 256 elements, got {}",
+                current_siblings.len()
+            )));
+        }
+
+        // Extract siblings into Vec<[u8; 32]>.
+        let mut siblings = Vec::with_capacity(256);
+        for (i, item) in current_siblings.iter().enumerate() {
+            let sib_bytes = item.downcast::<PyBytes>().map_err(|_| {
+                PyValueError::new_err(format!(
+                    "current_siblings[{}] must be bytes",
+                    i
+                ))
+            })?;
+            let sib_slice = sib_bytes.as_bytes();
+            if sib_slice.len() != 32 {
+                return Err(PyValueError::new_err(format!(
+                    "current_siblings[{}] must be 32 bytes, got {}",
+                    i,
+                    sib_slice.len()
+                )));
+            }
+            let arr: [u8; 32] = sib_slice
+                .try_into()
+                .expect("sibling slice length already validated to be 32 bytes");
+            siblings.push(arr);
+        }
+
+        let key32: [u8; 32] = key.try_into().unwrap();
+        let vh32: [u8; 32] = value_hash.try_into().unwrap();
+
+        let (new_root, deltas) = incremental_update_raw(&key32, &vh32, &siblings);
+
+        // Build Python return tuple: (new_root, proof_siblings, node_deltas)
+        let py_root = PyBytes::new(py, &new_root);
+
+        // Return the input siblings list as-is (siblings don't change for single insert)
+        let py_siblings = current_siblings.as_any();
+
+        // Build node_deltas as a list of (db_level, packed_index, hash) tuples
+        let py_deltas = PyList::empty(py);
+        for (db_level, packed_index, hash) in &deltas {
+            let tup = PyTuple::new(
+                py,
+                [
+                    (*db_level).into_pyobject(py)?.into_any().as_any(),
+                    PyBytes::new(py, packed_index).as_any(),
+                    PyBytes::new(py, hash).as_any(),
+                ],
+            )?;
+            py_deltas.append(tup)?;
+        }
+
+        Ok(PyTuple::new(py, [py_root.as_any(), py_siblings, py_deltas.as_any()])?.into())
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -455,5 +607,87 @@ mod tests {
         assert_eq!(eh[0], crypto::compute_empty_leaf());
         // Level 1 = node_hash(empty_leaf, empty_leaf)
         assert_eq!(eh[1], crypto::compute_node_hash(&eh[0], &eh[0]));
+    }
+
+    // -----------------------------------------------------------------------
+    // incremental_update tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_incremental_matches_full_tree_single_insert() {
+        let tree = RustSparseMerkleTree::new();
+        let key = [1u8; 32];
+        let val = [2u8; 32];
+        update_raw(&tree, &key, &val);
+        let full_root = get_root_raw(&tree);
+
+        let empty_hashes = precompute_empty_hashes();
+        let empty_siblings: Vec<[u8; 32]> = (0..256).map(|i| empty_hashes[i]).collect();
+
+        let (inc_root, _deltas) = incremental_update_raw(&key, &val, &empty_siblings);
+        assert_eq!(full_root, inc_root, "Incremental root must match full-tree root");
+    }
+
+    #[test]
+    fn test_incremental_matches_full_tree_second_insert() {
+        let tree = RustSparseMerkleTree::new();
+        let ka = [1u8; 32];
+        let va = [0xAAu8; 32];
+        update_raw(&tree, &ka, &va);
+
+        // Collect siblings for key B from the full tree.
+        let kb = [2u8; 32];
+        let vb = [0xBBu8; 32];
+        let state = tree.state.read().unwrap();
+        let path_b = key_to_path_bits(&kb);
+        let siblings_b = tree.collect_siblings(&state, &path_b);
+        drop(state);
+
+        // Do the full-tree insert of B.
+        update_raw(&tree, &kb, &vb);
+        let full_root = get_root_raw(&tree);
+
+        // Compute incremental update for B using A's siblings.
+        let (inc_root, _deltas) = incremental_update_raw(&kb, &vb, &siblings_b);
+        assert_eq!(full_root, inc_root, "Incremental root must match after second insert");
+    }
+
+    #[test]
+    fn test_incremental_delta_count() {
+        let empty_hashes = precompute_empty_hashes();
+        let empty_siblings: Vec<[u8; 32]> = (0..256).map(|i| empty_hashes[i]).collect();
+        let key = [1u8; 32];
+        let val = [2u8; 32];
+        let (_root, deltas) = incremental_update_raw(&key, &val, &empty_siblings);
+        assert_eq!(deltas.len(), 256, "Must have exactly 256 node deltas");
+    }
+
+    #[test]
+    fn test_incremental_delta_root_entry() {
+        let empty_hashes = precompute_empty_hashes();
+        let empty_siblings: Vec<[u8; 32]> = (0..256).map(|i| empty_hashes[i]).collect();
+        let key = [1u8; 32];
+        let val = [2u8; 32];
+        let (root, deltas) = incremental_update_raw(&key, &val, &empty_siblings);
+        // The last delta should be the root (db_level=0, empty path).
+        let (db_level, packed, hash) = &deltas[255];
+        assert_eq!(*db_level, 0usize);
+        assert!(packed.is_empty());
+        assert_eq!(hash, &root);
+    }
+
+    #[test]
+    fn test_pack_path_bits_empty() {
+        assert!(pack_path_bits(&[]).is_empty());
+    }
+
+    #[test]
+    fn test_pack_path_bits_full_key() {
+        // A 256-bit path from key [1u8; 32] should pack back to the same bytes
+        // (since key_to_path_bits is MSB-first and pack_path_bits is MSB-first).
+        let key = [1u8; 32];
+        let bits = key_to_path_bits(&key);
+        let packed = pack_path_bits(&bits);
+        assert_eq!(packed, key.to_vec());
     }
 }
