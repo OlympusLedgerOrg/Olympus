@@ -15,6 +15,7 @@ Covers paths not exercised in test_federation.py:
 
 from __future__ import annotations
 
+import dataclasses
 from pathlib import Path
 
 import pytest
@@ -711,7 +712,6 @@ def test_verify_data_availability_rejects_tampered_ledger_tail() -> None:
     )
 
     # Tamper: replace ledger_tail_hash with different value
-    import dataclasses
     tampered_proof = dataclasses.replace(proof, ledger_tail_hash="ff" * 32)
 
     assert verify_data_availability(challenge, tampered_proof, registry) is False
