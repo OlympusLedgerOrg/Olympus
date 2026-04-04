@@ -104,11 +104,13 @@ impl AdlScanner {
 
 mod canonical;
 mod crypto;
+mod smt;
 mod zkverify;
 
 #[pymodule]
 fn olympus_core(py: Python<'_>, m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<AdlScanner>()?;
+    m.add_class::<smt::RustSparseMerkleTree>()?;
     m.add_function(wrap_pyfunction!(zkverify::verify_groth16_bn254, m)?)?;
 
     // `olympus_core.crypto` — BLAKE3 hash primitives

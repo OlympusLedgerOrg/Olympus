@@ -22,6 +22,18 @@ import blake3
 from .hashes import leaf_hash, node_hash
 
 
+# ---------------------------------------------------------------------------
+# Optional Rust SMT acceleration — import from olympus_core if built,
+# fall back to the pure-Python SparseMerkleTree defined below.
+# ---------------------------------------------------------------------------
+try:
+    from olympus_core import RustSparseMerkleTree as _RustSMT
+
+    _RUST_SMT_AVAILABLE = True
+except ImportError:
+    _RUST_SMT_AVAILABLE = False
+
+
 # Domain-separated empty leaf sentinel.  This replaces the former all-zeros
 # sentinel to prevent confusion with naturally-occurring zero values.
 EMPTY_LEAF = blake3.blake3(b"OLY:EMPTY-LEAF:V1").digest()
@@ -319,6 +331,60 @@ class SparseMerkleTree:
             raise ValueError("Cannot get sibling of root")
         # Flip the last bit
         return path[:-1] + (1 - path[-1],)
+
+
+# ---------------------------------------------------------------------------
+# Rust-backed drop-in replacement (when the extension is available)
+# ---------------------------------------------------------------------------
+if _RUST_SMT_AVAILABLE:
+
+    class _RustBackedSparseMerkleTree:
+        """Drop-in replacement for SparseMerkleTree backed by Rust via PyO3."""
+
+        def __init__(self) -> None:
+            self._inner = _RustSMT()
+
+        @property
+        def leaves(self) -> dict[bytes, bytes]:
+            return self._inner.leaves  # type: ignore[return-value]
+
+        @property
+        def nodes(self) -> dict[tuple[int, ...], bytes]:
+            return self._inner.nodes  # type: ignore[return-value]
+
+        def get_root(self) -> bytes:
+            return self._inner.get_root()  # type: ignore[return-value]
+
+        def get(self, key: bytes) -> bytes | None:
+            return self._inner.get(key)  # type: ignore[return-value]
+
+        def update(self, key: bytes, value_hash: bytes) -> None:
+            self._inner.update(key, value_hash)
+
+        def prove_existence(self, key: bytes) -> ExistenceProof:
+            value_hash, siblings, root_hash = self._inner.prove_existence(key)
+            return ExistenceProof(
+                key=key,
+                value_hash=value_hash,
+                siblings=siblings,
+                root_hash=root_hash,
+            )
+
+        def prove_nonexistence(self, key: bytes) -> NonExistenceProof:
+            siblings, root_hash = self._inner.prove_nonexistence(key)
+            return NonExistenceProof(
+                key=key,
+                siblings=siblings,
+                root_hash=root_hash,
+            )
+
+        def prove(self, key: bytes) -> ExistenceProof | NonExistenceProof:
+            if self.get(key) is not None:
+                return self.prove_existence(key)
+            return self.prove_nonexistence(key)
+
+    # Shadow the pure-Python class so all importers get the Rust-backed version.
+    SparseMerkleTree = _RustBackedSparseMerkleTree  # type: ignore[assignment,misc]
 
 
 def diff_sparse_merkle_trees(

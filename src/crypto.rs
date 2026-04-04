@@ -27,6 +27,42 @@ const NODE_PREFIX: &[u8] = b"OLY:NODE:V1";
 /// Field separator used in leaf and node hash concatenation.
 const SEP: &[u8] = b"|";
 
+/// Domain-separation prefix for the empty-leaf sentinel.
+const EMPTY_LEAF_PREFIX: &[u8] = b"OLY:EMPTY-LEAF:V1";
+
+// ---------------------------------------------------------------------------
+// Pure-Rust hash functions (no GIL / no PyO3 types)
+//
+// These are used internally by `crate::smt` and by the PyO3 wrappers below.
+// ---------------------------------------------------------------------------
+
+/// Compute a domain-separated leaf hash: `BLAKE3(LEAF_PREFIX || "|" || key || "|" || value_hash)`.
+pub(crate) fn compute_leaf_hash(key: &[u8], value_hash: &[u8]) -> [u8; 32] {
+    let mut hasher = blake3::Hasher::new();
+    hasher.update(LEAF_PREFIX);
+    hasher.update(SEP);
+    hasher.update(key);
+    hasher.update(SEP);
+    hasher.update(value_hash);
+    *hasher.finalize().as_bytes()
+}
+
+/// Compute a domain-separated internal-node hash: `BLAKE3(NODE_PREFIX || "|" || left || "|" || right)`.
+pub(crate) fn compute_node_hash(left: &[u8], right: &[u8]) -> [u8; 32] {
+    let mut hasher = blake3::Hasher::new();
+    hasher.update(NODE_PREFIX);
+    hasher.update(SEP);
+    hasher.update(left);
+    hasher.update(SEP);
+    hasher.update(right);
+    *hasher.finalize().as_bytes()
+}
+
+/// Compute the domain-separated empty-leaf sentinel: `BLAKE3(b"OLY:EMPTY-LEAF:V1")`.
+pub(crate) fn compute_empty_leaf() -> [u8; 32] {
+    *blake3::hash(EMPTY_LEAF_PREFIX).as_bytes()
+}
+
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
@@ -130,14 +166,8 @@ pub fn record_key(
 /// ``leaf_hash(key: bytes, value_hash: bytes) -> bytes``
 #[pyfunction]
 pub fn leaf_hash(py: Python<'_>, key: &[u8], value_hash: &[u8]) -> PyObject {
-    let mut hasher = blake3::Hasher::new();
-    hasher.update(LEAF_PREFIX);
-    hasher.update(SEP);
-    hasher.update(key);
-    hasher.update(SEP);
-    hasher.update(value_hash);
-    let digest = hasher.finalize();
-    PyBytes::new(py, digest.as_bytes()).into()
+    let digest = compute_leaf_hash(key, value_hash);
+    PyBytes::new(py, &digest).into()
 }
 
 /// Compute a domain-separated hash for an internal Merkle node.
@@ -148,14 +178,8 @@ pub fn leaf_hash(py: Python<'_>, key: &[u8], value_hash: &[u8]) -> PyObject {
 /// ``node_hash(left: bytes, right: bytes) -> bytes``
 #[pyfunction]
 pub fn node_hash(py: Python<'_>, left: &[u8], right: &[u8]) -> PyObject {
-    let mut hasher = blake3::Hasher::new();
-    hasher.update(NODE_PREFIX);
-    hasher.update(SEP);
-    hasher.update(left);
-    hasher.update(SEP);
-    hasher.update(right);
-    let digest = hasher.finalize();
-    PyBytes::new(py, digest.as_bytes()).into()
+    let digest = compute_node_hash(left, right);
+    PyBytes::new(py, &digest).into()
 }
 
 // ---------------------------------------------------------------------------
