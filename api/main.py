@@ -31,6 +31,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from starlette.middleware.base import BaseHTTPMiddleware
 
+from api.auth import _assert_xff_default_deny
 from api.config import get_settings
 from api.db import engine
 from api.ingest import router as ingest_router
@@ -103,6 +104,39 @@ def _assert_dev_auth_flag_restricted_to_development() -> None:
         )
 
 
+def _assert_no_multiworker_with_memory_rate_limit() -> None:
+    """Block production startup when the memory rate limiter is used with multiple workers.
+
+    The in-process ``MemoryRateLimitBackend`` is per-worker: with *N* workers
+    each process tracks its own buckets, so the effective rate limit would be
+    *N×* the configured value — making rate limiting essentially non-functional.
+    Fail hard at startup rather than silently under-enforcing limits.
+
+    Raises:
+        RuntimeError: In production when ``WEB_CONCURRENCY > 1`` and
+            ``RATE_LIMIT_BACKEND`` is ``'memory'`` (i.e. Redis is not configured).
+    """
+    env = os.environ.get("OLYMPUS_ENV", "production")
+    if env != "production":
+        return
+    workers_str = os.environ.get("WEB_CONCURRENCY", "")
+    try:
+        workers = int(workers_str) if workers_str else 1
+    except ValueError:
+        workers = 1
+    settings = get_settings()
+    if workers > 1 and settings.rate_limit_backend.lower() == "memory":
+        raise RuntimeError(
+            f"RATE_LIMIT_BACKEND=memory is not effective with WEB_CONCURRENCY={workers}. "
+            "Each worker maintains independent rate limit buckets, so the effective limit "
+            f"would be {workers}× the configured value. "
+            "Options: (1) Set WEB_CONCURRENCY=1, (2) configure RATE_LIMIT_BACKEND=redis "
+            "once implemented, or (3) set OLYMPUS_ENV=development to skip this check locally. "
+            "Note: this check only runs when OLYMPUS_ENV=production — "
+            "staging environments with OLYMPUS_ENV != 'production' will not trigger it."
+        )
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Create database tables on startup and dispose the engine on shutdown."""
@@ -111,6 +145,8 @@ async def lifespan(app: FastAPI):
     _assert_no_dev_zk_stub_artifacts()
     _assert_no_dev_signing_key_in_non_development()
     _assert_dev_auth_flag_restricted_to_development()
+    _assert_no_multiworker_with_memory_rate_limit()
+    _assert_xff_default_deny()
     assert_rust_hot_path()
 
     try:
