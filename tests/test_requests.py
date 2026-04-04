@@ -7,6 +7,9 @@ and appeal filing.
 
 from __future__ import annotations
 
+from datetime import datetime
+from unittest.mock import patch
+
 import pytest
 import pytest_asyncio
 from httpx import ASGITransport, AsyncClient
@@ -15,6 +18,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_asyn
 from api.deps import get_db
 from api.main import create_app
 from api.models import Base
+from api.services.hasher import hash_request
 
 
 TEST_DB_URL = "sqlite+aiosqlite:///:memory:"
@@ -52,7 +56,10 @@ async def client(db_engine):
     app = create_app()
     app.dependency_overrides[get_db] = override_get_db
 
-    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
+    async with AsyncClient(
+        transport=ASGITransport(app=app, raise_app_exceptions=False),
+        base_url="http://test",
+    ) as ac:
         yield ac
 
 
@@ -66,6 +73,35 @@ async def test_create_request(client):
     assert len(data["commit_hash"]) == 64
     assert data["status"] == "PENDING"
     assert data["deadline"] is not None
+
+
+@pytest.mark.asyncio
+async def test_create_request_rejects_lone_surrogate(client):
+    """POST /requests surfaces hashing Unicode errors without nested detail."""
+    with patch(
+        "api.routers.requests.hash_request", side_effect=ValueError("surrogates not allowed")
+    ):
+        resp = await client.post("/requests", json=REQUEST_BODY)
+    assert resp.status_code == 422
+    detail = resp.json()["detail"]
+    assert detail == [
+        {
+            "msg": "surrogates not allowed",
+            "type": "unicode",
+            "code": "INVALID_UNICODE",
+        }
+    ]
+
+
+def test_hash_request_rejects_lone_surrogate() -> None:
+    """hash_request rejects malformed Unicode before hashing."""
+    with pytest.raises(ValueError, match="lone surrogate character"):
+        hash_request(
+            subject="Body camera \ud800 footage",
+            description=REQUEST_BODY["description"],
+            agency="",
+            filed_at=datetime(2024, 1, 15, 9, 0, 0),
+        )
 
 
 @pytest.mark.asyncio
@@ -484,3 +520,44 @@ def test_escape_like_wildcards():
     assert _escape_like("under_score") == "under\\_score"
     assert _escape_like("back\\slash") == "back\\\\slash"
     assert _escape_like("normal") == "normal"
+
+
+@pytest.mark.asyncio
+async def test_next_display_id_increments():
+    """_next_display_id() returns an ID one higher on the second call."""
+    from datetime import datetime, timezone
+
+    from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
+
+    from api.models import Base
+    from api.models.request import PublicRecordsRequest, RequestStatus, RequestType
+    from api.routers.requests import _next_display_id
+
+    engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+    factory = async_sessionmaker(engine, expire_on_commit=False, class_=AsyncSession)
+
+    async with factory() as session:
+        first = await _next_display_id(session)
+        assert first == "OLY-0001"
+
+        # Insert a row so the next call sees the current max
+        now = datetime.now(timezone.utc)
+        session.add(
+            PublicRecordsRequest(
+                display_id=first,
+                subject="test",
+                description="test",
+                request_type=RequestType.NC_PUBLIC_RECORDS.value,
+                status=RequestStatus.PENDING.value,
+                filed_at=now,
+                deadline=now,
+            )
+        )
+        await session.commit()
+
+        second = await _next_display_id(session)
+        assert int(second.split("-")[1]) == int(first.split("-")[1]) + 1
+
+    await engine.dispose()

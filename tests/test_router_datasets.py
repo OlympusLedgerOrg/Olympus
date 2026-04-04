@@ -14,6 +14,7 @@ Uses in-memory SQLite with aiosqlite and mocks RFC 3161 timestamp requests.
 
 from __future__ import annotations
 
+import json
 import os
 from unittest.mock import MagicMock, patch
 
@@ -23,14 +24,17 @@ import pytest_asyncio
 from httpx import ASGITransport, AsyncClient
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
+import api.auth as auth_module
 from api.deps import get_db
 from api.main import create_app
 from api.models import Base
 from protocol.hashes import (
     DATASET_LINEAGE_PREFIX,
+    _length_prefixed_bytes,
     blake3_hash,
     compute_dataset_commit_id,
     dataset_key,
+    hash_bytes,
 )
 
 
@@ -68,7 +72,14 @@ async def client(db_engine):
             yield session
 
     # Set development mode and no API keys for test bypass
-    with patch.dict(os.environ, {"OLYMPUS_ENV": "development", "OLYMPUS_FOIA_API_KEYS": "[]"}):
+    with patch.dict(
+        os.environ,
+        {
+            "OLYMPUS_ENV": "development",
+            "OLYMPUS_ALLOW_DEV_AUTH": "1",
+            "OLYMPUS_FOIA_API_KEYS": "[]",
+        },
+    ):
         app = create_app()
         app.dependency_overrides[get_db] = override_get_db
 
@@ -185,16 +196,28 @@ def build_lineage_request(
     """Build a complete LineageCommitRequest body with valid signature.
 
     The commit_id computation matches the server implementation in
-    api/routers/datasets.py (lines 678-679):
-      payload = f"{dataset_id}:{parent_commit_id}:{model_id}:{committer_pubkey}"
-      commit_id = blake3_hash([DATASET_LINEAGE_PREFIX, payload.encode()]).hex()
+    api/routers/datasets.py:
+      key_data = b"".join([
+          _length_prefixed_bytes("dataset_id", dataset_id.encode("utf-8")),
+          _length_prefixed_bytes("parent_commit_id", parent_commit_id.encode("utf-8")),
+          _length_prefixed_bytes("model_id", model_id.encode("utf-8")),
+          _length_prefixed_bytes("committer_pubkey", committer_pubkey.encode("utf-8")),
+      ])
+      commit_id = blake3_hash([DATASET_LINEAGE_PREFIX, key_data]).hex()
 
     Note: event_type is NOT included in commit_id, so different event_types
     for the same (dataset_id, model_id, committer_pubkey) will have the same
     commit_id and fail the unique constraint.
     """
-    payload = f"{dataset_id}:{parent_commit_id}:{model_id}:{pubkey_hex}"
-    commit_id = blake3_hash([DATASET_LINEAGE_PREFIX, payload.encode()]).hex()
+    key_data = b"".join(
+        [
+            _length_prefixed_bytes("dataset_id", dataset_id.encode("utf-8")),
+            _length_prefixed_bytes("parent_commit_id", parent_commit_id.encode("utf-8")),
+            _length_prefixed_bytes("model_id", model_id.encode("utf-8")),
+            _length_prefixed_bytes("committer_pubkey", pubkey_hex.encode("utf-8")),
+        ]
+    )
+    commit_id = blake3_hash([DATASET_LINEAGE_PREFIX, key_data]).hex()
     signature = sign_commit(signing_key, commit_id)
 
     return {
@@ -336,6 +359,16 @@ async def test_commit_dataset_empty_files_returns_422(client):
     pubkey, _, signing_key = create_signing_keypair()
     body = build_commit_request(pubkey, signing_key)
     body["files"] = []  # Invalid: at least 1 file required
+
+    resp = await client.post("/datasets/commit", json=body)
+    assert resp.status_code == 422
+
+
+@pytest.mark.asyncio
+async def test_commit_dataset_invalid_source_uri_scheme_returns_422(client):
+    """POST /datasets/commit rejects source_uri values without http(s) scheme."""
+    pubkey, _, signing_key = create_signing_keypair()
+    body = build_commit_request(pubkey, signing_key, source_uri="ftp://example.com/data.csv")
 
     resp = await client.post("/datasets/commit", json=body)
     assert resp.status_code == 422
@@ -583,6 +616,64 @@ async def test_verify_dataset_with_rfc3161_status(client):
     data = resp.json()
     # RFC 3161 status should be in checks
     assert "rfc3161_valid" in data["checks"]
+
+
+@pytest.mark.asyncio
+async def test_verify_dataset_requires_api_key_outside_development(monkeypatch, db_engine):
+    """GET /datasets/{dataset_id}/verify requires API key auth in non-development mode."""
+    original_loaded = auth_module._keys_loaded
+    original_store = dict(auth_module._key_store)
+    original_env = os.environ.get("OLYMPUS_FOIA_API_KEYS")
+    test_key = "dataset-verify-key"
+    test_key_hash = hash_bytes(test_key.encode("utf-8")).hex()
+    fake_dataset_id = "0" * 64
+    session_factory = async_sessionmaker(db_engine, expire_on_commit=False, class_=AsyncSession)
+
+    try:
+        auth_module._keys_loaded = False
+        auth_module._key_store.clear()
+        monkeypatch.setenv("OLYMPUS_ENV", "production")
+        monkeypatch.setenv("OLYMPUS_ALLOW_DEV_AUTH", "0")
+        monkeypatch.setenv(
+            "OLYMPUS_FOIA_API_KEYS",
+            json.dumps(
+                [
+                    {
+                        "key_hash": test_key_hash,
+                        "key_id": "dataset-verify-key",
+                        "scopes": ["read", "write"],
+                        "expires_at": "2099-01-01T00:00:00Z",
+                    }
+                ]
+            ),
+        )
+
+        async def override_get_db():
+            async with session_factory() as session:
+                yield session
+
+        app = create_app()
+        app.dependency_overrides[get_db] = override_get_db
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
+            unauthenticated = await ac.get(f"/datasets/{fake_dataset_id}/verify")
+            assert unauthenticated.status_code == 401
+
+        async with AsyncClient(
+            transport=ASGITransport(app=app),
+            base_url="http://test",
+            headers={"X-API-Key": test_key},
+        ) as ac:
+            authorized = await ac.get(f"/datasets/{fake_dataset_id}/verify")
+            assert authorized.status_code == 200
+            assert authorized.json()["verified"] is False
+    finally:
+        auth_module._keys_loaded = original_loaded
+        auth_module._key_store.clear()
+        auth_module._key_store.update(original_store)
+        if original_env is None:
+            os.environ.pop("OLYMPUS_FOIA_API_KEYS", None)
+        else:
+            os.environ["OLYMPUS_FOIA_API_KEYS"] = original_env
 
 
 # ---------------------------------------------------------------------------
@@ -869,3 +960,27 @@ async def test_commit_lineage_missing_required_fields_returns_422(client):
     incomplete_body = {"model_id": "incomplete"}
     resp = await client.post(f"/datasets/{dataset_id}/lineage", json=incomplete_body)
     assert resp.status_code == 422
+
+
+def test_lineage_commit_id_prevents_field_injection():
+    """Length-prefixed encoding prevents colon-injection in lineage commit_ids.
+
+    With naive colon-concatenation, dataset_id="a:b", parent="c" would produce
+    the same payload as dataset_id="a", parent="b:c". Length-prefix encoding
+    commits field boundaries explicitly, so these must be distinct.
+    """
+    model_id = "some-model"
+    pubkey = "e" * 64
+
+    def _compute(dataset_id: str, parent_commit_id: str) -> str:
+        key_data = b"".join(
+            [
+                _length_prefixed_bytes("dataset_id", dataset_id.encode("utf-8")),
+                _length_prefixed_bytes("parent_commit_id", parent_commit_id.encode("utf-8")),
+                _length_prefixed_bytes("model_id", model_id.encode("utf-8")),
+                _length_prefixed_bytes("committer_pubkey", pubkey.encode("utf-8")),
+            ]
+        )
+        return blake3_hash([DATASET_LINEAGE_PREFIX, key_data]).hex()
+
+    assert _compute("a:b", "c") != _compute("a", "b:c")

@@ -31,6 +31,11 @@ SUPPORTED_PROOF_VERSIONS: frozenset[str] = frozenset({"proof_v1"})
 # For standard Merkle trees, this is still a generous limit (2^256 leaves).
 MAX_PROOF_DEPTH = 256
 
+# L2: Maximum allowed consistency proof nodes to prevent DoS.
+# Consistency proofs contain O(log n) nodes, but we enforce an upper bound
+# to prevent malformed proofs from causing deep recursion.
+_MAX_CONSISTENCY_PROOF_NODES = 512
+
 # Canonical empty-tree commitment.  This is the root hash of a tree with
 # zero leaves and MUST be used as the only valid ``old_root`` when
 # ``old_size=0`` in consistency proof verification.
@@ -495,6 +500,8 @@ def verify_consistency_proof(
     proof: Sequence[bytes],
     old_size: int,
     new_size: int,
+    *,
+    trust_new_root_on_empty: bool = False,
 ) -> bool:
     """
     Verify that ``new_root`` represents a Merkle tree that extends the tree with
@@ -510,6 +517,11 @@ def verify_consistency_proof(
         proof: Consistency proof as produced by :func:`generate_consistency_proof`.
         old_size: Leaf count of the prior tree.
         new_size: Leaf count of the newer tree (must satisfy new_size >= old_size).
+        trust_new_root_on_empty: When old_size=0 the proof is vacuously consistent
+            and new_root cannot be verified cryptographically. Set this to True only
+            when new_root has been independently obtained from a trusted source such
+            as a signed checkpoint. Raises ValueError if False (the default) and
+            old_size=0 to prevent silent acceptance of adversarial new_root values.
 
     Returns:
         True if the proof is valid and demonstrates append-only growth.
@@ -522,15 +534,20 @@ def verify_consistency_proof(
         # Empty tree is a known commitment — the root must be the canonical empty hash.
         if old_root != EMPTY_TREE_HASH:
             return False
-        # RFC 6962 §2.1: a zero-leaf old tree is vacuously consistent with any
-        # new tree; generate_consistency_proof() returns an empty proof for this
-        # transition so there is nothing to verify cryptographically.  Callers
-        # that need to independently confirm new_root MUST obtain it from a
-        # trusted source (e.g. a signed checkpoint) — this function cannot do
-        # so from the proof alone.
+        if not trust_new_root_on_empty:
+            raise ValueError(
+                "verify_consistency_proof: old_size=0 cannot cryptographically "
+                "verify new_root from the proof alone. The caller must obtain "
+                "new_root from a trusted source (e.g. a signed checkpoint) and "
+                "pass trust_new_root_on_empty=True to acknowledge this."
+            )
         return True
     if old_size == new_size:
         return old_root == new_root
+
+    # L2: Enforce maximum proof size to prevent DoS via deep recursion
+    if len(proof) > _MAX_CONSISTENCY_PROOF_NODES:
+        return False
 
     try:
         # Verify RFC 6962 consistency proof

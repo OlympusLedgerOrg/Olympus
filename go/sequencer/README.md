@@ -1,3 +1,13 @@
+> **THIS IS A COMPILE-TIME CONTRACT SCAFFOLD — NOT THE ACTIVE SERVICE**
+>
+> All RPC handlers return `codes.Unimplemented`. This package exists
+> to establish the compile-time gRPC contract for the OlympusTree API.
+>
+> **The active sequencer implementation is at
+> [`services/sequencer-go/`](../../services/sequencer-go/).**
+> **All production work, security hardening, and deployable code lives
+> there.**
+
 # go/sequencer — OlympusTree gRPC Sequencer (scaffold)
 
 Trillian-shaped log sequencer for the Olympus append-only ledger.
@@ -11,7 +21,7 @@ wiring.  Full handler implementations will be added in subsequent phases.
 ## Architecture
 
 ```
-Python FastAPI  ──(HTTP/gRPC)──►  go/sequencer  ──(Unix socket, protobuf)──►  Rust CD-HS-SMF service
+Python FastAPI  ──(HTTP/gRPC)──►  go/sequencer  ──(Unix socket, protobuf)──►  Rust CD-HS-ST service
                                        │
                                        └──(SQL)──► Postgres
 ```
@@ -22,7 +32,7 @@ Python FastAPI  ──(HTTP/gRPC)──►  go/sequencer  ──(Unix socket, pr
 |-----------|--------|
 | **Local-only** | Listens on a Unix domain socket; MUST NOT be exposed on a TCP port or to external networks. |
 | **No hash computation** | Go never computes Merkle hashes.  All SMT operations — key derivation, leaf hashing, node updates, root computation, proof generation — are delegated to the Rust service via `proto/cdhs_smf.proto`. |
-| **Single global tree** | The SMT is one global 256-level tree (CD-HS-SMF).  There are no per-shard trees and no separate forest tree. |
+| **Single global tree** | The SMT is one global 256-level tree (CD-HS-ST).  There are no per-shard trees and no separate forest tree. |
 | **Protobuf on the wire** | All Go↔Rust communication uses protobuf (see `../../proto/`).  No JSON on internal boundaries. |
 
 ## Service API (`proto/olympus.proto`)
@@ -51,7 +61,7 @@ go build ./...
 ./sequencer --socket /tmp/olympus-sequencer.sock
 ```
 
-The Rust CD-HS-SMF service (see `services/cdhs-smf-rust/`) must be running
+The Rust CD-HS-ST service (see `services/cdhs-smf-rust/`) must be running
 before the sequencer can process any requests.
 
 ## Directory layout

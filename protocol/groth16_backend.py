@@ -64,6 +64,14 @@ class Groth16Backend(ProofBackendProtocol):
         build_dir: Path to the build directory for witnesses and proofs
         keys_dir: Path to the keys directory (zkeys, verification keys)
         snarkjs_bin: snarkjs launcher command (default: "npx")
+
+    Security note:
+        Subprocess calls use argv lists (no shell invocation) and circuit names
+        are allowlisted. Externally supplied artifact identifiers are validated
+        at ingest boundaries via ``api.ingest._IDENTIFIER_PATTERN`` before they
+        can influence persisted identifiers used by proof workflows. Local path
+        guards in ``_validate_circuit_name`` and ``_validate_artifact_path``
+        provide a second boundary before any subprocess invocation.
     """
 
     def __init__(
@@ -341,6 +349,7 @@ class Groth16Backend(ProofBackendProtocol):
         Returns:
             Path to verification key, or None if not found
         """
+        self._validate_circuit_name(circuit)
         vkey_filename = f"{circuit}_vkey.json"
 
         # Check keys directory first

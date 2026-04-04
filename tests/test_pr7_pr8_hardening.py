@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import os
 import time
+from pathlib import Path
 
 import nacl.signing
 import pytest
@@ -40,6 +41,119 @@ from protocol.timestamps import current_timestamp
 
 def _canonicalization():
     return canonicalization_provenance("application/json", CANONICAL_VERSION)
+
+
+def test_startup_rejects_dev_ceremony_stub_in_non_development(tmp_path: Path, monkeypatch):
+    from api.main import _assert_no_dev_zk_stub_artifacts
+
+    transcript_dir = tmp_path / "ceremony" / "transcript"
+    transcript_dir.mkdir(parents=True)
+    (transcript_dir / "dev_powers_of_tau.ptau").write_text(
+        "DEV PLACEHOLDER PTAU\nThis file is development-only.\n", encoding="utf-8"
+    )
+
+    monkeypatch.setenv("OLYMPUS_ENV", "production")
+    monkeypatch.delenv("OLYMPUS_ALLOW_DEV_AUTH", raising=False)
+    monkeypatch.delenv("OLYMPUS_ALLOW_DEV_ZK_ARTIFACTS", raising=False)
+
+    with pytest.raises(RuntimeError, match="dev ceremony stub artifact"):
+        _assert_no_dev_zk_stub_artifacts(tmp_path)
+
+
+def test_startup_allows_dev_ceremony_stub_with_override(tmp_path: Path, monkeypatch):
+    from api.main import _assert_no_dev_zk_stub_artifacts
+
+    transcript_dir = tmp_path / "ceremony" / "transcript"
+    transcript_dir.mkdir(parents=True)
+    (transcript_dir / "dev_redaction_validity_final.zkey").write_text(
+        "DEV PLACEHOLDER ZKEY\nThis file is development-only.\n", encoding="utf-8"
+    )
+
+    monkeypatch.setenv("OLYMPUS_ENV", "production")
+    monkeypatch.delenv("OLYMPUS_ALLOW_DEV_AUTH", raising=False)
+    monkeypatch.setenv("OLYMPUS_ALLOW_DEV_ZK_ARTIFACTS", "true")
+    _assert_no_dev_zk_stub_artifacts(tmp_path)
+
+
+def test_startup_allows_dev_ceremony_stub_in_development(tmp_path: Path, monkeypatch):
+    from api.main import _assert_no_dev_zk_stub_artifacts
+
+    transcript_dir = tmp_path / "ceremony" / "transcript"
+    transcript_dir.mkdir(parents=True)
+    (transcript_dir / "dev_powers_of_tau.ptau").write_text(
+        "DEV PLACEHOLDER PTAU\nThis file is development-only.\n", encoding="utf-8"
+    )
+
+    monkeypatch.setenv("OLYMPUS_ENV", "development")
+    monkeypatch.delenv("OLYMPUS_ALLOW_DEV_ZK_ARTIFACTS", raising=False)
+    _assert_no_dev_zk_stub_artifacts(tmp_path)
+
+
+def test_startup_rejects_dev_signing_key_in_non_development(monkeypatch):
+    from api.main import _assert_no_dev_signing_key_in_non_development
+
+    monkeypatch.setenv("OLYMPUS_ENV", "production")
+    monkeypatch.delenv("OLYMPUS_ALLOW_DEV_AUTH", raising=False)
+    monkeypatch.setenv("OLYMPUS_DEV_SIGNING_KEY", "true")
+
+    with pytest.raises(RuntimeError, match="OLYMPUS_DEV_SIGNING_KEY=true"):
+        _assert_no_dev_signing_key_in_non_development()
+
+
+def test_startup_allows_dev_signing_key_in_development(monkeypatch):
+    from api.main import _assert_no_dev_signing_key_in_non_development
+
+    monkeypatch.setenv("OLYMPUS_ENV", "development")
+    monkeypatch.setenv("OLYMPUS_DEV_SIGNING_KEY", "true")
+    _assert_no_dev_signing_key_in_non_development()
+
+
+def test_startup_rejects_dev_auth_flag_in_non_development(monkeypatch):
+    from api.main import _assert_dev_auth_flag_restricted_to_development
+
+    monkeypatch.setenv("OLYMPUS_ENV", "production")
+    monkeypatch.setenv("OLYMPUS_ALLOW_DEV_AUTH", "1")
+
+    with pytest.raises(RuntimeError, match="OLYMPUS_ALLOW_DEV_AUTH=1"):
+        _assert_dev_auth_flag_restricted_to_development()
+
+
+def test_startup_allows_dev_auth_flag_in_development(monkeypatch):
+    from api.main import _assert_dev_auth_flag_restricted_to_development
+
+    monkeypatch.setenv("OLYMPUS_ENV", "development")
+    monkeypatch.setenv("OLYMPUS_ALLOW_DEV_AUTH", "1")
+
+    _assert_dev_auth_flag_restricted_to_development()
+
+
+def test_create_app_rejects_wildcard_cors_with_credentials(monkeypatch):
+    from api.config import get_settings
+    from api.main import create_app
+
+    monkeypatch.setenv("CORS_ORIGINS", "*")
+    get_settings.cache_clear()
+    with pytest.raises(RuntimeError, match="CORS_ORIGINS contains wildcard"):
+        create_app()
+    get_settings.cache_clear()
+
+
+def test_validation_error_detail_preserves_url_key():
+    from api.main import _json_safe_validation_detail
+
+    detail = [
+        {
+            "type": "string_too_short",
+            "loc": ["body", "name"],
+            "msg": "String should have at least 3 characters",
+            "input": "x",
+            "url": "https://errors.pydantic.dev/2.10/v/string_too_short",
+        }
+    ]
+    sanitized = _json_safe_validation_detail(detail)
+    assert isinstance(sanitized, list)
+    assert sanitized
+    assert "url" in sanitized[0]
 
 
 # ── H7: Storage layer error sanitization ───────────────────────────────
@@ -96,6 +210,7 @@ class TestAPISecurityHeaders:
         csp = r.headers.get("content-security-policy", "")
         assert "default-src 'self'" in csp
         assert "frame-ancestors 'none'" in csp
+        assert "'unsafe-inline'" not in csp
 
     def test_hsts_always_set(self):
         """HSTS header is always present (safe over HTTP; browsers ignore on non-HTTPS)."""

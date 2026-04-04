@@ -2,7 +2,6 @@
 package api
 
 import (
-	"context"
 	"encoding/json"
 	"fmt"
 	"log"
@@ -17,13 +16,26 @@ import (
 type Sequencer struct {
 	smtClient *client.CdhsSmfClient
 	storage   *storage.PostgresStorage
+	token     string
 }
 
 // NewSequencer creates a new sequencer service
-func NewSequencer(smtClient *client.CdhsSmfClient, storage *storage.PostgresStorage) *Sequencer {
+func NewSequencer(smtClient *client.CdhsSmfClient, storage *storage.PostgresStorage, token string) *Sequencer {
 	return &Sequencer{
 		smtClient: smtClient,
 		storage:   storage,
+		token:     token,
+	}
+}
+
+// requireToken wraps an HTTP handler with shared-secret token authentication
+func requireToken(token string, next http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("X-Sequencer-Token") != token {
+			http.Error(w, "Unauthorized", http.StatusUnauthorized)
+			return
+		}
+		next(w, r)
 	}
 }
 
@@ -32,10 +44,10 @@ func (s *Sequencer) Handler() http.Handler {
 	mux := http.NewServeMux()
 
 	// Trillian-shaped API endpoints
-	mux.HandleFunc("/v1/queue-leaf", s.handleQueueLeaf)
-	mux.HandleFunc("/v1/get-latest-root", s.handleGetLatestRoot)
-	mux.HandleFunc("/v1/get-inclusion-proof", s.handleGetInclusionProof)
-	mux.HandleFunc("/v1/get-consistency-proof", s.handleGetConsistencyProof)
+	mux.HandleFunc("/v1/queue-leaf", requireToken(s.token, s.handleQueueLeaf))
+	mux.HandleFunc("/v1/get-latest-root", requireToken(s.token, s.handleGetLatestRoot))
+	mux.HandleFunc("/v1/get-inclusion-proof", requireToken(s.token, s.handleGetInclusionProof))
+	mux.HandleFunc("/v1/get-consistency-proof", requireToken(s.token, s.handleGetConsistencyProof))
 
 	return mux
 }
@@ -65,9 +77,28 @@ func (s *Sequencer) handleQueueLeaf(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	r.Body = http.MaxBytesReader(w, r.Body, 32<<20) // 32 MB
+
 	var req QueueLeafRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		http.Error(w, fmt.Sprintf("Invalid request: %v", err), http.StatusBadRequest)
+		return
+	}
+
+	if req.ShardID == "" || len(req.ShardID) > 128 {
+		http.Error(w, "invalid shard_id", http.StatusBadRequest)
+		return
+	}
+	if req.RecordType == "" || len(req.RecordType) > 64 {
+		http.Error(w, "invalid record_type", http.StatusBadRequest)
+		return
+	}
+	if req.RecordID == "" || len(req.RecordID) > 256 {
+		http.Error(w, "invalid record_id", http.StatusBadRequest)
+		return
+	}
+	if len(req.Content) == 0 {
+		http.Error(w, "content must not be empty", http.StatusBadRequest)
 		return
 	}
 

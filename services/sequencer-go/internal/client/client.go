@@ -1,4 +1,4 @@
-// Package client provides a Go client for the CD-HS-SMF Rust service
+// Package client provides a Go client for the CD-HS-ST Rust service
 package client
 
 import (
@@ -11,7 +11,7 @@ import (
 	pb "github.com/wombatvagina69-crypto/olympus/services/sequencer/proto"
 )
 
-// CdhsSmfClient wraps the gRPC client for the Rust CD-HS-SMF service
+// CdhsSmfClient wraps the gRPC client for the Rust CD-HS-ST service
 type CdhsSmfClient struct {
 	conn   *grpc.ClientConn
 	client pb.CdhsSmfServiceClient

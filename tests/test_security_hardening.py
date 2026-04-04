@@ -13,7 +13,9 @@ Covers:
 
 from __future__ import annotations
 
+import json
 import unittest.mock
+from types import SimpleNamespace
 
 import pytest
 
@@ -21,7 +23,9 @@ from api.auth import (
     MemoryRateLimitBackend,
     _get_client_ip,
     _ip_in_ranges,
+    _is_overly_broad_proxy_range,
     _is_valid_ip,
+    _normalize_ip,
     _TokenBucket,
 )
 
@@ -46,6 +50,37 @@ class TestIsValidIp:
 
     def test_cidr_not_valid_as_ip(self):
         assert _is_valid_ip("10.0.0.0/8") is False
+
+
+# ── M1: IPv4-mapped IPv6 normalization ───────────────────────────────────────
+
+
+class TestNormalizeIp:
+    """Unit tests for _normalize_ip."""
+
+    def test_ipv4_mapped_ipv6_normalized_to_ipv4(self):
+        assert _normalize_ip("::ffff:1.2.3.4") == "1.2.3.4"
+
+    def test_plain_ipv4_unchanged(self):
+        assert _normalize_ip("1.2.3.4") == "1.2.3.4"
+
+    def test_plain_ipv6_unchanged(self):
+        assert _normalize_ip("::1") == "::1"
+
+    def test_invalid_ip_returned_unchanged(self):
+        assert _normalize_ip("not-an-ip") == "not-an-ip"
+
+    def test_get_client_ip_same_bucket_for_mapped_and_plain(self):
+        """::ffff:10.0.0.1 and 10.0.0.1 should resolve to the same bucket key."""
+        with unittest.mock.patch("api.auth.get_settings") as mock_settings:
+            mock_settings.return_value.trusted_proxy_ips = []
+            req_mapped = unittest.mock.MagicMock()
+            req_mapped.client.host = "::ffff:10.0.0.1"
+            req_mapped.headers = {}
+            req_plain = unittest.mock.MagicMock()
+            req_plain.client.host = "10.0.0.1"
+            req_plain.headers = {}
+            assert _get_client_ip(req_mapped) == _get_client_ip(req_plain)
 
 
 class TestIpInRanges:
@@ -75,6 +110,23 @@ class TestIpInRanges:
     def test_invalid_range_skipped(self):
         # Invalid range entries are silently skipped
         assert _ip_in_ranges("10.0.0.1", ["bad-range", "10.0.0.0/8"]) is True
+
+    def test_ipv4_mapped_ipv6_matches_ipv4_range(self):
+        assert _ip_in_ranges("::ffff:127.0.0.1", ["127.0.0.0/8"]) is True
+
+
+class TestTrustedProxyRangeValidation:
+    """Unit tests for overly broad trusted-proxy CIDR detection."""
+
+    def test_rejects_ipv4_any(self):
+        assert _is_overly_broad_proxy_range("0.0.0.0/0") is True
+
+    def test_rejects_ipv6_any(self):
+        assert _is_overly_broad_proxy_range("::/0") is True
+
+    def test_accepts_narrow_ranges(self):
+        assert _is_overly_broad_proxy_range("10.0.0.0/8") is False
+        assert _is_overly_broad_proxy_range("2001:db8::/32") is False
 
 
 class TestGetClientIp:
@@ -124,6 +176,13 @@ class TestGetClientIp:
             mock_settings.return_value.trusted_proxy_ips = []
             request = self._make_request("192.168.1.1", xff="1.2.3.4")
             assert _get_client_ip(request) == "192.168.1.1"
+
+    def test_overly_broad_trusted_proxy_range_ignores_xff(self):
+        """If trusted proxy range is global, fail closed to direct peer IP."""
+        with unittest.mock.patch("api.auth.get_settings") as mock_settings:
+            mock_settings.return_value.trusted_proxy_ips = ["0.0.0.0/0"]
+            request = self._make_request("198.51.100.10", xff="203.0.113.50, 198.51.100.10")
+            assert _get_client_ip(request) == "198.51.100.10"
 
 
 # ── H3: Bucket eviction DoS prevention ──────────────────────────────────────
@@ -201,6 +260,55 @@ class TestRateLimitBackend:
 
             bucket = _TokenBucket(capacity=10, refill_rate=1, tokens=10, last_refill=monotonic())
             backend.set("key", bucket)
+
+    def test_backend_factory_rejects_redis_configuration(self):
+        from api.auth import _create_rate_limit_backend
+
+        with unittest.mock.patch(
+            "api.auth.get_settings",
+            return_value=SimpleNamespace(rate_limit_backend="redis"),
+        ):
+            with pytest.raises(ValueError, match="Redis rate limit backend is not yet implemented"):
+                _create_rate_limit_backend()
+
+
+@pytest.mark.asyncio
+async def test_reload_keys_auth_independent_of_json_entry_order(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """Reloaded API keys authenticate identically regardless of JSON entry order."""
+    import api.auth as auth_module
+    from protocol.hashes import hash_bytes
+
+    original_loaded = auth_module._keys_loaded
+    original_store = dict(auth_module._key_store)
+
+    first_key = "first-key"
+    second_key = "second-key"
+    second_key_hash = hash_bytes(second_key.encode("utf-8")).hex()
+    entries = [
+        {"key_hash": hash_bytes(first_key.encode("utf-8")).hex(), "key_id": "first"},
+        {"key_hash": second_key_hash, "key_id": "second"},
+    ]
+
+    request = unittest.mock.MagicMock()
+    request.headers = {"x-api-key": second_key}
+    request.client.host = "127.0.0.1"
+
+    try:
+        for ordered_entries in (entries, list(reversed(entries))):
+            auth_module._keys_loaded = False
+            auth_module._key_store.clear()
+            monkeypatch.setenv("OLYMPUS_FOIA_API_KEYS", json.dumps(ordered_entries))
+            auth_module.reload_keys()
+
+            record = await auth_module.require_api_key(request)
+            assert record.key_id == "second"
+            assert record.key_hash == second_key_hash
+    finally:
+        auth_module._keys_loaded = original_loaded
+        auth_module._key_store.clear()
+        auth_module._key_store.update(original_store)
 
 
 # ── M2: RequestStatusUpdate enum validation ─────────────────────────────────

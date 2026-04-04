@@ -33,10 +33,8 @@ pub struct AdlScanner {
 impl AdlScanner {
     #[new]
     pub fn new() -> PyResult<Self> {
-        let guid_re = Regex::new(
-            r"^[0-9a-fA-F]+(?:-[0-9a-fA-F]+){3,}",
-        )
-        .map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))?;
+        let guid_re = Regex::new(r"^[0-9a-fA-F]+(?:-[0-9a-fA-F]+){3,}")
+            .map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))?;
 
         let archetype_id_re = Regex::new(
             // Group 1: optional leading whitespace
@@ -106,10 +104,12 @@ impl AdlScanner {
 
 mod canonical;
 mod crypto;
+mod zkverify;
 
 #[pymodule]
 fn olympus_core(py: Python<'_>, m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<AdlScanner>()?;
+    m.add_function(wrap_pyfunction!(zkverify::verify_groth16_bn254, m)?)?;
 
     // `olympus_core.crypto` — BLAKE3 hash primitives
     let crypto_mod = PyModule::new(py, "crypto")?;

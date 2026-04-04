@@ -63,11 +63,21 @@ async def client(db_engine):
             yield session
 
     # Set development mode and no API keys for test bypass
-    with patch.dict(os.environ, {"OLYMPUS_ENV": "development", "OLYMPUS_FOIA_API_KEYS": "[]"}):
+    with patch.dict(
+        os.environ,
+        {
+            "OLYMPUS_ENV": "development",
+            "OLYMPUS_ALLOW_DEV_AUTH": "1",
+            "OLYMPUS_FOIA_API_KEYS": "[]",
+        },
+    ):
         app = create_app()
         app.dependency_overrides[get_db] = override_get_db
 
-        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
+        async with AsyncClient(
+            transport=ASGITransport(app=app, raise_app_exceptions=False),
+            base_url="http://test",
+        ) as ac:
             yield ac
 
 
@@ -198,6 +208,37 @@ async def test_file_appeal_success(client):
     assert data["status"] == "UNDER_REVIEW"
     assert data["request_id"] == req_id
     assert "commit_hash" in data
+
+
+@pytest.mark.asyncio
+async def test_file_appeal_rejects_lone_surrogate(client):
+    """POST /appeals surfaces hashing Unicode errors without nested detail."""
+    create_resp = await client.post("/requests", json=REQUEST_BODY)
+    req_id = create_resp.json()["id"]
+    display_id = create_resp.json()["display_id"]
+    await client.patch(f"/requests/{display_id}/status", json={"status": "DENIED"})
+
+    with patch(
+        "api.routers.appeals.canonical_json_encode",
+        side_effect=ValueError("surrogates not allowed"),
+    ):
+        appeal_resp = await client.post(
+            "/appeals",
+            json={
+                "request_id": req_id,
+                "grounds": "IMPROPER_EXEMPTION",
+                "statement": "The agency response was malformed",
+            },
+        )
+    assert appeal_resp.status_code == 422
+    detail = appeal_resp.json()["detail"]
+    assert detail == [
+        {
+            "msg": "surrogates not allowed",
+            "type": "unicode",
+            "code": "INVALID_UNICODE",
+        }
+    ]
 
 
 @pytest.mark.asyncio

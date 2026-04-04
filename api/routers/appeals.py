@@ -8,7 +8,6 @@ GET  /appeals/{id} — single appeal detail
 
 from __future__ import annotations
 
-import json
 import logging
 from datetime import datetime, timezone
 
@@ -20,6 +19,7 @@ from api.deps import DBSession
 from api.models.appeal import Appeal, AppealStatus
 from api.models.request import PublicRecordsRequest, RequestStatus
 from api.schemas.appeal import AppealCreate, AppealResponse
+from protocol.canonical_json import canonical_json_encode
 from protocol.hashes import hash_bytes
 
 
@@ -29,16 +29,13 @@ router = APIRouter(prefix="/appeals", tags=["appeals"])
 
 def _hash_appeal(request_id: str, grounds: str, statement: str, filed_at: datetime) -> str:
     """Compute a deterministic BLAKE3 hash of the appeal content."""
-    canonical = json.dumps(
+    canonical = canonical_json_encode(
         {
             "filed_at": filed_at.isoformat(),
             "grounds": grounds,
             "request_id": request_id,
             "statement": statement,
-        },
-        sort_keys=True,
-        separators=(",", ":"),
-        ensure_ascii=True,
+        }
     )
     return hash_bytes(canonical.encode("utf-8")).hex()
 
@@ -97,7 +94,13 @@ async def file_appeal(body: AppealCreate, db: DBSession, _api_key: RequireAPIKey
         )
 
     filed_at = datetime.now(timezone.utc)
-    commit_hash = _hash_appeal(body.request_id, body.grounds, body.statement, filed_at)
+    try:
+        commit_hash = _hash_appeal(body.request_id, body.grounds, body.statement, filed_at)
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail=[{"msg": str(exc), "type": "unicode", "code": "INVALID_UNICODE"}],
+        ) from exc
 
     appeal = Appeal(
         request_id=body.request_id,

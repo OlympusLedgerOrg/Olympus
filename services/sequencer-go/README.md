@@ -1,13 +1,13 @@
 # Go Sequencer Service
 
-Trillian-shaped log service that orchestrates the CD-HS-SMF Rust service for append-only record logging.
+Trillian-shaped log service that orchestrates the CD-HS-ST Rust service for append-only record logging.
 
 ## Architecture
 
 This service provides a **Trillian-shaped HTTP/gRPC API** that:
 
 1. Batches and orders record appends
-2. Delegates all cryptographic operations to the Rust CD-HS-SMF service
+2. Delegates all cryptographic operations to the Rust CD-HS-ST service
 3. Persists SMT node deltas and signed roots to Postgres
 4. Exposes a simple log API for clients (Python FastAPI, external verifiers)
 
@@ -27,7 +27,7 @@ go build -o sequencer ./cmd/sequencer
 ## Running
 
 ```bash
-# Start Rust CD-HS-SMF service first
+# Start Rust CD-HS-ST service first
 cd ../cdhs-smf-rust
 cargo run --release
 
@@ -106,7 +106,7 @@ Generate an inclusion proof for a record.
 
 ### Client Layer (`internal/client`)
 
-Wraps the gRPC client for the Rust CD-HS-SMF service. Provides Go-friendly API:
+Wraps the gRPC client for the Rust CD-HS-ST service. Provides Go-friendly API:
 
 ```go
 client, err := client.NewCdhsSmfClient("localhost:50051")

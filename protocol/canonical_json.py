@@ -31,7 +31,7 @@ from typing import Any
 # fall back to the pure-Python implementation below when it is not present.
 # ---------------------------------------------------------------------------
 try:
-    from olympus_core.canonical import (  # type: ignore[import-not-found]
+    from olympus_core.canonical import (
         canonical_json_encode as _rust_canonical_json_encode,
     )
 
@@ -154,8 +154,18 @@ def _encode_value(value: Any) -> str:
     if value is False:
         return "false"
     if isinstance(value, str):
+        # Explicitly reject lone surrogates (U+D800–U+DFFF) before encoding.
+        # Python strings can hold lone surrogates internally, and json.dumps
+        # with ensure_ascii=False may emit them as raw bytes rather than raising
+        # an error, producing invalid UTF-8 and non-deterministic output.
+        for ch in value:
+            cp = ord(ch)
+            if 0xD800 <= cp <= 0xDFFF:
+                raise ValueError(
+                    f"String contains a lone surrogate character (U+{cp:04X}), "
+                    "which is not valid Unicode and cannot be encoded as canonical JSON."
+                )
         # ensure_ascii=False: non-ASCII emitted as raw UTF-8 (JCS-compliant).
-        # json.dumps raises UnicodeEncodeError for lone surrogates — correct.
         return json.dumps(value, ensure_ascii=False)
     if isinstance(value, int | Decimal) and not isinstance(value, bool):
         return _encode_number(value)
@@ -166,7 +176,7 @@ def _encode_value(value: Any) -> str:
         for key in sorted(value.keys()):
             if not isinstance(key, str):
                 raise TypeError("Object keys must be strings for canonical JSON")
-            items.append(f"{json.dumps(key, ensure_ascii=False)}:{_encode_value(value[key])}")
+            items.append(f"{_encode_value(key)}:{_encode_value(value[key])}")
         return "{" + ",".join(items) + "}"
     raise TypeError(f"Type {type(value)} is not JSON-serializable")
 

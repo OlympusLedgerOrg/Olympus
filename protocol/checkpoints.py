@@ -650,12 +650,15 @@ def verify_checkpoint_chain(
             except (TypeError, ValueError):  # pragma: no cover — hex validated at creation
                 return False
 
+            trust_new_root_on_empty = checkpoints[i - 1].ledger_height == 0
+            # current_root comes from a signed checkpoint validated by verify_checkpoint above.
             if not verify_consistency_proof(
                 previous_root,
                 current_root,
                 proof_bytes,
                 checkpoints[i - 1].ledger_height,
                 checkpoint.ledger_height,
+                trust_new_root_on_empty=trust_new_root_on_empty,
             ):
                 return False
         elif checkpoint.consistency_proof:

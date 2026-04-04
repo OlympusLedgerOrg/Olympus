@@ -145,14 +145,13 @@ services:
       UI_API_BASE: ${UI_API_BASE}
       PSYCOPG_URL: ${PSYCOPG_URL:?Set PSYCOPG_URL in .env}
       OLYMPUS_DEBUG_UI: ${OLYMPUS_DEBUG_UI:-false}
-      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY}
       ORACLE_RATE_LIMIT_REQUESTS: ${ORACLE_RATE_LIMIT_REQUESTS:-10}
       ORACLE_RATE_LIMIT_WINDOW_SECONDS: ${ORACLE_RATE_LIMIT_WINDOW_SECONDS:-60}
     depends_on:
       app:
         condition: service_healthy
     ports:
-      - "8080:8080"
+      - "127.0.0.1:8080:8080"
     networks:
       - frontend
     # Tune these values for your deployment environment

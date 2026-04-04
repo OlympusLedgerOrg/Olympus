@@ -24,7 +24,7 @@ from .canonical_json import canonical_json_bytes
 # fall back to pure-Python implementations below when it is not present.
 # ---------------------------------------------------------------------------
 try:
-    from olympus_core.crypto import (  # type: ignore[import-not-found]
+    from olympus_core.crypto import (
         blake3_hash as _rust_blake3_hash,
         global_key as _rust_global_key,
         leaf_hash as _rust_leaf_hash,
@@ -132,7 +132,7 @@ def record_key(record_type: str, record_id: str, version: int) -> bytes:
 # needed; length prefixes commit the shard / record field boundaries explicitly.
 def global_key(shard_id: str, record_key_bytes: bytes) -> bytes:
     """
-    Generate a global SMT key for CDHSSMF (Constant-Depth Hierarchical Sparse Sharded Merkle Forest).
+    Generate a global SMT key for CD-HS-ST (Constant-Depth Hierarchical Sparse Tree).
 
     This function implements hierarchical key derivation that encodes shard identity into the
     global SMT key space, enabling a single SMT to replace separate per-shard SMTs and forest SMTs.
@@ -475,9 +475,14 @@ def dataset_key(
     Returns:
         64-character hex-encoded BLAKE3 hash.
     """
-    key_data = (
-        f"dataset_artifact:{canonical_namespace}:{source_uri}:{dataset_name}:{committer_pubkey}"
-    ).encode()
+    key_data = b"".join(
+        [
+            _length_prefixed_bytes("canonical_namespace", canonical_namespace.encode("utf-8")),
+            _length_prefixed_bytes("source_uri", source_uri.encode("utf-8")),
+            _length_prefixed_bytes("dataset_name", dataset_name.encode("utf-8")),
+            _length_prefixed_bytes("committer_pubkey", committer_pubkey.encode("utf-8")),
+        ]
+    )
     return blake3_hash([DATASET_PREFIX, key_data]).hex()
 
 
@@ -502,5 +507,12 @@ def compute_dataset_commit_id(
     Returns:
         64-character hex-encoded BLAKE3 hash.
     """
-    payload = f"{dataset_id}:{parent_commit_id}:{manifest_hash}:{committer_pubkey}"
-    return blake3_hash([DATASET_COMMIT_PREFIX, payload.encode()]).hex()
+    key_data = b"".join(
+        [
+            _length_prefixed_bytes("dataset_id", dataset_id.encode("utf-8")),
+            _length_prefixed_bytes("parent_commit_id", parent_commit_id.encode("utf-8")),
+            _length_prefixed_bytes("manifest_hash", manifest_hash.encode("utf-8")),
+            _length_prefixed_bytes("committer_pubkey", committer_pubkey.encode("utf-8")),
+        ]
+    )
+    return blake3_hash([DATASET_COMMIT_PREFIX, key_data]).hex()
