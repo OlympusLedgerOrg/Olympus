@@ -621,8 +621,12 @@ def test_startup_rejects_multiworker_memory_backend_in_production(monkeypatch):
     monkeypatch.setenv("RATE_LIMIT_BACKEND", "memory")
     get_settings.cache_clear()
 
-    with pytest.raises(RuntimeError, match="RATE_LIMIT_BACKEND=memory"):
+    with pytest.raises(RuntimeError, match="RATE_LIMIT_BACKEND=memory") as exc_info:
         _assert_no_multiworker_with_memory_rate_limit()
+
+    # Error message must mention the production-only gate so operators understand
+    # why staging (OLYMPUS_ENV != 'production') didn't trigger this check.
+    assert "OLYMPUS_ENV=production" in str(exc_info.value)
 
     get_settings.cache_clear()
 
@@ -670,7 +674,7 @@ def test_startup_allows_multiworker_when_web_concurrency_unset(monkeypatch):
 
 
 def test_startup_xff_disabled_when_no_trusted_proxies_configured(monkeypatch):
-    """assert_xff_default_deny sets _xff_disabled and _get_client_ip ignores XFF."""
+    """_assert_xff_default_deny sets _xff_disabled and _get_client_ip ignores XFF."""
     from unittest.mock import MagicMock, patch
 
     import api.auth as auth_mod
@@ -681,7 +685,7 @@ def test_startup_xff_disabled_when_no_trusted_proxies_configured(monkeypatch):
     mock_settings.trusted_proxy_ips = []
 
     with patch("api.auth.get_settings", return_value=mock_settings):
-        auth_mod.assert_xff_default_deny()
+        auth_mod._assert_xff_default_deny()
 
     assert auth_mod._xff_disabled is True
 
@@ -695,7 +699,7 @@ def test_startup_xff_disabled_when_no_trusted_proxies_configured(monkeypatch):
 
 
 def test_startup_xff_enabled_when_trusted_proxies_configured(monkeypatch):
-    """assert_xff_default_deny leaves _xff_disabled False when proxies are configured."""
+    """_assert_xff_default_deny leaves _xff_disabled False when proxies are configured."""
     from unittest.mock import MagicMock, patch
 
     import api.auth as auth_mod
@@ -706,6 +710,6 @@ def test_startup_xff_enabled_when_trusted_proxies_configured(monkeypatch):
     mock_settings.trusted_proxy_ips = ["10.0.0.1"]
 
     with patch("api.auth.get_settings", return_value=mock_settings):
-        auth_mod.assert_xff_default_deny()
+        auth_mod._assert_xff_default_deny()
 
     assert auth_mod._xff_disabled is False

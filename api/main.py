@@ -31,7 +31,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from starlette.middleware.base import BaseHTTPMiddleware
 
-from api.auth import assert_xff_default_deny
+from api.auth import _assert_xff_default_deny
 from api.config import get_settings
 from api.db import engine
 from api.ingest import router as ingest_router
@@ -131,7 +131,9 @@ def _assert_no_multiworker_with_memory_rate_limit() -> None:
             "Each worker maintains independent rate limit buckets, so the effective limit "
             f"would be {workers}× the configured value. "
             "Options: (1) Set WEB_CONCURRENCY=1, (2) configure RATE_LIMIT_BACKEND=redis "
-            "once implemented, or (3) set OLYMPUS_ENV=development to skip this check locally."
+            "once implemented, or (3) set OLYMPUS_ENV=development to skip this check locally. "
+            "Note: this check only runs when OLYMPUS_ENV=production — "
+            "staging environments with OLYMPUS_ENV != 'production' will not trigger it."
         )
 
 
@@ -144,7 +146,7 @@ async def lifespan(app: FastAPI):
     _assert_no_dev_signing_key_in_non_development()
     _assert_dev_auth_flag_restricted_to_development()
     _assert_no_multiworker_with_memory_rate_limit()
-    assert_xff_default_deny()
+    _assert_xff_default_deny()
     assert_rust_hot_path()
 
     try:

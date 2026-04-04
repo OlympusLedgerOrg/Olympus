@@ -561,7 +561,7 @@ def _get_backend() -> MemoryRateLimitBackend:
 _xff_disabled: bool = False
 
 
-def assert_xff_default_deny() -> None:
+def _assert_xff_default_deny() -> None:
     """Disable XFF processing at startup when no trusted proxies are configured.
 
     When ``OLYMPUS_TRUSTED_PROXY_IPS`` is empty or unset there is no
