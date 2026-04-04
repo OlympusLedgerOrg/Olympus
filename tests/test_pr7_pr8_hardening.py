@@ -618,7 +618,7 @@ def test_startup_rejects_multiworker_memory_backend_in_production(monkeypatch):
 
     monkeypatch.setenv("OLYMPUS_ENV", "production")
     monkeypatch.setenv("WEB_CONCURRENCY", "4")
-    monkeypatch.delenv("RATE_LIMIT_BACKEND", raising=False)
+    monkeypatch.setenv("RATE_LIMIT_BACKEND", "memory")
     get_settings.cache_clear()
 
     with pytest.raises(RuntimeError, match="RATE_LIMIT_BACKEND=memory"):
@@ -633,6 +633,7 @@ def test_startup_allows_multiworker_memory_backend_in_development(monkeypatch):
 
     monkeypatch.setenv("OLYMPUS_ENV", "development")
     monkeypatch.setenv("WEB_CONCURRENCY", "4")
+    monkeypatch.setenv("RATE_LIMIT_BACKEND", "memory")
     get_settings.cache_clear()
 
     _assert_no_multiworker_with_memory_rate_limit()  # must not raise
@@ -646,6 +647,7 @@ def test_startup_allows_single_worker_memory_backend_in_production(monkeypatch):
 
     monkeypatch.setenv("OLYMPUS_ENV", "production")
     monkeypatch.setenv("WEB_CONCURRENCY", "1")
+    monkeypatch.setenv("RATE_LIMIT_BACKEND", "memory")
     get_settings.cache_clear()
 
     _assert_no_multiworker_with_memory_rate_limit()  # must not raise
@@ -659,6 +661,7 @@ def test_startup_allows_multiworker_when_web_concurrency_unset(monkeypatch):
 
     monkeypatch.setenv("OLYMPUS_ENV", "production")
     monkeypatch.delenv("WEB_CONCURRENCY", raising=False)
+    monkeypatch.setenv("RATE_LIMIT_BACKEND", "memory")
     get_settings.cache_clear()
 
     _assert_no_multiworker_with_memory_rate_limit()  # WEB_CONCURRENCY defaults to 1
@@ -667,18 +670,18 @@ def test_startup_allows_multiworker_when_web_concurrency_unset(monkeypatch):
 
 
 def test_startup_xff_disabled_when_no_trusted_proxies_configured(monkeypatch):
-    """_assert_xff_default_deny sets _xff_disabled and _get_client_ip ignores XFF."""
+    """assert_xff_default_deny sets _xff_disabled and _get_client_ip ignores XFF."""
     from unittest.mock import MagicMock, patch
 
     import api.auth as auth_mod
 
-    auth_mod._xff_disabled = False  # reset before test
+    monkeypatch.setattr(auth_mod, "_xff_disabled", False)
 
     mock_settings = MagicMock()
     mock_settings.trusted_proxy_ips = []
 
     with patch("api.auth.get_settings", return_value=mock_settings):
-        auth_mod._assert_xff_default_deny()
+        auth_mod.assert_xff_default_deny()
 
     assert auth_mod._xff_disabled is True
 
@@ -690,23 +693,19 @@ def test_startup_xff_disabled_when_no_trusted_proxies_configured(monkeypatch):
     ip = auth_mod._get_client_ip(request)
     assert ip == "10.0.0.1"
 
-    auth_mod._xff_disabled = False  # restore
-
 
 def test_startup_xff_enabled_when_trusted_proxies_configured(monkeypatch):
-    """_assert_xff_default_deny leaves _xff_disabled False when proxies are configured."""
+    """assert_xff_default_deny leaves _xff_disabled False when proxies are configured."""
     from unittest.mock import MagicMock, patch
 
     import api.auth as auth_mod
 
-    auth_mod._xff_disabled = False
+    monkeypatch.setattr(auth_mod, "_xff_disabled", False)
 
     mock_settings = MagicMock()
     mock_settings.trusted_proxy_ips = ["10.0.0.1"]
 
     with patch("api.auth.get_settings", return_value=mock_settings):
-        auth_mod._assert_xff_default_deny()
+        auth_mod.assert_xff_default_deny()
 
     assert auth_mod._xff_disabled is False
-
-    auth_mod._xff_disabled = False  # restore

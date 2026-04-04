@@ -31,7 +31,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from starlette.middleware.base import BaseHTTPMiddleware
 
-from api.auth import _assert_xff_default_deny
+from api.auth import assert_xff_default_deny
 from api.config import get_settings
 from api.db import engine
 from api.ingest import router as ingest_router
@@ -144,7 +144,7 @@ async def lifespan(app: FastAPI):
     _assert_no_dev_signing_key_in_non_development()
     _assert_dev_auth_flag_restricted_to_development()
     _assert_no_multiworker_with_memory_rate_limit()
-    _assert_xff_default_deny()
+    assert_xff_default_deny()
     assert_rust_hot_path()
 
     try:
