@@ -1,5 +1,5 @@
 """
-Constant-Depth Hierarchical Sparse Sharded Merkle Forest (CDHSSMF)
+Constant-Depth Hierarchical Sparse Tree (CD-HS-ST)
 
 Design rationale
 ----------------
@@ -13,7 +13,7 @@ Maintaining two structures caused a whole class of concurrency and consistency
 bugs (BUG-03, BUG-10) because every append required updating *both* trees
 atomically.
 
-The CDHSSMF collapses the hierarchy into **one** 256-level SMT by pushing the
+The CD-HS-ST collapses the hierarchy into **one** 256-level SMT by pushing the
 shard identity into the key space via domain-separated hashing::
 
     global_key = blake3_derive_key(
@@ -75,7 +75,7 @@ class ShardRecord:
 
 class CdhssmfTree:
     """
-    Single-tree CDHSSMF: one 256-level SMT covering all shards.
+    Single-tree CD-HS-ST: one 256-level SMT covering all shards.
 
     Usage::
 

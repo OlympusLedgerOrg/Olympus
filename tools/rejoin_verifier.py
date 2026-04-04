@@ -156,12 +156,15 @@ def evaluate_rejoin_health(
 
         try:
             proof_nodes = _extract_proof_nodes(proof_data)
+            trust_new_root_on_empty = old_size == 0
+            # new_root comes from the signed STHs validated earlier in this verifier.
             is_valid = verify_consistency_proof(
                 bytes.fromhex(str(old_sth["merkle_root"])),
                 bytes.fromhex(str(new_sth["merkle_root"])),
                 proof_nodes,
                 old_size,
                 new_size,
+                trust_new_root_on_empty=trust_new_root_on_empty,
             )
         except (TypeError, ValueError):
             is_valid = False

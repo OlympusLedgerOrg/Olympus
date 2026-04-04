@@ -1,9 +1,11 @@
 """Tests for developer debug console UI."""
 
 import json
+import socket
 import unittest.mock
 from urllib.error import HTTPError
 
+import pytest
 from fastapi.testclient import TestClient
 
 import ui.app as ui_app
@@ -40,6 +42,13 @@ def test_console_shows_api_unavailable_banner_on_timeout(monkeypatch):
 
     assert response.status_code == 200
     assert "API unavailable (connection failed)." in response.text
+
+
+def test_debug_ui_csp_disallows_unsafe_inline_styles():
+    response = client.get("/manifest.json")
+    csp = response.headers.get("content-security-policy", "")
+    assert "style-src 'self'" in csp
+    assert "'unsafe-inline'" not in csp
 
 
 def test_console_shows_chain_broken_banner(monkeypatch):
@@ -357,6 +366,17 @@ def test_color_scheme_cycler_present(monkeypatch):
     assert "AMBER" in response.text
     assert "BLUE" in response.text
     assert "WHITE" in response.text
+
+
+def test_validate_federation_url_blocks_ipv4_mapped_ipv6():
+    with unittest.mock.patch(
+        "ui.app.socket.getaddrinfo",
+        return_value=[
+            (socket.AF_INET6, socket.SOCK_STREAM, 6, "", ("::ffff:127.0.0.1", 443, 0, 0))
+        ],
+    ):
+        with pytest.raises(ValueError, match="blocked address range"):
+            ui_app.validate_federation_url("https://example.invalid")
 
 
 def test_terminal_theme_css_present(monkeypatch):
@@ -829,6 +849,69 @@ def test_commit_persists_to_ledger_api(monkeypatch):
     data = response.json()
     assert data["ok"] is True
     assert data["ledger_commit_id"] == "ledger-id-abc123"
+    mock_client.post.assert_awaited_once_with(
+        f"{ui_app.API_BASE}/doc/commit",
+        json={"doc_hash": data["blake3_root"]},
+    )
+
+
+def test_commit_forwards_api_auth_headers_to_ledger_api(monkeypatch):
+    """POST /commit forwards API auth headers to the backend commit endpoint."""
+    monkeypatch.setattr(ui_app, "DEBUG_UI_ENABLED", True)
+    ui_app._commit_store.clear()
+
+    mock_response = unittest.mock.MagicMock()
+    mock_response.json.return_value = {"commit_id": "ledger-id-forwarded"}
+    mock_response.raise_for_status = unittest.mock.MagicMock()
+
+    mock_client = unittest.mock.AsyncMock()
+    mock_client.__aenter__ = unittest.mock.AsyncMock(return_value=mock_client)
+    mock_client.__aexit__ = unittest.mock.AsyncMock(return_value=False)
+    mock_client.post = unittest.mock.AsyncMock(return_value=mock_response)
+
+    monkeypatch.setattr(ui_app.httpx, "AsyncClient", lambda **kwargs: mock_client)
+
+    response = client.post(
+        "/commit",
+        headers={"X-API-Key": "ui-test-api-key", "Authorization": "Bearer ledger-token"},
+        data={"document_id": "docAuth", "version": 1},
+        files={"file": ("doc.txt", b"Section one\nSection two\n", "text/plain")},
+    )
+
+    assert response.status_code == 200
+    data = response.json()
+    mock_client.post.assert_awaited_once_with(
+        f"{ui_app.API_BASE}/doc/commit",
+        json={"doc_hash": data["blake3_root"]},
+        headers={"x-api-key": "ui-test-api-key", "authorization": "Bearer ledger-token"},
+    )
+
+
+def test_commit_does_not_forward_basic_auth_to_ledger_api(monkeypatch):
+    """POST /commit must not forward UI basic-auth credentials to the API."""
+    monkeypatch.setattr(ui_app, "DEBUG_UI_ENABLED", True)
+    ui_app._commit_store.clear()
+
+    mock_response = unittest.mock.MagicMock()
+    mock_response.json.return_value = {"commit_id": "ledger-id-basic"}
+    mock_response.raise_for_status = unittest.mock.MagicMock()
+
+    mock_client = unittest.mock.AsyncMock()
+    mock_client.__aenter__ = unittest.mock.AsyncMock(return_value=mock_client)
+    mock_client.__aexit__ = unittest.mock.AsyncMock(return_value=False)
+    mock_client.post = unittest.mock.AsyncMock(return_value=mock_response)
+
+    monkeypatch.setattr(ui_app.httpx, "AsyncClient", lambda **kwargs: mock_client)
+
+    response = client.post(
+        "/commit",
+        headers={"Authorization": "Basic dWk6cGFzcw=="},
+        data={"document_id": "docBasic", "version": 1},
+        files={"file": ("doc.txt", b"Section one\nSection two\n", "text/plain")},
+    )
+
+    assert response.status_code == 200
+    data = response.json()
     mock_client.post.assert_awaited_once_with(
         f"{ui_app.API_BASE}/doc/commit",
         json={"doc_hash": data["blake3_root"]},
@@ -1314,6 +1397,35 @@ def test_proxy_verify_simple_handles_api_error(monkeypatch):
 
     assert response.status_code == 400
     assert response.json()["detail"]["code"] == "MISSING_INPUT"
+
+
+def test_proxy_verify_simple_forwards_auth_headers(monkeypatch):
+    """Proxy should forward X-API-Key and Authorization headers to the API (H2)."""
+    monkeypatch.setattr(ui_app, "DEBUG_UI_ENABLED", True)
+
+    mock_response = unittest.mock.MagicMock()
+    mock_response.json.return_value = {"verified": True, "confidence": "certain"}
+    mock_response.raise_for_status = unittest.mock.MagicMock()
+
+    mock_client = unittest.mock.AsyncMock()
+    mock_client.__aenter__ = unittest.mock.AsyncMock(return_value=mock_client)
+    mock_client.__aexit__ = unittest.mock.AsyncMock(return_value=False)
+    mock_client.post = unittest.mock.AsyncMock(return_value=mock_response)
+
+    monkeypatch.setattr(ui_app.httpx, "AsyncClient", lambda **kwargs: mock_client)
+
+    response = client.post(
+        "/ledger/verify/simple",
+        headers={"X-API-Key": "my-secret-key", "Authorization": "Bearer my-token"},
+        data={"doc_hash": "cd" * 32},
+    )
+
+    assert response.status_code == 200
+    call_kwargs = mock_client.post.call_args
+    forwarded_headers = call_kwargs.kwargs["headers"]
+    assert forwarded_headers is not None
+    assert forwarded_headers["x-api-key"] == "my-secret-key"
+    assert forwarded_headers["authorization"] == "Bearer my-token"
 
 
 # ── PWA integration tests ──

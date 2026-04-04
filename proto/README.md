@@ -2,13 +2,13 @@
 
 This directory contains the protobuf definitions for inter-service communication in Olympus.
 
-## CD-HS-SMF Service API
+## CD-HS-ST Service API
 
-The `cdhs_smf.proto` file defines the API for the Constant-Depth Hierarchical Sparse Sharded Merkle Forest (CD-HS-SMF) service.
+The `cdhs_smf.proto` file defines the API for the Constant-Depth Hierarchical Sparse Tree (CD-HS-ST) service.
 
 ### Architecture
 
-The CD-HS-SMF service is a **Rust standalone binary** that:
+The CD-HS-ST service is a **Rust standalone binary** that:
 
 - Maintains a single global 256-level Sparse Merkle Tree
 - Uses composite keys: `H(GLOBAL_KEY_PREFIX || shard_id || record_key)`

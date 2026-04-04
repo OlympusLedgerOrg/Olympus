@@ -7,7 +7,6 @@ understand without knowing about Merkle trees or cryptographic hashes.
 
 from __future__ import annotations
 
-import json
 import logging
 from datetime import datetime, timezone
 from typing import Literal
@@ -128,21 +127,20 @@ async def verify_by_commit_id(
     # Resolve display ID → raw commit_id if needed
     resolved_commit_id: str | None = None
     if commit_id.upper().startswith("OLY-"):
-        # Search activity log for this display ID
+        # Query LedgerActivity by the indexed display_id column (C2 fix).
+        # The previous approach fetched all rows with details_json and scanned
+        # them in memory, which was O(n).  The display_id column has an index
+        # so this lookup is O(log n).
         activity_result = await db.execute(
             select(LedgerActivity)
-            .where(LedgerActivity.details_json.isnot(None))
+            .where(LedgerActivity.display_id == commit_id.upper())
+            .where(LedgerActivity.related_commit_id.isnot(None))
             .order_by(LedgerActivity.timestamp.desc())
+            .limit(1)
         )
-        activities = list(activity_result.scalars().all())
-        for act in activities:
-            try:
-                details = json.loads(act.details_json or "{}")
-                if details.get("display_id", "").upper() == commit_id.upper():
-                    resolved_commit_id = act.related_commit_id
-                    break
-            except (json.JSONDecodeError, AttributeError):
-                continue
+        activity_row = activity_result.scalars().first()
+        if activity_row is not None:
+            resolved_commit_id = activity_row.related_commit_id
 
         if not resolved_commit_id:
             steps.append(
@@ -275,6 +273,12 @@ async def _build_verification_response(
     step_n = len(steps) + 1
 
     # Merkle proof verification
+    # Guard against unbounded in-memory Merkle tree reconstruction for very
+    # large shards: load at most _MERKLE_LEAF_LIMIT leaves.  Shards larger than
+    # this limit will skip proof generation (proof_valid = False) rather than
+    # causing an OOM / DoS.  The limit matches the cap applied in the
+    # /ledger/proof/{commit_id} endpoint.
+    _MERKLE_LEAF_LIMIT = 50_000
     proof_valid = False
     failure_reason: str | None = None
     try:
@@ -282,6 +286,7 @@ async def _build_verification_response(
             select(DocCommit.doc_hash)
             .where(DocCommit.shard_id == commit.shard_id)
             .order_by(DocCommit.epoch_timestamp)
+            .limit(_MERKLE_LEAF_LIMIT)
         )
         all_hashes = list(all_hashes_result.scalars().all())
 

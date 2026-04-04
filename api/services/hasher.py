@@ -7,10 +7,10 @@ canonical BLAKE3 digests for requests, documents, and commit identifiers.
 
 from __future__ import annotations
 
-import json
 import os
 from datetime import datetime
 
+from protocol.canonical_json import canonical_json_encode
 from protocol.hashes import hash_bytes
 
 
@@ -36,16 +36,13 @@ def hash_request(
     Returns:
         Hex-encoded BLAKE3 digest.
     """
-    canonical = json.dumps(
+    canonical = canonical_json_encode(
         {
             "agency": agency,
             "description": description,
             "filed_at": filed_at.isoformat(),
             "subject": subject,
-        },
-        sort_keys=True,
-        separators=(",", ":"),
-        ensure_ascii=True,
+        }
     )
     return hash_bytes(canonical.encode("utf-8")).hex()
 

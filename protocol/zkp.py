@@ -8,6 +8,7 @@ Poseidon hashing confined to circuit scope and BLAKE3 hashing in Python.
 from __future__ import annotations
 
 import json
+import re
 import shutil
 import subprocess  # nosec B404
 import tempfile
@@ -158,12 +159,30 @@ class Groth16Prover:
     Notes:
       - For local/dev, prefer snarkjs_bin="npx" so it uses the repo's node_modules.
       - For global installs, snarkjs_bin="snarkjs" is fine.
+      - Subprocess argv values are always passed as list elements (no shell), and
+        circuit identifiers are allowlisted by :meth:`_validate_circuit_name`.
+        In the ingest pipeline, externally supplied artifact identifiers are
+        validated at API boundaries via ``api.ingest._IDENTIFIER_PATTERN`` before
+        any persisted identifier can influence proof artifact lookup or subprocess
+        arguments. This boundary is intentionally documented to support security
+        audits of identifier handling between storage and execution.
     """
 
     def __init__(self, circuits_dir: Path, snarkjs_bin: str = "npx") -> None:
         self.circuits_dir = circuits_dir
         self.snarkjs_bin = snarkjs_bin
         self._snarkjs_path: str | None = None
+
+    @staticmethod
+    def _validate_circuit_name(circuit: str) -> None:
+        """Restrict circuit identifiers to simple file-stem tokens (allowlist).
+
+        Prevents path-traversal and shell-injection attacks where a caller
+        supplies a circuit name that bleeds out of the expected build directory
+        or injects shell metacharacters into filesystem paths.
+        """
+        if not re.fullmatch(r"[A-Za-z0-9_-]+", circuit):
+            raise ValueError(f"Invalid circuit identifier: {circuit!r}")
 
     def _check_snarkjs(self) -> str:
         """Ensure snarkjs launcher is available (snarkjs or npx) and cache absolute path."""
@@ -324,6 +343,10 @@ class Groth16Prover:
     ) -> bool:
         """Verify a Groth16 proof with snarkjs."""
         self._check_snarkjs()
+
+        # Validate circuit name before using it in path construction to prevent
+        # path-traversal attacks via a crafted circuit identifier.
+        self._validate_circuit_name(proof.circuit)
 
         if verification_key_path is not None:
             vkey = verification_key_path

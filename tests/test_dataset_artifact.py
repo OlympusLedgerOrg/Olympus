@@ -364,6 +364,16 @@ class TestHashFunctions:
         cid2 = compute_dataset_commit_id("a" * 64, "", "e" * 64, "c" * 64)
         assert cid1 != cid2
 
+    def test_dataset_key_prevents_field_injection(self):
+        """Test that length-prefixed encoding prevents field injection (M4 fix)."""
+        from protocol.hashes import dataset_key
+
+        # With colon concatenation, "a:b" + "c" would equal "a" + "b:c"
+        # Length-prefixed encoding prevents this collision
+        key1 = dataset_key("a:b", "c", "d", "e" * 64)
+        key2 = dataset_key("a", "b:c", "d", "e" * 64)
+        assert key1 != key2
+
     def test_domain_prefixes_exist(self):
         from protocol.hashes import (
             DATASET_COMMIT_PREFIX,

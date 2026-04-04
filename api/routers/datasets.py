@@ -17,7 +17,7 @@ from datetime import datetime, timezone
 
 import nacl.exceptions
 import nacl.signing
-from fastapi import APIRouter, HTTPException, Query, status
+from fastapi import APIRouter, HTTPException, Query, Request, status
 from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 
@@ -37,6 +37,7 @@ from api.schemas.dataset import (
     DatasetHistoryEntry,
     DatasetHistoryResponse,
     DatasetListResponse,
+    DatasetProofBundleResponse,
     DatasetVerifyResponse,
     LineageCommitRequest,
     LineageCommitResponse,
@@ -46,6 +47,7 @@ from api.services.shard import DEFAULT_SHARD_ID, compute_state_root
 from protocol.canonical_json import canonical_json_bytes
 from protocol.hashes import (
     DATASET_LINEAGE_PREFIX,
+    _length_prefixed_bytes,
     blake3_hash,
     compute_dataset_commit_id,
     dataset_key,
@@ -54,6 +56,11 @@ from protocol.hashes import (
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/datasets", tags=["datasets"])
+
+# Cap the number of leaves loaded for in-memory Merkle tree reconstruction.
+# Shards with more than this many commits return an empty proof rather than
+# triggering OOM / CPU-DoS.  Same limit used in ledger.py and documents.py.
+_MERKLE_LEAF_LIMIT = 50_000
 
 
 # ---------------------------------------------------------------------------
@@ -83,7 +90,7 @@ def _verify_signature(pubkey_hex: str, commit_id: str, signature_hex: str) -> bo
     try:
         verify_key = nacl.signing.VerifyKey(bytes.fromhex(pubkey_hex))
         verify_key.verify(bytes.fromhex(commit_id), bytes.fromhex(signature_hex))
-    except (nacl.exceptions.BadSignatureError, ValueError, Exception):
+    except (nacl.exceptions.BadSignatureError, ValueError):
         return False
     return True
 
@@ -464,6 +471,7 @@ async def get_dataset(
 async def verify_dataset(
     dataset_id: str,
     db: DBSession,
+    _api_key: RequireAPIKey,
     _rl: RateLimit,
 ) -> DatasetVerifyResponse:
     """Run independent verification checks on a committed dataset.
@@ -558,6 +566,7 @@ async def verify_dataset(
         select(DatasetArtifact.manifest_hash)
         .where(DatasetArtifact.shard_id == artifact.shard_id)
         .order_by(DatasetArtifact.epoch_timestamp, DatasetArtifact.manifest_hash)
+        .limit(_MERKLE_LEAF_LIMIT)
     )
     all_hashes = list(all_hashes_result.scalars().all())
 
@@ -568,7 +577,11 @@ async def verify_dataset(
             proof: MerkleProof = generate_proof(artifact.manifest_hash, tree)
             merkle_proof_data = [{"hash": h, "direction": d} for h, d in proof.siblings]
         except ValueError:
-            pass
+            logger.warning(
+                "Merkle proof generation failed for dataset %s",
+                artifact.dataset_id,
+                exc_info=True,
+            )
 
     verified = all(checks.values())
 
@@ -596,6 +609,117 @@ async def verify_dataset(
 
 
 # ---------------------------------------------------------------------------
+# GET /datasets/{dataset_id}/proof-bundle
+# ---------------------------------------------------------------------------
+
+
+@router.get("/{dataset_id}/proof-bundle", response_model=DatasetProofBundleResponse)
+async def get_proof_bundle(
+    dataset_id: str,
+    request: Request,
+    db: DBSession,
+    _rl: RateLimit,
+) -> DatasetProofBundleResponse:
+    """Generate a self-contained proof bundle for a dataset commit.
+
+    The proof bundle includes the commit metadata, file list, Merkle
+    inclusion proof, and cryptographic verification results so that an
+    external auditor can independently verify the dataset commitment.
+
+    As a side-effect, the ``proof_bundle_uri`` field on the underlying
+    artifact is populated with the full URL so that subsequent
+    ``GET /datasets/{dataset_id}`` responses include it.
+    """
+    result = await db.execute(
+        select(DatasetArtifact)
+        .where(DatasetArtifact.dataset_id == dataset_id)
+        .order_by(DatasetArtifact.epoch_timestamp.desc())
+        .limit(1)
+    )
+    artifact = result.scalars().first()
+    if artifact is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Dataset not found.",
+        )
+
+    # Load child files
+    files_result = await db.execute(
+        select(DatasetArtifactFile).where(DatasetArtifactFile.artifact_id == artifact.id)
+    )
+    files = files_result.scalars().all()
+
+    # Verify commit_id
+    expected_commit_id = compute_dataset_commit_id(
+        artifact.dataset_id,
+        artifact.parent_commit_id,
+        artifact.manifest_hash,
+        artifact.committer_pubkey,
+    )
+    commit_id_valid = expected_commit_id == artifact.commit_id
+
+    # Verify signature
+    signature_valid = _verify_signature(
+        artifact.committer_pubkey,
+        artifact.commit_id,
+        artifact.commit_signature,
+    )
+
+    # Merkle inclusion proof (bounded to prevent OOM on large shards)
+    all_hashes_result = await db.execute(
+        select(DatasetArtifact.manifest_hash)
+        .where(DatasetArtifact.shard_id == artifact.shard_id)
+        .order_by(DatasetArtifact.epoch_timestamp, DatasetArtifact.manifest_hash)
+        .limit(_MERKLE_LEAF_LIMIT)
+    )
+    all_hashes = list(all_hashes_result.scalars().all())
+
+    merkle_proof_data: list[dict] | None = None
+    if all_hashes:
+        try:
+            tree = build_tree(all_hashes, preserve_order=True)
+            proof: MerkleProof = generate_proof(artifact.manifest_hash, tree)
+            merkle_proof_data = [{"hash": h, "direction": d} for h, d in proof.siblings]
+        except ValueError:
+            logger.warning(
+                "Merkle proof generation failed for dataset %s",
+                artifact.dataset_id,
+                exc_info=True,
+            )
+
+    # Set proof_bundle_uri to a full URL so external verifiers can use it.
+    bundle_uri = f"{request.base_url}datasets/{dataset_id}/proof-bundle"
+    if artifact.proof_bundle_uri is None:
+        artifact.proof_bundle_uri = bundle_uri
+        await db.commit()
+
+    return DatasetProofBundleResponse(
+        dataset_id=artifact.dataset_id,
+        commit_id=artifact.commit_id,
+        manifest_hash=artifact.manifest_hash,
+        merkle_root=artifact.merkle_root,
+        committer_pubkey=artifact.committer_pubkey,
+        commit_signature=artifact.commit_signature,
+        epoch=artifact.epoch_timestamp,
+        shard_id=artifact.shard_id,
+        dataset_name=artifact.dataset_name,
+        source_uri=artifact.source_uri,
+        files=[
+            DatasetFileEntry(
+                path=f.path,
+                content_hash=f.content_hash,
+                byte_size=f.byte_size,
+                record_count=f.record_count,
+            )
+            for f in files
+        ],
+        merkle_proof=merkle_proof_data,
+        signature_valid=signature_valid,
+        commit_id_valid=commit_id_valid,
+    )
+
+
+# ---------------------------------------------------------------------------
 # GET /datasets/{dataset_id}/history
 # ---------------------------------------------------------------------------
 
@@ -605,12 +729,19 @@ async def dataset_history(
     dataset_id: str,
     db: DBSession,
     _rl: RateLimit,
+    n: int = Query(
+        100,
+        ge=1,
+        le=1000,
+        description="Maximum number of versions to return (1-1000).",
+    ),
 ) -> DatasetHistoryResponse:
     """Return ordered version history for a logical dataset."""
     result = await db.execute(
         select(DatasetArtifact)
         .where(DatasetArtifact.dataset_id == dataset_id)
         .order_by(DatasetArtifact.epoch_timestamp.asc())
+        .limit(n)
     )
     rows = result.scalars().all()
     if not rows:
@@ -675,8 +806,15 @@ async def commit_lineage(
     )
     parent_commit_id = latest_result.scalars().first() or ""
 
-    payload = f"{dataset_id}:{parent_commit_id}:{body.model_id}:{body.committer_pubkey}"
-    commit_id = blake3_hash([DATASET_LINEAGE_PREFIX, payload.encode()]).hex()
+    key_data = b"".join(
+        [
+            _length_prefixed_bytes("dataset_id", dataset_id.encode("utf-8")),
+            _length_prefixed_bytes("parent_commit_id", parent_commit_id.encode("utf-8")),
+            _length_prefixed_bytes("model_id", body.model_id.encode("utf-8")),
+            _length_prefixed_bytes("committer_pubkey", body.committer_pubkey.encode("utf-8")),
+        ]
+    )
+    commit_id = blake3_hash([DATASET_LINEAGE_PREFIX, key_data]).hex()
 
     # 3. Check uniqueness (dataset_id, model_id, event_type, committer_pubkey)
     existing = await db.execute(

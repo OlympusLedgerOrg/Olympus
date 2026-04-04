@@ -410,3 +410,354 @@ class TestIntegrationScenarios:
 
         # Verify returns a VerificationResult
         assert isinstance(result, VerificationResult)
+
+
+# ---------------------------------------------------------------------------
+# Extended tests (Step 2i)
+# ---------------------------------------------------------------------------
+
+
+class TestGetBackend:
+    """Test backend retrieval."""
+
+    def test_get_groth16_backend(self):
+        verifier = UnifiedProofVerifier()
+        backend = verifier.get_backend(ProofBackend.GROTH16)
+        assert backend is verifier._groth16_backend
+
+    def test_get_halo2_backend(self):
+        verifier = UnifiedProofVerifier()
+        backend = verifier.get_backend(ProofBackend.HALO2)
+        assert backend is verifier._halo2_backend
+
+
+class TestVerifyViaBackendPaths:
+    """Test _verify_via_backend error paths."""
+
+    def test_backend_not_available_returns_false(self):
+        from unittest.mock import MagicMock
+
+        verifier = UnifiedProofVerifier()
+        mock_backend = MagicMock()
+        mock_backend.is_available.return_value = False
+
+        public_inputs = UnifiedPublicInputs(canonical_hash="1", merkle_root="2", ledger_root="3")
+        checkpoint = SignedCheckpoint(
+            sequence=1,
+            timestamp="2026-03-12T18:00:00Z",
+            ledger_head_hash="abc",
+            previous_checkpoint_hash="",
+            ledger_height=1,
+            shard_roots={},
+            consistency_proof=[],
+            checkpoint_hash="def",
+            federation_quorum_certificate={},
+        )
+        proof = UnifiedProof(zk_proof={}, public_inputs=public_inputs, checkpoint=checkpoint)
+
+        result = verifier._verify_via_backend(proof, mock_backend)
+        assert result is False
+
+    def test_backend_exception_returns_false(self):
+        from unittest.mock import MagicMock
+
+        verifier = UnifiedProofVerifier()
+        mock_backend = MagicMock()
+        mock_backend.is_available.return_value = True
+        mock_backend.verify.side_effect = ValueError("boom")
+
+        public_inputs = UnifiedPublicInputs(canonical_hash="1", merkle_root="2", ledger_root="3")
+        checkpoint = SignedCheckpoint(
+            sequence=1,
+            timestamp="2026-03-12T18:00:00Z",
+            ledger_head_hash="abc",
+            previous_checkpoint_hash="",
+            ledger_height=1,
+            shard_roots={},
+            consistency_proof=[],
+            checkpoint_hash="def",
+            federation_quorum_certificate={},
+        )
+        proof = UnifiedProof(zk_proof={}, public_inputs=public_inputs, checkpoint=checkpoint)
+
+        result = verifier._verify_via_backend(proof, mock_backend)
+        assert result is False
+
+
+class TestCheckpointStructureValidation:
+    """Extended checkpoint structure tests."""
+
+    def test_valid_checkpoint_passes(self):
+        verifier = UnifiedProofVerifier()
+        public_inputs = UnifiedPublicInputs(canonical_hash="1", merkle_root="2", ledger_root="3")
+        checkpoint = SignedCheckpoint(
+            sequence=1,
+            timestamp="2026-03-12T18:00:00Z",
+            ledger_head_hash="abc",
+            previous_checkpoint_hash="",
+            ledger_height=1,
+            shard_roots={},
+            consistency_proof=[],
+            checkpoint_hash="valid-hash",
+            federation_quorum_certificate={},
+        )
+        proof = UnifiedProof(zk_proof={}, public_inputs=public_inputs, checkpoint=checkpoint)
+        assert verifier._verify_checkpoint_structure(proof) is True
+
+    def test_empty_checkpoint_hash_fails(self):
+        verifier = UnifiedProofVerifier()
+        public_inputs = UnifiedPublicInputs(canonical_hash="1", merkle_root="2", ledger_root="3")
+        checkpoint = SignedCheckpoint(
+            sequence=1,
+            timestamp="2026-03-12T18:00:00Z",
+            ledger_head_hash="abc",
+            previous_checkpoint_hash="",
+            ledger_height=1,
+            shard_roots={},
+            consistency_proof=[],
+            checkpoint_hash="",
+            federation_quorum_certificate={},
+        )
+        proof = UnifiedProof(zk_proof={}, public_inputs=public_inputs, checkpoint=checkpoint)
+        assert verifier._verify_checkpoint_structure(proof) is False
+
+
+class TestQuorumCertificateVerification:
+    """Extended quorum certificate checks."""
+
+    def test_no_registry_skips_quorum_check(self):
+        verifier = UnifiedProofVerifier(registry=None)
+        public_inputs = UnifiedPublicInputs(canonical_hash="1", merkle_root="2", ledger_root="3")
+        checkpoint = SignedCheckpoint(
+            sequence=1,
+            timestamp="2026-03-12T18:00:00Z",
+            ledger_head_hash="abc",
+            previous_checkpoint_hash="",
+            ledger_height=1,
+            shard_roots={},
+            consistency_proof=[],
+            checkpoint_hash="def",
+            federation_quorum_certificate={},
+        )
+        proof = UnifiedProof(zk_proof={}, public_inputs=public_inputs, checkpoint=checkpoint)
+        # _verify_quorum_certificate returns True when no registry
+        assert verifier._verify_quorum_certificate(proof) is True
+
+    def test_with_registry_and_invalid_cert_fails(self):
+        nodes = [
+            FederationNode(
+                node_id="node1",
+                pubkey=b"x" * 32,
+                endpoint="http://node1",
+                operator="op",
+                jurisdiction="US",
+            )
+        ]
+        registry = FederationRegistry(nodes=nodes, epoch=1)
+        verifier = UnifiedProofVerifier(registry=registry)
+
+        public_inputs = UnifiedPublicInputs(canonical_hash="1", merkle_root="2", ledger_root="3")
+        checkpoint = SignedCheckpoint(
+            sequence=1,
+            timestamp="2026-03-12T18:00:00Z",
+            ledger_head_hash="abc",
+            previous_checkpoint_hash="",
+            ledger_height=1,
+            shard_roots={},
+            consistency_proof=[],
+            checkpoint_hash="def",
+            federation_quorum_certificate={"signatures": [], "quorum_threshold": 2},
+        )
+        proof = UnifiedProof(zk_proof={}, public_inputs=public_inputs, checkpoint=checkpoint)
+        result = verifier._verify_quorum_certificate(proof)
+        assert result is False
+
+
+class TestVerifyUnifiedProofConvenience:
+    """Test verify_unified_proof convenience function with backend override."""
+
+    def test_backend_override(self):
+        public_inputs = UnifiedPublicInputs(canonical_hash="1", merkle_root="2", ledger_root="3")
+        checkpoint = SignedCheckpoint(
+            sequence=1,
+            timestamp="2026-03-12T18:00:00Z",
+            ledger_head_hash="abc",
+            previous_checkpoint_hash="",
+            ledger_height=1,
+            shard_roots={},
+            consistency_proof=[],
+            checkpoint_hash="def",
+            federation_quorum_certificate={},
+        )
+        proof = UnifiedProof(
+            zk_proof={},
+            public_inputs=public_inputs,
+            checkpoint=checkpoint,
+            backend=ProofBackend.GROTH16,
+        )
+
+        result = verify_unified_proof(proof, backend=ProofBackend.HALO2)
+        assert isinstance(result, VerificationResult)
+        # Backend should have been overridden
+        assert proof.backend == ProofBackend.HALO2
+
+    def test_with_registry(self):
+        nodes = [
+            FederationNode(
+                node_id="node1",
+                pubkey=b"x" * 32,
+                endpoint="http://node1",
+                operator="op",
+                jurisdiction="US",
+            )
+        ]
+        registry = FederationRegistry(nodes=nodes, epoch=1)
+
+        public_inputs = UnifiedPublicInputs(canonical_hash="1", merkle_root="2", ledger_root="3")
+        checkpoint = SignedCheckpoint(
+            sequence=1,
+            timestamp="2026-03-12T18:00:00Z",
+            ledger_head_hash="abc",
+            previous_checkpoint_hash="",
+            ledger_height=1,
+            shard_roots={},
+            consistency_proof=[],
+            checkpoint_hash="def",
+            federation_quorum_certificate={},
+        )
+        proof = UnifiedProof(zk_proof={}, public_inputs=public_inputs, checkpoint=checkpoint)
+        result = verify_unified_proof(proof, registry=registry)
+        assert isinstance(result, VerificationResult)
+
+
+class TestMissingArtifacts:
+    """Test MISSING_ARTIFACTS result."""
+
+    def test_missing_artifacts_detection(self):
+        result = VerificationResult.MISSING_ARTIFACTS
+        assert not result.is_valid
+        assert not bool(result)
+        assert result.value == "missing_artifacts"
+
+
+class TestGeneratorEdgeCases:
+    """Test UnifiedProofGenerator edge cases."""
+
+    def test_empty_sections_raises(self):
+        checkpoint = SignedCheckpoint(
+            sequence=1,
+            timestamp="2026-03-12T18:00:00Z",
+            ledger_head_hash="abc123",
+            previous_checkpoint_hash="",
+            ledger_height=100,
+            shard_roots={},
+            consistency_proof=[],
+            checkpoint_hash="def456",
+            federation_quorum_certificate={},
+        )
+        generator = UnifiedProofGenerator()
+        with pytest.raises(ValueError, match="at least one section"):
+            generator.generate([], merkle_proof={}, checkpoint=checkpoint)
+
+    def test_single_section(self):
+        checkpoint = SignedCheckpoint(
+            sequence=1,
+            timestamp="2026-03-12T18:00:00Z",
+            ledger_head_hash="abc123",
+            previous_checkpoint_hash="",
+            ledger_height=100,
+            shard_roots={},
+            consistency_proof=[],
+            checkpoint_hash="def456",
+            federation_quorum_certificate={},
+        )
+        generator = UnifiedProofGenerator()
+        proof = generator.generate(["single section"], merkle_proof={}, checkpoint=checkpoint)
+        assert proof.backend == ProofBackend.GROTH16
+        assert proof.public_inputs.canonical_hash
+
+    def test_halo2_backend_generator(self):
+        checkpoint = SignedCheckpoint(
+            sequence=1,
+            timestamp="2026-03-12T18:00:00Z",
+            ledger_head_hash="abc123",
+            previous_checkpoint_hash="",
+            ledger_height=100,
+            shard_roots={},
+            consistency_proof=[],
+            checkpoint_hash="def456",
+            federation_quorum_certificate={},
+        )
+        generator = UnifiedProofGenerator(backend=ProofBackend.HALO2)
+        proof = generator.generate(["section"], merkle_proof={}, checkpoint=checkpoint)
+        assert proof.backend == ProofBackend.HALO2
+
+
+class TestVerifyZKProofRouting:
+    """Test ZK proof routing."""
+
+    def test_halo2_proof_routing(self):
+        """Halo2 backend routing returns False when not available."""
+        verifier = UnifiedProofVerifier()
+        public_inputs = UnifiedPublicInputs(canonical_hash="1", merkle_root="2", ledger_root="3")
+        checkpoint = SignedCheckpoint(
+            sequence=1,
+            timestamp="2026-03-12T18:00:00Z",
+            ledger_head_hash="abc",
+            previous_checkpoint_hash="",
+            ledger_height=1,
+            shard_roots={},
+            consistency_proof=[],
+            checkpoint_hash="def",
+            federation_quorum_certificate={},
+        )
+        proof = UnifiedProof(
+            zk_proof={},
+            public_inputs=public_inputs,
+            checkpoint=checkpoint,
+            backend=ProofBackend.HALO2,
+        )
+        result = verifier.verify(proof)
+        assert result == VerificationResult.INVALID_ZK_PROOF
+
+    def test_full_verification_chain_with_zk_pass(self):
+        """When ZK and checkpoint pass but quorum fails, result is INVALID_QUORUM."""
+        from unittest.mock import MagicMock
+
+        mock_groth16 = MagicMock()
+        mock_groth16.is_available.return_value = True
+        mock_groth16.verify.return_value = True
+
+        nodes = [
+            FederationNode(
+                node_id="node1",
+                pubkey=b"x" * 32,
+                endpoint="http://node1",
+                operator="op",
+                jurisdiction="US",
+            )
+        ]
+        registry = FederationRegistry(nodes=nodes, epoch=1)
+
+        verifier = UnifiedProofVerifier(
+            registry=registry,
+            groth16_backend=mock_groth16,
+        )
+
+        public_inputs = UnifiedPublicInputs(canonical_hash="1", merkle_root="2", ledger_root="3")
+        checkpoint = SignedCheckpoint(
+            sequence=1,
+            timestamp="2026-03-12T18:00:00Z",
+            ledger_head_hash="abc",
+            previous_checkpoint_hash="",
+            ledger_height=1,
+            shard_roots={},
+            consistency_proof=[],
+            checkpoint_hash="valid-hash",
+            federation_quorum_certificate={"signatures": []},
+        )
+        proof = UnifiedProof(
+            zk_proof={"pi_a": []}, public_inputs=public_inputs, checkpoint=checkpoint
+        )
+        result = verifier.verify(proof)
+        assert result == VerificationResult.INVALID_QUORUM

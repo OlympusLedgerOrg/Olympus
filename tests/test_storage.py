@@ -33,7 +33,7 @@ See docs/08_database_strategy.md for complete database strategy documentation.
 import json
 import os
 import uuid
-from datetime import datetime
+from datetime import datetime, timedelta
 
 
 try:
@@ -46,12 +46,13 @@ except ImportError:  # Python < 3.11
 import nacl.signing
 import psycopg
 import pytest
+from psycopg.rows import dict_row
 
 from protocol.hashes import global_key, hash_bytes, record_key
 from protocol.shards import create_shard_header
 from protocol.ssmf import verify_nonexistence_proof, verify_proof
 from protocol.timestamps import current_timestamp
-from storage.postgres import StorageLayer
+from storage.postgres import _NODE_REHASH_GATE, StorageLayer
 
 
 # Test database connection string
@@ -620,7 +621,7 @@ def test_deterministic_root_recomputation(storage, signing_key):
 
     # Load tree state and verify root matches
     with storage._get_connection() as conn, conn.cursor() as cur:
-        tree = storage._load_tree_state(cur, shard_id)
+        tree = storage._load_tree_state(cur)
         computed_root = tree.get_root()
 
         # Should match the last recorded root
@@ -755,6 +756,9 @@ def test_smt_leaves_reject_update(storage, signing_key):
         signing_key=signing_key,
     )
 
+    # Compute the actual global key that append_record stored
+    actual_key = global_key(shard_id, record_key("document", "doc1", 1))
+
     # Attempt to UPDATE the SMT leaf should fail
     with pytest.raises(psycopg.errors.ReadOnlySqlTransaction, match=r"smt_leaves is append-only"):
         with storage._get_connection() as conn, conn.cursor() as cur:
@@ -762,9 +766,9 @@ def test_smt_leaves_reject_update(storage, signing_key):
                 """
                 UPDATE smt_leaves
                 SET value_hash = %s
-                WHERE shard_id = %s
+                WHERE key = %s AND version = 1
                 """,
-                (hash_bytes(b"modified"), shard_id),
+                (hash_bytes(b"modified"), actual_key),
             )
 
 
@@ -782,15 +786,18 @@ def test_smt_leaves_reject_delete(storage, signing_key):
         signing_key=signing_key,
     )
 
+    # Compute the actual global key that append_record stored
+    actual_key = global_key(shard_id, record_key("document", "doc1", 1))
+
     # Attempt to DELETE the SMT leaf should fail
     with pytest.raises(psycopg.errors.ReadOnlySqlTransaction, match=r"smt_leaves is append-only"):
         with storage._get_connection() as conn, conn.cursor() as cur:
             cur.execute(
                 """
                 DELETE FROM smt_leaves
-                WHERE shard_id = %s
+                WHERE key = %s
                 """,
-                (shard_id,),
+                (actual_key,),
             )
 
 
@@ -808,6 +815,24 @@ def test_smt_nodes_reject_update(storage, signing_key):
         signing_key=signing_key,
     )
 
+    # Target an actual node row that exists.
+    # smt_nodes stores internal nodes keyed by (level, encoded_path_prefix), so
+    # selecting a concrete persisted row is more robust than assuming a specific
+    # level/index representation.
+    with storage._get_connection() as conn, conn.cursor(row_factory=dict_row) as cur:
+        cur.execute(
+            """
+            SELECT level, index
+            FROM smt_nodes
+            ORDER BY level ASC, index ASC
+            LIMIT 1
+            """
+        )
+        row = cur.fetchone()
+    assert row is not None
+    target_level = int(row["level"])
+    target_index = bytes(row["index"])
+
     # Attempt to UPDATE the SMT node should fail
     with pytest.raises(psycopg.errors.ReadOnlySqlTransaction, match=r"smt_nodes is append-only"):
         with storage._get_connection() as conn, conn.cursor() as cur:
@@ -815,9 +840,9 @@ def test_smt_nodes_reject_update(storage, signing_key):
                 """
                 UPDATE smt_nodes
                 SET hash = %s
-                WHERE shard_id = %s
+                WHERE level = %s AND index = %s
                 """,
-                (hash_bytes(b"modified"), shard_id),
+                (hash_bytes(b"modified"), target_level, target_index),
             )
 
 
@@ -835,15 +860,30 @@ def test_smt_nodes_reject_delete(storage, signing_key):
         signing_key=signing_key,
     )
 
+    # Target an actual node row that exists.
+    with storage._get_connection() as conn, conn.cursor(row_factory=dict_row) as cur:
+        cur.execute(
+            """
+            SELECT level, index
+            FROM smt_nodes
+            ORDER BY level ASC, index ASC
+            LIMIT 1
+            """
+        )
+        row = cur.fetchone()
+    assert row is not None
+    target_level = int(row["level"])
+    target_index = bytes(row["index"])
+
     # Attempt to DELETE the SMT node should fail
     with pytest.raises(psycopg.errors.ReadOnlySqlTransaction, match=r"smt_nodes is append-only"):
         with storage._get_connection() as conn, conn.cursor() as cur:
             cur.execute(
                 """
                 DELETE FROM smt_nodes
-                WHERE shard_id = %s
+                WHERE level = %s AND index = %s
                 """,
-                (shard_id,),
+                (target_level, target_index),
             )
 
 
@@ -952,7 +992,10 @@ def test_verify_state_replay_matches_headers_and_ledger(storage, signing_key):
             signing_key=signing_key,
         )
 
-    assert storage.verify_state_replay(shard_id) is True
+    result = storage.verify_state_replay(shard_id)
+    assert result["verified"] is True
+    assert result["headers_checked"] == 3
+    assert result["next_seq"] is None
 
 
 def test_verify_state_replay_detects_header_root_divergence(storage, signing_key):
@@ -988,19 +1031,31 @@ def test_verify_state_replay_detects_header_root_divergence(storage, signing_key
     # recorded through append_record.  smt_leaves is append-only (UPDATE/DELETE
     # are blocked), but plain INSERTs are permitted, so this is a realistic
     # threat vector that the replay verifier must detect.
-    # Use a large version number that cannot collide with any version stored by
-    # append_record (which starts at 1 and increments).
+    #
+    # Backdate the forged leaf to just before the first persisted header so it
+    # is guaranteed to be included in replay and root verification windows.
+    # This avoids boundary flakiness when multiple headers share close
+    # timestamps.
     forged_version = 9999
     forged_record_key = record_key("document", "forged-doc", forged_version)
     forged_key = global_key(shard_id, forged_record_key)
     forged_value = hash_bytes(b"forged-leaf-value")
-    with storage._get_connection() as conn, conn.cursor() as cur:
+    with storage._get_connection() as conn, conn.cursor(row_factory=dict_row) as cur:
+        cur.execute(
+            "SELECT ts FROM shard_headers WHERE shard_id = %s ORDER BY seq ASC LIMIT 1",
+            (shard_id,),
+        )
+        first_header_ts = cur.fetchone()["ts"]
+        forged_ts = first_header_ts - timedelta(microseconds=1)
+        # _NODE_REHASH_GATE is a compile-time BLAKE3 constant; SET LOCAL does
+        # not accept psycopg parameters, so f-string interpolation is safe.
+        cur.execute(f"SET LOCAL olympus.allow_smt_insert = '{_NODE_REHASH_GATE}'")
         cur.execute(
             """
             INSERT INTO smt_leaves (key, version, value_hash, ts)
-            VALUES (%s, %s, %s, NOW())
+            VALUES (%s, %s, %s, %s)
             """,
-            (forged_key, forged_version, forged_value),
+            (forged_key, forged_version, forged_value, forged_ts),
         )
         conn.commit()
 
@@ -1010,6 +1065,64 @@ def test_verify_state_replay_detects_header_root_divergence(storage, signing_key
 
     # get_latest_header should also reject the diverged state because the
     # recomputed tree root no longer matches the persisted header root.
+    with pytest.raises(ValueError, match="Computed root"):
+        storage.get_latest_header(shard_id)
+
+
+def test_replay_naive_datetime_cutoff_is_normalized(storage, signing_key):
+    """Timezone-naive cutoffs must not silently miss leaves near the boundary.
+
+    If _load_tree_state or replay_tree_incremental passes a naive datetime to
+    the WHERE ts <= %s TIMESTAMPTZ comparison, Postgres may apply local-clock
+    semantics and exclude leaves that sit within a microsecond of the boundary.
+    This regression test constructs an explicit naive cutoff and verifies that
+    verify_state_replay still raises for a forged leaf, and that
+    get_latest_header does too — confirming both code paths normalize tzinfo
+    before handing the value to psycopg.
+    """
+    shard_id = f"test_replay_naive_tz_{datetime.now(UTC).timestamp()}"
+
+    storage.append_record(
+        shard_id=shard_id,
+        record_type="document",
+        record_id="doc1",
+        version=1,
+        value_hash=hash_bytes(b"tz-naive-value-1"),
+        signing_key=signing_key,
+    )
+
+    # Insert a forged leaf backdated by 1 µs so it falls in the first window.
+    forged_version = 8888
+    forged_record_key = record_key("document", "tz-forged-doc", forged_version)
+    forged_key = global_key(shard_id, forged_record_key)
+    forged_value = hash_bytes(b"tz-naive-forged-value")
+    with storage._get_connection() as conn, conn.cursor(row_factory=dict_row) as cur:
+        cur.execute(
+            "SELECT ts FROM shard_headers WHERE shard_id = %s ORDER BY seq ASC LIMIT 1",
+            (shard_id,),
+        )
+        first_header_ts = cur.fetchone()["ts"]
+        # Construct a naive datetime (tzinfo=None) to simulate application code
+        # that strips timezone info before passing a cutoff to the replay path.
+        # The guard in _load_tree_state / replay_tree_incremental must re-attach
+        # UTC so the TIMESTAMPTZ comparison is unambiguous.
+        naive_ts = first_header_ts.replace(tzinfo=None) - timedelta(microseconds=1)
+        # _NODE_REHASH_GATE is a compile-time BLAKE3 constant; SET LOCAL does
+        # not accept psycopg parameters, so f-string interpolation is safe.
+        cur.execute(f"SET LOCAL olympus.allow_smt_insert = '{_NODE_REHASH_GATE}'")
+        cur.execute(
+            """
+            INSERT INTO smt_leaves (key, version, value_hash, ts)
+            VALUES (%s, %s, %s, %s)
+            """,
+            (forged_key, forged_version, forged_value, naive_ts),
+        )
+        conn.commit()
+
+    # Both replay paths must detect the forged leaf despite the naive timestamp.
+    with pytest.raises(ValueError, match="mismatch"):
+        storage.verify_state_replay(shard_id)
+
     with pytest.raises(ValueError, match="Computed root"):
         storage.get_latest_header(shard_id)
 

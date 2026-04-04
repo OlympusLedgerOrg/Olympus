@@ -130,6 +130,8 @@ def verify_consistency_proof(
     old_root: bytes,
     new_root: bytes,
     proof: ConsistencyProof,
+    *,
+    trust_new_root_on_empty: bool = False,
 ) -> bool:
     """
     Verify that ``new_root`` represents a Merkle tree that extends the tree with
@@ -143,6 +145,11 @@ def verify_consistency_proof(
         old_root: Merkle root of the prior tree (size ``proof.old_tree_size``).
         new_root: Merkle root of the newer tree (size ``proof.new_tree_size``).
         proof: ConsistencyProof as produced by :func:`generate_consistency_proof`.
+        trust_new_root_on_empty: When old_size=0 the proof is vacuously consistent
+            and new_root cannot be verified cryptographically. Set this to True only
+            when new_root has been independently obtained from a trusted source such
+            as a signed checkpoint. Raises ValueError if False (the default) and
+            old_size=0 to prevent silent acceptance of adversarial new_root values.
 
     Returns:
         True if the proof is valid and demonstrates append-only growth.
@@ -170,4 +177,5 @@ def verify_consistency_proof(
         proof.proof_nodes,
         proof.old_tree_size,
         proof.new_tree_size,
+        trust_new_root_on_empty=trust_new_root_on_empty,
     )

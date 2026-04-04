@@ -118,7 +118,7 @@ def _patch_pygments_rust_bridge() -> None:
     character exactly once regardless of input structure.
     """
     try:
-        from olympus_core import AdlScanner  # type: ignore[import-not-found]
+        from olympus_core import AdlScanner
     except ImportError:
         return  # Extension not built; atomic-group patch remains active.
     except Exception:

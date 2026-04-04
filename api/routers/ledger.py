@@ -11,9 +11,22 @@ POST /ledger/verify/simple        — user-friendly document verification
 
 from __future__ import annotations
 
+import asyncio
 import logging
+from typing import Annotated
 
-from fastapi import APIRouter, File, Form, HTTPException, Query, Request, UploadFile, status
+from fastapi import (
+    APIRouter,
+    File,
+    Form,
+    HTTPException,
+    Path,
+    Query,
+    Request,
+    Response,
+    UploadFile,
+    status,
+)
 from sqlalchemy import func, select
 
 from api.auth import RateLimit, RequireAPIKey
@@ -26,6 +39,7 @@ from api.schemas.ledger import (
     ActivityItem,
     CommitSummary,
     LedgerStateResponse,
+    PendingProofResponse,
     ProofResponse,
     ShardStateResponse,
     SimpleIngestionResponse,
@@ -41,6 +55,61 @@ from api.services.verification import verify_by_commit_id, verify_by_doc_hash, v
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/ledger", tags=["ledger"])
 
+_SHARD_ID_RE = r"^[A-Za-z0-9:._-]{1,128}$"
+_SHARD_ID_PATH = Path(
+    ...,
+    description="Shard identifier (alphanumeric, hyphens, colons, dots; max 128 chars)",
+    pattern=_SHARD_ID_RE,
+)
+
+# Maximum number of bytes read per iteration when streaming an upload.
+# Kept small enough to avoid large in-flight allocations while large enough
+# to amortise per-call overhead (64 KiB is a typical I/O page multiple).
+UPLOAD_CHUNK_SIZE = 65_536
+
+
+async def _read_upload_bounded(file: UploadFile, max_bytes: int, max_mb: int) -> bytes:
+    """Read *file* in fixed-size chunks, aborting if the total exceeds *max_bytes*.
+
+    Args:
+        file: FastAPI UploadFile to read.
+        max_bytes: Hard upper bound on accepted payload size in bytes.
+        max_mb: Human-readable equivalent (for error messages).
+
+    Returns:
+        The full file contents as a single :class:`bytes` object.
+
+    Raises:
+        HTTPException 413: If the payload exceeds *max_bytes* before EOF.
+    """
+    settings = get_settings()
+    chunks = bytearray()
+    total = 0
+    while True:
+        remaining = max_bytes - total
+        read_size = min(UPLOAD_CHUNK_SIZE, max_bytes, remaining + 1)
+        try:
+            chunk = await asyncio.wait_for(
+                file.read(read_size),
+                timeout=settings.upload_read_timeout_seconds,
+            )
+        except TimeoutError as exc:
+            await file.close()
+            raise HTTPException(
+                status_code=408,
+                detail="Upload read timed out.",
+            ) from exc
+        if not chunk:
+            break
+        total += len(chunk)
+        if total > max_bytes:
+            raise HTTPException(
+                status_code=413,
+                detail=f"File exceeds maximum size of {max_mb} MB.",
+            )
+        chunks.extend(chunk)
+    return bytes(chunks)
+
 
 @router.get("/state", response_model=LedgerStateResponse)
 async def get_ledger_state(db: DBSession, _rl: RateLimit):
@@ -55,14 +124,19 @@ async def get_ledger_state(db: DBSession, _rl: RateLimit):
     Returns:
         Global state root, shard count, total commits, and last epoch.
     """
-    result = await db.execute(select(DocCommit))
-    commits = list(result.scalars().all())
+    # Use aggregate queries instead of a full table scan to avoid OOM on large tables.
+    total_result = await db.execute(select(func.count()).select_from(DocCommit))
+    total_commits = total_result.scalar() or 0
 
-    total_commits = len(commits)
-    last_epoch = max((c.epoch_timestamp for c in commits), default=None)
+    epoch_result = await db.execute(select(func.max(DocCommit.epoch_timestamp)))
+    last_epoch = epoch_result.scalar()
 
-    # Phase 0: single shard
-    shard_ids = list({c.shard_id for c in commits}) or ["0x4F3A"]
+    # Fetch distinct shard IDs with a bounded query.
+    # Phase 0 deployments use a single shard; this limit is a safety guard
+    # until a dedicated shard registry (Phase 1) replaces the full table scan.
+    shard_result = await db.execute(select(DocCommit.shard_id).distinct().limit(1000))
+    shard_ids = [row[0] for row in shard_result.all()] or ["0x4F3A"]
+
     shard_roots: list[str] = []
     for sid in shard_ids:
         shard_roots.append(await compute_state_root(sid, db))
@@ -84,7 +158,7 @@ async def get_ledger_state(db: DBSession, _rl: RateLimit):
 
 
 @router.get("/shard/{shard_id}", response_model=ShardStateResponse)
-async def get_shard_state(shard_id: str, db: DBSession, _rl: RateLimit):
+async def get_shard_state(shard_id: Annotated[str, _SHARD_ID_PATH], db: DBSession, _rl: RateLimit):
     """Return the state of a single shard.
 
     Args:
@@ -123,8 +197,19 @@ async def get_shard_state(shard_id: str, db: DBSession, _rl: RateLimit):
     )
 
 
-@router.get("/proof/{commit_id}", response_model=ProofResponse)
-async def get_commit_proof(commit_id: str, db: DBSession, _rl: RateLimit):
+@router.get(
+    "/proof/{commit_id}",
+    responses={
+        200: {"model": ProofResponse},
+        202: {"model": PendingProofResponse},
+    },
+)
+async def get_commit_proof(
+    commit_id: str,
+    db: DBSession,
+    response: Response,
+    _rl: RateLimit,
+) -> ProofResponse | PendingProofResponse:
     """Return the Merkle inclusion proof and ZK proof stub for a commit.
 
     Args:
@@ -145,10 +230,16 @@ async def get_commit_proof(commit_id: str, db: DBSession, _rl: RateLimit):
             detail={"detail": f"Commit {commit_id!r} not found.", "code": "COMMIT_NOT_FOUND"},
         )
 
+    # Guard against unbounded in-memory Merkle tree reconstruction for
+    # large shards: cap the number of leaves loaded.  Shards with more than
+    # _MERKLE_LEAF_LIMIT commits will return an empty proof rather than
+    # triggering an OOM / CPU-DoS on every request.
+    _MERKLE_LEAF_LIMIT = 50_000
     all_result = await db.execute(
         select(DocCommit.doc_hash)
         .where(DocCommit.shard_id == commit.shard_id)
         .order_by(DocCommit.epoch_timestamp)
+        .limit(_MERKLE_LEAF_LIMIT)
     )
     all_hashes = list(all_result.scalars().all())
 
@@ -169,13 +260,19 @@ async def get_commit_proof(commit_id: str, db: DBSession, _rl: RateLimit):
 
         zk_proof = generate_proof_stub(commit.commit_id, commit.doc_hash)
     else:
-        zk_proof = {
-            "protocol": "groth16",
-            "curve": "bn128",
-            "proof_type": "pending",
-            "note": "ZK proof generation pending Groth16 trusted setup ceremony.",
-            "verified": False,
-        }
+        response.status_code = status.HTTP_202_ACCEPTED
+        return PendingProofResponse(
+            commit_id=commit.commit_id,
+            shard_id=commit.shard_id,
+            epoch=commit.epoch_timestamp,
+            status="pending",
+            reason=(
+                "ZK proof generation pending Groth16 trusted setup ceremony. "
+                "This record is anchored in the Merkle ledger but the ZK proof "
+                "is not yet available. Check back after the ceremony is complete."
+            ),
+            merkle_proof=merkle_proof_data or [],
+        )
 
     return ProofResponse(
         commit_id=commit.commit_id,
@@ -282,14 +379,11 @@ async def simple_document_ingest(
                     detail=f"File exceeds maximum size of {max_mb} MB.",
                 )
         except ValueError:
-            pass  # malformed header — let the post-read check catch it
+            pass  # malformed header — let the streaming check catch it
 
-    file_bytes = await file.read()
-    if len(file_bytes) > settings.max_upload_bytes:
-        raise HTTPException(
-            status_code=413,
-            detail=f"File exceeds maximum size of {max_mb} MB.",
-        )
+    # Stream the upload in fixed-size chunks so that an attacker who omits or
+    # spoofs Content-Length cannot trigger an OOM DoS via a single unbounded read.
+    file_bytes = await _read_upload_bounded(file, settings.max_upload_bytes, max_mb)
     validate_file_magic(file_bytes, file.content_type or "application/octet-stream")
     return await ingest_document(
         file_bytes=file_bytes,
@@ -306,6 +400,7 @@ async def simple_document_verify(
     request: Request,
     db: DBSession,
     _rl: RateLimit,
+    _key: RequireAPIKey,
     file: UploadFile | None = File(None),
     commit_id: str | None = Form(None),
     doc_hash: str | None = Form(None),
@@ -336,7 +431,7 @@ async def simple_document_verify(
     if file is not None and file.filename:
         settings = get_settings()
         max_mb = settings.max_upload_bytes // 1024 // 1024
-        # Pre-check Content-Length before buffering the entire upload.
+        # Pre-check Content-Length before streaming the upload.
         content_length = request.headers.get("content-length")
         if content_length is not None:
             try:
@@ -346,14 +441,10 @@ async def simple_document_verify(
                         detail=f"File exceeds maximum size of {max_mb} MB.",
                     )
             except ValueError:
-                pass  # malformed header — post-read check will catch it
+                pass  # malformed header — streaming check will catch it
 
-        file_bytes = await file.read()
-        if len(file_bytes) > settings.max_upload_bytes:
-            raise HTTPException(
-                status_code=413,
-                detail=f"File exceeds maximum size of {max_mb} MB.",
-            )
+        # Stream the upload in fixed-size chunks to prevent OOM DoS.
+        file_bytes = await _read_upload_bounded(file, settings.max_upload_bytes, max_mb)
         validate_file_magic(file_bytes, file.content_type or "application/octet-stream")
         return await verify_by_file(
             file_bytes=file_bytes,

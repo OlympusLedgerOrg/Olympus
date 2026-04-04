@@ -107,3 +107,73 @@ def verify_proof_type(proof: dict) -> tuple[bool, str | None]:
     if proof.get("proof_type") == "stub" and _get_env() != "development":
         return False, "stub_proof_rejected_in_production"
     return True, None
+
+
+def verify_groth16_proof(
+    proof: dict,
+    *,
+    vkey_path: str | None = None,
+) -> tuple[bool, str]:
+    """Verify a Groth16 proof using the native arkworks verifier.
+
+    Calls verify_groth16_bn254 from the olympus_core Rust extension,
+    which handles BN254 field arithmetic and snarkjs JSON parsing natively.
+
+    Args:
+        proof: Proof dict as returned by generate_proof_stub() or a real
+               snarkjs Groth16 prover. Expected shape:
+                 { "proof": {"pi_a": [...], "pi_b": [...], "pi_c": [...]},
+                   "public_signals": ["decimal_str", ...],
+                   "proof_type": "stub" | "groth16" }
+        vkey_path: Path to snarkjs-format verification key JSON.
+            Falls back to OLYMPUS_ZK_VKEY_PATH env var if None.
+
+    Returns:
+        (True, "verified") on success.
+        (False, reason) where reason is one of:
+          "stub_proof"                  proof_type == "stub"
+          "no_vkey_configured"          no vkey path available
+          "vkey_not_found"              file does not exist at path
+          "native_verifier_unavailable" olympus_core not importable
+          "verification_failed"         proof did not verify
+          "internal_error"              unexpected exception
+    """
+    import json
+    import os
+
+    if proof.get("proof_type") == "stub":
+        return False, "stub_proof"
+
+    resolved_path = vkey_path or os.environ.get("OLYMPUS_ZK_VKEY_PATH")
+    if not resolved_path:
+        return False, "no_vkey_configured"
+    if not os.path.exists(resolved_path):
+        logger.error("ZK vkey not found: %s", resolved_path)
+        return False, "vkey_not_found"
+
+    try:
+        from olympus_core import verify_groth16_bn254
+    except ImportError:
+        logger.warning(
+            "olympus_core not available — native ZK verifier unavailable. "
+            "Run 'maturin develop' or build the PyO3 extension."
+        )
+        return False, "native_verifier_unavailable"
+
+    try:
+        with open(resolved_path, encoding="utf-8") as f:
+            vkey_json = f.read()
+
+        # Extract the inner proof object (pi_a/pi_b/pi_c), not the
+        # outer wrapper dict which also contains public_signals and metadata.
+        proof_inner = proof.get("proof", proof)
+        proof_json = json.dumps(proof_inner)
+
+        public_signals: list[str] = [str(s) for s in proof.get("public_signals", [])]
+
+        ok = verify_groth16_bn254(vkey_json, proof_json, public_signals)
+        return (True, "verified") if ok else (False, "verification_failed")
+
+    except Exception:
+        logger.exception("Unexpected error in native ZK verifier")
+        return False, "internal_error"

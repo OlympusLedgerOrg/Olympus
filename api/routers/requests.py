@@ -13,8 +13,7 @@ import logging
 from datetime import datetime, timezone
 
 from fastapi import APIRouter, HTTPException, Query, status
-from sqlalchemy import func, select
-from sqlalchemy.exc import IntegrityError
+from sqlalchemy import func, select, text
 
 from api.auth import RateLimit, RequireAPIKey
 from api.deps import DBSession
@@ -72,24 +71,34 @@ def _escape_like(value: str) -> str:
     return value.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
 
 
-_DISPLAY_ID_MAX_RETRIES = 5
-
-
 async def _next_display_id(db) -> str:
-    """Generate the next sequential display ID (e.g. ``"OLY-0042"``).
+    """Generate the next sequential display ID using a PostgreSQL sequence.
 
-    Uses MAX(display_id) to find the current highest ID, avoiding collisions
-    from concurrent row-count reads.
+    Uses nextval() for atomic, race-free ID generation. Falls back to
+    the MAX()+1 approach when running against SQLite (tests only).
     """
-    result = await db.execute(select(func.max(PublicRecordsRequest.display_id)))
-    max_id = result.scalar()
-    if max_id is None:
-        return "OLY-0001"
-    # Parse the numeric suffix and increment
+    dialect_name = ""
     try:
-        num = int(max_id.split("-")[1]) + 1
-    except (IndexError, ValueError):
-        num = 1
+        engine = db.bind if hasattr(db, "bind") else None
+        if engine is not None:
+            dialect_name = engine.dialect.name
+    except Exception:
+        logger.debug("dialect detection failed", exc_info=True)
+
+    if dialect_name == "sqlite":
+        # SQLite fallback for tests
+        result = await db.execute(select(func.max(PublicRecordsRequest.display_id)))
+        max_id = result.scalar()
+        if max_id is None:
+            return "OLY-0001"
+        try:
+            num = int(max_id.split("-")[1]) + 1
+        except (IndexError, ValueError):
+            num = 1
+        return f"OLY-{num:04d}"
+
+    result = await db.execute(text("SELECT nextval('display_id_seq')"))
+    num = result.scalar()
     return f"OLY-{num:04d}"
 
 
@@ -110,45 +119,38 @@ async def file_request(body: RequestCreate, db: DBSession, _api_key: RequireAPIK
     """
     filed_at = datetime.now(timezone.utc)
     agency_name = body.agency_id or ""
-    commit_hash = hash_request(body.subject, body.description, agency_name, filed_at)
+    try:
+        commit_hash = hash_request(body.subject, body.description, agency_name, filed_at)
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail=[{"msg": str(exc), "type": "unicode", "code": "INVALID_UNICODE"}],
+        ) from exc
     deadline = compute_deadline(filed_at, body.request_type)
 
-    for _attempt in range(_DISPLAY_ID_MAX_RETRIES):
-        display_id = await _next_display_id(db)
-        req = PublicRecordsRequest(
-            display_id=display_id,
-            subject=body.subject,
-            description=body.description,
-            agency_id=body.agency_id,
-            request_type=body.request_type,
-            status=RequestStatus.PENDING.value,
-            date_from=body.date_from,
-            date_to=body.date_to,
-            response_format=body.response_format,
-            fee_waiver_basis=body.fee_waiver_basis,
-            priority=body.priority,
-            filed_at=filed_at,
-            deadline=deadline,
-            commit_hash=commit_hash,
-            shard_id=DEFAULT_SHARD_ID,
-        )
-        db.add(req)
-        try:
-            await db.commit()
-            await db.refresh(req)
-            logger.info("Filed request %s (commit=%s)", req.display_id, commit_hash)
-            return req
-        except IntegrityError:
-            await db.rollback()
-            logger.warning("display_id collision on %s, retrying", display_id)
-
-    raise HTTPException(
-        status_code=status.HTTP_409_CONFLICT,
-        detail={
-            "detail": "Could not generate unique display_id after retries.",
-            "code": "DISPLAY_ID_CONFLICT",
-        },
+    display_id = await _next_display_id(db)
+    req = PublicRecordsRequest(
+        display_id=display_id,
+        subject=body.subject,
+        description=body.description,
+        agency_id=body.agency_id,
+        request_type=body.request_type,
+        status=RequestStatus.PENDING.value,
+        date_from=body.date_from,
+        date_to=body.date_to,
+        response_format=body.response_format,
+        fee_waiver_basis=body.fee_waiver_basis,
+        priority=body.priority,
+        filed_at=filed_at,
+        deadline=deadline,
+        commit_hash=commit_hash,
+        shard_id=DEFAULT_SHARD_ID,
     )
+    db.add(req)
+    await db.commit()
+    await db.refresh(req)
+    logger.info("Filed request %s (commit=%s)", req.display_id, commit_hash)
+    return req
 
 
 @router.get("", response_model=list[RequestResponse])

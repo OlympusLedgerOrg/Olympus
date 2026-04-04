@@ -14,7 +14,7 @@
 // # Intended responsibilities (future phases)
 //
 //   - BatchUpdate: receive canonicalised records, delegate key/hash derivation
-//     to the Rust CD-HS-SMF service over its cdhs_smf.proto socket, persist
+//     to the Rust CD-HS-ST service over its cdhs_smf.proto socket, persist
 //     SMT node deltas to Postgres, return the new signed root.
 //   - ProveInclusion / ProveNonInclusion: forward to Rust service, relay proof.
 //   - GetRoot: return the latest committed signed root.

@@ -287,23 +287,30 @@ async def ingest_document(
 
     # ── Record a human-readable activity log entry ───────────────────────────
     display_id = _display_id(commit_id)
-    activity = LedgerActivity(
-        activity_type="DOCUMENT_SUBMITTED",
-        title="Document Added to Permanent Record",
-        description=(
-            f"A document '{filename}' ({size_label}) was permanently recorded. "
-            + (f"Description: {description}. " if description else "")
-            + f"Record ID: {display_id}."
-        ),
-        related_commit_id=commit_id,
-        related_request_id=request_id,
-        user_friendly_status="✓ Complete",
-        details_json=json.dumps(
-            {"filename": filename, "doc_hash": doc_hash, "display_id": display_id}
-        ),
-    )
-    db.add(activity)
-    await db.commit()
+    try:
+        activity = LedgerActivity(
+            activity_type="DOCUMENT_SUBMITTED",
+            title="Document Added to Permanent Record",
+            description=(
+                f"A document '{filename}' ({size_label}) was permanently recorded. "
+                + (f"Description: {description}. " if description else "")
+                + f"Record ID: {display_id}."
+            ),
+            related_commit_id=commit_id,
+            related_request_id=request_id,
+            display_id=display_id,
+            user_friendly_status="✓ Complete",
+            details_json=json.dumps(
+                {"filename": filename, "doc_hash": doc_hash, "display_id": display_id}
+            ),
+        )
+        db.add(activity)
+        await db.commit()
+    except Exception:
+        # Safe to continue: the ledger commit (step 5) already succeeded.
+        # The activity log is a non-critical convenience record; its failure
+        # must not mask a successful ingestion or cause a false-negative response.
+        logger.warning("Non-critical ingestion step failed", exc_info=True)
 
     return SimpleIngestionResponse(
         success=True,
@@ -330,7 +337,7 @@ def _display_id(commit_id: str) -> str:
     Uses the last 4 hex digits of the commit ID converted to a decimal number.
     """
     try:
-        numeric = int(commit_id.lstrip("0x")[-4:], 16)
-        return f"OLY-{numeric:04d}"
+        numeric = int(commit_id.lstrip("0x")[-8:], 16)
+        return f"OLY-{numeric:08d}"
     except (ValueError, IndexError):
-        return f"OLY-{abs(hash(commit_id)) % 10000:04d}"
+        return f"OLY-{abs(hash(commit_id)) % 100000000:08d}"
