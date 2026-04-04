@@ -439,6 +439,12 @@ def verify_nonexistence_proof(proof: NonExistenceProof) -> bool:
     Args:
         proof: Non-existence proof to verify
 
+    Security contract:
+        This function verifies mathematical consistency only. Callers MUST
+        additionally verify that ``proof.root_hash`` is an authenticated root
+        (for example, by matching it against a signed shard header) before
+        treating non-existence as authoritative.
+
     Returns:
         True if proof is valid, False otherwise
     """

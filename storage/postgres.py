@@ -53,7 +53,7 @@ from psycopg_pool import ConnectionPool, PoolTimeout
 
 from protocol.canonical_json import canonical_json_encode
 from protocol.canonicalizer import canonicalization_provenance
-from protocol.hashes import global_key, record_key, shard_header_hash
+from protocol.hashes import SNARK_SCALAR_FIELD, global_key, record_key, shard_header_hash
 from protocol.ledger import LedgerEntry
 from protocol.rfc3161 import MAX_TSA_TOKENS, _sha256_of_hash
 from protocol.shards import create_shard_header, sign_header, verify_header
@@ -69,12 +69,38 @@ from protocol.ssmf import (
 
 logger = logging.getLogger(__name__)
 
+
+def _derive_node_rehash_gate() -> str:
+    """Derive the session gate value for SMT trigger-protected writes.
+
+    Mixes a deployment secret when available so the effective gate value is
+    not derivable from source code alone.
+    """
+    hasher = blake3.blake3()
+    hasher.update(b"OLY:NODE-REHASH-GATE:V1")
+    gate_secret = os.getenv("OLYMPUS_NODE_REHASH_GATE_SECRET", "")
+    if gate_secret:
+        hasher.update(b"|")
+        hasher.update(gate_secret.encode("utf-8"))
+    return hasher.hexdigest()
+
+
 # ADR-0001: BLAKE3 domain-separated gate value for the smt_nodes rehash
 # trigger.  _persist_tree_nodes sets this as a session variable before
-# running the upsert; the trigger function checks for it.  Using a hash
-# rather than a plain flag makes accidental bypass harder and follows the
-# project's OLY: domain-separation convention.
-_NODE_REHASH_GATE: str = blake3.blake3(b"OLY:NODE-REHASH-GATE:V1").hexdigest()
+# running the upsert; the trigger function checks for it.
+_NODE_REHASH_GATE: str = _derive_node_rehash_gate()
+
+
+def _compute_poseidon_root_from_leaves(leaves: Mapping[bytes, bytes]) -> bytes:
+    """Compute the authoritative Poseidon root from current SMT leaves."""
+    from protocol.poseidon_smt import PoseidonSMT
+
+    poseidon_smt = PoseidonSMT()
+    for key, value_hash in leaves.items():
+        field_value = int.from_bytes(value_hash, byteorder="big") % SNARK_SCALAR_FIELD
+        poseidon_smt.update(key, field_value)
+    poseidon_int = int(poseidon_smt.get_root())
+    return poseidon_int.to_bytes(32, byteorder="big")
 
 
 class StorageLayer:
@@ -1263,15 +1289,37 @@ class StorageLayer:
                 ledger_payload["poseidon_root"] = poseidon_root_decimal
 
             # Compute entry hash using canonical JSON
-            from protocol.hashes import LEDGER_PREFIX, blake3_hash, create_dual_root_commitment
+            from protocol.hashes import (
+                LEDGER_PREFIX,
+                blake3_hash,
+                create_dual_root_commitment,
+                parse_dual_root_commitment,
+            )
 
             if poseidon_root is not None:
+                # Recompute Poseidon root from transaction-authoritative tree state
+                # to prevent stale roots under concurrent writes.
+                authoritative_poseidon_root = _compute_poseidon_root_from_leaves(tree.leaves)
+                poseidon_root_decimal = str(
+                    int.from_bytes(authoritative_poseidon_root, byteorder="big")
+                )
+                ledger_payload["poseidon_root"] = poseidon_root_decimal
+
                 # New format: dual-root commitment atomically binds BLAKE3 and Poseidon roots
-                entry_hash = create_dual_root_commitment(root_hash, poseidon_root)
+                entry_hash = create_dual_root_commitment(root_hash, authoritative_poseidon_root)
+                verified_b3_root, verified_poseidon_root = parse_dual_root_commitment(entry_hash)
+                if (
+                    verified_b3_root != root_hash
+                    or verified_poseidon_root != authoritative_poseidon_root
+                ):
+                    raise RuntimeError("Ledger dual-root commitment verification failed")
             else:
                 # Legacy format: hash of canonical JSON payload
                 canonical_json = canonical_json_encode(ledger_payload)
                 entry_hash = blake3_hash([LEDGER_PREFIX, canonical_json.encode("utf-8")])
+                verified_entry_hash = blake3_hash([LEDGER_PREFIX, canonical_json.encode("utf-8")])
+                if verified_entry_hash != entry_hash:
+                    raise RuntimeError("Ledger entry hash verification failed")
 
             # Insert ledger entry
             cur.execute(
@@ -2327,42 +2375,55 @@ class StorageLayer:
             SparseMerkleTree with all leaves loaded (global SMT)
         """
         tree = SparseMerkleTree()
+        batch_size = self.DEFAULT_FLUSH_BATCH_SIZE
+        offset = 0
 
         # CD-HS-ST: Load ALL leaves from the global SMT (no shard_id filter)
         # Secondary ordering by key makes replay deterministic when multiple inserts share
         # the same timestamp, while preserving the primary append order on ts. Without
         # this stable tie-break, historical reconstruction could yield different roots
         # for the same cutoff timestamp and break offline verification.
-        if up_to_ts is None:
-            cur.execute(
-                """
-                SELECT key, value_hash FROM smt_leaves
-                ORDER BY ts ASC, key ASC
-                """
-            )
-        else:
+        if up_to_ts is not None:
             cutoff = up_to_ts
             if isinstance(cutoff, str):
                 cutoff = datetime.fromisoformat(cutoff.replace("Z", "+00:00"))
             if cutoff.tzinfo is None:
                 cutoff = cutoff.replace(tzinfo=timezone.utc)
-            cur.execute(
-                """
-                SELECT key, value_hash FROM smt_leaves
-                WHERE ts <= %s
-                ORDER BY ts ASC, key ASC
-                """,
-                (cutoff,),
-            )
-        rows = cur.fetchall()
 
-        # Rebuild tree by updating each leaf
-        for row in rows:
-            # Support both dict and tuple rows for robustness
-            # SELECT key, value_hash => indices 0, 1
-            key = bytes(self._row_get(row, "key", 0))
-            value_hash = bytes(self._row_get(row, "value_hash", 1))
-            tree.update(key, value_hash)
+        while True:
+            if up_to_ts is None:
+                cur.execute(
+                    """
+                    SELECT key, value_hash FROM smt_leaves
+                    ORDER BY ts ASC, key ASC
+                    LIMIT %s OFFSET %s
+                    """,
+                    (batch_size, offset),
+                )
+            else:
+                cur.execute(
+                    """
+                    SELECT key, value_hash FROM smt_leaves
+                    WHERE ts <= %s
+                    ORDER BY ts ASC, key ASC
+                    LIMIT %s OFFSET %s
+                    """,
+                    (cutoff, batch_size, offset),
+                )
+
+            rows = cur.fetchall()
+            if not rows:
+                break
+
+            # Rebuild tree by updating each leaf
+            for row in rows:
+                # Support both dict and tuple rows for robustness
+                # SELECT key, value_hash => indices 0, 1
+                key = bytes(self._row_get(row, "key", 0))
+                value_hash = bytes(self._row_get(row, "value_hash", 1))
+                tree.update(key, value_hash)
+
+            offset += len(rows)
 
         return tree
 

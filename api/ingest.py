@@ -89,10 +89,23 @@ async def _read_upload_bounded(file: UploadFile, max_bytes: int, max_mb: int) ->
     Raises:
         HTTPException 413: If the payload exceeds *max_bytes* before EOF.
     """
-    chunks: list[bytes] = []
+    settings = get_settings()
+    chunks = bytearray()
     total = 0
+    max_chunk = min(_UPLOAD_CHUNK_SIZE, max_bytes)
     while True:
-        chunk = await file.read(_UPLOAD_CHUNK_SIZE)
+        remaining = max_bytes - total
+        read_size = min(max_chunk, remaining + 1)
+        try:
+            chunk = await asyncio.wait_for(
+                file.read(read_size),
+                timeout=settings.upload_read_timeout_seconds,
+            )
+        except TimeoutError as exc:
+            raise HTTPException(
+                status_code=408,
+                detail="Upload read timed out.",
+            ) from exc
         if not chunk:
             break
         total += len(chunk)
@@ -101,8 +114,8 @@ async def _read_upload_bounded(file: UploadFile, max_bytes: int, max_mb: int) ->
                 status_code=413,
                 detail=f"File exceeds maximum size of {max_mb} MB.",
             )
-        chunks.append(chunk)
-    return b"".join(chunks)
+        chunks.extend(chunk)
+    return bytes(chunks)
 
 
 # ---------------------------------------------------------------------------
@@ -115,6 +128,7 @@ async def _read_upload_bounded(file: UploadFile, max_bytes: int, max_mb: int) ->
 # (e.g. "watauga:2025:budget", "org/repo/v1.2.3-rc.1", "doc-001").
 # Deliberately excludes control characters, null bytes, shell metacharacters
 # (\ * ? < > | ; ` $ ! &), and Unicode homoglyphs (pure ASCII allowlist).
+_SHARD_ID_PATTERN = r"^[a-zA-Z0-9_.:\-]+$"
 _IDENTIFIER_PATTERN = r"^[a-zA-Z0-9_./:@+\-]+$"
 _IDENTIFIER_MAX_LEN = 256
 # Artifact IDs (e.g. 'org/repo/v1.2.3-rc.1+build.42') are typically longer than shard/record IDs.
@@ -211,7 +225,7 @@ class RecordInput(BaseModel):
         ...,
         description="Target shard identifier",
         max_length=_IDENTIFIER_MAX_LEN,
-        pattern=_IDENTIFIER_PATTERN,
+        pattern=_SHARD_ID_PATTERN,
     )
     record_type: str = Field(
         ...,
@@ -347,7 +361,12 @@ class ProofSubmissionRequest(ProofVerificationRequest):
         max_length=_IDENTIFIER_MAX_LEN,
         pattern=_IDENTIFIER_PATTERN,
     )
-    shard_id: str = Field(..., description="Shard identifier associated with the proof bundle")
+    shard_id: str = Field(
+        ...,
+        description="Shard identifier associated with the proof bundle",
+        max_length=_IDENTIFIER_MAX_LEN,
+        pattern=_SHARD_ID_PATTERN,
+    )
     ledger_entry_hash: str = Field(..., description="Ledger entry anchoring the proof bundle")
     timestamp: str = Field(..., description="ISO 8601 timestamp associated with the bundle")
     canonicalization: dict[str, Any] = Field(
@@ -800,12 +819,14 @@ def _value_hash_to_poseidon_field(value_hash: bytes) -> int:
     return int.from_bytes(value_hash, byteorder="big") % _BN128_FIELD_PRIME
 
 
-def _build_poseidon_smt_for_storage_shard(storage: StorageLayer, shard_id: str) -> PoseidonSMT:
+def _build_poseidon_smt_for_storage_shard(
+    storage: StorageLayer, shard_id: str, *, up_to_ts: datetime | str | None = None
+) -> PoseidonSMT:
     """Rebuild the current PoseidonSMT view for a shard from persisted SMT leaves."""
     from protocol.poseidon_smt import PoseidonSMT
 
     with storage._get_connection() as conn, conn.cursor() as cur:
-        tree = storage._load_tree_state(cur)
+        tree = storage._load_tree_state(cur, up_to_ts=up_to_ts)
 
     poseidon_smt = PoseidonSMT()
     for key, value_hash in tree.leaves.items():
@@ -1107,11 +1128,14 @@ async def ingest_batch(
                             ),
                             "ledger_entry_hash": ledger_entry.entry_hash,
                             "timestamp": ledger_entry.ts,
-                            "canonicalization": canonicalization_with_poseidon,
+                            "canonicalization": {
+                                **canonicalization,
+                                "poseidon_root": ledger_entry.poseidon_root or poseidon_root,
+                            },
                             "persisted": True,
                             "batch_id": batch_id,
                             "batch_index": len(persist_queue),
-                            "poseidon_root": poseidon_root,
+                            "poseidon_root": ledger_entry.poseidon_root or poseidon_root,
                         }
                         _cache_ingestion_record(ingestion_entry)
                         persist_queue.append(ingestion_entry)
@@ -1152,7 +1176,19 @@ async def ingest_batch(
                                 )
                             continue
                         else:
-                            raise
+                            logger.exception(
+                                "storage_append_record_failed",
+                                extra={
+                                    "shard_id": record.shard_id,
+                                    "record_type": record.record_type,
+                                    "record_id": record.record_id,
+                                    "version": record.version,
+                                },
+                            )
+                            raise HTTPException(
+                                status_code=500,
+                                detail="Failed to persist record.",
+                            ) from e
                 else:
                     # Fall back to in-memory storage
                     new_hashes.append(content_hash_bytes)
@@ -1599,11 +1635,14 @@ async def commit_artifact(
                     "merkle_proof": _smt_proof_to_merkle_proof_dict(proof, artifact_hash_bytes),
                     "ledger_entry_hash": ledger_entry.entry_hash,
                     "timestamp": ledger_entry.ts,
-                    "canonicalization": canonicalization,
+                    "canonicalization": {
+                        **canonicalization,
+                        "poseidon_root": ledger_entry.poseidon_root or poseidon_root_normalized,
+                    },
                     "persisted": True,
                     "batch_id": batch_id,
                     "batch_index": 0,
-                    "poseidon_root": poseidon_root_normalized,
+                    "poseidon_root": ledger_entry.poseidon_root or poseidon_root_normalized,
                 }
                 _ingestion_store[proof_id] = ingestion_entry
                 _content_index[artifact_hash_hex] = proof_id
@@ -1627,7 +1666,7 @@ async def commit_artifact(
                     id=request.id,
                     committed_at=ledger_entry.ts,
                     ledger_entry_hash=ledger_entry.entry_hash,
-                    poseidon_root=poseidon_root_normalized,
+                    poseidon_root=ledger_entry.poseidon_root or poseidon_root_normalized,
                 )
             except ValueError as e:
                 error_msg = str(e)
@@ -1649,7 +1688,14 @@ async def commit_artifact(
                         poseidon_root=existing.get("poseidon_root", poseidon_root_normalized),
                     )
                 else:
-                    raise
+                    logger.exception(
+                        "artifact_commit_storage_failed",
+                        extra={"namespace": request.namespace, "id": request.id},
+                    )
+                    raise HTTPException(
+                        status_code=500,
+                        detail="Failed to persist artifact commitment.",
+                    ) from e
 
         # Fall back to in-memory storage
         tree = MerkleTree([artifact_hash_bytes])

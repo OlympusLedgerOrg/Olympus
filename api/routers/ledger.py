@@ -11,6 +11,7 @@ POST /ledger/verify/simple        — user-friendly document verification
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from typing import Annotated
 
@@ -81,10 +82,23 @@ async def _read_upload_bounded(file: UploadFile, max_bytes: int, max_mb: int) ->
     Raises:
         HTTPException 413: If the payload exceeds *max_bytes* before EOF.
     """
-    chunks: list[bytes] = []
+    settings = get_settings()
+    chunks = bytearray()
     total = 0
+    max_chunk = min(UPLOAD_CHUNK_SIZE, max_bytes)
     while True:
-        chunk = await file.read(UPLOAD_CHUNK_SIZE)
+        remaining = max_bytes - total
+        read_size = min(max_chunk, remaining + 1)
+        try:
+            chunk = await asyncio.wait_for(
+                file.read(read_size),
+                timeout=settings.upload_read_timeout_seconds,
+            )
+        except TimeoutError as exc:
+            raise HTTPException(
+                status_code=408,
+                detail="Upload read timed out.",
+            ) from exc
         if not chunk:
             break
         total += len(chunk)
@@ -93,8 +107,8 @@ async def _read_upload_bounded(file: UploadFile, max_bytes: int, max_mb: int) ->
                 status_code=413,
                 detail=f"File exceeds maximum size of {max_mb} MB.",
             )
-        chunks.append(chunk)
-    return b"".join(chunks)
+        chunks.extend(chunk)
+    return bytes(chunks)
 
 
 @router.get("/state", response_model=LedgerStateResponse)

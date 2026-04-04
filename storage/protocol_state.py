@@ -17,6 +17,7 @@ radius of bugs in operational code (rate limiting, ingestion batches, etc.).
 from __future__ import annotations
 
 import logging
+import os
 from collections.abc import Mapping
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Any
@@ -32,8 +33,20 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
+
+def _derive_node_rehash_gate() -> str:
+    """Derive the session gate value for SMT trigger-protected writes."""
+    hasher = blake3.blake3()
+    hasher.update(b"OLY:NODE-REHASH-GATE:V1")
+    gate_secret = os.getenv("OLYMPUS_NODE_REHASH_GATE_SECRET", "")
+    if gate_secret:
+        hasher.update(b"|")
+        hasher.update(gate_secret.encode("utf-8"))
+    return hasher.hexdigest()
+
+
 # ADR-0001: BLAKE3 domain-separated gate for the smt_nodes rehash trigger.
-_NODE_REHASH_GATE: str = blake3.blake3(b"OLY:NODE-REHASH-GATE:V1").hexdigest()
+_NODE_REHASH_GATE: str = _derive_node_rehash_gate()
 
 
 # ---------------------------------------------------------------------------
