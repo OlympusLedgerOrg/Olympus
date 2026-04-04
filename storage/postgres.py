@@ -1157,7 +1157,9 @@ class StorageLayer:
                 )
             else:
                 if fallback_tree is None:
-                    raise RuntimeError("Fallback SMT tree state unavailable")
+                    raise RuntimeError(
+                        "Internal error: fallback_tree was not initialized in fallback path"
+                    )
                 proof = fallback_tree.prove_existence(key)
                 root_hash = fallback_tree.get_root()
                 tree_size = len(fallback_tree.leaves)
@@ -1202,7 +1204,9 @@ class StorageLayer:
                     self._cache_put(shard_id, db_level, packed_index, hash_val)
             else:
                 if fallback_tree is None:
-                    raise RuntimeError("Fallback SMT tree state unavailable for node persist")
+                    raise RuntimeError(
+                        "Internal error: fallback_tree was not initialized before node persistence"
+                    )
                 self._persist_tree_nodes(cur, shard_id, fallback_tree)
 
             # Get previous header
@@ -1368,7 +1372,9 @@ class StorageLayer:
                     authoritative_poseidon_root = _compute_poseidon_root_from_leaves(all_leaves)
                 else:
                     if fallback_tree is None:
-                        raise RuntimeError("Fallback SMT tree state unavailable for Poseidon")
+                        raise RuntimeError(
+                            "Internal error: fallback_tree was not initialized for Poseidon computation"
+                        )
                     authoritative_poseidon_root = _compute_poseidon_root_from_leaves(
                         fallback_tree.leaves
                     )
