@@ -15,17 +15,21 @@ Environment variables (see api/config.py for full list):
 from __future__ import annotations
 
 import api._patches as _patches  # apply CVE patches before any third-party imports
+
+
 _patches.apply_all()
 
 import logging
 import os
 from contextlib import asynccontextmanager
+from pathlib import Path
 from typing import Any
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
+from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 from starlette.middleware.base import BaseHTTPMiddleware
-from starlette.requests import Request
 
 from api.config import get_settings
 from api.db import engine
@@ -45,11 +49,67 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
+def _env_flag_enabled(name: str) -> bool:
+    """Return True when an environment flag is enabled with common truthy values."""
+    return os.environ.get(name, "").strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _assert_no_dev_zk_stub_artifacts(repo_root: Path | None = None) -> None:
+    """Block production startup when known development ceremony stubs are present."""
+    if os.environ.get("OLYMPUS_ENV", "production") == "development":
+        return
+    if os.environ.get("OLYMPUS_ALLOW_DEV_ZK_ARTIFACTS", "").lower() == "true":
+        logger.warning("OLYMPUS_ALLOW_DEV_ZK_ARTIFACTS=true: allowing dev ZK artifacts")
+        return
+
+    root = repo_root or Path(__file__).resolve().parent.parent
+    stub_paths = (
+        root / "ceremony" / "transcript" / "dev_powers_of_tau.ptau",
+        root / "ceremony" / "transcript" / "dev_redaction_validity_final.zkey",
+    )
+    for stub_path in stub_paths:
+        if not stub_path.exists():
+            continue
+        header = stub_path.read_bytes()[:256].lower()
+        if b"dev placeholder" in header or b"development" in header:
+            raise RuntimeError(
+                "Refusing startup in non-development environment with dev ceremony stub "
+                f"artifact present: {stub_path}. Set OLYMPUS_ALLOW_DEV_ZK_ARTIFACTS=true "
+                "only for non-production test scenarios."
+            )
+
+
+def _assert_no_dev_signing_key_in_non_development() -> None:
+    """Block non-development startup when OLYMPUS_DEV_SIGNING_KEY is enabled."""
+    if os.environ.get("OLYMPUS_ENV", "production") == "development":
+        return
+    if _env_flag_enabled("OLYMPUS_DEV_SIGNING_KEY"):
+        raise RuntimeError(
+            "Refusing startup in non-development environment with "
+            "OLYMPUS_DEV_SIGNING_KEY=true. Configure a persistent "
+            "OLYMPUS_INGEST_SIGNING_KEY for production use."
+        )
+
+
+def _assert_dev_auth_flag_restricted_to_development() -> None:
+    """Disallow dev auth bypass flag outside development."""
+    env = os.environ.get("OLYMPUS_ENV", "production")
+    if env == "development":
+        return
+    if os.environ.get("OLYMPUS_ALLOW_DEV_AUTH") == "1":
+        raise RuntimeError(
+            "OLYMPUS_ALLOW_DEV_AUTH=1 is not permitted when OLYMPUS_ENV != 'development'."
+        )
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Create database tables on startup and dispose the engine on shutdown."""
     settings = get_settings()
     logger.info("Starting Olympus API v%s", settings.app_version)
+    _assert_no_dev_zk_stub_artifacts()
+    _assert_no_dev_signing_key_in_non_development()
+    _assert_dev_auth_flag_restricted_to_development()
 
     try:
         async with engine.begin() as conn:
@@ -78,19 +138,30 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
         response.headers["Permissions-Policy"] = "geolocation=(), camera=(), microphone=()"
         # HSTS — always set to protect against SSL stripping attacks.
         # Safe even over HTTP (browsers ignore the header on non-HTTPS).
-        response.headers["Strict-Transport-Security"] = (
-            "max-age=63072000; includeSubDomains"
-        )
+        response.headers["Strict-Transport-Security"] = "max-age=63072000; includeSubDomains"
         # CSP — restrictive default; operators should customize for their frontend origin
         response.headers["Content-Security-Policy"] = (
             "default-src 'self'; "
             "script-src 'self'; "
-            "style-src 'self' 'unsafe-inline'; "  # TODO: Replace unsafe-inline with nonces after frontend refactor
+            "style-src 'self'; "
             "img-src 'self' data:; "
             "connect-src 'self'; "
             "frame-ancestors 'none';"
         )
         return response
+
+
+def _json_safe_validation_detail(value: Any) -> Any:
+    """Recursively sanitize validation payloads so JSON rendering cannot fail."""
+    if isinstance(value, str):
+        return value.encode("utf-8", "backslashreplace").decode("utf-8")
+    if isinstance(value, list):
+        return [_json_safe_validation_detail(item) for item in value]
+    if isinstance(value, tuple):
+        return [_json_safe_validation_detail(item) for item in value]
+    if isinstance(value, dict):
+        return {key: _json_safe_validation_detail(item) for key, item in value.items()}
+    return value
 
 
 def create_app() -> FastAPI:
@@ -124,15 +195,36 @@ def create_app() -> FastAPI:
             origins = []  # No CORS in production unless explicitly configured
             logger.warning("CORS_ORIGINS not set — cross-origin requests will be rejected.")
 
+    # Only enable CORS credentials when origins are explicitly configured and non-empty.
+    # Explicit wildcard origins with credentials are rejected as insecure.
+    explicit_cors_origins = bool(os.environ.get("CORS_ORIGINS", "").strip())
+    wildcard_origin_present = any("*" in origin for origin in origins)
+    if explicit_cors_origins and wildcard_origin_present:
+        raise RuntimeError(
+            "CORS_ORIGINS contains wildcard values, which is not allowed with "
+            "credentialed requests. Configure explicit origins instead."
+        )
+    allow_credentials = bool(origins) and explicit_cors_origins
+
     app.add_middleware(
         CORSMiddleware,
         allow_origins=origins,
-        allow_credentials=True,
+        allow_credentials=allow_credentials,
         allow_methods=["GET", "POST", "PATCH", "DELETE"],
         allow_headers=["Authorization", "Content-Type"],
     )
 
     app.add_middleware(SecurityHeadersMiddleware)
+
+    @app.exception_handler(RequestValidationError)
+    async def request_validation_exception_handler(
+        request: Request, exc: RequestValidationError
+    ) -> JSONResponse:
+        """Return validation errors without re-serializing invalid Unicode input."""
+        return JSONResponse(
+            status_code=422,
+            content={"detail": _json_safe_validation_detail(exc.errors())},
+        )
 
     # FOIA routers
     app.include_router(documents.router)

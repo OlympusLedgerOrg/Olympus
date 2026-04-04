@@ -8,6 +8,7 @@ POST /doc/verify  — verify a previously committed document hash
 from __future__ import annotations
 
 import logging
+from datetime import datetime, timezone
 
 from fastapi import APIRouter, HTTPException, status
 from sqlalchemy import exists, select
@@ -30,6 +31,8 @@ from api.services.zkproof import generate_proof_stub
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/doc", tags=["documents"])
+
+_MERKLE_LEAF_LIMIT = 50_000
 
 
 @router.post(
@@ -119,7 +122,9 @@ async def commit_document(
 
 
 @router.post("/verify", response_model=DocVerifyResponse)
-async def verify_document(body: DocVerifyRequest, db: DBSession, _rl: RateLimit):
+async def verify_document(
+    body: DocVerifyRequest, db: DBSession, _api_key: RequireAPIKey, _rl: RateLimit
+):
     """Verify a previously committed document hash.
 
     Looks up the commit by ``commit_id`` or ``doc_hash`` (at least one is
@@ -154,11 +159,19 @@ async def verify_document(body: DocVerifyRequest, db: DBSession, _rl: RateLimit)
     if not commit:
         return DocVerifyResponse(verified=False)
 
+    # Enforce embargo: embargoed documents must not be visible before their release date
+    if commit.embargo_until and commit.embargo_until > datetime.now(timezone.utc):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="This document is under embargo and not yet publicly available.",
+        )
+
     # Rebuild the Merkle tree for the shard and generate an inclusion proof
     all_hashes_result = await db.execute(
         select(DocCommit.doc_hash)
         .where(DocCommit.shard_id == commit.shard_id)
         .order_by(DocCommit.epoch_timestamp)
+        .limit(_MERKLE_LEAF_LIMIT)
     )
     all_hashes = list(all_hashes_result.scalars().all())
 

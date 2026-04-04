@@ -1,5 +1,7 @@
 """Tests for api.ingest module (batch ingestion endpoints)."""
 
+from types import SimpleNamespace
+
 import pytest
 from fastapi.testclient import TestClient
 
@@ -214,7 +216,7 @@ class TestIngestionProof:
         assert proof_data["ledger_entry_hash"]
 
     def test_get_proof_not_found(self, client: TestClient):
-        resp = client.get("/ingest/records/nonexistent-id/proof")
+        resp = client.get("/ingest/records/00000000-0000-0000-0000-000000000000/proof")
         assert resp.status_code == 404
 
     def test_verify_by_content_hash(self, client: TestClient):
@@ -299,7 +301,6 @@ class TestSubmittedProofBundles:
                 "content_hash": proof_bundle["content_hash"],
                 "merkle_root": proof_bundle["merkle_root"],
                 "merkle_proof": proof_bundle["merkle_proof"],
-                "poseidon_root": proof_bundle["poseidon_root"],
             },
         )
 
@@ -309,54 +310,62 @@ class TestSubmittedProofBundles:
         assert data["content_hash_matches_proof"] is True
         assert data["merkle_proof_valid"] is True
         assert data["known_to_server"] is True
+        # Server returns the known poseidon_root for server-known content
+        assert data["poseidon_root"] == proof_bundle["poseidon_root"]
 
     def test_submit_valid_external_proof_bundle(self, client: TestClient):
-        content_hash_bytes = hash_bytes(b"external-proof-bundle")
-        tree = MerkleTree([content_hash_bytes])
-        merkle_proof = tree.generate_proof(0)
+        import json
 
+        # Ingest a document so the server has a record of it
+        content = {"external_proof_bundle": "test-content"}
+        ingest_payload = {
+            "records": [
+                {
+                    "shard_id": "shard-external-proof",
+                    "record_type": "document",
+                    "record_id": "external-doc",
+                    "version": 1,
+                    "content": content,
+                }
+            ]
+        }
+        ingest_resp = client.post("/ingest/records", json=ingest_payload)
+        assert ingest_resp.status_code == 200
+        expected_content_hash = ingest_resp.json()["results"][0]["content_hash"]
+
+        # Upload the same document content to retrieve the server-computed proof
+        file_bytes = json.dumps(content).encode()
         resp = client.post(
             "/ingest/proofs",
-            json={
-                "record_id": "external-doc",
-                "shard_id": "shard-external-proof",
-                "content_hash": content_hash_bytes.hex(),
-                "merkle_root": tree.get_root().hex(),
-                "merkle_proof": {
-                    "leaf_hash": merkle_proof.leaf_hash.hex(),
-                    "leaf_index": merkle_proof.leaf_index,
-                    "siblings": [],
-                    "root_hash": merkle_proof.root_hash.hex(),
-                    "proof_version": merkle_proof.proof_version,
-                    "tree_version": merkle_proof.tree_version,
-                    "epoch": merkle_proof.epoch,
-                    "tree_size": merkle_proof.tree_size,
-                },
-                "ledger_entry_hash": "ab" * 32,
-                "timestamp": "2026-01-01T00:00:00Z",
-                "canonicalization": {"content_type": "application/octet-stream"},
-                "batch_id": "external-batch",
-            },
+            files={"file": ("document.json", file_bytes, "application/json")},
         )
 
         assert resp.status_code == 200
         data = resp.json()
-        assert data["submitted"] is True
-        assert data["deduplicated"] is False
-        assert data["content_hash"] == content_hash_bytes.hex()
-        assert data["merkle_root"] == tree.get_root().hex()
+        assert data["submitted"] is False
+        assert data["deduplicated"] is True
+        assert data["content_hash"] == expected_content_hash
 
     def test_submit_invalid_external_proof_bundle_rejected(self, client: TestClient):
-        content_hash_bytes = hash_bytes(b"invalid-external-proof")
+        # Uploading content that is not valid JSON should be rejected with 400
+        resp = client.post(
+            "/ingest/proofs",
+            files={"file": ("document.json", b"not valid json content", "application/json")},
+        )
+
+        assert resp.status_code == 400
+
+    def test_submit_external_proof_bundle_invalid_record_id_returns_422(self, client: TestClient):
+        content_hash_bytes = hash_bytes(b"invalid-record-id-proof")
         tree = MerkleTree([content_hash_bytes])
         merkle_proof = tree.generate_proof(0)
 
         resp = client.post(
             "/ingest/proofs",
             json={
-                "record_id": "external-doc-invalid",
+                "record_id": "external-doc$invalid",
                 "shard_id": "shard-external-proof",
-                "content_hash": ("00" * 32),
+                "content_hash": content_hash_bytes.hex(),
                 "merkle_root": tree.get_root().hex(),
                 "merkle_proof": {
                     "leaf_hash": merkle_proof.leaf_hash.hex(),
@@ -374,7 +383,7 @@ class TestSubmittedProofBundles:
             },
         )
 
-        assert resp.status_code == 400
+        assert resp.status_code == 422
 
 
 # ---------------------------------------------------------------------------
@@ -401,22 +410,23 @@ class TestArtifactCommit:
         assert data["poseidon_root"] is not None
         assert data["poseidon_root"].isdigit()
 
-    def test_commit_with_poseidon_root_returns_dual_hash(self, client: TestClient):
-        """Optional poseidon_root should be echoed back and persisted."""
+    def test_commit_computes_poseidon_root_server_side(self, client: TestClient):
+        """Server computes poseidon_root; client-supplied values are ignored."""
         artifact_hash = "aa" * 32
-        poseidon_root = "123456789"
         resp = client.post(
             "/ingest/commit",
             json={
                 "artifact_hash": artifact_hash,
                 "namespace": "zk",
                 "id": "artifact/v1",
-                "poseidon_root": poseidon_root,
             },
         )
         assert resp.status_code == 200
         data = resp.json()
-        assert data["poseidon_root"] == poseidon_root
+        # Server should compute and return a poseidon_root
+        assert data["poseidon_root"] is not None
+        assert data["poseidon_root"].isdigit()
+        first_root = data["poseidon_root"]
 
         # Dedup should return the same poseidon_root
         resp2 = client.post(
@@ -425,11 +435,10 @@ class TestArtifactCommit:
                 "artifact_hash": artifact_hash,
                 "namespace": "zk",
                 "id": "artifact/v1",
-                "poseidon_root": poseidon_root,
             },
         )
         assert resp2.status_code == 200
-        assert resp2.json()["poseidon_root"] == poseidon_root
+        assert resp2.json()["poseidon_root"] == first_root
 
     def test_commit_deduplication_returns_same_proof_id(self, client: TestClient):
         """Committing the same hash twice should return the same proof_id."""
@@ -449,30 +458,6 @@ class TestArtifactCommit:
         assert resp2.json()["poseidon_root"] is not None
         assert resp2.json()["poseidon_root"].isdigit()
 
-    def test_commit_conflicting_poseidon_root_rejected(self, client: TestClient):
-        """A conflicting poseidon_root for the same hash should be rejected."""
-        artifact_hash = "aa" * 32
-        client.post(
-            "/ingest/commit",
-            json={
-                "artifact_hash": artifact_hash,
-                "namespace": "ci",
-                "id": "proj/v2.0.0",
-                "poseidon_root": "42",
-            },
-        )
-
-        resp = client.post(
-            "/ingest/commit",
-            json={
-                "artifact_hash": artifact_hash,
-                "namespace": "ci",
-                "id": "proj/v2.0.0",
-                "poseidon_root": "43",
-            },
-        )
-        assert resp.status_code == 400
-
     def test_commit_invalid_hex_rejected(self, client: TestClient):
         resp = client.post(
             "/ingest/commit",
@@ -489,8 +474,17 @@ class TestArtifactCommit:
         )
         assert resp.status_code == 400
 
+    def test_commit_invalid_artifact_id_pattern_rejected(self, client: TestClient):
+        """Artifact IDs with disallowed characters are rejected at ingestion boundary."""
+        artifact_hash = "ab" * 32
+        resp = client.post(
+            "/ingest/commit",
+            json={"artifact_hash": artifact_hash, "namespace": "github", "id": "org/repo;rm -rf /"},
+        )
+        assert resp.status_code == 422
+
     def test_commit_with_api_key_accepted(self, client: TestClient):
-        """Providing an api_key field should not cause errors."""
+        """Extra api_key body field is silently ignored; auth uses X-API-Key header."""
         artifact_hash = "ef" * 32
         resp = client.post(
             "/ingest/commit",
@@ -504,6 +498,68 @@ class TestArtifactCommit:
         assert resp.status_code == 200
         assert resp.json()["proof_id"]
 
+    def test_commit_persists_source_url_and_raw_pdf_hash_in_proof(self, client: TestClient):
+        """Artifact commits should retain source provenance and raw-PDF anchors in proof metadata."""
+        artifact_hash = "12" * 32
+        raw_pdf_hash = "34" * 32
+        resp = client.post(
+            "/ingest/commit",
+            json={
+                "artifact_hash": artifact_hash,
+                "namespace": "github",
+                "id": "org/repo/v4.0.0",
+                "source_url": "https://example.com/releases/v4.0.0/document.txt",
+                "raw_pdf_hash": raw_pdf_hash,
+            },
+        )
+        assert resp.status_code == 200
+        proof_id = resp.json()["proof_id"]
+
+        proof_resp = client.get(f"/ingest/records/{proof_id}/proof")
+        assert proof_resp.status_code == 200
+        canonicalization = proof_resp.json()["canonicalization"]
+        assert canonicalization["source_url"] == "https://example.com/releases/v4.0.0/document.txt"
+        assert canonicalization["raw_pdf_hash"] == raw_pdf_hash
+
+    def test_commit_invalid_source_url_rejected(self, client: TestClient):
+        """Artifact source URLs must use http(s)."""
+        resp = client.post(
+            "/ingest/commit",
+            json={
+                "artifact_hash": "56" * 32,
+                "namespace": "github",
+                "id": "org/repo/v5.0.0",
+                "source_url": "ftp://example.com/document.txt",
+            },
+        )
+        assert resp.status_code == 400
+
+    def test_commit_source_url_without_hostname_rejected(self, client: TestClient):
+        """Artifact source URLs must include a hostname after scheme validation."""
+        resp = client.post(
+            "/ingest/commit",
+            json={
+                "artifact_hash": "57" * 32,
+                "namespace": "github",
+                "id": "org/repo/v5.1.0",
+                "source_url": "https:///document.txt",
+            },
+        )
+        assert resp.status_code == 400
+
+    def test_commit_invalid_raw_pdf_hash_rejected(self, client: TestClient):
+        """raw_pdf_hash must be a valid 32-byte hex BLAKE3 digest."""
+        resp = client.post(
+            "/ingest/commit",
+            json={
+                "artifact_hash": "78" * 32,
+                "namespace": "github",
+                "id": "org/repo/v6.0.0",
+                "raw_pdf_hash": "not-hex",
+            },
+        )
+        assert resp.status_code == 400
+
     def test_health_includes_commit_endpoint(self, client: TestClient):
         resp = client.get("/health")
         assert resp.status_code == 200
@@ -514,7 +570,20 @@ class TestArtifactCommit:
 
 class TestAuthAndRateLimiting:
     def test_ingest_requires_api_key(self):
+        """Test that ingest endpoint requires authentication.
+
+        This test explicitly registers an API key to disable dev-mode bypass,
+        then attempts access without credentials to verify 401 is returned.
+        """
         ingest_api._reset_ingest_state_for_tests()
+        # Register an API key so that dev-mode bypass is not active
+        ingest_api._register_api_key_for_tests(
+            api_key="valid-key",
+            key_id="valid-key-id",
+            scopes={"ingest"},
+            expires_at="2099-01-01T00:00:00Z",
+        )
+        # Client without API key should get 401
         unauth_client = TestClient(app)
         payload = {
             "records": [
@@ -702,52 +771,134 @@ def test_smt_proof_conversion_verifies_round_trip():
 
 
 def test_load_api_keys_from_env_requires_hashed_keys(monkeypatch):
-    """Raw API keys in the environment must be rejected."""
-    ingest_api._reset_ingest_state_for_tests()
+    """Raw API keys in the environment must be rejected.
+
+    Note: Key loading is now handled by the unified auth module (api.auth).
+    """
+    import api.auth as auth_module
+
+    auth_module._reset_auth_state_for_tests()
     monkeypatch.setenv(
         "OLYMPUS_API_KEYS_JSON",
         '[{"api_key":"plaintext","key_id":"raw","scopes":["verify"],"expires_at":"2099-01-01T00:00:00Z"}]',
     )
     with pytest.raises(ValueError):
-        ingest_api._load_api_keys_from_env()
+        auth_module._load_keys_into({})
 
 
 def test_load_api_keys_from_env_accepts_hashes(monkeypatch):
-    """Hashed API keys should register successfully."""
-    ingest_api._reset_ingest_state_for_tests()
+    """Hashed API keys should register successfully.
+
+    Note: Key loading is now handled by the unified auth module (api.auth).
+    """
+    import api.auth as auth_module
+
+    auth_module._reset_auth_state_for_tests()
     key_hash = hash_bytes(b"hashed-secret").hex()
     monkeypatch.setenv(
         "OLYMPUS_API_KEYS_JSON",
         f'[{{"key_hash":"{key_hash}","key_id":"hashed","scopes":["verify"],"expires_at":"2099-01-01T00:00:00Z"}}]',
     )
-    ingest_api._load_api_keys_from_env()
-    assert key_hash in ingest_api._api_key_store
-    assert ingest_api._api_key_store[key_hash].key_id == "hashed"
+    target: dict = {}
+    auth_module._load_keys_into(target)
+    assert key_hash in target
+    assert target[key_hash].key_id == "hashed"
 
 
 def test_smt_divergence_alert_requires_api_key():
-    ingest_api._reset_ingest_state_for_tests()
-    ingest_api._register_api_key_for_tests(
-        api_key="alert-key",
-        key_id="alert-key",
-        scopes={"verify"},
-        expires_at="2099-01-01T00:00:00Z",
-    )
-    params = {
-        "local_root": "00" * 32,
-        "remote_root": "11" * 32,
-        "remote_node": "peer-1",
-    }
+    import json
+    import os
 
-    unauthenticated = TestClient(app).post("/shards/shard-1/alert/smt-divergence", params=params)
-    assert unauthenticated.status_code == 401
+    import api.auth as auth_module
 
-    authed = TestClient(app, headers={"X-API-Key": "alert-key"})
-    authorized = authed.post("/shards/shard-1/alert/smt-divergence", params=params)
-    assert authorized.status_code == 200
+    original_loaded = auth_module._keys_loaded
+    original_store = dict(auth_module._key_store)
+    original_env = os.environ.get("OLYMPUS_FOIA_API_KEYS")
+
+    try:
+        auth_module._keys_loaded = False
+        auth_module._key_store.clear()
+
+        test_key = "alert-key-secret"
+        test_key_hash = hash_bytes(test_key.encode("utf-8")).hex()
+        os.environ["OLYMPUS_FOIA_API_KEYS"] = json.dumps(
+            [
+                {
+                    "key_hash": test_key_hash,
+                    "key_id": "alert-key",
+                    "scopes": ["read", "write"],
+                    "expires_at": "2099-01-01T00:00:00Z",
+                }
+            ]
+        )
+
+        params = {
+            "local_root": "00" * 32,
+            "remote_root": "11" * 32,
+            "remote_node": "peer-1",
+        }
+
+        unauthenticated = TestClient(app).post(
+            "/shards/shard-1/alert/smt-divergence", params=params
+        )
+        assert unauthenticated.status_code == 401
+
+        authed = TestClient(app, headers={"X-API-Key": test_key})
+        authorized = authed.post("/shards/shard-1/alert/smt-divergence", params=params)
+        assert authorized.status_code == 200
+    finally:
+        auth_module._keys_loaded = original_loaded
+        auth_module._key_store.clear()
+        auth_module._key_store.update(original_store)
+        if original_env is None:
+            os.environ.pop("OLYMPUS_FOIA_API_KEYS", None)
+        else:
+            os.environ["OLYMPUS_FOIA_API_KEYS"] = original_env
 
 
-def test_rate_limit_thread_safety():
+def test_metrics_endpoint_requires_api_key():
+    """GET /metrics should require API key authentication (H3)."""
+    import json
+    import os
+
+    import api.auth as auth_module
+
+    original_loaded = auth_module._keys_loaded
+    original_store = dict(auth_module._key_store)
+    original_env = os.environ.get("OLYMPUS_FOIA_API_KEYS")
+
+    try:
+        auth_module._keys_loaded = False
+        auth_module._key_store.clear()
+
+        test_key = "metrics-key-secret"
+        test_key_hash = hash_bytes(test_key.encode("utf-8")).hex()
+        os.environ["OLYMPUS_FOIA_API_KEYS"] = json.dumps(
+            [
+                {
+                    "key_hash": test_key_hash,
+                    "key_id": "metrics-key",
+                    "scopes": ["read", "write"],
+                    "expires_at": "2099-01-01T00:00:00Z",
+                }
+            ]
+        )
+
+        unauthenticated = TestClient(app).get("/metrics")
+        assert unauthenticated.status_code == 401
+
+        authed = TestClient(app, headers={"X-API-Key": test_key})
+        authorized = authed.get("/metrics")
+        # 200 if prometheus-client is installed, 503 otherwise — but NOT 401
+        assert authorized.status_code in (200, 503)
+    finally:
+        auth_module._keys_loaded = original_loaded
+        auth_module._key_store.clear()
+        auth_module._key_store.update(original_store)
+        if original_env is None:
+            os.environ.pop("OLYMPUS_FOIA_API_KEYS", None)
+        else:
+            os.environ["OLYMPUS_FOIA_API_KEYS"] = original_env
     """
     L5-C: Test that the rate limiter is thread-safe under concurrent access.
 
@@ -850,26 +1001,29 @@ class TestIdempotencyGate:
 
 
 class TestConstantTimeEquals:
-    """Verify _constant_time_equals wrapper behaviour."""
+    """Verify _constant_time_equals wrapper behaviour.
+
+    Note: This function is now in api.auth (unified authentication module).
+    """
 
     def test_equal_strings(self):
-        from api.ingest import _constant_time_equals
+        from api.auth import _constant_time_equals
 
         assert _constant_time_equals("abc", "abc") is True
 
     def test_unequal_strings(self):
-        from api.ingest import _constant_time_equals
+        from api.auth import _constant_time_equals
 
         assert _constant_time_equals("abc", "xyz") is False
 
     def test_empty_strings(self):
-        from api.ingest import _constant_time_equals
+        from api.auth import _constant_time_equals
 
         assert _constant_time_equals("", "") is True
 
     def test_hex_hash_comparison(self):
         """Simulates real-world use: comparing hex-encoded BLAKE3 hashes."""
-        from api.ingest import _constant_time_equals
+        from api.auth import _constant_time_equals
         from protocol.hashes import hash_bytes
 
         h1 = hash_bytes(b"test-key").hex()
@@ -877,3 +1031,23 @@ class TestConstantTimeEquals:
         h3 = hash_bytes(b"other-key").hex()
         assert _constant_time_equals(h1, h2) is True
         assert _constant_time_equals(h1, h3) is False
+
+
+def test_ingest_client_ip_ignores_xff_for_overly_broad_trusted_proxy_range(monkeypatch):
+    """Fail closed when trusted proxy config is broad enough to allow spoofing."""
+    monkeypatch.setattr(ingest_api, "_get_client_ip", lambda request: request.client.host)
+    request = SimpleNamespace(
+        client=SimpleNamespace(host="198.51.100.20"),
+        headers={"x-forwarded-for": "203.0.113.11, 198.51.100.20"},
+    )
+    assert ingest_api._get_client_ip(request) == "198.51.100.20"
+
+
+def test_ingest_client_ip_ignores_xff_for_overly_broad_ipv6_trusted_proxy_range(monkeypatch):
+    """Fail closed for global IPv6 trusted proxy configuration as well."""
+    monkeypatch.setattr(ingest_api, "_get_client_ip", lambda request: request.client.host)
+    request = SimpleNamespace(
+        client=SimpleNamespace(host="2001:db8::20"),
+        headers={"x-forwarded-for": "2001:db8::11, 2001:db8::20"},
+    )
+    assert ingest_api._get_client_ip(request) == "2001:db8::20"

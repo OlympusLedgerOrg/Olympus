@@ -49,9 +49,10 @@ def test_canonical_json_encode_key_order_invariant(value):
 
 @given(st.text())
 def test_canonical_json_encode_unicode_roundtrip(value):
-    """Unicode strings should be ASCII-safe and JSON round-trippable."""
+    """Unicode strings are emitted as raw UTF-8 (JCS) and JSON round-trip correctly."""
     encoded = canonical_json_encode({"value": value})
-    encoded.encode("ascii")
+    # Output is valid UTF-8 (not necessarily ASCII).
+    encoded.encode("utf-8")
     assert json.loads(encoded) == {"value": unicodedata.normalize("NFC", value)}
 
 

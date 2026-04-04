@@ -1,0 +1,234 @@
+syntax = "proto3";
+
+package olympus.cdhs_smf.v1;
+
+// CD-HS-ST Service: Constant-Depth Hierarchical Sparse Tree
+//
+// This service maintains a single global 256-level Sparse Merkle Tree with
+// composite keys that encode both shard identity and record identity.
+
+service CdhsSmfService {
+  // Insert or update a record in the global SMT
+  rpc Update(UpdateRequest) returns (UpdateResponse);
+
+  // Generate an inclusion proof for a key
+  rpc ProveInclusion(ProveInclusionRequest) returns (ProveInclusionResponse);
+
+  // Verify an inclusion proof
+  rpc VerifyInclusion(VerifyInclusionRequest) returns (VerifyInclusionResponse);
+
+  // Generate a non-inclusion proof for a key
+  rpc ProveNonInclusion(ProveNonInclusionRequest) returns (ProveNonInclusionResponse);
+
+  // Verify a non-inclusion proof
+  rpc VerifyNonInclusion(VerifyNonInclusionRequest) returns (VerifyNonInclusionResponse);
+
+  // Canonicalize a record (for consistency)
+  rpc Canonicalize(CanonicalizeRequest) returns (CanonicalizeResponse);
+
+  // Get the current root hash
+  rpc GetRoot(GetRootRequest) returns (GetRootResponse);
+
+  // Sign a root hash with Ed25519
+  rpc SignRoot(SignRootRequest) returns (SignRootResponse);
+}
+
+// Request to update (insert or modify) a record
+message UpdateRequest {
+  // Shard identifier (e.g., "watauga:2025:budget")
+  string shard_id = 1;
+
+  // Record key components (type, id, version, etc.)
+  RecordKey record_key = 2;
+
+  // Canonicalized record content (already canonicalized)
+  bytes canonical_content = 3;
+}
+
+// Response from update operation
+message UpdateResponse {
+  // The new root hash after update
+  bytes new_root = 1;
+
+  // The global key that was computed
+  bytes global_key = 2;
+
+  // The leaf value hash that was stored
+  bytes leaf_value_hash = 3;
+
+  // SMT node deltas (for persistence)
+  repeated SmtNodeDelta deltas = 4;
+}
+
+// Record key components
+message RecordKey {
+  // Record type (e.g., "doc", "dataset", "appeal")
+  string record_type = 1;
+
+  // Record ID
+  string record_id = 2;
+
+  // Version (optional)
+  string version = 3;
+
+  // Additional metadata (for future extensibility)
+  map<string, string> metadata = 4;
+}
+
+// SMT node delta for persistence
+message SmtNodeDelta {
+  // Path to the node (256 bits as bytes)
+  bytes path = 1;
+
+  // Level in the tree (0-255)
+  uint32 level = 2;
+
+  // New hash value
+  bytes hash = 3;
+}
+
+// Request to prove inclusion
+message ProveInclusionRequest {
+  // Shard identifier
+  string shard_id = 1;
+
+  // Record key
+  RecordKey record_key = 2;
+
+  // Root hash to prove against (optional, uses current if not specified)
+  bytes root = 3;
+}
+
+// Response with inclusion proof
+message ProveInclusionResponse {
+  // The global key
+  bytes global_key = 1;
+
+  // The leaf value hash
+  bytes value_hash = 2;
+
+  // Sibling hashes along the path (256 siblings)
+  repeated bytes siblings = 3;
+
+  // Root hash
+  bytes root = 4;
+}
+
+// Request to verify inclusion
+message VerifyInclusionRequest {
+  // Global key
+  bytes global_key = 1;
+
+  // Leaf value hash
+  bytes value_hash = 2;
+
+  // Sibling hashes
+  repeated bytes siblings = 3;
+
+  // Root hash to verify against
+  bytes root = 4;
+}
+
+// Response from verification
+message VerifyInclusionResponse {
+  // Whether the proof is valid
+  bool valid = 1;
+
+  // Error message if invalid
+  string error = 2;
+}
+
+// Request to prove non-inclusion
+message ProveNonInclusionRequest {
+  // Shard identifier
+  string shard_id = 1;
+
+  // Record key
+  RecordKey record_key = 2;
+
+  // Root hash to prove against (optional, uses current if not specified)
+  bytes root = 3;
+}
+
+// Response with non-inclusion proof
+message ProveNonInclusionResponse {
+  // The global key
+  bytes global_key = 1;
+
+  // Sibling hashes along the path to empty leaf
+  repeated bytes siblings = 2;
+
+  // Root hash
+  bytes root = 3;
+}
+
+// Request to verify non-inclusion
+message VerifyNonInclusionRequest {
+  // Global key
+  bytes global_key = 1;
+
+  // Sibling hashes
+  repeated bytes siblings = 2;
+
+  // Root hash to verify against
+  bytes root = 3;
+}
+
+// Response from non-inclusion verification
+message VerifyNonInclusionResponse {
+  // Whether the proof is valid
+  bool valid = 1;
+
+  // Error message if invalid
+  string error = 2;
+}
+
+// Request to canonicalize content
+message CanonicalizeRequest {
+  // Content type (e.g., "json", "html", "xml")
+  string content_type = 1;
+
+  // Raw content
+  bytes content = 2;
+}
+
+// Response with canonicalized content
+message CanonicalizeResponse {
+  // Canonicalized content
+  bytes canonical_content = 1;
+
+  // Hash of canonicalized content
+  bytes content_hash = 2;
+}
+
+// Request to get current root
+message GetRootRequest {
+  // No parameters needed
+}
+
+// Response with current root
+message GetRootResponse {
+  // Current root hash
+  bytes root = 1;
+
+  // Tree size (number of non-empty leaves)
+  uint64 tree_size = 2;
+}
+
+// Request to sign a root
+message SignRootRequest {
+  // Root hash to sign
+  bytes root = 1;
+
+  // Additional context (e.g., timestamp, checkpoint ID)
+  map<string, string> context = 2;
+}
+
+// Response with signature
+message SignRootResponse {
+  // Ed25519 signature
+  bytes signature = 1;
+
+  // Public key used for signing
+  bytes public_key = 2;
+}

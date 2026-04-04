@@ -433,38 +433,6 @@ class TestVerificationBundle:
 # ---------------------------------------------------------------------------
 
 
-class TestSMTSpec:
-    """Verify the SMT spec document exists and covers key topics."""
-
-    def test_spec_file_exists(self) -> None:
-        import os
-
-        spec_path = os.path.join(
-            os.path.dirname(os.path.dirname(__file__)), "docs", "smt_specification.md"
-        )
-        assert os.path.isfile(spec_path)
-
-    def test_spec_covers_key_sections(self) -> None:
-        import os
-
-        spec_path = os.path.join(
-            os.path.dirname(os.path.dirname(__file__)), "docs", "smt_specification.md"
-        )
-        with open(spec_path) as f:
-            content = f.read()
-        for section in [
-            "Hashing Rules",
-            "Path Encoding",
-            "Proof Format",
-            "Verification Algorithm",
-            "Tie-Break Rules",
-            "Leaf Hash",
-            "Internal Node Hash",
-            "Empty Hash Chain",
-        ]:
-            assert section in content, f"Missing section: {section}"
-
-
 # ---------------------------------------------------------------------------
 # 🔥 Item 8: Schema generation
 # ---------------------------------------------------------------------------

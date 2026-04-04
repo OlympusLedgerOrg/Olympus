@@ -33,6 +33,7 @@ import json
 import logging
 import os
 import time
+import warnings
 from collections import OrderedDict
 from collections.abc import Iterable, Iterator, Mapping
 from contextlib import contextmanager
@@ -44,26 +45,47 @@ import nacl.exceptions
 import nacl.signing
 import psycopg
 import psycopg.errors
-from psycopg import OperationalError
+from psycopg import OperationalError, sql
 from psycopg.pq import TransactionStatus
 from psycopg.rows import dict_row
 from psycopg_pool import ConnectionPool, PoolTimeout
 
 from protocol.canonical_json import canonical_json_encode
 from protocol.canonicalizer import canonicalization_provenance
-from protocol.hashes import record_key, shard_header_hash
+from protocol.hashes import SNARK_SCALAR_FIELD, global_key, record_key, shard_header_hash
 from protocol.ledger import LedgerEntry
 from protocol.rfc3161 import MAX_TSA_TOKENS, _sha256_of_hash
 from protocol.shards import create_shard_header, sign_header, verify_header
 from protocol.ssmf import (
+    EMPTY_HASHES,
     ExistenceProof,
     NonExistenceProof,
     SparseMerkleTree,
+    _key_to_path_bits,
     diff_sparse_merkle_trees,
 )
+from storage.gates import derive_node_rehash_gate
 
 
 logger = logging.getLogger(__name__)
+
+
+# ADR-0001: BLAKE3 domain-separated gate value for the smt_nodes rehash
+# trigger.  _persist_tree_nodes sets this as a session variable before
+# running the upsert; the trigger function checks for it.
+_NODE_REHASH_GATE: str = derive_node_rehash_gate()
+
+
+def _compute_poseidon_root_from_leaves(leaves: Mapping[bytes, bytes]) -> bytes:
+    """Compute the authoritative Poseidon root from current SMT leaves."""
+    from protocol.poseidon_smt import PoseidonSMT
+
+    poseidon_smt = PoseidonSMT()
+    for key, value_hash in leaves.items():
+        field_value = int.from_bytes(value_hash, byteorder="big") % SNARK_SCALAR_FIELD
+        poseidon_smt.update(key, field_value)
+    poseidon_int = int(poseidon_smt.get_root())
+    return poseidon_int.to_bytes(32, byteorder="big")
 
 
 class StorageLayer:
@@ -363,38 +385,64 @@ class StorageLayer:
             # SMT Leaves
             # ------------------------------------------------------------------
             """
+            DO $$
+            BEGIN
+                IF EXISTS (
+                    SELECT 1
+                    FROM information_schema.columns
+                    WHERE table_schema = 'public'
+                      AND table_name = 'smt_leaves'
+                      AND column_name = 'shard_id'
+                ) AND to_regclass('public.smt_leaves_legacy_011') IS NULL THEN
+                    EXECUTE 'ALTER TABLE smt_leaves RENAME TO smt_leaves_legacy_011';
+                END IF;
+            END $$;
+            """,
+            """
             CREATE TABLE IF NOT EXISTS smt_leaves (
-                shard_id   TEXT        NOT NULL,
                 key        BYTEA       NOT NULL,
                 version    INT         NOT NULL,
                 value_hash BYTEA       NOT NULL,
                 ts         TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-                PRIMARY KEY (shard_id, key, version),
+                PRIMARY KEY (key, version),
                 CONSTRAINT smt_leaves_key_length
                     CHECK (octet_length(key) = 32),
                 CONSTRAINT smt_leaves_value_hash_length
                     CHECK (octet_length(value_hash) = 32)
             )
             """,
-            "CREATE INDEX IF NOT EXISTS smt_leaves_shard_ts_idx ON smt_leaves(shard_id, ts)",
+            "CREATE INDEX IF NOT EXISTS smt_leaves_ts_idx ON smt_leaves(ts)",
             # ------------------------------------------------------------------
             # SMT Nodes
             # ------------------------------------------------------------------
             """
+            DO $$
+            BEGIN
+                IF EXISTS (
+                    SELECT 1
+                    FROM information_schema.columns
+                    WHERE table_schema = 'public'
+                      AND table_name = 'smt_nodes'
+                      AND column_name = 'shard_id'
+                ) AND to_regclass('public.smt_nodes_legacy_011') IS NULL THEN
+                    EXECUTE 'ALTER TABLE smt_nodes RENAME TO smt_nodes_legacy_011';
+                END IF;
+            END $$;
+            """,
+            """
             CREATE TABLE IF NOT EXISTS smt_nodes (
-                shard_id TEXT      NOT NULL,
                 level    SMALLINT  NOT NULL,
                 index    BYTEA     NOT NULL,
                 hash     BYTEA     NOT NULL,
                 ts       TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-                PRIMARY KEY (shard_id, level, index),
+                PRIMARY KEY (level, index),
                 CONSTRAINT smt_nodes_level_range
                     CHECK (level >= 0 AND level <= 256),
                 CONSTRAINT smt_nodes_hash_length
                     CHECK (octet_length(hash) = 32)
             )
             """,
-            "CREATE INDEX IF NOT EXISTS smt_nodes_shard_level_idx ON smt_nodes(shard_id, level)",
+            "CREATE INDEX IF NOT EXISTS smt_nodes_level_idx ON smt_nodes(level)",
             # ------------------------------------------------------------------
             # Shard Headers  (tree_size included from the start)
             # ------------------------------------------------------------------
@@ -427,7 +475,10 @@ class StorageLayer:
                     CHECK (tree_size >= 0)
             )
             """,
-            "CREATE INDEX IF NOT EXISTS shard_headers_shard_seq_desc_idx ON shard_headers(shard_id, seq DESC)",
+            """
+            CREATE INDEX IF NOT EXISTS shard_headers_shard_seq_desc_idx
+                ON shard_headers(shard_id, seq DESC)
+            """,
             # ------------------------------------------------------------------
             # Ledger Entries  (poseidon_root included from the start)
             # ------------------------------------------------------------------
@@ -447,10 +498,19 @@ class StorageLayer:
                 CONSTRAINT ledger_entries_entry_hash_length
                     CHECK (octet_length(entry_hash) = 32),
                 CONSTRAINT ledger_entries_seq_positive
-                    CHECK (seq >= 0)
+                    CHECK (seq >= 0),
+                -- RT-H3: Defense-in-depth constraint to prevent chain forks.
+                -- SERIALIZABLE isolation should already prevent two transactions
+                -- from reading the same prev_entry_hash and committing, but this
+                -- constraint provides a hard database-level guarantee.
+                CONSTRAINT ledger_entries_no_chain_fork
+                    UNIQUE (shard_id, prev_entry_hash)
             )
             """,
-            "CREATE INDEX IF NOT EXISTS ledger_entries_shard_seq_desc_idx ON ledger_entries(shard_id, seq DESC)",
+            """
+            CREATE INDEX IF NOT EXISTS ledger_entries_shard_seq_desc_idx
+                ON ledger_entries(shard_id, seq DESC)
+            """,
             "CREATE INDEX IF NOT EXISTS ledger_entries_ts_idx ON ledger_entries(ts)",
             """
             CREATE INDEX IF NOT EXISTS ledger_entries_poseidon_root_idx
@@ -563,11 +623,58 @@ class StorageLayer:
             BEFORE DELETE ON smt_leaves
             FOR EACH ROW EXECUTE FUNCTION olympus_reject_mutation()
             """,
+            "DROP TRIGGER IF EXISTS smt_leaves_reject_insert ON smt_leaves",
+            f"""
+            CREATE OR REPLACE FUNCTION olympus_reject_smt_leaf_direct_insert()
+            RETURNS trigger AS $$
+            BEGIN
+                IF current_setting('olympus.allow_smt_insert', true)
+                        = '{_NODE_REHASH_GATE}' THEN
+                    RETURN NEW;
+                END IF;
+                RAISE EXCEPTION
+                    'smt_leaves is append-only via append_record(): direct INSERT not allowed'
+                    USING ERRCODE = '25006';
+            END;
+            $$ LANGUAGE plpgsql
+            """,
+            """
+            CREATE TRIGGER smt_leaves_reject_insert
+            BEFORE INSERT ON smt_leaves
+            FOR EACH ROW EXECUTE FUNCTION olympus_reject_smt_leaf_direct_insert()
+            """,
+            # ------------------------------------------------------------------
+            # smt_nodes: gated update trigger (ADR-0001)
+            # ------------------------------------------------------------------
+            # Internal SMT nodes are *derived state* — their hashes change
+            # whenever a new leaf is inserted and the path from leaf to root
+            # is rehashed.  _persist_tree_nodes sets the session variable
+            # ``olympus.allow_node_rehash`` to a BLAKE3 domain-separated hash
+            # (via SET LOCAL, scoped to the current transaction) before
+            # running the upsert.  Ad-hoc UPDATE statements that do not set
+            # this variable are still rejected, preserving the security
+            # invariant.  The gate value follows the project's OLY:
+            # domain-separation convention so that a naive ``SET LOCAL ... =
+            # 'on'`` does not bypass the check.
+            f"""
+            CREATE OR REPLACE FUNCTION olympus_allow_node_rehash()
+            RETURNS trigger AS $$
+            BEGIN
+                IF current_setting('olympus.allow_node_rehash', true)
+                        = '{_NODE_REHASH_GATE}' THEN
+                    RETURN NEW;
+                END IF;
+                RAISE EXCEPTION '% is append-only: % is not allowed without rehash context',
+                    TG_TABLE_NAME, TG_OP
+                    USING ERRCODE = '25006';
+            END;
+            $$ LANGUAGE plpgsql
+            """,
             "DROP TRIGGER IF EXISTS smt_nodes_reject_update ON smt_nodes",
             """
             CREATE TRIGGER smt_nodes_reject_update
             BEFORE UPDATE ON smt_nodes
-            FOR EACH ROW EXECUTE FUNCTION olympus_reject_mutation()
+            FOR EACH ROW EXECUTE FUNCTION olympus_allow_node_rehash()
             """,
             "DROP TRIGGER IF EXISTS smt_nodes_reject_delete ON smt_nodes",
             """
@@ -614,7 +721,10 @@ class StorageLayer:
             END;
             $$
             """,
-            "CREATE INDEX IF NOT EXISTS timestamp_tokens_shard_created_desc_idx ON timestamp_tokens(shard_id, created_at DESC)",
+            """
+            CREATE INDEX IF NOT EXISTS timestamp_tokens_shard_created_desc_idx
+                ON timestamp_tokens(shard_id, created_at DESC)
+            """,
             """
             CREATE OR REPLACE FUNCTION olympus_reject_timestamp_token_mutation()
             RETURNS trigger AS $$
@@ -670,8 +780,14 @@ class StorageLayer:
                     CHECK (octet_length(ledger_entry_hash) = 32)
             )
             """,
-            "CREATE UNIQUE INDEX IF NOT EXISTS ingestion_proofs_content_hash_idx ON ingestion_proofs(content_hash)",
-            "CREATE INDEX IF NOT EXISTS ingestion_proofs_batch_idx ON ingestion_proofs(batch_id, batch_index)",
+            """
+            CREATE UNIQUE INDEX IF NOT EXISTS ingestion_proofs_content_hash_idx
+                ON ingestion_proofs(content_hash)
+            """,
+            """
+            CREATE INDEX IF NOT EXISTS ingestion_proofs_batch_idx
+                ON ingestion_proofs(batch_id, batch_index)
+            """,
             "DROP TRIGGER IF EXISTS ingestion_batches_reject_update ON ingestion_batches",
             """
             CREATE TRIGGER ingestion_batches_reject_update
@@ -723,8 +839,14 @@ class StorageLayer:
                 ts         TIMESTAMPTZ NOT NULL DEFAULT NOW()
             )
             """,
-            "CREATE INDEX IF NOT EXISTS idx_change_journal_shard_seq ON smt_change_journal(shard_id, header_seq)",
-            "CREATE INDEX IF NOT EXISTS idx_change_journal_shard_ts ON smt_change_journal(shard_id, ts)",
+            """
+            CREATE INDEX IF NOT EXISTS idx_change_journal_shard_seq
+                ON smt_change_journal(shard_id, header_seq)
+            """,
+            """
+            CREATE INDEX IF NOT EXISTS idx_change_journal_shard_ts
+                ON smt_change_journal(shard_id, ts)
+            """,
             """
             CREATE TABLE IF NOT EXISTS smt_checkpoints (
                 id         BIGSERIAL   PRIMARY KEY,
@@ -771,27 +893,35 @@ class StorageLayer:
         """
         Consume a rate-limit token using PostgreSQL for cross-worker coordination.
 
+        All timestamps are sourced from the PostgreSQL server clock (``NOW()``) to
+        prevent clock-skew attacks in distributed deployments where individual
+        Python workers may have drifted clocks.
+
         Returns:
             True if a token was consumed, False if the subject is rate limited.
         """
         if capacity <= 0 or refill_rate_per_second < 0:
             raise ValueError("capacity must be > 0 and refill_rate_per_second must be >= 0")
 
-        now = datetime.now(timezone.utc)
-
         with self._get_connection() as conn, conn.cursor(row_factory=dict_row) as cur:
+            # Use server-side NOW() for the initial insert so the seed timestamp
+            # is always anchored to the database clock, not the application clock.
             cur.execute(
                 """
-                    INSERT INTO api_rate_limits (subject_type, subject, action, tokens, last_refill_ts)
-                    VALUES (%s, %s, %s, %s, %s)
+                    INSERT INTO api_rate_limits
+                        (subject_type, subject, action, tokens, last_refill_ts)
+                    VALUES (%s, %s, %s, %s, NOW())
                     ON CONFLICT (subject_type, subject, action) DO NOTHING
                 """,
-                (subject_type, subject, action, capacity, now),
+                (subject_type, subject, action, capacity),
             )
 
+            # Retrieve current token count and the elapsed seconds since last refill,
+            # both computed server-side to avoid clock-skew races.
             cur.execute(
                 """
-                    SELECT tokens, last_refill_ts
+                    SELECT tokens,
+                           EXTRACT(EPOCH FROM (NOW() - last_refill_ts)) AS elapsed_seconds
                     FROM api_rate_limits
                     WHERE subject_type = %s AND subject = %s AND action = %s
                     FOR UPDATE
@@ -802,21 +932,23 @@ class StorageLayer:
             if row is None:
                 raise RuntimeError("Failed to load rate limit state from database")
 
-            elapsed = max(0.0, (now - row["last_refill_ts"]).total_seconds())
-            tokens = min(capacity, row["tokens"] + elapsed * refill_rate_per_second)
+            elapsed = max(0.0, float(row["elapsed_seconds"]))
+            tokens = round(min(capacity, row["tokens"] + elapsed * refill_rate_per_second), 6)
 
             if tokens < 1.0:
                 conn.rollback()
                 return False
 
             tokens -= 1.0
+            # Use NOW() in the UPDATE so last_refill_ts is always the database's
+            # notion of the current time, eliminating Python clock-skew influence.
             cur.execute(
                 """
                     UPDATE api_rate_limits
-                    SET tokens = %s, last_refill_ts = %s
+                    SET tokens = %s, last_refill_ts = NOW()
                     WHERE subject_type = %s AND subject = %s AND action = %s
                 """,
-                (tokens, now, subject_type, subject, action),
+                (tokens, subject_type, subject, action),
             )
             conn.commit()
             return True
@@ -837,14 +969,23 @@ class StorageLayer:
         signing_key: nacl.signing.SigningKey,
         canonicalization: dict[str, Any] | None = None,
         poseidon_root: bytes | None = None,
+        *,
+        max_serialization_retries: int = 3,
     ) -> tuple[bytes, ExistenceProof, dict[str, Any], str, LedgerEntry]:
         """
-        Append a record to the sparse Merkle tree and update shard header and ledger.
+        Append a record to the global sparse Merkle tree and update shard header and ledger.
+
+        CD-HS-ST Design:
+        ---------------
+        This function now uses the GLOBAL SMT with hierarchical key derivation.
+        Keys are generated via global_key(shard_id, record_key(...)) to encode
+        shard identity into the key space, eliminating the need for separate
+        per-shard trees.
 
         This is the main write operation. It:
-        1. Loads the current tree state from DB
-        2. Inserts the new leaf
-        3. Updates affected nodes
+        1. Loads the current GLOBAL tree state from DB
+        2. Inserts the new leaf using global_key()
+        3. Updates affected nodes in the global SMT
         4. Creates and signs a new shard header
         5. Creates a ledger entry
         6. Persists everything atomically
@@ -854,6 +995,12 @@ class StorageLayer:
         - SELECT MAX(seq)+1 queries execute inside the transaction
         - commit() finalizes all writes atomically
         - Exceptions trigger automatic rollback via context manager
+
+        Retry semantics (RT-H2):
+        - PostgreSQL SERIALIZABLE transactions may fail with error code 40001
+          when concurrent transactions conflict. This method automatically retries
+          with exponential backoff up to max_serialization_retries times before
+          raising the exception to the caller.
 
         Args:
             shard_id: Shard identifier
@@ -867,26 +1014,95 @@ class StorageLayer:
                 big-endian). When provided, the ledger entry hash uses the dual-root
                 commitment formula to atomically bind both the BLAKE3 SMT root and the
                 Poseidon root.
+            max_serialization_retries: Maximum number of additional retry attempts
+                after the initial attempt on PostgreSQL serialization failure (40001).
+                Total attempts = 1 + max_serialization_retries. Defaults to 3 retries
+                (4 total attempts).
 
         Returns:
             Tuple of (root_hash, proof, header, signature, ledger_entry)
+
+        Raises:
+            ValueError: If value_hash is not 32 bytes or record already exists.
+            psycopg.errors.SerializationFailure: If retries are exhausted on conflict.
         """
         if len(value_hash) != 32:
             raise ValueError(f"Value hash must be 32 bytes, got {len(value_hash)}")
 
         # Generate record key
-        key = record_key(record_type, record_id, version)
+        rec_key = record_key(record_type, record_id, version)
 
+        # CD-HS-ST: Generate global key that encodes shard identity
+        key = global_key(shard_id, rec_key)
+
+        # RT-H2: Retry loop for serialization failures
+        # Total attempts = 1 (initial) + max_serialization_retries (retries)
+        max_attempts = 1 + max_serialization_retries
+        for attempt in range(max_attempts):
+            try:
+                return self._append_record_inner(
+                    shard_id=shard_id,
+                    record_type=record_type,
+                    record_id=record_id,
+                    version=version,
+                    key=key,
+                    value_hash=value_hash,
+                    signing_key=signing_key,
+                    canonicalization=canonicalization,
+                    poseidon_root=poseidon_root,
+                )
+            except psycopg.errors.SerializationFailure as e:
+                is_last_attempt = attempt == max_attempts - 1
+                if not is_last_attempt:
+                    # Exponential backoff: 0.1s, 0.2s, 0.4s, ...
+                    delay = min(
+                        self._retry_base_delay_seconds * (2**attempt),
+                        self._retry_max_delay_seconds,
+                    )
+                    logger.warning(
+                        "Serialization failure on append_record attempt %d/%d, "
+                        "retrying in %.2fs: %s",
+                        attempt + 1,
+                        max_attempts,
+                        delay,
+                        e,
+                    )
+                    time.sleep(delay)
+                else:
+                    logger.error(
+                        "Serialization failure after %d attempts, giving up: %s",
+                        max_attempts,
+                        e,
+                    )
+                    raise
+
+        # Unreachable: loop always returns or raises
+        raise RuntimeError("Unexpected retry loop exit")
+
+    def _append_record_inner(
+        self,
+        *,
+        shard_id: str,
+        record_type: str,
+        record_id: str,
+        version: int,
+        key: bytes,
+        value_hash: bytes,
+        signing_key: nacl.signing.SigningKey,
+        canonicalization: dict[str, Any] | None,
+        poseidon_root: bytes | None,
+    ) -> tuple[bytes, ExistenceProof, dict[str, Any], str, LedgerEntry]:
+        """Inner implementation of append_record without retry logic."""
         # BEGIN TRANSACTION (implicit via context manager)
         with self._get_connection() as conn, conn.cursor(row_factory=dict_row) as cur:
             # Set SERIALIZABLE isolation level to prevent phantom reads
             # under concurrent writes, particularly for shard header chain linkage
             conn.execute("SET TRANSACTION ISOLATION LEVEL SERIALIZABLE")
 
-            # Load current tree state
-            tree = self._load_tree_state(cur, shard_id)
+            # Load current GLOBAL tree state (all shards)
+            tree = self._load_tree_state(cur)
 
-            # Check if key already exists
+            # Check if key already exists (by record identity)
             if tree.get(key) is not None:
                 raise ValueError(f"Record already exists: {record_type}:{record_id}:{version}")
 
@@ -898,16 +1114,22 @@ class StorageLayer:
             # Generate proof
             proof = tree.prove_existence(key)
 
-            # Insert leaf
+            # Insert leaf (CD-HS-ST: no shard_id column)
+            cur.execute(
+                sql.SQL("SET LOCAL olympus.allow_smt_insert = {}").format(
+                    sql.Literal(_NODE_REHASH_GATE)
+                )
+            )
             cur.execute(
                 """
-                    INSERT INTO smt_leaves (shard_id, key, version, value_hash, ts)
-                    VALUES (%s, %s, %s, %s, %s)
+                    INSERT INTO smt_leaves (key, version, value_hash, ts)
+                    VALUES (%s, %s, %s, %s)
                     """,
-                (shard_id, key, version, value_hash, datetime.now(timezone.utc)),
+                (key, version, value_hash, datetime.now(timezone.utc)),
             )
 
             # Insert new affected nodes (append-only, skip if node exists)
+            # CD-HS-ST: shard_id is passed for cache compatibility but not used in DB
             self._persist_tree_nodes(cur, shard_id, tree)
 
             # Get previous header
@@ -967,7 +1189,9 @@ class StorageLayer:
             # Insert shard header
             cur.execute(
                 """
-                    INSERT INTO shard_headers (shard_id, seq, root, tree_size, header_hash, sig, pubkey, previous_header_hash, ts)
+                    INSERT INTO shard_headers
+                        (shard_id, seq, root, tree_size, header_hash,
+                         sig, pubkey, previous_header_hash, ts)
                     VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
                     """,
                 (
@@ -986,7 +1210,8 @@ class StorageLayer:
             # Record change in the diff journal for O(changes) diffs
             cur.execute(
                 """
-                    INSERT INTO smt_change_journal (shard_id, key, old_value, new_value, header_seq, ts)
+                    INSERT INTO smt_change_journal
+                        (shard_id, key, old_value, new_value, header_seq, ts)
                     VALUES (%s, %s, %s, %s, %s, %s)
                     """,
                 (shard_id, key, None, value_hash, seq, ts),
@@ -1045,15 +1270,32 @@ class StorageLayer:
             if poseidon_root is not None:
                 if len(poseidon_root) != 32:
                     raise ValueError(f"poseidon_root must be 32 bytes, got {len(poseidon_root)}")
-                poseidon_root_decimal = str(int.from_bytes(poseidon_root, byteorder="big"))
-                ledger_payload["poseidon_root"] = poseidon_root_decimal
 
             # Compute entry hash using canonical JSON
-            from protocol.hashes import LEDGER_PREFIX, blake3_hash, create_dual_root_commitment
+            from protocol.hashes import (
+                LEDGER_PREFIX,
+                blake3_hash,
+                create_dual_root_commitment,
+                parse_dual_root_commitment,
+            )
 
             if poseidon_root is not None:
+                # Recompute Poseidon root from transaction-authoritative tree state
+                # to prevent stale roots under concurrent writes.
+                authoritative_poseidon_root = _compute_poseidon_root_from_leaves(tree.leaves)
+                poseidon_root_decimal = str(
+                    int.from_bytes(authoritative_poseidon_root, byteorder="big")
+                )
+                ledger_payload["poseidon_root"] = poseidon_root_decimal
+
                 # New format: dual-root commitment atomically binds BLAKE3 and Poseidon roots
-                entry_hash = create_dual_root_commitment(root_hash, poseidon_root)
+                entry_hash = create_dual_root_commitment(root_hash, authoritative_poseidon_root)
+                verified_b3_root, verified_poseidon_root = parse_dual_root_commitment(entry_hash)
+                if (
+                    verified_b3_root != root_hash
+                    or verified_poseidon_root != authoritative_poseidon_root
+                ):
+                    raise RuntimeError("Ledger dual-root commitment verification failed")
             else:
                 # Legacy format: hash of canonical JSON payload
                 canonical_json = canonical_json_encode(ledger_payload)
@@ -1062,7 +1304,8 @@ class StorageLayer:
             # Insert ledger entry
             cur.execute(
                 """
-                    INSERT INTO ledger_entries (shard_id, seq, entry_hash, prev_entry_hash, payload, ts)
+                    INSERT INTO ledger_entries
+                        (shard_id, seq, entry_hash, prev_entry_hash, payload, ts)
                     VALUES (%s, %s, %s, %s, %s, %s)
                     """,
                 (
@@ -1074,6 +1317,45 @@ class StorageLayer:
                     ts,
                 ),
             )
+
+            # Re-verify persisted ledger entry hash from stored payload.
+            cur.execute(
+                """
+                    SELECT entry_hash, payload
+                    FROM ledger_entries
+                    WHERE shard_id = %s AND seq = %s
+                    LIMIT 1
+                """,
+                (shard_id, ledger_seq),
+            )
+            persisted_entry_row = cur.fetchone()
+            if persisted_entry_row is None:
+                raise RuntimeError("Failed to load persisted ledger entry for verification")
+
+            persisted_entry_hash = bytes(persisted_entry_row["entry_hash"])
+            persisted_payload = persisted_entry_row["payload"]
+            if isinstance(persisted_payload, str):
+                persisted_payload = json.loads(persisted_payload)
+
+            if poseidon_root is not None:
+                parsed_b3_root, parsed_poseidon_root = parse_dual_root_commitment(
+                    persisted_entry_hash
+                )
+                if parsed_b3_root != root_hash:
+                    raise RuntimeError("Persisted dual-root commitment BLAKE3 root mismatch")
+                if poseidon_root_decimal is None:
+                    raise RuntimeError("Persisted dual-root commitment missing poseidon root")
+                if int.from_bytes(parsed_poseidon_root, byteorder="big") != int(
+                    poseidon_root_decimal
+                ):
+                    raise RuntimeError("Persisted dual-root commitment Poseidon root mismatch")
+            else:
+                persisted_canonical = canonical_json_encode(persisted_payload)
+                expected_persisted_hash = blake3_hash(
+                    [LEDGER_PREFIX, persisted_canonical.encode("utf-8")]
+                )
+                if persisted_entry_hash != expected_persisted_hash:
+                    raise RuntimeError("Persisted ledger entry hash verification failed")
 
             # Create LedgerEntry object
             ledger_entry = LedgerEntry(
@@ -1112,7 +1394,8 @@ class StorageLayer:
         Returns:
             Existence proof if record exists, None otherwise
         """
-        key = record_key(record_type, record_id, version)
+        rec_key = record_key(record_type, record_id, version)
+        key = global_key(shard_id, rec_key)
 
         # READ-ONLY: No commit needed, transaction auto-rolls back
         with self._get_connection() as conn, conn.cursor(row_factory=dict_row) as cur:
@@ -1120,18 +1403,26 @@ class StorageLayer:
             cur.execute(
                 """
                     SELECT value_hash FROM smt_leaves
-                    WHERE shard_id = %s AND key = %s AND version = %s
+                    WHERE key = %s AND version = %s
                     """,
-                (shard_id, key, version),
+                (key, version),
             )
             row = cur.fetchone()
 
             if row is None:
                 return None
 
-            # Load tree and generate proof
-            tree = self._load_tree_state(cur, shard_id)
-            return tree.prove_existence(key)
+            # ADR-0001 §2: fetch proof path from smt_nodes (O(256)) instead
+            # of rebuilding the full tree from leaves (O(N)).
+            value_hash_bytes = bytes(row["value_hash"])
+            siblings = self._get_proof_path(cur, key)
+            root_hash = self.get_current_root(shard_id)
+            return ExistenceProof(
+                key=key,
+                value_hash=value_hash_bytes,
+                siblings=siblings,
+                root_hash=root_hash,
+            )
 
     def get_nonexistence_proof(
         self, shard_id: str, record_type: str, record_id: str, version: int
@@ -1154,7 +1445,8 @@ class StorageLayer:
         Raises:
             ValueError: If record exists
         """
-        key = record_key(record_type, record_id, version)
+        rec_key = record_key(record_type, record_id, version)
+        key = global_key(shard_id, rec_key)
 
         # READ-ONLY: No commit needed, transaction auto-rolls back
         with self._get_connection() as conn, conn.cursor(row_factory=dict_row) as cur:
@@ -1162,16 +1454,22 @@ class StorageLayer:
             cur.execute(
                 """
                     SELECT 1 FROM smt_leaves
-                    WHERE shard_id = %s AND key = %s AND version = %s
+                    WHERE key = %s AND version = %s
                     """,
-                (shard_id, key, version),
+                (key, version),
             )
             if cur.fetchone() is not None:
                 raise ValueError("Record exists, cannot generate non-existence proof")
 
-            # Load tree and generate proof
-            tree = self._load_tree_state(cur, shard_id)
-            return tree.prove_nonexistence(key)
+            # ADR-0001 §2: fetch proof path from smt_nodes (O(256)) instead
+            # of rebuilding the full tree from leaves (O(N)).
+            siblings = self._get_proof_path(cur, key)
+            root_hash = self.get_current_root(shard_id)
+            return NonExistenceProof(
+                key=key,
+                siblings=siblings,
+                root_hash=root_hash,
+            )
 
     def store_ingestion_batch(self, batch_id: str, records: list[dict[str, Any]]) -> None:
         """
@@ -1342,7 +1640,8 @@ class StorageLayer:
             else:
                 # Unexpected type - raise error for clarity
                 raise TypeError(
-                    f"Unexpected timestamp type: {type(ts_value).__name__}. Expected str or datetime."
+                    f"Unexpected timestamp type: {type(ts_value).__name__}. "
+                    "Expected str or datetime."
                 )
 
             header = {
@@ -1366,15 +1665,12 @@ class StorageLayer:
             if header["header_hash"] != expected_hash:
                 raise ValueError(f"Invalid shard header hash for shard '{shard_id}'")
 
-            sig_bytes = bytes(row["sig"])
-            verify_key = nacl.signing.VerifyKey(bytes(row["pubkey"]))
-            try:
-                verify_key.verify(bytes.fromhex(header["header_hash"]), sig_bytes)
-            except nacl.exceptions.BadSignatureError as e:
-                raise ValueError(f"Invalid shard header signature for shard '{shard_id}'") from e
-
-            # Guard against SMT divergence by recomputing the current root.
-            self._assert_root_matches_state(cur, shard_id, bytes(row["root"]))
+            # Guard against SMT divergence.
+            # Always use the historical leaf replay path to verify the
+            # header root.  The O(1) smt_nodes shortcut (as_of_ts=None)
+            # cannot detect forged leaves that were inserted directly into
+            # smt_leaves without going through _persist_tree_nodes.
+            self._assert_root_matches_state(cur, shard_id, bytes(row["root"]), as_of_ts=row["ts"])
 
             return {
                 "header": header,
@@ -1397,7 +1693,8 @@ class StorageLayer:
         with self._get_connection() as conn, conn.cursor(row_factory=dict_row) as cur:
             cur.execute(
                 """
-                    SELECT seq, root, tree_size, header_hash, previous_header_hash, ts
+                    SELECT seq, root, tree_size, header_hash, previous_header_hash, ts,
+                           sig, pubkey
                     FROM shard_headers
                     WHERE shard_id = %s
                     ORDER BY seq DESC
@@ -1415,7 +1712,8 @@ class StorageLayer:
                     timestamp_str = ts_value.isoformat().replace("+00:00", "Z")
                 else:
                     raise TypeError(
-                        f"Unexpected timestamp type: {type(ts_value).__name__}. Expected str or datetime."
+                        f"Unexpected timestamp type: {type(ts_value).__name__}. "
+                        "Expected str or datetime."
                     )
 
                 history.append(
@@ -1432,6 +1730,8 @@ class StorageLayer:
                             else bytes(row["previous_header_hash"]).hex()
                         ),
                         "timestamp": timestamp_str,
+                        "signature": bytes(row["sig"]).hex(),
+                        "pubkey": bytes(row["pubkey"]).hex(),
                     }
                 )
 
@@ -1485,8 +1785,8 @@ class StorageLayer:
                 return journal_diff
 
             # Slow path: reconstruct full trees
-            from_tree = self._load_tree_state(cur, shard_id, up_to_ts=from_header["ts"])
-            to_tree = self._load_tree_state(cur, shard_id, up_to_ts=to_header["ts"])
+            from_tree = self._load_tree_state(cur, up_to_ts=from_header["ts"])
+            to_tree = self._load_tree_state(cur, up_to_ts=to_header["ts"])
             diff = diff_sparse_merkle_trees(
                 from_tree, to_tree, key_range_start=key_range_start, key_range_end=key_range_end
             )
@@ -1641,100 +1941,37 @@ class StorageLayer:
             rows = cur.fetchall()
             return [row["shard_id"] for row in rows]
 
-    def verify_state_replay(self, shard_id: str) -> bool:
+    def verify_state_replay(
+        self,
+        shard_id: str,
+        max_headers: int | None = None,
+        after_seq: int = -1,
+    ) -> dict[str, Any]:
         """
-        Replay shard state from genesis and verify roots against headers and ledger.
+        Replay global SMT state at each shard header timestamp and verify roots against headers
+        and ledger.
 
-        Returns True when:
-          * Every persisted shard header root matches the recomputed SMT root, and
-          * Every ledger entry payload shard_root matches the same recomputed root.
+        ADR-0001 §4: delegates to :meth:`replay_tree_incremental` which uses
+        O(N) streaming delta replay instead of the former O(N²) full-load
+        per header.
+
+        Returns a dict with ``verified``, ``headers_checked``, and
+        ``next_seq`` (``None`` when complete) to support RFC 6962 §4.6
+        cursor-based pagination.
 
         Args:
             shard_id: Shard identifier to replay.
+            max_headers: Maximum headers to verify in this call (optional).
+            after_seq: Resume after this sequence number (default 0).
 
         Raises:
             ValueError: If counts diverge or any root mismatch is detected.
         """
-        with self._get_connection() as conn, conn.cursor(row_factory=dict_row) as cur:
-            cur.execute(
-                """
-                SELECT key, value_hash
-                FROM smt_leaves
-                WHERE shard_id = %s
-                ORDER BY ts ASC, key ASC
-                """,
-                (shard_id,),
-            )
-            leaves = cur.fetchall()
-
-            cur.execute(
-                """
-                SELECT seq, root
-                FROM shard_headers
-                WHERE shard_id = %s
-                ORDER BY seq ASC
-                """,
-                (shard_id,),
-            )
-            headers = cur.fetchall()
-
-            cur.execute(
-                """
-                SELECT seq, payload
-                FROM ledger_entries
-                WHERE shard_id = %s
-                ORDER BY seq ASC
-                """,
-                (shard_id,),
-            )
-            ledger_rows = cur.fetchall()
-
-            if len(headers) != len(leaves):
-                raise ValueError(
-                    f"Replay mismatch for shard '{shard_id}': {len(headers)} headers vs "
-                    f"{len(leaves)} leaves"
-                )
-
-            if len(ledger_rows) != len(headers):
-                raise ValueError(
-                    f"Replay mismatch for shard '{shard_id}': {len(ledger_rows)} ledger entries "
-                    f"vs {len(headers)} headers"
-                )
-
-            tree = SparseMerkleTree()
-
-            for idx, leaf_row in enumerate(leaves):
-                key = bytes(self._row_get(leaf_row, "key", 0))
-                value_hash = bytes(self._row_get(leaf_row, "value_hash", 1))
-                tree.update(key, value_hash)
-                computed_root = tree.get_root()
-
-                header_row = headers[idx]
-                header_seq = int(self._row_get(header_row, "seq", 0))
-                expected_header_root = bytes(self._row_get(header_row, "root", 1))
-                if computed_root != expected_header_root:
-                    raise ValueError(
-                        f"Shard '{shard_id}' root mismatch at header seq {header_seq}: "
-                        f"expected {expected_header_root.hex()}, computed {computed_root.hex()}"
-                    )
-
-                ledger_row = ledger_rows[idx]
-                ledger_seq = int(self._row_get(ledger_row, "seq", 0))
-                payload = self._row_get(ledger_row, "payload", 1)
-                if isinstance(payload, str):
-                    payload = json.loads(payload)
-                shard_root_hex = payload.get("shard_root")
-                if shard_root_hex is None:
-                    raise ValueError(
-                        f"Ledger entry missing shard_root for shard '{shard_id}' at seq {ledger_seq}"
-                    )
-                if computed_root.hex() != shard_root_hex:
-                    raise ValueError(
-                        f"Shard '{shard_id}' ledger root mismatch at seq {ledger_seq}: "
-                        f"expected {shard_root_hex}, computed {computed_root.hex()}"
-                    )
-
-            return True
+        return self.replay_tree_incremental(
+            shard_id,
+            max_headers=max_headers,
+            after_seq=after_seq,
+        )
 
     def store_timestamp_token(
         self,
@@ -1795,7 +2032,8 @@ class StorageLayer:
             cur.execute(
                 """
                 INSERT INTO timestamp_tokens
-                    (shard_id, header_hash, tsa_url, tst, imprint_hash, gen_time, tsa_cert_fingerprint)
+                    (shard_id, header_hash, tsa_url, tst,
+                     imprint_hash, gen_time, tsa_cert_fingerprint)
                 VALUES (%s, %s, %s, %s, %s, %s, %s)
                 ON CONFLICT (shard_id, header_hash, tsa_url) DO NOTHING
                 """,
@@ -1904,9 +2142,15 @@ class StorageLayer:
 
             persisted_root = bytes(row["root"])
 
-            # Recompute root from leaves
-            tree = self._load_tree_state(cur, shard_id)
-            computed_root = tree.get_root()
+            # ADR-0001 §1: read root from smt_nodes directly (O(1)) instead
+            # of rebuilding from all leaves (O(N)).  The root node lives at
+            # (level=0, index=b'').
+            cur.execute("SELECT hash FROM smt_nodes WHERE level = 0 AND index = ''::bytea")
+            node_row = cur.fetchone()
+            if node_row is not None:
+                computed_root = bytes(node_row["hash"])
+            else:
+                computed_root = EMPTY_HASHES[256]
 
             return persisted_root == computed_root
 
@@ -1942,10 +2186,7 @@ class StorageLayer:
             header_seq = row["seq"]
             root_hash = bytes(row["root"])
 
-            cur.execute(
-                "SELECT COUNT(*) AS cnt FROM smt_leaves WHERE shard_id = %s",
-                (shard_id,),
-            )
+            cur.execute("SELECT COUNT(*) AS cnt FROM smt_leaves")
             count_row = cur.fetchone()
             leaf_count = int(count_row["cnt"]) if count_row else 0
 
@@ -2013,24 +2254,35 @@ class StorageLayer:
 
     def get_leaf_count(self, shard_id: str, *, up_to_ts: str | datetime | None = None) -> int:
         """
-        Return the number of SMT leaves for a shard.
+        Return the number of leaves in the global SMT.
 
         Args:
-            shard_id: Shard identifier.
+            shard_id: Deprecated shard identifier retained for API compatibility.
+                This parameter is ignored because counts are computed over the
+                global SMT. Existing callers may continue passing it unchanged
+                during the deprecation period because the public signature is
+                still shard-oriented, but the value does not affect the result.
             up_to_ts: Optional ISO 8601 timestamp (or datetime) to bound the count.
 
         Returns:
-            Count of leaves for the shard, optionally filtered by timestamp.
+            Count of global SMT leaves, optionally filtered by timestamp.
         """
-        query = "SELECT COUNT(*) AS cnt FROM smt_leaves WHERE shard_id = %s"
-        params: list[object] = [shard_id]
+        if shard_id is not None:
+            warnings.warn(
+                "get_leaf_count() shard_id parameter is deprecated and ignored. "
+                "The global SMT count is returned regardless of shard.",
+                DeprecationWarning,
+                stacklevel=2,
+            )
+        query = "SELECT COUNT(*) AS cnt FROM smt_leaves"
+        params: list[object] = []
         if up_to_ts is not None:
             ts_val = (
                 up_to_ts
                 if isinstance(up_to_ts, datetime)
                 else datetime.fromisoformat(str(up_to_ts).replace("Z", "+00:00"))
             )
-            query += " AND ts <= %s"
+            query += " WHERE ts <= %s"
             params.append(ts_val)
 
         with self._get_connection() as conn, conn.cursor(row_factory=dict_row) as cur:
@@ -2061,20 +2313,47 @@ class StorageLayer:
         cur: psycopg.Cursor[Any],
         shard_id: str,
         expected_root: bytes,
+        as_of_ts: datetime | str | None = None,
     ) -> None:
         """
-        Recompute the current shard root and ensure it matches ``expected_root``.
+        Recompute the global SMT root as of *as_of_ts* and ensure it matches
+        ``expected_root``.
+
+        Because the CD-HS-ST is a single global tree, the root changes every
+        time *any* shard appends a record.  Comparing against the current root
+        would fail as soon as a second shard writes after the header was
+        created.  Passing the header's own timestamp reconstructs the tree
+        state at that point in time.
+
+        ADR-0001: When *as_of_ts* is ``None`` the root is read directly from
+        ``smt_nodes`` (O(1)) instead of replaying all leaves.  Historical
+        snapshots still require a leaf replay.
 
         Args:
             cur: Active database cursor (read-only).
-            shard_id: Shard identifier.
+            shard_id: Shard identifier (used only in error messages).
             expected_root: Root hash from persisted header.
+            as_of_ts: Optional timestamp cutoff forwarded to
+                :meth:`_load_tree_state`.  When *None* the current root node
+                is read directly.
 
         Raises:
             ValueError: When the recomputed root diverges from ``expected_root``.
         """
-        tree = self._load_tree_state(cur, shard_id)
-        computed_root = tree.get_root()
+        if as_of_ts is None:
+            # Fast path: read root directly from smt_nodes (O(1)).
+            cur.execute("SELECT hash FROM smt_nodes WHERE level = 0 AND index = ''::bytea")
+            node_row = cur.fetchone()
+            computed_root = (
+                bytes(node_row["hash"] if isinstance(node_row, Mapping) else node_row[0])
+                if node_row is not None
+                else EMPTY_HASHES[256]
+            )
+        else:
+            # Historical snapshot — must replay from leaves.
+            tree = self._load_tree_state(cur, up_to_ts=as_of_ts)
+            computed_root = tree.get_root()
+
         if computed_root != expected_root:
             raise ValueError(
                 f"Computed root {computed_root.hex()} does not match persisted root "
@@ -2084,62 +2363,394 @@ class StorageLayer:
     def _load_tree_state(
         self,
         cur: psycopg.Cursor[Any],
-        shard_id: str,
         up_to_ts: datetime | str | None = None,
     ) -> SparseMerkleTree:
         """
-        Load sparse Merkle tree state from database.
+        Load the global sparse Merkle tree state from database.
+
+        .. deprecated::
+            ADR-0001 deprecates this method.  Use purpose-specific helpers:
+            - :meth:`_get_proof_path` for proof generation (O(256) nodes).
+            - :meth:`get_current_root` for root retrieval (O(1) header read).
+            - :meth:`replay_tree_incremental` for streaming audit replay.
+
+            Remaining callers that *must* reconstruct the full tree (e.g.
+            ``set_record_request``, historical ``_assert_root_matches_state``)
+            still use this method until the Rust CD-HS-ST service handles
+            writes natively (Phase 1).
+
+        CD-HS-ST Design:
+        ---------------
+        Loads ALL leaves from the single global SMT.
 
         Read-only helper. Must be called within an existing transaction.
         No writes, no commit.
 
         Args:
             cur: Database cursor
-            shard_id: Shard identifier
             up_to_ts: Optional inclusive timestamp cutoff for historical snapshots
 
         Returns:
-            SparseMerkleTree with all leaves loaded
+            SparseMerkleTree with all leaves loaded (global SMT)
         """
         tree = SparseMerkleTree()
+        # Reuse flush batch size as a conservative pagination window to avoid
+        # loading unbounded historical replay rows into memory.
+        batch_size = self.DEFAULT_FLUSH_BATCH_SIZE
+        offset = 0
 
-        # Load all leaves for this shard
+        # CD-HS-ST: Load ALL leaves from the global SMT (no shard_id filter)
         # Secondary ordering by key makes replay deterministic when multiple inserts share
         # the same timestamp, while preserving the primary append order on ts. Without
         # this stable tie-break, historical reconstruction could yield different roots
         # for the same cutoff timestamp and break offline verification.
-        if up_to_ts is None:
-            cur.execute(
-                """
-                SELECT key, value_hash FROM smt_leaves
-                WHERE shard_id = %s
-                ORDER BY ts ASC, key ASC
-                """,
-                (shard_id,),
-            )
-        else:
+        if up_to_ts is not None:
             cutoff = up_to_ts
             if isinstance(cutoff, str):
                 cutoff = datetime.fromisoformat(cutoff.replace("Z", "+00:00"))
-            cur.execute(
-                """
-                SELECT key, value_hash FROM smt_leaves
-                WHERE shard_id = %s AND ts <= %s
-                ORDER BY ts ASC, key ASC
-                """,
-                (shard_id, cutoff),
-            )
-        rows = cur.fetchall()
+            if cutoff.tzinfo is None:
+                cutoff = cutoff.replace(tzinfo=timezone.utc)
 
-        # Rebuild tree by updating each leaf
-        for row in rows:
-            # Support both dict and tuple rows for robustness
-            # SELECT key, value_hash => indices 0, 1
-            key = bytes(self._row_get(row, "key", 0))
-            value_hash = bytes(self._row_get(row, "value_hash", 1))
-            tree.update(key, value_hash)
+        while True:
+            if up_to_ts is None:
+                cur.execute(
+                    """
+                    SELECT key, value_hash FROM smt_leaves
+                    ORDER BY ts ASC, key ASC
+                    LIMIT %s OFFSET %s
+                    """,
+                    (batch_size, offset),
+                )
+            else:
+                cur.execute(
+                    """
+                    SELECT key, value_hash FROM smt_leaves
+                    WHERE ts <= %s
+                    ORDER BY ts ASC, key ASC
+                    LIMIT %s OFFSET %s
+                    """,
+                    (cutoff, batch_size, offset),
+                )
+
+            rows = cur.fetchall()
+            if not rows:
+                break
+
+            # Rebuild tree by updating each leaf
+            for row in rows:
+                # Support both dict and tuple rows for robustness
+                # SELECT key, value_hash => indices 0, 1
+                key = bytes(self._row_get(row, "key", 0))
+                value_hash = bytes(self._row_get(row, "value_hash", 1))
+                tree.update(key, value_hash)
+
+            offset += len(rows)
 
         return tree
+
+    # ------------------------------------------------------------------
+    # ADR-0001: Incremental / paginated tree reconstruction helpers
+    # ------------------------------------------------------------------
+
+    def _get_proof_path(
+        self,
+        cur: psycopg.Cursor[Any],
+        key: bytes,
+    ) -> list[bytes]:
+        """
+        Fetch the 256 sibling hashes needed for an inclusion/non-inclusion
+        proof directly from ``smt_nodes``, without loading the full tree.
+
+        ADR-0001 §2 — O(256) node fetches instead of O(N) leaf replay.
+
+        Args:
+            cur: Active database cursor.
+            key: 32-byte SMT leaf key.
+
+        Returns:
+            List of 256 sibling hashes ordered from leaf level to root.
+        """
+        path = tuple(_key_to_path_bits(key))
+
+        # Build the 256 (db_level, db_index) pairs for each sibling.
+        db_levels: list[int] = []
+        db_indices: list[bytes] = []
+        for level in range(256):
+            bit_pos = 255 - level
+            sub_path = path[: bit_pos + 1]
+            sibling_path = sub_path[:-1] + (1 - sub_path[-1],)
+            db_levels.append(len(sibling_path))
+            db_indices.append(self._encode_path(sibling_path))
+
+        # Single round-trip: UNNEST + LEFT JOIN returns rows in ordinal order.
+        cur.execute(
+            """
+            SELECT n.hash
+            FROM UNNEST(
+                %s::SMALLINT[],
+                %s::BYTEA[],
+                %s::INT[]
+            ) AS t(level, index, ord)
+            LEFT JOIN smt_nodes n
+                   ON n.level = t.level AND n.index = t.index
+            ORDER BY t.ord
+            """,
+            (db_levels, db_indices, list(range(256))),
+        )
+        rows = cur.fetchall()
+
+        siblings: list[bytes] = []
+        for i, row in enumerate(rows):
+            raw = row[0] if not isinstance(row, Mapping) else row.get("hash")
+            if raw is not None:
+                siblings.append(bytes(raw))
+            else:
+                siblings.append(EMPTY_HASHES[i])
+        return siblings
+
+    def get_current_root(self, shard_id: str) -> bytes:
+        """
+        Read the current SMT root from the latest shard header.
+
+        ADR-0001 §3 — avoids recomputing the root from leaves.
+
+        Args:
+            shard_id: Shard identifier.
+
+        Returns:
+            32-byte root hash.  Returns the empty-tree sentinel when no
+            headers exist for *shard_id*.
+        """
+        with self._get_connection() as conn, conn.cursor(row_factory=dict_row) as cur:
+            cur.execute(
+                """
+                SELECT root FROM shard_headers
+                WHERE shard_id = %s
+                ORDER BY seq DESC
+                LIMIT 1
+                """,
+                (shard_id,),
+            )
+            row = cur.fetchone()
+            if row is None:
+                return EMPTY_HASHES[256]
+            return bytes(row["root"])
+
+    def replay_tree_incremental(
+        self,
+        shard_id: str,
+        batch_size: int = 10_000,
+        max_headers: int | None = None,
+        after_seq: int = -1,
+    ) -> dict[str, Any]:
+        """
+        Verify shard integrity by streaming leaves in batches and replaying
+        root computation incrementally across headers.
+
+        ADR-0001 §4 — O(N) total work instead of O(N²).
+
+        Each header's root is verified by replaying **only the delta** of
+        leaves inserted since the previous header's timestamp.  The
+        in-memory tree is carried forward between checkpoints rather than
+        being rebuilt from scratch each time.
+
+        When *max_headers* is set the method stops after that many headers
+        and returns a cursor (``next_seq``) so callers can page through the
+        full history — RFC 6962 §4.6 cursor model.
+
+        Args:
+            shard_id: Shard identifier to replay.
+            batch_size: Number of leaves to fetch per DB round-trip.
+            max_headers: Maximum number of headers to verify in this call.
+                When ``None`` (default) the full history is verified.
+            after_seq: Resume verification after this sequence number.
+                Headers with ``seq <= after_seq`` are skipped.
+                Default is ``-1``: since shard-header sequence numbers start at
+                0, ``seq > -1`` (i.e. ``seq >= 0``) includes every header on
+                a fresh replay.  Pass the last verified seq to resume paging.
+
+        Returns:
+            A dict with keys:
+            - ``verified`` (bool): ``True`` when all checked headers match.
+            - ``headers_checked`` (int): Number of headers verified.
+            - ``next_seq`` (int | None): Next unverified sequence number,
+              or ``None`` when verification is complete.
+
+        Raises:
+            ValueError: On any root mismatch or count divergence.
+        """
+        with self._get_connection() as conn, conn.cursor(row_factory=dict_row) as cur:
+            # Fetch headers in sequence order, applying cursor filter.
+            cur.execute(
+                """
+                SELECT seq, root, ts
+                FROM shard_headers
+                WHERE shard_id = %s AND seq > %s
+                ORDER BY seq ASC
+                """,
+                (shard_id, after_seq),
+            )
+            headers = cur.fetchall()
+
+            # Fetch matching ledger entries (same cursor filter).
+            cur.execute(
+                """
+                SELECT seq, payload
+                FROM ledger_entries
+                WHERE shard_id = %s AND seq > %s
+                ORDER BY seq ASC
+                """,
+                (shard_id, after_seq),
+            )
+            ledger_rows = cur.fetchall()
+
+            if len(ledger_rows) != len(headers):
+                raise ValueError(
+                    f"Replay mismatch for shard '{shard_id}': {len(ledger_rows)} ledger "
+                    f"entries vs {len(headers)} headers (after_seq={after_seq})"
+                )
+
+            # Determine how many headers to process in this call.
+            if max_headers is not None:
+                headers_to_check = headers[:max_headers]
+                ledger_rows = ledger_rows[:max_headers]
+            else:
+                headers_to_check = headers
+
+            # If resuming, load tree state up to prev header's timestamp.
+            tree = SparseMerkleTree()
+            prev_ts: datetime | None = None
+
+            if after_seq >= 0:
+                # Load all leaves up to the timestamp of the header at after_seq
+                # so the tree carries forward correctly.
+                cur.execute(
+                    """
+                    SELECT ts FROM shard_headers
+                    WHERE shard_id = %s AND seq = %s
+                    """,
+                    (shard_id, after_seq),
+                )
+                prev_row = cur.fetchone()
+                if prev_row is not None:
+                    prev_ts = prev_row["ts"]
+                    if isinstance(prev_ts, str):
+                        prev_ts = datetime.fromisoformat(prev_ts.replace("Z", "+00:00"))
+                    if prev_ts.tzinfo is None:
+                        prev_ts = prev_ts.replace(tzinfo=timezone.utc)
+                    # Replay all leaves up to prev_ts to restore tree state.
+                    offset = 0
+                    while True:
+                        cur.execute(
+                            sql.SQL("""
+                            SELECT key, value_hash FROM smt_leaves
+                            WHERE ts <= %s
+                            ORDER BY ts ASC, key ASC
+                            LIMIT %s OFFSET %s
+                            """),
+                            (prev_ts, batch_size, offset),
+                        )
+                        rows = cur.fetchall()
+                        if not rows:
+                            break
+                        for row in rows:
+                            tree.update(bytes(row["key"]), bytes(row["value_hash"]))
+                        offset += len(rows)
+
+            # Incremental replay: carry the tree forward, replaying only
+            # leaves between successive header timestamps.
+            headers_checked = 0
+
+            for idx, header_row in enumerate(headers_to_check):
+                header_ts = header_row["ts"]
+                if isinstance(header_ts, str):
+                    header_ts = datetime.fromisoformat(header_ts.replace("Z", "+00:00"))
+                if header_ts.tzinfo is None:
+                    header_ts = header_ts.replace(tzinfo=timezone.utc)
+
+                # Stream the delta of leaves inserted in (prev_ts, header_ts].
+                if prev_ts is None:
+                    ts_clause = "WHERE ts <= %s"
+                    ts_params: tuple[Any, ...] = (header_ts,)
+                else:
+                    ts_clause = "WHERE ts > %s AND ts <= %s"
+                    ts_params = (prev_ts, header_ts)
+
+                # Paginated fetch for this delta window.
+                offset = 0
+                while True:
+                    cur.execute(
+                        sql.SQL("""
+                        SELECT key, value_hash FROM smt_leaves
+                        {}
+                        ORDER BY ts ASC, key ASC
+                        LIMIT %s OFFSET %s
+                        """).format(sql.SQL(ts_clause)),
+                        (*ts_params, batch_size, offset),
+                    )
+                    rows = cur.fetchall()
+                    if not rows:
+                        break
+                    for row in rows:
+                        tree.update(bytes(row["key"]), bytes(row["value_hash"]))
+                    offset += len(rows)
+
+                computed_root = tree.get_root()
+                header_seq = int(self._row_get(header_row, "seq", 0))
+                expected_header_root = bytes(self._row_get(header_row, "root", 1))
+
+                if computed_root != expected_header_root:
+                    raise ValueError(
+                        f"Shard '{shard_id}' root mismatch at header seq {header_seq}: "
+                        f"expected {expected_header_root.hex()}, computed {computed_root.hex()}"
+                    )
+
+                # Cross-check against ledger entry.
+                ledger_row = ledger_rows[idx]
+                ledger_seq = int(self._row_get(ledger_row, "seq", 0))
+                payload = self._row_get(ledger_row, "payload", 1)
+                if isinstance(payload, str):
+                    payload = json.loads(payload)
+                shard_root_hex = payload.get("shard_root")
+                if shard_root_hex is None:
+                    raise ValueError(
+                        f"Ledger entry missing shard_root for shard "
+                        f"'{shard_id}' at seq {ledger_seq}"
+                    )
+                if computed_root.hex() != shard_root_hex:
+                    raise ValueError(
+                        f"Shard '{shard_id}' ledger root mismatch at seq {ledger_seq}: "
+                        f"expected {shard_root_hex}, computed {computed_root.hex()}"
+                    )
+
+                prev_ts = header_ts
+                if prev_ts.tzinfo is None:
+                    prev_ts = prev_ts.replace(tzinfo=timezone.utc)
+                headers_checked += 1
+
+            # Determine whether there are more headers to verify.
+            remaining = len(headers) - len(headers_to_check)
+            if remaining > 0:
+                next_seq = int(self._row_get(headers_to_check[-1], "seq", 0))
+            else:
+                next_seq = None
+
+            # Final check: when verification is complete, the current tree
+            # must match the latest persisted root.
+            if next_seq is None and headers:
+                latest_header_root = bytes(self._row_get(headers[-1], "root", 1))
+                if tree.get_root() != latest_header_root:
+                    raise ValueError(
+                        f"Replay mismatch for shard '{shard_id}': latest persisted root "
+                        f"{latest_header_root.hex()} does not match current state "
+                        f"{tree.get_root().hex()}"
+                    )
+
+            return {
+                "verified": True,
+                "headers_checked": headers_checked,
+                "next_seq": next_seq,
+            }
 
     def _get_header_by_seq(
         self, cur: psycopg.Cursor[Any], shard_id: str, seq: int
@@ -2171,26 +2782,52 @@ class StorageLayer:
         """
         Persist tree nodes to database and populate the node cache.
 
-        Only inserts new nodes (append-only).
-        Node insertion failures are acceptable - they indicate the node already exists.
+        CD-HS-ST Design:
+        ---------------
+        This function persists nodes to the GLOBAL SMT.  The ``shard_id``
+        is used as a cache-key prefix so that node look-ups are correctly
+        namespaced; it is **not** written to the database INSERT.
+
+        ADR-0001: Uses ``ON CONFLICT DO UPDATE`` so that rehashed ancestor
+        nodes are kept current.  The ``smt_nodes_reject_update`` trigger
+        requires the session variable ``olympus.allow_node_rehash`` to be
+        set to the BLAKE3 domain-separated gate (``_NODE_REHASH_GATE``)
+        via ``SET LOCAL``, scoped to the enclosing transaction.
 
         Args:
             cur: Database cursor
-            shard_id: Shard identifier
+            shard_id: Shard prefix used for the in-memory node cache key
             tree: SparseMerkleTree to persist
         """
+        # Gate the trigger so the upsert is allowed.
+        # H-1 Fix: Use psycopg.sql.Literal to avoid f-string SQL pattern that could
+        # be cargo-culted into dynamic contexts.
+        cur.execute(
+            sql.SQL("SET LOCAL olympus.allow_node_rehash = {}").format(
+                sql.Literal(_NODE_REHASH_GATE)
+            )
+        )
+
         ts = datetime.now(timezone.utc)
         for row_batch in self._iter_batches(
             self._iter_tree_node_rows(shard_id, tree, ts),
             self.DEFAULT_FLUSH_BATCH_SIZE,
         ):
+            # CD-HS-ST: Insert into global SMT (no shard_id column)
+            # Extract just the fields we need (skip shard_id which is first field)
+            global_rows = [
+                (level, index, hash_val, ts_val)
+                for (_, level, index, hash_val, ts_val) in row_batch
+            ]
+
             cur.executemany(
                 """
-                INSERT INTO smt_nodes (shard_id, level, index, hash, ts)
-                VALUES (%s, %s, %s, %s, %s)
-                ON CONFLICT (shard_id, level, index) DO NOTHING
+                INSERT INTO smt_nodes (level, index, hash, ts)
+                VALUES (%s, %s, %s, %s)
+                ON CONFLICT (level, index)
+                DO UPDATE SET hash = EXCLUDED.hash, ts = EXCLUDED.ts
                 """,
-                row_batch,
+                global_rows,
             )
 
             for _, level, path_bytes, hash_value, _ in row_batch:

@@ -10,9 +10,162 @@ Olympus is a federated, append-only public ledger for government documents. It p
 
 1. **Append-Only Ledger**: All operations are additive; no modifications or deletions
 2. **Deterministic Canonicalization**: Semantically equivalent documents must produce identical hashes
-3. **Merkle Commitments**: Documents use Merkle trees for efficient cryptographic commitments
+3. **CD-HS-ST (Constant-Depth Hierarchical Sparse Tree)**: Single global 256-level Sparse Merkle Tree for all record commitments
 4. **Verifiable Proofs**: All operations must be independently verifiable
 5. **Distributed Replication (Guardian Replication)**: No trust in a single institution required (Phase 1+ only; not in v1.0)
+
+## Core Architecture: CD-HS-ST (DO NOT CHANGE)
+
+### 1. CD-HS-ST Structure
+
+The **Constant-Depth Hierarchical Sparse Tree (CD-HS-ST)** is the core cryptographic data structure:
+
+- A **single global 256-level Sparse Merkle Tree**
+- Keys encode both **shard identity** and **record identity**:
+  ```
+  key = H(GLOBAL_KEY_PREFIX || shard_id || record_key)
+  ```
+  where:
+  - `shard_id` identifies the logical shard (e.g., `watauga:2025:budget`)
+  - `record_key` identifies the specific record (type/id/version/etc.)
+  - `H` is BLAKE3 with domain separation
+- Values are hashes of **canonicalized record content**
+- Tree depth is **constant** (256) and **sparse** (only non-default nodes stored)
+
+**CRITICAL:** Copilot MUST:
+- Preserve this model
+- NOT reintroduce a separate "shard tree" plus "forest tree"
+- Assume **one global SMT**, logically sharded by keyspace, not multiple physical trees
+- NOT create separate `smt_nodes` vs `forest_nodes` tables
+- NOT implement per-shard SMTs with a separate forest aggregator
+
+### 2. Rust: CD-HS-ST + Crypto Hot Path (Service)
+
+Rust maintains and extends the cryptographic core:
+
+**Responsibilities:**
+- Canonicalization (canonical JSON, NFC normalization, deterministic key order)
+- BLAKE3 hashing with clear domain separation
+- CD-HS-ST operations:
+  - `insert/update(global_key, leaf_value) -> (delta, new_root)`
+  - `prove_inclusion(global_key, root) -> proof`
+  - `verify_inclusion(global_key, leaf_value, proof, root) -> bool`
+  - Non-inclusion proofs
+- Ed25519 signing of roots/checkpoints
+- Optional Poseidon support for witness generation (but CD-HS-ST stays BLAKE3-based)
+
+**Adaptation Rule:**
+Existing Rust SMT code must be **adapted to the CD-HS-ST model** (single global tree, composite key). It must **not** be re-introduced or extended as per-shard trees plus a forest tree. If existing Rust code assumes separate shard trees, refactor it to use the composite `H(GLOBAL_KEY_PREFIX || shard_id || record_key)` key scheme instead.
+
+**Form Factor:**
+- Implement the Rust core as a **standalone binary** exposing a small, stable API over a local socket using **protobuf as the wire format**
+- Do **not** use JSON for the Rust↔Go boundary; protobuf is canonical to avoid double-serialization when Go serves gRPC externally
+- Do **not** add new FFI from Python↔Rust or Go↔Rust; treat Rust as a separate service
+
+### 3. Go: Log / Sequencer Around CD-HS-ST
+
+Go builds a "Trillian-shaped" log service that **uses CD-HS-ST in Rust**:
+
+**Public API (HTTP/gRPC):**
+- `QueueLeaf` (append a record for a given `shard_id`)
+- `GetLatestRoot`
+- `GetInclusionProof`
+- `GetConsistencyProof` (if/when supported)
+
+**Sequencer:**
+- Batches and orders appends
+- Calls the Rust CD-HS-ST service (over local socket, protobuf) to:
+  - Canonicalize records
+  - Compute `global_key` from `(shard_id, record_id, …)`
+  - Update the global SMT
+  - Sign new roots
+- Persists SMT node deltas and `new_root` to storage (Postgres or current DB)
+
+**Constraints:**
+- Use the **same protobuf definitions** as the Rust service; do not introduce a separate JSON shim
+- **Go must never compute Merkle hashes itself.** All SMT operations—leaf hashing, node updates, root computation, proof generation—are delegated to the Rust service
+- Go is a **client** of the Rust service, not a co-implementor of the tree
+- Treat the SMT as **one global tree** (CD-HS-ST), not per-shard plus forest
+- Do **not** reintroduce separate `smt_nodes` vs `forest_nodes` tables that try to track two trees
+- If sharding metadata is needed, keep it in separate tables (e.g., `shard_meta`), not as separate Merkle trees
+
+### 4. Python: API, Policy, and Orchestration
+
+Python (FastAPI and jobs) handles high-level concerns:
+
+**Responsibilities:**
+- API endpoints for clients (FOIA, datasets, operators)
+- Metadata and policy logic:
+  - What is a shard?
+  - Retention and redaction rules
+- Orchestration:
+  - Call Go log service for append/proof queries
+  - Call Rust service for ZK witness generation
+
+**Constraints:**
+- Python must **not** implement SMT logic
+- Python must **not** re-define canonicalization logic; it should treat Rust as the canonical source
+- Python should talk to Go/Rust over HTTP/gRPC or sockets, not via FFI
+- Existing Python SMT code in `protocol/ssmf.py` is reference implementation only; operational logic migrates to Rust service
+
+### 5. Poseidon / Redaction Circuits
+
+For ZK / redaction:
+
+- CD-HS-ST remains **BLAKE3** in the operational layer
+- Poseidon trees and circuits are a **separate layer**:
+  - Rust can expose functions/endpoints to:
+    - Derive Poseidon leaves from canonicalized records
+    - Build Poseidon Merkle paths and roots for a redaction circuit
+  - Ledger/log entries can store both:
+    - `root_b3` (CD-HS-ST root)
+    - `root_poseidon` (redaction tree root)
+    - or a dual-root commitment
+
+**Constraints:**
+- Keep Poseidon concerns **logically separate** from the CD-HS-ST implementation
+- Do not try to change the CD-HS-ST structure to "be Poseidon-native"
+
+### 6. Non-Goals / Guardrails
+
+Copilot MUST NOT:
+- Reintroduce the old "two separate SMTs" pattern (per-shard SMT + forest SMT) that led to TOCTOU and consistency issues
+- Move canonicalization back into Python or Go
+- Add new in-process FFI layers between Python↔Rust or Go↔Rust
+- Introduce JSON as the wire format between Go and Rust (use protobuf)
+- Attempt backward-compatibility migrations for legacy Python SMT/ledger state (OK to ignore old data)
+
+Copilot SHOULD:
+- Generate or refactor code so that:
+  - There is a clear Rust service owning the CD-HS-ST
+  - Go's log/transport layer talks to Rust as a client over protobuf
+  - Python uses Go/Rust as external services, never as libraries
+
+### 7. Phasing and Scope
+
+This architecture describes the **target state**. Not all of it needs to be built before the system is public. Respect the following phasing:
+
+**Phase 0 — Pre-public blockers (do not defer, do not refactor around):**
+- Groth16 trusted setup ceremony (external dependency, not code)
+- Decomposition of `federation.py` (~2,000 lines / 73 functions) into focused modules
+- E2E CI integration test against a real Postgres database
+
+These three items are the only hard blockers for going public. Copilot should not generate refactor work that blocks or replaces them.
+
+**Phase 1 — Greenfield (new code only, no migration):**
+- Go sequencer and witness transport layer (new, not a rewrite of existing Python)
+- Rust standalone binary with protobuf socket API (extend existing Rust core, no Python SMT migration)
+- `.proto` definitions shared between Go and Rust
+
+**Phase 2 — Post-public migration (deferred):**
+- Moving existing Python SMT/ledger logic out of FastAPI handlers and into Go/Rust services
+- Replacing any remaining Python canonicalization calls with Rust service calls
+- Halo2 backend (currently gated behind `OLYMPUS_HALO2_ENABLED`; keep it gated until circuits are stable)
+
+**Current State (Phase 0):**
+- Python reference implementation in `protocol/ssmf.py` remains valid for tests and protocol documentation
+- New Rust/Go code should be built as greenfield services, not migrations of existing Python code
+- Existing Python API and FastAPI endpoints continue to operate during Phase 1 development
 
 ## Pipeline Stages
 

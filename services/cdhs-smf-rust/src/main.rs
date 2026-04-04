@@ -1,0 +1,261 @@
+//! CD-HS-ST Service
+//!
+//! Constant-Depth Hierarchical Sparse Tree service.
+//!
+//! This is a standalone Rust binary that maintains a single global 256-level
+//! Sparse Merkle Tree with composite keys encoding both shard identity and
+//! record identity.
+//!
+//! Architecture:
+//! - Single global SMT (not per-shard trees)
+//! - Composite keys: H(GLOBAL_KEY_PREFIX || shard_id || record_key)
+//! - BLAKE3 hashing with domain separation
+//! - Ed25519 signing for root commitments
+//! - Protobuf API over Unix domain socket
+
+mod canonicalization;
+mod crypto;
+mod proto;
+mod smt;
+
+use tonic::{transport::Server, Request, Response, Status};
+use tracing::{info, error};
+
+pub use proto::olympus::cdhs_smf::v1::cdhs_smf_service_server::{
+    CdhsSmfService as CdhsSmfServiceTrait, CdhsSmfServiceServer,
+};
+pub use proto::olympus::cdhs_smf::v1::*;
+
+use smt::SparseMerkleTree;
+use crypto::KeyManager;
+
+/// The main service implementation
+pub struct CdhsSmfService {
+    /// The global sparse Merkle tree
+    smt: SparseMerkleTree,
+    /// Key manager for Ed25519 signing
+    key_manager: KeyManager,
+}
+
+impl CdhsSmfService {
+    pub fn new() -> Self {
+        Self {
+            smt: SparseMerkleTree::new(),
+            key_manager: KeyManager::new(),
+        }
+    }
+}
+
+#[tonic::async_trait]
+impl CdhsSmfServiceTrait for CdhsSmfService {
+    async fn update(
+        &self,
+        request: Request<UpdateRequest>,
+    ) -> Result<Response<UpdateResponse>, Status> {
+        let req = request.into_inner();
+
+        info!("Update request for shard: {}", req.shard_id);
+
+        // Compute global key from shard_id and record_key
+        let global_key = crypto::compute_global_key(
+            &req.shard_id,
+            req.record_key.as_ref().ok_or_else(|| Status::invalid_argument("record_key required"))?,
+        );
+
+        // Hash the canonical content
+        let leaf_value_hash = crypto::hash_canonical_content(&req.canonical_content);
+
+        // Update the SMT
+        let (new_root, deltas) = self.smt.update(&global_key, &leaf_value_hash)
+            .map_err(|e| Status::internal(format!("SMT update failed: {}", e)))?;
+
+        Ok(Response::new(UpdateResponse {
+            new_root: new_root.to_vec(),
+            global_key: global_key.to_vec(),
+            leaf_value_hash: leaf_value_hash.to_vec(),
+            deltas: deltas.into_iter().map(|d| SmtNodeDelta {
+                path: d.path.to_vec(),
+                level: d.level,
+                hash: d.hash.to_vec(),
+            }).collect(),
+        }))
+    }
+
+    async fn prove_inclusion(
+        &self,
+        request: Request<ProveInclusionRequest>,
+    ) -> Result<Response<ProveInclusionResponse>, Status> {
+        let req = request.into_inner();
+
+        let global_key = crypto::compute_global_key(
+            &req.shard_id,
+            req.record_key.as_ref().ok_or_else(|| Status::invalid_argument("record_key required"))?,
+        );
+
+        let root = if req.root.is_empty() {
+            self.smt.root()
+        } else {
+            req.root.as_slice().try_into()
+                .map_err(|_| Status::invalid_argument("invalid root length"))?
+        };
+
+        let proof = self.smt.prove_inclusion(&global_key, &root)
+            .map_err(|e| Status::not_found(format!("Key not found: {}", e)))?;
+
+        Ok(Response::new(ProveInclusionResponse {
+            global_key: global_key.to_vec(),
+            value_hash: proof.value_hash.to_vec(),
+            siblings: proof.siblings.iter().map(|s| s.to_vec()).collect(),
+            root: root.to_vec(),
+        }))
+    }
+
+    async fn verify_inclusion(
+        &self,
+        request: Request<VerifyInclusionRequest>,
+    ) -> Result<Response<VerifyInclusionResponse>, Status> {
+        let req = request.into_inner();
+
+        let global_key: [u8; 32] = req.global_key.as_slice().try_into()
+            .map_err(|_| Status::invalid_argument("invalid global_key length"))?;
+        let value_hash: [u8; 32] = req.value_hash.as_slice().try_into()
+            .map_err(|_| Status::invalid_argument("invalid value_hash length"))?;
+        let root: [u8; 32] = req.root.as_slice().try_into()
+            .map_err(|_| Status::invalid_argument("invalid root length"))?;
+
+        let siblings: Result<Vec<[u8; 32]>, _> = req.siblings.iter()
+            .map(|s| s.as_slice().try_into())
+            .collect();
+        let siblings = siblings.map_err(|_| Status::invalid_argument("invalid sibling length"))?;
+
+        let valid = smt::verify_inclusion(&global_key, &value_hash, &siblings, &root);
+
+        Ok(Response::new(VerifyInclusionResponse {
+            valid,
+            error: if valid { String::new() } else { "Proof verification failed".to_string() },
+        }))
+    }
+
+    async fn prove_non_inclusion(
+        &self,
+        request: Request<ProveNonInclusionRequest>,
+    ) -> Result<Response<ProveNonInclusionResponse>, Status> {
+        let req = request.into_inner();
+
+        let global_key = crypto::compute_global_key(
+            &req.shard_id,
+            req.record_key.as_ref().ok_or_else(|| Status::invalid_argument("record_key required"))?,
+        );
+
+        let root = if req.root.is_empty() {
+            self.smt.root()
+        } else {
+            req.root.as_slice().try_into()
+                .map_err(|_| Status::invalid_argument("invalid root length"))?
+        };
+
+        let proof = self.smt.prove_non_inclusion(&global_key, &root)
+            .map_err(|e| Status::internal(format!("Non-inclusion proof failed: {}", e)))?;
+
+        Ok(Response::new(ProveNonInclusionResponse {
+            global_key: global_key.to_vec(),
+            siblings: proof.siblings.iter().map(|s| s.to_vec()).collect(),
+            root: root.to_vec(),
+        }))
+    }
+
+    async fn verify_non_inclusion(
+        &self,
+        request: Request<VerifyNonInclusionRequest>,
+    ) -> Result<Response<VerifyNonInclusionResponse>, Status> {
+        let req = request.into_inner();
+
+        let global_key: [u8; 32] = req.global_key.as_slice().try_into()
+            .map_err(|_| Status::invalid_argument("invalid global_key length"))?;
+        let root: [u8; 32] = req.root.as_slice().try_into()
+            .map_err(|_| Status::invalid_argument("invalid root length"))?;
+
+        let siblings: Result<Vec<[u8; 32]>, _> = req.siblings.iter()
+            .map(|s| s.as_slice().try_into())
+            .collect();
+        let siblings = siblings.map_err(|_| Status::invalid_argument("invalid sibling length"))?;
+
+        let valid = smt::verify_non_inclusion(&global_key, &siblings, &root);
+
+        Ok(Response::new(VerifyNonInclusionResponse {
+            valid,
+            error: if valid { String::new() } else { "Proof verification failed".to_string() },
+        }))
+    }
+
+    async fn canonicalize(
+        &self,
+        request: Request<CanonicalizeRequest>,
+    ) -> Result<Response<CanonicalizeResponse>, Status> {
+        let req = request.into_inner();
+
+        let canonical_content = canonicalization::canonicalize(&req.content_type, &req.content)
+            .map_err(|e| Status::invalid_argument(format!("Canonicalization failed: {}", e)))?;
+
+        let content_hash = crypto::hash_bytes(&canonical_content);
+
+        Ok(Response::new(CanonicalizeResponse {
+            canonical_content,
+            content_hash: content_hash.to_vec(),
+        }))
+    }
+
+    async fn get_root(
+        &self,
+        _request: Request<GetRootRequest>,
+    ) -> Result<Response<GetRootResponse>, Status> {
+        let root = self.smt.root();
+        let tree_size = self.smt.size();
+
+        Ok(Response::new(GetRootResponse {
+            root: root.to_vec(),
+            tree_size,
+        }))
+    }
+
+    async fn sign_root(
+        &self,
+        request: Request<SignRootRequest>,
+    ) -> Result<Response<SignRootResponse>, Status> {
+        let req = request.into_inner();
+
+        let root: [u8; 32] = req.root.as_slice().try_into()
+            .map_err(|_| Status::invalid_argument("invalid root length"))?;
+
+        let (signature, public_key) = self.key_manager.sign_root(&root, &req.context)
+            .map_err(|e| Status::internal(format!("Signing failed: {}", e)))?;
+
+        Ok(Response::new(SignRootResponse {
+            signature: signature.to_vec(),
+            public_key: public_key.to_vec(),
+        }))
+    }
+}
+
+#[tokio::main]
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    // Initialize tracing
+    tracing_subscriber::fmt()
+        .with_env_filter(
+            tracing_subscriber::EnvFilter::try_from_default_env()
+                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info"))
+        )
+        .init();
+
+    let addr = "[::1]:50051".parse()?;
+    let service = CdhsSmfService::new();
+
+    info!("CD-HS-ST Service starting on {}", addr);
+
+    Server::builder()
+        .add_service(CdhsSmfServiceServer::new(service))
+        .serve(addr)
+        .await?;
+
+    Ok(())
+}

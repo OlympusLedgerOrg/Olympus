@@ -36,7 +36,6 @@ from protocol.canonicalizer import (
 from protocol.epochs import EpochRecord, SignedTreeHead, compute_epoch_head, signed_tree_head_hash
 from protocol.events import CanonicalEvent
 from protocol.hashes import (
-    FOREST_PREFIX,
     HASH_SEPARATOR,
     HDR_PREFIX,
     KEY_PREFIX,
@@ -46,7 +45,6 @@ from protocol.hashes import (
     POLICY_PREFIX,
     blake3_hash,
     blake3_to_field_element,
-    forest_root,
     hash_bytes,
     leaf_hash,
     merkle_root,
@@ -179,7 +177,6 @@ class TestHashStage:
         assert LEAF_PREFIX == b"OLY:LEAF:V1"
         assert NODE_PREFIX == b"OLY:NODE:V1"
         assert HDR_PREFIX == b"OLY:HDR:V1"
-        assert FOREST_PREFIX == b"OLY:FOREST:V1"
         assert POLICY_PREFIX == b"OLY:POLICY:V1"
         assert LEDGER_PREFIX == b"OLY:LEDGER:V1"
 
@@ -206,10 +203,6 @@ class TestCommitStage:
     def test_merkle_root_exists(self):
         """merkle_root computes Merkle root from leaf hashes."""
         assert callable(merkle_root)
-
-    def test_forest_root_exists(self):
-        """forest_root computes global forest root from shard headers."""
-        assert callable(forest_root)
 
     def test_shard_header_functions_exist(self):
         """Shard header creation and signing functions are available."""

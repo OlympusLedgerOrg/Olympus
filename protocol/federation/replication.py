@@ -8,7 +8,7 @@ from typing import Any
 import nacl.exceptions
 import nacl.signing
 
-from protocol.hashes import HASH_SEPARATOR, hash_bytes
+from protocol.hashes import HASH_SEPARATOR, _length_prefixed_bytes, hash_bytes
 
 from .identity import FederationRegistry, _parse_timestamp
 from .quorum import NodeSignature
@@ -193,24 +193,25 @@ def registry_forest_commitment(registry: FederationRegistry) -> str:
         Hex-encoded BLAKE3 hash commitment of the registry state.
     """
     active_nodes = sorted(registry.active_nodes(), key=lambda n: n.node_id)
-    commitment_parts: list[bytes] = [
-        f"epoch:{registry.epoch}".encode(),
-        f"membership:{registry.membership_hash()}".encode(),
+
+    parts: list[bytes] = [
+        _length_prefixed_bytes("epoch", str(registry.epoch).encode("utf-8")),
+        _length_prefixed_bytes("membership", registry.membership_hash().encode("utf-8")),
     ]
     for node in active_nodes:
-        node_commitment = HASH_SEPARATOR.join(
+        node_part = b"".join(
             [
-                node.node_id,
-                node.pubkey.hex(),
-                node.endpoint,
-                node.operator,
-                node.jurisdiction,
-                node.status,
+                _length_prefixed_bytes("node_id", node.node_id.encode("utf-8")),
+                _length_prefixed_bytes("pubkey", node.pubkey.hex().encode("utf-8")),
+                _length_prefixed_bytes("endpoint", node.endpoint.encode("utf-8")),
+                _length_prefixed_bytes("operator", node.operator.encode("utf-8")),
+                _length_prefixed_bytes("jurisdiction", node.jurisdiction.encode("utf-8")),
+                _length_prefixed_bytes("status", node.status.encode("utf-8")),
             ]
-        ).encode("utf-8")
-        commitment_parts.append(node_commitment)
+        )
+        parts.append(node_part)
 
-    return hash_bytes(b"\n".join(commitment_parts)).hex()
+    return hash_bytes(b"".join(parts)).hex()
 
 
 # =============================================================================

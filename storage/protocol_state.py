@@ -21,13 +21,20 @@ from collections.abc import Mapping
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Any
 
+from psycopg import sql
+
 from protocol.ssmf import SparseMerkleTree
+from storage.gates import derive_node_rehash_gate
 
 
 if TYPE_CHECKING:
     import psycopg
 
 logger = logging.getLogger(__name__)
+
+
+# ADR-0001: BLAKE3 domain-separated gate for the smt_nodes rehash trigger.
+_NODE_REHASH_GATE: str = derive_node_rehash_gate()
 
 
 # ---------------------------------------------------------------------------
@@ -37,32 +44,46 @@ logger = logging.getLogger(__name__)
 
 def load_tree_state(
     cur: psycopg.Cursor[Any],
-    shard_id: str,
+    shard_id: str | None = None,
     up_to_ts: datetime | str | None = None,
 ) -> SparseMerkleTree:
     """
     Load sparse Merkle tree state from database.
 
+    .. deprecated::
+        ADR-0001 deprecates this function.  Production callers should use
+        the purpose-specific helpers on :class:`StorageLayer`:
+        ``_get_proof_path``, ``get_current_root``, ``replay_tree_incremental``.
+
     Read-only helper.  Must be called within an existing transaction.
+
+    CD-HS-ST Design:
+    ---------------
+    This function now loads the GLOBAL SMT state. The shard_id parameter is kept
+    for backwards compatibility but is deprecated. The global SMT contains all shards,
+    with shard identity encoded in the key space via global_key(shard_id, record_key).
+
+    To load a shard-specific view, the caller should filter by key prefix after loading,
+    though this is not recommended for production use. The global SMT is the canonical
+    source of truth.
 
     Args:
         cur: Database cursor
-        shard_id: Shard identifier
+        shard_id: DEPRECATED - kept for backwards compatibility, should be None
         up_to_ts: Optional inclusive timestamp cutoff for historical snapshots
 
     Returns:
-        SparseMerkleTree with all leaves loaded
+        SparseMerkleTree with all leaves loaded (global SMT)
     """
     tree = SparseMerkleTree()
 
+    # CD-HS-ST: Load ALL leaves from the global SMT (no shard_id filter)
     if up_to_ts is None:
         cur.execute(
             """
             SELECT key, value_hash FROM smt_leaves
-            WHERE shard_id = %s
             ORDER BY ts ASC, key ASC
-            """,
-            (shard_id,),
+            """
         )
     else:
         cutoff = up_to_ts
@@ -71,10 +92,10 @@ def load_tree_state(
         cur.execute(
             """
             SELECT key, value_hash FROM smt_leaves
-            WHERE shard_id = %s AND ts <= %s
+            WHERE ts <= %s
             ORDER BY ts ASC, key ASC
             """,
-            (shard_id, cutoff),
+            (cutoff,),
         )
     rows = cur.fetchall()
 
@@ -88,35 +109,56 @@ def load_tree_state(
 
 def persist_tree_nodes(
     cur: psycopg.Cursor[Any],
-    shard_id: str,
+    shard_id: str | None,
     tree: SparseMerkleTree,
     *,
     cache_put: Any | None = None,
 ) -> None:
     """
-    Persist tree nodes to database (append-only).
+    Persist tree nodes to database.
+
+    CD-HS-ST Design:
+    ---------------
+    This function now persists nodes to the GLOBAL SMT. The shard_id parameter is kept
+    for backwards compatibility with the cache_put callback but is not used in the
+    database INSERT (since the global SMT has no shard_id column).
+
+    ADR-0001: Uses ``ON CONFLICT DO UPDATE`` so that rehashed ancestor
+    nodes are kept current.  The ``smt_nodes_reject_update`` trigger
+    requires the session variable ``olympus.allow_node_rehash`` to be set
+    to the BLAKE3 domain-separated gate (``_NODE_REHASH_GATE``).
 
     Args:
         cur: Database cursor
-        shard_id: Shard identifier
+        shard_id: DEPRECATED - kept for cache_put callback compatibility
         tree: SparseMerkleTree to persist
         cache_put: Optional callback ``(shard_id, level, path_bytes, hash_value)``
             to populate an in-memory node cache.
     """
+    # Gate the trigger so the upsert is allowed.
+    # H-1 Fix: Use psycopg.sql.Literal to avoid f-string SQL pattern that could
+    # be cargo-culted into dynamic contexts.
+    cur.execute(
+        sql.SQL("SET LOCAL olympus.allow_node_rehash = {}").format(sql.Literal(_NODE_REHASH_GATE))
+    )
+
     for path, hash_value in tree.nodes.items():
         path_bytes = encode_path(path)
         level = len(path)
 
+        # CD-HS-ST: Insert into global SMT (no shard_id)
         cur.execute(
             """
-            INSERT INTO smt_nodes (shard_id, level, index, hash, ts)
-            VALUES (%s, %s, %s, %s, %s)
-            ON CONFLICT (shard_id, level, index) DO NOTHING
+            INSERT INTO smt_nodes (level, index, hash, ts)
+            VALUES (%s, %s, %s, %s)
+            ON CONFLICT (level, index)
+            DO UPDATE SET hash = EXCLUDED.hash, ts = EXCLUDED.ts
             """,
-            (shard_id, level, path_bytes, hash_value, datetime.now(timezone.utc)),
+            (level, path_bytes, hash_value, datetime.now(timezone.utc)),
         )
 
         if cache_put is not None:
+            # Keep shard_id in cache_put for backwards compatibility
             cache_put(shard_id, level, path_bytes, hash_value)
 
 
@@ -168,21 +210,27 @@ def get_header_by_seq(cur: psycopg.Cursor[Any], shard_id: str, seq: int) -> dict
 
 def assert_root_matches_state(
     cur: psycopg.Cursor[Any],
-    shard_id: str,
+    shard_id: str | None,
     expected_root: bytes,
 ) -> None:
     """
-    Recompute the current shard root and ensure it matches ``expected_root``.
+    Recompute the current global SMT root and ensure it matches ``expected_root``.
+
+    CD-HS-ST Design:
+    ---------------
+    This function now validates the GLOBAL SMT root, not a per-shard root.
+    The shard_id parameter is kept for backwards compatibility but is deprecated.
 
     Raises:
         ValueError: When the recomputed root diverges from ``expected_root``.
     """
-    tree = load_tree_state(cur, shard_id)
+    tree = load_tree_state(cur, shard_id=None)
     computed_root = tree.get_root()
     if computed_root != expected_root:
+        shard_msg = f" for shard '{shard_id}'" if shard_id else ""
         raise ValueError(
             f"Computed root {computed_root.hex()} does not match persisted root "
-            f"{expected_root.hex()} for shard '{shard_id}'"
+            f"{expected_root.hex()}{shard_msg}"
         )
 
 

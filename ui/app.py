@@ -6,6 +6,7 @@ import ipaddress
 import json
 import logging
 import os
+import socket
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, cast
@@ -47,6 +48,36 @@ _BLOCKED_RANGES = [
 ]
 
 
+def _normalize_ip_for_ssrf_check(
+    addr: ipaddress.IPv4Address | ipaddress.IPv6Address,
+) -> ipaddress.IPv4Address | ipaddress.IPv6Address:
+    """Normalize IP addresses for SSRF range checks."""
+    if isinstance(addr, ipaddress.IPv6Address) and addr.ipv4_mapped is not None:
+        return addr.ipv4_mapped
+    return addr
+
+
+def _is_blocked_ip_for_ssrf(
+    addr: ipaddress.IPv4Address | ipaddress.IPv6Address,
+) -> bool:
+    """Return True when an address is in a blocked SSRF range."""
+    normalized_addr = _normalize_ip_for_ssrf_check(addr)
+    for blocked in _BLOCKED_RANGES:
+        blocked_network: ipaddress.IPv4Network | ipaddress.IPv6Network = blocked
+        if (
+            isinstance(blocked_network, ipaddress.IPv6Network)
+            and blocked_network.network_address.ipv4_mapped is not None
+        ):
+            mapped_network_address = blocked_network.network_address.ipv4_mapped
+            prefixlen = max(blocked_network.prefixlen - 96, 0)
+            blocked_network = ipaddress.ip_network(
+                f"{mapped_network_address}/{prefixlen}", strict=False
+            )
+        if normalized_addr in blocked_network:
+            return True
+    return False
+
+
 API_BASE = os.environ.get("UI_API_BASE", "http://127.0.0.1:8000")
 _parsed_api_base = urlparse(API_BASE)
 if _parsed_api_base.scheme not in {"http", "https"} or not _parsed_api_base.netloc:
@@ -59,6 +90,16 @@ DEBUG_UI_ENABLED = True
 _DEBUG_CONSOLE_PASSWORD = os.environ.get("OLYMPUS_DEBUG_CONSOLE_PASSWORD", "")
 
 _ENV = os.environ.get("OLYMPUS_ENV", "production")
+
+# C-2 Fix: Refuse to start in production mode without a debug console password.
+# This prevents accidental exposure of the debug console when operators forget
+# to set OLYMPUS_DEBUG_CONSOLE_PASSWORD.
+if _ENV == "production" and not _DEBUG_CONSOLE_PASSWORD:
+    raise RuntimeError(
+        "OLYMPUS_DEBUG_CONSOLE_PASSWORD must be set when OLYMPUS_ENV=production. "
+        "The debug console cannot start without authentication configured. "
+        "Either set a strong password or use OLYMPUS_ENV=development for local testing."
+    )
 
 logger = logging.getLogger(__name__)
 
@@ -87,9 +128,11 @@ def validate_federation_url(url: str) -> None:
 
     try:
         addr = ipaddress.ip_address(hostname)
-        for blocked in _BLOCKED_RANGES:
-            if addr in blocked:
-                raise ValueError(f"Federation URL resolves to blocked address range: {addr}")
+        if _is_blocked_ip_for_ssrf(addr):
+            raise ValueError(
+                f"Federation URL resolves to blocked address range: "
+                f"{_normalize_ip_for_ssrf_check(addr)}"
+            )
     except ValueError as exc:
         if (
             "blocked address range" in str(exc)
@@ -97,11 +140,33 @@ def validate_federation_url(url: str) -> None:
             or "has no hostname" in str(exc)
         ):
             raise  # re-raise our own errors
-        # hostname is a domain name, not an IP — DNS resolution check would require async
-        # For now, log a warning that DNS-based SSRF is not fully mitigated
-        logger.warning(
-            "Federation URL %s uses a hostname — DNS rebinding SSRF not fully mitigated", url
-        )
+        try:
+            port = parsed.port or (443 if parsed.scheme == "https" else 80)
+            addrinfo = socket.getaddrinfo(hostname, port, type=socket.SOCK_STREAM)
+        except socket.gaierror as dns_error:
+            raise ValueError(
+                f"Federation URL hostname could not be resolved: {hostname}:{port}"
+            ) from dns_error
+
+        resolved_any = False
+        for info in addrinfo:
+            sockaddr = info[4]
+            if not sockaddr:
+                continue
+            resolved_ip = sockaddr[0]
+            try:
+                resolved_addr = ipaddress.ip_address(resolved_ip)
+            except ValueError:
+                continue
+            resolved_any = True
+            if _is_blocked_ip_for_ssrf(resolved_addr):
+                raise ValueError(
+                    f"Federation URL hostname resolves to blocked address range: "
+                    f"{_normalize_ip_for_ssrf_check(resolved_addr)}"
+                )
+
+        if not resolved_any:
+            raise ValueError(f"Federation URL hostname has no resolvable IP addresses: {hostname}")
 
 
 def _load_federation_nodes() -> dict[str, str]:
@@ -135,32 +200,56 @@ app.mount("/static", StaticFiles(directory=str(_STATIC_DIR)), name="static")
 
 @app.middleware("http")
 async def _debug_console_basic_auth(request: Request, call_next: Any) -> JSONResponse:
-    """Enforce HTTP Basic Auth when ``OLYMPUS_DEBUG_CONSOLE_PASSWORD`` is set."""
-    if _DEBUG_CONSOLE_PASSWORD:
-        auth_header = request.headers.get("authorization", "")
-        if not auth_header.startswith("Basic "):
+    """Enforce HTTP Basic Auth when ``OLYMPUS_DEBUG_CONSOLE_PASSWORD`` is set.
+
+    Note: The module-level startup check already refuses to import in production
+    mode without a password (see C-2 fix above). This middleware provides an
+    additional runtime safeguard for edge cases where the environment might
+    change after import.
+
+    When running in production mode (``OLYMPUS_ENV != 'development'``) and no
+    password is configured, every request is rejected with HTTP 503 to prevent
+    accidental unauthenticated exposure of the debug console.
+    """
+    if not _DEBUG_CONSOLE_PASSWORD:
+        if _ENV != "development":
             return JSONResponse(
-                status_code=401,
-                content={"detail": "Authentication required"},
-                headers={"WWW-Authenticate": 'Basic realm="Olympus Debug Console"'},
+                status_code=503,
+                content={
+                    "detail": (
+                        "Debug console is not available: "
+                        "OLYMPUS_DEBUG_CONSOLE_PASSWORD must be set in production. "
+                        "Set OLYMPUS_ENV=development to allow unauthenticated local access."
+                    )
+                },
             )
-        try:
-            decoded = base64.b64decode(auth_header[6:]).decode("utf-8")
-            _, _, password = decoded.partition(":")
-        except Exception:
-            return JSONResponse(
-                status_code=401,
-                content={"detail": "Invalid credentials"},
-                headers={"WWW-Authenticate": 'Basic realm="Olympus Debug Console"'},
-            )
-        if not hmac.compare_digest(
-            password.encode("utf-8"), _DEBUG_CONSOLE_PASSWORD.encode("utf-8")
-        ):
-            return JSONResponse(
-                status_code=401,
-                content={"detail": "Invalid credentials"},
-                headers={"WWW-Authenticate": 'Basic realm="Olympus Debug Console"'},
-            )
+        # Development mode with no password: allow unauthenticated access.
+        return await call_next(request)
+
+    auth_header = request.headers.get("authorization", "")
+    if not auth_header.startswith("Basic "):
+        return JSONResponse(
+            status_code=401,
+            content={"detail": "Authentication required"},
+            headers={"WWW-Authenticate": 'Basic realm="Olympus Debug Console"'},
+        )
+    try:
+        decoded = base64.b64decode(auth_header[6:]).decode("utf-8")
+        _, _, password = decoded.partition(":")
+    except Exception:
+        return JSONResponse(
+            status_code=401,
+            content={"detail": "Invalid credentials"},
+            headers={"WWW-Authenticate": 'Basic realm="Olympus Debug Console"'},
+        )
+    if not hmac.compare_digest(
+        password.encode("utf-8"), _DEBUG_CONSOLE_PASSWORD.encode("utf-8")
+    ):
+        return JSONResponse(
+            status_code=401,
+            content={"detail": "Invalid credentials"},
+            headers={"WWW-Authenticate": 'Basic realm="Olympus Debug Console"'},
+        )
     return await call_next(request)
 
 
@@ -168,11 +257,10 @@ _SECURITY_HEADERS: dict[str, str] = {
     "X-Content-Type-Options": "nosniff",
     "X-Frame-Options": "DENY",
     "Referrer-Policy": "strict-origin-when-cross-origin",
-    # TODO: Replace unsafe-inline with nonces after frontend refactor
     "Content-Security-Policy": (
         "default-src 'self'; "
         "script-src 'self'; "
-        "style-src 'self' 'unsafe-inline'; "
+        "style-src 'self'; "
         "img-src 'self' data:; "
         "connect-src 'self'; "
         "frame-ancestors 'none';"
@@ -572,6 +660,20 @@ def _get_commit_entry(document_id: str, version: int) -> dict[str, Any]:
     return entry
 
 
+def _commit_api_auth_headers(request: Request) -> dict[str, str]:
+    """Return auth headers that are safe to forward to the backend API."""
+    headers: dict[str, str] = {}
+    api_key = request.headers.get("x-api-key")
+    if api_key:
+        headers["x-api-key"] = api_key
+
+    authorization = request.headers.get("authorization", "")
+    if len(authorization) >= 7 and authorization[:7].lower() == "bearer ":
+        headers["authorization"] = authorization
+
+    return headers
+
+
 def _embargo_summary(entry: dict[str, Any]) -> dict[str, Any]:
     """Return derived embargo state for a committed document."""
     release_at = entry.get("release_at")
@@ -807,11 +909,13 @@ async def proxy_ledger_verify_simple(request: Request):
                 )
             else:
                 data[key] = str(value)
+        auth_headers = _commit_api_auth_headers(request)
         async with httpx.AsyncClient(timeout=30.0) as client:
             resp = await client.post(
                 f"{API_BASE}/ledger/verify/simple",
                 data=data or None,
                 files=upload_files or None,
+                headers=auth_headers or None,
             )
             resp.raise_for_status()
             return JSONResponse(resp.json())
@@ -985,6 +1089,7 @@ def state_diff_viewer(
 
 @app.post("/commit")
 async def commit_document(
+    request: Request,
     document_id: str = Form(...),
     version: int = Form(1),
     file: UploadFile = File(...),
@@ -1056,9 +1161,15 @@ async def commit_document(
     ledger_commit_id: str | None = None
     try:
         async with httpx.AsyncClient(timeout=10.0) as api_client:
+            api_request_kwargs: dict[str, Any] = {
+                "json": {"doc_hash": commit_result["blake3_root"]},
+            }
+            auth_headers = _commit_api_auth_headers(request)
+            if auth_headers:
+                api_request_kwargs["headers"] = auth_headers
             api_resp = await api_client.post(
                 f"{API_BASE}/doc/commit",
-                json={"doc_hash": commit_result["blake3_root"]},
+                **api_request_kwargs,
             )
             api_resp.raise_for_status()
             ledger_commit_id = api_resp.json().get("commit_id")

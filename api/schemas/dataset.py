@@ -35,7 +35,7 @@ class DatasetCommitRequest(BaseModel):
     # Dataset identity
     dataset_name: str = Field(..., max_length=256)
     dataset_version: str = Field(..., max_length=64)
-    source_uri: str = Field(..., max_length=2048)
+    source_uri: str = Field(..., max_length=2048, pattern=r"^https?://.+")
     canonical_namespace: str = Field(..., max_length=256)
     granularity: Literal["file", "record", "shard"]
 
@@ -46,7 +46,7 @@ class DatasetCommitRequest(BaseModel):
 
     # Content
     file_format: str = Field(..., max_length=32)
-    files: list[DatasetFileEntry] = Field(..., min_length=1)
+    files: list[DatasetFileEntry] = Field(..., min_length=1, max_length=10_000)
 
     # Provenance
     parent_dataset_id: str | None = Field(None, pattern=r"^[0-9a-f]{64}$")
@@ -109,6 +109,25 @@ class DatasetDetailResponse(DatasetCommitResponse):
     anchor_network: str | None
     files: list[DatasetFileEntry]
     proof_bundle_uri: str | None
+
+
+class DatasetProofBundleResponse(BaseModel):
+    """Self-contained verification bundle for a dataset commit."""
+
+    dataset_id: str
+    commit_id: str
+    manifest_hash: str
+    merkle_root: str | None
+    committer_pubkey: str
+    commit_signature: str
+    epoch: datetime
+    shard_id: str
+    dataset_name: str
+    source_uri: str
+    files: list[DatasetFileEntry]
+    merkle_proof: list[dict] | None = None
+    signature_valid: bool
+    commit_id_valid: bool
 
 
 class DatasetVerifyResponse(BaseModel):

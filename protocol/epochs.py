@@ -361,7 +361,14 @@ def verify_sth_consistency(
     if proof.new_tree_size != new_sth.tree_size:
         return False
 
-    return verify_consistency_proof(old_root, new_root, proof)
+    trust_new_root_on_empty = old_sth.tree_size == 0
+    # new_root comes from the signed STH whose signature was verified above.
+    return verify_consistency_proof(
+        old_root,
+        new_root,
+        proof,
+        trust_new_root_on_empty=trust_new_root_on_empty,
+    )
 
 
 def advance_epoch(
@@ -468,7 +475,14 @@ def advance_epoch(
             old_tree_size, new_tree_size, new_tree
         )
         old_root = bytes.fromhex(previous_sth.merkle_root)
-        if not verify_consistency_proof(old_root, new_root, proof_inner):
+        trust_new_root_on_empty = old_tree_size == 0
+        # new_root is computed locally from new_tree (not supplied by an untrusted peer).
+        if not verify_consistency_proof(
+            old_root,
+            new_root,
+            proof_inner,
+            trust_new_root_on_empty=trust_new_root_on_empty,
+        ):
             raise ValueError("Consistency proof verification failed; epoch transition rejected")
         proof: ConsistencyProof | None = proof_inner
     else:

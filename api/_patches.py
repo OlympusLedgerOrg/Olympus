@@ -31,24 +31,25 @@ _log = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 
 # Vulnerable originals (as they appear in Pygments 2.19.2)
-_GUID_VULN = r'(\d|[a-fA-F])+(-(\d|[a-fA-F])+){3,}'
+_GUID_VULN = r"(\d|[a-fA-F])+(-(\d|[a-fA-F])+){3,}"
 _ARCH_VULN = (
-    r'([ \t]*)(([a-zA-Z]\w+(\.[a-zA-Z]\w+)*::)?[a-zA-Z]\w+'
-    r'(-[a-zA-Z]\w+){2}\.\w+[\w-]*\.v\d+(\.\d+){,2}((-[a-z]+)(\.\d+)?)?)'
+    r"([ \t]*)(([a-zA-Z]\w+(\.[a-zA-Z]\w+)*::)?[a-zA-Z]\w+"
+    r"(-[a-zA-Z]\w+){2}\.\w+[\w-]*\.v\d+(\.\d+){,2}((-[a-z]+)(\.\d+)?)?)"
 )
 
 # Safe replacements used by Step 1 (atomic groups, Python 3.11+ re)
-_GUID_ATOMIC = r'(?>[0-9a-fA-F]+)(-(?>[0-9a-fA-F]+)){3,}'
+_GUID_ATOMIC = r"(?>[0-9a-fA-F]+)(-(?>[0-9a-fA-F]+)){3,}"
 _ARCH_ATOMIC = (
-    r'([ \t]*)((?:(?>[a-zA-Z]\w+)(?:\.(?>[a-zA-Z]\w+))*::)?'
-    r'(?>[a-zA-Z]\w+)(?:-[a-zA-Z]\w+){2}\.\w+[\w-]*\.v\d+'
-    r'(?:\.\d+){,2}(?:(?:-[a-z]+)(?:\.\d+)?)?)'
+    r"([ \t]*)((?:(?>[a-zA-Z]\w+)(?:\.(?>[a-zA-Z]\w+))*::)?"
+    r"(?>[a-zA-Z]\w+)(?:-[a-zA-Z]\w+){2}\.\w+[\w-]*\.v\d+"
+    r"(?:\.\d+){,2}(?:(?:-[a-z]+)(?:\.\d+)?)?)"
 )
 
 
 # ---------------------------------------------------------------------------
 # Step 1: atomic-group patch (pure Python, no Rust required)
 # ---------------------------------------------------------------------------
+
 
 def _patch_pygments_atomic_groups() -> None:
     """Patch CVE-2026-4539 using Python re atomic groups (GHSA-5239-wwwm-4pmq).
@@ -71,16 +72,16 @@ def _patch_pygments_atomic_groups() -> None:
     Remove this patch once Pygments releases a patched version.
     """
     try:
-        import pygments.lexers.archetype as _archetype
+        import pygments.lexers.archetype as _archetype  # type: ignore[import-untyped]
 
         _REPLACEMENTS = [
-            (_archetype.AdlLexer,    'metadata',     _GUID_VULN, _GUID_ATOMIC),
-            (_archetype.AtomsLexer,  'archetype_id', _ARCH_VULN, _ARCH_ATOMIC),
+            (_archetype.AdlLexer, "metadata", _GUID_VULN, _GUID_ATOMIC),
+            (_archetype.AtomsLexer, "archetype_id", _ARCH_VULN, _ARCH_ATOMIC),
         ]
 
         for klass, state, vuln, safe in _REPLACEMENTS:
             # Guard: skip if _tokens already compiled for this class
-            if '_tokens' in klass.__dict__:
+            if "_tokens" in klass.__dict__:
                 continue
             rules = klass.tokens.get(state)
             if not rules:
@@ -103,6 +104,7 @@ def _patch_pygments_atomic_groups() -> None:
 # ---------------------------------------------------------------------------
 # Step 2: Rust bridge (olympus_core) - O(n) DFA replacement
 
+
 def _patch_pygments_rust_bridge() -> None:
     """Replace atomic-group patterns with Rust O(n) matchers (CVE-2026-4539).
 
@@ -116,7 +118,7 @@ def _patch_pygments_rust_bridge() -> None:
     character exactly once regardless of input structure.
     """
     try:
-        from olympus_core import AdlScanner  # type: ignore[import]
+        from olympus_core import AdlScanner
     except ImportError:
         return  # Extension not built; atomic-group patch remains active.
     except Exception:
@@ -162,8 +164,7 @@ def _patch_pygments_rust_bridge() -> None:
 
             def groups(self) -> tuple:
                 return tuple(
-                    (self._text[s[0] : s[1]] if s is not None else None)
-                    for s in self._spans[1:]
+                    (self._text[s[0] : s[1]] if s is not None else None) for s in self._spans[1:]
                 )
 
         # ------------------------------------------------------------------ #
@@ -220,9 +221,12 @@ def _patch_pygments_rust_bridge() -> None:
             "falling back to atomic-group Python patch.",
             exc_info=True,
         )
+
+
 # ---------------------------------------------------------------------------
+
 
 def apply_all() -> None:
     """Apply all runtime patches.  Called once at application startup."""
-    _patch_pygments_atomic_groups()   # Step 1: fix tokens dict source
-    _patch_pygments_rust_bridge()     # Step 2: upgrade to Rust O(n) engine
+    _patch_pygments_atomic_groups()  # Step 1: fix tokens dict source
+    _patch_pygments_rust_bridge()  # Step 2: upgrade to Rust O(n) engine

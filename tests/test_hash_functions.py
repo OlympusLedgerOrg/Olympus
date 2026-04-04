@@ -6,7 +6,6 @@ import pytest
 
 from protocol.hashes import (
     blake3_hash,
-    forest_root,
     hash_bytes,
     leaf_hash,
     merkle_root,
@@ -64,6 +63,14 @@ def test_record_key_different_ids():
     """Test that different record IDs produce different keys."""
     key1 = record_key("document", "doc1", 1)
     key2 = record_key("document", "doc2", 1)
+
+    assert key1 != key2
+
+
+def test_record_key_embedded_separator_no_collision():
+    """Length prefixes prevent record_type / record_id boundary collisions."""
+    key1 = record_key("type:1", "doc", 7)
+    key2 = record_key("type", "1:doc", 7)
 
     assert key1 != key2
 
@@ -232,40 +239,3 @@ def test_shard_header_hash_changes_with_content():
     hash2 = shard_header_hash(fields2)
 
     assert hash1 != hash2
-
-
-def test_forest_root_deterministic():
-    """Test that forest root is deterministic."""
-    headers = [hash_bytes(b"header1"), hash_bytes(b"header2")]
-
-    root1 = forest_root(headers)
-    root2 = forest_root(headers)
-
-    assert root1 == root2
-    assert len(root1) == 32
-
-
-def test_forest_root_sorted():
-    """Test that forest root sorts headers for determinism."""
-    headers1 = [hash_bytes(b"header1"), hash_bytes(b"header2")]
-    headers2 = [hash_bytes(b"header2"), hash_bytes(b"header1")]
-
-    root1 = forest_root(headers1)
-    root2 = forest_root(headers2)
-
-    # Should be the same because they're sorted internally
-    assert root1 == root2
-
-
-def test_forest_root_empty_list():
-    """Test that empty list is rejected."""
-    with pytest.raises(ValueError, match="empty list"):
-        forest_root([])
-
-
-def test_forest_root_invalid_hash_length():
-    """Test that invalid hash length is rejected."""
-    headers = [b"short", hash_bytes(b"header2")]
-
-    with pytest.raises(ValueError, match="must be 32 bytes"):
-        forest_root(headers)

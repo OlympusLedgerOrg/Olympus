@@ -19,6 +19,24 @@ import blake3
 from .canonical_json import canonical_json_bytes
 
 
+# ---------------------------------------------------------------------------
+# Optional Rust acceleration — import from olympus_core.crypto if built,
+# fall back to pure-Python implementations below when it is not present.
+# ---------------------------------------------------------------------------
+try:
+    from olympus_core.crypto import (
+        blake3_hash as _rust_blake3_hash,
+        global_key as _rust_global_key,
+        leaf_hash as _rust_leaf_hash,
+        node_hash as _rust_node_hash,
+        record_key as _rust_record_key,
+    )
+
+    _RUST_CRYPTO_AVAILABLE = True  # pragma: no cover — requires maturin build
+except ImportError:
+    _RUST_CRYPTO_AVAILABLE = False
+
+
 # BN128 scalar field prime (alt_bn128) used by Circom/snarkjs
 SNARK_SCALAR_FIELD = 21888242871839275222246405745257275088548364400416034343698204186575808495617
 
@@ -35,7 +53,6 @@ KEY_ROTATION_PREFIX = b"OLY:KEY-ROTATION:V1"
 LEAF_PREFIX = b"OLY:LEAF:V1"
 NODE_PREFIX = b"OLY:NODE:V1"
 HDR_PREFIX = b"OLY:HDR:V1"
-FOREST_PREFIX = b"OLY:FOREST:V1"
 POLICY_PREFIX = b"OLY:POLICY:V1"
 LEDGER_PREFIX = b"OLY:LEDGER:V1"
 FEDERATION_PREFIX = b"OLY:FEDERATION:V1"
@@ -49,8 +66,11 @@ ATTESTATION_PREFIX = b"OLY:ATTESTATION:V1"
 DATASET_PREFIX = b"OLY:DATASET:V1"
 DATASET_COMMIT_PREFIX = b"OLY:DATASET-COMMIT:V1"
 DATASET_LINEAGE_PREFIX = b"OLY:DATASET-LINEAGE:V1"
+GLOBAL_KEY_PREFIX = b"OLY:GLOBAL-KEY:V1"
 EVENT_ID_FIELD_NAMES = ("shard_id", "header_hash", "timestamp")
 MAX_EVENT_ID_FIELD_LENGTH = (1 << 32) - 1
+_MAX_LENGTH_PREFIXED_FIELD_SIZE = (1 << 32) - 1
+_GLOBAL_SMT_KEY_CONTEXT = "olympus 2025-12 global-smt-leaf-key"
 
 
 def blake3_hash(parts: list[bytes]) -> bytes:
@@ -63,7 +83,17 @@ def blake3_hash(parts: list[bytes]) -> bytes:
     Returns:
         32-byte BLAKE3 hash
     """
+    if _RUST_CRYPTO_AVAILABLE:  # pragma: no cover — Rust FFI path
+        result: bytes = _rust_blake3_hash(parts)
+        return result
     return blake3.blake3(b"".join(parts)).digest()
+
+
+def _length_prefixed_bytes(field_name: str, value: bytes) -> bytes:
+    """Encode variable-length bytes with a 4-byte big-endian length prefix."""
+    if len(value) > _MAX_LENGTH_PREFIXED_FIELD_SIZE:
+        raise ValueError(f"{field_name} exceeds maximum length")  # pragma: no cover — 4 GB alloc
+    return len(value).to_bytes(4, "big") + value
 
 
 def record_key(record_type: str, record_id: str, version: int) -> bytes:
@@ -78,17 +108,86 @@ def record_key(record_type: str, record_id: str, version: int) -> bytes:
     Returns:
         32-byte key using KEY_PREFIX domain separation
     """
-    key_data = f"{record_type}:{record_id}:{version}".encode()
-    return blake3_hash([KEY_PREFIX, key_data])
+    if version < 0:
+        raise ValueError(f"version must be non-negative, got {version}")
+    if version > 0xFFFFFFFFFFFFFFFF:
+        raise ValueError("version exceeds maximum supported value")
+
+    if _RUST_CRYPTO_AVAILABLE:  # pragma: no cover — Rust FFI path
+        result: bytes = _rust_record_key(record_type, record_id, version)
+        return result
+
+    key_data = b"".join(
+        [
+            KEY_PREFIX,
+            _length_prefixed_bytes("record_type", record_type.encode("utf-8")),
+            _length_prefixed_bytes("record_id", record_id.encode("utf-8")),
+            version.to_bytes(8, "big"),
+        ]
+    )
+    return blake3.blake3(key_data).digest()
+
+
+# BLAKE3 derive_key mode bakes the domain into the hash state, so no separator is
+# needed; length prefixes commit the shard / record field boundaries explicitly.
+def global_key(shard_id: str, record_key_bytes: bytes) -> bytes:
+    """
+    Generate a global SMT key for CD-HS-ST (Constant-Depth Hierarchical Sparse Tree).
+
+    This function implements hierarchical key derivation that encodes shard identity into the
+    global SMT key space, enabling a single SMT to replace separate per-shard SMTs and forest SMTs.
+
+    The key derivation uses explicit domain separation with the shard_id and record key to ensure:
+    - Cryptographic isolation between shards
+    - Deterministic mapping from (shard_id, record_key) -> global_key
+    - No collisions between different shards
+
+    Args:
+        shard_id: Shard identifier (e.g., "watauga:2025:budget")
+        record_key_bytes: Record key bytes, typically the 32-byte output from record_key()
+
+    Returns:
+        32-byte global SMT key
+
+    Example:
+        >>> rec_key = record_key("document", "doc123", 1)
+        >>> g_key = global_key("watauga:2025:budget", rec_key)
+    """
+    if _RUST_CRYPTO_AVAILABLE:  # pragma: no cover — Rust FFI path
+        result: bytes = _rust_global_key(shard_id, record_key_bytes)
+        return result
+
+    shard_bytes = shard_id.encode("utf-8")
+    key_material = b"".join(
+        [
+            _length_prefixed_bytes("shard_id", shard_bytes),
+            _length_prefixed_bytes("record_key", record_key_bytes),
+        ]
+    )
+    # Use BLAKE3 derive_key mode so the domain is fixed in the hash state itself.
+    # The length prefixes commit the field boundaries, so there is no separator to collide with.
+    result = blake3.blake3(
+        key_material,
+        derive_key_context=_GLOBAL_SMT_KEY_CONTEXT,
+    ).digest()
+    if len(result) != 32:  # pragma: no cover — BLAKE3 always produces 32 bytes
+        raise ValueError(f"BLAKE3 derive_key returned {len(result)} bytes, expected 32")
+    return result
 
 
 def leaf_hash(key: bytes, value_hash: bytes) -> bytes:
     """Compute hash of a sparse-tree leaf with domain separation."""
+    if _RUST_CRYPTO_AVAILABLE:  # pragma: no cover — Rust FFI path
+        result: bytes = _rust_leaf_hash(key, value_hash)
+        return result
     return blake3_hash([LEAF_PREFIX, _SEP, key, _SEP, value_hash])
 
 
 def node_hash(left: bytes, right: bytes) -> bytes:
     """Compute hash of an internal Merkle node."""
+    if _RUST_CRYPTO_AVAILABLE:  # pragma: no cover — Rust FFI path
+        result: bytes = _rust_node_hash(left, right)
+        return result
     return blake3_hash([NODE_PREFIX, _SEP, left, _SEP, right])
 
 
@@ -140,31 +239,6 @@ def shard_header_hash(fields_dict: dict[str, Any]) -> bytes:
     """
     # Canonical JSON: sorted keys, compact separators, ASCII-escaped, NaN/Infinity rejected
     return blake3_hash([HDR_PREFIX, canonical_json_bytes(fields_dict)])
-
-
-def forest_root(header_hashes: list[bytes]) -> bytes:
-    """
-    Compute global forest root from shard header hashes.
-
-    Args:
-        header_hashes: List of 32-byte shard header hashes
-
-    Returns:
-        32-byte forest root hash using FOREST_PREFIX domain separation
-    """
-    if not header_hashes:
-        raise ValueError("Cannot compute forest root of empty list")
-
-    for h in header_hashes:
-        if len(h) != 32:
-            raise ValueError(f"All header hashes must be 32 bytes, got {len(h)}")
-
-    # Sort header hashes for determinism
-    sorted_hashes = sorted(header_hashes)
-    # Compute Merkle root of sorted hashes
-    root = merkle_root(sorted_hashes)
-    # Apply forest domain prefix
-    return blake3_hash([FOREST_PREFIX, root])
 
 
 # Legacy compatibility - these will be removed in future versions
@@ -309,7 +383,9 @@ def parse_dual_root_commitment(commitment: bytes) -> tuple[bytes, bytes]:
     idx += poseidon_len
     binding_hash = commitment[idx:]
 
-    if blake3_len != len(blake3_root) or poseidon_len != len(poseidon_root):
+    if blake3_len != len(blake3_root) or poseidon_len != len(
+        poseidon_root
+    ):  # pragma: no cover — guarded by overall length check
         raise ValueError("Dual root commitment length metadata is invalid")
     if blake3_len != 32 or poseidon_len != 32 or len(binding_hash) != 32:
         raise ValueError("Dual root commitment length metadata is invalid")
@@ -399,9 +475,14 @@ def dataset_key(
     Returns:
         64-character hex-encoded BLAKE3 hash.
     """
-    key_data = (
-        f"dataset_artifact:{canonical_namespace}:{source_uri}:{dataset_name}:{committer_pubkey}"
-    ).encode()
+    key_data = b"".join(
+        [
+            _length_prefixed_bytes("canonical_namespace", canonical_namespace.encode("utf-8")),
+            _length_prefixed_bytes("source_uri", source_uri.encode("utf-8")),
+            _length_prefixed_bytes("dataset_name", dataset_name.encode("utf-8")),
+            _length_prefixed_bytes("committer_pubkey", committer_pubkey.encode("utf-8")),
+        ]
+    )
     return blake3_hash([DATASET_PREFIX, key_data]).hex()
 
 
@@ -426,5 +507,12 @@ def compute_dataset_commit_id(
     Returns:
         64-character hex-encoded BLAKE3 hash.
     """
-    payload = f"{dataset_id}:{parent_commit_id}:{manifest_hash}:{committer_pubkey}"
-    return blake3_hash([DATASET_COMMIT_PREFIX, payload.encode()]).hex()
+    key_data = b"".join(
+        [
+            _length_prefixed_bytes("dataset_id", dataset_id.encode("utf-8")),
+            _length_prefixed_bytes("parent_commit_id", parent_commit_id.encode("utf-8")),
+            _length_prefixed_bytes("manifest_hash", manifest_hash.encode("utf-8")),
+            _length_prefixed_bytes("committer_pubkey", committer_pubkey.encode("utf-8")),
+        ]
+    )
+    return blake3_hash([DATASET_COMMIT_PREFIX, key_data]).hex()

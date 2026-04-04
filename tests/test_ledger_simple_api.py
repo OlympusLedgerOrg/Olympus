@@ -4,7 +4,7 @@ Tests for the user-friendly ledger endpoints.
 Covers:
   GET  /ledger/activity            — activity feed
   POST /ledger/ingest/simple       — guided document ingestion
-  POST /ledger/verify/simple       — plain-English verification
+  POST /ledger/verify/simple       — plain-English verification (requires API key)
 """
 
 from __future__ import annotations
@@ -288,3 +288,59 @@ async def test_verify_creates_activity_entry(client):
     assert activity_resp.status_code == 200
     data = activity_resp.json()
     assert data["total"] >= 1
+
+
+@pytest.mark.asyncio
+async def test_verify_simple_rejects_unauthenticated(db_engine):
+    """POST /ledger/verify/simple returns 401 when no API key is provided
+    and OLYMPUS_ENV is not 'development'."""
+    import os
+
+    import api.auth as _auth_mod
+
+    session_factory = async_sessionmaker(db_engine, expire_on_commit=False, class_=AsyncSession)
+
+    async def override_get_db():
+        async with session_factory() as session:
+            yield session
+
+    original_env = os.environ.pop("OLYMPUS_ENV", None)
+    original_keys = os.environ.get("OLYMPUS_FOIA_API_KEYS")
+    original_allow_dev_auth = os.environ.get("OLYMPUS_ALLOW_DEV_AUTH")
+    os.environ["OLYMPUS_ENV"] = "production"
+    os.environ["OLYMPUS_ALLOW_DEV_AUTH"] = "0"
+    os.environ["OLYMPUS_FOIA_API_KEYS"] = (
+        '[{"key_hash":"' + "a" * 64 + '","key_id":"test","scopes":["write"],'
+        '"expires_at":"2099-01-01T00:00:00Z"}]'
+    )
+
+    try:
+        _auth_mod._keys_loaded = False
+        _auth_mod._key_store.clear()
+
+        app = create_app()
+        app.dependency_overrides[get_db] = override_get_db
+
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
+            resp = await ac.post(
+                "/ledger/verify/simple",
+                data={"doc_hash": "a" * 64},
+            )
+        assert resp.status_code == 401, (
+            f"Expected 401 for unauthenticated verify/simple, got {resp.status_code}"
+        )
+    finally:
+        _auth_mod._keys_loaded = False
+        _auth_mod._key_store.clear()
+        if original_keys is None:
+            os.environ.pop("OLYMPUS_FOIA_API_KEYS", None)
+        else:
+            os.environ["OLYMPUS_FOIA_API_KEYS"] = original_keys
+        if original_env is None:
+            os.environ.pop("OLYMPUS_ENV", None)
+        else:
+            os.environ["OLYMPUS_ENV"] = original_env
+        if original_allow_dev_auth is None:
+            os.environ.pop("OLYMPUS_ALLOW_DEV_AUTH", None)
+        else:
+            os.environ["OLYMPUS_ALLOW_DEV_AUTH"] = original_allow_dev_auth

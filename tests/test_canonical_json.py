@@ -48,14 +48,18 @@ def test_canonical_json_encode_compact_separators():
     assert " " not in result
 
 
-def test_canonical_json_encode_ascii_only():
-    """Test that non-ASCII characters are escaped."""
+def test_canonical_json_encode_utf8_output():
+    """Non-ASCII characters are emitted as raw UTF-8 (JCS / RFC 8785 compliant).
+
+    Any standard JCS library produces the same bytes, enabling cross-implementation
+    ledger-hash verification without requiring ASCII-only consumers.
+    """
     obj = {"unicode": "hello 世界"}
     result = canonical_json_encode(obj)
-    # Non-ASCII characters should be escaped
-    assert "\\u" in result
-    # Should not contain raw non-ASCII bytes
-    result.encode("ascii")  # Should not raise
+    # Non-ASCII characters are present as-is (raw UTF-8), not \\uXXXX.
+    assert "世界" in result
+    # Output is valid UTF-8.
+    result.encode("utf-8")  # must not raise
 
 
 def test_canonical_json_encode_nested_objects():
@@ -164,14 +168,14 @@ def test_canonical_json_bytes():
 
 
 def test_canonical_json_bytes_unicode():
-    """Test canonical_json_bytes handles unicode correctly."""
+    """canonical_json_bytes produces raw UTF-8 for non-ASCII (JCS-compliant)."""
     obj = {"unicode": "hello 世界"}
     result = canonical_json_bytes(obj)
 
     assert isinstance(result, bytes)
-    # Should be ASCII-escaped in the JSON
+    # The non-ASCII characters appear as raw UTF-8 bytes, not \\uXXXX sequences.
     decoded = result.decode("utf-8")
-    assert "\\u" in decoded
+    assert "世界" in decoded
 
 
 def test_canonical_json_encode_empty_object():

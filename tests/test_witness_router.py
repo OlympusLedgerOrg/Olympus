@@ -2,14 +2,22 @@
 
 from __future__ import annotations
 
+import hashlib
 import uuid
 
+import nacl.signing
 import pytest
 from fastapi.testclient import TestClient
 
 import api.routers.witness as witness_module
 from api.main import create_app
 from protocol.timestamps import current_timestamp
+
+
+# -- Ed25519 test key pair used to sign all test announcements ----------------
+_TEST_SIGNING_KEY = nacl.signing.SigningKey.generate()
+_TEST_VERIFY_KEY = _TEST_SIGNING_KEY.verify_key
+_TEST_PUBKEY_HEX = _TEST_VERIFY_KEY.encode().hex()
 
 
 app = create_app()
@@ -22,6 +30,16 @@ def clear_store() -> None:
     witness_module.clear_observations()
 
 
+@pytest.fixture(autouse=True)
+def _set_witness_registry(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Make _resolve_node_pubkey return the test key for any origin."""
+    monkeypatch.setattr(
+        witness_module,
+        "_resolve_node_pubkey",
+        lambda origin: _TEST_PUBKEY_HEX,
+    )
+
+
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
@@ -32,6 +50,12 @@ def _nonce() -> str:
     return uuid.uuid4().hex
 
 
+def _sign_checkpoint(origin: str, sequence: int, checkpoint_hash: str) -> str:
+    """Create an Ed25519 signature over the canonical checkpoint payload."""
+    payload = hashlib.sha256(f"{origin}:{sequence}:{checkpoint_hash}".encode()).digest()
+    return _TEST_SIGNING_KEY.sign(payload).signature.hex()
+
+
 def _announcement_payload(
     origin: str,
     sequence: int,
@@ -39,15 +63,19 @@ def _announcement_payload(
     *,
     timestamp: str | None = None,
     nonce: str | None = None,
+    node_signature: str | None = None,
 ) -> dict:
+    ts = timestamp or current_timestamp()
+    sig = node_signature or _sign_checkpoint(origin, sequence, checkpoint_hash)
     return {
         "origin": origin,
         "checkpoint": {
             "sequence": sequence,
             "checkpoint_hash": checkpoint_hash,
-            "timestamp": timestamp or current_timestamp(),
+            "timestamp": ts,
         },
         "nonce": nonce or _nonce(),
+        "node_signature": sig,
     }
 
 
@@ -161,6 +189,32 @@ def test_checkpoint_by_sequence_found() -> None:
     resp = client.get("/witness/checkpoints/42")
     assert resp.status_code == 200
     assert resp.json()["checkpoint"]["sequence"] == 42
+
+
+def test_checkpoint_by_sequence_uses_secondary_index(monkeypatch: pytest.MonkeyPatch) -> None:
+    """GET /witness/checkpoints/{sequence} does not need to scan _observations."""
+    announcement = witness_module.WitnessAnnouncement.model_validate(
+        {
+            "origin": "node-index",
+            "checkpoint": {
+                "sequence": 42,
+                "checkpoint_hash": "ab" * 32,
+                "timestamp": current_timestamp(),
+            },
+            "received_at": current_timestamp(),
+        }
+    )
+    witness_module._observations_by_seq[42] = announcement
+
+    class _ForbiddenObservations(dict):
+        def values(self):  # pragma: no cover - should never be reached
+            raise AssertionError("get_checkpoint_by_sequence scanned _observations")
+
+    monkeypatch.setattr(witness_module, "_observations", _ForbiddenObservations())
+
+    resp = client.get("/witness/checkpoints/42")
+    assert resp.status_code == 200
+    assert resp.json()["origin"] == "node-index"
 
 
 def test_checkpoint_by_sequence_404() -> None:
