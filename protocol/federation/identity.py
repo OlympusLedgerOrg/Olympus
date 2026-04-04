@@ -293,6 +293,8 @@ class FederationRegistry:
                 updated_nodes.append(node)
                 continue
             found = True
+            if node.pubkey == new_pubkey:
+                raise ValueError(f"New pubkey must differ from current pubkey for node {node_id}")
             updated_nodes.append(
                 FederationNode(
                     node_id=node.node_id,

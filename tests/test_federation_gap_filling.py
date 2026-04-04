@@ -491,22 +491,17 @@ def test_rotate_node_key_raises_on_unknown_node_id() -> None:
         )
 
 
-def test_rotate_node_key_updates_history_even_with_same_pubkey() -> None:
-    """rotate_node_key should update history even if rotating to the same key (idempotent)."""
+def test_rotate_node_key_raises_on_same_pubkey() -> None:
+    """rotate_node_key must reject a rotation to the same public key."""
     registry = _three_node_registry()
-    # Get the current pubkey for olympus-node-1
-    node_1 = next(n for n in registry.nodes if n.node_id == "olympus-node-1")
-    same_key = node_1.pubkey
+    same_key = _test_signing_key(1).verify_key.encode()
 
-    new_registry = registry.rotate_node_key(
-        node_id="olympus-node-1",
-        new_pubkey=same_key,
-        rotated_at="2026-03-15T00:00:00Z",
-    )
-
-    # Verify key_history was updated
-    new_node_1 = next(n for n in new_registry.nodes if n.node_id == "olympus-node-1")
-    assert len(new_node_1.key_history) == len(node_1.key_history) + 1
+    with pytest.raises(ValueError, match="must differ from current pubkey"):
+        registry.rotate_node_key(
+            node_id="olympus-node-1",
+            new_pubkey=same_key,
+            rotated_at="2026-03-15T00:00:00Z",
+        )
 
 
 # =============================================================================
