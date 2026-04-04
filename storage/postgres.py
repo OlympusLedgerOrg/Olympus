@@ -1108,13 +1108,14 @@ class StorageLayer:
 
             # --- O(256) sibling fetch from smt_nodes ---
             siblings = self._get_proof_path(cur, key)
+            tree: SparseMerkleTree | None = None
 
             # --- O(256) Rust incremental update ---
             try:
                 from olympus_core import RustSparseMerkleTree
 
-                root_hash, proof_siblings, node_deltas = (
-                    RustSparseMerkleTree.incremental_update(key, value_hash, siblings)
+                root_hash, proof_siblings, node_deltas = RustSparseMerkleTree.incremental_update(
+                    key, value_hash, siblings
                 )
             except ImportError:
                 if os.getenv("OLYMPUS_REQUIRE_RUST", "").strip().lower() in {
@@ -1134,9 +1135,7 @@ class StorageLayer:
                 # Fallback: full tree load (pre-Rust build)
                 tree = self._load_tree_state(cur)
                 if tree.get(key) is not None:
-                    raise ValueError(
-                        f"Record already exists: {record_type}:{record_id}:{version}"
-                    )
+                    raise ValueError(f"Record already exists: {record_type}:{record_id}:{version}")
                 tree.update(key, value_hash)
                 root_hash = tree.get_root()
                 proof_siblings = None  # will use tree.prove_existence below
@@ -1156,9 +1155,10 @@ class StorageLayer:
                     root_hash=root_hash,
                 )
             else:
-                proof = tree.prove_existence(key)  # type: ignore[possibly-undefined]
-                root_hash = tree.get_root()  # type: ignore[possibly-undefined]
-                tree_size = len(tree.leaves)  # type: ignore[possibly-undefined]
+                assert tree is not None
+                proof = tree.prove_existence(key)
+                root_hash = tree.get_root()
+                tree_size = len(tree.leaves)
 
             # Insert leaf (CD-HS-ST: no shard_id column)
             cur.execute(
@@ -1199,7 +1199,8 @@ class StorageLayer:
                 for db_level, packed_index, hash_val in node_deltas:
                     self._cache_put(shard_id, db_level, packed_index, hash_val)
             else:
-                self._persist_tree_nodes(cur, shard_id, tree)  # type: ignore[possibly-undefined]
+                assert tree is not None
+                self._persist_tree_nodes(cur, shard_id, tree)
 
             # Get previous header
             cur.execute(
@@ -1363,9 +1364,8 @@ class StorageLayer:
                     all_leaves[key] = value_hash
                     authoritative_poseidon_root = _compute_poseidon_root_from_leaves(all_leaves)
                 else:
-                    authoritative_poseidon_root = _compute_poseidon_root_from_leaves(
-                        tree.leaves  # type: ignore[possibly-undefined]
-                    )
+                    assert tree is not None
+                    authoritative_poseidon_root = _compute_poseidon_root_from_leaves(tree.leaves)
                 poseidon_root_decimal = str(
                     int.from_bytes(authoritative_poseidon_root, byteorder="big")
                 )
