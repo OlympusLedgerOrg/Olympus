@@ -26,6 +26,30 @@ logger = logging.getLogger(__name__)
 
 _storage: StorageLayer | None = None
 _db_error: str | None = None
+_rust_smt_smoke_test_complete = False
+
+
+def _run_rust_smt_startup_smoke_test() -> None:
+    """Exercise RustSparseMerkleTree.incremental_update once at startup."""
+    global _rust_smt_smoke_test_complete
+
+    if _rust_smt_smoke_test_complete:
+        return
+
+    try:
+        from olympus_core import RustSparseMerkleTree
+
+        from protocol.ssmf import EMPTY_HASHES
+
+        RustSparseMerkleTree.incremental_update(
+            b"\x00" * 31 + b"\x01",
+            b"\x02" * 32,
+            EMPTY_HASHES[:256],
+        )
+    except Exception as exc:
+        raise RuntimeError("Rust SMT startup smoke test failed") from exc
+
+    _rust_smt_smoke_test_complete = True
 
 
 def _get_storage() -> StorageLayer:
@@ -122,6 +146,7 @@ def _require_storage() -> StorageLayer:
             status_code=503,
             detail="Database not available: storage not initialized",
         )
+    _run_rust_smt_startup_smoke_test()
     return storage
 
 

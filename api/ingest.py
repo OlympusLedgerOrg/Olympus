@@ -832,7 +832,17 @@ def _build_poseidon_smt_for_storage_shard(
     from protocol.poseidon_smt import PoseidonSMT
 
     with storage._get_connection() as conn, conn.cursor() as cur:
-        tree = storage._load_tree_state(cur, up_to_ts=up_to_ts)
+        # _OLYMPUS_POSEIDON_CARVE_OUT: this is the only approved O(N)
+        # _load_tree_state call in the ingest path.
+        _OLYMPUS_POSEIDON_CARVE_OUT = True
+        assert _OLYMPUS_POSEIDON_CARVE_OUT, (
+            "Poseidon SMT rebuilds must explicitly opt into _load_tree_state"
+        )
+        tree = storage._load_tree_state(
+            cur,
+            up_to_ts=up_to_ts,
+            _OLYMPUS_POSEIDON_CARVE_OUT=_OLYMPUS_POSEIDON_CARVE_OUT,
+        )
 
     poseidon_smt = PoseidonSMT()
     for key, value_hash in tree.leaves.items():

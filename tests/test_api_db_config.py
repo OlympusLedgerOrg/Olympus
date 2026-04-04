@@ -6,6 +6,7 @@ import subprocess
 import sys
 from contextlib import contextmanager
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 from fastapi import HTTPException
@@ -94,3 +95,48 @@ def test_get_storage_normalizes_asyncpg_url_for_psycopg(monkeypatch):
 
     assert storage is not None
     assert captured["connection_string"] == "postgresql://user:pass@localhost:5432/olympus"
+
+
+def test_require_storage_runs_rust_smt_smoke_test_once(monkeypatch):
+    """_require_storage() should run the Rust SMT smoke test once per process."""
+    calls: list[tuple[bytes, bytes, list[bytes]]] = []
+    sentinel_storage = object()
+
+    class _FakeRustSparseMerkleTree:
+        @staticmethod
+        def incremental_update(key: bytes, value_hash: bytes, siblings: list[bytes]):
+            calls.append((key, value_hash, siblings))
+            return (b"\x00" * 32, list(siblings), [(0, b"", b"\x00" * 32)] * 256)
+
+    monkeypatch.setattr(storage_layer_mod, "_rust_smt_smoke_test_complete", False)
+    monkeypatch.setattr(storage_layer_mod, "_get_storage", lambda: sentinel_storage)
+    monkeypatch.setitem(
+        sys.modules,
+        "olympus_core",
+        SimpleNamespace(RustSparseMerkleTree=_FakeRustSparseMerkleTree),
+    )
+
+    assert storage_layer_mod._require_storage() is sentinel_storage
+    assert storage_layer_mod._require_storage() is sentinel_storage
+    assert len(calls) == 1
+
+
+def test_require_storage_hard_fails_when_rust_smt_smoke_test_raises(monkeypatch):
+    """_require_storage() should fail hard if Rust incremental_update raises."""
+    sentinel_storage = object()
+
+    class _FakeRustSparseMerkleTree:
+        @staticmethod
+        def incremental_update(_key: bytes, _value_hash: bytes, _siblings: list[bytes]):
+            raise ValueError("boom")
+
+    monkeypatch.setattr(storage_layer_mod, "_rust_smt_smoke_test_complete", False)
+    monkeypatch.setattr(storage_layer_mod, "_get_storage", lambda: sentinel_storage)
+    monkeypatch.setitem(
+        sys.modules,
+        "olympus_core",
+        SimpleNamespace(RustSparseMerkleTree=_FakeRustSparseMerkleTree),
+    )
+
+    with pytest.raises(RuntimeError, match="Rust SMT startup smoke test failed"):
+        storage_layer_mod._require_storage()

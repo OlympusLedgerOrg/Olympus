@@ -155,6 +155,11 @@ try:  # pragma: no cover
         "Number of times an SMT root mismatch was detected between nodes",
     )
 
+    LOAD_TREE_STATE_OUTSIDE_POSEIDON_TOTAL = _prom.Counter(
+        "olympus_load_tree_state_outside_poseidon_total",
+        "Number of deprecated _load_tree_state calls made outside the Poseidon carve-out",
+    )
+
     # Total number of ingest operations by outcome.
     INGEST_TOTAL = _prom.Counter(
         "olympus_ingest_operations_total",
@@ -194,6 +199,7 @@ except ImportError:
     PROOF_LATENCY = _NullMetric()
     LEDGER_HEIGHT = _NullMetric()
     SMT_DIVERGENCE_TOTAL = _NullMetric()
+    LOAD_TREE_STATE_OUTSIDE_POSEIDON_TOTAL = _NullMetric()
     INGEST_TOTAL = _NullMetric()
     PARTITION_EVENTS = _NullMetric()
     VIEW_CHANGE_WATERMARK = _NullMetric()
