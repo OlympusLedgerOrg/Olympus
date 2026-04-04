@@ -25,7 +25,7 @@ dependencies = [
     "blake3==1.0.8",
     "PyNaCl==1.6.2",
     "fastapi==0.135.2",
-    "starlette==0.52.1",
+    "starlette==1.0.0",
     "uvicorn[standard]==0.42.0",
     "psycopg[binary]==3.3.3",
     "psycopg-pool==3.3.0",
