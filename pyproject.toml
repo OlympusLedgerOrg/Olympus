@@ -24,7 +24,7 @@ classifiers = [
 dependencies = [
     "blake3==1.0.8",
     "PyNaCl==1.6.2",
-    "fastapi==0.135.1",
+    "fastapi==0.135.2",
     "starlette==0.52.1",
     "uvicorn[standard]==0.41.0",
     "psycopg[binary]==3.3.3",
