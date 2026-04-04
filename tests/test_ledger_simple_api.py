@@ -4,7 +4,7 @@ Tests for the user-friendly ledger endpoints.
 Covers:
   GET  /ledger/activity            — activity feed
   POST /ledger/ingest/simple       — guided document ingestion
-  POST /ledger/verify/simple       — plain-English verification (requires API key)
+  POST /ledger/verify/simple       — plain-English verification (public, no API key required)
 """
 
 from __future__ import annotations
@@ -291,9 +291,11 @@ async def test_verify_creates_activity_entry(client):
 
 
 @pytest.mark.asyncio
-async def test_verify_simple_rejects_unauthenticated(db_engine):
-    """POST /ledger/verify/simple returns 401 when no API key is provided
-    and OLYMPUS_ENV is not 'development'."""
+async def test_verify_simple_allows_unauthenticated(db_engine):
+    """POST /ledger/verify/simple is publicly accessible without an API key.
+
+    Verification is a read-semantic operation — this is a transparency system.
+    """
     import os
 
     import api.auth as _auth_mod
@@ -326,8 +328,10 @@ async def test_verify_simple_rejects_unauthenticated(db_engine):
                 "/ledger/verify/simple",
                 data={"doc_hash": "a" * 64},
             )
-        assert resp.status_code == 401, (
-            f"Expected 401 for unauthenticated verify/simple, got {resp.status_code}"
+        # 200 (not-found result) or 400 (missing input) are both fine —
+        # neither is 401, confirming the endpoint is publicly accessible.
+        assert resp.status_code != 401, (
+            f"POST /ledger/verify/simple should not require auth, got {resp.status_code}"
         )
     finally:
         _auth_mod._keys_loaded = False

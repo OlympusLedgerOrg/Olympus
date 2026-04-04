@@ -400,7 +400,6 @@ async def simple_document_verify(
     request: Request,
     db: DBSession,
     _rl: RateLimit,
-    _key: RequireAPIKey,
     file: UploadFile | None = File(None),
     commit_id: str | None = Form(None),
     doc_hash: str | None = Form(None),

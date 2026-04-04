@@ -34,7 +34,6 @@ from protocol.hashes import (
     blake3_hash,
     compute_dataset_commit_id,
     dataset_key,
-    hash_bytes,
 )
 
 
@@ -619,13 +618,14 @@ async def test_verify_dataset_with_rfc3161_status(client):
 
 
 @pytest.mark.asyncio
-async def test_verify_dataset_requires_api_key_outside_development(monkeypatch, db_engine):
-    """GET /datasets/{dataset_id}/verify requires API key auth in non-development mode."""
+async def test_verify_dataset_allows_unauthenticated(monkeypatch, db_engine):
+    """GET /datasets/{dataset_id}/verify is publicly accessible without an API key.
+
+    Verification is a read-semantic operation — this is a transparency system.
+    """
     original_loaded = auth_module._keys_loaded
     original_store = dict(auth_module._key_store)
     original_env = os.environ.get("OLYMPUS_FOIA_API_KEYS")
-    test_key = "dataset-verify-key"
-    test_key_hash = hash_bytes(test_key.encode("utf-8")).hex()
     fake_dataset_id = "0" * 64
     session_factory = async_sessionmaker(db_engine, expire_on_commit=False, class_=AsyncSession)
 
@@ -639,7 +639,7 @@ async def test_verify_dataset_requires_api_key_outside_development(monkeypatch, 
             json.dumps(
                 [
                     {
-                        "key_hash": test_key_hash,
+                        "key_hash": "a" * 64,
                         "key_id": "dataset-verify-key",
                         "scopes": ["read", "write"],
                         "expires_at": "2099-01-01T00:00:00Z",
@@ -656,16 +656,12 @@ async def test_verify_dataset_requires_api_key_outside_development(monkeypatch, 
         app.dependency_overrides[get_db] = override_get_db
         async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
             unauthenticated = await ac.get(f"/datasets/{fake_dataset_id}/verify")
-            assert unauthenticated.status_code == 401
-
-        async with AsyncClient(
-            transport=ASGITransport(app=app),
-            base_url="http://test",
-            headers={"X-API-Key": test_key},
-        ) as ac:
-            authorized = await ac.get(f"/datasets/{fake_dataset_id}/verify")
-            assert authorized.status_code == 200
-            assert authorized.json()["verified"] is False
+        # 200 (not-found / verified=False) is the expected response — neither 401 nor 403.
+        assert unauthenticated.status_code != 401, (
+            "GET /datasets/{id}/verify should not require auth, got 401"
+        )
+        assert unauthenticated.status_code == 200
+        assert unauthenticated.json()["verified"] is False
     finally:
         auth_module._keys_loaded = original_loaded
         auth_module._key_store.clear()

@@ -122,9 +122,7 @@ async def commit_document(
 
 
 @router.post("/verify", response_model=DocVerifyResponse)
-async def verify_document(
-    body: DocVerifyRequest, db: DBSession, _api_key: RequireAPIKey, _rl: RateLimit
-):
+async def verify_document(body: DocVerifyRequest, db: DBSession, _rl: RateLimit):
     """Verify a previously committed document hash.
 
     Looks up the commit by ``commit_id`` or ``doc_hash`` (at least one is
