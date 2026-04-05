@@ -1362,9 +1362,12 @@ class StorageLayer:
                 # to prevent stale roots under concurrent writes (see threat-model.md RT-H5).
                 # The SERIALIZABLE isolation level prevents write skew anomalies, ensuring that
                 # the smt_leaves view remains consistent with this transaction's snapshot.
-                # The poseidon_root parameter is used only as a flag to enable this computation;
-                # its actual value is discarded and recomputed here from the current transaction's
-                # view of smt_leaves.
+                #
+                # API NOTE: The poseidon_root parameter (type: bytes | None) is used as a feature flag.
+                # If None, Poseidon computation is disabled entirely. If not None, the actual value
+                # is discarded and replaced with a transaction-authoritative recomputation from smt_leaves.
+                # Future API improvement: Consider renaming to enable_poseidon: bool for clarity.
+                #
                 # Poseidon root requires all leaves — query from DB when tree is
                 # unavailable (incremental path).  This is O(N) but only runs
                 # when ZK proofs are enabled.

@@ -79,7 +79,8 @@ async def _read_upload_bounded(file: UploadFile, max_bytes: int, max_mb: int) ->
     """Read *file* in fixed-size chunks, aborting if the total exceeds *max_bytes*.
 
     Security: This function implements multiple defenses against memory exhaustion:
-    1. Caller must check Content-Length header before calling this function
+    1. Caller must check Content-Length header before calling this function.
+       (See verify_record_upload endpoint at line ~1449 for reference implementation.)
     2. Per-chunk timeout prevents slow-loris attacks (upload_read_timeout_seconds)
     3. Size check before accumulating each chunk prevents OOM before limit check
     4. Uses list of immutable bytes chunks to avoid bytearray reallocation overhead
