@@ -82,7 +82,8 @@ async def _read_upload_bounded(file: UploadFile, max_bytes: int, max_mb: int) ->
     1. Caller must check Content-Length header before calling this function
     2. Per-chunk timeout prevents slow-loris attacks (upload_read_timeout_seconds)
     3. Size check before accumulating each chunk prevents OOM before limit check
-    4. Uses list of chunks to avoid bytearray memory overhead
+    4. Uses list of immutable bytes chunks to avoid bytearray reallocation overhead
+       and eliminates the final bytearray-to-bytes conversion step
 
     Args:
         file: FastAPI UploadFile to read.

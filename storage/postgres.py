@@ -1359,10 +1359,12 @@ class StorageLayer:
 
             if poseidon_root is not None:
                 # RT-H5 MITIGATION: Recompute Poseidon root from transaction-authoritative leaf state
-                # to prevent stale roots under concurrent writes.
+                # to prevent stale roots under concurrent writes (see threat-model.md RT-H5).
+                # The SERIALIZABLE isolation level prevents write skew anomalies, ensuring that
+                # the smt_leaves view remains consistent with this transaction's snapshot.
                 # The poseidon_root parameter is used only as a flag to enable this computation;
                 # its actual value is discarded and recomputed here from the current transaction's
-                # view of smt_leaves (which is isolated via SERIALIZABLE isolation level).
+                # view of smt_leaves.
                 # Poseidon root requires all leaves — query from DB when tree is
                 # unavailable (incremental path).  This is O(N) but only runs
                 # when ZK proofs are enabled.
