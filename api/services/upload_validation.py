@@ -150,6 +150,17 @@ def validate_zip_safety(content: bytes) -> None:
                         ),
                     )
 
+                # ── Symlink guard ────────────────────────────────────────────
+                # Unix-format external_attr encodes the file mode in the upper
+                # 16 bits.  Symlinks can escape the extraction sandbox even
+                # when the path itself looks safe.
+                unix_mode = info.external_attr >> 16
+                if unix_mode and stat.S_ISLNK(unix_mode):
+                    raise HTTPException(
+                        status_code=400,
+                        detail=(f"ZIP entry is a symlink: {info.filename!r} — rejected."),
+                    )
+
                 # ── Ratio guard (zip bomb, per-entry) ────────────────────────
                 if info.compress_size > 0:
                     ratio = info.file_size / info.compress_size

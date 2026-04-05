@@ -250,7 +250,8 @@ def probe_verify_groth16_bn254(bindings: _RustBindings) -> RustProbeResult:
 def _safe_probe(name: str, probe: _ProbeFunc, bindings: _RustBindings) -> RustProbeResult:
     """Run a probe and convert unexpected exceptions into probe failures."""
     try:
-        return probe(bindings)
+        result: RustProbeResult = probe(bindings)
+        return result
     except Exception as exc:
         return RustProbeResult(name=name, ok=False, detail=f"{type(exc).__name__}: {exc}")
 

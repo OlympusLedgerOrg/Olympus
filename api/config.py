@@ -105,9 +105,9 @@ class Settings(BaseSettings):
     @field_validator("shard_timestamp_skew_ms")
     @classmethod
     def validate_shard_timestamp_skew_ms(cls, v: int) -> int:
-        """Ensure shard_timestamp_skew_ms is positive."""
+        """Reject non-positive timestamp skew values."""
         if v <= 0:
-            raise ValueError("shard_timestamp_skew_ms must be > 0")
+            raise ValueError("shard_timestamp_skew_ms must be positive")
         return v
 
 

@@ -91,6 +91,9 @@ _DEBUG_CONSOLE_PASSWORD = os.environ.get("OLYMPUS_DEBUG_CONSOLE_PASSWORD", "")
 
 _ENV = os.environ.get("OLYMPUS_ENV", "production")
 
+# Minimum password length for the debug console (M1 audit fix).
+_MIN_DEBUG_PASSWORD_LENGTH = 16
+
 # C-2 Fix: Refuse to start in production mode without a debug console password.
 # This prevents accidental exposure of the debug console when operators forget
 # to set OLYMPUS_DEBUG_CONSOLE_PASSWORD.
@@ -99,6 +102,17 @@ if _ENV == "production" and not _DEBUG_CONSOLE_PASSWORD:
         "OLYMPUS_DEBUG_CONSOLE_PASSWORD must be set when OLYMPUS_ENV=production. "
         "The debug console cannot start without authentication configured. "
         "Either set a strong password or use OLYMPUS_ENV=development for local testing."
+    )
+
+# M1 audit fix: enforce minimum password length in production.
+if (
+    _ENV == "production"
+    and _DEBUG_CONSOLE_PASSWORD
+    and len(_DEBUG_CONSOLE_PASSWORD) < _MIN_DEBUG_PASSWORD_LENGTH
+):
+    raise RuntimeError(
+        f"OLYMPUS_DEBUG_CONSOLE_PASSWORD must be at least {_MIN_DEBUG_PASSWORD_LENGTH} characters "
+        f"(got {len(_DEBUG_CONSOLE_PASSWORD)}). Use a strong, randomly generated password."
     )
 
 logger = logging.getLogger(__name__)
@@ -211,6 +225,21 @@ async def _debug_console_basic_auth(request: Request, call_next: Any) -> JSONRes
     password is configured, every request is rejected with HTTP 503 to prevent
     accidental unauthenticated exposure of the debug console.
     """
+    # L4 audit fix: reject plaintext requests in production when behind a
+    # proxy that advertises the original protocol via X-Forwarded-Proto.
+    if _ENV != "development":
+        forwarded_proto = request.headers.get("x-forwarded-proto", "").lower()
+        if forwarded_proto and forwarded_proto != "https":
+            return JSONResponse(
+                status_code=421,
+                content={
+                    "detail": (
+                        "Debug console requires HTTPS. "
+                        "Redirecting to HTTPS is not supported; please use an HTTPS URL."
+                    )
+                },
+            )
+
     if not _DEBUG_CONSOLE_PASSWORD:
         if _ENV != "development":
             return JSONResponse(
@@ -242,9 +271,7 @@ async def _debug_console_basic_auth(request: Request, call_next: Any) -> JSONRes
             content={"detail": "Invalid credentials"},
             headers={"WWW-Authenticate": 'Basic realm="Olympus Debug Console"'},
         )
-    if not hmac.compare_digest(
-        password.encode("utf-8"), _DEBUG_CONSOLE_PASSWORD.encode("utf-8")
-    ):
+    if not hmac.compare_digest(password.encode("utf-8"), _DEBUG_CONSOLE_PASSWORD.encode("utf-8")):
         return JSONResponse(
             status_code=401,
             content={"detail": "Invalid credentials"},
