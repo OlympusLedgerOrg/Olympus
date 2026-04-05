@@ -14,15 +14,21 @@ use crate::proto::olympus::cdhs_smf::v1::RecordKey;
 
 /// Domain separation prefixes for BLAKE3 hashing.
 ///
-/// IMPORTANT: `GLOBAL_KEY_PREFIX` intentionally retains the historical bytes
-/// `b"OLY:CDHS-SMF:GKEY:V1"`.  Changing it would invalidate every existing leaf
-/// hash and break all outstanding inclusion proofs — it is a protocol-critical
-/// constant.  The architecture was later renamed CD-HS-ST but this prefix is
-/// frozen at its original value for backward compatibility.
-const GLOBAL_KEY_PREFIX: &[u8] = b"OLY:CDHS-SMF:GKEY:V1"; // frozen — do not change
-const LEAF_HASH_PREFIX: &[u8] = b"OLY:SMT:LEAF:V1";
-const NODE_HASH_PREFIX: &[u8] = b"OLY:SMT:NODE:V1";
+/// These constants MUST stay in sync with `src/crypto.rs` (PyO3 extension) and
+/// `protocol/hashes.py` (Python reference).  All three implementations must
+/// produce byte-identical hashes for the same inputs.
+///
+/// BLAKE3 derive_key context for global SMT leaf keys — matches the PyO3
+/// extension and `protocol/hashes.py::_GLOBAL_SMT_KEY_CONTEXT`.
+const GLOBAL_SMT_KEY_CONTEXT: &str = "olympus 2025-12 global-smt-leaf-key";
+
+const LEAF_HASH_PREFIX: &[u8] = b"OLY:LEAF:V1";
+const NODE_HASH_PREFIX: &[u8] = b"OLY:NODE:V1";
 const EMPTY_LEAF_PREFIX: &[u8] = b"OLY:EMPTY-LEAF:V1";
+
+/// Field separator between components in leaf/node hashes — matches `SEP` in
+/// `src/crypto.rs` and `HASH_SEPARATOR` in `protocol/hashes.py`.
+const SEP: &[u8] = b"|";
 
 /// Encode a byte slice with a 4-byte big-endian length prefix.
 ///
@@ -37,41 +43,66 @@ fn length_prefixed(data: &[u8]) -> Vec<u8> {
     buf
 }
 
-/// Compute a global key from shard_id and record_key
+/// Compute a global key from shard_id and record_key.
 ///
-/// global_key = H_derive(len(shard_id) || shard_id || len(record_type) || record_type || ...)
+/// Uses BLAKE3 `derive_key` mode with [`GLOBAL_SMT_KEY_CONTEXT`] — matching
+/// `src/crypto.rs::global_key()` (PyO3) and `protocol/hashes.py::global_key()`.
 ///
-/// All variable-length fields are length-prefixed to prevent canonicalization
-/// collisions (field-boundary bleeding between shard_id and record_key components).
+/// The record_key fields are first hashed into a 32-byte `record_key_bytes`
+/// using the same `KEY_PREFIX` + length-prefixed layout as the PyO3 extension,
+/// then the global key is derived from `(shard_id, record_key_bytes)`.
 pub fn compute_global_key(shard_id: &str, record_key: &RecordKey) -> [u8; 32] {
-    let mut hasher = blake3::Hasher::new();
+    // Step 1: Compute record_key_bytes (matches src/crypto.rs::record_key and
+    // protocol/hashes.py::record_key).
+    let record_key_bytes = compute_record_key_bytes(record_key);
 
-    // Domain separation prefix
-    hasher.update(GLOBAL_KEY_PREFIX);
+    // Step 2: Derive global key using BLAKE3 derive_key mode with
+    // length-prefixed shard_id and record_key_bytes.
+    let shard_bytes = shard_id.as_bytes();
+    let mut key_material = Vec::with_capacity(
+        4 + shard_bytes.len() + 4 + record_key_bytes.len(),
+    );
+    key_material.extend_from_slice(&length_prefixed(shard_bytes));
+    key_material.extend_from_slice(&length_prefixed(&record_key_bytes));
 
-    // Shard ID — length-prefixed to prevent bleeding into record_type
-    hasher.update(&length_prefixed(shard_id.as_bytes()));
+    *blake3::Hasher::new_derive_key(GLOBAL_SMT_KEY_CONTEXT)
+        .update(&key_material)
+        .finalize()
+        .as_bytes()
+}
 
-    // Record type — length-prefixed
-    hasher.update(&length_prefixed(record_key.record_type.as_bytes()));
+/// Domain-separation prefix for record keys — must match `KEY_PREFIX` in
+/// `src/crypto.rs` and `protocol/hashes.py`.
+const KEY_PREFIX: &[u8] = b"OLY:KEY:V1";
 
-    // Record ID — length-prefixed
-    hasher.update(&length_prefixed(record_key.record_id.as_bytes()));
+/// Compute record key bytes matching `src/crypto.rs::record_key()` and
+/// `protocol/hashes.py::record_key()`.
+///
+/// Layout: `BLAKE3(KEY_PREFIX || len(record_type) || record_type || len(record_id) || record_id || version_u64_be)`
+///
+/// Note: the `version` field in the protobuf `RecordKey` is a string; we
+/// parse it as `u64` (defaulting to 0 for empty strings) to match the Python
+/// and PyO3 implementations which accept an integer version.
+fn compute_record_key_bytes(rk: &RecordKey) -> [u8; 32] {
+    let rt = rk.record_type.as_bytes();
+    let ri = rk.record_id.as_bytes();
 
-    // Version — length-prefixed (empty version is encoded as 0-length prefix)
-    hasher.update(&length_prefixed(record_key.version.as_bytes()));
+    // Parse version string as u64 (empty → 0)
+    let version: u64 = if rk.version.is_empty() {
+        0
+    } else {
+        rk.version.parse::<u64>().unwrap_or(0)
+    };
 
-    // Metadata (sorted by key for determinism) — each key and value length-prefixed
-    let mut keys: Vec<_> = record_key.metadata.keys().collect();
-    keys.sort();
-    for key in keys {
-        hasher.update(&length_prefixed(key.as_bytes()));
-        if let Some(value) = record_key.metadata.get(key) {
-            hasher.update(&length_prefixed(value.as_bytes()));
-        }
-    }
+    let mut key_data = Vec::with_capacity(
+        KEY_PREFIX.len() + 4 + rt.len() + 4 + ri.len() + 8,
+    );
+    key_data.extend_from_slice(KEY_PREFIX);
+    key_data.extend_from_slice(&length_prefixed(rt));
+    key_data.extend_from_slice(&length_prefixed(ri));
+    key_data.extend_from_slice(&version.to_be_bytes());
 
-    *hasher.finalize().as_bytes()
+    *blake3::Hasher::new().update(&key_data).finalize().as_bytes()
 }
 
 /// Hash canonicalized content for leaf value
@@ -84,20 +115,32 @@ pub fn hash_bytes(data: &[u8]) -> [u8; 32] {
     *blake3::hash(data).as_bytes()
 }
 
-/// Hash a leaf node with domain separation
+/// Hash a leaf node with domain separation.
+///
+/// `BLAKE3(LEAF_HASH_PREFIX || "|" || key || "|" || value_hash)`
+///
+/// Matches `compute_leaf_hash` in `src/crypto.rs` (PyO3).
 pub fn hash_leaf(key: &[u8; 32], value_hash: &[u8; 32]) -> [u8; 32] {
     let mut hasher = blake3::Hasher::new();
     hasher.update(LEAF_HASH_PREFIX);
+    hasher.update(SEP);
     hasher.update(key);
+    hasher.update(SEP);
     hasher.update(value_hash);
     *hasher.finalize().as_bytes()
 }
 
-/// Hash an internal node with domain separation
+/// Hash an internal node with domain separation.
+///
+/// `BLAKE3(NODE_HASH_PREFIX || "|" || left || "|" || right)`
+///
+/// Matches `compute_node_hash` in `src/crypto.rs` (PyO3).
 pub fn hash_node(left: &[u8; 32], right: &[u8; 32]) -> [u8; 32] {
     let mut hasher = blake3::Hasher::new();
     hasher.update(NODE_HASH_PREFIX);
+    hasher.update(SEP);
     hasher.update(left);
+    hasher.update(SEP);
     hasher.update(right);
     *hasher.finalize().as_bytes()
 }
@@ -124,22 +167,29 @@ impl KeyManager {
         }
     }
 
-    /// Sign a root hash with optional context
+    /// Sign a root hash with optional context.
+    ///
+    /// Context keys and values are **length-prefixed** to prevent field-bleed
+    /// collisions (e.g. `{"ab": "cd"}` vs `{"a": "bcd"}`).
     pub fn sign_root(
         &self,
         root: &[u8; 32],
         context: &HashMap<String, String>,
     ) -> Result<([u8; 64], [u8; 32]), String> {
-        // Build message to sign: root || sorted_context
+        // Build message to sign: root || sorted_context (length-prefixed fields)
         let mut message = Vec::from(&root[..]);
 
-        // Add sorted context
+        // Add sorted context with length-prefixed keys and values
         let mut keys: Vec<_> = context.keys().collect();
         keys.sort();
         for key in keys {
-            message.extend_from_slice(key.as_bytes());
+            let key_bytes = key.as_bytes();
+            message.extend_from_slice(&(key_bytes.len() as u32).to_be_bytes());
+            message.extend_from_slice(key_bytes);
             if let Some(value) = context.get(key) {
-                message.extend_from_slice(value.as_bytes());
+                let value_bytes = value.as_bytes();
+                message.extend_from_slice(&(value_bytes.len() as u32).to_be_bytes());
+                message.extend_from_slice(value_bytes);
             }
         }
 

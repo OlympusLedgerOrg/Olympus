@@ -451,6 +451,36 @@ class MemoryRateLimitBackend:
             while len(self._buckets) > self._max_buckets:
                 self._buckets.popitem(last=False)
 
+    def consume_atomic(self, key: str, capacity: float, refill_rate: float) -> bool:
+        """Atomically get-consume-set a rate limit bucket.
+
+        Holds the lock across the entire get → consume → set sequence to
+        prevent TOCTOU races where two concurrent requests both read the
+        same token count and both succeed (H-4 in security audit).
+
+        Returns True if the request is allowed, False if rate-limited.
+        """
+        with self._lock:
+            bucket = self._buckets.get(key)
+            if bucket is not None:
+                self._buckets.move_to_end(key)
+            else:
+                bucket = _TokenBucket(
+                    capacity=capacity,
+                    refill_rate=refill_rate,
+                    tokens=capacity,
+                    last_refill=monotonic(),
+                )
+
+            allowed = bucket.consume()
+
+            self._buckets[key] = bucket
+            self._buckets.move_to_end(key)
+            while len(self._buckets) > self._max_buckets:
+                self._buckets.popitem(last=False)
+
+            return allowed
+
     @property
     def bucket_count(self) -> int:
         """Return the number of stored buckets (useful for testing)."""
@@ -690,6 +720,18 @@ async def rate_limit(request: Request) -> None:
     """
     ip = _get_client_ip(request)
     backend = _get_backend()
+
+    # Use atomic consume if available (MemoryRateLimitBackend) to prevent
+    # TOCTOU races where concurrent requests both read the same token count.
+    if hasattr(backend, "consume_atomic"):
+        if not backend.consume_atomic(ip, _RATE_LIMIT_CAPACITY, _RATE_LIMIT_REFILL):
+            raise HTTPException(
+                status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+                detail={"detail": "Rate limit exceeded.", "code": "RATE_LIMITED"},
+            )
+        return
+
+    # Fallback for other backends (e.g. Redis) that may not have consume_atomic
     bucket = backend.get(ip)
 
     if bucket is None:

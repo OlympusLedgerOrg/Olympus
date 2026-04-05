@@ -53,7 +53,8 @@ func (s *PostgresStorage) StoreRoot(ctx context.Context, root []byte, treeSize u
 	return nil
 }
 
-// StoreNodeDelta persists SMT node deltas to the database
+// StoreNodeDelta persists a single SMT node delta to the database within its own transaction.
+// For batch operations, prefer StoreLeafAndDeltas which wraps all deltas + root in one transaction.
 func (s *PostgresStorage) StoreNodeDelta(ctx context.Context, path []byte, level uint32, hash []byte) error {
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
@@ -61,6 +62,15 @@ func (s *PostgresStorage) StoreNodeDelta(ctx context.Context, path []byte, level
 	}
 	defer tx.Rollback()
 
+	if err := storeNodeDeltaInTx(ctx, tx, path, level, hash); err != nil {
+		return err
+	}
+
+	return tx.Commit()
+}
+
+// storeNodeDeltaInTx persists a single SMT node delta within an existing transaction.
+func storeNodeDeltaInTx(ctx context.Context, tx *sql.Tx, path []byte, level uint32, hash []byte) error {
 	if _, err := tx.ExecContext(ctx,
 		"SET LOCAL olympus.allow_node_rehash = $1", nodeRehashGate,
 	); err != nil {
@@ -75,6 +85,42 @@ func (s *PostgresStorage) StoreNodeDelta(ctx context.Context, path []byte, level
 	`
 	if _, err := tx.ExecContext(ctx, query, path, level, hash); err != nil {
 		return fmt.Errorf("store node delta: %w", err)
+	}
+
+	return nil
+}
+
+// SmtDelta represents a single SMT node delta for batch storage.
+type SmtDelta struct {
+	Path  []byte
+	Level uint32
+	Hash  []byte
+}
+
+// StoreLeafAndDeltas atomically persists all node deltas and the new root
+// within a single database transaction. This prevents partial SMT state on
+// crash (C-3 in security audit).
+func (s *PostgresStorage) StoreLeafAndDeltas(ctx context.Context, deltas []SmtDelta, root []byte, treeSize uint64, signature []byte) error {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("begin tx: %w", err)
+	}
+	defer tx.Rollback()
+
+	// Persist all node deltas within the same transaction
+	for _, delta := range deltas {
+		if err := storeNodeDeltaInTx(ctx, tx, delta.Path, delta.Level, delta.Hash); err != nil {
+			return fmt.Errorf("store delta at level %d: %w", delta.Level, err)
+		}
+	}
+
+	// Persist the signed root within the same transaction
+	rootQuery := `
+		INSERT INTO cdhs_smf_roots (root_hash, tree_size, signature, created_at)
+		VALUES ($1, $2, $3, NOW())
+	`
+	if _, err := tx.ExecContext(ctx, rootQuery, root, treeSize, signature); err != nil {
+		return fmt.Errorf("store root: %w", err)
 	}
 
 	return tx.Commit()

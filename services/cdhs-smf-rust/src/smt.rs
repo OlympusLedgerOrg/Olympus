@@ -27,9 +27,13 @@ struct TreeState {
     size: u64,
 }
 
-/// Node delta for persistence
+/// Node delta for persistence.
+///
+/// `path` is the **packed path prefix** at the given level (not the full
+/// 32-byte leaf key).  This matches the encoding used by the PyO3 extension
+/// in `src/smt.rs::incremental_update_raw()` and `storage/postgres.py`.
 pub struct NodeDelta {
-    pub path: [u8; 32],
+    pub path: Vec<u8>,
     pub level: u32,
     pub hash: [u8; 32],
 }
@@ -93,11 +97,15 @@ impl SparseMerkleTree {
 
             let sibling_path = sibling_path_bits(&path_bits, level);
 
-            // Get sibling hash (from nodes or use empty hash)
+            // Get sibling hash (from nodes or use empty hash).
+            // empty_hashes[level] is the hash of an empty subtree at height `level`:
+            //   - empty_hashes[0] = empty leaf sentinel
+            //   - empty_hashes[255] = empty subtree near the root
+            // This matches the convention in src/smt.rs (PyO3).
             let sibling_hash = state.nodes
                 .get(&(level as u8, sibling_path.clone()))
                 .copied()
-                .unwrap_or(empty_hashes[255 - level]);
+                .unwrap_or(empty_hashes[level]);
 
             // Compute parent hash
             let (left, right) = if bit == 0 {
@@ -108,9 +116,16 @@ impl SparseMerkleTree {
 
             let parent_hash = crypto::hash_node(&left, &right);
 
-            // Record delta
+            // Record delta with packed path prefix at this level
+            // (matches src/smt.rs::incremental_update_raw encoding).
+            let packed_path = if level == 0 {
+                Vec::new()
+            } else {
+                pack_path_bits(&path_bits[..level])
+            };
+
             deltas.push(NodeDelta {
-                path: *key, // Simplified - in production, encode path properly
+                path: packed_path,
                 level: level as u32,
                 hash: current_hash,
             });
@@ -157,7 +172,7 @@ impl SparseMerkleTree {
             let sibling_hash = state.nodes
                 .get(&(level as u8, sibling_path))
                 .copied()
-                .unwrap_or(empty_hashes[255 - level]);
+                .unwrap_or(empty_hashes[level]);
 
             siblings[level] = sibling_hash;
         }
@@ -192,7 +207,7 @@ impl SparseMerkleTree {
             let sibling_hash = state.nodes
                 .get(&(level as u8, sibling_path))
                 .copied()
-                .unwrap_or(empty_hashes[255 - level]);
+                .unwrap_or(empty_hashes[level]);
 
             siblings[level] = sibling_hash;
         }
@@ -296,6 +311,25 @@ fn precompute_empty_hashes() -> Vec<[u8; 32]> {
     empty
 }
 
+/// Pack a slice of path bits (0s and 1s) into bytes, MSB first.
+///
+/// Matches `pack_path_bits` in `src/smt.rs` (PyO3) and
+/// `StorageLayer._encode_path()` in `storage/postgres.py`.
+/// An empty slice returns an empty Vec. A 256-element slice returns 32 bytes.
+fn pack_path_bits(bits: &[u8]) -> Vec<u8> {
+    if bits.is_empty() {
+        return Vec::new();
+    }
+    let num_bytes = bits.len().div_ceil(8);
+    let mut result = vec![0u8; num_bytes];
+    for (i, &bit) in bits.iter().enumerate() {
+        if bit != 0 {
+            result[i >> 3] |= 1 << (7 - (i & 7));
+        }
+    }
+    result
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -363,7 +397,7 @@ mod tests {
 
         // Siblings should include actual node hashes, not all empty
         let empty_hashes = precompute_empty_hashes();
-        let has_non_empty = proof_a.siblings.iter().enumerate().any(|(i, s)| *s != empty_hashes[255 - i]);
+        let has_non_empty = proof_a.siblings.iter().enumerate().any(|(i, s)| *s != empty_hashes[i]);
         assert!(has_non_empty, "Two-key proof must have at least one non-empty sibling");
     }
 
