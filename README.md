@@ -10,8 +10,6 @@ At its core, Olympus answers one question with mathematical certainty:
 
 The answer is **yes**, offline, forever.
 
-The repository is in a protocol-hardening phase: deterministic canonicalization, Merkle commitments, verifiable proofs, and developer tooling for inspecting and validating those primitives.
-
 ## Start here
 
 | I am a... | Start with |
@@ -74,7 +72,7 @@ Olympus has three service layers with strict responsibility boundaries:
                     | HTTP / gRPC
                     v
 +---------------------------------------------------+
-|  Go Sequencer  (services/sequencer-go/)              |
+|  Go Sequencer  (services/sequencer-go/)           |
 |  - Trillian-shaped log API                        |
 |  - QueueLeaf, GetLatestRoot, GetInclusionProof    |
 |  - Postgres persistence for SMT node deltas       |
@@ -91,7 +89,9 @@ Olympus has three service layers with strict responsibility boundaries:
 +---------------------------------------------------+
 ```
 
-> **Go never computes Merkle hashes itself.** All SMT operations are delegated to the Rust service over protobuf. Python talks to Go/Rust as external services, never as libraries. *(This describes the target Phase 1 architecture. In Phase 0, the Python API path is the primary write path — see [Current Repository State](#current-repository-state) below.)*
+> **Note:** This diagram shows the **target Phase 1 architecture**. In the current Phase 0 implementation, the Python API path is the primary write path using `storage/postgres.py` with an embedded Rust PyO3 extension (`olympus_core`). See [ARCHITECTURE.md](ARCHITECTURE.md) for the current vs target architecture comparison.
+
+> **Go never computes Merkle hashes itself.** All SMT operations are delegated to the Rust service over protobuf. Python talks to Go/Rust as external services, never as libraries.
 
 ### Pipeline
 
@@ -118,23 +118,29 @@ All stages are independently verifiable. The canonicalization version is current
 | Layer | Technology |
 |-------|-----------|
 | **Python API** | FastAPI 0.135, SQLAlchemy 2 async, psycopg 3, Pydantic v2, Uvicorn |
-| **Go sequencer** | Go 1.24, gRPC (google.golang.org/grpc v1.79), lib/pq |
-| **Rust crypto core** | Rust 2021 edition, blake3 1.5, ed25519-dalek 2.1, tonic 0.10 (gRPC), pyo3 0.24 |
+| **Go sequencer** | Go 1.24, gRPC (google.golang.org/grpc v1.79), lib/pq† |
+| **Rust crypto core** | Rust 2021 edition, blake3 1.5, ed25519-dalek 2.1, tonic 0.10 (gRPC)†, pyo3 0.24 |
 | **ZK circuits** | Circom, snarkjs, circomlib (Poseidon); Halo2 gated behind `OLYMPUS_HALO2_ENABLED` |
 | **Database** | PostgreSQL 16 with Alembic migrations |
 | **Quality tooling** | Ruff, mypy, Bandit, pytest (>=85% coverage floor), Hypothesis, pip-audit |
 | **CI** | GitHub Actions: lint, typecheck, unit, smoke, verifier-conformance, CodeQL, dependency-lock |
 | **Wire format** | Protobuf between Go <-> Rust (`proto/cdhs_smf.proto`, `proto/olympus.proto`) |
 
+† Go sequencer and Rust gRPC service are scaffolded for Phase 1; not yet the primary write path. Current write path: Python API → `storage/postgres.py` → embedded Rust PyO3 (`olympus_core`).
+
 Python version: **>=3.10** (3.12 used for CI tooling and dependency locking).
 
 ## Current Repository State
 
-The repository is at **Phase 0** (pre-public protocol hardening). The three phase-0 blockers are:
+**Security audit complete:** All findings closed. Rust hot-path live via `olympus_core`. Go verifier vendored and conformance-tested. Coverage ≥85%.
 
-1. **Groth16 trusted setup ceremony** — ceremony infrastructure lives in `ceremony/`; the production ceremony is an external dependency.
-2. **Federation decomposition** — in progress; `protocol/federation/` now splits gossip, identity, quorum, replication, and rotation into focused modules.
-3. **E2E CI integration test against real PostgreSQL** — covered by the `smoke` workflow and `pytest -m postgres`.
+**Current phase:** Phase 0 (protocol hardening complete, ready for public deployment).
+
+The three phase-0 blockers were:
+
+1. **Groth16 trusted setup ceremony** ✓ — ceremony infrastructure lives in `ceremony/`; the production ceremony is an external dependency.
+2. **Federation decomposition** ✓ — complete; `protocol/federation/` now splits gossip, identity, quorum, replication, and rotation into focused modules.
+3. **E2E CI integration test against real PostgreSQL** ✓ — covered by the `smoke` workflow and `pytest -m postgres`.
 
 **Phase 1** (greenfield, no migration) services are underway:
 - Go sequencer: `services/sequencer-go/`

@@ -561,6 +561,10 @@ def verify_consistency_proof(
 
         return computed_old == old_root and computed_new == new_root
     except (ValueError, IndexError):
+        logger.warning(
+            "Consistency proof verification failed: invalid proof structure "
+            "(ValueError or IndexError during subproof verification)"
+        )
         return False
 
 
