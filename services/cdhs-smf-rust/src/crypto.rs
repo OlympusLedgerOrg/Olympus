@@ -87,11 +87,20 @@ fn compute_record_key_bytes(rk: &RecordKey) -> [u8; 32] {
     let rt = rk.record_type.as_bytes();
     let ri = rk.record_id.as_bytes();
 
-    // Parse version string as u64 (empty → 0)
+    // Parse version string as u64 (empty → 0).
+    // Non-numeric version strings default to 0 to match the protobuf interface
+    // where version is a string field. Callers should validate version format
+    // before calling this function.
     let version: u64 = if rk.version.is_empty() {
         0
     } else {
-        rk.version.parse::<u64>().unwrap_or(0)
+        rk.version.parse::<u64>().unwrap_or_else(|_| {
+            eprintln!(
+                "WARNING: non-numeric version {:?} in record key, defaulting to 0",
+                rk.version
+            );
+            0
+        })
     };
 
     let mut key_data = Vec::with_capacity(
