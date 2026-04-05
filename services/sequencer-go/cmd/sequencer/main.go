@@ -55,8 +55,27 @@ func main() {
 		log.Fatalf("Failed to listen: %v", err)
 	}
 
+	tlsCert := os.Getenv("SEQUENCER_TLS_CERT")
+	tlsKey := os.Getenv("SEQUENCER_TLS_KEY")
+
+	// Fail fast if exactly one of cert/key is set — this is a dangerous
+	// misconfiguration that would silently fall back to plaintext HTTP.
+	if (tlsCert == "") != (tlsKey == "") {
+		log.Fatalf("Misconfigured TLS: both SEQUENCER_TLS_CERT and SEQUENCER_TLS_KEY must be set, or neither. Got cert=%q, key=%q", tlsCert, tlsKey)
+	}
+
 	log.Printf("Sequencer service starting on %s", httpAddr)
-	if err := http.Serve(listener, sequencer.Handler()); err != nil {
-		log.Fatalf("Server failed: %v", err)
+
+	if tlsCert != "" && tlsKey != "" {
+		if err := http.ServeTLS(listener, sequencer.Handler(), tlsCert, tlsKey); err != nil {
+			log.Fatalf("TLS server failed: %v", err)
+		}
+	} else {
+		log.Printf("WARNING: TLS is not configured (SEQUENCER_TLS_CERT / SEQUENCER_TLS_KEY not set). " +
+			"The X-Sequencer-Token will be transmitted in plaintext. " +
+			"Configure TLS or use a TLS-terminating reverse proxy in production.")
+		if err := http.Serve(listener, sequencer.Handler()); err != nil {
+			log.Fatalf("Server failed: %v", err)
+		}
 	}
 }

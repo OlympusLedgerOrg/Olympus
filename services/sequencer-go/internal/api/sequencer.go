@@ -2,10 +2,13 @@
 package api
 
 import (
+	"crypto/sha256"
+	"crypto/subtle"
 	"encoding/json"
 	"fmt"
 	"log"
 	"net/http"
+	"strconv"
 
 	"github.com/wombatvagina69-crypto/olympus/services/sequencer/internal/client"
 	"github.com/wombatvagina69-crypto/olympus/services/sequencer/internal/storage"
@@ -28,10 +31,14 @@ func NewSequencer(smtClient *client.CdhsSmfClient, storage *storage.PostgresStor
 	}
 }
 
-// requireToken wraps an HTTP handler with shared-secret token authentication
+// requireToken wraps an HTTP handler with shared-secret token authentication.
+// Hashes both tokens with SHA-256 before comparing to prevent timing side-channels
+// from length differences (subtle.ConstantTimeCompare short-circuits on unequal lengths).
 func requireToken(token string, next http.HandlerFunc) http.HandlerFunc {
+	expectedHash := sha256.Sum256([]byte(token))
 	return func(w http.ResponseWriter, r *http.Request) {
-		if r.Header.Get("X-Sequencer-Token") != token {
+		providedHash := sha256.Sum256([]byte(r.Header.Get("X-Sequencer-Token")))
+		if subtle.ConstantTimeCompare(providedHash[:], expectedHash[:]) != 1 {
 			http.Error(w, "Unauthorized", http.StatusUnauthorized)
 			return
 		}
@@ -97,6 +104,16 @@ func (s *Sequencer) handleQueueLeaf(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "invalid record_id", http.StatusBadRequest)
 		return
 	}
+	if len(req.Version) > 64 {
+		http.Error(w, "invalid version", http.StatusBadRequest)
+		return
+	}
+	if req.Version != "" {
+		if _, err := strconv.ParseUint(req.Version, 10, 64); err != nil {
+			http.Error(w, "version must be empty or a base-10 unsigned integer", http.StatusBadRequest)
+			return
+		}
+	}
 	if len(req.Content) == 0 {
 		http.Error(w, "content must not be empty", http.StatusBadRequest)
 		return
@@ -127,16 +144,7 @@ func (s *Sequencer) handleQueueLeaf(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Step 3: Persist deltas and root to Postgres
-	for _, delta := range updateResp.Deltas {
-		if err := s.storage.StoreNodeDelta(ctx, delta.Path, delta.Level, delta.Hash); err != nil {
-			log.Printf("Failed to store node delta: %v", err)
-			http.Error(w, "Storage failed", http.StatusInternalServerError)
-			return
-		}
-	}
-
-	// Step 4: Sign the new root
+	// Step 3: Sign the new root
 	signResp, err := s.smtClient.SignRoot(ctx, updateResp.NewRoot, map[string]string{
 		"shard_id":    req.ShardID,
 		"record_type": req.RecordType,
@@ -148,7 +156,7 @@ func (s *Sequencer) handleQueueLeaf(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Step 5: Get current tree size
+	// Step 4: Get current tree size
 	rootResp, err := s.smtClient.GetRoot(ctx)
 	if err != nil {
 		log.Printf("Get root failed: %v", err)
@@ -156,9 +164,17 @@ func (s *Sequencer) handleQueueLeaf(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Step 6: Store the signed root
-	if err := s.storage.StoreRoot(ctx, updateResp.NewRoot, rootResp.TreeSize, signResp.Signature); err != nil {
-		log.Printf("Failed to store root: %v", err)
+	// Step 5: Persist all deltas + root atomically in a single transaction
+	deltas := make([]storage.SmtDelta, len(updateResp.Deltas))
+	for i, d := range updateResp.Deltas {
+		deltas[i] = storage.SmtDelta{
+			Path:  d.Path,
+			Level: d.Level,
+			Hash:  d.Hash,
+		}
+	}
+	if err := s.storage.StoreLeafAndDeltas(ctx, deltas, updateResp.NewRoot, rootResp.TreeSize, signResp.Signature); err != nil {
+		log.Printf("Failed to store leaf and deltas: %v", err)
 		http.Error(w, "Storage failed", http.StatusInternalServerError)
 		return
 	}
@@ -172,7 +188,9 @@ func (s *Sequencer) handleQueueLeaf(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(resp)
+	if err := json.NewEncoder(w).Encode(resp); err != nil {
+		log.Printf("Failed to encode response: %v", err)
+	}
 }
 
 func (s *Sequencer) handleGetLatestRoot(w http.ResponseWriter, r *http.Request) {
@@ -197,7 +215,9 @@ func (s *Sequencer) handleGetLatestRoot(w http.ResponseWriter, r *http.Request) 
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(resp)
+	if err := json.NewEncoder(w).Encode(resp); err != nil {
+		log.Printf("Failed to encode response: %v", err)
+	}
 }
 
 func (s *Sequencer) handleGetInclusionProof(w http.ResponseWriter, r *http.Request) {
@@ -247,7 +267,9 @@ func (s *Sequencer) handleGetInclusionProof(w http.ResponseWriter, r *http.Reque
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(resp)
+	if err := json.NewEncoder(w).Encode(resp); err != nil {
+		log.Printf("Failed to encode response: %v", err)
+	}
 }
 
 func (s *Sequencer) handleGetConsistencyProof(w http.ResponseWriter, r *http.Request) {

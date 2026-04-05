@@ -215,9 +215,10 @@ def test_global_key_shard_isolation():
 
 def test_global_key_context_uniqueness():
     """
-    The derive_key context string must appear in exactly two places:
-    - ``protocol/hashes.py``   (Python reference implementation)
-    - ``src/crypto.rs``        (Rust acceleration backend)
+    The derive_key context string must appear in exactly three places:
+    - ``protocol/hashes.py``                  (Python reference implementation)
+    - ``src/crypto.rs``                       (PyO3 Rust acceleration backend)
+    - ``services/cdhs-smf-rust/src/crypto.rs`` (standalone CD-HS-ST Rust service)
 
     Any other file using the same string would indicate an accidental
     copy-paste or a divergent implementation that could silently produce
@@ -229,7 +230,8 @@ def test_global_key_context_uniqueness():
     for pattern in ("*.py", "*.rs"):
         for path in repo_root.rglob(pattern):
             occurrences += path.read_text().count(context)
-    assert occurrences == 2, (
+    assert occurrences == 3, (
         f"derive_key context string found {occurrences} time(s); "
-        "expected exactly 2 (protocol/hashes.py + src/crypto.rs)"
+        "expected exactly 3 (protocol/hashes.py + src/crypto.rs + "
+        "services/cdhs-smf-rust/src/crypto.rs)"
     )

@@ -60,7 +60,7 @@ impl CdhsSmfServiceTrait for CdhsSmfService {
         let global_key = crypto::compute_global_key(
             &req.shard_id,
             req.record_key.as_ref().ok_or_else(|| Status::invalid_argument("record_key required"))?,
-        );
+        ).map_err(|e| Status::invalid_argument(format!("invalid record key: {}", e)))?;
 
         // Hash the canonical content
         let leaf_value_hash = crypto::hash_canonical_content(&req.canonical_content);
@@ -74,7 +74,7 @@ impl CdhsSmfServiceTrait for CdhsSmfService {
             global_key: global_key.to_vec(),
             leaf_value_hash: leaf_value_hash.to_vec(),
             deltas: deltas.into_iter().map(|d| SmtNodeDelta {
-                path: d.path.to_vec(),
+                path: d.path,
                 level: d.level,
                 hash: d.hash.to_vec(),
             }).collect(),
@@ -90,7 +90,7 @@ impl CdhsSmfServiceTrait for CdhsSmfService {
         let global_key = crypto::compute_global_key(
             &req.shard_id,
             req.record_key.as_ref().ok_or_else(|| Status::invalid_argument("record_key required"))?,
-        );
+        ).map_err(|e| Status::invalid_argument(format!("invalid record key: {}", e)))?;
 
         let root = if req.root.is_empty() {
             self.smt.root()
@@ -145,7 +145,7 @@ impl CdhsSmfServiceTrait for CdhsSmfService {
         let global_key = crypto::compute_global_key(
             &req.shard_id,
             req.record_key.as_ref().ok_or_else(|| Status::invalid_argument("record_key required"))?,
-        );
+        ).map_err(|e| Status::invalid_argument(format!("invalid record key: {}", e)))?;
 
         let root = if req.root.is_empty() {
             self.smt.root()
