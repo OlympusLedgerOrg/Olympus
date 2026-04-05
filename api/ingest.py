@@ -78,6 +78,12 @@ _UPLOAD_CHUNK_SIZE = 65_536
 async def _read_upload_bounded(file: UploadFile, max_bytes: int, max_mb: int) -> bytes:
     """Read *file* in fixed-size chunks, aborting if the total exceeds *max_bytes*.
 
+    Security: This function implements multiple defenses against memory exhaustion:
+    1. Caller must check Content-Length header before calling this function
+    2. Per-chunk timeout prevents slow-loris attacks (upload_read_timeout_seconds)
+    3. Size check before accumulating each chunk prevents OOM before limit check
+    4. Uses list of chunks to avoid bytearray memory overhead
+
     Args:
         file: FastAPI UploadFile to read.
         max_bytes: Hard upper bound on accepted payload size in bytes.
@@ -88,9 +94,10 @@ async def _read_upload_bounded(file: UploadFile, max_bytes: int, max_mb: int) ->
 
     Raises:
         HTTPException 413: If the payload exceeds *max_bytes* before EOF.
+        HTTPException 408: If a chunk read exceeds the timeout.
     """
     settings = get_settings()
-    chunks = bytearray()
+    chunks: list[bytes] = []
     total = 0
     max_chunk = min(_UPLOAD_CHUNK_SIZE, max_bytes)
     while True:
@@ -115,8 +122,8 @@ async def _read_upload_bounded(file: UploadFile, max_bytes: int, max_mb: int) ->
                 status_code=413,
                 detail=f"File exceeds maximum size of {max_mb} MB.",
             )
-        chunks.extend(chunk)
-    return bytes(chunks)
+        chunks.append(chunk)
+    return b"".join(chunks)
 
 
 # ---------------------------------------------------------------------------
@@ -1069,6 +1076,13 @@ async def ingest_batch(
             dedup_count = 0
             persist_queue: list[dict[str, Any]] = []
             ledger_entry_hash = ""
+            # RT-H5 MITIGATION: Pre-transaction Poseidon SMT build.
+            # NOTE: When storage is configured, this value is recomputed authoritatively
+            # inside the SERIALIZABLE transaction (storage/postgres.py:1360-1394) to
+            # prevent stale roots under concurrent writes. The pre-transaction value
+            # is used only as a flag to enable Poseidon computation (poseidon_root != None).
+            # The transaction-authoritative value from ledger_entry.poseidon_root is the
+            # source of truth and is used in the final ingestion_entry.
             poseidon_smt = (
                 _build_poseidon_smt_for_storage_shard(storage, shard_id)
                 if storage is not None

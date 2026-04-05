@@ -1358,8 +1358,11 @@ class StorageLayer:
             )
 
             if poseidon_root is not None:
-                # Recompute Poseidon root from transaction-authoritative leaf state
+                # RT-H5 MITIGATION: Recompute Poseidon root from transaction-authoritative leaf state
                 # to prevent stale roots under concurrent writes.
+                # The poseidon_root parameter is used only as a flag to enable this computation;
+                # its actual value is discarded and recomputed here from the current transaction's
+                # view of smt_leaves (which is isolated via SERIALIZABLE isolation level).
                 # Poseidon root requires all leaves — query from DB when tree is
                 # unavailable (incremental path).  This is O(N) but only runs
                 # when ZK proofs are enabled.
@@ -1414,7 +1417,10 @@ class StorageLayer:
                 ),
             )
 
-            # Re-verify persisted ledger entry hash from stored payload.
+            # RT-M1 MITIGATION: Re-verify persisted ledger entry hash from stored payload.
+            # This ensures no subtle bugs in canonical_json_encode() or create_dual_root_commitment()
+            # could cause the stored hash to diverge from a recomputation, which would corrupt
+            # the chain on verification.
             cur.execute(
                 """
                     SELECT entry_hash, payload
