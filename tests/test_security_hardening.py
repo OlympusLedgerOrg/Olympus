@@ -296,6 +296,8 @@ class TestRateLimitBackend:
         t1.join(timeout=5)
         t2.join(timeout=5)
 
+        assert not t1.is_alive(), "Thread 1 timed out"
+        assert not t2.is_alive(), "Thread 2 timed out"
         assert len(results) == 2
         assert results.count(True) == 1, (
             f"Expected exactly 1 allowed request, got {results.count(True)} (results={results})"

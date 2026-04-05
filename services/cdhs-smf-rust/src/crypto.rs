@@ -35,7 +35,17 @@ const SEP: &[u8] = b"|";
 /// This prevents canonicalization collisions where concatenated variable-length
 /// fields could be misinterpreted — e.g. `shard_id="ab"` + `record_key="cd"`
 /// vs. `shard_id="a"` + `record_key="bcd"` would otherwise hash identically.
+///
+/// # Panics
+///
+/// Panics if `data.len()` exceeds `u32::MAX` (4 GiB).  In practice this is
+/// unreachable for any reasonable input; it exists to prevent silent truncation.
 fn length_prefixed(data: &[u8]) -> Vec<u8> {
+    assert!(
+        data.len() <= u32::MAX as usize,
+        "length_prefixed: data length {} exceeds u32::MAX",
+        data.len()
+    );
     let len = data.len() as u32;
     let mut buf = Vec::with_capacity(4 + data.len());
     buf.extend_from_slice(&len.to_be_bytes());
@@ -188,8 +198,6 @@ impl KeyManager {
     ///
     /// Context keys and values are **length-prefixed** to prevent field-bleed
     /// collisions (e.g. `{"ab": "cd"}` vs `{"a": "bcd"}`).
-    ///
-    /// Returns an error if any context key or value exceeds `u32::MAX` bytes.
     pub fn sign_root(
         &self,
         root: &[u8; 32],
@@ -198,21 +206,14 @@ impl KeyManager {
         // Build message to sign: root || sorted_context (length-prefixed fields)
         let mut message = Vec::from(&root[..]);
 
-        // Add sorted context with length-prefixed keys and values
+        // Add sorted context with length-prefixed keys and values.
+        // length_prefixed() asserts that inputs fit in u32, so this is safe.
         let mut keys: Vec<_> = context.keys().collect();
         keys.sort();
         for key in keys {
-            let key_bytes = key.as_bytes();
-            if key_bytes.len() > u32::MAX as usize {
-                return Err(format!("context key exceeds u32::MAX length: {}", key_bytes.len()));
-            }
-            message.extend_from_slice(&length_prefixed(key_bytes));
+            message.extend_from_slice(&length_prefixed(key.as_bytes()));
             if let Some(value) = context.get(key) {
-                let value_bytes = value.as_bytes();
-                if value_bytes.len() > u32::MAX as usize {
-                    return Err(format!("context value exceeds u32::MAX length: {}", value_bytes.len()));
-                }
-                message.extend_from_slice(&length_prefixed(value_bytes));
+                message.extend_from_slice(&length_prefixed(value.as_bytes()));
             }
         }
 

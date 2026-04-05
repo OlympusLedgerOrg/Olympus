@@ -74,7 +74,8 @@ func (s *PostgresStorage) StoreNodeDelta(ctx context.Context, path []byte, level
 }
 
 // storeNodeDeltaInTx persists a single SMT node delta within an existing transaction.
-// The caller must have already set the rehash gate via setRehashGate().
+// Precondition: the caller must have called setRehashGate() on the transaction first;
+// otherwise the ON CONFLICT DO UPDATE will be rejected by the Postgres trigger.
 func storeNodeDeltaInTx(ctx context.Context, tx *sql.Tx, path []byte, level uint32, hash []byte) error {
 	query := `
 		INSERT INTO cdhs_smf_nodes (path, level, hash, created_at)
