@@ -271,6 +271,36 @@ class TestRateLimitBackend:
             with pytest.raises(ValueError, match="Redis rate limit backend is not yet implemented"):
                 _create_rate_limit_backend()
 
+    def test_consume_atomic_prevents_double_consume(self):
+        """Two threads with capacity=1 and refill=0 must allow exactly one request.
+
+        Regression test for H-4 (TOCTOU race in rate limiter).  Without
+        consume_atomic(), both threads could read tokens=1, both succeed,
+        and both write tokens=0 — allowing two requests through.
+        """
+        import threading
+
+        backend = MemoryRateLimitBackend()
+        results: list[bool] = []
+        barrier = threading.Barrier(2)
+
+        def try_consume() -> None:
+            barrier.wait()  # Synchronize both threads to maximize race window
+            allowed = backend.consume_atomic("race-ip", capacity=1.0, refill_rate=0.0)
+            results.append(allowed)
+
+        t1 = threading.Thread(target=try_consume)
+        t2 = threading.Thread(target=try_consume)
+        t1.start()
+        t2.start()
+        t1.join(timeout=5)
+        t2.join(timeout=5)
+
+        assert len(results) == 2
+        assert results.count(True) == 1, (
+            f"Expected exactly 1 allowed request, got {results.count(True)} (results={results})"
+        )
+
 
 @pytest.mark.asyncio
 async def test_reload_keys_auth_independent_of_json_entry_order(

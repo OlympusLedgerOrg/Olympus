@@ -2,11 +2,13 @@
 package api
 
 import (
+	"crypto/sha256"
 	"crypto/subtle"
 	"encoding/json"
 	"fmt"
 	"log"
 	"net/http"
+	"strconv"
 
 	"github.com/wombatvagina69-crypto/olympus/services/sequencer/internal/client"
 	"github.com/wombatvagina69-crypto/olympus/services/sequencer/internal/storage"
@@ -30,11 +32,13 @@ func NewSequencer(smtClient *client.CdhsSmfClient, storage *storage.PostgresStor
 }
 
 // requireToken wraps an HTTP handler with shared-secret token authentication.
-// Uses constant-time comparison to prevent timing-oracle attacks.
+// Hashes both tokens with SHA-256 before comparing to prevent timing side-channels
+// from length differences (subtle.ConstantTimeCompare short-circuits on unequal lengths).
 func requireToken(token string, next http.HandlerFunc) http.HandlerFunc {
+	expectedHash := sha256.Sum256([]byte(token))
 	return func(w http.ResponseWriter, r *http.Request) {
-		provided := r.Header.Get("X-Sequencer-Token")
-		if subtle.ConstantTimeCompare([]byte(provided), []byte(token)) != 1 {
+		providedHash := sha256.Sum256([]byte(r.Header.Get("X-Sequencer-Token")))
+		if subtle.ConstantTimeCompare(providedHash[:], expectedHash[:]) != 1 {
 			http.Error(w, "Unauthorized", http.StatusUnauthorized)
 			return
 		}
@@ -103,6 +107,12 @@ func (s *Sequencer) handleQueueLeaf(w http.ResponseWriter, r *http.Request) {
 	if len(req.Version) > 64 {
 		http.Error(w, "invalid version", http.StatusBadRequest)
 		return
+	}
+	if req.Version != "" {
+		if _, err := strconv.ParseUint(req.Version, 10, 64); err != nil {
+			http.Error(w, "version must be empty or a base-10 unsigned integer", http.StatusBadRequest)
+			return
+		}
 	}
 	if len(req.Content) == 0 {
 		http.Error(w, "content must not be empty", http.StatusBadRequest)

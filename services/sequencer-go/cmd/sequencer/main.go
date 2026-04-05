@@ -58,6 +58,12 @@ func main() {
 	tlsCert := os.Getenv("SEQUENCER_TLS_CERT")
 	tlsKey := os.Getenv("SEQUENCER_TLS_KEY")
 
+	// Fail fast if exactly one of cert/key is set — this is a dangerous
+	// misconfiguration that would silently fall back to plaintext HTTP.
+	if (tlsCert == "") != (tlsKey == "") {
+		log.Fatalf("Misconfigured TLS: both SEQUENCER_TLS_CERT and SEQUENCER_TLS_KEY must be set, or neither. Got cert=%q, key=%q", tlsCert, tlsKey)
+	}
+
 	log.Printf("Sequencer service starting on %s", httpAddr)
 
 	if tlsCert != "" && tlsKey != "" {

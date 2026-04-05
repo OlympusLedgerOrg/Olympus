@@ -51,10 +51,21 @@ fn length_prefixed(data: &[u8]) -> Vec<u8> {
 /// The record_key fields are first hashed into a 32-byte `record_key_bytes`
 /// using the same `KEY_PREFIX` + length-prefixed layout as the PyO3 extension,
 /// then the global key is derived from `(shard_id, record_key_bytes)`.
-pub fn compute_global_key(shard_id: &str, record_key: &RecordKey) -> [u8; 32] {
+///
+/// Returns an error if `version` is non-empty and not a valid base-10 u64,
+/// or if `metadata` is non-empty (metadata is not part of the key derivation
+/// protocol and would be silently ignored).
+pub fn compute_global_key(shard_id: &str, record_key: &RecordKey) -> Result<[u8; 32], String> {
+    // Reject non-empty metadata: it is accepted by protobuf but not included
+    // in key derivation.  Silently ignoring it would let clients overwrite
+    // each other's leaves when only metadata differs.
+    if !record_key.metadata.is_empty() {
+        return Err("metadata is not supported in key derivation; pass an empty map".to_string());
+    }
+
     // Step 1: Compute record_key_bytes (matches src/crypto.rs::record_key and
     // protocol/hashes.py::record_key).
-    let record_key_bytes = compute_record_key_bytes(record_key);
+    let record_key_bytes = compute_record_key_bytes(record_key)?;
 
     // Step 2: Derive global key using BLAKE3 derive_key mode with
     // length-prefixed shard_id and record_key_bytes.
@@ -65,10 +76,10 @@ pub fn compute_global_key(shard_id: &str, record_key: &RecordKey) -> [u8; 32] {
     key_material.extend_from_slice(&length_prefixed(shard_bytes));
     key_material.extend_from_slice(&length_prefixed(&record_key_bytes));
 
-    *blake3::Hasher::new_derive_key(GLOBAL_SMT_KEY_CONTEXT)
+    Ok(*blake3::Hasher::new_derive_key(GLOBAL_SMT_KEY_CONTEXT)
         .update(&key_material)
         .finalize()
-        .as_bytes()
+        .as_bytes())
 }
 
 /// Domain-separation prefix for record keys — must match `KEY_PREFIX` in
@@ -80,27 +91,24 @@ const KEY_PREFIX: &[u8] = b"OLY:KEY:V1";
 ///
 /// Layout: `BLAKE3(KEY_PREFIX || len(record_type) || record_type || len(record_id) || record_id || version_u64_be)`
 ///
-/// Note: the `version` field in the protobuf `RecordKey` is a string; we
-/// parse it as `u64` (defaulting to 0 for empty strings) to match the Python
-/// and PyO3 implementations which accept an integer version.
-fn compute_record_key_bytes(rk: &RecordKey) -> [u8; 32] {
+/// The `version` field in the protobuf `RecordKey` is a string; we parse it
+/// as `u64` (empty string → 0) to match the Python/PyO3 implementations
+/// which accept an integer version.  Returns an error if `version` is
+/// non-empty and not a valid base-10 u64 to prevent silent key collisions
+/// (e.g. "1" vs "v1" both mapping to 0).
+fn compute_record_key_bytes(rk: &RecordKey) -> Result<[u8; 32], String> {
     let rt = rk.record_type.as_bytes();
     let ri = rk.record_id.as_bytes();
 
-    // Parse version string as u64 (empty → 0).
-    // Non-numeric version strings default to 0 to match the protobuf interface
-    // where version is a string field. Callers should validate version format
-    // before calling this function.
     let version: u64 = if rk.version.is_empty() {
         0
     } else {
-        rk.version.parse::<u64>().unwrap_or_else(|_| {
-            eprintln!(
-                "WARNING: non-numeric version {:?} in record key, defaulting to 0",
-                rk.version
-            );
-            0
-        })
+        rk.version.parse::<u64>().map_err(|e| {
+            format!(
+                "invalid version {:?}: must be empty or a base-10 u64 ({})",
+                rk.version, e
+            )
+        })?
     };
 
     let mut key_data = Vec::with_capacity(
@@ -111,7 +119,7 @@ fn compute_record_key_bytes(rk: &RecordKey) -> [u8; 32] {
     key_data.extend_from_slice(&length_prefixed(ri));
     key_data.extend_from_slice(&version.to_be_bytes());
 
-    *blake3::Hasher::new().update(&key_data).finalize().as_bytes()
+    Ok(*blake3::Hasher::new().update(&key_data).finalize().as_bytes())
 }
 
 /// Hash canonicalized content for leaf value
@@ -180,6 +188,8 @@ impl KeyManager {
     ///
     /// Context keys and values are **length-prefixed** to prevent field-bleed
     /// collisions (e.g. `{"ab": "cd"}` vs `{"a": "bcd"}`).
+    ///
+    /// Returns an error if any context key or value exceeds `u32::MAX` bytes.
     pub fn sign_root(
         &self,
         root: &[u8; 32],
@@ -193,12 +203,16 @@ impl KeyManager {
         keys.sort();
         for key in keys {
             let key_bytes = key.as_bytes();
-            message.extend_from_slice(&(key_bytes.len() as u32).to_be_bytes());
-            message.extend_from_slice(key_bytes);
+            if key_bytes.len() > u32::MAX as usize {
+                return Err(format!("context key exceeds u32::MAX length: {}", key_bytes.len()));
+            }
+            message.extend_from_slice(&length_prefixed(key_bytes));
             if let Some(value) = context.get(key) {
                 let value_bytes = value.as_bytes();
-                message.extend_from_slice(&(value_bytes.len() as u32).to_be_bytes());
-                message.extend_from_slice(value_bytes);
+                if value_bytes.len() > u32::MAX as usize {
+                    return Err(format!("context value exceeds u32::MAX length: {}", value_bytes.len()));
+                }
+                message.extend_from_slice(&length_prefixed(value_bytes));
             }
         }
 
@@ -225,19 +239,52 @@ mod tests {
         let record_key = RecordKey {
             record_type: "doc".to_string(),
             record_id: "12345".to_string(),
-            version: "v1".to_string(),
+            version: "1".to_string(),
             metadata: HashMap::new(),
         };
 
-        let key1 = compute_global_key("watauga:2025:budget", &record_key);
-        let key2 = compute_global_key("watauga:2025:budget", &record_key);
+        let key1 = compute_global_key("watauga:2025:budget", &record_key).unwrap();
+        let key2 = compute_global_key("watauga:2025:budget", &record_key).unwrap();
 
         // Should be deterministic
         assert_eq!(key1, key2);
 
         // Different shard should give different key
-        let key3 = compute_global_key("other:shard", &record_key);
+        let key3 = compute_global_key("other:shard", &record_key).unwrap();
         assert_ne!(key1, key3);
+    }
+
+    /// Non-numeric version strings must be rejected (not silently coerced to 0).
+    #[test]
+    fn test_compute_global_key_rejects_non_numeric_version() {
+        let record_key = RecordKey {
+            record_type: "doc".to_string(),
+            record_id: "12345".to_string(),
+            version: "v1".to_string(),
+            metadata: HashMap::new(),
+        };
+
+        let result = compute_global_key("shard", &record_key);
+        assert!(result.is_err(), "non-numeric version 'v1' must be rejected");
+        assert!(result.unwrap_err().contains("invalid version"));
+    }
+
+    /// Non-empty metadata must be rejected (it's not part of key derivation).
+    #[test]
+    fn test_compute_global_key_rejects_metadata() {
+        let mut metadata = HashMap::new();
+        metadata.insert("key".to_string(), "value".to_string());
+
+        let record_key = RecordKey {
+            record_type: "doc".to_string(),
+            record_id: "12345".to_string(),
+            version: "1".to_string(),
+            metadata,
+        };
+
+        let result = compute_global_key("shard", &record_key);
+        assert!(result.is_err(), "non-empty metadata must be rejected");
+        assert!(result.unwrap_err().contains("metadata"));
     }
 
     /// Verify length-prefixing prevents canonicalization / field-bleed collisions.
@@ -262,8 +309,8 @@ mod tests {
             metadata: HashMap::new(),
         };
 
-        let key1 = compute_global_key("a", &rk1);
-        let key2 = compute_global_key("ab", &rk2);
+        let key1 = compute_global_key("a", &rk1).unwrap();
+        let key2 = compute_global_key("ab", &rk2).unwrap();
 
         assert_ne!(key1, key2, "length-prefixing must prevent field-bleed collisions");
     }

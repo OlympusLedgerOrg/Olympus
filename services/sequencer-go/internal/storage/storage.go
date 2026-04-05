@@ -62,6 +62,10 @@ func (s *PostgresStorage) StoreNodeDelta(ctx context.Context, path []byte, level
 	}
 	defer tx.Rollback()
 
+	if err := setRehashGate(ctx, tx); err != nil {
+		return err
+	}
+
 	if err := storeNodeDeltaInTx(ctx, tx, path, level, hash); err != nil {
 		return err
 	}
@@ -70,13 +74,8 @@ func (s *PostgresStorage) StoreNodeDelta(ctx context.Context, path []byte, level
 }
 
 // storeNodeDeltaInTx persists a single SMT node delta within an existing transaction.
+// The caller must have already set the rehash gate via setRehashGate().
 func storeNodeDeltaInTx(ctx context.Context, tx *sql.Tx, path []byte, level uint32, hash []byte) error {
-	if _, err := tx.ExecContext(ctx,
-		"SET LOCAL olympus.allow_node_rehash = $1", nodeRehashGate,
-	); err != nil {
-		return fmt.Errorf("set rehash gate: %w", err)
-	}
-
 	query := `
 		INSERT INTO cdhs_smf_nodes (path, level, hash, created_at)
 		VALUES ($1, $2, $3, NOW())
@@ -87,6 +86,17 @@ func storeNodeDeltaInTx(ctx context.Context, tx *sql.Tx, path []byte, level uint
 		return fmt.Errorf("store node delta: %w", err)
 	}
 
+	return nil
+}
+
+// setRehashGate sets the session variable required for ON CONFLICT DO UPDATE.
+// Must be called once per transaction before any storeNodeDeltaInTx calls.
+func setRehashGate(ctx context.Context, tx *sql.Tx) error {
+	if _, err := tx.ExecContext(ctx,
+		"SET LOCAL olympus.allow_node_rehash = $1", nodeRehashGate,
+	); err != nil {
+		return fmt.Errorf("set rehash gate: %w", err)
+	}
 	return nil
 }
 
@@ -106,6 +116,11 @@ func (s *PostgresStorage) StoreLeafAndDeltas(ctx context.Context, deltas []SmtDe
 		return fmt.Errorf("begin tx: %w", err)
 	}
 	defer tx.Rollback()
+
+	// Set the rehash gate once for the entire transaction (not per-delta)
+	if err := setRehashGate(ctx, tx); err != nil {
+		return err
+	}
 
 	// Persist all node deltas within the same transaction
 	for _, delta := range deltas {
