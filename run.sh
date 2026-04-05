@@ -118,7 +118,7 @@ if [ "$SKIP_DOCKER" = false ] && [ -z "${DATABASE_URL:-}" ]; then
                     break
                 fi
             done
-            "$ready" || die "PostgreSQL did not become ready. Check: docker logs olympus-postgres"
+            [ "$ready" = true ] || die "PostgreSQL did not become ready. Check: docker logs olympus-postgres"
             ok "PostgreSQL is ready."
         fi
     fi

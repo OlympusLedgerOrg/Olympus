@@ -128,7 +128,7 @@ if "%DATABASE_URL%"=="" (
 )
 
 if "%OLYMPUS_INGEST_SIGNING_KEY%"=="" (
-    REM Generate a pseudo-random key from time/date (dev only -- not cryptographically secure)
+    REM Generate a cryptographically secure random 32-byte key using Python's secrets module
     for /f %%i in ('python -c "import secrets; print(secrets.token_hex(32))"') do (
         set OLYMPUS_INGEST_SIGNING_KEY=%%i
     )
