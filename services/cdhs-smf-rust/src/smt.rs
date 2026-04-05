@@ -98,14 +98,14 @@ impl SparseMerkleTree {
             let sibling_path = sibling_path_bits(&path_bits, level);
 
             // Get sibling hash (from nodes or use empty hash).
-            // empty_hashes[level] is the hash of an empty subtree at height `level`:
-            //   - empty_hashes[0] = empty leaf sentinel
-            //   - empty_hashes[255] = empty subtree near the root
-            // This matches the convention in src/smt.rs (PyO3).
+            // In this service, level 255 = leaf, level 0 = near root.
+            // The sibling at level L is an empty subtree of height (255-L):
+            //   - At level 255 (leaf): sibling height 0 → empty_hashes[0] (empty leaf)
+            //   - At level 0 (root):   sibling height 255 → empty_hashes[255]
             let sibling_hash = state.nodes
                 .get(&(level as u8, sibling_path.clone()))
                 .copied()
-                .unwrap_or(empty_hashes[level]);
+                .unwrap_or(empty_hashes[255 - level]);
 
             // Compute parent hash
             let (left, right) = if bit == 0 {
@@ -172,7 +172,7 @@ impl SparseMerkleTree {
             let sibling_hash = state.nodes
                 .get(&(level as u8, sibling_path))
                 .copied()
-                .unwrap_or(empty_hashes[level]);
+                .unwrap_or(empty_hashes[255 - level]);
 
             siblings[level] = sibling_hash;
         }
@@ -207,7 +207,7 @@ impl SparseMerkleTree {
             let sibling_hash = state.nodes
                 .get(&(level as u8, sibling_path))
                 .copied()
-                .unwrap_or(empty_hashes[level]);
+                .unwrap_or(empty_hashes[255 - level]);
 
             siblings[level] = sibling_hash;
         }
@@ -397,7 +397,7 @@ mod tests {
 
         // Siblings should include actual node hashes, not all empty
         let empty_hashes = precompute_empty_hashes();
-        let has_non_empty = proof_a.siblings.iter().enumerate().any(|(i, s)| *s != empty_hashes[i]);
+        let has_non_empty = proof_a.siblings.iter().enumerate().any(|(i, s)| *s != empty_hashes[255 - i]);
         assert!(has_non_empty, "Two-key proof must have at least one non-empty sibling");
     }
 
