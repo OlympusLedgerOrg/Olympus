@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import os
+from collections.abc import Callable
 from dataclasses import dataclass
 from decimal import Decimal
 from typing import Any
@@ -108,6 +109,10 @@ class _RustBindings:
     canonical: Any
     sparse_merkle_tree: Any
     verify_groth16_bn254: Any
+
+
+# Type alias for probe functions
+_ProbeFunc = Callable[[_RustBindings], RustProbeResult]
 
 
 def _env_flag_enabled(name: str) -> bool:
@@ -242,7 +247,7 @@ def probe_verify_groth16_bn254(bindings: _RustBindings) -> RustProbeResult:
     )
 
 
-def _safe_probe(name: str, probe: Any, bindings: _RustBindings) -> RustProbeResult:
+def _safe_probe(name: str, probe: _ProbeFunc, bindings: _RustBindings) -> RustProbeResult:
     """Run a probe and convert unexpected exceptions into probe failures."""
     try:
         return probe(bindings)
