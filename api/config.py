@@ -102,6 +102,14 @@ class Settings(BaseSettings):
         """Accept the raw string; splitting is done by the app startup handler."""
         return v
 
+    @field_validator("shard_timestamp_skew_ms")
+    @classmethod
+    def validate_shard_timestamp_skew_ms(cls, v: int) -> int:
+        """Ensure shard_timestamp_skew_ms is positive."""
+        if v <= 0:
+            raise ValueError("shard_timestamp_skew_ms must be > 0")
+        return v
+
 
 @lru_cache(maxsize=1)
 def get_settings() -> Settings:

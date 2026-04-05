@@ -99,6 +99,21 @@ coverage xml  # For CI integration
 | **Security (Bandit)** | No high/critical findings |
 | **Dependencies** | No known CVEs |
 
+## ⚠️ Pre-Scale Constraints
+
+**Hard gates before horizontal scaling:**
+
+- **`WEB_CONCURRENCY=1` required** — The witness store DB upgrade is incomplete. Running multiple worker processes will cause witness generation race conditions and data corruption. This constraint MUST remain in place until the witness store schema supports concurrent writes.
+
+  **How to enforce:**
+  ```bash
+  # Explicitly set single worker in production until upgrade complete
+  export WEB_CONCURRENCY=1
+  uvicorn api.main:app --workers 1 --host 0.0.0.0 --port 8000
+  ```
+
+  **Tracking:** See `storage/` for witness store migration status. This gate can be removed once the upgrade to multi-worker-safe witness persistence is complete and verified.
+
 ## 🐳 Docker Development
 
 ### Build and Run

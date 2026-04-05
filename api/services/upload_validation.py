@@ -42,6 +42,7 @@ from __future__ import annotations
 import io
 import logging
 import os
+import stat
 import zipfile
 
 import magic
@@ -117,17 +118,29 @@ def validate_zip_safety(content: bytes) -> None:
     decompression occurs, so even a pathological 42.zip bomb cannot exhaust
     memory during this check.
 
+    **Symlink rejection:** ZIP entries with Unix symlink file modes are
+    rejected with HTTP 400. Content is never extracted.
+
     Args:
         content: Raw bytes of the ZIP archive (magic bytes already verified).
 
     Raises:
         HTTPException 400: Corrupt archive, path-traversal entry, size limit
-            exceeded, or suspicious compression ratio.
+            exceeded, suspicious compression ratio, or symlink detected.
     """
     try:
         with zipfile.ZipFile(io.BytesIO(content), "r") as zf:
             total_uncompressed = 0
             for info in zf.infolist():
+                # ── Symlink guard ────────────────────────────────────────────
+                # external_attr >> 16 gives the Unix file mode; reject symlinks
+                unix_mode = info.external_attr >> 16
+                if unix_mode and stat.S_ISLNK(unix_mode):
+                    raise HTTPException(
+                        status_code=400,
+                        detail=(f"ZIP entry is a symlink: {info.filename!r} — rejected."),
+                    )
+
                 # ── Path guard (Zip Slip / path traversal) ──────────────────
                 if not _zip_member_path_is_safe(info.filename):
                     raise HTTPException(
