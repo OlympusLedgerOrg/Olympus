@@ -36,7 +36,7 @@ def _normalize_hash(value: bytes | str, allow_empty: bool = False) -> bytes:
             value = bytes.fromhex(value)
         except ValueError as exc:  # pragma: no cover - defensive
             raise ValueError(f"Invalid hex value: {hex_input}") from exc
-    if not isinstance(value, bytes | bytearray):
+    if not isinstance(value, (bytes, bytearray)):
         raise ValueError("Hash values must be bytes or hex strings")
     if len(value) == 0 and allow_empty:
         return bytes(value)
