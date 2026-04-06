@@ -5,7 +5,6 @@ Covers:
 - Default settings construction
 - shard_timestamp_skew_ms validation (must be positive)
 - cors_origins validator passthrough
-- get_settings() caching
 - _load_db_password() file/env fallback
 """
 
@@ -89,15 +88,8 @@ class TestLoadDbPassword:
 
     def test_no_env_returns_empty(self) -> None:
         with patch.dict(os.environ, {}, clear=True):
-            # Remove both env vars if present
-            env = {
-                k: v
-                for k, v in os.environ.items()
-                if k not in ("DATABASE_PASSWORD_FILE", "DATABASE_PASSWORD")
-            }
-            with patch.dict(os.environ, env, clear=True):
-                result = _load_db_password()
-                assert result == ""
+            result = _load_db_password()
+            assert result == ""
 
     def test_password_from_env(self) -> None:
         with patch.dict(

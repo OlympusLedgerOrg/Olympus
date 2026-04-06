@@ -56,12 +56,24 @@ class TestHashRequest:
         assert h1 != h2
 
     def test_canonical_ordering(self) -> None:
-        """Hash should be the same regardless of conceptual argument order
-        because canonical JSON sorts keys."""
+        """Hash is computed over sorted-key canonical JSON, so the result
+        must be identical to a manually constructed sorted payload."""
+        from protocol.canonical_json import canonical_json_encode
+        from protocol.hashes import hash_bytes
+
         ts = datetime(2024, 6, 1, 0, 0, 0, tzinfo=timezone.utc)
         h = hash_request("Test Subject", "Test Desc", "FBI", ts)
-        assert isinstance(h, str)
-        assert len(h) == 64
+        # Manually construct the expected canonical JSON with sorted keys
+        expected_canonical = canonical_json_encode(
+            {
+                "agency": "FBI",
+                "description": "Test Desc",
+                "filed_at": ts.isoformat(),
+                "subject": "Test Subject",
+            }
+        )
+        expected_hash = hash_bytes(expected_canonical.encode("utf-8")).hex()
+        assert h == expected_hash
 
 
 # ------------------------------------------------------------------ #
