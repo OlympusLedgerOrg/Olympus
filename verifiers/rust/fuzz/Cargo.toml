@@ -1,0 +1,28 @@
+[package]
+name = "olympus-verifier-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2021"
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+arbitrary = { version = "1", features = ["derive"] }
+
+[dependencies.olympus-verifier]
+path = ".."
+
+[[bin]]
+name = "fuzz_verify_merkle_proof"
+path = "fuzz_targets/fuzz_verify_merkle_proof.rs"
+doc = false
+
+[[bin]]
+name = "fuzz_compute_merkle_root"
+path = "fuzz_targets/fuzz_compute_merkle_root.rs"
+doc = false
+
+[workspace]
+members = ["."]

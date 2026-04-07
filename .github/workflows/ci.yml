@@ -316,6 +316,69 @@ jobs:
         working-directory: verifiers/rust
         run: cargo test
 
+  cargo-fuzz-cdhs:
+    name: Cargo fuzz CD-HS-ST service (30 s per target)
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust nightly
+        run: rustup toolchain install nightly --no-self-update
+
+      - name: Install cargo-fuzz
+        run: cargo +nightly install cargo-fuzz
+
+      - name: Install protoc
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq protobuf-compiler
+
+      - name: Fuzz canonicalize (30 s)
+        working-directory: services/cdhs-smf-rust
+        run: cargo +nightly fuzz run fuzz_canonicalize -- -max_total_time=30
+
+      - name: Fuzz compute_global_key (30 s)
+        working-directory: services/cdhs-smf-rust
+        run: cargo +nightly fuzz run fuzz_compute_global_key -- -max_total_time=30
+
+      - name: Fuzz smt_update (30 s)
+        working-directory: services/cdhs-smf-rust
+        run: cargo +nightly fuzz run fuzz_smt_update -- -max_total_time=30
+
+      - name: Fuzz verify_inclusion (30 s)
+        working-directory: services/cdhs-smf-rust
+        run: cargo +nightly fuzz run fuzz_verify_inclusion -- -max_total_time=30
+
+      - name: Fuzz verify_non_inclusion (30 s)
+        working-directory: services/cdhs-smf-rust
+        run: cargo +nightly fuzz run fuzz_verify_non_inclusion -- -max_total_time=30
+
+      - name: Fuzz sign_root (30 s)
+        working-directory: services/cdhs-smf-rust
+        run: cargo +nightly fuzz run fuzz_sign_root -- -max_total_time=30
+
+  cargo-fuzz-verifier:
+    name: Cargo fuzz Olympus verifier (30 s per target)
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust nightly
+        run: rustup toolchain install nightly --no-self-update
+
+      - name: Install cargo-fuzz
+        run: cargo +nightly install cargo-fuzz
+
+      - name: Fuzz verify_merkle_proof (30 s)
+        working-directory: verifiers/rust
+        run: cargo +nightly fuzz run fuzz_verify_merkle_proof -- -max_total_time=30
+
+      - name: Fuzz compute_merkle_root (30 s)
+        working-directory: verifiers/rust
+        run: cargo +nightly fuzz run fuzz_compute_merkle_root -- -max_total_time=30
+
   cross-language-determinism:
     name: Cross-language determinism harness
     runs-on: ubuntu-latest

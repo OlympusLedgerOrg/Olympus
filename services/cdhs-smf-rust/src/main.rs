@@ -13,18 +13,17 @@
 //! - Ed25519 signing for root commitments
 //! - Protobuf API over Unix domain socket
 
-mod canonicalization;
-mod crypto;
-mod proto;
-mod smt;
-
 use tonic::{transport::Server, Request, Response, Status};
 use tracing::{info, error};
 
-pub use proto::olympus::cdhs_smf::v1::cdhs_smf_service_server::{
+use cdhs_smf_service::canonicalization;
+use cdhs_smf_service::crypto;
+use cdhs_smf_service::smt;
+
+pub use cdhs_smf_service::proto::olympus::cdhs_smf::v1::cdhs_smf_service_server::{
     CdhsSmfService as CdhsSmfServiceTrait, CdhsSmfServiceServer,
 };
-pub use proto::olympus::cdhs_smf::v1::*;
+pub use cdhs_smf_service::proto::olympus::cdhs_smf::v1::*;
 
 use smt::SparseMerkleTree;
 use crypto::KeyManager;
