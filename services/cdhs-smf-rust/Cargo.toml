@@ -3,6 +3,14 @@ name = "cdhs-smf-service"
 version = "0.1.0"
 edition = "2021"
 
+[lib]
+name = "cdhs_smf_service"
+path = "src/lib.rs"
+
+[[bin]]
+name = "cdhs-smf-service"
+path = "src/main.rs"
+
 [dependencies]
 # gRPC/Protobuf
 tonic = "0.10"

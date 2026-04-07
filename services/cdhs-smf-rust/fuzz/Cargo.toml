@@ -1,0 +1,48 @@
+[package]
+name = "cdhs-smf-service-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2021"
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+arbitrary = { version = "1", features = ["derive"] }
+
+[dependencies.cdhs-smf-service]
+path = ".."
+
+[[bin]]
+name = "fuzz_canonicalize"
+path = "fuzz_targets/fuzz_canonicalize.rs"
+doc = false
+
+[[bin]]
+name = "fuzz_compute_global_key"
+path = "fuzz_targets/fuzz_compute_global_key.rs"
+doc = false
+
+[[bin]]
+name = "fuzz_smt_update"
+path = "fuzz_targets/fuzz_smt_update.rs"
+doc = false
+
+[[bin]]
+name = "fuzz_verify_inclusion"
+path = "fuzz_targets/fuzz_verify_inclusion.rs"
+doc = false
+
+[[bin]]
+name = "fuzz_verify_non_inclusion"
+path = "fuzz_targets/fuzz_verify_non_inclusion.rs"
+doc = false
+
+[[bin]]
+name = "fuzz_sign_root"
+path = "fuzz_targets/fuzz_sign_root.rs"
+doc = false
+
+[workspace]
+members = ["."]
