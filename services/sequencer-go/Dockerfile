@@ -9,7 +9,7 @@
 # securityContext.readOnlyRootFilesystem: true).
 
 # --- Build Stage ---
-FROM golang:1.24-alpine AS build
+FROM golang:1.24.13-alpine AS build
 
 WORKDIR /src
 
@@ -18,8 +18,13 @@ WORKDIR /src
 COPY go.mod go.sum ./
 RUN go mod download
 
-# Copy the rest of the source.
-COPY . .
+# Copy only the source directories required to compile the sequencer binary.
+# cmd/ is the main package; internal/ and proto/ are local imports used by it.
+# This avoids sending VCS metadata, test data, or other workspace files into
+# the build context.
+COPY cmd ./cmd
+COPY internal ./internal
+COPY proto ./proto
 
 # Compile a fully static binary.
 # CGO_ENABLED=0  — required for the distroless/static image (no libc present).
