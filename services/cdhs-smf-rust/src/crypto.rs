@@ -7,7 +7,6 @@
 
 use blake3;
 use ed25519_dalek::{Signer, SigningKey, VerifyingKey};
-use rand::rngs::OsRng;
 use std::collections::HashMap;
 
 use crate::proto::olympus::cdhs_smf::v1::RecordKey;
@@ -185,7 +184,32 @@ pub struct KeyManager {
 
 impl KeyManager {
     pub fn new() -> Self {
-        let signing_key = SigningKey::generate(&mut OsRng);
+        // Load signing key from SEQUENCER_SMT_SIGNING_KEY environment variable.
+        // The key must be 32 bytes, encoded as either hex (64 chars) or base64.
+        // If the variable is absent or malformed, panic — never generate an
+        // ephemeral key in production.
+        let key_str = std::env::var("SEQUENCER_SMT_SIGNING_KEY")
+            .expect("SEQUENCER_SMT_SIGNING_KEY environment variable is required");
+
+        let key_bytes = if key_str.len() == 64 {
+            // Try hex decoding
+            hex::decode(&key_str)
+                .expect("SEQUENCER_SMT_SIGNING_KEY is not valid hex (expected 64 hex chars)")
+        } else {
+            // Try base64 decoding
+            use base64::Engine;
+            base64::engine::general_purpose::STANDARD.decode(&key_str)
+                .expect("SEQUENCER_SMT_SIGNING_KEY is not valid base64 or hex")
+        };
+
+        if key_bytes.len() != 32 {
+            panic!("SEQUENCER_SMT_SIGNING_KEY must decode to exactly 32 bytes, got {}", key_bytes.len());
+        }
+
+        let mut key_array = [0u8; 32];
+        key_array.copy_from_slice(&key_bytes);
+
+        let signing_key = SigningKey::from_bytes(&key_array);
         let verifying_key = signing_key.verifying_key();
 
         Self {
@@ -194,17 +218,20 @@ impl KeyManager {
         }
     }
 
-    /// Sign a root hash with optional context.
+    /// Sign a root hash with tree_size and optional context.
     ///
-    /// Context keys and values are **length-prefixed** to prevent field-bleed
+    /// Serializes as: root_bytes || tree_size_as_u64_le || sorted_context
+    /// where context keys and values are **length-prefixed** to prevent field-bleed
     /// collisions (e.g. `{"ab": "cd"}` vs `{"a": "bcd"}`).
     pub fn sign_root(
         &self,
         root: &[u8; 32],
+        tree_size: u64,
         context: &HashMap<String, String>,
     ) -> Result<([u8; 64], [u8; 32]), String> {
-        // Build message to sign: root || sorted_context (length-prefixed fields)
+        // Build message to sign: root || tree_size_le || sorted_context (length-prefixed fields)
         let mut message = Vec::from(&root[..]);
+        message.extend_from_slice(&tree_size.to_le_bytes());
 
         // Add sorted context with length-prefixed keys and values.
         // length_prefixed() asserts that inputs fit in u32, so this is safe.
@@ -337,11 +364,15 @@ mod tests {
 
     #[test]
     fn test_key_manager() {
+        // Set a test key (32 bytes of zeros, hex-encoded)
+        std::env::set_var("SEQUENCER_SMT_SIGNING_KEY", "0000000000000000000000000000000000000000000000000000000000000000");
+
         let km = KeyManager::new();
         let root = [0u8; 32];
+        let tree_size = 42u64;
         let context = HashMap::new();
 
-        let result = km.sign_root(&root, &context);
+        let result = km.sign_root(&root, tree_size, &context);
         assert!(result.is_ok());
 
         let (sig, pk) = result.unwrap();

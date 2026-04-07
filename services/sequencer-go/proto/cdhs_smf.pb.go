@@ -2,7 +2,7 @@
 // versions:
 // 	protoc-gen-go v1.36.11
 // 	protoc        v3.21.12
-// source: cdhs_smf.proto
+// source: proto/cdhs_smf.proto
 
 package proto
 
@@ -36,7 +36,7 @@ type UpdateRequest struct {
 
 func (x *UpdateRequest) Reset() {
 	*x = UpdateRequest{}
-	mi := &file_cdhs_smf_proto_msgTypes[0]
+	mi := &file_proto_cdhs_smf_proto_msgTypes[0]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -48,7 +48,7 @@ func (x *UpdateRequest) String() string {
 func (*UpdateRequest) ProtoMessage() {}
 
 func (x *UpdateRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_cdhs_smf_proto_msgTypes[0]
+	mi := &file_proto_cdhs_smf_proto_msgTypes[0]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -61,7 +61,7 @@ func (x *UpdateRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use UpdateRequest.ProtoReflect.Descriptor instead.
 func (*UpdateRequest) Descriptor() ([]byte, []int) {
-	return file_cdhs_smf_proto_rawDescGZIP(), []int{0}
+	return file_proto_cdhs_smf_proto_rawDescGZIP(), []int{0}
 }
 
 func (x *UpdateRequest) GetShardId() string {
@@ -95,14 +95,16 @@ type UpdateResponse struct {
 	// The leaf value hash that was stored
 	LeafValueHash []byte `protobuf:"bytes,3,opt,name=leaf_value_hash,json=leafValueHash,proto3" json:"leaf_value_hash,omitempty"`
 	// SMT node deltas (for persistence)
-	Deltas        []*SmtNodeDelta `protobuf:"bytes,4,rep,name=deltas,proto3" json:"deltas,omitempty"`
+	Deltas []*SmtNodeDelta `protobuf:"bytes,4,rep,name=deltas,proto3" json:"deltas,omitempty"`
+	// Tree size after this update (number of non-empty leaves)
+	TreeSize      uint64 `protobuf:"varint,5,opt,name=tree_size,json=treeSize,proto3" json:"tree_size,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
 
 func (x *UpdateResponse) Reset() {
 	*x = UpdateResponse{}
-	mi := &file_cdhs_smf_proto_msgTypes[1]
+	mi := &file_proto_cdhs_smf_proto_msgTypes[1]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -114,7 +116,7 @@ func (x *UpdateResponse) String() string {
 func (*UpdateResponse) ProtoMessage() {}
 
 func (x *UpdateResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_cdhs_smf_proto_msgTypes[1]
+	mi := &file_proto_cdhs_smf_proto_msgTypes[1]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -127,7 +129,7 @@ func (x *UpdateResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use UpdateResponse.ProtoReflect.Descriptor instead.
 func (*UpdateResponse) Descriptor() ([]byte, []int) {
-	return file_cdhs_smf_proto_rawDescGZIP(), []int{1}
+	return file_proto_cdhs_smf_proto_rawDescGZIP(), []int{1}
 }
 
 func (x *UpdateResponse) GetNewRoot() []byte {
@@ -158,6 +160,13 @@ func (x *UpdateResponse) GetDeltas() []*SmtNodeDelta {
 	return nil
 }
 
+func (x *UpdateResponse) GetTreeSize() uint64 {
+	if x != nil {
+		return x.TreeSize
+	}
+	return 0
+}
+
 // Record key components
 type RecordKey struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
@@ -175,7 +184,7 @@ type RecordKey struct {
 
 func (x *RecordKey) Reset() {
 	*x = RecordKey{}
-	mi := &file_cdhs_smf_proto_msgTypes[2]
+	mi := &file_proto_cdhs_smf_proto_msgTypes[2]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -187,7 +196,7 @@ func (x *RecordKey) String() string {
 func (*RecordKey) ProtoMessage() {}
 
 func (x *RecordKey) ProtoReflect() protoreflect.Message {
-	mi := &file_cdhs_smf_proto_msgTypes[2]
+	mi := &file_proto_cdhs_smf_proto_msgTypes[2]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -200,7 +209,7 @@ func (x *RecordKey) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RecordKey.ProtoReflect.Descriptor instead.
 func (*RecordKey) Descriptor() ([]byte, []int) {
-	return file_cdhs_smf_proto_rawDescGZIP(), []int{2}
+	return file_proto_cdhs_smf_proto_rawDescGZIP(), []int{2}
 }
 
 func (x *RecordKey) GetRecordType() string {
@@ -246,7 +255,7 @@ type SmtNodeDelta struct {
 
 func (x *SmtNodeDelta) Reset() {
 	*x = SmtNodeDelta{}
-	mi := &file_cdhs_smf_proto_msgTypes[3]
+	mi := &file_proto_cdhs_smf_proto_msgTypes[3]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -258,7 +267,7 @@ func (x *SmtNodeDelta) String() string {
 func (*SmtNodeDelta) ProtoMessage() {}
 
 func (x *SmtNodeDelta) ProtoReflect() protoreflect.Message {
-	mi := &file_cdhs_smf_proto_msgTypes[3]
+	mi := &file_proto_cdhs_smf_proto_msgTypes[3]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -271,7 +280,7 @@ func (x *SmtNodeDelta) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SmtNodeDelta.ProtoReflect.Descriptor instead.
 func (*SmtNodeDelta) Descriptor() ([]byte, []int) {
-	return file_cdhs_smf_proto_rawDescGZIP(), []int{3}
+	return file_proto_cdhs_smf_proto_rawDescGZIP(), []int{3}
 }
 
 func (x *SmtNodeDelta) GetPath() []byte {
@@ -310,7 +319,7 @@ type ProveInclusionRequest struct {
 
 func (x *ProveInclusionRequest) Reset() {
 	*x = ProveInclusionRequest{}
-	mi := &file_cdhs_smf_proto_msgTypes[4]
+	mi := &file_proto_cdhs_smf_proto_msgTypes[4]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -322,7 +331,7 @@ func (x *ProveInclusionRequest) String() string {
 func (*ProveInclusionRequest) ProtoMessage() {}
 
 func (x *ProveInclusionRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_cdhs_smf_proto_msgTypes[4]
+	mi := &file_proto_cdhs_smf_proto_msgTypes[4]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -335,7 +344,7 @@ func (x *ProveInclusionRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ProveInclusionRequest.ProtoReflect.Descriptor instead.
 func (*ProveInclusionRequest) Descriptor() ([]byte, []int) {
-	return file_cdhs_smf_proto_rawDescGZIP(), []int{4}
+	return file_proto_cdhs_smf_proto_rawDescGZIP(), []int{4}
 }
 
 func (x *ProveInclusionRequest) GetShardId() string {
@@ -376,7 +385,7 @@ type ProveInclusionResponse struct {
 
 func (x *ProveInclusionResponse) Reset() {
 	*x = ProveInclusionResponse{}
-	mi := &file_cdhs_smf_proto_msgTypes[5]
+	mi := &file_proto_cdhs_smf_proto_msgTypes[5]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -388,7 +397,7 @@ func (x *ProveInclusionResponse) String() string {
 func (*ProveInclusionResponse) ProtoMessage() {}
 
 func (x *ProveInclusionResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_cdhs_smf_proto_msgTypes[5]
+	mi := &file_proto_cdhs_smf_proto_msgTypes[5]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -401,7 +410,7 @@ func (x *ProveInclusionResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ProveInclusionResponse.ProtoReflect.Descriptor instead.
 func (*ProveInclusionResponse) Descriptor() ([]byte, []int) {
-	return file_cdhs_smf_proto_rawDescGZIP(), []int{5}
+	return file_proto_cdhs_smf_proto_rawDescGZIP(), []int{5}
 }
 
 func (x *ProveInclusionResponse) GetGlobalKey() []byte {
@@ -449,7 +458,7 @@ type VerifyInclusionRequest struct {
 
 func (x *VerifyInclusionRequest) Reset() {
 	*x = VerifyInclusionRequest{}
-	mi := &file_cdhs_smf_proto_msgTypes[6]
+	mi := &file_proto_cdhs_smf_proto_msgTypes[6]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -461,7 +470,7 @@ func (x *VerifyInclusionRequest) String() string {
 func (*VerifyInclusionRequest) ProtoMessage() {}
 
 func (x *VerifyInclusionRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_cdhs_smf_proto_msgTypes[6]
+	mi := &file_proto_cdhs_smf_proto_msgTypes[6]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -474,7 +483,7 @@ func (x *VerifyInclusionRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use VerifyInclusionRequest.ProtoReflect.Descriptor instead.
 func (*VerifyInclusionRequest) Descriptor() ([]byte, []int) {
-	return file_cdhs_smf_proto_rawDescGZIP(), []int{6}
+	return file_proto_cdhs_smf_proto_rawDescGZIP(), []int{6}
 }
 
 func (x *VerifyInclusionRequest) GetGlobalKey() []byte {
@@ -518,7 +527,7 @@ type VerifyInclusionResponse struct {
 
 func (x *VerifyInclusionResponse) Reset() {
 	*x = VerifyInclusionResponse{}
-	mi := &file_cdhs_smf_proto_msgTypes[7]
+	mi := &file_proto_cdhs_smf_proto_msgTypes[7]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -530,7 +539,7 @@ func (x *VerifyInclusionResponse) String() string {
 func (*VerifyInclusionResponse) ProtoMessage() {}
 
 func (x *VerifyInclusionResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_cdhs_smf_proto_msgTypes[7]
+	mi := &file_proto_cdhs_smf_proto_msgTypes[7]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -543,7 +552,7 @@ func (x *VerifyInclusionResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use VerifyInclusionResponse.ProtoReflect.Descriptor instead.
 func (*VerifyInclusionResponse) Descriptor() ([]byte, []int) {
-	return file_cdhs_smf_proto_rawDescGZIP(), []int{7}
+	return file_proto_cdhs_smf_proto_rawDescGZIP(), []int{7}
 }
 
 func (x *VerifyInclusionResponse) GetValid() bool {
@@ -575,7 +584,7 @@ type ProveNonInclusionRequest struct {
 
 func (x *ProveNonInclusionRequest) Reset() {
 	*x = ProveNonInclusionRequest{}
-	mi := &file_cdhs_smf_proto_msgTypes[8]
+	mi := &file_proto_cdhs_smf_proto_msgTypes[8]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -587,7 +596,7 @@ func (x *ProveNonInclusionRequest) String() string {
 func (*ProveNonInclusionRequest) ProtoMessage() {}
 
 func (x *ProveNonInclusionRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_cdhs_smf_proto_msgTypes[8]
+	mi := &file_proto_cdhs_smf_proto_msgTypes[8]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -600,7 +609,7 @@ func (x *ProveNonInclusionRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ProveNonInclusionRequest.ProtoReflect.Descriptor instead.
 func (*ProveNonInclusionRequest) Descriptor() ([]byte, []int) {
-	return file_cdhs_smf_proto_rawDescGZIP(), []int{8}
+	return file_proto_cdhs_smf_proto_rawDescGZIP(), []int{8}
 }
 
 func (x *ProveNonInclusionRequest) GetShardId() string {
@@ -639,7 +648,7 @@ type ProveNonInclusionResponse struct {
 
 func (x *ProveNonInclusionResponse) Reset() {
 	*x = ProveNonInclusionResponse{}
-	mi := &file_cdhs_smf_proto_msgTypes[9]
+	mi := &file_proto_cdhs_smf_proto_msgTypes[9]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -651,7 +660,7 @@ func (x *ProveNonInclusionResponse) String() string {
 func (*ProveNonInclusionResponse) ProtoMessage() {}
 
 func (x *ProveNonInclusionResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_cdhs_smf_proto_msgTypes[9]
+	mi := &file_proto_cdhs_smf_proto_msgTypes[9]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -664,7 +673,7 @@ func (x *ProveNonInclusionResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ProveNonInclusionResponse.ProtoReflect.Descriptor instead.
 func (*ProveNonInclusionResponse) Descriptor() ([]byte, []int) {
-	return file_cdhs_smf_proto_rawDescGZIP(), []int{9}
+	return file_proto_cdhs_smf_proto_rawDescGZIP(), []int{9}
 }
 
 func (x *ProveNonInclusionResponse) GetGlobalKey() []byte {
@@ -703,7 +712,7 @@ type VerifyNonInclusionRequest struct {
 
 func (x *VerifyNonInclusionRequest) Reset() {
 	*x = VerifyNonInclusionRequest{}
-	mi := &file_cdhs_smf_proto_msgTypes[10]
+	mi := &file_proto_cdhs_smf_proto_msgTypes[10]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -715,7 +724,7 @@ func (x *VerifyNonInclusionRequest) String() string {
 func (*VerifyNonInclusionRequest) ProtoMessage() {}
 
 func (x *VerifyNonInclusionRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_cdhs_smf_proto_msgTypes[10]
+	mi := &file_proto_cdhs_smf_proto_msgTypes[10]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -728,7 +737,7 @@ func (x *VerifyNonInclusionRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use VerifyNonInclusionRequest.ProtoReflect.Descriptor instead.
 func (*VerifyNonInclusionRequest) Descriptor() ([]byte, []int) {
-	return file_cdhs_smf_proto_rawDescGZIP(), []int{10}
+	return file_proto_cdhs_smf_proto_rawDescGZIP(), []int{10}
 }
 
 func (x *VerifyNonInclusionRequest) GetGlobalKey() []byte {
@@ -765,7 +774,7 @@ type VerifyNonInclusionResponse struct {
 
 func (x *VerifyNonInclusionResponse) Reset() {
 	*x = VerifyNonInclusionResponse{}
-	mi := &file_cdhs_smf_proto_msgTypes[11]
+	mi := &file_proto_cdhs_smf_proto_msgTypes[11]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -777,7 +786,7 @@ func (x *VerifyNonInclusionResponse) String() string {
 func (*VerifyNonInclusionResponse) ProtoMessage() {}
 
 func (x *VerifyNonInclusionResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_cdhs_smf_proto_msgTypes[11]
+	mi := &file_proto_cdhs_smf_proto_msgTypes[11]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -790,7 +799,7 @@ func (x *VerifyNonInclusionResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use VerifyNonInclusionResponse.ProtoReflect.Descriptor instead.
 func (*VerifyNonInclusionResponse) Descriptor() ([]byte, []int) {
-	return file_cdhs_smf_proto_rawDescGZIP(), []int{11}
+	return file_proto_cdhs_smf_proto_rawDescGZIP(), []int{11}
 }
 
 func (x *VerifyNonInclusionResponse) GetValid() bool {
@@ -820,7 +829,7 @@ type CanonicalizeRequest struct {
 
 func (x *CanonicalizeRequest) Reset() {
 	*x = CanonicalizeRequest{}
-	mi := &file_cdhs_smf_proto_msgTypes[12]
+	mi := &file_proto_cdhs_smf_proto_msgTypes[12]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -832,7 +841,7 @@ func (x *CanonicalizeRequest) String() string {
 func (*CanonicalizeRequest) ProtoMessage() {}
 
 func (x *CanonicalizeRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_cdhs_smf_proto_msgTypes[12]
+	mi := &file_proto_cdhs_smf_proto_msgTypes[12]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -845,7 +854,7 @@ func (x *CanonicalizeRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CanonicalizeRequest.ProtoReflect.Descriptor instead.
 func (*CanonicalizeRequest) Descriptor() ([]byte, []int) {
-	return file_cdhs_smf_proto_rawDescGZIP(), []int{12}
+	return file_proto_cdhs_smf_proto_rawDescGZIP(), []int{12}
 }
 
 func (x *CanonicalizeRequest) GetContentType() string {
@@ -875,7 +884,7 @@ type CanonicalizeResponse struct {
 
 func (x *CanonicalizeResponse) Reset() {
 	*x = CanonicalizeResponse{}
-	mi := &file_cdhs_smf_proto_msgTypes[13]
+	mi := &file_proto_cdhs_smf_proto_msgTypes[13]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -887,7 +896,7 @@ func (x *CanonicalizeResponse) String() string {
 func (*CanonicalizeResponse) ProtoMessage() {}
 
 func (x *CanonicalizeResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_cdhs_smf_proto_msgTypes[13]
+	mi := &file_proto_cdhs_smf_proto_msgTypes[13]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -900,7 +909,7 @@ func (x *CanonicalizeResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CanonicalizeResponse.ProtoReflect.Descriptor instead.
 func (*CanonicalizeResponse) Descriptor() ([]byte, []int) {
-	return file_cdhs_smf_proto_rawDescGZIP(), []int{13}
+	return file_proto_cdhs_smf_proto_rawDescGZIP(), []int{13}
 }
 
 func (x *CanonicalizeResponse) GetCanonicalContent() []byte {
@@ -926,7 +935,7 @@ type GetRootRequest struct {
 
 func (x *GetRootRequest) Reset() {
 	*x = GetRootRequest{}
-	mi := &file_cdhs_smf_proto_msgTypes[14]
+	mi := &file_proto_cdhs_smf_proto_msgTypes[14]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -938,7 +947,7 @@ func (x *GetRootRequest) String() string {
 func (*GetRootRequest) ProtoMessage() {}
 
 func (x *GetRootRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_cdhs_smf_proto_msgTypes[14]
+	mi := &file_proto_cdhs_smf_proto_msgTypes[14]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -951,7 +960,7 @@ func (x *GetRootRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetRootRequest.ProtoReflect.Descriptor instead.
 func (*GetRootRequest) Descriptor() ([]byte, []int) {
-	return file_cdhs_smf_proto_rawDescGZIP(), []int{14}
+	return file_proto_cdhs_smf_proto_rawDescGZIP(), []int{14}
 }
 
 // Response with current root
@@ -967,7 +976,7 @@ type GetRootResponse struct {
 
 func (x *GetRootResponse) Reset() {
 	*x = GetRootResponse{}
-	mi := &file_cdhs_smf_proto_msgTypes[15]
+	mi := &file_proto_cdhs_smf_proto_msgTypes[15]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -979,7 +988,7 @@ func (x *GetRootResponse) String() string {
 func (*GetRootResponse) ProtoMessage() {}
 
 func (x *GetRootResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_cdhs_smf_proto_msgTypes[15]
+	mi := &file_proto_cdhs_smf_proto_msgTypes[15]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -992,7 +1001,7 @@ func (x *GetRootResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetRootResponse.ProtoReflect.Descriptor instead.
 func (*GetRootResponse) Descriptor() ([]byte, []int) {
-	return file_cdhs_smf_proto_rawDescGZIP(), []int{15}
+	return file_proto_cdhs_smf_proto_rawDescGZIP(), []int{15}
 }
 
 func (x *GetRootResponse) GetRoot() []byte {
@@ -1014,15 +1023,17 @@ type SignRootRequest struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// Root hash to sign
 	Root []byte `protobuf:"bytes,1,opt,name=root,proto3" json:"root,omitempty"`
-	// Additional context (e.g., timestamp, checkpoint ID)
-	Context       map[string]string `protobuf:"bytes,2,rep,name=context,proto3" json:"context,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"`
+	// Tree size at the time of signing
+	TreeSize uint64 `protobuf:"varint,2,opt,name=tree_size,json=treeSize,proto3" json:"tree_size,omitempty"`
+	// Additional context (e.g., shard_id, record_id)
+	Context       map[string]string `protobuf:"bytes,3,rep,name=context,proto3" json:"context,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
 
 func (x *SignRootRequest) Reset() {
 	*x = SignRootRequest{}
-	mi := &file_cdhs_smf_proto_msgTypes[16]
+	mi := &file_proto_cdhs_smf_proto_msgTypes[16]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1034,7 +1045,7 @@ func (x *SignRootRequest) String() string {
 func (*SignRootRequest) ProtoMessage() {}
 
 func (x *SignRootRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_cdhs_smf_proto_msgTypes[16]
+	mi := &file_proto_cdhs_smf_proto_msgTypes[16]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1047,7 +1058,7 @@ func (x *SignRootRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SignRootRequest.ProtoReflect.Descriptor instead.
 func (*SignRootRequest) Descriptor() ([]byte, []int) {
-	return file_cdhs_smf_proto_rawDescGZIP(), []int{16}
+	return file_proto_cdhs_smf_proto_rawDescGZIP(), []int{16}
 }
 
 func (x *SignRootRequest) GetRoot() []byte {
@@ -1055,6 +1066,13 @@ func (x *SignRootRequest) GetRoot() []byte {
 		return x.Root
 	}
 	return nil
+}
+
+func (x *SignRootRequest) GetTreeSize() uint64 {
+	if x != nil {
+		return x.TreeSize
+	}
+	return 0
 }
 
 func (x *SignRootRequest) GetContext() map[string]string {
@@ -1077,7 +1095,7 @@ type SignRootResponse struct {
 
 func (x *SignRootResponse) Reset() {
 	*x = SignRootResponse{}
-	mi := &file_cdhs_smf_proto_msgTypes[17]
+	mi := &file_proto_cdhs_smf_proto_msgTypes[17]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1089,7 +1107,7 @@ func (x *SignRootResponse) String() string {
 func (*SignRootResponse) ProtoMessage() {}
 
 func (x *SignRootResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_cdhs_smf_proto_msgTypes[17]
+	mi := &file_proto_cdhs_smf_proto_msgTypes[17]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1102,7 +1120,7 @@ func (x *SignRootResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SignRootResponse.ProtoReflect.Descriptor instead.
 func (*SignRootResponse) Descriptor() ([]byte, []int) {
-	return file_cdhs_smf_proto_rawDescGZIP(), []int{17}
+	return file_proto_cdhs_smf_proto_rawDescGZIP(), []int{17}
 }
 
 func (x *SignRootResponse) GetSignature() []byte {
@@ -1119,22 +1137,23 @@ func (x *SignRootResponse) GetPublicKey() []byte {
 	return nil
 }
 
-var File_cdhs_smf_proto protoreflect.FileDescriptor
+var File_proto_cdhs_smf_proto protoreflect.FileDescriptor
 
-const file_cdhs_smf_proto_rawDesc = "" +
+const file_proto_cdhs_smf_proto_rawDesc = "" +
 	"\n" +
-	"\x0ecdhs_smf.proto\x12\x13olympus.cdhs_smf.v1\"\x96\x01\n" +
+	"\x14proto/cdhs_smf.proto\x12\x13olympus.cdhs_smf.v1\"\x96\x01\n" +
 	"\rUpdateRequest\x12\x19\n" +
 	"\bshard_id\x18\x01 \x01(\tR\ashardId\x12=\n" +
 	"\n" +
 	"record_key\x18\x02 \x01(\v2\x1e.olympus.cdhs_smf.v1.RecordKeyR\trecordKey\x12+\n" +
-	"\x11canonical_content\x18\x03 \x01(\fR\x10canonicalContent\"\xad\x01\n" +
+	"\x11canonical_content\x18\x03 \x01(\fR\x10canonicalContent\"\xca\x01\n" +
 	"\x0eUpdateResponse\x12\x19\n" +
 	"\bnew_root\x18\x01 \x01(\fR\anewRoot\x12\x1d\n" +
 	"\n" +
 	"global_key\x18\x02 \x01(\fR\tglobalKey\x12&\n" +
 	"\x0fleaf_value_hash\x18\x03 \x01(\fR\rleafValueHash\x129\n" +
-	"\x06deltas\x18\x04 \x03(\v2!.olympus.cdhs_smf.v1.SmtNodeDeltaR\x06deltas\"\xea\x01\n" +
+	"\x06deltas\x18\x04 \x03(\v2!.olympus.cdhs_smf.v1.SmtNodeDeltaR\x06deltas\x12\x1b\n" +
+	"\ttree_size\x18\x05 \x01(\x04R\btreeSize\"\xea\x01\n" +
 	"\tRecordKey\x12\x1f\n" +
 	"\vrecord_type\x18\x01 \x01(\tR\n" +
 	"recordType\x12\x1b\n" +
@@ -1197,10 +1216,11 @@ const file_cdhs_smf_proto_rawDesc = "" +
 	"\x0eGetRootRequest\"B\n" +
 	"\x0fGetRootResponse\x12\x12\n" +
 	"\x04root\x18\x01 \x01(\fR\x04root\x12\x1b\n" +
-	"\ttree_size\x18\x02 \x01(\x04R\btreeSize\"\xae\x01\n" +
+	"\ttree_size\x18\x02 \x01(\x04R\btreeSize\"\xcb\x01\n" +
 	"\x0fSignRootRequest\x12\x12\n" +
-	"\x04root\x18\x01 \x01(\fR\x04root\x12K\n" +
-	"\acontext\x18\x02 \x03(\v21.olympus.cdhs_smf.v1.SignRootRequest.ContextEntryR\acontext\x1a:\n" +
+	"\x04root\x18\x01 \x01(\fR\x04root\x12\x1b\n" +
+	"\ttree_size\x18\x02 \x01(\x04R\btreeSize\x12K\n" +
+	"\acontext\x18\x03 \x03(\v21.olympus.cdhs_smf.v1.SignRootRequest.ContextEntryR\acontext\x1a:\n" +
 	"\fContextEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
 	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"O\n" +
@@ -1216,22 +1236,22 @@ const file_cdhs_smf_proto_rawDesc = "" +
 	"\x12VerifyNonInclusion\x12..olympus.cdhs_smf.v1.VerifyNonInclusionRequest\x1a/.olympus.cdhs_smf.v1.VerifyNonInclusionResponse\x12c\n" +
 	"\fCanonicalize\x12(.olympus.cdhs_smf.v1.CanonicalizeRequest\x1a).olympus.cdhs_smf.v1.CanonicalizeResponse\x12T\n" +
 	"\aGetRoot\x12#.olympus.cdhs_smf.v1.GetRootRequest\x1a$.olympus.cdhs_smf.v1.GetRootResponse\x12W\n" +
-	"\bSignRoot\x12$.olympus.cdhs_smf.v1.SignRootRequest\x1a%.olympus.cdhs_smf.v1.SignRootResponseb\x06proto3"
+	"\bSignRoot\x12$.olympus.cdhs_smf.v1.SignRootRequest\x1a%.olympus.cdhs_smf.v1.SignRootResponseBCZAgithub.com/wombatvagina69-crypto/olympus/services/sequencer/protob\x06proto3"
 
 var (
-	file_cdhs_smf_proto_rawDescOnce sync.Once
-	file_cdhs_smf_proto_rawDescData []byte
+	file_proto_cdhs_smf_proto_rawDescOnce sync.Once
+	file_proto_cdhs_smf_proto_rawDescData []byte
 )
 
-func file_cdhs_smf_proto_rawDescGZIP() []byte {
-	file_cdhs_smf_proto_rawDescOnce.Do(func() {
-		file_cdhs_smf_proto_rawDescData = protoimpl.X.CompressGZIP(unsafe.Slice(unsafe.StringData(file_cdhs_smf_proto_rawDesc), len(file_cdhs_smf_proto_rawDesc)))
+func file_proto_cdhs_smf_proto_rawDescGZIP() []byte {
+	file_proto_cdhs_smf_proto_rawDescOnce.Do(func() {
+		file_proto_cdhs_smf_proto_rawDescData = protoimpl.X.CompressGZIP(unsafe.Slice(unsafe.StringData(file_proto_cdhs_smf_proto_rawDesc), len(file_proto_cdhs_smf_proto_rawDesc)))
 	})
-	return file_cdhs_smf_proto_rawDescData
+	return file_proto_cdhs_smf_proto_rawDescData
 }
 
-var file_cdhs_smf_proto_msgTypes = make([]protoimpl.MessageInfo, 20)
-var file_cdhs_smf_proto_goTypes = []any{
+var file_proto_cdhs_smf_proto_msgTypes = make([]protoimpl.MessageInfo, 20)
+var file_proto_cdhs_smf_proto_goTypes = []any{
 	(*UpdateRequest)(nil),              // 0: olympus.cdhs_smf.v1.UpdateRequest
 	(*UpdateResponse)(nil),             // 1: olympus.cdhs_smf.v1.UpdateResponse
 	(*RecordKey)(nil),                  // 2: olympus.cdhs_smf.v1.RecordKey
@@ -1253,7 +1273,7 @@ var file_cdhs_smf_proto_goTypes = []any{
 	nil,                                // 18: olympus.cdhs_smf.v1.RecordKey.MetadataEntry
 	nil,                                // 19: olympus.cdhs_smf.v1.SignRootRequest.ContextEntry
 }
-var file_cdhs_smf_proto_depIdxs = []int32{
+var file_proto_cdhs_smf_proto_depIdxs = []int32{
 	2,  // 0: olympus.cdhs_smf.v1.UpdateRequest.record_key:type_name -> olympus.cdhs_smf.v1.RecordKey
 	3,  // 1: olympus.cdhs_smf.v1.UpdateResponse.deltas:type_name -> olympus.cdhs_smf.v1.SmtNodeDelta
 	18, // 2: olympus.cdhs_smf.v1.RecordKey.metadata:type_name -> olympus.cdhs_smf.v1.RecordKey.MetadataEntry
@@ -1283,26 +1303,26 @@ var file_cdhs_smf_proto_depIdxs = []int32{
 	0,  // [0:6] is the sub-list for field type_name
 }
 
-func init() { file_cdhs_smf_proto_init() }
-func file_cdhs_smf_proto_init() {
-	if File_cdhs_smf_proto != nil {
+func init() { file_proto_cdhs_smf_proto_init() }
+func file_proto_cdhs_smf_proto_init() {
+	if File_proto_cdhs_smf_proto != nil {
 		return
 	}
 	type x struct{}
 	out := protoimpl.TypeBuilder{
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
-			RawDescriptor: unsafe.Slice(unsafe.StringData(file_cdhs_smf_proto_rawDesc), len(file_cdhs_smf_proto_rawDesc)),
+			RawDescriptor: unsafe.Slice(unsafe.StringData(file_proto_cdhs_smf_proto_rawDesc), len(file_proto_cdhs_smf_proto_rawDesc)),
 			NumEnums:      0,
 			NumMessages:   20,
 			NumExtensions: 0,
 			NumServices:   1,
 		},
-		GoTypes:           file_cdhs_smf_proto_goTypes,
-		DependencyIndexes: file_cdhs_smf_proto_depIdxs,
-		MessageInfos:      file_cdhs_smf_proto_msgTypes,
+		GoTypes:           file_proto_cdhs_smf_proto_goTypes,
+		DependencyIndexes: file_proto_cdhs_smf_proto_depIdxs,
+		MessageInfos:      file_proto_cdhs_smf_proto_msgTypes,
 	}.Build()
-	File_cdhs_smf_proto = out.File
-	file_cdhs_smf_proto_goTypes = nil
-	file_cdhs_smf_proto_depIdxs = nil
+	File_proto_cdhs_smf_proto = out.File
+	file_proto_cdhs_smf_proto_goTypes = nil
+	file_proto_cdhs_smf_proto_depIdxs = nil
 }

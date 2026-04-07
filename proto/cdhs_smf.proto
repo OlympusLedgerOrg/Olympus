@@ -2,6 +2,8 @@ syntax = "proto3";
 
 package olympus.cdhs_smf.v1;
 
+option go_package = "github.com/wombatvagina69-crypto/olympus/services/sequencer/proto";
+
 // CD-HS-ST Service: Constant-Depth Hierarchical Sparse Tree
 //
 // This service maintains a single global 256-level Sparse Merkle Tree with
@@ -58,6 +60,9 @@ message UpdateResponse {
 
   // SMT node deltas (for persistence)
   repeated SmtNodeDelta deltas = 4;
+
+  // Tree size after this update (number of non-empty leaves)
+  uint64 tree_size = 5;
 }
 
 // Record key components
@@ -220,8 +225,11 @@ message SignRootRequest {
   // Root hash to sign
   bytes root = 1;
 
-  // Additional context (e.g., timestamp, checkpoint ID)
-  map<string, string> context = 2;
+  // Tree size at the time of signing
+  uint64 tree_size = 2;
+
+  // Additional context (e.g., shard_id, record_id)
+  map<string, string> context = 3;
 }
 
 // Response with signature
