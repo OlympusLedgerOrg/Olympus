@@ -259,6 +259,48 @@ jobs:
           GOFLAGS: -mod=vendor
         run: go test ./... -v
 
+  fuzz-boundary:
+    name: Fuzz Go/Rust proto boundary (seed corpus + 10 s)
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.24"
+          cache: true
+          cache-dependency-path: services/sequencer-go/go.sum
+
+      - name: Seed-corpus smoke (no mutation)
+        working-directory: services/sequencer-go
+        run: go test ./proto/ -v -run=Fuzz
+
+      - name: Fuzz UpdateResponse (10 s)
+        working-directory: services/sequencer-go
+        run: go test ./proto/ -run='^$' -fuzz=FuzzUnmarshalUpdateResponse -fuzztime=10s
+
+      - name: Fuzz ProveInclusion (10 s)
+        working-directory: services/sequencer-go
+        run: go test ./proto/ -run='^$' -fuzz=FuzzUnmarshalProveInclusion -fuzztime=10s
+
+      - name: Fuzz ProveNonInclusion (10 s)
+        working-directory: services/sequencer-go
+        run: go test ./proto/ -run='^$' -fuzz=FuzzUnmarshalProveNonInclusion -fuzztime=10s
+
+      - name: Fuzz Canonicalize (10 s)
+        working-directory: services/sequencer-go
+        run: go test ./proto/ -run='^$' -fuzz=FuzzUnmarshalCanonicalize -fuzztime=10s
+
+      - name: Fuzz GetRoot (10 s)
+        working-directory: services/sequencer-go
+        run: go test ./proto/ -run='^$' -fuzz=FuzzUnmarshalGetRoot -fuzztime=10s
+
+      - name: Fuzz SignRoot (10 s)
+        working-directory: services/sequencer-go
+        run: go test ./proto/ -run='^$' -fuzz=FuzzUnmarshalSignRoot -fuzztime=10s
+
   rust-verifier:
     name: Rust verifier conformance
     runs-on: ubuntu-latest
