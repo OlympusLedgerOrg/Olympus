@@ -316,6 +316,10 @@ jobs:
         working-directory: verifiers/rust
         run: cargo test
 
+  # NOTE: CodeQL's Rust analyzer may time out on these fuzz jobs because
+  # libfuzzer-sys pulls in LLVM instrumentation that confuses static analysis.
+  # This is expected and not actionable — the fuzz targets are validated by
+  # actual execution below, not by CodeQL.
   cargo-fuzz-cdhs:
     name: Cargo fuzz CD-HS-ST service (30 s per target)
     runs-on: ubuntu-latest
