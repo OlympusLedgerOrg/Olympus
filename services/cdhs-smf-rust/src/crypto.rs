@@ -220,16 +220,40 @@ impl KeyManager {
 
     /// Sign a root hash with tree_size and optional context.
     ///
-    /// Serializes as: root_bytes || tree_size_as_u64_le || sorted_context
-    /// where context keys and values are **length-prefixed** to prevent field-bleed
-    /// collisions (e.g. `{"ab": "cd"}` vs `{"a": "bcd"}`).
+    /// ## Signing protocol (authoritative specification for verifiers)
+    ///
+    /// The Ed25519 message is constructed as:
+    ///
+    /// ```text
+    /// message = root[0..32]                       (32 bytes, SMT root hash)
+    ///        || tree_size_le[0..8]                (8 bytes,  little-endian u64)
+    ///        || context_entry* (sorted by key)
+    /// ```
+    ///
+    /// Each `context_entry` (context keys sorted ascending as byte strings) is:
+    ///
+    /// ```text
+    /// context_entry = len(key)[0..4]   (4 bytes, big-endian u32)
+    ///              || key
+    ///              || len(value)[0..4] (4 bytes, big-endian u32)
+    ///              || value
+    /// ```
+    ///
+    /// The big-endian u32 length prefix prevents field-bleed collisions (e.g.
+    /// `key="ab", value="cd"` vs `key="a", value="bcd"` produce different bytes).
+    ///
+    /// This layout is a **protocol commitment**: verifier implementations must
+    /// reproduce exactly these bytes to validate signatures.  Do not reorder
+    /// `root`, `tree_size_le`, or `context` fields without a versioned protocol
+    /// upgrade.
     pub fn sign_root(
         &self,
         root: &[u8; 32],
         tree_size: u64,
         context: &HashMap<String, String>,
     ) -> Result<([u8; 64], [u8; 32]), String> {
-        // Build message to sign: root || tree_size_le || sorted_context (length-prefixed fields)
+        // Serialize: root || tree_size_le || sorted length-prefixed context entries.
+        // See the doc-comment above for the authoritative byte layout.
         let mut message = Vec::from(&root[..]);
         message.extend_from_slice(&tree_size.to_le_bytes());
 
