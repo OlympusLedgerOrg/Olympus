@@ -2,7 +2,6 @@
 
 from types import SimpleNamespace
 
-import blake3
 import pytest
 from psycopg import OperationalError
 from psycopg.pq import TransactionStatus
@@ -147,40 +146,13 @@ def test_get_connection_rolls_back_before_returning_to_pool(
 
 
 def test_persist_tree_nodes_uses_upsert_without_precheck(monkeypatch: pytest.MonkeyPatch) -> None:
-    """SMT node persistence uses ON CONFLICT DO UPDATE to keep smt_nodes current.
-
-    ADR-0001: smt_nodes must reflect the latest tree state so that proof
-    generation can read siblings directly (O(256)) instead of rebuilding
-    the entire tree from leaves (O(N)).
-
-    The ``smt_nodes_reject_update`` trigger requires the session variable
-    ``olympus.allow_node_rehash`` to be set before an upsert is attempted.
-
-    The global CD-HS-ST table has no shard_id column (nodes are keyed by
-    level+index in the single global tree), so the conflict target is
-    ``(level, index)`` — not the old per-shard ``(shard_id, level, index)``.
-    """
+    """_persist_tree_nodes is retired in 0.12 and raises NotImplementedError."""
     monkeypatch.setattr(postgres_module, "ConnectionPool", _RetryPool)
     storage = StorageLayer("postgresql://unused")
     cursor = _FakeCursor()
 
-    storage._persist_tree_nodes(cursor, "shard", _FakeTree())
-
-    # No SELECT-before-INSERT anti-pattern.
-    assert all("SELECT 1 FROM smt_nodes" not in sql for sql in cursor.statements)
-
-    # The first statement must gate the trigger with the computed BLAKE3 hash.
-    assert "olympus.allow_node_rehash" in cursor.statements[0]
-    expected_prefix = blake3.blake3(b"OLY:NODE-REHASH-GATE:V1").hexdigest()[:6]
-    assert expected_prefix in cursor.statements[0]
-
-    # All INSERT statements must use DO UPDATE (not DO NOTHING).
-    insert_stmts = [s for s in cursor.statements if s.startswith("INSERT")]
-    assert insert_stmts, "expected at least one INSERT statement"
-    assert all(
-        "ON CONFLICT (level, index)" in sql and "DO UPDATE SET hash = EXCLUDED.hash" in sql
-        for sql in insert_stmts
-    )
+    with pytest.raises(NotImplementedError, match="Retired in 0.12"):
+        storage._persist_tree_nodes(cursor, "shard", _FakeTree())
 
 
 def test_fake_cursor_executemany_records_normalized_sql() -> None:

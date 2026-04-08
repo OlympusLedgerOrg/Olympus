@@ -374,7 +374,11 @@ mod tests {
         let root = tree.root().await;
         assert_eq!(root.len(), 32);
 
-        let recomputed = recompute_empty_hashes_uncached();
+        let mut recomputed = [[0u8; 32]; 257];
+        recomputed[0] = crypto::empty_leaf();
+        for i in 1..recomputed.len() {
+            recomputed[i] = crypto::hash_node(&recomputed[i - 1], &recomputed[i - 1]);
+        }
         assert_eq!(root, recomputed[256]);
         assert_eq!(root, empty_hashes()[256]);
     }
@@ -432,7 +436,7 @@ mod tests {
         assert!(verify_inclusion(&key_b, &val_b, &proof_b.siblings, &root));
 
         // Siblings should include actual node hashes, not all empty
-        let empty_hashes = precompute_empty_hashes();
+        let empty_hashes = empty_hashes();
         let has_non_empty = proof_a
             .siblings
             .iter()
