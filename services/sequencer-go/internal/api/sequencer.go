@@ -144,8 +144,32 @@ func (s *Sequencer) handleQueueLeaf(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Step 3: Sign the new root
-	signResp, err := s.smtClient.SignRoot(ctx, updateResp.NewRoot, map[string]string{
+	// Fix 2c: Validate returned hash lengths before storage
+	if len(updateResp.NewRoot) != 32 {
+		log.Printf("Rust service violated hash length contract: NewRoot length %d", len(updateResp.NewRoot))
+		http.Error(w, "Rust service violated hash length contract", http.StatusBadGateway)
+		return
+	}
+	if len(updateResp.GlobalKey) != 32 {
+		log.Printf("Rust service violated hash length contract: GlobalKey length %d", len(updateResp.GlobalKey))
+		http.Error(w, "Rust service violated hash length contract", http.StatusBadGateway)
+		return
+	}
+	if len(updateResp.LeafValueHash) != 32 {
+		log.Printf("Rust service violated hash length contract: LeafValueHash length %d", len(updateResp.LeafValueHash))
+		http.Error(w, "Rust service violated hash length contract", http.StatusBadGateway)
+		return
+	}
+
+	// Fix 2d: Validate delta count before storage
+	if len(updateResp.Deltas) != 256 {
+		log.Printf("Rust service returned wrong delta count: %d", len(updateResp.Deltas))
+		http.Error(w, "Rust service returned wrong delta count", http.StatusBadGateway)
+		return
+	}
+
+	// Fix 2b: Sign the new root with tree_size from UpdateResponse
+	signResp, err := s.smtClient.SignRoot(ctx, updateResp.NewRoot, updateResp.TreeSize, map[string]string{
 		"shard_id":    req.ShardID,
 		"record_type": req.RecordType,
 		"record_id":   req.RecordID,
@@ -156,15 +180,7 @@ func (s *Sequencer) handleQueueLeaf(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Step 4: Get current tree size
-	rootResp, err := s.smtClient.GetRoot(ctx)
-	if err != nil {
-		log.Printf("Get root failed: %v", err)
-		http.Error(w, "Get root failed", http.StatusInternalServerError)
-		return
-	}
-
-	// Step 5: Persist all deltas + root atomically in a single transaction
+	// Persist all deltas + root atomically in a single transaction
 	deltas := make([]storage.SmtDelta, len(updateResp.Deltas))
 	for i, d := range updateResp.Deltas {
 		deltas[i] = storage.SmtDelta{
@@ -173,7 +189,7 @@ func (s *Sequencer) handleQueueLeaf(w http.ResponseWriter, r *http.Request) {
 			Hash:  d.Hash,
 		}
 	}
-	if err := s.storage.StoreLeafAndDeltas(ctx, deltas, updateResp.NewRoot, rootResp.TreeSize, signResp.Signature); err != nil {
+	if err := s.storage.StoreLeafAndDeltas(ctx, deltas, updateResp.NewRoot, updateResp.TreeSize, signResp.Signature); err != nil {
 		log.Printf("Failed to store leaf and deltas: %v", err)
 		http.Error(w, "Storage failed", http.StatusInternalServerError)
 		return
@@ -181,10 +197,10 @@ func (s *Sequencer) handleQueueLeaf(w http.ResponseWriter, r *http.Request) {
 
 	// Return response
 	resp := QueueLeafResponse{
-		NewRoot:      fmt.Sprintf("%x", updateResp.NewRoot),
-		GlobalKey:    fmt.Sprintf("%x", updateResp.GlobalKey),
+		NewRoot:       fmt.Sprintf("%x", updateResp.NewRoot),
+		GlobalKey:     fmt.Sprintf("%x", updateResp.GlobalKey),
 		LeafValueHash: fmt.Sprintf("%x", updateResp.LeafValueHash),
-		TreeSize:     rootResp.TreeSize,
+		TreeSize:      updateResp.TreeSize,
 	}
 
 	w.Header().Set("Content-Type", "application/json")

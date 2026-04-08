@@ -29,6 +29,9 @@ pub struct UpdateResponse {
     /// SMT node deltas (for persistence)
     #[prost(message, repeated, tag = "4")]
     pub deltas: ::prost::alloc::vec::Vec<SmtNodeDelta>,
+    /// Tree size after this update (number of non-empty leaves)
+    #[prost(uint64, tag = "5")]
+    pub tree_size: u64,
 }
 /// Record key components
 #[allow(clippy::derive_partial_eq_without_eq)]
@@ -222,8 +225,11 @@ pub struct SignRootRequest {
     /// Root hash to sign
     #[prost(bytes = "vec", tag = "1")]
     pub root: ::prost::alloc::vec::Vec<u8>,
-    /// Additional context (e.g., timestamp, checkpoint ID)
-    #[prost(map = "string, string", tag = "2")]
+    /// Tree size at the time of signing
+    #[prost(uint64, tag = "2")]
+    pub tree_size: u64,
+    /// Additional context (e.g., shard_id, record_id)
+    #[prost(map = "string, string", tag = "3")]
     pub context: ::std::collections::HashMap<
         ::prost::alloc::string::String,
         ::prost::alloc::string::String,

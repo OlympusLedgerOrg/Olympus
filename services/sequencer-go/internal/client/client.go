@@ -111,10 +111,11 @@ func (c *CdhsSmfClient) Canonicalize(ctx context.Context, contentType string, co
 }
 
 // SignRoot signs a root hash with Ed25519
-func (c *CdhsSmfClient) SignRoot(ctx context.Context, root []byte, contextData map[string]string) (*pb.SignRootResponse, error) {
+func (c *CdhsSmfClient) SignRoot(ctx context.Context, root []byte, treeSize uint64, contextData map[string]string) (*pb.SignRootResponse, error) {
 	req := &pb.SignRootRequest{
-		Root:    root,
-		Context: contextData,
+		Root:     root,
+		TreeSize: treeSize,
+		Context:  contextData,
 	}
 
 	resp, err := c.client.SignRoot(ctx, req)

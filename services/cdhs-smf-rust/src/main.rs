@@ -14,7 +14,7 @@
 //! - Protobuf API over Unix domain socket
 
 use tonic::{transport::Server, Request, Response, Status};
-use tracing::{info, error};
+use tracing::info;
 
 use cdhs_smf_service::canonicalization;
 use cdhs_smf_service::crypto;
@@ -68,6 +68,9 @@ impl CdhsSmfServiceTrait for CdhsSmfService {
         let (new_root, deltas) = self.smt.update(&global_key, &leaf_value_hash)
             .map_err(|e| Status::internal(format!("SMT update failed: {}", e)))?;
 
+        // Get tree size after update
+        let tree_size = self.smt.size();
+
         Ok(Response::new(UpdateResponse {
             new_root: new_root.to_vec(),
             global_key: global_key.to_vec(),
@@ -77,6 +80,7 @@ impl CdhsSmfServiceTrait for CdhsSmfService {
                 level: d.level,
                 hash: d.hash.to_vec(),
             }).collect(),
+            tree_size,
         }))
     }
 
@@ -226,7 +230,7 @@ impl CdhsSmfServiceTrait for CdhsSmfService {
         let root: [u8; 32] = req.root.as_slice().try_into()
             .map_err(|_| Status::invalid_argument("invalid root length"))?;
 
-        let (signature, public_key) = self.key_manager.sign_root(&root, &req.context)
+        let (signature, public_key) = self.key_manager.sign_root(&root, req.tree_size, &req.context)
             .map_err(|e| Status::internal(format!("Signing failed: {}", e)))?;
 
         Ok(Response::new(SignRootResponse {
