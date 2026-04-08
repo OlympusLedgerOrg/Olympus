@@ -65,11 +65,11 @@ impl CdhsSmfServiceTrait for CdhsSmfService {
         let leaf_value_hash = crypto::hash_canonical_content(&req.canonical_content);
 
         // Update the SMT
-        let (new_root, deltas) = self.smt.update(&global_key, &leaf_value_hash)
+        let (new_root, deltas) = self.smt.update(&global_key, &leaf_value_hash).await
             .map_err(|e| Status::internal(format!("SMT update failed: {}", e)))?;
 
         // Get tree size after update
-        let tree_size = self.smt.size();
+        let tree_size = self.smt.size().await;
 
         Ok(Response::new(UpdateResponse {
             new_root: new_root.to_vec(),
@@ -96,13 +96,13 @@ impl CdhsSmfServiceTrait for CdhsSmfService {
         ).map_err(|e| Status::invalid_argument(format!("invalid record key: {}", e)))?;
 
         let root = if req.root.is_empty() {
-            self.smt.root()
+            self.smt.root().await
         } else {
             req.root.as_slice().try_into()
                 .map_err(|_| Status::invalid_argument("invalid root length"))?
         };
 
-        let proof = self.smt.prove_inclusion(&global_key, &root)
+        let proof = self.smt.prove_inclusion(&global_key, &root).await
             .map_err(|e| Status::not_found(format!("Key not found: {}", e)))?;
 
         Ok(Response::new(ProveInclusionResponse {
@@ -151,13 +151,13 @@ impl CdhsSmfServiceTrait for CdhsSmfService {
         ).map_err(|e| Status::invalid_argument(format!("invalid record key: {}", e)))?;
 
         let root = if req.root.is_empty() {
-            self.smt.root()
+            self.smt.root().await
         } else {
             req.root.as_slice().try_into()
                 .map_err(|_| Status::invalid_argument("invalid root length"))?
         };
 
-        let proof = self.smt.prove_non_inclusion(&global_key, &root)
+        let proof = self.smt.prove_non_inclusion(&global_key, &root).await
             .map_err(|e| Status::internal(format!("Non-inclusion proof failed: {}", e)))?;
 
         Ok(Response::new(ProveNonInclusionResponse {
@@ -212,8 +212,8 @@ impl CdhsSmfServiceTrait for CdhsSmfService {
         &self,
         _request: Request<GetRootRequest>,
     ) -> Result<Response<GetRootResponse>, Status> {
-        let root = self.smt.root();
-        let tree_size = self.smt.size();
+        let root = self.smt.root().await;
+        let tree_size = self.smt.size().await;
 
         Ok(Response::new(GetRootResponse {
             root: root.to_vec(),
