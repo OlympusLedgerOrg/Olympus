@@ -430,6 +430,12 @@ _use_sequencer: bool = os.environ.get("OLYMPUS_USE_SEQUENCER", "").strip() == "1
 _sequencer_addr: str = os.environ.get("SEQUENCER_ADDR", "localhost:9090")
 _sequencer_token: str = os.environ.get("SEQUENCER_API_TOKEN", "")
 
+# Module-level reusable httpx client for sequencer calls.  Shared across all
+# requests to enable connection pooling — creating a new AsyncClient per call
+# would tear down and rebuild the connection pool on every ingest, exhausting
+# file descriptors under load.  The token is intentionally NOT logged here.
+_sequencer_http_client: httpx.AsyncClient = httpx.AsyncClient(timeout=30.0)
+
 if _use_sequencer:
     logger.info("ingest_path=sequencer addr=%s (OLYMPUS_USE_SEQUENCER=1)", _sequencer_addr)
 else:
