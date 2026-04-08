@@ -316,8 +316,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         )
         .init();
 
-    let socket_path = env::var("CDHS_SMF_SOCKET")
-        .unwrap_or_else(|_| DEFAULT_SOCKET_PATH.to_string());
+    let socket_path =
+        env::var("CDHS_SMF_SOCKET").unwrap_or_else(|_| DEFAULT_SOCKET_PATH.to_string());
     let socket_path = Path::new(&socket_path);
     if let Some(parent) = socket_path.parent() {
         fs::create_dir_all(parent)?;
@@ -338,7 +338,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let incoming = UnixListenerStream::new(listener);
     let service = CdhsSmfService::new();
 
-    info!("CD-HS-ST Service starting on unix socket {}", socket_path.display());
+    info!(
+        "CD-HS-ST Service starting on unix socket {}",
+        socket_path.display()
+    );
 
     Server::builder()
         .add_service(CdhsSmfServiceServer::new(service))
