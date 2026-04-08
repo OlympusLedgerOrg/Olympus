@@ -10,6 +10,15 @@ use std::collections::HashMap;
 use crate::crypto;
 use tokio::sync::RwLock;
 
+static EMPTY_HASHES: LazyLock<[[u8; 32]; 257]> = LazyLock::new(|| {
+    let mut empty = [[0u8; 32]; 257];
+    empty[0] = crypto::empty_leaf();
+    for index in 1..empty.len() {
+        empty[index] = crypto::hash_node(&empty[index - 1], &empty[index - 1]);
+    }
+    empty
+});
+
 /// A 256-level sparse Merkle tree
 pub struct SparseMerkleTree {
     /// Internal state (nodes and leaves)
@@ -51,7 +60,7 @@ pub struct NonInclusionProof {
 
 impl SparseMerkleTree {
     pub fn new() -> Self {
-        let empty_hashes = precompute_empty_hashes();
+        let empty_hashes = empty_hashes();
         let root = empty_hashes[256]; // Root of empty tree
 
         Self {
@@ -90,7 +99,7 @@ impl SparseMerkleTree {
 
         // Update from leaf (level 255) to root (above level 0)
         let mut current_hash = leaf_hash;
-        let empty_hashes = precompute_empty_hashes();
+        let empty_hashes = empty_hashes();
 
         for level in (0..256).rev() {
             let bit = path_bits[level];
@@ -176,7 +185,7 @@ impl SparseMerkleTree {
         }
 
         let path_bits = key_to_path_bits(key);
-        let empty_hashes = precompute_empty_hashes();
+        let empty_hashes = empty_hashes();
         let mut siblings = vec![[0u8; 32]; 256];
 
         for level in (0..256).rev() {
@@ -216,7 +225,7 @@ impl SparseMerkleTree {
         }
 
         let path_bits = key_to_path_bits(key);
-        let empty_hashes = precompute_empty_hashes();
+        let empty_hashes = empty_hashes();
         let mut siblings = vec![[0u8; 32]; 256];
 
         for level in (0..256).rev() {
@@ -317,13 +326,8 @@ fn sibling_path_bits(path_bits: &[u8], level: usize) -> Vec<u8> {
 
 /// Precompute empty hashes for sparse tree
 /// empty_hashes[i] = hash of empty subtree at height i
-fn precompute_empty_hashes() -> Vec<[u8; 32]> {
-    let mut empty = vec![crypto::empty_leaf()];
-    for _ in 0..256 {
-        let last = empty.last().unwrap();
-        empty.push(crypto::hash_node(last, last));
-    }
-    empty
+fn empty_hashes() -> &'static [[u8; 32]; 257] {
+    &EMPTY_HASHES
 }
 
 /// Pack a slice of path bits (0s and 1s) into bytes, MSB first.
@@ -356,6 +360,10 @@ mod tests {
 
         let root = tree.root().await;
         assert_eq!(root.len(), 32);
+
+        let recomputed = recompute_empty_hashes_uncached();
+        assert_eq!(root, recomputed[256]);
+        assert_eq!(root, empty_hashes()[256]);
     }
 
     #[tokio::test]
