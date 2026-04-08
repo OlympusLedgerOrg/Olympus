@@ -63,7 +63,6 @@ from protocol.ssmf import (
     SparseMerkleTree,
     _key_to_path_bits,
 )
-from protocol.telemetry import LOAD_TREE_STATE_OUTSIDE_POSEIDON_TOTAL
 from storage.gates import derive_node_rehash_gate
 
 
@@ -2535,94 +2534,14 @@ class StorageLayer:
         *,
         _OLYMPUS_POSEIDON_CARVE_OUT: bool = False,
     ) -> SparseMerkleTree:
+        """Retired in 0.12: SMT writes now route through the Go sequencer.
+
+        See api/ingest.py _call_sequencer_queue_leaf.
         """
-        Load the global sparse Merkle tree state from database.
-
-        .. deprecated:: 0.12
-            All production callers have been migrated to incremental paths.
-            This method is retained only for offline diagnostic use and will
-            be removed in a future release.
-            Do not use this in insert/update hot paths.
-            The only accepted O(N) carve-out is Poseidon root recomputation
-            when ZK proofs are enabled.
-
-            Use purpose-specific helpers instead:
-            - :meth:`_get_proof_path` for proof generation (O(256) nodes).
-            - :meth:`get_current_root` for root retrieval (O(1) header read).
-            - :meth:`replay_tree_incremental` for streaming audit replay.
-
-        CD-HS-ST Design:
-        ---------------
-        Loads ALL leaves from the single global SMT.
-
-        Read-only helper. Must be called within an existing transaction.
-        No writes, no commit.
-
-        Args:
-            cur: Database cursor
-            up_to_ts: Optional inclusive timestamp cutoff for historical snapshots
-            _OLYMPUS_POSEIDON_CARVE_OUT: Sentinel reserved for the Poseidon
-                recomputation carve-out in api.ingest.
-
-        Returns:
-            SparseMerkleTree with all leaves loaded (global SMT)
-        """
-        if not _OLYMPUS_POSEIDON_CARVE_OUT:
-            LOAD_TREE_STATE_OUTSIDE_POSEIDON_TOTAL.inc()
-        tree = SparseMerkleTree()
-        # Reuse flush batch size as a conservative pagination window to avoid
-        # loading unbounded historical replay rows into memory.
-        batch_size = self.DEFAULT_FLUSH_BATCH_SIZE
-        offset = 0
-
-        # CD-HS-ST: Load ALL leaves from the global SMT (no shard_id filter)
-        # Secondary ordering by key makes replay deterministic when multiple inserts share
-        # the same timestamp, while preserving the primary append order on ts. Without
-        # this stable tie-break, historical reconstruction could yield different roots
-        # for the same cutoff timestamp and break offline verification.
-        if up_to_ts is not None:
-            cutoff = up_to_ts
-            if isinstance(cutoff, str):
-                cutoff = datetime.fromisoformat(cutoff.replace("Z", "+00:00"))
-            if cutoff.tzinfo is None:
-                cutoff = cutoff.replace(tzinfo=timezone.utc)
-
-        while True:
-            if up_to_ts is None:
-                cur.execute(
-                    """
-                    SELECT key, value_hash FROM smt_leaves
-                    ORDER BY ts ASC, key ASC
-                    LIMIT %s OFFSET %s
-                    """,
-                    (batch_size, offset),
-                )
-            else:
-                cur.execute(
-                    """
-                    SELECT key, value_hash FROM smt_leaves
-                    WHERE ts <= %s
-                    ORDER BY ts ASC, key ASC
-                    LIMIT %s OFFSET %s
-                    """,
-                    (cutoff, batch_size, offset),
-                )
-
-            rows = cur.fetchall()
-            if not rows:
-                break
-
-            # Rebuild tree by updating each leaf
-            for row in rows:
-                # Support both dict and tuple rows for robustness
-                # SELECT key, value_hash => indices 0, 1
-                key = bytes(self._row_get(row, "key", 0))
-                value_hash = bytes(self._row_get(row, "value_hash", 1))
-                tree.update(key, value_hash)
-
-            offset += len(rows)
-
-        return tree
+        raise NotImplementedError(
+            "Retired in 0.12: SMT writes now route through the Go sequencer. "
+            "See api/ingest.py _call_sequencer_queue_leaf."
+        )
 
     # ------------------------------------------------------------------
     # ADR-0001: Incremental / paginated tree reconstruction helpers
@@ -2955,59 +2874,14 @@ class StorageLayer:
     def _persist_tree_nodes(
         self, cur: psycopg.Cursor[Any], shard_id: str, tree: SparseMerkleTree
     ) -> None:
+        """Retired in 0.12: SMT writes now route through the Go sequencer.
+
+        See api/ingest.py _call_sequencer_queue_leaf.
         """
-        Persist tree nodes to database and populate the node cache.
-
-        CD-HS-ST Design:
-        ---------------
-        This function persists nodes to the GLOBAL SMT.  The ``shard_id``
-        is used as a cache-key prefix so that node look-ups are correctly
-        namespaced; it is **not** written to the database INSERT.
-
-        ADR-0001: Uses ``ON CONFLICT DO UPDATE`` so that rehashed ancestor
-        nodes are kept current.  The ``smt_nodes_reject_update`` trigger
-        requires the session variable ``olympus.allow_node_rehash`` to be
-        set to the BLAKE3 domain-separated gate (``_NODE_REHASH_GATE``)
-        via ``SET LOCAL``, scoped to the enclosing transaction.
-
-        Args:
-            cur: Database cursor
-            shard_id: Shard prefix used for the in-memory node cache key
-            tree: SparseMerkleTree to persist
-        """
-        # Gate the trigger so the upsert is allowed.
-        # H-1 Fix: Use psycopg.sql.Literal to avoid f-string SQL pattern that could
-        # be cargo-culted into dynamic contexts.
-        cur.execute(
-            sql.SQL("SET LOCAL olympus.allow_node_rehash = {}").format(
-                sql.Literal(_NODE_REHASH_GATE)
-            )
+        raise NotImplementedError(
+            "Retired in 0.12: SMT writes now route through the Go sequencer. "
+            "See api/ingest.py _call_sequencer_queue_leaf."
         )
-
-        ts = datetime.now(timezone.utc)
-        for row_batch in self._iter_batches(
-            self._iter_tree_node_rows(shard_id, tree, ts),
-            self.DEFAULT_FLUSH_BATCH_SIZE,
-        ):
-            # CD-HS-ST: Insert into global SMT (no shard_id column)
-            # Extract just the fields we need (skip shard_id which is first field)
-            global_rows = [
-                (level, index, hash_val, ts_val)
-                for (_, level, index, hash_val, ts_val) in row_batch
-            ]
-
-            cur.executemany(
-                """
-                INSERT INTO smt_nodes (level, index, hash, ts)
-                VALUES (%s, %s, %s, %s)
-                ON CONFLICT (level, index)
-                DO UPDATE SET hash = EXCLUDED.hash, ts = EXCLUDED.ts
-                """,
-                global_rows,
-            )
-
-            for _, level, path_bytes, hash_value, _ in row_batch:
-                self._cache_put(shard_id, level, path_bytes, hash_value)
 
     @staticmethod
     def _encode_path(path: tuple[int, ...]) -> bytes:

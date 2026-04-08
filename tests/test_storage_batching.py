@@ -5,6 +5,8 @@ from __future__ import annotations
 from contextlib import contextmanager
 from datetime import datetime, timezone
 
+import pytest
+
 from protocol.hashes import hash_bytes, record_key
 from protocol.ssmf import SparseMerkleTree
 from storage.postgres import StorageLayer
@@ -67,26 +69,16 @@ def test_iter_batches_rejects_non_positive_batch_size() -> None:
 
 
 def test_persist_tree_nodes_flushes_in_chunks() -> None:
+    """_persist_tree_nodes is retired in 0.12 and raises NotImplementedError."""
     storage = _make_storage_for_unit_tests()
     cursor = _FakeCursor()
-    cached_nodes: list[tuple[str, int, bytes, bytes]] = []
-    storage._cache_put = lambda shard_id, level, path_bytes, hash_value: cached_nodes.append(  # type: ignore[method-assign]
-        (shard_id, level, path_bytes, hash_value)
-    )
 
     tree = SparseMerkleTree()
     for idx in range(3):
         tree.update(record_key("document", f"doc-{idx}", 1), hash_bytes(f"value-{idx}".encode()))
 
-    storage._persist_tree_nodes(cursor, "shard-batch", tree)
-
-    flushed_rows = sum(len(rows) for _, rows in cursor.executemany_calls)
-    expected_batches = (len(tree.nodes) + storage.DEFAULT_FLUSH_BATCH_SIZE - 1) // (
-        storage.DEFAULT_FLUSH_BATCH_SIZE
-    )
-    assert len(cursor.executemany_calls) == expected_batches
-    assert flushed_rows == len(tree.nodes)
-    assert len(cached_nodes) == len(tree.nodes)
+    with pytest.raises(NotImplementedError, match="Retired in 0.12"):
+        storage._persist_tree_nodes(cursor, "shard-batch", tree)
 
 
 def test_store_ingestion_batch_flushes_proofs_in_chunks() -> None:

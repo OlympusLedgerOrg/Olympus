@@ -1,12 +1,11 @@
-"""Tests for the OLYMPUS_USE_SEQUENCER=1 ingest path.
+"""Tests for the Go sequencer ingest path (unconditional since 0.12).
 
 Covers:
   - Batch atomicity: a 503 from the sequencer on record N fails the entire
     batch (the DB transaction never commits).
-  - ledger_entry_hash semantics: on the sequencer path this field carries the
-    SMT leaf_value_hash returned by the sequencer, NOT a chained ledger hash.
-    This difference is intentional and must remain stable until Prompt 6
-    removes the direct-storage path.
+  - ledger_entry_hash semantics: this field carries the BLAKE3 hash of the
+    canonical record bytes (hash_bytes(canonical_content)), identical to the
+    content_hash computed by _process_record_canonicalization.
 """
 
 from __future__ import annotations
@@ -112,7 +111,7 @@ def _fake_seq_resp(
 
 @pytest.fixture()
 def seq_client(monkeypatch):
-    """TestClient with the sequencer path enabled and both storage + sequencer mocked."""
+    """TestClient with storage + sequencer mocked."""
     ingest_api._reset_ingest_state_for_tests()
     ingest_api._register_api_key_for_tests(
         api_key="seq-test-key",
@@ -122,7 +121,6 @@ def seq_client(monkeypatch):
     )
 
     fake_storage = _FakeStorage()
-    monkeypatch.setattr(ingest_api, "_use_sequencer", True)
     monkeypatch.setattr(ingest_api, "_storage", fake_storage)
     monkeypatch.setattr(ingest_api, "_signing_key", nacl.signing.SigningKey(b"\x01" * 32))
 
@@ -166,16 +164,24 @@ class TestSequencerHappyPath:
         assert data["deduplicated"] == 0
 
     def test_ledger_entry_hash_is_leaf_value_hash_on_sequencer_path(self, seq_client):
-        """On the sequencer path ledger_entry_hash carries the SMT leaf_value_hash.
+        """ledger_entry_hash equals hash_bytes(canonical_content) on the sequencer path.
 
-        This documents the intentional semantic difference vs the direct-storage
-        path (which stores the BLAKE3-chained ledger entry hash).  The field
-        value must equal the leaf_value_hash from the sequencer response and must
-        NOT be an empty string.
+        This is the acceptance gate: the field must equal the value produced by
+        hash_bytes() applied to the same canonical bytes that
+        _process_record_canonicalization computed — not the SMT leaf_value_hash
+        returned by the sequencer, and not an empty string.
         """
+        from protocol.canonical import canonicalize_document, document_to_bytes
+        from protocol.hashes import hash_bytes
+
         client, _ = seq_client
         leaf_hash_hex = "dd" * 32
         resp_dict = _fake_seq_resp(leaf_value_hash=leaf_hash_hex)
+
+        record_content = {"ledger_hash_semantic": True}
+        expected_ledger_hash = hash_bytes(
+            document_to_bytes(canonicalize_document(record_content))
+        ).hex()
 
         with patch.object(
             ingest_api,
@@ -191,7 +197,7 @@ class TestSequencerHappyPath:
                             "record_type": "doc",
                             "record_id": "doc-leh",
                             "version": 1,
-                            "content": {"ledger_hash_semantic": True},
+                            "content": record_content,
                         }
                     ]
                 },
@@ -199,15 +205,16 @@ class TestSequencerHappyPath:
 
         assert resp.status_code == 200
         data = resp.json()
-        # The batch-level ledger_entry_hash must equal the leaf_value_hash that
-        # the sequencer returned, not an empty string or a chained ledger hash.
-        assert data["ledger_entry_hash"] == leaf_hash_hex
+        # ledger_entry_hash must equal hash_bytes(canonical_content), which is the
+        # same as content_hash — NOT the SMT leaf_value_hash from the sequencer.
+        assert data["ledger_entry_hash"] == expected_ledger_hash
+        assert data["ledger_entry_hash"] != leaf_hash_hex
 
         # The individual proof stored in the cache should carry the same value.
         proof_id = data["results"][0]["proof_id"]
         cached = ingest_api._ingestion_store.get(proof_id)
         assert cached is not None
-        assert cached["ledger_entry_hash"] == leaf_hash_hex
+        assert cached["ledger_entry_hash"] == expected_ledger_hash
 
     def test_proof_metadata_written_to_storage_on_success(self, seq_client):
         """store_ingestion_batch must be called for successful sequencer batches."""
@@ -381,10 +388,10 @@ def test_startup_log_does_not_include_token(caplog):
 
     token_value = "super-secret-token-value"
     with caplog.at_level(logging.INFO, logger="api.ingest"):
-        # Simulate what module init does when sequencer is enabled
+        # Simulate what module init does at startup
         import api.ingest as _m
 
-        _m.logger.info("ingest_path=sequencer addr=%s (OLYMPUS_USE_SEQUENCER=1)", "localhost:9090")
+        _m.logger.info("ingest_path=sequencer addr=%s", "localhost:9090")
 
     for record in caplog.records:
         assert token_value not in record.getMessage(), (
@@ -393,7 +400,7 @@ def test_startup_log_does_not_include_token(caplog):
 
 
 def test_missing_token_emits_warning(monkeypatch, caplog):
-    """If OLYMPUS_USE_SEQUENCER=1 but SEQUENCER_API_TOKEN is unset, a warning is logged."""
+    """If SEQUENCER_API_TOKEN is unset, a warning is logged at startup."""
     import logging
 
     # Replicate what the module does at load time when token is missing.

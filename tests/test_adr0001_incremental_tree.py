@@ -307,37 +307,26 @@ class TestVerifyStateReplayDelegation(unittest.TestCase):
 
 
 # ---------------------------------------------------------------------------
-# _persist_tree_nodes uses DO UPDATE
+# _persist_tree_nodes is retired in 0.12
 # ---------------------------------------------------------------------------
 
 
 class TestPersistTreeNodesDoUpdate(unittest.TestCase):
-    """_persist_tree_nodes must use ON CONFLICT DO UPDATE (not DO NOTHING)."""
+    """_persist_tree_nodes raises NotImplementedError since 0.12."""
 
     def test_persist_uses_do_update(self):
-        """SQL must contain DO UPDATE SET hash to keep smt_nodes current."""
+        """_persist_tree_nodes must raise NotImplementedError (retired in 0.12)."""
         sl = _make_storage()
-        sl.DEFAULT_FLUSH_BATCH_SIZE = 10_000
 
         tree = SparseMerkleTree()
         tree.update(b"\x00" * 32, b"\x01" * 32)
 
         cur = MagicMock()
-        sl._cache_put = MagicMock()
 
-        sl._persist_tree_nodes(cur, "shard-1", tree)
+        with self.assertRaises(NotImplementedError) as ctx:
+            sl._persist_tree_nodes(cur, "shard-1", tree)
 
-        # The first execute call should gate the trigger with the BLAKE3 hash.
-        first_call_sql = _normalize_sql(cur.execute.call_args_list[0][0][0])
-        self.assertIn("olympus.allow_node_rehash", first_call_sql)
-        # Must NOT be a simple 'on' — must be the BLAKE3 gate.
-        self.assertNotIn("= 'on'", first_call_sql)
-
-        # executemany should have been called with SQL containing DO UPDATE
-        call_args = cur.executemany.call_args
-        sql = _normalize_sql(call_args[0][0])
-        self.assertIn("DO UPDATE SET hash = EXCLUDED.hash", sql)
-        self.assertNotIn("DO NOTHING", sql)
+        self.assertIn("Retired in 0.12", str(ctx.exception))
 
 
 # ---------------------------------------------------------------------------
