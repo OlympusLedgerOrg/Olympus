@@ -362,6 +362,15 @@ fn pack_path_bits(bits: &[u8]) -> Vec<u8> {
 mod tests {
     use super::*;
 
+    fn recompute_empty_hashes_uncached() -> [[u8; 32]; 257] {
+        let mut empty = [[0u8; 32]; 257];
+        empty[0] = crypto::empty_leaf();
+        for index in 1..empty.len() {
+            empty[index] = crypto::hash_node(&empty[index - 1], &empty[index - 1]);
+        }
+        empty
+    }
+
     #[test]
     fn test_empty_tree() {
         let tree = SparseMerkleTree::new();
@@ -369,6 +378,10 @@ mod tests {
 
         let root = tree.root();
         assert_eq!(root.len(), 32);
+
+        let recomputed = recompute_empty_hashes_uncached();
+        assert_eq!(root, recomputed[256]);
+        assert_eq!(root, empty_hashes()[256]);
     }
 
     #[test]
