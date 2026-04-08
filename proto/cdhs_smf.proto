@@ -33,6 +33,9 @@ service CdhsSmfService {
 
   // Sign a root hash with Ed25519
   rpc SignRoot(SignRootRequest) returns (SignRootResponse);
+
+  // Replay persisted leaves into the in-memory SMT at startup
+  rpc ReplayLeaves(ReplayRequest) returns (ReplayResponse);
 }
 
 // Request to update (insert or modify) a record
@@ -239,4 +242,25 @@ message SignRootResponse {
 
   // Public key used for signing
   bytes public_key = 2;
+}
+
+// Request to replay persisted leaves into the in-memory SMT
+message ReplayRequest {
+  // Ordered list of leaf entries to replay (insertion order, oldest first)
+  repeated LeafEntry leaves = 1;
+}
+
+// A single leaf entry for replay
+message LeafEntry {
+  // 32-byte global key
+  bytes key = 1;
+
+  // 32-byte leaf value hash
+  bytes value_hash = 2;
+}
+
+// Response from replay operation
+message ReplayResponse {
+  // Final root hash after replaying all leaves
+  bytes root_hash = 1;
 }

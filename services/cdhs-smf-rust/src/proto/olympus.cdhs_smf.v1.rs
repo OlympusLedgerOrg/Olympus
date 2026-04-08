@@ -246,6 +246,33 @@ pub struct SignRootResponse {
     #[prost(bytes = "vec", tag = "2")]
     pub public_key: ::prost::alloc::vec::Vec<u8>,
 }
+/// Request to replay persisted leaves into the in-memory SMT
+#[allow(clippy::derive_partial_eq_without_eq)]
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct ReplayRequest {
+    /// Ordered list of leaf entries to replay (insertion order, oldest first)
+    #[prost(message, repeated, tag = "1")]
+    pub leaves: ::prost::alloc::vec::Vec<LeafEntry>,
+}
+/// A single leaf entry for replay
+#[allow(clippy::derive_partial_eq_without_eq)]
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct LeafEntry {
+    /// 32-byte global key
+    #[prost(bytes = "vec", tag = "1")]
+    pub key: ::prost::alloc::vec::Vec<u8>,
+    /// 32-byte leaf value hash
+    #[prost(bytes = "vec", tag = "2")]
+    pub value_hash: ::prost::alloc::vec::Vec<u8>,
+}
+/// Response from replay operation
+#[allow(clippy::derive_partial_eq_without_eq)]
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct ReplayResponse {
+    /// Final root hash after replaying all leaves
+    #[prost(bytes = "vec", tag = "1")]
+    pub root_hash: ::prost::alloc::vec::Vec<u8>,
+}
 /// Generated server implementations.
 pub mod cdhs_smf_service_server {
     #![allow(unused_variables, dead_code, missing_docs, clippy::let_unit_value)]
@@ -311,6 +338,11 @@ pub mod cdhs_smf_service_server {
             tonic::Response<super::SignRootResponse>,
             tonic::Status,
         >;
+        /// Replay persisted leaves into the in-memory SMT at startup
+        async fn replay_leaves(
+            &self,
+            request: tonic::Request<super::ReplayRequest>,
+        ) -> std::result::Result<tonic::Response<super::ReplayResponse>, tonic::Status>;
     }
     #[derive(Debug)]
     pub struct CdhsSmfServiceServer<T: CdhsSmfService> {
@@ -748,6 +780,52 @@ pub mod cdhs_smf_service_server {
                     let fut = async move {
                         let inner = inner.0;
                         let method = SignRootSvc(inner);
+                        let codec = tonic::codec::ProstCodec::default();
+                        let mut grpc = tonic::server::Grpc::new(codec)
+                            .apply_compression_config(
+                                accept_compression_encodings,
+                                send_compression_encodings,
+                            )
+                            .apply_max_message_size_config(
+                                max_decoding_message_size,
+                                max_encoding_message_size,
+                            );
+                        let res = grpc.unary(method, req).await;
+                        Ok(res)
+                    };
+                    Box::pin(fut)
+                }
+                "/olympus.cdhs_smf.v1.CdhsSmfService/ReplayLeaves" => {
+                    #[allow(non_camel_case_types)]
+                    struct ReplayLeavesSvc<T: CdhsSmfService>(pub Arc<T>);
+                    impl<
+                        T: CdhsSmfService,
+                    > tonic::server::UnaryService<super::ReplayRequest>
+                    for ReplayLeavesSvc<T> {
+                        type Response = super::ReplayResponse;
+                        type Future = BoxFuture<
+                            tonic::Response<Self::Response>,
+                            tonic::Status,
+                        >;
+                        fn call(
+                            &mut self,
+                            request: tonic::Request<super::ReplayRequest>,
+                        ) -> Self::Future {
+                            let inner = Arc::clone(&self.0);
+                            let fut = async move {
+                                <T as CdhsSmfService>::replay_leaves(&inner, request).await
+                            };
+                            Box::pin(fut)
+                        }
+                    }
+                    let accept_compression_encodings = self.accept_compression_encodings;
+                    let send_compression_encodings = self.send_compression_encodings;
+                    let max_decoding_message_size = self.max_decoding_message_size;
+                    let max_encoding_message_size = self.max_encoding_message_size;
+                    let inner = self.inner.clone();
+                    let fut = async move {
+                        let inner = inner.0;
+                        let method = ReplayLeavesSvc(inner);
                         let codec = tonic::codec::ProstCodec::default();
                         let mut grpc = tonic::server::Grpc::new(codec)
                             .apply_compression_config(

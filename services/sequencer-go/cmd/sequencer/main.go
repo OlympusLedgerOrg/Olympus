@@ -2,10 +2,13 @@ package main
 
 import (
 	"context"
+	"encoding/hex"
 	"log"
 	"net"
 	"net/http"
 	"os"
+
+	pb "github.com/wombatvagina69-crypto/olympus/services/sequencer/proto"
 
 	"github.com/wombatvagina69-crypto/olympus/services/sequencer/internal/api"
 	"github.com/wombatvagina69-crypto/olympus/services/sequencer/internal/client"
@@ -44,6 +47,27 @@ func main() {
 
 	// Create sequencer service
 	sequencer := api.NewSequencer(smtClient, store, apiToken)
+
+	// Startup replay: restore in-memory SMT from persisted leaves before
+	// accepting traffic, so proof and root queries are consistent from the
+	// first request.
+	leaves, err := store.GetLeaves(ctx)
+	if err != nil {
+		log.Fatalf("Failed to load leaves for startup replay: %v", err)
+	}
+	pbLeaves := make([]*pb.LeafEntry, len(leaves))
+	for i, l := range leaves {
+		pbLeaves[i] = &pb.LeafEntry{
+			Key:       l.Key,
+			ValueHash: l.ValueHash,
+		}
+	}
+	replayResp, err := smtClient.ReplayLeaves(ctx, pbLeaves)
+	if err != nil {
+		log.Fatalf("Startup replay failed: %v", err)
+	}
+	log.Printf("Startup replay complete: replayed %d leaves, root_hash=%s",
+		len(leaves), hex.EncodeToString(replayResp.RootHash))
 
 	// Start HTTP/gRPC server
 	listener, err := net.Listen("tcp", httpAddr)

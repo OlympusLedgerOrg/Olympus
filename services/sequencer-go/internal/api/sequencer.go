@@ -189,7 +189,7 @@ func (s *Sequencer) handleQueueLeaf(w http.ResponseWriter, r *http.Request) {
 			Hash:  d.Hash,
 		}
 	}
-	if err := s.storage.StoreLeafAndDeltas(ctx, deltas, updateResp.NewRoot, updateResp.TreeSize, signResp.Signature); err != nil {
+	if err := s.storage.StoreLeafAndDeltas(ctx, deltas, updateResp.NewRoot, updateResp.TreeSize, signResp.Signature, storage.LeafEntry{Key: updateResp.GlobalKey, ValueHash: updateResp.LeafValueHash}); err != nil {
 		log.Printf("Failed to store leaf and deltas: %v", err)
 		http.Error(w, "Storage failed", http.StatusInternalServerError)
 		return

@@ -145,3 +145,18 @@ func (c *CdhsSmfClient) SignRoot(ctx context.Context, root []byte, treeSize uint
 
 	return resp, nil
 }
+
+// ReplayLeaves replays a sequence of persisted (key, value_hash) leaf pairs
+// into the Rust service's in-memory SMT and returns the resulting root hash.
+func (c *CdhsSmfClient) ReplayLeaves(ctx context.Context, leaves []*pb.LeafEntry) (*pb.ReplayResponse, error) {
+	req := &pb.ReplayRequest{
+		Leaves: leaves,
+	}
+
+	resp, err := c.client.ReplayLeaves(ctx, req)
+	if err != nil {
+		return nil, fmt.Errorf("replay leaves failed: %w", err)
+	}
+
+	return resp, nil
+}
