@@ -6,6 +6,7 @@
 //! - Inclusion and non-inclusion proofs
 
 use std::collections::HashMap;
+use std::sync::LazyLock;
 
 use crate::crypto;
 use tokio::sync::RwLock;
@@ -163,6 +164,18 @@ impl SparseMerkleTree {
     /// Get tree size (number of non-empty leaves)
     pub async fn size(&self) -> u64 {
         self.state.read().await.size
+    }
+
+    /// Replay a sequence of (key, value_hash) leaf insertions in order.
+    ///
+    /// Iterates through the provided pairs and calls `self.update()` for each,
+    /// using the same path as live inserts so the resulting root is identical.
+    /// Returns the final root hash after all leaves have been applied.
+    pub async fn replay(&self, leaves: Vec<([u8; 32], [u8; 32])>) -> Result<[u8; 32], String> {
+        for (key, value_hash) in leaves {
+            self.update(&key, &value_hash).await?;
+        }
+        Ok(self.root().await)
     }
 
     /// Generate inclusion proof

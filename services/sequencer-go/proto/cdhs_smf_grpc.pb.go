@@ -27,6 +27,7 @@ const (
 	CdhsSmfService_Canonicalize_FullMethodName       = "/olympus.cdhs_smf.v1.CdhsSmfService/Canonicalize"
 	CdhsSmfService_GetRoot_FullMethodName            = "/olympus.cdhs_smf.v1.CdhsSmfService/GetRoot"
 	CdhsSmfService_SignRoot_FullMethodName           = "/olympus.cdhs_smf.v1.CdhsSmfService/SignRoot"
+	CdhsSmfService_ReplayLeaves_FullMethodName       = "/olympus.cdhs_smf.v1.CdhsSmfService/ReplayLeaves"
 )
 
 // CdhsSmfServiceClient is the client API for CdhsSmfService service.
@@ -49,6 +50,8 @@ type CdhsSmfServiceClient interface {
 	GetRoot(ctx context.Context, in *GetRootRequest, opts ...grpc.CallOption) (*GetRootResponse, error)
 	// Sign a root hash with Ed25519
 	SignRoot(ctx context.Context, in *SignRootRequest, opts ...grpc.CallOption) (*SignRootResponse, error)
+	// Replay persisted leaves into the in-memory SMT at startup
+	ReplayLeaves(ctx context.Context, in *ReplayRequest, opts ...grpc.CallOption) (*ReplayResponse, error)
 }
 
 type cdhsSmfServiceClient struct {
@@ -139,6 +142,16 @@ func (c *cdhsSmfServiceClient) SignRoot(ctx context.Context, in *SignRootRequest
 	return out, nil
 }
 
+func (c *cdhsSmfServiceClient) ReplayLeaves(ctx context.Context, in *ReplayRequest, opts ...grpc.CallOption) (*ReplayResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ReplayResponse)
+	err := c.cc.Invoke(ctx, CdhsSmfService_ReplayLeaves_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // CdhsSmfServiceServer is the server API for CdhsSmfService service.
 // All implementations must embed UnimplementedCdhsSmfServiceServer
 // for forward compatibility.
@@ -159,6 +172,8 @@ type CdhsSmfServiceServer interface {
 	GetRoot(context.Context, *GetRootRequest) (*GetRootResponse, error)
 	// Sign a root hash with Ed25519
 	SignRoot(context.Context, *SignRootRequest) (*SignRootResponse, error)
+	// Replay persisted leaves into the in-memory SMT at startup
+	ReplayLeaves(context.Context, *ReplayRequest) (*ReplayResponse, error)
 	mustEmbedUnimplementedCdhsSmfServiceServer()
 }
 
@@ -192,6 +207,9 @@ func (UnimplementedCdhsSmfServiceServer) GetRoot(context.Context, *GetRootReques
 }
 func (UnimplementedCdhsSmfServiceServer) SignRoot(context.Context, *SignRootRequest) (*SignRootResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method SignRoot not implemented")
+}
+func (UnimplementedCdhsSmfServiceServer) ReplayLeaves(context.Context, *ReplayRequest) (*ReplayResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method ReplayLeaves not implemented")
 }
 func (UnimplementedCdhsSmfServiceServer) mustEmbedUnimplementedCdhsSmfServiceServer() {}
 func (UnimplementedCdhsSmfServiceServer) testEmbeddedByValue()                        {}
@@ -358,6 +376,24 @@ func _CdhsSmfService_SignRoot_Handler(srv interface{}, ctx context.Context, dec 
 	return interceptor(ctx, in, info, handler)
 }
 
+func _CdhsSmfService_ReplayLeaves_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ReplayRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(CdhsSmfServiceServer).ReplayLeaves(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: CdhsSmfService_ReplayLeaves_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(CdhsSmfServiceServer).ReplayLeaves(ctx, req.(*ReplayRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // CdhsSmfService_ServiceDesc is the grpc.ServiceDesc for CdhsSmfService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -396,6 +432,10 @@ var CdhsSmfService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "SignRoot",
 			Handler:    _CdhsSmfService_SignRoot_Handler,
+		},
+		{
+			MethodName: "ReplayLeaves",
+			Handler:    _CdhsSmfService_ReplayLeaves_Handler,
 		},
 	},
 	Streams:  []grpc.StreamDesc{},
