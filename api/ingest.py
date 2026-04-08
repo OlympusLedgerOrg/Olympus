@@ -430,14 +430,50 @@ _use_sequencer: bool = os.environ.get("OLYMPUS_USE_SEQUENCER", "").strip() == "1
 _sequencer_addr: str = os.environ.get("SEQUENCER_ADDR", "localhost:9090")
 _sequencer_token: str = os.environ.get("SEQUENCER_API_TOKEN", "")
 
-# Module-level reusable httpx client for sequencer calls.  Shared across all
-# requests to enable connection pooling — creating a new AsyncClient per call
-# would tear down and rebuild the connection pool on every ingest, exhausting
-# file descriptors under load.  The token is intentionally NOT logged here.
-_sequencer_http_client: httpx.AsyncClient = httpx.AsyncClient(timeout=30.0)
+# Module-level singleton for sequencer HTTP calls.  Lazily initialised by
+# _get_sequencer_client() so that the connection pool is only created when
+# the sequencer path is actually used (avoids touching the event loop at
+# import time).  Call _close_sequencer_client() from the application
+# shutdown hook to drain in-flight connections cleanly.
+_sequencer_http_client: httpx.AsyncClient | None = None
+
+
+def _get_sequencer_client() -> httpx.AsyncClient:
+    """Return the module-level sequencer HTTP client, creating it on first call.
+
+    The client is a singleton so that all requests share a single connection
+    pool (max_keepalive_connections=20).  Creating a new AsyncClient per call
+    would tear down the pool after every request, exhausting file descriptors
+    under load.
+    """
+    global _sequencer_http_client
+    if _sequencer_http_client is None:
+        limits = httpx.Limits(max_keepalive_connections=20, max_connections=100)
+        _sequencer_http_client = httpx.AsyncClient(timeout=30.0, limits=limits)
+    return _sequencer_http_client
+
+
+async def _close_sequencer_client() -> None:
+    """Close the module-level sequencer HTTP client.
+
+    Should be called from the application lifespan shutdown hook so that
+    in-flight connections are drained before the process exits.
+    """
+    global _sequencer_http_client
+    if _sequencer_http_client is not None:
+        await _sequencer_http_client.aclose()
+        _sequencer_http_client = None
+
 
 if _use_sequencer:
     logger.info("ingest_path=sequencer addr=%s (OLYMPUS_USE_SEQUENCER=1)", _sequencer_addr)
+    # Warn loudly if the auth token is missing — requests will be rejected
+    # by the sequencer's requireToken middleware.  The token value itself is
+    # intentionally never logged to avoid credential exposure.
+    if not _sequencer_token:
+        logger.warning(
+            "ingest: SEQUENCER_API_TOKEN is not set — sequencer requests will be unauthorized"
+        )
 else:
     logger.info("ingest_path=direct_storage")
 
@@ -1057,13 +1093,12 @@ async def _call_sequencer_queue_leaf(
         "content_type": "application/json",
     }
     try:
-        async with httpx.AsyncClient() as client:
-            resp = await client.post(
-                url,
-                json=payload,
-                headers={"X-Sequencer-Token": _sequencer_token},
-                timeout=30.0,
-            )
+        client = _get_sequencer_client()
+        resp = await client.post(
+            url,
+            json=payload,
+            headers={"X-Sequencer-Token": _sequencer_token},
+        )
     except httpx.RequestError as exc:
         logger.error("sequencer_unreachable error=%s", exc)
         raise HTTPException(status_code=503, detail="Sequencer unavailable") from exc
@@ -1449,7 +1484,12 @@ async def ingest_batch(
                         INGEST_TOTAL.labels(outcome="committed").inc()
                         new_record_counter += 1
             elif storage is not None:
-                # PostgreSQL path: records already persisted individually
+                # Proof metadata is written in a single DB transaction by
+                # store_ingestion_batch, so all records in the batch are
+                # committed atomically at the DB level.  Sequencer HTTP calls
+                # (above) happen per-record before this point; if one fails
+                # with a 503 the HTTPException propagates and store_ingestion_batch
+                # is never reached, keeping the DB consistent.
                 if persist_queue:
                     storage.store_ingestion_batch(batch_id, persist_queue)
                 # Get the latest ledger entry hash for response

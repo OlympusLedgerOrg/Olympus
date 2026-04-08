@@ -34,7 +34,7 @@ from starlette.middleware.base import BaseHTTPMiddleware
 from api.auth import _assert_xff_default_deny
 from api.config import get_settings
 from api.db import engine
-from api.ingest import router as ingest_router
+from api.ingest import _close_sequencer_client, router as ingest_router
 from api.models import Base  # noqa: F401 — ensures all models are registered
 from api.routers import agencies, appeals, documents, keys, ledger, requests as requests_router
 from api.routers.datasets import router as datasets_router
@@ -161,6 +161,7 @@ async def lifespan(app: FastAPI):
 
     yield
 
+    await _close_sequencer_client()
     await engine.dispose()
     logger.info("Engine disposed; shutdown complete.")
 
