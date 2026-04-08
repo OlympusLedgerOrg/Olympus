@@ -32,7 +32,7 @@ func socketPath() string {
 // NewCdhsSmfClient creates a new client connection to the Rust service
 func NewCdhsSmfClient() (*CdhsSmfClient, error) {
 	sockPath := socketPath()
-	conn, err := grpc.Dial(
+	conn, err := grpc.NewClient(
 		"unix://"+sockPath,
 		grpc.WithContextDialer(func(ctx context.Context, _ string) (net.Conn, error) {
 			var dialer net.Dialer

@@ -323,7 +323,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         fs::create_dir_all(parent)?;
     }
     if socket_path.exists() {
-        let metadata = fs::metadata(socket_path)?;
+        let metadata = fs::symlink_metadata(socket_path)?;
         if metadata.file_type().is_socket() {
             fs::remove_file(socket_path)?;
         } else {
