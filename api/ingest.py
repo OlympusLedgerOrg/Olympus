@@ -1224,6 +1224,7 @@ async def ingest_batch(
                             seq_merkle_root = seq_resp["new_root"]
                             seq_global_key = seq_resp["global_key"]
                             seq_leaf_hash = seq_resp["leaf_value_hash"]
+                            seq_committed_ts = current_timestamp()
                             seq_merkle_proof: dict[str, Any] = {
                                 "leaf_hash": seq_leaf_hash,
                                 "leaf_index": str(int(seq_global_key, 16)),
@@ -1243,8 +1244,10 @@ async def ingest_batch(
                                 "content_hash": content_hash,
                                 "merkle_root": seq_merkle_root,
                                 "merkle_proof": seq_merkle_proof,
+                                # NOTE: sequencer path stores the SMT leaf_value_hash here.
+                                # In the direct-storage path this field holds a ledger entry hash.
                                 "ledger_entry_hash": seq_leaf_hash,
-                                "timestamp": ts,
+                                "timestamp": seq_committed_ts,
                                 "canonicalization": canonicalization_with_poseidon,
                                 "persisted": True,
                                 "batch_id": batch_id,
@@ -1253,6 +1256,7 @@ async def ingest_batch(
                             }
                             _cache_ingestion_record(ingestion_entry)
                             persist_queue.append(ingestion_entry)
+                            ts = seq_committed_ts
                             ledger_entry_hash = seq_leaf_hash
                             logger.info("Record %s sequenced via Go sequencer", record.record_id)
                         else:
@@ -1304,6 +1308,9 @@ async def ingest_batch(
                             ledger_entry_hash = ledger_entry.entry_hash
                             logger.info(f"Record {record.record_id} persisted to PostgreSQL")
                     except HTTPException:
+                        # Re-raise HTTP exceptions (e.g. 503 from sequencer) so they
+                        # fail the whole batch atomically — consistent with how non-dedup
+                        # ValueError failures behave on the direct-storage path.
                         raise
                     except ValueError as e:
                         error_msg = str(e)
