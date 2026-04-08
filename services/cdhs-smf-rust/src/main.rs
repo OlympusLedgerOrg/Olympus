@@ -316,16 +316,22 @@ impl CdhsSmfServiceTrait for CdhsSmfService {
             .into_iter()
             .enumerate()
             .map(|(i, entry)| {
+                let key_len = entry.key.len();
                 let key: [u8; 32] = entry
                     .key
                     .as_slice()
                     .try_into()
-                    .map_err(|_| Status::invalid_argument(format!("leaf[{}]: invalid key length", i)))?;
+                    .map_err(|_| Status::invalid_argument(format!(
+                        "leaf[{}]: invalid key length (expected 32 bytes, got {})", i, key_len
+                    )))?;
+                let vh_len = entry.value_hash.len();
                 let value_hash: [u8; 32] = entry
                     .value_hash
                     .as_slice()
                     .try_into()
-                    .map_err(|_| Status::invalid_argument(format!("leaf[{}]: invalid value_hash length", i)))?;
+                    .map_err(|_| Status::invalid_argument(format!(
+                        "leaf[{}]: invalid value_hash length (expected 32 bytes, got {})", i, vh_len
+                    )))?;
                 Ok((key, value_hash))
             })
             .collect();

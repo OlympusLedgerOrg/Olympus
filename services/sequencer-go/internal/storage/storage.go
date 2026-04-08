@@ -101,6 +101,12 @@ func setRehashGate(ctx context.Context, tx *sql.Tx) error {
 	return nil
 }
 
+// LeafEntry represents a single stored leaf for startup replay.
+type LeafEntry struct {
+	Key       []byte
+	ValueHash []byte
+}
+
 // SmtDelta represents a single SMT node delta for batch storage.
 type SmtDelta struct {
 	Path  []byte
@@ -111,7 +117,7 @@ type SmtDelta struct {
 // StoreLeafAndDeltas atomically persists all node deltas, the leaf entry, and
 // the new root within a single database transaction. This prevents partial SMT
 // state on crash (C-3 in security audit).
-func (s *PostgresStorage) StoreLeafAndDeltas(ctx context.Context, deltas []SmtDelta, root []byte, treeSize uint64, signature []byte, key []byte, valueHash []byte) error {
+func (s *PostgresStorage) StoreLeafAndDeltas(ctx context.Context, deltas []SmtDelta, root []byte, treeSize uint64, signature []byte, leaf LeafEntry) error {
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return fmt.Errorf("begin tx: %w", err)
@@ -135,7 +141,7 @@ func (s *PostgresStorage) StoreLeafAndDeltas(ctx context.Context, deltas []SmtDe
 		INSERT INTO cdhs_smf_leaves (key, value_hash, created_at)
 		VALUES ($1, $2, NOW())
 	`
-	if _, err := tx.ExecContext(ctx, leafQuery, key, valueHash); err != nil {
+	if _, err := tx.ExecContext(ctx, leafQuery, leaf.Key, leaf.ValueHash); err != nil {
 		return fmt.Errorf("store leaf: %w", err)
 	}
 
@@ -219,12 +225,6 @@ func (s *PostgresStorage) InitSchema(ctx context.Context) error {
 	}
 
 	return nil
-}
-
-// LeafEntry represents a single stored leaf for startup replay.
-type LeafEntry struct {
-	Key       []byte
-	ValueHash []byte
 }
 
 // GetLeaves retrieves all leaf entries in insertion order (oldest first) for
