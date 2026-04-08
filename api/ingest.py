@@ -24,7 +24,7 @@ import uuid
 from collections import OrderedDict
 from datetime import datetime, timezone
 from time import monotonic
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, cast
 from urllib.parse import urlparse
 
 import httpx
@@ -1111,7 +1111,7 @@ async def _call_sequencer_queue_leaf(
         )
         raise HTTPException(status_code=503, detail="Sequencer returned an error")
 
-    return dict(resp.json())
+    return cast(dict[str, Any], resp.json())
 
 
 # ---------------------------------------------------------------------------
