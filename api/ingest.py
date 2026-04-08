@@ -16,6 +16,7 @@ All write operations are append-only and maintain ledger chain integrity.
 from __future__ import annotations
 
 import asyncio
+import base64
 import json
 import logging
 import os
@@ -23,9 +24,10 @@ import uuid
 from collections import OrderedDict
 from datetime import datetime, timezone
 from time import monotonic
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, cast
 from urllib.parse import urlparse
 
+import httpx
 import nacl.signing
 from fastapi import APIRouter, File, HTTPException, Path, Request, UploadFile
 from pydantic import BaseModel, Field, field_validator
@@ -416,6 +418,64 @@ _write_ledger = Ledger()
 
 # API key store and loaded flag have been removed - authentication is now unified
 # through api.auth module. The key store is maintained by api.auth._key_store.
+
+# ---------------------------------------------------------------------------
+# Go sequencer client configuration
+# ---------------------------------------------------------------------------
+
+# When OLYMPUS_USE_SEQUENCER=1, the ingest path calls the Go sequencer's
+# QueueLeaf endpoint instead of writing directly to storage.append_record().
+# Both paths remain available so they can be tested side by side.
+_use_sequencer: bool = os.environ.get("OLYMPUS_USE_SEQUENCER", "").strip() == "1"
+_sequencer_addr: str = os.environ.get("SEQUENCER_ADDR", "localhost:9090")
+_sequencer_token: str = os.environ.get("SEQUENCER_API_TOKEN", "")
+
+# Module-level singleton for sequencer HTTP calls.  Lazily initialised by
+# _get_sequencer_client() so that the connection pool is only created when
+# the sequencer path is actually used (avoids touching the event loop at
+# import time).  Call _close_sequencer_client() from the application
+# shutdown hook to drain in-flight connections cleanly.
+_sequencer_http_client: httpx.AsyncClient | None = None
+
+
+def _get_sequencer_client() -> httpx.AsyncClient:
+    """Return the module-level sequencer HTTP client, creating it on first call.
+
+    The client is a singleton so that all requests share a single connection
+    pool (max_keepalive_connections=20).  Creating a new AsyncClient per call
+    would tear down the pool after every request, exhausting file descriptors
+    under load.
+    """
+    global _sequencer_http_client
+    if _sequencer_http_client is None:
+        limits = httpx.Limits(max_keepalive_connections=20, max_connections=100)
+        _sequencer_http_client = httpx.AsyncClient(timeout=30.0, limits=limits)
+    return _sequencer_http_client
+
+
+async def _close_sequencer_client() -> None:
+    """Close the module-level sequencer HTTP client.
+
+    Should be called from the application lifespan shutdown hook so that
+    in-flight connections are drained before the process exits.
+    """
+    global _sequencer_http_client
+    if _sequencer_http_client is not None:
+        await _sequencer_http_client.aclose()
+        _sequencer_http_client = None
+
+
+if _use_sequencer:
+    logger.info("ingest_path=sequencer addr=%s (OLYMPUS_USE_SEQUENCER=1)", _sequencer_addr)
+    # Warn loudly if the auth token is missing — requests will be rejected
+    # by the sequencer's requireToken middleware.  The token value itself is
+    # intentionally never logged to avoid credential exposure.
+    if not _sequencer_token:
+        logger.warning(
+            "ingest: SEQUENCER_API_TOKEN is not set — sequencer requests will be unauthorized"
+        )
+else:
+    logger.info("ingest_path=direct_storage")
 
 
 def _dev_signing_key_enabled() -> bool:
@@ -985,17 +1045,73 @@ async def _async_canonicalize_and_hash(content: dict[str, Any]) -> tuple[bytes, 
 
 async def _process_record_canonicalization(
     record: RecordInput, batch_id: str
-) -> tuple[RecordInput, str, bytes, str]:
+) -> tuple[RecordInput, str, bytes, str, bytes]:
     """
     Process a single record's canonicalization asynchronously.
 
     Returns:
-        Tuple of (record, content_hash_hex, content_hash_bytes, proof_id)
+        Tuple of (record, content_hash_hex, content_hash_bytes, proof_id, canonical_content_bytes)
     """
     content_bytes, content_hash = await _async_canonicalize_and_hash(record.content)
     content_hash_bytes = bytes.fromhex(content_hash)
     proof_id = str(uuid.uuid4())
-    return record, content_hash, content_hash_bytes, proof_id
+    return record, content_hash, content_hash_bytes, proof_id, content_bytes
+
+
+async def _call_sequencer_queue_leaf(
+    shard_id: str,
+    record_type: str,
+    record_id: str,
+    version: str | None,
+    canonical_content: bytes,
+) -> dict[str, Any]:
+    """Call the Go sequencer's QueueLeaf endpoint.
+
+    Sends the canonical record to the Go sequencer over HTTP/JSON. Returns the
+    parsed response dict (keys: new_root, global_key, leaf_value_hash, tree_size).
+
+    Args:
+        shard_id: Shard identifier for the record.
+        record_type: Record type string.
+        record_id: Record identifier.
+        version: Optional version string (empty string if absent).
+        canonical_content: Canonical JSON bytes for the record.
+
+    Returns:
+        Parsed QueueLeafResponse dict from the sequencer.
+
+    Raises:
+        HTTPException 503: If the sequencer is unreachable or returns a non-2xx status.
+    """
+    url = f"http://{_sequencer_addr}/v1/queue-leaf"
+    payload = {
+        "shard_id": shard_id,
+        "record_type": record_type,
+        "record_id": record_id,
+        "version": version or "",
+        "content": base64.b64encode(canonical_content).decode(),
+        "content_type": "application/json",
+    }
+    try:
+        client = _get_sequencer_client()
+        resp = await client.post(
+            url,
+            json=payload,
+            headers={"X-Sequencer-Token": _sequencer_token},
+        )
+    except httpx.RequestError as exc:
+        logger.error("sequencer_unreachable error=%s", exc)
+        raise HTTPException(status_code=503, detail="Sequencer unavailable") from exc
+
+    if resp.status_code != 200:
+        logger.error(
+            "sequencer_error status=%d body=%.200s",
+            resp.status_code,
+            resp.text,
+        )
+        raise HTTPException(status_code=503, detail="Sequencer returned an error")
+
+    return cast(dict[str, Any], resp.json())
 
 
 # ---------------------------------------------------------------------------
@@ -1054,9 +1170,11 @@ async def ingest_batch(
     canonicalized_results = await asyncio.gather(*canonicalization_tasks)
 
     # Build a map from original index to canonicalized data
-    record_data_map: dict[int, tuple[str, bytes, str]] = {
-        i: (content_hash, content_hash_bytes, proof_id)
-        for i, (_, content_hash, content_hash_bytes, proof_id) in enumerate(canonicalized_results)
+    record_data_map: dict[int, tuple[str, bytes, str, bytes]] = {
+        i: (content_hash, content_hash_bytes, proof_id, canonical_content)
+        for i, (_, content_hash, content_hash_bytes, proof_id, canonical_content) in enumerate(
+            canonicalized_results
+        )
     }
 
     # Now process each shard group
@@ -1092,7 +1210,9 @@ async def ingest_batch(
             )
 
             for original_idx, record in shard_records:
-                content_hash, content_hash_bytes, proof_id = record_data_map[original_idx]
+                content_hash, content_hash_bytes, proof_id, canonical_content = record_data_map[
+                    original_idx
+                ]
                 record_smt_key = record_key(record.record_type, record.record_id, record.version)
 
                 # In-memory-only dedup: when no storage is configured, RT-H1
@@ -1132,51 +1252,107 @@ async def ingest_batch(
                             **canonicalization,
                             "poseidon_root": persisted_poseidon_root,
                         }
-                        root_hash, proof, _header, _signature, ledger_entry = storage.append_record(
-                            shard_id=record.shard_id,
-                            record_type=record.record_type,
-                            record_id=record.record_id,
-                            version=record.version,
-                            value_hash=content_hash_bytes,
-                            signing_key=_signing_key,
-                            canonicalization=canonicalization_with_poseidon,
-                            poseidon_root=int(persisted_poseidon_root).to_bytes(
-                                32, byteorder="big"
-                            ),
-                        )
-                        persisted_poseidon_root = _resolved_poseidon_root(
-                            ledger_entry.poseidon_root,
-                            persisted_poseidon_root,
-                        )
 
-                        # Store mapping from proof_id to record coordinates for later retrieval
-                        ingestion_entry = {
-                            "proof_id": proof_id,
-                            "record_id": record.record_id,
-                            "shard_id": record.shard_id,
-                            "record_type": record.record_type,
-                            "version": record.version,
-                            "content_hash": content_hash,
-                            "merkle_root": root_hash.hex(),
-                            "merkle_proof": _smt_proof_to_merkle_proof_dict(
-                                proof, content_hash_bytes
-                            ),
-                            "ledger_entry_hash": ledger_entry.entry_hash,
-                            "timestamp": ledger_entry.ts,
-                            "canonicalization": {
-                                **canonicalization,
+                        if _use_sequencer:
+                            # Sequencer path: delegate SMT update to the Go sequencer.
+                            seq_resp = await _call_sequencer_queue_leaf(
+                                shard_id=record.shard_id,
+                                record_type=record.record_type,
+                                record_id=record.record_id,
+                                version=str(record.version) if record.version is not None else None,
+                                canonical_content=canonical_content,
+                            )
+                            seq_merkle_root = seq_resp["new_root"]
+                            seq_global_key = seq_resp["global_key"]
+                            seq_leaf_hash = seq_resp["leaf_value_hash"]
+                            seq_committed_ts = current_timestamp()
+                            seq_merkle_proof: dict[str, Any] = {
+                                "leaf_hash": seq_leaf_hash,
+                                "leaf_index": str(int(seq_global_key, 16)),
+                                "siblings": [],
+                                "root_hash": seq_merkle_root,
+                                "tree_size": str(seq_resp["tree_size"]),
+                                "proof_version": PROOF_VERSION,
+                                "tree_version": MERKLE_VERSION,
+                                "smt_key": seq_global_key,
+                            }
+                            ingestion_entry = {
+                                "proof_id": proof_id,
+                                "record_id": record.record_id,
+                                "shard_id": record.shard_id,
+                                "record_type": record.record_type,
+                                "version": record.version,
+                                "content_hash": content_hash,
+                                "merkle_root": seq_merkle_root,
+                                "merkle_proof": seq_merkle_proof,
+                                # NOTE: sequencer path stores the SMT leaf_value_hash here.
+                                # In the direct-storage path this field holds a ledger entry hash.
+                                "ledger_entry_hash": seq_leaf_hash,
+                                "timestamp": seq_committed_ts,
+                                "canonicalization": canonicalization_with_poseidon,
+                                "persisted": True,
+                                "batch_id": batch_id,
+                                "batch_index": len(persist_queue),
                                 "poseidon_root": persisted_poseidon_root,
-                            },
-                            "persisted": True,
-                            "batch_id": batch_id,
-                            "batch_index": len(persist_queue),
-                            "poseidon_root": persisted_poseidon_root,
-                        }
-                        _cache_ingestion_record(ingestion_entry)
-                        persist_queue.append(ingestion_entry)
-                        ts = ledger_entry.ts
-                        ledger_entry_hash = ledger_entry.entry_hash
-                        logger.info(f"Record {record.record_id} persisted to PostgreSQL")
+                            }
+                            _cache_ingestion_record(ingestion_entry)
+                            persist_queue.append(ingestion_entry)
+                            ts = seq_committed_ts
+                            ledger_entry_hash = seq_leaf_hash
+                            logger.info("Record %s sequenced via Go sequencer", record.record_id)
+                        else:
+                            root_hash, proof, _header, _signature, ledger_entry = (
+                                storage.append_record(
+                                    shard_id=record.shard_id,
+                                    record_type=record.record_type,
+                                    record_id=record.record_id,
+                                    version=record.version,
+                                    value_hash=content_hash_bytes,
+                                    signing_key=_signing_key,
+                                    canonicalization=canonicalization_with_poseidon,
+                                    poseidon_root=int(persisted_poseidon_root).to_bytes(
+                                        32, byteorder="big"
+                                    ),
+                                )
+                            )
+                            persisted_poseidon_root = _resolved_poseidon_root(
+                                ledger_entry.poseidon_root,
+                                persisted_poseidon_root,
+                            )
+
+                            # Store mapping from proof_id to record coordinates for later retrieval
+                            ingestion_entry = {
+                                "proof_id": proof_id,
+                                "record_id": record.record_id,
+                                "shard_id": record.shard_id,
+                                "record_type": record.record_type,
+                                "version": record.version,
+                                "content_hash": content_hash,
+                                "merkle_root": root_hash.hex(),
+                                "merkle_proof": _smt_proof_to_merkle_proof_dict(
+                                    proof, content_hash_bytes
+                                ),
+                                "ledger_entry_hash": ledger_entry.entry_hash,
+                                "timestamp": ledger_entry.ts,
+                                "canonicalization": {
+                                    **canonicalization,
+                                    "poseidon_root": persisted_poseidon_root,
+                                },
+                                "persisted": True,
+                                "batch_id": batch_id,
+                                "batch_index": len(persist_queue),
+                                "poseidon_root": persisted_poseidon_root,
+                            }
+                            _cache_ingestion_record(ingestion_entry)
+                            persist_queue.append(ingestion_entry)
+                            ts = ledger_entry.ts
+                            ledger_entry_hash = ledger_entry.entry_hash
+                            logger.info(f"Record {record.record_id} persisted to PostgreSQL")
+                    except HTTPException:
+                        # Re-raise HTTP exceptions (e.g. 503 from sequencer) so they
+                        # fail the whole batch atomically — consistent with how non-dedup
+                        # ValueError failures behave on the direct-storage path.
+                        raise
                     except ValueError as e:
                         error_msg = str(e)
                         is_dedup = (
@@ -1308,7 +1484,12 @@ async def ingest_batch(
                         INGEST_TOTAL.labels(outcome="committed").inc()
                         new_record_counter += 1
             elif storage is not None:
-                # PostgreSQL path: records already persisted individually
+                # Proof metadata is written in a single DB transaction by
+                # store_ingestion_batch, so all records in the batch are
+                # committed atomically at the DB level.  Sequencer HTTP calls
+                # (above) happen per-record before this point; if one fails
+                # with a 503 the HTTPException propagates and store_ingestion_batch
+                # is never reached, keeping the DB consistent.
                 if persist_queue:
                     storage.store_ingestion_batch(batch_id, persist_queue)
                 # Get the latest ledger entry hash for response

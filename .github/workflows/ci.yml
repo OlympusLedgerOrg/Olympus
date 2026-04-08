@@ -316,12 +316,41 @@ jobs:
         working-directory: verifiers/rust
         run: cargo test
 
+  # Fast compile-check of every target in the cdhs-smf-rust crate (lib, bin,
+  # tests) plus the fuzz sub-workspace. Catches missing imports and type errors
+  # before the slower 30 s-per-target fuzz runs.
+  cargo-check-cdhs:
+    name: Cargo check CD-HS-ST service (all targets)
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust stable + nightly
+        run: |
+          rustup toolchain install stable --no-self-update
+          rustup toolchain install nightly --no-self-update
+          rustup default stable
+
+      - name: Install protoc
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq protobuf-compiler
+
+      - name: cargo check --all-targets (stable, main crate)
+        working-directory: services/cdhs-smf-rust
+        run: cargo check --all-targets
+
+      - name: cargo check --all-targets (nightly, fuzz sub-workspace)
+        working-directory: services/cdhs-smf-rust/fuzz
+        run: cargo +nightly check --all-targets
+
   # NOTE: CodeQL's Rust analyzer may time out on these fuzz jobs because
   # libfuzzer-sys pulls in LLVM instrumentation that confuses static analysis.
   # This is expected and not actionable — the fuzz targets are validated by
   # actual execution below, not by CodeQL.
   cargo-fuzz-cdhs:
     name: Cargo fuzz CD-HS-ST service (30 s per target)
+    needs: [cargo-check-cdhs]
     runs-on: ubuntu-latest
     permissions:
       contents: read
