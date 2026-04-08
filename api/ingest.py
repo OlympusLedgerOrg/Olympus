@@ -1111,7 +1111,7 @@ async def _call_sequencer_queue_leaf(
         )
         raise HTTPException(status_code=503, detail="Sequencer returned an error")
 
-    return resp.json()
+    return dict(resp.json())
 
 
 # ---------------------------------------------------------------------------
@@ -1259,7 +1259,7 @@ async def ingest_batch(
                                 shard_id=record.shard_id,
                                 record_type=record.record_type,
                                 record_id=record.record_id,
-                                version=record.version,
+                                version=str(record.version) if record.version is not None else None,
                                 canonical_content=canonical_content,
                             )
                             seq_merkle_root = seq_resp["new_root"]
