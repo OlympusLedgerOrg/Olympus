@@ -2536,6 +2536,11 @@ class StorageLayer:
     ) -> SparseMerkleTree:
         """Retired in 0.12: SMT writes now route through the Go sequencer.
 
+        This method is retained for backward compatibility but raises
+        ``NotImplementedError`` on every call.  All production callers
+        (api/ingest.py ingest_batch, _build_poseidon_smt_for_storage_shard)
+        have been migrated to the Go sequencer path introduced in 0.12.
+
         See api/ingest.py _call_sequencer_queue_leaf.
         """
         raise NotImplementedError(
