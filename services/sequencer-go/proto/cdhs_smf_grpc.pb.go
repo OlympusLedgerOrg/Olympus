@@ -2,7 +2,7 @@
 // versions:
 // - protoc-gen-go-grpc v1.6.1
 // - protoc             v3.21.12
-// source: cdhs_smf.proto
+// source: proto/cdhs_smf.proto
 
 package proto
 
@@ -399,5 +399,5 @@ var CdhsSmfService_ServiceDesc = grpc.ServiceDesc{
 		},
 	},
 	Streams:  []grpc.StreamDesc{},
-	Metadata: "cdhs_smf.proto",
+	Metadata: "proto/cdhs_smf.proto",
 }
