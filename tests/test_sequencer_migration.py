@@ -137,24 +137,42 @@ def parity_client(monkeypatch):
 # regardless of what leaf_value_hash the sequencer returns.
 _DATASETS = [
     pytest.param(
-        {"shard_id": "s1", "record_type": "doc", "record_id": "r1", "version": 1,
-         "content": {"title": "Budget Report", "year": 2024}},
-        _fake_seq_resp(new_root="aa" * 32, global_key="bb" * 32, leaf_value_hash="cc" * 32,
-                       tree_size=10),
+        {
+            "shard_id": "s1",
+            "record_type": "doc",
+            "record_id": "r1",
+            "version": 1,
+            "content": {"title": "Budget Report", "year": 2024},
+        },
+        _fake_seq_resp(
+            new_root="aa" * 32, global_key="bb" * 32, leaf_value_hash="cc" * 32, tree_size=10
+        ),
         id="budget-report",
     ),
     pytest.param(
-        {"shard_id": "s2", "record_type": "ordinance", "record_id": "ord-42", "version": 3,
-         "content": {"text": "amend section 5", "category": "zoning"}},
-        _fake_seq_resp(new_root="11" * 32, global_key="22" * 32, leaf_value_hash="33" * 32,
-                       tree_size=99),
+        {
+            "shard_id": "s2",
+            "record_type": "ordinance",
+            "record_id": "ord-42",
+            "version": 3,
+            "content": {"text": "amend section 5", "category": "zoning"},
+        },
+        _fake_seq_resp(
+            new_root="11" * 32, global_key="22" * 32, leaf_value_hash="33" * 32, tree_size=99
+        ),
         id="ordinance",
     ),
     pytest.param(
-        {"shard_id": "s3", "record_type": "permit", "record_id": "p-007", "version": 1,
-         "content": {"applicant": "Acme Corp", "approved": True, "value": 1234567}},
-        _fake_seq_resp(new_root="ff" * 32, global_key="ee" * 32, leaf_value_hash="dd" * 32,
-                       tree_size=1),
+        {
+            "shard_id": "s3",
+            "record_type": "permit",
+            "record_id": "p-007",
+            "version": 1,
+            "content": {"applicant": "Acme Corp", "approved": True, "value": 1234567},
+        },
+        _fake_seq_resp(
+            new_root="ff" * 32, global_key="ee" * 32, leaf_value_hash="dd" * 32, tree_size=1
+        ),
         id="permit",
     ),
 ]
