@@ -65,7 +65,11 @@ impl SparseMerkleTree {
     }
 
     /// Update a leaf and return new root and deltas
-    pub async fn update(&self, key: &[u8; 32], value_hash: &[u8; 32]) -> Result<([u8; 32], Vec<NodeDelta>), String> {
+    pub async fn update(
+        &self,
+        key: &[u8; 32],
+        value_hash: &[u8; 32],
+    ) -> Result<([u8; 32], Vec<NodeDelta>), String> {
         let mut state = self.state.write().await;
         let mut deltas = Vec::new();
 
@@ -93,7 +97,9 @@ impl SparseMerkleTree {
 
             // Store node before computing parent
             let node_path = path_bits[0..=level].to_vec();
-            state.nodes.insert((level as u8, node_path.clone()), current_hash);
+            state
+                .nodes
+                .insert((level as u8, node_path.clone()), current_hash);
 
             let sibling_path = sibling_path_bits(&path_bits, level);
 
@@ -102,7 +108,8 @@ impl SparseMerkleTree {
             // The sibling at level L is an empty subtree of height (255-L):
             //   - At level 255 (leaf): sibling height 0 → empty_hashes[0] (empty leaf)
             //   - At level 0 (root):   sibling height 255 → empty_hashes[255]
-            let sibling_hash = state.nodes
+            let sibling_hash = state
+                .nodes
                 .get(&(level as u8, sibling_path.clone()))
                 .copied()
                 .unwrap_or(empty_hashes[255 - level]);
@@ -150,11 +157,17 @@ impl SparseMerkleTree {
     }
 
     /// Generate inclusion proof
-    pub async fn prove_inclusion(&self, key: &[u8; 32], root: &[u8; 32]) -> Result<InclusionProof, String> {
+    pub async fn prove_inclusion(
+        &self,
+        key: &[u8; 32],
+        root: &[u8; 32],
+    ) -> Result<InclusionProof, String> {
         let state = self.state.read().await;
 
         // Check if key exists
-        let value_hash = state.leaves.get(key)
+        let value_hash = state
+            .leaves
+            .get(key)
             .ok_or_else(|| "Key not found".to_string())?;
 
         // Check root matches
@@ -169,7 +182,8 @@ impl SparseMerkleTree {
         for level in (0..256).rev() {
             let sibling_path = sibling_path_bits(&path_bits, level);
 
-            let sibling_hash = state.nodes
+            let sibling_hash = state
+                .nodes
                 .get(&(level as u8, sibling_path))
                 .copied()
                 .unwrap_or(empty_hashes[255 - level]);
@@ -184,7 +198,11 @@ impl SparseMerkleTree {
     }
 
     /// Generate non-inclusion proof
-    pub async fn prove_non_inclusion(&self, key: &[u8; 32], root: &[u8; 32]) -> Result<NonInclusionProof, String> {
+    pub async fn prove_non_inclusion(
+        &self,
+        key: &[u8; 32],
+        root: &[u8; 32],
+    ) -> Result<NonInclusionProof, String> {
         let state = self.state.read().await;
 
         // Check if key doesn't exist
@@ -204,7 +222,8 @@ impl SparseMerkleTree {
         for level in (0..256).rev() {
             let sibling_path = sibling_path_bits(&path_bits, level);
 
-            let sibling_hash = state.nodes
+            let sibling_hash = state
+                .nodes
                 .get(&(level as u8, sibling_path))
                 .copied()
                 .unwrap_or(empty_hashes[255 - level]);
@@ -247,11 +266,7 @@ pub fn verify_inclusion(
 }
 
 /// Verify a non-inclusion proof
-pub fn verify_non_inclusion(
-    key: &[u8; 32],
-    siblings: &[[u8; 32]],
-    root: &[u8; 32],
-) -> bool {
+pub fn verify_non_inclusion(key: &[u8; 32], siblings: &[[u8; 32]], root: &[u8; 32]) -> bool {
     if siblings.len() != 256 {
         return false;
     }
@@ -397,8 +412,15 @@ mod tests {
 
         // Siblings should include actual node hashes, not all empty
         let empty_hashes = precompute_empty_hashes();
-        let has_non_empty = proof_a.siblings.iter().enumerate().any(|(i, s)| *s != empty_hashes[255 - i]);
-        assert!(has_non_empty, "Two-key proof must have at least one non-empty sibling");
+        let has_non_empty = proof_a
+            .siblings
+            .iter()
+            .enumerate()
+            .any(|(i, s)| *s != empty_hashes[255 - i]);
+        assert!(
+            has_non_empty,
+            "Two-key proof must have at least one non-empty sibling"
+        );
     }
 
     #[tokio::test]
@@ -406,11 +428,11 @@ mod tests {
         let tree = SparseMerkleTree::new();
 
         // Three keys: A and C share bit 0 but differ at bit 1
-        let key_a = [0u8; 32];        // bits: 0, 0, ...
+        let key_a = [0u8; 32]; // bits: 0, 0, ...
         let mut key_b = [0u8; 32];
-        key_b[0] = 0x80;               // bits: 1, 0, ...
+        key_b[0] = 0x80; // bits: 1, 0, ...
         let mut key_c = [0u8; 32];
-        key_c[0] = 0x40;               // bits: 0, 1, ...
+        key_c[0] = 0x40; // bits: 0, 1, ...
 
         let val = [0xFFu8; 32];
 
@@ -502,7 +524,11 @@ mod tests {
         tree2.update(&key_b, &val_b).await.unwrap();
         tree2.update(&key_a, &val_a).await.unwrap();
 
-        assert_eq!(tree1.root().await, tree2.root().await, "Root must be independent of insertion order");
+        assert_eq!(
+            tree1.root().await,
+            tree2.root().await,
+            "Root must be independent of insertion order"
+        );
     }
 
     #[tokio::test]
