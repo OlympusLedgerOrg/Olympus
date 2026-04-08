@@ -13,6 +13,13 @@
 //! - Ed25519 signing for root commitments
 //! - Protobuf API over Unix domain socket
 
+use std::env;
+use std::fs;
+use std::os::unix::fs::FileTypeExt;
+use std::path::Path;
+
+use tokio::net::UnixListener;
+use tokio_stream::wrappers::UnixListenerStream;
 use tonic::{transport::Server, Request, Response, Status};
 use tracing::info;
 
@@ -44,6 +51,8 @@ impl CdhsSmfService {
         }
     }
 }
+
+const DEFAULT_SOCKET_PATH: &str = "/run/olympus/cdhs-smf.sock";
 
 #[tonic::async_trait]
 impl CdhsSmfServiceTrait for CdhsSmfService {
@@ -307,14 +316,33 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         )
         .init();
 
-    let addr = "[::1]:50051".parse()?;
+    let socket_path = env::var("CDHS_SMF_SOCKET")
+        .unwrap_or_else(|_| DEFAULT_SOCKET_PATH.to_string());
+    let socket_path = Path::new(&socket_path);
+    if let Some(parent) = socket_path.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    if socket_path.exists() {
+        let metadata = fs::metadata(socket_path)?;
+        if metadata.file_type().is_socket() {
+            fs::remove_file(socket_path)?;
+        } else {
+            return Err(format!(
+                "refusing to remove non-socket path: {}",
+                socket_path.display()
+            )
+            .into());
+        }
+    }
+    let listener = UnixListener::bind(socket_path)?;
+    let incoming = UnixListenerStream::new(listener);
     let service = CdhsSmfService::new();
 
-    info!("CD-HS-ST Service starting on {}", addr);
+    info!("CD-HS-ST Service starting on unix socket {}", socket_path.display());
 
     Server::builder()
         .add_service(CdhsSmfServiceServer::new(service))
-        .serve(addr)
+        .serve_with_incoming(incoming)
         .await?;
 
     Ok(())

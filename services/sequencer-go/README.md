@@ -109,7 +109,7 @@ Generate an inclusion proof for a record.
 Wraps the gRPC client for the Rust CD-HS-ST service. Provides Go-friendly API:
 
 ```go
-client, err := client.NewCdhsSmfClient("localhost:50051")
+client, err := client.NewCdhsSmfClient()
 
 resp, err := client.Update(ctx, shardID, recordKey, canonicalContent)
 // resp.NewRoot, resp.Deltas
