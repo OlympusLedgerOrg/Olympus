@@ -6,6 +6,7 @@
 //! - Inclusion and non-inclusion proofs
 
 use std::collections::HashMap;
+use std::sync::LazyLock;
 
 use crate::crypto;
 use tokio::sync::RwLock;
