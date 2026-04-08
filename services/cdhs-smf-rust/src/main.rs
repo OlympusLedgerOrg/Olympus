@@ -304,6 +304,46 @@ impl CdhsSmfServiceTrait for CdhsSmfService {
             public_key: public_key.to_vec(),
         }))
     }
+
+    async fn replay_leaves(
+        &self,
+        request: Request<ReplayRequest>,
+    ) -> Result<Response<ReplayResponse>, Status> {
+        let req = request.into_inner();
+
+        let leaves: Result<Vec<([u8; 32], [u8; 32])>, Status> = req
+            .leaves
+            .into_iter()
+            .enumerate()
+            .map(|(i, entry)| {
+                let key: [u8; 32] = entry
+                    .key
+                    .as_slice()
+                    .try_into()
+                    .map_err(|_| Status::invalid_argument(format!("leaf[{}]: invalid key length", i)))?;
+                let value_hash: [u8; 32] = entry
+                    .value_hash
+                    .as_slice()
+                    .try_into()
+                    .map_err(|_| Status::invalid_argument(format!("leaf[{}]: invalid value_hash length", i)))?;
+                Ok((key, value_hash))
+            })
+            .collect();
+
+        let leaves = leaves?;
+
+        info!("ReplayLeaves: replaying {} leaves", leaves.len());
+
+        let root_hash = self
+            .smt
+            .replay(leaves)
+            .await
+            .map_err(|e| Status::internal(format!("Replay failed: {}", e)))?;
+
+        Ok(Response::new(ReplayResponse {
+            root_hash: root_hash.to_vec(),
+        }))
+    }
 }
 
 #[tokio::main]

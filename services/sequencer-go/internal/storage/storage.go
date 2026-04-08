@@ -108,10 +108,10 @@ type SmtDelta struct {
 	Hash  []byte
 }
 
-// StoreLeafAndDeltas atomically persists all node deltas and the new root
-// within a single database transaction. This prevents partial SMT state on
-// crash (C-3 in security audit).
-func (s *PostgresStorage) StoreLeafAndDeltas(ctx context.Context, deltas []SmtDelta, root []byte, treeSize uint64, signature []byte) error {
+// StoreLeafAndDeltas atomically persists all node deltas, the leaf entry, and
+// the new root within a single database transaction. This prevents partial SMT
+// state on crash (C-3 in security audit).
+func (s *PostgresStorage) StoreLeafAndDeltas(ctx context.Context, deltas []SmtDelta, root []byte, treeSize uint64, signature []byte, key []byte, valueHash []byte) error {
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return fmt.Errorf("begin tx: %w", err)
@@ -128,6 +128,15 @@ func (s *PostgresStorage) StoreLeafAndDeltas(ctx context.Context, deltas []SmtDe
 		if err := storeNodeDeltaInTx(ctx, tx, delta.Path, delta.Level, delta.Hash); err != nil {
 			return fmt.Errorf("store delta at level %d: %w", delta.Level, err)
 		}
+	}
+
+	// Persist the leaf entry for startup replay
+	leafQuery := `
+		INSERT INTO cdhs_smf_leaves (key, value_hash, created_at)
+		VALUES ($1, $2, NOW())
+	`
+	if _, err := tx.ExecContext(ctx, leafQuery, key, valueHash); err != nil {
+		return fmt.Errorf("store leaf: %w", err)
 	}
 
 	// Persist the signed root within the same transaction
@@ -194,6 +203,14 @@ func (s *PostgresStorage) InitSchema(ctx context.Context) error {
 
 		CREATE INDEX IF NOT EXISTS idx_cdhs_smf_nodes_level
 			ON cdhs_smf_nodes(level);
+
+		-- Leaf entries in insertion order, used for startup replay.
+		CREATE TABLE IF NOT EXISTS cdhs_smf_leaves (
+			id SERIAL PRIMARY KEY,
+			key BYTEA NOT NULL,
+			value_hash BYTEA NOT NULL,
+			created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+		);
 	`
 
 	_, err := s.db.ExecContext(ctx, schema)
@@ -202,4 +219,40 @@ func (s *PostgresStorage) InitSchema(ctx context.Context) error {
 	}
 
 	return nil
+}
+
+// LeafEntry represents a single stored leaf for startup replay.
+type LeafEntry struct {
+	Key       []byte
+	ValueHash []byte
+}
+
+// GetLeaves retrieves all leaf entries in insertion order (oldest first) for
+// startup replay. Corresponds to the cdhs_smf_leaves table.
+func (s *PostgresStorage) GetLeaves(ctx context.Context) ([]LeafEntry, error) {
+	query := `
+		SELECT key, value_hash
+		FROM cdhs_smf_leaves
+		ORDER BY id ASC
+	`
+
+	rows, err := s.db.QueryContext(ctx, query)
+	if err != nil {
+		return nil, fmt.Errorf("query leaves: %w", err)
+	}
+	defer rows.Close()
+
+	var leaves []LeafEntry
+	for rows.Next() {
+		var e LeafEntry
+		if err := rows.Scan(&e.Key, &e.ValueHash); err != nil {
+			return nil, fmt.Errorf("scan leaf row: %w", err)
+		}
+		leaves = append(leaves, e)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate leaf rows: %w", err)
+	}
+
+	return leaves, nil
 }
