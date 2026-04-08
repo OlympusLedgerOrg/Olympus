@@ -315,7 +315,8 @@ cargo build --release
 cargo run --release
 ```
 
-Service listens on `[::1]:50051`.
+Service listens on the Unix domain socket from `CDHS_SMF_SOCKET`
+(default: `/run/olympus/cdhs-smf.sock`).
 
 ### Go Sequencer
 

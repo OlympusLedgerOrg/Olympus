@@ -4,12 +4,16 @@ package client
 import (
 	"context"
 	"fmt"
+	"net"
+	"os"
 
 	"google.golang.org/grpc"
-	"google.golang.org/grpc/credentials/insecure"
+	"google.golang.org/grpc/credentials/local"
 
 	pb "github.com/wombatvagina69-crypto/olympus/services/sequencer/proto"
 )
+
+const defaultSocketPath = "/run/olympus/cdhs-smf.sock"
 
 // CdhsSmfClient wraps the gRPC client for the Rust CD-HS-ST service
 type CdhsSmfClient struct {
@@ -17,9 +21,25 @@ type CdhsSmfClient struct {
 	client pb.CdhsSmfServiceClient
 }
 
+func socketPath() string {
+	path := os.Getenv("CDHS_SMF_SOCKET")
+	if path == "" {
+		return defaultSocketPath
+	}
+	return path
+}
+
 // NewCdhsSmfClient creates a new client connection to the Rust service
-func NewCdhsSmfClient(addr string) (*CdhsSmfClient, error) {
-	conn, err := grpc.Dial(addr, grpc.WithTransportCredentials(insecure.NewCredentials()))
+func NewCdhsSmfClient() (*CdhsSmfClient, error) {
+	sockPath := socketPath()
+	conn, err := grpc.NewClient(
+		"unix://"+sockPath,
+		grpc.WithContextDialer(func(ctx context.Context, _ string) (net.Conn, error) {
+			var dialer net.Dialer
+			return dialer.DialContext(ctx, "unix", sockPath)
+		}),
+		grpc.WithTransportCredentials(local.NewCredentials()),
+	)
 	if err != nil {
 		return nil, fmt.Errorf("failed to connect: %w", err)
 	}

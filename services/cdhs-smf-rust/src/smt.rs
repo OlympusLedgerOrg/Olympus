@@ -6,9 +6,9 @@
 //! - Inclusion and non-inclusion proofs
 
 use std::collections::HashMap;
-use std::sync::{LazyLock, RwLock};
 
 use crate::crypto;
+use tokio::sync::RwLock;
 
 static EMPTY_HASHES: LazyLock<[[u8; 32]; 257]> = LazyLock::new(|| {
     let mut empty = [[0u8; 32]; 257];
@@ -74,15 +74,12 @@ impl SparseMerkleTree {
     }
 
     /// Update a leaf and return new root and deltas
-    pub fn update(
+    pub async fn update(
         &self,
         key: &[u8; 32],
         value_hash: &[u8; 32],
     ) -> Result<([u8; 32], Vec<NodeDelta>), String> {
-        let mut state = self
-            .state
-            .write()
-            .map_err(|e| format!("Lock error: {}", e))?;
+        let mut state = self.state.write().await;
         let mut deltas = Vec::new();
 
         // Check if this is a new leaf
@@ -159,25 +156,22 @@ impl SparseMerkleTree {
     }
 
     /// Get current root
-    pub fn root(&self) -> [u8; 32] {
-        self.state.read().unwrap().root
+    pub async fn root(&self) -> [u8; 32] {
+        self.state.read().await.root
     }
 
     /// Get tree size (number of non-empty leaves)
-    pub fn size(&self) -> u64 {
-        self.state.read().unwrap().size
+    pub async fn size(&self) -> u64 {
+        self.state.read().await.size
     }
 
     /// Generate inclusion proof
-    pub fn prove_inclusion(
+    pub async fn prove_inclusion(
         &self,
         key: &[u8; 32],
         root: &[u8; 32],
     ) -> Result<InclusionProof, String> {
-        let state = self
-            .state
-            .read()
-            .map_err(|e| format!("Lock error: {}", e))?;
+        let state = self.state.read().await;
 
         // Check if key exists
         let value_hash = state
@@ -213,15 +207,12 @@ impl SparseMerkleTree {
     }
 
     /// Generate non-inclusion proof
-    pub fn prove_non_inclusion(
+    pub async fn prove_non_inclusion(
         &self,
         key: &[u8; 32],
         root: &[u8; 32],
     ) -> Result<NonInclusionProof, String> {
-        let state = self
-            .state
-            .read()
-            .map_err(|e| format!("Lock error: {}", e))?;
+        let state = self.state.read().await;
 
         // Check if key doesn't exist
         if state.leaves.contains_key(key) {
@@ -362,21 +353,12 @@ fn pack_path_bits(bits: &[u8]) -> Vec<u8> {
 mod tests {
     use super::*;
 
-    fn recompute_empty_hashes_uncached() -> [[u8; 32]; 257] {
-        let mut empty = [[0u8; 32]; 257];
-        empty[0] = crypto::empty_leaf();
-        for index in 1..empty.len() {
-            empty[index] = crypto::hash_node(&empty[index - 1], &empty[index - 1]);
-        }
-        empty
-    }
-
-    #[test]
-    fn test_empty_tree() {
+    #[tokio::test]
+    async fn test_empty_tree() {
         let tree = SparseMerkleTree::new();
-        assert_eq!(tree.size(), 0);
+        assert_eq!(tree.size().await, 0);
 
-        let root = tree.root();
+        let root = tree.root().await;
         assert_eq!(root.len(), 32);
 
         let recomputed = recompute_empty_hashes_uncached();
@@ -384,37 +366,37 @@ mod tests {
         assert_eq!(root, empty_hashes()[256]);
     }
 
-    #[test]
-    fn test_update() {
+    #[tokio::test]
+    async fn test_update() {
         let tree = SparseMerkleTree::new();
         let key = [1u8; 32];
         let value_hash = [2u8; 32];
 
-        let result = tree.update(&key, &value_hash);
+        let result = tree.update(&key, &value_hash).await;
         assert!(result.is_ok());
 
         let (new_root, deltas) = result.unwrap();
         assert_eq!(new_root.len(), 32);
         assert!(!deltas.is_empty());
-        assert_eq!(tree.size(), 1);
+        assert_eq!(tree.size().await, 1);
     }
 
-    #[test]
-    fn test_single_key_inclusion_proof() {
+    #[tokio::test]
+    async fn test_single_key_inclusion_proof() {
         let tree = SparseMerkleTree::new();
         let key = [1u8; 32];
         let value_hash = [2u8; 32];
 
-        tree.update(&key, &value_hash).unwrap();
-        let root = tree.root();
+        tree.update(&key, &value_hash).await.unwrap();
+        let root = tree.root().await;
 
-        let proof = tree.prove_inclusion(&key, &root).unwrap();
+        let proof = tree.prove_inclusion(&key, &root).await.unwrap();
         assert_eq!(proof.siblings.len(), 256);
         assert!(verify_inclusion(&key, &value_hash, &proof.siblings, &root));
     }
 
-    #[test]
-    fn test_two_key_inclusion_proofs() {
+    #[tokio::test]
+    async fn test_two_key_inclusion_proofs() {
         let tree = SparseMerkleTree::new();
 
         // Two keys that differ at bit 0 (MSB)
@@ -425,19 +407,19 @@ mod tests {
         let val_a = [0xAAu8; 32];
         let val_b = [0xBBu8; 32];
 
-        tree.update(&key_a, &val_a).unwrap();
-        tree.update(&key_b, &val_b).unwrap();
-        let root = tree.root();
+        tree.update(&key_a, &val_a).await.unwrap();
+        tree.update(&key_b, &val_b).await.unwrap();
+        let root = tree.root().await;
 
         // Both proofs must verify
-        let proof_a = tree.prove_inclusion(&key_a, &root).unwrap();
+        let proof_a = tree.prove_inclusion(&key_a, &root).await.unwrap();
         assert!(verify_inclusion(&key_a, &val_a, &proof_a.siblings, &root));
 
-        let proof_b = tree.prove_inclusion(&key_b, &root).unwrap();
+        let proof_b = tree.prove_inclusion(&key_b, &root).await.unwrap();
         assert!(verify_inclusion(&key_b, &val_b, &proof_b.siblings, &root));
 
         // Siblings should include actual node hashes, not all empty
-        let empty_hashes = empty_hashes();
+        let empty_hashes = precompute_empty_hashes();
         let has_non_empty = proof_a
             .siblings
             .iter()
@@ -449,8 +431,8 @@ mod tests {
         );
     }
 
-    #[test]
-    fn test_three_key_inclusion_proofs() {
+    #[tokio::test]
+    async fn test_three_key_inclusion_proofs() {
         let tree = SparseMerkleTree::new();
 
         // Three keys: A and C share bit 0 but differ at bit 1
@@ -462,13 +444,13 @@ mod tests {
 
         let val = [0xFFu8; 32];
 
-        tree.update(&key_a, &val).unwrap();
-        tree.update(&key_b, &val).unwrap();
-        tree.update(&key_c, &val).unwrap();
-        let root = tree.root();
+        tree.update(&key_a, &val).await.unwrap();
+        tree.update(&key_b, &val).await.unwrap();
+        tree.update(&key_c, &val).await.unwrap();
+        let root = tree.root().await;
 
         for key in [key_a, key_b, key_c] {
-            let proof = tree.prove_inclusion(&key, &root).unwrap();
+            let proof = tree.prove_inclusion(&key, &root).await.unwrap();
             assert!(
                 verify_inclusion(&key, &val, &proof.siblings, &root),
                 "Inclusion proof failed for key {:?}",
@@ -477,8 +459,8 @@ mod tests {
         }
     }
 
-    #[test]
-    fn test_many_keys_inclusion_proofs() {
+    #[tokio::test]
+    async fn test_many_keys_inclusion_proofs() {
         let tree = SparseMerkleTree::new();
         let mut keys = Vec::new();
         let mut vals = Vec::new();
@@ -488,14 +470,14 @@ mod tests {
             key[0] = i;
             let mut val = [0u8; 32];
             val[0] = i + 100;
-            tree.update(&key, &val).unwrap();
+            tree.update(&key, &val).await.unwrap();
             keys.push(key);
             vals.push(val);
         }
 
-        let root = tree.root();
+        let root = tree.root().await;
         for (key, val) in keys.iter().zip(vals.iter()) {
-            let proof = tree.prove_inclusion(key, &root).unwrap();
+            let proof = tree.prove_inclusion(key, &root).await.unwrap();
             assert!(
                 verify_inclusion(key, val, &proof.siblings, &root),
                 "Proof failed for key starting with {:02x}",
@@ -504,76 +486,76 @@ mod tests {
         }
     }
 
-    #[test]
-    fn test_non_inclusion_proof() {
+    #[tokio::test]
+    async fn test_non_inclusion_proof() {
         let tree = SparseMerkleTree::new();
         let key1 = [1u8; 32];
         let key2 = [2u8; 32];
         let value_hash = [3u8; 32];
 
-        tree.update(&key1, &value_hash).unwrap();
-        let root = tree.root();
+        tree.update(&key1, &value_hash).await.unwrap();
+        let root = tree.root().await;
 
-        let proof = tree.prove_non_inclusion(&key2, &root).unwrap();
+        let proof = tree.prove_non_inclusion(&key2, &root).await.unwrap();
         assert_eq!(proof.siblings.len(), 256);
         assert!(verify_non_inclusion(&key2, &proof.siblings, &root));
     }
 
-    #[test]
-    fn test_non_inclusion_with_multiple_keys() {
+    #[tokio::test]
+    async fn test_non_inclusion_with_multiple_keys() {
         let tree = SparseMerkleTree::new();
         let key1 = [1u8; 32];
         let key2 = [2u8; 32];
         let absent = [3u8; 32];
         let val = [0xAAu8; 32];
 
-        tree.update(&key1, &val).unwrap();
-        tree.update(&key2, &val).unwrap();
-        let root = tree.root();
+        tree.update(&key1, &val).await.unwrap();
+        tree.update(&key2, &val).await.unwrap();
+        let root = tree.root().await;
 
-        let proof = tree.prove_non_inclusion(&absent, &root).unwrap();
+        let proof = tree.prove_non_inclusion(&absent, &root).await.unwrap();
         assert!(verify_non_inclusion(&absent, &proof.siblings, &root));
     }
 
-    #[test]
-    fn test_insert_order_independence() {
+    #[tokio::test]
+    async fn test_insert_order_independence() {
         let key_a = [1u8; 32];
         let key_b = [2u8; 32];
         let val_a = [0xAu8; 32];
         let val_b = [0xBu8; 32];
 
         let tree1 = SparseMerkleTree::new();
-        tree1.update(&key_a, &val_a).unwrap();
-        tree1.update(&key_b, &val_b).unwrap();
+        tree1.update(&key_a, &val_a).await.unwrap();
+        tree1.update(&key_b, &val_b).await.unwrap();
 
         let tree2 = SparseMerkleTree::new();
-        tree2.update(&key_b, &val_b).unwrap();
-        tree2.update(&key_a, &val_a).unwrap();
+        tree2.update(&key_b, &val_b).await.unwrap();
+        tree2.update(&key_a, &val_a).await.unwrap();
 
         assert_eq!(
-            tree1.root(),
-            tree2.root(),
+            tree1.root().await,
+            tree2.root().await,
             "Root must be independent of insertion order"
         );
     }
 
-    #[test]
-    fn test_update_existing_key() {
+    #[tokio::test]
+    async fn test_update_existing_key() {
         let tree = SparseMerkleTree::new();
         let key = [1u8; 32];
         let val1 = [2u8; 32];
         let val2 = [3u8; 32];
 
-        tree.update(&key, &val1).unwrap();
-        let root1 = tree.root();
+        tree.update(&key, &val1).await.unwrap();
+        let root1 = tree.root().await;
 
-        tree.update(&key, &val2).unwrap();
-        let root2 = tree.root();
+        tree.update(&key, &val2).await.unwrap();
+        let root2 = tree.root().await;
 
         assert_ne!(root1, root2, "Root must change when value changes");
-        assert_eq!(tree.size(), 1, "Size should not increase on update");
+        assert_eq!(tree.size().await, 1, "Size should not increase on update");
 
-        let proof = tree.prove_inclusion(&key, &root2).unwrap();
+        let proof = tree.prove_inclusion(&key, &root2).await.unwrap();
         assert!(verify_inclusion(&key, &val2, &proof.siblings, &root2));
     }
 

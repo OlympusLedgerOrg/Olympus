@@ -16,14 +16,10 @@ func main() {
 	ctx := context.Background()
 
 	dbURL := os.Getenv("SEQUENCER_DB_URL")
-	smtAddr := os.Getenv("SEQUENCER_SMT_ADDR")
 	httpAddr := os.Getenv("SEQUENCER_HTTP_ADDR")
 	apiToken := os.Getenv("SEQUENCER_API_TOKEN")
 	if dbURL == "" {
 		log.Fatalf("SEQUENCER_DB_URL is required")
-	}
-	if smtAddr == "" {
-		log.Fatalf("SEQUENCER_SMT_ADDR is required")
 	}
 	if apiToken == "" {
 		log.Fatalf("SEQUENCER_API_TOKEN is required")
@@ -33,7 +29,7 @@ func main() {
 	}
 
 	// Initialize CD-HS-ST Rust service client
-	smtClient, err := client.NewCdhsSmfClient(smtAddr)
+	smtClient, err := client.NewCdhsSmfClient()
 	if err != nil {
 		log.Fatalf("Failed to create SMT client: %v", err)
 	}

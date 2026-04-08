@@ -26,7 +26,8 @@ cargo build --release
 cargo run --release
 ```
 
-The service will start on `[::1]:50051` by default.
+The service will listen on the Unix domain socket from `CDHS_SMF_SOCKET`,
+defaulting to `/run/olympus/cdhs-smf.sock`.
 
 ## Testing
 

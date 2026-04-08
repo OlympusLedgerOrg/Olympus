@@ -13,6 +13,13 @@
 //! - Ed25519 signing for root commitments
 //! - Protobuf API over Unix domain socket
 
+use std::env;
+use std::fs;
+use std::os::unix::fs::FileTypeExt;
+use std::path::Path;
+
+use tokio::net::UnixListener;
+use tokio_stream::wrappers::UnixListenerStream;
 use tonic::{transport::Server, Request, Response, Status};
 use tracing::info;
 
@@ -25,8 +32,8 @@ pub use cdhs_smf_service::proto::olympus::cdhs_smf::v1::cdhs_smf_service_server:
 };
 pub use cdhs_smf_service::proto::olympus::cdhs_smf::v1::*;
 
-use smt::SparseMerkleTree;
 use crypto::KeyManager;
+use smt::SparseMerkleTree;
 
 /// The main service implementation
 pub struct CdhsSmfService {
@@ -45,6 +52,8 @@ impl CdhsSmfService {
     }
 }
 
+const DEFAULT_SOCKET_PATH: &str = "/run/olympus/cdhs-smf.sock";
+
 #[tonic::async_trait]
 impl CdhsSmfServiceTrait for CdhsSmfService {
     async fn update(
@@ -58,28 +67,37 @@ impl CdhsSmfServiceTrait for CdhsSmfService {
         // Compute global key from shard_id and record_key
         let global_key = crypto::compute_global_key(
             &req.shard_id,
-            req.record_key.as_ref().ok_or_else(|| Status::invalid_argument("record_key required"))?,
-        ).map_err(|e| Status::invalid_argument(format!("invalid record key: {}", e)))?;
+            req.record_key
+                .as_ref()
+                .ok_or_else(|| Status::invalid_argument("record_key required"))?,
+        )
+        .map_err(|e| Status::invalid_argument(format!("invalid record key: {}", e)))?;
 
         // Hash the canonical content
         let leaf_value_hash = crypto::hash_canonical_content(&req.canonical_content);
 
         // Update the SMT
-        let (new_root, deltas) = self.smt.update(&global_key, &leaf_value_hash)
+        let (new_root, deltas) = self
+            .smt
+            .update(&global_key, &leaf_value_hash)
+            .await
             .map_err(|e| Status::internal(format!("SMT update failed: {}", e)))?;
 
         // Get tree size after update
-        let tree_size = self.smt.size();
+        let tree_size = self.smt.size().await;
 
         Ok(Response::new(UpdateResponse {
             new_root: new_root.to_vec(),
             global_key: global_key.to_vec(),
             leaf_value_hash: leaf_value_hash.to_vec(),
-            deltas: deltas.into_iter().map(|d| SmtNodeDelta {
-                path: d.path,
-                level: d.level,
-                hash: d.hash.to_vec(),
-            }).collect(),
+            deltas: deltas
+                .into_iter()
+                .map(|d| SmtNodeDelta {
+                    path: d.path,
+                    level: d.level,
+                    hash: d.hash.to_vec(),
+                })
+                .collect(),
             tree_size,
         }))
     }
@@ -92,17 +110,25 @@ impl CdhsSmfServiceTrait for CdhsSmfService {
 
         let global_key = crypto::compute_global_key(
             &req.shard_id,
-            req.record_key.as_ref().ok_or_else(|| Status::invalid_argument("record_key required"))?,
-        ).map_err(|e| Status::invalid_argument(format!("invalid record key: {}", e)))?;
+            req.record_key
+                .as_ref()
+                .ok_or_else(|| Status::invalid_argument("record_key required"))?,
+        )
+        .map_err(|e| Status::invalid_argument(format!("invalid record key: {}", e)))?;
 
         let root = if req.root.is_empty() {
-            self.smt.root()
+            self.smt.root().await
         } else {
-            req.root.as_slice().try_into()
+            req.root
+                .as_slice()
+                .try_into()
                 .map_err(|_| Status::invalid_argument("invalid root length"))?
         };
 
-        let proof = self.smt.prove_inclusion(&global_key, &root)
+        let proof = self
+            .smt
+            .prove_inclusion(&global_key, &root)
+            .await
             .map_err(|e| Status::not_found(format!("Key not found: {}", e)))?;
 
         Ok(Response::new(ProveInclusionResponse {
@@ -119,14 +145,25 @@ impl CdhsSmfServiceTrait for CdhsSmfService {
     ) -> Result<Response<VerifyInclusionResponse>, Status> {
         let req = request.into_inner();
 
-        let global_key: [u8; 32] = req.global_key.as_slice().try_into()
+        let global_key: [u8; 32] = req
+            .global_key
+            .as_slice()
+            .try_into()
             .map_err(|_| Status::invalid_argument("invalid global_key length"))?;
-        let value_hash: [u8; 32] = req.value_hash.as_slice().try_into()
+        let value_hash: [u8; 32] = req
+            .value_hash
+            .as_slice()
+            .try_into()
             .map_err(|_| Status::invalid_argument("invalid value_hash length"))?;
-        let root: [u8; 32] = req.root.as_slice().try_into()
+        let root: [u8; 32] = req
+            .root
+            .as_slice()
+            .try_into()
             .map_err(|_| Status::invalid_argument("invalid root length"))?;
 
-        let siblings: Result<Vec<[u8; 32]>, _> = req.siblings.iter()
+        let siblings: Result<Vec<[u8; 32]>, _> = req
+            .siblings
+            .iter()
             .map(|s| s.as_slice().try_into())
             .collect();
         let siblings = siblings.map_err(|_| Status::invalid_argument("invalid sibling length"))?;
@@ -135,7 +172,11 @@ impl CdhsSmfServiceTrait for CdhsSmfService {
 
         Ok(Response::new(VerifyInclusionResponse {
             valid,
-            error: if valid { String::new() } else { "Proof verification failed".to_string() },
+            error: if valid {
+                String::new()
+            } else {
+                "Proof verification failed".to_string()
+            },
         }))
     }
 
@@ -147,17 +188,25 @@ impl CdhsSmfServiceTrait for CdhsSmfService {
 
         let global_key = crypto::compute_global_key(
             &req.shard_id,
-            req.record_key.as_ref().ok_or_else(|| Status::invalid_argument("record_key required"))?,
-        ).map_err(|e| Status::invalid_argument(format!("invalid record key: {}", e)))?;
+            req.record_key
+                .as_ref()
+                .ok_or_else(|| Status::invalid_argument("record_key required"))?,
+        )
+        .map_err(|e| Status::invalid_argument(format!("invalid record key: {}", e)))?;
 
         let root = if req.root.is_empty() {
-            self.smt.root()
+            self.smt.root().await
         } else {
-            req.root.as_slice().try_into()
+            req.root
+                .as_slice()
+                .try_into()
                 .map_err(|_| Status::invalid_argument("invalid root length"))?
         };
 
-        let proof = self.smt.prove_non_inclusion(&global_key, &root)
+        let proof = self
+            .smt
+            .prove_non_inclusion(&global_key, &root)
+            .await
             .map_err(|e| Status::internal(format!("Non-inclusion proof failed: {}", e)))?;
 
         Ok(Response::new(ProveNonInclusionResponse {
@@ -173,12 +222,20 @@ impl CdhsSmfServiceTrait for CdhsSmfService {
     ) -> Result<Response<VerifyNonInclusionResponse>, Status> {
         let req = request.into_inner();
 
-        let global_key: [u8; 32] = req.global_key.as_slice().try_into()
+        let global_key: [u8; 32] = req
+            .global_key
+            .as_slice()
+            .try_into()
             .map_err(|_| Status::invalid_argument("invalid global_key length"))?;
-        let root: [u8; 32] = req.root.as_slice().try_into()
+        let root: [u8; 32] = req
+            .root
+            .as_slice()
+            .try_into()
             .map_err(|_| Status::invalid_argument("invalid root length"))?;
 
-        let siblings: Result<Vec<[u8; 32]>, _> = req.siblings.iter()
+        let siblings: Result<Vec<[u8; 32]>, _> = req
+            .siblings
+            .iter()
             .map(|s| s.as_slice().try_into())
             .collect();
         let siblings = siblings.map_err(|_| Status::invalid_argument("invalid sibling length"))?;
@@ -187,7 +244,11 @@ impl CdhsSmfServiceTrait for CdhsSmfService {
 
         Ok(Response::new(VerifyNonInclusionResponse {
             valid,
-            error: if valid { String::new() } else { "Proof verification failed".to_string() },
+            error: if valid {
+                String::new()
+            } else {
+                "Proof verification failed".to_string()
+            },
         }))
     }
 
@@ -212,8 +273,8 @@ impl CdhsSmfServiceTrait for CdhsSmfService {
         &self,
         _request: Request<GetRootRequest>,
     ) -> Result<Response<GetRootResponse>, Status> {
-        let root = self.smt.root();
-        let tree_size = self.smt.size();
+        let root = self.smt.root().await;
+        let tree_size = self.smt.size().await;
 
         Ok(Response::new(GetRootResponse {
             root: root.to_vec(),
@@ -227,10 +288,15 @@ impl CdhsSmfServiceTrait for CdhsSmfService {
     ) -> Result<Response<SignRootResponse>, Status> {
         let req = request.into_inner();
 
-        let root: [u8; 32] = req.root.as_slice().try_into()
+        let root: [u8; 32] = req
+            .root
+            .as_slice()
+            .try_into()
             .map_err(|_| Status::invalid_argument("invalid root length"))?;
 
-        let (signature, public_key) = self.key_manager.sign_root(&root, req.tree_size, &req.context)
+        let (signature, public_key) = self
+            .key_manager
+            .sign_root(&root, req.tree_size, &req.context)
             .map_err(|e| Status::internal(format!("Signing failed: {}", e)))?;
 
         Ok(Response::new(SignRootResponse {
@@ -246,18 +312,40 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     tracing_subscriber::fmt()
         .with_env_filter(
             tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info"))
+                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info")),
         )
         .init();
 
-    let addr = "[::1]:50051".parse()?;
+    let socket_path =
+        env::var("CDHS_SMF_SOCKET").unwrap_or_else(|_| DEFAULT_SOCKET_PATH.to_string());
+    let socket_path = Path::new(&socket_path);
+    if let Some(parent) = socket_path.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    if socket_path.exists() {
+        let metadata = fs::symlink_metadata(socket_path)?;
+        if metadata.file_type().is_socket() {
+            fs::remove_file(socket_path)?;
+        } else {
+            return Err(format!(
+                "refusing to remove non-socket path: {}",
+                socket_path.display()
+            )
+            .into());
+        }
+    }
+    let listener = UnixListener::bind(socket_path)?;
+    let incoming = UnixListenerStream::new(listener);
     let service = CdhsSmfService::new();
 
-    info!("CD-HS-ST Service starting on {}", addr);
+    info!(
+        "CD-HS-ST Service starting on unix socket {}",
+        socket_path.display()
+    );
 
     Server::builder()
         .add_service(CdhsSmfServiceServer::new(service))
-        .serve(addr)
+        .serve_with_incoming(incoming)
         .await?;
 
     Ok(())
