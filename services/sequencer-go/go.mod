@@ -1,4 +1,4 @@
-module github.com/wombatvagina69-crypto/olympus/services/sequencer
+module github.com/OlympusLedgerOrg/Olympus/services/sequencer
 
 go 1.24.0
 

@@ -2,26 +2,26 @@
 # Each line is a file pattern followed by one or more owners.
 
 # Default owners for everything in the repo
-*       @wombatvagina69-crypto
+*       @OlympusLedgerOrg
 
 # Protocol layer (core cryptographic primitives)
-/protocol/      @wombatvagina69-crypto
+/protocol/      @OlympusLedgerOrg
 
 # Storage layer (database and persistence)
-/storage/       @wombatvagina69-crypto
+/storage/       @OlympusLedgerOrg
 
 # API layer
-/api/           @wombatvagina69-crypto
-/app/           @wombatvagina69-crypto
+/api/           @OlympusLedgerOrg
+/app/           @OlympusLedgerOrg
 
 # Documentation
-/docs/          @wombatvagina69-crypto
-/*.md           @wombatvagina69-crypto
+/docs/          @OlympusLedgerOrg
+/*.md           @OlympusLedgerOrg
 
 # CI/CD and configuration
-/.github/       @wombatvagina69-crypto
-/pyproject.toml @wombatvagina69-crypto
-/requirements*.txt @wombatvagina69-crypto
+/.github/       @OlympusLedgerOrg
+/pyproject.toml @OlympusLedgerOrg
+/requirements*.txt @OlympusLedgerOrg
 
 # Tests
-/tests/         @wombatvagina69-crypto
+/tests/         @OlympusLedgerOrg

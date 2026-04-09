@@ -10,9 +10,9 @@ import (
 	"net/http"
 	"strconv"
 
-	"github.com/wombatvagina69-crypto/olympus/services/sequencer/internal/client"
-	"github.com/wombatvagina69-crypto/olympus/services/sequencer/internal/storage"
-	pb "github.com/wombatvagina69-crypto/olympus/services/sequencer/proto"
+	"github.com/OlympusLedgerOrg/Olympus/services/sequencer/internal/client"
+	"github.com/OlympusLedgerOrg/Olympus/services/sequencer/internal/storage"
+	pb "github.com/OlympusLedgerOrg/Olympus/services/sequencer/proto"
 )
 
 // Sequencer provides a Trillian-shaped log service API

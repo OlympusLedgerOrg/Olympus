@@ -8,11 +8,11 @@ import (
 	"net/http"
 	"os"
 
-	pb "github.com/wombatvagina69-crypto/olympus/services/sequencer/proto"
+	pb "github.com/OlympusLedgerOrg/Olympus/services/sequencer/proto"
 
-	"github.com/wombatvagina69-crypto/olympus/services/sequencer/internal/api"
-	"github.com/wombatvagina69-crypto/olympus/services/sequencer/internal/client"
-	"github.com/wombatvagina69-crypto/olympus/services/sequencer/internal/storage"
+	"github.com/OlympusLedgerOrg/Olympus/services/sequencer/internal/api"
+	"github.com/OlympusLedgerOrg/Olympus/services/sequencer/internal/client"
+	"github.com/OlympusLedgerOrg/Olympus/services/sequencer/internal/storage"
 )
 
 func main() {

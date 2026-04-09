@@ -31,8 +31,8 @@ import (
 
 	"google.golang.org/grpc"
 
-	"github.com/wombatvagina69-crypto/olympus/go/sequencer/internal/server"
-	pb "github.com/wombatvagina69-crypto/olympus/go/sequencer/proto"
+	"github.com/OlympusLedgerOrg/Olympus/go/sequencer/internal/server"
+	pb "github.com/OlympusLedgerOrg/Olympus/go/sequencer/proto"
 )
 
 func main() {

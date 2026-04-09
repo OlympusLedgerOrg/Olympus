@@ -20,7 +20,7 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 
-	pb "github.com/wombatvagina69-crypto/olympus/go/sequencer/proto"
+	pb "github.com/OlympusLedgerOrg/Olympus/go/sequencer/proto"
 )
 
 // SequencerServer implements pb.OlympusTreeServer.
