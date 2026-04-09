@@ -124,8 +124,9 @@ class TestLoadTreeState(unittest.TestCase):
     def test_load_tree_state_invalid_batch_size(self):
         """batch_size < 1 raises ValueError."""
         cur = MagicMock()
-        with self.assertRaises(ValueError, msg="batch_size must be >= 1"):
+        with self.assertRaises(ValueError) as ctx:
             load_tree_state(cur, batch_size=0)
+        self.assertIn("batch_size", str(ctx.exception))
 
 
 class TestPersistTreeNodes(unittest.TestCase):
