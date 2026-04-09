@@ -1118,8 +1118,8 @@ class StorageLayer:
                 )
             except ImportError:
                 raise RuntimeError(
-                    "olympus_core is required — install with maturin or set "
-                    "OLYMPUS_REQUIRE_RUST=1 for explicit enforcement"
+                    "olympus_core is required — install the Rust extension "
+                    "with `maturin develop`"
                 ) from None
 
             # --- tree_size from DB (O(1) COUNT on smt_leaves) ---
