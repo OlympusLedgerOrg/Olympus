@@ -169,7 +169,7 @@ def test_inactive_node_signature_does_not_satisfy_quorum() -> None:
     )
 
     header = create_shard_header(
-        shard_id="records/city-a",
+        shard_id="records.city-a",
         root_hash=bytes.fromhex("ab" * 32),
         timestamp="2026-03-15T00:00:00Z",
     )
@@ -354,7 +354,7 @@ def test_detect_compromise_signals_isolates_flags_per_node() -> None:
 def test_colluding_guardians_returns_empty_when_no_shared_signers() -> None:
     """colluding_guardians() must return empty when no node signed both headers."""
     evidence = ShardHeaderForkEvidence(
-        shard_id="records/city-a",
+        shard_id="records.city-a",
         seq=42,
         conflicting_header_hashes=("aa" * 32, "bb" * 32),
         observer_ids=("peer-1", "peer-2"),
@@ -369,7 +369,7 @@ def test_colluding_guardians_returns_empty_when_no_shared_signers() -> None:
 def test_colluding_guardians_returns_all_double_signers() -> None:
     """colluding_guardians() must include every node that appears in both signature sets."""
     evidence = ShardHeaderForkEvidence(
-        shard_id="records/city-a",
+        shard_id="records.city-a",
         seq=99,
         conflicting_header_hashes=("cc" * 32, "dd" * 32),
         observer_ids=("peer-1", "peer-2", "peer-3"),
@@ -400,7 +400,7 @@ def test_detect_shard_header_forks_does_not_conflate_different_shards() -> None:
     observations = {
         "peer-1": GossipedShardHeader(
             peer_id="peer-1",
-            shard_id="records/city-a",
+            shard_id="records.city-a",
             seq=1,
             header_hash="11" * 32,
             root_hash="aa" * 32,
@@ -409,7 +409,7 @@ def test_detect_shard_header_forks_does_not_conflate_different_shards() -> None:
         ),
         "peer-2": GossipedShardHeader(
             peer_id="peer-2",
-            shard_id="records/city-b",  # different shard — not a conflict
+            shard_id="records.city-b",  # different shard — not a conflict
             seq=1,
             header_hash="22" * 32,
             root_hash="bb" * 32,
@@ -427,7 +427,7 @@ def test_detect_shard_header_forks_handles_multiple_independent_conflicts() -> N
     observations = {
         "peer-1": GossipedShardHeader(
             peer_id="peer-1",
-            shard_id="records/city-a",
+            shard_id="records.city-a",
             seq=1,
             header_hash="11" * 32,
             root_hash="aa" * 32,
@@ -436,7 +436,7 @@ def test_detect_shard_header_forks_handles_multiple_independent_conflicts() -> N
         ),
         "peer-2": GossipedShardHeader(
             peer_id="peer-2",
-            shard_id="records/city-a",
+            shard_id="records.city-a",
             seq=1,
             header_hash="22" * 32,  # conflict on city-a
             root_hash="bb" * 32,
@@ -445,7 +445,7 @@ def test_detect_shard_header_forks_handles_multiple_independent_conflicts() -> N
         ),
         "peer-3": GossipedShardHeader(
             peer_id="peer-3",
-            shard_id="records/county-b",
+            shard_id="records.county-b",
             seq=5,
             header_hash="33" * 32,
             root_hash="cc" * 32,
@@ -454,7 +454,7 @@ def test_detect_shard_header_forks_handles_multiple_independent_conflicts() -> N
         ),
         "peer-4": GossipedShardHeader(
             peer_id="peer-4",
-            shard_id="records/county-b",
+            shard_id="records.county-b",
             seq=5,
             header_hash="44" * 32,  # conflict on county-b
             root_hash="dd" * 32,
@@ -467,8 +467,8 @@ def test_detect_shard_header_forks_handles_multiple_independent_conflicts() -> N
     shard_ids = {e.shard_id for e in evidences}
 
     assert len(evidences) == 2
-    assert "records/city-a" in shard_ids
-    assert "records/county-b" in shard_ids
+    assert "records.city-a" in shard_ids
+    assert "records.county-b" in shard_ids
 
 
 # =============================================================================
@@ -517,7 +517,7 @@ def test_resolve_canonical_fork_returns_sole_candidate_directly() -> None:
     """A single valid candidate must be returned without comparison."""
     registry = _three_node_registry()
     header = create_shard_header(
-        shard_id="records/city-a",
+        shard_id="records.city-a",
         root_hash=bytes.fromhex("f0" * 32),
         timestamp="2026-03-15T00:00:00Z",
         height=1,
@@ -542,14 +542,14 @@ def test_resolve_canonical_fork_prefers_higher_signer_count() -> None:
     timestamp = "2026-03-15T00:00:00Z"
 
     header_a = create_shard_header(
-        shard_id="records/city-a",
+        shard_id="records.city-a",
         root_hash=bytes.fromhex("f1" * 32),
         timestamp=timestamp,
         height=5,
         round_number=1,
     )
     header_b = create_shard_header(
-        shard_id="records/city-a",
+        shard_id="records.city-a",
         root_hash=bytes.fromhex("f2" * 32),
         timestamp=timestamp,
         height=5,
@@ -592,7 +592,7 @@ def test_quorum_certificate_hash_is_deterministic() -> None:
     """quorum_certificate_hash must return identical output on repeated calls."""
     registry = _three_node_registry()
     header = create_shard_header(
-        shard_id="records/city-a",
+        shard_id="records.city-a",
         root_hash=bytes.fromhex("ca" * 32),
         timestamp="2026-03-15T12:00:00Z",
     )
@@ -614,7 +614,7 @@ def test_quorum_certificate_hash_changes_on_mutation() -> None:
     """Mutating any field of the certificate must change its hash."""
     registry = _three_node_registry()
     header = create_shard_header(
-        shard_id="records/city-a",
+        shard_id="records.city-a",
         root_hash=bytes.fromhex("cb" * 32),
         timestamp="2026-03-15T12:01:00Z",
     )
@@ -639,7 +639,7 @@ def test_quorum_certificate_hash_changes_on_mutation() -> None:
 def test_create_replication_proof_rejects_mismatched_sample_lengths() -> None:
     """proof_sample_indices and proof_sample_hashes must have the same length."""
     challenge = DataAvailabilityChallenge(
-        shard_id="records/city-a",
+        shard_id="records.city-a",
         header_hash="aa" * 32,
         challenger_id="guardian-2",
         challenge_nonce="nonce-err-1",
@@ -663,7 +663,7 @@ def test_verify_data_availability_rejects_unknown_guardian() -> None:
     """verify_data_availability must reject a proof from a node not in the registry."""
     registry = _three_node_registry()
     challenge = DataAvailabilityChallenge(
-        shard_id="records/city-a",
+        shard_id="records.city-a",
         header_hash="aa" * 32,
         challenger_id="guardian-2",
         challenge_nonce="nonce-err-2",
@@ -690,7 +690,7 @@ def test_verify_data_availability_rejects_tampered_ledger_tail() -> None:
     signing_key = _test_signing_key(1)
 
     challenge = DataAvailabilityChallenge(
-        shard_id="records/city-a",
+        shard_id="records.city-a",
         header_hash="aa" * 32,
         challenger_id="guardian-2",
         challenge_nonce="nonce-err-3",

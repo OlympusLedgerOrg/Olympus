@@ -118,7 +118,7 @@ def test_federated_shard_header_reaches_quorum_with_two_of_three_signatures() ->
     """Two valid signatures out of three active nodes satisfy the >=2/3 prototype quorum."""
     registry = FederationRegistry.from_file(REGISTRY_PATH)
     header = create_shard_header(
-        shard_id="records/city-a",
+        shard_id="records.city-a",
         root_hash=bytes.fromhex("11" * 32),
         timestamp="2026-03-08T17:09:10Z",
     )
@@ -142,12 +142,12 @@ def test_federated_quorum_rejects_invalid_or_duplicate_signatures() -> None:
     """Duplicate node ids and invalid signatures should not count toward quorum."""
     registry = FederationRegistry.from_file(REGISTRY_PATH)
     header = create_shard_header(
-        shard_id="records/city-a",
+        shard_id="records.city-a",
         root_hash=bytes.fromhex("22" * 32),
         timestamp="2026-03-08T17:09:10Z",
     )
     other_header = create_shard_header(
-        shard_id="records/city-a",
+        shard_id="records.city-a",
         root_hash=bytes.fromhex("33" * 32),
         timestamp="2026-03-08T17:09:11Z",
     )
@@ -173,7 +173,7 @@ def test_byzantine_simulation_partition_accepts_two_of_three_quorum() -> None:
     """A partition that still has 2/3 signatures should finalize the header."""
     registry = FederationRegistry.from_file(REGISTRY_PATH)
     header = create_shard_header(
-        shard_id="records/city-a",
+        shard_id="records.city-a",
         root_hash=bytes.fromhex("44" * 32),
         timestamp="2026-03-09T00:00:00Z",
     )
@@ -191,7 +191,7 @@ def test_byzantine_simulation_mid_commit_node_kill_rejects_subquorum() -> None:
     """If a node dies mid-commit and only one signature remains, quorum must fail."""
     registry = FederationRegistry.from_file(REGISTRY_PATH)
     header = create_shard_header(
-        shard_id="records/city-a",
+        shard_id="records.city-a",
         root_hash=bytes.fromhex("55" * 32),
         timestamp="2026-03-09T00:00:01Z",
     )
@@ -243,7 +243,7 @@ def test_byzantine_threshold_for_four_nodes_requires_three_signatures() -> None:
         }
     )
     header = create_shard_header(
-        shard_id="records/city-a",
+        shard_id="records.city-a",
         root_hash=bytes.fromhex("56" * 32),
         timestamp="2026-03-09T00:00:01Z",
     )
@@ -266,14 +266,14 @@ def test_federated_vote_signatures_bind_round_and_height() -> None:
     """Votes must be bound to the consensus round and height metadata."""
     registry = FederationRegistry.from_file(REGISTRY_PATH)
     header = create_shard_header(
-        shard_id="records/city-a",
+        shard_id="records.city-a",
         root_hash=bytes.fromhex("57" * 32),
         timestamp="2026-03-09T00:00:01Z",
         height=7,
         round_number=3,
     )
     mismatched_round_header = create_shard_header(
-        shard_id="records/city-a",
+        shard_id="records.city-a",
         root_hash=bytes.fromhex("57" * 32),
         timestamp="2026-03-09T00:00:01Z",
         height=7,
@@ -290,7 +290,7 @@ def test_quorum_certificate_is_verifiable_and_persisted_in_ledger() -> None:
     """Signed federation quorum certificates should be persisted as ledger metadata."""
     registry = FederationRegistry.from_file(REGISTRY_PATH)
     header = create_shard_header(
-        shard_id="records/city-a",
+        shard_id="records.city-a",
         root_hash=bytes.fromhex("66" * 32),
         timestamp="2026-03-09T00:00:02Z",
     )
@@ -326,7 +326,7 @@ def test_federation_node_key_rotation_preserves_historical_quorum_verification()
     )
 
     historical_header = create_shard_header(
-        shard_id="records/city-a",
+        shard_id="records.city-a",
         root_hash=bytes.fromhex("6f" * 32),
         timestamp="2026-03-09T23:59:59Z",
     )
@@ -353,7 +353,7 @@ def test_federation_node_key_rotation_rejects_post_rotation_old_key_signatures()
         rotated_at="2026-03-10T00:00:00Z",
     )
     header = create_shard_header(
-        shard_id="records/city-a",
+        shard_id="records.city-a",
         root_hash=bytes.fromhex("7f" * 32),
         timestamp="2026-03-10T00:00:01Z",
     )
@@ -375,7 +375,7 @@ def test_quorum_certificate_signatures_are_canonicalized_for_determinism() -> No
     """Quorum certificate signatures should be serialized in deterministic node-id order."""
     registry = FederationRegistry.from_file(REGISTRY_PATH)
     header = create_shard_header(
-        shard_id="records/city-a",
+        shard_id="records.city-a",
         root_hash=bytes.fromhex("99" * 32),
         timestamp="2026-03-09T00:00:03Z",
     )
@@ -403,7 +403,7 @@ def test_verify_quorum_certificate_rejects_duplicate_signatures() -> None:
     """Duplicate signatures should invalidate canonical bitmap ordering."""
     registry = FederationRegistry.from_file(REGISTRY_PATH)
     header = create_shard_header(
-        shard_id="records/city-a",
+        shard_id="records.city-a",
         root_hash=bytes.fromhex("aa" * 32),
         timestamp="2026-03-09T00:00:04Z",
     )
@@ -444,7 +444,7 @@ def test_verify_quorum_certificate_rejects_conflicting_duplicate_node_votes() ->
     """A node must not contribute multiple conflicting signatures in one round."""
     registry = FederationRegistry.from_file(REGISTRY_PATH)
     header = create_shard_header(
-        shard_id="records/city-a",
+        shard_id="records.city-a",
         root_hash=bytes.fromhex("ab" * 32),
         timestamp="2026-03-09T00:00:04Z",
     )
@@ -492,7 +492,7 @@ def test_verify_quorum_certificate_rejects_signer_bitmap_mismatch() -> None:
     """Signer bitmap must match the exact signer set represented in signatures."""
     registry = FederationRegistry.from_file(REGISTRY_PATH)
     header = create_shard_header(
-        shard_id="records/city-a",
+        shard_id="records.city-a",
         root_hash=bytes.fromhex("ac" * 32),
         timestamp="2026-03-09T00:00:04Z",
     )
@@ -516,7 +516,7 @@ def test_verify_quorum_certificate_rejects_noncanonical_signature_order() -> Non
     """Signature order must follow canonical bitmap indexing of active nodes."""
     registry = FederationRegistry.from_file(REGISTRY_PATH)
     header = create_shard_header(
-        shard_id="records/city-a",
+        shard_id="records.city-a",
         root_hash=bytes.fromhex("ad" * 32),
         timestamp="2026-03-09T00:00:04Z",
     )
@@ -544,7 +544,7 @@ def test_federation_signature_is_domain_separated_from_plain_header_signature() 
     """Plain shard-header signatures must not verify as federation votes."""
     registry = FederationRegistry.from_file(REGISTRY_PATH)
     header = create_shard_header(
-        shard_id="records/city-a",
+        shard_id="records.city-a",
         root_hash=bytes.fromhex("bb" * 32),
         timestamp="2026-03-09T00:00:05Z",
     )
@@ -560,7 +560,7 @@ def test_verify_quorum_certificate_rejects_event_id_replay() -> None:
     """Event identifier mismatches must invalidate quorum certificates."""
     registry = FederationRegistry.from_file(REGISTRY_PATH)
     header = create_shard_header(
-        shard_id="records/city-a",
+        shard_id="records.city-a",
         root_hash=bytes.fromhex("cc" * 32),
         timestamp="2026-03-09T00:00:06Z",
     )
@@ -579,7 +579,7 @@ def test_verify_quorum_certificate_rejects_membership_hash_mismatch() -> None:
     """Certificates must be bound to the registry membership commitment."""
     registry = FederationRegistry.from_file(REGISTRY_PATH)
     header = create_shard_header(
-        shard_id="records/city-a",
+        shard_id="records.city-a",
         root_hash=bytes.fromhex("dd" * 32),
         timestamp="2026-03-09T00:00:07Z",
     )
@@ -598,7 +598,7 @@ def test_verify_quorum_certificate_rejects_validator_set_hash_mismatch() -> None
     """Certificates must include the validator_set_hash binding."""
     registry = FederationRegistry.from_file(REGISTRY_PATH)
     header = create_shard_header(
-        shard_id="records/city-a",
+        shard_id="records.city-a",
         root_hash=bytes.fromhex("de" * 32),
         timestamp="2026-03-09T00:00:07Z",
     )
@@ -618,7 +618,7 @@ def test_verify_quorum_certificate_rejects_epoch_mismatch() -> None:
     base_registry = FederationRegistry.from_file(REGISTRY_PATH)
     registry = FederationRegistry(nodes=base_registry.nodes, epoch=7)
     header = create_shard_header(
-        shard_id="records/city-a",
+        shard_id="records.city-a",
         root_hash=bytes.fromhex("ee" * 32),
         timestamp="2026-03-09T00:00:08Z",
     )
@@ -637,7 +637,7 @@ def test_verify_quorum_certificate_uses_epoch_snapshot() -> None:
     """Verification should use registry snapshot for the certificate epoch."""
     base_registry = FederationRegistry.from_file(REGISTRY_PATH)
     header = create_shard_header(
-        shard_id="records/city-a",
+        shard_id="records.city-a",
         root_hash=bytes.fromhex("ef" * 32),
         timestamp="2026-03-10T00:00:00Z",
     )
@@ -676,7 +676,7 @@ def test_node_key_rotation_with_superseding_signature() -> None:
     old_verify_key = old_key.verify_key
 
     pre_compromise_header = create_shard_header(
-        shard_id="records/city-a",
+        shard_id="records.city-a",
         root_hash=bytes.fromhex("77" * 32),
         timestamp="2026-03-01T00:00:00Z",
     )
@@ -694,7 +694,7 @@ def test_node_key_rotation_with_superseding_signature() -> None:
     )
 
     post_compromise_header = create_shard_header(
-        shard_id="records/city-a",
+        shard_id="records.city-a",
         root_hash=bytes.fromhex("88" * 32),
         timestamp="2026-03-03T00:00:00Z",
     )
@@ -745,7 +745,7 @@ def test_federation_vote_message_is_frozen_dataclass() -> None:
         domain=FEDERATION_DOMAIN_TAG,
         node_id="test-node",
         event_id="e" * 64,
-        shard_id="records/test",
+        shard_id="records.test",
         entry_seq=1,
         round_number=0,
         shard_root="a" * 64,
@@ -763,7 +763,7 @@ def test_serialize_vote_message_produces_canonical_json_bytes() -> None:
         domain=FEDERATION_DOMAIN_TAG,
         node_id="node-1",
         event_id="e" * 64,
-        shard_id="records/city-a",
+        shard_id="records.city-a",
         entry_seq=42,
         round_number=3,
         shard_root="a" * 64,
@@ -782,7 +782,7 @@ def test_serialize_vote_message_produces_canonical_json_bytes() -> None:
             "event_id": "e" * 64,
             "node_id": "node-1",
             "round_number": 3,
-            "shard_id": "records/city-a",
+            "shard_id": "records.city-a",
             "shard_root": "a" * 64,
             "timestamp": "2026-03-10T00:00:00Z",
             "validator_set_hash": "b" * 64,
@@ -797,7 +797,7 @@ def test_serialize_vote_message_is_deterministic() -> None:
         domain=FEDERATION_DOMAIN_TAG,
         node_id="node-1",
         event_id="e" * 64,
-        shard_id="records/city-a",
+        shard_id="records.city-a",
         entry_seq=1,
         round_number=0,
         shard_root="a" * 64,
@@ -813,7 +813,7 @@ def test_serialize_vote_message_differs_for_different_node_ids() -> None:
     common_fields = dict(
         domain=FEDERATION_DOMAIN_TAG,
         event_id="e" * 64,
-        shard_id="records/city-a",
+        shard_id="records.city-a",
         entry_seq=1,
         round_number=0,
         shard_root="a" * 64,
@@ -854,7 +854,7 @@ def test_serialize_vote_message_embeds_domain_tag() -> None:
         domain=FEDERATION_DOMAIN_TAG,
         node_id="node-1",
         event_id="e" * 64,
-        shard_id="records/city-a",
+        shard_id="records.city-a",
         entry_seq=1,
         round_number=0,
         shard_root="a" * 64,
@@ -870,7 +870,7 @@ def test_sign_and_verify_uses_canonical_vote_message() -> None:
     """sign_federated_header and verify round-trip through FederationVoteMessage."""
     registry = FederationRegistry.from_file(REGISTRY_PATH)
     header = create_shard_header(
-        shard_id="records/city-a",
+        shard_id="records.city-a",
         root_hash=bytes.fromhex("f1" * 32),
         timestamp="2026-03-10T12:00:00Z",
     )
@@ -885,7 +885,7 @@ def test_verify_quorum_certificate_uses_registry_for_key_lookup() -> None:
     """verify_quorum_certificate must reject a tampered node_id that is not in the registry."""
     registry = FederationRegistry.from_file(REGISTRY_PATH)
     header = create_shard_header(
-        shard_id="records/city-a",
+        shard_id="records.city-a",
         root_hash=bytes.fromhex("f2" * 32),
         timestamp="2026-03-10T12:01:00Z",
     )
@@ -908,7 +908,7 @@ def test_verify_quorum_certificate_unique_nodes_counted_for_quorum() -> None:
     """verify_quorum_certificate must reject a bitmap with the same node appearing twice."""
     registry = FederationRegistry.from_file(REGISTRY_PATH)
     header = create_shard_header(
-        shard_id="records/city-a",
+        shard_id="records.city-a",
         root_hash=bytes.fromhex("f3" * 32),
         timestamp="2026-03-10T12:02:00Z",
     )
@@ -937,14 +937,14 @@ def test_resolve_canonical_fork_prefers_lexicographic_hash_on_signer_tie() -> No
     registry = FederationRegistry.from_file(REGISTRY_PATH)
     timestamp = "2026-03-10T12:00:00Z"
     header_a = create_shard_header(
-        shard_id="records/city-a",
+        shard_id="records.city-a",
         root_hash=bytes.fromhex("01" * 32),
         timestamp=timestamp,
         height=8,
         round_number=2,
     )
     header_b = create_shard_header(
-        shard_id="records/city-a",
+        shard_id="records.city-a",
         root_hash=bytes.fromhex("02" * 32),
         timestamp=timestamp,
         height=8,
@@ -972,21 +972,21 @@ def test_resolve_canonical_fork_prefers_lexicographic_hash_on_signer_tie() -> No
 def test_resolve_canonical_fork_rejects_timestamp_outliers() -> None:
     registry = FederationRegistry.from_file(REGISTRY_PATH)
     header_a = create_shard_header(
-        shard_id="records/city-a",
+        shard_id="records.city-a",
         root_hash=bytes.fromhex("03" * 32),
         timestamp="2026-03-10T12:00:00Z",
         height=9,
         round_number=3,
     )
     header_b = create_shard_header(
-        shard_id="records/city-a",
+        shard_id="records.city-a",
         root_hash=bytes.fromhex("05" * 32),
         timestamp="2026-03-10T12:01:00Z",
         height=9,
         round_number=3,
     )
     header_outlier = create_shard_header(
-        shard_id="records/city-a",
+        shard_id="records.city-a",
         root_hash=bytes.fromhex("04" * 32),
         timestamp="2026-03-10T12:30:00Z",
         height=9,
@@ -1075,7 +1075,7 @@ def test_shard_header_fork_evidence_validates_fields() -> None:
 
     # Valid evidence should pass
     evidence = ShardHeaderForkEvidence(
-        shard_id="records/city-a",
+        shard_id="records.city-a",
         seq=42,
         conflicting_header_hashes=("aa" * 32, "bb" * 32),
         observer_ids=("peer-1", "peer-2"),
@@ -1083,7 +1083,7 @@ def test_shard_header_fork_evidence_validates_fields() -> None:
         signatures_b=(sig2,),
         detected_at="2026-03-14T12:00:00Z",
     )
-    assert evidence.shard_id == "records/city-a"
+    assert evidence.shard_id == "records.city-a"
     assert evidence.seq == 42
 
     # Should reject empty shard_id
@@ -1101,7 +1101,7 @@ def test_shard_header_fork_evidence_validates_fields() -> None:
     # Should reject less than 2 conflicting hashes
     with pytest.raises(ValueError, match="conflicting_header_hashes"):
         ShardHeaderForkEvidence(
-            shard_id="records/city-a",
+            shard_id="records.city-a",
             seq=42,
             conflicting_header_hashes=("aa" * 32,),
             observer_ids=("peer-1",),
@@ -1119,7 +1119,7 @@ def test_shard_header_fork_evidence_detects_colluding_guardians() -> None:
     sig3_b = NodeSignature(node_id="node-3", signature="dd" * 32)
 
     evidence = ShardHeaderForkEvidence(
-        shard_id="records/city-a",
+        shard_id="records.city-a",
         seq=42,
         conflicting_header_hashes=("aa" * 32, "bb" * 32),
         observer_ids=("peer-1", "peer-2"),
@@ -1140,7 +1140,7 @@ def test_detect_shard_header_forks_finds_equivocation() -> None:
     observations = {
         "peer-1": GossipedShardHeader(
             peer_id="peer-1",
-            shard_id="records/city-a",
+            shard_id="records.city-a",
             seq=42,
             header_hash="11" * 32,
             root_hash="aa" * 32,
@@ -1149,7 +1149,7 @@ def test_detect_shard_header_forks_finds_equivocation() -> None:
         ),
         "peer-2": GossipedShardHeader(
             peer_id="peer-2",
-            shard_id="records/city-a",
+            shard_id="records.city-a",
             seq=42,
             header_hash="22" * 32,  # Different header hash at same seq
             root_hash="bb" * 32,
@@ -1162,7 +1162,7 @@ def test_detect_shard_header_forks_finds_equivocation() -> None:
 
     assert len(evidences) == 1
     evidence = evidences[0]
-    assert evidence.shard_id == "records/city-a"
+    assert evidence.shard_id == "records.city-a"
     assert evidence.seq == 42
     assert set(evidence.conflicting_header_hashes) == {"11" * 32, "22" * 32}
 
@@ -1175,7 +1175,7 @@ def test_detect_shard_header_forks_no_conflict_when_hashes_match() -> None:
     observations = {
         "peer-1": GossipedShardHeader(
             peer_id="peer-1",
-            shard_id="records/city-a",
+            shard_id="records.city-a",
             seq=42,
             header_hash="11" * 32,
             root_hash="aa" * 32,
@@ -1184,7 +1184,7 @@ def test_detect_shard_header_forks_no_conflict_when_hashes_match() -> None:
         ),
         "peer-2": GossipedShardHeader(
             peer_id="peer-2",
-            shard_id="records/city-a",
+            shard_id="records.city-a",
             seq=42,
             header_hash="11" * 32,  # Same header hash = no conflict
             root_hash="aa" * 32,
@@ -1231,14 +1231,14 @@ def test_registry_forest_commitment_changes_with_membership() -> None:
 def test_data_availability_challenge_validation() -> None:
     """DataAvailabilityChallenge should validate all required fields."""
     challenge = DataAvailabilityChallenge(
-        shard_id="records/city-a",
+        shard_id="records.city-a",
         header_hash="aa" * 32,
         challenger_id="guardian-1",
         challenge_nonce="nonce-123",
         issued_at="2026-03-14T12:00:00Z",
         response_deadline="2026-03-14T12:05:00Z",
     )
-    assert challenge.shard_id == "records/city-a"
+    assert challenge.shard_id == "records.city-a"
     assert len(challenge.challenge_hash()) == 64
 
     with pytest.raises(ValueError, match="shard_id"):
@@ -1258,7 +1258,7 @@ def test_replication_proof_creation_and_verification() -> None:
     signing_key = _test_signing_key(1)
 
     challenge = DataAvailabilityChallenge(
-        shard_id="records/city-a",
+        shard_id="records.city-a",
         header_hash="aa" * 32,
         challenger_id="guardian-2",
         challenge_nonce="nonce-456",
@@ -1287,7 +1287,7 @@ def test_replication_proof_rejects_wrong_challenge() -> None:
     signing_key = _test_signing_key(1)
 
     challenge1 = DataAvailabilityChallenge(
-        shard_id="records/city-a",
+        shard_id="records.city-a",
         header_hash="aa" * 32,
         challenger_id="guardian-2",
         challenge_nonce="nonce-111",
@@ -1296,7 +1296,7 @@ def test_replication_proof_rejects_wrong_challenge() -> None:
     )
 
     challenge2 = DataAvailabilityChallenge(
-        shard_id="records/city-a",
+        shard_id="records.city-a",
         header_hash="aa" * 32,
         challenger_id="guardian-2",
         challenge_nonce="nonce-222",  # Different nonce
@@ -1321,7 +1321,7 @@ def test_replication_proof_rejects_wrong_challenge() -> None:
 def test_federation_finality_status_tracks_state() -> None:
     """FederationFinalityStatus should track header finalization progress."""
     status = FederationFinalityStatus(
-        shard_id="records/city-a",
+        shard_id="records.city-a",
         seq=42,
         header_hash="aa" * 32,
         status=FederationFinalityStatus.STATUS_PROPOSED,
@@ -1335,7 +1335,7 @@ def test_federation_finality_status_tracks_state() -> None:
 
     # Verify finalized status
     final_status = FederationFinalityStatus(
-        shard_id="records/city-a",
+        shard_id="records.city-a",
         seq=42,
         header_hash="aa" * 32,
         status=FederationFinalityStatus.STATUS_FEDERATION_FINAL,
@@ -1354,7 +1354,7 @@ def test_federation_finality_availability_threshold() -> None:
     signing_key2 = _test_signing_key(2)
 
     challenge = DataAvailabilityChallenge(
-        shard_id="records/city-a",
+        shard_id="records.city-a",
         header_hash="aa" * 32,
         challenger_id="external",
         challenge_nonce="nonce-789",
@@ -1384,7 +1384,7 @@ def test_federation_finality_availability_threshold() -> None:
 
     # With 3 nodes and 2/3 threshold, need 2 proofs
     status_one_proof = FederationFinalityStatus(
-        shard_id="records/city-a",
+        shard_id="records.city-a",
         seq=42,
         header_hash="aa" * 32,
         status=FederationFinalityStatus.STATUS_AVAILABILITY_PENDING,
@@ -1395,7 +1395,7 @@ def test_federation_finality_availability_threshold() -> None:
     assert status_one_proof.availability_threshold_met(registry) is False
 
     status_two_proofs = FederationFinalityStatus(
-        shard_id="records/city-a",
+        shard_id="records.city-a",
         seq=42,
         header_hash="aa" * 32,
         status=FederationFinalityStatus.STATUS_AVAILABILITY_VERIFIED,

@@ -745,7 +745,7 @@ class TestAuthAndRateLimiting:
         rate_limited = client.post("/ingest/records", json=payload)
         assert rate_limited.status_code == 429
         assert len(ingest_api._write_ledger.entries) == ledger_len_before + 1
-        assert ingest_api._write_ledger.entries[-1].shard_id == "audit/security"
+        assert ingest_api._write_ledger.entries[-1].shard_id == "audit.security"
 
 
 def test_smt_proof_conversion_verifies_round_trip():

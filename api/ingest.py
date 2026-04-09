@@ -666,7 +666,7 @@ def _append_security_audit_event(event: str, details: dict[str, Any]) -> None:
     payload_hash = hash_bytes(document_to_bytes(canonicalize_document(payload))).hex()
     _write_ledger.append(
         record_hash=payload_hash,
-        shard_id="audit/security",
+        shard_id="audit.security",
         shard_root=payload_hash,
         canonicalization=canonicalization_provenance("application/json", CANONICAL_VERSION),
     )
@@ -1736,7 +1736,7 @@ async def commit_artifact(
     # Apply rate limiting after authentication
     _apply_rate_limits(http_request, _api_key.key_id, "commit")
 
-    shard_id = f"artifacts/{request.namespace}"
+    shard_id = f"artifacts.{request.namespace}"
     batch_id = str(uuid.uuid4())
 
     # Try to get storage layer (returns None if not configured)

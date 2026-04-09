@@ -114,7 +114,7 @@ class TestGenerateCommitId:
     def test_format(self) -> None:
         cid = generate_commit_id()
         assert cid.startswith("0x")
-        assert len(cid) == 42  # "0x" + 40 hex chars
+        assert len(cid) == 66  # "0x" + 64 hex chars
 
     def test_valid_hex(self) -> None:
         cid = generate_commit_id()

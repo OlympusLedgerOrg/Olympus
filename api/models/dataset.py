@@ -91,8 +91,8 @@ class DatasetArtifact(Base):
     # --- Core ledger fields -------------------------------------------------
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
     dataset_id: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
-    commit_id: Mapped[str] = mapped_column(String(64), nullable=False, unique=True, index=True)
-    parent_commit_id: Mapped[str] = mapped_column(String(64), nullable=False, default="")
+    commit_id: Mapped[str] = mapped_column(String(66), nullable=False, unique=True, index=True)
+    parent_commit_id: Mapped[str] = mapped_column(String(66), nullable=False, default="")
     epoch_timestamp: Mapped[datetime] = mapped_column(
         DateTime, nullable=False, default=lambda: datetime.now(timezone.utc)
     )
@@ -219,8 +219,8 @@ class DatasetLineageEvent(Base):
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
     dataset_id: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
-    commit_id: Mapped[str] = mapped_column(String(64), nullable=False, unique=True)
-    parent_commit_id: Mapped[str] = mapped_column(String(64), nullable=False, default="")
+    commit_id: Mapped[str] = mapped_column(String(66), nullable=False, unique=True)
+    parent_commit_id: Mapped[str] = mapped_column(String(66), nullable=False, default="")
     epoch_timestamp: Mapped[datetime] = mapped_column(
         DateTime, nullable=False, default=lambda: datetime.now(timezone.utc)
     )

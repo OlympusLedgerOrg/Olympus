@@ -41,5 +41,5 @@ class KeyCredential(Base):
     revoked_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     issuer: Mapped[str] = mapped_column(String(256), nullable=False)
     sbt_nontransferable: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
-    commit_id: Mapped[str] = mapped_column(String(64), nullable=False, default="")
-    revocation_commit_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    commit_id: Mapped[str] = mapped_column(String(66), nullable=False, default="")
+    revocation_commit_id: Mapped[str | None] = mapped_column(String(66), nullable=True)

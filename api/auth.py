@@ -204,13 +204,25 @@ def _constant_time_equals(a: str, b: str) -> bool:
     return _hmac_module.compare_digest(a, b)
 
 
-def _constant_time_lookup(key_hash: str) -> _APIKeyRecord | None:
-    """Constant-time key lookup to prevent timing oracle attacks."""
+def _constant_time_lookup(key_hash: str) -> tuple[_APIKeyRecord | None, bool]:
+    """Constant-time key lookup to prevent timing oracle attacks.
+
+    Returns:
+        A tuple of ``(record, expired)`` where *record* is the matching
+        :class:`_APIKeyRecord` or ``None``, and *expired* indicates whether the
+        matched key has passed its expiration time.  The expiration check is
+        performed inside the same constant-time loop so that an attacker cannot
+        distinguish "valid key, not expired" from "valid key, expired" via
+        response timing (RT-L2).
+    """
+    now = datetime.now(timezone.utc)
     found: _APIKeyRecord | None = None
+    expired = False
     for stored_hash, record in _key_store.items():
         if _constant_time_equals(stored_hash, key_hash):
             found = record
-    return found
+            expired = now >= record.expires_at
+    return found, expired
 
 
 async def require_api_key(request: Request) -> _APIKeyRecord:
@@ -249,7 +261,7 @@ async def require_api_key(request: Request) -> _APIKeyRecord:
 
     raw_key = _extract_key(request)
     key_hash = _hash_key(raw_key)
-    record = _constant_time_lookup(key_hash)
+    record, expired = _constant_time_lookup(key_hash)
 
     if record is None:
         logger.warning(
@@ -260,7 +272,7 @@ async def require_api_key(request: Request) -> _APIKeyRecord:
             detail={"detail": "Invalid API key.", "code": "AUTH_INVALID"},
         )
 
-    if datetime.now(timezone.utc) >= record.expires_at:
+    if expired:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail={"detail": "API key expired.", "code": "AUTH_EXPIRED"},
@@ -329,7 +341,7 @@ def require_api_key_with_scope(required_scope: str) -> Any:
 
         raw_key = _extract_key(request)
         key_hash = _hash_key(raw_key)
-        record = _constant_time_lookup(key_hash)
+        record, expired = _constant_time_lookup(key_hash)
         client_ip = _get_client_ip(request)
 
         if record is None:
@@ -343,7 +355,7 @@ def require_api_key_with_scope(required_scope: str) -> Any:
                 detail={"detail": "Invalid API key.", "code": "AUTH_INVALID"},
             )
 
-        if datetime.now(timezone.utc) >= record.expires_at:
+        if expired:
             logger.warning(
                 "Expired API key attempt from %s (key_id=%s, scope=%s)",
                 client_ip,

@@ -383,7 +383,7 @@ def test_find_first_divergent_round_identifies_first_difference() -> None:
 def test_detect_slashable_equivocations_requires_conflicting_published_votes() -> None:
     vote_a = PublishedVote(
         node_id="guardian-1",
-        shard_id="records/a",
+        shard_id="records.a",
         round_number=7,
         chain_id="chain-a",
         publication=VotePublication(
@@ -394,7 +394,7 @@ def test_detect_slashable_equivocations_requires_conflicting_published_votes() -
     )
     vote_b = PublishedVote(
         node_id="guardian-1",
-        shard_id="records/a",
+        shard_id="records.a",
         round_number=7,
         chain_id="chain-b",
         publication=VotePublication(

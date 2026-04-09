@@ -65,7 +65,7 @@ async def test_commit_document(client):
     data = resp.json()
     assert data["doc_hash"] == doc_hash
     assert data["commit_id"].startswith("0x")
-    assert len(data["commit_id"]) == 42  # 0x + 40 hex chars
+    assert len(data["commit_id"]) == 66  # 0x + 64 hex chars
 
 
 @pytest.mark.asyncio
@@ -98,7 +98,8 @@ async def test_verify_by_doc_hash(client):
 async def test_verify_nonexistent_returns_false(client):
     """Verifying a non-existent commit should return verified: false, not 404."""
     resp = await client.post(
-        "/doc/verify", json={"commit_id": "0xdeadbeef00000000deadbeef00000000deadbeef"}
+        "/doc/verify",
+        json={"commit_id": "0xdeadbeef00000000deadbeef00000000deadbeef00000000deadbeef00000000"},
     )
     assert resp.status_code == 200
     assert resp.json()["verified"] is False

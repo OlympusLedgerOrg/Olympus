@@ -157,7 +157,7 @@ def test_ledger_entry_hash_includes_federation_quorum_certificate_when_present()
     ledger = Ledger()
 
     certificate = {
-        "shard_id": "records/city-a",
+        "shard_id": "records.city-a",
         "header_hash": "ab" * 32,
         "timestamp": "2026-03-09T00:00:00Z",
         "event_id": "ef" * 32,
@@ -168,7 +168,7 @@ def test_ledger_entry_hash_includes_federation_quorum_certificate_when_present()
     }
     entry = ledger.append(
         record_hash="test_hash",
-        shard_id="records/city-a",
+        shard_id="records.city-a",
         shard_root="test_root",
         canonicalization=_canonicalization(),
         federation_quorum_certificate=certificate,
@@ -197,7 +197,7 @@ def test_ledger_canonicalizes_quorum_certificate_signature_order_before_hashing(
     """Entry hash commitment should be stable regardless of signature ordering."""
     ledger = Ledger()
     certificate = {
-        "shard_id": "records/city-a",
+        "shard_id": "records.city-a",
         "header_hash": "ab" * 32,
         "timestamp": "2026-03-09T00:00:00Z",
         "event_id": "ef" * 32,
@@ -212,7 +212,7 @@ def test_ledger_canonicalizes_quorum_certificate_signature_order_before_hashing(
 
     entry = ledger.append(
         record_hash="test_hash",
-        shard_id="records/city-a",
+        shard_id="records.city-a",
         shard_root="test_root",
         canonicalization=_canonicalization(),
         federation_quorum_certificate=certificate,

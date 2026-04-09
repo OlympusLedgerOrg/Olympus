@@ -53,7 +53,7 @@ def _make_signed_candidate(
     timestamp: str = "2026-03-17T00:00:00Z",
     height: int = 1,
     round_number: int = 0,
-    shard_id: str = "records/city-a",
+    shard_id: str = "records.city-a",
     num_signers: int = 2,
 ) -> tuple[dict, dict]:
     """Build a header + quorum certificate for fork resolution tests."""
@@ -491,7 +491,7 @@ class TestAppendQuorumCertificateToLedger:
     def test_appends_entry(self):
         registry = _make_registry()
         header = create_shard_header(
-            shard_id="records/city-a",
+            shard_id="records.city-a",
             root_hash=bytes.fromhex("11" * 32),
             timestamp="2026-03-17T00:00:00Z",
         )
@@ -509,4 +509,4 @@ class TestAppendQuorumCertificateToLedger:
         )
         assert entry is not None
         assert len(ledger.entries) == 1
-        assert entry.shard_id == "records/city-a"
+        assert entry.shard_id == "records.city-a"
