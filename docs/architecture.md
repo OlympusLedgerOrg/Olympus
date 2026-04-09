@@ -59,25 +59,25 @@ the primary write path while the Go → Rust path is hardened.
 
 | Concern | Directory |
 |---|---|
-| Protocol truth (hashing, canonicalization, Merkle, ledger, federation) | [`protocol/`](protocol/) |
-| Current API (FastAPI endpoints, auth, schemas) | [`api/`](api/) |
-| Target services (Go sequencer, Rust CD-HS-ST) | [`services/`](services/) |
-| ZK proof system (Circom circuits, proving keys, ceremony) | [`proofs/`](proofs/), [`ceremony/`](ceremony/) |
-| Independent verification (Python, Go, Rust, JavaScript verifiers) | [`verifiers/`](verifiers/) |
-| Operator tooling (CLI, schema validation, benchmarks) | [`tools/`](tools/), [`schemas/`](schemas/), [`benchmarks/`](benchmarks/) |
-| Assurance (tests, test vectors, threat model) | [`tests/`](tests/), [`test_vectors/`](test_vectors/), [`threat-model.md`](threat-model.md) |
+| Protocol truth (hashing, canonicalization, Merkle, ledger, federation) | [`protocol/`](../protocol/) |
+| Current API (FastAPI endpoints, auth, schemas) | [`api/`](../api/) |
+| Target services (Go sequencer, Rust CD-HS-ST) | [`services/`](../services/) |
+| ZK proof system (Circom circuits, proving keys, ceremony) | [`proofs/`](../proofs/), [`ceremony/`](../ceremony/) |
+| Independent verification (Python, Go, Rust, JavaScript verifiers) | [`verifiers/`](../verifiers/) |
+| Operator tooling (CLI, schema validation, benchmarks) | [`tools/`](../tools/), [`schemas/`](../schemas/), [`benchmarks/`](../benchmarks/) |
+| Assurance (tests, test vectors, threat model) | [`tests/`](../tests/), [`test_vectors/`](../test_vectors/), [`threat-model.md`](threat-model.md) |
 
 ## Document hierarchy
 
 | Document | Purpose |
 |---|---|
-| [`README.md`](README.md) | 5-minute orientation |
-| [`QUICKSTART.md`](QUICKSTART.md) | Get running in 20 minutes |
-| [`DEVELOPMENT.md`](DEVELOPMENT.md) | Day-to-day developer workflow |
-| [`CONTRIBUTING.md`](CONTRIBUTING.md) | Contribution process |
-| `ARCHITECTURE.md` (this file) | Structural decisions and navigation |
+| [`README.md`](../README.md) | 5-minute orientation |
+| [`quickstart.md`](quickstart.md) | Get running in 20 minutes |
+| [`development.md`](development.md) | Day-to-day developer workflow |
+| [`CONTRIBUTING.md`](../CONTRIBUTING.md) | Contribution process |
+| `architecture.md` (this file) | Structural decisions and navigation |
 | [`threat-model.md`](threat-model.md) | Security posture for auditors |
-| [`docs/adr/`](docs/adr/) | Architectural Decision Records |
+| [`adr/`](adr/) | Architectural Decision Records |
 
 ## Phase definitions
 
@@ -90,7 +90,7 @@ Do not defer, do not refactor around. The three hard blockers for going
 public:
 
 1. **Groth16 trusted setup ceremony** — external dependency, not code.
-   Infrastructure in [`ceremony/`](ceremony/).
+   Infrastructure in [`ceremony/`](../ceremony/).
 2. **Federation decomposition** — `protocol/federation/` now splits
    gossip, identity, quorum, replication, and rotation into focused
    modules.

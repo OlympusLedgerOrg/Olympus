@@ -2,7 +2,7 @@ syntax = "proto3";
 
 package olympus.cdhs_smf.v1;
 
-option go_package = "github.com/wombatvagina69-crypto/olympus/services/sequencer/proto";
+option go_package = "github.com/OlympusLedgerOrg/Olympus/services/sequencer/proto";
 
 // CD-HS-ST Service: Constant-Depth Hierarchical Sparse Tree
 //

@@ -102,23 +102,23 @@ Findings are rated using a **Severity × Exploitability** matrix:
 
 | ID | Title | Severity | Exploitability | Status | Fix PR |
 |----|-------|----------|----------------|--------|--------|
-| [C-1](#c-1-poseidon-smt-rebuild-crashes-on-non-empty-shards) | Poseidon SMT rebuild crashes on non-empty shards | Critical | Moderate | ✅ Verified | [#538](https://github.com/wombatvagina69-crypto/Olympus/pull/538) |
-| [C-2](#c-2-embargo-flag-stored-but-never-enforced) | Embargo flag stored but never enforced | Critical | **Trivial** | ✅ Verified | [#539](https://github.com/wombatvagina69-crypto/Olympus/pull/539) |
-| [H-1](#h-1-witness-checkpoint-submissions-accept-unsigned-announcements) | Witness checkpoint submissions accept unsigned announcements | High | Moderate | ✅ Verified | [#540](https://github.com/wombatvagina69-crypto/Olympus/pull/540) |
-| [H-2](#h-2-poseidon-field-values-not-reduced-modulo-snark-scalar-field) | Poseidon field values not reduced mod SNARK_SCALAR_FIELD | High | Complex | ✅ Verified | [#538](https://github.com/wombatvagina69-crypto/Olympus/pull/538) |
+| [C-1](#c-1-poseidon-smt-rebuild-crashes-on-non-empty-shards) | Poseidon SMT rebuild crashes on non-empty shards | Critical | Moderate | ✅ Verified | [#538](https://github.com/OlympusLedgerOrg/Olympus/pull/538) |
+| [C-2](#c-2-embargo-flag-stored-but-never-enforced) | Embargo flag stored but never enforced | Critical | **Trivial** | ✅ Verified | [#539](https://github.com/OlympusLedgerOrg/Olympus/pull/539) |
+| [H-1](#h-1-witness-checkpoint-submissions-accept-unsigned-announcements) | Witness checkpoint submissions accept unsigned announcements | High | Moderate | ✅ Verified | [#540](https://github.com/OlympusLedgerOrg/Olympus/pull/540) |
+| [H-2](#h-2-poseidon-field-values-not-reduced-modulo-snark-scalar-field) | Poseidon field values not reduced mod SNARK_SCALAR_FIELD | High | Complex | ✅ Verified | [#538](https://github.com/OlympusLedgerOrg/Olympus/pull/538) |
 | [H-3](#h-3-dual-independent-rate-limit-systems) | Dual independent rate-limit systems | High | Moderate | 🔴 Open | — |
-| [H-4](#h-4-sth-history-returns-empty-signatures) | STH history returns empty signatures | High | Trivial | ✅ Verified | [#539](https://github.com/wombatvagina69-crypto/Olympus/pull/539) |
+| [H-4](#h-4-sth-history-returns-empty-signatures) | STH history returns empty signatures | High | Trivial | ✅ Verified | [#539](https://github.com/OlympusLedgerOrg/Olympus/pull/539) |
 | [H-5](#h-5-proof_id-parameter-unvalidated) | `proof_id` parameter — no format constraint | High | Trivial | 🔴 Open | — |
-| [M-1](#m-1-dataset-history-unbounded-query) | Dataset history unbounded query | Medium | Moderate | ✅ Verified | [#540](https://github.com/wombatvagina69-crypto/Olympus/pull/540) |
+| [M-1](#m-1-dataset-history-unbounded-query) | Dataset history unbounded query | Medium | Moderate | ✅ Verified | [#540](https://github.com/OlympusLedgerOrg/Olympus/pull/540) |
 | [M-2](#m-2-dataset-file-commit-unbounded) | Dataset file commit unbounded | Medium | Moderate | 🔴 Open | — |
-| [M-3](#m-3-internal-exception-message-leak) | Internal exception message leak | Medium | Trivial | ✅ Verified | [#539](https://github.com/wombatvagina69-crypto/Olympus/pull/539) |
-| [M-4](#m-4-duplicate-client-ip-resolution) | Duplicate client IP resolution | Medium | Complex | ✅ Verified | [#545](https://github.com/wombatvagina69-crypto/Olympus/pull/545) |
-| [M-5](#m-5-witness-origin-field-unconstrained) | Witness origin field unconstrained | Medium | Trivial | ✅ Verified | [#540](https://github.com/wombatvagina69-crypto/Olympus/pull/540) |
-| [M-6](#m-6-proof-submission-accepts-caller-supplied-state) | Proof submission accepts caller-supplied state | Medium | Moderate | ✅ Verified | [#544](https://github.com/wombatvagina69-crypto/Olympus/pull/544) |
-| [M-7](#m-7-unbounded-tree-replay) | Unbounded tree replay | Medium | Moderate | ✅ Verified | [#542](https://github.com/wombatvagina69-crypto/Olympus/pull/542) |
-| [L-1](#l-1-get_ingestion_proof-unauthenticated) | `get_ingestion_proof` unauthenticated | Low | Trivial | ✅ Verified | [#539](https://github.com/wombatvagina69-crypto/Olympus/pull/539) |
-| [L-2](#l-2-admin-reload-leaks-config-state) | Admin reload leaks config state | Low | Trivial | ✅ Verified | [#540](https://github.com/wombatvagina69-crypto/Olympus/pull/540) |
-| [L-3](#l-3-witness-stores-per-process) | Witness stores per-process | Low | Complex | ✅ Verified | [#540](https://github.com/wombatvagina69-crypto/Olympus/pull/540) |
+| [M-3](#m-3-internal-exception-message-leak) | Internal exception message leak | Medium | Trivial | ✅ Verified | [#539](https://github.com/OlympusLedgerOrg/Olympus/pull/539) |
+| [M-4](#m-4-duplicate-client-ip-resolution) | Duplicate client IP resolution | Medium | Complex | ✅ Verified | [#545](https://github.com/OlympusLedgerOrg/Olympus/pull/545) |
+| [M-5](#m-5-witness-origin-field-unconstrained) | Witness origin field unconstrained | Medium | Trivial | ✅ Verified | [#540](https://github.com/OlympusLedgerOrg/Olympus/pull/540) |
+| [M-6](#m-6-proof-submission-accepts-caller-supplied-state) | Proof submission accepts caller-supplied state | Medium | Moderate | ✅ Verified | [#544](https://github.com/OlympusLedgerOrg/Olympus/pull/544) |
+| [M-7](#m-7-unbounded-tree-replay) | Unbounded tree replay | Medium | Moderate | ✅ Verified | [#542](https://github.com/OlympusLedgerOrg/Olympus/pull/542) |
+| [L-1](#l-1-get_ingestion_proof-unauthenticated) | `get_ingestion_proof` unauthenticated | Low | Trivial | ✅ Verified | [#539](https://github.com/OlympusLedgerOrg/Olympus/pull/539) |
+| [L-2](#l-2-admin-reload-leaks-config-state) | Admin reload leaks config state | Low | Trivial | ✅ Verified | [#540](https://github.com/OlympusLedgerOrg/Olympus/pull/540) |
+| [L-3](#l-3-witness-stores-per-process) | Witness stores per-process | Low | Complex | ✅ Verified | [#540](https://github.com/OlympusLedgerOrg/Olympus/pull/540) |
 | [L-4](#l-4-recursive-json-depth-check) | Recursive JSON depth check | Low | Complex | 🟡 Mitigated | — |
 | [L-5](#l-5-rfc-3161-tsa-no-certificate-pinning) | RFC 3161 TSA no certificate pinning | Low | Complex | 🟡 Mitigated | — |
 
@@ -137,7 +137,7 @@ Findings are rated using a **Severity × Exploitability** matrix:
 | **Severity** | Critical |
 | **Exploitability** | Moderate |
 | **Location** | `api/ingest.py:862` |
-| **Status** | ✅ Verified — Fixed in [PR #538](https://github.com/wombatvagina69-crypto/Olympus/pull/538) (commit `ca63d07`, April 1 2026) |
+| **Status** | ✅ Verified — Fixed in [PR #538](https://github.com/OlympusLedgerOrg/Olympus/pull/538) (commit `ca63d07`, April 1 2026) |
 
 **Description:**  
 `_build_poseidon_smt_for_storage_shard()` passes `shard_id` as the second argument to `StorageLayer._load_tree_state()`, but that function expects `up_to_ts` (a timestamp). When `up_to_ts` is not `None`, the code attempts `datetime.fromisoformat()` on a shard ID string, raising `ValueError`.
@@ -163,7 +163,7 @@ curl -X POST /ingest/records -d '{"shard_id": "existing:shard", ...}'
 | **Severity** | Critical |
 | **Exploitability** | **Trivial** |
 | **Location** | `api/models/document.py:54`, `api/routers/documents.py`, `api/routers/ledger.py` |
-| **Status** | ✅ Verified — Fixed in [PR #539](https://github.com/wombatvagina69-crypto/Olympus/pull/539) (commit `788ca9f`, April 1 2026) |
+| **Status** | ✅ Verified — Fixed in [PR #539](https://github.com/OlympusLedgerOrg/Olympus/pull/539) (commit `788ca9f`, April 1 2026) |
 
 **Description:**  
 `DocCommit.embargo_until` is accepted at commit time and persisted to the database, but **no read path filters on this field**. All document retrieval endpoints return embargoed records without checking whether the embargo period has elapsed.
@@ -200,7 +200,7 @@ curl GET /ledger/proof/{commit_id}
 | **Severity** | High |
 | **Exploitability** | Moderate |
 | **Location** | `api/routers/witness.py:submit_observation` |
-| **Status** | ✅ Verified — Fixed in [PR #540](https://github.com/wombatvagina69-crypto/Olympus/pull/540) (commit `a7ff63c`, April 1 2026) |
+| **Status** | ✅ Verified — Fixed in [PR #540](https://github.com/OlympusLedgerOrg/Olympus/pull/540) (commit `a7ff63c`, April 1 2026) |
 
 **Description:**  
 The `POST /witness/observations` endpoint validates timestamp freshness and nonce deduplication but does not verify any Ed25519 signature on the checkpoint payload. Any authenticated caller can fabricate an announcement from any `origin` with any `checkpoint_hash`.
@@ -219,7 +219,7 @@ The witness/gossip anti-split-view mechanism becomes meaningless. An attacker wi
 | **Severity** | High |
 | **Exploitability** | Complex |
 | **Location** | `api/ingest.py:850-854` |
-| **Status** | ✅ Verified — Fixed in [PR #538](https://github.com/wombatvagina69-crypto/Olympus/pull/538) (commit `ca63d07`, April 1 2026) |
+| **Status** | ✅ Verified — Fixed in [PR #538](https://github.com/OlympusLedgerOrg/Olympus/pull/538) (commit `ca63d07`, April 1 2026) |
 
 **Description:**  
 ```python
@@ -268,7 +268,7 @@ Consolidate to a single rate-limit backend. Either have `ingest.py` delegate to 
 | **Severity** | High |
 | **Exploitability** | Trivial |
 | **Location** | `api/sth.py:161-165` |
-| **Status** | ✅ Verified — Fixed in [PR #539](https://github.com/wombatvagina69-crypto/Olympus/pull/539) (commit `788ca9f`, April 1 2026) |
+| **Status** | ✅ Verified — Fixed in [PR #539](https://github.com/OlympusLedgerOrg/Olympus/pull/539) (commit `788ca9f`, April 1 2026) |
 
 **Description:**  
 ```python
@@ -296,7 +296,7 @@ A log operator could serve a silently forked history with no evidence of tamperi
 | **Severity** | High |
 | **Exploitability** | Trivial |
 | **Location** | `api/ingest.py:1339` |
-| **Status** | 🔴 Open — Authentication was added in [PR #539](https://github.com/wombatvagina69-crypto/Olympus/pull/539) (`RequireVerifyScope`), but format validation is still absent |
+| **Status** | 🔴 Open — Authentication was added in [PR #539](https://github.com/OlympusLedgerOrg/Olympus/pull/539) (`RequireVerifyScope`), but format validation is still absent |
 
 **Description:**  
 `GET /ingest/records/{proof_id}/proof` now requires authentication (L-1 fix, PR #539), but `proof_id` accepts arbitrary strings with no length limit or UUID pattern constraint. An authenticated attacker can still probe arbitrary IDs as an enumeration oracle.
@@ -315,7 +315,7 @@ Add parameter constraint: `proof_id: str = Path(..., pattern=r"^[0-9a-f-]{32,36}
 | **Severity** | Medium |
 | **Exploitability** | Moderate |
 | **Location** | `api/routers/datasets.py:734-738` |
-| **Status** | ✅ Verified — Fixed in [PR #540](https://github.com/wombatvagina69-crypto/Olympus/pull/540) (commit `a7ff63c`, April 1 2026) |
+| **Status** | ✅ Verified — Fixed in [PR #540](https://github.com/OlympusLedgerOrg/Olympus/pull/540) (commit `a7ff63c`, April 1 2026) |
 
 **Description:**  
 `GET /datasets/{dataset_id}/history` executes a query with no `.limit()` clause. A dataset with thousands of versions causes a full table scan and potential OOM.
@@ -350,7 +350,7 @@ Add `max_length=10_000` to `DatasetCommitRequest.files`. Add `.limit(10_001)` on
 | **Severity** | Medium |
 | **Exploitability** | Trivial |
 | **Location** | `api/sth.py:131`, `200` |
-| **Status** | ✅ Verified — Fixed in [PR #539](https://github.com/wombatvagina69-crypto/Olympus/pull/539) (commit `788ca9f`, April 1 2026) |
+| **Status** | ✅ Verified — Fixed in [PR #539](https://github.com/OlympusLedgerOrg/Olympus/pull/539) (commit `788ca9f`, April 1 2026) |
 
 **Description:**  
 Raw exception messages may expose table names, column names, SQL fragments, or stack details to external callers.
@@ -366,7 +366,7 @@ Raw exception messages may expose table names, column names, SQL fragments, or s
 | **Severity** | Medium |
 | **Exploitability** | Complex |
 | **Location** | `api/ingest.py:646-680`, `api/auth.py:630-657` |
-| **Status** | ✅ Verified — Fixed in [PR #545](https://github.com/wombatvagina69-crypto/Olympus/pull/545) (commit `f041a20`, April 2 2026) |
+| **Status** | ✅ Verified — Fixed in [PR #545](https://github.com/OlympusLedgerOrg/Olympus/pull/545) (commit `f041a20`, April 2 2026) |
 
 **Description:**  
 Both modules implement `X-Forwarded-For` parsing with trusted-proxy logic, reading from different configuration sources. Divergence could cause inconsistent IP-based rate limiting or logging.
@@ -382,7 +382,7 @@ Both modules implement `X-Forwarded-For` parsing with trusted-proxy logic, readi
 | **Severity** | Medium |
 | **Exploitability** | Trivial |
 | **Location** | `api/routers/witness.py`, `api/schemas/witness.py` |
-| **Status** | ✅ Verified — Fixed in [PR #540](https://github.com/wombatvagina69-crypto/Olympus/pull/540) (commit `a7ff63c`, April 1 2026) |
+| **Status** | ✅ Verified — Fixed in [PR #540](https://github.com/OlympusLedgerOrg/Olympus/pull/540) (commit `a7ff63c`, April 1 2026) |
 
 **Description:**  
 The `origin` field had no pattern constraint, length limit, or allowlist. Attackers could inject colons to collide with legitimate key namespaces or use extremely long strings.
@@ -398,7 +398,7 @@ The `origin` field had no pattern constraint, length limit, or allowlist. Attack
 | **Severity** | Medium |
 | **Exploitability** | Moderate |
 | **Location** | `api/ingest.py:1411-1475` |
-| **Status** | ✅ Verified — Fixed in [PR #544](https://github.com/wombatvagina69-crypto/Olympus/pull/544) (commit `6575f4e`, April 2 2026) |
+| **Status** | ✅ Verified — Fixed in [PR #544](https://github.com/OlympusLedgerOrg/Olympus/pull/544) (commit `6575f4e`, April 2 2026) |
 
 **Description:**  
 `submit_proof_bundle` accepted `shard_id`, `record_id`, and `canonicalization` from the caller, allowing an authenticated attacker to poison the in-memory Poseidon state cache.
@@ -414,7 +414,7 @@ The `origin` field had no pattern constraint, length limit, or allowlist. Attack
 | **Severity** | Medium |
 | **Exploitability** | Moderate |
 | **Location** | `storage/postgres.py:2334-2474` |
-| **Status** | ✅ Verified — Fixed in [PR #542](https://github.com/wombatvagina69-crypto/Olympus/pull/542) (commit `636bd68`, April 2 2026) |
+| **Status** | ✅ Verified — Fixed in [PR #542](https://github.com/OlympusLedgerOrg/Olympus/pull/542) (commit `636bd68`, April 2 2026) |
 
 **Description:**  
 `replay_tree_incremental()` loaded all shard headers and ledger rows unboundedly. Large shards caused memory exhaustion.
@@ -432,7 +432,7 @@ The `origin` field had no pattern constraint, length limit, or allowlist. Attack
 | **Severity** | Low |
 | **Exploitability** | Trivial |
 | **Location** | `api/ingest.py:1339` |
-| **Status** | ✅ Verified — Fixed in [PR #539](https://github.com/wombatvagina69-crypto/Olympus/pull/539) (commit `788ca9f`, April 1 2026) |
+| **Status** | ✅ Verified — Fixed in [PR #539](https://github.com/OlympusLedgerOrg/Olympus/pull/539) (commit `788ca9f`, April 1 2026) |
 
 **Description:**  
 The endpoint lacked `RequireVerifyScope` or `RequireAPIKey` dependency, unlike `/records/hash/{content_hash}/verify` which requires authentication.
@@ -448,7 +448,7 @@ The endpoint lacked `RequireVerifyScope` or `RequireAPIKey` dependency, unlike `
 | **Severity** | Low |
 | **Exploitability** | Trivial |
 | **Location** | `api/routers/keys.py:107-121` |
-| **Status** | ✅ Verified — Fixed in [PR #540](https://github.com/wombatvagina69-crypto/Olympus/pull/540) (commit `a7ff63c`, April 1 2026) |
+| **Status** | ✅ Verified — Fixed in [PR #540](https://github.com/OlympusLedgerOrg/Olympus/pull/540) (commit `a7ff63c`, April 1 2026) |
 
 **Description:**  
 The 503 response message "Admin key reload not configured" revealed whether `OLYMPUS_ADMIN_KEY` is set.
@@ -464,7 +464,7 @@ The 503 response message "Admin key reload not configured" revealed whether `OLY
 | **Severity** | Low |
 | **Exploitability** | Complex |
 | **Location** | `api/routers/witness.py:73-80` |
-| **Status** | ✅ Verified — Fixed in [PR #540](https://github.com/wombatvagina69-crypto/Olympus/pull/540) (commit `a7ff63c`, April 1 2026) |
+| **Status** | ✅ Verified — Fixed in [PR #540](https://github.com/OlympusLedgerOrg/Olympus/pull/540) (commit `a7ff63c`, April 1 2026) |
 
 **Description:**  
 Witness observation stores were in-memory and per-process. Multi-worker deployments silently split observations across processes, fragmenting the gossip state.
@@ -523,23 +523,23 @@ The TSA URL is fetched without certificate pinning. A MITM attacker with a valid
 
 | ID | Severity | Found | Fix PR | Fixed | Verified | Notes |
 |----|----------|-------|--------|-------|----------|-------|
-| C-1 | Critical | 2026-04-01 | [#538](https://github.com/wombatvagina69-crypto/Olympus/pull/538) | 2026-04-01 | ✅ 2026-04-03 | `_load_tree_state` arg fixed + BN128 field reduction |
-| C-2 | Critical | 2026-04-01 | [#539](https://github.com/wombatvagina69-crypto/Olympus/pull/539) | 2026-04-01 | ✅ 2026-04-03 | Embargo enforced on all read paths |
-| H-1 | High | 2026-04-01 | [#540](https://github.com/wombatvagina69-crypto/Olympus/pull/540) | 2026-04-01 | ✅ 2026-04-03 | Ed25519 sig verification added |
-| H-2 | High | 2026-04-01 | [#538](https://github.com/wombatvagina69-crypto/Olympus/pull/538) | 2026-04-01 | ✅ 2026-04-03 | `% _BN128_FIELD_PRIME` at call site |
+| C-1 | Critical | 2026-04-01 | [#538](https://github.com/OlympusLedgerOrg/Olympus/pull/538) | 2026-04-01 | ✅ 2026-04-03 | `_load_tree_state` arg fixed + BN128 field reduction |
+| C-2 | Critical | 2026-04-01 | [#539](https://github.com/OlympusLedgerOrg/Olympus/pull/539) | 2026-04-01 | ✅ 2026-04-03 | Embargo enforced on all read paths |
+| H-1 | High | 2026-04-01 | [#540](https://github.com/OlympusLedgerOrg/Olympus/pull/540) | 2026-04-01 | ✅ 2026-04-03 | Ed25519 sig verification added |
+| H-2 | High | 2026-04-01 | [#538](https://github.com/OlympusLedgerOrg/Olympus/pull/538) | 2026-04-01 | ✅ 2026-04-03 | `% _BN128_FIELD_PRIME` at call site |
 | H-3 | High | 2026-04-01 | — | — | — | **Open** — ingest.py retains own TokenBucket |
-| H-4 | High | 2026-04-01 | [#539](https://github.com/wombatvagina69-crypto/Olympus/pull/539) | 2026-04-01 | ✅ 2026-04-03 | Real `sig`/`pubkey` returned in history |
+| H-4 | High | 2026-04-01 | [#539](https://github.com/OlympusLedgerOrg/Olympus/pull/539) | 2026-04-01 | ✅ 2026-04-03 | Real `sig`/`pubkey` returned in history |
 | H-5 | High | 2026-04-01 | — | — | — | **Open** — auth added (#539) but format constraint missing |
-| M-1 | Medium | 2026-04-01 | [#540](https://github.com/wombatvagina69-crypto/Olympus/pull/540) | 2026-04-01 | ✅ 2026-04-03 | `n` param + `.limit(n)` added |
+| M-1 | Medium | 2026-04-01 | [#540](https://github.com/OlympusLedgerOrg/Olympus/pull/540) | 2026-04-01 | ✅ 2026-04-03 | `n` param + `.limit(n)` added |
 | M-2 | Medium | 2026-04-01 | — | — | — | **Open** — `DatasetCommitRequest.files` still unbounded |
-| M-3 | Medium | 2026-04-01 | [#539](https://github.com/wombatvagina69-crypto/Olympus/pull/539) | 2026-04-01 | ✅ 2026-04-03 | Generic error message; full exception logged server-side |
-| M-4 | Medium | 2026-04-01 | [#545](https://github.com/wombatvagina69-crypto/Olympus/pull/545) | 2026-04-02 | ✅ 2026-04-03 | `_client_ip()` removed from ingest.py |
-| M-5 | Medium | 2026-04-01 | [#540](https://github.com/wombatvagina69-crypto/Olympus/pull/540) | 2026-04-01 | ✅ 2026-04-03 | Pattern constraint added to origin field |
-| M-6 | Medium | 2026-04-01 | [#544](https://github.com/wombatvagina69-crypto/Olympus/pull/544) | 2026-04-02 | ✅ 2026-04-03 | File-upload-only endpoint |
-| M-7 | Medium | 2026-04-01 | [#542](https://github.com/wombatvagina69-crypto/Olympus/pull/542) | 2026-04-02 | ✅ 2026-04-03 | `max_headers`/`after_seq` pagination |
-| L-1 | Low | 2026-04-01 | [#539](https://github.com/wombatvagina69-crypto/Olympus/pull/539) | 2026-04-01 | ✅ 2026-04-03 | `RequireVerifyScope` added |
-| L-2 | Low | 2026-04-01 | [#540](https://github.com/wombatvagina69-crypto/Olympus/pull/540) | 2026-04-01 | ✅ 2026-04-03 | Rate limit added |
-| L-3 | Low | 2026-04-01 | [#540](https://github.com/wombatvagina69-crypto/Olympus/pull/540) | 2026-04-01 | ✅ 2026-04-03 | `RuntimeError` on multi-worker startup |
+| M-3 | Medium | 2026-04-01 | [#539](https://github.com/OlympusLedgerOrg/Olympus/pull/539) | 2026-04-01 | ✅ 2026-04-03 | Generic error message; full exception logged server-side |
+| M-4 | Medium | 2026-04-01 | [#545](https://github.com/OlympusLedgerOrg/Olympus/pull/545) | 2026-04-02 | ✅ 2026-04-03 | `_client_ip()` removed from ingest.py |
+| M-5 | Medium | 2026-04-01 | [#540](https://github.com/OlympusLedgerOrg/Olympus/pull/540) | 2026-04-01 | ✅ 2026-04-03 | Pattern constraint added to origin field |
+| M-6 | Medium | 2026-04-01 | [#544](https://github.com/OlympusLedgerOrg/Olympus/pull/544) | 2026-04-02 | ✅ 2026-04-03 | File-upload-only endpoint |
+| M-7 | Medium | 2026-04-01 | [#542](https://github.com/OlympusLedgerOrg/Olympus/pull/542) | 2026-04-02 | ✅ 2026-04-03 | `max_headers`/`after_seq` pagination |
+| L-1 | Low | 2026-04-01 | [#539](https://github.com/OlympusLedgerOrg/Olympus/pull/539) | 2026-04-01 | ✅ 2026-04-03 | `RequireVerifyScope` added |
+| L-2 | Low | 2026-04-01 | [#540](https://github.com/OlympusLedgerOrg/Olympus/pull/540) | 2026-04-01 | ✅ 2026-04-03 | Rate limit added |
+| L-3 | Low | 2026-04-01 | [#540](https://github.com/OlympusLedgerOrg/Olympus/pull/540) | 2026-04-01 | ✅ 2026-04-03 | `RuntimeError` on multi-worker startup |
 | L-4 | Low | 2026-04-01 | — | — | 🟡 | Early-exit guard added; iterative rewrite deferred |
 | L-5 | Low | 2026-04-01 | — | — | 🟡 | Trust-store API available; pinning optional |
 

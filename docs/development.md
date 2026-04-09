@@ -12,7 +12,7 @@ This guide covers common development workflows for the Olympus project.
 
 1. **Clone the repository**
    ```bash
-   git clone https://github.com/wombatvagina69-crypto/Olympus.git
+   git clone https://github.com/OlympusLedgerOrg/Olympus.git
    cd Olympus
    ```
 
@@ -293,8 +293,7 @@ The project uses GitHub Actions for continuous integration:
 
 ## Additional Resources
 
-- [README.md](README.md) - Project overview
-- [CONTRIBUTING.md](CONTRIBUTING.md) - Contribution guidelines
-- [SECURITY.md](SECURITY.md) - Security policy
+- [README.md](../README.md) - Project overview
+- [CONTRIBUTING.md](../CONTRIBUTING.md) - Contribution guidelines
+- [SECURITY.md](../SECURITY.md) - Security policy
 - [threat-model.md](threat-model.md) - Threat model
-- [docs/](docs/) - Protocol specifications

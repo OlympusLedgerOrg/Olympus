@@ -4,7 +4,7 @@
 
 ```bash
 # Clone and enter repository
-git clone https://github.com/wombatvagina69-crypto/Olympus.git
+git clone https://github.com/OlympusLedgerOrg/Olympus.git
 cd Olympus
 
 # Set up Python environment (Python 3.10+)

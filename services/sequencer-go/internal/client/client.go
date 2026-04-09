@@ -10,7 +10,7 @@ import (
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/local"
 
-	pb "github.com/wombatvagina69-crypto/olympus/services/sequencer/proto"
+	pb "github.com/OlympusLedgerOrg/Olympus/services/sequencer/proto"
 )
 
 const defaultSocketPath = "/run/olympus/cdhs-smf.sock"

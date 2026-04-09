@@ -1,4 +1,4 @@
-module github.com/olympus/verifiers/go
+module github.com/OlympusLedgerOrg/Olympus/verifiers/go
 
 go 1.21
 

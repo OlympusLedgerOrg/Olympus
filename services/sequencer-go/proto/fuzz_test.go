@@ -33,7 +33,7 @@ import (
 
 	"google.golang.org/protobuf/proto"
 
-	pb "github.com/wombatvagina69-crypto/olympus/services/sequencer/proto"
+	pb "github.com/OlympusLedgerOrg/Olympus/services/sequencer/proto"
 )
 
 // seedBytes encodes msg and panics if marshalling fails — used only for

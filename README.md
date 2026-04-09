@@ -14,10 +14,10 @@ The answer is **yes**, offline, forever.
 
 | I am a... | Start with |
 |---|---|
-| **Security auditor** | [`threat-model.md`](threat-model.md) → [`storage/postgres.py`](storage/postgres.py) → [`protocol/`](protocol/) |
-| **New contributor** | [`QUICKSTART.md`](QUICKSTART.md) → [`DEVELOPMENT.md`](DEVELOPMENT.md) → [`CONTRIBUTING.md`](CONTRIBUTING.md) |
+| **Security auditor** | [`docs/threat-model.md`](docs/threat-model.md) → [`storage/postgres.py`](storage/postgres.py) → [`protocol/`](protocol/) |
+| **New contributor** | [`docs/quickstart.md`](docs/quickstart.md) → [`docs/development.md`](docs/development.md) → [`CONTRIBUTING.md`](CONTRIBUTING.md) |
 | **Integrator / API user** | [`api/routers/`](api/routers/) → [`schemas/`](schemas/) → [`tools/verify_cli.py`](tools/verify_cli.py) |
-| **Operator / deployer** | [`QUICKSTART.md`](QUICKSTART.md) → [`docs/`](docs/) → [`alembic/`](alembic/) |
+| **Operator / deployer** | [`docs/quickstart.md`](docs/quickstart.md) → [`docs/`](docs/) → [`alembic/`](alembic/) |
 | **ZK / circuit reviewer** | [`proofs/circuits/`](proofs/circuits/) → [`ceremony/`](ceremony/) → [`api/services/zkproof.py`](api/services/zkproof.py) |
 
 ## Licensing
@@ -34,7 +34,7 @@ All components are open source: protocol implementations (`protocol/`), ZK circu
 - **What we defend:** append-only ledger integrity (BLAKE3 CD-HS-ST + shard headers), verifiable provenance, and non-malleable redaction proofs (Poseidon + Groth16).
 - **What we do not promise:** availability under single-operator failure (Guardian replication is Phase 1+), confidentiality of submitted content, or completeness of all possible records.
 - **Why it holds:** dual-root commitments bind BLAKE3 ledger roots to Poseidon circuit roots; deterministic canonicalization removes parser ambiguity; shard headers are Ed25519-signed and RFC 3161 timestamp-tokened; verification bundles allow offline re-validation.
-- See [`threat-model.md`](threat-model.md) for the full threat/assurance boundaries.
+- See [`docs/threat-model.md`](docs/threat-model.md) for the full threat/assurance boundaries.
 
 ## The Vision
 
@@ -89,7 +89,7 @@ Olympus has three service layers with strict responsibility boundaries:
 +---------------------------------------------------+
 ```
 
-> **Note:** This diagram shows the **target Phase 1 architecture**. In the current Phase 0 implementation, the Python API path is the primary write path using `storage/postgres.py` with an embedded Rust PyO3 extension (`olympus_core`). See [ARCHITECTURE.md](ARCHITECTURE.md) for the current vs target architecture comparison.
+> **Note:** This diagram shows the **target Phase 1 architecture**. In the current Phase 0 implementation, the Python API path is the primary write path using `storage/postgres.py` with an embedded Rust PyO3 extension (`olympus_core`). See [docs/architecture.md](docs/architecture.md) for the current vs target architecture comparison.
 
 > **Go never computes Merkle hashes itself.** All SMT operations are delegated to the Rust service over protobuf. Python talks to Go/Rust as external services, never as libraries.
 
@@ -184,6 +184,8 @@ app/             Application utility module
 assets/          Static assets
 benchmarks/      Performance benchmarks (Merkle proofs, ZK proofs, canonicalization)
 ceremony/        Groth16 trusted setup ceremony infrastructure and transcripts
+docs/            All project documentation -- architecture, quickstart, threat model,
+                   development guide, governance, security audits, ADRs
 examples/        Sample artifacts, federation registry, and runnable demos
 go/              Go sequencer module (go/sequencer/)
 integrations/    Lightweight Ethereum and IPFS bridge helpers
@@ -194,9 +196,7 @@ proto/           Protobuf definitions shared between Go and Rust services
 protocol/        Python reference implementations -- hashing, CD-HS-ST,
                    canonicalization, Merkle trees, ledger, redaction, federation,
                    attestations, checkpoints, RFC 3161
-scaffolding/     Non-production test wiring and view-change scaffolding
 schemas/         JSON schema definitions validated by tools/validate_schemas.py
-scripts/         Utility scripts
 services/        Microservices:
                    cdhs-smf-rust/  -- Rust gRPC CD-HS-ST cryptographic core
                    sequencer-go/   -- Go gRPC log sequencer
@@ -213,7 +213,7 @@ verifiers/       Cross-language verifiers -- Python, Go, Rust, JavaScript
 ## Quick Start
 
 ```bash
-git clone https://github.com/wombatvagina69-crypto/Olympus.git
+git clone https://github.com/OlympusLedgerOrg/Olympus.git
 cd Olympus
 python -m pip install -e ".[dev]"
 ```
@@ -240,7 +240,7 @@ python -m alembic upgrade head         # apply database migrations
 make dev                               # API on :8000, debug UI on :8080
 ```
 
-See [`QUICKSTART.md`](QUICKSTART.md) for a step-by-step walkthrough and [`DEVELOPMENT.md`](DEVELOPMENT.md) for the full developer workflow.
+See [`docs/quickstart.md`](docs/quickstart.md) for a step-by-step walkthrough and [`docs/development.md`](docs/development.md) for the full developer workflow.
 
 ## Federation Architecture
 
@@ -279,11 +279,11 @@ Olympus is influenced by the operational model of Certificate Transparency and S
 | ZK proof setup and circuits | `proofs/README.md`, `proofs/circuits/` |
 | Runnable demos | `examples/README.md` |
 | Interoperability helpers | `integrations/README.md` |
-| Extended setup guide | [`QUICKSTART.md`](QUICKSTART.md) |
-| Full developer workflow | [`DEVELOPMENT.md`](DEVELOPMENT.md) |
-| Governance & sustainability | [`GOVERNANCE.md`](GOVERNANCE.md) |
+| Extended setup guide | [`docs/quickstart.md`](docs/quickstart.md) |
+| Full developer workflow | [`docs/development.md`](docs/development.md) |
+| Governance & sustainability | [`docs/governance.md`](docs/governance.md) |
 | Contribution workflow | [`CONTRIBUTING.md`](CONTRIBUTING.md) |
-| Architecture & structural decisions | [`ARCHITECTURE.md`](ARCHITECTURE.md) |
+| Architecture & structural decisions | [`docs/architecture.md`](docs/architecture.md) |
 
 ## Notes
 
@@ -299,4 +299,4 @@ Olympus is influenced by the operational model of Certificate Transparency and S
 Olympus is designed to be audit-friendly, and external review is encouraged:
 
 - Security policy and coordinated disclosure: [`SECURITY.md`](SECURITY.md)
-- Threat model for auditors and policymakers: [`threat-model.md`](threat-model.md)
+- Threat model for auditors and policymakers: [`docs/threat-model.md`](docs/threat-model.md)

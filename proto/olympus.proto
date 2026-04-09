@@ -2,7 +2,7 @@ syntax = "proto3";
 
 package olympus.sequencer.v1;
 
-option go_package = "github.com/wombatvagina69-crypto/olympus/go/sequencer/proto;pb";
+option go_package = "github.com/OlympusLedgerOrg/Olympus/go/sequencer/proto;pb";
 
 // OlympusTree — Trillian-shaped log API for the Olympus append-only ledger.
 //

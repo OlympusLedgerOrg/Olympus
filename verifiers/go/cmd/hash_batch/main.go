@@ -7,7 +7,7 @@ import (
 	"io"
 	"os"
 
-	verifier "github.com/olympus/verifiers/go"
+	verifier "github.com/OlympusLedgerOrg/Olympus/verifiers/go"
 )
 
 type hashBatchRequest struct {

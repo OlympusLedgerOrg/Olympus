@@ -16,7 +16,7 @@ This guide provides copy-paste commands to get Olympus up and running quickly.
 
 ```bash
 # Clone repository
-git clone https://github.com/wombatvagina69-crypto/Olympus.git
+git clone https://github.com/OlympusLedgerOrg/Olympus.git
 cd Olympus
 
 # Create virtual environment
@@ -686,7 +686,7 @@ See `proofs/README.md` for full circuit documentation.
 
 ## 12. Next Steps
 
-1. **Read the documentation**: Start with `README.md` and `ARCHITECTURE.md`
+1. **Read the documentation**: Start with `README.md` and `docs/architecture.md`
 2. **Explore the protocol**: Check `protocol/` for core primitives
 3. **Run examples**: See `examples/` for usage patterns and the new walkthrough notebooks (`*.ipynb`)
 4. **Review tests**: `tests/` shows expected behavior
@@ -697,7 +697,7 @@ See `proofs/README.md` for full circuit documentation.
 
 ## 13. Resources
 
-- **Repository**: https://github.com/wombatvagina69-crypto/Olympus
+- **Repository**: https://github.com/OlympusLedgerOrg/Olympus
 - **Documentation**: `docs/` directory
 - **Protocol Specs**: `docs/00_overview.md` → `docs/07_*.md`
 - **API Docs** (when running): http://localhost:8000/docs
