@@ -76,11 +76,6 @@ class _FakeCursor:
         self.statements.append(_normalize_sql(sql))
 
 
-class _FakeTree:
-    def __init__(self) -> None:
-        self.nodes = {(0,): b"\x01" * 32, (1, 0): b"\x02" * 32}
-
-
 def test_get_connection_retries_transient_failures(monkeypatch: pytest.MonkeyPatch) -> None:
     """Transient pool failures are retried with backoff before succeeding."""
     monkeypatch.setattr(postgres_module, "ConnectionPool", _RetryPool)
@@ -143,16 +138,6 @@ def test_get_connection_rolls_back_before_returning_to_pool(
 
     assert storage._pool.connection.rollback_calls == 1
     assert storage._pool.putconn_calls == 1
-
-
-def test_persist_tree_nodes_uses_upsert_without_precheck(monkeypatch: pytest.MonkeyPatch) -> None:
-    """_persist_tree_nodes is retired in 0.12 and raises NotImplementedError."""
-    monkeypatch.setattr(postgres_module, "ConnectionPool", _RetryPool)
-    storage = StorageLayer("postgresql://unused")
-    cursor = _FakeCursor()
-
-    with pytest.raises(NotImplementedError, match="Retired in 0.12"):
-        storage._persist_tree_nodes(cursor, "shard", _FakeTree())
 
 
 def test_fake_cursor_executemany_records_normalized_sql() -> None:
