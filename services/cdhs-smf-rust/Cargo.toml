@@ -21,6 +21,7 @@ tokio-stream = { version = "0.1", features = ["net"] }
 # Cryptography
 blake3 = "1.5"
 ed25519-dalek = { version = "2.1", features = ["rand_core"] }
+zeroize = "1.7"
 rand = "0.8"
 
 # Serialization

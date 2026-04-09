@@ -77,10 +77,14 @@ global_key = BLAKE3(
   shard_id ||
   record_type ||
   record_id ||
-  version ||
-  sorted(metadata)
+  version
 )
 ```
+
+> **Note:** The `metadata` field in `RecordKey` is reserved for future use.
+> The service rejects requests with non-empty metadata to prevent collision
+> attacks where two records differing only in metadata would silently map to
+> the same global key.
 
 This ensures:
 - Logical sharding by keyspace
