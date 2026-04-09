@@ -1312,8 +1312,12 @@ async def ingest_batch(
                         "poseidon_root": persisted_poseidon_root,
                     }
 
-                    # Use pre-fetched batch response
-                    assert seq_results is not None
+                    # Use pre-fetched batch response (seq_results is guaranteed set
+                    # by the batch call above when storage and signing_key are configured)
+                    if seq_results is None:
+                        raise RuntimeError(
+                            "Sequencer batch response missing when storage is configured"
+                        )
                     seq_resp = seq_results[loop_index]
                     seq_merkle_root = seq_resp["new_root"]
                     seq_global_key = seq_resp["global_key"]
