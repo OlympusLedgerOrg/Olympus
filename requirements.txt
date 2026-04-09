@@ -202,9 +202,9 @@ blake3==1.0.8 \
     --hash=sha256:fe1b02ab49bfd969ef50b9f17482a2011c77536654af21807ba5c2674e0bb2a0 \
     --hash=sha256:fe61d52da1d102aabb0e315d3fc613c11c103376aa0a8510aeee159939612f76
     # via olympus (pyproject.toml)
-boto3==1.42.83 \
-    --hash=sha256:544846fdb10585bb7837e409868e8e04c6b372fa04479ba1597ce82cf1242076 \
-    --hash=sha256:cc5621e603982cb3145b7f6c9970e02e297a1a0eb94637cc7f7b69d3017640ee
+boto3==1.42.86 \
+    --hash=sha256:492c3c7cbbe9842882680064902f50cf711b5ab770d26525549872339ed95d5b \
+    --hash=sha256:c87d2a750b1a8cad0384d1a83d3bad6aedf924ae9a14aaba814bcb3297b39c01
     # via olympus (pyproject.toml)
 botocore==1.42.83 \
     --hash=sha256:34bc8cb64b17ac17f8901f073fe4fc9572a5cac9393a37b2b3ea372a83b87f4a \
