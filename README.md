@@ -132,7 +132,7 @@ Python version: **>=3.10** (3.12 used for CI tooling and dependency locking).
 
 ## Current Repository State
 
-**Security audit complete:** All findings closed. Rust hot-path live via `olympus_core`. Go verifier vendored and conformance-tested. Coverage ≥85%.
+**Security audit complete (two rounds):** All critical and high findings closed. Remaining medium items (RT-M3 gate secret enforcement, Poseidon O(N) optimization) tracked in [`docs/SECURITY_AUDIT_REPORT_V2.md`](docs/SECURITY_AUDIT_REPORT_V2.md). Rust hot-path live via `olympus_core`. Go verifier vendored and conformance-tested. Coverage ≥85%.
 
 **Current phase:** Phase 0 (protocol hardening complete, ready for public deployment).
 
