@@ -1110,6 +1110,54 @@ async def _call_sequencer_queue_leaf(
     return cast(dict[str, Any], resp.json())
 
 
+async def _call_sequencer_queue_leaves_batch(
+    records: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """Call /v1/queue-leaves for an entire shard group in one HTTP roundtrip.
+
+    Args:
+        records: List of dicts with keys: shard_id, record_type, record_id,
+                 version (str|None), canonical_content (bytes).
+
+    Returns:
+        List of QueueLeafResponse dicts in the same order as the input.
+
+    Raises:
+        HTTPException 503: If the sequencer is unreachable or returns non-2xx.
+    """
+    url = f"http://{_sequencer_addr}/v1/queue-leaves"
+    payload = {
+        "records": [
+            {
+                "shard_id": r["shard_id"],
+                "record_type": r["record_type"],
+                "record_id": r["record_id"],
+                "version": r.get("version") or "",
+                "content": base64.b64encode(r["canonical_content"]).decode(),
+                "content_type": "application/json",
+            }
+            for r in records
+        ]
+    }
+    try:
+        client = _get_sequencer_client()
+        resp = await client.post(
+            url,
+            json=payload,
+            headers={"X-Sequencer-Token": _sequencer_token},
+        )
+    except httpx.RequestError as exc:
+        logger.error("sequencer_unreachable error=%s", exc)
+        raise HTTPException(status_code=503, detail="Sequencer unavailable") from exc
+
+    if resp.status_code != 200:
+        logger.error("sequencer_batch_error status=%d body=%.200s", resp.status_code, resp.text)
+        raise HTTPException(status_code=503, detail="Sequencer returned an error")
+
+    data = cast(dict[str, Any], resp.json())
+    return cast(list[dict[str, Any]], data["results"])
+
+
 # ---------------------------------------------------------------------------
 # Endpoints
 # ---------------------------------------------------------------------------
@@ -1205,6 +1253,22 @@ async def ingest_batch(
                 else PoseidonSMT()
             )
 
+            # Build batch payload and call sequencer once for all records in this shard
+            seq_results: list[dict[str, Any]] | None = None
+            if storage is not None and _signing_key is not None:
+                batch_inputs = [
+                    {
+                        "shard_id": record.shard_id,
+                        "record_type": record.record_type,
+                        "record_id": record.record_id,
+                        "version": str(record.version) if record.version is not None else None,
+                        "canonical_content": record_data_map[original_idx][3],
+                    }
+                    for original_idx, record in shard_records
+                ]
+                seq_results = await _call_sequencer_queue_leaves_batch(batch_inputs)
+
+            loop_index = 0
             for original_idx, record in shard_records:
                 content_hash, content_hash_bytes, proof_id, canonical_content = record_data_map[
                     original_idx
@@ -1238,69 +1302,59 @@ async def ingest_batch(
 
                 # If PostgreSQL is configured, persist record durably
                 if storage is not None and _signing_key is not None:
-                    try:
-                        poseidon_smt.update(
-                            record_smt_key, _value_hash_to_poseidon_field(content_hash_bytes)
-                        )
-                        poseidon_root = str(poseidon_smt.get_root())
-                        persisted_poseidon_root = poseidon_root
-                        canonicalization_with_poseidon = {
-                            **canonicalization,
-                            "poseidon_root": persisted_poseidon_root,
-                        }
+                    poseidon_smt.update(
+                        record_smt_key, _value_hash_to_poseidon_field(content_hash_bytes)
+                    )
+                    poseidon_root = str(poseidon_smt.get_root())
+                    persisted_poseidon_root = poseidon_root
+                    canonicalization_with_poseidon = {
+                        **canonicalization,
+                        "poseidon_root": persisted_poseidon_root,
+                    }
 
-                        # Delegate SMT update to the Go sequencer.
-                        seq_resp = await _call_sequencer_queue_leaf(
-                            shard_id=record.shard_id,
-                            record_type=record.record_type,
-                            record_id=record.record_id,
-                            version=str(record.version) if record.version is not None else None,
-                            canonical_content=canonical_content,
-                        )
-                        seq_merkle_root = seq_resp["new_root"]
-                        seq_global_key = seq_resp["global_key"]
-                        seq_leaf_hash = seq_resp["leaf_value_hash"]
-                        seq_committed_ts = current_timestamp()
-                        seq_merkle_proof: dict[str, Any] = {
-                            "leaf_hash": seq_leaf_hash,
-                            "leaf_index": str(int(seq_global_key, 16)),
-                            "siblings": [],
-                            "root_hash": seq_merkle_root,
-                            "tree_size": str(seq_resp["tree_size"]),
-                            "proof_version": PROOF_VERSION,
-                            "tree_version": MERKLE_VERSION,
-                            "smt_key": seq_global_key,
-                        }
-                        # ledger_entry_hash is the BLAKE3 hash of the canonical record bytes,
-                        # consistent with hash_bytes() applied to the same canonical content
-                        # that _process_record_canonicalization already computed.
-                        record_ledger_hash = hash_bytes(canonical_content).hex()
-                        ingestion_entry = {
-                            "proof_id": proof_id,
-                            "record_id": record.record_id,
-                            "shard_id": record.shard_id,
-                            "record_type": record.record_type,
-                            "version": record.version,
-                            "content_hash": content_hash,
-                            "merkle_root": seq_merkle_root,
-                            "merkle_proof": seq_merkle_proof,
-                            "ledger_entry_hash": record_ledger_hash,
-                            "timestamp": seq_committed_ts,
-                            "canonicalization": canonicalization_with_poseidon,
-                            "persisted": True,
-                            "batch_id": batch_id,
-                            "batch_index": len(persist_queue),
-                            "poseidon_root": persisted_poseidon_root,
-                        }
-                        _cache_ingestion_record(ingestion_entry)
-                        persist_queue.append(ingestion_entry)
-                        ts = seq_committed_ts
-                        ledger_entry_hash = record_ledger_hash
-                        logger.info("Record %s sequenced via Go sequencer", record.record_id)
-                    except HTTPException:
-                        # Re-raise HTTP exceptions (e.g. 503 from sequencer) so they
-                        # fail the whole batch atomically.
-                        raise
+                    # Use pre-fetched batch response
+                    assert seq_results is not None
+                    seq_resp = seq_results[loop_index]
+                    seq_merkle_root = seq_resp["new_root"]
+                    seq_global_key = seq_resp["global_key"]
+                    seq_leaf_hash = seq_resp["leaf_value_hash"]
+                    seq_committed_ts = current_timestamp()
+                    seq_merkle_proof: dict[str, Any] = {
+                        "leaf_hash": seq_leaf_hash,
+                        "leaf_index": str(int(seq_global_key, 16)),
+                        "siblings": [],
+                        "root_hash": seq_merkle_root,
+                        "tree_size": str(seq_resp["tree_size"]),
+                        "proof_version": PROOF_VERSION,
+                        "tree_version": MERKLE_VERSION,
+                        "smt_key": seq_global_key,
+                    }
+                    # ledger_entry_hash is the BLAKE3 hash of the canonical record bytes,
+                    # consistent with hash_bytes() applied to the same canonical content
+                    # that _process_record_canonicalization already computed.
+                    record_ledger_hash = hash_bytes(canonical_content).hex()
+                    ingestion_entry = {
+                        "proof_id": proof_id,
+                        "record_id": record.record_id,
+                        "shard_id": record.shard_id,
+                        "record_type": record.record_type,
+                        "version": record.version,
+                        "content_hash": content_hash,
+                        "merkle_root": seq_merkle_root,
+                        "merkle_proof": seq_merkle_proof,
+                        "ledger_entry_hash": record_ledger_hash,
+                        "timestamp": seq_committed_ts,
+                        "canonicalization": canonicalization_with_poseidon,
+                        "persisted": True,
+                        "batch_id": batch_id,
+                        "batch_index": len(persist_queue),
+                        "poseidon_root": persisted_poseidon_root,
+                    }
+                    _cache_ingestion_record(ingestion_entry)
+                    persist_queue.append(ingestion_entry)
+                    ts = seq_committed_ts
+                    ledger_entry_hash = record_ledger_hash
+                    logger.info("Record %s sequenced via Go sequencer", record.record_id)
                 else:
                     # Fall back to in-memory storage
                     new_hashes.append(content_hash_bytes)
@@ -1323,6 +1377,7 @@ async def ingest_batch(
                 )
 
                 _content_index[content_hash] = proof_id
+                loop_index += 1
 
             # Build Merkle tree from new content hashes (in-memory path only)
             ingested_count = len(shard_records) - dedup_count

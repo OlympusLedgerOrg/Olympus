@@ -13,7 +13,7 @@ from __future__ import annotations
 from contextlib import contextmanager
 from types import SimpleNamespace
 from typing import Any
-from unittest.mock import AsyncMock, patch
+from unittest.mock import patch
 
 import nacl.signing
 import pytest
@@ -138,10 +138,13 @@ class TestSequencerHappyPath:
         client, _ = seq_client
         resp_dict = _fake_seq_resp()
 
+        async def _batch_mock(records):
+            return [resp_dict]
+
         with patch.object(
             ingest_api,
-            "_call_sequencer_queue_leaf",
-            new=AsyncMock(return_value=resp_dict),
+            "_call_sequencer_queue_leaves_batch",
+            new=_batch_mock,
         ):
             resp = client.post(
                 "/ingest/records",
@@ -183,10 +186,13 @@ class TestSequencerHappyPath:
             document_to_bytes(canonicalize_document(record_content))
         ).hex()
 
+        async def _batch_mock(records):
+            return [resp_dict]
+
         with patch.object(
             ingest_api,
-            "_call_sequencer_queue_leaf",
-            new=AsyncMock(return_value=resp_dict),
+            "_call_sequencer_queue_leaves_batch",
+            new=_batch_mock,
         ):
             resp = client.post(
                 "/ingest/records",
@@ -221,10 +227,13 @@ class TestSequencerHappyPath:
         client, fake_storage = seq_client
         resp_dict = _fake_seq_resp()
 
+        async def _batch_mock(records):
+            return [resp_dict]
+
         with patch.object(
             ingest_api,
-            "_call_sequencer_queue_leaf",
-            new=AsyncMock(return_value=resp_dict),
+            "_call_sequencer_queue_leaves_batch",
+            new=_batch_mock,
         ):
             resp = client.post(
                 "/ingest/records",
@@ -266,10 +275,13 @@ class TestSequencerBatchAtomicity:
         client, fake_storage = seq_client
         from fastapi import HTTPException
 
+        async def _batch_mock(records):
+            raise HTTPException(status_code=503, detail="Sequencer down")
+
         with patch.object(
             ingest_api,
-            "_call_sequencer_queue_leaf",
-            new=AsyncMock(side_effect=HTTPException(status_code=503, detail="Sequencer down")),
+            "_call_sequencer_queue_leaves_batch",
+            new=_batch_mock,
         ):
             resp = client.post(
                 "/ingest/records",
@@ -291,30 +303,19 @@ class TestSequencerBatchAtomicity:
         # DB must not have received any records.
         assert len(fake_storage.stored_batches) == 0
 
-    def test_503_on_record_n_fails_entire_batch(self, seq_client):
-        """Records before the failing record should not be persisted to DB.
+    def test_503_on_batch_fails_entire_batch(self, seq_client):
+        """Batch endpoint failure should not persist anything to DB.
 
-        When record 2 (0-indexed) of a 3-record batch fails, store_ingestion_batch
-        must not be called — the DB transaction never starts.
+        With the batch endpoint, failures are atomic since the entire batch
+        is sent in one call.
         """
         client, fake_storage = seq_client
         from fastapi import HTTPException
 
-        call_count = 0
+        async def _failing_batch(records):
+            raise HTTPException(status_code=503, detail="Sequencer error")
 
-        async def _flaky_sequencer(*args, **kwargs):
-            nonlocal call_count
-            call_count += 1
-            if call_count >= 2:
-                raise HTTPException(status_code=503, detail="Sequencer error on record 2")
-            return _fake_seq_resp(
-                new_root="aa" * 32,
-                global_key="bb" * 32,
-                leaf_value_hash="cc" * 32,
-                tree_size=call_count,
-            )
-
-        with patch.object(ingest_api, "_call_sequencer_queue_leaf", new=_flaky_sequencer):
+        with patch.object(ingest_api, "_call_sequencer_queue_leaves_batch", new=_failing_batch):
             resp = client.post(
                 "/ingest/records",
                 json={
@@ -340,19 +341,19 @@ class TestSequencerBatchAtomicity:
         """All records in a successful batch must be written in one DB call."""
         client, fake_storage = seq_client
         n = 5
-        call_counter = 0
 
-        async def _seq(*args, **kwargs):
-            nonlocal call_counter
-            call_counter += 1
-            return _fake_seq_resp(
-                new_root=hex(call_counter)[2:].zfill(64),
-                global_key=hex(call_counter + 100)[2:].zfill(64),
-                leaf_value_hash=hex(call_counter + 200)[2:].zfill(64),
-                tree_size=call_counter,
-            )
+        async def _batch_mock(records):
+            return [
+                _fake_seq_resp(
+                    new_root=hex(i + 1)[2:].zfill(64),
+                    global_key=hex(i + 101)[2:].zfill(64),
+                    leaf_value_hash=hex(i + 201)[2:].zfill(64),
+                    tree_size=i + 1,
+                )
+                for i in range(len(records))
+            ]
 
-        with patch.object(ingest_api, "_call_sequencer_queue_leaf", new=_seq):
+        with patch.object(ingest_api, "_call_sequencer_queue_leaves_batch", new=_batch_mock):
             resp = client.post(
                 "/ingest/records",
                 json={
@@ -375,6 +376,90 @@ class TestSequencerBatchAtomicity:
         assert len(fake_storage.stored_batches) == 1
         _, records = fake_storage.stored_batches[0]
         assert len(records) == n
+
+
+# ---------------------------------------------------------------------------
+# Batch endpoint integration: _call_sequencer_queue_leaves_batch
+# ---------------------------------------------------------------------------
+
+
+class TestSequencerBatchEndpoint:
+    """Verify the batch endpoint _call_sequencer_queue_leaves_batch populates ingestion_entries."""
+
+    def test_batch_endpoint_populates_all_ingestion_entries(self, seq_client):
+        """A 3-record batch must populate all three ingestion_entry dicts correctly."""
+        client, fake_storage = seq_client
+
+        # Mock response for batch endpoint: 3 records with distinct hashes
+        batch_results = [
+            _fake_seq_resp(
+                new_root="11" * 32,
+                global_key="a1" * 32,
+                leaf_value_hash="b1" * 32,
+                tree_size=1,
+            ),
+            _fake_seq_resp(
+                new_root="22" * 32,
+                global_key="a2" * 32,
+                leaf_value_hash="b2" * 32,
+                tree_size=2,
+            ),
+            _fake_seq_resp(
+                new_root="33" * 32,
+                global_key="a3" * 32,
+                leaf_value_hash="b3" * 32,
+                tree_size=3,
+            ),
+        ]
+
+        async def _batch_mock(records):
+            # Verify we're receiving 3 records
+            assert len(records) == 3
+            return batch_results
+
+        with patch.object(
+            ingest_api,
+            "_call_sequencer_queue_leaves_batch",
+            new=_batch_mock,
+        ):
+            resp = client.post(
+                "/ingest/records",
+                json={
+                    "records": [
+                        {
+                            "shard_id": "shard-batch",
+                            "record_type": "doc",
+                            "record_id": f"doc-batch-{i}",
+                            "version": 1,
+                            "content": {"batch_idx": i},
+                        }
+                        for i in range(3)
+                    ]
+                },
+            )
+
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["ingested"] == 3
+        assert data["deduplicated"] == 0
+        assert len(data["results"]) == 3
+
+        # Verify all three records were persisted via store_ingestion_batch
+        assert len(fake_storage.stored_batches) == 1
+        _, stored_records = fake_storage.stored_batches[0]
+        assert len(stored_records) == 3
+
+        # Verify each ingestion_entry has the correct fields populated
+        for i, record in enumerate(stored_records):
+            assert record["record_id"] == f"doc-batch-{i}"
+            assert record["shard_id"] == "shard-batch"
+            assert record["record_type"] == "doc"
+            assert record["merkle_root"] == batch_results[i]["new_root"]
+            assert record["merkle_proof"]["smt_key"] == batch_results[i]["global_key"]
+            assert record["merkle_proof"]["leaf_hash"] == batch_results[i]["leaf_value_hash"]
+            assert record["persisted"] is True
+            # ledger_entry_hash must be set (BLAKE3 of canonical content)
+            assert record["ledger_entry_hash"] != ""
 
 
 # ---------------------------------------------------------------------------
