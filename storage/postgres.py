@@ -70,8 +70,8 @@ logger = logging.getLogger(__name__)
 
 
 # ADR-0001: BLAKE3 domain-separated gate value for the smt_nodes rehash
-# trigger.  _persist_tree_nodes sets this as a session variable before
-# running the upsert; the trigger function checks for it.
+# trigger.  The append_record write path sets this as a session variable
+# before running the upsert; the trigger function checks for it.
 _NODE_REHASH_GATE: str = derive_node_rehash_gate()
 
 
@@ -647,7 +647,7 @@ class StorageLayer:
             # ------------------------------------------------------------------
             # Internal SMT nodes are *derived state* — their hashes change
             # whenever a new leaf is inserted and the path from leaf to root
-            # is rehashed.  _persist_tree_nodes sets the session variable
+            # is rehashed.  The append_record write path sets the session variable
             # ``olympus.allow_node_rehash`` to a BLAKE3 domain-separated hash
             # (via SET LOCAL, scoped to the current transaction) before
             # running the upsert.  Ad-hoc UPDATE statements that do not set
@@ -1331,9 +1331,8 @@ class StorageLayer:
                 # is discarded and replaced with a transaction-authoritative recomputation from smt_leaves.
                 # Future API improvement: Consider renaming to enable_poseidon: bool for clarity.
                 #
-                # Poseidon root requires all leaves — query from DB when tree is
-                # unavailable (incremental path).  This is O(N) but only runs
-                # when ZK proofs are enabled.
+                # Poseidon root requires all leaves — query from DB.
+                # This is O(N) but only runs when ZK proofs are enabled.
                 cur.execute("SELECT key, value_hash FROM smt_leaves ORDER BY key")
                 all_leaves: dict[bytes, bytes] = {}
                 for leaf_row in cur.fetchall():
@@ -1730,7 +1729,7 @@ class StorageLayer:
             # Always use the historical leaf replay path to verify the
             # header root.  The O(1) smt_nodes shortcut (as_of_ts=None)
             # cannot detect forged leaves that were inserted directly into
-            # smt_leaves without going through _persist_tree_nodes.
+            # smt_leaves without going through the append_record write path.
             self._assert_root_matches_state(cur, shard_id, bytes(row["root"]), as_of_ts=row["ts"])
 
             return {
@@ -2430,8 +2429,8 @@ class StorageLayer:
             cur: Active database cursor (read-only).
             shard_id: Shard identifier (used only in error messages).
             expected_root: Root hash from persisted header.
-            as_of_ts: Optional timestamp cutoff forwarded to
-                :meth:`_load_tree_state`.  When *None* the current root node
+            as_of_ts: Optional timestamp cutoff for historical replay
+                from ``smt_leaves``.  When *None* the current root node
                 is read directly.
 
         Raises:
