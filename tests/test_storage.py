@@ -65,8 +65,9 @@ pytestmark = [
         reason="TEST_DATABASE_URL is not set; skipping PostgreSQL storage tests.",
     ),
     pytest.mark.skip(
-        reason="Retired in 0.12: storage.append_record() now routes through the Go sequencer. "
-        "These tests need to be rewritten to use the ingest API or run with a sequencer.",
+        reason="storage.append_record() requires olympus_core Rust extension; "
+        "fallback path calls _load_tree_state which raises NotImplementedError since 0.12. "
+        "Run `maturin develop` to build olympus_core, or rewrite tests to use ingest API.",
     ),
 ]
 
