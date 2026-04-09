@@ -203,8 +203,8 @@ def test_ledger_entry_hash_parity(parity_client, record_input, seq_resp):
 
     with patch.object(
         ingest_api,
-        "_call_sequencer_queue_leaf",
-        new=AsyncMock(return_value=seq_resp),
+        "_call_sequencer_queue_leaves_batch",
+        new=AsyncMock(return_value=[seq_resp]),
     ):
         resp = client.post("/ingest/records", json={"records": [record_input]})
 
