@@ -65,7 +65,6 @@ def test_iter_batches_rejects_non_positive_batch_size() -> None:
         raise AssertionError("Expected ValueError for batch_size=0")
 
 
-
 def test_store_ingestion_batch_flushes_proofs_in_chunks() -> None:
     storage = _make_storage_for_unit_tests()
     cursor = _FakeCursor()

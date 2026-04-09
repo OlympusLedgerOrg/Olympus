@@ -1392,7 +1392,7 @@ const file_proto_cdhs_smf_proto_rawDesc = "" +
 	"\fCanonicalize\x12(.olympus.cdhs_smf.v1.CanonicalizeRequest\x1a).olympus.cdhs_smf.v1.CanonicalizeResponse\x12T\n" +
 	"\aGetRoot\x12#.olympus.cdhs_smf.v1.GetRootRequest\x1a$.olympus.cdhs_smf.v1.GetRootResponse\x12W\n" +
 	"\bSignRoot\x12$.olympus.cdhs_smf.v1.SignRootRequest\x1a%.olympus.cdhs_smf.v1.SignRootResponse\x12W\n" +
-	"\fReplayLeaves\x12\".olympus.cdhs_smf.v1.ReplayRequest\x1a#.olympus.cdhs_smf.v1.ReplayResponseBCZAgithub.com/OlympusLedgerOrg/Olympus/services/sequencer/protob\x06proto3"
+	"\fReplayLeaves\x12\".olympus.cdhs_smf.v1.ReplayRequest\x1a#.olympus.cdhs_smf.v1.ReplayResponseB>Z<github.com/OlympusLedgerOrg/Olympus/services/sequencer/protob\x06proto3"
 
 var (
 	file_proto_cdhs_smf_proto_rawDescOnce sync.Once
