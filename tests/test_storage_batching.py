@@ -5,8 +5,6 @@ from __future__ import annotations
 from contextlib import contextmanager
 from datetime import datetime, timezone
 
-import pytest
-
 from protocol.hashes import hash_bytes
 from storage.postgres import StorageLayer
 

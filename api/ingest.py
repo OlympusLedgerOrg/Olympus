@@ -897,17 +897,22 @@ def _build_poseidon_smt_for_storage_shard(
     from protocol.poseidon_smt import PoseidonSMT
 
     with storage._get_connection() as conn, conn.cursor() as cur:
-        # _OLYMPUS_POSEIDON_CARVE_OUT: this is the only approved O(N)
-        # _load_tree_state call in the ingest path.
-        tree = storage._load_tree_state(
-            cur,
-            up_to_ts=up_to_ts,
-            _OLYMPUS_POSEIDON_CARVE_OUT=True,
-        )
+        # O(N) leaf scan — only runs when Poseidon / ZK proofs are enabled.
+        if up_to_ts is not None:
+            if isinstance(up_to_ts, str):
+                up_to_ts = datetime.fromisoformat(up_to_ts)
+            cur.execute(
+                "SELECT key, value_hash FROM smt_leaves WHERE ts <= %s ORDER BY key",
+                (up_to_ts,),
+            )
+        else:
+            cur.execute("SELECT key, value_hash FROM smt_leaves ORDER BY key")
 
-    poseidon_smt = PoseidonSMT()
-    for key, value_hash in tree.leaves.items():
-        poseidon_smt.update(key, _value_hash_to_poseidon_field(value_hash))
+        poseidon_smt = PoseidonSMT()
+        for row in cur.fetchall():
+            leaf_key = bytes(row["key"])
+            value_hash = bytes(row["value_hash"])
+            poseidon_smt.update(leaf_key, _value_hash_to_poseidon_field(value_hash))
     return poseidon_smt
 
 
