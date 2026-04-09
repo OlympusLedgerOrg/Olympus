@@ -293,13 +293,14 @@ analogous to the existing shard header verification.
 |-----------|-------|
 | **Severity** | Medium |
 | **Exploitability** | Moderate (attacker inserts many records, then triggers audit) |
-| **Location** | `storage/postgres.py` — `_load_tree_state()` |
+| **Location** | `storage/protocol_state.py` — `load_tree_state()` |
+| **Status** | ✅ Fixed |
 
 **Description:**
-The `_load_tree_state()` function loads **all** SMT leaves into memory for tree
-reconstruction. For a shard with millions of leaves, this can exhaust available
-memory. The incremental tree reconstruction (ADR-0001) addresses this for the
-forward path, but historical replay still loads all leaves.
+The `load_tree_state()` function loaded **all** SMT leaves into memory for tree
+reconstruction. For a shard with millions of leaves, this could exhaust available
+memory. The incremental tree reconstruction (ADR-0001) addressed this for the
+forward path, but historical replay still loaded all leaves.
 
 **Cross-reference:** This is related to finding M-7 in the
 [V1 audit report](SECURITY_AUDIT_REPORT.md), which was marked as verified fixed.
@@ -308,6 +309,11 @@ address the historical replay case.
 
 **Recommendation:** Extend ADR-0001's incremental approach to historical replays,
 or enforce a maximum replay window.
+
+**Fix applied:** `load_tree_state()` now uses `fetchmany(batch_size)` (default
+10 000 rows) instead of `fetchall()`, bounding peak memory to O(batch_size)
+rows regardless of total leaf count. A `batch_size` parameter is exposed for
+caller control.
 
 ---
 
@@ -544,7 +550,7 @@ The following table summarizes the verified properties of the ledger commitment 
 | H-3: Dual rate-limit systems | 🔴 Still open; not re-examined (out of scope) |
 | H-5: proof_id unvalidated | 🔴 Still open; not re-examined (out of scope) |
 | M-2: Dataset file commit unbounded | 🔴 Still open; not re-examined (out of scope) |
-| M-7: Unbounded tree replay | ✅ Verified fixed for forward path; RT-M2 identifies historical replay gap |
+| M-7: Unbounded tree replay | ✅ Verified fixed for forward path; RT-M2 now also fixed for historical replay |
 
 ---
 
