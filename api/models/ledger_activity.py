@@ -47,7 +47,7 @@ class LedgerActivity(Base):
     activity_type: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
     title: Mapped[str] = mapped_column(String(255), nullable=False)
     description: Mapped[str] = mapped_column(Text, nullable=False)
-    related_commit_id: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
+    related_commit_id: Mapped[str | None] = mapped_column(String(66), nullable=True, index=True)
     related_request_id: Mapped[str | None] = mapped_column(String(36), nullable=True, index=True)
     # Indexed display_id for O(1) OLY-NNNN lookups (C2).  Populated by the
     # ingestion service when activity_type = 'DOCUMENT_SUBMITTED'.

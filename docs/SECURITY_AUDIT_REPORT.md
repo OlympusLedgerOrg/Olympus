@@ -510,7 +510,7 @@ The TSA URL is fetched without certificate pinning. A MITM attacker with a valid
 | ID | Description | Location | Notes |
 |----|-------------|----------|-------|
 | I-1 | Duplicate client IP resolution | — | Resolved via M-4 (PR #545) |
-| I-2 | `generate_commit_id()` uses 160-bit, not 256-bit | `api/services/hasher.py:64-70` | Open |
+| I-2 | `generate_commit_id()` uses 160-bit, not 256-bit | `api/services/hasher.py:64-70` | Fixed — changed to `os.urandom(32)` (256-bit) |
 | I-3 | `submit_proof_bundle` did not persist to Postgres | `api/ingest.py` | Resolved via M-6 (PR #544) |
 | I-4 | `_build_poseidon_smt_for_storage_shard` called private methods | `api/ingest.py` | Resolved via C-1 (PR #538) |
 | I-5 | `dataset_history` endpoint has no authentication | `api/routers/datasets.py` | Open (public read is intentional per API design) |

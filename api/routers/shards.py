@@ -39,8 +39,6 @@ router = APIRouter(tags=["shards"])
 # Shard IDs are alphanumeric strings with optional hyphens, colons, and dots.
 # Maximum 128 characters.  This rejects path traversal, SQL injection, and
 # other malformed inputs at the FastAPI validation layer (M5).
-# RT-L1: Allowed character set is intentionally restricted to ASCII letters,
-# digits, underscore, dot, colon, and hyphen to prevent log injection.
 _SHARD_ID_RE = r"^[A-Za-z0-9:._-]{1,128}$"
 _SHARD_ID_PATTERN = re.compile(_SHARD_ID_RE)
 _SHARD_ID_PATH = Path(

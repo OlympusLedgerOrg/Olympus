@@ -393,6 +393,10 @@ SQL injection is not possible.
 **Recommendation:** Document the allowed character set in the API specification.
 Consider restricting to `^[a-zA-Z0-9_.\-:]+$` (removing `/`, `@`, `+`).
 
+**Status:** Fixed — shard IDs now use `.` as namespace separator (e.g.
+`records.city-a` instead of `records/city-a`). The validation pattern
+`^[a-zA-Z0-9_.:\-]+$` already excludes `/`, `@`, and `+`.
+
 ---
 
 #### RT-L2: Token Expiration Check Not Constant-Time
@@ -415,6 +419,9 @@ of measurements and local network access.
 
 **Recommendation:** Move expiration check into the constant-time lookup path,
 or accept the risk given the impracticality of exploitation.
+
+**Status:** Fixed — expiration check moved into `_constant_time_lookup()` so
+that the timing of the response no longer varies based on expiration state.
 
 ---
 

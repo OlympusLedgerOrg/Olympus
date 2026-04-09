@@ -44,7 +44,7 @@ class DocCommit(Base):
         String(36), ForeignKey("public_records_requests.id"), nullable=True
     )
     doc_hash: Mapped[str] = mapped_column(String(64), nullable=False)
-    commit_id: Mapped[str] = mapped_column(String(64), nullable=False, unique=True)
+    commit_id: Mapped[str] = mapped_column(String(66), nullable=False, unique=True)
     epoch_timestamp: Mapped[datetime] = mapped_column(
         DateTime, nullable=False, default=lambda: datetime.now(timezone.utc)
     )

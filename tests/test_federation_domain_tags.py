@@ -16,7 +16,7 @@ from protocol.shards import create_shard_header, get_signing_key_from_seed
 
 def test_event_id_is_deterministic_and_includes_domain_prefix() -> None:
     """Event IDs should be deterministic and include domain separation."""
-    shard_id = "records/test"
+    shard_id = "records.test"
     header_hash = "a" * 64
     timestamp = "2026-03-09T00:00:00Z"
 
@@ -31,7 +31,7 @@ def test_event_id_is_deterministic_and_includes_domain_prefix() -> None:
     assert all(c in "0123456789abcdef" for c in event_id_1)
 
     # Different inputs should produce different event IDs
-    different_shard_id = event_id("records/different", header_hash, timestamp)
+    different_shard_id = event_id("records.different", header_hash, timestamp)
     different_header = event_id(shard_id, "b" * 64, timestamp)
     different_timestamp = event_id(shard_id, header_hash, "2026-03-10T00:00:00Z")
 
@@ -44,12 +44,12 @@ def test_event_id_binds_to_shard_header_and_timestamp() -> None:
     """Event IDs should bind signatures to specific shard header events."""
     # Create two headers with different content
     header1 = create_shard_header(
-        shard_id="records/city-a",
+        shard_id="records.city-a",
         root_hash=bytes.fromhex("11" * 32),
         timestamp="2026-03-09T00:00:00Z",
     )
     header2 = create_shard_header(
-        shard_id="records/city-a",
+        shard_id="records.city-a",
         root_hash=bytes.fromhex("22" * 32),
         timestamp="2026-03-09T00:00:00Z",
     )
@@ -82,7 +82,7 @@ def test_event_id_prevents_field_injection() -> None:
 def test_federation_vote_hash_includes_all_required_fields() -> None:
     """Federation vote hashes should include domain, node_id, shard_id, header_hash, timestamp, and event_id."""
     node_id = "test-node-1"
-    shard_id = "records/test"
+    shard_id = "records.test"
     header_hash = "a" * 64
     timestamp = "2026-03-09T00:00:00Z"
     event_id_hex = event_id(shard_id, header_hash, timestamp)
@@ -102,7 +102,7 @@ def test_federation_vote_hash_includes_all_required_fields() -> None:
 def test_federation_vote_hash_is_deterministic() -> None:
     """Federation vote hashes should be deterministic for the same inputs."""
     node_id = "test-node-1"
-    shard_id = "records/test"
+    shard_id = "records.test"
     header_hash = "a" * 64
     timestamp = "2026-03-09T00:00:00Z"
     event_id_hex = event_id(shard_id, header_hash, timestamp)
@@ -168,7 +168,7 @@ def test_federation_signatures_bind_to_node_id() -> None:
     )
 
     header = create_shard_header(
-        shard_id="records/test",
+        shard_id="records.test",
         root_hash=bytes.fromhex("11" * 32),
         timestamp="2026-03-09T00:00:00Z",
     )
@@ -220,12 +220,12 @@ def test_signature_replay_protection_via_event_id() -> None:
 
     # Create two different headers with same timestamp
     header1 = create_shard_header(
-        shard_id="records/test",
+        shard_id="records.test",
         root_hash=bytes.fromhex("11" * 32),
         timestamp="2026-03-09T00:00:00Z",
     )
     header2 = create_shard_header(
-        shard_id="records/test",
+        shard_id="records.test",
         root_hash=bytes.fromhex("22" * 32),
         timestamp="2026-03-09T00:00:00Z",
     )
@@ -247,12 +247,12 @@ def test_cross_shard_signature_isolation() -> None:
     """Signatures should be bound to specific shards via event_id."""
     # Create headers for different shards with same root and timestamp
     header_shard_a = create_shard_header(
-        shard_id="records/shard-a",
+        shard_id="records.shard-a",
         root_hash=bytes.fromhex("11" * 32),
         timestamp="2026-03-09T00:00:00Z",
     )
     header_shard_b = create_shard_header(
-        shard_id="records/shard-b",
+        shard_id="records.shard-b",
         root_hash=bytes.fromhex("11" * 32),
         timestamp="2026-03-09T00:00:00Z",
     )

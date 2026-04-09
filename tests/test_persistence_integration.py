@@ -32,7 +32,7 @@ def test_postgres_persistence_survives_restart():
     storage1.init_schema()
 
     signing_key = nacl.signing.SigningKey(hash_bytes(b"postgres-persistence-test"))
-    shard_id = f"ingest_persistence/{uuid.uuid4()}"
+    shard_id = f"ingest_persistence.{uuid.uuid4()}"
     batch_id = str(uuid.uuid4())
     proof_id = str(uuid.uuid4())
     value_hash = hash_bytes(b"durable-ingest-payload")

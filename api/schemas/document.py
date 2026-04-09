@@ -48,8 +48,8 @@ class DocVerifyRequest(BaseModel):
 
     commit_id: str | None = Field(
         None,
-        pattern=r"^0x[0-9a-f]{40}$",
-        description="Hex commit identifier (0x + 40 hex characters).",
+        pattern=r"^0x[0-9a-f]{64}$",
+        description="Hex commit identifier (0x + 64 hex characters).",
     )
     doc_hash: str | None = Field(
         None,

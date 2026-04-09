@@ -73,7 +73,7 @@ class TestMultiNodeQuorumLifecycle:
     def _setup(self) -> None:
         self.registry = FederationRegistry.from_file(REGISTRY_PATH)
         self.header = create_shard_header(
-            shard_id="records/city-a",
+            shard_id="records.city-a",
             root_hash=bytes.fromhex("aa" * 32),
             timestamp="2026-03-10T12:00:00Z",
         )
@@ -138,7 +138,7 @@ class TestMultiNodeForkDetection:
         obs = {
             nid: GossipedShardHeader(
                 peer_id=nid,
-                shard_id="records/city-a",
+                shard_id="records.city-a",
                 seq=0,
                 header_hash=header_hash,
                 root_hash="cc" * 32,
@@ -155,7 +155,7 @@ class TestMultiNodeForkDetection:
         obs = {
             "olympus-node-1": GossipedShardHeader(
                 peer_id="olympus-node-1",
-                shard_id="records/city-a",
+                shard_id="records.city-a",
                 seq=0,
                 header_hash="aa" * 32,
                 root_hash="cc" * 32,
@@ -164,7 +164,7 @@ class TestMultiNodeForkDetection:
             ),
             "olympus-node-2": GossipedShardHeader(
                 peer_id="olympus-node-2",
-                shard_id="records/city-a",
+                shard_id="records.city-a",
                 seq=0,
                 header_hash="aa" * 32,
                 root_hash="cc" * 32,
@@ -173,7 +173,7 @@ class TestMultiNodeForkDetection:
             ),
             "olympus-node-3": GossipedShardHeader(
                 peer_id="olympus-node-3",
-                shard_id="records/city-a",
+                shard_id="records.city-a",
                 seq=0,
                 header_hash="ff" * 32,
                 root_hash="dd" * 32,
@@ -184,7 +184,7 @@ class TestMultiNodeForkDetection:
         forks = detect_shard_header_forks(obs, registry=self.registry)
         assert len(forks) >= 1
         evidence = forks[0]
-        assert evidence.shard_id == "records/city-a"
+        assert evidence.shard_id == "records.city-a"
         assert len(evidence.conflicting_header_hashes) >= 2
 
 
@@ -202,7 +202,7 @@ class TestMultiNodeDataAvailability:
 
     def _make_challenge(self) -> DataAvailabilityChallenge:
         return DataAvailabilityChallenge(
-            shard_id="records/city-a",
+            shard_id="records.city-a",
             header_hash="dd" * 32,
             challenger_id="olympus-node-1",
             challenge_nonce="deadbeef" * 8,

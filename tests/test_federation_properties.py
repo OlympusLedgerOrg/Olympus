@@ -39,7 +39,7 @@ def test_quorum_certificate_binding_is_unique(
     """A header cannot have two distinct valid quorum certificates."""
     registry = FederationRegistry.from_file(REGISTRY_PATH)
     header = create_shard_header(
-        shard_id="records/property-a",
+        shard_id="records.property-a",
         root_hash=root_hash,
         timestamp="2026-03-10T00:00:00Z",
         height=height,
@@ -66,7 +66,7 @@ def test_validator_set_tampering_invalidates_certificate(
     """Changing the validator set snapshot must invalidate an existing certificate."""
     registry = FederationRegistry.from_file(REGISTRY_PATH)
     header = create_shard_header(
-        shard_id="records/property-b",
+        shard_id="records.property-b",
         root_hash=root_hash,
         timestamp="2026-03-11T00:00:00Z",
         height=height,
@@ -104,7 +104,7 @@ def test_duplicate_signatures_never_satisfy_quorum(
     """Duplicate votes from the same node must not satisfy quorum thresholds."""
     registry = FederationRegistry.from_file(REGISTRY_PATH)
     header = create_shard_header(
-        shard_id="records/property-c",
+        shard_id="records.property-c",
         root_hash=root_hash,
         timestamp="2026-03-12T00:00:00Z",
         height=height,
