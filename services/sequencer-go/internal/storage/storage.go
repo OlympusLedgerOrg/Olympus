@@ -157,6 +157,52 @@ func (s *PostgresStorage) StoreLeafAndDeltas(ctx context.Context, deltas []SmtDe
 	return tx.Commit()
 }
 
+// BatchLeaf groups a leaf entry with its SMT node deltas for atomic batch storage.
+type BatchLeaf struct {
+	Leaf   LeafEntry
+	Deltas []SmtDelta
+}
+
+// StoreLeafAndDeltasBatch atomically persists all leaves, their node deltas,
+// and the final root in a single transaction. All leaves share the post-batch
+// root — only one root row is written regardless of batch size.
+func (s *PostgresStorage) StoreLeafAndDeltasBatch(
+	ctx context.Context,
+	batch []BatchLeaf,
+	root []byte,
+	treeSize uint64,
+	signature []byte,
+) error {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("begin tx: %w", err)
+	}
+	defer tx.Rollback()
+
+	if err := setRehashGate(ctx, tx); err != nil {
+		return err
+	}
+
+	for _, bl := range batch {
+		for _, delta := range bl.Deltas {
+			if err := storeNodeDeltaInTx(ctx, tx, delta.Path, delta.Level, delta.Hash); err != nil {
+				return fmt.Errorf("store delta at level %d: %w", delta.Level, err)
+			}
+		}
+		leafQuery := `INSERT INTO cdhs_smf_leaves (key, value_hash, created_at) VALUES ($1, $2, NOW())`
+		if _, err := tx.ExecContext(ctx, leafQuery, bl.Leaf.Key, bl.Leaf.ValueHash); err != nil {
+			return fmt.Errorf("store leaf: %w", err)
+		}
+	}
+
+	rootQuery := `INSERT INTO cdhs_smf_roots (root_hash, tree_size, signature, created_at) VALUES ($1, $2, $3, NOW())`
+	if _, err := tx.ExecContext(ctx, rootQuery, root, treeSize, signature); err != nil {
+		return fmt.Errorf("store root: %w", err)
+	}
+
+	return tx.Commit()
+}
+
 // GetLatestRoot retrieves the most recent root hash
 func (s *PostgresStorage) GetLatestRoot(ctx context.Context) ([]byte, uint64, error) {
 	query := `
