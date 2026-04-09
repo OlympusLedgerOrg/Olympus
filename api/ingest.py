@@ -235,7 +235,11 @@ class RecordInput(BaseModel):
 
     shard_id: str = Field(
         ...,
-        description="Target shard identifier",
+        description=(
+            "Target shard identifier. "
+            "Allowed characters: ASCII letters, digits, underscore, dot, colon, "
+            "and hyphen (regex: ^[a-zA-Z0-9_.:\\-]+$). Max 256 characters."
+        ),
         max_length=_IDENTIFIER_MAX_LEN,
         pattern=_SHARD_ID_PATTERN,
     )
@@ -375,7 +379,11 @@ class ProofSubmissionRequest(ProofVerificationRequest):
     )
     shard_id: str = Field(
         ...,
-        description="Shard identifier associated with the proof bundle",
+        description=(
+            "Shard identifier associated with the proof bundle. "
+            "Allowed characters: ASCII letters, digits, underscore, dot, colon, "
+            "and hyphen (regex: ^[a-zA-Z0-9_.:\\-]+$). Max 256 characters."
+        ),
         max_length=_IDENTIFIER_MAX_LEN,
         pattern=_SHARD_ID_PATTERN,
     )

@@ -65,6 +65,6 @@ def generate_commit_id() -> str:
     """Generate a unique commit identifier.
 
     Returns:
-        ``0x`` followed by 20 random hex bytes (42 characters total).
+        ``0x`` followed by 32 random hex bytes (66 characters total).
     """
-    return "0x" + os.urandom(20).hex()
+    return "0x" + os.urandom(32).hex()
