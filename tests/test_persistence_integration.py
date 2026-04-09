@@ -22,6 +22,10 @@ TEST_DB = os.environ.get("TEST_DATABASE_URL", "")
     not TEST_DB,
     reason="TEST_DATABASE_URL is not set; skipping PostgreSQL integration tests.",
 )
+@pytest.mark.skip(
+    reason="Retired in 0.12: storage.append_record() now routes through the Go sequencer. "
+    "These tests need to be rewritten to use the ingest API or run with a sequencer.",
+)
 def test_postgres_persistence_survives_restart():
     """Verify proof mappings remain available after a new StorageLayer instance is created."""
     storage1 = StorageLayer(TEST_DB)

@@ -358,6 +358,13 @@ func (s *Sequencer) handleQueueLeaves(w http.ResponseWriter, r *http.Request) {
 		lastUpdateResp = updateResp
 	}
 
+	// Safety check: should never happen since we validate len(req.Records) > 0
+	if lastUpdateResp == nil {
+		log.Printf("No records processed - this should not happen")
+		http.Error(w, "No records processed", http.StatusInternalServerError)
+		return
+	}
+
 	// Sign the final root once (using the last tree size)
 	signResp, err := s.smtClient.SignRoot(ctx, lastUpdateResp.NewRoot, lastUpdateResp.TreeSize, map[string]string{
 		"batch_size": fmt.Sprintf("%d", len(req.Records)),
