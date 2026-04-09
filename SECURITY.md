@@ -80,9 +80,7 @@ publicly reviewable and reproducible.
 ## Threat Model Summary
 
 The threat model is described in detail in:
-- [`docs/threat_model.md`](docs/threat_model.md) — High-level adversary model and security goals
-- [`docs/01_threat_model.md`](docs/01_threat_model.md) — Detailed protocol-level threat analysis
-- [`docs/threat-model-mitigations.md`](docs/threat-model-mitigations.md) — **Threat-to-mitigation mapping with evidence links**
+- [`docs/threat-model.md`](docs/threat-model.md) — Adversary model, security goals, and threat-to-mitigation mapping
 
 Key properties Olympus aims to protect:
 

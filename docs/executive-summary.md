@@ -1,4 +1,4 @@
-# EXECUTIVE_SUMMARY.md
+# Executive Summary
 
 ## Olympus — Executive Summary
 

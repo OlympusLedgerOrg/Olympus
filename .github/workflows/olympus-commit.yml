@@ -81,7 +81,7 @@ jobs:
 
 Proof IDs: \`${PROOF_IDS}\`
 
-These artifacts have been anchored to the [Olympus](https://github.com/wombatvagina69-crypto/Olympus) public ledger."
+These artifacts have been anchored to the [Olympus](https://github.com/OlympusLedgerOrg/Olympus) public ledger."
 
           printf '%s\n\n%s' "${EXISTING_NOTES}" "${NOTES_APPEND}" > /tmp/updated-notes.txt
           gh release edit "$REF_NAME" --notes-file /tmp/updated-notes.txt
