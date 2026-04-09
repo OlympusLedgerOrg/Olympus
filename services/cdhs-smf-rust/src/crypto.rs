@@ -8,6 +8,7 @@
 use blake3;
 use ed25519_dalek::{Signer, SigningKey, VerifyingKey};
 use std::collections::HashMap;
+use zeroize::Zeroizing;
 
 use crate::proto::olympus::cdhs_smf::v1::RecordKey;
 
@@ -206,7 +207,7 @@ impl KeyManager {
             panic!("SEQUENCER_SMT_SIGNING_KEY must decode to exactly 32 bytes, got {}", key_bytes.len());
         }
 
-        let mut key_array = [0u8; 32];
+        let mut key_array = Zeroizing::new([0u8; 32]);
         key_array.copy_from_slice(&key_bytes);
 
         let signing_key = SigningKey::from_bytes(&key_array);
