@@ -98,7 +98,8 @@ async def test_verify_by_doc_hash(client):
 async def test_verify_nonexistent_returns_false(client):
     """Verifying a non-existent commit should return verified: false, not 404."""
     resp = await client.post(
-        "/doc/verify", json={"commit_id": "0xdeadbeef00000000deadbeef00000000deadbeef00000000deadbeef00000000"}
+        "/doc/verify",
+        json={"commit_id": "0xdeadbeef00000000deadbeef00000000deadbeef00000000deadbeef00000000"},
     )
     assert resp.status_code == 200
     assert resp.json()["verified"] is False
