@@ -17,11 +17,12 @@ use std::env;
 use std::fs;
 use std::os::unix::fs::FileTypeExt;
 use std::path::Path;
+use std::sync::Arc;
 
 use tokio::net::UnixListener;
 use tokio_stream::wrappers::UnixListenerStream;
 use tonic::{transport::Server, Request, Response, Status};
-use tracing::info;
+use tracing::{info, warn};
 
 use cdhs_smf_service::canonicalization;
 use cdhs_smf_service::crypto;
@@ -39,16 +40,22 @@ use smt::SparseMerkleTree;
 pub struct CdhsSmfService {
     /// The global sparse Merkle tree
     smt: SparseMerkleTree,
-    /// Key manager for Ed25519 signing
-    key_manager: KeyManager,
+    /// Key manager for Ed25519 signing (Arc-shared with the SIGHUP handler)
+    key_manager: Arc<KeyManager>,
 }
 
 impl CdhsSmfService {
     pub fn new() -> Self {
         Self {
             smt: SparseMerkleTree::new(),
-            key_manager: KeyManager::new(),
+            key_manager: Arc::new(KeyManager::new()),
         }
+    }
+
+    /// Return a clone of the `Arc<KeyManager>` so that background tasks
+    /// (e.g. the SIGHUP handler) can trigger key rotation.
+    pub fn key_manager_handle(&self) -> Arc<KeyManager> {
+        Arc::clone(&self.key_manager)
     }
 }
 
@@ -383,6 +390,27 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let listener = UnixListener::bind(socket_path)?;
     let incoming = UnixListenerStream::new(listener);
     let service = CdhsSmfService::new();
+
+    // Spawn a background task that listens for SIGHUP and triggers key rotation.
+    let km_handle = service.key_manager_handle();
+    tokio::spawn(async move {
+        let mut sighup =
+            tokio::signal::unix::signal(tokio::signal::unix::SignalKind::hangup())
+                .expect("failed to register SIGHUP handler");
+        loop {
+            sighup.recv().await;
+            info!("SIGHUP received — reloading signing key");
+            match km_handle.reload_key() {
+                Ok(new_pk) => info!(
+                    "Signing key rotated successfully; new public key = {}",
+                    hex::encode(new_pk)
+                ),
+                Err(e) => warn!(
+                    "Signing key reload failed (keeping previous key): {e}"
+                ),
+            }
+        }
+    });
 
     info!(
         "CD-HS-ST Service starting on unix socket {}",

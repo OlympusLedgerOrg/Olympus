@@ -34,7 +34,7 @@ class TestLoadTreeState(unittest.TestCase):
     def test_load_tree_state_empty(self):
         """Returns empty tree when no rows exist in database."""
         cur = MagicMock()
-        cur.fetchall.return_value = []
+        cur.fetchmany.return_value = []
 
         tree = load_tree_state(cur)
 
@@ -52,9 +52,9 @@ class TestLoadTreeState(unittest.TestCase):
         value1 = b"\x01" * 32
         key2 = b"\x02" * 32
         value2 = b"\x03" * 32
-        cur.fetchall.return_value = [
-            (key1, value1),
-            (key2, value2),
+        cur.fetchmany.side_effect = [
+            [(key1, value1), (key2, value2)],
+            [],
         ]
 
         tree = load_tree_state(cur)
@@ -66,7 +66,7 @@ class TestLoadTreeState(unittest.TestCase):
     def test_load_tree_state_with_timestamp_cutoff_string(self):
         """Handles timestamp cutoff as ISO string."""
         cur = MagicMock()
-        cur.fetchall.return_value = []
+        cur.fetchmany.return_value = []
 
         _tree = load_tree_state(cur, up_to_ts="2024-01-01T00:00:00Z")  # noqa: F841
 
@@ -78,7 +78,7 @@ class TestLoadTreeState(unittest.TestCase):
     def test_load_tree_state_with_timestamp_cutoff_datetime(self):
         """Handles timestamp cutoff as datetime object."""
         cur = MagicMock()
-        cur.fetchall.return_value = []
+        cur.fetchmany.return_value = []
         cutoff = datetime(2024, 1, 1, tzinfo=timezone.utc)
 
         _tree = load_tree_state(cur, up_to_ts=cutoff)  # noqa: F841
@@ -91,13 +91,41 @@ class TestLoadTreeState(unittest.TestCase):
         cur = MagicMock()
         key1 = b"\x00" * 32
         value1 = b"\x01" * 32
-        cur.fetchall.return_value = [
-            {"key": key1, "value_hash": value1},
+        cur.fetchmany.side_effect = [
+            [{"key": key1, "value_hash": value1}],
+            [],
         ]
 
         tree = load_tree_state(cur)
 
         self.assertEqual(tree.leaves.get(key1), value1)
+
+    def test_load_tree_state_batched_iteration(self):
+        """Rows are fetched in batches to bound peak memory (RT-M2)."""
+        cur = MagicMock()
+        key1 = b"\x00" * 32
+        value1 = b"\x01" * 32
+        key2 = b"\x02" * 32
+        value2 = b"\x03" * 32
+        # Simulate two batches of size 1, then empty
+        cur.fetchmany.side_effect = [
+            [(key1, value1)],
+            [(key2, value2)],
+            [],
+        ]
+
+        tree = load_tree_state(cur, batch_size=1)
+
+        self.assertEqual(tree.leaves.get(key1), value1)
+        self.assertEqual(tree.leaves.get(key2), value2)
+        # fetchmany should have been called 3 times (2 batches + 1 empty)
+        self.assertEqual(cur.fetchmany.call_count, 3)
+
+    def test_load_tree_state_invalid_batch_size(self):
+        """batch_size < 1 raises ValueError."""
+        cur = MagicMock()
+        with self.assertRaises(ValueError, msg="batch_size must be >= 1"):
+            load_tree_state(cur, batch_size=0)
 
 
 class TestPersistTreeNodes(unittest.TestCase):
@@ -234,7 +262,7 @@ class TestAssertRootMatchesState(unittest.TestCase):
     def test_assert_root_matches_state_passes(self):
         """Passes when computed root matches expected root."""
         cur = MagicMock()
-        cur.fetchall.return_value = []  # Empty tree
+        cur.fetchmany.return_value = []  # Empty tree
 
         # Get the default root from an empty tree
         from protocol.ssmf import SparseMerkleTree
@@ -248,7 +276,7 @@ class TestAssertRootMatchesState(unittest.TestCase):
     def test_assert_root_matches_state_raises_on_mismatch(self):
         """Raises ValueError when roots diverge."""
         cur = MagicMock()
-        cur.fetchall.return_value = []  # Empty tree
+        cur.fetchmany.return_value = []  # Empty tree
 
         # Provide a wrong expected root
         wrong_root = b"\xff" * 32
@@ -261,7 +289,7 @@ class TestAssertRootMatchesState(unittest.TestCase):
     def test_assert_root_matches_state_includes_shard_in_error(self):
         """Error message includes shard_id when provided."""
         cur = MagicMock()
-        cur.fetchall.return_value = []
+        cur.fetchmany.return_value = []
         wrong_root = b"\xff" * 32
 
         with self.assertRaises(ValueError) as ctx:

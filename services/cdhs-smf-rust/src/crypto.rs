@@ -177,46 +177,93 @@ pub fn empty_leaf() -> [u8; 32] {
     *blake3::hash(EMPTY_LEAF_PREFIX).as_bytes()
 }
 
-/// Key manager for Ed25519 signing
+/// Key manager for Ed25519 signing with hot-reload support.
+///
+/// The signing key is stored behind an [`std::sync::RwLock`] so that
+/// [`reload_key`] can atomically swap it while concurrent [`sign_root`]
+/// calls continue safely.  A SIGHUP handler (see `main.rs`) should call
+/// [`reload_key`] to pick up a rotated `SEQUENCER_SMT_SIGNING_KEY`
+/// without restarting the service.
 pub struct KeyManager {
+    inner: std::sync::RwLock<KeyPair>,
+}
+
+/// Interior key material protected by the RwLock.
+struct KeyPair {
     signing_key: SigningKey,
     verifying_key: VerifyingKey,
 }
 
+/// Load and validate the signing key from `SEQUENCER_SMT_SIGNING_KEY`.
+///
+/// Returns an error string on failure instead of panicking, so callers
+/// can decide whether to abort (startup) or log-and-continue (reload).
+fn load_signing_key_from_env() -> Result<KeyPair, String> {
+    let key_str = std::env::var("SEQUENCER_SMT_SIGNING_KEY")
+        .map_err(|_| "SEQUENCER_SMT_SIGNING_KEY environment variable is required".to_string())?;
+
+    let key_bytes = if key_str.len() == 64 {
+        hex::decode(&key_str).map_err(|e| {
+            format!(
+                "SEQUENCER_SMT_SIGNING_KEY is not valid hex (expected 64 hex chars): {e}"
+            )
+        })?
+    } else {
+        use base64::Engine;
+        base64::engine::general_purpose::STANDARD
+            .decode(&key_str)
+            .map_err(|e| {
+                format!("SEQUENCER_SMT_SIGNING_KEY is not valid base64 or hex: {e}")
+            })?
+    };
+
+    if key_bytes.len() != 32 {
+        return Err(format!(
+            "SEQUENCER_SMT_SIGNING_KEY must decode to exactly 32 bytes, got {}",
+            key_bytes.len()
+        ));
+    }
+
+    let mut key_array = Zeroizing::new([0u8; 32]);
+    key_array.copy_from_slice(&key_bytes);
+
+    let signing_key = SigningKey::from_bytes(&key_array);
+    let verifying_key = signing_key.verifying_key();
+
+    Ok(KeyPair {
+        signing_key,
+        verifying_key,
+    })
+}
+
 impl KeyManager {
     pub fn new() -> Self {
-        // Load signing key from SEQUENCER_SMT_SIGNING_KEY environment variable.
-        // The key must be 32 bytes, encoded as either hex (64 chars) or base64.
-        // If the variable is absent or malformed, panic — never generate an
-        // ephemeral key in production.
-        let key_str = std::env::var("SEQUENCER_SMT_SIGNING_KEY")
-            .expect("SEQUENCER_SMT_SIGNING_KEY environment variable is required");
-
-        let key_bytes = if key_str.len() == 64 {
-            // Try hex decoding
-            hex::decode(&key_str)
-                .expect("SEQUENCER_SMT_SIGNING_KEY is not valid hex (expected 64 hex chars)")
-        } else {
-            // Try base64 decoding
-            use base64::Engine;
-            base64::engine::general_purpose::STANDARD.decode(&key_str)
-                .expect("SEQUENCER_SMT_SIGNING_KEY is not valid base64 or hex")
-        };
-
-        if key_bytes.len() != 32 {
-            panic!("SEQUENCER_SMT_SIGNING_KEY must decode to exactly 32 bytes, got {}", key_bytes.len());
-        }
-
-        let mut key_array = Zeroizing::new([0u8; 32]);
-        key_array.copy_from_slice(&key_bytes);
-
-        let signing_key = SigningKey::from_bytes(&key_array);
-        let verifying_key = signing_key.verifying_key();
+        // At startup, a missing or malformed key is fatal.
+        let pair = load_signing_key_from_env()
+            .unwrap_or_else(|e| panic!("{e}"));
 
         Self {
-            signing_key,
-            verifying_key,
+            inner: std::sync::RwLock::new(pair),
         }
+    }
+
+    /// Re-read `SEQUENCER_SMT_SIGNING_KEY` and atomically swap the
+    /// signing key.
+    ///
+    /// Returns `Ok(new_public_key)` on success so callers can log the
+    /// rotation event, or `Err(reason)` if the new key is invalid (in
+    /// which case the previous key remains active).
+    pub fn reload_key(&self) -> Result<[u8; 32], String> {
+        let new_pair = load_signing_key_from_env()?;
+        let new_pk = new_pair.verifying_key.to_bytes();
+
+        let mut guard = self
+            .inner
+            .write()
+            .map_err(|e| format!("RwLock poisoned: {e}"))?;
+        *guard = new_pair;
+
+        Ok(new_pk)
     }
 
     /// Sign a root hash with tree_size and optional context.
@@ -269,17 +316,26 @@ impl KeyManager {
             }
         }
 
-        // Sign
-        let signature = self.signing_key.sign(&message);
+        // Acquire read lock — concurrent sign_root calls are safe.
+        let guard = self
+            .inner
+            .read()
+            .map_err(|e| format!("RwLock poisoned: {e}"))?;
+
+        let signature = guard.signing_key.sign(&message);
 
         Ok((
             signature.to_bytes(),
-            self.verifying_key.to_bytes(),
+            guard.verifying_key.to_bytes(),
         ))
     }
 
     pub fn public_key(&self) -> [u8; 32] {
-        self.verifying_key.to_bytes()
+        self.inner
+            .read()
+            .expect("RwLock poisoned in public_key()")
+            .verifying_key
+            .to_bytes()
     }
 }
 
@@ -404,5 +460,51 @@ mod tests {
         assert_eq!(sig.len(), 64);
         assert_eq!(pk.len(), 32);
         assert_eq!(pk, km.public_key());
+    }
+
+    #[test]
+    fn test_key_manager_reload() {
+        // Start with one key
+        std::env::set_var(
+            "SEQUENCER_SMT_SIGNING_KEY",
+            "0000000000000000000000000000000000000000000000000000000000000000",
+        );
+        let km = KeyManager::new();
+        let old_pk = km.public_key();
+
+        // Rotate to a different key (32 bytes of 0x01)
+        std::env::set_var(
+            "SEQUENCER_SMT_SIGNING_KEY",
+            "0101010101010101010101010101010101010101010101010101010101010101",
+        );
+        let new_pk = km.reload_key().expect("reload_key should succeed");
+
+        // The public key should have changed
+        assert_ne!(old_pk, new_pk);
+        assert_eq!(new_pk, km.public_key());
+
+        // Signing should use the new key
+        let root = [0u8; 32];
+        let (_, sig_pk) = km.sign_root(&root, 1, &HashMap::new()).unwrap();
+        assert_eq!(sig_pk, new_pk);
+    }
+
+    #[test]
+    fn test_key_manager_reload_bad_key_keeps_old() {
+        // Start with a valid key
+        std::env::set_var(
+            "SEQUENCER_SMT_SIGNING_KEY",
+            "0000000000000000000000000000000000000000000000000000000000000000",
+        );
+        let km = KeyManager::new();
+        let old_pk = km.public_key();
+
+        // Set an invalid key — reload should fail and keep the old one
+        std::env::set_var("SEQUENCER_SMT_SIGNING_KEY", "not-valid");
+        let result = km.reload_key();
+        assert!(result.is_err());
+
+        // Public key should still be the original
+        assert_eq!(old_pk, km.public_key());
     }
 }

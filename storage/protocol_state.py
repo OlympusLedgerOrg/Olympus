@@ -46,6 +46,8 @@ def load_tree_state(
     cur: psycopg.Cursor[Any],
     shard_id: str | None = None,
     up_to_ts: datetime | str | None = None,
+    *,
+    batch_size: int = 10_000,
 ) -> SparseMerkleTree:
     """
     Load sparse Merkle tree state from database.
@@ -56,6 +58,13 @@ def load_tree_state(
         ``_get_proof_path``, ``get_current_root``, ``replay_tree_incremental``.
 
     Read-only helper.  Must be called within an existing transaction.
+
+    RT-M2 Fix:
+    ----------
+    Rows are now fetched in batches of *batch_size* (default 10 000) via
+    ``fetchmany()`` instead of a single ``fetchall()``.  This bounds peak
+    memory to O(batch_size) rows rather than O(total_leaves), preventing
+    OOM on historical replay of large shards.
 
     CD-HS-ST Design:
     ---------------
@@ -71,13 +80,18 @@ def load_tree_state(
         cur: Database cursor
         shard_id: DEPRECATED - kept for backwards compatibility, should be None
         up_to_ts: Optional inclusive timestamp cutoff for historical snapshots
+        batch_size: Number of rows to fetch per DB round-trip (default 10 000).
+            Controls peak memory usage during tree reconstruction.
 
     Returns:
         SparseMerkleTree with all leaves loaded (global SMT)
     """
+    if batch_size < 1:
+        raise ValueError("batch_size must be >= 1")
+
     tree = SparseMerkleTree()
 
-    # CD-HS-ST: Load ALL leaves from the global SMT (no shard_id filter)
+    # CD-HS-ST: Load leaves from the global SMT (no shard_id filter)
     if up_to_ts is None:
         cur.execute(
             """
@@ -97,12 +111,16 @@ def load_tree_state(
             """,
             (cutoff,),
         )
-    rows = cur.fetchall()
 
-    for row in rows:
-        key = bytes(_row_get(row, "key", 0))
-        value_hash = bytes(_row_get(row, "value_hash", 1))
-        tree.update(key, value_hash)
+    # RT-M2: Stream rows in batches to bound peak memory.
+    while True:
+        rows = cur.fetchmany(batch_size)
+        if not rows:
+            break
+        for row in rows:
+            key = bytes(_row_get(row, "key", 0))
+            value_hash = bytes(_row_get(row, "value_hash", 1))
+            tree.update(key, value_hash)
 
     return tree
 
