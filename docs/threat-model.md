@@ -119,7 +119,7 @@ repository, with links to the relevant source evidence.
 |----------|-----------|---------|
 | Hash-chained entries | Each `LedgerEntry.prev_entry_hash` binds to its predecessor | [`protocol/ledger.py`](protocol/ledger.py) — `LedgerEntry`, `Ledger.append()` |
 | Chain verification | `verify_chain()` detects any gap or reordering | [`protocol/ledger.py`](protocol/ledger.py) — `Ledger.verify_chain()` |
-| Append-only DB schema | No `UPDATE`/`DELETE` paths exist in the storage layer; PK enforces ordering | [`storage/postgres.py`](storage/postgres.py), [`migrations/001_init_schema.sql`](migrations/001_init_schema.sql) |
+| Append-only DB schema | No `UPDATE`/`DELETE` paths exist in the storage layer; PK enforces ordering | [`storage/postgres.py` init_schema()](storage/postgres.py), [`alembic/versions/`](alembic/versions/) |
 | SMT root divergence alert | Prometheus counter fires when replicas compute different roots | [`protocol/telemetry.py`](protocol/telemetry.py) — `smt_divergence_total` |
 
 ### T3 — Forged Audit Proofs

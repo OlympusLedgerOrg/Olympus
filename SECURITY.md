@@ -50,15 +50,12 @@ We follow a **coordinated disclosure** model:
    - If we cannot reproduce the issue we will ask for clarification before
      closing.
 
-5. **Scope** — See [`docs/pentest-scope.md`](docs/pentest-scope.md) for the
-   full penetration-test scope and out-of-scope areas.
+5. **Scope** — see the threat model (`docs/threat-model.md`) for the audit perimeter; a dedicated pentest scope document is planned.
 
 ### Contact + PGP
 
 - **Email:** `security@olympus.dev`
-- **PGP (ASCII-armored):** [`docs/security-contact-pubkey.asc`](docs/security-contact-pubkey.asc)
-- **Fingerprint:** `0A30 DAE5 44D7 63AA E044  9827 2F31 D2AF 780F FDB6`
-- For sensitive reports, encrypt to the PGP key and attach to the GitHub Security Advisory.
+- For sensitive reports, attach details to the GitHub Security Advisory.
 
 ---
 
@@ -70,7 +67,7 @@ We welcome independent audits of Olympus protocol and implementation layers
 - **Audit coordination:** Open a private GitHub Security Advisory first so we
   can share test vectors and scope details safely.
 - **Bug bounty intake (HackerOne):** <https://hackerone.com/olympus>
-- **Audit scope baseline:** [`docs/pentest-scope.md`](docs/pentest-scope.md)
+- **Audit scope baseline:** `docs/pentest-scope.md` (planned)
 
 Post-audit remediations are tracked as regular pull requests so fixes remain
 publicly reviewable and reproducible.
@@ -114,8 +111,8 @@ Olympus implements structured observability for detecting security and integrity
 
 | Component | Purpose | Documentation |
 |-----------|---------|---------------|
-| OpenTelemetry traces | End-to-end flow tracing (commit/verify/redact) | [`docs/observability-deployment.md`](docs/observability-deployment.md) |
-| Prometheus metrics | Proof latency, ledger height, SMT divergence alerts | [`docs/prometheus-alerting.md`](docs/prometheus-alerting.md) |
+| OpenTelemetry traces | End-to-end flow tracing (commit/verify/redact) | `docs/observability-deployment.md` (planned) |
+| Prometheus metrics | Proof latency, ledger height, SMT divergence alerts | `docs/prometheus-alerting.md` (planned) |
 | SMT root divergence alerting | Detects tampering or replication bugs | [`protocol/telemetry.py`](protocol/telemetry.py) — `record_smt_divergence()` |
 | Chaos engineering tests | Automated fault injection with documented behaviors | [`tests/chaos/README.md`](tests/chaos/README.md) |
 
