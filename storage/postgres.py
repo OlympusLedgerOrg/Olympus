@@ -1108,7 +1108,6 @@ class StorageLayer:
 
             # --- O(256) sibling fetch from smt_nodes ---
             siblings = self._get_proof_path(cur, key)
-            fallback_tree: SparseMerkleTree | None = None
 
             # --- O(256) Rust incremental update ---
             try:
@@ -1118,29 +1117,10 @@ class StorageLayer:
                     key, value_hash, siblings
                 )
             except ImportError:
-                if os.getenv("OLYMPUS_REQUIRE_RUST", "").strip().lower() in {
-                    "1",
-                    "true",
-                    "yes",
-                    "on",
-                }:
-                    raise RuntimeError(
-                        "Rust SMT extension required by OLYMPUS_REQUIRE_RUST=1, "
-                        "but olympus_core could not be imported"
-                    ) from None
-                logger.warning(
-                    "olympus_core unavailable; falling back to O(N) _load_tree_state "
-                    "path in _append_record_inner"
-                )
-                # Fallback: full tree load (pre-Rust build)
-                tree = self._load_tree_state(cur)
-                if tree.get(key) is not None:
-                    raise ValueError(f"Record already exists: {record_type}:{record_id}:{version}")
-                tree.update(key, value_hash)
-                fallback_tree = tree
-                root_hash = tree.get_root()
-                proof_siblings = None  # will use tree.prove_existence below
-                node_deltas = None
+                raise RuntimeError(
+                    "olympus_core is required — install with maturin or set "
+                    "OLYMPUS_REQUIRE_RUST=1 for explicit enforcement"
+                ) from None
 
             # --- tree_size from DB (O(1) COUNT on smt_leaves) ---
             cur.execute("SELECT COUNT(*) AS cnt FROM smt_leaves")
@@ -1148,21 +1128,12 @@ class StorageLayer:
             tree_size = (int(count_row["cnt"]) if count_row else 0) + 1  # +1 for pending insert
 
             # --- Build proof ---
-            if proof_siblings is not None:
-                proof = ExistenceProof(
-                    key=key,
-                    value_hash=value_hash,
-                    siblings=list(proof_siblings),
-                    root_hash=root_hash,
-                )
-            else:
-                if fallback_tree is None:
-                    raise RuntimeError(
-                        "Internal error: fallback_tree was not initialized in fallback path"
-                    )
-                proof = fallback_tree.prove_existence(key)
-                root_hash = fallback_tree.get_root()
-                tree_size = len(fallback_tree.leaves)
+            proof = ExistenceProof(
+                key=key,
+                value_hash=value_hash,
+                siblings=list(proof_siblings),
+                root_hash=root_hash,
+            )
 
             # Insert leaf (CD-HS-ST: no shard_id column)
             cur.execute(
@@ -1179,35 +1150,28 @@ class StorageLayer:
             )
 
             # --- Persist node deltas ---
-            if node_deltas is not None:
-                # O(256) upsert — only the affected path nodes
-                cur.execute(
-                    sql.SQL("SET LOCAL olympus.allow_node_rehash = {}").format(
-                        sql.Literal(_NODE_REHASH_GATE)
-                    )
+            # O(256) upsert — only the affected path nodes
+            cur.execute(
+                sql.SQL("SET LOCAL olympus.allow_node_rehash = {}").format(
+                    sql.Literal(_NODE_REHASH_GATE)
                 )
-                ts_now = datetime.now(timezone.utc)
-                cur.executemany(
-                    """
-                    INSERT INTO smt_nodes (level, index, hash, ts)
-                    VALUES (%s, %s, %s, %s)
-                    ON CONFLICT (level, index)
-                    DO UPDATE SET hash = EXCLUDED.hash, ts = EXCLUDED.ts
-                    """,
-                    [
-                        (db_level, packed_index, hash_val, ts_now)
-                        for db_level, packed_index, hash_val in node_deltas
-                    ],
-                )
-                # Update cache for each delta
-                for db_level, packed_index, hash_val in node_deltas:
-                    self._cache_put(shard_id, db_level, packed_index, hash_val)
-            else:
-                if fallback_tree is None:
-                    raise RuntimeError(
-                        "Internal error: fallback_tree was not initialized before node persistence"
-                    )
-                self._persist_tree_nodes(cur, shard_id, fallback_tree)
+            )
+            ts_now = datetime.now(timezone.utc)
+            cur.executemany(
+                """
+                INSERT INTO smt_nodes (level, index, hash, ts)
+                VALUES (%s, %s, %s, %s)
+                ON CONFLICT (level, index)
+                DO UPDATE SET hash = EXCLUDED.hash, ts = EXCLUDED.ts
+                """,
+                [
+                    (db_level, packed_index, hash_val, ts_now)
+                    for db_level, packed_index, hash_val in node_deltas
+                ],
+            )
+            # Update cache for each delta
+            for db_level, packed_index, hash_val in node_deltas:
+                self._cache_put(shard_id, db_level, packed_index, hash_val)
 
             # Get previous header
             cur.execute(
@@ -1370,22 +1334,13 @@ class StorageLayer:
                 # Poseidon root requires all leaves — query from DB when tree is
                 # unavailable (incremental path).  This is O(N) but only runs
                 # when ZK proofs are enabled.
-                if node_deltas is not None:
-                    cur.execute("SELECT key, value_hash FROM smt_leaves ORDER BY key")
-                    all_leaves: dict[bytes, bytes] = {}
-                    for leaf_row in cur.fetchall():
-                        all_leaves[bytes(leaf_row["key"])] = bytes(leaf_row["value_hash"])
-                    # Include the leaf we just inserted
-                    all_leaves[key] = value_hash
-                    authoritative_poseidon_root = _compute_poseidon_root_from_leaves(all_leaves)
-                else:
-                    if fallback_tree is None:
-                        raise RuntimeError(
-                            "Internal error: fallback_tree was not initialized for Poseidon computation"
-                        )
-                    authoritative_poseidon_root = _compute_poseidon_root_from_leaves(
-                        fallback_tree.leaves
-                    )
+                cur.execute("SELECT key, value_hash FROM smt_leaves ORDER BY key")
+                all_leaves: dict[bytes, bytes] = {}
+                for leaf_row in cur.fetchall():
+                    all_leaves[bytes(leaf_row["key"])] = bytes(leaf_row["value_hash"])
+                # Include the leaf we just inserted
+                all_leaves[key] = value_hash
+                authoritative_poseidon_root = _compute_poseidon_root_from_leaves(all_leaves)
                 poseidon_root_decimal = str(
                     int.from_bytes(authoritative_poseidon_root, byteorder="big")
                 )
@@ -2527,27 +2482,6 @@ class StorageLayer:
                 f"{expected_root.hex()} for shard '{shard_id}'"
             )
 
-    def _load_tree_state(
-        self,
-        cur: psycopg.Cursor[Any],
-        up_to_ts: datetime | str | None = None,
-        *,
-        _OLYMPUS_POSEIDON_CARVE_OUT: bool = False,
-    ) -> SparseMerkleTree:
-        """Retired in 0.12: SMT writes now route through the Go sequencer.
-
-        This method is retained for backward compatibility but raises
-        ``NotImplementedError`` on every call.  All production callers
-        (api/ingest.py ingest_batch, _build_poseidon_smt_for_storage_shard)
-        have been migrated to the Go sequencer path introduced in 0.12.
-
-        See api/ingest.py _call_sequencer_queue_leaf.
-        """
-        raise NotImplementedError(
-            "Retired in 0.12: SMT writes now route through the Go sequencer. "
-            "See api/ingest.py _call_sequencer_queue_leaf."
-        )
-
     # ------------------------------------------------------------------
     # ADR-0001: Incremental / paginated tree reconstruction helpers
     # ------------------------------------------------------------------
@@ -2875,18 +2809,6 @@ class StorageLayer:
             (shard_id, seq),
         )
         return cur.fetchone()
-
-    def _persist_tree_nodes(
-        self, cur: psycopg.Cursor[Any], shard_id: str, tree: SparseMerkleTree
-    ) -> None:
-        """Retired in 0.12: SMT writes now route through the Go sequencer.
-
-        See api/ingest.py _call_sequencer_queue_leaf.
-        """
-        raise NotImplementedError(
-            "Retired in 0.12: SMT writes now route through the Go sequencer. "
-            "See api/ingest.py _call_sequencer_queue_leaf."
-        )
 
     @staticmethod
     def _encode_path(path: tuple[int, ...]) -> bytes:

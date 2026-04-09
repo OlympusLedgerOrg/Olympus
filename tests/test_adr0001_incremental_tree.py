@@ -307,29 +307,6 @@ class TestVerifyStateReplayDelegation(unittest.TestCase):
 
 
 # ---------------------------------------------------------------------------
-# _persist_tree_nodes is retired in 0.12
-# ---------------------------------------------------------------------------
-
-
-class TestPersistTreeNodesDoUpdate(unittest.TestCase):
-    """_persist_tree_nodes raises NotImplementedError since 0.12."""
-
-    def test_persist_uses_do_update(self):
-        """_persist_tree_nodes must raise NotImplementedError (retired in 0.12)."""
-        sl = _make_storage()
-
-        tree = SparseMerkleTree()
-        tree.update(b"\x00" * 32, b"\x01" * 32)
-
-        cur = MagicMock()
-
-        with self.assertRaises(NotImplementedError) as ctx:
-            sl._persist_tree_nodes(cur, "shard-1", tree)
-
-        self.assertIn("Retired in 0.12", str(ctx.exception))
-
-
-# ---------------------------------------------------------------------------
 # protocol_state.persist_tree_nodes uses DO UPDATE
 # ---------------------------------------------------------------------------
 

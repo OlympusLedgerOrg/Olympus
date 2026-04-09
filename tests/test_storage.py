@@ -65,8 +65,7 @@ pytestmark = [
         reason="TEST_DATABASE_URL is not set; skipping PostgreSQL storage tests.",
     ),
     pytest.mark.skip(
-        reason="storage.append_record() requires olympus_core Rust extension; "
-        "fallback path calls _load_tree_state which raises NotImplementedError since 0.12. "
+        reason="storage.append_record() requires olympus_core Rust extension. "
         "Run `maturin develop` to build olympus_core, or rewrite tests to use ingest API.",
     ),
 ]
