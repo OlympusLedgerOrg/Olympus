@@ -69,7 +69,8 @@ try:
     from olympus_core import RustSparseMerkleTree
 except ImportError:
     raise RuntimeError(
-        "olympus_core is required — install with `maturin develop`"
+        "olympus_core is required for storage operations — "
+        "install with `maturin develop`"
     ) from None
 
 

@@ -110,8 +110,10 @@ class TestIncrementalUpdate:
 
     def test_ten_sequential_inserts(self):
         """Incrementally insert 10 keys, verify each root matches full tree."""
-        tree = SparseMerkleTree()
-        # Use pure Python implementation to access internal methods
+        # Use pure Python implementation for both trees:
+        # - tree: for verification via .get_root()
+        # - siblings_source: for accessing internal ._collect_siblings()
+        tree = PurePythonSparseMerkleTree()
         siblings_source = PurePythonSparseMerkleTree()
 
         for i in range(10):
