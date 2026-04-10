@@ -64,6 +64,11 @@ class ParseProvenance(BaseModel):
 
     This structure captures all information needed to verify
     the extraction was performed deterministically.
+
+    The canonical_parser_version is the stable identifier used for proof verification.
+    When model_hash changes (due to model upgrades), a new canonical_parser_version
+    must be assigned. Documents parsed with the same canonical_parser_version are
+    guaranteed to produce identical extraction results.
     """
 
     raw_file_blake3: str = Field(
@@ -72,7 +77,15 @@ class ParseProvenance(BaseModel):
         description="BLAKE3 hash of raw input file",
     )
     parser_name: str = Field(..., description="Parser backend name")
-    parser_version: str = Field(..., description="Parser version")
+    parser_version: str = Field(..., description="Parser library version")
+    canonical_parser_version: str = Field(
+        ...,
+        pattern=r"^v\d+\.\d+$",
+        description=(
+            "Stable canonical version (e.g., 'v1.0') that maps to a specific "
+            "parser_version + model_hash combination. Used for proof verification."
+        ),
+    )
     model_hash: str = Field(
         ...,
         pattern=r"^sha256_[0-9a-f]{64}$",

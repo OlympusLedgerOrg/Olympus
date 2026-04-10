@@ -262,6 +262,7 @@ async def parse_document(
         raw_file_blake3=raw_file_blake3,
         parser_name=_parser.name,
         parser_version=_parser.version,
+        canonical_parser_version=_config.parser.canonical_parser_version,
         model_hash=_parser.model_hash,
         environment_digest=_config.server.environment_digest,
     )

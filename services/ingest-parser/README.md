@@ -10,6 +10,7 @@ This service provides document parsing with **cryptographic determinism guarante
 2. **Strict version pinning**: All dependencies and AI models are pinned with hashes
 3. **Deterministic output**: All floating-point values (bounding boxes) rounded to exactly 4 decimal places
 4. **Full provenance**: Every output includes file hash, parser version, model hashes, and environment digest
+5. **Canonical versioning**: `canonical_parser_version` provides stable versioning for proof verification
 
 ## Architecture
 
@@ -64,6 +65,7 @@ Accepts a raw file binary and returns a strictly formatted JSON.
     "raw_file_blake3": "blake3_abc123...",
     "parser_name": "docling",
     "parser_version": "2.1.0",
+    "canonical_parser_version": "v1.0",
     "model_hash": "sha256_def456...",
     "environment_digest": "sha256_ghi789..."
   },
@@ -98,6 +100,28 @@ Health check endpoint.
   "model_hash": "sha256_...",
   "cpu_only": true
 }
+```
+
+## Versioning and Model Upgrades
+
+### canonical_parser_version
+
+The `canonical_parser_version` field (e.g., `v1.0`) provides a stable identifier for proof verification:
+
+- **Immutable mapping**: Each `canonical_parser_version` maps to a specific combination of `parser_version` + `model_hash`
+- **Proof compatibility**: Documents parsed with the same `canonical_parser_version` produce identical extraction results
+- **Upgrade path**: When models are upgraded, increment the `canonical_parser_version` (e.g., `v1.0` → `v1.1`)
+
+**Migration workflow when models change:**
+1. Update model weights and increment `INGEST_PARSER_CANONICAL_VERSION`
+2. Existing proofs remain valid against their original `canonical_parser_version`
+3. New extractions use the new version
+4. Optionally re-parse documents if needed for new proofs
+
+### Environment Variable
+
+```bash
+INGEST_PARSER_CANONICAL_VERSION=v1.0  # Default
 ```
 
 ## Determinism Guarantees
@@ -164,6 +188,7 @@ python -m ingest_parser.main
 | `INGEST_PARSER_MAX_FILE_SIZE_MB` | `256` | Maximum file size in MB |
 | `INGEST_PARSER_MODEL_PATH` | `/models` | Path to AI model weights |
 | `INGEST_PARSER_LOG_LEVEL` | `INFO` | Logging level |
+| `INGEST_PARSER_CANONICAL_VERSION` | `v1.0` | Canonical parser version |
 
 ## Testing
 

@@ -28,11 +28,13 @@ class TestExtractionSchemas:
             raw_file_blake3="blake3_" + "a" * 64,
             parser_name="docling",
             parser_version="2.1.0",
+            canonical_parser_version="v1.0",
             model_hash="sha256_" + "b" * 64,
             environment_digest="sha256_" + "c" * 64,
         )
 
         assert provenance.parser_name == "docling"
+        assert provenance.canonical_parser_version == "v1.0"
         assert provenance.raw_file_blake3.startswith("blake3_")
         assert len(provenance.raw_file_blake3) == 7 + 64
 
@@ -43,9 +45,36 @@ class TestExtractionSchemas:
                 raw_file_blake3="invalid",
                 parser_name="docling",
                 parser_version="2.1.0",
+                canonical_parser_version="v1.0",
                 model_hash="sha256_" + "b" * 64,
                 environment_digest="sha256_" + "c" * 64,
             )
+
+    def test_parse_provenance_canonical_version_pattern(self) -> None:
+        """Test that canonical_parser_version follows v{major}.{minor} pattern."""
+        # Valid versions
+        for version in ["v1.0", "v2.5", "v10.20"]:
+            provenance = ParseProvenance(
+                raw_file_blake3="blake3_" + "a" * 64,
+                parser_name="docling",
+                parser_version="2.1.0",
+                canonical_parser_version=version,
+                model_hash="sha256_" + "b" * 64,
+                environment_digest="sha256_" + "c" * 64,
+            )
+            assert provenance.canonical_parser_version == version
+
+        # Invalid versions
+        for invalid in ["1.0", "v1", "v1.0.0", "latest"]:
+            with pytest.raises(ValueError):
+                ParseProvenance(
+                    raw_file_blake3="blake3_" + "a" * 64,
+                    parser_name="docling",
+                    parser_version="2.1.0",
+                    canonical_parser_version=invalid,
+                    model_hash="sha256_" + "b" * 64,
+                    environment_digest="sha256_" + "c" * 64,
+                )
 
     def test_content_block_types(self) -> None:
         """Test all block types are valid."""
@@ -65,6 +94,7 @@ class TestExtractionSchemas:
                 raw_file_blake3="blake3_" + "a" * 64,
                 parser_name="fallback",
                 parser_version="1.0.0",
+                canonical_parser_version="v1.0",
                 model_hash="sha256_" + "0" * 64,
                 environment_digest="sha256_" + "0" * 64,
             ),
@@ -115,6 +145,7 @@ class TestExtractionSchemas:
                 raw_file_blake3="blake3_" + "a" * 64,
                 parser_name="fallback",
                 parser_version="1.0.0",
+                canonical_parser_version="v1.0",
                 model_hash="sha256_" + "0" * 64,
                 environment_digest="sha256_" + "0" * 64,
             ),
@@ -158,6 +189,7 @@ class TestExtractionResultDeterminism:
                 raw_file_blake3="blake3_" + "a" * 64,
                 parser_name="fallback",
                 parser_version="1.0.0",
+                canonical_parser_version="v1.0",
                 model_hash="sha256_" + "0" * 64,
                 environment_digest="sha256_" + "0" * 64,
             ),
@@ -203,6 +235,7 @@ class TestExtractionResultDeterminism:
                 raw_file_blake3="blake3_" + "a" * 64,
                 parser_name="fallback",
                 parser_version="1.0.0",
+                canonical_parser_version="v1.0",
                 model_hash="sha256_" + "0" * 64,
                 environment_digest="sha256_" + "0" * 64,
             ),
@@ -304,6 +337,7 @@ class TestApiSchemas:
                 raw_file_blake3="blake3_" + "a" * 64,
                 parser_name="fallback",
                 parser_version="1.0.0",
+                canonical_parser_version="v1.0",
                 model_hash="sha256_" + "0" * 64,
                 environment_digest="sha256_" + "0" * 64,
             ),
@@ -330,5 +364,6 @@ class TestApiSchemas:
         )
 
         assert response.provenance.parser_name == "fallback"
+        assert response.provenance.canonical_parser_version == "v1.0"
         assert response.document.total_pages == 1
         assert response.commit_id is None

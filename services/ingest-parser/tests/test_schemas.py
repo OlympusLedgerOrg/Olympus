@@ -92,12 +92,40 @@ class TestProvenance:
             raw_file_blake3="blake3_" + "a" * 64,
             parser_name="docling",
             parser_version="2.1.0",
+            canonical_parser_version="v1.0",
             model_hash="sha256_" + "b" * 64,
             environment_digest="sha256_" + "c" * 64,
         )
 
         assert provenance.parser_name == "docling"
+        assert provenance.canonical_parser_version == "v1.0"
         assert provenance.raw_file_blake3.startswith("blake3_")
+
+    def test_canonical_version_pattern(self) -> None:
+        """Test that canonical_parser_version follows v{major}.{minor} pattern."""
+        # Valid versions
+        for version in ["v1.0", "v2.5", "v10.20"]:
+            provenance = Provenance(
+                raw_file_blake3="blake3_" + "a" * 64,
+                parser_name="docling",
+                parser_version="2.1.0",
+                canonical_parser_version=version,
+                model_hash="sha256_" + "b" * 64,
+                environment_digest="sha256_" + "c" * 64,
+            )
+            assert provenance.canonical_parser_version == version
+
+        # Invalid versions
+        for invalid in ["1.0", "v1", "v1.0.0", "latest"]:
+            with pytest.raises(ValueError):
+                Provenance(
+                    raw_file_blake3="blake3_" + "a" * 64,
+                    parser_name="docling",
+                    parser_version="2.1.0",
+                    canonical_parser_version=invalid,
+                    model_hash="sha256_" + "b" * 64,
+                    environment_digest="sha256_" + "c" * 64,
+                )
 
     def test_invalid_blake3_hash(self) -> None:
         """Test that invalid BLAKE3 hash is rejected."""
@@ -106,6 +134,7 @@ class TestProvenance:
                 raw_file_blake3="invalid_hash",  # Missing blake3_ prefix
                 parser_name="docling",
                 parser_version="2.1.0",
+                canonical_parser_version="v1.0",
                 model_hash="sha256_" + "b" * 64,
                 environment_digest="sha256_" + "c" * 64,
             )
@@ -117,6 +146,7 @@ class TestProvenance:
                 raw_file_blake3="blake3_" + "a" * 64,
                 parser_name="docling",
                 parser_version="2.1.0",
+                canonical_parser_version="v1.0",
                 model_hash="invalid",  # Missing sha256_ prefix
                 environment_digest="sha256_" + "c" * 64,
             )
@@ -169,6 +199,7 @@ class TestParseResponse:
                 raw_file_blake3="blake3_" + "a" * 64,
                 parser_name="docling",
                 parser_version="2.1.0",
+                canonical_parser_version="v1.0",
                 model_hash="sha256_" + "b" * 64,
                 environment_digest="sha256_" + "c" * 64,
             ),
@@ -191,6 +222,7 @@ class TestParseResponse:
         )
 
         assert response.provenance.parser_name == "docling"
+        assert response.provenance.canonical_parser_version == "v1.0"
         assert response.document.total_pages == 1
 
     def test_response_serialization(self) -> None:
@@ -200,6 +232,7 @@ class TestParseResponse:
                 raw_file_blake3="blake3_" + "a" * 64,
                 parser_name="fallback",
                 parser_version="1.0.0",
+                canonical_parser_version="v1.0",
                 model_hash="sha256_" + "0" * 64,
                 environment_digest="sha256_" + "0" * 64,
             ),
@@ -210,3 +243,4 @@ class TestParseResponse:
         assert "provenance" in json_str
         assert "document" in json_str
         assert "blake3_" in json_str
+        assert "canonical_parser_version" in json_str

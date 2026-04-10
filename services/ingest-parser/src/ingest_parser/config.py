@@ -19,6 +19,9 @@ class ParserConfig:
         parser_name: Name of the parser backend (e.g., 'docling', 'marker')
         model_path: Path to the AI model weights directory
         expected_model_hash: Expected SHA256 hash of the model weights
+        canonical_parser_version: Stable version identifier (e.g., 'v1.0') that maps
+                                  to a specific parser_version + model_hash combination.
+                                  Must be incremented when model_hash changes.
         cpu_only: Force CPU execution for determinism (should always be True)
         num_threads: Number of CPU threads to use (1 for max reproducibility)
         bbox_precision: Decimal places for bounding box rounding
@@ -27,6 +30,7 @@ class ParserConfig:
     parser_name: str = "docling"
     model_path: Path = field(default_factory=lambda: Path("/models"))
     expected_model_hash: str = ""
+    canonical_parser_version: str = "v1.0"
     cpu_only: bool = True
     num_threads: int = 1
     bbox_precision: int = 4
@@ -38,6 +42,7 @@ class ParserConfig:
             parser_name=os.getenv("INGEST_PARSER_NAME", "docling"),
             model_path=Path(os.getenv("INGEST_PARSER_MODEL_PATH", "/models")),
             expected_model_hash=os.getenv("INGEST_PARSER_MODEL_HASH", ""),
+            canonical_parser_version=os.getenv("INGEST_PARSER_CANONICAL_VERSION", "v1.0"),
             cpu_only=os.getenv("INGEST_PARSER_CPU_ONLY", "true").lower() == "true",
             num_threads=int(os.getenv("INGEST_PARSER_NUM_THREADS", "1")),
             bbox_precision=int(os.getenv("INGEST_PARSER_BBOX_PRECISION", "4")),
