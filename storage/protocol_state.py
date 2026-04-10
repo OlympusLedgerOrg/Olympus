@@ -17,6 +17,7 @@ radius of bugs in operational code (rate limiting, ingestion batches, etc.).
 from __future__ import annotations
 
 import logging
+import os
 from collections.abc import Mapping
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Any
@@ -26,13 +27,29 @@ from psycopg import sql
 from storage.gates import derive_node_rehash_gate
 
 # Rust SMT is required for production — no fallback allowed.
+# When OLYMPUS_REQUIRE_RUST=1, fail immediately. Otherwise, set a sentinel
+# for runtime checks. Tests that skip Rust can still collect this module.
 try:
     from olympus_core import RustSparseMerkleTree
+
+    _RUST_SMT_AVAILABLE = True
 except ImportError:
-    raise RuntimeError(
-        "olympus_core is required for tree state operations — "
-        "install with `maturin develop`"
-    ) from None
+    RustSparseMerkleTree = None  # type: ignore[assignment,misc]
+    _RUST_SMT_AVAILABLE = False
+    if os.getenv("OLYMPUS_REQUIRE_RUST", "").strip().lower() in {"1", "true", "yes", "on"}:
+        raise RuntimeError(
+            "Rust SMT extension required by OLYMPUS_REQUIRE_RUST=1, "
+            "but olympus_core could not be imported — install with `maturin develop`"
+        ) from None
+
+
+def _require_rust_smt() -> None:
+    """Raise RuntimeError if Rust SMT is not available. Call at runtime entry points."""
+    if not _RUST_SMT_AVAILABLE:
+        raise RuntimeError(
+            "olympus_core is required for tree state operations — "
+            "install with `maturin develop`"
+        )
 
 
 if TYPE_CHECKING:
@@ -97,6 +114,7 @@ def load_tree_state(
     if batch_size < 1:
         raise ValueError("batch_size must be >= 1")
 
+    _require_rust_smt()
     tree = RustSparseMerkleTree()
 
     # CD-HS-ST: Load leaves from the global SMT (no shard_id filter)

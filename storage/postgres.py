@@ -65,13 +65,29 @@ from protocol.ssmf import (
 from storage.gates import derive_node_rehash_gate
 
 # Rust SMT is required for production — no fallback allowed.
+# When OLYMPUS_REQUIRE_RUST=1, fail immediately. Otherwise, set a sentinel
+# for runtime checks. Tests that skip Rust can still collect this module.
 try:
     from olympus_core import RustSparseMerkleTree
+
+    _RUST_SMT_AVAILABLE = True
 except ImportError:
-    raise RuntimeError(
-        "olympus_core is required for storage operations — "
-        "install with `maturin develop`"
-    ) from None
+    RustSparseMerkleTree = None  # type: ignore[assignment,misc]
+    _RUST_SMT_AVAILABLE = False
+    if os.getenv("OLYMPUS_REQUIRE_RUST", "").strip().lower() in {"1", "true", "yes", "on"}:
+        raise RuntimeError(
+            "Rust SMT extension required by OLYMPUS_REQUIRE_RUST=1, "
+            "but olympus_core could not be imported — install with `maturin develop`"
+        ) from None
+
+
+def _require_rust_smt() -> None:
+    """Raise RuntimeError if Rust SMT is not available. Call at runtime entry points."""
+    if not _RUST_SMT_AVAILABLE:
+        raise RuntimeError(
+            "olympus_core is required for storage operations — "
+            "install with `maturin develop`"
+        )
 
 
 logger = logging.getLogger(__name__)
@@ -1100,6 +1116,7 @@ class StorageLayer:
         poseidon_root: bytes | None,
     ) -> tuple[bytes, ExistenceProof, dict[str, Any], str, LedgerEntry]:
         """Inner implementation of append_record without retry logic."""
+        _require_rust_smt()
         # BEGIN TRANSACTION (implicit via context manager)
         with self._get_connection() as conn, conn.cursor(row_factory=dict_row) as cur:
             # Set SERIALIZABLE isolation level to prevent phantom reads
@@ -2447,6 +2464,7 @@ class StorageLayer:
             )
         else:
             # Historical snapshot — incremental replay from leaves.
+            _require_rust_smt()
             replay_tree = RustSparseMerkleTree()
             cutoff = as_of_ts
             if isinstance(cutoff, str):
@@ -2651,6 +2669,7 @@ class StorageLayer:
                 headers_to_check = headers
 
             # If resuming, load tree state up to prev header's timestamp.
+            _require_rust_smt()
             tree = RustSparseMerkleTree()
             prev_ts: datetime | None = None
 

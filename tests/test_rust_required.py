@@ -2,17 +2,19 @@
 
 from __future__ import annotations
 
+import os
 import sys
 import unittest
 
 
 class TestRustRequired(unittest.TestCase):
-    """olympus_core must be present for storage modules."""
+    """olympus_core must be present for storage modules when OLYMPUS_REQUIRE_RUST=1."""
 
-    def test_storage_postgres_raises_without_olympus_core(self) -> None:
-        """storage.postgres raises RuntimeError at import time when olympus_core is absent."""
+    def test_storage_postgres_raises_without_olympus_core_when_required(self) -> None:
+        """storage.postgres raises RuntimeError at import when olympus_core is absent and required."""
         # Save the original olympus_core module
         orig_olympus_core = sys.modules.get("olympus_core")
+        orig_require_rust = os.environ.get("OLYMPUS_REQUIRE_RUST")
 
         # Remove olympus_core from sys.modules and prevent reimport
         if "olympus_core" in sys.modules:
@@ -32,17 +34,26 @@ class TestRustRequired(unittest.TestCase):
             return real_import(name, *args, **kwargs)
 
         try:
+            # Set OLYMPUS_REQUIRE_RUST=1 to trigger the error
+            os.environ["OLYMPUS_REQUIRE_RUST"] = "1"
+
             # Patch builtins.__import__ to block olympus_core
             builtins.__import__ = _fake_import
 
             with self.assertRaises(RuntimeError) as ctx:
                 import storage.postgres  # noqa: F401
 
-            self.assertIn("olympus_core is required", str(ctx.exception))
+            self.assertIn("OLYMPUS_REQUIRE_RUST=1", str(ctx.exception))
 
         finally:
             # Restore original __import__
             builtins.__import__ = real_import
+
+            # Restore environment
+            if orig_require_rust is not None:
+                os.environ["OLYMPUS_REQUIRE_RUST"] = orig_require_rust
+            else:
+                os.environ.pop("OLYMPUS_REQUIRE_RUST", None)
 
             # Restore sys.modules
             if orig_olympus_core is not None:
@@ -52,10 +63,11 @@ class TestRustRequired(unittest.TestCase):
             if orig_storage is not None:
                 sys.modules["storage"] = orig_storage
 
-    def test_storage_protocol_state_raises_without_olympus_core(self) -> None:
-        """storage.protocol_state raises RuntimeError at import time when olympus_core is absent."""
+    def test_storage_protocol_state_raises_without_olympus_core_when_required(self) -> None:
+        """storage.protocol_state raises RuntimeError at import when olympus_core is absent and required."""
         # Save the original olympus_core module
         orig_olympus_core = sys.modules.get("olympus_core")
+        orig_require_rust = os.environ.get("OLYMPUS_REQUIRE_RUST")
 
         # Remove olympus_core from sys.modules and prevent reimport
         if "olympus_core" in sys.modules:
@@ -74,17 +86,26 @@ class TestRustRequired(unittest.TestCase):
             return real_import(name, *args, **kwargs)
 
         try:
+            # Set OLYMPUS_REQUIRE_RUST=1 to trigger the error
+            os.environ["OLYMPUS_REQUIRE_RUST"] = "1"
+
             # Patch builtins.__import__ to block olympus_core
             builtins.__import__ = _fake_import
 
             with self.assertRaises(RuntimeError) as ctx:
                 import storage.protocol_state  # noqa: F401
 
-            self.assertIn("olympus_core is required", str(ctx.exception))
+            self.assertIn("OLYMPUS_REQUIRE_RUST=1", str(ctx.exception))
 
         finally:
             # Restore original __import__
             builtins.__import__ = real_import
+
+            # Restore environment
+            if orig_require_rust is not None:
+                os.environ["OLYMPUS_REQUIRE_RUST"] = orig_require_rust
+            else:
+                os.environ.pop("OLYMPUS_REQUIRE_RUST", None)
 
             # Restore sys.modules
             if orig_olympus_core is not None:
