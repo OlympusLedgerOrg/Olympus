@@ -33,19 +33,19 @@ class BaseParser(ABC):
     @abstractmethod
     def name(self) -> str:
         """Return the parser name (e.g., 'docling')."""
-        ...
+        pass
 
     @property
     @abstractmethod
     def version(self) -> str:
         """Return the parser version (semantic version)."""
-        ...
+        pass
 
     @property
     @abstractmethod
     def model_hash(self) -> str:
         """Return the SHA256 hash of the model weights."""
-        ...
+        pass
 
     @abstractmethod
     def parse(self, content: bytes, content_type: str) -> ExtractedDocument:
@@ -62,7 +62,7 @@ class BaseParser(ABC):
             ValueError: If content type is not supported.
             RuntimeError: If parsing fails.
         """
-        ...
+        pass
 
     def _round_float(self, value: float, precision: int = 4) -> float:
         """Round a float to the specified precision.

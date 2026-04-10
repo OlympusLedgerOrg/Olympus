@@ -78,7 +78,7 @@ class TestExtractionSchemas:
 
     def test_content_block_types(self) -> None:
         """Test all block types are valid."""
-        for block_type in BlockType:
+        for block_type in list(BlockType):
             block = ContentBlock(
                 id="blk_01",
                 type=block_type,
