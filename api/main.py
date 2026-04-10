@@ -37,6 +37,7 @@ from api.db import engine
 from api.ingest import _close_sequencer_client, router as ingest_router
 from api.models import Base  # noqa: F401 — ensures all models are registered
 from api.routers import agencies, appeals, documents, keys, ledger, requests as requests_router
+from api.routers.admin import router as admin_router
 from api.routers.datasets import router as datasets_router
 from api.routers.shards import router as shards_router
 from api.routers.witness import router as witness_router
@@ -309,6 +310,9 @@ def create_app() -> FastAPI:
     app.include_router(sth_router)
     app.include_router(witness_router)
     app.include_router(datasets_router)
+
+    # Admin RBAC router
+    app.include_router(admin_router)
 
     @app.get("/", tags=["health"])
     async def root() -> dict[str, Any]:
