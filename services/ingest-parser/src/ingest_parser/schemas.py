@@ -57,8 +57,8 @@ class ContentBlock(BaseModel):
         This is CRITICAL for cryptographic determinism. Floating-point drift
         is the #1 killer of hash stability across environments.
         """
-        if v is None:
-            return v
+        # bbox is a required field, but this validator runs "before" mode
+        # so we handle the case where v might not be the expected type yet
         return [round(float(coord), 4) for coord in v]
 
     @field_validator("confidence", mode="before")

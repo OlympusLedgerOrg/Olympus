@@ -63,9 +63,9 @@ def download_docling_models(output_dir: Path) -> dict:
 
         from docling.document_converter import DocumentConverter
 
-        # Initialize converter (this downloads models if needed)
+        # Initialize converter to trigger model download as a side effect
         print("Initializing Docling (this may download models)...")
-        _converter = DocumentConverter()  # noqa: F841 - Side effect: downloads models
+        DocumentConverter()  # Side effect: downloads models to cache
 
         docling_version = version("docling")
 

@@ -137,7 +137,11 @@ class ExtractResponse(BaseModel):
     commit_id: str | None = Field(
         None,
         pattern=r"^0x[0-9a-f]{64}$",
-        description="Commit ID if commit_after_extract was true",
+        description=(
+            "Ledger commit ID if commit_after_extract was true. "
+            "Uses '0x' prefix (Ethereum-style) to match existing Olympus commit ID format, "
+            "distinct from 'blake3_' prefixed content hashes."
+        ),
     )
     extracted_at: datetime = Field(
         ...,

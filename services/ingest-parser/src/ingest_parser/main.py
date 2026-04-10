@@ -23,7 +23,7 @@ import logging
 from contextlib import asynccontextmanager
 from typing import TYPE_CHECKING, Annotated
 
-from fastapi import FastAPI, File, HTTPException, UploadFile, status
+from fastapi import FastAPI, File, HTTPException, Request, UploadFile, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
@@ -273,7 +273,7 @@ async def parse_document(
 
 
 @app.exception_handler(Exception)
-async def global_exception_handler(request, exc: Exception) -> JSONResponse:
+async def global_exception_handler(request: Request, exc: Exception) -> JSONResponse:
     """Global exception handler for unhandled errors."""
     logger.exception(f"Unhandled exception: {exc}")
     return JSONResponse(

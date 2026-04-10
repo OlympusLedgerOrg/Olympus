@@ -56,6 +56,9 @@ class ServerConfig:
         environment_digest: SHA256 hash of the Docker image or environment manifest
     """
 
+    # Note: 0.0.0.0 binds to all interfaces, which is intentional for
+    # containerized deployments. For production use behind a reverse proxy,
+    # consider binding to 127.0.0.1 if the service should not be directly accessible.
     host: str = "0.0.0.0"
     port: int = 8090
     max_file_size_mb: int = 256

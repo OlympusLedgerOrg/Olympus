@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import logging
 import os
+import threading
 from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
 from typing import TYPE_CHECKING
@@ -251,19 +252,27 @@ class IngestParserClient:
         }.get(ext, "application/octet-stream")
 
 
-# Singleton client management for the API
+# Thread-safe singleton client management for the API
 _client: IngestParserClient | None = None
+_client_lock = threading.Lock()
 
 
 def get_parser_client() -> IngestParserClient:
-    """Get the global parser client instance.
+    """Get the global parser client instance (thread-safe).
 
     Note: This returns a client that must be used within an async context.
-    For FastAPI integration, use the lifespan context manager instead.
+    For FastAPI integration, prefer using the lifespan context manager instead.
+
+    Warning: This singleton pattern is provided for convenience but the
+    recommended approach is to use parser_client_lifespan() in your
+    FastAPI application's lifespan handler.
     """
     global _client
     if _client is None:
-        _client = IngestParserClient()
+        with _client_lock:
+            # Double-check locking pattern
+            if _client is None:
+                _client = IngestParserClient()
     return _client
 
 
