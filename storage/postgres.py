@@ -1049,6 +1049,8 @@ class StorageLayer:
             ValueError: If value_hash is not 32 bytes or record already exists.
             psycopg.errors.SerializationFailure: If retries are exhausted on conflict.
         """
+        _require_rust_smt()
+
         if len(value_hash) != 32:
             raise ValueError(f"Value hash must be 32 bytes, got {len(value_hash)}")
 
@@ -1116,7 +1118,6 @@ class StorageLayer:
         poseidon_root: bytes | None,
     ) -> tuple[bytes, ExistenceProof, dict[str, Any], str, LedgerEntry]:
         """Inner implementation of append_record without retry logic."""
-        _require_rust_smt()
         # BEGIN TRANSACTION (implicit via context manager)
         with self._get_connection() as conn, conn.cursor(row_factory=dict_row) as cur:
             # Set SERIALIZABLE isolation level to prevent phantom reads
