@@ -64,6 +64,7 @@ from protocol.ssmf import (
 )
 from storage.gates import derive_node_rehash_gate
 
+
 # Rust SMT is required for production — no fallback allowed.
 # When OLYMPUS_REQUIRE_RUST=1, fail immediately. Otherwise, set a sentinel
 # for runtime checks. Tests that skip Rust can still collect this module.
