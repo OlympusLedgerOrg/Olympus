@@ -60,10 +60,17 @@ from protocol.ssmf import (
     EMPTY_HASHES,
     ExistenceProof,
     NonExistenceProof,
-    SparseMerkleTree,
     _key_to_path_bits,
 )
 from storage.gates import derive_node_rehash_gate
+
+# Rust SMT is required for production — no fallback allowed.
+try:
+    from olympus_core import RustSparseMerkleTree
+except ImportError:
+    raise RuntimeError(
+        "olympus_core is required — install with `maturin develop`"
+    ) from None
 
 
 logger = logging.getLogger(__name__)
@@ -298,7 +305,7 @@ class StorageLayer:
             )
 
     def _iter_tree_node_rows(
-        self, shard_id: str, tree: SparseMerkleTree, ts: datetime
+        self, shard_id: str, tree: RustSparseMerkleTree, ts: datetime
     ) -> Iterator[tuple[str, int, bytes, bytes, datetime]]:
         """
         Yield sparse Merkle node rows ready for append-only persistence.
@@ -1110,16 +1117,9 @@ class StorageLayer:
             siblings = self._get_proof_path(cur, key)
 
             # --- O(256) Rust incremental update ---
-            try:
-                from olympus_core import RustSparseMerkleTree
-
-                root_hash, proof_siblings, node_deltas = RustSparseMerkleTree.incremental_update(
-                    key, value_hash, siblings
-                )
-            except ImportError:
-                raise RuntimeError(
-                    "olympus_core is required — install the Rust extension with `maturin develop`"
-                ) from None
+            root_hash, proof_siblings, node_deltas = RustSparseMerkleTree.incremental_update(
+                key, value_hash, siblings
+            )
 
             # --- tree_size from DB (O(1) COUNT on smt_leaves) ---
             cur.execute("SELECT COUNT(*) AS cnt FROM smt_leaves")
@@ -2446,7 +2446,7 @@ class StorageLayer:
             )
         else:
             # Historical snapshot — incremental replay from leaves.
-            replay_tree = SparseMerkleTree()
+            replay_tree = RustSparseMerkleTree()
             cutoff = as_of_ts
             if isinstance(cutoff, str):
                 cutoff = datetime.fromisoformat(cutoff.replace("Z", "+00:00"))
@@ -2650,7 +2650,7 @@ class StorageLayer:
                 headers_to_check = headers
 
             # If resuming, load tree state up to prev header's timestamp.
-            tree = SparseMerkleTree()
+            tree = RustSparseMerkleTree()
             prev_ts: datetime | None = None
 
             if after_seq >= 0:

@@ -23,8 +23,16 @@ from typing import TYPE_CHECKING, Any
 
 from psycopg import sql
 
-from protocol.ssmf import SparseMerkleTree
 from storage.gates import derive_node_rehash_gate
+
+# Rust SMT is required for production — no fallback allowed.
+try:
+    from olympus_core import RustSparseMerkleTree
+except ImportError:
+    raise RuntimeError(
+        "olympus_core is required for tree state operations — "
+        "install with `maturin develop`"
+    ) from None
 
 
 if TYPE_CHECKING:
@@ -48,7 +56,7 @@ def load_tree_state(
     up_to_ts: datetime | str | None = None,
     *,
     batch_size: int = 10_000,
-) -> SparseMerkleTree:
+) -> RustSparseMerkleTree:
     """
     Load sparse Merkle tree state from database.
 
@@ -84,12 +92,12 @@ def load_tree_state(
             Controls peak memory usage during tree reconstruction.
 
     Returns:
-        SparseMerkleTree with all leaves loaded (global SMT)
+        RustSparseMerkleTree with all leaves loaded (global SMT)
     """
     if batch_size < 1:
         raise ValueError("batch_size must be >= 1")
 
-    tree = SparseMerkleTree()
+    tree = RustSparseMerkleTree()
 
     # CD-HS-ST: Load leaves from the global SMT (no shard_id filter)
     if up_to_ts is None:
@@ -128,7 +136,7 @@ def load_tree_state(
 def persist_tree_nodes(
     cur: psycopg.Cursor[Any],
     shard_id: str | None,
-    tree: SparseMerkleTree,
+    tree: RustSparseMerkleTree,
     *,
     cache_put: Any | None = None,
 ) -> None:
@@ -149,7 +157,7 @@ def persist_tree_nodes(
     Args:
         cur: Database cursor
         shard_id: DEPRECATED - kept for cache_put callback compatibility
-        tree: SparseMerkleTree to persist
+        tree: RustSparseMerkleTree to persist
         cache_put: Optional callback ``(shard_id, level, path_bytes, hash_value)``
             to populate an in-memory node cache.
     """
