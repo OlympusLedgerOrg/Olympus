@@ -29,9 +29,7 @@ class User(Base):
 
     __tablename__ = "users"
 
-    id: Mapped[str] = mapped_column(
-        String(36), primary_key=True, default=lambda: str(uuid.uuid4())
-    )
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
     email: Mapped[str] = mapped_column(String(320), nullable=False, unique=True, index=True)
     role: Mapped[str] = mapped_column(String(32), nullable=False, default="user")
     plan: Mapped[str] = mapped_column(String(32), nullable=False, default="free")

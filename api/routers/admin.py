@@ -61,19 +61,13 @@ async def get_platform_stats(
     total_revenue_result = await db.execute(select(func.coalesce(func.sum(Purchase.price), 0)))
     total_revenue: float = total_revenue_result.scalar_one()
 
-    active_subs_result = await db.execute(
-        select(func.count(User.id)).where(User.plan != "free")
-    )
+    active_subs_result = await db.execute(select(func.count(User.id)).where(User.plan != "free"))
     active_subscriptions: int = active_subs_result.scalar_one()
 
-    avg_price_result = await db.execute(
-        select(func.coalesce(func.avg(Purchase.price), 0))
-    )
+    avg_price_result = await db.execute(select(func.coalesce(func.avg(Purchase.price), 0)))
     avg_price: float = avg_price_result.scalar_one()
 
-    conversion_rate = (
-        (active_subscriptions / total_users * 100) if total_users > 0 else 0.0
-    )
+    conversion_rate = (active_subscriptions / total_users * 100) if total_users > 0 else 0.0
 
     return PlatformStatsResponse(
         mrr=active_subscriptions * avg_price,
@@ -104,12 +98,7 @@ async def list_customers(
     count_result = await db.execute(select(func.count(User.id)))
     total: int = count_result.scalar_one()
 
-    q = (
-        select(User)
-        .order_by(User.created_at.desc())
-        .offset((page - 1) * per_page)
-        .limit(per_page)
-    )
+    q = select(User).order_by(User.created_at.desc()).offset((page - 1) * per_page).limit(per_page)
     result = await db.execute(q)
 
     return CustomerListResponse(
