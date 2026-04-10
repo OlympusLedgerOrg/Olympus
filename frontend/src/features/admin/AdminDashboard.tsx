@@ -1,5 +1,5 @@
-import React, { useEffect, useState } from 'react';
-import { Users, DollarSign, TrendingUp, ShieldAlert, Activity } from 'lucide-react';
+import React, { useEffect, useState, useCallback } from 'react';
+import { Users, DollarSign, TrendingUp, ShieldAlert, Activity, ChevronLeft, ChevronRight } from 'lucide-react';
 import api from '../../api/client';
 
 interface PlatformStats {
@@ -15,6 +15,13 @@ interface Customer {
   role: string;
   plan: string;
   created_at: string;
+}
+
+interface CustomerListResponse {
+  items: Customer[];
+  page: number;
+  per_page: number;
+  total: number;
 }
 
 const AdminStat = ({ label, value, icon: Icon, color }: {
@@ -34,20 +41,45 @@ const AdminStat = ({ label, value, icon: Icon, color }: {
   </div>
 );
 
+const PER_PAGE = 20;
+
 const AdminDashboard = () => {
   const [stats, setStats] = useState<PlatformStats | null>(null);
   const [customers, setCustomers] = useState<Customer[]>([]);
+  const [page, setPage] = useState(1);
+  const [total, setTotal] = useState(0);
+
+  const totalPages = Math.max(1, Math.ceil(total / PER_PAGE));
+
+  const fetchCustomers = useCallback(async (p: number) => {
+    const res = await api.get<CustomerListResponse>(`/api/admin/customers?page=${p}&per_page=${PER_PAGE}`);
+    setCustomers(res.data.items);
+    setTotal(res.data.total);
+  }, []);
 
   useEffect(() => {
-    const fetchAdminData = async () => {
-      const [statsRes, custRes] = await Promise.all([
-        api.get<PlatformStats>('/api/admin/stats'),
-        api.get<Customer[]>('/api/admin/customers'),
-      ]);
-      setStats(statsRes.data);
-      setCustomers(custRes.data);
+    const fetchStats = async () => {
+      const res = await api.get<PlatformStats>('/api/admin/stats');
+      setStats(res.data);
     };
-    fetchAdminData();
+    fetchStats();
+  }, []);
+
+  useEffect(() => {
+    fetchCustomers(page);
+  }, [page, fetchCustomers]);
+
+  const handleExportCsv = useCallback(() => {
+    const token = localStorage.getItem('olympus_token') ?? '';
+    const baseUrl = import.meta.env.VITE_API_BASE_URL ?? '';
+    const link = document.createElement('a');
+    link.href = `${baseUrl}/api/admin/customers/export`;
+    // For API-key-gated downloads we open in a new tab; the browser will
+    // handle the Content-Disposition attachment header.  If the endpoint
+    // requires an API key header the operator should use curl/wget instead.
+    link.target = '_blank';
+    link.rel = 'noopener noreferrer';
+    link.click();
   }, []);
 
   if (!stats) return <div className="p-20 font-mono text-cyan-500 animate-pulse">INIT_ADMIN_SESSION...</div>;
@@ -76,7 +108,9 @@ const AdminDashboard = () => {
       <div className="bg-black border border-white/10 rounded-2xl overflow-hidden">
         <div className="p-6 border-b border-white/10 flex justify-between items-center">
           <h2 className="font-bold font-mono">CUSTOMER_REGISTRY</h2>
-          <button className="text-xs text-cyan-400 hover:underline">EXPORT_CSV</button>
+          <button onClick={handleExportCsv} className="text-xs text-cyan-400 hover:underline">
+            EXPORT_CSV
+          </button>
         </div>
         <table className="w-full text-left font-mono text-sm">
           <thead>
@@ -109,6 +143,30 @@ const AdminDashboard = () => {
             ))}
           </tbody>
         </table>
+
+        {/* Pagination Controls */}
+        <div className="p-4 border-t border-white/10 flex justify-between items-center text-xs font-mono text-gray-500">
+          <span>{total} total customer{total !== 1 ? 's' : ''}</span>
+          <div className="flex items-center gap-3">
+            <button
+              onClick={() => setPage((p) => Math.max(1, p - 1))}
+              disabled={page <= 1}
+              className="p-1 rounded hover:bg-white/10 disabled:opacity-30 disabled:cursor-not-allowed"
+            >
+              <ChevronLeft size={16} />
+            </button>
+            <span>
+              Page {page} of {totalPages}
+            </span>
+            <button
+              onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
+              disabled={page >= totalPages}
+              className="p-1 rounded hover:bg-white/10 disabled:opacity-30 disabled:cursor-not-allowed"
+            >
+              <ChevronRight size={16} />
+            </button>
+          </div>
+        </div>
       </div>
     </div>
   );
