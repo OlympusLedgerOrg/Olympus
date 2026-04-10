@@ -4,6 +4,7 @@ Tests for storage/protocol_state.py module.
 Uses mocked psycopg cursor/connection to avoid requiring a real Postgres instance.
 """
 
+import importlib.util
 import unittest
 from datetime import datetime, timezone
 from unittest.mock import MagicMock
@@ -21,12 +22,7 @@ from storage.protocol_state import (
 
 
 # Check if Rust extension is available
-try:
-    import olympus_core  # noqa: F401
-
-    HAS_RUST = True
-except ImportError:
-    HAS_RUST = False
+HAS_RUST = importlib.util.find_spec("olympus_core") is not None
 
 RUST_ONLY = pytest.mark.skipif(not HAS_RUST, reason="Rust extension not built")
 
