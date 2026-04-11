@@ -9,76 +9,28 @@ permissions:
   pull-requests: write
   statuses: write
 
-# ---------------------------------------------------------------------------
-# Sensitive paths that require GPG/SSH signed commits (CLA Section 5).
-# Any PR touching these paths must have ALL commits cryptographically signed.
-# ---------------------------------------------------------------------------
-env:
-  SENSITIVE_PATHS: |
-    protocol/
-    proofs/circuits/
-    src/
-    services/cdhs-smf-rust/src/
-    verifiers/rust/src/
-    verifiers/go/
-
 jobs:
   # -------------------------------------------------------------------------
-  # Job 1: CLA signature check via cla-assistant
-  # Requires: cla-assistant GitHub App installed on the repo
+  # CLA check — disabled. No CLA signing is required to contribute.
+  # This job always passes so it does not block any PR.
   # -------------------------------------------------------------------------
   cla-check:
     name: CLA Signature Check
     runs-on: ubuntu-latest
     steps:
-      - name: CLA Assistant
-        uses: contributor-assistant/github-action@v2.6.1
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          # CLA_ASSISTANT_PAT: a Personal Access Token with repo write scope,
-          # required for cla-assistant to commit signature records to
-          # .github/cla-signatures.json on behalf of the bot.
-          PERSONAL_ACCESS_TOKEN: ${{ secrets.CLA_ASSISTANT_PAT }}
-        with:
-          # Path in the repo where signed CLAs are recorded (JSON)
-          path-to-signatures: '.github/cla-signatures.json'
-          path-to-document: 'CLA.md'
-          # Bot comment text when CLA is not signed.
-          # Note: &gt; is used as an HTML entity so the rendered comment
-          # shows the literal ">" that contributors must type when signing.
-          custom-notsigned-prcomment: |
-            Thank you for your contribution to Olympus!
-
-            Before we can merge this PR, you must sign the
-            <a href="https://github.com/OlympusLedgerOrg/Olympus/blob/main/CLA.md">Contributor License Agreement</a>.
-
-            Please comment below with:
-            &gt; I have read the CLA Document and I hereby sign the CLA
-
-            This is required for all human contributors. Bots (Dependabot,
-            Copilot) are exempt.
-          # Bots that are exempt from CLA signing
-          allowlist: |
-            bot
-            dependabot[bot]
-            github-actions[bot]
-            github-advanced-security[bot]
-            copilot[bot]
+      - name: CLA not required
+        run: echo "No CLA signing required — all contributors are welcome."
 
   # -------------------------------------------------------------------------
-  # Job 2: Signed commit enforcement for sensitive paths.
-  # Runs independently of cla-check — no needs dependency — so it always
-  # executes for every PR, including bot PRs where cla-check auto-passes.
-  # Uses the GitHub API — no checkout of PR code is required, so there is
-  # no risk of executing untrusted code in this pull_request_target context.
-  # GitHub's API verifies signatures against keys registered to each
-  # contributor's account, preventing use of arbitrary signing keys.
+  # Signed-commit check — advisory / informational only.
+  # Reports which commits touching sensitive cryptographic paths lack a
+  # GPG or SSH signature, but does NOT fail the workflow or block merging.
   # -------------------------------------------------------------------------
   signed-commit-check:
-    name: Signed Commit Enforcement
+    name: Signed Commit Check (Informational)
     runs-on: ubuntu-latest
     steps:
-      - name: Check signed commits for sensitive paths
+      - name: Check signed commits for sensitive paths (advisory)
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
@@ -115,7 +67,7 @@ jobs:
           echo "Sensitive paths changed:"
           printf '  %s\n' "${sensitive_files[@]}"
           echo ""
-          echo "Verifying all commits are signed..."
+          echo "Checking commit signatures (advisory — does not block merge)..."
           echo ""
 
           UNSIGNED_COMMITS=()
@@ -143,26 +95,30 @@ jobs:
             if [ "$verified" = "true" ]; then
               echo "  OK (signed): ${sha:0:12} — $login"
             else
-              echo "  FAIL (unsigned): ${sha:0:12} — $login"
+              echo "  ADVISORY (unsigned): ${sha:0:12} — $login"
               UNSIGNED_COMMITS+=("$sha")
             fi
           done
 
           if [ ${#UNSIGNED_COMMITS[@]} -gt 0 ]; then
             echo ""
-            echo "ERROR: The following commits modify sensitive cryptographic"
-            echo "paths but lack a valid GPG or SSH signature:"
+            echo "ADVISORY: The following commits modify sensitive cryptographic"
+            echo "paths but lack a valid GPG or SSH signature."
+            echo "Signing is recommended: it cryptographically proves commit"
+            echo "authorship and prevents tampering, but it is not required to merge."
             echo ""
             for c in "${UNSIGNED_COMMITS[@]}"; do
               echo "  $c"
             done
             echo ""
-            echo "Per CLA Section 5, contributions to cryptographic components"
-            echo "require signed commits. Configure git commit signing:"
+            echo "To sign commits, see:"
             echo "  https://docs.github.com/en/authentication/managing-commit-signature-verification"
-            exit 1
+          else
+            echo ""
+            echo "All commits touching sensitive paths are signed."
           fi
 
-          echo ""
-          echo "All commits touching sensitive paths are signed."
+          # Always exit 0 — this check is informational only and must not
+          # block contributors from merging their pull requests.
+          exit 0
 
