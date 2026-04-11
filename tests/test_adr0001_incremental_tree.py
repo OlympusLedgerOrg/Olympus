@@ -17,6 +17,7 @@ from protocol.ssmf import (
     EMPTY_HASHES,
     ExistenceProof,
     NonExistenceProof,
+    PurePythonSparseMerkleTree,
     SparseMerkleTree,
     _key_to_path_bits,
 )
@@ -47,9 +48,12 @@ def _normalize_sql(statement: object) -> str:
     return " ".join(text.split())
 
 
-def _build_tree_with_one_leaf() -> tuple[SparseMerkleTree, bytes, bytes]:
-    """Insert a single leaf into a fresh SMT and return (tree, key, value_hash)."""
-    tree = SparseMerkleTree()
+def _build_tree_with_one_leaf() -> tuple[PurePythonSparseMerkleTree, bytes, bytes]:
+    """Insert a single leaf into a fresh SMT and return (tree, key, value_hash).
+
+    Uses pure Python implementation to enable access to internal methods.
+    """
+    tree = PurePythonSparseMerkleTree()
     rec_key = record_key("document", "doc-1", 1)
     key = global_key("shard-1", rec_key)
     value_hash = b"\xab" * 32

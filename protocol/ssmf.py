@@ -333,6 +333,10 @@ class SparseMerkleTree:
         return path[:-1] + (1 - path[-1],)
 
 
+# Preserve pure-Python implementation for tests that need internal methods.
+PurePythonSparseMerkleTree = SparseMerkleTree
+
+
 # ---------------------------------------------------------------------------
 # Rust-backed drop-in replacement (when the extension is available)
 # ---------------------------------------------------------------------------
