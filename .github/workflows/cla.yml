@@ -5,6 +5,7 @@ on:
     types: [opened, synchronize, reopened]
 
 permissions:
+  contents: read
   pull-requests: write
   statuses: write
 
@@ -34,14 +35,17 @@ jobs:
         uses: contributor-assistant/github-action@v2.6.1
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # CLA_ASSISTANT_PAT: a Personal Access Token with repo write scope,
+          # required for cla-assistant to commit signature records to
+          # .github/cla-signatures.json on behalf of the bot.
           PERSONAL_ACCESS_TOKEN: ${{ secrets.CLA_ASSISTANT_PAT }}
         with:
           # Path in the repo where signed CLAs are recorded (JSON)
           path-to-signatures: '.github/cla-signatures.json'
           path-to-document: 'CLA.md'
           # Bot comment text when CLA is not signed.
-          # Note: &gt; is used as an HTML entity so the rendered comment shows
-          # the literal ">" that contributors must type when signing.
+          # Note: &gt; is used as an HTML entity so the rendered comment
+          # shows the literal ">" that contributors must type when signing.
           custom-notsigned-prcomment: |
             Thank you for your contribution to Olympus!
 
@@ -62,72 +66,87 @@ jobs:
             copilot[bot]
 
   # -------------------------------------------------------------------------
-  # Job 2: Signed commit enforcement for sensitive paths
-  # Runs only when the CLA check passes (or for bots)
+  # Job 2: Signed commit enforcement for sensitive paths.
+  # Uses the GitHub API — no checkout of PR code is required, so there is
+  # no risk of executing untrusted code in this pull_request_target context.
+  # GitHub's API verifies signatures against keys registered to each
+  # contributor's account, preventing use of arbitrary signing keys.
+  # if: always() ensures this check runs even when cla-check is skipped
+  # (e.g. bot PRs) or fails due to infrastructure issues.
   # -------------------------------------------------------------------------
   signed-commit-check:
     name: Signed Commit Enforcement
     runs-on: ubuntu-latest
     needs: cla-check
+    if: always()
     steps:
-      - name: Checkout base branch
-        uses: actions/checkout@v4
-        with:
-          # Checkout the base branch (trusted), NOT the PR head, to avoid
-          # executing untrusted contributor code in this privileged
-          # pull_request_target context.
-          fetch-depth: 0
-          ref: ${{ github.event.pull_request.base.sha }}
-
-      - name: Fetch PR head commits for inspection
-        # Fetch the head SHA so git log/verify-commit can inspect all PR
-        # commits without checking out untrusted code into the workspace.
-        run: git fetch --no-recurse-submodules origin ${{ github.event.pull_request.head.sha }}
-
-      - name: Get changed files
-        id: changed-files
-        uses: tj-actions/changed-files@v46.0.1
-        with:
-          base_sha: ${{ github.event.pull_request.base.sha }}
-          sha: ${{ github.event.pull_request.head.sha }}
-          files_yaml: |
-            sensitive:
-              - 'protocol/**'
-              - 'proofs/circuits/**'
-              - 'src/**'
-              - 'services/cdhs-smf-rust/src/**'
-              - 'verifiers/rust/src/**'
-              - 'verifiers/go/**'
-
       - name: Check signed commits for sensitive paths
-        if: steps.changed-files.outputs.sensitive_any_changed == 'true'
         env:
-          BASE_SHA: ${{ github.event.pull_request.base.sha }}
-          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          REPO: ${{ github.repository }}
         run: |
-          echo "Sensitive paths changed. Verifying all commits are signed."
-          echo "Changed sensitive files:"
-          echo "${{ steps.changed-files.outputs.sensitive_all_changed_files }}"
+          sensitive_patterns=(
+            "^protocol/"
+            "^proofs/circuits/"
+            "^src/"
+            "^services/cdhs-smf-rust/src/"
+            "^verifiers/rust/src/"
+            "^verifiers/go/"
+          )
+
+          sensitive_changed=false
+          sensitive_files=()
+
+          while IFS= read -r file; do
+            for pattern in "${sensitive_patterns[@]}"; do
+              if echo "$file" | grep -qE "$pattern"; then
+                sensitive_changed=true
+                sensitive_files+=("$file")
+                break
+              fi
+            done
+          done < <(gh api "repos/${REPO}/pulls/${PR_NUMBER}/files" --paginate \
+            --jq '.[].filename')
+
+          if [ "$sensitive_changed" = "false" ]; then
+            echo "No sensitive paths changed — signed commit check not required."
+            exit 0
+          fi
+
+          echo "Sensitive paths changed:"
+          printf '  %s\n' "${sensitive_files[@]}"
+          echo ""
+          echo "Verifying all commits are signed..."
           echo ""
 
           UNSIGNED_COMMITS=()
 
-          # Iterate over every commit in the PR
-          for commit in $(git log --format="%H" ${BASE_SHA}..${HEAD_SHA}); do
-            author=$(git log -1 --format="%an <%ae>" "$commit")
+          # GitHub's API returns verification.verified=true only when the
+          # signature is valid AND the signing key is registered to the
+          # contributor's GitHub account.
+          mapfile -t commit_entries < <(
+            gh api "repos/${REPO}/pulls/${PR_NUMBER}/commits" --paginate \
+              --jq '.[] | [.sha, (.commit.verification.verified | tostring), (.author.login // "unknown")] | join("|")'
+          )
 
-            # Skip bot commits — they're exempt per CLA allowlist
-            if echo "$author" | grep -qiE "bot|dependabot|copilot|github-actions"; then
-              echo "  SKIP (bot): $commit — $author"
+          for entry in "${commit_entries[@]}"; do
+            sha="${entry%%|*}"
+            rest="${entry#*|}"
+            verified="${rest%%|*}"
+            login="${rest#*|}"
+
+            # Skip bots: GitHub bot logins end with the [bot] suffix
+            if [[ "$login" =~ \[bot\]$ ]]; then
+              echo "  SKIP (bot): ${sha:0:12} — $login"
               continue
             fi
 
-            # git verify-commit exits 0 if signature is valid
-            if git verify-commit "$commit" 2>/dev/null; then
-              echo "  OK (signed): $commit — $author"
+            if [ "$verified" = "true" ]; then
+              echo "  OK (signed): ${sha:0:12} — $login"
             else
-              echo "  FAIL (unsigned): $commit — $author"
-              UNSIGNED_COMMITS+=("$commit")
+              echo "  FAIL (unsigned): ${sha:0:12} — $login"
+              UNSIGNED_COMMITS+=("$sha")
             fi
           done
 
@@ -149,7 +168,3 @@ jobs:
           echo ""
           echo "All commits touching sensitive paths are signed."
 
-      - name: Sensitive path check skipped
-        if: steps.changed-files.outputs.sensitive_any_changed != 'true'
-        run: |
-          echo "No sensitive paths changed — signed commit check not required."
