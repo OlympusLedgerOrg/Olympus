@@ -66,7 +66,7 @@ class TestNumericCanonicalization:
 # ---------------------------------------------------------------------------
 
 from api.services.merkle import (  # noqa: E402
-    _blake3_pair,
+    _blake3_leaf,
     build_tree,
     generate_proof,
     verify_proof,
@@ -96,7 +96,7 @@ class TestMerkleLeafOrdering:
 
 
 class TestLoneNodeSelfPairing:
-    """Adversarial probes: lone nodes must be self-paired, not promoted."""
+    """Adversarial probes: lone nodes use CT-style promotion (matching protocol.merkle.MerkleTree)."""
 
     def test_single_leaf_root_differs_from_leaf(self) -> None:
         """A single-leaf tree's root must NOT equal the leaf itself."""
@@ -104,12 +104,12 @@ class TestLoneNodeSelfPairing:
         tree = build_tree([leaf])
         assert tree.root_hash != leaf, "Lone leaf was promoted without hashing"
 
-    def test_single_leaf_root_equals_self_pair(self) -> None:
-        """The root must be H(0x01 || leaf || leaf) — a self-pair."""
+    def test_single_leaf_root_equals_domain_separated_leaf(self) -> None:
+        """The root must be the domain-separated leaf hash (CT-style promotion)."""
         leaf = hash_bytes(b"only_leaf").hex()
         tree = build_tree([leaf])
-        expected = _blake3_pair(leaf, leaf)
-        assert tree.root_hash == expected, "Lone leaf was not self-paired"
+        expected = _blake3_leaf(bytes.fromhex(leaf))
+        assert tree.root_hash == expected, "Lone leaf was not domain-separated correctly"
 
     def test_odd_leaf_count_lone_node_self_paired(self) -> None:
         """In a 3-leaf tree the lone node at level 1 is self-paired."""

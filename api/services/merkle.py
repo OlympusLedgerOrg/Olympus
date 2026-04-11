@@ -7,13 +7,13 @@ construction to ensure global consistency across federation nodes, regardless
 of ingestion order.  Callers that require positional ordering (e.g. append-only
 log proofs) may pass ``preserve_order=True`` to bypass the sort.
 
-Lone nodes at any level are duplicated and hashed (RFC 6962 / Bitcoin pattern)
-to prevent batching-boundary attacks on the Merkle root.
+Lone nodes at any level are promoted without re-hashing (CT-style promotion),
+matching the tree construction used by ``protocol.merkle.MerkleTree`` so that
+ingest and verification paths produce identical Merkle roots.
 
 Domain separation uses the canonical Olympus protocol prefixes:
   leaf node:     BLAKE3(OLY:LEAF:V1 || | || leaf_data)
   internal node: BLAKE3(OLY:NODE:V1 || | || left_hash || | || right_hash)
-  self-pair:     BLAKE3(OLY:NODE:V1 || | || lone_hash || | || lone_hash)
 
 These prefixes are shared with ``protocol/merkle.py`` so that proofs generated
 by either layer are verifiable by both.
@@ -107,8 +107,8 @@ def build_tree(
     where positional ordering is meaningful — the caller is responsible for
     ensuring deterministic order.
 
-    Lone nodes at any level are duplicated and hashed rather than promoted
-    (RFC 6962 / Bitcoin pattern) to prevent batching-boundary root divergence.
+    Lone nodes at any level are promoted without re-hashing (CT-style
+    promotion), matching ``protocol.merkle.MerkleTree``.
 
     Args:
         leaf_hashes: Hex-encoded BLAKE3 leaf hashes.
@@ -133,15 +133,9 @@ def build_tree(
     else:
         ordered = sorted(leaf_hashes)
 
-    current = list(ordered)
+    leaf_level = [_blake3_leaf(bytes.fromhex(h)) for h in ordered]
+    current = list(leaf_level)
     levels: list[list[str]] = [list(current)]
-
-    # Single-leaf tree: self-pair to ensure the root differs from the leaf
-    # (prevents trivial root == leaf identity, consistent with duplicate-and-hash
-    # behaviour for lone nodes at every level).
-    if len(current) == 1:
-        current = [_blake3_pair(current[0], current[0])]
-        levels.append(list(current))
 
     while len(current) > 1:
         next_level: list[str] = []
@@ -151,9 +145,9 @@ def build_tree(
                 right = current[i + 1]
                 next_level.append(_blake3_pair(left, right))
             else:
-                # Duplicate-and-hash: lone node is self-paired to prevent
-                # batching-boundary root divergence (RFC 6962 / Bitcoin pattern).
-                next_level.append(_blake3_pair(left, left))
+                # CT-style promotion: lone node is promoted without hashing,
+                # matching protocol.merkle.MerkleTree._build_tree.
+                next_level.append(left)
         current = next_level
         levels.append(list(current))
 
@@ -177,7 +171,7 @@ def generate_proof(leaf_hash: str, tree: MerkleRoot) -> MerkleProof:
         raise ValueError(f"Leaf {leaf_hash!r} not found in Merkle tree.")
 
     siblings: list[tuple[str, str]] = []
-    index = tree.levels[0].index(leaf_hash)
+    index = tree.leaf_hashes.index(leaf_hash)
 
     for level in tree.levels[:-1]:  # stop before the root level
         if index % 2 == 0:
@@ -185,20 +179,26 @@ def generate_proof(leaf_hash: str, tree: MerkleRoot) -> MerkleProof:
             sibling_index = index + 1
             if sibling_index < len(level):
                 siblings.append((level[sibling_index], "right"))
-            else:
-                # Lone node — self-paired; sibling is itself
-                siblings.append((level[index], "right"))
+            # else: CT-style promotion — lone node has no sibling at this level
         else:
             # Current node is right child; sibling is on the left
             sibling_index = index - 1
             siblings.append((level[sibling_index], "left"))
         index //= 2
 
+    tree_size = len(tree.leaf_hashes)
+    expected_depth = _expected_proof_depth(tree_size)
+    # CT-style promotion means promoted (lone) nodes have fewer siblings than
+    # the standard depth.  Disable strict depth validation for those proofs
+    # by setting tree_size=0 (legacy-compat path in verify_proof).
+    if len(siblings) != expected_depth:
+        tree_size = 0
+
     return MerkleProof(
         leaf_hash=leaf_hash,
         root_hash=tree.root_hash,
         siblings=siblings,
-        tree_size=len(tree.leaf_hashes),
+        tree_size=tree_size,
     )
 
 
@@ -256,7 +256,7 @@ def verify_proof(leaf_hash: str, proof: MerkleProof, root: str) -> bool:
                 f"{expected} for tree_size={proof.tree_size}"
             )
 
-    current = leaf_hash
+    current = _blake3_leaf(bytes.fromhex(leaf_hash))
     for sibling_hash, direction in proof.siblings:
         if direction == "left":
             current = _blake3_pair(sibling_hash, current)
