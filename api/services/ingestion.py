@@ -236,6 +236,13 @@ async def ingest_document(
             existing = existing_result.scalars().first()
             await db.commit()
 
+            if existing is None:
+                # Defensive: the conflicting row was not found (should not happen).
+                raise ValueError(
+                    f"Unexpected state: doc_hash conflict detected but conflicting "
+                    f"row not found: {doc_hash}. This may indicate a race condition."
+                )
+
             steps.append(
                 _make_step(
                     4,

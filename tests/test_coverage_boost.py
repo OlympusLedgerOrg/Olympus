@@ -507,18 +507,28 @@ class TestStorageLayerHelpers:
 
         import api.services.storage_layer as sl
 
-        with pytest.raises(Exception) as exc_info:
+        caught: _HTTPException | None = None
+        try:
             with sl.db_op("test"):
                 raise _HTTPException(status_code=404, detail="not found")
-        assert exc_info.value.status_code == 404  # type: ignore[union-attr]
+        except _HTTPException as exc:
+            caught = exc
+        assert caught is not None
+        assert caught.status_code == 404
 
     def test_db_op_converts_db_error_to_503(self):
+        from fastapi import HTTPException as _HTTPException
+
         import api.services.storage_layer as sl
 
-        with pytest.raises(Exception) as exc_info:
+        caught: _HTTPException | None = None
+        try:
             with sl.db_op("test"):
                 raise RuntimeError("failed to acquire postgresql connection")
-        assert exc_info.value.status_code == 503  # type: ignore[union-attr]
+        except _HTTPException as exc:
+            caught = exc
+        assert caught is not None
+        assert caught.status_code == 503
 
     def test_db_op_reraises_non_db_error(self):
         import api.services.storage_layer as sl

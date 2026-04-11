@@ -554,10 +554,10 @@ return 1
 
     def __init__(self, redis_url: str) -> None:
         self._redis_url = redis_url
-        self._client: object | None = None
-        self._consume_script: object | None = None
+        self._client: Any = None
+        self._consume_script: Any = None
 
-    def _get_client(self) -> object:
+    def _get_client(self) -> Any:
         """Return (and lazily create) the Redis client."""
         if self._client is None:
             try:
@@ -568,7 +568,7 @@ return 1
                     "Install it with: pip install redis"
                 ) from None
             self._client = redis.Redis.from_url(self._redis_url, decode_responses=True)
-        return self._client  # type: ignore[return-value]
+        return self._client
 
     def _prefixed(self, key: str) -> str:
         return f"{self._KEY_PREFIX}{key}"
@@ -583,12 +583,12 @@ return 1
 
     def _now_unix(self) -> float:
         """Get current time from Redis server for cross-worker consistency."""
-        sec, usec = self._get_client().time()  # type: ignore[union-attr]
+        sec, usec = self._get_client().time()
         return float(sec) + float(usec) / self._MICROSECONDS_PER_SECOND
 
     def get(self, key: str) -> _TokenBucket | None:
         """Retrieve a token bucket from Redis."""
-        data = self._get_client().hgetall(self._prefixed(key))  # type: ignore[union-attr]
+        data = self._get_client().hgetall(self._prefixed(key))
         if not data:
             return None
         try:
@@ -605,7 +605,7 @@ return 1
         """Store a token bucket in Redis with TTL."""
         rkey = self._prefixed(key)
         client = self._get_client()
-        client.hset(  # type: ignore[union-attr]
+        client.hset(
             rkey,
             mapping={
                 "tokens": str(bucket.tokens),
@@ -615,7 +615,7 @@ return 1
             },
         )
         ttl = self._ttl_for(bucket.capacity, bucket.refill_rate)
-        client.expire(rkey, ttl)  # type: ignore[union-attr]
+        client.expire(rkey, ttl)
 
     def consume_atomic(self, key: str, capacity: float, refill_rate: float) -> bool:
         """Atomically consume a token via Lua script.
@@ -627,7 +627,7 @@ return 1
         """
         client = self._get_client()
         if self._consume_script is None:
-            self._consume_script = client.register_script(self._LUA_CONSUME)  # type: ignore[union-attr]
+            self._consume_script = client.register_script(self._LUA_CONSUME)
         now = self._now_unix()
         ttl = self._ttl_for(capacity, refill_rate)
         result = self._consume_script(
@@ -643,9 +643,7 @@ return 1
         count = 0
         cursor: int = 0
         while True:
-            cursor, keys = client.scan(  # type: ignore[union-attr]
-                cursor=cursor, match=f"{self._KEY_PREFIX}*", count=500
-            )
+            cursor, keys = client.scan(cursor=cursor, match=f"{self._KEY_PREFIX}*", count=500)
             count += len(keys)
             if int(cursor) == 0:
                 break
