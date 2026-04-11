@@ -133,7 +133,7 @@ class TestDomainSeparation:
 
         leaf_data = b"test_document"
         old_leaf_hash = b3.blake3(leaf_data).hexdigest()  # no prefix
-        new_leaf_hash = _blake3_leaf(leaf_data)  # 0x00 prefix
+        new_leaf_hash = _blake3_leaf(leaf_data)  # OLY:LEAF:V1 prefix
 
         new_tree = build_tree([new_leaf_hash])
         old_tree = build_tree([old_leaf_hash])

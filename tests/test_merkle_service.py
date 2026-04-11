@@ -15,6 +15,7 @@ import pytest
 from api.services.merkle import (
     _INTERNAL_PREFIX,
     _LEAF_PREFIX,
+    _SEP,
     MerkleProof,
     _blake3_leaf,
     _blake3_pair,
@@ -23,6 +24,7 @@ from api.services.merkle import (
     generate_proof,
     verify_proof,
 )
+from protocol.hashes import blake3_hash
 
 
 def _b3(s: str) -> str:
@@ -40,8 +42,8 @@ class TestBuildTree:
     def test_two_leaves_preserve_order(self):
         a, b = _b3("a"), _b3("b")
         tree = build_tree([a, b], preserve_order=True)
-        # Domain-separated internal node: H(0x01 || a || b)
-        expected = blake3.blake3(_INTERNAL_PREFIX + bytes.fromhex(a) + bytes.fromhex(b)).hexdigest()
+        # Domain-separated internal node: BLAKE3(OLY:NODE:V1 || | || a || | || b)
+        expected = blake3_hash([_INTERNAL_PREFIX, _SEP, bytes.fromhex(a), _SEP, bytes.fromhex(b)]).hex()
         assert tree.root_hash == expected
 
     def test_four_leaves(self):
@@ -104,14 +106,14 @@ class TestBuildTree:
         assert build_tree(leaves_3).root_hash != build_tree(leaves_2).root_hash
 
     def test_lone_node_is_rehashed_not_promoted(self):
-        """Single-leaf tree root should be H(0x01 || leaf || leaf), not leaf."""
+        """Single-leaf tree root should be H(OLY:NODE:V1 || | || leaf || | || leaf), not leaf."""
         leaf = _b3("only_leaf")
         tree = build_tree([leaf])
         assert tree.root_hash != leaf
-        # Domain-separated self-pair: H(0x01 || leaf || leaf)
-        expected = blake3.blake3(
-            _INTERNAL_PREFIX + bytes.fromhex(leaf) + bytes.fromhex(leaf)
-        ).hexdigest()
+        # Domain-separated self-pair: BLAKE3(OLY:NODE:V1 || | || leaf || | || leaf)
+        expected = blake3_hash(
+            [_INTERNAL_PREFIX, _SEP, bytes.fromhex(leaf), _SEP, bytes.fromhex(leaf)]
+        ).hex()
         assert tree.root_hash == expected
 
     # -------------------------------------------------------------------
@@ -147,7 +149,7 @@ class TestBuildTree:
         leaf_data = b"test_document"
         # Old scheme: no prefix
         old_leaf_hash = blake3.blake3(leaf_data).hexdigest()
-        # New scheme: 0x00 prefix
+        # New scheme: OLY:LEAF:V1 prefix
         new_leaf_hash = _blake3_leaf(leaf_data)
 
         new_tree = build_tree([new_leaf_hash])

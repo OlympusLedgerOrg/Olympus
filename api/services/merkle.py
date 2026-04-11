@@ -10,17 +10,13 @@ log proofs) may pass ``preserve_order=True`` to bypass the sort.
 Lone nodes at any level are duplicated and hashed (RFC 6962 / Bitcoin pattern)
 to prevent batching-boundary attacks on the Merkle root.
 
-Domain separation (Finding #10):
-  leaf node:     H(0x00 || leaf_data)
-  internal node: H(0x01 || left_hash || right_hash)
-  self-pair:     H(0x01 || lone_hash || lone_hash)
+Domain separation uses the canonical Olympus protocol prefixes:
+  leaf node:     BLAKE3(OLY:LEAF:V1 || | || leaf_data)
+  internal node: BLAKE3(OLY:NODE:V1 || | || left_hash || | || right_hash)
+  self-pair:     BLAKE3(OLY:NODE:V1 || | || lone_hash || | || lone_hash)
 
-This is a **breaking change** to all Merkle roots produced by this module.
-Pre-launch determination: no stored proofs exist that reference unprefixed
-roots in a way that cannot be regenerated — all verification paths rebuild
-the tree on demand from ``DocCommit.doc_hash`` values.  Therefore no
-``CANONICAL_VERSION`` bump is required; the existing ``canonical_v2`` version
-covers this change.
+These prefixes are shared with ``protocol/merkle.py`` so that proofs generated
+by either layer are verifiable by both.
 """
 
 from __future__ import annotations
@@ -28,14 +24,19 @@ from __future__ import annotations
 import warnings
 from dataclasses import dataclass, field
 
-import blake3
+from protocol.hashes import (
+    HASH_SEPARATOR,
+    LEAF_PREFIX,
+    NODE_PREFIX,
+    blake3_hash as _blake3_hash,
+)
 
 
-# RFC 6962-style domain separation prefixes.
-# Leaf and internal node hashes use distinct single-byte prefixes so that a
-# crafted leaf value can never collide with an internal node hash.
-_LEAF_PREFIX = b"\x00"
-_INTERNAL_PREFIX = b"\x01"
+# Domain separation prefixes re-exported from protocol.hashes for test access.
+# These are the canonical prefixes used across the entire Olympus protocol.
+_LEAF_PREFIX = LEAF_PREFIX
+_INTERNAL_PREFIX = NODE_PREFIX
+_SEP = HASH_SEPARATOR.encode("utf-8")
 
 
 @dataclass
@@ -76,17 +77,16 @@ class MerkleProof:
 
 
 def _blake3_leaf(data: bytes) -> str:
-    """Compute a domain-separated leaf hash: ``BLAKE3(0x00 || data)``."""
-    return blake3.blake3(_LEAF_PREFIX + data).hexdigest()
+    """Compute a domain-separated leaf hash: ``BLAKE3(OLY:LEAF:V1 || | || data)``."""
+    return _blake3_hash([_LEAF_PREFIX, _SEP, data]).hex()
 
 
 def _blake3_pair(left: str, right: str) -> str:
     """Compute a domain-separated internal node hash.
 
-    ``BLAKE3(0x01 || left_bytes || right_bytes)`` over hex-encoded inputs.
+    ``BLAKE3(OLY:NODE:V1 || | || left_bytes || | || right_bytes)`` over hex-encoded inputs.
     """
-    data = _INTERNAL_PREFIX + bytes.fromhex(left) + bytes.fromhex(right)
-    return blake3.blake3(data).hexdigest()
+    return _blake3_hash([_INTERNAL_PREFIX, _SEP, bytes.fromhex(left), _SEP, bytes.fromhex(right)]).hex()
 
 
 def build_tree(
