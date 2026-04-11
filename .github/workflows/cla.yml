@@ -1,0 +1,144 @@
+name: CLA and Commit Signature Enforcement
+
+on:
+  pull_request_target:
+    types: [opened, synchronize, reopened]
+
+permissions:
+  pull-requests: write
+  statuses: write
+
+# ---------------------------------------------------------------------------
+# Sensitive paths that require GPG/SSH signed commits (CLA Section 5).
+# Any PR touching these paths must have ALL commits cryptographically signed.
+# ---------------------------------------------------------------------------
+env:
+  SENSITIVE_PATHS: |
+    protocol/
+    proofs/circuits/
+    src/
+    services/cdhs-smf-rust/src/
+    verifiers/rust/src/
+    verifiers/go/
+
+jobs:
+  # -------------------------------------------------------------------------
+  # Job 1: CLA signature check via cla-assistant
+  # Requires: cla-assistant GitHub App installed on the repo
+  # -------------------------------------------------------------------------
+  cla-check:
+    name: CLA Signature Check
+    runs-on: ubuntu-latest
+    steps:
+      - name: CLA Assistant
+        uses: contributor-assistant/github-action@v2.6.1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PERSONAL_ACCESS_TOKEN: ${{ secrets.CLA_ASSISTANT_PAT }}
+        with:
+          # Path in the repo where signed CLAs are recorded (JSON)
+          path-to-signatures: '.github/cla-signatures.json'
+          path-to-document: 'CLA.md'
+          # Bot comment text when CLA is not signed
+          custom-notsigned-prcomment: |
+            Thank you for your contribution to Olympus!
+
+            Before we can merge this PR, you must sign the
+            <a>Contributor License Agreement</a>.
+
+            Please comment below with:
+            &gt; I have read the CLA Document and I hereby sign the CLA
+
+            This is required for all human contributors. Bots (Dependabot,
+            Copilot) are exempt.
+          # Bots that are exempt from CLA signing
+          allowlist: |
+            bot
+            dependabot[bot]
+            github-actions[bot]
+            github-advanced-security[bot]
+            copilot[bot]
+
+  # -------------------------------------------------------------------------
+  # Job 2: Signed commit enforcement for sensitive paths
+  # Runs only when the CLA check passes (or for bots)
+  # -------------------------------------------------------------------------
+  signed-commit-check:
+    name: Signed Commit Enforcement
+    runs-on: ubuntu-latest
+    needs: cla-check
+    steps:
+      - name: Checkout PR
+        uses: actions/checkout@v4
+        with:
+          # Fetch full history so we can inspect all commits in the PR
+          fetch-depth: 0
+          ref: ${{ github.event.pull_request.head.sha }}
+
+      - name: Get changed files
+        id: changed-files
+        uses: tj-actions/changed-files@v46.0.1
+        with:
+          files_yaml: |
+            sensitive:
+              - 'protocol/**'
+              - 'proofs/circuits/**'
+              - 'src/**'
+              - 'services/cdhs-smf-rust/src/**'
+              - 'verifiers/rust/src/**'
+              - 'verifiers/go/**'
+
+      - name: Check signed commits for sensitive paths
+        if: steps.changed-files.outputs.sensitive_any_changed == 'true'
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          echo "Sensitive paths changed. Verifying all commits are signed."
+          echo "Changed sensitive files:"
+          echo "${{ steps.changed-files.outputs.sensitive_all_changed_files }}"
+          echo ""
+
+          UNSIGNED_COMMITS=()
+
+          # Iterate over every commit in the PR
+          for commit in $(git log --format="%H" ${BASE_SHA}..${HEAD_SHA}); do
+            author=$(git log -1 --format="%an <%ae>" "$commit")
+
+            # Skip bot commits — they're exempt per CLA allowlist
+            if echo "$author" | grep -qiE "bot|dependabot|copilot|github-actions"; then
+              echo "  SKIP (bot): $commit — $author"
+              continue
+            fi
+
+            # git verify-commit exits 0 if signature is valid
+            if git verify-commit "$commit" 2>/dev/null; then
+              echo "  OK (signed): $commit — $author"
+            else
+              echo "  FAIL (unsigned): $commit — $author"
+              UNSIGNED_COMMITS+=("$commit")
+            fi
+          done
+
+          if [ ${#UNSIGNED_COMMITS[@]} -gt 0 ]; then
+            echo ""
+            echo "ERROR: The following commits modify sensitive cryptographic"
+            echo "paths but lack a valid GPG or SSH signature:"
+            echo ""
+            for c in "${UNSIGNED_COMMITS[@]}"; do
+              echo "  $c"
+            done
+            echo ""
+            echo "Per CLA Section 5, contributions to cryptographic components"
+            echo "require signed commits. Configure git commit signing:"
+            echo "  https://docs.github.com/en/authentication/managing-commit-signature-verification"
+            exit 1
+          fi
+
+          echo ""
+          echo "All commits touching sensitive paths are signed."
+
+      - name: Sensitive path check skipped
+        if: steps.changed-files.outputs.sensitive_any_changed != 'true'
+        run: |
+          echo "No sensitive paths changed — signed commit check not required."
