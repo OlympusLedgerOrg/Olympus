@@ -14,12 +14,10 @@ import nacl.signing
 import pytest
 
 from protocol.federation.identity import (
-    FEDERATION_DOMAIN_TAG,
     FederationKeyHistoryEntry,
     FederationNode,
     FederationRegistry,
     _extract_round_and_height,
-    _to_int,
 )
 from protocol.federation.quorum import (
     NodeSignature,
@@ -377,7 +375,7 @@ class TestSelectLoop:
                 loop = asyncio.get_event_loop()
                 loop.close()
             except RuntimeError:
-                pass
+                pass  # no running loop to close — expected in some environments
 
             new_loop, owns = transport._select_loop()
             assert owns is True

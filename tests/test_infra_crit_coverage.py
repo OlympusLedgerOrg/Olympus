@@ -14,7 +14,8 @@ import sys
 import pytest
 from unittest.mock import MagicMock, patch
 
-import protocol.hashes
+import protocol.hashes  # noqa: F811 — used via importlib.reload()
+from protocol.hashes import hash_bytes
 from protocol.consistency import (
     ConsistencyProof,
     generate_consistency_proof,
@@ -23,10 +24,9 @@ from protocol.consistency import (
 from protocol.merkle import (
     MerkleTree,
     _verify_subproof_ct,
-    verify_consistency_proof as merkle_verify,
 )
 from protocol.monitoring import LogMonitor
-from storage.consistency_checker import SMTConsistencyChecker, ConsistencyReport, ConsistencyResult
+from storage.consistency_checker import SMTConsistencyChecker
 from storage.gates import derive_node_rehash_gate
 
 
@@ -156,7 +156,6 @@ class TestGenerateConsistencyProofValidation:
     """Cover generate_consistency_proof input guards (lines 110, 112)."""
 
     def _make_tree(self, n: int) -> MerkleTree:
-        from protocol.hashes import hash_bytes
         leaves = [hash_bytes(f"leaf-{i}".encode()) for i in range(n)]
         return MerkleTree(leaves)
 
