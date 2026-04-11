@@ -10,17 +10,16 @@ import importlib
 import logging
 import os
 import sys
-
-import pytest
 from unittest.mock import MagicMock, patch
 
-import protocol.hashes  # noqa: F811 — used via importlib.reload()
-from protocol.hashes import hash_bytes
+import pytest
+
 from protocol.consistency import (
     ConsistencyProof,
     generate_consistency_proof,
     verify_consistency_proof as consistency_verify,
 )
+from protocol.hashes import hash_bytes
 from protocol.merkle import (
     MerkleTree,
     _verify_subproof_ct,
@@ -52,7 +51,7 @@ class TestRequireRustGuard:
 
             with patch.dict(os.environ, {"OLYMPUS_REQUIRE_RUST": "1"}):
                 with pytest.raises(RuntimeError, match="Rust crypto extension required"):
-                    importlib.reload(protocol.hashes)
+                    importlib.reload(sys.modules["protocol.hashes"])
         finally:
             # Restore original module entries
             if saved_core is not None:
@@ -66,7 +65,7 @@ class TestRequireRustGuard:
                 sys.modules.pop("olympus_core.crypto", None)
 
             # Re-load cleanly so downstream tests are unaffected
-            importlib.reload(protocol.hashes)
+            importlib.reload(sys.modules["protocol.hashes"])
 
     def test_no_error_when_require_rust_unset(self):
         """Module reloads cleanly when OLYMPUS_REQUIRE_RUST is not set."""
@@ -79,7 +78,7 @@ class TestRequireRustGuard:
 
             with patch.dict(os.environ, {"OLYMPUS_REQUIRE_RUST": "0"}):
                 # Should NOT raise – the guard only fires for truthy values.
-                importlib.reload(protocol.hashes)
+                importlib.reload(sys.modules["protocol.hashes"])
         finally:
             if saved_core is not None:
                 sys.modules["olympus_core"] = saved_core
@@ -91,7 +90,7 @@ class TestRequireRustGuard:
             else:
                 sys.modules.pop("olympus_core.crypto", None)
 
-            importlib.reload(protocol.hashes)
+            importlib.reload(sys.modules["protocol.hashes"])
 
 
 # ===================================================================

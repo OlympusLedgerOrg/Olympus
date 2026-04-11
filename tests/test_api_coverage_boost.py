@@ -534,9 +534,9 @@ class TestZipSafety:
 
     def test_path_traversal_detected(self):
         """ZIP with path-traversal entries is rejected."""
-        from api.services.upload_validation import validate_zip_safety
-
         from fastapi import HTTPException
+
+        from api.services.upload_validation import validate_zip_safety
 
         buf = io.BytesIO()
         with zipfile.ZipFile(buf, "w") as zf:
@@ -550,9 +550,9 @@ class TestZipSafety:
 
     def test_compression_ratio_bomb(self):
         """ZIP with extreme compression ratio is rejected."""
-        from api.services.upload_validation import validate_zip_safety
-
         from fastapi import HTTPException
+
+        from api.services.upload_validation import validate_zip_safety
 
         buf = io.BytesIO()
         with zipfile.ZipFile(buf, "w", compression=zipfile.ZIP_DEFLATED) as zf:
@@ -575,12 +575,12 @@ class TestZipSafety:
 
     def test_total_size_exceeded(self):
         """ZIP with total uncompressed size exceeding 100MB is rejected."""
+        from fastapi import HTTPException
+
         from api.services.upload_validation import (
             _MAX_DECOMPRESSED_BYTES,
             validate_zip_safety,
         )
-
-        from fastapi import HTTPException
 
         # Craft a ZIP with a declared uncompressed size exceeding the limit
         # by manipulating the ZipInfo directly.
@@ -626,9 +626,9 @@ class TestZipSafety:
 
     def test_corrupt_zip_rejected(self):
         """Corrupt ZIP content is rejected with 400."""
-        from api.services.upload_validation import validate_zip_safety
-
         from fastapi import HTTPException
+
+        from api.services.upload_validation import validate_zip_safety
 
         with pytest.raises(HTTPException) as exc_info:
             validate_zip_safety(b"not a zip file at all")
@@ -648,9 +648,9 @@ class TestZstdSafety:
 
     def test_empty_stream_rejected(self):
         """Empty zstd content is rejected."""
-        from api.services.upload_validation import validate_zstd_safety
-
         from fastapi import HTTPException
+
+        from api.services.upload_validation import validate_zstd_safety
 
         with pytest.raises(HTTPException) as exc_info:
             validate_zstd_safety(b"")
@@ -672,9 +672,9 @@ class TestZstdSafety:
 
     def test_corrupt_zstd_rejected(self):
         """Corrupt zstd content is rejected."""
-        from api.services.upload_validation import validate_zstd_safety
-
         from fastapi import HTTPException
+
+        from api.services.upload_validation import validate_zstd_safety
 
         # Valid zstd magic bytes (0xFD2FB528) followed by garbage
         corrupt = b"\x28\xb5\x2f\xfd" + b"\xff" * 100
@@ -697,9 +697,9 @@ class TestFileMagic:
 
     def test_disallowed_mime_type(self):
         """Content detected as a disallowed MIME type is rejected."""
-        from api.services.upload_validation import validate_file_magic
-
         from fastapi import HTTPException
+
+        from api.services.upload_validation import validate_file_magic
 
         # Minimal ELF binary: the ELF header must be well-formed enough for
         # libmagic to identify it as application/x-executable (or similar).

@@ -46,6 +46,7 @@ from protocol.witness_transport import (
     create_witness_transport,
 )
 
+
 REPO_ROOT = Path(__file__).resolve().parent.parent
 REGISTRY_PATH = REPO_ROOT / "examples" / "federation_registry.json"
 
