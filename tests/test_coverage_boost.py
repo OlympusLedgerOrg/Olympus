@@ -206,7 +206,7 @@ async def test_verify_embargoed_document(client, db_session):
     fake_now = datetime.utcnow()  # noqa: DTZ003
     with patch("api.routers.documents.datetime") as mock_dt:
         mock_dt.now.return_value = fake_now
-        mock_dt.side_effect = lambda *a, **kw: datetime(*a, **kw)
+        mock_dt.side_effect = datetime
         verify_resp = await client.post("/doc/verify", json={"commit_id": commit_id})
     assert verify_resp.status_code == 403
 
@@ -475,58 +475,56 @@ class TestStorageLayerHelpers:
     """Test helper functions in api/services/storage_layer.py."""
 
     def test_is_db_unavailable_runtime_error_retries(self):
-        from api.services.storage_layer import _is_db_unavailable_error
+        import api.services.storage_layer as sl
 
         exc = RuntimeError("failed to acquire postgresql connection after retries")
-        assert _is_db_unavailable_error(exc) is True
+        assert sl._is_db_unavailable_error(exc) is True
 
     def test_is_db_unavailable_circuit_breaker(self):
-        from api.services.storage_layer import _is_db_unavailable_error
+        import api.services.storage_layer as sl
 
         exc = RuntimeError("circuit breaker is open")
-        assert _is_db_unavailable_error(exc) is True
+        assert sl._is_db_unavailable_error(exc) is True
 
     def test_is_db_unavailable_generic_error(self):
-        from api.services.storage_layer import _is_db_unavailable_error
+        import api.services.storage_layer as sl
 
-        assert _is_db_unavailable_error(ValueError("some error")) is False
+        assert sl._is_db_unavailable_error(ValueError("some error")) is False
 
     def test_is_db_unavailable_generic_runtime_error(self):
-        from api.services.storage_layer import _is_db_unavailable_error
+        import api.services.storage_layer as sl
 
-        assert _is_db_unavailable_error(RuntimeError("unrelated error")) is False
+        assert sl._is_db_unavailable_error(RuntimeError("unrelated error")) is False
 
     def test_db_op_passes_through(self):
-        from api.services.storage_layer import db_op
+        import api.services.storage_layer as sl
 
-        with db_op("test op"):
+        with sl.db_op("test op"):
             pass  # no exception → no error
 
     def test_db_op_reraises_http_exception(self):
-        from fastapi import HTTPException
+        from fastapi import HTTPException as _HTTPException
 
-        from api.services.storage_layer import db_op
+        import api.services.storage_layer as sl
 
-        with pytest.raises(HTTPException) as exc_info:
-            with db_op("test"):
-                raise HTTPException(status_code=404, detail="not found")
-        assert exc_info.value.status_code == 404
+        with pytest.raises(Exception) as exc_info:
+            with sl.db_op("test"):
+                raise _HTTPException(status_code=404, detail="not found")
+        assert exc_info.value.status_code == 404  # type: ignore[union-attr]
 
     def test_db_op_converts_db_error_to_503(self):
-        from fastapi import HTTPException
+        import api.services.storage_layer as sl
 
-        from api.services.storage_layer import db_op
-
-        with pytest.raises(HTTPException) as exc_info:
-            with db_op("test"):
+        with pytest.raises(Exception) as exc_info:
+            with sl.db_op("test"):
                 raise RuntimeError("failed to acquire postgresql connection")
-        assert exc_info.value.status_code == 503
+        assert exc_info.value.status_code == 503  # type: ignore[union-attr]
 
     def test_db_op_reraises_non_db_error(self):
-        from api.services.storage_layer import db_op
+        import api.services.storage_layer as sl
 
         with pytest.raises(TypeError):
-            with db_op("test"):
+            with sl.db_op("test"):
                 raise TypeError("not a db error")
 
     def test_get_storage_status_not_initialized(self):

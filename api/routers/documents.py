@@ -12,7 +12,6 @@ from datetime import datetime, timezone
 
 from fastapi import APIRouter, HTTPException, status
 from sqlalchemy import exists, select
-from sqlalchemy.exc import IntegrityError
 
 from api.auth import RateLimit, RequireAPIKey
 from api.deps import DBSession
