@@ -7,10 +7,14 @@ import uuid
 
 import nacl.signing
 import pytest
-from fastapi.testclient import TestClient
+import pytest_asyncio
+from httpx import ASGITransport, AsyncClient
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
 import api.routers.witness as witness_module
+from api.db import get_db
 from api.main import create_app
+from api.models import Base
 from protocol.timestamps import current_timestamp
 
 
@@ -20,24 +24,49 @@ _TEST_VERIFY_KEY = _TEST_SIGNING_KEY.verify_key
 _TEST_PUBKEY_HEX = _TEST_VERIFY_KEY.encode().hex()
 
 
-app = create_app()
-client = TestClient(app, raise_server_exceptions=True)
+TEST_DB_URL = "sqlite+aiosqlite:///:memory:"
 
 
-@pytest.fixture(autouse=True)
-def clear_store() -> None:
-    """Reset the in-process observation store before every test."""
-    witness_module.clear_observations()
+@pytest.fixture(scope="module")
+def anyio_backend():
+    return "asyncio"
 
 
-@pytest.fixture(autouse=True)
-def _set_witness_registry(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Make _resolve_node_pubkey return the test key for any origin."""
+@pytest_asyncio.fixture(scope="module")
+async def db_engine():
+    engine = create_async_engine(TEST_DB_URL, connect_args={"check_same_thread": False})
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+    yield engine
+    await engine.dispose()
+
+
+@pytest_asyncio.fixture(scope="module")
+async def session_factory(db_engine):
+    return async_sessionmaker(db_engine, expire_on_commit=False, class_=AsyncSession)
+
+
+@pytest_asyncio.fixture()
+async def client(session_factory, monkeypatch):
+    async def override_get_db():
+        async with session_factory() as session:
+            yield session
+
+    app = create_app()
+    app.dependency_overrides[get_db] = override_get_db
+
     monkeypatch.setattr(
         witness_module,
         "_resolve_node_pubkey",
         lambda origin: _TEST_PUBKEY_HEX,
     )
+
+    # Clear tables before each test
+    async with session_factory() as session:
+        await witness_module.clear_observations(session)
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
+        yield ac
 
 
 # ---------------------------------------------------------------------------
@@ -84,9 +113,10 @@ def _announcement_payload(
 # ---------------------------------------------------------------------------
 
 
-def test_submit_observation_returns_201() -> None:
+@pytest.mark.asyncio
+async def test_submit_observation_returns_201(client) -> None:
     payload = _announcement_payload("node-alpha", 1)
-    resp = client.post("/witness/observations", json=payload)
+    resp = await client.post("/witness/observations", json=payload)
     assert resp.status_code == 201
     body = resp.json()
     assert body["origin"] == "node-alpha"
@@ -94,12 +124,13 @@ def test_submit_observation_returns_201() -> None:
     assert body["status"] == "recorded"
 
 
-def test_submit_observation_stores_entry() -> None:
+@pytest.mark.asyncio
+async def test_submit_observation_stores_entry(client) -> None:
     payload = _announcement_payload("node-beta", 5, "cd" * 32)
-    resp = client.post("/witness/observations", json=payload)
+    resp = await client.post("/witness/observations", json=payload)
     assert resp.status_code == 201
     # Verify via the public API rather than the internal store
-    get_resp = client.get("/witness/checkpoints/5")
+    get_resp = await client.get("/witness/checkpoints/5")
     assert get_resp.status_code == 200
     body = get_resp.json()
     assert body["origin"] == "node-beta"
@@ -107,20 +138,30 @@ def test_submit_observation_stores_entry() -> None:
     assert body["checkpoint"]["checkpoint_hash"] == "cd" * 32
 
 
-def test_submit_observation_duplicate_returns_409() -> None:
+@pytest.mark.asyncio
+async def test_submit_observation_duplicate_returns_409(client) -> None:
     nonce1 = _nonce()
     nonce2 = _nonce()
     payload1 = _announcement_payload("node-gamma", 3, nonce=nonce1)
     payload2 = _announcement_payload("node-gamma", 3, nonce=nonce2)
-    first = client.post("/witness/observations", json=payload1)
+    first = await client.post("/witness/observations", json=payload1)
     assert first.status_code == 201
-    second = client.post("/witness/observations", json=payload2)
+    second = await client.post("/witness/observations", json=payload2)
     assert second.status_code == 409
 
 
-def test_submit_observation_same_origin_different_sequence_allowed() -> None:
-    client.post("/witness/observations", json=_announcement_payload("node-delta", 1))
-    resp = client.post("/witness/observations", json=_announcement_payload("node-delta", 2))
+@pytest.mark.asyncio
+async def test_submit_observation_same_origin_different_sequence_allowed(
+    client,
+) -> None:
+    await client.post(
+        "/witness/observations",
+        json=_announcement_payload("node-delta", 1),
+    )
+    resp = await client.post(
+        "/witness/observations",
+        json=_announcement_payload("node-delta", 2),
+    )
     assert resp.status_code == 201
 
 
@@ -129,35 +170,40 @@ def test_submit_observation_same_origin_different_sequence_allowed() -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_submit_observation_rejects_too_short_hash() -> None:
+@pytest.mark.asyncio
+async def test_submit_observation_rejects_too_short_hash(client) -> None:
     payload = _announcement_payload("node-short", 1, "ab" * 10)  # only 20 hex chars
-    resp = client.post("/witness/observations", json=payload)
+    resp = await client.post("/witness/observations", json=payload)
     assert resp.status_code == 422
 
 
-def test_submit_observation_rejects_empty_hash() -> None:
+@pytest.mark.asyncio
+async def test_submit_observation_rejects_empty_hash(client) -> None:
     payload = _announcement_payload("node-empty", 1, "")
-    resp = client.post("/witness/observations", json=payload)
+    resp = await client.post("/witness/observations", json=payload)
     assert resp.status_code == 422
 
 
-def test_submit_observation_rejects_non_hex_hash() -> None:
+@pytest.mark.asyncio
+async def test_submit_observation_rejects_non_hex_hash(client) -> None:
     payload = _announcement_payload("node-invalid", 1, "zz" * 32)  # non-hex chars
-    resp = client.post("/witness/observations", json=payload)
+    resp = await client.post("/witness/observations", json=payload)
     assert resp.status_code == 422
 
 
-def test_submit_observation_accepts_128_char_hash() -> None:
+@pytest.mark.asyncio
+async def test_submit_observation_accepts_128_char_hash(client) -> None:
     # 128 hex chars (512-bit hash) should be accepted
     long_hash = "a1" * 64
     payload = _announcement_payload("node-long", 1, long_hash)
-    resp = client.post("/witness/observations", json=payload)
+    resp = await client.post("/witness/observations", json=payload)
     assert resp.status_code == 201
 
 
-def test_submit_observation_rejects_too_long_hash() -> None:
+@pytest.mark.asyncio
+async def test_submit_observation_rejects_too_long_hash(client) -> None:
     payload = _announcement_payload("node-toolong", 1, "ab" * 65)  # 130 hex chars
-    resp = client.post("/witness/observations", json=payload)
+    resp = await client.post("/witness/observations", json=payload)
     assert resp.status_code == 422
 
 
@@ -166,15 +212,20 @@ def test_submit_observation_rejects_too_long_hash() -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_latest_checkpoint_404_when_empty() -> None:
-    resp = client.get("/witness/checkpoints/latest")
+@pytest.mark.asyncio
+async def test_latest_checkpoint_404_when_empty(client) -> None:
+    resp = await client.get("/witness/checkpoints/latest")
     assert resp.status_code == 404
 
 
-def test_latest_checkpoint_returns_highest_sequence() -> None:
+@pytest.mark.asyncio
+async def test_latest_checkpoint_returns_highest_sequence(client) -> None:
     for seq in (3, 1, 7, 5):
-        client.post("/witness/observations", json=_announcement_payload(f"node-{seq}", seq))
-    resp = client.get("/witness/checkpoints/latest")
+        await client.post(
+            "/witness/observations",
+            json=_announcement_payload(f"node-{seq}", seq),
+        )
+    resp = await client.get("/witness/checkpoints/latest")
     assert resp.status_code == 200
     assert resp.json()["checkpoint"]["sequence"] == 7
 
@@ -184,41 +235,20 @@ def test_latest_checkpoint_returns_highest_sequence() -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_checkpoint_by_sequence_found() -> None:
-    client.post("/witness/observations", json=_announcement_payload("node-x", 42))
-    resp = client.get("/witness/checkpoints/42")
+@pytest.mark.asyncio
+async def test_checkpoint_by_sequence_found(client) -> None:
+    await client.post(
+        "/witness/observations",
+        json=_announcement_payload("node-x", 42),
+    )
+    resp = await client.get("/witness/checkpoints/42")
     assert resp.status_code == 200
     assert resp.json()["checkpoint"]["sequence"] == 42
 
 
-def test_checkpoint_by_sequence_uses_secondary_index(monkeypatch: pytest.MonkeyPatch) -> None:
-    """GET /witness/checkpoints/{sequence} does not need to scan _observations."""
-    announcement = witness_module.WitnessAnnouncement.model_validate(
-        {
-            "origin": "node-index",
-            "checkpoint": {
-                "sequence": 42,
-                "checkpoint_hash": "ab" * 32,
-                "timestamp": current_timestamp(),
-            },
-            "received_at": current_timestamp(),
-        }
-    )
-    witness_module._observations_by_seq[42] = announcement
-
-    class _ForbiddenObservations(dict):
-        def values(self):  # pragma: no cover - should never be reached
-            raise AssertionError("get_checkpoint_by_sequence scanned _observations")
-
-    monkeypatch.setattr(witness_module, "_observations", _ForbiddenObservations())
-
-    resp = client.get("/witness/checkpoints/42")
-    assert resp.status_code == 200
-    assert resp.json()["origin"] == "node-index"
-
-
-def test_checkpoint_by_sequence_404() -> None:
-    resp = client.get("/witness/checkpoints/99")
+@pytest.mark.asyncio
+async def test_checkpoint_by_sequence_404(client) -> None:
+    resp = await client.get("/witness/checkpoints/99")
     assert resp.status_code == 404
 
 
@@ -227,19 +257,27 @@ def test_checkpoint_by_sequence_404() -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_list_checkpoints_sorted_descending() -> None:
+@pytest.mark.asyncio
+async def test_list_checkpoints_sorted_descending(client) -> None:
     for seq in (1, 3, 2):
-        client.post("/witness/observations", json=_announcement_payload(f"node-{seq}", seq))
-    resp = client.get("/witness/checkpoints")
+        await client.post(
+            "/witness/observations",
+            json=_announcement_payload(f"node-{seq}", seq),
+        )
+    resp = await client.get("/witness/checkpoints")
     assert resp.status_code == 200
     sequences = [item["checkpoint"]["sequence"] for item in resp.json()]
     assert sequences == sorted(sequences, reverse=True)
 
 
-def test_list_checkpoints_pagination() -> None:
+@pytest.mark.asyncio
+async def test_list_checkpoints_pagination(client) -> None:
     for seq in range(1, 6):
-        client.post("/witness/observations", json=_announcement_payload(f"node-{seq}", seq))
-    resp = client.get("/witness/checkpoints?limit=2&offset=1")
+        await client.post(
+            "/witness/observations",
+            json=_announcement_payload(f"node-{seq}", seq),
+        )
+    resp = await client.get("/witness/checkpoints?limit=2&offset=1")
     assert resp.status_code == 200
     items = resp.json()
     assert len(items) == 2
@@ -248,10 +286,14 @@ def test_list_checkpoints_pagination() -> None:
     assert items[1]["checkpoint"]["sequence"] == 3
 
 
-def test_list_checkpoints_default_limit_is_20() -> None:
+@pytest.mark.asyncio
+async def test_list_checkpoints_default_limit_is_20(client) -> None:
     for seq in range(1, 26):
-        client.post("/witness/observations", json=_announcement_payload(f"n{seq}", seq))
-    resp = client.get("/witness/checkpoints")
+        await client.post(
+            "/witness/observations",
+            json=_announcement_payload(f"n{seq}", seq),
+        )
+    resp = await client.get("/witness/checkpoints")
     assert resp.status_code == 200
     assert len(resp.json()) == 20
 
@@ -261,32 +303,43 @@ def test_list_checkpoints_default_limit_is_20() -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_gossip_empty_when_no_observations() -> None:
-    resp = client.get("/witness/gossip")
+@pytest.mark.asyncio
+async def test_gossip_empty_when_no_observations(client) -> None:
+    resp = await client.get("/witness/gossip")
     assert resp.status_code == 200
     assert resp.json() == []
 
 
-def test_gossip_empty_when_no_conflicts() -> None:
+@pytest.mark.asyncio
+async def test_gossip_empty_when_no_conflicts(client) -> None:
     # Two origins, same sequence, same hash → no conflict
     hash_val = "aa" * 32
-    client.post("/witness/observations", json=_announcement_payload("origin-a", 1, hash_val))
-    client.post("/witness/observations", json=_announcement_payload("origin-b", 1, hash_val))
-    resp = client.get("/witness/gossip")
+    await client.post(
+        "/witness/observations",
+        json=_announcement_payload("origin-a", 1, hash_val),
+    )
+    await client.post(
+        "/witness/observations",
+        json=_announcement_payload("origin-b", 1, hash_val),
+    )
+    resp = await client.get("/witness/gossip")
     assert resp.status_code == 200
     assert resp.json() == []
 
 
-def test_gossip_detects_differing_hashes_at_same_sequence() -> None:
-    client.post(
+@pytest.mark.asyncio
+async def test_gossip_detects_differing_hashes_at_same_sequence(
+    client,
+) -> None:
+    await client.post(
         "/witness/observations",
         json=_announcement_payload("origin-a", 10, "aa" * 32),
     )
-    client.post(
+    await client.post(
         "/witness/observations",
         json=_announcement_payload("origin-b", 10, "bb" * 32),
     )
-    resp = client.get("/witness/gossip")
+    resp = await client.get("/witness/gossip")
     assert resp.status_code == 200
     conflicts = resp.json()
     assert len(conflicts) == 1
@@ -297,21 +350,32 @@ def test_gossip_detects_differing_hashes_at_same_sequence() -> None:
     assert conflict["hashes"]["origin-b"] == "bb" * 32
 
 
-def test_gossip_ignores_single_origin_at_sequence() -> None:
+@pytest.mark.asyncio
+async def test_gossip_ignores_single_origin_at_sequence(client) -> None:
     # Only one origin at a given sequence → cannot determine split view
-    client.post("/witness/observations", json=_announcement_payload("only-origin", 7))
-    resp = client.get("/witness/gossip")
+    await client.post(
+        "/witness/observations",
+        json=_announcement_payload("only-origin", 7),
+    )
+    resp = await client.get("/witness/gossip")
     assert resp.status_code == 200
     assert resp.json() == []
 
 
-def test_gossip_conflict_with_128_char_hash() -> None:
-    # 128 hex chars (max boundary) — conflict detection must still fire correctly.
-    hash_x = "a1" * 64  # 128-char lowercase hex
-    hash_y = "b2" * 64  # 128-char lowercase hex, different value
-    client.post("/witness/observations", json=_announcement_payload("origin-x", 20, hash_x))
-    client.post("/witness/observations", json=_announcement_payload("origin-y", 20, hash_y))
-    resp = client.get("/witness/gossip")
+@pytest.mark.asyncio
+async def test_gossip_conflict_with_128_char_hash(client) -> None:
+    # 128 hex chars (max boundary) — conflict detection must still fire.
+    hash_x = "a1" * 64
+    hash_y = "b2" * 64
+    await client.post(
+        "/witness/observations",
+        json=_announcement_payload("origin-x", 20, hash_x),
+    )
+    await client.post(
+        "/witness/observations",
+        json=_announcement_payload("origin-y", 20, hash_y),
+    )
+    resp = await client.get("/witness/gossip")
     assert resp.status_code == 200
     conflicts = resp.json()
     assert len(conflicts) == 1
@@ -321,24 +385,43 @@ def test_gossip_conflict_with_128_char_hash() -> None:
     assert conflicts[0]["hashes"]["origin-y"] == hash_y
 
 
-def test_gossip_no_conflict_when_128_char_hashes_match() -> None:
+@pytest.mark.asyncio
+async def test_gossip_no_conflict_when_128_char_hashes_match(client) -> None:
     # Two origins at same sequence with identical 128-char hashes → no conflict.
     hash_val = "c3" * 64
-    client.post("/witness/observations", json=_announcement_payload("origin-p", 30, hash_val))
-    client.post("/witness/observations", json=_announcement_payload("origin-q", 30, hash_val))
-    resp = client.get("/witness/gossip")
+    await client.post(
+        "/witness/observations",
+        json=_announcement_payload("origin-p", 30, hash_val),
+    )
+    await client.post(
+        "/witness/observations",
+        json=_announcement_payload("origin-q", 30, hash_val),
+    )
+    resp = await client.get("/witness/gossip")
     assert resp.status_code == 200
     assert resp.json() == []
 
     hash_a = "aa" * 32
     hash_b = "bb" * 32
     # Sequence 1: conflict
-    client.post("/witness/observations", json=_announcement_payload("o1", 1, hash_a))
-    client.post("/witness/observations", json=_announcement_payload("o2", 1, hash_b))
+    await client.post(
+        "/witness/observations",
+        json=_announcement_payload("o1", 1, hash_a),
+    )
+    await client.post(
+        "/witness/observations",
+        json=_announcement_payload("o2", 1, hash_b),
+    )
     # Sequence 2: no conflict (same hash)
-    client.post("/witness/observations", json=_announcement_payload("o1", 2, hash_a))
-    client.post("/witness/observations", json=_announcement_payload("o2", 2, hash_a))
-    resp = client.get("/witness/gossip")
+    await client.post(
+        "/witness/observations",
+        json=_announcement_payload("o1", 2, hash_a),
+    )
+    await client.post(
+        "/witness/observations",
+        json=_announcement_payload("o2", 2, hash_a),
+    )
+    resp = await client.get("/witness/gossip")
     assert resp.status_code == 200
     conflicts = resp.json()
     assert len(conflicts) == 1
@@ -350,18 +433,23 @@ def test_gossip_no_conflict_when_128_char_hashes_match() -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_health_ok_when_empty() -> None:
-    resp = client.get("/witness/health")
+@pytest.mark.asyncio
+async def test_health_ok_when_empty(client) -> None:
+    resp = await client.get("/witness/health")
     assert resp.status_code == 200
     body = resp.json()
     assert body["status"] == "ok"
     assert body["observation_count"] == 0
 
 
-def test_health_count_reflects_observations() -> None:
+@pytest.mark.asyncio
+async def test_health_count_reflects_observations(client) -> None:
     for seq in range(1, 4):
-        client.post("/witness/observations", json=_announcement_payload(f"n{seq}", seq))
-    resp = client.get("/witness/health")
+        await client.post(
+            "/witness/observations",
+            json=_announcement_payload(f"n{seq}", seq),
+        )
+    resp = await client.get("/witness/health")
     assert resp.status_code == 200
     assert resp.json()["observation_count"] == 3
 
@@ -371,10 +459,30 @@ def test_health_count_reflects_observations() -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_submit_observation_requires_auth_when_keys_configured() -> None:
+@pytest.mark.asyncio
+async def test_submit_observation_requires_auth_when_keys_configured(
+    session_factory, monkeypatch
+) -> None:
     """POST /witness/observations returns 401 when API keys are configured
     but the request has no key."""
+    import json
+    import os
+
     import api.auth as auth_module
+    from protocol.hashes import hash_bytes
+
+    async def override_get_db():
+        async with session_factory() as session:
+            yield session
+
+    app = create_app()
+    app.dependency_overrides[get_db] = override_get_db
+
+    monkeypatch.setattr(
+        witness_module,
+        "_resolve_node_pubkey",
+        lambda origin: _TEST_PUBKEY_HEX,
+    )
 
     original_loaded = auth_module._keys_loaded
     original_store = dict(auth_module._key_store)
@@ -383,21 +491,18 @@ def test_submit_observation_requires_auth_when_keys_configured() -> None:
         auth_module._keys_loaded = False
         auth_module._key_store.clear()
 
-        from protocol.hashes import hash_bytes
-
         test_key_hash = hash_bytes(b"witness-test-key").hex()
-        import json
-        import os
 
         os.environ["OLYMPUS_FOIA_API_KEYS"] = json.dumps(
             [{"key_hash": test_key_hash, "key_id": "witness-test"}]
         )
 
-        # Client with NO auth header should be rejected
-        no_auth_client = TestClient(app, raise_server_exceptions=False)
-        payload = _announcement_payload("no-auth-node", 1)
-        resp = no_auth_client.post("/witness/observations", json=payload)
-        assert resp.status_code == 401
+        async with AsyncClient(
+            transport=ASGITransport(app=app), base_url="http://test"
+        ) as no_auth_client:
+            payload = _announcement_payload("no-auth-node", 1)
+            resp = await no_auth_client.post("/witness/observations", json=payload)
+            assert resp.status_code == 401
     finally:
         auth_module._keys_loaded = original_loaded
         auth_module._key_store.clear()
@@ -410,28 +515,31 @@ def test_submit_observation_requires_auth_when_keys_configured() -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_submit_observation_rejects_stale_timestamp() -> None:
+@pytest.mark.asyncio
+async def test_submit_observation_rejects_stale_timestamp(client) -> None:
     """Checkpoint timestamp older than _MAX_ANNOUNCE_SKEW_SECONDS is rejected."""
     stale_ts = "2020-01-01T00:00:00Z"
     payload = _announcement_payload("stale-node", 1, timestamp=stale_ts)
-    resp = client.post("/witness/observations", json=payload)
+    resp = await client.post("/witness/observations", json=payload)
     assert resp.status_code == 422
     assert "Stale" in resp.json()["detail"]
 
 
-def test_submit_observation_rejects_future_timestamp() -> None:
+@pytest.mark.asyncio
+async def test_submit_observation_rejects_future_timestamp(client) -> None:
     """Checkpoint timestamp far in the future is rejected."""
     future_ts = "2099-01-01T00:00:00Z"
     payload = _announcement_payload("future-node", 1, timestamp=future_ts)
-    resp = client.post("/witness/observations", json=payload)
+    resp = await client.post("/witness/observations", json=payload)
     assert resp.status_code == 422
     assert "future" in resp.json()["detail"]
 
 
-def test_submit_observation_accepts_fresh_timestamp() -> None:
+@pytest.mark.asyncio
+async def test_submit_observation_accepts_fresh_timestamp(client) -> None:
     """Checkpoint with a current timestamp is accepted."""
     payload = _announcement_payload("fresh-node", 1, timestamp=current_timestamp())
-    resp = client.post("/witness/observations", json=payload)
+    resp = await client.post("/witness/observations", json=payload)
     assert resp.status_code == 201
 
 
@@ -440,22 +548,24 @@ def test_submit_observation_accepts_fresh_timestamp() -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_submit_observation_rejects_duplicate_nonce() -> None:
+@pytest.mark.asyncio
+async def test_submit_observation_rejects_duplicate_nonce(client) -> None:
     """Re-using a nonce returns 409 even if origin/sequence differ."""
     shared_nonce = "a" * 32
     payload1 = _announcement_payload("nonce-node-a", 1, nonce=shared_nonce)
     payload2 = _announcement_payload("nonce-node-b", 2, nonce=shared_nonce)
-    first = client.post("/witness/observations", json=payload1)
+    first = await client.post("/witness/observations", json=payload1)
     assert first.status_code == 201
-    second = client.post("/witness/observations", json=payload2)
+    second = await client.post("/witness/observations", json=payload2)
     assert second.status_code == 409
     assert "nonce" in second.json()["detail"].lower()
 
 
-def test_submit_observation_rejects_short_nonce() -> None:
+@pytest.mark.asyncio
+async def test_submit_observation_rejects_short_nonce(client) -> None:
     """Nonces shorter than 16 characters are rejected by schema validation."""
     payload = _announcement_payload("short-nonce-node", 1, nonce="tooshort")
-    resp = client.post("/witness/observations", json=payload)
+    resp = await client.post("/witness/observations", json=payload)
     assert resp.status_code == 422
 
 
@@ -464,11 +574,12 @@ def test_submit_observation_rejects_short_nonce() -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_stored_announcement_has_received_at() -> None:
+@pytest.mark.asyncio
+async def test_stored_announcement_has_received_at(client) -> None:
     """WitnessAnnouncement returned by GET includes a server-assigned received_at."""
     payload = _announcement_payload("ts-node", 50)
-    client.post("/witness/observations", json=payload)
-    resp = client.get("/witness/checkpoints/50")
+    await client.post("/witness/observations", json=payload)
+    resp = await client.get("/witness/checkpoints/50")
     assert resp.status_code == 200
     body = resp.json()
     assert "received_at" in body

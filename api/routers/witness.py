@@ -23,14 +23,18 @@ import hashlib
 import json
 import logging
 import os
-from collections import OrderedDict, defaultdict
+from collections import defaultdict
 from datetime import datetime, timezone
 
 import nacl.exceptions
 import nacl.signing
 from fastapi import APIRouter, HTTPException, Query, status
+from sqlalchemy import delete, func, select
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from api.auth import RequireAPIKey
+from api.deps import DBSession
+from api.models.witness import WitnessNonce, WitnessObservation
 from api.schemas.witness import (
     GossipConflictEntry,
     WitnessAnnouncement,
@@ -54,58 +58,9 @@ _MAX_ANNOUNCE_SKEW_SECONDS: int = 60
 # reaches this size the oldest entries are evicted.
 _MAX_NONCE_ENTRIES: int = 100_000
 
-# Maximum number of observations to store in the in-process store.
-# Prevents unbounded memory growth under sustained load.
+# Maximum number of observations to store.
+# Prevents unbounded growth under sustained load.
 _MAX_OBSERVATIONS: int = 500_000
-
-# ---------------------------------------------------------------------------
-# In-process observation store (Phase 1 — no DB).
-# Key: f"{announcement.origin}:{announcement.checkpoint.sequence}"
-#
-# Uses OrderedDict so that FIFO/LRU eviction (popitem(last=False)) removes the
-# oldest entries once _MAX_OBSERVATIONS is reached, preventing unbounded memory
-# growth under sustained load.
-#
-# _observations_by_seq is a secondary index keyed by sequence number for O(1)
-# lookups in get_checkpoint_by_sequence().  It mirrors _observations and is
-# updated atomically with it.
-#
-# Upgrade path: replace with an async DB-backed repository that implements the
-# same get/set interface used below.
-#
-# WARNING: this store is not safe for multi-worker deployments. Running
-# uvicorn with --workers > 1 splits the store across processes silently,
-# causing each worker to see only a fraction of observations. Ensure
-# workers=1 (single-process mode) until the DB upgrade is complete.
-# ---------------------------------------------------------------------------
-_observations: OrderedDict[str, WitnessAnnouncement] = OrderedDict()
-
-# Secondary index: sequence number → first WitnessAnnouncement seen for that sequence.
-# Allows O(1) lookups in get_checkpoint_by_sequence() instead of O(n) linear scans.
-_observations_by_seq: dict[int, WitnessAnnouncement] = {}
-
-# Bounded nonce set for replay-resistance.  Tracks recently seen nonces
-# to reject duplicate submissions.  Uses OrderedDict for O(1) lookup and
-# FIFO eviction when the capacity is reached.
-_seen_nonces: OrderedDict[str, None] = OrderedDict()
-
-# Warn operators if the witness store is running in a multi-worker deployment.
-# Split-view detection requires that all workers share the same store.
-_web_concurrency = os.environ.get("WEB_CONCURRENCY", "")
-try:
-    if _web_concurrency.strip() and int(_web_concurrency) > 1:
-        raise RuntimeError(
-            f"Witness router: WEB_CONCURRENCY={_web_concurrency} but "
-            "_observations is in-process only. Split-view detection "
-            "silently fails across workers. Set WEB_CONCURRENCY=1 "
-            "or upgrade to a DB-backed observation store."
-        )
-except ValueError:
-    logger.warning(
-        "Witness router: WEB_CONCURRENCY=%r is not a valid integer — "
-        "multi-worker safety check skipped. Set WEB_CONCURRENCY to an integer.",
-        _web_concurrency,
-    )
 
 
 def _resolve_node_pubkey(origin: str) -> str | None:
@@ -128,23 +83,31 @@ def _resolve_node_pubkey(origin: str) -> str | None:
         return None
 
 
+def _row_to_announcement(row: WitnessObservation) -> WitnessAnnouncement:
+    """Deserialize a DB row back into a WitnessAnnouncement."""
+    return WitnessAnnouncement.model_validate(json.loads(row.announcement_json))
+
+
 @router.get("/checkpoints/latest", response_model=WitnessAnnouncement)
-async def get_latest_checkpoint() -> WitnessAnnouncement:
+async def get_latest_checkpoint(db: DBSession) -> WitnessAnnouncement:
     """Return the announcement with the highest checkpoint sequence.
 
     Raises:
         404: If no announcements have been stored yet.
     """
-    if not _observations:
+    stmt = select(WitnessObservation).order_by(WitnessObservation.sequence.desc()).limit(1)
+    result = await db.execute(stmt)
+    row = result.scalar_one_or_none()
+    if row is None:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="No checkpoints available",
         )
-    return max(_observations.values(), key=lambda a: a.checkpoint.sequence)
+    return _row_to_announcement(row)
 
 
 @router.get("/checkpoints/{sequence}", response_model=WitnessAnnouncement)
-async def get_checkpoint_by_sequence(sequence: int) -> WitnessAnnouncement:
+async def get_checkpoint_by_sequence(sequence: int, db: DBSession) -> WitnessAnnouncement:
     """Return any stored announcement whose checkpoint.sequence matches.
 
     Args:
@@ -153,9 +116,16 @@ async def get_checkpoint_by_sequence(sequence: int) -> WitnessAnnouncement:
     Raises:
         404: If no announcement for that sequence exists.
     """
-    announcement = _observations_by_seq.get(sequence)
-    if announcement is not None:
-        return announcement
+    stmt = (
+        select(WitnessObservation)
+        .where(WitnessObservation.sequence == sequence)
+        .order_by(WitnessObservation.created_at.asc())
+        .limit(1)
+    )
+    result = await db.execute(stmt)
+    row = result.scalar_one_or_none()
+    if row is not None:
+        return _row_to_announcement(row)
     raise HTTPException(
         status_code=status.HTTP_404_NOT_FOUND,
         detail=f"No announcement found for sequence {sequence}",
@@ -164,6 +134,7 @@ async def get_checkpoint_by_sequence(sequence: int) -> WitnessAnnouncement:
 
 @router.get("/checkpoints", response_model=list[WitnessAnnouncement])
 async def list_checkpoints(
+    db: DBSession,
     limit: int = Query(20, ge=1, le=100, description="Maximum number of results to return"),
     offset: int = Query(0, ge=0, description="Number of results to skip"),
 ) -> list[WitnessAnnouncement]:
@@ -173,12 +144,15 @@ async def list_checkpoints(
         limit: Maximum number of results (default 20).
         offset: Number of results to skip for pagination.
     """
-    sorted_announcements = sorted(
-        _observations.values(),
-        key=lambda a: a.checkpoint.sequence,
-        reverse=True,
+    stmt = (
+        select(WitnessObservation)
+        .order_by(WitnessObservation.sequence.desc())
+        .offset(offset)
+        .limit(limit)
     )
-    return sorted_announcements[offset : offset + limit]
+    result = await db.execute(stmt)
+    rows = result.scalars().all()
+    return [_row_to_announcement(r) for r in rows]
 
 
 @router.post(
@@ -189,6 +163,7 @@ async def list_checkpoints(
 async def submit_observation(
     request: WitnessAnnounceRequest,
     _api_key: RequireAPIKey,
+    db: DBSession,
 ) -> WitnessAnnounceResponse:
     """Submit a checkpoint announcement from an origin node.
 
@@ -235,16 +210,16 @@ async def submit_observation(
         )
 
     # -- Replay-resistance: nonce deduplication --------------------------
-    if request.nonce in _seen_nonces:
+    nonce_exists = await db.execute(
+        select(WitnessNonce.id).where(WitnessNonce.nonce == request.nonce).limit(1)
+    )
+    if nonce_exists.scalar_one_or_none() is not None:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="Duplicate nonce — possible replay",
         )
 
     # -- Ed25519 signature verification (C2SP tlog-witness model) --------
-    # Verify the checkpoint signature from the announcing node's registered
-    # public key before accepting the announcement.
-    # Payload: SHA-256(origin:sequence:checkpoint_hash) as bytes.
     _signed_payload = hashlib.sha256(
         f"{request.origin}:{request.checkpoint.sequence}:{request.checkpoint.checkpoint_hash}".encode()
     ).digest()
@@ -272,7 +247,11 @@ async def submit_observation(
 
     _origin_key_prefix = hashlib.sha256(request.origin.encode()).hexdigest()[:16]
     key = f"{_origin_key_prefix}:{request.checkpoint.sequence}"
-    if key in _observations:
+
+    existing = await db.execute(
+        select(WitnessObservation.id).where(WitnessObservation.key == key).limit(1)
+    )
+    if existing.scalar_one_or_none() is not None:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail=(
@@ -281,29 +260,53 @@ async def submit_observation(
             ),
         )
 
-    # Record the nonce (evict oldest if at capacity)
-    _seen_nonces[request.nonce] = None
-    while len(_seen_nonces) > _MAX_NONCE_ENTRIES:
-        _seen_nonces.popitem(last=False)
+    # Evict oldest nonces when at capacity (before adding the new one)
+    nonce_count_result = await db.execute(select(func.count(WitnessNonce.id)))
+    nonce_count = nonce_count_result.scalar_one()
+    if nonce_count >= _MAX_NONCE_ENTRIES:
+        excess = nonce_count - _MAX_NONCE_ENTRIES + 1
+        oldest_nonce_ids = (
+            select(WitnessNonce.id).order_by(WitnessNonce.created_at.asc()).limit(excess)
+        )
+        await db.execute(delete(WitnessNonce).where(WitnessNonce.id.in_(oldest_nonce_ids)))
 
+    # Record the nonce
+    db.add(WitnessNonce(nonce=request.nonce))
+
+    received_at = current_timestamp()
     announcement = WitnessAnnouncement(
         origin=request.origin,
         checkpoint=request.checkpoint,
-        received_at=current_timestamp(),
+        received_at=received_at,
     )
-    # Evict oldest entries when observation store is at capacity (LRU).
-    # ``while`` (not ``if``) guards against concurrent requests that may have
-    # pushed the store past capacity between the check and the insert.
-    while len(_observations) >= _MAX_OBSERVATIONS:
-        _, evicted = _observations.popitem(last=False)
-        # Remove from the secondary index only if it still points to the evicted
-        # announcement (another origin may have registered the same sequence).
-        seq = evicted.checkpoint.sequence
-        if _observations_by_seq.get(seq) is evicted:
-            del _observations_by_seq[seq]
-    _observations[key] = announcement
-    # Populate secondary index: first announcement wins per sequence number.
-    _observations_by_seq.setdefault(announcement.checkpoint.sequence, announcement)
+
+    obs = WitnessObservation(
+        key=key,
+        origin=request.origin,
+        sequence=request.checkpoint.sequence,
+        checkpoint_hash=request.checkpoint.checkpoint_hash,
+        checkpoint_timestamp=request.checkpoint.timestamp,
+        received_at=received_at,
+        nonce=request.nonce,
+        announcement_json=announcement.model_dump_json(),
+    )
+    # Evict oldest observations when at capacity (before adding the new one)
+    obs_count_result = await db.execute(select(func.count(WitnessObservation.id)))
+    obs_count = obs_count_result.scalar_one()
+    if obs_count >= _MAX_OBSERVATIONS:
+        excess = obs_count - _MAX_OBSERVATIONS + 1
+        oldest_obs_ids = (
+            select(WitnessObservation.id)
+            .order_by(WitnessObservation.created_at.asc())
+            .limit(excess)
+        )
+        await db.execute(
+            delete(WitnessObservation).where(WitnessObservation.id.in_(oldest_obs_ids))
+        )
+
+    db.add(obs)
+
+    await db.commit()
 
     logger.info(
         "Stored announcement %s: seq=%d hash=%s",
@@ -320,7 +323,7 @@ async def submit_observation(
 
 
 @router.get("/gossip", response_model=list[GossipConflictEntry])
-async def get_gossip_state() -> list[GossipConflictEntry]:
+async def get_gossip_state(db: DBSession) -> list[GossipConflictEntry]:
     """Return split-view evidence detected across stored announcements.
 
     Groups announcements by checkpoint.sequence.  Any sequence where two or
@@ -330,11 +333,13 @@ async def get_gossip_state() -> list[GossipConflictEntry]:
     Returns:
         List of conflict entries (empty if no conflicts exist).
     """
-    # Group by sequence: sequence -> {origin -> checkpoint_hash}
+    stmt = select(WitnessObservation)
+    result = await db.execute(stmt)
+    rows = result.scalars().all()
+
     by_sequence: dict[int, dict[str, str]] = defaultdict(dict)
-    for announcement in _observations.values():
-        seq = announcement.checkpoint.sequence
-        by_sequence[seq][announcement.origin] = announcement.checkpoint.checkpoint_hash
+    for row in rows:
+        by_sequence[row.sequence][row.origin] = row.checkpoint_hash
 
     conflicts: list[GossipConflictEntry] = []
     for seq, origin_hashes in by_sequence.items():
@@ -352,20 +357,25 @@ async def get_gossip_state() -> list[GossipConflictEntry]:
 
 
 @router.get("/health", response_model=WitnessHealthResponse)
-async def witness_health() -> WitnessHealthResponse:
+async def witness_health(db: DBSession) -> WitnessHealthResponse:
     """Return service health and current observation count."""
+    count_result = await db.execute(select(func.count(WitnessObservation.id)))
+    count = count_result.scalar_one()
     return WitnessHealthResponse(
         status="ok",
-        observation_count=len(_observations),
+        observation_count=count,
     )
 
 
-def clear_observations() -> None:
+async def clear_observations(db: AsyncSession) -> None:
     """Clear all stored observations and nonce tracking.
 
     Intended for use in tests and maintenance operations.
+
+    Args:
+        db: An async database session.
     """
-    _observations.clear()
-    _observations_by_seq.clear()
-    _seen_nonces.clear()
+    await db.execute(delete(WitnessObservation))
+    await db.execute(delete(WitnessNonce))
+    await db.commit()
     logger.info("Cleared all witness observations and nonce state")

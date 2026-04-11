@@ -42,7 +42,10 @@ _MERKLE_LEAF_LIMIT = 50_000
     responses={
         status.HTTP_404_NOT_FOUND: {
             "description": "The request_id does not match any existing public records request."
-        }
+        },
+        status.HTTP_409_CONFLICT: {
+            "description": "The doc_hash has already been committed to the ledger."
+        },
     },
 )
 async def commit_document(
@@ -54,6 +57,10 @@ async def commit_document(
     shard, rebuilds the shard Merkle tree, and persists the commit record.
     Olympus stores hashes only — the underlying document is never submitted.
 
+    If the same ``doc_hash`` has already been committed, a ``409 Conflict``
+    is returned with the existing commit details so the caller can reference
+    the original record.
+
     Args:
         body: Commit request containing the BLAKE3 doc_hash.
         db: Injected async database session.
@@ -63,6 +70,7 @@ async def commit_document(
 
     Raises:
         HTTPException 404: If request_id is provided but no matching public records request exists.
+        HTTPException 409: If the doc_hash has already been committed.
     """
     if body.request_id is not None:
         result = await db.execute(
@@ -76,6 +84,21 @@ async def commit_document(
                     "code": "REQUEST_NOT_FOUND",
                 },
             )
+
+    # Check for existing commit with the same doc_hash (idempotency).
+    existing_result = await db.execute(
+        select(DocCommit).where(DocCommit.doc_hash == body.doc_hash).limit(1)
+    )
+    existing = existing_result.scalars().first()
+    if existing:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={
+                "detail": "This document hash has already been committed.",
+                "code": "DUPLICATE_DOC_HASH",
+                "existing_commit_id": existing.commit_id,
+            },
+        )
 
     commit_id = generate_commit_id()
     shard_id = DEFAULT_SHARD_ID

@@ -230,6 +230,10 @@ ignore_missing_imports = true
 module = "olympus_core"
 ignore_missing_imports = true
 
+[[tool.mypy.overrides]]
+module = "redis.*"
+ignore_missing_imports = true
+
 [tool.bandit]
 exclude_dirs = ["tests", ".venv", "venv"]
 skips = ["B101"]  # Skip assert_used check (assertions are fine in tests)

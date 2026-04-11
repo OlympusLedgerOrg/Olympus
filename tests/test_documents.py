@@ -114,13 +114,13 @@ async def test_verify_missing_both_fields(client):
 
 @pytest.mark.asyncio
 async def test_hash_consistency(client):
-    """The same doc_hash committed twice should produce different commit_ids."""
+    """The same doc_hash committed twice should return 409 with existing commit_id."""
     doc_hash = _b3("duplicate hash test")
     r1 = await client.post("/doc/commit", json={"doc_hash": doc_hash})
     r2 = await client.post("/doc/commit", json={"doc_hash": doc_hash})
     assert r1.status_code == 201
-    assert r2.status_code == 201
-    assert r1.json()["commit_id"] != r2.json()["commit_id"]
+    assert r2.status_code == 409
+    assert r2.json()["detail"]["existing_commit_id"] == r1.json()["commit_id"]
 
 
 @pytest.mark.asyncio

@@ -14,6 +14,7 @@ import uuid
 from datetime import datetime, timezone
 
 from sqlalchemy import select
+from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from api.models.document import DocCommit
@@ -189,49 +190,19 @@ async def ingest_document(
         )
     )
 
-    # ── Step 4: Duplicate check ──────────────────────────────────────────────
-    existing_result = await db.execute(
-        select(DocCommit).where(DocCommit.doc_hash == doc_hash).limit(1)
-    )
-    existing = existing_result.scalars().first()
+    # ── Steps 4 + 5 combined: atomic upsert on doc_hash ─────────────────────
+    #
+    # A single INSERT … ON CONFLICT (doc_hash) DO NOTHING eliminates the
+    # TOCTOU window that existed between the old SELECT and INSERT.  If two
+    # concurrent requests race on the same doc_hash, exactly one INSERT wins;
+    # the other hits the conflict clause and returns no rows.  We then SELECT
+    # the winner in both cases.
 
-    if existing:
-        steps.append(
-            _make_step(
-                4,
-                "Duplicate Check",
-                "complete",
-                "This document is already in the permanent record.",
-                details={"existing_commit_id": existing.commit_id},
-            )
-        )
-        epoch_str = _format_epoch(existing.epoch_timestamp)
-        return SimpleIngestionResponse(
-            success=True,
-            summary="This document is already in the permanent record.",
-            steps=steps,
-            commit_id=existing.commit_id,
-            permanent_record_id=_display_id(existing.commit_id),
-            what_this_means=(
-                f"This exact document was previously recorded on {epoch_str}. "
-                "No duplicate entry was created — the existing record is still valid."
-            ),
-            next_steps=(
-                f"Use the permanent record ID '{_display_id(existing.commit_id)}' to "
-                "reference or verify this document in the future."
-            ),
-        )
-
-    steps.append(
-        _make_step(4, "Duplicate Check", "complete", "This document has not been submitted before.")
-    )
-
-    # ── Step 5: Commit to ledger ─────────────────────────────────────────────
     try:
-        commit_id = generate_commit_id()
+        new_commit_id = generate_commit_id()
         shard_id = "0x4F3A"
 
-        # Compute Merkle root for the shard after adding this commit
+        # Compute candidate Merkle root (used only if this is a new insert).
         existing_hashes_result = await db.execute(
             select(DocCommit.doc_hash)
             .where(DocCommit.shard_id == shard_id)
@@ -241,17 +212,84 @@ async def ingest_document(
         all_hashes = existing_hashes + [doc_hash]
         merkle_root = build_tree(all_hashes, preserve_order=True).root_hash
 
-        commit = DocCommit(
-            id=str(uuid.uuid4()),
-            request_id=None,  # request_id FK is a UUID; display IDs like OLY-0001 are not stored here
-            doc_hash=doc_hash,
-            commit_id=commit_id,
-            shard_id=shard_id,
-            merkle_root=merkle_root,
+        stmt = (
+            pg_insert(DocCommit)
+            .values(
+                id=str(uuid.uuid4()),
+                request_id=None,
+                doc_hash=doc_hash,
+                commit_id=new_commit_id,
+                shard_id=shard_id,
+                merkle_root=merkle_root,
+            )
+            .on_conflict_do_nothing(index_elements=["doc_hash"])
+            .returning(DocCommit.commit_id, DocCommit.epoch_timestamp)
         )
-        db.add(commit)
+        result = await db.execute(stmt)
+        returned_row = result.fetchone()
+
+        if returned_row is None:
+            # Conflict: another row with this doc_hash already existed.
+            existing_result = await db.execute(
+                select(DocCommit).where(DocCommit.doc_hash == doc_hash).limit(1)
+            )
+            existing = existing_result.scalars().first()
+            await db.commit()
+
+            if existing is None:
+                # Defensive: the conflicting row was not found (should not happen).
+                raise ValueError(
+                    f"Unexpected state: doc_hash conflict detected but conflicting "
+                    f"row not found: {doc_hash}. This may indicate a race condition."
+                )
+
+            steps.append(
+                _make_step(
+                    4,
+                    "Duplicate Check",
+                    "complete",
+                    "This document is already in the permanent record.",
+                    details={"existing_commit_id": existing.commit_id},
+                )
+            )
+            epoch_str = _format_epoch(existing.epoch_timestamp)
+            return SimpleIngestionResponse(
+                success=True,
+                summary="This document is already in the permanent record.",
+                steps=steps,
+                commit_id=existing.commit_id,
+                permanent_record_id=_display_id(existing.commit_id),
+                what_this_means=(
+                    f"This exact document was previously recorded on {epoch_str}. "
+                    "No duplicate entry was created — the existing record is still valid."
+                ),
+                next_steps=(
+                    f"Use the permanent record ID '{_display_id(existing.commit_id)}' to "
+                    "reference or verify this document in the future."
+                ),
+            )
+
+        # Insert succeeded — this is a new record.
+        commit_id = returned_row[0]
         await db.commit()
-        await db.refresh(commit)
+
+        steps.append(
+            _make_step(
+                4, "Duplicate Check", "complete", "This document has not been submitted before."
+            )
+        )
+        steps.append(
+            _make_step(
+                5,
+                "Added to Permanent Record",
+                "complete",
+                (
+                    "The document's fingerprint has been permanently recorded in the ledger "
+                    "and cannot be altered or deleted."
+                ),
+                details={"commit_id": commit_id, "merkle_root": merkle_root},
+            )
+        )
 
     except Exception:
         logger.exception("Failed to commit document %s to ledger", filename)
@@ -271,19 +309,6 @@ async def ingest_document(
             what_this_means="An internal database error occurred.",
             error_help="Please try again in a moment. If the problem continues, contact the system administrator.",
         )
-
-    steps.append(
-        _make_step(
-            5,
-            "Added to Permanent Record",
-            "complete",
-            (
-                "The document's fingerprint has been permanently recorded in the ledger "
-                "and cannot be altered or deleted."
-            ),
-            details={"commit_id": commit_id, "merkle_root": merkle_root},
-        )
-    )
 
     # ── Record a human-readable activity log entry ───────────────────────────
     display_id = _display_id(commit_id)

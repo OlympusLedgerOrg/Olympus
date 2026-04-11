@@ -249,26 +249,26 @@ class TestRateLimitBackend:
         assert backend.get("ip0") is None
         assert backend.get("ip1") is None
 
-    def test_redis_backend_raises_not_implemented(self):
+    def test_redis_backend_raises_import_error_without_redis(self):
         from api.auth import RedisRateLimitBackend
 
         backend = RedisRateLimitBackend("redis://localhost")
-        with pytest.raises(NotImplementedError, match="not yet implemented"):
+        with pytest.raises(ImportError, match="redis"):
             backend.get("key")
-        with pytest.raises(NotImplementedError, match="not yet implemented"):
+        with pytest.raises(ImportError, match="redis"):
             from time import monotonic
 
             bucket = _TokenBucket(capacity=10, refill_rate=1, tokens=10, last_refill=monotonic())
             backend.set("key", bucket)
 
-    def test_backend_factory_rejects_redis_configuration(self):
+    def test_backend_factory_requires_redis_url(self):
         from api.auth import _create_rate_limit_backend
 
         with unittest.mock.patch(
             "api.auth.get_settings",
-            return_value=SimpleNamespace(rate_limit_backend="redis"),
+            return_value=SimpleNamespace(rate_limit_backend="redis", rate_limit_redis_url=""),
         ):
-            with pytest.raises(ValueError, match="Redis rate limit backend is not yet implemented"):
+            with pytest.raises(ValueError, match="RATE_LIMIT_REDIS_URL"):
                 _create_rate_limit_backend()
 
     def test_consume_atomic_prevents_double_consume(self):
