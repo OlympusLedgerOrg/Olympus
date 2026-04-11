@@ -1,19 +1,26 @@
 """
 Shard assignment and state-root computation for the Olympus FOIA ledger.
 
-All records are currently assigned to a single shard (0x4F3A).  The
-``assign_shard`` function is a trivial stub designed to be replaced when
-multi-shard routing is implemented.
+Shard assignment uses a BLAKE3-based consistent-hashing ring.  Each shard
+in the ring is replicated across 64 virtual nodes to ensure even key
+distribution.  The ring is configured via the ``OLYMPUS_SHARD_RING``
+environment variable (a JSON array of hex shard IDs).  When unset or set
+to a single shard, all requests are routed to ``DEFAULT_SHARD_ID`` for
+backward compatibility with Phase 0 single-shard operation.
 """
 
 from __future__ import annotations
 
+import bisect
+import json
 import logging
+import os
 
 from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from api.services.merkle import build_tree
+from protocol.hashes import hash_string
 
 
 logger = logging.getLogger(__name__)
@@ -21,19 +28,88 @@ logger = logging.getLogger(__name__)
 # Default shard — Phase 0 single-shard operation
 DEFAULT_SHARD_ID = "0x4F3A"
 
+# Number of virtual-node replicas per physical shard on the hash ring.
+_VIRTUAL_NODES = 64
+
+
+class _ShardRing:
+    """Consistent-hashing ring backed by BLAKE3.
+
+    The ring is read-only after construction and therefore safe for
+    concurrent access from multiple threads.
+    """
+
+    def __init__(self, shard_ids: list[str]) -> None:
+        self._shard_ids = list(shard_ids)
+        self._keys: list[int] = []
+        self._ring: dict[int, str] = {}
+
+        for shard_id in self._shard_ids:
+            for replica in range(_VIRTUAL_NODES):
+                vnode_label = f"{shard_id}:{replica}"
+                digest = hash_string(vnode_label)
+                pos = int.from_bytes(digest, "big")
+                self._keys.append(pos)
+                self._ring[pos] = shard_id
+
+        self._keys.sort()
+
+    @property
+    def single_shard(self) -> bool:
+        """True when the ring contains only one physical shard."""
+        return len(self._shard_ids) <= 1
+
+    def assign(self, key: str) -> str:
+        """Map *key* to the nearest shard clockwise on the ring."""
+        if self.single_shard:
+            return self._shard_ids[0] if self._shard_ids else DEFAULT_SHARD_ID
+
+        digest = hash_string(key)
+        pos = int.from_bytes(digest, "big")
+        idx = bisect.bisect_right(self._keys, pos)
+        if idx == len(self._keys):
+            idx = 0
+        return self._ring[self._keys[idx]]
+
+
+def _load_ring() -> _ShardRing:
+    """Build the shard ring from the environment (once at import time)."""
+    raw = os.environ.get("OLYMPUS_SHARD_RING", "")
+    if raw.strip():
+        try:
+            shard_ids = json.loads(raw)
+            if not isinstance(shard_ids, list) or not all(isinstance(s, str) for s in shard_ids):
+                raise TypeError("OLYMPUS_SHARD_RING must be a JSON array of strings")
+        except (json.JSONDecodeError, TypeError):
+            logger.warning(
+                "Invalid OLYMPUS_SHARD_RING value %r; falling back to default shard.",
+                raw,
+            )
+            shard_ids = [DEFAULT_SHARD_ID]
+    else:
+        shard_ids = [DEFAULT_SHARD_ID]
+
+    return _ShardRing(shard_ids)
+
+
+_RING: _ShardRing = _load_ring()
+
 
 def assign_shard(request_id: str) -> str:
     """Return the shard identifier for the given request.
 
+    Uses a BLAKE3-based consistent-hashing ring to map *request_id* to one
+    of the configured shards.  When the ring contains a single shard (the
+    default), ``DEFAULT_SHARD_ID`` is returned for every input, preserving
+    backward compatibility.
+
     Args:
-        request_id: UUID or display ID of the request (currently unused;
-                    all records go to the default shard in Phase 0).
+        request_id: UUID or display ID of the request.
 
     Returns:
         Hex shard identifier string.
     """
-    # TODO: Implement consistent-hashing shard routing for multi-shard Phase 1.
-    return DEFAULT_SHARD_ID
+    return _RING.assign(request_id)
 
 
 async def compute_state_root(shard_id: str, db: AsyncSession) -> str:
