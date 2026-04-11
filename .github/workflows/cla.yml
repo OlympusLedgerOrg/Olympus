@@ -67,18 +67,16 @@ jobs:
 
   # -------------------------------------------------------------------------
   # Job 2: Signed commit enforcement for sensitive paths.
+  # Runs independently of cla-check — no needs dependency — so it always
+  # executes for every PR, including bot PRs where cla-check auto-passes.
   # Uses the GitHub API — no checkout of PR code is required, so there is
   # no risk of executing untrusted code in this pull_request_target context.
   # GitHub's API verifies signatures against keys registered to each
   # contributor's account, preventing use of arbitrary signing keys.
-  # if: always() ensures this check runs even when cla-check is skipped
-  # (e.g. bot PRs) or fails due to infrastructure issues.
   # -------------------------------------------------------------------------
   signed-commit-check:
     name: Signed Commit Enforcement
     runs-on: ubuntu-latest
-    needs: cla-check
-    if: always()
     steps:
       - name: Check signed commits for sensitive paths
         env:
