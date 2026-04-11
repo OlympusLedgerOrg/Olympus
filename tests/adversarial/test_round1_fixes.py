@@ -67,7 +67,6 @@ class TestNumericCanonicalization:
 
 from api.services.merkle import (  # noqa: E402
     _blake3_leaf,
-    _blake3_pair,
     build_tree,
     generate_proof,
     verify_proof,
