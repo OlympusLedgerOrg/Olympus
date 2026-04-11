@@ -19,6 +19,7 @@ from api.services.ingestion import ingest_document
 # Helpers
 # ---------------------------------------------------------------------------
 
+
 def _fake_file_bytes() -> bytes:
     """Return deterministic file content for hashing."""
     return b"Hello, Olympus ledger!"
@@ -38,6 +39,7 @@ def _fake_commit_id() -> str:
 # Fixtures
 # ---------------------------------------------------------------------------
 
+
 @pytest.fixture()
 def mock_db() -> AsyncMock:
     """Return an ``AsyncMock`` that behaves like an ``AsyncSession``."""
@@ -51,6 +53,7 @@ def mock_db() -> AsyncMock:
 # ---------------------------------------------------------------------------
 # Tests
 # ---------------------------------------------------------------------------
+
 
 @pytest.mark.asyncio
 async def test_concurrent_duplicate_returns_existing(mock_db: AsyncMock) -> None:

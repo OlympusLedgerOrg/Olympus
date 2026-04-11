@@ -38,9 +38,7 @@ class DocCommit(Base):
     """
 
     __tablename__ = "doc_commits"
-    __table_args__ = (
-        UniqueConstraint("doc_hash", name="ix_doc_commits_doc_hash_unique"),
-    )
+    __table_args__ = (UniqueConstraint("doc_hash", name="ix_doc_commits_doc_hash_unique"),)
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
     request_id: Mapped[str | None] = mapped_column(

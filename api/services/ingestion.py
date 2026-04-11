@@ -267,7 +267,9 @@ async def ingest_document(
         await db.commit()
 
         steps.append(
-            _make_step(4, "Duplicate Check", "complete", "This document has not been submitted before.")
+            _make_step(
+                4, "Duplicate Check", "complete", "This document has not been submitted before."
+            )
         )
         steps.append(
             _make_step(
