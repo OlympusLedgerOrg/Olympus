@@ -15,7 +15,9 @@ from api.models.dataset import DatasetArtifact, DatasetArtifactFile, DatasetLine
 from api.models.document import DocCommit
 from api.models.ledger import MerkleNode
 from api.models.ledger_activity import LedgerActivity
+from api.models.purchase import Purchase
 from api.models.request import PublicRecordsRequest
+from api.models.user import User
 
 
 __all__ = [
@@ -30,4 +32,6 @@ __all__ = [
     "LedgerActivity",
     "MerkleNode",
     "PublicRecordsRequest",
+    "Purchase",
+    "User",
 ]

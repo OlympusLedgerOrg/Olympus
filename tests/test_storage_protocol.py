@@ -4,9 +4,12 @@ Tests for storage/protocol_state.py module.
 Uses mocked psycopg cursor/connection to avoid requiring a real Postgres instance.
 """
 
+import importlib.util
 import unittest
 from datetime import datetime, timezone
 from unittest.mock import MagicMock
+
+import pytest
 
 from storage.protocol_state import (
     _row_get,
@@ -16,6 +19,12 @@ from storage.protocol_state import (
     load_tree_state,
     persist_tree_nodes,
 )
+
+
+# Check if Rust extension is available
+HAS_RUST = importlib.util.find_spec("olympus_core") is not None
+
+RUST_ONLY = pytest.mark.skipif(not HAS_RUST, reason="Rust extension not built")
 
 
 def _normalize_sql(statement: object) -> str:
@@ -28,6 +37,7 @@ def _normalize_sql(statement: object) -> str:
     return " ".join(text.split())
 
 
+@RUST_ONLY
 class TestLoadTreeState(unittest.TestCase):
     """Tests for load_tree_state function."""
 
@@ -257,6 +267,7 @@ class TestGetHeaderBySeq(unittest.TestCase):
         self.assertIsNone(result)
 
 
+@RUST_ONLY
 class TestAssertRootMatchesState(unittest.TestCase):
     """Tests for assert_root_matches_state function."""
 
@@ -266,10 +277,9 @@ class TestAssertRootMatchesState(unittest.TestCase):
         cur.fetchmany.return_value = []  # Empty tree
 
         # Get the default root from an empty tree
-        from protocol.ssmf import SparseMerkleTree
+        from protocol.ssmf import EMPTY_HASHES
 
-        empty_tree = SparseMerkleTree()
-        expected_root = empty_tree.get_root()
+        expected_root = EMPTY_HASHES[256]
 
         # Should not raise
         assert_root_matches_state(cur, None, expected_root)

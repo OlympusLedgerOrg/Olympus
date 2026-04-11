@@ -5,6 +5,7 @@ import pytest
 from protocol.ssmf import (
     EMPTY_HASHES,
     ExistenceProof,
+    PurePythonSparseMerkleTree,
     SparseMerkleTree,
     verify_proof,
 )
@@ -45,7 +46,8 @@ class TestIncrementalUpdate:
         kb, vb = b"\x02" * 32, b"\xbb" * 32
 
         # Build tree with A, collect siblings for B
-        tree = SparseMerkleTree()
+        # Use pure Python implementation to access internal methods
+        tree = PurePythonSparseMerkleTree()
         tree.update(ka, va)
         # Siblings for B from the tree with only A
         siblings_b = tree._collect_siblings(tree._key_to_path(kb))
@@ -108,8 +110,11 @@ class TestIncrementalUpdate:
 
     def test_ten_sequential_inserts(self):
         """Incrementally insert 10 keys, verify each root matches full tree."""
-        tree = SparseMerkleTree()
-        siblings_source = SparseMerkleTree()  # parallel tree to collect siblings
+        # Use pure Python implementation for both trees:
+        # - tree: for verification via .get_root()
+        # - siblings_source: for accessing internal ._collect_siblings()
+        tree = PurePythonSparseMerkleTree()
+        siblings_source = PurePythonSparseMerkleTree()
 
         for i in range(10):
             key = bytes([i] + [0] * 31)
