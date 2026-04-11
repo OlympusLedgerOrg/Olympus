@@ -501,41 +501,170 @@ class MemoryRateLimitBackend:
 
 
 class RedisRateLimitBackend:
-    """Redis-backed rate limit backend (stub).
+    """Redis-backed rate limit backend for multi-worker deployments.
 
-    Provides a clear migration path for multi-worker deployments.
+    Stores token-bucket state in Redis hashes with automatic TTL expiry.
+    Uses a Lua script for atomic consume operations to prevent TOCTOU races
+    across workers.  The ``redis`` package is imported lazily so it remains
+    an optional dependency.
     """
+
+    _KEY_PREFIX = "olympus:rl:"
+    _MIN_TTL_SECONDS = 60
+
+    # Lua script: atomic token-bucket consume.
+    # KEYS[1] = bucket hash key
+    # ARGV[1] = capacity, ARGV[2] = refill_rate, ARGV[3] = now (unix ts), ARGV[4] = ttl
+    _LUA_CONSUME = """\
+local key = KEYS[1]
+local capacity = tonumber(ARGV[1])
+local refill_rate = tonumber(ARGV[2])
+local now = tonumber(ARGV[3])
+local ttl = tonumber(ARGV[4])
+
+local tokens = tonumber(redis.call('HGET', key, 'tokens'))
+local last_refill = tonumber(redis.call('HGET', key, 'last_refill'))
+
+if tokens == nil or last_refill == nil then
+    tokens = capacity
+    last_refill = now
+end
+
+local elapsed = math.max(now - last_refill, 0)
+tokens = math.min(capacity, tokens + elapsed * refill_rate)
+last_refill = now
+
+if tokens < 1.0 then
+    redis.call('HSET', key, 'tokens', tostring(tokens),
+               'last_refill', tostring(last_refill),
+               'capacity', tostring(capacity),
+               'refill_rate', tostring(refill_rate))
+    redis.call('EXPIRE', key, ttl)
+    return 0
+end
+
+tokens = tokens - 1.0
+redis.call('HSET', key, 'tokens', tostring(tokens),
+           'last_refill', tostring(last_refill),
+           'capacity', tostring(capacity),
+           'refill_rate', tostring(refill_rate))
+redis.call('EXPIRE', key, ttl)
+return 1
+"""
 
     def __init__(self, redis_url: str) -> None:
         self._redis_url = redis_url
+        self._client: object | None = None
+        self._consume_script: object | None = None
+
+    def _get_client(self) -> object:
+        """Return (and lazily create) the Redis client."""
+        if self._client is None:
+            try:
+                import redis  # noqa: PLC0415 — lazy optional import
+            except ImportError:
+                raise ImportError(
+                    "The 'redis' package is required for RedisRateLimitBackend. "
+                    "Install it with: pip install redis"
+                ) from None
+            self._client = redis.Redis.from_url(self._redis_url, decode_responses=True)
+        return self._client  # type: ignore[return-value]
+
+    def _prefixed(self, key: str) -> str:
+        return f"{self._KEY_PREFIX}{key}"
+
+    def _ttl_for(self, capacity: float, refill_rate: float) -> int:
+        """Compute a reasonable TTL: time to fully refill × 2, min 60s."""
+        if refill_rate <= 0:
+            return self._MIN_TTL_SECONDS
+        return max(int(capacity / refill_rate * 2), self._MIN_TTL_SECONDS)
+
+    _MICROSECONDS_PER_SECOND = 1_000_000
+
+    def _now_unix(self) -> float:
+        """Get current time from Redis server for cross-worker consistency."""
+        sec, usec = self._get_client().time()  # type: ignore[union-attr]
+        return float(sec) + float(usec) / self._MICROSECONDS_PER_SECOND
 
     def get(self, key: str) -> _TokenBucket | None:
-        raise NotImplementedError(
-            "Redis rate limit backend not yet implemented. Contributions welcome."
-        )
+        """Retrieve a token bucket from Redis."""
+        data = self._get_client().hgetall(self._prefixed(key))  # type: ignore[union-attr]
+        if not data:
+            return None
+        try:
+            return _TokenBucket(
+                capacity=float(data["capacity"]),
+                refill_rate=float(data["refill_rate"]),
+                tokens=float(data["tokens"]),
+                last_refill=float(data["last_refill"]),
+            )
+        except (KeyError, ValueError):
+            return None
 
     def set(self, key: str, bucket: _TokenBucket) -> None:
-        raise NotImplementedError(
-            "Redis rate limit backend not yet implemented. Contributions welcome."
+        """Store a token bucket in Redis with TTL."""
+        rkey = self._prefixed(key)
+        client = self._get_client()
+        client.hset(  # type: ignore[union-attr]
+            rkey,
+            mapping={
+                "tokens": str(bucket.tokens),
+                "last_refill": str(bucket.last_refill),
+                "capacity": str(bucket.capacity),
+                "refill_rate": str(bucket.refill_rate),
+            },
         )
+        ttl = self._ttl_for(bucket.capacity, bucket.refill_rate)
+        client.expire(rkey, ttl)  # type: ignore[union-attr]
+
+    def consume_atomic(self, key: str, capacity: float, refill_rate: float) -> bool:
+        """Atomically consume a token via Lua script.
+
+        The Lua script runs on the Redis server as a single atomic
+        operation, preventing TOCTOU races across multiple workers.
+
+        Returns True if the request is allowed, False if rate-limited.
+        """
+        client = self._get_client()
+        if self._consume_script is None:
+            self._consume_script = client.register_script(self._LUA_CONSUME)  # type: ignore[union-attr]
+        now = self._now_unix()
+        ttl = self._ttl_for(capacity, refill_rate)
+        result = self._consume_script(
+            keys=[self._prefixed(key)],
+            args=[str(capacity), str(refill_rate), str(now), str(ttl)],
+        )
+        return int(result) == 1
+
+    @property
+    def bucket_count(self) -> int:
+        """Return an estimate of stored rate-limit keys."""
+        client = self._get_client()
+        count = 0
+        cursor: int = 0
+        while True:
+            cursor, keys = client.scan(  # type: ignore[union-attr]
+                cursor=cursor, match=f"{self._KEY_PREFIX}*", count=500
+            )
+            count += len(keys)
+            if int(cursor) == 0:
+                break
+        return count
 
 
-def _create_rate_limit_backend() -> MemoryRateLimitBackend:
+def _create_rate_limit_backend() -> MemoryRateLimitBackend | RedisRateLimitBackend:
     """Instantiate the rate limit backend for the current configuration.
 
-    Currently only the ``'memory'`` backend is supported.  Requesting
-    ``RATE_LIMIT_BACKEND=redis`` raises :exc:`ValueError` at startup so the
-    misconfiguration is caught early rather than silently failing at request
-    time.  When a Redis backend is implemented, this function will return the
-    appropriate type and the return annotation should be widened accordingly.
+    Supports ``'memory'`` (default, in-process) and ``'redis'`` (shared
+    across workers) backends.
 
     H-2 Fix: In production mode with multiple workers and memory backend,
     startup is blocked because the rate limiter would be essentially non-functional
     (each worker maintains independent buckets, so effective limit is N× configured).
 
     Raises:
-        ValueError: If ``RATE_LIMIT_BACKEND`` is ``'redis'`` (not yet
-            implemented) or an unknown value.
+        ValueError: If ``RATE_LIMIT_BACKEND`` is an unknown value, or if
+            ``'redis'`` is selected but no ``RATE_LIMIT_REDIS_URL`` is set.
         RuntimeError: If in production mode with WEB_CONCURRENCY > 1 and
             RATE_LIMIT_BACKEND=memory.
     """
@@ -543,14 +672,17 @@ def _create_rate_limit_backend() -> MemoryRateLimitBackend:
     backend_type = settings.rate_limit_backend.lower()
 
     if backend_type == "redis":
-        raise ValueError(
-            "Redis rate limit backend is not yet implemented. "
-            "Use RATE_LIMIT_BACKEND=memory (default) for now. "
-            "Contributions to implement the Redis backend are welcome."
-        )
+        if not settings.rate_limit_redis_url:
+            raise ValueError(
+                "RATE_LIMIT_BACKEND=redis requires RATE_LIMIT_REDIS_URL to be set "
+                "(e.g. 'redis://localhost:6379/0')."
+            )
+        return RedisRateLimitBackend(settings.rate_limit_redis_url)
 
     if backend_type != "memory":
-        raise ValueError(f"Unknown RATE_LIMIT_BACKEND: {backend_type!r}. Options: 'memory'")
+        raise ValueError(
+            f"Unknown RATE_LIMIT_BACKEND: {backend_type!r}. Options: 'memory', 'redis'"
+        )
 
     # H-2 Fix: Block startup if memory backend with multiple workers in production.
     # The memory backend is per-process, so with N workers the effective rate limit
@@ -568,7 +700,7 @@ def _create_rate_limit_backend() -> MemoryRateLimitBackend:
             "Each worker maintains independent rate limit buckets, so the effective limit "
             f"would be {workers}× the configured value. "
             "Options: (1) Set WEB_CONCURRENCY=1, (2) Use a distributed rate limiter "
-            "(RATE_LIMIT_BACKEND=redis once implemented), or (3) Set OLYMPUS_ENV=development "
+            "(RATE_LIMIT_BACKEND=redis), or (3) Set OLYMPUS_ENV=development "
             "to disable this check for local testing."
         )
 
@@ -577,7 +709,7 @@ def _create_rate_limit_backend() -> MemoryRateLimitBackend:
         logger.warning(
             "RATE_LIMIT_BACKEND=memory with WEB_CONCURRENCY=%s — "
             "rate limits are per-process; effective limit is %s× configured value. "
-            "Consider switching to RATE_LIMIT_BACKEND=redis once implemented.",
+            "Consider switching to RATE_LIMIT_BACKEND=redis.",
             workers,
             workers,
         )
@@ -585,10 +717,10 @@ def _create_rate_limit_backend() -> MemoryRateLimitBackend:
     return MemoryRateLimitBackend()
 
 
-_rate_limit_backend: MemoryRateLimitBackend | None = None
+_rate_limit_backend: MemoryRateLimitBackend | RedisRateLimitBackend | None = None
 
 
-def _get_backend() -> MemoryRateLimitBackend:
+def _get_backend() -> MemoryRateLimitBackend | RedisRateLimitBackend:
     """Lazy-initialise and return the rate limit backend singleton."""
     global _rate_limit_backend
     if _rate_limit_backend is None:
