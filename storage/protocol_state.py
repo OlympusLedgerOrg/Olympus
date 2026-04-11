@@ -48,8 +48,7 @@ def _require_rust_smt() -> None:
     """Raise RuntimeError if Rust SMT is not available. Call at runtime entry points."""
     if not _RUST_SMT_AVAILABLE:
         raise RuntimeError(
-            "olympus_core is required for tree state operations — "
-            "install with `maturin develop`"
+            "olympus_core is required for tree state operations — install with `maturin develop`"
         )
 
 
