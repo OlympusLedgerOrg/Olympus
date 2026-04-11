@@ -352,15 +352,15 @@ class TestMemoryRateLimitBackend:
 
 
 class TestRedisRateLimitBackend:
-    def test_get_raises(self) -> None:
+    def test_get_raises_without_redis(self) -> None:
         backend = RedisRateLimitBackend("redis://localhost")
-        with pytest.raises(NotImplementedError):
+        with pytest.raises(ImportError, match="redis"):
             backend.get("key")
 
-    def test_set_raises(self) -> None:
+    def test_set_raises_without_redis(self) -> None:
         backend = RedisRateLimitBackend("redis://localhost")
         b = _TokenBucket(capacity=1.0, refill_rate=1.0, tokens=1.0, last_refill=monotonic())
-        with pytest.raises(NotImplementedError):
+        with pytest.raises(ImportError, match="redis"):
             backend.set("key", b)
 
 
