@@ -42,9 +42,12 @@ class TestBuildTree:
     def test_two_leaves_preserve_order(self):
         a, b = _b3("a"), _b3("b")
         tree = build_tree([a, b], preserve_order=True)
-        # Domain-separated internal node: BLAKE3(OLY:NODE:V1 || | || a || | || b)
+        # Leaves are first domain-separated, then paired as an internal node:
+        # BLAKE3(OLY:NODE:V1 || | || leaf_hash(a) || | || leaf_hash(b))
+        leaf_a = _blake3_leaf(bytes.fromhex(a))
+        leaf_b = _blake3_leaf(bytes.fromhex(b))
         expected = blake3_hash(
-            [_INTERNAL_PREFIX, _SEP, bytes.fromhex(a), _SEP, bytes.fromhex(b)]
+            [_INTERNAL_PREFIX, _SEP, bytes.fromhex(leaf_a), _SEP, bytes.fromhex(leaf_b)]
         ).hex()
         assert tree.root_hash == expected
 
@@ -107,16 +110,15 @@ class TestBuildTree:
         leaves_2 = [_b3(s) for s in ["a", "b"]]
         assert build_tree(leaves_3).root_hash != build_tree(leaves_2).root_hash
 
-    def test_lone_node_is_rehashed_not_promoted(self):
-        """Single-leaf tree root should be H(OLY:NODE:V1 || | || leaf || | || leaf), not leaf."""
+    def test_lone_node_is_promoted_not_rehashed(self):
+        """Single-leaf tree root should be the domain-separated leaf hash (CT-style promotion)."""
         leaf = _b3("only_leaf")
         tree = build_tree([leaf])
-        assert tree.root_hash != leaf
-        # Domain-separated self-pair: BLAKE3(OLY:NODE:V1 || | || leaf || | || leaf)
-        expected = blake3_hash(
-            [_INTERNAL_PREFIX, _SEP, bytes.fromhex(leaf), _SEP, bytes.fromhex(leaf)]
-        ).hex()
+        # With CT-style promotion, single leaf root = domain-separated leaf hash
+        expected = _blake3_leaf(bytes.fromhex(leaf))
         assert tree.root_hash == expected
+        # Root differs from the original (un-hashed) leaf value
+        assert tree.root_hash != leaf
 
     # -------------------------------------------------------------------
     # Finding #10 — domain separation tests
