@@ -11,7 +11,7 @@ import uuid
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING
 
-from sqlalchemy import Boolean, DateTime, ForeignKey, String, Text
+from sqlalchemy import Boolean, DateTime, ForeignKey, String, Text, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from api.models.base import Base
@@ -38,6 +38,9 @@ class DocCommit(Base):
     """
 
     __tablename__ = "doc_commits"
+    __table_args__ = (
+        UniqueConstraint("doc_hash", name="ix_doc_commits_doc_hash_unique"),
+    )
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
     request_id: Mapped[str | None] = mapped_column(
