@@ -68,7 +68,9 @@ class TestSparseMerkleDiffEntry:
         before_val = b"\xaa" * 32
         after_val = b"\xbb" * 32
         key = b"\xcc" * 32
-        entry = SparseMerkleDiffEntry(key=key, before_value_hash=before_val, after_value_hash=after_val)
+        entry = SparseMerkleDiffEntry(
+            key=key, before_value_hash=before_val, after_value_hash=after_val
+        )
         d = entry.to_dict()
         assert d["key"] == key.hex()
         assert d["before_value_hash"] == before_val.hex()
@@ -627,7 +629,9 @@ class TestFederationKeyHistoryEntry:
         assert entry.valid_until == "2025-06-01T00:00:00Z"
 
     def test_roundtrip(self) -> None:
-        original = FederationKeyHistoryEntry(pubkey=b"\xcd" * 32, valid_until="2025-12-31T23:59:59Z")
+        original = FederationKeyHistoryEntry(
+            pubkey=b"\xcd" * 32, valid_until="2025-12-31T23:59:59Z"
+        )
         restored = FederationKeyHistoryEntry.from_dict(original.to_dict())
         assert restored == original
 
@@ -694,9 +698,7 @@ class TestFederationRegistryValidationErrors:
     def test_negative_epoch(self) -> None:
         pk = _test_signing_key(1).verify_key.encode().hex()
         with pytest.raises(ValueError, match="epoch must be non-negative"):
-            FederationRegistry.from_dict(
-                {"nodes": [self._base_node("n1", pk)], "epoch": -1}
-            )
+            FederationRegistry.from_dict({"nodes": [self._base_node("n1", pk)], "epoch": -1})
 
 
 class TestGetSnapshotNegativeEpoch:

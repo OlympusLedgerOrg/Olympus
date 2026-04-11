@@ -69,9 +69,7 @@ async def fresh_client(fresh_db_engine):
     ):
         app = create_app()
         app.dependency_overrides[get_db] = override_get_db
-        async with AsyncClient(
-            transport=ASGITransport(app=app), base_url="http://test"
-        ) as ac:
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
             yield ac
 
 
@@ -306,9 +304,7 @@ async def test_admin_reload_keys_no_admin_key():
         os.environ.pop("OLYMPUS_ADMIN_KEY", None)
         app = create_app()
         app.dependency_overrides[get_db] = override_get_db
-        async with AsyncClient(
-            transport=ASGITransport(app=app), base_url="http://test"
-        ) as ac:
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
             resp = await ac.post("/key/admin/reload-keys")
             assert resp.status_code == 503
             assert "not configured" in resp.json()["detail"].lower()
@@ -340,12 +336,8 @@ async def test_admin_reload_keys_wrong_key():
     ):
         app = create_app()
         app.dependency_overrides[get_db] = override_get_db
-        async with AsyncClient(
-            transport=ASGITransport(app=app), base_url="http://test"
-        ) as ac:
-            resp = await ac.post(
-                "/key/admin/reload-keys", headers={"x-admin-key": "wrong-secret"}
-            )
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
+            resp = await ac.post("/key/admin/reload-keys", headers={"x-admin-key": "wrong-secret"})
             assert resp.status_code == 401
             assert "invalid" in resp.json()["detail"].lower()
 
@@ -376,9 +368,7 @@ async def test_admin_reload_keys_success():
     ):
         app = create_app()
         app.dependency_overrides[get_db] = override_get_db
-        async with AsyncClient(
-            transport=ASGITransport(app=app), base_url="http://test"
-        ) as ac:
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
             resp = await ac.post(
                 "/key/admin/reload-keys",
                 headers={"x-admin-key": "test-admin-secret"},
@@ -500,9 +490,7 @@ async def test_verify_groth16_native_verifier_unavailable():
     from api.services.zkproof import verify_groth16_proof
 
     # Create a real temporary vkey file within the project directory
-    vkey_path = os.path.join(
-        os.path.dirname(__file__), "_test_vkey_temp.json"
-    )
+    vkey_path = os.path.join(os.path.dirname(__file__), "_test_vkey_temp.json")
     try:
         with open(vkey_path, "w") as f:
             f.write("{}")
@@ -633,7 +621,9 @@ class TestZipSafety:
         with pytest.raises(HTTPException) as exc_info:
             validate_zip_safety(b"not a zip file at all")
         assert exc_info.value.status_code == 400
-        assert "corrupt" in exc_info.value.detail.lower() or "invalid" in exc_info.value.detail.lower()
+        assert (
+            "corrupt" in exc_info.value.detail.lower() or "invalid" in exc_info.value.detail.lower()
+        )
 
 
 class TestZstdSafety:
@@ -693,7 +683,9 @@ class TestFileMagic:
 
         content = b"Hello, this is a plain text document.\n"
         result = validate_file_magic(content, "text/plain")
-        assert result in ("text/plain", "text/html", "application/octet-stream") or result is not None
+        assert (
+            result in ("text/plain", "text/html", "application/octet-stream") or result is not None
+        )
 
     def test_disallowed_mime_type(self):
         """Content detected as a disallowed MIME type is rejected."""

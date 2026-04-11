@@ -297,9 +297,11 @@ class TestNodeRehashGate:
 # 6. storage/blob.py – lines 84, 123, 153: S3 ClientError re-raise
 # ===================================================================
 
+
 def _client_error(code: str) -> Exception:
     """Build a botocore-style ClientError with the given error code."""
     from botocore.exceptions import ClientError
+
     return ClientError(
         error_response={"Error": {"Code": code, "Message": "test"}},
         operation_name="test",
@@ -317,6 +319,7 @@ class TestBlobStoreS3Errors:
             mock_s3 = MagicMock()
             mock_boto3.client.return_value = mock_s3
             from storage.blob import BlobStore
+
             store = BlobStore()
         store.s3 = mock_s3
         return store
@@ -329,6 +332,7 @@ class TestBlobStoreS3Errors:
         store.s3.head_object.side_effect = _client_error("403")
 
         from botocore.exceptions import ClientError
+
         with pytest.raises(ClientError) as exc_info:
             store.put_artifact(self.VALID_HASH, b"data", "application/pdf")
         assert exc_info.value.response["Error"]["Code"] == "403"
@@ -358,6 +362,7 @@ class TestBlobStoreS3Errors:
         store.s3.get_object.side_effect = _client_error("AccessDenied")
 
         from botocore.exceptions import ClientError
+
         with pytest.raises(ClientError) as exc_info:
             store.get_artifact(self.VALID_HASH)
         assert exc_info.value.response["Error"]["Code"] == "AccessDenied"
@@ -377,6 +382,7 @@ class TestBlobStoreS3Errors:
         store.s3.head_object.side_effect = _client_error("500")
 
         from botocore.exceptions import ClientError
+
         with pytest.raises(ClientError) as exc_info:
             store.exists(self.VALID_HASH)
         assert exc_info.value.response["Error"]["Code"] == "500"
@@ -403,6 +409,7 @@ class TestConsistencyCheckerLoop:
             checker.start(interval_seconds=9999)
             # Give the thread a moment to execute _loop once.
             import time
+
             time.sleep(0.3)
             checker.stop(timeout=5)
 
@@ -418,12 +425,15 @@ class TestConsistencyCheckerLoop:
         with caplog.at_level(logging.ERROR):
             checker.start(interval_seconds=9999)
             import time
+
             time.sleep(0.3)
             checker.stop(timeout=5)
 
         # run_all wraps get_all_shard_ids failure in an error log already,
         # but the _loop also catches any leftover unhandled exceptions.
-        assert any("boom" in r.message or "Failed to enumerate shards" in r.message for r in caplog.records)
+        assert any(
+            "boom" in r.message or "Failed to enumerate shards" in r.message for r in caplog.records
+        )
 
     def test_run_all_divergence_halt(self):
         """halt_on_divergence=True stops checking after first divergent shard."""

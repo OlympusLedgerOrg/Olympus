@@ -48,11 +48,14 @@ async def client(fresh_engine):
         async with sf() as session:
             yield session
 
-    with patch.dict(os.environ, {
-        "OLYMPUS_ENV": "development",
-        "OLYMPUS_ALLOW_DEV_AUTH": "1",
-        "OLYMPUS_FOIA_API_KEYS": "[]",
-    }):
+    with patch.dict(
+        os.environ,
+        {
+            "OLYMPUS_ENV": "development",
+            "OLYMPUS_ALLOW_DEV_AUTH": "1",
+            "OLYMPUS_FOIA_API_KEYS": "[]",
+        },
+    ):
         app = create_app()
         app.dependency_overrides[get_db] = override_get_db
         async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
@@ -66,21 +69,31 @@ async def seeded_client(fresh_engine):
 
     async with sf() as session:
         req = PublicRecordsRequest(
-            id="req-001", display_id="OLY-0001", subject="Budget records",
-            description="All budget records for 2025", status=RequestStatus.PENDING.value,
-            filed_at=datetime.now(timezone.utc), commit_hash="a" * 64,
+            id="req-001",
+            display_id="OLY-0001",
+            subject="Budget records",
+            description="All budget records for 2025",
+            status=RequestStatus.PENDING.value,
+            filed_at=datetime.now(timezone.utc),
+            commit_hash="a" * 64,
             shard_id="0x4F3A",
         )
         session.add(req)
         commit = DocCommit(
-            id="commit-001", request_id="req-001", doc_hash="b" * 64,
-            commit_id="0x" + "c" * 64, shard_id="0x4F3A",
-            epoch_timestamp=datetime.now(timezone.utc), merkle_root="d" * 64,
+            id="commit-001",
+            request_id="req-001",
+            doc_hash="b" * 64,
+            commit_id="0x" + "c" * 64,
+            shard_id="0x4F3A",
+            epoch_timestamp=datetime.now(timezone.utc),
+            merkle_root="d" * 64,
         )
         session.add(commit)
         activity = LedgerActivity(
-            id="act-001", activity_type="DOCUMENT_SUBMITTED",
-            title="Document Added", description="Budget doc submitted",
+            id="act-001",
+            activity_type="DOCUMENT_SUBMITTED",
+            title="Document Added",
+            description="Budget doc submitted",
             related_commit_id="0x" + "c" * 64,
             user_friendly_status="✓ Complete",
         )
@@ -91,11 +104,14 @@ async def seeded_client(fresh_engine):
         async with sf() as session:
             yield session
 
-    with patch.dict(os.environ, {
-        "OLYMPUS_ENV": "development",
-        "OLYMPUS_ALLOW_DEV_AUTH": "1",
-        "OLYMPUS_FOIA_API_KEYS": "[]",
-    }):
+    with patch.dict(
+        os.environ,
+        {
+            "OLYMPUS_ENV": "development",
+            "OLYMPUS_ALLOW_DEV_AUTH": "1",
+            "OLYMPUS_FOIA_API_KEYS": "[]",
+        },
+    ):
         app = create_app()
         app.dependency_overrides[get_db] = override_get_db
         async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
@@ -110,10 +126,13 @@ async def seeded_client(fresh_engine):
 @pytest.mark.asyncio
 async def test_create_request(client: AsyncClient):
     """POST /requests — file a new request (lines 132-153)."""
-    resp = await client.post("/requests", json={
-        "subject": "Budget transparency report",
-        "description": "All line-item budgets for fiscal year 2025",
-    })
+    resp = await client.post(
+        "/requests",
+        json={
+            "subject": "Budget transparency report",
+            "description": "All line-item budgets for fiscal year 2025",
+        },
+    )
     assert resp.status_code == 201
     data = resp.json()
     assert data["display_id"].startswith("OLY-")
@@ -127,12 +146,20 @@ async def test_create_request(client: AsyncClient):
 async def test_list_requests(client: AsyncClient):
     """GET /requests — paginated list (lines 189-196)."""
     # Create two requests first
-    await client.post("/requests", json={
-        "subject": "List test A", "description": "desc A",
-    })
-    await client.post("/requests", json={
-        "subject": "List test B", "description": "desc B",
-    })
+    await client.post(
+        "/requests",
+        json={
+            "subject": "List test A",
+            "description": "desc A",
+        },
+    )
+    await client.post(
+        "/requests",
+        json={
+            "subject": "List test B",
+            "description": "desc B",
+        },
+    )
     resp = await client.get("/requests")
     assert resp.status_code == 200
     data = resp.json()
@@ -144,9 +171,13 @@ async def test_list_requests(client: AsyncClient):
 @pytest.mark.asyncio
 async def test_get_request_found(client: AsyncClient):
     """GET /requests/{display_id} — found (lines 216-227)."""
-    create_resp = await client.post("/requests", json={
-        "subject": "Get test", "description": "Verify get by display_id",
-    })
+    create_resp = await client.post(
+        "/requests",
+        json={
+            "subject": "Get test",
+            "description": "Verify get by display_id",
+        },
+    )
     display_id = create_resp.json()["display_id"]
     resp = await client.get(f"/requests/{display_id}")
     assert resp.status_code == 200
@@ -167,13 +198,20 @@ async def test_get_request_not_found(client: AsyncClient):
 @pytest.mark.asyncio
 async def test_update_status_valid_transition(client: AsyncClient):
     """PATCH /requests/{id}/status — PENDING→ACKNOWLEDGED (lines 258-295)."""
-    create_resp = await client.post("/requests", json={
-        "subject": "Status test", "description": "transition test",
-    })
+    create_resp = await client.post(
+        "/requests",
+        json={
+            "subject": "Status test",
+            "description": "transition test",
+        },
+    )
     display_id = create_resp.json()["display_id"]
-    resp = await client.patch(f"/requests/{display_id}/status", json={
-        "status": "ACKNOWLEDGED",
-    })
+    resp = await client.patch(
+        f"/requests/{display_id}/status",
+        json={
+            "status": "ACKNOWLEDGED",
+        },
+    )
     assert resp.status_code == 200
     assert resp.json()["status"] == "ACKNOWLEDGED"
 
@@ -181,13 +219,20 @@ async def test_update_status_valid_transition(client: AsyncClient):
 @pytest.mark.asyncio
 async def test_update_status_invalid_transition(client: AsyncClient):
     """PATCH /requests/{id}/status — invalid transition 409 (lines 268-278)."""
-    create_resp = await client.post("/requests", json={
-        "subject": "Invalid transition", "description": "desc",
-    })
+    create_resp = await client.post(
+        "/requests",
+        json={
+            "subject": "Invalid transition",
+            "description": "desc",
+        },
+    )
     display_id = create_resp.json()["display_id"]
-    resp = await client.patch(f"/requests/{display_id}/status", json={
-        "status": "OVERDUE",
-    })
+    resp = await client.patch(
+        f"/requests/{display_id}/status",
+        json={
+            "status": "OVERDUE",
+        },
+    )
     assert resp.status_code == 409
     body = resp.json()
     assert body["detail"]["code"] == "INVALID_STATUS_TRANSITION"
@@ -197,9 +242,12 @@ async def test_update_status_invalid_transition(client: AsyncClient):
 @pytest.mark.asyncio
 async def test_update_status_not_found(client: AsyncClient):
     """PATCH /requests/{id}/status — 404 (lines 259-263)."""
-    resp = await client.patch("/requests/OLY-0000/status", json={
-        "status": "ACKNOWLEDGED",
-    })
+    resp = await client.patch(
+        "/requests/OLY-0000/status",
+        json={
+            "status": "ACKNOWLEDGED",
+        },
+    )
     assert resp.status_code == 404
     assert resp.json()["detail"]["code"] == "REQUEST_NOT_FOUND"
 
@@ -207,9 +255,13 @@ async def test_update_status_not_found(client: AsyncClient):
 @pytest.mark.asyncio
 async def test_fulfilled_sets_fulfilled_at(client: AsyncClient):
     """PATCH — PENDING→ACKNOWLEDGED→FULFILLED sets fulfilled_at (lines 282-283)."""
-    create_resp = await client.post("/requests", json={
-        "subject": "Fulfillment test", "description": "desc",
-    })
+    create_resp = await client.post(
+        "/requests",
+        json={
+            "subject": "Fulfillment test",
+            "description": "desc",
+        },
+    )
     did = create_resp.json()["display_id"]
     await client.patch(f"/requests/{did}/status", json={"status": "ACKNOWLEDGED"})
     resp = await client.patch(f"/requests/{did}/status", json={"status": "FULFILLED"})
@@ -311,7 +363,9 @@ async def test_activity_with_data(seeded_client: AsyncClient):
 @pytest.mark.asyncio
 async def test_activity_filter_by_type(seeded_client: AsyncClient):
     """GET /ledger/activity?activity_type=... — filter."""
-    resp = await seeded_client.get("/ledger/activity", params={"activity_type": "DOCUMENT_SUBMITTED"})
+    resp = await seeded_client.get(
+        "/ledger/activity", params={"activity_type": "DOCUMENT_SUBMITTED"}
+    )
     assert resp.status_code == 200
     data = resp.json()
     assert all(i["activity_type"] == "DOCUMENT_SUBMITTED" for i in data["items"])
@@ -329,10 +383,13 @@ async def test_activity_filter_by_type(seeded_client: AsyncClient):
 @pytest.mark.asyncio
 async def test_doc_commit_request_not_found(client: AsyncClient):
     """POST /doc/commit — request_id not found 404 (lines 71-72)."""
-    resp = await client.post("/doc/commit", json={
-        "doc_hash": "a" * 64,
-        "request_id": str(uuid.uuid4()),
-    })
+    resp = await client.post(
+        "/doc/commit",
+        json={
+            "doc_hash": "a" * 64,
+            "request_id": str(uuid.uuid4()),
+        },
+    )
     assert resp.status_code == 404
     assert resp.json()["detail"]["code"] == "REQUEST_NOT_FOUND"
 
@@ -340,9 +397,12 @@ async def test_doc_commit_request_not_found(client: AsyncClient):
 @pytest.mark.asyncio
 async def test_doc_commit_success(client: AsyncClient):
     """POST /doc/commit — success (lines 94-121)."""
-    resp = await client.post("/doc/commit", json={
-        "doc_hash": "ab" * 32,
-    })
+    resp = await client.post(
+        "/doc/commit",
+        json={
+            "doc_hash": "ab" * 32,
+        },
+    )
     assert resp.status_code == 201
     data = resp.json()
     assert data["doc_hash"] == "ab" * 32
@@ -354,9 +414,12 @@ async def test_doc_commit_success(client: AsyncClient):
 @pytest.mark.asyncio
 async def test_doc_verify_not_found(client: AsyncClient):
     """POST /doc/verify — commit not found returns verified=False (line 158)."""
-    resp = await client.post("/doc/verify", json={
-        "commit_id": "0x" + "f" * 64,
-    })
+    resp = await client.post(
+        "/doc/verify",
+        json={
+            "commit_id": "0x" + "f" * 64,
+        },
+    )
     assert resp.status_code == 200
     assert resp.json()["verified"] is False
 
@@ -364,13 +427,19 @@ async def test_doc_verify_not_found(client: AsyncClient):
 @pytest.mark.asyncio
 async def test_doc_verify_success(client: AsyncClient):
     """POST /doc/verify — success (lines 174-187)."""
-    commit_resp = await client.post("/doc/commit", json={
-        "doc_hash": "cd" * 32,
-    })
+    commit_resp = await client.post(
+        "/doc/commit",
+        json={
+            "doc_hash": "cd" * 32,
+        },
+    )
     commit_id = commit_resp.json()["commit_id"]
-    resp = await client.post("/doc/verify", json={
-        "commit_id": commit_id,
-    })
+    resp = await client.post(
+        "/doc/verify",
+        json={
+            "commit_id": commit_id,
+        },
+    )
     assert resp.status_code == 200
     data = resp.json()
     assert data["verified"] is True
@@ -390,10 +459,13 @@ async def test_doc_verify_embargoed(fresh_engine):
     commit_id = "0x" + "e" * 64
     async with sf() as session:
         commit = DocCommit(
-            id=str(uuid.uuid4()), doc_hash="ee" * 32,
-            commit_id=commit_id, shard_id="0x4F3A",
+            id=str(uuid.uuid4()),
+            doc_hash="ee" * 32,
+            commit_id=commit_id,
+            shard_id="0x4F3A",
             epoch_timestamp=datetime.now(timezone.utc),
-            merkle_root="dd" * 32, embargo_until=future_aware,
+            merkle_root="dd" * 32,
+            embargo_until=future_aware,
         )
         session.add(commit)
         await session.commit()
@@ -411,11 +483,14 @@ async def test_doc_verify_embargoed(fresh_engine):
         def now(cls, tz=None):
             return _real_dt.now()
 
-    with patch.dict(os.environ, {
-        "OLYMPUS_ENV": "development",
-        "OLYMPUS_ALLOW_DEV_AUTH": "1",
-        "OLYMPUS_FOIA_API_KEYS": "[]",
-    }):
+    with patch.dict(
+        os.environ,
+        {
+            "OLYMPUS_ENV": "development",
+            "OLYMPUS_ALLOW_DEV_AUTH": "1",
+            "OLYMPUS_FOIA_API_KEYS": "[]",
+        },
+    ):
         app = create_app()
         app.dependency_overrides[get_db] = override_get_db
         with patch("api.routers.documents.datetime", _NaiveDatetime):
