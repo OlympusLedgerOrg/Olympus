@@ -103,6 +103,15 @@ Ingest -> Canonicalize -> Hash -> Commit -> Prove -> Verify
 
 All stages are independently verifiable. The canonicalization version is currently **`canonical_v2`** (see [`CHANGELOG.md`](CHANGELOG.md)).
 
+| Pipeline stage | Implementation |
+|----------------|---------------|
+| Ingest | `api/ingest.py` — FastAPI endpoints accept documents and artifacts |
+| Canonicalize | `protocol/canonical.py` — deterministic byte representation |
+| Hash | `protocol/hashes.py` — `blake3_hash()` with domain-separated prefixes |
+| Commit | `protocol/ledger.py` — `Ledger.append()` creates a hash-chained entry |
+| Prove | `protocol/merkle.py` — `MerkleTree.generate_proof()` (standard) / `SparseMerkleTree.prove()` (CD-HS-ST) |
+| Verify | `protocol/merkle.py` — `verify_proof()` / `protocol/ledger.py` — `Ledger.verify_chain()` |
+
 ### Cryptographic Primitives
 
 | Primitive | Where used |
