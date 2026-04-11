@@ -18,6 +18,7 @@ from api.models.ledger_activity import LedgerActivity
 from api.models.purchase import Purchase
 from api.models.request import PublicRecordsRequest
 from api.models.user import User
+from api.models.witness import WitnessNonce, WitnessObservation
 
 
 __all__ = [
@@ -34,4 +35,6 @@ __all__ = [
     "PublicRecordsRequest",
     "Purchase",
     "User",
+    "WitnessNonce",
+    "WitnessObservation",
 ]
