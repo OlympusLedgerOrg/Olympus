@@ -1,10 +1,6 @@
 # Olympus Individual Contributor License Agreement (ICLA)
 
-> **Draft — modeled on the Apache ICLA v2.0.**
-> This document must be reviewed by qualified legal counsel before it is
-> finalized and adopted by OlympusLedgerOrg.
-
-Version: 1.0-draft  
+Version: 1.0  
 Project: Olympus (OlympusLedgerOrg/Olympus)
 
 ---
@@ -206,7 +202,3 @@ The `cla-assistant` bot will record your signature in
 
 ---
 
-*This document is a draft modeled on the Apache ICLA v2.0 and has not been
-reviewed by legal counsel. It should not be treated as legal advice.
-OlympusLedgerOrg should consult qualified legal counsel before adopting
-this agreement for the Olympus project.*
