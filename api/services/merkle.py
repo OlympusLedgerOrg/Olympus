@@ -86,7 +86,9 @@ def _blake3_pair(left: str, right: str) -> str:
 
     ``BLAKE3(OLY:NODE:V1 || | || left_bytes || | || right_bytes)`` over hex-encoded inputs.
     """
-    return _blake3_hash([_INTERNAL_PREFIX, _SEP, bytes.fromhex(left), _SEP, bytes.fromhex(right)]).hex()
+    return _blake3_hash(
+        [_INTERNAL_PREFIX, _SEP, bytes.fromhex(left), _SEP, bytes.fromhex(right)]
+    ).hex()
 
 
 def build_tree(

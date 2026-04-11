@@ -43,7 +43,9 @@ class TestBuildTree:
         a, b = _b3("a"), _b3("b")
         tree = build_tree([a, b], preserve_order=True)
         # Domain-separated internal node: BLAKE3(OLY:NODE:V1 || | || a || | || b)
-        expected = blake3_hash([_INTERNAL_PREFIX, _SEP, bytes.fromhex(a), _SEP, bytes.fromhex(b)]).hex()
+        expected = blake3_hash(
+            [_INTERNAL_PREFIX, _SEP, bytes.fromhex(a), _SEP, bytes.fromhex(b)]
+        ).hex()
         assert tree.root_hash == expected
 
     def test_four_leaves(self):
