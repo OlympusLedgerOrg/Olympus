@@ -133,7 +133,8 @@ def build_tree(
     else:
         ordered = sorted(leaf_hashes)
 
-    current = list(ordered)
+    leaf_level = [_blake3_leaf(bytes.fromhex(h)) for h in ordered]
+    current = list(leaf_level)
     levels: list[list[str]] = [list(current)]
 
     # Single-leaf tree: self-pair to ensure the root differs from the leaf
@@ -177,7 +178,7 @@ def generate_proof(leaf_hash: str, tree: MerkleRoot) -> MerkleProof:
         raise ValueError(f"Leaf {leaf_hash!r} not found in Merkle tree.")
 
     siblings: list[tuple[str, str]] = []
-    index = tree.levels[0].index(leaf_hash)
+    index = tree.leaf_hashes.index(leaf_hash)
 
     for level in tree.levels[:-1]:  # stop before the root level
         if index % 2 == 0:

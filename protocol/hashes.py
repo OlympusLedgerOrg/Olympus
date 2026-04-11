@@ -262,12 +262,8 @@ def hash_string(text: str) -> bytes:
 
 
 def hash_hex(payload: bytes) -> str:
-    """Legacy raw-bytes hashing returning a hex-encoded digest.
-
-    Equivalent to ``hash_bytes(payload).hex()``.  Provided as a convenience
-    for callers that need hex output directly.
-    """
-    return hash_bytes(payload).hex()
+    """Compute BLAKE3 hash of payload and return as a lowercase hex string."""
+    return blake3_hash([payload]).hex()
 
 
 def blake3_to_field_element(seed: bytes) -> str:
