@@ -107,8 +107,8 @@ repository, with links to the relevant source evidence.
 
 | Property | Mitigation | Evidence |
 |----------|-----------|---------|
-| Preimage resistance | BLAKE3 hash; changing any byte produces a different hash | [`protocol/hashes.py`](protocol/hashes.py) — `hash_bytes()` |
-| Domain separation | Leaf / node / entry prefixes prevent cross-context collisions | [`protocol/hashes.py`](protocol/hashes.py) — `LEAF_PREFIX`, `NODE_PREFIX`, `ENTRY_PREFIX` |
+| Preimage resistance | BLAKE3 hash; changing any byte produces a different hash | [`protocol/hashes.py`](protocol/hashes.py) — `blake3_hash()` |
+| Domain separation | Leaf / node / ledger prefixes prevent cross-context collisions | [`protocol/hashes.py`](protocol/hashes.py) — `LEAF_PREFIX`, `NODE_PREFIX`, `LEDGER_PREFIX` |
 | Merkle commitment | Single root commits all document parts; inclusion proof verifiable offline | [`protocol/merkle.py`](protocol/merkle.py) — `MerkleTree`, `verify_proof()` |
 | Canonicalization | Deterministic byte sequence from any semantically equivalent input | [`protocol/canonical.py`](protocol/canonical.py), [`protocol/canonicalizer.py`](protocol/canonicalizer.py) |
 | Cross-language test vectors | Canonicalization hash parity verified in Python, Go, JS, Rust | [`verifiers/test_vectors/canonicalizer_vectors.tsv`](verifiers/test_vectors/canonicalizer_vectors.tsv) |

@@ -67,7 +67,7 @@ where docs describe an architecture that does not match the current code.
 POST /ingest/records
   → ingest_batch() [api/ingest.py]
     → canonicalize_document() [protocol/canonical.py]
-    → hash_bytes() [protocol/hashes.py]
+    → blake3_hash() [protocol/hashes.py]
     → storage.append_record() [storage/postgres.py]
       → BEGIN SERIALIZABLE TRANSACTION
         → _load_tree_state()           — load global SMT

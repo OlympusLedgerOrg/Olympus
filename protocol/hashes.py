@@ -13,6 +13,7 @@ Protocol notes:
 """
 
 import os
+from collections.abc import Sequence
 from typing import Any
 
 import blake3
@@ -79,18 +80,18 @@ _MAX_LENGTH_PREFIXED_FIELD_SIZE = (1 << 32) - 1
 _GLOBAL_SMT_KEY_CONTEXT = "olympus 2025-12 global-smt-leaf-key"
 
 
-def blake3_hash(parts: list[bytes]) -> bytes:
+def blake3_hash(parts: Sequence[bytes]) -> bytes:
     """
     Compute BLAKE3 hash with deterministic concatenation.
 
     Args:
-        parts: List of byte strings to hash together
+        parts: Sequence of byte strings to hash together (list or tuple)
 
     Returns:
         32-byte BLAKE3 hash
     """
     if _RUST_CRYPTO_AVAILABLE:  # pragma: no cover — Rust FFI path
-        result: bytes = _rust_blake3_hash(parts)
+        result: bytes = _rust_blake3_hash(list(parts))
         return result
     return blake3.blake3(b"".join(parts)).digest()
 
@@ -258,6 +259,15 @@ def hash_string(text: str) -> bytes:
     """Legacy UTF-8 string hashing with explicit domain separation."""
     payload = text.encode("utf-8")
     return blake3.blake3(LEGACY_STRING_PREFIX + payload).digest()
+
+
+def hash_hex(payload: bytes) -> str:
+    """Legacy raw-bytes hashing returning a hex-encoded digest.
+
+    Equivalent to ``hash_bytes(payload).hex()``.  Provided as a convenience
+    for callers that need hex output directly.
+    """
+    return hash_bytes(payload).hex()
 
 
 def blake3_to_field_element(seed: bytes) -> str:
