@@ -39,12 +39,14 @@ jobs:
           # Path in the repo where signed CLAs are recorded (JSON)
           path-to-signatures: '.github/cla-signatures.json'
           path-to-document: 'CLA.md'
-          # Bot comment text when CLA is not signed
+          # Bot comment text when CLA is not signed.
+          # Note: &gt; is used as an HTML entity so the rendered comment shows
+          # the literal ">" that contributors must type when signing.
           custom-notsigned-prcomment: |
             Thank you for your contribution to Olympus!
 
             Before we can merge this PR, you must sign the
-            <a>Contributor License Agreement</a>.
+            <a href="https://github.com/OlympusLedgerOrg/Olympus/blob/main/CLA.md">Contributor License Agreement</a>.
 
             Please comment below with:
             &gt; I have read the CLA Document and I hereby sign the CLA
@@ -68,17 +70,26 @@ jobs:
     runs-on: ubuntu-latest
     needs: cla-check
     steps:
-      - name: Checkout PR
+      - name: Checkout base branch
         uses: actions/checkout@v4
         with:
-          # Fetch full history so we can inspect all commits in the PR
+          # Checkout the base branch (trusted), NOT the PR head, to avoid
+          # executing untrusted contributor code in this privileged
+          # pull_request_target context.
           fetch-depth: 0
-          ref: ${{ github.event.pull_request.head.sha }}
+          ref: ${{ github.event.pull_request.base.sha }}
+
+      - name: Fetch PR head commits for inspection
+        # Fetch the head SHA so git log/verify-commit can inspect all PR
+        # commits without checking out untrusted code into the workspace.
+        run: git fetch --no-recurse-submodules origin ${{ github.event.pull_request.head.sha }}
 
       - name: Get changed files
         id: changed-files
         uses: tj-actions/changed-files@v46.0.1
         with:
+          base_sha: ${{ github.event.pull_request.base.sha }}
+          sha: ${{ github.event.pull_request.head.sha }}
           files_yaml: |
             sensitive:
               - 'protocol/**'
