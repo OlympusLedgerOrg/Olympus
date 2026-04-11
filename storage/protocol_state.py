@@ -35,7 +35,7 @@ try:
 
     _RUST_SMT_AVAILABLE = True
 except ImportError:
-    RustSparseMerkleTree = None  # type: ignore[assignment,misc]
+    RustSparseMerkleTree = None  # noqa: N816
     _RUST_SMT_AVAILABLE = False
     if os.getenv("OLYMPUS_REQUIRE_RUST", "").strip().lower() in {"1", "true", "yes", "on"}:
         raise RuntimeError(
