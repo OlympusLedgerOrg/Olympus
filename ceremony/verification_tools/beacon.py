@@ -172,12 +172,9 @@ def fetch_beacon_round(
     # Validate the base URL to prevent SSRF
     parsed = urlparse(base_url)
     if parsed.scheme not in _ALLOWED_BEACON_SCHEMES:
-        raise ValueError(f"Beacon base_url must use HTTPS, got scheme '{parsed.scheme}'")
+        raise ValueError("Beacon base_url must use HTTPS")
     if parsed.hostname not in _ALLOWED_BEACON_HOSTS:
-        raise ValueError(
-            f"Beacon base_url host '{parsed.hostname}' not in allowed hosts: "
-            f"{_ALLOWED_BEACON_HOSTS}"
-        )
+        raise ValueError("Beacon base_url host not in allowed hosts")
 
     url = f"{base_url}/{chain_hash}/public/{round_number}"
 
@@ -235,12 +232,9 @@ def fetch_latest_beacon_round(
     # Validate the base URL to prevent SSRF
     parsed = urlparse(base_url)
     if parsed.scheme not in _ALLOWED_BEACON_SCHEMES:
-        raise ValueError(f"Beacon base_url must use HTTPS, got scheme '{parsed.scheme}'")
+        raise ValueError("Beacon base_url must use HTTPS")
     if parsed.hostname not in _ALLOWED_BEACON_HOSTS:
-        raise ValueError(
-            f"Beacon base_url host '{parsed.hostname}' not in allowed hosts: "
-            f"{_ALLOWED_BEACON_HOSTS}"
-        )
+        raise ValueError("Beacon base_url host not in allowed hosts")
 
     url = f"{base_url}/{chain_hash}/public/latest"
 

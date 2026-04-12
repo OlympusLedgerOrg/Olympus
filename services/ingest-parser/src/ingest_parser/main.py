@@ -218,7 +218,7 @@ async def parse_document(
         logger.error("Failed to read file: %s", e)
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Failed to read uploaded file",
+            detail="Failed to read uploaded file. Please verify the file is not corrupted and try again.",
         ) from e
 
     # Check file size
@@ -259,7 +259,7 @@ async def parse_document(
         logger.exception("Failed to parse document: %s", e)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Failed to parse document",
+            detail="Document parsing failed. Please verify the file format is supported and the file is not corrupted.",
         ) from e
 
     # Build provenance
