@@ -189,6 +189,7 @@ python -m ingest_parser.main
 | `INGEST_PARSER_MODEL_PATH` | `/models` | Path to AI model weights |
 | `INGEST_PARSER_LOG_LEVEL` | `INFO` | Logging level |
 | `INGEST_PARSER_CANONICAL_VERSION` | `v1.0` | Canonical parser version |
+| `INGEST_PARSER_CORS_ORIGINS` | _(disabled)_ | Comma-separated list of allowed CORS origins (e.g., `http://localhost:3000,https://app.example.com`). CORS is disabled by default for security. |
 
 ## Testing
 
@@ -207,3 +208,5 @@ curl -X POST http://localhost:8090/parse \
 2. **Memory limits**: Configurable per-request memory limits
 3. **File size limits**: Enforced at upload time
 4. **No arbitrary code execution**: Parser runs in sandboxed mode
+5. **CORS disabled by default**: Cross-Origin Resource Sharing (CORS) is disabled by default. Enable only when needed via `INGEST_PARSER_CORS_ORIGINS` environment variable with explicit origin allowlist. Never use wildcard origins (`*`) in production.
+6. **Error message sanitization**: Internal exception details are logged but not exposed in HTTP responses to prevent information disclosure
