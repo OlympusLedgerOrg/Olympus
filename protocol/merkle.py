@@ -12,6 +12,7 @@ from typing import Any, Optional
 
 from .events import CanonicalEvent
 from .hashes import HASH_SEPARATOR, LEAF_PREFIX, blake3_hash, node_hash
+from .log_sanitization import sanitize_for_log
 
 
 # Merkle tree version - DO NOT CHANGE
@@ -717,7 +718,9 @@ def deserialize_merkle_proof(proof_data: dict[str, Any]) -> MerkleProof:
     for sibling_hash_hex, is_right in siblings_data:
         if isinstance(is_right, str):
             normalized_flag = is_right.lower() == "right"
-            logger.debug("Normalized legacy sibling format", extra={"is_right": is_right})
+            logger.debug(
+                "Normalized legacy sibling format", extra={"is_right": sanitize_for_log(is_right)}
+            )
         else:
             normalized_flag = bool(is_right)
         normalized_siblings.append(

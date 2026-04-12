@@ -21,6 +21,7 @@ from api.models.request import PublicRecordsRequest, RequestStatus
 from api.schemas.appeal import AppealCreate, AppealResponse
 from protocol.canonical_json import canonical_json_encode
 from protocol.hashes import hash_bytes
+from protocol.log_sanitization import sanitize_for_log
 
 
 logger = logging.getLogger(__name__)
@@ -114,7 +115,11 @@ async def file_appeal(body: AppealCreate, db: DBSession, _api_key: RequireAPIKey
     req.status = RequestStatus.APPEALED.value
     await db.commit()
     await db.refresh(appeal)
-    logger.info("Filed appeal %s for request %s", appeal.id, body.request_id)
+    logger.info(
+        "Filed appeal %s for request %s",
+        sanitize_for_log(str(appeal.id)),
+        sanitize_for_log(body.request_id),
+    )
     return appeal
 
 

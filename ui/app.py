@@ -10,9 +10,7 @@ import socket
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, cast
-from urllib.error import HTTPError, URLError
-from urllib.parse import quote, urlparse
-from urllib.request import urlopen
+from urllib.parse import quote, urlparse, urlunparse
 
 import httpx
 import nacl.exceptions
@@ -439,11 +437,55 @@ def _fetch_json(path: str) -> dict[str, Any] | list[dict[str, Any]]:
 
 
 def _fetch_json_from_base(base_url: str, path: str) -> dict[str, Any] | list[dict[str, Any]]:
-    """Fetch JSON from a specific Olympus API base URL."""
+    """Fetch JSON from a specific Olympus API base URL.
+
+    Prevents SSRF by:
+    1. Requiring ``base_url`` to match a known-safe endpoint (API_BASE or federation node).
+    2. Rebuilding the outgoing URL from the *trusted* base (scheme + netloc) so that
+       user-controlled path segments cannot redirect the request to another host.
+    3. Checking the resolved host IP against the private-range blocklist.
+    """
     if not path.startswith("/") or "://" in path:
         raise ValueError("API path must be a relative path")
-    with urlopen(f"{base_url}{path}", timeout=5) as response:  # noqa: S310
-        payload = json.loads(response.read().decode("utf-8"))
+
+    # --- Allowlist: only contact pre-validated endpoints ---
+    _allowed_bases: set[str] = {API_BASE} | set(FEDERATION_NODES.values())
+    if base_url not in _allowed_bases:
+        raise ValueError("Request base URL is not in the allowed set")
+
+    # --- Build URL from *trusted* base components + relative path ---
+    parsed_base = urlparse(base_url)
+    parsed_rel = urlparse(path)           # splits path, params, query, fragment
+    safe_url = urlunparse((
+        parsed_base.scheme,               # trusted
+        parsed_base.netloc,               # trusted
+        parsed_rel.path,                  # relative path from caller
+        parsed_rel.params,
+        parsed_rel.query,
+        "",                               # fragment stripped (server-side irrelevant)
+    ))
+
+    # --- Resolve hostname and check IP blocklist ---
+    hostname = parsed_base.hostname
+    if not hostname:
+        raise ValueError("Base URL must have a valid hostname")
+    try:
+        for _family, _, _, _, sockaddr in socket.getaddrinfo(hostname, None):
+            ip_addr = ipaddress.ip_address(sockaddr[0])
+            if _is_blocked_ip_for_ssrf(ip_addr):
+                raise ValueError(
+                    f"Blocked: {hostname} resolves to private IP {sockaddr[0]}"
+                )
+    except socket.gaierror as exc:
+        raise ValueError(f"Cannot resolve hostname: {hostname}") from exc
+
+    # --- Perform the request using httpx (modern, safe HTTP client) ---
+    # Disable redirects to prevent redirect-based SSRF bypass where an
+    # initial response redirects to a blocked private/internal IP.
+    response = httpx.get(safe_url, timeout=5.0, follow_redirects=False)
+    response.raise_for_status()
+    payload = response.json()
+
     if isinstance(payload, dict):
         return cast(dict[str, Any], payload)
     if isinstance(payload, list) and all(isinstance(item, dict) for item in payload):
@@ -734,7 +776,7 @@ def _collect_federation_dashboard() -> dict[str, Any]:
         try:
             _expect_json_object(_fetch_json_from_base(base_url, "/health"))
             shards = _expect_json_list(_fetch_json_from_base(base_url, "/shards"))
-        except (HTTPError, URLError, TypeError, ValueError):
+        except (httpx.HTTPStatusError, httpx.RequestError, TypeError, ValueError):
             continue
 
         for shard in shards:
@@ -749,7 +791,7 @@ def _collect_federation_dashboard() -> dict[str, Any]:
                     _fetch_json_from_base(base_url, f"/shards/{quote(shard_id)}/header/latest")
                 )
                 signature_valid = _verify_signature(header)
-            except (HTTPError, URLError, TypeError, ValueError):
+            except (httpx.HTTPStatusError, httpx.RequestError, TypeError, ValueError):
                 signature_valid = False
 
             try:
@@ -757,7 +799,7 @@ def _collect_federation_dashboard() -> dict[str, Any]:
                     _fetch_json_from_base(base_url, f"/ledger/{quote(shard_id)}/tail?n=10")
                 )
                 chain_ok = not _is_chain_broken(ledger.get("entries", []))
-            except (HTTPError, URLError, TypeError, ValueError):
+            except (httpx.HTTPStatusError, httpx.RequestError, TypeError, ValueError):
                 chain_ok = False
 
             shard_map.setdefault(shard_id, []).append(
@@ -993,13 +1035,13 @@ def debug_console(request: Request):
 
     try:
         shards = _expect_json_list(_fetch_json("/shards"))
-    except HTTPError as exc:
-        if exc.code == 503:
+    except httpx.HTTPStatusError as exc:
+        if exc.response.status_code == 503:
             context["banners"].append("Database unavailable (503).")
             return templates.TemplateResponse(request, "index.html", context)
-        context["banners"].append(f"API error: HTTP {exc.code}")
+        context["banners"].append(f"API error: HTTP {exc.response.status_code}")
         return templates.TemplateResponse(request, "index.html", context)
-    except (URLError, TimeoutError):
+    except (httpx.RequestError, TimeoutError):
         context["banners"].append("API unavailable (connection failed).")
         return templates.TemplateResponse(request, "index.html", context)
 
@@ -1027,16 +1069,16 @@ def debug_console(request: Request):
             try:
                 history = _expect_json_object(_fetch_json(f"/shards/{quote(shard_id)}/history?n=5"))
                 shard_row["history"] = history.get("headers", [])
-            except (HTTPError, URLError, TimeoutError, TypeError, ValueError):
+            except (httpx.HTTPStatusError, httpx.RequestError, TimeoutError, TypeError, ValueError):
                 shard_row["history"] = []
             if _is_chain_broken(entries):
                 context["banners"].append(f"Chain linkage broken in shard {shard_id} ledger tail.")
-        except HTTPError as exc:
-            if exc.code == 503:
+        except httpx.HTTPStatusError as exc:
+            if exc.response.status_code == 503:
                 context["banners"].append("Database unavailable (503).")
             else:
-                context["banners"].append(f"Shard {shard_id} query failed (HTTP {exc.code}).")
-        except (URLError, TimeoutError):
+                context["banners"].append(f"Shard {shard_id} query failed (HTTP {exc.response.status_code}).")
+        except (httpx.RequestError, TimeoutError):
             context["banners"].append(f"Shard {shard_id} query failed (connection error).")
 
         context["shards"].append(shard_row)
@@ -1060,12 +1102,12 @@ def verification_portal_hash(content_hash: str):
     try:
         verification = _fetch_json(f"/ingest/records/hash/{quote(content_hash)}/verify")
         return JSONResponse({"ok": True, "verification": verification})
-    except HTTPError as exc:
+    except httpx.HTTPStatusError as exc:
         return JSONResponse(
-            status_code=exc.code,
-            content={"ok": False, "error": f"Hash verification failed (HTTP {exc.code})."},
+            status_code=exc.response.status_code,
+            content={"ok": False, "error": f"Hash verification failed (HTTP {exc.response.status_code})."},
         )
-    except (URLError, TimeoutError):
+    except (httpx.RequestError, TimeoutError):
         return JSONResponse(status_code=503, content={"ok": False, "error": "API unavailable."})
 
 
@@ -1085,12 +1127,12 @@ def proof_explorer(
     try:
         proof = _fetch_json(path)
         return JSONResponse({"ok": True, "proof": proof})
-    except HTTPError as exc:
+    except httpx.HTTPStatusError as exc:
         return JSONResponse(
-            status_code=exc.code,
-            content={"ok": False, "error": f"Proof query failed (HTTP {exc.code})."},
+            status_code=exc.response.status_code,
+            content={"ok": False, "error": f"Proof query failed (HTTP {exc.response.status_code})."},
         )
-    except (URLError, TimeoutError):
+    except (httpx.RequestError, TimeoutError):
         return JSONResponse(status_code=503, content={"ok": False, "error": "API unavailable."})
 
 
@@ -1105,12 +1147,12 @@ def state_diff_viewer(
     try:
         diff = _fetch_json(path)
         return JSONResponse({"ok": True, "diff": diff})
-    except HTTPError as exc:
+    except httpx.HTTPStatusError as exc:
         return JSONResponse(
-            status_code=exc.code,
-            content={"ok": False, "error": f"State diff query failed (HTTP {exc.code})."},
+            status_code=exc.response.status_code,
+            content={"ok": False, "error": f"State diff query failed (HTTP {exc.response.status_code})."},
         )
-    except (URLError, TimeoutError):
+    except (httpx.RequestError, TimeoutError):
         return JSONResponse(status_code=503, content={"ok": False, "error": "API unavailable."})
 
 
@@ -1609,10 +1651,7 @@ async def inspect_proof_bundle(request: Request):
     try:
         bundle = await request.json()
     except Exception as exc:
-        if _ENV == "development":
-            return JSONResponse(
-                status_code=400, content={"ok": False, "error": f"Invalid JSON: {exc}"}
-            )
+        # Don't expose exception details even in development mode (security risk)
         logger.error("Debug UI error: %s", exc, exc_info=True)
         return JSONResponse(status_code=400, content={"ok": False, "error": "Invalid JSON input."})
 

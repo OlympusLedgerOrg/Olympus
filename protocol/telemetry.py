@@ -49,6 +49,8 @@ from collections.abc import Generator
 from contextlib import contextmanager
 from typing import Any
 
+from .log_sanitization import sanitize_for_log
+
 
 logger = logging.getLogger(__name__)
 
@@ -294,9 +296,9 @@ def record_smt_divergence(
     logger.warning(
         "smt_root_divergence_detected",
         extra={
-            "shard_id": shard_id,
-            "local_root": local_root,
-            "remote_root": remote_root,
-            "remote_node": remote_node,
+            "shard_id": sanitize_for_log(shard_id),
+            "local_root": sanitize_for_log(local_root),
+            "remote_root": sanitize_for_log(remote_root),
+            "remote_node": sanitize_for_log(remote_node),
         },
     )
