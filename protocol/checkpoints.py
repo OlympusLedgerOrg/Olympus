@@ -515,7 +515,8 @@ def create_checkpoint(
     checkpoint_hash = checkpoint_hash_bytes.hex()
 
     if signatures is None:
-        assert signing_keys is not None
+        if signing_keys is None:
+            raise ValueError("signing_keys must not be None when signatures is None")
         signatures = [
             sign_federated_checkpoint(
                 checkpoint_hash=checkpoint_hash,
