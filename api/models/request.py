@@ -116,7 +116,5 @@ class PublicRecordsRequest(Base):
 
     # Relationships
     agency: Mapped[Agency | None] = relationship("Agency", back_populates="requests")
-    appeal: Mapped[Any | None] = relationship(
-        "Appeal", back_populates="request", uselist=False
-    )
+    appeal: Mapped[Any | None] = relationship("Appeal", back_populates="request", uselist=False)
     doc_commits: Mapped[list] = relationship("DocCommit", back_populates="request")

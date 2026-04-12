@@ -71,6 +71,4 @@ class Appeal(Base):
     commit_hash: Mapped[str] = mapped_column(String(64), nullable=False, default="")
 
     # Relationships
-    request: Mapped[Any] = relationship(
-        "PublicRecordsRequest", back_populates="appeal"
-    )
+    request: Mapped[Any] = relationship("PublicRecordsRequest", back_populates="appeal")
