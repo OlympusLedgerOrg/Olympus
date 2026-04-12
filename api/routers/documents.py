@@ -27,6 +27,7 @@ from api.services.hasher import generate_commit_id
 from api.services.merkle import MerkleProof, build_tree, generate_proof
 from api.services.shard import DEFAULT_SHARD_ID, compute_state_root
 from api.services.zkproof import generate_proof_stub
+from protocol.log_sanitization import sanitize_for_log
 
 
 logger = logging.getLogger(__name__)
@@ -132,9 +133,6 @@ async def commit_document(
 
     await db.commit()
     await db.refresh(commit)
-
-    from protocol.log_sanitization import sanitize_for_log
-
     logger.info("Committed doc_hash=%s as commit_id=%s", sanitize_for_log(body.doc_hash), sanitize_for_log(commit_id))
 
     return DocCommitResponse(

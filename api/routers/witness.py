@@ -4,6 +4,7 @@ Witness Protocol API Endpoints.
 This module provides FastAPI endpoints for external witnesses to monitor
 Olympus nodes and detect split-view attacks. Witnesses collect checkpoints
 from multiple nodes and compare them to detect inconsistencies.
+from protocol.log_sanitization import sanitize_for_log
 
 This is a Phase 1+ feature implementing the witness protocol described in
 docs/17_signed_checkpoints.md.
@@ -307,9 +308,6 @@ async def submit_observation(
     db.add(obs)
 
     await db.commit()
-
-    from protocol.log_sanitization import sanitize_for_log
-
     logger.info(
         "Stored announcement %s: seq=%d hash=%s",
         sanitize_for_log(key),

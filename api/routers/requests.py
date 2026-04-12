@@ -22,6 +22,7 @@ from api.schemas.request import RequestCreate, RequestResponse, RequestStatusUpd
 from api.services.deadline import compute_deadline, is_overdue
 from api.services.hasher import hash_request
 from api.services.shard import DEFAULT_SHARD_ID
+from protocol.log_sanitization import sanitize_for_log
 
 
 logger = logging.getLogger(__name__)
@@ -284,9 +285,6 @@ async def update_request_status(
 
     await db.commit()
     await db.refresh(req)
-    
-    from protocol.log_sanitization import sanitize_for_log
-    
     logger.info(
         "Status transition on %s: %s → %s (key_id=%s, note=%s)",
         sanitize_for_log(display_id),

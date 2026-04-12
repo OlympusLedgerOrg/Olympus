@@ -50,6 +50,7 @@ from protocol.canonical import CANONICAL_VERSION, canonicalize_document, documen
 from protocol.canonicalizer import canonicalization_provenance
 from protocol.hashes import hash_bytes, leaf_hash, record_key
 from protocol.ledger import Ledger
+from protocol.log_sanitization import sanitize_for_log
 from protocol.merkle import (
     MERKLE_VERSION,
     PROOF_VERSION,
@@ -1836,9 +1837,6 @@ async def commit_artifact(
                 _content_index[artifact_hash_hex] = proof_id
                 storage.store_ingestion_batch(batch_id, [ingestion_entry])
                 INGEST_TOTAL.labels(outcome="committed").inc()
-
-                from protocol.log_sanitization import sanitize_for_log
-
                 logger.info(
                     "artifact_committed",
                     extra={
@@ -1878,8 +1876,6 @@ async def commit_artifact(
                         poseidon_root=existing.get("poseidon_root", persisted_poseidon_root),
                     )
                 else:
-                    from protocol.log_sanitization import sanitize_for_log
-                    
                     logger.exception(
                         "artifact_commit_storage_failed",
                         extra={"namespace": sanitize_for_log(request.namespace), "id": sanitize_for_log(request.id)},
@@ -1937,9 +1933,6 @@ async def commit_artifact(
         }
         _content_index[artifact_hash_hex] = proof_id
         INGEST_TOTAL.labels(outcome="committed").inc()
-
-    from protocol.log_sanitization import sanitize_for_log
-
     logger.info(
         "artifact_committed",
         extra={

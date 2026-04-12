@@ -21,6 +21,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from api.services.merkle import build_tree
 from protocol.hashes import hash_string
+from protocol.log_sanitization import sanitize_for_log
 
 
 logger = logging.getLogger(__name__)
@@ -147,9 +148,6 @@ async def compute_state_root(shard_id: str, db: AsyncSession) -> str:
     union_q = doc_q.union_all(ds_q).order_by(text("ts"), text("hash"))
     result = await db.execute(union_q)
     hashes = [row.hash for row in result.all()]
-
-    from protocol.log_sanitization import sanitize_for_log
-
     if not hashes:
         logger.debug("Shard %s is empty; returning zero root.", sanitize_for_log(shard_id))
         return "0" * 64

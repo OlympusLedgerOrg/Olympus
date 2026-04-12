@@ -21,6 +21,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from .checkpoints import SignedCheckpoint
+from protocol.log_sanitization import sanitize_for_log
 
 
 logger = logging.getLogger(__name__)
@@ -385,8 +386,6 @@ class DryRunBackend(DNSBackend):
             name: Fully qualified domain name
             txt: TXT record value
         """
-        from protocol.log_sanitization import sanitize_for_log
-        
         logger.info(
             "[DRY RUN] Would publish TXT record: %s -> %s",
             sanitize_for_log(name),
@@ -401,8 +400,6 @@ class DryRunBackend(DNSBackend):
         Args:
             name: Fully qualified domain name
         """
-        from protocol.log_sanitization import sanitize_for_log
-        
         logger.info("[DRY RUN] Would delete TXT record: %s", sanitize_for_log(name))
         self.records.pop(name, None)
 

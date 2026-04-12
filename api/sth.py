@@ -17,6 +17,7 @@ from typing import Any
 
 from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel
+from protocol.log_sanitization import sanitize_for_log
 
 
 logger = logging.getLogger(__name__)
@@ -125,8 +126,6 @@ async def get_latest_sth(
     except HTTPException:
         raise
     except Exception as e:
-        from protocol.log_sanitization import sanitize_for_log
-        
         logger.error("Failed to get latest STH for shard %s: %s", sanitize_for_log(shard_id), str(e))
         raise HTTPException(
             status_code=500,
@@ -196,8 +195,6 @@ async def get_sth_history(
     except HTTPException:
         raise
     except Exception as e:
-        from protocol.log_sanitization import sanitize_for_log
-        
         logger.error("Failed to get STH history for shard %s: %s", sanitize_for_log(shard_id), str(e))
         raise HTTPException(
             status_code=500,

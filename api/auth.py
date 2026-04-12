@@ -43,6 +43,7 @@ from fastapi import Depends, HTTPException, Request, status
 
 from api.config import get_settings
 from protocol.hashes import hash_bytes
+from protocol.log_sanitization import sanitize_for_log
 
 
 logger = logging.getLogger(__name__)
@@ -815,9 +816,8 @@ def _is_overly_broad_proxy_range(range_expr: str) -> bool:
     try:
         network = ipaddress.ip_network(range_expr, strict=False)
     except ValueError:
-        # Sanitize range_expr to prevent log injection before logging
-        from protocol.log_sanitization import sanitize_for_log
-        logger.warning("Ignoring invalid trusted proxy CIDR/IP expression: %s", sanitize_for_log(range_expr))
+        # Don't log the actual value as it may contain sensitive network topology info
+        logger.warning("Ignoring invalid trusted proxy CIDR/IP expression (parse error)")
         return False
     return network.prefixlen == 0
 

@@ -461,7 +461,8 @@ def _fetch_json_from_base(base_url: str, path: str) -> dict[str, Any] | list[dic
         addr_info = socket.getaddrinfo(hostname, None)
         for family, _, _, _, sockaddr in addr_info:
             ip_str = sockaddr[0]
-            if _is_blocked_private_ip(ip_str):
+            ip_addr = ipaddress.ip_address(ip_str)
+            if _is_blocked_ip_for_ssrf(ip_addr):
                 raise ValueError(f"Access to private/internal IP {ip_str} is not allowed")
     except socket.gaierror as e:
         raise ValueError(f"Cannot resolve hostname {hostname}: {e}") from e

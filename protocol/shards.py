@@ -21,6 +21,7 @@ from .canonical_json import canonical_json_bytes
 from .events import CanonicalEvent
 from .hashes import HASH_SEPARATOR, hash_bytes, shard_header_hash
 from .hlc import HLCTimestamp
+from protocol.log_sanitization import sanitize_for_log
 
 
 logger = logging.getLogger(__name__)
@@ -258,8 +259,6 @@ def verify_header(
     # Replay protection: sequence must be strictly monotonic
     if prev_sequence is not None and "sequence_number" in header:
         if header["sequence_number"] <= prev_sequence:
-            from protocol.log_sanitization import sanitize_for_log
-            
             logger.warning(
                 "Shard header replay detected: seq=%s prev=%s",
                 sanitize_for_log(header["sequence_number"]),

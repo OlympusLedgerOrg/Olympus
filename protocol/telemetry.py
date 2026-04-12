@@ -48,6 +48,7 @@ import time
 from collections.abc import Generator
 from contextlib import contextmanager
 from typing import Any
+from protocol.log_sanitization import sanitize_for_log
 
 
 logger = logging.getLogger(__name__)
@@ -291,9 +292,6 @@ def record_smt_divergence(
         remote_node: Identifier (URL or node ID) of the remote peer.
     """
     SMT_DIVERGENCE_TOTAL.inc()
-    
-    from protocol.log_sanitization import sanitize_for_log
-    
     logger.warning(
         "smt_root_divergence_detected",
         extra={
