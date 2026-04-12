@@ -4,7 +4,6 @@ Witness Protocol API Endpoints.
 This module provides FastAPI endpoints for external witnesses to monitor
 Olympus nodes and detect split-view attacks. Witnesses collect checkpoints
 from multiple nodes and compare them to detect inconsistencies.
-from protocol.log_sanitization import sanitize_for_log
 
 This is a Phase 1+ feature implementing the witness protocol described in
 docs/17_signed_checkpoints.md.
@@ -28,6 +27,23 @@ from collections import defaultdict
 from datetime import datetime, timezone
 
 import nacl.exceptions
+import nacl.signing
+from fastapi import APIRouter, HTTPException, Query, Request, status
+from sqlalchemy import delete, func, select
+
+from api.auth import RequireWitnessScope
+from api.deps import DBSession
+from api.models.witness import WitnessNonce, WitnessObservation
+from api.schemas.witness import (
+    CheckpointAnnouncementList,
+    WitnessAnnounce,
+    WitnessAnnounceRequest,
+    WitnessAnnounceResponse,
+    WitnessGossipEvidence,
+    WitnessGossipResponse,
+    WitnessHealthResponse,
+)
+from protocol.log_sanitization import sanitize_for_log
 import nacl.signing
 from fastapi import APIRouter, HTTPException, Query, status
 from sqlalchemy import delete, func, select
