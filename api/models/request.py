@@ -11,7 +11,7 @@ from __future__ import annotations
 import enum
 import uuid
 from datetime import datetime, timezone
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from sqlalchemy import DateTime, Enum as SAEnum, ForeignKey, String, Text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
@@ -21,7 +21,6 @@ from api.models.base import Base
 
 if TYPE_CHECKING:
     from api.models.agency import Agency
-    from api.models.appeal import Appeal
 
 
 class RequestType(str, enum.Enum):
@@ -117,5 +116,5 @@ class PublicRecordsRequest(Base):
 
     # Relationships
     agency: Mapped[Agency | None] = relationship("Agency", back_populates="requests")
-    appeal: Mapped[Appeal | None] = relationship("Appeal", back_populates="request", uselist=False)
+    appeal: Mapped[Any | None] = relationship("Appeal", back_populates="request", uselist=False)
     doc_commits: Mapped[list] = relationship("DocCommit", back_populates="request")

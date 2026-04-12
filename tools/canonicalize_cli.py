@@ -61,7 +61,7 @@ def main() -> int:
             output = json.dumps(canonical, indent=2)
         elif args.format == "bytes":
             output = canonical_bytes.decode("utf-8")
-        elif args.format == "hex":
+        else:  # "hex"
             output = canonical_bytes.hex()
 
     # Write output

@@ -302,15 +302,15 @@ def resolve_partition_fork(
         fork_round: int | None = None
 
         if elapsed_rounds_a > elapsed_rounds_b:
-            selected = "a"
+            pass
         elif elapsed_rounds_b > elapsed_rounds_a:
             selected = "b"
         elif len(chain_a) > len(chain_b):
-            selected = "a"
+            pass
         elif len(chain_b) > len(chain_a):
             selected = "b"
         elif chain_a == chain_b:
-            selected = "a"
+            pass
         else:
             fork_round = find_first_divergent_round(chain_a, chain_b)
             if fork_round >= len(chain_a) or fork_round >= len(chain_b):
