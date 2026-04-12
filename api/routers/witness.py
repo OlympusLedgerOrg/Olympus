@@ -28,23 +28,6 @@ from datetime import datetime, timezone
 
 import nacl.exceptions
 import nacl.signing
-from fastapi import APIRouter, HTTPException, Query, Request, status
-from sqlalchemy import delete, func, select
-
-from api.auth import RequireWitnessScope
-from api.deps import DBSession
-from api.models.witness import WitnessNonce, WitnessObservation
-from api.schemas.witness import (
-    CheckpointAnnouncementList,
-    WitnessAnnounce,
-    WitnessAnnounceRequest,
-    WitnessAnnounceResponse,
-    WitnessGossipEvidence,
-    WitnessGossipResponse,
-    WitnessHealthResponse,
-)
-from protocol.log_sanitization import sanitize_for_log
-import nacl.signing
 from fastapi import APIRouter, HTTPException, Query, status
 from sqlalchemy import delete, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -59,6 +42,7 @@ from api.schemas.witness import (
     WitnessAnnounceResponse,
     WitnessHealthResponse,
 )
+from protocol.log_sanitization import sanitize_for_log
 from protocol.timestamps import current_timestamp
 
 
@@ -324,6 +308,7 @@ async def submit_observation(
     db.add(obs)
 
     await db.commit()
+
     logger.info(
         "Stored announcement %s: seq=%d hash=%s",
         sanitize_for_log(key),

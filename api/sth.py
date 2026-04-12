@@ -17,6 +17,7 @@ from typing import Any
 
 from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel
+
 from protocol.log_sanitization import sanitize_for_log
 
 

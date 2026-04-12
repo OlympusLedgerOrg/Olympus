@@ -43,7 +43,6 @@ from fastapi import Depends, HTTPException, Request, status
 
 from api.config import get_settings
 from protocol.hashes import hash_bytes
-from protocol.log_sanitization import sanitize_for_log
 
 
 logger = logging.getLogger(__name__)

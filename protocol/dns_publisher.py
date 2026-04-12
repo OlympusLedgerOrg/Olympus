@@ -21,7 +21,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from .checkpoints import SignedCheckpoint
-from protocol.log_sanitization import sanitize_for_log
+from .log_sanitization import sanitize_for_log
 
 
 logger = logging.getLogger(__name__)

@@ -12,7 +12,7 @@ from typing import Any, Optional
 
 from .events import CanonicalEvent
 from .hashes import HASH_SEPARATOR, LEAF_PREFIX, blake3_hash, node_hash
-from protocol.log_sanitization import sanitize_for_log
+from .log_sanitization import sanitize_for_log
 
 
 # Merkle tree version - DO NOT CHANGE

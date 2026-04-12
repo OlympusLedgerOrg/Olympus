@@ -21,7 +21,7 @@ from .canonical_json import canonical_json_bytes
 from .events import CanonicalEvent
 from .hashes import HASH_SEPARATOR, hash_bytes, shard_header_hash
 from .hlc import HLCTimestamp
-from protocol.log_sanitization import sanitize_for_log
+from .log_sanitization import sanitize_for_log
 
 
 logger = logging.getLogger(__name__)

@@ -48,7 +48,8 @@ import time
 from collections.abc import Generator
 from contextlib import contextmanager
 from typing import Any
-from protocol.log_sanitization import sanitize_for_log
+
+from .log_sanitization import sanitize_for_log
 
 
 logger = logging.getLogger(__name__)

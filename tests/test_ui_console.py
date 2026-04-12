@@ -3,8 +3,8 @@
 import json
 import socket
 import unittest.mock
-from urllib.error import HTTPError
 
+import httpx
 import pytest
 from fastapi.testclient import TestClient
 
@@ -14,12 +14,21 @@ import ui.app as ui_app
 client = TestClient(ui_app.app)
 
 
+def _make_http_status_error(status_code: int) -> httpx.HTTPStatusError:
+    """Create an httpx.HTTPStatusError for test mocking."""
+    response = httpx.Response(status_code)
+    request = httpx.Request("GET", "http://test")
+    return httpx.HTTPStatusError(
+        f"HTTP {status_code}", request=request, response=response,
+    )
+
+
 def test_console_shows_db_unavailable_banner(monkeypatch):
     """Root page should show DB unavailable banner on 503 from API."""
     monkeypatch.setattr(ui_app, "DEBUG_UI_ENABLED", True)
 
     def raise_503(path: str):
-        raise HTTPError(url=path, code=503, msg="service unavailable", hdrs=None, fp=None)
+        raise _make_http_status_error(503)
 
     monkeypatch.setattr(ui_app, "_fetch_json", raise_503)
 
