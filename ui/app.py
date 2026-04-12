@@ -462,7 +462,7 @@ def _fetch_json_from_base(base_url: str, path: str) -> dict[str, Any] | list[dic
         parsed_rel.path,                  # relative path from caller
         parsed_rel.params,
         parsed_rel.query,
-        "",
+        "",                               # fragment stripped (server-side irrelevant)
     ))
 
     # --- Resolve hostname and check IP blocklist ---
@@ -480,7 +480,9 @@ def _fetch_json_from_base(base_url: str, path: str) -> dict[str, Any] | list[dic
         raise ValueError(f"Cannot resolve hostname: {hostname}") from exc
 
     # --- Perform the request using httpx (modern, safe HTTP client) ---
-    response = httpx.get(safe_url, timeout=5.0)
+    # Disable redirects to prevent redirect-based SSRF bypass where an
+    # initial response redirects to a blocked private/internal IP.
+    response = httpx.get(safe_url, timeout=5.0, follow_redirects=False)
     response.raise_for_status()
     payload = response.json()
 
