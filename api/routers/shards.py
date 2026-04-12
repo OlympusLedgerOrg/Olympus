@@ -358,7 +358,7 @@ async def verify_latest_header(
             verify_key = nacl.signing.VerifyKey(bytes.fromhex(pubkey_hex))
             signature_valid = verify_header(header, signature, verify_key)
         except (ValueError, nacl.exceptions.CryptoError) as exc:
-            logger.debug("Signature verification failed: %s", exc)
+            logger.warning("Signature verification failed: %s", exc)
             signature_valid = False
 
         # Retrieve timestamp token if stored
