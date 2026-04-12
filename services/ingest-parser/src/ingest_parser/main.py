@@ -107,8 +107,8 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
-# Add CORS middleware — restrict origins in production via CORS_ORIGINS env var
-_cors_origins_raw = os.environ.get("CORS_ORIGINS", "")
+# Add CORS middleware — disabled by default; enable via INGEST_PARSER_CORS_ORIGINS
+_cors_origins_raw = os.environ.get("INGEST_PARSER_CORS_ORIGINS", "")
 _cors_origins: list[str] = [o.strip() for o in _cors_origins_raw.split(",") if o.strip()]
 app.add_middleware(
     CORSMiddleware,
