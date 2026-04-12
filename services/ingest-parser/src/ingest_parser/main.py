@@ -20,6 +20,7 @@ from ingest_parser.config import configure_deterministic_execution, enforce_cpu_
 enforce_cpu_only()
 
 import logging
+import os
 from contextlib import asynccontextmanager
 from typing import TYPE_CHECKING, Annotated
 
@@ -106,12 +107,14 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
-# Add CORS middleware
+# Add CORS middleware — restrict origins in production via CORS_ORIGINS env var
+_cors_origins_raw = os.environ.get("CORS_ORIGINS", "")
+_cors_origins: list[str] = [o.strip() for o in _cors_origins_raw.split(",") if o.strip()]
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # Configure appropriately for production
-    allow_credentials=True,
-    allow_methods=["*"],
+    allow_origins=_cors_origins if _cors_origins else ["*"],
+    allow_credentials=bool(_cors_origins),
+    allow_methods=["POST", "GET"],
     allow_headers=["*"],
 )
 

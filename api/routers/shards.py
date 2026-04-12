@@ -349,6 +349,7 @@ async def verify_latest_header(
         pubkey_hex = header_data["pubkey"]
 
         # Explicitly verify the header signature (don't rely on implicit validation)
+        import nacl.exceptions
         import nacl.signing
 
         from protocol.shards import verify_header
@@ -356,7 +357,8 @@ async def verify_latest_header(
         try:
             verify_key = nacl.signing.VerifyKey(bytes.fromhex(pubkey_hex))
             signature_valid = verify_header(header, signature, verify_key)
-        except Exception:
+        except (ValueError, nacl.exceptions.CryptoError) as exc:
+            logger.debug("Signature verification failed: %s", exc)
             signature_valid = False
 
         # Retrieve timestamp token if stored
@@ -379,7 +381,8 @@ async def verify_latest_header(
                     bytes.fromhex(token_dict["tst_hex"]),
                     token_dict["hash_hex"],
                 )
-            except Exception:
+            except (ValueError, KeyError, TypeError) as exc:
+                logger.debug("Timestamp token verification failed: %s", exc)
                 timestamp_valid = False
 
         # Replay verification with optional cursor pagination.
