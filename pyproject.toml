@@ -69,7 +69,7 @@ dev = [
 observability = [
     "opentelemetry-api==1.40.0",
     "opentelemetry-sdk==1.40.0",
-    "prometheus-client==0.24.1",
+    "prometheus-client==0.25.0",
 ]
 
 [tool.setuptools]
