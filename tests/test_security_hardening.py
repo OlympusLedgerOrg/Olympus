@@ -309,7 +309,7 @@ async def test_reload_keys_auth_independent_of_json_entry_order(
     monkeypatch: pytest.MonkeyPatch,
 ):
     """Reloaded API keys authenticate identically regardless of JSON entry order."""
-    import api.auth as auth_module
+    from api import auth as auth_module
     from protocol.hashes import hash_bytes
 
     original_loaded = auth_module._keys_loaded

@@ -119,8 +119,7 @@ def test_create_or_update_txt_record():
     """create_or_update_txt_record delegates to publish()."""
     backend = DryRunBackend()
     backend.create_or_update_txt_record("test.example.com", "oly-v1 seq=1 hash=abc")
-    assert "test.example.com" in backend.records
-    assert backend.records["test.example.com"] == "oly-v1 seq=1 hash=abc"
+    assert backend.records.get("test.example.com") == "oly-v1 seq=1 hash=abc"
 
 
 # ---------------------------------------------------------------------------
@@ -200,10 +199,10 @@ def test_dry_run_backend_delete_existing():
     """DryRunBackend.delete removes a previously published record."""
     backend = DryRunBackend()
     backend.publish("rec.example.com", "value")
-    assert "rec.example.com" in backend.records
+    assert backend.records.get("rec.example.com") == "value"
 
     backend.delete("rec.example.com")
-    assert "rec.example.com" not in backend.records
+    assert backend.records.get("rec.example.com") is None
 
 
 def test_dry_run_backend_delete_nonexistent():

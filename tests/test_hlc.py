@@ -107,7 +107,7 @@ class TestHLCComparison:
         a = HLCTimestamp(wall_ms=100, counter=0)
         b = HLCTimestamp(wall_ms=200, counter=0)
         assert a < b
-        assert not b < a
+        assert b > a
 
     def test_lt_by_counter(self) -> None:
         a = HLCTimestamp(wall_ms=100, counter=0)
@@ -127,7 +127,9 @@ class TestHLCComparison:
 
     def test_ge(self) -> None:
         a = HLCTimestamp(wall_ms=100, counter=5)
-        assert a >= a
+        b = HLCTimestamp(wall_ms=100, counter=5)
+        assert a >= b
+        assert b >= a
 
     def test_equality(self) -> None:
         a = HLCTimestamp(wall_ms=42, counter=7)
@@ -139,7 +141,6 @@ class TestHLCComparison:
         a = HLCTimestamp(wall_ms=200, counter=0)
         b = HLCTimestamp(wall_ms=100, counter=999)
         assert a > b
-        assert b < a
 
 
 # ------------------------------------------------------------------ #

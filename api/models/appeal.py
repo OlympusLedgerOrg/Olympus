@@ -10,16 +10,11 @@ from __future__ import annotations
 import enum
 import uuid
 from datetime import datetime, timezone
-from typing import TYPE_CHECKING
 
 from sqlalchemy import DateTime, Enum as SAEnum, ForeignKey, String, Text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from api.models.base import Base
-
-
-if TYPE_CHECKING:
-    from api.models.request import PublicRecordsRequest
 
 
 class AppealGrounds(str, enum.Enum):

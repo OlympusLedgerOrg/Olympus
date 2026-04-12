@@ -6,7 +6,7 @@ import pytest
 from psycopg import OperationalError
 from psycopg.pq import TransactionStatus
 
-import storage.postgres as postgres_module
+from storage import postgres as postgres_module
 from storage.postgres import StorageLayer
 
 

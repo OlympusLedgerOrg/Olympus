@@ -123,9 +123,7 @@ def test_storage_layer_propagates_connection_error_on_write(
             record_type="document",
             record_id="doc-1",
             version=1,
-            content_hash=b"\xaa" * 32,
-            merkle_proof={"leaf_hash": "aa" * 32, "siblings": []},
-            ledger_entry={"entry_hash": "bb" * 32},
+            value_hash=b"\xaa" * 32,
         )
 
 

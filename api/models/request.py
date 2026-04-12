@@ -21,7 +21,6 @@ from api.models.base import Base
 
 if TYPE_CHECKING:
     from api.models.agency import Agency
-    from api.models.appeal import Appeal
 
 
 class RequestType(str, enum.Enum):
