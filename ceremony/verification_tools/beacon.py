@@ -30,6 +30,10 @@ from typing import Any
 import blake3
 
 
+# Allowed URL schemes for beacon API requests (SSRF defense)
+_ALLOWED_BEACON_SCHEMES = {"https"}
+_ALLOWED_BEACON_HOSTS = {"api.drand.sh"}
+
 # DRAND mainnet configuration
 DRAND_MAINNET_URL = "https://api.drand.sh"
 DRAND_CHAIN_HASH = "8990e7a9aaed2ffed73dbd7092123d6f289930540d7651336225dc172e51b2ce"
@@ -163,6 +167,14 @@ def fetch_beacon_round(
     """
     import urllib.error
     import urllib.request
+    from urllib.parse import urlparse
+
+    # Validate the base URL to prevent SSRF
+    parsed = urlparse(base_url)
+    if parsed.scheme not in _ALLOWED_BEACON_SCHEMES:
+        raise ValueError("Beacon base_url must use HTTPS")
+    if parsed.hostname not in _ALLOWED_BEACON_HOSTS:
+        raise ValueError("Beacon base_url host not in allowed hosts")
 
     url = f"{base_url}/{chain_hash}/public/{round_number}"
 
@@ -215,6 +227,14 @@ def fetch_latest_beacon_round(
     """
     import urllib.error
     import urllib.request
+    from urllib.parse import urlparse
+
+    # Validate the base URL to prevent SSRF
+    parsed = urlparse(base_url)
+    if parsed.scheme not in _ALLOWED_BEACON_SCHEMES:
+        raise ValueError("Beacon base_url must use HTTPS")
+    if parsed.hostname not in _ALLOWED_BEACON_HOSTS:
+        raise ValueError("Beacon base_url host not in allowed hosts")
 
     url = f"{base_url}/{chain_hash}/public/latest"
 

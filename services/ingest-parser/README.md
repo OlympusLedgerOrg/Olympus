@@ -189,6 +189,7 @@ python -m ingest_parser.main
 | `INGEST_PARSER_MODEL_PATH` | `/models` | Path to AI model weights |
 | `INGEST_PARSER_LOG_LEVEL` | `INFO` | Logging level |
 | `INGEST_PARSER_CANONICAL_VERSION` | `v1.0` | Canonical parser version |
+| `INGEST_PARSER_CORS_ORIGINS` | _(empty)_ | Comma-separated CORS origin allowlist. When empty, CORS allows all origins without credentials. Set explicit origins (e.g. `https://app.example.com`) to enable `allow_credentials`. |
 
 ## Testing
 

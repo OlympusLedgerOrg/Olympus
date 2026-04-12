@@ -561,7 +561,7 @@ def _get_storage() -> StorageLayer | None:
         _storage = storage
         return _storage
     except Exception as e:
-        logger.error(f"Failed to initialize storage layer: {e}")
+        logger.error("Failed to initialize storage layer: %s", e)
         raise RuntimeError(f"Storage layer initialization failed: {e}") from e
 
 

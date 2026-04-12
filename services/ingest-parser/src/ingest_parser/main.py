@@ -20,6 +20,7 @@ from ingest_parser.config import configure_deterministic_execution, enforce_cpu_
 enforce_cpu_only()
 
 import logging
+import os
 from contextlib import asynccontextmanager
 from typing import TYPE_CHECKING, Annotated
 
@@ -78,11 +79,13 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     try:
         _parser = create_parser(_config.parser)
         logger.info(
-            f"Parser initialized: name={_parser.name}, "
-            f"version={_parser.version}, model_hash={_parser.model_hash}"
+            "Parser initialized: name=%s, version=%s, model_hash=%s",
+            _parser.name,
+            _parser.version,
+            _parser.model_hash,
         )
     except Exception as e:
-        logger.error(f"Failed to initialize parser: {e}")
+        logger.error("Failed to initialize parser: %s", e)
         raise
 
     yield
@@ -104,12 +107,14 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
-# Add CORS middleware
+# Add CORS middleware — disabled by default; enable via INGEST_PARSER_CORS_ORIGINS
+_cors_origins_raw = os.environ.get("INGEST_PARSER_CORS_ORIGINS", "")
+_cors_origins: list[str] = [o.strip() for o in _cors_origins_raw.split(",") if o.strip()]
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # Configure appropriately for production
-    allow_credentials=True,
-    allow_methods=["*"],
+    allow_origins=_cors_origins if _cors_origins else ["*"],
+    allow_credentials=bool(_cors_origins),
+    allow_methods=["POST", "GET"],
     allow_headers=["*"],
 )
 
@@ -210,10 +215,10 @@ async def parse_document(
     try:
         content = await file.read()
     except Exception as e:
-        logger.error(f"Failed to read file: {e}")
+        logger.error("Failed to read file: %s", e)
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"Failed to read file: {e}",
+            detail="Failed to read uploaded file. Please verify the file is not corrupted and try again.",
         ) from e
 
     # Check file size
@@ -251,10 +256,10 @@ async def parse_document(
             detail=str(e),
         ) from e
     except Exception as e:
-        logger.exception(f"Failed to parse document: {e}")
+        logger.exception("Failed to parse document: %s", e)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to parse document: {e}",
+            detail="Document parsing failed. Please verify the file format is supported and the file is not corrupted.",
         ) from e
 
     # Build provenance
@@ -276,7 +281,7 @@ async def parse_document(
 @app.exception_handler(Exception)
 async def global_exception_handler(request: Request, exc: Exception) -> JSONResponse:
     """Global exception handler for unhandled errors."""
-    logger.exception(f"Unhandled exception: {exc}")
+    logger.exception("Unhandled exception: %s", exc)
     return JSONResponse(
         status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
         content=ErrorResponse(

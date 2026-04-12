@@ -152,7 +152,12 @@ class FallbackParser(BaseParser):
                                 id=f"blk_{page_num:02d}_01",
                                 type=BlockType.TEXT,
                                 content=text_content,
-                                bbox=[0.0, 0.0, self._round_float(width), self._round_float(height)],
+                                bbox=[
+                                    0.0,
+                                    0.0,
+                                    self._round_float(width),
+                                    self._round_float(height),
+                                ],
                                 confidence=1.0,
                             )
                         )
@@ -263,12 +268,14 @@ class DoclingParser(BaseParser):
                         f"got {self._model_hash_cache}"
                     )
 
-            logger.info(f"Docling loaded: version={self._docling_version}, model_hash={self._model_hash_cache}")
+            logger.info(
+                "Docling loaded: version=%s, model_hash=%s",
+                self._docling_version,
+                self._model_hash_cache,
+            )
 
         except ImportError as e:
-            raise RuntimeError(
-                "Docling is not installed. Install with: pip install docling"
-            ) from e
+            raise RuntimeError("Docling is not installed. Install with: pip install docling") from e
 
     def _get_docling_version(self) -> str:
         """Get the installed Docling version."""
@@ -347,9 +354,7 @@ class DoclingParser(BaseParser):
             metadata={"parser": "docling"},
         )
 
-    def _convert_element(
-        self, element: object, page_num: int, idx: int
-    ) -> ContentBlock | None:
+    def _convert_element(self, element: object, page_num: int, idx: int) -> ContentBlock | None:
         """Convert a Docling element to a ContentBlock."""
         # Get element text
         text = getattr(element, "text", "") or ""
@@ -410,12 +415,12 @@ def create_parser(config: ParserConfig) -> BaseParser:
         try:
             return DoclingParser(config)
         except RuntimeError as e:
-            logger.warning(f"Failed to load Docling: {e}. Using fallback parser.")
+            logger.warning("Failed to load Docling: %s. Using fallback parser.", e)
             return FallbackParser(config)
 
     elif parser_name == "fallback":
         return FallbackParser(config)
 
     else:
-        logger.warning(f"Unknown parser '{parser_name}'. Using fallback parser.")
+        logger.warning("Unknown parser '%s'. Using fallback parser.", parser_name)
         return FallbackParser(config)
