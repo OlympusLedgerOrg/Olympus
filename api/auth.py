@@ -815,7 +815,9 @@ def _is_overly_broad_proxy_range(range_expr: str) -> bool:
     try:
         network = ipaddress.ip_network(range_expr, strict=False)
     except ValueError:
-        logger.warning("Ignoring invalid trusted proxy CIDR/IP expression: %s", range_expr)
+        # Sanitize range_expr to prevent log injection before logging
+        from protocol.log_sanitization import sanitize_for_log
+        logger.warning("Ignoring invalid trusted proxy CIDR/IP expression: %s", sanitize_for_log(range_expr))
         return False
     return network.prefixlen == 0
 

@@ -284,12 +284,15 @@ async def update_request_status(
 
     await db.commit()
     await db.refresh(req)
+    
+    from protocol.log_sanitization import sanitize_for_log
+    
     logger.info(
         "Status transition on %s: %s → %s (key_id=%s, note=%s)",
-        display_id,
-        previous_status,
-        target,
-        _api_key.key_id,
-        body.note or "",
+        sanitize_for_log(display_id),
+        sanitize_for_log(previous_status),
+        sanitize_for_log(target),
+        sanitize_for_log(_api_key.key_id),
+        sanitize_for_log(body.note or ""),
     )
     return req

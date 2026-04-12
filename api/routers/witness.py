@@ -308,11 +308,13 @@ async def submit_observation(
 
     await db.commit()
 
+    from protocol.log_sanitization import sanitize_for_log
+
     logger.info(
         "Stored announcement %s: seq=%d hash=%s",
-        key,
+        sanitize_for_log(key),
         announcement.checkpoint.sequence,
-        announcement.checkpoint.checkpoint_hash,
+        sanitize_for_log(announcement.checkpoint.checkpoint_hash),
     )
 
     return WitnessAnnounceResponse(

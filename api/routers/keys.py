@@ -53,7 +53,10 @@ async def issue_credential(
     db.add(cred)
     await db.commit()
     await db.refresh(cred)
-    logger.info("Issued credential %s for holder=%s", cred.id, body.holder_key)
+    
+    from protocol.log_sanitization import sanitize_for_log
+    
+    logger.info("Issued credential %s for holder=%s", sanitize_for_log(str(cred.id)), sanitize_for_log(body.holder_key))
     return cred
 
 
@@ -90,7 +93,10 @@ async def revoke_credential(
     cred.revoked_at = datetime.now(timezone.utc)
     cred.revocation_commit_id = generate_commit_id()  # Anchor the revocation event
     await db.commit()
-    logger.info("Revoked credential %s", credential_id)
+    
+    from protocol.log_sanitization import sanitize_for_log
+    
+    logger.info("Revoked credential %s", sanitize_for_log(str(credential_id)))
 
 
 @router.post("/admin/reload-keys", status_code=status.HTTP_200_OK)

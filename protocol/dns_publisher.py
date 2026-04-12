@@ -385,7 +385,13 @@ class DryRunBackend(DNSBackend):
             name: Fully qualified domain name
             txt: TXT record value
         """
-        logger.info(f"[DRY RUN] Would publish TXT record: {name} -> {txt}")
+        from protocol.log_sanitization import sanitize_for_log
+        
+        logger.info(
+            "[DRY RUN] Would publish TXT record: %s -> %s",
+            sanitize_for_log(name),
+            sanitize_for_log(txt)
+        )
         self.records[name] = txt
 
     def delete(self, name: str) -> None:
@@ -395,7 +401,9 @@ class DryRunBackend(DNSBackend):
         Args:
             name: Fully qualified domain name
         """
-        logger.info(f"[DRY RUN] Would delete TXT record: {name}")
+        from protocol.log_sanitization import sanitize_for_log
+        
+        logger.info("[DRY RUN] Would delete TXT record: %s", sanitize_for_log(name))
         self.records.pop(name, None)
 
     def query_txt_record(self, fqdn: str) -> list[str]:

@@ -114,7 +114,10 @@ async def file_appeal(body: AppealCreate, db: DBSession, _api_key: RequireAPIKey
     req.status = RequestStatus.APPEALED.value
     await db.commit()
     await db.refresh(appeal)
-    logger.info("Filed appeal %s for request %s", appeal.id, body.request_id)
+    
+    from protocol.log_sanitization import sanitize_for_log
+    
+    logger.info("Filed appeal %s for request %s", sanitize_for_log(str(appeal.id)), sanitize_for_log(body.request_id))
     return appeal
 
 

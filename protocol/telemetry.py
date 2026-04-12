@@ -291,12 +291,15 @@ def record_smt_divergence(
         remote_node: Identifier (URL or node ID) of the remote peer.
     """
     SMT_DIVERGENCE_TOTAL.inc()
+    
+    from protocol.log_sanitization import sanitize_for_log
+    
     logger.warning(
         "smt_root_divergence_detected",
         extra={
-            "shard_id": shard_id,
-            "local_root": local_root,
-            "remote_root": remote_root,
-            "remote_node": remote_node,
+            "shard_id": sanitize_for_log(shard_id),
+            "local_root": sanitize_for_log(local_root),
+            "remote_root": sanitize_for_log(remote_root),
+            "remote_node": sanitize_for_log(remote_node),
         },
     )

@@ -258,10 +258,12 @@ def verify_header(
     # Replay protection: sequence must be strictly monotonic
     if prev_sequence is not None and "sequence_number" in header:
         if header["sequence_number"] <= prev_sequence:
+            from protocol.log_sanitization import sanitize_for_log
+            
             logger.warning(
-                "Shard header replay detected: seq=%d prev=%d",
-                header["sequence_number"],
-                prev_sequence,
+                "Shard header replay detected: seq=%s prev=%s",
+                sanitize_for_log(header["sequence_number"]),
+                sanitize_for_log(prev_sequence),
             )
             return False
 

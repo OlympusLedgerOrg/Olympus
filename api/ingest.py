@@ -761,7 +761,8 @@ def _consume_rate_limit(subject_type: str, subject: str, action: str) -> bool:
                 extra={
                     "action": action,
                     "subject_type": subject_type,
-                    "subject": subject,
+                    # Redact subject value (could be API key or IP) to avoid logging sensitive info
+                    "subject": "<redacted>",
                     "error": str(exc),
                 },
             )
@@ -805,7 +806,8 @@ def _apply_rate_limits(request: Request, api_key_id: str, action: str) -> None:
     if not _consume_rate_limit("api_key", api_key_id, action):
         logger.warning(
             "rate_limit_hit",
-            extra={"dimension": "api_key", "key_id": api_key_id, "action": action},
+            # Redact key_id to avoid logging sensitive API key identifiers
+            extra={"dimension": "api_key", "key_id": "<redacted>", "action": action},
         )
         _append_security_audit_event(
             "rate_limit_hit",
@@ -1835,12 +1837,14 @@ async def commit_artifact(
                 storage.store_ingestion_batch(batch_id, [ingestion_entry])
                 INGEST_TOTAL.labels(outcome="committed").inc()
 
+                from protocol.log_sanitization import sanitize_for_log
+
                 logger.info(
                     "artifact_committed",
                     extra={
-                        "proof_id": proof_id,
-                        "namespace": request.namespace,
-                        "id": request.id,
+                        "proof_id": sanitize_for_log(proof_id),
+                        "namespace": sanitize_for_log(request.namespace),
+                        "id": sanitize_for_log(request.id),
                         "using_postgres": True,
                     },
                 )
@@ -1874,9 +1878,11 @@ async def commit_artifact(
                         poseidon_root=existing.get("poseidon_root", persisted_poseidon_root),
                     )
                 else:
+                    from protocol.log_sanitization import sanitize_for_log
+                    
                     logger.exception(
                         "artifact_commit_storage_failed",
-                        extra={"namespace": request.namespace, "id": request.id},
+                        extra={"namespace": sanitize_for_log(request.namespace), "id": sanitize_for_log(request.id)},
                     )
                     raise HTTPException(
                         status_code=500,
@@ -1932,12 +1938,14 @@ async def commit_artifact(
         _content_index[artifact_hash_hex] = proof_id
         INGEST_TOTAL.labels(outcome="committed").inc()
 
+    from protocol.log_sanitization import sanitize_for_log
+
     logger.info(
         "artifact_committed",
         extra={
-            "proof_id": proof_id,
-            "namespace": request.namespace,
-            "id": request.id,
+            "proof_id": sanitize_for_log(proof_id),
+            "namespace": sanitize_for_log(request.namespace),
+            "id": sanitize_for_log(request.id),
             "using_postgres": storage is not None,
         },
     )

@@ -442,7 +442,31 @@ def _fetch_json_from_base(base_url: str, path: str) -> dict[str, Any] | list[dic
     """Fetch JSON from a specific Olympus API base URL."""
     if not path.startswith("/") or "://" in path:
         raise ValueError("API path must be a relative path")
-    with urlopen(f"{base_url}{path}", timeout=5) as response:  # noqa: S310
+    
+    # Construct the full URL
+    full_url = f"{base_url}{path}"
+    
+    # Parse and validate the URL to prevent SSRF
+    parsed_url = urlparse(full_url)
+    if parsed_url.scheme not in {"http", "https"}:
+        raise ValueError("URL must use http or https scheme")
+    
+    # Resolve hostname to IP and check against blocked ranges
+    try:
+        hostname = parsed_url.hostname
+        if not hostname:
+            raise ValueError("URL must have a valid hostname")
+        
+        # Resolve hostname to IP addresses
+        addr_info = socket.getaddrinfo(hostname, None)
+        for family, _, _, _, sockaddr in addr_info:
+            ip_str = sockaddr[0]
+            if _is_blocked_private_ip(ip_str):
+                raise ValueError(f"Access to private/internal IP {ip_str} is not allowed")
+    except socket.gaierror as e:
+        raise ValueError(f"Cannot resolve hostname {hostname}: {e}") from e
+    
+    with urlopen(full_url, timeout=5) as response:
         payload = json.loads(response.read().decode("utf-8"))
     if isinstance(payload, dict):
         return cast(dict[str, Any], payload)
@@ -1609,10 +1633,7 @@ async def inspect_proof_bundle(request: Request):
     try:
         bundle = await request.json()
     except Exception as exc:
-        if _ENV == "development":
-            return JSONResponse(
-                status_code=400, content={"ok": False, "error": f"Invalid JSON: {exc}"}
-            )
+        # Don't expose exception details even in development mode (security risk)
         logger.error("Debug UI error: %s", exc, exc_info=True)
         return JSONResponse(status_code=400, content={"ok": False, "error": "Invalid JSON input."})
 
