@@ -517,6 +517,7 @@ def create_checkpoint(
     if signatures is None:
         if signing_keys is None:  # pragma: no cover — guarded by line 487 check
             raise ValueError("Either signing_keys or signatures must be provided")
+        _keys = signing_keys  # local binding for mypy type narrowing
         signatures = [
             sign_federated_checkpoint(
                 checkpoint_hash=checkpoint_hash,
@@ -527,7 +528,7 @@ def create_checkpoint(
                 signing_key=key,
                 registry=registry,
             )
-            for node_id, key in signing_keys.items()
+            for node_id, key in _keys.items()
         ]
 
     certificate = build_checkpoint_quorum_certificate(
