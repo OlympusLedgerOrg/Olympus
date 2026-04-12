@@ -30,16 +30,16 @@ def sanitize_for_log(value: str | int | float | None) -> str:
     s = str(value)
 
     # Replace newlines and carriage returns with spaces
-    s = s.replace('\n', ' ').replace('\r', ' ')
+    s = s.replace("\n", " ").replace("\r", " ")
 
     # Remove ANSI escape sequences
-    s = re.sub(r'\x1b\[[0-9;]*m', '', s)
+    s = re.sub(r"\x1b\[[0-9;]*m", "", s)
 
     # Remove other control characters (except space and tab)
-    s = ''.join(char if (char >= ' ' or char == '\t') and char != '\x7f' else ' ' for char in s)
+    s = "".join(char if (char >= " " or char == "\t") and char != "\x7f" else " " for char in s)
 
     # Collapse multiple spaces
-    s = re.sub(r'\s+', ' ', s)
+    s = re.sub(r"\s+", " ", s)
 
     # Trim
     s = s.strip()

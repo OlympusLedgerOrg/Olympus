@@ -389,7 +389,7 @@ class DryRunBackend(DNSBackend):
         logger.info(
             "[DRY RUN] Would publish TXT record: %s -> %s",
             sanitize_for_log(name),
-            sanitize_for_log(txt)
+            sanitize_for_log(txt),
         )
         self.records[name] = txt
 

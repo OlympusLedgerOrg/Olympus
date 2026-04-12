@@ -54,7 +54,11 @@ async def issue_credential(
     db.add(cred)
     await db.commit()
     await db.refresh(cred)
-    logger.info("Issued credential %s for holder=%s", sanitize_for_log(str(cred.id)), sanitize_for_log(body.holder_key))
+    logger.info(
+        "Issued credential %s for holder=%s",
+        sanitize_for_log(str(cred.id)),
+        sanitize_for_log(body.holder_key),
+    )
     return cred
 
 

@@ -153,5 +153,9 @@ async def compute_state_root(shard_id: str, db: AsyncSession) -> str:
         return "0" * 64
 
     tree = build_tree(hashes, preserve_order=True)
-    logger.debug("Computed state root %s for shard %s.", sanitize_for_log(tree.root_hash), sanitize_for_log(shard_id))
+    logger.debug(
+        "Computed state root %s for shard %s.",
+        sanitize_for_log(tree.root_hash),
+        sanitize_for_log(shard_id),
+    )
     return tree.root_hash

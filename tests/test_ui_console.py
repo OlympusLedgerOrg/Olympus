@@ -19,7 +19,9 @@ def _make_http_status_error(status_code: int) -> httpx.HTTPStatusError:
     response = httpx.Response(status_code)
     request = httpx.Request("GET", "http://test")
     return httpx.HTTPStatusError(
-        f"HTTP {status_code}", request=request, response=response,
+        f"HTTP {status_code}",
+        request=request,
+        response=response,
     )
 
 

@@ -133,7 +133,11 @@ async def commit_document(
 
     await db.commit()
     await db.refresh(commit)
-    logger.info("Committed doc_hash=%s as commit_id=%s", sanitize_for_log(body.doc_hash), sanitize_for_log(commit_id))
+    logger.info(
+        "Committed doc_hash=%s as commit_id=%s",
+        sanitize_for_log(body.doc_hash),
+        sanitize_for_log(commit_id),
+    )
 
     return DocCommitResponse(
         commit_id=commit.commit_id,

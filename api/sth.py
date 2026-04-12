@@ -127,7 +127,9 @@ async def get_latest_sth(
     except HTTPException:
         raise
     except Exception as e:
-        logger.error("Failed to get latest STH for shard %s: %s", sanitize_for_log(shard_id), str(e))
+        logger.error(
+            "Failed to get latest STH for shard %s: %s", sanitize_for_log(shard_id), str(e)
+        )
         raise HTTPException(
             status_code=500,
             detail="Failed to retrieve STH. See server logs for details.",
@@ -196,7 +198,9 @@ async def get_sth_history(
     except HTTPException:
         raise
     except Exception as e:
-        logger.error("Failed to get STH history for shard %s: %s", sanitize_for_log(shard_id), str(e))
+        logger.error(
+            "Failed to get STH history for shard %s: %s", sanitize_for_log(shard_id), str(e)
+        )
         raise HTTPException(
             status_code=500,
             detail="Failed to retrieve STH history. See server logs for details.",

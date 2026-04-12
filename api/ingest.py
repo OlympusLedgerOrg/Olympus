@@ -1878,7 +1878,10 @@ async def commit_artifact(
                 else:
                     logger.exception(
                         "artifact_commit_storage_failed",
-                        extra={"namespace": sanitize_for_log(request.namespace), "id": sanitize_for_log(request.id)},
+                        extra={
+                            "namespace": sanitize_for_log(request.namespace),
+                            "id": sanitize_for_log(request.id),
+                        },
                     )
                     raise HTTPException(
                         status_code=500,
