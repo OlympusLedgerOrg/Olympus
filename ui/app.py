@@ -991,16 +991,12 @@ async def proxy_ledger_verify_simple(request: Request):
     except httpx.HTTPStatusError as exc:
         return JSONResponse(status_code=exc.response.status_code, content=exc.response.json())
     except httpx.RequestError as exc:
-        if _ENV == "development":
-            return JSONResponse(status_code=502, content={"error": str(exc)})
         logger.error("Debug UI proxy error: %s", exc, exc_info=True)
         return JSONResponse(
             status_code=502,
             content={"error": "An internal error occurred. Check server logs for details."},
         )
     except Exception as exc:
-        if _ENV == "development":
-            return JSONResponse(status_code=500, content={"error": str(exc)})
         logger.error("Debug UI error: %s", exc, exc_info=True)
         return JSONResponse(
             status_code=500,
@@ -1217,8 +1213,6 @@ async def commit_document(
             canon_provenance=canon_prov,
         )
     except ValueError as exc:
-        if _ENV == "development":
-            return JSONResponse(status_code=400, content={"ok": False, "error": str(exc)})
         logger.error("Debug UI error: %s", exc, exc_info=True)
         return JSONResponse(
             status_code=400,
@@ -1270,11 +1264,6 @@ def get_committed_sections(doc_id: str, version: int):
     try:
         entry = _get_commit_entry(doc_id, version)
     except ValueError as exc:
-        if _ENV == "development":
-            return JSONResponse(
-                status_code=404,
-                content={"ok": False, "error": str(exc)},
-            )
         logger.error("Debug UI error: %s", exc, exc_info=True)
         return JSONResponse(
             status_code=404,
@@ -1306,10 +1295,6 @@ async def create_redaction(request: Request):
         version = int(body["version"])
         revealed_indices = [int(i) for i in body["revealed_indices"]]
     except (KeyError, TypeError, ValueError) as exc:
-        if _ENV == "development":
-            return JSONResponse(
-                status_code=400, content={"ok": False, "error": f"Invalid request: {exc}"}
-            )
         logger.error("Debug UI error: %s", exc, exc_info=True)
         return JSONResponse(
             status_code=400,
@@ -1319,11 +1304,6 @@ async def create_redaction(request: Request):
     try:
         entry = _get_commit_entry(document_id, version)
     except ValueError as exc:
-        if _ENV == "development":
-            return JSONResponse(
-                status_code=404,
-                content={"ok": False, "error": str(exc)},
-            )
         logger.error("Debug UI error: %s", exc, exc_info=True)
         return JSONResponse(
             status_code=404,
@@ -1352,8 +1332,6 @@ async def create_redaction(request: Request):
             zk_proof={},
         )
     except ValueError as exc:
-        if _ENV == "development":
-            return JSONResponse(status_code=400, content={"ok": False, "error": str(exc)})
         logger.error("Debug UI error: %s", exc, exc_info=True)
         return JSONResponse(
             status_code=400,
@@ -1394,11 +1372,6 @@ async def verify_proof_bundle(request: Request):
         body = await request.json()
         proof, smt_root, revealed_indices, revealed_content, total_parts = _parse_proof_bundle(body)
     except (KeyError, TypeError, ValueError) as exc:
-        if _ENV == "development":
-            return JSONResponse(
-                status_code=400,
-                content={"ok": False, "error": f"Invalid proof bundle: {exc}"},
-            )
         logger.error("Debug UI error: %s", exc, exc_info=True)
         return JSONResponse(
             status_code=400,
@@ -1436,8 +1409,6 @@ def get_embargo_state(doc_id: str, version: int):
     try:
         entry = _get_commit_entry(doc_id, version)
     except ValueError as exc:
-        if _ENV == "development":
-            return JSONResponse(status_code=404, content={"ok": False, "error": str(exc)})
         logger.error("Debug UI error: %s", exc, exc_info=True)
         return JSONResponse(
             status_code=404,
@@ -1464,10 +1435,6 @@ async def update_embargo(request: Request):
         )
         recipient_keys = _parse_recipient_keys(str(body.get("recipient_keys", "")))
     except (KeyError, TypeError, ValueError) as exc:
-        if _ENV == "development":
-            return JSONResponse(
-                status_code=400, content={"ok": False, "error": f"Invalid request: {exc}"}
-            )
         logger.error("Debug UI error: %s", exc, exc_info=True)
         return JSONResponse(
             status_code=400,
@@ -1505,10 +1472,6 @@ async def revoke_embargo_recipient(request: Request):
         recipient_key = str(body["recipient_key"]).strip()
         entry = _get_commit_entry(document_id, version)
     except (KeyError, TypeError, ValueError) as exc:
-        if _ENV == "development":
-            return JSONResponse(
-                status_code=400, content={"ok": False, "error": f"Invalid request: {exc}"}
-            )
         logger.error("Debug UI error: %s", exc, exc_info=True)
         return JSONResponse(
             status_code=400,
