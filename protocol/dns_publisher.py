@@ -211,14 +211,14 @@ class DNSPublisher:
         """
         fqdn, txt_value = checkpoint_record_set(checkpoint, self.domain, label)
         self.backend.publish(fqdn, txt_value)
-        logger.info(f"Published checkpoint {checkpoint.sequence} to DNS: {fqdn}")
+        logger.info("Published checkpoint %d to DNS: %s", checkpoint.sequence, fqdn)
 
         if label is None:
             latest_fqdn, latest_txt_value = checkpoint_record_set(
                 checkpoint, self.domain, label="latest"
             )
             self.backend.publish(latest_fqdn, latest_txt_value)
-            logger.info(f"Updated latest checkpoint pointer to sequence {checkpoint.sequence}")
+            logger.info("Updated latest checkpoint pointer to sequence %d", checkpoint.sequence)
 
         return fqdn
 
@@ -234,7 +234,7 @@ class DNSPublisher:
         """
         subdomain = self.checkpoint_subdomain(sequence)
         self.backend.delete(subdomain)
-        logger.info(f"Deleted checkpoint {sequence} DNS record: {subdomain}")
+        logger.info("Deleted checkpoint %d DNS record: %s", sequence, subdomain)
 
     def query_checkpoint(self, sequence: int) -> DNSCheckpointRecord | None:
         """
@@ -260,7 +260,7 @@ class DNSPublisher:
             try:
                 return DNSCheckpointRecord.from_txt_record(txt_value)
             except ValueError:
-                logger.warning(f"Invalid DNS checkpoint record at {subdomain}: {txt_value}")
+                logger.warning("Invalid DNS checkpoint record at %s: %s", subdomain, txt_value)
                 continue
 
         return None
@@ -285,7 +285,7 @@ class DNSPublisher:
             try:
                 return DNSCheckpointRecord.from_txt_record(txt_value)
             except ValueError:
-                logger.warning(f"Invalid DNS checkpoint record at {subdomain}: {txt_value}")
+                logger.warning("Invalid DNS checkpoint record at %s: %s", subdomain, txt_value)
                 continue
 
         return None
@@ -415,7 +415,7 @@ class DryRunBackend(DNSBackend):
         """
         record = self.records.get(fqdn)
         records = [record] if record is not None else []
-        logger.info(f"[DRY RUN] Query TXT record: {fqdn} -> {records}")
+        logger.info("[DRY RUN] Query TXT record: %s -> %s", fqdn, records)
         return records
 
 
