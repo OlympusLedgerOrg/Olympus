@@ -20,6 +20,7 @@ from ingest_parser.config import configure_deterministic_execution, enforce_cpu_
 enforce_cpu_only()
 
 import logging
+import os
 from contextlib import asynccontextmanager
 from typing import TYPE_CHECKING, Annotated
 
@@ -78,8 +79,10 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     try:
         _parser = create_parser(_config.parser)
         logger.info(
-            f"Parser initialized: name={_parser.name}, "
-            f"version={_parser.version}, model_hash={_parser.model_hash}"
+            "Parser initialized: name=%s, version=%s, model_hash=%s",
+            _parser.name,
+            _parser.version,
+            _parser.model_hash,
         )
     except ValueError as e:
         # Expected configuration errors (missing models, invalid settings)
@@ -117,7 +120,6 @@ app = FastAPI(
 # Security: CORS is disabled by default for production security.
 # Allow credentials with wildcard origins is a security risk (CSRF).
 # Enable via INGEST_PARSER_CORS_ORIGINS environment variable if needed.
-import os
 _cors_origins = os.getenv("INGEST_PARSER_CORS_ORIGINS", "").strip()
 if _cors_origins:
     origins_list = [origin.strip() for origin in _cors_origins.split(",") if origin.strip()]
@@ -299,7 +301,7 @@ async def parse_document(
 @app.exception_handler(Exception)
 async def global_exception_handler(request: Request, exc: Exception) -> JSONResponse:
     """Global exception handler for unhandled errors."""
-    logger.exception(f"Unhandled exception: {exc}")
+    logger.exception("Unhandled exception: %s", exc)
     return JSONResponse(
         status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
         content=ErrorResponse(

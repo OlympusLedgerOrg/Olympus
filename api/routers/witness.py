@@ -241,9 +241,10 @@ async def submit_observation(
             detail="Invalid checkpoint signature — announcement rejected.",
         )
     except (ValueError, KeyError) as exc:
+        logger.warning("Malformed signature or public key: %s", exc)
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"Malformed signature or public key: {exc}",
+            detail="Malformed signature or public key",
         )
 
     _origin_key_prefix = hashlib.sha256(request.origin.encode()).hexdigest()[:16]
