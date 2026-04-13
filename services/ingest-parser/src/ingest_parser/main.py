@@ -84,8 +84,17 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
             _parser.version,
             _parser.model_hash,
         )
+    except ValueError as e:
+        # Expected configuration errors (missing models, invalid settings)
+        logger.error(f"Parser configuration error: {e}")
+        raise
+    except ImportError as e:
+        # Missing dependencies
+        logger.error(f"Parser dependency not found: {e}")
+        raise
     except Exception as e:
-        logger.error("Failed to initialize parser: %s", e)
+        # Unexpected errors during parser initialization
+        logger.exception(f"Unexpected error initializing parser: {type(e).__name__}")
         raise
 
     yield
@@ -107,16 +116,23 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
-# Add CORS middleware — disabled by default; enable via INGEST_PARSER_CORS_ORIGINS
-_cors_origins_raw = os.environ.get("INGEST_PARSER_CORS_ORIGINS", "")
-_cors_origins: list[str] = [o.strip() for o in _cors_origins_raw.split(",") if o.strip()]
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=_cors_origins if _cors_origins else ["*"],
-    allow_credentials=bool(_cors_origins),
-    allow_methods=["POST", "GET"],
-    allow_headers=["*"],
-)
+# Add CORS middleware
+# Security: CORS is disabled by default for production security.
+# Allow credentials with wildcard origins is a security risk (CSRF).
+# Enable via INGEST_PARSER_CORS_ORIGINS environment variable if needed.
+_cors_origins = os.getenv("INGEST_PARSER_CORS_ORIGINS", "").strip()
+if _cors_origins:
+    origins_list = [origin.strip() for origin in _cors_origins.split(",") if origin.strip()]
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=origins_list,
+        allow_credentials=False,  # Never allow credentials with CORS
+        allow_methods=["GET", "POST"],
+        allow_headers=["Content-Type", "Accept"],
+    )
+    logger.info(f"CORS enabled for origins: {origins_list}")
+else:
+    logger.info("CORS disabled (set INGEST_PARSER_CORS_ORIGINS to enable)")
 
 
 # Content type mapping
@@ -215,10 +231,11 @@ async def parse_document(
     try:
         content = await file.read()
     except Exception as e:
-        logger.error("Failed to read file: %s", e)
+        logger.error(f"Failed to read file: {e}")
+        # Security: Don't expose internal exception details to clients
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Failed to read uploaded file. Please verify the file is not corrupted and try again.",
+            detail="Failed to read uploaded file",
         ) from e
 
     # Check file size
@@ -251,15 +268,18 @@ async def parse_document(
     try:
         document = _parser.parse(content, content_type)
     except ValueError as e:
+        # ValueError indicates expected parsing issues (e.g., malformed input)
+        logger.warning(f"Document parsing failed with ValueError: {type(e).__name__}")
         raise HTTPException(
             status_code=status.HTTP_415_UNSUPPORTED_MEDIA_TYPE,
-            detail=str(e),
+            detail="Document format is not supported or malformed",
         ) from e
     except Exception as e:
-        logger.exception("Failed to parse document: %s", e)
+        # Security: Log full exception but don't expose internal details to clients
+        logger.exception(f"Unexpected parsing error: {type(e).__name__}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Document parsing failed. Please verify the file format is supported and the file is not corrupted.",
+            detail="Internal error during document parsing",
         ) from e
 
     # Build provenance
