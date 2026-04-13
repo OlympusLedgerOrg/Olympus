@@ -1,0 +1,209 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no,viewport-fit=cover"/>
+<title>OLYMPUS // WAKE UP</title>
+<link href="https://fonts.googleapis.com/css2?family=Fira+Code:wght@300;400;500;600;700&display=swap" rel="stylesheet"/>
+<style>
+:root {
+  --bg0: #020202;
+  --bg1: #050a05;
+  --bg2: #0a140a;
+  --neo-green: #00ff41;
+  --neo-dim: rgba(0, 255, 65, 0.15);
+  --neo-glow: rgba(0, 255, 65, 0.4);
+  --text-hi: #e0ffe0;
+  --text-lo: #4a8a4a;
+  --border: rgba(0, 255, 65, 0.2);
+  --border-hi: rgba(0, 255, 65, 0.5);
+  --nav-h: 68px;
+  --mono: 'Fira Code', monospace;
+}
+*,*::before,*::after{box-sizing:border-box;margin:0;padding:0;}
+html, body {
+  background: var(--bg0);
+  color: var(--neo-green);
+  font-family: var(--mono);
+  height: 100%;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+
+/* ── MATRIX CANVAS ── */
+#matrix-canvas { position: fixed; top: 0; left: 0; z-index: 0; opacity: 0.12; pointer-events: none; }
+
+/* ── CRT SCANLINES ── */
+body::after {
+  content: ''; position: fixed; inset: 0; z-index: 999; pointer-events: none;
+  background: linear-gradient(rgba(18, 16, 16, 0) 50%, rgba(0, 0, 0, 0.25) 50%), linear-gradient(90deg, rgba(255, 0, 0, 0.06), rgba(0, 255, 0, 0.02), rgba(0, 0, 255, 0.06));
+  background-size: 100% 2px, 3px 100%;
+}
+
+/* ── UI OVERLAYS ── */
+#topbar { height: 56px; border-bottom: 1px solid var(--border); display: flex; align-items: center; padding: 0 16px; z-index: 10; background: var(--bg1); }
+.topbar-title { font-size: 16px; font-weight: 700; letter-spacing: 0.2em; text-shadow: 0 0 8px var(--neo-glow); flex: 1; }
+.topbar-badge { font-size: 10px; background: var(--neo-dim); border: 1px solid var(--border-hi); padding: 2px 8px; border-radius: 4px; }
+
+#content { flex: 1; overflow-y: auto; z-index: 10; padding: 16px; padding-bottom: 100px; position: relative; }
+.card { background: rgba(5, 10, 5, 0.85); border: 1px solid var(--border); padding: 16px; margin-bottom: 16px; backdrop-filter: blur(4px); }
+.card-title { font-size: 12px; letter-spacing: 0.15em; margin-bottom: 12px; display: flex; align-items: center; gap: 8px; text-shadow: 0 0 5px var(--neo-glow); }
+.card-title::before { content: '>'; color: var(--text-hi); }
+
+/* ── INPUTS & BUTTONS ── */
+input, textarea, select { width: 100%; background: var(--bg2); border: 1px solid var(--border); color: var(--text-hi); font-family: var(--mono); padding: 10px; margin-bottom: 12px; outline: none; }
+input:focus, textarea:focus { border-color: var(--neo-green); box-shadow: 0 0 8px var(--neo-dim); }
+.btn { width: 100%; background: var(--neo-dim); border: 1px solid var(--neo-green); color: var(--neo-green); font-family: var(--mono); font-size: 12px; font-weight: 600; padding: 12px; cursor: pointer; text-transform: uppercase; letter-spacing: 0.1em; transition: 0.2s; }
+.btn:hover { background: var(--neo-green); color: var(--bg0); box-shadow: 0 0 15px var(--neo-glow); }
+
+/* ── BOOT SEQUENCE ── */
+#boot { position: fixed; inset: 0; z-index: 10000; background: var(--bg0); display: flex; flex-direction: column; align-items: center; justify-content: center; }
+.wake-up { font-size: 14px; opacity: 0; transition: opacity 1s; margin-bottom: 20px; }
+.boot-ascii { font-size: clamp(8px, 1.5vw, 12px); white-space: pre; text-shadow: 0 0 10px var(--neo-glow); display: none; }
+.boot-log { width: 80%; max-width: 500px; margin-top: 20px; font-size: 12px; }
+.boot-line { opacity: 0; margin-bottom: 4px; }
+.boot-line.show { opacity: 1; }
+
+.tab { display: none; }
+.tab.active { display: block; animation: glitchIn 0.3s ease forwards; }
+
+@keyframes glitchIn {
+  0% { transform: translateX(-5%); opacity: 0; filter: hue-rotate(-90deg); }
+  50% { transform: translateX(2%); opacity: 0.8; filter: hue-rotate(90deg); }
+  100% { transform: none; opacity: 1; filter: none; }
+}
+
+/* ── BOTTOM NAV ── */
+#nav { position: fixed; bottom: 0; left: 0; right: 0; height: var(--nav-h); background: var(--bg1); border-top: 1px solid var(--border); display: flex; z-index: 100; }
+.nav-btn { flex: 1; background: none; border: none; color: var(--text-lo); font-family: var(--mono); font-size: 11px; cursor: pointer; transition: 0.2s; }
+.nav-btn.active { color: var(--neo-green); text-shadow: 0 0 8px var(--neo-glow); border-top: 2px solid var(--neo-green); background: linear-gradient(to top, transparent, var(--neo-dim)); }
+</style>
+</head>
+<body>
+
+<canvas id="matrix-canvas"></canvas>
+
+<!-- BOOT SEQUENCE -->
+<div id="boot">
+  <div class="wake-up" id="msg1">Wake up, investigator...</div>
+  <div class="wake-up" id="msg2">The Ledger has you...</div>
+  <div class="wake-up" id="msg3">Follow the white rabbit.</div>
+  
+  <div class="boot-ascii" id="ascii-art">
+   ____  __    _  _  __  __  ____  __  __  ___ 
+  / O  \(  )  ( \/ )(  \/  )(  _ \(  )(  )/ __)
+ (  O  / )(__  )  (  )    (  )___/ )(__)( \__ \ 
+  \___/ (____)(_\/\_)(_/\/\_)(__)  (______)(___/
+  :: CRYPTOGRAPHIC TRANSPARENCY PROTOCOL ::
+  </div>
+  <div class="boot-log" id="boot-log">
+    <div class="boot-line">[*] Disconnecting from the Matrix...</div>
+    <div class="boot-line">[*] Initializing Air-Gapped Environment...</div>
+    <div class="boot-line">[*] Loading BLAKE3 WASM interface...</div>
+    <div class="boot-line">[*] Injecting Poseidon Parameters...</div>
+    <div class="boot-line">[*] Sparse Merkle Tree [CD-HS-ST] ready.</div>
+    <div class="boot-line">[*] System offline. Trust the math.</div>
+  </div>
+</div>
+
+<!-- MAIN UI -->
+<div id="topbar">
+  <div class="topbar-title">OLYMPUS_TERMINAL</div>
+  <div class="topbar-badge" id="status-badge">OFFLINE</div>
+</div>
+
+<div id="content">
+  <!-- TAB: VERIFY -->
+  <div class="tab active" id="tab-verify">
+    <div class="card">
+      <div class="card-title">VERIFY PROOF BUNDLE</div>
+      <p style="font-size: 10px; color: var(--text-lo); margin-bottom: 12px;">Paste the leaked cryptographic bundle to independently verify the Merkle root.</p>
+      <textarea rows="6" placeholder='{"document_id":"...", "merkle_proof": {...}}'></textarea>
+      <button class="btn" onclick="alert('Verification protocol initiated...')">Decrypt & Verify</button>
+    </div>
+    
+    <div class="card">
+      <div class="card-title">LOCAL LEDGER STATUS</div>
+      <div style="font-size: 11px; line-height: 1.8;">
+        > ROOT: <span style="color: #fff">0x8f2a...c91e</span><br>
+        > RECORDS: 0<br>
+        > ALGORITHM: BLAKE3<br>
+        > NETWORK: AIR-GAPPED
+      </div>
+    </div>
+  </div>
+
+  <!-- TAB: REDACT -->
+  <div class="tab" id="tab-redact">
+    <div class="card">
+      <div class="card-title">SELECTIVE DISCLOSURE</div>
+      <p style="font-size: 10px; color: var(--text-lo); margin-bottom: 12px;">Generate a Zero-Knowledge sub-proof for journalists to publish.</p>
+      <select><option>Select a committed record...</option></select>
+      <button class="btn">Generate Sub-Proof</button>
+    </div>
+  </div>
+</div>
+
+<!-- NAV -->
+<div id="nav">
+  <button class="nav-btn active" onclick="switchTab('verify')">VERIFY</button>
+  <button class="nav-btn" onclick="switchTab('redact')">REDACT</button>
+  <button class="nav-btn" onclick="switchTab('config')">CONFIG</button>
+</div>
+
+<script>
+// ── MATRIX RAIN EFFECT ──
+const canvas = document.getElementById('matrix-canvas');
+const ctx = canvas.getContext('2d');
+canvas.width = window.innerWidth;
+canvas.height = window.innerHeight;
+const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789@#$%^&*ΩΞ'.split('');
+const fontSize = 14;
+const columns = canvas.width / fontSize;
+const drops = Array.from({length: columns}).fill(1);
+
+function drawMatrix() {
+  ctx.fillStyle = 'rgba(2, 2, 2, 0.05)';
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+  ctx.fillStyle = '#00ff41';
+  ctx.font = fontSize + 'px monospace';
+  for(let i=0; i<drops.length; i++) {
+    const text = chars[Math.floor(Math.random() * chars.length)];
+    ctx.fillText(text, i * fontSize, drops[i] * fontSize);
+    if(drops[i] * fontSize > canvas.height && Math.random() > 0.975) drops[i] = 0;
+    drops[i]++;
+  }
+}
+setInterval(drawMatrix, 33);
+
+// ── BOOT SEQUENCE ──
+setTimeout(() => document.getElementById('msg1').style.opacity = 1, 500);
+setTimeout(() => { document.getElementById('msg1').style.display = 'none'; document.getElementById('msg2').style.opacity = 1; }, 2500);
+setTimeout(() => { document.getElementById('msg2').style.display = 'none'; document.getElementById('msg3').style.opacity = 1; }, 4500);
+setTimeout(() => { 
+  document.getElementById('msg3').style.display = 'none';
+  document.getElementById('ascii-art').style.display = 'block';
+  
+  const lines = document.querySelectorAll('.boot-line');
+  lines.forEach((line, i) => {
+    setTimeout(() => line.classList.add('show'), 500 + (i * 400));
+  });
+
+  setTimeout(() => {
+    document.getElementById('boot').style.opacity = '0';
+    document.getElementById('boot').style.pointerEvents = 'none';
+    setTimeout(() => document.getElementById('boot').style.display = 'none', 500);
+  }, 500 + (lines.length * 400) + 800);
+}, 6500);
+
+// ── TAB SWITCHING ──
+function switchTab(id) {
+  document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+  document.querySelectorAll('.nav-btn').forEach(b => b.classList.remove('active'));
+  document.getElementById('tab-' + id)?.classList.add('active');
+  event.currentTarget.classList.add('active');
+}
+</script>
+</body>
+</html>
