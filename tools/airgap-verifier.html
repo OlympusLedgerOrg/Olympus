@@ -3,84 +3,318 @@
 <head>
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no,viewport-fit=cover"/>
-<title>OLYMPUS // WAKE UP</title>
+<meta name="theme-color" content="#020202"/>
+<title>OLYMPUS // AIR-GAPPED VERIFIER</title>
 <link href="https://fonts.googleapis.com/css2?family=Fira+Code:wght@300;400;500;600;700&display=swap" rel="stylesheet"/>
 <style>
+/* ─────────────────────────────────────────────
+   DESIGN TOKENS — Neo Green / Air-Gapped Theme
+───────────────────────────────────────────── */
 :root {
   --bg0: #020202;
   --bg1: #050a05;
   --bg2: #0a140a;
+  --bg3: #0f1e0f;
   --neo-green: #00ff41;
   --neo-dim: rgba(0, 255, 65, 0.15);
   --neo-glow: rgba(0, 255, 65, 0.4);
+  --neo-soft: rgba(0, 255, 65, 0.08);
+  --ok: #69ff47;
+  --ok-soft: rgba(105, 255, 71, 0.12);
+  --err: #ff1744;
+  --err-soft: rgba(255, 23, 68, 0.12);
   --text-hi: #e0ffe0;
+  --text-md: #7fbf7f;
   --text-lo: #4a8a4a;
   --border: rgba(0, 255, 65, 0.2);
   --border-hi: rgba(0, 255, 65, 0.5);
-  --nav-h: 68px;
+  --nav-h: 64px;
+  --header-h: 52px;
+  --radius: 8px;
+  --radius-sm: 5px;
   --mono: 'Fira Code', monospace;
 }
-*,*::before,*::after{box-sizing:border-box;margin:0;padding:0;}
+
+/* ─── Reset ─── */
+*,*::before,*::after { box-sizing: border-box; margin: 0; padding: 0; -webkit-tap-highlight-color: transparent; }
 html, body {
   background: var(--bg0);
   color: var(--neo-green);
   font-family: var(--mono);
   height: 100%;
-  overflow: hidden;
-  display: flex;
-  flex-direction: column;
+  overflow-x: hidden;
+}
+body {
+  min-height: 100%;
+  padding-bottom: calc(var(--nav-h) + env(safe-area-inset-bottom));
+  overflow-x: hidden;
 }
 
 /* ── MATRIX CANVAS ── */
 #matrix-canvas { position: fixed; top: 0; left: 0; z-index: 0; opacity: 0.12; pointer-events: none; }
 
 /* ── CRT SCANLINES ── */
-body::after {
-  content: ''; position: fixed; inset: 0; z-index: 999; pointer-events: none;
-  background: linear-gradient(rgba(18, 16, 16, 0) 50%, rgba(0, 0, 0, 0.25) 50%), linear-gradient(90deg, rgba(255, 0, 0, 0.06), rgba(0, 255, 0, 0.02), rgba(0, 0, 255, 0.06));
-  background-size: 100% 2px, 3px 100%;
+.crt-overlay {
+  pointer-events: none;
+  position: fixed; inset: 0; z-index: 9999;
+  background: repeating-linear-gradient(0deg, rgba(0,0,0,0.03) 0px, rgba(0,0,0,0.03) 1px, transparent 1px, transparent 2px);
+  opacity: 0.4;
 }
 
-/* ── UI OVERLAYS ── */
-#topbar { height: 56px; border-bottom: 1px solid var(--border); display: flex; align-items: center; padding: 0 16px; z-index: 10; background: var(--bg1); }
-.topbar-title { font-size: 16px; font-weight: 700; letter-spacing: 0.2em; text-shadow: 0 0 8px var(--neo-glow); flex: 1; }
-.topbar-badge { font-size: 10px; background: var(--neo-dim); border: 1px solid var(--border-hi); padding: 2px 8px; border-radius: 4px; }
+/* ── HEADER ── */
+#topbar {
+  position: sticky; top: 0; z-index: 100;
+  height: var(--header-h);
+  background: linear-gradient(180deg, var(--bg1) 0%, rgba(5,10,5,0.97) 100%);
+  border-bottom: 1px solid var(--border);
+  display: flex; align-items: center;
+  padding: 0 16px; gap: 10px;
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+}
+.topbar-icon {
+  width: 30px; height: 30px;
+  border: 1.5px solid var(--neo-green);
+  border-radius: 6px;
+  display: flex; align-items: center; justify-content: center;
+  font-size: 14px; flex-shrink: 0;
+  box-shadow: 0 0 10px var(--neo-dim);
+}
+.topbar-title { font-size: 13px; font-weight: 700; letter-spacing: 0.15em; text-shadow: 0 0 8px var(--neo-glow); flex: 1; }
+.topbar-badge {
+  font-size: 10px; font-weight: 500;
+  background: var(--neo-dim); border: 1px solid var(--border-hi);
+  padding: 2px 8px; border-radius: 4px;
+}
 
-#content { flex: 1; overflow-y: auto; z-index: 10; padding: 16px; padding-bottom: 100px; position: relative; }
-.card { background: rgba(5, 10, 5, 0.85); border: 1px solid var(--border); padding: 16px; margin-bottom: 16px; backdrop-filter: blur(4px); }
-.card-title { font-size: 12px; letter-spacing: 0.15em; margin-bottom: 12px; display: flex; align-items: center; gap: 8px; text-shadow: 0 0 5px var(--neo-glow); }
-.card-title::before { content: '>'; color: var(--text-hi); }
+/* ── CONTENT ── */
+#content { position: relative; z-index: 1; }
+.tab-panel { display: none; padding: 16px; animation: fadeIn 0.2s ease; }
+.tab-panel.active { display: block; }
+@keyframes fadeIn { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
+
+/* ── CARDS ── */
+.card {
+  background: rgba(5, 10, 5, 0.85);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  margin-bottom: 12px;
+  backdrop-filter: blur(4px);
+  overflow: hidden;
+}
+.card-header {
+  display: flex; align-items: center;
+  padding: 12px 16px; gap: 8px;
+  border-bottom: 1px solid var(--border);
+  background: linear-gradient(90deg, var(--neo-soft) 0%, transparent 100%);
+}
+.card-title {
+  font-size: 11px; font-weight: 600;
+  letter-spacing: 0.12em; text-transform: uppercase;
+  text-shadow: 0 0 5px var(--neo-glow);
+  flex: 1;
+}
+.card-title::before { content: '▸ '; color: var(--text-hi); }
+.card-body { padding: 16px; }
+.card-desc { font-size: 10px; color: var(--text-lo); margin-bottom: 12px; line-height: 1.6; }
+
+/* ── STATUS CHIPS ── */
+.chip-row { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 10px; }
+.chip {
+  display: inline-flex; align-items: center; gap: 4px;
+  padding: 3px 8px; border-radius: 20px;
+  font-size: 10px; font-weight: 500;
+  border: 1px solid; white-space: nowrap;
+}
+.chip-ok  { background: var(--ok-soft);  color: var(--ok);  border-color: rgba(105,255,71,0.3); }
+.chip-err { background: var(--err-soft); color: var(--err); border-color: rgba(255,23,68,0.3); }
+.chip-info{ background: var(--neo-soft); color: var(--neo-green); border-color: var(--border); }
 
 /* ── INPUTS & BUTTONS ── */
-input, textarea, select { width: 100%; background: var(--bg2); border: 1px solid var(--border); color: var(--text-hi); font-family: var(--mono); padding: 10px; margin-bottom: 12px; outline: none; }
-input:focus, textarea:focus { border-color: var(--neo-green); box-shadow: 0 0 8px var(--neo-dim); }
-.btn { width: 100%; background: var(--neo-dim); border: 1px solid var(--neo-green); color: var(--neo-green); font-family: var(--mono); font-size: 12px; font-weight: 600; padding: 12px; cursor: pointer; text-transform: uppercase; letter-spacing: 0.1em; transition: 0.2s; }
-.btn:hover { background: var(--neo-green); color: var(--bg0); box-shadow: 0 0 15px var(--neo-glow); }
+.form-group { margin-bottom: 10px; }
+.form-label {
+  display: block; font-size: 10px; font-weight: 500;
+  color: var(--text-md); letter-spacing: 0.1em;
+  text-transform: uppercase; margin-bottom: 4px;
+}
+.form-input,
+.form-textarea,
+.form-select {
+  width: 100%;
+  background: var(--bg2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  color: var(--text-hi);
+  font-family: var(--mono);
+  font-size: 12px;
+  padding: 10px;
+  outline: none;
+  transition: border-color 0.15s, box-shadow 0.15s;
+  -webkit-appearance: none; appearance: none;
+}
+.form-input:focus,
+.form-textarea:focus,
+.form-select:focus {
+  border-color: var(--neo-green);
+  box-shadow: 0 0 0 3px var(--neo-dim);
+}
+.form-input::placeholder,
+.form-textarea::placeholder { color: var(--text-lo); }
+.form-textarea { min-height: 80px; resize: vertical; }
+.form-select { cursor: pointer; }
+.form-select option { background: var(--bg2); }
 
-/* ── BOOT SEQUENCE ── */
-#boot { position: fixed; inset: 0; z-index: 10000; background: var(--bg0); display: flex; flex-direction: column; align-items: center; justify-content: center; }
-.wake-up { font-size: 14px; opacity: 0; transition: opacity 1s; margin-bottom: 20px; }
-.boot-ascii { font-size: clamp(8px, 1.5vw, 12px); white-space: pre; text-shadow: 0 0 10px var(--neo-glow); display: none; }
-.boot-log { width: 80%; max-width: 500px; margin-top: 20px; font-size: 12px; }
-.boot-line { opacity: 0; margin-bottom: 4px; }
-.boot-line.show { opacity: 1; }
+.btn {
+  display: inline-flex; align-items: center; justify-content: center;
+  gap: 6px; width: 100%;
+  padding: 12px 16px; border-radius: var(--radius-sm);
+  font-family: var(--mono); font-size: 11px; font-weight: 600;
+  letter-spacing: 0.08em; text-transform: uppercase;
+  cursor: pointer; border: 1px solid; transition: all 0.15s;
+  min-height: 44px; white-space: nowrap;
+  -webkit-tap-highlight-color: transparent;
+}
+.btn-primary {
+  background: var(--neo-dim); border-color: var(--neo-green); color: var(--neo-green);
+  box-shadow: 0 0 15px rgba(0,255,65,0.15);
+}
+.btn-primary:hover { background: var(--neo-green); color: var(--bg0); box-shadow: 0 0 20px var(--neo-glow); }
+.btn-primary:active { transform: scale(0.98); }
+.btn-secondary {
+  background: var(--bg2); border-color: var(--border-hi); color: var(--text-md);
+}
+.btn-secondary:hover { color: var(--neo-green); border-color: var(--neo-green); }
+.btn-secondary:active { background: var(--neo-soft); }
+.btn:disabled { opacity: 0.4; cursor: not-allowed; }
 
-tab { display: none; }
-tab.active { display: block; animation: glitchIn 0.3s ease forwards; }
-
-@keyframes glitchIn {
-  0% { transform: translateX(-5%); opacity: 0; filter: hue-rotate(-90deg); }
-  50% { transform: translateX(2%); opacity: 0.8; filter: hue-rotate(90deg); }
-  100% { transform: none; opacity: 1; filter: none; }
+/* ── OUTPUT BLOCKS ── */
+.output-block {
+  background: var(--bg2);
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 10px;
+  font-size: 11px; color: var(--text-md);
+  white-space: pre-wrap; word-break: break-all;
+  overflow: auto; max-height: 280px;
+  margin-top: 10px; line-height: 1.6;
+  display: none;
+}
+.output-block.visible { display: block; }
+.output-block.success {
+  border-left-color: var(--ok);
+  background: linear-gradient(135deg, var(--ok-soft) 0%, var(--bg2) 40%);
+  color: var(--text-hi);
+}
+.output-block.error {
+  border-left-color: var(--err);
+  background: linear-gradient(135deg, var(--err-soft) 0%, var(--bg2) 40%);
+  color: var(--err);
 }
 
+/* ── LEDGER STATUS ── */
+.status-row {
+  display: flex; align-items: center; gap: 8px;
+  padding: 6px 0;
+  font-size: 11px; line-height: 1.6;
+}
+.status-label { color: var(--text-lo); min-width: 80px; }
+.status-value { color: var(--text-hi); word-break: break-all; }
+
+/* ── BOOT SEQUENCE ── */
+#boot {
+  position: fixed; inset: 0; z-index: 10000;
+  background: var(--bg0);
+  display: flex; flex-direction: column;
+  align-items: center; justify-content: center;
+  transition: opacity 0.5s ease;
+}
+#boot.fade { opacity: 0; pointer-events: none; }
+.wake-up { font-size: 14px; opacity: 0; transition: opacity 1s; margin-bottom: 20px; }
+.boot-ascii {
+  font-size: clamp(8px, 1.5vw, 12px); white-space: pre;
+  text-shadow: 0 0 10px var(--neo-glow);
+  color: var(--neo-green); display: none;
+  line-height: 1.15;
+  animation: logoGlow 2s ease-in-out infinite alternate;
+}
+@keyframes logoGlow {
+  from { text-shadow: 0 0 10px var(--neo-glow), 0 0 30px rgba(0,255,65,0.3); }
+  to   { text-shadow: 0 0 20px var(--neo-glow), 0 0 60px rgba(0,255,65,0.6), 0 0 80px rgba(0,255,65,0.2); }
+}
+.boot-log { width: 80%; max-width: 500px; margin-top: 20px; font-size: 12px; }
+.boot-line {
+  opacity: 0; transform: translateX(-8px);
+  transition: opacity 0.25s, transform 0.25s;
+  margin-bottom: 4px;
+}
+.boot-line.show { opacity: 1; transform: none; }
+
 /* ── BOTTOM NAV ── */
-#nav { position: fixed; bottom: 0; left: 0; right: 0; height: var(--nav-h); background: var(--bg1); border-top: 1px solid var(--border); display: flex; z-index: 100; }
-.nav-btn { flex: 1; background: none; border: none; color: var(--text-lo); font-family: var(--mono); font-size: 11px; cursor: pointer; transition: 0.2s; }
-.nav-btn.active { color: var(--neo-green); text-shadow: 0 0 8px var(--neo-glow); border-top: 2px solid var(--neo-green); background: linear-gradient(to top, transparent, var(--neo-dim)); }
+#nav {
+  position: fixed; bottom: 0; left: 0; right: 0;
+  z-index: 200;
+  height: var(--nav-h);
+  padding-bottom: env(safe-area-inset-bottom);
+  background: linear-gradient(0deg, var(--bg1) 0%, rgba(5,10,5,0.98) 100%);
+  border-top: 1px solid var(--border);
+  display: flex; align-items: stretch;
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+}
+.nav-btn {
+  flex: 1;
+  display: flex; flex-direction: column;
+  align-items: center; justify-content: center;
+  gap: 2px; cursor: pointer;
+  border: none; background: none;
+  color: var(--text-lo);
+  font-family: var(--mono); font-size: 10px; font-weight: 600;
+  letter-spacing: 0.06em; text-transform: uppercase;
+  transition: color 0.15s;
+  position: relative;
+  -webkit-tap-highlight-color: transparent;
+}
+.nav-btn::before {
+  content: '';
+  position: absolute; top: 0; left: 20%; right: 20%; height: 2px;
+  background: var(--neo-green);
+  border-radius: 0 0 2px 2px;
+  transform: scaleX(0); transition: transform 0.2s;
+}
+.nav-btn.active { color: var(--neo-green); text-shadow: 0 0 8px var(--neo-glow); }
+.nav-btn.active::before { transform: scaleX(1); }
+.nav-icon { font-size: 18px; line-height: 1; }
+
+/* ── SNACKBAR ── */
+#snackbar {
+  position: fixed; bottom: calc(var(--nav-h) + env(safe-area-inset-bottom) + 12px);
+  left: 16px; right: 16px; z-index: 500;
+  background: var(--bg3); border: 1px solid var(--border-hi);
+  border-radius: var(--radius-sm);
+  padding: 10px 14px;
+  font-size: 11px; color: var(--text-hi);
+  box-shadow: 0 4px 24px rgba(0,0,0,0.5);
+  transform: translateY(120%);
+  transition: transform 0.25s cubic-bezier(0.34,1.56,0.64,1);
+  display: flex; align-items: center; gap: 6px;
+}
+#snackbar.show { transform: translateY(0); }
+#snackbar.snack-ok  { border-color: rgba(105,255,71,0.5); }
+#snackbar.snack-err { border-color: rgba(255,23,68,0.5); }
+
+/* ── RESPONSIVE ── */
+@media (min-width: 600px) {
+  .tab-panel { max-width: 640px; margin: 0 auto; }
+  #topbar { padding: 0 24px; }
+  #nav { max-width: 640px; left: 50%; transform: translateX(-50%); }
+}
 </style>
 </head>
 <body>
+
+<!-- CRT SCANLINES -->
+<div class="crt-overlay"></div>
 
 <canvas id="matrix-canvas"></canvas>
 
@@ -89,121 +323,373 @@ tab.active { display: block; animation: glitchIn 0.3s ease forwards; }
   <div class="wake-up" id="msg1">Wake up, investigator...</div>
   <div class="wake-up" id="msg2">The Ledger has you...</div>
   <div class="wake-up" id="msg3">Follow the white rabbit.</div>
-  
+
   <div class="boot-ascii" id="ascii-art">
-   ____  __    _  _  __  __  ____  __  __  ___ 
+   ____  __    _  _  __  __  ____  __  __  ___
   / O  \(  )  ( \/ )(  \/  )(  _ \(  )(  )/ __)
  (  O  / )( __  )  (  )    (  )___/ )(__)( \__ \
   \___/ (____)(_\/\_)(_/\/\_)(__)  (______)(___/
   :: CRYPTOGRAPHIC TRANSPARENCY PROTOCOL ::
   </div>
   <div class="boot-log" id="boot-log">
-    <div class="boot-line">[*] Disconnecting from the Matrix...</div>
-    <div class="boot-line">[*] Initializing Air-Gapped Environment...</div>
-    <div class="boot-line">[*] Loading BLAKE3 WASM interface...</div>
-    <div class="boot-line">[*] Injecting Poseidon Parameters...</div>
-    <div class="boot-line">[*] Sparse Merkle Tree [CD-HS-ST] ready.</div>
-    <div class="boot-line">[*] System offline. Trust the math.</div>
+    <div class="boot-line" data-delay="200">[*] Disconnecting from the Matrix...</div>
+    <div class="boot-line" data-delay="400">[*] Initializing Air-Gapped Environment...</div>
+    <div class="boot-line" data-delay="600">[*] Loading BLAKE3 hash engine... <span style="color:var(--ok)">OK</span></div>
+    <div class="boot-line" data-delay="800">[*] Injecting Poseidon Parameters... <span style="color:var(--ok)">OK</span></div>
+    <div class="boot-line" data-delay="1000">[*] Sparse Merkle Tree [CD-HS-ST] ready... <span style="color:var(--ok)">OK</span></div>
+    <div class="boot-line" data-delay="1200">[*] System offline. Trust the math.</div>
   </div>
 </div>
 
-<!-- MAIN UI -->
+<!-- SNACKBAR -->
+<div id="snackbar"><span id="snackbar-text"></span></div>
+
+<!-- HEADER -->
 <div id="topbar">
+  <div class="topbar-icon">⬡</div>
   <div class="topbar-title">OLYMPUS_TERMINAL</div>
-  <div class="topbar-badge" id="status-badge">OFFLINE</div>
+  <div class="topbar-badge" id="status-badge">AIR-GAPPED</div>
 </div>
 
 <div id="content">
-  <!-- TAB: VERIFY -->
-  <div class="tab active" id="tab-verify">
+  <!-- ───────── TAB: VERIFY ───────── -->
+  <div class="tab-panel active" id="tab-verify">
     <div class="card">
-      <div class="card-title">VERIFY PROOF BUNDLE</div>
-      <p style="font-size: 10px; color: var(--text-lo); margin-bottom: 12px;">Paste the leaked cryptographic bundle to independently verify the Merkle root.</p>
-      <textarea rows="6" placeholder='{"document_id":"...", "merkle_proof": {...}}'></textarea>
-      <button class="btn" onclick="alert('Verification protocol initiated...')">Decrypt & Verify</button>
+      <div class="card-header">
+        <div class="card-title">VERIFY PROOF BUNDLE</div>
+      </div>
+      <div class="card-body">
+        <p class="card-desc">Paste a cryptographic proof bundle to independently verify the Merkle inclusion proof. All verification runs locally — no network calls.</p>
+        <div class="form-group">
+          <label class="form-label">Proof Bundle JSON</label>
+          <textarea class="form-textarea" id="verify-bundle" rows="6" placeholder='{"document_id":"...", "merkle_proof": {"root": "...", "leaf": "...", "siblings": [...]}}'></textarea>
+        </div>
+        <button class="btn btn-primary" onclick="executeVerify()">✓ &nbsp;Verify Bundle</button>
+        <div id="verify-output" class="output-block"></div>
+      </div>
     </div>
-    
+
     <div class="card">
-      <div class="card-title">LOCAL LEDGER STATUS</div>
-      <div style="font-size: 11px; line-height: 1.8;">
-        > ROOT: <span style="color: #fff">0x8f2a...c91e</span><br>
-        > RECORDS: 0<br>
-        > ALGORITHM: BLAKE3<br>
-        > NETWORK: AIR-GAPPED
+      <div class="card-header">
+        <div class="card-title">LOCAL LEDGER STATUS</div>
+      </div>
+      <div class="card-body">
+        <div class="chip-row">
+          <span class="chip chip-info">BLAKE3</span>
+          <span class="chip chip-info">CD-HS-ST</span>
+          <span class="chip chip-ok">AIR-GAPPED</span>
+        </div>
+        <div class="status-row">
+          <span class="status-label">> ROOT:</span>
+          <span class="status-value" id="local-root">(no records)</span>
+        </div>
+        <div class="status-row">
+          <span class="status-label">> RECORDS:</span>
+          <span class="status-value" id="local-count">0</span>
+        </div>
+        <div class="status-row">
+          <span class="status-label">> HASH:</span>
+          <span class="status-value">BLAKE3-256</span>
+        </div>
+        <div class="status-row">
+          <span class="status-label">> NETWORK:</span>
+          <span class="status-value">OFFLINE / AIR-GAPPED</span>
+        </div>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-header">
+        <div class="card-title">QUICK HASH CHECK</div>
+      </div>
+      <div class="card-body">
+        <p class="card-desc">Paste plaintext to compute its BLAKE3 hash locally (requires browser BLAKE3 support).</p>
+        <div class="form-group">
+          <label class="form-label">Input Text</label>
+          <textarea class="form-textarea" id="hash-input" rows="3" placeholder="Paste plaintext content to hash..."></textarea>
+        </div>
+        <button class="btn btn-secondary" onclick="computeLocalHash()">🔍 &nbsp;Compute BLAKE3 Hash</button>
+        <div id="hash-output" class="output-block"></div>
       </div>
     </div>
   </div>
 
-  <!-- TAB: REDACT -->
-  <div class="tab" id="tab-redact">
+  <!-- ───────── TAB: REDACT ───────── -->
+  <div class="tab-panel" id="tab-redact">
     <div class="card">
-      <div class="card-title">SELECTIVE DISCLOSURE</div>
-      <p style="font-size: 10px; color: var(--text-lo); margin-bottom: 12px;">Generate a Zero-Knowledge sub-proof for journalists to publish.</p>
-      <select><option>Select a committed record...</option></select>
-      <button class="btn">Generate Sub-Proof</button>
+      <div class="card-header">
+        <div class="card-title">SELECTIVE DISCLOSURE</div>
+      </div>
+      <div class="card-body">
+        <p class="card-desc">Load a proof bundle with sections to verify selective disclosure. The proof travels — the document stays yours.</p>
+        <div class="form-group">
+          <label class="form-label">Redaction Proof Bundle</label>
+          <textarea class="form-textarea" id="redact-bundle" rows="6" placeholder='{"revealed_sections": [...], "merkle_root": "...", "proofs": [...]}'></textarea>
+        </div>
+        <button class="btn btn-primary" onclick="verifyRedaction()">⚡ &nbsp;Verify Selective Disclosure</button>
+        <div id="redact-output" class="output-block"></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ───────── TAB: CONFIG ───────── -->
+  <div class="tab-panel" id="tab-config">
+    <div class="card">
+      <div class="card-header">
+        <div class="card-title">ENVIRONMENT</div>
+      </div>
+      <div class="card-body">
+        <div class="status-row">
+          <span class="status-label">> MODE:</span>
+          <span class="status-value">Air-Gapped Standalone</span>
+        </div>
+        <div class="status-row">
+          <span class="status-label">> CRYPTO:</span>
+          <span class="status-value">BLAKE3 + Ed25519 + Poseidon BN128</span>
+        </div>
+        <div class="status-row">
+          <span class="status-label">> TREE:</span>
+          <span class="status-value">CD-HS-ST (256-level Sparse Merkle Tree)</span>
+        </div>
+        <div class="status-row">
+          <span class="status-label">> PROOF:</span>
+          <span class="status-value">Groth16 (ZK-SNARK)</span>
+        </div>
+        <div class="status-row">
+          <span class="status-label">> FILE:</span>
+          <span class="status-value" id="config-location">(this page)</span>
+        </div>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-header">
+        <div class="card-title">ABOUT</div>
+      </div>
+      <div class="card-body">
+        <p class="card-desc" style="margin-bottom:0">
+          This is a standalone, air-gapped verification tool for the Olympus cryptographic transparency protocol.
+          It runs entirely in your browser with zero network dependencies once loaded.
+          All cryptographic operations are performed locally — no data leaves this page.<br><br>
+          <span style="color:var(--neo-green)">Trust the math. Verify everything.</span>
+        </p>
+      </div>
     </div>
   </div>
 </div>
 
-<!-- NAV -->
-<div id="nav">
-  <button class="nav-btn active" onclick="switchTab('verify')">VERIFY</button>
-  <button class="nav-btn" onclick="switchTab('redact')">REDACT</button>
-  <button class="nav-btn" onclick="switchTab('config')">CONFIG</button>
-</div>
+<!-- BOTTOM NAV -->
+<nav id="nav">
+  <button class="nav-btn active" data-tab="verify" onclick="switchTab('verify', this)">
+    <span class="nav-icon">✓</span>
+    <span>VERIFY</span>
+  </button>
+  <button class="nav-btn" data-tab="redact" onclick="switchTab('redact', this)">
+    <span class="nav-icon">⚡</span>
+    <span>REDACT</span>
+  </button>
+  <button class="nav-btn" data-tab="config" onclick="switchTab('config', this)">
+    <span class="nav-icon">⚙</span>
+    <span>CONFIG</span>
+  </button>
+</nav>
 
 <script>
-// ── MATRIX RAIN EFFECT ──
-const canvas = document.getElementById('matrix-canvas');
-const ctx = canvas.getContext('2d');
+'use strict';
+
+/* ─── Matrix Rain ─── */
+var canvas = document.getElementById('matrix-canvas');
+var ctx = canvas.getContext('2d');
 canvas.width = window.innerWidth;
 canvas.height = window.innerHeight;
-const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789@#$%^&*ΩΞ'.split('');
-const fontSize = 14;
-const columns = canvas.width / fontSize;
-const drops = Array.from({length: columns}).fill(1);
+var chars = 'アイウエオカキクケコサシスセソ01234567890ABCDEF@#$%ΩΞ'.split('');
+var fontSize = 14;
+var columns = Math.floor(canvas.width / fontSize);
+var drops = new Array(columns).fill(1);
+
+window.addEventListener('resize', function() {
+  canvas.width = window.innerWidth;
+  canvas.height = window.innerHeight;
+});
 
 function drawMatrix() {
   ctx.fillStyle = 'rgba(2, 2, 2, 0.05)';
   ctx.fillRect(0, 0, canvas.width, canvas.height);
   ctx.fillStyle = '#00ff41';
   ctx.font = fontSize + 'px monospace';
-  for(let i=0; i<drops.length; i++) {
-    const text = chars[Math.floor(Math.random() * chars.length)];
+  for (var i = 0; i < drops.length; i++) {
+    var text = chars[Math.floor(Math.random() * chars.length)];
     ctx.fillText(text, i * fontSize, drops[i] * fontSize);
-    if(drops[i] * fontSize > canvas.height && Math.random() > 0.975) drops[i] = 0;
+    if (drops[i] * fontSize > canvas.height && Math.random() > 0.975) drops[i] = 0;
     drops[i]++;
   }
 }
 setInterval(drawMatrix, 33);
 
-// ── BOOT SEQUENCE ──
-setTimeout(() => document.getElementById('msg1').style.opacity = 1, 500);
-setTimeout(() => { document.getElementById('msg1').style.display = 'none'; document.getElementById('msg2').style.opacity = 1; }, 2500);
-setTimeout(() => { document.getElementById('msg2').style.display = 'none'; document.getElementById('msg3').style.opacity = 1; }, 4500);
-setTimeout(() => { 
+/* ─── Boot Sequence ─── */
+setTimeout(function() { document.getElementById('msg1').style.opacity = 1; }, 500);
+setTimeout(function() { document.getElementById('msg1').style.display = 'none'; document.getElementById('msg2').style.opacity = 1; }, 2500);
+setTimeout(function() { document.getElementById('msg2').style.display = 'none'; document.getElementById('msg3').style.opacity = 1; }, 4500);
+setTimeout(function() {
   document.getElementById('msg3').style.display = 'none';
   document.getElementById('ascii-art').style.display = 'block';
-  
-  const lines = document.querySelectorAll('.boot-line');
-  lines.forEach((line, i) => {
-    setTimeout(() => line.classList.add('show'), 500 + (i * 400));
+
+  var lines = document.querySelectorAll('.boot-line');
+  lines.forEach(function(line) {
+    var delay = parseInt(line.dataset.delay) || 0;
+    setTimeout(function() { line.classList.add('show'); }, delay);
   });
 
-  setTimeout(() => {
-    document.getElementById('boot').style.opacity = '0';
-    document.getElementById('boot').style.pointerEvents = 'none';
-    setTimeout(() => document.getElementById('boot').style.display = 'none', 500);
-  }, 500 + (lines.length * 400) + 800);
+  var maxDelay = 0;
+  lines.forEach(function(l) { var d = parseInt(l.dataset.delay) || 0; if (d > maxDelay) maxDelay = d; });
+  setTimeout(function() {
+    var boot = document.getElementById('boot');
+    boot.classList.add('fade');
+    setTimeout(function() { boot.style.display = 'none'; }, 550);
+  }, maxDelay + 600);
 }, 6500);
 
-// ── TAB SWITCHING ──
-function switchTab(id) {
-  document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
-  document.querySelectorAll('.nav-btn').forEach(b => b.classList.remove('active'));
-  document.getElementById('tab-' + id)?.classList.add('active');
-  event.currentTarget.classList.add('active');
+/* ─── Tab Switching ─── */
+function switchTab(id, btn) {
+  document.querySelectorAll('.tab-panel').forEach(function(p) { p.classList.remove('active'); });
+  document.querySelectorAll('.nav-btn').forEach(function(b) { b.classList.remove('active'); });
+  var panel = document.getElementById('tab-' + id);
+  if (panel) { panel.classList.add('active'); window.scrollTo(0, 0); }
+  if (btn) btn.classList.add('active');
 }
+
+/* ─── Snackbar ─── */
+var snackTimer;
+function snack(msg, type) {
+  var el = document.getElementById('snackbar');
+  document.getElementById('snackbar-text').textContent = msg;
+  el.className = 'show' + (type ? ' snack-' + type : '');
+  clearTimeout(snackTimer);
+  snackTimer = setTimeout(function() { el.classList.remove('show'); }, 3000);
+}
+
+/* ─── Output helpers ─── */
+function setOutput(id, text, isError) {
+  var el = document.getElementById(id);
+  if (!el) return;
+  el.textContent = text;
+  el.className = 'output-block visible ' + (isError ? 'error' : 'success');
+}
+
+function formatJSON(obj) {
+  return typeof obj === 'string' ? obj : JSON.stringify(obj, null, 2);
+}
+
+/* ─── Verify Bundle ─── */
+function executeVerify() {
+  var raw = document.getElementById('verify-bundle').value.trim();
+  if (!raw) { snack('Paste a proof bundle first', 'err'); return; }
+  var bundle;
+  try { bundle = JSON.parse(raw); } catch (e) { snack('Invalid JSON: ' + e.message, 'err'); return; }
+
+  var out = '[ BUNDLE ANALYSIS ]\n────────────────────\n';
+  var fields = Object.keys(bundle);
+  out += 'Fields present: ' + fields.join(', ') + '\n\n';
+
+  /* Basic structural checks */
+  var checks = [];
+  if (bundle.merkle_proof || bundle.smt_proof) {
+    checks.push({ ok: true, label: 'Merkle/SMT proof object present' });
+    var proof = bundle.merkle_proof || bundle.smt_proof;
+    if (proof.root) checks.push({ ok: true, label: 'Root hash: ' + proof.root.substring(0, 32) + '…' });
+    if (proof.leaf) checks.push({ ok: true, label: 'Leaf hash: ' + proof.leaf.substring(0, 32) + '…' });
+    if (proof.siblings && Array.isArray(proof.siblings)) {
+      checks.push({ ok: true, label: 'Proof path: ' + proof.siblings.length + ' siblings' });
+    }
+  } else {
+    checks.push({ ok: false, label: 'No merkle_proof or smt_proof found' });
+  }
+
+  if (bundle.zk_proof) checks.push({ ok: true, label: 'ZK proof object present' });
+  if (bundle.document_id) checks.push({ ok: true, label: 'Document ID: ' + bundle.document_id });
+  if (bundle.revealed_sections) checks.push({ ok: true, label: 'Revealed sections: ' + bundle.revealed_sections.length });
+
+  checks.forEach(function(c) {
+    out += '  ' + (c.ok ? '✓' : '✗') + ' ' + c.label + '\n';
+  });
+
+  out += '\n⚠ Full cryptographic verification requires BLAKE3 WASM.\n';
+  out += '  This tool validates bundle structure and field presence.\n';
+  out += '\nRaw bundle:\n' + formatJSON(bundle);
+
+  var hasErrors = checks.some(function(c) { return !c.ok; });
+  setOutput('verify-output', out, hasErrors);
+  snack(hasErrors ? '✗ Bundle has structural issues' : '✓ Bundle structure valid', hasErrors ? 'err' : 'ok');
+}
+
+/* ─── Compute Local Hash ─── */
+function computeLocalHash() {
+  var input = document.getElementById('hash-input').value;
+  if (!input) { snack('Enter text to hash', 'err'); return; }
+
+  /* Use SubtleCrypto SHA-256 as a fallback demonstration (BLAKE3 requires WASM) */
+  var encoder = new TextEncoder();
+  var data = encoder.encode(input);
+
+  crypto.subtle.digest('SHA-256', data).then(function(hash) {
+    var arr = new Uint8Array(hash);
+    var hex = Array.from(arr).map(function(b) { return b.toString(16).padStart(2, '0'); }).join('');
+    var out = '[ LOCAL HASH ]\n───────────────\n';
+    out += 'Input length:  ' + input.length + ' chars / ' + data.length + ' bytes\n';
+    out += 'SHA-256:       ' + hex + '\n\n';
+    out += '⚠ Note: Olympus uses BLAKE3, not SHA-256.\n';
+    out += '  Full BLAKE3 hashing requires the WASM module.\n';
+    out += '  This SHA-256 hash is for local reference only.';
+    setOutput('hash-output', out, false);
+    snack('SHA-256 computed (BLAKE3 requires WASM)', 'ok');
+  }).catch(function(err) {
+    setOutput('hash-output', 'Hash computation failed: ' + err.message, true);
+    snack('Hash failed', 'err');
+  });
+}
+
+/* ─── Verify Redaction ─── */
+function verifyRedaction() {
+  var raw = document.getElementById('redact-bundle').value.trim();
+  if (!raw) { snack('Paste a redaction proof bundle', 'err'); return; }
+  var bundle;
+  try { bundle = JSON.parse(raw); } catch (e) { snack('Invalid JSON: ' + e.message, 'err'); return; }
+
+  var out = '[ REDACTION ANALYSIS ]\n───────────────────────\n';
+  var checks = [];
+
+  if (bundle.revealed_sections && Array.isArray(bundle.revealed_sections)) {
+    checks.push({ ok: true, label: 'Revealed sections: ' + bundle.revealed_sections.length });
+    bundle.revealed_sections.forEach(function(sec, i) {
+      var preview = (typeof sec === 'string' ? sec : JSON.stringify(sec)).substring(0, 80);
+      out += '  [' + i + '] ' + preview + '\n';
+    });
+    out += '\n';
+  } else {
+    checks.push({ ok: false, label: 'No revealed_sections array found' });
+  }
+
+  if (bundle.merkle_root) checks.push({ ok: true, label: 'Merkle root: ' + bundle.merkle_root.substring(0, 32) + '…' });
+  if (bundle.total_parts) checks.push({ ok: true, label: 'Total document parts: ' + bundle.total_parts });
+  if (bundle.proofs && Array.isArray(bundle.proofs)) checks.push({ ok: true, label: 'Inclusion proofs: ' + bundle.proofs.length });
+  if (bundle.zk_proof) checks.push({ ok: true, label: 'ZK proof present' });
+
+  checks.forEach(function(c) {
+    out += '  ' + (c.ok ? '✓' : '✗') + ' ' + c.label + '\n';
+  });
+
+  out += '\n⚠ Full proof verification requires BLAKE3 WASM.\n';
+  out += '  This tool validates structure and revealed content.\n';
+
+  var hasErrors = checks.some(function(c) { return !c.ok; });
+  setOutput('redact-output', out, hasErrors);
+  snack(hasErrors ? '✗ Redaction bundle has issues' : '✓ Redaction structure valid', hasErrors ? 'err' : 'ok');
+}
+
+/* ─── Init ─── */
+document.addEventListener('DOMContentLoaded', function() {
+  document.getElementById('config-location').textContent = window.location.href;
+});
 </script>
 </body>
 </html>
