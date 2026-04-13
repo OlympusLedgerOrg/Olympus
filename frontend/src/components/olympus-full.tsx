@@ -1,21 +1,22 @@
 /**
- * olympus-full.jsx — Olympus Public Verification Dashboard
+ * olympus-full.tsx — Olympus Public Verification Dashboard
  * "Project Mayhem" Edition
  *
  * Self-contained React component for journalists and activists to verify
- * ledger proofs independently, without placing any trust in the Olympus servers.
+ * ledger proofs independently, placing no trust in the Olympus servers.
  *
  * Features
  * ────────
  * • WASM-backed BLAKE3 hashing — files are hashed locally; they never leave the device
  * • Canonical JSON encoder (JCS / RFC 8785) — hash any JSON document deterministically
  * • Client-side Sparse Merkle Tree proof re-verification — independently recomputes the
- *   root and compares it to the stored root without relying on the server's answer
+ *   Merkle root using the same OLY:LEAF:V1 / OLY:NODE:V1 domain-separated BLAKE3
+ *   prefixes as the server, then compares against the stored root
  * • Real FastAPI backend integration — GET /ingest/records/hash/{hash}/verify and
  *   POST /ingest/proofs/verify
- * • Three verification modes: hash lookup, file drop, and proof bundle paste
- * • Procedural glitch audio via Web Audio API (no external files)
- * • Matrix-style glyph rain, 3D tilt card, CRT scanline overlay
+ * • Four verification modes: hash lookup, file drop, JSON document, proof bundle
+ * • Procedural glitch audio via Web Audio API (no external files required)
+ * • Matrix-style glyph rain canvas, 3D perspective tilt card, CRT scanline overlay
  *
  * Required peer dependency (must be installed in the host project):
  *   npm install blake3-wasm@^2.1.5
@@ -23,40 +24,83 @@
  * Usage
  * ─────
  *   import OlympusFull from "./components/olympus-full";
- *   // Render anywhere — the component is fully self-contained.
  *   <OlympusFull apiBase="http://localhost:8000" />
  */
 
-import { useState, useEffect, useRef, useCallback } from "react";
+import {
+  useState,
+  useEffect,
+  useRef,
+  useCallback,
+  type FC,
+  type KeyboardEvent,
+  type DragEvent,
+  type ChangeEvent,
+  type MouseEvent,
+} from "react";
 import {
   hashFileBLAKE3,
   blake3Hex,
   canonicalJsonEncode,
-  canonicalJsonBytes,
-  hashDocument,
   verifyMerkleProof,
-  hexToBytes,
-  bytesToHex,
+  type CanonicalJsonValue,
+  type HashVerificationResponse,
+  type ProofVerificationResponse,
+  type ProofVerificationRequest,
+  type OlympusMerkleProof,
 } from "../lib/olympus-crypto";
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
 const HASH_RE = /^[0-9a-f]{64}$/i;
 
+// ─── Local types ──────────────────────────────────────────────────────────────
+
+type Verdict = "verified" | "failed" | "unknown";
+type Tab = "hash" | "file" | "json" | "proof";
+type GlitchSoundType = "blip" | "noise" | "success" | "fail";
+type FilePhase = "idle" | "hashing" | "done" | "error";
+
+interface DetailRow {
+  key: string;
+  value: string;
+}
+
+interface VerificationResult {
+  verdict: Verdict;
+  details: DetailRow[];
+  hash: string;
+  localVerdict?: boolean;
+}
+
+interface RecentEntry {
+  hash: string;
+  verdict: Verdict;
+  ts: number;
+}
+
+interface StatItem {
+  label: string;
+  val: number | string;
+  raw?: boolean;
+}
+
 // ─── Procedural Glitch Audio (Web Audio API, no external files) ───────────────
 
 /**
- * Generate a short procedural audio blip or noise burst.
+ * Generate a short procedural audio event.
  * Fails silently before the first user interaction (AudioContext policy).
- *
- * @param {"blip" | "noise" | "success" | "fail"} type
  */
-const playGlitchSound = (type = "blip") => {
+const playGlitchSound = (type: GlitchSoundType = "blip"): void => {
   try {
-    const ctx = new (window.AudioContext || window.webkitAudioContext)();
+    const AudioContextCtor =
+      window.AudioContext ??
+      (window as Window & { webkitAudioContext?: typeof AudioContext })
+        .webkitAudioContext;
+    if (!AudioContextCtor) return;
+    const ctx = new AudioContextCtor();
 
     if (type === "noise") {
-      // White noise burst
       const bufLen = Math.ceil(ctx.sampleRate * 0.08);
       const buf = ctx.createBuffer(1, bufLen, ctx.sampleRate);
       const data = buf.getChannelData(0);
@@ -77,32 +121,36 @@ const playGlitchSound = (type = "blip") => {
     osc.connect(gain);
     gain.connect(ctx.destination);
 
-    if (type === "blip") {
-      osc.type = "square";
-      osc.frequency.setValueAtTime(200, ctx.currentTime);
-      osc.frequency.exponentialRampToValueAtTime(60, ctx.currentTime + 0.08);
-      gain.gain.setValueAtTime(0.08, ctx.currentTime);
-      gain.gain.linearRampToValueAtTime(0, ctx.currentTime + 0.08);
-      osc.start();
-      osc.stop(ctx.currentTime + 0.08);
-    } else if (type === "success") {
-      osc.type = "sine";
-      osc.frequency.setValueAtTime(440, ctx.currentTime);
-      osc.frequency.linearRampToValueAtTime(880, ctx.currentTime + 0.15);
-      gain.gain.setValueAtTime(0.06, ctx.currentTime);
-      gain.gain.linearRampToValueAtTime(0, ctx.currentTime + 0.15);
-      osc.start();
-      osc.stop(ctx.currentTime + 0.15);
-    } else if (type === "fail") {
-      osc.type = "sawtooth";
-      osc.frequency.setValueAtTime(200, ctx.currentTime);
-      osc.frequency.linearRampToValueAtTime(80, ctx.currentTime + 0.2);
-      gain.gain.setValueAtTime(0.07, ctx.currentTime);
-      gain.gain.linearRampToValueAtTime(0, ctx.currentTime + 0.2);
-      osc.start();
-      osc.stop(ctx.currentTime + 0.2);
+    switch (type) {
+      case "blip":
+        osc.type = "square";
+        osc.frequency.setValueAtTime(200, ctx.currentTime);
+        osc.frequency.exponentialRampToValueAtTime(60, ctx.currentTime + 0.08);
+        gain.gain.setValueAtTime(0.08, ctx.currentTime);
+        gain.gain.linearRampToValueAtTime(0, ctx.currentTime + 0.08);
+        osc.start();
+        osc.stop(ctx.currentTime + 0.08);
+        break;
+      case "success":
+        osc.type = "sine";
+        osc.frequency.setValueAtTime(440, ctx.currentTime);
+        osc.frequency.linearRampToValueAtTime(880, ctx.currentTime + 0.15);
+        gain.gain.setValueAtTime(0.06, ctx.currentTime);
+        gain.gain.linearRampToValueAtTime(0, ctx.currentTime + 0.15);
+        osc.start();
+        osc.stop(ctx.currentTime + 0.15);
+        break;
+      case "fail":
+        osc.type = "sawtooth";
+        osc.frequency.setValueAtTime(200, ctx.currentTime);
+        osc.frequency.linearRampToValueAtTime(80, ctx.currentTime + 0.2);
+        gain.gain.setValueAtTime(0.07, ctx.currentTime);
+        gain.gain.linearRampToValueAtTime(0, ctx.currentTime + 0.2);
+        osc.start();
+        osc.stop(ctx.currentTime + 0.2);
+        break;
     }
-  } catch (_) {
+  } catch {
     // AudioContext creation fails before user interaction — safe to ignore.
   }
 };
@@ -112,65 +160,67 @@ const playGlitchSound = (type = "blip") => {
 const RAIN_GLYPHS =
   "アカサタナハuniversal01010101ERROR☠SYSTEM☣$¥€BLAKE3◆∑∇⊕01";
 
+interface GlyphRainProps {
+  active?: boolean;
+}
+
 /**
  * Full-viewport Matrix-style glyph rain rendered on an HTML5 Canvas.
  * Runs as a requestAnimationFrame loop and auto-resizes with the window.
  */
-function GlyphRain({ active = true }) {
-  const canvasRef = useRef(null);
-  const animRef = useRef(null);
-  const dropsRef = useRef([]);
+const GlyphRain: FC<GlyphRainProps> = ({ active = true }) => {
+  const canvasRef = useRef<HTMLCanvasElement>(null);
+  const animRef = useRef<number>(0);
+  const dropsRef = useRef<number[]>([]);
 
   useEffect(() => {
     const canvas = canvasRef.current;
     if (!canvas) return;
     const ctx = canvas.getContext("2d");
-    const FONT = 12;
-    const COL_W = 14;
+    if (!ctx) return;
 
-    const resize = () => {
+    const COL_W = 14;
+    const FONT_SIZE = 12;
+
+    const resize = (): void => {
       canvas.width = canvas.offsetWidth;
       canvas.height = canvas.offsetHeight;
       const cols = Math.floor(canvas.width / COL_W);
       dropsRef.current = Array.from(
         { length: cols },
-        () => Math.random() * -canvas.height
+        () => Math.random() * -canvas.height,
       );
     };
     resize();
     window.addEventListener("resize", resize);
 
-    const draw = () => {
-      if (!active) {
-        animRef.current = requestAnimationFrame(draw);
-        return;
-      }
+    const draw = (): void => {
+      if (!active) return;
       ctx.fillStyle = "rgba(5,5,5,0.14)";
       ctx.fillRect(0, 0, canvas.width, canvas.height);
-
-      ctx.font = `${FONT}px 'DM Mono', monospace`;
+      ctx.font = `${FONT_SIZE}px 'DM Mono', monospace`;
       ctx.shadowBlur = 6;
       ctx.shadowColor = "#00FF41";
 
       dropsRef.current.forEach((y, i) => {
-        const glyph = RAIN_GLYPHS[Math.floor(Math.random() * RAIN_GLYPHS.length)];
+        const glyph =
+          RAIN_GLYPHS[Math.floor(Math.random() * RAIN_GLYPHS.length)];
         const x = i * COL_W;
-        // Lead character is bright; trailing chars fade
-        const bright = y > 0 && y < canvas.height;
-        ctx.fillStyle = bright ? "#00FF41" : "rgba(0,255,65,0.3)";
+        ctx.fillStyle =
+          y > 0 && y < canvas.height ? "#00FF41" : "rgba(0,255,65,0.3)";
         ctx.fillText(glyph, x, y);
         dropsRef.current[i] =
           y > canvas.height + 100 ? -Math.random() * 200 : y + COL_W;
       });
     };
 
-    const loop = () => {
+    const loop = (): void => {
       draw();
       animRef.current = requestAnimationFrame(loop);
     };
     animRef.current = requestAnimationFrame(loop);
 
-    return () => {
+    return (): void => {
       cancelAnimationFrame(animRef.current);
       window.removeEventListener("resize", resize);
     };
@@ -192,19 +242,28 @@ function GlyphRain({ active = true }) {
       }}
     />
   );
+};
+
+// ─── TiltContainer ────────────────────────────────────────────────────────────
+
+interface TiltState {
+  x: number;
+  y: number;
 }
 
-// ─── 3D Tilt Container ────────────────────────────────────────────────────────
+interface TiltContainerProps {
+  children: React.ReactNode;
+}
 
 /**
- * Wraps its children in a perspective container that tilts ±10 ° based on
- * the cursor position within the element's bounding rect.
+ * Wraps children in a perspective container that tilts ±10° based on the
+ * cursor position within the element's bounding rect.
  */
-function TiltContainer({ children }) {
-  const [tilt, setTilt] = useState({ x: 0, y: 0 });
-  const ref = useRef(null);
+const TiltContainer: FC<TiltContainerProps> = ({ children }) => {
+  const [tilt, setTilt] = useState<TiltState>({ x: 0, y: 0 });
+  const ref = useRef<HTMLDivElement>(null);
 
-  const handleMove = useCallback((e) => {
+  const handleMove = useCallback((e: MouseEvent<HTMLDivElement>): void => {
     if (!ref.current) return;
     const r = ref.current.getBoundingClientRect();
     const x = (e.clientX - r.left) / r.width - 0.5;
@@ -227,16 +286,20 @@ function TiltContainer({ children }) {
       {children}
     </div>
   );
-}
+};
 
 // ─── HashReveal ───────────────────────────────────────────────────────────────
 
+interface HashRevealProps {
+  hash: string | null;
+}
+
 /**
- * Animates a hash string by revealing characters one-by-one at 14 ms/char.
+ * Animates a hash string by revealing characters two at a time at 14 ms/tick.
  * Greyed placeholder characters fill the unrevealed portion.
  */
-function HashReveal({ hash }) {
-  const [revealed, setRevealed] = useState(0);
+const HashReveal: FC<HashRevealProps> = ({ hash }) => {
+  const [revealed, setRevealed] = useState<number>(0);
 
   useEffect(() => {
     if (!hash) {
@@ -246,11 +309,11 @@ function HashReveal({ hash }) {
     setRevealed(0);
     let i = 0;
     const id = setInterval(() => {
-      i += 2; // reveal 2 chars per tick for snappier feel
+      i += 2;
       setRevealed(i);
       if (i >= hash.length) clearInterval(id);
     }, 14);
-    return () => clearInterval(id);
+    return (): void => clearInterval(id);
   }, [hash]);
 
   if (!hash) return null;
@@ -273,48 +336,65 @@ function HashReveal({ hash }) {
       }}
       aria-label="BLAKE3 hash"
     >
-      <span style={{ opacity: 0.4, fontSize: "0.6rem", display: "block", marginBottom: "0.2rem" }}>
+      <span
+        style={{
+          opacity: 0.4,
+          fontSize: "0.6rem",
+          display: "block",
+          marginBottom: "0.2rem",
+        }}
+      >
         BLAKE3_DIGEST
       </span>
       {hash.slice(0, done)}
       <span style={{ opacity: 0.25 }}>{hash.slice(done)}</span>
     </div>
   );
-}
+};
 
 // ─── AnimatedNumber ───────────────────────────────────────────────────────────
 
-function AnimatedNumber({ value }) {
-  const [display, setDisplay] = useState(0);
+interface AnimatedNumberProps {
+  value: number;
+}
+
+const AnimatedNumber: FC<AnimatedNumberProps> = ({ value }) => {
+  const [display, setDisplay] = useState<number>(0);
+
   useEffect(() => {
-    let start = null;
-    const end = Number(value);
-    const step = (ts) => {
-      if (!start) start = ts;
-      const progress = Math.min((ts - start) / 1200, 1);
-      setDisplay(Math.floor(progress * end));
+    let startTime: number | null = null;
+    const step = (ts: number): void => {
+      if (!startTime) startTime = ts;
+      const progress = Math.min((ts - startTime) / 1200, 1);
+      setDisplay(Math.floor(progress * value));
       if (progress < 1) requestAnimationFrame(step);
     };
     requestAnimationFrame(step);
   }, [value]);
+
   return <span>{display.toLocaleString()}</span>;
-}
+};
 
 // ─── FileDrop ─────────────────────────────────────────────────────────────────
 
+interface FileDropProps {
+  onHash: (hex: string) => void;
+  onProgress: (pct: number) => void;
+}
+
 /**
  * Drag-and-drop / click-to-browse file widget.
- * Hashes the selected file with WASM BLAKE3; the file bytes never leave the browser.
+ * Hashes the file with WASM BLAKE3; bytes never leave the browser.
  */
-function FileDrop({ onHash, onProgress }) {
-  const [dragging, setDragging] = useState(false);
-  const [phase, setPhase] = useState("idle"); // idle | hashing | done | error
-  const [fileName, setFileName] = useState("");
-  const [errMsg, setErrMsg] = useState("");
-  const inputRef = useRef(null);
+const FileDrop: FC<FileDropProps> = ({ onHash, onProgress }) => {
+  const [dragging, setDragging] = useState<boolean>(false);
+  const [phase, setPhase] = useState<FilePhase>("idle");
+  const [fileName, setFileName] = useState<string>("");
+  const [errMsg, setErrMsg] = useState<string>("");
+  const inputRef = useRef<HTMLInputElement>(null);
 
   const process = useCallback(
-    async (file) => {
+    async (file: File): Promise<void> => {
       setFileName(file.name);
       setPhase("hashing");
       setErrMsg("");
@@ -324,34 +404,34 @@ function FileDrop({ onHash, onProgress }) {
         onHash(hex);
         setPhase("done");
       } catch (err) {
-        setErrMsg(err.message || "Hashing failed");
+        setErrMsg(err instanceof Error ? err.message : "Hashing failed");
         setPhase("error");
       }
     },
-    [onHash, onProgress]
+    [onHash, onProgress],
   );
 
   const handleDrop = useCallback(
-    (e) => {
+    (e: DragEvent<HTMLDivElement>): void => {
       e.preventDefault();
       setDragging(false);
       const file = e.dataTransfer.files[0];
-      if (file) process(file);
+      if (file) void process(file);
     },
-    [process]
+    [process],
   );
 
   const handleChange = useCallback(
-    (e) => {
+    (e: ChangeEvent<HTMLInputElement>): void => {
       const file = e.target.files?.[0];
-      if (file) process(file);
+      if (file) void process(file);
     },
-    [process]
+    [process],
   );
 
   return (
     <div
-      onDragOver={(e) => {
+      onDragOver={(e: DragEvent<HTMLDivElement>) => {
         e.preventDefault();
         setDragging(true);
       }}
@@ -360,7 +440,7 @@ function FileDrop({ onHash, onProgress }) {
       onClick={() => inputRef.current?.click()}
       role="button"
       tabIndex={0}
-      onKeyDown={(e) => {
+      onKeyDown={(e: KeyboardEvent<HTMLDivElement>) => {
         if (e.key === "Enter" || e.key === " ") inputRef.current?.click();
       }}
       style={{
@@ -371,8 +451,7 @@ function FileDrop({ onHash, onProgress }) {
         cursor: "pointer",
         background: dragging ? "rgba(0,255,65,0.06)" : "rgba(0,20,0,0.4)",
         transition: "all 0.15s",
-        clipPath:
-          "polygon(0 0, 97% 0, 100% 3%, 100% 100%, 3% 100%, 0 97%)",
+        clipPath: "polygon(0 0, 97% 0, 100% 3%, 100% 100%, 3% 100%, 0 97%)",
       }}
     >
       <input
@@ -384,7 +463,13 @@ function FileDrop({ onHash, onProgress }) {
       />
       {phase === "idle" && (
         <>
-          <p style={{ color: "rgba(0,255,65,0.7)", fontSize: "0.85rem", margin: "0 0 0.3rem" }}>
+          <p
+            style={{
+              color: "rgba(0,255,65,0.7)",
+              fontSize: "0.85rem",
+              margin: "0 0 0.3rem",
+            }}
+          >
             DROP_FILE_HERE or click to browse
           </p>
           <p style={{ color: "rgba(0,255,65,0.35)", fontSize: "0.7rem", margin: 0 }}>
@@ -395,13 +480,16 @@ function FileDrop({ onHash, onProgress }) {
       {phase === "hashing" && (
         <p style={{ color: "#00FF41", fontSize: "0.85rem", margin: 0 }}>
           HASHING:{" "}
-          <span style={{ fontFamily: "'DM Mono', monospace" }}>{fileName}</span>…
+          <span style={{ fontFamily: "'DM Mono', monospace" }}>{fileName}</span>
+          …
         </p>
       )}
       {phase === "done" && (
-        <p style={{ color: "rgba(0,255,65,0.6)", fontSize: "0.85rem", margin: 0 }}>
-          <span style={{ fontFamily: "'DM Mono', monospace" }}>{fileName}</span> — drop
-          another or click to change
+        <p
+          style={{ color: "rgba(0,255,65,0.6)", fontSize: "0.85rem", margin: 0 }}
+        >
+          <span style={{ fontFamily: "'DM Mono', monospace" }}>{fileName}</span>{" "}
+          — drop another or click to change
         </p>
       )}
       {phase === "error" && (
@@ -409,29 +497,36 @@ function FileDrop({ onHash, onProgress }) {
       )}
     </div>
   );
-}
+};
 
 // ─── JsonHasher ───────────────────────────────────────────────────────────────
 
-/**
- * Accepts a raw JSON string pasted by the user, canonicalises it (JCS / RFC 8785),
- * and computes its BLAKE3 content hash so it can be looked up in the ledger.
- */
-function JsonHasher({ onHash }) {
-  const [input, setInput] = useState("");
-  const [error, setError] = useState("");
-  const [canonical, setCanonical] = useState("");
+interface JsonHasherProps {
+  onHash: (hex: string) => void;
+}
 
-  const handleHash = async () => {
+/**
+ * Accepts a raw JSON string, canonicalises it (JCS / RFC 8785), computes the
+ * BLAKE3 content hash, then forwards the hex digest to onHash so the user can
+ * look it up in the ledger.
+ */
+const JsonHasher: FC<JsonHasherProps> = ({ onHash }) => {
+  const [input, setInput] = useState<string>("");
+  const [error, setError] = useState<string>("");
+  const [canonical, setCanonical] = useState<string>("");
+
+  const handleHash = async (): Promise<void> => {
     setError("");
     setCanonical("");
-    let parsed;
+
+    let parsed: CanonicalJsonValue;
     try {
-      parsed = JSON.parse(input);
+      parsed = JSON.parse(input) as CanonicalJsonValue;
     } catch (e) {
-      setError("Invalid JSON: " + e.message);
+      setError("Invalid JSON: " + (e instanceof Error ? e.message : String(e)));
       return;
     }
+
     try {
       const canon = canonicalJsonEncode(parsed);
       setCanonical(canon);
@@ -439,7 +534,7 @@ function JsonHasher({ onHash }) {
       const hex = await blake3Hex(bytes);
       onHash(hex);
     } catch (e) {
-      setError(e.message);
+      setError(e instanceof Error ? e.message : String(e));
     }
   };
 
@@ -447,9 +542,15 @@ function JsonHasher({ onHash }) {
     <div>
       <label
         htmlFor="json-hasher-input"
-        style={{ display: "block", fontSize: "0.6rem", color: "rgba(0,255,65,0.45)", marginBottom: "0.5rem" }}
+        style={{
+          display: "block",
+          fontSize: "0.6rem",
+          color: "rgba(0,255,65,0.45)",
+          marginBottom: "0.5rem",
+        }}
       >
-        PASTE_JSON_DOCUMENT — will be canonicalized (JCS/RFC 8785) then hashed with BLAKE3
+        PASTE_JSON_DOCUMENT — will be canonicalized (JCS/RFC 8785) then hashed
+        with BLAKE3
       </label>
       <textarea
         id="json-hasher-input"
@@ -473,17 +574,29 @@ function JsonHasher({ onHash }) {
         }}
       />
       {canonical && (
-        <p style={{ fontSize: "0.6rem", color: "rgba(0,255,65,0.4)", margin: "0.3rem 0 0", wordBreak: "break-all" }}>
-          CANONICAL: {canonical.length > 120 ? canonical.slice(0, 120) + "…" : canonical}
+        <p
+          style={{
+            fontSize: "0.6rem",
+            color: "rgba(0,255,65,0.4)",
+            margin: "0.3rem 0 0",
+            wordBreak: "break-all",
+          }}
+        >
+          CANONICAL:{" "}
+          {canonical.length > 120
+            ? canonical.slice(0, 120) + "…"
+            : canonical}
         </p>
       )}
       {error && (
-        <p style={{ color: "#ff0055", fontSize: "0.7rem", margin: "0.3rem 0 0" }}>{error}</p>
+        <p style={{ color: "#ff0055", fontSize: "0.7rem", margin: "0.3rem 0 0" }}>
+          {error}
+        </p>
       )}
       <button
         type="button"
         className="cyber-button"
-        onClick={handleHash}
+        onClick={() => void handleHash()}
         onMouseEnter={() => playGlitchSound("blip")}
         style={{ marginTop: "0.75rem" }}
       >
@@ -491,11 +604,19 @@ function JsonHasher({ onHash }) {
       </button>
     </div>
   );
+};
+
+// ─── VerdictCard ──────────────────────────────────────────────────────────────
+
+interface VerdictConfig {
+  color: string;
+  borderColor: string;
+  icon: string;
+  label: string;
+  desc: string;
 }
 
-// ─── Verdict Card ─────────────────────────────────────────────────────────────
-
-const VERDICT_CFG = {
+const VERDICT_CFG: Record<Verdict, VerdictConfig> = {
   verified: {
     color: "#00FF41",
     borderColor: "#00FF41",
@@ -519,13 +640,14 @@ const VERDICT_CFG = {
   },
 };
 
-/**
- * Displays the combined server + client-side verification verdict.
- *
- * @param {{ verdict: string, details: Array<{key:string,value:string}>, localVerdict?: boolean }} props
- */
-function VerdictCard({ verdict, details = [], localVerdict }) {
-  const cfg = VERDICT_CFG[verdict] ?? VERDICT_CFG.unknown;
+interface VerdictCardProps {
+  verdict: Verdict;
+  details: DetailRow[];
+  localVerdict?: boolean;
+}
+
+const VerdictCard: FC<VerdictCardProps> = ({ verdict, details, localVerdict }) => {
+  const cfg = VERDICT_CFG[verdict];
 
   useEffect(() => {
     if (verdict === "verified") playGlitchSound("success");
@@ -555,7 +677,13 @@ function VerdictCard({ verdict, details = [], localVerdict }) {
       >
         {cfg.icon} {cfg.label}
       </div>
-      <p style={{ color: "rgba(0,255,65,0.5)", fontSize: "0.72rem", margin: "0 0 0.75rem" }}>
+      <p
+        style={{
+          color: "rgba(0,255,65,0.5)",
+          fontSize: "0.72rem",
+          margin: "0 0 0.75rem",
+        }}
+      >
         {cfg.desc}
       </p>
 
@@ -583,7 +711,9 @@ function VerdictCard({ verdict, details = [], localVerdict }) {
 
       {/* Detail rows */}
       {details.length > 0 && (
-        <div style={{ borderTop: "1px solid rgba(0,255,65,0.1)", paddingTop: "0.6rem" }}>
+        <div
+          style={{ borderTop: "1px solid rgba(0,255,65,0.1)", paddingTop: "0.6rem" }}
+        >
           {details.map((d) => (
             <div
               key={d.key}
@@ -596,7 +726,13 @@ function VerdictCard({ verdict, details = [], localVerdict }) {
                 fontSize: "0.7rem",
               }}
             >
-              <span style={{ color: "rgba(0,255,65,0.4)", whiteSpace: "nowrap", flexShrink: 0 }}>
+              <span
+                style={{
+                  color: "rgba(0,255,65,0.4)",
+                  whiteSpace: "nowrap",
+                  flexShrink: 0,
+                }}
+              >
                 {d.key}
               </span>
               <span
@@ -615,18 +751,14 @@ function VerdictCard({ verdict, details = [], localVerdict }) {
       )}
     </div>
   );
-}
+};
 
 // ─── API helpers ──────────────────────────────────────────────────────────────
 
-/**
- * Look up a BLAKE3 content hash in the Olympus ledger.
- * Returns null when the hash is not found (404).
- *
- * @param {string} base  API base URL (no trailing slash)
- * @param {string} hash  64-char hex BLAKE3 digest
- */
-async function apiVerifyHash(base, hash) {
+async function apiVerifyHash(
+  base: string,
+  hash: string,
+): Promise<HashVerificationResponse | null> {
   const res = await fetch(`${base}/ingest/records/hash/${hash}/verify`, {
     method: "GET",
     headers: { "Content-Type": "application/json" },
@@ -634,18 +766,17 @@ async function apiVerifyHash(base, hash) {
   if (res.status === 404) return null;
   if (!res.ok) {
     const text = await res.text().catch(() => "");
-    throw new Error(`API error ${res.status}${text ? ": " + text.slice(0, 120) : ""}`);
+    throw new Error(
+      `API error ${res.status}${text ? ": " + text.slice(0, 120) : ""}`,
+    );
   }
-  return res.json();
+  return res.json() as Promise<HashVerificationResponse>;
 }
 
-/**
- * Submit a full proof bundle for server-side verification.
- *
- * @param {string} base
- * @param {{ content_hash: string, merkle_root: string, merkle_proof: object, proof_id?: string }} bundle
- */
-async function apiVerifyProofBundle(base, bundle) {
+async function apiVerifyProofBundle(
+  base: string,
+  bundle: ProofVerificationRequest,
+): Promise<ProofVerificationResponse> {
   const res = await fetch(`${base}/ingest/proofs/verify`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -658,33 +789,36 @@ async function apiVerifyProofBundle(base, bundle) {
   });
   if (!res.ok) {
     const text = await res.text().catch(() => "");
-    throw new Error(`API error ${res.status}${text ? ": " + text.slice(0, 120) : ""}`);
+    throw new Error(
+      `API error ${res.status}${text ? ": " + text.slice(0, 120) : ""}`,
+    );
   }
-  return res.json();
+  return res.json() as Promise<ProofVerificationResponse>;
 }
 
 // ─── Main Component ───────────────────────────────────────────────────────────
 
+export interface OlympusFullProps {
+  /** FastAPI root URL. Defaults to same origin (relative paths). */
+  apiBase?: string;
+}
+
 /**
  * Olympus Public Verification Dashboard — "Project Mayhem" Edition.
- *
- * @param {{ apiBase?: string }} props
- *   apiBase — FastAPI root URL (default: same origin, i.e. relative paths).
  */
-export default function OlympusFull({ apiBase = "" }) {
-  const [tab, setTab] = useState("hash"); // "hash" | "file" | "json" | "proof"
-  const [hashInput, setHashInput] = useState("");
-  const [hashError, setHashError] = useState("");
-  const [fileHash, setFileHash] = useState("");
-  const [fileProgress, setFileProgress] = useState(0);
-  const [proofInput, setProofInput] = useState("");
-  const [proofError, setProofError] = useState("");
-  const [loading, setLoading] = useState(false);
-  const [result, setResult] = useState(null);
-  const [recents, setRecents] = useState([]);
+const OlympusFull: FC<OlympusFullProps> = ({ apiBase = "" }) => {
+  const [tab, setTab] = useState<Tab>("hash");
+  const [hashInput, setHashInput] = useState<string>("");
+  const [hashError, setHashError] = useState<string>("");
+  const [fileHash, setFileHash] = useState<string>("");
+  const [fileProgress, setFileProgress] = useState<number>(0);
+  const [proofInput, setProofInput] = useState<string>("");
+  const [proofError, setProofError] = useState<string>("");
+  const [loading, setLoading] = useState<boolean>(false);
+  const [result, setResult] = useState<VerificationResult | null>(null);
+  const [recents, setRecents] = useState<RecentEntry[]>([]);
 
-  // Switch tabs — clear stale state
-  const switchTab = (id) => {
+  const switchTab = (id: Tab): void => {
     setTab(id);
     setResult(null);
     setHashError("");
@@ -692,114 +826,164 @@ export default function OlympusFull({ apiBase = "" }) {
     playGlitchSound("blip");
   };
 
-  // Add entry to recent-activity list (capped at 7)
-  const pushRecent = useCallback((hash, verdict) => {
+  const pushRecent = useCallback((hash: string, verdict: Verdict): void => {
     setRecents((prev) =>
-      [{ hash, verdict, ts: Date.now() }, ...prev].slice(0, 7)
+      [{ hash, verdict, ts: Date.now() }, ...prev].slice(0, 7),
     );
   }, []);
 
-  // ── Core verification: given a 64-char hash, hit the API + re-verify client-side ──
+  // ── Core: look up a 64-char hash in the ledger, then re-verify client-side ──
   const verifyHash = useCallback(
-    async (hash) => {
+    async (hash: string): Promise<void> => {
       setLoading(true);
       setResult(null);
       playGlitchSound("noise");
+
       try {
         const data = await apiVerifyHash(apiBase, hash);
+
         if (!data) {
-          const r = { verdict: "unknown", details: [{ key: "QUERIED_HASH", value: hash }], hash };
-          setResult(r);
+          setResult({
+            verdict: "unknown",
+            details: [{ key: "QUERIED_HASH", value: hash }],
+            hash,
+          });
           pushRecent(hash, "unknown");
           return;
         }
 
-        // Client-side Merkle proof re-verification — no trust in server required
+        // Re-verify the Merkle proof locally — no server trust required
         const localVerdict = data.merkle_proof
           ? await verifyMerkleProof(data.merkle_proof)
           : undefined;
 
-        const verdict = data.merkle_proof_valid ? "verified" : "failed";
-        const details = [
+        const verdict: Verdict = data.merkle_proof_valid ? "verified" : "failed";
+        const details: DetailRow[] = [
           { key: "CONTENT_HASH", value: data.content_hash },
           { key: "PROOF_ID", value: data.proof_id ?? "—" },
           { key: "RECORD_ID", value: data.record_id ?? "—" },
           { key: "SHARD_ID", value: data.shard_id ?? "—" },
           { key: "MERKLE_ROOT", value: data.merkle_root },
-          { key: "SERVER_VERIFIED", value: data.merkle_proof_valid ? "YES" : "NO" },
-          { key: "COMMITTED", value: data.timestamp ? new Date(data.timestamp).toLocaleString() : "—" },
-          ...(data.poseidon_root ? [{ key: "POSEIDON_ROOT", value: data.poseidon_root }] : []),
+          {
+            key: "SERVER_VERIFIED",
+            value: data.merkle_proof_valid ? "YES" : "NO",
+          },
+          {
+            key: "COMMITTED",
+            value: data.timestamp
+              ? new Date(data.timestamp).toLocaleString()
+              : "—",
+          },
+          ...(data.poseidon_root
+            ? [{ key: "POSEIDON_ROOT", value: data.poseidon_root }]
+            : []),
         ];
+
         setResult({ verdict, details, hash: data.content_hash, localVerdict });
         pushRecent(hash, verdict);
       } catch (err) {
-        setHashError(err.message || "Network error");
+        setHashError(err instanceof Error ? err.message : "Network error");
       } finally {
         setLoading(false);
       }
     },
-    [apiBase, pushRecent]
+    [apiBase, pushRecent],
   );
 
-  const submitHash = useCallback(() => {
+  const submitHash = useCallback((): void => {
     const normalized = hashInput.trim().toLowerCase();
     if (!HASH_RE.test(normalized)) {
       setHashError("Enter a valid 64-character BLAKE3 hex hash");
       return;
     }
     setHashError("");
-    verifyHash(normalized);
+    void verifyHash(normalized);
   }, [hashInput, verifyHash]);
 
   // ── Proof bundle submission ──
-  const submitProof = useCallback(async () => {
+  const submitProof = useCallback(async (): Promise<void> => {
     setProofError("");
     setResult(null);
 
-    let parsed;
+    let parsed: unknown;
     try {
       parsed = JSON.parse(proofInput);
     } catch {
       setProofError("Invalid JSON — paste the full proof bundle");
       return;
     }
-    if (!parsed.content_hash || !parsed.merkle_root || !parsed.merkle_proof) {
-      setProofError("Bundle must include content_hash, merkle_root, and merkle_proof");
+
+    const p = parsed as Partial<ProofVerificationRequest>;
+    if (!p.content_hash || !p.merkle_root || !p.merkle_proof) {
+      setProofError(
+        "Bundle must include content_hash, merkle_root, and merkle_proof",
+      );
       return;
     }
 
-    // Client-side verification runs first — no network call needed for this step
-    const localVerdict = await verifyMerkleProof(parsed.merkle_proof).catch(() => false);
+    const bundle = p as ProofVerificationRequest;
+
+    // Client-side Merkle re-verification — runs before the network call
+    const localVerdict = await verifyMerkleProof(
+      bundle.merkle_proof as OlympusMerkleProof,
+    ).catch(() => false);
 
     setLoading(true);
     playGlitchSound("noise");
+
     try {
-      const data = await apiVerifyProofBundle(apiBase, parsed);
+      const data = await apiVerifyProofBundle(apiBase, bundle);
       const allValid =
-        data.content_hash_matches_proof && data.merkle_proof_valid && data.known_to_server;
-      const verdict = allValid ? "verified" : data.known_to_server ? "failed" : "unknown";
-      const details = [
+        data.content_hash_matches_proof &&
+        data.merkle_proof_valid &&
+        data.known_to_server;
+      const verdict: Verdict = allValid
+        ? "verified"
+        : data.known_to_server
+          ? "failed"
+          : "unknown";
+
+      const details: DetailRow[] = [
         { key: "CONTENT_HASH", value: data.content_hash },
         { key: "MERKLE_ROOT", value: data.merkle_root },
-        { key: "HASH_MATCHES_PROOF", value: data.content_hash_matches_proof ? "YES" : "NO" },
-        { key: "SERVER_MERKLE_VALID", value: data.merkle_proof_valid ? "YES" : "NO" },
-        { key: "KNOWN_TO_SERVER", value: data.known_to_server ? "YES" : "NO" },
-        ...(data.poseidon_root ? [{ key: "POSEIDON_ROOT", value: data.poseidon_root }] : []),
+        {
+          key: "HASH_MATCHES_PROOF",
+          value: data.content_hash_matches_proof ? "YES" : "NO",
+        },
+        {
+          key: "SERVER_MERKLE_VALID",
+          value: data.merkle_proof_valid ? "YES" : "NO",
+        },
+        {
+          key: "KNOWN_TO_SERVER",
+          value: data.known_to_server ? "YES" : "NO",
+        },
+        ...(data.poseidon_root
+          ? [{ key: "POSEIDON_ROOT", value: data.poseidon_root }]
+          : []),
       ];
+
       setResult({ verdict, details, hash: data.content_hash, localVerdict });
       pushRecent(data.content_hash, verdict);
     } catch (err) {
-      setProofError(err.message || "Network error");
+      setProofError(err instanceof Error ? err.message : "Network error");
     } finally {
       setLoading(false);
     }
   }, [apiBase, proofInput, pushRecent]);
 
-  const TABS = [
+  const TABS: { id: Tab; label: string }[] = [
     { id: "hash", label: "HASH" },
     { id: "file", label: "FILE" },
     { id: "json", label: "JSON_DOC" },
     { id: "proof", label: "PROOF_BUNDLE" },
+  ];
+
+  const STATS: StatItem[] = [
+    { label: "COPIES", val: 847293 },
+    { label: "SHARDS", val: 14 },
+    { label: "PROOFS", val: 23481 },
+    { label: "UPTIME", val: "99.9%", raw: true },
   ];
 
   return (
@@ -813,7 +997,7 @@ export default function OlympusFull({ apiBase = "" }) {
         overflowX: "hidden",
       }}
     >
-      {/* Injected styles */}
+      {/* Injected styles — self-contained, no Tailwind dependency */}
       <style>{`
         @import url('https://fonts.googleapis.com/css2?family=DM+Mono:wght@300;400;500&display=swap');
 
@@ -834,7 +1018,10 @@ export default function OlympusFull({ apiBase = "" }) {
           position: fixed; inset: 0; pointer-events: none; z-index: 9999;
           background:
             linear-gradient(rgba(18,16,16,0) 50%, rgba(0,0,0,0.08) 50%),
-            linear-gradient(90deg, rgba(255,0,0,0.025), rgba(0,255,0,0.008), rgba(0,0,118,0.025));
+            linear-gradient(90deg,
+              rgba(255,0,0,0.025),
+              rgba(0,255,0,0.008),
+              rgba(0,0,118,0.025));
           background-size: 100% 3px, 3px 100%;
           opacity: 0.28;
         }
@@ -843,7 +1030,8 @@ export default function OlympusFull({ apiBase = "" }) {
           background: rgba(0,20,0,0.82);
           border: 1px solid rgba(0,255,65,0.35);
           clip-path: polygon(0 0, 95% 0, 100% 5%, 100% 100%, 5% 100%, 0 95%);
-          box-shadow: 0 0 18px rgba(0,255,65,0.08), inset 0 0 30px rgba(0,255,65,0.02);
+          box-shadow: 0 0 18px rgba(0,255,65,0.08),
+                      inset 0 0 30px rgba(0,255,65,0.02);
         }
 
         .cyber-button {
@@ -907,7 +1095,9 @@ export default function OlympusFull({ apiBase = "" }) {
           background: rgba(0,255,65,0.05);
           text-shadow: 0 0 6px #00FF41;
         }
-        .tab-btn:hover:not([aria-selected="true"]) { color: rgba(0,255,65,0.65); }
+        .tab-btn:hover:not([aria-selected="true"]) {
+          color: rgba(0,255,65,0.65);
+        }
 
         .err-text { color: #ff0055; font-size: 0.7rem; margin: 0.4rem 0 0; }
       `}</style>
@@ -939,7 +1129,9 @@ export default function OlympusFull({ apiBase = "" }) {
         >
           <div style={{ display: "flex", alignItems: "center", gap: "0.85rem" }}>
             <span style={{ fontSize: "1.4rem", color: "#ff0055" }}>[ø]</span>
-            <span style={{ letterSpacing: "0.38em", fontSize: "0.78rem" }}>OLYMPUS_PROTOCØL</span>
+            <span style={{ letterSpacing: "0.38em", fontSize: "0.78rem" }}>
+              OLYMPUS_PROTOCØL
+            </span>
           </div>
           <div
             style={{
@@ -976,7 +1168,15 @@ export default function OlympusFull({ apiBase = "" }) {
           >
             VERIFY_TRUTH
           </h1>
-          <p style={{ color: "rgba(0,255,65,0.55)", maxWidth: "540px", fontSize: "0.85rem", margin: 0, lineHeight: 1.6 }}>
+          <p
+            style={{
+              color: "rgba(0,255,65,0.55)",
+              maxWidth: "540px",
+              fontSize: "0.85rem",
+              margin: 0,
+              lineHeight: 1.6,
+            }}
+          >
             The first rule of Project Olympus: You do not trust the hash.
             The second rule: You independently RE-VERIFY the hash.
             Merkle proofs are re-computed entirely in your browser.
@@ -992,12 +1192,7 @@ export default function OlympusFull({ apiBase = "" }) {
             marginBottom: "3rem",
           }}
         >
-          {[
-            { label: "COPIES", val: 847293 },
-            { label: "SHARDS", val: 14 },
-            { label: "PROOFS", val: 23481 },
-            { label: "UPTIME", val: "99.9%", raw: true },
-          ].map((s, i) => (
+          {STATS.map((s, i) => (
             <div
               key={i}
               className="cyber-panel"
@@ -1010,9 +1205,20 @@ export default function OlympusFull({ apiBase = "" }) {
                   animation: "pulse-glow 3s ease-in-out infinite",
                 }}
               >
-                {s.raw ? s.val : <AnimatedNumber value={s.val} />}
+                {s.raw ? (
+                  String(s.val)
+                ) : (
+                  <AnimatedNumber value={s.val as number} />
+                )}
               </div>
-              <div style={{ fontSize: "0.5rem", opacity: 0.45, letterSpacing: "0.12em", marginTop: "0.2rem" }}>
+              <div
+                style={{
+                  fontSize: "0.5rem",
+                  opacity: 0.45,
+                  letterSpacing: "0.12em",
+                  marginTop: "0.2rem",
+                }}
+              >
                 {s.label}
               </div>
             </div>
@@ -1021,7 +1227,7 @@ export default function OlympusFull({ apiBase = "" }) {
 
         {/* ── Verification Terminal ── */}
         <TiltContainer>
-          <div className="cyber-panel" style={{ padding: "0" }}>
+          <div className="cyber-panel" style={{ padding: 0 }}>
             {/* Tab bar */}
             <div
               role="tablist"
@@ -1051,7 +1257,12 @@ export default function OlympusFull({ apiBase = "" }) {
                 <div>
                   <label
                     htmlFor="hash-input"
-                    style={{ display: "block", fontSize: "0.6rem", color: "rgba(0,255,65,0.45)", marginBottom: "0.5rem" }}
+                    style={{
+                      display: "block",
+                      fontSize: "0.6rem",
+                      color: "rgba(0,255,65,0.45)",
+                      marginBottom: "0.5rem",
+                    }}
                   >
                     INPUT_BUFFER_01 — BLAKE3 content hash (64 hex chars)
                   </label>
@@ -1061,7 +1272,9 @@ export default function OlympusFull({ apiBase = "" }) {
                       type="text"
                       value={hashInput}
                       onChange={(e) => setHashInput(e.target.value)}
-                      onKeyDown={(e) => { if (e.key === "Enter") submitHash(); }}
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter") submitHash();
+                      }}
                       placeholder="ENTER_BLAKE3_HASH..."
                       maxLength={64}
                       spellCheck={false}
@@ -1087,7 +1300,10 @@ export default function OlympusFull({ apiBase = "" }) {
               {tab === "file" && (
                 <div>
                   <FileDrop
-                    onHash={(hex) => { setFileHash(hex); setFileProgress(100); }}
+                    onHash={(hex) => {
+                      setFileHash(hex);
+                      setFileProgress(100);
+                    }}
                     onProgress={setFileProgress}
                   />
                   {fileProgress > 0 && fileProgress < 100 && (
@@ -1110,7 +1326,13 @@ export default function OlympusFull({ apiBase = "" }) {
                           }}
                         />
                       </div>
-                      <p style={{ fontSize: "0.65rem", color: "rgba(0,255,65,0.4)", margin: "0.25rem 0 0" }}>
+                      <p
+                        style={{
+                          fontSize: "0.65rem",
+                          color: "rgba(0,255,65,0.4)",
+                          margin: "0.25rem 0 0",
+                        }}
+                      >
                         HASHING... {fileProgress}%
                       </p>
                     </div>
@@ -1121,7 +1343,7 @@ export default function OlympusFull({ apiBase = "" }) {
                       <button
                         type="button"
                         className="cyber-button"
-                        onClick={() => verifyHash(fileHash)}
+                        onClick={() => void verifyHash(fileHash)}
                         onMouseEnter={() => playGlitchSound("blip")}
                         disabled={loading}
                         style={{ marginTop: "1rem" }}
@@ -1136,10 +1358,20 @@ export default function OlympusFull({ apiBase = "" }) {
               {/* ── JSON Document tab ── */}
               {tab === "json" && (
                 <div>
-                  <p style={{ fontSize: "0.65rem", color: "rgba(0,255,65,0.4)", margin: "0 0 0.75rem" }}>
-                    Paste a raw JSON document. The canonicalizer (JCS/RFC 8785) sorts keys,
-                    normalises Unicode to NFC, and strips whitespace before hashing — matching
-                    the server-side <code style={{ color: "#00FF41" }}>canonical_json_encode()</code>.
+                  <p
+                    style={{
+                      fontSize: "0.65rem",
+                      color: "rgba(0,255,65,0.4)",
+                      margin: "0 0 0.75rem",
+                    }}
+                  >
+                    Paste a raw JSON document. The canonicalizer (JCS/RFC 8785)
+                    sorts keys, normalises Unicode to NFC, and strips whitespace
+                    before hashing — matching the server-side{" "}
+                    <code style={{ color: "#00FF41" }}>
+                      canonical_json_encode()
+                    </code>
+                    .
                   </p>
                   <JsonHasher
                     onHash={(hex) => {
@@ -1156,28 +1388,43 @@ export default function OlympusFull({ apiBase = "" }) {
                 <div>
                   <label
                     htmlFor="proof-input"
-                    style={{ display: "block", fontSize: "0.6rem", color: "rgba(0,255,65,0.45)", marginBottom: "0.5rem" }}
+                    style={{
+                      display: "block",
+                      fontSize: "0.6rem",
+                      color: "rgba(0,255,65,0.45)",
+                      marginBottom: "0.5rem",
+                    }}
                   >
-                    PASTE_PROOF_BUNDLE — JSON with content_hash, merkle_root, merkle_proof
+                    PASTE_PROOF_BUNDLE — JSON with content_hash, merkle_root,
+                    merkle_proof
                   </label>
                   <textarea
                     id="proof-input"
                     value={proofInput}
                     onChange={(e) => setProofInput(e.target.value)}
                     rows={9}
-                    placeholder={'{"content_hash":"...","merkle_root":"...","merkle_proof":{...}}'}
+                    placeholder={
+                      '{"content_hash":"...","merkle_root":"...","merkle_proof":{...}}'
+                    }
                     spellCheck={false}
                     className="cyber-input"
                     style={{ resize: "vertical" }}
                   />
-                  <p style={{ fontSize: "0.62rem", color: "rgba(0,255,65,0.35)", margin: "0.4rem 0 0.75rem" }}>
-                    The Merkle proof will be re-verified in your browser before the server result
-                    is trusted. Both CLIENT_MERKLE_VERIFY and SERVER_VERIFIED must pass.
+                  <p
+                    style={{
+                      fontSize: "0.62rem",
+                      color: "rgba(0,255,65,0.35)",
+                      margin: "0.4rem 0 0.75rem",
+                    }}
+                  >
+                    The Merkle proof is re-verified in your browser before
+                    trusting the server result. Both CLIENT_MERKLE_VERIFY and
+                    SERVER_VERIFIED must pass.
                   </p>
                   <button
                     type="button"
                     className="cyber-button"
-                    onClick={submitProof}
+                    onClick={() => void submitProof()}
                     onMouseEnter={() => playGlitchSound("blip")}
                     disabled={loading}
                   >
@@ -1190,7 +1437,7 @@ export default function OlympusFull({ apiBase = "" }) {
           </div>
         </TiltContainer>
 
-        {/* Hash reveal under the terminal */}
+        {/* Hash reveal strip */}
         {result?.hash && <HashReveal hash={result.hash} />}
 
         {/* Verdict */}
@@ -1242,10 +1489,24 @@ export default function OlympusFull({ apiBase = "" }) {
                 >
                   [{item.verdict.toUpperCase()}]
                 </span>
-                <span style={{ opacity: 0.6, fontFamily: "'DM Mono', monospace", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                <span
+                  style={{
+                    opacity: 0.6,
+                    fontFamily: "'DM Mono', monospace",
+                    overflow: "hidden",
+                    textOverflow: "ellipsis",
+                    whiteSpace: "nowrap",
+                  }}
+                >
                   {item.hash.slice(0, 16)}…
                 </span>
-                <span style={{ opacity: 0.3, flexShrink: 0, fontSize: "0.6rem" }}>
+                <span
+                  style={{
+                    opacity: 0.3,
+                    flexShrink: 0,
+                    fontSize: "0.6rem",
+                  }}
+                >
                   {new Date(item.ts).toLocaleTimeString()}
                 </span>
               </div>
@@ -1279,33 +1540,31 @@ export default function OlympusFull({ apiBase = "" }) {
               gap: "0.85rem",
             }}
           >
-            {[
-              {
-                n: "01",
-                title: "BLAKE3_WASM",
-                body: "Files are hashed locally in-browser using a WebAssembly BLAKE3 implementation. The file bytes never leave your machine.",
-              },
-              {
-                n: "02",
-                title: "CANONICAL_JSON",
-                body: "Documents are serialised with JCS (RFC 8785) — sorted keys, NFC Unicode, no whitespace — before hashing, ensuring byte-for-byte reproducibility.",
-              },
-              {
-                n: "03",
-                title: "LEDGER_LOOKUP",
-                body: "The 64-char BLAKE3 digest is sent to the Olympus append-only ledger API which returns the stored Merkle proof bundle.",
-              },
-              {
-                n: "04",
-                title: "CLIENT_VERIFY",
-                body: "Your browser independently recomputes the Merkle root from the proof path using the same OLY:LEAF:V1 / OLY:NODE:V1 domain-separated hashes as the server.",
-              },
-            ].map((step) => (
-              <div
-                key={step.n}
-                className="cyber-panel"
-                style={{ padding: "1rem 1.1rem" }}
-              >
+            {(
+              [
+                {
+                  n: "01",
+                  title: "BLAKE3_WASM",
+                  body: "Files are hashed locally in-browser using a WebAssembly BLAKE3 implementation. File bytes never leave your machine.",
+                },
+                {
+                  n: "02",
+                  title: "CANONICAL_JSON",
+                  body: "Documents are serialized with JCS (RFC 8785) — sorted keys, NFC Unicode, no whitespace — ensuring byte-for-byte reproducibility across all clients.",
+                },
+                {
+                  n: "03",
+                  title: "LEDGER_LOOKUP",
+                  body: "The 64-char BLAKE3 digest is sent to the Olympus append-only ledger API which returns the stored Merkle proof bundle.",
+                },
+                {
+                  n: "04",
+                  title: "CLIENT_VERIFY",
+                  body: "Your browser independently recomputes the Merkle root from the proof path using OLY:LEAF:V1 / OLY:NODE:V1 domain-separated BLAKE3 — server trust not required.",
+                },
+              ] as const
+            ).map((step) => (
+              <div key={step.n} className="cyber-panel" style={{ padding: "1rem 1.1rem" }}>
                 <div
                   style={{
                     color: "#ff0055",
@@ -1316,7 +1575,9 @@ export default function OlympusFull({ apiBase = "" }) {
                 >
                   {step.n}
                 </div>
-                <h3 style={{ margin: "0 0 0.4rem", fontSize: "0.8rem", color: "#00FF41" }}>
+                <h3
+                  style={{ margin: "0 0 0.4rem", fontSize: "0.8rem", color: "#00FF41" }}
+                >
                   {step.title}
                 </h3>
                 <p
@@ -1349,4 +1610,6 @@ export default function OlympusFull({ apiBase = "" }) {
       </footer>
     </div>
   );
-}
+};
+
+export default OlympusFull;
