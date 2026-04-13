@@ -596,8 +596,8 @@ function executeVerify() {
   if (bundle.merkle_proof || bundle.smt_proof) {
     checks.push({ ok: true, label: 'Merkle/SMT proof object present' });
     var proof = bundle.merkle_proof || bundle.smt_proof;
-    if (proof.root) checks.push({ ok: true, label: 'Root hash: ' + proof.root.substring(0, 32) + '…' });
-    if (proof.leaf) checks.push({ ok: true, label: 'Leaf hash: ' + proof.leaf.substring(0, 32) + '…' });
+    if (proof.root) checks.push({ ok: true, label: 'Root hash: ' + proof.root.substring(0, 48) + (proof.root.length > 48 ? '…' : '') });
+    if (proof.leaf) checks.push({ ok: true, label: 'Leaf hash: ' + proof.leaf.substring(0, 48) + (proof.leaf.length > 48 ? '…' : '') });
     if (proof.siblings && Array.isArray(proof.siblings)) {
       checks.push({ ok: true, label: 'Proof path: ' + proof.siblings.length + ' siblings' });
     }
@@ -661,15 +661,16 @@ function verifyRedaction() {
   if (bundle.revealed_sections && Array.isArray(bundle.revealed_sections)) {
     checks.push({ ok: true, label: 'Revealed sections: ' + bundle.revealed_sections.length });
     bundle.revealed_sections.forEach(function(sec, i) {
-      var preview = (typeof sec === 'string' ? sec : JSON.stringify(sec)).substring(0, 80);
-      out += '  [' + i + '] ' + preview + '\n';
+      var full = typeof sec === 'string' ? sec : JSON.stringify(sec);
+      var preview = full.substring(0, 80);
+      out += '  [' + i + '] ' + preview + (full.length > 80 ? '…' : '') + '\n';
     });
     out += '\n';
   } else {
     checks.push({ ok: false, label: 'No revealed_sections array found' });
   }
 
-  if (bundle.merkle_root) checks.push({ ok: true, label: 'Merkle root: ' + bundle.merkle_root.substring(0, 32) + '…' });
+  if (bundle.merkle_root) checks.push({ ok: true, label: 'Merkle root: ' + bundle.merkle_root.substring(0, 48) + (bundle.merkle_root.length > 48 ? '…' : '') });
   if (bundle.total_parts) checks.push({ ok: true, label: 'Total document parts: ' + bundle.total_parts });
   if (bundle.proofs && Array.isArray(bundle.proofs)) checks.push({ ok: true, label: 'Inclusion proofs: ' + bundle.proofs.length });
   if (bundle.zk_proof) checks.push({ ok: true, label: 'ZK proof present' });

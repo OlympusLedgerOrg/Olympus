@@ -1798,12 +1798,8 @@ document.addEventListener('DOMContentLoaded', function() {
   setTimeout(runConnectivityCheck, 500);
 
   // Make all hash-like values in shard-meta copyable
-  document.querySelectorAll('.shard-meta span:not(.copy-target)').forEach(function(el) {
-    if (/[0-9a-f]{8,}/i.test(el.textContent)) {
-      el.classList.add('copy-target');
-      el.title = 'Click to copy';
-      el.onclick = function() { copyToClipboard(this); };
-    }
+  document.querySelectorAll('.shard-meta .copy-target').forEach(function(el) {
+    el.title = 'Click to copy';
   });
 
   // Make output blocks copyable on double-click
