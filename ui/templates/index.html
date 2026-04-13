@@ -655,12 +655,264 @@ input[type="checkbox"] {
   );
   opacity: 0.4;
 }
+
+/* ─── Vignette Depth ─── */
+.vignette {
+  pointer-events: none;
+  position: fixed; inset: 0;
+  z-index: 9998;
+  background: radial-gradient(ellipse at center, transparent 50%, rgba(0,0,0,0.4) 100%);
+}
+
+/* ═══════════════════════════════════════════════
+   PREMIUM MICRO-INTERACTIONS & EFFECTS
+═══════════════════════════════════════════════ */
+
+/* ─── Custom Scrollbar ─── */
+::-webkit-scrollbar { width: 5px; height: 5px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: var(--border-hi); border-radius: 3px; }
+::-webkit-scrollbar-thumb:hover { background: var(--accent); }
+* { scrollbar-width: thin; scrollbar-color: var(--border-hi) transparent; }
+
+/* ─── Selection Color ─── */
+::selection { background: var(--accent); color: var(--bg); }
+
+/* ─── Card Hover Lift ─── */
+.card {
+  transition: transform .2s cubic-bezier(.22,1,.36,1), box-shadow .2s ease, border-color .3s ease;
+}
+.card:hover {
+  transform: translateY(-2px);
+  box-shadow: var(--shadow-hi), 0 0 30px rgba(0,229,255,0.04);
+  border-color: var(--border-hi);
+}
+
+/* ─── Stat Card Hover Glow ─── */
+.stat-card {
+  transition: transform .2s cubic-bezier(.22,1,.36,1), box-shadow .2s ease, border-color .2s ease;
+}
+.stat-card:hover {
+  transform: translateY(-3px);
+  box-shadow: 0 8px 28px rgba(0,229,255,0.12), 0 0 1px var(--accent);
+  border-color: var(--border-hi);
+}
+.stat-value { transition: text-shadow .2s ease; }
+.stat-card:hover .stat-value { text-shadow: 0 0 16px var(--accent); }
+
+/* ─── Shard Row Hover Slide ─── */
+.shard-row {
+  transition: transform .15s cubic-bezier(.22,1,.36,1), box-shadow .15s ease;
+  border-left: 3px solid transparent;
+}
+.shard-row:hover {
+  transform: translateX(4px);
+  border-left-color: var(--accent);
+  box-shadow: -4px 0 12px rgba(0,229,255,0.06);
+}
+
+/* ─── Chip Micro-interactions ─── */
+.chip {
+  transition: transform .12s ease, box-shadow .12s ease, filter .12s ease;
+  cursor: default;
+}
+.chip:hover {
+  transform: translateY(-1px) scale(1.03);
+  filter: brightness(1.15);
+}
+
+/* ─── Connection Dot Pulse ─── */
+@keyframes dotPulse {
+  0%, 100% { box-shadow: 0 0 6px currentColor; }
+  50% { box-shadow: 0 0 6px currentColor, 0 0 14px currentColor, 0 0 24px rgba(0,230,118,0.2); }
+}
+.conn-dot.ok  { animation: dotPulse 2s ease-in-out infinite; }
+.conn-dot.err { animation: dotPulse 1.5s ease-in-out infinite; }
+
+/* ─── Ambient Header Glow ─── */
+@keyframes ambientGlow {
+  0%, 100% { box-shadow: inset 0 -1px 0 var(--border), 0 2px 20px rgba(0,229,255,0.03); }
+  50%      { box-shadow: inset 0 -1px 0 var(--border), 0 2px 30px rgba(0,229,255,0.10); }
+}
+#header { animation: ambientGlow 5s ease-in-out infinite; }
+
+/* ─── Button Glow Pulse ─── */
+@keyframes btnGlow {
+  0%, 100% { box-shadow: 0 0 15px rgba(0,229,255,0.20); }
+  50%      { box-shadow: 0 0 25px rgba(0,229,255,0.35), 0 0 50px rgba(0,229,255,0.06); }
+}
+.btn-primary { animation: btnGlow 3s ease-in-out infinite; }
+.btn-primary:active { animation: none; }
+.btn-secondary {
+  transition: all .15s ease;
+  position: relative;
+  overflow: hidden;
+}
+.btn-secondary:hover {
+  background: var(--accent-soft);
+  border-color: var(--accent);
+  color: var(--accent);
+  box-shadow: 0 0 20px rgba(0,229,255,0.08);
+}
+
+/* ─── Output Block Entrance ─── */
+@keyframes slideUp {
+  from { opacity: 0; transform: translateY(10px); }
+  to   { opacity: 1; transform: none; }
+}
+.output-block.visible { animation: slideUp .35s cubic-bezier(.22,1,.36,1); }
+.output-block.loading { animation: slideUp .2s ease; }
+
+/* ─── Debug Section Hover ─── */
+.debug-section {
+  transition: border-color .3s ease, box-shadow .3s ease;
+}
+.debug-section:hover {
+  border-color: var(--border-hi);
+  box-shadow: 0 4px 20px rgba(0,229,255,0.04);
+}
+
+/* ─── Section Label Hover ─── */
+.section-label { transition: color .15s ease; cursor: default; }
+.section-label:hover { color: var(--text-md); }
+.section-label:hover::after { background: var(--border-hi); }
+
+/* ─── Nav Item Hover Glow ─── */
+.nav-item:hover:not(.active) {
+  color: var(--text-md);
+  background: linear-gradient(to top, transparent 40%, var(--accent-soft) 100%);
+}
+
+/* ─── Better Focus Rings ─── */
+:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+.form-input:focus, .form-textarea:focus, .form-select:focus {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-glow), 0 0 24px rgba(0,229,255,0.06);
+}
+
+/* ─── Copy-to-Clipboard Targets ─── */
+.copy-target {
+  cursor: pointer;
+  position: relative;
+  transition: color .15s ease;
+  border-bottom: 1px dashed transparent;
+}
+.copy-target:hover {
+  color: var(--accent);
+  border-bottom-color: var(--accent);
+}
+.copy-target.copied::after {
+  content: '✓ COPIED';
+  position: absolute;
+  top: -24px; left: 50%;
+  transform: translateX(-50%);
+  font-size: 9px;
+  color: var(--ok);
+  background: var(--surface-2);
+  border: 1px solid var(--ok);
+  border-radius: 3px;
+  padding: 1px 6px;
+  white-space: nowrap;
+  pointer-events: none;
+  animation: copyToast .9s ease forwards;
+  z-index: 200;
+}
+@keyframes copyToast {
+  0%   { opacity: 0; transform: translateX(-50%) translateY(4px); }
+  15%  { opacity: 1; transform: translateX(-50%) translateY(0); }
+  75%  { opacity: 1; }
+  100% { opacity: 0; transform: translateX(-50%) translateY(-6px); }
+}
+
+/* ─── Keyboard Hint Badges ─── */
+.kbd-hint {
+  font-family: var(--font-mono);
+  font-size: 8px;
+  background: var(--surface-3);
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  padding: 0 3px;
+  color: var(--text-lo);
+  line-height: 1.6;
+  margin-top: 1px;
+  opacity: .6;
+  transition: opacity .15s;
+}
+.nav-item:hover .kbd-hint { opacity: 1; }
+
+/* ─── Boot Progress Bar ─── */
+.boot-progress {
+  width: min(300px, 60vw);
+  height: 2px;
+  background: var(--surface-3);
+  border-radius: 1px;
+  margin-top: 1.5rem;
+  overflow: hidden;
+}
+.boot-progress-bar {
+  height: 100%;
+  background: linear-gradient(90deg, var(--accent), var(--ok));
+  border-radius: 1px;
+  width: 0%;
+  transition: width .3s ease;
+  box-shadow: 0 0 10px var(--accent);
+}
+
+/* ─── Shimmer Loading ─── */
+@keyframes shimmer {
+  0%   { background-position: -200% 0; }
+  100% { background-position: 200% 0; }
+}
+.shimmer {
+  background: linear-gradient(90deg, var(--surface-2) 25%, var(--accent-soft) 50%, var(--surface-2) 75%);
+  background-size: 200% 100%;
+  animation: shimmer 1.5s ease infinite;
+  border-radius: var(--radius-sm);
+  min-height: 40px;
+}
+
+/* ─── Enhanced Responsive ─── */
+@media (min-width: 600px) {
+  .card:hover { transform: translateY(-3px); }
+  .stat-card:hover { transform: translateY(-4px); }
+  .stats-row { gap: .75rem; }
+}
+@media (min-width: 900px) {
+  .tab-panel { max-width: 720px; }
+  #bottom-nav { border-radius: 16px 16px 0 0; }
+}
+
+/* ─── Reduced Motion ─── */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.001ms !important;
+  }
+}
+
+/* ─── Snackbar Enhancement ─── */
+#snackbar {
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+}
+
+/* ─── Textarea Auto-grow Feel ─── */
+.form-textarea {
+  transition: border-color .15s, box-shadow .15s, height .2s ease;
+}
 </style>
 </head>
 <body>
 
 <!-- ── CRT SCANLINES ── -->
 <div class="crt-overlay"></div>
+
+<!-- ── VIGNETTE DEPTH ── -->
+<div class="vignette"></div>
 
 <!-- ── MATRIX CANVAS ── -->
 <canvas id="matrix-canvas"></canvas>
@@ -685,6 +937,7 @@ input[type="checkbox"] {
     <div class="boot-log-line" data-delay="1180">[CONN] API endpoint: {{ api_base }}</div>
     <div class="boot-log-line ready-line" data-delay="1400">[ OLYMPUS DEBUG CONSOLE — ONLINE ]</div>
   </div>
+  <div class="boot-progress"><div class="boot-progress-bar" id="boot-progress-bar"></div></div>
 </div>
 
 <!-- ── SNACKBAR ── -->
@@ -790,10 +1043,10 @@ input[type="checkbox"] {
       {% if row.signature_valid %}<span class="chip chip-ok">SIG</span>{% else %}<span class="chip chip-err">SIG</span>{% endif %}
       {% if row.chain_ok %}<span class="chip chip-ok">CHAIN</span>{% else %}<span class="chip chip-err">CHAIN</span>{% endif %}
     </div>
-    <div class="shard-meta">seq {{ row.shard.latest_seq }} · {{ row.shard.latest_root }}</div>
+    <div class="shard-meta"><span class="copy-target" onclick="copyToClipboard(this)" title="Click to copy">seq {{ row.shard.latest_seq }} · {{ row.shard.latest_root }}</span></div>
     {% if row.history %}
     <div class="shard-history">
-      {% for h in row.history %}↳ seq {{ h.seq }} {{ h.root_hash[:20] }}… {% endfor %}
+    {% for h in row.history %}↳ seq {{ h.seq }} <span class="copy-target" onclick="copyToClipboard(this)" title="Click to copy">{{ h.root_hash[:20] }}…</span> {% endfor %}
     </div>
     {% endif %}
   </div>
@@ -1034,26 +1287,31 @@ input[type="checkbox"] {
 </div><!-- /#app -->
 
 <!-- ── BOTTOM NAVIGATION ── -->
-<nav id="bottom-nav">
-  <button class="nav-item active" data-tab="status" onclick="switchTab('status',this)">
+<nav id="bottom-nav" role="navigation" aria-label="Main navigation">
+  <button class="nav-item active" data-tab="status" onclick="switchTab('status',this)" aria-label="Status tab (keyboard: 1)">
     <span class="nav-icon">◎</span>
     <span class="nav-label">Status</span>
+    <span class="kbd-hint">1</span>
   </button>
-  <button class="nav-item" data-tab="commit" onclick="switchTab('commit',this)">
+  <button class="nav-item" data-tab="commit" onclick="switchTab('commit',this)" aria-label="Commit tab (keyboard: 2)">
     <span class="nav-icon">⬆</span>
     <span class="nav-label">Commit</span>
+    <span class="kbd-hint">2</span>
   </button>
-  <button class="nav-item" data-tab="redact" onclick="switchTab('redact',this)">
+  <button class="nav-item" data-tab="redact" onclick="switchTab('redact',this)" aria-label="Redact tab (keyboard: 3)">
     <span class="nav-icon">⚡</span>
     <span class="nav-label">Redact</span>
+    <span class="kbd-hint">3</span>
   </button>
-  <button class="nav-item" data-tab="verify" onclick="switchTab('verify',this)">
+  <button class="nav-item" data-tab="verify" onclick="switchTab('verify',this)" aria-label="Verify tab (keyboard: 4)">
     <span class="nav-icon">✓</span>
     <span class="nav-label">Verify</span>
+    <span class="kbd-hint">4</span>
   </button>
-  <button class="nav-item" data-tab="debug" onclick="switchTab('debug',this)">
+  <button class="nav-item" data-tab="debug" onclick="switchTab('debug',this)" aria-label="Debug tab (keyboard: 5)">
     <span class="nav-icon">🔬</span>
     <span class="nav-label">Debug</span>
+    <span class="kbd-hint">5</span>
   </button>
 </nav>
 
@@ -1129,7 +1387,8 @@ function switchTab(name, btn) {
 var snackTimer;
 function snack(msg, type) {
   var el = document.getElementById('snackbar');
-  document.getElementById('snackbar-text').textContent = msg;
+  var icon = type === 'ok' ? '✓ ' : type === 'err' ? '✗ ' : 'ℹ ';
+  document.getElementById('snackbar-text').textContent = icon + msg;
   el.className = 'show' + (type ? ' snack-'+type : '');
   clearTimeout(snackTimer);
   snackTimer = setTimeout(function() { el.classList.remove('show'); }, 3000);
@@ -1453,30 +1712,112 @@ function loadStateDiff() {
   });
 }
 
+/* ─── Copy to Clipboard ─── */
+function copyToClipboard(el) {
+  var text = el.textContent.trim();
+  if (!text) return;
+  if (navigator.clipboard && navigator.clipboard.writeText) {
+    navigator.clipboard.writeText(text).then(function() {
+      flashCopied(el);
+      snack('Copied: ' + (text.length > 40 ? text.substring(0,40) + '…' : text), 'ok');
+    }).catch(function() { fallbackCopy(text, el); });
+  } else {
+    fallbackCopy(text, el);
+  }
+}
+function fallbackCopy(text, el) {
+  var ta = document.createElement('textarea');
+  ta.value = text; ta.style.position = 'fixed'; ta.style.opacity = '0';
+  document.body.appendChild(ta); ta.select();
+  try { document.execCommand('copy'); flashCopied(el); snack('Copied!', 'ok'); }
+  catch(_) { snack('Copy failed', 'err'); }
+  document.body.removeChild(ta);
+}
+function flashCopied(el) {
+  el.classList.add('copied');
+  setTimeout(function() { el.classList.remove('copied'); }, 900);
+}
+
+/* ─── Keyboard Shortcuts ─── */
+var TAB_KEYS = { '1':'status', '2':'commit', '3':'redact', '4':'verify', '5':'debug' };
+document.addEventListener('keydown', function(e) {
+  // Skip if user is typing in an input/textarea
+  var tag = (e.target.tagName || '').toLowerCase();
+  if (tag === 'input' || tag === 'textarea' || tag === 'select') return;
+  if (e.ctrlKey || e.metaKey || e.altKey) return;
+
+  var tabName = TAB_KEYS[e.key];
+  if (tabName) {
+    e.preventDefault();
+    var btn = document.querySelector('.nav-item[data-tab="'+tabName+'"]');
+    if (btn) switchTab(tabName, btn);
+    return;
+  }
+  // 'm' toggles matrix
+  if (e.key === 'm' || e.key === 'M') { toggleMatrix(); return; }
+});
+
 /* ─── Boot + Init ─── */
 document.addEventListener('DOMContentLoaded', function() {
   // Restore color scheme
   try { var c=localStorage.getItem('oly-color'); if (c&&COLOR_SCHEMES[c]) setColorScheme(c); } catch(_){}
 
-  // Boot sequence
+  // Boot sequence with progress bar
+  var progressBar = document.getElementById('boot-progress-bar');
   var lines = document.querySelectorAll('.boot-log-line');
-  lines.forEach(function(line) {
+  var totalLines = lines.length;
+
+  lines.forEach(function(line, idx) {
     var delay = parseInt(line.dataset.delay)||0;
-    setTimeout(function() { line.classList.add('show'); }, delay);
+    setTimeout(function() {
+      line.classList.add('show');
+      // Update progress bar
+      if (progressBar) {
+        var pct = Math.round(((idx + 1) / totalLines) * 100);
+        progressBar.style.width = pct + '%';
+      }
+    }, delay);
   });
+
   var maxDelay = 0;
   lines.forEach(function(l) { var d=parseInt(l.dataset.delay)||0; if (d>maxDelay) maxDelay=d; });
   setTimeout(function() {
-    var boot = document.getElementById('boot');
-    boot.classList.add('fade');
-    setTimeout(function() { boot.style.display='none'; }, 550);
-  }, maxDelay + 600);
+    // Fill progress bar to 100%
+    if (progressBar) progressBar.style.width = '100%';
+    setTimeout(function() {
+      var boot = document.getElementById('boot');
+      boot.classList.add('fade');
+      setTimeout(function() { boot.style.display='none'; }, 550);
+    }, 300);
+  }, maxDelay + 400);
 
   // Restore matrix
   try { if (localStorage.getItem('oly-matrix')==='on') toggleMatrix(); } catch(_){}
 
   // Auto connectivity check
   setTimeout(runConnectivityCheck, 500);
+
+  // Make all hash-like values in shard-meta copyable
+  document.querySelectorAll('.shard-meta span:not(.copy-target)').forEach(function(el) {
+    if (/[0-9a-f]{8,}/i.test(el.textContent)) {
+      el.classList.add('copy-target');
+      el.title = 'Click to copy';
+      el.onclick = function() { copyToClipboard(this); };
+    }
+  });
+
+  // Make output blocks copyable on double-click
+  document.querySelectorAll('.output-block').forEach(function(el) {
+    el.addEventListener('dblclick', function() {
+      var text = el.textContent.trim();
+      if (text && navigator.clipboard) {
+        navigator.clipboard.writeText(text).then(function() {
+          snack('Output copied to clipboard', 'ok');
+        });
+      }
+    });
+    el.title = 'Double-click to copy output';
+  });
 });
 </script>
 <script>if("serviceWorker" in navigator){navigator.serviceWorker.register("/sw.js").catch(function(){})}</script>
