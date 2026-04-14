@@ -172,7 +172,8 @@ class TestCircuitConfig:
 
 
 class TestProveAndVerify:
-    def test_prove_raises_without_snarkjs(self, tmp_path: Path):
+    def test_prove_raises_without_snarkjs(self, tmp_path: Path, monkeypatch):
+        monkeypatch.setattr("proofs.snarkjs_bridge.bridge_available", lambda: False)
         gen = ProofGenerator(
             "document_existence",
             build_dir=tmp_path,
@@ -182,7 +183,8 @@ class TestProveAndVerify:
         with pytest.raises(RuntimeError, match="snarkjs binary"):
             gen.prove(witness)
 
-    def test_verify_raises_without_snarkjs(self, tmp_path: Path):
+    def test_verify_raises_without_snarkjs(self, tmp_path: Path, monkeypatch):
+        monkeypatch.setattr("proofs.snarkjs_bridge.bridge_available", lambda: False)
         gen = ProofGenerator(
             "document_existence",
             build_dir=tmp_path,
@@ -192,12 +194,22 @@ class TestProveAndVerify:
         with pytest.raises(RuntimeError, match="snarkjs binary"):
             gen.verify(proof)
 
-    def test_snarkjs_available_property(self, tmp_path: Path):
+    def test_snarkjs_available_property(self, tmp_path: Path, monkeypatch):
+        monkeypatch.setattr("proofs.snarkjs_bridge.bridge_available", lambda: False)
         gen = ProofGenerator(
             "document_existence",
             snarkjs_bin="nonexistent-snarkjs",
         )
         assert gen.snarkjs_available is False
+
+    def test_snarkjs_available_with_bridge(self, tmp_path: Path, monkeypatch):
+        """Bridge availability makes snarkjs_available True even without CLI."""
+        monkeypatch.setattr("proofs.snarkjs_bridge.bridge_available", lambda: True)
+        gen = ProofGenerator(
+            "document_existence",
+            snarkjs_bin="nonexistent-snarkjs",
+        )
+        assert gen.snarkjs_available is True
 
 
 def _require_redaction_artifacts() -> tuple[Path, Path]:
