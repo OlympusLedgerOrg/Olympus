@@ -134,3 +134,16 @@ class StateRootDiffResponse(BaseModel):
     changed: list[StateRootDiffEntryResponse]
     removed: list[StateRootDiffEntryResponse]
     summary: dict[str, int]
+
+
+class RekorAnchorResponse(BaseModel):
+    """Rekor transparency log anchor for a shard header."""
+
+    shard_id: str
+    shard_seq: int
+    root_hash: str  # Hex-encoded 32-byte root
+    rekor_uuid: str | None  # Rekor entry UUID
+    rekor_index: int | None  # Rekor log index
+    anchored_at: str  # ISO 8601 timestamp
+    status: str  # pending | anchored | failed
+    verification_url: str | None  # URL to verify the Rekor entry

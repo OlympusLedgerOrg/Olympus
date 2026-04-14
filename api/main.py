@@ -40,6 +40,7 @@ from api.models import Base  # noqa: F401 — ensures all models are registered
 from api.routers import agencies, appeals, documents, keys, ledger, requests as requests_router
 from api.routers.admin import router as admin_router
 from api.routers.datasets import router as datasets_router
+from api.routers.federation import router as federation_router
 from api.routers.shards import router as shards_router
 from api.routers.witness import router as witness_router
 from api.rust_smoke import assert_rust_hot_path
@@ -346,6 +347,7 @@ def create_app() -> FastAPI:
     app.include_router(sth_router)
     app.include_router(witness_router)
     app.include_router(datasets_router)
+    app.include_router(federation_router)
 
     # Admin RBAC router
     app.include_router(admin_router)
@@ -365,6 +367,7 @@ def create_app() -> FastAPI:
     v1.include_router(sth_router)
     v1.include_router(witness_router)
     v1.include_router(datasets_router)
+    v1.include_router(federation_router)
     v1.include_router(admin_router)
     app.include_router(v1)
 

@@ -2,10 +2,13 @@
 
 from __future__ import annotations
 
+import asyncio
+import logging
 import math
 from dataclasses import dataclass
 from typing import Any
 
+import httpx
 import nacl.exceptions
 import nacl.signing
 
@@ -20,6 +23,18 @@ from .identity import (
     _extract_round_and_height,
     _to_int,
 )
+
+
+logger = logging.getLogger(__name__)
+
+
+class QuorumNotReached(Exception):
+    """Raised when the required quorum threshold is not reached."""
+
+    def __init__(self, message: str, collected_signatures: int, required_threshold: int):
+        super().__init__(message)
+        self.collected_signatures = collected_signatures
+        self.required_threshold = required_threshold
 
 
 @dataclass(frozen=True)
@@ -307,6 +322,187 @@ def build_quorum_certificate(
     certificate_hash = quorum_certificate_hash(certificate)
     header["quorum_certificate_hash"] = certificate_hash
     return certificate
+
+
+async def collect_quorum_signatures(
+    *,
+    header: dict[str, Any],
+    local_signature: str,
+    local_node_id: str,
+    registry: FederationRegistry,
+    threshold: int,
+    timeout_seconds: float = 5.0,
+    http_client: httpx.AsyncClient | None = None,
+) -> dict[str, Any]:
+    """Collect quorum signatures from Guardian nodes for a shard header.
+
+    This function broadcasts the header to all active Guardian nodes in the
+    registry, collects their signatures, and returns a quorum certificate
+    once the threshold is reached.
+
+    Args:
+        header: The shard header to sign (must include header_hash).
+        local_signature: Hex-encoded signature from the local node.
+        local_node_id: Node ID of the local node.
+        registry: Federation registry with active Guardian nodes.
+        threshold: Minimum number of valid signatures required.
+        timeout_seconds: Maximum time to wait for all nodes to respond.
+        http_client: Optional async HTTP client (creates one if not provided).
+
+    Returns:
+        A quorum certificate dictionary containing all collected signatures.
+
+    Raises:
+        QuorumNotReached: If insufficient signatures are collected before timeout.
+        ValueError: If the header is missing required fields.
+    """
+    if "header_hash" not in header:
+        raise ValueError("Header must include header_hash for quorum signing")
+
+    # Build the vote message for broadcasting
+    vote_msg = _build_federation_vote_message(header, local_node_id, registry)
+
+    # Serialize the vote message for transmission
+    vote_payload = {
+        "domain": vote_msg.domain,
+        "node_id": vote_msg.node_id,
+        "event_id": vote_msg.event_id,
+        "shard_id": vote_msg.shard_id,
+        "entry_seq": vote_msg.entry_seq,
+        "round_number": vote_msg.round_number,
+        "shard_root": vote_msg.shard_root,
+        "timestamp": vote_msg.timestamp,
+        "epoch": vote_msg.epoch,
+        "validator_set_hash": vote_msg.validator_set_hash,
+        "header": header,  # Include full header for fork detection
+    }
+
+    # Start with the local signature
+    collected_signatures: list[NodeSignature] = [
+        NodeSignature(node_id=local_node_id, signature=local_signature)
+    ]
+
+    # Get all active nodes except the local node
+    remote_nodes = [
+        node for node in registry.active_nodes() if node.node_id != local_node_id
+    ]
+
+    if len(remote_nodes) == 0:
+        # Single-node deployment - check if local signature is sufficient
+        if len(collected_signatures) >= threshold:
+            return build_quorum_certificate(header, collected_signatures, registry)
+        raise QuorumNotReached(
+            "No remote Guardian nodes available and local signature alone is insufficient",
+            collected_signatures=len(collected_signatures),
+            required_threshold=threshold,
+        )
+
+    # Create HTTP client if not provided
+    should_close_client = http_client is None
+    if http_client is None:
+        http_client = httpx.AsyncClient(timeout=timeout_seconds)
+
+    try:
+        # Request signatures from all remote nodes concurrently
+        async def request_signature(node) -> NodeSignature | None:
+            """Request a signature from a single Guardian node."""
+            try:
+                endpoint = f"{node.endpoint.rstrip('/')}/v1/federation/sign-header"
+                response = await http_client.post(
+                    endpoint,
+                    json=vote_payload,
+                    timeout=timeout_seconds,
+                )
+
+                if response.status_code == 200:
+                    data = response.json()
+                    node_sig = NodeSignature(
+                        node_id=data.get("node_id", node.node_id),
+                        signature=data.get("signature", ""),
+                    )
+
+                    # Verify the signature against the registry
+                    valid_sigs = verify_federated_header_signatures(
+                        header, [node_sig], registry
+                    )
+                    if valid_sigs:
+                        return valid_sigs[0]
+
+                    logger.warning(
+                        "Invalid signature from Guardian node %s",
+                        node.node_id,
+                    )
+                    return None
+
+                elif response.status_code == 409:
+                    # Fork detected - log but don't fail the overall collection
+                    logger.error(
+                        "Fork detected by Guardian node %s: %s",
+                        node.node_id,
+                        response.json().get("detail", "Unknown fork"),
+                    )
+                    return None
+
+                else:
+                    logger.warning(
+                        "Guardian node %s returned HTTP %d",
+                        node.node_id,
+                        response.status_code,
+                    )
+                    return None
+
+            except httpx.TimeoutException:
+                logger.warning(
+                    "Guardian node %s timed out after %.1fs",
+                    node.node_id,
+                    timeout_seconds,
+                )
+                return None
+            except httpx.RequestError as exc:
+                logger.warning(
+                    "Guardian node %s request failed: %s",
+                    node.node_id,
+                    exc,
+                )
+                return None
+            except Exception as exc:
+                logger.exception(
+                    "Unexpected error requesting signature from Guardian node %s",
+                    node.node_id,
+                )
+                return None
+
+        # Gather all signature requests with a global timeout
+        try:
+            results = await asyncio.wait_for(
+                asyncio.gather(
+                    *[request_signature(node) for node in remote_nodes],
+                    return_exceptions=True,
+                ),
+                timeout=timeout_seconds,
+            )
+        except TimeoutError:
+            results = []
+
+        # Collect valid signatures
+        for result in results:
+            if isinstance(result, NodeSignature):
+                collected_signatures.append(result)
+
+        # Check if we have enough signatures
+        if len(collected_signatures) >= threshold:
+            return build_quorum_certificate(header, collected_signatures, registry)
+
+        raise QuorumNotReached(
+            f"Only collected {len(collected_signatures)} signatures, "
+            f"need {threshold} for quorum",
+            collected_signatures=len(collected_signatures),
+            required_threshold=threshold,
+        )
+
+    finally:
+        if should_close_client:
+            await http_client.aclose()
 
 
 def quorum_certificate_hash(certificate: dict[str, Any]) -> str:
