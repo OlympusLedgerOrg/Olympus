@@ -30,7 +30,9 @@ if TYPE_CHECKING:
     from api.services.sequencer_client import GoSequencerClient
     from storage.postgres import StorageLayer
 
-    # Union type for write backend (storage or sequencer client)
+    # Type alias for write backend -- used by _get_write_backend() return type
+    # annotation and for type hints in calling code that needs to handle both
+    # the StorageLayer (direct PostgreSQL) and GoSequencerClient (via Go sequencer).
     WriteBackend = StorageLayer | GoSequencerClient
 
 logger = logging.getLogger(__name__)

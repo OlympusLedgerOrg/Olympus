@@ -210,7 +210,7 @@ class GoSequencerClient:
             # Use error-level logging in production-like environments to
             # ensure this misconfiguration is noticed early.
             logger.error(
-                "GoSequencerClient: OLYMPUS_SEQUENCER_TOKEN not set — "
+                "GoSequencerClient: OLYMPUS_SEQUENCER_TOKEN not set -- "
                 "sequencer requests will be unauthorized and fail"
             )
 
