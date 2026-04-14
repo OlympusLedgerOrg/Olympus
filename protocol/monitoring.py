@@ -69,10 +69,10 @@ except ImportError:
         def observe(self, _v: float) -> None:
             return
 
-    _MONITOR_OBSERVATIONS = _NullMonitorMetric()  # type: ignore[assignment]
-    _MONITOR_SPLIT_VIEWS = _NullMonitorMetric()  # type: ignore[assignment]
-    _MONITOR_CONSISTENCY_FAILURES = _NullMonitorMetric()  # type: ignore[assignment]
-    _MONITOR_POLL_LATENCY = _NullMonitorMetric()  # type: ignore[assignment]
+    _MONITOR_OBSERVATIONS = _NullMonitorMetric()
+    _MONITOR_SPLIT_VIEWS = _NullMonitorMetric()
+    _MONITOR_CONSISTENCY_FAILURES = _NullMonitorMetric()
+    _MONITOR_POLL_LATENCY = _NullMonitorMetric()
     _PROM_MONITOR = False
 
 
@@ -154,9 +154,7 @@ class LogMonitor:
                 if proof is None:
                     raise ValueError("Consistency proof required for append-only growth")
                 if not verify_sth_consistency(previous, sth, proof):
-                    _MONITOR_CONSISTENCY_FAILURES.labels(
-                        shard_id=shard_id, node_id=node_id
-                    ).inc()
+                    _MONITOR_CONSISTENCY_FAILURES.labels(shard_id=shard_id, node_id=node_id).inc()
                     raise ValueError("Consistency proof rejected")
 
         self._latest[key] = sth

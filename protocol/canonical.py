@@ -283,9 +283,7 @@ _XML_DOCTYPE_RE = re.compile(r"<!DOCTYPE[^>]*>", re.IGNORECASE)
 # Matches <tag ... /> or <tag .../> self-closing tags
 _XML_SELF_CLOSE_RE = re.compile(r"<(\w[\w:.-]*)\s*/\s*>")
 # Matches opening tags with attributes for sorting
-_XML_TAG_ATTRS_RE = re.compile(
-    r"<(\w[\w:.-]*)((?:\s+[\w:.-]+\s*=\s*\"[^\"]*\")*)\s*(/?)>"
-)
+_XML_TAG_ATTRS_RE = re.compile(r"<(\w[\w:.-]*)((?:\s+[\w:.-]+\s*=\s*\"[^\"]*\")*)\s*(/?)>")
 _XML_SINGLE_ATTR_RE = re.compile(r'([\w:.-]+)\s*=\s*"([^"]*)"')
 
 
@@ -426,9 +424,7 @@ def canonicalize_xml(text: str) -> str:
         CanonicalizationError: If text exceeds the size limit.
     """
     if len(text.encode("utf-8")) > _MAX_XML_BYTES:
-        raise CanonicalizationError(
-            f"XML text exceeds maximum size ({_MAX_XML_BYTES} bytes)"
-        )
+        raise CanonicalizationError(f"XML text exceeds maximum size ({_MAX_XML_BYTES} bytes)")
 
     # Step 1–2: BOM + NFC
     text = _strip_bom(text)
@@ -506,9 +502,7 @@ def canonicalize_csv(
         CanonicalizationError: If text exceeds size/row limits or is empty.
     """
     if len(text.encode("utf-8")) > _MAX_CSV_BYTES:
-        raise CanonicalizationError(
-            f"CSV text exceeds maximum size ({_MAX_CSV_BYTES} bytes)"
-        )
+        raise CanonicalizationError(f"CSV text exceeds maximum size ({_MAX_CSV_BYTES} bytes)")
 
     # Step 1–3: BOM, NFC, line endings
     text = _strip_bom(text)
@@ -520,9 +514,7 @@ def canonicalize_csv(
     rows: list[list[str]] = []
     for row in reader:
         if len(rows) >= _MAX_CSV_ROWS:
-            raise CanonicalizationError(
-                f"CSV exceeds maximum row count ({_MAX_CSV_ROWS})"
-            )
+            raise CanonicalizationError(f"CSV exceeds maximum row count ({_MAX_CSV_ROWS})")
         # NFC-normalize each cell and strip whitespace
         rows.append([unicodedata.normalize("NFC", cell.strip()) for cell in row])
 

@@ -307,7 +307,7 @@ CANONICAL_TEST_VECTORS: list[CanonicalTestVector] = [
         name="plaintext_basic",
         format_name="plaintext",
         version="1.0.0-nfc-homoglyph",
-        input_bytes="Hello   World\r\n\r\nSecond paragraph.\r\n".encode("utf-8"),
+        input_bytes=b"Hello   World\r\n\r\nSecond paragraph.\r\n",
         expected_canonical_hash="",  # Populated on first run via verify_test_vector
         description="Basic plaintext: CRLF normalization, whitespace collapse",
     ),

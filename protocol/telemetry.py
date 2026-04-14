@@ -81,11 +81,13 @@ try:  # pragma: no cover
     from opentelemetry.sdk.trace import TracerProvider
     from opentelemetry.sdk.trace.export import BatchSpanProcessor, ConsoleSpanExporter
 
-    _resource = Resource.create({
-        "service.name": os.getenv("OTEL_SERVICE_NAME", "olympus-ledger"),
-        "service.version": os.getenv("OLYMPUS_VERSION", "0.0.0"),
-        "deployment.environment": os.getenv("OLYMPUS_ENVIRONMENT", "development"),
-    })
+    _resource = Resource.create(
+        {
+            "service.name": os.getenv("OTEL_SERVICE_NAME", "olympus-ledger"),
+            "service.version": os.getenv("OLYMPUS_VERSION", "0.0.0"),
+            "deployment.environment": os.getenv("OLYMPUS_ENVIRONMENT", "development"),
+        }
+    )
 
     _provider = TracerProvider(resource=_resource)
 
@@ -117,8 +119,7 @@ try:  # pragma: no cover
     # Try to import propagation utilities for cross-service context
     try:
         from opentelemetry import context as _otel_context
-        from opentelemetry.propagate import extract as _otel_extract
-        from opentelemetry.propagate import inject as _otel_inject
+        from opentelemetry.propagate import extract as _otel_extract, inject as _otel_inject
 
         _OTEL_PROPAGATOR_AVAILABLE = True
     except ImportError:
@@ -431,7 +432,7 @@ def inject_trace_context(carrier: dict[str, str] | None = None) -> dict[str, str
         carrier = {}
 
     if _OTEL_PROPAGATOR_AVAILABLE:  # pragma: no cover
-        _otel_inject(carrier)  # type: ignore[name-defined]
+        _otel_inject(carrier)
 
     return carrier
 
@@ -451,7 +452,7 @@ def extract_trace_context(carrier: dict[str, str]) -> Any:
         is not available).
     """
     if _OTEL_PROPAGATOR_AVAILABLE:  # pragma: no cover
-        return _otel_extract(carrier)  # type: ignore[name-defined]
+        return _otel_extract(carrier)
 
     return None
 
@@ -474,7 +475,7 @@ def attach_trace_context(ctx: Any) -> Any:
         return None
 
     if _OTEL_PROPAGATOR_AVAILABLE:  # pragma: no cover
-        return _otel_context.attach(ctx)  # type: ignore[name-defined]
+        return _otel_context.attach(ctx)
 
     return None
 
@@ -489,7 +490,7 @@ def detach_trace_context(token: Any) -> None:
         return
 
     if _OTEL_PROPAGATOR_AVAILABLE:  # pragma: no cover
-        _otel_context.detach(token)  # type: ignore[name-defined]
+        _otel_context.detach(token)
 
 
 # ---------------------------------------------------------------------------
