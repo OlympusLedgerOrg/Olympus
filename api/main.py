@@ -26,7 +26,7 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any
 
-from fastapi import FastAPI, Request
+from fastapi import APIRouter, FastAPI, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
@@ -54,6 +54,11 @@ class _JSONLogFormatter(logging.Formatter):
     to the LogRecord.
     """
 
+    # Pre-compute standard LogRecord attributes once to avoid repeated allocation.
+    _STANDARD_ATTRS: frozenset[str] = frozenset(
+        logging.LogRecord("", 0, "", 0, "", (), None).__dict__.keys()
+    )
+
     def format(self, record: logging.LogRecord) -> str:
         log_entry: dict[str, Any] = {
             "timestamp": self.formatTime(record, self.datefmt),
@@ -64,9 +69,8 @@ class _JSONLogFormatter(logging.Formatter):
         if record.exc_info and record.exc_info[1] is not None:
             log_entry["exception"] = self.formatException(record.exc_info)
         # Forward structured 'extra' fields (skip standard LogRecord attrs)
-        _STANDARD = logging.LogRecord("", 0, "", 0, "", (), None).__dict__.keys()
         for key, val in record.__dict__.items():
-            if key not in _STANDARD and key not in log_entry:
+            if key not in self._STANDARD_ATTRS and key not in log_entry:
                 log_entry[key] = val
         return _json_mod.dumps(log_entry, default=str)
 
@@ -349,9 +353,7 @@ def create_app() -> FastAPI:
     # ── API Versioning ──
     # Mount all routers under /v1 prefix for versioned access.
     # Unversioned routes above are kept for backward compatibility.
-    from fastapi import APIRouter as _APIRouter
-
-    v1 = _APIRouter(prefix="/v1")
+    v1 = APIRouter(prefix="/v1")
     v1.include_router(documents.router)
     v1.include_router(ledger.router)
     v1.include_router(requests_router.router)

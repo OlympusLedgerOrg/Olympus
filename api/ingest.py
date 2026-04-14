@@ -635,10 +635,14 @@ async def _fetch_by_content_hash(content_hash_hex: str) -> dict[str, Any] | None
     # Fast path: check in-memory cache first (no I/O)
     proof_id = _content_index.get(content_hash_hex)
     if proof_id and proof_id in _ingestion_store:
-        # Promote to MRU position so frequently-accessed proofs stay cached
-        _ingestion_store.move_to_end(proof_id)
-        _content_index.move_to_end(content_hash_hex)
-        return _ingestion_store[proof_id]
+        # Promote to MRU position so frequently-accessed proofs stay cached.
+        # Guard against concurrent eviction between the check and move.
+        try:
+            _ingestion_store.move_to_end(proof_id)
+            _content_index.move_to_end(content_hash_hex)
+            return _ingestion_store[proof_id]
+        except KeyError:
+            pass  # Entry evicted concurrently; fall through to DB
 
     loop = asyncio.get_running_loop()
     return await loop.run_in_executor(None, _fetch_by_content_hash_sync, content_hash_hex)
@@ -1559,8 +1563,12 @@ async def get_ingestion_proof(
     """
     data = _ingestion_store.get(proof_id)
     if data is not None:
-        # Promote to MRU position so frequently-accessed proofs stay cached
-        _ingestion_store.move_to_end(proof_id)
+        # Promote to MRU position so frequently-accessed proofs stay cached.
+        # Guard against concurrent eviction between the get and move.
+        try:
+            _ingestion_store.move_to_end(proof_id)
+        except KeyError:
+            data = await _fetch_persisted_proof(proof_id)
     else:
         data = await _fetch_persisted_proof(proof_id)
     if data is None:
