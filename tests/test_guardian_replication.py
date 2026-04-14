@@ -73,15 +73,11 @@ class TestCollectQuorumSignatures:
         """Test that 2-of-3 signatures produces a valid quorum certificate."""
         # Generate local signature
         local_key = _test_signing_key(1)
-        local_sig = sign_federated_header(
-            sample_header, "olympus-node-1", local_key, test_registry
-        )
+        local_sig = sign_federated_header(sample_header, "olympus-node-1", local_key, test_registry)
 
         # Mock remote node responses
         node2_key = _test_signing_key(2)
-        node2_sig = sign_federated_header(
-            sample_header, "olympus-node-2", node2_key, test_registry
-        )
+        node2_sig = sign_federated_header(sample_header, "olympus-node-2", node2_key, test_registry)
 
         # Mock node 2 response
         respx.post("https://node2.olympus.org/v1/federation/sign-header").mock(
@@ -120,9 +116,7 @@ class TestCollectQuorumSignatures:
         """Test that only 1 signature fails to reach quorum."""
         # Generate local signature
         local_key = _test_signing_key(1)
-        local_sig = sign_federated_header(
-            sample_header, "olympus-node-1", local_key, test_registry
-        )
+        local_sig = sign_federated_header(sample_header, "olympus-node-1", local_key, test_registry)
 
         # Mock both remote nodes timing out
         respx.post("https://node2.olympus.org/v1/federation/sign-header").mock(
@@ -153,19 +147,13 @@ class TestCollectQuorumSignatures:
         """Test that all 3 signatures produces a valid certificate."""
         # Generate all signatures
         local_key = _test_signing_key(1)
-        local_sig = sign_federated_header(
-            sample_header, "olympus-node-1", local_key, test_registry
-        )
+        local_sig = sign_federated_header(sample_header, "olympus-node-1", local_key, test_registry)
 
         node2_key = _test_signing_key(2)
-        node2_sig = sign_federated_header(
-            sample_header, "olympus-node-2", node2_key, test_registry
-        )
+        node2_sig = sign_federated_header(sample_header, "olympus-node-2", node2_key, test_registry)
 
         node3_key = _test_signing_key(3)
-        node3_sig = sign_federated_header(
-            sample_header, "olympus-node-3", node3_key, test_registry
-        )
+        node3_sig = sign_federated_header(sample_header, "olympus-node-3", node3_key, test_registry)
 
         # Mock all remote node responses
         respx.post("https://node2.olympus.org/v1/federation/sign-header").mock(
@@ -207,9 +195,7 @@ class TestCollectQuorumSignatures:
         """Test that invalid signatures from remote nodes are rejected."""
         # Generate local signature
         local_key = _test_signing_key(1)
-        local_sig = sign_federated_header(
-            sample_header, "olympus-node-1", local_key, test_registry
-        )
+        local_sig = sign_federated_header(sample_header, "olympus-node-1", local_key, test_registry)
 
         # Mock node 2 with invalid signature (correct format but cryptographically invalid)
         respx.post("https://node2.olympus.org/v1/federation/sign-header").mock(
@@ -268,14 +254,10 @@ class TestForkDetectionInQuorum:
     ):
         """Test that 409 fork detection responses are logged but don't count."""
         local_key = _test_signing_key(1)
-        local_sig = sign_federated_header(
-            sample_header, "olympus-node-1", local_key, test_registry
-        )
+        local_sig = sign_federated_header(sample_header, "olympus-node-1", local_key, test_registry)
 
         node2_key = _test_signing_key(2)
-        node2_sig = sign_federated_header(
-            sample_header, "olympus-node-2", node2_key, test_registry
-        )
+        node2_sig = sign_federated_header(sample_header, "olympus-node-2", node2_key, test_registry)
 
         # Node 2 returns valid signature
         respx.post("https://node2.olympus.org/v1/federation/sign-header").mock(
@@ -359,8 +341,12 @@ class TestBuildQuorumCertificate:
     def test_build_certificate_with_threshold_signatures(self, test_registry, sample_header):
         """Test building a certificate with exactly threshold signatures."""
         signatures = [
-            sign_federated_header(sample_header, "olympus-node-1", _test_signing_key(1), test_registry),
-            sign_federated_header(sample_header, "olympus-node-2", _test_signing_key(2), test_registry),
+            sign_federated_header(
+                sample_header, "olympus-node-1", _test_signing_key(1), test_registry
+            ),
+            sign_federated_header(
+                sample_header, "olympus-node-2", _test_signing_key(2), test_registry
+            ),
         ]
 
         cert = build_quorum_certificate(sample_header, signatures, test_registry)
@@ -372,7 +358,9 @@ class TestBuildQuorumCertificate:
     def test_build_certificate_fails_below_threshold(self, test_registry, sample_header):
         """Test that certificate building fails with insufficient signatures."""
         signatures = [
-            sign_federated_header(sample_header, "olympus-node-1", _test_signing_key(1), test_registry),
+            sign_federated_header(
+                sample_header, "olympus-node-1", _test_signing_key(1), test_registry
+            ),
         ]
 
         with pytest.raises(ValueError, match="Insufficient"):

@@ -383,9 +383,7 @@ async def collect_quorum_signatures(
     ]
 
     # Get all active nodes except the local node
-    remote_nodes = [
-        node for node in registry.active_nodes() if node.node_id != local_node_id
-    ]
+    remote_nodes = [node for node in registry.active_nodes() if node.node_id != local_node_id]
 
     if len(remote_nodes) == 0:
         # Single-node deployment - check if local signature is sufficient
@@ -422,9 +420,7 @@ async def collect_quorum_signatures(
                     )
 
                     # Verify the signature against the registry
-                    valid_sigs = verify_federated_header_signatures(
-                        header, [node_sig], registry
-                    )
+                    valid_sigs = verify_federated_header_signatures(header, [node_sig], registry)
                     if valid_sigs:
                         return valid_sigs[0]
 
@@ -498,8 +494,7 @@ async def collect_quorum_signatures(
             return build_quorum_certificate(header, collected_signatures, registry)
 
         raise QuorumNotReached(
-            f"Only collected {len(collected_signatures)} signatures, "
-            f"need {threshold} for quorum",
+            f"Only collected {len(collected_signatures)} signatures, need {threshold} for quorum",
             collected_signatures=len(collected_signatures),
             required_threshold=threshold,
         )

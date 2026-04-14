@@ -2364,6 +2364,8 @@ class StorageLayer:
             )
             row = cur.fetchone()
             conn.commit()
+            if row is None:
+                raise RuntimeError("INSERT INTO rekor_anchors did not return an id")
             return int(row["id"])
 
     def update_rekor_anchor(
@@ -2394,9 +2396,7 @@ class StorageLayer:
             )
             conn.commit()
 
-    def get_latest_rekor_anchor(
-        self, shard_id: str
-    ) -> dict[str, Any] | None:
+    def get_latest_rekor_anchor(self, shard_id: str) -> dict[str, Any] | None:
         """
         Get the most recent Rekor anchor for a shard.
 
@@ -2433,9 +2433,7 @@ class StorageLayer:
                 "status": row["status"],
             }
 
-    def get_rekor_anchor_by_seq(
-        self, shard_id: str, shard_seq: int
-    ) -> dict[str, Any] | None:
+    def get_rekor_anchor_by_seq(self, shard_id: str, shard_seq: int) -> dict[str, Any] | None:
         """
         Get a Rekor anchor for a specific shard header sequence.
 
