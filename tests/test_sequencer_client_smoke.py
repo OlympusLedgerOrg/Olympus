@@ -35,14 +35,14 @@ pytestmark = [
 
 
 @pytest.fixture
-def sequencer_client():
-    """Create a GoSequencerClient for testing."""
+async def sequencer_client():
+    """Create a GoSequencerClient for testing with proper cleanup."""
     from api.services.sequencer_client import GoSequencerClient
 
     client = GoSequencerClient()
     yield client
-    # Note: We don't close here since these are smoke tests and
-    # the client may be reused across tests
+    # Clean up the HTTP client after tests complete
+    await client.close()
 
 
 class TestGoSequencerClientSmoke:

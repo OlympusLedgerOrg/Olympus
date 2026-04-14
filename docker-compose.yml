@@ -102,8 +102,10 @@ services:
       - olympus-socket:/run/olympus
     environment:
       CDHS_SMF_SOCKET: /run/olympus/cdhs-smf.sock
-      # Ed25519 signing key for SMT roots (hex-encoded 32-byte seed)
-      SEQUENCER_SMT_SIGNING_KEY: ${OLYMPUS_INGEST_SIGNING_KEY}
+      # Ed25519 signing key for SMT roots (hex-encoded 32-byte seed).
+      # Uses the same key as Python ingest for consistent signatures.
+      # Override with OLYMPUS_SEQUENCER_SIGNING_KEY if separate key is needed.
+      SEQUENCER_SMT_SIGNING_KEY: ${OLYMPUS_SEQUENCER_SIGNING_KEY:-${OLYMPUS_INGEST_SIGNING_KEY}}
       RUST_LOG: ${RUST_LOG:-info}
     networks:
       - backend

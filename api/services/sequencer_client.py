@@ -41,8 +41,6 @@ logger = logging.getLogger(__name__)
 class SequencerError(Exception):
     """Base exception for sequencer-related errors."""
 
-    pass
-
 
 class SequencerUnavailableError(SequencerError):
     """Raised when the Go sequencer service is unreachable.
@@ -205,10 +203,15 @@ class GoSequencerClient:
         # Lazily initialized HTTP client
         self._client: httpx.AsyncClient | None = None
 
+        # Warn loudly when token is missing - requests will be rejected
+        # by the sequencer's requireToken middleware. The token value itself
+        # is intentionally never logged to avoid credential exposure.
         if not self._token:
-            logger.warning(
+            # Use error-level logging in production-like environments to
+            # ensure this misconfiguration is noticed early.
+            logger.error(
                 "GoSequencerClient: OLYMPUS_SEQUENCER_TOKEN not set — "
-                "requests will be unauthorized"
+                "sequencer requests will be unauthorized and fail"
             )
 
     def _get_client(self) -> httpx.AsyncClient:
