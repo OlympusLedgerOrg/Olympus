@@ -382,21 +382,54 @@ def create_app() -> FastAPI:
 
     @app.get("/health", tags=["health"])
     async def health() -> dict[str, Any]:
-        """Health check with optional database status."""
+        """Health check with database and sequencer status.
+
+        Returns:
+            JSON response with service health indicators:
+            - status: "ok" | "degraded" (overall health)
+            - version: API version string
+            - database: "connected" | "degraded" | "error" | "not_initialized"
+            - db_check: True if database SELECT 1 succeeds
+            - sequencer: "ok" | "degraded" | "unavailable" | "disabled"
+              (only when OLYMPUS_USE_GO_SEQUENCER is set)
+
+        Status codes:
+            200: Service is healthy (status == "ok")
+            503: Service is degraded (database or sequencer unavailable)
+        """
+        from starlette.responses import JSONResponse
+
         result: dict[str, Any] = {
             "status": "ok",
             "version": settings.app_version,
         }
+
+        # Check database status
         try:
             from api.services.storage_layer import get_storage_status
 
             db_status, db_check = get_storage_status()
             result["database"] = db_status
             result["db_check"] = db_check
-            if db_status == "error":
+            if db_status in ("error", "degraded"):
                 result["status"] = "degraded"
         except ImportError:
             pass
+
+        # Check sequencer status when Go sequencer routing is enabled
+        try:
+            from api.services.storage_layer import get_sequencer_status
+
+            seq_status, seq_healthy = await get_sequencer_status()
+            result["sequencer"] = seq_status
+            if not seq_healthy and seq_status != "disabled":
+                result["status"] = "degraded"
+        except ImportError:
+            pass
+
+        # Return 503 when degraded
+        if result["status"] == "degraded":
+            return JSONResponse(content=result, status_code=503)
         return result
 
     return app
