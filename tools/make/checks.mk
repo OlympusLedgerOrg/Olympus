@@ -7,7 +7,7 @@ check: boundary-check check-demo-keys
 	ruff format --check protocol/ storage/ api/ scaffolding/ tests/
 	mypy protocol/ storage/ api/
 	bandit -r protocol/ storage/ api/ scaffolding/ -f txt
-	pytest tests/ -v --tb=short -m "not postgres" \
+	pytest tests/ -v --tb=short -m "not postgres and not differential" \
 	  --cov=protocol --cov=scaffolding --cov=storage --cov=api \
 	  --cov-report=term-missing --cov-report=xml \
 	  --cov-fail-under=85
@@ -46,3 +46,12 @@ check-demo-keys:
 	  . 2>/dev/null; then \
 	  echo "ERROR: Hardcoded demo key detected in source"; exit 1; \
 	fi
+
+## mutation-test: Run mutation testing on protocol crypto code (requires mutmut)
+.PHONY: mutation-test mutation-test-report
+mutation-test:
+	mutmut run --paths-to-mutate="protocol/hashes.py,protocol/merkle.py,protocol/ssmf.py,protocol/canonical.py"
+
+## mutation-test-report: Show mutation testing results summary
+mutation-test-report:
+	mutmut results

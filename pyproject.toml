@@ -65,6 +65,8 @@ dev = [
     "bandit==1.9.4",
     # Build tool for the olympus_core Rust extension (CVE-2026-4539 bridge)
     "maturin>=1.5,<2",
+    # Mutation testing for crypto-critical code paths
+    "mutmut==3.2.2",
 ]
 observability = [
     "opentelemetry-api==1.40.0",
@@ -149,6 +151,7 @@ markers = [
     "slow: marks long-running or nightly scenarios",
     "layer4: marks layer-4 (ZK circuit) tests",
     "circuits: marks tests that inspect or exercise ZK circuit source/behavior",
+    "differential: marks cross-implementation differential fuzz tests (require Go, Rust, Node)",
 ]
 
 [tool.coverage.run]
@@ -237,3 +240,9 @@ ignore_missing_imports = true
 [tool.bandit]
 exclude_dirs = ["tests", ".venv", "venv"]
 skips = ["B101"]  # Skip assert_used check (assertions are fine in tests)
+
+[tool.mutmut]
+paths_to_mutate = "protocol/hashes.py,protocol/merkle.py,protocol/ssmf.py,protocol/canonical.py"
+tests_dir = "tests/"
+runner = "python -m pytest tests/test_hash_functions.py tests/test_hash_domains.py tests/test_hashes_coverage.py tests/test_merkle_coverage.py tests/test_merkle_extended.py tests/test_merkle_proof_verification.py tests/test_merkle_consistency.py tests/test_ssmf.py tests/test_golden_values.py tests/test_canonicalizer_vectors.py tests/test_crypto_properties.py -x -q --tb=line --no-header"
+dict_synonyms = "Mutation"

@@ -1,0 +1,54 @@
+name: Mutation Testing
+
+on:
+  workflow_dispatch:
+  schedule:
+    # Run nightly at 03:00 UTC — mutation testing is expensive
+    - cron: "0 3 * * *"
+
+concurrency:
+  group: mutation-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  mutation-test:
+    name: mutmut – protocol crypto modules
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install system dependencies
+        run: sudo apt-get update && sudo apt-get install -y libmagic1
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[dev]"
+
+      - name: Run mutation testing
+        run: |
+          mutmut run \
+            --paths-to-mutate="protocol/hashes.py,protocol/merkle.py,protocol/ssmf.py,protocol/canonical.py" \
+            --no-progress
+          echo "## Mutation Testing Results" >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+          mutmut results >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Check for surviving mutants
+        run: |
+          # Report surviving mutants but don't fail CI yet.
+          # This is informational while we work toward 100% mutation kill rate.
+          survived=$(mutmut results 2>/dev/null | grep -c "survived" || true)
+          echo "Surviving mutants: $survived"
+          if [ "$survived" -gt 0 ]; then
+            echo "::warning::$survived mutant(s) survived — review with 'mutmut results' and 'mutmut show <id>'"
+          fi
