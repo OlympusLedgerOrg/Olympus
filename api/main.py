@@ -414,7 +414,10 @@ def create_app() -> FastAPI:
             if db_status in ("error", "degraded"):
                 result["status"] = "degraded"
         except ImportError:
-            pass
+            _logger.warning("Storage status check unavailable: failed to import storage layer", exc_info=True)
+            result["database"] = "not_initialized"
+            result["db_check"] = False
+            result["status"] = "degraded"
 
         # Check sequencer status when Go sequencer routing is enabled
         try:
@@ -425,7 +428,9 @@ def create_app() -> FastAPI:
             if not seq_healthy and seq_status != "disabled":
                 result["status"] = "degraded"
         except ImportError:
-            pass
+            _logger.warning("Sequencer status check unavailable: failed to import storage layer", exc_info=True)
+            result["sequencer"] = "unavailable"
+            result["status"] = "degraded"
 
         # Return 503 when degraded
         if result["status"] == "degraded":
