@@ -49,7 +49,6 @@ class TestRekorEnabled:
     def test_rekor_disabled_by_default(self):
         """Rekor should be disabled when env var is not set."""
         with patch.dict(os.environ, {}, clear=True):
-            os.environ.pop("OLYMPUS_REKOR_ENABLED", None)
             assert _rekor_enabled() is False
 
     def test_rekor_enabled_with_true(self):

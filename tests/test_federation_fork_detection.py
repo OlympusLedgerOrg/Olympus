@@ -7,8 +7,9 @@ of signing.
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 import pytest
 
@@ -19,7 +20,7 @@ from protocol.federation.replication import (
     ShardHeaderForkEvidence,
     detect_shard_header_forks,
 )
-from protocol.shards import create_shard_header, get_signing_key_from_seed, sign_header
+from protocol.shards import get_signing_key_from_seed
 
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -310,8 +311,6 @@ class TestForkEvidenceInGuardianSigningEndpoint:
         matches the header_hash in the header field.
         """
         from fastapi.testclient import TestClient
-        from unittest.mock import patch
-        import os
 
         from api.main import app
 

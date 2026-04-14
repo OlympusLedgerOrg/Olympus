@@ -67,6 +67,8 @@ dev = [
     "maturin>=1.5,<2",
     # Mutation testing for crypto-critical code paths
     "mutmut==3.2.2",
+    # HTTP mocking for async client tests
+    "respx>=0.23.1",
 ]
 observability = [
     "opentelemetry-api==1.40.0",

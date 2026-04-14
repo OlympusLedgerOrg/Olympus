@@ -6,11 +6,9 @@ POST /v1/federation/sign-header endpoint.
 
 from __future__ import annotations
 
-import asyncio
-import json
 import os
 from pathlib import Path
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 import httpx
 import pytest
@@ -18,11 +16,9 @@ import respx
 
 from protocol.federation.identity import FederationRegistry
 from protocol.federation.quorum import (
-    NodeSignature,
     QuorumNotReached,
     build_quorum_certificate,
     collect_quorum_signatures,
-    has_federation_quorum,
     sign_federated_header,
 )
 from protocol.shards import create_shard_header, get_signing_key_from_seed
@@ -215,13 +211,13 @@ class TestCollectQuorumSignatures:
             sample_header, "olympus-node-1", local_key, test_registry
         )
 
-        # Mock node 2 with invalid signature
+        # Mock node 2 with invalid signature (correct format but cryptographically invalid)
         respx.post("https://node2.olympus.org/v1/federation/sign-header").mock(
             return_value=httpx.Response(
                 200,
                 json={
                     "node_id": "olympus-node-2",
-                    "signature": "invalid" + "00" * 64,  # Invalid signature
+                    "signature": "00" * 64,  # Properly formatted but invalid signature
                 },
             )
         )

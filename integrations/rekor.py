@@ -26,10 +26,11 @@ import json
 import logging
 import os
 from dataclasses import dataclass
-from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Any
 
 import httpx
+
+from protocol.timestamps import current_timestamp
 
 
 if TYPE_CHECKING:
@@ -148,7 +149,7 @@ class RekorAnchor:
             "seq": seq,
             "header_hash": header_hash.hex(),
             "root_hash": root_hash.hex(),
-            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "timestamp": current_timestamp(),
         }
         data_b64 = base64.standard_b64encode(
             json.dumps(data_payload, sort_keys=True).encode("utf-8")
