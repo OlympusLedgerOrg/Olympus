@@ -8,9 +8,21 @@ This provides basic structural canonicalization: JSON key sorting, whitespace
 normalization, and deterministic byte encoding. For multi-format artifact
 ingestion (JCS/RFC 8785, HTML, DOCX, PDF) with version-pinned pipelines,
 see protocol/canonicalizer.py instead.
+
+Extended format support (v2.1+):
+
+- **Plain text**: line-ending normalization, Unicode NFC, homoglyph scrubbing,
+  trailing-whitespace removal, BOM stripping.
+- **XML**: Exclusive XML Canonicalization (C14N) subset — sorted attributes,
+  self-closing tag normalization, comment/PI stripping, NFC normalization.
+- **CSV/TSV**: deterministic delimiter, quoting, row ordering by canonical
+  JSON key, NFC normalization, and BOM stripping.
 """
 
+import csv
+import io
 import math
+import re
 import unicodedata
 from decimal import Decimal
 from typing import Any
@@ -252,3 +264,314 @@ def canonicalize_text(text: str) -> str:
         normalized_lines.pop()
 
     return "\n".join(normalized_lines)
+
+
+# ---------------------------------------------------------------------------
+# Extended format canonicalization (v2.1+)
+# ---------------------------------------------------------------------------
+
+# Maximum sizes to prevent resource exhaustion
+_MAX_PLAINTEXT_BYTES: int = 64 * 1024 * 1024  # 64 MiB
+_MAX_XML_BYTES: int = 64 * 1024 * 1024  # 64 MiB
+_MAX_CSV_BYTES: int = 64 * 1024 * 1024  # 64 MiB
+_MAX_CSV_ROWS: int = 1_000_000
+
+# XML processing instruction / comment / DOCTYPE patterns
+_XML_PI_RE = re.compile(r"<\?.*?\?>", re.DOTALL)
+_XML_COMMENT_RE = re.compile(r"<!--.*?-->", re.DOTALL)
+_XML_DOCTYPE_RE = re.compile(r"<!DOCTYPE[^>]*>", re.IGNORECASE)
+# Matches <tag ... /> or <tag .../> self-closing tags
+_XML_SELF_CLOSE_RE = re.compile(r"<(\w[\w:.-]*)\s*/\s*>")
+# Matches opening tags with attributes for sorting
+_XML_TAG_ATTRS_RE = re.compile(
+    r"<(\w[\w:.-]*)((?:\s+[\w:.-]+\s*=\s*\"[^\"]*\")*)\s*(/?)>"
+)
+_XML_SINGLE_ATTR_RE = re.compile(r'([\w:.-]+)\s*=\s*"([^"]*)"')
+
+
+def _strip_bom(text: str) -> str:
+    """Strip Unicode BOM (U+FEFF) from start of text."""
+    if text.startswith("\ufeff"):
+        return text[1:]
+    return text
+
+
+def canonicalize_plaintext(text: str, *, scrub_homoglyphs: bool = True) -> str:
+    """Canonicalize plain text for deterministic hashing.
+
+    Produces a deterministic plain-text representation by:
+
+    1. Stripping BOM (U+FEFF).
+    2. Normalizing to Unicode NFC.
+    3. Converting all line endings to Unix ``\\n``.
+    4. Replacing Unicode space-like characters with ASCII space.
+    5. Collapsing runs of spaces within each line.
+    6. Stripping trailing whitespace from each line.
+    7. Removing leading/trailing blank lines.
+    8. Optionally scrubbing homoglyphs (default: on).
+
+    Args:
+        text: Input plain text.
+        scrub_homoglyphs: If ``True`` (default), replace homoglyphs.
+
+    Returns:
+        Canonicalized plain text.
+
+    Raises:
+        CanonicalizationError: If text exceeds the size limit.
+    """
+    if len(text.encode("utf-8")) > _MAX_PLAINTEXT_BYTES:
+        raise CanonicalizationError(
+            f"Plain text exceeds maximum size ({_MAX_PLAINTEXT_BYTES} bytes)"
+        )
+
+    # Step 1: Strip BOM
+    text = _strip_bom(text)
+
+    # Step 2: NFC normalization
+    text = unicodedata.normalize("NFC", text)
+
+    # Step 3: Normalize line endings
+    text = text.replace("\r\n", "\n").replace("\r", "\n")
+
+    # Steps 4–6: per-line normalization
+    lines: list[str] = []
+    for line in text.split("\n"):
+        # Replace Unicode spaces
+        line = line.translate(_RESIDUAL_UNICODE_SPACES)
+        # Collapse whitespace within line
+        line = " ".join(line.split())
+        lines.append(line)
+
+    # Step 7: Homoglyph scrubbing (before trimming, to avoid changing structure)
+    if scrub_homoglyphs:
+        lines = [_scrub_homoglyphs(line) for line in lines]
+
+    # Step 8: Remove leading/trailing blank lines
+    while lines and not lines[0]:
+        lines.pop(0)
+    while lines and not lines[-1]:
+        lines.pop()
+
+    return "\n".join(lines)
+
+
+def canonicalize_plaintext_bytes(
+    data: bytes, *, encoding: str = "utf-8", scrub_homoglyphs: bool = True
+) -> bytes:
+    """Canonicalize plain text bytes for deterministic hashing.
+
+    Args:
+        data: Raw text bytes.
+        encoding: Source encoding (default UTF-8).
+        scrub_homoglyphs: Forwarded to :func:`canonicalize_plaintext`.
+
+    Returns:
+        Canonical UTF-8 bytes.
+    """
+    text = data.decode(encoding)
+    return canonicalize_plaintext(text, scrub_homoglyphs=scrub_homoglyphs).encode("utf-8")
+
+
+def _sort_xml_attributes(match: re.Match[str]) -> str:
+    """Sort XML attributes alphabetically within a tag."""
+    tag_name = match.group(1)
+    attrs_str = match.group(2)
+    self_close = match.group(3)
+
+    if not attrs_str.strip():
+        if self_close:
+            return f"<{tag_name}/>"
+        return f"<{tag_name}>"
+
+    attrs = _XML_SINGLE_ATTR_RE.findall(attrs_str)
+    sorted_attrs = sorted(attrs, key=lambda a: a[0])
+    attr_str = " ".join(f'{name}="{value}"' for name, value in sorted_attrs)
+
+    if self_close:
+        return f"<{tag_name} {attr_str}/>"
+    return f"<{tag_name} {attr_str}>"
+
+
+def canonicalize_xml(text: str) -> str:
+    """Canonicalize XML text for deterministic hashing.
+
+    Applies a subset of Exclusive XML Canonicalization suitable for
+    government document comparison:
+
+    1. Strip BOM.
+    2. NFC normalization.
+    3. Remove XML processing instructions (``<?...?>``).
+    4. Remove comments (``<!--...-->``).
+    5. Remove DOCTYPE declarations.
+    6. Normalize line endings to ``\\n``.
+    7. Sort attributes within each element alphabetically by name.
+    8. Normalize self-closing tags to ``<tag/>``.
+    9. Collapse inter-tag whitespace to single spaces.
+    10. Strip leading/trailing whitespace.
+
+    .. note::
+       This is *not* full C14N — it provides deterministic byte output
+       for comparing government XML artifacts without requiring an XML
+       parser dependency.  For W3C Exclusive XML Canonicalization, use
+       lxml-based canonicalization in ``canonicalizer.py``.
+
+    Args:
+        text: XML text to canonicalize.
+
+    Returns:
+        Canonicalized XML text.
+
+    Raises:
+        CanonicalizationError: If text exceeds the size limit.
+    """
+    if len(text.encode("utf-8")) > _MAX_XML_BYTES:
+        raise CanonicalizationError(
+            f"XML text exceeds maximum size ({_MAX_XML_BYTES} bytes)"
+        )
+
+    # Step 1–2: BOM + NFC
+    text = _strip_bom(text)
+    text = unicodedata.normalize("NFC", text)
+
+    # Step 3–5: Remove PIs, comments, DOCTYPE
+    text = _XML_PI_RE.sub("", text)
+    text = _XML_COMMENT_RE.sub("", text)
+    text = _XML_DOCTYPE_RE.sub("", text)
+
+    # Step 6: Line endings
+    text = text.replace("\r\n", "\n").replace("\r", "\n")
+
+    # Step 7: Sort attributes within tags
+    text = _XML_TAG_ATTRS_RE.sub(_sort_xml_attributes, text)
+
+    # Step 8: Normalize self-closing tags (with internal whitespace)
+    text = _XML_SELF_CLOSE_RE.sub(r"<\1/>", text)
+
+    # Step 9: Collapse inter-element whitespace
+    lines = [" ".join(line.split()) for line in text.split("\n")]
+    text = "\n".join(line for line in lines if line)
+
+    # Step 10: Strip leading/trailing whitespace
+    return text.strip()
+
+
+def canonicalize_xml_bytes(data: bytes, *, encoding: str = "utf-8") -> bytes:
+    """Canonicalize XML bytes for deterministic hashing.
+
+    Args:
+        data: Raw XML bytes.
+        encoding: Source encoding (default UTF-8).
+
+    Returns:
+        Canonical UTF-8 bytes.
+    """
+    text = data.decode(encoding)
+    return canonicalize_xml(text).encode("utf-8")
+
+
+def canonicalize_csv(
+    text: str,
+    *,
+    delimiter: str = ",",
+    sort_rows: bool = True,
+    has_header: bool = True,
+) -> str:
+    """Canonicalize CSV/TSV text for deterministic hashing.
+
+    Produces a deterministic CSV representation:
+
+    1. Strip BOM (U+FEFF).
+    2. NFC normalization of all cell values.
+    3. Normalize line endings to ``\\n``.
+    4. Parse with Python's csv module (handles quoting edge cases).
+    5. Optionally sort data rows (header stays in place).
+    6. Re-serialize with deterministic quoting (``QUOTE_MINIMAL``),
+       comma delimiter, and Unix line endings.
+
+    Args:
+        text: Input CSV/TSV text.
+        delimiter: Field delimiter (default: comma).
+        sort_rows: Whether to sort data rows for deterministic ordering
+            (default: ``True``). The sort key is the canonical JSON
+            representation of each row.
+        has_header: Whether the first row is a header (default: ``True``).
+            If ``True`` and ``sort_rows`` is ``True``, the header stays
+            in place and only data rows are sorted.
+
+    Returns:
+        Canonicalized CSV text.
+
+    Raises:
+        CanonicalizationError: If text exceeds size/row limits or is empty.
+    """
+    if len(text.encode("utf-8")) > _MAX_CSV_BYTES:
+        raise CanonicalizationError(
+            f"CSV text exceeds maximum size ({_MAX_CSV_BYTES} bytes)"
+        )
+
+    # Step 1–3: BOM, NFC, line endings
+    text = _strip_bom(text)
+    text = unicodedata.normalize("NFC", text)
+    text = text.replace("\r\n", "\n").replace("\r", "\n")
+
+    # Step 4: Parse
+    reader = csv.reader(io.StringIO(text), delimiter=delimiter)
+    rows: list[list[str]] = []
+    for row in reader:
+        if len(rows) >= _MAX_CSV_ROWS:
+            raise CanonicalizationError(
+                f"CSV exceeds maximum row count ({_MAX_CSV_ROWS})"
+            )
+        # NFC-normalize each cell and strip whitespace
+        rows.append([unicodedata.normalize("NFC", cell.strip()) for cell in row])
+
+    if not rows:
+        raise CanonicalizationError("CSV is empty")
+
+    # Step 5: Optionally sort data rows
+    if sort_rows:
+        if has_header and len(rows) > 1:
+            header = rows[0]
+            data = rows[1:]
+            data.sort(key=lambda r: canonical_json_encode(r))
+            rows = [header] + data
+        elif not has_header:
+            rows.sort(key=lambda r: canonical_json_encode(r))
+
+    # Step 6: Re-serialize with deterministic settings
+    output = io.StringIO()
+    writer = csv.writer(
+        output,
+        delimiter=",",
+        quoting=csv.QUOTE_MINIMAL,
+        lineterminator="\n",
+    )
+    writer.writerows(rows)
+    return output.getvalue().rstrip("\n")
+
+
+def canonicalize_csv_bytes(
+    data: bytes,
+    *,
+    encoding: str = "utf-8",
+    delimiter: str = ",",
+    sort_rows: bool = True,
+    has_header: bool = True,
+) -> bytes:
+    """Canonicalize CSV/TSV bytes for deterministic hashing.
+
+    Args:
+        data: Raw CSV/TSV bytes.
+        encoding: Source encoding (default UTF-8).
+        delimiter: Forwarded to :func:`canonicalize_csv`.
+        sort_rows: Forwarded to :func:`canonicalize_csv`.
+        has_header: Forwarded to :func:`canonicalize_csv`.
+
+    Returns:
+        Canonical UTF-8 bytes.
+    """
+    text = data.decode(encoding)
+    return canonicalize_csv(
+        text, delimiter=delimiter, sort_rows=sort_rows, has_header=has_header
+    ).encode("utf-8")

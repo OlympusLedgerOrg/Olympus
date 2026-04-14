@@ -4,15 +4,76 @@ Global log monitoring utilities for Olympus transparency logs.
 Monitors collect Signed Tree Heads (STHs) from multiple nodes, verify
 append-only growth via Merkle consistency proofs, and surface split-view
 evidence when peers disagree on the same shard history.
+
+Prometheus integration
+----------------------
+When ``prometheus-client`` is installed, the monitor emits:
+
+- ``olympus_monitor_observations_total`` — observations recorded per shard/node.
+- ``olympus_monitor_split_views_total`` — split-view evidence events detected.
+- ``olympus_monitor_consistency_failures_total`` — consistency proof failures.
+- ``olympus_monitor_poll_seconds`` — poll_node latency histogram.
 """
 
 from __future__ import annotations
 
+import logging
+import time
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 
 from .consistency import ConsistencyProof
 from .epochs import SignedTreeHead, verify_sth_consistency
+
+
+logger = logging.getLogger(__name__)
+
+# ---------------------------------------------------------------------------
+# Prometheus metrics (optional)
+# ---------------------------------------------------------------------------
+
+try:  # pragma: no cover
+    import prometheus_client as _prom
+
+    _MONITOR_OBSERVATIONS = _prom.Counter(
+        "olympus_monitor_observations_total",
+        "Total STH observations recorded",
+        labelnames=["shard_id", "node_id"],
+    )
+    _MONITOR_SPLIT_VIEWS = _prom.Counter(
+        "olympus_monitor_split_views_total",
+        "Total split-view evidence events detected",
+        labelnames=["shard_id"],
+    )
+    _MONITOR_CONSISTENCY_FAILURES = _prom.Counter(
+        "olympus_monitor_consistency_failures_total",
+        "Total consistency proof failures during monitoring",
+        labelnames=["shard_id", "node_id"],
+    )
+    _MONITOR_POLL_LATENCY = _prom.Histogram(
+        "olympus_monitor_poll_seconds",
+        "Latency of poll_node operations",
+        labelnames=["node_id", "shard_id"],
+        buckets=(0.01, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0, 10.0),
+    )
+    _PROM_MONITOR = True
+except ImportError:
+
+    class _NullMonitorMetric:
+        def labels(self, **_kw: object) -> _NullMonitorMetric:
+            return self
+
+        def inc(self, _amount: float = 1) -> None:
+            return
+
+        def observe(self, _v: float) -> None:
+            return
+
+    _MONITOR_OBSERVATIONS = _NullMonitorMetric()  # type: ignore[assignment]
+    _MONITOR_SPLIT_VIEWS = _NullMonitorMetric()  # type: ignore[assignment]
+    _MONITOR_CONSISTENCY_FAILURES = _NullMonitorMetric()  # type: ignore[assignment]
+    _MONITOR_POLL_LATENCY = _NullMonitorMetric()  # type: ignore[assignment]
+    _PROM_MONITOR = False
 
 
 @dataclass(frozen=True)
@@ -93,9 +154,13 @@ class LogMonitor:
                 if proof is None:
                     raise ValueError("Consistency proof required for append-only growth")
                 if not verify_sth_consistency(previous, sth, proof):
+                    _MONITOR_CONSISTENCY_FAILURES.labels(
+                        shard_id=shard_id, node_id=node_id
+                    ).inc()
                     raise ValueError("Consistency proof rejected")
 
         self._latest[key] = sth
+        _MONITOR_OBSERVATIONS.labels(shard_id=shard_id, node_id=node_id).inc()
         return Observation(node_id=node_id, shard_id=shard_id, sth=sth)
 
     def poll_node(self, *, node_id: str, shard_id: str) -> Observation:
@@ -110,18 +175,25 @@ class LogMonitor:
         """
         if self._sth_fetcher is None:
             raise ValueError("sth_fetcher not configured for LogMonitor")
-        latest = self._sth_fetcher(node_id, shard_id)
-        previous = self._latest.get((node_id, shard_id))
-        proof: ConsistencyProof | None = None
-        if (
-            previous is not None
-            and self._consistency_fetcher is not None
-            and latest.tree_size > previous.tree_size
-        ):
-            proof = self._consistency_fetcher(
-                node_id, shard_id, previous.tree_size, latest.tree_size
+        start = time.monotonic()
+        try:
+            latest = self._sth_fetcher(node_id, shard_id)
+            previous = self._latest.get((node_id, shard_id))
+            proof: ConsistencyProof | None = None
+            if (
+                previous is not None
+                and self._consistency_fetcher is not None
+                and latest.tree_size > previous.tree_size
+            ):
+                proof = self._consistency_fetcher(
+                    node_id, shard_id, previous.tree_size, latest.tree_size
+                )
+            return self.record_observation(
+                node_id=node_id, shard_id=shard_id, sth=latest, proof=proof
             )
-        return self.record_observation(node_id=node_id, shard_id=shard_id, sth=latest, proof=proof)
+        finally:
+            elapsed = time.monotonic() - start
+            _MONITOR_POLL_LATENCY.labels(node_id=node_id, shard_id=shard_id).observe(elapsed)
 
     # ------------------------------------------------------------------#
     # Gossip analysis
@@ -157,6 +229,7 @@ class LogMonitor:
                         observations=observations,
                     )
                 )
+                _MONITOR_SPLIT_VIEWS.labels(shard_id=shard_id).inc()
         return tuple(evidence)
 
     def observed(self) -> Iterable[Observation]:
