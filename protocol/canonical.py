@@ -526,10 +526,10 @@ def canonicalize_csv(
         if has_header and len(rows) > 1:
             header = rows[0]
             data = rows[1:]
-            data.sort(key=lambda r: canonical_json_encode(r))
+            data.sort(key=canonical_json_encode)
             rows = [header] + data
         elif not has_header:
-            rows.sort(key=lambda r: canonical_json_encode(r))
+            rows.sort(key=canonical_json_encode)
 
     # Step 6: Re-serialize with deterministic settings
     output = io.StringIO()

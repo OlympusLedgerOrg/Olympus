@@ -123,10 +123,10 @@ try:  # pragma: no cover
 
         _OTEL_PROPAGATOR_AVAILABLE = True
     except ImportError:
-        pass
+        pass  # Propagation is optional; trace context helpers degrade to no-ops
 
 except ImportError:
-    pass
+    pass  # OTel SDK is optional; no-op stubs used when absent
 
 
 class _NoOpSpan:

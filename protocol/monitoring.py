@@ -56,7 +56,6 @@ try:  # pragma: no cover
         labelnames=["node_id", "shard_id"],
         buckets=(0.01, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0, 10.0),
     )
-    _PROM_MONITOR = True
 except ImportError:
 
     class _NullMonitorMetric:
@@ -73,7 +72,6 @@ except ImportError:
     _MONITOR_SPLIT_VIEWS = _NullMonitorMetric()
     _MONITOR_CONSISTENCY_FAILURES = _NullMonitorMetric()
     _MONITOR_POLL_LATENCY = _NullMonitorMetric()
-    _PROM_MONITOR = False
 
 
 @dataclass(frozen=True)
