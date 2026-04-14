@@ -1,8 +1,11 @@
 package verifier
 
 import (
+	"bytes"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -28,13 +31,15 @@ func canonicalizerVectorFile(t *testing.T) string {
 // --- JSON structures for parsing vectors.json ---
 
 type Vectors struct {
-	Blake3Raw           []Blake3RawVec           `json:"blake3_raw"`
-	MerkleLeafHash      []LeafHashVec            `json:"merkle_leaf_hash"`
-	MerkleParentHash    []ParentHashVec          `json:"merkle_parent_hash"`
-	MerkleRoot          []MerkleRootVec          `json:"merkle_root"`
-	MerkleProof         []MerkleProofVec         `json:"merkle_proof"`
-	LedgerEntryHash     []LedgerEntryHashVec     `json:"ledger_entry_hash"`
-	DualRootCommitment  []DualRootCommitmentVec  `json:"dual_root_commitment"`
+	Blake3Raw            []Blake3RawVec            `json:"blake3_raw"`
+	MerkleLeafHash       []LeafHashVec             `json:"merkle_leaf_hash"`
+	MerkleParentHash     []ParentHashVec           `json:"merkle_parent_hash"`
+	MerkleRoot           []MerkleRootVec           `json:"merkle_root"`
+	MerkleProof          []MerkleProofVec          `json:"merkle_proof"`
+	LedgerEntryHash      []LedgerEntryHashVec      `json:"ledger_entry_hash"`
+	DualRootCommitment   []DualRootCommitmentVec   `json:"dual_root_commitment"`
+	VerificationBundle   []VerificationBundleVec   `json:"verification_bundle"`
+	ConsistencyProof     []ConsistencyProofVec     `json:"consistency_proof"`
 }
 
 type Blake3RawVec struct {
@@ -111,6 +116,37 @@ type DualRootCommitmentVec struct {
 	Blake3Proof              *Blake3ProofVec `json:"blake3_proof"`
 	ExpectedValid            bool            `json:"expected_valid"`
 	ExpectedBlake3Consistent bool            `json:"expected_blake3_consistent"`
+}
+
+// BundleMerkleProofVec is a Merkle proof within a verification bundle.
+// Siblings may be either [hash, position] arrays or {hash, position} objects.
+type BundleMerkleProofVec struct {
+	LeafHash  string          `json:"leaf_hash"`
+	LeafIndex int             `json:"leaf_index"`
+	Siblings  json.RawMessage `json:"siblings"`
+	RootHash  string          `json:"root_hash"`
+}
+
+// VerificationBundleVec represents a self-contained verification bundle test vector.
+type VerificationBundleVec struct {
+	Description     string                   `json:"description"`
+	BundleVersion   string                   `json:"bundle_version"`
+	CanonicalEvents []map[string]interface{}  `json:"canonical_events"`
+	LeafHashes      []string                 `json:"leaf_hashes"`
+	MerkleRoot      string                   `json:"merkle_root"`
+	MerkleProofs    []BundleMerkleProofVec   `json:"merkle_proofs"`
+}
+
+// ConsistencyProofVec represents a Merkle consistency proof test vector.
+type ConsistencyProofVec struct {
+	Description   string   `json:"description"`
+	LeavesUTF8    []string `json:"leaves_utf8"`
+	OldTreeSize   int      `json:"old_tree_size"`
+	NewTreeSize   int      `json:"new_tree_size"`
+	OldRoot       string   `json:"old_root"`
+	NewRoot       string   `json:"new_root"`
+	ProofNodes    []string `json:"proof_nodes"`
+	ExpectedValid bool     `json:"expected_valid"`
 }
 
 type CanonicalizerHashVec struct {
@@ -362,4 +398,222 @@ func TestConformanceDualRootCommitment(t *testing.T) {
 			}
 		})
 	}
+}
+
+// canonicalJSON produces Python-compatible canonical JSON:
+// sorted keys, minimal separators (',', ':'), ensure_ascii=True.
+func canonicalJSON(val interface{}) ([]byte, error) {
+	switch v := val.(type) {
+	case nil:
+		return []byte("null"), nil
+	case bool:
+		if v {
+			return []byte("true"), nil
+		}
+		return []byte("false"), nil
+	case float64:
+		return json.Marshal(v)
+	case string:
+		return json.Marshal(v)
+	case []interface{}:
+		var buf bytes.Buffer
+		buf.WriteByte('[')
+		for i, item := range v {
+			if i > 0 {
+				buf.WriteByte(',')
+			}
+			b, err := canonicalJSON(item)
+			if err != nil {
+				return nil, err
+			}
+			buf.Write(b)
+		}
+		buf.WriteByte(']')
+		return buf.Bytes(), nil
+	case map[string]interface{}:
+		keys := make([]string, 0, len(v))
+		for k := range v {
+			keys = append(keys, k)
+		}
+		// Sort keys
+		for i := 0; i < len(keys); i++ {
+			for j := i + 1; j < len(keys); j++ {
+				if keys[j] < keys[i] {
+					keys[i], keys[j] = keys[j], keys[i]
+				}
+			}
+		}
+		var buf bytes.Buffer
+		buf.WriteByte('{')
+		for i, k := range keys {
+			if i > 0 {
+				buf.WriteByte(',')
+			}
+			keyBytes, err := json.Marshal(k)
+			if err != nil {
+				return nil, err
+			}
+			buf.Write(keyBytes)
+			buf.WriteByte(':')
+			valBytes, err := canonicalJSON(v[k])
+			if err != nil {
+				return nil, err
+			}
+			buf.Write(valBytes)
+		}
+		buf.WriteByte('}')
+		return buf.Bytes(), nil
+	default:
+		return json.Marshal(v)
+	}
+}
+
+// parseBundleSiblings handles both array and object siblings in bundle proofs.
+func parseBundleSiblings(raw json.RawMessage) ([]MerkleSibling, error) {
+	// Try parsing as array of [hash, position] pairs first
+	var arrayForm [][]interface{}
+	if err := json.Unmarshal(raw, &arrayForm); err == nil && len(arrayForm) > 0 {
+		if _, ok := arrayForm[0][0].(string); ok {
+			siblings := make([]MerkleSibling, len(arrayForm))
+			for i, pair := range arrayForm {
+				if len(pair) != 2 {
+					return nil, fmt.Errorf("sibling[%d]: expected [hash, position], got %d elements", i, len(pair))
+				}
+				siblings[i] = MerkleSibling{
+					Hash:     pair[0].(string),
+					Position: pair[1].(string),
+				}
+			}
+			return siblings, nil
+		}
+	}
+	// Try parsing as array of {hash, position} objects
+	var objectForm []SiblingVec
+	if err := json.Unmarshal(raw, &objectForm); err != nil {
+		return nil, fmt.Errorf("failed to parse siblings: %w", err)
+	}
+	siblings := make([]MerkleSibling, len(objectForm))
+	for i, s := range objectForm {
+		siblings[i] = MerkleSibling{Hash: s.Hash, Position: s.Position}
+	}
+	return siblings, nil
+}
+
+// TestConformanceVerificationBundle validates the self-contained verification
+// bundle vectors: leaf hashes from canonical events, Merkle root, and proofs.
+func TestConformanceVerificationBundle(t *testing.T) {
+	vectors := loadVectors(t)
+	for _, vec := range vectors.VerificationBundle {
+		vec := vec
+		t.Run(vec.Description, func(t *testing.T) {
+			// 1. Verify leaf hashes from canonical events
+			for i, event := range vec.CanonicalEvents {
+				canonical, err := canonicalJSON(event)
+				if err != nil {
+					t.Fatalf("canonicalJSON for event[%d] failed: %v", i, err)
+				}
+				got := hex.EncodeToString(ComputeBlake3(canonical))
+				if got != vec.LeafHashes[i] {
+					t.Errorf("leaf_hash[%d]: got %s, want %s\n  canonical: %s", i, got, vec.LeafHashes[i], string(canonical))
+				}
+			}
+
+			// 2. Verify Merkle root from leaf hashes
+			leaves := make([][]byte, len(vec.LeafHashes))
+			for i, h := range vec.LeafHashes {
+				b, err := hex.DecodeString(h)
+				if err != nil {
+					t.Fatalf("bad leaf_hash[%d]: %v", i, err)
+				}
+				leaves[i] = b
+			}
+			root, err := ComputeMerkleRoot(leaves)
+			if err != nil {
+				t.Fatalf("ComputeMerkleRoot error: %v", err)
+			}
+			if root != vec.MerkleRoot {
+				t.Errorf("merkle_root: got %s, want %s", root, vec.MerkleRoot)
+			}
+
+			// 3. Verify each Merkle inclusion proof
+			for pi, mp := range vec.MerkleProofs {
+				leafHashBytes, err := hex.DecodeString(mp.LeafHash)
+				if err != nil {
+					t.Fatalf("bad proof[%d] leaf_hash: %v", pi, err)
+				}
+				siblings, err := parseBundleSiblings(mp.Siblings)
+				if err != nil {
+					t.Fatalf("bad proof[%d] siblings: %v", pi, err)
+				}
+				proof := &MerkleProof{
+					LeafHash: leafHashBytes,
+					Siblings: siblings,
+					RootHash: mp.RootHash,
+				}
+				valid, err := VerifyMerkleProof(proof)
+				if err != nil {
+					t.Fatalf("VerifyMerkleProof[%d] error: %v", pi, err)
+				}
+				if !valid {
+					t.Errorf("merkle_proof[%d] (leaf index %d) verification failed", pi, mp.LeafIndex)
+				}
+			}
+		})
+	}
+}
+
+// TestConformanceConsistencyProof validates the consistency proof test vectors by
+// verifying that the old_root and new_root match what's computed from the leaves.
+func TestConformanceConsistencyProof(t *testing.T) {
+	vectors := loadVectors(t)
+	for _, vec := range vectors.ConsistencyProof {
+		vec := vec
+		t.Run(vec.Description, func(t *testing.T) {
+			// Compute leaf hashes
+			leafHashes := make([][]byte, len(vec.LeavesUTF8))
+			for i, s := range vec.LeavesUTF8 {
+				leafHashes[i] = MerkleLeafHash([]byte(s))
+			}
+
+			// Compute old root from old_tree_size leaves
+			oldRoot, err := computeCTMerkleRoot(leafHashes[:vec.OldTreeSize])
+			if err != nil {
+				t.Fatalf("computeCTMerkleRoot(old) error: %v", err)
+			}
+			if oldRoot != vec.OldRoot {
+				t.Errorf("old_root: got %s, want %s", oldRoot, vec.OldRoot)
+			}
+
+			// Compute new root from new_tree_size leaves
+			newRoot, err := computeCTMerkleRoot(leafHashes[:vec.NewTreeSize])
+			if err != nil {
+				t.Fatalf("computeCTMerkleRoot(new) error: %v", err)
+			}
+			if newRoot != vec.NewRoot {
+				t.Errorf("new_root: got %s, want %s", newRoot, vec.NewRoot)
+			}
+		})
+	}
+}
+
+// computeCTMerkleRoot computes a CT-style Merkle root from pre-hashed leaves.
+// This is used for consistency proof testing where leaves are already leaf-hashed.
+func computeCTMerkleRoot(leafHashes [][]byte) (string, error) {
+	if len(leafHashes) == 0 {
+		return "", errors.New("empty leaf list")
+	}
+	level := make([][]byte, len(leafHashes))
+	copy(level, leafHashes)
+	for len(level) > 1 {
+		var nextLevel [][]byte
+		for i := 0; i < len(level); i += 2 {
+			if i+1 < len(level) {
+				nextLevel = append(nextLevel, MerkleParentHash(level[i], level[i+1]))
+			} else {
+				nextLevel = append(nextLevel, level[i]) // CT-style promotion
+			}
+		}
+		level = nextLevel
+	}
+	return hex.EncodeToString(level[0]), nil
 }
