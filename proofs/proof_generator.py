@@ -47,11 +47,11 @@ from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
-from protocol.zkp import Groth16Prover, ZKProof
-
+from proofs import snarkjs_bridge
 from protocol.hashes import SNARK_SCALAR_FIELD
 from protocol.poseidon_bn128 import poseidon_hash_bn128
 from protocol.poseidon_tree import POSEIDON_DOMAIN_COMMITMENT
+from protocol.zkp import Groth16Prover, ZKProof
 
 
 if TYPE_CHECKING:
@@ -250,8 +250,8 @@ class ProofGenerator:
 
     @property
     def snarkjs_available(self) -> bool:
-        """Return True if the configured snarkjs launcher is on PATH."""
-        return shutil.which(self.snarkjs_bin) is not None
+        """Return True if snarkjs is available (via bridge or CLI)."""
+        return snarkjs_bridge.bridge_available() or shutil.which(self.snarkjs_bin) is not None
 
     def generate_witness(self, **inputs: Any) -> Witness:
         """
@@ -298,23 +298,55 @@ class ProofGenerator:
     def prove(self, witness: Witness) -> ZKProof:
         """
         Generate a Groth16 proof from a witness produced by generate_witness().
+
+        Uses the persistent Node.js snarkjs bridge when available,
+        falling back to the CLI subprocess (npx snarkjs) otherwise.
         """
         if not self.snarkjs_available:
             raise RuntimeError(
-                f"snarkjs binary '{self.snarkjs_bin}' not found. "
-                "Install Node.js/npm (for npx) or install snarkjs globally."
-            )
-
-        if witness.witness_path is None or not witness.witness_path.exists():
-            raise FileNotFoundError(
-                "Witness file missing. Ensure circuits are compiled (setup_circuits.sh) "
-                "and witness generation succeeded."
+                f"snarkjs binary '{self.snarkjs_bin}' not found and Node.js bridge "
+                "unavailable. Install Node.js/npm or install snarkjs globally."
             )
 
         zkey_path = self.build_dir / f"{self.circuit}_final.zkey"
         if not zkey_path.exists():
             raise FileNotFoundError(
                 f"ZKey file not found: {zkey_path}. Run 'bash setup_circuits.sh' first."
+            )
+
+        # --- Preferred path: Node.js bridge ---
+        if snarkjs_bridge.bridge_available():
+            # If we have a witness file, use prove(); otherwise use fullProve()
+            # with the raw input signals + WASM.
+            if witness.witness_path is not None and witness.witness_path.exists():
+                proof_dict, public_signals = snarkjs_bridge.prove(
+                    witness_file=witness.witness_path,
+                    zkey_file=zkey_path,
+                )
+            else:
+                # fullProve: witness generation + proving in one step
+                wasm_file = self.build_dir / f"{self.circuit}_js" / f"{self.circuit}.wasm"
+                if not wasm_file.exists():
+                    raise FileNotFoundError(
+                        f"WASM witness generator not found: {wasm_file}. "
+                        "Run 'bash setup_circuits.sh --compile-only' first."
+                    )
+                proof_dict, public_signals = snarkjs_bridge.full_prove(
+                    input_signals=witness.inputs,
+                    wasm_file=wasm_file,
+                    zkey_file=zkey_path,
+                )
+            return ZKProof(
+                proof=proof_dict,
+                public_signals=public_signals,
+                circuit=self.circuit,
+            )
+
+        # --- Fallback: CLI subprocess via Groth16Prover ---
+        if witness.witness_path is None or not witness.witness_path.exists():
+            raise FileNotFoundError(
+                "Witness file missing. Ensure circuits are compiled (setup_circuits.sh) "
+                "and witness generation succeeded."
             )
 
         # Unique outputs per run to avoid collisions
@@ -338,6 +370,9 @@ class ProofGenerator:
         """
         Verify a Groth16 proof.
 
+        Uses the persistent Node.js snarkjs bridge when available,
+        falling back to the CLI subprocess (npx snarkjs) otherwise.
+
         If public_inputs is provided, it overrides proof.public_signals for this call.
 
         Important: by default the verification key is selected based on proof.circuit,
@@ -345,8 +380,8 @@ class ProofGenerator:
         """
         if not self.snarkjs_available:
             raise RuntimeError(
-                f"snarkjs binary '{self.snarkjs_bin}' not found. "
-                "Install Node.js/npm (for npx) or install snarkjs globally."
+                f"snarkjs binary '{self.snarkjs_bin}' not found and Node.js bridge "
+                "unavailable. Install Node.js/npm or install snarkjs globally."
             )
 
         verify_proof = proof
@@ -361,6 +396,15 @@ class ProofGenerator:
         if vkey is None:
             vkey = self.keys_dir / "verification_keys" / f"{verify_proof.circuit}_vkey.json"
 
+        # --- Preferred path: Node.js bridge ---
+        if snarkjs_bridge.bridge_available():
+            return snarkjs_bridge.verify(
+                vkey_file=vkey,
+                proof=verify_proof.proof,
+                public_signals=verify_proof.public_signals,
+            )
+
+        # --- Fallback: CLI subprocess via Groth16Prover ---
         return self._prover.verify(verify_proof, verification_key_path=vkey)
 
     def export_proof(self, proof: ZKProof, path: Path) -> None:
