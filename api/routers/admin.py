@@ -109,21 +109,26 @@ async def list_customers(
     )
 
 
+_CSV_EXPORT_MAX_ROWS = 50_000
+
+
 @router.get("/customers/export")
 async def export_customers_csv(
     db: DBSession,
     _admin: RequireAdminScope,
     _rl: RateLimit,
+    max_rows: int = Query(_CSV_EXPORT_MAX_ROWS, ge=1, le=_CSV_EXPORT_MAX_ROWS),
 ) -> StreamingResponse:
-    """Export all customers as a CSV file.
+    """Export customers as a CSV file with a bounded row limit.
 
     Args:
         db: Injected async database session.
+        max_rows: Maximum number of rows to export (1–50 000, default 50 000).
 
     Returns:
         Streaming CSV response with ``Content-Disposition: attachment``.
     """
-    result = await db.execute(select(User).order_by(User.created_at.desc()))
+    result = await db.execute(select(User).order_by(User.created_at.desc()).limit(max_rows))
     users = result.scalars().all()
 
     buf = io.StringIO()

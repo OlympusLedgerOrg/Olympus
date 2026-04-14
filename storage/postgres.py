@@ -177,6 +177,9 @@ class StorageLayer:
     All operations are append-only and deterministic.
     """
 
+    # Default pool size — configurable via OLYMPUS_POOL_MAX_SIZE env var.
+    DEFAULT_POOL_MAX_SIZE: int = int(os.environ.get("OLYMPUS_POOL_MAX_SIZE", "20"))
+
     # Default maximum number of cached Merkle node entries.
     DEFAULT_NODE_CACHE_SIZE: int = 4096
     DEFAULT_FLUSH_BATCH_SIZE: int = 10_000
@@ -186,7 +189,7 @@ class StorageLayer:
         connection_string: str,
         *,
         pool_min_size: int = 1,
-        pool_max_size: int = 10,
+        pool_max_size: int | None = None,
         connection_retries: int = 3,
         retry_base_delay_seconds: float = 0.1,
         retry_max_delay_seconds: float = 2.0,
@@ -201,6 +204,7 @@ class StorageLayer:
             connection_string: Postgres connection string
             pool_min_size: Minimum number of pooled DB connections.
             pool_max_size: Maximum number of pooled DB connections.
+                If None, reads from OLYMPUS_POOL_MAX_SIZE env var (default: 20).
             connection_retries: Number of retries for transient connection failures.
             retry_base_delay_seconds: Initial exponential backoff delay in seconds.
             retry_max_delay_seconds: Maximum retry backoff delay in seconds.
@@ -212,6 +216,8 @@ class StorageLayer:
                 cache.  Set to 0 to disable caching.  Defaults to
                 :data:`DEFAULT_NODE_CACHE_SIZE`.
         """
+        if pool_max_size is None:
+            pool_max_size = self.DEFAULT_POOL_MAX_SIZE
         if pool_min_size < 1:
             raise ValueError("pool_min_size must be >= 1")
         if pool_max_size < pool_min_size:
