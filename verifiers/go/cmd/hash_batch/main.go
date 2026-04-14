@@ -64,7 +64,9 @@ func main() {
 		}
 
 	case "merkle_root":
-		// All records_b64 are leaves of a single tree
+		// All records_b64 are leaves of a single tree.
+		// ComputeMerkleRoot returns a hex-encoded string (unlike ComputeBlake3
+		// which returns raw bytes requiring %x formatting).
 		leaves := make([][]byte, len(req.RecordsB64))
 		for i, recordB64 := range req.RecordsB64 {
 			record, err := base64.StdEncoding.DecodeString(recordB64)

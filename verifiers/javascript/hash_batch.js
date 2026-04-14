@@ -36,7 +36,8 @@ process.stdin.on('end', () => {
       break;
 
     case 'merkle_root': {
-      // All records_b64 are leaves of a single tree
+      // All records_b64 are leaves of a single tree.
+      // computeMerkleRoot already returns a hex string.
       const leaves = request.records_b64.map((recordB64, index) => {
         try {
           return new Uint8Array(Buffer.from(recordB64, 'base64'));

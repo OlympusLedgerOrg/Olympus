@@ -52,6 +52,10 @@ HAS_GO = shutil.which("go") is not None
 HAS_CARGO = shutil.which("cargo") is not None
 HAS_NODE = shutil.which("node") is not None
 
+# Maximum time (seconds) to wait for a batch hasher subprocess.  Includes
+# toolchain compilation on first invocation (Go/Rust may need to build).
+_SUBPROCESS_TIMEOUT = 120
+
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -76,7 +80,7 @@ def _run_batch(
         capture_output=True,
         cwd=cwd,
         check=False,
-        timeout=120,
+        timeout=_SUBPROCESS_TIMEOUT,
     )
     if proc.returncode != 0:
         raise RuntimeError(
