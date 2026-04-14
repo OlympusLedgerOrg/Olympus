@@ -43,6 +43,24 @@ VERSION_HISTORY: dict[str, dict[str, dict[str, str | None]]] = {
             "deprecated_at": None,
         },
     },
+    "plaintext": {
+        "1.0.0-nfc-homoglyph": {
+            "deployed_at": "2026-04-14T00:00:00Z",
+            "deprecated_at": None,
+        },
+    },
+    "xml": {
+        "1.0.0-c14n-subset-nfc": {
+            "deployed_at": "2026-04-14T00:00:00Z",
+            "deprecated_at": None,
+        },
+    },
+    "csv": {
+        "1.0.0-sorted-quote-minimal": {
+            "deployed_at": "2026-04-14T00:00:00Z",
+            "deprecated_at": None,
+        },
+    },
 }
 
 
@@ -50,12 +68,21 @@ class CanonicalizationVersionError(Exception):
     """Raised when canonicalization version validation fails."""
 
 
+# Versions for formats defined in canonical.py (not in canonicalizer.py)
+_CANONICAL_MODULE_VERSIONS: dict[str, str] = {
+    "plaintext": "1.0.0-nfc-homoglyph",
+    "xml": "1.0.0-c14n-subset-nfc",
+    "csv": "1.0.0-sorted-quote-minimal",
+}
+
+
 def get_current_version(format_name: str) -> str:
     """
     Get the current canonicalization version for a format.
 
     Args:
-        format_name: Format name (e.g., "jcs", "html", "docx", "pdf")
+        format_name: Format name (e.g., "jcs", "html", "docx", "pdf",
+            "plaintext", "xml", "csv")
 
     Returns:
         Current version string
@@ -63,9 +90,11 @@ def get_current_version(format_name: str) -> str:
     Raises:
         CanonicalizationVersionError: If format is unknown
     """
-    if format_name not in CANONICALIZER_VERSIONS:
-        raise CanonicalizationVersionError(f"Unknown format: {format_name}")
-    return CANONICALIZER_VERSIONS[format_name]
+    if format_name in CANONICALIZER_VERSIONS:
+        return CANONICALIZER_VERSIONS[format_name]
+    if format_name in _CANONICAL_MODULE_VERSIONS:
+        return _CANONICAL_MODULE_VERSIONS[format_name]
+    raise CanonicalizationVersionError(f"Unknown format: {format_name}")
 
 
 def verify_version_compatibility(
@@ -131,6 +160,12 @@ def validate_canonicalization_result(result: dict[str, Any]) -> bool:
         format_name = "docx"
     elif "pdf" in mode or "norm" in mode:
         format_name = "pdf"
+    elif "plaintext" in mode or "text" in mode:
+        format_name = "plaintext"
+    elif "xml" in mode:
+        format_name = "xml"
+    elif "csv" in mode or "tsv" in mode:
+        format_name = "csv"
 
     claimed_version = result["version"]
 
@@ -156,8 +191,9 @@ def create_version_manifest() -> dict[str, Any]:
     Returns:
         Version manifest containing current versions and full history
     """
+    all_versions = {**CANONICALIZER_VERSIONS, **_CANONICAL_MODULE_VERSIONS}
     return {
-        "current_versions": CANONICALIZER_VERSIONS.copy(),
+        "current_versions": all_versions,
         "version_history": VERSION_HISTORY.copy(),
     }
 
@@ -176,9 +212,10 @@ def verify_version_manifest(manifest: dict[str, Any]) -> bool:
         return False
 
     claimed_current = manifest["current_versions"]
+    all_versions = {**CANONICALIZER_VERSIONS, **_CANONICAL_MODULE_VERSIONS}
 
     # All current versions must match
-    for format_name, version in CANONICALIZER_VERSIONS.items():
+    for format_name, version in all_versions.items():
         if format_name not in claimed_current:
             return False
         if claimed_current[format_name] != version:
@@ -265,6 +302,38 @@ CANONICAL_TEST_VECTORS: list[CanonicalTestVector] = [
         input_bytes=b'{"int": 42, "float": 3.14159, "exp": 1.0e10}',
         expected_canonical_hash="e72d09c5a8c9e28a4f75a1d2f3d8e5c6a7b9f4d3e8c2a7b5f9d4e6c8a3b7f1d9",
         description="JCS numeric serialization test",
+    ),
+    CanonicalTestVector(
+        name="plaintext_basic",
+        format_name="plaintext",
+        version="1.0.0-nfc-homoglyph",
+        input_bytes=b"Hello   World\r\n\r\nSecond paragraph.\r\n",
+        expected_canonical_hash="",  # Populated on first run via verify_test_vector
+        description="Basic plaintext: CRLF normalization, whitespace collapse",
+    ),
+    CanonicalTestVector(
+        name="plaintext_unicode_spaces",
+        format_name="plaintext",
+        version="1.0.0-nfc-homoglyph",
+        input_bytes="Hello\u00a0World\u202fTest".encode("utf-8"),
+        expected_canonical_hash="",
+        description="Plaintext with Unicode NBSP and NARROW NBSP",
+    ),
+    CanonicalTestVector(
+        name="xml_basic",
+        format_name="xml",
+        version="1.0.0-c14n-subset-nfc",
+        input_bytes=b'<?xml version="1.0"?>\n<root b="2" a="1"><child/></root>',
+        expected_canonical_hash="",
+        description="XML: PI removal, attribute sorting, self-close normalization",
+    ),
+    CanonicalTestVector(
+        name="csv_basic",
+        format_name="csv",
+        version="1.0.0-sorted-quote-minimal",
+        input_bytes=b"name,age\r\nBob,30\r\nAlice,25\r\n",
+        expected_canonical_hash="",
+        description="CSV: CRLF normalization, row sorting, deterministic quoting",
     ),
 ]
 
