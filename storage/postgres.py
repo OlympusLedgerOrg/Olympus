@@ -564,20 +564,6 @@ class StorageLayer:
                     CHECK (tree_size >= 0)
             )
             """,
-            # Add quorum_certificate column if it doesn't exist (migration-safe)
-            """
-            DO $$
-            BEGIN
-                IF NOT EXISTS (
-                    SELECT 1 FROM information_schema.columns
-                    WHERE table_schema = 'public'
-                      AND table_name = 'shard_headers'
-                      AND column_name = 'quorum_certificate'
-                ) THEN
-                    ALTER TABLE shard_headers ADD COLUMN quorum_certificate TEXT DEFAULT NULL;
-                END IF;
-            END $$;
-            """,
             """
             CREATE INDEX IF NOT EXISTS shard_headers_shard_seq_desc_idx
                 ON shard_headers(shard_id, seq DESC)

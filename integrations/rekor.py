@@ -42,14 +42,22 @@ logger = logging.getLogger(__name__)
 DEFAULT_REKOR_URL = "https://rekor.sigstore.dev"
 
 
-def _rekor_enabled() -> bool:
-    """Return True when Rekor anchoring is enabled via environment variable."""
-    return os.environ.get("OLYMPUS_REKOR_ENABLED", "").strip().lower() in {
+def _env_flag_enabled(name: str) -> bool:
+    """Return True when an environment flag is enabled with common truthy values.
+
+    This is a shared utility to ensure consistent boolean parsing across the codebase.
+    """
+    return os.environ.get(name, "").strip().lower() in {
         "1",
         "true",
         "yes",
         "on",
     }
+
+
+def _rekor_enabled() -> bool:
+    """Return True when Rekor anchoring is enabled via environment variable."""
+    return _env_flag_enabled("OLYMPUS_REKOR_ENABLED")
 
 
 def _rekor_base_url() -> str:
@@ -135,8 +143,6 @@ class RekorAnchor:
         # Build the hashedrekord entry
         # Rekor expects base64-encoded data for the hash
         import base64
-
-        hash_b64 = base64.standard_b64encode(commitment).decode("ascii")
 
         # Include shard metadata in the data field for provenance
         data_payload = {
@@ -233,9 +239,10 @@ class RekorAnchor:
                         verification_url=verification_url,
                     )
 
+                # Unexpected response format - treat as failure
                 return RekorAnchorResult(
-                    success=True,
-                    error_message="Unexpected response format from Rekor",
+                    success=False,
+                    error_message="Unexpected response format from Rekor: expected dict with UUID key",
                 )
 
             # HTTP error

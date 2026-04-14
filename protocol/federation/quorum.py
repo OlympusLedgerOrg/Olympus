@@ -465,7 +465,11 @@ async def collect_quorum_signatures(
                     exc,
                 )
                 return None
-            except Exception as exc:
+            except Exception:
+                # Catch-all for unexpected errors (JSON decoding, response parsing, etc.)
+                # We log the full exception and return None to allow other nodes to
+                # continue - a single node's failure should not prevent quorum if
+                # enough other nodes respond successfully.
                 logger.exception(
                     "Unexpected error requesting signature from Guardian node %s",
                     node.node_id,

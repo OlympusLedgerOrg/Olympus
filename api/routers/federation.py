@@ -17,7 +17,6 @@ from pydantic import BaseModel, Field
 from api.auth import RequireIngestScope
 from protocol.federation.identity import FEDERATION_DOMAIN_TAG, FederationRegistry
 from protocol.federation.quorum import (
-    NodeSignature,
     _build_federation_vote_message,
     serialize_vote_message,
 )
@@ -29,14 +28,22 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/federation", tags=["federation"])
 
 
-def _guardian_enabled() -> bool:
-    """Return True when Guardian replication is enabled."""
-    return os.environ.get("OLYMPUS_GUARDIAN_ENABLED", "").strip().lower() in {
+def _env_flag_enabled(name: str) -> bool:
+    """Return True when an environment flag is enabled with common truthy values.
+
+    This is a shared utility to ensure consistent boolean parsing across the codebase.
+    """
+    return os.environ.get(name, "").strip().lower() in {
         "1",
         "true",
         "yes",
         "on",
     }
+
+
+def _guardian_enabled() -> bool:
+    """Return True when Guardian replication is enabled."""
+    return _env_flag_enabled("OLYMPUS_GUARDIAN_ENABLED")
 
 
 def _get_guardian_registry() -> FederationRegistry | None:
@@ -180,10 +187,12 @@ async def sign_header(
             detail=f"Invalid domain tag: expected {FEDERATION_DOMAIN_TAG}",
         )
 
-    # Fork detection: check if the remote header_hash matches our local state
-    # In a full implementation, we would query our local storage for the
-    # current committed root for this shard. For now, we verify the header
-    # structure is valid.
+    # Fork detection: Validate the request header structure.
+    # TODO(C-02): Full fork detection requires querying local storage to compare
+    # the received header's root against our locally committed root for this shard.
+    # If roots differ, we should return HTTP 409 with ShardHeaderForkEvidence.
+    # For now, we perform structural validation only - the actual fork detection
+    # logic will be added when wiring Guardian mode into the storage layer.
     header = request.header
     if "header_hash" not in header:
         raise HTTPException(

@@ -30,7 +30,7 @@ from api.schemas.shards import (
     TimestampTokenResponse,
 )
 from api.services.storage_layer import _require_storage, db_op
-from integrations.rekor import DEFAULT_REKOR_URL, _rekor_base_url
+from integrations.rekor import _rekor_base_url
 from protocol.shards import canonical_header
 from protocol.telemetry import opentelemetry_available, prometheus_available, record_smt_divergence
 
