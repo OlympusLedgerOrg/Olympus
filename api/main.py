@@ -380,8 +380,8 @@ def create_app() -> FastAPI:
             "status": "ok",
         }
 
-    @app.get("/health", tags=["health"])
-    async def health() -> Any:
+    @app.get("/health", tags=["health"], response_model=None)
+    async def health() -> dict[str, Any] | JSONResponse:
         """Health check with database and sequencer status.
 
         Returns:
@@ -397,8 +397,6 @@ def create_app() -> FastAPI:
             200: Service is healthy (status == "ok")
             503: Service is degraded (database or sequencer unavailable)
         """
-        from starlette.responses import JSONResponse
-
         result: dict[str, Any] = {
             "status": "ok",
             "version": settings.app_version,
@@ -415,7 +413,7 @@ def create_app() -> FastAPI:
                 result["status"] = "degraded"
         except ImportError:
             # storage_layer not available (e.g. test environment) — skip db check
-            pass
+            logger.debug("Skipping database health check: storage_layer not importable")
 
         # Check sequencer status when Go sequencer routing is enabled
         try:
@@ -427,7 +425,7 @@ def create_app() -> FastAPI:
                 result["status"] = "degraded"
         except ImportError:
             # storage_layer not available — skip sequencer check
-            pass
+            logger.debug("Skipping sequencer health check: storage_layer not importable")
 
         # Return 503 when degraded
         if result["status"] == "degraded":
