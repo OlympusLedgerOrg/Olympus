@@ -414,7 +414,7 @@ def create_app() -> FastAPI:
             if db_status in ("error", "degraded"):
                 result["status"] = "degraded"
         except ImportError:
-            _logger.warning("Storage status check unavailable: failed to import storage layer", exc_info=True)
+            logger.warning("Storage status check unavailable: failed to import storage layer", exc_info=True)
             result["database"] = "not_initialized"
             result["db_check"] = False
             result["status"] = "degraded"
@@ -428,7 +428,7 @@ def create_app() -> FastAPI:
             if not seq_healthy and seq_status != "disabled":
                 result["status"] = "degraded"
         except ImportError:
-            _logger.warning("Sequencer status check unavailable: failed to import storage layer", exc_info=True)
+            logger.warning("Sequencer status check unavailable: failed to import storage layer", exc_info=True)
             result["sequencer"] = "unavailable"
             result["status"] = "degraded"
 
