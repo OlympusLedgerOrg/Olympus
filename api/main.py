@@ -19,6 +19,7 @@ import api._patches as _patches  # apply CVE patches before any third-party impo
 
 _patches.apply_all()
 
+import json as _json_mod
 import logging
 import os
 from contextlib import asynccontextmanager
@@ -45,10 +46,41 @@ from api.rust_smoke import assert_rust_hot_path
 from api.sth import router as sth_router
 
 
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s %(levelname)s %(name)s — %(message)s",
-)
+class _JSONLogFormatter(logging.Formatter):
+    """Structured JSON log formatter for production environments.
+
+    Emits one JSON object per line with standard fields: ``timestamp``,
+    ``level``, ``logger``, ``message``, plus any ``extra`` fields attached
+    to the LogRecord.
+    """
+
+    def format(self, record: logging.LogRecord) -> str:
+        log_entry: dict[str, Any] = {
+            "timestamp": self.formatTime(record, self.datefmt),
+            "level": record.levelname,
+            "logger": record.name,
+            "message": record.getMessage(),
+        }
+        if record.exc_info and record.exc_info[1] is not None:
+            log_entry["exception"] = self.formatException(record.exc_info)
+        # Forward structured 'extra' fields (skip standard LogRecord attrs)
+        _STANDARD = logging.LogRecord("", 0, "", 0, "", (), None).__dict__.keys()
+        for key, val in record.__dict__.items():
+            if key not in _STANDARD and key not in log_entry:
+                log_entry[key] = val
+        return _json_mod.dumps(log_entry, default=str)
+
+
+_log_format = os.environ.get("OLYMPUS_LOG_FORMAT", "text").strip().lower()
+if _log_format == "json":
+    _handler = logging.StreamHandler()
+    _handler.setFormatter(_JSONLogFormatter())
+    logging.basicConfig(level=logging.INFO, handlers=[_handler])
+else:
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s %(levelname)s %(name)s — %(message)s",
+    )
 logger = logging.getLogger(__name__)
 
 
@@ -313,6 +345,26 @@ def create_app() -> FastAPI:
 
     # Admin RBAC router
     app.include_router(admin_router)
+
+    # ── API Versioning ──
+    # Mount all routers under /v1 prefix for versioned access.
+    # Unversioned routes above are kept for backward compatibility.
+    from fastapi import APIRouter as _APIRouter
+
+    v1 = _APIRouter(prefix="/v1")
+    v1.include_router(documents.router)
+    v1.include_router(ledger.router)
+    v1.include_router(requests_router.router)
+    v1.include_router(agencies.router)
+    v1.include_router(appeals.router)
+    v1.include_router(keys.router)
+    v1.include_router(shards_router)
+    v1.include_router(ingest_router)
+    v1.include_router(sth_router)
+    v1.include_router(witness_router)
+    v1.include_router(datasets_router)
+    v1.include_router(admin_router)
+    app.include_router(v1)
 
     @app.get("/", tags=["health"])
     async def root() -> dict[str, Any]:

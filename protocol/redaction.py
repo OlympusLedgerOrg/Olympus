@@ -17,6 +17,7 @@ Independence guarantee: verification requires only the proof and the
 revealed content — no access to the original document or private keys.
 """
 
+import os as _os
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -39,8 +40,14 @@ from .ssmf import SparseMerkleTree
 from .telemetry import get_tracer
 
 
-# Poseidon redaction circuit parameters (16 leaves, depth 4)
-_POSEIDON_TREE_DEPTH = 4
+# Poseidon redaction circuit parameters
+# Default: depth 4 → 16 leaves. Configurable via OLYMPUS_POSEIDON_TREE_DEPTH
+# (supports up to depth 8 → 256 leaves).
+_POSEIDON_TREE_DEPTH = int(_os.environ.get("OLYMPUS_POSEIDON_TREE_DEPTH", "4"))
+if _POSEIDON_TREE_DEPTH < 1 or _POSEIDON_TREE_DEPTH > 8:
+    raise ValueError(
+        f"OLYMPUS_POSEIDON_TREE_DEPTH must be between 1 and 8; got {_POSEIDON_TREE_DEPTH}"
+    )
 _POSEIDON_MAX_LEAVES = 1 << _POSEIDON_TREE_DEPTH
 
 

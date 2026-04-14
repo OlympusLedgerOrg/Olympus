@@ -635,6 +635,9 @@ async def _fetch_by_content_hash(content_hash_hex: str) -> dict[str, Any] | None
     # Fast path: check in-memory cache first (no I/O)
     proof_id = _content_index.get(content_hash_hex)
     if proof_id and proof_id in _ingestion_store:
+        # Promote to MRU position so frequently-accessed proofs stay cached
+        _ingestion_store.move_to_end(proof_id)
+        _content_index.move_to_end(content_hash_hex)
         return _ingestion_store[proof_id]
 
     loop = asyncio.get_running_loop()
@@ -790,6 +793,13 @@ def _consume_rate_limit(subject_type: str, subject: str, action: str) -> bool:
     # isolation within the single backend.
     backend = _get_rate_limit_backend()
     composite_key = f"ingest:{action}:{subject_type}:{subject}"
+
+    # Use atomic consume to prevent TOCTOU races where concurrent requests
+    # both read the same token count and both succeed.
+    if hasattr(backend, "consume_atomic"):
+        return backend.consume_atomic(composite_key, capacity, refill)
+
+    # Fallback for backends without consume_atomic (e.g. Redis)
     bucket = backend.get(composite_key)
 
     if bucket is None:
@@ -1548,7 +1558,10 @@ async def get_ingestion_proof(
         HTTPException: 404 if proof_id is not found.
     """
     data = _ingestion_store.get(proof_id)
-    if data is None:
+    if data is not None:
+        # Promote to MRU position so frequently-accessed proofs stay cached
+        _ingestion_store.move_to_end(proof_id)
+    else:
         data = await _fetch_persisted_proof(proof_id)
     if data is None:
         raise HTTPException(status_code=404, detail="Proof not found")
