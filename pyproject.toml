@@ -64,7 +64,7 @@ dev = [
     "coverage==7.13.4",
     "bandit==1.9.4",
     # Build tool for the olympus_core Rust extension (CVE-2026-4539 bridge)
-    "maturin>=1.5,<2",
+    "maturin>=1.13.1,<2",
     # Mutation testing for crypto-critical code paths
     "mutmut==3.2.2",
     # HTTP mocking for async client tests
