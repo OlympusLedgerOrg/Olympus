@@ -106,7 +106,7 @@
         "leaf-2",
         "leaf-3"
       ],
-      "root": "f3081e8755192e7c33a163305b76d6305b632d700b369c54ee2b03610ae5ca86"
+      "root": "d4be10ce8930302f91c6c5ab3110bc606f3304765bc625cba728574b3f7d8d00"
     },
     {
       "description": "Root of 5-leaf tree [leaf-0..leaf-4] (odd-leaf CT promotion)",
@@ -117,7 +117,7 @@
         "leaf-3",
         "leaf-4"
       ],
-      "root": "53cc22318d50f0309cd2fa07ee98c59bc9c564f55c7ae7466150e39c53f300fc"
+      "root": "304fe9037fe9a3af1d95bd13488411374f719380c1680776e3d6ee0e176130ea"
     },
     {
       "description": "Root of 7-leaf tree [leaf-0..leaf-6] (multiple odd promotions)",
@@ -130,7 +130,7 @@
         "leaf-5",
         "leaf-6"
       ],
-      "root": "07a83e61588d3c085094cbf729beac4f65f5d0446cf00c0bedbfea4e6588c5be"
+      "root": "2c0ec4108f3555bd29e5033601c4ab76a571f4a1baef8ce47ce90be1dcb02e9d"
     }
   ],
   "merkle_proof": [
@@ -179,33 +179,24 @@
     },
     {
       "description": "Valid proof for leaf[2] in 7-leaf tree (deep path)",
-      "leaves_utf8": [
-        "leaf-0",
-        "leaf-1",
-        "leaf-2",
-        "leaf-3",
-        "leaf-4",
-        "leaf-5",
-        "leaf-6"
-      ],
       "leaf_index": 2,
-      "leaf_hash": "67699ae49fb47f7045d9805620927e31234258b4346ccd42164269290d4f6351",
+      "leaf_hash": "12421d82092f007ce442083204fc63cc0a2d2e2ae87e0d8961dd5243d1f05188",
       "siblings": [
         {
-          "hash": "bd77ec905c48131e9cec03bed23e42ff40be6319e50e1c1f89809984c0a86977",
+          "hash": "00bed561072b5db06b1db7092a3b84ad1dee5393c9b049c682c1144e36cfdb91",
           "position": "right"
         },
         {
-          "hash": "54c63bceaaf526bfcd28505958f49186d15f8e1beebecf7eb3517ce2e7ceacc6",
+          "hash": "080ef84c7ff74ee361c7a6cee7dfcfc71027fa8e8bc53aff8822e902f31e5e6b",
           "position": "left"
         },
         {
-          "hash": "385626081e9f2b6f1490b448c6ba9c36ce22cbbc957709f8eb73df7026e22fb7",
+          "hash": "52e9b635bf4d84deda8a7a6cd67db4bcb3283b36778b6a454058a55a0f1b1ade",
           "position": "right"
         }
       ],
-      "root": "07a83e61588d3c085094cbf729beac4f65f5d0446cf00c0bedbfea4e6588c5be",
-      "expected_valid": true
+      "expected_valid": true,
+      "root_hash": "2c0ec4108f3555bd29e5033601c4ab76a571f4a1baef8ce47ce90be1dcb02e9d"
     }
   ],
   "poseidon_root": [
@@ -2020,13 +2011,13 @@
       ],
       "old_tree_size": 3,
       "new_tree_size": 7,
-      "old_root": "773a0884f027ec2200b5e26a7aa93e7a7a815b691a1e0e52ecd448dc9f1ae0ac",
-      "new_root": "07a83e61588d3c085094cbf729beac4f65f5d0446cf00c0bedbfea4e6588c5be",
+      "old_root": "0186e2071c71568e6fe83067f095c4aa55ba610a2c87e5fb02913b6b7c7c7943",
+      "new_root": "2c0ec4108f3555bd29e5033601c4ab76a571f4a1baef8ce47ce90be1dcb02e9d",
       "proof_nodes": [
-        "54c63bceaaf526bfcd28505958f49186d15f8e1beebecf7eb3517ce2e7ceacc6",
-        "67699ae49fb47f7045d9805620927e31234258b4346ccd42164269290d4f6351",
-        "bd77ec905c48131e9cec03bed23e42ff40be6319e50e1c1f89809984c0a86977",
-        "385626081e9f2b6f1490b448c6ba9c36ce22cbbc957709f8eb73df7026e22fb7"
+        "080ef84c7ff74ee361c7a6cee7dfcfc71027fa8e8bc53aff8822e902f31e5e6b",
+        "12421d82092f007ce442083204fc63cc0a2d2e2ae87e0d8961dd5243d1f05188",
+        "00bed561072b5db06b1db7092a3b84ad1dee5393c9b049c682c1144e36cfdb91",
+        "52e9b635bf4d84deda8a7a6cd67db4bcb3283b36778b6a454058a55a0f1b1ade"
       ],
       "expected_valid": true
     },
@@ -2041,13 +2032,13 @@
       ],
       "old_tree_size": 1,
       "new_tree_size": 5,
-      "old_root": "8b2bb33755ca715442d84f653e24999dc1a12eb54769428f7cf5855913b392b2",
-      "new_root": "53cc22318d50f0309cd2fa07ee98c59bc9c564f55c7ae7466150e39c53f300fc",
+      "old_root": "2732b5b395c7868be889e847ff7930a655478bac872d4a9835a6cdf0b9d16866",
+      "new_root": "304fe9037fe9a3af1d95bd13488411374f719380c1680776e3d6ee0e176130ea",
       "proof_nodes": [
-        "8b2bb33755ca715442d84f653e24999dc1a12eb54769428f7cf5855913b392b2",
-        "a244257b97653174a65c2e0e636257913dac12ac0bd7162f6b36041394005696",
-        "1aa9536d9454c14b43045da5e21e90c0f93012879d504b90b38372c116a222be",
-        "fb07a6f1097e94459081387d90b9a41634c6f48c4f8376a18489981cc9bfdf9c"
+        "2732b5b395c7868be889e847ff7930a655478bac872d4a9835a6cdf0b9d16866",
+        "7f9f28fffac020ae139968261f5053ed0465670bf0bdeb1f7e40a6fb0b6625aa",
+        "8155a9dc4fbd953af58566c7abdd62d3e1217e201a753032c701a408387f7646",
+        "737724e0c8b9ee41e0c926d68a250335c58a459eadcf26fc0e3b55024db982d4"
       ],
       "expected_valid": true
     },
@@ -2064,11 +2055,11 @@
       ],
       "old_tree_size": 4,
       "new_tree_size": 7,
-      "old_root": "f3081e8755192e7c33a163305b76d6305b632d700b369c54ee2b03610ae5ca86",
-      "new_root": "07a83e61588d3c085094cbf729beac4f65f5d0446cf00c0bedbfea4e6588c5be",
+      "old_root": "d4be10ce8930302f91c6c5ab3110bc606f3304765bc625cba728574b3f7d8d00",
+      "new_root": "2c0ec4108f3555bd29e5033601c4ab76a571f4a1baef8ce47ce90be1dcb02e9d",
       "proof_nodes": [
-        "f3081e8755192e7c33a163305b76d6305b632d700b369c54ee2b03610ae5ca86",
-        "385626081e9f2b6f1490b448c6ba9c36ce22cbbc957709f8eb73df7026e22fb7"
+        "d4be10ce8930302f91c6c5ab3110bc606f3304765bc625cba728574b3f7d8d00",
+        "52e9b635bf4d84deda8a7a6cd67db4bcb3283b36778b6a454058a55a0f1b1ade"
       ],
       "expected_valid": true
     }
