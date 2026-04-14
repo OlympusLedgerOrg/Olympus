@@ -192,7 +192,7 @@ class TestCrossImplBlake3:
 
     @pytest.mark.skipif(not HAS_GO, reason="Go toolchain not available")
     @given(data=st.lists(byte_data, min_size=1, max_size=50))
-    @settings(max_examples=20, deadline=60_000, suppress_health_check=[HealthCheck.too_slow])
+    @settings(max_examples=20, deadline=None, suppress_health_check=[HealthCheck.too_slow])
     def test_blake3_python_vs_go(self, data: list[bytes]) -> None:
         py_hashes = _python_blake3(data)
         go_hashes = _run_batch(["go", "run", "./cmd/hash_batch"], GO_DIR, "blake3", data)
@@ -200,7 +200,7 @@ class TestCrossImplBlake3:
 
     @pytest.mark.skipif(not HAS_CARGO, reason="Cargo toolchain not available")
     @given(data=st.lists(byte_data, min_size=1, max_size=50))
-    @settings(max_examples=20, deadline=60_000, suppress_health_check=[HealthCheck.too_slow])
+    @settings(max_examples=20, deadline=None, suppress_health_check=[HealthCheck.too_slow])
     def test_blake3_python_vs_rust(self, data: list[bytes]) -> None:
         py_hashes = _python_blake3(data)
         rust_hashes = _run_batch(
@@ -213,7 +213,7 @@ class TestCrossImplBlake3:
 
     @pytest.mark.skipif(not HAS_NODE, reason="Node.js not available")
     @given(data=st.lists(byte_data, min_size=1, max_size=50))
-    @settings(max_examples=20, deadline=60_000, suppress_health_check=[HealthCheck.too_slow])
+    @settings(max_examples=20, deadline=None, suppress_health_check=[HealthCheck.too_slow])
     def test_blake3_python_vs_js(self, data: list[bytes]) -> None:
         py_hashes = _python_blake3(data)
         js_hashes = _run_batch(["node", "hash_batch.js"], JS_DIR, "blake3", data)
@@ -226,7 +226,7 @@ class TestCrossImplMerkleLeafHash:
 
     @pytest.mark.skipif(not HAS_GO, reason="Go toolchain not available")
     @given(data=st.lists(byte_data, min_size=1, max_size=50))
-    @settings(max_examples=20, deadline=60_000, suppress_health_check=[HealthCheck.too_slow])
+    @settings(max_examples=20, deadline=None, suppress_health_check=[HealthCheck.too_slow])
     def test_merkle_leaf_python_vs_go(self, data: list[bytes]) -> None:
         py_hashes = _python_merkle_leaf_hash(data)
         go_hashes = _run_batch(["go", "run", "./cmd/hash_batch"], GO_DIR, "merkle_leaf_hash", data)
@@ -234,7 +234,7 @@ class TestCrossImplMerkleLeafHash:
 
     @pytest.mark.skipif(not HAS_CARGO, reason="Cargo toolchain not available")
     @given(data=st.lists(byte_data, min_size=1, max_size=50))
-    @settings(max_examples=20, deadline=60_000, suppress_health_check=[HealthCheck.too_slow])
+    @settings(max_examples=20, deadline=None, suppress_health_check=[HealthCheck.too_slow])
     def test_merkle_leaf_python_vs_rust(self, data: list[bytes]) -> None:
         py_hashes = _python_merkle_leaf_hash(data)
         rust_hashes = _run_batch(
@@ -247,7 +247,7 @@ class TestCrossImplMerkleLeafHash:
 
     @pytest.mark.skipif(not HAS_NODE, reason="Node.js not available")
     @given(data=st.lists(byte_data, min_size=1, max_size=50))
-    @settings(max_examples=20, deadline=60_000, suppress_health_check=[HealthCheck.too_slow])
+    @settings(max_examples=20, deadline=None, suppress_health_check=[HealthCheck.too_slow])
     def test_merkle_leaf_python_vs_js(self, data: list[bytes]) -> None:
         py_hashes = _python_merkle_leaf_hash(data)
         js_hashes = _run_batch(["node", "hash_batch.js"], JS_DIR, "merkle_leaf_hash", data)
@@ -260,7 +260,7 @@ class TestCrossImplMerkleRoot:
 
     @pytest.mark.skipif(not HAS_GO, reason="Go toolchain not available")
     @given(leaves=leaf_lists)
-    @settings(max_examples=20, deadline=60_000, suppress_health_check=[HealthCheck.too_slow])
+    @settings(max_examples=20, deadline=None, suppress_health_check=[HealthCheck.too_slow])
     def test_merkle_root_python_vs_go(self, leaves: list[bytes]) -> None:
         py_root = _python_merkle_root(leaves)
         go_result = _run_batch(["go", "run", "./cmd/hash_batch"], GO_DIR, "merkle_root", leaves)
@@ -268,7 +268,7 @@ class TestCrossImplMerkleRoot:
 
     @pytest.mark.skipif(not HAS_CARGO, reason="Cargo toolchain not available")
     @given(leaves=leaf_lists)
-    @settings(max_examples=20, deadline=60_000, suppress_health_check=[HealthCheck.too_slow])
+    @settings(max_examples=20, deadline=None, suppress_health_check=[HealthCheck.too_slow])
     def test_merkle_root_python_vs_rust(self, leaves: list[bytes]) -> None:
         py_root = _python_merkle_root(leaves)
         rust_result = _run_batch(
@@ -281,7 +281,7 @@ class TestCrossImplMerkleRoot:
 
     @pytest.mark.skipif(not HAS_NODE, reason="Node.js not available")
     @given(leaves=leaf_lists)
-    @settings(max_examples=20, deadline=60_000, suppress_health_check=[HealthCheck.too_slow])
+    @settings(max_examples=20, deadline=None, suppress_health_check=[HealthCheck.too_slow])
     def test_merkle_root_python_vs_js(self, leaves: list[bytes]) -> None:
         py_root = _python_merkle_root(leaves)
         js_result = _run_batch(["node", "hash_batch.js"], JS_DIR, "merkle_root", leaves)

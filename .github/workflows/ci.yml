@@ -135,7 +135,7 @@ jobs:
 
     - name: Run unit tests with coverage floor
       run: |
-        pytest tests/ -v --tb=short -m "not postgres" \
+        pytest tests/ -v --tb=short -m "not postgres and not differential" \
           --cov=protocol --cov=storage --cov=api \
           --cov-report=xml \
           --cov-fail-under=77

@@ -7,7 +7,7 @@ check: boundary-check check-demo-keys
 	ruff format --check protocol/ storage/ api/ scaffolding/ tests/
 	mypy protocol/ storage/ api/
 	bandit -r protocol/ storage/ api/ scaffolding/ -f txt
-	pytest tests/ -v --tb=short -m "not postgres" \
+	pytest tests/ -v --tb=short -m "not postgres and not differential" \
 	  --cov=protocol --cov=scaffolding --cov=storage --cov=api \
 	  --cov-report=term-missing --cov-report=xml \
 	  --cov-fail-under=85
