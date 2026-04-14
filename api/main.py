@@ -380,8 +380,8 @@ def create_app() -> FastAPI:
             "status": "ok",
         }
 
-    @app.get("/health", tags=["health"], response_model=None)
-    async def health() -> dict[str, Any] | JSONResponse:
+    @app.get("/health", tags=["health"])
+    async def health() -> dict[str, Any]:
         """Health check with database and sequencer status.
 
         Returns:
@@ -392,10 +392,6 @@ def create_app() -> FastAPI:
             - db_check: True if database SELECT 1 succeeds
             - sequencer: "ok" | "degraded" | "unavailable" | "disabled"
               (only present when storage_layer is importable)
-
-        Status codes:
-            200: Service is healthy (status == "ok")
-            503: Service is degraded (database or sequencer unavailable)
         """
         result: dict[str, Any] = {
             "status": "ok",
@@ -409,11 +405,11 @@ def create_app() -> FastAPI:
             db_status, db_check = get_storage_status()
             result["database"] = db_status
             result["db_check"] = db_check
-            if db_status in ("error", "degraded"):
+            if db_status == "error":
                 result["status"] = "degraded"
         except ImportError:
             # storage_layer not available (e.g. test environment) — skip db check
-            logger.debug("Skipping database health check: storage_layer not importable")
+            pass
 
         # Check sequencer status when Go sequencer routing is enabled
         try:
@@ -425,11 +421,8 @@ def create_app() -> FastAPI:
                 result["status"] = "degraded"
         except ImportError:
             # storage_layer not available — skip sequencer check
-            logger.debug("Skipping sequencer health check: storage_layer not importable")
+            pass
 
-        # Return 503 when degraded
-        if result["status"] == "degraded":
-            return JSONResponse(content=result, status_code=503)
         return result
 
     return app
