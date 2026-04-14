@@ -20,6 +20,7 @@ Environment Variables:
 from __future__ import annotations
 
 import asyncio
+import base64
 import hashlib
 import json
 import logging
@@ -139,10 +140,6 @@ class RekorAnchor:
         # Combine header_hash and root_hash into a single commitment
         # Use SHA-256 as Rekor requires SHA-256 or SHA-512 for hashedrekord
         commitment = hashlib.sha256(header_hash + root_hash).digest()
-
-        # Build the hashedrekord entry
-        # Rekor expects base64-encoded data for the hash
-        import base64
 
         # Include shard metadata in the data field for provenance
         data_payload = {

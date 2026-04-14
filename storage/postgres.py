@@ -90,6 +90,22 @@ def _require_rust_smt() -> None:
         )
 
 
+def _normalize_timestamp_iso(ts: datetime | str | None) -> str:
+    """Normalize a timestamp to ISO 8601 format with 'Z' suffix.
+
+    Args:
+        ts: A datetime object or string timestamp.
+
+    Returns:
+        ISO 8601 formatted timestamp string with 'Z' suffix for UTC.
+    """
+    if ts is None:
+        return ""
+    if isinstance(ts, datetime):
+        return ts.isoformat().replace("+00:00", "Z")
+    return str(ts)
+
+
 logger = logging.getLogger(__name__)
 
 
@@ -2406,12 +2422,6 @@ class StorageLayer:
             if row is None:
                 return None
 
-            anchored_at = row["anchored_at"]
-            if isinstance(anchored_at, datetime):
-                anchored_at_str = anchored_at.isoformat().replace("+00:00", "Z")
-            else:
-                anchored_at_str = str(anchored_at)
-
             return {
                 "id": row["id"],
                 "shard_id": row["shard_id"],
@@ -2419,7 +2429,7 @@ class StorageLayer:
                 "root_hash": bytes(row["root_hash"]).hex(),
                 "rekor_uuid": row["rekor_uuid"],
                 "rekor_index": row["rekor_index"],
-                "anchored_at": anchored_at_str,
+                "anchored_at": _normalize_timestamp_iso(row["anchored_at"]),
                 "status": row["status"],
             }
 
@@ -2452,12 +2462,6 @@ class StorageLayer:
             if row is None:
                 return None
 
-            anchored_at = row["anchored_at"]
-            if isinstance(anchored_at, datetime):
-                anchored_at_str = anchored_at.isoformat().replace("+00:00", "Z")
-            else:
-                anchored_at_str = str(anchored_at)
-
             return {
                 "id": row["id"],
                 "shard_id": row["shard_id"],
@@ -2465,7 +2469,7 @@ class StorageLayer:
                 "root_hash": bytes(row["root_hash"]).hex(),
                 "rekor_uuid": row["rekor_uuid"],
                 "rekor_index": row["rekor_index"],
-                "anchored_at": anchored_at_str,
+                "anchored_at": _normalize_timestamp_iso(row["anchored_at"]),
                 "status": row["status"],
             }
 
