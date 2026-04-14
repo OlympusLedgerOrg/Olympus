@@ -128,9 +128,7 @@ async def export_customers_csv(
     Returns:
         Streaming CSV response with ``Content-Disposition: attachment``.
     """
-    result = await db.execute(
-        select(User).order_by(User.created_at.desc()).limit(max_rows)
-    )
+    result = await db.execute(select(User).order_by(User.created_at.desc()).limit(max_rows))
     users = result.scalars().all()
 
     buf = io.StringIO()
