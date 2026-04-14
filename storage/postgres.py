@@ -90,6 +90,22 @@ def _require_rust_smt() -> None:
         )
 
 
+def _normalize_timestamp_iso(ts: datetime | str | None) -> str:
+    """Normalize a timestamp to ISO 8601 format with 'Z' suffix.
+
+    Args:
+        ts: A datetime object or string timestamp.
+
+    Returns:
+        ISO 8601 formatted timestamp string with 'Z' suffix for UTC.
+    """
+    if ts is None:
+        return ""
+    if isinstance(ts, datetime):
+        return ts.isoformat().replace("+00:00", "Z")
+    return str(ts)
+
+
 logger = logging.getLogger(__name__)
 
 
@@ -544,6 +560,7 @@ class StorageLayer:
                 sig                  BYTEA       NOT NULL,
                 pubkey               BYTEA       NOT NULL,
                 previous_header_hash TEXT        NOT NULL,
+                quorum_certificate   TEXT        DEFAULT NULL,
                 ts                   TIMESTAMPTZ NOT NULL,
                 created_at           TIMESTAMPTZ NOT NULL DEFAULT NOW(),
                 PRIMARY KEY (shard_id, seq),
@@ -964,6 +981,25 @@ class StorageLayer:
             )
             """,
             "CREATE INDEX IF NOT EXISTS poseidon_smt_nodes_level_idx ON poseidon_smt_nodes(level)",
+            # ------------------------------------------------------------------
+            # Rekor Anchors — Sigstore Rekor transparency log anchoring
+            # ------------------------------------------------------------------
+            """
+            CREATE TABLE IF NOT EXISTS rekor_anchors (
+                id            BIGSERIAL   PRIMARY KEY,
+                shard_id      TEXT        NOT NULL,
+                shard_seq     BIGINT      NOT NULL,
+                root_hash     BYTEA       NOT NULL,
+                rekor_uuid    TEXT,
+                rekor_index   BIGINT,
+                anchored_at   TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                status        TEXT        NOT NULL DEFAULT 'pending',
+                CONSTRAINT rekor_anchors_root_hash_length
+                    CHECK (octet_length(root_hash) = 32)
+            )
+            """,
+            "CREATE INDEX IF NOT EXISTS rekor_anchors_shard_seq_idx ON rekor_anchors(shard_id, shard_seq)",
+            "CREATE INDEX IF NOT EXISTS rekor_anchors_status_idx ON rekor_anchors(status)",
         ]
 
         with self._get_connection() as conn:
@@ -2291,6 +2327,149 @@ class StorageLayer:
         if not tokens:
             return None
         return tokens[0]
+
+    # ------------------------------------------------------------------
+    # Rekor Anchoring Methods
+    # ------------------------------------------------------------------
+
+    def create_rekor_anchor(
+        self,
+        *,
+        shard_id: str,
+        shard_seq: int,
+        root_hash: bytes,
+    ) -> int:
+        """
+        Create a pending Rekor anchor record.
+
+        Args:
+            shard_id: Shard identifier.
+            shard_seq: Shard header sequence number.
+            root_hash: 32-byte SMT root hash.
+
+        Returns:
+            The ID of the created anchor record.
+        """
+        if len(root_hash) != 32:
+            raise ValueError(f"root_hash must be 32 bytes, got {len(root_hash)}")
+
+        with self._get_connection() as conn, conn.cursor(row_factory=dict_row) as cur:
+            cur.execute(
+                """
+                INSERT INTO rekor_anchors (shard_id, shard_seq, root_hash, status)
+                VALUES (%s, %s, %s, 'pending')
+                RETURNING id
+                """,
+                (shard_id, shard_seq, root_hash),
+            )
+            row = cur.fetchone()
+            conn.commit()
+            if row is None:
+                raise RuntimeError("INSERT INTO rekor_anchors did not return an id")
+            return int(row["id"])
+
+    def update_rekor_anchor(
+        self,
+        *,
+        anchor_id: int,
+        status: str,
+        rekor_uuid: str | None = None,
+        rekor_index: int | None = None,
+    ) -> None:
+        """
+        Update a Rekor anchor record with the anchoring result.
+
+        Args:
+            anchor_id: The ID of the anchor record to update.
+            status: New status ('anchored' or 'failed').
+            rekor_uuid: The UUID of the Rekor log entry (if successful).
+            rekor_index: The log index of the Rekor entry (if successful).
+        """
+        with self._get_connection() as conn, conn.cursor() as cur:
+            cur.execute(
+                """
+                UPDATE rekor_anchors
+                SET status = %s, rekor_uuid = %s, rekor_index = %s, anchored_at = NOW()
+                WHERE id = %s
+                """,
+                (status, rekor_uuid, rekor_index, anchor_id),
+            )
+            conn.commit()
+
+    def get_latest_rekor_anchor(self, shard_id: str) -> dict[str, Any] | None:
+        """
+        Get the most recent Rekor anchor for a shard.
+
+        Args:
+            shard_id: Shard identifier.
+
+        Returns:
+            Anchor record dictionary, or None if no anchors exist.
+        """
+        with self._get_connection() as conn, conn.cursor(row_factory=dict_row) as cur:
+            cur.execute(
+                """
+                SELECT id, shard_id, shard_seq, root_hash, rekor_uuid, rekor_index,
+                       anchored_at, status
+                FROM rekor_anchors
+                WHERE shard_id = %s
+                ORDER BY shard_seq DESC, id DESC
+                LIMIT 1
+                """,
+                (shard_id,),
+            )
+            row = cur.fetchone()
+            if row is None:
+                return None
+
+            return {
+                "id": row["id"],
+                "shard_id": row["shard_id"],
+                "shard_seq": row["shard_seq"],
+                "root_hash": bytes(row["root_hash"]).hex(),
+                "rekor_uuid": row["rekor_uuid"],
+                "rekor_index": row["rekor_index"],
+                "anchored_at": _normalize_timestamp_iso(row["anchored_at"]),
+                "status": row["status"],
+            }
+
+    def get_rekor_anchor_by_seq(self, shard_id: str, shard_seq: int) -> dict[str, Any] | None:
+        """
+        Get a Rekor anchor for a specific shard header sequence.
+
+        Args:
+            shard_id: Shard identifier.
+            shard_seq: Shard header sequence number.
+
+        Returns:
+            Anchor record dictionary, or None if no anchor exists.
+        """
+        with self._get_connection() as conn, conn.cursor(row_factory=dict_row) as cur:
+            cur.execute(
+                """
+                SELECT id, shard_id, shard_seq, root_hash, rekor_uuid, rekor_index,
+                       anchored_at, status
+                FROM rekor_anchors
+                WHERE shard_id = %s AND shard_seq = %s
+                ORDER BY id DESC
+                LIMIT 1
+                """,
+                (shard_id, shard_seq),
+            )
+            row = cur.fetchone()
+            if row is None:
+                return None
+
+            return {
+                "id": row["id"],
+                "shard_id": row["shard_id"],
+                "shard_seq": row["shard_seq"],
+                "root_hash": bytes(row["root_hash"]).hex(),
+                "rekor_uuid": row["rekor_uuid"],
+                "rekor_index": row["rekor_index"],
+                "anchored_at": _normalize_timestamp_iso(row["anchored_at"]),
+                "status": row["status"],
+            }
 
     def verify_persisted_root(self, shard_id: str) -> bool:
         """

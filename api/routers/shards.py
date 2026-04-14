@@ -20,6 +20,7 @@ from api.schemas.shards import (
     LedgerEntryResponse,
     LedgerTailResponse,
     NonExistenceProofResponse,
+    RekorAnchorResponse,
     ShardHeaderResponse,
     ShardHistoryEntryResponse,
     ShardHistoryResponse,
@@ -29,6 +30,7 @@ from api.schemas.shards import (
     TimestampTokenResponse,
 )
 from api.services.storage_layer import _require_storage, db_op
+from integrations.rekor import _rekor_base_url
 from protocol.shards import canonical_header
 from protocol.telemetry import opentelemetry_available, prometheus_available, record_smt_divergence
 
@@ -480,3 +482,49 @@ async def alert_smt_divergence(
             "prometheus": prometheus_available(),
         },
     }
+
+
+@router.get("/shards/{shard_id}/anchor/latest", response_model=RekorAnchorResponse)
+async def get_latest_rekor_anchor(
+    shard_id: str = _SHARD_ID_PATH,
+    *,
+    _rl: RateLimit,
+) -> RekorAnchorResponse:
+    """
+    Get the most recent Rekor transparency log anchor for a shard.
+
+    This endpoint returns the latest Sigstore Rekor anchor for the specified
+    shard, including the verification URL for independent verification.
+
+    Args:
+        shard_id: Shard identifier.
+
+    Returns:
+        The latest Rekor anchor for the shard, or 404 if none exists.
+    """
+    storage = _require_storage()
+    with db_op("get rekor anchor"):
+        anchor = storage.get_latest_rekor_anchor(shard_id)
+
+        if anchor is None:
+            raise HTTPException(
+                status_code=404,
+                detail=f"No Rekor anchor found for shard: {shard_id}",
+            )
+
+        # Build verification URL if we have a log index
+        verification_url = None
+        if anchor["rekor_index"] is not None:
+            base_url = _rekor_base_url()
+            verification_url = f"{base_url}/api/v1/log/entries?logIndex={anchor['rekor_index']}"
+
+        return RekorAnchorResponse(
+            shard_id=anchor["shard_id"],
+            shard_seq=anchor["shard_seq"],
+            root_hash=anchor["root_hash"],
+            rekor_uuid=anchor["rekor_uuid"],
+            rekor_index=anchor["rekor_index"],
+            anchored_at=anchor["anchored_at"],
+            status=anchor["status"],
+            verification_url=verification_url,
+        )
