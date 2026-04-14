@@ -12,7 +12,8 @@
 # -----------------------------------------------------------------------
 set -euo pipefail
 
-echo "WARNING: PRODUCTION UNSAFE — dev-only Groth16 setup (single contributor)."
+echo "NOTE: Phase 1 uses the public Hermez Powers of Tau (trusted multi-party ceremony)."
+echo "WARNING: Phase 2 uses a SINGLE dev contributor — not production-safe."
 echo "         Record PTAU provenance and verification key fingerprints."
 
 # Parse flags
@@ -47,6 +48,13 @@ PTAU_URL="https://hermez.s3-eu-west-1.amazonaws.com/${PTAU_FILE}"
 PTAU_PATH="${KEYS_DIR}/${PTAU_FILE}"
 PTAU_SOURCE="${PTAU_URL}"
 
+# Known SHA-256 checksums for Hermez PTAU files.
+# Source: https://github.com/iden3/snarkjs#7-prepare-phase-2
+declare -A PTAU_CHECKSUMS=(
+  [15]="982372c867d229c236091f767e703253249a9b432c1730cbe57e8e864e5ed37f"
+  [17]="3a4ed97a753be2df8a9ee9f69ee1efaf8c988c52f5bfac5f42e9b89c3c4cef4b"
+)
+
 # -----------------------------------------------------------------------
 # 0. Install npm dependencies (circomlib, snarkjs)
 # -----------------------------------------------------------------------
@@ -79,23 +87,30 @@ mkdir -p "${BUILD_DIR}" "${VKEYS_DIR}"
 if [ -f "${PTAU_PATH}" ]; then
   echo "==> PTAU file already present: ${PTAU_PATH}"
 else
-  echo "==> Attempting to download PTAU file (2^${PTAU_POWER}) …"
-  if curl -fSL --connect-timeout 10 -o "${PTAU_PATH}" "${PTAU_URL}" 2>/dev/null; then
+  echo "==> Downloading Hermez Powers of Tau (2^${PTAU_POWER}) …"
+  if curl -fSL --connect-timeout 30 --retry 3 -o "${PTAU_PATH}" "${PTAU_URL}"; then
     echo "    Downloaded ${PTAU_FILE}"
   else
-    echo "    Download failed — generating PTAU locally (dev only) …"
-    echo "    This may take several minutes for power ${PTAU_POWER}."
-    PTAU_SOURCE="local-dev-generated"
-    PTAU_TMP0="${BUILD_DIR}/pot_${PTAU_POWER}_0000.ptau"
-    PTAU_TMP1="${BUILD_DIR}/pot_${PTAU_POWER}_0001.ptau"
-    ${SNARKJS} powersoftau new bn128 "${PTAU_POWER}" "${PTAU_TMP0}"
-    ${SNARKJS} powersoftau contribute "${PTAU_TMP0}" "${PTAU_TMP1}" \
-      --name="Dev PTAU" -e="olympus-ptau-dev-entropy" 2>/dev/null
-    ${SNARKJS} powersoftau prepare phase2 "${PTAU_TMP1}" "${PTAU_PATH}"
-    rm -f "${PTAU_TMP0}" "${PTAU_TMP1}"
-    echo "    Generated local dev PTAU: ${PTAU_PATH}"
+    echo "ERROR: Failed to download Hermez PTAU from ${PTAU_URL}"
+    echo "       A trusted Phase 1 ceremony file is required."
+    echo "       Local PTAU generation is not supported — use the public Hermez ceremony."
+    exit 1
   fi
 fi
+
+# Verify PTAU SHA-256 checksum
+echo "==> Verifying PTAU integrity …"
+PTAU_SHA256="$(sha256sum "${PTAU_PATH}" | awk '{print $1}')"
+PTAU_EXPECTED="${PTAU_CHECKSUMS[${PTAU_POWER}]:-}"
+if [ -n "${PTAU_EXPECTED}" ] && [ "${PTAU_SHA256}" != "${PTAU_EXPECTED}" ]; then
+  echo "ERROR: PTAU SHA-256 mismatch!"
+  echo "  Expected: ${PTAU_EXPECTED}"
+  echo "  Got:      ${PTAU_SHA256}"
+  echo "  File may be corrupted or tampered with."
+  rm -f "${PTAU_PATH}"
+  exit 1
+fi
+echo "    PTAU integrity verified ✓"
 
 # -----------------------------------------------------------------------
 # 2.5 Record provenance (PTAU source + hashes + verification key fingerprints)

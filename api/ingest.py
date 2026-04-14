@@ -597,8 +597,8 @@ def _cache_ingestion_record(entry: dict[str, Any]) -> None:
     _content_index[content_hash] = proof_id
 
 
-def _fetch_persisted_proof(proof_id: str) -> dict[str, Any] | None:
-    """Load a persisted proof mapping from storage and cache it."""
+def _fetch_persisted_proof_sync(proof_id: str) -> dict[str, Any] | None:
+    """Load a persisted proof mapping from storage and cache it (sync)."""
     storage = _get_storage()
     if storage is None:
         return None
@@ -609,8 +609,14 @@ def _fetch_persisted_proof(proof_id: str) -> dict[str, Any] | None:
     return record
 
 
-def _fetch_by_content_hash(content_hash_hex: str) -> dict[str, Any] | None:
-    """Lookup proof metadata by content hash from memory or storage."""
+async def _fetch_persisted_proof(proof_id: str) -> dict[str, Any] | None:
+    """Load a persisted proof mapping from storage without blocking the event loop."""
+    loop = asyncio.get_running_loop()
+    return await loop.run_in_executor(None, _fetch_persisted_proof_sync, proof_id)
+
+
+def _fetch_by_content_hash_sync(content_hash_hex: str) -> dict[str, Any] | None:
+    """Lookup proof metadata by content hash from memory or storage (sync)."""
     proof_id = _content_index.get(content_hash_hex)
     if proof_id and proof_id in _ingestion_store:
         return _ingestion_store[proof_id]
@@ -622,6 +628,17 @@ def _fetch_by_content_hash(content_hash_hex: str) -> dict[str, Any] | None:
     if record:
         _cache_ingestion_record(record)
     return record
+
+
+async def _fetch_by_content_hash(content_hash_hex: str) -> dict[str, Any] | None:
+    """Lookup proof metadata by content hash without blocking the event loop."""
+    # Fast path: check in-memory cache first (no I/O)
+    proof_id = _content_index.get(content_hash_hex)
+    if proof_id and proof_id in _ingestion_store:
+        return _ingestion_store[proof_id]
+
+    loop = asyncio.get_running_loop()
+    return await loop.run_in_executor(None, _fetch_by_content_hash_sync, content_hash_hex)
 
 
 # ---------------------------------------------------------------------------
@@ -788,11 +805,14 @@ def _consume_rate_limit(subject_type: str, subject: str, action: str) -> bool:
     return allowed
 
 
-def _apply_rate_limits(request: Request, api_key_id: str, action: str) -> None:
+async def _apply_rate_limits(request: Request, api_key_id: str, action: str) -> None:
     """Apply rate limiting for API key and IP after authentication.
 
     This function is called after successful authentication to enforce
     per-key and per-IP rate limits for ingest operations.
+
+    DB-backed rate limit checks are offloaded to a thread pool executor
+    to avoid blocking the async event loop.
 
     Args:
         request: The incoming HTTP request.
@@ -803,8 +823,12 @@ def _apply_rate_limits(request: Request, api_key_id: str, action: str) -> None:
         HTTPException 429: If rate limit is exceeded.
     """
     client_ip = _get_client_ip(request)
+    loop = asyncio.get_running_loop()
 
-    if not _consume_rate_limit("api_key", api_key_id, action):
+    key_allowed = await loop.run_in_executor(
+        None, _consume_rate_limit, "api_key", api_key_id, action
+    )
+    if not key_allowed:
         logger.warning(
             "rate_limit_hit",
             # Redact key_id to avoid logging sensitive API key identifiers
@@ -821,7 +845,10 @@ def _apply_rate_limits(request: Request, api_key_id: str, action: str) -> None:
         )
         raise HTTPException(status_code=429, detail="Rate limit exceeded for API key")
 
-    if not _consume_rate_limit("ip", client_ip, action):
+    ip_allowed = await loop.run_in_executor(
+        None, _consume_rate_limit, "ip", client_ip, action
+    )
+    if not ip_allowed:
         logger.warning(
             "rate_limit_hit",
             extra={"dimension": "ip", "client_ip": client_ip, "action": action},
@@ -1197,7 +1224,7 @@ async def ingest_batch(
         Ingestion results with proof IDs.
     """
     # Apply rate limiting after authentication
-    _apply_rate_limits(request, _api_key.key_id, "ingest")
+    await _apply_rate_limits(request, _api_key.key_id, "ingest")
 
     # Validate batch is not empty
     if not batch.records:
@@ -1248,18 +1275,13 @@ async def ingest_batch(
             dedup_count = 0
             persist_queue: list[dict[str, Any]] = []
             ledger_entry_hash = ""
-            # RT-H5 MITIGATION: Pre-transaction Poseidon SMT build.
-            # NOTE: When storage is configured, this value is recomputed authoritatively
-            # inside the SERIALIZABLE transaction (storage/postgres.py:1360-1394) to
-            # prevent stale roots under concurrent writes. The pre-transaction value
-            # is used only as a flag to enable Poseidon computation (poseidon_root != None).
-            # The transaction-authoritative value from ledger_entry.poseidon_root is the
-            # source of truth and is used in the final ingestion_entry.
-            poseidon_smt = (
-                _build_poseidon_smt_for_storage_shard(storage, shard_id)
-                if storage is not None
-                else PoseidonSMT()
-            )
+            # Poseidon SMT for local tracking of root within this batch.
+            # When storage is configured, the authoritative Poseidon root is
+            # computed incrementally inside the SERIALIZABLE transaction
+            # (storage/postgres.py) — O(log N) per record, not O(N).
+            # We only need a local PoseidonSMT to carry forward the root
+            # between records in the same batch for metadata purposes.
+            poseidon_smt = PoseidonSMT()
 
             # Build batch payload and call sequencer once for all records in this shard
             seq_results: list[dict[str, Any]] | None = None
@@ -1286,7 +1308,7 @@ async def ingest_batch(
                 # In-memory-only dedup: when no storage is configured, RT-H1
                 # cannot run, so check the in-memory cache here instead.
                 if storage is None:
-                    existing_record = _fetch_by_content_hash(content_hash)
+                    existing_record = await _fetch_by_content_hash(content_hash)
                     if existing_record is not None:
                         results.append(
                             (
@@ -1526,7 +1548,9 @@ async def get_ingestion_proof(
     Raises:
         HTTPException: 404 if proof_id is not found.
     """
-    data = _ingestion_store.get(proof_id) or _fetch_persisted_proof(proof_id)
+    data = _ingestion_store.get(proof_id)
+    if data is None:
+        data = await _fetch_persisted_proof(proof_id)
     if data is None:
         raise HTTPException(status_code=404, detail="Proof not found")
 
@@ -1545,12 +1569,12 @@ async def verify_ingested_content_hash(
     the verifiable transcript needed for independent re-checking.
     """
     # Apply rate limiting after authentication
-    _apply_rate_limits(request, _api_key.key_id, "verify")
+    await _apply_rate_limits(request, _api_key.key_id, "verify")
 
     with timed_operation("verify") as span:
         normalized_hash = _parse_content_hash(content_hash).hex()
         span.set_attribute("content_hash", normalized_hash)
-        record = _fetch_by_content_hash(normalized_hash)
+        record = await _fetch_by_content_hash(normalized_hash)
         if record is None:
             raise HTTPException(
                 status_code=404, detail="Content hash not found in the ingestion store"
@@ -1567,7 +1591,7 @@ async def verify_submitted_proof_bundle(
 ) -> ProofVerificationResponse:
     """Verify an externally supplied proof bundle without persisting it."""
     # Apply rate limiting after authentication
-    _apply_rate_limits(request, _api_key.key_id, "verify")
+    await _apply_rate_limits(request, _api_key.key_id, "verify")
 
     normalized_hash, normalized_root, content_hash_matches, merkle_proof_valid = (
         _evaluate_proof_bundle(
@@ -1576,7 +1600,7 @@ async def verify_submitted_proof_bundle(
             proof_request.merkle_proof,
         )
     )
-    record = _fetch_by_content_hash(normalized_hash)
+    record = await _fetch_by_content_hash(normalized_hash)
     # Return server-known poseidon_root only (HIGH-02 security fix)
     return ProofVerificationResponse(
         proof_id=record["proof_id"] if record is not None else proof_request.proof_id,
@@ -1606,7 +1630,7 @@ async def submit_proof_bundle(
     Returns 404 if the document has not been committed yet. Commit
     first via POST /ingest/records.
     """
-    _apply_rate_limits(request, _api_key.key_id, "verify")
+    await _apply_rate_limits(request, _api_key.key_id, "verify")
 
     settings = get_settings()
     max_mb = settings.max_upload_bytes // 1024 // 1024
@@ -1642,7 +1666,7 @@ async def submit_proof_bundle(
 
     _, content_hash = await _async_canonicalize_and_hash(content)
 
-    record = _fetch_by_content_hash(content_hash)
+    record = await _fetch_by_content_hash(content_hash)
     if record is None:
         raise HTTPException(
             status_code=404,
@@ -1737,7 +1761,7 @@ async def commit_artifact(
         Commitment response with proof_id and ledger anchor details.
     """
     # Apply rate limiting after authentication
-    _apply_rate_limits(http_request, _api_key.key_id, "commit")
+    await _apply_rate_limits(http_request, _api_key.key_id, "commit")
 
     shard_id = f"artifacts.{request.namespace}"
     batch_id = str(uuid.uuid4())
@@ -1757,7 +1781,7 @@ async def commit_artifact(
         # In-memory-only dedup: when no storage is configured, RT-H1 cannot
         # run, so check the in-memory cache here instead.
         if storage is None:
-            existing = _fetch_by_content_hash(artifact_hash_hex)
+            existing = await _fetch_by_content_hash(artifact_hash_hex)
             if existing is not None:
                 existing_proof_id = existing["proof_id"]
                 INGEST_TOTAL.labels(outcome="deduplicated").inc()
@@ -1863,7 +1887,7 @@ async def commit_artifact(
                     or "Content hash already committed" in error_msg
                 )
                 if is_dedup:
-                    existing = _fetch_by_content_hash(artifact_hash_hex) or {}
+                    existing = (await _fetch_by_content_hash(artifact_hash_hex)) or {}
                     existing_proof_id = existing.get("proof_id", proof_id)
                     INGEST_TOTAL.labels(outcome="deduplicated").inc()
                     return ArtifactCommitResponse(

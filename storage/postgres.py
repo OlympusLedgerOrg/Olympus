@@ -100,7 +100,13 @@ _NODE_REHASH_GATE: str = derive_node_rehash_gate()
 
 
 def _compute_poseidon_root_from_leaves(leaves: Mapping[bytes, bytes]) -> bytes:
-    """Compute the authoritative Poseidon root from current SMT leaves."""
+    """Compute the authoritative Poseidon root from current SMT leaves.
+
+    .. deprecated::
+        This O(N) rebuild is retained only as a fallback for the first write
+        when the ``poseidon_smt_nodes`` table is empty.  Production callers
+        should use ``_poseidon_incremental_update`` instead.
+    """
     from protocol.poseidon_smt import PoseidonSMT
 
     poseidon_smt = PoseidonSMT()
@@ -109,6 +115,58 @@ def _compute_poseidon_root_from_leaves(leaves: Mapping[bytes, bytes]) -> bytes:
         poseidon_smt.update(key, field_value)
     poseidon_int = int(poseidon_smt.get_root())
     return poseidon_int.to_bytes(32, byteorder="big")
+
+
+def _poseidon_incremental_update(
+    key: bytes,
+    value_hash: bytes,
+    siblings: list[int],
+) -> tuple[int, list[tuple[int, bytes, str]]]:
+    """Incrementally update the Poseidon SMT for a single key-value insertion.
+
+    This mirrors the logic in ``PoseidonSMT.update()`` but operates on a flat
+    sibling list fetched from the ``poseidon_smt_nodes`` table, producing a
+    list of node deltas for persistence — O(256) work instead of O(N).
+
+    Args:
+        key: 32-byte SMT leaf key.
+        value_hash: 32-byte record value hash (will be reduced to BN128 field).
+        siblings: 256 sibling hashes (field element ints) ordered leaf→root.
+
+    Returns:
+        ``(new_root, node_deltas)`` where *new_root* is the Poseidon root as
+        an int and *node_deltas* is a list of ``(db_level, packed_index, hash_decimal)``
+        tuples for upserting into ``poseidon_smt_nodes``.
+    """
+    from protocol.poseidon_smt import _poseidon_hash_leaf, _poseidon_hash_node
+
+    path = tuple(_key_to_path_bits(key))
+    key_int = int.from_bytes(key, byteorder="big") % SNARK_SCALAR_FIELD
+    field_value = int.from_bytes(value_hash, byteorder="big") % SNARK_SCALAR_FIELD
+
+    current_hash = _poseidon_hash_leaf(key_int, field_value)
+
+    node_deltas: list[tuple[int, bytes, str]] = []
+
+    for level in range(256):
+        bit_pos = 255 - level
+        sibling_hash = siblings[level]
+
+        if path[bit_pos] == 0:
+            parent_hash = _poseidon_hash_node(current_hash, sibling_hash)
+        else:
+            parent_hash = _poseidon_hash_node(sibling_hash, current_hash)
+
+        parent_hash = parent_hash % SNARK_SCALAR_FIELD
+
+        # Store the parent node delta
+        parent_path = path[:bit_pos] if bit_pos > 0 else ()
+        packed_index = StorageLayer._encode_path(parent_path)
+        node_deltas.append((len(parent_path), packed_index, str(parent_hash)))
+
+        current_hash = parent_hash
+
+    return current_hash, node_deltas
 
 
 class StorageLayer:
@@ -881,6 +939,24 @@ class StorageLayer:
                 UNIQUE (shard_id, header_seq)
             )
             """,
+            # ------------------------------------------------------------------
+            # Poseidon SMT Nodes — sparse internal nodes for incremental
+            # O(log N) Poseidon root updates.  Structure mirrors smt_nodes
+            # but stores Poseidon field elements as TEXT (decimal strings)
+            # for circuit compatibility.
+            # ------------------------------------------------------------------
+            """
+            CREATE TABLE IF NOT EXISTS poseidon_smt_nodes (
+                level    SMALLINT      NOT NULL,
+                index    BYTEA         NOT NULL,
+                hash     TEXT          NOT NULL,
+                ts       TIMESTAMPTZ   NOT NULL DEFAULT NOW(),
+                PRIMARY KEY (level, index),
+                CONSTRAINT poseidon_smt_nodes_level_range
+                    CHECK (level >= 0 AND level <= 256)
+            )
+            """,
+            "CREATE INDEX IF NOT EXISTS poseidon_smt_nodes_level_idx ON poseidon_smt_nodes(level)",
         ]
 
         with self._get_connection() as conn:
@@ -1015,7 +1091,7 @@ class StorageLayer:
 
         Transaction semantics:
         - All operations occur in a single transaction
-        - SELECT MAX(seq)+1 queries execute inside the transaction
+        - Sequence numbers derived from previous row's seq + 1 (with FOR UPDATE lock)
         - commit() finalizes all writes atomically
         - Exceptions trigger automatic rollback via context manager
 
@@ -1191,32 +1267,21 @@ class StorageLayer:
             for db_level, packed_index, hash_val in node_deltas:
                 self._cache_put(shard_id, db_level, packed_index, hash_val)
 
-            # Get previous header
+            # Get previous header (includes seq for next-seq derivation,
+            # eliminating the fragile SELECT MAX(seq) anti-pattern).
             cur.execute(
                 """
-                    SELECT header_hash, ts FROM shard_headers
+                    SELECT seq, header_hash, ts FROM shard_headers
                     WHERE shard_id = %s
                     ORDER BY seq DESC
                     LIMIT 1
+                    FOR UPDATE
                     """,
                 (shard_id,),
             )
             prev_row = cur.fetchone()
             prev_header_hash = "" if prev_row is None else bytes(prev_row["header_hash"]).hex()
-
-            # Get next sequence number
-            cur.execute(
-                """
-                    SELECT COALESCE(MAX(seq), -1) + 1 as next_seq
-                    FROM shard_headers
-                    WHERE shard_id = %s
-                    """,
-                (shard_id,),
-            )
-            seq_row = cur.fetchone()
-            if seq_row is None:
-                raise RuntimeError("Failed to compute next shard header sequence")
-            seq = seq_row["next_seq"]
+            seq = 0 if prev_row is None else prev_row["seq"] + 1
 
             # Create shard header
             ts = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
@@ -1280,13 +1345,15 @@ class StorageLayer:
             record_hash_hex = value_hash.hex()
             shard_root_hex = root_hash.hex()
 
-            # Get previous ledger entry
+            # Get previous ledger entry (includes seq for next-seq derivation,
+            # eliminating the fragile SELECT MAX(seq) anti-pattern).
             cur.execute(
                 """
-                    SELECT entry_hash FROM ledger_entries
+                    SELECT seq, entry_hash FROM ledger_entries
                     WHERE shard_id = %s
                     ORDER BY seq DESC
                     LIMIT 1
+                    FOR UPDATE
                     """,
                 (shard_id,),
             )
@@ -1294,20 +1361,7 @@ class StorageLayer:
             prev_entry_hash = (
                 "" if prev_ledger_row is None else bytes(prev_ledger_row["entry_hash"]).hex()
             )
-
-            # Get next ledger sequence number
-            cur.execute(
-                """
-                    SELECT COALESCE(MAX(seq), -1) + 1 as next_seq
-                    FROM ledger_entries
-                    WHERE shard_id = %s
-                    """,
-                (shard_id,),
-            )
-            ledger_row = cur.fetchone()
-            if ledger_row is None:
-                raise RuntimeError("Failed to compute next ledger sequence")
-            ledger_seq = ledger_row["next_seq"]
+            ledger_seq = 0 if prev_ledger_row is None else prev_ledger_row["seq"] + 1
 
             canonicalization = canonicalization or canonicalization_provenance(
                 "application/octet-stream",
@@ -1339,29 +1393,37 @@ class StorageLayer:
             )
 
             if poseidon_root is not None:
-                # RT-H5 MITIGATION: Recompute Poseidon root from transaction-authoritative leaf state
-                # to prevent stale roots under concurrent writes (see threat-model.md RT-H5).
-                # The SERIALIZABLE isolation level prevents write skew anomalies, ensuring that
-                # the smt_leaves view remains consistent with this transaction's snapshot.
+                # RT-H5 MITIGATION: Incremental O(log N) Poseidon root update.
+                # Fetches the 256 siblings from poseidon_smt_nodes and computes
+                # the new root by walking up the path — no full-tree rebuild.
+                # The SERIALIZABLE isolation level ensures the sibling snapshot
+                # is consistent with this transaction.
                 #
-                # API NOTE: The poseidon_root parameter (type: bytes | None) is used as a feature flag.
-                # If None, Poseidon computation is disabled entirely. If not None, the actual value
-                # is discarded and replaced with a transaction-authoritative recomputation from smt_leaves.
-                # Future API improvement: Consider renaming to enable_poseidon: bool for clarity.
-                #
-                # Poseidon root requires all leaves — query from DB.
-                # This is O(N) but only runs when ZK proofs are enabled.
-                cur.execute("SELECT key, value_hash FROM smt_leaves ORDER BY key")
-                all_leaves: dict[bytes, bytes] = {}
-                for leaf_row in cur.fetchall():
-                    all_leaves[bytes(leaf_row["key"])] = bytes(leaf_row["value_hash"])
-                # Include the leaf we just inserted
-                all_leaves[key] = value_hash
-                authoritative_poseidon_root = _compute_poseidon_root_from_leaves(all_leaves)
-                poseidon_root_decimal = str(
-                    int.from_bytes(authoritative_poseidon_root, byteorder="big")
+                # API NOTE: The poseidon_root parameter (type: bytes | None) is
+                # used as a feature flag.  If None, Poseidon computation is
+                # disabled entirely.  The actual value is discarded.
+                poseidon_siblings = self._get_poseidon_proof_path(cur, key)
+                poseidon_root_int, poseidon_node_deltas = _poseidon_incremental_update(
+                    key, value_hash, poseidon_siblings
                 )
+                authoritative_poseidon_root = poseidon_root_int.to_bytes(32, byteorder="big")
+                poseidon_root_decimal = str(poseidon_root_int)
                 ledger_payload["poseidon_root"] = poseidon_root_decimal
+
+                # Persist Poseidon node deltas — O(256) upserts
+                ts_now_poseidon = datetime.now(timezone.utc)
+                cur.executemany(
+                    """
+                    INSERT INTO poseidon_smt_nodes (level, index, hash, ts)
+                    VALUES (%s, %s, %s, %s)
+                    ON CONFLICT (level, index)
+                    DO UPDATE SET hash = EXCLUDED.hash, ts = EXCLUDED.ts
+                    """,
+                    [
+                        (db_level, packed_index, hash_decimal, ts_now_poseidon)
+                        for db_level, packed_index, hash_decimal in poseidon_node_deltas
+                    ],
+                )
 
                 # New format: dual-root commitment atomically binds BLAKE3 and Poseidon roots
                 entry_hash = create_dual_root_commitment(root_hash, authoritative_poseidon_root)
@@ -2558,6 +2620,63 @@ class StorageLayer:
                 siblings.append(bytes(raw))
             else:
                 siblings.append(EMPTY_HASHES[i])
+        return siblings
+
+    def _get_poseidon_proof_path(
+        self,
+        cur: psycopg.Cursor[Any],
+        key: bytes,
+    ) -> list[int]:
+        """
+        Fetch the 256 Poseidon sibling hashes needed for an incremental
+        Poseidon root update directly from ``poseidon_smt_nodes``.
+
+        Args:
+            cur: Active database cursor.
+            key: 32-byte SMT leaf key.
+
+        Returns:
+            List of 256 sibling hashes (field element ints) ordered leaf→root.
+            Missing nodes default to ``POSEIDON_EMPTY_HASHES[level]``.
+        """
+        from protocol.poseidon_smt import POSEIDON_EMPTY_HASHES
+
+        path = tuple(_key_to_path_bits(key))
+
+        # Build the 256 (db_level, db_index) pairs for each sibling.
+        db_levels: list[int] = []
+        db_indices: list[bytes] = []
+        for level in range(256):
+            bit_pos = 255 - level
+            sub_path = path[: bit_pos + 1]
+            sibling_path = sub_path[:-1] + (1 - sub_path[-1],)
+            db_levels.append(len(sibling_path))
+            db_indices.append(self._encode_path(sibling_path))
+
+        # Single round-trip: UNNEST + LEFT JOIN returns rows in ordinal order.
+        cur.execute(
+            """
+            SELECT n.hash
+            FROM UNNEST(
+                %s::SMALLINT[],
+                %s::BYTEA[],
+                %s::INT[]
+            ) AS t(level, index, ord)
+            LEFT JOIN poseidon_smt_nodes n
+                   ON n.level = t.level AND n.index = t.index
+            ORDER BY t.ord
+            """,
+            (db_levels, db_indices, list(range(256))),
+        )
+        rows = cur.fetchall()
+
+        siblings: list[int] = []
+        for i, row in enumerate(rows):
+            raw = row[0] if not isinstance(row, Mapping) else row.get("hash")
+            if raw is not None:
+                siblings.append(int(raw))
+            else:
+                siblings.append(POSEIDON_EMPTY_HASHES[i])
         return siblings
 
     def get_current_root(self, shard_id: str) -> bytes:
