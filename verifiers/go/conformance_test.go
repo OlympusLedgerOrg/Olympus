@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"sort"
 	"strings"
 	"testing"
 )
@@ -435,14 +436,7 @@ func canonicalJSON(val interface{}) ([]byte, error) {
 		for k := range v {
 			keys = append(keys, k)
 		}
-		// Sort keys
-		for i := 0; i < len(keys); i++ {
-			for j := i + 1; j < len(keys); j++ {
-				if keys[j] < keys[i] {
-					keys[i], keys[j] = keys[j], keys[i]
-				}
-			}
-		}
+		sort.Strings(keys)
 		var buf bytes.Buffer
 		buf.WriteByte('{')
 		for i, k := range keys {

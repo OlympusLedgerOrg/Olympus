@@ -553,12 +553,8 @@ var BLAKE3 = (function() {
   }
 
   function compress(chainingValue, blockWords, counter, blockLen, flags) {
-    var counterLow = counter >>> 0;
-    var counterHigh = 0; // counter fits in 32 bits for our use case
-    if (counter > 0xFFFFFFFF) {
-      counterHigh = Math.floor(counter / 0x100000000) >>> 0;
-      counterLow = (counter & 0xFFFFFFFF) >>> 0;
-    }
+    var counterLow = (counter & 0xFFFFFFFF) >>> 0;
+    var counterHigh = counter > 0xFFFFFFFF ? (Math.floor(counter / 0x100000000) >>> 0) : 0;
 
     var state = new Uint32Array([
       chainingValue[0], chainingValue[1], chainingValue[2], chainingValue[3],
