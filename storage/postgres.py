@@ -160,6 +160,7 @@ def _poseidon_incremental_update(
         parent_hash = parent_hash % SNARK_SCALAR_FIELD
 
         # Store the parent node delta
+        # Root node has empty path when bit_pos reaches 0
         parent_path = path[:bit_pos] if bit_pos > 0 else ()
         packed_index = StorageLayer._encode_path(parent_path)
         node_deltas.append((len(parent_path), packed_index, str(parent_hash)))
@@ -1275,7 +1276,7 @@ class StorageLayer:
                     WHERE shard_id = %s
                     ORDER BY seq DESC
                     LIMIT 1
-                    FOR UPDATE
+                    FOR UPDATE  -- lock prevents concurrent seq race
                     """,
                 (shard_id,),
             )
@@ -1353,7 +1354,7 @@ class StorageLayer:
                     WHERE shard_id = %s
                     ORDER BY seq DESC
                     LIMIT 1
-                    FOR UPDATE
+                    FOR UPDATE  -- lock prevents concurrent seq race
                     """,
                 (shard_id,),
             )

@@ -825,8 +825,10 @@ async def _apply_rate_limits(request: Request, api_key_id: str, action: str) -> 
     client_ip = _get_client_ip(request)
     loop = asyncio.get_running_loop()
 
-    key_allowed = await loop.run_in_executor(
-        None, _consume_rate_limit, "api_key", api_key_id, action
+    # Run both rate-limit checks concurrently to halve DB latency
+    key_allowed, ip_allowed = await asyncio.gather(
+        loop.run_in_executor(None, _consume_rate_limit, "api_key", api_key_id, action),
+        loop.run_in_executor(None, _consume_rate_limit, "ip", client_ip, action),
     )
     if not key_allowed:
         logger.warning(
@@ -845,9 +847,6 @@ async def _apply_rate_limits(request: Request, api_key_id: str, action: str) -> 
         )
         raise HTTPException(status_code=429, detail="Rate limit exceeded for API key")
 
-    ip_allowed = await loop.run_in_executor(
-        None, _consume_rate_limit, "ip", client_ip, action
-    )
     if not ip_allowed:
         logger.warning(
             "rate_limit_hit",
