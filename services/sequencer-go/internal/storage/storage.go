@@ -273,6 +273,33 @@ func (s *PostgresStorage) InitSchema(ctx context.Context) error {
 	return nil
 }
 
+// SignedRoot holds a root hash, its tree size, and the Ed25519 signature.
+type SignedRoot struct {
+	RootHash  []byte
+	TreeSize  uint64
+	Signature []byte
+}
+
+// GetRootByTreeSize retrieves the signed root at the given tree size.
+// Returns sql.ErrNoRows if no root exists at that size.
+func (s *PostgresStorage) GetRootByTreeSize(ctx context.Context, treeSize uint64) (*SignedRoot, error) {
+	query := `
+		SELECT root_hash, tree_size, signature
+		FROM cdhs_smf_roots
+		WHERE tree_size = $1
+		ORDER BY created_at DESC
+		LIMIT 1
+	`
+
+	var sr SignedRoot
+	err := s.db.QueryRowContext(ctx, query, treeSize).Scan(&sr.RootHash, &sr.TreeSize, &sr.Signature)
+	if err != nil {
+		return nil, err
+	}
+
+	return &sr, nil
+}
+
 // GetLeaves retrieves all leaf entries in insertion order (oldest first) for
 // startup replay. Corresponds to the cdhs_smf_leaves table.
 func (s *PostgresStorage) GetLeaves(ctx context.Context) ([]LeafEntry, error) {

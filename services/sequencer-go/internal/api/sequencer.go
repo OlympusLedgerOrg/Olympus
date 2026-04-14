@@ -475,6 +475,65 @@ func (s *Sequencer) handleGetInclusionProof(w http.ResponseWriter, r *http.Reque
 }
 
 func (s *Sequencer) handleGetConsistencyProof(w http.ResponseWriter, r *http.Request) {
-	// Consistency proofs are not yet implemented (Phase 1+)
-	http.Error(w, "Consistency proofs not yet supported", http.StatusNotImplemented)
+	if r.Method != http.MethodGet {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	oldSizeStr := r.URL.Query().Get("old_tree_size")
+	newSizeStr := r.URL.Query().Get("new_tree_size")
+
+	if oldSizeStr == "" || newSizeStr == "" {
+		http.Error(w, "Missing required parameters: old_tree_size, new_tree_size", http.StatusBadRequest)
+		return
+	}
+
+	oldSize, err := strconv.ParseUint(oldSizeStr, 10, 64)
+	if err != nil {
+		http.Error(w, "Invalid old_tree_size", http.StatusBadRequest)
+		return
+	}
+
+	newSize, err := strconv.ParseUint(newSizeStr, 10, 64)
+	if err != nil {
+		http.Error(w, "Invalid new_tree_size", http.StatusBadRequest)
+		return
+	}
+
+	if oldSize > newSize {
+		http.Error(w, "old_tree_size cannot exceed new_tree_size", http.StatusBadRequest)
+		return
+	}
+
+	ctx := r.Context()
+
+	// Retrieve the signed root at the old tree size
+	oldRoot, err := s.storage.GetRootByTreeSize(ctx, oldSize)
+	if err != nil {
+		log.Printf("Failed to get root at tree size %d: %v", oldSize, err)
+		http.Error(w, "Root not found for old_tree_size", http.StatusNotFound)
+		return
+	}
+
+	// Retrieve the signed root at the new tree size
+	newRoot, err := s.storage.GetRootByTreeSize(ctx, newSize)
+	if err != nil {
+		log.Printf("Failed to get root at tree size %d: %v", newSize, err)
+		http.Error(w, "Root not found for new_tree_size", http.StatusNotFound)
+		return
+	}
+
+	resp := map[string]interface{}{
+		"old_tree_size": oldSize,
+		"new_tree_size": newSize,
+		"old_root":      fmt.Sprintf("%x", oldRoot.RootHash),
+		"old_signature":  fmt.Sprintf("%x", oldRoot.Signature),
+		"new_root":      fmt.Sprintf("%x", newRoot.RootHash),
+		"new_signature":  fmt.Sprintf("%x", newRoot.Signature),
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	if err := json.NewEncoder(w).Encode(resp); err != nil {
+		log.Printf("Failed to encode response: %v", err)
+	}
 }

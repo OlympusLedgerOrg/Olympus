@@ -16,6 +16,26 @@
       "description": "BLAKE3 of empty bytes",
       "input_utf8": "",
       "hash": "af1349b9f5f9a1a6a0404dea36dcc9499bcb25c9adc112b7cc9a93cae41f3262"
+    },
+    {
+      "description": "BLAKE3 of single byte A",
+      "input_utf8": "A",
+      "hash": "32684bfa28c0c84d6f210511aace0efc5171c7889148ba89208d5aa29705fa98"
+    },
+    {
+      "description": "BLAKE3 of 256 repeated A bytes",
+      "input_utf8": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+      "hash": "f30e300dae8292bfc1dca85127eb8d6ea6c72d82a703d3f56f837daaab87df94"
+    },
+    {
+      "description": "BLAKE3 of NFC-normalized Unicode (café résumé naïve)",
+      "input_utf8": "café résumé naïve",
+      "hash": "ff48bf8e14941171ab077ce3d659154c7d79942970c6ca15c68bb5ca345e1f5a"
+    },
+    {
+      "description": "BLAKE3 of emoji string (🔐🗝️📜)",
+      "input_utf8": "🔐🗝️📜",
+      "hash": "3be6da64b233cc1c442c5b252a63fbf74c670250f3eb6628a9abd73c937db589"
     }
   ],
   "merkle_leaf_hash": [
@@ -38,6 +58,11 @@
       "description": "Leaf hash of 'gamma'",
       "input_utf8": "gamma",
       "hash": "9cc9d6578dab4333405bc3fd06579f13e41aeab1770b062617a2037acaa01626"
+    },
+    {
+      "description": "Leaf hash of empty bytes — BLAKE3(OLY:LEAF:V1 || '|' || '')",
+      "input_utf8": "",
+      "hash": "3235e77cafe7027ce4c95a34e4d9359a52592b49dfbfebfaa3450ab6397b9d35"
     }
   ],
   "merkle_parent_hash": [
@@ -72,6 +97,40 @@
         "gamma"
       ],
       "root": "9f68b7c5e6fc491a2f926699a0d7bd0bda1cdda1285b60c5ada9fb7fa3a6dad9"
+    },
+    {
+      "description": "Root of 4-leaf tree [leaf-0..leaf-3]",
+      "leaves_utf8": [
+        "leaf-0",
+        "leaf-1",
+        "leaf-2",
+        "leaf-3"
+      ],
+      "root": "d4be10ce8930302f91c6c5ab3110bc606f3304765bc625cba728574b3f7d8d00"
+    },
+    {
+      "description": "Root of 5-leaf tree [leaf-0..leaf-4] (odd-leaf CT promotion)",
+      "leaves_utf8": [
+        "leaf-0",
+        "leaf-1",
+        "leaf-2",
+        "leaf-3",
+        "leaf-4"
+      ],
+      "root": "304fe9037fe9a3af1d95bd13488411374f719380c1680776e3d6ee0e176130ea"
+    },
+    {
+      "description": "Root of 7-leaf tree [leaf-0..leaf-6] (multiple odd promotions)",
+      "leaves_utf8": [
+        "leaf-0",
+        "leaf-1",
+        "leaf-2",
+        "leaf-3",
+        "leaf-4",
+        "leaf-5",
+        "leaf-6"
+      ],
+      "root": "2c0ec4108f3555bd29e5033601c4ab76a571f4a1baef8ce47ce90be1dcb02e9d"
     }
   ],
   "merkle_proof": [
@@ -117,6 +176,27 @@
       ],
       "root_hash": "0000000000000000000000000000000000000000000000000000000000000000",
       "expected_valid": false
+    },
+    {
+      "description": "Valid proof for leaf[2] in 7-leaf tree (deep path)",
+      "leaf_index": 2,
+      "leaf_hash": "12421d82092f007ce442083204fc63cc0a2d2e2ae87e0d8961dd5243d1f05188",
+      "siblings": [
+        {
+          "hash": "00bed561072b5db06b1db7092a3b84ad1dee5393c9b049c682c1144e36cfdb91",
+          "position": "right"
+        },
+        {
+          "hash": "080ef84c7ff74ee361c7a6cee7dfcfc71027fa8e8bc53aff8822e902f31e5e6b",
+          "position": "left"
+        },
+        {
+          "hash": "52e9b635bf4d84deda8a7a6cd67db4bcb3283b36778b6a454058a55a0f1b1ade",
+          "position": "right"
+        }
+      ],
+      "expected_valid": true,
+      "root_hash": "2c0ec4108f3555bd29e5033601c4ab76a571f4a1baef8ce47ce90be1dcb02e9d"
     }
   ],
   "poseidon_root": [
@@ -1915,6 +1995,156 @@
       },
       "expected_valid": false,
       "expected_blake3_consistent": false
+    }
+  ],
+  "consistency_proof": [
+    {
+      "description": "Consistency proof 3→7 leaves (append-only growth)",
+      "leaves_utf8": [
+        "leaf-0",
+        "leaf-1",
+        "leaf-2",
+        "leaf-3",
+        "leaf-4",
+        "leaf-5",
+        "leaf-6"
+      ],
+      "old_tree_size": 3,
+      "new_tree_size": 7,
+      "old_root": "0186e2071c71568e6fe83067f095c4aa55ba610a2c87e5fb02913b6b7c7c7943",
+      "new_root": "2c0ec4108f3555bd29e5033601c4ab76a571f4a1baef8ce47ce90be1dcb02e9d",
+      "proof_nodes": [
+        "080ef84c7ff74ee361c7a6cee7dfcfc71027fa8e8bc53aff8822e902f31e5e6b",
+        "12421d82092f007ce442083204fc63cc0a2d2e2ae87e0d8961dd5243d1f05188",
+        "00bed561072b5db06b1db7092a3b84ad1dee5393c9b049c682c1144e36cfdb91",
+        "52e9b635bf4d84deda8a7a6cd67db4bcb3283b36778b6a454058a55a0f1b1ade"
+      ],
+      "expected_valid": true
+    },
+    {
+      "description": "Consistency proof 1→5 leaves (single-leaf to five)",
+      "leaves_utf8": [
+        "leaf-0",
+        "leaf-1",
+        "leaf-2",
+        "leaf-3",
+        "leaf-4"
+      ],
+      "old_tree_size": 1,
+      "new_tree_size": 5,
+      "old_root": "2732b5b395c7868be889e847ff7930a655478bac872d4a9835a6cdf0b9d16866",
+      "new_root": "304fe9037fe9a3af1d95bd13488411374f719380c1680776e3d6ee0e176130ea",
+      "proof_nodes": [
+        "2732b5b395c7868be889e847ff7930a655478bac872d4a9835a6cdf0b9d16866",
+        "7f9f28fffac020ae139968261f5053ed0465670bf0bdeb1f7e40a6fb0b6625aa",
+        "8155a9dc4fbd953af58566c7abdd62d3e1217e201a753032c701a408387f7646",
+        "737724e0c8b9ee41e0c926d68a250335c58a459eadcf26fc0e3b55024db982d4"
+      ],
+      "expected_valid": true
+    },
+    {
+      "description": "Consistency proof 4→7 leaves (power-of-two to odd)",
+      "leaves_utf8": [
+        "leaf-0",
+        "leaf-1",
+        "leaf-2",
+        "leaf-3",
+        "leaf-4",
+        "leaf-5",
+        "leaf-6"
+      ],
+      "old_tree_size": 4,
+      "new_tree_size": 7,
+      "old_root": "d4be10ce8930302f91c6c5ab3110bc606f3304765bc625cba728574b3f7d8d00",
+      "new_root": "2c0ec4108f3555bd29e5033601c4ab76a571f4a1baef8ce47ce90be1dcb02e9d",
+      "proof_nodes": [
+        "d4be10ce8930302f91c6c5ab3110bc606f3304765bc625cba728574b3f7d8d00",
+        "52e9b635bf4d84deda8a7a6cd67db4bcb3283b36778b6a454058a55a0f1b1ade"
+      ],
+      "expected_valid": true
+    }
+  ],
+  "verification_bundle": [
+    {
+      "description": "Self-contained 3-event verification bundle for conformance testing",
+      "bundle_version": "1.0.0",
+      "schema_version": "1.0.0",
+      "canonical_events": [
+        {
+          "body": "Budget report FY2025",
+          "title": "Annual Budget"
+        },
+        {
+          "body": "Council minutes January",
+          "title": "Meeting Minutes"
+        },
+        {
+          "body": "Permit application #4521",
+          "title": "Building Permit"
+        }
+      ],
+      "leaf_hashes": [
+        "cadb9ee1da9f16c24bf9fa5efb5b8743c3c7d163f65d5aad1116bb7774fa66d8",
+        "1dc9426fcd85ccf8fce96c11d87796f8c5c2e4838041ad8963127423b366021f",
+        "90793edff19c2c5c09da4dee5ad8661278fff38f64da04c73c094aebf0fa7043"
+      ],
+      "merkle_root": "169d5550d2937a264036f55842ff35e790071c3a85890e11c5c50a698dd329ef",
+      "merkle_proofs": [
+        {
+          "leaf_hash": "1a0d983009e1b68ca62eb2ec3234250bd943da3aca39547e17b6ec837c7d0330",
+          "leaf_index": 0,
+          "siblings": [
+            [
+              "8b561764eb607752e2d009664c47d45cef13fba34b171c630f4298513b63e3ea",
+              "right"
+            ],
+            [
+              "abe6c9c5f0aa2d2776831e5426730608ebf79f162158c69c961db0a7a5933cce",
+              "right"
+            ]
+          ],
+          "root_hash": "169d5550d2937a264036f55842ff35e790071c3a85890e11c5c50a698dd329ef"
+        },
+        {
+          "leaf_hash": "8b561764eb607752e2d009664c47d45cef13fba34b171c630f4298513b63e3ea",
+          "leaf_index": 1,
+          "siblings": [
+            [
+              "1a0d983009e1b68ca62eb2ec3234250bd943da3aca39547e17b6ec837c7d0330",
+              "left"
+            ],
+            [
+              "abe6c9c5f0aa2d2776831e5426730608ebf79f162158c69c961db0a7a5933cce",
+              "right"
+            ]
+          ],
+          "root_hash": "169d5550d2937a264036f55842ff35e790071c3a85890e11c5c50a698dd329ef"
+        },
+        {
+          "leaf_hash": "abe6c9c5f0aa2d2776831e5426730608ebf79f162158c69c961db0a7a5933cce",
+          "leaf_index": 2,
+          "siblings": [
+            [
+              "0f67fc9e2c79ab2718a7be4e1cd2fda284b04ff25fe35d9ba3de8fee0bc17f95",
+              "left"
+            ]
+          ],
+          "root_hash": "169d5550d2937a264036f55842ff35e790071c3a85890e11c5c50a698dd329ef"
+        }
+      ],
+      "canonicalization": {
+        "format": "application/json",
+        "normalization_mode": "canonical_v1",
+        "canonicalizer_versions": {
+          "jcs": "1.2.0-strict-numeric"
+        },
+        "fallback_reason": null
+      },
+      "checks": {
+        "leaf_hash_from_canonical": "Each leaf_hash == BLAKE3(canonical_json_bytes(event))",
+        "merkle_root_from_leaves": "Root == MerkleTree(leaf_hashes).get_root()",
+        "proofs_valid": "Each merkle_proof verifies against merkle_root"
+      }
     }
   ]
 }

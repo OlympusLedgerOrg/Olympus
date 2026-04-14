@@ -175,6 +175,71 @@ function testDualRootCommitment(vectors) {
   console.log(`  ✓ dual_root_commitment: ${vectors.dual_root_commitment.length} vectors`);
 }
 
+function testVerificationBundle(vectors) {
+  console.log('Testing conformance: verification_bundle...');
+  if (!vectors.verification_bundle) {
+    console.log('  (skipped: no verification_bundle vectors)');
+    return;
+  }
+  for (const vec of vectors.verification_bundle) {
+    // 1. Verify leaf hashes from canonical events
+    for (let i = 0; i < vec.canonical_events.length; i++) {
+      const canonical = canonicalJsonBytes(vec.canonical_events[i]);
+      const got = toHex(computeBlake3(canonical));
+      assert(
+        got === vec.leaf_hashes[i],
+        `verification_bundle leaf[${i}]: got ${got}, want ${vec.leaf_hashes[i]}`
+      );
+    }
+
+    // 2. Verify Merkle root from leaf hashes
+    const leaves = vec.leaf_hashes.map(h => fromHex(h));
+    const root = computeMerkleRoot(leaves);
+    assert(
+      root === vec.merkle_root,
+      `verification_bundle merkle_root: got ${root}, want ${vec.merkle_root}`
+    );
+
+    // 3. Verify each Merkle inclusion proof
+    for (const mp of vec.merkle_proofs) {
+      const siblings = mp.siblings.map(s => {
+        if (Array.isArray(s)) return { hash: s[0], position: s[1] };
+        return s;
+      });
+      const valid = verifyMerkleProof({
+        leafHash: fromHex(mp.leaf_hash),
+        siblings: siblings,
+        rootHash: mp.root_hash,
+      });
+      assert(valid, `verification_bundle proof[${mp.leaf_index}] failed`);
+    }
+  }
+  console.log(`  ✓ verification_bundle: ${vectors.verification_bundle.length} vectors`);
+}
+
+/**
+ * Produce canonical JSON bytes from an object (sorted keys, minimal separators).
+ * Matches Python: json.dumps(data, sort_keys=True, separators=(',',':'), ensure_ascii=True)
+ */
+function canonicalJsonBytes(obj) {
+  function sortedStringify(val) {
+    if (val === null) return 'null';
+    if (typeof val === 'boolean') return val ? 'true' : 'false';
+    if (typeof val === 'number') return JSON.stringify(val);
+    if (typeof val === 'string') return JSON.stringify(val);
+    if (Array.isArray(val)) {
+      return '[' + val.map(sortedStringify).join(',') + ']';
+    }
+    if (typeof val === 'object') {
+      const keys = Object.keys(val).sort();
+      const pairs = keys.map(k => JSON.stringify(k) + ':' + sortedStringify(val[k]));
+      return '{' + pairs.join(',') + '}';
+    }
+    return String(val);
+  }
+  return new TextEncoder().encode(sortedStringify(obj));
+}
+
 function runConformanceTests() {
   console.log('Running JavaScript conformance tests against vectors.json\n');
   const vectors = loadVectors();
@@ -187,6 +252,7 @@ function runConformanceTests() {
   testCanonicalizerHash(canonicalizerVectors);
   testLedgerEntryHash(vectors);
   testDualRootCommitment(vectors);
+  testVerificationBundle(vectors);
   console.log('\n✓ All JavaScript conformance tests passed!');
 }
 
