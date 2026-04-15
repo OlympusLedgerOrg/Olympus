@@ -450,16 +450,27 @@ def diff_sparse_merkle_trees(
     }
 
 
-def verify_proof(proof: ExistenceProof) -> bool:
+def verify_proof(
+    proof: ExistenceProof,
+    expected_root: bytes | None = None,
+) -> bool:
     """
     Verify an existence proof.
 
     Args:
         proof: Existence proof to verify
+        expected_root: When provided, the proof's root_hash is checked against
+            this value before path reconstruction. If they don't match, the
+            function returns False immediately. Callers should pass the root
+            from a signed shard header to ensure the proof is anchored to an
+            authenticated root.
 
     Returns:
         True if proof is valid, False otherwise
     """
+    if expected_root is not None and proof.root_hash != expected_root:
+        return False
+
     if len(proof.key) != 32:
         return False
     if len(proof.value_hash) != 32:
@@ -494,7 +505,10 @@ def verify_proof(proof: ExistenceProof) -> bool:
     return current_hash == proof.root_hash
 
 
-def verify_nonexistence_proof(proof: NonExistenceProof) -> bool:
+def verify_nonexistence_proof(
+    proof: NonExistenceProof,
+    expected_root: bytes | None = None,
+) -> bool:
     """
     Verify a non-existence proof using the default hash chain.
 
@@ -508,16 +522,25 @@ def verify_nonexistence_proof(proof: NonExistenceProof) -> bool:
 
     Args:
         proof: Non-existence proof to verify
+        expected_root: When provided, the proof's root_hash is checked against
+            this value before path reconstruction. If they don't match, the
+            function returns False immediately. Callers should pass the root
+            from a signed shard header to ensure the proof is anchored to an
+            authenticated root.
 
     Security contract:
         This function verifies mathematical consistency only. Callers MUST
         additionally verify that ``proof.root_hash`` is an authenticated root
         (for example, by matching it against a signed shard header) before
-        treating non-existence as authoritative.
+        treating non-existence as authoritative. When ``expected_root`` is
+        provided, this check is performed automatically.
 
     Returns:
         True if proof is valid, False otherwise
     """
+    if expected_root is not None and proof.root_hash != expected_root:
+        return False
+
     if len(proof.key) != 32:
         return False
     if len(proof.siblings) != 256:
@@ -548,7 +571,10 @@ def verify_nonexistence_proof(proof: NonExistenceProof) -> bool:
     return current_hash == proof.root_hash
 
 
-def verify_unified_proof(proof: ExistenceProof | NonExistenceProof) -> bool:
+def verify_unified_proof(
+    proof: ExistenceProof | NonExistenceProof,
+    expected_root: bytes | None = None,
+) -> bool:
     """
     Verify a proof (existence or non-existence).
 
@@ -556,14 +582,17 @@ def verify_unified_proof(proof: ExistenceProof | NonExistenceProof) -> bool:
 
     Args:
         proof: Existence or non-existence proof to verify
+        expected_root: When provided, the proof's root_hash is checked against
+            this value before path reconstruction. Passed through to the
+            underlying verification function.
 
     Returns:
         True if proof is valid, False otherwise
     """
     if isinstance(proof, ExistenceProof):
-        return verify_proof(proof)
+        return verify_proof(proof, expected_root=expected_root)
     elif isinstance(proof, NonExistenceProof):
-        return verify_nonexistence_proof(proof)
+        return verify_nonexistence_proof(proof, expected_root=expected_root)
     else:
         return False
 

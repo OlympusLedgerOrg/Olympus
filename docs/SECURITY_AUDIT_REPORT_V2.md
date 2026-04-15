@@ -32,7 +32,7 @@ where docs describe an architecture that does not match the current code.
 | Risk Level | Count | Fixed | Description |
 |------------|-------|-------|-------------|
 | **High** | 5 | 5 ✅ | All high-severity findings are now closed (RT-H1 through RT-H5) |
-| **Medium** | 4 | 0 | Missing constraints, unverified hashes, documentation drift |
+| **Medium** | 4 | 4 ✅ | Missing constraints, unverified hashes, documentation drift |
 | **Low** | 3 | 0 | Permissive patterns, minor information leaks |
 | **Documentation** | 4 | 3 ✅ | Outdated terminology, broken references, misleading architecture claims |
 
@@ -288,13 +288,15 @@ rebuild-then-append staleness gap.
 
 ### Medium Severity
 
-#### RT-M1: Ledger Entry Hash Not Re-Verified After Persistence
+#### RT-M1: Ledger Entry Hash Not Re-Verified After Persistence — ✅ FIXED
 
 | Attribute | Value |
 |-----------|-------|
 | **Severity** | Medium |
 | **Exploitability** | Complex (requires subtle serialization bug) |
 | **Location** | `storage/postgres.py` — ledger entry insertion |
+| **Status** | ✅ Fixed |
+| **Fix Location** | `storage/postgres.py:_append_record_inner()` |
 
 **Description:**
 Shard headers are verified after signing (post-sign verification before persist),
@@ -305,6 +307,12 @@ will appear corrupted on verification.
 
 **Recommendation:** Add a post-compute verification step for ledger entry hashes,
 analogous to the existing shard header verification.
+
+**Remediation:** Post-persist SELECT-and-recompute verification added in
+`storage/postgres.py` for both dual-root (Poseidon) and legacy entry hash
+paths. After inserting a ledger entry, the code performs a `SELECT` of the
+persisted row, re-parses the stored payload, recomputes the hash, and raises
+`RuntimeError` on mismatch.
 
 ---
 
@@ -338,13 +346,15 @@ caller control.
 
 ---
 
-#### RT-M3: Trigger Gate Value Is Deterministic and Discoverable
+#### RT-M3: Trigger Gate Value Is Deterministic and Discoverable — ✅ FIXED
 
 | Attribute | Value |
 |-----------|-------|
 | **Severity** | Medium |
 | **Exploitability** | Complex (requires DB access + knowledge of gate computation) |
 | **Location** | `storage/postgres.py:77` — `_NODE_REHASH_GATE` |
+| **Status** | ✅ Fixed |
+| **Fix Location** | `storage/gates.py:derive_node_rehash_gate()` |
 
 **Description:**
 The session variable gate (`_NODE_REHASH_GATE`) is computed as
@@ -362,15 +372,22 @@ Additionally, `SERIALIZABLE` isolation provides additional detection capability.
 from environment variable) to the gate computation, so the value is not
 derivable from source code alone.
 
+**Remediation:** Production deployments now require
+`OLYMPUS_NODE_REHASH_GATE_SECRET`. The gate value mixes the secret with the
+domain prefix, making it non-derivable from source code. Development
+environments retain the deterministic fallback with a logged warning.
+
 ---
 
-#### RT-M4: Non-Existence Proof Verification Checks Mathematical Consistency Only
+#### RT-M4: Non-Existence Proof Verification Checks Mathematical Consistency Only — ✅ FIXED
 
 | Attribute | Value |
 |-----------|-------|
 | **Severity** | Medium |
 | **Exploitability** | Complex (attacker needs valid root hash) |
 | **Location** | `protocol/ssmf.py` — `verify_nonexistence_proof()` |
+| **Status** | ✅ Fixed |
+| **Fix Location** | `protocol/ssmf.py`, `tools/verify_cli.py`, `verifiers/cli/verify.py` |
 
 **Description:**
 Non-existence proof verification starts from `EMPTY_HASHES[0]` (the empty leaf
@@ -392,6 +409,14 @@ in isolation without checking the root against a signed header.
 callers MUST verify the root hash against a signed header. Consider adding an
 optional `expected_root` parameter that, when provided, is checked before
 proof reconstruction.
+
+**Remediation:** `verify_nonexistence_proof()` and `verify_existence_proof()` now
+accept an optional `expected_root` parameter. When provided, the proof root is
+checked against the expected value before path reconstruction.
+`verify_unified_proof()` passes the parameter through to the underlying function.
+`tools/verify_cli.py` extracts the root from signed shard headers in verification
+bundles automatically. `verifiers/cli/verify.py` supports `--expected-root` for
+standalone verification.
 
 ---
 
@@ -565,7 +590,7 @@ The following table summarizes the verified properties of the ledger commitment 
 | **Proofs are independently verifiable** | ✅ Verified | `verify_cli.py` and verification bundles enable offline verification |
 | **Concurrent writes are safe** | ✅ Verified | `append_record()` retries `SerializationFailure` with backoff under `SERIALIZABLE` isolation |
 | **Poseidon root is consistent** | ✅ Verified | Poseidon root is updated incrementally and persisted inside the same transaction as the ledger append |
-| **Non-existence proofs are sound** | ⚠️ Conditional | Sound only when combined with signed root verification |
+| **Non-existence proofs are sound** | ✅ Verified | Sound; `expected_root` parameter enables root authentication |
 
 ---
 

@@ -185,3 +185,25 @@ Deploy Olympus behind a reverse proxy (nginx, HAProxy, AWS ALB) configured with:
 If the API is accessed from browser-based clients, configure CORS via your reverse
 proxy or add the `CORSMiddleware` to the FastAPI application. The default configuration
 does not include CORS headers to prevent unintended cross-origin access.
+
+### Trigger Gate Secret
+
+The `OLYMPUS_NODE_REHASH_GATE_SECRET` environment variable provides a deployment-specific
+secret mixed into the SMT trigger gate value. **This secret must be set in production.**
+
+Without this secret, the trigger gate value is deterministic and derivable from source code
+alone. An attacker with direct database access could compute the gate value and bypass
+PostgreSQL trigger protection to insert or modify SMT nodes directly.
+
+1. **Generate a strong random value:**
+   ```bash
+   python -c "import secrets; print(secrets.token_hex(32))"
+   ```
+2. **Set via environment variable or secret manager** — treat with the same
+   confidentiality as database credentials.
+3. **Rotate periodically** — generate a new secret and restart the service.
+   Existing SMT data is not affected by rotation since the gate is a session-level
+   control, not a persisted value.
+4. **Development/test environments** — the secret is recommended but not required.
+   A warning is logged when operating without it. Set `OLYMPUS_ENV=development`
+   or `OLYMPUS_ENV=test` to allow the deterministic fallback.
