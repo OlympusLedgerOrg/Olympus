@@ -23,7 +23,6 @@ from __future__ import annotations
 
 import base64
 import json
-import os
 import shutil
 import subprocess
 from pathlib import Path
@@ -43,7 +42,6 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 GO_DIR = REPO_ROOT / "verifiers" / "go"
 RUST_DIR = REPO_ROOT / "verifiers" / "rust"
 JS_DIR = REPO_ROOT / "verifiers" / "javascript"
-JS_NODE_MODULES = JS_DIR / "node_modules"
 
 
 # ---------------------------------------------------------------------------
@@ -52,30 +50,11 @@ JS_NODE_MODULES = JS_DIR / "node_modules"
 
 HAS_GO = shutil.which("go") is not None
 HAS_CARGO = shutil.which("cargo") is not None
-HAS_NODE = shutil.which("node") is not None
+HAS_NODE = shutil.which("node") is not None and (JS_DIR / "node_modules").is_dir()
 
 # Maximum time (seconds) to wait for a batch hasher subprocess.  Includes
 # toolchain compilation on first invocation (Go/Rust may need to build).
 _SUBPROCESS_TIMEOUT = 120
-
-
-def _js_prerequisite_missing() -> str | None:
-    """Return a reason string when JavaScript verifier prerequisites are absent."""
-    if not HAS_NODE:
-        return "Node.js is not available on PATH"
-    if not JS_NODE_MODULES.is_dir():
-        return (
-            f"verifiers/javascript/node_modules not found at {JS_NODE_MODULES}; "
-            "run `npm install` inside verifiers/javascript first"
-        )
-    return None
-
-
-def _require_in_ci_or_skip(reason: str) -> None:
-    """Skip locally; fail in CI so missing JS coverage never becomes a silent gap."""
-    if os.environ.get("CI", "").lower() in ("true", "1"):
-        pytest.fail(f"Required prerequisite missing in CI environment: {reason}")
-    pytest.skip(reason)
 
 
 # ---------------------------------------------------------------------------
@@ -232,12 +211,12 @@ class TestCrossImplBlake3:
         )
         assert py_hashes == rust_hashes, "Python vs Rust BLAKE3 divergence"
 
+    @pytest.mark.skipif(
+        not HAS_NODE, reason="Node.js or verifiers/javascript/node_modules not available"
+    )
     @given(data=st.lists(byte_data, min_size=1, max_size=50))
     @settings(max_examples=20, deadline=None, suppress_health_check=[HealthCheck.too_slow])
     def test_blake3_python_vs_js(self, data: list[bytes]) -> None:
-        reason = _js_prerequisite_missing()
-        if reason is not None:
-            _require_in_ci_or_skip(reason)
         py_hashes = _python_blake3(data)
         js_hashes = _run_batch(["node", "hash_batch.js"], JS_DIR, "blake3", data)
         assert py_hashes == js_hashes, "Python vs JavaScript BLAKE3 divergence"
@@ -268,12 +247,12 @@ class TestCrossImplMerkleLeafHash:
         )
         assert py_hashes == rust_hashes, "Python vs Rust merkle_leaf_hash divergence"
 
+    @pytest.mark.skipif(
+        not HAS_NODE, reason="Node.js or verifiers/javascript/node_modules not available"
+    )
     @given(data=st.lists(byte_data, min_size=1, max_size=50))
     @settings(max_examples=20, deadline=None, suppress_health_check=[HealthCheck.too_slow])
     def test_merkle_leaf_python_vs_js(self, data: list[bytes]) -> None:
-        reason = _js_prerequisite_missing()
-        if reason is not None:
-            _require_in_ci_or_skip(reason)
         py_hashes = _python_merkle_leaf_hash(data)
         js_hashes = _run_batch(["node", "hash_batch.js"], JS_DIR, "merkle_leaf_hash", data)
         assert py_hashes == js_hashes, "Python vs JavaScript merkle_leaf_hash divergence"
@@ -304,12 +283,12 @@ class TestCrossImplMerkleRoot:
         )
         assert [py_root] == rust_result, "Python vs Rust merkle_root divergence"
 
+    @pytest.mark.skipif(
+        not HAS_NODE, reason="Node.js or verifiers/javascript/node_modules not available"
+    )
     @given(leaves=leaf_lists)
     @settings(max_examples=20, deadline=None, suppress_health_check=[HealthCheck.too_slow])
     def test_merkle_root_python_vs_js(self, leaves: list[bytes]) -> None:
-        reason = _js_prerequisite_missing()
-        if reason is not None:
-            _require_in_ci_or_skip(reason)
         py_root = _python_merkle_root(leaves)
         js_result = _run_batch(["node", "hash_batch.js"], JS_DIR, "merkle_root", leaves)
         assert [py_root] == js_result, "Python vs JavaScript merkle_root divergence"

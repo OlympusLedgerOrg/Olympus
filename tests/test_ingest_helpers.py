@@ -91,9 +91,7 @@ class TestReadUploadBounded:
         assert upload.closed is True
 
     @pytest.mark.asyncio
-    async def test_closes_file_when_read_times_out(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    async def test_closes_file_when_read_times_out(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setattr(
             "api.ingest.get_settings",
             lambda: SimpleNamespace(upload_read_timeout_seconds=0.01),

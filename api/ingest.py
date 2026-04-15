@@ -123,7 +123,7 @@ async def _read_upload_bounded(file: UploadFile, max_bytes: int, max_mb: int) ->
                 file.read(read_size),
                 timeout=settings.upload_read_timeout_seconds,
             )
-        except TimeoutError as exc:
+        except asyncio.TimeoutError as exc:
             await _close_upload_quietly(file)
             raise HTTPException(
                 status_code=408,

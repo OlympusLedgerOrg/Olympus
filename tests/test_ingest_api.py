@@ -554,7 +554,9 @@ class TestArtifactCommit:
                     ),
                 )
 
-            def store_ingestion_batch(self, batch_id: str, records: list[dict[str, object]]) -> None:
+            def store_ingestion_batch(
+                self, batch_id: str, records: list[dict[str, object]]
+            ) -> None:
                 calls["batch_id"] = batch_id
                 calls["records"] = records
 
@@ -563,7 +565,9 @@ class TestArtifactCommit:
 
         monkeypatch.setattr(ingest_api, "_get_storage", lambda: _FakeStorage())
         monkeypatch.setattr(ingest_api, "_signing_key", SigningKey(b"\x01" * 32))
-        monkeypatch.setattr(ingest_api, "_get_or_build_poseidon_smt", _fail_if_poseidon_rebuild_attempted)
+        monkeypatch.setattr(
+            ingest_api, "_get_or_build_poseidon_smt", _fail_if_poseidon_rebuild_attempted
+        )
 
         resp = client.post(
             "/ingest/commit",
