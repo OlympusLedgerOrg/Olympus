@@ -99,7 +99,7 @@ jobs:
         pip install -e . --no-deps
 
     - name: Build olympus_core Rust extension
-      run: maturin develop --release
+      run: maturin build --release --out dist && pip install --force-reinstall dist/*.whl
 
     - name: Run smoke tests (PostgreSQL integration)
       run: pytest tests/test_e2e_audit.py -v --tb=short
