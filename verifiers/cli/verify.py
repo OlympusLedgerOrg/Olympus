@@ -191,6 +191,71 @@ def poseidon_command(args):
     sys.exit(0 if is_valid else 1)
 
 
+def smt_proof_command(args):
+    """Verify an SMT existence or non-existence proof.
+
+    Supports an optional --expected-root flag for root authentication (RT-M4).
+    If the proof file is a verification bundle with a signed shard header,
+    the root is extracted automatically.
+    """
+    from protocol.ssmf import (
+        ExistenceProof,
+        NonExistenceProof,
+        verify_nonexistence_proof as verify_ne_proof,
+        verify_proof as verify_ex_proof,
+    )
+
+    data = json.loads(Path(args.proof).read_text())
+
+    expected_root: bytes | None = None
+    if args.expected_root:
+        expected_root = bytes.fromhex(args.expected_root)
+    elif "signed_shard_header" in data:
+        header = data["signed_shard_header"]
+        header_root = header.get("shard_root") or header.get("root_hash")
+        if header_root:
+            expected_root = bytes.fromhex(header_root)
+
+    proof_data = data.get("proof", data)
+    is_existence = proof_data.get("exists", True)
+
+    if is_existence:
+        proof = ExistenceProof(
+            key=bytes.fromhex(proof_data["key"]),
+            value_hash=bytes.fromhex(proof_data["value_hash"]),
+            siblings=[bytes.fromhex(s) for s in proof_data["siblings"]],
+            root_hash=bytes.fromhex(proof_data["root_hash"]),
+        )
+        is_valid = verify_ex_proof(proof, expected_root=expected_root)
+    else:
+        proof = NonExistenceProof(
+            key=bytes.fromhex(proof_data["key"]),
+            siblings=[bytes.fromhex(s) for s in proof_data["siblings"]],
+            root_hash=bytes.fromhex(proof_data["root_hash"]),
+        )
+        is_valid = verify_ne_proof(proof, expected_root=expected_root)
+
+    proof_type = "existence" if is_existence else "non-existence"
+
+    if args.json:
+        result = {
+            "command": "smt-proof",
+            "valid": is_valid,
+            "proof_type": proof_type,
+            "root_hash": proof_data["root_hash"],
+            "expected_root": expected_root.hex() if expected_root else None,
+        }
+        print(json.dumps(result, indent=2))
+    else:
+        print(f"Proof Type:    {proof_type}")
+        print(f"Root Hash:     {proof_data['root_hash']}")
+        if expected_root:
+            print(f"Expected Root: {expected_root.hex()}")
+        print(f"Valid:         {'✓ YES' if is_valid else '✗ NO'}")
+
+    sys.exit(0 if is_valid else 1)
+
+
 def main():
     """Main entry point."""
     parser = argparse.ArgumentParser(
@@ -228,6 +293,17 @@ def main():
         "--chunk-size", type=int, default=256, help="Chunk size (default: 256)"
     )
 
+    # smt-proof command (RT-M4: root authentication for SMT proofs)
+    smt_parser = subparsers.add_parser(
+        "smt-proof", help="Verify SMT existence/non-existence proof"
+    )
+    smt_parser.add_argument("--proof", required=True, help="SMT proof or verification bundle JSON")
+    smt_parser.add_argument(
+        "--expected-root",
+        help="Expected root hash (hex) for root authentication. "
+        "Extracted automatically from signed shard headers in bundles.",
+    )
+
     args = parser.parse_args()
 
     if args.command == "blake3":
@@ -238,6 +314,8 @@ def main():
         merkle_proof_command(args)
     elif args.command == "poseidon":
         poseidon_command(args)
+    elif args.command == "smt-proof":
+        smt_proof_command(args)
     else:
         parser.print_help()
         sys.exit(1)

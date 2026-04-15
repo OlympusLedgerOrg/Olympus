@@ -129,6 +129,76 @@ def verify_redaction(args: argparse.Namespace) -> int:
         return 1
 
 
+def verify_smt_proof(args: argparse.Namespace) -> int:
+    """Verify an SMT existence or non-existence proof.
+
+    If the proof file is a verification bundle that includes a signed shard
+    header, the root hash is extracted from the header and used as the
+    expected_root for secure proof verification. An explicit --expected-root
+    flag overrides the bundle root.
+    """
+    try:
+        from protocol.ssmf import (
+            ExistenceProof,
+            NonExistenceProof,
+            verify_nonexistence_proof,
+            verify_proof,
+        )
+
+        with open(args.proof_file) as f:
+            data = json.load(f)
+
+        expected_root: bytes | None = None
+
+        # If the user provided an explicit expected root, use it
+        if args.expected_root:
+            expected_root = bytes.fromhex(args.expected_root)
+        elif "signed_shard_header" in data:
+            # Extract root from signed shard header in verification bundle
+            header = data["signed_shard_header"]
+            header_root = header.get("shard_root") or header.get("root_hash")
+            if header_root:
+                expected_root = bytes.fromhex(header_root)
+                print(f"  Using root from signed shard header: {header_root}")
+
+        # Determine proof type from data
+        proof_data = data.get("proof", data)
+        is_existence = proof_data.get("exists", True)
+
+        if is_existence:
+            proof = ExistenceProof(
+                key=bytes.fromhex(proof_data["key"]),
+                value_hash=bytes.fromhex(proof_data["value_hash"]),
+                siblings=[bytes.fromhex(s) for s in proof_data["siblings"]],
+                root_hash=bytes.fromhex(proof_data["root_hash"]),
+            )
+            is_valid = verify_proof(proof, expected_root=expected_root)
+        else:
+            proof = NonExistenceProof(
+                key=bytes.fromhex(proof_data["key"]),
+                siblings=[bytes.fromhex(s) for s in proof_data["siblings"]],
+                root_hash=bytes.fromhex(proof_data["root_hash"]),
+            )
+            is_valid = verify_nonexistence_proof(proof, expected_root=expected_root)
+
+        proof_type = "existence" if is_existence else "non-existence"
+        if is_valid:
+            print(f"✓ SMT {proof_type} proof is VALID")
+            if expected_root:
+                print(f"  Root authenticated: {expected_root.hex()}")
+            return 0
+        else:
+            print(f"✗ SMT {proof_type} proof is INVALID", file=sys.stderr)
+            if expected_root:
+                print(f"  Expected root: {expected_root.hex()}", file=sys.stderr)
+                print(f"  Proof root:    {proof_data['root_hash']}", file=sys.stderr)
+            return 1
+
+    except Exception as e:
+        print(f"Error verifying SMT proof: {e}", file=sys.stderr)
+        return 1
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(
         description="Verify proofs and commitments in Olympus protocol"
@@ -149,6 +219,17 @@ def main() -> int:
     redaction_parser.add_argument("proof_file", help="Path to redaction proof JSON file")
     redaction_parser.add_argument("content_file", help="Path to revealed content JSON file")
 
+    # SMT proof verification (RT-M4)
+    smt_parser = subparsers.add_parser(
+        "smt", help="Verify SMT existence/non-existence proof"
+    )
+    smt_parser.add_argument("proof_file", help="Path to SMT proof or verification bundle JSON")
+    smt_parser.add_argument(
+        "--expected-root",
+        help="Expected root hash (hex). If the proof file is a verification bundle "
+        "with a signed shard header, the root is extracted automatically.",
+    )
+
     args = parser.parse_args()
 
     if not args.command:
@@ -161,6 +242,8 @@ def main() -> int:
         return verify_ledger_chain(args)
     elif args.command == "redaction":
         return verify_redaction(args)
+    elif args.command == "smt":
+        return verify_smt_proof(args)
     else:
         print(f"Unknown command: {args.command}", file=sys.stderr)
         return 1

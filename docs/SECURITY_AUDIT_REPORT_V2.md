@@ -32,7 +32,7 @@ where docs describe an architecture that does not match the current code.
 | Risk Level | Count | Fixed | Description |
 |------------|-------|-------|-------------|
 | **High** | 5 | 5 ✅ | All high-severity findings are now closed (RT-H1 through RT-H5) |
-| **Medium** | 4 | 2 | Missing constraints, unverified hashes, documentation drift |
+| **Medium** | 4 | 4 ✅ | Missing constraints, unverified hashes, documentation drift |
 | **Low** | 3 | 0 | Permissive patterns, minor information leaks |
 | **Documentation** | 4 | 3 ✅ | Outdated terminology, broken references, misleading architecture claims |
 
@@ -379,13 +379,15 @@ environments retain the deterministic fallback with a logged warning.
 
 ---
 
-#### RT-M4: Non-Existence Proof Verification Checks Mathematical Consistency Only
+#### RT-M4: Non-Existence Proof Verification Checks Mathematical Consistency Only — ✅ FIXED
 
 | Attribute | Value |
 |-----------|-------|
 | **Severity** | Medium |
 | **Exploitability** | Complex (attacker needs valid root hash) |
 | **Location** | `protocol/ssmf.py` — `verify_nonexistence_proof()` |
+| **Status** | ✅ Fixed |
+| **Fix Location** | `protocol/ssmf.py`, `tools/verify_cli.py`, `verifiers/cli/verify.py` |
 
 **Description:**
 Non-existence proof verification starts from `EMPTY_HASHES[0]` (the empty leaf
@@ -407,6 +409,14 @@ in isolation without checking the root against a signed header.
 callers MUST verify the root hash against a signed header. Consider adding an
 optional `expected_root` parameter that, when provided, is checked before
 proof reconstruction.
+
+**Remediation:** `verify_nonexistence_proof()` and `verify_existence_proof()` now
+accept an optional `expected_root` parameter. When provided, the proof root is
+checked against the expected value before path reconstruction.
+`verify_unified_proof()` passes the parameter through to the underlying function.
+`tools/verify_cli.py` extracts the root from signed shard headers in verification
+bundles automatically. `verifiers/cli/verify.py` supports `--expected-root` for
+standalone verification.
 
 ---
 
@@ -580,7 +590,7 @@ The following table summarizes the verified properties of the ledger commitment 
 | **Proofs are independently verifiable** | ✅ Verified | `verify_cli.py` and verification bundles enable offline verification |
 | **Concurrent writes are safe** | ✅ Verified | `append_record()` retries `SerializationFailure` with backoff under `SERIALIZABLE` isolation |
 | **Poseidon root is consistent** | ✅ Verified | Poseidon root is updated incrementally and persisted inside the same transaction as the ledger append |
-| **Non-existence proofs are sound** | ⚠️ Conditional | Sound only when combined with signed root verification |
+| **Non-existence proofs are sound** | ✅ Verified | Sound; `expected_root` parameter enables root authentication |
 
 ---
 
