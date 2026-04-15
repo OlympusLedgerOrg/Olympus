@@ -32,7 +32,7 @@ where docs describe an architecture that does not match the current code.
 | Risk Level | Count | Fixed | Description |
 |------------|-------|-------|-------------|
 | **High** | 5 | 5 ✅ | All high-severity findings are now closed (RT-H1 through RT-H5) |
-| **Medium** | 4 | 1 | Missing constraints, unverified hashes, documentation drift |
+| **Medium** | 4 | 2 | Missing constraints, unverified hashes, documentation drift |
 | **Low** | 3 | 0 | Permissive patterns, minor information leaks |
 | **Documentation** | 4 | 3 ✅ | Outdated terminology, broken references, misleading architecture claims |
 
@@ -346,13 +346,15 @@ caller control.
 
 ---
 
-#### RT-M3: Trigger Gate Value Is Deterministic and Discoverable
+#### RT-M3: Trigger Gate Value Is Deterministic and Discoverable — ✅ FIXED
 
 | Attribute | Value |
 |-----------|-------|
 | **Severity** | Medium |
 | **Exploitability** | Complex (requires DB access + knowledge of gate computation) |
 | **Location** | `storage/postgres.py:77` — `_NODE_REHASH_GATE` |
+| **Status** | ✅ Fixed |
+| **Fix Location** | `storage/gates.py:derive_node_rehash_gate()` |
 
 **Description:**
 The session variable gate (`_NODE_REHASH_GATE`) is computed as
@@ -369,6 +371,11 @@ Additionally, `SERIALIZABLE` isolation provides additional detection capability.
 **Recommendation:** Consider mixing in a deployment-specific secret (e.g.,
 from environment variable) to the gate computation, so the value is not
 derivable from source code alone.
+
+**Remediation:** Production deployments now require
+`OLYMPUS_NODE_REHASH_GATE_SECRET`. The gate value mixes the secret with the
+domain prefix, making it non-derivable from source code. Development
+environments retain the deterministic fallback with a logged warning.
 
 ---
 

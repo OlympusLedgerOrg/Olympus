@@ -264,8 +264,8 @@ class TestNodeRehashGate:
     """Cover the secret-branch in derive_node_rehash_gate."""
 
     def test_without_secret(self):
-        """Without the env var the gate is a valid 64-char hex string."""
-        with patch.dict(os.environ, {}, clear=False):
+        """Without the env var the gate raises in production (default)."""
+        with patch.dict(os.environ, {"OLYMPUS_ENV": "test"}, clear=False):
             os.environ.pop("OLYMPUS_NODE_REHASH_GATE_SECRET", None)
             gate = derive_node_rehash_gate()
         assert len(gate) == 64
@@ -273,7 +273,7 @@ class TestNodeRehashGate:
 
     def test_with_secret(self):
         """With a secret the gate changes and is still valid hex."""
-        with patch.dict(os.environ, {}, clear=False):
+        with patch.dict(os.environ, {"OLYMPUS_ENV": "test"}, clear=False):
             os.environ.pop("OLYMPUS_NODE_REHASH_GATE_SECRET", None)
             gate_no_secret = derive_node_rehash_gate()
 
