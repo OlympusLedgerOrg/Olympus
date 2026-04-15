@@ -75,7 +75,17 @@ router = APIRouter(prefix="/ingest", tags=["ingest"])
 
 # Maximum number of bytes read per iteration when streaming an upload.
 _UPLOAD_CHUNK_SIZE = 65_536
+# Storage uses poseidon_root as an enable/disable flag for in-transaction
+# computation; the supplied bytes are ignored once Poseidon updates are enabled.
 _POSEIDON_STORAGE_COMPUTE_FLAG = b"\x00" * 32
+
+
+async def _close_upload_quietly(file: UploadFile) -> None:
+    """Best-effort cleanup for upload handles without masking the primary error."""
+    try:
+        await file.close()
+    except Exception:  # pragma: no cover - cleanup failure is non-deterministic
+        logger.warning("Failed to close upload handle cleanly", exc_info=True)
 
 
 async def _read_upload_bounded(file: UploadFile, max_bytes: int, max_mb: int) -> bytearray:
@@ -114,7 +124,7 @@ async def _read_upload_bounded(file: UploadFile, max_bytes: int, max_mb: int) ->
                 timeout=settings.upload_read_timeout_seconds,
             )
         except TimeoutError as exc:
-            await file.close()
+            await _close_upload_quietly(file)
             raise HTTPException(
                 status_code=408,
                 detail="Upload read timed out.",
@@ -123,7 +133,7 @@ async def _read_upload_bounded(file: UploadFile, max_bytes: int, max_mb: int) ->
             break
         total += len(chunk)
         if total > max_bytes:
-            await file.close()
+            await _close_upload_quietly(file)
             raise HTTPException(
                 status_code=413,
                 detail=f"File exceeds maximum size of {max_mb} MB.",
@@ -1818,7 +1828,10 @@ async def commit_artifact(
                     poseidon_root=_POSEIDON_STORAGE_COMPUTE_FLAG,
                 )
                 if ledger_entry.poseidon_root is None:
-                    raise RuntimeError("Storage append_record returned no Poseidon root")
+                    raise RuntimeError(
+                        "Storage append_record returned no Poseidon root for "
+                        f"{shard_id}:{request.id}"
+                    )
                 persisted_poseidon_root = ledger_entry.poseidon_root
                 canonicalization_with_poseidon = {
                     **canonicalization,
@@ -1884,7 +1897,8 @@ async def commit_artifact(
                         id=existing.get("record_id", request.id),
                         committed_at=existing.get("timestamp", current_timestamp()),
                         ledger_entry_hash=existing.get("ledger_entry_hash", ""),
-                        poseidon_root=existing.get("poseidon_root"),
+                        poseidon_root=existing.get("poseidon_root")
+                        or existing.get("canonicalization", {}).get("poseidon_root"),
                     )
                 else:
                     logger.exception(
@@ -1904,7 +1918,10 @@ async def commit_artifact(
         poseidon_smt = _get_or_build_poseidon_smt(shard_id)
         poseidon_smt.update(artifact_key, _value_hash_to_poseidon_field(artifact_hash_bytes))
         poseidon_root_normalized = str(poseidon_smt.get_root())
-        canonicalization["poseidon_root"] = poseidon_root_normalized
+        canonicalization_with_poseidon = {
+            **canonicalization,
+            "poseidon_root": poseidon_root_normalized,
+        }
         tree = MerkleTree([artifact_hash_bytes])
         merkle_root = tree.get_root().hex()
 
@@ -1913,7 +1930,7 @@ async def commit_artifact(
             record_hash=merkle_root,
             shard_id=shard_id,
             shard_root=merkle_root,
-            canonicalization=canonicalization,
+            canonicalization=canonicalization_with_poseidon,
         )
         ledger_height = len(_write_ledger.entries)
         LEDGER_HEIGHT.set(ledger_height)
@@ -1944,7 +1961,7 @@ async def commit_artifact(
             },
             "ledger_entry_hash": ledger_entry.entry_hash,
             "timestamp": ts,
-            "canonicalization": canonicalization,
+            "canonicalization": canonicalization_with_poseidon,
             "persisted": False,
             "batch_id": batch_id,
             "batch_index": 0,

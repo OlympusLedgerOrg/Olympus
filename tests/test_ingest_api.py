@@ -531,13 +531,17 @@ class TestArtifactCommit:
         authoritative_poseidon_root = "123456789"
 
         class _FakeStorage:
-            def append_record(self, **kwargs):  # noqa: ANN003
+            def append_record(self, **kwargs: object):
                 calls["append_kwargs"] = kwargs
                 return (
                     b"\x11" * 32,
                     ExistenceProof(
-                        key=record_key("artifact", kwargs["record_id"], kwargs["version"]),
-                        value_hash=kwargs["value_hash"],
+                        key=record_key(
+                            "artifact",
+                            str(kwargs["record_id"]),
+                            int(kwargs["version"]),
+                        ),
+                        value_hash=bytes(kwargs["value_hash"]),
                         siblings=[b"\x00" * 32 for _ in range(256)],
                         root_hash=b"\x11" * 32,
                     ),
@@ -554,15 +558,12 @@ class TestArtifactCommit:
                 calls["batch_id"] = batch_id
                 calls["records"] = records
 
+        def _fail_if_poseidon_rebuild_attempted(_shard_id: str) -> None:
+            raise AssertionError("storage commit must not rebuild Poseidon SMT outside transaction")
+
         monkeypatch.setattr(ingest_api, "_get_storage", lambda: _FakeStorage())
         monkeypatch.setattr(ingest_api, "_signing_key", SigningKey(b"\x01" * 32))
-        monkeypatch.setattr(
-            ingest_api,
-            "_get_or_build_poseidon_smt",
-            lambda shard_id: (_ for _ in ()).throw(
-                AssertionError("storage commit must not rebuild Poseidon SMT outside tx")
-            ),
-        )
+        monkeypatch.setattr(ingest_api, "_get_or_build_poseidon_smt", _fail_if_poseidon_rebuild_attempted)
 
         resp = client.post(
             "/ingest/commit",

@@ -71,7 +71,7 @@ def _js_prerequisite_missing() -> str | None:
     return None
 
 
-def _skip_or_fail(reason: str) -> None:
+def _require_in_ci_or_skip(reason: str) -> None:
     """Skip locally; fail in CI so missing JS coverage never becomes a silent gap."""
     if os.environ.get("CI", "").lower() in ("true", "1"):
         pytest.fail(f"Required prerequisite missing in CI environment: {reason}")
@@ -237,7 +237,7 @@ class TestCrossImplBlake3:
     def test_blake3_python_vs_js(self, data: list[bytes]) -> None:
         reason = _js_prerequisite_missing()
         if reason is not None:
-            _skip_or_fail(reason)
+            _require_in_ci_or_skip(reason)
         py_hashes = _python_blake3(data)
         js_hashes = _run_batch(["node", "hash_batch.js"], JS_DIR, "blake3", data)
         assert py_hashes == js_hashes, "Python vs JavaScript BLAKE3 divergence"
@@ -273,7 +273,7 @@ class TestCrossImplMerkleLeafHash:
     def test_merkle_leaf_python_vs_js(self, data: list[bytes]) -> None:
         reason = _js_prerequisite_missing()
         if reason is not None:
-            _skip_or_fail(reason)
+            _require_in_ci_or_skip(reason)
         py_hashes = _python_merkle_leaf_hash(data)
         js_hashes = _run_batch(["node", "hash_batch.js"], JS_DIR, "merkle_leaf_hash", data)
         assert py_hashes == js_hashes, "Python vs JavaScript merkle_leaf_hash divergence"
@@ -309,7 +309,7 @@ class TestCrossImplMerkleRoot:
     def test_merkle_root_python_vs_js(self, leaves: list[bytes]) -> None:
         reason = _js_prerequisite_missing()
         if reason is not None:
-            _skip_or_fail(reason)
+            _require_in_ci_or_skip(reason)
         py_root = _python_merkle_root(leaves)
         js_result = _run_batch(["node", "hash_batch.js"], JS_DIR, "merkle_root", leaves)
         assert [py_root] == js_result, "Python vs JavaScript merkle_root divergence"
