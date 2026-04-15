@@ -554,8 +554,8 @@ The following table summarizes the verified properties of the ledger commitment 
 |-----------|-----------|
 | C-1: Poseidon SMT rebuild crash | ✅ Verified fixed; RT-H5 identifies remaining staleness issue |
 | C-2: Embargo enforcement | ✅ Verified fixed; not re-examined |
-| H-3: Dual rate-limit systems | 🔴 Still open; not re-examined (out of scope) |
-| H-5: proof_id unvalidated | 🔴 Still open; not re-examined (out of scope) |
+| H-3: Dual rate-limit systems | ✅ Fixed after audit (2026-04-15); not re-examined in V2 |
+| H-5: proof_id unvalidated | ✅ Fixed after audit (2026-04-15); not re-examined in V2 |
 | M-2: Dataset file commit unbounded | 🔴 Still open; not re-examined (out of scope) |
 | M-7: Unbounded tree replay | ✅ Verified fixed for forward path; RT-M2 now also fixed for historical replay |
 
