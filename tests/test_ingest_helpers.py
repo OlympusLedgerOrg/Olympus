@@ -65,7 +65,7 @@ class TestReadUploadBounded:
             lambda: SimpleNamespace(upload_read_timeout_seconds=0.1),
         )
 
-        upload = _FakeUpload(b'{"ok":true}')
+        upload = _FakeUpload(b"{\"ok\":true}")
 
         result = await _read_upload_bounded(upload, max_bytes=32, max_mb=1)
 
