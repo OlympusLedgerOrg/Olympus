@@ -31,7 +31,7 @@ where docs describe an architecture that does not match the current code.
 
 | Risk Level | Count | Fixed | Description |
 |------------|-------|-------|-------------|
-| **High** | 5 | 3 ✅ | Concurrency gaps (RT-H1, RT-H2, RT-H3 fixed), proof soundness, memory exhaustion |
+| **High** | 5 | 5 ✅ | All high-severity findings are now closed (RT-H1 through RT-H5) |
 | **Medium** | 4 | 0 | Missing constraints, unverified hashes, documentation drift |
 | **Low** | 3 | 0 | Permissive patterns, minor information leaks |
 | **Documentation** | 4 | 3 ✅ | Outdated terminology, broken references, misleading architecture claims |
@@ -210,13 +210,15 @@ semantics.
 
 ---
 
-#### RT-H4: File Upload Memory Exhaustion Vector
+#### RT-H4: File Upload Memory Exhaustion Vector — ✅ FIXED
 
 | Attribute | Value |
 |-----------|-------|
 | **Severity** | High |
 | **Exploitability** | Trivial (single unauthenticated request if upload endpoint is exposed) |
 | **Location** | `api/ingest.py` — `_read_upload_bounded()` |
+| **Status** | ✅ Fixed |
+| **Fix Location** | `api/ingest.py:_read_upload_bounded()`, `api/ingest.py:submit_proof_bundle()` |
 
 **Description:**
 The `_read_upload_bounded()` function reads file uploads in chunks and checks the
@@ -237,15 +239,25 @@ or by sending data very slowly to hold connections open.
 per-request timeout, and consider streaming the upload directly to a hash function
 rather than accumulating in memory.
 
+**Resolution:**
+The upload path now performs the recommended `Content-Length` pre-check before any
+body reads in `submit_proof_bundle()`. `_read_upload_bounded()` now wraps each
+chunk read in `asyncio.wait_for(...)`, caps the final read to `remaining + 1` bytes
+so overflow is detected before unbounded accumulation, and appends into a single
+mutable `bytearray` instead of collecting a chunk list plus a final `b"".join(...)`
+copy. Timed-out and oversized uploads are closed immediately.
+
 ---
 
-#### RT-H5: Poseidon SMT State Stale Under Concurrent Writes
+#### RT-H5: Poseidon SMT State Stale Under Concurrent Writes — ✅ FIXED
 
 | Attribute | Value |
 |-----------|-------|
 | **Severity** | High |
 | **Exploitability** | Moderate (concurrent writes to same shard) |
 | **Location** | `api/ingest.py` — `_build_poseidon_smt_for_storage_shard()` |
+| **Status** | ✅ Fixed |
+| **Fix Location** | `storage/postgres.py:_append_record_inner()` |
 
 **Description:**
 The Poseidon SMT is rebuilt from database state **outside** the `SERIALIZABLE`
@@ -262,6 +274,15 @@ only for ZK circuit witness generation and is not the primary integrity guarante
 **Recommendation:** Compute Poseidon root inside the `SERIALIZABLE` transaction,
 or mark it as "advisory" in the ledger entry schema with explicit documentation
 that it may lag behind the BLAKE3 root.
+
+**Resolution:**
+Poseidon state is now updated inside `_append_record_inner()` during the same
+`SERIALIZABLE` transaction that persists the BLAKE3 CD-HS-ST update and ledger
+entry. The code loads the authoritative Poseidon sibling path from
+`poseidon_smt_nodes`, performs an incremental O(log N) root update, persists the
+Poseidon node deltas in-transaction, and binds the resulting authoritative
+Poseidon root into the dual-root ledger commitment before commit. This removes the
+rebuild-then-append staleness gap.
 
 ---
 
@@ -542,8 +563,8 @@ The following table summarizes the verified properties of the ledger commitment 
 | **Canonicalization is deterministic** | ✅ Verified | `canonical_v2` with versioned pipeline stages |
 | **Hashing uses domain separation** | ✅ Verified | All BLAKE3 calls use domain-specific prefixes |
 | **Proofs are independently verifiable** | ✅ Verified | `verify_cli.py` and verification bundles enable offline verification |
-| **Concurrent writes are safe** | ⚠️ Mostly | `SERIALIZABLE` prevents corruption but no retry on serialization failure |
-| **Poseidon root is consistent** | ⚠️ Partial | Computed outside transaction; may lag behind BLAKE3 root |
+| **Concurrent writes are safe** | ✅ Verified | `append_record()` retries `SerializationFailure` with backoff under `SERIALIZABLE` isolation |
+| **Poseidon root is consistent** | ✅ Verified | Poseidon root is updated incrementally and persisted inside the same transaction as the ledger append |
 | **Non-existence proofs are sound** | ⚠️ Conditional | Sound only when combined with signed root verification |
 
 ---
@@ -552,7 +573,7 @@ The following table summarizes the verified properties of the ledger commitment 
 
 | V1 Finding | V2 Status |
 |-----------|-----------|
-| C-1: Poseidon SMT rebuild crash | ✅ Verified fixed; RT-H5 identifies remaining staleness issue |
+| C-1: Poseidon SMT rebuild crash | ✅ Verified fixed; in-transaction incremental updates also closed RT-H5 |
 | C-2: Embargo enforcement | ✅ Verified fixed; not re-examined |
 | H-3: Dual rate-limit systems | ✅ Fixed after audit (2026-04-15); not re-examined in V2 |
 | H-5: proof_id unvalidated | ✅ Fixed after audit (2026-04-15); not re-examined in V2 |

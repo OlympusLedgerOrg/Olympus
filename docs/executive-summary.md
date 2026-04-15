@@ -9,7 +9,7 @@ At its core, Olympus answers one question with mathematical certainty:
 
 > **"Can any party independently verify that this record existed at a specific time, hasn't been altered, and is part of the official state?"**
 
-The answer is **yes**, offline, forever.
+The answer is **yes** — independently and offline.
 
 ---
 
