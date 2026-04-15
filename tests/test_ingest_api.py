@@ -1,15 +1,18 @@
 """Tests for api.ingest module (batch ingestion endpoints)."""
 
+from __future__ import annotations
+
 from types import SimpleNamespace
 
 import pytest
 from fastapi.testclient import TestClient
+from nacl.signing import SigningKey
 
 from api import ingest as ingest_api
 from api.app import app
 from protocol.hashes import hash_bytes, record_key
 from protocol.merkle import MerkleTree, deserialize_merkle_proof, verify_proof
-from protocol.ssmf import SparseMerkleTree
+from protocol.ssmf import ExistenceProof, SparseMerkleTree
 
 
 @pytest.fixture()
@@ -520,6 +523,68 @@ class TestArtifactCommit:
         canonicalization = proof_resp.json()["canonicalization"]
         assert canonicalization["source_url"] == "https://example.com/releases/v4.0.0/document.txt"
         assert canonicalization["raw_pdf_hash"] == raw_pdf_hash
+
+    def test_commit_storage_uses_in_transaction_poseidon_root(
+        self, client: TestClient, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        calls: dict[str, object] = {}
+        authoritative_poseidon_root = "123456789"
+
+        class _FakeStorage:
+            def append_record(self, **kwargs: object):
+                calls["append_kwargs"] = kwargs
+                return (
+                    b"\x11" * 32,
+                    ExistenceProof(
+                        key=record_key(
+                            "artifact",
+                            str(kwargs["record_id"]),
+                            int(kwargs["version"]),
+                        ),
+                        value_hash=bytes(kwargs["value_hash"]),
+                        siblings=[b"\x00" * 32 for _ in range(256)],
+                        root_hash=b"\x11" * 32,
+                    ),
+                    {},
+                    "signature",
+                    SimpleNamespace(
+                        entry_hash="aa" * 32,
+                        ts="2026-01-01T00:00:00Z",
+                        poseidon_root=authoritative_poseidon_root,
+                    ),
+                )
+
+            def store_ingestion_batch(
+                self, batch_id: str, records: list[dict[str, object]]
+            ) -> None:
+                calls["batch_id"] = batch_id
+                calls["records"] = records
+
+        def _fail_if_poseidon_rebuild_attempted(_shard_id: str) -> None:
+            raise AssertionError("storage commit must not rebuild Poseidon SMT outside transaction")
+
+        monkeypatch.setattr(ingest_api, "_get_storage", lambda: _FakeStorage())
+        monkeypatch.setattr(ingest_api, "_signing_key", SigningKey(b"\x01" * 32))
+        monkeypatch.setattr(
+            ingest_api, "_get_or_build_poseidon_smt", _fail_if_poseidon_rebuild_attempted
+        )
+
+        resp = client.post(
+            "/ingest/commit",
+            json={"artifact_hash": "ab" * 32, "namespace": "github", "id": "org/repo/v6.0.0"},
+        )
+
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["poseidon_root"] == authoritative_poseidon_root
+        append_kwargs = calls["append_kwargs"]
+        assert isinstance(append_kwargs, dict)
+        assert append_kwargs["poseidon_root"] == ingest_api._POSEIDON_STORAGE_COMPUTE_FLAG
+        assert "poseidon_root" not in append_kwargs["canonicalization"]
+        records = calls["records"]
+        assert isinstance(records, list)
+        assert records[0]["poseidon_root"] == authoritative_poseidon_root
+        assert records[0]["canonicalization"]["poseidon_root"] == authoritative_poseidon_root
 
     def test_commit_invalid_source_url_rejected(self, client: TestClient):
         """Artifact source URLs must use http(s)."""

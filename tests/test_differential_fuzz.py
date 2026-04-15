@@ -57,6 +57,11 @@ HAS_NODE = shutil.which("node") is not None
 _SUBPROCESS_TIMEOUT = 120
 
 
+def _has_js_runtime() -> bool:
+    """Return True when the JavaScript verifier runtime prerequisites are present."""
+    return HAS_NODE and (JS_DIR / "node_modules").is_dir()
+
+
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
@@ -211,7 +216,10 @@ class TestCrossImplBlake3:
         )
         assert py_hashes == rust_hashes, "Python vs Rust BLAKE3 divergence"
 
-    @pytest.mark.skipif(not HAS_NODE, reason="Node.js not available")
+    @pytest.mark.skipif(
+        not _has_js_runtime(),
+        reason="Node.js or verifiers/javascript/node_modules not available",
+    )
     @given(data=st.lists(byte_data, min_size=1, max_size=50))
     @settings(max_examples=20, deadline=None, suppress_health_check=[HealthCheck.too_slow])
     def test_blake3_python_vs_js(self, data: list[bytes]) -> None:
@@ -245,7 +253,10 @@ class TestCrossImplMerkleLeafHash:
         )
         assert py_hashes == rust_hashes, "Python vs Rust merkle_leaf_hash divergence"
 
-    @pytest.mark.skipif(not HAS_NODE, reason="Node.js not available")
+    @pytest.mark.skipif(
+        not _has_js_runtime(),
+        reason="Node.js or verifiers/javascript/node_modules not available",
+    )
     @given(data=st.lists(byte_data, min_size=1, max_size=50))
     @settings(max_examples=20, deadline=None, suppress_health_check=[HealthCheck.too_slow])
     def test_merkle_leaf_python_vs_js(self, data: list[bytes]) -> None:
@@ -279,7 +290,10 @@ class TestCrossImplMerkleRoot:
         )
         assert [py_root] == rust_result, "Python vs Rust merkle_root divergence"
 
-    @pytest.mark.skipif(not HAS_NODE, reason="Node.js not available")
+    @pytest.mark.skipif(
+        not _has_js_runtime(),
+        reason="Node.js or verifiers/javascript/node_modules not available",
+    )
     @given(leaves=leaf_lists)
     @settings(max_examples=20, deadline=None, suppress_health_check=[HealthCheck.too_slow])
     def test_merkle_root_python_vs_js(self, leaves: list[bytes]) -> None:
