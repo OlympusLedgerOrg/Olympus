@@ -145,6 +145,7 @@ _IDENTIFIER_PATTERN = r"^[a-zA-Z0-9_./:@+\-]+$"
 _IDENTIFIER_MAX_LEN = 256
 # Artifact IDs (e.g. 'org/repo/v1.2.3-rc.1+build.42') are typically longer than shard/record IDs.
 _ARTIFACT_ID_MAX_LEN = 512
+# Accept mixed-case UUIDs from clients; normalize to lowercase before lookup.
 _PROOF_ID_PATTERN = r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$"
 
 # H-3 Fix: Content validation limits (matching canonicalizer limits).
