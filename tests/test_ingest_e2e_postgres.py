@@ -410,7 +410,7 @@ def test_storage_layer_ingestion_proof_roundtrip() -> None:
             "root_hash": merkle_root.hex(),
         },
         "ledger_entry_hash": ledger_entry_hash.hex(),
-        "timestamp": "2024-01-01T00:00:00Z",
+        "timestamp": current_timestamp(),
         "canonicalization": {"version": "canonical_v2", "mime_type": "application/json"},
         "persisted": True,
     }
