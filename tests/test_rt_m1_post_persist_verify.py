@@ -97,12 +97,12 @@ class TestRTM1LegacyPathVerification:
         # On verification pass, canonical_json_encode returns subtly different output
         # (e.g., a trailing space — the class of bug RT-M1 guards against)
         corrupted_canonical = canonical_json_encode(persisted_payload) + " "
-        expected_persisted_hash = blake3_hash(
-            [LEDGER_PREFIX, corrupted_canonical.encode("utf-8")]
-        )
+        expected_persisted_hash = blake3_hash([LEDGER_PREFIX, corrupted_canonical.encode("utf-8")])
 
         # The RT-M1 mitigation detects the mismatch and raises
-        assert entry_hash != expected_persisted_hash, "Corrupted encoding should produce a different hash"
+        assert entry_hash != expected_persisted_hash, (
+            "Corrupted encoding should produce a different hash"
+        )
         with pytest.raises(RuntimeError, match="Persisted ledger entry hash verification"):
             # Simulate the mitigation raising on detected mismatch.
             raise RuntimeError("Persisted ledger entry hash verification failed")
