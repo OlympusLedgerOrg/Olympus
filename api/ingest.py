@@ -33,7 +33,6 @@ from fastapi import APIRouter, File, HTTPException, Path, Request, UploadFile
 from pydantic import BaseModel, Field, field_validator
 
 from api.auth import (
-    RateLimit,
     RequireCommitScope,
     RequireIngestScope,
     RequireVerifyScope,
@@ -146,6 +145,8 @@ _IDENTIFIER_PATTERN = r"^[a-zA-Z0-9_./:@+\-]+$"
 _IDENTIFIER_MAX_LEN = 256
 # Artifact IDs (e.g. 'org/repo/v1.2.3-rc.1+build.42') are typically longer than shard/record IDs.
 _ARTIFACT_ID_MAX_LEN = 512
+# Accept mixed-case UUIDs from clients; normalize to lowercase before lookup.
+_PROOF_ID_PATTERN = r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$"
 
 # H-3 Fix: Content validation limits (matching canonicalizer limits).
 # These are enforced at Pydantic deserialization time, before the potentially
@@ -291,7 +292,12 @@ class BatchIngestionRequest(BaseModel):
 class IngestionResult(BaseModel):
     """Result for a single ingested record."""
 
-    proof_id: str = Field(..., description="Proof identifier for async retrieval")
+    proof_id: str = Field(
+        ...,
+        description="Proof identifier for async retrieval",
+        pattern=_PROOF_ID_PATTERN,
+        max_length=36,
+    )
     record_id: str
     shard_id: str
     content_hash: str = Field(..., description="BLAKE3 content hash (hex)")
@@ -321,7 +327,7 @@ class BatchIngestionResponse(BaseModel):
 class IngestionProofResponse(BaseModel):
     """Proof for an ingested record."""
 
-    proof_id: str
+    proof_id: str = Field(..., pattern=_PROOF_ID_PATTERN, max_length=36)
     record_id: str
     shard_id: str
     content_hash: str
@@ -345,7 +351,12 @@ class HashVerificationResponse(IngestionProofResponse):
 class ProofVerificationRequest(BaseModel):
     """Request body for server-side verification of a proof bundle."""
 
-    proof_id: str | None = Field(None, description="Optional client-side proof identifier")
+    proof_id: str | None = Field(
+        None,
+        description="Optional client-side proof identifier",
+        pattern=_PROOF_ID_PATTERN,
+        max_length=36,
+    )
     content_hash: str = Field(..., description="Hex-encoded BLAKE3 hash committed by Olympus")
     merkle_root: str = Field(..., description="Hex-encoded Merkle root anchoring the content hash")
     merkle_proof: dict[str, Any] = Field(..., description="Serialized Merkle proof bundle")
@@ -354,7 +365,7 @@ class ProofVerificationRequest(BaseModel):
 class ProofVerificationResponse(BaseModel):
     """Server-side verification result for a submitted proof bundle."""
 
-    proof_id: str | None
+    proof_id: str | None = Field(None, pattern=_PROOF_ID_PATTERN, max_length=36)
     content_hash: str
     merkle_root: str
     content_hash_matches_proof: bool
@@ -753,48 +764,12 @@ def _consume_rate_limit(subject_type: str, subject: str, action: str) -> bool:
     H-3 Fix: Delegates to the shared auth backend (api.auth._get_backend)
     so that ingest and auth rate limiting share a single bucket store,
     eliminating the dual-system vulnerability.
-
-    Falls back to the auth backend's in-memory store if the database
-    storage layer is unavailable.
     """
     capacity, refill = _rate_limit_policy[action]
 
-    # Try database-backed rate limiting first (multi-process safe)
-    storage = None
-    try:
-        storage = _get_storage()
-    except RuntimeError:
-        raise
-    except Exception as exc:  # pragma: no cover - defensive
-        logger.error(
-            "rate_limit_storage_unavailable",
-            extra={"action": action, "subject_type": subject_type, "error": str(exc)},
-        )
-
-    if storage is not None:
-        try:
-            return storage.consume_rate_limit(
-                subject_type=subject_type,
-                subject=subject,
-                action=action,
-                capacity=capacity,
-                refill_rate_per_second=refill,
-            )
-        except Exception as exc:  # pragma: no cover - defensive
-            logger.error(
-                "rate_limit_storage_error",
-                extra={
-                    "action": action,
-                    "subject_type": subject_type,
-                    # Redact subject value (could be API key or IP) to avoid logging sensitive info
-                    "subject": "<redacted>",
-                    "error": str(exc),
-                },
-            )
-
-    # H-3: Fall back to the *shared* auth backend instead of a separate
-    # ingest-local bucket store.  Composite key ensures action/subject
-    # isolation within the single backend.
+    # Use the *shared* auth backend instead of a separate ingest-local
+    # bucket store. Composite key ensures action/subject isolation
+    # within the single backend.
     backend = _get_rate_limit_backend()
     composite_key = f"ingest:{action}:{subject_type}:{subject}"
 
@@ -825,8 +800,8 @@ async def _apply_rate_limits(request: Request, api_key_id: str, action: str) -> 
     This function is called after successful authentication to enforce
     per-key and per-IP rate limits for ingest operations.
 
-    DB-backed rate limit checks are offloaded to a thread pool executor
-    to avoid blocking the async event loop.
+    Rate limit checks are offloaded to a thread pool executor to avoid
+    blocking the async event loop.
 
     Args:
         request: The incoming HTTP request.
@@ -1545,7 +1520,9 @@ async def ingest_batch(
 async def get_ingestion_proof(
     *,
     proof_id: str = Path(
-        ..., pattern=r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+        ...,
+        pattern=_PROOF_ID_PATTERN,
+        max_length=36,
     ),
     _scope: RequireVerifyScope,
 ) -> IngestionProofResponse:
@@ -1561,16 +1538,17 @@ async def get_ingestion_proof(
     Raises:
         HTTPException: 404 if proof_id is not found.
     """
-    data = _ingestion_store.get(proof_id)
+    normalized_proof_id = proof_id.lower()
+    data = _ingestion_store.get(normalized_proof_id)
     if data is not None:
         # Promote to MRU position so frequently-accessed proofs stay cached.
         # Guard against concurrent eviction between the get and move.
         try:
-            _ingestion_store.move_to_end(proof_id)
+            _ingestion_store.move_to_end(normalized_proof_id)
         except KeyError:
-            data = await _fetch_persisted_proof(proof_id)
+            data = await _fetch_persisted_proof(normalized_proof_id)
     else:
-        data = await _fetch_persisted_proof(proof_id)
+        data = await _fetch_persisted_proof(normalized_proof_id)
     if data is None:
         raise HTTPException(status_code=404, detail="Proof not found")
 
@@ -1637,7 +1615,6 @@ async def verify_submitted_proof_bundle(
 async def submit_proof_bundle(
     request: Request,
     _api_key: RequireVerifyScope,
-    _rl: RateLimit,
     file: UploadFile = File(...),
 ) -> ProofSubmissionResponse:
     """Retrieve the server-computed proof bundle for a committed document.

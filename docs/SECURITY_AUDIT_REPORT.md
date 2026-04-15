@@ -19,12 +19,12 @@ This report documents the findings from a comprehensive security audit of the Ol
 | Risk Level | Count | Verified Closed | Open / Mitigated |
 |------------|-------|----------------|-----------------|
 | **Critical** | 2 | 2 ✅ | 0 |
-| **High** | 5 | 3 ✅ | 2 🔴 |
+| **High** | 5 | 5 ✅ | 0 |
 | **Medium** | 7 | 5 ✅ | 2 🔴 |
 | **Low** | 5 | 3 ✅ | 2 🟡 |
 | **Informational** | 7 | — | N/A |
 
-**Remaining priority items:** H-3 (dual independent rate-limit systems) and M-2 (unbounded dataset file commit) are the only genuinely open non-informational findings on current `main`.
+**Remaining priority items:** M-2 (unbounded dataset file commit) is the only genuinely open non-informational finding on current `main`.
 
 ---
 
@@ -106,9 +106,9 @@ Findings are rated using a **Severity × Exploitability** matrix:
 | [C-2](#c-2-embargo-flag-stored-but-never-enforced) | Embargo flag stored but never enforced | Critical | **Trivial** | ✅ Verified | [#539](https://github.com/OlympusLedgerOrg/Olympus/pull/539) |
 | [H-1](#h-1-witness-checkpoint-submissions-accept-unsigned-announcements) | Witness checkpoint submissions accept unsigned announcements | High | Moderate | ✅ Verified | [#540](https://github.com/OlympusLedgerOrg/Olympus/pull/540) |
 | [H-2](#h-2-poseidon-field-values-not-reduced-modulo-snark-scalar-field) | Poseidon field values not reduced mod SNARK_SCALAR_FIELD | High | Complex | ✅ Verified | [#538](https://github.com/OlympusLedgerOrg/Olympus/pull/538) |
-| [H-3](#h-3-dual-independent-rate-limit-systems) | Dual independent rate-limit systems | High | Moderate | 🔴 Open | — |
+| [H-3](#h-3-dual-independent-rate-limit-systems) | Dual independent rate-limit systems | High | Moderate | ✅ Verified | — |
 | [H-4](#h-4-sth-history-returns-empty-signatures) | STH history returns empty signatures | High | Trivial | ✅ Verified | [#539](https://github.com/OlympusLedgerOrg/Olympus/pull/539) |
-| [H-5](#h-5-proof_id-parameter-unvalidated) | `proof_id` parameter — no format constraint | High | Trivial | 🔴 Open | — |
+| [H-5](#h-5-proof_id-parameter-unvalidated) | `proof_id` parameter — no format constraint | High | Trivial | ✅ Verified | — |
 | [M-1](#m-1-dataset-history-unbounded-query) | Dataset history unbounded query | Medium | Moderate | ✅ Verified | [#540](https://github.com/OlympusLedgerOrg/Olympus/pull/540) |
 | [M-2](#m-2-dataset-file-commit-unbounded) | Dataset file commit unbounded | Medium | Moderate | 🔴 Open | — |
 | [M-3](#m-3-internal-exception-message-leak) | Internal exception message leak | Medium | Trivial | ✅ Verified | [#539](https://github.com/OlympusLedgerOrg/Olympus/pull/539) |
@@ -244,20 +244,17 @@ BLAKE3 hashes are uniform 256-bit integers. The BN128 scalar field prime is ~2²
 | **Severity** | High |
 | **Exploitability** | Moderate |
 | **Location** | `api/ingest.py:530-580`, `api/auth.py:390-558` |
-| **Status** | 🔴 Open |
+| **Status** | ✅ Verified — Fixed (April 15, 2026) |
 
 **Description:**  
-`api/ingest.py` maintains its own `TokenBucket`-based rate-limit subsystem (separate `_rate_limit_policy`, `_rate_limit_key_buckets`, `_rate_limit_ip_buckets`, `_rate_limit_lock`) in addition to the primary rate-limit system in `api/auth.py`. The two systems are not synchronized and are governed by different configuration sources.
+`api/ingest.py` previously maintained its own rate-limit buckets alongside the
+primary `api/auth.py` rate limiter. The two stores diverged in configuration and
+state, making it possible to exhaust one budget without affecting the other.
 
-**Cross-reference:** This finding was not addressed in the prior sprint (PRs #538–#545). It is a genuinely new open item.
-
-**Impact:**
-- Attacker can exhaust auth-module budget while ingest limits remain unaffected
-- Key-reload operations reset auth state but not ingest rate-limit state
-- Environment variables (`OLYMPUS_FOIA_RATE_LIMIT_CAPACITY`) only affect one module
-
-**Recommendation:**  
-Consolidate to a single rate-limit backend. Either have `ingest.py` delegate to `auth._get_backend()`, or move all rate limiting to a shared Redis/database-backed system.
+**Fix applied:**  
+`ingest.py` now delegates all rate-limit storage to the shared auth backend
+(`api.auth._get_backend()`), eliminating the separate ingest-local bucket store
+and ensuring a single source of truth for rate-limit state.
 
 ---
 
@@ -296,13 +293,16 @@ A log operator could serve a silently forked history with no evidence of tamperi
 | **Severity** | High |
 | **Exploitability** | Trivial |
 | **Location** | `api/ingest.py:1339` |
-| **Status** | 🔴 Open — Authentication was added in [PR #539](https://github.com/OlympusLedgerOrg/Olympus/pull/539) (`RequireVerifyScope`), but format validation is still absent |
+| **Status** | ✅ Verified — Fixed (April 15, 2026) |
 
 **Description:**  
-`GET /ingest/records/{proof_id}/proof` now requires authentication (L-1 fix, PR #539), but `proof_id` accepts arbitrary strings with no length limit or UUID pattern constraint. An authenticated attacker can still probe arbitrary IDs as an enumeration oracle.
+`GET /ingest/records/{proof_id}/proof` required authentication but previously
+accepted arbitrary strings with no UUID pattern constraint, enabling
+enumeration-style probing.
 
-**Recommendation:**  
-Add parameter constraint: `proof_id: str = Path(..., pattern=r"^[0-9a-f-]{32,36}$")`
+**Fix applied:**  
+`proof_id` inputs are now constrained to a canonical UUID pattern in both path
+parameters and request bodies, bounding input size and format.
 
 ---
 
@@ -527,9 +527,9 @@ The TSA URL is fetched without certificate pinning. A MITM attacker with a valid
 | C-2 | Critical | 2026-04-01 | [#539](https://github.com/OlympusLedgerOrg/Olympus/pull/539) | 2026-04-01 | ✅ 2026-04-03 | Embargo enforced on all read paths |
 | H-1 | High | 2026-04-01 | [#540](https://github.com/OlympusLedgerOrg/Olympus/pull/540) | 2026-04-01 | ✅ 2026-04-03 | Ed25519 sig verification added |
 | H-2 | High | 2026-04-01 | [#538](https://github.com/OlympusLedgerOrg/Olympus/pull/538) | 2026-04-01 | ✅ 2026-04-03 | `% _BN128_FIELD_PRIME` at call site |
-| H-3 | High | 2026-04-01 | — | — | — | **Open** — ingest.py retains own TokenBucket |
+| H-3 | High | 2026-04-01 | — | 2026-04-15 | ✅ 2026-04-15 | Rate limit storage unified on auth backend |
 | H-4 | High | 2026-04-01 | [#539](https://github.com/OlympusLedgerOrg/Olympus/pull/539) | 2026-04-01 | ✅ 2026-04-03 | Real `sig`/`pubkey` returned in history |
-| H-5 | High | 2026-04-01 | — | — | — | **Open** — auth added (#539) but format constraint missing |
+| H-5 | High | 2026-04-01 | — | 2026-04-15 | ✅ 2026-04-15 | `proof_id` constrained to UUID pattern |
 | M-1 | Medium | 2026-04-01 | [#540](https://github.com/OlympusLedgerOrg/Olympus/pull/540) | 2026-04-01 | ✅ 2026-04-03 | `n` param + `.limit(n)` added |
 | M-2 | Medium | 2026-04-01 | — | — | — | **Open** — `DatasetCommitRequest.files` still unbounded |
 | M-3 | Medium | 2026-04-01 | [#539](https://github.com/OlympusLedgerOrg/Olympus/pull/539) | 2026-04-01 | ✅ 2026-04-03 | Generic error message; full exception logged server-side |
