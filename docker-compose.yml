@@ -4,6 +4,12 @@
 # SETUP: Copy .env.example to .env and adjust values before running.
 # The .env file supplies all credentials and is excluded from version control.
 # For production deployments, use Docker secrets or a secrets manager.
+#
+# PROFILES:
+#   - default: db, app, ui, traefik
+#   - sequencer: adds cdhs-smf-rust and sequencer-go services for Go sequencer write path
+#
+# To run with Go sequencer: docker compose --profile sequencer up -d
 
 networks:
   frontend:
@@ -79,6 +85,85 @@ services:
         reservations:
           memory: 256M
 
+  # ---------------------------------------------------------------------------
+  # Go Sequencer Write Path (optional, use --profile sequencer)
+  # ---------------------------------------------------------------------------
+
+  # Rust CD-HS-ST service: Maintains the global 256-level Sparse Merkle Tree.
+  # Exposes gRPC over Unix socket at /run/olympus/cdhs-smf.sock.
+  # All Merkle operations (Update, ProveInclusion, GetRoot, Sign) are delegated here.
+  cdhs-smf-rust:
+    profiles: [sequencer]
+    build:
+      context: services/cdhs-smf-rust
+      dockerfile: Dockerfile
+    container_name: olympus-cdhs-smf-rust
+    volumes:
+      - olympus-socket:/run/olympus
+    environment:
+      CDHS_SMF_SOCKET: /run/olympus/cdhs-smf.sock
+      # Ed25519 signing key for SMT roots (hex-encoded 32-byte seed).
+      # Uses the same key as Python ingest for consistent signatures.
+      # Override with OLYMPUS_SEQUENCER_SIGNING_KEY if separate key is needed.
+      SEQUENCER_SMT_SIGNING_KEY: ${OLYMPUS_SEQUENCER_SIGNING_KEY:-${OLYMPUS_INGEST_SIGNING_KEY}}
+      RUST_LOG: ${RUST_LOG:-info}
+    networks:
+      - backend
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+          cpus: "1.0"
+        reservations:
+          memory: 128M
+    read_only: true
+    security_opt:
+      - no-new-privileges:true
+
+  # Go sequencer: Trillian-shaped log service that calls the Rust CD-HS-ST service.
+  # Exposes HTTP API on port 8081 for QueueLeaf, QueueLeaves, GetLatestRoot,
+  # GetInclusionProof, GetConsistencyProof.
+  sequencer-go:
+    profiles: [sequencer]
+    build:
+      context: services/sequencer-go
+      dockerfile: Dockerfile
+    container_name: olympus-sequencer-go
+    depends_on:
+      cdhs-smf-rust:
+        condition: service_started
+      db:
+        condition: service_healthy
+    environment:
+      CDHS_SMF_SOCKET: /run/olympus/cdhs-smf.sock
+      SEQUENCER_DB_URL: postgresql://${POSTGRES_USER:-A.Smith}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB:-olympus}?sslmode=disable
+      SEQUENCER_API_TOKEN: ${OLYMPUS_SEQUENCER_TOKEN}
+      SEQUENCER_HTTP_ADDR: ":8081"
+      # Maximum batch size for /v1/queue-leaves (default: 1000)
+      OLYMPUS_SEQUENCER_MAX_BATCH_SIZE: ${OLYMPUS_SEQUENCER_MAX_BATCH_SIZE:-1000}
+    ports:
+      - "127.0.0.1:8081:8081"
+    volumes:
+      - olympus-socket:/run/olympus
+    networks:
+      - backend
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          memory: 256M
+          cpus: "0.5"
+        reservations:
+          memory: 64M
+    read_only: true
+    security_opt:
+      - no-new-privileges:true
+
+  # ---------------------------------------------------------------------------
+  # Main Application Services
+  # ---------------------------------------------------------------------------
+
   # Optional: Application service (use `docker compose up -d app` to run full stack)
   app:
     build:
@@ -103,6 +188,11 @@ services:
       DATABASE_PASSWORD_FILE: /run/secrets/db_password
       OLYMPUS_DEV_SIGNING_KEY: ${OLYMPUS_DEV_SIGNING_KEY:-true}
       OLYMPUS_API_KEYS_JSON: '${OLYMPUS_API_KEYS_JSON:-[]}'
+      # Go sequencer configuration (only used when OLYMPUS_USE_GO_SEQUENCER=true)
+      OLYMPUS_USE_GO_SEQUENCER: ${OLYMPUS_USE_GO_SEQUENCER:-false}
+      OLYMPUS_SEQUENCER_URL: ${OLYMPUS_SEQUENCER_URL:-http://sequencer-go:8081}
+      OLYMPUS_SEQUENCER_TOKEN: ${OLYMPUS_SEQUENCER_TOKEN}
+      OLYMPUS_SEQUENCER_TIMEOUT_SECONDS: ${OLYMPUS_SEQUENCER_TIMEOUT_SECONDS:-30}
     secrets:
       - db_password
     depends_on:
@@ -171,3 +261,5 @@ services:
 volumes:
   olympus_pgdata:
   letsencrypt:
+  # Shared Unix socket volume for Rust ↔ Go communication
+  olympus-socket:

@@ -4,6 +4,13 @@ Lazy-initializing StorageLayer for protocol-layer endpoints.
 Provides _get_storage() and _require_storage() for endpoints that need
 the PostgreSQL-backed StorageLayer. Returns HTTP 503 if the database
 is not available.
+
+Also provides feature-flag routing for the Go sequencer write path via
+_get_write_backend() and get_sequencer_status().
+
+Environment Variables:
+    OLYMPUS_USE_GO_SEQUENCER: When "true", route writes through Go sequencer.
+        Defaults to "false" (direct PostgreSQL writes via storage/postgres.py).
 """
 
 from __future__ import annotations
@@ -20,7 +27,13 @@ from fastapi import HTTPException
 if TYPE_CHECKING:
     from collections.abc import Generator
 
+    from api.services.sequencer_client import GoSequencerClient
     from storage.postgres import StorageLayer
+
+    # Type alias for write backend -- used by _get_write_backend() return type
+    # annotation and for type hints in calling code that needs to handle both
+    # the StorageLayer (direct PostgreSQL) and GoSequencerClient (via Go sequencer).
+    WriteBackend = StorageLayer | GoSequencerClient
 
 logger = logging.getLogger(__name__)
 
@@ -216,3 +229,79 @@ def get_storage_status() -> tuple[str, bool]:
             db_status = "degraded"
 
     return db_status, db_check
+
+
+# ---------------------------------------------------------------------------
+# Go Sequencer Feature Flag Routing
+# ---------------------------------------------------------------------------
+
+
+def _use_go_sequencer() -> bool:
+    """Return True when the Go sequencer write path is enabled.
+
+    Controlled by OLYMPUS_USE_GO_SEQUENCER environment variable.
+    Default is False (direct PostgreSQL writes via storage/postgres.py).
+    """
+    return os.environ.get("OLYMPUS_USE_GO_SEQUENCER", "").strip().lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }
+
+
+def _get_sequencer_client() -> GoSequencerClient:
+    """Get the Go sequencer client singleton.
+
+    Raises:
+        HTTPException: 503 if the sequencer client cannot be initialized.
+    """
+    try:
+        from api.services.sequencer_client import get_sequencer_client
+
+        return get_sequencer_client()
+    except Exception as e:
+        logger.error("Failed to initialize sequencer client: %s", e, exc_info=True)
+        raise HTTPException(
+            status_code=503,
+            detail="Sequencer client initialization failed.",
+        ) from e
+
+
+def _get_write_backend() -> WriteBackend:
+    """Get the appropriate write backend based on feature flags.
+
+    When OLYMPUS_USE_GO_SEQUENCER=true, returns the GoSequencerClient.
+    Otherwise, returns the StorageLayer for direct PostgreSQL writes.
+
+    Returns:
+        Either a GoSequencerClient or StorageLayer instance.
+
+    Raises:
+        HTTPException: 503 if the selected backend is unavailable.
+    """
+    if _use_go_sequencer():
+        return _get_sequencer_client()
+    return _get_storage()
+
+
+async def get_sequencer_status() -> tuple[str, bool]:
+    """Return (sequencer_status_string, is_healthy) for the health endpoint.
+
+    Returns:
+        Tuple of (status, healthy) where status is one of:
+        - "ok": Sequencer is reachable and responding
+        - "degraded": Sequencer returned an error
+        - "unavailable": Sequencer is unreachable
+        - "disabled": Go sequencer routing is disabled (OLYMPUS_USE_GO_SEQUENCER=false)
+    """
+    if not _use_go_sequencer():
+        return ("disabled", True)
+
+    try:
+        from api.services.sequencer_client import get_sequencer_health_status
+
+        return await get_sequencer_health_status()
+    except Exception as e:
+        logger.error("Sequencer health check failed: %s", e)
+        return ("unavailable", False)

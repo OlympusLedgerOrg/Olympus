@@ -249,6 +249,32 @@ python -m alembic upgrade head         # apply database migrations
 make dev                               # API on :8000, debug UI on :8080
 ```
 
+### Run with Go Sequencer (Phase 1 Write Path)
+
+The Go sequencer provides a Trillian-shaped log API backed by the Rust CD-HS-ST service.
+When enabled, all write operations route through Go → Rust instead of direct Python → PostgreSQL.
+
+```bash
+# Start with the sequencer profile (includes cdhs-smf-rust and sequencer-go)
+docker compose --profile sequencer up -d
+
+# Enable sequencer routing in the Python API
+export OLYMPUS_USE_GO_SEQUENCER=true
+export OLYMPUS_SEQUENCER_URL=http://localhost:8081
+export OLYMPUS_SEQUENCER_TOKEN=$(openssl rand -hex 32)  # same token for both services
+
+# Apply migrations and start
+python -m alembic upgrade head
+make dev
+```
+
+When the sequencer is enabled, `/health` returns sequencer status:
+```json
+{"status": "ok", "database": "connected", "sequencer": "ok"}
+```
+
+See [`.env.example`](.env.example) for all sequencer-related environment variables.
+
 See [`docs/quickstart.md`](docs/quickstart.md) for a step-by-step walkthrough and [`docs/development.md`](docs/development.md) for the full developer workflow.
 
 ## Federation Architecture

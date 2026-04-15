@@ -382,11 +382,23 @@ def create_app() -> FastAPI:
 
     @app.get("/health", tags=["health"])
     async def health() -> dict[str, Any]:
-        """Health check with optional database status."""
+        """Health check with database and sequencer status.
+
+        Returns:
+            JSON response with service health indicators:
+            - status: "ok" | "degraded" (overall health)
+            - version: API version string
+            - database: "connected" | "degraded" | "error" | "not_initialized"
+            - db_check: True if database SELECT 1 succeeds
+            - sequencer: "ok" | "degraded" | "unavailable" | "disabled"
+              (only present when storage_layer is importable)
+        """
         result: dict[str, Any] = {
             "status": "ok",
             "version": settings.app_version,
         }
+
+        # Check database status
         try:
             from api.services.storage_layer import get_storage_status
 
@@ -396,7 +408,21 @@ def create_app() -> FastAPI:
             if db_status == "error":
                 result["status"] = "degraded"
         except ImportError:
+            # storage_layer not available (e.g. test environment) — skip db check
             pass
+
+        # Check sequencer status when Go sequencer routing is enabled
+        try:
+            from api.services.storage_layer import get_sequencer_status
+
+            seq_status, seq_healthy = await get_sequencer_status()
+            result["sequencer"] = seq_status
+            if not seq_healthy and seq_status != "disabled":
+                result["status"] = "degraded"
+        except ImportError:
+            # storage_layer not available — skip sequencer check
+            pass
+
         return result
 
     return app
