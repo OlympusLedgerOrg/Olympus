@@ -12,7 +12,6 @@ from __future__ import annotations
 import json
 import subprocess
 import sys
-import tempfile
 
 import pytest
 
@@ -118,7 +117,7 @@ class TestVerifyUnifiedProofExpectedRoot:
 class TestVerifyCliSmtCommand:
     """Test that verify_cli.py smt subcommand uses expected_root from headers."""
 
-    def test_smt_subcommand_with_matching_root(self, populated_tree):
+    def test_smt_subcommand_with_matching_root(self, populated_tree, tmp_path):
         """verify_cli.py smt command extracts root from signed_shard_header."""
         tree, key, value_hash = populated_tree
         proof = tree.prove_existence(key)
@@ -129,19 +128,18 @@ class TestVerifyCliSmtCommand:
             "proof": proof.to_dict(),
         }
 
-        with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False) as f:
-            json.dump(bundle, f)
-            f.flush()
-            result = subprocess.run(
-                [sys.executable, "tools/verify_cli.py", "smt", f.name],
-                capture_output=True,
-                text=True,
-            )
+        proof_file = tmp_path / "bundle.json"
+        proof_file.write_text(json.dumps(bundle))
+        result = subprocess.run(
+            [sys.executable, "tools/verify_cli.py", "smt", str(proof_file)],
+            capture_output=True,
+            text=True,
+        )
 
         assert result.returncode == 0
         assert "VALID" in result.stdout
 
-    def test_smt_subcommand_with_wrong_root(self, populated_tree):
+    def test_smt_subcommand_with_wrong_root(self, populated_tree, tmp_path):
         """verify_cli.py smt command fails when header root doesn't match proof."""
         tree, key, value_hash = populated_tree
         proof = tree.prove_existence(key)
@@ -151,19 +149,18 @@ class TestVerifyCliSmtCommand:
             "proof": proof.to_dict(),
         }
 
-        with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False) as f:
-            json.dump(bundle, f)
-            f.flush()
-            result = subprocess.run(
-                [sys.executable, "tools/verify_cli.py", "smt", f.name],
-                capture_output=True,
-                text=True,
-            )
+        proof_file = tmp_path / "bundle.json"
+        proof_file.write_text(json.dumps(bundle))
+        result = subprocess.run(
+            [sys.executable, "tools/verify_cli.py", "smt", str(proof_file)],
+            capture_output=True,
+            text=True,
+        )
 
         assert result.returncode == 1
         assert "INVALID" in result.stderr
 
-    def test_smt_subcommand_with_explicit_expected_root(self, populated_tree):
+    def test_smt_subcommand_with_explicit_expected_root(self, populated_tree, tmp_path):
         """verify_cli.py smt --expected-root overrides bundle header."""
         tree, key, value_hash = populated_tree
         proof = tree.prove_existence(key)
@@ -171,21 +168,20 @@ class TestVerifyCliSmtCommand:
 
         proof_data = proof.to_dict()
 
-        with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False) as f:
-            json.dump(proof_data, f)
-            f.flush()
-            result = subprocess.run(
-                [
-                    sys.executable,
-                    "tools/verify_cli.py",
-                    "smt",
-                    f.name,
-                    "--expected-root",
-                    root_hex,
-                ],
-                capture_output=True,
-                text=True,
-            )
+        proof_file = tmp_path / "proof.json"
+        proof_file.write_text(json.dumps(proof_data))
+        result = subprocess.run(
+            [
+                sys.executable,
+                "tools/verify_cli.py",
+                "smt",
+                str(proof_file),
+                "--expected-root",
+                root_hex,
+            ],
+            capture_output=True,
+            text=True,
+        )
 
         assert result.returncode == 0
         assert "VALID" in result.stdout
