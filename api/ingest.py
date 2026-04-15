@@ -145,7 +145,7 @@ _IDENTIFIER_PATTERN = r"^[a-zA-Z0-9_./:@+\-]+$"
 _IDENTIFIER_MAX_LEN = 256
 # Artifact IDs (e.g. 'org/repo/v1.2.3-rc.1+build.42') are typically longer than shard/record IDs.
 _ARTIFACT_ID_MAX_LEN = 512
-_PROOF_ID_PATTERN = r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+_PROOF_ID_PATTERN = r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$"
 
 # H-3 Fix: Content validation limits (matching canonicalizer limits).
 # These are enforced at Pydantic deserialization time, before the potentially
@@ -1537,16 +1537,17 @@ async def get_ingestion_proof(
     Raises:
         HTTPException: 404 if proof_id is not found.
     """
-    data = _ingestion_store.get(proof_id)
+    normalized_proof_id = proof_id.lower()
+    data = _ingestion_store.get(normalized_proof_id)
     if data is not None:
         # Promote to MRU position so frequently-accessed proofs stay cached.
         # Guard against concurrent eviction between the get and move.
         try:
-            _ingestion_store.move_to_end(proof_id)
+            _ingestion_store.move_to_end(normalized_proof_id)
         except KeyError:
-            data = await _fetch_persisted_proof(proof_id)
+            data = await _fetch_persisted_proof(normalized_proof_id)
     else:
-        data = await _fetch_persisted_proof(proof_id)
+        data = await _fetch_persisted_proof(normalized_proof_id)
     if data is None:
         raise HTTPException(status_code=404, detail="Proof not found")
 
