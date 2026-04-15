@@ -290,7 +290,7 @@ def validate_zstd_safety(content: bytes) -> None:
 # ---------------------------------------------------------------------------
 
 
-def validate_file_magic(content: bytes, declared_content_type: str) -> str:
+def validate_file_magic(content: bytes | bytearray, declared_content_type: str) -> str:
     """Detect MIME type from file content and enforce the allowlist.
 
     For ZIP archives the file is passed through :func:`validate_zip_safety`
@@ -309,7 +309,7 @@ def validate_file_magic(content: bytes, declared_content_type: str) -> str:
         HTTPException 415: Detected MIME type not in :data:`ALLOWED_MIME_TYPES`.
         HTTPException 400: ZIP or Zstandard archive fails safety checks.
     """
-    detected = magic.from_buffer(content[:2048], mime=True)
+    detected = magic.from_buffer(bytes(content[:2048]), mime=True)
 
     if detected not in ALLOWED_MIME_TYPES:
         raise HTTPException(

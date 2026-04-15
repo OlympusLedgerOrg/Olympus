@@ -16,6 +16,9 @@ unit tested without a database or external services:
 
 from __future__ import annotations
 
+import asyncio
+from types import SimpleNamespace
+
 import pytest
 from fastapi import HTTPException
 
@@ -25,9 +28,84 @@ from api.ingest import (
     _normalize_merkle_root,
     _normalize_source_url,
     _parse_content_hash,
+    _read_upload_bounded,
     _resolved_poseidon_root,
     _value_hash_to_poseidon_field,
 )
+
+
+# ------------------------------------------------------------------ #
+# _read_upload_bounded
+# ------------------------------------------------------------------ #
+
+
+class _FakeUpload:
+    def __init__(self, payload: bytes, *, delay_seconds: float = 0.0) -> None:
+        self._payload = payload
+        self._offset = 0
+        self._delay_seconds = delay_seconds
+        self.closed = False
+
+    async def read(self, size: int) -> bytes:
+        if self._delay_seconds:
+            await asyncio.sleep(self._delay_seconds)
+        chunk = self._payload[self._offset : self._offset + size]
+        self._offset += len(chunk)
+        return chunk
+
+    async def close(self) -> None:
+        self.closed = True
+
+
+class TestReadUploadBounded:
+    @pytest.mark.asyncio
+    async def test_returns_mutable_single_buffer(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr(
+            "api.ingest.get_settings",
+            lambda: SimpleNamespace(upload_read_timeout_seconds=0.1),
+        )
+
+        upload = _FakeUpload(b'{"ok":true}')
+
+        result = await _read_upload_bounded(upload, max_bytes=32, max_mb=1)
+
+        assert isinstance(result, bytearray)
+        assert bytes(result) == b'{"ok":true}'
+        assert upload.closed is False
+
+    @pytest.mark.asyncio
+    async def test_closes_file_when_size_limit_exceeded(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr(
+            "api.ingest.get_settings",
+            lambda: SimpleNamespace(upload_read_timeout_seconds=0.1),
+        )
+
+        upload = _FakeUpload(b"abcdef")
+
+        with pytest.raises(HTTPException, match="maximum size") as exc_info:
+            await _read_upload_bounded(upload, max_bytes=5, max_mb=1)
+
+        assert exc_info.value.status_code == 413
+        assert upload.closed is True
+
+    @pytest.mark.asyncio
+    async def test_closes_file_when_read_times_out(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr(
+            "api.ingest.get_settings",
+            lambda: SimpleNamespace(upload_read_timeout_seconds=0.01),
+        )
+
+        upload = _FakeUpload(b"abc", delay_seconds=0.05)
+
+        with pytest.raises(HTTPException, match="timed out") as exc_info:
+            await _read_upload_bounded(upload, max_bytes=16, max_mb=1)
+
+        assert exc_info.value.status_code == 408
+        assert upload.closed is True
 
 
 # ------------------------------------------------------------------ #

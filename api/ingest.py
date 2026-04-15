@@ -75,9 +75,10 @@ router = APIRouter(prefix="/ingest", tags=["ingest"])
 
 # Maximum number of bytes read per iteration when streaming an upload.
 _UPLOAD_CHUNK_SIZE = 65_536
+_POSEIDON_STORAGE_COMPUTE_FLAG = b"\x00" * 32
 
 
-async def _read_upload_bounded(file: UploadFile, max_bytes: int, max_mb: int) -> bytes:
+async def _read_upload_bounded(file: UploadFile, max_bytes: int, max_mb: int) -> bytearray:
     """Read *file* in fixed-size chunks, aborting if the total exceeds *max_bytes*.
 
     Security: This function implements multiple defenses against memory exhaustion:
@@ -85,8 +86,8 @@ async def _read_upload_bounded(file: UploadFile, max_bytes: int, max_mb: int) ->
        (See verify_record_upload endpoint at line ~1449 for reference implementation.)
     2. Per-chunk timeout prevents slow-loris attacks (upload_read_timeout_seconds)
     3. Size check before accumulating each chunk prevents OOM before limit check
-    4. Uses list of immutable bytes chunks to avoid bytearray reallocation overhead
-       and eliminates the final bytearray-to-bytes conversion step
+    4. Uses a single mutable buffer to avoid holding both chunk list and joined
+       payload copies in memory at the same time
 
     Args:
         file: FastAPI UploadFile to read.
@@ -94,14 +95,14 @@ async def _read_upload_bounded(file: UploadFile, max_bytes: int, max_mb: int) ->
         max_mb: Human-readable equivalent (for error messages).
 
     Returns:
-        The full file contents as a single :class:`bytes` object.
+        The full file contents as a single in-memory :class:`bytearray`.
 
     Raises:
         HTTPException 413: If the payload exceeds *max_bytes* before EOF.
         HTTPException 408: If a chunk read exceeds the timeout.
     """
     settings = get_settings()
-    chunks: list[bytes] = []
+    buffer = bytearray()
     total = 0
     max_chunk = min(_UPLOAD_CHUNK_SIZE, max_bytes)
     while True:
@@ -122,12 +123,13 @@ async def _read_upload_bounded(file: UploadFile, max_bytes: int, max_mb: int) ->
             break
         total += len(chunk)
         if total > max_bytes:
+            await file.close()
             raise HTTPException(
                 status_code=413,
                 detail=f"File exceeds maximum size of {max_mb} MB.",
             )
-        chunks.append(chunk)
-    return b"".join(chunks)
+        buffer.extend(chunk)
+    return buffer
 
 
 # ---------------------------------------------------------------------------
@@ -1793,18 +1795,10 @@ async def commit_artifact(
                 )
 
         proof_id = str(uuid.uuid4())
-        artifact_key = record_key("artifact", request.id, 1)
-        # Always compute Poseidon root server-side (HIGH-02 security fix)
-        poseidon_smt = _get_or_build_poseidon_smt(shard_id)
-        poseidon_smt.update(artifact_key, _value_hash_to_poseidon_field(artifact_hash_bytes))
-        poseidon_root_normalized = str(poseidon_smt.get_root())
-        persisted_poseidon_root = _resolved_poseidon_root(None, poseidon_root_normalized)
         canonicalization = canonicalization_provenance(
             "application/octet-stream", CANONICAL_VERSION
         )
-        # Poseidon root is always computed server-side (HIGH-02 security fix)
         canonicalization = dict(canonicalization)
-        canonicalization["poseidon_root"] = persisted_poseidon_root
         if request.source_url:
             canonicalization["source_url"] = _normalize_source_url(request.source_url)
         if request.raw_pdf_hash:
@@ -1813,10 +1807,6 @@ async def commit_artifact(
         # If PostgreSQL is configured, persist artifact durably
         if storage is not None and _signing_key is not None:
             try:
-                # Convert the server-computed Poseidon root decimal string to bytes for the
-                # storage layer, which uses raw 32-byte big-endian encoding.
-                poseidon_root_bytes = int(persisted_poseidon_root).to_bytes(32, byteorder="big")
-
                 root_hash, proof, _header, _signature, ledger_entry = storage.append_record(
                     shard_id=shard_id,
                     record_type="artifact",
@@ -1825,12 +1815,15 @@ async def commit_artifact(
                     value_hash=artifact_hash_bytes,
                     signing_key=_signing_key,
                     canonicalization=canonicalization,
-                    poseidon_root=poseidon_root_bytes,
+                    poseidon_root=_POSEIDON_STORAGE_COMPUTE_FLAG,
                 )
-                persisted_poseidon_root = _resolved_poseidon_root(
-                    ledger_entry.poseidon_root,
-                    persisted_poseidon_root,
-                )
+                if ledger_entry.poseidon_root is None:
+                    raise RuntimeError("Storage append_record returned no Poseidon root")
+                persisted_poseidon_root = ledger_entry.poseidon_root
+                canonicalization_with_poseidon = {
+                    **canonicalization,
+                    "poseidon_root": persisted_poseidon_root,
+                }
 
                 # Store mapping from proof_id to record coordinates
                 ingestion_entry = {
@@ -1845,10 +1838,7 @@ async def commit_artifact(
                     "merkle_proof": _smt_proof_to_merkle_proof_dict(proof, artifact_hash_bytes),
                     "ledger_entry_hash": ledger_entry.entry_hash,
                     "timestamp": ledger_entry.ts,
-                    "canonicalization": {
-                        **canonicalization,
-                        "poseidon_root": persisted_poseidon_root,
-                    },
+                    "canonicalization": canonicalization_with_poseidon,
                     "persisted": True,
                     "batch_id": batch_id,
                     "batch_index": 0,
@@ -1894,7 +1884,7 @@ async def commit_artifact(
                         id=existing.get("record_id", request.id),
                         committed_at=existing.get("timestamp", current_timestamp()),
                         ledger_entry_hash=existing.get("ledger_entry_hash", ""),
-                        poseidon_root=existing.get("poseidon_root", persisted_poseidon_root),
+                        poseidon_root=existing.get("poseidon_root"),
                     )
                 else:
                     logger.exception(
@@ -1910,6 +1900,11 @@ async def commit_artifact(
                     ) from e
 
         # Fall back to in-memory storage
+        artifact_key = record_key("artifact", request.id, 1)
+        poseidon_smt = _get_or_build_poseidon_smt(shard_id)
+        poseidon_smt.update(artifact_key, _value_hash_to_poseidon_field(artifact_hash_bytes))
+        poseidon_root_normalized = str(poseidon_smt.get_root())
+        canonicalization["poseidon_root"] = poseidon_root_normalized
         tree = MerkleTree([artifact_hash_bytes])
         merkle_root = tree.get_root().hex()
 
