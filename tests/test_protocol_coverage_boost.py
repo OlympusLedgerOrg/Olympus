@@ -32,6 +32,7 @@ from protocol.ssmf import (
     EMPTY_HASHES,
     ExistenceProof,
     NonExistenceProof,
+    PurePythonSparseMerkleTree,
     SparseMerkleDiffEntry,
     SparseMerkleTree,
     diff_sparse_merkle_trees,
@@ -129,7 +130,7 @@ class TestSiblingPathEmptyPath:
     """Cover line 331: _sibling_path of empty tuple raises ValueError."""
 
     def test_empty_path_raises(self) -> None:
-        tree = SparseMerkleTree()
+        tree = PurePythonSparseMerkleTree()
         with pytest.raises(ValueError, match="Cannot get sibling of root"):
             tree._sibling_path(())
 
