@@ -94,8 +94,12 @@ async def test_create_request_rejects_lone_surrogate(client):
 
 
 def test_hash_request_rejects_lone_surrogate() -> None:
-    """hash_request rejects malformed Unicode before hashing."""
-    with pytest.raises(ValueError, match="lone surrogate character"):
+    """hash_request rejects malformed Unicode before hashing.
+
+    The pure-Python encoder raises ValueError; the Rust hot-path raises TypeError.
+    Both signal that lone surrogates are correctly rejected.
+    """
+    with pytest.raises((ValueError, TypeError)):
         hash_request(
             subject="Body camera \ud800 footage",
             description=REQUEST_BODY["description"],

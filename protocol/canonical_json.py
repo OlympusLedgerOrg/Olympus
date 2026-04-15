@@ -46,36 +46,6 @@ except ImportError:
         ) from None
 
 
-def _reject_lone_surrogates(obj: Any) -> None:
-    """Recursively raise ValueError if any string in obj contains a lone surrogate.
-
-    Python str can hold lone surrogates (U+D800–U+DFFF) internally. The pure-Python
-    path catches them in _encode_value, but the Rust encoder raises TypeError instead.
-    Call this before delegating to Rust so the error type and message are consistent.
-
-    Args:
-        obj: Object to validate.
-
-    Raises:
-        ValueError: If a lone surrogate character is found.
-    """
-    if isinstance(obj, str):
-        for ch in obj:
-            cp = ord(ch)
-            if 0xD800 <= cp <= 0xDFFF:
-                raise ValueError(
-                    f"String contains a lone surrogate character (U+{cp:04X}), "
-                    "which is not valid Unicode and cannot be encoded as canonical JSON."
-                )
-    elif isinstance(obj, dict):
-        for k, v in obj.items():
-            _reject_lone_surrogates(k)
-            _reject_lone_surrogates(v)
-    elif isinstance(obj, list | tuple):
-        for item in obj:
-            _reject_lone_surrogates(item)
-
-
 def canonical_json_encode(obj: Any) -> str:
     """
     Encode object to canonical JSON string.
@@ -95,11 +65,10 @@ def canonical_json_encode(obj: Any) -> str:
         Canonical JSON string
 
     Raises:
-        ValueError: If object contains NaN, Infinity, or lone surrogate characters
+        ValueError: If object contains NaN or Infinity
         TypeError: If object is not JSON-serializable
     """
     if _RUST_CANONICAL_AVAILABLE:
-        _reject_lone_surrogates(obj)
         result: str = _rust_canonical_json_encode(obj)
         return result
     normalized = _normalize_for_canonical_json(obj)
