@@ -32,7 +32,7 @@ where docs describe an architecture that does not match the current code.
 | Risk Level | Count | Fixed | Description |
 |------------|-------|-------|-------------|
 | **High** | 5 | 5 ✅ | All high-severity findings are now closed (RT-H1 through RT-H5) |
-| **Medium** | 4 | 0 | Missing constraints, unverified hashes, documentation drift |
+| **Medium** | 4 | 1 | Missing constraints, unverified hashes, documentation drift |
 | **Low** | 3 | 0 | Permissive patterns, minor information leaks |
 | **Documentation** | 4 | 3 ✅ | Outdated terminology, broken references, misleading architecture claims |
 
@@ -288,13 +288,15 @@ rebuild-then-append staleness gap.
 
 ### Medium Severity
 
-#### RT-M1: Ledger Entry Hash Not Re-Verified After Persistence
+#### RT-M1: Ledger Entry Hash Not Re-Verified After Persistence — ✅ FIXED
 
 | Attribute | Value |
 |-----------|-------|
 | **Severity** | Medium |
 | **Exploitability** | Complex (requires subtle serialization bug) |
 | **Location** | `storage/postgres.py` — ledger entry insertion |
+| **Status** | ✅ Fixed |
+| **Fix Location** | `storage/postgres.py:_append_record_inner()` |
 
 **Description:**
 Shard headers are verified after signing (post-sign verification before persist),
@@ -305,6 +307,12 @@ will appear corrupted on verification.
 
 **Recommendation:** Add a post-compute verification step for ledger entry hashes,
 analogous to the existing shard header verification.
+
+**Remediation:** Post-persist SELECT-and-recompute verification added in
+`storage/postgres.py` for both dual-root (Poseidon) and legacy entry hash
+paths. After inserting a ledger entry, the code performs a `SELECT` of the
+persisted row, re-parses the stored payload, recomputes the hash, and raises
+`RuntimeError` on mismatch.
 
 ---
 
