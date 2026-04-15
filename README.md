@@ -196,7 +196,6 @@ ceremony/        Groth16 trusted setup ceremony infrastructure and transcripts
 docs/            All project documentation -- architecture, quickstart, threat model,
                    development guide, governance, security audits, ADRs
 examples/        Sample artifacts, federation registry, and runnable demos
-go/              Go sequencer module (go/sequencer/)
 integrations/    Lightweight Ethereum and IPFS bridge helpers
 proofs/          Circom ZK circuits (document_existence, redaction_validity,
                    non_existence), proving keys, and proof-generation tooling

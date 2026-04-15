@@ -89,11 +89,17 @@ jobs:
         python-version: "3.12"
         cache: 'pip'
 
+    - name: Install Rust stable
+      run: rustup toolchain install stable --no-self-update && rustup default stable
+
     - name: Install dependencies
       run: |
         python -m pip install --upgrade pip
         pip install --require-hashes -r requirements-dev.txt
         pip install -e . --no-deps
+
+    - name: Build olympus_core Rust extension
+      run: maturin develop --release
 
     - name: Run smoke tests (PostgreSQL integration)
       run: pytest tests/test_e2e_audit.py -v --tb=short
