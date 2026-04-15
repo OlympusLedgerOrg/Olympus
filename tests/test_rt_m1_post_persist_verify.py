@@ -104,9 +104,8 @@ class TestRTM1LegacyPathVerification:
         # The RT-M1 mitigation detects the mismatch and raises
         assert entry_hash != expected_persisted_hash, "Corrupted encoding should produce a different hash"
         with pytest.raises(RuntimeError, match="Persisted ledger entry hash verification"):
-            # This is the check that storage/postgres.py performs:
-            if entry_hash != expected_persisted_hash:
-                raise RuntimeError("Persisted ledger entry hash verification failed")
+            # Simulate the mitigation raising on detected mismatch.
+            raise RuntimeError("Persisted ledger entry hash verification failed")
 
 
 class TestRTM1DualRootPathVerification:
