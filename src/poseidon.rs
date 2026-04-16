@@ -5,6 +5,11 @@
 //! (https://eprint.iacr.org/2019/458) with parameters suitable for the BN254 curve.
 //!
 //! Domain separation constants match the Circom circuits in proofs/circuits/.
+//!
+//! **NOTE**: This is a STUB implementation for structural refactoring purposes.
+//! The round constants are incomplete (only 10 of 195). For production use,
+//! the full constants from circomlibjs must be integrated. The current
+//! implementation produces deterministic but NOT circuit-compatible hashes.
 
 use ark_bn254::Fr;
 use ark_ff::{BigInteger, Field, PrimeField};
@@ -26,8 +31,10 @@ pub const POSEIDON_DOMAIN_LEAF: u64 = 0;
 pub const POSEIDON_DOMAIN_NODE: u64 = 1;
 
 /// Poseidon round constants for t=3 (2 inputs + 1 capacity).
-/// These are the first 195 constants needed for the full Poseidon permutation.
-/// Generated using the Poseidon reference implementation grain LFSR.
+/// 
+/// **STUB**: Only 10 of 195 constants are included. This is sufficient for
+/// testing the architecture but NOT for production/circuit-compatible hashes.
+/// Full constants must be generated using the Poseidon grain LFSR.
 const POSEIDON_C: &[&str] = &[
     "14397397413755236225575615486459253198602422701513067526754101844196324375522",
     "10405129301473404666785234951972711717481302463898292859783056520670200613128",
@@ -39,7 +46,7 @@ const POSEIDON_C: &[&str] = &[
     "2008540005368330234524962342006691994500273283000229509835662097352946198608",
     "16018407964853379535338740313053768402596521780991140819786060571607994549498",
     "20653139667070586705378398435856186172195806027708437373130914721152832286242",
-    // Truncated for brevity - full constants would be included in production
+    // TODO: Add remaining 185 constants for production use
 ];
 
 /// Poseidon MDS matrix for t=3.
@@ -220,24 +227,9 @@ pub fn bytes_to_field(bytes: &[u8]) -> Fr {
 // PyO3 bindings
 // ---------------------------------------------------------------------------
 
-/// Compute Poseidon hash of two field elements (as Python integers).
+/// Compute Poseidon hash from big integers (as decimal strings for large values).
 ///
-/// # Python signature
-/// ``poseidon_hash_bn254(a: int, b: int) -> int``
-#[pyfunction]
-pub fn poseidon_hash_bn254(a: u128, b: u128) -> u128 {
-    let fa = Fr::from(a);
-    let fb = Fr::from(b);
-    let result = poseidon_hash(fa, fb);
-    // Convert back - note: this truncates to u128, full result needs BigInt
-    let bytes = result.into_bigint().to_bytes_be();
-    let mut arr = [0u8; 16];
-    let len = bytes.len().min(16);
-    arr[16 - len..].copy_from_slice(&bytes[bytes.len() - len..]);
-    u128::from_be_bytes(arr)
-}
-
-/// Compute Poseidon hash from big integers (as hex strings for large values).
+/// This is the preferred function for Python as it handles full 254-bit field elements.
 ///
 /// # Python signature  
 /// ``poseidon_hash_bn254_bigint(a: str, b: str) -> str``

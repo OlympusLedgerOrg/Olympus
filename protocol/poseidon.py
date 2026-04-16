@@ -5,6 +5,11 @@ This module provides Python bindings to the Rust Poseidon implementation
 in olympus_core. The Rust implementation is mandatory - there is no Python
 fallback.
 
+**NOTE**: The current Rust Poseidon implementation is a STUB with incomplete
+round constants (10 of 195). It produces deterministic hashes but is NOT
+circuit-compatible. For production use with ZK circuits, the full Poseidon
+constants from circomlibjs must be integrated into src/poseidon.rs.
+
 Usage:
     from protocol.poseidon import poseidon_hash, poseidon_leaf_hash, poseidon_node_hash
 """
