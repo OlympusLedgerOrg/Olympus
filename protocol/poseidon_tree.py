@@ -11,8 +11,11 @@ is done in Rust via olympus_core.poseidon.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import Any
 
 from protocol.poseidon import (
+    POSEIDON_DOMAIN_LEAF,
+    POSEIDON_DOMAIN_NODE,
     SNARK_SCALAR_FIELD,
     poseidon_hash,
     poseidon_node_hash,
@@ -41,7 +44,28 @@ def poseidon_hash_with_domain(domain: int, value: int) -> int:
         Hash result as field element
     """
     return poseidon_hash(domain, value)
-    return value % SNARK_SCALAR_FIELD
+
+
+def build_poseidon_witness_inputs(
+    tree: PoseidonMerkleTree,
+    leaf_index: int,
+) -> dict[str, Any]:
+    """Build witness inputs for a Poseidon Merkle proof circuit.
+
+    Args:
+        tree: The Poseidon Merkle tree
+        leaf_index: Index of the leaf to prove
+
+    Returns:
+        Dictionary with witness inputs for the circuit
+    """
+    proof = tree.get_proof(leaf_index)
+    return {
+        "leaf": str(proof.leaf_hash),
+        "pathElements": [str(s) for s in proof.siblings],
+        "pathIndices": proof.path_indices,
+        "root": str(proof.root),
+    }
 
 
 @dataclass
@@ -199,8 +223,11 @@ def compute_poseidon_commitment(data: bytes) -> int:
 
 __all__ = [
     "POSEIDON_DOMAIN_COMMITMENT",
+    "POSEIDON_DOMAIN_LEAF",
+    "POSEIDON_DOMAIN_NODE",
     "PoseidonMerkleTree",
     "PoseidonProof",
+    "build_poseidon_witness_inputs",
     "compute_poseidon_commitment",
     "poseidon_hash_with_domain",
     "_to_field_int",

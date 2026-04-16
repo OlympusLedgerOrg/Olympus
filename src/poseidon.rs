@@ -290,7 +290,7 @@ pub fn poseidon_node_hash_bn254(left: &str, right: &str) -> String {
 /// # Python signature
 /// ``bytes_to_field_element(data: bytes) -> str``
 #[pyfunction]
-pub fn bytes_to_field_element(py: Python<'_>, data: &Bound<'_, PyBytes>) -> String {
+pub fn bytes_to_field_element(_py: Python<'_>, data: &Bound<'_, PyBytes>) -> String {
     let bytes = data.as_bytes();
     let result = bytes_to_field(bytes);
     fr_to_biguint(result).to_string()
