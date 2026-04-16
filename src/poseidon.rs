@@ -282,16 +282,25 @@ fn poseidon_permutation(state: &mut [Fr; 3]) {
 
     // Parse MDS matrix (large field elements, not u64)
     let mds: [[Fr; 3]; 3] = POSEIDON_M.map(|row| {
-        row.map(|s| Fr::from(BigUint::parse_bytes(s.as_bytes(), 10).unwrap()))
+        row.map(|s| Fr::from(
+            BigUint::parse_bytes(s.as_bytes(), 10)
+                .expect("invalid Poseidon MDS matrix constant"),
+        ))
     });
 
     // Iterate through all rounds (matching Python's single loop structure)
     for r in 0..(num_full_rounds + num_partial_rounds) {
         // Add round constants
         let base = r * t;
-        state[0] += Fr::from(BigUint::parse_bytes(POSEIDON_C[base].as_bytes(), 10).unwrap());
-        state[1] += Fr::from(BigUint::parse_bytes(POSEIDON_C[base + 1].as_bytes(), 10).unwrap());
-        state[2] += Fr::from(BigUint::parse_bytes(POSEIDON_C[base + 2].as_bytes(), 10).unwrap());
+        let parse_rc = |idx: usize| -> Fr {
+            Fr::from(
+                BigUint::parse_bytes(POSEIDON_C[idx].as_bytes(), 10)
+                    .expect("invalid Poseidon round constant"),
+            )
+        };
+        state[0] += parse_rc(base);
+        state[1] += parse_rc(base + 1);
+        state[2] += parse_rc(base + 2);
 
         // S-box layer
         if r < half_full || r >= half_full + num_partial_rounds {
