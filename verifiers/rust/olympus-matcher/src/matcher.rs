@@ -52,7 +52,12 @@ impl MatchResult {
         span: Option<(usize, usize)>,
         captures: Vec<String>,
     ) -> Self {
-        MatchResult { matched, pattern, span, captures }
+        MatchResult {
+            matched,
+            pattern,
+            span,
+            captures,
+        }
     }
 
     fn __repr__(&self) -> String {
@@ -87,7 +92,9 @@ impl Matcher {
     /// Create a new, empty `Matcher`.
     #[new]
     pub fn new() -> Self {
-        Matcher { inner: CoreMatcher::new() }
+        Matcher {
+            inner: CoreMatcher::new(),
+        }
     }
 
     /// Compile an ADL pattern and add it under `name`.
@@ -95,14 +102,18 @@ impl Matcher {
     /// Raises `ValueError` if the ADL expression or the resulting regex is
     /// invalid.  The error message includes the offending pattern string.
     pub fn add_pattern(&mut self, name: &str, adl_pattern: &str) -> PyResult<()> {
-        self.inner.add_pattern(name, adl_pattern).map_err(OlympusMatcherError::into)
+        self.inner
+            .add_pattern(name, adl_pattern)
+            .map_err(OlympusMatcherError::into)
     }
 
     /// Add a raw regex string under `name`, bypassing the ADL compiler.
     ///
     /// Raises `ValueError` if the regex fails to compile.
     pub fn add_raw_pattern(&mut self, name: &str, raw_regex: &str) -> PyResult<()> {
-        self.inner.add_raw_pattern(name, raw_regex).map_err(OlympusMatcherError::into)
+        self.inner
+            .add_raw_pattern(name, raw_regex)
+            .map_err(OlympusMatcherError::into)
     }
 
     /// Run all patterns against `input` and return the first match, or `None`.
@@ -112,7 +123,12 @@ impl Matcher {
 
     /// Run all patterns against `input` and return every match.
     pub fn match_all(&self, input: &str) -> PyResult<Vec<MatchResult>> {
-        Ok(self.inner.match_all(input).into_iter().map(MatchResult::from).collect())
+        Ok(self
+            .inner
+            .match_all(input)
+            .into_iter()
+            .map(MatchResult::from)
+            .collect())
     }
 
     /// Return the list of loaded pattern names, in insertion order.

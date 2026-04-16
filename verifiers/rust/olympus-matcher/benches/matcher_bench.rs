@@ -12,13 +12,19 @@ fn build_matcher_multi() -> CoreMatcher {
     let mut m = CoreMatcher::new();
     m.add_raw_pattern("digits", r"\d+").unwrap();
     m.add_raw_pattern("words", r"[A-Za-z]+").unwrap();
-    m.add_raw_pattern("email", r"[a-z0-9._%+\-]+@[a-z0-9.\-]+\.[a-z]{2,}").unwrap();
+    m.add_raw_pattern("email", r"[a-z0-9._%+\-]+@[a-z0-9.\-]+\.[a-z]{2,}")
+        .unwrap();
     m.add_raw_pattern("url", r"https?://[^\s]+").unwrap();
     m.add_raw_pattern("hash_hex", r"[0-9a-f]{64}").unwrap();
     m.add_raw_pattern("iso_date", r"\d{4}-\d{2}-\d{2}").unwrap();
     m.add_raw_pattern("redacted", r"\[REDACTED\]").unwrap();
-    m.add_raw_pattern("uuid", r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}").unwrap();
-    m.add_raw_pattern("ipv4", r"\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}").unwrap();
+    m.add_raw_pattern(
+        "uuid",
+        r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}",
+    )
+    .unwrap();
+    m.add_raw_pattern("ipv4", r"\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}")
+        .unwrap();
     m.add_raw_pattern("ssn", r"\d{3}-\d{2}-\d{4}").unwrap();
     m
 }
@@ -79,5 +85,10 @@ fn bench_match_all_realistic(c: &mut Criterion) {
     });
 }
 
-criterion_group!(benches, bench_match_first_redos, bench_redos_scaling, bench_match_all_realistic);
+criterion_group!(
+    benches,
+    bench_match_first_redos,
+    bench_redos_scaling,
+    bench_match_all_realistic
+);
 criterion_main!(benches);

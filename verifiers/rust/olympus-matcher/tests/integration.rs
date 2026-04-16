@@ -31,7 +31,10 @@ mod tests {
         // An unmatched `(` is an invalid regex.
         let err = m.add_raw_pattern("bad", "(unclosed").unwrap_err();
         let msg = err.to_string();
-        assert!(msg.contains("(unclosed"), "expected pattern in error: {msg}");
+        assert!(
+            msg.contains("(unclosed"),
+            "expected pattern in error: {msg}"
+        );
     }
 
     #[test]
@@ -55,7 +58,10 @@ mod tests {
         let names: Vec<&str> = results.iter().map(|r| r.pattern.as_str()).collect();
         assert!(names.contains(&"alpha"), "expected alpha in {names:?}");
         assert!(names.contains(&"beta"), "expected beta in {names:?}");
-        assert!(!names.contains(&"gamma"), "gamma should not match: {names:?}");
+        assert!(
+            !names.contains(&"gamma"),
+            "gamma should not match: {names:?}"
+        );
     }
 
     #[test]
@@ -107,49 +113,24 @@ mod tests {
     }
 
     // ── property tests ────────────────────────────────────────────────────────
-    //
-    // We use hand-rolled fuzz loops instead of proptest to keep the
-    // test executable self-contained without a proptest runner setup.
 
-    /// Arbitrary input strings never cause match_first to panic.
-    #[test]
-    fn match_first_never_panics_on_arbitrary_input() {
-        let mut m = CoreMatcher::new();
-        m.add_raw_pattern("p1", r"\w+").unwrap();
-        m.add_pattern("p2", r#""hello""#).unwrap();
-
-        let inputs: &[&str] = &[
-            "",
-            "a",
-            "hello world",
-            "\0\x01\x02",
-            &"a".repeat(10_000),
-            &"🦀".repeat(1_000),
-            "SELECT * FROM users; DROP TABLE users;--",
-            "<script>alert('xss')</script>",
-        ];
-
-        for input in inputs {
-            let _ = m.match_first(input);
+    proptest::proptest! {
+        /// Arbitrary input strings never cause match_first to panic.
+        #[test]
+        fn match_first_never_panics_on_arbitrary_input(s in proptest::prelude::any::<String>()) {
+            let mut m = CoreMatcher::new();
+            m.add_raw_pattern("p1", r"\w+").unwrap();
+            m.add_pattern("p2", r#""hello""#).unwrap();
+            let _ = m.match_first(&s);
         }
-    }
 
-    /// Arbitrary input strings never cause match_all to panic.
-    #[test]
-    fn match_all_never_panics_on_arbitrary_input() {
-        let mut m = CoreMatcher::new();
-        m.add_raw_pattern("p1", r"\d+").unwrap();
-        m.add_raw_pattern("p2", r"[a-z]+").unwrap();
-
-        let inputs: &[&str] = &[
-            "",
-            "abc 123",
-            &"x".repeat(100_000),
-            &"1".repeat(100_000),
-        ];
-
-        for input in inputs {
-            let _ = m.match_all(input);
+        /// Arbitrary input strings never cause match_all to panic.
+        #[test]
+        fn match_all_never_panics_on_arbitrary_input(s in proptest::prelude::any::<String>()) {
+            let mut m = CoreMatcher::new();
+            m.add_raw_pattern("p1", r"\d+").unwrap();
+            m.add_raw_pattern("p2", r"[a-z]+").unwrap();
+            let _ = m.match_all(&s);
         }
     }
 
