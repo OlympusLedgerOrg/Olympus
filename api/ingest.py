@@ -91,7 +91,6 @@ from protocol.merkle import (
 )
 from protocol.poseidon import (
     # Backward compatibility exports (re-exported for tests)
-    resolved_poseidon_root as _resolved_poseidon_root,  # noqa: F401
     value_hash_to_poseidon_field as _value_hash_to_poseidon_field,  # noqa: F401
 )
 from protocol.ssmf import ExistenceProof
