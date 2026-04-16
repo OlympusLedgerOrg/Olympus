@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import logging
 import os
+from pathlib import Path as _Path
 
 from fastapi import HTTPException, status
 
@@ -151,23 +152,16 @@ def verify_groth16_proof(
         return False, "no_vkey_configured"
 
     # Path containment check: resolve symlinks and relative components,
-    # then ensure the final path lives under an expected directory.
-    from pathlib import Path as _Path
-
+    # then ensure the final path lives under an explicitly configured directory.
     try:
         resolved = _Path(resolved_path).resolve(strict=False)
     except (OSError, ValueError):
         logger.error("ZK vkey path could not be resolved")
         return False, "vkey_not_found"
 
-    _allowed_bases = [
-        _Path(os.environ.get("OLYMPUS_ZK_DIR", "/etc/olympus/zk")).resolve(),
-        _Path.cwd().resolve(),
-    ]
-    if not any(
-        resolved == base or base in resolved.parents for base in _allowed_bases
-    ):
-        logger.error("ZK vkey path outside allowed directories")
+    _zk_dir = _Path(os.environ.get("OLYMPUS_ZK_DIR", "/etc/olympus/zk")).resolve()
+    if not resolved.is_relative_to(_zk_dir):
+        logger.error("ZK vkey path outside allowed directory")
         return False, "vkey_not_found"
 
     if not resolved.exists():
