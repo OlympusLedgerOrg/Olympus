@@ -19,6 +19,7 @@ import pytest
 from hypothesis import HealthCheck, settings
 from hypothesis.database import DirectoryBasedExampleDatabase
 
+
 # ── Hypothesis profiles ────────────────────────────────────────────────────
 # The "ci" profile writes examples to a well-known directory that CI can
 # archive.  The "default" profile also writes there so local runs benefit

@@ -140,11 +140,21 @@ jobs:
       run: npm install --prefix proofs
 
     - name: Run unit tests with coverage floor
+      env:
+        HYPOTHESIS_PROFILE: ci
       run: |
         pytest tests/ -v --tb=short -m "not postgres and not differential" \
           --cov=protocol --cov=storage --cov=api \
           --cov-report=xml \
           --cov-fail-under=85
+
+    - name: Upload Hypothesis failure examples
+      if: failure()
+      uses: actions/upload-artifact@v7
+      with:
+        name: hypothesis-examples-py${{ matrix.python-version }}
+        path: .hypothesis/examples/
+        if-no-files-found: ignore
 
     - name: Upload coverage artifact
       uses: actions/upload-artifact@v7
