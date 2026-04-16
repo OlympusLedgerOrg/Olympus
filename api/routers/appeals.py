@@ -101,7 +101,13 @@ async def file_appeal(body: AppealCreate, db: DBSession, _api_key: RequireAPIKey
         logger.warning("Invalid unicode in appeal input: %s", exc)
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
-            detail=[{"msg": "Invalid unicode in appeal input.", "type": "unicode", "code": "INVALID_UNICODE"}],
+            detail=[
+                {
+                    "msg": "Invalid unicode in appeal input.",
+                    "type": "unicode",
+                    "code": "INVALID_UNICODE",
+                }
+            ],
         ) from exc
 
     appeal = Appeal(
