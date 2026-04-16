@@ -203,7 +203,7 @@ def _reconstruct_poseidon_root(poseidon_proof: PoseidonProof) -> int | None:
         The reconstructed root as an integer reduced modulo the BN128 field,
         or ``None`` if any value is malformed.
     """
-    from .poseidon_bn128 import poseidon_hash_bn128
+    from .poseidon import poseidon_hash as poseidon_hash_bn128
 
     try:
         current = int(poseidon_proof.leaf) % SNARK_SCALAR_FIELD
