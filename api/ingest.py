@@ -16,8 +16,6 @@ Module Structure (post-refactor):
     This module is the FastAPI router layer. Business logic is extracted to:
     - api/schemas/ingest.py: Pydantic request/response models
     - api/services/poseidon.py: Poseidon SMT operations (in-memory fallback only)
-    - api/services/record_store.py: In-memory caching and persistent lookups
-    - api/services/rate_limiting.py: Rate limit enforcement
     - api/services/proof_utils.py: Proof parsing and verification helpers
 """
 
@@ -65,9 +63,11 @@ from api.schemas.ingest import (
     ProofVerificationRequest,
     ProofVerificationResponse,
     RecordInput,
+    check_json_depth as _check_json_depth,  # noqa: F401
+    estimate_json_size as _estimate_json_size,  # noqa: F401
 )
 from api.services.poseidon import (
-    # Backward compatibility exports (re-exported for tests)
+    resolved_poseidon_root as _resolved_poseidon_root,  # noqa: F401
     value_hash_to_poseidon_field as _value_hash_to_poseidon_field,  # noqa: F401
 )
 from api.services.proof_utils import (
