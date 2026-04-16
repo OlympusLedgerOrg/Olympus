@@ -69,11 +69,6 @@ from api.schemas.ingest import (
     check_json_depth as _check_json_depth,  # noqa: F401
     estimate_json_size as _estimate_json_size,  # noqa: F401
 )
-from api.services.poseidon import (
-    # Backward compatibility exports (re-exported for tests)
-    resolved_poseidon_root as _resolved_poseidon_root,  # noqa: F401
-    value_hash_to_poseidon_field as _value_hash_to_poseidon_field,  # noqa: F401
-)
 from api.services.proof_utils import (
     # Backward compatibility exports (re-exported for tests)
     normalize_source_url as _normalize_source_url,  # noqa: F401
@@ -93,6 +88,11 @@ from protocol.merkle import (
     deserialize_merkle_proof,
     merkle_leaf_hash,
     verify_proof,
+)
+from protocol.poseidon import (
+    # Backward compatibility exports (re-exported for tests)
+    resolved_poseidon_root as _resolved_poseidon_root,  # noqa: F401
+    value_hash_to_poseidon_field as _value_hash_to_poseidon_field,  # noqa: F401
 )
 from protocol.ssmf import ExistenceProof
 from protocol.telemetry import INGEST_TOTAL, LEDGER_HEIGHT, timed_operation
