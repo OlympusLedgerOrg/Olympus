@@ -86,36 +86,54 @@ def estimate_json_size(obj: Any) -> int:
     This is a rough estimate based on traversing the object. It's not exact
     but is good enough to catch obvious DoS attempts before full serialization.
 
+    Uses an iterative approach (explicit stack) to avoid Python recursion
+    limits on adversarial input, consistent with check_json_depth().
+
     Args:
         obj: The object to estimate size for.
 
     Returns:
         Estimated size in bytes.
     """
-    if obj is None:
-        return 4  # "null"
-    elif isinstance(obj, bool):
-        return 5  # "true" or "false"
-    elif isinstance(obj, (int, float)):
-        return len(str(obj))
-    elif isinstance(obj, str):
-        # Use UTF-8 encoding for accurate size of multi-byte characters
-        return len(obj.encode("utf-8")) + 2  # quotes
-    elif isinstance(obj, dict):
-        # keys + values + colons + commas + braces
-        size = 2  # {}
-        for key, value in obj.items():
-            # Keys are also UTF-8 encoded in JSON
-            size += len(str(key).encode("utf-8")) + 2 + 1 + estimate_json_size(value) + 1
-        return size
-    elif isinstance(obj, list):
-        # items + commas + brackets
-        size = 2  # []
-        for item in obj:
-            size += estimate_json_size(item) + 1  # item,
-        return size
-    else:
-        return len(str(obj))
+    total_size = 0
+    # Stack of items to process: (value, container_overhead)
+    # container_overhead accounts for separators (commas between items)
+    stack: list[tuple[Any, int]] = [(obj, 0)]
+
+    while stack:
+        current, overhead = stack.pop()
+        total_size += overhead
+
+        if current is None:
+            total_size += 4  # "null"
+        elif isinstance(current, bool):
+            total_size += 5  # "true" or "false"
+        elif isinstance(current, (int, float)):
+            total_size += len(str(current))
+        elif isinstance(current, str):
+            # UTF-8 encoding for accurate size + surrounding JSON double-quote characters
+            total_size += len(current.encode("utf-8")) + 2
+        elif isinstance(current, dict):
+            # braces
+            total_size += 2  # {}
+            items = list(current.items())
+            for i, (key, value) in enumerate(items):
+                # Key UTF-8 encoded + surrounding quotes + colon
+                total_size += len(str(key).encode("utf-8")) + 2 + 1
+                # Add comma overhead for non-last items
+                comma_overhead = 1 if i < len(items) - 1 else 0
+                stack.append((value, comma_overhead))
+        elif isinstance(current, list):
+            # brackets
+            total_size += 2  # []
+            for i, item in enumerate(current):
+                # Add comma overhead for non-last items
+                comma_overhead = 1 if i < len(current) - 1 else 0
+                stack.append((item, comma_overhead))
+        else:
+            total_size += len(str(current))
+
+    return total_size
 
 
 # ---------------------------------------------------------------------------
