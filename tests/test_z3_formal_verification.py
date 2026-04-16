@@ -48,7 +48,8 @@ pytestmark = pytest.mark.skipif(not HAS_Z3, reason="z3-solver not installed")
 
 
 # ──────────────────────────────────────────────────────────────────────
-# BN128 field prime used by Poseidon / Groth16
+# BN254 scalar field prime (historically called BN128 in many codebases).
+# Used by Poseidon / Groth16 circuits in the Olympus ZK layer.
 # ──────────────────────────────────────────────────────────────────────
 BN128_PRIME = 21888242871839275222246405745257275088548364400416034343698204186575808495617
 
@@ -255,7 +256,10 @@ class TestNonExistenceCircuit:
 
         for b in range(BYTES):
             for i in range(8):
-                # Extract bit i from byte b
+                # Extract bit i from byte b.  Z3 Int division (/) and
+                # modulo (%) map to IntDiv/IntMod, which are equivalent to
+                # floor-division for non-negative values — correct here
+                # because key bytes are constrained to [0, 255].
                 bit_idx = b * 8 + i
                 bits1_val = (key1[b] / (1 << (7 - i))) % 2
                 bits2_val = (key2[b] / (1 << (7 - i))) % 2
@@ -436,8 +440,8 @@ class TestDomainSeparation:
         )
 
     def test_commitment_domain_distinct_from_node(self):
-        """Verify domain tag 3 (commitment) cannot collide with tag 2 (node)
-        or tag 1 (leaf) used in the Merkle tree."""
+        """Verify domain tag 3 (commitment) cannot collide with tag 1 (node)
+        used in the Merkle tree."""
         Poseidon2 = _poseidon2()
         s = Solver()
 
