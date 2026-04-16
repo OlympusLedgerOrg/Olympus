@@ -97,7 +97,7 @@ async def get_latest_header(
         header_data = storage.get_latest_header(shard_id)
 
         if header_data is None:
-            raise HTTPException(status_code=404, detail=f"Shard not found: {shard_id}")
+            raise HTTPException(status_code=404, detail="Shard not found.")
 
         header = header_data["header"]
 
@@ -147,7 +147,7 @@ async def get_proof(
         # Get latest header
         header_data = storage.get_latest_header(shard_id)
         if header_data is None:
-            raise HTTPException(status_code=404, detail=f"Shard not found: {shard_id}")
+            raise HTTPException(status_code=404, detail="Shard not found.")
 
         # Build header response
         header = header_data["header"]
@@ -343,7 +343,7 @@ async def verify_latest_header(
     with db_op("verify header"):
         header_data = storage.get_latest_header(shard_id)
         if header_data is None:
-            raise HTTPException(status_code=404, detail=f"Shard not found: {shard_id}")
+            raise HTTPException(status_code=404, detail="Shard not found.")
 
         header = header_data["header"]
         header_hash = header["header_hash"]
@@ -509,7 +509,7 @@ async def get_latest_rekor_anchor(
         if anchor is None:
             raise HTTPException(
                 status_code=404,
-                detail=f"No Rekor anchor found for shard: {shard_id}",
+                detail="No Rekor anchor found for this shard.",
             )
 
         # Build verification URL if we have a log index

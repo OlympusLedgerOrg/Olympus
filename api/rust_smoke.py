@@ -253,7 +253,7 @@ def _safe_probe(name: str, probe: _ProbeFunc, bindings: _RustBindings) -> RustPr
         result: RustProbeResult = probe(bindings)
         return result
     except Exception as exc:
-        return RustProbeResult(name=name, ok=False, detail=f"{type(exc).__name__}: {exc}")
+        return RustProbeResult(name=name, ok=False, detail=f"{type(exc).__name__}: probe failed")
 
 
 def run_smoke() -> RustSmokeReport:

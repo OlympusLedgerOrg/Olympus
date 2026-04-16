@@ -489,8 +489,10 @@ async def test_verify_groth16_native_verifier_unavailable():
 
     from api.services.zkproof import verify_groth16_proof
 
-    # Create a real temporary vkey file within the project directory
-    vkey_path = os.path.join(os.path.dirname(__file__), "_test_vkey_temp.json")
+    # Create a real temporary vkey file within the project directory and
+    # set OLYMPUS_ZK_DIR so the path containment check passes.
+    test_dir = os.path.dirname(__file__)
+    vkey_path = os.path.join(test_dir, "_test_vkey_temp.json")
     try:
         with open(vkey_path, "w") as f:
             f.write("{}")
@@ -502,11 +504,12 @@ async def test_verify_groth16_native_verifier_unavailable():
                 raise ImportError("mocked")
             return original_import(name, *args, **kwargs)
 
-        with patch.object(builtins, "__import__", side_effect=mock_import):
-            with pytest.raises(HTTPException) as exc_info:
-                verify_groth16_proof({"proof_type": "groth16"}, vkey_path=vkey_path)
-            assert exc_info.value.status_code == 503
-            assert "native" in exc_info.value.detail.lower()
+        with patch.dict(os.environ, {"OLYMPUS_ZK_DIR": test_dir}):
+            with patch.object(builtins, "__import__", side_effect=mock_import):
+                with pytest.raises(HTTPException) as exc_info:
+                    verify_groth16_proof({"proof_type": "groth16"}, vkey_path=vkey_path)
+                assert exc_info.value.status_code == 503
+                assert "native" in exc_info.value.detail.lower()
     finally:
         if os.path.exists(vkey_path):
             os.remove(vkey_path)

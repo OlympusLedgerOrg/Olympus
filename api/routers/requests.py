@@ -123,9 +123,16 @@ async def file_request(body: RequestCreate, db: DBSession, _api_key: RequireAPIK
     try:
         commit_hash = hash_request(body.subject, body.description, agency_name, filed_at)
     except ValueError as exc:
+        logger.warning("Invalid unicode in FOIA request input: %s", exc)
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
-            detail=[{"msg": str(exc), "type": "unicode", "code": "INVALID_UNICODE"}],
+            detail=[
+                {
+                    "msg": "Invalid unicode in request input.",
+                    "type": "unicode",
+                    "code": "INVALID_UNICODE",
+                }
+            ],
         ) from exc
     deadline = compute_deadline(filed_at, body.request_type)
 
