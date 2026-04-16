@@ -312,9 +312,10 @@ def validate_file_magic(content: bytes | bytearray, declared_content_type: str) 
     detected = magic.from_buffer(bytes(content[:2048]), mime=True)
 
     if detected not in ALLOWED_MIME_TYPES:
+        logger.warning("Rejected upload with detected MIME type: %s", detected)
         raise HTTPException(
             status_code=415,
-            detail=f"File type '{detected}' is not permitted.",
+            detail="The uploaded file type is not permitted.",
         )
 
     if detected != declared_content_type:

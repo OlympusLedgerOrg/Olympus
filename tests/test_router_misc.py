@@ -234,7 +234,7 @@ async def test_file_appeal_rejects_lone_surrogate(client):
     detail = appeal_resp.json()["detail"]
     assert detail == [
         {
-            "msg": "surrogates not allowed",
+            "msg": "Invalid unicode in appeal input.",
             "type": "unicode",
             "code": "INVALID_UNICODE",
         }

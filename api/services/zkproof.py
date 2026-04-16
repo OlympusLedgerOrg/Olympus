@@ -149,8 +149,29 @@ def verify_groth16_proof(
     resolved_path = vkey_path or os.environ.get("OLYMPUS_ZK_VKEY_PATH")
     if not resolved_path:
         return False, "no_vkey_configured"
-    if not os.path.exists(resolved_path):
-        logger.error("ZK vkey not found: %s", resolved_path)
+
+    # Path containment check: resolve symlinks and relative components,
+    # then ensure the final path lives under an expected directory.
+    from pathlib import Path as _Path
+
+    try:
+        resolved = _Path(resolved_path).resolve(strict=False)
+    except (OSError, ValueError):
+        logger.error("ZK vkey path could not be resolved")
+        return False, "vkey_not_found"
+
+    _allowed_bases = [
+        _Path(os.environ.get("OLYMPUS_ZK_DIR", "/etc/olympus/zk")).resolve(),
+        _Path.cwd().resolve(),
+    ]
+    if not any(
+        resolved == base or base in resolved.parents for base in _allowed_bases
+    ):
+        logger.error("ZK vkey path outside allowed directories")
+        return False, "vkey_not_found"
+
+    if not resolved.exists():
+        logger.error("ZK vkey not found at resolved path")
         return False, "vkey_not_found"
 
     try:
@@ -166,7 +187,7 @@ def verify_groth16_proof(
         ) from None
 
     try:
-        with open(resolved_path, encoding="utf-8") as f:
+        with open(resolved, encoding="utf-8") as f:
             vkey_json = f.read()
 
         # Extract the inner proof object (pi_a/pi_b/pi_c), not the

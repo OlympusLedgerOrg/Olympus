@@ -96,7 +96,7 @@ async def get_latest_sth(
         if header_data is None:
             raise HTTPException(
                 status_code=404,
-                detail=f"Shard not found or has no header: {shard_id}",
+                detail="Shard not found or has no header.",
             )
 
         header = header_data["header"]
@@ -169,7 +169,7 @@ async def get_sth_history(
         if not history:
             raise HTTPException(
                 status_code=404,
-                detail=f"Shard not found or has no history: {shard_id}",
+                detail="Shard not found or has no history.",
             )
 
         # Convert headers to STH format

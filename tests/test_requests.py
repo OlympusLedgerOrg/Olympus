@@ -86,7 +86,7 @@ async def test_create_request_rejects_lone_surrogate(client):
     detail = resp.json()["detail"]
     assert detail == [
         {
-            "msg": "surrogates not allowed",
+            "msg": "Invalid unicode in request input.",
             "type": "unicode",
             "code": "INVALID_UNICODE",
         }

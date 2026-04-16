@@ -211,9 +211,10 @@ async def sign_header(
     try:
         vote_msg = _build_federation_vote_message(header, local_node_id, registry)
     except (KeyError, ValueError) as exc:
+        logger.warning("Invalid header for federation vote: %s", exc)
         raise HTTPException(
             status_code=400,
-            detail=f"Invalid header for federation vote: {exc}",
+            detail="Invalid header for federation vote.",
         ) from exc
 
     # Sign the vote message
