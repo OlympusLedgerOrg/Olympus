@@ -4,12 +4,41 @@ Pytest configuration for Olympus test suite.
 Auto-detects PostgreSQL availability and sets TEST_DATABASE_URL
 so that database-dependent tests run automatically when PostgreSQL
 is accessible (e.g., via docker-compose or CI service containers).
+
+Registers Hypothesis profiles so that shrunk failure examples are persisted
+to ``.hypothesis/examples/`` inside the repo root.  CI uploads this directory
+as an artifact on test failure so that failures can be replayed locally with
+``pytest --hypothesis-seed=…`` or by copying the database back.
 """
 
 import os
+from pathlib import Path
 
 import psycopg
 import pytest
+from hypothesis import HealthCheck, settings
+from hypothesis.database import DirectoryBasedExampleDatabase
+
+
+# ── Hypothesis profiles ────────────────────────────────────────────────────
+# The "ci" profile writes examples to a well-known directory that CI can
+# archive.  The "default" profile also writes there so local runs benefit
+# from replay too.
+_EXAMPLES_DIR = str(Path(__file__).resolve().parent.parent / ".hypothesis" / "examples")
+
+settings.register_profile(
+    "ci",
+    database=DirectoryBasedExampleDatabase(_EXAMPLES_DIR),
+    suppress_health_check=[HealthCheck.too_slow],
+    print_blob=True,
+)
+
+settings.register_profile(
+    "default",
+    database=DirectoryBasedExampleDatabase(_EXAMPLES_DIR),
+)
+
+settings.load_profile(os.environ.get("HYPOTHESIS_PROFILE", "default"))
 
 
 def pytest_configure(config):

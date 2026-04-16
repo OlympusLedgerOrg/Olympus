@@ -30,11 +30,17 @@ pub struct CoreMatcher {
 impl CoreMatcher {
     /// Create a new, empty matcher.
     pub fn new() -> Self {
-        CoreMatcher { patterns: Vec::new() }
+        CoreMatcher {
+            patterns: Vec::new(),
+        }
     }
 
     /// Compile an ADL pattern and add it under `name`.
-    pub fn add_pattern(&mut self, name: &str, adl_pattern: &str) -> Result<(), OlympusMatcherError> {
+    pub fn add_pattern(
+        &mut self,
+        name: &str,
+        adl_pattern: &str,
+    ) -> Result<(), OlympusMatcherError> {
         let regex_str = adl_to_regex(adl_pattern)?;
         let re = Regex::new(&regex_str).map_err(|e| OlympusMatcherError::InvalidPattern {
             pattern: adl_pattern.to_owned(),
@@ -45,7 +51,11 @@ impl CoreMatcher {
     }
 
     /// Add a raw regex string under `name`, bypassing the ADL compiler.
-    pub fn add_raw_pattern(&mut self, name: &str, raw_regex: &str) -> Result<(), OlympusMatcherError> {
+    pub fn add_raw_pattern(
+        &mut self,
+        name: &str,
+        raw_regex: &str,
+    ) -> Result<(), OlympusMatcherError> {
         let re = Regex::new(raw_regex).map_err(|e| OlympusMatcherError::InvalidPattern {
             pattern: raw_regex.to_owned(),
             reason: e.to_string(),

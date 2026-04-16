@@ -55,10 +55,7 @@ fn compile(adl: &str) -> Result<String, OlympusMatcherError> {
 
     // Glob with pipe alternation: pat1|pat2 where each part may contain */?
     if adl.contains('|') {
-        let parts: Vec<String> = adl
-            .split('|')
-            .map(|p| glob_to_regex(p.trim()))
-            .collect();
+        let parts: Vec<String> = adl.split('|').map(|p| glob_to_regex(p.trim())).collect();
         return Ok(format!("(?:{})", parts.join("|")));
     }
 
@@ -77,7 +74,9 @@ fn is_field_selector(adl: &str) -> bool {
         && !adl.contains('*')
         && !adl.contains('?')
         && !adl.contains('|')
-        && adl.chars().all(|c| c.is_alphanumeric() || c == '.' || c == '_')
+        && adl
+            .chars()
+            .all(|c| c.is_alphanumeric() || c == '.' || c == '_')
 }
 
 /// Convert a simple glob pattern (`*`, `?`, literal) to a regex.
