@@ -65,9 +65,6 @@ from api.schemas.ingest import (
     ProofVerificationRequest,
     ProofVerificationResponse,
     RecordInput,
-    # Backward compatibility exports (re-exported for tests)
-    check_json_depth as _check_json_depth,  # noqa: F401
-    estimate_json_size as _estimate_json_size,  # noqa: F401
 )
 from api.services.poseidon import (
     # Backward compatibility exports (re-exported for tests)
