@@ -11,6 +11,12 @@ Endpoints:
     POST /ingest/commit          — Commit a pre-computed artifact hash to the ledger
 
 All write operations are append-only and maintain ledger chain integrity.
+
+Module Structure (post-refactor):
+    This module is the FastAPI router layer. Business logic is extracted to:
+    - api/schemas/ingest.py: Pydantic request/response models
+    - api/services/poseidon.py: Poseidon SMT operations (in-memory fallback only)
+    - api/services/proof_utils.py: Proof parsing and verification helpers
 """
 
 from __future__ import annotations
@@ -25,12 +31,10 @@ from collections import OrderedDict
 from datetime import datetime, timezone
 from time import monotonic
 from typing import TYPE_CHECKING, Any, cast
-from urllib.parse import urlparse
 
 import httpx
 import nacl.signing
 from fastapi import APIRouter, File, HTTPException, Path, Request, UploadFile
-from pydantic import BaseModel, Field, field_validator
 
 from api.auth import (
     RequireCommitScope,
@@ -44,6 +48,33 @@ from api.auth import (
     _TokenBucket as _AuthTokenBucket,
 )
 from api.config import get_settings
+
+# Import schemas from the new extracted module
+from api.schemas.ingest import (
+    PROOF_ID_PATTERN as _PROOF_ID_PATTERN,
+    ArtifactCommitRequest,
+    ArtifactCommitResponse,
+    BatchIngestionRequest,
+    BatchIngestionResponse,
+    HashVerificationResponse,
+    IngestionProofResponse,
+    IngestionResult,
+    ProofSubmissionResponse,
+    ProofVerificationRequest,
+    ProofVerificationResponse,
+    RecordInput,
+    check_json_depth as _check_json_depth,  # noqa: F401
+    estimate_json_size as _estimate_json_size,  # noqa: F401
+)
+from api.services.poseidon import (
+    resolved_poseidon_root as _resolved_poseidon_root,  # noqa: F401
+    value_hash_to_poseidon_field as _value_hash_to_poseidon_field,  # noqa: F401
+)
+from api.services.proof_utils import (
+    # Backward compatibility exports (re-exported for tests)
+    normalize_source_url as _normalize_source_url,  # noqa: F401
+    parse_content_hash as _parse_content_hash,  # noqa: F401
+)
 from api.services.upload_validation import validate_file_magic
 from protocol.canonical import CANONICAL_VERSION, canonicalize_document, document_to_bytes
 from protocol.canonicalizer import canonicalization_provenance
@@ -70,6 +101,22 @@ if TYPE_CHECKING:
 
 
 logger = logging.getLogger(__name__)
+
+
+def _normalize_merkle_root(merkle_root: str) -> str:
+    """Validate and normalize a hex-encoded Merkle root.
+
+    Note: This function is kept in ingest.py for backward compatibility.
+    The canonical implementation is in api/services/proof_utils.py.
+    """
+    try:
+        raw = bytes.fromhex(merkle_root)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail="merkle_root must be valid hex") from exc
+    if len(raw) != 32:
+        raise HTTPException(status_code=400, detail="merkle_root must be a 32-byte hash")
+    return raw.hex()
+
 
 router = APIRouter(prefix="/ingest", tags=["ingest"])
 
@@ -140,282 +187,6 @@ async def _read_upload_bounded(file: UploadFile, max_bytes: int, max_mb: int) ->
             )
         buffer.extend(chunk)
     return buffer
-
-
-# ---------------------------------------------------------------------------
-# Request / response models
-# ---------------------------------------------------------------------------
-
-
-# Allowlist pattern for identifier fields. Permits alphanumeric chars plus the
-# small set of punctuation needed for record/artifact IDs
-# (e.g. "org/repo/v1.2.3-rc.1", "doc-001").
-# Deliberately excludes control characters, null bytes, shell metacharacters
-# (\ * ? < > | ; ` $ ! &), and Unicode homoglyphs (pure ASCII allowlist).
-_SHARD_ID_PATTERN = r"^[a-zA-Z0-9_.:\-]+$"
-_IDENTIFIER_PATTERN = r"^[a-zA-Z0-9_./:@+\-]+$"
-_IDENTIFIER_MAX_LEN = 256
-# Artifact IDs (e.g. 'org/repo/v1.2.3-rc.1+build.42') are typically longer than shard/record IDs.
-_ARTIFACT_ID_MAX_LEN = 512
-# Accept mixed-case UUIDs from clients; normalize to lowercase before lookup.
-_PROOF_ID_PATTERN = r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$"
-
-# H-3 Fix: Content validation limits (matching canonicalizer limits).
-# These are enforced at Pydantic deserialization time, before the potentially
-# expensive canonicalization step, to prevent DoS via deeply nested JSON.
-_MAX_CONTENT_DEPTH = 128  # Maximum nesting depth for content JSON
-_MAX_CONTENT_SIZE_ESTIMATE = 16 * 1024 * 1024  # 16 MiB rough size limit per record content
-
-
-def _check_json_depth(obj: Any, current_depth: int = 0) -> int:
-    """Check the nesting depth of a JSON-like object.
-
-    Uses an iterative approach (explicit stack) to avoid Python recursion
-    limits on adversarial input (L-4 hardening).
-
-    Args:
-        obj: The object to check.
-        current_depth: Initial depth offset (normally 0).
-
-    Returns:
-        Maximum depth found in the object.
-
-    Raises:
-        ValueError: If depth exceeds _MAX_CONTENT_DEPTH.
-    """
-    max_depth = current_depth
-    # Explicit stack of (value, depth) pairs replaces recursion
-    stack: list[tuple[Any, int]] = [(obj, current_depth)]
-
-    while stack:
-        current, depth = stack.pop()
-
-        if depth >= _MAX_CONTENT_DEPTH:
-            raise ValueError(f"Content nesting depth exceeds limit of {_MAX_CONTENT_DEPTH}")
-
-        if depth > max_depth:
-            max_depth = depth
-
-        if isinstance(current, dict):
-            for value in current.values():
-                stack.append((value, depth + 1))
-        elif isinstance(current, list):
-            for item in current:
-                stack.append((item, depth + 1))
-
-    return max_depth
-
-
-def _estimate_json_size(obj: Any) -> int:
-    """Estimate the serialized size of a JSON-like object.
-
-    This is a rough estimate based on traversing the object. It's not exact
-    but is good enough to catch obvious DoS attempts before full serialization.
-
-    Args:
-        obj: The object to estimate size for.
-
-    Returns:
-        Estimated size in bytes.
-    """
-    if obj is None:
-        return 4  # "null"
-    elif isinstance(obj, bool):
-        return 5  # "true" or "false"
-    elif isinstance(obj, (int, float)):
-        return len(str(obj))
-    elif isinstance(obj, str):
-        # Use UTF-8 encoding for accurate size of multi-byte characters
-        return len(obj.encode("utf-8")) + 2  # quotes
-    elif isinstance(obj, dict):
-        # keys + values + colons + commas + braces
-        size = 2  # {}
-        for key, value in obj.items():
-            # Keys are also UTF-8 encoded in JSON
-            size += len(str(key).encode("utf-8")) + 2 + 1 + _estimate_json_size(value) + 1
-        return size
-    elif isinstance(obj, list):
-        # items + commas + brackets
-        size = 2  # []
-        for item in obj:
-            size += _estimate_json_size(item) + 1  # item,
-        return size
-    else:
-        return len(str(obj))
-
-
-class RecordInput(BaseModel):
-    """A single record to ingest."""
-
-    shard_id: str = Field(
-        ...,
-        description="Target shard identifier",
-        max_length=_IDENTIFIER_MAX_LEN,
-        pattern=_SHARD_ID_PATTERN,
-    )
-    record_type: str = Field(
-        ...,
-        description="Record type (e.g. 'document')",
-        max_length=_IDENTIFIER_MAX_LEN,
-        pattern=_IDENTIFIER_PATTERN,
-    )
-    record_id: str = Field(
-        ...,
-        description="Unique record identifier",
-        max_length=_IDENTIFIER_MAX_LEN,
-        pattern=_IDENTIFIER_PATTERN,
-    )
-    version: int = Field(..., ge=1, description="Record version (≥ 1)")
-    content: dict[str, Any] = Field(..., description="Record content (JSON document)")
-
-    @field_validator("content")
-    @classmethod
-    def validate_content_limits(cls, v: dict[str, Any]) -> dict[str, Any]:
-        """H-3 Fix: Validate content depth and size at Pydantic layer.
-
-        This prevents DoS attacks via deeply nested or very large JSON content
-        before the expensive canonicalization step runs.
-        """
-        # Check depth
-        try:
-            _check_json_depth(v)
-        except ValueError as exc:
-            raise ValueError(str(exc)) from exc
-
-        # Estimate size
-        estimated_size = _estimate_json_size(v)
-        if estimated_size > _MAX_CONTENT_SIZE_ESTIMATE:
-            raise ValueError(
-                f"Content size estimate ({estimated_size} bytes) exceeds limit "
-                f"of {_MAX_CONTENT_SIZE_ESTIMATE} bytes per record"
-            )
-
-        return v
-
-
-class BatchIngestionRequest(BaseModel):
-    """Request body for batch record ingestion."""
-
-    records: list[RecordInput] = Field(
-        ..., min_length=1, max_length=1000, description="Records to ingest"
-    )
-
-
-class IngestionResult(BaseModel):
-    """Result for a single ingested record."""
-
-    proof_id: str = Field(
-        ...,
-        description="Proof identifier for async retrieval",
-        pattern=_PROOF_ID_PATTERN,
-        max_length=36,
-    )
-    record_id: str
-    shard_id: str
-    content_hash: str = Field(..., description="BLAKE3 content hash (hex)")
-    deduplicated: bool = Field(False, description="True if record was already present")
-    idempotent: bool = Field(
-        False,
-        description=(
-            "True when this response returns an existing record instead of "
-            "creating a new one. Callers can use this to distinguish a fresh "
-            "insert from a deduplicated return."
-        ),
-    )
-
-
-class BatchIngestionResponse(BaseModel):
-    """Response for a batch ingestion request."""
-
-    ingested: int = Field(..., description="Number of records ingested")
-    deduplicated: int = Field(..., description="Number of duplicates skipped")
-    results: list[IngestionResult]
-    ledger_entry_hash: str = Field(..., description="Hash of the ledger entry for this batch")
-    timestamp: str
-    canonicalization: dict[str, Any]
-    batch_id: str | None = Field(None, description="Durable batch identifier")
-
-
-class IngestionProofResponse(BaseModel):
-    """Proof for an ingested record."""
-
-    proof_id: str = Field(..., pattern=_PROOF_ID_PATTERN, max_length=36)
-    record_id: str
-    shard_id: str
-    content_hash: str
-    merkle_root: str
-    merkle_proof: dict[str, Any]
-    ledger_entry_hash: str
-    timestamp: str
-    canonicalization: dict[str, Any]
-    batch_id: str | None = Field(None, description="Batch identifier if available")
-    poseidon_root: str | None = Field(
-        None, description="Optional Poseidon root associated with the commitment"
-    )
-
-
-class HashVerificationResponse(IngestionProofResponse):
-    """Verification result for a committed content hash."""
-
-    merkle_proof_valid: bool
-
-
-class ProofVerificationRequest(BaseModel):
-    """Request body for server-side verification of a proof bundle."""
-
-    proof_id: str | None = Field(
-        None,
-        description="Optional client-side proof identifier",
-        pattern=_PROOF_ID_PATTERN,
-        max_length=36,
-    )
-    content_hash: str = Field(..., description="Hex-encoded BLAKE3 hash committed by Olympus")
-    merkle_root: str = Field(..., description="Hex-encoded Merkle root anchoring the content hash")
-    merkle_proof: dict[str, Any] = Field(..., description="Serialized Merkle proof bundle")
-
-
-class ProofVerificationResponse(BaseModel):
-    """Server-side verification result for a submitted proof bundle."""
-
-    proof_id: str | None = Field(None, pattern=_PROOF_ID_PATTERN, max_length=36)
-    content_hash: str
-    merkle_root: str
-    content_hash_matches_proof: bool
-    merkle_proof_valid: bool
-    known_to_server: bool
-    poseidon_root: str | None = None
-
-
-# DEPRECATED: submit_proof_bundle no longer accepts a JSON body.
-# Retained for migration period. Will be removed in a future release.
-class ProofSubmissionRequest(ProofVerificationRequest):
-    """Proof bundle payload that can be submitted to the API for later retrieval."""
-
-    record_id: str = Field(
-        ...,
-        description="Record identifier associated with the proof bundle",
-        max_length=_IDENTIFIER_MAX_LEN,
-        pattern=_IDENTIFIER_PATTERN,
-    )
-    shard_id: str = Field(
-        ...,
-        description="Shard identifier associated with the proof bundle",
-        max_length=_IDENTIFIER_MAX_LEN,
-        pattern=_SHARD_ID_PATTERN,
-    )
-    ledger_entry_hash: str = Field(..., description="Ledger entry anchoring the proof bundle")
-    timestamp: str = Field(..., description="ISO 8601 timestamp associated with the bundle")
-    canonicalization: dict[str, Any] = Field(
-        ..., description="Canonicalization provenance metadata"
-    )
-    batch_id: str | None = Field(None, description="Optional batch identifier for the proof bundle")
-
-
-class ProofSubmissionResponse(IngestionProofResponse):
-    """Response body for a proof bundle submitted to the ingest API."""
-
-    submitted: bool
-    deduplicated: bool
 
 
 # ---------------------------------------------------------------------------
@@ -860,64 +631,18 @@ async def _apply_rate_limits(request: Request, api_key_id: str, action: str) -> 
         raise HTTPException(status_code=429, detail="Rate limit exceeded for IP address")
 
 
-def _parse_content_hash(content_hash: str) -> bytes:
-    """Validate and decode a hex-encoded BLAKE3 content hash."""
-    try:
-        raw = bytes.fromhex(content_hash)
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail="content_hash must be valid hex") from exc
-    if len(raw) != 32:
-        raise HTTPException(status_code=400, detail="content_hash must be a 32-byte BLAKE3 hash")
-    return raw
-
-
 def _merkle_proof_from_store(data: dict[str, Any]) -> MerkleProof:
     """Convert stored ingestion proof metadata into a MerkleProof instance."""
     proof_data = data["merkle_proof"]
     return deserialize_merkle_proof(proof_data)
 
 
-def _normalize_merkle_root(merkle_root: str) -> str:
-    """Validate and normalize a hex-encoded Merkle root."""
-    try:
-        raw = bytes.fromhex(merkle_root)
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail="merkle_root must be valid hex") from exc
-    if len(raw) != 32:
-        raise HTTPException(status_code=400, detail="merkle_root must be a 32-byte hash")
-    return raw.hex()
-
-
-def _normalize_source_url(source_url: str) -> str:
-    """Validate and normalize a provenance source URL."""
-    parsed = urlparse(source_url)
-    if parsed.scheme not in {"http", "https"}:
-        raise HTTPException(status_code=400, detail="source_url must use http or https")
-    if not parsed.netloc:
-        raise HTTPException(status_code=400, detail="source_url must include a hostname")
-    return source_url
+# Note: _normalize_merkle_root is now defined at the top of this file
+# The functions _parse_content_hash, _normalize_source_url, _value_hash_to_poseidon_field,
+# and _resolved_poseidon_root are imported from their respective modules at the top.
 
 
 _BN128_FIELD_PRIME = 21888242871839275222246405745257275088548364400416034343698204186575808495617
-
-
-def _value_hash_to_poseidon_field(value_hash: bytes) -> int:
-    """Convert a 32-byte value hash into a BN128 field element.
-
-    Applies modular reduction by the BN128 scalar field prime so that
-    the returned value is always a valid field element. Without this
-    reduction, values derived from BLAKE3 hashes can exceed the prime
-    (2^256 - 1 is ~5.3x the BN128 prime), causing incorrect Poseidon
-    hash outputs and enabling hash collisions.
-    """
-    if len(value_hash) != 32:
-        raise ValueError(f"value_hash must be 32 bytes, got {len(value_hash)}")
-    return int.from_bytes(value_hash, byteorder="big") % _BN128_FIELD_PRIME
-
-
-def _resolved_poseidon_root(persisted_root: str | None, fallback_root: str) -> str:
-    """Resolve persisted Poseidon root with a deterministic fallback."""
-    return persisted_root if persisted_root is not None else fallback_root
 
 
 def _build_poseidon_smt_for_storage_shard(
@@ -1696,57 +1421,6 @@ async def submit_proof_bundle(
 # ---------------------------------------------------------------------------
 # Artifact commit endpoint
 # ---------------------------------------------------------------------------
-
-
-class ArtifactCommitRequest(BaseModel):
-    """Request body for committing a pre-computed artifact hash to the ledger.
-
-    Security boundary:
-        ``id`` and ``namespace`` are validated by ``_IDENTIFIER_PATTERN`` at API
-        ingestion time before persistence. This keeps externally supplied
-        artifact identifiers constrained before they can flow into downstream
-        proof tooling and subprocess-based proof backends.
-    """
-
-    artifact_hash: str = Field(..., description="Hex-encoded BLAKE3 hash of the artifact")
-    namespace: str = Field(
-        ...,
-        description="Namespace for the artifact (e.g. 'github')",
-        max_length=_IDENTIFIER_MAX_LEN,
-        pattern=_IDENTIFIER_PATTERN,
-    )
-    id: str = Field(
-        ...,
-        description="Artifact identifier (e.g. 'org/repo/v1.0.0')",
-        max_length=_ARTIFACT_ID_MAX_LEN,
-        pattern=_IDENTIFIER_PATTERN,
-    )
-    source_url: str | None = Field(
-        None,
-        description="Optional http(s) URL describing where the artifact was retrieved from",
-        max_length=2048,
-    )
-    raw_pdf_hash: str | None = Field(
-        None,
-        description=(
-            "Optional 64-character hex-encoded raw-PDF BLAKE3 hash anchored "
-            "alongside OCR/text hashes"
-        ),
-    )
-
-
-class ArtifactCommitResponse(BaseModel):
-    """Response for a successful artifact commitment."""
-
-    proof_id: str = Field(..., description="Proof identifier for future verification")
-    artifact_hash: str = Field(..., description="Hex-encoded BLAKE3 hash that was committed")
-    namespace: str
-    id: str
-    committed_at: str = Field(..., description="ISO 8601 commitment timestamp")
-    ledger_entry_hash: str = Field(..., description="Hash of the ledger entry")
-    poseidon_root: str | None = Field(
-        None, description="Optional Poseidon root bound to the artifact commitment"
-    )
 
 
 @router.post("/commit", response_model=ArtifactCommitResponse)

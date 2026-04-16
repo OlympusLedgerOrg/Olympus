@@ -104,6 +104,7 @@ impl AdlScanner {
 
 mod canonical;
 mod crypto;
+mod poseidon;
 mod smt;
 mod zkverify;
 
@@ -122,6 +123,11 @@ fn olympus_core(py: Python<'_>, m: &Bound<'_, PyModule>) -> PyResult<()> {
     let canonical_mod = PyModule::new(py, "canonical")?;
     canonical::register(py, &canonical_mod)?;
     m.add_submodule(&canonical_mod)?;
+
+    // `olympus_core.poseidon` — Poseidon hash for ZK circuits
+    let poseidon_mod = PyModule::new(py, "poseidon")?;
+    poseidon::register(py, &poseidon_mod)?;
+    m.add_submodule(&poseidon_mod)?;
 
     Ok(())
 }
