@@ -69,6 +69,8 @@ dev = [
     "mutmut==3.2.2",
     # HTTP mocking for async client tests
     "respx>=0.23.1",
+    # Z3 SMT solver for formal verification of circuit constraints
+    "z3-solver==4.16.0.0",
 ]
 observability = [
     "opentelemetry-api==1.40.0",

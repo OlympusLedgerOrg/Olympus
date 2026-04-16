@@ -22,29 +22,20 @@ Requires: pip install z3-solver
 from __future__ import annotations
 
 import pytest
-
-
-try:
-    from z3 import (
-        And,
-        ForAll,
-        Function,
-        If,
-        Implies,
-        Int,
-        IntSort,
-        IntVal,
-        Not,
-        Or,
-        Solver,
-        unsat,
-    )
-
-    HAS_Z3 = True
-except ImportError:
-    HAS_Z3 = False
-
-pytestmark = pytest.mark.skipif(not HAS_Z3, reason="z3-solver not installed")
+from z3 import (
+    And,
+    ForAll,
+    Function,
+    If,
+    Implies,
+    Int,
+    IntSort,
+    IntVal,
+    Not,
+    Or,
+    Solver,
+    unsat,
+)
 
 
 # ──────────────────────────────────────────────────────────────────────
