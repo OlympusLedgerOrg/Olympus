@@ -80,9 +80,7 @@ def normalize_source_url(source_url: str) -> str:
     """
     parsed = urlparse(source_url)
     if parsed.scheme not in {"http", "https"}:
-        raise HTTPException(
-            status_code=400, detail="source_url must be an http or https URL"
-        )
+        raise HTTPException(status_code=400, detail="source_url must be an http or https URL")
     if not parsed.netloc:
         raise HTTPException(status_code=400, detail="source_url must have a valid host")
     # Normalize to scheme://host/path (no query/fragment for reproducibility)
@@ -130,9 +128,13 @@ def smt_proof_to_merkle_proof_dict(proof: ExistenceProof, value_hash: bytes) -> 
 
     return {
         "leaf_hash": merkle_leaf_hash(value_hash).hex(),
-        "leaf_index": str(int(proof.key.hex(), 16)) if isinstance(proof.key, bytes) else str(proof.key),
+        "leaf_index": str(int(proof.key.hex(), 16))
+        if isinstance(proof.key, bytes)
+        else str(proof.key),
         "siblings": siblings_formatted,
-        "root_hash": proof.root.hex() if isinstance(proof.root, bytes) else str(proof.root),
+        "root_hash": proof.root_hash.hex()
+        if isinstance(proof.root_hash, bytes)
+        else str(proof.root_hash),
         "tree_size": str(proof.tree_size) if hasattr(proof, "tree_size") else "1",
         "proof_version": PROOF_VERSION,
         "tree_version": MERKLE_VERSION,
@@ -170,9 +172,7 @@ def evaluate_proof_bundle(
     try:
         merkle_proof = deserialize_merkle_proof(merkle_proof_data)
     except (KeyError, TypeError, ValueError):
-        raise HTTPException(
-            status_code=400, detail="Invalid merkle_proof: malformed proof data"
-        )
+        raise HTTPException(status_code=400, detail="Invalid merkle_proof: malformed proof data")
 
     # Check if content hash matches the proof's leaf hash
     leaf_for_content = merkle_leaf_hash(bytes.fromhex(normalized_hash))

@@ -49,7 +49,7 @@ from typing import TYPE_CHECKING, Any
 
 from proofs import snarkjs_bridge
 from protocol.hashes import SNARK_SCALAR_FIELD
-from protocol.poseidon import poseidon_hash_bn128
+from protocol.poseidon_bn128 import poseidon_hash_bn128
 from protocol.poseidon_tree import POSEIDON_DOMAIN_COMMITMENT
 from protocol.zkp import Groth16Prover, ZKProof
 
@@ -483,7 +483,7 @@ class ProofGenerator:
             ValueError: If the key is absent from the SMT.
         """
         from protocol.hashes import SNARK_SCALAR_FIELD
-        from protocol.poseidon import poseidon_hash_bn128
+        from protocol.poseidon_bn128 import poseidon_hash_bn128
 
         value = smt.get(key)
         if value is None:

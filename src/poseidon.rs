@@ -303,7 +303,6 @@ pub fn get_bn254_scalar_field() -> String {
 
 /// Register all Poseidon functions into the given Python (sub)module.
 pub fn register(py: Python<'_>, m: &Bound<'_, PyModule>) -> PyResult<()> {
-    m.add_function(wrap_pyfunction!(poseidon_hash_bn254, m)?)?;
     m.add_function(wrap_pyfunction!(poseidon_hash_bn254_bigint, m)?)?;
     m.add_function(wrap_pyfunction!(poseidon_leaf_hash_bn254, m)?)?;
     m.add_function(wrap_pyfunction!(poseidon_node_hash_bn254, m)?)?;

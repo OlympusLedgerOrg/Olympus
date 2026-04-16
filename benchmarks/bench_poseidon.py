@@ -9,7 +9,7 @@ import time
 from pathlib import Path
 
 from protocol.hashes import SNARK_SCALAR_FIELD
-from protocol.poseidon import poseidon_hash_bn128
+from protocol.poseidon_bn128 import poseidon_hash_bn128
 
 
 def benchmark_poseidon_throughput(iterations: int = 10000) -> dict[str, float]:

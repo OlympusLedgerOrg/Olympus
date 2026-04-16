@@ -65,6 +65,14 @@ from api.schemas.ingest import (
     ProofVerificationRequest,
     ProofVerificationResponse,
     RecordInput,
+    # Backward compatibility exports (re-exported for tests)
+    check_json_depth as _check_json_depth,  # noqa: F401
+    estimate_json_size as _estimate_json_size,  # noqa: F401
+)
+from api.services.poseidon import (
+    # Backward compatibility exports (re-exported for tests)
+    resolved_poseidon_root as _resolved_poseidon_root,  # noqa: F401
+    value_hash_to_poseidon_field as _value_hash_to_poseidon_field,  # noqa: F401
 )
 from api.services.proof_utils import (
     # Backward compatibility exports (re-exported for tests)
@@ -85,10 +93,6 @@ from protocol.merkle import (
     deserialize_merkle_proof,
     merkle_leaf_hash,
     verify_proof,
-)
-from protocol.poseidon import (
-    # Backward compatibility exports (re-exported for tests)
-    value_hash_to_poseidon_field as _value_hash_to_poseidon_field,  # noqa: F401
 )
 from protocol.ssmf import ExistenceProof
 from protocol.telemetry import INGEST_TOTAL, LEDGER_HEIGHT, timed_operation
@@ -640,6 +644,9 @@ def _merkle_proof_from_store(data: dict[str, Any]) -> MerkleProof:
 # Note: _normalize_merkle_root is now defined at the top of this file
 # The functions _parse_content_hash, _normalize_source_url, _value_hash_to_poseidon_field,
 # and _resolved_poseidon_root are imported from their respective modules at the top.
+
+
+_BN128_FIELD_PRIME = 21888242871839275222246405745257275088548364400416034343698204186575808495617
 
 
 def _build_poseidon_smt_for_storage_shard(

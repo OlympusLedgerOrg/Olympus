@@ -203,7 +203,7 @@ def fetch_persisted_proof_sync(
         return None
 
     try:
-        return storage.fetch_ingestion_by_proof_id(proof_id)
+        return storage.get_ingestion_proof(proof_id)
     except Exception:
         logger.warning("Failed to fetch persisted proof %s", proof_id, exc_info=True)
         return None
@@ -228,9 +228,7 @@ async def fetch_persisted_proof(
         return None
 
     loop = asyncio.get_running_loop()
-    return await loop.run_in_executor(
-        None, fetch_persisted_proof_sync, proof_id, storage
-    )
+    return await loop.run_in_executor(None, fetch_persisted_proof_sync, proof_id, storage)
 
 
 def fetch_by_content_hash_sync(
@@ -263,11 +261,9 @@ def fetch_by_content_hash_sync(
     # Fall back to storage if configured
     if storage is not None:
         try:
-            return storage.fetch_ingestion_by_content_hash(content_hash_hex)
+            return storage.get_ingestion_proof_by_content_hash(bytes.fromhex(content_hash_hex))
         except Exception:
-            logger.warning(
-                "Failed to fetch by content hash %s", content_hash_hex, exc_info=True
-            )
+            logger.warning("Failed to fetch by content hash %s", content_hash_hex, exc_info=True)
 
     return None
 

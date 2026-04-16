@@ -13,7 +13,7 @@ Covers:
 import pytest
 
 from protocol.hashes import SNARK_SCALAR_FIELD, hash_bytes
-from protocol.poseidon import poseidon_hash_bn128
+from protocol.poseidon_bn128 import poseidon_hash_bn128
 from protocol.poseidon_tree import (
     POSEIDON_DOMAIN_COMMITMENT,
     POSEIDON_DOMAIN_LEAF,

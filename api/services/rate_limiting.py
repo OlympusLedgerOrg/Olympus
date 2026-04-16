@@ -54,9 +54,7 @@ DEFAULT_RATE_LIMITS: dict[str, tuple[float, float]] = {
 _rate_limit_policy: dict[str, tuple[float, float]] = dict(DEFAULT_RATE_LIMITS)
 
 
-def set_rate_limit_for_tests(
-    action: str, capacity: float, refill_rate_per_second: float
-) -> None:
+def set_rate_limit_for_tests(action: str, capacity: float, refill_rate_per_second: float) -> None:
     """Override rate-limit policy for tests.
 
     Args:
@@ -91,7 +89,9 @@ def consume_rate_limit(subject_type: str, subject: str, action: str) -> bool:
     Returns:
         True if the request is allowed, False if rate limited.
     """
-    capacity, refill = _rate_limit_policy.get(action, DEFAULT_RATE_LIMITS.get(action, (100.0, 10.0)))
+    capacity, refill = _rate_limit_policy.get(
+        action, DEFAULT_RATE_LIMITS.get(action, (100.0, 10.0))
+    )
 
     # Use the *shared* auth backend instead of a separate ingest-local
     # bucket store. Composite key ensures action/subject isolation

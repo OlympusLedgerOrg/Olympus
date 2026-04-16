@@ -154,13 +154,13 @@ def _poseidon_incremental_update(
         an int and *node_deltas* is a list of ``(db_level, packed_index, hash_decimal)``
         tuples for upserting into ``poseidon_smt_nodes``.
     """
-    from protocol.poseidon import poseidon_leaf_hash, poseidon_node_hash
+    from protocol.poseidon_smt import _poseidon_hash_leaf, _poseidon_hash_node
 
     path = tuple(_key_to_path_bits(key))
     key_int = int.from_bytes(key, byteorder="big") % SNARK_SCALAR_FIELD
     field_value = int.from_bytes(value_hash, byteorder="big") % SNARK_SCALAR_FIELD
 
-    current_hash = poseidon_leaf_hash(key_int, field_value)
+    current_hash = _poseidon_hash_leaf(key_int, field_value)
 
     node_deltas: list[tuple[int, bytes, str]] = []
 
@@ -169,9 +169,9 @@ def _poseidon_incremental_update(
         sibling_hash = siblings[level]
 
         if path[bit_pos] == 0:
-            parent_hash = poseidon_node_hash(current_hash, sibling_hash)
+            parent_hash = _poseidon_hash_node(current_hash, sibling_hash)
         else:
-            parent_hash = poseidon_node_hash(sibling_hash, current_hash)
+            parent_hash = _poseidon_hash_node(sibling_hash, current_hash)
 
         parent_hash = parent_hash % SNARK_SCALAR_FIELD
 

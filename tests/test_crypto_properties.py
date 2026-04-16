@@ -9,7 +9,7 @@ from hypothesis import given, strategies as st
 
 from protocol.hashes import SNARK_SCALAR_FIELD, blake3_to_field_element
 from protocol.merkle import MerkleTree
-from protocol.poseidon import poseidon_hash_bn128
+from protocol.poseidon_bn128 import poseidon_hash_bn128
 from protocol.poseidon_tree import PoseidonMerkleTree
 
 
@@ -201,7 +201,7 @@ def test_merkle_proof_verifies_for_all_leaves(leaves: list[bytes], seed: int):
 @given(leaf_lists, st.integers(min_value=0))
 def test_poseidon_merkle_proof_verifies_for_all_leaves(leaves: list[bytes], seed: int):
     """Every leaf in a Poseidon Merkle tree must have a valid inclusion proof."""
-    from protocol.poseidon import poseidon_hash_bn128
+    from protocol.poseidon_bn128 import poseidon_hash_bn128
     from protocol.poseidon_tree import _to_field_int
 
     tree = PoseidonMerkleTree(leaves)
