@@ -21,7 +21,37 @@ updates:
       - "dependencies"
       - "security"
   - package-ecosystem: "cargo"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 10
+    reviewers:
+      - "OlympusLedgerOrg"
+    labels:
+      - "dependencies"
+      - "security"
+  - package-ecosystem: "cargo"
     directory: "/verifiers/rust"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 10
+    reviewers:
+      - "OlympusLedgerOrg"
+    labels:
+      - "dependencies"
+      - "security"
+  - package-ecosystem: "cargo"
+    directory: "/services/cdhs-smf-rust"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 10
+    reviewers:
+      - "OlympusLedgerOrg"
+    labels:
+      - "dependencies"
+      - "security"
+  - package-ecosystem: "npm"
+    directory: "/proofs"
     schedule:
       interval: "weekly"
     open-pull-requests-limit: 10
@@ -32,6 +62,26 @@ updates:
       - "security"
   - package-ecosystem: "npm"
     directory: "/verifiers/javascript"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 10
+    reviewers:
+      - "OlympusLedgerOrg"
+    labels:
+      - "dependencies"
+      - "security"
+  - package-ecosystem: "npm"
+    directory: "/app/public-ui"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 10
+    reviewers:
+      - "OlympusLedgerOrg"
+    labels:
+      - "dependencies"
+      - "security"
+  - package-ecosystem: "gomod"
+    directory: "/services/sequencer-go"
     schedule:
       interval: "weekly"
     open-pull-requests-limit: 10

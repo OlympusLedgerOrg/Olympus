@@ -235,10 +235,19 @@ jobs:
         with:
           python-version: "3.12"
 
+      - name: Install Rust stable
+        run: rustup toolchain install stable --no-self-update && rustup default stable
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
       - name: Install tooling
         run: |
           python -m pip install --upgrade pip
           pip install cyclonedx-bom==7.2.2 pip-audit==2.8.0
+          cargo install cargo-audit --locked
 
       - name: Generate SBOM (CycloneDX)
         run: |
@@ -254,12 +263,24 @@ jobs:
           name: sbom-cyclonedx
           path: sbom.json
 
-      - name: Dependency vulnerability audit
+      - name: Python dependency vulnerability audit
         run: |
           IGNORE_ARGS=$(grep -v '^[[:space:]]*#' pip-audit-baseline.txt | awk 'NF {printf "--ignore-vuln %s ", $1}')
           pip-audit -r requirements.txt -r requirements-dev.txt \
             --progress-spinner off \
             ${IGNORE_ARGS}
+
+      - name: Rust dependency vulnerability audit
+        run: |
+          cargo audit --file Cargo.lock
+          cargo audit --file verifiers/rust/Cargo.lock
+          cargo audit --file services/cdhs-smf-rust/Cargo.lock
+
+      - name: Node.js dependency vulnerability audit
+        run: |
+          npm audit --prefix proofs --audit-level=high
+          npm audit --prefix verifiers/javascript --audit-level=high
+          npm audit --prefix app/public-ui --audit-level=high
 
   go-verifier:
     name: Go verifier conformance
