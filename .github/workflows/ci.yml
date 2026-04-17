@@ -235,10 +235,28 @@ jobs:
         with:
           python-version: "3.12"
 
+      - name: Install Rust stable
+        run: rustup toolchain install stable --no-self-update && rustup default stable
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Cache cargo-audit binary
+        id: cache-cargo-audit
+        uses: actions/cache@v4
+        with:
+          path: ~/.cargo/bin/cargo-audit
+          key: cargo-audit-0.21
+
       - name: Install tooling
         run: |
           python -m pip install --upgrade pip
           pip install cyclonedx-bom==7.2.2 pip-audit==2.8.0
+          if ! command -v cargo-audit &> /dev/null; then
+            cargo install cargo-audit --locked
+          fi
 
       - name: Generate SBOM (CycloneDX)
         run: |
@@ -254,12 +272,28 @@ jobs:
           name: sbom-cyclonedx
           path: sbom.json
 
-      - name: Dependency vulnerability audit
+      - name: Python dependency vulnerability audit
         run: |
           IGNORE_ARGS=$(grep -v '^[[:space:]]*#' pip-audit-baseline.txt | awk 'NF {printf "--ignore-vuln %s ", $1}')
           pip-audit -r requirements.txt -r requirements-dev.txt \
             --progress-spinner off \
             ${IGNORE_ARGS}
+
+      - name: Rust dependency vulnerability audit
+        run: |
+          IGNORE_ARGS=$(grep -v '^[[:space:]]*#' cargo-audit-baseline.txt | awk 'NF {printf "--ignore %s ", $1}')
+          cargo audit --file Cargo.lock ${IGNORE_ARGS}
+          cargo audit --file verifiers/rust/Cargo.lock ${IGNORE_ARGS}
+          cargo audit --file services/cdhs-smf-rust/Cargo.lock ${IGNORE_ARGS}
+
+      - name: Node.js dependency vulnerability audit
+        run: |
+          npm audit --prefix verifiers/javascript --audit-level=high
+          npm audit --prefix app/public-ui --audit-level=high
+          # proofs/: circomlibjs and safe-jsonpath have known unfixable transitive
+          # vulnerabilities (elliptic, jsonpath via bfj). Use --audit-level=critical
+          # to avoid false-positive CI failures on already-mitigated issues.
+          npm audit --prefix proofs --audit-level=critical
 
   go-verifier:
     name: Go verifier conformance
