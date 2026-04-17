@@ -7,7 +7,7 @@ toolchain go1.24.13
 require (
 	github.com/lib/pq v1.12.0
 	google.golang.org/grpc v1.79.3
-	google.golang.org/protobuf v1.36.10
+	google.golang.org/protobuf v1.36.11
 )
 
 require (
