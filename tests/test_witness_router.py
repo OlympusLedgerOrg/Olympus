@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import hashlib
 import uuid
 
 import nacl.signing
@@ -15,6 +14,7 @@ import api.routers.witness as witness_module
 from api.db import get_db
 from api.main import create_app
 from api.models import Base
+from protocol.hashes import hash_bytes
 from protocol.timestamps import current_timestamp
 
 
@@ -81,7 +81,7 @@ def _nonce() -> str:
 
 def _sign_checkpoint(origin: str, sequence: int, checkpoint_hash: str) -> str:
     """Create an Ed25519 signature over the canonical checkpoint payload."""
-    payload = hashlib.sha256(f"{origin}:{sequence}:{checkpoint_hash}".encode()).digest()
+    payload = hash_bytes(f"{origin}:{sequence}:{checkpoint_hash}".encode())
     return _TEST_SIGNING_KEY.sign(payload).signature.hex()
 
 

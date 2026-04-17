@@ -175,6 +175,27 @@ def _assert_no_multiworker_with_memory_rate_limit() -> None:
         )
 
 
+def _assert_redis_url_when_redis_backend() -> None:
+    """Block startup when Redis rate-limit backend is selected without a URL.
+
+    Catches the misconfiguration where ``RATE_LIMIT_BACKEND=redis`` is set but
+    ``RATE_LIMIT_REDIS_URL`` is empty.  Without a URL the Redis client will fail
+    at the first rate-limited request, causing hard-to-diagnose 500 errors
+    instead of a clear startup failure.
+
+    Raises:
+        RuntimeError: When ``RATE_LIMIT_BACKEND`` is ``redis`` and
+            ``RATE_LIMIT_REDIS_URL`` is empty or unset.
+    """
+    settings = get_settings()
+    if settings.rate_limit_backend.lower() == "redis" and not settings.rate_limit_redis_url:
+        raise RuntimeError(
+            "RATE_LIMIT_BACKEND=redis requires RATE_LIMIT_REDIS_URL to be set. "
+            "Provide a valid Redis connection URL (e.g. redis://localhost:6379/0) "
+            "or switch to RATE_LIMIT_BACKEND=memory for single-worker deployments."
+        )
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Create database tables on startup and dispose the engine on shutdown."""
@@ -184,6 +205,7 @@ async def lifespan(app: FastAPI):
     _assert_no_dev_signing_key_in_non_development()
     _assert_dev_auth_flag_restricted_to_development()
     _assert_no_multiworker_with_memory_rate_limit()
+    _assert_redis_url_when_redis_backend()
     _assert_xff_default_deny()
     assert_rust_hot_path()
 
