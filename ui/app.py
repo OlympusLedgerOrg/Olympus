@@ -153,16 +153,20 @@ class _AuthFailureTracker:
     def is_locked_out(self, ip: str) -> bool:
         """Return True if the IP is currently locked out."""
         with self._lock:
-            entry = self._store.get(ip)
-            if entry is None:
-                return False
-            count, first_failure = entry
-            now = monotonic()
-            # If the lockout window has expired, clear and allow
-            if now - first_failure > self._lockout_seconds:
-                del self._store[ip]
-                return False
-            return count >= self._max_failures
+            return self._is_locked_out_unlocked(ip)
+
+    def _is_locked_out_unlocked(self, ip: str) -> bool:
+        """Internal lockout check (caller must hold ``_lock``)."""
+        entry = self._store.get(ip)
+        if entry is None:
+            return False
+        count, first_failure = entry
+        now = monotonic()
+        # If the lockout window has expired, clear and allow
+        if now - first_failure > self._lockout_seconds:
+            del self._store[ip]
+            return False
+        return count >= self._max_failures
 
     def record_failure(self, ip: str) -> None:
         """Record a failed auth attempt for the given IP."""
@@ -171,16 +175,19 @@ class _AuthFailureTracker:
             entry = self._store.get(ip)
             if entry is not None:
                 count, first_failure = entry
+                # Use the same expiry logic as is_locked_out: clear and
+                # start fresh when the lockout window has elapsed.
                 if now - first_failure > self._lockout_seconds:
-                    # Window expired — start fresh
-                    count = 0
-                    first_failure = now
+                    del self._store[ip]
+                    entry = None
+            if entry is None:
+                self._store[ip] = (1, now)
+            else:
                 self._store[ip] = (count + 1, first_failure)
                 self._store.move_to_end(ip)
-            else:
-                self._store[ip] = (1, now)
-            # Evict oldest entries to bound memory
-            while len(self._store) > self._max_tracked:
+            # Evict oldest entry to bound memory (one at a time since
+            # failures are recorded individually).
+            if len(self._store) > self._max_tracked:
                 self._store.popitem(last=False)
 
     def record_success(self, ip: str) -> None:
@@ -333,7 +340,15 @@ async def _debug_console_basic_auth(request: Request, call_next: Any) -> JSONRes
         # Development mode with no password: allow unauthenticated access.
         return await call_next(request)
 
-    client_ip = request.client.host if request.client else "unknown"
+    client_ip = request.client.host if request.client else None
+
+    # Reject requests where no client IP can be determined — these should not
+    # bypass auth or pollute the shared failure tracker (review comment fix).
+    if client_ip is None:
+        return JSONResponse(
+            status_code=400,
+            content={"detail": "Unable to determine client IP address."},
+        )
 
     # Brute-force protection: check lockout before processing credentials.
     if _auth_tracker.is_locked_out(client_ip):
