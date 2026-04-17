@@ -69,7 +69,6 @@ node_modules/
 verifiers/rust/target/
 # Root-level Rust/maturin build artefacts (olympus_core extension)
 target/
-Cargo.lock
 
 # Benchmark results
 benchmarks/results/

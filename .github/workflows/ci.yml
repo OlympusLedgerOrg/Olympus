@@ -261,6 +261,18 @@ jobs:
             --progress-spinner off \
             ${IGNORE_ARGS}
 
+      - name: Install Rust stable
+        run: rustup toolchain install stable --no-self-update && rustup default stable
+
+      - name: Install cargo-audit
+        run: cargo install cargo-audit --locked
+
+      - name: Rust dependency vulnerability audit
+        run: |
+          cargo audit --file Cargo.lock
+          cargo audit --file verifiers/rust/Cargo.lock
+          cargo audit --file services/cdhs-smf-rust/Cargo.lock
+
   go-verifier:
     name: Go verifier conformance
     runs-on: ubuntu-latest

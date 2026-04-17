@@ -23,8 +23,10 @@ blake3 = "1"
 # Unicode NFC normalisation — required for canonical JSON key/value encoding.
 unicode-normalization = "0.1"
 ark-bn254 = "0.4"
-ark-groth16 = { version = "0.4", features = ["r1cs"] }
-ark-relations = "0.4"
+# default-features disabled: the "parallel" default feature transitively enables
+# ark-relations/std → tracing-subscriber 0.2.x (RUSTSEC-2025-0055).
+# Proof verification does not need multi-threaded acceleration.
+ark-groth16 = { version = "0.4", default-features = false }
 ark-ff = "0.4"
 ark-ec = "0.4"
 ark-serialize = "0.4"
