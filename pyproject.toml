@@ -66,7 +66,7 @@ dev = [
     # Build tool for the olympus_core Rust extension (CVE-2026-4539 bridge)
     "maturin>=1.5,<2",
     # Mutation testing for crypto-critical code paths
-    "mutmut==3.2.2",
+    "mutmut==3.5.0",
     # HTTP mocking for async client tests
     "respx>=0.23.1",
     # Z3 SMT solver for formal verification of circuit constraints
