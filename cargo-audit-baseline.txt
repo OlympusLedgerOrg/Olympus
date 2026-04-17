@@ -1,0 +1,12 @@
+# Known Rust advisory IDs to ignore during cargo-audit.
+# Keep this file sorted and prefer removing IDs as dependencies are upgraded.
+#
+# RUSTSEC-2025-0055 — tracing-subscriber <= 0.3.19: ANSI escape sequence
+# injection via user-controlled log input.
+# tracing-subscriber 0.2.25 is a transitive dependency of the ark-* crate
+# family (ark-groth16 0.4.x → ark-crypto-primitives → tracing-subscriber ^0.2).
+# Upgrading requires ark-* 0.5.x (breaking API change).  The olympus-core
+# extension does not expose tracing-subscriber to external log input, so this
+# advisory is not exploitable here.  Remove this entry once ark-* 0.5.x is
+# adopted.
+RUSTSEC-2025-0055
