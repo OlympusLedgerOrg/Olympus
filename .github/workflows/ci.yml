@@ -243,11 +243,20 @@ jobs:
         with:
           node-version: '20'
 
+      - name: Cache cargo-audit binary
+        id: cache-cargo-audit
+        uses: actions/cache@v4
+        with:
+          path: ~/.cargo/bin/cargo-audit
+          key: cargo-audit-0.21
+
       - name: Install tooling
         run: |
           python -m pip install --upgrade pip
           pip install cyclonedx-bom==7.2.2 pip-audit==2.8.0
-          cargo install cargo-audit --locked
+          if ! command -v cargo-audit &> /dev/null; then
+            cargo install cargo-audit --locked
+          fi
 
       - name: Generate SBOM (CycloneDX)
         run: |
