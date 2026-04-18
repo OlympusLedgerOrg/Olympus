@@ -62,6 +62,7 @@ def _sanitize_csv_cell(value: str) -> str:
         return f"'{value}"
     return value
 
+
 # Reusable dependency — validates API key carries the "admin" scope.
 RequireAdminScope = Annotated[object, Depends(require_api_key_with_scope("admin"))]
 
@@ -167,13 +168,15 @@ async def export_customers_csv(
         created = u.created_at
         if created.tzinfo is None:
             created = created.replace(tzinfo=timezone.utc)
-        writer.writerow([
-            u.id,
-            _sanitize_csv_cell(str(u.email)),
-            _sanitize_csv_cell(str(u.role)),
-            _sanitize_csv_cell(str(u.plan)),
-            created.isoformat(),
-        ])
+        writer.writerow(
+            [
+                u.id,
+                _sanitize_csv_cell(str(u.email)),
+                _sanitize_csv_cell(str(u.role)),
+                _sanitize_csv_cell(str(u.plan)),
+                created.isoformat(),
+            ]
+        )
     buf.seek(0)
 
     return StreamingResponse(
