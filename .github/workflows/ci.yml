@@ -295,6 +295,24 @@ jobs:
           # to avoid false-positive CI failures on already-mitigated issues.
           npm audit --prefix proofs --audit-level=critical
 
+      - name: Set up Go for govulncheck
+        uses: actions/setup-go@v5
+        with:
+          # govulncheck@latest (golang.org/x/vuln v1.2+) requires Go >= 1.25,
+          # and we want the scanned stdlib to be a recent patch release so
+          # known-fixed stdlib CVEs do not surface as findings here.
+          go-version: "1.25"
+          cache: false
+
+      - name: Install govulncheck
+        run: go install golang.org/x/vuln/cmd/govulncheck@latest
+
+      - name: Go dependency vulnerability audit (verifiers/go)
+        run: scripts/run-govulncheck.sh verifiers/go ./...
+
+      - name: Go dependency vulnerability audit (services/sequencer-go)
+        run: scripts/run-govulncheck.sh services/sequencer-go ./...
+
   go-verifier:
     name: Go verifier conformance
     runs-on: ubuntu-latest

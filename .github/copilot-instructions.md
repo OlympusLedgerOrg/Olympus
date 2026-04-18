@@ -70,7 +70,7 @@ Go builds a "Trillian-shaped" log service that **uses CD-HS-ST in Rust**:
 - `QueueLeaf` (append a record for a given `shard_id`)
 - `GetLatestRoot`
 - `GetInclusionProof`
-- `GetConsistencyProof` (if/when supported)
+- `GetSignedRootPair` (returns two signed roots for offline comparison; **not** an RFC-6962 consistency proof)
 
 **Sequencer:**
 - Batches and orders appends

@@ -98,9 +98,39 @@ Generate an inclusion proof for a record.
 }
 ```
 
-### GET /v1/get-consistency-proof
+### GET /v1/get-signed-root-pair
 
-*Not yet implemented (Phase 1+)*
+Return the signed roots at two tree sizes for offline comparison.
+
+> **Not** an RFC-6962 / Trillian consistency proof. This endpoint does not
+> prove that the older root is a prefix of the newer one — it returns both
+> signed roots and lets the caller verify the signatures and compare the
+> hashes. The sequencer does not currently produce a real consistency
+> proof; the CD-HS-ST is a sparse Merkle tree and the proof shape differs
+> from RFC 6962. See the follow-up issue tracked from `CHANGELOG.md`.
+
+**Query Parameters:**
+- `old_tree_size`: smaller tree size
+- `new_tree_size`: larger tree size (must be ≥ `old_tree_size`)
+
+**Response:**
+```json
+{
+  "old_tree_size": 100,
+  "new_tree_size": 200,
+  "old_root": "abc123...",
+  "old_signature": "def456...",
+  "new_root": "789ghi...",
+  "new_signature": "jkl012..."
+}
+```
+
+### GET /v1/get-consistency-proof (deprecated)
+
+Returns HTTP `410 Gone` with a body pointing callers to
+`/v1/get-signed-root-pair`. The original name was misleading: it suggested
+an RFC-6962 consistency proof but only ever returned a pair of signed
+roots. This deprecated alias will be removed in the next release.
 
 ## Internal Architecture
 

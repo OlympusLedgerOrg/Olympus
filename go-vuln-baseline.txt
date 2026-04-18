@@ -1,0 +1,18 @@
+# Go vulnerability suppression baseline for govulncheck.
+#
+# Format: one Go vulnerability ID per line (e.g. GO-2024-1234) or one
+# CVE / GHSA alias (e.g. CVE-2024-1234, GHSA-xxxx-yyyy-zzzz).
+# Blank lines and lines beginning with '#' are ignored.
+#
+# Each entry MUST be accompanied by a short justification comment on the
+# preceding line explaining why the finding is suppressed (false positive,
+# unreachable code path, mitigated by deployment topology, etc.) and a link
+# to the upstream advisory or tracking issue.
+#
+# This baseline is consumed by .github/workflows/ci.yml in the
+# `supply-chain` job. Suppressions filter govulncheck's `-json` output
+# because govulncheck has no native ignore flag.
+#
+# Mirrors the policy in cargo-audit-baseline.txt and pip-audit-baseline.txt.
+
+# (no current suppressions)
