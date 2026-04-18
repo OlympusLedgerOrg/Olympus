@@ -163,7 +163,7 @@ class _AuthFailureTracker:
         count, first_failure = entry
         now = monotonic()
         # If the lockout window has expired, clear and allow
-        if now - first_failure > self._lockout_seconds:
+        if now - first_failure >= self._lockout_seconds:
             del self._store[ip]
             return False
         return count >= self._max_failures
@@ -177,7 +177,7 @@ class _AuthFailureTracker:
                 count, first_failure = entry
                 # Use the same expiry logic as is_locked_out: clear and
                 # start fresh when the lockout window has elapsed.
-                if now - first_failure > self._lockout_seconds:
+                if now - first_failure >= self._lockout_seconds:
                     del self._store[ip]
                     entry = None
             if entry is None:

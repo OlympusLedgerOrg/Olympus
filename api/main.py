@@ -237,7 +237,9 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
         response.headers["Permissions-Policy"] = "geolocation=(), camera=(), microphone=()"
         # HSTS — always set to protect against SSL stripping attacks.
         # Safe even over HTTP (browsers ignore the header on non-HTTPS).
-        response.headers["Strict-Transport-Security"] = "max-age=63072000; includeSubDomains"
+        response.headers["Strict-Transport-Security"] = (
+            "max-age=63072000; includeSubDomains; preload"
+        )
         # CSP — restrictive default; operators should customize for their frontend origin
         response.headers["Content-Security-Policy"] = (
             "default-src 'self'; "
@@ -245,8 +247,11 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
             "style-src 'self'; "
             "img-src 'self' data:; "
             "connect-src 'self'; "
-            "frame-ancestors 'none';"
+            "frame-ancestors 'none'; "
+            "upgrade-insecure-requests;"
         )
+        # Suppress server identity headers to avoid information disclosure.
+        response.headers["Server"] = "Olympus"
         return response
 
 
