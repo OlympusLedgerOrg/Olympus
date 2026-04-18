@@ -17,10 +17,13 @@ Extended format support (v2.1+):
   self-closing tag normalization, comment/PI stripping, NFC normalization.
 - **CSV/TSV**: deterministic delimiter, quoting, row ordering by canonical
   JSON key, NFC normalization, and BOM stripping.
+- **JSONL**: JSON Lines format — parse each line, canonicalize individually,
+  optionally sort by canonical representation (for training datasets).
 """
 
 import csv
 import io
+import json
 import math
 import re
 import unicodedata
@@ -275,6 +278,8 @@ _MAX_PLAINTEXT_BYTES: int = 64 * 1024 * 1024  # 64 MiB
 _MAX_XML_BYTES: int = 64 * 1024 * 1024  # 64 MiB
 _MAX_CSV_BYTES: int = 64 * 1024 * 1024  # 64 MiB
 _MAX_CSV_ROWS: int = 1_000_000
+_MAX_JSONL_BYTES: int = 256 * 1024 * 1024  # 256 MiB (training datasets)
+_MAX_JSONL_LINES: int = 10_000_000  # 10 million lines
 
 # XML processing instruction / comment / DOCTYPE patterns
 _XML_PI_RE = re.compile(r"<\?.*?\?>", re.DOTALL)
@@ -567,3 +572,102 @@ def canonicalize_csv_bytes(
     return canonicalize_csv(
         text, delimiter=delimiter, sort_rows=sort_rows, has_header=has_header
     ).encode("utf-8")
+
+
+def canonicalize_jsonl(text: str, *, sort_lines: bool = True) -> str:
+    """Canonicalize JSONL (JSON Lines) text for deterministic hashing.
+
+    Produces a deterministic JSONL representation by:
+
+    1. Strip BOM (U+FEFF).
+    2. Normalize line endings to ``\\n``.
+    3. Parse each line as JSON (blank lines ignored).
+    4. Canonicalize each JSON object individually (normalize numbers, etc.).
+    5. Optionally sort lines by their canonical JSON representation.
+    6. Join with Unix newlines.
+
+    This is designed for training datasets in JSONL format where row order
+    may vary but semantic content is identical.
+
+    Args:
+        text: Input JSONL text (newline-delimited JSON objects).
+        sort_lines: Whether to sort lines by canonical representation
+            (default: ``True``). Ensures reshuffled datasets produce the
+            same hash.
+
+    Returns:
+        Canonicalized JSONL text.
+
+    Raises:
+        CanonicalizationError: If text exceeds limits, is empty, or contains
+            invalid JSON.
+    """
+    if len(text.encode("utf-8")) > _MAX_JSONL_BYTES:
+        raise CanonicalizationError(
+            f"JSONL text exceeds maximum size ({_MAX_JSONL_BYTES} bytes)"
+        )
+
+    # Step 1: Strip BOM
+    text = _strip_bom(text)
+
+    # Step 2: Normalize line endings
+    text = text.replace("\r\n", "\n").replace("\r", "\n")
+
+    # Step 3–4: Parse and canonicalize each line
+    canonical_lines: list[str] = []
+    for line_num, line in enumerate(text.split("\n"), start=1):
+        # Skip blank lines
+        line = line.strip()
+        if not line:
+            continue
+
+        if len(canonical_lines) >= _MAX_JSONL_LINES:
+            raise CanonicalizationError(
+                f"JSONL exceeds maximum line count ({_MAX_JSONL_LINES})"
+            )
+
+        # Parse JSON
+        try:
+            obj = json.loads(line)
+        except json.JSONDecodeError as e:
+            raise CanonicalizationError(
+                f"Invalid JSON on line {line_num}: {e}"
+            ) from e
+
+        # Canonicalize the object if it's a dict (most common for JSONL)
+        # For non-dict values (arrays, primitives), just encode directly
+        if isinstance(obj, dict):
+            canonical_obj = canonicalize_document(obj, scrub_homoglyphs=False)
+            canonical_json = canonical_json_encode(canonical_obj)
+        else:
+            # For non-dict types, use canonical_json_encode directly
+            canonical_json = canonical_json_encode(obj)
+
+        canonical_lines.append(canonical_json)
+
+    if not canonical_lines:
+        raise CanonicalizationError("JSONL is empty")
+
+    # Step 5: Optionally sort lines
+    if sort_lines:
+        canonical_lines.sort()
+
+    # Step 6: Join with Unix newlines
+    return "\n".join(canonical_lines)
+
+
+def canonicalize_jsonl_bytes(
+    data: bytes, *, encoding: str = "utf-8", sort_lines: bool = True
+) -> bytes:
+    """Canonicalize JSONL bytes for deterministic hashing.
+
+    Args:
+        data: Raw JSONL bytes.
+        encoding: Source encoding (default UTF-8).
+        sort_lines: Forwarded to :func:`canonicalize_jsonl`.
+
+    Returns:
+        Canonical UTF-8 bytes.
+    """
+    text = data.decode(encoding)
+    return canonicalize_jsonl(text, sort_lines=sort_lines).encode("utf-8")

@@ -31,6 +31,7 @@ CANONICALIZER_VERSIONS: dict[str, str] = {
     "html": "1.0.1-lxml-pinned-nfc",
     "docx": "1.1.0-c14n-strict",
     "pdf": "1.4.0-pikepdf-10.3.0-linearized",
+    "jsonl": "1.0.0-canonical-v2-sorted",
 }
 
 
