@@ -19,7 +19,6 @@ Endpoints:
 
 from __future__ import annotations
 
-import hashlib
 import json
 import logging
 import os
@@ -42,6 +41,7 @@ from api.schemas.witness import (
     WitnessAnnounceResponse,
     WitnessHealthResponse,
 )
+from protocol.hashes import hash_bytes
 from protocol.log_sanitization import sanitize_for_log
 from protocol.timestamps import current_timestamp
 
@@ -221,9 +221,9 @@ async def submit_observation(
         )
 
     # -- Ed25519 signature verification (C2SP tlog-witness model) --------
-    _signed_payload = hashlib.sha256(
+    _signed_payload = hash_bytes(
         f"{request.origin}:{request.checkpoint.sequence}:{request.checkpoint.checkpoint_hash}".encode()
-    ).digest()
+    )
 
     try:
         sig_bytes = bytes.fromhex(request.node_signature)
@@ -247,7 +247,7 @@ async def submit_observation(
             detail="Malformed signature or public key",
         )
 
-    _origin_key_prefix = hashlib.sha256(request.origin.encode()).hexdigest()[:16]
+    _origin_key_prefix = hash_bytes(request.origin.encode()).hex()[:16]
     key = f"{_origin_key_prefix}:{request.checkpoint.sequence}"
 
     existing = await db.execute(

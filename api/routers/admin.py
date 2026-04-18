@@ -33,6 +33,36 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/admin", tags=["admin"])
 
+# Characters that trigger formula interpretation in spreadsheet applications.
+# Prefixed with a single-quote to neutralize them (CSV injection / formula
+# injection defense per OWASP guidelines).
+_CSV_FORMULA_TRIGGERS = frozenset({"=", "+", "-", "@", "\t", "\r", "\n"})
+
+
+def _sanitize_csv_cell(value: str) -> str:
+    """Prevent CSV injection by escaping formula-triggering prefixes.
+
+    Spreadsheet applications (Excel, Google Sheets, LibreOffice Calc) interpret
+    cell values starting with ``=``, ``+``, ``-``, ``@``, tab, or carriage
+    return as formulas.  An attacker who controls a field value (e.g. email)
+    could inject a formula such as ``=CMD(...)`` that executes when an admin
+    opens the exported CSV.
+
+    Defense: prepend a single-quote ``'`` to neutralize the formula trigger.
+    The quote is visible in the raw CSV but is stripped by most spreadsheet
+    applications when displaying the cell.
+
+    Args:
+        value: The raw cell string.
+
+    Returns:
+        The sanitized cell string safe for CSV output.
+    """
+    if value and value[0] in _CSV_FORMULA_TRIGGERS:
+        return f"'{value}"
+    return value
+
+
 # Reusable dependency — validates API key carries the "admin" scope.
 RequireAdminScope = Annotated[object, Depends(require_api_key_with_scope("admin"))]
 
@@ -138,7 +168,15 @@ async def export_customers_csv(
         created = u.created_at
         if created.tzinfo is None:
             created = created.replace(tzinfo=timezone.utc)
-        writer.writerow([u.id, u.email, u.role, u.plan, created.isoformat()])
+        writer.writerow(
+            [
+                u.id,
+                _sanitize_csv_cell(str(u.email)),
+                _sanitize_csv_cell(str(u.role)),
+                _sanitize_csv_cell(str(u.plan)),
+                created.isoformat(),
+            ]
+        )
     buf.seek(0)
 
     return StreamingResponse(

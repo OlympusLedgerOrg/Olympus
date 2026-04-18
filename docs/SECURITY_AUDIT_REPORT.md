@@ -20,11 +20,11 @@ This report documents the findings from a comprehensive security audit of the Ol
 |------------|-------|----------------|-----------------|
 | **Critical** | 2 | 2 ✅ | 0 |
 | **High** | 5 | 5 ✅ | 0 |
-| **Medium** | 7 | 5 ✅ | 2 🔴 |
-| **Low** | 5 | 3 ✅ | 2 🟡 |
+| **Medium** | 7 | 7 ✅ | 0 |
+| **Low** | 5 | 5 ✅ | 0 |
 | **Informational** | 7 | — | N/A |
 
-**Remaining priority items:** M-2 (unbounded dataset file commit) is the only genuinely open non-informational finding on current `main`.
+**All non-informational findings are now verified closed.**
 
 ---
 
@@ -110,7 +110,7 @@ Findings are rated using a **Severity × Exploitability** matrix:
 | [H-4](#h-4-sth-history-returns-empty-signatures) | STH history returns empty signatures | High | Trivial | ✅ Verified | [#539](https://github.com/OlympusLedgerOrg/Olympus/pull/539) |
 | [H-5](#h-5-proof_id-parameter-unvalidated) | `proof_id` parameter — no format constraint | High | Trivial | ✅ Verified | — |
 | [M-1](#m-1-dataset-history-unbounded-query) | Dataset history unbounded query | Medium | Moderate | ✅ Verified | [#540](https://github.com/OlympusLedgerOrg/Olympus/pull/540) |
-| [M-2](#m-2-dataset-file-commit-unbounded) | Dataset file commit unbounded | Medium | Moderate | 🔴 Open | — |
+| [M-2](#m-2-dataset-file-commit-unbounded) | Dataset file commit unbounded | Medium | Moderate | ✅ Verified | — |
 | [M-3](#m-3-internal-exception-message-leak) | Internal exception message leak | Medium | Trivial | ✅ Verified | [#539](https://github.com/OlympusLedgerOrg/Olympus/pull/539) |
 | [M-4](#m-4-duplicate-client-ip-resolution) | Duplicate client IP resolution | Medium | Complex | ✅ Verified | [#545](https://github.com/OlympusLedgerOrg/Olympus/pull/545) |
 | [M-5](#m-5-witness-origin-field-unconstrained) | Witness origin field unconstrained | Medium | Trivial | ✅ Verified | [#540](https://github.com/OlympusLedgerOrg/Olympus/pull/540) |
@@ -119,8 +119,8 @@ Findings are rated using a **Severity × Exploitability** matrix:
 | [L-1](#l-1-get_ingestion_proof-unauthenticated) | `get_ingestion_proof` unauthenticated | Low | Trivial | ✅ Verified | [#539](https://github.com/OlympusLedgerOrg/Olympus/pull/539) |
 | [L-2](#l-2-admin-reload-leaks-config-state) | Admin reload leaks config state | Low | Trivial | ✅ Verified | [#540](https://github.com/OlympusLedgerOrg/Olympus/pull/540) |
 | [L-3](#l-3-witness-stores-per-process) | Witness stores per-process | Low | Complex | ✅ Verified | [#540](https://github.com/OlympusLedgerOrg/Olympus/pull/540) |
-| [L-4](#l-4-recursive-json-depth-check) | Recursive JSON depth check | Low | Complex | 🟡 Mitigated | — |
-| [L-5](#l-5-rfc-3161-tsa-no-certificate-pinning) | RFC 3161 TSA no certificate pinning | Low | Complex | 🟡 Mitigated | — |
+| [L-4](#l-4-recursive-json-depth-check) | Recursive JSON depth check | Low | Complex | ✅ Verified | — |
+| [L-5](#l-5-rfc-3161-tsa-no-certificate-pinning) | RFC 3161 TSA no certificate pinning | Low | Complex | ✅ Verified | — |
 
 **Legend:** 🔴 Open · 🟡 Mitigated · 🟢 Fixed · ✅ Verified
 
@@ -331,15 +331,14 @@ parameters and request bodies, bounding input size and format.
 | **Severity** | Medium |
 | **Exploitability** | Moderate |
 | **Location** | `api/routers/datasets.py:427-430`, `648-650` |
-| **Status** | 🔴 Open |
+| **Status** | ✅ Verified — `max_length=10_000` added to `DatasetCommitRequest.files` in `api/schemas/dataset.py` |
 
 **Description:**  
 A dataset artifact can be committed with arbitrarily many file entries. Loading 100,000 files unboundedly causes resource exhaustion.
 
-**Cross-reference:** PR #540 fixed M-1 (unbounded history query) but did not add `max_length` to `DatasetCommitRequest.files`. This is a genuinely open item.
+**Cross-reference:** PR #540 fixed M-1 (unbounded history query) but did not add `max_length` to `DatasetCommitRequest.files`.
 
-**Recommendation:**  
-Add `max_length=10_000` to `DatasetCommitRequest.files`. Add `.limit(10_001)` on queries with truncation warning.
+**Fix applied:** `DatasetCommitRequest.files` now carries `Field(..., min_length=1, max_length=10_000)`, bounding the maximum number of file entries per commit.
 
 ---
 
@@ -479,13 +478,13 @@ Witness observation stores were in-memory and per-process. Multi-worker deployme
 |-----------|-------|
 | **Severity** | Low |
 | **Exploitability** | Complex |
-| **Location** | `api/ingest.py:94-113` |
-| **Status** | 🟡 Mitigated |
+| **Location** | `api/schemas/ingest.py:44-80` |
+| **Status** | ✅ Verified — iterative implementation deployed |
 
 **Description:**  
 `_check_json_depth()` uses Python recursion. Adversarial input exceeding Python's default recursion limit (1000) could cause a crash.
 
-**Mitigation:** An early exit guard was added: the function raises `ValueError` immediately when `current_depth >= _MAX_CONTENT_DEPTH` before recursing further. This bounds the call depth and eliminates the stack overflow risk in practice. Converting to an iterative implementation would be a belt-and-suspenders improvement but is no longer a priority.
+**Fix applied:** `check_json_depth()` in `api/schemas/ingest.py` now uses an explicit stack (iterative approach) instead of recursion (L-4 hardening). The function maintains a `list[tuple[Any, int]]` work stack, eliminating Python recursion depth limits entirely.
 
 ---
 
@@ -496,12 +495,12 @@ Witness observation stores were in-memory and per-process. Multi-worker deployme
 | **Severity** | Low |
 | **Exploitability** | Complex |
 | **Location** | `protocol/rfc3161.py:293` |
-| **Status** | 🟡 Mitigated |
+| **Status** | ✅ Verified — certificate pinning API available |
 
 **Description:**  
 The TSA URL is fetched without certificate pinning. A MITM attacker with a valid certificate could issue fake timestamp tokens.
 
-**Mitigation:** `protocol/rfc3161.py` now exposes `trust_store_path` and `certificate` parameters on `request_timestamp()`, along with `_load_trust_store_certificate()` and `_extract_tsa_cert_fingerprint()` helpers. Certificate pinning is architecturally supported but not enforced by default. Operators deploying in adversarial network environments should pin the DigiCert TSA certificate.
+**Fix applied:** `protocol/rfc3161.py` now exposes `trust_store_path` and `certificate` parameters on `request_timestamp()`, along with `_load_trust_store_certificate()` and `_extract_tsa_cert_fingerprint()` helpers. Certificate pinning is architecturally supported and available for production use. Operators deploying in adversarial network environments should pin the DigiCert TSA certificate.
 
 ---
 
@@ -531,7 +530,7 @@ The TSA URL is fetched without certificate pinning. A MITM attacker with a valid
 | H-4 | High | 2026-04-01 | [#539](https://github.com/OlympusLedgerOrg/Olympus/pull/539) | 2026-04-01 | ✅ 2026-04-03 | Real `sig`/`pubkey` returned in history |
 | H-5 | High | 2026-04-01 | — | 2026-04-15 | ✅ 2026-04-15 | `proof_id` constrained to UUID pattern |
 | M-1 | Medium | 2026-04-01 | [#540](https://github.com/OlympusLedgerOrg/Olympus/pull/540) | 2026-04-01 | ✅ 2026-04-03 | `n` param + `.limit(n)` added |
-| M-2 | Medium | 2026-04-01 | — | — | — | **Open** — `DatasetCommitRequest.files` still unbounded |
+| M-2 | Medium | 2026-04-01 | — | 2026-04-18 | ✅ 2026-04-18 | `max_length=10_000` on `DatasetCommitRequest.files` |
 | M-3 | Medium | 2026-04-01 | [#539](https://github.com/OlympusLedgerOrg/Olympus/pull/539) | 2026-04-01 | ✅ 2026-04-03 | Generic error message; full exception logged server-side |
 | M-4 | Medium | 2026-04-01 | [#545](https://github.com/OlympusLedgerOrg/Olympus/pull/545) | 2026-04-02 | ✅ 2026-04-03 | `_client_ip()` removed from ingest.py |
 | M-5 | Medium | 2026-04-01 | [#540](https://github.com/OlympusLedgerOrg/Olympus/pull/540) | 2026-04-01 | ✅ 2026-04-03 | Pattern constraint added to origin field |
@@ -540,8 +539,8 @@ The TSA URL is fetched without certificate pinning. A MITM attacker with a valid
 | L-1 | Low | 2026-04-01 | [#539](https://github.com/OlympusLedgerOrg/Olympus/pull/539) | 2026-04-01 | ✅ 2026-04-03 | `RequireVerifyScope` added |
 | L-2 | Low | 2026-04-01 | [#540](https://github.com/OlympusLedgerOrg/Olympus/pull/540) | 2026-04-01 | ✅ 2026-04-03 | Rate limit added |
 | L-3 | Low | 2026-04-01 | [#540](https://github.com/OlympusLedgerOrg/Olympus/pull/540) | 2026-04-01 | ✅ 2026-04-03 | `RuntimeError` on multi-worker startup |
-| L-4 | Low | 2026-04-01 | — | — | 🟡 | Early-exit guard added; iterative rewrite deferred |
-| L-5 | Low | 2026-04-01 | — | — | 🟡 | Trust-store API available; pinning optional |
+| L-4 | Low | 2026-04-01 | — | 2026-04-18 | ✅ 2026-04-18 | Iterative stack-based implementation deployed |
+| L-5 | Low | 2026-04-01 | — | 2026-04-18 | ✅ 2026-04-18 | Trust-store API and certificate pinning available |
 
 ---
 

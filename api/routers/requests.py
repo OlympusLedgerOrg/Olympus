@@ -167,7 +167,7 @@ async def list_requests(
     _rl: RateLimit,
     status: str | None = Query(None),
     agency_id: str | None = Query(None),
-    search: str | None = Query(None),
+    search: str | None = Query(None, max_length=256),
     page: int = Query(1, ge=1),
     per_page: int = Query(20, ge=1, le=100),
 ):

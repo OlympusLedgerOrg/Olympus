@@ -7,8 +7,11 @@ import json
 import logging
 import os
 import socket
+from collections import OrderedDict
 from datetime import datetime, timezone
 from pathlib import Path
+from threading import Lock
+from time import monotonic
 from typing import Any, cast
 from urllib.parse import quote, urlparse, urlunparse
 
@@ -114,6 +117,86 @@ if (
     )
 
 logger = logging.getLogger(__name__)
+
+
+# ── Brute-force protection for debug console auth ────────────────────────
+# Track failed authentication attempts per client IP.  After
+# _AUTH_MAX_FAILURES consecutive failures within the refill window the IP
+# is locked out for a cooldown period.  Uses a token-bucket model similar
+# to the API rate limiter (see api/auth.py).
+
+_AUTH_MAX_FAILURES: int = 5
+_AUTH_LOCKOUT_SECONDS: float = 300.0  # 5 minutes
+_AUTH_MAX_TRACKED_IPS: int = 10_000
+
+
+class _AuthFailureTracker:
+    """Per-IP failed auth attempt tracker with lockout.
+
+    Thread-safe via an internal lock.  Evicts the oldest entries when the
+    store exceeds ``_AUTH_MAX_TRACKED_IPS`` to bound memory usage.
+    """
+
+    def __init__(
+        self,
+        max_failures: int = _AUTH_MAX_FAILURES,
+        lockout_seconds: float = _AUTH_LOCKOUT_SECONDS,
+        max_tracked: int = _AUTH_MAX_TRACKED_IPS,
+    ) -> None:
+        self._max_failures = max_failures
+        self._lockout_seconds = lockout_seconds
+        self._max_tracked = max_tracked
+        self._lock = Lock()
+        # ip -> (failure_count, first_failure_time)
+        self._store: OrderedDict[str, tuple[int, float]] = OrderedDict()
+
+    def is_locked_out(self, ip: str) -> bool:
+        """Return True if the IP is currently locked out."""
+        with self._lock:
+            return self._is_locked_out_unlocked(ip)
+
+    def _is_locked_out_unlocked(self, ip: str) -> bool:
+        """Internal lockout check (caller must hold ``_lock``)."""
+        entry = self._store.get(ip)
+        if entry is None:
+            return False
+        count, first_failure = entry
+        now = monotonic()
+        # If the lockout window has expired, clear and allow
+        if now - first_failure >= self._lockout_seconds:
+            del self._store[ip]
+            return False
+        return count >= self._max_failures
+
+    def record_failure(self, ip: str) -> None:
+        """Record a failed auth attempt for the given IP."""
+        with self._lock:
+            now = monotonic()
+            entry = self._store.get(ip)
+            if entry is not None:
+                count, first_failure = entry
+                # Use the same expiry logic as is_locked_out: clear and
+                # start fresh when the lockout window has elapsed.
+                if now - first_failure >= self._lockout_seconds:
+                    del self._store[ip]
+                    entry = None
+            if entry is None:
+                self._store[ip] = (1, now)
+            else:
+                self._store[ip] = (count + 1, first_failure)
+                self._store.move_to_end(ip)
+            # Evict oldest entry to bound memory (one at a time since
+            # failures are recorded individually).
+            if len(self._store) > self._max_tracked:
+                self._store.popitem(last=False)
+
+    def record_success(self, ip: str) -> None:
+        """Clear failure tracking for a successfully authenticated IP."""
+        with self._lock:
+            self._store.pop(ip, None)
+
+
+_auth_tracker = _AuthFailureTracker()
 
 
 def validate_federation_url(url: str) -> None:
@@ -222,6 +305,10 @@ async def _debug_console_basic_auth(request: Request, call_next: Any) -> JSONRes
     When running in production mode (``OLYMPUS_ENV != 'development'``) and no
     password is configured, every request is rejected with HTTP 503 to prevent
     accidental unauthenticated exposure of the debug console.
+
+    Includes brute-force protection: after ``_AUTH_MAX_FAILURES`` consecutive
+    failed attempts from the same IP within the lockout window, further
+    attempts are rejected with HTTP 429 until the lockout expires.
     """
     # L4 audit fix: reject plaintext requests in production when behind a
     # proxy that advertises the original protocol via X-Forwarded-Proto.
@@ -253,6 +340,25 @@ async def _debug_console_basic_auth(request: Request, call_next: Any) -> JSONRes
         # Development mode with no password: allow unauthenticated access.
         return await call_next(request)
 
+    client_ip = request.client.host if request.client else None
+
+    # Reject requests where no client IP can be determined — these should not
+    # bypass auth or pollute the shared failure tracker (review comment fix).
+    if client_ip is None:
+        return JSONResponse(
+            status_code=400,
+            content={"detail": "Unable to determine client IP address."},
+        )
+
+    # Brute-force protection: check lockout before processing credentials.
+    if _auth_tracker.is_locked_out(client_ip):
+        logger.warning("Debug console auth locked out for IP %s", client_ip)
+        return JSONResponse(
+            status_code=429,
+            content={"detail": "Too many failed authentication attempts. Try again later."},
+            headers={"Retry-After": str(int(_AUTH_LOCKOUT_SECONDS))},
+        )
+
     auth_header = request.headers.get("authorization", "")
     if not auth_header.startswith("Basic "):
         return JSONResponse(
@@ -264,17 +370,20 @@ async def _debug_console_basic_auth(request: Request, call_next: Any) -> JSONRes
         decoded = base64.b64decode(auth_header[6:]).decode("utf-8")
         _, _, password = decoded.partition(":")
     except Exception:
+        _auth_tracker.record_failure(client_ip)
         return JSONResponse(
             status_code=401,
             content={"detail": "Invalid credentials"},
             headers={"WWW-Authenticate": 'Basic realm="Olympus Debug Console"'},
         )
     if not hmac.compare_digest(password.encode("utf-8"), _DEBUG_CONSOLE_PASSWORD.encode("utf-8")):
+        _auth_tracker.record_failure(client_ip)
         return JSONResponse(
             status_code=401,
             content={"detail": "Invalid credentials"},
             headers={"WWW-Authenticate": 'Basic realm="Olympus Debug Console"'},
         )
+    _auth_tracker.record_success(client_ip)
     return await call_next(request)
 
 
