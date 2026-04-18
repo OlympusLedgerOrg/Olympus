@@ -44,9 +44,7 @@ class TestStreamingJsonl:
 
         # Write unsorted records
         inp.write_text(
-            '{"z": 1, "a": 2}\n'
-            '{"b": 10, "a": 5}\n'
-            '{"a": 1, "b": 3}\n',
+            '{"z": 1, "a": 2}\n{"b": 10, "a": 5}\n{"a": 1, "b": 3}\n',
             encoding="utf-8",
         )
 
@@ -73,9 +71,7 @@ class TestStreamingJsonl:
         out = tmp_path / "output.jsonl"
 
         inp.write_text(
-            '{"id": "charlie", "val": 3}\n'
-            '{"id": "alice", "val": 1}\n'
-            '{"id": "bob", "val": 2}\n',
+            '{"id": "charlie", "val": 3}\n{"id": "alice", "val": 1}\n{"id": "bob", "val": 2}\n',
             encoding="utf-8",
         )
 
@@ -141,7 +137,9 @@ class TestStreamingJsonl:
         inp.write_text("\n".join(records) + "\n", encoding="utf-8")
 
         result = canonicalize_jsonl_streaming(
-            inp, out, chunk_mem=200  # tiny buffer → many spills
+            inp,
+            out,
+            chunk_mem=200,  # tiny buffer → many spills
         )
 
         assert result.record_count == 100
@@ -293,9 +291,7 @@ class TestCDC:
         data = os.urandom(100_000)
         stream = io.BytesIO(data)
 
-        result = content_defined_chunking(
-            stream, min_chunk=1024, avg_chunk=4096, max_chunk=16384
-        )
+        result = content_defined_chunking(stream, min_chunk=1024, avg_chunk=4096, max_chunk=16384)
 
         assert isinstance(result, CDCResult)
         assert result.total_bytes == len(data)
@@ -383,9 +379,7 @@ class TestCDC:
         data = os.urandom(50_000)
         f.write_bytes(data)
 
-        result = cdc_from_file(
-            f, min_chunk=512, avg_chunk=2048, max_chunk=8192
-        )
+        result = cdc_from_file(f, min_chunk=512, avg_chunk=2048, max_chunk=8192)
 
         assert result.total_bytes == len(data)
         assert len(result.chunks) >= 1
@@ -396,14 +390,10 @@ class TestCDC:
             content_defined_chunking(io.BytesIO(b"x"), min_chunk=0)
 
         with pytest.raises(ValueError, match="avg_chunk"):
-            content_defined_chunking(
-                io.BytesIO(b"x"), min_chunk=100, avg_chunk=50
-            )
+            content_defined_chunking(io.BytesIO(b"x"), min_chunk=100, avg_chunk=50)
 
         with pytest.raises(ValueError, match="max_chunk"):
-            content_defined_chunking(
-                io.BytesIO(b"x"), min_chunk=100, avg_chunk=200, max_chunk=100
-            )
+            content_defined_chunking(io.BytesIO(b"x"), min_chunk=100, avg_chunk=200, max_chunk=100)
 
 
 # ---------------------------------------------------------------------------
@@ -431,9 +421,7 @@ class TestDeterministicParquet:
         ]
         out = tmp_path / "test.parquet"
 
-        result = write_deterministic_parquet(
-            data, out, sort_columns=["id"], row_group_size=2
-        )
+        result = write_deterministic_parquet(data, out, sort_columns=["id"], row_group_size=2)
 
         assert isinstance(result, ParquetWriteResult)
         assert result.row_count == 3
@@ -453,10 +441,7 @@ class TestDeterministicParquet:
             write_deterministic_parquet,
         )
 
-        data = [
-            {"id": i, "value": f"val_{i}"}
-            for i in range(50)
-        ]
+        data = [{"id": i, "value": f"val_{i}"} for i in range(50)]
 
         out1 = tmp_path / "out1.parquet"
         out2 = tmp_path / "out2.parquet"
@@ -507,9 +492,7 @@ class TestDeterministicParquet:
         table = pa.table({"id": [3, 1, 2], "name": ["c", "a", "b"]})
         out = tmp_path / "test.parquet"
 
-        result = write_deterministic_parquet(
-            table, out, sort_columns=["id"]
-        )
+        result = write_deterministic_parquet(table, out, sort_columns=["id"])
 
         assert result.row_count == 3
 
@@ -559,15 +542,11 @@ class TestAuditMetadata:
         log_path = tmp_path / "audit.jsonl"
 
         log1 = AuditLog(log_path, operator="op1")
-        e1 = log1.record(
-            format_name="jcs", input_hash="a" * 64, output_hash="b" * 64
-        )
+        e1 = log1.record(format_name="jcs", input_hash="a" * 64, output_hash="b" * 64)
 
         # Re-open
         log2 = AuditLog(log_path, operator="op2")
-        e2 = log2.record(
-            format_name="html", input_hash="c" * 64, output_hash="d" * 64
-        )
+        e2 = log2.record(format_name="html", input_hash="c" * 64, output_hash="d" * 64)
 
         assert e2.previous_hash == e1.entry_hash
 
@@ -582,12 +561,8 @@ class TestAuditMetadata:
         log_path = tmp_path / "audit.jsonl"
         log = AuditLog(log_path, operator="test")
 
-        log.record(
-            format_name="jcs", input_hash="a" * 64, output_hash="b" * 64
-        )
-        log.record(
-            format_name="html", input_hash="c" * 64, output_hash="d" * 64
-        )
+        log.record(format_name="jcs", input_hash="a" * 64, output_hash="b" * 64)
+        log.record(format_name="html", input_hash="c" * 64, output_hash="d" * 64)
 
         # Tamper with the first entry by changing the input_hash value
         lines = log_path.read_text(encoding="utf-8").strip().split("\n")

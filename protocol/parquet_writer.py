@@ -168,9 +168,7 @@ def write_deterministic_parquet(
     elif _PYARROW_AVAILABLE and isinstance(data, pa.Table):
         table = data
     else:
-        raise TypeError(
-            f"data must be a pyarrow.Table or list[dict], got {type(data).__name__}"
-        )
+        raise TypeError(f"data must be a pyarrow.Table or list[dict], got {type(data).__name__}")
 
     if table.num_rows == 0:
         raise ValueError("Cannot write an empty table to Parquet")
@@ -180,8 +178,7 @@ def write_deterministic_parquet(
     for col in sort_cols:
         if col not in table.column_names:
             raise ValueError(
-                f"Sort column '{col}' not found in table columns: "
-                f"{table.column_names}"
+                f"Sort column '{col}' not found in table columns: {table.column_names}"
             )
 
     # Sort table
@@ -258,6 +255,7 @@ def verify_parquet_determinism(
     Returns:
         ``True`` if both files have the same BLAKE3 hash.
     """
+
     def _hash_file(path: str | Path) -> str:
         hasher = _blake3.blake3()
         with open(path, "rb") as fh:

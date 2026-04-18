@@ -33,7 +33,7 @@ import unicodedata
 from collections.abc import Iterator
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import IO, Any, BinaryIO, TextIO
+from typing import Any, BinaryIO, TextIO
 
 import blake3 as _blake3
 
@@ -49,7 +49,7 @@ from .canonicalizer import CanonicalizationError
 DEFAULT_CHUNK_MEM_BYTES: int = 128 * 1024 * 1024  # 128 MiB working memory
 """Maximum in-memory buffer before spilling to disk during external sort."""
 
-DEFAULT_CDC_MIN_CHUNK: int = 256 * 1024       # 256 KiB
+DEFAULT_CDC_MIN_CHUNK: int = 256 * 1024  # 256 KiB
 """Minimum CDC chunk size (bytes)."""
 
 DEFAULT_CDC_AVG_CHUNK: int = 1 * 1024 * 1024  # 1 MiB
@@ -95,15 +95,9 @@ def _open_run_files(
     Yields:
         List of line iterators, one per file.
     """
-    handles: list[IO[str]] = []
-    try:
-        for path in paths:
-            fh = open(path, encoding="utf-8")  # noqa: SIM115
-            handles.append(fh)
+    with contextlib.ExitStack() as stack:
+        handles = [stack.enter_context(Path(p).open(encoding="utf-8")) for p in paths]
         yield [iter(h) for h in handles]
-    finally:
-        for h in handles:
-            h.close()
 
 
 def _write_sorted_run(
@@ -252,9 +246,7 @@ def canonicalize_jsonl_streaming(
             for raw_line in fh:
                 if not raw_line.strip():
                     continue  # skip blank lines
-                canonical = _canonicalize_json_record(
-                    raw_line, scrub_homoglyphs=scrub_homoglyphs
-                )
+                canonical = _canonicalize_json_record(raw_line, scrub_homoglyphs=scrub_homoglyphs)
 
                 # If a sort key is specified, prepend it for sorting, then
                 # strip it after the merge.  Format: "<sort_value>\t<record>"
@@ -264,9 +256,7 @@ def canonicalize_jsonl_streaming(
                     if isinstance(key_val, str):
                         sort_prefix = key_val
                     else:
-                        sort_prefix = json.dumps(
-                            key_val, sort_keys=True, separators=(",", ":")
-                        )
+                        sort_prefix = json.dumps(key_val, sort_keys=True, separators=(",", ":"))
                     entry = f"{sort_prefix}\t{canonical}"
                 else:
                     entry = canonical
@@ -275,9 +265,7 @@ def canonicalize_jsonl_streaming(
                 buffer_bytes += len(entry.encode("utf-8"))
 
                 if buffer_bytes >= chunk_mem:
-                    run_paths.append(
-                        _write_sorted_run(buffer, tmp_dir, run_index)
-                    )
+                    run_paths.append(_write_sorted_run(buffer, tmp_dir, run_index))
                     run_index += 1
                     buffer.clear()
                     buffer_bytes = 0
@@ -292,9 +280,7 @@ def canonicalize_jsonl_streaming(
 
         with output_path.open("w", encoding="utf-8") as out:
             if not run_paths:
-                return StreamingJsonlResult(
-                    record_count=0, blake3_hex=hasher.hexdigest()
-                )
+                return StreamingJsonlResult(record_count=0, blake3_hex=hasher.hexdigest())
 
             # Open all runs and merge
             with _open_run_files(run_paths) as iterators:
@@ -311,9 +297,7 @@ def canonicalize_jsonl_streaming(
                     hasher.update(b"\n")
                     total_records += 1
 
-    return StreamingJsonlResult(
-        record_count=total_records, blake3_hex=hasher.hexdigest()
-    )
+    return StreamingJsonlResult(record_count=total_records, blake3_hex=hasher.hexdigest())
 
 
 # ---------------------------------------------------------------------------
@@ -368,9 +352,7 @@ def canonicalize_csv_streaming(
         """Canonicalize and serialize a single CSV row."""
         cells = [unicodedata.normalize("NFC", c.strip()) for c in row]
         buf = io.StringIO()
-        writer = csv.writer(
-            buf, delimiter=",", quoting=csv.QUOTE_MINIMAL, lineterminator=""
-        )
+        writer = csv.writer(buf, delimiter=",", quoting=csv.QUOTE_MINIMAL, lineterminator="")
         writer.writerow(cells)
         return buf.getvalue()
 
@@ -463,9 +445,7 @@ def canonicalize_csv_streaming(
                             hasher.update(line.encode("utf-8"))
                             hasher.update(b"\n")
 
-    return StreamingCsvResult(
-        record_count=row_count, blake3_hex=hasher.hexdigest()
-    )
+    return StreamingCsvResult(record_count=row_count, blake3_hex=hasher.hexdigest())
 
 
 # ---------------------------------------------------------------------------
