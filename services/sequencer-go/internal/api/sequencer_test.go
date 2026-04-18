@@ -1,12 +1,46 @@
 package api
 
 import (
+	"bytes"
+	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
+
+	"github.com/OlympusLedgerOrg/Olympus/services/sequencer/internal/storage"
 )
+
+// mockStorage is a test double for storageQuerier. It serves pre-loaded roots
+// by tree size and returns a configurable error for any unknown size.
+type mockStorage struct {
+	roots map[uint64]*storage.SignedRoot
+	err   error
+}
+
+func (m *mockStorage) StoreLeafAndDeltas(_ context.Context, _ []storage.SmtDelta, _ []byte, _ uint64, _ []byte, _ storage.LeafEntry) error {
+	return nil
+}
+
+func (m *mockStorage) StoreLeafAndDeltasBatch(_ context.Context, _ []storage.BatchLeaf, _ []byte, _ uint64, _ []byte) error {
+	return nil
+}
+
+func (m *mockStorage) GetLatestRoot(_ context.Context) ([]byte, uint64, error) {
+	return make([]byte, 32), 0, nil
+}
+
+func (m *mockStorage) GetRootByTreeSize(_ context.Context, treeSize uint64) (*storage.SignedRoot, error) {
+	if root, ok := m.roots[treeSize]; ok {
+		return root, nil
+	}
+	if m.err != nil {
+		return nil, m.err
+	}
+	return nil, errors.New("not found")
+}
 
 // TestHandleConsistencyProofGone verifies the deprecation contract for the
 // renamed /v1/get-consistency-proof route. The contract is part of the
@@ -71,6 +105,170 @@ func TestHandleConsistencyProofGone(t *testing.T) {
 		}
 		if body["message"] == "" {
 			t.Error("expected non-empty message field")
+		}
+	})
+}
+
+// TestHandleGetSignedRootPair locks down the /v1/get-signed-root-pair contract.
+// This is the live endpoint that /v1/get-consistency-proof (HTTP 410) points
+// callers toward, so its behaviour matters as much as the deprecation itself.
+func TestHandleGetSignedRootPair(t *testing.T) {
+	const token = "test-token"
+
+	oldRoot := &storage.SignedRoot{
+		RootHash:  bytes.Repeat([]byte{0xaa}, 32),
+		TreeSize:  5,
+		Signature: bytes.Repeat([]byte{0xbb}, 64),
+	}
+	newRoot := &storage.SignedRoot{
+		RootHash:  bytes.Repeat([]byte{0xcc}, 32),
+		TreeSize:  10,
+		Signature: bytes.Repeat([]byte{0xdd}, 64),
+	}
+
+	// Full store: both tree sizes present.
+	fullStore := &mockStorage{
+		roots: map[uint64]*storage.SignedRoot{5: oldRoot, 10: newRoot},
+		err:   errors.New("not found"),
+	}
+	s := &Sequencer{token: token, storage: fullStore}
+	handler := requireToken(s.token, s.handleGetSignedRootPair)
+
+	t.Run("requires token", func(t *testing.T) {
+		req := httptest.NewRequest(http.MethodGet, "/v1/get-signed-root-pair?old_tree_size=5&new_tree_size=10", nil)
+		w := httptest.NewRecorder()
+		handler(w, req)
+		if w.Code != http.StatusUnauthorized {
+			t.Fatalf("expected 401 without token, got %d", w.Code)
+		}
+	})
+
+	t.Run("method not allowed", func(t *testing.T) {
+		req := httptest.NewRequest(http.MethodPost, "/v1/get-signed-root-pair?old_tree_size=5&new_tree_size=10", nil)
+		req.Header.Set("X-Sequencer-Token", token)
+		w := httptest.NewRecorder()
+		handler(w, req)
+		if w.Code != http.StatusMethodNotAllowed {
+			t.Fatalf("expected 405, got %d", w.Code)
+		}
+	})
+
+	t.Run("missing old_tree_size", func(t *testing.T) {
+		req := httptest.NewRequest(http.MethodGet, "/v1/get-signed-root-pair?new_tree_size=10", nil)
+		req.Header.Set("X-Sequencer-Token", token)
+		w := httptest.NewRecorder()
+		handler(w, req)
+		if w.Code != http.StatusBadRequest {
+			t.Fatalf("expected 400, got %d", w.Code)
+		}
+	})
+
+	t.Run("missing new_tree_size", func(t *testing.T) {
+		req := httptest.NewRequest(http.MethodGet, "/v1/get-signed-root-pair?old_tree_size=5", nil)
+		req.Header.Set("X-Sequencer-Token", token)
+		w := httptest.NewRecorder()
+		handler(w, req)
+		if w.Code != http.StatusBadRequest {
+			t.Fatalf("expected 400, got %d", w.Code)
+		}
+	})
+
+	t.Run("invalid old_tree_size", func(t *testing.T) {
+		req := httptest.NewRequest(http.MethodGet, "/v1/get-signed-root-pair?old_tree_size=bad&new_tree_size=10", nil)
+		req.Header.Set("X-Sequencer-Token", token)
+		w := httptest.NewRecorder()
+		handler(w, req)
+		if w.Code != http.StatusBadRequest {
+			t.Fatalf("expected 400, got %d", w.Code)
+		}
+	})
+
+	t.Run("invalid new_tree_size", func(t *testing.T) {
+		req := httptest.NewRequest(http.MethodGet, "/v1/get-signed-root-pair?old_tree_size=5&new_tree_size=bad", nil)
+		req.Header.Set("X-Sequencer-Token", token)
+		w := httptest.NewRecorder()
+		handler(w, req)
+		if w.Code != http.StatusBadRequest {
+			t.Fatalf("expected 400, got %d", w.Code)
+		}
+	})
+
+	t.Run("old_tree_size exceeds new_tree_size", func(t *testing.T) {
+		req := httptest.NewRequest(http.MethodGet, "/v1/get-signed-root-pair?old_tree_size=10&new_tree_size=5", nil)
+		req.Header.Set("X-Sequencer-Token", token)
+		w := httptest.NewRecorder()
+		handler(w, req)
+		if w.Code != http.StatusBadRequest {
+			t.Fatalf("expected 400, got %d", w.Code)
+		}
+	})
+
+	t.Run("old root not found returns 404", func(t *testing.T) {
+		// Neither tree size 99 nor 100 is in the store.
+		req := httptest.NewRequest(http.MethodGet, "/v1/get-signed-root-pair?old_tree_size=99&new_tree_size=100", nil)
+		req.Header.Set("X-Sequencer-Token", token)
+		w := httptest.NewRecorder()
+		handler(w, req)
+		if w.Code != http.StatusNotFound {
+			t.Fatalf("expected 404, got %d", w.Code)
+		}
+	})
+
+	t.Run("new root not found returns 404", func(t *testing.T) {
+		// old_tree_size=5 exists; new_tree_size=99 does not.
+		partialStore := &mockStorage{
+			roots: map[uint64]*storage.SignedRoot{5: oldRoot},
+			err:   errors.New("not found"),
+		}
+		s2 := &Sequencer{token: token, storage: partialStore}
+		h2 := requireToken(s2.token, s2.handleGetSignedRootPair)
+		req := httptest.NewRequest(http.MethodGet, "/v1/get-signed-root-pair?old_tree_size=5&new_tree_size=99", nil)
+		req.Header.Set("X-Sequencer-Token", token)
+		w := httptest.NewRecorder()
+		h2(w, req)
+		if w.Code != http.StatusNotFound {
+			t.Fatalf("expected 404, got %d", w.Code)
+		}
+	})
+
+	t.Run("success returns signed root pair", func(t *testing.T) {
+		req := httptest.NewRequest(http.MethodGet, "/v1/get-signed-root-pair?old_tree_size=5&new_tree_size=10", nil)
+		req.Header.Set("X-Sequencer-Token", token)
+		w := httptest.NewRecorder()
+		handler(w, req)
+
+		if w.Code != http.StatusOK {
+			t.Fatalf("expected 200, got %d", w.Code)
+		}
+		if ct := w.Header().Get("Content-Type"); !strings.HasPrefix(ct, "application/json") {
+			t.Errorf("expected JSON Content-Type, got %q", ct)
+		}
+
+		var body map[string]interface{}
+		if err := json.NewDecoder(w.Body).Decode(&body); err != nil {
+			t.Fatalf("expected JSON body, decode failed: %v", err)
+		}
+
+		if got := body["old_tree_size"]; got != float64(5) {
+			t.Errorf("expected old_tree_size=5, got %v", got)
+		}
+		if got := body["new_tree_size"]; got != float64(10) {
+			t.Errorf("expected new_tree_size=10, got %v", got)
+		}
+		// old_root is 0xaa repeated 32 times — 64 hex characters.
+		wantOldRoot := strings.Repeat("aa", 32)
+		if got, _ := body["old_root"].(string); got != wantOldRoot {
+			t.Errorf("expected old_root=%q, got %q", wantOldRoot, got)
+		}
+		wantNewRoot := strings.Repeat("cc", 32)
+		if got, _ := body["new_root"].(string); got != wantNewRoot {
+			t.Errorf("expected new_root=%q, got %q", wantNewRoot, got)
+		}
+		if _, ok := body["old_signature"]; !ok {
+			t.Error("expected old_signature field in response body")
+		}
+		if _, ok := body["new_signature"]; !ok {
+			t.Error("expected new_signature field in response body")
 		}
 	})
 }
