@@ -251,7 +251,7 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
             "upgrade-insecure-requests;"
         )
         # Suppress server identity headers to avoid information disclosure.
-        response.headers["Server"] = "Olympus"
+        response.headers["Server"] = ""
         return response
 
 
