@@ -101,6 +101,7 @@ Key properties Olympus aims to protect:
 | Python dependency audit (pip-audit) | `.github/workflows/ci.yml` — `supply-chain` job |
 | Rust dependency audit (cargo-audit) | `.github/workflows/ci.yml` — `supply-chain` job |
 | Node.js dependency audit (npm audit) | `.github/workflows/ci.yml` — `supply-chain` job |
+| Go dependency audit (govulncheck) | `.github/workflows/ci.yml` — `supply-chain` job |
 | SBOM generation (CycloneDX) | `.github/workflows/ci.yml` — `supply-chain` job |
 | Dependabot version updates | `.github/dependabot.yml` — pip, cargo, npm, gomod, github-actions |
 | Type checking (mypy strict) | `.github/workflows/ci.yml` — `typecheck` job |
@@ -188,6 +189,78 @@ Deploy Olympus behind a reverse proxy (nginx, HAProxy, AWS ALB) configured with:
 If the API is accessed from browser-based clients, configure CORS via your reverse
 proxy or add the `CORSMiddleware` to the FastAPI application. The default configuration
 does not include CORS headers to prevent unintended cross-origin access.
+
+### Sequencer Token Trust Model
+
+The Go sequencer service (`services/sequencer-go/`) gates every write and read
+endpoint on a single shared-secret bearer token, supplied in the
+`X-Sequencer-Token` HTTP header and validated by the `requireToken` middleware
+in `services/sequencer-go/internal/api/sequencer.go`. The token is the **only**
+authentication or authorization control on the sequencer's HTTP surface.
+
+**Trust assumption (write this down explicitly):**
+
+> Possession of the sequencer token is sufficient to append any leaf to any
+> shard. The token holder is fully trusted to: append arbitrary records,
+> attribute them to arbitrary `shard_id` values, and trigger signed root
+> advancement across the entire CD-HS-ST.
+
+The cryptographic chain proves *what* was appended and *in what order* under a
+given signed root. It does **not** prove that the appender was authorized for
+the shard they wrote to — that distinction does not exist in v1.0.
+
+**Threats this model does NOT defend against:**
+
+- A compromised token holder forging or backdating leaves up to the next
+  signed root. Once a leaf is included in a signed root, it is permanently
+  part of the ledger and cryptographically indistinguishable from a
+  legitimate append.
+- A compromised token holder attributing leaves to a `shard_id` they do not
+  operationally own (e.g. a county clerk's token writing to a state
+  attorney-general shard).
+- Denial-of-service via leaf flooding from a leaked token. The `requireToken`
+  middleware does not rate-limit; that is a reverse-proxy concern.
+- Replay of captured signed-root responses across deployments — the token
+  does not bind the response to a specific verifier session.
+
+**Required operator mitigations:**
+
+1. **Network isolation** — Bind the sequencer to a private network only.
+   Never expose `services/sequencer-go` directly to the public internet. The
+   public API surface (FastAPI in `api/`) is the intended ingress.
+2. **Token rotation** — Rotate the shared secret on a documented cadence and
+   immediately on suspected compromise. The token has no embedded expiry.
+3. **Per-environment tokens** — Use distinct tokens for production, staging,
+   and development. Never reuse a production token in any non-production
+   context. Hard-coded development tokens (e.g. `dev-token`) MUST NOT appear
+   in production configuration.
+4. **Reverse-proxy audit logging** — Log every request reaching the
+   sequencer (timestamp, source IP, path, response status) at the reverse
+   proxy. The sequencer itself does not maintain a per-caller audit log;
+   reconstructing "who appended what" requires correlating proxy logs with
+   ledger entries by timestamp and shard.
+5. **Rate limiting at the network layer** — Apply per-source rate limits at
+   the reverse proxy. The sequencer enforces none.
+6. **Secret storage** — Treat the sequencer token as a secret of the same
+   class as `OLYMPUS_INGEST_SIGNING_KEY`. Never commit it; load from a
+   secret manager.
+
+**Explicit non-goals for v1.0:**
+
+- Per-shard authorization (no token-to-shard binding).
+- Multi-tenant token scoping (no notion of "tenant A may write only shards
+  matching `tenant-a:*`").
+- Capability tokens, OAuth flows, or short-lived credentials.
+- Cryptographic attestation of the appender's identity inside the leaf
+  itself.
+
+These limitations are accepted because Olympus v1.0 assumes a single
+operator running the sequencer behind their own access controls. Multi-party
+trust distribution is the role of **Guardian replication** (Phase 1+,
+documented in the architecture overview), which adds independent verifiers
+that re-sign the root and refuse to replicate unexpected appends. Until
+Guardian replication ships, the sequencer-token holder is a single point of
+trust for what enters the ledger.
 
 ### Trigger Gate Secret
 
