@@ -22,6 +22,7 @@ All operations stream through data without exceeding
 
 from __future__ import annotations
 
+import contextlib
 import csv
 import heapq
 import io
@@ -112,12 +113,10 @@ def _merge_sorted_runs(run_paths: list[str], output: TextIO) -> int:
     Returns:
         Total number of records written.
     """
-    file_handles: list[TextIO] = []
-    try:
+    with contextlib.ExitStack() as stack:
         iterators: list[Iterator[str]] = []
         for path in run_paths:
-            fh = open(path, encoding="utf-8")  # noqa: SIM115
-            file_handles.append(fh)
+            fh = stack.enter_context(open(path, encoding="utf-8"))
             iterators.append(iter(fh))
 
         # heapq.merge gives a sorted iterator over pre-sorted iterables.
@@ -126,9 +125,6 @@ def _merge_sorted_runs(run_paths: list[str], output: TextIO) -> int:
             output.write(line)
             count += 1
         return count
-    finally:
-        for fh in file_handles:
-            fh.close()
 
 
 # ---------------------------------------------------------------------------
@@ -279,12 +275,10 @@ def canonicalize_jsonl_streaming(
                 )
 
             # Open all runs and merge
-            file_handles: list[TextIO] = []
-            try:
+            with contextlib.ExitStack() as stack:
                 iterators: list[Iterator[str]] = []
                 for path in run_paths:
-                    fh_run = open(path, encoding="utf-8")  # noqa: SIM115
-                    file_handles.append(fh_run)
+                    fh_run = stack.enter_context(open(path, encoding="utf-8"))
                     iterators.append(iter(fh_run))
 
                 for line in heapq.merge(*iterators):
@@ -299,9 +293,6 @@ def canonicalize_jsonl_streaming(
                     hasher.update(line.encode("utf-8"))
                     hasher.update(b"\n")
                     total_records += 1
-            finally:
-                for fh_run in file_handles:
-                    fh_run.close()
 
     return StreamingJsonlResult(
         record_count=total_records, blake3_hex=hasher.hexdigest()
@@ -433,12 +424,10 @@ def canonicalize_csv_streaming(
                 hasher.update(b"\n")
 
             if sort_rows and run_paths:
-                file_handles: list[TextIO] = []
-                try:
+                with contextlib.ExitStack() as stack:
                     iterators: list[Iterator[str]] = []
                     for path in run_paths:
-                        fh = open(path, encoding="utf-8")  # noqa: SIM115
-                        file_handles.append(fh)
+                        fh = stack.enter_context(open(path, encoding="utf-8"))
                         iterators.append(iter(fh))
 
                     for line in heapq.merge(*iterators):
@@ -449,9 +438,6 @@ def canonicalize_csv_streaming(
                         out.write("\n")
                         hasher.update(line.encode("utf-8"))
                         hasher.update(b"\n")
-                finally:
-                    for fh in file_handles:
-                        fh.close()
             elif run_paths:
                 # No sorting needed — just concatenate
                 for path in run_paths:

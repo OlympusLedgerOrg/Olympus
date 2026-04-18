@@ -33,6 +33,7 @@ from typing import Any
 
 import blake3 as _blake3
 
+from .canonical_json import canonical_json_encode
 from .canonicalization_versions import (
     _CANONICAL_MODULE_VERSIONS,
     create_version_manifest,
@@ -96,7 +97,7 @@ def _compute_entry_hash(entry_dict: dict[str, Any]) -> str:
         Hex-encoded BLAKE3 digest.
     """
     hashable = {k: v for k, v in sorted(entry_dict.items()) if k != "entry_hash"}
-    canonical = json.dumps(hashable, sort_keys=True, separators=(",", ":"), ensure_ascii=True)
+    canonical = canonical_json_encode(hashable)
     return _blake3.blake3(canonical.encode("utf-8")).hexdigest()
 
 
@@ -206,7 +207,7 @@ class AuditLog:
             # Append to log
             self._path.parent.mkdir(parents=True, exist_ok=True)
             with self._path.open("a", encoding="utf-8") as fh:
-                fh.write(json.dumps(entry_dict, sort_keys=True, separators=(",", ":")))
+                fh.write(canonical_json_encode(entry_dict))
                 fh.write("\n")
 
             self._last_hash = entry_hash
