@@ -158,7 +158,7 @@ class AuditLog:
             if not last_line:
                 return ""
             entry = json.loads(last_line)
-            return entry.get("entry_hash", "")
+            return str(entry.get("entry_hash", ""))
         except (json.JSONDecodeError, OSError):
             return ""
 

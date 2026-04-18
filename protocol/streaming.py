@@ -30,9 +30,10 @@ import json
 import os
 import tempfile
 import unicodedata
+from collections.abc import Iterator
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import IO, Any, BinaryIO, Iterator, TextIO
+from typing import IO, Any, BinaryIO, TextIO
 
 import blake3 as _blake3
 
@@ -79,6 +80,32 @@ _init_buzhash_table()
 # ---------------------------------------------------------------------------
 
 
+@contextlib.contextmanager
+def _open_run_files(
+    paths: list[str],
+) -> Iterator[list[Iterator[str]]]:
+    """Open multiple sorted-run files and yield their line iterators.
+
+    All file handles are guaranteed to be closed when the context exits,
+    even if an exception is raised during iteration.
+
+    Args:
+        paths: Paths to the sorted run files.
+
+    Yields:
+        List of line iterators, one per file.
+    """
+    handles: list[IO[str]] = []
+    try:
+        for path in paths:
+            fh = open(path, encoding="utf-8")  # noqa: SIM115
+            handles.append(fh)
+        yield [iter(h) for h in handles]
+    finally:
+        for h in handles:
+            h.close()
+
+
 def _write_sorted_run(
     records: list[str],
     tmp_dir: str,
@@ -113,12 +140,7 @@ def _merge_sorted_runs(run_paths: list[str], output: TextIO) -> int:
     Returns:
         Total number of records written.
     """
-    with contextlib.ExitStack() as stack:
-        iterators: list[Iterator[str]] = []
-        for path in run_paths:
-            fh = stack.enter_context(open(path, encoding="utf-8"))
-            iterators.append(iter(fh))
-
+    with _open_run_files(run_paths) as iterators:
         # heapq.merge gives a sorted iterator over pre-sorted iterables.
         count = 0
         for line in heapq.merge(*iterators):
@@ -275,12 +297,7 @@ def canonicalize_jsonl_streaming(
                 )
 
             # Open all runs and merge
-            with contextlib.ExitStack() as stack:
-                iterators: list[Iterator[str]] = []
-                for path in run_paths:
-                    fh_run = stack.enter_context(open(path, encoding="utf-8"))
-                    iterators.append(iter(fh_run))
-
+            with _open_run_files(run_paths) as iterators:
                 for line in heapq.merge(*iterators):
                     line = line.rstrip("\n")
                     if not line:
@@ -424,12 +441,7 @@ def canonicalize_csv_streaming(
                 hasher.update(b"\n")
 
             if sort_rows and run_paths:
-                with contextlib.ExitStack() as stack:
-                    iterators: list[Iterator[str]] = []
-                    for path in run_paths:
-                        fh = stack.enter_context(open(path, encoding="utf-8"))
-                        iterators.append(iter(fh))
-
+                with _open_run_files(run_paths) as iterators:
                     for line in heapq.merge(*iterators):
                         line = line.rstrip("\n")
                         if not line:

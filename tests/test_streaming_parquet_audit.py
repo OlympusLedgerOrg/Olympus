@@ -14,13 +14,11 @@ Covers:
 import io
 import json
 import os
-import tempfile
 from pathlib import Path
 
 import pytest
 
 from protocol.streaming import (
-    CDCChunk,
     CDCResult,
     StreamingCsvResult,
     StreamingJsonlResult,
@@ -29,6 +27,7 @@ from protocol.streaming import (
     cdc_from_file,
     content_defined_chunking,
 )
+
 
 # ---------------------------------------------------------------------------
 # Streaming JSONL canonicalizer
@@ -80,7 +79,7 @@ class TestStreamingJsonl:
             encoding="utf-8",
         )
 
-        result = canonicalize_jsonl_streaming(inp, out, sort_key="id")
+        canonicalize_jsonl_streaming(inp, out, sort_key="id")
 
         lines = out.read_text(encoding="utf-8").strip().split("\n")
         ids = [json.loads(line)["id"] for line in lines]

@@ -24,12 +24,13 @@ reproducible.
 
 from __future__ import annotations
 
-import json
+from collections.abc import Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Sequence
+from typing import Any
 
 import blake3 as _blake3
+
 
 try:
     import pyarrow as pa
@@ -98,7 +99,7 @@ def _ensure_pyarrow() -> None:
         )
 
 
-def _dicts_to_table(records: Sequence[dict[str, Any]]) -> "pa.Table":
+def _dicts_to_table(records: Sequence[dict[str, Any]]) -> pa.Table:
     """Convert a list of flat dicts to a pyarrow Table.
 
     All values are inferred by pyarrow; the caller should ensure
