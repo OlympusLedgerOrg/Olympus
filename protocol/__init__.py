@@ -37,6 +37,10 @@ __all__ = [
     "hashes",
     # Ingest (multi-format; depends on hashes + canonical)
     "canonicalizer",
+    # Streaming / large-dataset canonicalization
+    "streaming",
+    "parquet_writer",
+    "audit_metadata",
     # Commit
     "epochs",
     "events",

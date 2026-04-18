@@ -77,6 +77,9 @@ observability = [
     "opentelemetry-sdk==1.40.0",
     "prometheus-client==0.25.0",
 ]
+parquet = [
+    "pyarrow>=15.0.0",
+]
 
 [tool.setuptools]
 include-package-data = true
