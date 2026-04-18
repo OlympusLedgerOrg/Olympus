@@ -15,26 +15,4 @@
 #
 # Mirrors the policy in cargo-audit-baseline.txt and pip-audit-baseline.txt.
 
-# verifiers/go stdlib vulnerabilities present in the CI Go toolchain (go1.24.x).
-# The verifiers/go module has no network-facing code and no user-controlled
-# input paths that exercise these stdlib call sites. Addressed by upgrading
-# the Go toolchain; tracked in https://github.com/OlympusLedgerOrg/Olympus/issues/694.
-GO-2026-4601
-CVE-2026-25679
-GO-2026-4602
-CVE-2026-27139
-GO-2026-4603
-CVE-2026-27142
-GO-2026-4864
-CVE-2026-32282
-GO-2026-4865
-CVE-2026-32289
-GO-2026-4869
-CVE-2026-32288
-GO-2026-4870
-CVE-2026-32283
-GO-2026-4946
-CVE-2026-32281
-GO-2026-4947
-CVE-2026-32280
-
+# (no current suppressions)
