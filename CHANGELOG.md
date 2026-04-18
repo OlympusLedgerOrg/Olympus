@@ -2,6 +2,47 @@
 
 All notable changes to the Olympus protocol are documented in this file.
 
+## Unreleased
+
+### Breaking Changes
+
+- **Sequencer endpoint renamed: `/v1/get-consistency-proof` →
+  `/v1/get-signed-root-pair`** (`services/sequencer-go/internal/api/sequencer.go`)
+  The original name was misleading: the handler returned a pair of signed
+  roots for offline comparison, not an RFC-6962 / Trillian consistency
+  proof. Anything an external verifier might have built on the old name
+  would have overstated the cryptographic guarantee (H-2). The new name
+  describes what the endpoint actually returns. The old path is preserved
+  for one release as a deprecated alias that returns HTTP `410 Gone` with
+  a body pointing to the successor (rather than a silent 301 redirect, to
+  avoid masking the semantic change). The deprecated alias will be removed
+  in the next release. A real RFC-6962-style consistency proof for the
+  CD-HS-ST sparse Merkle tree is tracked as a follow-up; the proof shape
+  differs from RFC 6962 and requires its own design.
+
+### Documentation
+
+- **SECURITY.md: Sequencer Token Trust Model** — Documented the v1.0 trust
+  assumption that possession of the sequencer's `X-Sequencer-Token`
+  bearer token grants append authority for any leaf in any shard, the
+  threats this model does not defend against, the operator mitigations
+  required to deploy the sequencer safely, and explicit non-goals for
+  v1.0 (per-shard authorization, multi-tenant scoping, capability
+  tokens) with a forward reference to Guardian replication for
+  multi-party trust distribution.
+
+### CI / Supply Chain
+
+- **govulncheck added to `supply-chain` job** (`.github/workflows/ci.yml`)
+  The Go modules under `verifiers/go/` and `services/sequencer-go/` are
+  now audited on every PR alongside the existing `pip-audit`,
+  `cargo audit`, and `npm audit` steps. Suppressions are managed via
+  `go-vuln-baseline.txt` (mirrors the format of `pip-audit-baseline.txt`
+  and `cargo-audit-baseline.txt`) and applied by
+  `scripts/run-govulncheck.sh`, which post-filters `govulncheck -json`
+  output by OSV id and aliases (CVE / GHSA). Only call-graph–reachable
+  findings cause CI failure.
+
 ## canonical_v2 (Round 2) — 2026-03-26
 
 ### Breaking Changes

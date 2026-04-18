@@ -76,7 +76,10 @@ echo "::endgroup::"
 
 # Build a map: OSV id -> space-separated aliases.
 # govulncheck emits separate {osv: ...} and {finding: ...} JSON objects.
-ALIAS_MAP="$(jq -r 'select(.osv) | [.osv.id] + (.osv.aliases // []) | join(" ")' "${JSON_OUT}" || true)"
+# Deduplicate by OSV id in case the same record is emitted more than once
+# (e.g. once per finding); sort -u guarantees the awk lookup below sees
+# at most one alias line per OSV id.
+ALIAS_MAP="$(jq -r 'select(.osv) | [.osv.id] + (.osv.aliases // []) | join(" ")' "${JSON_OUT}" | sort -u || true)"
 
 # Collect distinct OSV ids that have actual call-graph findings.
 FINDING_IDS="$(jq -r 'select(.finding) | .finding.osv' "${JSON_OUT}" 2>/dev/null | sort -u || true)"

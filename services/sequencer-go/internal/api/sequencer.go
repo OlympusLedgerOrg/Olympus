@@ -55,7 +55,18 @@ func (s *Sequencer) Handler() http.Handler {
 	mux.HandleFunc("/v1/queue-leaves", requireToken(s.token, s.handleQueueLeaves))
 	mux.HandleFunc("/v1/get-latest-root", requireToken(s.token, s.handleGetLatestRoot))
 	mux.HandleFunc("/v1/get-inclusion-proof", requireToken(s.token, s.handleGetInclusionProof))
-	mux.HandleFunc("/v1/get-consistency-proof", requireToken(s.token, s.handleGetConsistencyProof))
+	// /v1/get-signed-root-pair returns the two signed roots at old_tree_size
+	// and new_tree_size for offline comparison. This is *not* an
+	// RFC-6962-style consistency proof; the sequencer does not currently
+	// produce one. See docs/adr/0001-incremental-tree-reconstruction.md and
+	// the SECURITY.md sequencer-token trust model for context.
+	mux.HandleFunc("/v1/get-signed-root-pair", requireToken(s.token, s.handleGetSignedRootPair))
+	// Deprecated alias for /v1/get-signed-root-pair. Returns HTTP 410 Gone
+	// pointing callers to the new path. The old name was misleading: it
+	// suggested an RFC-6962 consistency proof but only ever returned a pair
+	// of signed roots. Will be removed in the next release after callers
+	// have migrated.
+	mux.HandleFunc("/v1/get-consistency-proof", requireToken(s.token, s.handleConsistencyProofGone))
 
 	return mux
 }
@@ -474,7 +485,21 @@ func (s *Sequencer) handleGetInclusionProof(w http.ResponseWriter, r *http.Reque
 	}
 }
 
-func (s *Sequencer) handleGetConsistencyProof(w http.ResponseWriter, r *http.Request) {
+// handleGetSignedRootPair returns the signed roots at two tree sizes for
+// offline comparison.
+//
+// IMPORTANT: this is **not** an RFC-6962 / Trillian consistency proof. It
+// does not prove that the older root is a prefix of the newer one — it
+// simply returns both signed roots and lets the caller verify the
+// signatures and compare the hashes. The sequencer does not currently
+// produce a real consistency proof (the CD-HS-ST is a sparse Merkle tree
+// and the proof shape differs from RFC 6962); see the follow-up issue
+// linked from CHANGELOG.md.
+//
+// The old route /v1/get-consistency-proof is preserved as a deprecated
+// alias that returns HTTP 410 Gone to avoid silently misleading any
+// external verifier built against the old name.
+func (s *Sequencer) handleGetSignedRootPair(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
@@ -535,5 +560,30 @@ func (s *Sequencer) handleGetConsistencyProof(w http.ResponseWriter, r *http.Req
 	w.Header().Set("Content-Type", "application/json")
 	if err := json.NewEncoder(w).Encode(resp); err != nil {
 		log.Printf("Failed to encode response: %v", err)
+	}
+}
+
+// handleConsistencyProofGone returns HTTP 410 Gone for the deprecated
+// /v1/get-consistency-proof route.
+//
+// The original handler was misnamed: it returned a pair of signed roots
+// rather than an RFC-6962 consistency proof. Renaming it (rather than
+// silently 301-redirecting) ensures any external verifier built against
+// the misleading name fails loudly instead of receiving the same response
+// under a name that overstates the cryptographic guarantee. See CHANGELOG
+// "Breaking changes" for the migration path.
+func (s *Sequencer) handleConsistencyProofGone(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Deprecation", "true")
+	w.Header().Set("Link", "</v1/get-signed-root-pair>; rel=\"successor-version\"")
+	w.WriteHeader(http.StatusGone)
+	body := map[string]string{
+		"error":          "endpoint_renamed",
+		"message":        "/v1/get-consistency-proof has been renamed to /v1/get-signed-root-pair. The original name was misleading: this endpoint returns a pair of signed roots for offline comparison, not an RFC-6962 consistency proof.",
+		"successor":      "/v1/get-signed-root-pair",
+		"removal_notice": "This deprecated alias will be removed in the next release.",
+	}
+	if err := json.NewEncoder(w).Encode(body); err != nil {
+		log.Printf("Failed to encode 410 Gone body: %v", err)
 	}
 }
