@@ -32,6 +32,7 @@ CANONICALIZER_VERSIONS: dict[str, str] = {
     "docx": "1.1.0-c14n-strict",
     "pdf": "1.4.0-pikepdf-10.3.0-linearized",
     "jsonl": "1.0.0-canonical-v2-sorted",
+    "parquet": "1.0.0-pyarrow-23.0.1-single-rowgroup-snappy",
 }
 
 

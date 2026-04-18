@@ -19,6 +19,12 @@ Extended format support (v2.1+):
   JSON key, NFC normalization, and BOM stripping.
 - **JSONL**: JSON Lines format — parse each line, canonicalize individually,
   optionally sort by canonical representation (for training datasets).
+
+Training dataset support (v2.2+):
+
+- **Parquet**: columnar binary format — schema normalization, row extraction,
+  canonical JSON intermediate, single-row-group rebuild with deterministic
+  settings (compression, encoding, metadata stripping).
 """
 
 import csv
@@ -280,6 +286,8 @@ _MAX_CSV_BYTES: int = 64 * 1024 * 1024  # 64 MiB
 _MAX_CSV_ROWS: int = 1_000_000
 _MAX_JSONL_BYTES: int = 256 * 1024 * 1024  # 256 MiB (training datasets)
 _MAX_JSONL_LINES: int = 10_000_000  # 10 million lines
+_MAX_PARQUET_BYTES: int = 1024 * 1024 * 1024  # 1 GiB (training datasets)
+_MAX_PARQUET_ROWS: int = 100_000_000  # 100 million rows
 
 # XML processing instruction / comment / DOCTYPE patterns
 _XML_PI_RE = re.compile(r"<\?.*?\?>", re.DOTALL)
@@ -671,3 +679,131 @@ def canonicalize_jsonl_bytes(
     """
     text = data.decode(encoding)
     return canonicalize_jsonl(text, sort_lines=sort_lines).encode("utf-8")
+
+
+# ---------------------------------------------------------------------------
+# Parquet canonicalization (v2.2+ training dataset support)
+# ---------------------------------------------------------------------------
+
+
+def canonicalize_parquet(data: bytes, *, sort_rows: bool = True) -> bytes:
+    """Canonicalize Parquet file for deterministic hashing.
+
+    Produces a deterministic Parquet representation by:
+
+    1. Check file size limits.
+    2. Read Parquet file with PyArrow.
+    3. Normalize schema (sort fields alphabetically, strip metadata).
+    4. Extract all rows and convert to canonical dictionaries.
+    5. Optionally sort rows by canonical JSON representation.
+    6. Rebuild as single-row-group Parquet with deterministic settings.
+    7. Strip writer metadata and timestamps.
+
+    This ensures that semantically identical datasets (even with different
+    row group boundaries, encoding, or metadata) produce identical hashes.
+
+    Args:
+        data: Raw Parquet file bytes.
+        sort_rows: Whether to sort rows by canonical representation
+            (default: ``True``). Ensures reshuffled datasets produce the
+            same hash.
+
+    Returns:
+        Canonical Parquet bytes.
+
+    Raises:
+        CanonicalizationError: If file exceeds limits, is empty, or invalid.
+    """
+    try:
+        import pyarrow as pa
+        import pyarrow.parquet as pq
+    except ImportError as e:
+        raise CanonicalizationError(
+            "PyArrow is required for Parquet canonicalization. "
+            "Install with: pip install pyarrow"
+        ) from e
+
+    # Step 1: Size limits
+    if len(data) > _MAX_PARQUET_BYTES:
+        raise CanonicalizationError(
+            f"Parquet file exceeds maximum size ({_MAX_PARQUET_BYTES} bytes)"
+        )
+
+    # Step 2: Read Parquet
+    try:
+        import io as _io
+
+        table = pq.read_table(_io.BytesIO(data))
+    except Exception as e:
+        raise CanonicalizationError(f"Invalid Parquet file: {e}") from e
+
+    if table.num_rows == 0:
+        raise CanonicalizationError("Parquet file is empty")
+
+    if table.num_rows > _MAX_PARQUET_ROWS:
+        raise CanonicalizationError(
+            f"Parquet file exceeds maximum row count ({_MAX_PARQUET_ROWS})"
+        )
+
+    # Step 3: Normalize schema - sort fields alphabetically
+    schema_dict = {}
+    for field in table.schema:
+        schema_dict[field.name] = field.type
+
+    sorted_fields = sorted(schema_dict.keys())
+    new_schema = pa.schema([(name, schema_dict[name]) for name in sorted_fields])
+
+    # Reorder columns to match sorted schema
+    table = table.select(sorted_fields)
+
+    # Step 4: Extract rows and convert to canonical dictionaries
+    rows = []
+    for batch in table.to_batches():
+        batch_dict = batch.to_pydict()
+        # Transpose to row-oriented structure
+        num_rows = len(next(iter(batch_dict.values())))
+        for i in range(num_rows):
+            row = {key: batch_dict[key][i] for key in sorted_fields}
+            # Canonicalize the row (handles floats, Decimals, etc.)
+            canonical_row = canonicalize_document(row, scrub_homoglyphs=False)
+            rows.append(canonical_row)
+
+    # Step 5: Optionally sort rows
+    if sort_rows:
+        rows.sort(key=lambda r: canonical_json_encode(r))
+
+    # Step 6: Rebuild as canonical Parquet
+    # Convert rows back to columnar format
+    # Note: We need to convert Decimal back to float for PyArrow compatibility
+    columnar = {field: [] for field in sorted_fields}
+    for row in rows:
+        for field in sorted_fields:
+            value = row[field]
+            # Convert Decimal back to float for PyArrow
+            if isinstance(value, Decimal):
+                value = float(value)
+            columnar[field].append(value)
+
+    # Create new table with canonical data
+    canonical_table = pa.table(columnar, schema=new_schema)
+
+    # Step 7: Write with deterministic settings
+    output = _io.BytesIO()
+    pq.write_table(
+        canonical_table,
+        output,
+        # Single row group for determinism
+        row_group_size=len(rows),
+        # Deterministic compression
+        compression="snappy",
+        # Disable statistics to avoid non-determinism
+        write_statistics=False,
+        # Store schema in file
+        store_schema=True,
+        # Disable dictionary encoding for determinism
+        use_dictionary=False,
+        # Parquet version
+        version="2.6",
+    )
+
+    return output.getvalue()

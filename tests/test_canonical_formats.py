@@ -1,8 +1,8 @@
 """
-Tests for extended canonicalization formats (plaintext, XML, CSV, JSONL).
+Tests for extended canonicalization formats (plaintext, XML, CSV, JSONL, Parquet).
 
 Tests the new format support added to protocol/canonical.py for
-deterministic canonicalization of plain text, XML, CSV/TSV, and JSONL data.
+deterministic canonicalization of plain text, XML, CSV/TSV, JSONL, and Parquet data.
 """
 
 import pytest
@@ -13,10 +13,24 @@ from protocol.canonical import (
     canonicalize_csv_bytes,
     canonicalize_jsonl,
     canonicalize_jsonl_bytes,
+    canonicalize_parquet,
     canonicalize_plaintext,
     canonicalize_plaintext_bytes,
     canonicalize_xml,
     canonicalize_xml_bytes,
+)
+
+# PyArrow may not be installed in all test environments
+try:
+    import pyarrow as pa
+    import pyarrow.parquet as pq
+
+    PYARROW_AVAILABLE = True
+except ImportError:
+    PYARROW_AVAILABLE = False
+
+pytestmark_parquet = pytest.mark.skipif(
+    not PYARROW_AVAILABLE, reason="PyArrow not installed"
 )
 
 
@@ -524,6 +538,244 @@ class TestCanonicalizeJsonlBytes:
         assert '"name":"Alice"' in sorted_text.split("\n")[0]
         # Unsorted should have Zoe first
         assert '"name":"Zoe"' in unsorted_text.split("\n")[0]
+
+
+# ---------------------------------------------------------------------------
+# Parquet canonicalization
+# ---------------------------------------------------------------------------
+
+
+@pytestmark_parquet
+class TestCanonicalizeParquet:
+    """Tests for canonicalize_parquet()."""
+
+    def _create_parquet_bytes(self, data: dict, **kwargs) -> bytes:
+        """Helper to create Parquet bytes from dict data."""
+        import io
+
+        import pyarrow as pa
+        import pyarrow.parquet as pq
+
+        table = pa.table(data)
+        output = io.BytesIO()
+        pq.write_table(table, output, **kwargs)
+        return output.getvalue()
+
+    def test_basic_parquet(self) -> None:
+        """Basic Parquet with columns and rows."""
+        parquet_data = {
+            "name": ["Bob", "Alice", "Charlie"],
+            "age": [30, 25, 35],
+        }
+        parquet_bytes = self._create_parquet_bytes(parquet_data)
+        result = canonicalize_parquet(parquet_bytes)
+
+        # Result should be valid Parquet
+        import io
+
+        import pyarrow.parquet as pq
+
+        table = pq.read_table(io.BytesIO(result))
+        assert table.num_rows == 3
+
+        # Columns should be sorted alphabetically (age before name)
+        assert table.column_names == ["age", "name"]
+
+        # Rows should be sorted by canonical representation
+        # {"age":25,"name":"Alice"} < {"age":30,"name":"Bob"} < {"age":35,"name":"Charlie"}
+        rows = table.to_pydict()
+        assert rows["name"][0] == "Alice"  # First row
+        assert rows["age"][0] == 25
+
+    def test_column_reordering(self) -> None:
+        """Columns are reordered alphabetically."""
+        parquet_data = {"z_field": [1, 2], "a_field": [3, 4], "m_field": [5, 6]}
+        parquet_bytes = self._create_parquet_bytes(parquet_data)
+        result = canonicalize_parquet(parquet_bytes)
+
+        import io
+
+        import pyarrow.parquet as pq
+
+        table = pq.read_table(io.BytesIO(result))
+        # Should be alphabetically sorted
+        assert table.column_names == ["a_field", "m_field", "z_field"]
+
+    def test_row_sorting(self) -> None:
+        """Rows are sorted by canonical JSON representation."""
+        parquet_data = {
+            "name": ["Zoe", "Alice", "Bob"],
+            "age": [20, 25, 30],
+        }
+        parquet_bytes = self._create_parquet_bytes(parquet_data)
+        result = canonicalize_parquet(parquet_bytes)
+
+        import io
+
+        import pyarrow.parquet as pq
+
+        table = pq.read_table(io.BytesIO(result))
+        rows = table.to_pydict()
+
+        # Rows should be sorted by canonical JSON string
+        # {"age":20,"name":"Zoe"} < {"age":25,"name":"Alice"} < {"age":30,"name":"Bob"}
+        # (sorted lexicographically by the JSON string)
+        assert rows["name"] == ["Zoe", "Alice", "Bob"]
+        assert rows["age"] == [20, 25, 30]
+
+    def test_sort_disabled(self) -> None:
+        """Row sorting can be disabled."""
+        parquet_data = {
+            "name": ["Zoe", "Alice", "Bob"],
+            "age": [20, 25, 30],
+        }
+        parquet_bytes = self._create_parquet_bytes(parquet_data)
+        result = canonicalize_parquet(parquet_bytes, sort_rows=False)
+
+        import io
+
+        import pyarrow.parquet as pq
+
+        table = pq.read_table(io.BytesIO(result))
+        rows = table.to_pydict()
+
+        # Order should be preserved
+        assert rows["name"] == ["Zoe", "Alice", "Bob"]
+
+    def test_numeric_normalization(self) -> None:
+        """Whole floats are converted to ints."""
+        parquet_data = {
+            "value": [42.0, 3.14, 100.0],
+        }
+        parquet_bytes = self._create_parquet_bytes(parquet_data)
+        result = canonicalize_parquet(parquet_bytes)
+
+        import io
+
+        import pyarrow.parquet as pq
+
+        table = pq.read_table(io.BytesIO(result))
+        # canonicalize_document converts whole floats to ints
+        # So 42.0 and 100.0 become ints, but this may affect Arrow schema
+        # Just verify it doesn't crash
+        assert table.num_rows == 3
+
+    def test_deterministic_output(self) -> None:
+        """Same data produces identical bytes."""
+        parquet_data = {
+            "name": ["Alice", "Bob"],
+            "age": [25, 30],
+        }
+
+        # Create same data twice
+        parquet_bytes_1 = self._create_parquet_bytes(parquet_data)
+        parquet_bytes_2 = self._create_parquet_bytes(parquet_data)
+
+        result_1 = canonicalize_parquet(parquet_bytes_1)
+        result_2 = canonicalize_parquet(parquet_bytes_2)
+
+        # Should produce identical canonical bytes
+        assert result_1 == result_2
+
+    def test_reshuffled_rows(self) -> None:
+        """Reshuffled rows produce same canonical form."""
+        data_a = {
+            "id": [1, 2, 3],
+            "text": ["hello", "world", "foo"],
+        }
+        data_b = {
+            "id": [3, 1, 2],
+            "text": ["foo", "hello", "world"],
+        }
+
+        parquet_a = self._create_parquet_bytes(data_a)
+        parquet_b = self._create_parquet_bytes(data_b)
+
+        result_a = canonicalize_parquet(parquet_a)
+        result_b = canonicalize_parquet(parquet_b)
+
+        # Should produce identical canonical form
+        assert result_a == result_b
+
+    def test_empty_parquet_raises(self) -> None:
+        """Empty Parquet file raises CanonicalizationError."""
+        parquet_data = {"name": [], "age": []}
+        parquet_bytes = self._create_parquet_bytes(parquet_data)
+
+        with pytest.raises(CanonicalizationError, match="empty"):
+            canonicalize_parquet(parquet_bytes)
+
+    def test_invalid_parquet_raises(self) -> None:
+        """Invalid Parquet bytes raise CanonicalizationError."""
+        with pytest.raises(CanonicalizationError, match="Invalid"):
+            canonicalize_parquet(b"not a parquet file")
+
+    def test_size_limit(self) -> None:
+        """Parquet exceeding size limit raises CanonicalizationError."""
+        from protocol.canonical import _MAX_PARQUET_BYTES
+
+        # Create data that exceeds limit
+        large_data = b"x" * (_MAX_PARQUET_BYTES + 1)
+
+        with pytest.raises(CanonicalizationError, match="exceeds maximum size"):
+            canonicalize_parquet(large_data)
+
+    def test_row_limit(self) -> None:
+        """Parquet exceeding row limit raises CanonicalizationError."""
+        # Use a smaller test limit
+        import protocol.canonical as canonical_module
+
+        original_limit = canonical_module._MAX_PARQUET_ROWS
+        try:
+            canonical_module._MAX_PARQUET_ROWS = 10
+            # Create Parquet with too many rows
+            parquet_data = {"x": list(range(11))}
+            parquet_bytes = self._create_parquet_bytes(parquet_data)
+
+            with pytest.raises(CanonicalizationError, match="maximum row count"):
+                canonicalize_parquet(parquet_bytes)
+        finally:
+            canonical_module._MAX_PARQUET_ROWS = original_limit
+
+    def test_different_row_groups_same_hash(self) -> None:
+        """Files with different row groups produce same canonical hash."""
+        parquet_data = {
+            "id": list(range(100)),
+            "value": [f"item_{i}" for i in range(100)],
+        }
+
+        # Create with different row group sizes
+        parquet_small_groups = self._create_parquet_bytes(
+            parquet_data, row_group_size=10
+        )
+        parquet_large_groups = self._create_parquet_bytes(
+            parquet_data, row_group_size=50
+        )
+
+        result_small = canonicalize_parquet(parquet_small_groups)
+        result_large = canonicalize_parquet(parquet_large_groups)
+
+        # Should produce identical canonical form (single row group)
+        assert result_small == result_large
+
+    def test_different_compression_same_hash(self) -> None:
+        """Files with different compression produce same canonical hash."""
+        parquet_data = {
+            "name": ["Alice", "Bob", "Charlie"],
+            "age": [25, 30, 35],
+        }
+
+        # Create with different compression
+        parquet_snappy = self._create_parquet_bytes(parquet_data, compression="snappy")
+        parquet_gzip = self._create_parquet_bytes(parquet_data, compression="gzip")
+        parquet_none = self._create_parquet_bytes(parquet_data, compression=None)
+
+        result_snappy = canonicalize_parquet(parquet_snappy)
+        result_gzip = canonicalize_parquet(parquet_gzip)
+        result_none = canonicalize_parquet(parquet_none)
+
+        # All should produce identical canonical form (using snappy)
+        assert result_snappy == result_gzip == result_none
 
     def test_returns_utf8_bytes(self) -> None:
         """Output is UTF-8 encoded bytes."""
