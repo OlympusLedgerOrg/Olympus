@@ -66,7 +66,7 @@ def _init_buzhash_table() -> None:
     """Populate the Buzhash lookup table with deterministic random values."""
     import random
 
-    rng = random.Random(0x4F4C594D505553)  # "OLYMPUS" as seed
+    rng = random.Random(0x4F4C594D505553)  # "OLYMPUS" as seed  # nosec B311
     _BUZHASH_TABLE.clear()
     for _ in range(256):
         _BUZHASH_TABLE.append(rng.getrandbits(64))
