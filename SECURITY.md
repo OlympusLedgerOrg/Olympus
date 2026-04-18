@@ -98,8 +98,11 @@ Key properties Olympus aims to protect:
 |---------|-------|
 | Static analysis (Bandit) | `.github/workflows/ci.yml` — `lint` job |
 | CodeQL extended query suite | `.github/workflows/codeql.yml` |
-| Dependency vulnerability audit (pip-audit) | `.github/workflows/ci.yml` — `supply-chain` job |
+| Python dependency audit (pip-audit) | `.github/workflows/ci.yml` — `supply-chain` job |
+| Rust dependency audit (cargo-audit) | `.github/workflows/ci.yml` — `supply-chain` job |
+| Node.js dependency audit (npm audit) | `.github/workflows/ci.yml` — `supply-chain` job |
 | SBOM generation (CycloneDX) | `.github/workflows/ci.yml` — `supply-chain` job |
+| Dependabot version updates | `.github/dependabot.yml` — pip, cargo, npm, gomod, github-actions |
 | Type checking (mypy strict) | `.github/workflows/ci.yml` — `typecheck` job |
 | Chaos engineering tests | `tests/chaos/` — disk full, network partition, clock skew, DB connection loss |
 
