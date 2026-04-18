@@ -298,7 +298,10 @@ jobs:
       - name: Set up Go for govulncheck
         uses: actions/setup-go@v5
         with:
-          go-version: "1.24"
+          # govulncheck@latest (golang.org/x/vuln v1.2+) requires Go >= 1.25,
+          # and we want the scanned stdlib to be a recent patch release so
+          # known-fixed stdlib CVEs do not surface as findings here.
+          go-version: "1.25"
           cache: false
 
       - name: Install govulncheck
