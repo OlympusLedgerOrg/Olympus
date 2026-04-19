@@ -15,12 +15,13 @@
 
 use std::env;
 use std::fs;
-use std::os::unix::fs::FileTypeExt;
+use std::io;
 use std::os::unix::fs::PermissionsExt;
 use std::path::Path;
 use std::sync::Arc;
 
 use tokio::net::UnixListener;
+use tokio::signal::unix::{signal, SignalKind};
 use tokio_stream::wrappers::UnixListenerStream;
 use tonic::{transport::Server, Request, Response, Status};
 use tracing::{info, warn};
@@ -61,6 +62,17 @@ impl CdhsSmfService {
 }
 
 const DEFAULT_SOCKET_PATH: &str = "/run/olympus/cdhs-smf.sock";
+
+/// Maximum gRPC message size accepted from the Go sequencer.
+///
+/// This MUST stay >= the HTTP body cap on the sequencer side
+/// (see `services/sequencer-go/internal/api/sequencer.go::maxRequestBodyBytes`).
+/// 32 MiB is the agreed ceiling on both sides; the sequencer wraps each
+/// HTTP body in `http.MaxBytesReader(..., maxRequestBodyBytes)` and the
+/// Rust gRPC server allows the same. Tonic's default of 4 MiB would reject
+/// large canonical-content uploads with a misleading "decoded message too
+/// large" error.
+const GRPC_MAX_MESSAGE_BYTES: usize = 32 * 1024 * 1024;
 
 #[tonic::async_trait]
 impl CdhsSmfServiceTrait for CdhsSmfService {
@@ -376,19 +388,24 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     if let Some(parent) = socket_path.parent() {
         fs::create_dir_all(parent)?;
     }
-    if socket_path.exists() {
-        let metadata = fs::symlink_metadata(socket_path)?;
-        if metadata.file_type().is_socket() {
-            fs::remove_file(socket_path)?;
-        } else {
+    // Try to bind the socket directly. On EADDRINUSE we abort with an
+    // operator-actionable message instead of trying to clean up the path
+    // ourselves: the previous check-then-delete (`is_socket()` followed by
+    // `remove_file()`) was a TOCTOU race — between the check and the unlink
+    // another process could swap the file, and we'd unlink the wrong thing.
+    // Forcing the operator to remove a stale socket explicitly also avoids
+    // accidentally killing a running instance that already owns the path.
+    let listener = match UnixListener::bind(socket_path) {
+        Ok(l) => l,
+        Err(e) if e.kind() == io::ErrorKind::AddrInUse => {
             return Err(format!(
-                "refusing to remove non-socket path: {}",
+                "stale socket at {} — remove and restart.",
                 socket_path.display()
             )
             .into());
         }
-    }
-    let listener = UnixListener::bind(socket_path)?;
+        Err(e) => return Err(e.into()),
+    };
     // Restrict the unix socket to the service user and group (rw-/rw-/---).
     // The default file mode after `bind()` follows the process umask, which
     // on many systems is `022` and would leave the socket world-readable —
@@ -426,10 +443,46 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         socket_path.display()
     );
 
+    // Configure the gRPC server with the agreed body-size ceiling and a
+    // graceful shutdown trigger that drains in-flight requests on
+    // SIGTERM/SIGINT. Without `serve_with_incoming_shutdown`, container
+    // stop would abandon in-flight `Update` calls mid-tree-mutation —
+    // exactly the wrong behaviour for an append-only ledger.
     Server::builder()
-        .add_service(CdhsSmfServiceServer::new(service))
-        .serve_with_incoming(incoming)
+        .add_service(
+            CdhsSmfServiceServer::new(service)
+                .max_decoding_message_size(GRPC_MAX_MESSAGE_BYTES)
+                .max_encoding_message_size(GRPC_MAX_MESSAGE_BYTES),
+        )
+        .serve_with_incoming_shutdown(incoming, shutdown_signal())
         .await?;
 
+    info!("CD-HS-ST Service shut down cleanly");
     Ok(())
+}
+
+/// Resolves when the process receives SIGTERM or SIGINT (Ctrl-C).
+///
+/// Used by `serve_with_incoming_shutdown` so tonic stops accepting new
+/// connections and waits for in-flight RPCs (notably `Update`, which mutates
+/// the SMT) to finish before the binary exits. Container orchestrators send
+/// SIGTERM on stop; SIGINT is for interactive runs.
+async fn shutdown_signal() {
+    let mut sigterm = match signal(SignalKind::terminate()) {
+        Ok(s) => s,
+        Err(e) => {
+            warn!("failed to install SIGTERM handler ({e}); shutdown will rely on SIGINT only");
+            // Fall back to waiting on SIGINT alone.
+            let _ = tokio::signal::ctrl_c().await;
+            return;
+        }
+    };
+    tokio::select! {
+        _ = sigterm.recv() => {
+            info!("SIGTERM received — beginning graceful shutdown");
+        }
+        _ = tokio::signal::ctrl_c() => {
+            info!("SIGINT received — beginning graceful shutdown");
+        }
+    }
 }

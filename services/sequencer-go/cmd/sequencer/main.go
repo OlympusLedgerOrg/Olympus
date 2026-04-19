@@ -7,6 +7,7 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"time"
 
 	pb "github.com/OlympusLedgerOrg/Olympus/services/sequencer/proto"
 
@@ -89,15 +90,28 @@ func main() {
 
 	log.Printf("Sequencer service starting on %s", httpAddr)
 
+	// Build an explicit http.Server with conservative timeouts so a
+	// misbehaving or malicious client cannot hold a connection open
+	// indefinitely (classic Slowloris). The bare http.Serve / http.ServeTLS
+	// helpers leave every timeout at zero, which is unsafe for a
+	// public-facing cryptographic state service.
+	srv := &http.Server{
+		Handler:           sequencer.Handler(),
+		ReadHeaderTimeout: 10 * time.Second,
+		ReadTimeout:       60 * time.Second,
+		WriteTimeout:      60 * time.Second,
+		IdleTimeout:       120 * time.Second,
+	}
+
 	if tlsCert != "" && tlsKey != "" {
-		if err := http.ServeTLS(listener, sequencer.Handler(), tlsCert, tlsKey); err != nil {
+		if err := srv.ServeTLS(listener, tlsCert, tlsKey); err != nil {
 			log.Fatalf("TLS server failed: %v", err)
 		}
 	} else {
 		log.Printf("WARNING: TLS is not configured (SEQUENCER_TLS_CERT / SEQUENCER_TLS_KEY not set). " +
 			"The X-Sequencer-Token will be transmitted in plaintext. " +
 			"Configure TLS or use a TLS-terminating reverse proxy in production.")
-		if err := http.Serve(listener, sequencer.Handler()); err != nil {
+		if err := srv.Serve(listener); err != nil {
 			log.Fatalf("Server failed: %v", err)
 		}
 	}
