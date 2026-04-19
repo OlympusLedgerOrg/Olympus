@@ -85,7 +85,9 @@ def test_create_dual_root_commitment_binding_hash_formula() -> None:
 def test_create_dual_root_commitment_binding_hash_breaks_old_format() -> None:
     """The new binding hash must NOT match the legacy formula that omitted _SEP and length fields.
 
-    Old formula (PR 4 fix target): ``blake3(LEDGER_PREFIX || blake3_root || _SEP || poseidon_root)``.
+    Old formula (missing leading _SEP and length fields):
+        ``blake3(LEDGER_PREFIX || blake3_root || _SEP || poseidon_root)``
+
     Any verifier still using the old formula MUST fail to reproduce the binding
     hash, signaling that it needs to update.
     """
