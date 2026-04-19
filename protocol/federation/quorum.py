@@ -197,9 +197,7 @@ def _federation_vote_event_id(header: dict[str, Any], registry: FederationRegist
             _length_prefixed_bytes("header_hash", str(header["header_hash"]).encode("utf-8")),
             _length_prefixed_bytes("timestamp", str(header["timestamp"]).encode("utf-8")),
             _length_prefixed_bytes("epoch", str(registry.epoch).encode("utf-8")),
-            _length_prefixed_bytes(
-                "membership_hash", registry.membership_hash().encode("utf-8")
-            ),
+            _length_prefixed_bytes("membership_hash", registry.membership_hash().encode("utf-8")),
         ]
     )
     return hash_bytes(payload).hex()
