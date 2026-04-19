@@ -333,6 +333,14 @@ class DoclingParser(BaseParser):
                 page_elements[page_no] = []
             page_elements[page_no].append(element)
 
+        # Docling exposes per-page geometry on ``document.pages`` (a mapping
+        # of page_no -> page object with a ``size.width`` / ``size.height``
+        # attribute). Forward those dimensions so that downstream consumers can
+        # normalize bounding boxes consistently with the fallback parser
+        # (which always populates width/height). Defaults stay ``None`` if
+        # docling didn't supply them, matching the schema's optionality.
+        docling_pages = getattr(doc, "pages", None) or {}
+
         # Build pages
         for page_num in sorted(page_elements.keys()):
             blocks = []
@@ -341,10 +349,16 @@ class DoclingParser(BaseParser):
                 if block:
                     blocks.append(block)
 
+            page_width, page_height = self._extract_page_dimensions(
+                docling_pages, page_num
+            )
+
             pages.append(
                 DocumentPage(
                     page_number=page_num,
                     blocks=blocks,
+                    width=page_width,
+                    height=page_height,
                 )
             )
 
@@ -353,6 +367,51 @@ class DoclingParser(BaseParser):
             total_pages=len(pages),
             metadata={"parser": "docling"},
         )
+
+    def _extract_page_dimensions(
+        self, docling_pages: object, page_num: int
+    ) -> tuple[float | None, float | None]:
+        """Return ``(width, height)`` for a docling page, or ``(None, None)``.
+
+        Docling page objects expose dimensions on a ``size`` attribute with
+        ``width`` and ``height`` floats. The mapping from page number to page
+        object is tolerant of either dict-like access or attribute access so
+        that this helper degrades gracefully across docling versions.
+        """
+        page_obj: object | None = None
+        if isinstance(docling_pages, dict):
+            page_obj = docling_pages.get(page_num)
+        else:
+            getter = getattr(docling_pages, "get", None)
+            if callable(getter):
+                try:
+                    page_obj = getter(page_num)
+                except Exception:  # pragma: no cover - defensive
+                    page_obj = None
+
+        if page_obj is None:
+            return None, None
+
+        size = getattr(page_obj, "size", None)
+        if size is None:
+            return None, None
+
+        raw_width = getattr(size, "width", None)
+        raw_height = getattr(size, "height", None)
+
+        width: float | None = None
+        height: float | None = None
+        if raw_width is not None:
+            try:
+                width = self._round_float(float(raw_width))
+            except (TypeError, ValueError):
+                width = None
+        if raw_height is not None:
+            try:
+                height = self._round_float(float(raw_height))
+            except (TypeError, ValueError):
+                height = None
+        return width, height
 
     def _convert_element(self, element: object, page_num: int, idx: int) -> ContentBlock | None:
         """Convert a Docling element to a ContentBlock."""

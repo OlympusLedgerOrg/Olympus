@@ -544,6 +544,14 @@ def verify_quorum_certificate(
 ) -> bool:
     """Verify a quorum certificate against a header and registry membership.
 
+    Returns ``True`` only when the certificate is structurally and
+    cryptographically valid *and* the number of unique verified signers meets
+    the registry quorum threshold. Callers that need the verified signer count
+    (e.g. for fork-choice tie-breaking) should use
+    :func:`count_verified_quorum_signers`, which performs the same verification
+    and returns the trusted count instead of trusting any caller-supplied
+    field on the certificate.
+
     Security properties enforced
     ----------------------------
     * **Structural completeness** – all required certificate fields must be present.
@@ -564,6 +572,54 @@ def verify_quorum_certificate(
     * **Signer-bitmap consistency** – the signatures list must correspond exactly
       to the "1" bits in the signer bitmap.
     """
+    snapshot, verified_count = _verify_quorum_certificate_signers(
+        certificate, header, registry
+    )
+    if snapshot is None or verified_count is None:
+        return False
+    # Quorum is counted against the number of *unique* verified signers.
+    return verified_count >= snapshot.quorum_threshold()
+
+
+def count_verified_quorum_signers(
+    certificate: dict[str, Any],
+    header: dict[str, Any],
+    registry: FederationRegistry,
+) -> int:
+    """Return the number of *cryptographically verified* unique signers.
+
+    Performs the full :func:`verify_quorum_certificate` check and returns the
+    count of distinct signers whose signatures verified against the registry,
+    or ``0`` if the certificate is structurally invalid, fails any binding
+    check, or contains any signature that does not verify.
+
+    Use this in fork-choice / preference scoring instead of
+    ``len(certificate["signatures"])``: the raw list length is attacker-
+    controlled and can be padded with bogus signature entries to inflate a
+    fork's preference score.
+    """
+    snapshot, verified_count = _verify_quorum_certificate_signers(
+        certificate, header, registry
+    )
+    if snapshot is None or verified_count is None:
+        return 0
+    if verified_count < snapshot.quorum_threshold():
+        return 0
+    return verified_count
+
+
+def _verify_quorum_certificate_signers(
+    certificate: dict[str, Any],
+    header: dict[str, Any],
+    registry: FederationRegistry,
+) -> tuple[FederationRegistry | None, int | None]:
+    """Verify a quorum certificate and return ``(snapshot, verified_count)``.
+
+    Returns ``(None, None)`` if any structural / binding / signature check
+    fails. Otherwise returns the registry snapshot used for verification and
+    the count of unique cryptographically verified signers (which the caller
+    is responsible for comparing against the snapshot's quorum threshold).
+    """
     required_fields = {
         "shard_id",
         "height",
@@ -581,27 +637,27 @@ def verify_quorum_certificate(
         "signatures",
     }
     if not required_fields.issubset(certificate):
-        return False
+        return None, None
     try:
         certificate_epoch = int(certificate["federation_epoch"])
     except (TypeError, ValueError):
-        return False
+        return None, None
     try:
         registry_snapshot = registry.get_snapshot(certificate_epoch)
     except ValueError:
-        return False
+        return None, None
     header_quorum_hash = header.get("quorum_certificate_hash")
     expected_certificate_hash = quorum_certificate_hash(certificate)
     if header_quorum_hash is None:
-        return False
+        return None, None
     if str(header_quorum_hash) != expected_certificate_hash:
-        return False
+        return None, None
     if certificate["shard_id"] != header.get("shard_id"):
-        return False
+        return None, None
     if certificate["header_hash"] != header.get("header_hash"):
-        return False
+        return None, None
     if certificate["timestamp"] != header.get("timestamp"):
-        return False
+        return None, None
 
     cert_height = _to_int(certificate.get("height"))
     header_height = _to_int(header.get("height"))
@@ -609,50 +665,50 @@ def verify_quorum_certificate(
     header_round = _to_int(header.get("round"))
 
     if None in (cert_height, header_height, cert_round, header_round):
-        return False
+        return None, None
 
     if cert_height != header_height:
-        return False
+        return None, None
     if cert_round != header_round:
-        return False
+        return None, None
     if certificate["event_id"] != _federation_vote_event_id(header, registry_snapshot):
-        return False
+        return None, None
     if int(certificate["federation_epoch"]) != registry_snapshot.epoch:
-        return False
+        return None, None
     validator_set_hash = registry_snapshot.membership_hash()
     if str(certificate["membership_hash"]) != validator_set_hash:
-        return False
+        return None, None
     if str(certificate["validator_set_hash"]) != validator_set_hash:
-        return False
+        return None, None
     try:
         validator_count = int(certificate["validator_count"])
         quorum_threshold = int(certificate["quorum_threshold"])
     except (TypeError, ValueError):
-        return False
+        return None, None
     if validator_count != len(registry_snapshot.active_nodes()):
-        return False
+        return None, None
     expected_threshold = math.ceil((2 * validator_count) / 3)
     if quorum_threshold != expected_threshold:
-        return False
+        return None, None
     if certificate.get("scheme") != _CERTIFICATE_SIGNATURE_SCHEME_ED25519:
-        return False
+        return None, None
 
     serialized_signatures = certificate.get("signatures")
     if not isinstance(serialized_signatures, list):
-        return False
+        return None, None
     active_node_ids = sorted(node.node_id for node in registry_snapshot.active_nodes())
     signer_bitmap = certificate.get("signer_bitmap")
     if not isinstance(signer_bitmap, str):
-        return False
+        return None, None
     if len(signer_bitmap) != len(active_node_ids) or set(signer_bitmap) - {"0", "1"}:
-        return False
+        return None, None
     expected_signer_ids = [
         node_id
         for node_id, bitmap_bit in zip(active_node_ids, signer_bitmap, strict=True)
         if bitmap_bit == "1"
     ]
     if len(serialized_signatures) != len(expected_signer_ids):
-        return False
+        return None, None
 
     # Verify each signature individually with explicit registry key lookup and
     # explicit uniqueness tracking, then check quorum against unique signers.
@@ -665,29 +721,29 @@ def verify_quorum_certificate(
             and "node_id" in serialized_signature
             and "signature" in serialized_signature
         ):
-            return False
+            return None, None
         node_id = str(serialized_signature["node_id"])
         # The signer bitmap already establishes the expected order; reject any
         # mismatch to prevent node-id spoofing.
         if node_id != expected_node_id:
-            return False
+            return None, None
         # Enforce uniqueness: a node_id must appear at most once.
         if node_id in unique_verified_nodes:
-            return False
+            return None, None
 
         # Explicit registry key lookup — identity flows from the registry, not
         # from any field inside the certificate.
         try:
             node = registry_snapshot.get_node(node_id)
         except ValueError:
-            return False
+            return None, None
         if not node.active:
-            return False
+            return None, None
 
         # Build the canonical vote message and assert the domain tag.
         msg = _build_federation_vote_message(header, node_id, registry_snapshot)
         if msg.domain != FEDERATION_DOMAIN_TAG:
-            return False
+            return None, None
         vote_hash = hash_bytes(serialize_vote_message(msg))
 
         # Verify the signature against the registry-derived key(s).
@@ -702,11 +758,10 @@ def verify_quorum_certificate(
                 except nacl.exceptions.BadSignatureError:
                     continue
             if not verified:
-                return False
+                return None, None
         except (ValueError, nacl.exceptions.BadSignatureError):
-            return False
+            return None, None
 
         unique_verified_nodes.add(node_id)
 
-    # Quorum is counted against the number of *unique* verified signers.
-    return len(unique_verified_nodes) >= registry_snapshot.quorum_threshold()
+    return registry_snapshot, len(unique_verified_nodes)

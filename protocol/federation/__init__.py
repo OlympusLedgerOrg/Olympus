@@ -43,6 +43,7 @@ from protocol.federation.quorum import (
     build_federation_header_record,
     build_quorum_certificate,
     collect_quorum_signatures,
+    count_verified_quorum_signers,
     has_federation_quorum,
     quorum_certificate_hash,
     serialize_vote_message,
@@ -101,6 +102,7 @@ __all__ = [
     "collect_quorum_signatures",
     "quorum_certificate_hash",
     "verify_quorum_certificate",
+    "count_verified_quorum_signers",
     # gossip
     "resolve_canonical_fork",
     "build_proactive_share_commitments",
