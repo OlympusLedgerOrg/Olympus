@@ -1,4 +1,4 @@
-"""Golden-vector tests for protocol/hashes.py wire-format changes (PR 4).
+"""Golden-vector tests for protocol/hashes.py wire-format changes (PR #698).
 
 These vectors are part of the wire-format contract. Any cross-language verifier
 (Rust, Go, JS, ...) MUST reproduce the exact hex strings asserted here.
@@ -141,9 +141,7 @@ def test_federation_vote_hash_golden_vector_no_inner_domain() -> None:
         timestamp="2026-03-09T00:00:00Z",
         event_id_hex="deadbeef",
     )
-    assert vote_hash.hex() == (
-        "dd5426a489f7c531d39d1989582ac21dfc6b3fa006cd41613a22af5f53c9bf81"
-    )
+    assert vote_hash.hex() == ("dd5426a489f7c531d39d1989582ac21dfc6b3fa006cd41613a22af5f53c9bf81")
 
 
 def test_federation_vote_hash_does_not_match_legacy_inner_domain_format() -> None:
@@ -261,7 +259,7 @@ def test_replication_proof_payload_hash_golden_vector() -> None:
         guardian_signature="",
     )
     assert proof.proof_payload_hash() == (
-        "e55409b9a71991605ef385006d79d6f84b0e8f73565c7fe04b4d879564e6e80d"
+        "e5af90fb7dd3050674989ad9f824b059b7a3e1b6f233ff987c36eefe4c6ed9dd"
     )
 
 
@@ -287,4 +285,30 @@ def test_replication_proof_payload_hash_prevents_pipe_injection() -> None:
         ledger_tail_hash="x|" + "d" * 62,
         **base_kwargs,
     )
+    assert proof_a.proof_payload_hash() != proof_b.proof_payload_hash()
+
+
+def test_replication_proof_payload_hash_prevents_comma_collision_in_hashes() -> None:
+    """Different ``proof_sample_hashes`` tuples that would collide if comma-joined
+    must produce distinct hashes. E.g., ["a,b", "c"] vs ["a", "b,c"].
+    """
+    base_kwargs = dict(
+        challenge_hash="c" * 64,
+        guardian_id="guardian-1",
+        ledger_tail_hash="d" * 64,
+        merkle_root_verified=True,
+        proof_sample_indices=(0, 1),
+        replicated_at="2026-03-09T00:00:00Z",
+        guardian_signature="",
+    )
+    # These two would produce the same comma-joined string: "abc,def,ghi"
+    proof_a = ReplicationProof(
+        proof_sample_hashes=("abc,def", "ghi"),
+        **base_kwargs,
+    )
+    proof_b = ReplicationProof(
+        proof_sample_hashes=("abc", "def,ghi"),
+        **base_kwargs,
+    )
+    # With per-element length-prefixing, these must be different
     assert proof_a.proof_payload_hash() != proof_b.proof_payload_hash()

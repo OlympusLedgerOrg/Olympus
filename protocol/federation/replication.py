@@ -347,23 +347,26 @@ class ReplicationProof:
         values containing the literal ``|`` character cannot be injected to
         collide with a different field layout.
         """
-        sample_indices_bytes = ",".join(str(i) for i in self.proof_sample_indices).encode(
-            "utf-8"
-        )
-        sample_hashes_bytes = ",".join(self.proof_sample_hashes).encode("utf-8")
+        sample_indices_bytes = ",".join(str(i) for i in self.proof_sample_indices).encode("utf-8")
+        # Encode each hash separately to prevent collision attacks.
+        # E.g., ["a,b", "c"] and ["a", "b,c"] would collide if comma-joined.
+        proof_sample_hashes_encoded = [
+            _length_prefixed_bytes("proof_sample_hash", h.encode("utf-8"))
+            for h in self.proof_sample_hashes
+        ]
         payload = b"".join(
             [
                 _length_prefixed_bytes("challenge_hash", self.challenge_hash.encode("utf-8")),
                 _length_prefixed_bytes("guardian_id", self.guardian_id.encode("utf-8")),
-                _length_prefixed_bytes(
-                    "ledger_tail_hash", self.ledger_tail_hash.encode("utf-8")
-                ),
+                _length_prefixed_bytes("ledger_tail_hash", self.ledger_tail_hash.encode("utf-8")),
                 _length_prefixed_bytes(
                     "merkle_root_verified",
                     str(self.merkle_root_verified).encode("utf-8"),
                 ),
                 _length_prefixed_bytes("proof_sample_indices", sample_indices_bytes),
-                _length_prefixed_bytes("proof_sample_hashes", sample_hashes_bytes),
+            ]
+            + proof_sample_hashes_encoded
+            + [
                 _length_prefixed_bytes("replicated_at", self.replicated_at.encode("utf-8")),
             ]
         )

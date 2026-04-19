@@ -2255,7 +2255,7 @@
         "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
       ],
       "replicated_at": "2026-03-09T00:00:00Z",
-      "proof_payload_hash": "e55409b9a71991605ef385006d79d6f84b0e8f73565c7fe04b4d879564e6e80d"
+      "proof_payload_hash": "e5af90fb7dd3050674989ad9f824b059b7a3e1b6f233ff987c36eefe4c6ed9dd"
     },
     {
       "description": "replication_proof_payload_hash guardian='g|x'",
@@ -2296,7 +2296,7 @@
       "proof_sample_indices": [],
       "proof_sample_hashes": [],
       "replicated_at": "2026-04-01T00:00:00Z",
-      "proof_payload_hash": "713a375eb00e61e9660589b7699d7de7a0c07972ba3e8c2d2bd4d17ad818afda"
+      "proof_payload_hash": "477e51c73ab1f6fa546fa9b3235a403dee8d25b7793860abbeec63cbb28b8993"
     }
   ]
 }
