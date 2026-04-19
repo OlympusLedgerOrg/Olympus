@@ -7,7 +7,7 @@ import inspect
 import pytest
 
 from proofs.proof_generator import ProofGenerator
-from protocol.hashes import blake3_hash
+from protocol.hashes import SNARK_SCALAR_FIELD, blake3_hash
 from protocol.poseidon_smt import PoseidonSMT
 
 
@@ -16,8 +16,8 @@ def test_witness_from_smt_roundtrip() -> None:
     smt = PoseidonSMT()
     key1 = blake3_hash([b"key1"])
     key2 = blake3_hash([b"key2"])
-    val1 = int.from_bytes(blake3_hash([b"val1"]), byteorder="big")
-    val2 = int.from_bytes(blake3_hash([b"val2"]), byteorder="big")
+    val1 = int.from_bytes(blake3_hash([b"val1"]), byteorder="big") % SNARK_SCALAR_FIELD
+    val2 = int.from_bytes(blake3_hash([b"val2"]), byteorder="big") % SNARK_SCALAR_FIELD
     smt.update(key1, val1)
     smt.update(key2, val2)
 
@@ -33,7 +33,10 @@ def test_witness_from_smt_roundtrip() -> None:
 def test_witness_from_smt_raises_for_present_key() -> None:
     smt = PoseidonSMT()
     key1 = blake3_hash([b"key1"])
-    smt.update(key1, int.from_bytes(blake3_hash([b"val1"]), byteorder="big"))
+    smt.update(
+        key1,
+        int.from_bytes(blake3_hash([b"val1"]), byteorder="big") % SNARK_SCALAR_FIELD,
+    )
 
     with pytest.raises(ValueError):
         ProofGenerator.witness_from_smt(smt, key1)

@@ -32,6 +32,7 @@ from protocol.merkle import EMPTY_TREE_HASH, MerkleTree
 
 # Read files in 1 MiB chunks to avoid loading large datasets entirely into RAM.
 _CHUNK_SIZE = 1 << 20
+_DATASET_SIGNATURE_PREFIX = b"OLY:DATASET:COMMIT:V1|"
 
 
 # ---------------------------------------------------------------------------
@@ -243,10 +244,10 @@ def _cmd_dataset_commit(args: argparse.Namespace) -> int:
     # 7. Deterministic commit ID — content only, no timestamp (ADR-0010 v4).
     commit_id = compute_dataset_commit_id(ds_id, args.parent or "", manifest_hash, pubkey_hex)
 
-    # 8. Sign the commit ID with the Ed25519 signing key.
-    #    The commit_id is a hex string; bytes.fromhex converts it to the raw
-    #    32-byte hash for signing, matching server-side verification convention.
-    signature_hex = signing_key.sign(bytes.fromhex(commit_id)).signature.hex()
+    # 8. Sign the commit ID using the server's domain-separated message format.
+    signature_hex = signing_key.sign(
+        _DATASET_SIGNATURE_PREFIX + bytes.fromhex(commit_id)
+    ).signature.hex()
 
     # 9. Assemble the bundle.
     bundle = {
@@ -324,12 +325,15 @@ def _cmd_dataset_verify(args: argparse.Namespace) -> int:
     if expected_commit_id != bundle["commit_id"]:
         errors.append("Commit ID mismatch")
 
-    # 3. Verify Ed25519 signature over the commit ID.
+    # 3. Verify Ed25519 signature over the domain-separated commit message.
     try:
         verify_key = nacl.signing.VerifyKey(
             bundle["committer_pubkey"], encoder=nacl.encoding.HexEncoder
         )
-        verify_key.verify(bytes.fromhex(bundle["commit_id"]), bytes.fromhex(bundle["signature"]))
+        verify_key.verify(
+            _DATASET_SIGNATURE_PREFIX + bytes.fromhex(bundle["commit_id"]),
+            bytes.fromhex(bundle["signature"]),
+        )
     except nacl.exceptions.BadSignatureError:
         errors.append("Ed25519 signature invalid")
     except Exception as exc:
@@ -457,8 +461,10 @@ def _cmd_dataset_push(args: argparse.Namespace) -> int:
     parent_id = bundle.get("parent_id") or ""
     commit_id = compute_dataset_commit_id(ds_id, parent_id, server_manifest_hash, pubkey_hex)
 
-    # Re-sign the commit ID using the server convention (raw hash bytes).
-    signature_hex = signing_key.sign(bytes.fromhex(commit_id)).signature.hex()
+    # Re-sign the commit ID using the server's domain-separated message format.
+    signature_hex = signing_key.sign(
+        _DATASET_SIGNATURE_PREFIX + bytes.fromhex(commit_id)
+    ).signature.hex()
 
     # 6. Assemble the API request body.
     request_body = {

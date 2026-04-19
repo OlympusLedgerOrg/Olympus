@@ -26,6 +26,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_asyn
 from api.deps import get_db
 from api.main import create_app
 from api.models import Base
+from api.routers.datasets import _DATASET_SIGNATURE_PREFIX
 from protocol.canonical_json import canonical_json_bytes
 from protocol.hashes import (
     blake3_hash,
@@ -138,7 +139,9 @@ def _build_push_request(
     ds_id = dataset_key(dataset_name, source_uri, namespace, pubkey_hex)
     parent_id = bundle.get("parent_id") or ""
     commit_id = compute_dataset_commit_id(ds_id, parent_id, server_manifest_hash, pubkey_hex)
-    signature_hex = signing_key.sign(bytes.fromhex(commit_id)).signature.hex()
+    signature_hex = signing_key.sign(
+        _DATASET_SIGNATURE_PREFIX + bytes.fromhex(commit_id)
+    ).signature.hex()
 
     return {
         "dataset_name": dataset_name,
@@ -272,7 +275,9 @@ async def test_proof_bundle_endpoint(tmp_path, client):
         "proof-bundle-test", "https://example.com/proof-test.csv", "test.proof", pubkey_hex
     )
     commit_id = compute_dataset_commit_id(ds_id, "", manifest_hash, pubkey_hex)
-    signature = signing_key.sign(bytes.fromhex(commit_id)).signature.hex()
+    signature = signing_key.sign(
+        _DATASET_SIGNATURE_PREFIX + bytes.fromhex(commit_id)
+    ).signature.hex()
 
     body = {
         "dataset_name": "proof-bundle-test",
