@@ -184,6 +184,7 @@ dependencies = [
  "blake3",
  "ed25519-dalek",
  "hex",
+ "libc",
  "prost",
  "rand",
  "serde",
