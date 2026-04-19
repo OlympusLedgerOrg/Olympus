@@ -5,6 +5,8 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"net/url"
+	"strings"
 
 	_ "github.com/lib/pq"
 )
@@ -19,8 +21,65 @@ type PostgresStorage struct {
 	db *sql.DB
 }
 
-// NewPostgresStorage creates a new Postgres storage instance
+// requireVerifyingSSLMode enforces that the supplied connection string opts
+// into a TLS mode that actually verifies the server certificate. lib/pq
+// inherits libpq's default of sslmode=prefer, which silently falls back to
+// plaintext when the TLS handshake fails — unacceptable for the cryptographic
+// state DB. We hard-fail unless sslmode=verify-full or sslmode=verify-ca is
+// explicitly set, regardless of whether the connection string is in URL or
+// keyword=value form.
+func requireVerifyingSSLMode(connStr string) error {
+	mode, err := extractSSLMode(connStr)
+	if err != nil {
+		return err
+	}
+	if mode == "" {
+		return fmt.Errorf("postgres connection string must set sslmode=verify-full or sslmode=verify-ca; " +
+			"the cryptographic state DB will not open with libpq's default sslmode=prefer (silent plaintext fallback)")
+	}
+	switch mode {
+	case "verify-full", "verify-ca":
+		return nil
+	default:
+		return fmt.Errorf("postgres sslmode=%q is not permitted for the cryptographic state DB; "+
+			"use sslmode=verify-full or sslmode=verify-ca", mode)
+	}
+}
+
+// extractSSLMode returns the sslmode parameter from either a postgres:// URL
+// or a libpq keyword=value connection string. Returns "" if unset.
+func extractSSLMode(connStr string) (string, error) {
+	trimmed := strings.TrimSpace(connStr)
+	if strings.HasPrefix(trimmed, "postgres://") || strings.HasPrefix(trimmed, "postgresql://") {
+		u, err := url.Parse(trimmed)
+		if err != nil {
+			return "", fmt.Errorf("invalid postgres URL: %w", err)
+		}
+		return u.Query().Get("sslmode"), nil
+	}
+	// Keyword=value form: split on whitespace, look for sslmode=...
+	for _, field := range strings.Fields(trimmed) {
+		if eq := strings.IndexByte(field, '='); eq > 0 {
+			if strings.EqualFold(field[:eq], "sslmode") {
+				return strings.Trim(field[eq+1:], "'\""), nil
+			}
+		}
+	}
+	return "", nil
+}
+
+// NewPostgresStorage creates a new Postgres storage instance.
+//
+// The connection string MUST set sslmode=verify-full or sslmode=verify-ca.
+// libpq's default (sslmode=prefer) silently falls back to a plaintext
+// connection if the TLS handshake fails, which would let an on-path attacker
+// downgrade the link to the cryptographic state DB. We refuse to open the
+// connection rather than risk a silent downgrade.
 func NewPostgresStorage(ctx context.Context, connStr string) (*PostgresStorage, error) {
+	if err := requireVerifyingSSLMode(connStr); err != nil {
+		return nil, err
+	}
+
 	db, err := sql.Open("postgres", connStr)
 	if err != nil {
 		return nil, fmt.Errorf("failed to open database: %w", err)

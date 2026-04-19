@@ -16,6 +16,13 @@ import (
 	pb "github.com/OlympusLedgerOrg/Olympus/services/sequencer/proto"
 )
 
+// maxRequestBodyBytes caps the size of an HTTP request body for queue-leaf
+// and queue-leaves. This MUST stay <= the gRPC max_decoding_message_size
+// configured on the Rust CD-HS-ST service (see
+// services/cdhs-smf-rust/src/main.rs::GRPC_MAX_MESSAGE_BYTES). 32 MiB is the
+// agreed ceiling on both sides; see the matching constant in main.rs.
+const maxRequestBodyBytes = 32 << 20 // 32 MiB
+
 // storageQuerier is the persistence contract required by the sequencer API.
 // It is satisfied by *storage.PostgresStorage in production and by test
 // doubles in unit tests.
@@ -119,7 +126,7 @@ func (s *Sequencer) handleQueueLeaf(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	r.Body = http.MaxBytesReader(w, r.Body, 32<<20) // 32 MB
+	r.Body = http.MaxBytesReader(w, r.Body, maxRequestBodyBytes)
 
 	var req QueueLeafRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -250,7 +257,7 @@ func (s *Sequencer) handleQueueLeaves(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	r.Body = http.MaxBytesReader(w, r.Body, 32<<20) // 32 MB
+	r.Body = http.MaxBytesReader(w, r.Body, maxRequestBodyBytes)
 
 	var req QueueLeavesRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -299,7 +306,11 @@ func (s *Sequencer) handleQueueLeaves(w http.ResponseWriter, r *http.Request) {
 
 	ctx := r.Context()
 
-	// Process all records sequentially (SMT is stateful)
+	// Process all records sequentially (SMT is stateful). The loop fails
+	// fast on the first error: a 1000-record batch must never produce
+	// 1000 error log lines (P-6). Each error path logs exactly one line
+	// that includes the failing record's position (i+1 of N) so the
+	// operator can locate the offender without per-record log spam.
 	results := make([]QueueLeafResponse, 0, len(req.Records))
 	batchLeaves := make([]storage.BatchLeaf, 0, len(req.Records))
 	var lastUpdateResp *pb.UpdateResponse
@@ -308,7 +319,7 @@ func (s *Sequencer) handleQueueLeaves(w http.ResponseWriter, r *http.Request) {
 		// Step 1: Canonicalize content via Rust service
 		canonResp, err := s.smtClient.Canonicalize(ctx, rec.ContentType, rec.Content)
 		if err != nil {
-			log.Printf("Canonicalization failed for record %d: %v", i, err)
+			log.Printf("Canonicalization failed (record %d of %d, aborting batch): %v", i+1, len(req.Records), err)
 			http.Error(w, "Canonicalization failed", http.StatusInternalServerError)
 			return
 		}
@@ -323,31 +334,31 @@ func (s *Sequencer) handleQueueLeaves(w http.ResponseWriter, r *http.Request) {
 
 		updateResp, err := s.smtClient.Update(ctx, rec.ShardID, recordKey, canonResp.CanonicalContent)
 		if err != nil {
-			log.Printf("SMT update failed for record %d: %v", i, err)
+			log.Printf("SMT update failed (record %d of %d, aborting batch): %v", i+1, len(req.Records), err)
 			http.Error(w, "SMT update failed", http.StatusInternalServerError)
 			return
 		}
 
 		// Validate returned hash lengths
 		if len(updateResp.NewRoot) != 32 {
-			log.Printf("Rust service violated hash length contract: NewRoot length %d", len(updateResp.NewRoot))
+			log.Printf("Rust service violated hash length contract (record %d of %d): NewRoot length %d", i+1, len(req.Records), len(updateResp.NewRoot))
 			http.Error(w, "upstream error", http.StatusBadGateway)
 			return
 		}
 		if len(updateResp.GlobalKey) != 32 {
-			log.Printf("Rust service violated hash length contract: GlobalKey length %d", len(updateResp.GlobalKey))
+			log.Printf("Rust service violated hash length contract (record %d of %d): GlobalKey length %d", i+1, len(req.Records), len(updateResp.GlobalKey))
 			http.Error(w, "upstream error", http.StatusBadGateway)
 			return
 		}
 		if len(updateResp.LeafValueHash) != 32 {
-			log.Printf("Rust service violated hash length contract: LeafValueHash length %d", len(updateResp.LeafValueHash))
+			log.Printf("Rust service violated hash length contract (record %d of %d): LeafValueHash length %d", i+1, len(req.Records), len(updateResp.LeafValueHash))
 			http.Error(w, "upstream error", http.StatusBadGateway)
 			return
 		}
 
 		// Validate delta count
 		if len(updateResp.Deltas) != 256 {
-			log.Printf("Rust service returned wrong delta count: %d", len(updateResp.Deltas))
+			log.Printf("Rust service returned wrong delta count (record %d of %d): %d", i+1, len(req.Records), len(updateResp.Deltas))
 			http.Error(w, "upstream error", http.StatusBadGateway)
 			return
 		}
