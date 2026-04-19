@@ -136,23 +136,37 @@ pub fn compute_ledger_entry_hash(canonical_payload_bytes: &[u8]) -> [u8; 32] {
     compute_blake3(&combined)
 }
 
-/// Compute the dual-root commitment hash from BLAKE3 and Poseidon roots.
+/// Compute the dual-root commitment binding hash (V2).
 ///
 /// Formula:
-///   BLAKE3(OLY:LEDGER:V1 | "|" | blake3_root_bytes | "|" | poseidon_root_32be_bytes)
+///   BLAKE3(OLY:LEDGER:V1 | "|" | len_b3 | blake3_root_bytes
+///                        | "|" | len_pos | poseidon_root_32be_bytes)
 ///
-/// where `poseidon_root_32be` is the 32-byte big-endian encoding of the BN128 field element.
+/// where `len_b3` and `len_pos` are 2-byte big-endian length prefixes (always
+/// `0x0020 = 32`), and `poseidon_root_32be` is the 32-byte big-endian
+/// encoding of the BN128 field element.
 ///
-/// This matches the Python reference:
-///   `blake3_hash([LEDGER_PREFIX, SEP, blake3_root_bytes, SEP, poseidon_root_32be])`
+/// This matches the Python reference (V2, PR 4: M-15 + M-14):
+///   `blake3_hash([LEDGER_PREFIX, SEP, len_b3, blake3_root,
+///                 SEP, len_pos, poseidon_root_32be])`
 pub fn compute_dual_commitment(blake3_root: &[u8; 32], poseidon_root_32be: &[u8; 32]) -> [u8; 32] {
+    let len_b3 = (blake3_root.len() as u16).to_be_bytes();
+    let len_pos = (poseidon_root_32be.len() as u16).to_be_bytes();
     let mut combined = Vec::with_capacity(
-        LEDGER_PREFIX.len() + HASH_SEPARATOR.len() + 32 + HASH_SEPARATOR.len() + 32,
+        LEDGER_PREFIX.len()
+            + HASH_SEPARATOR.len()
+            + len_b3.len()
+            + 32
+            + HASH_SEPARATOR.len()
+            + len_pos.len()
+            + 32,
     );
     combined.extend_from_slice(LEDGER_PREFIX);
     combined.extend_from_slice(HASH_SEPARATOR);
+    combined.extend_from_slice(&len_b3);
     combined.extend_from_slice(blake3_root);
     combined.extend_from_slice(HASH_SEPARATOR);
+    combined.extend_from_slice(&len_pos);
     combined.extend_from_slice(poseidon_root_32be);
     compute_blake3(&combined)
 }
@@ -397,7 +411,7 @@ mod tests {
                 document_parts: &["section A", "section B", "section C"],
                 blake3_root_hex: "487f19f5f9226d91d8b59732d51baff231710c4f171a170e8573e4ca1666967b",
                 poseidon_root_32be_hex: "18a53b4212bf0cf8cef46e92830204178bf8a3a266ddf389cce2cd4ae2e903e5",
-                expected_dual: "ab1cde209598faa9cac0f8273d4d35a778893c849e71d5dca737ce7cf822825a",
+                expected_dual: "11392f039f5823c9916749bcb55b03227c0c7700d5115ffab46f45965dc44993",
                 expected_blake3_consistent: true,
             },
             DualRootCommitmentVector {
@@ -405,7 +419,7 @@ mod tests {
                 document_parts: &["section A", "section B", "section C"],
                 blake3_root_hex: "487f19f5f9226d91d8b59732d51baff231710c4f171a170e8573e4ca1666967b",
                 poseidon_root_32be_hex: "08ce2263d65d7ea15782e3ef9029a934275e4be7b51a35e49a1ad74be1d934c1",
-                expected_dual: "dd05613ebe944c29c840a5b61f948922b7759c1ad8857390fffad22712f3bdeb",
+                expected_dual: "be6ee9795ca414471a3165267bff046112ca5257bc014536296f29a1695ab787",
                 expected_blake3_consistent: true,
             },
             DualRootCommitmentVector {
@@ -413,7 +427,7 @@ mod tests {
                 document_parts: &["minimal"],
                 blake3_root_hex: "cf57382d603eef611238e86c5d0fc6175326570ecfa4d1a6445d65f8d0b40d7f",
                 poseidon_root_32be_hex: "16f987bf796eaea13eff0678e11b547e740e0490f01a3c3ef0dbf1027e649c99",
-                expected_dual: "12c485379ad537098b351369c04b886a9ec40ca250943f2031cb7801c179e502",
+                expected_dual: "460901d08c75e68d1dba341f369b0dc7562d9d1f8cbc7826a0658afbc31f075f",
                 expected_blake3_consistent: true,
             },
             DualRootCommitmentVector {
@@ -421,7 +435,7 @@ mod tests {
                 document_parts: &["section A", "section B", "section C"],
                 blake3_root_hex: "deadbeefa0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0",
                 poseidon_root_32be_hex: "18a53b4212bf0cf8cef46e92830204178bf8a3a266ddf389cce2cd4ae2e903e5",
-                expected_dual: "b566feebc0ed143b717acd637f14ebd6ef5adf02d0d40ab9e5e4e90da2921660",
+                expected_dual: "899a4d503e790e3c9550fe8187492a2164909210e84e1ad46823c58661c14d84",
                 expected_blake3_consistent: false,
             },
         ];

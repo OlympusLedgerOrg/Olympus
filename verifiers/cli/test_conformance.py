@@ -144,15 +144,29 @@ def test_ledger_entry_hash(vectors: dict) -> None:
 
 
 def _compute_dual_commitment(blake3_root_hex: str, poseidon_root_decimal: str) -> str:
-    """Compute the dual-root commitment hash.
+    """Compute the dual-root commitment binding hash (V2).
 
-    Formula: BLAKE3(OLY:LEDGER:V1 | "|" | blake3_root_bytes | "|" | poseidon_root_bytes)
-    where poseidon_root_bytes is the 32-byte big-endian encoding of the decimal integer.
+    Formula:
+        binding_hash = BLAKE3(
+            OLY:LEDGER:V1 || "|" || len_b3 || blake3_root_bytes
+                          || "|" || len_pos || poseidon_root_32be_bytes
+        )
+
+    where:
+      - len_b3 and len_pos are 2-byte big-endian length prefixes (always 0x0020 = 32),
+      - poseidon_root_bytes is the 32-byte big-endian encoding of the decimal integer.
+
+    The leading "|" separator after the LEDGER prefix and the inclusion of both
+    length fields are required by the V2 wire format (PR 4: M-15 + M-14).
     """
     sep = HASH_SEPARATOR.encode("utf-8")
     b3_bytes = bytes.fromhex(blake3_root_hex)
     pos_bytes = int(poseidon_root_decimal).to_bytes(32, byteorder="big")
-    return blake3_hash([LEDGER_PREFIX, sep, b3_bytes, sep, pos_bytes]).hex()
+    len_b3 = len(b3_bytes).to_bytes(2, byteorder="big")
+    len_pos = len(pos_bytes).to_bytes(2, byteorder="big")
+    return blake3_hash(
+        [LEDGER_PREFIX, sep, len_b3, b3_bytes, sep, len_pos, pos_bytes]
+    ).hex()
 
 
 def test_dual_root_commitment(vectors: dict) -> None:
@@ -214,6 +228,107 @@ def test_dual_root_commitment(vectors: dict) -> None:
     print(f"  ✓ dual_root_commitment: {len(vectors['dual_root_commitment'])} vectors")
 
 
+def test_dual_root_commitment_wire(vectors: dict) -> None:
+    """Verify the full dual-root commitment wire format (V2, PR 4: M-15 + M-14).
+
+    Wire layout:
+        len_b3 (2B BE) || blake3_root (32B) || len_pos (2B BE)
+            || poseidon_root_32be (32B) || binding_hash (32B)
+    where binding_hash is the value pinned by ``test_dual_root_commitment``.
+    """
+    from protocol.hashes import create_dual_root_commitment
+
+    for vec in vectors["dual_root_commitment"]:
+        if "dual_commitment_wire" not in vec:
+            continue
+        b3 = bytes.fromhex(vec["blake3_root"])
+        pos = int(vec["poseidon_root"]).to_bytes(32, "big")
+        wire_hex = create_dual_root_commitment(b3, pos).hex()
+        assert wire_hex == vec["dual_commitment_wire"], (
+            f"dual_commitment_wire mismatch for {vec['description']!r}: "
+            f"got {wire_hex}, want {vec['dual_commitment_wire']}"
+        )
+        # Cross-check: last 32 bytes of wire == binding hash field
+        assert wire_hex[-64:] == vec["dual_commitment"], (
+            f"binding hash slice mismatch for {vec['description']!r}"
+        )
+    print("  ✓ dual_root_commitment_wire: validated")
+
+
+def test_federation_vote_hash(vectors: dict) -> None:
+    """Validate ``federation_vote_hash`` golden vectors (PR 4: M-16)."""
+    from protocol.hashes import federation_vote_hash
+
+    section = vectors.get("federation_vote_hash", [])
+    for vec in section:
+        got = federation_vote_hash(
+            vec["node_id"],
+            vec["shard_id"],
+            vec["header_hash"],
+            vec["timestamp"],
+            vec["event_id"],
+        ).hex()
+        assert got == vec["vote_hash"], (
+            f"federation_vote_hash mismatch for {vec['description']!r}: "
+            f"got {got}, want {vec['vote_hash']}"
+        )
+    print(f"  ✓ federation_vote_hash: {len(section)} vectors")
+
+
+def test_federation_vote_event_id(vectors: dict) -> None:
+    """Validate length-prefixed ``_federation_vote_event_id`` vectors (PR 4: F-FED-6).
+
+    Vectors pin the inputs (shard_id, header_hash, timestamp, epoch, membership_hash)
+    so any verifier can reproduce the event_id without depending on the registry
+    implementation.
+    """
+    from protocol.hashes import _length_prefixed_bytes, hash_bytes
+
+    section = vectors.get("federation_vote_event_id", [])
+    for vec in section:
+        payload = b"".join(
+            [
+                _length_prefixed_bytes("shard_id", vec["shard_id"].encode("utf-8")),
+                _length_prefixed_bytes("header_hash", vec["header_hash"].encode("utf-8")),
+                _length_prefixed_bytes("timestamp", vec["timestamp"].encode("utf-8")),
+                _length_prefixed_bytes("epoch", str(vec["epoch"]).encode("utf-8")),
+                _length_prefixed_bytes(
+                    "membership_hash", vec["membership_hash"].encode("utf-8")
+                ),
+            ]
+        )
+        got = hash_bytes(payload).hex()
+        assert got == vec["event_id"], (
+            f"federation_vote_event_id mismatch for {vec['description']!r}: "
+            f"got {got}, want {vec['event_id']}"
+        )
+    print(f"  ✓ federation_vote_event_id: {len(section)} vectors")
+
+
+def test_replication_proof_payload_hash(vectors: dict) -> None:
+    """Validate ``ReplicationProof.proof_payload_hash`` vectors (PR 4: F-FED-7)."""
+    from protocol.federation.replication import ReplicationProof
+
+    section = vectors.get("replication_proof_payload_hash", [])
+    for vec in section:
+        proof = ReplicationProof(
+            challenge_hash=vec["challenge_hash"],
+            guardian_id=vec["guardian_id"],
+            ledger_tail_hash=vec["ledger_tail_hash"],
+            merkle_root_verified=vec["merkle_root_verified"],
+            proof_sample_indices=tuple(vec["proof_sample_indices"]),
+            proof_sample_hashes=tuple(vec["proof_sample_hashes"]),
+            replicated_at=vec["replicated_at"],
+            guardian_signature="",
+        )
+        got = proof.proof_payload_hash()
+        assert got == vec["proof_payload_hash"], (
+            f"proof_payload_hash mismatch for {vec['description']!r}: "
+            f"got {got}, want {vec['proof_payload_hash']}"
+        )
+    print(f"  ✓ replication_proof_payload_hash: {len(section)} vectors")
+
+
 def main() -> None:
     print("Running Python conformance tests against vectors.json\n")
     vectors = load_vectors()
@@ -225,6 +340,10 @@ def main() -> None:
     test_canonicalizer_hash_vectors()
     test_ledger_entry_hash(vectors)
     test_dual_root_commitment(vectors)
+    test_dual_root_commitment_wire(vectors)
+    test_federation_vote_hash(vectors)
+    test_federation_vote_event_id(vectors)
+    test_replication_proof_payload_hash(vectors)
     print("\n✓ All Python conformance tests passed!")
 
 
