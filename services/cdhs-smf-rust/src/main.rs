@@ -16,6 +16,7 @@
 use std::env;
 use std::fs;
 use std::os::unix::fs::FileTypeExt;
+use std::os::unix::fs::PermissionsExt;
 use std::path::Path;
 use std::sync::Arc;
 
@@ -388,6 +389,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     }
     let listener = UnixListener::bind(socket_path)?;
+    // Restrict the unix socket to the service user and group (rw-/rw-/---).
+    // The default file mode after `bind()` follows the process umask, which
+    // on many systems is `022` and would leave the socket world-readable —
+    // anyone on the host could then send gRPC requests to the CD-HS-ST
+    // service (signing, leaf inserts, etc.). Tightening to 0660 means only
+    // the owner and group can connect; deployments are expected to set the
+    // group to whatever account runs the Go sequencer.
+    fs::set_permissions(socket_path, fs::Permissions::from_mode(0o660))?;
     let incoming = UnixListenerStream::new(listener);
     let service = CdhsSmfService::new();
 

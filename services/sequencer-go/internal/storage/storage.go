@@ -203,12 +203,19 @@ func (s *PostgresStorage) StoreLeafAndDeltasBatch(
 	return tx.Commit()
 }
 
-// GetLatestRoot retrieves the most recent root hash
+// GetLatestRoot retrieves the most recent root hash by tree size.
+//
+// Ordering by `tree_size DESC` (not `created_at`) is intentional: tree size
+// is a monotonic, append-only counter assigned by the sequencer, so it is
+// the authoritative notion of "latest" even if `created_at` clocks jump or
+// rows are inserted out of order during replay/migration. Ties on tree_size
+// are broken by `id DESC` so the most recently inserted row at that size
+// wins (which can happen during a re-sign with new context).
 func (s *PostgresStorage) GetLatestRoot(ctx context.Context) ([]byte, uint64, error) {
 	query := `
 		SELECT root_hash, tree_size
 		FROM cdhs_smf_roots
-		ORDER BY created_at DESC
+		ORDER BY tree_size DESC, id DESC
 		LIMIT 1
 	`
 
@@ -232,13 +239,33 @@ func (s *PostgresStorage) InitSchema(ctx context.Context) error {
 	schema := `
 		-- Note: schema change from TIMESTAMP → TIMESTAMPTZ.
 		-- Existing dev databases require: ALTER TABLE cdhs_smf_roots ALTER COLUMN created_at TYPE TIMESTAMPTZ;
+		--
+		-- Schema invariants (enforced at the DB layer so a buggy or compromised
+		-- sequencer cannot persist a half-formed signed root):
+		--   * signature is NOT NULL  — every signed-root row must carry a real
+		--     Ed25519 signature; a NULL signature would silently make the row
+		--     unverifiable.
+		--   * signature is UNIQUE    — Ed25519 signatures over distinct
+		--     (root, tree_size, context) inputs are overwhelmingly unique;
+		--     a duplicate signature indicates either a bug, a key reuse on the
+		--     same input, or replay, all of which we want to surface as a
+		--     constraint violation rather than persist silently.
+		--   * length CHECK on signature (64 B) and root_hash (32 B) blocks
+		--     truncated/oversized values from ever landing in the table.
 		CREATE TABLE IF NOT EXISTS cdhs_smf_roots (
 			id SERIAL PRIMARY KEY,
 			root_hash BYTEA NOT NULL,
 			tree_size BIGINT NOT NULL,
-			signature BYTEA,
-			created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+			signature BYTEA NOT NULL,
+			created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+			CONSTRAINT cdhs_smf_roots_signature_unique UNIQUE (signature),
+			CONSTRAINT cdhs_smf_roots_signature_len CHECK (octet_length(signature) = 64),
+			CONSTRAINT cdhs_smf_roots_root_hash_len CHECK (octet_length(root_hash) = 32),
+			CONSTRAINT cdhs_smf_roots_tree_size_nonneg CHECK (tree_size >= 0)
 		);
+
+		CREATE INDEX IF NOT EXISTS idx_cdhs_smf_roots_tree_size
+			ON cdhs_smf_roots(tree_size DESC);
 
 		CREATE INDEX IF NOT EXISTS idx_cdhs_smf_roots_created_at
 			ON cdhs_smf_roots(created_at DESC);

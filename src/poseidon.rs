@@ -384,15 +384,23 @@ pub fn bytes_to_field(bytes: &[u8]) -> Fr {
 /// # Python signature  
 /// ``poseidon_hash_bn254_bigint(a: str, b: str) -> str``
 #[pyfunction]
-pub fn poseidon_hash_bn254_bigint(a: &str, b: &str) -> String {
-    let a_int = BigUint::parse_bytes(a.as_bytes(), 10).unwrap_or_default();
-    let b_int = BigUint::parse_bytes(b.as_bytes(), 10).unwrap_or_default();
-    
+pub fn poseidon_hash_bn254_bigint(a: &str, b: &str) -> PyResult<String> {
+    let a_int = BigUint::parse_bytes(a.as_bytes(), 10).ok_or_else(|| {
+        pyo3::exceptions::PyValueError::new_err(
+            "poseidon_hash_bn254_bigint: argument `a` is not a valid base-10 unsigned integer",
+        )
+    })?;
+    let b_int = BigUint::parse_bytes(b.as_bytes(), 10).ok_or_else(|| {
+        pyo3::exceptions::PyValueError::new_err(
+            "poseidon_hash_bn254_bigint: argument `b` is not a valid base-10 unsigned integer",
+        )
+    })?;
+
     let fa = biguint_to_fr(&a_int);
     let fb = biguint_to_fr(&b_int);
     let result = poseidon_hash(fa, fb);
-    
-    fr_to_biguint(result).to_string()
+
+    Ok(fr_to_biguint(result).to_string())
 }
 
 /// Compute domain-separated Poseidon leaf hash.
@@ -400,15 +408,23 @@ pub fn poseidon_hash_bn254_bigint(a: &str, b: &str) -> String {
 /// # Python signature
 /// ``poseidon_leaf_hash_bn254(key: str, value: str) -> str``
 #[pyfunction]
-pub fn poseidon_leaf_hash_bn254(key: &str, value: &str) -> String {
-    let key_int = BigUint::parse_bytes(key.as_bytes(), 10).unwrap_or_default();
-    let value_int = BigUint::parse_bytes(value.as_bytes(), 10).unwrap_or_default();
-    
+pub fn poseidon_leaf_hash_bn254(key: &str, value: &str) -> PyResult<String> {
+    let key_int = BigUint::parse_bytes(key.as_bytes(), 10).ok_or_else(|| {
+        pyo3::exceptions::PyValueError::new_err(
+            "poseidon_leaf_hash_bn254: argument `key` is not a valid base-10 unsigned integer",
+        )
+    })?;
+    let value_int = BigUint::parse_bytes(value.as_bytes(), 10).ok_or_else(|| {
+        pyo3::exceptions::PyValueError::new_err(
+            "poseidon_leaf_hash_bn254: argument `value` is not a valid base-10 unsigned integer",
+        )
+    })?;
+
     let fk = biguint_to_fr(&key_int);
     let fv = biguint_to_fr(&value_int);
     let result = poseidon_leaf_hash(fk, fv);
-    
-    fr_to_biguint(result).to_string()
+
+    Ok(fr_to_biguint(result).to_string())
 }
 
 /// Compute domain-separated Poseidon node hash.
@@ -416,15 +432,23 @@ pub fn poseidon_leaf_hash_bn254(key: &str, value: &str) -> String {
 /// # Python signature
 /// ``poseidon_node_hash_bn254(left: str, right: str) -> str``
 #[pyfunction]
-pub fn poseidon_node_hash_bn254(left: &str, right: &str) -> String {
-    let left_int = BigUint::parse_bytes(left.as_bytes(), 10).unwrap_or_default();
-    let right_int = BigUint::parse_bytes(right.as_bytes(), 10).unwrap_or_default();
-    
+pub fn poseidon_node_hash_bn254(left: &str, right: &str) -> PyResult<String> {
+    let left_int = BigUint::parse_bytes(left.as_bytes(), 10).ok_or_else(|| {
+        pyo3::exceptions::PyValueError::new_err(
+            "poseidon_node_hash_bn254: argument `left` is not a valid base-10 unsigned integer",
+        )
+    })?;
+    let right_int = BigUint::parse_bytes(right.as_bytes(), 10).ok_or_else(|| {
+        pyo3::exceptions::PyValueError::new_err(
+            "poseidon_node_hash_bn254: argument `right` is not a valid base-10 unsigned integer",
+        )
+    })?;
+
     let fl = biguint_to_fr(&left_int);
     let fr_val = biguint_to_fr(&right_int);
     let result = poseidon_node_hash(fl, fr_val);
-    
-    fr_to_biguint(result).to_string()
+
+    Ok(fr_to_biguint(result).to_string())
 }
 
 /// Convert 32 bytes to a BN254 field element (with modular reduction).

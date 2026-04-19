@@ -26,6 +26,12 @@ const LEAF_HASH_PREFIX: &[u8] = b"OLY:LEAF:V1";
 const NODE_HASH_PREFIX: &[u8] = b"OLY:NODE:V1";
 const EMPTY_LEAF_PREFIX: &[u8] = b"OLY:EMPTY-LEAF:V1";
 
+/// Domain-separation prefix for Ed25519 signed roots produced by
+/// [`KeyManager::sign_root`].  Versioned (`:V1`) so a future protocol change
+/// can introduce a new tag without ambiguity.  See `sign_root` for the full
+/// signed-message layout.
+const SIG_ROOT_DOMAIN: &[u8] = b"OLY:SIG:ROOT:V1";
+
 /// Field separator between components in leaf/node hashes — matches `SEP` in
 /// `src/crypto.rs` and `HASH_SEPARATOR` in `protocol/hashes.py`.
 const SEP: &[u8] = b"|";
@@ -273,7 +279,8 @@ impl KeyManager {
     /// The Ed25519 message is constructed as:
     ///
     /// ```text
-    /// message = root[0..32]                       (32 bytes, SMT root hash)
+    /// message = SIG_ROOT_DOMAIN                    (b"OLY:SIG:ROOT:V1", domain separation)
+    ///        || root[0..32]                       (32 bytes, SMT root hash)
     ///        || tree_size_le[0..8]                (8 bytes,  little-endian u64)
     ///        || context_entry* (sorted by key)
     /// ```
@@ -290,19 +297,27 @@ impl KeyManager {
     /// The big-endian u32 length prefix prevents field-bleed collisions (e.g.
     /// `key="ab", value="cd"` vs `key="a", value="bcd"` produce different bytes).
     ///
+    /// The `OLY:SIG:ROOT:V1` prefix is a domain-separation tag: it ensures this
+    /// signing key cannot be tricked into producing a signature whose message
+    /// happens to coincide with one used by a different Olympus subsystem (e.g.
+    /// a redaction-proof or witness payload), even if that subsystem's bytes
+    /// look like `root || tree_size_le || context`.
+    ///
     /// This layout is a **protocol commitment**: verifier implementations must
     /// reproduce exactly these bytes to validate signatures.  Do not reorder
-    /// `root`, `tree_size_le`, or `context` fields without a versioned protocol
-    /// upgrade.
+    /// `SIG_ROOT_DOMAIN`, `root`, `tree_size_le`, or `context` fields without a
+    /// versioned protocol upgrade.
     pub fn sign_root(
         &self,
         root: &[u8; 32],
         tree_size: u64,
         context: &HashMap<String, String>,
     ) -> Result<([u8; 64], [u8; 32]), String> {
-        // Serialize: root || tree_size_le || sorted length-prefixed context entries.
+        // Serialize: SIG_ROOT_DOMAIN || root || tree_size_le || sorted length-prefixed context entries.
         // See the doc-comment above for the authoritative byte layout.
-        let mut message = Vec::from(&root[..]);
+        let mut message = Vec::with_capacity(SIG_ROOT_DOMAIN.len() + 32 + 8);
+        message.extend_from_slice(SIG_ROOT_DOMAIN);
+        message.extend_from_slice(&root[..]);
         message.extend_from_slice(&tree_size.to_le_bytes());
 
         // Add sorted context with length-prefixed keys and values.
