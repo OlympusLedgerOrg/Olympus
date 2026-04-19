@@ -24,7 +24,7 @@ import os
 from contextlib import asynccontextmanager
 from typing import TYPE_CHECKING, Annotated
 
-from fastapi import FastAPI, File, HTTPException, Request, UploadFile, status
+from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
@@ -194,7 +194,10 @@ async def health_check() -> HealthResponse:
 )
 async def parse_document(
     file: Annotated[UploadFile, File(description="Document file to parse")],
-    expected_blake3: str | None = None,
+    expected_blake3: Annotated[
+        str | None,
+        Form(description="Optional expected BLAKE3 hash for verification"),
+    ] = None,
 ) -> ParseResponse:
     """Parse a document and return structured extraction with provenance.
 

@@ -123,6 +123,24 @@ Coverage includes:
 
 **Pass under the current V1 hash contract.** The verifier system has both fixed-vector conformance and randomized parity coverage.
 
+### Validation snapshot (local run on this branch)
+
+- `pytest /home/runner/work/Olympus/Olympus/tests/test_federation.py /home/runner/work/Olympus/Olympus/tests/test_federation_multinode_integration.py`
+  - **64 passed**
+- `pytest /home/runner/work/Olympus/Olympus/services/ingest-parser/tests/test_api.py /home/runner/work/Olympus/Olympus/services/ingest-parser/tests/test_schemas.py`
+  - **21 passed**, **1 warning** (`HTTP_422_UNPROCESSABLE_ENTITY` deprecation warning from FastAPI)
+- `npm test` in `/home/runner/work/Olympus/Olympus/verifiers/javascript`
+  - JavaScript verifier smoke tests passed
+  - JavaScript conformance tests passed against fixed vectors
+- `go test ./...` in `/home/runner/work/Olympus/Olympus/verifiers/go`
+  - Go verifier tests passed
+- `cargo test` in `/home/runner/work/Olympus/Olympus/verifiers/rust`
+  - **12 passed**
+- `python /home/runner/work/Olympus/Olympus/verifiers/cli/test_conformance.py`
+  - Python conformance tests passed against fixed vectors
+- `OLYMPUS_DETERMINISM_CASES=5000 python /home/runner/work/Olympus/Olympus/verifiers/cli/test_cross_language_determinism.py`
+  - Cross-language determinism confirmed for **5006** records (6 fixed + 5000 randomized)
+
 ---
 
 ## 6. Observed gaps / blockers
@@ -136,6 +154,7 @@ Coverage includes:
 
 3. **Ingest test suite setup required correction**
    - The ingest-parser API tests needed lifespan-aware `TestClient` setup so startup initialization runs and the service contract is exercised correctly.
+   - This audit branch corrects that setup and adds explicit provenance assertions.
 
 4. **No standalone parity results artifact**
    - Verifier parity is enforced by tests and CI, but there is no committed results snapshot/report outside the test harness itself.
