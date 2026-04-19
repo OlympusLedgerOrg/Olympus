@@ -343,9 +343,9 @@ def test_empty_hashes_recursive():
 
 
 def test_max_key_value():
-    """Tree handles maximum key value (all 0xFF)."""
+    """Tree handles the maximum valid field-element key."""
     tree = PoseidonSMT()
-    key = b"\xff" * 32
+    key = (SNARK_SCALAR_FIELD - 1).to_bytes(32, byteorder="big")
     value = SNARK_SCALAR_FIELD - 1
 
     tree.update(key, value)
