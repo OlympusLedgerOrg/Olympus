@@ -2,6 +2,7 @@
 package api
 
 import (
+	"context"
 	"crypto/sha256"
 	"crypto/subtle"
 	"encoding/json"
@@ -15,10 +16,20 @@ import (
 	pb "github.com/OlympusLedgerOrg/Olympus/services/sequencer/proto"
 )
 
+// storageQuerier is the persistence contract required by the sequencer API.
+// It is satisfied by *storage.PostgresStorage in production and by test
+// doubles in unit tests.
+type storageQuerier interface {
+	StoreLeafAndDeltas(ctx context.Context, deltas []storage.SmtDelta, root []byte, treeSize uint64, signature []byte, leaf storage.LeafEntry) error
+	StoreLeafAndDeltasBatch(ctx context.Context, batch []storage.BatchLeaf, root []byte, treeSize uint64, signature []byte) error
+	GetLatestRoot(ctx context.Context) ([]byte, uint64, error)
+	GetRootByTreeSize(ctx context.Context, treeSize uint64) (*storage.SignedRoot, error)
+}
+
 // Sequencer provides a Trillian-shaped log service API
 type Sequencer struct {
 	smtClient *client.CdhsSmfClient
-	storage   *storage.PostgresStorage
+	storage   storageQuerier
 	token     string
 }
 
