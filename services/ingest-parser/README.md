@@ -57,6 +57,7 @@ Accepts a raw file binary and returns a strictly formatted JSON.
 **Request:**
 - Content-Type: `multipart/form-data`
 - Body: `file` (binary) - The raw document to parse
+- Optional form field: `expected_blake3` - Expected raw-file BLAKE3 for request-time verification
 
 **Response:**
 ```json
