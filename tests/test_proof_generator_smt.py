@@ -8,20 +8,20 @@ import pytest
 
 from proofs.proof_generator import ProofGenerator
 from protocol.hashes import blake3_hash
-from protocol.poseidon_smt import PoseidonSMT
+from protocol.poseidon_smt import PoseidonSMT, key_to_smt_bytes
 
 
 def test_witness_from_smt_roundtrip() -> None:
     """witness_from_smt produces a valid snarkjs input dict."""
     smt = PoseidonSMT()
-    key1 = blake3_hash([b"key1"])
-    key2 = blake3_hash([b"key2"])
+    key1 = key_to_smt_bytes(blake3_hash([b"key1"]))
+    key2 = key_to_smt_bytes(blake3_hash([b"key2"]))
     val1 = int.from_bytes(blake3_hash([b"val1"]), byteorder="big")
     val2 = int.from_bytes(blake3_hash([b"val2"]), byteorder="big")
     smt.update(key1, val1)
     smt.update(key2, val2)
 
-    key_absent = blake3_hash([b"not_here"])
+    key_absent = key_to_smt_bytes(blake3_hash([b"not_here"]))
     witness = ProofGenerator.witness_from_smt(smt, key_absent)
     inp = witness.inputs
 
@@ -32,7 +32,7 @@ def test_witness_from_smt_roundtrip() -> None:
 
 def test_witness_from_smt_raises_for_present_key() -> None:
     smt = PoseidonSMT()
-    key1 = blake3_hash([b"key1"])
+    key1 = key_to_smt_bytes(blake3_hash([b"key1"]))
     smt.update(key1, int.from_bytes(blake3_hash([b"val1"]), byteorder="big"))
 
     with pytest.raises(ValueError):

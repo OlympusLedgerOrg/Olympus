@@ -57,6 +57,38 @@ def _precompute_poseidon_empty_hashes(height: int = 256) -> list[int]:
 POSEIDON_EMPTY_HASHES = _precompute_poseidon_empty_hashes()
 
 
+def key_to_smt_bytes(raw_key: bytes) -> bytes:
+    """Convert an arbitrary 32-byte key to a valid Poseidon SMT key.
+
+    Keys passed to :meth:`PoseidonSMT.update` must represent integers that are
+    valid BN128 scalar field elements (i.e. ``int < SNARK_SCALAR_FIELD``).
+    Raw BLAKE3 hashes span the full 256-bit space and therefore have roughly a
+    25 % chance of being out of range.
+
+    This helper performs an *explicit* arithmetic modular reduction so that
+    callers are aware the mapping occurs.  For typical inputs (BLAKE3 hashes or
+    other pseudo-random 32-byte values) the collision probability is negligible
+    (~2⁻²⁵⁴), unlike the previous *silent* reduction that was hidden inside
+    ``update()`` and could mask programmer errors.
+
+    If ``raw_key`` already encodes a valid field element the returned bytes are
+    identical to the input.
+
+    Args:
+        raw_key: Arbitrary 32-byte key (e.g. a BLAKE3 hash).
+
+    Returns:
+        32-byte big-endian encoding of ``int(raw_key) % SNARK_SCALAR_FIELD``.
+
+    Raises:
+        ValueError: If ``raw_key`` is not exactly 32 bytes.
+    """
+    if len(raw_key) != 32:
+        raise ValueError(f"raw_key must be 32 bytes, got {len(raw_key)}")
+    field_int = int.from_bytes(raw_key, byteorder="big") % SNARK_SCALAR_FIELD
+    return field_int.to_bytes(32, byteorder="big")
+
+
 def _key_to_path_bits(key: bytes) -> list[int]:
     """
     Convert 32-byte key to 256-bit path (list of 0s and 1s).
