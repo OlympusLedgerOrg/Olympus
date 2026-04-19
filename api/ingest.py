@@ -569,7 +569,7 @@ def _consume_rate_limit(subject_type: str, subject: str, action: str) -> bool:
         bucket = _AuthTokenBucket(
             capacity=capacity,
             refill_rate=refill,
-            tokens=capacity,
+            tokens=int(capacity),
             last_refill=monotonic(),
         )
 
