@@ -308,6 +308,14 @@ def test_leaf_hash_matches_circuit():
     assert tree.get_root() != POSEIDON_EMPTY_HASHES[256]
 
 
+def test_out_of_field_key_rejected():
+    """Keys must be valid field elements and must not be reduced modulo the field."""
+    tree = PoseidonSMT()
+
+    with pytest.raises(ValueError, match="field element"):
+        tree.update(SNARK_SCALAR_FIELD.to_bytes(32, byteorder="big"), 42)
+
+
 # --- Empty hash precomputation ---
 
 
@@ -335,9 +343,9 @@ def test_empty_hashes_recursive():
 
 
 def test_max_key_value():
-    """Tree handles maximum key value (all 0xFF)."""
+    """Tree handles the maximum valid field-element key."""
     tree = PoseidonSMT()
-    key = b"\xff" * 32
+    key = (SNARK_SCALAR_FIELD - 1).to_bytes(32, byteorder="big")
     value = SNARK_SCALAR_FIELD - 1
 
     tree.update(key, value)

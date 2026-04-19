@@ -27,6 +27,9 @@ func main() {
 	if apiToken == "" {
 		log.Fatalf("SEQUENCER_API_TOKEN is required")
 	}
+	if len(apiToken) < 32 {
+		log.Fatalf("SEQUENCER_API_TOKEN must be at least 32 bytes")
+	}
 	if httpAddr == "" {
 		httpAddr = ":8080"
 	}

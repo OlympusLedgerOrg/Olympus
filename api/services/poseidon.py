@@ -29,6 +29,8 @@ if TYPE_CHECKING:
     from protocol.poseidon_smt import PoseidonSMT
     from storage.postgres import StorageLayer
 
+from protocol.poseidon_smt import key_to_smt_bytes as _key_to_smt_bytes
+
 
 logger = logging.getLogger(__name__)
 
@@ -109,7 +111,7 @@ def build_poseidon_smt_for_storage_shard(
 
         poseidon_smt = PoseidonSMT()
         for row in cur.fetchall():
-            leaf_key = bytes(row["key"])
+            leaf_key = _key_to_smt_bytes(bytes(row["key"]))
             value_hash = bytes(row["value_hash"])
             poseidon_smt.update(leaf_key, value_hash_to_poseidon_field(value_hash))
     return poseidon_smt

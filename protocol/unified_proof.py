@@ -535,7 +535,7 @@ class UnifiedProofGenerator:
         # For minimal witness-backed proof, use simple SMT structure
         from proofs.proof_generator import ProofGenerator
         from protocol.hashes import blake3_hash
-        from protocol.poseidon_smt import PoseidonSMT
+        from protocol.poseidon_smt import PoseidonSMT, key_to_smt_bytes
 
         leaf_hashes = [
             blake3_hash([RedactionProtocol.canonical_section_bytes(section)])
@@ -544,10 +544,10 @@ class UnifiedProofGenerator:
 
         smt = PoseidonSMT()
         for index, leaf_hash in enumerate(leaf_hashes):
-            key = blake3_hash([str(index).encode("utf-8")])
+            key = key_to_smt_bytes(blake3_hash([str(index).encode("utf-8")]))
             smt.update(key, int.from_bytes(leaf_hash, byteorder="big"))
 
-        target_key = blake3_hash([b"0"])
+        target_key = key_to_smt_bytes(blake3_hash([b"0"]))
         witness = ProofGenerator.witness_from_smt_existence(smt, target_key)
 
         poseidon_root = str(smt.get_root())

@@ -90,6 +90,7 @@ from protocol.merkle import (
     merkle_leaf_hash,
     verify_proof,
 )
+from protocol.poseidon_smt import key_to_smt_bytes as _poseidon_smt_key
 from protocol.ssmf import ExistenceProof
 from protocol.telemetry import INGEST_TOTAL, LEDGER_HEIGHT, timed_operation
 from protocol.timestamps import current_timestamp
@@ -568,7 +569,7 @@ def _consume_rate_limit(subject_type: str, subject: str, action: str) -> bool:
         bucket = _AuthTokenBucket(
             capacity=capacity,
             refill_rate=refill,
-            tokens=capacity,
+            tokens=int(capacity),
             last_refill=monotonic(),
         )
 
@@ -665,7 +666,7 @@ def _build_poseidon_smt_for_storage_shard(
 
         poseidon_smt = PoseidonSMT()
         for row in cur.fetchall():
-            leaf_key = bytes(row["key"])
+            leaf_key = _poseidon_smt_key(bytes(row["key"]))
             value_hash = bytes(row["value_hash"])
             poseidon_smt.update(leaf_key, _value_hash_to_poseidon_field(value_hash))
     return poseidon_smt
@@ -1028,7 +1029,9 @@ async def ingest_batch(
                 content_hash, content_hash_bytes, proof_id, canonical_content = record_data_map[
                     original_idx
                 ]
-                record_smt_key = record_key(record.record_type, record.record_id, record.version)
+                record_smt_key = _poseidon_smt_key(
+                    record_key(record.record_type, record.record_id, record.version)
+                )
 
                 # In-memory-only dedup: when no storage is configured, RT-H1
                 # cannot run, so check the in-memory cache here instead.
@@ -1588,7 +1591,7 @@ async def commit_artifact(
                     ) from e
 
         # Fall back to in-memory storage
-        artifact_key = record_key("artifact", request.id, 1)
+        artifact_key = _poseidon_smt_key(record_key("artifact", request.id, 1))
         poseidon_smt = _get_or_build_poseidon_smt(shard_id)
         poseidon_smt.update(artifact_key, _value_hash_to_poseidon_field(artifact_hash_bytes))
         poseidon_root_normalized = str(poseidon_smt.get_root())

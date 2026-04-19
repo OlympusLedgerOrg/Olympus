@@ -296,6 +296,18 @@ class TestTokenBucket:
         # After 1 second at rate 100/s, should have 5 tokens (capped)
         assert bucket.consume()
 
+    def test_subtoken_refill_does_not_grant_request(self) -> None:
+        bucket = _TokenBucket(capacity=1.0, refill_rate=10.0, tokens=0, last_refill=100.0)
+        with patch("api.auth.monotonic", return_value=100.099):
+            assert not bucket.consume()
+
+    def test_fractional_elapsed_accumulates_across_calls(self) -> None:
+        bucket = _TokenBucket(capacity=2.0, refill_rate=0.5, tokens=0, last_refill=100.0)
+        with patch("api.auth.monotonic", return_value=101.0):
+            assert not bucket.consume()
+        with patch("api.auth.monotonic", return_value=102.0):
+            assert bucket.consume()
+
 
 # ------------------------------------------------------------------ #
 # MemoryRateLimitBackend
