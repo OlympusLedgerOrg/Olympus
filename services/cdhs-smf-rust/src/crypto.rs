@@ -86,6 +86,10 @@ pub fn compute_global_key(shard_id: &str, record_key: &RecordKey) -> Result<[u8;
     // Step 2: Derive global key using BLAKE3 derive_key mode with
     // length-prefixed shard_id and record_key_bytes.
     let shard_bytes = shard_id.as_bytes();
+    // Hot path: cheap bound check elided in release builds; the inner
+    // `length_prefixed` carries the equivalent `assert!` for production.
+    debug_assert!(shard_bytes.len() <= u32::MAX as usize);
+    debug_assert!(record_key_bytes.len() <= u32::MAX as usize);
     let mut key_material = Vec::with_capacity(
         4 + shard_bytes.len() + 4 + record_key_bytes.len(),
     );
@@ -115,6 +119,8 @@ const KEY_PREFIX: &[u8] = b"OLY:KEY:V1";
 fn compute_record_key_bytes(rk: &RecordKey) -> Result<[u8; 32], String> {
     let rt = rk.record_type.as_bytes();
     let ri = rk.record_id.as_bytes();
+    debug_assert!(rt.len() <= u32::MAX as usize);
+    debug_assert!(ri.len() <= u32::MAX as usize);
 
     let version: u64 = if rk.version.is_empty() {
         0

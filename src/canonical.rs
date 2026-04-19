@@ -28,14 +28,29 @@ use unicode_normalization::UnicodeNormalization;
 /// ``canonical_json_encode(obj: object) -> str``
 #[pyfunction]
 pub fn canonical_json_encode(py: Python<'_>, obj: &Bound<'_, PyAny>) -> PyResult<String> {
-    encode_value(py, obj)
+    encode_value(py, obj, 0)
 }
 
 // ---------------------------------------------------------------------------
 // Core recursive encoder
 // ---------------------------------------------------------------------------
 
-fn encode_value(py: Python<'_>, value: &Bound<'_, PyAny>) -> PyResult<String> {
+/// Maximum nesting depth for canonical JSON encoding.
+///
+/// Hard ceiling that protects the PyO3 worker thread from stack overflow on
+/// pathologically nested input (the encoder is recursive and runs on Python's
+/// thread, which has a smaller stack than typical Rust threads).  Set lower
+/// than the Python reference (`max_depth=100` in `protocol/canonical_json.py`)
+/// because the Rust path holds additional `Bound<'py, PyAny>` reference
+/// frames per level.  Real ledger documents nest only a handful of levels.
+const MAX_DEPTH: usize = 64;
+
+fn encode_value(py: Python<'_>, value: &Bound<'_, PyAny>, depth: usize) -> PyResult<String> {
+    if depth > MAX_DEPTH {
+        return Err(pyo3::exceptions::PyValueError::new_err(format!(
+            "Canonical JSON nesting depth {depth} exceeds maximum of {MAX_DEPTH}"
+        )));
+    }
     // None
     if value.is_none() {
         return Ok("null".to_string());
@@ -90,7 +105,8 @@ fn encode_value(py: Python<'_>, value: &Bound<'_, PyAny>) -> PyResult<String> {
     // list / tuple
     if value.is_instance_of::<PyList>() || value.is_instance_of::<PyTuple>() {
         let items: Vec<Bound<'_, PyAny>> = value.extract()?;
-        let encoded: PyResult<Vec<String>> = items.iter().map(|x| encode_value(py, x)).collect();
+        let encoded: PyResult<Vec<String>> =
+            items.iter().map(|x| encode_value(py, x, depth + 1)).collect();
         return Ok(format!("[{}]", encoded?.join(",")));
     }
 
@@ -113,7 +129,7 @@ fn encode_value(py: Python<'_>, value: &Bound<'_, PyAny>) -> PyResult<String> {
                     "Duplicate key after NFC normalization: {key_nfc:?}"
                 )));
             }
-            let val_enc = encode_value(py, &v)?;
+            let val_enc = encode_value(py, &v, depth + 1)?;
             pairs.push((key_nfc, val_enc));
         }
         // Sort by NFC-normalised key
