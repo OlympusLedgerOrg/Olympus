@@ -187,7 +187,14 @@ async def commit_dataset(
         body.committer_pubkey,
     )
 
-    # 5. Check replay: UNIQUE(dataset_id, parent_commit_id, manifest_hash)
+    # 5. Verify Ed25519 signature
+    if not _verify_signature(body.committer_pubkey, commit_id, body.commit_signature):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Invalid Ed25519 signature.",
+        )
+
+    # 6. Check replay: UNIQUE(dataset_id, parent_commit_id, manifest_hash)
     existing = await db.execute(
         select(DatasetArtifact.commit_id).where(
             DatasetArtifact.dataset_id == ds_id,
@@ -203,13 +210,6 @@ async def commit_dataset(
                 "detail": "Duplicate commit: same content already committed.",
                 "existing_commit_id": existing_commit,
             },
-        )
-
-    # 6. Verify Ed25519 signature
-    if not _verify_signature(body.committer_pubkey, commit_id, body.commit_signature):
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Invalid Ed25519 signature.",
         )
 
     # 7. Cross-reference committer key against key_credentials (D12)

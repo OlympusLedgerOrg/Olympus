@@ -143,7 +143,9 @@ class PoseidonSMT:
         path = self._key_to_path(key)
 
         # Compute leaf hash: DomainPoseidon(DOMAIN_LEAF, key_int, value_int)
-        key_int = int.from_bytes(key, byteorder="big") % SNARK_SCALAR_FIELD
+        key_int = int.from_bytes(key, byteorder="big")
+        if key_int >= SNARK_SCALAR_FIELD:
+            raise ValueError("Key must be a valid field element")
         current_hash = _poseidon_hash_leaf(key_int, value)
 
         # Go from leaf level (255) up to root (0)

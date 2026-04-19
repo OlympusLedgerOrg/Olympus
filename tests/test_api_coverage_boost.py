@@ -28,6 +28,7 @@ from api.deps import get_db
 from api.main import create_app
 from api.models import Base
 from api.models.request import PublicRecordsRequest, RequestStatus
+from protocol.hashes import hash_bytes
 
 
 TEST_DB_URL = "sqlite+aiosqlite:///:memory:"
@@ -478,6 +479,29 @@ async def test_verify_groth16_vkey_not_found():
     )
     assert ok is False
     assert reason == "vkey_not_found"
+
+
+@pytest.mark.asyncio
+async def test_verify_groth16_vkey_hash_mismatch(tmp_path):
+    """verify_groth16_proof rejects a verification key whose content hash mismatches config."""
+    from api.services.zkproof import verify_groth16_proof
+
+    vkey_path = tmp_path / "vkey.json"
+    vkey_bytes = b"{}"
+    vkey_path.write_bytes(vkey_bytes)
+
+    with patch.dict(
+        os.environ,
+        {
+            "OLYMPUS_ZK_DIR": str(tmp_path),
+            "OLYMPUS_ZK_VKEY_HASH": "00" * 32,
+        },
+    ):
+        ok, reason = verify_groth16_proof({"proof_type": "groth16"}, vkey_path=str(vkey_path))
+
+    assert hash_bytes(vkey_bytes).hex() != "00" * 32
+    assert ok is False
+    assert reason == "vkey_hash_mismatch"
 
 
 @pytest.mark.asyncio

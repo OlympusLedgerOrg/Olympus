@@ -313,6 +313,21 @@ async def test_commit_dataset_invalid_signature_returns_403(client):
 
 
 @pytest.mark.asyncio
+async def test_commit_dataset_duplicate_with_invalid_signature_returns_403(client):
+    """Signature verification must run before duplicate detection."""
+    pubkey, _, signing_key = create_signing_keypair()
+    body = build_commit_request(pubkey, signing_key, dataset_name="duplicate-invalid-sig-test")
+
+    resp1 = await client.post("/datasets/commit", json=body)
+    assert resp1.status_code == 201
+
+    body["commit_signature"] = "00" * 64
+    resp2 = await client.post("/datasets/commit", json=body)
+    assert resp2.status_code == 403
+    assert "signature" in resp2.json()["detail"].lower()
+
+
+@pytest.mark.asyncio
 async def test_commit_dataset_malformed_signature_returns_403(client):
     """POST /datasets/commit with a malformed signature should return 403."""
     pubkey, _, signing_key = create_signing_keypair()

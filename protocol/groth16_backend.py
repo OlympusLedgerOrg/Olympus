@@ -335,6 +335,7 @@ class Groth16Backend(ProofBackendProtocol):
             check=True,
             capture_output=True,
             text=True,
+            timeout=30,
         )
 
     def _find_verification_key(self, circuit: str) -> Path | None:

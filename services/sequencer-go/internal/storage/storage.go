@@ -258,6 +258,7 @@ func (s *PostgresStorage) InitSchema(ctx context.Context) error {
 			tree_size BIGINT NOT NULL,
 			signature BYTEA NOT NULL,
 			created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+			CONSTRAINT uq_cdhs_smf_roots_tree_size UNIQUE (tree_size),
 			CONSTRAINT cdhs_smf_roots_signature_unique UNIQUE (signature),
 			CONSTRAINT cdhs_smf_roots_signature_len CHECK (octet_length(signature) = 64),
 			CONSTRAINT cdhs_smf_roots_root_hash_len CHECK (octet_length(root_hash) = 32),

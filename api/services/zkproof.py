@@ -22,6 +22,7 @@ import os
 from pathlib import Path as _Path
 
 from fastapi import HTTPException, status
+from protocol.hashes import hash_bytes
 
 
 logger = logging.getLogger(__name__)
@@ -181,8 +182,11 @@ def verify_groth16_proof(
         ) from None
 
     try:
-        with open(resolved, encoding="utf-8") as f:
-            vkey_json = f.read()
+        vkey_bytes = resolved.read_bytes()
+        expected_vkey_hash = os.environ.get("OLYMPUS_ZK_VKEY_HASH")
+        if expected_vkey_hash and hash_bytes(vkey_bytes).hex() != expected_vkey_hash.lower():
+            return False, "vkey_hash_mismatch"
+        vkey_json = vkey_bytes.decode("utf-8")
 
         # Extract the inner proof object (pi_a/pi_b/pi_c), not the
         # outer wrapper dict which also contains public_signals and metadata.

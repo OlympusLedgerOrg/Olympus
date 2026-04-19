@@ -400,16 +400,19 @@ class _TokenBucket:
 
     capacity: float
     refill_rate: float
-    tokens: float
+    tokens: int
     last_refill: float
 
     def consume(self) -> bool:
         now = monotonic()
-        self.tokens = min(self.capacity, self.tokens + (now - self.last_refill) * self.refill_rate)
-        self.last_refill = now
-        if self.tokens < 1.0:
+        if self.refill_rate > 0:
+            replenished = int((now - self.last_refill) * self.refill_rate)
+            if replenished > 0:
+                self.tokens = min(int(self.capacity), self.tokens + replenished)
+                self.last_refill += replenished / self.refill_rate
+        if self.tokens < 1:
             return False
-        self.tokens -= 1.0
+        self.tokens -= 1
         return True
 
 
@@ -480,7 +483,7 @@ class MemoryRateLimitBackend:
                 bucket = _TokenBucket(
                     capacity=capacity,
                     refill_rate=refill_rate,
-                    tokens=capacity,
+                    tokens=int(capacity),
                     last_refill=monotonic(),
                 )
 
@@ -531,10 +534,13 @@ if tokens == nil or last_refill == nil then
 end
 
 local elapsed = math.max(now - last_refill, 0)
-tokens = math.min(capacity, tokens + elapsed * refill_rate)
-last_refill = now
+local replenished = math.floor(elapsed * refill_rate)
+if replenished > 0 then
+    tokens = math.min(capacity, tokens + replenished)
+    last_refill = last_refill + replenished / refill_rate
+end
 
-if tokens < 1.0 then
+if tokens < 1 then
     redis.call('HSET', key, 'tokens', tostring(tokens),
                'last_refill', tostring(last_refill),
                'capacity', tostring(capacity),
@@ -543,7 +549,7 @@ if tokens < 1.0 then
     return 0
 end
 
-tokens = tokens - 1.0
+tokens = tokens - 1
 redis.call('HSET', key, 'tokens', tostring(tokens),
            'last_refill', tostring(last_refill),
            'capacity', tostring(capacity),
@@ -595,7 +601,7 @@ return 1
             return _TokenBucket(
                 capacity=float(data["capacity"]),
                 refill_rate=float(data["refill_rate"]),
-                tokens=float(data["tokens"]),
+                tokens=int(data["tokens"]),
                 last_refill=float(data["last_refill"]),
             )
         except (KeyError, ValueError):
@@ -881,7 +887,7 @@ async def rate_limit(request: Request) -> None:
         bucket = _TokenBucket(
             capacity=_RATE_LIMIT_CAPACITY,
             refill_rate=_RATE_LIMIT_REFILL,
-            tokens=_RATE_LIMIT_CAPACITY,
+            tokens=int(_RATE_LIMIT_CAPACITY),
             last_refill=monotonic(),
         )
 

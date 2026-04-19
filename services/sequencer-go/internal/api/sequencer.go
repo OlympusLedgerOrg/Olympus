@@ -182,24 +182,24 @@ func (s *Sequencer) handleQueueLeaf(w http.ResponseWriter, r *http.Request) {
 	// Fix 2c: Validate returned hash lengths before storage
 	if len(updateResp.NewRoot) != 32 {
 		log.Printf("Rust service violated hash length contract: NewRoot length %d", len(updateResp.NewRoot))
-		http.Error(w, "Rust service violated hash length contract", http.StatusBadGateway)
+		http.Error(w, "upstream error", http.StatusBadGateway)
 		return
 	}
 	if len(updateResp.GlobalKey) != 32 {
 		log.Printf("Rust service violated hash length contract: GlobalKey length %d", len(updateResp.GlobalKey))
-		http.Error(w, "Rust service violated hash length contract", http.StatusBadGateway)
+		http.Error(w, "upstream error", http.StatusBadGateway)
 		return
 	}
 	if len(updateResp.LeafValueHash) != 32 {
 		log.Printf("Rust service violated hash length contract: LeafValueHash length %d", len(updateResp.LeafValueHash))
-		http.Error(w, "Rust service violated hash length contract", http.StatusBadGateway)
+		http.Error(w, "upstream error", http.StatusBadGateway)
 		return
 	}
 
 	// Fix 2d: Validate delta count before storage
 	if len(updateResp.Deltas) != 256 {
 		log.Printf("Rust service returned wrong delta count: %d", len(updateResp.Deltas))
-		http.Error(w, "Rust service returned wrong delta count", http.StatusBadGateway)
+		http.Error(w, "upstream error", http.StatusBadGateway)
 		return
 	}
 
@@ -331,24 +331,24 @@ func (s *Sequencer) handleQueueLeaves(w http.ResponseWriter, r *http.Request) {
 		// Validate returned hash lengths
 		if len(updateResp.NewRoot) != 32 {
 			log.Printf("Rust service violated hash length contract: NewRoot length %d", len(updateResp.NewRoot))
-			http.Error(w, "Rust service violated hash length contract", http.StatusBadGateway)
+			http.Error(w, "upstream error", http.StatusBadGateway)
 			return
 		}
 		if len(updateResp.GlobalKey) != 32 {
 			log.Printf("Rust service violated hash length contract: GlobalKey length %d", len(updateResp.GlobalKey))
-			http.Error(w, "Rust service violated hash length contract", http.StatusBadGateway)
+			http.Error(w, "upstream error", http.StatusBadGateway)
 			return
 		}
 		if len(updateResp.LeafValueHash) != 32 {
 			log.Printf("Rust service violated hash length contract: LeafValueHash length %d", len(updateResp.LeafValueHash))
-			http.Error(w, "Rust service violated hash length contract", http.StatusBadGateway)
+			http.Error(w, "upstream error", http.StatusBadGateway)
 			return
 		}
 
 		// Validate delta count
 		if len(updateResp.Deltas) != 256 {
 			log.Printf("Rust service returned wrong delta count: %d", len(updateResp.Deltas))
-			http.Error(w, "Rust service returned wrong delta count", http.StatusBadGateway)
+			http.Error(w, "upstream error", http.StatusBadGateway)
 			return
 		}
 

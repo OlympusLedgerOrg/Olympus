@@ -488,6 +488,7 @@ class TestRunSnarkjs:
         assert cmd[0] == "/usr/bin/npx"
         assert cmd[1] == "snarkjs"
         assert "groth16" in cmd
+        assert call_args.kwargs["timeout"] == 30
 
     def test_run_snarkjs_with_direct_binary(self, tmp_path: Path) -> None:
         """Test that _run_snarkjs() uses direct binary when snarkjs_bin is not npx."""
@@ -510,6 +511,7 @@ class TestRunSnarkjs:
         cmd = call_args[0][0]
         assert cmd[0] == "/usr/local/bin/snarkjs"
         assert cmd[1] == "groth16"  # No "snarkjs" prefix
+        assert call_args.kwargs["timeout"] == 30
 
 
 class TestProofSystemType:
