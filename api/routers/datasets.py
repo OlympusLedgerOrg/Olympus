@@ -61,6 +61,7 @@ router = APIRouter(prefix="/datasets", tags=["datasets"])
 # Shards with more than this many commits return an empty proof rather than
 # triggering OOM / CPU-DoS.  Same limit used in ledger.py and documents.py.
 _MERKLE_LEAF_LIMIT = 50_000
+_DATASET_SIGNATURE_PREFIX = b"OLY:DATASET:COMMIT:V1|"
 
 
 # ---------------------------------------------------------------------------
@@ -85,11 +86,16 @@ def _build_manifest_dict(body: DatasetCommitRequest) -> dict:
     }
 
 
+def _signature_message(commit_id: str) -> bytes:
+    """Build the signed message bytes for dataset and lineage commit signatures."""
+    return _DATASET_SIGNATURE_PREFIX + bytes.fromhex(commit_id)
+
+
 def _verify_signature(pubkey_hex: str, commit_id: str, signature_hex: str) -> bool:
-    """Verify Ed25519 signature over commit_id bytes."""
+    """Verify Ed25519 signature over a domain-separated commit message."""
     try:
         verify_key = nacl.signing.VerifyKey(bytes.fromhex(pubkey_hex))
-        verify_key.verify(bytes.fromhex(commit_id), bytes.fromhex(signature_hex))
+        verify_key.verify(_signature_message(commit_id), bytes.fromhex(signature_hex))
     except (nacl.exceptions.BadSignatureError, ValueError):
         return False
     return True
@@ -187,7 +193,14 @@ async def commit_dataset(
         body.committer_pubkey,
     )
 
-    # 5. Check replay: UNIQUE(dataset_id, parent_commit_id, manifest_hash)
+    # 5. Verify Ed25519 signature
+    if not _verify_signature(body.committer_pubkey, commit_id, body.commit_signature):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Invalid Ed25519 signature.",
+        )
+
+    # 6. Check replay: UNIQUE(dataset_id, parent_commit_id, manifest_hash)
     existing = await db.execute(
         select(DatasetArtifact.commit_id).where(
             DatasetArtifact.dataset_id == ds_id,
@@ -203,13 +216,6 @@ async def commit_dataset(
                 "detail": "Duplicate commit: same content already committed.",
                 "existing_commit_id": existing_commit,
             },
-        )
-
-    # 6. Verify Ed25519 signature
-    if not _verify_signature(body.committer_pubkey, commit_id, body.commit_signature):
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Invalid Ed25519 signature.",
         )
 
     # 7. Cross-reference committer key against key_credentials (D12)
@@ -815,7 +821,14 @@ async def commit_lineage(
     )
     commit_id = blake3_hash([DATASET_LINEAGE_PREFIX, key_data]).hex()
 
-    # 3. Check uniqueness (dataset_id, model_id, event_type, committer_pubkey)
+    # 3. Verify signature
+    if not _verify_signature(body.committer_pubkey, commit_id, body.commit_signature):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Invalid Ed25519 signature.",
+        )
+
+    # 4. Check uniqueness (dataset_id, model_id, event_type, committer_pubkey)
     existing = await db.execute(
         select(DatasetLineageEvent.commit_id).where(
             DatasetLineageEvent.dataset_id == dataset_id,
@@ -832,13 +845,6 @@ async def commit_lineage(
                 "detail": "Duplicate lineage event.",
                 "existing_commit_id": existing_commit,
             },
-        )
-
-    # 4. Verify signature
-    if not _verify_signature(body.committer_pubkey, commit_id, body.commit_signature):
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Invalid Ed25519 signature.",
         )
 
     # 5. Cross-reference key revocation

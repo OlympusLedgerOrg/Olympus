@@ -28,6 +28,7 @@ import api.auth as auth_module
 from api.deps import get_db
 from api.main import create_app
 from api.models import Base
+from api.routers.datasets import _DATASET_SIGNATURE_PREFIX
 from protocol.hashes import (
     DATASET_LINEAGE_PREFIX,
     _length_prefixed_bytes,
@@ -104,7 +105,7 @@ def sign_commit(signing_key: nacl.signing.SigningKey, commit_id: str) -> str:
     Returns:
         128-character hex-encoded signature.
     """
-    signed = signing_key.sign(bytes.fromhex(commit_id))
+    signed = signing_key.sign(_DATASET_SIGNATURE_PREFIX + bytes.fromhex(commit_id))
     return signed.signature.hex()
 
 
@@ -296,6 +297,26 @@ async def test_commit_dataset_duplicate_manifest_returns_409(client):
     resp2 = await client.post("/datasets/commit", json=body)
     assert resp2.status_code == 409
     assert "Duplicate" in str(resp2.json())
+
+
+@pytest.mark.asyncio
+async def test_commit_dataset_duplicate_with_invalid_signature_returns_403(client):
+    """POST /datasets/commit should reject invalid signatures before duplicate checks."""
+    pubkey, _, signing_key = create_signing_keypair()
+    body = build_commit_request(
+        pubkey,
+        signing_key,
+        dataset_name="duplicate-invalid-sig-test",
+        source_uri="https://example.com/duplicate-invalid-sig.csv",
+    )
+
+    resp1 = await client.post("/datasets/commit", json=body)
+    assert resp1.status_code == 201
+
+    body["commit_signature"] = "f" * 128
+    resp2 = await client.post("/datasets/commit", json=body)
+    assert resp2.status_code == 403
+    assert "signature" in resp2.json()["detail"].lower()
 
 
 @pytest.mark.asyncio
@@ -886,6 +907,39 @@ async def test_commit_lineage_duplicate_returns_409(client):
     resp2 = await client.post(f"/datasets/{dataset_id}/lineage", json=lineage_body)
     assert resp2.status_code == 409
     assert "Duplicate" in str(resp2.json())
+
+
+@pytest.mark.asyncio
+async def test_commit_lineage_duplicate_with_invalid_signature_returns_403(client):
+    """POST /datasets/{dataset_id}/lineage validates signature before duplicate checks."""
+    pubkey, _, signing_key = create_signing_keypair()
+
+    body = build_commit_request(
+        pubkey,
+        signing_key,
+        dataset_name="lineage-dup-invalid-sig",
+        source_uri="https://example.com/lineage-dup-invalid-sig.csv",
+    )
+    resp = await client.post("/datasets/commit", json=body)
+    assert resp.status_code == 201
+    dataset_id = resp.json()["dataset_id"]
+    parent_commit_id = resp.json()["commit_id"]
+
+    lineage_body = build_lineage_request(
+        pubkey,
+        signing_key,
+        dataset_id=dataset_id,
+        parent_commit_id=parent_commit_id,
+        model_id="dup-invalid-model",
+        event_type="training_started",
+    )
+    resp1 = await client.post(f"/datasets/{dataset_id}/lineage", json=lineage_body)
+    assert resp1.status_code == 201
+
+    lineage_body["commit_signature"] = "f" * 128
+    resp2 = await client.post(f"/datasets/{dataset_id}/lineage", json=lineage_body)
+    assert resp2.status_code == 403
+    assert "signature" in resp2.json()["detail"].lower()
 
 
 @pytest.mark.asyncio

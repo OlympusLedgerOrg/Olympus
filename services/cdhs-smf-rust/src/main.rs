@@ -388,7 +388,17 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             .into());
         }
     }
-    let listener = UnixListener::bind(socket_path)?;
+    // Set a restrictive umask during bind so the socket is created as 0660
+    // even for the brief window before explicit chmod below.
+    let listener = {
+        // SAFETY: `umask` only affects process-global file creation mode bits.
+        // We immediately restore the previous value after `bind` returns.
+        let previous_umask = unsafe { libc::umask(0o117) };
+        let bind_result = UnixListener::bind(socket_path);
+        // SAFETY: restoring the previously returned umask is always valid.
+        unsafe { libc::umask(previous_umask) };
+        bind_result?
+    };
     // Restrict the unix socket to the service user and group (rw-/rw-/---).
     // The default file mode after `bind()` follows the process umask, which
     // on many systems is `022` and would leave the socket world-readable —

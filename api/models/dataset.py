@@ -48,7 +48,8 @@ class DatasetArtifact(Base):
         merkle_root: Shard Merkle root after this commit.
         zk_proof: Serialised Groth16 proof stub.
         committer_pubkey: Ed25519 public key of the committer (hex).
-        commit_signature: Ed25519 signature over commit_id (hex).
+        commit_signature: Ed25519 signature over
+            ``b"OLY:DATASET:COMMIT:V1|" || bytes.fromhex(commit_id)`` (hex).
         committer_label: Optional human-readable committer name.
         rfc3161_tst_hex: DER-encoded RFC 3161 timestamp token (hex).
         rfc3161_tsa_url: TSA that issued the token.

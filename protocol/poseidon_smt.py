@@ -133,8 +133,10 @@ class PoseidonSMT:
         if len(key) != 32:
             raise ValueError(f"Key must be 32 bytes, got {len(key)}")
 
-        # Reduce value to field
-        value = value % SNARK_SCALAR_FIELD
+        if not (0 <= value < SNARK_SCALAR_FIELD):
+            raise ValueError(
+                "value must be a BN128 field element in [0, SNARK_SCALAR_FIELD)"
+            )
 
         # Store leaf
         self.leaves[key] = value
@@ -171,8 +173,8 @@ class PoseidonSMT:
 
             # Store parent at path up to bit_pos
             parent_path = () if bit_pos == 0 else path[:bit_pos]
-            self.nodes[parent_path] = parent_hash % SNARK_SCALAR_FIELD
-            current_hash = parent_hash % SNARK_SCALAR_FIELD
+            self.nodes[parent_path] = parent_hash
+            current_hash = parent_hash
 
     def prove_nonexistence(self, key: bytes) -> PoseidonNonExistenceWitness:
         """
@@ -270,6 +272,8 @@ def verify_poseidon_nonexistence_witness(witness: PoseidonNonExistenceWitness) -
     # Path bits are ordered from root to leaf (bit 0, 1, 2...)
     for level in range(256):
         sibling = int(witness.path_elements[level])
+        if not (0 <= sibling < SNARK_SCALAR_FIELD):
+            return False
         bit_pos = 255 - level  # Map from level to bit position
         bit = path_bits[bit_pos]
 
@@ -277,6 +281,10 @@ def verify_poseidon_nonexistence_witness(witness: PoseidonNonExistenceWitness) -
             current = _poseidon_hash_node(current, sibling)
         else:
             current = _poseidon_hash_node(sibling, current)
-        current %= SNARK_SCALAR_FIELD
-
-    return str(current) == witness.root
+    try:
+        root = int(witness.root)
+    except ValueError:
+        return False
+    if not (0 <= root < SNARK_SCALAR_FIELD):
+        return False
+    return current == root

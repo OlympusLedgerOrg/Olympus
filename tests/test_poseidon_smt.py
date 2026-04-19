@@ -279,14 +279,22 @@ def test_witness_verification_rejects_tampered_root():
 # --- Field element handling ---
 
 
-def test_values_reduced_to_field():
-    """Values are reduced modulo SNARK_SCALAR_FIELD."""
+def test_values_outside_field_are_rejected():
+    """Values >= SNARK_SCALAR_FIELD are rejected."""
     tree = PoseidonSMT()
     key = b"\x00" * 32
     large_value = SNARK_SCALAR_FIELD + 42
 
-    tree.update(key, large_value)
-    assert tree.get(key) == 42
+    with pytest.raises(ValueError, match="field element"):
+        tree.update(key, large_value)
+
+
+def test_negative_values_are_rejected():
+    """Negative values are rejected."""
+    tree = PoseidonSMT()
+    key = b"\x00" * 32
+    with pytest.raises(ValueError, match="field element"):
+        tree.update(key, -1)
 
 
 def test_leaf_hash_matches_circuit():
