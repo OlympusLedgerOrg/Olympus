@@ -4,7 +4,8 @@
   "domain_separation": {
     "leaf_prefix": "OLY:LEAF:V1",
     "node_prefix": "OLY:NODE:V1",
-    "hash_separator": "|"
+    "hash_separator": "|",
+    "dual_root_commitment_formula": "binding_hash = BLAKE3(\"OLY:LEDGER:V1\" || \"|\" || len_b3 || blake3_root || \"|\" || len_pos || poseidon_root_32be); wire = len_b3 || blake3_root || len_pos || poseidon_root_32be || binding_hash; len_b3 and len_pos are 2-byte big-endian length prefixes (always 0x0020 = 32)."
   },
   "blake3_raw": [
     {
@@ -28,19 +29,19 @@
       "hash": "f30e300dae8292bfc1dca85127eb8d6ea6c72d82a703d3f56f837daaab87df94"
     },
     {
-      "description": "BLAKE3 of NFC-normalized Unicode (café résumé naïve)",
-      "input_utf8": "café résumé naïve",
+      "description": "BLAKE3 of NFC-normalized Unicode (caf\u00e9 r\u00e9sum\u00e9 na\u00efve)",
+      "input_utf8": "caf\u00e9 r\u00e9sum\u00e9 na\u00efve",
       "hash": "ff48bf8e14941171ab077ce3d659154c7d79942970c6ca15c68bb5ca345e1f5a"
     },
     {
-      "description": "BLAKE3 of emoji string (🔐🗝️📜)",
-      "input_utf8": "🔐🗝️📜",
+      "description": "BLAKE3 of emoji string (\ud83d\udd10\ud83d\udddd\ufe0f\ud83d\udcdc)",
+      "input_utf8": "\ud83d\udd10\ud83d\udddd\ufe0f\ud83d\udcdc",
       "hash": "3be6da64b233cc1c442c5b252a63fbf74c670250f3eb6628a9abd73c937db589"
     }
   ],
   "merkle_leaf_hash": [
     {
-      "description": "Leaf hash of 'leaf1' — BLAKE3(OLY:LEAF:V1 || '|' || leaf_data)",
+      "description": "Leaf hash of 'leaf1' \u2014 BLAKE3(OLY:LEAF:V1 || '|' || leaf_data)",
       "input_utf8": "leaf1",
       "hash": "ca49d51cdd54cf54fc89c04b1d2abda03f0e7474d0af83ce143e7520e2eff199"
     },
@@ -60,14 +61,14 @@
       "hash": "9cc9d6578dab4333405bc3fd06579f13e41aeab1770b062617a2037acaa01626"
     },
     {
-      "description": "Leaf hash of empty bytes — BLAKE3(OLY:LEAF:V1 || '|' || '')",
+      "description": "Leaf hash of empty bytes \u2014 BLAKE3(OLY:LEAF:V1 || '|' || '')",
       "input_utf8": "",
       "hash": "3235e77cafe7027ce4c95a34e4d9359a52592b49dfbfebfaa3450ab6397b9d35"
     }
   ],
   "merkle_parent_hash": [
     {
-      "description": "Parent of leaf_hash('alpha') and leaf_hash('beta') — BLAKE3(OLY:NODE:V1 || '|' || left || '|' || right)",
+      "description": "Parent of leaf_hash('alpha') and leaf_hash('beta') \u2014 BLAKE3(OLY:NODE:V1 || '|' || left || '|' || right)",
       "left_hash": "9cdaa796deeaec992a83d52101921e788ca4e2f959b47316a00fa43aa1ef9dc5",
       "right_hash": "23ffd41f2e47a101c0b510809770af0aefb2c293d5114989d69abe3384704720",
       "parent_hash": "b1463a3156ed73e5df9d0101533766d62381dbb6e0b5b23a4c1b651095ba36dc"
@@ -90,7 +91,7 @@
       "root": "b1463a3156ed73e5df9d0101533766d62381dbb6e0b5b23a4c1b651095ba36dc"
     },
     {
-      "description": "Root of 3-leaf tree ['alpha', 'beta', 'gamma'] — CT-style promotion applied",
+      "description": "Root of 3-leaf tree ['alpha', 'beta', 'gamma'] \u2014 CT-style promotion applied",
       "leaves_utf8": [
         "alpha",
         "beta",
@@ -165,7 +166,7 @@
       "expected_valid": true
     },
     {
-      "description": "Tampered proof — wrong root hash. Must verify as invalid.",
+      "description": "Tampered proof \u2014 wrong root hash. Must verify as invalid.",
       "leaf_hash": "9cdaa796deeaec992a83d52101921e788ca4e2f959b47316a00fa43aa1ef9dc5",
       "leaf_index": 0,
       "siblings": [
@@ -201,7 +202,7 @@
   ],
   "poseidon_root": [
     {
-      "description": "Poseidon Merkle root of 3-byte-string leaves ['doc1', 'doc2', 'doc3']. Leaves are converted via BLAKE3→field element before tree construction.",
+      "description": "Poseidon Merkle root of 3-byte-string leaves ['doc1', 'doc2', 'doc3']. Leaves are converted via BLAKE3\u2192field element before tree construction.",
       "leaves_utf8": [
         "doc1",
         "doc2",
@@ -212,17 +213,17 @@
   ],
   "ledger_entry_hash": [
     {
-      "description": "Genesis entry — no prev_entry_hash, no certificate. Hash = BLAKE3(OLY:LEDGER:V1 || canonical_json_bytes(payload)).",
+      "description": "Genesis entry \u2014 no prev_entry_hash, no certificate. Hash = BLAKE3(OLY:LEDGER:V1 || canonical_json_bytes(payload)).",
       "canonical_payload_hex": "7b2263616e6f6e6963616c697a6174696f6e223a7b226d6f6465223a226a63735f7631222c2276657273696f6e223a22312e322e302d7374726963742d6e756d65726963227d2c22707265765f656e7472795f68617368223a22222c227265636f72645f68617368223a2261616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161222c2273686172645f6964223a2273686172642d30222c2273686172645f726f6f74223a2262626262626262626262626262626262626262626262626262626262626262626262626262626262626262626262626262626262626262626262626262626262222c227473223a22323032362d30312d30315430303a30303a30305a227d",
       "entry_hash": "adb9e28763376377881ee19f70d565216ff78781e87106190f16b3311d31eba6"
     },
     {
-      "description": "Chained entry — prev_entry_hash set to the genesis entry hash above.",
+      "description": "Chained entry \u2014 prev_entry_hash set to the genesis entry hash above.",
       "canonical_payload_hex": "7b2263616e6f6e6963616c697a6174696f6e223a7b226d6f6465223a226a63735f7631222c2276657273696f6e223a22312e322e302d7374726963742d6e756d65726963227d2c22707265765f656e7472795f68617368223a2261646239653238373633333736333737383831656531396637306435363532313666663738373831653837313036313930663136623333313164333165626136222c227265636f72645f68617368223a2263636363636363636363636363636363636363636363636363636363636363636363636363636363636363636363636363636363636363636363636363636363222c2273686172645f6964223a2273686172642d30222c2273686172645f726f6f74223a2264646464646464646464646464646464646464646464646464646464646464646464646464646464646464646464646464646464646464646464646464646464222c227473223a22323032362d30312d30315430303a30313a30305a227d",
       "entry_hash": "cf49a42ee068d1c79fabb380968c2f4166b661f0d4dee94c5de0c6636a3ecbf5"
     },
     {
-      "description": "Entry with federation_quorum_certificate — certificate fields are fully canonicalized (only known fields included, quorum_threshold as integer, acknowledgments sorted).",
+      "description": "Entry with federation_quorum_certificate \u2014 certificate fields are fully canonicalized (only known fields included, quorum_threshold as integer, acknowledgments sorted).",
       "canonical_payload_hex": "7b2263616e6f6e6963616c697a6174696f6e223a7b226d6f6465223a226a63735f7631222c2276657273696f6e223a22312e322e302d7374726963742d6e756d65726963227d2c2266656465726174696f6e5f71756f72756d5f6365727469666963617465223a7b2261636b6e6f776c6564676d656e7473223a5b7b226e6f64655f6964223a226e6f64652d61222c227369676e6174757265223a227369672d612d303030303030303030303030303030303030303030303030303030303030303030303030303030303030303030303030303030303030303030303030303030303030303030303030303030303030303030303030303030303030303030303030303030303030303030303030303030303030303030303030227d2c7b226e6f64655f6964223a226e6f64652d62222c227369676e6174757265223a227369672d622d303030303030303030303030303030303030303030303030303030303030303030303030303030303030303030303030303030303030303030303030303030303030303030303030303030303030303030303030303030303030303030303030303030303030303030303030303030303030303030303030227d5d2c226865616465725f68617368223a2231313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131222c2271756f72756d5f7468726573686f6c64223a322c2273686172645f6964223a2273686172642d31222c2274696d657374616d70223a22323032362d30312d30315430303a30323a30305a227d2c22707265765f656e7472795f68617368223a2263663439613432656530363864316337396661626233383039363863326634313636623636316630643464656539346335646530633636333661336563626635222c227265636f72645f68617368223a2265656565656565656565656565656565656565656565656565656565656565656565656565656565656565656565656565656565656565656565656565656565222c2273686172645f6964223a2273686172642d31222c2273686172645f726f6f74223a2266666666666666666666666666666666666666666666666666666666666666666666666666666666666666666666666666666666666666666666666666666666222c227473223a22323032362d30312d30315430303a30323a30305a227d",
       "entry_hash": "297c46f43726e4be43b311a49bab4e6df31d5ea7fa9164e125e22158c2709cd5"
     }
@@ -1866,7 +1867,7 @@
       ],
       "blake3_root": "487f19f5f9226d91d8b59732d51baff231710c4f171a170e8573e4ca1666967b",
       "poseidon_root": "11147447116051982348245104693366946735454072470907024538637255387529817424869",
-      "dual_commitment": "ab1cde209598faa9cac0f8273d4d35a778893c849e71d5dca737ce7cf822825a",
+      "dual_commitment": "11392f039f5823c9916749bcb55b03227c0c7700d5115ffab46f45965dc44993",
       "blake3_proof": {
         "leaf_hash": "e284fdc2ac4d3399fbb88862a2f227c4fe83f4a290d16a4b8c1341e31acc0b13",
         "leaf_index": 1,
@@ -1900,7 +1901,8 @@
         ]
       },
       "expected_valid": true,
-      "expected_blake3_consistent": true
+      "expected_blake3_consistent": true,
+      "dual_commitment_wire": "0020487f19f5f9226d91d8b59732d51baff231710c4f171a170e8573e4ca1666967b002018a53b4212bf0cf8cef46e92830204178bf8a3a266ddf389cce2cd4ae2e903e511392f039f5823c9916749bcb55b03227c0c7700d5115ffab46f45965dc44993"
     },
     {
       "description": "Invalid: BLAKE3 root from document A, Poseidon root from unrelated document B",
@@ -1911,7 +1913,7 @@
       ],
       "blake3_root": "487f19f5f9226d91d8b59732d51baff231710c4f171a170e8573e4ca1666967b",
       "poseidon_root": "3982710634996281090944547644333147865669900206036754387708868841669211534529",
-      "dual_commitment": "dd05613ebe944c29c840a5b61f948922b7759c1ad8857390fffad22712f3bdeb",
+      "dual_commitment": "be6ee9795ca414471a3165267bff046112ca5257bc014536296f29a1695ab787",
       "blake3_proof": {
         "leaf_hash": "e284fdc2ac4d3399fbb88862a2f227c4fe83f4a290d16a4b8c1341e31acc0b13",
         "leaf_index": 1,
@@ -1929,7 +1931,8 @@
       },
       "poseidon_proof": null,
       "expected_valid": false,
-      "expected_blake3_consistent": true
+      "expected_blake3_consistent": true,
+      "dual_commitment_wire": "0020487f19f5f9226d91d8b59732d51baff231710c4f171a170e8573e4ca1666967b002008ce2263d65d7ea15782e3ef9029a934275e4be7b51a35e49a1ad74be1d934c1be6ee9795ca414471a3165267bff046112ca5257bc014536296f29a1695ab787"
     },
     {
       "description": "Edge: single-leaf (minimal) document with valid dual-root commitment",
@@ -1938,7 +1941,7 @@
       ],
       "blake3_root": "cf57382d603eef611238e86c5d0fc6175326570ecfa4d1a6445d65f8d0b40d7f",
       "poseidon_root": "10391764485856627680762372439234638767141969214068319390773889853263727336601",
-      "dual_commitment": "12c485379ad537098b351369c04b886a9ec40ca250943f2031cb7801c179e502",
+      "dual_commitment": "460901d08c75e68d1dba341f369b0dc7562d9d1f8cbc7826a0658afbc31f075f",
       "blake3_proof": {
         "leaf_hash": "cf57382d603eef611238e86c5d0fc6175326570ecfa4d1a6445d65f8d0b40d7f",
         "leaf_index": 0,
@@ -1963,7 +1966,8 @@
         ]
       },
       "expected_valid": true,
-      "expected_blake3_consistent": true
+      "expected_blake3_consistent": true,
+      "dual_commitment_wire": "0020cf57382d603eef611238e86c5d0fc6175326570ecfa4d1a6445d65f8d0b40d7f002016f987bf796eaea13eff0678e11b547e740e0490f01a3c3ef0dbf1027e649c99460901d08c75e68d1dba341f369b0dc7562d9d1f8cbc7826a0658afbc31f075f"
     },
     {
       "description": "Malformed: corrupted BLAKE3 root does not match recomputed hash from document parts",
@@ -1974,7 +1978,7 @@
       ],
       "blake3_root": "deadbeefa0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0",
       "poseidon_root": "11147447116051982348245104693366946735454072470907024538637255387529817424869",
-      "dual_commitment": "b566feebc0ed143b717acd637f14ebd6ef5adf02d0d40ab9e5e4e90da2921660",
+      "dual_commitment": "899a4d503e790e3c9550fe8187492a2164909210e84e1ad46823c58661c14d84",
       "blake3_proof": null,
       "poseidon_proof": {
         "root": "11147447116051982348245104693366946735454072470907024538637255387529817424869",
@@ -1994,12 +1998,13 @@
         ]
       },
       "expected_valid": false,
-      "expected_blake3_consistent": false
+      "expected_blake3_consistent": false,
+      "dual_commitment_wire": "0020deadbeefa0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0002018a53b4212bf0cf8cef46e92830204178bf8a3a266ddf389cce2cd4ae2e903e5899a4d503e790e3c9550fe8187492a2164909210e84e1ad46823c58661c14d84"
     }
   ],
   "consistency_proof": [
     {
-      "description": "Consistency proof 3→7 leaves (append-only growth)",
+      "description": "Consistency proof 3\u21927 leaves (append-only growth)",
       "leaves_utf8": [
         "leaf-0",
         "leaf-1",
@@ -2022,7 +2027,7 @@
       "expected_valid": true
     },
     {
-      "description": "Consistency proof 1→5 leaves (single-leaf to five)",
+      "description": "Consistency proof 1\u21925 leaves (single-leaf to five)",
       "leaves_utf8": [
         "leaf-0",
         "leaf-1",
@@ -2043,7 +2048,7 @@
       "expected_valid": true
     },
     {
-      "description": "Consistency proof 4→7 leaves (power-of-two to odd)",
+      "description": "Consistency proof 4\u21927 leaves (power-of-two to odd)",
       "leaves_utf8": [
         "leaf-0",
         "leaf-1",
@@ -2145,6 +2150,153 @@
         "merkle_root_from_leaves": "Root == MerkleTree(leaf_hashes).get_root()",
         "proofs_valid": "Each merkle_proof verifies against merkle_root"
       }
+    }
+  ],
+  "federation_vote_hash": [
+    {
+      "description": "federation_vote_hash node='node-A' shard='records.test'",
+      "node_id": "node-A",
+      "shard_id": "records.test",
+      "header_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "timestamp": "2026-03-09T00:00:00Z",
+      "event_id": "deadbeef",
+      "vote_hash": "dd5426a489f7c531d39d1989582ac21dfc6b3fa006cd41613a22af5f53c9bf81"
+    },
+    {
+      "description": "federation_vote_hash node='node-B' shard='records.test'",
+      "node_id": "node-B",
+      "shard_id": "records.test",
+      "header_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "timestamp": "2026-03-09T00:00:00Z",
+      "event_id": "deadbeef",
+      "vote_hash": "d72dafa9830d41dcc64c039e751991804df0da10b79320fe93a5aa6b70b7acae"
+    },
+    {
+      "description": "federation_vote_hash node='node|A' shard='shard'",
+      "node_id": "node|A",
+      "shard_id": "shard",
+      "header_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "timestamp": "2026-03-09T00:00:00Z",
+      "event_id": "deadbeef",
+      "vote_hash": "552e6b2380569eaf68e24362403996c9571d9f2b5ad22e5502c8b959f8e0a400"
+    },
+    {
+      "description": "federation_vote_hash node='node' shard='A|shard'",
+      "node_id": "node",
+      "shard_id": "A|shard",
+      "header_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "timestamp": "2026-03-09T00:00:00Z",
+      "event_id": "deadbeef",
+      "vote_hash": "c215ae92c602319cfa6e41f5185286b23faa50e5d43e1f85164f1f47e168c401"
+    },
+    {
+      "description": "federation_vote_hash node='op-1' shard='watauga:2025:budget'",
+      "node_id": "op-1",
+      "shard_id": "watauga:2025:budget",
+      "header_hash": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+      "timestamp": "2026-04-01T12:34:56Z",
+      "event_id": "cafef00dcafef00dcafef00dcafef00dcafef00dcafef00dcafef00dcafef00d",
+      "vote_hash": "1e5d2d6fa854aa1d9ddd27c9c2d5547fcdf0b020c2ebaacca77acca2e8644927"
+    }
+  ],
+  "federation_vote_event_id": [
+    {
+      "description": "federation_vote_event_id shard='records.test' epoch=7",
+      "shard_id": "records.test",
+      "header_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "timestamp": "2026-03-09T00:00:00Z",
+      "epoch": 7,
+      "membership_hash": "63b63393b190c6b5e965692644f94fbd6ecea90bc2b96d3fa0196ed7feed473d",
+      "event_id": "22c075b2691ee4a9231d13de4008fca48e7cc25fbb557ba49ce9760717d46bdc"
+    },
+    {
+      "description": "federation_vote_event_id shard='X|Y' epoch=7",
+      "shard_id": "X|Y",
+      "header_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "timestamp": "2026-03-09T00:00:00Z",
+      "epoch": 7,
+      "membership_hash": "63b63393b190c6b5e965692644f94fbd6ecea90bc2b96d3fa0196ed7feed473d",
+      "event_id": "0632231b84e70861bb1841c43ce51febd0af560ff6e63fe8f9afa8127750fbde"
+    },
+    {
+      "description": "federation_vote_event_id shard='X' epoch=7",
+      "shard_id": "X",
+      "header_hash": "Y|aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "timestamp": "2026-03-09T00:00:00Z",
+      "epoch": 7,
+      "membership_hash": "63b63393b190c6b5e965692644f94fbd6ecea90bc2b96d3fa0196ed7feed473d",
+      "event_id": "81d50919b06dc2dc7e2fb7ae70e9daea3db31c95e7eb74bb07fc0d30d60ab01d"
+    },
+    {
+      "description": "federation_vote_event_id shard='watauga:2025:budget' epoch=12",
+      "shard_id": "watauga:2025:budget",
+      "header_hash": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+      "timestamp": "2026-04-01T12:34:56Z",
+      "epoch": 12,
+      "membership_hash": "0000000000000000000000000000000000000000000000000000000000000000",
+      "event_id": "544aa5407ac85c4ca3194ebbc5b16a669444e9e252564d05ccc64ec30545aa2c"
+    }
+  ],
+  "replication_proof_payload_hash": [
+    {
+      "description": "replication_proof_payload_hash guardian='guardian-1'",
+      "challenge_hash": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+      "guardian_id": "guardian-1",
+      "ledger_tail_hash": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+      "merkle_root_verified": true,
+      "proof_sample_indices": [
+        0,
+        5,
+        17
+      ],
+      "proof_sample_hashes": [
+        "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
+      ],
+      "replicated_at": "2026-03-09T00:00:00Z",
+      "proof_payload_hash": "e5af90fb7dd3050674989ad9f824b059b7a3e1b6f233ff987c36eefe4c6ed9dd"
+    },
+    {
+      "description": "replication_proof_payload_hash guardian='g|x'",
+      "challenge_hash": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+      "guardian_id": "g|x",
+      "ledger_tail_hash": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+      "merkle_root_verified": true,
+      "proof_sample_indices": [
+        0
+      ],
+      "proof_sample_hashes": [
+        "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      ],
+      "replicated_at": "2026-03-09T00:00:00Z",
+      "proof_payload_hash": "9e95dcf882e45dd6e650ad3ca5ca58631db57b2bfa8cb63c05d31e176a4bac40"
+    },
+    {
+      "description": "replication_proof_payload_hash guardian='g'",
+      "challenge_hash": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+      "guardian_id": "g",
+      "ledger_tail_hash": "x|dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+      "merkle_root_verified": true,
+      "proof_sample_indices": [
+        0
+      ],
+      "proof_sample_hashes": [
+        "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      ],
+      "replicated_at": "2026-03-09T00:00:00Z",
+      "proof_payload_hash": "787460bab2a5e5db29de83a69d5cfb95e132b335407fafc751540cf8297d50ec"
+    },
+    {
+      "description": "replication_proof_payload_hash guardian='guardian-X'",
+      "challenge_hash": "0000000000000000000000000000000000000000000000000000000000000000",
+      "guardian_id": "guardian-X",
+      "ledger_tail_hash": "1111111111111111111111111111111111111111111111111111111111111111",
+      "merkle_root_verified": true,
+      "proof_sample_indices": [],
+      "proof_sample_hashes": [],
+      "replicated_at": "2026-04-01T00:00:00Z",
+      "proof_payload_hash": "477e51c73ab1f6fa546fa9b3235a403dee8d25b7793860abbeec63cbb28b8993"
     }
   ]
 }

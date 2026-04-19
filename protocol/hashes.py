@@ -348,12 +348,22 @@ def create_dual_root_commitment(blake3_root: bytes, poseidon_root: bytes) -> byt
     if len(poseidon_root) != 32:
         raise ValueError(f"Poseidon root must be 32 bytes, got {len(poseidon_root)}")
 
-    binding_hash = blake3_hash([LEDGER_PREFIX, blake3_root, _SEP, poseidon_root])
+    len_b3 = len(blake3_root).to_bytes(2, byteorder="big")
+    len_pos = len(poseidon_root).to_bytes(2, byteorder="big")
+    # Binding hash format (V2):
+    #   blake3(LEDGER_PREFIX || _SEP || len_b3 || blake3_root || _SEP || len_pos || poseidon_root)
+    # The leading _SEP after LEDGER_PREFIX matches the uniform PREFIX || SEP || data
+    # convention used by every other domain-separated hash in this module. The 2-byte
+    # length fields are bound into the hash so a verifier cannot accept a payload with
+    # mismatched length metadata.
+    binding_hash = blake3_hash(
+        [LEDGER_PREFIX, _SEP, len_b3, blake3_root, _SEP, len_pos, poseidon_root]
+    )
     return b"".join(
         [
-            len(blake3_root).to_bytes(2, byteorder="big"),
+            len_b3,
             blake3_root,
-            len(poseidon_root).to_bytes(2, byteorder="big"),
+            len_pos,
             poseidon_root,
             binding_hash,
         ]
@@ -384,11 +394,13 @@ def parse_dual_root_commitment(commitment: bytes) -> tuple[bytes, bytes]:
         )
 
     idx = 0
-    blake3_len = int.from_bytes(commitment[idx : idx + 2], byteorder="big")
+    blake3_len_bytes = commitment[idx : idx + 2]
+    blake3_len = int.from_bytes(blake3_len_bytes, byteorder="big")
     idx += 2
     blake3_root = commitment[idx : idx + blake3_len]
     idx += blake3_len
-    poseidon_len = int.from_bytes(commitment[idx : idx + 2], byteorder="big")
+    poseidon_len_bytes = commitment[idx : idx + 2]
+    poseidon_len = int.from_bytes(poseidon_len_bytes, byteorder="big")
     idx += 2
     poseidon_root = commitment[idx : idx + poseidon_len]
     idx += poseidon_len
@@ -401,7 +413,17 @@ def parse_dual_root_commitment(commitment: bytes) -> tuple[bytes, bytes]:
     if blake3_len != 32 or poseidon_len != 32 or len(binding_hash) != 32:
         raise ValueError("Dual root commitment length metadata is invalid")
 
-    expected_binding_hash = blake3_hash([LEDGER_PREFIX, blake3_root, _SEP, poseidon_root])
+    expected_binding_hash = blake3_hash(
+        [
+            LEDGER_PREFIX,
+            _SEP,
+            blake3_len_bytes,
+            blake3_root,
+            _SEP,
+            poseidon_len_bytes,
+            poseidon_root,
+        ]
+    )
     if binding_hash != expected_binding_hash:
         raise ValueError("tampered commitment")
 
@@ -427,13 +449,15 @@ def federation_vote_hash(
     - The unique event identifier (event_id)
 
     Encoding (version 2):
-        - domain is always "olympus.federation.v1" for the current protocol version
         - each field is encoded as: [4-byte big-endian length] || [UTF-8 bytes]
-        - payload = concat(fields)
+        - payload = concat(fields) in the order
+          (node_id, shard_id, header_hash, timestamp, event_id_hex)
         - vote_hash = blake3(FEDERATION_PREFIX || "|" || payload)
 
-    Length-prefixing prevents field-injection collisions (e.g., literal "|" characters
-    inside node_id or shard_id) while preserving deterministic, auditable encoding.
+    Domain separation is provided exclusively by ``FEDERATION_PREFIX``; no inner
+    string-domain field is included. Length-prefixing prevents field-injection
+    collisions (e.g., literal "|" characters inside node_id or shard_id) while
+    preserving deterministic, auditable encoding.
 
     Args:
         node_id: Federation node identifier
@@ -445,8 +469,7 @@ def federation_vote_hash(
     Returns:
         32-byte hash to be signed by the federation node
     """
-    domain = "olympus.federation.v1"
-    fields = [domain, node_id, shard_id, header_hash, timestamp, event_id_hex]
+    fields = [node_id, shard_id, header_hash, timestamp, event_id_hex]
     encoded_fields = []
     for value in fields:
         field_bytes = value.encode("utf-8")

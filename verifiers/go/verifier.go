@@ -138,18 +138,22 @@ func ComputeLedgerEntryHash(canonicalPayloadBytes []byte) []byte {
 	return ComputeBlake3(buf.Bytes())
 }
 
-// ComputeDualCommitment computes the dual-root commitment hash from BLAKE3 and Poseidon roots.
+// ComputeDualCommitment computes the dual-root commitment binding hash (V2)
+// from BLAKE3 and Poseidon roots.
 //
 // Formula:
 //
-//	BLAKE3(OLY:LEDGER:V1 | "|" | blake3RootBytes | "|" | poseidonRoot32BEBytes)
+//	BLAKE3(OLY:LEDGER:V1 | "|" | lenB3 | blake3RootBytes
+//	                     | "|" | lenPos | poseidonRoot32BEBytes)
 //
-// where poseidonRoot32BEBytes is the 32-byte big-endian encoding of the BN128 field
-// element expressed as a decimal string.
+// where lenB3 and lenPos are 2-byte big-endian length prefixes (always
+// 0x0020 = 32), and poseidonRoot32BEBytes is the 32-byte big-endian encoding
+// of the BN128 field element expressed as a decimal string.
 //
-// This matches the Python reference:
+// This matches the Python reference (V2, PR 4: M-15 + M-14):
 //
-//	blake3_hash([LEDGER_PREFIX, SEP, blake3_root_bytes, SEP, poseidon_root_32be])
+//	blake3_hash([LEDGER_PREFIX, SEP, lenB3, blake3_root_bytes,
+//	             SEP, lenPos, poseidon_root_32be])
 func ComputeDualCommitment(blake3RootHex string, poseidonRootDecimal string) (string, error) {
 	blake3RootBytes, err := hex.DecodeString(blake3RootHex)
 	if err != nil {
@@ -169,11 +173,16 @@ func ComputeDualCommitment(blake3RootHex string, poseidonRootDecimal string) (st
 	}
 	copy(poseidonBytes[32-len(poseidonBigEndian):], poseidonBigEndian)
 
+	lenB3 := []byte{byte(len(blake3RootBytes) >> 8), byte(len(blake3RootBytes) & 0xff)}
+	lenPos := []byte{byte(len(poseidonBytes) >> 8), byte(len(poseidonBytes) & 0xff)}
+
 	var buf bytes.Buffer
 	buf.WriteString(LedgerPrefix)
 	buf.WriteString(HashSeparator)
+	buf.Write(lenB3)
 	buf.Write(blake3RootBytes)
 	buf.WriteString(HashSeparator)
+	buf.Write(lenPos)
 	buf.Write(poseidonBytes)
 	return hex.EncodeToString(ComputeBlake3(buf.Bytes())), nil
 }

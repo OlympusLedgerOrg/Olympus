@@ -189,16 +189,19 @@ function computeLedgerEntryHash(canonicalPayloadBytes) {
 }
 
 /**
- * Compute the dual-root commitment hash from BLAKE3 and Poseidon roots.
+ * Compute the dual-root commitment binding hash (V2) from BLAKE3 and Poseidon roots.
  *
  * Formula:
- *   BLAKE3(OLY:LEDGER:V1 | "|" | blake3RootBytes | "|" | poseidonRoot32BEBytes)
+ *   BLAKE3(OLY:LEDGER:V1 | "|" | lenB3 | blake3RootBytes
+ *                        | "|" | lenPos | poseidonRoot32BEBytes)
  *
- * where poseidonRoot32BEBytes is the 32-byte big-endian encoding of the BN128
- * field element expressed as a decimal string.
+ * where lenB3 and lenPos are 2-byte big-endian length prefixes (always
+ * 0x0020 = 32), and poseidonRoot32BEBytes is the 32-byte big-endian encoding
+ * of the BN128 field element expressed as a decimal string.
  *
- * This matches the Python reference:
- *   blake3_hash([LEDGER_PREFIX, SEP, blake3_root_bytes, SEP, poseidon_root_32be])
+ * This matches the Python reference (V2, PR 4: M-15 + M-14):
+ *   blake3_hash([LEDGER_PREFIX, SEP, lenB3, blake3_root_bytes,
+ *                SEP, lenPos, poseidon_root_32be])
  *
  * @param {string} blake3RootHex - BLAKE3 Merkle root as 64-char hex string
  * @param {string} poseidonRootDecimal - Poseidon root as decimal string (BN128 field element)
@@ -212,14 +215,27 @@ function computeDualCommitment(blake3RootHex, poseidonRootDecimal) {
   // Encode poseidon root decimal string as 32-byte big-endian
   const poseidonBytes = bigIntTo32BytesBE(BigInt(poseidonRootDecimal));
 
+  // 2-byte big-endian length prefixes (M-14)
+  const lenB3 = new Uint8Array([
+    (blake3RootBytes.length >> 8) & 0xff,
+    blake3RootBytes.length & 0xff,
+  ]);
+  const lenPos = new Uint8Array([
+    (poseidonBytes.length >> 8) & 0xff,
+    poseidonBytes.length & 0xff,
+  ]);
+
   const combined = new Uint8Array(
-    LEDGER_PREFIX.length + SEP.length + blake3RootBytes.length + SEP.length + poseidonBytes.length
+    LEDGER_PREFIX.length + SEP.length + lenB3.length + blake3RootBytes.length
+      + SEP.length + lenPos.length + poseidonBytes.length
   );
   let offset = 0;
   combined.set(LEDGER_PREFIX, offset); offset += LEDGER_PREFIX.length;
   combined.set(SEP, offset);           offset += SEP.length;
+  combined.set(lenB3, offset);         offset += lenB3.length;
   combined.set(blake3RootBytes, offset); offset += blake3RootBytes.length;
   combined.set(SEP, offset);           offset += SEP.length;
+  combined.set(lenPos, offset);        offset += lenPos.length;
   combined.set(poseidonBytes, offset);
 
   return toHex(computeBlake3(combined));

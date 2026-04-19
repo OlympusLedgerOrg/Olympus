@@ -13,7 +13,7 @@ import nacl.exceptions
 import nacl.signing
 
 from protocol.canonical_json import canonical_json_bytes
-from protocol.hashes import HASH_SEPARATOR, hash_bytes, shard_header_hash
+from protocol.hashes import _length_prefixed_bytes, hash_bytes, shard_header_hash
 
 from .identity import (
     _CERTIFICATE_SIGNATURE_SCHEME_ED25519,
@@ -185,16 +185,21 @@ def sign_federated_header(
 
 
 def _federation_vote_event_id(header: dict[str, Any], registry: FederationRegistry) -> str:
-    """Return the deterministic federation vote event identifier for a shard header."""
-    payload = HASH_SEPARATOR.join(
+    """Return the deterministic federation vote event identifier for a shard header.
+
+    Each field is encoded with a 4-byte big-endian length prefix so that values
+    containing the literal ``|`` character (notably ``shard_id``) cannot be
+    injected to collide with a different field layout.
+    """
+    payload = b"".join(
         [
-            str(header["shard_id"]),
-            str(header["header_hash"]),
-            str(header["timestamp"]),
-            str(registry.epoch),
-            registry.membership_hash(),
+            _length_prefixed_bytes("shard_id", str(header["shard_id"]).encode("utf-8")),
+            _length_prefixed_bytes("header_hash", str(header["header_hash"]).encode("utf-8")),
+            _length_prefixed_bytes("timestamp", str(header["timestamp"]).encode("utf-8")),
+            _length_prefixed_bytes("epoch", str(registry.epoch).encode("utf-8")),
+            _length_prefixed_bytes("membership_hash", registry.membership_hash().encode("utf-8")),
         ]
-    ).encode("utf-8")
+    )
     return hash_bytes(payload).hex()
 
 
