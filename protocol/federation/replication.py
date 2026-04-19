@@ -341,18 +341,32 @@ class ReplicationProof:
         }
 
     def proof_payload_hash(self) -> str:
-        """Return the hash of the proof payload (excluding signature)."""
-        payload = HASH_SEPARATOR.join(
+        """Return the hash of the proof payload (excluding signature).
+
+        Each field is encoded with a 4-byte big-endian length prefix so that
+        values containing the literal ``|`` character cannot be injected to
+        collide with a different field layout.
+        """
+        sample_indices_bytes = ",".join(str(i) for i in self.proof_sample_indices).encode(
+            "utf-8"
+        )
+        sample_hashes_bytes = ",".join(self.proof_sample_hashes).encode("utf-8")
+        payload = b"".join(
             [
-                self.challenge_hash,
-                self.guardian_id,
-                self.ledger_tail_hash,
-                str(self.merkle_root_verified),
-                ",".join(str(i) for i in self.proof_sample_indices),
-                ",".join(self.proof_sample_hashes),
-                self.replicated_at,
+                _length_prefixed_bytes("challenge_hash", self.challenge_hash.encode("utf-8")),
+                _length_prefixed_bytes("guardian_id", self.guardian_id.encode("utf-8")),
+                _length_prefixed_bytes(
+                    "ledger_tail_hash", self.ledger_tail_hash.encode("utf-8")
+                ),
+                _length_prefixed_bytes(
+                    "merkle_root_verified",
+                    str(self.merkle_root_verified).encode("utf-8"),
+                ),
+                _length_prefixed_bytes("proof_sample_indices", sample_indices_bytes),
+                _length_prefixed_bytes("proof_sample_hashes", sample_hashes_bytes),
+                _length_prefixed_bytes("replicated_at", self.replicated_at.encode("utf-8")),
             ]
-        ).encode("utf-8")
+        )
         return hash_bytes(payload).hex()
 
 
