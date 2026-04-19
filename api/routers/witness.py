@@ -210,17 +210,15 @@ async def submit_observation(
             detail="checkpoint.timestamp is too far in the future",
         )
 
-    # -- Replay-resistance: nonce deduplication --------------------------
-    nonce_exists = await db.execute(
-        select(WitnessNonce.id).where(WitnessNonce.nonce == request.nonce).limit(1)
-    )
-    if nonce_exists.scalar_one_or_none() is not None:
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail="Duplicate nonce — possible replay",
-        )
-
     # -- Ed25519 signature verification (C2SP tlog-witness model) --------
+    #
+    # Signature verification MUST run before the nonce-deduplication 409
+    # below.  Otherwise an unauthenticated attacker could probe whether a
+    # given nonce has been seen by the witness and learn information about
+    # legitimate observation traffic — and could also force eviction of
+    # honest entries from the bounded nonce set by submitting unsigned
+    # garbage.  Authenticate the caller first; only then do replay/dedup
+    # bookkeeping.
     _signed_payload = hash_bytes(
         f"{request.origin}:{request.checkpoint.sequence}:{request.checkpoint.checkpoint_hash}".encode()
     )
@@ -245,6 +243,16 @@ async def submit_observation(
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Malformed signature or public key",
+        )
+
+    # -- Replay-resistance: nonce deduplication --------------------------
+    nonce_exists = await db.execute(
+        select(WitnessNonce.id).where(WitnessNonce.nonce == request.nonce).limit(1)
+    )
+    if nonce_exists.scalar_one_or_none() is not None:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Duplicate nonce — possible replay",
         )
 
     _origin_key_prefix = hash_bytes(request.origin.encode()).hex()[:16]
