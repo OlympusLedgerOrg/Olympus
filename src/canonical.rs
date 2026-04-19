@@ -48,7 +48,7 @@ const MAX_DEPTH: usize = 64;
 fn encode_value(py: Python<'_>, value: &Bound<'_, PyAny>, depth: usize) -> PyResult<String> {
     if depth > MAX_DEPTH {
         return Err(pyo3::exceptions::PyValueError::new_err(format!(
-            "Canonical JSON nesting depth exceeds maximum of {MAX_DEPTH}"
+            "Canonical JSON nesting depth {depth} exceeds maximum of {MAX_DEPTH}"
         )));
     }
     // None
