@@ -19,7 +19,8 @@ class TestHealthEndpoint:
         """Create a test client."""
         from ingest_parser.main import app
 
-        return TestClient(app)
+        with TestClient(app) as client:
+            yield client
 
     def test_health_check(self, client: TestClient) -> None:
         """Test health check returns healthy status."""
@@ -31,6 +32,7 @@ class TestHealthEndpoint:
         assert "parser_name" in data
         assert "parser_version" in data
         assert "model_hash" in data
+        assert "environment_digest" in data
         assert data["cpu_only"] is True
 
 
@@ -42,7 +44,8 @@ class TestParseEndpoint:
         """Create a test client."""
         from ingest_parser.main import app
 
-        return TestClient(app)
+        with TestClient(app) as client:
+            yield client
 
     def test_parse_text_file(self, client: TestClient) -> None:
         """Test parsing a plain text file."""
@@ -56,6 +59,11 @@ class TestParseEndpoint:
         assert "provenance" in data
         assert "document" in data
         assert data["provenance"]["raw_file_blake3"].startswith("blake3_")
+        assert data["provenance"]["parser_name"]
+        assert data["provenance"]["parser_version"]
+        assert data["provenance"]["canonical_parser_version"]
+        assert data["provenance"]["model_hash"].startswith("sha256_")
+        assert data["provenance"]["environment_digest"].startswith("sha256_")
         assert data["document"]["total_pages"] >= 1
 
     def test_parse_with_expected_hash(self, client: TestClient) -> None:
@@ -106,7 +114,8 @@ class TestDeterminism:
         """Create a test client."""
         from ingest_parser.main import app
 
-        return TestClient(app)
+        with TestClient(app) as client:
+            yield client
 
     def test_same_input_same_output(self, client: TestClient) -> None:
         """Test that same input produces identical output."""
@@ -124,7 +133,7 @@ class TestDeterminism:
         data1 = response1.json()
         data2 = response2.json()
 
-        assert data1["provenance"]["raw_file_blake3"] == data2["provenance"]["raw_file_blake3"]
+        assert data1["provenance"] == data2["provenance"]
         assert data1["document"] == data2["document"]
 
     def test_bbox_precision(self, client: TestClient) -> None:
