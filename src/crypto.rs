@@ -72,9 +72,22 @@ pub(crate) fn compute_empty_leaf() -> [u8; 32] {
 /// This prevents field-injection collisions between variable-length inputs
 /// (e.g. a `shard_id` value that contains "|" characters cannot be confused
 /// with a field boundary).
+///
+/// # Panics
+///
+/// Panics if `data.len()` exceeds `u32::MAX` (4 GiB).  Without this check the
+/// `as u32` cast would silently wrap, producing two different inputs that
+/// share the same length-prefixed encoding — a hash collision.  Mirrors the
+/// `assert!` in `services/cdhs-smf-rust/src/crypto.rs::length_prefixed`.
 fn length_prefixed(data: &[u8]) -> Vec<u8> {
+    assert!(
+        data.len() <= u32::MAX as usize,
+        "length_prefixed: data length {} exceeds u32::MAX",
+        data.len()
+    );
+    let len = data.len() as u32;
     let mut out = Vec::with_capacity(4 + data.len());
-    out.extend_from_slice(&(data.len() as u32).to_be_bytes());
+    out.extend_from_slice(&len.to_be_bytes());
     out.extend_from_slice(data);
     out
 }
@@ -115,6 +128,10 @@ pub fn blake3_hash<'py>(py: Python<'py>, parts: &Bound<'py, PyList>) -> PyResult
 #[pyfunction]
 pub fn global_key(py: Python<'_>, shard_id: &str, record_key_bytes: &[u8]) -> PyObject {
     let shard_bytes = shard_id.as_bytes();
+    // Hot path: cheap bound check elided in release builds; the inner
+    // `length_prefixed` carries the equivalent `assert!` for production.
+    debug_assert!(shard_bytes.len() <= u32::MAX as usize);
+    debug_assert!(record_key_bytes.len() <= u32::MAX as usize);
     let mut key_material = Vec::with_capacity(
         4 + shard_bytes.len() + 4 + record_key_bytes.len(),
     );
@@ -146,6 +163,8 @@ pub fn record_key(
 ) -> PyObject {
     let rt = record_type.as_bytes();
     let ri = record_id.as_bytes();
+    debug_assert!(rt.len() <= u32::MAX as usize);
+    debug_assert!(ri.len() <= u32::MAX as usize);
     let mut key_data = Vec::with_capacity(
         KEY_PREFIX.len() + 4 + rt.len() + 4 + ri.len() + 8,
     );

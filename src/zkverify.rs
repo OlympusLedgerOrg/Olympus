@@ -41,6 +41,14 @@ fn verify_groth16_bn254_inner(
     }
 
     let vkey = parse_verifying_key(&vkey_value)?;
+    // SAFETY: snarkjs/Groth16 requires `IC` (a.k.a. `gamma_abc_g1`) to have
+    // exactly `nPublic + 1` entries — one base term plus one per public
+    // signal.  A crafted VK with extra IC entries would otherwise pass the
+    // signal count check and cause arkworks to MSM over attacker-controlled
+    // points outside the circuit's commitment.
+    if vkey.gamma_abc_g1.len() != expected_public + 1 {
+        return Some(false);
+    }
     let proof = parse_proof(proof_json)?;
     let parsed_public_signals = parse_public_signals(public_signals)?;
     let prepared = prepare_verifying_key(&vkey);
