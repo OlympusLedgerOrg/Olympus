@@ -405,11 +405,20 @@ class _TokenBucket:
 
     def consume(self) -> bool:
         now = monotonic()
+        capacity = int(self.capacity)
         if self.refill_rate > 0:
-            replenished = int((now - self.last_refill) * self.refill_rate)
-            if replenished > 0:
-                self.tokens = min(int(self.capacity), self.tokens + replenished)
-                self.last_refill += replenished / self.refill_rate
+            if self.tokens >= capacity:
+                self.tokens = capacity
+                self.last_refill = now
+            else:
+                replenished = int((now - self.last_refill) * self.refill_rate)
+                if replenished > 0:
+                    self.tokens = min(capacity, self.tokens + replenished)
+                    self.last_refill = (
+                        now
+                        if self.tokens >= capacity
+                        else (self.last_refill + replenished / self.refill_rate)
+                    )
         if self.tokens < 1:
             return False
         self.tokens -= 1
@@ -521,6 +530,7 @@ class RedisRateLimitBackend:
     _LUA_CONSUME = """\
 local key = KEYS[1]
 local capacity = tonumber(ARGV[1])
+local capacity_int = math.floor(capacity)
 local refill_rate = tonumber(ARGV[2])
 local now = tonumber(ARGV[3])
 local ttl = tonumber(ARGV[4])
@@ -529,15 +539,24 @@ local tokens = tonumber(redis.call('HGET', key, 'tokens'))
 local last_refill = tonumber(redis.call('HGET', key, 'last_refill'))
 
 if tokens == nil or last_refill == nil then
-    tokens = capacity
+    tokens = capacity_int
     last_refill = now
 end
 
-local elapsed = math.max(now - last_refill, 0)
-local replenished = math.floor(elapsed * refill_rate)
-if replenished > 0 then
-    tokens = math.min(capacity, tokens + replenished)
-    last_refill = last_refill + replenished / refill_rate
+if tokens >= capacity_int then
+    tokens = capacity_int
+    last_refill = now
+else
+    local elapsed = math.max(now - last_refill, 0)
+    local replenished = math.floor(elapsed * refill_rate)
+    if replenished > 0 then
+        tokens = math.min(capacity_int, tokens + replenished)
+        if tokens >= capacity_int then
+            last_refill = now
+        else
+            last_refill = last_refill + replenished / refill_rate
+        end
+    end
 end
 
 if tokens < 1 then
@@ -601,7 +620,7 @@ return 1
             return _TokenBucket(
                 capacity=float(data["capacity"]),
                 refill_rate=float(data["refill_rate"]),
-                tokens=int(data["tokens"]),
+                tokens=int(float(data["tokens"])),
                 last_refill=float(data["last_refill"]),
             )
         except (KeyError, ValueError):
