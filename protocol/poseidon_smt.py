@@ -170,6 +170,8 @@ class PoseidonSMT:
             else:
                 # Current is right child
                 parent_hash = _poseidon_hash_node(sibling_hash, current_hash)
+            if not (0 <= parent_hash < SNARK_SCALAR_FIELD):
+                raise ValueError("poseidon hash output exceeded BN128 field")
 
             # Store parent at path up to bit_pos
             parent_path = () if bit_pos == 0 else path[:bit_pos]

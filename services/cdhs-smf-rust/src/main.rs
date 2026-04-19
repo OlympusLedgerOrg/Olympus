@@ -389,7 +389,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     }
     // Set a restrictive umask during bind so the socket is created as 0660
-    // even for the brief window before explicit chmod below.
+    // (0777 & !0o117 = 0660) even for the brief window before explicit chmod below.
     let listener = {
         // SAFETY: `umask` only affects process-global file creation mode bits.
         // We immediately restore the previous value after `bind` returns.
