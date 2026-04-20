@@ -90,8 +90,26 @@ def _py_global_key(shard_id: str, record_key_bytes: bytes) -> bytes:
     ).digest()
 
 
-def _py_leaf_hash(key: bytes, value_hash: bytes) -> bytes:
-    return _py_blake3_hash([_LEAF_PREFIX, _SEP, key, _SEP, value_hash])
+def _py_leaf_hash(
+    key: bytes, value_hash: bytes, parser_id: str, canonical_parser_version: str
+) -> bytes:
+    pid = parser_id.encode("utf-8")
+    cpv = canonical_parser_version.encode("utf-8")
+    return _py_blake3_hash(
+        [
+            _LEAF_PREFIX,
+            _SEP,
+            key,
+            _SEP,
+            value_hash,
+            _SEP,
+            len(pid).to_bytes(4, "big"),
+            pid,
+            _SEP,
+            len(cpv).to_bytes(4, "big"),
+            cpv,
+        ]
+    )
 
 
 def _py_node_hash(left: bytes, right: bytes) -> bytes:
@@ -181,12 +199,29 @@ class TestLeafHashParity:
     def test_basic(self) -> None:
         key = bytes(range(32))
         value = bytes(range(32, 64))
-        assert _rust_crypto.leaf_hash(key, value) == _py_leaf_hash(key, value)
+        assert _rust_crypto.leaf_hash(key, value, "docling@2.3.1", "v1") == _py_leaf_hash(
+            key, value, "docling@2.3.1", "v1"
+        )
+
+    def test_fallback_parser(self) -> None:
+        key = bytes(range(32))
+        value = bytes(range(32, 64))
+        assert _rust_crypto.leaf_hash(
+            key, value, "fallback@1.0.0", "v1"
+        ) == _py_leaf_hash(key, value, "fallback@1.0.0", "v1")
 
     def test_output_is_32_bytes(self) -> None:
-        result = _rust_crypto.leaf_hash(bytes(32), bytes(32))
+        result = _rust_crypto.leaf_hash(bytes(32), bytes(32), "fallback@1.0.0", "v1")
         assert isinstance(result, bytes)
         assert len(result) == 32
+
+    def test_empty_parser_id_rejected(self) -> None:
+        with pytest.raises((ValueError, Exception)):
+            _rust_crypto.leaf_hash(bytes(32), bytes(32), "", "v1")
+
+    def test_empty_canonical_parser_version_rejected(self) -> None:
+        with pytest.raises((ValueError, Exception)):
+            _rust_crypto.leaf_hash(bytes(32), bytes(32), "fallback@1.0.0", "")
 
 
 class TestNodeHashParity:

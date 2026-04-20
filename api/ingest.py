@@ -708,7 +708,7 @@ def _evaluate_proof_bundle(
             raise HTTPException(
                 status_code=400, detail="smt_key must be a 32-byte key (64 hex chars)"
             )
-        expected_leaf_hash = leaf_hash(smt_key, content_hash_bytes)
+        expected_leaf_hash = leaf_hash(smt_key, content_hash_bytes, "fallback@1.0.0", "v1")
 
     content_hash_matches_proof = merkle_proof.leaf_hash == expected_leaf_hash
     if merkle_proof.root_hash.hex() != normalized_root:
@@ -748,7 +748,7 @@ def _smt_proof_to_merkle_proof_dict(proof: ExistenceProof, value_hash: bytes) ->
         is_right = ((leaf_index >> level) & 1) == 0
         siblings_with_positions.append([sibling_hash.hex(), is_right])
 
-    smt_leaf_hash = leaf_hash(proof.key, value_hash)
+    smt_leaf_hash = leaf_hash(proof.key, value_hash, proof.parser_id, proof.canonical_parser_version)
 
     return {
         "leaf_hash": smt_leaf_hash.hex(),

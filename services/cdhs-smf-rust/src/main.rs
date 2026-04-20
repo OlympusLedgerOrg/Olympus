@@ -99,7 +99,7 @@ impl CdhsSmfServiceTrait for CdhsSmfService {
         // Update the SMT
         let (new_root, deltas) = self
             .smt
-            .update(&global_key, &leaf_value_hash)
+            .update(&global_key, &leaf_value_hash, "fallback@1.0.0", "v1")
             .await
             .map_err(|e| Status::internal(format!("SMT update failed: {}", e)))?;
 
@@ -188,7 +188,7 @@ impl CdhsSmfServiceTrait for CdhsSmfService {
             .collect();
         let siblings = siblings.map_err(|_| Status::invalid_argument("invalid sibling length"))?;
 
-        let valid = smt::verify_inclusion(&global_key, &value_hash, &siblings, &root);
+        let valid = smt::verify_inclusion(&global_key, &value_hash, &siblings, &root, "fallback@1.0.0", "v1");
 
         Ok(Response::new(VerifyInclusionResponse {
             valid,
@@ -362,7 +362,7 @@ impl CdhsSmfServiceTrait for CdhsSmfService {
 
         let root_hash = self
             .smt
-            .replay(leaves)
+            .replay(leaves, "fallback@1.0.0", "v1")
             .await
             .map_err(|e| Status::internal(format!("Replay failed: {}", e)))?;
 

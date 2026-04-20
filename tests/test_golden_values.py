@@ -247,14 +247,14 @@ class TestHashGoldenValues:
         assert key != record_key("document", "doc-001", 2)
 
     def test_leaf_hash_golden(self):
-        """Pin leaf_hash for known key and value."""
+        """Pin leaf_hash for known key, value, and parser provenance."""
         key = record_key("document", "doc-001", 1)
         value = hash_bytes(b"document content")
-        leaf = leaf_hash(key, value)
-        assert leaf.hex() == "83dd10dc7fbfed1e0ac62d828c34eb02fd184211a41315b63c4c52ac45612688"
+        leaf = leaf_hash(key, value, "docling@2.3.1", "v1")
+        assert leaf.hex() == "1d9535ffa5c63fa1a6784cc02ca844bf4bece14f5590414afb281bf4d53e66fc"
         assert len(leaf) == 32
         # Verify determinism
-        assert leaf == leaf_hash(key, value)
+        assert leaf == leaf_hash(key, value, "docling@2.3.1", "v1")
 
     def test_node_hash_golden(self):
         """Pin node_hash for known left and right children."""

@@ -111,9 +111,25 @@ def test_leaf_hash_determinism():
     """leaf_hash returns consistent 32-byte hashes."""
     k = b"\x00" * 32
     v = b"\x01" * 32
-    h1 = leaf_hash(k, v)
-    h2 = leaf_hash(k, v)
+    h1 = leaf_hash(k, v, "fallback@1.0.0", "v1")
+    h2 = leaf_hash(k, v, "fallback@1.0.0", "v1")
     assert h1 == h2 and len(h1) == 32
+
+
+def test_leaf_hash_parser_id_required():
+    """leaf_hash rejects empty parser_id."""
+    k = b"\x00" * 32
+    v = b"\x01" * 32
+    with pytest.raises(ValueError, match="parser_id"):
+        leaf_hash(k, v, "", "v1")
+
+
+def test_leaf_hash_canonical_parser_version_required():
+    """leaf_hash rejects empty canonical_parser_version."""
+    k = b"\x00" * 32
+    v = b"\x01" * 32
+    with pytest.raises(ValueError, match="canonical_parser_version"):
+        leaf_hash(k, v, "fallback@1.0.0", "")
 
 
 def test_node_hash_determinism():

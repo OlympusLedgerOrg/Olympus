@@ -23,6 +23,6 @@ fuzz_target!(|input: SmtUpdateInput| {
 
     for (key, value_hash) in &input.entries {
         // Errors are acceptable (e.g. lock poisoning); panics are not.
-        let _ = tree.update(key, value_hash);
+        let _ = tree.update(key, value_hash, "fallback@1.0.0", "v1");
     }
 });

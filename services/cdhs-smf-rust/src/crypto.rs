@@ -171,18 +171,38 @@ pub fn hash_bytes(data: &[u8]) -> [u8; 32] {
     *blake3::hash(data).as_bytes()
 }
 
-/// Hash a leaf node with domain separation.
+/// Hash a leaf node with domain separation and parser-version binding.
 ///
-/// `BLAKE3(LEAF_HASH_PREFIX || "|" || key || "|" || value_hash)`
+/// Formula:
+/// ```text
+/// BLAKE3(LEAF_HASH_PREFIX || SEP || key || SEP || value_hash || SEP ||
+///        len(parser_id)[4B BE] || parser_id || SEP ||
+///        len(canonical_parser_version)[4B BE] || canonical_parser_version)
+/// ```
 ///
 /// Matches `compute_leaf_hash` in `src/crypto.rs` (PyO3).
-pub fn hash_leaf(key: &[u8; 32], value_hash: &[u8; 32]) -> [u8; 32] {
+pub fn hash_leaf(
+    key: &[u8; 32],
+    value_hash: &[u8; 32],
+    parser_id: &str,
+    canonical_parser_version: &str,
+) -> [u8; 32] {
+    let pid = parser_id.as_bytes();
+    let cpv = canonical_parser_version.as_bytes();
+    let pid_len = (pid.len() as u32).to_be_bytes();
+    let cpv_len = (cpv.len() as u32).to_be_bytes();
     let mut hasher = blake3::Hasher::new();
     hasher.update(LEAF_HASH_PREFIX);
     hasher.update(SEP);
     hasher.update(key);
     hasher.update(SEP);
     hasher.update(value_hash);
+    hasher.update(SEP);
+    hasher.update(&pid_len);
+    hasher.update(pid);
+    hasher.update(SEP);
+    hasher.update(&cpv_len);
+    hasher.update(cpv);
     *hasher.finalize().as_bytes()
 }
 

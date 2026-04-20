@@ -36,14 +36,34 @@ const EMPTY_LEAF_PREFIX: &[u8] = b"OLY:EMPTY-LEAF:V1";
 // These are used internally by `crate::smt` and by the PyO3 wrappers below.
 // ---------------------------------------------------------------------------
 
-/// Compute a domain-separated leaf hash: `BLAKE3(LEAF_PREFIX || "|" || key || "|" || value_hash)`.
-pub(crate) fn compute_leaf_hash(key: &[u8], value_hash: &[u8]) -> [u8; 32] {
+/// Compute a domain-separated leaf hash with parser-version binding.
+///
+/// Formula:
+/// ```text
+/// BLAKE3(LEAF_PREFIX || SEP || key || SEP || value_hash || SEP ||
+///        len(parser_id)[4B BE] || parser_id || SEP ||
+///        len(canonical_parser_version)[4B BE] || canonical_parser_version)
+/// ```
+pub(crate) fn compute_leaf_hash(
+    key: &[u8],
+    value_hash: &[u8],
+    parser_id: &[u8],
+    canonical_parser_version: &[u8],
+) -> [u8; 32] {
+    let pid_len = (parser_id.len() as u32).to_be_bytes();
+    let cpv_len = (canonical_parser_version.len() as u32).to_be_bytes();
     let mut hasher = blake3::Hasher::new();
     hasher.update(LEAF_PREFIX);
     hasher.update(SEP);
     hasher.update(key);
     hasher.update(SEP);
     hasher.update(value_hash);
+    hasher.update(SEP);
+    hasher.update(&pid_len);
+    hasher.update(parser_id);
+    hasher.update(SEP);
+    hasher.update(&cpv_len);
+    hasher.update(canonical_parser_version);
     *hasher.finalize().as_bytes()
 }
 
@@ -177,16 +197,43 @@ pub fn record_key(
     PyBytes::new(py, digest.as_bytes()).into()
 }
 
-/// Compute a domain-separated hash for a sparse-tree leaf.
+/// Compute a domain-separated hash for a sparse-tree leaf with parser-version binding.
 ///
-/// ``leaf_hash = BLAKE3(LEAF_PREFIX || "|" || key || "|" || value_hash)``
+/// Formula:
+/// ```text
+/// BLAKE3(LEAF_PREFIX || SEP || key || SEP || value_hash || SEP ||
+///        len(parser_id)[4B BE] || parser_id || SEP ||
+///        len(canonical_parser_version)[4B BE] || canonical_parser_version)
+/// ```
+///
+/// Both `parser_id` and `canonical_parser_version` must be non-empty strings.
 ///
 /// # Python signature
-/// ``leaf_hash(key: bytes, value_hash: bytes) -> bytes``
+/// ``leaf_hash(key: bytes, value_hash: bytes, parser_id: str, canonical_parser_version: str) -> bytes``
 #[pyfunction]
-pub fn leaf_hash(py: Python<'_>, key: &[u8], value_hash: &[u8]) -> PyObject {
-    let digest = compute_leaf_hash(key, value_hash);
-    PyBytes::new(py, &digest).into()
+pub fn leaf_hash(
+    py: Python<'_>,
+    key: &[u8],
+    value_hash: &[u8],
+    parser_id: &str,
+    canonical_parser_version: &str,
+) -> PyResult<PyObject> {
+    use pyo3::exceptions::PyValueError;
+    if parser_id.is_empty() {
+        return Err(PyValueError::new_err("parser_id must not be empty"));
+    }
+    if canonical_parser_version.is_empty() {
+        return Err(PyValueError::new_err(
+            "canonical_parser_version must not be empty",
+        ));
+    }
+    let digest = compute_leaf_hash(
+        key,
+        value_hash,
+        parser_id.as_bytes(),
+        canonical_parser_version.as_bytes(),
+    );
+    Ok(PyBytes::new(py, &digest).into())
 }
 
 /// Compute a domain-separated hash for an internal Merkle node.

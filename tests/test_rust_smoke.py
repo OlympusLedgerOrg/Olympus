@@ -56,8 +56,26 @@ def _py_global_key(shard_id: str, record_key_bytes: bytes) -> bytes:
     return blake3.blake3(payload, derive_key_context=_GLOBAL_SMT_KEY_CONTEXT).digest()
 
 
-def _py_leaf_hash(key: bytes, value_hash: bytes) -> bytes:
-    return _py_blake3_hash((_LEAF_PREFIX, _SEP, key, _SEP, value_hash))
+def _py_leaf_hash(
+    key: bytes, value_hash: bytes, parser_id: str, canonical_parser_version: str
+) -> bytes:
+    pid = parser_id.encode("utf-8")
+    cpv = canonical_parser_version.encode("utf-8")
+    return _py_blake3_hash(
+        (
+            _LEAF_PREFIX,
+            _SEP,
+            key,
+            _SEP,
+            value_hash,
+            _SEP,
+            len(pid).to_bytes(4, "big"),
+            pid,
+            _SEP,
+            len(cpv).to_bytes(4, "big"),
+            cpv,
+        )
+    )
 
 
 def _py_node_hash(left: bytes, right: bytes) -> bytes:
@@ -68,8 +86,8 @@ def _py_canonical_json(value: object) -> str:
     return _encode_value(_normalize_for_canonical_json(value))
 
 
-def _py_zero_sibling_root(key: bytes, value_hash: bytes) -> bytes:
-    current = _py_leaf_hash(key, value_hash)
+def _py_zero_sibling_root(key: bytes, value_hash: bytes, parser_id: str, canonical_parser_version: str) -> bytes:
+    current = _py_leaf_hash(key, value_hash, parser_id, canonical_parser_version)
     path_bits: list[int] = []
     for byte in key:
         for bit_index in range(8):
@@ -115,6 +133,8 @@ def _py_zero_sibling_root(key: bytes, value_hash: bytes) -> bytes:
             lambda: _py_zero_sibling_root(
                 rust_smoke.SMT_INCREMENTAL_ARGS[0],
                 rust_smoke.SMT_INCREMENTAL_ARGS[1],
+                rust_smoke.SMT_INCREMENTAL_ARGS[3],
+                rust_smoke.SMT_INCREMENTAL_ARGS[4],
             ).hex(),
         ),
     ],

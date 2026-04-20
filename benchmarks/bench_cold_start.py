@@ -120,8 +120,24 @@ def py_global_key(shard_id: str, rk: bytes) -> bytes:
     ).digest()
 
 
-def py_leaf_hash(key: bytes, value_hash: bytes) -> bytes:
-    return _blake3.blake3(_LEAF_PREFIX + _SEP + key + _SEP + value_hash).digest()
+def py_leaf_hash(
+    key: bytes, value_hash: bytes, parser_id: str = "fallback@1.0.0", canonical_parser_version: str = "v1"
+) -> bytes:
+    pid = parser_id.encode("utf-8")
+    cpv = canonical_parser_version.encode("utf-8")
+    return _blake3.blake3(
+        _LEAF_PREFIX
+        + _SEP
+        + key
+        + _SEP
+        + value_hash
+        + _SEP
+        + len(pid).to_bytes(4, "big")
+        + pid
+        + _SEP
+        + len(cpv).to_bytes(4, "big")
+        + cpv
+    ).digest()
 
 
 def py_node_hash(left: bytes, right: bytes) -> bytes:
@@ -319,7 +335,7 @@ def _make_suite() -> BenchSuite:
         (
             "leaf_hash",
             lambda: py_leaf_hash(_GK, _VH),
-            (lambda: _rust_crypto.leaf_hash(_GK, _VH)) if _rust_available else None,
+            (lambda: _rust_crypto.leaf_hash(_GK, _VH, "fallback@1.0.0", "v1")) if _rust_available else None,
         )
     )
 
@@ -365,7 +381,7 @@ def _make_suite() -> BenchSuite:
         vh = _rust_crypto.blake3_hash([canonical.encode("utf-8")])
         rk = _rust_crypto.record_key(_RTYPE, _RID, _VERSION)
         gk = _rust_crypto.global_key(_SHARD, rk)
-        return _rust_crypto.leaf_hash(gk, vh)
+        return _rust_crypto.leaf_hash(gk, vh, "fallback@1.0.0", "v1")
 
     suite.append(
         (

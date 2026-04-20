@@ -79,6 +79,8 @@ impl SparseMerkleTree {
         &self,
         key: &[u8; 32],
         value_hash: &[u8; 32],
+        parser_id: &str,
+        canonical_parser_version: &str,
     ) -> Result<([u8; 32], Vec<NodeDelta>), String> {
         let mut state = self.state.write().await;
         let mut deltas = Vec::new();
@@ -96,7 +98,7 @@ impl SparseMerkleTree {
         let path_bits = key_to_path_bits(key);
 
         // Compute leaf hash
-        let leaf_hash = crypto::hash_leaf(key, value_hash);
+        let leaf_hash = crypto::hash_leaf(key, value_hash, parser_id, canonical_parser_version);
 
         // Update from leaf (level 255) to root (above level 0)
         let mut current_hash = leaf_hash;
@@ -168,12 +170,19 @@ impl SparseMerkleTree {
 
     /// Replay a sequence of (key, value_hash) leaf insertions in order.
     ///
+    /// All leaves are committed with the provided `parser_id` and
+    /// `canonical_parser_version` (uniform for the entire replay batch).
     /// Iterates through the provided pairs and calls `self.update()` for each,
     /// using the same path as live inserts so the resulting root is identical.
     /// Returns the final root hash after all leaves have been applied.
-    pub async fn replay(&self, leaves: Vec<([u8; 32], [u8; 32])>) -> Result<[u8; 32], String> {
+    pub async fn replay(
+        &self,
+        leaves: Vec<([u8; 32], [u8; 32])>,
+        parser_id: &str,
+        canonical_parser_version: &str,
+    ) -> Result<[u8; 32], String> {
         for (key, value_hash) in leaves {
-            self.update(&key, &value_hash).await?;
+            self.update(&key, &value_hash, parser_id, canonical_parser_version).await?;
         }
         Ok(self.root().await)
     }
@@ -263,13 +272,15 @@ pub fn verify_inclusion(
     value_hash: &[u8; 32],
     siblings: &[[u8; 32]],
     root: &[u8; 32],
+    parser_id: &str,
+    canonical_parser_version: &str,
 ) -> bool {
     if siblings.len() != 256 {
         return false;
     }
 
     let path_bits = key_to_path_bits(key);
-    let mut current_hash = crypto::hash_leaf(key, value_hash);
+    let mut current_hash = crypto::hash_leaf(key, value_hash, parser_id, canonical_parser_version);
 
     for level in (0..256).rev() {
         let bit = path_bits[level];
@@ -389,7 +400,7 @@ mod tests {
         let key = [1u8; 32];
         let value_hash = [2u8; 32];
 
-        let result = tree.update(&key, &value_hash).await;
+        let result = tree.update(&key, &value_hash, "fallback@1.0.0", "v1").await;
         assert!(result.is_ok());
 
         let (new_root, deltas) = result.unwrap();
@@ -404,12 +415,12 @@ mod tests {
         let key = [1u8; 32];
         let value_hash = [2u8; 32];
 
-        tree.update(&key, &value_hash).await.unwrap();
+        tree.update(&key, &value_hash, "fallback@1.0.0", "v1").await.unwrap();
         let root = tree.root().await;
 
         let proof = tree.prove_inclusion(&key, &root).await.unwrap();
         assert_eq!(proof.siblings.len(), 256);
-        assert!(verify_inclusion(&key, &value_hash, &proof.siblings, &root));
+        assert!(verify_inclusion(&key, &value_hash, &proof.siblings, &root, "fallback@1.0.0", "v1"));
     }
 
     #[tokio::test]
@@ -424,16 +435,16 @@ mod tests {
         let val_a = [0xAAu8; 32];
         let val_b = [0xBBu8; 32];
 
-        tree.update(&key_a, &val_a).await.unwrap();
-        tree.update(&key_b, &val_b).await.unwrap();
+        tree.update(&key_a, &val_a, "fallback@1.0.0", "v1").await.unwrap();
+        tree.update(&key_b, &val_b, "fallback@1.0.0", "v1").await.unwrap();
         let root = tree.root().await;
 
         // Both proofs must verify
         let proof_a = tree.prove_inclusion(&key_a, &root).await.unwrap();
-        assert!(verify_inclusion(&key_a, &val_a, &proof_a.siblings, &root));
+        assert!(verify_inclusion(&key_a, &val_a, &proof_a.siblings, &root, "fallback@1.0.0", "v1"));
 
         let proof_b = tree.prove_inclusion(&key_b, &root).await.unwrap();
-        assert!(verify_inclusion(&key_b, &val_b, &proof_b.siblings, &root));
+        assert!(verify_inclusion(&key_b, &val_b, &proof_b.siblings, &root, "fallback@1.0.0", "v1"));
 
         // Siblings should include actual node hashes, not all empty
         let empty_hashes = empty_hashes();
@@ -461,15 +472,15 @@ mod tests {
 
         let val = [0xFFu8; 32];
 
-        tree.update(&key_a, &val).await.unwrap();
-        tree.update(&key_b, &val).await.unwrap();
-        tree.update(&key_c, &val).await.unwrap();
+        tree.update(&key_a, &val, "fallback@1.0.0", "v1").await.unwrap();
+        tree.update(&key_b, &val, "fallback@1.0.0", "v1").await.unwrap();
+        tree.update(&key_c, &val, "fallback@1.0.0", "v1").await.unwrap();
         let root = tree.root().await;
 
         for key in [key_a, key_b, key_c] {
             let proof = tree.prove_inclusion(&key, &root).await.unwrap();
             assert!(
-                verify_inclusion(&key, &val, &proof.siblings, &root),
+                verify_inclusion(&key, &val, &proof.siblings, &root, "fallback@1.0.0", "v1"),
                 "Inclusion proof failed for key {:?}",
                 &key[..4]
             );
@@ -487,7 +498,7 @@ mod tests {
             key[0] = i;
             let mut val = [0u8; 32];
             val[0] = i + 100;
-            tree.update(&key, &val).await.unwrap();
+            tree.update(&key, &val, "fallback@1.0.0", "v1").await.unwrap();
             keys.push(key);
             vals.push(val);
         }
@@ -496,7 +507,7 @@ mod tests {
         for (key, val) in keys.iter().zip(vals.iter()) {
             let proof = tree.prove_inclusion(key, &root).await.unwrap();
             assert!(
-                verify_inclusion(key, val, &proof.siblings, &root),
+                verify_inclusion(key, val, &proof.siblings, &root, "fallback@1.0.0", "v1"),
                 "Proof failed for key starting with {:02x}",
                 key[0]
             );
@@ -510,7 +521,7 @@ mod tests {
         let key2 = [2u8; 32];
         let value_hash = [3u8; 32];
 
-        tree.update(&key1, &value_hash).await.unwrap();
+        tree.update(&key1, &value_hash, "fallback@1.0.0", "v1").await.unwrap();
         let root = tree.root().await;
 
         let proof = tree.prove_non_inclusion(&key2, &root).await.unwrap();
@@ -526,8 +537,8 @@ mod tests {
         let absent = [3u8; 32];
         let val = [0xAAu8; 32];
 
-        tree.update(&key1, &val).await.unwrap();
-        tree.update(&key2, &val).await.unwrap();
+        tree.update(&key1, &val, "fallback@1.0.0", "v1").await.unwrap();
+        tree.update(&key2, &val, "fallback@1.0.0", "v1").await.unwrap();
         let root = tree.root().await;
 
         let proof = tree.prove_non_inclusion(&absent, &root).await.unwrap();
@@ -542,12 +553,12 @@ mod tests {
         let val_b = [0xBu8; 32];
 
         let tree1 = SparseMerkleTree::new();
-        tree1.update(&key_a, &val_a).await.unwrap();
-        tree1.update(&key_b, &val_b).await.unwrap();
+        tree1.update(&key_a, &val_a, "fallback@1.0.0", "v1").await.unwrap();
+        tree1.update(&key_b, &val_b, "fallback@1.0.0", "v1").await.unwrap();
 
         let tree2 = SparseMerkleTree::new();
-        tree2.update(&key_b, &val_b).await.unwrap();
-        tree2.update(&key_a, &val_a).await.unwrap();
+        tree2.update(&key_b, &val_b, "fallback@1.0.0", "v1").await.unwrap();
+        tree2.update(&key_a, &val_a, "fallback@1.0.0", "v1").await.unwrap();
 
         assert_eq!(
             tree1.root().await,
@@ -563,17 +574,17 @@ mod tests {
         let val1 = [2u8; 32];
         let val2 = [3u8; 32];
 
-        tree.update(&key, &val1).await.unwrap();
+        tree.update(&key, &val1, "fallback@1.0.0", "v1").await.unwrap();
         let root1 = tree.root().await;
 
-        tree.update(&key, &val2).await.unwrap();
+        tree.update(&key, &val2, "fallback@1.0.0", "v1").await.unwrap();
         let root2 = tree.root().await;
 
         assert_ne!(root1, root2, "Root must change when value changes");
         assert_eq!(tree.size().await, 1, "Size should not increase on update");
 
         let proof = tree.prove_inclusion(&key, &root2).await.unwrap();
-        assert!(verify_inclusion(&key, &val2, &proof.siblings, &root2));
+        assert!(verify_inclusion(&key, &val2, &proof.siblings, &root2, "fallback@1.0.0", "v1"));
     }
 
     #[test]

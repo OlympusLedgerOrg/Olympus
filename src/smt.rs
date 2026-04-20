@@ -95,9 +95,16 @@ fn incremental_update_raw(
     key: &[u8; 32],
     value_hash: &[u8; 32],
     current_siblings: &[[u8; 32]],
+    parser_id: &str,
+    canonical_parser_version: &str,
 ) -> ([u8; 32], Vec<NodeDelta>) {
     let path = key_to_path_bits(key);
-    let mut current_hash = crypto::compute_leaf_hash(key, value_hash);
+    let mut current_hash = crypto::compute_leaf_hash(
+        key,
+        value_hash,
+        parser_id.as_bytes(),
+        canonical_parser_version.as_bytes(),
+    );
     let mut deltas = Vec::with_capacity(256);
 
     for (level, sib_hash) in current_siblings.iter().enumerate().take(256) {
@@ -163,7 +170,13 @@ impl RustSparseMerkleTree {
     }
 
     /// Insert or update a leaf.  `key` and `value_hash` must each be 32 bytes.
-    fn update(&self, key: &[u8], value_hash: &[u8]) -> PyResult<()> {
+    fn update(
+        &self,
+        key: &[u8],
+        value_hash: &[u8],
+        parser_id: &str,
+        canonical_parser_version: &str,
+    ) -> PyResult<()> {
         if key.len() != 32 {
             return Err(PyValueError::new_err(format!(
                 "Key must be 32 bytes, got {}",
@@ -176,6 +189,14 @@ impl RustSparseMerkleTree {
                 value_hash.len()
             )));
         }
+        if parser_id.is_empty() {
+            return Err(PyValueError::new_err("parser_id must not be empty"));
+        }
+        if canonical_parser_version.is_empty() {
+            return Err(PyValueError::new_err(
+                "canonical_parser_version must not be empty",
+            ));
+        }
 
         let key32: [u8; 32] = key.try_into().unwrap();
         let vh32: [u8; 32] = value_hash.try_into().unwrap();
@@ -186,7 +207,12 @@ impl RustSparseMerkleTree {
 
         // Compute leaf hash and walk from leaf to root, exactly matching
         // the Python ``SparseMerkleTree.update`` loop.
-        let mut current_hash = crypto::compute_leaf_hash(key, value_hash);
+        let mut current_hash = crypto::compute_leaf_hash(
+            key,
+            value_hash,
+            parser_id.as_bytes(),
+            canonical_parser_version.as_bytes(),
+        );
 
         for level in 0..256usize {
             let bit_pos = 255 - level;
@@ -373,6 +399,8 @@ impl RustSparseMerkleTree {
     ///     value_hash: 32-byte value hash.
     ///     current_siblings: list of exactly 256 × 32-byte sibling hashes,
     ///         ordered from leaf level (index 0) to root level (index 255).
+    ///     parser_id: Non-empty string identifying the ingest parser (e.g. ``"docling@2.3.1"``).
+    ///     canonical_parser_version: Non-empty opaque operator string (e.g. ``"v1"``).
     ///
     /// Returns:
     ///     A 3-tuple ``(new_root, proof_siblings, node_deltas)`` where:
@@ -386,6 +414,8 @@ impl RustSparseMerkleTree {
         key: &[u8],
         value_hash: &[u8],
         current_siblings: &Bound<'py, PyList>,
+        parser_id: &str,
+        canonical_parser_version: &str,
     ) -> PyResult<PyObject> {
         if key.len() != 32 {
             return Err(PyValueError::new_err(format!(
@@ -404,6 +434,14 @@ impl RustSparseMerkleTree {
                 "current_siblings must have exactly 256 elements, got {}",
                 current_siblings.len()
             )));
+        }
+        if parser_id.is_empty() {
+            return Err(PyValueError::new_err("parser_id must not be empty"));
+        }
+        if canonical_parser_version.is_empty() {
+            return Err(PyValueError::new_err(
+                "canonical_parser_version must not be empty",
+            ));
         }
 
         // Extract siblings into Vec<[u8; 32]>.
@@ -432,7 +470,7 @@ impl RustSparseMerkleTree {
         let key32: [u8; 32] = key.try_into().unwrap();
         let vh32: [u8; 32] = value_hash.try_into().unwrap();
 
-        let (new_root, deltas) = incremental_update_raw(&key32, &vh32, &siblings);
+        let (new_root, deltas) = incremental_update_raw(&key32, &vh32, &siblings, parser_id, canonical_parser_version);
 
         // Build Python return tuple: (new_root, proof_siblings, node_deltas)
         let py_root = PyBytes::new(py, &new_root);
@@ -507,7 +545,12 @@ mod tests {
         let mut state = tree.state.write().unwrap();
         state.leaves.insert(*key, *value_hash);
 
-        let mut current_hash = crypto::compute_leaf_hash(key, value_hash);
+        let mut current_hash = crypto::compute_leaf_hash(
+            key,
+            value_hash,
+            b"fallback@1.0.0",
+            b"v1",
+        );
         for level in 0..256usize {
             let bit_pos = 255 - level;
             let sib_path = sibling_path(&path[..=bit_pos]);

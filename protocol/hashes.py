@@ -181,12 +181,60 @@ def global_key(shard_id: str, record_key_bytes: bytes) -> bytes:
     return result
 
 
-def leaf_hash(key: bytes, value_hash: bytes) -> bytes:
-    """Compute hash of a sparse-tree leaf with domain separation."""
+def leaf_hash(
+    key: bytes,
+    value_hash: bytes,
+    parser_id: str,
+    canonical_parser_version: str,
+) -> bytes:
+    """Compute hash of a sparse-tree leaf with parser-version binding.
+
+    The domain-separated leaf hash is:
+
+        BLAKE3(LEAF_PREFIX || SEP || key || SEP || value_hash || SEP ||
+               len(parser_id)[4B BE] || parser_id || SEP ||
+               len(canonical_parser_version)[4B BE] || canonical_parser_version)
+
+    Args:
+        key: 32-byte SMT leaf key.
+        value_hash: 32-byte hash of the canonicalized record content.
+        parser_id: Non-empty string identifying the ingest parser and its version,
+            in ``"<name>@<version>"`` format (e.g. ``"docling@2.3.1"``).
+            The fallback parser uses ``"fallback@1.0.0"``.
+        canonical_parser_version: Non-empty opaque string set by the operator
+            via ``INGEST_PARSER_CANONICAL_VERSION`` (default ``"v1"``).
+
+    Returns:
+        32-byte BLAKE3 digest.
+
+    Raises:
+        ValueError: If ``parser_id`` or ``canonical_parser_version`` is an empty
+            string.
+    """
+    if not parser_id:
+        raise ValueError("parser_id must not be empty")
+    if not canonical_parser_version:
+        raise ValueError("canonical_parser_version must not be empty")
     if _RUST_CRYPTO_AVAILABLE:  # pragma: no cover — Rust FFI path
-        result: bytes = _rust_leaf_hash(key, value_hash)
+        result: bytes = _rust_leaf_hash(key, value_hash, parser_id, canonical_parser_version)
         return result
-    return blake3_hash([LEAF_PREFIX, _SEP, key, _SEP, value_hash])
+    pid_bytes = parser_id.encode("utf-8")
+    cpv_bytes = canonical_parser_version.encode("utf-8")
+    return blake3_hash(
+        [
+            LEAF_PREFIX,
+            _SEP,
+            key,
+            _SEP,
+            value_hash,
+            _SEP,
+            len(pid_bytes).to_bytes(4, "big"),
+            pid_bytes,
+            _SEP,
+            len(cpv_bytes).to_bytes(4, "big"),
+            cpv_bytes,
+        ]
+    )
 
 
 def node_hash(left: bytes, right: bytes) -> bytes:
