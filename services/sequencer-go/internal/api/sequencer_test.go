@@ -24,7 +24,7 @@ func (m *mockStorage) StoreLeafAndDeltas(_ context.Context, _ []storage.SmtDelta
 return nil
 }
 
-func (m *mockStorage) StoreLeafAndDeltasBatch(_ context.Context, _ []storage.BatchLeaf, _ []byte, _ uint64, _ []byte) error {
+func (m *mockStorage) StoreLeafAndDeltasBatch(_ context.Context, _ []storage.BatchLeaf) error {
 return nil
 }
 
