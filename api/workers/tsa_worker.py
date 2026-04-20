@@ -52,6 +52,13 @@ from api.models.tsa_job import TsaJob
 logger = logging.getLogger(__name__)
 
 
+# Hard ceiling on inter-attempt sleep.  Five minutes keeps a stuck job
+# from waiting longer than the default grace window between retries —
+# any larger value would let a row age out without the worker getting a
+# real chance to recover it.
+_MAX_BACKOFF_SECONDS = 300
+
+
 # Mapping of ``target_table`` values stored on TsaJob rows back to their
 # ORM models.  Adding a new row type requires registering it here.  Both
 # models in this map share the contract: they expose ``id``,
@@ -77,11 +84,11 @@ def _backoff_seconds(attempts: int) -> float:
     """Exponential backoff with a hard cap.
 
     ``attempts`` is the new attempt count *after* incrementing.  Schedule
-    is 1, 2, 4, 8, ... up to 5 minutes between retries.  A hard cap
-    avoids unbounded delays that would push past the grace window with
-    no chance to recover.
+    is 1, 2, 4, 8, ... up to ``_MAX_BACKOFF_SECONDS`` between retries.
+    A hard cap avoids unbounded delays that would push past the grace
+    window with no chance to recover.
     """
-    return float(min(300, 2 ** max(0, attempts - 1)))
+    return float(min(_MAX_BACKOFF_SECONDS, 2 ** max(0, attempts - 1)))
 
 
 async def claim_one_job(session: AsyncSession) -> TsaJob | None:
