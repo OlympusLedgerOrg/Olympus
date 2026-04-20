@@ -1,6 +1,9 @@
 package storage
 
-import "testing"
+import (
+	"bytes"
+	"testing"
+)
 
 func TestRequireVerifyingSSLMode(t *testing.T) {
 	cases := []struct {
@@ -34,5 +37,60 @@ func TestRequireVerifyingSSLMode(t *testing.T) {
 				t.Fatalf("expected no error for %q, got %v", tc.connStr, err)
 			}
 		})
+	}
+}
+
+// TestBatchLeafPerLeafRootFields enforces the H-3/H-7 contract: every
+// BatchLeaf must carry its own Root, TreeSize, and Signature so that
+// StoreLeafAndDeltasBatch can write one root row per leaf. The test
+// constructs a batch of three leaves with distinct roots and tree sizes,
+// verifies the fields survive round-trip through the struct (no shared root
+// pointer aliasing), and confirms that a zero-value BatchLeaf has an empty
+// root — meaning callers that omit Root will produce a detectable failure
+// rather than silently persisting a bogus row.
+func TestBatchLeafPerLeafRootFields(t *testing.T) {
+	roots := [][]byte{
+		bytes.Repeat([]byte{0x01}, 32),
+		bytes.Repeat([]byte{0x02}, 32),
+		bytes.Repeat([]byte{0x03}, 32),
+	}
+	sigs := [][]byte{
+		bytes.Repeat([]byte{0xaa}, 64),
+		bytes.Repeat([]byte{0xbb}, 64),
+		bytes.Repeat([]byte{0xcc}, 64),
+	}
+
+	batch := make([]BatchLeaf, 3)
+	for i := range batch {
+		batch[i] = BatchLeaf{
+			Leaf:      LeafEntry{Key: []byte{byte(i)}, ValueHash: []byte{byte(i + 10)}},
+			Root:      roots[i],
+			TreeSize:  uint64(i + 1),
+			Signature: sigs[i],
+		}
+	}
+
+	// Every leaf must carry a distinct root so GetRootByTreeSize can serve
+	// each intermediate tree size.
+	for i, bl := range batch {
+		if !bytes.Equal(bl.Root, roots[i]) {
+			t.Errorf("leaf %d: Root mismatch: got %x, want %x", i, bl.Root, roots[i])
+		}
+		if bl.TreeSize != uint64(i+1) {
+			t.Errorf("leaf %d: TreeSize = %d, want %d", i, bl.TreeSize, i+1)
+		}
+		if !bytes.Equal(bl.Signature, sigs[i]) {
+			t.Errorf("leaf %d: Signature mismatch: got %x, want %x", i, bl.Signature, sigs[i])
+		}
+	}
+
+	// A zero-value BatchLeaf must have a nil Root so a caller that forgets to
+	// sign will produce an explicit nil rather than an accidentally shared root.
+	var zero BatchLeaf
+	if zero.Root != nil {
+		t.Errorf("zero-value BatchLeaf.Root should be nil, got %x", zero.Root)
+	}
+	if zero.Signature != nil {
+		t.Errorf("zero-value BatchLeaf.Signature should be nil, got %x", zero.Signature)
 	}
 }

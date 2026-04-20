@@ -216,21 +216,26 @@ func (s *PostgresStorage) StoreLeafAndDeltas(ctx context.Context, deltas []SmtDe
 	return tx.Commit()
 }
 
-// BatchLeaf groups a leaf entry with its SMT node deltas for atomic batch storage.
+// BatchLeaf groups a leaf entry with its SMT node deltas and the signed root
+// that results from inserting this leaf into the global tree. Each leaf carries
+// its own root so that GetRootByTreeSize returns a valid row for every
+// intermediate tree size within a batch (H-3/H-7).
 type BatchLeaf struct {
-	Leaf   LeafEntry
-	Deltas []SmtDelta
+	Leaf      LeafEntry
+	Deltas    []SmtDelta
+	Root      []byte
+	TreeSize  uint64
+	Signature []byte
 }
 
 // StoreLeafAndDeltasBatch atomically persists all leaves, their node deltas,
-// and the final root in a single transaction. All leaves share the post-batch
-// root — only one root row is written regardless of batch size.
+// and one signed root row per leaf in a single transaction. Writing a root for
+// every intermediate tree size ensures that GetRootByTreeSize(N) succeeds for
+// every tree size produced during the batch, so inclusion proofs at
+// intermediate points remain servable (H-3/H-7).
 func (s *PostgresStorage) StoreLeafAndDeltasBatch(
 	ctx context.Context,
 	batch []BatchLeaf,
-	root []byte,
-	treeSize uint64,
-	signature []byte,
 ) error {
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
@@ -242,6 +247,8 @@ func (s *PostgresStorage) StoreLeafAndDeltasBatch(
 		return err
 	}
 
+	rootQuery := `INSERT INTO cdhs_smf_roots (root_hash, tree_size, signature, created_at) VALUES ($1, $2, $3, NOW())`
+
 	for _, bl := range batch {
 		for _, delta := range bl.Deltas {
 			if err := storeNodeDeltaInTx(ctx, tx, delta.Path, delta.Level, delta.Hash); err != nil {
@@ -252,11 +259,9 @@ func (s *PostgresStorage) StoreLeafAndDeltasBatch(
 		if _, err := tx.ExecContext(ctx, leafQuery, bl.Leaf.Key, bl.Leaf.ValueHash); err != nil {
 			return fmt.Errorf("store leaf: %w", err)
 		}
-	}
-
-	rootQuery := `INSERT INTO cdhs_smf_roots (root_hash, tree_size, signature, created_at) VALUES ($1, $2, $3, NOW())`
-	if _, err := tx.ExecContext(ctx, rootQuery, root, treeSize, signature); err != nil {
-		return fmt.Errorf("store root: %w", err)
+		if _, err := tx.ExecContext(ctx, rootQuery, bl.Root, bl.TreeSize, bl.Signature); err != nil {
+			return fmt.Errorf("store root at tree size %d: %w", bl.TreeSize, err)
+		}
 	}
 
 	return tx.Commit()

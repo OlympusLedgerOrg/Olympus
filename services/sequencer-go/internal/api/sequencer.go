@@ -28,7 +28,7 @@ const maxRequestBodyBytes = 32 << 20 // 32 MiB
 // doubles in unit tests.
 type storageQuerier interface {
 	StoreLeafAndDeltas(ctx context.Context, deltas []storage.SmtDelta, root []byte, treeSize uint64, signature []byte, leaf storage.LeafEntry) error
-	StoreLeafAndDeltasBatch(ctx context.Context, batch []storage.BatchLeaf, root []byte, treeSize uint64, signature []byte) error
+	StoreLeafAndDeltasBatch(ctx context.Context, batch []storage.BatchLeaf) error
 	GetLatestRoot(ctx context.Context) ([]byte, uint64, error)
 	GetRootByTreeSize(ctx context.Context, treeSize uint64) (*storage.SignedRoot, error)
 }
@@ -380,12 +380,29 @@ func (s *Sequencer) handleQueueLeaves(w http.ResponseWriter, r *http.Request) {
 				Hash:  d.Hash,
 			}
 		}
+
+		// Sign this intermediate root immediately so that GetRootByTreeSize
+		// can serve every tree size produced during the batch (H-3/H-7).
+		signResp, err := s.smtClient.SignRoot(ctx, updateResp.NewRoot, updateResp.TreeSize, map[string]string{
+			"shard_id":    rec.ShardID,
+			"record_type": rec.RecordType,
+			"record_id":   rec.RecordID,
+		})
+		if err != nil {
+			log.Printf("Root signing failed (record %d of %d, aborting batch): %v", i+1, len(req.Records), err)
+			http.Error(w, "Signing failed", http.StatusInternalServerError)
+			return
+		}
+
 		batchLeaves = append(batchLeaves, storage.BatchLeaf{
 			Leaf: storage.LeafEntry{
 				Key:       updateResp.GlobalKey,
 				ValueHash: updateResp.LeafValueHash,
 			},
-			Deltas: deltas,
+			Deltas:    deltas,
+			Root:      updateResp.NewRoot,
+			TreeSize:  updateResp.TreeSize,
+			Signature: signResp.Signature,
 		})
 
 		lastUpdateResp = updateResp
@@ -398,18 +415,8 @@ func (s *Sequencer) handleQueueLeaves(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Sign the final root once (using the last tree size)
-	signResp, err := s.smtClient.SignRoot(ctx, lastUpdateResp.NewRoot, lastUpdateResp.TreeSize, map[string]string{
-		"batch_size": fmt.Sprintf("%d", len(req.Records)),
-	})
-	if err != nil {
-		log.Printf("Root signing failed: %v", err)
-		http.Error(w, "Signing failed", http.StatusInternalServerError)
-		return
-	}
-
-	// Store all leaves + deltas + root in a single transaction
-	if err := s.storage.StoreLeafAndDeltasBatch(ctx, batchLeaves, lastUpdateResp.NewRoot, lastUpdateResp.TreeSize, signResp.Signature); err != nil {
+	// Store all leaves + deltas + per-leaf roots in a single transaction
+	if err := s.storage.StoreLeafAndDeltasBatch(ctx, batchLeaves); err != nil {
 		log.Printf("Failed to store batch: %v", err)
 		http.Error(w, "Storage failed", http.StatusInternalServerError)
 		return
