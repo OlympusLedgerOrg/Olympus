@@ -568,7 +568,12 @@ async def test_get_dataset_not_found(client):
 
 @pytest.mark.asyncio
 async def test_verify_dataset_pass(client):
-    """GET /datasets/{dataset_id}/verify should return verified=True for a valid dataset."""
+    """GET /datasets/{dataset_id}/verify returns the structural checks for a valid commit.
+
+    H-5: ``commit_dataset`` no longer calls the TSA inline, so a fresh commit
+    is ``pending_within_grace`` and ``verified`` is False until the
+    background worker stores a token.  Cryptographic checks still pass.
+    """
     pubkey, _, signing_key = create_signing_keypair()
     body = build_commit_request(
         pubkey,
@@ -586,13 +591,18 @@ async def test_verify_dataset_pass(client):
     assert resp.status_code == 200
 
     data = resp.json()
-    assert data["verified"] is True
+    # Structural checks must pass even without a TSA token.
     assert data["commit_id_valid"] is True
     assert data["signature_valid"] is True
     assert data["chain_valid"] is True
     assert data["key_revoked"] is False
     assert data["checks"]["commit_id_valid"] is True
     assert data["checks"]["signature_valid"] is True
+    # H-5: TSA is async; a brand-new commit is within the grace window and
+    # the legacy ``rfc3161_valid`` is False until the worker lands a token.
+    assert data["timestamp_state"] == "pending_within_grace"
+    assert data["rfc3161_valid"] is False
+    assert data["verified"] is False
 
 
 @pytest.mark.asyncio

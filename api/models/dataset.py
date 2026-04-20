@@ -109,6 +109,12 @@ class DatasetArtifact(Base):
     rfc3161_tst_hex: Mapped[str | None] = mapped_column(Text, nullable=True)
     rfc3161_tsa_url: Mapped[str | None] = mapped_column(String(512), nullable=True)
     timestamp_status: Mapped[str] = mapped_column(String(16), nullable=False, default="pending")
+    # H-5: observability for the background TSA worker.  ``timestamp_attempts``
+    # counts how many times the worker has tried to obtain a token; resets to
+    # 0 only when the row transitions to ``verified``.  ``timestamp_last_error``
+    # holds a short human-readable error string for triage.
+    timestamp_attempts: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    timestamp_last_error: Mapped[str | None] = mapped_column(Text, nullable=True)
 
     # --- External anchor (D6) -----------------------------------------------
     anchor_tx_hash: Mapped[str | None] = mapped_column(String(128), nullable=True)
@@ -233,6 +239,10 @@ class DatasetLineageEvent(Base):
 
     # --- Timestamp status ---------------------------------------------------
     timestamp_status: Mapped[str] = mapped_column(String(16), nullable=False, default="pending")
+    # H-5: observability for the background TSA worker (mirrors
+    # DatasetArtifact).  Lineage events go through the same worker.
+    timestamp_attempts: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    timestamp_last_error: Mapped[str | None] = mapped_column(Text, nullable=True)
 
     # --- Lineage payload ----------------------------------------------------
     model_id: Mapped[str] = mapped_column(String(256), nullable=False, index=True)

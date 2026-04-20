@@ -229,9 +229,12 @@ async def test_keygen_commit_push_verify(tmp_path, client):
     resp = await client.get(f"/datasets/{dataset_id}/verify")
     assert resp.status_code == 200
     verify_data = resp.json()
-    assert verify_data["verified"] is True
+    # H-5: TSA call is async, so a fresh commit's overall ``verified`` is
+    # False until the worker lands a token.  Structural checks must still
+    # pass, and the new ``timestamp_state`` should be ``pending_within_grace``.
     assert verify_data["commit_id_valid"] is True
     assert verify_data["signature_valid"] is True
+    assert verify_data["timestamp_state"] == "pending_within_grace"
 
     # 6. Also verify locally via CLI (the CLI bundle uses its own convention)
     result = subprocess.run(

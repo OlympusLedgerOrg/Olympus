@@ -6,6 +6,39 @@ All notable changes to the Olympus protocol are documented in this file.
 
 ### Breaking Changes
 
+- **`POST /datasets/commit` and `POST /datasets/{id}/lineage` now return
+  immediately with `timestamp_status="pending"` (H-5).** The RFC 3161
+  timestamp call has been moved out of the request handler into a
+  dedicated background worker (`api.workers.tsa_worker`). Clients that
+  previously read `rfc3161_tst_hex` synchronously from the commit response
+  will now always see `null` until the worker has stored a token —
+  typically within a few seconds, but bounded by the configurable grace
+  window `TSA_GRACE_SECONDS` (default 300). Operators must run the new
+  worker process (`python -m api.workers.tsa_worker` or the
+  `olympus-tsa-worker` console script) alongside the API for tokens to
+  ever be persisted.
+- **`GET /datasets/{id}/verify` adds a new `timestamp_state` field with
+  values `verified | pending_within_grace | pending_past_grace | failed`
+  (H-5).** The legacy boolean `rfc3161_valid` is preserved for backward
+  compatibility but collapses pending-within-grace and pending-past-grace
+  into the same `false` value. Witnesses and downstream verifiers should
+  read `timestamp_state` to distinguish "still being processed" from
+  "permanently failed". A row that previously rendered as
+  `rfc3161_valid=false` because the inline TSA call had timed out will
+  now report `timestamp_state="pending_within_grace"` (and eventually
+  flip to `verified` once the worker lands a token, or `failed` once the
+  sweeper or worker exhausts retries).
+
+### Security
+
+- **TSA call hardening (H-5 Tier 0).** `protocol.rfc3161.request_timestamp`
+  now passes an explicit `timeout=5.0` to `rfc3161ng.RemoteTimestamper`,
+  bounding the TCP round-trip. Previously the default 10-second timeout
+  applied; combined with the synchronous inline call this allowed a hung
+  TSA to pin FastAPI workers indefinitely.
+
+### Breaking Changes
+
 - **Sequencer endpoint renamed: `/v1/get-consistency-proof` →
   `/v1/get-signed-root-pair`** (`services/sequencer-go/internal/api/sequencer.go`)
   The original name was misleading: the handler returned a pair of signed

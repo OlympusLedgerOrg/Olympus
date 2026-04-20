@@ -138,6 +138,20 @@ class DatasetVerifyResponse(BaseModel):
     dataset: DatasetCommitResponse | None = None
     merkle_proof: list[dict] | None = None
     rfc3161_valid: bool | None = None
+    # H-5: explicit timestamp lifecycle state.  ``rfc3161_valid`` collapses
+    # the four real states into a boolean, which loses the distinction
+    # between "still being processed" and "permanently failed".  Witnesses
+    # should prefer this field.  Possible values:
+    #   * ``"verified"``           — TSA token present and stored.
+    #   * ``"pending_within_grace"`` — TSA call has not landed yet but the
+    #                                 commit is still inside the configured
+    #                                 grace window (``TSA_GRACE_SECONDS``).
+    #   * ``"pending_past_grace"`` — TSA call has not landed and the grace
+    #                                 window has elapsed.  Treat as a soft
+    #                                 failure pending sweeper action.
+    #   * ``"failed"``             — Worker exhausted retries or sweeper
+    #                                 promoted past-grace pending to failed.
+    timestamp_state: str | None = None
     signature_valid: bool | None = None
     commit_id_valid: bool | None = None
     chain_valid: bool | None = None
