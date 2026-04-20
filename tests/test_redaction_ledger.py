@@ -147,7 +147,7 @@ def make_fixture(poseidon_root_str: str = "99999999999", doc_id: str = "docA", v
     smt = SparseMerkleTree()
     key = poseidon_root_record_key(doc_id, version)
     value = poseidon_root_to_bytes(poseidon_root_str)
-    smt.update(key, value)
+    smt.update(key, value, "docling@2.3.1", "v1")
     smt_proof = smt.prove_existence(key)
     public_inputs = ZKPublicInputs(
         original_root=poseidon_root_str,

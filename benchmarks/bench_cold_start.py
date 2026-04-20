@@ -319,7 +319,7 @@ def _make_suite() -> BenchSuite:
         (
             "leaf_hash",
             lambda: py_leaf_hash(_GK, _VH),
-            (lambda: _rust_crypto.leaf_hash(_GK, _VH)) if _rust_available else None,
+            (lambda: _rust_crypto.leaf_hash(_GK, _VH, "docling@2.3.1", "v1")) if _rust_available else None,
         )
     )
 
@@ -365,7 +365,7 @@ def _make_suite() -> BenchSuite:
         vh = _rust_crypto.blake3_hash([canonical.encode("utf-8")])
         rk = _rust_crypto.record_key(_RTYPE, _RID, _VERSION)
         gk = _rust_crypto.global_key(_SHARD, rk)
-        return _rust_crypto.leaf_hash(gk, vh)
+        return _rust_crypto.leaf_hash(gk, vh, "docling@2.3.1", "v1")
 
     suite.append(
         (

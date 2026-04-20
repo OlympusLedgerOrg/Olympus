@@ -96,17 +96,28 @@ class CdhssmfTree:
     # Core read/write
     # ------------------------------------------------------------------
 
-    def update(self, shard_id: str, rec_key: bytes, value_hash: bytes) -> None:
+    def update(
+        self,
+        shard_id: str,
+        rec_key: bytes,
+        value_hash: bytes,
+        parser_id: str,
+        canonical_parser_version: str,
+    ) -> None:
         """
         Insert or update a record under a shard namespace.
 
         Args:
-            shard_id:   Logical shard identifier (arbitrary UTF-8 string).
-            rec_key:    32-byte record key (from :func:`~protocol.hashes.record_key`).
-            value_hash: 32-byte hash of the canonical record bytes.
+            shard_id:                 Logical shard identifier (arbitrary UTF-8 string).
+            rec_key:                  32-byte record key (from :func:`~protocol.hashes.record_key`).
+            value_hash:               32-byte hash of the canonical record bytes.
+            parser_id:                Parser identity bound into the leaf hash
+                                      per ADR-0003 (e.g. ``"docling@2.3.1"``).
+            canonical_parser_version: Operator-controlled stable canonical
+                                      parser version per ADR-0003 (e.g. ``"v1"``).
         """
         gk = _derive_global_key(shard_id, rec_key)
-        self._smt.update(gk, value_hash)
+        self._smt.update(gk, value_hash, parser_id, canonical_parser_version)
 
     def get(self, shard_id: str, rec_key: bytes) -> bytes | None:
         """

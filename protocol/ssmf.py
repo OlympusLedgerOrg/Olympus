@@ -69,6 +69,8 @@ class ExistenceProof:
 
     key: bytes  # 32-byte key
     value_hash: bytes  # 32-byte hash of the value
+    parser_id: str  # Parser identity bound into leaf hash (ADR-0003)
+    canonical_parser_version: str  # Canonical parser version bound into leaf hash (ADR-0003)
     siblings: list[bytes]  # Sibling hashes along path to root (256 siblings)
     root_hash: bytes  # 32-byte root hash
 
@@ -78,6 +80,8 @@ class ExistenceProof:
             "exists": True,
             "key": self.key.hex(),
             "value_hash": self.value_hash.hex(),
+            "parser_id": self.parser_id,
+            "canonical_parser_version": self.canonical_parser_version,
             "siblings": [s.hex() for s in self.siblings],
             "root_hash": self.root_hash.hex(),
         }
@@ -135,12 +139,22 @@ class SparseMerkleTree:
         """Initialize an empty sparse Merkle tree."""
         # Store only non-empty nodes: path -> hash
         self.nodes: dict[tuple[int, ...], bytes] = {}
-        # Store leaves: key -> value_hash
-        self.leaves: dict[bytes, bytes] = {}
+        # Store leaves: key -> (value_hash, parser_id, canonical_parser_version).
+        # The parser fields are bound into the leaf hash domain per ADR-0003.
+        self._leaf_records: dict[bytes, tuple[bytes, str, str]] = {}
+
+    @property
+    def leaves(self) -> dict[bytes, bytes]:
+        """Snapshot mapping of key → value_hash.
+
+        Returned for backward compatibility; per-leaf parser metadata is held
+        separately in ``_leaf_records`` and surfaced via proofs.
+        """
+        return {k: v for k, (v, _, _) in self._leaf_records.items()}
 
     def get_root(self) -> bytes:
         """Get the root hash of the tree."""
-        if not self.nodes and not self.leaves:
+        if not self.nodes and not self._leaf_records:
             # Empty tree
             return EMPTY_HASHES[256]
 
@@ -161,30 +175,50 @@ class SparseMerkleTree:
         """
         if len(key) != 32:
             raise ValueError(f"Key must be 32 bytes, got {len(key)}")
-        return self.leaves.get(key)
+        record = self._leaf_records.get(key)
+        if record is None:
+            return None
+        return record[0]
 
-    def update(self, key: bytes, value_hash: bytes) -> None:
+    def update(
+        self,
+        key: bytes,
+        value_hash: bytes,
+        parser_id: str,
+        canonical_parser_version: str,
+    ) -> None:
         """
         Update or insert a key-value pair.
+
+        Per ADR-0003, ``parser_id`` and ``canonical_parser_version`` are
+        bound into the leaf hash domain and must both be non-empty.
 
         Args:
             key: 32-byte key
             value_hash: 32-byte hash of the value
+            parser_id: Parser identity, e.g. ``"docling@2.3.1"``.
+            canonical_parser_version: Operator-controlled stable version,
+                e.g. ``"v1"``.
         """
         if len(key) != 32:
             raise ValueError(f"Key must be 32 bytes, got {len(key)}")
         if len(value_hash) != 32:
             raise ValueError(f"Value hash must be 32 bytes, got {len(value_hash)}")
+        if not parser_id:
+            raise ValueError("parser_id must be a non-empty string")
+        if not canonical_parser_version:
+            raise ValueError("canonical_parser_version must be a non-empty string")
 
-        # Store leaf
-        self.leaves[key] = value_hash
+        # Store leaf together with the parser provenance bound into the
+        # leaf hash domain (ADR-0003).
+        self._leaf_records[key] = (value_hash, parser_id, canonical_parser_version)
 
         # Compute path from key (each bit determines left/right)
         path = self._key_to_path(key)
 
         # Update tree from leaf to root
         # Level 0 = first bit, Level 255 = last bit (leaf level)
-        current_hash = leaf_hash(key, value_hash)
+        current_hash = leaf_hash(key, value_hash, parser_id, canonical_parser_version)
 
         # Go from leaf level (255) up to root (0)
         for level in range(256):
@@ -228,15 +262,21 @@ class SparseMerkleTree:
         if len(key) != 32:
             raise ValueError(f"Key must be 32 bytes, got {len(key)}")
 
-        if key not in self.leaves:
+        record = self._leaf_records.get(key)
+        if record is None:
             raise ValueError("Key does not exist in tree")
 
-        value_hash = self.leaves[key]
+        value_hash, parser_id, canonical_parser_version = record
         path = self._key_to_path(key)
         siblings = self._collect_siblings(path)
 
         return ExistenceProof(
-            key=key, value_hash=value_hash, siblings=siblings, root_hash=self.get_root()
+            key=key,
+            value_hash=value_hash,
+            parser_id=parser_id,
+            canonical_parser_version=canonical_parser_version,
+            siblings=siblings,
+            root_hash=self.get_root(),
         )
 
     def prove_nonexistence(self, key: bytes) -> NonExistenceProof:
@@ -255,7 +295,7 @@ class SparseMerkleTree:
         if len(key) != 32:
             raise ValueError(f"Key must be 32 bytes, got {len(key)}")
 
-        if key in self.leaves:
+        if key in self._leaf_records:
             raise ValueError("Key exists in tree, cannot prove non-existence")
 
         path = self._key_to_path(key)
@@ -282,14 +322,19 @@ class SparseMerkleTree:
         if len(key) != 32:
             raise ValueError(f"Key must be 32 bytes, got {len(key)}")
 
-        if key in self.leaves:
-            # Key exists - return existence proof
-            value_hash = self.leaves[key]
+        record = self._leaf_records.get(key)
+        if record is not None:
+            value_hash, parser_id, canonical_parser_version = record
             path = self._key_to_path(key)
             siblings = self._collect_siblings(path)
 
             return ExistenceProof(
-                key=key, value_hash=value_hash, siblings=siblings, root_hash=self.get_root()
+                key=key,
+                value_hash=value_hash,
+                parser_id=parser_id,
+                canonical_parser_version=canonical_parser_version,
+                siblings=siblings,
+                root_hash=self.get_root(),
             )
         else:
             # Key does not exist - return non-existence proof
@@ -362,14 +407,28 @@ if _RUST_SMT_AVAILABLE:
         def get(self, key: bytes) -> bytes | None:
             return self._inner.get(key)  # type: ignore[no-any-return]
 
-        def update(self, key: bytes, value_hash: bytes) -> None:
-            self._inner.update(key, value_hash)
+        def update(
+            self,
+            key: bytes,
+            value_hash: bytes,
+            parser_id: str,
+            canonical_parser_version: str,
+        ) -> None:
+            self._inner.update(key, value_hash, parser_id, canonical_parser_version)
 
         def prove_existence(self, key: bytes) -> ExistenceProof:
-            value_hash, siblings, root_hash = self._inner.prove_existence(key)
+            (
+                value_hash,
+                parser_id,
+                canonical_parser_version,
+                siblings,
+                root_hash,
+            ) = self._inner.prove_existence(key)
             return ExistenceProof(
                 key=key,
                 value_hash=value_hash,
+                parser_id=parser_id,
+                canonical_parser_version=canonical_parser_version,
                 siblings=siblings,
                 root_hash=root_hash,
             )
@@ -475,6 +534,10 @@ def verify_proof(
         return False
     if len(proof.value_hash) != 32:
         return False
+    if not proof.parser_id:
+        return False
+    if not proof.canonical_parser_version:
+        return False
     if len(proof.siblings) != 256:
         return False
     if len(proof.root_hash) != 32:
@@ -491,7 +554,12 @@ def verify_proof(
     # Compute root from leaf
     # Siblings are ordered from leaf to root (level 0, 1, 2...)
     # Path bits are ordered from root to leaf (bit 0, 1, 2...)
-    current_hash = leaf_hash(proof.key, proof.value_hash)
+    current_hash = leaf_hash(
+        proof.key,
+        proof.value_hash,
+        proof.parser_id,
+        proof.canonical_parser_version,
+    )
 
     for level in range(256):
         sibling = proof.siblings[level]

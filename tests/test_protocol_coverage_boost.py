@@ -106,7 +106,7 @@ class TestSparseMerkleTreeEmpty:
         tree = SparseMerkleTree()
         key = b"\x00" * 32
         val = b"\xff" * 32
-        tree.update(key, val)
+        tree.update(key, val, "docling@2.3.1", "v1")
         root = tree.get_root()
         assert root != EMPTY_HASHES[256]
         assert len(root) == 32
@@ -192,7 +192,7 @@ class TestVerifyProofInvalidInputs:
         tree = SparseMerkleTree()
         key = b"\x00" * 32
         val = b"\x01" * 32
-        tree.update(key, val)
+        tree.update(key, val, "docling@2.3.1", "v1")
         return tree.prove_existence(key)
 
     def test_key_wrong_length(self) -> None:

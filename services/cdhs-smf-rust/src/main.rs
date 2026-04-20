@@ -96,10 +96,30 @@ impl CdhsSmfServiceTrait for CdhsSmfService {
         // Hash the canonical content
         let leaf_value_hash = crypto::hash_canonical_content(&req.canonical_content);
 
+        // ADR-0003: parser_id and canonical_parser_version are bound into
+        // the leaf hash domain. Both fields MUST be non-empty strings and
+        // are validated here so the request fails with a clear gRPC status
+        // before reaching the SMT layer.
+        if req.parser_id.is_empty() {
+            return Err(Status::invalid_argument(
+                "parser_id must be a non-empty string",
+            ));
+        }
+        if req.canonical_parser_version.is_empty() {
+            return Err(Status::invalid_argument(
+                "canonical_parser_version must be a non-empty string",
+            ));
+        }
+
         // Update the SMT
         let (new_root, deltas) = self
             .smt
-            .update(&global_key, &leaf_value_hash)
+            .update(
+                &global_key,
+                &leaf_value_hash,
+                &req.parser_id,
+                &req.canonical_parser_version,
+            )
             .await
             .map_err(|e| Status::internal(format!("SMT update failed: {}", e)))?;
 
@@ -156,6 +176,8 @@ impl CdhsSmfServiceTrait for CdhsSmfService {
             value_hash: proof.value_hash.to_vec(),
             siblings: proof.siblings.iter().map(|s| s.to_vec()).collect(),
             root: root.to_vec(),
+            parser_id: proof.parser_id,
+            canonical_parser_version: proof.canonical_parser_version,
         }))
     }
 
@@ -188,7 +210,27 @@ impl CdhsSmfServiceTrait for CdhsSmfService {
             .collect();
         let siblings = siblings.map_err(|_| Status::invalid_argument("invalid sibling length"))?;
 
-        let valid = smt::verify_inclusion(&global_key, &value_hash, &siblings, &root);
+        // ADR-0003: parser_id and canonical_parser_version are bound into
+        // the leaf hash domain. Both fields MUST be non-empty strings.
+        if req.parser_id.is_empty() {
+            return Err(Status::invalid_argument(
+                "parser_id must be a non-empty string",
+            ));
+        }
+        if req.canonical_parser_version.is_empty() {
+            return Err(Status::invalid_argument(
+                "canonical_parser_version must be a non-empty string",
+            ));
+        }
+
+        let valid = smt::verify_inclusion(
+            &global_key,
+            &value_hash,
+            &req.parser_id,
+            &req.canonical_parser_version,
+            &siblings,
+            &root,
+        );
 
         Ok(Response::new(VerifyInclusionResponse {
             valid,
@@ -331,7 +373,7 @@ impl CdhsSmfServiceTrait for CdhsSmfService {
     ) -> Result<Response<ReplayResponse>, Status> {
         let req = request.into_inner();
 
-        let leaves: Result<Vec<([u8; 32], [u8; 32])>, Status> = req
+        let leaves: Result<Vec<([u8; 32], [u8; 32], String, String)>, Status> = req
             .leaves
             .into_iter()
             .enumerate()
@@ -352,7 +394,19 @@ impl CdhsSmfServiceTrait for CdhsSmfService {
                     .map_err(|_| Status::invalid_argument(format!(
                         "leaf[{}]: invalid value_hash length (expected 32 bytes, got {})", i, vh_len
                     )))?;
-                Ok((key, value_hash))
+                if entry.parser_id.is_empty() {
+                    return Err(Status::invalid_argument(format!(
+                        "leaf[{}]: parser_id must be a non-empty string",
+                        i
+                    )));
+                }
+                if entry.canonical_parser_version.is_empty() {
+                    return Err(Status::invalid_argument(format!(
+                        "leaf[{}]: canonical_parser_version must be a non-empty string",
+                        i
+                    )));
+                }
+                Ok((key, value_hash, entry.parser_id, entry.canonical_parser_version))
             })
             .collect();
 

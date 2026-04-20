@@ -24,7 +24,7 @@ def test_prove_returns_existence_proof_for_existing_key():
 
     key = record_key("document", "doc1", 1)
     value_hash = hash_bytes(b"test value")
-    tree.update(key, value_hash)
+    tree.update(key, value_hash, "docling@2.3.1", "v1")
 
     # This should NOT raise an exception
     proof = tree.prove(key)
@@ -55,7 +55,7 @@ def test_prove_returns_nonexistence_proof_for_missing_key():
     # Add some data to the tree
     key1 = record_key("document", "doc1", 1)
     value_hash1 = hash_bytes(b"test value 1")
-    tree.update(key1, value_hash1)
+    tree.update(key1, value_hash1, "docling@2.3.1", "v1")
 
     # Query for a non-existent key
     missing_key = record_key("document", "nonexistent", 1)
@@ -141,7 +141,7 @@ def test_prove_deterministic():
 
     # Add the key
     value_hash = hash_bytes(b"test value")
-    tree.update(key, value_hash)
+    tree.update(key, value_hash, "docling@2.3.1", "v1")
 
     # Second set of proofs (existence)
     proof3 = tree.prove(key)
@@ -161,7 +161,7 @@ def test_backward_compatibility_with_old_methods():
 
     key = record_key("document", "doc1", 1)
     value_hash = hash_bytes(b"test value")
-    tree.update(key, value_hash)
+    tree.update(key, value_hash, "docling@2.3.1", "v1")
 
     # Old method should still work
     existence_proof = tree.prove_existence(key)
@@ -189,7 +189,7 @@ def test_unified_verification():
     key2 = record_key("document", "doc2", 1)
     value_hash = hash_bytes(b"test value")
 
-    tree.update(key1, value_hash)
+    tree.update(key1, value_hash, "docling@2.3.1", "v1")
 
     # Get both types of proofs
     existence_proof = tree.prove(key1)
@@ -208,7 +208,7 @@ def test_type_helpers():
     key2 = record_key("document", "doc2", 1)
     value_hash = hash_bytes(b"test value")
 
-    tree.update(key1, value_hash)
+    tree.update(key1, value_hash, "docling@2.3.1", "v1")
 
     existence_proof = tree.prove(key1)
     nonexistence_proof = tree.prove(key2)

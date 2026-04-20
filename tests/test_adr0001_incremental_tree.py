@@ -57,7 +57,7 @@ def _build_tree_with_one_leaf() -> tuple[PurePythonSparseMerkleTree, bytes, byte
     rec_key = record_key("document", "doc-1", 1)
     key = global_key("shard-1", rec_key)
     value_hash = b"\xab" * 32
-    tree.update(key, value_hash)
+    tree.update(key, value_hash, "docling@2.3.1", "v1")
     return tree, key, value_hash
 
 
@@ -322,7 +322,7 @@ class TestProtocolStatePersistDoUpdate(unittest.TestCase):
         from storage.protocol_state import persist_tree_nodes
 
         tree = SparseMerkleTree()
-        tree.update(b"\x00" * 32, b"\x01" * 32)
+        tree.update(b"\x00" * 32, b"\x01" * 32, "docling@2.3.1", "v1")
 
         cur = MagicMock()
         persist_tree_nodes(cur, None, tree)

@@ -80,7 +80,7 @@ def test_leaf_hash_valid():
     key = record_key("document", "doc1", 1)
     value_hash = hash_bytes(b"test value")
 
-    leaf = leaf_hash(key, value_hash)
+    leaf = leaf_hash(key, value_hash, "docling@2.3.1", "v1")
 
     assert len(leaf) == 32
 
@@ -90,22 +90,22 @@ def test_leaf_hash_deterministic():
     key = record_key("document", "doc1", 1)
     value_hash = hash_bytes(b"test value")
 
-    leaf1 = leaf_hash(key, value_hash)
-    leaf2 = leaf_hash(key, value_hash)
+    leaf1 = leaf_hash(key, value_hash, "docling@2.3.1", "v1")
+    leaf2 = leaf_hash(key, value_hash, "docling@2.3.1", "v1")
 
     assert leaf1 == leaf2
 
 
 def test_leaf_hash_handles_short_key():
     """Leaf hashing should still produce a digest even with odd-length keys."""
-    leaf = leaf_hash(b"short", hash_bytes(b"value"))
+    leaf = leaf_hash(b"short", hash_bytes(b"value"), "docling@2.3.1", "v1")
     assert len(leaf) == 32
 
 
 def test_leaf_hash_handles_short_value_hash():
     """Leaf hashing is tolerant of non-32-byte value inputs."""
     key = record_key("document", "doc1", 1)
-    leaf = leaf_hash(key, b"short")
+    leaf = leaf_hash(key, b"short", "docling@2.3.1", "v1")
     assert len(leaf) == 32
 
 

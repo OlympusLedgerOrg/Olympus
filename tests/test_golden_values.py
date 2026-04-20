@@ -250,11 +250,11 @@ class TestHashGoldenValues:
         """Pin leaf_hash for known key and value."""
         key = record_key("document", "doc-001", 1)
         value = hash_bytes(b"document content")
-        leaf = leaf_hash(key, value)
+        leaf = leaf_hash(key, value, "docling@2.3.1", "v1")
         assert leaf.hex() == "83dd10dc7fbfed1e0ac62d828c34eb02fd184211a41315b63c4c52ac45612688"
         assert len(leaf) == 32
         # Verify determinism
-        assert leaf == leaf_hash(key, value)
+        assert leaf == leaf_hash(key, value, "docling@2.3.1", "v1")
 
     def test_node_hash_golden(self):
         """Pin node_hash for known left and right children."""

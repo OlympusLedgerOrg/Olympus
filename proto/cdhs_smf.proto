@@ -48,6 +48,16 @@ message UpdateRequest {
 
   // Canonicalized record content (already canonicalized)
   bytes canonical_content = 3;
+
+  // Parser identity ("<name>@<version>", e.g. "docling@2.3.1"). Required by
+  // ADR-0003: this is bound into the leaf hash domain. Empty string is
+  // rejected by the service.
+  string parser_id = 4;
+
+  // Operator-controlled stable canonical parser version (e.g. "v1"). Required
+  // by ADR-0003: this is bound into the leaf hash domain. Empty string is
+  // rejected by the service.
+  string canonical_parser_version = 5;
 }
 
 // Response from update operation
@@ -120,6 +130,13 @@ message ProveInclusionResponse {
 
   // Root hash
   bytes root = 4;
+
+  // Parser identity bound into the leaf hash domain (ADR-0003).
+  string parser_id = 5;
+
+  // Operator-controlled canonical parser version bound into the leaf hash
+  // domain (ADR-0003).
+  string canonical_parser_version = 6;
 }
 
 // Request to verify inclusion
@@ -135,6 +152,14 @@ message VerifyInclusionRequest {
 
   // Root hash to verify against
   bytes root = 4;
+
+  // Parser identity bound into the leaf hash domain (ADR-0003). Empty string
+  // is rejected by the service.
+  string parser_id = 5;
+
+  // Operator-controlled canonical parser version bound into the leaf hash
+  // domain (ADR-0003). Empty string is rejected by the service.
+  string canonical_parser_version = 6;
 }
 
 // Response from verification
@@ -257,6 +282,14 @@ message LeafEntry {
 
   // 32-byte leaf value hash
   bytes value_hash = 2;
+
+  // Parser identity bound into the leaf hash domain (ADR-0003). Empty string
+  // is rejected by the service.
+  string parser_id = 3;
+
+  // Operator-controlled canonical parser version bound into the leaf hash
+  // domain (ADR-0003). Empty string is rejected by the service.
+  string canonical_parser_version = 4;
 }
 
 // Response from replay operation

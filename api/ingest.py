@@ -127,6 +127,25 @@ _UPLOAD_CHUNK_SIZE = 65_536
 # computation; the supplied bytes are ignored once Poseidon updates are enabled.
 _POSEIDON_STORAGE_COMPUTE_FLAG = b"\x00" * 32
 
+# ADR-0003: Parser provenance bound into the SMT leaf hash.
+#
+# Per the ADR:
+#   - parser_id format is "<name>@<version>" (e.g. "docling@2.3.1").
+#     Fallback parser uses "fallback@1.0.0".
+#   - canonical_parser_version is opaque, set by operator via
+#     INGEST_PARSER_CANONICAL_VERSION. Default "v1".
+_FALLBACK_PARSER_ID = "fallback@1.0.0"
+
+
+def _operator_canonical_parser_version() -> str:
+    """Return the operator-controlled canonical parser version (ADR-0003).
+
+    Reads ``INGEST_PARSER_CANONICAL_VERSION`` from the environment, falling
+    back to ``"v1"`` when unset or empty.
+    """
+    value = os.environ.get("INGEST_PARSER_CANONICAL_VERSION", "").strip()
+    return value or "v1"
+
 
 async def _close_upload_quietly(file: UploadFile) -> None:
     """Best-effort cleanup for upload handles without masking the primary error."""
@@ -708,7 +727,24 @@ def _evaluate_proof_bundle(
             raise HTTPException(
                 status_code=400, detail="smt_key must be a 32-byte key (64 hex chars)"
             )
-        expected_leaf_hash = leaf_hash(smt_key, content_hash_bytes)
+        # ADR-0003: parser_id and canonical_parser_version are bound into
+        # the leaf hash domain. Both are required to recompute the expected
+        # leaf hash for an SMT-key proof bundle.
+        bundle_parser_id = merkle_proof_data.get("parser_id")
+        bundle_cpv = merkle_proof_data.get("canonical_parser_version")
+        if not isinstance(bundle_parser_id, str) or not bundle_parser_id:
+            raise HTTPException(
+                status_code=400,
+                detail="parser_id is required and must be a non-empty string",
+            )
+        if not isinstance(bundle_cpv, str) or not bundle_cpv:
+            raise HTTPException(
+                status_code=400,
+                detail="canonical_parser_version is required and must be a non-empty string",
+            )
+        expected_leaf_hash = leaf_hash(
+            smt_key, content_hash_bytes, bundle_parser_id, bundle_cpv
+        )
 
     content_hash_matches_proof = merkle_proof.leaf_hash == expected_leaf_hash
     if merkle_proof.root_hash.hex() != normalized_root:
@@ -727,7 +763,8 @@ def _smt_proof_to_merkle_proof_dict(proof: ExistenceProof, value_hash: bytes) ->
     Convert a sparse Merkle proof to the MerkleProof serialization used by the ingest API.
 
     Args:
-        proof: SMT existence proof from storage layer
+        proof: SMT existence proof from storage layer (carries parser_id and
+            canonical_parser_version per ADR-0003)
         value_hash: The value hash bound to the SMT leaf
 
     Returns:
@@ -739,6 +776,10 @@ def _smt_proof_to_merkle_proof_dict(proof: ExistenceProof, value_hash: bytes) ->
         raise ValueError("proof.key must be 32 bytes")
     if len(proof.root_hash) != 32:
         raise ValueError("proof.root_hash must be 32 bytes")
+    if not proof.parser_id:
+        raise ValueError("proof.parser_id must be a non-empty string")
+    if not proof.canonical_parser_version:
+        raise ValueError("proof.canonical_parser_version must be a non-empty string")
 
     leaf_index = int.from_bytes(proof.key, byteorder="big", signed=False)
     siblings_with_positions: list[list[str | bool]] = []
@@ -748,7 +789,12 @@ def _smt_proof_to_merkle_proof_dict(proof: ExistenceProof, value_hash: bytes) ->
         is_right = ((leaf_index >> level) & 1) == 0
         siblings_with_positions.append([sibling_hash.hex(), is_right])
 
-    smt_leaf_hash = leaf_hash(proof.key, value_hash)
+    smt_leaf_hash = leaf_hash(
+        proof.key,
+        value_hash,
+        proof.parser_id,
+        proof.canonical_parser_version,
+    )
 
     return {
         "leaf_hash": smt_leaf_hash.hex(),
@@ -759,6 +805,10 @@ def _smt_proof_to_merkle_proof_dict(proof: ExistenceProof, value_hash: bytes) ->
         "proof_version": PROOF_VERSION,
         "tree_version": MERKLE_VERSION,
         "smt_key": proof.key.hex(),
+        # ADR-0003: Bind parser provenance into the proof bundle so verifiers
+        # can recompute the leaf hash.
+        "parser_id": proof.parser_id,
+        "canonical_parser_version": proof.canonical_parser_version,
     }
 
 

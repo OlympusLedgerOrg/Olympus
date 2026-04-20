@@ -818,7 +818,7 @@ def test_smt_proof_conversion_verifies_round_trip():
     tree = SparseMerkleTree()
     key = record_key("document", "doc-smt", 1)
     value_hash = hash_bytes(b"deterministic-smt-payload")
-    tree.update(key, value_hash)
+    tree.update(key, value_hash, "docling@2.3.1", "v1")
     proof = tree.prove_existence(key)
 
     merkle_dict = ingest_api._smt_proof_to_merkle_proof_dict(proof, value_hash)

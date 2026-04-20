@@ -38,5 +38,12 @@ fuzz_target!(|data: &[u8]| {
     }
 
     // Must not panic.  Returning false for invalid proofs is fine.
-    let _ = smt::verify_inclusion(&key, &value_hash, &siblings, &root);
+    let _ = smt::verify_inclusion(
+        &key,
+        &value_hash,
+        "fuzz@0.0.0",
+        "v1",
+        &siblings,
+        &root,
+    );
 });

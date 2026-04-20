@@ -30,7 +30,7 @@ class TestIncrementalUpdate:
 
         # Full tree approach
         tree = SparseMerkleTree()
-        tree.update(key, val)
+        tree.update(key, val, "docling@2.3.1", "v1")
         expected_root = tree.get_root()
 
         # Incremental approach
@@ -48,12 +48,12 @@ class TestIncrementalUpdate:
         # Build tree with A, collect siblings for B
         # Use pure Python implementation to access internal methods
         tree = PurePythonSparseMerkleTree()
-        tree.update(ka, va)
+        tree.update(ka, va, "docling@2.3.1", "v1")
         # Siblings for B from the tree with only A
         siblings_b = tree._collect_siblings(tree._key_to_path(kb))
 
         # Now insert B into full tree
-        tree.update(kb, vb)
+        tree.update(kb, vb, "docling@2.3.1", "v1")
         expected_root = tree.get_root()
 
         # Incremental insert of B using A's siblings
@@ -127,7 +127,7 @@ class TestIncrementalUpdate:
             new_root, _, _ = RustSparseMerkleTree.incremental_update(key, val, sibs)
 
             # Full tree
-            tree.update(key, val)
+            tree.update(key, val, "docling@2.3.1", "v1")
             siblings_source.update(key, val)
 
             assert new_root == tree.get_root(), f"Mismatch at insert {i}"

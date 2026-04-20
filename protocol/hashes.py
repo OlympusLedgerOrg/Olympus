@@ -181,12 +181,64 @@ def global_key(shard_id: str, record_key_bytes: bytes) -> bytes:
     return result
 
 
-def leaf_hash(key: bytes, value_hash: bytes) -> bytes:
-    """Compute hash of a sparse-tree leaf with domain separation."""
+def leaf_hash(
+    key: bytes,
+    value_hash: bytes,
+    parser_id: str,
+    canonical_parser_version: str,
+) -> bytes:
+    """Compute hash of a sparse-tree leaf with domain separation.
+
+    Per ADR-0003, the leaf hash binds the parser identity into the domain so
+    that any change to the parser produces a different leaf hash even when
+    the canonical content is byte-identical.
+
+    Layout::
+
+        BLAKE3(
+            LEAF_PREFIX || SEP ||
+            key || SEP ||
+            value_hash || SEP ||
+            len(parser_id)[4B BE] || parser_id || SEP ||
+            len(canonical_parser_version)[4B BE] || canonical_parser_version
+        )
+
+    Args:
+        key: 32-byte global SMT key.
+        value_hash: 32-byte hash of the canonicalized record content.
+        parser_id: Parser identity, formatted as ``"<name>@<version>"``
+            (e.g. ``"docling@2.3.1"`` or ``"fallback@1.0.0"``). Empty
+            string is rejected.
+        canonical_parser_version: Opaque operator-controlled stable version
+            (e.g. ``"v1"``). Empty string is rejected.
+
+    Raises:
+        ValueError: If ``parser_id`` or ``canonical_parser_version`` is empty.
+    """
+    if not parser_id:
+        raise ValueError("parser_id must be a non-empty string")
+    if not canonical_parser_version:
+        raise ValueError("canonical_parser_version must be a non-empty string")
     if _RUST_CRYPTO_AVAILABLE:  # pragma: no cover — Rust FFI path
-        result: bytes = _rust_leaf_hash(key, value_hash)
+        result: bytes = _rust_leaf_hash(
+            key, value_hash, parser_id, canonical_parser_version
+        )
         return result
-    return blake3_hash([LEAF_PREFIX, _SEP, key, _SEP, value_hash])
+    pid_bytes = parser_id.encode("utf-8")
+    cpv_bytes = canonical_parser_version.encode("utf-8")
+    return blake3_hash(
+        [
+            LEAF_PREFIX,
+            _SEP,
+            key,
+            _SEP,
+            value_hash,
+            _SEP,
+            _length_prefixed_bytes("parser_id", pid_bytes),
+            _SEP,
+            _length_prefixed_bytes("canonical_parser_version", cpv_bytes),
+        ]
+    )
 
 
 def node_hash(left: bytes, right: bytes) -> bytes:

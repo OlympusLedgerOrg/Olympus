@@ -28,7 +28,7 @@ def test_ssmf_insert_and_retrieve():
     key = record_key("document", "doc1", 1)
     value_hash = hash_bytes(b"test value")
 
-    tree.update(key, value_hash)
+    tree.update(key, value_hash, "docling@2.3.1", "v1")
 
     retrieved = tree.get(key)
     assert retrieved == value_hash
@@ -44,8 +44,8 @@ def test_ssmf_versioning_via_key():
     value_v1 = hash_bytes(b"version 1")
     value_v2 = hash_bytes(b"version 2")
 
-    tree.update(key_v1, value_v1)
-    tree.update(key_v2, value_v2)
+    tree.update(key_v1, value_v1, "docling@2.3.1", "v1")
+    tree.update(key_v2, value_v2, "docling@2.3.1", "v1")
 
     # Both versions should exist independently
     assert tree.get(key_v1) == value_v1
@@ -59,7 +59,7 @@ def test_ssmf_existence_proof():
     key = record_key("document", "doc1", 1)
     value_hash = hash_bytes(b"test value")
 
-    tree.update(key, value_hash)
+    tree.update(key, value_hash, "docling@2.3.1", "v1")
 
     proof = tree.prove_existence(key)
 
@@ -88,7 +88,7 @@ def test_ssmf_existence_proof_size_is_constant_across_tree_sizes():
         values = [hash_bytes(f"value-{idx}".encode()) for idx in range(tree_size)]
 
         for key, value in zip(keys, values, strict=True):
-            tree.update(key, value)
+            tree.update(key, value, "docling@2.3.1", "v1")
 
         proof = tree.prove_existence(keys[-1])
         proof_sizes.append(
@@ -118,7 +118,7 @@ def test_ssmf_nonexistence_proof():
     # Add some data
     key1 = record_key("document", "doc1", 1)
     value_hash1 = hash_bytes(b"test value 1")
-    tree.update(key1, value_hash1)
+    tree.update(key1, value_hash1, "docling@2.3.1", "v1")
 
     # Prove that a different key doesn't exist
     key2 = record_key("document", "doc2", 1)
@@ -138,7 +138,7 @@ def test_ssmf_nonexistence_proof_for_existing_key():
 
     key = record_key("document", "doc1", 1)
     value_hash = hash_bytes(b"test value")
-    tree.update(key, value_hash)
+    tree.update(key, value_hash, "docling@2.3.1", "v1")
 
     with pytest.raises(ValueError, match="exists in tree"):
         tree.prove_nonexistence(key)
@@ -150,7 +150,7 @@ def test_ssmf_tampered_proof_detected():
 
     key = record_key("document", "doc1", 1)
     value_hash = hash_bytes(b"test value")
-    tree.update(key, value_hash)
+    tree.update(key, value_hash, "docling@2.3.1", "v1")
 
     proof = tree.prove_existence(key)
 
@@ -171,7 +171,7 @@ def test_ssmf_tampered_siblings_detected():
 
     key = record_key("document", "doc1", 1)
     value_hash = hash_bytes(b"test value")
-    tree.update(key, value_hash)
+    tree.update(key, value_hash, "docling@2.3.1", "v1")
 
     proof = tree.prove_existence(key)
 
@@ -197,7 +197,7 @@ def test_ssmf_wrong_key_detected():
     key2 = record_key("document", "doc2", 1)
     value_hash = hash_bytes(b"test value")
 
-    tree.update(key1, value_hash)
+    tree.update(key1, value_hash, "docling@2.3.1", "v1")
 
     proof = tree.prove_existence(key1)
 
@@ -214,7 +214,7 @@ def test_ssmf_invalid_key_length():
     tree = SparseMerkleTree()
 
     with pytest.raises(ValueError, match="must be 32 bytes"):
-        tree.update(b"short", hash_bytes(b"value"))
+        tree.update(b"short", hash_bytes(b"value"), "docling@2.3.1", "v1")
 
     with pytest.raises(ValueError, match="must be 32 bytes"):
         tree.get(b"short")
@@ -227,7 +227,7 @@ def test_ssmf_invalid_value_hash_length():
     key = record_key("document", "doc1", 1)
 
     with pytest.raises(ValueError, match="must be 32 bytes"):
-        tree.update(key, b"short")
+        tree.update(key, b"short", "docling@2.3.1", "v1")
 
 
 def test_ssmf_multiple_updates():
@@ -238,7 +238,7 @@ def test_ssmf_multiple_updates():
     values = [hash_bytes(f"value {i}".encode()) for i in range(5)]
 
     for key, value in zip(keys, values, strict=False):
-        tree.update(key, value)
+        tree.update(key, value, "docling@2.3.1", "v1")
 
     # All values should be retrievable
     for key, value in zip(keys, values, strict=False):
@@ -259,8 +259,8 @@ def test_ssmf_deterministic_root():
     values = [hash_bytes(f"value {i}".encode()) for i in range(3)]
 
     for key, value in zip(keys, values, strict=False):
-        tree1.update(key, value)
-        tree2.update(key, value)
+        tree1.update(key, value, "docling@2.3.1", "v1")
+        tree2.update(key, value, "docling@2.3.1", "v1")
 
     assert tree1.get_root() == tree2.get_root()
 
@@ -338,7 +338,7 @@ def test_ssmf_prove_existence_returns_existence_proof():
     tree = SparseMerkleTree()
     key = record_key("document", "existing", 1)
     value = hash_bytes(b"value")
-    tree.update(key, value)
+    tree.update(key, value, "docling@2.3.1", "v1")
 
     # Use the prove() method
     proof = tree.prove(key)
@@ -377,7 +377,7 @@ def test_ssmf_verify_unified_proof():
     tree = SparseMerkleTree()
     key1 = record_key("document", "exists", 1)
     value1 = hash_bytes(b"value1")
-    tree.update(key1, value1)
+    tree.update(key1, value1, "docling@2.3.1", "v1")
 
     key2 = record_key("document", "missing", 1)
 

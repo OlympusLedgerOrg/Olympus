@@ -111,8 +111,8 @@ def test_leaf_hash_determinism():
     """leaf_hash returns consistent 32-byte hashes."""
     k = b"\x00" * 32
     v = b"\x01" * 32
-    h1 = leaf_hash(k, v)
-    h2 = leaf_hash(k, v)
+    h1 = leaf_hash(k, v, "docling@2.3.1", "v1")
+    h2 = leaf_hash(k, v, "docling@2.3.1", "v1")
     assert h1 == h2 and len(h1) == 32
 
 
