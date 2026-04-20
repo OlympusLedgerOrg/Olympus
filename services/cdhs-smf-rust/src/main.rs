@@ -63,6 +63,14 @@ impl CdhsSmfService {
 
 const DEFAULT_SOCKET_PATH: &str = "/run/olympus/cdhs-smf.sock";
 
+/// Fallback parser identity used when the gRPC caller does not yet supply
+/// per-request parser provenance (pending proto extension in a follow-up PR).
+const DEFAULT_PARSER_ID: &str = "fallback@1.0.0";
+
+/// Fallback canonical parser version used when the gRPC caller does not yet
+/// supply per-request parser provenance (pending proto extension).
+const DEFAULT_CANONICAL_PARSER_VERSION: &str = "v1";
+
 /// Maximum gRPC message size accepted from the Go sequencer.
 ///
 /// This MUST stay >= the HTTP body cap on the sequencer side
@@ -99,7 +107,7 @@ impl CdhsSmfServiceTrait for CdhsSmfService {
         // Update the SMT
         let (new_root, deltas) = self
             .smt
-            .update(&global_key, &leaf_value_hash, "fallback@1.0.0", "v1")
+            .update(&global_key, &leaf_value_hash, DEFAULT_PARSER_ID, DEFAULT_CANONICAL_PARSER_VERSION)
             .await
             .map_err(|e| Status::internal(format!("SMT update failed: {}", e)))?;
 
@@ -188,7 +196,7 @@ impl CdhsSmfServiceTrait for CdhsSmfService {
             .collect();
         let siblings = siblings.map_err(|_| Status::invalid_argument("invalid sibling length"))?;
 
-        let valid = smt::verify_inclusion(&global_key, &value_hash, &siblings, &root, "fallback@1.0.0", "v1");
+        let valid = smt::verify_inclusion(&global_key, &value_hash, &siblings, &root, DEFAULT_PARSER_ID, DEFAULT_CANONICAL_PARSER_VERSION);
 
         Ok(Response::new(VerifyInclusionResponse {
             valid,
@@ -362,7 +370,7 @@ impl CdhsSmfServiceTrait for CdhsSmfService {
 
         let root_hash = self
             .smt
-            .replay(leaves, "fallback@1.0.0", "v1")
+            .replay(leaves, DEFAULT_PARSER_ID, DEFAULT_CANONICAL_PARSER_VERSION)
             .await
             .map_err(|e| Status::internal(format!("Replay failed: {}", e)))?;
 

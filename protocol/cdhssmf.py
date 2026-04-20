@@ -46,7 +46,12 @@ rather than a bare ``record_key``.
 
 from dataclasses import dataclass
 
-from .hashes import global_key as _derive_global_key, record_key as _derive_record_key
+from .hashes import (
+    DEFAULT_CANONICAL_PARSER_VERSION,
+    DEFAULT_PARSER_ID,
+    global_key as _derive_global_key,
+    record_key as _derive_record_key,
+)
 from .ssmf import (
     ExistenceProof,
     NonExistenceProof,
@@ -101,8 +106,8 @@ class CdhssmfTree:
         shard_id: str,
         rec_key: bytes,
         value_hash: bytes,
-        parser_id: str = "fallback@1.0.0",
-        canonical_parser_version: str = "v1",
+        parser_id: str = DEFAULT_PARSER_ID,
+        canonical_parser_version: str = DEFAULT_CANONICAL_PARSER_VERSION,
     ) -> None:
         """
         Insert or update a record under a shard namespace.

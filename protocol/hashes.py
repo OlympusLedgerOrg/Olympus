@@ -78,6 +78,11 @@ MAX_EVENT_ID_FIELD_LENGTH = (1 << 32) - 1
 _MAX_LENGTH_PREFIXED_FIELD_SIZE = (1 << 32) - 1
 _GLOBAL_SMT_KEY_CONTEXT = "olympus 2025-12 global-smt-leaf-key"
 
+# Default parser provenance values — used when no explicit provenance is
+# available (e.g. the fallback parser path or pending proto integration).
+DEFAULT_PARSER_ID = "fallback@1.0.0"
+DEFAULT_CANONICAL_PARSER_VERSION = "v1"
+
 
 def blake3_hash(parts: Sequence[bytes]) -> bytes:
     """

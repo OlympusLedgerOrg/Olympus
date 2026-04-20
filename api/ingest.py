@@ -78,7 +78,7 @@ from api.services.proof_utils import (
 from api.services.upload_validation import validate_file_magic
 from protocol.canonical import CANONICAL_VERSION, canonicalize_document, document_to_bytes
 from protocol.canonicalizer import canonicalization_provenance
-from protocol.hashes import hash_bytes, leaf_hash, record_key
+from protocol.hashes import DEFAULT_CANONICAL_PARSER_VERSION, DEFAULT_PARSER_ID, hash_bytes, leaf_hash, record_key
 from protocol.ledger import Ledger
 from protocol.log_sanitization import sanitize_for_log
 from protocol.merkle import (
@@ -708,7 +708,7 @@ def _evaluate_proof_bundle(
             raise HTTPException(
                 status_code=400, detail="smt_key must be a 32-byte key (64 hex chars)"
             )
-        expected_leaf_hash = leaf_hash(smt_key, content_hash_bytes, "fallback@1.0.0", "v1")
+        expected_leaf_hash = leaf_hash(smt_key, content_hash_bytes, DEFAULT_PARSER_ID, DEFAULT_CANONICAL_PARSER_VERSION)
 
     content_hash_matches_proof = merkle_proof.leaf_hash == expected_leaf_hash
     if merkle_proof.root_hash.hex() != normalized_root:

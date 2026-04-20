@@ -121,7 +121,10 @@ def py_global_key(shard_id: str, rk: bytes) -> bytes:
 
 
 def py_leaf_hash(
-    key: bytes, value_hash: bytes, parser_id: str = "fallback@1.0.0", canonical_parser_version: str = "v1"
+    key: bytes,
+    value_hash: bytes,
+    parser_id: str = "fallback@1.0.0",
+    canonical_parser_version: str = "v1",
 ) -> bytes:
     pid = parser_id.encode("utf-8")
     cpv = canonical_parser_version.encode("utf-8")

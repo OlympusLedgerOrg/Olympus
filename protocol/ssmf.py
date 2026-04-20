@@ -19,7 +19,7 @@ from dataclasses import dataclass
 
 import blake3
 
-from .hashes import leaf_hash, node_hash
+from .hashes import DEFAULT_CANONICAL_PARSER_VERSION, DEFAULT_PARSER_ID, leaf_hash, node_hash
 
 
 # ---------------------------------------------------------------------------
@@ -71,8 +71,8 @@ class ExistenceProof:
     value_hash: bytes  # 32-byte hash of the value
     siblings: list[bytes]  # Sibling hashes along path to root (256 siblings)
     root_hash: bytes  # 32-byte root hash
-    parser_id: str = "fallback@1.0.0"  # Parser identity, e.g. "docling@2.3.1"
-    canonical_parser_version: str = "v1"  # Operator-set canonical parser version
+    parser_id: str = DEFAULT_PARSER_ID  # Parser identity, e.g. "docling@2.3.1"
+    canonical_parser_version: str = DEFAULT_CANONICAL_PARSER_VERSION  # Operator-set canonical parser version
 
     def to_dict(self) -> dict[str, bool | str | list[str]]:
         """Convert proof to dictionary for JSON serialization."""
@@ -171,8 +171,8 @@ class SparseMerkleTree:
         self,
         key: bytes,
         value_hash: bytes,
-        parser_id: str = "fallback@1.0.0",
-        canonical_parser_version: str = "v1",
+        parser_id: str = DEFAULT_PARSER_ID,
+        canonical_parser_version: str = DEFAULT_CANONICAL_PARSER_VERSION,
     ) -> None:
         """
         Update or insert a key-value pair.
@@ -249,7 +249,7 @@ class SparseMerkleTree:
         value_hash = self.leaves[key]
         path = self._key_to_path(key)
         siblings = self._collect_siblings(path)
-        pid, cpv = self._leaf_provenance.get(key, ("fallback@1.0.0", "v1"))
+        pid, cpv = self._leaf_provenance.get(key, (DEFAULT_PARSER_ID, DEFAULT_CANONICAL_PARSER_VERSION))
 
         return ExistenceProof(
             key=key,
@@ -308,7 +308,7 @@ class SparseMerkleTree:
             value_hash = self.leaves[key]
             path = self._key_to_path(key)
             siblings = self._collect_siblings(path)
-            pid, cpv = self._leaf_provenance.get(key, ("fallback@1.0.0", "v1"))
+            pid, cpv = self._leaf_provenance.get(key, (DEFAULT_PARSER_ID, DEFAULT_CANONICAL_PARSER_VERSION))
 
             return ExistenceProof(
                 key=key,
