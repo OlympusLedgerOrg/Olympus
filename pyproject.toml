@@ -81,6 +81,11 @@ parquet = [
     "pyarrow>=15.0.0",
 ]
 
+[project.scripts]
+# H-5: dedicated background worker that drains the ``tsa_jobs`` queue and
+# fetches RFC 3161 timestamp tokens out-of-band from the request path.
+olympus-tsa-worker = "api.workers.tsa_worker:_main_sync"
+
 [tool.setuptools]
 include-package-data = true
 

@@ -213,7 +213,7 @@ def test_request_timestamp_uses_default_tsa_when_no_url_given():
 
     # First positional arg to RemoteTimestamper should be DEFAULT_TSA_URL
     cls_mock.assert_called_once_with(
-        DEFAULT_TSA_URL, hashname="sha256", include_tsa_certificate=True
+        DEFAULT_TSA_URL, hashname="sha256", include_tsa_certificate=True, timeout=5.0
     )
 
 

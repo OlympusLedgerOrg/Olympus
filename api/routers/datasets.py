@@ -22,6 +22,7 @@ from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 
 from api.auth import RateLimit, RequireAPIKey
+from api.config import get_settings
 from api.deps import DBSession
 from api.models.credential import KeyCredential
 from api.models.dataset import (
@@ -29,6 +30,7 @@ from api.models.dataset import (
     DatasetArtifactFile,
     DatasetLineageEvent,
 )
+from api.models.tsa_job import TsaJob
 from api.schemas.dataset import (
     DatasetCommitRequest,
     DatasetCommitResponse,
@@ -117,6 +119,37 @@ def _is_key_revoked_at(revoked_at: datetime | None, reference: datetime) -> bool
     if revoked_at is None:
         return False
     return revoked_at <= reference
+
+
+def _compute_timestamp_state(
+    timestamp_status: str,
+    epoch_timestamp: datetime,
+    grace_seconds: int,
+    now: datetime | None = None,
+) -> str:
+    """Derive the H-5 ``timestamp_state`` enum from row state + clock.
+
+    The on-disk column ``timestamp_status`` only carries the worker's
+    knowledge (``pending`` / ``verified`` / ``failed``).  Whether a
+    ``pending`` row is still within the operator-configured grace window or
+    has aged past it is a read-time computation so /verify can answer
+    truthfully without waiting for the sweeper to flip the row.
+    """
+    if timestamp_status == "verified":
+        return "verified"
+    if timestamp_status == "failed":
+        return "failed"
+    # ``pending`` (and any unknown future status) — bucket by age.
+    reference = now or datetime.now(timezone.utc)
+    # ``epoch_timestamp`` is naive in SQLite-backed deployments; align both
+    # sides to UTC-aware before subtracting.
+    epoch = epoch_timestamp
+    if epoch.tzinfo is None:
+        epoch = epoch.replace(tzinfo=timezone.utc)
+    age_seconds = (reference - epoch).total_seconds()
+    if age_seconds > grace_seconds:
+        return "pending_past_grace"
+    return "pending_within_grace"
 
 
 # ---------------------------------------------------------------------------
@@ -218,23 +251,16 @@ async def commit_dataset(
     # 8. epoch_timestamp (set AFTER identity computation — not in hash)
     epoch_ts = datetime.now(timezone.utc)
 
-    # 9. RFC 3161 timestamp with explicit status
-    rfc3161_tst_hex: str | None = None
-    rfc3161_tsa_url: str | None = None
-    timestamp_status = "pending"
-    try:
-        from protocol.rfc3161 import DEFAULT_TSA_URL, request_timestamp
-
-        token = request_timestamp(commit_id, DEFAULT_TSA_URL)
-        rfc3161_tst_hex = token.tst_bytes.hex()
-        rfc3161_tsa_url = token.tsa_url
-        timestamp_status = "verified"
-    except Exception:
-        logger.warning(
-            "RFC 3161 timestamp request failed; commit_id=%s status=pending",
-            commit_id,
-            exc_info=True,
-        )
+    # 9. RFC 3161 timestamp — enqueued, not requested inline (H-5).
+    #
+    # The TSA round-trip is bounded but still latency-prone (and TSAs do
+    # occasionally hang); doing it on the request path lets a slow TSA
+    # exhaust FastAPI workers.  We persist ``timestamp_status='pending'``
+    # and let ``api.workers.tsa_worker`` fetch the token in the background.
+    # The /verify endpoint surfaces a ``timestamp_state`` value derived
+    # from (status, epoch, grace) so callers can distinguish a still-young
+    # pending row from one past the grace window.
+    tsa_url = get_settings().tsa_default_url
 
     # 10. Compute totals from files
     total_bytes = sum(f.byte_size for f in body.files)
@@ -256,9 +282,9 @@ async def commit_dataset(
         committer_pubkey=body.committer_pubkey,
         commit_signature=body.commit_signature,
         committer_label=body.committer_label,
-        rfc3161_tst_hex=rfc3161_tst_hex,
-        rfc3161_tsa_url=rfc3161_tsa_url,
-        timestamp_status=timestamp_status,
+        rfc3161_tst_hex=None,
+        rfc3161_tsa_url=None,
+        timestamp_status="pending",
         dataset_name=body.dataset_name,
         dataset_version=body.dataset_version,
         source_uri=body.source_uri,
@@ -305,14 +331,26 @@ async def commit_dataset(
     new_root = await compute_state_root(shard_id, db)
     artifact.merkle_root = new_root
 
+    # 15. Enqueue background TSA job (H-5).  Same transaction as the
+    # artifact row, so either both land or neither does — we never have a
+    # ``pending`` artifact without a queue entry to drain it.
+    db.add(
+        TsaJob(
+            target_table="dataset_artifacts",
+            target_pk=artifact.id,
+            hash_hex=commit_id,
+            tsa_url=tsa_url,
+        )
+    )
+
     await db.commit()
     await db.refresh(artifact)
 
     logger.info(
-        "Dataset committed dataset_id=%s commit_id=%s timestamp_status=%s",
+        "Dataset committed dataset_id=%s commit_id=%s timestamp_status=%s tsa_enqueued=true",
         ds_id,
         commit_id,
-        timestamp_status,
+        artifact.timestamp_status,
     )
 
     return DatasetCommitResponse(
@@ -512,14 +550,20 @@ async def verify_dataset(
     )
 
     # 3. RFC 3161 status check
-    rfc3161_valid: bool | None = None
+    settings = get_settings()
+    timestamp_state = _compute_timestamp_state(
+        artifact.timestamp_status,
+        artifact.epoch_timestamp,
+        settings.tsa_grace_seconds,
+    )
+    rfc3161_valid: bool | None
     if artifact.timestamp_status == "verified" and artifact.rfc3161_tst_hex is not None:
         rfc3161_valid = True
         checks["rfc3161_valid"] = True
-    elif artifact.timestamp_status == "pending":
-        rfc3161_valid = False
-        checks["rfc3161_valid"] = False
     else:
+        # Pending (any age) or failed: legacy boolean stays False.  Callers
+        # that want to distinguish "still being processed" from "permanently
+        # failed" should read ``timestamp_state`` instead.
         rfc3161_valid = False
         checks["rfc3161_valid"] = False
 
@@ -600,6 +644,7 @@ async def verify_dataset(
         ),
         merkle_proof=merkle_proof_data,
         rfc3161_valid=rfc3161_valid,
+        timestamp_state=timestamp_state,
         signature_valid=checks.get("signature_valid"),
         commit_id_valid=checks.get("commit_id_valid"),
         chain_valid=checks.get("chain_valid"),
@@ -875,6 +920,17 @@ async def commit_lineage(
 
     new_root = await compute_state_root(shard_id, db)
     event.merkle_root = new_root
+
+    # H-5: enqueue background TSA job for the lineage event.  Same
+    # transaction as the event row.
+    db.add(
+        TsaJob(
+            target_table="dataset_lineage_events",
+            target_pk=event.id,
+            hash_hex=commit_id,
+            tsa_url=get_settings().tsa_default_url,
+        )
+    )
 
     await db.commit()
 

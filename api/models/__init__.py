@@ -17,6 +17,7 @@ from api.models.ledger import MerkleNode
 from api.models.ledger_activity import LedgerActivity
 from api.models.purchase import Purchase
 from api.models.request import PublicRecordsRequest
+from api.models.tsa_job import TsaJob
 from api.models.user import User
 from api.models.witness import WitnessNonce, WitnessObservation
 
@@ -34,6 +35,7 @@ __all__ = [
     "MerkleNode",
     "PublicRecordsRequest",
     "Purchase",
+    "TsaJob",
     "User",
     "WitnessNonce",
     "WitnessObservation",

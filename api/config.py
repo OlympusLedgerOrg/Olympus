@@ -96,6 +96,25 @@ class Settings(BaseSettings):
     # Federal FOIA: 20 business days per 5 U.S.C. § 552(a)(6)(A)
     statutory_window_foia_days: int = 20
 
+    # --- H-5: RFC 3161 background worker --------------------------------------
+    # Settings class has no env_prefix, so these fields map to bare uppercase
+    # env vars: ``TSA_DEFAULT_URL``, ``TSA_GRACE_SECONDS``, etc.  Keep the
+    # default TSA URL in sync with ``protocol.rfc3161.DEFAULT_TSA_URL``.
+    tsa_default_url: str = "https://freetsa.org/tsr"
+    # Grace window: a commit whose ``epoch_timestamp`` is older than this
+    # *and* still has ``timestamp_status='pending'`` is flipped to
+    # ``failed`` by the sweeper.  Read by the sweeper, the worker, and the
+    # ``/verify`` endpoint so all three agree on the boundary.
+    tsa_grace_seconds: int = 300
+    # Worker stops retrying a job once ``attempts >= tsa_max_attempts`` and
+    # marks it ``failed`` (the row's ``timestamp_status`` is also flipped).
+    tsa_max_attempts: int = 8
+    # Worker poll interval when there is no work to do.
+    tsa_worker_poll_interval_seconds: float = 2.0
+    # Sweeper runs every N seconds.  The sweeper is cheap (one UPDATE) so
+    # frequent polling is fine.
+    tsa_sweeper_interval_seconds: float = 30.0
+
     @field_validator("cors_origins")
     @classmethod
     def parse_cors_origins(cls, v: str) -> str:

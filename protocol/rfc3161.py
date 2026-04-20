@@ -230,10 +230,16 @@ def request_timestamp(
         rfc3161ng.TimestampingError: If the TSA request or validation fails.
     """
     digest = _sha256_of_hash(hash_hex)
+    # H-5: bound the TSA TCP round-trip so a hung server cannot pin a worker.
+    # The default timeout in rfc3161ng is 10s, which is too long for a
+    # synchronous request handler. Callers running this in a background worker
+    # (api.workers.tsa_worker) treat the timeout as a transient failure and
+    # retry on the next sweep.
     stamper = rfc3161ng.RemoteTimestamper(
         tsa_url,
         hashname="sha256",
         include_tsa_certificate=True,
+        timeout=5.0,
     )
     tst_bytes: bytes = stamper(digest=digest, return_tsr=False)
     ts = rfc3161ng.get_timestamp(tst_bytes, naive=False).astimezone(timezone.utc)
