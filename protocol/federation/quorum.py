@@ -572,9 +572,7 @@ def verify_quorum_certificate(
     * **Signer-bitmap consistency** – the signatures list must correspond exactly
       to the "1" bits in the signer bitmap.
     """
-    snapshot, verified_count = _verify_quorum_certificate_signers(
-        certificate, header, registry
-    )
+    snapshot, verified_count = _verify_quorum_certificate_signers(certificate, header, registry)
     if snapshot is None or verified_count is None:
         return False
     # Quorum is counted against the number of *unique* verified signers.
@@ -598,9 +596,7 @@ def count_verified_quorum_signers(
     controlled and can be padded with bogus signature entries to inflate a
     fork's preference score.
     """
-    snapshot, verified_count = _verify_quorum_certificate_signers(
-        certificate, header, registry
-    )
+    snapshot, verified_count = _verify_quorum_certificate_signers(certificate, header, registry)
     if snapshot is None or verified_count is None:
         return 0
     if verified_count < snapshot.quorum_threshold():
