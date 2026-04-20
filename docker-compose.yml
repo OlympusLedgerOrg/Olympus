@@ -105,6 +105,12 @@ services:
       # Ed25519 signing key for SMT roots (hex-encoded 32-byte seed).
       # Uses the same key as Python ingest for consistent signatures.
       # Override with OLYMPUS_SEQUENCER_SIGNING_KEY if separate key is needed.
+      #
+      # SECURITY: providing the key inline via SEQUENCER_SMT_SIGNING_KEY is
+      # DEPRECATED — env vars are visible via /proc/<pid>/environ.  Prefer
+      # mounting a 0600 file and pointing SEQUENCER_SMT_SIGNING_KEY_PATH at
+      # it (e.g. via a Docker/K8s secret).  The service will emit a startup
+      # warning whenever the env-var fallback is used.
       SEQUENCER_SMT_SIGNING_KEY: ${OLYMPUS_SEQUENCER_SIGNING_KEY:-${OLYMPUS_INGEST_SIGNING_KEY}}
       RUST_LOG: ${RUST_LOG:-info}
     networks:
