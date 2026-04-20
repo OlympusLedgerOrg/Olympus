@@ -162,6 +162,14 @@ def test_inactive_node_signature_does_not_satisfy_quorum() -> None:
                     "endpoint": "https://node3.olympus.org",
                     "operator": "State Auditor",
                     "jurisdiction": "state-c",
+                    "status": "active",
+                },
+                {
+                    "node_id": "olympus-node-4",
+                    "pubkey": _test_signing_key(4).verify_key.encode().hex(),
+                    "endpoint": "https://node4.olympus.org",
+                    "operator": "Federal Archive",
+                    "jurisdiction": "federal",
                     "status": "inactive",
                 },
             ]
@@ -174,14 +182,15 @@ def test_inactive_node_signature_does_not_satisfy_quorum() -> None:
         timestamp="2026-03-15T00:00:00Z",
     )
 
-    # 2 active + 1 inactive; quorum threshold for 2 active nodes is 2
+    # 3 active + 1 inactive; quorum threshold for 3 active nodes is 2.
     active_sig_1 = sign_federated_header(header, "olympus-node-1", _test_signing_key(1), registry)
-    inactive_sig = sign_federated_header(header, "olympus-node-3", _test_signing_key(3), registry)
+    inactive_sig = sign_federated_header(header, "olympus-node-4", _test_signing_key(4), registry)
 
-    # One active signature should not reach quorum alone
+    # One active signature plus one inactive should not reach quorum: the
+    # inactive signature must not count, leaving only one valid signer.
     assert has_federation_quorum(header, [active_sig_1, inactive_sig], registry) is False
 
-    # Two active signatures should reach quorum
+    # Two active signatures should reach quorum.
     active_sig_2 = sign_federated_header(header, "olympus-node-2", _test_signing_key(2), registry)
     assert has_federation_quorum(header, [active_sig_1, active_sig_2], registry) is True
 
@@ -197,15 +206,52 @@ def test_quorum_threshold_counts_only_active_nodes() -> None:
                     "endpoint": f"https://node{i}.olympus.org",
                     "operator": f"Op {i}",
                     "jurisdiction": f"zone-{i}",
-                    "status": "active" if i <= 2 else "inactive",
+                    "status": "active" if i <= 3 else "inactive",
                 }
-                for i in range(1, 5)
+                for i in range(1, 6)
             ]
         }
     )
 
-    # 2 active nodes -> ceil(2 * 2/3) = 2
+    # 3 active nodes -> ceil(2 * 3/3) = 2
     assert registry.quorum_threshold() == 2
+
+
+def test_quorum_threshold_rejects_fewer_than_three_active_nodes() -> None:
+    """A federation with <3 active nodes provides no BFT guarantee and must error."""
+    registry = FederationRegistry.from_dict(
+        {
+            "nodes": [
+                {
+                    "node_id": "olympus-node-1",
+                    "pubkey": _test_signing_key(1).verify_key.encode().hex(),
+                    "endpoint": "https://node1.olympus.org",
+                    "operator": "Op 1",
+                    "jurisdiction": "zone-1",
+                    "status": "active",
+                },
+                {
+                    "node_id": "olympus-node-2",
+                    "pubkey": _test_signing_key(2).verify_key.encode().hex(),
+                    "endpoint": "https://node2.olympus.org",
+                    "operator": "Op 2",
+                    "jurisdiction": "zone-2",
+                    "status": "active",
+                },
+                {
+                    "node_id": "olympus-node-3",
+                    "pubkey": _test_signing_key(3).verify_key.encode().hex(),
+                    "endpoint": "https://node3.olympus.org",
+                    "operator": "Op 3",
+                    "jurisdiction": "zone-3",
+                    "status": "inactive",
+                },
+            ]
+        }
+    )
+
+    with pytest.raises(ValueError, match="at least 3 active Guardians"):
+        registry.quorum_threshold()
 
 
 # =============================================================================

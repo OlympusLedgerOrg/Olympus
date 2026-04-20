@@ -404,15 +404,17 @@ class TestFederationFinalityStatus:
         assert s.is_final() is False
 
     def test_availability_threshold(self):
-        sk = nacl.signing.SigningKey.generate()
-        node = FederationNode(
-            node_id="n1",
-            pubkey=sk.verify_key.encode(),
-            endpoint="https://n1.example.com",
-            operator="op1",
-            jurisdiction="US",
+        nodes = tuple(
+            FederationNode(
+                node_id=f"n{i}",
+                pubkey=nacl.signing.SigningKey.generate().verify_key.encode(),
+                endpoint=f"https://n{i}.example.com",
+                operator=f"op{i}",
+                jurisdiction="US",
+            )
+            for i in range(1, 4)
         )
-        registry = FederationRegistry(nodes=(node,), epoch=1)
+        registry = FederationRegistry(nodes=nodes, epoch=1)
         s = FederationFinalityStatus(**self._valid_kwargs())
         # No proofs → threshold not met
         assert s.availability_threshold_met(registry) is False

@@ -6,7 +6,7 @@ import json
 import math
 from collections.abc import Iterator
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
@@ -19,6 +19,21 @@ from protocol.hashes import hash_bytes
 # Prevents signatures created for other protocol contexts (ingest, admin,
 # shard-merge, …) from being replayed as federation votes.
 FEDERATION_DOMAIN_TAG = "OLY:FEDERATION-VOTE:V1"
+
+# Minimum number of active Guardians required for the federation to operate.
+# Byzantine fault tolerance with a 2/3 quorum requires at least N=3 nodes so
+# that no single operator (or single failed node) can self-certify the ledger.
+# A 1- or 2-node "federation" provides zero BFT guarantee and would silently
+# turn the load-bearing distributed-trust claim into a single-operator trust
+# claim; reject such configurations explicitly.
+MIN_ACTIVE_GUARDIANS_FOR_BFT = 3
+
+# Maximum window during which a rotated-away federation key remains valid for
+# signature verification after the rotation timestamp. This bounds the overlap
+# during a key handover and prevents an operator from setting an effectively
+# permanent ``valid_until`` (e.g. ``"2099-12-31"``) which would keep a rotated
+# key valid forever and defeat the purpose of rotation.
+MAX_KEY_OVERLAP_WINDOW = timedelta(days=30)
 _HEADER_EXCLUDED_FIELDS: frozenset[str] = frozenset(
     {"header_hash", "signature", "timestamp_token", "quorum_certificate_hash"}
 )
@@ -240,10 +255,20 @@ class FederationRegistry:
         return tuple(node for node in self.nodes if node.active)
 
     def quorum_threshold(self) -> int:
-        """Return the prototype >=2/3 quorum threshold."""
+        """Return the prototype >=2/3 quorum threshold.
+
+        Requires at least ``MIN_ACTIVE_GUARDIANS_FOR_BFT`` (3) active Guardians.
+        With fewer than three active nodes, a 2/3 quorum cannot tolerate a
+        single Byzantine or unavailable node, so the federation provides no
+        BFT guarantee and the "distributed trust" claim is unfounded.
+        """
         active_count = len(self.active_nodes())
         if active_count == 0:
             raise ValueError("Federation registry has no active nodes")
+        if active_count < MIN_ACTIVE_GUARDIANS_FOR_BFT:
+            raise ValueError(
+                "Federation requires at least 3 active Guardians for Byzantine fault tolerance"
+            )
         # Require at least a two-thirds quorum of active federation members.
         return math.ceil((2 * active_count) / 3)
 
@@ -281,11 +306,26 @@ class FederationRegistry:
         new_pubkey: bytes,
         rotated_at: str,
     ) -> FederationRegistry:
-        """Return a new registry with one node key rotated while preserving history."""
+        """Return a new registry with one node key rotated while preserving history.
+
+        ``rotated_at`` is recorded as the ``valid_until`` of the previous key in
+        the node's key history. To prevent an operator from making a
+        rotated-away key effectively permanent (e.g. ``valid_until =
+        "2099-12-31"``), the timestamp must lie no further than
+        :data:`MAX_KEY_OVERLAP_WINDOW` (30 days) in the future.
+        """
         try:
-            _parse_timestamp(rotated_at)
+            parsed_rotated_at = _parse_timestamp(rotated_at)
         except ValueError as exc:
             raise ValueError(f"Invalid rotation timestamp: {rotated_at}") from exc
+        max_allowed = datetime.now(timezone.utc) + MAX_KEY_OVERLAP_WINDOW
+        if parsed_rotated_at >= max_allowed:
+            raise ValueError(
+                "rotated_at must be within "
+                f"{MAX_KEY_OVERLAP_WINDOW.days} days of the current time; "
+                "a far-future valid_until would keep the previous key valid "
+                "indefinitely and defeat key rotation"
+            )
         updated_nodes: list[FederationNode] = []
         found = False
         for node in self.nodes:

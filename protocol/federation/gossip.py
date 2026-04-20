@@ -26,7 +26,7 @@ from .quorum import (
     FederationBehaviorSample,
     NodeSignature,
     build_quorum_certificate,
-    verify_quorum_certificate,
+    count_verified_quorum_signers,
 )
 
 
@@ -62,7 +62,13 @@ def resolve_canonical_fork(
         cert_epoch = _to_int(certificate.get("federation_epoch"))
         if cert_epoch is None or is_replay_epoch(cert_epoch, effective_epoch):
             continue
-        if not verify_quorum_certificate(certificate, header, registry):
+        # Use the *cryptographically verified* unique signer count for fork
+        # preference scoring. Trusting ``len(certificate["signatures"])`` would
+        # let an attacker pad the signatures list with bogus entries to inflate
+        # their fork's score, since the bogus entries are rejected by
+        # verify_quorum_certificate but still inflate the raw list length.
+        signer_count = count_verified_quorum_signers(certificate, header, registry)
+        if signer_count <= 0:
             continue
 
         candidate_slot = (
@@ -75,7 +81,6 @@ def resolve_canonical_fork(
         elif candidate_slot != slot:
             raise ValueError("Fork candidates must reference the same shard_id, height, and round")
 
-        signer_count = len(certificate["signatures"])
         try:
             certificate_timestamp = _parse_timestamp(str(certificate["timestamp"]))
         except ValueError:
