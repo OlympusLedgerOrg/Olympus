@@ -49,15 +49,20 @@ func TestRequireVerifyingSSLMode(t *testing.T) {
 // root — meaning callers that omit Root will produce a detectable failure
 // rather than silently persisting a bogus row.
 func TestBatchLeafPerLeafRootFields(t *testing.T) {
+	const (
+		blake3HashSize       = 32 // BLAKE3 output length in bytes
+		ed25519SignatureSize = 64 // Ed25519 signature length in bytes
+	)
+
 	roots := [][]byte{
-		bytes.Repeat([]byte{0x01}, 32),
-		bytes.Repeat([]byte{0x02}, 32),
-		bytes.Repeat([]byte{0x03}, 32),
+		bytes.Repeat([]byte{0x01}, blake3HashSize),
+		bytes.Repeat([]byte{0x02}, blake3HashSize),
+		bytes.Repeat([]byte{0x03}, blake3HashSize),
 	}
 	sigs := [][]byte{
-		bytes.Repeat([]byte{0xaa}, 64),
-		bytes.Repeat([]byte{0xbb}, 64),
-		bytes.Repeat([]byte{0xcc}, 64),
+		bytes.Repeat([]byte{0xaa}, ed25519SignatureSize),
+		bytes.Repeat([]byte{0xbb}, ed25519SignatureSize),
+		bytes.Repeat([]byte{0xcc}, ed25519SignatureSize),
 	}
 
 	batch := make([]BatchLeaf, 3)

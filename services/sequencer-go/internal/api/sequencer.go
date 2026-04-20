@@ -389,7 +389,7 @@ func (s *Sequencer) handleQueueLeaves(w http.ResponseWriter, r *http.Request) {
 			"record_id":   rec.RecordID,
 		})
 		if err != nil {
-			log.Printf("Root signing failed (record %d of %d, aborting batch): %v", i+1, len(req.Records), err)
+			log.Printf("Root signing failed (record %d of %d, entire batch will be rolled back): %v", i+1, len(req.Records), err)
 			http.Error(w, "Signing failed", http.StatusInternalServerError)
 			return
 		}
