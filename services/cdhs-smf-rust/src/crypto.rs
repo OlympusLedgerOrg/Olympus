@@ -8,7 +8,24 @@
 use blake3;
 use ed25519_dalek::{Signer, SigningKey, VerifyingKey};
 use std::collections::HashMap;
+use tracing::warn;
 use zeroize::Zeroizing;
+
+/// Environment variable naming a file containing the Ed25519 signing key.
+///
+/// **This is the preferred way to provision the key.**  The file must contain
+/// the key encoded as 64 hex chars or as standard base64 of 32 raw bytes
+/// (trailing whitespace / newline is trimmed).  On Unix the file must not be
+/// readable by group or other (recommended mode: `0600`).
+pub const SIGNING_KEY_PATH_ENV: &str = "SEQUENCER_SMT_SIGNING_KEY_PATH";
+
+/// Deprecated environment variable carrying the signing key inline.
+///
+/// Retained as a fallback for backwards compatibility, but discouraged: env
+/// vars are visible to any process that can read `/proc/<pid>/environ` and
+/// frequently leak into shell history, container inspect output, and process
+/// listings.  Prefer [`SIGNING_KEY_PATH_ENV`].
+pub const SIGNING_KEY_ENV: &str = "SEQUENCER_SMT_SIGNING_KEY";
 
 use crate::proto::olympus::cdhs_smf::v1::RecordKey;
 
@@ -194,8 +211,11 @@ pub fn empty_leaf() -> [u8; 32] {
 /// The signing key is stored behind an [`std::sync::RwLock`] so that
 /// [`reload_key`] can atomically swap it while concurrent [`sign_root`]
 /// calls continue safely.  A SIGHUP handler (see `main.rs`) should call
-/// [`reload_key`] to pick up a rotated `SEQUENCER_SMT_SIGNING_KEY`
-/// without restarting the service.
+/// [`reload_key`] to pick up a rotated key without restarting the service.
+///
+/// The signing key is provisioned via either [`SIGNING_KEY_PATH_ENV`]
+/// (preferred — file mode `0600`) or [`SIGNING_KEY_ENV`] (deprecated env-var
+/// fallback).  See [`load_signing_key`] for the full resolution order.
 pub struct KeyManager {
     inner: std::sync::RwLock<KeyPair>,
 }
@@ -206,32 +226,115 @@ struct KeyPair {
     verifying_key: VerifyingKey,
 }
 
-/// Load and validate the signing key from `SEQUENCER_SMT_SIGNING_KEY`.
+/// Load and validate the signing key.
+///
+/// Resolution order:
+///
+/// 1. If [`SIGNING_KEY_PATH_ENV`] (`SEQUENCER_SMT_SIGNING_KEY_PATH`) is set,
+///    read the key from that file.  On Unix the file must not be group- or
+///    world-accessible (i.e. `mode & 0o077 == 0`; recommended `0600`).
+/// 2. Otherwise, fall back to [`SIGNING_KEY_ENV`] (`SEQUENCER_SMT_SIGNING_KEY`).
+///    This path is **deprecated** because env vars are visible via
+///    `/proc/<pid>/environ`; a `warn!` is emitted whenever it is taken.
+///
+/// In both cases the key material is parsed as 64 hex chars or as standard
+/// base64 of 32 raw bytes (trailing whitespace is trimmed).
 ///
 /// Returns an error string on failure instead of panicking, so callers
 /// can decide whether to abort (startup) or log-and-continue (reload).
-fn load_signing_key_from_env() -> Result<KeyPair, String> {
-    let key_str = std::env::var("SEQUENCER_SMT_SIGNING_KEY")
-        .map_err(|_| "SEQUENCER_SMT_SIGNING_KEY environment variable is required".to_string())?;
+fn load_signing_key() -> Result<KeyPair, String> {
+    if let Some(path) = std::env::var_os(SIGNING_KEY_PATH_ENV) {
+        let path = std::path::PathBuf::from(path);
+        return load_signing_key_from_path(&path);
+    }
 
+    match std::env::var(SIGNING_KEY_ENV) {
+        Ok(key_str) => {
+            warn!(
+                env = SIGNING_KEY_ENV,
+                preferred = SIGNING_KEY_PATH_ENV,
+                "loading signing key from environment variable is deprecated; \
+                 env vars are visible via /proc/<pid>/environ. \
+                 Set {SIGNING_KEY_PATH_ENV} to a 0600 file containing the key."
+            );
+            parse_signing_key(&key_str, SIGNING_KEY_ENV)
+        }
+        Err(_) => Err(format!(
+            "no signing key configured: set {SIGNING_KEY_PATH_ENV} (preferred) \
+             or {SIGNING_KEY_ENV} (deprecated)"
+        )),
+    }
+}
+
+/// Load the signing key from the file at `path`, enforcing safe permissions
+/// on Unix.
+fn load_signing_key_from_path(path: &std::path::Path) -> Result<KeyPair, String> {
+    let metadata = std::fs::metadata(path).map_err(|e| {
+        format!(
+            "failed to stat {SIGNING_KEY_PATH_ENV} ({}): {e}",
+            path.display()
+        )
+    })?;
+
+    if !metadata.is_file() {
+        return Err(format!(
+            "{SIGNING_KEY_PATH_ENV} ({}) must be a regular file",
+            path.display()
+        ));
+    }
+
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        let mode = metadata.mode() & 0o777;
+        // Reject any group or other permission bits.  Matches the SSH
+        // convention for private-key files; recommended mode is 0600.
+        if mode & 0o077 != 0 {
+            return Err(format!(
+                "{SIGNING_KEY_PATH_ENV} ({}) has insecure permissions {:#o}; \
+                 require mode 0600 (no group/other access)",
+                path.display(),
+                mode
+            ));
+        }
+    }
+
+    // Hold contents in a Zeroizing buffer so the raw key bytes are wiped
+    // from memory when this function returns.
+    let raw = std::fs::read(path).map_err(|e| {
+        format!(
+            "failed to read {SIGNING_KEY_PATH_ENV} ({}): {e}",
+            path.display()
+        )
+    })?;
+    let raw = Zeroizing::new(raw);
+
+    let key_str = std::str::from_utf8(&raw)
+        .map_err(|e| format!("{SIGNING_KEY_PATH_ENV} ({}) is not valid UTF-8: {e}", path.display()))?
+        .trim();
+
+    parse_signing_key(key_str, SIGNING_KEY_PATH_ENV)
+}
+
+/// Parse a 32-byte Ed25519 signing key from its hex or base64 string form.
+///
+/// `source` is included in error messages so callers can tell which
+/// environment variable / file provided the bad value.
+fn parse_signing_key(key_str: &str, source: &str) -> Result<KeyPair, String> {
     let key_bytes = if key_str.len() == 64 {
-        hex::decode(&key_str).map_err(|e| {
-            format!(
-                "SEQUENCER_SMT_SIGNING_KEY is not valid hex (expected 64 hex chars): {e}"
-            )
+        hex::decode(key_str).map_err(|e| {
+            format!("{source} is not valid hex (expected 64 hex chars): {e}")
         })?
     } else {
         use base64::Engine;
         base64::engine::general_purpose::STANDARD
-            .decode(&key_str)
-            .map_err(|e| {
-                format!("SEQUENCER_SMT_SIGNING_KEY is not valid base64 or hex: {e}")
-            })?
+            .decode(key_str)
+            .map_err(|e| format!("{source} is not valid base64 or hex: {e}"))?
     };
 
     if key_bytes.len() != 32 {
         return Err(format!(
-            "SEQUENCER_SMT_SIGNING_KEY must decode to exactly 32 bytes, got {}",
+            "{source} must decode to exactly 32 bytes, got {}",
             key_bytes.len()
         ));
     }
@@ -251,7 +354,7 @@ fn load_signing_key_from_env() -> Result<KeyPair, String> {
 impl KeyManager {
     pub fn new() -> Self {
         // At startup, a missing or malformed key is fatal.
-        let pair = load_signing_key_from_env()
+        let pair = load_signing_key()
             .unwrap_or_else(|e| panic!("{e}"));
 
         Self {
@@ -259,14 +362,14 @@ impl KeyManager {
         }
     }
 
-    /// Re-read `SEQUENCER_SMT_SIGNING_KEY` and atomically swap the
-    /// signing key.
+    /// Re-read the signing key (from [`SIGNING_KEY_PATH_ENV`] or, as a
+    /// deprecated fallback, [`SIGNING_KEY_ENV`]) and atomically swap it.
     ///
     /// Returns `Ok(new_public_key)` on success so callers can log the
     /// rotation event, or `Err(reason)` if the new key is invalid (in
     /// which case the previous key remains active).
     pub fn reload_key(&self) -> Result<[u8; 32], String> {
-        let new_pair = load_signing_key_from_env()?;
+        let new_pair = load_signing_key()?;
         let new_pk = new_pair.verifying_key.to_bytes();
 
         let mut guard = self
@@ -363,6 +466,25 @@ impl KeyManager {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Serializes tests that mutate process-global env vars (`SEQUENCER_SMT_SIGNING_KEY*`).
+    /// Without this, parallel tests race on env-var state and `KeyManager` construction.
+    fn env_lock() -> std::sync::MutexGuard<'static, ()> {
+        use std::sync::{Mutex, OnceLock};
+        static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+        // Even if a previous test panicked while holding the lock, we still
+        // want subsequent tests to make progress, so recover from poisoning.
+        LOCK.get_or_init(|| Mutex::new(()))
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+    }
+
+    /// Reset both signing-key env vars to a known state before a test sets
+    /// the ones it cares about.
+    fn clear_signing_env() {
+        std::env::remove_var(SIGNING_KEY_PATH_ENV);
+        std::env::remove_var(SIGNING_KEY_ENV);
+    }
 
     #[test]
     fn test_compute_global_key() {
@@ -466,8 +588,10 @@ mod tests {
 
     #[test]
     fn test_key_manager() {
+        let _lock = env_lock();
+        clear_signing_env();
         // Set a test key (32 bytes of zeros, hex-encoded)
-        std::env::set_var("SEQUENCER_SMT_SIGNING_KEY", "0000000000000000000000000000000000000000000000000000000000000000");
+        std::env::set_var(SIGNING_KEY_ENV, "0000000000000000000000000000000000000000000000000000000000000000");
 
         let km = KeyManager::new();
         let root = [0u8; 32];
@@ -481,13 +605,16 @@ mod tests {
         assert_eq!(sig.len(), 64);
         assert_eq!(pk.len(), 32);
         assert_eq!(pk, km.public_key());
+        clear_signing_env();
     }
 
     #[test]
     fn test_key_manager_reload() {
+        let _lock = env_lock();
+        clear_signing_env();
         // Start with one key
         std::env::set_var(
-            "SEQUENCER_SMT_SIGNING_KEY",
+            SIGNING_KEY_ENV,
             "0000000000000000000000000000000000000000000000000000000000000000",
         );
         let km = KeyManager::new();
@@ -495,7 +622,7 @@ mod tests {
 
         // Rotate to a different key (32 bytes of 0x01)
         std::env::set_var(
-            "SEQUENCER_SMT_SIGNING_KEY",
+            SIGNING_KEY_ENV,
             "0101010101010101010101010101010101010101010101010101010101010101",
         );
         let new_pk = km.reload_key().expect("reload_key should succeed");
@@ -508,24 +635,177 @@ mod tests {
         let root = [0u8; 32];
         let (_, sig_pk) = km.sign_root(&root, 1, &HashMap::new()).unwrap();
         assert_eq!(sig_pk, new_pk);
+        clear_signing_env();
     }
 
     #[test]
     fn test_key_manager_reload_bad_key_keeps_old() {
+        let _lock = env_lock();
+        clear_signing_env();
         // Start with a valid key
         std::env::set_var(
-            "SEQUENCER_SMT_SIGNING_KEY",
+            SIGNING_KEY_ENV,
             "0000000000000000000000000000000000000000000000000000000000000000",
         );
         let km = KeyManager::new();
         let old_pk = km.public_key();
 
         // Set an invalid key — reload should fail and keep the old one
-        std::env::set_var("SEQUENCER_SMT_SIGNING_KEY", "not-valid");
+        std::env::set_var(SIGNING_KEY_ENV, "not-valid");
         let result = km.reload_key();
         assert!(result.is_err());
 
         // Public key should still be the original
         assert_eq!(old_pk, km.public_key());
+        clear_signing_env();
+    }
+
+    /// Helper: write `contents` to a unique file in the temp dir with the
+    /// given Unix mode and return the path.  The caller is responsible for
+    /// removing the file.
+    fn write_key_file(contents: &str, mode: u32) -> std::path::PathBuf {
+        use std::io::Write;
+        let mut path = std::env::temp_dir();
+        // Unique-enough filename for tests running in the same process.
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        path.push(format!(
+            "olympus-signing-key-{}-{}.key",
+            std::process::id(),
+            nanos
+        ));
+        let mut f = std::fs::File::create(&path).expect("create key file");
+        f.write_all(contents.as_bytes()).expect("write key file");
+        drop(f);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(mode))
+                .expect("chmod key file");
+        }
+        let _ = mode; // silence unused on non-unix
+        path
+    }
+
+    #[test]
+    fn test_key_manager_loads_from_file_path() {
+        let _lock = env_lock();
+        clear_signing_env();
+        let key_hex = "0202020202020202020202020202020202020202020202020202020202020202";
+        // Trailing newline is intentional: load_signing_key_from_path must trim.
+        let path = write_key_file(&format!("{key_hex}\n"), 0o600);
+        std::env::set_var(SIGNING_KEY_PATH_ENV, &path);
+        // Also set the env-var fallback to a *different* key to confirm
+        // the path takes precedence.
+        std::env::set_var(
+            SIGNING_KEY_ENV,
+            "0303030303030303030303030303030303030303030303030303030303030303",
+        );
+
+        let km = KeyManager::new();
+
+        // Public key must match the one derived from the file's bytes.
+        let key_bytes = hex::decode(key_hex).unwrap();
+        let mut arr = [0u8; 32];
+        arr.copy_from_slice(&key_bytes);
+        let expected_pk = SigningKey::from_bytes(&arr).verifying_key().to_bytes();
+        assert_eq!(km.public_key(), expected_pk);
+
+        clear_signing_env();
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn test_key_manager_reloads_from_file_path() {
+        let _lock = env_lock();
+        clear_signing_env();
+        let path = write_key_file(
+            "0404040404040404040404040404040404040404040404040404040404040404\n",
+            0o600,
+        );
+        std::env::set_var(SIGNING_KEY_PATH_ENV, &path);
+
+        let km = KeyManager::new();
+        let old_pk = km.public_key();
+
+        // Rewrite the same file with a new key and reload.
+        std::fs::write(
+            &path,
+            "0505050505050505050505050505050505050505050505050505050505050505\n",
+        )
+        .unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).unwrap();
+        }
+        let new_pk = km.reload_key().expect("reload from file path should succeed");
+        assert_ne!(old_pk, new_pk);
+        assert_eq!(new_pk, km.public_key());
+
+        clear_signing_env();
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn test_key_manager_rejects_world_readable_file() {
+        let _lock = env_lock();
+        clear_signing_env();
+        let path = write_key_file(
+            "0606060606060606060606060606060606060606060606060606060606060606\n",
+            0o644, // group + other readable — must be rejected
+        );
+        std::env::set_var(SIGNING_KEY_PATH_ENV, &path);
+
+        let err = match load_signing_key() {
+            Ok(_) => panic!("insecure mode must be rejected"),
+            Err(e) => e,
+        };
+        assert!(
+            err.contains("insecure permissions"),
+            "expected permission error, got: {err}"
+        );
+
+        clear_signing_env();
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn test_key_manager_path_takes_precedence_over_env() {
+        let _lock = env_lock();
+        clear_signing_env();
+        let path_key = "0707070707070707070707070707070707070707070707070707070707070707";
+        let env_key = "0808080808080808080808080808080808080808080808080808080808080808";
+        let path = write_key_file(&format!("{path_key}\n"), 0o600);
+        std::env::set_var(SIGNING_KEY_PATH_ENV, &path);
+        std::env::set_var(SIGNING_KEY_ENV, env_key);
+
+        let pair = match load_signing_key() {
+            Ok(p) => p,
+            Err(e) => panic!("load should succeed: {e}"),
+        };
+
+        let mut arr = [0u8; 32];
+        arr.copy_from_slice(&hex::decode(path_key).unwrap());
+        let expected_pk = SigningKey::from_bytes(&arr).verifying_key().to_bytes();
+        assert_eq!(pair.verifying_key.to_bytes(), expected_pk);
+
+        clear_signing_env();
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn test_load_signing_key_errors_when_unset() {
+        let _lock = env_lock();
+        clear_signing_env();
+        let err = match load_signing_key() {
+            Ok(_) => panic!("must error when neither env var is set"),
+            Err(e) => e,
+        };
+        assert!(err.contains(SIGNING_KEY_PATH_ENV));
+        assert!(err.contains(SIGNING_KEY_ENV));
     }
 }
