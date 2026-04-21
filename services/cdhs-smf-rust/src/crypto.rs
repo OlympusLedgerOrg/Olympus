@@ -171,18 +171,35 @@ pub fn hash_bytes(data: &[u8]) -> [u8; 32] {
     *blake3::hash(data).as_bytes()
 }
 
-/// Hash a leaf node with domain separation.
+/// Hash a leaf node with domain separation (ADR-0003).
 ///
-/// `BLAKE3(LEAF_HASH_PREFIX || "|" || key || "|" || value_hash)`
+/// `BLAKE3(LEAF_HASH_PREFIX || "|" || key || "|" || value_hash || "|" ||
+///         len(parser_id)[4B BE] || parser_id || "|" ||
+///         len(canonical_parser_version)[4B BE] || canonical_parser_version)`
 ///
-/// Matches `compute_leaf_hash` in `src/crypto.rs` (PyO3).
-pub fn hash_leaf(key: &[u8; 32], value_hash: &[u8; 32]) -> [u8; 32] {
+/// Both `parser_id` and `canonical_parser_version` MUST be non-empty UTF-8
+/// strings (callers are responsible for enforcing this; an empty slice will
+/// still hash, but produces a value that the verifier will reject under the
+/// ADR-0003 contract).
+///
+/// Matches `compute_leaf_hash` in `src/crypto.rs` (PyO3) and
+/// `protocol.hashes.leaf_hash` (Python reference).
+pub fn hash_leaf(
+    key: &[u8; 32],
+    value_hash: &[u8; 32],
+    parser_id: &[u8],
+    canonical_parser_version: &[u8],
+) -> [u8; 32] {
     let mut hasher = blake3::Hasher::new();
     hasher.update(LEAF_HASH_PREFIX);
     hasher.update(SEP);
     hasher.update(key);
     hasher.update(SEP);
     hasher.update(value_hash);
+    hasher.update(SEP);
+    hasher.update(&length_prefixed(parser_id));
+    hasher.update(SEP);
+    hasher.update(&length_prefixed(canonical_parser_version));
     *hasher.finalize().as_bytes()
 }
 

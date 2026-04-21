@@ -23,20 +23,28 @@ PINNED_GOLDEN_VECTORS: dict[str, str] = {
     "blake3_hash": "2c3bbac58e97e3fecb016078d28ae954977ee82784f7c029d4602bdf37afa4b9",
     "record_key": "a214f2689de915c85ffe80094ce259adacb358f4d568029ad5c9f01566f9cf0c",
     "global_key": "b071e17db59fdba9c316129cf8efedf9785aa0662a0b17ffa1756bcf29f419e2",
-    "leaf_hash": "dcc6962cd3224e433b3dee65e3007781dd5707d31f69f7c0ecf8b6dac4abea59",
-    "node_hash": "ceaa1f7b959e2a3e69bd2bc4fa9c2321f99b1b6c3f2336533eb58da8ffa7727e",
+    "leaf_hash": "dfa43c7d40caebc9541cfe528fed1f73eba3631f36f22bb9cbc7f741512a45c8",
+    "node_hash": "cf2ac37294b1b07c5d734e52c71f0769b6e54b2ef082bed5e5a95a74da481fad",
     "canonical_json_encode": (
         '{"a":[1,2.5,{"a":null,"b":"Ω"}],"nested":{"alpha":"é","beta":true},"z":"é"}'
     ),
     "RustSparseMerkleTree.incremental_update": (
-        "96ba400037c4fa1e5daa6cfc9c025e66f6ff86540f52ca0c0e950d3362ad59bf"
+        "b1b866dfcf2ba9d455691e732adc5d1af392e3bc5e529f7594257a41a0c9a01e"
     ),
 }
 
 BLAKE3_HASH_PARTS = (b"OLY", b":", bytes(range(16)), b"\x00\xff")
 RECORD_KEY_ARGS = ("document", "watauga:budget:2025", 7)
 GLOBAL_KEY_ARGS = ("watauga:2025:budget", bytes.fromhex(PINNED_GOLDEN_VECTORS["record_key"]))
-LEAF_HASH_ARGS = (bytes.fromhex(PINNED_GOLDEN_VECTORS["global_key"]), VALUE_HASH)
+# ADR-0003: leaf_hash now binds parser identity into the leaf domain.
+SMOKE_PARSER_ID = "docling@2.3.1"
+SMOKE_CANONICAL_PARSER_VERSION = "v1"
+LEAF_HASH_ARGS = (
+    bytes.fromhex(PINNED_GOLDEN_VECTORS["global_key"]),
+    VALUE_HASH,
+    SMOKE_PARSER_ID,
+    SMOKE_CANONICAL_PARSER_VERSION,
+)
 NODE_HASH_ARGS = (bytes.fromhex(PINNED_GOLDEN_VECTORS["leaf_hash"]), ZERO_HASH)
 CANONICAL_JSON_INPUT: dict[str, Any] = {
     "z": "é",
@@ -46,6 +54,8 @@ CANONICAL_JSON_INPUT: dict[str, Any] = {
 SMT_INCREMENTAL_ARGS = (
     bytes.fromhex(PINNED_GOLDEN_VECTORS["global_key"]),
     VALUE_HASH,
+    SMOKE_PARSER_ID,
+    SMOKE_CANONICAL_PARSER_VERSION,
     ZERO_SIBLINGS,
 )
 
@@ -199,10 +209,12 @@ def probe_canonical_json_encode(bindings: _RustBindings) -> RustProbeResult:
 
 def probe_incremental_update(bindings: _RustBindings) -> RustProbeResult:
     """Probe RustSparseMerkleTree.incremental_update with a zero-sibling path."""
-    key, value_hash, siblings = SMT_INCREMENTAL_ARGS
+    key, value_hash, parser_id, canonical_parser_version, siblings = SMT_INCREMENTAL_ARGS
     root_hash, proof_siblings, node_deltas = bindings.sparse_merkle_tree.incremental_update(
         key,
         value_hash,
+        parser_id,
+        canonical_parser_version,
         list(siblings),
     )
     root_result = _bytes_probe(

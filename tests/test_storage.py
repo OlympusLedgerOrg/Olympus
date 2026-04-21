@@ -1056,10 +1056,11 @@ def test_verify_state_replay_detects_header_root_divergence(storage, signing_key
         cur.execute(f"SET LOCAL olympus.allow_smt_insert = '{_NODE_REHASH_GATE}'")
         cur.execute(
             """
-            INSERT INTO smt_leaves (key, version, value_hash, ts)
-            VALUES (%s, %s, %s, %s)
+            INSERT INTO smt_leaves
+                (key, version, value_hash, parser_id, canonical_parser_version, ts)
+            VALUES (%s, %s, %s, %s, %s, %s)
             """,
-            (forged_key, forged_version, forged_value, forged_ts),
+            (forged_key, forged_version, forged_value, "docling@2.3.1", "v1", forged_ts),
         )
         conn.commit()
 
@@ -1116,10 +1117,11 @@ def test_replay_naive_datetime_cutoff_is_normalized(storage, signing_key):
         cur.execute(f"SET LOCAL olympus.allow_smt_insert = '{_NODE_REHASH_GATE}'")
         cur.execute(
             """
-            INSERT INTO smt_leaves (key, version, value_hash, ts)
-            VALUES (%s, %s, %s, %s)
+            INSERT INTO smt_leaves
+                (key, version, value_hash, parser_id, canonical_parser_version, ts)
+            VALUES (%s, %s, %s, %s, %s, %s)
             """,
-            (forged_key, forged_version, forged_value, naive_ts),
+            (forged_key, forged_version, forged_value, "docling@2.3.1", "v1", naive_ts),
         )
         conn.commit()
 

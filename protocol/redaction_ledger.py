@@ -46,7 +46,7 @@ Building and verifying the anchor::
     poseidon_root_str = poseidon_tree.get_root()   # decimal string
     key = poseidon_root_record_key(document_id, version)
     value = poseidon_root_to_bytes(poseidon_root_str)
-    smt.update(key, value)
+    smt.update(key, value, "docling@2.3.1", "v1")
 
     smt_proof = smt.prove_existence(key)
     public_inputs = ZKPublicInputs(

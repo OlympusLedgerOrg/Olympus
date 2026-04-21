@@ -94,10 +94,13 @@ type NodeDelta = (usize, Vec<u8>, [u8; 32]);
 fn incremental_update_raw(
     key: &[u8; 32],
     value_hash: &[u8; 32],
+    parser_id: &[u8],
+    canonical_parser_version: &[u8],
     current_siblings: &[[u8; 32]],
 ) -> ([u8; 32], Vec<NodeDelta>) {
     let path = key_to_path_bits(key);
-    let mut current_hash = crypto::compute_leaf_hash(key, value_hash);
+    let mut current_hash =
+        crypto::compute_leaf_hash(key, value_hash, parser_id, canonical_parser_version);
     let mut deltas = Vec::with_capacity(256);
 
     for (level, sib_hash) in current_siblings.iter().enumerate().take(256) {
@@ -130,8 +133,8 @@ struct TreeState {
     /// Internal nodes keyed by path-bit prefix (Vec of 0s and 1s).
     /// The root is at key `vec![]` (empty).
     nodes: HashMap<Vec<u8>, [u8; 32]>,
-    /// Leaf storage: 32-byte key → 32-byte value_hash.
-    leaves: HashMap<[u8; 32], [u8; 32]>,
+    /// Leaf storage: 32-byte key → (32-byte value_hash, parser_id, canonical_parser_version).
+    leaves: HashMap<[u8; 32], ([u8; 32], String, String)>,
 }
 
 // ---------------------------------------------------------------------------
@@ -162,8 +165,16 @@ impl RustSparseMerkleTree {
         }
     }
 
-    /// Insert or update a leaf.  `key` and `value_hash` must each be 32 bytes.
-    fn update(&self, key: &[u8], value_hash: &[u8]) -> PyResult<()> {
+    /// Insert or update a leaf.  `key` and `value_hash` must each be 32 bytes;
+    /// `parser_id` and `canonical_parser_version` must be non-empty strings
+    /// (ADR-0003).
+    fn update(
+        &self,
+        key: &[u8],
+        value_hash: &[u8],
+        parser_id: &str,
+        canonical_parser_version: &str,
+    ) -> PyResult<()> {
         if key.len() != 32 {
             return Err(PyValueError::new_err(format!(
                 "Key must be 32 bytes, got {}",
@@ -176,17 +187,35 @@ impl RustSparseMerkleTree {
                 value_hash.len()
             )));
         }
+        if parser_id.is_empty() {
+            return Err(PyValueError::new_err(
+                "parser_id must be a non-empty string",
+            ));
+        }
+        if canonical_parser_version.is_empty() {
+            return Err(PyValueError::new_err(
+                "canonical_parser_version must be a non-empty string",
+            ));
+        }
 
         let key32: [u8; 32] = key.try_into().unwrap();
         let vh32: [u8; 32] = value_hash.try_into().unwrap();
         let path = key_to_path_bits(&key32);
 
         let mut state = self.state.write().map_err(lock_err)?;
-        state.leaves.insert(key32, vh32);
+        state.leaves.insert(
+            key32,
+            (vh32, parser_id.to_string(), canonical_parser_version.to_string()),
+        );
 
         // Compute leaf hash and walk from leaf to root, exactly matching
         // the Python ``SparseMerkleTree.update`` loop.
-        let mut current_hash = crypto::compute_leaf_hash(key, value_hash);
+        let mut current_hash = crypto::compute_leaf_hash(
+            key,
+            value_hash,
+            parser_id.as_bytes(),
+            canonical_parser_version.as_bytes(),
+        );
 
         for level in 0..256usize {
             let bit_pos = 255 - level;
@@ -247,7 +276,7 @@ impl RustSparseMerkleTree {
         Ok(state
             .leaves
             .get(&key32)
-            .map(|v| PyBytes::new(py, v).into()))
+            .map(|(v, _, _)| PyBytes::new(py, v).into()))
     }
 
     /// Number of non-empty leaves.
@@ -256,12 +285,16 @@ impl RustSparseMerkleTree {
         Ok(self.state.read().map_err(lock_err)?.leaves.len())
     }
 
-    /// Snapshot of leaves as ``dict[bytes, bytes]``.
+    /// Snapshot of leaves as ``dict[bytes, bytes]`` mapping key → value_hash.
+    ///
+    /// The parser metadata stored alongside each leaf is intentionally not
+    /// surfaced here so that legacy callers iterating ``(key, value_hash)``
+    /// pairs continue to behave identically.
     #[getter]
     fn leaves<'py>(&self, py: Python<'py>) -> PyResult<PyObject> {
         let state = self.state.read().map_err(lock_err)?;
         let dict = PyDict::new(py);
-        for (k, v) in &state.leaves {
+        for (k, (v, _pid, _cpv)) in &state.leaves {
             dict.set_item(PyBytes::new(py, k), PyBytes::new(py, v))?;
         }
         Ok(dict.into())
@@ -291,7 +324,8 @@ impl RustSparseMerkleTree {
         Ok(dict.into())
     }
 
-    /// Return ``(value_hash, siblings, root_hash)`` for an existing key.
+    /// Return ``(value_hash, parser_id, canonical_parser_version, siblings, root_hash)``
+    /// for an existing key.
     ///
     /// Raises ``ValueError`` if key is not found.
     fn prove_existence<'py>(&self, py: Python<'py>, key: &[u8]) -> PyResult<PyObject> {
@@ -304,7 +338,7 @@ impl RustSparseMerkleTree {
         let key32: [u8; 32] = key.try_into().unwrap();
         let state = self.state.read().map_err(lock_err)?;
 
-        let value_hash = state
+        let (value_hash, parser_id, canonical_parser_version) = state
             .leaves
             .get(&key32)
             .ok_or_else(|| PyValueError::new_err("Key does not exist in tree"))?;
@@ -318,12 +352,24 @@ impl RustSparseMerkleTree {
             .unwrap_or(self.empty_hashes[256]);
 
         let py_vh = PyBytes::new(py, value_hash);
+        let py_pid = pyo3::types::PyString::new(py, parser_id);
+        let py_cpv = pyo3::types::PyString::new(py, canonical_parser_version);
         let py_sibs = PyList::new(
             py,
             siblings.iter().map(|s| PyBytes::new(py, s)),
         )?;
         let py_root = PyBytes::new(py, &root);
-        Ok(PyTuple::new(py, [py_vh.as_any(), py_sibs.as_any(), py_root.as_any()])?.into())
+        Ok(PyTuple::new(
+            py,
+            [
+                py_vh.as_any(),
+                py_pid.as_any(),
+                py_cpv.as_any(),
+                py_sibs.as_any(),
+                py_root.as_any(),
+            ],
+        )?
+        .into())
     }
 
     /// Return ``(siblings, root_hash)`` for a non-existing key.
@@ -385,6 +431,8 @@ impl RustSparseMerkleTree {
         py: Python<'py>,
         key: &[u8],
         value_hash: &[u8],
+        parser_id: &str,
+        canonical_parser_version: &str,
         current_siblings: &Bound<'py, PyList>,
     ) -> PyResult<PyObject> {
         if key.len() != 32 {
@@ -398,6 +446,16 @@ impl RustSparseMerkleTree {
                 "value_hash must be 32 bytes, got {}",
                 value_hash.len()
             )));
+        }
+        if parser_id.is_empty() {
+            return Err(PyValueError::new_err(
+                "parser_id must be a non-empty string",
+            ));
+        }
+        if canonical_parser_version.is_empty() {
+            return Err(PyValueError::new_err(
+                "canonical_parser_version must be a non-empty string",
+            ));
         }
         if current_siblings.len() != 256 {
             return Err(PyValueError::new_err(format!(
@@ -432,7 +490,13 @@ impl RustSparseMerkleTree {
         let key32: [u8; 32] = key.try_into().unwrap();
         let vh32: [u8; 32] = value_hash.try_into().unwrap();
 
-        let (new_root, deltas) = incremental_update_raw(&key32, &vh32, &siblings);
+        let (new_root, deltas) = incremental_update_raw(
+            &key32,
+            &vh32,
+            parser_id.as_bytes(),
+            canonical_parser_version.as_bytes(),
+            &siblings,
+        );
 
         // Build Python return tuple: (new_root, proof_siblings, node_deltas)
         let py_root = PyBytes::new(py, &new_root);
@@ -503,11 +567,20 @@ mod tests {
     }
 
     fn update_raw(tree: &RustSparseMerkleTree, key: &[u8; 32], value_hash: &[u8; 32]) {
+        let parser_id = b"docling@2.3.1";
+        let cpv = b"v1";
         let path = key_to_path_bits(key);
         let mut state = tree.state.write().unwrap();
-        state.leaves.insert(*key, *value_hash);
+        state.leaves.insert(
+            *key,
+            (
+                *value_hash,
+                "docling@2.3.1".to_string(),
+                "v1".to_string(),
+            ),
+        );
 
-        let mut current_hash = crypto::compute_leaf_hash(key, value_hash);
+        let mut current_hash = crypto::compute_leaf_hash(key, value_hash, parser_id, cpv);
         for level in 0..256usize {
             let bit_pos = 255 - level;
             let sib_path = sibling_path(&path[..=bit_pos]);
@@ -624,7 +697,7 @@ mod tests {
         let empty_hashes = precompute_empty_hashes();
         let empty_siblings: Vec<[u8; 32]> = (0..256).map(|i| empty_hashes[i]).collect();
 
-        let (inc_root, _deltas) = incremental_update_raw(&key, &val, &empty_siblings);
+        let (inc_root, _deltas) = incremental_update_raw(&key, &val, b"docling@2.3.1", b"v1", &empty_siblings);
         assert_eq!(full_root, inc_root, "Incremental root must match full-tree root");
     }
 
@@ -648,7 +721,7 @@ mod tests {
         let full_root = get_root_raw(&tree);
 
         // Compute incremental update for B using A's siblings.
-        let (inc_root, _deltas) = incremental_update_raw(&kb, &vb, &siblings_b);
+        let (inc_root, _deltas) = incremental_update_raw(&kb, &vb, b"docling@2.3.1", b"v1", &siblings_b);
         assert_eq!(full_root, inc_root, "Incremental root must match after second insert");
     }
 
@@ -658,7 +731,7 @@ mod tests {
         let empty_siblings: Vec<[u8; 32]> = (0..256).map(|i| empty_hashes[i]).collect();
         let key = [1u8; 32];
         let val = [2u8; 32];
-        let (_root, deltas) = incremental_update_raw(&key, &val, &empty_siblings);
+        let (_root, deltas) = incremental_update_raw(&key, &val, b"docling@2.3.1", b"v1", &empty_siblings);
         assert_eq!(deltas.len(), 256, "Must have exactly 256 node deltas");
     }
 
@@ -668,7 +741,7 @@ mod tests {
         let empty_siblings: Vec<[u8; 32]> = (0..256).map(|i| empty_hashes[i]).collect();
         let key = [1u8; 32];
         let val = [2u8; 32];
-        let (root, deltas) = incremental_update_raw(&key, &val, &empty_siblings);
+        let (root, deltas) = incremental_update_raw(&key, &val, b"docling@2.3.1", b"v1", &empty_siblings);
         // The last delta should be the root (db_level=0, empty path).
         let (db_level, packed, hash) = &deltas[255];
         assert_eq!(*db_level, 0usize);

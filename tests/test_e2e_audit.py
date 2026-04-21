@@ -282,6 +282,8 @@ def test_end_to_end_audit_flow(storage, signing_key, client):
         api_proof = ExistenceProof(
             key=bytes.fromhex(proof_data["key"]),
             value_hash=bytes.fromhex(proof_data["value_hash"]),
+            parser_id=str(proof_data["parser_id"]),
+            canonical_parser_version=str(proof_data["canonical_parser_version"]),
             siblings=[bytes.fromhex(s) for s in proof_data["siblings"]],
             root_hash=bytes.fromhex(proof_data["root_hash"]),
         )

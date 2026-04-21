@@ -113,7 +113,7 @@ class TestSMTNonMembership:
         tree = SparseMerkleTree()
         key_exists = b"\x01" * 32
         key_missing = b"\x02" * 32
-        tree.update(key_exists, hash_bytes(b"value"))
+        tree.update(key_exists, hash_bytes(b"value"), "docling@2.3.1", "v1")
 
         proof = tree.prove_nonexistence(key_missing)
         assert verify_nonexistence_proof(proof) is True

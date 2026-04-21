@@ -30,7 +30,7 @@ def populated_tree():
     tree = SparseMerkleTree()
     key = record_key("document", "doc1", 1)
     value_hash = hash_bytes(b"test value")
-    tree.update(key, value_hash)
+    tree.update(key, value_hash, "docling@2.3.1", "v1")
     return tree, key, value_hash
 
 

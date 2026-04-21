@@ -46,7 +46,7 @@ def test_smt_update_prove_verify_roundtrip(
     """
     tree = SparseMerkleTree()
     for key, value in entries:
-        tree.update(key, value)
+        tree.update(key, value, "docling@2.3.1", "v1")
 
     root = tree.get_root()
 
@@ -82,7 +82,7 @@ def test_smt_nonexistence_proof_roundtrip(
     tree = SparseMerkleTree()
     inserted_keys = set()
     for key, value in entries:
-        tree.update(key, value)
+        tree.update(key, value, "docling@2.3.1", "v1")
         inserted_keys.add(key)
 
     if absent_key in inserted_keys:
@@ -117,7 +117,7 @@ def test_smt_unified_prove_dispatches_correctly(
     tree = SparseMerkleTree()
     inserted_keys = set()
     for key, value in entries:
-        tree.update(key, value)
+        tree.update(key, value, "docling@2.3.1", "v1")
         inserted_keys.add(key)
 
     # Existence via prove()
@@ -151,11 +151,11 @@ def test_smt_root_changes_after_update(
     tree = SparseMerkleTree()
 
     # Insert first entry, capture root
-    tree.update(entries[0][0], entries[0][1])
+    tree.update(entries[0][0], entries[0][1], "docling@2.3.1", "v1")
     root_after_first = tree.get_root()
 
     # If a second *distinct* key is present, root must differ after insert.
     if entries[1][0] != entries[0][0]:
-        tree.update(entries[1][0], entries[1][1])
+        tree.update(entries[1][0], entries[1][1], "docling@2.3.1", "v1")
         root_after_second = tree.get_root()
         assert root_after_first != root_after_second

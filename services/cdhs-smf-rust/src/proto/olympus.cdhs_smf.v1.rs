@@ -12,6 +12,16 @@ pub struct UpdateRequest {
     /// Canonicalized record content (already canonicalized)
     #[prost(bytes = "vec", tag = "3")]
     pub canonical_content: ::prost::alloc::vec::Vec<u8>,
+    /// Parser identity ("<name>@<version>", e.g. "docling@2.3.1"). Required by
+    /// ADR-0003: this is bound into the leaf hash domain. Empty string is
+    /// rejected by the service.
+    #[prost(string, tag = "4")]
+    pub parser_id: ::prost::alloc::string::String,
+    /// Operator-controlled stable canonical parser version (e.g. "v1"). Required
+    /// by ADR-0003: this is bound into the leaf hash domain. Empty string is
+    /// rejected by the service.
+    #[prost(string, tag = "5")]
+    pub canonical_parser_version: ::prost::alloc::string::String,
 }
 /// Response from update operation
 #[allow(clippy::derive_partial_eq_without_eq)]
@@ -97,6 +107,13 @@ pub struct ProveInclusionResponse {
     /// Root hash
     #[prost(bytes = "vec", tag = "4")]
     pub root: ::prost::alloc::vec::Vec<u8>,
+    /// Parser identity bound into the leaf hash domain (ADR-0003).
+    #[prost(string, tag = "5")]
+    pub parser_id: ::prost::alloc::string::String,
+    /// Operator-controlled canonical parser version bound into the leaf hash
+    /// domain (ADR-0003).
+    #[prost(string, tag = "6")]
+    pub canonical_parser_version: ::prost::alloc::string::String,
 }
 /// Request to verify inclusion
 #[allow(clippy::derive_partial_eq_without_eq)]
@@ -114,6 +131,14 @@ pub struct VerifyInclusionRequest {
     /// Root hash to verify against
     #[prost(bytes = "vec", tag = "4")]
     pub root: ::prost::alloc::vec::Vec<u8>,
+    /// Parser identity bound into the leaf hash domain (ADR-0003). Empty string
+    /// is rejected by the service.
+    #[prost(string, tag = "5")]
+    pub parser_id: ::prost::alloc::string::String,
+    /// Operator-controlled canonical parser version bound into the leaf hash
+    /// domain (ADR-0003). Empty string is rejected by the service.
+    #[prost(string, tag = "6")]
+    pub canonical_parser_version: ::prost::alloc::string::String,
 }
 /// Response from verification
 #[allow(clippy::derive_partial_eq_without_eq)]
@@ -264,6 +289,14 @@ pub struct LeafEntry {
     /// 32-byte leaf value hash
     #[prost(bytes = "vec", tag = "2")]
     pub value_hash: ::prost::alloc::vec::Vec<u8>,
+    /// Parser identity bound into the leaf hash domain (ADR-0003). Empty string
+    /// is rejected by the service.
+    #[prost(string, tag = "3")]
+    pub parser_id: ::prost::alloc::string::String,
+    /// Operator-controlled canonical parser version bound into the leaf hash
+    /// domain (ADR-0003). Empty string is rejected by the service.
+    #[prost(string, tag = "4")]
+    pub canonical_parser_version: ::prost::alloc::string::String,
 }
 /// Response from replay operation
 #[allow(clippy::derive_partial_eq_without_eq)]

@@ -175,6 +175,8 @@ async def get_proof(
                 version=version,
                 key=proof.key.hex(),
                 value_hash=proof.value_hash.hex(),
+                parser_id=proof.parser_id,
+                canonical_parser_version=proof.canonical_parser_version,
                 siblings=[s.hex() for s in proof.siblings],
                 root_hash=proof.root_hash.hex(),
                 shard_header=shard_header,

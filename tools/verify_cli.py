@@ -166,9 +166,19 @@ def verify_smt_proof(args: argparse.Namespace) -> int:
         is_existence = proof_data.get("exists", True)
 
         if is_existence:
+            raw_parser_id = proof_data.get("parser_id")
+            raw_cpv = proof_data.get("canonical_parser_version")
+            if not isinstance(raw_parser_id, str) or not raw_parser_id:
+                raise ValueError("proof.parser_id is required and must be a non-empty string")
+            if not isinstance(raw_cpv, str) or not raw_cpv:
+                raise ValueError(
+                    "proof.canonical_parser_version is required and must be a non-empty string"
+                )
             proof = ExistenceProof(
                 key=bytes.fromhex(proof_data["key"]),
                 value_hash=bytes.fromhex(proof_data["value_hash"]),
+                parser_id=raw_parser_id,
+                canonical_parser_version=raw_cpv,
                 siblings=[bytes.fromhex(s) for s in proof_data["siblings"]],
                 root_hash=bytes.fromhex(proof_data["root_hash"]),
             )
@@ -220,9 +230,7 @@ def main() -> int:
     redaction_parser.add_argument("content_file", help="Path to revealed content JSON file")
 
     # SMT proof verification (RT-M4)
-    smt_parser = subparsers.add_parser(
-        "smt", help="Verify SMT existence/non-existence proof"
-    )
+    smt_parser = subparsers.add_parser("smt", help="Verify SMT existence/non-existence proof")
     smt_parser.add_argument("proof_file", help="Path to SMT proof or verification bundle JSON")
     smt_parser.add_argument(
         "--expected-root",

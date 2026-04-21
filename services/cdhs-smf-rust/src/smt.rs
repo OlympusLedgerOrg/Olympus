@@ -29,8 +29,9 @@ pub struct SparseMerkleTree {
 struct TreeState {
     /// Mapping from (level, path_bits[0..=level]) to hash
     nodes: HashMap<(u8, Vec<u8>), [u8; 32]>,
-    /// Mapping from key to value_hash
-    leaves: HashMap<[u8; 32], [u8; 32]>,
+    /// Mapping from key to (value_hash, parser_id, canonical_parser_version).
+    /// The parser fields are bound into the leaf hash per ADR-0003.
+    leaves: HashMap<[u8; 32], ([u8; 32], String, String)>,
     /// Current root
     root: [u8; 32],
     /// Number of non-empty leaves
@@ -51,6 +52,11 @@ pub struct NodeDelta {
 /// Inclusion proof
 pub struct InclusionProof {
     pub value_hash: [u8; 32],
+    /// Parser identity bound into the leaf hash (ADR-0003).
+    pub parser_id: String,
+    /// Operator-controlled canonical parser version bound into the leaf hash
+    /// (ADR-0003).
+    pub canonical_parser_version: String,
     pub siblings: Vec<[u8; 32]>,
 }
 
@@ -74,12 +80,24 @@ impl SparseMerkleTree {
         }
     }
 
-    /// Update a leaf and return new root and deltas
+    /// Update a leaf and return new root and deltas.
+    ///
+    /// `parser_id` and `canonical_parser_version` are bound into the leaf
+    /// hash domain per ADR-0003. Both MUST be non-empty.
     pub async fn update(
         &self,
         key: &[u8; 32],
         value_hash: &[u8; 32],
+        parser_id: &str,
+        canonical_parser_version: &str,
     ) -> Result<([u8; 32], Vec<NodeDelta>), String> {
+        if parser_id.is_empty() {
+            return Err("parser_id must be a non-empty string".to_string());
+        }
+        if canonical_parser_version.is_empty() {
+            return Err("canonical_parser_version must be a non-empty string".to_string());
+        }
+
         let mut state = self.state.write().await;
         let mut deltas = Vec::new();
 
@@ -89,14 +107,27 @@ impl SparseMerkleTree {
             state.size += 1;
         }
 
-        // Store leaf
-        state.leaves.insert(*key, *value_hash);
+        // Store leaf together with the parser provenance bound into the
+        // leaf hash domain per ADR-0003.
+        state.leaves.insert(
+            *key,
+            (
+                *value_hash,
+                parser_id.to_string(),
+                canonical_parser_version.to_string(),
+            ),
+        );
 
         // Convert key to path bits
         let path_bits = key_to_path_bits(key);
 
         // Compute leaf hash
-        let leaf_hash = crypto::hash_leaf(key, value_hash);
+        let leaf_hash = crypto::hash_leaf(
+            key,
+            value_hash,
+            parser_id.as_bytes(),
+            canonical_parser_version.as_bytes(),
+        );
 
         // Update from leaf (level 255) to root (above level 0)
         let mut current_hash = leaf_hash;
@@ -166,14 +197,20 @@ impl SparseMerkleTree {
         self.state.read().await.size
     }
 
-    /// Replay a sequence of (key, value_hash) leaf insertions in order.
+    /// Replay a sequence of `(key, value_hash, parser_id, canonical_parser_version)`
+    /// leaf insertions in order.
     ///
-    /// Iterates through the provided pairs and calls `self.update()` for each,
-    /// using the same path as live inserts so the resulting root is identical.
-    /// Returns the final root hash after all leaves have been applied.
-    pub async fn replay(&self, leaves: Vec<([u8; 32], [u8; 32])>) -> Result<[u8; 32], String> {
-        for (key, value_hash) in leaves {
-            self.update(&key, &value_hash).await?;
+    /// Iterates through the provided tuples and calls `self.update()` for
+    /// each, using the same path as live inserts so the resulting root is
+    /// identical. Returns the final root hash after all leaves have been
+    /// applied.
+    pub async fn replay(
+        &self,
+        leaves: Vec<([u8; 32], [u8; 32], String, String)>,
+    ) -> Result<[u8; 32], String> {
+        for (key, value_hash, parser_id, canonical_parser_version) in leaves {
+            self.update(&key, &value_hash, &parser_id, &canonical_parser_version)
+                .await?;
         }
         Ok(self.root().await)
     }
@@ -187,7 +224,7 @@ impl SparseMerkleTree {
         let state = self.state.read().await;
 
         // Check if key exists
-        let value_hash = state
+        let (value_hash, parser_id, canonical_parser_version) = state
             .leaves
             .get(key)
             .ok_or_else(|| "Key not found".to_string())?;
@@ -215,6 +252,8 @@ impl SparseMerkleTree {
 
         Ok(InclusionProof {
             value_hash: *value_hash,
+            parser_id: parser_id.clone(),
+            canonical_parser_version: canonical_parser_version.clone(),
             siblings,
         })
     }
@@ -257,19 +296,33 @@ impl SparseMerkleTree {
     }
 }
 
-/// Verify an inclusion proof
+/// Verify an inclusion proof.
+///
+/// `parser_id` and `canonical_parser_version` are bound into the leaf hash
+/// per ADR-0003. Both MUST be non-empty; passing an empty string returns
+/// `false` immediately.
 pub fn verify_inclusion(
     key: &[u8; 32],
     value_hash: &[u8; 32],
+    parser_id: &str,
+    canonical_parser_version: &str,
     siblings: &[[u8; 32]],
     root: &[u8; 32],
 ) -> bool {
     if siblings.len() != 256 {
         return false;
     }
+    if parser_id.is_empty() || canonical_parser_version.is_empty() {
+        return false;
+    }
 
     let path_bits = key_to_path_bits(key);
-    let mut current_hash = crypto::hash_leaf(key, value_hash);
+    let mut current_hash = crypto::hash_leaf(
+        key,
+        value_hash,
+        parser_id.as_bytes(),
+        canonical_parser_version.as_bytes(),
+    );
 
     for level in (0..256).rev() {
         let bit = path_bits[level];
@@ -389,7 +442,7 @@ mod tests {
         let key = [1u8; 32];
         let value_hash = [2u8; 32];
 
-        let result = tree.update(&key, &value_hash).await;
+        let result = tree.update(&key, &value_hash, "docling@2.3.1", "v1").await;
         assert!(result.is_ok());
 
         let (new_root, deltas) = result.unwrap();
@@ -404,12 +457,12 @@ mod tests {
         let key = [1u8; 32];
         let value_hash = [2u8; 32];
 
-        tree.update(&key, &value_hash).await.unwrap();
+        tree.update(&key, &value_hash, "docling@2.3.1", "v1").await.unwrap();
         let root = tree.root().await;
 
         let proof = tree.prove_inclusion(&key, &root).await.unwrap();
         assert_eq!(proof.siblings.len(), 256);
-        assert!(verify_inclusion(&key, &value_hash, &proof.siblings, &root));
+        assert!(verify_inclusion(&key, &value_hash, "docling@2.3.1", "v1", &proof.siblings, &root));
     }
 
     #[tokio::test]
@@ -424,16 +477,16 @@ mod tests {
         let val_a = [0xAAu8; 32];
         let val_b = [0xBBu8; 32];
 
-        tree.update(&key_a, &val_a).await.unwrap();
-        tree.update(&key_b, &val_b).await.unwrap();
+        tree.update(&key_a, &val_a, "docling@2.3.1", "v1").await.unwrap();
+        tree.update(&key_b, &val_b, "docling@2.3.1", "v1").await.unwrap();
         let root = tree.root().await;
 
         // Both proofs must verify
         let proof_a = tree.prove_inclusion(&key_a, &root).await.unwrap();
-        assert!(verify_inclusion(&key_a, &val_a, &proof_a.siblings, &root));
+        assert!(verify_inclusion(&key_a, &val_a, "docling@2.3.1", "v1", &proof_a.siblings, &root));
 
         let proof_b = tree.prove_inclusion(&key_b, &root).await.unwrap();
-        assert!(verify_inclusion(&key_b, &val_b, &proof_b.siblings, &root));
+        assert!(verify_inclusion(&key_b, &val_b, "docling@2.3.1", "v1", &proof_b.siblings, &root));
 
         // Siblings should include actual node hashes, not all empty
         let empty_hashes = empty_hashes();
@@ -461,15 +514,15 @@ mod tests {
 
         let val = [0xFFu8; 32];
 
-        tree.update(&key_a, &val).await.unwrap();
-        tree.update(&key_b, &val).await.unwrap();
-        tree.update(&key_c, &val).await.unwrap();
+        tree.update(&key_a, &val, "docling@2.3.1", "v1").await.unwrap();
+        tree.update(&key_b, &val, "docling@2.3.1", "v1").await.unwrap();
+        tree.update(&key_c, &val, "docling@2.3.1", "v1").await.unwrap();
         let root = tree.root().await;
 
         for key in [key_a, key_b, key_c] {
             let proof = tree.prove_inclusion(&key, &root).await.unwrap();
             assert!(
-                verify_inclusion(&key, &val, &proof.siblings, &root),
+                verify_inclusion(&key, &val, "docling@2.3.1", "v1", &proof.siblings, &root),
                 "Inclusion proof failed for key {:?}",
                 &key[..4]
             );
@@ -487,7 +540,7 @@ mod tests {
             key[0] = i;
             let mut val = [0u8; 32];
             val[0] = i + 100;
-            tree.update(&key, &val).await.unwrap();
+            tree.update(&key, &val, "docling@2.3.1", "v1").await.unwrap();
             keys.push(key);
             vals.push(val);
         }
@@ -496,7 +549,7 @@ mod tests {
         for (key, val) in keys.iter().zip(vals.iter()) {
             let proof = tree.prove_inclusion(key, &root).await.unwrap();
             assert!(
-                verify_inclusion(key, val, &proof.siblings, &root),
+                verify_inclusion(key, val, "docling@2.3.1", "v1", &proof.siblings, &root),
                 "Proof failed for key starting with {:02x}",
                 key[0]
             );
@@ -510,7 +563,7 @@ mod tests {
         let key2 = [2u8; 32];
         let value_hash = [3u8; 32];
 
-        tree.update(&key1, &value_hash).await.unwrap();
+        tree.update(&key1, &value_hash, "docling@2.3.1", "v1").await.unwrap();
         let root = tree.root().await;
 
         let proof = tree.prove_non_inclusion(&key2, &root).await.unwrap();
@@ -526,8 +579,8 @@ mod tests {
         let absent = [3u8; 32];
         let val = [0xAAu8; 32];
 
-        tree.update(&key1, &val).await.unwrap();
-        tree.update(&key2, &val).await.unwrap();
+        tree.update(&key1, &val, "docling@2.3.1", "v1").await.unwrap();
+        tree.update(&key2, &val, "docling@2.3.1", "v1").await.unwrap();
         let root = tree.root().await;
 
         let proof = tree.prove_non_inclusion(&absent, &root).await.unwrap();
@@ -542,12 +595,12 @@ mod tests {
         let val_b = [0xBu8; 32];
 
         let tree1 = SparseMerkleTree::new();
-        tree1.update(&key_a, &val_a).await.unwrap();
-        tree1.update(&key_b, &val_b).await.unwrap();
+        tree1.update(&key_a, &val_a, "docling@2.3.1", "v1").await.unwrap();
+        tree1.update(&key_b, &val_b, "docling@2.3.1", "v1").await.unwrap();
 
         let tree2 = SparseMerkleTree::new();
-        tree2.update(&key_b, &val_b).await.unwrap();
-        tree2.update(&key_a, &val_a).await.unwrap();
+        tree2.update(&key_b, &val_b, "docling@2.3.1", "v1").await.unwrap();
+        tree2.update(&key_a, &val_a, "docling@2.3.1", "v1").await.unwrap();
 
         assert_eq!(
             tree1.root().await,
@@ -563,17 +616,17 @@ mod tests {
         let val1 = [2u8; 32];
         let val2 = [3u8; 32];
 
-        tree.update(&key, &val1).await.unwrap();
+        tree.update(&key, &val1, "docling@2.3.1", "v1").await.unwrap();
         let root1 = tree.root().await;
 
-        tree.update(&key, &val2).await.unwrap();
+        tree.update(&key, &val2, "docling@2.3.1", "v1").await.unwrap();
         let root2 = tree.root().await;
 
         assert_ne!(root1, root2, "Root must change when value changes");
         assert_eq!(tree.size().await, 1, "Size should not increase on update");
 
         let proof = tree.prove_inclusion(&key, &root2).await.unwrap();
-        assert!(verify_inclusion(&key, &val2, &proof.siblings, &root2));
+        assert!(verify_inclusion(&key, &val2, "docling@2.3.1", "v1", &proof.siblings, &root2));
     }
 
     #[test]

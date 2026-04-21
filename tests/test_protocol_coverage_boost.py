@@ -106,7 +106,7 @@ class TestSparseMerkleTreeEmpty:
         tree = SparseMerkleTree()
         key = b"\x00" * 32
         val = b"\xff" * 32
-        tree.update(key, val)
+        tree.update(key, val, "docling@2.3.1", "v1")
         root = tree.get_root()
         assert root != EMPTY_HASHES[256]
         assert len(root) == 32
@@ -147,9 +147,9 @@ class TestDiffWithKeyRange:
         high_key = b"\x90" + b"\x00" * 31
         val = b"\x01" * 32
 
-        after.update(low_key, val)
-        after.update(mid_key, val)
-        after.update(high_key, val)
+        after.update(low_key, val, "docling@2.3.1", "v1")
+        after.update(mid_key, val, "docling@2.3.1", "v1")
+        after.update(high_key, val, "docling@2.3.1", "v1")
 
         # Only mid_key should survive the range filter
         result = diff_sparse_merkle_trees(
@@ -171,8 +171,8 @@ class TestDiffWithKeyRange:
         key_out = b"\x10" + b"\x00" * 31
         val = b"\x01" * 32
 
-        before.update(key_in, val)
-        before.update(key_out, val)
+        before.update(key_in, val, "docling@2.3.1", "v1")
+        before.update(key_out, val, "docling@2.3.1", "v1")
 
         result = diff_sparse_merkle_trees(
             before,
@@ -192,7 +192,7 @@ class TestVerifyProofInvalidInputs:
         tree = SparseMerkleTree()
         key = b"\x00" * 32
         val = b"\x01" * 32
-        tree.update(key, val)
+        tree.update(key, val, "docling@2.3.1", "v1")
         return tree.prove_existence(key)
 
     def test_key_wrong_length(self) -> None:

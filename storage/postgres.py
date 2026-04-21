@@ -504,18 +504,33 @@ class StorageLayer:
             """,
             """
             CREATE TABLE IF NOT EXISTS smt_leaves (
-                key        BYTEA       NOT NULL,
-                version    INT         NOT NULL,
-                value_hash BYTEA       NOT NULL,
-                ts         TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                key                       BYTEA       NOT NULL,
+                version                   INT         NOT NULL,
+                value_hash                BYTEA       NOT NULL,
+                parser_id                 TEXT        NOT NULL,
+                canonical_parser_version  TEXT        NOT NULL,
+                ts                        TIMESTAMPTZ NOT NULL DEFAULT NOW(),
                 PRIMARY KEY (key, version),
                 CONSTRAINT smt_leaves_key_length
                     CHECK (octet_length(key) = 32),
                 CONSTRAINT smt_leaves_value_hash_length
-                    CHECK (octet_length(value_hash) = 32)
+                    CHECK (octet_length(value_hash) = 32),
+                CONSTRAINT smt_leaves_parser_id_nonempty
+                    CHECK (length(parser_id) > 0),
+                CONSTRAINT smt_leaves_canonical_parser_version_nonempty
+                    CHECK (length(canonical_parser_version) > 0)
             )
             """,
             "CREATE INDEX IF NOT EXISTS smt_leaves_ts_idx ON smt_leaves(ts)",
+            # ADR-0003 upgrade: add parser provenance columns to existing smt_leaves.
+            # ADD COLUMN IF NOT EXISTS is idempotent; the DEFAULT uses the canonical
+            # fallback values so that any previously-committed rows get a meaningful
+            # parser identity, then the default is dropped so future INSERTs must
+            # supply explicit values.
+            "ALTER TABLE smt_leaves ADD COLUMN IF NOT EXISTS parser_id TEXT NOT NULL DEFAULT 'fallback@1.0.0'",
+            "ALTER TABLE smt_leaves ADD COLUMN IF NOT EXISTS canonical_parser_version TEXT NOT NULL DEFAULT 'v1'",
+            "ALTER TABLE smt_leaves ALTER COLUMN parser_id DROP DEFAULT",
+            "ALTER TABLE smt_leaves ALTER COLUMN canonical_parser_version DROP DEFAULT",
             # ------------------------------------------------------------------
             # SMT Nodes
             # ------------------------------------------------------------------
@@ -1112,6 +1127,8 @@ class StorageLayer:
         canonicalization: dict[str, Any] | None = None,
         poseidon_root: bytes | None = None,
         *,
+        parser_id: str = "fallback@1.0.0",
+        canonical_parser_version: str = "v1",
         max_serialization_retries: int = 3,
     ) -> tuple[bytes, ExistenceProof, dict[str, Any], str, LedgerEntry]:
         """
@@ -1172,6 +1189,10 @@ class StorageLayer:
 
         if len(value_hash) != 32:
             raise ValueError(f"Value hash must be 32 bytes, got {len(value_hash)}")
+        if not parser_id:
+            raise ValueError("parser_id must be a non-empty string")
+        if not canonical_parser_version:
+            raise ValueError("canonical_parser_version must be a non-empty string")
 
         # Generate record key
         rec_key = record_key(record_type, record_id, version)
@@ -1191,6 +1212,8 @@ class StorageLayer:
                     version=version,
                     key=key,
                     value_hash=value_hash,
+                    parser_id=parser_id,
+                    canonical_parser_version=canonical_parser_version,
                     signing_key=signing_key,
                     canonicalization=canonicalization,
                     poseidon_root=poseidon_root,
@@ -1232,6 +1255,8 @@ class StorageLayer:
         version: int,
         key: bytes,
         value_hash: bytes,
+        parser_id: str,
+        canonical_parser_version: str,
         signing_key: nacl.signing.SigningKey,
         canonicalization: dict[str, Any] | None,
         poseidon_root: bytes | None,
@@ -1256,7 +1281,7 @@ class StorageLayer:
 
             # --- O(256) Rust incremental update ---
             root_hash, proof_siblings, node_deltas = RustSparseMerkleTree.incremental_update(
-                key, value_hash, siblings
+                key, value_hash, parser_id, canonical_parser_version, siblings
             )
 
             # --- tree_size from DB (O(1) COUNT on smt_leaves) ---
@@ -1268,6 +1293,8 @@ class StorageLayer:
             proof = ExistenceProof(
                 key=key,
                 value_hash=value_hash,
+                parser_id=parser_id,
+                canonical_parser_version=canonical_parser_version,
                 siblings=list(proof_siblings),
                 root_hash=root_hash,
             )
@@ -1280,10 +1307,18 @@ class StorageLayer:
             )
             cur.execute(
                 """
-                    INSERT INTO smt_leaves (key, version, value_hash, ts)
-                    VALUES (%s, %s, %s, %s)
+                    INSERT INTO smt_leaves
+                        (key, version, value_hash, parser_id, canonical_parser_version, ts)
+                    VALUES (%s, %s, %s, %s, %s, %s)
                     """,
-                (key, version, value_hash, datetime.now(timezone.utc)),
+                (
+                    key,
+                    version,
+                    value_hash,
+                    parser_id,
+                    canonical_parser_version,
+                    datetime.now(timezone.utc),
+                ),
             )
 
             # --- Persist node deltas ---
@@ -1585,7 +1620,8 @@ class StorageLayer:
             # Check if leaf exists
             cur.execute(
                 """
-                    SELECT value_hash FROM smt_leaves
+                    SELECT value_hash, parser_id, canonical_parser_version
+                    FROM smt_leaves
                     WHERE key = %s AND version = %s
                     """,
                 (key, version),
@@ -1603,6 +1639,8 @@ class StorageLayer:
             return ExistenceProof(
                 key=key,
                 value_hash=value_hash_bytes,
+                parser_id=row["parser_id"],
+                canonical_parser_version=row["canonical_parser_version"],
                 siblings=siblings,
                 root_hash=root_hash,
             )
@@ -2726,7 +2764,8 @@ class StorageLayer:
             while True:
                 cur.execute(
                     """
-                    SELECT key, value_hash FROM smt_leaves
+                    SELECT key, value_hash, parser_id, canonical_parser_version
+                    FROM smt_leaves
                     WHERE ts <= %s
                     ORDER BY ts ASC, key ASC
                     LIMIT %s OFFSET %s
@@ -2737,7 +2776,12 @@ class StorageLayer:
                 if not rows:
                     break
                 for row in rows:
-                    replay_tree.update(bytes(row["key"]), bytes(row["value_hash"]))
+                    replay_tree.update(
+                        bytes(row["key"]),
+                        bytes(row["value_hash"]),
+                        row["parser_id"],
+                        row["canonical_parser_version"],
+                    )
                 offset += len(rows)
 
             computed_root = replay_tree.get_root()
@@ -3001,7 +3045,8 @@ class StorageLayer:
                     while True:
                         cur.execute(
                             sql.SQL("""
-                            SELECT key, value_hash FROM smt_leaves
+                            SELECT key, value_hash, parser_id, canonical_parser_version
+                            FROM smt_leaves
                             WHERE ts <= %s
                             ORDER BY ts ASC, key ASC
                             LIMIT %s OFFSET %s
@@ -3012,7 +3057,12 @@ class StorageLayer:
                         if not rows:
                             break
                         for row in rows:
-                            tree.update(bytes(row["key"]), bytes(row["value_hash"]))
+                            tree.update(
+                                bytes(row["key"]),
+                                bytes(row["value_hash"]),
+                                row["parser_id"],
+                                row["canonical_parser_version"],
+                            )
                         offset += len(rows)
 
             # Incremental replay: carry the tree forward, replaying only
@@ -3039,7 +3089,8 @@ class StorageLayer:
                 while True:
                     cur.execute(
                         sql.SQL("""
-                        SELECT key, value_hash FROM smt_leaves
+                        SELECT key, value_hash, parser_id, canonical_parser_version
+                        FROM smt_leaves
                         {}
                         ORDER BY ts ASC, key ASC
                         LIMIT %s OFFSET %s
@@ -3050,7 +3101,12 @@ class StorageLayer:
                     if not rows:
                         break
                     for row in rows:
-                        tree.update(bytes(row["key"]), bytes(row["value_hash"]))
+                        tree.update(
+                            bytes(row["key"]),
+                            bytes(row["value_hash"]),
+                            row["parser_id"],
+                            row["canonical_parser_version"],
+                        )
                     offset += len(rows)
 
                 computed_root = tree.get_root()

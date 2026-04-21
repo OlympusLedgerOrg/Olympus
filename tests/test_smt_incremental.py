@@ -30,13 +30,13 @@ class TestIncrementalUpdate:
 
         # Full tree approach
         tree = SparseMerkleTree()
-        tree.update(key, val)
+        tree.update(key, val, "docling@2.3.1", "v1")
         expected_root = tree.get_root()
 
         # Incremental approach
         empty_siblings = EMPTY_HASHES[:256]
         new_root, proof_sibs, deltas = RustSparseMerkleTree.incremental_update(
-            key, val, empty_siblings
+            key, val, "docling@2.3.1", "v1", empty_siblings
         )
         assert new_root == expected_root
 
@@ -48,16 +48,18 @@ class TestIncrementalUpdate:
         # Build tree with A, collect siblings for B
         # Use pure Python implementation to access internal methods
         tree = PurePythonSparseMerkleTree()
-        tree.update(ka, va)
+        tree.update(ka, va, "docling@2.3.1", "v1")
         # Siblings for B from the tree with only A
         siblings_b = tree._collect_siblings(tree._key_to_path(kb))
 
         # Now insert B into full tree
-        tree.update(kb, vb)
+        tree.update(kb, vb, "docling@2.3.1", "v1")
         expected_root = tree.get_root()
 
         # Incremental insert of B using A's siblings
-        new_root, _, _ = RustSparseMerkleTree.incremental_update(kb, vb, siblings_b)
+        new_root, _, _ = RustSparseMerkleTree.incremental_update(
+            kb, vb, "docling@2.3.1", "v1", siblings_b
+        )
         assert new_root == expected_root
 
     def test_proof_from_incremental_verifies(self):
@@ -66,10 +68,14 @@ class TestIncrementalUpdate:
         val = b"\x02" * 32
         empty_siblings = EMPTY_HASHES[:256]
 
-        new_root, proof_sibs, _ = RustSparseMerkleTree.incremental_update(key, val, empty_siblings)
+        new_root, proof_sibs, _ = RustSparseMerkleTree.incremental_update(
+            key, val, "docling@2.3.1", "v1", empty_siblings
+        )
         proof = ExistenceProof(
             key=key,
             value_hash=val,
+            parser_id="docling@2.3.1",
+            canonical_parser_version="v1",
             siblings=list(proof_sibs),
             root_hash=new_root,
         )
@@ -78,14 +84,14 @@ class TestIncrementalUpdate:
     def test_delta_count_is_256(self):
         empty_siblings = EMPTY_HASHES[:256]
         _, _, deltas = RustSparseMerkleTree.incremental_update(
-            b"\x01" * 32, b"\x02" * 32, empty_siblings
+            b"\x01" * 32, b"\x02" * 32, "docling@2.3.1", "v1", empty_siblings
         )
         assert len(deltas) == 256
 
     def test_delta_root_entry(self):
         empty_siblings = EMPTY_HASHES[:256]
         new_root, _, deltas = RustSparseMerkleTree.incremental_update(
-            b"\x01" * 32, b"\x02" * 32, empty_siblings
+            b"\x01" * 32, b"\x02" * 32, "docling@2.3.1", "v1", empty_siblings
         )
         # Find the root delta (db_level=0)
         root_deltas = [(lvl, idx, h) for lvl, idx, h in deltas if lvl == 0]
@@ -95,18 +101,24 @@ class TestIncrementalUpdate:
 
     def test_bad_key_length_raises(self):
         with pytest.raises(ValueError, match="32 bytes"):
-            RustSparseMerkleTree.incremental_update(b"\x01" * 31, b"\x02" * 32, EMPTY_HASHES[:256])
+            RustSparseMerkleTree.incremental_update(
+                b"\x01" * 31, b"\x02" * 32, "docling@2.3.1", "v1", EMPTY_HASHES[:256]
+            )
 
     def test_bad_sibling_count_raises(self):
         with pytest.raises(ValueError, match="256"):
-            RustSparseMerkleTree.incremental_update(b"\x01" * 32, b"\x02" * 32, EMPTY_HASHES[:100])
+            RustSparseMerkleTree.incremental_update(
+                b"\x01" * 32, b"\x02" * 32, "docling@2.3.1", "v1", EMPTY_HASHES[:100]
+            )
 
     def test_bad_sibling_hash_length_raises(self):
         """Passing a sibling with wrong length raises ValueError."""
         bad_siblings = list(EMPTY_HASHES[:256])
         bad_siblings[0] = b"\x01" * 31  # 31 bytes instead of 32
         with pytest.raises(ValueError, match="32 bytes"):
-            RustSparseMerkleTree.incremental_update(b"\x01" * 32, b"\x02" * 32, bad_siblings)
+            RustSparseMerkleTree.incremental_update(
+                b"\x01" * 32, b"\x02" * 32, "docling@2.3.1", "v1", bad_siblings
+            )
 
     def test_ten_sequential_inserts(self):
         """Incrementally insert 10 keys, verify each root matches full tree."""
@@ -124,10 +136,12 @@ class TestIncrementalUpdate:
             sibs = siblings_source._collect_siblings(siblings_source._key_to_path(key))
 
             # Incremental
-            new_root, _, _ = RustSparseMerkleTree.incremental_update(key, val, sibs)
+            new_root, _, _ = RustSparseMerkleTree.incremental_update(
+                key, val, "docling@2.3.1", "v1", sibs
+            )
 
             # Full tree
-            tree.update(key, val)
-            siblings_source.update(key, val)
+            tree.update(key, val, "docling@2.3.1", "v1")
+            siblings_source.update(key, val, "docling@2.3.1", "v1")
 
             assert new_root == tree.get_root(), f"Mismatch at insert {i}"

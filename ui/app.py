@@ -564,15 +564,17 @@ def _fetch_json_from_base(base_url: str, path: str) -> dict[str, Any] | list[dic
 
     # --- Build URL from *trusted* base components + relative path ---
     parsed_base = urlparse(base_url)
-    parsed_rel = urlparse(path)           # splits path, params, query, fragment
-    safe_url = urlunparse((
-        parsed_base.scheme,               # trusted
-        parsed_base.netloc,               # trusted
-        parsed_rel.path,                  # relative path from caller
-        parsed_rel.params,
-        parsed_rel.query,
-        "",                               # fragment stripped (server-side irrelevant)
-    ))
+    parsed_rel = urlparse(path)  # splits path, params, query, fragment
+    safe_url = urlunparse(
+        (
+            parsed_base.scheme,  # trusted
+            parsed_base.netloc,  # trusted
+            parsed_rel.path,  # relative path from caller
+            parsed_rel.params,
+            parsed_rel.query,
+            "",  # fragment stripped (server-side irrelevant)
+        )
+    )
 
     # --- Resolve hostname and check IP blocklist ---
     hostname = parsed_base.hostname
@@ -582,9 +584,7 @@ def _fetch_json_from_base(base_url: str, path: str) -> dict[str, Any] | list[dic
         for _family, _, _, _, sockaddr in socket.getaddrinfo(hostname, None):
             ip_addr = ipaddress.ip_address(sockaddr[0])
             if _is_blocked_ip_for_ssrf(ip_addr):
-                raise ValueError(
-                    f"Blocked: {hostname} resolves to private IP {sockaddr[0]}"
-                )
+                raise ValueError(f"Blocked: {hostname} resolves to private IP {sockaddr[0]}")
     except socket.gaierror as exc:
         raise ValueError(f"Cannot resolve hostname: {hostname}") from exc
 
@@ -978,9 +978,22 @@ def _parse_proof_bundle(
     smt_proof_data = body["smt_proof"]
     public_inputs_data = body["zk_public_inputs"]
 
+    # Parser provenance fields (ADR-0003) — _validate_proof_bundle_schema()
+    # is the canonical gatekeeper, but we still validate here as
+    # defence-in-depth so callers that bypass the schema check (e.g.
+    # programmatic tests) cannot smuggle None/non-strings into ExistenceProof.
+    raw_parser_id = smt_proof_data.get("parser_id")
+    raw_cpv = smt_proof_data.get("canonical_parser_version")
+    if not isinstance(raw_parser_id, str) or not raw_parser_id:
+        raise ValueError("smt_proof.parser_id must be a non-empty string")
+    if not isinstance(raw_cpv, str) or not raw_cpv:
+        raise ValueError("smt_proof.canonical_parser_version must be a non-empty string")
+
     smt_proof = ExistenceProof(
         key=bytes.fromhex(str(smt_proof_data["key"])),
         value_hash=bytes.fromhex(str(smt_proof_data["value_hash"])),
+        parser_id=raw_parser_id,
+        canonical_parser_version=raw_cpv,
         siblings=[bytes.fromhex(str(sibling)) for sibling in smt_proof_data["siblings"]],
         root_hash=bytes.fromhex(str(smt_proof_data["root_hash"])),
     )
@@ -1182,7 +1195,9 @@ def debug_console(request: Request):
             if exc.response.status_code == 503:
                 context["banners"].append("Database unavailable (503).")
             else:
-                context["banners"].append(f"Shard {shard_id} query failed (HTTP {exc.response.status_code}).")
+                context["banners"].append(
+                    f"Shard {shard_id} query failed (HTTP {exc.response.status_code})."
+                )
         except (httpx.RequestError, TimeoutError):
             context["banners"].append(f"Shard {shard_id} query failed (connection error).")
 
@@ -1210,7 +1225,10 @@ def verification_portal_hash(content_hash: str):
     except httpx.HTTPStatusError as exc:
         return JSONResponse(
             status_code=exc.response.status_code,
-            content={"ok": False, "error": f"Hash verification failed (HTTP {exc.response.status_code})."},
+            content={
+                "ok": False,
+                "error": f"Hash verification failed (HTTP {exc.response.status_code}).",
+            },
         )
     except (httpx.RequestError, TimeoutError):
         return JSONResponse(status_code=503, content={"ok": False, "error": "API unavailable."})
@@ -1235,7 +1253,10 @@ def proof_explorer(
     except httpx.HTTPStatusError as exc:
         return JSONResponse(
             status_code=exc.response.status_code,
-            content={"ok": False, "error": f"Proof query failed (HTTP {exc.response.status_code})."},
+            content={
+                "ok": False,
+                "error": f"Proof query failed (HTTP {exc.response.status_code}).",
+            },
         )
     except (httpx.RequestError, TimeoutError):
         return JSONResponse(status_code=503, content={"ok": False, "error": "API unavailable."})
@@ -1255,7 +1276,10 @@ def state_diff_viewer(
     except httpx.HTTPStatusError as exc:
         return JSONResponse(
             status_code=exc.response.status_code,
-            content={"ok": False, "error": f"State diff query failed (HTTP {exc.response.status_code})."},
+            content={
+                "ok": False,
+                "error": f"State diff query failed (HTTP {exc.response.status_code}).",
+            },
         )
     except (httpx.RequestError, TimeoutError):
         return JSONResponse(status_code=503, content={"ok": False, "error": "API unavailable."})
@@ -1454,6 +1478,8 @@ async def create_redaction(request: Request):
         "smt_proof": {
             "key": proof.smt_proof.key.hex(),
             "value_hash": proof.smt_proof.value_hash.hex(),
+            "parser_id": proof.smt_proof.parser_id,
+            "canonical_parser_version": proof.smt_proof.canonical_parser_version,
             "siblings": [s.hex() for s in proof.smt_proof.siblings],
             "root_hash": proof.smt_proof.root_hash.hex(),
         },
@@ -1625,10 +1651,27 @@ def _validate_proof_bundle_schema(bundle: Any) -> tuple[bool, str | None]:
             return False, "smt_proof must be an object"
 
         # Required fields for ExistenceProof
-        required_smt_fields = ["root_hash", "key", "value_hash", "siblings"]
+        required_smt_fields = [
+            "root_hash",
+            "key",
+            "value_hash",
+            "siblings",
+            "parser_id",
+            "canonical_parser_version",
+        ]
         for field in required_smt_fields:
             if field not in smt_proof:
                 return False, f"smt_proof missing required field: {field}"
+
+        # Validate parser_id is a non-empty string (ADR-0003)
+        parser_id = smt_proof.get("parser_id")
+        if not isinstance(parser_id, str) or not parser_id:
+            return False, "smt_proof.parser_id must be a non-empty string"
+
+        # Validate canonical_parser_version is a non-empty string (ADR-0003)
+        cpv = smt_proof.get("canonical_parser_version")
+        if not isinstance(cpv, str) or not cpv:
+            return False, "smt_proof.canonical_parser_version must be a non-empty string"
 
         # Validate root_hash is hex string (should be 32 bytes / 64 hex chars)
         root_hash = smt_proof.get("root_hash")

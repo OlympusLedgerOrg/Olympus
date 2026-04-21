@@ -133,7 +133,7 @@ class TestCdhssmfTreeBasicOperations:
         rec_key = record_key("document", "doc1", 1)
         value_hash = hash_bytes(b"document content")
 
-        tree.update(shard_id, rec_key, value_hash)
+        tree.update(shard_id, rec_key, value_hash, "docling@2.3.1", "v1")
         retrieved = tree.get(shard_id, rec_key)
 
         assert retrieved == value_hash
@@ -156,10 +156,10 @@ class TestCdhssmfTreeBasicOperations:
         value1 = hash_bytes(b"version 1")
         value2 = hash_bytes(b"version 2")
 
-        tree.update(shard_id, rec_key, value1)
+        tree.update(shard_id, rec_key, value1, "docling@2.3.1", "v1")
         assert tree.get(shard_id, rec_key) == value1
 
-        tree.update(shard_id, rec_key, value2)
+        tree.update(shard_id, rec_key, value2, "docling@2.3.1", "v1")
         assert tree.get(shard_id, rec_key) == value2
 
     def test_multiple_records_independent(self):
@@ -172,8 +172,8 @@ class TestCdhssmfTreeBasicOperations:
         value1 = hash_bytes(b"content 1")
         value2 = hash_bytes(b"content 2")
 
-        tree.update(shard_id, rec_key1, value1)
-        tree.update(shard_id, rec_key2, value2)
+        tree.update(shard_id, rec_key1, value1, "docling@2.3.1", "v1")
+        tree.update(shard_id, rec_key2, value2, "docling@2.3.1", "v1")
 
         assert tree.get(shard_id, rec_key1) == value1
         assert tree.get(shard_id, rec_key2) == value2
@@ -199,7 +199,9 @@ class TestCdhssmfTreeRoot:
 
         root_before = tree.get_root()
 
-        tree.update("shard", record_key("doc", "1", 1), hash_bytes(b"content"))
+        tree.update(
+            "shard", record_key("doc", "1", 1), hash_bytes(b"content"), "docling@2.3.1", "v1"
+        )
 
         root_after = tree.get_root()
 
@@ -210,9 +212,15 @@ class TestCdhssmfTreeRoot:
 
         def build_tree():
             tree = CdhssmfTree()
-            tree.update("shard1", record_key("doc", "1", 1), hash_bytes(b"a"))
-            tree.update("shard1", record_key("doc", "2", 1), hash_bytes(b"b"))
-            tree.update("shard2", record_key("doc", "1", 1), hash_bytes(b"c"))
+            tree.update(
+                "shard1", record_key("doc", "1", 1), hash_bytes(b"a"), "docling@2.3.1", "v1"
+            )
+            tree.update(
+                "shard1", record_key("doc", "2", 1), hash_bytes(b"b"), "docling@2.3.1", "v1"
+            )
+            tree.update(
+                "shard2", record_key("doc", "1", 1), hash_bytes(b"c"), "docling@2.3.1", "v1"
+            )
             return tree.get_root()
 
         root1 = build_tree()
@@ -233,11 +241,11 @@ class TestCdhssmfTreeRoot:
         val2 = hash_bytes(b"b")
 
         # Different insert order
-        tree1.update("shard", key1, val1)
-        tree1.update("shard", key2, val2)
+        tree1.update("shard", key1, val1, "docling@2.3.1", "v1")
+        tree1.update("shard", key2, val2, "docling@2.3.1", "v1")
 
-        tree2.update("shard", key2, val2)
-        tree2.update("shard", key1, val1)
+        tree2.update("shard", key2, val2, "docling@2.3.1", "v1")
+        tree2.update("shard", key1, val1, "docling@2.3.1", "v1")
 
         assert tree1.get_root() == tree2.get_root()
 
@@ -252,7 +260,7 @@ class TestCdhssmfTreeProofs:
         rec_key = record_key("document", "doc1", 1)
         value = hash_bytes(b"content")
 
-        tree.update(shard_id, rec_key, value)
+        tree.update(shard_id, rec_key, value, "docling@2.3.1", "v1")
 
         proof = tree.prove(shard_id, rec_key)
 
@@ -274,7 +282,7 @@ class TestCdhssmfTreeProofs:
         rec_key = record_key("document", "doc1", 1)
         value = hash_bytes(b"content")
 
-        tree.update(shard_id, rec_key, value)
+        tree.update(shard_id, rec_key, value, "docling@2.3.1", "v1")
 
         proof = tree.prove_existence(shard_id, rec_key)
 
@@ -305,7 +313,7 @@ class TestCdhssmfTreeProofs:
         rec_key = record_key("document", "doc1", 1)
         value = hash_bytes(b"content")
 
-        tree.update(shard_id, rec_key, value)
+        tree.update(shard_id, rec_key, value, "docling@2.3.1", "v1")
 
         with pytest.raises(ValueError):
             tree.prove_nonexistence(shard_id, rec_key)
@@ -321,7 +329,7 @@ class TestCdhssmfTreeProofVerification:
         rec_key = record_key("document", "doc1", 1)
         value = hash_bytes(b"content")
 
-        tree.update(shard_id, rec_key, value)
+        tree.update(shard_id, rec_key, value, "docling@2.3.1", "v1")
         root = tree.get_root()
         proof = tree.prove_existence(shard_id, rec_key)
 
@@ -336,13 +344,15 @@ class TestCdhssmfTreeProofVerification:
         rec_key = record_key("document", "doc1", 1)
         value = hash_bytes(b"content")
 
-        tree.update(shard_id, rec_key, value)
+        tree.update(shard_id, rec_key, value, "docling@2.3.1", "v1")
         proof = tree.prove_existence(shard_id, rec_key)
 
         # Tamper with the root_hash in the proof
         tampered_proof = ExistenceProof(
             key=proof.key,
             value_hash=proof.value_hash,
+            parser_id="docling@2.3.1",
+            canonical_parser_version="v1",
             siblings=proof.siblings,
             root_hash=hash_bytes(b"wrong root"),
         )
@@ -353,7 +363,9 @@ class TestCdhssmfTreeProofVerification:
         """verify_nonexistence_proof() passes with correct root in proof."""
         tree = CdhssmfTree()
         # Add some data to the tree
-        tree.update("shard", record_key("doc", "existing", 1), hash_bytes(b"x"))
+        tree.update(
+            "shard", record_key("doc", "existing", 1), hash_bytes(b"x"), "docling@2.3.1", "v1"
+        )
 
         root = tree.get_root()
 
@@ -367,7 +379,9 @@ class TestCdhssmfTreeProofVerification:
     def test_verify_nonexistence_proof_fails_with_tampered_proof(self):
         """verify_nonexistence_proof() fails with tampered proof."""
         tree = CdhssmfTree()
-        tree.update("shard", record_key("doc", "existing", 1), hash_bytes(b"x"))
+        tree.update(
+            "shard", record_key("doc", "existing", 1), hash_bytes(b"x"), "docling@2.3.1", "v1"
+        )
 
         proof = tree.prove_nonexistence("shard", record_key("doc", "missing", 1))
 
@@ -392,8 +406,8 @@ class TestCdhssmfTreeDiff:
         key = record_key("doc", "1", 1)
         value = hash_bytes(b"content")
 
-        tree1.update("shard", key, value)
-        tree2.update("shard", key, value)
+        tree1.update("shard", key, value, "docling@2.3.1", "v1")
+        tree2.update("shard", key, value, "docling@2.3.1", "v1")
 
         diff = tree1.diff(tree2)
 
@@ -411,11 +425,11 @@ class TestCdhssmfTreeDiff:
         value = hash_bytes(b"content")
 
         # Both have key1
-        tree1.update("shard", key1, value)
-        tree2.update("shard", key1, value)
+        tree1.update("shard", key1, value, "docling@2.3.1", "v1")
+        tree2.update("shard", key1, value, "docling@2.3.1", "v1")
 
         # Only tree1 has key2
-        tree1.update("shard", key2, value)
+        tree1.update("shard", key2, value, "docling@2.3.1", "v1")
 
         diff = tree1.diff(tree2)
 
@@ -443,8 +457,8 @@ class TestCdhssmfShardIsolation:
         rec_key = record_key("document", "shared_doc_id", 1)
         value = hash_bytes(b"content")
 
-        tree.update("shard_a", rec_key, value)
-        tree.update("shard_b", rec_key, value)
+        tree.update("shard_a", rec_key, value, "docling@2.3.1", "v1")
+        tree.update("shard_b", rec_key, value, "docling@2.3.1", "v1")
 
         # Both should be stored independently (not overwrite each other)
         assert tree.get("shard_a", rec_key) == value
@@ -457,8 +471,8 @@ class TestCdhssmfShardIsolation:
         value_a = hash_bytes(b"content A")
         value_b = hash_bytes(b"content B")
 
-        tree.update("shard_a", rec_key, value_a)
-        tree.update("shard_b", rec_key, value_b)
+        tree.update("shard_a", rec_key, value_a, "docling@2.3.1", "v1")
+        tree.update("shard_b", rec_key, value_b, "docling@2.3.1", "v1")
 
         root = tree.get_root()
 
@@ -483,8 +497,8 @@ class TestCdhssmfShardIsolation:
         value_a = hash_bytes(b"content A")
         value_b = hash_bytes(b"content B")
 
-        tree.update("shard_a", rec_key, value_a)
-        tree.update("shard_b", rec_key, value_b)
+        tree.update("shard_a", rec_key, value_a, "docling@2.3.1", "v1")
+        tree.update("shard_b", rec_key, value_b, "docling@2.3.1", "v1")
 
         proof_a = tree.prove_existence("shard_a", rec_key)
 
@@ -502,7 +516,7 @@ class TestCdhssmfShardIsolation:
         value = hash_bytes(b"content")
 
         # Only exists in shard_a
-        tree.update("shard_a", rec_key, value)
+        tree.update("shard_a", rec_key, value, "docling@2.3.1", "v1")
 
         root = tree.get_root()
 
@@ -549,7 +563,9 @@ class TestCdhssmfTreeRegressionGuards:
     def test_proof_structure_stability(self):
         """Proof structure should remain stable."""
         tree = CdhssmfTree()
-        tree.update("shard", record_key("doc", "1", 1), hash_bytes(b"content"))
+        tree.update(
+            "shard", record_key("doc", "1", 1), hash_bytes(b"content"), "docling@2.3.1", "v1"
+        )
 
         proof = tree.prove_existence("shard", record_key("doc", "1", 1))
 
