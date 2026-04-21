@@ -6,6 +6,34 @@ All notable changes to the Olympus protocol are documented in this file.
 
 ### Breaking Changes
 
+- **ADR-0003: Parser identity is now bound into the SMT leaf hash domain
+  separator.** The `OLY:LEAF:V1` leaf hash now appends two
+  length-prefixed fields (`parser_id`, `canonical_parser_version`) after
+  `value_hash`:
+
+      BLAKE3(
+          "OLY:LEAF:V1" || SEP ||
+          key || SEP ||
+          value_hash || SEP ||
+          len(parser_id)[4B BE]               || parser_id || SEP ||
+          len(canonical_parser_version)[4B BE] || canonical_parser_version
+      )
+
+  Two records produced by different parser versions now hash to distinct
+  leaves. The static `OLY:LEAF:V1` prefix is unchanged; no `leaf_hash_v2`
+  function is introduced. Because no ledger exists yet, there is no
+  migration: all `leaf_hash`, `SparseMerkleTree.update`,
+  `incremental_update`, `prove_existence`, `ExistenceProof`, the
+  `cdhs-smf-rust` crate, the `cdhs_smf.proto` `LeafEntry`/`UpdateRequest`
+  /`VerifyInclusionRequest`/`ProveInclusionResponse` messages, the
+  `smt_leaves` Postgres schema, the proof-bundle JSON, and every
+  language verifier (Python/Rust/Go/JS) require the two new fields.
+  `parser_id` is `"<name>@<version>"` (fallback `"fallback@1.0.0"`);
+  `canonical_parser_version` is set by operators via
+  `INGEST_PARSER_CANONICAL_VERSION` (default `"v1"`). Empty strings are
+  rejected. Golden vectors and `verifiers/test_vectors/vectors.json`
+  ssmf blocks have been regenerated.
+
 - **`POST /datasets/commit` and `POST /datasets/{id}/lineage` now return
   immediately with `timestamp_status="pending"` (H-5).** The RFC 3161
   timestamp call has been moved out of the request handler into a

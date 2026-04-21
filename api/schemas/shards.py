@@ -37,6 +37,8 @@ class ExistenceProofResponse(BaseModel):
     version: int
     key: str  # Hex-encoded 32-byte key
     value_hash: str  # Hex-encoded 32-byte value hash
+    parser_id: str  # ADR-0003: parser identity bound into leaf hash
+    canonical_parser_version: str  # ADR-0003: operator-set parser version
     siblings: list[str]  # 256 hex-encoded 32-byte sibling hashes
     root_hash: str  # Hex-encoded 32-byte root
     shard_header: ShardHeaderResponse  # Latest header for this shard
