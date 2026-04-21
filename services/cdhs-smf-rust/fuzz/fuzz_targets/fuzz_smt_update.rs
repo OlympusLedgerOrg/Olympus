@@ -28,6 +28,11 @@ struct SmtUpdateInput {
 
 fuzz_target!(|input: SmtUpdateInput| {
     let tree = SparseMerkleTree::new();
+    // The SMT's async `update()` requires a tokio runtime. We build a
+    // single-thread runtime per fuzz iteration; if that ever fails
+    // (e.g. resource exhaustion under libfuzzer) we skip this iteration
+    // rather than panic — the target's invariant is "no panics", not
+    // "every input produces a tree".
     let runtime = match tokio::runtime::Builder::new_current_thread().build() {
         Ok(rt) => rt,
         Err(_) => return,
