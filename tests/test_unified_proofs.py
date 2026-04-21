@@ -99,7 +99,7 @@ def test_prove_multiple_keys_mixed_existence():
     # Add some keys
     existing_keys = [record_key("document", f"doc{i}", 1) for i in range(3)]
     for key in existing_keys:
-        tree.update(key, hash_bytes(f"value for {key.hex()}".encode()))
+        tree.update(key, hash_bytes(f"value for {key.hex()}".encode()), "docling@2.3.1", "v1")
 
     # Test existing keys
     for key in existing_keys:

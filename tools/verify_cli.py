@@ -169,6 +169,8 @@ def verify_smt_proof(args: argparse.Namespace) -> int:
             proof = ExistenceProof(
                 key=bytes.fromhex(proof_data["key"]),
                 value_hash=bytes.fromhex(proof_data["value_hash"]),
+                parser_id=str(proof_data["parser_id"]),
+                canonical_parser_version=str(proof_data["canonical_parser_version"]),
                 siblings=[bytes.fromhex(s) for s in proof_data["siblings"]],
                 root_hash=bytes.fromhex(proof_data["root_hash"]),
             )

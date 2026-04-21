@@ -981,6 +981,8 @@ def _parse_proof_bundle(
     smt_proof = ExistenceProof(
         key=bytes.fromhex(str(smt_proof_data["key"])),
         value_hash=bytes.fromhex(str(smt_proof_data["value_hash"])),
+        parser_id=str(smt_proof_data["parser_id"]),
+        canonical_parser_version=str(smt_proof_data["canonical_parser_version"]),
         siblings=[bytes.fromhex(str(sibling)) for sibling in smt_proof_data["siblings"]],
         root_hash=bytes.fromhex(str(smt_proof_data["root_hash"])),
     )
@@ -1454,6 +1456,8 @@ async def create_redaction(request: Request):
         "smt_proof": {
             "key": proof.smt_proof.key.hex(),
             "value_hash": proof.smt_proof.value_hash.hex(),
+            "parser_id": proof.smt_proof.parser_id,
+            "canonical_parser_version": proof.smt_proof.canonical_parser_version,
             "siblings": [s.hex() for s in proof.smt_proof.siblings],
             "root_hash": proof.smt_proof.root_hash.hex(),
         },

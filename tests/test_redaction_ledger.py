@@ -207,6 +207,8 @@ def test_verify_smt_anchor_fails_if_smt_value_tampered():
     tampered_proof = ExistenceProof(
         key=wrapped.smt_proof.key,
         value_hash=poseidon_root_to_bytes("12345"),  # different from original_root
+        parser_id="docling@2.3.1",
+        canonical_parser_version="v1",
         siblings=wrapped.smt_proof.siblings,
         root_hash=wrapped.smt_proof.root_hash,
     )

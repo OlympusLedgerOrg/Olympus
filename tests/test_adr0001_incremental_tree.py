@@ -224,8 +224,12 @@ class TestProofEndpointsUseNodePath(unittest.TestCase):
 
         mock_conn = MagicMock()
         mock_cur = MagicMock()
-        # smt_leaves SELECT value_hash
-        mock_cur.fetchone.return_value = {"value_hash": vh}
+        # smt_leaves SELECT value_hash, parser_id, canonical_parser_version
+        mock_cur.fetchone.return_value = {
+            "value_hash": vh,
+            "parser_id": "docling@2.3.1",
+            "canonical_parser_version": "v1",
+        }
         mock_conn.cursor.return_value.__enter__ = MagicMock(return_value=mock_cur)
         mock_conn.cursor.return_value.__exit__ = MagicMock(return_value=False)
         mock_conn.__enter__ = MagicMock(return_value=mock_conn)

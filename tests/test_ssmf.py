@@ -158,6 +158,8 @@ def test_ssmf_tampered_proof_detected():
     tampered_proof = ExistenceProof(
         key=proof.key,
         value_hash=hash_bytes(b"different value"),
+        parser_id="docling@2.3.1",
+        canonical_parser_version="v1",
         siblings=proof.siblings,
         root_hash=proof.root_hash,
     )
@@ -182,6 +184,8 @@ def test_ssmf_tampered_siblings_detected():
     tampered_proof = ExistenceProof(
         key=proof.key,
         value_hash=proof.value_hash,
+        parser_id="docling@2.3.1",
+        canonical_parser_version="v1",
         siblings=tampered_siblings,
         root_hash=proof.root_hash,
     )
@@ -203,7 +207,12 @@ def test_ssmf_wrong_key_detected():
 
     # Use wrong key
     wrong_proof = ExistenceProof(
-        key=key2, value_hash=proof.value_hash, siblings=proof.siblings, root_hash=proof.root_hash
+        key=key2,
+        value_hash=proof.value_hash,
+        parser_id="docling@2.3.1",
+        canonical_parser_version="v1",
+        siblings=proof.siblings,
+        root_hash=proof.root_hash,
     )
 
     assert verify_proof(wrong_proof) is False
@@ -272,13 +281,13 @@ def test_ssmf_root_independent_of_insert_order():
 
     tree_in_order = SparseMerkleTree()
     for key, value in zip(keys, values, strict=False):
-        tree_in_order.update(key, value)
+        tree_in_order.update(key, value, "docling@2.3.1", "v1")
 
     tree_reordered = SparseMerkleTree()
     # Apply a different network arrival order
     reorder = [2, 0, 3, 1]
     for idx in reorder:
-        tree_reordered.update(keys[idx], values[idx])
+        tree_reordered.update(keys[idx], values[idx], "docling@2.3.1", "v1")
 
     assert tree_in_order.get_root() == tree_reordered.get_root()
 
@@ -292,11 +301,11 @@ def test_ssmf_diff_reports_added_changed_and_removed_keys():
     key_changed = record_key("document", "changed", 1)
     key_added = record_key("document", "added", 1)
 
-    before.update(key_removed, hash_bytes(b"old removed value"))
-    before.update(key_changed, hash_bytes(b"before change"))
+    before.update(key_removed, hash_bytes(b"old removed value"), "docling@2.3.1", "v1")
+    before.update(key_changed, hash_bytes(b"before change"), "docling@2.3.1", "v1")
 
-    after.update(key_changed, hash_bytes(b"after change"))
-    after.update(key_added, hash_bytes(b"new value"))
+    after.update(key_changed, hash_bytes(b"after change"), "docling@2.3.1", "v1")
+    after.update(key_added, hash_bytes(b"new value"), "docling@2.3.1", "v1")
 
     diff = diff_sparse_merkle_trees(before, after)
 
@@ -314,8 +323,8 @@ def test_ssmf_diff_is_empty_for_identical_trees():
 
     key = record_key("document", "same", 1)
     value_hash = hash_bytes(b"same value")
-    left.update(key, value_hash)
-    right.update(key, value_hash)
+    left.update(key, value_hash, "docling@2.3.1", "v1")
+    right.update(key, value_hash, "docling@2.3.1", "v1")
 
     diff = diff_sparse_merkle_trees(left, right)
 

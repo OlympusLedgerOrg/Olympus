@@ -542,6 +542,8 @@ class TestArtifactCommit:
                             int(kwargs["version"]),
                         ),
                         value_hash=bytes(kwargs["value_hash"]),
+                        parser_id="docling@2.3.1",
+                        canonical_parser_version="v1",
                         siblings=[b"\x00" * 32 for _ in range(256)],
                         root_hash=b"\x11" * 32,
                     ),

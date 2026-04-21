@@ -459,10 +459,12 @@ class RedactionProtocol:
         tree = MerkleTree(leaf_hashes)
         blake3_root = tree.get_root().hex()
 
-        # Anchor the Poseidon root in the SMT under its own key namespace
+        # Anchor the Poseidon root in the SMT under its own key namespace.
+        # ADR-0003: the Poseidon root is not produced by a content parser, so
+        # we use the fallback parser identity for this SMT leaf's domain binding.
         key = poseidon_root_record_key(document_id, version)
         poseidon_bytes = poseidon_root_to_bytes(poseidon_root)
-        smt.update(key, poseidon_bytes)
+        smt.update(key, poseidon_bytes, "fallback@1.0.0", "v1")
 
         normalized_poseidon_root = str(int.from_bytes(poseidon_bytes, byteorder="big"))
         commitment = DualHashCommitment(

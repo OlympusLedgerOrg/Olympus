@@ -41,6 +41,8 @@ class MockExistenceProof:
 
     key: bytes
     value_hash: bytes
+    parser_id: str
+    canonical_parser_version: str
     siblings: list[bytes]
     root_hash: bytes
 
@@ -304,6 +306,8 @@ async def test_get_proof_existence(client):
     proof = MockExistenceProof(
         key=b"\x01" * 32,
         value_hash=b"\x02" * 32,
+        parser_id="docling@2.3.1",
+        canonical_parser_version="v1",
         siblings=[b"\x03" * 32] * 256,
         root_hash=b"\x04" * 32,
     )
@@ -428,6 +432,8 @@ async def test_get_proof_existence_with_shard_header_fields(client):
     proof = MockExistenceProof(
         key=b"\x01" * 32,
         value_hash=b"\x02" * 32,
+        parser_id="docling@2.3.1",
+        canonical_parser_version="v1",
         siblings=[b"\x03" * 32] * 256,
         root_hash=b"\x04" * 32,
     )
@@ -474,6 +480,8 @@ async def test_get_proof_special_characters_in_ids(client):
     proof = MockExistenceProof(
         key=b"\x01" * 32,
         value_hash=b"\x02" * 32,
+        parser_id="docling@2.3.1",
+        canonical_parser_version="v1",
         siblings=[b"\x03" * 32] * 256,
         root_hash=b"\x04" * 32,
     )

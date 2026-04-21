@@ -70,6 +70,8 @@ class TestIncrementalUpdate:
         proof = ExistenceProof(
             key=key,
             value_hash=val,
+            parser_id="docling@2.3.1",
+            canonical_parser_version="v1",
             siblings=list(proof_sibs),
             root_hash=new_root,
         )

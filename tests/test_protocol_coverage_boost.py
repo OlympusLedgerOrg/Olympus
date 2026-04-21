@@ -147,9 +147,9 @@ class TestDiffWithKeyRange:
         high_key = b"\x90" + b"\x00" * 31
         val = b"\x01" * 32
 
-        after.update(low_key, val)
-        after.update(mid_key, val)
-        after.update(high_key, val)
+        after.update(low_key, val, "docling@2.3.1", "v1")
+        after.update(mid_key, val, "docling@2.3.1", "v1")
+        after.update(high_key, val, "docling@2.3.1", "v1")
 
         # Only mid_key should survive the range filter
         result = diff_sparse_merkle_trees(
@@ -171,8 +171,8 @@ class TestDiffWithKeyRange:
         key_out = b"\x10" + b"\x00" * 31
         val = b"\x01" * 32
 
-        before.update(key_in, val)
-        before.update(key_out, val)
+        before.update(key_in, val, "docling@2.3.1", "v1")
+        before.update(key_out, val, "docling@2.3.1", "v1")
 
         result = diff_sparse_merkle_trees(
             before,

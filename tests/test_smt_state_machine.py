@@ -46,7 +46,7 @@ class SMTStateMachine(RuleBasedStateMachine):
     @rule(key=_keys, value=_values)
     def insert_or_update(self, key: bytes, value: bytes) -> None:
         """Insert or overwrite a key-value pair and mirror it in the shadow."""
-        self.tree.update(key, value)
+        self.tree.update(key, value, "docling@2.3.1", "v1")
         self.shadow[key] = value
 
     # ── Rule 2: prove existence of an inserted key ────────────────────────

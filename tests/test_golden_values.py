@@ -251,7 +251,7 @@ class TestHashGoldenValues:
         key = record_key("document", "doc-001", 1)
         value = hash_bytes(b"document content")
         leaf = leaf_hash(key, value, "docling@2.3.1", "v1")
-        assert leaf.hex() == "83dd10dc7fbfed1e0ac62d828c34eb02fd184211a41315b63c4c52ac45612688"
+        assert leaf.hex() == "1d9535ffa5c63fa1a6784cc02ca844bf4bece14f5590414afb281bf4d53e66fc"
         assert len(leaf) == 32
         # Verify determinism
         assert leaf == leaf_hash(key, value, "docling@2.3.1", "v1")

@@ -38,12 +38,12 @@ class TestSmtInterfaceContract:
         v1, v2 = b"\xaa" * 32, b"\xbb" * 32
 
         t1 = SparseMerkleTree()
-        t1.update(k1, v1)
-        t1.update(k2, v2)
+        t1.update(k1, v1, "docling@2.3.1", "v1")
+        t1.update(k2, v2, "docling@2.3.1", "v1")
 
         t2 = SparseMerkleTree()
-        t2.update(k2, v2)
-        t2.update(k1, v1)
+        t2.update(k2, v2, "docling@2.3.1", "v1")
+        t2.update(k1, v1, "docling@2.3.1", "v1")
 
         assert t1.get_root() == t2.get_root()
 

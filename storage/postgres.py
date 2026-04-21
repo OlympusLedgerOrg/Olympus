@@ -1611,7 +1611,8 @@ class StorageLayer:
             # Check if leaf exists
             cur.execute(
                 """
-                    SELECT value_hash FROM smt_leaves
+                    SELECT value_hash, parser_id, canonical_parser_version
+                    FROM smt_leaves
                     WHERE key = %s AND version = %s
                     """,
                 (key, version),
@@ -1629,6 +1630,8 @@ class StorageLayer:
             return ExistenceProof(
                 key=key,
                 value_hash=value_hash_bytes,
+                parser_id=row["parser_id"],
+                canonical_parser_version=row["canonical_parser_version"],
                 siblings=siblings,
                 root_hash=root_hash,
             )

@@ -124,7 +124,7 @@ def test_proof_existence_endpoint_returns_existence_proof_for_existing_key(clien
 
     # Add the key to the shard
     shard = state._shard("shard2")
-    shard.tree.update(key, value_hash)
+    shard.tree.update(key, value_hash, "docling@2.3.1", "v1")
 
     # Now query for the key
     response = client.get(f"/shards/shard2/proof/existence?key={key.hex()}")
@@ -159,7 +159,7 @@ def test_proof_nonexistence_endpoint_returns_existence_proof_for_existing_key(cl
     value_hash = hash_bytes(b"another value")
 
     shard = state._shard("shard3")
-    shard.tree.update(key, value_hash)
+    shard.tree.update(key, value_hash, "docling@2.3.1", "v1")
 
     # Query via /proof/nonexistence endpoint
     response = client.get(f"/shards/shard3/proof/nonexistence?key={key.hex()}")
@@ -221,12 +221,12 @@ def test_roots_endpoint(client):
     key1 = record_key("document", "doc1", 1)
     value_hash1 = hash_bytes(b"value1")
     shard1 = state._shard("shard_a")
-    shard1.tree.update(key1, value_hash1)
+    shard1.tree.update(key1, value_hash1, "docling@2.3.1", "v1")
 
     key2 = record_key("document", "doc2", 1)
     value_hash2 = hash_bytes(b"value2")
     shard2 = state._shard("shard_b")
-    shard2.tree.update(key2, value_hash2)
+    shard2.tree.update(key2, value_hash2, "docling@2.3.1", "v1")
 
     # Query the /roots endpoint
     response = client.get("/roots")
@@ -249,12 +249,12 @@ def test_list_shards_endpoint(client):
     key1 = record_key("document", "doc_x", 1)
     value_hash1 = hash_bytes(b"value_x")
     shard1 = state._shard("shard_x")
-    shard1.tree.update(key1, value_hash1)
+    shard1.tree.update(key1, value_hash1, "docling@2.3.1", "v1")
 
     key2 = record_key("document", "doc_y", 1)
     value_hash2 = hash_bytes(b"value_y")
     shard2 = state._shard("shard_y")
-    shard2.tree.update(key2, value_hash2)
+    shard2.tree.update(key2, value_hash2, "docling@2.3.1", "v1")
 
     # Query the /shards endpoint
     response = client.get("/shards")
@@ -282,7 +282,7 @@ def test_shard_header_latest_returns_header_for_existing_shard(client):
     key = record_key("document", "doc_header", 1)
     value_hash = hash_bytes(b"header_value")
     shard = state._shard("shard_with_header")
-    shard.tree.update(key, value_hash)
+    shard.tree.update(key, value_hash, "docling@2.3.1", "v1")
 
     # Query the header
     response = client.get("/shards/shard_with_header/header/latest")
