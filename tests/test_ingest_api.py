@@ -837,6 +837,89 @@ def test_smt_proof_conversion_verifies_round_trip():
     assert valid is True
 
 
+# ---------------------------------------------------------------------------
+# ADR-0003: parser provenance validation in proof bundles / helpers
+# ---------------------------------------------------------------------------
+
+
+def _adr0003_merkle_dict() -> dict:
+    """Build a valid ADR-0003 merkle_proof_data dict for mutation-based tests."""
+    tree = SparseMerkleTree()
+    key = record_key("document", "doc-adr0003", 1)
+    value_hash = hash_bytes(b"adr-0003-payload")
+    tree.update(key, value_hash, "docling@2.3.1", "v1")
+    proof = tree.prove_existence(key)
+    merkle_dict = ingest_api._smt_proof_to_merkle_proof_dict(proof, value_hash)
+    return merkle_dict | {"_value_hash_hex": value_hash.hex()}
+
+
+@pytest.mark.parametrize(
+    "mutate, field",
+    [
+        (lambda d: d.pop("parser_id"), "parser_id"),
+        (lambda d: d.__setitem__("parser_id", ""), "parser_id"),
+        (lambda d: d.__setitem__("parser_id", 123), "parser_id"),
+        (lambda d: d.pop("canonical_parser_version"), "canonical_parser_version"),
+        (lambda d: d.__setitem__("canonical_parser_version", ""), "canonical_parser_version"),
+        (lambda d: d.__setitem__("canonical_parser_version", 7), "canonical_parser_version"),
+    ],
+)
+def test_evaluate_proof_bundle_rejects_invalid_parser_provenance(mutate, field):
+    """_evaluate_proof_bundle must 400 when parser_id or CPV is missing/invalid."""
+    from fastapi import HTTPException
+
+    merkle_dict = _adr0003_merkle_dict()
+    value_hash_hex = merkle_dict.pop("_value_hash_hex")
+    root_hex = merkle_dict["root_hash"]
+    mutate(merkle_dict)
+
+    with pytest.raises(HTTPException) as excinfo:
+        ingest_api._evaluate_proof_bundle(value_hash_hex, root_hex, merkle_dict)
+    assert excinfo.value.status_code == 400
+    assert field in str(excinfo.value.detail)
+
+
+def test_smt_proof_to_merkle_proof_dict_requires_parser_fields():
+    """_smt_proof_to_merkle_proof_dict must reject proofs with empty parser fields."""
+    value_hash = hash_bytes(b"adr-0003-value")
+    key = record_key("document", "doc-empty-parser", 1)
+    root = b"\x00" * 32
+
+    proof_missing_pid = ExistenceProof(
+        key=key,
+        value_hash=value_hash,
+        siblings=[b"\x00" * 32] * 256,
+        root_hash=root,
+        parser_id="",
+        canonical_parser_version="v1",
+    )
+    with pytest.raises(ValueError, match="parser_id"):
+        ingest_api._smt_proof_to_merkle_proof_dict(proof_missing_pid, value_hash)
+
+    proof_missing_cpv = ExistenceProof(
+        key=key,
+        value_hash=value_hash,
+        siblings=[b"\x00" * 32] * 256,
+        root_hash=root,
+        parser_id="docling@2.3.1",
+        canonical_parser_version="",
+    )
+    with pytest.raises(ValueError, match="canonical_parser_version"):
+        ingest_api._smt_proof_to_merkle_proof_dict(proof_missing_cpv, value_hash)
+
+
+def test_operator_canonical_parser_version_env_override(monkeypatch):
+    """INGEST_PARSER_CANONICAL_VERSION controls the operator default."""
+    monkeypatch.delenv("INGEST_PARSER_CANONICAL_VERSION", raising=False)
+    assert ingest_api._operator_canonical_parser_version() == "v1"
+
+    monkeypatch.setenv("INGEST_PARSER_CANONICAL_VERSION", "   ")
+    assert ingest_api._operator_canonical_parser_version() == "v1"
+
+    monkeypatch.setenv("INGEST_PARSER_CANONICAL_VERSION", "  v7.2  ")
+    assert ingest_api._operator_canonical_parser_version() == "v7.2"
+
+
 def test_load_api_keys_from_env_requires_hashed_keys(monkeypatch):
     """Raw API keys in the environment must be rejected.
 
