@@ -15,9 +15,9 @@ deterministic proofs without raising exceptions for missing keys.
 - Use `prove_nonexistence(key)` only when you know the key doesn't exist (raises ValueError if it does)
 """
 
+from collections.abc import Mapping
 from dataclasses import dataclass
 from types import MappingProxyType
-from typing import Mapping
 
 import blake3
 
