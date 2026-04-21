@@ -181,7 +181,9 @@ class TestLeafHashParity:
     def test_basic(self) -> None:
         key = bytes(range(32))
         value = bytes(range(32, 64))
-        assert _rust_crypto.leaf_hash(key, value, "docling@2.3.1", "v1") == _py_leaf_hash(key, value)
+        assert _rust_crypto.leaf_hash(key, value, "docling@2.3.1", "v1") == _py_leaf_hash(
+            key, value, "docling@2.3.1", "v1"
+        )
 
     def test_output_is_32_bytes(self) -> None:
         result = _rust_crypto.leaf_hash(bytes(32), bytes(32), "docling@2.3.1", "v1")
