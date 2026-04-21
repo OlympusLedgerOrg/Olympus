@@ -16,6 +16,8 @@ deterministic proofs without raising exceptions for missing keys.
 """
 
 from dataclasses import dataclass
+from types import MappingProxyType
+from typing import Mapping
 
 import blake3
 
@@ -144,23 +146,26 @@ class SparseMerkleTree:
         self._leaf_records: dict[bytes, tuple[bytes, str, str]] = {}
         # Cached snapshot of ``leaves`` (key -> value_hash) to avoid rebuilding
         # on every read. Invalidated by ``update`` when ``_leaf_records``
-        # changes; see ADR-0003 review feedback.
-        self._leaves_cache: dict[bytes, bytes] | None = None
+        # changes; see ADR-0003 review feedback. Wrapped in a read-only
+        # MappingProxyType before exposure so callers cannot mutate internal
+        # state.
+        self._leaves_cache: MappingProxyType[bytes, bytes] | None = None
 
     @property
-    def leaves(self) -> dict[bytes, bytes]:
-        """Snapshot mapping of key → value_hash.
+    def leaves(self) -> Mapping[bytes, bytes]:
+        """Read-only snapshot mapping of key → value_hash.
 
         Returned for backward compatibility; per-leaf parser metadata is held
         separately in ``_leaf_records`` and surfaced via proofs.
 
         The snapshot is cached and returned directly on subsequent reads
-        until ``update`` mutates ``_leaf_records``. Callers that need a
-        stable view across writes must copy the returned mapping.
+        until ``update`` mutates ``_leaf_records``. The returned mapping is
+        a read-only view (``MappingProxyType``); callers that need a mutable
+        or stable-across-writes copy must call ``dict(tree.leaves)``.
         """
         cache = self._leaves_cache
         if cache is None:
-            cache = {k: v for k, (v, _, _) in self._leaf_records.items()}
+            cache = MappingProxyType({k: v for k, (v, _, _) in self._leaf_records.items()})
             self._leaves_cache = cache
         return cache
 
