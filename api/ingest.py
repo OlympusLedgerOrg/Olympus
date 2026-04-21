@@ -131,9 +131,9 @@ _POSEIDON_STORAGE_COMPUTE_FLAG = b"\x00" * 32
 #
 # Per the ADR:
 #   - parser_id format is "<name>@<version>" (e.g. "docling@2.3.1").
-#     Fallback parser uses "fallback@1.0.0" (set by the storage layer).
 #   - canonical_parser_version is opaque, set by operator via
 #     INGEST_PARSER_CANONICAL_VERSION. Default "v1".
+_FALLBACK_PARSER_ID = "fallback@1.0.0"
 
 
 def _operator_canonical_parser_version() -> str:
@@ -1139,7 +1139,7 @@ async def ingest_batch(
                         "proof_version": PROOF_VERSION,
                         "tree_version": MERKLE_VERSION,
                         "smt_key": seq_global_key,
-                        "parser_id": seq_resp.get("parser_id", "fallback@1.0.0"),
+                        "parser_id": seq_resp.get("parser_id", _FALLBACK_PARSER_ID),
                         "canonical_parser_version": seq_resp.get(
                             "canonical_parser_version",
                             _operator_canonical_parser_version(),
