@@ -1629,10 +1629,20 @@ def _validate_proof_bundle_schema(bundle: Any) -> tuple[bool, str | None]:
             return False, "smt_proof must be an object"
 
         # Required fields for ExistenceProof
-        required_smt_fields = ["root_hash", "key", "value_hash", "siblings"]
+        required_smt_fields = ["root_hash", "key", "value_hash", "siblings", "parser_id", "canonical_parser_version"]
         for field in required_smt_fields:
             if field not in smt_proof:
                 return False, f"smt_proof missing required field: {field}"
+
+        # Validate parser_id is a non-empty string (ADR-0003)
+        parser_id = smt_proof.get("parser_id")
+        if not isinstance(parser_id, str) or not parser_id:
+            return False, "smt_proof.parser_id must be a non-empty string"
+
+        # Validate canonical_parser_version is a non-empty string (ADR-0003)
+        cpv = smt_proof.get("canonical_parser_version")
+        if not isinstance(cpv, str) or not cpv:
+            return False, "smt_proof.canonical_parser_version must be a non-empty string"
 
         # Validate root_hash is hex string (should be 32 bytes / 64 hex chars)
         root_hash = smt_proof.get("root_hash")

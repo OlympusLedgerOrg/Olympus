@@ -130,6 +130,6 @@ class TestIncrementalUpdate:
 
             # Full tree
             tree.update(key, val, "docling@2.3.1", "v1")
-            siblings_source.update(key, val)
+            siblings_source.update(key, val, "docling@2.3.1", "v1")
 
             assert new_root == tree.get_root(), f"Mismatch at insert {i}"

@@ -1105,6 +1105,8 @@ def test_inspect_proof_bundle_rejects_non_hex_root_hash(monkeypatch):
             "key": "0" * 64,
             "value_hash": "0" * 64,
             "siblings": [],
+            "parser_id": "fallback@1.0.0",
+            "canonical_parser_version": "v1",
         }
     }
     response = client.post("/inspect-proof-bundle", json=bundle)
@@ -1216,6 +1218,8 @@ def test_inspect_proof_bundle_accepts_valid_bundle(monkeypatch):
             "key": "0" * 64,
             "value_hash": "0" * 64,
             "siblings": [],
+            "parser_id": "fallback@1.0.0",
+            "canonical_parser_version": "v1",
         },
         "zk_public_inputs": {
             "original_root": "123",
@@ -1258,6 +1262,8 @@ def test_inspect_proof_bundle_accepts_forward_compatible_fields(monkeypatch):
             "key": "0" * 64,
             "value_hash": "0" * 64,
             "siblings": [],
+            "parser_id": "fallback@1.0.0",
+            "canonical_parser_version": "v1",
         },
         "bundle_version": "2.0.0",  # future field
         "metadata": {"client": "olympus-cli-v2"},  # future field
@@ -1278,6 +1284,8 @@ def test_inspect_proof_bundle_rejects_malformed_hex_string(monkeypatch):
             "key": "0" * 64,
             "value_hash": "0" * 64,
             "siblings": [],
+            "parser_id": "fallback@1.0.0",
+            "canonical_parser_version": "v1",
         }
     }
     response = client.post("/inspect-proof-bundle", json=bundle)

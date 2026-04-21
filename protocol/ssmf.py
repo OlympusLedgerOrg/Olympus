@@ -481,24 +481,27 @@ def diff_sparse_merkle_trees(
             return False
         return True
 
-    before_keys = {k for k in before.leaves if in_range(k)}
-    after_keys = {k for k in after.leaves if in_range(k)}
+    before_leaves = before.leaves
+    after_leaves = after.leaves
+
+    before_keys = {k for k in before_leaves if in_range(k)}
+    after_keys = {k for k in after_leaves if in_range(k)}
 
     added = [
-        SparseMerkleDiffEntry(key=key, before_value_hash=None, after_value_hash=after.leaves[key])
+        SparseMerkleDiffEntry(key=key, before_value_hash=None, after_value_hash=after_leaves[key])
         for key in sorted(after_keys - before_keys)
     ]
     changed = [
         SparseMerkleDiffEntry(
             key=key,
-            before_value_hash=before.leaves[key],
-            after_value_hash=after.leaves[key],
+            before_value_hash=before_leaves[key],
+            after_value_hash=after_leaves[key],
         )
         for key in sorted(before_keys & after_keys)
-        if before.leaves[key] != after.leaves[key]
+        if before_leaves[key] != after_leaves[key]
     ]
     removed = [
-        SparseMerkleDiffEntry(key=key, before_value_hash=before.leaves[key], after_value_hash=None)
+        SparseMerkleDiffEntry(key=key, before_value_hash=before_leaves[key], after_value_hash=None)
         for key in sorted(before_keys - after_keys)
     ]
 

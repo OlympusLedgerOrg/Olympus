@@ -1139,6 +1139,11 @@ async def ingest_batch(
                         "proof_version": PROOF_VERSION,
                         "tree_version": MERKLE_VERSION,
                         "smt_key": seq_global_key,
+                        "parser_id": seq_resp.get("parser_id", "fallback@1.0.0"),
+                        "canonical_parser_version": seq_resp.get(
+                            "canonical_parser_version",
+                            _operator_canonical_parser_version(),
+                        ),
                     }
                     # ledger_entry_hash is the BLAKE3 hash of the canonical record bytes,
                     # consistent with hash_bytes() applied to the same canonical content

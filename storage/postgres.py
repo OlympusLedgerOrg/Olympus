@@ -522,6 +522,14 @@ class StorageLayer:
             )
             """,
             "CREATE INDEX IF NOT EXISTS smt_leaves_ts_idx ON smt_leaves(ts)",
+            # ADR-0003 upgrade: add parser provenance columns to existing smt_leaves.
+            # ADD COLUMN IF NOT EXISTS is idempotent; the DEFAULT '' satisfies
+            # the NOT NULL constraint during the ALTER on populated tables, then
+            # the default is dropped so future INSERTs must supply explicit values.
+            "ALTER TABLE smt_leaves ADD COLUMN IF NOT EXISTS parser_id TEXT NOT NULL DEFAULT ''",
+            "ALTER TABLE smt_leaves ADD COLUMN IF NOT EXISTS canonical_parser_version TEXT NOT NULL DEFAULT ''",
+            "ALTER TABLE smt_leaves ALTER COLUMN parser_id DROP DEFAULT",
+            "ALTER TABLE smt_leaves ALTER COLUMN canonical_parser_version DROP DEFAULT",
             # ------------------------------------------------------------------
             # SMT Nodes
             # ------------------------------------------------------------------
