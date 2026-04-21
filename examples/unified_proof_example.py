@@ -45,7 +45,7 @@ def main():
     for record_type, record_id, version in records:
         key = record_key(record_type, record_id, version)
         value_hash = hash_bytes(f"content-of-{record_id}".encode())
-        tree.update(key, value_hash)
+        tree.update(key, value_hash, "docling@2.3.1", "v1")
         print(f"   ✓ {record_type}/{record_id} v{version}")
     print()
 
