@@ -142,6 +142,10 @@ class SparseMerkleTree:
         # Store leaves: key -> (value_hash, parser_id, canonical_parser_version).
         # The parser fields are bound into the leaf hash domain per ADR-0003.
         self._leaf_records: dict[bytes, tuple[bytes, str, str]] = {}
+        # Cached snapshot of ``leaves`` (key -> value_hash) to avoid rebuilding
+        # on every read. Invalidated by ``update`` when ``_leaf_records``
+        # changes; see ADR-0003 review feedback.
+        self._leaves_cache: dict[bytes, bytes] | None = None
 
     @property
     def leaves(self) -> dict[bytes, bytes]:
@@ -149,8 +153,16 @@ class SparseMerkleTree:
 
         Returned for backward compatibility; per-leaf parser metadata is held
         separately in ``_leaf_records`` and surfaced via proofs.
+
+        The snapshot is cached and returned directly on subsequent reads
+        until ``update`` mutates ``_leaf_records``. Callers that need a
+        stable view across writes must copy the returned mapping.
         """
-        return {k: v for k, (v, _, _) in self._leaf_records.items()}
+        cache = self._leaves_cache
+        if cache is None:
+            cache = {k: v for k, (v, _, _) in self._leaf_records.items()}
+            self._leaves_cache = cache
+        return cache
 
     def get_root(self) -> bytes:
         """Get the root hash of the tree."""
@@ -212,6 +224,9 @@ class SparseMerkleTree:
         # Store leaf together with the parser provenance bound into the
         # leaf hash domain (ADR-0003).
         self._leaf_records[key] = (value_hash, parser_id, canonical_parser_version)
+        # Invalidate the ``leaves`` snapshot cache; it will be lazily
+        # rebuilt on the next read.
+        self._leaves_cache = None
 
         # Compute path from key (each bit determines left/right)
         path = self._key_to_path(key)

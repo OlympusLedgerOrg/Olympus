@@ -80,7 +80,13 @@ class CdhssmfTree:
     Usage::
 
         tree = CdhssmfTree()
-        tree.update("acme:2025:budget", record_key_bytes, value_hash_bytes)
+        tree.update(
+            "acme:2025:budget",
+            record_key_bytes,
+            value_hash_bytes,
+            "docling@2.3.1",  # parser_id (ADR-0003)
+            "v1",             # canonical_parser_version (ADR-0003)
+        )
         root = tree.get_root()          # single global root
         proof = tree.prove("acme:2025:budget", record_key_bytes)
 

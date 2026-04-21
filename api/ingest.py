@@ -1128,6 +1128,33 @@ async def ingest_batch(
                     seq_global_key = seq_resp["global_key"]
                     seq_leaf_hash = seq_resp["leaf_value_hash"]
                     seq_committed_ts = current_timestamp()
+                    seq_parser_id_raw = seq_resp.get("parser_id") or _FALLBACK_PARSER_ID
+                    seq_cpv_raw = (
+                        seq_resp.get("canonical_parser_version")
+                        or _operator_canonical_parser_version()
+                    )
+                    if not isinstance(seq_parser_id_raw, str):
+                        raise HTTPException(
+                            status_code=500,
+                            detail="sequencer returned non-string parser_id",
+                        )
+                    if not isinstance(seq_cpv_raw, str):
+                        raise HTTPException(
+                            status_code=500,
+                            detail="sequencer returned non-string canonical_parser_version",
+                        )
+                    seq_parser_id = seq_parser_id_raw.strip()
+                    seq_cpv = seq_cpv_raw.strip()
+                    if not seq_parser_id:
+                        raise HTTPException(
+                            status_code=500,
+                            detail="sequencer parser_id must be non-empty",
+                        )
+                    if not seq_cpv:
+                        raise HTTPException(
+                            status_code=500,
+                            detail="sequencer canonical_parser_version must be non-empty",
+                        )
                     seq_merkle_proof: dict[str, Any] = {
                         "leaf_hash": seq_leaf_hash,
                         "leaf_index": str(int(seq_global_key, 16)),
@@ -1137,11 +1164,8 @@ async def ingest_batch(
                         "proof_version": PROOF_VERSION,
                         "tree_version": MERKLE_VERSION,
                         "smt_key": seq_global_key,
-                        "parser_id": seq_resp.get("parser_id", _FALLBACK_PARSER_ID),
-                        "canonical_parser_version": seq_resp.get(
-                            "canonical_parser_version",
-                            _operator_canonical_parser_version(),
-                        ),
+                        "parser_id": seq_parser_id,
+                        "canonical_parser_version": seq_cpv,
                     }
                     # ledger_entry_hash is the BLAKE3 hash of the canonical record bytes,
                     # consistent with hash_bytes() applied to the same canonical content

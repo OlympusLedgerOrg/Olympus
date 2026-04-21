@@ -334,6 +334,10 @@ async def test_get_proof_existence(client):
     assert data["version"] == version
     assert data["key"] == "01" * 32
     assert data["value_hash"] == "02" * 32
+    # ADR-0003: parser provenance must round-trip in the API response
+    # so verifiers can recompute leaf_hash(key, value_hash, parser_id, cpv).
+    assert data["parser_id"] == "docling@2.3.1"
+    assert data["canonical_parser_version"] == "v1"
     assert len(data["siblings"]) == 256
     assert data["root_hash"] == "04" * 32
     assert "shard_header" in data
@@ -451,6 +455,10 @@ async def test_get_proof_existence_with_shard_header_fields(client):
     assert resp.status_code == 200
     data = resp.json()
 
+    # ADR-0003: parser provenance must be part of the detailed proof response.
+    assert data["parser_id"] == "docling@2.3.1"
+    assert data["canonical_parser_version"] == "v1"
+
     # Verify shard_header contains all expected fields
     shard_header = data["shard_header"]
     assert shard_header["shard_id"] == shard_id
@@ -500,6 +508,9 @@ async def test_get_proof_special_characters_in_ids(client):
     data = resp.json()
     assert data["shard_id"] == shard_id
     assert data["record_id"] == record_id
+    # ADR-0003: parser provenance is part of the API contract.
+    assert data["parser_id"] == "docling@2.3.1"
+    assert data["canonical_parser_version"] == "v1"
 
 
 @pytest.mark.asyncio

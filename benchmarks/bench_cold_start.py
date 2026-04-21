@@ -120,8 +120,33 @@ def py_global_key(shard_id: str, rk: bytes) -> bytes:
     ).digest()
 
 
-def py_leaf_hash(key: bytes, value_hash: bytes) -> bytes:
-    return _blake3.blake3(_LEAF_PREFIX + _SEP + key + _SEP + value_hash).digest()
+def py_leaf_hash(
+    key: bytes,
+    value_hash: bytes,
+    parser_id: str,
+    canonical_parser_version: str,
+) -> bytes:
+    """Pure-Python mirror of ``_rust_crypto.leaf_hash`` (ADR-0003 domain).
+
+    Must stay byte-identical to the Rust implementation so the
+    ``leaf_hash`` benchmark baseline and the full-pipeline benchmark
+    compare apples-to-apples.
+    """
+    pid = parser_id.encode("utf-8")
+    cpv = canonical_parser_version.encode("utf-8")
+    return _blake3.blake3(
+        _LEAF_PREFIX
+        + _SEP
+        + key
+        + _SEP
+        + value_hash
+        + _SEP
+        + len(pid).to_bytes(4, "big")
+        + pid
+        + _SEP
+        + len(cpv).to_bytes(4, "big")
+        + cpv
+    ).digest()
 
 
 def py_node_hash(left: bytes, right: bytes) -> bytes:
@@ -318,8 +343,10 @@ def _make_suite() -> BenchSuite:
     suite.append(
         (
             "leaf_hash",
-            lambda: py_leaf_hash(_GK, _VH),
-            (lambda: _rust_crypto.leaf_hash(_GK, _VH, "docling@2.3.1", "v1")) if _rust_available else None,
+            lambda: py_leaf_hash(_GK, _VH, "docling@2.3.1", "v1"),
+            (lambda: _rust_crypto.leaf_hash(_GK, _VH, "docling@2.3.1", "v1"))
+            if _rust_available
+            else None,
         )
     )
 
@@ -358,7 +385,7 @@ def _make_suite() -> BenchSuite:
         vh = py_blake3_hash([canonical.encode("utf-8")])
         rk = py_record_key(_RTYPE, _RID, _VERSION)
         gk = py_global_key(_SHARD, rk)
-        return py_leaf_hash(gk, vh)
+        return py_leaf_hash(gk, vh, "docling@2.3.1", "v1")
 
     def _rust_pipeline():
         canonical = _rust_canonical.canonical_json_encode(_SMALL_DOC)
