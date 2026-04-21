@@ -90,8 +90,27 @@ def _py_global_key(shard_id: str, record_key_bytes: bytes) -> bytes:
     ).digest()
 
 
-def _py_leaf_hash(key: bytes, value_hash: bytes) -> bytes:
-    return _py_blake3_hash([_LEAF_PREFIX, _SEP, key, _SEP, value_hash])
+def _py_leaf_hash(
+    key: bytes,
+    value_hash: bytes,
+    parser_id: str,
+    canonical_parser_version: str,
+) -> bytes:
+    pid = parser_id.encode("utf-8")
+    cpv = canonical_parser_version.encode("utf-8")
+    return _py_blake3_hash(
+        [
+            _LEAF_PREFIX,
+            _SEP,
+            key,
+            _SEP,
+            value_hash,
+            _SEP,
+            len(pid).to_bytes(4, "big") + pid,
+            _SEP,
+            len(cpv).to_bytes(4, "big") + cpv,
+        ]
+    )
 
 
 def _py_node_hash(left: bytes, right: bytes) -> bytes:
