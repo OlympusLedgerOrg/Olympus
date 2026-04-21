@@ -741,9 +741,7 @@ def _evaluate_proof_bundle(
                 status_code=400,
                 detail="canonical_parser_version is required and must be a non-empty string",
             )
-        expected_leaf_hash = leaf_hash(
-            smt_key, content_hash_bytes, bundle_parser_id, bundle_cpv
-        )
+        expected_leaf_hash = leaf_hash(smt_key, content_hash_bytes, bundle_parser_id, bundle_cpv)
 
     content_hash_matches_proof = merkle_proof.leaf_hash == expected_leaf_hash
     if merkle_proof.root_hash.hex() != normalized_root:

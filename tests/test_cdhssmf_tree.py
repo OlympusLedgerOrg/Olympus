@@ -199,7 +199,9 @@ class TestCdhssmfTreeRoot:
 
         root_before = tree.get_root()
 
-        tree.update("shard", record_key("doc", "1", 1), hash_bytes(b"content"), "docling@2.3.1", "v1")
+        tree.update(
+            "shard", record_key("doc", "1", 1), hash_bytes(b"content"), "docling@2.3.1", "v1"
+        )
 
         root_after = tree.get_root()
 
@@ -210,9 +212,15 @@ class TestCdhssmfTreeRoot:
 
         def build_tree():
             tree = CdhssmfTree()
-            tree.update("shard1", record_key("doc", "1", 1), hash_bytes(b"a"), "docling@2.3.1", "v1")
-            tree.update("shard1", record_key("doc", "2", 1), hash_bytes(b"b"), "docling@2.3.1", "v1")
-            tree.update("shard2", record_key("doc", "1", 1), hash_bytes(b"c"), "docling@2.3.1", "v1")
+            tree.update(
+                "shard1", record_key("doc", "1", 1), hash_bytes(b"a"), "docling@2.3.1", "v1"
+            )
+            tree.update(
+                "shard1", record_key("doc", "2", 1), hash_bytes(b"b"), "docling@2.3.1", "v1"
+            )
+            tree.update(
+                "shard2", record_key("doc", "1", 1), hash_bytes(b"c"), "docling@2.3.1", "v1"
+            )
             return tree.get_root()
 
         root1 = build_tree()
@@ -355,7 +363,9 @@ class TestCdhssmfTreeProofVerification:
         """verify_nonexistence_proof() passes with correct root in proof."""
         tree = CdhssmfTree()
         # Add some data to the tree
-        tree.update("shard", record_key("doc", "existing", 1), hash_bytes(b"x"), "docling@2.3.1", "v1")
+        tree.update(
+            "shard", record_key("doc", "existing", 1), hash_bytes(b"x"), "docling@2.3.1", "v1"
+        )
 
         root = tree.get_root()
 
@@ -369,7 +379,9 @@ class TestCdhssmfTreeProofVerification:
     def test_verify_nonexistence_proof_fails_with_tampered_proof(self):
         """verify_nonexistence_proof() fails with tampered proof."""
         tree = CdhssmfTree()
-        tree.update("shard", record_key("doc", "existing", 1), hash_bytes(b"x"), "docling@2.3.1", "v1")
+        tree.update(
+            "shard", record_key("doc", "existing", 1), hash_bytes(b"x"), "docling@2.3.1", "v1"
+        )
 
         proof = tree.prove_nonexistence("shard", record_key("doc", "missing", 1))
 
@@ -551,7 +563,9 @@ class TestCdhssmfTreeRegressionGuards:
     def test_proof_structure_stability(self):
         """Proof structure should remain stable."""
         tree = CdhssmfTree()
-        tree.update("shard", record_key("doc", "1", 1), hash_bytes(b"content"), "docling@2.3.1", "v1")
+        tree.update(
+            "shard", record_key("doc", "1", 1), hash_bytes(b"content"), "docling@2.3.1", "v1"
+        )
 
         proof = tree.prove_existence("shard", record_key("doc", "1", 1))
 

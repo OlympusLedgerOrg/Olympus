@@ -117,11 +117,15 @@ def load_tree_state(
     _require_rust_smt()
     tree = RustSparseMerkleTree()
 
-    # CD-HS-ST: Load leaves from the global SMT (no shard_id filter)
+    # CD-HS-ST: Load leaves from the global SMT (no shard_id filter).
+    # ADR-0003: also fetch parser_id and canonical_parser_version because
+    # they are now bound into the leaf hash domain and required by
+    # RustSparseMerkleTree.update().
     if up_to_ts is None:
         cur.execute(
             """
-            SELECT key, value_hash FROM smt_leaves
+            SELECT key, value_hash, parser_id, canonical_parser_version
+            FROM smt_leaves
             ORDER BY ts ASC, key ASC
             """
         )
@@ -131,7 +135,8 @@ def load_tree_state(
             cutoff = datetime.fromisoformat(cutoff.replace("Z", "+00:00"))
         cur.execute(
             """
-            SELECT key, value_hash FROM smt_leaves
+            SELECT key, value_hash, parser_id, canonical_parser_version
+            FROM smt_leaves
             WHERE ts <= %s
             ORDER BY ts ASC, key ASC
             """,
@@ -146,7 +151,12 @@ def load_tree_state(
         for row in rows:
             key = bytes(_row_get(row, "key", 0))
             value_hash = bytes(_row_get(row, "value_hash", 1))
-            tree.update(key, value_hash)
+            # ADR-0003: parser fields are required by the leaf hash domain.
+            # Fall back to the stored migration defaults for legacy rows
+            # that predate ADR-0003 or for test fixtures that omit them.
+            parser_id = _row_get_optional(row, "parser_id", 2) or "fallback@1.0.0"
+            canonical_parser_version = _row_get_optional(row, "canonical_parser_version", 3) or "v1"
+            tree.update(key, value_hash, parser_id, canonical_parser_version)
 
     return tree
 
@@ -288,3 +298,19 @@ def _row_get(row: Any, key: str, idx: int) -> Any:
     if isinstance(row, Mapping):
         return row[key]
     return row[idx]
+
+
+def _row_get_optional(row: Any, key: str, idx: int) -> Any:
+    """Get value from row when present, returning None if absent.
+
+    Used for ADR-0003 parser provenance columns (`parser_id`,
+    `canonical_parser_version`) so that legacy rows or test mocks that omit
+    them fall through to the well-known migration defaults rather than
+    raising KeyError / IndexError.
+    """
+    if isinstance(row, Mapping):
+        return row.get(key)
+    try:
+        return row[idx]
+    except (IndexError, KeyError):
+        return None

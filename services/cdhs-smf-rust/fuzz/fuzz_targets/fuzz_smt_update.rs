@@ -4,6 +4,11 @@
 //! asserts that the tree remains internally consistent: the root changes,
 //! the tree size tracks correctly, and no panics occur during the 256-level
 //! Merkle path recomputation.
+//!
+//! ADR-0003: leaf hashing now binds the parser identity into the leaf
+//! domain, so `update()` requires a non-empty `parser_id` and
+//! `canonical_parser_version`. We pass fixed test values here — the goal of
+//! this target is the SMT path math, not the parser-domain validation.
 
 #![no_main]
 
@@ -11,6 +16,9 @@ use arbitrary::Arbitrary;
 use libfuzzer_sys::fuzz_target;
 
 use cdhs_smf_service::smt::SparseMerkleTree;
+
+const FUZZ_PARSER_ID: &str = "fallback@1.0.0";
+const FUZZ_CANONICAL_PARSER_VERSION: &str = "v1";
 
 #[derive(Arbitrary, Debug)]
 struct SmtUpdateInput {
@@ -20,9 +28,18 @@ struct SmtUpdateInput {
 
 fuzz_target!(|input: SmtUpdateInput| {
     let tree = SparseMerkleTree::new();
+    let runtime = match tokio::runtime::Builder::new_current_thread().build() {
+        Ok(rt) => rt,
+        Err(_) => return,
+    };
 
     for (key, value_hash) in &input.entries {
         // Errors are acceptable (e.g. lock poisoning); panics are not.
-        let _ = tree.update(key, value_hash);
+        let _ = runtime.block_on(tree.update(
+            key,
+            value_hash,
+            FUZZ_PARSER_ID,
+            FUZZ_CANONICAL_PARSER_VERSION,
+        ));
     }
 });

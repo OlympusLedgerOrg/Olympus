@@ -220,9 +220,7 @@ def leaf_hash(
     if not canonical_parser_version:
         raise ValueError("canonical_parser_version must be a non-empty string")
     if _RUST_CRYPTO_AVAILABLE:  # pragma: no cover — Rust FFI path
-        result: bytes = _rust_leaf_hash(
-            key, value_hash, parser_id, canonical_parser_version
-        )
+        result: bytes = _rust_leaf_hash(key, value_hash, parser_id, canonical_parser_version)
         return result
     pid_bytes = parser_id.encode("utf-8")
     cpv_bytes = canonical_parser_version.encode("utf-8")
