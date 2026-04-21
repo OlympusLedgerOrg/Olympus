@@ -98,6 +98,12 @@ def _py_leaf_hash(
 ) -> bytes:
     pid = parser_id.encode("utf-8")
     cpv = canonical_parser_version.encode("utf-8")
+    # ADR-0003 parity: the Rust implementation rejects empty parser metadata,
+    # so the Python reference must do the same to keep behaviour byte-identical.
+    if len(pid) == 0:
+        raise ValueError("parser_id must be non-empty")
+    if len(cpv) == 0:
+        raise ValueError("canonical_parser_version must be non-empty")
     return _py_blake3_hash(
         [
             _LEAF_PREFIX,
@@ -208,6 +214,24 @@ class TestLeafHashParity:
         result = _rust_crypto.leaf_hash(bytes(32), bytes(32), "docling@2.3.1", "v1")
         assert isinstance(result, bytes)
         assert len(result) == 32
+
+    def test_reject_empty_parser_id(self) -> None:
+        """ADR-0003: both Rust and Python must reject empty parser_id."""
+        key = bytes(32)
+        value = bytes(32)
+        with pytest.raises(Exception):
+            _rust_crypto.leaf_hash(key, value, "", "v1")
+        with pytest.raises(ValueError):
+            _py_leaf_hash(key, value, "", "v1")
+
+    def test_reject_empty_canonical_parser_version(self) -> None:
+        """ADR-0003: both Rust and Python must reject empty canonical_parser_version."""
+        key = bytes(32)
+        value = bytes(32)
+        with pytest.raises(Exception):
+            _rust_crypto.leaf_hash(key, value, "docling@2.3.1", "")
+        with pytest.raises(ValueError):
+            _py_leaf_hash(key, value, "docling@2.3.1", "")
 
 
 class TestNodeHashParity:

@@ -1237,6 +1237,75 @@ def test_inspect_proof_bundle_accepts_valid_bundle(monkeypatch):
     assert "fields" in data
 
 
+def _valid_bundle_for_parser_tests() -> dict:
+    """Return a fresh well-formed bundle so per-test mutations are isolated."""
+    return {
+        "smt_proof": {
+            "root_hash": "0" * 64,
+            "key": "0" * 64,
+            "value_hash": "0" * 64,
+            "siblings": [],
+            "parser_id": "fallback@1.0.0",
+            "canonical_parser_version": "v1",
+        },
+        "zk_public_inputs": {
+            "original_root": "123",
+            "redacted_commitment": "456",
+            "revealed_count": 3,
+        },
+        "zk_proof": {},
+        "revealed_indices": [0, 1, 2],
+    }
+
+
+def test_inspect_proof_bundle_rejects_missing_parser_id(monkeypatch):
+    """ADR-0003: bundles without smt_proof.parser_id must be rejected (4xx)."""
+    monkeypatch.setattr(ui_app, "DEBUG_UI_ENABLED", True)
+    bundle = _valid_bundle_for_parser_tests()
+    del bundle["smt_proof"]["parser_id"]
+    response = client.post("/inspect-proof-bundle", json=bundle)
+    assert 400 <= response.status_code < 500
+    data = response.json()
+    assert data["ok"] is False
+    assert "parser_id" in data["error"]
+
+
+def test_inspect_proof_bundle_rejects_empty_parser_id(monkeypatch):
+    """ADR-0003: bundles with an empty smt_proof.parser_id must be rejected."""
+    monkeypatch.setattr(ui_app, "DEBUG_UI_ENABLED", True)
+    bundle = _valid_bundle_for_parser_tests()
+    bundle["smt_proof"]["parser_id"] = ""
+    response = client.post("/inspect-proof-bundle", json=bundle)
+    assert 400 <= response.status_code < 500
+    data = response.json()
+    assert data["ok"] is False
+    assert "parser_id" in data["error"]
+
+
+def test_inspect_proof_bundle_rejects_missing_canonical_parser_version(monkeypatch):
+    """ADR-0003: bundles without smt_proof.canonical_parser_version must be rejected."""
+    monkeypatch.setattr(ui_app, "DEBUG_UI_ENABLED", True)
+    bundle = _valid_bundle_for_parser_tests()
+    del bundle["smt_proof"]["canonical_parser_version"]
+    response = client.post("/inspect-proof-bundle", json=bundle)
+    assert 400 <= response.status_code < 500
+    data = response.json()
+    assert data["ok"] is False
+    assert "canonical_parser_version" in data["error"]
+
+
+def test_inspect_proof_bundle_rejects_empty_canonical_parser_version(monkeypatch):
+    """ADR-0003: bundles with empty smt_proof.canonical_parser_version are rejected."""
+    monkeypatch.setattr(ui_app, "DEBUG_UI_ENABLED", True)
+    bundle = _valid_bundle_for_parser_tests()
+    bundle["smt_proof"]["canonical_parser_version"] = ""
+    response = client.post("/inspect-proof-bundle", json=bundle)
+    assert 400 <= response.status_code < 500
+    data = response.json()
+    assert data["ok"] is False
+    assert "canonical_parser_version" in data["error"]
+
+
 def test_inspect_proof_bundle_accepts_minimal_bundle(monkeypatch):
     """Endpoint should accept an empty bundle (all fields optional)."""
     monkeypatch.setattr(ui_app, "DEBUG_UI_ENABLED", True)
