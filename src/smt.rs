@@ -41,6 +41,21 @@ fn key_to_path_bits(key: &[u8; 32]) -> Vec<u8> {
     path
 }
 
+/// Inverse of `key_to_path_bits`: pack a 256-bit MSB-first path back into a 32-byte key.
+///
+/// Used by `collect_siblings` to look up a leaf-level sibling by key in `state.leaves`.
+/// Panics if the path is not exactly 256 bits (caller ensures this).
+fn path_to_key(path: &[u8]) -> [u8; 32] {
+    assert_eq!(path.len(), 256, "path must be exactly 256 bits");
+    let mut out = [0u8; 32];
+    for (idx, &bit) in path.iter().enumerate() {
+        if bit != 0 {
+            out[idx / 8] |= 1 << (7 - (idx % 8));
+        }
+    }
+    out
+}
+
 /// Precompute empty hashes for the 256-level sparse tree.
 ///
 /// `empty_hashes[i]` is the hash of a completely-empty subtree at height `i`:
@@ -534,11 +549,27 @@ impl RustSparseMerkleTree {
         for level in 0..256usize {
             let bit_pos = 255 - level;
             let sib_path = sibling_path(&path[..=bit_pos]);
-            let sib_hash = state
-                .nodes
-                .get(&sib_path)
-                .copied()
-                .unwrap_or(self.empty_hashes[level]);
+
+            // Check nodes first
+            let sib_hash = if let Some(&hash) = state.nodes.get(&sib_path) {
+                hash
+            } else if sib_path.len() == 256 {
+                // Leaf level: look up in leaves and compute leaf hash
+                let sibling_key = path_to_key(&sib_path);
+                if let Some((value_hash, parser_id, canonical_parser_version)) = state.leaves.get(&sibling_key) {
+                    crypto::compute_leaf_hash(
+                        &sibling_key,
+                        value_hash,
+                        parser_id.as_bytes(),
+                        canonical_parser_version.as_bytes(),
+                    )
+                } else {
+                    self.empty_hashes[level]
+                }
+            } else {
+                self.empty_hashes[level]
+            };
+
             siblings.push(sib_hash);
         }
         siblings

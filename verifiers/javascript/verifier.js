@@ -426,7 +426,17 @@ function verifySmtNonInclusion(proof) {
     if (!(sib instanceof Uint8Array) || sib.length !== 32) return false;
   }
   const pathBits = keyToPathBits(key);
-  return smtWalkAndCheck(pathBits, siblings, SMT_EMPTY_LEAF, rootHash);
+  // Use a copy of SMT_EMPTY_LEAF to prevent callers from mutating the constant
+  return smtWalkAndCheck(pathBits, siblings, new Uint8Array(SMT_EMPTY_LEAF), rootHash);
+}
+
+/**
+ * Get a copy of the SMT empty-leaf sentinel.
+ * Returns a new Uint8Array to prevent external mutation of the internal constant.
+ * @returns {Uint8Array} - 32-byte copy of SMT_EMPTY_LEAF
+ */
+function getSmtEmptyLeaf() {
+  return new Uint8Array(SMT_EMPTY_LEAF);
 }
 
 // Export functions
@@ -442,7 +452,7 @@ module.exports = {
   computeLedgerEntryHash,
   computeDualCommitment,
   // SMT (SSMF) cross-language verifier — ADR-0003
-  SMT_EMPTY_LEAF,
+  getSmtEmptyLeaf,
   smtLeafHash,
   verifySmtInclusion,
   verifySmtNonInclusion,

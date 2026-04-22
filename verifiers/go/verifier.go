@@ -200,14 +200,21 @@ func ComputeDualCommitment(blake3RootHex string, poseidonRootDecimal string) (st
 
 const EmptyLeafPrefix = "OLY:EMPTY-LEAF:V1"
 
-// SmtEmptyLeaf is BLAKE3(b"OLY:EMPTY-LEAF:V1") — must match
+// smtEmptyLeaf is BLAKE3(b"OLY:EMPTY-LEAF:V1") — must match
 // protocol/ssmf.py::EMPTY_LEAF. Hardcoded for clarity; recomputed by
 // TestSMTEmptyLeafConstant to guard against drift.
-var SmtEmptyLeaf = [32]byte{
+// Internal constant to prevent external mutation.
+var smtEmptyLeaf = [32]byte{
 	0x0c, 0x51, 0xa9, 0xc6, 0xfd, 0x8d, 0xd8, 0x84,
 	0x7b, 0xa1, 0x05, 0x3a, 0x17, 0xf6, 0x29, 0x43,
 	0xc5, 0x90, 0x52, 0xf4, 0xe3, 0x11, 0xab, 0x4e,
 	0x93, 0x86, 0x7c, 0x42, 0x80, 0x57, 0x9f, 0x29,
+}
+
+// GetSmtEmptyLeaf returns a copy of the SMT empty-leaf sentinel.
+// This prevents external callers from mutating the verifier's internal constant.
+func GetSmtEmptyLeaf() [32]byte {
+	return smtEmptyLeaf
 }
 
 // SmtSibling is a 32-byte sibling hash in an SMT proof.
@@ -327,5 +334,5 @@ func VerifySMTNonInclusion(proof *SmtNonInclusionProof) bool {
 		return false
 	}
 	pathBits := keyToPathBits(proof.Key)
-	return smtWalkAndCheck(pathBits, proof.Siblings, SmtEmptyLeaf, proof.RootHash)
+	return smtWalkAndCheck(pathBits, proof.Siblings, smtEmptyLeaf, proof.RootHash)
 }

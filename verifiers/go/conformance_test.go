@@ -680,18 +680,19 @@ func makeNonInclusion(t *testing.T, vec SsmfNonExistenceProofVec) *SmtNonInclusi
 	}
 }
 
-// TestSMTEmptyLeafConstant guards against drift in the hardcoded SmtEmptyLeaf
+// TestSMTEmptyLeafConstant guards against drift in the hardcoded smtEmptyLeaf
 // constant by recomputing BLAKE3(b"OLY:EMPTY-LEAF:V1").
 func TestSMTEmptyLeafConstant(t *testing.T) {
 	got := ComputeBlake3([]byte(EmptyLeafPrefix))
 	var gotArr [32]byte
 	copy(gotArr[:], got)
-	if gotArr != SmtEmptyLeaf {
-		t.Fatalf("SmtEmptyLeaf has drifted:\n  got  %x\n  want %x", got, SmtEmptyLeaf[:])
+	smtEmptyLeaf := GetSmtEmptyLeaf()
+	if gotArr != smtEmptyLeaf {
+		t.Fatalf("smtEmptyLeaf has drifted:\n  got  %x\n  want %x", got, smtEmptyLeaf[:])
 	}
 	const expectedHex = "0c51a9c6fd8dd8847ba1053a17f62943c59052f4e311ab4e93867c4280579f29"
-	if hex.EncodeToString(SmtEmptyLeaf[:]) != expectedHex {
-		t.Fatalf("SmtEmptyLeaf hex mismatch: got %x want %s", SmtEmptyLeaf[:], expectedHex)
+	if hex.EncodeToString(smtEmptyLeaf[:]) != expectedHex {
+		t.Fatalf("smtEmptyLeaf hex mismatch: got %x want %s", smtEmptyLeaf[:], expectedHex)
 	}
 }
 
