@@ -32,17 +32,17 @@ func canonicalizerVectorFile(t *testing.T) string {
 // --- JSON structures for parsing vectors.json ---
 
 type Vectors struct {
-	Blake3Raw            []Blake3RawVec            `json:"blake3_raw"`
-	MerkleLeafHash       []LeafHashVec             `json:"merkle_leaf_hash"`
-	MerkleParentHash     []ParentHashVec           `json:"merkle_parent_hash"`
-	MerkleRoot           []MerkleRootVec           `json:"merkle_root"`
-	MerkleProof          []MerkleProofVec          `json:"merkle_proof"`
-	LedgerEntryHash      []LedgerEntryHashVec      `json:"ledger_entry_hash"`
-	DualRootCommitment   []DualRootCommitmentVec   `json:"dual_root_commitment"`
-	VerificationBundle   []VerificationBundleVec   `json:"verification_bundle"`
-	ConsistencyProof     []ConsistencyProofVec     `json:"consistency_proof"`
-	SSMFExistenceProof   []SSMFExistenceVec        `json:"ssmf_existence_proof"`
-	SSMFNonExistenceProof []SSMFNonExistenceVec    `json:"ssmf_nonexistence_proof"`
+	Blake3Raw             []Blake3RawVec          `json:"blake3_raw"`
+	MerkleLeafHash        []LeafHashVec           `json:"merkle_leaf_hash"`
+	MerkleParentHash      []ParentHashVec         `json:"merkle_parent_hash"`
+	MerkleRoot            []MerkleRootVec         `json:"merkle_root"`
+	MerkleProof           []MerkleProofVec        `json:"merkle_proof"`
+	LedgerEntryHash       []LedgerEntryHashVec    `json:"ledger_entry_hash"`
+	DualRootCommitment    []DualRootCommitmentVec `json:"dual_root_commitment"`
+	VerificationBundle    []VerificationBundleVec `json:"verification_bundle"`
+	ConsistencyProof      []ConsistencyProofVec   `json:"consistency_proof"`
+	SSMFExistenceProof    []SSMFExistenceVec      `json:"ssmf_existence_proof"`
+	SSMFNonExistenceProof []SSMFNonExistenceVec   `json:"ssmf_nonexistence_proof"`
 }
 
 type Blake3RawVec struct {
@@ -85,9 +85,9 @@ type MerkleProofVec struct {
 }
 
 type LedgerEntryHashVec struct {
-	Description        string `json:"description"`
+	Description         string `json:"description"`
 	CanonicalPayloadHex string `json:"canonical_payload_hex"`
-	EntryHash          string `json:"entry_hash"`
+	EntryHash           string `json:"entry_hash"`
 }
 
 // Blake3ProofVec mirrors the blake3_proof sub-object in dual_root_commitment vectors.
@@ -134,7 +134,7 @@ type BundleMerkleProofVec struct {
 type VerificationBundleVec struct {
 	Description     string                   `json:"description"`
 	BundleVersion   string                   `json:"bundle_version"`
-	CanonicalEvents []map[string]interface{}  `json:"canonical_events"`
+	CanonicalEvents []map[string]interface{} `json:"canonical_events"`
 	LeafHashes      []string                 `json:"leaf_hashes"`
 	MerkleRoot      string                   `json:"merkle_root"`
 	MerkleProofs    []BundleMerkleProofVec   `json:"merkle_proofs"`
@@ -636,18 +636,24 @@ func computeCTMerkleRoot(leafHashes [][]byte) (string, error) {
 }
 
 // decodeSiblingsHex converts a slice of 64-char hex strings into a slice of
-// 32-byte slices for SSMF proofs.
+// 32-byte slices for SSMF proofs. Validates that each decoded sibling is
+// exactly 32 bytes so malformed test vectors fail with a clear, early
+// error rather than tripping the deeper `len(sib) != 32` check inside
+// `ssmfWalkPath`.
 func decodeSiblingsHex(t *testing.T, hexes []string) [][]byte {
-t.Helper()
-out := make([][]byte, len(hexes))
-for i, h := range hexes {
-b, err := hex.DecodeString(h)
-if err != nil {
-t.Fatalf("sibling[%d] hex decode: %v", i, err)
-}
-out[i] = b
-}
-return out
+	t.Helper()
+	out := make([][]byte, len(hexes))
+	for i, h := range hexes {
+		b, err := hex.DecodeString(h)
+		if err != nil {
+			t.Fatalf("sibling[%d] hex decode: %v", i, err)
+		}
+		if len(b) != 32 {
+			t.Fatalf("sibling[%d] must be 32 bytes, got %d", i, len(b))
+		}
+		out[i] = b
+	}
+	return out
 }
 
 // TestConformanceSSMFExistenceProof verifies every ssmf_existence_proof
@@ -655,107 +661,107 @@ return out
 // produced by protocol.ssmf.SparseMerkleTree.prove_existence and validated
 // by the Python reference verify_proof.
 func TestConformanceSSMFExistenceProof(t *testing.T) {
-vectors := loadVectors(t)
-if len(vectors.SSMFExistenceProof) == 0 {
-t.Fatalf("expected at least one ssmf_existence_proof vector, got 0")
-}
-for _, vec := range vectors.SSMFExistenceProof {
-vec := vec
-t.Run(vec.Description, func(t *testing.T) {
-key, err := hex.DecodeString(vec.Key)
-if err != nil {
-t.Fatalf("bad key: %v", err)
-}
-vh, err := hex.DecodeString(vec.ValueHash)
-if err != nil {
-t.Fatalf("bad value_hash: %v", err)
-}
-root, err := hex.DecodeString(vec.RootHash)
-if err != nil {
-t.Fatalf("bad root_hash: %v", err)
-}
-proof := &SSMFExistenceProof{
-Key:                    key,
-ValueHash:              vh,
-ParserID:               vec.ParserID,
-CanonicalParserVersion: vec.CanonicalParserVersion,
-Siblings:               decodeSiblingsHex(t, vec.Siblings),
-RootHash:               root,
-}
-got, err := VerifySSMFExistenceProof(proof)
-if err != nil {
-t.Fatalf("VerifySSMFExistenceProof error: %v", err)
-}
-if got != vec.ExpectedValid {
-t.Errorf("ssmf_existence verify: got %v, want %v", got, vec.ExpectedValid)
-}
-})
-}
+	vectors := loadVectors(t)
+	if len(vectors.SSMFExistenceProof) == 0 {
+		t.Fatalf("expected at least one ssmf_existence_proof vector, got 0")
+	}
+	for _, vec := range vectors.SSMFExistenceProof {
+		vec := vec
+		t.Run(vec.Description, func(t *testing.T) {
+			key, err := hex.DecodeString(vec.Key)
+			if err != nil {
+				t.Fatalf("bad key: %v", err)
+			}
+			vh, err := hex.DecodeString(vec.ValueHash)
+			if err != nil {
+				t.Fatalf("bad value_hash: %v", err)
+			}
+			root, err := hex.DecodeString(vec.RootHash)
+			if err != nil {
+				t.Fatalf("bad root_hash: %v", err)
+			}
+			proof := &SSMFExistenceProof{
+				Key:                    key,
+				ValueHash:              vh,
+				ParserID:               vec.ParserID,
+				CanonicalParserVersion: vec.CanonicalParserVersion,
+				Siblings:               decodeSiblingsHex(t, vec.Siblings),
+				RootHash:               root,
+			}
+			got, err := VerifySSMFExistenceProof(proof)
+			if err != nil {
+				t.Fatalf("VerifySSMFExistenceProof error: %v", err)
+			}
+			if got != vec.ExpectedValid {
+				t.Errorf("ssmf_existence verify: got %v, want %v", got, vec.ExpectedValid)
+			}
+		})
+	}
 }
 
 // TestConformanceSSMFNonExistenceProof verifies every ssmf_nonexistence_proof
 // vector in vectors.json against the Go verifier.
 func TestConformanceSSMFNonExistenceProof(t *testing.T) {
-vectors := loadVectors(t)
-if len(vectors.SSMFNonExistenceProof) == 0 {
-t.Fatalf("expected at least one ssmf_nonexistence_proof vector, got 0")
-}
-for _, vec := range vectors.SSMFNonExistenceProof {
-vec := vec
-t.Run(vec.Description, func(t *testing.T) {
-key, err := hex.DecodeString(vec.Key)
-if err != nil {
-t.Fatalf("bad key: %v", err)
-}
-root, err := hex.DecodeString(vec.RootHash)
-if err != nil {
-t.Fatalf("bad root_hash: %v", err)
-}
-proof := &SSMFNonExistenceProof{
-Key:      key,
-Siblings: decodeSiblingsHex(t, vec.Siblings),
-RootHash: root,
-}
-got, err := VerifySSMFNonExistenceProof(proof)
-if err != nil {
-t.Fatalf("VerifySSMFNonExistenceProof error: %v", err)
-}
-if got != vec.ExpectedValid {
-t.Errorf("ssmf_nonexistence verify: got %v, want %v", got, vec.ExpectedValid)
-}
-})
-}
+	vectors := loadVectors(t)
+	if len(vectors.SSMFNonExistenceProof) == 0 {
+		t.Fatalf("expected at least one ssmf_nonexistence_proof vector, got 0")
+	}
+	for _, vec := range vectors.SSMFNonExistenceProof {
+		vec := vec
+		t.Run(vec.Description, func(t *testing.T) {
+			key, err := hex.DecodeString(vec.Key)
+			if err != nil {
+				t.Fatalf("bad key: %v", err)
+			}
+			root, err := hex.DecodeString(vec.RootHash)
+			if err != nil {
+				t.Fatalf("bad root_hash: %v", err)
+			}
+			proof := &SSMFNonExistenceProof{
+				Key:      key,
+				Siblings: decodeSiblingsHex(t, vec.Siblings),
+				RootHash: root,
+			}
+			got, err := VerifySSMFNonExistenceProof(proof)
+			if err != nil {
+				t.Fatalf("VerifySSMFNonExistenceProof error: %v", err)
+			}
+			if got != vec.ExpectedValid {
+				t.Errorf("ssmf_nonexistence verify: got %v, want %v", got, vec.ExpectedValid)
+			}
+		})
+	}
 }
 
 // TestSSMFTamperedProofRejected sanity-checks that the Go SSMF verifiers
 // reject proofs with a tampered sibling, complementing the conformance
 // vectors which only assert positive cases.
 func TestSSMFTamperedProofRejected(t *testing.T) {
-vectors := loadVectors(t)
-if len(vectors.SSMFExistenceProof) == 0 {
-t.Skip("no SSMF existence vectors available")
-}
-vec := vectors.SSMFExistenceProof[0]
-key, _ := hex.DecodeString(vec.Key)
-vh, _ := hex.DecodeString(vec.ValueHash)
-root, _ := hex.DecodeString(vec.RootHash)
-siblings := decodeSiblingsHex(t, vec.Siblings)
-// Flip one bit in siblings[0] (leaf-end, the bit our recent fix touches).
-siblings[0] = append([]byte(nil), siblings[0]...)
-siblings[0][0] ^= 0x01
-proof := &SSMFExistenceProof{
-Key:                    key,
-ValueHash:              vh,
-ParserID:               vec.ParserID,
-CanonicalParserVersion: vec.CanonicalParserVersion,
-Siblings:               siblings,
-RootHash:               root,
-}
-ok, err := VerifySSMFExistenceProof(proof)
-if err != nil {
-t.Fatalf("unexpected error: %v", err)
-}
-if ok {
-t.Errorf("expected tampered SSMF existence proof to be rejected, got valid=true")
-}
+	vectors := loadVectors(t)
+	if len(vectors.SSMFExistenceProof) == 0 {
+		t.Skip("no SSMF existence vectors available")
+	}
+	vec := vectors.SSMFExistenceProof[0]
+	key, _ := hex.DecodeString(vec.Key)
+	vh, _ := hex.DecodeString(vec.ValueHash)
+	root, _ := hex.DecodeString(vec.RootHash)
+	siblings := decodeSiblingsHex(t, vec.Siblings)
+	// Flip one bit in siblings[0] (leaf-end, the bit our recent fix touches).
+	siblings[0] = append([]byte(nil), siblings[0]...)
+	siblings[0][0] ^= 0x01
+	proof := &SSMFExistenceProof{
+		Key:                    key,
+		ValueHash:              vh,
+		ParserID:               vec.ParserID,
+		CanonicalParserVersion: vec.CanonicalParserVersion,
+		Siblings:               siblings,
+		RootHash:               root,
+	}
+	ok, err := VerifySSMFExistenceProof(proof)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if ok {
+		t.Errorf("expected tampered SSMF existence proof to be rejected, got valid=true")
+	}
 }
