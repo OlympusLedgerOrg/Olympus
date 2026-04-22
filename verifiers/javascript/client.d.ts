@@ -86,8 +86,9 @@ export interface SmtNonInclusionProof {
   rootHash: Uint8Array;
 }
 
-/** BLAKE3(b"OLY:EMPTY-LEAF:V1") — 32-byte SMT empty-leaf sentinel. */
-export const SMT_EMPTY_LEAF: Uint8Array;
+/** BLAKE3(b"OLY:EMPTY-LEAF:V1") — 32-byte SMT empty-leaf sentinel.
+ * Returns a new Uint8Array copy each call to prevent external mutation. */
+export function getSmtEmptyLeaf(): Uint8Array;
 
 /** Compute the SMT leaf hash with parser-identity binding (ADR-0003). */
 export function smtLeafHash(

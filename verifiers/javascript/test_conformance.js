@@ -18,7 +18,7 @@ const {
   verifyMerkleProof,
   computeLedgerEntryHash,
   computeDualCommitment,
-  SMT_EMPTY_LEAF,
+  getSmtEmptyLeaf,
   smtLeafHash,
   verifySmtInclusion,
   verifySmtNonInclusion,
@@ -291,7 +291,7 @@ function testSmtEmptyLeafConstant() {
   console.log('Testing conformance: smt_empty_leaf...');
   const recomputed = computeBlake3(new TextEncoder().encode('OLY:EMPTY-LEAF:V1'));
   const recomputedHex = toHex(recomputed);
-  const constantHex = toHex(SMT_EMPTY_LEAF);
+  const constantHex = toHex(getSmtEmptyLeaf());
   const expected = '0c51a9c6fd8dd8847ba1053a17f62943c59052f4e311ab4e93867c4280579f29';
   assert(constantHex === expected,
     `SMT_EMPTY_LEAF constant has drifted: got ${constantHex}, want ${expected}`);
