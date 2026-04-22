@@ -32,16 +32,16 @@ func canonicalizerVectorFile(t *testing.T) string {
 // --- JSON structures for parsing vectors.json ---
 
 type Vectors struct {
-	Blake3Raw            []Blake3RawVec            `json:"blake3_raw"`
-	MerkleLeafHash       []LeafHashVec             `json:"merkle_leaf_hash"`
-	MerkleParentHash     []ParentHashVec           `json:"merkle_parent_hash"`
-	MerkleRoot           []MerkleRootVec           `json:"merkle_root"`
-	MerkleProof          []MerkleProofVec          `json:"merkle_proof"`
-	LedgerEntryHash      []LedgerEntryHashVec      `json:"ledger_entry_hash"`
-	DualRootCommitment   []DualRootCommitmentVec   `json:"dual_root_commitment"`
-	VerificationBundle   []VerificationBundleVec   `json:"verification_bundle"`
-	ConsistencyProof     []ConsistencyProofVec     `json:"consistency_proof"`
-	SsmfExistenceProof   []SsmfExistenceProofVec   `json:"ssmf_existence_proof"`
+	Blake3Raw             []Blake3RawVec             `json:"blake3_raw"`
+	MerkleLeafHash        []LeafHashVec              `json:"merkle_leaf_hash"`
+	MerkleParentHash      []ParentHashVec            `json:"merkle_parent_hash"`
+	MerkleRoot            []MerkleRootVec            `json:"merkle_root"`
+	MerkleProof           []MerkleProofVec           `json:"merkle_proof"`
+	LedgerEntryHash       []LedgerEntryHashVec       `json:"ledger_entry_hash"`
+	DualRootCommitment    []DualRootCommitmentVec    `json:"dual_root_commitment"`
+	VerificationBundle    []VerificationBundleVec    `json:"verification_bundle"`
+	ConsistencyProof      []ConsistencyProofVec      `json:"consistency_proof"`
+	SsmfExistenceProof    []SsmfExistenceProofVec    `json:"ssmf_existence_proof"`
 	SsmfNonExistenceProof []SsmfNonExistenceProofVec `json:"ssmf_nonexistence_proof"`
 }
 
@@ -106,9 +106,9 @@ type MerkleProofVec struct {
 }
 
 type LedgerEntryHashVec struct {
-	Description        string `json:"description"`
+	Description         string `json:"description"`
 	CanonicalPayloadHex string `json:"canonical_payload_hex"`
-	EntryHash          string `json:"entry_hash"`
+	EntryHash           string `json:"entry_hash"`
 }
 
 // Blake3ProofVec mirrors the blake3_proof sub-object in dual_root_commitment vectors.
@@ -155,7 +155,7 @@ type BundleMerkleProofVec struct {
 type VerificationBundleVec struct {
 	Description     string                   `json:"description"`
 	BundleVersion   string                   `json:"bundle_version"`
-	CanonicalEvents []map[string]interface{}  `json:"canonical_events"`
+	CanonicalEvents []map[string]interface{} `json:"canonical_events"`
 	LeafHashes      []string                 `json:"leaf_hashes"`
 	MerkleRoot      string                   `json:"merkle_root"`
 	MerkleProofs    []BundleMerkleProofVec   `json:"merkle_proofs"`
@@ -637,184 +637,184 @@ func computeCTMerkleRoot(leafHashes [][]byte) (string, error) {
 
 // hex32 decodes a 64-char hex string into a [32]byte.
 func hex32(t *testing.T, s string) [32]byte {
-t.Helper()
-b, err := hex.DecodeString(s)
-if err != nil {
-t.Fatalf("bad hex %q: %v", s, err)
-}
-if len(b) != 32 {
-t.Fatalf("expected 32 bytes, got %d for %q", len(b), s)
-}
-var out [32]byte
-copy(out[:], b)
-return out
+	t.Helper()
+	b, err := hex.DecodeString(s)
+	if err != nil {
+		t.Fatalf("bad hex %q: %v", s, err)
+	}
+	if len(b) != 32 {
+		t.Fatalf("expected 32 bytes, got %d for %q", len(b), s)
+	}
+	var out [32]byte
+	copy(out[:], b)
+	return out
 }
 
 func sibsFromHex(t *testing.T, hexes []string) []SmtSibling {
-t.Helper()
-out := make([]SmtSibling, len(hexes))
-for i, s := range hexes {
-out[i] = hex32(t, s)
-}
-return out
+	t.Helper()
+	out := make([]SmtSibling, len(hexes))
+	for i, s := range hexes {
+		out[i] = hex32(t, s)
+	}
+	return out
 }
 
 func makeInclusion(t *testing.T, vec SsmfExistenceProofVec) *SmtInclusionProof {
-t.Helper()
-return &SmtInclusionProof{
-Key:                    hex32(t, vec.Key),
-ValueHash:              hex32(t, vec.ValueHash),
-ParserID:               vec.ParserID,
-CanonicalParserVersion: vec.CanonicalParserVersion,
-Siblings:               sibsFromHex(t, vec.Siblings),
-RootHash:               hex32(t, vec.RootHash),
-}
+	t.Helper()
+	return &SmtInclusionProof{
+		Key:                    hex32(t, vec.Key),
+		ValueHash:              hex32(t, vec.ValueHash),
+		ParserID:               vec.ParserID,
+		CanonicalParserVersion: vec.CanonicalParserVersion,
+		Siblings:               sibsFromHex(t, vec.Siblings),
+		RootHash:               hex32(t, vec.RootHash),
+	}
 }
 
 func makeNonInclusion(t *testing.T, vec SsmfNonExistenceProofVec) *SmtNonInclusionProof {
-t.Helper()
-return &SmtNonInclusionProof{
-Key:      hex32(t, vec.Key),
-Siblings: sibsFromHex(t, vec.Siblings),
-RootHash: hex32(t, vec.RootHash),
-}
+	t.Helper()
+	return &SmtNonInclusionProof{
+		Key:      hex32(t, vec.Key),
+		Siblings: sibsFromHex(t, vec.Siblings),
+		RootHash: hex32(t, vec.RootHash),
+	}
 }
 
 // TestSMTEmptyLeafConstant guards against drift in the hardcoded SmtEmptyLeaf
 // constant by recomputing BLAKE3(b"OLY:EMPTY-LEAF:V1").
 func TestSMTEmptyLeafConstant(t *testing.T) {
-got := ComputeBlake3([]byte(EmptyLeafPrefix))
-var gotArr [32]byte
-copy(gotArr[:], got)
-if gotArr != SmtEmptyLeaf {
-t.Fatalf("SmtEmptyLeaf has drifted:\n  got  %x\n  want %x", got, SmtEmptyLeaf[:])
-}
-const expectedHex = "0c51a9c6fd8dd8847ba1053a17f62943c59052f4e311ab4e93867c4280579f29"
-if hex.EncodeToString(SmtEmptyLeaf[:]) != expectedHex {
-t.Fatalf("SmtEmptyLeaf hex mismatch: got %x want %s", SmtEmptyLeaf[:], expectedHex)
-}
+	got := ComputeBlake3([]byte(EmptyLeafPrefix))
+	var gotArr [32]byte
+	copy(gotArr[:], got)
+	if gotArr != SmtEmptyLeaf {
+		t.Fatalf("SmtEmptyLeaf has drifted:\n  got  %x\n  want %x", got, SmtEmptyLeaf[:])
+	}
+	const expectedHex = "0c51a9c6fd8dd8847ba1053a17f62943c59052f4e311ab4e93867c4280579f29"
+	if hex.EncodeToString(SmtEmptyLeaf[:]) != expectedHex {
+		t.Fatalf("SmtEmptyLeaf hex mismatch: got %x want %s", SmtEmptyLeaf[:], expectedHex)
+	}
 }
 
 // TestConformanceSMTExistenceProof verifies all ssmf_existence_proof vectors.
 func TestConformanceSMTExistenceProof(t *testing.T) {
-vectors := loadVectors(t)
-if len(vectors.SsmfExistenceProof) == 0 {
-t.Fatal("no ssmf_existence_proof vectors in vectors.json")
-}
-for _, vec := range vectors.SsmfExistenceProof {
-vec := vec
-t.Run(vec.Description, func(t *testing.T) {
-proof := makeInclusion(t, vec)
-got := VerifySMTInclusion(proof)
-if got != vec.ExpectedValid {
-t.Errorf("VerifySMTInclusion: got %v, want %v", got, vec.ExpectedValid)
-}
-})
-}
+	vectors := loadVectors(t)
+	if len(vectors.SsmfExistenceProof) == 0 {
+		t.Fatal("no ssmf_existence_proof vectors in vectors.json")
+	}
+	for _, vec := range vectors.SsmfExistenceProof {
+		vec := vec
+		t.Run(vec.Description, func(t *testing.T) {
+			proof := makeInclusion(t, vec)
+			got := VerifySMTInclusion(proof)
+			if got != vec.ExpectedValid {
+				t.Errorf("VerifySMTInclusion: got %v, want %v", got, vec.ExpectedValid)
+			}
+		})
+	}
 }
 
 // TestConformanceSMTNonExistenceProof verifies all ssmf_nonexistence_proof vectors.
 func TestConformanceSMTNonExistenceProof(t *testing.T) {
-vectors := loadVectors(t)
-if len(vectors.SsmfNonExistenceProof) == 0 {
-t.Fatal("no ssmf_nonexistence_proof vectors in vectors.json")
-}
-for _, vec := range vectors.SsmfNonExistenceProof {
-vec := vec
-t.Run(vec.Description, func(t *testing.T) {
-proof := makeNonInclusion(t, vec)
-got := VerifySMTNonInclusion(proof)
-if got != vec.ExpectedValid {
-t.Errorf("VerifySMTNonInclusion: got %v, want %v", got, vec.ExpectedValid)
-}
-})
-}
+	vectors := loadVectors(t)
+	if len(vectors.SsmfNonExistenceProof) == 0 {
+		t.Fatal("no ssmf_nonexistence_proof vectors in vectors.json")
+	}
+	for _, vec := range vectors.SsmfNonExistenceProof {
+		vec := vec
+		t.Run(vec.Description, func(t *testing.T) {
+			proof := makeNonInclusion(t, vec)
+			got := VerifySMTNonInclusion(proof)
+			if got != vec.ExpectedValid {
+				t.Errorf("VerifySMTNonInclusion: got %v, want %v", got, vec.ExpectedValid)
+			}
+		})
+	}
 }
 
 // TestSMTNegatives covers the six negative cases required by the cross-language
 // SMT verifier specification. Input-validation failures must return false (never
 // panic, never return an error).
 func TestSMTNegatives(t *testing.T) {
-vectors := loadVectors(t)
-if len(vectors.SsmfExistenceProof) == 0 {
-t.Fatal("no ssmf_existence_proof vectors")
-}
-if len(vectors.SsmfNonExistenceProof) == 0 {
-t.Fatal("no ssmf_nonexistence_proof vectors")
-}
-baseExist := vectors.SsmfExistenceProof[0]
-baseNonExist := vectors.SsmfNonExistenceProof[0]
+	vectors := loadVectors(t)
+	if len(vectors.SsmfExistenceProof) == 0 {
+		t.Fatal("no ssmf_existence_proof vectors")
+	}
+	if len(vectors.SsmfNonExistenceProof) == 0 {
+		t.Fatal("no ssmf_nonexistence_proof vectors")
+	}
+	baseExist := vectors.SsmfExistenceProof[0]
+	baseNonExist := vectors.SsmfNonExistenceProof[0]
 
-// Sanity: baseline must verify.
-if !VerifySMTInclusion(makeInclusion(t, baseExist)) {
-t.Fatal("baseline inclusion proof must verify")
-}
-if !VerifySMTNonInclusion(makeNonInclusion(t, baseNonExist)) {
-t.Fatal("baseline non-inclusion proof must verify")
-}
+	// Sanity: baseline must verify.
+	if !VerifySMTInclusion(makeInclusion(t, baseExist)) {
+		t.Fatal("baseline inclusion proof must verify")
+	}
+	if !VerifySMTNonInclusion(makeNonInclusion(t, baseNonExist)) {
+		t.Fatal("baseline non-inclusion proof must verify")
+	}
 
-t.Run("empty parser_id", func(t *testing.T) {
-p := makeInclusion(t, baseExist)
-p.ParserID = ""
-if VerifySMTInclusion(p) {
-t.Error("empty parser_id must fail")
-}
-})
+	t.Run("empty parser_id", func(t *testing.T) {
+		p := makeInclusion(t, baseExist)
+		p.ParserID = ""
+		if VerifySMTInclusion(p) {
+			t.Error("empty parser_id must fail")
+		}
+	})
 
-t.Run("empty canonical_parser_version", func(t *testing.T) {
-p := makeInclusion(t, baseExist)
-p.CanonicalParserVersion = ""
-if VerifySMTInclusion(p) {
-t.Error("empty canonical_parser_version must fail")
-}
-})
+	t.Run("empty canonical_parser_version", func(t *testing.T) {
+		p := makeInclusion(t, baseExist)
+		p.CanonicalParserVersion = ""
+		if VerifySMTInclusion(p) {
+			t.Error("empty canonical_parser_version must fail")
+		}
+	})
 
-t.Run("tampered root", func(t *testing.T) {
-p := makeInclusion(t, baseExist)
-p.RootHash[0] ^= 0x01
-if VerifySMTInclusion(p) {
-t.Error("tampered root must fail")
-}
-})
+	t.Run("tampered root", func(t *testing.T) {
+		p := makeInclusion(t, baseExist)
+		p.RootHash[0] ^= 0x01
+		if VerifySMTInclusion(p) {
+			t.Error("tampered root must fail")
+		}
+	})
 
-t.Run("wrong value_hash", func(t *testing.T) {
-p := makeInclusion(t, baseExist)
-p.ValueHash[31] ^= 0xff
-if VerifySMTInclusion(p) {
-t.Error("wrong value_hash must fail")
-}
-})
+	t.Run("wrong value_hash", func(t *testing.T) {
+		p := makeInclusion(t, baseExist)
+		p.ValueHash[31] ^= 0xff
+		if VerifySMTInclusion(p) {
+			t.Error("wrong value_hash must fail")
+		}
+	})
 
-t.Run("wrong number of siblings", func(t *testing.T) {
-p := makeInclusion(t, baseExist)
-p.Siblings = p.Siblings[:255]
-if VerifySMTInclusion(p) {
-t.Error("255 siblings must fail")
-}
-})
+	t.Run("wrong number of siblings", func(t *testing.T) {
+		p := makeInclusion(t, baseExist)
+		p.Siblings = p.Siblings[:255]
+		if VerifySMTInclusion(p) {
+			t.Error("255 siblings must fail")
+		}
+	})
 
-t.Run("corrupted sibling[100]", func(t *testing.T) {
-p := makeInclusion(t, baseExist)
-p.Siblings[100][0] ^= 0x01
-if VerifySMTInclusion(p) {
-t.Error("corrupted sibling must fail")
-}
-})
+	t.Run("corrupted sibling[100]", func(t *testing.T) {
+		p := makeInclusion(t, baseExist)
+		p.Siblings[100][0] ^= 0x01
+		if VerifySMTInclusion(p) {
+			t.Error("corrupted sibling must fail")
+		}
+	})
 
-// Mirror tampering tests for non-inclusion as well.
-t.Run("non-inclusion tampered root", func(t *testing.T) {
-p := makeNonInclusion(t, baseNonExist)
-p.RootHash[0] ^= 0x01
-if VerifySMTNonInclusion(p) {
-t.Error("tampered non-inclusion root must fail")
-}
-})
+	// Mirror tampering tests for non-inclusion as well.
+	t.Run("non-inclusion tampered root", func(t *testing.T) {
+		p := makeNonInclusion(t, baseNonExist)
+		p.RootHash[0] ^= 0x01
+		if VerifySMTNonInclusion(p) {
+			t.Error("tampered non-inclusion root must fail")
+		}
+	})
 
-t.Run("non-inclusion wrong sibling count", func(t *testing.T) {
-p := makeNonInclusion(t, baseNonExist)
-p.Siblings = p.Siblings[:200]
-if VerifySMTNonInclusion(p) {
-t.Error("wrong sibling count must fail")
-}
-})
+	t.Run("non-inclusion wrong sibling count", func(t *testing.T) {
+		p := makeNonInclusion(t, baseNonExist)
+		p.Siblings = p.Siblings[:200]
+		if VerifySMTNonInclusion(p) {
+			t.Error("wrong sibling count must fail")
+		}
+	})
 }
