@@ -186,3 +186,145 @@ func ComputeDualCommitment(blake3RootHex string, poseidonRootDecimal string) (st
 	buf.Write(poseidonBytes)
 	return hex.EncodeToString(ComputeBlake3(buf.Bytes())), nil
 }
+
+// ---------------------------------------------------------------------------
+// Sparse Merkle Tree (SSMF) cross-language verifier — ADR-0003
+//
+// Mirrors protocol/ssmf.py::verify_proof and verify_nonexistence_proof.
+// Wire format: siblings are leaf-to-root (Siblings[0] = leaf-adjacent,
+// Siblings[255] = root-adjacent). DO NOT model this on
+// services/cdhs-smf-rust/src/smt.rs — that service uses the opposite
+// (root-to-leaf) convention internally; this module follows the wire format
+// used by verifiers/test_vectors/vectors.json and the Python reference.
+// ---------------------------------------------------------------------------
+
+const EmptyLeafPrefix = "OLY:EMPTY-LEAF:V1"
+
+// SmtEmptyLeaf is BLAKE3(b"OLY:EMPTY-LEAF:V1") — must match
+// protocol/ssmf.py::EMPTY_LEAF. Hardcoded for clarity; recomputed by
+// TestSMTEmptyLeafConstant to guard against drift.
+var SmtEmptyLeaf = [32]byte{
+0x0c, 0x51, 0xa9, 0xc6, 0xfd, 0x8d, 0xd8, 0x84,
+0x7b, 0xa1, 0x05, 0x3a, 0x17, 0xf6, 0x29, 0x43,
+0xc5, 0x90, 0x52, 0xf4, 0xe3, 0x11, 0xab, 0x4e,
+0x93, 0x86, 0x7c, 0x42, 0x80, 0x57, 0x9f, 0x29,
+}
+
+// SmtSibling is a 32-byte sibling hash in an SMT proof.
+type SmtSibling = [32]byte
+
+// SmtInclusionProof represents an SMT inclusion proof.
+// Siblings are ordered leaf-to-root: Siblings[0] is leaf-adjacent,
+// Siblings[255] is root-adjacent. Length must be exactly 256.
+type SmtInclusionProof struct {
+Key                    [32]byte
+ValueHash              [32]byte
+ParserID               string
+CanonicalParserVersion string
+Siblings               []SmtSibling
+RootHash               [32]byte
+}
+
+// SmtNonInclusionProof represents an SMT non-inclusion proof.
+// Siblings are ordered leaf-to-root. Length must be exactly 256.
+type SmtNonInclusionProof struct {
+Key      [32]byte
+Siblings []SmtSibling
+RootHash [32]byte
+}
+
+// SmtLeafHash computes the SMT leaf hash with parser-identity binding (ADR-0003).
+// Layout matches protocol/hashes.py::leaf_hash:
+//
+//BLAKE3(LEAF_PREFIX || SEP || key || SEP || value_hash || SEP ||
+//       len(parser_id)[4B BE] || parser_id || SEP ||
+//       len(canonical_parser_version)[4B BE] || canonical_parser_version)
+func SmtLeafHash(key, valueHash [32]byte, parserID, canonicalParserVersion string) [32]byte {
+pid := []byte(parserID)
+cpv := []byte(canonicalParserVersion)
+pidLen := []byte{
+byte(len(pid) >> 24), byte(len(pid) >> 16), byte(len(pid) >> 8), byte(len(pid)),
+}
+cpvLen := []byte{
+byte(len(cpv) >> 24), byte(len(cpv) >> 16), byte(len(cpv) >> 8), byte(len(cpv)),
+}
+var buf bytes.Buffer
+buf.WriteString(LeafPrefix)
+buf.WriteString(HashSeparator)
+buf.Write(key[:])
+buf.WriteString(HashSeparator)
+buf.Write(valueHash[:])
+buf.WriteString(HashSeparator)
+buf.Write(pidLen)
+buf.Write(pid)
+buf.WriteString(HashSeparator)
+buf.Write(cpvLen)
+buf.Write(cpv)
+var out [32]byte
+copy(out[:], ComputeBlake3(buf.Bytes()))
+return out
+}
+
+// keyToPathBits converts a 32-byte key to a 256-bit MSB-first path.
+// path[0] is the MSB of key[0]; path[255] is the LSB of key[31].
+func keyToPathBits(key [32]byte) [256]byte {
+var path [256]byte
+for byteIdx := 0; byteIdx < 32; byteIdx++ {
+b := key[byteIdx]
+for bitInByte := 0; bitInByte < 8; bitInByte++ {
+path[byteIdx*8+bitInByte] = (b >> (7 - bitInByte)) & 1
+}
+}
+return path
+}
+
+// smtWalkAndCheck walks siblings (leaf-to-root) from start and reports
+// whether the computed root matches root.
+func smtWalkAndCheck(pathBits [256]byte, siblings []SmtSibling, start [32]byte, root [32]byte) bool {
+current := start
+for i := 0; i < 256; i++ {
+bit := pathBits[255-i]
+sib := siblings[i]
+if bit == 0 {
+var out [32]byte
+copy(out[:], MerkleParentHash(current[:], sib[:]))
+current = out
+} else {
+var out [32]byte
+copy(out[:], MerkleParentHash(sib[:], current[:]))
+current = out
+}
+}
+return current == root
+}
+
+// VerifySMTInclusion verifies an SMT inclusion proof.
+// Returns false for any input-validation failure (matches the Python
+// reference: never panics, never returns an error).
+func VerifySMTInclusion(proof *SmtInclusionProof) bool {
+if proof == nil {
+return false
+}
+if len(proof.Siblings) != 256 {
+return false
+}
+if proof.ParserID == "" || proof.CanonicalParserVersion == "" {
+return false
+}
+pathBits := keyToPathBits(proof.Key)
+leaf := SmtLeafHash(proof.Key, proof.ValueHash, proof.ParserID, proof.CanonicalParserVersion)
+return smtWalkAndCheck(pathBits, proof.Siblings, leaf, proof.RootHash)
+}
+
+// VerifySMTNonInclusion verifies an SMT non-inclusion proof.
+// Returns false for any input-validation failure.
+func VerifySMTNonInclusion(proof *SmtNonInclusionProof) bool {
+if proof == nil {
+return false
+}
+if len(proof.Siblings) != 256 {
+return false
+}
+pathBits := keyToPathBits(proof.Key)
+return smtWalkAndCheck(pathBits, proof.Siblings, SmtEmptyLeaf, proof.RootHash)
+}
