@@ -144,6 +144,49 @@ def test_ssmf_nonexistence_proof_for_existing_key():
         tree.prove_nonexistence(key)
 
 
+def test_ssmf_proofs_for_keys_with_shared_255_bit_prefix():
+    """Regression: keys that share a 255-bit prefix must produce verifiable
+    existence and non-existence proofs.
+
+    Previously, both ``update`` and ``_collect_siblings`` only consulted
+    ``self.nodes`` for the level-0 sibling. ``self.nodes`` only stores
+    internal nodes (paths of length 0..255), never leaves, so the leaf-level
+    sibling silently fell back to ``EMPTY_LEAF`` whenever two keys shared a
+    255-bit prefix. The result was: parent hashes computed during ``update``
+    were wrong, and proofs for either key (existence or non-existence)
+    could not be verified by ``verify_proof`` / ``verify_nonexistence_proof``.
+    """
+    # 31 zero bytes + 0x00 / 0x01 → identical first 255 bits, differ in bit 255.
+    key0 = bytes.fromhex("00" * 31 + "00")
+    key1 = bytes.fromhex("00" * 31 + "01")
+    val0 = hash_bytes(b"value-0")
+    val1 = hash_bytes(b"value-1")
+
+    # Insert key1 first; non-existence for shared-prefix neighbour key0
+    # must verify before key0 is added.
+    tree_before = SparseMerkleTree()
+    tree_before.update(key1, val1, "docling@2.3.1", "v1")
+    ne_proof = tree_before.prove_nonexistence(key0)
+    assert verify_nonexistence_proof(ne_proof) is True
+    assert verify_proof(tree_before.prove_existence(key1)) is True
+
+    # Both keys present (insertion order A): existence proofs for both must verify.
+    tree_a = SparseMerkleTree()
+    tree_a.update(key1, val1, "docling@2.3.1", "v1")
+    tree_a.update(key0, val0, "docling@2.3.1", "v1")
+    assert verify_proof(tree_a.prove_existence(key0)) is True
+    assert verify_proof(tree_a.prove_existence(key1)) is True
+
+    # Insertion order B (reversed): root and proofs must be identical /
+    # also verify, demonstrating the fix is order-independent.
+    tree_b = SparseMerkleTree()
+    tree_b.update(key0, val0, "docling@2.3.1", "v1")
+    tree_b.update(key1, val1, "docling@2.3.1", "v1")
+    assert tree_b.get_root() == tree_a.get_root()
+    assert verify_proof(tree_b.prove_existence(key0)) is True
+    assert verify_proof(tree_b.prove_existence(key1)) is True
+
+
 def test_ssmf_tampered_proof_detected():
     """Test that tampering with proof is detected."""
     tree = SparseMerkleTree()

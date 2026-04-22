@@ -65,6 +65,19 @@ def _key_to_path_bits(key: bytes) -> list[int]:
     return path
 
 
+def _path_bits_to_key(path: tuple[int, ...]) -> bytes:
+    """Inverse of :func:`_key_to_path_bits` for a full 256-bit path.
+
+    Used by :meth:`SparseMerkleTree._collect_siblings` to look up a
+    leaf-level neighbour by its 32-byte key.
+    """
+    if len(path) != 256:
+        raise ValueError(f"path must be 256 bits, got {len(path)}")
+    return bytes(
+        sum(path[i * 8 + j] << (7 - j) for j in range(8)) for i in range(32)
+    )
+
+
 @dataclass
 class ExistenceProof:
     """Proof that a key-value pair exists in the tree."""
@@ -249,9 +262,25 @@ class SparseMerkleTree:
                 break  # We've reached the root
 
             sibling_path = self._sibling_path(path[: bit_pos + 1])
-            sibling_hash = (
-                self.nodes[sibling_path] if sibling_path in self.nodes else EMPTY_HASHES[level]
-            )
+            if level == 0:
+                # Leaf-level sibling lives in ``_leaf_records`` (see
+                # ``_collect_siblings`` for the full rationale). ``self.nodes``
+                # never stores leaves, so falling back to ``EMPTY_HASHES[0]``
+                # would silently corrupt the parent hash whenever this key
+                # shares its 255-bit prefix with an existing leaf.
+                sibling_key = _path_bits_to_key(sibling_path)
+                neighbour = self._leaf_records.get(sibling_key)
+                if neighbour is not None:
+                    n_value, n_pid, n_cpv = neighbour
+                    sibling_hash = leaf_hash(sibling_key, n_value, n_pid, n_cpv)
+                else:
+                    sibling_hash = EMPTY_HASHES[0]
+            else:
+                sibling_hash = (
+                    self.nodes[sibling_path]
+                    if sibling_path in self.nodes
+                    else EMPTY_HASHES[level]
+                )
 
             # Compute parent hash
             if path[bit_pos] == 0:
@@ -380,7 +409,24 @@ class SparseMerkleTree:
                 break
 
             sibling_path = self._sibling_path(path[: bit_pos + 1])
-            if sibling_path in self.nodes:
+            if level == 0:
+                # Leaf-level sibling: ``self.nodes`` only stores internal
+                # nodes (paths of length 0..255), never leaves. The level-0
+                # sibling, if present, is a real leaf living in
+                # ``_leaf_records`` keyed by the full 32-byte key. Without
+                # this lookup, proofs for keys that share a 255-bit prefix
+                # with an inserted neighbour would emit ``EMPTY_LEAF`` here
+                # and fail verification (the prove/verify generator/checker
+                # mismatch that previously made all shared-prefix
+                # non-existence proofs unverifiable).
+                sibling_key = _path_bits_to_key(sibling_path)
+                neighbour = self._leaf_records.get(sibling_key)
+                if neighbour is not None:
+                    n_value, n_pid, n_cpv = neighbour
+                    siblings.append(leaf_hash(sibling_key, n_value, n_pid, n_cpv))
+                else:
+                    siblings.append(EMPTY_HASHES[0])
+            elif sibling_path in self.nodes:
                 siblings.append(self.nodes[sibling_path])
             else:
                 siblings.append(EMPTY_HASHES[level])

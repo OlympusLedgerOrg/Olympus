@@ -3,6 +3,7 @@ package verifier
 
 import (
 	"bytes"
+	"encoding/binary"
 	"encoding/hex"
 	"errors"
 	"fmt"
@@ -14,10 +15,11 @@ import (
 
 // Constants for domain separation - must match protocol/hashes.py
 const (
-	LeafPrefix    = "OLY:LEAF:V1"
-	NodePrefix    = "OLY:NODE:V1"
-	LedgerPrefix  = "OLY:LEDGER:V1"
-	HashSeparator = "|"
+	LeafPrefix       = "OLY:LEAF:V1"
+	NodePrefix       = "OLY:NODE:V1"
+	LedgerPrefix     = "OLY:LEDGER:V1"
+	HashSeparator    = "|"
+	emptyLeafPreimage = "OLY:EMPTY-LEAF:V1"
 )
 
 // ComputeBlake3 computes the BLAKE3 hash of data
@@ -185,4 +187,176 @@ func ComputeDualCommitment(blake3RootHex string, poseidonRootDecimal string) (st
 	buf.Write(lenPos)
 	buf.Write(poseidonBytes)
 	return hex.EncodeToString(ComputeBlake3(buf.Bytes())), nil
+}
+
+// ---------------------------------------------------------------------------
+// Sparse Merkle Forest (SSMF / CD-HS-ST) verifier
+// ---------------------------------------------------------------------------
+//
+// These functions verify existence and non-existence proofs produced by the
+// 256-height sparse Merkle tree in protocol/ssmf.py. The leaf and node
+// hashing rules below MUST stay byte-identical to:
+//
+//   - protocol.hashes.leaf_hash(key, value_hash, parser_id, canonical_parser_version)
+//   - protocol.hashes.node_hash(left, right)
+//   - protocol.ssmf.EMPTY_LEAF
+//
+// Sibling convention: ``siblings[0]`` is the leaf-end (level 0, paired with
+// the leaf hash) and ``siblings[255]`` is the root-end. For level L the
+// path bit consulted is ``key[bit_pos = 255 - L]`` (MSB-first). See
+// protocol.ssmf.verify_proof / verify_nonexistence_proof.
+
+// SSMFEmptyLeaf returns the domain-separated empty-leaf sentinel used by
+// the sparse Merkle tree, BLAKE3(b"OLY:EMPTY-LEAF:V1").
+func SSMFEmptyLeaf() []byte {
+	h := blake3.Sum256([]byte(emptyLeafPreimage))
+	return h[:]
+}
+
+// SSMFLeafHash computes the SMT leaf hash with parser-identity binding
+// (ADR-0003). Layout matches protocol.hashes.leaf_hash:
+//
+//	BLAKE3(LEAF_PREFIX | "|" | key | "|" | value_hash | "|" |
+//	       len(parser_id)[4B BE] | parser_id | "|" |
+//	       len(canonical_parser_version)[4B BE] | canonical_parser_version)
+//
+// ``key`` and ``valueHash`` must be 32 bytes; ``parserID`` and
+// ``canonicalParserVersion`` must be non-empty (returns nil and false).
+func SSMFLeafHash(key, valueHash []byte, parserID, canonicalParserVersion string) ([]byte, error) {
+	if len(key) != 32 {
+		return nil, fmt.Errorf("ssmf: key must be 32 bytes, got %d", len(key))
+	}
+	if len(valueHash) != 32 {
+		return nil, fmt.Errorf("ssmf: value_hash must be 32 bytes, got %d", len(valueHash))
+	}
+	if parserID == "" {
+		return nil, errors.New("ssmf: parser_id must be a non-empty string")
+	}
+	if canonicalParserVersion == "" {
+		return nil, errors.New("ssmf: canonical_parser_version must be a non-empty string")
+	}
+
+	pid := []byte(parserID)
+	cpv := []byte(canonicalParserVersion)
+
+	var lenPID [4]byte
+	binary.BigEndian.PutUint32(lenPID[:], uint32(len(pid)))
+	var lenCPV [4]byte
+	binary.BigEndian.PutUint32(lenCPV[:], uint32(len(cpv)))
+
+	var buf bytes.Buffer
+	buf.WriteString(LeafPrefix)
+	buf.WriteString(HashSeparator)
+	buf.Write(key)
+	buf.WriteString(HashSeparator)
+	buf.Write(valueHash)
+	buf.WriteString(HashSeparator)
+	buf.Write(lenPID[:])
+	buf.Write(pid)
+	buf.WriteString(HashSeparator)
+	buf.Write(lenCPV[:])
+	buf.Write(cpv)
+	return ComputeBlake3(buf.Bytes()), nil
+}
+
+// keyToPathBitsMSB returns the 256 path bits of a 32-byte key, MSB-first.
+// Mirrors protocol.ssmf._key_to_path_bits.
+func keyToPathBitsMSB(key []byte) ([256]byte, error) {
+	var bits [256]byte
+	if len(key) != 32 {
+		return bits, fmt.Errorf("ssmf: key must be 32 bytes, got %d", len(key))
+	}
+	for i, b := range key {
+		for j := 0; j < 8; j++ {
+			bits[i*8+j] = (b >> (7 - j)) & 1
+		}
+	}
+	return bits, nil
+}
+
+// ssmfWalkPath walks ``current`` from the leaf level up to the root using
+// the standard SSMF convention (ascending level, bit_pos = 255 - level,
+// siblings[0] = leaf-end). Returns the reconstructed root hash.
+func ssmfWalkPath(current []byte, key []byte, siblings [][]byte) ([]byte, error) {
+	if len(siblings) != 256 {
+		return nil, fmt.Errorf("ssmf: siblings must be length 256, got %d", len(siblings))
+	}
+	bits, err := keyToPathBitsMSB(key)
+	if err != nil {
+		return nil, err
+	}
+	cur := current
+	for level := 0; level < 256; level++ {
+		bitPos := 255 - level
+		sib := siblings[level]
+		if len(sib) != 32 {
+			return nil, fmt.Errorf("ssmf: sibling[%d] must be 32 bytes, got %d", level, len(sib))
+		}
+		if bits[bitPos] == 0 {
+			cur = MerkleParentHash(cur, sib)
+		} else {
+			cur = MerkleParentHash(sib, cur)
+		}
+	}
+	return cur, nil
+}
+
+// SSMFExistenceProof represents an existence proof produced by
+// protocol.ssmf.SparseMerkleTree.prove_existence.
+type SSMFExistenceProof struct {
+	Key                    []byte // 32 bytes
+	ValueHash              []byte // 32 bytes
+	ParserID               string
+	CanonicalParserVersion string
+	Siblings               [][]byte // 256 × 32 bytes, leaf-end first
+	RootHash               []byte   // 32 bytes
+}
+
+// SSMFNonExistenceProof represents a non-existence proof produced by
+// protocol.ssmf.SparseMerkleTree.prove_nonexistence.
+type SSMFNonExistenceProof struct {
+	Key      []byte   // 32 bytes
+	Siblings [][]byte // 256 × 32 bytes, leaf-end first
+	RootHash []byte   // 32 bytes
+}
+
+// VerifySSMFExistenceProof reconstructs the root from leaf_hash(key,
+// value_hash, parser_id, canonical_parser_version) and the 256 siblings,
+// returning true iff the reconstructed root matches RootHash.
+//
+// Mirrors protocol.ssmf.verify_proof.
+func VerifySSMFExistenceProof(p *SSMFExistenceProof) (bool, error) {
+	if p == nil {
+		return false, errors.New("ssmf: nil existence proof")
+	}
+	if len(p.RootHash) != 32 {
+		return false, fmt.Errorf("ssmf: root_hash must be 32 bytes, got %d", len(p.RootHash))
+	}
+	leaf, err := SSMFLeafHash(p.Key, p.ValueHash, p.ParserID, p.CanonicalParserVersion)
+	if err != nil {
+		return false, err
+	}
+	got, err := ssmfWalkPath(leaf, p.Key, p.Siblings)
+	if err != nil {
+		return false, err
+	}
+	return bytes.Equal(got, p.RootHash), nil
+}
+
+// VerifySSMFNonExistenceProof reconstructs the root from EMPTY_LEAF and the
+// 256 siblings, returning true iff the reconstructed root matches RootHash.
+//
+// Mirrors protocol.ssmf.verify_nonexistence_proof.
+func VerifySSMFNonExistenceProof(p *SSMFNonExistenceProof) (bool, error) {
+	if p == nil {
+		return false, errors.New("ssmf: nil non-existence proof")
+	}
+	if len(p.RootHash) != 32 {
+		return false, fmt.Errorf("ssmf: root_hash must be 32 bytes, got %d", len(p.RootHash))
+	}
+	got, err := ssmfWalkPath(SSMFEmptyLeaf(), p.Key, p.Siblings)
+	if err != nil {
+		return false, err
+	}
+	return bytes.Equal(got, p.RootHash), nil
 }

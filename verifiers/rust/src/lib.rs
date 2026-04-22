@@ -171,6 +171,156 @@ pub fn compute_dual_commitment(blake3_root: &[u8; 32], poseidon_root_32be: &[u8;
     compute_blake3(&combined)
 }
 
+// ---------------------------------------------------------------------------
+// Sparse Merkle Forest (SSMF / CD-HS-ST) verifier
+// ---------------------------------------------------------------------------
+//
+// These functions verify existence and non-existence proofs produced by the
+// 256-height sparse Merkle tree in `protocol/ssmf.py`. The leaf and node
+// hashing rules below MUST stay byte-identical to:
+//   - `protocol.hashes.leaf_hash(key, value_hash, parser_id, canonical_parser_version)`
+//   - `protocol.hashes.node_hash(left, right)`
+//   - `protocol.ssmf.EMPTY_LEAF`
+//
+// Sibling convention: `siblings[0]` is the leaf-end (level 0, paired with
+// the leaf hash) and `siblings[255]` is the root-end. For level L the
+// path bit consulted is `key[bit_pos = 255 - L]` (MSB-first). See
+// `protocol.ssmf.verify_proof` / `verify_nonexistence_proof`.
+
+const SSMF_EMPTY_LEAF_PREIMAGE: &[u8] = b"OLY:EMPTY-LEAF:V1";
+
+/// Domain-separated empty-leaf sentinel: `BLAKE3(b"OLY:EMPTY-LEAF:V1")`.
+pub fn ssmf_empty_leaf() -> [u8; 32] {
+    compute_blake3(SSMF_EMPTY_LEAF_PREIMAGE)
+}
+
+/// Compute the SMT leaf hash with parser-identity binding (ADR-0003).
+///
+/// Layout matches `protocol.hashes.leaf_hash`:
+///
+/// ```text
+/// BLAKE3(LEAF_PREFIX | "|" | key | "|" | value_hash | "|" |
+///        len(parser_id)[4B BE] | parser_id | "|" |
+///        len(canonical_parser_version)[4B BE] | canonical_parser_version)
+/// ```
+///
+/// `parser_id` and `canonical_parser_version` must be non-empty (returns
+/// `Err`).
+pub fn ssmf_leaf_hash(
+    key: &[u8; 32],
+    value_hash: &[u8; 32],
+    parser_id: &str,
+    canonical_parser_version: &str,
+) -> Result<[u8; 32], &'static str> {
+    if parser_id.is_empty() {
+        return Err("parser_id must be a non-empty string");
+    }
+    if canonical_parser_version.is_empty() {
+        return Err("canonical_parser_version must be a non-empty string");
+    }
+    let pid = parser_id.as_bytes();
+    let cpv = canonical_parser_version.as_bytes();
+    let len_pid = (pid.len() as u32).to_be_bytes();
+    let len_cpv = (cpv.len() as u32).to_be_bytes();
+
+    let mut combined = Vec::with_capacity(
+        LEAF_PREFIX.len() + 1 + 32 + 1 + 32 + 1 + 4 + pid.len() + 1 + 4 + cpv.len(),
+    );
+    combined.extend_from_slice(LEAF_PREFIX);
+    combined.extend_from_slice(HASH_SEPARATOR);
+    combined.extend_from_slice(key);
+    combined.extend_from_slice(HASH_SEPARATOR);
+    combined.extend_from_slice(value_hash);
+    combined.extend_from_slice(HASH_SEPARATOR);
+    combined.extend_from_slice(&len_pid);
+    combined.extend_from_slice(pid);
+    combined.extend_from_slice(HASH_SEPARATOR);
+    combined.extend_from_slice(&len_cpv);
+    combined.extend_from_slice(cpv);
+    Ok(compute_blake3(&combined))
+}
+
+/// Convert a 32-byte key to its 256 path bits, MSB-first.
+///
+/// Mirrors `protocol.ssmf._key_to_path_bits`.
+fn ssmf_key_to_path_bits(key: &[u8; 32]) -> [u8; 256] {
+    let mut bits = [0u8; 256];
+    for (i, byte) in key.iter().enumerate() {
+        for j in 0..8 {
+            bits[i * 8 + j] = (byte >> (7 - j)) & 1;
+        }
+    }
+    bits
+}
+
+/// Walk `current` from leaf level up to the root using the SSMF convention
+/// (ascending level, `bit_pos = 255 - level`, `siblings[0]` = leaf-end).
+fn ssmf_walk_path(
+    current: [u8; 32],
+    key: &[u8; 32],
+    siblings: &[[u8; 32]],
+) -> Result<[u8; 32], String> {
+    if siblings.len() != 256 {
+        return Err(format!("siblings must be length 256, got {}", siblings.len()));
+    }
+    let bits = ssmf_key_to_path_bits(key);
+    let mut cur = current;
+    for level in 0..256usize {
+        let bit_pos = 255 - level;
+        let sib = &siblings[level];
+        cur = if bits[bit_pos] == 0 {
+            merkle_parent_hash(&cur, sib)
+        } else {
+            merkle_parent_hash(sib, &cur)
+        };
+    }
+    Ok(cur)
+}
+
+/// Existence proof for a key in the SSMF (CD-HS-ST) sparse Merkle tree.
+#[derive(Debug, Clone)]
+pub struct SsmfExistenceProof {
+    pub key: [u8; 32],
+    pub value_hash: [u8; 32],
+    pub parser_id: String,
+    pub canonical_parser_version: String,
+    /// 256 sibling hashes; `siblings[0]` is the leaf-end.
+    pub siblings: Vec<[u8; 32]>,
+    pub root_hash: [u8; 32],
+}
+
+/// Non-existence proof for a key in the SSMF (CD-HS-ST) sparse Merkle tree.
+#[derive(Debug, Clone)]
+pub struct SsmfNonExistenceProof {
+    pub key: [u8; 32],
+    /// 256 sibling hashes; `siblings[0]` is the leaf-end.
+    pub siblings: Vec<[u8; 32]>,
+    pub root_hash: [u8; 32],
+}
+
+/// Verify an SSMF existence proof.
+///
+/// Mirrors `protocol.ssmf.verify_proof`.
+pub fn verify_ssmf_existence_proof(proof: &SsmfExistenceProof) -> Result<bool, String> {
+    let leaf = ssmf_leaf_hash(
+        &proof.key,
+        &proof.value_hash,
+        &proof.parser_id,
+        &proof.canonical_parser_version,
+    )
+    .map_err(|e| e.to_string())?;
+    let got = ssmf_walk_path(leaf, &proof.key, &proof.siblings)?;
+    Ok(got == proof.root_hash)
+}
+
+/// Verify an SSMF non-existence proof.
+///
+/// Mirrors `protocol.ssmf.verify_nonexistence_proof`.
+pub fn verify_ssmf_nonexistence_proof(proof: &SsmfNonExistenceProof) -> Result<bool, String> {
+    let got = ssmf_walk_path(ssmf_empty_leaf(), &proof.key, &proof.siblings)?;
+    Ok(got == proof.root_hash)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -463,5 +613,139 @@ mod tests {
                 case.description, computed_root, case.blake3_root_hex,
             );
         }
+    }
+
+    // ---- SSMF (CD-HS-ST) conformance ----------------------------------
+    //
+    // The SSMF vectors are too large to hard-code (256 × 32-byte siblings ×
+    // 6 cases). Embed `vectors.json` at compile time and parse only the
+    // SSMF-relevant sections so we keep zero file I/O at test runtime
+    // while still exercising the canonical vectors.
+
+    const VECTORS_JSON: &str =
+        include_str!("../../test_vectors/vectors.json");
+
+    fn hex32(s: &str) -> [u8; 32] {
+        let v = hex::decode(s).expect("hex32: bad hex");
+        assert_eq!(v.len(), 32, "hex32: expected 32 bytes, got {}", v.len());
+        let mut out = [0u8; 32];
+        out.copy_from_slice(&v);
+        out
+    }
+
+    fn ssmf_decode_siblings(arr: &serde_json::Value) -> Vec<[u8; 32]> {
+        let arr = arr.as_array().expect("siblings is array");
+        arr.iter()
+            .map(|v| hex32(v.as_str().expect("sibling is string")))
+            .collect()
+    }
+
+    #[test]
+    fn conformance_ssmf_existence_proof() {
+        let v: serde_json::Value =
+            serde_json::from_str(VECTORS_JSON).expect("parse vectors.json");
+        let cases = v["ssmf_existence_proof"].as_array().expect("ssmf_existence_proof");
+        assert!(!cases.is_empty(), "expected at least one ssmf_existence_proof vector");
+        for case in cases {
+            let proof = SsmfExistenceProof {
+                key: hex32(case["key"].as_str().unwrap()),
+                value_hash: hex32(case["value_hash"].as_str().unwrap()),
+                parser_id: case["parser_id"].as_str().unwrap().to_string(),
+                canonical_parser_version: case["canonical_parser_version"]
+                    .as_str()
+                    .unwrap()
+                    .to_string(),
+                siblings: ssmf_decode_siblings(&case["siblings"]),
+                root_hash: hex32(case["root_hash"].as_str().unwrap()),
+            };
+            let expected = case["expected_valid"].as_bool().unwrap_or(true);
+            let got = verify_ssmf_existence_proof(&proof).expect("verify_ssmf_existence_proof");
+            assert_eq!(
+                got, expected,
+                "ssmf_existence_proof: {} (got valid={}, expected={})",
+                case["description"].as_str().unwrap_or(""),
+                got,
+                expected,
+            );
+        }
+    }
+
+    #[test]
+    fn conformance_ssmf_nonexistence_proof() {
+        let v: serde_json::Value =
+            serde_json::from_str(VECTORS_JSON).expect("parse vectors.json");
+        let cases = v["ssmf_nonexistence_proof"]
+            .as_array()
+            .expect("ssmf_nonexistence_proof");
+        assert!(!cases.is_empty(), "expected at least one ssmf_nonexistence_proof vector");
+        for case in cases {
+            let proof = SsmfNonExistenceProof {
+                key: hex32(case["key"].as_str().unwrap()),
+                siblings: ssmf_decode_siblings(&case["siblings"]),
+                root_hash: hex32(case["root_hash"].as_str().unwrap()),
+            };
+            let expected = case["expected_valid"].as_bool().unwrap_or(true);
+            let got = verify_ssmf_nonexistence_proof(&proof).expect("verify_ssmf_nonexistence_proof");
+            assert_eq!(
+                got, expected,
+                "ssmf_nonexistence_proof: {} (got valid={}, expected={})",
+                case["description"].as_str().unwrap_or(""),
+                got,
+                expected,
+            );
+        }
+    }
+
+    #[test]
+    fn ssmf_tampered_existence_proof_rejected() {
+        // Cross-check leaf_hash against the first vector: this also retires
+        // the historical "suspect #3" (leaf-hash divergence) hypothesis by
+        // proving the Rust verifier's `ssmf_leaf_hash` is byte-identical to
+        // the Python reference for a known-good input.
+        let v: serde_json::Value =
+            serde_json::from_str(VECTORS_JSON).expect("parse vectors.json");
+        let case = &v["ssmf_existence_proof"].as_array().unwrap()[0];
+        let key = hex32(case["key"].as_str().unwrap());
+        let value_hash = hex32(case["value_hash"].as_str().unwrap());
+        let pid = case["parser_id"].as_str().unwrap();
+        let cpv = case["canonical_parser_version"].as_str().unwrap();
+        // Independently compute the expected leaf hash for vector #1 using
+        // the BLAKE3 length-prefixed schema; assert byte-equality with the
+        // Rust verifier's `ssmf_leaf_hash`.
+        let pid_b = pid.as_bytes();
+        let cpv_b = cpv.as_bytes();
+        let mut expected = Vec::new();
+        expected.extend_from_slice(LEAF_PREFIX);
+        expected.extend_from_slice(HASH_SEPARATOR);
+        expected.extend_from_slice(&key);
+        expected.extend_from_slice(HASH_SEPARATOR);
+        expected.extend_from_slice(&value_hash);
+        expected.extend_from_slice(HASH_SEPARATOR);
+        expected.extend_from_slice(&(pid_b.len() as u32).to_be_bytes());
+        expected.extend_from_slice(pid_b);
+        expected.extend_from_slice(HASH_SEPARATOR);
+        expected.extend_from_slice(&(cpv_b.len() as u32).to_be_bytes());
+        expected.extend_from_slice(cpv_b);
+        let expected_leaf = compute_blake3(&expected);
+        let got_leaf = ssmf_leaf_hash(&key, &value_hash, pid, cpv).expect("leaf hash");
+        assert_eq!(got_leaf, expected_leaf, "ssmf_leaf_hash diverges from canonical schema");
+
+        // Now flip a bit in siblings[0] (the leaf-end sibling, the one our
+        // recent fix touched) and confirm the proof is rejected.
+        let mut siblings = ssmf_decode_siblings(&case["siblings"]);
+        siblings[0][0] ^= 0x01;
+        let tampered = SsmfExistenceProof {
+            key,
+            value_hash,
+            parser_id: pid.to_string(),
+            canonical_parser_version: cpv.to_string(),
+            siblings,
+            root_hash: hex32(case["root_hash"].as_str().unwrap()),
+        };
+        assert_eq!(
+            verify_ssmf_existence_proof(&tampered).expect("verify"),
+            false,
+            "tampered SSMF existence proof should be rejected",
+        );
     }
 }

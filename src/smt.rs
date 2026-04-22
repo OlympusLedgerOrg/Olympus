@@ -66,6 +66,27 @@ fn sibling_path(path: &[u8]) -> Vec<u8> {
     sib
 }
 
+/// Pack a 256-element bit slice into a 32-byte key (MSB first).
+///
+/// Inverse of `key_to_path_bits`. Used to look up a leaf-level neighbour
+/// in `TreeState.leaves` when collecting the level-0 sibling for a proof
+/// or `update`. Leaves are never stored in `nodes`, so without this lookup
+/// the level-0 sibling of any key sharing a 255-bit prefix with another
+/// inserted leaf would silently default to `EMPTY_LEAF` and corrupt the
+/// resulting parent hash / proof.
+fn path_bits_to_key(bits: &[u8]) -> [u8; 32] {
+    debug_assert_eq!(bits.len(), 256, "path_bits_to_key requires a full 256-bit path");
+    let mut out = [0u8; 32];
+    for (i, byte) in out.iter_mut().enumerate() {
+        let mut b = 0u8;
+        for j in 0..8 {
+            b |= (bits[i * 8 + j] & 1) << (7 - j);
+        }
+        *byte = b;
+    }
+    out
+}
+
 /// Pack a slice of path bits (0s and 1s) into bytes, MSB first.
 ///
 /// Matches `StorageLayer._encode_path()` in `storage/postgres.py`.
@@ -223,11 +244,30 @@ impl RustSparseMerkleTree {
             // Sibling path: path[0..=bit_pos] with last bit flipped.
             let sib_path = sibling_path(&path[..=bit_pos]);
 
-            let sib_hash = state
-                .nodes
-                .get(&sib_path)
-                .copied()
-                .unwrap_or(self.empty_hashes[level]);
+            let sib_hash = if level == 0 {
+                // Leaf-level sibling: ``state.nodes`` only stores internal
+                // nodes (paths of length 0..255), never leaves. The level-0
+                // sibling, if present, is a real leaf living in
+                // ``state.leaves`` keyed by the full 32-byte key. Mirrors
+                // the fix in ``protocol/ssmf.SparseMerkleTree.update``.
+                let neighbour_key = path_bits_to_key(&sib_path);
+                if let Some((n_value, n_pid, n_cpv)) = state.leaves.get(&neighbour_key) {
+                    crypto::compute_leaf_hash(
+                        &neighbour_key,
+                        n_value,
+                        n_pid.as_bytes(),
+                        n_cpv.as_bytes(),
+                    )
+                } else {
+                    self.empty_hashes[0]
+                }
+            } else {
+                state
+                    .nodes
+                    .get(&sib_path)
+                    .copied()
+                    .unwrap_or(self.empty_hashes[level])
+            };
 
             let parent_hash = if path[bit_pos] == 0 {
                 crypto::compute_node_hash(&current_hash, &sib_hash)
@@ -534,11 +574,27 @@ impl RustSparseMerkleTree {
         for level in 0..256usize {
             let bit_pos = 255 - level;
             let sib_path = sibling_path(&path[..=bit_pos]);
-            let sib_hash = state
-                .nodes
-                .get(&sib_path)
-                .copied()
-                .unwrap_or(self.empty_hashes[level]);
+            let sib_hash = if level == 0 {
+                // See ``update`` above: level-0 siblings are leaves living
+                // in ``state.leaves``, not in ``state.nodes``.
+                let neighbour_key = path_bits_to_key(&sib_path);
+                if let Some((n_value, n_pid, n_cpv)) = state.leaves.get(&neighbour_key) {
+                    crypto::compute_leaf_hash(
+                        &neighbour_key,
+                        n_value,
+                        n_pid.as_bytes(),
+                        n_cpv.as_bytes(),
+                    )
+                } else {
+                    self.empty_hashes[0]
+                }
+            } else {
+                state
+                    .nodes
+                    .get(&sib_path)
+                    .copied()
+                    .unwrap_or(self.empty_hashes[level])
+            };
             siblings.push(sib_hash);
         }
         siblings
@@ -584,11 +640,25 @@ mod tests {
         for level in 0..256usize {
             let bit_pos = 255 - level;
             let sib_path = sibling_path(&path[..=bit_pos]);
-            let sib_hash = state
-                .nodes
-                .get(&sib_path)
-                .copied()
-                .unwrap_or(tree.empty_hashes[level]);
+            let sib_hash = if level == 0 {
+                let neighbour_key = path_bits_to_key(&sib_path);
+                if let Some((n_value, n_pid, n_cpv)) = state.leaves.get(&neighbour_key) {
+                    crypto::compute_leaf_hash(
+                        &neighbour_key,
+                        n_value,
+                        n_pid.as_bytes(),
+                        n_cpv.as_bytes(),
+                    )
+                } else {
+                    tree.empty_hashes[0]
+                }
+            } else {
+                state
+                    .nodes
+                    .get(&sib_path)
+                    .copied()
+                    .unwrap_or(tree.empty_hashes[level])
+            };
 
             let parent_hash = if path[bit_pos] == 0 {
                 crypto::compute_node_hash(&current_hash, &sib_hash)
