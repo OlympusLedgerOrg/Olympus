@@ -256,6 +256,198 @@ function bigIntTo32BytesBE(n) {
   return bytes;
 }
 
+// ---------------------------------------------------------------------------
+// Sparse Merkle Tree (SSMF) cross-language verifier — ADR-0003
+//
+// Mirrors protocol/ssmf.py::verify_proof and verify_nonexistence_proof.
+// Wire format: siblings are leaf-to-root (siblings[0] = leaf-adjacent,
+// siblings[255] = root-adjacent). Do NOT model this on
+// services/cdhs-smf-rust/src/smt.rs — that service uses the opposite
+// (root-to-leaf) convention internally; this module follows the wire format
+// used by verifiers/test_vectors/vectors.json and the Python reference.
+// ---------------------------------------------------------------------------
+
+/**
+ * SMT empty-leaf sentinel: BLAKE3(b"OLY:EMPTY-LEAF:V1"). Must match
+ * protocol/ssmf.py::EMPTY_LEAF. Hardcoded here for clarity; recomputed by
+ * the conformance test to guard against drift.
+ * Value: 0c51a9c6fd8dd8847ba1053a17f62943c59052f4e311ab4e93867c4280579f29
+ * @type {Uint8Array}
+ */
+const SMT_EMPTY_LEAF = new Uint8Array([
+  0x0c, 0x51, 0xa9, 0xc6, 0xfd, 0x8d, 0xd8, 0x84,
+  0x7b, 0xa1, 0x05, 0x3a, 0x17, 0xf6, 0x29, 0x43,
+  0xc5, 0x90, 0x52, 0xf4, 0xe3, 0x11, 0xab, 0x4e,
+  0x93, 0x86, 0x7c, 0x42, 0x80, 0x57, 0x9f, 0x29,
+]);
+
+/**
+ * Compute the SMT leaf hash with parser-identity binding (ADR-0003).
+ *
+ * Layout (matches protocol/hashes.py::leaf_hash):
+ *   BLAKE3(LEAF_PREFIX || SEP || key || SEP || value_hash || SEP ||
+ *          len(parser_id)[4B BE] || parser_id || SEP ||
+ *          len(canonical_parser_version)[4B BE] || canonical_parser_version)
+ *
+ * @param {Uint8Array} key - 32-byte key
+ * @param {Uint8Array} valueHash - 32-byte value hash
+ * @param {string} parserId - Parser identity (must be non-empty)
+ * @param {string} canonicalParserVersion - Canonical parser version (must be non-empty)
+ * @returns {Uint8Array} - 32-byte leaf hash
+ */
+function smtLeafHash(key, valueHash, parserId, canonicalParserVersion) {
+  const LEAF_PREFIX = new TextEncoder().encode('OLY:LEAF:V1');
+  const SEP = new TextEncoder().encode('|');
+  const pid = new TextEncoder().encode(parserId);
+  const cpv = new TextEncoder().encode(canonicalParserVersion);
+  const u32be = (n) => new Uint8Array([
+    (n >>> 24) & 0xff, (n >>> 16) & 0xff, (n >>> 8) & 0xff, n & 0xff,
+  ]);
+  const pidLen = u32be(pid.length);
+  const cpvLen = u32be(cpv.length);
+
+  const totalLen =
+    LEAF_PREFIX.length + SEP.length + key.length + SEP.length + valueHash.length +
+    SEP.length + pidLen.length + pid.length + SEP.length + cpvLen.length + cpv.length;
+  const buf = new Uint8Array(totalLen);
+  let off = 0;
+  buf.set(LEAF_PREFIX, off); off += LEAF_PREFIX.length;
+  buf.set(SEP, off); off += SEP.length;
+  buf.set(key, off); off += key.length;
+  buf.set(SEP, off); off += SEP.length;
+  buf.set(valueHash, off); off += valueHash.length;
+  buf.set(SEP, off); off += SEP.length;
+  buf.set(pidLen, off); off += pidLen.length;
+  buf.set(pid, off); off += pid.length;
+  buf.set(SEP, off); off += SEP.length;
+  buf.set(cpvLen, off); off += cpvLen.length;
+  buf.set(cpv, off);
+  return computeBlake3(buf);
+}
+
+/**
+ * Convert a 32-byte key to a 256-bit MSB-first path.
+ * pathBits[0] = MSB of key[0]; pathBits[255] = LSB of key[31].
+ * @param {Uint8Array} key
+ * @returns {Uint8Array} - 256 bytes each containing 0 or 1
+ */
+function keyToPathBits(key) {
+  const path = new Uint8Array(256);
+  for (let byteIdx = 0; byteIdx < 32; byteIdx++) {
+    const b = key[byteIdx];
+    for (let bitInByte = 0; bitInByte < 8; bitInByte++) {
+      path[byteIdx * 8 + bitInByte] = (b >>> (7 - bitInByte)) & 1;
+    }
+  }
+  return path;
+}
+
+/** Fixed-iteration equality check for same-length Uint8Arrays. */
+function bytesEqual(a, b) {
+  if (a.length !== b.length) return false;
+  let diff = 0;
+  for (let i = 0; i < a.length; i++) {
+    diff |= a[i] ^ b[i];
+  }
+  return diff === 0;
+}
+
+/**
+ * Walk siblings from leaf to root starting at `start`; return whether the
+ * computed root matches `root`.
+ *
+ * @param {Uint8Array} pathBits - 256 path bits (MSB-first)
+ * @param {Uint8Array[]} siblings - exactly 256 siblings, leaf-to-root
+ * @param {Uint8Array} start - 32-byte starting hash (leaf hash or empty-leaf sentinel)
+ * @param {Uint8Array} root - 32-byte expected root
+ * @returns {boolean}
+ */
+function smtWalkAndCheck(pathBits, siblings, start, root) {
+  let current = start;
+  for (let i = 0; i < 256; i++) {
+    const bit = pathBits[255 - i];
+    const sib = siblings[i];
+    current = bit === 0
+      ? merkleParentHash(current, sib)
+      : merkleParentHash(sib, current);
+  }
+  return bytesEqual(current, root);
+}
+
+/**
+ * Verify an SMT inclusion proof.
+ *
+ * Returns false for any input-validation failure (matches the Python
+ * reference: never throws).
+ *
+ * @param {Object} proof
+ * @param {Uint8Array} proof.key - 32-byte key
+ * @param {Uint8Array} proof.valueHash - 32-byte value hash
+ * @param {string} proof.parserId - Non-empty parser identity
+ * @param {string} proof.canonicalParserVersion - Non-empty canonical parser version
+ * @param {Uint8Array[]} proof.siblings - Exactly 256 32-byte siblings, leaf-to-root
+ * @param {Uint8Array} proof.rootHash - 32-byte root
+ * @returns {boolean}
+ */
+function verifySmtInclusion(proof) {
+  if (!proof) return false;
+  const { key, valueHash, parserId, canonicalParserVersion, siblings, rootHash } = proof;
+  if (!(key instanceof Uint8Array) || key.length !== 32) return false;
+  if (!(valueHash instanceof Uint8Array) || valueHash.length !== 32) return false;
+  if (!(rootHash instanceof Uint8Array) || rootHash.length !== 32) return false;
+  if (typeof parserId !== 'string' || parserId === '') return false;
+  if (typeof canonicalParserVersion !== 'string' || canonicalParserVersion === '') return false;
+  if (!Array.isArray(siblings) || siblings.length !== 256) return false;
+  for (const sib of siblings) {
+    if (!(sib instanceof Uint8Array) || sib.length !== 32) return false;
+  }
+  const pathBits = keyToPathBits(key);
+  const leaf = smtLeafHash(key, valueHash, parserId, canonicalParserVersion);
+  return smtWalkAndCheck(pathBits, siblings, leaf, rootHash);
+}
+
+/**
+ * Verify an SMT non-inclusion proof.
+ *
+ * Returns false for any input-validation failure.
+ *
+ * @param {Object} proof
+ * @param {Uint8Array} proof.key - 32-byte key
+ * @param {Uint8Array[]} proof.siblings - Exactly 256 32-byte siblings, leaf-to-root
+ * @param {Uint8Array} proof.rootHash - 32-byte root
+ * @returns {boolean}
+ */
+function verifySmtNonInclusion(proof) {
+  if (!proof) return false;
+  const { key, siblings, rootHash } = proof;
+  if (!(key instanceof Uint8Array) || key.length !== 32) return false;
+  if (!(rootHash instanceof Uint8Array) || rootHash.length !== 32) return false;
+  if (!Array.isArray(siblings) || siblings.length !== 256) return false;
+  for (const sib of siblings) {
+    if (!(sib instanceof Uint8Array) || sib.length !== 32) return false;
+  }
+  const pathBits = keyToPathBits(key);
+  // Use a copy of SMT_EMPTY_LEAF to prevent callers from mutating the constant
+  return smtWalkAndCheck(pathBits, siblings, new Uint8Array(SMT_EMPTY_LEAF), rootHash);
+}
+
+/**
+ * Get a copy of the SMT empty-leaf sentinel.
+ * Returns a new Uint8Array to prevent external mutation of the internal constant.
+ * @returns {Uint8Array} - 32-byte copy of SMT_EMPTY_LEAF
+ */
+function getSmtEmptyLeaf() {
+  return new Uint8Array(SMT_EMPTY_LEAF);
+}
+
+/**
+ * SMT empty-leaf sentinel as an immutable hex string.
+ * Primitives are immutable, so callers cannot corrupt the verifier's state.
+ * Value: BLAKE3(b"OLY:EMPTY-LEAF:V1")
+ * @type {string}
+ */
+const SMT_EMPTY_LEAF_HEX = toHex(SMT_EMPTY_LEAF);
+
 // Export functions
 module.exports = {
   computeBlake3,
@@ -268,4 +460,10 @@ module.exports = {
   verifyMerkleProof,
   computeLedgerEntryHash,
   computeDualCommitment,
+  // SMT (SSMF) cross-language verifier — ADR-0003
+  SMT_EMPTY_LEAF_HEX,
+  getSmtEmptyLeaf,
+  smtLeafHash,
+  verifySmtInclusion,
+  verifySmtNonInclusion,
 };

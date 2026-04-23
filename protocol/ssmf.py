@@ -65,6 +65,23 @@ def _key_to_path_bits(key: bytes) -> list[int]:
     return path
 
 
+def _path_to_key(path: tuple[int, ...] | list[int]) -> bytes:
+    """Inverse of ``_key_to_path_bits``: pack a length-256 MSB-first path
+    back into a 32-byte key.
+
+    Used by ``SparseMerkleTree._resolve_sibling_hash`` to look up a
+    leaf-level sibling by key in ``_leaf_records``. Raises ``ValueError``
+    if the path is not exactly 256 bits.
+    """
+    if len(path) != 256:
+        raise ValueError(f"path must be exactly 256 bits, got {len(path)}")
+    out = bytearray(32)
+    for idx, bit in enumerate(path):
+        if bit:
+            out[idx // 8] |= 1 << (7 - (idx % 8))
+    return bytes(out)
+
+
 @dataclass
 class ExistenceProof:
     """Proof that a key-value pair exists in the tree."""
@@ -249,9 +266,7 @@ class SparseMerkleTree:
                 break  # We've reached the root
 
             sibling_path = self._sibling_path(path[: bit_pos + 1])
-            sibling_hash = (
-                self.nodes[sibling_path] if sibling_path in self.nodes else EMPTY_HASHES[level]
-            )
+            sibling_hash = self._resolve_sibling_hash(sibling_path, level)
 
             # Compute parent hash
             if path[bit_pos] == 0:
@@ -380,11 +395,39 @@ class SparseMerkleTree:
                 break
 
             sibling_path = self._sibling_path(path[: bit_pos + 1])
-            if sibling_path in self.nodes:
-                siblings.append(self.nodes[sibling_path])
-            else:
-                siblings.append(EMPTY_HASHES[level])
+            siblings.append(self._resolve_sibling_hash(sibling_path, level))
         return siblings
+
+    def _resolve_sibling_hash(
+        self,
+        sibling_path: tuple[int, ...],
+        level: int,
+    ) -> bytes:
+        """
+        Resolve the hash at ``sibling_path`` for use as a Merkle proof sibling.
+
+        Internal nodes (path length 1..255) live in ``self.nodes``. Leaves
+        (path length 256) are NOT stored in ``self.nodes``; they live in
+        ``self._leaf_records``. At the leaf level we must look the sibling
+        up there and compute its leaf hash on demand. Without this branch
+        the leaf-level sibling always falls through to ``empty_leaf``, which
+        silently corrupts proofs whenever two keys are direct leaf-level
+        siblings (ledger-integrity bug — see tests/test_ssmf_adjacent_leaves.py).
+        """
+        if sibling_path in self.nodes:
+            return self.nodes[sibling_path]
+        if len(sibling_path) == 256:
+            sibling_key = _path_to_key(sibling_path)
+            record = self._leaf_records.get(sibling_key)
+            if record is not None:
+                value_hash, parser_id, canonical_parser_version = record
+                return leaf_hash(
+                    sibling_key,
+                    value_hash,
+                    parser_id,
+                    canonical_parser_version,
+                )
+        return EMPTY_HASHES[level]
 
     def _key_to_path(self, key: bytes) -> tuple[int, ...]:
         """Convert 32-byte key to 256-bit path (tuple of 0s and 1s)."""

@@ -18,6 +18,11 @@ const {
   verifyMerkleProof,
   computeLedgerEntryHash,
   computeDualCommitment,
+  SMT_EMPTY_LEAF_HEX,
+  getSmtEmptyLeaf,
+  smtLeafHash,
+  verifySmtInclusion,
+  verifySmtNonInclusion,
 } = require('./verifier');
 
 const VECTORS_PATH = path.join(__dirname, '..', 'test_vectors', 'vectors.json');
@@ -253,7 +258,148 @@ function runConformanceTests() {
   testLedgerEntryHash(vectors);
   testDualRootCommitment(vectors);
   testVerificationBundle(vectors);
+  runSmtTests(vectors);
   console.log('\n✓ All JavaScript conformance tests passed!');
+}
+
+// ---------------------------------------------------------------------------
+// SMT (SSMF) cross-language verifier conformance — ADR-0003
+// Mirrors the Rust/Go conformance tests against ssmf_existence_proof and
+// ssmf_nonexistence_proof entries in vectors.json. Includes the same six
+// negative cases.
+// ---------------------------------------------------------------------------
+
+function buildInclusionProof(vec) {
+  return {
+    key: fromHex(vec.key),
+    valueHash: fromHex(vec.value_hash),
+    parserId: vec.parser_id,
+    canonicalParserVersion: vec.canonical_parser_version,
+    siblings: vec.siblings.map((s) => fromHex(s)),
+    rootHash: fromHex(vec.root_hash),
+  };
+}
+
+function buildNonInclusionProof(vec) {
+  return {
+    key: fromHex(vec.key),
+    siblings: vec.siblings.map((s) => fromHex(s)),
+    rootHash: fromHex(vec.root_hash),
+  };
+}
+
+function testSmtEmptyLeafConstant() {
+  console.log('Testing conformance: smt_empty_leaf...');
+  const recomputed = computeBlake3(new TextEncoder().encode('OLY:EMPTY-LEAF:V1'));
+  const recomputedHex = toHex(recomputed);
+  const constantHex = toHex(getSmtEmptyLeaf());
+  const expected = '0c51a9c6fd8dd8847ba1053a17f62943c59052f4e311ab4e93867c4280579f29';
+  assert(constantHex === expected,
+    `SMT_EMPTY_LEAF constant has drifted: got ${constantHex}, want ${expected}`);
+  assert(recomputedHex === expected,
+    `BLAKE3(OLY:EMPTY-LEAF:V1) != ${expected}: got ${recomputedHex}`);
+  assert(SMT_EMPTY_LEAF_HEX === expected,
+    `SMT_EMPTY_LEAF_HEX has drifted: got ${SMT_EMPTY_LEAF_HEX}, want ${expected}`);
+  console.log('  ✓ smt_empty_leaf: hardcoded constant matches BLAKE3(OLY:EMPTY-LEAF:V1)');
+}
+
+function testSmtExistenceProof(vectors) {
+  console.log('Testing conformance: ssmf_existence_proof...');
+  const cases = vectors.ssmf_existence_proof || [];
+  assert(cases.length > 0, 'no ssmf_existence_proof vectors found');
+  for (const vec of cases) {
+    const proof = buildInclusionProof(vec);
+    const got = verifySmtInclusion(proof);
+    assert(got === vec.expected_valid,
+      `ssmf_existence_proof verify (${vec.description}): got ${got}, want ${vec.expected_valid}`);
+  }
+  console.log(`  ✓ ssmf_existence_proof: ${cases.length} vectors`);
+}
+
+function testSmtNonExistenceProof(vectors) {
+  console.log('Testing conformance: ssmf_nonexistence_proof...');
+  const cases = vectors.ssmf_nonexistence_proof || [];
+  assert(cases.length > 0, 'no ssmf_nonexistence_proof vectors found');
+  for (const vec of cases) {
+    const proof = buildNonInclusionProof(vec);
+    const got = verifySmtNonInclusion(proof);
+    assert(got === vec.expected_valid,
+      `ssmf_nonexistence_proof verify (${vec.description}): got ${got}, want ${vec.expected_valid}`);
+  }
+  console.log(`  ✓ ssmf_nonexistence_proof: ${cases.length} vectors`);
+}
+
+function testSmtNegatives(vectors) {
+  console.log('Testing conformance: ssmf negative cases...');
+  const baseExist = vectors.ssmf_existence_proof[0];
+  const baseNonExist = vectors.ssmf_nonexistence_proof[0];
+
+  // Sanity baselines
+  assert(verifySmtInclusion(buildInclusionProof(baseExist)),
+    'baseline inclusion proof must verify');
+  assert(verifySmtNonInclusion(buildNonInclusionProof(baseNonExist)),
+    'baseline non-inclusion proof must verify');
+
+  // 1) empty parser_id
+  {
+    const p = buildInclusionProof(baseExist);
+    p.parserId = '';
+    assert(verifySmtInclusion(p) === false, 'empty parser_id must fail');
+  }
+  // 2) empty canonical_parser_version
+  {
+    const p = buildInclusionProof(baseExist);
+    p.canonicalParserVersion = '';
+    assert(verifySmtInclusion(p) === false, 'empty canonical_parser_version must fail');
+  }
+  // 3) tampered root
+  {
+    const p = buildInclusionProof(baseExist);
+    p.rootHash = new Uint8Array(p.rootHash);
+    p.rootHash[0] ^= 0x01;
+    assert(verifySmtInclusion(p) === false, 'tampered root must fail');
+  }
+  // 4) wrong value_hash
+  {
+    const p = buildInclusionProof(baseExist);
+    p.valueHash = new Uint8Array(p.valueHash);
+    p.valueHash[31] ^= 0xff;
+    assert(verifySmtInclusion(p) === false, 'wrong value_hash must fail');
+  }
+  // 5) wrong number of siblings (255 instead of 256)
+  {
+    const p = buildInclusionProof(baseExist);
+    p.siblings = p.siblings.slice(0, 255);
+    assert(verifySmtInclusion(p) === false, '255 siblings must fail');
+  }
+  // 6) corrupted sibling[100]
+  {
+    const p = buildInclusionProof(baseExist);
+    p.siblings[100] = new Uint8Array(p.siblings[100]);
+    p.siblings[100][0] ^= 0x01;
+    assert(verifySmtInclusion(p) === false, 'corrupted sibling[100] must fail');
+  }
+
+  // Parallel tampering for non-inclusion
+  {
+    const p = buildNonInclusionProof(baseNonExist);
+    p.rootHash = new Uint8Array(p.rootHash);
+    p.rootHash[0] ^= 0x01;
+    assert(verifySmtNonInclusion(p) === false, 'tampered non-inclusion root must fail');
+  }
+  {
+    const p = buildNonInclusionProof(baseNonExist);
+    p.siblings = p.siblings.slice(0, 200);
+    assert(verifySmtNonInclusion(p) === false, 'wrong sibling count must fail');
+  }
+  console.log('  ✓ ssmf negatives: 8 cases');
+}
+
+function runSmtTests(vectors) {
+  testSmtEmptyLeafConstant();
+  testSmtExistenceProof(vectors);
+  testSmtNonExistenceProof(vectors);
+  testSmtNegatives(vectors);
 }
 
 runConformanceTests();
