@@ -113,3 +113,62 @@ export function verifySmtInclusion(proof: SmtInclusionProof): boolean;
  * input-validation failure.
  */
 export function verifySmtNonInclusion(proof: SmtNonInclusionProof): boolean;
+
+// ---------------------------------------------------------------------------
+// Primitive crypto / Merkle helpers — mirrors verifier.js exports
+// ---------------------------------------------------------------------------
+
+/** Compute a BLAKE3 hash of the given bytes. */
+export function computeBlake3(data: Uint8Array): Uint8Array;
+
+/** Encode a byte array as a lowercase hex string. */
+export function toHex(bytes: Uint8Array): string;
+
+/** Decode a hex string into a Uint8Array. */
+export function fromHex(hex: string): Uint8Array;
+
+/** Return true iff BLAKE3(data) equals the given hex string (case-insensitive). */
+export function verifyBlake3Hash(data: Uint8Array, expectedHex: string): boolean;
+
+/** Compute the BLAKE3 Merkle parent hash of two child hashes. */
+export function merkleParentHash(left: Uint8Array, right: Uint8Array): Uint8Array;
+
+/** Compute the BLAKE3 Merkle leaf hash (OLY:LEAF:V1 domain separation). */
+export function merkleLeafHash(data: Uint8Array): Uint8Array;
+
+/** Build a Merkle tree from leaves and return the root as a hex string. */
+export function computeMerkleRoot(leaves: Uint8Array[]): string;
+
+/** One sibling entry in a Merkle inclusion proof. */
+export interface MerkleSibling {
+  /** Hex-encoded sibling hash. */
+  hash: string;
+  /** Whether this sibling is to the left or right of the current node. */
+  position: 'left' | 'right';
+}
+
+/** Merkle inclusion proof as produced by computeMerkleRoot. */
+export interface MerkleProof {
+  /** Hash of the leaf being proved. */
+  leafHash: Uint8Array;
+  /** Ordered list of sibling hashes from leaf to root. */
+  siblings: MerkleSibling[];
+  /** Expected root hash as a hex string. */
+  rootHash: string;
+}
+
+/** Verify a Merkle inclusion proof. Returns true iff the proof is valid. */
+export function verifyMerkleProof(proof: MerkleProof): boolean;
+
+/**
+ * Compute the ledger entry hash from pre-canonicalized payload bytes.
+ * Formula: BLAKE3(OLY:LEDGER:V1 || canonical_json_bytes)
+ */
+export function computeLedgerEntryHash(canonicalPayloadBytes: Uint8Array): Uint8Array;
+
+/**
+ * Compute the dual-root commitment hash binding a BLAKE3 Merkle root and a
+ * Poseidon root (BN128 field element expressed as a decimal string).
+ * Returns a 64-character hex string.
+ */
+export function computeDualCommitment(blake3RootHex: string, poseidonRootDecimal: string): string;
