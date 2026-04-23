@@ -78,7 +78,7 @@ class TestLoadTreeState(unittest.TestCase):
         cur = MagicMock()
         cur.fetchmany.return_value = []
 
-        _tree = load_tree_state(cur, up_to_ts="2024-01-01T00:00:00Z")  # noqa: F841
+        load_tree_state(cur, up_to_ts="2024-01-01T00:00:00Z")
 
         # Should have called execute with timestamp parameter
         args, kwargs = cur.execute.call_args
@@ -91,7 +91,7 @@ class TestLoadTreeState(unittest.TestCase):
         cur.fetchmany.return_value = []
         cutoff = datetime(2024, 1, 1, tzinfo=timezone.utc)
 
-        _tree = load_tree_state(cur, up_to_ts=cutoff)  # noqa: F841
+        load_tree_state(cur, up_to_ts=cutoff)
 
         args, kwargs = cur.execute.call_args
         self.assertIn("WHERE ts <=", args[0])

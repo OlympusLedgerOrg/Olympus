@@ -102,7 +102,7 @@ def test_storage_layer_propagates_connection_error_on_write(
     We monkeypatch ``StorageLayer._get_connection`` to raise ``OSError`` and
     verify the exception propagates to the caller rather than being swallowed.
     """
-    import storage.postgres as postgres_module
+    from storage import postgres as postgres_module
     from storage.postgres import StorageLayer
 
     # Build a StorageLayer with a fake pool so construction succeeds
@@ -117,8 +117,13 @@ def test_storage_layer_propagates_connection_error_on_write(
 
     monkeypatch.setattr(storage, "append_record", _explode)
 
+    # ``append_record`` has been monkey-patched to ``_explode`` which accepts
+    # arbitrary args/kwargs.  Invoke via the patched attribute directly so
+    # static analysis (CodeQL) doesn't flag the call against the original
+    # ``StorageLayer.append_record`` signature.
+    patched_append_record = storage.append_record
     with pytest.raises(OSError, match="No space left on device"):
-        storage.append_record(  # type: ignore[call-arg]
+        patched_append_record(
             shard_id="chaos-test",
             record_type="document",
             record_id="doc-1",

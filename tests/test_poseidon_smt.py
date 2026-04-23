@@ -297,7 +297,9 @@ def test_leaf_hash_matches_circuit():
     value = 42
 
     key_int = int.from_bytes(key, byteorder="big") % SNARK_SCALAR_FIELD
-    _expected_leaf_hash = _poseidon_hash_leaf(key_int, value)
+    # Sanity-check that the leaf hash function is invocable; the value is not
+    # exposed by the public tree API, so we verify it indirectly via the root.
+    _poseidon_hash_leaf(key_int, value)
 
     tree = PoseidonSMT()
     tree.update(key, value)

@@ -41,7 +41,7 @@ def test_witness_from_smt_raises_for_present_key() -> None:
 
 def test_no_placeholder_string_in_proof_generator() -> None:
     """Regression: the literal placeholder must be removed from the module."""
-    import proofs.proof_generator as pg_mod
+    from proofs import proof_generator as pg_mod
 
     src = inspect.getsource(pg_mod)
     assert "<poseidon_smt_root_as_field_element>" not in src, (

@@ -10,7 +10,7 @@ from pathlib import Path
 import nacl.signing
 import pytest
 
-import protocol.checkpoints as checkpoints_module
+from protocol import checkpoints as checkpoints_module
 from protocol.checkpoints import (
     CheckpointRegistry,
     SignedCheckpoint,

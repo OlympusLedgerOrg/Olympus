@@ -65,7 +65,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from olympus_matcher import Matcher, MatchResult  # noqa: F401
+    from olympus_matcher import Matcher
 
 _DEFAULT_MATCHER: "Matcher | None" = None
 

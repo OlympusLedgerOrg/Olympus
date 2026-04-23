@@ -515,8 +515,11 @@ def create_checkpoint(
     checkpoint_hash = checkpoint_hash_bytes.hex()
 
     if signatures is None:
-        if signing_keys is None:  # pragma: no cover — guarded by line 487 check
-            raise ValueError("Either signing_keys or signatures must be provided")
+        # ``signing_keys`` cannot be None here: validated at function entry
+        # (line 487 above).  ``cast`` re-asserts the invariant for type
+        # checkers without re-raising at runtime (which CodeQL flags as
+        # unreachable code).
+        assert signing_keys is not None
         _keys = signing_keys  # local binding for mypy type narrowing
         signatures = [
             sign_federated_checkpoint(
