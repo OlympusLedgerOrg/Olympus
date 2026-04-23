@@ -86,6 +86,10 @@ export interface SmtNonInclusionProof {
   rootHash: Uint8Array;
 }
 
+/** BLAKE3(b"OLY:EMPTY-LEAF:V1") — SMT empty-leaf sentinel as an immutable hex string.
+ * Primitives are immutable; use this for equality comparisons. */
+export const SMT_EMPTY_LEAF_HEX: string;
+
 /** BLAKE3(b"OLY:EMPTY-LEAF:V1") — 32-byte SMT empty-leaf sentinel.
  * Returns a new Uint8Array copy each call to prevent external mutation. */
 export function getSmtEmptyLeaf(): Uint8Array;

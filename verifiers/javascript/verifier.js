@@ -342,13 +342,14 @@ function keyToPathBits(key) {
   return path;
 }
 
-/** Constant-time-ish equality check for 32-byte Uint8Arrays. */
+/** Fixed-iteration equality check for same-length Uint8Arrays. */
 function bytesEqual(a, b) {
   if (a.length !== b.length) return false;
+  let diff = 0;
   for (let i = 0; i < a.length; i++) {
-    if (a[i] !== b[i]) return false;
+    diff |= a[i] ^ b[i];
   }
-  return true;
+  return diff === 0;
 }
 
 /**
@@ -439,6 +440,14 @@ function getSmtEmptyLeaf() {
   return new Uint8Array(SMT_EMPTY_LEAF);
 }
 
+/**
+ * SMT empty-leaf sentinel as an immutable hex string.
+ * Primitives are immutable, so callers cannot corrupt the verifier's state.
+ * Value: BLAKE3(b"OLY:EMPTY-LEAF:V1")
+ * @type {string}
+ */
+const SMT_EMPTY_LEAF_HEX = toHex(SMT_EMPTY_LEAF);
+
 // Export functions
 module.exports = {
   computeBlake3,
@@ -452,6 +461,7 @@ module.exports = {
   computeLedgerEntryHash,
   computeDualCommitment,
   // SMT (SSMF) cross-language verifier — ADR-0003
+  SMT_EMPTY_LEAF_HEX,
   getSmtEmptyLeaf,
   smtLeafHash,
   verifySmtInclusion,

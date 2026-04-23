@@ -198,7 +198,7 @@ func ComputeDualCommitment(blake3RootHex string, poseidonRootDecimal string) (st
 // used by verifiers/test_vectors/vectors.json and the Python reference.
 // ---------------------------------------------------------------------------
 
-const EmptyLeafPrefix = "OLY:EMPTY-LEAF:V1"
+const emptyLeafPrefix = "OLY:EMPTY-LEAF:V1"
 
 // smtEmptyLeaf is BLAKE3(b"OLY:EMPTY-LEAF:V1") — must match
 // protocol/ssmf.py::EMPTY_LEAF. Hardcoded for clarity; recomputed by

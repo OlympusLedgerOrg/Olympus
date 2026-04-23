@@ -683,7 +683,7 @@ func makeNonInclusion(t *testing.T, vec SsmfNonExistenceProofVec) *SmtNonInclusi
 // TestSMTEmptyLeafConstant guards against drift in the hardcoded smtEmptyLeaf
 // constant by recomputing BLAKE3(b"OLY:EMPTY-LEAF:V1").
 func TestSMTEmptyLeafConstant(t *testing.T) {
-	got := ComputeBlake3([]byte(EmptyLeafPrefix))
+	got := ComputeBlake3([]byte(emptyLeafPrefix))
 	var gotArr [32]byte
 	copy(gotArr[:], got)
 	smtEmptyLeaf := GetSmtEmptyLeaf()

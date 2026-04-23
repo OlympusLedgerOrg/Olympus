@@ -18,6 +18,7 @@ const {
   verifyMerkleProof,
   computeLedgerEntryHash,
   computeDualCommitment,
+  SMT_EMPTY_LEAF_HEX,
   getSmtEmptyLeaf,
   smtLeafHash,
   verifySmtInclusion,
@@ -297,6 +298,8 @@ function testSmtEmptyLeafConstant() {
     `SMT_EMPTY_LEAF constant has drifted: got ${constantHex}, want ${expected}`);
   assert(recomputedHex === expected,
     `BLAKE3(OLY:EMPTY-LEAF:V1) != ${expected}: got ${recomputedHex}`);
+  assert(SMT_EMPTY_LEAF_HEX === expected,
+    `SMT_EMPTY_LEAF_HEX has drifted: got ${SMT_EMPTY_LEAF_HEX}, want ${expected}`);
   console.log('  ✓ smt_empty_leaf: hardcoded constant matches BLAKE3(OLY:EMPTY-LEAF:V1)');
 }
 
