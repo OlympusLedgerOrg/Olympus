@@ -20,6 +20,8 @@ Expected system behaviour
 from __future__ import annotations
 
 import io
+import os
+from typing import Any
 from unittest.mock import MagicMock, patch
 
 import nacl.signing
@@ -54,10 +56,14 @@ def test_in_memory_ledger_survives_disk_full(fresh_ledger: Ledger) -> None:
     """
     builtin_open = open  # keep reference before patch
 
-    def _raise_on_write(path: object, mode: str = "r", **kwargs: object) -> io.IOBase:
+    def _raise_on_write(
+        path: str | bytes | os.PathLike[str] | os.PathLike[bytes] | int,
+        mode: str = "r",
+        **kwargs: Any,
+    ) -> io.IOBase:
         if isinstance(mode, str) and "w" in mode:
             raise OSError(28, "No space left on device")
-        return builtin_open(path, mode, **kwargs)  # type: ignore[arg-type,call-arg]
+        return builtin_open(path, mode, **kwargs)
 
     # Commit two entries before injecting the fault
     for i in range(2):
