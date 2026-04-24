@@ -13,18 +13,26 @@ import (
 
 	"github.com/OlympusLedgerOrg/Olympus/services/sequencer/internal/api"
 	"github.com/OlympusLedgerOrg/Olympus/services/sequencer/internal/client"
+	"github.com/OlympusLedgerOrg/Olympus/services/sequencer/internal/config"
 	"github.com/OlympusLedgerOrg/Olympus/services/sequencer/internal/storage"
 )
 
 func main() {
 	ctx := context.Background()
 
-	dbURL := os.Getenv("SEQUENCER_DB_URL")
+	dbCfg, err := config.LoadDBConfig()
+	if err != nil {
+		log.Fatalf("DB config: %v", err)
+	}
+	log.Printf("DB password source: %s", dbCfg.PasswordSource)
+	if dbCfg.PasswordSource == "embedded:SEQUENCER_DB_URL" || dbCfg.PasswordSource == "env:SEQUENCER_DB_PASSWORD" {
+		log.Printf("WARNING: DB password is supplied via environment variable; " +
+			"prefer SEQUENCER_DB_PASSWORD_FILE pointing at a 0600 secret file " +
+			"(env vars are visible via /proc/<pid>/environ and `docker inspect`).")
+	}
+
 	httpAddr := os.Getenv("SEQUENCER_HTTP_ADDR")
 	apiToken := os.Getenv("SEQUENCER_API_TOKEN")
-	if dbURL == "" {
-		log.Fatalf("SEQUENCER_DB_URL is required")
-	}
 	if apiToken == "" {
 		log.Fatalf("SEQUENCER_API_TOKEN is required")
 	}
@@ -43,7 +51,7 @@ func main() {
 	defer smtClient.Close()
 
 	// Initialize storage (Postgres)
-	store, err := storage.NewPostgresStorage(ctx, dbURL)
+	store, err := storage.NewPostgresStorage(ctx, dbCfg.URL)
 	if err != nil {
 		log.Fatalf("Failed to initialize storage: %v", err)
 	}

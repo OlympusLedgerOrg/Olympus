@@ -74,6 +74,9 @@ Thumbs.db
 *.env
 !.env.example
 
+# Local Docker secrets — never bake into the image.
+secrets/
+
 # Temporary files
 tmp/
 temp/

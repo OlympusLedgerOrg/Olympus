@@ -143,6 +143,98 @@ def test_dockerfile_copies_alembic_files():
     assert "migrations /app/migrations" not in dockerfile
 
 
+# ---------------------------------------------------------------------------
+# Part 2 hardening: kill A.Smith default, file-backed db_password secret,
+# sequencer-go must not receive the password as an inline env var.
+# ---------------------------------------------------------------------------
+
+
+def test_no_a_smith_default_in_compose_files():
+    """The legacy POSTGRES_USER default ``A.Smith`` must not reappear."""
+    for compose_name in ("docker-compose.yml", "docker-compose.federation.yml"):
+        text = (REPO_ROOT / compose_name).read_text(encoding="utf-8")
+        assert "A.Smith" not in text, (
+            f"{compose_name} still references the legacy 'A.Smith' default — "
+            "use 'olympus' instead"
+        )
+
+
+def test_db_password_secret_is_file_backed():
+    """``db_password`` must be file-backed so a fresh ``docker compose up``
+    succeeds without first running ``docker secret create`` (which only
+    works in Swarm mode and is the #1 first-boot cliff for self-hosters)."""
+    for compose_name in ("docker-compose.yml", "docker-compose.federation.yml"):
+        compose = yaml.safe_load((REPO_ROOT / compose_name).read_text(encoding="utf-8"))
+        secret = compose["secrets"]["db_password"]
+        assert secret.get("external") is not True, (
+            f"{compose_name}: db_password must not be external:true — "
+            "use file: ./secrets/db_password instead"
+        )
+        assert secret.get("file") == "./secrets/db_password", (
+            f"{compose_name}: db_password must be backed by ./secrets/db_password"
+        )
+
+
+def test_secrets_dir_is_gitignored():
+    """The generated ./secrets/ contents must never be committed."""
+    gitignore = (REPO_ROOT / ".gitignore").read_text(encoding="utf-8")
+    # Allow either form: '/secrets/*' (rooted) is what we ship.
+    assert "/secrets/*" in gitignore or "secrets/" in gitignore, (
+        ".gitignore must exclude the local secrets directory"
+    )
+    dockerignore = (REPO_ROOT / ".dockerignore").read_text(encoding="utf-8")
+    assert "secrets/" in dockerignore, (
+        ".dockerignore must exclude secrets/ so passwords never bake into the image"
+    )
+
+
+def test_bootstrap_script_exists_and_is_executable():
+    bootstrap = REPO_ROOT / "scripts" / "bootstrap.sh"
+    assert bootstrap.exists(), "scripts/bootstrap.sh is missing"
+    # Script must be executable so the README's `./scripts/bootstrap.sh`
+    # works straight from a fresh clone.
+    import os
+
+    mode = bootstrap.stat().st_mode
+    assert mode & 0o111, "scripts/bootstrap.sh must be executable"
+
+
+def test_sequencer_go_uses_file_backed_password():
+    """sequencer-go must mount the db_password secret and source the password
+    from a file — never as an inline env var like ${POSTGRES_PASSWORD}."""
+    compose = _load_primary_compose()
+    seq = compose["services"]["sequencer-go"]
+
+    # Must mount the same db_password secret the app and db services use.
+    assert "db_password" in (seq.get("secrets") or []), (
+        "sequencer-go must list db_password in its secrets so it gets "
+        "mounted at /run/secrets/db_password"
+    )
+
+    env = seq["environment"]
+    # Must use the new component-based env vars and the file-backed password.
+    assert env.get("SEQUENCER_DB_PASSWORD_FILE") == "/run/secrets/db_password"
+    assert "SEQUENCER_DB_HOST" in env
+    assert "SEQUENCER_DB_USER" in env
+    assert "SEQUENCER_DB_NAME" in env
+    assert "SEQUENCER_DB_SSLMODE" in env
+
+    # Must NOT use the old single-URL form (which forced an inline password).
+    assert "SEQUENCER_DB_URL" not in env, (
+        "sequencer-go must not use SEQUENCER_DB_URL — it leaks the password "
+        "into the process environment. Use SEQUENCER_DB_PASSWORD_FILE plus "
+        "the component vars instead."
+    )
+
+    # Belt-and-braces: nowhere in the compose file should we see the
+    # password interpolated into a connection string.
+    raw = (REPO_ROOT / "docker-compose.yml").read_text(encoding="utf-8")
+    assert "${POSTGRES_PASSWORD}" not in raw, (
+        "docker-compose.yml must not interpolate ${POSTGRES_PASSWORD} into "
+        "any service environment — use the db_password secret instead"
+    )
+
+
 def test_env_example_has_asyncpg_database_url():
     """.env.example must specify postgresql+asyncpg in DATABASE_URL."""
     env_example = (REPO_ROOT / ".env.example").read_text(encoding="utf-8")
