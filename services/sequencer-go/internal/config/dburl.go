@@ -161,8 +161,13 @@ func buildFromComponents(env envReader, readFile fileReader) (*DBConfig, error) 
 	}
 
 	passwordFile := strings.TrimSpace(env.Getenv("SEQUENCER_DB_PASSWORD_FILE"))
-	// Do not TrimSpace passwordEnv: the password may legitimately contain
-	// surrounding whitespace if the operator chose to.
+	// passwordFile is TrimSpace'd because it is a *path* — leading/trailing
+	// whitespace is never meaningful in a filesystem path and almost always
+	// indicates a copy-paste mistake in the env value.
+	//
+	// passwordEnv is intentionally NOT TrimSpace'd: it is the password
+	// itself, and a password may legitimately contain leading or trailing
+	// whitespace if the operator chose to use one.
 	passwordEnv := env.Getenv("SEQUENCER_DB_PASSWORD")
 
 	if passwordFile != "" && passwordEnv != "" {
@@ -182,8 +187,10 @@ func buildFromComponents(env envReader, readFile fileReader) (*DBConfig, error) 
 		if err != nil {
 			return nil, fmt.Errorf("read SEQUENCER_DB_PASSWORD_FILE %q: %w", passwordFile, err)
 		}
-		// Strip a single trailing newline (common with `echo "x" > secret`)
-		// but preserve any other whitespace the operator put in the file.
+		// Strip any number of trailing CR / LF bytes — common with both
+		// `echo "x" > secret` (one \n) and Windows-edited files (\r\n,
+		// possibly multiples). All other whitespace inside the password
+		// is preserved as-is.
 		password = strings.TrimRight(string(raw), "\r\n")
 		if password == "" {
 			return nil, fmt.Errorf("SEQUENCER_DB_PASSWORD_FILE %q is empty", passwordFile)

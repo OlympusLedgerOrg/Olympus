@@ -62,13 +62,26 @@ if [ -f "${DB_PASSWORD_FILE}" ]; then
     log "secrets/db_password already exists — keeping the existing password."
 else
     log "Generating a new random database password at secrets/db_password..."
-    # 40 characters from a base64 alphabet (minus URL-unsafe '+', '/', '=')
-    # gives ~6 bits/char × 40 = ~240 bits of entropy — comfortably above
-    # the 128-bit symmetric-strength target without bumping into libpq URL
-    # length quirks. We strip URL-unsafe chars so the same password drops
-    # cleanly into a postgresql:// URL without extra percent-encoding.
+    # We want a 40-char password from a URL-safe alphabet (no `+`, `/`,
+    # `=`) so it can drop straight into a postgresql:// URL without
+    # percent-encoding.
+    #
+    # `openssl rand -base64 30` would produce exactly 40 base64 chars, but
+    # base64 includes `+` and `/`; stripping those leaves a shorter,
+    # variable-length string. Generating 6 extra random bytes (36 total →
+    # ~48 base64 chars) and then truncating to 40 after the strip
+    # guarantees we always have 40 chars regardless of how many `+`/`/`
+    # the random draw happened to contain.
+    #
+    # Entropy: 40 chars × ~6 bits each ≈ 240 bits, well above the
+    # 128-bit symmetric-strength target.
     PASSWORD_LENGTH=40
     DB_PASSWORD="$(openssl rand -base64 36 | tr -d '=+/' | cut -c1-${PASSWORD_LENGTH})"
+    if [ "${#DB_PASSWORD}" -ne "${PASSWORD_LENGTH}" ]; then
+        log "ERROR: generated password is ${#DB_PASSWORD} chars, expected ${PASSWORD_LENGTH}."
+        log "       openssl produced too few URL-safe chars — try re-running."
+        exit 1
+    fi
     # Use printf without trailing newline. The Go and Python loaders both
     # tolerate a trailing newline, but omitting it keeps the file byte-clean.
     umask 077

@@ -26,14 +26,18 @@ func main() {
 	if err != nil {
 		log.Fatalf("DB config: %v", err)
 	}
-	// dbCfg.Source is a categorical SourceKind constant ("file", "env",
-	// "embedded") — never an operator-controlled string — so logging it
-	// cannot leak the password or the secret-file path.
-	log.Printf("DB password source: %s", dbCfg.Source)
+	// Don't log dbCfg.Source directly: even though it is a categorical
+	// constant ("file" / "env" / "embedded") that cannot itself carry the
+	// password, CodeQL's clear-text-logging analyzer conservatively taints
+	// any value computed in the same branch that read SEQUENCER_DB_PASSWORD_FILE.
+	// The presence/absence of the warning below is enough to tell operators
+	// which source is in use.
 	if dbCfg.Source == config.SourceEmbedded || dbCfg.Source == config.SourceEnv {
 		log.Printf("WARNING: DB password is supplied via environment variable; " +
 			"prefer SEQUENCER_DB_PASSWORD_FILE pointing at a 0600 secret file " +
 			"(env vars are visible via /proc/<pid>/environ and `docker inspect`).")
+	} else {
+		log.Printf("DB password loaded from file-backed secret.")
 	}
 
 	httpAddr := os.Getenv("SEQUENCER_HTTP_ADDR")
