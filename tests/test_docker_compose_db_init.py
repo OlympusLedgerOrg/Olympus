@@ -193,8 +193,6 @@ def test_bootstrap_script_exists_and_is_executable():
     assert bootstrap.exists(), "scripts/bootstrap.sh is missing"
     # Script must be executable so the README's `./scripts/bootstrap.sh`
     # works straight from a fresh clone.
-    import os
-
     mode = bootstrap.stat().st_mode
     assert mode & 0o111, "scripts/bootstrap.sh must be executable"
 

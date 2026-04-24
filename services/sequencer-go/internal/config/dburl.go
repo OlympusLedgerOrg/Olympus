@@ -12,6 +12,7 @@ package config
 
 import (
 	"fmt"
+	"net"
 	"net/url"
 	"os"
 	"strings"
@@ -214,10 +215,15 @@ func buildFromComponents(env envReader, readFile fileReader) (*DBConfig, error) 
 	// Build a postgresql:// URL with the user info URL-encoded so that
 	// passwords containing reserved characters (':', '@', '/', '?', '#')
 	// are passed through correctly to lib/pq.
+	//
+	// Use net.JoinHostPort so IPv6 literals in SEQUENCER_DB_HOST are
+	// bracketed correctly (e.g. "[::1]:5432"). A bare `host + ":" + port`
+	// would produce "::1:5432", which url.Parse interprets as host "::1"
+	// with no port (or rejects entirely depending on the consumer).
 	u := &url.URL{
 		Scheme: "postgresql",
 		User:   url.UserPassword(user, password),
-		Host:   host + ":" + port,
+		Host:   net.JoinHostPort(host, port),
 		Path:   "/" + dbName,
 	}
 	q := u.Query()

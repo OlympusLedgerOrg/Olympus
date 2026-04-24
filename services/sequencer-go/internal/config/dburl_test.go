@@ -126,6 +126,34 @@ func TestLoadDBConfig_ComponentMode_PasswordEscaping(t *testing.T) {
 	}
 }
 
+// IPv6 host literals must be bracketed by net.JoinHostPort so the
+// resulting URL parses cleanly. A bare host+":"+port produces "::1:5432",
+// which url.Parse mis-handles.
+func TestLoadDBConfig_ComponentMode_IPv6Host(t *testing.T) {
+	env := fakeEnv{
+		"SEQUENCER_DB_HOST":     "::1",
+		"SEQUENCER_DB_PORT":     "5432",
+		"SEQUENCER_DB_USER":     "olympus",
+		"SEQUENCER_DB_NAME":     "olympus",
+		"SEQUENCER_DB_SSLMODE":  "disable",
+		"SEQUENCER_DB_PASSWORD": "s3cret",
+	}
+	cfg, err := loadDBConfig(env, fakeReader(nil))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	u, err := url.Parse(cfg.URL)
+	if err != nil {
+		t.Fatalf("URL did not parse: %v (url=%q)", err, cfg.URL)
+	}
+	if u.Hostname() != "::1" {
+		t.Errorf("hostname: got %q want %q (url=%q)", u.Hostname(), "::1", cfg.URL)
+	}
+	if u.Port() != "5432" {
+		t.Errorf("port: got %q want %q (url=%q)", u.Port(), "5432", cfg.URL)
+	}
+}
+
 func TestLoadDBConfig_AmbiguousModesRejected(t *testing.T) {
 	env := fakeEnv{
 		"SEQUENCER_DB_URL":  "postgresql://u:p@h/db?sslmode=disable",
@@ -241,29 +269,29 @@ func TestLoadDBConfig_FileReadErrorWrapped(t *testing.T) {
 }
 
 func TestScrubPath_RemovesPathFromErrorMessage(t *testing.T) {
-path := "/run/secrets/db_password"
-in := fmt.Errorf("open %s: no such file or directory", path)
-out := scrubPath(in, path)
-if strings.Contains(out.Error(), path) {
-t.Errorf("path not scrubbed: %q", out.Error())
-}
-if !strings.Contains(out.Error(), "[redacted-path]") {
-t.Errorf("redaction marker missing: %q", out.Error())
-}
-// Wrapped error must still be reachable via errors.Is on a sentinel.
-sentinel := errors.New("sentinel")
-out2 := scrubPath(fmt.Errorf("wrap %s: %w", path, sentinel), path)
-if !errors.Is(out2, sentinel) {
-t.Errorf("Unwrap broken: %v", out2)
-}
+	path := "/run/secrets/db_password"
+	in := fmt.Errorf("open %s: no such file or directory", path)
+	out := scrubPath(in, path)
+	if strings.Contains(out.Error(), path) {
+		t.Errorf("path not scrubbed: %q", out.Error())
+	}
+	if !strings.Contains(out.Error(), "[redacted-path]") {
+		t.Errorf("redaction marker missing: %q", out.Error())
+	}
+	// Wrapped error must still be reachable via errors.Is on a sentinel.
+	sentinel := errors.New("sentinel")
+	out2 := scrubPath(fmt.Errorf("wrap %s: %w", path, sentinel), path)
+	if !errors.Is(out2, sentinel) {
+		t.Errorf("Unwrap broken: %v", out2)
+	}
 }
 
 func TestScrubPath_NilOrEmptyPathPassThrough(t *testing.T) {
-if got := scrubPath(nil, "/x"); got != nil {
-t.Errorf("nil err should pass through, got %v", got)
-}
-in := errors.New("plain")
-if got := scrubPath(in, ""); got != in {
-t.Errorf("empty path should pass through original err, got %v", got)
-}
+	if got := scrubPath(nil, "/x"); got != nil {
+		t.Errorf("nil err should pass through, got %v", got)
+	}
+	in := errors.New("plain")
+	if got := scrubPath(in, ""); got != in {
+		t.Errorf("empty path should pass through original err, got %v", got)
+	}
 }
