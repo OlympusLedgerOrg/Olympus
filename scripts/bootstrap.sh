@@ -37,6 +37,16 @@ cd "${REPO_ROOT}"
 
 log() { printf '[bootstrap] %s\n' "$*" >&2; }
 
+# Track all temp files we create so an `set -e` exit (or interrupt)
+# doesn't leave them lying around in /tmp.
+_tmp_files=()
+_cleanup_tmp() {
+    if [ ${#_tmp_files[@]} -gt 0 ]; then
+        rm -f "${_tmp_files[@]}"
+    fi
+}
+trap _cleanup_tmp EXIT INT TERM
+
 require_cmd() {
     if ! command -v "$1" >/dev/null 2>&1; then
         log "ERROR: required command '$1' is not installed."
@@ -75,7 +85,7 @@ else
     #
     # Entropy: 40 chars × ~6 bits each ≈ 240 bits, well above the
     # 128-bit symmetric-strength target.
-    PASSWORD_LENGTH=40
+    readonly PASSWORD_LENGTH=40
     DB_PASSWORD="$(openssl rand -base64 36 | tr -d '=+/' | cut -c1-${PASSWORD_LENGTH})"
     if [ "${#DB_PASSWORD}" -ne "${PASSWORD_LENGTH}" ]; then
         log "ERROR: generated password is ${#DB_PASSWORD} chars, expected ${PASSWORD_LENGTH}."
@@ -136,6 +146,7 @@ set_env_if_blank() {
         # quoting issues with the random/hex values we generate.
         local tmp
         tmp="$(mktemp)"
+        _tmp_files+=("${tmp}")
         awk -v k="${key}" -v v="${value}" '
             BEGIN { found = 0 }
             $0 ~ "^"k"=" { print k"="v; found = 1; next }

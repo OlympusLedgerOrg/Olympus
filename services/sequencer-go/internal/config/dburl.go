@@ -185,7 +185,13 @@ func buildFromComponents(env envReader, readFile fileReader) (*DBConfig, error) 
 	case passwordFile != "":
 		raw, err := readFile(passwordFile)
 		if err != nil {
-			return nil, fmt.Errorf("read SEQUENCER_DB_PASSWORD_FILE %q: %w", passwordFile, err)
+			// Don't echo passwordFile here: it is sourced from an env var
+			// whose name contains "PASSWORD", and CodeQL conservatively
+			// taints anything derived from such variables. Returning a
+			// scrubbed error keeps secrets/paths from later flowing into
+			// log.Fatalf in main. Operators can recover the offending path
+			// by inspecting their own SEQUENCER_DB_PASSWORD_FILE setting.
+			return nil, fmt.Errorf("read SEQUENCER_DB_PASSWORD_FILE: %w", scrubPath(err, passwordFile))
 		}
 		// Strip any number of trailing CR / LF bytes — common with both
 		// `echo "x" > secret` (one \n) and Windows-edited files (\r\n,
@@ -193,7 +199,7 @@ func buildFromComponents(env envReader, readFile fileReader) (*DBConfig, error) 
 		// is preserved as-is.
 		password = strings.TrimRight(string(raw), "\r\n")
 		if password == "" {
-			return nil, fmt.Errorf("SEQUENCER_DB_PASSWORD_FILE %q is empty", passwordFile)
+			return nil, fmt.Errorf("SEQUENCER_DB_PASSWORD_FILE is empty")
 		}
 		passSource = SourceFile
 	case passwordEnv != "":
@@ -223,3 +229,28 @@ func buildFromComponents(env envReader, readFile fileReader) (*DBConfig, error) 
 		Source: passSource,
 	}, nil
 }
+
+// scrubPath returns a wrapped error whose Error() text has any occurrence
+// of `path` (the file path read from SEQUENCER_DB_PASSWORD_FILE) replaced
+// with a placeholder. os.ReadFile errors typically embed the path; without
+// scrubbing, the path would flow through %w into errors logged elsewhere
+// and trip CodeQL's clear-text-logging analyzer (the env var name contains
+// "PASSWORD", so any value derived from it is treated as sensitive).
+func scrubPath(err error, path string) error {
+	if err == nil || path == "" {
+		return err
+	}
+	scrubbed := strings.ReplaceAll(err.Error(), path, "[redacted-path]")
+	return scrubbedErr{msg: scrubbed, wrapped: err}
+}
+
+// scrubbedErr is the small error type returned by scrubPath. It exposes a
+// scrubbed Error() string but preserves Unwrap() so callers can still match
+// underlying errors with errors.Is / errors.As.
+type scrubbedErr struct {
+	msg     string
+	wrapped error
+}
+
+func (e scrubbedErr) Error() string { return e.msg }
+func (e scrubbedErr) Unwrap() error { return e.wrapped }

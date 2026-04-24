@@ -239,3 +239,31 @@ func TestLoadDBConfig_FileReadErrorWrapped(t *testing.T) {
 		t.Fatalf("expected wrapped sentinel, got %v", err)
 	}
 }
+
+func TestScrubPath_RemovesPathFromErrorMessage(t *testing.T) {
+path := "/run/secrets/db_password"
+in := fmt.Errorf("open %s: no such file or directory", path)
+out := scrubPath(in, path)
+if strings.Contains(out.Error(), path) {
+t.Errorf("path not scrubbed: %q", out.Error())
+}
+if !strings.Contains(out.Error(), "[redacted-path]") {
+t.Errorf("redaction marker missing: %q", out.Error())
+}
+// Wrapped error must still be reachable via errors.Is on a sentinel.
+sentinel := errors.New("sentinel")
+out2 := scrubPath(fmt.Errorf("wrap %s: %w", path, sentinel), path)
+if !errors.Is(out2, sentinel) {
+t.Errorf("Unwrap broken: %v", out2)
+}
+}
+
+func TestScrubPath_NilOrEmptyPathPassThrough(t *testing.T) {
+if got := scrubPath(nil, "/x"); got != nil {
+t.Errorf("nil err should pass through, got %v", got)
+}
+in := errors.New("plain")
+if got := scrubPath(in, ""); got != in {
+t.Errorf("empty path should pass through original err, got %v", got)
+}
+}
