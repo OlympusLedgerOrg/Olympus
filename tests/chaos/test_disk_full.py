@@ -22,6 +22,7 @@ from __future__ import annotations
 import io
 from unittest.mock import MagicMock, patch
 
+import nacl.signing
 import pytest
 
 from protocol.hashes import hash_bytes
@@ -117,18 +118,14 @@ def test_storage_layer_propagates_connection_error_on_write(
 
     monkeypatch.setattr(storage, "append_record", _explode)
 
-    # ``append_record`` has been monkey-patched to ``_explode`` which accepts
-    # arbitrary args/kwargs.  Invoke via the patched attribute directly so
-    # static analysis (CodeQL) doesn't flag the call against the original
-    # ``StorageLayer.append_record`` signature.
-    patched_append_record = storage.append_record
     with pytest.raises(OSError, match="No space left on device"):
-        patched_append_record(
+        storage.append_record(
             shard_id="chaos-test",
             record_type="document",
             record_id="doc-1",
             version=1,
             value_hash=b"\xaa" * 32,
+            signing_key=nacl.signing.SigningKey.generate(),
         )
 
 
