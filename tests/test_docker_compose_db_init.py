@@ -154,8 +154,7 @@ def test_no_a_smith_default_in_compose_files():
     for compose_name in ("docker-compose.yml", "docker-compose.federation.yml"):
         text = (REPO_ROOT / compose_name).read_text(encoding="utf-8")
         assert "A.Smith" not in text, (
-            f"{compose_name} still references the legacy 'A.Smith' default — "
-            "use 'olympus' instead"
+            f"{compose_name} still references the legacy 'A.Smith' default — use 'olympus' instead"
         )
 
 
