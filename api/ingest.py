@@ -104,6 +104,23 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
+# Backward-compatibility re-exports.  These names are exposed by ``api.ingest``
+# for tests and downstream callers; their canonical definitions live in
+# ``api.schemas.ingest``, ``api.services.poseidon`` and ``api.services.proof_utils``.
+# Listing them in ``__all__`` ensures static analysers (CodeQL ``py/unused-import``)
+# recognise them as exported, not unused.
+__all__ = [
+    "router",
+    "_PROOF_ID_PATTERN",
+    "_check_json_depth",
+    "_estimate_json_size",
+    "_resolved_poseidon_root",
+    "_value_hash_to_poseidon_field",
+    "_normalize_source_url",
+    "_parse_content_hash",
+]
+
+
 def _normalize_merkle_root(merkle_root: str) -> str:
     """Validate and normalize a hex-encoded Merkle root.
 

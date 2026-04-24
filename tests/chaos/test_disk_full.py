@@ -22,6 +22,7 @@ from __future__ import annotations
 import io
 from unittest.mock import MagicMock, patch
 
+import nacl.signing
 import pytest
 
 from protocol.hashes import hash_bytes
@@ -102,7 +103,7 @@ def test_storage_layer_propagates_connection_error_on_write(
     We monkeypatch ``StorageLayer._get_connection`` to raise ``OSError`` and
     verify the exception propagates to the caller rather than being swallowed.
     """
-    import storage.postgres as postgres_module
+    from storage import postgres as postgres_module
     from storage.postgres import StorageLayer
 
     # Build a StorageLayer with a fake pool so construction succeeds
@@ -118,12 +119,13 @@ def test_storage_layer_propagates_connection_error_on_write(
     monkeypatch.setattr(storage, "append_record", _explode)
 
     with pytest.raises(OSError, match="No space left on device"):
-        storage.append_record(  # type: ignore[call-arg]
+        storage.append_record(
             shard_id="chaos-test",
             record_type="document",
             record_id="doc-1",
             version=1,
             value_hash=b"\xaa" * 32,
+            signing_key=nacl.signing.SigningKey.generate(),
         )
 
 

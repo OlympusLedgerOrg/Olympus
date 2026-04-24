@@ -13,7 +13,7 @@ Coverage:
 
 import pytest
 
-import protocol.cross_root_validation as cross_root_validation_module
+from protocol import cross_root_validation as cross_root_validation_module
 from protocol.cross_root_validation import (
     ConsistencyError,
     ConsistencyResult,

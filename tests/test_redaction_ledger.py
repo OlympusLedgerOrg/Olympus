@@ -535,7 +535,7 @@ def test_commit_document_dual_rejects_poseidon_root_mismatch():
 
     smt = SparseMerkleTree()
 
-    _tree, _commitment = RedactionProtocol.commit_document_dual(
+    RedactionProtocol.commit_document_dual(
         document_parts=["alpha", "beta", "gamma"],
         poseidon_root=mismatched_poseidon_root,
         smt=smt,

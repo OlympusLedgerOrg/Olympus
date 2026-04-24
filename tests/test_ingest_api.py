@@ -925,7 +925,7 @@ def test_load_api_keys_from_env_requires_hashed_keys(monkeypatch):
 
     Note: Key loading is now handled by the unified auth module (api.auth).
     """
-    import api.auth as auth_module
+    from api import auth as auth_module
 
     auth_module._reset_auth_state_for_tests()
     monkeypatch.setenv(
@@ -941,7 +941,7 @@ def test_load_api_keys_from_env_accepts_hashes(monkeypatch):
 
     Note: Key loading is now handled by the unified auth module (api.auth).
     """
-    import api.auth as auth_module
+    from api import auth as auth_module
 
     auth_module._reset_auth_state_for_tests()
     key_hash = hash_bytes(b"hashed-secret").hex()
@@ -959,7 +959,7 @@ def test_smt_divergence_alert_requires_api_key():
     import json
     import os
 
-    import api.auth as auth_module
+    from api import auth as auth_module
 
     original_loaded = auth_module._keys_loaded
     original_store = dict(auth_module._key_store)
@@ -1011,7 +1011,7 @@ def test_metrics_endpoint_requires_api_key():
     import json
     import os
 
-    import api.auth as auth_module
+    from api import auth as auth_module
 
     original_loaded = auth_module._keys_loaded
     original_store = dict(auth_module._key_store)

@@ -756,7 +756,7 @@ async def test_dataset_history_multi_version_chain(client):
     )
     resp2 = await client.post("/datasets/commit", json=body2)
     assert resp2.status_code == 201
-    _commit_id_v2 = resp2.json()["commit_id"]  # noqa: F841
+    assert resp2.json()["commit_id"]
 
     # Get history
     resp = await client.get(f"/datasets/{dataset_id}/history")

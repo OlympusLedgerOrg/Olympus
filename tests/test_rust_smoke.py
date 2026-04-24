@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import importlib.util
 import os
 import subprocess
 import sys
@@ -15,12 +16,7 @@ from protocol.canonical_json import _encode_value, _normalize_for_canonical_json
 from protocol.hashes import _GLOBAL_SMT_KEY_CONTEXT
 
 
-try:
-    import olympus_core  # noqa: F401
-
-    HAS_RUST = True
-except ImportError:
-    HAS_RUST = False
+HAS_RUST = importlib.util.find_spec("olympus_core") is not None
 
 RUST_ONLY = pytest.mark.skipif(not HAS_RUST, reason="Rust extension not built")
 REPO_ROOT = Path(__file__).resolve().parent.parent

@@ -5,9 +5,14 @@ import re
 from sqlalchemy import engine_from_config, pool
 
 # Import all models so that metadata is populated for autogenerate
-import api.models  # noqa: F401
+import api.models
 from alembic import context
 from api.models.base import Base
+
+# Reference ``api.models`` after import so static analysers (CodeQL) see the
+# import as used; importing it for side effects is required to populate
+# ``Base.metadata`` for autogenerate.
+assert api.models is not None
 
 
 config = context.config

@@ -515,8 +515,10 @@ def create_checkpoint(
     checkpoint_hash = checkpoint_hash_bytes.hex()
 
     if signatures is None:
-        if signing_keys is None:  # pragma: no cover — guarded by line 487 check
-            raise ValueError("Either signing_keys or signatures must be provided")
+        # signing_keys is guaranteed non-None here by the check at line 487.
+        # The assert is purely for mypy type narrowing and can never fail at
+        # runtime; nosec suppresses the Bandit B101 false-positive.
+        assert signing_keys is not None  # nosec B101
         _keys = signing_keys  # local binding for mypy type narrowing
         signatures = [
             sign_federated_checkpoint(

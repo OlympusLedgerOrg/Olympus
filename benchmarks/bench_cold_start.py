@@ -28,8 +28,6 @@ The "throughput" section shows steady-state records/second.
 from __future__ import annotations
 
 import argparse
-import importlib
-import statistics
 import sys
 import time
 from decimal import Decimal
@@ -168,8 +166,6 @@ def py_canonical_json_encode(obj: object) -> str:
         if d == 0:
             return "0"
         n = d.normalize()
-        digits = str(abs(int(n)))
-        exp = int(n.log10()) if n != 0 else 0  # approx; use as_tuple for precision
         at = n.as_tuple()
         sign = "-" if at.sign else ""
         digs = "".join(str(x) for x in at.digits)
