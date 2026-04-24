@@ -34,8 +34,8 @@ func TestLoadDBConfig_URLMode(t *testing.T) {
 	if cfg.URL != "postgresql://u:p@h:5432/db?sslmode=verify-full" {
 		t.Errorf("URL not preserved: %q", cfg.URL)
 	}
-	if cfg.PasswordSource != "embedded:SEQUENCER_DB_URL" {
-		t.Errorf("unexpected PasswordSource: %q", cfg.PasswordSource)
+	if cfg.Source != SourceEmbedded {
+		t.Errorf("unexpected Source: %q", cfg.Source)
 	}
 }
 
@@ -76,8 +76,8 @@ func TestLoadDBConfig_ComponentMode_FileWins(t *testing.T) {
 	if u.Query().Get("sslmode") != "disable" {
 		t.Errorf("sslmode: %q", u.Query().Get("sslmode"))
 	}
-	if cfg.PasswordSource != "file:/run/secrets/db_password" {
-		t.Errorf("PasswordSource: %q", cfg.PasswordSource)
+	if cfg.Source != SourceFile {
+		t.Errorf("Source: %q", cfg.Source)
 	}
 }
 
@@ -93,8 +93,8 @@ func TestLoadDBConfig_ComponentMode_EnvFallback(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if cfg.PasswordSource != "env:SEQUENCER_DB_PASSWORD" {
-		t.Errorf("PasswordSource: %q", cfg.PasswordSource)
+	if cfg.Source != SourceEnv {
+		t.Errorf("Source: %q", cfg.Source)
 	}
 	u, _ := url.Parse(cfg.URL)
 	if pass, _ := u.User.Password(); pass != "s3cret" {

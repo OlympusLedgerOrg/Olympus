@@ -25,11 +25,28 @@ type DBConfig struct {
 	// in logs because it may contain the password.
 	URL string
 
-	// PasswordSource describes where the password came from, for
-	// non-sensitive startup logging (e.g. "file:/run/secrets/db_password",
-	// "env:SEQUENCER_DB_PASSWORD", "embedded:SEQUENCER_DB_URL").
-	PasswordSource string
+	// Source describes where the password came from, for non-sensitive
+	// startup logging. Always one of the constants below — a categorical
+	// label, never a file path or env-var value, so logging it cannot
+	// leak operator-controlled strings.
+	Source SourceKind
 }
+
+// SourceKind enumerates the (categorical) ways the DB password may have
+// reached the sequencer.
+type SourceKind string
+
+const (
+	// SourceFile means the password was read from a file pointed at by
+	// SEQUENCER_DB_PASSWORD_FILE.
+	SourceFile SourceKind = "file"
+	// SourceEnv means the password was read from the
+	// SEQUENCER_DB_PASSWORD environment variable.
+	SourceEnv SourceKind = "env"
+	// SourceEmbedded means the password was embedded in a full
+	// SEQUENCER_DB_URL connection string.
+	SourceEmbedded SourceKind = "embedded"
+)
 
 // envReader is the small slice of os we need; it lets tests inject a fake
 // environment without touching real os.Setenv state.
@@ -101,8 +118,8 @@ func loadDBConfig(env envReader, readFile fileReader) (*DBConfig, error) {
 				"variables alone (with SEQUENCER_DB_PASSWORD_FILE for the password)")
 	case urlVar != "":
 		return &DBConfig{
-			URL:            urlVar,
-			PasswordSource: "embedded:SEQUENCER_DB_URL",
+			URL:    urlVar,
+			Source: SourceEmbedded,
 		}, nil
 	case componentSet:
 		return buildFromComponents(env, readFile)
@@ -157,7 +174,7 @@ func buildFromComponents(env envReader, readFile fileReader) (*DBConfig, error) 
 
 	var (
 		password   string
-		passSource string
+		passSource SourceKind
 	)
 	switch {
 	case passwordFile != "":
@@ -171,10 +188,10 @@ func buildFromComponents(env envReader, readFile fileReader) (*DBConfig, error) 
 		if password == "" {
 			return nil, fmt.Errorf("SEQUENCER_DB_PASSWORD_FILE %q is empty", passwordFile)
 		}
-		passSource = "file:" + passwordFile
+		passSource = SourceFile
 	case passwordEnv != "":
 		password = passwordEnv
-		passSource = "env:SEQUENCER_DB_PASSWORD"
+		passSource = SourceEnv
 	default:
 		return nil, fmt.Errorf(
 			"no DB password source: set SEQUENCER_DB_PASSWORD_FILE (preferred) or " +
@@ -195,7 +212,7 @@ func buildFromComponents(env envReader, readFile fileReader) (*DBConfig, error) 
 	u.RawQuery = q.Encode()
 
 	return &DBConfig{
-		URL:            u.String(),
-		PasswordSource: passSource,
+		URL:    u.String(),
+		Source: passSource,
 	}, nil
 }

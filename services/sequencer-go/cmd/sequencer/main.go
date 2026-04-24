@@ -6,7 +6,9 @@ import (
 	"log"
 	"net"
 	"net/http"
+	"net/url"
 	"os"
+	"strings"
 	"time"
 
 	pb "github.com/OlympusLedgerOrg/Olympus/services/sequencer/proto"
@@ -24,8 +26,11 @@ func main() {
 	if err != nil {
 		log.Fatalf("DB config: %v", err)
 	}
-	log.Printf("DB password source: %s", dbCfg.PasswordSource)
-	if dbCfg.PasswordSource == "embedded:SEQUENCER_DB_URL" || dbCfg.PasswordSource == "env:SEQUENCER_DB_PASSWORD" {
+	// dbCfg.Source is a categorical SourceKind constant ("file", "env",
+	// "embedded") — never an operator-controlled string — so logging it
+	// cannot leak the password or the secret-file path.
+	log.Printf("DB password source: %s", dbCfg.Source)
+	if dbCfg.Source == config.SourceEmbedded || dbCfg.Source == config.SourceEnv {
 		log.Printf("WARNING: DB password is supplied via environment variable; " +
 			"prefer SEQUENCER_DB_PASSWORD_FILE pointing at a 0600 secret file " +
 			"(env vars are visible via /proc/<pid>/environ and `docker inspect`).")
@@ -50,10 +55,14 @@ func main() {
 	}
 	defer smtClient.Close()
 
-	// Initialize storage (Postgres)
+	// Initialize storage (Postgres). Use redactedErr when logging because
+	// dbCfg.URL embeds the database password; even though the storage
+	// layer's current errors never include the URL, redactedErr is a
+	// defense-in-depth scrubber that prevents any future regression from
+	// leaking credentials via log lines.
 	store, err := storage.NewPostgresStorage(ctx, dbCfg.URL)
 	if err != nil {
-		log.Fatalf("Failed to initialize storage: %v", err)
+		log.Fatalf("Failed to initialize storage: %s", redactedErr(err, dbCfg.URL))
 	}
 	defer store.Close()
 
@@ -123,4 +132,24 @@ func main() {
 			log.Fatalf("Server failed: %v", err)
 		}
 	}
+}
+
+// redactedErr returns err.Error() with the supplied secret string (and any
+// percent-encoded form of its userinfo segment) removed. Used when logging
+// errors that may have flowed downstream from a connection string
+// containing a password.
+func redactedErr(err error, secret string) string {
+	msg := err.Error()
+	if secret == "" {
+		return msg
+	}
+	msg = strings.ReplaceAll(msg, secret, "[REDACTED-DB-URL]")
+	// Some libraries log just the userinfo portion (`user:password@host`).
+	// Try to match and redact that fragment as well.
+	if u, perr := url.Parse(secret); perr == nil && u.User != nil {
+		if pw, ok := u.User.Password(); ok && pw != "" {
+			msg = strings.ReplaceAll(msg, pw, "[REDACTED]")
+		}
+	}
+	return msg
 }
