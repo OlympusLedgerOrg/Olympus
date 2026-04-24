@@ -170,7 +170,7 @@ set_env_if_blank "POSTGRES_PASSWORD" "${DB_PASSWORD}"
 # defaults from .env.example. Operators running outside docker compose
 # should override them.
 DEFAULT_USER="$(grep -E '^DATABASE_USER=' "${ENV_FILE}" | head -n1 | cut -d= -f2- || true)"
-DEFAULT_USER="${DEFAULT_USER:-olympus_user}"
+DEFAULT_USER="${DEFAULT_USER:-olympus}"
 DEFAULT_DB="$(grep -E '^DATABASE_NAME=' "${ENV_FILE}" | head -n1 | cut -d= -f2- || true)"
 DEFAULT_DB="${DEFAULT_DB:-olympus}"
 
