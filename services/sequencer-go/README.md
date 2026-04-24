@@ -38,6 +38,65 @@ cd ../sequencer-go
 
 The service will start on `:8080` by default.
 
+## Configuration
+
+The sequencer reads its database connection from one of two **mutually
+exclusive** sets of environment variables. Picking both is rejected at
+startup with a clear error.
+
+### Mode A — file-backed password (recommended for Docker / Kubernetes)
+
+```
+SEQUENCER_DB_HOST=db
+SEQUENCER_DB_PORT=5432            # optional, default 5432
+SEQUENCER_DB_USER=olympus
+SEQUENCER_DB_NAME=olympus
+SEQUENCER_DB_SSLMODE=verify-full  # see "TLS" below
+SEQUENCER_DB_PASSWORD_FILE=/run/secrets/db_password
+```
+
+The sequencer reads the password from the file at startup and assembles
+the libpq connection string in memory. The password is **never** placed
+in the process environment, so it does not show up in `docker inspect`,
+`/proc/<pid>/environ`, or shell history. This mirrors the Python API's
+`DATABASE_PASSWORD_FILE` handling and lets both services share the same
+`db_password` Docker secret.
+
+### Mode B — full URL (back-compat / local dev)
+
+```
+SEQUENCER_DB_URL=postgresql://user:pass@host:5432/db?sslmode=verify-full
+```
+
+This is preserved for non-Docker deployments and ad-hoc local testing.
+The sequencer logs a warning at startup because the password is then
+visible in the process environment.
+
+### Mode B variant — env-var password
+
+If you must use component variables but cannot mount a file (e.g. a CI
+runner that only exposes secrets as env vars):
+
+```
+SEQUENCER_DB_HOST=db
+SEQUENCER_DB_USER=olympus
+SEQUENCER_DB_NAME=olympus
+SEQUENCER_DB_SSLMODE=verify-full
+SEQUENCER_DB_PASSWORD=...
+```
+
+Same warning applies: the password is visible in `/proc/<pid>/environ`.
+
+### Other required variables
+
+```
+SEQUENCER_API_TOKEN=<random ≥32 bytes>   # X-Sequencer-Token shared secret
+SEQUENCER_HTTP_ADDR=:8081                 # default :8080 if unset
+CDHS_SMF_SOCKET=/run/olympus/cdhs-smf.sock
+SEQUENCER_TLS_CERT=/path/to/cert.pem      # optional; both must be set or neither
+SEQUENCER_TLS_KEY=/path/to/key.pem
+```
+
 ## API Endpoints
 
 ### POST /v1/queue-leaf

@@ -6,25 +6,42 @@ import (
 	"log"
 	"net"
 	"net/http"
+	"net/url"
 	"os"
+	"strings"
 	"time"
 
 	pb "github.com/OlympusLedgerOrg/Olympus/services/sequencer/proto"
 
 	"github.com/OlympusLedgerOrg/Olympus/services/sequencer/internal/api"
 	"github.com/OlympusLedgerOrg/Olympus/services/sequencer/internal/client"
+	"github.com/OlympusLedgerOrg/Olympus/services/sequencer/internal/config"
 	"github.com/OlympusLedgerOrg/Olympus/services/sequencer/internal/storage"
 )
 
 func main() {
 	ctx := context.Background()
 
-	dbURL := os.Getenv("SEQUENCER_DB_URL")
+	dbCfg, err := config.LoadDBConfig()
+	if err != nil {
+		log.Fatalf("DB config: %v", err)
+	}
+	// Don't log dbCfg.Source directly: even though it is a categorical
+	// constant ("file" / "env" / "embedded") that cannot itself carry the
+	// password, CodeQL's clear-text-logging analyzer conservatively taints
+	// any value computed in the same branch that read SEQUENCER_DB_PASSWORD_FILE.
+	// The presence/absence of the warning below is enough to tell operators
+	// which source is in use.
+	if dbCfg.Source == config.SourceEmbedded || dbCfg.Source == config.SourceEnv {
+		log.Printf("WARNING: DB password is supplied via environment variable; " +
+			"prefer SEQUENCER_DB_PASSWORD_FILE pointing at a 0600 secret file " +
+			"(env vars are visible via /proc/<pid>/environ and `docker inspect`).")
+	} else {
+		log.Printf("DB password loaded from file-backed secret.")
+	}
+
 	httpAddr := os.Getenv("SEQUENCER_HTTP_ADDR")
 	apiToken := os.Getenv("SEQUENCER_API_TOKEN")
-	if dbURL == "" {
-		log.Fatalf("SEQUENCER_DB_URL is required")
-	}
 	if apiToken == "" {
 		log.Fatalf("SEQUENCER_API_TOKEN is required")
 	}
@@ -42,10 +59,14 @@ func main() {
 	}
 	defer smtClient.Close()
 
-	// Initialize storage (Postgres)
-	store, err := storage.NewPostgresStorage(ctx, dbURL)
+	// Initialize storage (Postgres). Use redactedErr when logging because
+	// dbCfg.URL embeds the database password; even though the storage
+	// layer's current errors never include the URL, redactedErr is a
+	// defense-in-depth scrubber that prevents any future regression from
+	// leaking credentials via log lines.
+	store, err := storage.NewPostgresStorage(ctx, dbCfg.URL)
 	if err != nil {
-		log.Fatalf("Failed to initialize storage: %v", err)
+		log.Fatalf("Failed to initialize storage: %s", redactedErr(err, dbCfg.URL))
 	}
 	defer store.Close()
 
@@ -115,4 +136,24 @@ func main() {
 			log.Fatalf("Server failed: %v", err)
 		}
 	}
+}
+
+// redactedErr returns err.Error() with the supplied secret string (and any
+// percent-encoded form of its userinfo segment) removed. Used when logging
+// errors that may have flowed downstream from a connection string
+// containing a password.
+func redactedErr(err error, secret string) string {
+	msg := err.Error()
+	if secret == "" {
+		return msg
+	}
+	msg = strings.ReplaceAll(msg, secret, "[REDACTED-DB-URL]")
+	// Some libraries log just the userinfo portion (`user:password@host`).
+	// Try to match and redact that fragment as well.
+	if u, perr := url.Parse(secret); perr == nil && u.User != nil {
+		if pw, ok := u.User.Password(); ok && pw != "" {
+			msg = strings.ReplaceAll(msg, pw, "[REDACTED]")
+		}
+	}
+	return msg
 }

@@ -241,6 +241,7 @@ make smoke
 ### Run the API + debug UI locally
 
 ```bash
+./scripts/bootstrap.sh                 # generate ./secrets/db_password and .env (idempotent)
 docker compose up -d                   # start PostgreSQL + Traefik
 export DATABASE_URL='postgresql://olympus:olympus@localhost:5432/olympus'
 export TEST_DATABASE_URL="$DATABASE_URL"
@@ -248,19 +249,33 @@ python -m alembic upgrade head         # apply database migrations
 make dev                               # API on :8000, debug UI on :8080
 ```
 
+> **First-boot note:** `docker compose up` reads the database password from
+> `./secrets/db_password`. The `bootstrap.sh` step creates that file (mode
+> 600) and seeds `.env` with matching values; without it, the `db` container
+> will refuse to start because the secret file is missing.
+
 ### Run with Go Sequencer (Phase 1 Write Path)
 
 The Go sequencer provides a Trillian-shaped log API backed by the Rust CD-HS-ST service.
 When enabled, all write operations route through Go → Rust instead of direct Python → PostgreSQL.
 
 ```bash
-# Start with the sequencer profile (includes cdhs-smf-rust and sequencer-go)
+# One-time bootstrap (generates secrets/db_password and seeds .env, including
+# OLYMPUS_SEQUENCER_TOKEN). Idempotent — safe to re-run.
+./scripts/bootstrap.sh
+
+# Start with the sequencer profile (includes cdhs-smf-rust and sequencer-go).
+# sequencer-go reads its DB password from /run/secrets/db_password — the same
+# file the db and app services use — so the password never appears in any
+# process environment.
 docker compose --profile sequencer up -d
 
 # Enable sequencer routing in the Python API
 export OLYMPUS_USE_GO_SEQUENCER=true
 export OLYMPUS_SEQUENCER_URL=http://localhost:8081
-export OLYMPUS_SEQUENCER_TOKEN=$(openssl rand -hex 32)  # same token for both services
+# OLYMPUS_SEQUENCER_TOKEN is already in .env after bootstrap; export it for
+# the host-side python process too:
+export OLYMPUS_SEQUENCER_TOKEN="$(grep ^OLYMPUS_SEQUENCER_TOKEN= .env | cut -d= -f2-)"
 
 # Apply migrations and start
 python -m alembic upgrade head
