@@ -16,6 +16,7 @@ import pytest
 import pytest_asyncio
 from httpx import ASGITransport, AsyncClient
 
+from api.config import get_settings
 from api.main import create_app
 
 
@@ -39,12 +40,14 @@ async def cors_client():
             "CORS_ORIGINS": "http://localhost:3000",
         },
     ):
+        get_settings.cache_clear()
         app = create_app()
         async with AsyncClient(
             transport=ASGITransport(app=app, raise_app_exceptions=False),
             base_url="http://test",
         ) as ac:
             yield ac
+        get_settings.cache_clear()
 
 
 # ---------------------------------------------------------------------------
