@@ -4,6 +4,37 @@ All notable changes to the Olympus protocol are documented in this file.
 
 ## Unreleased
 
+### Changed
+
+- **Python ingest write path now honours `OLYMPUS_USE_GO_SEQUENCER`.** When
+  the flag is enabled, `POST /ingest/commit` routes the artifact append
+  through the Go sequencer (`GoSequencerClient.append_record` +
+  `get_inclusion_proof`) instead of calling
+  `StorageLayer.append_record` against PostgreSQL directly. Backend
+  selection lives behind a new `append_via_backend` adapter in
+  `api/services/storage_layer.py`, which normalises both backends into a
+  single `AppendRecordResult` dataclass and maps sequencer transport
+  failures to consistent HTTP statuses (`SequencerUnavailableError` →
+  `503`, `SequencerResponseError` → `502`). With the flag off, behaviour
+  is unchanged: the storage-layer call still runs (now dispatched to a
+  worker thread so the FastAPI event loop is never blocked by the sync
+  Postgres write).
+
+### Added
+
+- **`GoSequencerClient.get_signed_root_pair(old_tree_size, new_tree_size)`**
+  in `api/services/sequencer_client.py` mirrors the renamed
+  `/v1/get-signed-root-pair` endpoint on the Go sequencer. Returns a
+  `SequencerSignedRootPair` dataclass with the two signed roots so
+  callers can verify the signatures and compare hashes offline. This is
+  not an RFC-6962 consistency proof; it is the Python wrapper for the
+  same endpoint that previously lived behind the misleading
+  `/v1/get-consistency-proof` name (now `410 Gone` on the Go side).
+- `api/main.py` lifespan shutdown now also closes the
+  `GoSequencerClient` singleton (`close_sequencer_client()`) alongside
+  the older httpx client embedded in `api/ingest.py`, so both connection
+  pools drain cleanly on process exit.
+
 ### Breaking Changes
 
 - **ADR-0003: Parser identity is now bound into the SMT leaf hash domain

@@ -97,6 +97,7 @@ from protocol.timestamps import current_timestamp
 
 
 if TYPE_CHECKING:
+    from api.services.sequencer_client import SequencerInclusionProof
     from protocol.poseidon_smt import PoseidonSMT
     from storage.postgres import StorageLayer
 
@@ -823,6 +824,76 @@ def _smt_proof_to_merkle_proof_dict(proof: ExistenceProof, value_hash: bytes) ->
         # can recompute the leaf hash.
         "parser_id": proof.parser_id,
         "canonical_parser_version": proof.canonical_parser_version,
+    }
+
+
+def _sequencer_proof_to_merkle_proof_dict(
+    proof: SequencerInclusionProof,
+    value_hash: bytes,
+    parser_id: str,
+    canonical_parser_version: str,
+) -> dict[str, Any]:
+    """Convert a Go sequencer inclusion proof to the API merkle_proof dict.
+
+    The Go sequencer's `/v1/get-inclusion-proof` returns the SMT key, the
+    value hash, the per-level sibling hashes, and the root. It does not echo
+    the ADR-0003 parser provenance fields back to the caller, so we bind the
+    operator-configured `parser_id` / `canonical_parser_version` here. These
+    must match what the sequencer used when it computed the leaf hash.
+
+    Args:
+        proof: Inclusion proof returned by `GoSequencerClient.get_inclusion_proof`.
+        value_hash: 32-byte canonical value hash committed to the leaf.
+        parser_id: ADR-0003 parser identifier bound into the leaf hash.
+        canonical_parser_version: ADR-0003 canonical parser version bound
+            into the leaf hash.
+
+    Returns:
+        A dict with the same shape as `_smt_proof_to_merkle_proof_dict`.
+    """
+    if len(value_hash) != 32:
+        raise ValueError("value_hash must be 32 bytes")
+    if not parser_id:
+        raise ValueError("parser_id must be a non-empty string")
+    if not canonical_parser_version:
+        raise ValueError("canonical_parser_version must be a non-empty string")
+
+    smt_key_hex = proof.global_key
+    smt_key_bytes = bytes.fromhex(smt_key_hex)
+    if len(smt_key_bytes) != 32:
+        raise ValueError("sequencer global_key must decode to 32 bytes")
+
+    root_bytes = bytes.fromhex(proof.root)
+    if len(root_bytes) != 32:
+        raise ValueError("sequencer root must decode to 32 bytes")
+
+    leaf_index = int.from_bytes(smt_key_bytes, byteorder="big", signed=False)
+    siblings_with_positions: list[list[str | bool]] = []
+    for level, sibling_hex in enumerate(proof.siblings):
+        sibling_bytes = bytes.fromhex(sibling_hex)
+        if len(sibling_bytes) != 32:
+            raise ValueError(f"sequencer sibling at level {level} must decode to 32 bytes")
+        is_right = ((leaf_index >> level) & 1) == 0
+        siblings_with_positions.append([sibling_hex, is_right])
+
+    smt_leaf_hash = leaf_hash(
+        smt_key_bytes,
+        value_hash,
+        parser_id,
+        canonical_parser_version,
+    )
+
+    return {
+        "leaf_hash": smt_leaf_hash.hex(),
+        "leaf_index": str(leaf_index),
+        "siblings": siblings_with_positions,
+        "root_hash": proof.root,
+        "tree_size": str(1 << 256),
+        "proof_version": PROOF_VERSION,
+        "tree_version": MERKLE_VERSION,
+        "smt_key": smt_key_hex,
+        "parser_id": parser_id,
+        "canonical_parser_version": canonical_parser_version,
     }
 
 
@@ -1568,10 +1639,30 @@ async def commit_artifact(
         if request.raw_pdf_hash:
             canonicalization["raw_pdf_hash"] = _parse_content_hash(request.raw_pdf_hash).hex()
 
-        # If PostgreSQL is configured, persist artifact durably
-        if storage is not None and _signing_key is not None:
+        # Try the durable write path:
+        #  - If the Go sequencer flag is on, route the leaf through Go.
+        #  - Else, if a PostgreSQL StorageLayer is configured and a signing
+        #    key is available, write through the storage layer.
+        # The fall-through (in-memory) path runs when neither is available.
+        from api.services.storage_layer import (
+            AppendRecordResult,
+            _use_go_sequencer as _sl_use_go_sequencer,
+            append_via_backend,
+        )
+
+        sequencer_enabled = _sl_use_go_sequencer()
+        durable_via_storage = storage is not None and _signing_key is not None
+        if sequencer_enabled or durable_via_storage:
             try:
-                root_hash, proof, _header, _signature, ledger_entry = storage.append_record(
+                # When the sequencer flag is off, pass the already-resolved
+                # storage object explicitly so the adapter does not call
+                # storage_layer._get_storage() (which would re-read
+                # DATABASE_URL and bypass any test-supplied fake injected via
+                # ingest._get_storage()). When the flag is on, leave
+                # backend=None so the adapter picks up the GoSequencerClient
+                # singleton from _get_write_backend().
+                explicit_backend = None if sequencer_enabled else storage
+                append_result: AppendRecordResult = await append_via_backend(
                     shard_id=shard_id,
                     record_type="artifact",
                     record_id=request.id,
@@ -1580,61 +1671,12 @@ async def commit_artifact(
                     signing_key=_signing_key,
                     canonicalization=canonicalization,
                     poseidon_root=_POSEIDON_STORAGE_COMPUTE_FLAG,
-                )
-                if ledger_entry.poseidon_root is None:
-                    raise RuntimeError(
-                        "Storage append_record returned no Poseidon root for "
-                        f"{shard_id}:{request.id}"
-                    )
-                persisted_poseidon_root = ledger_entry.poseidon_root
-                canonicalization_with_poseidon = {
-                    **canonicalization,
-                    "poseidon_root": persisted_poseidon_root,
-                }
-
-                # Store mapping from proof_id to record coordinates
-                ingestion_entry = {
-                    "proof_id": proof_id,
-                    "record_id": request.id,
-                    "shard_id": shard_id,
-                    "record_type": "artifact",
-                    "version": 1,
-                    "content_hash": artifact_hash_hex,
-                    "namespace": request.namespace,
-                    "merkle_root": root_hash.hex(),
-                    "merkle_proof": _smt_proof_to_merkle_proof_dict(proof, artifact_hash_bytes),
-                    "ledger_entry_hash": ledger_entry.entry_hash,
-                    "timestamp": ledger_entry.ts,
-                    "canonicalization": canonicalization_with_poseidon,
-                    "persisted": True,
-                    "batch_id": batch_id,
-                    "batch_index": 0,
-                    "poseidon_root": persisted_poseidon_root,
-                }
-                _ingestion_store[proof_id] = ingestion_entry
-                _content_index[artifact_hash_hex] = proof_id
-                storage.store_ingestion_batch(batch_id, [ingestion_entry])
-                INGEST_TOTAL.labels(outcome="committed").inc()
-                logger.info(
-                    "artifact_committed",
-                    extra={
-                        "proof_id": sanitize_for_log(proof_id),
-                        "namespace": sanitize_for_log(request.namespace),
-                        "id": sanitize_for_log(request.id),
-                        "using_postgres": True,
-                    },
-                )
-
-                return ArtifactCommitResponse(
-                    proof_id=proof_id,
-                    artifact_hash=artifact_hash_hex,
-                    namespace=request.namespace,
-                    id=request.id,
-                    committed_at=ledger_entry.ts,
-                    ledger_entry_hash=ledger_entry.entry_hash,
-                    poseidon_root=persisted_poseidon_root,
+                    backend=explicit_backend,
                 )
             except ValueError as e:
+                # Storage-layer dedup conflicts surface as ValueError. The
+                # sequencer path translates its own errors to HTTPException
+                # inside the adapter and never raises ValueError here.
                 error_msg = str(e)
                 is_dedup = (
                     "Record already exists" in error_msg
@@ -1654,18 +1696,105 @@ async def commit_artifact(
                         poseidon_root=existing.get("poseidon_root")
                         or existing.get("canonicalization", {}).get("poseidon_root"),
                     )
-                else:
-                    logger.exception(
-                        "artifact_commit_storage_failed",
-                        extra={
-                            "namespace": sanitize_for_log(request.namespace),
-                            "id": sanitize_for_log(request.id),
-                        },
+                logger.exception(
+                    "artifact_commit_storage_failed",
+                    extra={
+                        "namespace": sanitize_for_log(request.namespace),
+                        "id": sanitize_for_log(request.id),
+                    },
+                )
+                raise HTTPException(
+                    status_code=500,
+                    detail="Failed to persist artifact commitment.",
+                ) from e
+
+            # Build the API merkle_proof dict from whichever proof carrier
+            # the backend returned.
+            if append_result.backend == "storage":
+                if append_result.poseidon_root is None:
+                    raise RuntimeError(
+                        "Storage append_record returned no Poseidon root for "
+                        f"{shard_id}:{request.id}"
                     )
+                if append_result.storage_proof is None:
+                    raise RuntimeError(
+                        "Storage append_record returned no inclusion proof for "
+                        f"{shard_id}:{request.id}"
+                    )
+                merkle_proof_dict = _smt_proof_to_merkle_proof_dict(
+                    append_result.storage_proof, artifact_hash_bytes
+                )
+            else:
+                # Sequencer backend. The Go service does not currently emit a
+                # Poseidon root; the canonicalization dict therefore omits it
+                # on this path. ADR-0003 parser provenance defaults to the
+                # same fallback values the storage layer uses so verifiers can
+                # reconstruct the leaf hash.
+                if append_result.sequencer_proof is None:
                     raise HTTPException(
-                        status_code=500,
-                        detail="Failed to persist artifact commitment.",
-                    ) from e
+                        status_code=502,
+                        detail="Sequencer did not return an inclusion proof.",
+                    )
+                merkle_proof_dict = _sequencer_proof_to_merkle_proof_dict(
+                    append_result.sequencer_proof,
+                    artifact_hash_bytes,
+                    parser_id="fallback@1.0.0",
+                    canonical_parser_version="v1",
+                )
+
+            persisted_poseidon_root = append_result.poseidon_root
+            canonicalization_with_poseidon = (
+                {**canonicalization, "poseidon_root": persisted_poseidon_root}
+                if persisted_poseidon_root is not None
+                else dict(canonicalization)
+            )
+
+            # Store mapping from proof_id to record coordinates
+            ingestion_entry = {
+                "proof_id": proof_id,
+                "record_id": request.id,
+                "shard_id": shard_id,
+                "record_type": "artifact",
+                "version": 1,
+                "content_hash": artifact_hash_hex,
+                "namespace": request.namespace,
+                "merkle_root": append_result.root_hash.hex(),
+                "merkle_proof": merkle_proof_dict,
+                "ledger_entry_hash": append_result.ledger_entry_hash,
+                "timestamp": append_result.ts,
+                "canonicalization": canonicalization_with_poseidon,
+                "persisted": append_result.persisted,
+                "batch_id": batch_id,
+                "batch_index": 0,
+                "poseidon_root": persisted_poseidon_root,
+            }
+            _ingestion_store[proof_id] = ingestion_entry
+            _content_index[artifact_hash_hex] = proof_id
+            # Only the storage backend has a side-effecting batch table; the
+            # sequencer backend owns its own persistence in Postgres.
+            if append_result.backend == "storage" and storage is not None:
+                storage.store_ingestion_batch(batch_id, [ingestion_entry])
+            INGEST_TOTAL.labels(outcome="committed").inc()
+            logger.info(
+                "artifact_committed",
+                extra={
+                    "proof_id": sanitize_for_log(proof_id),
+                    "namespace": sanitize_for_log(request.namespace),
+                    "id": sanitize_for_log(request.id),
+                    "using_postgres": append_result.backend == "storage",
+                    "backend": append_result.backend,
+                },
+            )
+
+            return ArtifactCommitResponse(
+                proof_id=proof_id,
+                artifact_hash=artifact_hash_hex,
+                namespace=request.namespace,
+                id=request.id,
+                committed_at=append_result.ts,
+                ledger_entry_hash=append_result.ledger_entry_hash,
+                poseidon_root=persisted_poseidon_root,
+            )
 
         # Fall back to in-memory storage
         artifact_key = _poseidon_smt_key(record_key("artifact", request.id, 1))

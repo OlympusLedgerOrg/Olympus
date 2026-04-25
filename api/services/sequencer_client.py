@@ -121,6 +121,33 @@ class SequencerLatestRoot:
     tree_size: int
 
 
+@dataclass(frozen=True, slots=True)
+class SequencerSignedRootPair:
+    """A pair of signed roots returned by `/v1/get-signed-root-pair`.
+
+    This is **not** an RFC-6962 / Trillian consistency proof. It returns the
+    two signed roots so that a caller can verify both signatures and compare
+    the hashes offline. A real consistency proof for the CD-HS-ST sparse
+    Merkle tree is tracked as a follow-up; see the changelog entry that
+    renamed the original `/v1/get-consistency-proof` endpoint.
+
+    Attributes:
+        old_tree_size: Smaller tree size requested by the caller.
+        new_tree_size: Larger tree size requested by the caller.
+        old_root: Hex-encoded 32-byte root at `old_tree_size`.
+        old_signature: Hex-encoded Ed25519 signature over the old root.
+        new_root: Hex-encoded 32-byte root at `new_tree_size`.
+        new_signature: Hex-encoded Ed25519 signature over the new root.
+    """
+
+    old_tree_size: int
+    new_tree_size: int
+    old_root: str
+    old_signature: str
+    new_root: str
+    new_signature: str
+
+
 # ---------------------------------------------------------------------------
 # Client implementation
 # ---------------------------------------------------------------------------
@@ -509,6 +536,80 @@ class GoSequencerClient:
             return True
         except (SequencerUnavailableError, SequencerResponseError):
             return False
+
+    async def get_signed_root_pair(
+        self,
+        old_tree_size: int,
+        new_tree_size: int,
+    ) -> SequencerSignedRootPair:
+        """Fetch a pair of signed roots for offline comparison.
+
+        GET /v1/get-signed-root-pair → returns (old_root, old_signature,
+        new_root, new_signature) plus the requested tree sizes.
+
+        This is **not** an RFC-6962 consistency proof; it only returns the
+        two signed roots and lets the caller verify the signatures and
+        compare the hashes. The endpoint was renamed from the misleading
+        `/v1/get-consistency-proof` (which now returns 410 Gone on the Go
+        side); see the changelog entry under the rename.
+
+        Args:
+            old_tree_size: Smaller tree size (must be ≥ 0).
+            new_tree_size: Larger tree size (must be ≥ `old_tree_size`).
+
+        Returns:
+            A `SequencerSignedRootPair` with both signed roots.
+
+        Raises:
+            ValueError: If `new_tree_size < old_tree_size`.
+            SequencerUnavailableError: If the sequencer is unreachable.
+            SequencerResponseError: If the sequencer returns a non-2xx status.
+        """
+        if new_tree_size < old_tree_size:
+            raise ValueError(
+                f"new_tree_size ({new_tree_size}) must be >= old_tree_size ({old_tree_size})"
+            )
+
+        url = f"{self._base_url}/v1/get-signed-root-pair"
+        params = {
+            "old_tree_size": str(old_tree_size),
+            "new_tree_size": str(new_tree_size),
+        }
+
+        try:
+            client = self._get_client()
+            resp = await client.get(url, params=params, headers=self._headers())
+        except httpx.RequestError as exc:
+            logger.error(
+                "sequencer_signed_root_pair_unreachable url=%s error=%s", url, exc
+            )
+            raise SequencerUnavailableError(
+                f"Sequencer unavailable at {self._base_url}", cause=exc
+            ) from exc
+
+        if resp.status_code != 200:
+            detail = resp.text[:500] if resp.text else None
+            logger.error(
+                "sequencer_signed_root_pair_error url=%s status=%d body=%.200s",
+                url,
+                resp.status_code,
+                detail,
+            )
+            raise SequencerResponseError(
+                f"Sequencer returned HTTP {resp.status_code}",
+                status_code=resp.status_code,
+                detail=detail,
+            )
+
+        data = resp.json()
+        return SequencerSignedRootPair(
+            old_tree_size=int(data["old_tree_size"]),
+            new_tree_size=int(data["new_tree_size"]),
+            old_root=data["old_root"],
+            old_signature=data["old_signature"],
+            new_root=data["new_root"],
+            new_signature=data["new_signature"],
+        )
 
 
 # ---------------------------------------------------------------------------

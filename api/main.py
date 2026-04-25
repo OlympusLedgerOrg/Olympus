@@ -222,6 +222,17 @@ async def lifespan(app: FastAPI):
     yield
 
     await _close_sequencer_client()
+    # Also close the GoSequencerClient singleton owned by api.services.sequencer_client.
+    # _close_sequencer_client() above only handles the older httpx client embedded in
+    # api.ingest; the new singleton has its own connection pool that must be drained
+    # cleanly on shutdown.
+    try:
+        from api.services.sequencer_client import close_sequencer_client
+
+        await close_sequencer_client()
+    except Exception as exc:
+        # Never let shutdown cleanup raise; log and continue with engine disposal.
+        logger.warning("Failed to close GoSequencerClient cleanly: %s", exc)
     await engine.dispose()
     logger.info("Engine disposed; shutdown complete.")
 
