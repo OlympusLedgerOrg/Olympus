@@ -339,12 +339,16 @@ fn canonicalize_plaintext(content: &[u8]) -> Result<Vec<u8>, String> {
         })
         .collect();
 
-    // Step 6: Remove leading blank lines.
-    while !lines.is_empty() && lines[0].is_empty() {
-        lines.remove(0);
-    }
+    // Step 6: Remove leading blank lines — use drain for O(n) rather than
+    // repeated remove(0) which would be O(n²).
+    let first_non_empty = lines
+        .iter()
+        .position(|l| !l.is_empty())
+        .unwrap_or(lines.len());
+    lines.drain(..first_non_empty);
+
     // Remove trailing blank lines.
-    while !lines.is_empty() && lines.last().map_or(true, |l| l.is_empty()) {
+    while !lines.is_empty() && lines.last().map_or(false, |l| l.is_empty()) {
         lines.pop();
     }
 
