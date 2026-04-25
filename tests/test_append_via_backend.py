@@ -33,10 +33,12 @@ from api.services.sequencer_client import (
     SequencerSignedRootPair,
     SequencerUnavailableError,
 )
-from api.services.storage_layer import (
-    AppendRecordResult,
-    append_via_backend,
-)
+
+
+# Re-bind through the module to avoid the CodeQL "imported with both 'import'
+# and 'import from'" warning while still keeping the short call sites.
+AppendRecordResult = storage_layer_mod.AppendRecordResult
+append_via_backend = storage_layer_mod.append_via_backend
 
 
 # ---------------------------------------------------------------------------
@@ -103,9 +105,7 @@ async def test_append_via_backend_uses_storage_when_flag_disabled(
     )
 
     # Bypass _get_storage() entirely by replacing the write backend selector.
-    monkeypatch.setattr(
-        storage_layer_mod, "_get_write_backend", lambda: fake_storage
-    )
+    monkeypatch.setattr(storage_layer_mod, "_get_write_backend", lambda: fake_storage)
 
     signing_key = MagicMock()
     result = await append_via_backend(
@@ -142,9 +142,7 @@ async def test_append_via_backend_storage_path_requires_signing_key(
 ) -> None:
     """Storage-layer writes must surface a 500 if no signing key is supplied."""
     fake_storage = MagicMock()
-    monkeypatch.setattr(
-        storage_layer_mod, "_get_write_backend", lambda: fake_storage
-    )
+    monkeypatch.setattr(storage_layer_mod, "_get_write_backend", lambda: fake_storage)
 
     with pytest.raises(HTTPException) as excinfo:
         await append_via_backend(
@@ -197,13 +195,9 @@ class _StubSequencerClient:
         return self._proof_result
 
 
-def _patch_isinstance_for_stub(
-    monkeypatch: pytest.MonkeyPatch, stub: _StubSequencerClient
-) -> None:
+def _patch_isinstance_for_stub(monkeypatch: pytest.MonkeyPatch, stub: _StubSequencerClient) -> None:
     """Make append_via_backend treat the stub as a GoSequencerClient instance."""
-    monkeypatch.setattr(
-        storage_layer_mod, "_get_write_backend", lambda: stub
-    )
+    monkeypatch.setattr(storage_layer_mod, "_get_write_backend", lambda: stub)
     real_isinstance = isinstance
 
     def fake_isinstance(obj: Any, cls: Any) -> bool:
@@ -211,9 +205,7 @@ def _patch_isinstance_for_stub(
             return True
         return real_isinstance(obj, cls)
 
-    monkeypatch.setattr(
-        "api.services.storage_layer.isinstance", fake_isinstance, raising=False
-    )
+    monkeypatch.setattr("api.services.storage_layer.isinstance", fake_isinstance, raising=False)
 
 
 @pytest.mark.asyncio
@@ -363,9 +355,7 @@ async def test_append_via_backend_proof_unavailable_maps_to_503(
 
 
 def _make_client_with_transport(transport: httpx.MockTransport) -> GoSequencerClient:
-    client = GoSequencerClient(
-        base_url="http://sequencer.test", token="test-token"
-    )
+    client = GoSequencerClient(base_url="http://sequencer.test", token="test-token")
     # Inject the mock-transport-backed httpx client directly.
     client._client = httpx.AsyncClient(transport=transport)
     return client
@@ -416,6 +406,18 @@ async def test_get_signed_root_pair_rejects_inverted_sizes() -> None:
     try:
         with pytest.raises(ValueError):
             await client.get_signed_root_pair(200, 100)
+    finally:
+        await client.close()
+
+
+@pytest.mark.asyncio
+async def test_get_signed_root_pair_rejects_negative_sizes() -> None:
+    client = GoSequencerClient(base_url="http://sequencer.test", token="t")
+    try:
+        with pytest.raises(ValueError):
+            await client.get_signed_root_pair(-1, 5)
+        with pytest.raises(ValueError):
+            await client.get_signed_root_pair(0, -1)
     finally:
         await client.close()
 
@@ -493,9 +495,7 @@ async def test_append_via_backend_integration_with_mock_sequencer(
         return httpx.Response(404)
 
     client = _make_client_with_transport(httpx.MockTransport(handler))
-    monkeypatch.setattr(
-        storage_layer_mod, "_get_write_backend", lambda: client
-    )
+    monkeypatch.setattr(storage_layer_mod, "_get_write_backend", lambda: client)
 
     try:
         result = await append_via_backend(

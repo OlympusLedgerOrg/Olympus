@@ -867,6 +867,13 @@ def _sequencer_proof_to_merkle_proof_dict(
     if len(root_bytes) != 32:
         raise ValueError("sequencer root must decode to 32 bytes")
 
+    # CD-HS-ST is a 256-level sparse Merkle tree, so a well-formed proof must
+    # carry exactly 256 sibling hashes. Reject malformed/truncated sequencer
+    # responses early rather than emitting a structurally-valid bundle that
+    # will silently fail verification later.
+    if len(proof.siblings) != 256:
+        raise ValueError(f"sequencer proof must have 256 siblings, got {len(proof.siblings)}")
+
     leaf_index = int.from_bytes(smt_key_bytes, byteorder="big", signed=False)
     siblings_with_positions: list[list[str | bool]] = []
     for level, sibling_hex in enumerate(proof.siblings):
@@ -1738,8 +1745,8 @@ async def commit_artifact(
                 merkle_proof_dict = _sequencer_proof_to_merkle_proof_dict(
                     append_result.sequencer_proof,
                     artifact_hash_bytes,
-                    parser_id="fallback@1.0.0",
-                    canonical_parser_version="v1",
+                    parser_id=_FALLBACK_PARSER_ID,
+                    canonical_parser_version=_operator_canonical_parser_version(),
                 )
 
             persisted_poseidon_root = append_result.poseidon_root

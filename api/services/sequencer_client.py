@@ -565,6 +565,10 @@ class GoSequencerClient:
             SequencerUnavailableError: If the sequencer is unreachable.
             SequencerResponseError: If the sequencer returns a non-2xx status.
         """
+        if old_tree_size < 0 or new_tree_size < 0:
+            raise ValueError(
+                f"tree sizes must be non-negative (got old={old_tree_size}, new={new_tree_size})"
+            )
         if new_tree_size < old_tree_size:
             raise ValueError(
                 f"new_tree_size ({new_tree_size}) must be >= old_tree_size ({old_tree_size})"
@@ -580,9 +584,7 @@ class GoSequencerClient:
             client = self._get_client()
             resp = await client.get(url, params=params, headers=self._headers())
         except httpx.RequestError as exc:
-            logger.error(
-                "sequencer_signed_root_pair_unreachable url=%s error=%s", url, exc
-            )
+            logger.error("sequencer_signed_root_pair_unreachable url=%s error=%s", url, exc)
             raise SequencerUnavailableError(
                 f"Sequencer unavailable at {self._base_url}", cause=exc
             ) from exc

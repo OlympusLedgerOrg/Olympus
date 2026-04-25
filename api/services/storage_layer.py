@@ -25,6 +25,8 @@ from urllib.parse import urlparse
 
 from fastapi import HTTPException
 
+from protocol.log_sanitization import sanitize_for_log
+
 
 if TYPE_CHECKING:
     from collections.abc import Generator
@@ -411,6 +413,11 @@ async def append_via_backend(
             tests) can pass it directly. This is also how callers can force
             the storage path while leaving the global feature flag alone.
 
+            Sequencer dispatch uses `isinstance(backend, GoSequencerClient)`,
+            so any sequencer test stub passed via this argument must be a
+            real `GoSequencerClient` instance or subclass — duck-typed stubs
+            will fall through to the StorageLayer path.
+
     Returns:
         An `AppendRecordResult` with backend-agnostic fields.
 
@@ -446,8 +453,8 @@ async def append_via_backend(
         except SequencerUnavailableError as exc:
             logger.error(
                 "sequencer_append_unavailable shard=%s record=%s",
-                shard_id,
-                record_id,
+                sanitize_for_log(shard_id),
+                sanitize_for_log(record_id),
             )
             raise HTTPException(
                 status_code=503,
@@ -456,8 +463,8 @@ async def append_via_backend(
         except SequencerResponseError as exc:
             logger.error(
                 "sequencer_append_error shard=%s record=%s status=%d",
-                shard_id,
-                record_id,
+                sanitize_for_log(shard_id),
+                sanitize_for_log(record_id),
                 exc.status_code,
             )
             raise HTTPException(
@@ -478,8 +485,8 @@ async def append_via_backend(
             except SequencerUnavailableError as exc:
                 logger.error(
                     "sequencer_proof_unavailable shard=%s record=%s",
-                    shard_id,
-                    record_id,
+                    sanitize_for_log(shard_id),
+                    sanitize_for_log(record_id),
                 )
                 raise HTTPException(
                     status_code=503,
@@ -488,8 +495,8 @@ async def append_via_backend(
             except SequencerResponseError as exc:
                 logger.error(
                     "sequencer_proof_error shard=%s record=%s status=%d",
-                    shard_id,
-                    record_id,
+                    sanitize_for_log(shard_id),
+                    sanitize_for_log(record_id),
                     exc.status_code,
                 )
                 raise HTTPException(
