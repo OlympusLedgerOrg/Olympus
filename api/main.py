@@ -344,7 +344,7 @@ def create_app() -> FastAPI:
         allow_origins=origins,
         allow_credentials=allow_credentials,
         allow_methods=["GET", "POST", "PATCH", "DELETE"],
-        allow_headers=["Authorization", "Content-Type"],
+        allow_headers=["Authorization", "Content-Type", "X-API-Key", "X-Admin-Key"],
     )
 
     app.add_middleware(SecurityHeadersMiddleware)
