@@ -11,7 +11,6 @@
 
 use std::collections::HashSet;
 
-use serde_json::Value;
 use unicode_normalization::UnicodeNormalization;
 
 // ---------------------------------------------------------------------------
@@ -38,94 +37,464 @@ pub fn canonicalize(content_type: &str, content: &[u8]) -> Result<Vec<u8>, Strin
 }
 
 // ---------------------------------------------------------------------------
-// JSON canonicalization (JCS / RFC 8785)
+// JSON canonicalization (JCS / RFC 8785) — single-pass recursive-descent
 // ---------------------------------------------------------------------------
 
 /// Canonicalize JSON content following JCS (RFC 8785).
 ///
 /// Rules (identical to `protocol/canonical_json.py`):
 /// - NFC normalization on all string keys and values
-/// - Duplicate key detection after NFC normalization
+/// - Duplicate key detection **before** any library-level deduplication,
+///   covering both byte-identical duplicates and NFC-equivalent duplicates
 /// - Keys sorted lexicographically (by NFC-normalized key)
 /// - No whitespace (compact separators)
 /// - Non-ASCII characters emitted as raw UTF-8 (not `\uXXXX`)
 /// - Control characters U+0000–U+001F use standard JSON escapes
 /// - Numbers formatted per JCS: fixed when `-6 ≤ adjusted_exp ≤ 20`,
 ///   otherwise scientific with explicit `+`/`-` sign on the exponent
+///
+/// # Why a hand-written parser?
+///
+/// `serde_json::from_slice` silently deduplicates object keys (last-value-wins)
+/// before we ever see them.  That means `{"a":1,"a":2}` would pass through our
+/// previous post-parse `HashSet` duplicate check without triggering an error.
+/// A canonicalizer that silently accepts ambiguous inputs is a security hazard
+/// (two documents with different semantics could produce the same canonical
+/// form).  `JcsParser` processes the raw bytes directly so that duplicate keys
+/// are detected the moment the second key is parsed.
 fn canonicalize_json(content: &[u8]) -> Result<Vec<u8>, String> {
-    let value: Value =
-        serde_json::from_slice(content).map_err(|e| format!("Invalid JSON: {}", e))?;
-
+    let mut parser = JcsParser::new(content);
     let mut out = Vec::with_capacity(content.len());
-    encode_value_jcs(&value, &mut out, 0)?;
+    parser.encode_value(&mut out, 0)?;
+    // Reject trailing non-whitespace content (e.g. two top-level values).
+    parser.skip_ws();
+    if parser.peek().is_some() {
+        return Err(format!(
+            "unexpected trailing content at byte {}",
+            parser.pos
+        ));
+    }
     Ok(out)
 }
 
-/// Recursively encode a `serde_json::Value` into JCS bytes.
-fn encode_value_jcs(value: &Value, out: &mut Vec<u8>, depth: usize) -> Result<(), String> {
-    if depth > MAX_JSON_DEPTH {
-        return Err(format!(
-            "JSON nesting depth exceeds maximum of {}",
-            MAX_JSON_DEPTH
-        ));
+// ---------------------------------------------------------------------------
+// JcsParser — single-pass recursive-descent canonicalizer
+// ---------------------------------------------------------------------------
+
+/// Single-pass, streaming JSON canonicalizer.
+///
+/// Processes `input` byte-by-byte.  For each JSON value it encounters it
+/// writes the JCS-canonical form directly to the caller-supplied `out`
+/// buffer, without building an intermediate in-memory tree.  Object
+/// key–value pairs are collected into a `Vec` so that they can be sorted
+/// before being emitted; values are buffered per key.
+struct JcsParser<'a> {
+    input: &'a [u8],
+    pos: usize,
+}
+
+impl<'a> JcsParser<'a> {
+    fn new(input: &'a [u8]) -> Self {
+        JcsParser { input, pos: 0 }
     }
 
-    match value {
-        Value::Null => out.extend_from_slice(b"null"),
-        Value::Bool(true) => out.extend_from_slice(b"true"),
-        Value::Bool(false) => out.extend_from_slice(b"false"),
+    fn peek(&self) -> Option<u8> {
+        self.input.get(self.pos).copied()
+    }
 
-        Value::Number(n) => {
-            let s = jcs_format_number(&n.to_string())?;
-            out.extend_from_slice(s.as_bytes());
+    fn advance(&mut self) {
+        self.pos += 1;
+    }
+
+    fn consume(&mut self) -> Option<u8> {
+        let b = self.peek()?;
+        self.advance();
+        Some(b)
+    }
+
+    fn skip_ws(&mut self) {
+        while matches!(self.peek(), Some(b' ' | b'\t' | b'\r' | b'\n')) {
+            self.advance();
         }
+    }
 
-        Value::String(s) => {
-            let nfc: String = s.nfc().collect();
-            encode_str_jcs(&nfc, out);
+    fn expect_byte(&mut self, expected: u8) -> Result<(), String> {
+        match self.consume() {
+            Some(b) if b == expected => Ok(()),
+            Some(b) => Err(format!(
+                "at byte {}: expected {:?} but got {:?}",
+                self.pos - 1,
+                expected as char,
+                b as char,
+            )),
+            None => Err(format!(
+                "unexpected end of input; expected {:?}",
+                expected as char,
+            )),
         }
+    }
 
-        Value::Array(arr) => {
-            out.push(b'[');
-            for (i, v) in arr.iter().enumerate() {
-                if i > 0 {
-                    out.push(b',');
+    fn expect_literal(&mut self, lit: &[u8]) -> Result<(), String> {
+        for &b in lit {
+            self.expect_byte(b)?;
+        }
+        Ok(())
+    }
+
+    /// Parse a single hexadecimal digit and return its value (0–15).
+    fn hex_digit(&mut self) -> Result<u16, String> {
+        match self.consume() {
+            Some(b) if b.is_ascii_digit() => Ok((b - b'0') as u16),
+            Some(b) if (b'a'..=b'f').contains(&b) => Ok((b - b'a' + 10) as u16),
+            Some(b) if (b'A'..=b'F').contains(&b) => Ok((b - b'A' + 10) as u16),
+            Some(b) => Err(format!("invalid hex digit {:?}", b as char)),
+            None => Err("unexpected end of input in \\u escape".to_string()),
+        }
+    }
+
+    /// Parse four hex digits after `\u` and return the code-unit value.
+    fn parse_hex4(&mut self) -> Result<u16, String> {
+        let d0 = self.hex_digit()?;
+        let d1 = self.hex_digit()?;
+        let d2 = self.hex_digit()?;
+        let d3 = self.hex_digit()?;
+        Ok((d0 << 12) | (d1 << 8) | (d2 << 4) | d3)
+    }
+
+    /// Parse a JSON string literal (including the surrounding `"` quotes).
+    ///
+    /// Returns the unescaped, NFC-normalized Rust string, and also writes the
+    /// JCS-encoded form of that string into `out`.
+    fn parse_string(&mut self, out: &mut Vec<u8>) -> Result<String, String> {
+        self.expect_byte(b'"')?;
+        let mut unescaped = String::new();
+
+        loop {
+            match self.consume() {
+                None => return Err("unterminated string literal".to_string()),
+                Some(b'"') => break,
+                Some(b'\\') => {
+                    let ch = match self.consume() {
+                        Some(b'"') => '"',
+                        Some(b'\\') => '\\',
+                        Some(b'/') => '/',
+                        Some(b'b') => '\x08',
+                        Some(b't') => '\t',
+                        Some(b'n') => '\n',
+                        Some(b'f') => '\x0C',
+                        Some(b'r') => '\r',
+                        Some(b'u') => {
+                            let hi = self.parse_hex4()?;
+                            if (0xD800..=0xDBFF).contains(&hi) {
+                                // High surrogate — must be followed by \uLLLL low surrogate.
+                                if self.peek() == Some(b'\\') {
+                                    self.advance();
+                                    self.expect_byte(b'u')?;
+                                    let lo = self.parse_hex4()?;
+                                    if !(0xDC00..=0xDFFF).contains(&lo) {
+                                        return Err(format!(
+                                            "invalid surrogate pair \\u{:04X}\\u{:04X}",
+                                            hi, lo
+                                        ));
+                                    }
+                                    let cp = 0x10000u32
+                                        + (u32::from(hi - 0xD800) << 10)
+                                        + u32::from(lo - 0xDC00);
+                                    char::from_u32(cp).ok_or_else(|| {
+                                        format!("invalid code point U+{:X}", cp)
+                                    })?
+                                } else {
+                                    return Err(format!(
+                                        "lone high surrogate \\u{:04X}",
+                                        hi
+                                    ));
+                                }
+                            } else if (0xDC00..=0xDFFF).contains(&hi) {
+                                return Err(format!("lone low surrogate \\u{:04X}", hi));
+                            } else {
+                                char::from_u32(u32::from(hi))
+                                    .ok_or_else(|| format!("invalid code point U+{:X}", hi))?
+                            }
+                        }
+                        Some(c) => return Err(format!("invalid escape \\{:?}", c as char)),
+                        None => return Err("unterminated escape sequence".to_string()),
+                    };
+                    unescaped.push(ch);
                 }
-                encode_value_jcs(v, out, depth + 1)?;
+                Some(b) => {
+                    if b < 0x20 {
+                        return Err(format!(
+                            "unescaped control character U+{:04X} in string",
+                            b
+                        ));
+                    }
+                    if b < 0x80 {
+                        unescaped.push(b as char);
+                    } else {
+                        // Multi-byte UTF-8: collect the continuation bytes.
+                        let width = utf8_seq_len(b);
+                        if width == 0 {
+                            return Err(format!("invalid UTF-8 lead byte 0x{:02X}", b));
+                        }
+                        let mut seq = [b, 0u8, 0u8, 0u8];
+                        for seq_byte in seq.iter_mut().take(width).skip(1) {
+                            match self.consume() {
+                                Some(cont) if (cont & 0xC0) == 0x80 => *seq_byte = cont,
+                                Some(cont) => {
+                                    return Err(format!(
+                                        "invalid UTF-8 continuation byte 0x{:02X}",
+                                        cont
+                                    ))
+                                }
+                                None => return Err("truncated UTF-8 sequence".to_string()),
+                            }
+                        }
+                        let s = std::str::from_utf8(&seq[..width])
+                            .map_err(|e| format!("invalid UTF-8 sequence: {}", e))?;
+                        unescaped.push_str(s);
+                    }
+                }
             }
-            out.push(b']');
         }
 
-        Value::Object(map) => {
-            // Collect with NFC-normalized keys and detect post-NFC duplicates.
-            let mut pairs: Vec<(String, &Value)> = Vec::with_capacity(map.len());
-            let mut seen: HashSet<String> = HashSet::with_capacity(map.len());
-            for (k, v) in map.iter() {
-                let nfc_k: String = k.nfc().collect();
-                if !seen.insert(nfc_k.clone()) {
+        // NFC-normalize the unescaped content, then JCS-encode it.
+        let nfc: String = unescaped.nfc().collect();
+        encode_str_jcs(&nfc, out);
+        Ok(nfc)
+    }
+
+    /// Consume a JSON number literal from the input; return the raw string.
+    fn parse_number_raw(&mut self) -> Result<String, String> {
+        let start = self.pos;
+
+        // Optional leading minus.
+        if self.peek() == Some(b'-') {
+            self.advance();
+        }
+
+        // Integer part.
+        match self.peek() {
+            Some(b'0') => {
+                self.advance();
+                // JSON forbids leading zeros: `01` is not a valid number.
+                if matches!(self.peek(), Some(b'0'..=b'9')) {
                     return Err(format!(
-                        "Duplicate key after NFC normalization: {:?}",
-                        nfc_k
+                        "leading zeros are not allowed in JSON numbers at byte {}",
+                        self.pos
                     ));
                 }
-                pairs.push((nfc_k, v));
             }
-            // Sort by NFC-normalized key (lexicographic byte order).
-            pairs.sort_by(|a, b| a.0.cmp(&b.0));
-
-            out.push(b'{');
-            for (i, (k, v)) in pairs.iter().enumerate() {
-                if i > 0 {
-                    out.push(b',');
+            Some(b'1'..=b'9') => {
+                while matches!(self.peek(), Some(b'0'..=b'9')) {
+                    self.advance();
                 }
-                encode_str_jcs(k, out);
-                out.push(b':');
-                encode_value_jcs(v, out, depth + 1)?;
             }
-            out.push(b'}');
+            _ => return Err(format!("expected digit at byte {}", self.pos)),
         }
+
+        // Optional fractional part.
+        if self.peek() == Some(b'.') {
+            self.advance();
+            if !matches!(self.peek(), Some(b'0'..=b'9')) {
+                return Err("expected digit after '.'".to_string());
+            }
+            while matches!(self.peek(), Some(b'0'..=b'9')) {
+                self.advance();
+            }
+        }
+
+        // Optional exponent.
+        if matches!(self.peek(), Some(b'e' | b'E')) {
+            self.advance();
+            if matches!(self.peek(), Some(b'+' | b'-')) {
+                self.advance();
+            }
+            if !matches!(self.peek(), Some(b'0'..=b'9')) {
+                return Err("expected digit in exponent".to_string());
+            }
+            while matches!(self.peek(), Some(b'0'..=b'9')) {
+                self.advance();
+            }
+        }
+
+        let raw = std::str::from_utf8(&self.input[start..self.pos])
+            .map_err(|_| "number contains invalid bytes".to_string())?
+            .to_string();
+        Ok(raw)
     }
-    Ok(())
+
+    /// Canonicalize the next JSON value and write it to `out`.
+    fn encode_value(&mut self, out: &mut Vec<u8>, depth: usize) -> Result<(), String> {
+        if depth > MAX_JSON_DEPTH {
+            return Err(format!(
+                "JSON nesting depth exceeds maximum of {}",
+                MAX_JSON_DEPTH
+            ));
+        }
+        self.skip_ws();
+        match self.peek() {
+            Some(b'n') => {
+                self.expect_literal(b"null")?;
+                out.extend_from_slice(b"null");
+            }
+            Some(b't') => {
+                self.expect_literal(b"true")?;
+                out.extend_from_slice(b"true");
+            }
+            Some(b'f') => {
+                self.expect_literal(b"false")?;
+                out.extend_from_slice(b"false");
+            }
+            Some(b'"') => {
+                self.parse_string(out)?;
+            }
+            Some(b'-') | Some(b'0'..=b'9') => {
+                let raw = self.parse_number_raw()?;
+                let formatted = jcs_format_number(&raw)?;
+                out.extend_from_slice(formatted.as_bytes());
+            }
+            Some(b'[') => self.encode_array(out, depth)?,
+            Some(b'{') => self.encode_object(out, depth)?,
+            Some(b) => {
+                return Err(format!(
+                    "unexpected character {:?} at byte {}",
+                    b as char,
+                    self.pos
+                ))
+            }
+            None => return Err("unexpected end of input".to_string()),
+        }
+        Ok(())
+    }
+
+    fn encode_array(&mut self, out: &mut Vec<u8>, depth: usize) -> Result<(), String> {
+        self.expect_byte(b'[')?;
+        out.push(b'[');
+        self.skip_ws();
+
+        if self.peek() == Some(b']') {
+            self.advance();
+            out.push(b']');
+            return Ok(());
+        }
+
+        // First element.
+        self.encode_value(out, depth + 1)?;
+        self.skip_ws();
+
+        // Subsequent elements.
+        while self.peek() == Some(b',') {
+            self.advance();
+            out.push(b',');
+            self.skip_ws();
+            // Strict JSON: trailing commas are invalid.
+            if self.peek() == Some(b']') {
+                return Err("trailing comma in array".to_string());
+            }
+            self.encode_value(out, depth + 1)?;
+            self.skip_ws();
+        }
+
+        self.expect_byte(b']')?;
+        out.push(b']');
+        Ok(())
+    }
+
+    fn encode_object(&mut self, out: &mut Vec<u8>, depth: usize) -> Result<(), String> {
+        self.expect_byte(b'{')?;
+        self.skip_ws();
+
+        if self.peek() == Some(b'}') {
+            self.advance();
+            out.extend_from_slice(b"{}");
+            return Ok(());
+        }
+
+        // Collect all key-value pairs into a Vec so we can sort them.
+        // Using a Vec (not a Map) ensures that byte-identical duplicate keys
+        // are visible to our duplicate check before any deduplication.
+        let mut pairs: Vec<(String, Vec<u8>)> = Vec::new();
+        let mut seen: HashSet<String> = HashSet::new();
+
+        self.parse_kv_into(&mut pairs, &mut seen, depth)?;
+        self.skip_ws();
+
+        while self.peek() == Some(b',') {
+            self.advance();
+            self.skip_ws();
+            // Strict JSON: trailing commas are invalid.
+            if self.peek() == Some(b'}') {
+                return Err("trailing comma in object".to_string());
+            }
+            self.parse_kv_into(&mut pairs, &mut seen, depth)?;
+            self.skip_ws();
+        }
+
+        self.expect_byte(b'}')?;
+
+        // Sort by NFC-normalized key (lexicographic byte order of the key string).
+        pairs.sort_by(|a, b| a.0.cmp(&b.0));
+
+        out.push(b'{');
+        for (i, (k, v)) in pairs.iter().enumerate() {
+            if i > 0 {
+                out.push(b',');
+            }
+            encode_str_jcs(k, out);
+            out.push(b':');
+            out.extend_from_slice(v);
+        }
+        out.push(b'}');
+        Ok(())
+    }
+
+    /// Parse one `"key": value` pair into `pairs`.
+    ///
+    /// Rejects the pair if its NFC-normalized key was already seen (duplicate).
+    fn parse_kv_into(
+        &mut self,
+        pairs: &mut Vec<(String, Vec<u8>)>,
+        seen: &mut HashSet<String>,
+        depth: usize,
+    ) -> Result<(), String> {
+        // Key — parse the raw string; the encoded form is discarded because we
+        // re-encode keys after sorting in `encode_object`.
+        let mut tmp = Vec::new();
+        let nfc_key = self.parse_string(&mut tmp)?;
+
+        // Duplicate check covers both byte-identical duplicates
+        // (e.g. {"a":1,"a":2}) and NFC-equivalent duplicates
+        // (e.g. {"e\u0301":1,"\u00e9":2}).
+        if !seen.insert(nfc_key.clone()) {
+            return Err(format!(
+                "duplicate key after NFC normalization: {:?}",
+                nfc_key
+            ));
+        }
+
+        self.skip_ws();
+        self.expect_byte(b':')?;
+        self.skip_ws();
+
+        // Value — canonicalize into a temporary buffer.
+        let mut val_buf = Vec::new();
+        self.encode_value(&mut val_buf, depth + 1)?;
+
+        pairs.push((nfc_key, val_buf));
+        Ok(())
+    }
+}
+
+/// Return the expected byte-length of a UTF-8 sequence given its lead byte.
+/// Returns 0 for invalid lead bytes (continuation bytes and overlong markers).
+fn utf8_seq_len(first_byte: u8) -> usize {
+    match first_byte {
+        0x00..=0x7F => 1,
+        0xC0..=0xDF => 2,
+        0xE0..=0xEF => 3,
+        0xF0..=0xF7 => 4,
+        _ => 0,
+    }
 }
 
 /// Encode a Rust `&str` as a JSON string literal following JCS / RFC 8785.
@@ -173,9 +542,8 @@ fn encode_str_jcs(s: &str, out: &mut Vec<u8>) {
 /// - Fixed notation when `-6 ≤ adjusted_exponent ≤ 20`
 /// - Scientific notation otherwise, with explicit `+`/`-` on the exponent
 ///
-/// The input `raw` is the string representation produced by `serde_json`'s
-/// `Display` impl for `Number` (integers formatted without decimal point;
-/// floats formatted by `ryu` in shortest-round-trip form).
+/// The input `raw` is the raw number string as it appears in the JSON source
+/// (integers without decimal point; floats in standard decimal or scientific form).
 fn jcs_format_number(raw: &str) -> Result<String, String> {
     let s = raw.trim();
 
@@ -467,6 +835,30 @@ mod tests {
     fn test_canonicalize_json_invalid() {
         let result = canonicalize("json", b"not json");
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_canonicalize_json_rejects_byte_identical_duplicate_keys() {
+        // {"a": 1, "a": 2} — serde_json would silently keep only one "a";
+        // JcsParser detects the duplicate before any deduplication occurs.
+        let input = br#"{"a": 1, "a": 2}"#;
+        let result = canonicalize("json", input);
+        assert!(
+            result.is_err(),
+            "byte-identical duplicate keys must be rejected"
+        );
+    }
+
+    #[test]
+    fn test_canonicalize_json_rejects_nfc_equivalent_duplicate_keys() {
+        // "e\u0301" (NFD e-acute) and "\u00e9" (NFC precomposed e-acute) are
+        // NFC-equivalent; the object must be rejected as having a duplicate key.
+        let input = "{\"\u{0065}\u{0301}\": 1, \"\u{00E9}\": 2}";
+        let result = canonicalize("json", input.as_bytes());
+        assert!(
+            result.is_err(),
+            "NFC-equivalent duplicate keys must be rejected"
+        );
     }
 
     // -------------------------------------------------------------------------
