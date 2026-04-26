@@ -39,7 +39,7 @@ base64 = "0.21"
 unicode-normalization = "0.1"
 
 [build-dependencies]
-tonic-build = "0.10"
+tonic-build = "0.14"
 
 [dev-dependencies]
 hex = "0.4"
