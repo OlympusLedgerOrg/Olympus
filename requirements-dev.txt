@@ -2219,9 +2219,9 @@ urllib3==2.6.3 \
     # via
     #   botocore
     #   requests
-uvicorn[standard]==0.43.0 \
-    --hash=sha256:46fac64f487fd968cd999e5e49efbbe64bd231b5bd8b4a0b482a23ebce499620 \
-    --hash=sha256:ab1652d2fb23abf124f36ccc399828558880def222c3cb3d98d24021520dc6e8
+uvicorn[standard]==0.46.0 \
+    --hash=sha256:bbebbcbed972d162afca128605223022bedd345b7bc7855ce66deb31487a9048 \
+    --hash=sha256:fb9da0926999cc6cb22dc7cd71a94a632f078e6ae47ff683c5c420750fb7413d
     # via olympus (pyproject.toml)
 uvloop==0.22.1 \
     --hash=sha256:017bd46f9e7b78e81606329d07141d3da446f8798c6baeec124260e22c262772 \
