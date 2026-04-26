@@ -24,7 +24,7 @@ blake3 = "1"
 unicode-normalization = "0.1"
 ark-bn254 = "0.4"
 ark-groth16 = { version = "0.4", features = ["r1cs"] }
-ark-relations = "0.4"
+ark-relations = "0.5"
 ark-ff = "0.4"
 ark-ec = "0.4"
 ark-serialize = "0.4"
