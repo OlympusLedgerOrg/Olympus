@@ -74,7 +74,7 @@ dev = [
 ]
 observability = [
     "opentelemetry-api==1.40.0",
-    "opentelemetry-sdk==1.40.0",
+    "opentelemetry-sdk==1.41.1",
     "prometheus-client==0.25.0",
 ]
 parquet = [
