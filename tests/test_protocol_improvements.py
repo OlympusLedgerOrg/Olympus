@@ -198,10 +198,10 @@ class TestModuleSeparation:
         assert callable(get_timestamp_tokens)
 
     def test_init_exports_submodules(self) -> None:
-        from storage import operational_state, protocol_state
+        import storage
 
-        assert protocol_state is not None
-        assert operational_state is not None
+        assert hasattr(storage, "protocol_state")
+        assert hasattr(storage, "operational_state")
 
 
 # ---------------------------------------------------------------------------

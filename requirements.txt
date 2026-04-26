@@ -1508,6 +1508,12 @@ starlette==1.0.0 \
     # via
     #   fastapi
     #   olympus (pyproject.toml)
+tomli==2.4.1 ; python_version < "3.11" \
+    --hash=sha256:0d85819802132122da43cb86656f8d1f8c6587d54ae7dcaf30e90533028b49fe \
+    --hash=sha256:7c7e1a961a0b2f2472c1ac5b69affa0ae1132c39adcb67aba98568702b9cc23f
+    # via
+    #   alembic
+    #   olympus (pyproject.toml)
 typer==0.24.2 \
     --hash=sha256:b618bc3d721f9a8d30f3e05565be26416d06e9bcc29d49bc491dc26aba674fa8 \
     --hash=sha256:ec070dcfca1408e85ee203c6365001e818c3b7fffe686fd07ff2d68095ca0480
