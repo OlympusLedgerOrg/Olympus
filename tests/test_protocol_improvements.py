@@ -14,7 +14,6 @@ import pytest
 from psycopg.pq import TransactionStatus
 
 from storage import postgres as postgres_module
-from storage.postgres import StorageLayer
 
 
 # ---------------------------------------------------------------------------
@@ -54,41 +53,45 @@ class TestPathEncoding:
     """Verify _encode_path packs bits into bytes (MSB first)."""
 
     def test_empty_path(self) -> None:
-        assert StorageLayer._encode_path(()) == b""
+        assert postgres_module.StorageLayer._encode_path(()) == b""
 
     def test_single_zero(self) -> None:
-        assert StorageLayer._encode_path((0,)) == b"\x00"
+        assert postgres_module.StorageLayer._encode_path((0,)) == b"\x00"
 
     def test_single_one(self) -> None:
         # 1 bit set in MSB of first byte
-        assert StorageLayer._encode_path((1,)) == b"\x80"
+        assert postgres_module.StorageLayer._encode_path((1,)) == b"\x80"
 
     def test_full_byte_all_ones(self) -> None:
-        assert StorageLayer._encode_path((1, 1, 1, 1, 1, 1, 1, 1)) == b"\xff"
+        assert postgres_module.StorageLayer._encode_path((1, 1, 1, 1, 1, 1, 1, 1)) == b"\xff"
 
     def test_full_byte_alternating(self) -> None:
-        assert StorageLayer._encode_path((1, 0, 1, 0, 1, 0, 1, 0)) == bytes([0b10101010])
+        assert postgres_module.StorageLayer._encode_path((1, 0, 1, 0, 1, 0, 1, 0)) == bytes(
+            [0b10101010]
+        )
 
     def test_256_bit_all_ones(self) -> None:
         path = tuple([1] * 256)
-        packed = StorageLayer._encode_path(path)
+        packed = postgres_module.StorageLayer._encode_path(path)
         assert len(packed) == 32
         assert packed == b"\xff" * 32
 
     def test_256_bit_all_zeros(self) -> None:
         path = tuple([0] * 256)
-        packed = StorageLayer._encode_path(path)
+        packed = postgres_module.StorageLayer._encode_path(path)
         assert len(packed) == 32
         assert packed == b"\x00" * 32
 
     def test_partial_byte(self) -> None:
         # 5 bits: (1,0,1,1,0) → 10110_000 → 0xB0
-        assert StorageLayer._encode_path((1, 0, 1, 1, 0)) == bytes([0xB0])
+        assert postgres_module.StorageLayer._encode_path((1, 0, 1, 1, 0)) == bytes([0xB0])
 
     def test_deterministic(self) -> None:
         """Encoding is deterministic for the same input."""
         path = tuple([1, 0, 0, 1, 1, 0, 1, 0, 0, 1])
-        assert StorageLayer._encode_path(path) == StorageLayer._encode_path(path)
+        assert postgres_module.StorageLayer._encode_path(
+            path
+        ) == postgres_module.StorageLayer._encode_path(path)
 
     def test_protocol_state_encode_matches(self) -> None:
         """protocol_state.encode_path matches StorageLayer._encode_path."""
@@ -96,7 +99,7 @@ class TestPathEncoding:
 
         paths = [(), (0,), (1,), (1, 0, 1, 0), tuple([1] * 256)]
         for p in paths:
-            assert encode_path(p) == StorageLayer._encode_path(p)
+            assert encode_path(p) == postgres_module.StorageLayer._encode_path(p)
 
 
 # ---------------------------------------------------------------------------
@@ -109,18 +112,18 @@ class TestNodeCache:
 
     @pytest.mark.usefixtures("_fake_pool")
     def test_cache_miss_returns_none(self) -> None:
-        sl = StorageLayer("postgresql://unused", node_cache_size=10)
+        sl = postgres_module.StorageLayer("postgresql://unused", node_cache_size=10)
         assert sl._cache_get("s", 0, b"\x00") is None
 
     @pytest.mark.usefixtures("_fake_pool")
     def test_cache_put_and_get(self) -> None:
-        sl = StorageLayer("postgresql://unused", node_cache_size=10)
+        sl = postgres_module.StorageLayer("postgresql://unused", node_cache_size=10)
         sl._cache_put("s", 0, b"\x00", b"\xab" * 32)
         assert sl._cache_get("s", 0, b"\x00") == b"\xab" * 32
 
     @pytest.mark.usefixtures("_fake_pool")
     def test_cache_eviction(self) -> None:
-        sl = StorageLayer("postgresql://unused", node_cache_size=2)
+        sl = postgres_module.StorageLayer("postgresql://unused", node_cache_size=2)
         sl._cache_put("s", 0, b"\x01", b"\x01" * 32)
         sl._cache_put("s", 0, b"\x02", b"\x02" * 32)
         # Evicts the first entry
@@ -130,7 +133,7 @@ class TestNodeCache:
 
     @pytest.mark.usefixtures("_fake_pool")
     def test_cache_lru_promotion(self) -> None:
-        sl = StorageLayer("postgresql://unused", node_cache_size=2)
+        sl = postgres_module.StorageLayer("postgresql://unused", node_cache_size=2)
         sl._cache_put("s", 0, b"\x01", b"\x01" * 32)
         sl._cache_put("s", 0, b"\x02", b"\x02" * 32)
         # Access first entry to promote it
@@ -142,13 +145,13 @@ class TestNodeCache:
 
     @pytest.mark.usefixtures("_fake_pool")
     def test_cache_disabled(self) -> None:
-        sl = StorageLayer("postgresql://unused", node_cache_size=0)
+        sl = postgres_module.StorageLayer("postgresql://unused", node_cache_size=0)
         sl._cache_put("s", 0, b"\x01", b"\x01" * 32)
         assert sl._cache_get("s", 0, b"\x01") is None
 
     @pytest.mark.usefixtures("_fake_pool")
     def test_cache_clear(self) -> None:
-        sl = StorageLayer("postgresql://unused", node_cache_size=10)
+        sl = postgres_module.StorageLayer("postgresql://unused", node_cache_size=10)
         sl._cache_put("s", 0, b"\x01", b"\x01" * 32)
         sl._cache_clear()
         assert sl._cache_get("s", 0, b"\x01") is None
@@ -195,10 +198,10 @@ class TestModuleSeparation:
         assert callable(get_timestamp_tokens)
 
     def test_init_exports_submodules(self) -> None:
-        import storage
+        from storage import operational_state, protocol_state
 
-        assert hasattr(storage, "protocol_state")
-        assert hasattr(storage, "operational_state")
+        assert protocol_state is not None
+        assert operational_state is not None
 
 
 # ---------------------------------------------------------------------------

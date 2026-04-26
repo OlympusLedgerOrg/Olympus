@@ -354,7 +354,7 @@ async def run_worker(stop_event: asyncio.Event) -> None:
                     try:
                         await asyncio.wait_for(stop_event.wait(), timeout=poll)
                     except asyncio.TimeoutError:
-                        pass
+                        continue
                     continue
                 await process_job(session, job, max_attempts)
         except asyncio.CancelledError:
@@ -364,7 +364,7 @@ async def run_worker(stop_event: asyncio.Event) -> None:
             try:
                 await asyncio.wait_for(stop_event.wait(), timeout=poll)
             except asyncio.TimeoutError:
-                pass
+                continue
     logger.info("TSA worker stopped")
 
 
@@ -389,7 +389,7 @@ async def run_sweeper(stop_event: asyncio.Event) -> None:
         try:
             await asyncio.wait_for(stop_event.wait(), timeout=interval)
         except asyncio.TimeoutError:
-            pass
+            continue
     logger.info("TSA sweeper stopped")
 
 
