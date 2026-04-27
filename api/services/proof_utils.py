@@ -15,6 +15,7 @@ from urllib.parse import urlparse
 
 from fastapi import HTTPException
 
+from protocol.hashes import leaf_hash
 from protocol.merkle import (
     MERKLE_VERSION,
     PROOF_VERSION,
@@ -93,92 +94,155 @@ def normalize_source_url(source_url: str) -> str:
 
 
 def merkle_proof_from_store(data: dict[str, Any]) -> MerkleProof:
-    """Convert stored proof data to a MerkleProof object.
-
-    Args:
-        data: Ingestion metadata dict containing 'merkle_proof'.
-
-    Returns:
-        A MerkleProof object for verification.
-    """
-    return deserialize_merkle_proof(data["merkle_proof"])
-
-
-def smt_proof_to_merkle_proof_dict(proof: ExistenceProof, value_hash: bytes) -> dict[str, Any]:
-    """Convert an SMT ExistenceProof to a Merkle proof dict for storage.
-
-    The stored format is compatible with deserialize_merkle_proof() and
-    includes version metadata for future proof format migrations.
-
-    Args:
-        proof: The ExistenceProof from the SMT.
-        value_hash: The 32-byte value hash for the leaf.
-
-    Returns:
-        A dict suitable for JSON serialization and later verification.
-    """
-    # Convert sibling hashes to the expected format
-    # SMT siblings are bytes, convert to [hex_string, is_right_sibling]
-    siblings_formatted: list[list[Any]] = []
-    for i, sib in enumerate(proof.siblings):
-        sib_hex = sib.hex() if isinstance(sib, bytes) else str(sib)
-        # In an SMT, sibling position is determined by the bit at each level
-        # For simplicity, we mark all as left siblings (verification handles this)
-        siblings_formatted.append([sib_hex, False])
-
-    return {
-        "leaf_hash": merkle_leaf_hash(value_hash).hex(),
-        "leaf_index": str(int(proof.key.hex(), 16))
-        if isinstance(proof.key, bytes)
-        else str(proof.key),
-        "siblings": siblings_formatted,
-        "root_hash": proof.root_hash.hex()
-        if isinstance(proof.root_hash, bytes)
-        else str(proof.root_hash),
-        "tree_size": str(proof.tree_size) if hasattr(proof, "tree_size") else "1",
-        "proof_version": PROOF_VERSION,
-        "tree_version": MERKLE_VERSION,
-        "smt_key": proof.key.hex() if isinstance(proof.key, bytes) else str(proof.key),
-    }
-
-
-# ---------------------------------------------------------------------------
-# Proof evaluation
-# ---------------------------------------------------------------------------
+    """Convert stored ingestion proof metadata into a MerkleProof instance."""
+    proof_data = data["merkle_proof"]
+    return deserialize_merkle_proof(proof_data)
 
 
 def evaluate_proof_bundle(
     content_hash: str, merkle_root: str, merkle_proof_data: dict[str, Any]
 ) -> tuple[str, str, bool, bool]:
-    """Validate and verify a submitted proof bundle.
-
-    Args:
-        content_hash: Hex-encoded BLAKE3 content hash.
-        merkle_root: Hex-encoded Merkle root.
-        merkle_proof_data: Serialized Merkle proof dict.
-
-    Returns:
-        Tuple of:
-        - normalized_hash: Lowercase hex content hash
-        - normalized_root: Lowercase hex Merkle root
-        - content_hash_matches: True if content hash matches proof leaf
-        - merkle_proof_valid: True if Merkle proof verifies against root
-
-    Raises:
-        HTTPException 400: If proof data is malformed.
-    """
+    """Validate and verify a submitted proof bundle."""
     normalized_hash = parse_content_hash(content_hash).hex()
     normalized_root = normalize_merkle_root(merkle_root)
     try:
         merkle_proof = deserialize_merkle_proof(merkle_proof_data)
     except (KeyError, TypeError, ValueError):
-        raise HTTPException(status_code=400, detail="Invalid merkle_proof: malformed proof data")
+        raise HTTPException(
+            status_code=400, detail="Invalid merkle_proof: malformed proof data"
+        ) from None
 
-    # Check if content hash matches the proof's leaf hash
-    leaf_for_content = merkle_leaf_hash(bytes.fromhex(normalized_hash))
-    content_hash_matches = leaf_for_content.hex() == merkle_proof.leaf_hash.hex()
+    content_hash_bytes = bytes.fromhex(normalized_hash)
+    expected_leaf_hash = merkle_leaf_hash(content_hash_bytes)
+    smt_key_hex = merkle_proof_data.get("smt_key")
+    if smt_key_hex is not None:
+        try:
+            smt_key = bytes.fromhex(str(smt_key_hex))
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail="smt_key must be valid hex") from exc
+        if len(smt_key) != 32:
+            raise HTTPException(
+                status_code=400, detail="smt_key must be a 32-byte key (64 hex chars)"
+            )
+        bundle_parser_id = merkle_proof_data.get("parser_id")
+        bundle_cpv = merkle_proof_data.get("canonical_parser_version")
+        if not isinstance(bundle_parser_id, str) or not bundle_parser_id:
+            raise HTTPException(
+                status_code=400,
+                detail="parser_id is required and must be a non-empty string",
+            )
+        if not isinstance(bundle_cpv, str) or not bundle_cpv:
+            raise HTTPException(
+                status_code=400,
+                detail="canonical_parser_version is required and must be a non-empty string",
+            )
+        expected_leaf_hash = leaf_hash(smt_key, content_hash_bytes, bundle_parser_id, bundle_cpv)
 
-    # Verify the Merkle proof
-    merkle_proof_valid = verify_proof(merkle_proof)
+    content_hash_matches_proof = merkle_proof.leaf_hash == expected_leaf_hash
+    if merkle_proof.root_hash.hex() != normalized_root:
+        return normalized_hash, normalized_root, content_hash_matches_proof, False
 
-    return normalized_hash, normalized_root, content_hash_matches, merkle_proof_valid
+    try:
+        merkle_proof_valid = content_hash_matches_proof and verify_proof(merkle_proof)
+    except ValueError:
+        merkle_proof_valid = False
+
+    return normalized_hash, normalized_root, content_hash_matches_proof, merkle_proof_valid
+
+
+def smt_proof_to_merkle_proof_dict(proof: ExistenceProof, value_hash: bytes) -> dict[str, Any]:
+    """Convert a sparse Merkle proof to the MerkleProof serialization used by the ingest API."""
+    if len(value_hash) != 32:
+        raise ValueError("value_hash must be 32 bytes")
+    if len(proof.key) != 32:
+        raise ValueError("proof.key must be 32 bytes")
+    if len(proof.root_hash) != 32:
+        raise ValueError("proof.root_hash must be 32 bytes")
+    if not proof.parser_id:
+        raise ValueError("proof.parser_id must be a non-empty string")
+    if not proof.canonical_parser_version:
+        raise ValueError("proof.canonical_parser_version must be a non-empty string")
+
+    leaf_index = int.from_bytes(proof.key, byteorder="big", signed=False)
+    siblings_with_positions: list[list[str | bool]] = []
+    for level, sibling_hash in enumerate(proof.siblings):
+        if len(sibling_hash) != 32:
+            raise ValueError(f"sibling at level {level} must be 32 bytes")
+        is_right = ((leaf_index >> level) & 1) == 0
+        siblings_with_positions.append([sibling_hash.hex(), is_right])
+
+    smt_leaf_hash = leaf_hash(
+        proof.key,
+        value_hash,
+        proof.parser_id,
+        proof.canonical_parser_version,
+    )
+
+    return {
+        "leaf_hash": smt_leaf_hash.hex(),
+        "leaf_index": str(leaf_index),
+        "siblings": siblings_with_positions,
+        "root_hash": proof.root_hash.hex(),
+        "tree_size": str(1 << 256),
+        "proof_version": PROOF_VERSION,
+        "tree_version": MERKLE_VERSION,
+        "smt_key": proof.key.hex(),
+        "parser_id": proof.parser_id,
+        "canonical_parser_version": proof.canonical_parser_version,
+    }
+
+
+def sequencer_proof_to_merkle_proof_dict(
+    proof: Any,
+    value_hash: bytes,
+    parser_id: str,
+    canonical_parser_version: str,
+) -> dict[str, Any]:
+    """Convert a Go sequencer inclusion proof to the API merkle_proof dict."""
+    if len(value_hash) != 32:
+        raise ValueError("value_hash must be 32 bytes")
+    if not parser_id:
+        raise ValueError("parser_id must be a non-empty string")
+    if not canonical_parser_version:
+        raise ValueError("canonical_parser_version must be a non-empty string")
+
+    smt_key_hex = proof.global_key
+    smt_key_bytes = bytes.fromhex(smt_key_hex)
+    if len(smt_key_bytes) != 32:
+        raise ValueError("sequencer global_key must decode to 32 bytes")
+
+    root_bytes = bytes.fromhex(proof.root)
+    if len(root_bytes) != 32:
+        raise ValueError("sequencer root must decode to 32 bytes")
+
+    if len(proof.siblings) != 256:
+        raise ValueError(f"sequencer proof must have 256 siblings, got {len(proof.siblings)}")
+
+    leaf_index = int.from_bytes(smt_key_bytes, byteorder="big", signed=False)
+    siblings_with_positions: list[list[str | bool]] = []
+    for level, sibling_hex in enumerate(proof.siblings):
+        sibling_bytes = bytes.fromhex(sibling_hex)
+        if len(sibling_bytes) != 32:
+            raise ValueError(f"sequencer sibling at level {level} must decode to 32 bytes")
+        is_right = ((leaf_index >> level) & 1) == 0
+        siblings_with_positions.append([sibling_hex, is_right])
+
+    smt_leaf_hash = leaf_hash(
+        smt_key_bytes,
+        value_hash,
+        parser_id,
+        canonical_parser_version,
+    )
+
+    return {
+        "leaf_hash": smt_leaf_hash.hex(),
+        "leaf_index": str(leaf_index),
+        "siblings": siblings_with_positions,
+        "root_hash": proof.root,
+        "tree_size": str(1 << 256),
+        "proof_version": PROOF_VERSION,
+        "tree_version": MERKLE_VERSION,
+        "smt_key": smt_key_hex,
+        "parser_id": parser_id,
+        "canonical_parser_version": canonical_parser_version,
+    }
