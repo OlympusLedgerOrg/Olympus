@@ -18,10 +18,39 @@ import nacl.exceptions
 import nacl.signing
 
 from .canonical_json import canonical_json_bytes
+from .checkpoint_forks import (
+    CheckpointRegistry,
+    GossipForkEvidence,
+    _ForkAccumulator,
+    detect_checkpoint_fork,
+    detect_gossip_checkpoint_forks,
+)
 from .federation import FederationRegistry, NodeSignature
 from .hashes import CHECKPOINT_PREFIX, HASH_SEPARATOR, hash_bytes
 from .timestamps import current_timestamp
 
+
+# Re-exported symbols from checkpoint_forks to preserve the public API of this
+# module.  Listed in ``__all__`` so static analysers treat them as intentional
+# re-exports rather than unused imports.
+__all__ = [
+    "SignedCheckpoint",
+    "CheckpointVoteMessage",
+    "CHECKPOINT_DOMAIN_TAG",
+    "serialize_checkpoint_vote_message",
+    "sign_federated_checkpoint",
+    "verify_federated_checkpoint_signatures",
+    "build_checkpoint_quorum_certificate",
+    "verify_checkpoint_quorum_certificate",
+    "create_checkpoint",
+    "verify_checkpoint",
+    "verify_checkpoint_chain",
+    "detect_checkpoint_fork",
+    "detect_gossip_checkpoint_forks",
+    "GossipForkEvidence",
+    "_ForkAccumulator",
+    "CheckpointRegistry",
+]
 
 # Domain tag for federation vote messages (distinct from CHECKPOINT_PREFIX hashes).
 CHECKPOINT_DOMAIN_TAG = "OLY:CHECKPOINT-VOTE:V1"
@@ -679,11 +708,3 @@ def verify_checkpoint_chain(
 
     return True
 
-
-from .checkpoint_forks import (  # noqa: E402,F401
-    CheckpointRegistry,
-    GossipForkEvidence,
-    _ForkAccumulator,
-    detect_checkpoint_fork,
-    detect_gossip_checkpoint_forks,
-)

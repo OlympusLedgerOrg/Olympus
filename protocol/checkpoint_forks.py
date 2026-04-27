@@ -4,9 +4,13 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from dataclasses import dataclass
+from typing import TYPE_CHECKING
 
-from .checkpoints import SignedCheckpoint, verify_checkpoint, verify_checkpoint_chain
 from .federation import FederationRegistry
+
+
+if TYPE_CHECKING:
+    from .checkpoints import SignedCheckpoint
 
 
 def detect_checkpoint_fork(
@@ -159,6 +163,8 @@ def detect_gossip_checkpoint_forks(
 
     peer_items = sorted(observations.items(), key=lambda item: item[0])
     if registry is not None:
+        from .checkpoints import verify_checkpoint  # local import breaks import cycle
+
         for peer_id, checkpoint in peer_items:
             if not verify_checkpoint(checkpoint, registry):
                 raise ValueError(f"Invalid checkpoint from peer {peer_id}")
@@ -249,6 +255,8 @@ class CheckpointRegistry:
             ValueError: If checkpoint would create a fork
         """
         # Verify checkpoint is valid
+        from .checkpoints import verify_checkpoint  # local import breaks import cycle
+
         if not verify_checkpoint(checkpoint, self.registry):
             return False
 
@@ -280,6 +288,8 @@ class CheckpointRegistry:
         Returns:
             True if all checkpoints form a valid chain
         """
+        from .checkpoints import verify_checkpoint_chain  # local import breaks import cycle
+
         return verify_checkpoint_chain(
             self.checkpoints,
             self.registry,
