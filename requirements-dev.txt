@@ -35,6 +35,12 @@ exceptiongroup==1.3.1 ; python_version < "3.11" \
     # via
     #   anyio
     #   olympus (pyproject.toml)
+async-timeout==5.0.1 ; python_version < "3.11" \
+    --hash=sha256:39e3809566ff85354557ec2398b55e096c8364bacac9405a7a1fa429e77fe76c \
+    --hash=sha256:d9321a7a3d5a6a5e187e824d2fa0793ce379a202935782d555d6e9d2735677d3
+    # via
+    #   asyncpg
+    #   olympus (pyproject.toml)
 asyncpg==0.31.0 \
     --hash=sha256:027eaa61361ec735926566f995d959ade4796f6a49d3bde17e5134b9964f9ba8 \
     --hash=sha256:04d19392716af6b029411a0264d92093b6e5e8285ae97a39957b9a9c14ea72be \
