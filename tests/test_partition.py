@@ -20,6 +20,9 @@ Pure protocol logic — no DB, Redis, or external APIs required.
 
 from __future__ import annotations
 
+from collections.abc import Collection, Iterable
+from functools import partial
+
 import pytest
 
 from protocol.hashes import hash_bytes
@@ -71,6 +74,30 @@ def _pub(vote_hash_seed: str = "vote") -> VotePublication:
         published_at="2024-01-01T00:00:00Z",
         witnesses=("w1", "w2"),
     )
+
+
+def _all_reachable(nodes: Iterable[str]) -> list[str]:
+    return list(nodes)
+
+
+def _no_reachable(_nodes: Iterable[str]) -> list[str]:
+    return []
+
+
+def _first_reachable(_nodes: Iterable[str]) -> list[str]:
+    return ["n1"]
+
+
+def _first_two_reachable(_nodes: Iterable[str]) -> list[str]:
+    return ["n1", "n2"]
+
+
+def _current_state(state: ConsensusChainState) -> ConsensusChainState:
+    return state
+
+
+def _reject_reachable(_reachable: Collection[str]) -> bool:
+    return False
 
 
 # ------------------------------------------------------------------ #
@@ -506,8 +533,8 @@ class TestPartitionDetector:
     def test_healthy_quorum(self) -> None:
         state = self._make_state()
         detector = PartitionDetector(
-            ping_nodes=lambda nodes: list(nodes),
-            get_current_state=lambda: state,
+            ping_nodes=_all_reachable,
+            get_current_state=partial(_current_state, state),
         )
         healthy = detector.check_network_health(0, ["n1", "n2", "n3"])
         assert healthy
@@ -516,8 +543,8 @@ class TestPartitionDetector:
     def test_quorum_loss_freezes_watermark(self) -> None:
         state = self._make_state()
         detector = PartitionDetector(
-            ping_nodes=lambda nodes: [],  # No nodes reachable
-            get_current_state=lambda: state,
+            ping_nodes=_no_reachable,
+            get_current_state=partial(_current_state, state),
         )
         healthy = detector.check_network_health(1, ["n1", "n2", "n3"])
         assert not healthy
@@ -527,8 +554,8 @@ class TestPartitionDetector:
         state = self._make_state()
         # Only 1 of 3 reachable (< 2/3 = 2)
         detector = PartitionDetector(
-            ping_nodes=lambda nodes: ["n1"],
-            get_current_state=lambda: state,
+            ping_nodes=_first_reachable,
+            get_current_state=partial(_current_state, state),
         )
         healthy = detector.check_network_health(2, ["n1", "n2", "n3"])
         assert not healthy
@@ -537,8 +564,8 @@ class TestPartitionDetector:
         state = self._make_state()
         # 2 of 3 reachable = 66.7% >= ceil(2/3 * 3) = 2
         detector = PartitionDetector(
-            ping_nodes=lambda nodes: ["n1", "n2"],
-            get_current_state=lambda: state,
+            ping_nodes=_first_two_reachable,
+            get_current_state=partial(_current_state, state),
         )
         healthy = detector.check_network_health(3, ["n1", "n2", "n3"])
         assert healthy
@@ -546,8 +573,8 @@ class TestPartitionDetector:
     def test_empty_nodes_raises(self) -> None:
         state = self._make_state()
         detector = PartitionDetector(
-            ping_nodes=lambda nodes: list(nodes),
-            get_current_state=lambda: state,
+            ping_nodes=_all_reachable,
+            get_current_state=partial(_current_state, state),
         )
         with pytest.raises(ValueError, match="cannot be empty"):
             detector.check_network_health(0, [])
@@ -555,8 +582,8 @@ class TestPartitionDetector:
     def test_recover_from_partition(self) -> None:
         state = self._make_state(0, 5)
         detector = PartitionDetector(
-            ping_nodes=lambda nodes: [],
-            get_current_state=lambda: state,
+            ping_nodes=_no_reachable,
+            get_current_state=partial(_current_state, state),
         )
         # Lose quorum at round 1
         detector.check_network_health(1, ["n1", "n2", "n3"])
@@ -572,9 +599,9 @@ class TestPartitionDetector:
     def test_cross_network_verifier_rejection(self) -> None:
         state = self._make_state()
         detector = PartitionDetector(
-            ping_nodes=lambda nodes: list(nodes),
-            get_current_state=lambda: state,
-            cross_network_verifier=lambda reachable: False,  # Always reject
+            ping_nodes=_all_reachable,
+            get_current_state=partial(_current_state, state),
+            cross_network_verifier=_reject_reachable,
         )
         healthy = detector.check_network_health(0, ["n1", "n2", "n3"])
         assert not healthy
@@ -583,8 +610,8 @@ class TestPartitionDetector:
     def test_peer_group_diversity_check(self) -> None:
         state = self._make_state()
         detector = PartitionDetector(
-            ping_nodes=lambda nodes: list(nodes),
-            get_current_state=lambda: state,
+            ping_nodes=_all_reachable,
+            get_current_state=partial(_current_state, state),
             peer_groups={"n1": "dc1", "n2": "dc1", "n3": "dc1"},
             min_peer_group_diversity=2,  # Require 2 different groups
         )

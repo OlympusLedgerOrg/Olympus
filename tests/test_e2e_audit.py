@@ -147,7 +147,6 @@ def client(storage, isolated_db_url):
     """Create test client for API."""
     # Import here to avoid connecting to Postgres during test collection
     import api.app as api_app
-    from api.app import app
 
     # Override DATABASE_URL for the API
     os.environ["DATABASE_URL"] = isolated_db_url
@@ -157,7 +156,7 @@ def client(storage, isolated_db_url):
     api_app._storage = None
     api_app._db_error = None
 
-    client = TestClient(app)
+    client = TestClient(api_app.app)
     try:
         yield client
     finally:

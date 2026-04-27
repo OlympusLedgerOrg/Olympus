@@ -27,8 +27,8 @@ from unittest.mock import MagicMock, patch
 import nacl.signing
 import pytest
 
+import protocol.ledger as ledger_module
 from protocol.hashes import hash_bytes
-from protocol.ledger import Ledger
 from protocol.merkle import MerkleTree
 
 
@@ -47,7 +47,7 @@ def _make_leaf_hash(seed: int) -> bytes:
 # ---------------------------------------------------------------------------
 
 
-def test_in_memory_ledger_survives_disk_full(fresh_ledger: Ledger) -> None:
+def test_in_memory_ledger_survives_disk_full(fresh_ledger: ledger_module.Ledger) -> None:
     """
     The in-memory Ledger append path is unaffected by I/O errors.
 
@@ -110,14 +110,13 @@ def test_storage_layer_propagates_connection_error_on_write(
     verify the exception propagates to the caller rather than being swallowed.
     """
     from storage import postgres as postgres_module
-    from storage.postgres import StorageLayer
 
     # Build a StorageLayer with a fake pool so construction succeeds
     fake_pool = MagicMock()
     monkeypatch.setattr(postgres_module, "ConnectionPool", lambda *a, **kw: fake_pool)
     monkeypatch.setattr(postgres_module.time, "sleep", lambda _s: None)
 
-    storage = StorageLayer("postgresql://unused")
+    storage = postgres_module.StorageLayer("postgresql://unused")
 
     def _explode(*_args: object, **_kwargs: object) -> None:
         raise OSError(28, "No space left on device")
@@ -136,7 +135,7 @@ def test_storage_layer_propagates_connection_error_on_write(
 
 
 def test_committed_entries_verifiable_after_failed_extra_append(
-    fresh_ledger: Ledger,
+    fresh_ledger: ledger_module.Ledger,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """
@@ -146,8 +145,6 @@ def test_committed_entries_verifiable_after_failed_extra_append(
     third call, which is the first call on the 4th ledger append attempt.
     All three pre-fault entries must still pass verify_chain().
     """
-    import protocol.ledger as ledger_module
-
     # Commit three entries successfully
     for i in range(3):
         leaf = _make_leaf_hash(i)
