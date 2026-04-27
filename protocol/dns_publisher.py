@@ -317,7 +317,7 @@ class DNSBackend(ABC):
         Raises:
             DNSPublisherError: If the operation fails
         """
-        ...
+        raise NotImplementedError
 
     @abstractmethod
     def delete(self, name: str) -> None:
@@ -330,7 +330,7 @@ class DNSBackend(ABC):
         Raises:
             DNSPublisherError: If the operation fails
         """
-        ...
+        raise NotImplementedError
 
     def create_or_update_txt_record(self, fqdn: str, value: str) -> None:
         """

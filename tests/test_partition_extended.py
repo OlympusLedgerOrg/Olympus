@@ -1,5 +1,8 @@
 """Extended tests for protocol/partition.py targeting uncovered lines."""
 
+from collections.abc import Collection, Iterable
+from functools import partial
+
 import pytest
 
 from protocol.hashes import hash_bytes
@@ -27,6 +30,22 @@ def _block(rnd: int, weight: int = 1, vrf_seed: str | None = None) -> ConsensusB
     return ConsensusBlock(
         round_number=rnd, quorum_weight=weight, vrf_hash=vrf, timestamp="2025-01-01T00:00:00Z"
     )
+
+
+def _all_reachable(nodes: Iterable[str]) -> list[str]:
+    return list(nodes)
+
+
+def _no_reachable(_nodes: Iterable[str]) -> list[str]:
+    return []
+
+
+def _current_state(state: ConsensusChainState) -> ConsensusChainState:
+    return state
+
+
+def _reject_reachable(_reachable: Collection[str]) -> bool:
+    return False
 
 
 # ── VotePublication validation (lines 46, 49-50, 52, 55-56, 58, 60, 62) ──
@@ -319,7 +338,8 @@ class TestPartitionDetector:
 
     def test_empty_nodes_raises(self):
         det = PartitionDetector(
-            ping_nodes=lambda _: [], get_current_state=lambda: self._make_state()
+            ping_nodes=_no_reachable,
+            get_current_state=partial(_current_state, self._make_state()),
         )
         with pytest.raises(ValueError, match="empty"):
             det.check_network_health(0, [])
@@ -327,16 +347,16 @@ class TestPartitionDetector:
     def test_sample_size_clamped(self):
         """sample_size > len(nodes) is clamped down."""
         det = PartitionDetector(
-            ping_nodes=lambda nodes: list(nodes),
-            get_current_state=lambda: self._make_state(),
+            ping_nodes=_all_reachable,
+            get_current_state=partial(_current_state, self._make_state()),
             sample_size=100,
         )
         assert det.check_network_health(0, ["n1", "n2"]) is True
 
     def test_insufficient_peer_group_diversity(self):
         det = PartitionDetector(
-            ping_nodes=lambda nodes: list(nodes),
-            get_current_state=lambda: self._make_state(),
+            ping_nodes=_all_reachable,
+            get_current_state=partial(_current_state, self._make_state()),
             peer_groups={"n1": "group-a", "n2": "group-a"},
             min_peer_group_diversity=2,
         )
@@ -346,9 +366,9 @@ class TestPartitionDetector:
 
     def test_cross_network_verifier_rejection(self):
         det = PartitionDetector(
-            ping_nodes=lambda nodes: list(nodes),
-            get_current_state=lambda: self._make_state(),
-            cross_network_verifier=lambda _: False,
+            ping_nodes=_all_reachable,
+            get_current_state=partial(_current_state, self._make_state()),
+            cross_network_verifier=_reject_reachable,
         )
         result = det.check_network_health(0, ["n1", "n2", "n3"])
         assert result is False
@@ -356,8 +376,8 @@ class TestPartitionDetector:
     def test_recover_skips_future_rounds(self):
         """Frozen watermarks at or beyond healed_round are not processed."""
         det = PartitionDetector(
-            ping_nodes=lambda nodes: list(nodes),
-            get_current_state=lambda: self._make_state(5),
+            ping_nodes=_all_reachable,
+            get_current_state=partial(_current_state, self._make_state(5)),
         )
         det.frozen_watermarks[3] = self._make_state(3)
         det.frozen_watermarks[10] = self._make_state(10)

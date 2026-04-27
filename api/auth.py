@@ -440,11 +440,11 @@ class RateLimitBackend(Protocol):
 
     def get(self, key: str) -> _TokenBucket | None:
         """Retrieve a rate limit bucket by key."""
-        ...
+        raise NotImplementedError
 
     def set(self, key: str, bucket: _TokenBucket) -> None:
         """Store a rate limit bucket by key."""
-        ...
+        raise NotImplementedError
 
 
 class MemoryRateLimitBackend:

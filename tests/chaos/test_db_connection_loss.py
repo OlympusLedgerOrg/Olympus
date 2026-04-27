@@ -26,7 +26,6 @@ from psycopg import OperationalError
 from psycopg.pq import TransactionStatus
 
 import storage.postgres as postgres_module
-from storage.postgres import StorageLayer
 
 
 # ---------------------------------------------------------------------------
@@ -93,7 +92,7 @@ def test_storage_layer_raises_after_all_retries_exhausted(
     monkeypatch.setattr(postgres_module, "ConnectionPool", _AlwaysFailPool)
     monkeypatch.setattr(postgres_module.time, "sleep", lambda _s: None)
 
-    storage = StorageLayer("postgresql://unused")
+    storage = postgres_module.StorageLayer("postgresql://unused")
 
     with pytest.raises(RuntimeError, match="Failed to acquire PostgreSQL connection"):
         with storage._get_connection():
@@ -110,7 +109,7 @@ def test_storage_layer_retries_transient_failure_and_succeeds(
     monkeypatch.setattr(postgres_module, "ConnectionPool", lambda *a, **kw: _FlakyPool(2))
     monkeypatch.setattr(postgres_module.time, "sleep", lambda _s: None)
 
-    storage = StorageLayer("postgresql://unused")
+    storage = postgres_module.StorageLayer("postgresql://unused")
 
     with storage._get_connection() as conn:
         assert conn is not None
@@ -217,7 +216,7 @@ def test_circuit_breaker_opens_after_repeated_failures(
     sleep_calls: list[float] = []
     monkeypatch.setattr(postgres_module.time, "sleep", lambda s: sleep_calls.append(s))
 
-    storage = StorageLayer("postgresql://unused")
+    storage = postgres_module.StorageLayer("postgresql://unused")
 
     # First call: exhausts retries (sleep is called for backoff)
     with pytest.raises((RuntimeError, OperationalError)):

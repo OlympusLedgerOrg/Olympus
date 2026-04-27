@@ -679,9 +679,6 @@ def _merkle_proof_from_store(data: dict[str, Any]) -> MerkleProof:
 # and _resolved_poseidon_root are imported from their respective modules at the top.
 
 
-_BN128_FIELD_PRIME = 21888242871839275222246405745257275088548364400416034343698204186575808495617
-
-
 def _build_poseidon_smt_for_storage_shard(
     storage: StorageLayer, shard_id: str, *, up_to_ts: datetime | str | None = None
 ) -> PoseidonSMT:

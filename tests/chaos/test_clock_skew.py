@@ -33,7 +33,6 @@ from unittest.mock import patch
 
 import protocol.ledger as ledger_module
 from protocol.hashes import hash_bytes
-from protocol.ledger import Ledger
 from protocol.merkle import MerkleTree
 
 
@@ -46,7 +45,7 @@ def _make_leaf_hash(seed: int) -> bytes:
     return hash_bytes(seed.to_bytes(4, "big"))
 
 
-def _append_with_ts(ledger: Ledger, seed: int, fake_ts: str) -> str:
+def _append_with_ts(ledger: ledger_module.Ledger, seed: int, fake_ts: str) -> str:
     """Append a ledger entry using a patched current_timestamp."""
     # Patch the function reference inside the ledger module so that
     # Ledger.append() picks up the fake timestamp.
@@ -68,7 +67,7 @@ def _append_with_ts(ledger: Ledger, seed: int, fake_ts: str) -> str:
 # ---------------------------------------------------------------------------
 
 
-def test_ledger_accepts_timestamp_far_in_past(fresh_ledger: Ledger) -> None:
+def test_ledger_accepts_timestamp_far_in_past(fresh_ledger: ledger_module.Ledger) -> None:
     """
     An entry with a timestamp far in the past (Unix epoch) is accepted and
     the chain remains verifiable.
@@ -80,7 +79,7 @@ def test_ledger_accepts_timestamp_far_in_past(fresh_ledger: Ledger) -> None:
     assert fresh_ledger.verify_chain()
 
 
-def test_ledger_accepts_timestamp_far_in_future(fresh_ledger: Ledger) -> None:
+def test_ledger_accepts_timestamp_far_in_future(fresh_ledger: ledger_module.Ledger) -> None:
     """
     An entry with a timestamp far in the future (year 9999) is accepted and
     the chain remains verifiable.
@@ -92,7 +91,7 @@ def test_ledger_accepts_timestamp_far_in_future(fresh_ledger: Ledger) -> None:
     assert fresh_ledger.verify_chain()
 
 
-def test_chain_accepts_non_monotonic_timestamps(fresh_ledger: Ledger) -> None:
+def test_chain_accepts_non_monotonic_timestamps(fresh_ledger: ledger_module.Ledger) -> None:
     """
     Chain now accepts backwards clock jumps (L2-B change).
 
@@ -112,7 +111,7 @@ def test_chain_accepts_non_monotonic_timestamps(fresh_ledger: Ledger) -> None:
     assert fresh_ledger.verify_chain()
 
 
-def test_large_clock_skew_does_not_affect_entry_hash(fresh_ledger: Ledger) -> None:
+def test_large_clock_skew_does_not_affect_entry_hash(fresh_ledger: ledger_module.Ledger) -> None:
     """
     Two entries with identical content but different timestamps produce different
     entry hashes (the timestamp is included in the hash preimage).
@@ -132,7 +131,7 @@ def test_large_clock_skew_does_not_affect_entry_hash(fresh_ledger: Ledger) -> No
         )
 
     # Use a second fresh ledger so prev_entry_hash is also identical
-    ledger_b = Ledger()
+    ledger_b = ledger_module.Ledger()
     with patch.object(ledger_module, "current_timestamp", return_value="2099-01-01T00:00:00Z"):
         entry_b = ledger_b.append(
             record_hash=root,
