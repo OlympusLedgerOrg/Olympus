@@ -30,10 +30,11 @@ from .hashes import CHECKPOINT_PREFIX, HASH_SEPARATOR, hash_bytes
 from .timestamps import current_timestamp
 
 
-# Re-exported symbols from checkpoint_forks to preserve the public API of this
-# module.  Listed in ``__all__`` so static analysers treat them as intentional
-# re-exports rather than unused imports.
+# Public API for this module — includes both locally-defined symbols and symbols
+# re-exported from ``protocol.checkpoint_forks`` so that callers can import
+# everything checkpoint-related from a single location.
 __all__ = [
+    # Locally defined
     "SignedCheckpoint",
     "CheckpointVoteMessage",
     "CHECKPOINT_DOMAIN_TAG",
@@ -45,6 +46,7 @@ __all__ = [
     "create_checkpoint",
     "verify_checkpoint",
     "verify_checkpoint_chain",
+    # Re-exported from protocol.checkpoint_forks
     "detect_checkpoint_fork",
     "detect_gossip_checkpoint_forks",
     "GossipForkEvidence",

@@ -1,4 +1,11 @@
-"""Checkpoint fork detection and in-memory registry helpers."""
+"""Checkpoint fork detection and in-memory registry helpers.
+
+Import note: ``protocol.checkpoints`` imports this module for re-export, so
+``protocol.checkpoints`` must **not** be imported at module scope here.
+``SignedCheckpoint`` is guarded by ``TYPE_CHECKING`` (annotations only).
+``verify_checkpoint`` and ``verify_checkpoint_chain`` are imported locally
+inside the functions that call them to keep the import graph acyclic.
+"""
 
 from __future__ import annotations
 
@@ -163,7 +170,7 @@ def detect_gossip_checkpoint_forks(
 
     peer_items = sorted(observations.items(), key=lambda item: item[0])
     if registry is not None:
-        from .checkpoints import verify_checkpoint  # local import breaks import cycle
+        from .checkpoints import verify_checkpoint
 
         for peer_id, checkpoint in peer_items:
             if not verify_checkpoint(checkpoint, registry):
@@ -255,7 +262,7 @@ class CheckpointRegistry:
             ValueError: If checkpoint would create a fork
         """
         # Verify checkpoint is valid
-        from .checkpoints import verify_checkpoint  # local import breaks import cycle
+        from .checkpoints import verify_checkpoint
 
         if not verify_checkpoint(checkpoint, self.registry):
             return False
@@ -288,7 +295,7 @@ class CheckpointRegistry:
         Returns:
             True if all checkpoints form a valid chain
         """
-        from .checkpoints import verify_checkpoint_chain  # local import breaks import cycle
+        from .checkpoints import verify_checkpoint_chain
 
         return verify_checkpoint_chain(
             self.checkpoints,
