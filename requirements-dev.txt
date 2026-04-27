@@ -2234,6 +2234,10 @@ textual==8.2.3 \
     --hash=sha256:5008ac581bebf1f6fa0520404261844a231e5715fdbddd10ca73916a3af48ca2 \
     --hash=sha256:beea7b86b03b03558a2224f0cc35252e60ef8b0c4353b117b2f40972902d976a
     # via mutmut
+toml==0.10.2 \
+    --hash=sha256:806143ae5bfb6a3c6e736a764057db0e6a0e05e338b5630894a5f779cabb4f9b \
+    --hash=sha256:b3bda1d108d5dd99f4a20d24d9c348e91c4db7ab1b749200bded2f839ccbe68f
+    # via mutmut
 tomli==2.4.1 ; python_version < "3.11" \
     --hash=sha256:0d85819802132122da43cb86656f8d1f8c6587d54ae7dcaf30e90533028b49fe \
     --hash=sha256:7c7e1a961a0b2f2472c1ac5b69affa0ae1132c39adcb67aba98568702b9cc23f
