@@ -234,7 +234,9 @@ def test_verify_checkpoint_propagates_unexpected_quorum_verifier_errors(
     def _boom(*_args: object, **_kwargs: object) -> bool:
         raise RuntimeError("unexpected quorum verifier failure")
 
-    monkeypatch.setattr(checkpoints_module, "verify_checkpoint_quorum_certificate", _boom)
+    monkeypatch.setattr(
+        "protocol.checkpoint_verify.verify_checkpoint_quorum_certificate", _boom
+    )
 
     with pytest.raises(RuntimeError, match="unexpected quorum verifier failure"):
         verify_checkpoint(checkpoint, registry)

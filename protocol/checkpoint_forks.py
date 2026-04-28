@@ -1,11 +1,11 @@
 """Checkpoint fork detection and in-memory registry helpers.
 
 Import note: ``protocol.checkpoints`` imports this module for re-export, so
-``protocol.checkpoints`` must **not** be imported at module scope here.
-``verify_checkpoint`` and ``verify_checkpoint_chain`` are imported locally
-inside the functions that call them to keep the import graph acyclic.
-``SignedCheckpoint`` is imported from ``protocol.checkpoint_types``, which has
-no cross-module protocol dependencies and is therefore safe to import here.
+``protocol.checkpoints`` must **not** be imported here at any scope (module
+or function level). ``SignedCheckpoint`` and the verification helpers come
+from ``protocol.checkpoint_types`` and ``protocol.checkpoint_verify``, which
+have no dependency on ``protocol.checkpoints`` and are therefore safe to
+import here without creating an import cycle.
 """
 
 from __future__ import annotations
@@ -14,6 +14,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 
 from .checkpoint_types import SignedCheckpoint
+from .checkpoint_verify import verify_checkpoint, verify_checkpoint_chain
 from .federation import FederationRegistry
 
 
@@ -167,8 +168,6 @@ def detect_gossip_checkpoint_forks(
 
     peer_items = sorted(observations.items(), key=lambda item: item[0])
     if registry is not None:
-        from .checkpoints import verify_checkpoint
-
         for peer_id, checkpoint in peer_items:
             if not verify_checkpoint(checkpoint, registry):
                 raise ValueError(f"Invalid checkpoint from peer {peer_id}")
@@ -259,8 +258,6 @@ class CheckpointRegistry:
             ValueError: If checkpoint would create a fork
         """
         # Verify checkpoint is valid
-        from .checkpoints import verify_checkpoint
-
         if not verify_checkpoint(checkpoint, self.registry):
             return False
 
@@ -292,8 +289,6 @@ class CheckpointRegistry:
         Returns:
             True if all checkpoints form a valid chain
         """
-        from .checkpoints import verify_checkpoint_chain
-
         return verify_checkpoint_chain(
             self.checkpoints,
             self.registry,

@@ -756,7 +756,7 @@ def test_verify_signatures_domain_mismatch(registry, signing_keys):
         federation_epoch=0,
         validator_set_hash="fake",
     )
-    with patch("protocol.checkpoints._build_checkpoint_vote_message", return_value=bad_msg):
+    with patch("protocol.checkpoint_verify._build_checkpoint_vote_message", return_value=bad_msg):
         valid = verify_federated_checkpoint_signatures(
             checkpoint_hash=cp.checkpoint_hash,
             sequence=cp.sequence,
@@ -892,7 +892,7 @@ def test_cert_sig_loop_domain_mismatch(registry, signing_keys):
         federation_epoch=0,
         validator_set_hash="any",
     )
-    with patch("protocol.checkpoints._build_checkpoint_vote_message", return_value=bad_msg):
+    with patch("protocol.checkpoint_verify._build_checkpoint_vote_message", return_value=bad_msg):
         assert not verify_checkpoint_quorum_certificate(checkpoint=cp, registry=registry)
 
 
