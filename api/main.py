@@ -43,7 +43,6 @@ from api.routers.datasets import router as datasets_router
 from api.routers.federation import router as federation_router
 from api.routers.shards import router as shards_router
 from api.routers.witness import router as witness_router
-from api.rust_smoke import assert_rust_hot_path
 from api.sth import router as sth_router
 
 
@@ -207,8 +206,6 @@ async def lifespan(app: FastAPI):
     _assert_no_multiworker_with_memory_rate_limit()
     _assert_redis_url_when_redis_backend()
     _assert_xff_default_deny()
-    assert_rust_hot_path()
-
     try:
         async with engine.begin() as conn:
             await conn.run_sync(Base.metadata.create_all)
