@@ -39,11 +39,12 @@ except ImportError:
 # Domain-separated empty leaf sentinel.  This replaces the former all-zeros
 # sentinel to prevent confusion with naturally-occurring zero values.
 EMPTY_LEAF = blake3.blake3(b"OLY:EMPTY-LEAF:V1").digest()
+SPARSE_MERKLE_DEPTH = 256
 
 
 # Precompute empty hashes for sparse Merkle tree (256 levels)
 # EMPTY[i] = hash of empty subtree at height i
-def _precompute_empty_hashes(height: int = 256) -> list[bytes]:
+def _precompute_empty_hashes(height: int = SPARSE_MERKLE_DEPTH) -> list[bytes]:
     """Precompute empty node hashes for sparse tree."""
     empty = [EMPTY_LEAF]
     for i in range(height):

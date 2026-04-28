@@ -12,10 +12,7 @@ from api import ingest as ingest_api
 from api.app import app
 from protocol.hashes import hash_bytes, leaf_hash, record_key
 from protocol.merkle import MerkleTree, deserialize_merkle_proof, verify_proof
-from protocol.ssmf import ExistenceProof, SparseMerkleTree
-
-
-SPARSE_MERKLE_DEPTH = 256
+from protocol.ssmf import SPARSE_MERKLE_DEPTH, ExistenceProof, SparseMerkleTree
 
 
 @pytest.fixture()

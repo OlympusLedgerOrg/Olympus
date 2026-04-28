@@ -24,7 +24,7 @@ from protocol.merkle import (
     merkle_leaf_hash,
     verify_proof,
 )
-from protocol.ssmf import ExistenceProof
+from protocol.ssmf import SPARSE_MERKLE_DEPTH, ExistenceProof
 
 
 # ---------------------------------------------------------------------------
@@ -162,8 +162,10 @@ def smt_proof_to_merkle_proof_dict(proof: ExistenceProof, value_hash: bytes) -> 
         raise ValueError("proof.parser_id must be a non-empty string")
     if not proof.canonical_parser_version:
         raise ValueError("proof.canonical_parser_version must be a non-empty string")
-    if len(proof.siblings) != 256:
-        raise ValueError(f"proof must have 256 siblings, got {len(proof.siblings)}")
+    if len(proof.siblings) != SPARSE_MERKLE_DEPTH:
+        raise ValueError(
+            f"proof must have {SPARSE_MERKLE_DEPTH} siblings, got {len(proof.siblings)}"
+        )
 
     leaf_index = int.from_bytes(proof.key, byteorder="big", signed=False)
     siblings_with_positions: list[list[str | bool]] = []
