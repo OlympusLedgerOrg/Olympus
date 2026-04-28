@@ -949,6 +949,7 @@ def test_sequencer_proof_to_merkle_proof_dict_success():
     assert merkle_dict["parser_id"] == "docling@2.3.1"
     assert merkle_dict["canonical_parser_version"] == "v1"
     assert len(merkle_dict["siblings"]) == SPARSE_MERKLE_DEPTH
+    # Assert the public proof-bundle contract independently of the conversion helper.
     key_lsb_is_zero = (int.from_bytes(key, "big") & 1) == 0
     assert merkle_dict["siblings"][0] == ["00" * 32, key_lsb_is_zero]
     assert merkle_dict["leaf_hash"] == leaf_hash(
