@@ -15,6 +15,9 @@ from protocol.merkle import MerkleTree, deserialize_merkle_proof, verify_proof
 from protocol.ssmf import ExistenceProof, SparseMerkleTree
 
 
+SPARSE_MERKLE_DEPTH = 256
+
+
 @pytest.fixture()
 def client():
     """Create a test client for the API."""
@@ -915,7 +918,7 @@ def test_smt_proof_to_merkle_proof_dict_requires_full_sparse_path():
     proof = ExistenceProof(
         key=key,
         value_hash=value_hash,
-        siblings=[b"\x00" * 32] * 255,
+        siblings=[b"\x00" * 32] * (SPARSE_MERKLE_DEPTH - 1),
         root_hash=b"\x00" * 32,
         parser_id="docling@2.3.1",
         canonical_parser_version="v1",
@@ -933,7 +936,7 @@ def test_sequencer_proof_to_merkle_proof_dict_success():
     proof = SimpleNamespace(
         global_key=key.hex(),
         root=root.hex(),
-        siblings=["00" * 32] * 256,
+        siblings=["00" * 32] * SPARSE_MERKLE_DEPTH,
     )
 
     merkle_dict = ingest_api._sequencer_proof_to_merkle_proof_dict(
@@ -945,11 +948,12 @@ def test_sequencer_proof_to_merkle_proof_dict_success():
 
     assert merkle_dict["smt_key"] == key.hex()
     assert merkle_dict["root_hash"] == root.hex()
-    assert merkle_dict["tree_size"] == str(1 << 256)
+    assert merkle_dict["tree_size"] == str(1 << SPARSE_MERKLE_DEPTH)
     assert merkle_dict["parser_id"] == "docling@2.3.1"
     assert merkle_dict["canonical_parser_version"] == "v1"
-    assert len(merkle_dict["siblings"]) == 256
-    assert merkle_dict["siblings"][0] == ["00" * 32, ((int.from_bytes(key, "big") & 1) == 0)]
+    assert len(merkle_dict["siblings"]) == SPARSE_MERKLE_DEPTH
+    key_lsb_is_zero = (int.from_bytes(key, "big") & 1) == 0
+    assert merkle_dict["siblings"][0] == ["00" * 32, key_lsb_is_zero]
     assert merkle_dict["leaf_hash"] == leaf_hash(
         key,
         value_hash,
@@ -965,9 +969,15 @@ def test_sequencer_proof_to_merkle_proof_dict_success():
         ({"global_key": "00" * 31}, "global_key"),
         ({"root": "not-hex"}, "non-hexadecimal"),
         ({"root": "00" * 31}, "root"),
-        ({"siblings": ["00" * 32] * 255}, "256 siblings"),
-        ({"siblings": ["00" * 32] * 255 + ["00" * 31]}, "sibling at level 255"),
-        ({"siblings": ["00" * 32] * 255 + ["not-hex"]}, "non-hexadecimal"),
+        ({"siblings": ["00" * 32] * (SPARSE_MERKLE_DEPTH - 1)}, "256 siblings"),
+        (
+            {"siblings": ["00" * 32] * (SPARSE_MERKLE_DEPTH - 1) + ["00" * 31]},
+            f"sibling at level {SPARSE_MERKLE_DEPTH - 1}",
+        ),
+        (
+            {"siblings": ["00" * 32] * (SPARSE_MERKLE_DEPTH - 1) + ["not-hex"]},
+            "non-hexadecimal",
+        ),
     ],
 )
 def test_sequencer_proof_to_merkle_proof_dict_rejects_malformed_proofs(
@@ -979,7 +989,7 @@ def test_sequencer_proof_to_merkle_proof_dict_rejects_malformed_proofs(
     proof_data = {
         "global_key": record_key("document", "doc-sequencer-invalid", 1).hex(),
         "root": hash_bytes(b"sequencer-invalid-root").hex(),
-        "siblings": ["00" * 32] * 256,
+        "siblings": ["00" * 32] * SPARSE_MERKLE_DEPTH,
     }
     proof_data.update(proof_kwargs)
     proof = SimpleNamespace(**proof_data)
@@ -1011,7 +1021,7 @@ def test_sequencer_proof_to_merkle_proof_dict_rejects_invalid_metadata(
     proof = SimpleNamespace(
         global_key=record_key("document", "doc-sequencer-metadata", 1).hex(),
         root=hash_bytes(b"sequencer-metadata-root").hex(),
-        siblings=["00" * 32] * 256,
+        siblings=["00" * 32] * SPARSE_MERKLE_DEPTH,
     )
 
     with pytest.raises(ValueError, match=error_match):
