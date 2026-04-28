@@ -72,32 +72,31 @@ from api.services.poseidon import (
 )
 from api.services.proof_utils import (
     # Backward compatibility exports (re-exported for tests)
+    evaluate_proof_bundle as _evaluate_proof_bundle,
+    merkle_proof_from_store as _merkle_proof_from_store,
     normalize_source_url as _normalize_source_url,  # noqa: F401
     parse_content_hash as _parse_content_hash,  # noqa: F401
+    sequencer_proof_to_merkle_proof_dict as _sequencer_proof_to_merkle_proof_dict,
+    smt_proof_to_merkle_proof_dict as _smt_proof_to_merkle_proof_dict,
 )
 from api.services.upload_validation import validate_file_magic
 from protocol.canonical import CANONICAL_VERSION, canonicalize_document, document_to_bytes
 from protocol.canonicalizer import canonicalization_provenance
-from protocol.hashes import hash_bytes, leaf_hash, record_key
+from protocol.hashes import hash_bytes, record_key
 from protocol.ledger import Ledger
 from protocol.log_sanitization import sanitize_for_log
 from protocol.merkle import (
     MERKLE_VERSION,
     PROOF_VERSION,
-    MerkleProof,
     MerkleTree,
-    deserialize_merkle_proof,
-    merkle_leaf_hash,
     verify_proof,
 )
 from protocol.poseidon_smt import key_to_smt_bytes as _poseidon_smt_key
-from protocol.ssmf import ExistenceProof
 from protocol.telemetry import INGEST_TOTAL, LEDGER_HEIGHT, timed_operation
 from protocol.timestamps import current_timestamp
 
 
 if TYPE_CHECKING:
-    from api.services.sequencer_client import SequencerInclusionProof
     from protocol.poseidon_smt import PoseidonSMT
     from storage.postgres import StorageLayer
 
@@ -668,12 +667,6 @@ async def _apply_rate_limits(request: Request, api_key_id: str, action: str) -> 
         raise HTTPException(status_code=429, detail="Rate limit exceeded for IP address")
 
 
-def _merkle_proof_from_store(data: dict[str, Any]) -> MerkleProof:
-    """Convert stored ingestion proof metadata into a MerkleProof instance."""
-    proof_data = data["merkle_proof"]
-    return deserialize_merkle_proof(proof_data)
-
-
 # Note: _normalize_merkle_root is now defined at the top of this file
 # The functions _parse_content_hash, _normalize_source_url, _value_hash_to_poseidon_field,
 # and _resolved_poseidon_root are imported from their respective modules at the top.
@@ -714,191 +707,6 @@ def _get_or_build_poseidon_smt(shard_id: str) -> PoseidonSMT:
         from protocol.poseidon_smt import PoseidonSMT
 
         return PoseidonSMT()
-
-
-def _evaluate_proof_bundle(
-    content_hash: str, merkle_root: str, merkle_proof_data: dict[str, Any]
-) -> tuple[str, str, bool, bool]:
-    """Validate and verify a submitted proof bundle."""
-    normalized_hash = _parse_content_hash(content_hash).hex()
-    normalized_root = _normalize_merkle_root(merkle_root)
-    try:
-        merkle_proof = deserialize_merkle_proof(merkle_proof_data)
-    except (KeyError, TypeError, ValueError):
-        raise HTTPException(
-            status_code=400, detail="Invalid merkle_proof: malformed proof data"
-        ) from None
-
-    content_hash_bytes = bytes.fromhex(normalized_hash)
-    expected_leaf_hash = merkle_leaf_hash(content_hash_bytes)
-    smt_key_hex = merkle_proof_data.get("smt_key")
-    if smt_key_hex is not None:
-        try:
-            smt_key = bytes.fromhex(str(smt_key_hex))
-        except ValueError as exc:
-            raise HTTPException(status_code=400, detail="smt_key must be valid hex") from exc
-        if len(smt_key) != 32:
-            raise HTTPException(
-                status_code=400, detail="smt_key must be a 32-byte key (64 hex chars)"
-            )
-        # ADR-0003: parser_id and canonical_parser_version are bound into
-        # the leaf hash domain. Both are required to recompute the expected
-        # leaf hash for an SMT-key proof bundle.
-        bundle_parser_id = merkle_proof_data.get("parser_id")
-        bundle_cpv = merkle_proof_data.get("canonical_parser_version")
-        if not isinstance(bundle_parser_id, str) or not bundle_parser_id:
-            raise HTTPException(
-                status_code=400,
-                detail="parser_id is required and must be a non-empty string",
-            )
-        if not isinstance(bundle_cpv, str) or not bundle_cpv:
-            raise HTTPException(
-                status_code=400,
-                detail="canonical_parser_version is required and must be a non-empty string",
-            )
-        expected_leaf_hash = leaf_hash(smt_key, content_hash_bytes, bundle_parser_id, bundle_cpv)
-
-    content_hash_matches_proof = merkle_proof.leaf_hash == expected_leaf_hash
-    if merkle_proof.root_hash.hex() != normalized_root:
-        return normalized_hash, normalized_root, content_hash_matches_proof, False
-
-    try:
-        merkle_proof_valid = content_hash_matches_proof and verify_proof(merkle_proof)
-    except ValueError:
-        merkle_proof_valid = False
-
-    return normalized_hash, normalized_root, content_hash_matches_proof, merkle_proof_valid
-
-
-def _smt_proof_to_merkle_proof_dict(proof: ExistenceProof, value_hash: bytes) -> dict[str, Any]:
-    """
-    Convert a sparse Merkle proof to the MerkleProof serialization used by the ingest API.
-
-    Args:
-        proof: SMT existence proof from storage layer (carries parser_id and
-            canonical_parser_version per ADR-0003)
-        value_hash: The value hash bound to the SMT leaf
-
-    Returns:
-        Dict with merkle_proof structure expected by ingest API
-    """
-    if len(value_hash) != 32:
-        raise ValueError("value_hash must be 32 bytes")
-    if len(proof.key) != 32:
-        raise ValueError("proof.key must be 32 bytes")
-    if len(proof.root_hash) != 32:
-        raise ValueError("proof.root_hash must be 32 bytes")
-    if not proof.parser_id:
-        raise ValueError("proof.parser_id must be a non-empty string")
-    if not proof.canonical_parser_version:
-        raise ValueError("proof.canonical_parser_version must be a non-empty string")
-
-    leaf_index = int.from_bytes(proof.key, byteorder="big", signed=False)
-    siblings_with_positions: list[list[str | bool]] = []
-    for level, sibling_hash in enumerate(proof.siblings):
-        if len(sibling_hash) != 32:
-            raise ValueError(f"sibling at level {level} must be 32 bytes")
-        is_right = ((leaf_index >> level) & 1) == 0
-        siblings_with_positions.append([sibling_hash.hex(), is_right])
-
-    smt_leaf_hash = leaf_hash(
-        proof.key,
-        value_hash,
-        proof.parser_id,
-        proof.canonical_parser_version,
-    )
-
-    return {
-        "leaf_hash": smt_leaf_hash.hex(),
-        "leaf_index": str(leaf_index),
-        "siblings": siblings_with_positions,
-        "root_hash": proof.root_hash.hex(),
-        "tree_size": str(1 << 256),
-        "proof_version": PROOF_VERSION,
-        "tree_version": MERKLE_VERSION,
-        "smt_key": proof.key.hex(),
-        # ADR-0003: Bind parser provenance into the proof bundle so verifiers
-        # can recompute the leaf hash.
-        "parser_id": proof.parser_id,
-        "canonical_parser_version": proof.canonical_parser_version,
-    }
-
-
-def _sequencer_proof_to_merkle_proof_dict(
-    proof: SequencerInclusionProof,
-    value_hash: bytes,
-    parser_id: str,
-    canonical_parser_version: str,
-) -> dict[str, Any]:
-    """Convert a Go sequencer inclusion proof to the API merkle_proof dict.
-
-    The Go sequencer's `/v1/get-inclusion-proof` returns the SMT key, the
-    value hash, the per-level sibling hashes, and the root. It does not echo
-    the ADR-0003 parser provenance fields back to the caller, so we bind the
-    operator-configured `parser_id` / `canonical_parser_version` here. These
-    must match what the sequencer used when it computed the leaf hash.
-
-    Args:
-        proof: Inclusion proof returned by `GoSequencerClient.get_inclusion_proof`.
-        value_hash: 32-byte canonical value hash committed to the leaf.
-        parser_id: ADR-0003 parser identifier bound into the leaf hash.
-        canonical_parser_version: ADR-0003 canonical parser version bound
-            into the leaf hash.
-
-    Returns:
-        A dict with the same shape as `_smt_proof_to_merkle_proof_dict`.
-    """
-    if len(value_hash) != 32:
-        raise ValueError("value_hash must be 32 bytes")
-    if not parser_id:
-        raise ValueError("parser_id must be a non-empty string")
-    if not canonical_parser_version:
-        raise ValueError("canonical_parser_version must be a non-empty string")
-
-    smt_key_hex = proof.global_key
-    smt_key_bytes = bytes.fromhex(smt_key_hex)
-    if len(smt_key_bytes) != 32:
-        raise ValueError("sequencer global_key must decode to 32 bytes")
-
-    root_bytes = bytes.fromhex(proof.root)
-    if len(root_bytes) != 32:
-        raise ValueError("sequencer root must decode to 32 bytes")
-
-    # CD-HS-ST is a 256-level sparse Merkle tree, so a well-formed proof must
-    # carry exactly 256 sibling hashes. Reject malformed/truncated sequencer
-    # responses early rather than emitting a structurally-valid bundle that
-    # will silently fail verification later.
-    if len(proof.siblings) != 256:
-        raise ValueError(f"sequencer proof must have 256 siblings, got {len(proof.siblings)}")
-
-    leaf_index = int.from_bytes(smt_key_bytes, byteorder="big", signed=False)
-    siblings_with_positions: list[list[str | bool]] = []
-    for level, sibling_hex in enumerate(proof.siblings):
-        sibling_bytes = bytes.fromhex(sibling_hex)
-        if len(sibling_bytes) != 32:
-            raise ValueError(f"sequencer sibling at level {level} must decode to 32 bytes")
-        is_right = ((leaf_index >> level) & 1) == 0
-        siblings_with_positions.append([sibling_hex, is_right])
-
-    smt_leaf_hash = leaf_hash(
-        smt_key_bytes,
-        value_hash,
-        parser_id,
-        canonical_parser_version,
-    )
-
-    return {
-        "leaf_hash": smt_leaf_hash.hex(),
-        "leaf_index": str(leaf_index),
-        "siblings": siblings_with_positions,
-        "root_hash": proof.root,
-        "tree_size": str(1 << 256),
-        "proof_version": PROOF_VERSION,
-        "tree_version": MERKLE_VERSION,
-        "smt_key": smt_key_hex,
-        "parser_id": parser_id,
-        "canonical_parser_version": canonical_parser_version,
-    }
 
 
 # ---------------------------------------------------------------------------

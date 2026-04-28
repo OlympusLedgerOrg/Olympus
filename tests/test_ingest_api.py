@@ -10,9 +10,9 @@ from nacl.signing import SigningKey
 
 from api import ingest as ingest_api
 from api.app import app
-from protocol.hashes import hash_bytes, record_key
+from protocol.hashes import hash_bytes, leaf_hash, record_key
 from protocol.merkle import MerkleTree, deserialize_merkle_proof, verify_proof
-from protocol.ssmf import ExistenceProof, SparseMerkleTree
+from protocol.ssmf import SPARSE_MERKLE_DEPTH, ExistenceProof, SparseMerkleTree
 
 
 @pytest.fixture()
@@ -906,6 +906,132 @@ def test_smt_proof_to_merkle_proof_dict_requires_parser_fields():
     )
     with pytest.raises(ValueError, match="canonical_parser_version"):
         ingest_api._smt_proof_to_merkle_proof_dict(proof_missing_cpv, value_hash)
+
+
+def test_smt_proof_to_merkle_proof_dict_requires_full_sparse_path():
+    """_smt_proof_to_merkle_proof_dict must reject structurally incomplete proofs."""
+    value_hash = hash_bytes(b"short-smt-proof-value")
+    key = record_key("document", "doc-short-smt-proof", 1)
+    proof = ExistenceProof(
+        key=key,
+        value_hash=value_hash,
+        siblings=[b"\x00" * 32] * (SPARSE_MERKLE_DEPTH - 1),
+        root_hash=b"\x00" * 32,
+        parser_id="docling@2.3.1",
+        canonical_parser_version="v1",
+    )
+
+    with pytest.raises(ValueError, match="256 siblings"):
+        ingest_api._smt_proof_to_merkle_proof_dict(proof, value_hash)
+
+
+def test_sequencer_proof_to_merkle_proof_dict_success():
+    """Sequencer inclusion proofs should convert to ADR-0003 proof bundles."""
+    value_hash = hash_bytes(b"sequencer-proof-value")
+    key = record_key("document", "doc-sequencer", 1)
+    root = hash_bytes(b"sequencer-root")
+    proof = SimpleNamespace(
+        global_key=key.hex(),
+        root=root.hex(),
+        siblings=["00" * 32] * SPARSE_MERKLE_DEPTH,
+    )
+
+    merkle_dict = ingest_api._sequencer_proof_to_merkle_proof_dict(
+        proof,
+        value_hash,
+        "docling@2.3.1",
+        "v1",
+    )
+
+    assert merkle_dict["smt_key"] == key.hex()
+    assert merkle_dict["root_hash"] == root.hex()
+    assert merkle_dict["tree_size"] == str(1 << SPARSE_MERKLE_DEPTH)
+    assert merkle_dict["parser_id"] == "docling@2.3.1"
+    assert merkle_dict["canonical_parser_version"] == "v1"
+    assert len(merkle_dict["siblings"]) == SPARSE_MERKLE_DEPTH
+    # Assert the public proof-bundle contract independently of the conversion helper.
+    key_lsb_is_zero = (int.from_bytes(key, "big") & 1) == 0
+    assert merkle_dict["siblings"][0] == ["00" * 32, key_lsb_is_zero]
+    assert (
+        merkle_dict["leaf_hash"]
+        == leaf_hash(
+            key,
+            value_hash,
+            "docling@2.3.1",
+            "v1",
+        ).hex()
+    )
+
+
+@pytest.mark.parametrize(
+    "proof_kwargs, error_match",
+    [
+        ({"global_key": "not-hex"}, "non-hexadecimal"),
+        ({"global_key": "00" * 31}, "global_key"),
+        ({"root": "not-hex"}, "non-hexadecimal"),
+        ({"root": "00" * 31}, "root"),
+        ({"siblings": ["00" * 32] * (SPARSE_MERKLE_DEPTH - 1)}, "256 siblings"),
+        (
+            {"siblings": ["00" * 32] * (SPARSE_MERKLE_DEPTH - 1) + ["00" * 31]},
+            f"sibling at level {SPARSE_MERKLE_DEPTH - 1}",
+        ),
+        (
+            {"siblings": ["00" * 32] * (SPARSE_MERKLE_DEPTH - 1) + ["not-hex"]},
+            "non-hexadecimal",
+        ),
+    ],
+)
+def test_sequencer_proof_to_merkle_proof_dict_rejects_malformed_proofs(
+    proof_kwargs,
+    error_match,
+):
+    """Sequencer proof conversion should reject malformed key/root/path fields."""
+    value_hash = hash_bytes(b"sequencer-proof-invalid-value")
+    proof_data = {
+        "global_key": record_key("document", "doc-sequencer-invalid", 1).hex(),
+        "root": hash_bytes(b"sequencer-invalid-root").hex(),
+        "siblings": ["00" * 32] * SPARSE_MERKLE_DEPTH,
+    }
+    proof_data.update(proof_kwargs)
+    proof = SimpleNamespace(**proof_data)
+
+    with pytest.raises(ValueError, match=error_match):
+        ingest_api._sequencer_proof_to_merkle_proof_dict(
+            proof,
+            value_hash,
+            "docling@2.3.1",
+            "v1",
+        )
+
+
+@pytest.mark.parametrize(
+    "value_hash, parser_id, canonical_parser_version, error_match",
+    [
+        (b"\x00" * 31, "docling@2.3.1", "v1", "value_hash"),
+        (b"\x00" * 32, "", "v1", "parser_id"),
+        (b"\x00" * 32, "docling@2.3.1", "", "canonical_parser_version"),
+    ],
+)
+def test_sequencer_proof_to_merkle_proof_dict_rejects_invalid_metadata(
+    value_hash,
+    parser_id,
+    canonical_parser_version,
+    error_match,
+):
+    """Sequencer proof conversion should reject invalid leaf metadata."""
+    proof = SimpleNamespace(
+        global_key=record_key("document", "doc-sequencer-metadata", 1).hex(),
+        root=hash_bytes(b"sequencer-metadata-root").hex(),
+        siblings=["00" * 32] * SPARSE_MERKLE_DEPTH,
+    )
+
+    with pytest.raises(ValueError, match=error_match):
+        ingest_api._sequencer_proof_to_merkle_proof_dict(
+            proof,
+            value_hash,
+            parser_id,
+            canonical_parser_version,
+        )
 
 
 def test_operator_canonical_parser_version_env_override(monkeypatch):
