@@ -667,7 +667,6 @@ async def _apply_rate_limits(request: Request, api_key_id: str, action: str) -> 
         raise HTTPException(status_code=429, detail="Rate limit exceeded for IP address")
 
 
-
 # Note: _normalize_merkle_root is now defined at the top of this file
 # The functions _parse_content_hash, _normalize_source_url, _value_hash_to_poseidon_field,
 # and _resolved_poseidon_root are imported from their respective modules at the top.
@@ -708,7 +707,6 @@ def _get_or_build_poseidon_smt(shard_id: str) -> PoseidonSMT:
         from protocol.poseidon_smt import PoseidonSMT
 
         return PoseidonSMT()
-
 
 
 # ---------------------------------------------------------------------------

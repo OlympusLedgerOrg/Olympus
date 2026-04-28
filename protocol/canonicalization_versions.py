@@ -315,7 +315,7 @@ CANONICAL_TEST_VECTORS: list[CanonicalTestVector] = [
         name="plaintext_unicode_spaces",
         format_name="plaintext",
         version="1.0.0-nfc-homoglyph",
-        input_bytes="Hello\u00a0World\u202fTest".encode("utf-8"),
+        input_bytes="Hello\u00a0World\u202fTest".encode(),
         expected_canonical_hash="",
         description="Plaintext with Unicode NBSP and NARROW NBSP",
     ),

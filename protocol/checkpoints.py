@@ -278,6 +278,3 @@ def create_checkpoint(
         checkpoint_hash=checkpoint_hash,
         federation_quorum_certificate=certificate,
     )
-
-
-

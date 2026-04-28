@@ -2,9 +2,24 @@
 
 from __future__ import annotations
 
+import re
+
+
+# Gate value must be hex-only; it is interpolated directly into PL/pgSQL trigger bodies.
+_HEX_RE = re.compile(r"^[0-9a-f]+$")
+
 
 def schema_statements(node_rehash_gate: str) -> list[str]:
-    """Return idempotent PostgreSQL schema statements for ``StorageLayer.init_schema``."""
+    """Return idempotent PostgreSQL schema statements for ``StorageLayer.init_schema``.
+
+    ``node_rehash_gate`` must be a lowercase hex string (as produced by
+    ``storage.gates.derive_node_rehash_gate``). It is interpolated into
+    PL/pgSQL trigger bodies, so non-hex input is rejected to prevent
+    accidental SQL injection if the function is ever called with untrusted
+    input.
+    """
+    if not node_rehash_gate or not _HEX_RE.fullmatch(node_rehash_gate):
+        raise ValueError("node_rehash_gate must be a non-empty lowercase hex string")
     stmts = [
         # ------------------------------------------------------------------
         # SMT Leaves
