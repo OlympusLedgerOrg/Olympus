@@ -2,22 +2,19 @@
 
 Import note: ``protocol.checkpoints`` imports this module for re-export, so
 ``protocol.checkpoints`` must **not** be imported at module scope here.
-``SignedCheckpoint`` is guarded by ``TYPE_CHECKING`` (annotations only).
 ``verify_checkpoint`` and ``verify_checkpoint_chain`` are imported locally
 inside the functions that call them to keep the import graph acyclic.
+``SignedCheckpoint`` is imported from ``protocol.checkpoint_types``, which has
+no cross-module protocol dependencies and is therefore safe to import here.
 """
 
 from __future__ import annotations
 
 from collections.abc import Mapping
 from dataclasses import dataclass
-from typing import TYPE_CHECKING
 
+from .checkpoint_types import SignedCheckpoint
 from .federation import FederationRegistry
-
-
-if TYPE_CHECKING:
-    from .checkpoints import SignedCheckpoint
 
 
 def detect_checkpoint_fork(
