@@ -82,22 +82,6 @@ def test_docker_compose_app_has_env_file():
     assert compose["services"]["app"]["env_file"] == [".env"]
 
 
-def test_docker_compose_ui_has_env_file():
-    """The ui service in docker-compose.yml must load .env."""
-    compose = _load_primary_compose()
-    assert compose["services"]["ui"]["env_file"] == [".env"]
-
-
-def test_docker_compose_ui_exposes_psycopg_url():
-    """The ui service in docker-compose.yml must require PSYCOPG_URL (no hardcoded fallback)."""
-    compose = _load_primary_compose()
-    psycopg_url = compose["services"]["ui"]["environment"]["PSYCOPG_URL"]
-    # Must require the env var (fail-closed) — no hardcoded credentials
-    assert "PSYCOPG_URL" in psycopg_url
-    # Must not contain a hardcoded connection string with credentials
-    assert "postgresql://" not in psycopg_url
-
-
 def test_docker_compose_app_healthcheck_start_period_allows_migrations():
     """The app healthcheck must allow enough startup time for alembic + uvicorn."""
     compose = _load_primary_compose()

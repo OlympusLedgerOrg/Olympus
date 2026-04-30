@@ -6,7 +6,7 @@
 # For production deployments, use Docker secrets or a secrets manager.
 #
 # PROFILES:
-#   - default: db, app, ui, traefik
+#   - default: db, app, traefik
 #   - sequencer: adds cdhs-smf-rust and sequencer-go services for Go sequencer write path
 #
 # To run with Go sequencer: docker compose --profile sequencer up -d
@@ -261,41 +261,6 @@ services:
     tmpfs:
       - /tmp
       - /var/run
-
-  ui:
-    build:
-      context: .
-      target: production
-    container_name: olympus-ui
-    env_file:
-      - .env
-    command: ["uvicorn", "ui.app:app", "--host", "0.0.0.0", "--port", "8080"]
-    environment:
-      UI_API_BASE: ${UI_API_BASE}
-      PSYCOPG_URL: ${PSYCOPG_URL:?Set PSYCOPG_URL in .env}
-      OLYMPUS_DEBUG_UI: ${OLYMPUS_DEBUG_UI:-false}
-      ORACLE_RATE_LIMIT_REQUESTS: ${ORACLE_RATE_LIMIT_REQUESTS:-10}
-      ORACLE_RATE_LIMIT_WINDOW_SECONDS: ${ORACLE_RATE_LIMIT_WINDOW_SECONDS:-60}
-    depends_on:
-      app:
-        condition: service_healthy
-    ports:
-      - "127.0.0.1:8080:8080"
-    networks:
-      - frontend
-    # Tune these values for your deployment environment
-    deploy:
-      resources:
-        limits:
-          memory: 256M
-          cpus: "0.5"
-        reservations:
-          memory: 128M
-    read_only: true
-    security_opt:
-      - no-new-privileges:true
-    tmpfs:
-      - /tmp
 
   # ---------------------------------------------------------------------------
   # Public Verification UI (React + nginx)

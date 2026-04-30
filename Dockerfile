@@ -13,6 +13,7 @@ WORKDIR /app
 RUN apt-get update && apt-get install -y --no-install-recommends \
     postgresql-client \
     curl \
+    libmagic1 \
     && rm -rf /var/lib/apt/lists/* \
     && apt-get clean
 
@@ -42,7 +43,7 @@ RUN groupadd -r -g 1000 olympus \
 COPY --chown=olympus:olympus protocol /app/protocol
 COPY --chown=olympus:olympus storage /app/storage
 COPY --chown=olympus:olympus api /app/api
-COPY --chown=olympus:olympus ui /app/ui
+COPY --chown=olympus:olympus integrations /app/integrations
 COPY --chown=olympus:olympus schemas /app/schemas
 COPY --chown=olympus:olympus alembic /app/alembic
 COPY --chown=olympus:olympus alembic.ini /app/alembic.ini

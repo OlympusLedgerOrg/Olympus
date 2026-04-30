@@ -41,7 +41,7 @@ try:
     _RUST_CANONICAL_AVAILABLE = True
 except ImportError:
     _RUST_CANONICAL_AVAILABLE = False
-    _rust_canonical_json_encode_bytes = None  # type: ignore[assignment]
+    _rust_canonical_json_encode_bytes = None
     if os.getenv("OLYMPUS_REQUIRE_RUST", "").strip().lower() in {"1", "true", "yes", "on"}:
         raise RuntimeError(
             "Rust canonical JSON extension required by OLYMPUS_REQUIRE_RUST=1, "
@@ -92,7 +92,7 @@ def canonical_json_bytes(obj: Any) -> bytes:
         Canonical JSON as UTF-8 bytes
     """
     if _RUST_CANONICAL_AVAILABLE:
-        return bytes(_rust_canonical_json_encode_bytes(obj))  # type: ignore[misc]
+        return bytes(_rust_canonical_json_encode_bytes(obj))
     return canonical_json_encode(obj).encode("utf-8")
 
 
