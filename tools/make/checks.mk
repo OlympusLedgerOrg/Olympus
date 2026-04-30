@@ -1,5 +1,5 @@
 ## check: Run full quality gate (lint + type-check + bandit + tests)
-.PHONY: check format lint boundary-check vectors check-demo-keys
+.PHONY: check format lint boundary-check vectors check-demo-keys pre-push install-hooks
 
 check: boundary-check check-demo-keys
 	python tools/validate_schemas.py
@@ -46,6 +46,24 @@ check-demo-keys:
 	  . 2>/dev/null; then \
 	  echo "ERROR: Hardcoded demo key detected in source"; exit 1; \
 	fi
+
+## pre-push: Fast local CI gate (lint + typecheck + unit tests) — same as the pre-push hook
+pre-push: boundary-check check-demo-keys
+	python tools/validate_schemas.py
+	ruff check protocol/ storage/ api/ tests/ --output-format=concise
+	ruff format --check protocol/ storage/ api/ tests/
+	bandit -r protocol/ storage/ api/ -f txt -q
+	mypy protocol/ storage/ api/ --no-error-summary
+	pytest tests/ -q --tb=short -m "not postgres and not differential" \
+	  --cov=protocol --cov=storage --cov=api \
+	  --cov-report=term-missing:skip-covered \
+	  --cov-fail-under=85
+
+## install-hooks: Wire .githooks/ as the git hooks directory (run once per clone)
+install-hooks:
+	git config core.hooksPath .githooks
+	chmod +x .githooks/pre-push
+	@echo "Git hooks installed. Pre-push gate active."
 
 ## mutation-test: Run mutation testing on protocol crypto code (requires mutmut)
 .PHONY: mutation-test mutation-test-report

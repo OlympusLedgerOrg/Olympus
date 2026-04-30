@@ -152,7 +152,7 @@ def schema_statements(node_rehash_gate: str) -> list[str]:
             CONSTRAINT ledger_entries_entry_hash_unique
                 UNIQUE (entry_hash),
             CONSTRAINT ledger_entries_entry_hash_length
-                CHECK (octet_length(entry_hash) = 32),
+                CHECK (octet_length(entry_hash) IN (32, 100)),
             CONSTRAINT ledger_entries_seq_positive
                 CHECK (seq >= 0),
             -- RT-H3: Defense-in-depth constraint to prevent chain forks.
@@ -433,7 +433,7 @@ def schema_statements(node_rehash_gate: str) -> list[str]:
             CONSTRAINT ingestion_proofs_merkle_root_length
                 CHECK (octet_length(merkle_root) = 32),
             CONSTRAINT ingestion_proofs_ledger_entry_hash_length
-                CHECK (octet_length(ledger_entry_hash) = 32)
+                CHECK (octet_length(ledger_entry_hash) IN (32, 100))
         )
         """,
         """

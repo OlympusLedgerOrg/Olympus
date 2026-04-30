@@ -370,7 +370,8 @@ class Route53Backend(DNSBackend):
     """AWS Route53 DNS backend for Olympus checkpoint publication.
 
     Requires boto3 (already a project dependency). Supply ``hosted_zone_id``
-    via the ``credentials`` dict or the ``OLYMPUS_ROUTE53_HOSTED_ZONE_ID``
+    via the constructor, the ``credentials`` dict passed to
+    ``create_dns_publisher``, or the ``OLYMPUS_ROUTE53_HOSTED_ZONE_ID``
     environment variable. AWS credentials follow the standard boto3 resolution
     order: explicit kwargs → environment variables → ~/.aws/credentials → IAM role.
     """
@@ -379,13 +380,18 @@ class Route53Backend(DNSBackend):
 
     def __init__(
         self,
-        hosted_zone_id: str,
+        hosted_zone_id: str | None = None,
         ttl: int = _DEFAULT_TTL,
         **boto3_kwargs: Any,
     ) -> None:
         import boto3
 
-        self._zone_id = hosted_zone_id
+        zone_id = hosted_zone_id or os.environ.get("OLYMPUS_ROUTE53_HOSTED_ZONE_ID", "")
+        if not zone_id:
+            raise ValueError(
+                "hosted_zone_id must be supplied or set via OLYMPUS_ROUTE53_HOSTED_ZONE_ID"
+            )
+        self._zone_id = zone_id
         self._ttl = ttl
         self._client = boto3.client("route53", **boto3_kwargs)
 
@@ -556,7 +562,10 @@ def create_dns_publisher(
         domain: Base domain for checkpoint records
         provider: DNS provider name ('route53', 'cloudflare', etc.)
             If None, uses DryRunBackend
-        credentials: Provider-specific credentials
+        credentials: Provider-specific credentials. For 'route53', may include
+            ``hosted_zone_id`` (otherwise falls back to
+            ``OLYMPUS_ROUTE53_HOSTED_ZONE_ID`` env var) plus any boto3 client
+            kwargs (e.g. ``aws_access_key_id``, ``aws_secret_access_key``).
 
     Returns:
         Configured DNSPublisher instance
@@ -569,7 +578,11 @@ def create_dns_publisher(
         >>> publisher = create_dns_publisher(
         ...     "checkpoints.olympus.example.com",
         ...     provider="route53",
-        ...     credentials={"aws_access_key_id": "...", "aws_secret_access_key": "..."}
+        ...     credentials={
+        ...         "hosted_zone_id": "Z1234ABCDE",
+        ...         "aws_access_key_id": "...",
+        ...         "aws_secret_access_key": "...",
+        ...     }
         ... )
     """
     if provider is None:
@@ -592,7 +605,7 @@ def create_dns_publisher(
             if key in creds:
                 boto3_kwargs[key] = creds[key]
         ttl = int(creds.get("ttl", Route53Backend._DEFAULT_TTL))
-        backend = Route53Backend(zone_id, ttl=ttl, **boto3_kwargs)
+        backend = Route53Backend(hosted_zone_id=zone_id, ttl=ttl, **boto3_kwargs)
     elif provider == "cloudflare":
         raise NotImplementedError("Cloudflare backend not yet implemented")
     else:
