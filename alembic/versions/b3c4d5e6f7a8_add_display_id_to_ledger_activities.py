@@ -12,7 +12,9 @@ instead of a full-table scan with in-memory JSON parsing (O(n)).
 from collections.abc import Sequence
 
 import sqlalchemy as sa
+
 from alembic import op
+
 
 revision: str = "b3c4d5e6f7a8"
 down_revision: str | Sequence[str] | None = "a1b2c3d4e5f6"

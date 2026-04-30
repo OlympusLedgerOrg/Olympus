@@ -229,7 +229,7 @@ def test_global_key_context_uniqueness():
     occurrences = 0
     for pattern in ("*.py", "*.rs"):
         for path in repo_root.rglob(pattern):
-            occurrences += path.read_text().count(context)
+            occurrences += path.read_text(encoding="utf-8").count(context)
     assert occurrences == 3, (
         f"derive_key context string found {occurrences} time(s); "
         "expected exactly 3 (protocol/hashes.py + src/crypto.rs + "

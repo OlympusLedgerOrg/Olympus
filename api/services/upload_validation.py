@@ -41,7 +41,8 @@ from __future__ import annotations
 
 import io
 import logging
-import os
+import ntpath
+import posixpath
 import stat
 import zipfile
 
@@ -64,9 +65,6 @@ _MAX_DECOMPRESSED_BYTES: int = 100 * 1024 * 1024
 _MAX_COMPRESSION_RATIO: float = 50.0
 _MAX_ZSTD_WINDOW_SIZE: int = 2**26  # 64 MB LZ77 back-reference window cap
 _ZSTD_CHUNK_SIZE: int = 65536  # 64 KB streaming read chunks
-
-# Sentinel base used solely for ZIP path-containment checks; never written to disk.
-_ZIP_SAFETY_BASE: str = "/zip_extract_root"
 
 ALLOWED_MIME_TYPES: set[str] = {
     "application/pdf",
@@ -91,24 +89,29 @@ ALLOWED_MIME_TYPES: set[str] = {
 
 
 def _zip_member_path_is_safe(filename: str) -> bool:
-    """Return True when *filename* stays inside :data:`_ZIP_SAFETY_BASE`.
+    """Return True when *filename* is a relative, contained ZIP member path.
 
-    Uses ``os.path.commonpath`` (the standard recommended technique) to verify
-    that the normalised resolved path shares the sentinel base as a common
-    prefix.  This correctly rejects:
+    ZIP member names are slash-delimited archive paths rather than native
+    filesystem paths, so validate them with POSIX-style normalization and
+    explicit Windows drive checks.  This correctly rejects:
 
     * Absolute paths (``/etc/passwd``)
+    * Windows absolute paths (``C:\\Windows\\win.ini``)
     * Parent-traversal paths (``../../root/.ssh/authorized_keys``)
     * Null-byte injections (``file\\x00.txt``)
     * Mixed-separator tricks on all platforms
     """
-    if "\x00" in filename:
+    if "\x00" in filename or not filename:
         return False
-    candidate = os.path.normpath(os.path.join(_ZIP_SAFETY_BASE, filename))
-    try:
-        return os.path.commonpath([_ZIP_SAFETY_BASE, candidate]) == _ZIP_SAFETY_BASE
-    except ValueError:
+
+    archive_name = filename.replace("\\", "/")
+    if archive_name.startswith("/"):
         return False
+    if ntpath.splitdrive(archive_name)[0]:
+        return False
+
+    normalized = posixpath.normpath(archive_name)
+    return normalized not in {"", ".", ".."} and not normalized.startswith("../")
 
 
 def validate_zip_safety(content: bytes) -> None:

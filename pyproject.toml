@@ -42,6 +42,7 @@ dependencies = [
     "tomli==2.4.1; python_version < '3.11'",
     "python-multipart==0.0.26",
     "python-magic>=0.4.27",
+    "python-magic-bin>=0.4.14; sys_platform == 'win32'",
     "zstandard>=0.25.0",
     "sqlalchemy[asyncio]==2.0.49",
     "aiosqlite==0.22.1",
@@ -255,6 +256,14 @@ ignore_missing_imports = true
 
 [[tool.mypy.overrides]]
 module = "pyarrow.*"
+ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+module = "boto3.*"
+ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+module = "botocore.*"
 ignore_missing_imports = true
 
 [tool.bandit]

@@ -21,7 +21,9 @@ from __future__ import annotations
 from collections.abc import Sequence
 
 import sqlalchemy as sa
+
 from alembic import op
+
 
 revision: str = "f6a7b8c9d0e1"
 down_revision: str | Sequence[str] | None = "e5f6a7b8c9d0"

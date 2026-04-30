@@ -327,7 +327,18 @@ class Canonicalizer:
         )
         try:
             raw_nfc = unicodedata.normalize("NFC", data.decode("utf-8"))
-            root = lxml_html.fromstring(raw_nfc.encode("utf-8"), parser=parser)
+            try:
+                root = lxml_html.fromstring(raw_nfc.encode("utf-8"), parser=parser)
+            except Exception as strict_error:
+                if "Unexpected end tag" not in str(strict_error):
+                    raise
+                recovery_parser = lxml_html.HTMLParser(
+                    remove_comments=True,
+                    remove_pis=True,
+                    encoding="utf-8",
+                    recover=True,
+                )
+                root = lxml_html.fromstring(raw_nfc.encode("utf-8"), parser=recovery_parser)
         except Exception as e:
             raise CanonicalizationError(f"HTML Parse Failure: {e!s}")
 

@@ -2,7 +2,9 @@ package main
 
 import (
 	"context"
+	"crypto/tls"
 	"encoding/hex"
+	"fmt"
 	"log"
 	"net"
 	"net/http"
@@ -20,6 +22,14 @@ import (
 )
 
 func main() {
+	// Self-probe mode for container healthchecks. The distroless/static
+	// runtime image has no shell, curl, or wget, so the only reliable way
+	// to express a Docker/K8s healthcheck is to exec the binary itself with
+	// a flag and exit non-zero on failure.
+	if len(os.Args) > 1 && os.Args[1] == "--healthcheck" {
+		os.Exit(runHealthcheck())
+	}
+
 	ctx := context.Background()
 
 	dbCfg, err := config.LoadDBConfig()
@@ -136,6 +146,61 @@ func main() {
 			log.Fatalf("Server failed: %v", err)
 		}
 	}
+}
+
+// insecureLocalTLSConfig returns a TLS config that skips verification.
+// Used only by the in-container healthcheck probe against 127.0.0.1; do
+// not use for any outbound connection.
+func insecureLocalTLSConfig() *tls.Config {
+	return &tls.Config{InsecureSkipVerify: true} //nolint:gosec // local-loopback healthcheck only
+}
+
+// runHealthcheck performs an HTTP GET against /v1/healthz on the local
+// listener and returns 0 on a 2xx response, 1 otherwise. Honors
+// SEQUENCER_HTTP_ADDR so the probe reaches the same address the server is
+// listening on. Defaults to 127.0.0.1:8081 (matches the published port in
+// docker-compose.yml).
+func runHealthcheck() int {
+	addr := os.Getenv("SEQUENCER_HTTP_ADDR")
+	if addr == "" {
+		addr = ":8081"
+	}
+	host, port, err := net.SplitHostPort(addr)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "healthcheck: invalid SEQUENCER_HTTP_ADDR %q: %v\n", addr, err)
+		return 1
+	}
+	if host == "" || host == "0.0.0.0" || host == "::" {
+		host = "127.0.0.1"
+	}
+
+	scheme := "http"
+	if os.Getenv("SEQUENCER_TLS_CERT") != "" && os.Getenv("SEQUENCER_TLS_KEY") != "" {
+		scheme = "https"
+	}
+
+	client := &http.Client{Timeout: 5 * time.Second}
+	if scheme == "https" {
+		// The server cert is operator-issued; the probe runs inside the
+		// container so we trust the loopback target. Skipping verification
+		// here is intentional and scoped to the local probe only.
+		client.Transport = &http.Transport{
+			TLSClientConfig: insecureLocalTLSConfig(),
+		}
+	}
+
+	url := fmt.Sprintf("%s://%s/v1/healthz", scheme, net.JoinHostPort(host, port))
+	resp, err := client.Get(url)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "healthcheck: GET %s: %v\n", url, err)
+		return 1
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		fmt.Fprintf(os.Stderr, "healthcheck: GET %s -> %d\n", url, resp.StatusCode)
+		return 1
+	}
+	return 0
 }
 
 // redactedErr returns err.Error() with the supplied secret string (and any

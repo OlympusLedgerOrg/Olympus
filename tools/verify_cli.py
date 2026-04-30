@@ -25,6 +25,12 @@ from protocol.merkle import (
 from protocol.redaction import RedactionProof, RedactionProtocol
 
 
+if hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(encoding="utf-8")
+if hasattr(sys.stderr, "reconfigure"):
+    sys.stderr.reconfigure(encoding="utf-8")
+
+
 def verify_merkle_proof(args: argparse.Namespace) -> int:
     """Verify a Merkle inclusion proof."""
     try:
