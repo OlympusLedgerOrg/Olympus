@@ -22,6 +22,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import threading
 from collections import defaultdict
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -75,30 +76,34 @@ class _RegistryCache:
 
 
 _registry_cache: _RegistryCache | None = None
+_registry_cache_lock = threading.Lock()
 
 
 def _load_federation_registry(registry_path: str) -> FederationRegistry:
     """Load the FederationRegistry, using a module-level cache keyed by path and mtime.
 
     The registry is re-read from disk only when the file's modification time
-    changes, avoiding redundant I/O on every witness announcement.
+    changes, avoiding redundant I/O on every witness announcement.  Access to
+    the shared cache is serialised with a lock so concurrent callers cannot
+    race during a cache refresh.
     """
     global _registry_cache
     try:
         mtime = os.path.getmtime(registry_path)
     except OSError:
         mtime = -1.0
-    if (
-        _registry_cache is None
-        or _registry_cache.path != registry_path
-        or _registry_cache.mtime != mtime
-    ):
-        _registry_cache = _RegistryCache(
-            registry=FederationRegistry.from_file(registry_path),
-            path=registry_path,
-            mtime=mtime,
-        )
-    return _registry_cache.registry
+    with _registry_cache_lock:
+        if (
+            _registry_cache is None
+            or _registry_cache.path != registry_path
+            or _registry_cache.mtime != mtime
+        ):
+            _registry_cache = _RegistryCache(
+                registry=FederationRegistry.from_file(registry_path),
+                path=registry_path,
+                mtime=mtime,
+            )
+        return _registry_cache.registry
 
 
 def _resolve_node_pubkey(origin: str) -> str | None:

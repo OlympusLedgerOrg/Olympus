@@ -444,7 +444,14 @@ class Route53Backend(DNSBackend):
                     self._unquote_txt(rr["Value"])
                     for rr in rrset.get("ResourceRecords", [])
                 ]
-                return values, int(rrset.get("TTL", self._ttl))
+                ttl_raw = rrset.get("TTL")
+                if ttl_raw is None:
+                    logger.warning(
+                        "Route53 RRSet for %s has no TTL field; falling back to configured TTL %d",
+                        sanitize_for_log(name),
+                        self._ttl,
+                    )
+                return values, int(ttl_raw) if ttl_raw is not None else self._ttl
         return None
 
     def delete(self, name: str) -> None:
