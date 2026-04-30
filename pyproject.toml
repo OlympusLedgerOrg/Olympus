@@ -141,6 +141,9 @@ unfixable = []
 # _patches.apply_all() MUST execute before any third-party imports so that
 # CVE runtime patches are in place; the E402 violations are intentional.
 "api/main.py" = ["E402"]
+# Windows DLL PATH setup must run before `import magic`; the interleaved
+# code block is intentional and cannot be reordered.
+"api/services/upload_validation.py" = ["E402", "I001"]
 
 [tool.ruff.lint.isort]
 # Ensure first-party modules are grouped correctly after stdlib and third-party.

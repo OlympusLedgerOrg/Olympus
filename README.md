@@ -24,7 +24,7 @@ The answer is **yes** — independently and offline.
 
 Olympus is licensed under **Apache License 2.0**.
 
-All components are open source: protocol implementations (`protocol/`), ZK circuits (`proofs/`), storage layer (`storage/`), API gateway (`api/`), debug UI (`ui/`), schemas (`schemas/`), verification tools (`verifiers/`), CLI tools (`tools/`), and examples (`examples/`, `test_vectors/`).
+All components are open source: protocol implementations (`protocol/`), ZK circuits (`proofs/`), storage layer (`storage/`), API gateway (`api/`), schemas (`schemas/`), verification tools (`verifiers/`), CLI tools (`tools/`), and examples (`examples/`, `test_vectors/`).
 
 **Why Apache 2.0?** Strong patent protection, enterprise-friendly, and protects cryptographic IP from patent trolls.
 

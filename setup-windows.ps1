@@ -222,7 +222,7 @@ Write-Host "   Setup complete!                               " -ForegroundColor 
 Write-Host "==================================================" -ForegroundColor Green
 Write-Host "   API:      http://localhost:8000               " -ForegroundColor Green
 Write-Host "   API docs: http://localhost:8000/docs          " -ForegroundColor Green
-Write-Host "   Database: postgresql://${DbUser}@localhost:5432" -ForegroundColor Green
+Write-Host "   Database: postgresql://${DbUser}@localhost:5432/olympus" -ForegroundColor Green
 Write-Host "==================================================" -ForegroundColor Green
 
 if ($SkipStart) {

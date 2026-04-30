@@ -138,7 +138,7 @@ bandit -r protocol/ storage/ api/ scaffolding/ -f txt
 uvicorn api.app:app --host 127.0.0.1 --port 8000 --reload
 ```
 
-### Run both with make
+### Run the API with make
 ```bash
 make dev
 ```
