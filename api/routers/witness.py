@@ -35,7 +35,6 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from api.auth import RequireAPIKey
 from api.deps import DBSession
-from protocol.federation.identity import FederationRegistry
 from api.models.witness import WitnessNonce, WitnessObservation
 from api.schemas.witness import (
     GossipConflictEntry,
@@ -44,6 +43,7 @@ from api.schemas.witness import (
     WitnessAnnounceResponse,
     WitnessHealthResponse,
 )
+from protocol.federation.identity import FederationRegistry
 from protocol.hashes import hash_bytes
 from protocol.log_sanitization import sanitize_for_log
 from protocol.timestamps import current_timestamp
@@ -70,6 +70,7 @@ _MAX_OBSERVATIONS: int = 500_000
 @dataclass
 class _RegistryCache:
     """Cache entry for a loaded FederationRegistry."""
+
     registry: FederationRegistry
     path: str
     mtime: float
@@ -115,7 +116,10 @@ def _resolve_node_pubkey(origin: str) -> str | None:
     deployments or when the registry cannot be loaded.
     """
     guardian_enabled = os.environ.get("OLYMPUS_GUARDIAN_ENABLED", "").strip().lower() in {
-        "1", "true", "yes", "on"
+        "1",
+        "true",
+        "yes",
+        "on",
     }
     if guardian_enabled:
         registry_path = os.environ.get(

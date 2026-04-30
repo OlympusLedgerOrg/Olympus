@@ -24,7 +24,6 @@ from protocol.federation.quorum import (
     serialize_vote_message,
 )
 from protocol.hashes import hash_bytes
-from protocol.log_sanitization import sanitize_for_log
 from protocol.timestamps import current_timestamp
 
 
@@ -221,13 +220,7 @@ async def sign_header(
         )
         local_root = result.scalar_one_or_none()
         if local_root is not None and local_root != incoming_root:
-            logger.warning(
-                "Fork detected for shard %s at seq %d: local=%s remote=%s",
-                sanitize_for_log(request.shard_id),
-                request.entry_seq,
-                sanitize_for_log(local_root),
-                sanitize_for_log(incoming_root),
-            )
+            logger.warning("Fork detected during federation signing; rejecting co-sign request")
             raise HTTPException(
                 status_code=409,
                 detail=ForkEvidenceResponse(

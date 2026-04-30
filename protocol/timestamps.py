@@ -12,8 +12,15 @@ import time
 from datetime import datetime, timezone
 
 
+class _TimestampState:
+    """Mutable timestamp state protected by _timestamp_lock."""
+
+    def __init__(self) -> None:
+        self.last_us = 0
+
+
 _timestamp_lock = threading.Lock()
-_last_timestamp_us: int = 0
+_timestamp_state = _TimestampState()
 
 
 def current_timestamp() -> str:
@@ -26,14 +33,14 @@ def current_timestamp() -> str:
     microsecond. Access to the shared counter is protected by a lock so that
     concurrent callers cannot observe duplicate timestamps.
     """
-    global _last_timestamp_us
-
     with _timestamp_lock:
         timestamp_us = time.time_ns() // 1_000
-        if timestamp_us <= _last_timestamp_us:
-            timestamp_us = _last_timestamp_us + 1
-        _last_timestamp_us = timestamp_us
+        if timestamp_us <= _timestamp_state.last_us:
+            timestamp_us = _timestamp_state.last_us + 1
+        _timestamp_state.last_us = timestamp_us
 
-    return datetime.fromtimestamp(timestamp_us / 1_000_000, timezone.utc).isoformat().replace(
-        "+00:00", "Z"
+    return (
+        datetime.fromtimestamp(timestamp_us / 1_000_000, timezone.utc)
+        .isoformat()
+        .replace("+00:00", "Z")
     )
