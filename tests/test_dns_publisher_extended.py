@@ -148,8 +148,8 @@ def test_dns_backend_query_txt_record_not_implemented():
 
 
 def test_create_dns_publisher_route53():
-    """route53 provider raises NotImplementedError."""
-    with pytest.raises(NotImplementedError, match="Route53"):
+    """route53 provider raises ValueError when hosted_zone_id is not configured."""
+    with pytest.raises(ValueError, match="hosted_zone_id"):
         create_dns_publisher(DOMAIN, provider="route53")
 
 

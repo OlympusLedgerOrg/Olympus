@@ -440,10 +440,7 @@ class Route53Backend(DNSBackend):
             raise DNSPublisherError(f"Route53 query failed for {name!r}: {exc}") from exc
         for rrset in resp.get("ResourceRecordSets", []):
             if rrset["Name"] == dns_name and rrset["Type"] == "TXT":
-                values = [
-                    self._unquote_txt(rr["Value"])
-                    for rr in rrset.get("ResourceRecords", [])
-                ]
+                values = [self._unquote_txt(rr["Value"]) for rr in rrset.get("ResourceRecords", [])]
                 ttl_raw = rrset.get("TTL")
                 if ttl_raw is None:
                     logger.warning(
@@ -578,9 +575,7 @@ def create_dns_publisher(
         backend: DNSBackend = DryRunBackend()
     elif provider == "route53":
         creds = credentials or {}
-        zone_id = creds.get("hosted_zone_id") or os.environ.get(
-            "OLYMPUS_ROUTE53_HOSTED_ZONE_ID"
-        )
+        zone_id = creds.get("hosted_zone_id") or os.environ.get("OLYMPUS_ROUTE53_HOSTED_ZONE_ID")
         if not zone_id:
             raise ValueError(
                 "Route53 backend requires hosted_zone_id in credentials "
