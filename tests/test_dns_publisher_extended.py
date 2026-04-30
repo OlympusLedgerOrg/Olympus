@@ -123,7 +123,8 @@ def test_create_or_update_txt_record():
 
 
 # ---------------------------------------------------------------------------
-# DNSBackend.query_txt_record raises NotImplementedError
+# DNSBackend.query_txt_record is abstract — subclasses omitting it cannot be
+# instantiated (TypeError on construction, not NotImplementedError at call time)
 # ---------------------------------------------------------------------------
 
 

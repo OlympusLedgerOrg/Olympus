@@ -111,6 +111,9 @@ def _load_federation_registry(registry_path: str) -> FederationRegistry | None:
                     mtime=mtime,
                 )
             except Exception:
+                logger.debug(
+                    "Failed to load federation registry from %s", registry_path, exc_info=True
+                )
                 return None
         return _registry_cache.registry
 
