@@ -49,6 +49,7 @@ import stat
 import sys
 import zipfile
 
+
 if sys.platform == "win32":
     _magic_spec = importlib.util.find_spec("magic")
     if _magic_spec is not None and _magic_spec.origin is not None:
