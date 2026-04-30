@@ -67,8 +67,6 @@ _MAX_NONCE_ENTRIES: int = 100_000
 _MAX_OBSERVATIONS: int = 500_000
 
 
-
-
 def _env_flag_enabled(name: str) -> bool:
     return os.environ.get(name, "").strip().lower() in {"1", "true", "yes", "on"}
 

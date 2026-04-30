@@ -384,7 +384,7 @@ class Route53Backend(DNSBackend):
         ttl: int = _DEFAULT_TTL,
         **boto3_kwargs: Any,
     ) -> None:
-        import boto3  # type: ignore[import-untyped]
+        import boto3
 
         zone_id = hosted_zone_id or os.environ.get("OLYMPUS_ROUTE53_HOSTED_ZONE_ID", "")
         if not zone_id:
