@@ -24,8 +24,8 @@ pragma circom 2.0.0;
 include "./lib/merkleProof.circom";
 include "./lib/poseidon.circom";
 include "./parameters.circom";
-include "../../node_modules/circomlib/circuits/iszero.circom";
-include "../../node_modules/circomlib/circuits/bitify.circom";
+include "../node_modules/circomlib/circuits/comparators.circom";
+include "../node_modules/circomlib/circuits/bitify.circom";
 
 template NonExistence(depth) {
     // ---- Public inputs ----
@@ -79,4 +79,4 @@ template NonExistence(depth) {
     }
 }
 
-component main { public [root] } = NonExistence(NON_EXISTENCE_MERKLE_DEPTH);
+component main { public [root] } = NonExistence(NON_EXISTENCE_MERKLE_DEPTH());

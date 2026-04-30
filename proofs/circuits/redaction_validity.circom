@@ -84,6 +84,8 @@ template RedactionValidity(maxLeaves, depth) {
     // -------------------------
     component inclusionProofs[maxLeaves];
     signal revealedLeaves[maxLeaves];
+    // idxAccum must be declared in initial scope (not inside a loop)
+    signal idxAccum[maxLeaves][depth + 1];
 
     for (var i = 0; i < maxLeaves; i++) {
         // Force revealMask to be strictly binary (0 or 1)
@@ -94,14 +96,13 @@ template RedactionValidity(maxLeaves, depth) {
 
         // Bind pathIndices to index i (LSB-first), so this proof is about position i.
         // Since maxLeaves = 2^depth, i fits in 'depth' bits.
-        signal idxAccum[depth + 1];
-        idxAccum[0] <== 0;
+        idxAccum[i][0] <== 0;
         for (var b = 0; b < depth; b++) {
             var bitWeight = 1 << b;
-            idxAccum[b + 1] <== idxAccum[b] + pathIndices[i][b] * bitWeight;
+            idxAccum[i][b + 1] <== idxAccum[i][b] + pathIndices[i][b] * bitWeight;
         }
         // L4-C: Enforce index match for ALL leaves (not just revealed)
-        idxAccum[depth] === i;
+        idxAccum[i][depth] === i;
 
         // MerkleProof (computed for ALL leaves)
         inclusionProofs[i] = MerkleProof(depth);
@@ -152,4 +153,4 @@ template RedactionValidity(maxLeaves, depth) {
 
 // Default parameters: values loaded from parameters.circom
 component main {public [originalRoot, redactedCommitment, revealedCount]} =
-    RedactionValidity(REDACTION_MAX_LEAVES, REDACTION_MERKLE_DEPTH);
+    RedactionValidity(REDACTION_MAX_LEAVES(), REDACTION_MERKLE_DEPTH());
