@@ -83,6 +83,9 @@ FORBIDDEN_EDGES: list[tuple[str, str]] = [
     # federation.rotation must not depend on replication or gossip
     ("protocol.federation.rotation", "protocol.federation.replication"),
     ("protocol.federation.rotation", "protocol.federation.gossip"),
+    # federation.gossip must not depend on replication or rotation
+    ("protocol.federation.gossip", "protocol.federation.replication"),
+    ("protocol.federation.gossip", "protocol.federation.rotation"),
 ]
 
 
@@ -145,8 +148,22 @@ def _get_internal_imports(module_path: Path, repo_root: Path) -> list[str]:
                 abs_name = f"{base}.{module}" if module else base
                 if abs_name.startswith("protocol"):
                     names.append(abs_name)
+                    # Also record each explicitly named alias so that
+                    # "from .federation import quorum" records
+                    # "protocol.federation.quorum" in addition to
+                    # "protocol.federation", catching submodule imports.
+                    for alias in node.names:
+                        if alias.name != "*":
+                            names.append(f"{abs_name}.{alias.name}")
             elif module.startswith("protocol"):
                 names.append(module)
+                # Also record each explicitly named alias so that
+                # "from protocol.federation import quorum" records
+                # "protocol.federation.quorum" in addition to
+                # "protocol.federation".
+                for alias in node.names:
+                    if alias.name != "*":
+                        names.append(f"{module}.{alias.name}")
     return names
 
 
