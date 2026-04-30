@@ -64,13 +64,14 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
+
 if TYPE_CHECKING:
     from olympus_matcher import Matcher
 
-_DEFAULT_MATCHER: "Matcher | None" = None
+_DEFAULT_MATCHER: Matcher | None = None
 
 
-def get_default_matcher() -> "Matcher":
+def get_default_matcher() -> Matcher:
     """Return the lazily-initialised default :class:`Matcher`.
 
     The matcher is created once and reused for the lifetime of the process.

@@ -27,8 +27,7 @@ class TestSettingsDefaults:
     """Tests for default Settings values."""
 
     def test_default_database_url(self) -> None:
-        settings = Settings()
-        assert "sqlite" in settings.database_url
+        assert "sqlite" in Settings.model_fields["database_url"].default
 
     def test_default_app_title(self) -> None:
         settings = Settings()
@@ -108,14 +107,17 @@ class TestLoadDbPassword:
         with tempfile.NamedTemporaryFile(mode="w", suffix=".txt", delete=False) as f:
             f.write("file_secret\n")
             f.flush()
+            password_file = f.name
+        try:
             with patch.dict(
                 os.environ,
-                {"DATABASE_PASSWORD_FILE": f.name},
+                {"DATABASE_PASSWORD_FILE": password_file},
                 clear=False,
             ):
                 result = _load_db_password()
                 assert result == "file_secret"
-            os.unlink(f.name)
+        finally:
+            os.unlink(password_file)
 
     def test_missing_file_falls_back_to_env(self) -> None:
         with patch.dict(

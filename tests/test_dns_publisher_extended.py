@@ -123,12 +123,13 @@ def test_create_or_update_txt_record():
 
 
 # ---------------------------------------------------------------------------
-# DNSBackend.query_txt_record raises NotImplementedError
+# DNSBackend.query_txt_record is abstract — subclasses omitting it cannot be
+# instantiated (TypeError on construction, not NotImplementedError at call time)
 # ---------------------------------------------------------------------------
 
 
 def test_dns_backend_query_txt_record_not_implemented():
-    """Base DNSBackend.query_txt_record raises NotImplementedError."""
+    """DNSBackend subclasses that omit query_txt_record cannot be instantiated."""
 
     class MinimalBackend(DNSBackend):
         def publish(self, name: str, txt: str) -> None:
@@ -137,9 +138,8 @@ def test_dns_backend_query_txt_record_not_implemented():
         def delete(self, name: str) -> None:
             pass
 
-    backend = MinimalBackend()
-    with pytest.raises(NotImplementedError):
-        backend.query_txt_record("test.example.com")
+    with pytest.raises(TypeError):
+        MinimalBackend()
 
 
 # ---------------------------------------------------------------------------
@@ -148,8 +148,8 @@ def test_dns_backend_query_txt_record_not_implemented():
 
 
 def test_create_dns_publisher_route53():
-    """route53 provider raises NotImplementedError."""
-    with pytest.raises(NotImplementedError, match="Route53"):
+    """route53 provider raises ValueError when hosted_zone_id is not configured."""
+    with pytest.raises(ValueError, match="hosted_zone_id"):
         create_dns_publisher(DOMAIN, provider="route53")
 
 

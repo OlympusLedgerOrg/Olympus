@@ -68,6 +68,14 @@ func requireToken(token string, next http.HandlerFunc) http.HandlerFunc {
 func (s *Sequencer) Handler() http.Handler {
 	mux := http.NewServeMux()
 
+	// Liveness probe. Intentionally unauthenticated and dependency-free so
+	// container orchestrators can probe it from a read-only distroless image
+	// without holding an API token. Operators MUST keep the sequencer behind
+	// an internal network (see docker-compose `backend` network) — exposing
+	// /v1/healthz publicly is acceptable, but /v1/queue-leaf etc. must stay
+	// token-gated.
+	mux.HandleFunc("/v1/healthz", s.handleHealthz)
+
 	// Trillian-shaped API endpoints
 	mux.HandleFunc("/v1/queue-leaf", requireToken(s.token, s.handleQueueLeaf))
 	mux.HandleFunc("/v1/queue-leaves", requireToken(s.token, s.handleQueueLeaves))
@@ -589,6 +597,27 @@ func (s *Sequencer) handleGetSignedRootPair(w http.ResponseWriter, r *http.Reque
 	w.Header().Set("Content-Type", "application/json")
 	if err := json.NewEncoder(w).Encode(resp); err != nil {
 		log.Printf("Failed to encode response: %v", err)
+	}
+}
+
+// handleHealthz reports liveness. It is intentionally cheap: it does not
+// touch the database or the Rust SMT service, so a transient downstream
+// stall does not flap the container's health state. Readiness checks (which
+// do exercise dependencies) should use /v1/get-latest-root with a valid
+// token.
+func (s *Sequencer) handleHealthz(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet && r.Method != http.MethodHead {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Cache-Control", "no-store")
+	w.WriteHeader(http.StatusOK)
+	if r.Method == http.MethodHead {
+		return
+	}
+	if _, err := w.Write([]byte(`{"status":"ok"}`)); err != nil {
+		log.Printf("Failed to write healthz body: %v", err)
 	}
 }
 

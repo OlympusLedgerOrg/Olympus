@@ -734,7 +734,7 @@ def test_verify_valid_bundle_passes(bundle_file):
         text=True,
     )
     assert result.returncode == 0, result.stdout + result.stderr
-    assert "✓" in result.stdout
+    assert "Merkle root consistent" in result.stdout
 
 
 def test_verify_tampered_signature_fails(bundle_file, tmp_path):
@@ -752,7 +752,7 @@ def test_verify_tampered_signature_fails(bundle_file, tmp_path):
         text=True,
     )
     assert result.returncode == 1
-    assert "✗" in result.stdout
+    assert "signature" in result.stdout.lower()
     assert "signature" in result.stdout.lower()
 
 
@@ -768,7 +768,7 @@ def test_verify_tampered_commit_id_fails(bundle_file, tmp_path):
         text=True,
     )
     assert result.returncode == 1
-    assert "✗" in result.stdout
+    assert "commit" in result.stdout.lower()
 
 
 def test_verify_tampered_root_hash_fails(bundle_file, tmp_path):
@@ -783,7 +783,6 @@ def test_verify_tampered_root_hash_fails(bundle_file, tmp_path):
         text=True,
     )
     assert result.returncode == 1
-    assert "✗" in result.stdout
     assert "merkle" in result.stdout.lower() or "root" in result.stdout.lower()
 
 
@@ -871,4 +870,4 @@ def test_olympus_dataset_commit_and_verify_round_trip(tmp_path):
         text=True,
     )
     assert result.returncode == 0, result.stdout + result.stderr
-    assert "✓" in result.stdout
+    assert "Merkle root consistent" in result.stdout

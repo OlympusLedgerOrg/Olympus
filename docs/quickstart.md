@@ -69,19 +69,21 @@ export DATABASE_URL='postgresql://olympus@localhost:5432/olympus'
 
 ### Docker (Recommended for Development)
 
-The easiest way to run PostgreSQL locally is with Docker Compose:
+The fastest way to run only the live PostgreSQL service used by local tests is:
 
 ```bash
-# Start API + PostgreSQL (and UI) using docker-compose (runs in background)
-docker compose up -d
+# Start PostgreSQL on localhost:5432 with olympus/olympus credentials
+docker compose -f docker-compose.postgres.yml up -d
 
 # Verify it's running
-docker compose ps
+docker compose -f docker-compose.postgres.yml ps
 
 # Set environment variables
 export DATABASE_URL='postgresql://olympus:olympus@localhost:5432/olympus'
 export TEST_DATABASE_URL='postgresql://olympus:olympus@localhost:5432/olympus'
 ```
+
+For the full application stack, use the main `docker-compose.yml` instead.
 
 **Alternative: Docker Run (one-liner)**
 
@@ -116,7 +118,6 @@ python -c "from psycopg import connect; connect('$DATABASE_URL'); print('Connect
 | `DATABASE_URL` | Yes (API/DB tests) | PostgreSQL connection string |
 | `TEST_DATABASE_URL` | No | Separate connection string for test runs |
 | `LOG_LEVEL` | No | Python log level (`DEBUG`, `INFO`, …) |
-| `OLYMPUS_DEBUG_UI` | No | Set to `true` to enable the debug UI |
 | `OLYMPUS_HALO2_ENABLED` | No | Set to `true` to enable the Halo2 proof backend. **Intentionally a no-op in v1.0** — Halo2 support is planned for Phase 1+. The flag exists so deployment tooling can reference it before the backend ships. |
 
 ---

@@ -4,7 +4,7 @@
 //! See that module's docstring for the full specification.
 
 use pyo3::prelude::*;
-use pyo3::types::{PyBool, PyDict, PyFloat, PyList, PyString, PyTuple};
+use pyo3::types::{PyBool, PyBytes, PyDict, PyFloat, PyList, PyString, PyTuple};
 use unicode_normalization::UnicodeNormalization;
 
 // ---------------------------------------------------------------------------
@@ -15,9 +15,9 @@ use unicode_normalization::UnicodeNormalization;
 ///
 /// Rules (identical to ``protocol/canonical_json.py``):
 /// - NFC normalization on all string keys and values
-/// - Sorted keys
+/// - Keys sorted by UTF-16 code-unit order (RFC 8785 §3.2.3)
 /// - No whitespace (compact separators)
-/// - ``ensure_ascii=True`` — non-ASCII escaped as ``\uXXXX``
+/// - Non-ASCII emitted as raw UTF-8 (JCS-compliant)
 /// - Reject ``float`` (only ``int`` and ``Decimal`` allowed)
 /// - Reject ``NaN`` and ``±Infinity``
 /// - Normalise ``-0`` to ``0``
@@ -29,6 +29,22 @@ use unicode_normalization::UnicodeNormalization;
 #[pyfunction]
 pub fn canonical_json_encode(py: Python<'_>, obj: &Bound<'_, PyAny>) -> PyResult<String> {
     encode_value(py, obj, 0)
+}
+
+/// Encode a Python object to canonical JSON bytes (UTF-8).
+///
+/// Equivalent to ``canonical_json_encode(obj).encode("utf-8")`` but avoids
+/// the intermediate Python ``str`` allocation and re-encoding step.
+///
+/// # Python signature
+/// ``canonical_json_encode_bytes(obj: object) -> bytes``
+#[pyfunction]
+pub fn canonical_json_encode_bytes(
+    py: Python<'_>,
+    obj: &Bound<'_, PyAny>,
+) -> PyResult<Py<PyBytes>> {
+    let encoded = encode_value(py, obj, 0)?;
+    Ok(PyBytes::new(py, encoded.as_bytes()).unbind())
 }
 
 // ---------------------------------------------------------------------------
@@ -132,8 +148,16 @@ fn encode_value(py: Python<'_>, value: &Bound<'_, PyAny>, depth: usize) -> PyRes
             let val_enc = encode_value(py, &v, depth + 1)?;
             pairs.push((key_nfc, val_enc));
         }
-        // Sort by NFC-normalised key
-        pairs.sort_by(|a, b| a.0.cmp(&b.0));
+        // Sort by UTF-16 code-unit sequence (RFC 8785 §3.2.3).
+        // Rust's default str::cmp uses Unicode code-point order, which diverges
+        // from UTF-16 code-unit order for supplementary-plane characters
+        // (U+10000+): their surrogates (0xD800–0xDFFF) sort before U+E000–U+FFFF
+        // in UTF-16 but after them in code-point order.
+        pairs.sort_by(|a, b| {
+            let a16: Vec<u16> = a.0.encode_utf16().collect();
+            let b16: Vec<u16> = b.0.encode_utf16().collect();
+            a16.cmp(&b16)
+        });
         let items: Vec<String> = pairs
             .iter()
             .map(|(k, v)| format!("{}:{}", encode_str(k), v))
@@ -291,6 +315,7 @@ fn format_scientific(digits: &str, adjusted_exponent: i64) -> String {
 /// (sub)module and expose it as ``olympus_core.canonical``.
 pub fn register(py: Python<'_>, m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(canonical_json_encode, m)?)?;
+    m.add_function(wrap_pyfunction!(canonical_json_encode_bytes, m)?)?;
 
     // Make the submodule importable as `olympus_core.canonical`
     py.import("sys")?

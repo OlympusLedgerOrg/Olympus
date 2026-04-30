@@ -2,10 +2,8 @@
 
 Covers:
 - M2: RFC 3161 bare exception replacement with specific types + logging
-- M1: Debug console minimum password length enforcement
 - L1: ZIP symlink detection in upload validation
 - L3: shard_timestamp_skew_ms positive-value validation
-- L4: Debug console HTTPS enforcement via X-Forwarded-Proto
 """
 
 from __future__ import annotations
@@ -13,7 +11,6 @@ from __future__ import annotations
 import io
 import logging
 import stat
-import unittest.mock
 import zipfile
 
 import pytest
@@ -139,102 +136,3 @@ class TestShardTimestampSkewValidation:
 
         s = Settings()
         assert s.shard_timestamp_skew_ms == 30_000
-
-
-# ── M1: Debug console minimum password length ───────────────────────────────
-
-
-class TestDebugConsolePasswordMinLength:
-    """Validate that short passwords are rejected in production."""
-
-    def test_short_password_rejected_in_production(self):
-        """Production mode with a password shorter than 16 chars should fail."""
-        env = {
-            "OLYMPUS_ENV": "production",
-            "OLYMPUS_DEBUG_CONSOLE_PASSWORD": "short",
-        }
-        with unittest.mock.patch.dict("os.environ", env, clear=False):
-            with pytest.raises(RuntimeError, match="at least 16 characters"):
-                import importlib
-
-                import ui.app
-
-                importlib.reload(ui.app)
-
-    def test_adequate_password_accepted_in_production(self):
-        """Production mode with a 16+ character password should succeed."""
-        env = {
-            "OLYMPUS_ENV": "production",
-            "OLYMPUS_DEBUG_CONSOLE_PASSWORD": "a_very_strong_password_here!!",
-        }
-        with unittest.mock.patch.dict("os.environ", env, clear=False):
-            import importlib
-
-            import ui.app
-
-            importlib.reload(ui.app)
-            assert ui.app._MIN_DEBUG_PASSWORD_LENGTH == 16
-
-
-# ── L4: Debug console HTTPS enforcement ──────────────────────────────────────
-
-
-class TestDebugConsoleHttpsEnforcement:
-    """Validate that non-HTTPS requests are rejected in production debug console."""
-
-    def test_http_forwarded_proto_rejected_in_production(self):
-        """Request with X-Forwarded-Proto: http should be rejected in non-dev mode."""
-        import importlib
-
-        env = {
-            "OLYMPUS_ENV": "production",
-            "OLYMPUS_DEBUG_CONSOLE_PASSWORD": "a_very_strong_password_here!!",
-        }
-        with unittest.mock.patch.dict("os.environ", env, clear=False):
-            import ui.app
-
-            importlib.reload(ui.app)
-            from fastapi.testclient import TestClient
-
-            client = TestClient(ui.app.app)
-            response = client.get("/", headers={"X-Forwarded-Proto": "http"})
-            assert response.status_code == 421
-            assert "HTTPS" in response.json()["detail"]
-
-    def test_https_forwarded_proto_allowed_in_production(self):
-        """Request with X-Forwarded-Proto: https should pass the proto check."""
-        import importlib
-
-        env = {
-            "OLYMPUS_ENV": "production",
-            "OLYMPUS_DEBUG_CONSOLE_PASSWORD": "a_very_strong_password_here!!",
-        }
-        with unittest.mock.patch.dict("os.environ", env, clear=False):
-            import ui.app
-
-            importlib.reload(ui.app)
-            from fastapi.testclient import TestClient
-
-            client = TestClient(ui.app.app)
-            # Should reach auth (401) not proto check (421)
-            response = client.get("/", headers={"X-Forwarded-Proto": "https"})
-            assert response.status_code == 401
-
-    def test_no_forwarded_proto_allowed_in_development(self):
-        """Development mode should not enforce HTTPS check."""
-        import importlib
-
-        env = {
-            "OLYMPUS_ENV": "development",
-            "OLYMPUS_DEBUG_CONSOLE_PASSWORD": "",
-        }
-        with unittest.mock.patch.dict("os.environ", env, clear=False):
-            import ui.app
-
-            importlib.reload(ui.app)
-            from fastapi.testclient import TestClient
-
-            client = TestClient(ui.app.app)
-            response = client.get("/manifest.json", headers={"X-Forwarded-Proto": "http"})
-            # Should pass proto check in dev mode (200 for static, not 421)
-            assert response.status_code != 421

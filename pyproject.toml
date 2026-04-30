@@ -42,6 +42,7 @@ dependencies = [
     "tomli==2.4.1; python_version < '3.11'",
     "python-multipart==0.0.26",
     "python-magic>=0.4.27",
+    "python-magic-bin>=0.4.14; sys_platform == 'win32'",
     "zstandard>=0.25.0",
     "sqlalchemy[asyncio]==2.0.49",
     "aiosqlite==0.22.1",
@@ -140,6 +141,9 @@ unfixable = []
 # _patches.apply_all() MUST execute before any third-party imports so that
 # CVE runtime patches are in place; the E402 violations are intentional.
 "api/main.py" = ["E402"]
+# Windows DLL PATH setup must run before `import magic`; the interleaved
+# code block is intentional and cannot be reordered.
+"api/services/upload_validation.py" = ["E402", "I001"]
 
 [tool.ruff.lint.isort]
 # Ensure first-party modules are grouped correctly after stdlib and third-party.
@@ -255,6 +259,14 @@ ignore_missing_imports = true
 
 [[tool.mypy.overrides]]
 module = "pyarrow.*"
+ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+module = "boto3.*"
+ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+module = "botocore.*"
 ignore_missing_imports = true
 
 [tool.bandit]

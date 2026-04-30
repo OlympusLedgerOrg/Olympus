@@ -33,6 +33,7 @@ import time
 from decimal import Decimal
 from pathlib import Path
 
+
 # Add repo root to sys.path so `protocol` is importable when the script is
 # run directly (e.g. `python benchmarks/bench_cold_start.py`).
 _REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -64,18 +65,20 @@ _ARGS, _UNKNOWN = _parser.parse_known_args()
 _t_import_start = time.perf_counter()
 import blake3 as _blake3  # noqa: E402
 
+
 _t_blake3_imported = time.perf_counter()
 
-import unicodedata  # noqa: E402
 import json as _json  # noqa: E402
+import unicodedata  # noqa: E402
+
 
 _t_python_stdlib = time.perf_counter()
 
 _rust_available = False
 _t_rust_import_start = time.perf_counter()
 try:
-    import olympus_core.crypto as _rust_crypto
     import olympus_core.canonical as _rust_canonical
+    import olympus_core.crypto as _rust_crypto
 
     _rust_available = True
 except ImportError:
@@ -547,7 +550,7 @@ def run_benchmarks() -> None:
             print(
                 f"  │  Rust   pipeline ..... {_fmt_throughput(pipeline_rust_rps):>10} rec/s                  │"
             )
-            print(f"  │                                                            │")
+            print("  │                                                            │")
             print(
                 f"  │  End-to-end speedup .. {overall_speedup:>8.2f}×                           │"
             )

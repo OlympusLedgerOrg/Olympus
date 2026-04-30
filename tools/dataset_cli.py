@@ -30,6 +30,11 @@ from protocol.hashes import compute_dataset_commit_id, dataset_key, hash_bytes
 from protocol.merkle import EMPTY_TREE_HASH, MerkleTree
 
 
+if hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(encoding="utf-8")
+if hasattr(sys.stderr, "reconfigure"):
+    sys.stderr.reconfigure(encoding="utf-8")
+
 # Read files in 1 MiB chunks to avoid loading large datasets entirely into RAM.
 _CHUNK_SIZE = 1 << 20
 

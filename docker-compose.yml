@@ -6,7 +6,7 @@
 # For production deployments, use Docker secrets or a secrets manager.
 #
 # PROFILES:
-#   - default: db, app, ui, traefik
+#   - default: db, app, traefik
 #   - sequencer: adds cdhs-smf-rust and sequencer-go services for Go sequencer write path
 #
 # To run with Go sequencer: docker compose --profile sequencer up -d
@@ -178,6 +178,16 @@ services:
     networks:
       - backend
     restart: unless-stopped
+    # The distroless/static runtime has no shell or curl, so we exec the
+    # sequencer binary itself in --healthcheck mode (loopback GET against
+    # /v1/healthz). The healthcheck path is intentionally token-free; see
+    # internal/api/sequencer.go::handleHealthz for the trust rationale.
+    healthcheck:
+      test: ["CMD", "/sequencer", "--healthcheck"]
+      interval: 10s
+      timeout: 5s
+      start_period: 20s
+      retries: 5
     deploy:
       resources:
         limits:
@@ -252,40 +262,55 @@ services:
       - /tmp
       - /var/run
 
-  ui:
+  # ---------------------------------------------------------------------------
+  # Public Verification UI (React + nginx)
+  # ---------------------------------------------------------------------------
+  # Statically built React SPA served from a hardened nginx image. Routes
+  # /ingest, /datasets, and /v1 are reverse-proxied to the `app` service so
+  # the browser only ever talks to a single origin (no CORS preflight, no
+  # third-party tracking).
+  public-ui:
     build:
-      context: .
-      target: production
-    container_name: olympus-ui
-    env_file:
-      - .env
-    command: ["uvicorn", "ui.app:app", "--host", "0.0.0.0", "--port", "8080"]
-    environment:
-      UI_API_BASE: ${UI_API_BASE}
-      PSYCOPG_URL: ${PSYCOPG_URL:?Set PSYCOPG_URL in .env}
-      OLYMPUS_DEBUG_UI: ${OLYMPUS_DEBUG_UI:-false}
-      ORACLE_RATE_LIMIT_REQUESTS: ${ORACLE_RATE_LIMIT_REQUESTS:-10}
-      ORACLE_RATE_LIMIT_WINDOW_SECONDS: ${ORACLE_RATE_LIMIT_WINDOW_SECONDS:-60}
+      context: app/public-ui
+      dockerfile: Dockerfile
+    container_name: olympus-public-ui
     depends_on:
       app:
         condition: service_healthy
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.public-ui.rule=Host(`${OLYMPUS_PUBLIC_DOMAIN:-${OLYMPUS_DOMAIN}}`)"
+      - "traefik.http.routers.public-ui.entrypoints=websecure"
+      - "traefik.http.routers.public-ui.tls.certresolver=letsencrypt"
+      - "traefik.http.services.public-ui.loadbalancer.server.port=8080"
     ports:
-      - "127.0.0.1:8080:8080"
+      - "127.0.0.1:8090:8080"
     networks:
       - frontend
-    # Tune these values for your deployment environment
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:8080/healthz"]
+      interval: 10s
+      timeout: 3s
+      start_period: 10s
+      retries: 5
     deploy:
       resources:
         limits:
-          memory: 256M
-          cpus: "0.5"
-        reservations:
           memory: 128M
+          cpus: "0.25"
+        reservations:
+          memory: 32M
     read_only: true
     security_opt:
       - no-new-privileges:true
+    cap_drop:
+      - ALL
     tmpfs:
-      - /tmp
+      # nginx writes its pid file plus client/proxy temp dirs under /tmp.
+      # Mounting it as tmpfs (with mode=0700) keeps the container fully
+      # read-only while still allowing nginx to start.
+      - /tmp:mode=0700,size=64m
+      - /var/cache/nginx:mode=0700,size=32m
 
 volumes:
   olympus_pgdata:

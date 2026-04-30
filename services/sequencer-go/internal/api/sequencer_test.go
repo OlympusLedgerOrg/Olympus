@@ -292,3 +292,70 @@ t.Error("expected new_signature field in response body")
 }
 })
 }
+
+// TestHandleHealthz verifies the unauthenticated liveness probe. The
+// healthcheck contract is load-bearing for docker-compose / Kubernetes
+// readiness logic, so the response shape and method handling are pinned
+// here.
+func TestHandleHealthz(t *testing.T) {
+	s := &Sequencer{token: "irrelevant-for-healthz"}
+
+	t.Run("GET returns 200 with json status", func(t *testing.T) {
+		req := httptest.NewRequest(http.MethodGet, "/v1/healthz", nil)
+		w := httptest.NewRecorder()
+		s.handleHealthz(w, req)
+		if w.Code != http.StatusOK {
+			t.Fatalf("expected 200, got %d", w.Code)
+		}
+		if got := w.Header().Get("Content-Type"); got != "application/json" {
+			t.Errorf("expected json content-type, got %q", got)
+		}
+		if got := w.Header().Get("Cache-Control"); got != "no-store" {
+			t.Errorf("expected Cache-Control: no-store, got %q", got)
+		}
+		var body map[string]string
+		if err := json.NewDecoder(w.Body).Decode(&body); err != nil {
+			t.Fatalf("decode body: %v", err)
+		}
+		if body["status"] != "ok" {
+			t.Errorf("expected status=ok, got %q", body["status"])
+		}
+	})
+
+	t.Run("HEAD returns 200 with empty body", func(t *testing.T) {
+		req := httptest.NewRequest(http.MethodHead, "/v1/healthz", nil)
+		w := httptest.NewRecorder()
+		s.handleHealthz(w, req)
+		if w.Code != http.StatusOK {
+			t.Fatalf("expected 200, got %d", w.Code)
+		}
+		if w.Body.Len() != 0 {
+			t.Errorf("expected empty HEAD body, got %d bytes", w.Body.Len())
+		}
+	})
+
+	t.Run("POST is rejected", func(t *testing.T) {
+		req := httptest.NewRequest(http.MethodPost, "/v1/healthz", bytes.NewReader(nil))
+		w := httptest.NewRecorder()
+		s.handleHealthz(w, req)
+		if w.Code != http.StatusMethodNotAllowed {
+			t.Errorf("expected 405, got %d", w.Code)
+		}
+	})
+
+	t.Run("does not require auth token", func(t *testing.T) {
+		// The sequencer's mux routes /v1/healthz without requireToken so
+		// orchestrators can probe without holding the API token. Verify the
+		// routing decision by walking the actual Handler() mux.
+		s := &Sequencer{token: "secret"}
+		mux := s.Handler()
+
+		req := httptest.NewRequest(http.MethodGet, "/v1/healthz", nil)
+		// No X-Sequencer-Token header.
+		w := httptest.NewRecorder()
+		mux.ServeHTTP(w, req)
+		if w.Code != http.StatusOK {
+			t.Fatalf("expected unauth healthz to return 200, got %d", w.Code)
+		}
+	})
+}

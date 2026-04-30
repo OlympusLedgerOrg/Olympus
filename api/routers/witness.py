@@ -22,13 +22,15 @@ from __future__ import annotations
 import json
 import logging
 import os
+import threading
 from collections import defaultdict
+from dataclasses import dataclass
 from datetime import datetime, timezone
 
 import nacl.exceptions
 import nacl.signing
 from fastapi import APIRouter, HTTPException, Query, status
-from sqlalchemy import delete, func, select
+from sqlalchemy import delete, distinct, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from api.auth import RequireAPIKey
@@ -65,24 +67,57 @@ _MAX_NONCE_ENTRIES: int = 100_000
 _MAX_OBSERVATIONS: int = 500_000
 
 
-_registry_cache: dict[str, tuple[float, FederationRegistry]] = {}
 
 
-def _load_federation_registry(path: str) -> FederationRegistry | None:
-    """Load and cache the federation registry, refreshing on file mtime change."""
+def _env_flag_enabled(name: str) -> bool:
+    return os.environ.get(name, "").strip().lower() in {"1", "true", "yes", "on"}
+
+
+@dataclass
+class _RegistryCache:
+    """Cache entry for a loaded FederationRegistry."""
+
+    registry: FederationRegistry
+    path: str
+    mtime: float
+
+
+_registry_cache: _RegistryCache | None = None
+_registry_cache_lock = threading.Lock()
+
+
+def _load_federation_registry(registry_path: str) -> FederationRegistry | None:
+    """Load the FederationRegistry, using a module-level cache keyed by path and mtime.
+
+    The registry is re-read from disk only when the file's modification time
+    changes, avoiding redundant I/O on every witness announcement.  Access to
+    the shared cache is serialised with a lock so concurrent callers cannot
+    race during a cache refresh.  Returns None if the file is missing or
+    cannot be parsed.
+    """
+    global _registry_cache
     try:
-        mtime = os.path.getmtime(path)
+        mtime = os.path.getmtime(registry_path)
     except OSError:
         return None
-    cached = _registry_cache.get(path)
-    if cached is not None and cached[0] == mtime:
-        return cached[1]
-    try:
-        registry = FederationRegistry.from_file(path)
-    except Exception:
-        return None
-    _registry_cache[path] = (mtime, registry)
-    return registry
+    with _registry_cache_lock:
+        if (
+            _registry_cache is None
+            or _registry_cache.path != registry_path
+            or _registry_cache.mtime != mtime
+        ):
+            try:
+                _registry_cache = _RegistryCache(
+                    registry=FederationRegistry.from_file(registry_path),
+                    path=registry_path,
+                    mtime=mtime,
+                )
+            except Exception:
+                logger.debug(
+                    "Failed to load federation registry from %s", registry_path, exc_info=True
+                )
+                return None
+        return _registry_cache.registry
 
 
 def _resolve_node_pubkey(origin: str) -> str | None:
@@ -93,10 +128,7 @@ def _resolve_node_pubkey(origin: str) -> str | None:
     Falls back to OLYMPUS_WITNESS_REGISTRY (JSON dict) for non-Guardian
     deployments or when the registry cannot be loaded.
     """
-    guardian_enabled = os.environ.get("OLYMPUS_GUARDIAN_ENABLED", "").strip().lower() in {
-        "1", "true", "yes", "on"
-    }
-    if guardian_enabled:
+    if _env_flag_enabled("OLYMPUS_GUARDIAN_ENABLED"):
         registry_path = os.environ.get(
             "OLYMPUS_GUARDIAN_REGISTRY_PATH",
             "examples/federation_registry.json",
@@ -114,8 +146,8 @@ def _resolve_node_pubkey(origin: str) -> str | None:
 
     registry_json = os.environ.get("OLYMPUS_WITNESS_REGISTRY", "{}")
     try:
-        registry: dict[str, str] = json.loads(registry_json)
-        return registry.get(origin)
+        env_registry: dict[str, str] = json.loads(registry_json)
+        return env_registry.get(origin)
     except (json.JSONDecodeError, TypeError):
         logger.error("OLYMPUS_WITNESS_REGISTRY is not valid JSON")
         return None
@@ -380,27 +412,41 @@ async def get_gossip_state(db: DBSession) -> list[GossipConflictEntry]:
     Returns:
         List of conflict entries (empty if no conflicts exist).
     """
-    stmt = select(WitnessObservation)
+    # Find only sequences that have 2+ distinct origins AND 2+ distinct hashes.
+    conflict_seqs = (
+        select(WitnessObservation.sequence)
+        .group_by(WitnessObservation.sequence)
+        .having(
+            func.count(distinct(WitnessObservation.origin)) >= 2,
+            func.count(distinct(WitnessObservation.checkpoint_hash)) > 1,
+        )
+        .subquery()
+    )
+
+    stmt = (
+        select(
+            WitnessObservation.sequence,
+            WitnessObservation.origin,
+            WitnessObservation.checkpoint_hash,
+        )
+        .where(WitnessObservation.sequence.in_(select(conflict_seqs.c.sequence)))
+        .order_by(WitnessObservation.sequence)
+    )
     result = await db.execute(stmt)
-    rows = result.scalars().all()
+    rows = result.all()
 
     by_sequence: dict[int, dict[str, str]] = defaultdict(dict)
     for row in rows:
         by_sequence[row.sequence][row.origin] = row.checkpoint_hash
 
-    conflicts: list[GossipConflictEntry] = []
-    for seq, origin_hashes in by_sequence.items():
-        unique_hashes = set(origin_hashes.values())
-        if len(origin_hashes) >= 2 and len(unique_hashes) > 1:
-            conflicts.append(
-                GossipConflictEntry(
-                    sequence=seq,
-                    conflicting_origins=sorted(origin_hashes.keys()),
-                    hashes=origin_hashes,
-                )
-            )
-
-    return sorted(conflicts, key=lambda c: c.sequence)
+    return [
+        GossipConflictEntry(
+            sequence=seq,
+            conflicting_origins=sorted(origin_hashes.keys()),
+            hashes=origin_hashes,
+        )
+        for seq, origin_hashes in sorted(by_sequence.items())
+    ]
 
 
 @router.get("/health", response_model=WitnessHealthResponse)

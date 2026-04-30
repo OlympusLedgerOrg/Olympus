@@ -349,6 +349,7 @@ class DNSBackend(ABC):
         """
         self.publish(fqdn, value)
 
+    @abstractmethod
     def query_txt_record(self, fqdn: str) -> list[str]:
         """
         Query DNS TXT records for a domain.
@@ -394,19 +395,6 @@ class Route53Backend(DNSBackend):
         self._ttl = ttl
         self._client = boto3.client("route53", **boto3_kwargs)
 
-    def _fetch_existing_rrset(self, dns_name: str) -> dict[str, Any] | None:
-        """Return the live Route53 TXT RRSet for ``dns_name`` (or None)."""
-        resp = self._client.list_resource_record_sets(
-            HostedZoneId=self._zone_id,
-            StartRecordName=dns_name,
-            StartRecordType="TXT",
-            MaxItems="1",
-        )
-        for rrset in resp.get("ResourceRecordSets", []):
-            if rrset["Name"] == dns_name and rrset["Type"] == "TXT":
-                return rrset
-        return None
-
     @staticmethod
     def _to_dns_name(name: str) -> str:
         return name if name.endswith(".") else f"{name}."
@@ -445,12 +433,37 @@ class Route53Backend(DNSBackend):
         except Exception as exc:
             raise DNSPublisherError(f"Route53 publish failed for {name!r}: {exc}") from exc
 
-    def delete(self, name: str) -> None:
+    def _get_rrset(self, name: str) -> tuple[list[str], int] | None:
+        """Return (values, ttl) for an existing TXT RRSet, or None if absent."""
         dns_name = self._to_dns_name(name)
-        existing_rrset = self._fetch_existing_rrset(dns_name)
-        if not existing_rrset:
+        try:
+            resp = self._client.list_resource_record_sets(
+                HostedZoneId=self._zone_id,
+                StartRecordName=dns_name,
+                StartRecordType="TXT",
+                MaxItems="1",
+            )
+        except Exception as exc:
+            raise DNSPublisherError(f"Route53 query failed for {name!r}: {exc}") from exc
+        for rrset in resp.get("ResourceRecordSets", []):
+            if rrset["Name"] == dns_name and rrset["Type"] == "TXT":
+                values = [self._unquote_txt(rr["Value"]) for rr in rrset.get("ResourceRecords", [])]
+                ttl_raw = rrset.get("TTL")
+                if ttl_raw is None:
+                    logger.warning(
+                        "Route53 RRSet for %s has no TTL field; falling back to configured TTL %d",
+                        sanitize_for_log(name),
+                        self._ttl,
+                    )
+                return values, int(ttl_raw) if ttl_raw is not None else self._ttl
+        return None
+
+    def delete(self, name: str) -> None:
+        rrset = self._get_rrset(name)
+        if rrset is None:
             logger.debug("Route53 delete skipped — no TXT record at %s", sanitize_for_log(name))
             return
+        existing_values, existing_ttl = rrset
         try:
             self._client.change_resource_record_sets(
                 HostedZoneId=self._zone_id,
@@ -458,7 +471,14 @@ class Route53Backend(DNSBackend):
                     "Changes": [
                         {
                             "Action": "DELETE",
-                            "ResourceRecordSet": existing_rrset,
+                            "ResourceRecordSet": {
+                                "Name": self._to_dns_name(name),
+                                "Type": "TXT",
+                                "TTL": existing_ttl,
+                                "ResourceRecords": [
+                                    {"Value": self._quote_txt(v)} for v in existing_values
+                                ],
+                            },
                         }
                     ]
                 },
@@ -468,23 +488,11 @@ class Route53Backend(DNSBackend):
             raise DNSPublisherError(f"Route53 delete failed for {name!r}: {exc}") from exc
 
     def query_txt_record(self, fqdn: str) -> list[str]:
-        dns_name = self._to_dns_name(fqdn)
-        try:
-            resp = self._client.list_resource_record_sets(
-                HostedZoneId=self._zone_id,
-                StartRecordName=dns_name,
-                StartRecordType="TXT",
-                MaxItems="1",
-            )
-        except Exception as exc:
-            raise DNSPublisherError(f"Route53 query failed for {fqdn!r}: {exc}") from exc
-        for rrset in resp.get("ResourceRecordSets", []):
-            if rrset["Name"] == dns_name and rrset["Type"] == "TXT":
-                return [
-                    self._unquote_txt(rr["Value"])
-                    for rr in rrset.get("ResourceRecords", [])
-                ]
-        return []
+        result = self._get_rrset(fqdn)
+        if result is None:
+            return []
+        values, _ = result
+        return values
 
 
 class DryRunBackend(DNSBackend):
@@ -538,7 +546,7 @@ class DryRunBackend(DNSBackend):
         """
         record = self.records.get(fqdn)
         records = [record] if record is not None else []
-        logger.info("[DRY RUN] Query TXT record: %s -> %s", fqdn, records)
+        logger.debug("[DRY RUN] Query TXT record: %s -> %s", fqdn, records)
         return records
 
 
@@ -580,11 +588,25 @@ def create_dns_publisher(
     if provider is None:
         backend: DNSBackend = DryRunBackend()
     elif provider == "route53":
-        creds = dict(credentials or {})
-        hosted_zone_id = creds.pop("hosted_zone_id", None)
-        backend = Route53Backend(hosted_zone_id=hosted_zone_id, **creds)
+        creds = credentials or {}
+        zone_id = creds.get("hosted_zone_id") or os.environ.get("OLYMPUS_ROUTE53_HOSTED_ZONE_ID")
+        if not zone_id:
+            raise ValueError(
+                "Route53 backend requires hosted_zone_id in credentials "
+                "or OLYMPUS_ROUTE53_HOSTED_ZONE_ID environment variable"
+            )
+        boto3_kwargs: dict[str, Any] = {}
+        for key in (
+            "aws_access_key_id",
+            "aws_secret_access_key",
+            "aws_session_token",
+            "region_name",
+        ):
+            if key in creds:
+                boto3_kwargs[key] = creds[key]
+        ttl = int(creds.get("ttl", Route53Backend._DEFAULT_TTL))
+        backend = Route53Backend(hosted_zone_id=zone_id, ttl=ttl, **boto3_kwargs)
     elif provider == "cloudflare":
-        # Placeholder - would require cloudflare API integration
         raise NotImplementedError("Cloudflare backend not yet implemented")
     else:
         raise ValueError(f"Unknown DNS provider: {provider}")

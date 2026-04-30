@@ -4,8 +4,7 @@ PR 8 (protocol-layer hardening).
 
 Covers:
 - H7: Database credential leak sanitization in storage_layer.py
-- M12: Security response headers on API and debug UI
-- M13: Debug UI env-guarded error messages
+- M12: Security response headers on API
 - H8: HLC monotonic timestamps in ledger
 - H12: Shard header replay protection
 - M18: Dual-signature key revocation
@@ -216,24 +215,6 @@ class TestAPISecurityHeaders:
         """HSTS header is always present (safe over HTTP; browsers ignore on non-HTTPS)."""
         r = self.client.get("/")
         assert "strict-transport-security" in r.headers
-
-
-class TestDebugUISecurityHeaders:
-    """Verify that the debug UI sets required security headers."""
-
-    @pytest.fixture(autouse=True)
-    def _client(self):
-        import ui.app as ui_app
-
-        self.client = TestClient(ui_app.app, raise_server_exceptions=False)
-
-    def test_x_content_type_options(self):
-        r = self.client.get("/manifest.json")
-        assert r.headers.get("x-content-type-options") == "nosniff"
-
-    def test_x_frame_options(self):
-        r = self.client.get("/manifest.json")
-        assert r.headers.get("x-frame-options") == "DENY"
 
 
 # ── H8: HLC timestamps ────────────────────────────────────────────────

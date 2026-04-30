@@ -9,7 +9,11 @@ from decimal import Decimal
 
 import pytest
 
-from protocol.canonical_json import canonical_json_bytes, canonical_json_encode
+from protocol.canonical_json import (
+    canonical_json_bytes,
+    canonical_json_encode,
+    canonical_json_encode_batch,
+)
 
 
 def test_canonical_json_encode_basic_types():
@@ -37,6 +41,16 @@ def test_canonical_json_encode_sorted_keys():
     result = canonical_json_encode(obj)
     # Keys should be in alphabetical order
     assert result == '{"a":2,"m":3,"z":1}'
+
+
+def test_canonical_json_encode_sorts_keys_by_utf16_code_units():
+    """RFC 8785 sorts object keys by UTF-16 code units, not code points."""
+    obj = {
+        "\ue000": "bmp-private-use",
+        "\U0001f600": "supplementary",
+    }
+
+    assert canonical_json_encode(obj) == '{"\U0001f600":"supplementary","\ue000":"bmp-private-use"}'
 
 
 def test_canonical_json_encode_compact_separators():
@@ -176,6 +190,24 @@ def test_canonical_json_bytes_unicode():
     # The non-ASCII characters appear as raw UTF-8 bytes, not \\uXXXX sequences.
     decoded = result.decode("utf-8")
     assert "世界" in decoded
+
+
+def test_canonical_json_encode_batch_preserves_order():
+    """Batch encoding returns one canonical string per input document in order."""
+    docs = [
+        {"z": 1, "a": 2},
+        {"value": Decimal("1.2300")},
+        {"emoji": "\U0001f600", "pua": "\ue000"},
+    ]
+
+    assert canonical_json_encode_batch(docs, workers=2) == [
+        canonical_json_encode(doc) for doc in docs
+    ]
+
+
+def test_canonical_json_encode_batch_handles_empty_input():
+    """Batch encoding has a cheap empty-list path."""
+    assert canonical_json_encode_batch([]) == []
 
 
 def test_canonical_json_encode_empty_object():
