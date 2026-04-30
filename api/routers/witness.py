@@ -23,6 +23,7 @@ import json
 import logging
 import os
 from collections import defaultdict
+from dataclasses import dataclass
 from datetime import datetime, timezone
 
 import nacl.exceptions
@@ -65,6 +66,41 @@ _MAX_NONCE_ENTRIES: int = 100_000
 _MAX_OBSERVATIONS: int = 500_000
 
 
+@dataclass
+class _RegistryCache:
+    """Cache entry for a loaded FederationRegistry."""
+    registry: FederationRegistry
+    path: str
+    mtime: float
+
+
+_registry_cache: _RegistryCache | None = None
+
+
+def _load_federation_registry(registry_path: str) -> FederationRegistry:
+    """Load the FederationRegistry, using a module-level cache keyed by path and mtime.
+
+    The registry is re-read from disk only when the file's modification time
+    changes, avoiding redundant I/O on every witness announcement.
+    """
+    global _registry_cache
+    try:
+        mtime = os.path.getmtime(registry_path)
+    except OSError:
+        mtime = -1.0
+    if (
+        _registry_cache is None
+        or _registry_cache.path != registry_path
+        or _registry_cache.mtime != mtime
+    ):
+        _registry_cache = _RegistryCache(
+            registry=FederationRegistry.from_file(registry_path),
+            path=registry_path,
+            mtime=mtime,
+        )
+    return _registry_cache.registry
+
+
 def _resolve_node_pubkey(origin: str) -> str | None:
     """Return hex pubkey for a registered origin, or None if unknown.
 
@@ -82,7 +118,7 @@ def _resolve_node_pubkey(origin: str) -> str | None:
             "examples/federation_registry.json",
         )
         try:
-            fed_registry = FederationRegistry.from_file(registry_path)
+            fed_registry = _load_federation_registry(registry_path)
             for node in fed_registry.nodes:
                 if node.endpoint == origin:
                     return node.pubkey.hex()

@@ -24,6 +24,7 @@ from protocol.federation.quorum import (
     serialize_vote_message,
 )
 from protocol.hashes import hash_bytes
+from protocol.log_sanitization import sanitize_for_log
 from protocol.timestamps import current_timestamp
 
 
@@ -214,6 +215,7 @@ async def sign_header(
         result = await db.execute(
             select(DocCommit.merkle_root)
             .where(DocCommit.shard_id == request.shard_id)
+            .where(DocCommit.merkle_root.isnot(None))
             .order_by(DocCommit.epoch_timestamp.desc())
             .limit(1)
         )
@@ -221,10 +223,10 @@ async def sign_header(
         if local_root is not None and local_root != incoming_root:
             logger.warning(
                 "Fork detected for shard %s at seq %d: local=%s remote=%s",
-                request.shard_id,
+                sanitize_for_log(request.shard_id),
                 request.entry_seq,
-                local_root,
-                incoming_root,
+                sanitize_for_log(local_root),
+                sanitize_for_log(incoming_root),
             )
             raise HTTPException(
                 status_code=409,

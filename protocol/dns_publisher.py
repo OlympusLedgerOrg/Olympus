@@ -426,11 +426,33 @@ class Route53Backend(DNSBackend):
         except Exception as exc:
             raise DNSPublisherError(f"Route53 publish failed for {name!r}: {exc}") from exc
 
+    def _get_rrset(self, name: str) -> tuple[list[str], int] | None:
+        """Return (values, ttl) for an existing TXT RRSet, or None if absent."""
+        dns_name = self._to_dns_name(name)
+        try:
+            resp = self._client.list_resource_record_sets(
+                HostedZoneId=self._zone_id,
+                StartRecordName=dns_name,
+                StartRecordType="TXT",
+                MaxItems="1",
+            )
+        except Exception as exc:
+            raise DNSPublisherError(f"Route53 query failed for {name!r}: {exc}") from exc
+        for rrset in resp.get("ResourceRecordSets", []):
+            if rrset["Name"] == dns_name and rrset["Type"] == "TXT":
+                values = [
+                    self._unquote_txt(rr["Value"])
+                    for rr in rrset.get("ResourceRecords", [])
+                ]
+                return values, int(rrset.get("TTL", self._ttl))
+        return None
+
     def delete(self, name: str) -> None:
-        existing = self.query_txt_record(name)
-        if not existing:
+        rrset = self._get_rrset(name)
+        if rrset is None:
             logger.debug("Route53 delete skipped — no TXT record at %s", sanitize_for_log(name))
             return
+        existing_values, existing_ttl = rrset
         try:
             self._client.change_resource_record_sets(
                 HostedZoneId=self._zone_id,
@@ -441,9 +463,9 @@ class Route53Backend(DNSBackend):
                             "ResourceRecordSet": {
                                 "Name": self._to_dns_name(name),
                                 "Type": "TXT",
-                                "TTL": self._ttl,
+                                "TTL": existing_ttl,
                                 "ResourceRecords": [
-                                    {"Value": self._quote_txt(v)} for v in existing
+                                    {"Value": self._quote_txt(v)} for v in existing_values
                                 ],
                             },
                         }
@@ -455,23 +477,11 @@ class Route53Backend(DNSBackend):
             raise DNSPublisherError(f"Route53 delete failed for {name!r}: {exc}") from exc
 
     def query_txt_record(self, fqdn: str) -> list[str]:
-        dns_name = self._to_dns_name(fqdn)
-        try:
-            resp = self._client.list_resource_record_sets(
-                HostedZoneId=self._zone_id,
-                StartRecordName=dns_name,
-                StartRecordType="TXT",
-                MaxItems="1",
-            )
-        except Exception as exc:
-            raise DNSPublisherError(f"Route53 query failed for {fqdn!r}: {exc}") from exc
-        for rrset in resp.get("ResourceRecordSets", []):
-            if rrset["Name"] == dns_name and rrset["Type"] == "TXT":
-                return [
-                    self._unquote_txt(rr["Value"])
-                    for rr in rrset.get("ResourceRecords", [])
-                ]
-        return []
+        result = self._get_rrset(fqdn)
+        if result is None:
+            return []
+        values, _ = result
+        return values
 
 
 class DryRunBackend(DNSBackend):
