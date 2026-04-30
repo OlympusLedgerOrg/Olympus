@@ -50,10 +50,7 @@ def test_canonical_json_encode_sorts_keys_by_utf16_code_units():
         "\U0001f600": "supplementary",
     }
 
-    assert (
-        canonical_json_encode(obj)
-        == '{"\U0001f600":"supplementary","\ue000":"bmp-private-use"}'
-    )
+    assert canonical_json_encode(obj) == '{"\U0001f600":"supplementary","\ue000":"bmp-private-use"}'
 
 
 def test_canonical_json_encode_compact_separators():

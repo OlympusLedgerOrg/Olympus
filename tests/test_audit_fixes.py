@@ -136,5 +136,3 @@ class TestShardTimestampSkewValidation:
 
         s = Settings()
         assert s.shard_timestamp_skew_ms == 30_000
-
-

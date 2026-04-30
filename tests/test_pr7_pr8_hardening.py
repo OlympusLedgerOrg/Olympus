@@ -217,7 +217,6 @@ class TestAPISecurityHeaders:
         assert "strict-transport-security" in r.headers
 
 
-
 # ── H8: HLC timestamps ────────────────────────────────────────────────
 
 
