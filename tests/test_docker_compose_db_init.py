@@ -1,3 +1,4 @@
+import os
 import re
 from pathlib import Path
 
@@ -190,6 +191,8 @@ def test_secrets_dir_is_gitignored():
 def test_bootstrap_script_exists_and_is_executable():
     bootstrap = REPO_ROOT / "scripts" / "bootstrap.sh"
     assert bootstrap.exists(), "scripts/bootstrap.sh is missing"
+    if os.name == "nt":
+        return
     # Script must be executable so the README's `./scripts/bootstrap.sh`
     # works straight from a fresh clone.
     mode = bootstrap.stat().st_mode

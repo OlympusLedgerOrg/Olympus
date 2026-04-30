@@ -29,11 +29,25 @@ func socketPath() string {
 	return path
 }
 
-// NewCdhsSmfClient creates a new client connection to the Rust service
+// NewCdhsSmfClient creates a new client connection to the Rust service.
+//
+// The gRPC target is intentionally `passthrough:///` rather than
+// `unix://` + sockPath. Two reasons:
+//
+//  1. We supply a WithContextDialer below that ignores the resolved address
+//     and dials sockPath directly. The target is therefore only used for
+//     resolver registration and channel naming — its content does not
+//     affect the actual transport.
+//  2. The unix:// resolver feeds sockPath through net/url parsing rules.
+//     On Windows, sockPath is something like `C:\Users\…\cdhs-smf.sock`,
+//     and `unix://C:\Users\…` trips "too many colons in address" because
+//     the parser treats `C` as a host and the trailing `\…sock` as a port.
+//     The `passthrough` resolver does no URL parsing and works on every
+//     OS the rest of the codebase supports.
 func NewCdhsSmfClient() (*CdhsSmfClient, error) {
 	sockPath := socketPath()
 	conn, err := grpc.NewClient(
-		"unix://"+sockPath,
+		"passthrough:///cdhs-smf",
 		grpc.WithContextDialer(func(ctx context.Context, _ string) (net.Conn, error) {
 			var dialer net.Dialer
 			return dialer.DialContext(ctx, "unix", sockPath)

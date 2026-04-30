@@ -7,7 +7,11 @@ anchoring via an external Timestamp Authority (RFC 3161 trusted timestamping),
 see protocol/rfc3161.py instead.
 """
 
+import time
 from datetime import datetime, timezone
+
+
+_last_timestamp_us = 0
 
 
 def current_timestamp() -> str:
@@ -16,4 +20,13 @@ def current_timestamp() -> str:
 
     The timestamp is timezone-aware and normalizes the offset to a trailing 'Z'.
     """
-    return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+    global _last_timestamp_us
+
+    timestamp_us = time.time_ns() // 1_000
+    if timestamp_us <= _last_timestamp_us:
+        timestamp_us = _last_timestamp_us + 1
+    _last_timestamp_us = timestamp_us
+
+    return datetime.fromtimestamp(timestamp_us / 1_000_000, timezone.utc).isoformat().replace(
+        "+00:00", "Z"
+    )

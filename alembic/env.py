@@ -1,6 +1,6 @@
-from logging.config import fileConfig
 import os
 import re
+from logging.config import fileConfig
 
 from sqlalchemy import engine_from_config, pool
 
@@ -8,6 +8,7 @@ from sqlalchemy import engine_from_config, pool
 import api.models
 from alembic import context
 from api.models.base import Base
+
 
 # Reference ``api.models`` after import so static analysers (CodeQL) see the
 # import as used; importing it for side effects is required to populate

@@ -16,6 +16,7 @@ Based on RFC 6962 (Certificate Transparency) DNS publication patterns.
 from __future__ import annotations
 
 import logging
+import os
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from typing import Any
@@ -364,6 +365,115 @@ class DNSBackend(ABC):
         raise NotImplementedError
 
 
+class Route53Backend(DNSBackend):
+    """AWS Route53 DNS backend for Olympus checkpoint publication.
+
+    Requires boto3 (already a project dependency). Supply ``hosted_zone_id``
+    via the ``credentials`` dict or the ``OLYMPUS_ROUTE53_HOSTED_ZONE_ID``
+    environment variable. AWS credentials follow the standard boto3 resolution
+    order: explicit kwargs → environment variables → ~/.aws/credentials → IAM role.
+    """
+
+    _DEFAULT_TTL: int = 300
+
+    def __init__(
+        self,
+        hosted_zone_id: str,
+        ttl: int = _DEFAULT_TTL,
+        **boto3_kwargs: Any,
+    ) -> None:
+        import boto3
+
+        self._zone_id = hosted_zone_id
+        self._ttl = ttl
+        self._client = boto3.client("route53", **boto3_kwargs)
+
+    @staticmethod
+    def _to_dns_name(name: str) -> str:
+        return name if name.endswith(".") else f"{name}."
+
+    @staticmethod
+    def _quote_txt(value: str) -> str:
+        if value.startswith('"') and value.endswith('"'):
+            return value
+        return f'"{value}"'
+
+    @staticmethod
+    def _unquote_txt(value: str) -> str:
+        if len(value) >= 2 and value.startswith('"') and value.endswith('"'):
+            return value[1:-1]
+        return value
+
+    def publish(self, name: str, txt: str) -> None:
+        try:
+            self._client.change_resource_record_sets(
+                HostedZoneId=self._zone_id,
+                ChangeBatch={
+                    "Changes": [
+                        {
+                            "Action": "UPSERT",
+                            "ResourceRecordSet": {
+                                "Name": self._to_dns_name(name),
+                                "Type": "TXT",
+                                "TTL": self._ttl,
+                                "ResourceRecords": [{"Value": self._quote_txt(txt)}],
+                            },
+                        }
+                    ]
+                },
+            )
+            logger.info("Route53 published TXT record: %s", sanitize_for_log(name))
+        except Exception as exc:
+            raise DNSPublisherError(f"Route53 publish failed for {name!r}: {exc}") from exc
+
+    def delete(self, name: str) -> None:
+        existing = self.query_txt_record(name)
+        if not existing:
+            logger.debug("Route53 delete skipped — no TXT record at %s", sanitize_for_log(name))
+            return
+        try:
+            self._client.change_resource_record_sets(
+                HostedZoneId=self._zone_id,
+                ChangeBatch={
+                    "Changes": [
+                        {
+                            "Action": "DELETE",
+                            "ResourceRecordSet": {
+                                "Name": self._to_dns_name(name),
+                                "Type": "TXT",
+                                "TTL": self._ttl,
+                                "ResourceRecords": [
+                                    {"Value": self._quote_txt(v)} for v in existing
+                                ],
+                            },
+                        }
+                    ]
+                },
+            )
+            logger.info("Route53 deleted TXT record: %s", sanitize_for_log(name))
+        except Exception as exc:
+            raise DNSPublisherError(f"Route53 delete failed for {name!r}: {exc}") from exc
+
+    def query_txt_record(self, fqdn: str) -> list[str]:
+        dns_name = self._to_dns_name(fqdn)
+        try:
+            resp = self._client.list_resource_record_sets(
+                HostedZoneId=self._zone_id,
+                StartRecordName=dns_name,
+                StartRecordType="TXT",
+                MaxItems="1",
+            )
+        except Exception as exc:
+            raise DNSPublisherError(f"Route53 query failed for {fqdn!r}: {exc}") from exc
+        for rrset in resp.get("ResourceRecordSets", []):
+            if rrset["Name"] == dns_name and rrset["Type"] == "TXT":
+                return [
+                    self._unquote_txt(rr["Value"])
+                    for rr in rrset.get("ResourceRecords", [])
+                ]
+        return []
+
+
 class DryRunBackend(DNSBackend):
     """
     DNS backend that logs operations without making actual DNS changes.
@@ -450,10 +560,27 @@ def create_dns_publisher(
     if provider is None:
         backend: DNSBackend = DryRunBackend()
     elif provider == "route53":
-        # Placeholder - would require boto3 integration
-        raise NotImplementedError("AWS Route53 backend not yet implemented")
+        creds = credentials or {}
+        zone_id = creds.get("hosted_zone_id") or os.environ.get(
+            "OLYMPUS_ROUTE53_HOSTED_ZONE_ID"
+        )
+        if not zone_id:
+            raise ValueError(
+                "Route53 backend requires hosted_zone_id in credentials "
+                "or OLYMPUS_ROUTE53_HOSTED_ZONE_ID environment variable"
+            )
+        boto3_kwargs: dict[str, Any] = {}
+        for key in (
+            "aws_access_key_id",
+            "aws_secret_access_key",
+            "aws_session_token",
+            "region_name",
+        ):
+            if key in creds:
+                boto3_kwargs[key] = creds[key]
+        ttl = int(creds.get("ttl", Route53Backend._DEFAULT_TTL))
+        backend = Route53Backend(zone_id, ttl=ttl, **boto3_kwargs)
     elif provider == "cloudflare":
-        # Placeholder - would require cloudflare API integration
         raise NotImplementedError("Cloudflare backend not yet implemented")
     else:
         raise ValueError(f"Unknown DNS provider: {provider}")

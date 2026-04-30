@@ -33,6 +33,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from api.auth import RequireAPIKey
 from api.deps import DBSession
+from protocol.federation.identity import FederationRegistry
 from api.models.witness import WitnessNonce, WitnessObservation
 from api.schemas.witness import (
     GossipConflictEntry,
@@ -67,18 +68,34 @@ _MAX_OBSERVATIONS: int = 500_000
 def _resolve_node_pubkey(origin: str) -> str | None:
     """Return hex pubkey for a registered origin, or None if unknown.
 
-    Reads OLYMPUS_WITNESS_REGISTRY env var as JSON dict:
-        {"origin/string": "hexpubkey", ...}
-
-    In production this should be backed by the federation registry
-    (protocol/federation/identity.py FederationRegistry).
-
-    TODO: Phase 2 — wire this to FederationRegistry.get_node().
+    When OLYMPUS_GUARDIAN_ENABLED is set, resolves the pubkey from the
+    federation registry by matching origin against node endpoints.
+    Falls back to OLYMPUS_WITNESS_REGISTRY (JSON dict) for non-Guardian
+    deployments or when the registry cannot be loaded.
     """
+    guardian_enabled = os.environ.get("OLYMPUS_GUARDIAN_ENABLED", "").strip().lower() in {
+        "1", "true", "yes", "on"
+    }
+    if guardian_enabled:
+        registry_path = os.environ.get(
+            "OLYMPUS_GUARDIAN_REGISTRY_PATH",
+            "examples/federation_registry.json",
+        )
+        try:
+            fed_registry = FederationRegistry.from_file(registry_path)
+            for node in fed_registry.nodes:
+                if node.endpoint == origin:
+                    return node.pubkey.hex()
+        except Exception:
+            logger.warning(
+                "Failed to load Guardian registry from %s — falling back to env var",
+                registry_path,
+            )
+
     registry_json = os.environ.get("OLYMPUS_WITNESS_REGISTRY", "{}")
     try:
-        registry: dict[str, str] = json.loads(registry_json)
-        return registry.get(origin)
+        env_registry: dict[str, str] = json.loads(registry_json)
+        return env_registry.get(origin)
     except (json.JSONDecodeError, TypeError):
         logger.error("OLYMPUS_WITNESS_REGISTRY is not valid JSON")
         return None

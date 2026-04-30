@@ -13,14 +13,18 @@ from typing import Any
 import nacl.signing
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
+from sqlalchemy import select
 
 from api.auth import RequireIngestScope
+from api.deps import DBSession
+from api.models.document import DocCommit
 from protocol.federation.identity import FEDERATION_DOMAIN_TAG, FederationRegistry
 from protocol.federation.quorum import (
     _build_federation_vote_message,
     serialize_vote_message,
 )
 from protocol.hashes import hash_bytes
+from protocol.timestamps import current_timestamp
 
 
 logger = logging.getLogger(__name__)
@@ -133,6 +137,7 @@ class ForkEvidenceResponse(BaseModel):
 async def sign_header(
     request: SignHeaderRequest,
     _api_key: RequireIngestScope,
+    db: DBSession,
 ) -> SignHeaderResponse:
     """Sign a shard header on behalf of this Guardian node.
 
@@ -187,12 +192,6 @@ async def sign_header(
             detail=f"Invalid domain tag: expected {FEDERATION_DOMAIN_TAG}",
         )
 
-    # Fork detection: Validate the request header structure.
-    # TODO(C-02): Full fork detection requires querying local storage to compare
-    # the received header's root against our locally committed root for this shard.
-    # If roots differ, we should return HTTP 409 with ShardHeaderForkEvidence.
-    # For now, we perform structural validation only - the actual fork detection
-    # logic will be added when wiring Guardian mode into the storage layer.
     header = request.header
     if "header_hash" not in header:
         raise HTTPException(
@@ -206,6 +205,37 @@ async def sign_header(
             status_code=400,
             detail="shard_root does not match header.header_hash",
         )
+
+    # Fork detection: compare the incoming root_hash against the most recent
+    # locally committed Merkle root for this shard.  If they differ we have
+    # evidence of a split ledger and must refuse to co-sign.
+    incoming_root = header.get("root_hash")
+    if incoming_root is not None:
+        result = await db.execute(
+            select(DocCommit.merkle_root)
+            .where(DocCommit.shard_id == request.shard_id)
+            .order_by(DocCommit.epoch_timestamp.desc())
+            .limit(1)
+        )
+        local_root = result.scalar_one_or_none()
+        if local_root is not None and local_root != incoming_root:
+            logger.warning(
+                "Fork detected for shard %s at seq %d: local=%s remote=%s",
+                request.shard_id,
+                request.entry_seq,
+                local_root,
+                incoming_root,
+            )
+            raise HTTPException(
+                status_code=409,
+                detail=ForkEvidenceResponse(
+                    shard_id=request.shard_id,
+                    seq=request.entry_seq,
+                    local_header_hash=local_root,
+                    remote_header_hash=incoming_root,
+                    detected_at=current_timestamp(),
+                ).model_dump(),
+            )
 
     # Build the canonical vote message for this node
     try:
