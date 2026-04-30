@@ -9,6 +9,7 @@ import nacl.exceptions
 import nacl.signing
 
 from protocol.hashes import HASH_SEPARATOR, _length_prefixed_bytes, hash_bytes
+from protocol.timestamps import current_timestamp as _current_timestamp
 
 from .identity import FederationRegistry, _parse_timestamp
 from .quorum import NodeSignature
@@ -130,8 +131,6 @@ def detect_shard_header_forks(
     """
     if not observations:
         return ()
-
-    from protocol.timestamps import current_timestamp as _current_timestamp
 
     # Group observations by (shard_id, seq)
     grouped: dict[tuple[str, int], list[GossipedShardHeader]] = {}
