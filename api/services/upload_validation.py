@@ -39,12 +39,24 @@ Formats **not** supported for upload:
 
 from __future__ import annotations
 
+import importlib.util
 import io
 import logging
 import ntpath
+import os
 import posixpath
 import stat
+import sys
 import zipfile
+
+if sys.platform == "win32":
+    _magic_spec = importlib.util.find_spec("magic")
+    if _magic_spec is not None and _magic_spec.origin is not None:
+        _magic_lib_dir = os.path.join(os.path.dirname(_magic_spec.origin), "libmagic")
+        if os.path.exists(os.path.join(_magic_lib_dir, "libmagic.dll")):
+            os.environ["PATH"] = _magic_lib_dir + os.pathsep + os.environ.get("PATH", "")
+            if hasattr(os, "add_dll_directory"):
+                os.add_dll_directory(_magic_lib_dir)
 
 import magic
 from fastapi import HTTPException

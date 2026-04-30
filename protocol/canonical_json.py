@@ -23,6 +23,7 @@ import json
 import math
 import os
 import unicodedata
+from concurrent.futures import ThreadPoolExecutor as _ThreadPoolExecutor
 from decimal import Decimal
 from typing import Any
 
@@ -34,11 +35,13 @@ from typing import Any
 try:
     from olympus_core.canonical import (
         canonical_json_encode as _rust_canonical_json_encode,
+        canonical_json_encode_bytes as _rust_canonical_json_encode_bytes,
     )
 
     _RUST_CANONICAL_AVAILABLE = True
 except ImportError:
     _RUST_CANONICAL_AVAILABLE = False
+    _rust_canonical_json_encode_bytes = None  # type: ignore[assignment]
     if os.getenv("OLYMPUS_REQUIRE_RUST", "").strip().lower() in {"1", "true", "yes", "on"}:
         raise RuntimeError(
             "Rust canonical JSON extension required by OLYMPUS_REQUIRE_RUST=1, "
@@ -77,7 +80,10 @@ def canonical_json_encode(obj: Any) -> str:
 
 def canonical_json_bytes(obj: Any) -> bytes:
     """
-    Encode object to canonical JSON bytes.
+    Encode object to canonical JSON bytes (UTF-8).
+
+    Uses the Rust ``canonical_json_encode_bytes`` path when available to avoid
+    the intermediate Python ``str`` allocation and re-encoding step.
 
     Args:
         obj: Object to encode
@@ -85,7 +91,35 @@ def canonical_json_bytes(obj: Any) -> bytes:
     Returns:
         Canonical JSON as UTF-8 bytes
     """
+    if _RUST_CANONICAL_AVAILABLE:
+        return bytes(_rust_canonical_json_encode_bytes(obj))  # type: ignore[misc]
     return canonical_json_encode(obj).encode("utf-8")
+
+
+def canonical_json_encode_batch(docs: list[Any], *, workers: int | None = None) -> list[str]:
+    """
+    Encode multiple documents to canonical JSON in parallel.
+
+    Spawns a thread pool whose size defaults to ``min(len(docs), cpu_count)``.
+    When the Rust backend is active, threads run concurrently for documents
+    that contain no ``Decimal`` values (Rust releases the GIL for primitive-only
+    paths).  Decimal-heavy documents serialise sequentially due to GIL
+    constraints on Python's ``decimal`` module.
+
+    Args:
+        docs: List of objects to encode.
+        workers: Thread-pool size.  Defaults to ``min(len(docs), cpu_count)``.
+
+    Returns:
+        List of canonical JSON strings, one per input document, in order.
+    """
+    if not docs:
+        return []
+    n_workers = workers if workers is not None else min(len(docs), os.cpu_count() or 4)
+    if n_workers <= 1 or len(docs) == 1:
+        return [canonical_json_encode(d) for d in docs]
+    with _ThreadPoolExecutor(max_workers=n_workers) as pool:
+        return list(pool.map(canonical_json_encode, docs))
 
 
 def _normalize_for_canonical_json(obj: Any) -> Any:
@@ -179,9 +213,16 @@ def _encode_value(value: Any) -> str:
         return "[" + ",".join(_encode_value(item) for item in value) + "]"
     if isinstance(value, dict):
         items = []
-        for key in sorted(value.keys()):
+        for key in value:
             if not isinstance(key, str):
                 raise TypeError("Object keys must be strings for canonical JSON")
+        # RFC 8785 §3.2.3: keys sorted by UTF-16 code-unit sequence, not
+        # Unicode code-point order.  They agree for U+0000–U+FFFF (BMP) but
+        # diverge for supplementary-plane characters (U+10000+), whose UTF-16
+        # surrogate pairs (0xD800–0xDFFF) sort before U+E000–U+FFFF in UTF-16
+        # but after them in code-point order.  utf-16-be gives big-endian
+        # 2-byte code units; lexicographic byte comparison equals u16 comparison.
+        for key in sorted(value.keys(), key=lambda k: k.encode("utf-16-be")):
             items.append(f"{_encode_value(key)}:{_encode_value(value[key])}")
         return "{" + ",".join(items) + "}"
     raise TypeError(f"Type {type(value)} is not JSON-serializable")

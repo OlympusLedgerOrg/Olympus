@@ -347,6 +347,13 @@ class TestCanonicalJsonParity:
     def test_dict_sorted_keys(self) -> None:
         self._assert_parity({"z": 1, "a": 2, "m": 3})
 
+    def test_dict_sorted_keys_by_utf16_code_units(self) -> None:
+        self._assert_parity({"\ue000": 1, "\U0001f600": 2})
+        assert (
+            _rust_canonical.canonical_json_encode({"\ue000": 1, "\U0001f600": 2})
+            == '{"\U0001f600":2,"\ue000":1}'
+        )
+
     def test_nested_dict(self) -> None:
         self._assert_parity({"outer": {"inner": True}, "z": None})
 
@@ -381,6 +388,14 @@ class TestCanonicalJsonParity:
     def test_decimal_infinity_rejected(self) -> None:
         with pytest.raises(ValueError):
             _rust_canonical.canonical_json_encode(Decimal("inf"))
+
+    def test_encode_bytes_returns_python_bytes(self) -> None:
+        obj = {"world": "世界", "emoji": "\U0001f600"}
+        py_result = _py_canonical_json_encode(obj).encode("utf-8")
+        rust_result = _rust_canonical.canonical_json_encode_bytes(obj)
+
+        assert isinstance(rust_result, bytes)
+        assert rust_result == py_result
 
 
 # ---------------------------------------------------------------------------
