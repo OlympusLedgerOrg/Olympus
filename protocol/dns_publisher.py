@@ -349,6 +349,7 @@ class DNSBackend(ABC):
         """
         self.publish(fqdn, value)
 
+    @abstractmethod
     def query_txt_record(self, fqdn: str) -> list[str]:
         """
         Query DNS TXT records for a domain.
@@ -539,7 +540,7 @@ class DryRunBackend(DNSBackend):
         """
         record = self.records.get(fqdn)
         records = [record] if record is not None else []
-        logger.info("[DRY RUN] Query TXT record: %s -> %s", fqdn, records)
+        logger.debug("[DRY RUN] Query TXT record: %s -> %s", fqdn, records)
         return records
 
 

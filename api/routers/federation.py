@@ -8,6 +8,8 @@ from __future__ import annotations
 
 import logging
 import os
+import threading
+from dataclasses import dataclass
 from typing import Any
 
 import nacl.signing
@@ -24,12 +26,24 @@ from protocol.federation.quorum import (
     serialize_vote_message,
 )
 from protocol.hashes import hash_bytes
+from protocol.log_sanitization import sanitize_for_log
 from protocol.timestamps import current_timestamp
 
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/federation", tags=["federation"])
+
+
+@dataclass
+class _RegistryCache:
+    registry: FederationRegistry
+    path: str
+    mtime: float
+
+
+_registry_cache: _RegistryCache | None = None
+_registry_cache_lock = threading.Lock()
 
 
 def _env_flag_enabled(name: str) -> bool:
@@ -51,7 +65,8 @@ def _guardian_enabled() -> bool:
 
 
 def _get_guardian_registry() -> FederationRegistry | None:
-    """Load the Guardian federation registry from the configured path."""
+    """Load the Guardian federation registry, caching by path and mtime."""
+    global _registry_cache
     if not _guardian_enabled():
         return None
 
@@ -61,10 +76,27 @@ def _get_guardian_registry() -> FederationRegistry | None:
     )
 
     try:
-        return FederationRegistry.from_file(registry_path)
-    except Exception as exc:
-        logger.error("Failed to load Guardian registry from %s: %s", registry_path, exc)
+        mtime = os.path.getmtime(registry_path)
+    except OSError:
+        logger.error("Guardian registry not found: %s", registry_path)
         return None
+
+    with _registry_cache_lock:
+        if (
+            _registry_cache is None
+            or _registry_cache.path != registry_path
+            or _registry_cache.mtime != mtime
+        ):
+            try:
+                _registry_cache = _RegistryCache(
+                    registry=FederationRegistry.from_file(registry_path),
+                    path=registry_path,
+                    mtime=mtime,
+                )
+            except Exception as exc:
+                logger.error("Failed to load Guardian registry from %s: %s", registry_path, exc)
+                return None
+        return _registry_cache.registry
 
 
 def _get_local_signing_key() -> nacl.signing.SigningKey | None:
@@ -84,19 +116,16 @@ def _get_local_signing_key() -> nacl.signing.SigningKey | None:
         return None
 
 
-def _get_local_node_id(registry: FederationRegistry) -> str | None:
+def _get_local_node_id(
+    registry: FederationRegistry,
+    signing_key: nacl.signing.SigningKey | None = None,
+) -> str | None:
     """Determine the local node's ID by matching the signing key's public key."""
-    signing_key = _get_local_signing_key()
-    if signing_key is None:
+    key = signing_key or _get_local_signing_key()
+    if key is None:
         return None
-
-    local_pubkey = signing_key.verify_key.encode()
-
-    for node in registry.nodes:
-        if node.pubkey == local_pubkey:
-            return node.node_id
-
-    return None
+    local_pubkey = key.verify_key.encode()
+    return next((node.node_id for node in registry.nodes if node.pubkey == local_pubkey), None)
 
 
 class SignHeaderRequest(BaseModel):
@@ -171,18 +200,18 @@ async def sign_header(
             detail="Guardian registry not configured",
         )
 
-    local_node_id = _get_local_node_id(registry)
-    if local_node_id is None:
-        raise HTTPException(
-            status_code=503,
-            detail="Local node not found in Guardian registry",
-        )
-
     signing_key = _get_local_signing_key()
     if signing_key is None:
         raise HTTPException(
             status_code=503,
             detail="Local signing key not configured",
+        )
+
+    local_node_id = _get_local_node_id(registry, signing_key=signing_key)
+    if local_node_id is None:
+        raise HTTPException(
+            status_code=503,
+            detail="Local node not found in Guardian registry",
         )
 
     # Verify domain tag
@@ -213,14 +242,22 @@ async def sign_header(
     if incoming_root is not None:
         result = await db.execute(
             select(DocCommit.merkle_root)
-            .where(DocCommit.shard_id == request.shard_id)
-            .where(DocCommit.merkle_root.isnot(None))
+            .where(
+                DocCommit.shard_id == request.shard_id,
+                DocCommit.merkle_root.is_not(None),
+            )
             .order_by(DocCommit.epoch_timestamp.desc())
             .limit(1)
         )
         local_root = result.scalar_one_or_none()
         if local_root is not None and local_root != incoming_root:
-            logger.warning("Fork detected during federation signing; rejecting co-sign request")
+            logger.warning(
+                "Fork detected for shard %s at seq %d: local=%s remote=%s",
+                sanitize_for_log(request.shard_id),
+                request.entry_seq,
+                sanitize_for_log(local_root),
+                sanitize_for_log(str(incoming_root)),
+            )
             raise HTTPException(
                 status_code=409,
                 detail=ForkEvidenceResponse(
