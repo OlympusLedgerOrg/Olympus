@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import secrets
 import uuid
 
 import psycopg
@@ -57,9 +58,9 @@ def test_ingestion_tables_reject_updates_and_deletes() -> None:
                 "document",
                 "doc1",
                 1,
-                b"\x01" * 32,
-                b"\x02" * 32,
-                b"\x03" * 32,
+                secrets.token_bytes(32),
+                secrets.token_bytes(32),
+                secrets.token_bytes(32),
             ),
         )
         # Commit so the rows are visible to the subsequent UPDATE/DELETE tests;
