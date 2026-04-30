@@ -7,6 +7,7 @@ import json
 import os
 import sys
 from dataclasses import dataclass
+from enum import Enum
 from pathlib import Path
 from typing import Optional
 from typing import NoReturn
@@ -21,8 +22,6 @@ from rich.panel import Panel
 from rich.syntax import Syntax
 from rich.table import Table
 from typing_extensions import Annotated
-
-sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from protocol.canonical import canonicalize_document, document_to_bytes
 from protocol.federation import FederationRegistry
@@ -45,6 +44,13 @@ class _State:
 
 
 _S = _State()
+
+
+class _CanonFormat(str, Enum):
+    json = "json"
+    bytes = "bytes"
+    hex = "hex"
+
 
 # ---------------------------------------------------------------------------
 # App + sub-apps
@@ -204,7 +210,7 @@ def ingest(
     namespace: Annotated[str, typer.Option(help="Ledger namespace")] = "default",
     id: Annotated[str, typer.Option("--id", help="Artifact ID (defaults to filename)")] = "",
     source_url: Annotated[str, typer.Option(help="Source URL for the artifact")] = "",
-    raw_pdf: Annotated[Optional[Path], typer.Option(help="Raw PDF to anchor alongside")] = None,
+    raw_pdf: Annotated[Optional[Path], typer.Option(help="Raw PDF to anchor alongside", exists=True)] = None,
     proof: Annotated[bool, typer.Option("--proof", help="Fetch proof bundle after commit")] = False,
     verify: Annotated[bool, typer.Option("--verify", help="Verify the committed hash")] = False,
 ) -> None:
@@ -292,7 +298,12 @@ def records(
     Pipe raw JSON or pass a file path.
     """
     if file:
-        raw = file.read_text(encoding="utf-8-sig")
+        if not file.exists():
+            _die(f"file not found: {file}")
+        try:
+            raw = file.read_text(encoding="utf-8-sig")
+        except OSError as exc:
+            _die(f"could not read file: {exc}")
     elif not sys.stdin.isatty():
         raw = sys.stdin.read()
     else:
@@ -398,7 +409,7 @@ def canon(
     input_file: Annotated[Path, typer.Argument(help="JSON file to canonicalize", exists=True)],
     output: Annotated[Optional[Path], typer.Option("-o", "--output", help="Output file")] = None,
     hash_only: Annotated[bool, typer.Option("--hash", help="Print BLAKE3 hash only")] = False,
-    format: Annotated[str, typer.Option(help="Output format: json | bytes | hex")] = "json",
+    format: Annotated[_CanonFormat, typer.Option(help="Output format")] = _CanonFormat.json,
 ) -> None:
     """Canonicalize a JSON document (RFC 8785) or emit its BLAKE3 hash."""
     try:
@@ -411,9 +422,9 @@ def canon(
 
     if hash_only:
         text = hash_bytes(canonical_bytes).hex()
-    elif format == "json":
+    elif format == _CanonFormat.json:
         text = json.dumps(canonical, indent=2)
-    elif format == "bytes":
+    elif format == _CanonFormat.bytes:
         text = canonical_bytes.decode()
     else:
         text = canonical_bytes.hex()
@@ -583,18 +594,21 @@ def node_start(
         parsed = urlparse(node.endpoint)
         if parsed.hostname:
             host = parsed.hostname
-        if parsed.port:
+        if parsed.port is not None:
             port = parsed.port
 
     if not os.environ.get("DATABASE_URL"):
         _die("DATABASE_URL must be set to start a node")
 
     import uvicorn
-    from api.main import app as api_app
 
     if not _S.quiet:
         out.print(f"[dim]Starting Olympus node on {host}:{port}…[/]")
-    uvicorn.run(api_app, host=host, port=port, reload=reload)
+    if reload:
+        uvicorn.run("api.main:app", host=host, port=port, reload=True)
+    else:
+        from api.main import app as api_app  # noqa: PLC0415
+        uvicorn.run(api_app, host=host, port=port, reload=False)
 
 
 # ---------------------------------------------------------------------------

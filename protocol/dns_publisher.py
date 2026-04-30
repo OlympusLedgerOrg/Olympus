@@ -16,6 +16,7 @@ Based on RFC 6962 (Certificate Transparency) DNS publication patterns.
 from __future__ import annotations
 
 import logging
+import os
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from typing import Any
@@ -368,7 +369,8 @@ class Route53Backend(DNSBackend):
     """AWS Route53 DNS backend for Olympus checkpoint publication.
 
     Requires boto3 (already a project dependency). Supply ``hosted_zone_id``
-    via the ``credentials`` dict or the ``OLYMPUS_ROUTE53_HOSTED_ZONE_ID``
+    via the constructor, the ``credentials`` dict passed to
+    ``create_dns_publisher``, or the ``OLYMPUS_ROUTE53_HOSTED_ZONE_ID``
     environment variable. AWS credentials follow the standard boto3 resolution
     order: explicit kwargs → environment variables → ~/.aws/credentials → IAM role.
     """
@@ -377,13 +379,18 @@ class Route53Backend(DNSBackend):
 
     def __init__(
         self,
-        hosted_zone_id: str,
+        hosted_zone_id: str | None = None,
         ttl: int = _DEFAULT_TTL,
         **boto3_kwargs: Any,
     ) -> None:
         import boto3  # type: ignore[import-untyped]
 
-        self._zone_id = hosted_zone_id
+        zone_id = hosted_zone_id or os.environ.get("OLYMPUS_ROUTE53_HOSTED_ZONE_ID", "")
+        if not zone_id:
+            raise ValueError(
+                "hosted_zone_id must be supplied or set via OLYMPUS_ROUTE53_HOSTED_ZONE_ID"
+            )
+        self._zone_id = zone_id
         self._ttl = ttl
         self._client = boto3.client("route53", **boto3_kwargs)
 
@@ -439,8 +446,9 @@ class Route53Backend(DNSBackend):
             raise DNSPublisherError(f"Route53 publish failed for {name!r}: {exc}") from exc
 
     def delete(self, name: str) -> None:
-        existing = self.query_txt_record(name)
-        if not existing:
+        dns_name = self._to_dns_name(name)
+        existing_rrset = self._fetch_existing_rrset(dns_name)
+        if not existing_rrset:
             logger.debug("Route53 delete skipped — no TXT record at %s", sanitize_for_log(name))
             return
         try:
@@ -450,14 +458,7 @@ class Route53Backend(DNSBackend):
                     "Changes": [
                         {
                             "Action": "DELETE",
-                            "ResourceRecordSet": {
-                                "Name": self._to_dns_name(name),
-                                "Type": "TXT",
-                                "TTL": self._ttl,
-                                "ResourceRecords": [
-                                    {"Value": self._quote_txt(v)} for v in existing
-                                ],
-                            },
+                            "ResourceRecordSet": existing_rrset,
                         }
                     ]
                 },
@@ -553,7 +554,10 @@ def create_dns_publisher(
         domain: Base domain for checkpoint records
         provider: DNS provider name ('route53', 'cloudflare', etc.)
             If None, uses DryRunBackend
-        credentials: Provider-specific credentials
+        credentials: Provider-specific credentials. For 'route53', may include
+            ``hosted_zone_id`` (otherwise falls back to
+            ``OLYMPUS_ROUTE53_HOSTED_ZONE_ID`` env var) plus any boto3 client
+            kwargs (e.g. ``aws_access_key_id``, ``aws_secret_access_key``).
 
     Returns:
         Configured DNSPublisher instance
@@ -566,14 +570,19 @@ def create_dns_publisher(
         >>> publisher = create_dns_publisher(
         ...     "checkpoints.olympus.example.com",
         ...     provider="route53",
-        ...     credentials={"aws_access_key_id": "...", "aws_secret_access_key": "..."}
+        ...     credentials={
+        ...         "hosted_zone_id": "Z1234ABCDE",
+        ...         "aws_access_key_id": "...",
+        ...         "aws_secret_access_key": "...",
+        ...     }
         ... )
     """
     if provider is None:
         backend: DNSBackend = DryRunBackend()
     elif provider == "route53":
-        # Placeholder - would require boto3 integration
-        raise NotImplementedError("AWS Route53 backend not yet implemented")
+        creds = credentials or {}
+        hosted_zone_id = creds.pop("hosted_zone_id", None)
+        backend = Route53Backend(hosted_zone_id=hosted_zone_id, **creds)
     elif provider == "cloudflare":
         # Placeholder - would require cloudflare API integration
         raise NotImplementedError("Cloudflare backend not yet implemented")
