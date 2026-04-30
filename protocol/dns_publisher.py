@@ -580,7 +580,7 @@ def create_dns_publisher(
     if provider is None:
         backend: DNSBackend = DryRunBackend()
     elif provider == "route53":
-        creds = credentials or {}
+        creds = dict(credentials or {})
         hosted_zone_id = creds.pop("hosted_zone_id", None)
         backend = Route53Backend(hosted_zone_id=hosted_zone_id, **creds)
     elif provider == "cloudflare":

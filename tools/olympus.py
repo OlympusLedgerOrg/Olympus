@@ -23,6 +23,8 @@ from rich.syntax import Syntax
 from rich.table import Table
 from typing_extensions import Annotated
 
+sys.path.insert(0, str(Path(__file__).parent.parent))
+
 from protocol.canonical import canonicalize_document, document_to_bytes
 from protocol.federation import FederationRegistry
 from protocol.hashes import blake3_hash, hash_bytes
