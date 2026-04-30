@@ -12,8 +12,9 @@ jobs:
   olympus-commit:
     name: Anchor release artifacts to Olympus
     runs-on: ubuntu-latest
+
     permissions:
-      contents: write  # required to update release notes
+      contents: write # required to update release notes
 
     steps:
       - name: Checkout code
@@ -47,21 +48,21 @@ jobs:
           set -euo pipefail
 
           PROOF_IDS=""
-          # Determine the API URL, falling back to the public Olympus endpoint
           API_URL="${OLYMPUS_API_URL:-https://api.olympus.example.com}"
 
           for artifact in release-assets/*; do
             [ -f "$artifact" ] || continue
+
             PROOF_ID=$(python tools/olympus.py commit "$artifact" \
               --api-key "${OLYMPUS_API_KEY:-}" \
               --namespace github \
               --id "${GH_REPOSITORY}/${REF_NAME}" \
               --api-url "$API_URL")
+
             echo "Committed $artifact → proof_id=$PROOF_ID"
             PROOF_IDS="${PROOF_IDS}${PROOF_ID} "
           done
 
-          # Trim trailing space
           PROOF_IDS="${PROOF_IDS% }"
           echo "proof_ids=${PROOF_IDS}" >> "$GITHUB_OUTPUT"
 
@@ -77,11 +78,15 @@ jobs:
         run: |
           PROOF_IDS="${{ steps.olympus.outputs.proof_ids }}"
           EXISTING_NOTES=$(gh release view "$REF_NAME" --json body -q '.body // ""')
-          NOTES_APPEND="## Olympus Provenance
+
+          NOTES_APPEND=$(cat <<EOF
+## Olympus Provenance
 
 Proof IDs: \`${PROOF_IDS}\`
 
-These artifacts have been anchored to the [Olympus](https://github.com/OlympusLedgerOrg/Olympus) public ledger."
+These artifacts have been anchored to the [Olympus](https://github.com/OlympusLedgerOrg/Olympus) public ledger.
+EOF
+)
 
-          printf '%s\n\n%s' "${EXISTING_NOTES}" "${NOTES_APPEND}" > /tmp/updated-notes.txt
+          printf '%s\n\n%s\n' "${EXISTING_NOTES}" "${NOTES_APPEND}" > /tmp/updated-notes.txt
           gh release edit "$REF_NAME" --notes-file /tmp/updated-notes.txt
