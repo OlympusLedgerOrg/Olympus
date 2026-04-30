@@ -91,5 +91,11 @@ All verifiers produce identical results for the same inputs, demonstrating:
 - Cryptographic correctness
 - Implementation independence
 
+**Confirmed parity:** Go, Rust, JavaScript, and Python all produce byte-for-byte
+identical BLAKE3 leaf/node hashes and Merkle roots for every test vector in
+`test_vectors/vectors.json`. The cross-language determinism harness
+(`verifiers/cli/test_cross_language_determinism.py`) validates this parity
+over 5,000 randomly generated records on every CI run.
+
 A dedicated CI workflow (`.github/workflows/verifier-conformance.yml`) runs all
 language test suites plus the random determinism harness on every commit and PR.
