@@ -27,8 +27,7 @@ class TestSettingsDefaults:
     """Tests for default Settings values."""
 
     def test_default_database_url(self) -> None:
-        settings = Settings()
-        assert "sqlite" in settings.database_url
+        assert "sqlite" in Settings.model_fields["database_url"].default
 
     def test_default_app_title(self) -> None:
         settings = Settings()
