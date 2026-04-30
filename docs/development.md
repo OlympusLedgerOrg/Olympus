@@ -41,7 +41,6 @@ This guide covers common development workflows for the Olympus project.
    | `DATABASE_URL` | Yes (API/DB tests) | PostgreSQL connection string |
    | `TEST_DATABASE_URL` | No | Separate connection string for test runs |
    | `LOG_LEVEL` | No | Python log level (`DEBUG`, `INFO`, …) |
-   | `OLYMPUS_DEBUG_UI` | No | Deprecated — debug UI is now always enabled. No longer required. |
    | `OLYMPUS_HALO2_ENABLED` | No | Set to `true` to enable the Halo2 proof backend. **Intentionally a no-op in v1.0** — Halo2 support is planned for Phase 1+. The flag exists so deployment tooling can reference it before the backend ships. |
 
 5. **Start PostgreSQL** (if using Docker)
@@ -139,13 +138,7 @@ bandit -r protocol/ storage/ api/ scaffolding/ -f txt
 uvicorn api.app:app --host 127.0.0.1 --port 8000 --reload
 ```
 
-### Run the UI
-```bash
-# In a separate terminal
-UI_API_BASE=http://127.0.0.1:8000 uvicorn ui.app:app --host 127.0.0.1 --port 8080
-```
-
-### Run both API and UI together
+### Run both with make
 ```bash
 make dev
 ```
@@ -211,7 +204,6 @@ make dev
 | `DATABASE_URL` | Yes (API/DB tests) | PostgreSQL connection string |
 | `TEST_DATABASE_URL` | No | Separate connection string for test runs |
 | `LOG_LEVEL` | No | Python log level (`DEBUG`, `INFO`, …) |
-| `OLYMPUS_DEBUG_UI` | No | Deprecated — debug UI is now always enabled. No longer required. |
 | `OLYMPUS_HALO2_ENABLED` | No | Set to `true` to enable the Halo2 proof backend. **Intentionally a no-op in v1.0** — Halo2 support is planned for Phase 1+. The flag exists so deployment tooling can reference it before the backend ships. |
 
 ## Debugging

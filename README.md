@@ -180,7 +180,7 @@ make format                          # auto-format with Ruff
 make vectors                         # verify golden canonicalization + hash vectors
 make boundary-check                  # verify protocol import boundaries are intact
 make smoke                           # PostgreSQL-backed smoke test (requires Docker Compose)
-make dev                             # FastAPI on :8000 + debug UI on :8080
+make dev                             # FastAPI on :8000
 make federation-dev                  # three-node local federation via Docker Compose
 ```
 
@@ -214,7 +214,6 @@ storage/         PostgreSQL persistence layer and schema bootstrap
 test_vectors/    Golden test vectors for cross-language determinism harness
 tests/           Python test suite (unit, integration, postgres, adversarial, chaos)
 tools/           CLI helpers: canonicalize_cli.py, verify_cli.py, olympus.py, etc.
-ui/              FastAPI debug console and public verification portal
 verifiers/       Cross-language verifiers -- Python, Go, Rust, JavaScript
 ```
 
@@ -238,7 +237,7 @@ make check
 make smoke
 ```
 
-### Run the API + debug UI locally
+### Run the API locally
 
 ```bash
 ./scripts/bootstrap.sh                 # generate ./secrets/db_password and .env (idempotent)
@@ -246,7 +245,7 @@ docker compose up -d                   # start PostgreSQL + Traefik
 export DATABASE_URL='postgresql://olympus:olympus@localhost:5432/olympus'
 export TEST_DATABASE_URL="$DATABASE_URL"
 python -m alembic upgrade head         # apply database migrations
-make dev                               # API on :8000, debug UI on :8080
+make dev                               # API on :8000
 ```
 
 > **First-boot note:** `docker compose up` reads the database password from
@@ -319,7 +318,6 @@ Olympus is influenced by the operational model of Certificate Transparency and S
 | What | Where |
 |------|-------|
 | Python API application | `api/app.py` |
-| Debug UI / verification portal | `ui/app.py` |
 | Rust CD-HS-ST service | `services/cdhs-smf-rust/src/main.rs` |
 | Go sequencer service | `services/sequencer-go/` |
 | Protobuf definitions | `proto/cdhs_smf.proto`, `proto/olympus.proto` |
@@ -337,8 +335,6 @@ Olympus is influenced by the operational model of Certificate Transparency and S
 ## Notes
 
 - Python requirement: `>=3.10` (3.12 is used for CI tooling and dependency locking).
-- The debug console is disabled by default; set `OLYMPUS_DEBUG_UI=true` when running the UI directly.
-- The public verification portal is always available at `/verification-portal` even when debug-only routes are disabled.
 - `canonical_v2` is the current canonicalization version. `canonical_v1` remains in `SUPPORTED_VERSIONS` with a deprecation warning.
 - The Rust PyO3 extension (`src/`, built with `maturin`) accelerates hashing and canonicalization. It is optional; the pure-Python fallback in `protocol/hashes.py` is always active when the extension is not built.
 - The Halo2 ZK backend is gated behind `OLYMPUS_HALO2_ENABLED` and is not yet production-ready.
