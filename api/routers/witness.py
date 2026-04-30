@@ -41,6 +41,7 @@ from api.schemas.witness import (
     WitnessAnnounceResponse,
     WitnessHealthResponse,
 )
+from protocol.federation.identity import FederationRegistry
 from protocol.hashes import hash_bytes
 from protocol.log_sanitization import sanitize_for_log
 from protocol.timestamps import current_timestamp
@@ -64,17 +65,53 @@ _MAX_NONCE_ENTRIES: int = 100_000
 _MAX_OBSERVATIONS: int = 500_000
 
 
+_registry_cache: dict[str, tuple[float, FederationRegistry]] = {}
+
+
+def _load_federation_registry(path: str) -> FederationRegistry | None:
+    """Load and cache the federation registry, refreshing on file mtime change."""
+    try:
+        mtime = os.path.getmtime(path)
+    except OSError:
+        return None
+    cached = _registry_cache.get(path)
+    if cached is not None and cached[0] == mtime:
+        return cached[1]
+    try:
+        registry = FederationRegistry.from_file(path)
+    except Exception:
+        return None
+    _registry_cache[path] = (mtime, registry)
+    return registry
+
+
 def _resolve_node_pubkey(origin: str) -> str | None:
     """Return hex pubkey for a registered origin, or None if unknown.
 
-    Reads OLYMPUS_WITNESS_REGISTRY env var as JSON dict:
-        {"origin/string": "hexpubkey", ...}
-
-    In production this should be backed by the federation registry
-    (protocol/federation/identity.py FederationRegistry).
-
-    TODO: Phase 2 — wire this to FederationRegistry.get_node().
+    When OLYMPUS_GUARDIAN_ENABLED is set, resolves the pubkey from the
+    federation registry by matching origin against node endpoints.
+    Falls back to OLYMPUS_WITNESS_REGISTRY (JSON dict) for non-Guardian
+    deployments or when the registry cannot be loaded.
     """
+    guardian_enabled = os.environ.get("OLYMPUS_GUARDIAN_ENABLED", "").strip().lower() in {
+        "1", "true", "yes", "on"
+    }
+    if guardian_enabled:
+        registry_path = os.environ.get(
+            "OLYMPUS_GUARDIAN_REGISTRY_PATH",
+            "examples/federation_registry.json",
+        )
+        fed_registry = _load_federation_registry(registry_path)
+        if fed_registry is not None:
+            for node in fed_registry.nodes:
+                if node.endpoint == origin:
+                    return node.pubkey.hex()
+        else:
+            logger.warning(
+                "Failed to load Guardian registry from %s — falling back to env var",
+                registry_path,
+            )
+
     registry_json = os.environ.get("OLYMPUS_WITNESS_REGISTRY", "{}")
     try:
         registry: dict[str, str] = json.loads(registry_json)

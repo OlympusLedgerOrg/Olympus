@@ -21,6 +21,8 @@ from protocol.federation.quorum import (
     serialize_vote_message,
 )
 from protocol.hashes import hash_bytes
+from protocol.log_sanitization import sanitize_for_log
+from protocol.timestamps import current_timestamp
 
 
 logger = logging.getLogger(__name__)
