@@ -33,8 +33,8 @@ from protocol.hashes import blake3_hash, hash_bytes
 # Console + global state
 # ---------------------------------------------------------------------------
 
-out = Console()
-err = Console(stderr=True)
+out = Console(width=300)
+err = Console(stderr=True, width=300)
 
 
 @dataclass
@@ -213,10 +213,26 @@ def ingest(
     id: Annotated[str, typer.Option("--id", help="Artifact ID (defaults to filename)")] = "",
     source_url: Annotated[str, typer.Option(help="Source URL for the artifact")] = "",
     raw_pdf: Annotated[Optional[Path], typer.Option(help="Raw PDF to anchor alongside", exists=True)] = None,
-    proof: Annotated[bool, typer.Option("--proof", help="Fetch proof bundle after commit")] = False,
+    generate_proof: Annotated[
+        bool, typer.Option("--generate-proof", help="Fetch proof bundle after commit")
+    ] = False,
     verify: Annotated[bool, typer.Option("--verify", help="Verify the committed hash")] = False,
+    api_url: Annotated[
+        Optional[str], typer.Option("--api-url", envvar="OLYMPUS_API_URL", help="API base URL")
+    ] = None,
+    api_key: Annotated[
+        Optional[str], typer.Option("--api-key", envvar="OLYMPUS_API_KEY", help="API key")
+    ] = None,
+    json_out: Annotated[bool, typer.Option("--json", help="Emit machine-readable JSON")] = False,
 ) -> None:
     """Commit a file to the Olympus ledger."""
+    if api_url is not None:
+        _S.api_url = api_url.rstrip("/")
+    if api_key is not None:
+        _S.api_key = api_key
+    if json_out:
+        _S.json_out = True
+
     artifact_id = id or file.name
     artifact_hash = _blake3_hex(file.read_bytes())
 
@@ -241,9 +257,11 @@ def ingest(
         "proof_id": proof_id,
         "commit": commit,
     }
+    if source_url:
+        output["source_url"] = source_url
     if raw_pdf_hash:
         output["raw_pdf_hash"] = raw_pdf_hash
-    if proof:
+    if generate_proof:
         output["proof"] = _request(f"/ingest/records/{proof_id}/proof")
     if verify:
         output["verification"] = _request(f"/ingest/records/hash/{artifact_hash}/verify")
@@ -269,7 +287,7 @@ def ingest(
     poseidon = commit.get("poseidon_root", "")
     if poseidon:
         t.add_row("poseidon root", str(poseidon))
-    if proof:
+    if generate_proof:
         t.add_row("proof bundle", "[green]fetched[/]")
     if verify:
         v = output.get("verification")
@@ -280,8 +298,64 @@ def ingest(
 
 
 # ---------------------------------------------------------------------------
-# records  (batch ingest via /ingest/records)
+# commit  (hash-and-commit, prints bare proof_id)
 # ---------------------------------------------------------------------------
+
+
+@app.command()
+def commit(
+    file: Annotated[Path, typer.Argument(help="File to hash and commit")],
+    namespace: Annotated[str, typer.Option(help="Ledger namespace")] = "default",
+    id: Annotated[str, typer.Option("--id", help="Artifact ID (defaults to filename)")] = "",
+    api_url: Annotated[
+        Optional[str], typer.Option("--api-url", envvar="OLYMPUS_API_URL", help="API base URL")
+    ] = None,
+    api_key: Annotated[
+        Optional[str], typer.Option("--api-key", envvar="OLYMPUS_API_KEY", help="API key")
+    ] = None,
+) -> None:
+    """Hash a file and commit it to the ledger, printing the proof ID to stdout."""
+    effective_url = (api_url or _S.api_url).rstrip("/")
+    effective_key = api_key if api_key is not None else _S.api_key
+
+    # Validate URL scheme before reading the file
+    parsed = urlparse(effective_url)
+    if parsed.scheme not in {"http", "https"}:
+        err.print("[bold red]error:[/] api-url must use http or https", markup=True)
+        raise typer.Exit(1)
+    if not parsed.netloc:
+        err.print("[bold red]error:[/] api-url must include a hostname", markup=True)
+        raise typer.Exit(1)
+
+    if not file.exists():
+        err.print(f"[bold red]error:[/] file not found: {file}", markup=True)
+        raise typer.Exit(1)
+
+    artifact_id = id or file.name
+    artifact_hash = _blake3_hex(file.read_bytes())
+
+    payload: dict = {
+        "artifact_hash": artifact_hash,
+        "namespace": namespace,
+        "id": artifact_id,
+    }
+    if effective_key:
+        payload["api_key"] = effective_key
+
+    # Override global state for _request helper
+    _S.api_url = effective_url
+    _S.api_key = effective_key
+
+    commit_resp = _request("/ingest/commit", method="POST", payload=payload)
+    assert isinstance(commit_resp, dict)
+    proof_id = commit_resp.get("proof_id", "")
+    if not proof_id:
+        _die("API returned no proof_id")
+
+    # Plain print — no Rich markup so stdout is exactly the proof_id
+    print(proof_id)
+
+
 
 
 @app.command()
@@ -655,7 +729,7 @@ def federation_status(
                         r = str(s.get("latest_root", ""))
                         if r:
                             roots[r] = roots.get(r, 0) + 1
-            except Exception:
+            except Exception:  # noqa: BLE001 — network errors per-node are non-fatal; skip unreachable nodes
                 pass
         if roots:
             best, agreeing = max(roots.items(), key=lambda x: x[1])
@@ -667,18 +741,19 @@ def federation_status(
         _emit(payload)
         return
 
-    t = _kv_table()
-    t.add_row("total nodes", str(payload["total_nodes"]))
-    t.add_row("active", str(payload["active_nodes"]))
-    t.add_row("quorum", str(payload["quorum_threshold"]))
-    t.add_row("epoch", str(payload["epoch"]))
+    lines = [
+        f"Nodes: {payload['total_nodes']}",
+        f"Active: {payload['active_nodes']}",
+        f"Quorum: {payload['quorum_threshold']}",
+        f"Epoch: {payload['epoch']}",
+    ]
     if shard_id and "latest_root" in payload:
-        t.add_row("shard", shard_id)
         root = str(payload["latest_root"])
-        t.add_row("latest root", root[:32] + "…" if len(root) > 32 else root)
-        t.add_row("agreeing nodes", str(payload.get("agreeing_nodes", "—")))
+        lines.append(f"Shard: {shard_id}")
+        lines.append(f"Latest root: {root[:32]}…" if len(root) > 32 else f"Latest root: {root}")
+        lines.append(f"Agreeing nodes: {payload.get('agreeing_nodes', '—')}")
 
-    out.print(Panel(t, title="[bold]Federation[/]", border_style="blue"))
+    out.print(Panel("\n".join(lines), title="[bold]Federation Status[/]", border_style="blue"))
 
 
 # ---------------------------------------------------------------------------
