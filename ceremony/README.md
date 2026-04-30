@@ -15,6 +15,50 @@ Groth16 requires a two-phase trusted setup ceremony:
 The security model is 1-of-N honest: as long as at least one participant
 destroys their toxic waste, the resulting parameters are secure.
 
+## Current Ceremony Status
+
+### Phase 1 — Complete ✅
+
+Phase 1 (Powers of Tau) is **complete**. Olympus uses the publicly audited
+[Hermez Network](https://blog.hermez.io/hermez-cryptographic-setup/) Phase 1
+output:
+
+| File | Source | B2 hash |
+|------|--------|---------|
+| `powersOfTau28_hez_final_17.ptau` | Hermez S3 (public) | `6247a3433948b35fbfae414fa5a9355bfb45f56efa7ab4929e669264a0258976741dfbe3288bfb49828e5df02c2e633df38d2245e30162ae7e3bcca5b8b49345` |
+
+This file supports circuits up to 2^17 constraints (~131 000 R1CS rows), which
+covers all current Olympus circuits. It is automatically downloaded by
+`.github/workflows/copilot-setup-steps.yml` and integrity-checked with
+`b2sum` on every CI run. **No new Phase 1 ceremony is required or planned.**
+
+### Phase 2 — Pending ⏳ (Olympus Ceremony)
+
+Phase 2 (circuit-specific setup) is **pending**. This is the Olympus-specific
+ceremony that generates the final proving and verification keys for the
+production circuits (`document_existence`, `redaction_validity`,
+`non_existence`).
+
+**Planned participants:** Freedom of the Press Foundation (FPF), Electronic
+Frontier Foundation (EFF), and three independent cryptographers — five
+participants total. The 1-of-N security guarantee means the final keys are
+secure as long as any one participant genuinely destroys their toxic waste.
+
+**What happens during the ceremony:**
+1. Participant 1 downloads the current `.zkey`, adds entropy, uploads the new
+   `.zkey` + a signed transcript entry, and destroys the entropy source.
+2. Participants 2–5 repeat the same step, each building on the previous output.
+3. After the final contribution, the `.zkey` is finalized, the verification key
+   is exported, and the complete transcript is committed to this directory.
+
+**Prerequisites before Phase 2 can start:**
+- Circom circuit code must be locked (any change invalidates the keys).
+- All participants must be coordinated and available.
+- Development placeholder artifacts in `transcript/` must be replaced.
+
+The development-only artifacts checked into this repository (see below) are
+**not** the production keys and must never be used in a real deployment.
+
 ## Directory Structure
 
 ```
@@ -40,7 +84,11 @@ See `verification_tools/transcript.py` for the canonical format.
 
 ## Ceremony Protocol
 
-### Phase 1 (Powers of Tau)
+### Phase 1 (Powers of Tau) — reference only
+
+Phase 1 is complete via the Hermez public ceremony (see "Current Ceremony
+Status" above). The steps below are for reference should a new Phase 1 ever
+be required:
 
 1. Download or generate the initial PTAU file
 2. Each participant:
@@ -50,7 +98,7 @@ See `verification_tools/transcript.py` for the canonical format.
    d. Signs the contribution with their identity key
    e. Uploads the new PTAU file and transcript entry
 
-### Phase 2 (Circuit-Specific)
+### Phase 2 (Circuit-Specific) — Olympus Ceremony, pending
 
 1. Compile the circuit to R1CS
 2. Initialize the zkey from the finalized PTAU

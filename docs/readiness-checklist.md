@@ -160,8 +160,33 @@ The GitHub Actions workflow automatically runs on push and PR:
 - ✅ Ruff linting and formatting checks
 - ✅ MyPy type checking
 - ✅ Bandit security scanning
-- ✅ Pytest with coverage (both SQLite and PostgreSQL)
+- ✅ Pytest with coverage (both unit and PostgreSQL integration)
 - ✅ JSON schema validation
+- ✅ Import boundary verification
+- ✅ Cross-language verifier conformance (Python, Go, Rust, JavaScript + 5,000-case determinism harness)
+
+## 🏁 Phase 0 Completion Status
+
+All three Phase 0 blockers are resolved:
+
+| Blocker | Status |
+|---------|--------|
+| Groth16 trusted setup ceremony infrastructure | ✅ Complete — `ceremony/` scaffolding in place; Phase 1 uses Hermez `powersOfTau28_hez_final_17.ptau`; Phase 2 (Olympus Ceremony with FPF, EFF, 3 cryptographers) is pending external coordination |
+| `protocol/federation/` decomposition | ✅ Complete — cyclic imports removed; split into `identity.py`, `quorum.py`, `gossip.py`, `replication.py`, `rotation.py` |
+| E2E CI integration test against real PostgreSQL | ✅ Complete — covered by `smoke.yml` (postgres integration job) and `pytest -m postgres` |
+
+**Current phase:** Phase 0 complete. Phase 1 greenfield services are underway
+(`services/sequencer-go/`, `services/cdhs-smf-rust/`, `proto/`).
+
+## 🔒 Groth16 Trusted Setup Summary
+
+| Phase | Description | Status |
+|-------|-------------|--------|
+| Phase 1 — Powers of Tau | Universal parameters (Hermez `final_17.ptau`, 2^17 constraints) | ✅ Complete |
+| Phase 2 — Olympus Ceremony | Circuit-specific keys for `document_existence`, `redaction_validity`, `non_existence` | ⏳ Pending (FPF + EFF + 3 cryptographers) |
+
+See [`ceremony/README.md`](../ceremony/README.md) for the full ceremony protocol
+and [`proofs/README.md`](../proofs/README.md) for circuit details.
 
 **Local CI simulation:**
 ```bash
