@@ -36,9 +36,10 @@ async function apiFetch<T>(url: string, options?: RequestInit): Promise<T> {
     } catch {
       // fall through — raw text is fine
     }
-    throw new Error(
-      detail || `HTTP ${res.status.toString()} ${res.statusText}`,
-    );
+    // Always include the HTTP status code so callers can test e.g.
+    // err.message.includes("404") for "not found" disambiguation.
+    const body = detail.trim() || res.statusText;
+    throw new Error(`HTTP ${res.status.toString()}: ${body}`);
   }
   return res.json() as Promise<T>;
 }

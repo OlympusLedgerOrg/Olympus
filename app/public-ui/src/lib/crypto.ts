@@ -40,8 +40,20 @@ function _encode(value: CanonicalJsonValue): string {
   if (value === null) return "null";
   if (typeof value === "boolean") return value ? "true" : "false";
   if (typeof value === "number") {
-    if (!isFinite(value)) throw new Error("Non-finite number in canonical JSON");
-    return JSON.stringify(value);
+    if (!Number.isFinite(value)) {
+      throw new Error("Non-finite number in canonical JSON");
+    }
+    if (!Number.isInteger(value)) {
+      throw new Error(
+        "Non-integer number in canonical JSON: browser canonicalization only accepts integers",
+      );
+    }
+    if (!Number.isSafeInteger(value)) {
+      throw new Error(
+        "Unsafe integer in canonical JSON: value cannot be represented losslessly in JavaScript",
+      );
+    }
+    return value.toString();
   }
   if (typeof value === "string") {
     // NFC normalisation ensures byte-for-byte agreement with the Python

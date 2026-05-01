@@ -30,7 +30,6 @@ import {
   type ChangeEvent,
   type MouseEvent,
 } from "react";
-import { hashFileBLAKE3, canonicalJsonEncode, blake3Hex, type CanonicalJsonValue } from "../../../lib/olympus-crypto";
 import type { VerificationEngineState } from "../verificationEngine";
 
 // ─── Sub-component types ──────────────────────────────────────────────────────
@@ -302,9 +301,12 @@ const AnimatedNumber: FC<{ value: number }> = ({ value }) => {
 // ─── FileDrop ─────────────────────────────────────────────────────────────────
 
 const FileDrop: FC<{
-  onHash: (hex: string) => void;
-  onProgress: (pct: number) => void;
-}> = ({ onHash, onProgress }) => {
+  /**
+   * Called with the file to hash+verify.  Should be the engine's `hashFile`
+   * function so that no crypto is imported directly into the skin.
+   */
+  hashFile: (file: File, onProgress?: (pct: number) => void) => Promise<void>;
+}> = ({ hashFile }) => {
   const [dragging, setDragging] = useState<boolean>(false);
   const [phase, setPhase] = useState<FilePhase>("idle");
   const [fileName, setFileName] = useState<string>("");
@@ -316,17 +318,18 @@ const FileDrop: FC<{
       setFileName(file.name);
       setPhase("hashing");
       setErrMsg("");
-      onProgress(0);
       try {
-        const hex = await hashFileBLAKE3(file, onProgress);
-        onHash(hex);
+        await hashFile(file, (pct) => {
+          // progress is already propagated inside engine.hashFile
+          void pct;
+        });
         setPhase("done");
       } catch (err) {
         setErrMsg(err instanceof Error ? err.message : "Hashing failed");
         setPhase("error");
       }
     },
-    [onHash, onProgress],
+    [hashFile],
   );
 
   const handleDrop = useCallback(
@@ -414,98 +417,79 @@ const FileDrop: FC<{
 
 // ─── JsonHasher ───────────────────────────────────────────────────────────────
 
-const JsonHasher: FC<{ onHash: (hex: string) => void }> = ({ onHash }) => {
-  const [input, setInput] = useState<string>("");
-  const [error, setError] = useState<string>("");
-  const [canonical, setCanonical] = useState<string>("");
-
-  const handleHash = async (): Promise<void> => {
-    setError("");
-    setCanonical("");
-
-    let parsed: CanonicalJsonValue;
-    try {
-      parsed = JSON.parse(input) as CanonicalJsonValue;
-    } catch (e) {
-      setError("Invalid JSON: " + (e instanceof Error ? e.message : String(e)));
-      return;
-    }
-
-    try {
-      const canon = canonicalJsonEncode(parsed);
-      setCanonical(canon);
-      const bytes = new TextEncoder().encode(canon);
-      const hex = await blake3Hex(bytes);
-      onHash(hex);
-    } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
-    }
-  };
-
-  return (
-    <div>
-      <label
-        htmlFor="json-hasher-input"
+/**
+ * Canonical JSON hasher — delegates all hashing to the engine so that no
+ * crypto primitives are imported directly into the skin.
+ */
+const JsonHasher: FC<{
+  value: string;
+  onChange: (v: string) => void;
+  onSubmit: () => void;
+  canonical: string;
+  error: string;
+}> = ({ value, onChange, onSubmit, canonical, error }) => (
+  <div>
+    <label
+      htmlFor="json-hasher-input"
+      style={{
+        display: "block",
+        fontSize: "0.6rem",
+        color: "rgba(0,255,65,0.45)",
+        marginBottom: "0.5rem",
+      }}
+    >
+      PASTE_JSON_DOCUMENT — will be canonicalized (JCS/RFC 8785) then hashed with BLAKE3
+    </label>
+    <textarea
+      id="json-hasher-input"
+      value={value}
+      onChange={(e) => onChange(e.target.value)}
+      rows={5}
+      placeholder='{"title": "Budget 2025", "amount": 1000000}'
+      spellCheck={false}
+      style={{
+        width: "100%",
+        background: "rgba(0,0,0,0.5)",
+        border: "1px solid rgba(0,255,65,0.2)",
+        padding: "0.6rem 0.75rem",
+        color: "#00FF41",
+        fontFamily: "'DM Mono', monospace",
+        fontSize: "0.72rem",
+        outline: "none",
+        resize: "vertical",
+        boxSizing: "border-box",
+        borderRadius: 2,
+      }}
+    />
+    {canonical && (
+      <p
         style={{
-          display: "block",
           fontSize: "0.6rem",
-          color: "rgba(0,255,65,0.45)",
-          marginBottom: "0.5rem",
+          color: "rgba(0,255,65,0.4)",
+          margin: "0.3rem 0 0",
+          wordBreak: "break-all",
         }}
       >
-        PASTE_JSON_DOCUMENT — will be canonicalized (JCS/RFC 8785) then hashed with BLAKE3
-      </label>
-      <textarea
-        id="json-hasher-input"
-        value={input}
-        onChange={(e) => setInput(e.target.value)}
-        rows={5}
-        placeholder='{"title": "Budget 2025", "amount": 1000000}'
-        spellCheck={false}
-        style={{
-          width: "100%",
-          background: "rgba(0,0,0,0.5)",
-          border: "1px solid rgba(0,255,65,0.2)",
-          padding: "0.6rem 0.75rem",
-          color: "#00FF41",
-          fontFamily: "'DM Mono', monospace",
-          fontSize: "0.72rem",
-          outline: "none",
-          resize: "vertical",
-          boxSizing: "border-box",
-          borderRadius: 2,
-        }}
-      />
-      {canonical && (
-        <p
-          style={{
-            fontSize: "0.6rem",
-            color: "rgba(0,255,65,0.4)",
-            margin: "0.3rem 0 0",
-            wordBreak: "break-all",
-          }}
-        >
-          CANONICAL:{" "}
-          {canonical.length > 120 ? canonical.slice(0, 120) + "…" : canonical}
-        </p>
-      )}
-      {error && (
-        <p style={{ color: "#ff0055", fontSize: "0.7rem", margin: "0.3rem 0 0" }}>
-          {error}
-        </p>
-      )}
-      <button
-        type="button"
-        className="cyber-button"
-        onClick={() => void handleHash()}
-        onMouseEnter={() => playGlitchSound("blip")}
-        style={{ marginTop: "0.75rem" }}
-      >
-        CANONICALIZE + HASH
-      </button>
-    </div>
-  );
-};
+        CANONICAL:{" "}
+        {canonical.length > 120 ? canonical.slice(0, 120) + "…" : canonical}
+      </p>
+    )}
+    {error && (
+      <p style={{ color: "#ff0055", fontSize: "0.7rem", margin: "0.3rem 0 0" }}>
+        {error}
+      </p>
+    )}
+    <button
+      type="button"
+      className="cyber-button"
+      onClick={() => void onSubmit()}
+      onMouseEnter={() => playGlitchSound("blip")}
+      style={{ marginTop: "0.75rem" }}
+    >
+      CANONICALIZE + HASH
+    </button>
+  </div>
+);
 
 // ─── VerdictCard ──────────────────────────────────────────────────────────────
 
@@ -683,8 +667,12 @@ export const MayhemSkin: FC<MayhemSkinProps> = (props) => {
     submitHash,
     fileHash,
     fileProgress,
-    handleFileHashed,
-    handleFileProgress,
+    hashFile,
+    jsonInput,
+    setJsonInput,
+    jsonError,
+    jsonCanonical,
+    submitJsonDoc,
     proofInput,
     setProofInput,
     proofError,
@@ -1058,13 +1046,7 @@ export const MayhemSkin: FC<MayhemSkinProps> = (props) => {
               {/* ── File tab ── */}
               {tab === "file" && (
                 <div>
-                  <FileDrop
-                    onHash={(hex) => {
-                      handleFileHashed(hex);
-                      handleFileProgress(100);
-                    }}
-                    onProgress={handleFileProgress}
-                  />
+                  <FileDrop hashFile={hashFile} />
                   {fileProgress > 0 && fileProgress < 100 && (
                     <div style={{ marginTop: "0.75rem" }}>
                       <div
@@ -1104,7 +1086,9 @@ export const MayhemSkin: FC<MayhemSkinProps> = (props) => {
                         className="cyber-button"
                         onClick={() => {
                           playGlitchSound("noise");
-                          handleFileHashed(fileHash);
+                          // Re-trigger verification through the hash tab
+                          setHashInput(fileHash);
+                          switchTab("hash");
                         }}
                         disabled={loading}
                         style={{ marginTop: "1rem" }}
@@ -1132,11 +1116,11 @@ export const MayhemSkin: FC<MayhemSkinProps> = (props) => {
                     <code style={{ color: "#00FF41" }}>canonical_json_encode()</code>.
                   </p>
                   <JsonHasher
-                    onHash={(hex) => {
-                      handleFileHashed(hex);
-                      switchTab("hash");
-                      setHashInput(hex);
-                    }}
+                    value={jsonInput}
+                    onChange={setJsonInput}
+                    onSubmit={submitJsonDoc}
+                    canonical={jsonCanonical}
+                    error={jsonError}
                   />
                 </div>
               )}

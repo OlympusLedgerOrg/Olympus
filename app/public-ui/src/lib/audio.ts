@@ -10,18 +10,38 @@ import type { GlitchSoundType } from "./types";
 
 export { type GlitchSoundType };
 
+// ─── Shared AudioContext singleton ────────────────────────────────────────────
+// Browsers limit the number of AudioContext instances per tab.  Creating a new
+// one on every sound call can exhaust that limit.  We keep a single shared
+// instance and resume it (after a user gesture) as needed.
+
+type AudioContextCtor = typeof AudioContext;
+let _sharedCtx: InstanceType<AudioContextCtor> | null = null;
+
+function getSharedAudioContext(): InstanceType<AudioContextCtor> | null {
+  const Ctor: AudioContextCtor | undefined =
+    window.AudioContext ??
+    (window as Window & { webkitAudioContext?: AudioContextCtor })
+      .webkitAudioContext;
+  if (!Ctor) return null;
+  if (!_sharedCtx || _sharedCtx.state === "closed") {
+    _sharedCtx = new Ctor();
+  }
+  if (_sharedCtx.state === "suspended") {
+    // Non-blocking: resume will take effect before the next render frame.
+    void _sharedCtx.resume();
+  }
+  return _sharedCtx;
+}
+
 /**
  * Generate a short procedural audio event.
  * Fails silently before the first user interaction (AudioContext policy).
  */
 export function playGlitchSound(type: GlitchSoundType = "blip"): void {
   try {
-    const AudioContextCtor =
-      window.AudioContext ??
-      (window as Window & { webkitAudioContext?: typeof AudioContext })
-        .webkitAudioContext;
-    if (!AudioContextCtor) return;
-    const ctx = new AudioContextCtor();
+    const ctx = getSharedAudioContext();
+    if (!ctx) return;
 
     if (type === "noise") {
       const bufLen = Math.ceil(ctx.sampleRate * 0.08);

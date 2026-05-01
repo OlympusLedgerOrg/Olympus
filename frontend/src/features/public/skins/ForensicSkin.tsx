@@ -28,33 +28,48 @@ export type ForensicSkinProps = VerificationEngineState;
 
 const CopyButton: FC<{ text: string }> = ({ text }) => {
   const [copied, setCopied] = useState(false);
+  const [copyError, setCopyError] = useState(false);
 
-  const handleCopy = (): void => {
-    void navigator.clipboard.writeText(text).then(() => {
+  const handleCopy = async (): Promise<void> => {
+    setCopyError(false);
+
+    if (!navigator.clipboard?.writeText) {
+      setCopyError(true);
+      setTimeout(() => setCopyError(false), 1500);
+      return;
+    }
+
+    try {
+      await navigator.clipboard.writeText(text);
       setCopied(true);
       setTimeout(() => setCopied(false), 1500);
-    });
+    } catch {
+      setCopyError(true);
+      setTimeout(() => setCopyError(false), 1500);
+    }
   };
 
   return (
     <button
       type="button"
-      onClick={handleCopy}
-      title="Copy to clipboard"
+      onClick={() => {
+        void handleCopy();
+      }}
+      title={copyError ? "Clipboard unavailable" : "Copy to clipboard"}
       style={{
         padding: "0.1rem 0.4rem",
         fontSize: "0.65rem",
-        background: copied ? "#374151" : "transparent",
+        background: copied ? "#374151" : copyError ? "#3f1d1d" : "transparent",
         border: "1px solid #374151",
         borderRadius: "0.25rem",
-        color: copied ? "#9ca3af" : "#6b7280",
+        color: copied ? "#9ca3af" : copyError ? "#fca5a5" : "#6b7280",
         cursor: "pointer",
         flexShrink: 0,
         transition: "all 0.15s",
         fontFamily: "monospace",
       }}
     >
-      {copied ? "✓" : "copy"}
+      {copied ? "✓" : copyError ? "failed" : "copy"}
     </button>
   );
 };

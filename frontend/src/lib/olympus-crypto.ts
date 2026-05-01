@@ -32,16 +32,28 @@ export type CanonicalJsonValue =
   | { [key: string]: CanonicalJsonValue };
 
 /**
- * Merkle inclusion proof as returned by the Olympus API.
- * Structure matches the JS reference verifier (verifiers/javascript/verifier.js).
+ * Merkle inclusion proof as returned by the Olympus API wire format.
+ *
+ * Matches `protocol/merkle.py::deserialize_merkle_proof` serialization:
+ * - `leaf_hash` / `root_hash`: lowercase hex strings
+ * - `siblings`: ordered list of `[hashHex, is_right]` tuples where `is_right`
+ *   is `true` when the sibling is to the right of the current node.
  */
+export type OlympusMerkleProofSibling = [hashHex: string, is_right: boolean];
+
 export interface OlympusMerkleProof {
-  /** Hex-encoded BLAKE3 leaf hash (the content_hash value). */
-  leafHash: string;
+  /** Hex-encoded BLAKE3 hash of the leaf value (content_hash). */
+  leaf_hash: string;
+  /** Leaf position within the tree (optional, not used for verification). */
+  leaf_index?: number;
   /** Ordered sibling hashes required to reconstruct the root. */
-  siblings: Array<{ hash: string; position: "left" | "right" }>;
+  siblings: OlympusMerkleProofSibling[];
   /** Expected Merkle root hex string. */
-  rootHash: string;
+  root_hash: string;
+  proof_version?: string;
+  tree_version?: string;
+  epoch?: number;
+  tree_size?: number;
 }
 
 export interface HashVerificationResponse {
@@ -50,10 +62,15 @@ export interface HashVerificationResponse {
   shard_id: string;
   content_hash: string;
   merkle_root: string;
-  merkle_proof: OlympusMerkleProof | null;
+  /**
+   * Opaque dict matching `IngestionProofResponse.merkle_proof` (dict[str, Any]).
+   * Cast to OlympusMerkleProof only after explicit validation.
+   */
+  merkle_proof: Record<string, unknown> | null;
   merkle_proof_valid: boolean;
   ledger_entry_hash: string;
   timestamp: string;
+  canonicalization?: Record<string, unknown> | null;
   batch_id?: string;
   poseidon_root?: string;
 }
@@ -62,7 +79,11 @@ export interface ProofVerificationRequest {
   proof_id?: string;
   content_hash: string;
   merkle_root: string;
-  merkle_proof: OlympusMerkleProof;
+  /**
+   * Passed through to the server as-is; typed as a generic dict to avoid
+   * dropping fields the server needs for deserialization.
+   */
+  merkle_proof: Record<string, unknown>;
 }
 
 export interface ProofVerificationResponse {
@@ -129,18 +150,20 @@ export async function hashFileBLAKE3(
   const hasher = _createHasher();
   let offset = 0;
 
-  while (offset < total) {
-    const buf = await file.slice(offset, offset + CHUNK).arrayBuffer();
-    hasher.update(new Uint8Array(buf));
-    offset += buf.byteLength;
-    onProgress?.(Math.round((offset / total) * 100));
+  try {
+    while (offset < total) {
+      const buf = await file.slice(offset, offset + CHUNK).arrayBuffer();
+      hasher.update(new Uint8Array(buf));
+      offset += buf.byteLength;
+      onProgress?.(Math.round((offset / total) * 100));
+    }
+
+    const out = new Uint8Array(32);
+    hasher.digest(out);
+    return _toHex(out);
+  } finally {
+    hasher.free();
   }
-
-  const out = new Uint8Array(32);
-  hasher.digest(out);
-  hasher.free();
-
-  return _toHex(out);
 }
 
 function _toHex(bytes: Uint8Array): string {
@@ -171,8 +194,20 @@ function _encodeValue(value: CanonicalJsonValue): string {
   if (value === null) return "null";
   if (typeof value === "boolean") return value ? "true" : "false";
   if (typeof value === "number") {
-    if (!isFinite(value)) throw new Error("Non-finite number in canonical JSON");
-    return JSON.stringify(value);
+    if (!Number.isFinite(value)) {
+      throw new Error("Non-finite number in canonical JSON");
+    }
+    if (!Number.isInteger(value)) {
+      throw new Error(
+        "Non-integer number in canonical JSON: browser canonicalization only accepts integers",
+      );
+    }
+    if (!Number.isSafeInteger(value)) {
+      throw new Error(
+        "Unsafe integer in canonical JSON: value cannot be represented losslessly in JavaScript",
+      );
+    }
+    return value.toString();
   }
   if (typeof value === "string") {
     return JSON.stringify(value.normalize("NFC"));
@@ -223,34 +258,32 @@ async function _parentHash(
 /**
  * Re-verify a Merkle inclusion proof entirely in the browser.
  *
- * Starts from `proof.leafHash` (the leaf value already stored in the tree,
- * as returned by the Olympus API) and walks up the sibling path using
- * OLY:NODE:V1 domain-separated BLAKE3 parent hashing.  This mirrors the
+ * Accepts a proof in the Olympus API wire format (`leaf_hash`, `root_hash`,
+ * `siblings` as `[hashHex, is_right]` tuples) and walks up the sibling path
+ * using OLY:NODE:V1 domain-separated BLAKE3 parent hashing.  This mirrors the
  * reference implementation in verifiers/javascript/verifier.js.
  *
- * Returns `true` if the computed root matches `proof.rootHash`, `false`
- * otherwise.
+ * Returns `true` if the computed root matches `proof.root_hash`, `false`
+ * otherwise (including on any decoding error).
  */
 export async function verifyMerkleProof(
   proof: OlympusMerkleProof,
 ): Promise<boolean> {
   try {
-    const leafBytes = _fromHex(proof.leafHash);
-    // proof.leafHash is the leaf value as stored in the Merkle tree, returned
-    // verbatim by the API.  We start from it directly and walk up the sibling
-    // path — no additional prefix hashing is applied here.
-    let current = leafBytes;
+    let current = _fromHex(proof.leaf_hash);
 
-    for (const sibling of proof.siblings) {
-      const sibBytes = _fromHex(sibling.hash);
-      if (sibling.position === "left") {
-        current = await _parentHash(sibBytes, current);
-      } else {
+    for (const [sibHex, isRight] of proof.siblings) {
+      const sibBytes = _fromHex(sibHex);
+      if (isRight) {
+        // sibling is to the right: current node is the left child
         current = await _parentHash(current, sibBytes);
+      } else {
+        // sibling is to the left: current node is the right child
+        current = await _parentHash(sibBytes, current);
       }
     }
 
-    return _toHex(current) === proof.rootHash.toLowerCase();
+    return _toHex(current) === proof.root_hash.toLowerCase();
   } catch {
     return false;
   }

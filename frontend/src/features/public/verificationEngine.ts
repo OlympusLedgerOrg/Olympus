@@ -30,7 +30,6 @@ import {
   type HashVerificationResponse,
   type ProofVerificationRequest,
 } from "../../lib/olympus-crypto";
-
 // ─── Types ────────────────────────────────────────────────────────────────────
 
 export type Verdict = "verified" | "failed" | "unknown";
@@ -78,7 +77,15 @@ export interface VerificationEngineState {
   // ── File mode ──
   fileHash: string;
   fileProgress: number;
+  /**
+   * Hash a File with WASM BLAKE3 (with progress) then immediately verify it
+   * against the ledger.  Skins should call this instead of importing crypto
+   * primitives directly — they remain pure presentation.
+   */
+  hashFile: (file: File, onProgress?: (pct: number) => void) => Promise<void>;
+  /** @deprecated Use hashFile — kept for backwards compat. */
   handleFileHashed: (hex: string) => void;
+  /** @deprecated Use hashFile — kept for backwards compat. */
   handleFileProgress: (pct: number) => void;
 
   // ── JSON mode ──
@@ -151,6 +158,28 @@ async function apiVerifyProofBundle(
   return res.json() as ReturnType<typeof apiVerifyProofBundle>;
 }
 
+// ─── Wire-format proof normalizer ────────────────────────────────────────────
+
+/**
+ * Attempt to cast an opaque API dict to OlympusMerkleProof.
+ *
+ * The backend serializes `merkle_proof` as `dict[str, Any]`.  This helper
+ * validates the minimum required fields and returns a typed proof, or `null`
+ * if the shape is unexpected.
+ */
+function _normalizeMerkleProof(
+  raw: Record<string, unknown>,
+): OlympusMerkleProof | null {
+  if (
+    typeof raw.leaf_hash !== "string" ||
+    typeof raw.root_hash !== "string" ||
+    !Array.isArray(raw.siblings)
+  ) {
+    return null;
+  }
+  return raw as unknown as OlympusMerkleProof;
+}
+
 // ─── Hook ─────────────────────────────────────────────────────────────────────
 
 export function useVerificationEngine(
@@ -213,12 +242,22 @@ export function useVerificationEngine(
           return;
         }
 
-        // Re-verify the Merkle proof locally — no server trust required
-        const localVerdict = data.merkle_proof
-          ? await verifyMerkleProof(data.merkle_proof)
+        // Re-verify the Merkle proof locally — no server trust required.
+        // Normalize the opaque API dict to a typed proof before passing it to
+        // the verifier; on shape mismatch localVerdict is undefined (not false).
+        const typedProof = data.merkle_proof
+          ? _normalizeMerkleProof(data.merkle_proof)
+          : null;
+        const localVerdict = typedProof
+          ? await verifyMerkleProof(typedProof)
           : undefined;
 
-        const verdict: Verdict = data.merkle_proof_valid ? "verified" : "failed";
+        // Treat as failed when: server says invalid OR local re-verification
+        // explicitly disagrees (localVerdict === false).  When the proof is
+        // absent localVerdict is undefined and the server result is used as-is.
+        const localFailed = localVerdict === false;
+        const verdict: Verdict =
+          data.merkle_proof_valid && !localFailed ? "verified" : "failed";
         const details: DetailRow[] = [
           { key: "CONTENT_HASH", value: data.content_hash },
           { key: "PROOF_ID", value: data.proof_id ?? "—" },
@@ -226,6 +265,15 @@ export function useVerificationEngine(
           { key: "SHARD_ID", value: data.shard_id ?? "—" },
           { key: "MERKLE_ROOT", value: data.merkle_root },
           { key: "SERVER_VERIFIED", value: data.merkle_proof_valid ? "YES" : "NO" },
+          {
+            key: "LOCAL_VERIFIED",
+            value:
+              localVerdict === true
+                ? "YES"
+                : localVerdict === false
+                  ? "NO — LOCAL RECOMPUTATION FAILED"
+                  : "SKIPPED (no proof)",
+          },
           {
             key: "COMMITTED",
             value: data.timestamp
@@ -270,6 +318,23 @@ export function useVerificationEngine(
   const handleFileProgress = useCallback((pct: number): void => {
     setFileProgress(pct);
   }, []);
+
+  /**
+   * Hash a File with WASM BLAKE3 (with progress) then immediately verify it.
+   * Skins should use this instead of importing `hashFileBLAKE3` directly.
+   */
+  const hashFile = useCallback(
+    async (file: File, onProgress?: (pct: number) => void): Promise<void> => {
+      const combinedProgress = (pct: number): void => {
+        setFileProgress(pct);
+        onProgress?.(pct);
+      };
+      const hex = await hashFileBLAKE3(file, combinedProgress);
+      setFileHash(hex);
+      void verifyHash(hex);
+    },
+    [verifyHash],
+  );
 
   // ── JSON mode: canonicalise → BLAKE3 → verify ──
   const submitJsonDoc = useCallback(async (): Promise<void> => {
@@ -323,10 +388,20 @@ export function useVerificationEngine(
 
     const bundle = p as ProofVerificationRequest;
 
-    // Client-side Merkle re-verification runs before the network call
-    const localVerdict = await verifyMerkleProof(
-      bundle.merkle_proof as OlympusMerkleProof,
-    ).catch(() => false);
+    // Client-side Merkle re-verification runs before the network call.
+    // Normalize from the opaque dict wire format before passing to verifier.
+    const typedProof = _normalizeMerkleProof(bundle.merkle_proof);
+    const localVerdict = typedProof
+      ? await verifyMerkleProof(typedProof).catch(() => false)
+      : false;
+
+    // Reject outright if local re-verification fails — "no server trust".
+    if (!localVerdict) {
+      setProofError(
+        "LOCAL_MERKLE_RECOMPUTE_FAILED — proof math does not check out",
+      );
+      return;
+    }
 
     setLoading(true);
 
@@ -335,7 +410,8 @@ export function useVerificationEngine(
       const allValid =
         data.content_hash_matches_proof &&
         data.merkle_proof_valid &&
-        data.known_to_server;
+        data.known_to_server &&
+        localVerdict === true;
       const verdict: Verdict = allValid
         ? "verified"
         : data.known_to_server
@@ -380,6 +456,7 @@ export function useVerificationEngine(
     submitHash,
     fileHash,
     fileProgress,
+    hashFile,
     handleFileHashed,
     handleFileProgress,
     jsonInput,

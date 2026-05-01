@@ -63,20 +63,22 @@ export async function hashFile(
   const hasher = _createHasher();
   let offset = 0;
 
-  while (offset < total) {
-    const slice = file.slice(offset, offset + CHUNK_SIZE);
-    const buf = await slice.arrayBuffer();
-    hasher.update(new Uint8Array(buf));
-    offset += buf.byteLength;
-    onProgress?.(Math.round((offset / total) * 100));
+  try {
+    while (offset < total) {
+      const slice = file.slice(offset, offset + CHUNK_SIZE);
+      const buf = await slice.arrayBuffer();
+      hasher.update(new Uint8Array(buf));
+      offset += buf.byteLength;
+      onProgress?.(Math.round((offset / total) * 100));
+    }
+
+    // Finalise: read the 32-byte digest
+    const out = new Uint8Array(32);
+    hasher.digest(out);
+    return toHex(out);
+  } finally {
+    hasher.free();
   }
-
-  // Finalise: read the 32-byte digest
-  const out = new Uint8Array(32);
-  hasher.digest(out);
-  hasher.free();
-
-  return toHex(out);
 }
 
 function toHex(bytes: Uint8Array): string {
