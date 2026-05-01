@@ -157,16 +157,32 @@ jobs:
     - name: Build olympus_core Rust extension
       run: maturin build --release --out dist && pip install --force-reinstall dist/*.whl
 
-    - name: Verify Rust parity tests are collected (not skipped)
+    - name: Verify Rust extension is active (not silently skipping)
       run: |
-        COUNT=$(pytest tests/test_rust_python_parity.py tests/test_smt_rust_parity.py \
-          --collect-only -q | grep -c "::")
-        echo "Rust parity test count: $COUNT"
-        if [ "$COUNT" -lt 10 ]; then
-          echo "ERROR: Expected ≥10 Rust parity tests to be collected; got $COUNT."
-          echo "This means olympus_core failed to load after maturin build, and tests are silently skipping."
-          exit 1
-        fi
+        python - <<'EOF'
+        import importlib, sys
+
+        # Direct import: fails immediately if maturin build did not produce a working wheel
+        importlib.import_module("olympus_core.crypto")
+        importlib.import_module("olympus_core.canonical")
+
+        # Module-level availability flags must both be True
+        from protocol.hashes import _RUST_CRYPTO_AVAILABLE
+        from protocol.canonical_json import _RUST_CANONICAL_AVAILABLE
+
+        errors = []
+        if not _RUST_CRYPTO_AVAILABLE:
+            errors.append("protocol.hashes._RUST_CRYPTO_AVAILABLE is False")
+        if not _RUST_CANONICAL_AVAILABLE:
+            errors.append("protocol.canonical_json._RUST_CANONICAL_AVAILABLE is False")
+
+        if errors:
+            for e in errors:
+                print(f"ERROR: {e}", file=sys.stderr)
+            sys.exit(1)
+
+        print("olympus_core.crypto and olympus_core.canonical loaded successfully.")
+        EOF
 
     - name: Verify dependency consistency
       run: pip check
