@@ -158,7 +158,10 @@ class TestGetClientIp:
 
     def test_xff_from_trusted_peer_used(self):
         """XFF from a trusted proxy should return the client IP."""
-        with unittest.mock.patch("api.auth.get_settings") as mock_settings:
+        with (
+            unittest.mock.patch("api.auth._xff_disabled", False),
+            unittest.mock.patch("api.auth.get_settings") as mock_settings,
+        ):
             mock_settings.return_value.trusted_proxy_ips = ["10.0.0.1"]
             request = self._make_request("10.0.0.1", xff="203.0.113.50, 10.0.0.1")
             assert _get_client_ip(request) == "203.0.113.50"
