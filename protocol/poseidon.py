@@ -14,6 +14,8 @@ Usage:
     from protocol.poseidon import poseidon_hash, poseidon_leaf_hash, poseidon_node_hash
 """
 
+from typing import cast
+
 from olympus_core.poseidon import (
     bytes_to_field_element,
     get_bn254_scalar_field,
@@ -41,7 +43,7 @@ def poseidon_hash(a: int, b: int) -> int:
     Returns:
         Hash result as integer in BN254 scalar field
     """
-    return _poseidon_hash(a, b)
+    return cast(int, _poseidon_hash(a, b))
 
 
 def poseidon_hash_bn128(a: int, b: int) -> int:
@@ -61,7 +63,7 @@ def poseidon_leaf_hash(key: int, value: int) -> int:
     Returns:
         Leaf hash as integer
     """
-    return _poseidon_leaf_hash(key, value)
+    return cast(int, _poseidon_leaf_hash(key, value))
 
 
 def poseidon_node_hash(left: int, right: int) -> int:
@@ -76,7 +78,7 @@ def poseidon_node_hash(left: int, right: int) -> int:
     Returns:
         Node hash as integer
     """
-    return _poseidon_node_hash(left, right)
+    return cast(int, _poseidon_node_hash(left, right))
 
 
 def value_hash_to_field(value_hash: bytes) -> int:

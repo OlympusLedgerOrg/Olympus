@@ -68,9 +68,7 @@ class TestWriteDeterministicParquet:
         from protocol.parquet_writer import write_deterministic_parquet
 
         records = [{"id": 3, "val": "c"}, {"id": 1, "val": "a"}, {"id": 2, "val": "b"}]
-        result = write_deterministic_parquet(
-            records, tmp_path / "out.parquet", sort_columns=["id"]
-        )
+        result = write_deterministic_parquet(records, tmp_path / "out.parquet", sort_columns=["id"])
         assert result.sort_columns == ["id"]
 
         # Read back and verify sort order
@@ -90,9 +88,7 @@ class TestWriteDeterministicParquet:
         from protocol.parquet_writer import write_deterministic_parquet
 
         records = _make_records(25)
-        result = write_deterministic_parquet(
-            records, tmp_path / "out.parquet", row_group_size=10
-        )
+        result = write_deterministic_parquet(records, tmp_path / "out.parquet", row_group_size=10)
         assert result.row_count == 25
         assert result.row_group_count == 3  # ceil(25/10)
 

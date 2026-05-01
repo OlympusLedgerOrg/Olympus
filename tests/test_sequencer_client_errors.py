@@ -292,9 +292,7 @@ class TestGetInclusionProofErrors:
         )
         client = GoSequencerClient(base_url="http://localhost:8081", token="t")
         with pytest.raises(SequencerUnavailableError):
-            await client.get_inclusion_proof(
-                shard_id="s", record_type="doc", record_id="id1"
-            )
+            await client.get_inclusion_proof(shard_id="s", record_type="doc", record_id="id1")
         await client.close()
 
     @respx.mock
@@ -306,9 +304,7 @@ class TestGetInclusionProofErrors:
         )
         client = GoSequencerClient(base_url="http://localhost:8081", token="t")
         with pytest.raises(SequencerResponseError) as exc_info:
-            await client.get_inclusion_proof(
-                shard_id="s", record_type="doc", record_id="id1"
-            )
+            await client.get_inclusion_proof(shard_id="s", record_type="doc", record_id="id1")
         assert exc_info.value.status_code == 404
         await client.close()
 
@@ -349,9 +345,7 @@ class TestGetLatestRootErrors:
         from api.services.sequencer_client import GoSequencerClient
 
         route = respx.get("http://localhost:8081/v1/get-latest-root").mock(
-            return_value=httpx.Response(
-                200, json={"root": "aa" * 32, "tree_size": 10}
-            )
+            return_value=httpx.Response(200, json={"root": "aa" * 32, "tree_size": 10})
         )
         client = GoSequencerClient(base_url="http://localhost:8081", token="t")
         result = await client.get_latest_root(shard_id="my-shard")
@@ -520,7 +514,9 @@ class TestGetSequencerHealthStatus:
         respx.get("http://localhost:8081/v1/get-latest-root").mock(
             return_value=httpx.Response(200, json={"root": "aa" * 32, "tree_size": 0})
         )
-        with patch.dict(os.environ, {"OLYMPUS_USE_GO_SEQUENCER": "true", "OLYMPUS_SEQUENCER_TOKEN": "t"}):
+        with patch.dict(
+            os.environ, {"OLYMPUS_USE_GO_SEQUENCER": "true", "OLYMPUS_SEQUENCER_TOKEN": "t"}
+        ):
             # Reset module singleton so it picks up env changes
             sc_mod._sequencer_client = None
             status, healthy = await sc_mod.get_sequencer_health_status()
@@ -535,7 +531,9 @@ class TestGetSequencerHealthStatus:
         respx.get("http://localhost:8081/v1/get-latest-root").mock(
             side_effect=httpx.ConnectError("refused")
         )
-        with patch.dict(os.environ, {"OLYMPUS_USE_GO_SEQUENCER": "true", "OLYMPUS_SEQUENCER_TOKEN": "t"}):
+        with patch.dict(
+            os.environ, {"OLYMPUS_USE_GO_SEQUENCER": "true", "OLYMPUS_SEQUENCER_TOKEN": "t"}
+        ):
             sc_mod._sequencer_client = None
             status, healthy = await sc_mod.get_sequencer_health_status()
             await sc_mod.close_sequencer_client()
@@ -549,7 +547,9 @@ class TestGetSequencerHealthStatus:
         respx.get("http://localhost:8081/v1/get-latest-root").mock(
             return_value=httpx.Response(503, text="down")
         )
-        with patch.dict(os.environ, {"OLYMPUS_USE_GO_SEQUENCER": "true", "OLYMPUS_SEQUENCER_TOKEN": "t"}):
+        with patch.dict(
+            os.environ, {"OLYMPUS_USE_GO_SEQUENCER": "true", "OLYMPUS_SEQUENCER_TOKEN": "t"}
+        ):
             sc_mod._sequencer_client = None
             status, healthy = await sc_mod.get_sequencer_health_status()
             await sc_mod.close_sequencer_client()

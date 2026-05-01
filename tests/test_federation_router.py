@@ -151,9 +151,7 @@ class TestSignHeaderGuardPaths:
 
         with patch.dict(os.environ, {"OLYMPUS_GUARDIAN_ENABLED": "false"}):
             with TestClient(app) as client:
-                response = client.post(
-                    "/v1/federation/sign-header", json=_VALID_SIGN_HEADER_BODY
-                )
+                response = client.post("/v1/federation/sign-header", json=_VALID_SIGN_HEADER_BODY)
         assert response.status_code == 503
         assert "Guardian replication is not enabled" in response.json()["detail"]
 
@@ -170,9 +168,7 @@ class TestSignHeaderGuardPaths:
         }
         with patch.dict(os.environ, env):
             with TestClient(app) as client:
-                response = client.post(
-                    "/v1/federation/sign-header", json=_VALID_SIGN_HEADER_BODY
-                )
+                response = client.post("/v1/federation/sign-header", json=_VALID_SIGN_HEADER_BODY)
         assert response.status_code == 503
         assert "registry" in response.json()["detail"].lower()
 
@@ -189,9 +185,7 @@ class TestSignHeaderGuardPaths:
         with patch.dict(os.environ, env):
             os.environ.pop("OLYMPUS_INGEST_SIGNING_KEY", None)
             with TestClient(app) as client:
-                response = client.post(
-                    "/v1/federation/sign-header", json=_VALID_SIGN_HEADER_BODY
-                )
+                response = client.post("/v1/federation/sign-header", json=_VALID_SIGN_HEADER_BODY)
         assert response.status_code == 503
         assert "signing key" in response.json()["detail"].lower()
 
@@ -214,9 +208,7 @@ class TestSignHeaderGuardPaths:
         }
         with patch.dict(os.environ, env):
             with TestClient(app) as client:
-                response = client.post(
-                    "/v1/federation/sign-header", json=_VALID_SIGN_HEADER_BODY
-                )
+                response = client.post("/v1/federation/sign-header", json=_VALID_SIGN_HEADER_BODY)
         assert response.status_code == 503
         assert "Local node not found" in response.json()["detail"]
 
@@ -414,7 +406,10 @@ class TestGetLocalSigningKey:
         with patch.dict(os.environ, {"OLYMPUS_INGEST_SIGNING_KEY": _NODE1_SIGNING_KEY_HEX}):
             key = _get_local_signing_key()
         assert key is not None
-        assert key.verify_key.encode().hex() == "3e86f08f516951ff0c69815cfc4ed7cf1f0b44651aa5c7472f67623449c09425"
+        assert (
+            key.verify_key.encode().hex()
+            == "3e86f08f516951ff0c69815cfc4ed7cf1f0b44651aa5c7472f67623449c09425"
+        )
 
     def test_returns_none_when_env_not_set(self) -> None:
         from api.routers.federation import _get_local_signing_key

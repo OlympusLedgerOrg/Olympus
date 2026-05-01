@@ -80,8 +80,7 @@ class TestRustBackendIsActive:
         import sys
 
         assert "olympus_core.poseidon" in sys.modules, (
-            "olympus_core.poseidon not found in sys.modules — "
-            "Rust extension is not loaded"
+            "olympus_core.poseidon not found in sys.modules — Rust extension is not loaded"
         )
 
     def test_internal_hash_fn_is_rust_object(self) -> None:
@@ -106,7 +105,6 @@ class TestRustBackendIsActive:
 # ---------------------------------------------------------------------------
 
 
-
 class TestSnarkScalarField:
     def test_field_is_positive_integer(self) -> None:
         from protocol.poseidon import SNARK_SCALAR_FIELD
@@ -121,7 +119,6 @@ class TestSnarkScalarField:
         # BN254 / BN128 scalar field prime
         expected = 21888242871839275222246405745257275088548364400416034343698204186575808495617
         assert SNARK_SCALAR_FIELD == expected
-
 
 
 class TestPoseidonHash:
@@ -170,7 +167,6 @@ class TestPoseidonHash:
         assert 0 <= result < SNARK_SCALAR_FIELD
 
 
-
 class TestPoseidonLeafHash:
     def test_basic(self) -> None:
         from protocol.poseidon import poseidon_leaf_hash
@@ -196,7 +192,6 @@ class TestPoseidonLeafHash:
 
         result = poseidon_leaf_hash(1, 1)
         assert 0 <= result < SNARK_SCALAR_FIELD
-
 
 
 class TestPoseidonNodeHash:
@@ -229,7 +224,6 @@ class TestPoseidonNodeHash:
 
         result = poseidon_node_hash(0, 0)
         assert 0 <= result < SNARK_SCALAR_FIELD
-
 
 
 class TestValueHashToField:
