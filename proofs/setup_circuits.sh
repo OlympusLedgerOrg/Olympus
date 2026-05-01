@@ -87,9 +87,22 @@ SNARKJS="npx snarkjs"
 # -----------------------------------------------------------------------
 mkdir -p "${BUILD_DIR}" "${VKEYS_DIR}"
 
+# Dev fallback uses a distinct name/path so it is never confused with the
+# trusted Hermez file and survives subsequent runs without checksum errors.
+DEV_PTAU_POWER=16
+DEV_PTAU_FILE="dev_pot${DEV_PTAU_POWER}_final.ptau"
+DEV_PTAU_PATH="${BUILD_DIR}/${DEV_PTAU_FILE}"
+
 PTAU_IS_LOCAL=0
 if [ -f "${PTAU_PATH}" ]; then
   echo "==> PTAU file already present: ${PTAU_PATH}"
+elif [ -f "${DEV_PTAU_PATH}" ]; then
+  echo "==> Reusing local dev PTAU from previous run: ${DEV_PTAU_PATH}"
+  PTAU_IS_LOCAL=1
+  PTAU_FILE="${DEV_PTAU_FILE}"
+  PTAU_PATH="${DEV_PTAU_PATH}"
+  PTAU_POWER=${DEV_PTAU_POWER}
+  PTAU_SOURCE="local-dev (snarkjs powersoftau — NOT from trusted ceremony)"
 else
   echo "==> Downloading Hermez Powers of Tau (2^${PTAU_POWER}) …"
   if curl -fSL --connect-timeout 30 --retry 3 -o "${PTAU_PATH}" "${PTAU_URL}"; then
@@ -101,9 +114,12 @@ else
     echo "         Production requires the Phase 1 Hermez ceremony file."
     PTAU_IS_LOCAL=1
     PTAU_SOURCE="local-dev (snarkjs powersoftau — NOT from trusted ceremony)"
-    # Use power 16 (max 65536 constraints) for the dev fallback — sufficient for
-    # all three Olympus circuits and much faster to generate than power 17.
-    DEV_PTAU_POWER=16
+    # Use power 16 (max 65536 constraints). NOTE: non_existence requires power 17
+    # and will be skipped below — only document_existence and redaction_validity
+    # get dev keys in this fallback path.
+    PTAU_FILE="${DEV_PTAU_FILE}"
+    PTAU_PATH="${DEV_PTAU_PATH}"
+    PTAU_POWER=${DEV_PTAU_POWER}
     PTAU_0="${BUILD_DIR}/dev_pot${DEV_PTAU_POWER}_0000.ptau"
     PTAU_1="${BUILD_DIR}/dev_pot${DEV_PTAU_POWER}_0001.ptau"
     echo "  [a] Generating new Powers of Tau (2^${DEV_PTAU_POWER}) …"
@@ -168,6 +184,15 @@ for circuit in "${CIRCUITS[@]}"; do
   CIRCOM_FILE="circuits/${circuit}.circom"
   echo ""
   echo "===== ${circuit} ====="
+
+  # non_existence uses a 256-level SMT (~70k+ constraints) and requires power 17.
+  # Skip it when the dev fallback PTAU only supports power 16.
+  if [ "${PTAU_IS_LOCAL}" -eq 1 ] && [ "${PTAU_POWER}" -lt 17 ] && [ "${circuit}" = "non_existence" ]; then
+    echo "  [SKIP] non_existence requires PTAU power ≥ 17 (max $(( 1 << 17 )) constraints)."
+    echo "         Dev fallback PTAU is power ${PTAU_POWER} (max $(( 1 << PTAU_POWER )) constraints)."
+    echo "         Download the Hermez ceremony file to generate non_existence keys."
+    continue
+  fi
 
   # ---- Compile ----
   echo "  [1/4] Compiling ${CIRCOM_FILE} …"
