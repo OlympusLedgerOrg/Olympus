@@ -30,7 +30,7 @@ import {
   type ChangeEvent,
   type MouseEvent,
 } from "react";
-import { hashFileBLAKE3, canonicalJsonEncode, blake3Hex, type CanonicalJsonValue } from "../../lib/olympus-crypto";
+import { hashFileBLAKE3, canonicalJsonEncode, blake3Hex, type CanonicalJsonValue } from "../../../lib/olympus-crypto";
 import type { VerificationEngineState } from "../verificationEngine";
 
 // ─── Sub-component types ──────────────────────────────────────────────────────

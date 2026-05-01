@@ -14,11 +14,16 @@ import type {
   DatasetVerificationResponse,
 } from "./types";
 
-/** Base URL for the Olympus API. Resolved from the current origin in the browser. */
-const API_BASE =
-  typeof window !== "undefined"
-    ? window.location.origin
-    : "http://localhost:8000";
+/** Base URL for the Olympus API.
+ * Resolved in order of priority:
+ * 1. VITE_API_BASE environment variable (set in .env or CI)
+ * 2. Current window origin (browser same-origin, works with a Vite proxy)
+ * 3. http://localhost:8000 (local development fallback for SSR/test contexts)
+ */
+const API_BASE: string =
+  (typeof import.meta !== "undefined" &&
+    (import.meta as { env?: { VITE_API_BASE?: string } }).env?.VITE_API_BASE) ||
+  (typeof window !== "undefined" ? window.location.origin : "http://localhost:8000");
 
 async function apiFetch<T>(url: string, options?: RequestInit): Promise<T> {
   const res = await fetch(`${API_BASE}${url}`, options);

@@ -29,7 +29,7 @@ import {
   type OlympusMerkleProof,
   type HashVerificationResponse,
   type ProofVerificationRequest,
-} from "../lib/olympus-crypto";
+} from "../../lib/olympus-crypto";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 

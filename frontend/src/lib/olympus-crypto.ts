@@ -190,7 +190,6 @@ function _encodeValue(value: CanonicalJsonValue): string {
 
 // ─── Client-side Merkle proof verification ────────────────────────────────────
 
-const LEAF_PREFIX = new TextEncoder().encode("OLY:LEAF:V1");
 const NODE_PREFIX = new TextEncoder().encode("OLY:NODE:V1");
 const SEP = new TextEncoder().encode("|");
 
@@ -206,20 +205,9 @@ function _concat(...parts: Uint8Array[]): Uint8Array {
 }
 
 /**
- * Compute the domain-separated BLAKE3 leaf hash of a content-hash byte string.
- * Mirrors `merkleLeafHash()` in verifiers/javascript/verifier.js.
- */
-async function _leafHash(leafBytes: Uint8Array): Promise<Uint8Array> {
-  await _ensureBlake3();
-  const data = _concat(LEAF_PREFIX, SEP, leafBytes);
-  const out = new Uint8Array(32);
-  _wasmHash(data, out);
-  return out;
-}
-
-/**
  * Compute the domain-separated BLAKE3 parent hash of two child hashes.
- * Mirrors `merkleParentHash()` in verifiers/javascript/verifier.js.
+ * Mirrors `merkleParentHash()` in verifiers/javascript/verifier.js:
+ *   BLAKE3(OLY:NODE:V1 || "|" || left || "|" || right)
  */
 async function _parentHash(
   left: Uint8Array,
@@ -235,10 +223,12 @@ async function _parentHash(
 /**
  * Re-verify a Merkle inclusion proof entirely in the browser.
  *
- * Recomputes the root from the proof path using OLY:LEAF:V1 / OLY:NODE:V1
- * domain-separated BLAKE3 and compares it against `proof.rootHash`.
+ * Starts from `proof.leafHash` (the leaf value already stored in the tree,
+ * as returned by the Olympus API) and walks up the sibling path using
+ * OLY:NODE:V1 domain-separated BLAKE3 parent hashing.  This mirrors the
+ * reference implementation in verifiers/javascript/verifier.js.
  *
- * Returns `true` if the computed root matches the expected root, `false`
+ * Returns `true` if the computed root matches `proof.rootHash`, `false`
  * otherwise.
  */
 export async function verifyMerkleProof(
@@ -246,9 +236,9 @@ export async function verifyMerkleProof(
 ): Promise<boolean> {
   try {
     const leafBytes = _fromHex(proof.leafHash);
-    // The leaf is already a BLAKE3 hash of the content — treat it as raw bytes
-    // and walk the proof path (no additional leaf-prefix hashing needed here
-    // because the server already stores the BLAKE3(content_hash_bytes) as the leaf).
+    // proof.leafHash is the leaf value as stored in the Merkle tree, returned
+    // verbatim by the API.  We start from it directly and walk up the sibling
+    // path — no additional prefix hashing is applied here.
     let current = leafBytes;
 
     for (const sibling of proof.siblings) {
