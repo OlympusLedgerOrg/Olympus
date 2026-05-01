@@ -18,9 +18,11 @@ echo "         Record PTAU provenance and verification key fingerprints."
 
 # Parse flags
 COMPILE_ONLY=0
+ALLOW_DEV_PTAU="${OLYMPUS_ALLOW_DEV_PTAU:-0}"
 for arg in "$@"; do
   case "${arg}" in
     --compile-only) COMPILE_ONLY=1 ;;
+    --allow-dev-ptau) ALLOW_DEV_PTAU=1 ;;
     *) echo "Unknown argument: ${arg}" >&2; exit 1 ;;
   esac
 done
@@ -96,19 +98,19 @@ DEV_PTAU_PATH="${BUILD_DIR}/${DEV_PTAU_FILE}"
 PTAU_IS_LOCAL=0
 if [ -f "${PTAU_PATH}" ]; then
   echo "==> PTAU file already present: ${PTAU_PATH}"
-elif [ -f "${DEV_PTAU_PATH}" ]; then
-  echo "==> Reusing local dev PTAU from previous run: ${DEV_PTAU_PATH}"
-  PTAU_IS_LOCAL=1
-  PTAU_FILE="${DEV_PTAU_FILE}"
-  PTAU_PATH="${DEV_PTAU_PATH}"
-  PTAU_POWER=${DEV_PTAU_POWER}
-  PTAU_SOURCE="local-dev (snarkjs powersoftau — NOT from trusted ceremony)"
 else
   echo "==> Downloading Hermez Powers of Tau (2^${PTAU_POWER}) …"
   if curl -fSL --connect-timeout 30 --retry 3 -o "${PTAU_PATH}" "${PTAU_URL}"; then
     echo "    Downloaded ${PTAU_FILE}"
   else
     echo "WARNING: Failed to download Hermez PTAU from ${PTAU_URL}"
+    if [ "${ALLOW_DEV_PTAU}" -ne 1 ]; then
+      echo "ERROR: Local PTAU fallback is disabled."
+      echo "       To enable it for development use, pass --allow-dev-ptau or set"
+      echo "       OLYMPUS_ALLOW_DEV_PTAU=1 in your environment."
+      echo "       *** Never use locally-generated keys in production. ***"
+      exit 1
+    fi
     echo "         Falling back to local PTAU generation for development use only."
     echo "         *** DO NOT use locally-generated keys in production. ***"
     echo "         Production requires the Phase 1 Hermez ceremony file."
@@ -120,18 +122,22 @@ else
     PTAU_FILE="${DEV_PTAU_FILE}"
     PTAU_PATH="${DEV_PTAU_PATH}"
     PTAU_POWER=${DEV_PTAU_POWER}
-    PTAU_0="${BUILD_DIR}/dev_pot${DEV_PTAU_POWER}_0000.ptau"
-    PTAU_1="${BUILD_DIR}/dev_pot${DEV_PTAU_POWER}_0001.ptau"
-    echo "  [a] Generating new Powers of Tau (2^${DEV_PTAU_POWER}) …"
-    ${SNARKJS} powersoftau new bn128 "${DEV_PTAU_POWER}" "${PTAU_0}" -v 2>/dev/null
-    echo "  [b] Adding dev contribution …"
-    ${SNARKJS} powersoftau contribute "${PTAU_0}" "${PTAU_1}" \
-      --name="Olympus dev PTAU" -e="olympus-dev-ptau-$(date +%s)" 2>/dev/null
-    rm -f "${PTAU_0}"
-    echo "  [c] Preparing phase 2 …"
-    ${SNARKJS} powersoftau prepare phase2 "${PTAU_1}" "${PTAU_PATH}" -v 2>/dev/null
-    rm -f "${PTAU_1}"
-    echo "    Local dev PTAU generated: ${PTAU_PATH}"
+    if [ -f "${DEV_PTAU_PATH}" ]; then
+      echo "    Reusing cached local dev PTAU: ${DEV_PTAU_PATH}"
+    else
+      PTAU_0="${BUILD_DIR}/dev_pot${DEV_PTAU_POWER}_0000.ptau"
+      PTAU_1="${BUILD_DIR}/dev_pot${DEV_PTAU_POWER}_0001.ptau"
+      echo "  [a] Generating new Powers of Tau (2^${DEV_PTAU_POWER}) …"
+      ${SNARKJS} powersoftau new bn128 "${DEV_PTAU_POWER}" "${PTAU_0}" -v 2>/dev/null
+      echo "  [b] Adding dev contribution …"
+      ${SNARKJS} powersoftau contribute "${PTAU_0}" "${PTAU_1}" \
+        --name="Olympus dev PTAU" -e="olympus-dev-ptau-$(date +%s)" 2>/dev/null
+      rm -f "${PTAU_0}"
+      echo "  [c] Preparing phase 2 …"
+      ${SNARKJS} powersoftau prepare phase2 "${PTAU_1}" "${PTAU_PATH}" -v 2>/dev/null
+      rm -f "${PTAU_1}"
+      echo "    Local dev PTAU generated: ${PTAU_PATH}"
+    fi
   fi
 fi
 
