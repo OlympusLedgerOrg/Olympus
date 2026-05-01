@@ -1,3 +1,4 @@
+# ruff: noqa: I001  -- DAG order enforced; gossip imports protocol.ledger so must go last
 """Federation identity, registry, and quorum-signing prototype.
 
 This package re-exports every public name that was previously available from
