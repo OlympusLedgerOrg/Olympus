@@ -145,6 +145,6 @@ class TestVerifyIntegration:
                 "protocol": "groth16",
                 "curve": "bn128",
             },
-            public_signals=["0", "0"],
+            public_signals=["0", "0", "0"],
         )
         assert result is False

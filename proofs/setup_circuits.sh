@@ -18,9 +18,11 @@ echo "         Record PTAU provenance and verification key fingerprints."
 
 # Parse flags
 COMPILE_ONLY=0
+ALLOW_DEV_PTAU="${OLYMPUS_ALLOW_DEV_PTAU:-0}"
 for arg in "$@"; do
   case "${arg}" in
     --compile-only) COMPILE_ONLY=1 ;;
+    --allow-dev-ptau) ALLOW_DEV_PTAU=1 ;;
     *) echo "Unknown argument: ${arg}" >&2; exit 1 ;;
   esac
 done
@@ -109,6 +111,13 @@ else
     echo "    Downloaded ${PTAU_FILE}"
   else
     echo "WARNING: Failed to download Hermez PTAU from ${PTAU_URL}"
+    if [ "${ALLOW_DEV_PTAU}" -ne 1 ]; then
+      echo "ERROR: Local PTAU fallback is disabled."
+      echo "       To enable it for development use, pass --allow-dev-ptau or set"
+      echo "       OLYMPUS_ALLOW_DEV_PTAU=1 in your environment."
+      echo "       *** Never use locally-generated keys in production. ***"
+      exit 1
+    fi
     echo "         Falling back to local PTAU generation for development use only."
     echo "         *** DO NOT use locally-generated keys in production. ***"
     echo "         Production requires the Phase 1 Hermez ceremony file."
@@ -149,6 +158,11 @@ if [ "${PTAU_IS_LOCAL}" -eq 0 ] && [ -n "${PTAU_EXPECTED}" ] && [ "${PTAU_SHA256
 fi
 if [ "${PTAU_IS_LOCAL}" -eq 1 ]; then
   echo "    Local dev PTAU in use — checksum verification skipped."
+  # Redirect dev verification keys to a separate directory so they are never
+  # mixed with (or accidentally shipped as) trusted production keys.
+  VKEYS_DIR="${KEYS_DIR}/verification_keys/dev"
+  mkdir -p "${VKEYS_DIR}"
+  echo "    Dev verification keys will be written to: ${VKEYS_DIR}"
 else
   echo "    PTAU integrity verified ✓"
 fi

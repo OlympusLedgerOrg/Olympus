@@ -7,7 +7,7 @@ WARNING: These are DEVELOPMENT keys generated with a locally-created PTAU.
          Production requires the Phase 2 ceremony with the Hermez Phase 1 file.
 
 PTAU_SOURCE: local-dev (snarkjs powersoftau — NOT from trusted ceremony)
-PTAU_FILE: powersOfTau28_hez_final_17.ptau
+PTAU_FILE: dev_pot16_final.ptau
 PTAU_SHA256: 3bf0ee159c521eac200721ea019e7d8dc23b3f88abd4ee329962e3c70b3a9f9f
 
 Verification key fingerprints (SHA-256):

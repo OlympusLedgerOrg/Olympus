@@ -154,22 +154,30 @@ class CircuitConfig:
         )
 
     def to_circom(self) -> str:
-        """Render configuration as a Circom include file."""
+        """Render configuration as a Circom include file.
+
+        Uses zero-argument functions rather than top-level ``var`` declarations
+        because circom 2.x does not allow global variable declarations.
+        """
+
+        def _fn(name: str, value: int) -> str:
+            return f"function {name}() {{ return {value}; }}\n"
+
         return (
             "pragma circom 2.0.0;\n\n"
             "// Configurable circuit parameters (updated via proofs/proof_generator.py).\n"
-            "// Keep these defaults aligned with protocol docs and test inputs.\n\n"
-            f"var DOCUMENT_MERKLE_DEPTH = {self.document_merkle_depth};\n"
-            f"var NON_EXISTENCE_MERKLE_DEPTH = {self.non_existence_merkle_depth};\n"
-            f"var REDACTION_MAX_LEAVES = {self.redaction_max_leaves};\n"
-            f"var REDACTION_MERKLE_DEPTH = {self.redaction_merkle_depth};\n"
-            f"var UNIFIED_MAX_SECTIONS = {self.unified_max_sections};\n"
-            f"var UNIFIED_MERKLE_DEPTH = {self.unified_merkle_depth};\n"
-            f"var UNIFIED_SMT_DEPTH = {self.unified_smt_depth};\n"
-            f"var SELECTIVE_DISCLOSURE_DEPTH = {self.selective_disclosure_depth};\n"
-            f"var SELECTIVE_DISCLOSURE_K = {self.selective_disclosure_k};\n"
-            f"var SELECTIVE_DISCLOSURE_PREIMAGE_LEN = "
-            f"{self.selective_disclosure_preimage_len};\n"
+            "// Keep these defaults aligned with protocol docs and test inputs.\n"
+            "// Note: circom 2.x does not allow global var declarations; use functions instead.\n\n"
+            + _fn("DOCUMENT_MERKLE_DEPTH", self.document_merkle_depth)
+            + _fn("NON_EXISTENCE_MERKLE_DEPTH", self.non_existence_merkle_depth)
+            + _fn("REDACTION_MAX_LEAVES", self.redaction_max_leaves)
+            + _fn("REDACTION_MERKLE_DEPTH", self.redaction_merkle_depth)
+            + _fn("UNIFIED_MAX_SECTIONS", self.unified_max_sections)
+            + _fn("UNIFIED_MERKLE_DEPTH", self.unified_merkle_depth)
+            + _fn("UNIFIED_SMT_DEPTH", self.unified_smt_depth)
+            + _fn("SELECTIVE_DISCLOSURE_DEPTH", self.selective_disclosure_depth)
+            + _fn("SELECTIVE_DISCLOSURE_K", self.selective_disclosure_k)
+            + _fn("SELECTIVE_DISCLOSURE_PREIMAGE_LEN", self.selective_disclosure_preimage_len)
         )
 
     def validate(self) -> None:
