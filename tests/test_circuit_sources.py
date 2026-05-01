@@ -34,7 +34,7 @@ def test_redaction_validity_uses_bit_weights_and_zero_padding() -> None:
     )
 
     assert "var bitWeight = 1 << b;" in source
-    assert "idxAccum[b + 1] <== idxAccum[b] + pathIndices[i][b] * bitWeight;" in source
+    assert "idxAccum[i][b + 1] <== idxAccum[i][b] + pathIndices[i][b] * bitWeight;" in source
     assert "revealedLeaves[i] <== revealMask[i] * originalLeaves[i];" in source
     assert "zero-pad the commitment chain" in source
 
@@ -64,7 +64,7 @@ class TestB1IsZeroHardening:
 
     def test_iszero_import_present_in_document_existence(self):
         src = (REPO_ROOT / "proofs" / "circuits" / "document_existence.circom").read_text()
-        assert "iszero.circom" in src
+        assert "comparators.circom" in src
 
     def test_iszero_import_present_in_unified(self):
         src = (
@@ -73,7 +73,7 @@ class TestB1IsZeroHardening:
             / "circuits"
             / "unified_canonicalization_inclusion_root_sign.circom"
         ).read_text()
-        assert "iszero.circom" in src
+        assert "comparators.circom" in src
 
 
 # ---------------------------------------------------------------------------
@@ -107,7 +107,7 @@ class TestB5NonExistenceKeyBased:
 
     def test_non_existence_depth_is_256(self):
         src = (REPO_ROOT / "proofs" / "circuits" / "parameters.circom").read_text()
-        assert "NON_EXISTENCE_MERKLE_DEPTH = 256" in src, (
+        assert "NON_EXISTENCE_MERKLE_DEPTH() { return 256; }" in src, (
             "NON_EXISTENCE_MERKLE_DEPTH must be 256 for a 256-bit sparse Merkle tree"
         )
 
