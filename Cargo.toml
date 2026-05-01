@@ -22,12 +22,12 @@ regex = "1"
 blake3 = "1"
 # Unicode NFC normalisation — required for canonical JSON key/value encoding.
 unicode-normalization = "0.1"
-ark-bn254 = "0.6"
-ark-groth16 = { version = "0.6", features = ["r1cs"] }
-ark-relations = "0.6"
-ark-ff = "0.6"
-ark-ec = "0.6"
-ark-serialize = "0.6"
+ark-bn254 = "=0.6.0"
+ark-groth16 = { version = "=0.6.0", features = ["r1cs"] }
+ark-relations = "=0.6.0"
+ark-ff = "=0.6.0"
+ark-ec = "=0.6.0"
+ark-serialize = "=0.6.0"
 num-bigint = "0.4"
 serde_json = "1"
 
