@@ -448,6 +448,71 @@ function getSmtEmptyLeaf() {
  */
 const SMT_EMPTY_LEAF_HEX = toHex(SMT_EMPTY_LEAF);
 
+/**
+ * Canonical JSON encoder (JCS / RFC 8785 subset).
+ *
+ * Produces deterministic, byte-identical output matching the Python reference
+ * implementation in ``protocol/canonical_json.py``:
+ *
+ * - Object keys are sorted by UTF-16 code units (native JS sort).
+ * - Strings are NFC-normalized before encoding.
+ * - Non-ASCII characters are emitted as raw UTF-8, not ``\uXXXX`` escapes.
+ * - ``null``, ``true``, ``false``, integers, and arrays are handled
+ *   identically to the Python encoder.
+ *
+ * **Known behavioral difference from the Python encoder:**
+ * The Python ``canonical_json_encode()`` function rejects native Python
+ * ``float`` objects and requires callers to use ``decimal.Decimal`` for
+ * non-integer numbers. JavaScript has no separate ``Decimal`` type, so this
+ * encoder accepts JS ``number`` values (finite only). ``NaN`` and ``±Infinity``
+ * are rejected with an error, matching Python's rejection of ``float('nan')``
+ * and ``float('inf')``.  All positive test vectors were generated from the
+ * Python encoder using ``Decimal`` inputs, so round-trip output is
+ * byte-identical for all vectors in ``canonicalizer_vectors.tsv``.
+ *
+ * @param {*} val - Value to encode. Must be null, boolean, finite number,
+ *   string, Array, or plain Object. Other types throw TypeError.
+ * @returns {string} Canonical JSON string.
+ * @throws {Error} If val contains NaN, Infinity, or an unsupported type.
+ */
+function canonicalJsonEncode(val) {
+  if (val === null) return 'null';
+  if (typeof val === 'boolean') return val ? 'true' : 'false';
+  if (typeof val === 'number') {
+    if (Number.isNaN(val) || !Number.isFinite(val)) {
+      const description = Number.isNaN(val) ? 'NaN' : (val > 0 ? 'Infinity' : '-Infinity');
+      throw new Error('canonicalJsonEncode: non-finite number not allowed: ' + description);
+    }
+    return JSON.stringify(val);
+  }
+  if (typeof val === 'string') {
+    // NFC-normalize before encoding so that composed and decomposed forms
+    // produce identical output (e.g. "e\u0301" → "é").
+    return JSON.stringify(val.normalize('NFC'));
+  }
+  if (Array.isArray(val)) {
+    return '[' + val.map(canonicalJsonEncode).join(',') + ']';
+  }
+  if (typeof val === 'object') {
+    // Object.keys() + Array.sort() uses UTF-16 code unit ordering, which
+    // matches the Python JCS key-sort behaviour.
+    const keys = Object.keys(val).sort();
+    const pairs = keys.map(k => JSON.stringify(k.normalize('NFC')) + ':' + canonicalJsonEncode(val[k]));
+    return '{' + pairs.join(',') + '}';
+  }
+  throw new TypeError('canonicalJsonEncode: unsupported type: ' + typeof val);
+}
+
+/**
+ * Encode val to canonical JSON and return the UTF-8 bytes.
+ *
+ * @param {*} val - Value to encode.
+ * @returns {Uint8Array} UTF-8 bytes of the canonical JSON string.
+ */
+function canonicalJsonEncodeBytes(val) {
+  return new TextEncoder().encode(canonicalJsonEncode(val));
+}
+
 // Export functions
 module.exports = {
   computeBlake3,
@@ -460,6 +525,9 @@ module.exports = {
   verifyMerkleProof,
   computeLedgerEntryHash,
   computeDualCommitment,
+  // Canonical JSON encoder (JCS / RFC 8785 subset)
+  canonicalJsonEncode,
+  canonicalJsonEncodeBytes,
   // SMT (SSMF) cross-language verifier — ADR-0003
   SMT_EMPTY_LEAF_HEX,
   getSmtEmptyLeaf,

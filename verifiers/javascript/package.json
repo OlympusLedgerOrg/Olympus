@@ -16,7 +16,7 @@
     }
   },
   "scripts": {
-    "test": "node test.js && node test_conformance.js"
+    "test": "node test.js && node test_conformance.js && node test_canonical_json.js"
   },
   "keywords": [
     "olympus",
