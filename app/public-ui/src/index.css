@@ -1,29 +1,145 @@
 @import "tailwindcss";
 
 @theme {
-  --color-paper: #f5f2eb;
-  --color-ink: #0a0a0f;
-  --color-gold: #c9a84c;
-  --color-verified: #1a5c2a;
-  --color-failed: #8b1a1a;
-  --color-unknown: #b8860b;
-  --color-neutral: #6b7280;
+  --color-paper: #050505;
+  --color-ink: #00FF41;
+  --color-gold: #ff0055;
+  --color-verified: #00FF41;
+  --color-failed: #ff0055;
+  --color-unknown: #f59e0b;
+  --color-neutral: #3d6b45;
 
-  --font-serif: "Instrument Serif", serif;
+  --font-serif: "DM Mono", monospace;
   --font-mono: "DM Mono", monospace;
-  --font-ui: "Syne", sans-serif;
+  --font-ui: "DM Mono", monospace;
 }
 
 body {
-  font-family: var(--font-ui);
-  background-color: var(--color-paper);
-  color: var(--color-ink);
-  background-image: repeating-linear-gradient(
-    to bottom,
-    transparent,
-    transparent 1.75rem,
-    rgba(10, 10, 15, 0.04) 1.75rem,
-    rgba(10, 10, 15, 0.04) calc(1.75rem + 1px)
-  );
+  font-family: "DM Mono", monospace;
+  background-color: #050505;
+  color: #00FF41;
   min-height: 100vh;
+}
+
+* {
+  scrollbar-color: rgba(0, 255, 65, 0.3) rgba(0, 0, 0, 0.5);
+  scrollbar-width: thin;
+}
+
+@keyframes flicker {
+  0%   { opacity: 0.92; }
+  5%   { opacity: 0.4;  }
+  10%  { opacity: 0.88; }
+  15%  { opacity: 0.75; }
+  20%  { opacity: 0.95; }
+  100% { opacity: 1;    }
+}
+
+@keyframes pulse-glow {
+  0%, 100% { text-shadow: 0 0 4px #00FF41; }
+  50%       { text-shadow: 0 0 14px #00FF41, 0 0 30px #00FF41; }
+}
+
+@keyframes verdict-in {
+  0%   { opacity: 0.3; transform: scaleX(0.97); }
+  100% { opacity: 1;   transform: scaleX(1); }
+}
+
+.cyber-panel {
+  background: rgba(0, 20, 0, 0.82);
+  border: 1px solid rgba(0, 255, 65, 0.35);
+  clip-path: polygon(0 0, 95% 0, 100% 5%, 100% 100%, 5% 100%, 0 95%);
+  box-shadow: 0 0 18px rgba(0, 255, 65, 0.08),
+              inset 0 0 30px rgba(0, 255, 65, 0.02);
+}
+
+.cyber-panel-sm {
+  background: rgba(0, 20, 0, 0.82);
+  border: 1px solid rgba(0, 255, 65, 0.35);
+  clip-path: polygon(0 0, 97% 0, 100% 3%, 100% 100%, 3% 100%, 0 97%);
+}
+
+.cyber-button {
+  background: transparent;
+  color: #00FF41;
+  border: 1px solid #00FF41;
+  padding: 0.7rem 1.4rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  font-size: 0.72rem;
+  font-family: "DM Mono", monospace;
+  cursor: pointer;
+  clip-path: polygon(8% 0, 100% 0, 100% 65%, 92% 100%, 0 100%, 0 35%);
+  transition: all 0.18s;
+  white-space: nowrap;
+}
+.cyber-button:hover:not(:disabled) {
+  background: #00FF41;
+  color: #000;
+  box-shadow: 0 0 18px rgba(0, 255, 65, 0.6);
+}
+.cyber-button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.cyber-input {
+  width: 100%;
+  background: rgba(0, 0, 0, 0.55);
+  border: 1px solid rgba(0, 255, 65, 0.25);
+  padding: 0.7rem 0.85rem;
+  color: #00FF41;
+  font-family: "DM Mono", monospace;
+  font-size: 0.78rem;
+  outline: none;
+  box-sizing: border-box;
+  transition: border-color 0.15s;
+}
+.cyber-input:focus {
+  border-color: #00FF41;
+  box-shadow: 0 0 8px rgba(0, 255, 65, 0.2);
+}
+.cyber-input::placeholder {
+  color: rgba(0, 255, 65, 0.2);
+}
+
+.tab-btn {
+  flex: 1;
+  padding: 0.65rem 0.5rem;
+  border: none;
+  border-bottom: 2px solid transparent;
+  background: transparent;
+  color: rgba(0, 255, 65, 0.35);
+  font-family: "DM Mono", monospace;
+  font-size: 0.62rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+.tab-btn[aria-selected="true"] {
+  color: #00FF41;
+  border-bottom-color: #00FF41;
+  background: rgba(0, 255, 65, 0.05);
+  text-shadow: 0 0 6px #00FF41;
+}
+.tab-btn:hover:not([aria-selected="true"]) {
+  color: rgba(0, 255, 65, 0.65);
+}
+
+.err-text {
+  color: #ff0055;
+  font-size: 0.7rem;
+  margin: 0.4rem 0 0;
+}
+
+.verdict-card {
+  animation: verdict-in 0.2s ease;
+}
+
+details summary {
+  list-style: none;
+}
+details summary::-webkit-details-marker {
+  display: none;
 }

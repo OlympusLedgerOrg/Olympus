@@ -1,10 +1,17 @@
 import { useParams, Link } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
-import { motion } from "framer-motion";
 import { getDataset, verifyDataset } from "../lib/api";
+import { playGlitchSound } from "../lib/audio";
 import VerdictCard from "../components/VerdictCard";
 import HashDisplay from "../components/HashDisplay";
 import type { Verdict, VerdictDetail } from "../lib/types";
+
+function formatBytes(bytes: number): string {
+  if (bytes === 0) return "0 B";
+  const units = ["B", "KB", "MB", "GB"];
+  const i = Math.floor(Math.log(bytes) / Math.log(1024));
+  return `${(bytes / Math.pow(1024, i)).toFixed(i > 0 ? 1 : 0)} ${units[i]}`;
+}
 
 export default function DatasetPage() {
   const { dataset_id } = useParams<{ dataset_id: string }>();
@@ -23,26 +30,54 @@ export default function DatasetPage() {
 
   if (detailQuery.isLoading || verifyQuery.isLoading) {
     return (
-      <div className="text-center py-20">
-        <p className="text-sm font-ui text-ink/50">Loading dataset…</p>
+      <div style={{ textAlign: "center", padding: "5rem 0" }}>
+        <p
+          style={{
+            color: "rgba(0,255,65,0.5)",
+            fontSize: "0.8rem",
+            animation: "flicker 1.5s infinite",
+          }}
+        >
+          LOADING_DATASET…
+        </p>
       </div>
     );
   }
 
   if (detailQuery.error || !detailQuery.data) {
     return (
-      <div className="text-center py-20">
-        <h1 className="font-serif text-3xl text-ink mb-2">Dataset Not Found</h1>
-        <p className="text-sm font-ui text-ink/50 mb-6">
+      <div style={{ textAlign: "center", padding: "5rem 0" }}>
+        <h1
+          style={{
+            fontSize: "1.5rem",
+            marginBottom: "0.75rem",
+            color: "#ff0055",
+            textShadow: "0 0 8px #ff0055",
+          }}
+        >
+          DATASET_NOT_FOUND
+        </h1>
+        <p
+          style={{
+            fontSize: "0.78rem",
+            color: "rgba(0,255,65,0.4)",
+            marginBottom: "1.5rem",
+          }}
+        >
           {detailQuery.error instanceof Error
             ? detailQuery.error.message
             : "Could not load dataset."}
         </p>
         <Link
           to="/"
-          className="text-xs font-ui text-gold hover:text-gold/80 no-underline"
+          style={{
+            fontSize: "0.7rem",
+            color: "#ff0055",
+            textDecoration: "none",
+            letterSpacing: "0.06em",
+          }}
         >
-          ← Back to Verify
+          ← BACK_TO_VERIFY
         </Link>
       </div>
     );
@@ -90,9 +125,10 @@ export default function DatasetPage() {
         status: vr.key_revoked ? "err" : "ok",
       });
     }
-    // Additional checks
     for (const [k, v] of Object.entries(vr.checks)) {
-      if (!["commit_id_valid", "signature_valid", "chain_valid", "rfc3161_valid"].includes(k)) {
+      if (
+        !["commit_id_valid", "signature_valid", "chain_valid", "rfc3161_valid"].includes(k)
+      ) {
         verifyDetails.push({
           key: k.replace(/_/g, " "),
           value: v ? "Pass" : "Fail",
@@ -112,7 +148,7 @@ export default function DatasetPage() {
           zk_proof: vr.zk_proof,
         },
         null,
-        2
+        2,
       )
     : null;
 
@@ -120,119 +156,263 @@ export default function DatasetPage() {
     <div>
       <Link
         to="/"
-        className="text-xs font-ui text-ink/40 hover:text-ink/60 no-underline mb-6 inline-block"
+        style={{
+          fontSize: "0.68rem",
+          color: "rgba(0,255,65,0.4)",
+          textDecoration: "none",
+          display: "inline-block",
+          marginBottom: "1.75rem",
+          letterSpacing: "0.06em",
+        }}
+        onMouseEnter={() => playGlitchSound("blip")}
       >
-        ← Back to Verify
+        ← BACK_TO_VERIFY
       </Link>
 
-      <motion.div
-        initial={{ opacity: 0, y: 10 }}
-        animate={{ opacity: 1, y: 0 }}
-        transition={{ duration: 0.4, ease: "easeOut" }}
-      >
-        <h1 className="font-serif text-3xl md:text-4xl text-ink mb-1">
-          {ds.dataset_name}
+      <div style={{ marginBottom: "2rem" }}>
+        <h1
+          style={{
+            fontSize: "clamp(1.2rem, 3.5vw, 1.8rem)",
+            margin: "0 0 0.4rem",
+            textShadow: "0 0 10px #00FF41",
+            letterSpacing: "0.05em",
+          }}
+        >
+          {ds.dataset_name.toUpperCase()}
         </h1>
-        <p className="text-sm font-ui text-ink/50 mb-6">
-          v{ds.dataset_version} · {ds.license_spdx}
+        <p
+          style={{
+            fontSize: "0.68rem",
+            color: "rgba(0,255,65,0.4)",
+            margin: "0 0 1.25rem",
+            letterSpacing: "0.06em",
+          }}
+        >
+          V{ds.dataset_version} // {ds.license_spdx}
         </p>
-      </motion.div>
+      </div>
 
       {/* Metadata Grid */}
-      <motion.div
-        initial={{ opacity: 0, y: 8 }}
-        animate={{ opacity: 1, y: 0 }}
-        transition={{ duration: 0.3, delay: 0.1, ease: "easeOut" }}
-        className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-6"
+      <div
+        style={{
+          display: "grid",
+          gridTemplateColumns: "repeat(auto-fit, minmax(240px, 1fr))",
+          gap: "0.75rem",
+          marginBottom: "1.5rem",
+        }}
       >
-        <div className="bg-white/50 border border-ink/10 rounded-sm p-4">
-          <p className="text-xs font-ui text-ink/40 mb-1">Dataset ID</p>
-          <HashDisplay hash={ds.dataset_id} />
+        <div className="cyber-panel-sm" style={{ padding: "0.85rem 1rem" }}>
+          <p
+            style={{
+              fontSize: "0.55rem",
+              color: "rgba(0,255,65,0.35)",
+              margin: "0 0 0.4rem",
+              letterSpacing: "0.1em",
+            }}
+          >
+            DATASET_ID
+          </p>
+          <HashDisplay hash={ds.dataset_id} label="DATASET_ID" />
         </div>
-        <div className="bg-white/50 border border-ink/10 rounded-sm p-4">
-          <p className="text-xs font-ui text-ink/40 mb-1">Commit ID</p>
-          <p className="font-mono text-xs text-ink/80 break-all">{ds.commit_id}</p>
+        <div className="cyber-panel-sm" style={{ padding: "0.85rem 1rem" }}>
+          <p
+            style={{
+              fontSize: "0.55rem",
+              color: "rgba(0,255,65,0.35)",
+              margin: "0 0 0.4rem",
+              letterSpacing: "0.1em",
+            }}
+          >
+            COMMIT_ID
+          </p>
+          <p
+            style={{
+              fontFamily: "'DM Mono', monospace",
+              fontSize: "0.68rem",
+              color: "rgba(0,255,65,0.8)",
+              wordBreak: "break-all",
+              margin: 0,
+            }}
+          >
+            {ds.commit_id}
+          </p>
         </div>
-        <div className="bg-white/50 border border-ink/10 rounded-sm p-4">
-          <p className="text-xs font-ui text-ink/40 mb-1">Source URI</p>
+        <div className="cyber-panel-sm" style={{ padding: "0.85rem 1rem" }}>
+          <p
+            style={{
+              fontSize: "0.55rem",
+              color: "rgba(0,255,65,0.35)",
+              margin: "0 0 0.4rem",
+              letterSpacing: "0.1em",
+            }}
+          >
+            SOURCE_URI
+          </p>
           <a
             href={ds.source_uri}
             target="_blank"
             rel="noopener noreferrer"
-            className="text-xs font-ui text-gold hover:text-gold/80 break-all"
+            style={{
+              fontSize: "0.68rem",
+              color: "#ff0055",
+              textDecoration: "none",
+              wordBreak: "break-all",
+            }}
           >
             {ds.source_uri}
           </a>
         </div>
-        <div className="bg-white/50 border border-ink/10 rounded-sm p-4">
-          <p className="text-xs font-ui text-ink/40 mb-1">Committed</p>
-          <p className="text-xs font-ui text-ink/70">
+        <div className="cyber-panel-sm" style={{ padding: "0.85rem 1rem" }}>
+          <p
+            style={{
+              fontSize: "0.55rem",
+              color: "rgba(0,255,65,0.35)",
+              margin: "0 0 0.4rem",
+              letterSpacing: "0.1em",
+            }}
+          >
+            COMMITTED
+          </p>
+          <p
+            style={{
+              fontSize: "0.68rem",
+              color: "rgba(0,255,65,0.7)",
+              margin: 0,
+            }}
+          >
             {new Date(ds.epoch).toLocaleString()}
           </p>
         </div>
-      </motion.div>
+      </div>
 
-      {/* Verification Result */}
       <VerdictCard verdict={verdict} details={verifyDetails} />
 
       {/* Files */}
-      <motion.div
-        initial={{ opacity: 0, y: 8 }}
-        animate={{ opacity: 1, y: 0 }}
-        transition={{ duration: 0.3, delay: 0.2, ease: "easeOut" }}
-        className="mt-8"
-      >
-        <h2 className="font-serif text-xl text-ink mb-3">
-          Files ({ds.files.length})
+      <div style={{ marginTop: "2.5rem" }}>
+        <h2
+          style={{
+            fontSize: "0.65rem",
+            letterSpacing: "0.12em",
+            color: "rgba(0,255,65,0.45)",
+            margin: "0 0 1rem",
+          }}
+        >
+          FILES_({ds.files.length})
         </h2>
-        <div className="border border-ink/10 rounded-sm overflow-hidden">
-          <div className="grid grid-cols-[1fr_auto_auto] gap-4 px-4 py-2 bg-ink/3 border-b border-ink/10 text-xs font-ui text-ink/50">
-            <span>Path</span>
-            <span>Size</span>
-            <span>Content Hash</span>
+        <div
+          style={{
+            border: "1px solid rgba(0,255,65,0.2)",
+            overflow: "hidden",
+          }}
+        >
+          <div
+            style={{
+              display: "grid",
+              gridTemplateColumns: "1fr auto auto",
+              gap: "1rem",
+              padding: "0.5rem 1rem",
+              background: "rgba(0,255,65,0.04)",
+              borderBottom: "1px solid rgba(0,255,65,0.15)",
+              fontSize: "0.58rem",
+              color: "rgba(0,255,65,0.4)",
+              letterSpacing: "0.08em",
+            }}
+          >
+            <span>PATH</span>
+            <span>SIZE</span>
+            <span>HASH</span>
           </div>
           {ds.files.map((f, i) => (
             <div
               key={f.path}
-              className={`grid grid-cols-[1fr_auto_auto] gap-4 px-4 py-2.5 text-xs ${
-                i < ds.files.length - 1 ? "border-b border-ink/5" : ""
-              }`}
+              style={{
+                display: "grid",
+                gridTemplateColumns: "1fr auto auto",
+                gap: "1rem",
+                padding: "0.5rem 1rem",
+                borderBottom:
+                  i < ds.files.length - 1
+                    ? "1px solid rgba(0,255,65,0.06)"
+                    : "none",
+                fontSize: "0.68rem",
+                alignItems: "center",
+              }}
             >
-              <span className="font-mono text-ink/70 truncate">{f.path}</span>
-              <span className="font-mono text-ink/50 text-right">
+              <span
+                style={{
+                  fontFamily: "'DM Mono', monospace",
+                  color: "rgba(0,255,65,0.7)",
+                  overflow: "hidden",
+                  textOverflow: "ellipsis",
+                  whiteSpace: "nowrap",
+                }}
+              >
+                {f.path}
+              </span>
+              <span
+                style={{
+                  fontFamily: "'DM Mono', monospace",
+                  color: "rgba(0,255,65,0.4)",
+                  textAlign: "right",
+                  whiteSpace: "nowrap",
+                }}
+              >
                 {formatBytes(f.byte_size)}
               </span>
-              <span className="font-mono text-ink/40 truncate max-w-[200px]" title={f.content_hash}>
-                {f.content_hash.slice(0, 16)}…
+              <span
+                style={{
+                  fontFamily: "'DM Mono', monospace",
+                  color: "rgba(0,255,65,0.35)",
+                  overflow: "hidden",
+                  textOverflow: "ellipsis",
+                  whiteSpace: "nowrap",
+                  maxWidth: "160px",
+                }}
+                title={f.content_hash}
+              >
+                {f.content_hash.slice(0, 14)}…
               </span>
             </div>
           ))}
         </div>
-      </motion.div>
+      </div>
 
-      {/* Proof Bundle Expander */}
+      {/* Proof Bundle */}
       {proofBundle && (
-        <motion.details
-          initial={{ opacity: 0 }}
-          animate={{ opacity: 1 }}
-          transition={{ duration: 0.3, delay: 0.3 }}
-          className="mt-8 border border-ink/10 rounded-sm"
-        >
-          <summary className="text-xs font-ui text-ink/50 cursor-pointer px-4 py-3 hover:bg-white/30">
-            Verify independently — Raw proof bundle
+        <details style={{ marginTop: "2rem" }}>
+          <summary
+            style={{
+              fontSize: "0.68rem",
+              color: "rgba(0,255,65,0.4)",
+              cursor: "pointer",
+              padding: "0.75rem 1rem",
+              background: "rgba(0,20,0,0.5)",
+              border: "1px solid rgba(0,255,65,0.2)",
+              letterSpacing: "0.06em",
+              listStyle: "none",
+            }}
+            onMouseEnter={() => playGlitchSound("blip")}
+          >
+            [+] RAW_PROOF_BUNDLE — verify independently
           </summary>
-          <pre className="text-xs font-mono text-ink/60 p-4 overflow-x-auto border-t border-ink/10">
+          <pre
+            style={{
+              fontSize: "0.65rem",
+              fontFamily: "'DM Mono', monospace",
+              color: "rgba(0,255,65,0.6)",
+              padding: "1rem",
+              overflowX: "auto",
+              background: "rgba(0,0,0,0.6)",
+              border: "1px solid rgba(0,255,65,0.15)",
+              borderTop: "none",
+              margin: 0,
+              lineHeight: 1.5,
+            }}
+          >
             {proofBundle}
           </pre>
-        </motion.details>
+        </details>
       )}
     </div>
   );
-}
-
-function formatBytes(bytes: number): string {
-  if (bytes === 0) return "0 B";
-  const units = ["B", "KB", "MB", "GB"];
-  const i = Math.floor(Math.log(bytes) / Math.log(1024));
-  return `${(bytes / Math.pow(1024, i)).toFixed(i > 0 ? 1 : 0)} ${units[i]}`;
 }

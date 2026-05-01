@@ -1,4 +1,4 @@
-import { useState, useCallback, useRef } from "react";
+import { useState, useCallback, useRef, type DragEvent, type ChangeEvent, type KeyboardEvent } from "react";
 import { hashFile } from "../lib/blake3";
 
 interface FileHasherProps {
@@ -28,25 +28,25 @@ export default function FileHasher({ onHash, onProgress }: FileHasherProps) {
         setHashing(false);
       }
     },
-    [onHash, onProgress]
+    [onHash, onProgress],
   );
 
   const handleDrop = useCallback(
-    (e: React.DragEvent) => {
+    (e: DragEvent<HTMLDivElement>) => {
       e.preventDefault();
       setDragging(false);
       const file = e.dataTransfer.files[0];
       if (file) void processFile(file);
     },
-    [processFile]
+    [processFile],
   );
 
   const handleChange = useCallback(
-    (e: React.ChangeEvent<HTMLInputElement>) => {
+    (e: ChangeEvent<HTMLInputElement>) => {
       const file = e.target.files?.[0];
       if (file) void processFile(file);
     },
-    [processFile]
+    [processFile],
   );
 
   return (
@@ -58,45 +58,65 @@ export default function FileHasher({ onHash, onProgress }: FileHasherProps) {
       onDragLeave={() => setDragging(false)}
       onDrop={handleDrop}
       onClick={() => inputRef.current?.click()}
-      className={`border-2 border-dashed rounded-sm p-8 text-center cursor-pointer transition-colors ${
-        dragging
-          ? "border-gold bg-gold/5"
-          : "border-ink/20 hover:border-ink/40"
-      }`}
       role="button"
       tabIndex={0}
-      onKeyDown={(e) => {
+      onKeyDown={(e: KeyboardEvent<HTMLDivElement>) => {
         if (e.key === "Enter" || e.key === " ") inputRef.current?.click();
+      }}
+      style={{
+        border: `1px solid ${dragging ? "#00FF41" : "rgba(0,255,65,0.25)"}`,
+        borderRadius: 3,
+        padding: "1.75rem",
+        textAlign: "center",
+        cursor: "pointer",
+        background: dragging ? "rgba(0,255,65,0.06)" : "rgba(0,20,0,0.4)",
+        transition: "all 0.15s",
+        clipPath:
+          "polygon(0 0, 97% 0, 100% 3%, 100% 100%, 3% 100%, 0 97%)",
       }}
     >
       <input
         ref={inputRef}
         type="file"
-        className="hidden"
+        style={{ display: "none" }}
         onChange={handleChange}
-        aria-label="Select file to hash"
+        aria-label="Select file for BLAKE3 WASM hashing"
       />
       {hashing ? (
-        <p className="text-sm font-ui text-ink/60">
-          Hashing <span className="font-mono">{fileName}</span>…
+        <p style={{ color: "#00FF41", fontSize: "0.85rem", margin: 0 }}>
+          HASHING:{" "}
+          <span style={{ fontFamily: "'DM Mono', monospace" }}>{fileName}</span>
+          …
         </p>
       ) : fileName ? (
-        <p className="text-sm font-ui text-ink/60">
-          <span className="font-mono">{fileName}</span> — drop another or click
-          to change
+        <p
+          style={{ color: "rgba(0,255,65,0.6)", fontSize: "0.85rem", margin: 0 }}
+        >
+          <span style={{ fontFamily: "'DM Mono', monospace" }}>{fileName}</span>{" "}
+          — drop another or click to change
         </p>
       ) : (
-        <div>
-          <p className="text-sm font-ui text-ink/60 mb-1">
-            Drop a file here or click to browse
+        <>
+          <p
+            style={{
+              color: "rgba(0,255,65,0.7)",
+              fontSize: "0.85rem",
+              margin: "0 0 0.3rem",
+            }}
+          >
+            DROP_FILE_HERE or click to browse
           </p>
-          <p className="text-xs font-ui text-ink/40">
-            File never leaves your device — hashed locally with BLAKE3
+          <p
+            style={{ color: "rgba(0,255,65,0.35)", fontSize: "0.7rem", margin: 0 }}
+          >
+            Hashed locally with BLAKE3 WASM — file never leaves your device
           </p>
-        </div>
+        </>
       )}
       {error && (
-        <p className="text-xs text-failed mt-2 font-ui">{error}</p>
+        <p style={{ color: "#ff0055", fontSize: "0.85rem", margin: "0.5rem 0 0" }}>
+          {error}
+        </p>
       )}
     </div>
   );

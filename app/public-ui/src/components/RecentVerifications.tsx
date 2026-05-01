@@ -2,10 +2,10 @@ import { useState, useEffect } from "react";
 import { getRecentVerifications } from "../lib/storage";
 import type { RecentVerificationEntry, Verdict } from "../lib/types";
 
-const verdictDotColor: Record<Verdict, string> = {
-  verified: "bg-verified",
-  failed: "bg-failed",
-  unknown: "bg-unknown",
+const verdictColor: Record<Verdict, string> = {
+  verified: "#00FF41",
+  failed: "#ff0055",
+  unknown: "#f59e0b",
 };
 
 function relativeTime(ts: number): string {
@@ -20,7 +20,7 @@ function relativeTime(ts: number): string {
 
 export default function RecentVerifications() {
   const [entries, setEntries] = useState<RecentVerificationEntry[]>(
-    () => getRecentVerifications()
+    () => getRecentVerifications(),
   );
 
   useEffect(() => {
@@ -29,7 +29,6 @@ export default function RecentVerifications() {
     return () => window.removeEventListener("storage", onStorage);
   }, []);
 
-  // Re-read on focus to catch same-tab updates
   useEffect(() => {
     const onFocus = () => setEntries(getRecentVerifications());
     window.addEventListener("focus", onFocus);
@@ -39,29 +38,64 @@ export default function RecentVerifications() {
   if (entries.length === 0) return null;
 
   return (
-    <div className="mt-8 lg:mt-0">
-      <h3 className="text-xs font-ui text-ink/50 uppercase tracking-wider mb-3">
-        Recent Verifications
-      </h3>
-      <div className="space-y-1">
-        {entries.map((e) => (
-          <div
-            key={e.hash + e.timestamp}
-            className="flex items-center gap-2 py-1.5 text-xs"
-          >
-            <span
-              className={`w-2 h-2 rounded-full shrink-0 ${verdictDotColor[e.verdict]}`}
-            />
-            <span className="font-mono text-ink/70 truncate max-w-[160px]">
-              {e.hash.slice(0, 16)}…
-            </span>
-            <span className="text-ink/40 font-ui">{e.type}</span>
-            <span className="text-ink/30 font-ui ml-auto">
-              {relativeTime(e.timestamp)}
-            </span>
-          </div>
-        ))}
+    <div style={{ marginTop: "2.5rem" }}>
+      <div
+        style={{
+          fontSize: "0.58rem",
+          opacity: 0.4,
+          borderBottom: "1px solid rgba(0,255,65,0.15)",
+          paddingBottom: "0.5rem",
+          marginBottom: "0.75rem",
+          letterSpacing: "0.12em",
+        }}
+      >
+        RECENT_LOGS
       </div>
+      {entries.map((e) => (
+        <div
+          key={e.hash + e.timestamp}
+          style={{
+            display: "flex",
+            justifyContent: "space-between",
+            alignItems: "center",
+            gap: "0.75rem",
+            fontSize: "0.65rem",
+            padding: "0.4rem 0",
+            borderBottom: "1px solid rgba(0,255,65,0.05)",
+          }}
+        >
+          <span
+            style={{
+              color: verdictColor[e.verdict],
+              flexShrink: 0,
+              fontSize: "0.6rem",
+            }}
+          >
+            [{e.verdict.toUpperCase()}]
+          </span>
+          <span
+            style={{
+              color: "rgba(0,255,65,0.6)",
+              fontFamily: "'DM Mono', monospace",
+              overflow: "hidden",
+              textOverflow: "ellipsis",
+              whiteSpace: "nowrap",
+              flex: 1,
+            }}
+          >
+            {e.hash.slice(0, 14)}…
+          </span>
+          <span
+            style={{
+              color: "rgba(0,255,65,0.3)",
+              flexShrink: 0,
+              fontSize: "0.58rem",
+            }}
+          >
+            {relativeTime(e.timestamp)}
+          </span>
+        </div>
+      ))}
     </div>
   );
 }

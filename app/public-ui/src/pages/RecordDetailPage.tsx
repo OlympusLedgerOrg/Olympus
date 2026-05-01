@@ -1,7 +1,7 @@
 import { useParams, Link } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
-import { motion } from "framer-motion";
 import { getRecordProof } from "../lib/api";
+import { playGlitchSound } from "../lib/audio";
 import VerdictCard from "../components/VerdictCard";
 import HashDisplay from "../components/HashDisplay";
 import CopyButton from "../components/CopyButton";
@@ -18,24 +18,53 @@ export default function RecordDetailPage() {
 
   if (isLoading) {
     return (
-      <div className="text-center py-20">
-        <p className="text-sm font-ui text-ink/50">Loading record…</p>
+      <div style={{ textAlign: "center", padding: "5rem 0" }}>
+        <p
+          style={{
+            color: "rgba(0,255,65,0.5)",
+            fontSize: "0.8rem",
+            animation: "flicker 1.5s infinite",
+          }}
+        >
+          LOADING_RECORD…
+        </p>
       </div>
     );
   }
 
   if (error || !data) {
     return (
-      <div className="text-center py-20">
-        <h1 className="font-serif text-3xl text-ink mb-2">Record Not Found</h1>
-        <p className="text-sm font-ui text-ink/50 mb-6">
+      <div style={{ textAlign: "center", padding: "5rem 0" }}>
+        <h1
+          style={{
+            fontSize: "1.5rem",
+            marginBottom: "0.75rem",
+            color: "#ff0055",
+            textShadow: "0 0 8px #ff0055",
+          }}
+        >
+          RECORD_NOT_FOUND
+        </h1>
+        <p
+          style={{
+            fontSize: "0.78rem",
+            color: "rgba(0,255,65,0.4)",
+            marginBottom: "1.5rem",
+          }}
+        >
           {error instanceof Error ? error.message : "Could not load record proof."}
         </p>
         <Link
           to="/"
-          className="text-xs font-ui text-gold hover:text-gold/80 no-underline"
+          style={{
+            fontSize: "0.7rem",
+            color: "#ff0055",
+            textDecoration: "none",
+            letterSpacing: "0.06em",
+          }}
+          onMouseEnter={() => playGlitchSound("blip")}
         >
-          ← Back to Verify
+          ← BACK_TO_VERIFY
         </Link>
       </div>
     );
@@ -43,14 +72,56 @@ export default function RecordDetailPage() {
 
   const details: VerdictDetail[] = [
     { key: "Proof ID", value: data.proof_id, status: "neutral", copyable: true },
-    { key: "Record ID", value: data.record_id, status: "neutral", copyable: true },
+    {
+      key: "Record ID",
+      value: data.record_id,
+      status: "neutral",
+      copyable: true,
+    },
     { key: "Shard ID", value: data.shard_id, status: "neutral" },
-    { key: "Content Hash", value: data.content_hash, status: "ok", copyable: true },
-    { key: "Merkle Root", value: data.merkle_root, status: "neutral", copyable: true },
-    { key: "Ledger Entry Hash", value: data.ledger_entry_hash, status: "neutral", copyable: true },
-    { key: "Committed", value: new Date(data.timestamp).toLocaleString(), status: "neutral" },
-    ...(data.batch_id ? [{ key: "Batch ID", value: data.batch_id, status: "neutral" as const, copyable: true }] : []),
-    ...(data.poseidon_root ? [{ key: "Poseidon Root", value: data.poseidon_root, status: "neutral" as const, copyable: true }] : []),
+    {
+      key: "Content Hash",
+      value: data.content_hash,
+      status: "ok",
+      copyable: true,
+    },
+    {
+      key: "Merkle Root",
+      value: data.merkle_root,
+      status: "neutral",
+      copyable: true,
+    },
+    {
+      key: "Ledger Entry Hash",
+      value: data.ledger_entry_hash,
+      status: "neutral",
+      copyable: true,
+    },
+    {
+      key: "Committed",
+      value: new Date(data.timestamp).toLocaleString(),
+      status: "neutral",
+    },
+    ...(data.batch_id
+      ? [
+          {
+            key: "Batch ID",
+            value: data.batch_id,
+            status: "neutral" as const,
+            copyable: true,
+          },
+        ]
+      : []),
+    ...(data.poseidon_root
+      ? [
+          {
+            key: "Poseidon Root",
+            value: data.poseidon_root,
+            status: "neutral" as const,
+            copyable: true,
+          },
+        ]
+      : []),
   ];
 
   const proofBundle = JSON.stringify(
@@ -61,7 +132,7 @@ export default function RecordDetailPage() {
       merkle_proof: data.merkle_proof,
     },
     null,
-    2
+    2,
   );
 
   const downloadBundle = () => {
@@ -78,59 +149,114 @@ export default function RecordDetailPage() {
     <div>
       <Link
         to="/"
-        className="text-xs font-ui text-ink/40 hover:text-ink/60 no-underline mb-6 inline-block"
+        style={{
+          fontSize: "0.68rem",
+          color: "rgba(0,255,65,0.4)",
+          textDecoration: "none",
+          display: "inline-block",
+          marginBottom: "1.75rem",
+          letterSpacing: "0.06em",
+          transition: "color 0.15s",
+        }}
+        onMouseEnter={() => playGlitchSound("blip")}
       >
-        ← Back to Verify
+        ← BACK_TO_VERIFY
       </Link>
 
-      <motion.div
-        initial={{ opacity: 0, y: 10 }}
-        animate={{ opacity: 1, y: 0 }}
-        transition={{ duration: 0.4, ease: "easeOut" }}
-      >
-        <h1 className="font-serif text-3xl md:text-4xl text-ink mb-2">
-          Record Detail
+      <div style={{ marginBottom: "2rem" }}>
+        <h1
+          style={{
+            fontSize: "clamp(1.4rem, 4vw, 2rem)",
+            margin: "0 0 1rem",
+            textShadow: "0 0 10px #00FF41",
+            letterSpacing: "0.05em",
+          }}
+        >
+          RECORD_DETAIL
         </h1>
-        <div className="mb-6">
-          <HashDisplay hash={data.content_hash} />
-        </div>
-      </motion.div>
+        <HashDisplay hash={data.content_hash} />
+      </div>
 
       <VerdictCard verdict="verified" details={details} />
 
-      <motion.div
-        initial={{ opacity: 0, y: 8 }}
-        animate={{ opacity: 1, y: 0 }}
-        transition={{ duration: 0.3, delay: 0.2, ease: "easeOut" }}
-        className="mt-6 flex gap-3"
+      <div
+        style={{
+          marginTop: "1.5rem",
+          display: "flex",
+          gap: "1.5rem",
+          alignItems: "center",
+          flexWrap: "wrap",
+        }}
       >
-        <span className="flex items-center gap-1 text-xs font-ui text-ink/50">
+        <span
+          style={{
+            display: "flex",
+            alignItems: "center",
+            gap: "0.4rem",
+            fontSize: "0.68rem",
+            color: "rgba(0,255,65,0.4)",
+          }}
+        >
           <CopyButton text={window.location.href} />
-          Copy verification link
+          COPY_VERIFICATION_LINK
         </span>
         <button
           type="button"
-          onClick={downloadBundle}
-          className="text-xs font-ui text-gold hover:text-gold/80 cursor-pointer"
+          onClick={() => {
+            downloadBundle();
+            playGlitchSound("blip");
+          }}
+          style={{
+            background: "transparent",
+            border: "none",
+            cursor: "pointer",
+            fontSize: "0.68rem",
+            color: "#ff0055",
+            padding: 0,
+            letterSpacing: "0.06em",
+            fontFamily: "'DM Mono', monospace",
+          }}
         >
-          Download proof bundle
+          DOWNLOAD_PROOF_BUNDLE
         </button>
-      </motion.div>
+      </div>
 
       {/* Raw Merkle Proof */}
-      <motion.details
-        initial={{ opacity: 0 }}
-        animate={{ opacity: 1 }}
-        transition={{ duration: 0.3, delay: 0.3 }}
-        className="mt-8 border border-ink/10 rounded-sm"
+      <details
+        style={{ marginTop: "2rem" }}
       >
-        <summary className="text-xs font-ui text-ink/50 cursor-pointer px-4 py-3 hover:bg-white/30">
-          Merkle Proof Details
+        <summary
+          style={{
+            fontSize: "0.68rem",
+            color: "rgba(0,255,65,0.4)",
+            cursor: "pointer",
+            padding: "0.75rem 1rem",
+            background: "rgba(0,20,0,0.5)",
+            border: "1px solid rgba(0,255,65,0.2)",
+            letterSpacing: "0.06em",
+            listStyle: "none",
+          }}
+          onMouseEnter={() => playGlitchSound("blip")}
+        >
+          [+] MERKLE_PROOF_DETAILS
         </summary>
-        <pre className="text-xs font-mono text-ink/60 p-4 overflow-x-auto border-t border-ink/10">
+        <pre
+          style={{
+            fontSize: "0.68rem",
+            fontFamily: "'DM Mono', monospace",
+            color: "rgba(0,255,65,0.6)",
+            padding: "1rem",
+            overflowX: "auto",
+            background: "rgba(0,0,0,0.6)",
+            border: "1px solid rgba(0,255,65,0.15)",
+            borderTop: "none",
+            margin: 0,
+            lineHeight: 1.5,
+          }}
+        >
           {JSON.stringify(data.merkle_proof, null, 2)}
         </pre>
-      </motion.details>
+      </details>
     </div>
   );
 }

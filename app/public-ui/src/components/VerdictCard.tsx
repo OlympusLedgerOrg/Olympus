@@ -1,104 +1,178 @@
-import { motion } from "framer-motion";
-import type { Verdict, VerdictDetail } from "../lib/types";
+import { useEffect } from "react";
+import { playGlitchSound } from "../lib/audio";
 import CopyButton from "./CopyButton";
+import type { Verdict, VerdictDetail } from "../lib/types";
 
-const verdictConfig: Record<
+const VERDICT_CFG: Record<
   Verdict,
-  { border: string; icon: string; title: string; description: string }
+  { color: string; borderColor: string; icon: string; label: string; desc: string }
 > = {
   verified: {
-    border: "border-l-verified",
+    color: "#00FF41",
+    borderColor: "#00FF41",
     icon: "✓",
-    title: "Record Intact",
-    description:
-      "This record matches its cryptographic commitment exactly.",
+    label: ">>> ACCESS_GRANTED",
+    desc: "Record exists on the ledger and the Merkle proof is cryptographically valid.",
   },
   failed: {
-    border: "border-l-failed",
+    color: "#ff0055",
+    borderColor: "#ff0055",
     icon: "✗",
-    title: "Verification Failed",
-    description:
-      "This record does not match its commitment — possible tampering.",
+    label: ">>> SECURITY_BREACH_DETECTED",
+    desc: "Hash or Merkle proof mismatch — possible tampering or corrupted proof bundle.",
   },
   unknown: {
-    border: "border-l-unknown",
+    color: "#f59e0b",
+    borderColor: "#f59e0b",
     icon: "?",
-    title: "Not on Ledger",
-    description:
-      "This hash has not been committed to the Olympus ledger.",
+    label: ">>> RECORD_NOT_FOUND",
+    desc: "This hash has not been committed to the Olympus ledger, or the server could not be reached.",
   },
 };
 
-const statusDot: Record<string, string> = {
-  ok: "bg-verified",
-  err: "bg-failed",
-  warn: "bg-unknown",
-  neutral: "bg-neutral",
+const statusColor: Record<string, string> = {
+  ok: "#00FF41",
+  err: "#ff0055",
+  warn: "#f59e0b",
+  neutral: "rgba(0,255,65,0.4)",
 };
 
 interface VerdictCardProps {
   verdict: Verdict;
   details?: VerdictDetail[];
+  localVerdict?: boolean;
 }
 
-export default function VerdictCard({ verdict, details = [] }: VerdictCardProps) {
-  const cfg = verdictConfig[verdict];
+export default function VerdictCard({
+  verdict,
+  details = [],
+  localVerdict,
+}: VerdictCardProps) {
+  const cfg = VERDICT_CFG[verdict];
+
+  useEffect(() => {
+    if (verdict === "verified") playGlitchSound("success");
+    else if (verdict === "failed") playGlitchSound("fail");
+    else playGlitchSound("noise");
+  }, [verdict]);
 
   return (
-    <motion.div
-      initial={{ opacity: 0, y: 8 }}
-      animate={{ opacity: 1, y: 0 }}
-      transition={{ duration: 0.25, ease: "easeOut" }}
-      className={`border-l-4 ${cfg.border} bg-white/60 rounded-sm p-6 mt-6`}
+    <div
+      className="verdict-card"
+      style={{
+        marginTop: "1.5rem",
+        border: `1px solid ${cfg.borderColor}`,
+        background: "rgba(0,0,0,0.92)",
+        padding: "1.25rem 1.5rem",
+        clipPath: "polygon(0 0, 96% 0, 100% 4%, 100% 100%, 4% 100%, 0 96%)",
+      }}
     >
-      <div className="flex items-center gap-3 mb-2">
-        <span
-          className={`text-2xl font-serif ${
-            verdict === "verified"
-              ? "text-verified"
-              : verdict === "failed"
-                ? "text-failed"
-                : "text-unknown"
-          }`}
-        >
-          {cfg.icon}
-        </span>
-        <h2 className="text-xl font-serif text-ink">{cfg.title}</h2>
+      <div
+        style={{
+          color: cfg.color,
+          fontWeight: "bold",
+          fontSize: "0.8rem",
+          textShadow: `0 0 8px ${cfg.color}`,
+          marginBottom: "0.5rem",
+          letterSpacing: "0.05em",
+        }}
+      >
+        {cfg.icon} {cfg.label}
       </div>
-      <p className="text-sm text-ink/70 mb-4 font-ui">{cfg.description}</p>
+      <p
+        style={{
+          color: "rgba(0,255,65,0.5)",
+          fontSize: "0.72rem",
+          margin: "0 0 0.75rem",
+          lineHeight: 1.5,
+        }}
+      >
+        {cfg.desc}
+      </p>
+
+      {localVerdict !== undefined && (
+        <div
+          style={{
+            display: "inline-flex",
+            alignItems: "center",
+            gap: "0.4rem",
+            fontSize: "0.65rem",
+            color: localVerdict ? "#00FF41" : "#ff0055",
+            background: "rgba(0,0,0,0.5)",
+            padding: "0.25rem 0.6rem",
+            border: `1px solid ${localVerdict ? "rgba(0,255,65,0.3)" : "rgba(255,0,85,0.3)"}`,
+            borderRadius: 2,
+            marginBottom: "0.75rem",
+            fontFamily: "'DM Mono', monospace",
+          }}
+        >
+          {localVerdict ? "✓" : "✗"} CLIENT_MERKLE_VERIFY:{" "}
+          {localVerdict ? "PASS" : "FAIL"}
+        </div>
+      )}
 
       {details.length > 0 && (
-        <div className="space-y-0 border-t border-ink/10">
-          {details.map((d, i) => (
-            <motion.div
+        <div
+          style={{
+            borderTop: "1px solid rgba(0,255,65,0.1)",
+            paddingTop: "0.6rem",
+          }}
+        >
+          {details.map((d) => (
+            <div
               key={d.key}
-              initial={{ opacity: 0, y: 4 }}
-              animate={{ opacity: 1, y: 0 }}
-              transition={{
-                duration: 0.2,
-                delay: 0.03 * i,
-                ease: "easeOut",
+              style={{
+                display: "flex",
+                justifyContent: "space-between",
+                alignItems: "flex-start",
+                gap: "1rem",
+                padding: "0.35rem 0",
+                borderBottom: "1px solid rgba(0,255,65,0.05)",
+                fontSize: "0.7rem",
               }}
-              className="flex items-start justify-between py-2.5 border-b border-ink/5 gap-4"
             >
-              <span className="flex items-center gap-2 text-xs text-ink/50 font-ui shrink-0 min-w-[120px]">
+              <span
+                style={{
+                  color: "rgba(0,255,65,0.4)",
+                  whiteSpace: "nowrap",
+                  flexShrink: 0,
+                  display: "flex",
+                  alignItems: "center",
+                  gap: "0.4rem",
+                }}
+              >
                 {d.status && (
                   <span
-                    className={`inline-block w-1.5 h-1.5 rounded-full ${
-                      statusDot[d.status] ?? "bg-neutral"
-                    }`}
+                    style={{
+                      display: "inline-block",
+                      width: 5,
+                      height: 5,
+                      borderRadius: "50%",
+                      background: statusColor[d.status] ?? "rgba(0,255,65,0.4)",
+                      flexShrink: 0,
+                    }}
                   />
                 )}
-                {d.key}
+                {d.key.toUpperCase().replace(/ /g, "_")}
               </span>
-              <span className="text-xs font-mono text-ink/80 break-all text-right flex items-center gap-1">
+              <span
+                style={{
+                  fontFamily: "'DM Mono', monospace",
+                  color: "rgba(0,255,65,0.85)",
+                  wordBreak: "break-all",
+                  textAlign: "right",
+                  display: "flex",
+                  alignItems: "center",
+                  gap: "0.4rem",
+                }}
+              >
                 {d.value}
                 {d.copyable && <CopyButton text={d.value} />}
               </span>
-            </motion.div>
+            </div>
           ))}
         </div>
       )}
-    </motion.div>
+    </div>
   );
 }
