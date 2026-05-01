@@ -54,7 +54,9 @@ function loadTsvVectors(filePath) {
     const trimmed = line.trim();
     if (!trimmed || trimmed.startsWith('#')) continue;
     const parts = trimmed.split('\t');
-    if (parts.length !== 4) continue;
+    if (parts.length !== 4) {
+      throw new Error(`Malformed TSV vector (expected 4 fields, got ${parts.length}): ${trimmed}`);
+    }
     vectors.push({
       groupId: parts[0],
       inputHex: parts[1],

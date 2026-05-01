@@ -19,12 +19,6 @@ try:
 except ImportError:
     _PYARROW_AVAILABLE = False
 
-pytestmark = pytest.mark.skipif(
-    not _PYARROW_AVAILABLE,
-    reason="pyarrow not installed",
-)
-
-
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
@@ -46,6 +40,7 @@ def _make_records(n: int = 5) -> list[dict]:
 # ---------------------------------------------------------------------------
 
 
+@pytest.mark.skipif(not _PYARROW_AVAILABLE, reason="pyarrow not installed")
 class TestWriteDeterministicParquet:
     def test_write_from_list_of_dicts(self, tmp_path: Path) -> None:
         from protocol.parquet_writer import write_deterministic_parquet
@@ -126,6 +121,7 @@ class TestWriteDeterministicParquet:
 # ---------------------------------------------------------------------------
 
 
+@pytest.mark.skipif(not _PYARROW_AVAILABLE, reason="pyarrow not installed")
 class TestDeterminism:
     def test_identical_hash_on_repeated_write(self, tmp_path: Path) -> None:
         from protocol.parquet_writer import write_deterministic_parquet
@@ -168,6 +164,7 @@ class TestDeterminism:
 # ---------------------------------------------------------------------------
 
 
+@pytest.mark.skipif(not _PYARROW_AVAILABLE, reason="pyarrow not installed")
 class TestVerifyParquetDeterminism:
     def test_identical_files_return_true(self, tmp_path: Path) -> None:
         from protocol.parquet_writer import verify_parquet_determinism, write_deterministic_parquet
@@ -193,12 +190,14 @@ class TestVerifyParquetDeterminism:
 
 
 class TestErrorCases:
+    @pytest.mark.skipif(not _PYARROW_AVAILABLE, reason="pyarrow not installed")
     def test_empty_list_raises_value_error(self, tmp_path: Path) -> None:
         from protocol.parquet_writer import write_deterministic_parquet
 
         with pytest.raises(ValueError, match="empty"):
             write_deterministic_parquet([], tmp_path / "out.parquet")
 
+    @pytest.mark.skipif(not _PYARROW_AVAILABLE, reason="pyarrow not installed")
     def test_empty_table_raises_value_error(self, tmp_path: Path) -> None:
         from protocol.parquet_writer import write_deterministic_parquet
 
@@ -206,6 +205,7 @@ class TestErrorCases:
         with pytest.raises(ValueError, match="empty"):
             write_deterministic_parquet(empty, tmp_path / "out.parquet")
 
+    @pytest.mark.skipif(not _PYARROW_AVAILABLE, reason="pyarrow not installed")
     def test_invalid_sort_column_raises_value_error(self, tmp_path: Path) -> None:
         from protocol.parquet_writer import write_deterministic_parquet
 
@@ -215,6 +215,7 @@ class TestErrorCases:
                 records, tmp_path / "out.parquet", sort_columns=["nonexistent"]
             )
 
+    @pytest.mark.skipif(not _PYARROW_AVAILABLE, reason="pyarrow not installed")
     def test_unsupported_type_raises_type_error(self, tmp_path: Path) -> None:
         from protocol.parquet_writer import write_deterministic_parquet
 

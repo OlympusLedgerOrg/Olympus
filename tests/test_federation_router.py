@@ -56,7 +56,7 @@ _VALID_SIGN_HEADER_BODY = {
 }
 
 
-def _make_mock_db_session(local_root: str | None = None):
+def _make_mock_db_session(local_root: str | None = None) -> AsyncMock:
     """Return an async DB session mock that returns ``local_root`` for Merkle root queries."""
     session = AsyncMock()
     result_mock = MagicMock()
@@ -458,7 +458,6 @@ class TestRegistryCaching:
     def test_cache_invalidated_on_mtime_change(self, tmp_path: Path) -> None:
         """If registry file mtime changes the cache should be invalidated."""
         import json
-        import time
 
         from api.routers import federation as fed_mod
 
@@ -475,9 +474,9 @@ class TestRegistryCaching:
 
         with patch.dict(os.environ, env):
             r1 = fed_mod._get_guardian_registry()
-            # Touch the file to change mtime
-            time.sleep(0.05)
-            registry_file.touch()
+            # Advance mtime by 5 s — deterministic on all filesystem mtime resolutions
+            current_mtime = registry_file.stat().st_mtime
+            os.utime(registry_file, (current_mtime + 5, current_mtime + 5))
             r2 = fed_mod._get_guardian_registry()
 
         # Different object instances (cache was invalidated and reloaded)

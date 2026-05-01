@@ -486,18 +486,32 @@ function canonicalJsonEncode(val) {
     return JSON.stringify(val);
   }
   if (typeof val === 'string') {
-    // NFC-normalize before encoding so that composed and decomposed forms
-    // produce identical output (e.g. "e\u0301" → "é").
-    return JSON.stringify(val.normalize('NFC'));
+    const s = val.normalize('NFC');
+    // Reject lone (unpaired) UTF-16 surrogates — they produce malformed JSON.
+    for (let i = 0; i < s.length; i++) {
+      const c = s.charCodeAt(i);
+      if (c >= 0xD800 && c <= 0xDBFF) {
+        const next = s.charCodeAt(i + 1);
+        if (next < 0xDC00 || next > 0xDFFF) throw new Error('canonicalJsonEncode: lone high surrogate at index ' + i);
+        i++;
+      } else if (c >= 0xDC00 && c <= 0xDFFF) {
+        throw new Error('canonicalJsonEncode: lone low surrogate at index ' + i);
+      }
+    }
+    return JSON.stringify(s);
   }
   if (Array.isArray(val)) {
     return '[' + val.map(canonicalJsonEncode).join(',') + ']';
   }
   if (typeof val === 'object') {
-    // Object.keys() + Array.sort() uses UTF-16 code unit ordering, which
-    // matches the Python JCS key-sort behaviour.
     const keys = Object.keys(val).sort();
-    const pairs = keys.map(k => JSON.stringify(k.normalize('NFC')) + ':' + canonicalJsonEncode(val[k]));
+    const normalizedKeys = keys.map(k => k.normalize('NFC'));
+    for (let i = 1; i < normalizedKeys.length; i++) {
+      if (normalizedKeys[i] === normalizedKeys[i - 1]) {
+        throw new Error('canonicalJsonEncode: duplicate object key after NFC normalization: ' + JSON.stringify(normalizedKeys[i]));
+      }
+    }
+    const pairs = normalizedKeys.map((nk, i) => JSON.stringify(nk) + ':' + canonicalJsonEncode(val[keys[i]]));
     return '{' + pairs.join(',') + '}';
   }
   throw new TypeError('canonicalJsonEncode: unsupported type: ' + typeof val);

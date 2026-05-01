@@ -36,7 +36,7 @@ pytestmark = pytest.mark.skipif(
 
 
 # ---------------------------------------------------------------------------
-# Pure-Python helpers (always run)
+# Pure-Python helpers (skipped when Rust extension is unavailable)
 # ---------------------------------------------------------------------------
 
 
