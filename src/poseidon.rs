@@ -23,7 +23,7 @@ use pyo3::types::PyBytes;
 
 /// The BN254 scalar field prime (r).
 /// This is the order of the BN254 curve's scalar field.
-const BN254_SCALAR_FIELD_STR: &str = 
+const BN254_SCALAR_FIELD_STR: &str =
     "21888242871839275222246405745257275088548364400416034343698204186575808495617";
 
 /// Domain separation constants matching Circom circuits.
@@ -282,10 +282,12 @@ fn poseidon_permutation(state: &mut [Fr; 3]) {
 
     // Parse MDS matrix (large field elements, not u64)
     let mds: [[Fr; 3]; 3] = POSEIDON_M.map(|row| {
-        row.map(|s| Fr::from(
-            BigUint::parse_bytes(s.as_bytes(), 10)
-                .expect("invalid Poseidon MDS matrix constant"),
-        ))
+        row.map(|s| {
+            Fr::from(
+                BigUint::parse_bytes(s.as_bytes(), 10)
+                    .expect("invalid Poseidon MDS matrix constant"),
+            )
+        })
     });
 
     // Iterate through all rounds (matching Python's single loop structure)
@@ -322,12 +324,12 @@ fn poseidon_permutation(state: &mut [Fr; 3]) {
 }
 
 /// Compute Poseidon hash of two field elements.
-/// 
+///
 /// Uses the sponge construction with capacity 1:
 /// - state[0] = capacity (initialized to 0)
 /// - state[1] = first input
 /// - state[2] = second input
-/// 
+///
 /// Returns state[0] after permutation.
 pub fn poseidon_hash(a: Fr, b: Fr) -> Fr {
     let mut state = [Fr::from(0u64), a, b];
@@ -377,11 +379,22 @@ pub fn bytes_to_field(bytes: &[u8]) -> Fr {
 // PyO3 bindings
 // ---------------------------------------------------------------------------
 
-/// Compute Poseidon hash from big integers (as decimal strings for large values).
+/// Compute Poseidon hash from Python integers.
 ///
-/// This is the preferred function for Python as it handles full 254-bit field elements.
+/// This is the preferred function for Python as it handles full 254-bit field elements
+/// without decimal string serialization.
 ///
 /// # Python signature  
+/// ``poseidon_hash_bn254(a: int, b: int) -> int``
+#[pyfunction]
+pub fn poseidon_hash_bn254(a: BigUint, b: BigUint) -> BigUint {
+    let result = poseidon_hash(biguint_to_fr(&a), biguint_to_fr(&b));
+    fr_to_biguint(result)
+}
+
+/// Legacy decimal-string API retained for older callers.
+///
+/// # Python signature
 /// ``poseidon_hash_bn254_bigint(a: str, b: str) -> str``
 #[pyfunction]
 pub fn poseidon_hash_bn254_bigint(a: &str, b: &str) -> PyResult<String> {
@@ -406,49 +419,25 @@ pub fn poseidon_hash_bn254_bigint(a: &str, b: &str) -> PyResult<String> {
 /// Compute domain-separated Poseidon leaf hash.
 ///
 /// # Python signature
-/// ``poseidon_leaf_hash_bn254(key: str, value: str) -> str``
+/// ``poseidon_leaf_hash_bn254(key: int, value: int) -> int``
 #[pyfunction]
-pub fn poseidon_leaf_hash_bn254(key: &str, value: &str) -> PyResult<String> {
-    let key_int = BigUint::parse_bytes(key.as_bytes(), 10).ok_or_else(|| {
-        pyo3::exceptions::PyValueError::new_err(
-            "poseidon_leaf_hash_bn254: argument `key` is not a valid base-10 unsigned integer",
-        )
-    })?;
-    let value_int = BigUint::parse_bytes(value.as_bytes(), 10).ok_or_else(|| {
-        pyo3::exceptions::PyValueError::new_err(
-            "poseidon_leaf_hash_bn254: argument `value` is not a valid base-10 unsigned integer",
-        )
-    })?;
-
-    let fk = biguint_to_fr(&key_int);
-    let fv = biguint_to_fr(&value_int);
+pub fn poseidon_leaf_hash_bn254(key: BigUint, value: BigUint) -> BigUint {
+    let fk = biguint_to_fr(&key);
+    let fv = biguint_to_fr(&value);
     let result = poseidon_leaf_hash(fk, fv);
-
-    Ok(fr_to_biguint(result).to_string())
+    fr_to_biguint(result)
 }
 
 /// Compute domain-separated Poseidon node hash.
 ///
 /// # Python signature
-/// ``poseidon_node_hash_bn254(left: str, right: str) -> str``
+/// ``poseidon_node_hash_bn254(left: int, right: int) -> int``
 #[pyfunction]
-pub fn poseidon_node_hash_bn254(left: &str, right: &str) -> PyResult<String> {
-    let left_int = BigUint::parse_bytes(left.as_bytes(), 10).ok_or_else(|| {
-        pyo3::exceptions::PyValueError::new_err(
-            "poseidon_node_hash_bn254: argument `left` is not a valid base-10 unsigned integer",
-        )
-    })?;
-    let right_int = BigUint::parse_bytes(right.as_bytes(), 10).ok_or_else(|| {
-        pyo3::exceptions::PyValueError::new_err(
-            "poseidon_node_hash_bn254: argument `right` is not a valid base-10 unsigned integer",
-        )
-    })?;
-
-    let fl = biguint_to_fr(&left_int);
-    let fr_val = biguint_to_fr(&right_int);
+pub fn poseidon_node_hash_bn254(left: BigUint, right: BigUint) -> BigUint {
+    let fl = biguint_to_fr(&left);
+    let fr_val = biguint_to_fr(&right);
     let result = poseidon_node_hash(fl, fr_val);
-
-    Ok(fr_to_biguint(result).to_string())
+    fr_to_biguint(result)
 }
 
 /// Convert 32 bytes to a BN254 field element (with modular reduction).
@@ -477,6 +466,7 @@ pub fn get_bn254_scalar_field() -> String {
 
 /// Register all Poseidon functions into the given Python (sub)module.
 pub fn register(py: Python<'_>, m: &Bound<'_, PyModule>) -> PyResult<()> {
+    m.add_function(wrap_pyfunction!(poseidon_hash_bn254, m)?)?;
     m.add_function(wrap_pyfunction!(poseidon_hash_bn254_bigint, m)?)?;
     m.add_function(wrap_pyfunction!(poseidon_leaf_hash_bn254, m)?)?;
     m.add_function(wrap_pyfunction!(poseidon_node_hash_bn254, m)?)?;

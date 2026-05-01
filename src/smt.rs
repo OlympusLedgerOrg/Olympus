@@ -23,7 +23,9 @@ use crate::crypto;
 /// internal state potentially inconsistent.  Rather than propagating the panic
 /// (which would crash the Python interpreter), we surface a clear error.
 fn lock_err<T>(_e: std::sync::PoisonError<T>) -> PyErr {
-    PyRuntimeError::new_err("RustSparseMerkleTree: internal lock poisoned (prior panic during write)")
+    PyRuntimeError::new_err(
+        "RustSparseMerkleTree: internal lock poisoned (prior panic during write)",
+    )
 }
 
 // ---------------------------------------------------------------------------
@@ -220,7 +222,11 @@ impl RustSparseMerkleTree {
         let mut state = self.state.write().map_err(lock_err)?;
         state.leaves.insert(
             key32,
-            (vh32, parser_id.to_string(), canonical_parser_version.to_string()),
+            (
+                vh32,
+                parser_id.to_string(),
+                canonical_parser_version.to_string(),
+            ),
         );
 
         // Compute leaf hash and walk from leaf to root, exactly matching
@@ -369,10 +375,7 @@ impl RustSparseMerkleTree {
         let py_vh = PyBytes::new(py, value_hash);
         let py_pid = pyo3::types::PyString::new(py, parser_id);
         let py_cpv = pyo3::types::PyString::new(py, canonical_parser_version);
-        let py_sibs = PyList::new(
-            py,
-            siblings.iter().map(|s| PyBytes::new(py, s)),
-        )?;
+        let py_sibs = PyList::new(py, siblings.iter().map(|s| PyBytes::new(py, s)))?;
         let py_root = PyBytes::new(py, &root);
         Ok(PyTuple::new(
             py,
@@ -414,10 +417,7 @@ impl RustSparseMerkleTree {
             .copied()
             .unwrap_or(self.empty_hashes[256]);
 
-        let py_sibs = PyList::new(
-            py,
-            siblings.iter().map(|s| PyBytes::new(py, s)),
-        )?;
+        let py_sibs = PyList::new(py, siblings.iter().map(|s| PyBytes::new(py, s)))?;
         let py_root = PyBytes::new(py, &root);
         Ok(PyTuple::new(py, [py_sibs.as_any(), py_root.as_any()])?.into())
     }
@@ -483,10 +483,7 @@ impl RustSparseMerkleTree {
         let mut siblings = Vec::with_capacity(256);
         for (i, item) in current_siblings.iter().enumerate() {
             let sib_bytes = item.downcast::<PyBytes>().map_err(|_| {
-                PyValueError::new_err(format!(
-                    "current_siblings[{}] must be bytes",
-                    i
-                ))
+                PyValueError::new_err(format!("current_siblings[{}] must be bytes", i))
             })?;
             let sib_slice = sib_bytes.as_bytes();
             if sib_slice.len() != 32 {
@@ -556,7 +553,9 @@ impl RustSparseMerkleTree {
             } else if sib_path.len() == 256 {
                 // Leaf level: look up in leaves and compute leaf hash
                 let sibling_key = path_to_key(&sib_path);
-                if let Some((value_hash, parser_id, canonical_parser_version)) = state.leaves.get(&sibling_key) {
+                if let Some((value_hash, parser_id, canonical_parser_version)) =
+                    state.leaves.get(&sibling_key)
+                {
                     crypto::compute_leaf_hash(
                         &sibling_key,
                         value_hash,
@@ -604,11 +603,7 @@ mod tests {
         let mut state = tree.state.write().unwrap();
         state.leaves.insert(
             *key,
-            (
-                *value_hash,
-                "docling@2.3.1".to_string(),
-                "v1".to_string(),
-            ),
+            (*value_hash, "docling@2.3.1".to_string(), "v1".to_string()),
         );
 
         let mut current_hash = crypto::compute_leaf_hash(key, value_hash, parser_id, cpv);
@@ -728,8 +723,12 @@ mod tests {
         let empty_hashes = precompute_empty_hashes();
         let empty_siblings: Vec<[u8; 32]> = (0..256).map(|i| empty_hashes[i]).collect();
 
-        let (inc_root, _deltas) = incremental_update_raw(&key, &val, b"docling@2.3.1", b"v1", &empty_siblings);
-        assert_eq!(full_root, inc_root, "Incremental root must match full-tree root");
+        let (inc_root, _deltas) =
+            incremental_update_raw(&key, &val, b"docling@2.3.1", b"v1", &empty_siblings);
+        assert_eq!(
+            full_root, inc_root,
+            "Incremental root must match full-tree root"
+        );
     }
 
     #[test]
@@ -752,8 +751,12 @@ mod tests {
         let full_root = get_root_raw(&tree);
 
         // Compute incremental update for B using A's siblings.
-        let (inc_root, _deltas) = incremental_update_raw(&kb, &vb, b"docling@2.3.1", b"v1", &siblings_b);
-        assert_eq!(full_root, inc_root, "Incremental root must match after second insert");
+        let (inc_root, _deltas) =
+            incremental_update_raw(&kb, &vb, b"docling@2.3.1", b"v1", &siblings_b);
+        assert_eq!(
+            full_root, inc_root,
+            "Incremental root must match after second insert"
+        );
     }
 
     #[test]
@@ -762,7 +765,8 @@ mod tests {
         let empty_siblings: Vec<[u8; 32]> = (0..256).map(|i| empty_hashes[i]).collect();
         let key = [1u8; 32];
         let val = [2u8; 32];
-        let (_root, deltas) = incremental_update_raw(&key, &val, b"docling@2.3.1", b"v1", &empty_siblings);
+        let (_root, deltas) =
+            incremental_update_raw(&key, &val, b"docling@2.3.1", b"v1", &empty_siblings);
         assert_eq!(deltas.len(), 256, "Must have exactly 256 node deltas");
     }
 
@@ -772,7 +776,8 @@ mod tests {
         let empty_siblings: Vec<[u8; 32]> = (0..256).map(|i| empty_hashes[i]).collect();
         let key = [1u8; 32];
         let val = [2u8; 32];
-        let (root, deltas) = incremental_update_raw(&key, &val, b"docling@2.3.1", b"v1", &empty_siblings);
+        let (root, deltas) =
+            incremental_update_raw(&key, &val, b"docling@2.3.1", b"v1", &empty_siblings);
         // The last delta should be the root (db_level=0, empty path).
         let (db_level, packed, hash) = &deltas[255];
         assert_eq!(*db_level, 0usize);

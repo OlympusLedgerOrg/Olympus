@@ -228,8 +228,8 @@ class TestSignHeaderGuardPaths:
 
 class TestSignHeaderValidationPaths:
     def _post(self, body: dict) -> tuple[int, dict]:
-        from api.main import app
         from api.db import get_db
+        from api.main import app
         from api.routers import federation as fed_mod
 
         fed_mod._registry_cache = None
@@ -283,8 +283,8 @@ class TestSignHeaderValidationPaths:
 class TestSignHeaderForkDetection:
     def test_409_on_root_mismatch(self) -> None:
         """When local DB root differs from incoming root, return 409."""
-        from api.main import app
         from api.db import get_db
+        from api.main import app
         from api.routers import federation as fed_mod
 
         fed_mod._registry_cache = None
@@ -313,8 +313,8 @@ class TestSignHeaderForkDetection:
 
     def test_no_fork_when_roots_match(self) -> None:
         """When local DB root matches incoming root, signing proceeds."""
-        from api.main import app
         from api.db import get_db
+        from api.main import app
         from api.routers import federation as fed_mod
 
         fed_mod._registry_cache = None
@@ -346,8 +346,8 @@ class TestSignHeaderForkDetection:
 
 class TestSignHeaderSuccess:
     def test_200_returns_node_id_and_signature(self) -> None:
-        from api.main import app
         from api.db import get_db
+        from api.main import app
         from api.routers import federation as fed_mod
 
         fed_mod._registry_cache = None

@@ -116,7 +116,7 @@ def _get_local_signing_key() -> nacl.signing.SigningKey | None:
             return None
         return nacl.signing.SigningKey(signing_key_bytes)
     except Exception as exc:
-        logger.error("Failed to parse OLYMPUS_INGEST_SIGNING_KEY: %s", exc)
+        logger.error("Failed to parse OLYMPUS_INGEST_SIGNING_KEY: %s", sanitize_for_log(str(exc)))
         return None
 
 
@@ -277,7 +277,7 @@ async def sign_header(
     try:
         vote_msg = _build_federation_vote_message(header, local_node_id, registry)
     except (KeyError, ValueError) as exc:
-        logger.warning("Invalid header for federation vote: %s", exc)
+        logger.warning("Invalid header for federation vote: %s", sanitize_for_log(str(exc)))
         raise HTTPException(
             status_code=400,
             detail="Invalid header for federation vote.",

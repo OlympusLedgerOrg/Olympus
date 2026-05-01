@@ -15,6 +15,8 @@ when the extension is absent.
 
 from __future__ import annotations
 
+import importlib
+
 import pytest
 
 
@@ -23,10 +25,11 @@ import pytest
 # ---------------------------------------------------------------------------
 
 try:
-    import olympus_core.poseidon  # noqa: F401
-
+    importlib.import_module("olympus_core.poseidon")
     _RUST_AVAILABLE = True
-except ImportError:
+except ModuleNotFoundError as exc:
+    if exc.name not in {"olympus_core", "olympus_core.poseidon"}:
+        raise
     _RUST_AVAILABLE = False
 
 pytestmark = pytest.mark.skipif(
@@ -82,23 +85,20 @@ class TestRustBackendIsActive:
         )
 
     def test_internal_hash_fn_is_rust_object(self) -> None:
-        import olympus_core.poseidon as _oc
-        import protocol.poseidon as _proto
+        _oc = importlib.import_module("olympus_core.poseidon")
+        _proto = importlib.import_module("protocol.poseidon")
 
-        assert _proto._poseidon_hash_bigint is _oc.poseidon_hash_bn254_bigint, (
-            "protocol.poseidon._poseidon_hash_bigint is not the Rust function"
+        assert _proto._poseidon_hash is _oc.poseidon_hash_bn254, (
+            "protocol.poseidon._poseidon_hash is not the Rust function"
         )
         assert _proto._poseidon_leaf_hash is _oc.poseidon_leaf_hash_bn254
         assert _proto._poseidon_node_hash is _oc.poseidon_node_hash_bn254
 
     def test_rust_fn_module_attribute(self) -> None:
-        import protocol.poseidon as _proto
+        _proto = importlib.import_module("protocol.poseidon")
 
-        # PyO3-exported functions carry __module__ == the Rust crate's module path.
-        assert "olympus_core" in (_proto._poseidon_hash_bigint.__module__ or ""), (
-            f"Expected __module__ to contain 'olympus_core', "
-            f"got {_proto._poseidon_hash_bigint.__module__!r}"
-        )
+        assert _proto._poseidon_hash.__name__ == "poseidon_hash_bn254"
+        assert _proto._poseidon_hash.__module__ in {"poseidon", "olympus_core.poseidon"}
 
 
 # ---------------------------------------------------------------------------

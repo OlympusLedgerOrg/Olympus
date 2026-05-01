@@ -11,6 +11,7 @@ Usage:
 """
 
 import re
+import sys
 from pathlib import Path
 
 
@@ -99,4 +100,4 @@ def check_database_urls() -> bool:
 
 if __name__ == "__main__":
     success = check_database_urls()
-    exit(0 if success else 1)
+    sys.exit(0 if success else 1)

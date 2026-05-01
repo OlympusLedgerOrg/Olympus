@@ -14,7 +14,7 @@ crate-type = ["cdylib"]
 # PyO3 0.24 — chosen as the latest stable release line that satisfies the
 # minimum safe version (>= 0.22.4) required to avoid CVE-2024-9979
 # (use-after-free in PyString::from_object, patched in 0.22.4).
-pyo3 = { version = "0.24", features = ["extension-module"] }
+pyo3 = { version = "0.24", features = ["extension-module", "num-bigint"] }
 # Rust's regex crate uses a DFA/NFA hybrid with strict O(n) matching —
 # it is architecturally immune to catastrophic backtracking.
 regex = "1"
