@@ -23,7 +23,7 @@ import pytest
 # ---------------------------------------------------------------------------
 
 try:
-    import olympus_core.poseidon as _rust_poseidon  # noqa: F401
+    import olympus_core.poseidon  # noqa: F401
 
     _RUST_AVAILABLE = True
 except ImportError:
