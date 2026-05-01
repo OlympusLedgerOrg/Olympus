@@ -7,7 +7,7 @@ needing a live Go sequencer.
 from __future__ import annotations
 
 import os
-from unittest.mock import AsyncMock, patch
+from unittest.mock import patch
 
 import httpx
 import pytest
@@ -109,7 +109,7 @@ class TestGoSequencerClientInit:
         from api.services.sequencer_client import GoSequencerClient
 
         with patch.dict(os.environ, {"OLYMPUS_SEQUENCER_TIMEOUT_SECONDS": "15"}):
-            client = GoSequencerClient(token="t")
+            client = GoSequencerClient(base_url="http://localhost:8081", token="t")
             assert client._timeout == 15.0
 
     def test_invalid_timeout_env_uses_default(self) -> None:
@@ -144,7 +144,7 @@ class TestClientLifecycle:
     async def test_close_without_open_is_noop(self) -> None:
         from api.services.sequencer_client import GoSequencerClient
 
-        client = GoSequencerClient(token="t")
+        client = GoSequencerClient(base_url="http://localhost:8081", token="t")
         # Should not raise
         await client.close()
         assert client._client is None
@@ -174,7 +174,7 @@ class TestAppendRecordErrors:
         respx.post("http://localhost:8081/v1/queue-leaf").mock(
             side_effect=httpx.ConnectError("refused")
         )
-        client = GoSequencerClient(token="t")
+        client = GoSequencerClient(base_url="http://localhost:8081", token="t")
         with pytest.raises(SequencerUnavailableError):
             await client.append_record(
                 shard_id="s", record_type="doc", record_id="id1", content=b"data"
@@ -188,7 +188,7 @@ class TestAppendRecordErrors:
         respx.post("http://localhost:8081/v1/queue-leaf").mock(
             return_value=httpx.Response(503, text="service unavailable")
         )
-        client = GoSequencerClient(token="t")
+        client = GoSequencerClient(base_url="http://localhost:8081", token="t")
         with pytest.raises(SequencerResponseError) as exc_info:
             await client.append_record(
                 shard_id="s", record_type="doc", record_id="id1", content=b"data"
@@ -205,7 +205,7 @@ class TestAppendRecordErrors:
         respx.post("http://localhost:8081/v1/queue-leaf").mock(
             return_value=httpx.Response(400, text=long_body)
         )
-        client = GoSequencerClient(token="t")
+        client = GoSequencerClient(base_url="http://localhost:8081", token="t")
         with pytest.raises(SequencerResponseError) as exc_info:
             await client.append_record(
                 shard_id="s", record_type="doc", record_id="id1", content=b"data"
@@ -229,7 +229,7 @@ class TestAppendRecordErrors:
                 },
             )
         )
-        client = GoSequencerClient(token="t")
+        client = GoSequencerClient(base_url="http://localhost:8081", token="t")
         result = await client.append_record(
             shard_id="shard", record_type="doc", record_id="id1", content=b"hello"
         )
@@ -253,7 +253,7 @@ class TestAppendRecordsBatchErrors:
         respx.post("http://localhost:8081/v1/queue-leaves").mock(
             side_effect=httpx.TimeoutException("timeout")
         )
-        client = GoSequencerClient(token="t")
+        client = GoSequencerClient(base_url="http://localhost:8081", token="t")
         with pytest.raises(SequencerUnavailableError):
             await client.append_records_batch(
                 [{"shard_id": "s", "record_type": "doc", "record_id": "r1", "content": b"x"}]
@@ -267,7 +267,7 @@ class TestAppendRecordsBatchErrors:
         respx.post("http://localhost:8081/v1/queue-leaves").mock(
             return_value=httpx.Response(500, text="internal error")
         )
-        client = GoSequencerClient(token="t")
+        client = GoSequencerClient(base_url="http://localhost:8081", token="t")
         with pytest.raises(SequencerResponseError) as exc_info:
             await client.append_records_batch(
                 [{"shard_id": "s", "record_type": "doc", "record_id": "r1", "content": b"x"}]
@@ -290,7 +290,7 @@ class TestGetInclusionProofErrors:
         respx.get("http://localhost:8081/v1/get-inclusion-proof").mock(
             side_effect=httpx.ConnectError("refused")
         )
-        client = GoSequencerClient(token="t")
+        client = GoSequencerClient(base_url="http://localhost:8081", token="t")
         with pytest.raises(SequencerUnavailableError):
             await client.get_inclusion_proof(
                 shard_id="s", record_type="doc", record_id="id1"
@@ -304,7 +304,7 @@ class TestGetInclusionProofErrors:
         respx.get("http://localhost:8081/v1/get-inclusion-proof").mock(
             return_value=httpx.Response(404, text="not found")
         )
-        client = GoSequencerClient(token="t")
+        client = GoSequencerClient(base_url="http://localhost:8081", token="t")
         with pytest.raises(SequencerResponseError) as exc_info:
             await client.get_inclusion_proof(
                 shard_id="s", record_type="doc", record_id="id1"
@@ -327,7 +327,7 @@ class TestGetLatestRootErrors:
         respx.get("http://localhost:8081/v1/get-latest-root").mock(
             side_effect=httpx.ConnectError("refused")
         )
-        client = GoSequencerClient(token="t")
+        client = GoSequencerClient(base_url="http://localhost:8081", token="t")
         with pytest.raises(SequencerUnavailableError):
             await client.get_latest_root()
         await client.close()
@@ -339,7 +339,7 @@ class TestGetLatestRootErrors:
         respx.get("http://localhost:8081/v1/get-latest-root").mock(
             return_value=httpx.Response(500, text="error")
         )
-        client = GoSequencerClient(token="t")
+        client = GoSequencerClient(base_url="http://localhost:8081", token="t")
         with pytest.raises(SequencerResponseError):
             await client.get_latest_root()
         await client.close()
@@ -353,11 +353,11 @@ class TestGetLatestRootErrors:
                 200, json={"root": "aa" * 32, "tree_size": 10}
             )
         )
-        client = GoSequencerClient(token="t")
+        client = GoSequencerClient(base_url="http://localhost:8081", token="t")
         result = await client.get_latest_root(shard_id="my-shard")
         assert result.tree_size == 10
-        # shard_id must be in the query string
-        assert "shard_id" in str(route.calls.last.request.url)
+        # shard_id value must appear in the query string
+        assert "shard_id=my-shard" in str(route.calls.last.request.url)
         await client.close()
 
 
@@ -375,7 +375,7 @@ class TestHealthCheck:
         respx.get("http://localhost:8081/v1/get-latest-root").mock(
             return_value=httpx.Response(200, json={"root": "aa" * 32, "tree_size": 0})
         )
-        client = GoSequencerClient(token="t")
+        client = GoSequencerClient(base_url="http://localhost:8081", token="t")
         assert await client.health_check() is True
         await client.close()
 
@@ -386,7 +386,7 @@ class TestHealthCheck:
         respx.get("http://localhost:8081/v1/get-latest-root").mock(
             side_effect=httpx.ConnectError("refused")
         )
-        client = GoSequencerClient(token="t")
+        client = GoSequencerClient(base_url="http://localhost:8081", token="t")
         assert await client.health_check() is False
         await client.close()
 
@@ -397,7 +397,7 @@ class TestHealthCheck:
         respx.get("http://localhost:8081/v1/get-latest-root").mock(
             return_value=httpx.Response(503, text="down")
         )
-        client = GoSequencerClient(token="t")
+        client = GoSequencerClient(base_url="http://localhost:8081", token="t")
         assert await client.health_check() is False
         await client.close()
 
@@ -412,7 +412,7 @@ class TestGetSignedRootPair:
     async def test_raises_value_error_when_new_lt_old(self) -> None:
         from api.services.sequencer_client import GoSequencerClient
 
-        client = GoSequencerClient(token="t")
+        client = GoSequencerClient(base_url="http://localhost:8081", token="t")
         with pytest.raises(ValueError, match="new_tree_size"):
             await client.get_signed_root_pair(old_tree_size=10, new_tree_size=5)
         await client.close()
@@ -420,7 +420,7 @@ class TestGetSignedRootPair:
     async def test_raises_value_error_on_negative_size(self) -> None:
         from api.services.sequencer_client import GoSequencerClient
 
-        client = GoSequencerClient(token="t")
+        client = GoSequencerClient(base_url="http://localhost:8081", token="t")
         with pytest.raises(ValueError, match="non-negative"):
             await client.get_signed_root_pair(old_tree_size=-1, new_tree_size=5)
         await client.close()
@@ -432,7 +432,7 @@ class TestGetSignedRootPair:
         respx.get("http://localhost:8081/v1/get-signed-root-pair").mock(
             side_effect=httpx.ConnectError("refused")
         )
-        client = GoSequencerClient(token="t")
+        client = GoSequencerClient(base_url="http://localhost:8081", token="t")
         with pytest.raises(SequencerUnavailableError):
             await client.get_signed_root_pair(old_tree_size=0, new_tree_size=5)
         await client.close()
@@ -444,7 +444,7 @@ class TestGetSignedRootPair:
         respx.get("http://localhost:8081/v1/get-signed-root-pair").mock(
             return_value=httpx.Response(410, text="Gone")
         )
-        client = GoSequencerClient(token="t")
+        client = GoSequencerClient(base_url="http://localhost:8081", token="t")
         with pytest.raises(SequencerResponseError) as exc_info:
             await client.get_signed_root_pair(old_tree_size=0, new_tree_size=5)
         assert exc_info.value.status_code == 410
@@ -467,7 +467,7 @@ class TestGetSignedRootPair:
                 },
             )
         )
-        client = GoSequencerClient(token="t")
+        client = GoSequencerClient(base_url="http://localhost:8081", token="t")
         pair = await client.get_signed_root_pair(old_tree_size=3, new_tree_size=7)
         assert isinstance(pair, SequencerSignedRootPair)
         assert pair.old_tree_size == 3
@@ -492,7 +492,7 @@ class TestGetSignedRootPair:
                 },
             )
         )
-        client = GoSequencerClient(token="t")
+        client = GoSequencerClient(base_url="http://localhost:8081", token="t")
         pair = await client.get_signed_root_pair(old_tree_size=5, new_tree_size=5)
         assert pair.old_tree_size == pair.new_tree_size == 5
         await client.close()
@@ -575,6 +575,6 @@ class TestCloseSequencerClient:
         from api.services import sequencer_client as sc_mod
         from api.services.sequencer_client import GoSequencerClient
 
-        sc_mod._sequencer_client = GoSequencerClient(token="t")
+        sc_mod._sequencer_client = GoSequencerClient(base_url="http://localhost:8081", token="t")
         await sc_mod.close_sequencer_client()
         assert sc_mod._sequencer_client is None

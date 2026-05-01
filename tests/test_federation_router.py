@@ -10,7 +10,6 @@ request passes auth as long as no API keys are registered in the store.
 
 from __future__ import annotations
 
-import json
 import os
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -74,7 +73,6 @@ def _make_mock_db_session(local_root: str | None = None):
 class TestFederationStatusEndpoint:
     def test_status_disabled(self) -> None:
         from api.main import app
-        from api.db import get_db
 
         with patch.dict(os.environ, {"OLYMPUS_GUARDIAN_ENABLED": "false"}):
             with TestClient(app) as client:
@@ -335,8 +333,8 @@ class TestSignHeaderForkDetection:
                     response = client.post(
                         "/v1/federation/sign-header", json=_VALID_SIGN_HEADER_BODY
                     )
-            # Should sign successfully (200) or fail for unrelated reason, not 409
-            assert response.status_code != 409
+            # Roots match, so no fork: signing must succeed
+            assert response.status_code == 200
         finally:
             app.dependency_overrides.pop(get_db, None)
 
