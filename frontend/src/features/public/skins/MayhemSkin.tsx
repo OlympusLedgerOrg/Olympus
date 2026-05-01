@@ -319,10 +319,7 @@ const FileDrop: FC<{
       setPhase("hashing");
       setErrMsg("");
       try {
-        await hashFile(file, (pct) => {
-          // progress is already propagated inside engine.hashFile
-          void pct;
-        });
+        await hashFile(file);
         setPhase("done");
       } catch (err) {
         setErrMsg(err instanceof Error ? err.message : "Hashing failed");
@@ -665,6 +662,7 @@ export const MayhemSkin: FC<MayhemSkinProps> = (props) => {
     setHashInput,
     hashError,
     submitHash,
+    verifyHashValue,
     fileHash,
     fileProgress,
     hashFile,
@@ -1086,9 +1084,11 @@ export const MayhemSkin: FC<MayhemSkinProps> = (props) => {
                         className="cyber-button"
                         onClick={() => {
                           playGlitchSound("noise");
-                          // Re-trigger verification through the hash tab
+                          // Pre-fill the hash input, switch to hash tab, and
+                          // immediately start verification with the known value.
                           setHashInput(fileHash);
                           switchTab("hash");
+                          verifyHashValue(fileHash);
                         }}
                         disabled={loading}
                         style={{ marginTop: "1rem" }}

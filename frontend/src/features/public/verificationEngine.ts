@@ -73,6 +73,12 @@ export interface VerificationEngineState {
   setHashInput: (v: string) => void;
   hashError: string;
   submitHash: () => void;
+  /**
+   * Immediately verify a specific 64-char hex hash without going through the
+   * hashInput state.  Useful when the caller already holds the hash (e.g. the
+   * file tab's "VERIFY_ON_LEDGER" button after a drop).
+   */
+  verifyHashValue: (hash: string) => void;
 
   // ── File mode ──
   fileHash: string;
@@ -306,6 +312,19 @@ export function useVerificationEngine(
     void verifyHash(normalized);
   }, [hashInput, verifyHash]);
 
+  const verifyHashValue = useCallback(
+    (hash: string): void => {
+      const normalized = hash.trim().toLowerCase();
+      if (!HASH_RE.test(normalized)) {
+        setHashError("Enter a valid 64-character BLAKE3 hex hash");
+        return;
+      }
+      setHashError("");
+      void verifyHash(normalized);
+    },
+    [verifyHash],
+  );
+
   // ── File mode: called by the FileDrop component when hashing completes ──
   const handleFileHashed = useCallback(
     (hex: string): void => {
@@ -454,6 +473,7 @@ export function useVerificationEngine(
     setHashInput,
     hashError,
     submitHash,
+    verifyHashValue,
     fileHash,
     fileProgress,
     hashFile,
