@@ -66,6 +66,42 @@ class TestResolvedPoseidonRoot:
 
 
 # ---------------------------------------------------------------------------
+# Rust backend is active
+# ---------------------------------------------------------------------------
+
+
+class TestRustBackendIsActive:
+    """Assert the Rust extension is genuinely loaded, not shadowed or bypassed."""
+
+    def test_olympus_core_poseidon_in_sys_modules(self) -> None:
+        import sys
+
+        assert "olympus_core.poseidon" in sys.modules, (
+            "olympus_core.poseidon not found in sys.modules — "
+            "Rust extension is not loaded"
+        )
+
+    def test_internal_hash_fn_is_rust_object(self) -> None:
+        import olympus_core.poseidon as _oc
+        import protocol.poseidon as _proto
+
+        assert _proto._poseidon_hash_bigint is _oc.poseidon_hash_bn254_bigint, (
+            "protocol.poseidon._poseidon_hash_bigint is not the Rust function"
+        )
+        assert _proto._poseidon_leaf_hash is _oc.poseidon_leaf_hash_bn254
+        assert _proto._poseidon_node_hash is _oc.poseidon_node_hash_bn254
+
+    def test_rust_fn_module_attribute(self) -> None:
+        import protocol.poseidon as _proto
+
+        # PyO3-exported functions carry __module__ == the Rust crate's module path.
+        assert "olympus_core" in (_proto._poseidon_hash_bigint.__module__ or ""), (
+            f"Expected __module__ to contain 'olympus_core', "
+            f"got {_proto._poseidon_hash_bigint.__module__!r}"
+        )
+
+
+# ---------------------------------------------------------------------------
 # Rust-backed Poseidon hash tests
 # ---------------------------------------------------------------------------
 
