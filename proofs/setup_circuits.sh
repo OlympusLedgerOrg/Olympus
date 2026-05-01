@@ -64,15 +64,18 @@ npm install --silent
 # -----------------------------------------------------------------------
 # 1. Verify circom compiler is available
 # -----------------------------------------------------------------------
+# Prefer native circom (Rust binary) over circom2 (npm WASM package).
+# The native binary supports the full circom 2.x language including functions
+# used in parameters.circom.  circom2 npm is accepted as a fallback.
 CIRCOM=""
-if command -v circom2 &>/dev/null; then
-  CIRCOM="circom2"
-elif command -v circom &>/dev/null; then
+if command -v circom &>/dev/null; then
   CIRCOM="circom"
+elif command -v circom2 &>/dev/null; then
+  CIRCOM="circom2"
 else
   echo "ERROR: circom compiler not found in PATH."
-  echo "Install circom2 via npm (npm install -g circom2) or from"
-  echo "https://docs.circom.io/getting-started/installation/"
+  echo "Install circom from https://docs.circom.io/getting-started/installation/"
+  echo "or via npm: npm install -g circom2"
   exit 1
 fi
 echo "==> Using circom compiler: $(${CIRCOM} --version 2>&1 | head -1)"
@@ -84,25 +87,59 @@ SNARKJS="npx snarkjs"
 # -----------------------------------------------------------------------
 mkdir -p "${BUILD_DIR}" "${VKEYS_DIR}"
 
+# Dev fallback uses a distinct name/path so it is never confused with the
+# trusted Hermez file and survives subsequent runs without checksum errors.
+DEV_PTAU_POWER=16
+DEV_PTAU_FILE="dev_pot${DEV_PTAU_POWER}_final.ptau"
+DEV_PTAU_PATH="${BUILD_DIR}/${DEV_PTAU_FILE}"
+
+PTAU_IS_LOCAL=0
 if [ -f "${PTAU_PATH}" ]; then
   echo "==> PTAU file already present: ${PTAU_PATH}"
+elif [ -f "${DEV_PTAU_PATH}" ]; then
+  echo "==> Reusing local dev PTAU from previous run: ${DEV_PTAU_PATH}"
+  PTAU_IS_LOCAL=1
+  PTAU_FILE="${DEV_PTAU_FILE}"
+  PTAU_PATH="${DEV_PTAU_PATH}"
+  PTAU_POWER=${DEV_PTAU_POWER}
+  PTAU_SOURCE="local-dev (snarkjs powersoftau — NOT from trusted ceremony)"
 else
   echo "==> Downloading Hermez Powers of Tau (2^${PTAU_POWER}) …"
   if curl -fSL --connect-timeout 30 --retry 3 -o "${PTAU_PATH}" "${PTAU_URL}"; then
     echo "    Downloaded ${PTAU_FILE}"
   else
-    echo "ERROR: Failed to download Hermez PTAU from ${PTAU_URL}"
-    echo "       A trusted Phase 1 ceremony file is required."
-    echo "       Local PTAU generation is not supported — use the public Hermez ceremony."
-    exit 1
+    echo "WARNING: Failed to download Hermez PTAU from ${PTAU_URL}"
+    echo "         Falling back to local PTAU generation for development use only."
+    echo "         *** DO NOT use locally-generated keys in production. ***"
+    echo "         Production requires the Phase 1 Hermez ceremony file."
+    PTAU_IS_LOCAL=1
+    PTAU_SOURCE="local-dev (snarkjs powersoftau — NOT from trusted ceremony)"
+    # Use power 16 (max 65536 constraints). NOTE: non_existence requires power 17
+    # and will be skipped below — only document_existence and redaction_validity
+    # get dev keys in this fallback path.
+    PTAU_FILE="${DEV_PTAU_FILE}"
+    PTAU_PATH="${DEV_PTAU_PATH}"
+    PTAU_POWER=${DEV_PTAU_POWER}
+    PTAU_0="${BUILD_DIR}/dev_pot${DEV_PTAU_POWER}_0000.ptau"
+    PTAU_1="${BUILD_DIR}/dev_pot${DEV_PTAU_POWER}_0001.ptau"
+    echo "  [a] Generating new Powers of Tau (2^${DEV_PTAU_POWER}) …"
+    ${SNARKJS} powersoftau new bn128 "${DEV_PTAU_POWER}" "${PTAU_0}" -v 2>/dev/null
+    echo "  [b] Adding dev contribution …"
+    ${SNARKJS} powersoftau contribute "${PTAU_0}" "${PTAU_1}" \
+      --name="Olympus dev PTAU" -e="olympus-dev-ptau-$(date +%s)" 2>/dev/null
+    rm -f "${PTAU_0}"
+    echo "  [c] Preparing phase 2 …"
+    ${SNARKJS} powersoftau prepare phase2 "${PTAU_1}" "${PTAU_PATH}" -v 2>/dev/null
+    rm -f "${PTAU_1}"
+    echo "    Local dev PTAU generated: ${PTAU_PATH}"
   fi
 fi
 
-# Verify PTAU SHA-256 checksum
+# Verify PTAU SHA-256 checksum (only for known trusted files; skip for local dev)
 echo "==> Verifying PTAU integrity …"
 PTAU_SHA256="$(sha256sum "${PTAU_PATH}" | awk '{print $1}')"
 PTAU_EXPECTED="${PTAU_CHECKSUMS[${PTAU_POWER}]:-}"
-if [ -n "${PTAU_EXPECTED}" ] && [ "${PTAU_SHA256}" != "${PTAU_EXPECTED}" ]; then
+if [ "${PTAU_IS_LOCAL}" -eq 0 ] && [ -n "${PTAU_EXPECTED}" ] && [ "${PTAU_SHA256}" != "${PTAU_EXPECTED}" ]; then
   echo "ERROR: PTAU SHA-256 mismatch!"
   echo "  Expected: ${PTAU_EXPECTED}"
   echo "  Got:      ${PTAU_SHA256}"
@@ -110,7 +147,11 @@ if [ -n "${PTAU_EXPECTED}" ] && [ "${PTAU_SHA256}" != "${PTAU_EXPECTED}" ]; then
   rm -f "${PTAU_PATH}"
   exit 1
 fi
-echo "    PTAU integrity verified ✓"
+if [ "${PTAU_IS_LOCAL}" -eq 1 ]; then
+  echo "    Local dev PTAU in use — checksum verification skipped."
+else
+  echo "    PTAU integrity verified ✓"
+fi
 
 # -----------------------------------------------------------------------
 # 2.5 Record provenance (PTAU source + hashes + verification key fingerprints)
@@ -122,6 +163,12 @@ PTAU_SHA256="$(sha256sum "${PTAU_PATH}" | awk '{print $1}')"
   echo ""
   echo "Generated: $(date -u +"%Y-%m-%dT%H:%M:%SZ")"
   echo ""
+  if [ "${PTAU_IS_LOCAL}" -eq 1 ]; then
+    echo "WARNING: These are DEVELOPMENT keys generated with a locally-created PTAU."
+    echo "         They are NOT suitable for production use."
+    echo "         Production requires the Phase 2 ceremony with the Hermez Phase 1 file."
+    echo ""
+  fi
   echo "PTAU_SOURCE: ${PTAU_SOURCE}"
   echo "PTAU_FILE: ${PTAU_FILE}"
   echo "PTAU_SHA256: ${PTAU_SHA256}"
@@ -137,6 +184,15 @@ for circuit in "${CIRCUITS[@]}"; do
   CIRCOM_FILE="circuits/${circuit}.circom"
   echo ""
   echo "===== ${circuit} ====="
+
+  # non_existence uses a 256-level SMT (~70k+ constraints) and requires power 17.
+  # Skip it when the dev fallback PTAU only supports power 16.
+  if [ "${PTAU_IS_LOCAL}" -eq 1 ] && [ "${PTAU_POWER}" -lt 17 ] && [ "${circuit}" = "non_existence" ]; then
+    echo "  [SKIP] non_existence requires PTAU power ≥ 17 (max $(( 1 << 17 )) constraints)."
+    echo "         Dev fallback PTAU is power ${PTAU_POWER} (max $(( 1 << PTAU_POWER )) constraints)."
+    echo "         Download the Hermez ceremony file to generate non_existence keys."
+    continue
+  fi
 
   # ---- Compile ----
   echo "  [1/4] Compiling ${CIRCOM_FILE} …"

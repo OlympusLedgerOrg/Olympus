@@ -48,7 +48,7 @@ pragma circom 2.0.0;
 include "./lib/merkleProof.circom";
 include "./lib/poseidon.circom";
 include "./parameters.circom";
-include "../../node_modules/circomlib/circuits/iszero.circom";
+include "../node_modules/circomlib/circuits/comparators.circom";
 
 // Range-checked Num2Bits converter
 template Num2BitsStrict(n) {
@@ -223,7 +223,7 @@ template UnifiedCanonicalizationInclusionRootSign(maxSections, merkleDepth, smtD
 // Default instantiation: values loaded from parameters.circom
 component main {public [canonicalHash, merkleRoot, ledgerRoot, treeSize]} =
     UnifiedCanonicalizationInclusionRootSign(
-        UNIFIED_MAX_SECTIONS,
-        UNIFIED_MERKLE_DEPTH,
-        UNIFIED_SMT_DEPTH
+        UNIFIED_MAX_SECTIONS(),
+        UNIFIED_MERKLE_DEPTH(),
+        UNIFIED_SMT_DEPTH()
     );
