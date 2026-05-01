@@ -1,3 +1,4 @@
+# ruff: noqa: I001  -- DAG order enforced; gossip imports protocol.ledger so must go last
 """Federation identity, registry, and quorum-signing prototype.
 
 This package re-exports every public name that was previously available from
@@ -5,18 +6,6 @@ the monolithic ``protocol.federation`` module so that all existing imports
 continue to work unchanged.
 """
 
-from protocol.federation.gossip import (
-    append_quorum_certificate_to_ledger,
-    build_proactive_share_commitments,
-    build_vrf_reveal_commitment,
-    derive_vrf_round_entropy,
-    detect_compromise_signals,
-    resolve_canonical_fork,
-    select_vrf_committee,
-    select_vrf_leader,
-    verify_proactive_share_commitments,
-    vrf_selection_scores,
-)
 from protocol.federation.identity import (
     _CERTIFICATE_SIGNATURE_SCHEME_ED25519,
     _HEADER_EXCLUDED_FIELDS,
@@ -67,6 +56,18 @@ from protocol.federation.rotation import (
     RecursiveChainProof,
     verify_epoch_key_rotation,
     verify_recursive_chain_proof,
+)
+from protocol.federation.gossip import (
+    append_quorum_certificate_to_ledger,
+    build_proactive_share_commitments,
+    build_vrf_reveal_commitment,
+    derive_vrf_round_entropy,
+    detect_compromise_signals,
+    resolve_canonical_fork,
+    select_vrf_committee,
+    select_vrf_leader,
+    verify_proactive_share_commitments,
+    vrf_selection_scores,
 )
 
 
