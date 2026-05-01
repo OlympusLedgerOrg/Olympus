@@ -160,7 +160,7 @@ jobs:
     - name: Verify Rust parity tests are collected (not skipped)
       run: |
         COUNT=$(pytest tests/test_rust_python_parity.py tests/test_smt_rust_parity.py \
-          --co -q 2>/dev/null | grep -c "::" || true)
+          --collect-only -q | grep -c "::")
         echo "Rust parity test count: $COUNT"
         if [ "$COUNT" -lt 10 ]; then
           echo "ERROR: Expected ≥10 Rust parity tests to be collected; got $COUNT."
