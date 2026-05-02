@@ -53,7 +53,7 @@ except ImportError:  # pragma: no cover - exercised only when repo imports are u
 
 logger = logging.getLogger(__name__)
 
-INITIAL_ZKEY_PREFIX = ".tmp_setup_"
+INITIAL_ZKEY_PREFIX = "_tmp_setup_"
 
 
 # ---------------------------------------------------------------------------
@@ -180,8 +180,8 @@ def contribute(
                 f"{setup_result.stderr}"
             )
 
-        # Step 2: zkey contribute — -e makes snarkjs non-interactive so the CLI
-        # never hides an entropy prompt behind captured stdout/stderr.
+        # Step 2: zkey contribute — pass entropy via -e so snarkjs is
+        # non-interactive while stdout/stderr are captured.
         contribute_result = subprocess.run(
             [
                 "npx",

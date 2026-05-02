@@ -187,7 +187,7 @@ class TestCeremonyContributeSuccess:
             if "setup" in cmd:
                 Path(cmd[-1]).write_bytes(b"initial key material")
             elif "contribute" in cmd:
-                assert any(arg.startswith("-e=") for arg in cmd)
+                assert any(arg.startswith("-e=") and len(arg) > 3 for arg in cmd)
                 Path(cmd[5]).write_bytes(b"final key material")
             return mock
 
