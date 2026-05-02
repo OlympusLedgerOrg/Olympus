@@ -23,6 +23,7 @@ except ImportError:
 # Helpers
 # ---------------------------------------------------------------------------
 
+
 def _make_records(n: int = 5) -> list[dict]:
     return [
         {
@@ -33,9 +34,11 @@ def _make_records(n: int = 5) -> list[dict]:
         for i in range(n)
     ]
 
+
 # ---------------------------------------------------------------------------
 # write_deterministic_parquet — basic functionality
 # ---------------------------------------------------------------------------
+
 
 @pytest.mark.skipif(not _PYARROW_AVAILABLE, reason="pyarrow not installed")
 class TestWriteDeterministicParquet:
@@ -65,9 +68,7 @@ class TestWriteDeterministicParquet:
         from protocol.parquet_writer import write_deterministic_parquet
 
         records = [{"id": 3, "val": "c"}, {"id": 1, "val": "a"}, {"id": 2, "val": "b"}]
-        result = write_deterministic_parquet(
-            records, tmp_path / "out.parquet", sort_columns=["id"]
-        )
+        result = write_deterministic_parquet(records, tmp_path / "out.parquet", sort_columns=["id"])
         assert result.sort_columns == ["id"]
 
         # Read back and verify sort order
@@ -87,45 +88,32 @@ class TestWriteDeterministicParquet:
         from protocol.parquet_writer import write_deterministic_parquet
 
         records = _make_records(25)
-        result = write_deterministic_parquet(
-            records, tmp_path / "out.parquet", row_group_size=10
-        )
+        result = write_deterministic_parquet(records, tmp_path / "out.parquet", row_group_size=10)
         assert result.row_count == 25
         assert result.row_group_count == 3  # ceil(25/10)
 
     @pytest.mark.parametrize(
-        "codec, input_level, expect_level",
+        "codec, expect_level",
         [
             # Level-unaware codecs: PyArrow rejects compression_level entirely.
-            # Even when the caller explicitly passes a level, it must be
-            # suppressed — result.compression_level must be None to prove
-            # we never forwarded it to PyArrow.
-            ("snappy", 9, None),
-            ("lz4", 9, None),
-            # Level-aware codecs: the caller-supplied level must be preserved.
-            # Default 3 is within all valid ranges (zstd 1-22, brotli 0-11).
-            ("zstd", 3, 3),
-            ("brotli", 3, 3),
+            # result.compression_level must be None to prove we never passed it.
+            ("snappy", None),
+            ("lz4", None),
+            # Level-aware codecs: default level 3 is within all valid ranges
+            # (zstd 1-22, brotli 0-11), so it must be preserved in the result.
+            ("zstd", 3),
+            ("brotli", 3),
         ],
     )
     def test_custom_compression(
-        self,
-        tmp_path: Path,
-        codec: str,
-        input_level: int,
-        expect_level: int | None,
+        self, tmp_path: Path, codec: str, expect_level: int | None
     ) -> None:
         from protocol.parquet_writer import write_deterministic_parquet
 
         result = write_deterministic_parquet(
-            _make_records(5),
-            tmp_path / "out.parquet",
-            compression=codec,
-            compression_level=input_level,
+            _make_records(5), tmp_path / "out.parquet", compression=codec
         )
         assert result.compression == codec
-        # For level-unaware codecs (snappy, lz4) the input level must be
-        # silently dropped — passing it to PyArrow would raise ArrowInvalid.
         assert result.compression_level == expect_level
 
     def test_created_by_metadata_is_fixed(self, tmp_path: Path) -> None:
@@ -138,9 +126,11 @@ class TestWriteDeterministicParquet:
         schema_meta = pf.schema_arrow.metadata or {}
         assert schema_meta.get(b"created_by") == WRITER_CREATED_BY.encode("utf-8")
 
+
 # ---------------------------------------------------------------------------
 # Compression level range validation
 # ---------------------------------------------------------------------------
+
 
 @pytest.mark.skipif(not _PYARROW_AVAILABLE, reason="pyarrow not installed")
 class TestCompressionLevelValidation:
@@ -190,7 +180,7 @@ class TestCompressionLevelValidation:
             ("brotli", 11),  # max valid — proves brotli ceiling is 11 not 22
         ],
     )
-    def test_boundary_levels_are_accepted(
+    def test_valid_compression_level_accepted(
         self, tmp_path: Path, codec: str, good_level: int
     ) -> None:
         from protocol.parquet_writer import write_deterministic_parquet
@@ -201,11 +191,14 @@ class TestCompressionLevelValidation:
             compression=codec,
             compression_level=good_level,
         )
+        assert result.compression == codec
         assert result.compression_level == good_level
+
 
 # ---------------------------------------------------------------------------
 # Determinism
 # ---------------------------------------------------------------------------
+
 
 @pytest.mark.skipif(not _PYARROW_AVAILABLE, reason="pyarrow not installed")
 class TestDeterminism:
@@ -213,12 +206,8 @@ class TestDeterminism:
         from protocol.parquet_writer import write_deterministic_parquet
 
         records = _make_records(20)
-        r1 = write_deterministic_parquet(
-            records, tmp_path / "a.parquet", sort_columns=["id"]
-        )
-        r2 = write_deterministic_parquet(
-            records, tmp_path / "b.parquet", sort_columns=["id"]
-        )
+        r1 = write_deterministic_parquet(records, tmp_path / "a.parquet", sort_columns=["id"])
+        r2 = write_deterministic_parquet(records, tmp_path / "b.parquet", sort_columns=["id"])
 
         assert r1.blake3_hex == r2.blake3_hex
 
@@ -231,12 +220,8 @@ class TestDeterminism:
         dicts_fwd = [{"id": i} for i in records_fwd]
         dicts_rev = [{"id": i} for i in records_rev]
 
-        r1 = write_deterministic_parquet(
-            dicts_fwd, tmp_path / "fwd.parquet", sort_columns=["id"]
-        )
-        r2 = write_deterministic_parquet(
-            dicts_rev, tmp_path / "rev.parquet", sort_columns=["id"]
-        )
+        r1 = write_deterministic_parquet(dicts_fwd, tmp_path / "fwd.parquet", sort_columns=["id"])
+        r2 = write_deterministic_parquet(dicts_rev, tmp_path / "rev.parquet", sort_columns=["id"])
 
         assert r1.blake3_hex == r2.blake3_hex
 
@@ -252,17 +237,16 @@ class TestDeterminism:
 
         assert r1.blake3_hex != r2.blake3_hex
 
+
 # ---------------------------------------------------------------------------
 # verify_parquet_determinism
 # ---------------------------------------------------------------------------
 
+
 @pytest.mark.skipif(not _PYARROW_AVAILABLE, reason="pyarrow not installed")
 class TestVerifyParquetDeterminism:
     def test_identical_files_return_true(self, tmp_path: Path) -> None:
-        from protocol.parquet_writer import (
-            verify_parquet_determinism,
-            write_deterministic_parquet,
-        )
+        from protocol.parquet_writer import verify_parquet_determinism, write_deterministic_parquet
 
         records = _make_records(5)
         write_deterministic_parquet(records, tmp_path / "a.parquet", sort_columns=["id"])
@@ -271,22 +255,18 @@ class TestVerifyParquetDeterminism:
         assert verify_parquet_determinism(tmp_path / "a.parquet", tmp_path / "b.parquet")
 
     def test_different_files_return_false(self, tmp_path: Path) -> None:
-        from protocol.parquet_writer import (
-            verify_parquet_determinism,
-            write_deterministic_parquet,
-        )
+        from protocol.parquet_writer import verify_parquet_determinism, write_deterministic_parquet
 
         write_deterministic_parquet(_make_records(5), tmp_path / "a.parquet")
         write_deterministic_parquet(_make_records(6), tmp_path / "b.parquet")
 
-        assert not verify_parquet_determinism(
-            tmp_path / "a.parquet", tmp_path / "b.parquet"
-        )
+        assert not verify_parquet_determinism(tmp_path / "a.parquet", tmp_path / "b.parquet")
 
 
 # ---------------------------------------------------------------------------
 # Error cases
 # ---------------------------------------------------------------------------
+
 
 class TestErrorCases:
     @pytest.mark.skipif(not _PYARROW_AVAILABLE, reason="pyarrow not installed")
@@ -319,9 +299,7 @@ class TestErrorCases:
         from protocol.parquet_writer import write_deterministic_parquet
 
         with pytest.raises(TypeError):
-            write_deterministic_parquet(
-                "not-a-table", tmp_path / "out.parquet"  # type: ignore[arg-type]
-            )
+            write_deterministic_parquet("not-a-table", tmp_path / "out.parquet")  # type: ignore[arg-type]
 
     def test_pyarrow_not_available_raises_import_error(self) -> None:
         from protocol import parquet_writer as pw_module
