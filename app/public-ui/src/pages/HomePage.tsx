@@ -1,4 +1,4 @@
-import { useCallback, useState } from "react";
+import { useCallback, useMemo, useState } from "react";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import {
   getPublicStats,
@@ -28,6 +28,7 @@ import VerdictCard from "../components/VerdictCard";
 type Tab = "hash" | "file" | "json" | "proof";
 
 const HASH_RE = /^[0-9a-f]{64}$/i;
+const SAMPLE_HASH = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
 
 const FALLBACK_STATS: PublicStatsResponse = {
   copies: 0,
@@ -35,6 +36,16 @@ const FALLBACK_STATS: PublicStatsResponse = {
   proofs: 0,
   uptime: "0s",
   uptime_seconds: 0,
+};
+
+const EXAMPLE_PROOF = {
+  content_hash: SAMPLE_HASH,
+  merkle_root: SAMPLE_HASH,
+  merkle_proof: {
+    leaf_hash: SAMPLE_HASH,
+    siblings: [],
+    root_hash: SAMPLE_HASH,
+  },
 };
 
 function hashVerificationToVerdict(
@@ -140,6 +151,18 @@ export default function HomePage() {
   });
   const stats = statsQuery.data ?? FALLBACK_STATS;
 
+  const normalizedHash = hashInput.trim().toLowerCase();
+  const hashStatus = useMemo(() => {
+    if (!normalizedHash) return { label: "WAITING", tone: "neutral" as const };
+    if (normalizedHash.length !== 64) {
+      return { label: `${normalizedHash.length}/64`, tone: "warn" as const };
+    }
+    if (!HASH_RE.test(normalizedHash)) {
+      return { label: "BAD_HEX", tone: "err" as const };
+    }
+    return { label: "READY", tone: "ok" as const };
+  }, [normalizedHash]);
+
   const switchTab = (id: Tab) => {
     setActiveTab(id);
     setVerdictResult(null);
@@ -207,10 +230,21 @@ export default function HomePage() {
         setHashError("Enter a valid 64-character hexadecimal BLAKE3 hash");
         return;
       }
+      setHashInput(normalized);
       hashMutation.mutate(normalized);
     },
     [hashMutation],
   );
+
+  const pasteHash = useCallback(async () => {
+    try {
+      const text = await navigator.clipboard.readText();
+      setHashInput(text.trim());
+      setHashError(null);
+    } catch {
+      setHashError("Clipboard read was blocked by the browser");
+    }
+  }, []);
 
   const submitJsonDoc = useCallback(async () => {
     setJsonError(null);
@@ -229,6 +263,24 @@ export default function HomePage() {
     }
   }, [jsonInput, submitHash]);
 
+  const formatJson = useCallback(() => {
+    try {
+      setJsonInput(JSON.stringify(JSON.parse(jsonInput) as CanonicalJsonValue, null, 2));
+      setJsonError(null);
+    } catch (err) {
+      setJsonError(err instanceof Error ? err.message : String(err));
+    }
+  }, [jsonInput]);
+
+  const minifyJson = useCallback(() => {
+    try {
+      setJsonInput(JSON.stringify(JSON.parse(jsonInput) as CanonicalJsonValue));
+      setJsonError(null);
+    } catch (err) {
+      setJsonError(err instanceof Error ? err.message : String(err));
+    }
+  }, [jsonInput]);
+
   const submitProof = useCallback(() => {
     setProofError(null);
     setVerdictResult(null);
@@ -244,7 +296,25 @@ export default function HomePage() {
     }
   }, [proofInput, proofMutation]);
 
+  const clearWorkspace = () => {
+    setHashInput("");
+    setHashError(null);
+    setFileHash(null);
+    setFileProgress(0);
+    setJsonInput("");
+    setJsonError(null);
+    setJsonCanonical(null);
+    setProofInput("");
+    setProofError(null);
+    setVerdictResult(null);
+  };
+
   const isPending = hashMutation.isPending || proofMutation.isPending;
+  const operationLabel = isPending
+    ? "VERIFYING"
+    : verdictResult
+      ? verdictResult.verdict.toUpperCase()
+      : "IDLE";
   const tabs: { id: Tab; label: string }[] = [
     { id: "hash", label: "HASH" },
     { id: "file", label: "FILE" },
@@ -260,102 +330,98 @@ export default function HomePage() {
 
   return (
     <div>
-      <div style={{ marginBottom: "3rem" }}>
-        <h1
-          style={{
-            fontSize: "clamp(1.8rem, 5vw, 3rem)",
-            margin: "0 0 0.75rem",
-            textShadow: "0 0 12px #00FF41",
-            fontFamily: "'DM Mono', monospace",
-          }}
-        >
-          VERIFY_TRUTH
-        </h1>
-        <p
-          style={{
-            color: "rgba(0,255,65,0.55)",
-            maxWidth: "540px",
-            fontSize: "0.82rem",
-            margin: 0,
-            lineHeight: 1.65,
-          }}
-        >
-          Independently verify Olympus hashes, documents, and proof bundles
-          against the append-only ledger.
-        </p>
+      <div className="console-hero">
+        <div>
+          <h1
+            style={{
+              fontSize: "clamp(1.8rem, 5vw, 3rem)",
+              margin: "0 0 0.75rem",
+              textShadow: "0 0 12px #00FF41",
+              fontFamily: "'DM Mono', monospace",
+            }}
+          >
+            VERIFY_TRUTH
+          </h1>
+          <p
+            style={{
+              color: "rgba(0,255,65,0.55)",
+              maxWidth: "600px",
+              fontSize: "0.82rem",
+              margin: 0,
+              lineHeight: 1.65,
+            }}
+          >
+            Independently verify Olympus hashes, documents, and proof bundles
+            against the append-only ledger.
+          </p>
+        </div>
+        <div className="status-stack">
+          <span className={`status-pill status-${statsQuery.isError ? "err" : "ok"}`}>
+            API_{statsQuery.isError ? "OFFLINE" : "LIVE"}
+          </span>
+          <span className={`status-pill status-${isPending ? "warn" : "neutral"}`}>
+            {operationLabel}
+          </span>
+        </div>
       </div>
 
-      <div
-        style={{
-          display: "grid",
-          gridTemplateColumns: "repeat(auto-fit, minmax(120px, 1fr))",
-          gap: "0.75rem",
-          marginBottom: "2.5rem",
-        }}
-      >
+      <div className="stats-grid">
         {statCards.map((s) => (
-          <div
+          <button
             key={s.label}
-            className="cyber-panel-sm"
-            style={{ padding: "0.85rem 1rem", textAlign: "center" }}
+            type="button"
+            className="cyber-panel-sm stat-card"
+            onClick={() => void statsQuery.refetch()}
           >
             <div style={{ fontSize: "1.1rem", color: "#00FF41" }}>
               {s.raw ? String(s.value) : <AnimatedNumber value={Number(s.value)} />}
             </div>
-            <div
-              style={{
-                fontSize: "0.5rem",
-                opacity: 0.4,
-                letterSpacing: "0.12em",
-                marginTop: "0.2rem",
-              }}
-            >
-              {s.label}
-            </div>
-          </div>
+            <div className="stat-label">{s.label}</div>
+          </button>
         ))}
       </div>
 
-      <div style={{ display: "grid", gridTemplateColumns: "1fr", gap: "2.5rem" }}>
+      <div className="verify-grid">
         <div style={{ minWidth: 0 }}>
           <TiltContainer>
             <div className="cyber-panel" style={{ padding: 0 }}>
-              <div
-                role="tablist"
-                style={{
-                  display: "flex",
-                  borderBottom: "1px solid rgba(0,255,65,0.18)",
-                  overflowX: "auto",
-                }}
-              >
-                {tabs.map((t) => (
+              <div role="tablist" className="tab-list">
+                {tabs.map((tab) => (
                   <button
-                    key={t.id}
+                    key={tab.id}
                     role="tab"
-                    aria-selected={activeTab === t.id}
+                    aria-selected={activeTab === tab.id}
                     className="tab-btn"
-                    onClick={() => switchTab(t.id)}
+                    onClick={() => switchTab(tab.id)}
                     type="button"
                   >
-                    {t.label}
+                    {tab.label}
                   </button>
                 ))}
               </div>
 
-              <div style={{ padding: "1.75rem" }}>
+              <div style={{ padding: "1.5rem" }}>
                 {activeTab === "hash" && (
                   <div>
-                    <label htmlFor="hash-input" className="terminal-label">
-                      BLAKE3 content hash
-                    </label>
-                    <div style={{ display: "flex", gap: "0.6rem" }}>
+                    <div className="field-head">
+                      <label htmlFor="hash-input" className="terminal-label">
+                        BLAKE3 content hash
+                      </label>
+                      <span className={`status-pill status-${hashStatus.tone}`}>
+                        {hashStatus.label}
+                      </span>
+                    </div>
+                    <div className="input-row">
                       <input
                         id="hash-input"
                         type="text"
                         value={hashInput}
-                        onChange={(e) => setHashInput(e.target.value)}
-                        onKeyDown={(e) => {
-                          if (e.key === "Enter") submitHash(hashInput);
+                        onChange={(event) => {
+                          setHashInput(event.target.value);
+                          setHashError(null);
+                        }}
+                        onKeyDown={(event) => {
+                          if (event.key === "Enter") submitHash(hashInput);
                         }}
                         placeholder="ENTER_BLAKE3_HASH..."
                         maxLength={64}
@@ -367,9 +433,35 @@ export default function HomePage() {
                         type="button"
                         className="cyber-button"
                         onClick={() => submitHash(hashInput)}
-                        disabled={isPending}
+                        disabled={isPending || hashStatus.tone !== "ok"}
                       >
-                        {isPending ? "EXECUTING..." : "EXECUTE"}
+                        {isPending ? "EXECUTING..." : "VERIFY"}
+                      </button>
+                    </div>
+                    <div className="quick-actions">
+                      <button type="button" className="icon-text-btn" onClick={pasteHash}>
+                        PASTE
+                      </button>
+                      <button
+                        type="button"
+                        className="icon-text-btn"
+                        onClick={() => {
+                          setHashInput(SAMPLE_HASH);
+                          setHashError(null);
+                        }}
+                      >
+                        SAMPLE
+                      </button>
+                      <button
+                        type="button"
+                        className="icon-text-btn"
+                        onClick={() => {
+                          setHashInput("");
+                          setHashError(null);
+                          setVerdictResult(null);
+                        }}
+                      >
+                        CLEAR
                       </button>
                     </div>
                     {hashError && <p className="err-text">{hashError}</p>}
@@ -409,30 +501,55 @@ export default function HomePage() {
 
                 {activeTab === "json" && (
                   <div>
-                    <label htmlFor="json-input" className="terminal-label">
-                      JSON document
-                    </label>
+                    <div className="field-head">
+                      <label htmlFor="json-input" className="terminal-label">
+                        JSON document
+                      </label>
+                      <span className="status-pill status-neutral">
+                        {jsonInput.length.toLocaleString()}B
+                      </span>
+                    </div>
                     <textarea
                       id="json-input"
                       value={jsonInput}
-                      onChange={(e) => setJsonInput(e.target.value)}
-                      rows={6}
+                      onChange={(event) => {
+                        setJsonInput(event.target.value);
+                        setJsonError(null);
+                      }}
+                      rows={7}
                       placeholder='{"title":"Budget 2025","amount":1000000}'
                       spellCheck={false}
                       className="cyber-input"
                       style={{ resize: "vertical" }}
                     />
-                    {jsonCanonical && (
-                      <p
-                        style={{
-                          fontSize: "0.6rem",
-                          color: "rgba(0,255,65,0.4)",
-                          wordBreak: "break-all",
-                        }}
+                    <div className="quick-actions">
+                      <button type="button" className="icon-text-btn" onClick={formatJson}>
+                        FORMAT
+                      </button>
+                      <button type="button" className="icon-text-btn" onClick={minifyJson}>
+                        MINIFY
+                      </button>
+                      <button
+                        type="button"
+                        className="icon-text-btn"
+                        onClick={() =>
+                          setJsonInput(
+                            JSON.stringify(
+                              { title: "Budget 2025", amount: 1000000, agency: "demo" },
+                              null,
+                              2,
+                            ),
+                          )
+                        }
                       >
+                        SAMPLE
+                      </button>
+                    </div>
+                    {jsonCanonical && (
+                      <p className="preview-line">
                         CANONICAL:{" "}
-                        {jsonCanonical.length > 120
-                          ? `${jsonCanonical.slice(0, 120)}...`
+                        {jsonCanonical.length > 160
+                          ? `${jsonCanonical.slice(0, 160)}...`
                           : jsonCanonical}
                       </p>
                     )}
@@ -441,7 +558,7 @@ export default function HomePage() {
                       type="button"
                       className="cyber-button"
                       onClick={() => void submitJsonDoc()}
-                      disabled={isPending}
+                      disabled={isPending || !jsonInput.trim()}
                       style={{ marginTop: "0.75rem" }}
                     >
                       {isPending ? "EXECUTING..." : "CANONICALIZE_AND_HASH"}
@@ -457,18 +574,37 @@ export default function HomePage() {
                     <textarea
                       id="proof-input"
                       value={proofInput}
-                      onChange={(e) => setProofInput(e.target.value)}
+                      onChange={(event) => {
+                        setProofInput(event.target.value);
+                        setProofError(null);
+                      }}
                       rows={9}
                       placeholder='{"content_hash":"...","merkle_root":"...","merkle_proof":{}}'
                       spellCheck={false}
                       className="cyber-input"
                       style={{ resize: "vertical" }}
                     />
+                    <div className="quick-actions">
+                      <button
+                        type="button"
+                        className="icon-text-btn"
+                        onClick={() => setProofInput(JSON.stringify(EXAMPLE_PROOF, null, 2))}
+                      >
+                        SAMPLE
+                      </button>
+                      <button
+                        type="button"
+                        className="icon-text-btn"
+                        onClick={() => setProofInput("")}
+                      >
+                        CLEAR
+                      </button>
+                    </div>
                     <button
                       type="button"
                       className="cyber-button"
                       onClick={submitProof}
-                      disabled={isPending}
+                      disabled={isPending || !proofInput.trim()}
                       style={{ marginTop: "0.75rem" }}
                     >
                       {isPending ? "EXECUTING..." : "EXECUTE_VERIFICATION"}
@@ -480,7 +616,7 @@ export default function HomePage() {
             </div>
           </TiltContainer>
 
-          {verdictResult && (
+          {verdictResult ? (
             <div>
               {verdictResult.displayHash && (
                 <div style={{ marginTop: "1.5rem" }}>
@@ -492,11 +628,50 @@ export default function HomePage() {
                 details={verdictResult.details}
               />
             </div>
+          ) : (
+            <div className="ready-panel">
+              <span className="ready-dot" />
+              <span>READY_FOR_INPUT</span>
+            </div>
           )}
         </div>
 
-        <aside>
-          <RecentVerifications />
+        <aside className="console-side">
+          <div className="side-panel">
+            <div className="side-title">SESSION</div>
+            <div className="flow-step" data-active={activeTab === "hash"}>
+              <span>01</span>
+              <strong>Hash lookup</strong>
+            </div>
+            <div className="flow-step" data-active={activeTab === "file"}>
+              <span>02</span>
+              <strong>Local file hash</strong>
+            </div>
+            <div className="flow-step" data-active={activeTab === "json"}>
+              <span>03</span>
+              <strong>Canonical JSON</strong>
+            </div>
+            <div className="flow-step" data-active={activeTab === "proof"}>
+              <span>04</span>
+              <strong>Proof bundle</strong>
+            </div>
+            <button
+              type="button"
+              className="cyber-button"
+              onClick={clearWorkspace}
+              style={{ width: "100%", marginTop: "1rem" }}
+            >
+              RESET_CONSOLE
+            </button>
+          </div>
+
+          <RecentVerifications
+            onSelect={(entry) => {
+              switchTab("hash");
+              setHashInput(entry.hash);
+              submitHash(entry.hash);
+            }}
+          />
         </aside>
       </div>
     </div>
