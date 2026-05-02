@@ -43,6 +43,7 @@ from api.routers.datasets import router as datasets_router
 from api.routers.federation import router as federation_router
 from api.routers.shards import router as shards_router
 from api.routers.witness import router as witness_router
+from api.routers.public_stats import router as public_stats_router
 from api.sth import router as sth_router
 
 
@@ -386,6 +387,7 @@ def create_app() -> FastAPI:
 
     # Admin RBAC router
     app.include_router(admin_router)
+    app.include_router(public_stats_router)
 
     # ── API Versioning ──
     # Mount all routers under /v1 prefix for versioned access.
@@ -404,6 +406,7 @@ def create_app() -> FastAPI:
     v1.include_router(datasets_router)
     v1.include_router(federation_router)
     v1.include_router(admin_router)
+    v1.include_router(public_stats_router)
     app.include_router(v1)
 
     @app.get("/", tags=["health"])
