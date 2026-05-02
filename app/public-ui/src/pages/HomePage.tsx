@@ -1,35 +1,41 @@
-import { useState, useCallback } from "react";
-import { useMutation } from "@tanstack/react-query";
-import { verifyHash, verifyProofBundle } from "../lib/api";
+import { useCallback, useState } from "react";
+import { useMutation, useQuery } from "@tanstack/react-query";
+import {
+  getPublicStats,
+  verifyHash,
+  verifyProofBundle,
+  type PublicStatsResponse,
+} from "../lib/api";
 import { addRecentVerification } from "../lib/storage";
 import { hashBytes } from "../lib/blake3";
 import { canonicalJsonEncode, type CanonicalJsonValue } from "../lib/crypto";
 import { playGlitchSound } from "../lib/audio";
 import type {
+  HashVerificationResponse,
+  ProofVerificationRequest,
+  ProofVerificationResponse,
+  RecentVerificationEntry,
   Verdict,
   VerdictDetail,
-  HashVerificationResponse,
-  ProofVerificationResponse,
-  ProofVerificationRequest,
-  RecentVerificationEntry,
 } from "../lib/types";
-import VerdictCard from "../components/VerdictCard";
-import HashDisplay from "../components/HashDisplay";
+import AnimatedNumber from "../components/AnimatedNumber";
 import FileHasher from "../components/FileHasher";
+import HashDisplay from "../components/HashDisplay";
 import RecentVerifications from "../components/RecentVerifications";
 import TiltContainer from "../components/TiltContainer";
-import AnimatedNumber from "../components/AnimatedNumber";
+import VerdictCard from "../components/VerdictCard";
 
 type Tab = "hash" | "file" | "json" | "proof";
 
 const HASH_RE = /^[0-9a-f]{64}$/i;
 
-const STATS: { label: string; val: number | string; raw?: boolean }[] = [
-  { label: "COPIES", val: 847293 },
-  { label: "SHARDS", val: 14 },
-  { label: "PROOFS", val: 23481 },
-  { label: "UPTIME", val: "99.9%", raw: true },
-];
+const FALLBACK_STATS: PublicStatsResponse = {
+  copies: 0,
+  shards: 0,
+  proofs: 0,
+  uptime: "0s",
+  uptime_seconds: 0,
+};
 
 function hashVerificationToVerdict(
   resp: HashVerificationResponse,
@@ -38,26 +44,11 @@ function hashVerificationToVerdict(
   return {
     verdict,
     details: [
-      {
-        key: "Content Hash",
-        value: resp.content_hash,
-        status: "ok",
-        copyable: true,
-      },
+      { key: "Content Hash", value: resp.content_hash, status: "ok", copyable: true },
       { key: "Proof ID", value: resp.proof_id, status: "neutral", copyable: true },
-      {
-        key: "Record ID",
-        value: resp.record_id,
-        status: "neutral",
-        copyable: true,
-      },
+      { key: "Record ID", value: resp.record_id, status: "neutral", copyable: true },
       { key: "Shard ID", value: resp.shard_id, status: "neutral" },
-      {
-        key: "Merkle Root",
-        value: resp.merkle_root,
-        status: "neutral",
-        copyable: true,
-      },
+      { key: "Merkle Root", value: resp.merkle_root, status: "neutral", copyable: true },
       {
         key: "Merkle Proof",
         value: resp.merkle_proof_valid ? "Valid" : "Invalid",
@@ -103,18 +94,8 @@ function proofVerificationToVerdict(
   return {
     verdict,
     details: [
-      {
-        key: "Content Hash",
-        value: resp.content_hash,
-        status: "neutral",
-        copyable: true,
-      },
-      {
-        key: "Merkle Root",
-        value: resp.merkle_root,
-        status: "neutral",
-        copyable: true,
-      },
+      { key: "Content Hash", value: resp.content_hash, status: "neutral", copyable: true },
+      { key: "Merkle Root", value: resp.merkle_root, status: "neutral", copyable: true },
       {
         key: "Hash Matches Proof",
         value: resp.content_hash_matches_proof ? "Yes" : "No",
@@ -130,16 +111,6 @@ function proofVerificationToVerdict(
         value: resp.known_to_server ? "Yes" : "No",
         status: resp.known_to_server ? "ok" : "warn",
       },
-      ...(resp.poseidon_root
-        ? [
-            {
-              key: "Poseidon Root",
-              value: resp.poseidon_root,
-              status: "neutral" as const,
-              copyable: true,
-            },
-          ]
-        : []),
     ],
   };
 }
@@ -155,12 +126,19 @@ export default function HomePage() {
   const [jsonCanonical, setJsonCanonical] = useState<string | null>(null);
   const [proofInput, setProofInput] = useState("");
   const [proofError, setProofError] = useState<string | null>(null);
-
   const [verdictResult, setVerdictResult] = useState<{
     verdict: Verdict;
     details: VerdictDetail[];
     displayHash?: string;
   } | null>(null);
+
+  const statsQuery = useQuery({
+    queryKey: ["public-stats"],
+    queryFn: getPublicStats,
+    staleTime: 15_000,
+    refetchInterval: 30_000,
+  });
+  const stats = statsQuery.data ?? FALLBACK_STATS;
 
   const switchTab = (id: Tab) => {
     setActiveTab(id);
@@ -188,14 +166,7 @@ export default function HomePage() {
         const qHash = hashInput || fileHash || "";
         setVerdictResult({
           verdict: "unknown",
-          details: [
-            {
-              key: "Queried Hash",
-              value: qHash,
-              status: "warn",
-              copyable: true,
-            },
-          ],
+          details: [{ key: "Queried Hash", value: qHash, status: "warn", copyable: true }],
           displayHash: qHash || undefined,
         });
         addRecentVerification({
@@ -246,26 +217,15 @@ export default function HomePage() {
     setJsonCanonical(null);
     setVerdictResult(null);
 
-    let parsed: CanonicalJsonValue;
     try {
-      parsed = JSON.parse(jsonInput) as CanonicalJsonValue;
-    } catch (e) {
-      setJsonError(
-        "Invalid JSON: " + (e instanceof Error ? e.message : String(e)),
-      );
-      return;
-    }
-
-    try {
+      const parsed = JSON.parse(jsonInput) as CanonicalJsonValue;
       const canon = canonicalJsonEncode(parsed);
+      const hex = await hashBytes(new TextEncoder().encode(canon));
       setJsonCanonical(canon);
-      const bytes = new TextEncoder().encode(canon);
-      const hex = await hashBytes(bytes);
       setHashInput(hex);
-      setActiveTab("hash");
       submitHash(hex);
-    } catch (e) {
-      setJsonError(e instanceof Error ? e.message : String(e));
+    } catch (err) {
+      setJsonError(err instanceof Error ? err.message : String(err));
     }
   }, [jsonInput, submitHash]);
 
@@ -275,36 +235,37 @@ export default function HomePage() {
     try {
       const parsed = JSON.parse(proofInput) as ProofVerificationRequest;
       if (!parsed.content_hash || !parsed.merkle_root || !parsed.merkle_proof) {
-        setProofError(
-          "Bundle must include content_hash, merkle_root, and merkle_proof",
-        );
+        setProofError("Bundle must include content_hash, merkle_root, and merkle_proof");
         return;
       }
       proofMutation.mutate(parsed);
     } catch {
-      setProofError("Invalid JSON — paste the full proof bundle");
+      setProofError("Invalid JSON: paste the full proof bundle");
     }
   }, [proofInput, proofMutation]);
 
   const isPending = hashMutation.isPending || proofMutation.isPending;
-
-  const TABS: { id: Tab; label: string }[] = [
+  const tabs: { id: Tab; label: string }[] = [
     { id: "hash", label: "HASH" },
     { id: "file", label: "FILE" },
     { id: "json", label: "JSON_DOC" },
     { id: "proof", label: "PROOF_BUNDLE" },
   ];
+  const statCards = [
+    { label: "COPIES", value: stats.copies },
+    { label: "SHARDS", value: stats.shards },
+    { label: "PROOFS", value: stats.proofs },
+    { label: "UPTIME", value: stats.uptime, raw: true },
+  ];
 
   return (
     <div>
-      {/* Hero */}
       <div style={{ marginBottom: "3rem" }}>
         <h1
           style={{
             fontSize: "clamp(1.8rem, 5vw, 3rem)",
             margin: "0 0 0.75rem",
             textShadow: "0 0 12px #00FF41",
-            letterSpacing: "-0.02em",
             fontFamily: "'DM Mono', monospace",
           }}
         >
@@ -313,19 +274,17 @@ export default function HomePage() {
         <p
           style={{
             color: "rgba(0,255,65,0.55)",
-            maxWidth: "520px",
+            maxWidth: "540px",
             fontSize: "0.82rem",
             margin: 0,
             lineHeight: 1.65,
           }}
         >
-          The first rule of Project Olympus: You do not trust the hash.
-          The second rule: You independently RE-VERIFY the hash.
-          Merkle proofs are re-computed entirely in your browser.
+          Independently verify Olympus hashes, documents, and proof bundles
+          against the append-only ledger.
         </p>
       </div>
 
-      {/* Stats strip */}
       <div
         style={{
           display: "grid",
@@ -334,24 +293,14 @@ export default function HomePage() {
           marginBottom: "2.5rem",
         }}
       >
-        {STATS.map((s, i) => (
+        {statCards.map((s) => (
           <div
-            key={i}
+            key={s.label}
             className="cyber-panel-sm"
             style={{ padding: "0.85rem 1rem", textAlign: "center" }}
           >
-            <div
-              style={{
-                fontSize: "1.1rem",
-                color: "#00FF41",
-                animation: "pulse-glow 3s ease-in-out infinite",
-              }}
-            >
-              {s.raw ? (
-                String(s.val)
-              ) : (
-                <AnimatedNumber value={s.val as number} />
-              )}
+            <div style={{ fontSize: "1.1rem", color: "#00FF41" }}>
+              {s.raw ? String(s.value) : <AnimatedNumber value={Number(s.value)} />}
             </div>
             <div
               style={{
@@ -367,28 +316,19 @@ export default function HomePage() {
         ))}
       </div>
 
-      {/* Two-column layout on large screens */}
-      <div
-        style={{
-          display: "grid",
-          gridTemplateColumns: "1fr",
-          gap: "2.5rem",
-        }}
-        className="lg:grid-cols-[1fr_220px]"
-      >
+      <div style={{ display: "grid", gridTemplateColumns: "1fr", gap: "2.5rem" }}>
         <div style={{ minWidth: 0 }}>
-          {/* Verification Terminal */}
           <TiltContainer>
             <div className="cyber-panel" style={{ padding: 0 }}>
-              {/* Tab bar */}
               <div
                 role="tablist"
                 style={{
                   display: "flex",
                   borderBottom: "1px solid rgba(0,255,65,0.18)",
+                  overflowX: "auto",
                 }}
               >
-                {TABS.map((t) => (
+                {tabs.map((t) => (
                   <button
                     key={t.id}
                     role="tab"
@@ -403,20 +343,10 @@ export default function HomePage() {
               </div>
 
               <div style={{ padding: "1.75rem" }}>
-                {/* Hash tab */}
                 {activeTab === "hash" && (
                   <div>
-                    <label
-                      htmlFor="hash-input"
-                      style={{
-                        display: "block",
-                        fontSize: "0.6rem",
-                        color: "rgba(0,255,65,0.45)",
-                        marginBottom: "0.5rem",
-                        letterSpacing: "0.06em",
-                      }}
-                    >
-                      INPUT_BUFFER_01 — BLAKE3 content hash (64 hex chars)
+                    <label htmlFor="hash-input" className="terminal-label">
+                      BLAKE3 content hash
                     </label>
                     <div style={{ display: "flex", gap: "0.6rem" }}>
                       <input
@@ -437,20 +367,15 @@ export default function HomePage() {
                         type="button"
                         className="cyber-button"
                         onClick={() => submitHash(hashInput)}
-                        onMouseEnter={() => playGlitchSound("blip")}
                         disabled={isPending}
-                        style={{ flexShrink: 0 }}
                       >
-                        {isPending ? "EXECUTING…" : "EXECUTE"}
+                        {isPending ? "EXECUTING..." : "EXECUTE"}
                       </button>
                     </div>
-                    {hashError && (
-                      <p className="err-text">{hashError}</p>
-                    )}
+                    {hashError && <p className="err-text">{hashError}</p>}
                   </div>
                 )}
 
-                {/* File tab */}
                 {activeTab === "file" && (
                   <div>
                     <FileHasher
@@ -461,35 +386,9 @@ export default function HomePage() {
                       onProgress={setFileProgress}
                     />
                     {fileProgress > 0 && fileProgress < 100 && (
-                      <div style={{ marginTop: "0.75rem" }}>
-                        <div
-                          style={{
-                            height: 2,
-                            background: "rgba(0,255,65,0.15)",
-                            borderRadius: 1,
-                            overflow: "hidden",
-                          }}
-                        >
-                          <div
-                            style={{
-                              height: "100%",
-                              width: `${fileProgress}%`,
-                              background: "#00FF41",
-                              transition: "width 0.15s",
-                              boxShadow: "0 0 6px #00FF41",
-                            }}
-                          />
-                        </div>
-                        <p
-                          style={{
-                            fontSize: "0.65rem",
-                            color: "rgba(0,255,65,0.4)",
-                            margin: "0.25rem 0 0",
-                          }}
-                        >
-                          HASHING… {fileProgress}%
-                        </p>
-                      </div>
+                      <p style={{ fontSize: "0.65rem", color: "rgba(0,255,65,0.45)" }}>
+                        HASHING... {fileProgress}%
+                      </p>
                     )}
                     {fileHash && (
                       <div style={{ marginTop: "1rem" }}>
@@ -498,39 +397,27 @@ export default function HomePage() {
                           type="button"
                           className="cyber-button"
                           onClick={() => submitHash(fileHash)}
-                          onMouseEnter={() => playGlitchSound("blip")}
                           disabled={isPending}
                           style={{ marginTop: "1rem" }}
                         >
-                          {isPending ? "EXECUTING…" : "VERIFY_ON_LEDGER"}
+                          {isPending ? "EXECUTING..." : "VERIFY_ON_LEDGER"}
                         </button>
                       </div>
                     )}
                   </div>
                 )}
 
-                {/* JSON Document tab */}
                 {activeTab === "json" && (
                   <div>
-                    <label
-                      htmlFor="json-input"
-                      style={{
-                        display: "block",
-                        fontSize: "0.6rem",
-                        color: "rgba(0,255,65,0.45)",
-                        marginBottom: "0.5rem",
-                        letterSpacing: "0.06em",
-                      }}
-                    >
-                      PASTE_JSON_DOCUMENT — canonicalized (JCS/RFC 8785) then
-                      hashed with BLAKE3
+                    <label htmlFor="json-input" className="terminal-label">
+                      JSON document
                     </label>
                     <textarea
                       id="json-input"
                       value={jsonInput}
                       onChange={(e) => setJsonInput(e.target.value)}
-                      rows={5}
-                      placeholder='{"title": "Budget 2025", "amount": 1000000}'
+                      rows={6}
+                      placeholder='{"title":"Budget 2025","amount":1000000}'
                       spellCheck={false}
                       className="cyber-input"
                       style={{ resize: "vertical" }}
@@ -540,13 +427,12 @@ export default function HomePage() {
                         style={{
                           fontSize: "0.6rem",
                           color: "rgba(0,255,65,0.4)",
-                          margin: "0.3rem 0 0",
                           wordBreak: "break-all",
                         }}
                       >
                         CANONICAL:{" "}
                         {jsonCanonical.length > 120
-                          ? jsonCanonical.slice(0, 120) + "…"
+                          ? `${jsonCanonical.slice(0, 120)}...`
                           : jsonCanonical}
                       </p>
                     )}
@@ -555,58 +441,37 @@ export default function HomePage() {
                       type="button"
                       className="cyber-button"
                       onClick={() => void submitJsonDoc()}
-                      onMouseEnter={() => playGlitchSound("blip")}
                       disabled={isPending}
                       style={{ marginTop: "0.75rem" }}
                     >
-                      {isPending ? "EXECUTING…" : "CANONICALIZE_+_HASH"}
+                      {isPending ? "EXECUTING..." : "CANONICALIZE_AND_HASH"}
                     </button>
                   </div>
                 )}
 
-                {/* Proof Bundle tab */}
                 {activeTab === "proof" && (
                   <div>
-                    <label
-                      htmlFor="proof-input"
-                      style={{
-                        display: "block",
-                        fontSize: "0.6rem",
-                        color: "rgba(0,255,65,0.45)",
-                        marginBottom: "0.5rem",
-                        letterSpacing: "0.06em",
-                      }}
-                    >
-                      PASTE_PROOF_BUNDLE — JSON with content_hash, merkle_root,
-                      merkle_proof
+                    <label htmlFor="proof-input" className="terminal-label">
+                      Proof bundle JSON
                     </label>
                     <textarea
                       id="proof-input"
                       value={proofInput}
                       onChange={(e) => setProofInput(e.target.value)}
                       rows={9}
-                      placeholder='{"content_hash":"...","merkle_root":"...","merkle_proof":{...}}'
+                      placeholder='{"content_hash":"...","merkle_root":"...","merkle_proof":{}}'
                       spellCheck={false}
                       className="cyber-input"
                       style={{ resize: "vertical" }}
                     />
-                    <p
-                      style={{
-                        fontSize: "0.62rem",
-                        color: "rgba(0,255,65,0.35)",
-                        margin: "0.4rem 0 0.75rem",
-                      }}
-                    >
-                      Both HASH_MATCHES_PROOF and SERVER_MERKLE_VALID must pass.
-                    </p>
                     <button
                       type="button"
                       className="cyber-button"
                       onClick={submitProof}
-                      onMouseEnter={() => playGlitchSound("blip")}
                       disabled={isPending}
+                      style={{ marginTop: "0.75rem" }}
                     >
-                      {isPending ? "EXECUTING…" : "EXECUTE_VERIFICATION"}
+                      {isPending ? "EXECUTING..." : "EXECUTE_VERIFICATION"}
                     </button>
                     {proofError && <p className="err-text">{proofError}</p>}
                   </div>
@@ -615,7 +480,6 @@ export default function HomePage() {
             </div>
           </TiltContainer>
 
-          {/* Result */}
           {verdictResult && (
             <div>
               {verdictResult.displayHash && (
@@ -629,98 +493,8 @@ export default function HomePage() {
               />
             </div>
           )}
-
-          {/* How It Works */}
-          <section
-            style={{
-              marginTop: "4rem",
-              paddingTop: "2.5rem",
-              borderTop: "1px solid rgba(0,255,65,0.1)",
-            }}
-          >
-            <h2
-              style={{
-                fontSize: "0.62rem",
-                letterSpacing: "0.15em",
-                textTransform: "uppercase",
-                color: "rgba(0,255,65,0.4)",
-                margin: "0 0 1.5rem",
-              }}
-            >
-              HOW_IT_WORKS
-            </h2>
-            <div
-              style={{
-                display: "grid",
-                gridTemplateColumns: "repeat(auto-fit, minmax(190px, 1fr))",
-                gap: "0.85rem",
-              }}
-            >
-              {(
-                [
-                  {
-                    n: "01",
-                    title: "BLAKE3_WASM",
-                    body: "Files are hashed locally using a WebAssembly BLAKE3 implementation. Bytes never leave your machine.",
-                  },
-                  {
-                    n: "02",
-                    title: "CANONICAL_JSON",
-                    body: "Documents are serialized with JCS (RFC 8785) — sorted keys, NFC Unicode, no whitespace — ensuring byte-for-byte reproducibility.",
-                  },
-                  {
-                    n: "03",
-                    title: "LEDGER_LOOKUP",
-                    body: "The 64-char BLAKE3 digest is sent to the Olympus append-only ledger API which returns the stored Merkle proof bundle.",
-                  },
-                  {
-                    n: "04",
-                    title: "CLIENT_VERIFY",
-                    body: "Your browser independently recomputes the Merkle root from the proof path using OLY:LEAF:V1 / OLY:NODE:V1 domain-separated BLAKE3 — server trust not required.",
-                  },
-                ] as const
-              ).map((step) => (
-                <div
-                  key={step.n}
-                  className="cyber-panel-sm"
-                  style={{ padding: "1rem 1.1rem" }}
-                >
-                  <div
-                    style={{
-                      color: "#ff0055",
-                      fontSize: "0.6rem",
-                      marginBottom: "0.4rem",
-                      letterSpacing: "0.05em",
-                    }}
-                  >
-                    {step.n}
-                  </div>
-                  <h3
-                    style={{
-                      margin: "0 0 0.4rem",
-                      fontSize: "0.78rem",
-                      color: "#00FF41",
-                    }}
-                  >
-                    {step.title}
-                  </h3>
-                  <p
-                    style={{
-                      margin: 0,
-                      fontSize: "0.68rem",
-                      color: "rgba(0,255,65,0.45)",
-                      lineHeight: 1.55,
-                    }}
-                  >
-                    {step.body}
-                  </p>
-                </div>
-              ))}
-            </div>
-          </section>
         </div>
 
-        {/* Sidebar */}
         <aside>
           <RecentVerifications />
         </aside>

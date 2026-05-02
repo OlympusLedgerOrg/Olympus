@@ -102,3 +102,15 @@ export function verifyDataset(
 ): Promise<DatasetVerificationResponse> {
   return apiFetch<DatasetVerificationResponse>(`/datasets/${datasetId}/verify`);
 }
+
+export type PublicStatsResponse = {
+  copies: number;
+  shards: number;
+  proofs: number;
+  uptime: string;
+  uptime_seconds: number;
+};
+
+export function getPublicStats(): Promise<PublicStatsResponse> {
+  return apiFetch<PublicStatsResponse>("/v1/public/stats");
+}

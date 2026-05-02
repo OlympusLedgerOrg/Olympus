@@ -22,6 +22,15 @@ COPY requirements.txt .
 RUN pip install --no-cache-dir --upgrade pip setuptools wheel \
     && pip install --no-cache-dir -r requirements.txt
 
+# Build the PyO3 extension as a wheel so production gets olympus_core without
+# carrying Rust tooling in the runtime image.
+FROM ghcr.io/pyo3/maturin:v1.8.7 AS olympus-core-builder
+
+WORKDIR /build
+COPY Cargo.toml Cargo.lock ./
+COPY src ./src
+RUN maturin build --release --interpreter python3.12 --out /wheels
+
 # Development stage
 FROM base AS development
 
@@ -34,6 +43,11 @@ CMD ["uvicorn", "api.main:app", "--host", "0.0.0.0", "--port", "8000", "--reload
 
 # Production stage
 FROM base AS production
+
+# Install the prebuilt Rust/Python extension into the production environment.
+COPY --from=olympus-core-builder /wheels /tmp/wheels
+RUN pip install --no-cache-dir /tmp/wheels/*.whl \
+    && rm -rf /tmp/wheels
 
 # Security: Create non-root user with specific UID/GID and no home directory shell access
 RUN groupadd -r -g 1000 olympus \
