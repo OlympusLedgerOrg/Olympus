@@ -21,7 +21,7 @@ function formatBytes(bytes: number): string {
   return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
 }
 
-export default function FileHasher({ onHash, onProgress, onFile }: FileHasherProps) {
+export default function FileHasher({ onHash, onProgress }: FileHasherProps) {
   const [dragging, setDragging] = useState(false);
   const [fileName, setFileName] = useState<string | null>(null);
   const [fileSize, setFileSize] = useState<number | null>(null);
