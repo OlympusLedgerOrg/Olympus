@@ -1,3 +1,4 @@
+import { useSkin } from "../skins/SkinContext";
 import FileHasher from "../components/FileHasher";
 import HashDisplay from "../components/HashDisplay";
 
@@ -22,13 +23,10 @@ export default function FileTab({
   onFile,
   onVerify,
 }: FileTabProps) {
+  const { skin } = useSkin();
   return (
     <div>
-      <FileHasher
-        onHash={onHash}
-        onProgress={onProgress}
-        onFile={onFile}
-      />
+      <FileHasher onHash={onHash} onProgress={onProgress} onFile={onFile} />
       {fileProgress > 0 && fileProgress < 100 && (
         <p style={{ fontSize: "0.65rem", color: "rgba(0,255,65,0.45)" }}>
           HASHING... {fileProgress}%
@@ -64,7 +62,7 @@ export default function FileTab({
           )}
           <button
             type="button"
-            className="cyber-button"
+            className={skin.classes.buttonPrimary}
             onClick={onVerify}
             disabled={isPending}
             style={{ marginTop: "1rem" }}

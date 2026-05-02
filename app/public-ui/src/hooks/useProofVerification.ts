@@ -41,8 +41,7 @@ export function useProofVerification(
     } catch {
       setProofError("Invalid JSON: paste the full proof bundle");
     }
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [proofInput, proofMutation]);
+  }, [proofInput, proofMutation, setVerdictResult]);
 
   const reset = useCallback(() => {
     setProofInput("");

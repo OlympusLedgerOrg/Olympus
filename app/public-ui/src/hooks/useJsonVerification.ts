@@ -24,8 +24,7 @@ export function useJsonVerification(
     } catch (err) {
       setJsonError(err instanceof Error ? err.message : String(err));
     }
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [jsonInput, submitHash]);
+  }, [jsonInput, submitHash, setVerdictResult]);
 
   const formatJson = useCallback(() => {
     try {

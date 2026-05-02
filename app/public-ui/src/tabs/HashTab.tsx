@@ -1,3 +1,4 @@
+import { useSkin } from "../skins/SkinContext";
 import { SAMPLE_HASH } from "../lib/constants";
 
 interface HashTabProps {
@@ -21,6 +22,7 @@ export default function HashTab({
   onPaste,
   onClear,
 }: HashTabProps) {
+  const { skin } = useSkin();
   return (
     <div>
       <div className="field-head">
@@ -46,11 +48,11 @@ export default function HashTab({
           maxLength={64}
           spellCheck={false}
           autoComplete="off"
-          className="cyber-input"
+          className={skin.classes.input}
         />
         <button
           type="button"
-          className="cyber-button"
+          className={skin.classes.buttonPrimary}
           onClick={() => onSubmit(hashInput)}
           disabled={isPending || hashStatus.tone !== "ok"}
         >
@@ -58,19 +60,23 @@ export default function HashTab({
         </button>
       </div>
       <div className="quick-actions">
-        <button type="button" className="icon-text-btn" onClick={() => void onPaste()}>
+        <button
+          type="button"
+          className={skin.classes.buttonSecondary}
+          onClick={() => void onPaste()}
+        >
           PASTE
         </button>
         <button
           type="button"
-          className="icon-text-btn"
+          className={skin.classes.buttonSecondary}
           onClick={() => {
             setHashInput(SAMPLE_HASH);
           }}
         >
           SAMPLE
         </button>
-        <button type="button" className="icon-text-btn" onClick={onClear}>
+        <button type="button" className={skin.classes.buttonSecondary} onClick={onClear}>
           CLEAR
         </button>
       </div>

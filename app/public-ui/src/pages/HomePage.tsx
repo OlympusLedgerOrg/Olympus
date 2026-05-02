@@ -7,6 +7,7 @@ import { useHashVerification } from "../hooks/useHashVerification";
 import { useProofVerification } from "../hooks/useProofVerification";
 import { useFileCommit } from "../hooks/useFileCommit";
 import { useJsonVerification } from "../hooks/useJsonVerification";
+import { useSkin } from "../skins/SkinContext";
 import CommitPrompt from "../components/CommitPrompt";
 import HashDisplay from "../components/HashDisplay";
 import RecentVerifications from "../components/RecentVerifications";
@@ -29,6 +30,7 @@ const FALLBACK_STATS: PublicStatsResponse = {
 export default function HomePage() {
   const [activeTab, setActiveTab] = useState<Tab>("hash");
   const [verdictResult, setVerdictResult] = useState<VerdictState | null>(null);
+  const { skin } = useSkin();
 
   const statsQuery = useQuery({
     queryKey: ["public-stats"],
@@ -82,21 +84,22 @@ export default function HomePage() {
 
   return (
     <div>
-      <div className="console-hero">
+      <div className={skin.classes.hero}>
         <div>
           <h1
+            className={skin.classes.accentText}
             style={{
               fontSize: "clamp(1.8rem, 5vw, 3rem)",
               margin: "0 0 0.75rem",
-              textShadow: "0 0 12px #00FF41",
+              textShadow: skin.effects?.showGlow ? "0 0 12px currentColor" : "none",
               fontFamily: "'DM Mono', monospace",
             }}
           >
             VERIFY_TRUTH
           </h1>
           <p
+            className={skin.classes.mutedText}
             style={{
-              color: "rgba(0,255,65,0.55)",
               maxWidth: "600px",
               fontSize: "0.82rem",
               margin: 0,
@@ -122,14 +125,18 @@ export default function HomePage() {
       <div className="verify-grid">
         <div style={{ minWidth: 0 }}>
           <TiltContainer>
-            <div className="cyber-panel" style={{ padding: 0 }}>
+            <div className={skin.classes.panel} style={{ padding: 0 }}>
               <div role="tablist" className="tab-list">
                 {tabs.map((tab) => (
                   <button
                     key={tab.id}
                     role="tab"
                     aria-selected={activeTab === tab.id}
-                    className="tab-btn"
+                    className={
+                      activeTab === tab.id
+                        ? skin.classes.tabActive
+                        : skin.classes.tabInactive
+                    }
                     onClick={() => switchTab(tab.id)}
                     type="button"
                   >
@@ -142,13 +149,19 @@ export default function HomePage() {
                 {activeTab === "hash" && (
                   <HashTab
                     hashInput={hashHook.hashInput}
-                    setHashInput={(v) => { hashHook.setHashInput(v); hashHook.setHashError(null); }}
+                    setHashInput={(v) => {
+                      hashHook.setHashInput(v);
+                      hashHook.setHashError(null);
+                    }}
                     hashError={hashHook.hashError}
                     hashStatus={hashHook.hashStatus}
                     isPending={isPending}
                     onSubmit={hashHook.submitHash}
                     onPaste={hashHook.pasteHash}
-                    onClear={() => { hashHook.reset(); setVerdictResult(null); }}
+                    onClear={() => {
+                      hashHook.reset();
+                      setVerdictResult(null);
+                    }}
                   />
                 )}
                 {activeTab === "file" && (
@@ -160,13 +173,18 @@ export default function HomePage() {
                     onHash={fileHook.onHash}
                     onProgress={fileHook.onProgress}
                     onFile={fileHook.onFile}
-                    onVerify={() => fileHook.fileHash && hashHook.submitHash(fileHook.fileHash)}
+                    onVerify={() =>
+                      fileHook.fileHash && hashHook.submitHash(fileHook.fileHash)
+                    }
                   />
                 )}
                 {activeTab === "json" && (
                   <JsonTab
                     jsonInput={jsonHook.jsonInput}
-                    setJsonInput={(v) => { jsonHook.setJsonInput(v); jsonHook.setJsonError(null); }}
+                    setJsonInput={(v) => {
+                      jsonHook.setJsonInput(v);
+                      jsonHook.setJsonError(null);
+                    }}
                     jsonError={jsonHook.jsonError}
                     jsonCanonical={jsonHook.jsonCanonical}
                     isPending={isPending}
@@ -178,7 +196,10 @@ export default function HomePage() {
                 {activeTab === "proof" && (
                   <ProofTab
                     proofInput={proofHook.proofInput}
-                    setProofInput={(v) => { proofHook.setProofInput(v); proofHook.setProofError(null); }}
+                    setProofInput={(v) => {
+                      proofHook.setProofInput(v);
+                      proofHook.setProofError(null);
+                    }}
                     proofError={proofHook.proofError}
                     isPending={isPending}
                     onSubmit={proofHook.submitProof}
@@ -240,7 +261,7 @@ export default function HomePage() {
             </div>
             <button
               type="button"
-              className="cyber-button"
+              className={skin.classes.buttonPrimary}
               onClick={clearWorkspace}
               style={{ width: "100%", marginTop: "1rem" }}
             >

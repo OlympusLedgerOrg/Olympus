@@ -1,3 +1,5 @@
+import { useSkin } from "../skins/SkinContext";
+
 interface JsonTabProps {
   jsonInput: string;
   setJsonInput: (v: string) => void;
@@ -19,6 +21,7 @@ export default function JsonTab({
   onFormat,
   onMinify,
 }: JsonTabProps) {
+  const { skin } = useSkin();
   return (
     <div>
       <div className="field-head">
@@ -38,19 +41,19 @@ export default function JsonTab({
         rows={7}
         placeholder='{"title":"Budget 2025","amount":1000000}'
         spellCheck={false}
-        className="cyber-input"
+        className={skin.classes.input}
         style={{ resize: "vertical" }}
       />
       <div className="quick-actions">
-        <button type="button" className="icon-text-btn" onClick={onFormat}>
+        <button type="button" className={skin.classes.buttonSecondary} onClick={onFormat}>
           FORMAT
         </button>
-        <button type="button" className="icon-text-btn" onClick={onMinify}>
+        <button type="button" className={skin.classes.buttonSecondary} onClick={onMinify}>
           MINIFY
         </button>
         <button
           type="button"
-          className="icon-text-btn"
+          className={skin.classes.buttonSecondary}
           onClick={() =>
             setJsonInput(
               JSON.stringify(
@@ -75,7 +78,7 @@ export default function JsonTab({
       {jsonError && <p className="err-text">{jsonError}</p>}
       <button
         type="button"
-        className="cyber-button"
+        className={skin.classes.buttonPrimary}
         onClick={() => void onSubmit()}
         disabled={isPending || !jsonInput.trim()}
         style={{ marginTop: "0.75rem" }}
