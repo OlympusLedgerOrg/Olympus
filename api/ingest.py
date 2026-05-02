@@ -121,6 +121,12 @@ __all__ = [
     "_parse_content_hash",
 ]
 
+# Poseidon hash suite identifier emitted in proof bundle metadata — see ADR-0009.
+# Defined here as a string literal to keep api.ingest importable without the
+# olympus_core Rust extension. The authoritative definition (with full parameter
+# dict) lives in protocol/poseidon.py::HASH_SUITE_VERSION.
+_HASH_SUITE_VERSION = "poseidon-bn254-v1"
+
 
 def _normalize_merkle_root(merkle_root: str) -> str:
     """Validate and normalize a hex-encoded Merkle root.
@@ -1318,6 +1324,9 @@ async def verify_submitted_proof_bundle(
         merkle_proof_valid=merkle_proof_valid,
         known_to_server=record is not None,
         poseidon_root=record.get("poseidon_root") if record is not None else None,
+        hash_suite=_HASH_SUITE_VERSION
+        if (record is not None and record.get("poseidon_root"))
+        else None,
     )
 
 
@@ -1446,6 +1455,7 @@ async def commit_artifact(
                     committed_at=existing["timestamp"],
                     ledger_entry_hash=existing["ledger_entry_hash"],
                     poseidon_root=existing.get("poseidon_root"),
+                    hash_suite=_HASH_SUITE_VERSION if existing.get("poseidon_root") else None,
                 )
 
         proof_id = str(uuid.uuid4())
@@ -1514,6 +1524,12 @@ async def commit_artifact(
                         ledger_entry_hash=existing.get("ledger_entry_hash", ""),
                         poseidon_root=existing.get("poseidon_root")
                         or existing.get("canonicalization", {}).get("poseidon_root"),
+                        hash_suite=_HASH_SUITE_VERSION
+                        if (
+                            existing.get("poseidon_root")
+                            or existing.get("canonicalization", {}).get("poseidon_root")
+                        )
+                        else None,
                     )
                 logger.exception(
                     "artifact_commit_storage_failed",
@@ -1586,6 +1602,7 @@ async def commit_artifact(
                 "batch_id": batch_id,
                 "batch_index": 0,
                 "poseidon_root": persisted_poseidon_root,
+                "hash_suite": _HASH_SUITE_VERSION if persisted_poseidon_root is not None else None,
             }
             _ingestion_store[proof_id] = ingestion_entry
             _content_index[artifact_hash_hex] = proof_id
@@ -1613,6 +1630,7 @@ async def commit_artifact(
                 committed_at=append_result.ts,
                 ledger_entry_hash=append_result.ledger_entry_hash,
                 poseidon_root=persisted_poseidon_root,
+                hash_suite=_HASH_SUITE_VERSION if persisted_poseidon_root is not None else None,
             )
 
         # Fall back to in-memory storage
@@ -1668,6 +1686,7 @@ async def commit_artifact(
             "batch_id": batch_id,
             "batch_index": 0,
             "poseidon_root": poseidon_root_normalized,
+            "hash_suite": _HASH_SUITE_VERSION,
         }
         _content_index[artifact_hash_hex] = proof_id
         INGEST_TOTAL.labels(outcome="committed").inc()
@@ -1689,4 +1708,5 @@ async def commit_artifact(
         committed_at=ts,
         ledger_entry_hash=ledger_entry.entry_hash,
         poseidon_root=poseidon_root_normalized,
+        hash_suite=_HASH_SUITE_VERSION,
     )

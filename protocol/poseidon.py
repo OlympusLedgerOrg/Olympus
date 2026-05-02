@@ -32,6 +32,27 @@ SNARK_SCALAR_FIELD = int(get_bn254_scalar_field())
 POSEIDON_DOMAIN_LEAF = 0
 POSEIDON_DOMAIN_NODE = 1
 
+# The canonical identifier for the Poseidon hash suite used in all Olympus circuits.
+# This constant is emitted in proof bundle metadata so verifiers can select
+# the correct parameter set. MUST NOT be changed — see ADR-0009.
+HASH_SUITE_VERSION: str = "poseidon-bn254-v1"
+
+# Full parameter set for poseidon-bn254-v1 — pinned per ADR-0009.
+# These values MUST match circomlibjs/src/poseidon_constants.json exactly.
+POSEIDON_PARAMS: dict = {
+    "suite_id": "poseidon-bn254-v1",
+    "curve": "BN254",
+    "width": 3,          # t=3: capacity=1, rate=2
+    "arity": 2,          # 2 inputs per hash call
+    "n_rounds_f": 8,     # full rounds (4 before + 4 after partial)
+    "n_rounds_p": 57,    # partial rounds
+    "sbox_exponent": 5,  # x^5 mod p
+    "field_modulus": 21888242871839275222246405745257275088548364400416034343698204186575808495617,
+    "domain_tag_leaf": 0,
+    "domain_tag_node": 1,
+    "constants_source": "circomlibjs/src/poseidon_constants.json",
+}
+
 
 def poseidon_hash(a: int, b: int) -> int:
     """Compute Poseidon hash of two field elements.
@@ -119,6 +140,8 @@ __all__ = [
     "SNARK_SCALAR_FIELD",
     "POSEIDON_DOMAIN_LEAF",
     "POSEIDON_DOMAIN_NODE",
+    "HASH_SUITE_VERSION",
+    "POSEIDON_PARAMS",
     "poseidon_hash",
     "poseidon_hash_bn128",
     "poseidon_leaf_hash",
