@@ -3,14 +3,14 @@
 tools/ceremony_contribute.py — CLI for Groth16 trusted-setup Phase 2 contributions.
 
 Guides a single participant through contributing randomness to the Groth16
-trusted setup ceremony.  Wraps snarkjs under the hood and produces a JSON
+trusted setup ceremony. Wraps snarkjs under the hood and produces a JSON
 metadata sidecar alongside the output .zkey file.
 
 Usage:
-    python tools/ceremony_contribute.py \\
-        --ptau path/to/phase1.ptau \\
-        --circuit path/to/circuit.circom \\
-        --participant "Alice" \\
+    python tools/ceremony_contribute.py \
+        --ptau path/to/phase1.ptau \
+        --circuit path/to/circuit.circom \
+        --participant "Alice" \
         --output path/to/contribution.zkey
 
 The tool:
@@ -23,18 +23,33 @@ The tool:
 
 Exit codes:
     0 — success
-    1 — failure (snarkjs unavailable, subprocess error, etc.)
+    1 — failure (snarkjs unavailable, subprocess error, timeout, etc.)
 """
 
 from __future__ import annotations
 
+import argparse
 import json
 import logging
+import secrets
 import subprocess
 import sys
+from datetime import datetime, timezone
 from pathlib import Path
 
 import blake3 as _blake3
+
+
+# Standalone tools are often invoked from outside the repository root.
+# Make internal imports deterministic instead of silently falling back.
+REPO_ROOT = Path(__file__).resolve().parent.parent
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
+
+try:
+    from protocol.timestamps import current_timestamp  # noqa: E402
+except ImportError:  # pragma: no cover - exercised only when repo imports are unavailable
+    current_timestamp = None
 
 logger = logging.getLogger(__name__)
 
@@ -73,20 +88,19 @@ def _check_snarkjs() -> bool:
             timeout=10,
         )
         return result.returncode == 0
-    except (FileNotFoundError, subprocess.TimeoutExpired):
+    except FileNotFoundError:
+        logger.debug("snarkjs not found in PATH (npx/node not installed)")
+        return False
+    except subprocess.TimeoutExpired:
+        logger.debug("snarkjs version check timed out")
         return False
 
 
 def _utc_now() -> str:
     """Return current UTC time as RFC3339 with Z suffix."""
-    try:
-        from protocol.timestamps import current_timestamp
-
+    if current_timestamp is not None:
         return current_timestamp()
-    except ImportError:
-        from datetime import datetime, timezone
-
-        return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
 # ---------------------------------------------------------------------------
@@ -100,7 +114,8 @@ def contribute(
     circuit_path: Path,
     participant_name: str,
     output_path: Path,
-) -> dict:
+    entropy: str | None = None,
+) -> dict[str, str]:
     """Run a Groth16 Phase 2 contribution for the given circuit.
 
     Args:
@@ -108,18 +123,22 @@ def contribute(
         circuit_path: Path to the .circom source file (used for provenance hash).
         participant_name: Human-readable name of the contributor.
         output_path: Destination path for the final .zkey file.
+        entropy: Optional entropy string. If omitted, a random value is generated.
 
     Returns:
         Metadata dict written to the sidecar JSON file.
 
     Raises:
-        FileNotFoundError: If ptau_path or circuit_path do not exist.
-        RuntimeError: If snarkjs groth16 setup or zkey contribute fails.
+        FileNotFoundError: If ptau_path, circuit_path, or the sibling .r1cs do not exist.
+        RuntimeError: If snarkjs is unavailable or a subprocess exits non-zero.
+        subprocess.TimeoutExpired: If snarkjs exceeds the configured timeout.
     """
     if not ptau_path.exists():
         raise FileNotFoundError(f"PTAU file not found: {ptau_path}")
     if not circuit_path.exists():
         raise FileNotFoundError(f"Circuit not found: {circuit_path}")
+    if not _check_snarkjs():
+        raise RuntimeError("snarkjs not found. Install with: npm install -g snarkjs")
 
     r1cs_path = circuit_path.with_suffix(".r1cs")
     if not r1cs_path.exists():
@@ -128,10 +147,17 @@ def contribute(
         )
 
     output_path = output_path.resolve()
-    initial_zkey = output_path.parent / "initial_DONOTCOMMIT.zkey"
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+
+    contribution_entropy = entropy or secrets.token_hex(64)
+    initial_zkey = output_path.parent / f".initial_DONOTCOMMIT-{secrets.token_hex(8)}.zkey"
+
+    logger.info("Starting Groth16 contribution for participant: %s", participant_name)
+    logger.info("Circuit source: %s", circuit_path)
+    logger.info("Phase 1 ptau: %s", ptau_path)
 
     try:
-        # Step 1: groth16 setup — produces the initial (pre-contribution) .zkey
+        # Step 1: groth16 setup — produces the initial (pre-contribution) .zkey.
         setup_result = subprocess.run(
             [
                 "npx",
@@ -152,7 +178,8 @@ def contribute(
                 f"{setup_result.stderr}"
             )
 
-        # Step 2: zkey contribute — folds participant's entropy
+        # Step 2: zkey contribute — -e makes snarkjs non-interactive so the CLI
+        # never hides an entropy prompt behind captured stdout/stderr.
         contribute_result = subprocess.run(
             [
                 "npx",
@@ -162,7 +189,7 @@ def contribute(
                 str(initial_zkey),
                 str(output_path),
                 f"--name={participant_name}",
-                "-v",
+                f"-e={contribution_entropy}",
             ],
             capture_output=True,
             text=True,
@@ -191,11 +218,11 @@ def contribute(
     zkey_hash = _hash_file(output_path)
     circuit_hash = _hash_file(circuit_path)
 
-    metadata: dict = {
+    metadata: dict[str, str] = {
         "participant": participant_name,
         "timestamp": _utc_now(),
-        "zkey_blake3_hex": zkey_hash,       # hash of the output .zkey file
-        "circuit_blake3_hex": circuit_hash,  # hash of the circuit source
+        "zkey_blake3_hex": zkey_hash,
+        "circuit_blake3_hex": circuit_hash,
         "ptau_path": str(ptau_path),
         "circuit_path": str(circuit_path),
         "output_path": str(output_path),
@@ -203,7 +230,10 @@ def contribute(
 
     sidecar = output_path.with_suffix(".metadata.json")
     sidecar.write_text(json.dumps(metadata, indent=2) + "\n", encoding="utf-8")
-    logger.info("Wrote metadata sidecar: %s", sidecar)
+
+    logger.info("=== CONTRIBUTION COMPLETE ===")
+    logger.info("zkey BLAKE3 hash (publish this): %s", zkey_hash)
+    logger.info("Metadata written to: %s", sidecar)
 
     return metadata
 
@@ -219,8 +249,6 @@ def main() -> int:
     Guides a participant through contributing to the Groth16 trusted setup.
     Exits 0 on success, 1 on failure.
     """
-    import argparse
-
     logging.basicConfig(
         level=logging.INFO,
         format="%(levelname)s: %(message)s",
@@ -241,10 +269,12 @@ def main() -> int:
         required=True,
         type=Path,
         metavar="FILE",
-        help="Path to the compiled circuit (.circom source for provenance).",
+        help="Path to the Circom source (.circom); sibling .r1cs must already exist.",
     )
     parser.add_argument(
         "--participant",
+        "--participant-name",
+        dest="participant_name",
         required=True,
         metavar="NAME",
         help="Your name or pseudonym for the ceremony transcript.",
@@ -256,28 +286,25 @@ def main() -> int:
         metavar="FILE",
         help="Destination path for the contribution .zkey file.",
     )
+    parser.add_argument(
+        "--entropy",
+        default=None,
+        help="Additional entropy string (optional, random by default).",
+    )
     args = parser.parse_args()
 
-    if not _check_snarkjs():
-        logger.error(
-            "snarkjs not found — install it with: npm install -g snarkjs"
-        )
-        return 1
-
     try:
-        metadata = contribute(
+        contribute(
             ptau_path=args.ptau,
             circuit_path=args.circuit,
-            participant_name=args.participant,
+            participant_name=args.participant_name,
             output_path=args.output,
+            entropy=args.entropy,
         )
-    except (FileNotFoundError, RuntimeError) as exc:
-        logger.error("%s", exc)
+    except (FileNotFoundError, RuntimeError, subprocess.TimeoutExpired) as exc:
+        logger.error("Ceremony contribution failed: %s", exc)
         return 1
 
-    print(f"Contribution complete: {args.output}")
-    print(f"  zkey_blake3_hex:    {metadata['zkey_blake3_hex']}")
-    print(f"  circuit_blake3_hex: {metadata['circuit_blake3_hex']}")
     return 0
 
 

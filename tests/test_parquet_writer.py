@@ -105,9 +105,7 @@ class TestWriteDeterministicParquet:
             ("brotli", 3),
         ],
     )
-    def test_custom_compression(
-        self, tmp_path: Path, codec: str, expect_level: int | None
-    ) -> None:
+    def test_custom_compression(self, tmp_path: Path, codec: str, expect_level: int | None) -> None:
         from protocol.parquet_writer import write_deterministic_parquet
 
         result = write_deterministic_parquet(

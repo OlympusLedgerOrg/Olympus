@@ -1,0 +1,124 @@
+## 🔒 Layer 2 hardening: add `PR_SET_PDEATHSIG` to the seccomp fallback path
+
+The current fallback (when `start_new_session=True` raises `OSError`) uses plain `Popen` + `proc.kill()` on timeout. This kills the `npx` parent but leaves the underlying `node` process churning indefinitely — until the CI job hits its global wall-clock timeout.
+
+**Fix:** set `PR_SET_PDEATHSIG=SIGKILL` via `prctl(2)` in the child's `preexec_fn`. This tells the Linux kernel to deliver `SIGKILL` to the child the moment its parent (Python) dies — no process group required, no userspace polling.
+
+### Drop-in additions
+
+```python
+import ctypes
+import ctypes.util
+import platform
+from typing import Callable
+
+def _make_pdeathsig_preexec() -> Callable[[], None] | None:
+    """
+    Return a preexec_fn that calls prctl(PR_SET_PDEATHSIG, SIGKILL) in the
+    child process on Linux.
+
+    Why: when setsid(2) is blocked (seccomp/gVisor), we can't use process
+    groups to clean up npx's Node.js child on timeout. PR_SET_PDEATHSIG
+    shifts the burden to the kernel — it delivers SIGKILL to the child
+    automatically the moment its Python parent exits or is killed.
+
+    Returns None on non-Linux platforms (Popen ignores a None preexec_fn).
+    Errors inside the child are swallowed — if prctl itself is blocked the
+    environment is too restricted for snarkjs to run anyway.
+    """
+    if platform.system() != "Linux":
+        return None
+
+    PR_SET_PDEATHSIG = 1  # <sys/prctl.h>
+    SIGKILL = 9
+
+    libc_name = ctypes.util.find_library("c")
+    if not libc_name:
+        return None
+
+    try:
+        libc = ctypes.CDLL(libc_name, use_errno=True)
+    except OSError:
+        return None
+
+    def _set_pdeathsig() -> None:
+        try:
+            libc.prctl(PR_SET_PDEATHSIG, SIGKILL, 0, 0, 0)
+        except Exception:
+            pass  # extreme restriction — swallow silently
+
+    return _set_pdeathsig
+```
+
+### Updated fallback block in `_run_subprocess`
+
+Replace the plain fallback `Popen` with:
+
+```python
+    except OSError:
+        # setsid(2) blocked by container security policy (seccomp/gVisor).
+        # Use PR_SET_PDEATHSIG so the kernel kills the node child when the
+        # npx parent is killed on timeout. Best-effort on non-Linux.
+        use_new_session = False
+        preexec = _make_pdeathsig_preexec()
+        if preexec is None:
+            logger.warning(
+                "start_new_session blocked and PR_SET_PDEATHSIG unavailable "
+                "(non-Linux or restricted prctl). Orphaned node processes "
+                "possible if snarkjs hangs — CI global timeout is last resort."
+            )
+        else:
+            logger.warning(
+                "start_new_session blocked (seccomp?); "
+                "using PR_SET_PDEATHSIG for orphan cleanup."
+            )
+        proc = subprocess.Popen(
+            cmd,
+            cwd=cwd,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            preexec_fn=preexec,  # None is safe — Popen ignores it
+        )
+```
+
+### The three-layer guarantee
+
+| Environment | Cleanup mechanism |
+|---|---|
+| Standard Linux CI (Ubuntu/Debian runners) | `start_new_session=True` + `killpg` kills entire npx+node tree ✅ |
+| Restricted Linux (seccomp blocks setsid) | `PR_SET_PDEATHSIG=SIGKILL` — kernel reaps node when npx parent dies ✅ |
+| macOS / Windows / prctl also blocked | `proc.kill()` + warning logged — CI global timeout is last resort ⚠️ |
+
+### Test to add
+
+```python
+def test_run_subprocess_fallback_uses_pdeathsig(monkeypatch):
+    """When start_new_session raises OSError, _make_pdeathsig_preexec is called."""
+    import protocol.zkp as zkp_mod
+
+    preexec_called = []
+
+    def fake_pdeathsig():
+        preexec_called.append(True)
+        return lambda: None
+
+    monkeypatch.setattr(zkp_mod, "_make_pdeathsig_preexec", fake_pdeathsig)
+
+    original_popen = subprocess.Popen
+    call_count = [0]
+
+    def popen_raise_first(*args, **kwargs):
+        call_count[0] += 1
+        if call_count[0] == 1:
+            raise OSError("setsid blocked")
+        return original_popen(*args, **kwargs)
+
+    monkeypatch.setattr(subprocess, "Popen", popen_raise_first)
+
+    # Should not raise — falls back and completes
+    zkp_mod._run_subprocess(["echo", "ok"], timeout=5)
+    assert preexec_called, "preexec_fn factory was not called on OSError fallback"
+```
+
+Please incorporate before marking ready — avoids a "fix for the fix" commit after merge.

@@ -32,6 +32,7 @@ SETUP:
 See docs/08_database_strategy.md for complete database strategy documentation.
 """
 
+import importlib.util
 import os
 from datetime import datetime
 
@@ -60,6 +61,7 @@ from storage.postgres import StorageLayer
 
 # Test database connection string
 TEST_DB = os.environ.get("TEST_DATABASE_URL", "")
+HAS_RUST = importlib.util.find_spec("olympus_core") is not None
 
 pytestmark = [
     pytest.mark.postgres,
@@ -67,9 +69,9 @@ pytestmark = [
         not TEST_DB,
         reason="TEST_DATABASE_URL is not set; skipping PostgreSQL end-to-end tests.",
     ),
-    pytest.mark.skip(
-        reason="storage.append_record() requires olympus_core Rust extension. "
-        "Run `maturin develop` to build olympus_core, or rewrite tests to use ingest API.",
+    pytest.mark.skipif(
+        not HAS_RUST,
+        reason="olympus_core Rust extension not built — run `maturin develop` to enable.",
     ),
 ]
 

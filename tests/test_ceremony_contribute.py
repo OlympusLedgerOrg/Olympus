@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import subprocess
 import sys
 from pathlib import Path
@@ -10,8 +11,11 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-# tools/ is not on sys.path by default — add the repo root so we can import it.
-sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "tools"))
+
+# tools/ is not on sys.path by default — add it so we can import the CLI module.
+TOOLS_DIR = Path(__file__).resolve().parents[1] / "tools"
+if str(TOOLS_DIR) not in sys.path:
+    sys.path.insert(0, str(TOOLS_DIR))
 
 
 # ---------------------------------------------------------------------------
@@ -98,6 +102,72 @@ class TestCheckSnarkjs:
 
 
 # ---------------------------------------------------------------------------
+# contribute — prerequisite failures
+# ---------------------------------------------------------------------------
+
+
+class TestCeremonyPrerequisiteChecks:
+    def test_missing_ptau_raises_file_not_found(self, tmp_path: Path) -> None:
+        from ceremony_contribute import contribute
+
+        with pytest.raises(FileNotFoundError, match="[Pp][Tt][Aa][Uu]"):
+            contribute(
+                ptau_path=tmp_path / "nonexistent.ptau",
+                circuit_path=tmp_path / "circuit.circom",
+                participant_name="test",
+                output_path=tmp_path / "out.zkey",
+            )
+
+    def test_missing_circuit_raises_file_not_found(self, tmp_path: Path) -> None:
+        from ceremony_contribute import contribute
+
+        ptau = tmp_path / "phase1.ptau"
+        ptau.write_bytes(b"fake ptau")
+
+        with pytest.raises(FileNotFoundError, match="[Cc]ircuit"):
+            contribute(
+                ptau_path=ptau,
+                circuit_path=tmp_path / "nonexistent.circom",
+                participant_name="test",
+                output_path=tmp_path / "out.zkey",
+            )
+
+    def test_missing_snarkjs_raises_runtime_error(self, tmp_path: Path) -> None:
+        from ceremony_contribute import contribute
+
+        ptau = tmp_path / "phase1.ptau"
+        ptau.write_bytes(b"fake ptau")
+        circuit = tmp_path / "circuit.circom"
+        circuit.write_text("pragma circom 2.0.0;")
+
+        with patch("ceremony_contribute._check_snarkjs", return_value=False):
+            with pytest.raises(RuntimeError, match="snarkjs"):
+                contribute(
+                    ptau_path=ptau,
+                    circuit_path=circuit,
+                    participant_name="test",
+                    output_path=tmp_path / "out.zkey",
+                )
+
+    def test_missing_r1cs_raises_file_not_found(self, tmp_path: Path) -> None:
+        from ceremony_contribute import contribute
+
+        ptau = tmp_path / "phase1.ptau"
+        ptau.write_bytes(b"fake ptau")
+        circuit = tmp_path / "circuit.circom"
+        circuit.write_text("pragma circom 2.0.0;")
+
+        with patch("ceremony_contribute._check_snarkjs", return_value=True):
+            with pytest.raises(FileNotFoundError, match="R1CS"):
+                contribute(
+                    ptau_path=ptau,
+                    circuit_path=circuit,
+                    participant_name="test",
+                    output_path=tmp_path / "out.zkey",
+                )
+
+
+# ---------------------------------------------------------------------------
 # contribute — success path
 # ---------------------------------------------------------------------------
 
@@ -107,23 +177,19 @@ class TestCeremonyContributeSuccess:
         """contribute() returns a metadata dict with the expected keys."""
         from ceremony_contribute import contribute
 
-        ptau, circuit, r1cs, output = _write_fake_files(tmp_path)
-
-        call_count = 0
+        ptau, circuit, _r1cs, output = _write_fake_files(tmp_path)
+        seen_timeouts: list[int] = []
 
         def fake_run(cmd: list[str], **kwargs: Any) -> MagicMock:
-            nonlocal call_count
-            call_count += 1
-            m = MagicMock()
-            m.returncode = 0
-            if call_count == 1:
-                # groth16 setup — write intermediate zkey
-                initial_zkey = tmp_path / "initial_DONOTCOMMIT.zkey"
-                initial_zkey.write_bytes(b"initial key material")
-            else:
-                # zkey contribute — write final output
-                output.write_bytes(b"final key material")
-            return m
+            seen_timeouts.append(kwargs["timeout"])
+            mock = MagicMock()
+            mock.returncode = 0
+            if "setup" in cmd:
+                Path(cmd[-1]).write_bytes(b"initial key material")
+            elif "contribute" in cmd:
+                assert any(arg.startswith("-e=") for arg in cmd)
+                Path(cmd[5]).write_bytes(b"final key material")
+            return mock
 
         with patch("ceremony_contribute._check_snarkjs", return_value=True), patch(
             "ceremony_contribute.subprocess.run", side_effect=fake_run
@@ -135,32 +201,29 @@ class TestCeremonyContributeSuccess:
                 output_path=output,
             )
 
+        assert seen_timeouts == [1800, 3600]
         assert meta["participant"] == "Test Participant"
         assert "zkey_blake3_hex" in meta
         assert "circuit_blake3_hex" in meta
+        assert "contribution_hash" not in meta
         assert len(meta["zkey_blake3_hex"]) == 64
         assert len(meta["circuit_blake3_hex"]) == 64
-        # Timestamp must end with Z (not +00:00)
         assert meta["timestamp"].endswith("Z")
 
     def test_contribute_writes_sidecar_json(self, tmp_path: Path) -> None:
         """A .metadata.json sidecar is written alongside the .zkey."""
         from ceremony_contribute import contribute
 
-        ptau, circuit, r1cs, output = _write_fake_files(tmp_path)
-
-        call_count = 0
+        ptau, circuit, _r1cs, output = _write_fake_files(tmp_path)
 
         def fake_run(cmd: list[str], **kwargs: Any) -> MagicMock:
-            nonlocal call_count
-            call_count += 1
-            m = MagicMock()
-            m.returncode = 0
-            if call_count == 1:
-                (tmp_path / "initial_DONOTCOMMIT.zkey").write_bytes(b"init")
-            else:
-                output.write_bytes(b"final")
-            return m
+            mock = MagicMock()
+            mock.returncode = 0
+            if "setup" in cmd:
+                Path(cmd[-1]).write_bytes(b"init")
+            elif "contribute" in cmd:
+                Path(cmd[5]).write_bytes(b"final")
+            return mock
 
         with patch("ceremony_contribute._check_snarkjs", return_value=True), patch(
             "ceremony_contribute.subprocess.run", side_effect=fake_run
@@ -174,8 +237,6 @@ class TestCeremonyContributeSuccess:
 
         sidecar = output.with_suffix(".metadata.json")
         assert sidecar.exists()
-        import json
-
         data = json.loads(sidecar.read_text())
         assert data["participant"] == "Alice"
         assert "zkey_blake3_hex" in data
@@ -185,21 +246,16 @@ class TestCeremonyContributeSuccess:
         """The intermediate .zkey is deleted after a successful contribution."""
         from ceremony_contribute import contribute
 
-        ptau, circuit, r1cs, output = _write_fake_files(tmp_path)
-        initial_zkey = tmp_path / "initial_DONOTCOMMIT.zkey"
-
-        call_count = 0
+        ptau, circuit, _r1cs, output = _write_fake_files(tmp_path)
 
         def fake_run(cmd: list[str], **kwargs: Any) -> MagicMock:
-            nonlocal call_count
-            call_count += 1
-            m = MagicMock()
-            m.returncode = 0
-            if call_count == 1:
-                initial_zkey.write_bytes(b"init key")
-            else:
-                output.write_bytes(b"final key")
-            return m
+            mock = MagicMock()
+            mock.returncode = 0
+            if "setup" in cmd:
+                Path(cmd[-1]).write_bytes(b"init key")
+            elif "contribute" in cmd:
+                Path(cmd[5]).write_bytes(b"final key")
+            return mock
 
         with patch("ceremony_contribute._check_snarkjs", return_value=True), patch(
             "ceremony_contribute.subprocess.run", side_effect=fake_run
@@ -211,7 +267,37 @@ class TestCeremonyContributeSuccess:
                 output_path=output,
             )
 
-        assert not initial_zkey.exists(), "intermediate zkey must be deleted on success"
+        assert not list(tmp_path.glob(".initial_DONOTCOMMIT-*.zkey"))
+
+    def test_output_named_like_old_temp_file_is_not_deleted(self, tmp_path: Path) -> None:
+        """The final output is never the same path as the intermediate .zkey."""
+        from ceremony_contribute import contribute
+
+        ptau, circuit, _r1cs, _output = _write_fake_files(tmp_path)
+        output = tmp_path / "initial_DONOTCOMMIT.zkey"
+
+        def fake_run(cmd: list[str], **kwargs: Any) -> MagicMock:
+            mock = MagicMock()
+            mock.returncode = 0
+            if "setup" in cmd:
+                assert Path(cmd[-1]) != output
+                Path(cmd[-1]).write_bytes(b"init key")
+            elif "contribute" in cmd:
+                Path(cmd[5]).write_bytes(b"final key")
+            return mock
+
+        with patch("ceremony_contribute._check_snarkjs", return_value=True), patch(
+            "ceremony_contribute.subprocess.run", side_effect=fake_run
+        ):
+            contribute(
+                ptau_path=ptau,
+                circuit_path=circuit,
+                participant_name="Carol",
+                output_path=output,
+            )
+
+        assert output.exists()
+        assert output.read_bytes() == b"final key"
 
 
 # ---------------------------------------------------------------------------
@@ -220,44 +306,17 @@ class TestCeremonyContributeSuccess:
 
 
 class TestCeremonyContributeFailures:
-    def test_missing_ptau_raises_file_not_found(self, tmp_path: Path) -> None:
-        """FileNotFoundError raised when PTAU file is missing."""
-        from ceremony_contribute import contribute
-
-        with pytest.raises(FileNotFoundError, match="[Pp][Tt][Aa][Uu]"):
-            contribute(
-                ptau_path=tmp_path / "missing.ptau",
-                circuit_path=tmp_path / "circuit.circom",
-                participant_name="test",
-                output_path=tmp_path / "out.zkey",
-            )
-
-    def test_missing_circuit_raises_file_not_found(self, tmp_path: Path) -> None:
-        """FileNotFoundError raised when circuit file is missing."""
-        from ceremony_contribute import contribute
-
-        ptau = tmp_path / "phase1.ptau"
-        ptau.write_bytes(b"fake ptau")
-
-        with pytest.raises(FileNotFoundError, match="[Cc]ircuit"):
-            contribute(
-                ptau_path=ptau,
-                circuit_path=tmp_path / "circuit.circom",
-                participant_name="test",
-                output_path=tmp_path / "out.zkey",
-            )
-
     def test_groth16_setup_failure_raises_runtime_error(self, tmp_path: Path) -> None:
         """If snarkjs groth16 setup exits non-zero, RuntimeError is raised."""
         from ceremony_contribute import contribute
 
-        ptau, circuit, r1cs, output = _write_fake_files(tmp_path)
+        ptau, circuit, _r1cs, output = _write_fake_files(tmp_path)
 
         def fake_run_fail(cmd: list[str], **kwargs: Any) -> MagicMock:
-            m = MagicMock()
-            m.returncode = 1
-            m.stderr = "snarkjs error: something went wrong"
-            return m
+            mock = MagicMock()
+            mock.returncode = 1
+            mock.stderr = "snarkjs error: something went wrong"
+            return mock
 
         with patch("ceremony_contribute._check_snarkjs", return_value=True), patch(
             "ceremony_contribute.subprocess.run", side_effect=fake_run_fail
@@ -274,24 +333,20 @@ class TestCeremonyContributeFailures:
         """If snarkjs zkey contribute exits non-zero, RuntimeError is raised."""
         from ceremony_contribute import contribute
 
-        ptau, circuit, r1cs, output = _write_fake_files(tmp_path)
-        initial_zkey = tmp_path / "initial_DONOTCOMMIT.zkey"
-
-        call_count = 0
+        ptau, circuit, _r1cs, output = _write_fake_files(tmp_path)
+        intermediate_paths: list[Path] = []
 
         def fake_run_second_fail(cmd: list[str], **kwargs: Any) -> MagicMock:
-            nonlocal call_count
-            call_count += 1
-            m = MagicMock()
-            if call_count == 1:
-                # setup succeeds, writes initial zkey
-                initial_zkey.write_bytes(b"initial zkey")
-                m.returncode = 0
+            mock = MagicMock()
+            if "setup" in cmd:
+                intermediate = Path(cmd[-1])
+                intermediate_paths.append(intermediate)
+                intermediate.write_bytes(b"initial zkey")
+                mock.returncode = 0
             else:
-                # contribute fails
-                m.returncode = 1
-                m.stderr = "contribute failed"
-            return m
+                mock.returncode = 1
+                mock.stderr = "contribute failed"
+            return mock
 
         with patch("ceremony_contribute._check_snarkjs", return_value=True), patch(
             "ceremony_contribute.subprocess.run", side_effect=fake_run_second_fail
@@ -304,8 +359,8 @@ class TestCeremonyContributeFailures:
                     output_path=output,
                 )
 
-        # The intermediate zkey must be cleaned up even on failure
-        assert not initial_zkey.exists(), "intermediate zkey must be deleted on failure"
+        assert intermediate_paths
+        assert all(not path.exists() for path in intermediate_paths)
 
 
 # ---------------------------------------------------------------------------
@@ -320,16 +375,20 @@ class TestMain:
         """main() returns 1 when snarkjs is not available."""
         from ceremony_contribute import main
 
-        ptau, circuit, r1cs, output = _write_fake_files(tmp_path)
+        ptau, circuit, _r1cs, output = _write_fake_files(tmp_path)
         monkeypatch.setattr(
             sys,
             "argv",
             [
                 "ceremony_contribute",
-                "--ptau", str(ptau),
-                "--circuit", str(circuit),
-                "--participant", "test",
-                "--output", str(output),
+                "--ptau",
+                str(ptau),
+                "--circuit",
+                str(circuit),
+                "--participant",
+                "test",
+                "--output",
+                str(output),
             ],
         )
         with patch("ceremony_contribute._check_snarkjs", return_value=False):
@@ -341,8 +400,41 @@ class TestMain:
         """main() returns 1 when contribute raises an exception."""
         from ceremony_contribute import main
 
-        ptau, circuit, r1cs, output = _write_fake_files(tmp_path)
+        ptau, circuit, _r1cs, output = _write_fake_files(tmp_path)
+        monkeypatch.setattr(
+            sys,
+            "argv",
+            [
+                "ceremony_contribute",
+                "--ptau",
+                str(ptau),
+                "--circuit",
+                str(circuit),
+                "--participant-name",
+                "test",
+                "--output",
+                str(output),
+            ],
+        )
 
+        def fake_run_fail(cmd: list[str], **kwargs: Any) -> MagicMock:
+            mock = MagicMock()
+            mock.returncode = 1
+            mock.stderr = "setup failed"
+            return mock
+
+        with patch("ceremony_contribute._check_snarkjs", return_value=True), patch(
+            "ceremony_contribute.subprocess.run", side_effect=fake_run_fail
+        ):
+            assert main() == 1
+
+    def test_main_returns_1_on_timeout(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """main() returns 1 instead of a traceback when snarkjs times out."""
+        from ceremony_contribute import main
+
+        ptau, circuit, _r1cs, output = _write_fake_files(tmp_path)
         monkeypatch.setattr(
             sys,
             "argv",
@@ -359,13 +451,8 @@ class TestMain:
             ],
         )
 
-        def fake_run_fail(cmd: list[str], **kwargs: Any) -> MagicMock:
-            m = MagicMock()
-            m.returncode = 1
-            m.stderr = "setup failed"
-            return m
-
         with patch("ceremony_contribute._check_snarkjs", return_value=True), patch(
-            "ceremony_contribute.subprocess.run", side_effect=fake_run_fail
+            "ceremony_contribute.subprocess.run",
+            side_effect=subprocess.TimeoutExpired("snarkjs", 1800),
         ):
             assert main() == 1
