@@ -493,9 +493,6 @@ _rate_limit_policy: dict[str, tuple[float, float]] = {
     "verify": (120.0, 2.0),
 }
 
-# L5-B: Maximum number of entries in rate-limit buckets to prevent memory leaks
-_RATE_LIMIT_LRU_CAP = 10_000
-
 # Maximum number of entries in ingestion caches to prevent OOM under sustained load
 _INGESTION_CACHE_LRU_CAP = 50_000
 
@@ -1341,7 +1338,7 @@ async def submit_proof_bundle(
                     detail=f"File exceeds maximum size of {max_mb} MB.",
                 )
         except ValueError:
-            pass
+            content_length = None
 
     file_bytes = await _read_upload_bounded(file, settings.max_upload_bytes, max_mb)
     validate_file_magic(file_bytes, file.content_type or "application/octet-stream")

@@ -425,7 +425,7 @@ def verify_timestamp_quorum(
             ):
                 valid_count += 1
         except ValueError:
-            pass
+            continue
     return valid_count >= TSA_QUORUM_THRESHOLD
 
 

@@ -227,7 +227,7 @@ class ProofBackendProtocol(Protocol):
             ValueError: If statement or witness is invalid
             RuntimeError: If proof generation fails
         """
-        ...
+        raise NotImplementedError
 
     @abstractmethod
     def verify(self, statement: Statement, proof: Proof) -> bool:
@@ -244,13 +244,13 @@ class ProofBackendProtocol(Protocol):
         Raises:
             ValueError: If statement or proof is malformed
         """
-        ...
+        raise NotImplementedError
 
     @property
     @abstractmethod
     def proof_system_type(self) -> ProofSystemType:
         """Return the type of proof system this backend implements."""
-        ...
+        raise NotImplementedError
 
     @abstractmethod
     def is_available(self) -> bool:
@@ -260,7 +260,7 @@ class ProofBackendProtocol(Protocol):
         Returns:
             bool: True if backend dependencies are available
         """
-        ...
+        raise NotImplementedError
 
 
 class ProofBackendError(Exception):

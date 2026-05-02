@@ -21,9 +21,9 @@ def stats_app() -> FastAPI:
 
 @pytest.fixture(autouse=True)
 def clear_public_stats_cache():
-    public_stats._cached_stats = None
+    public_stats._stats_cache.clear()
     yield
-    public_stats._cached_stats = None
+    public_stats._stats_cache.clear()
 
 
 @pytest_asyncio.fixture

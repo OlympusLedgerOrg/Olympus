@@ -18,6 +18,18 @@ branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 
 
+def _validate_revision_identifiers() -> None:
+    """Keep Alembic's module-level revision identifiers explicit for analyzers."""
+    if not isinstance(revision, str):
+        raise RuntimeError("Alembic revision must be a string")
+    for value in (down_revision, branch_labels, depends_on):
+        if value is not None and not isinstance(value, str | Sequence):
+            raise RuntimeError("Alembic revision identifier must be a string, sequence, or None")
+
+
+_validate_revision_identifiers()
+
+
 def upgrade() -> None:
     op.add_column(
         "key_credentials",
