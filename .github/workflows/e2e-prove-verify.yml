@@ -26,7 +26,7 @@ jobs:
     env:
       DATABASE_URL: postgresql://olympus:olympus@localhost:5432/olympus
       TEST_DATABASE_URL: postgresql://olympus:olympus@localhost:5432/olympus
-      OLYMPUS_INGEST_SIGNING_KEY: "test-key-for-ci-only-not-for-production"
+      OLYMPUS_INGEST_SIGNING_KEY: ""  # generated ephemerally at runtime (see step below)
       PGHOST: localhost
       PGPORT: "5432"
       PGUSER: olympus
@@ -65,6 +65,11 @@ jobs:
           python -m pip install --upgrade pip
           pip install --require-hashes -r requirements-dev.txt
           pip install -e . --no-deps
+
+      - name: Generate ephemeral CI signing key
+        # Generates a random key at runtime rather than hardcoding one in the
+        # workflow file, avoiding patterns that could be copied to production.
+        run: echo "OLYMPUS_INGEST_SIGNING_KEY=$(python -c 'import secrets; print(secrets.token_hex(32))')" >> "$GITHUB_ENV"
 
       - name: Build olympus_core Rust extension
         run: maturin build --release --out dist && pip install --force-reinstall dist/*.whl

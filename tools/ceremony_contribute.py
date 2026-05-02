@@ -51,7 +51,11 @@ def _check_snarkjs() -> bool:
             timeout=10,
         )
         return result.returncode == 0
-    except (FileNotFoundError, subprocess.TimeoutExpired):
+    except FileNotFoundError:
+        logger.debug("snarkjs not found in PATH (npx/node not installed)")
+        return False
+    except subprocess.TimeoutExpired:
+        logger.debug("snarkjs version check timed out — snarkjs may be installed but unresponsive")
         return False
 
 
@@ -102,7 +106,7 @@ def contribute(
             "Compile the circuit first: circom circuit.circom --r1cs --wasm"
         )
 
-    initial_zkey = output_path.parent / "initial_0000.zkey"
+    initial_zkey = output_path.parent / f"initial_{secrets.token_hex(8)}.zkey"
 
     # Step 1: Generate initial phase 2 key
     subprocess.run(
@@ -183,8 +187,8 @@ def main() -> int:
             output_path=args.output,
             entropy=args.entropy,
         )
-        print(f"\nContribution hash: {metadata['contribution_hash']}")
-        print("Please publish this hash publicly (tweet, GitHub issue, etc.)")
+        logger.info("\nContribution hash: %s", metadata["contribution_hash"])
+        logger.info("Please publish this hash publicly (tweet, GitHub issue, etc.)")
         return 0
     except Exception as exc:
         logger.error("Ceremony contribution failed: %s", exc, exc_info=True)

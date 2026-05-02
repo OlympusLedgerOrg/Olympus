@@ -101,13 +101,16 @@ class TestCeremonyContributeSuccess:
         def fake_run(cmd, **kwargs):
             # Simulate snarkjs writing output files
             if "setup" in cmd:
-                (tmp_path / "initial_0000.zkey").write_bytes(b"initial zkey")
+                # The initial zkey filename is now randomised; find it from cmd
+                initial_zkey_path = Path(cmd[-1])
+                initial_zkey_path.parent.mkdir(parents=True, exist_ok=True)
+                initial_zkey_path.write_bytes(b"initial zkey")
             elif "contribute" in cmd:
                 output.parent.mkdir(parents=True, exist_ok=True)
                 output.write_bytes(b"contributed zkey data")
-            m = MagicMock()
-            m.returncode = 0
-            return m
+            mock_result = MagicMock()
+            mock_result.returncode = 0
+            return mock_result
 
         with (
             patch("ceremony_contribute._check_snarkjs", return_value=True),
