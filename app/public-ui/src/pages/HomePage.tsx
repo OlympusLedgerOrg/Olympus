@@ -260,6 +260,7 @@ export default function HomePage() {
     if (!droppedFile || !fileHash || !apiKey.trim()) return;
     setCommitStage("committing");
     setCommitError(null);
+    setCommitContentHash(null);
     localStorage.setItem("olympus_api_key", apiKey.trim());
 
     const recordId = sanitizeId(droppedFile.name.replace(/\.[^.]+$/, ""));
@@ -547,6 +548,7 @@ export default function HomePage() {
                       onProgress={setFileProgress}
                       onFile={(f) => {
                         setDroppedFile(f);
+                        setFileHash(null);
                         setVerdictResult(null);
                         setCommitStage("idle");
                         setCommitError(null);
