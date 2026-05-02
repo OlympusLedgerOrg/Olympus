@@ -755,14 +755,9 @@ export default function HomePage() {
               <span className="ready-dot" />
               <span>READY_FOR_INPUT</span>
             </div>
-          ) : (
-            <div className="ready-panel">
-              <span className="ready-dot" />
-              <span>READY_FOR_INPUT</span>
-            </div>
           )}
         </div>
-
+        
         <aside className="console-side">
           <div className="side-panel">
             <div className="side-title">SESSION</div>

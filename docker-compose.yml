@@ -226,12 +226,13 @@ services:
       DATABASE_USER: ${DATABASE_USER:?DATABASE_USER must be set}
       DATABASE_PASSWORD_FILE: /run/secrets/db_password
       OLYMPUS_DEV_SIGNING_KEY: ${OLYMPUS_DEV_SIGNING_KEY:-true}
-      OLYMPUS_API_KEYS_JSON: '${OLYMPUS_API_KEYS_JSON:-[]}'
       # Go sequencer configuration (only used when OLYMPUS_USE_GO_SEQUENCER=true)
       OLYMPUS_USE_GO_SEQUENCER: ${OLYMPUS_USE_GO_SEQUENCER:-false}
       OLYMPUS_SEQUENCER_URL: ${OLYMPUS_SEQUENCER_URL:-http://sequencer-go:8081}
       OLYMPUS_SEQUENCER_TOKEN: ${OLYMPUS_SEQUENCER_TOKEN}
       OLYMPUS_SEQUENCER_TIMEOUT_SECONDS: ${OLYMPUS_SEQUENCER_TIMEOUT_SECONDS:-30}
+    ports:
+      - "127.0.0.1:8001:8000"
     secrets:
       - db_password
     depends_on:
