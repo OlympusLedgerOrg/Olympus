@@ -1,8 +1,12 @@
 name: Commit to Olympus
 
-# Anchor every published release to the Olympus public ledger.
-# If the Olympus API is unavailable the release is NOT blocked; a visible
-# warning is emitted instead so a human can investigate and re-anchor later.
+# NOTE: This workflow fires ONLY on GitHub releases (not on push/PR).
+# It does NOT gate merges to main. Its purpose is to anchor release artifacts
+# to the Olympus ledger for public provenance. Failure here means the release
+# wasn't anchored, not that the code is broken. A human should re-run it.
+#
+# If OLYMPUS_API_URL / OLYMPUS_API_KEY are not configured, the anchoring step
+# is skipped with a notice rather than failing the workflow.
 
 on:
   release:
@@ -36,8 +40,22 @@ jobs:
           mkdir -p release-assets
           gh release download "$REF_NAME" --dir release-assets || true
 
+      - name: Check Olympus API is configured
+        id: api-check
+        run: |
+          if [ -z "${OLYMPUS_API_URL:-}" ] && [ -z "${OLYMPUS_API_KEY:-}" ]; then
+            echo "configured=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::Olympus API not configured — skipping artifact anchoring"
+          else
+            echo "configured=true" >> "$GITHUB_OUTPUT"
+          fi
+        env:
+          OLYMPUS_API_URL: ${{ vars.OLYMPUS_API_URL }}
+          OLYMPUS_API_KEY: ${{ secrets.OLYMPUS_API_KEY }}
+
       - name: Commit artifacts to Olympus
         id: olympus
+        if: steps.api-check.outputs.configured == 'true'
         continue-on-error: true
         env:
           OLYMPUS_API_URL: ${{ vars.OLYMPUS_API_URL }}
