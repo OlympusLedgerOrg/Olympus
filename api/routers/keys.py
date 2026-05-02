@@ -13,11 +13,9 @@ import logging
 import os
 import secrets
 from datetime import datetime, timezone
-from typing import Annotated
 
-import blake3 as _blake3
 from protocol.hashes import hash_bytes as _hash_bytes
-from fastapi import APIRouter, Body, HTTPException, Request, status
+from fastapi import APIRouter, HTTPException, Request, status
 from pydantic import BaseModel, field_validator
 from sqlalchemy import select
 

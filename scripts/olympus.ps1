@@ -74,6 +74,10 @@ function Invoke-Api {
     }
     try {
         $resp = Invoke-WebRequest @params
+        # 204 No Content (and other empty bodies) — return $null without parsing.
+        if ($resp.StatusCode -eq 204 -or [string]::IsNullOrWhiteSpace($resp.Content)) {
+            return $null
+        }
         return $resp.Content | ConvertFrom-Json
     } catch {
         $status = $_.Exception.Response.StatusCode.value__

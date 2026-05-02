@@ -42,8 +42,7 @@ export default function IngestPage() {
     const auto = sanitizeId(f.name.replace(/\.[^.]+$/, ""));
     setRecordId(auto);
     try {
-      const bytes = new Uint8Array(await f.arrayBuffer());
-      const h = await hashFile(bytes);
+      const h = await hashFile(f);
       setHash(h);
       setStage("ready");
     } catch (e) {

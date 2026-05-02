@@ -246,7 +246,7 @@ async def _db_lookup_key(key_hash: str) -> tuple[_APIKeyRecord | None, bool]:
             expires = row.expires_at.replace(tzinfo=None) if row.expires_at.tzinfo is not None else row.expires_at
             expired = now >= expires
             record = _APIKeyRecord(
-                key_id=row.name,
+                key_id=row.id,
                 key_hash=key_hash,
                 scopes=set(_json.loads(row.scopes)),
                 expires_at=expires.replace(tzinfo=timezone.utc),
