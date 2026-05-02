@@ -175,15 +175,55 @@ class TestAttachPoseidonHashSuite:
         assert bundle["hash_suite"] == "future-suite"
 
     def test_returns_same_dict(self) -> None:
-        """Helper returns the bundle dict for convenience chaining."""
-        from api.ingest import _attach_poseidon_hash_suite
+        """Helper returns the same dict and the modification is visible on it."""
+        from api.ingest import _HASH_SUITE_VERSION, _attach_poseidon_hash_suite
 
         bundle: dict = {"poseidon_root": "abc"}
         result = _attach_poseidon_hash_suite(bundle)
         assert result is bundle
+        assert result["hash_suite"] == _HASH_SUITE_VERSION
 
     def test_hash_suite_version_matches_adr_constant(self) -> None:
         """_HASH_SUITE_VERSION in api.ingest must equal the ADR-0009 value."""
         from api.ingest import _HASH_SUITE_VERSION
 
         assert _HASH_SUITE_VERSION == "poseidon-bn254-v1"
+
+    def test_cache_ingestion_record_attaches_hash_suite_from_top_level(self) -> None:
+        """_cache_ingestion_record attaches hash_suite when poseidon_root is at the top level.
+
+        This simulates the storage-load path where records fetched from Postgres
+        already have poseidon_root at the top level of the dict.
+        """
+        from api.ingest import _HASH_SUITE_VERSION, _cache_ingestion_record, _ingestion_store
+
+        entry: dict = {
+            "proof_id": "aaaabbbb-0000-0000-0000-000000000001",
+            "content_hash": "aabbccddaabbccddaabbccddaabbccddaabbccddaabbccddaabbccddaabbccdd",
+            "poseidon_root": "99887766",
+            "canonicalization": {},
+        }
+        _cache_ingestion_record(entry)
+        assert entry.get("hash_suite") == _HASH_SUITE_VERSION
+        # Clean up to avoid polluting other tests
+        _ingestion_store.pop(entry["proof_id"], None)
+
+    def test_cache_ingestion_record_attaches_hash_suite_from_canonicalization(self) -> None:
+        """_cache_ingestion_record promotes poseidon_root from canonicalization and sets hash_suite.
+
+        This simulates the storage-load path where poseidon_root is nested under
+        the canonicalization sub-dict rather than at the top level.
+        """
+        from api.ingest import _HASH_SUITE_VERSION, _cache_ingestion_record, _ingestion_store
+
+        entry: dict = {
+            "proof_id": "aaaabbbb-0000-0000-0000-000000000002",
+            "content_hash": "aabbccddaabbccddaabbccddaabbccddaabbccddaabbccddaabbccddaabbccdd",
+            "canonicalization": {"poseidon_root": "11223344"},
+        }
+        _cache_ingestion_record(entry)
+        # poseidon_root is promoted to top level and hash_suite is attached
+        assert entry.get("poseidon_root") == "11223344"
+        assert entry.get("hash_suite") == _HASH_SUITE_VERSION
+        # Clean up to avoid polluting other tests
+        _ingestion_store.pop(entry["proof_id"], None)
