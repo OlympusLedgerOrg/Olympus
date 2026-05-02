@@ -244,7 +244,7 @@ class TestCeremonyContributeSuccess:
 
     def test_intermediate_zkey_removed_on_success(self, tmp_path: Path) -> None:
         """The intermediate .zkey is deleted after a successful contribution."""
-        from ceremony_contribute import contribute
+        from ceremony_contribute import INITIAL_ZKEY_PREFIX, contribute
 
         ptau, circuit, _r1cs, output = _write_fake_files(tmp_path)
 
@@ -267,7 +267,7 @@ class TestCeremonyContributeSuccess:
                 output_path=output,
             )
 
-        assert not list(tmp_path.glob(".initial_DONOTCOMMIT-*.zkey"))
+        assert not list(tmp_path.glob(f"{INITIAL_ZKEY_PREFIX}*.zkey"))
 
     def test_output_named_like_old_temp_file_is_not_deleted(self, tmp_path: Path) -> None:
         """The final output is never the same path as the intermediate .zkey."""

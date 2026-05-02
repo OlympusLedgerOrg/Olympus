@@ -53,6 +53,8 @@ except ImportError:  # pragma: no cover - exercised only when repo imports are u
 
 logger = logging.getLogger(__name__)
 
+INITIAL_ZKEY_PREFIX = ".tmp_setup_"
+
 
 # ---------------------------------------------------------------------------
 # Internal helpers
@@ -150,7 +152,7 @@ def contribute(
     output_path.parent.mkdir(parents=True, exist_ok=True)
 
     contribution_entropy = entropy or secrets.token_hex(64)
-    initial_zkey = output_path.parent / f".initial_DONOTCOMMIT-{secrets.token_hex(8)}.zkey"
+    initial_zkey = output_path.parent / f"{INITIAL_ZKEY_PREFIX}{secrets.token_hex(8)}.zkey"
 
     logger.info("Starting Groth16 contribution for participant: %s", participant_name)
     logger.info("Circuit source: %s", circuit_path)

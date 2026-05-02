@@ -76,7 +76,10 @@ jobs:
       - name: Generate ephemeral CI signing key
         # Generates a random key at runtime rather than hardcoding one in the
         # workflow file, avoiding patterns that could be copied to production.
-        run: echo "OLYMPUS_INGEST_SIGNING_KEY=$(python -c 'import secrets; print(secrets.token_hex(32))')" >> "$GITHUB_ENV"
+        run: |
+          SIGNING_KEY=$(python -c 'import secrets; print(secrets.token_hex(32))')
+          echo "::add-mask::${SIGNING_KEY}"
+          echo "OLYMPUS_INGEST_SIGNING_KEY=${SIGNING_KEY}" >> "$GITHUB_ENV"
 
       - name: Build olympus_core Rust extension
         run: maturin build --release --out dist && pip install --force-reinstall dist/*.whl
