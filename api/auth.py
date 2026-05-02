@@ -40,6 +40,7 @@ from time import monotonic
 from typing import Annotated, Any, Protocol, runtime_checkable
 
 from fastapi import Depends, HTTPException, Request, status
+from sqlalchemy import select
 
 from api.config import get_settings
 from protocol.hashes import hash_bytes
@@ -225,6 +226,37 @@ def _constant_time_lookup(key_hash: str) -> tuple[_APIKeyRecord | None, bool]:
     return found, expired
 
 
+async def _db_lookup_key(key_hash: str) -> tuple[_APIKeyRecord | None, bool]:
+    """Check api_keys table for a matching DB-backed key. Returns (record, expired)."""
+    try:
+        from api.db import AsyncSessionLocal
+        from api.models.api_key import ApiKey
+        import json as _json
+
+        async with AsyncSessionLocal() as session:
+            result = await session.execute(
+                select(ApiKey)
+                .where(ApiKey.key_hash == key_hash)
+                .where(ApiKey.revoked_at.is_(None))
+            )
+            row = result.scalars().first()
+            if row is None:
+                return None, False
+            now = datetime.now(timezone.utc).replace(tzinfo=None)
+            expires = row.expires_at.replace(tzinfo=None) if row.expires_at.tzinfo is not None else row.expires_at
+            expired = now >= expires
+            record = _APIKeyRecord(
+                key_id=row.name,
+                key_hash=key_hash,
+                scopes=set(_json.loads(row.scopes)),
+                expires_at=expires.replace(tzinfo=timezone.utc),
+            )
+            return record, expired
+    except Exception:
+        # DB unavailable — degrade gracefully to env-var only
+        return None, False
+
+
 async def require_api_key(request: Request) -> _APIKeyRecord:
     """FastAPI dependency — validates API key on write endpoints.
 
@@ -262,6 +294,9 @@ async def require_api_key(request: Request) -> _APIKeyRecord:
     raw_key = _extract_key(request)
     key_hash = _hash_key(raw_key)
     record, expired = _constant_time_lookup(key_hash)
+
+    if record is None:
+        record, expired = await _db_lookup_key(key_hash)
 
     if record is None:
         logger.warning(
@@ -343,6 +378,9 @@ def require_api_key_with_scope(required_scope: str) -> Any:
         key_hash = _hash_key(raw_key)
         record, expired = _constant_time_lookup(key_hash)
         client_ip = _get_client_ip(request)
+
+        if record is None:
+            record, expired = await _db_lookup_key(key_hash)
 
         if record is None:
             logger.warning(

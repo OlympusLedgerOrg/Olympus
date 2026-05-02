@@ -44,6 +44,7 @@ from api.routers.federation import router as federation_router
 from api.routers.shards import router as shards_router
 from api.routers.witness import router as witness_router
 from api.routers.public_stats import router as public_stats_router
+from api.routers.user_auth import router as user_auth_router
 from api.sth import router as sth_router
 
 
@@ -388,6 +389,7 @@ def create_app() -> FastAPI:
     # Admin RBAC router
     app.include_router(admin_router)
     app.include_router(public_stats_router)
+    app.include_router(user_auth_router)
 
     # ── API Versioning ──
     # Mount all routers under /v1 prefix for versioned access.

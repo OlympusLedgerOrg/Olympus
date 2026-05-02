@@ -114,3 +114,4 @@ export type PublicStatsResponse = {
 export function getPublicStats(): Promise<PublicStatsResponse> {
   return apiFetch("/v1/public/stats");
 }
+

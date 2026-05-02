@@ -4,9 +4,10 @@ import { hashFile } from "../lib/blake3";
 interface FileHasherProps {
   onHash: (hex: string) => void;
   onProgress: (pct: number) => void;
+  onFile?: (file: File) => void;
 }
 
-export default function FileHasher({ onHash, onProgress }: FileHasherProps) {
+export default function FileHasher({ onHash, onProgress, onFile }: FileHasherProps) {
   const [dragging, setDragging] = useState(false);
   const [fileName, setFileName] = useState<string | null>(null);
   const [hashing, setHashing] = useState(false);
@@ -19,6 +20,7 @@ export default function FileHasher({ onHash, onProgress }: FileHasherProps) {
       setHashing(true);
       setError(null);
       onProgress(0);
+      onFile?.(file);
       try {
         const hex = await hashFile(file, onProgress);
         onHash(hex);

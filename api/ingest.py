@@ -39,7 +39,6 @@ from fastapi import APIRouter, File, HTTPException, Path, Request, UploadFile
 from api.auth import (
     RequireCommitScope,
     RequireIngestScope,
-    RequireVerifyScope,
     _get_backend as _get_rate_limit_backend,
     _get_client_ip,
     _register_api_key_for_tests as _auth_register_api_key_for_tests,
@@ -667,6 +666,21 @@ async def _apply_rate_limits(request: Request, api_key_id: str, action: str) -> 
         raise HTTPException(status_code=429, detail="Rate limit exceeded for IP address")
 
 
+async def _apply_ip_rate_limit(request: Request, action: str) -> None:
+    """Apply IP-only rate limiting for public (unauthenticated) endpoints."""
+    client_ip = _get_client_ip(request)
+    loop = asyncio.get_running_loop()
+    ip_allowed = await loop.run_in_executor(
+        None, _consume_rate_limit, "ip", client_ip, action
+    )
+    if not ip_allowed:
+        logger.warning(
+            "rate_limit_hit",
+            extra={"dimension": "ip", "client_ip": client_ip, "action": action},
+        )
+        raise HTTPException(status_code=429, detail="Rate limit exceeded for IP address")
+
+
 # Note: _normalize_merkle_root is now defined at the top of this file
 # The functions _parse_content_hash, _normalize_source_url, _value_hash_to_poseidon_field,
 # and _resolved_poseidon_root are imported from their respective modules at the top.
@@ -1219,12 +1233,12 @@ async def ingest_batch(
 @router.get("/records/{proof_id}/proof", response_model=IngestionProofResponse)
 async def get_ingestion_proof(
     *,
+    request: Request,
     proof_id: str = Path(
         ...,
         pattern=_PROOF_ID_PATTERN,
         max_length=36,
     ),
-    _scope: RequireVerifyScope,
 ) -> IngestionProofResponse:
     """
     Retrieve the proof for a previously ingested record.
@@ -1238,6 +1252,7 @@ async def get_ingestion_proof(
     Raises:
         HTTPException: 404 if proof_id is not found.
     """
+    await _apply_ip_rate_limit(request, "verify")
     normalized_proof_id = proof_id.lower()
     data = _ingestion_store.get(normalized_proof_id)
     if data is not None:
@@ -1257,7 +1272,7 @@ async def get_ingestion_proof(
 
 @router.get("/records/hash/{content_hash}/verify", response_model=HashVerificationResponse)
 async def verify_ingested_content_hash(
-    content_hash: str, request: Request, _api_key: RequireVerifyScope
+    content_hash: str, request: Request
 ) -> HashVerificationResponse:
     """
     Verify that a committed BLAKE3 content hash exists in the ingestion store.
@@ -1266,8 +1281,7 @@ async def verify_ingested_content_hash(
     verification result so public portals can display both the commitment data and
     the verifiable transcript needed for independent re-checking.
     """
-    # Apply rate limiting after authentication
-    await _apply_rate_limits(request, _api_key.key_id, "verify")
+    await _apply_ip_rate_limit(request, "verify")
 
     with timed_operation("verify") as span:
         normalized_hash = _parse_content_hash(content_hash).hex()
@@ -1285,11 +1299,10 @@ async def verify_ingested_content_hash(
 
 @router.post("/proofs/verify", response_model=ProofVerificationResponse)
 async def verify_submitted_proof_bundle(
-    proof_request: ProofVerificationRequest, request: Request, _api_key: RequireVerifyScope
+    proof_request: ProofVerificationRequest, request: Request
 ) -> ProofVerificationResponse:
     """Verify an externally supplied proof bundle without persisting it."""
-    # Apply rate limiting after authentication
-    await _apply_rate_limits(request, _api_key.key_id, "verify")
+    await _apply_ip_rate_limit(request, "verify")
 
     normalized_hash, normalized_root, content_hash_matches, merkle_proof_valid = (
         _evaluate_proof_bundle(
@@ -1314,7 +1327,6 @@ async def verify_submitted_proof_bundle(
 @router.post("/proofs", response_model=ProofSubmissionResponse)
 async def submit_proof_bundle(
     request: Request,
-    _api_key: RequireVerifyScope,
     file: UploadFile = File(...),
 ) -> ProofSubmissionResponse:
     """Retrieve the server-computed proof bundle for a committed document.
@@ -1327,7 +1339,7 @@ async def submit_proof_bundle(
     Returns 404 if the document has not been committed yet. Commit
     first via POST /ingest/records.
     """
-    await _apply_rate_limits(request, _api_key.key_id, "verify")
+    await _apply_ip_rate_limit(request, "verify")
 
     settings = get_settings()
     max_mb = settings.max_upload_bytes // 1024 // 1024

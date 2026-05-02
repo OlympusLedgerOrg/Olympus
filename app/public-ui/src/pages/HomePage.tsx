@@ -25,6 +25,17 @@ import RecentVerifications from "../components/RecentVerifications";
 import TiltContainer from "../components/TiltContainer";
 import VerdictCard from "../components/VerdictCard";
 
+const API_BASE =
+  (typeof import.meta !== "undefined" &&
+    (import.meta as { env?: { VITE_API_BASE?: string } }).env?.VITE_API_BASE) ||
+  (typeof window !== "undefined" ? window.location.origin : "");
+
+function sanitizeId(s: string) {
+  return s.replace(/[^a-zA-Z0-9_.:\-]/g, "-").replace(/^-+|-+$/g, "").slice(0, 200) || "record";
+}
+
+type CommitStage = "idle" | "committing" | "done" | "error";
+
 type Tab = "hash" | "file" | "json" | "proof";
 
 const HASH_RE = /^[0-9a-f]{64}$/i;
@@ -132,6 +143,11 @@ export default function HomePage() {
     displayHash?: string;
   } | null>(null);
 
+  const [droppedFile, setDroppedFile] = useState<File | null>(null);
+  const [apiKey, setApiKey] = useState(() => localStorage.getItem("olympus_api_key") ?? "");
+  const [commitStage, setCommitStage] = useState<CommitStage>("idle");
+  const [commitError, setCommitError] = useState<string | null>(null);
+
   const statsQuery = useQuery({
     queryKey: ["public-stats"],
     queryFn: getPublicStats,
@@ -146,8 +162,46 @@ export default function HomePage() {
     setHashError(null);
     setProofError(null);
     setJsonError(null);
+    setCommitStage("idle");
+    setCommitError(null);
     playGlitchSound("blip");
   };
+
+  const commitFile = useCallback(async () => {
+    if (!droppedFile || !fileHash || !apiKey.trim()) return;
+    setCommitStage("committing");
+    setCommitError(null);
+    localStorage.setItem("olympus_api_key", apiKey.trim());
+
+    const recordId = sanitizeId(droppedFile.name.replace(/\.[^.]+$/, ""));
+    const content = {
+      filename: droppedFile.name,
+      size: droppedFile.size,
+      type: droppedFile.type || "application/octet-stream",
+      blake3: fileHash,
+    };
+    try {
+      const res = await fetch(`${API_BASE}/ingest/records`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "X-API-Key": apiKey.trim() },
+        body: JSON.stringify({
+          records: [{ shard_id: "files", record_type: "file", record_id: recordId, version: 1, content }],
+        }),
+      });
+      const data = await res.json() as Record<string, unknown>;
+      if (!res.ok) {
+        const d = (data as { detail?: unknown }).detail;
+        setCommitError(typeof d === "string" ? d : JSON.stringify(d));
+        setCommitStage("error");
+        return;
+      }
+      setCommitStage("done");
+      submitHash(fileHash);
+    } catch (e) {
+      setCommitError(String(e));
+      setCommitStage("error");
+    }
+  }, [droppedFile, fileHash, apiKey, submitHash]);
 
   const hashMutation = useMutation({
     mutationFn: verifyHash,
@@ -382,8 +436,17 @@ export default function HomePage() {
                       onHash={(hex) => {
                         setFileHash(hex);
                         setFileProgress(100);
+                        setVerdictResult(null);
+                        setCommitStage("idle");
+                        setCommitError(null);
                       }}
                       onProgress={setFileProgress}
+                      onFile={(f) => {
+                        setDroppedFile(f);
+                        setVerdictResult(null);
+                        setCommitStage("idle");
+                        setCommitError(null);
+                      }}
                     />
                     {fileProgress > 0 && fileProgress < 100 && (
                       <p style={{ fontSize: "0.65rem", color: "rgba(0,255,65,0.45)" }}>
@@ -491,6 +554,65 @@ export default function HomePage() {
                 verdict={verdictResult.verdict}
                 details={verdictResult.details}
               />
+              {verdictResult.verdict === "unknown" && droppedFile && commitStage !== "done" && (
+                <div
+                  style={{
+                    marginTop: "1rem",
+                    padding: "1.25rem 1.5rem",
+                    border: "1px solid rgba(245,158,11,0.35)",
+                    background: "rgba(245,158,11,0.03)",
+                  }}
+                >
+                  <div style={{ fontSize: "0.55rem", letterSpacing: "0.12em", color: "rgba(245,158,11,0.6)", marginBottom: "1rem" }}>
+                    COMMIT THIS FILE TO THE LEDGER
+                  </div>
+                  <div style={{ marginBottom: "0.85rem" }}>
+                    <label style={{ display: "block", fontSize: "0.55rem", letterSpacing: "0.1em", color: "rgba(245,158,11,0.5)", marginBottom: "0.35rem" }}>
+                      API KEY
+                    </label>
+                    <input
+                      type="password"
+                      value={apiKey}
+                      onChange={(e) => setApiKey(e.target.value)}
+                      placeholder="your API key from registration"
+                      style={{
+                        width: "100%",
+                        background: "rgba(0,0,0,0.65)",
+                        border: "1px solid rgba(245,158,11,0.3)",
+                        color: "#f59e0b",
+                        fontFamily: "'DM Mono', monospace",
+                        fontSize: "0.78rem",
+                        padding: "0.6rem 0.75rem",
+                        outline: "none",
+                        boxSizing: "border-box",
+                      }}
+                    />
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => void commitFile()}
+                    disabled={commitStage === "committing" || !apiKey.trim()}
+                    style={{
+                      width: "100%",
+                      padding: "0.75rem",
+                      background: commitStage === "committing" ? "rgba(245,158,11,0.06)" : "rgba(245,158,11,0.12)",
+                      border: "1px solid rgba(245,158,11,0.5)",
+                      color: "#f59e0b",
+                      fontFamily: "'DM Mono', monospace",
+                      fontSize: "0.72rem",
+                      letterSpacing: "0.12em",
+                      cursor: commitStage === "committing" || !apiKey.trim() ? "not-allowed" : "pointer",
+                    }}
+                  >
+                    {commitStage === "committing" ? "COMMITTING..." : "COMMIT TO LEDGER →"}
+                  </button>
+                  {commitError && (
+                    <div style={{ marginTop: "0.75rem", padding: "0.65rem 0.85rem", border: "1px solid rgba(255,0,85,0.4)", color: "#ff0055", fontSize: "0.7rem", background: "rgba(255,0,85,0.05)" }}>
+                      {commitError}
+                    </div>
+                  )}
+                </div>
+              )}
             </div>
           )}
         </div>
