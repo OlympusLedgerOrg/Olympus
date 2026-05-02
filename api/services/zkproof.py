@@ -28,7 +28,6 @@ from protocol.hashes import hash_bytes
 
 logger = logging.getLogger(__name__)
 
-_ENV = os.getenv("OLYMPUS_ENV", "production")
 if not os.getenv("OLYMPUS_ENV"):
     logger.warning(
         "OLYMPUS_ENV is not set — defaulting to 'production'. "

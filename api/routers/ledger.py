@@ -250,7 +250,7 @@ async def get_commit_proof(
             proof: MerkleProof = generate_proof(commit.doc_hash, tree)
             merkle_proof_data = [{"hash": h, "direction": d} for h, d in proof.siblings]
         except ValueError:
-            pass
+            merkle_proof_data = []
 
     import os as _os
 

@@ -307,8 +307,8 @@ services:
       - ALL
     tmpfs:
       # nginx writes its pid file plus client/proxy temp dirs under /tmp.
-      # Mounting it as tmpfs (with mode=0700) keeps the container fully
-      # read-only while still allowing nginx to start.
+      # mode=1777 keeps normal sticky-bit semantics so non-root nginx workers
+      # can write temp files while the root filesystem stays read-only.
       - /tmp:rw,noexec,nosuid,size=64m,mode=1777
       - /var/cache/nginx:rw,noexec,nosuid,size=32m,mode=1777
 

@@ -207,7 +207,7 @@ async def verify_document(body: DocVerifyRequest, db: DBSession, _rl: RateLimit)
             proof: MerkleProof = generate_proof(commit.doc_hash, tree)
             merkle_proof_data = [{"hash": h, "direction": d} for h, d in proof.siblings]
         except ValueError:
-            pass
+            merkle_proof_data = None
 
     zk_proof = generate_proof_stub(commit.commit_id, commit.doc_hash)
 

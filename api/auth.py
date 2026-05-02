@@ -837,7 +837,7 @@ def _normalize_ip(ip: str) -> str:
         if isinstance(addr, ipaddress.IPv6Address) and addr.ipv4_mapped is not None:
             return str(addr.ipv4_mapped)
     except ValueError:
-        pass
+        return ip
     return ip
 
 

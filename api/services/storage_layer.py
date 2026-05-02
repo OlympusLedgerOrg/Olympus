@@ -174,7 +174,7 @@ def _is_db_unavailable_error(exc: BaseException) -> bool:
         if isinstance(exc, (OperationalError, PoolTimeout)):
             return True
     except ImportError:
-        pass
+        return False
 
     if isinstance(exc, RuntimeError):
         msg = str(exc).lower()

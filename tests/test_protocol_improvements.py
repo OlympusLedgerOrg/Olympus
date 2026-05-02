@@ -6,6 +6,7 @@ These tests validate the new functionality without requiring PostgreSQL.
 from __future__ import annotations
 
 import time
+from importlib import import_module
 from types import SimpleNamespace
 from unittest.mock import MagicMock
 
@@ -198,10 +199,10 @@ class TestModuleSeparation:
         assert callable(get_timestamp_tokens)
 
     def test_init_exports_submodules(self) -> None:
-        import storage
+        storage_module = import_module("storage")
 
-        assert hasattr(storage, "protocol_state")
-        assert hasattr(storage, "operational_state")
+        assert hasattr(storage_module, "protocol_state")
+        assert hasattr(storage_module, "operational_state")
 
 
 # ---------------------------------------------------------------------------

@@ -41,10 +41,10 @@ from api.routers import agencies, appeals, documents, keys, ledger, requests as 
 from api.routers.admin import router as admin_router
 from api.routers.datasets import router as datasets_router
 from api.routers.federation import router as federation_router
-from api.routers.shards import router as shards_router
-from api.routers.witness import router as witness_router
 from api.routers.public_stats import router as public_stats_router
+from api.routers.shards import router as shards_router
 from api.routers.user_auth import router as user_auth_router
+from api.routers.witness import router as witness_router
 from api.sth import router as sth_router
 
 

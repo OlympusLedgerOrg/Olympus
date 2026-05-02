@@ -186,7 +186,7 @@ def test_partition_detector_freezes_on_insufficient_diversity() -> None:
             return frozen_state
 
     detector = PartitionDetector(
-        ping_nodes=lambda nodes: tuple(nodes),
+        ping_nodes=tuple,
         get_current_state=_State().get,
         peer_groups={"n1": "asn-a", "n2": "asn-a", "n3": "asn-a"},
         min_peer_group_diversity=2,
@@ -203,10 +203,13 @@ def test_partition_detector_freezes_when_cross_network_verification_fails() -> N
         def get(self) -> ConsensusChainState:
             return frozen_state
 
+    def verification_fails(reachable: tuple[str, ...]) -> bool:
+        return False
+
     detector = PartitionDetector(
-        ping_nodes=lambda nodes: tuple(nodes),
+        ping_nodes=tuple,
         get_current_state=_State().get,
-        cross_network_verifier=lambda reachable: False,
+        cross_network_verifier=verification_fails,
     )
 
     assert detector.check_network_health(9, ("n1", "n2", "n3")) is False
@@ -288,7 +291,7 @@ def test_partition_detector_peer_sampling_respects_diversity_constraints() -> No
             return frozen_state
 
     detector = PartitionDetector(
-        ping_nodes=lambda nodes: tuple(nodes),  # All reachable
+        ping_nodes=tuple,  # All reachable
         get_current_state=_State().get,
         sample_size=3,
         peer_selector=custom_selector,

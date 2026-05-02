@@ -112,7 +112,7 @@ def _create_isolated_database(base_url: str) -> tuple[str, callable]:
                         sql.SQL("DROP DATABASE IF EXISTS {}").format(sql.Identifier(temp_db))
                     )
         except Exception:
-            pass
+            return
 
     return temp_url, drop_db
 

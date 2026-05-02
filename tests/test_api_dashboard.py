@@ -53,9 +53,13 @@ class FakeDashboardStorage:
         }
 
 
+def _fake_dashboard_storage() -> FakeDashboardStorage:
+    return FakeDashboardStorage()
+
+
 def test_shard_history_endpoint(monkeypatch):
     """The shard history endpoint should return recent signed header snapshots."""
-    monkeypatch.setattr(shards_mod, "_require_storage", lambda: FakeDashboardStorage())
+    monkeypatch.setattr(shards_mod, "_require_storage", _fake_dashboard_storage)
 
     response = client.get("/shards/shard-a/history?n=2")
 
@@ -68,7 +72,7 @@ def test_shard_history_endpoint(monkeypatch):
 
 def test_shard_state_diff_endpoint(monkeypatch):
     """The shard state diff endpoint should expose root hashes and summary counts."""
-    monkeypatch.setattr(shards_mod, "_require_storage", lambda: FakeDashboardStorage())
+    monkeypatch.setattr(shards_mod, "_require_storage", _fake_dashboard_storage)
 
     response = client.get("/shards/shard-a/diff?from_seq=1&to_seq=2")
 

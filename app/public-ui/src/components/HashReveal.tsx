@@ -1,4 +1,4 @@
-import { useState, useEffect, type FC } from "react";
+import type { FC } from "react";
 
 interface HashRevealProps {
   hash: string | null;
@@ -6,25 +6,7 @@ interface HashRevealProps {
 }
 
 const HashReveal: FC<HashRevealProps> = ({ hash, label = "BLAKE3_DIGEST" }) => {
-  const [revealed, setRevealed] = useState<number>(0);
-
-  useEffect(() => {
-    if (!hash) {
-      setRevealed(0);
-      return;
-    }
-    setRevealed(0);
-    let i = 0;
-    const id = setInterval(() => {
-      i += 2;
-      setRevealed(i);
-      if (i >= hash.length) clearInterval(id);
-    }, 14);
-    return (): void => clearInterval(id);
-  }, [hash]);
-
   if (!hash) return null;
-  const done = Math.min(revealed, hash.length);
 
   return (
     <div
@@ -53,8 +35,9 @@ const HashReveal: FC<HashRevealProps> = ({ hash, label = "BLAKE3_DIGEST" }) => {
       >
         {label}
       </span>
-      {hash.slice(0, done)}
-      <span style={{ opacity: 0.25 }}>{hash.slice(done)}</span>
+      <span key={hash} className="hash-reveal-text">
+        {hash}
+      </span>
     </div>
   );
 };

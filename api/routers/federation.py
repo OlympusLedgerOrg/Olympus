@@ -256,9 +256,9 @@ async def sign_header(
         local_root = result.scalar_one_or_none()
         if local_root is not None and local_root != incoming_root:
             logger.warning(
-                "Fork detected for shard %s at seq %d: local=%s remote=%s",
+                "Fork detected for shard %s at seq %s: local=%s remote=%s",
                 sanitize_for_log(request.shard_id),
-                request.entry_seq,
+                sanitize_for_log(request.entry_seq),
                 sanitize_for_log(local_root),
                 sanitize_for_log(str(incoming_root)),
             )

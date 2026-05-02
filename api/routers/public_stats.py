@@ -7,6 +7,7 @@ from fastapi import APIRouter
 from pydantic import BaseModel
 from sqlalchemy import column, func, inspect, select, table
 from sqlalchemy.sql.elements import quoted_name
+from sqlalchemy.sql.expression import TableClause
 
 from api.db import engine
 
@@ -26,7 +27,7 @@ class PublicStats(BaseModel):
     uptime_seconds: int
 
 
-def _quoted_table(table_name: str):
+def _quoted_table(table_name: str) -> TableClause:
     return table(quoted_name(table_name, quote=True))
 
 

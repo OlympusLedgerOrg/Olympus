@@ -70,6 +70,11 @@ RECURSIVE_REDACTION_CIRCUIT = "recursive_redaction_composition"
 _HASH_SEPARATOR_BYTES = HASH_SEPARATOR.encode("utf-8")
 
 
+def recursive_redaction_circuit_id() -> str:
+    """Return the reserved Halo2 recursive redaction circuit identifier."""
+    return RECURSIVE_REDACTION_CIRCUIT
+
+
 @dataclass(frozen=True)
 class Halo2Proof:
     """

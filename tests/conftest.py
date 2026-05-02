@@ -66,7 +66,7 @@ def pytest_configure(config):
                 cur.execute("SELECT 1")
         os.environ["TEST_DATABASE_URL"] = candidate
     except Exception:
-        pass
+        return
 
 
 @pytest.fixture(autouse=True)
@@ -83,7 +83,7 @@ def _reset_rate_limit_state():
 
         _reset_rate_limit_backend_for_tests()
     except ImportError:
-        pass
+        return
 
 
 @pytest.fixture(autouse=True)
@@ -100,4 +100,4 @@ def _reset_auth_state():
 
         _reset_auth_state_for_tests()
     except ImportError:
-        pass
+        return
