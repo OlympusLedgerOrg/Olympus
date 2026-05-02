@@ -99,9 +99,7 @@ class TestPoseidonSuiteContract:
         """Round constants source must match the circomlibjs path per ADR-0009. Do not change."""
         from protocol.poseidon import POSEIDON_PARAMS
 
-        assert POSEIDON_PARAMS["constants_source"] == (
-            "circomlibjs/src/poseidon_constants.json"
-        )
+        assert POSEIDON_PARAMS["constants_source"] == ("circomlibjs/src/poseidon_constants.json")
 
     def test_poseidon_params_uses_snark_scalar_field(self) -> None:
         """POSEIDON_PARAMS['field_modulus'] must equal SNARK_SCALAR_FIELD (no duplicate literal)."""

@@ -48,10 +48,10 @@ POSEIDON_PARAMS: Final[Mapping[str, object]] = MappingProxyType(
     {
         "suite_id": HASH_SUITE_VERSION,
         "curve": "BN254",
-        "width": 3,          # t=3: capacity=1, rate=2
-        "arity": 2,          # 2 inputs per hash call
-        "n_rounds_f": 8,     # full rounds (4 before + 4 after partial)
-        "n_rounds_p": 57,    # partial rounds
+        "width": 3,  # t=3: capacity=1, rate=2
+        "arity": 2,  # 2 inputs per hash call
+        "n_rounds_f": 8,  # full rounds (4 before + 4 after partial)
+        "n_rounds_p": 57,  # partial rounds
         "sbox_exponent": 5,  # x^5 mod p
         "field_modulus": SNARK_SCALAR_FIELD,
         "domain_tag_leaf": POSEIDON_DOMAIN_LEAF,
@@ -59,6 +59,20 @@ POSEIDON_PARAMS: Final[Mapping[str, object]] = MappingProxyType(
         "constants_source": "circomlibjs/src/poseidon_constants.json",
     }
 )
+
+
+def poseidon_params_dict() -> dict[str, object]:
+    """Return the pinned Poseidon parameters as a plain, JSON-serializable dict.
+
+    Use this function whenever you need to embed the parameter set in a JSON
+    response or schema — *not* ``POSEIDON_PARAMS`` directly, because that is a
+    ``MappingProxyType`` and some serializers (e.g. ``json.dumps``) will raise
+    a ``TypeError`` when they encounter it.
+
+    Returns:
+        A shallow copy of ``POSEIDON_PARAMS`` as a plain ``dict``.
+    """
+    return dict(POSEIDON_PARAMS)
 
 
 def poseidon_hash(a: int, b: int) -> int:
@@ -149,6 +163,7 @@ __all__ = [
     "POSEIDON_DOMAIN_NODE",
     "HASH_SUITE_VERSION",
     "POSEIDON_PARAMS",
+    "poseidon_params_dict",
     "poseidon_hash",
     "poseidon_hash_bn128",
     "poseidon_leaf_hash",
