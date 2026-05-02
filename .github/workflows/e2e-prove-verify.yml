@@ -26,7 +26,6 @@ jobs:
     env:
       DATABASE_URL: postgresql://olympus:olympus@localhost:5432/olympus
       TEST_DATABASE_URL: postgresql://olympus:olympus@localhost:5432/olympus
-      OLYMPUS_INGEST_SIGNING_KEY: ""  # generated ephemerally at runtime (see step below)
       PGHOST: localhost
       PGPORT: "5432"
       PGUSER: olympus

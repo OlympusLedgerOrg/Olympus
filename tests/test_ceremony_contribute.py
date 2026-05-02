@@ -101,8 +101,9 @@ class TestCeremonyContributeSuccess:
         def fake_run(cmd, **kwargs):
             # Simulate snarkjs writing output files
             if "setup" in cmd:
-                # The initial zkey filename is now randomised; find it from cmd
-                initial_zkey_path = Path(cmd[-1])
+                # The initial zkey path is the last positional arg: <r1cs> <ptau> <zkey>
+                # cmd = ["npx", "snarkjs", "groth16", "setup", r1cs, ptau, zkey]
+                initial_zkey_path = Path(cmd[6])
                 initial_zkey_path.parent.mkdir(parents=True, exist_ok=True)
                 initial_zkey_path.write_bytes(b"initial zkey")
             elif "contribute" in cmd:

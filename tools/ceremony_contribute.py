@@ -106,16 +106,23 @@ def contribute(
             "Compile the circuit first: circom circuit.circom --r1cs --wasm"
         )
 
-    initial_zkey = output_path.parent / f"initial_{secrets.token_hex(8)}.zkey"
+    # Use a fixed, obviously-temporary name so cleanup scripts can reliably find it.
+    # WARNING: this file contains toxic waste — it MUST be securely deleted after use.
+    initial_zkey = output_path.parent / "initial_DONOTCOMMIT.zkey"
 
     # Step 1: Generate initial phase 2 key
-    subprocess.run(
+    setup_result = subprocess.run(
         ["npx", "snarkjs", "groth16", "setup", str(r1cs_path), str(ptau_path), str(initial_zkey)],
-        check=True,
+        capture_output=True,
+        text=True,
     )
+    if setup_result.returncode != 0:
+        raise RuntimeError(
+            f"snarkjs groth16 setup failed (exit {setup_result.returncode}):\n{setup_result.stderr}"
+        )
 
     # Step 2: Contribute
-    subprocess.run(
+    contribute_result = subprocess.run(
         [
             "npx",
             "snarkjs",
@@ -126,8 +133,14 @@ def contribute(
             f"--name={participant_name}",
             f"-e={contribution_entropy}",
         ],
-        check=True,
+        capture_output=True,
+        text=True,
     )
+    if contribute_result.returncode != 0:
+        raise RuntimeError(
+            f"snarkjs zkey contribute failed (exit {contribute_result.returncode}):\n"
+            f"{contribute_result.stderr}"
+        )
 
     # Compute contribution hash for public attestation
     contribution_hash = _sha256_file(output_path)
