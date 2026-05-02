@@ -1,0 +1,49 @@
+name: E2E Prove-Verify
+
+# End-to-end test that exercises the full proof-generation and verification
+# pipeline without requiring a live database.
+#
+# test_e2e_audit.py is intentionally excluded: it carries an unconditional
+# pytest.mark.skip (requires the olympus_core Rust extension built via
+# `maturin develop`) and would always be a no-op here.
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [ main, copilot/** ]
+  pull_request:
+    branches: [ main ]
+
+concurrency:
+  group: e2e-prove-verify-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  e2e-prove-verify:
+    name: e2e proof generation and verification
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+          cache: 'pip'
+
+      - name: Install system dependencies
+        run: sudo apt-get update && sudo apt-get install -y libmagic1
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install --require-hashes -r requirements-dev.txt
+          pip install -e . --no-deps
+
+      - name: Run proof generator tests
+        run: |
+          pytest tests/test_proof_generator.py -v --tb=short \
+            -m "not postgres"

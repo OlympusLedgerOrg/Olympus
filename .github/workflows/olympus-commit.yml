@@ -36,8 +36,22 @@ jobs:
           mkdir -p release-assets
           gh release download "$REF_NAME" --dir release-assets || true
 
+      - name: Check Olympus API configuration
+        id: api-config
+        env:
+          OLYMPUS_API_URL: ${{ vars.OLYMPUS_API_URL }}
+          OLYMPUS_API_KEY: ${{ secrets.OLYMPUS_API_KEY }}
+        run: |
+          if [ -z "${OLYMPUS_API_URL:-}" ] || [ -z "${OLYMPUS_API_KEY:-}" ]; then
+            echo "configured=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::Olympus API not fully configured — skipping artifact anchoring"
+          else
+            echo "configured=true" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Commit artifacts to Olympus
         id: olympus
+        if: steps.api-config.outputs.configured == 'true'
         continue-on-error: true
         env:
           OLYMPUS_API_URL: ${{ vars.OLYMPUS_API_URL }}

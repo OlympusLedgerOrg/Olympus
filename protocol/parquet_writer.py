@@ -182,7 +182,7 @@ def write_deterministic_parquet(
     elif _PYARROW_AVAILABLE and isinstance(data, pa.Table):
         table = data
     else:
-        raise TypeError(
+        raise ValueError(
             f"data must be a pyarrow.Table or list[dict], got {type(data).__name__}"
         )
 
