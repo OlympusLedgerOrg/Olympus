@@ -82,7 +82,8 @@ try:
 
     _rust_available = True
 except ImportError:
-    pass
+    _rust_canonical = None
+    _rust_crypto = None
 _t_rust_imported = time.perf_counter()
 
 # ---------------------------------------------------------------------------
@@ -485,10 +486,12 @@ def run_benchmarks() -> None:
 
     # ── Import timings ───────────────────────────────────────────────────────
     py_import_ms = (_t_python_stdlib - _t_import_start) * 1000
+    blake3_import_ms = (_t_blake3_imported - _t_import_start) * 1000
     rust_import_ms = (_t_rust_imported - _t_rust_import_start) * 1000
 
     print("  Import latency (cold start)")
     print(f"    Python stdlib + blake3 ........... {py_import_ms:7.1f} ms")
+    print(f"    blake3 only ...................... {blake3_import_ms:7.1f} ms")
     if _rust_available:
         print(f"    olympus_core (Rust extension) .... {rust_import_ms:7.1f} ms")
     else:

@@ -54,7 +54,6 @@ if _POSEIDON_TREE_DEPTH < 1 or _POSEIDON_TREE_DEPTH > 8:
     raise ValueError(
         f"OLYMPUS_POSEIDON_TREE_DEPTH must be between 1 and 8; got {_POSEIDON_TREE_DEPTH}"
     )
-_POSEIDON_MAX_LEAVES = 1 << _POSEIDON_TREE_DEPTH
 
 
 def _poseidon_capacity_error(max_leaves: int, actual: int) -> ValueError:

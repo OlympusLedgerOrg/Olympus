@@ -15,7 +15,7 @@ router = APIRouter(prefix="/public", tags=["public-stats"])
 
 _STARTED_AT = time.time()
 _CACHE_TTL_SECONDS = 10
-_cached_stats: tuple[float, PublicStats] | None = None
+_stats_cache: dict[str, tuple[float, PublicStats]] = {}
 
 
 class PublicStats(BaseModel):
@@ -72,11 +72,10 @@ async def get_public_stats() -> PublicStats:
     Returns:
         PublicStats: Counts for copies, shards, proofs, and process uptime.
     """
-    global _cached_stats
-
     now = time.time()
-    if _cached_stats is not None:
-        cached_at, stats = _cached_stats
+    cached = _stats_cache.get("latest")
+    if cached is not None:
+        cached_at, stats = cached
         if now - cached_at < _CACHE_TTL_SECONDS:
             return stats
 
@@ -122,5 +121,5 @@ async def get_public_stats() -> PublicStats:
         uptime=_format_uptime(uptime_seconds),
         uptime_seconds=uptime_seconds,
     )
-    _cached_stats = (now, stats)
+    _stats_cache["latest"] = (now, stats)
     return stats

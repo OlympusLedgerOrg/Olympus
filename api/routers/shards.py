@@ -8,7 +8,6 @@ records, proofs, signatures, and ledger integrity.
 from __future__ import annotations
 
 import logging
-import re
 from typing import Any
 
 from fastapi import APIRouter, HTTPException, Path, Query
@@ -42,7 +41,6 @@ router = APIRouter(tags=["shards"])
 # Maximum 128 characters.  This rejects path traversal, SQL injection, and
 # other malformed inputs at the FastAPI validation layer (M5).
 _SHARD_ID_RE = r"^[A-Za-z0-9:._-]{1,128}$"
-_SHARD_ID_PATTERN = re.compile(_SHARD_ID_RE)
 _SHARD_ID_PATH = Path(
     ...,
     description="Shard identifier (alphanumeric, hyphens, colons, dots; max 128 chars)",

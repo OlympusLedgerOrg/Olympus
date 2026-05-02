@@ -903,18 +903,18 @@ def test_combined_state_transitions_produce_identical_final_state(
         try:
             consensus_b.start_round(round_num=round_num, start_epoch=start_epoch, registry=registry)
         except ValueError:
-            pass  # Skip duplicate rounds
+            continue
 
     # Apply watermark advances in order for both
     for advance in sorted(watermark_advances):
         try:
             consensus_a.advance_watermark(advance)
         except ValueError:
-            pass
+            continue
         try:
             consensus_b.advance_watermark(advance)
         except ValueError:
-            pass
+            continue
 
     # Both nodes must have identical final state
     assert consensus_a.low_watermark == consensus_b.low_watermark, "Low watermarks differ"
@@ -1085,7 +1085,7 @@ def test_concurrent_validator_join_leave_during_rounds() -> None:
             try:
                 registry.apply_change(epoch=epoch, added_members={f"v_new_{epoch}"})
             except ValueError:
-                pass
+                continue
 
     with ThreadPoolExecutor(max_workers=2) as pool:
         f1 = pool.submit(round_inserter)
@@ -1229,11 +1229,11 @@ def test_pickle_round_trip_then_advance_is_deterministic(
     try:
         consensus_a.advance_watermark(extra)
     except ValueError:
-        pass
+        assert consensus_a.low_watermark <= consensus_a.high_watermark
     try:
         consensus_b.advance_watermark(extra)
     except ValueError:
-        pass
+        assert consensus_b.low_watermark <= consensus_b.high_watermark
 
     assert consensus_a.low_watermark == consensus_b.low_watermark
     assert consensus_a.high_watermark == consensus_b.high_watermark
