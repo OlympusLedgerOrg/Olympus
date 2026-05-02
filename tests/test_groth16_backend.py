@@ -204,7 +204,7 @@ class TestGenerate:
         mock_completed.stdout = ""
         mock_completed.stderr = ""
 
-        def mock_run(cmd, *, cwd=None, timeout, check=True):
+        def mock_run(cmd: list[str], *, cwd: Path | None = None, timeout: int, check: bool = True):
             """Mock _run_subprocess to simulate snarkjs behavior."""
             # Check if this is the proof generation call (snarkjs groth16 prove)
             if "prove" in cmd:
@@ -250,7 +250,9 @@ class TestGenerate:
         statement = Statement(circuit="test", public_inputs={"root": "123"})
         witness = Witness(private_inputs={"path": "456"})
 
-        def mock_run_fail(cmd, *, cwd=None, timeout, check=True):
+        def mock_run_fail(
+            cmd: list[str], *, cwd: Path | None = None, timeout: int, check: bool = True
+        ):
             """Mock _run_subprocess to simulate witness generation failure."""
             raise subprocess.CalledProcessError(1, cmd, stderr="Witness generation error")
 
@@ -343,7 +345,9 @@ class TestVerify:
             public_signals=["123"],
         )
 
-        def mock_run_fail(cmd, *, cwd=None, timeout, check=True):
+        def mock_run_fail(
+            cmd: list[str], *, cwd: Path | None = None, timeout: int, check: bool = True
+        ):
             """Mock _run_subprocess to simulate verification failure."""
             raise subprocess.CalledProcessError(1, cmd, stderr="Verification failed")
 
