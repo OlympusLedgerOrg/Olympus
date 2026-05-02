@@ -783,7 +783,7 @@ export default function HomePage() {
             </div>
           )}
         </div>
-
+        
         <aside className="console-side">
           <div className="side-panel">
             <div className="side-title">SESSION</div>
