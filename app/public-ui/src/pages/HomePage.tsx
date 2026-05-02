@@ -285,7 +285,12 @@ export default function HomePage() {
         return;
       }
       const results = (data as { results?: Array<{ content_hash: string }> }).results;
-      const contentHash = results?.[0]?.content_hash ?? fileHash;
+      const contentHash = results?.[0]?.content_hash;
+      if (!contentHash) {
+        setCommitError("Server response missing content_hash — cannot verify");
+        setCommitStage("error");
+        return;
+      }
       setCommitContentHash(contentHash);
       setCommitStage("done");
       submitHash(contentHash);
@@ -559,7 +564,7 @@ export default function HomePage() {
                           FILE BLAKE3
                         </p>
                         <HashDisplay hash={fileHash} />
-                        {commitContentHash && commitContentHash !== fileHash && (
+                        {commitContentHash && (
                           <div style={{ marginTop: "0.85rem" }}>
                             <p style={{ fontSize: "0.55rem", letterSpacing: "0.1em", color: "rgba(0,255,65,0.65)", margin: "0 0 0.25rem" }}>
                               LEDGER CONTENT HASH
