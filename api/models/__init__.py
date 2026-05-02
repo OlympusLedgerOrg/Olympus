@@ -8,6 +8,7 @@ before Alembic or db.py calls `Base.metadata.create_all()`.
 from __future__ import annotations
 
 from api.models.agency import Agency
+from api.models.api_key import ApiKey
 from api.models.appeal import Appeal
 from api.models.base import Base
 from api.models.credential import KeyCredential
@@ -23,6 +24,7 @@ from api.models.witness import WitnessNonce, WitnessObservation
 
 
 __all__ = [
+    "ApiKey",
     "Base",
     "Agency",
     "Appeal",

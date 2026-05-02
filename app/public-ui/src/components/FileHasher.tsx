@@ -11,6 +11,7 @@ import { hashFile } from "../lib/blake3";
 interface FileHasherProps {
   onHash: (hex: string) => void;
   onProgress: (pct: number) => void;
+  onFile?: (file: File) => void;
 }
 
 function formatBytes(bytes: number): string {
@@ -37,6 +38,7 @@ export default function FileHasher({ onHash, onProgress }: FileHasherProps) {
       setError(null);
       setProgress(0);
       onProgress(0);
+      onFile?.(file);
       try {
         const hex = await hashFile(file, (pct) => {
           setProgress(pct);

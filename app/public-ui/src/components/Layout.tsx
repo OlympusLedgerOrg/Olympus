@@ -2,6 +2,8 @@ import { Link, useLocation } from "react-router-dom";
 import { motion } from "framer-motion";
 import GlyphRain from "./GlyphRain";
 import CrtOverlay from "./CrtOverlay";
+import SkylineBackdrop from "./SkylineBackdrop";
+import GlitchMentorPopups from "./GlitchMentorPopups";
 
 export default function Layout({ children }: { children: React.ReactNode }) {
   const location = useLocation();
@@ -17,8 +19,10 @@ export default function Layout({ children }: { children: React.ReactNode }) {
         overflowX: "hidden",
       }}
     >
+      <SkylineBackdrop />
       <CrtOverlay />
       <GlyphRain active />
+      <GlitchMentorPopups />
 
       {/* Header */}
       <header
@@ -63,16 +67,38 @@ export default function Layout({ children }: { children: React.ReactNode }) {
                   fontSize: "0.62rem",
                   letterSpacing: "0.1em",
                   textDecoration: "none",
-                  color:
-                    location.pathname === "/"
-                      ? "#00FF41"
-                      : "rgba(0,255,65,0.45)",
-                  textShadow:
-                    location.pathname === "/" ? "0 0 6px #00FF41" : "none",
+                  color: location.pathname === "/" ? "#00FF41" : "rgba(0,255,65,0.45)",
+                  textShadow: location.pathname === "/" ? "0 0 6px #00FF41" : "none",
+                  transition: "all 0.15s",
+                }}
+              >
+                ACCESS
+              </Link>
+              <Link
+                to="/verify"
+                style={{
+                  fontSize: "0.62rem",
+                  letterSpacing: "0.1em",
+                  textDecoration: "none",
+                  color: location.pathname === "/verify" ? "#00FF41" : "rgba(0,255,65,0.45)",
+                  textShadow: location.pathname === "/verify" ? "0 0 6px #00FF41" : "none",
                   transition: "all 0.15s",
                 }}
               >
                 VERIFY
+              </Link>
+              <Link
+                to="/admin"
+                style={{
+                  fontSize: "0.62rem",
+                  letterSpacing: "0.1em",
+                  textDecoration: "none",
+                  color: location.pathname === "/admin" ? "#ff0055" : "rgba(255,0,85,0.4)",
+                  textShadow: location.pathname === "/admin" ? "0 0 6px #ff0055" : "none",
+                  transition: "all 0.15s",
+                }}
+              >
+                ADMIN
               </Link>
             </nav>
             <div

@@ -102,6 +102,7 @@ async def get_public_stats() -> PublicStats:
 
         proofs = 0
         for table_name in (
+            "ingestion_proofs",
             "proof_requests",
             "proof_audit_log",
             "proof_audits",
