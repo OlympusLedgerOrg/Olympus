@@ -1,7 +1,16 @@
-Olympus
-Copyright 2024-2026 Olympus Contributors
+Olympus Cryptographic Transparency Ledger
+Copyright 2025-2026 Anthony Smith Jr — Boone, North Carolina
 
-This product includes software developed as part of the Olympus project.
+Original Author: Anthony Smith Jr
+Contact:         olympusledgerorg@gmail.com
+Repository:      https://github.com/OlympusLedgerOrg/Olympus
+
+Built to protect journalists, activists, and investigators
+from document tampering and secret redaction.
+
+Every fork of this software must carry this notice.
+
+================================================================================
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -62,3 +71,5 @@ Examples and Test Vectors (examples/, test_vectors/)
 ================================================================================
 
 All components are licensed under Apache License 2.0.
+Every fork, derivative work, and redistribution must preserve this notice
+and credit the original author.
