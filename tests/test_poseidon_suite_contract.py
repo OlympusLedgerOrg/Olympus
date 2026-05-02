@@ -52,41 +52,49 @@ class TestPoseidonSuiteContract:
         )
 
     def test_arity_is_two(self) -> None:
+        """Arity must equal 2 (two inputs per hash call) per ADR-0009. Do not change."""
         from protocol.poseidon import POSEIDON_PARAMS
 
         assert POSEIDON_PARAMS["arity"] == 2
 
     def test_width_is_three(self) -> None:
+        """Width must equal 3 (t=3: capacity=1, rate=2) per ADR-0009. Do not change."""
         from protocol.poseidon import POSEIDON_PARAMS
 
         assert POSEIDON_PARAMS["width"] == 3
 
     def test_full_rounds_is_eight(self) -> None:
+        """Full rounds must equal 8 (4 before + 4 after partial) per ADR-0009. Do not change."""
         from protocol.poseidon import POSEIDON_PARAMS
 
         assert POSEIDON_PARAMS["n_rounds_f"] == 8
 
     def test_partial_rounds_is_57(self) -> None:
+        """Partial rounds must equal 57 per ADR-0009. Do not change."""
         from protocol.poseidon import POSEIDON_PARAMS
 
         assert POSEIDON_PARAMS["n_rounds_p"] == 57
 
     def test_sbox_exponent_is_five(self) -> None:
+        """S-box exponent must equal 5 (x^5 mod p) per ADR-0009. Do not change."""
         from protocol.poseidon import POSEIDON_PARAMS
 
         assert POSEIDON_PARAMS["sbox_exponent"] == 5
 
     def test_domain_tag_leaf_is_zero(self) -> None:
+        """Domain tag for Merkle leaf hashes must equal 0 per ADR-0009. Do not change."""
         from protocol.poseidon import POSEIDON_PARAMS
 
         assert POSEIDON_PARAMS["domain_tag_leaf"] == 0
 
     def test_domain_tag_node_is_one(self) -> None:
+        """Domain tag for Merkle internal node hashes must equal 1 per ADR-0009. Do not change."""
         from protocol.poseidon import POSEIDON_PARAMS
 
         assert POSEIDON_PARAMS["domain_tag_node"] == 1
 
     def test_constants_source_is_circomlibjs(self) -> None:
+        """Round constants source must match the circomlibjs path per ADR-0009. Do not change."""
         from protocol.poseidon import POSEIDON_PARAMS
 
         assert POSEIDON_PARAMS["constants_source"] == (
