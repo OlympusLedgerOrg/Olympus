@@ -21,10 +21,21 @@ depends_on: str | Sequence[str] | None = None
 def _validate_revision_identifiers() -> None:
     """Keep Alembic's module-level revision identifiers explicit for analyzers."""
     if not isinstance(revision, str):
-        raise RuntimeError("Alembic revision must be a string")
-    for value in (down_revision, branch_labels, depends_on):
-        if value is not None and not isinstance(value, str | Sequence):
-            raise RuntimeError("Alembic revision identifier must be a string, sequence, or None")
+        raise ValueError("Alembic revision must be a string")
+    for name, value in (
+        ("down_revision", down_revision),
+        ("branch_labels", branch_labels),
+        ("depends_on", depends_on),
+    ):
+        if value is None or isinstance(value, str):
+            continue
+        if (
+            isinstance(value, Sequence)
+            and not isinstance(value, bytes)
+            and all(isinstance(item, str) for item in value)
+        ):
+            continue
+        raise ValueError(f"Alembic {name} must be a string, sequence of strings, or None")
 
 
 _validate_revision_identifiers()

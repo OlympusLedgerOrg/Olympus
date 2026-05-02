@@ -28,6 +28,7 @@ import logging
 import os
 import uuid
 from collections import OrderedDict
+from contextlib import suppress
 from datetime import datetime, timezone
 from time import monotonic
 from typing import TYPE_CHECKING, Any, cast
@@ -1331,14 +1332,12 @@ async def submit_proof_bundle(
 
     content_length = request.headers.get("content-length")
     if content_length is not None:
-        try:
+        with suppress(ValueError):
             if int(content_length) > settings.max_upload_bytes:
                 raise HTTPException(
                     status_code=413,
                     detail=f"File exceeds maximum size of {max_mb} MB.",
                 )
-        except ValueError:
-            content_length = None
 
     file_bytes = await _read_upload_bounded(file, settings.max_upload_bytes, max_mb)
     validate_file_magic(file_bytes, file.content_type or "application/octet-stream")
