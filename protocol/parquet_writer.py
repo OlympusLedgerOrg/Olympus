@@ -8,7 +8,7 @@ Produces byte-identical Parquet files across runs and machines by enforcing:
 2. **Primary-key sort** — data is sorted by a caller-specified column (or
    set of columns) before writing, guaranteeing deterministic row order.
 3. **Standardized compression** — uses a fixed codec (Zstd level 3 by
-default) so that the compressed output is identical on every machine.
+   default) so that the compressed output is identical on every machine.
 4. **Deterministic metadata** — ``created_by`` and other file-level
    metadata are fixed strings, not environment-dependent.
 
@@ -78,7 +78,7 @@ WRITER_CREATED_BY: str = "olympus-deterministic-parquet-writer/1.0"
 # ---------------------------------------------------------------------------
 
 
-dataclass
+@dataclass
 class ParquetWriteResult:
     """Metadata returned after writing a deterministic Parquet file."""
 
@@ -171,7 +171,7 @@ def write_deterministic_parquet(
         ImportError: If pyarrow is not installed.
         ValueError: If *data* is empty, *sort_columns* reference non-existent
             columns, or *compression_level* is out of range for the codec.
-    """  
+    """
     _ensure_pyarrow()
 
     output_path = Path(output_path)
@@ -287,7 +287,7 @@ def verify_parquet_determinism(
 
     Returns:
         ``True`` if both files have the same BLAKE3 hash.
-    """
+    """ 
 
     def _hash_file(path: str | Path) -> str:
         hasher = _blake3.blake3()
