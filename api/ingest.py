@@ -128,6 +128,25 @@ __all__ = [
 _HASH_SUITE_VERSION = "poseidon-bn254-v1"
 
 
+def _attach_poseidon_hash_suite(bundle: dict[str, Any]) -> dict[str, Any]:
+    """Attach hash_suite to a proof bundle dict when poseidon_root is present.
+
+    ADR-0009 requires that every proof bundle containing poseidon_root also
+    declares hash_suite so verifiers can select the correct parameter set
+    without inspecting circuit source code.  This helper is the single
+    enforcement point for that invariant.
+
+    Args:
+        bundle: Mutable proof bundle dict (modified in place).
+
+    Returns:
+        The same dict, with hash_suite set if poseidon_root is present.
+    """
+    if bundle.get("poseidon_root") is not None:
+        bundle.setdefault("hash_suite", _HASH_SUITE_VERSION)
+    return bundle
+
+
 def _normalize_merkle_root(merkle_root: str) -> str:
     """Validate and normalize a hex-encoded Merkle root.
 
@@ -416,6 +435,8 @@ def _cache_ingestion_record(entry: dict[str, Any]) -> None:
         poseidon_root = canonicalization.get("poseidon_root")
         if poseidon_root is not None:
             entry["poseidon_root"] = poseidon_root
+    # ADR-0009: every bundle with poseidon_root must also declare hash_suite.
+    _attach_poseidon_hash_suite(entry)
     proof_id = entry["proof_id"]
     content_hash = entry["content_hash"]
 

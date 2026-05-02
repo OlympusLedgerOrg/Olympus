@@ -126,7 +126,7 @@ The following test vectors MUST pass for any implementation claiming to implemen
 `poseidon-bn254-v1`. They are also pinned in `tests/test_poseidon_module.py`
 and `tests/test_poseidon_parameter_parity.py`.
 
-```
+```text
 # Poseidon(0, 0) — the zero-input base case
 input:  a=0, b=0
 output: (see tests/test_poseidon_module.py::test_poseidon_hash_zero_inputs)
@@ -140,7 +140,10 @@ input:  left=1, right=2
 output: (see tests/test_poseidon_module.py::test_poseidon_node_hash_known_value)
 ```
 
-Full golden vectors are in `tests/vectors/poseidon_bn254_v1_vectors.json`.
+Additional Poseidon BN254 vectors are generated from the repository source at
+`proofs/test_inputs/poseidon_vectors.js`. For implementers, the authoritative
+in-repo known-value checks are the pinned test cases in
+`tests/test_poseidon_module.py` and `tests/test_poseidon_parameter_parity.py`.
 
 ---
 
