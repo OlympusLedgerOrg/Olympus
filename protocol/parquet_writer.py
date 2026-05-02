@@ -55,6 +55,10 @@ DEFAULT_COMPRESSION: str = "zstd"
 DEFAULT_COMPRESSION_LEVEL: int = 3
 """Default Zstd compression level (deterministic across platforms)."""
 
+# Codecs that accept a compression_level parameter.
+# Snappy, lz4, and uncompressed reject the level parameter in PyArrow.
+_LEVEL_AWARE_CODECS: frozenset[str] = frozenset({"zstd", "gzip", "brotli"})
+
 WRITER_CREATED_BY: str = "olympus-deterministic-parquet-writer/1.0"
 """Fixed ``created_by`` metadata for reproducibility."""
 
@@ -86,8 +90,8 @@ class ParquetWriteResult:
     compression: str = DEFAULT_COMPRESSION
     """Compression codec used."""
 
-    compression_level: int = DEFAULT_COMPRESSION_LEVEL
-    """Compression level used."""
+    compression_level: int | None = DEFAULT_COMPRESSION_LEVEL
+    """Compression level used, or ``None`` for codecs that do not support levels."""
 
 
 def _ensure_pyarrow() -> None:
@@ -199,14 +203,20 @@ def write_deterministic_parquet(
     }
     schema_with_meta = table.schema.with_metadata(file_metadata)
 
-    writer = pq.ParquetWriter(
-        str(output_path),
-        schema_with_meta,
-        compression=compression,
-        compression_level=compression_level,
-        version="2.6",
-        write_statistics=True,
+    writer_kwargs: dict = {
+        "compression": compression,
+        "version": "2.6",
+        "write_statistics": True,
+    }
+    # Only pass compression_level for codecs that support it.
+    # Snappy, lz4, and uncompressed ignore/reject the level parameter in PyArrow.
+    effective_level: int | None = (
+        compression_level if compression.lower() in _LEVEL_AWARE_CODECS else None
     )
+    if effective_level is not None:
+        writer_kwargs["compression_level"] = effective_level
+
+    writer = pq.ParquetWriter(str(output_path), schema_with_meta, **writer_kwargs)
 
     try:
         # Write in fixed-size row groups
@@ -238,7 +248,7 @@ def write_deterministic_parquet(
         blake3_hex=hasher.hexdigest(),
         sort_columns=sort_cols,
         compression=compression,
-        compression_level=compression_level,
+        compression_level=effective_level,
     )
 
 
