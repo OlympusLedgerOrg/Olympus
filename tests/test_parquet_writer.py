@@ -92,14 +92,29 @@ class TestWriteDeterministicParquet:
         assert result.row_count == 25
         assert result.row_group_count == 3  # ceil(25/10)
 
-    def test_custom_compression(self, tmp_path: Path) -> None:
+    @pytest.mark.parametrize(
+        "codec, expect_level",
+        [
+            # Level-unaware codecs: PyArrow rejects compression_level entirely.
+            # result.compression_level must be None to prove we never passed it.
+            ("snappy", None),
+            ("lz4", None),
+            # Level-aware codecs: default level 3 is within all valid ranges
+            # (zstd 1-22, brotli 0-11), so it must be preserved in the result.
+            ("zstd", 3),
+            ("brotli", 3),
+        ],
+    )
+    def test_custom_compression(
+        self, tmp_path: Path, codec: str, expect_level: int | None
+    ) -> None:
         from protocol.parquet_writer import write_deterministic_parquet
 
-        records = _make_records(5)
         result = write_deterministic_parquet(
-            records, tmp_path / "out.parquet", compression="snappy"
+            _make_records(5), tmp_path / "out.parquet", compression=codec
         )
-        assert result.compression == "snappy"
+        assert result.compression == codec
+        assert result.compression_level == expect_level
 
     def test_created_by_metadata_is_fixed(self, tmp_path: Path) -> None:
         from protocol.parquet_writer import WRITER_CREATED_BY, write_deterministic_parquet
@@ -110,6 +125,74 @@ class TestWriteDeterministicParquet:
         pf = pq.ParquetFile(str(tmp_path / "out.parquet"))
         schema_meta = pf.schema_arrow.metadata or {}
         assert schema_meta.get(b"created_by") == WRITER_CREATED_BY.encode("utf-8")
+
+
+# ---------------------------------------------------------------------------
+# Compression level range validation
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.skipif(not _PYARROW_AVAILABLE, reason="pyarrow not installed")
+class TestCompressionLevelValidation:
+    """_CODEC_LEVEL_RANGES guards against out-of-range levels per codec.
+
+    This is especially important for brotli (max 11), where callers familiar
+    with zstd (max 22) might accidentally pass an out-of-range level that
+    would produce an ArrowInvalid error deep inside PyArrow with no clear
+    explanation.
+    """
+
+    @pytest.mark.parametrize(
+        "codec, bad_level",
+        [
+            # zstd: valid 1-22 — test both edges
+            ("zstd", 0),  # below min
+            ("zstd", 23),  # above max
+            # gzip: valid 1-9
+            ("gzip", 0),  # below min
+            ("gzip", 10),  # above max
+            # brotli: valid 0-11 — 12 looks plausible to zstd users
+            ("brotli", 12),  # above max
+            ("brotli", -1),  # below min
+        ],
+    )
+    def test_out_of_range_compression_level_raises_value_error(
+        self, tmp_path: Path, codec: str, bad_level: int
+    ) -> None:
+        from protocol.parquet_writer import write_deterministic_parquet
+
+        with pytest.raises(ValueError, match="out of range"):
+            write_deterministic_parquet(
+                _make_records(5),
+                tmp_path / "out.parquet",
+                compression=codec,
+                compression_level=bad_level,
+            )
+
+    @pytest.mark.parametrize(
+        "codec, good_level",
+        [
+            ("zstd", 1),  # min valid
+            ("zstd", 22),  # max valid
+            ("gzip", 1),  # min valid
+            ("gzip", 9),  # max valid
+            ("brotli", 0),  # min valid
+            ("brotli", 11),  # max valid — proves brotli ceiling is 11 not 22
+        ],
+    )
+    def test_valid_compression_level_accepted(
+        self, tmp_path: Path, codec: str, good_level: int
+    ) -> None:
+        from protocol.parquet_writer import write_deterministic_parquet
+
+        result = write_deterministic_parquet(
+            _make_records(5),
+            tmp_path / "out.parquet",
+            compression=codec,
+            compression_level=good_level,
+        )
+        assert result.compression == codec
+        assert result.compression_level == good_level
 
 
 # ---------------------------------------------------------------------------

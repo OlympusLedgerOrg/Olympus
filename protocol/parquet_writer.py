@@ -55,6 +55,20 @@ DEFAULT_COMPRESSION: str = "zstd"
 DEFAULT_COMPRESSION_LEVEL: int = 3
 """Default Zstd compression level (deterministic across platforms)."""
 
+# Codecs that accept a compression_level parameter.
+# Snappy, lz4, and uncompressed reject the level parameter in PyArrow.
+_LEVEL_AWARE_CODECS: frozenset[str] = frozenset({"zstd", "gzip", "brotli"})
+
+# Valid compression_level ranges per level-aware codec.
+# Passing a level outside these bounds raises ArrowInvalid in PyArrow.
+# brotli quality is 0-11 (NOT 0-22 like zstd); guard against callers
+# passing zstd-style levels to brotli by accident.
+_CODEC_LEVEL_RANGES: dict[str, tuple[int, int]] = {
+    "zstd": (1, 22),
+    "gzip": (1, 9),
+    "brotli": (0, 11),
+}
+
 WRITER_CREATED_BY: str = "olympus-deterministic-parquet-writer/1.0"
 """Fixed ``created_by`` metadata for reproducibility."""
 
@@ -86,8 +100,8 @@ class ParquetWriteResult:
     compression: str = DEFAULT_COMPRESSION
     """Compression codec used."""
 
-    compression_level: int = DEFAULT_COMPRESSION_LEVEL
-    """Compression level used."""
+    compression_level: int | None = DEFAULT_COMPRESSION_LEVEL
+    """Compression level used, or ``None`` for codecs that do not support levels."""
 
 
 def _ensure_pyarrow() -> None:
@@ -155,8 +169,8 @@ def write_deterministic_parquet(
 
     Raises:
         ImportError: If pyarrow is not installed.
-        ValueError: If *data* is empty or *sort_columns* reference
-            non-existent columns.
+        ValueError: If *data* is empty, *sort_columns* reference non-existent
+            columns, or *compression_level* is out of range for the codec.
     """
     _ensure_pyarrow()
 
@@ -168,7 +182,9 @@ def write_deterministic_parquet(
     elif _PYARROW_AVAILABLE and isinstance(data, pa.Table):
         table = data
     else:
-        raise TypeError(f"data must be a pyarrow.Table or list[dict], got {type(data).__name__}")
+        raise TypeError(
+            f"data must be a pyarrow.Table or list[dict], got {type(data).__name__}"
+        )
 
     if table.num_rows == 0:
         raise ValueError("Cannot write an empty table to Parquet")
@@ -199,14 +215,31 @@ def write_deterministic_parquet(
     }
     schema_with_meta = table.schema.with_metadata(file_metadata)
 
-    writer = pq.ParquetWriter(
-        str(output_path),
-        schema_with_meta,
-        compression=compression,
-        compression_level=compression_level,
-        version="2.6",
-        write_statistics=True,
+    writer_kwargs: dict = {
+        "compression": compression,
+        "version": "2.6",
+        "write_statistics": True,
+    }
+    # Only pass compression_level for codecs that support it.
+    # Snappy, lz4, and uncompressed ignore/reject the level parameter in PyArrow.
+    effective_level: int | None = (
+        compression_level if compression.lower() in _LEVEL_AWARE_CODECS else None
     )
+    if effective_level is not None:
+        # Validate the level is within the codec's accepted range before
+        # passing it to PyArrow — catches e.g. a zstd-style level=15 being
+        # passed to brotli (max 11) which would raise ArrowInvalid at runtime.
+        codec_key = compression.lower()
+        if codec_key in _CODEC_LEVEL_RANGES:
+            lo, hi = _CODEC_LEVEL_RANGES[codec_key]
+            if not (lo <= effective_level <= hi):
+                raise ValueError(
+                    f"compression_level {effective_level} is out of range "
+                    f"[{lo}, {hi}] for codec '{compression}'"
+                )
+        writer_kwargs["compression_level"] = effective_level
+
+    writer = pq.ParquetWriter(str(output_path), schema_with_meta, **writer_kwargs)
 
     try:
         # Write in fixed-size row groups
@@ -238,7 +271,7 @@ def write_deterministic_parquet(
         blake3_hex=hasher.hexdigest(),
         sort_columns=sort_cols,
         compression=compression,
-        compression_level=compression_level,
+        compression_level=effective_level,
     )
 
 
@@ -254,7 +287,7 @@ def verify_parquet_determinism(
 
     Returns:
         ``True`` if both files have the same BLAKE3 hash.
-    """
+    """ 
 
     def _hash_file(path: str | Path) -> str:
         hasher = _blake3.blake3()
