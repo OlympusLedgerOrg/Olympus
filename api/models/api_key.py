@@ -20,7 +20,9 @@ class ApiKey(Base):
     __tablename__ = "api_keys"
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
-    user_id: Mapped[str] = mapped_column(String(36), ForeignKey("users.id"), nullable=False, index=True)
+    user_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("users.id"), nullable=False, index=True
+    )
     key_hash: Mapped[str] = mapped_column(String(64), nullable=False, unique=True, index=True)
     name: Mapped[str] = mapped_column(String(128), nullable=False)
     scopes: Mapped[str] = mapped_column(Text, nullable=False, default='["ingest","verify"]')

@@ -7,12 +7,12 @@ POST  /auth/keys           — generate additional API key (requires auth)
 GET   /auth/keys           — list caller's active keys
 DELETE /auth/keys/{key_id} — revoke a key
 """
+
 from __future__ import annotations
 
 import hashlib
 import json
 import logging
-import os
 import secrets
 import uuid
 from datetime import datetime, timezone
@@ -26,6 +26,7 @@ from api.deps import DBSession
 from api.models.api_key import ApiKey
 from api.models.user import User
 from protocol.log_sanitization import sanitize_for_log
+
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/auth", tags=["auth"])
@@ -49,6 +50,7 @@ _SALT_BYTES = 32
 
 # ── password helpers ──────────────────────────────────────────────────────────
 
+
 def _hash_password(password: str) -> str:
     salt = secrets.token_bytes(_SALT_BYTES)
     dk = hashlib.scrypt(password.encode(), salt=salt, n=_SCRYPT_N, r=_SCRYPT_R, p=_SCRYPT_P)
@@ -67,11 +69,14 @@ def _verify_password(password: str, stored: str) -> bool:
 
 # ── key helpers ───────────────────────────────────────────────────────────────
 
+
 def _naive_utc() -> datetime:
     return datetime.now(timezone.utc).replace(tzinfo=None)
 
 
-def _make_api_key(user_id: str, name: str, scopes: list[str], expires_at: datetime) -> tuple[str, ApiKey]:
+def _make_api_key(
+    user_id: str, name: str, scopes: list[str], expires_at: datetime
+) -> tuple[str, ApiKey]:
     raw = secrets.token_hex(32)
     key_hash = _hash_key(raw)
     record = ApiKey(
@@ -134,6 +139,7 @@ def _validate_scopes(requested: list[str], allowed: set[str], *, context: str) -
 
 # ── schemas ───────────────────────────────────────────────────────────────────
 
+
 class RegisterRequest(BaseModel):
     email: str
     password: str
@@ -186,6 +192,7 @@ class KeyCreateResponse(BaseModel):
 
 # ── routes ────────────────────────────────────────────────────────────────────
 
+
 @router.post("/register", response_model=RegisterResponse, status_code=status.HTTP_201_CREATED)
 async def register(body: RegisterRequest, db: DBSession, _rl: RateLimit) -> RegisterResponse:
     """Create a new user account and issue a first API key."""
@@ -230,7 +237,8 @@ async def login(body: LoginRequest, db: DBSession, _rl: RateLimit) -> LoginRespo
     user = result.scalars().first()
 
     # Always run verify to prevent timing oracle on email enumeration
-    stored_hash = user.password_hash if user else f"scrypt${_SCRYPT_N}${_SCRYPT_R}${_SCRYPT_P}${'00'*32}${'00'*32}"
+    dummy_hash = f"scrypt${_SCRYPT_N}${_SCRYPT_R}${_SCRYPT_P}${'00' * 32}${'00' * 32}"
+    stored_hash = user.password_hash if user and user.password_hash else dummy_hash
     if not _verify_password(body.password, stored_hash) or not user:
         raise HTTPException(status_code=401, detail="Invalid email or password.")
 
@@ -261,7 +269,9 @@ async def login(body: LoginRequest, db: DBSession, _rl: RateLimit) -> LoginRespo
 
 
 @router.post("/keys", response_model=KeyCreateResponse, status_code=status.HTTP_201_CREATED)
-async def create_key(body: KeyCreateRequest, request: Request, db: DBSession, _rl: RateLimit) -> KeyCreateResponse:
+async def create_key(
+    body: KeyCreateRequest, request: Request, db: DBSession, _rl: RateLimit
+) -> KeyCreateResponse:
     """Generate an additional API key for the authenticated user.
 
     The new key's scopes must be a subset of the caller's current key scopes
@@ -332,6 +342,7 @@ async def revoke_key(key_id: str, request: Request, db: DBSession, _rl: RateLimi
 
 
 # ── internal helper ───────────────────────────────────────────────────────────
+
 
 async def _require_db_user(request: Request, db: DBSession) -> User:
     """Look up the user who owns the incoming API key."""

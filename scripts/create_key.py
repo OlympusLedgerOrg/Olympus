@@ -7,6 +7,7 @@ Usage:
     python scripts/create_key.py --name alice --patch-env .env
     python scripts/create_key.py --name alice --reload http://localhost:8090 --admin-key <key>
 """
+
 from __future__ import annotations
 
 import argparse
@@ -17,6 +18,7 @@ import sys
 import urllib.error
 import urllib.request
 from datetime import datetime, timezone
+
 
 _DOMAIN_PREFIX = b"OLY:LEGACY-BYTES:V1"
 
@@ -51,7 +53,7 @@ def _parse_expires(raw: str) -> str:
         return dt.strftime("%Y-%m-%dT%H:%M:%SZ")
     except ValueError:
         print(f"ERROR: --expires must be YYYY-MM-DD, got: {raw!r}", file=sys.stderr)
-        sys.exit(1)
+        raise SystemExit(1)
 
 
 def generate(name: str, scopes: list[str], expires: str) -> tuple[str, dict]:
@@ -114,12 +116,26 @@ def reload_via_api(base_url: str, admin_key: str) -> None:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Generate an Olympus API key")
-    parser.add_argument("--name", required=True, help="Human-readable key ID (e.g. alice, org-acme)")
-    parser.add_argument("--scopes", default=",".join(DEFAULT_SCOPES), help=f"Comma-separated scopes. Default: {','.join(DEFAULT_SCOPES)}. Valid: {','.join(sorted(VALID_SCOPES))}")
-    parser.add_argument("--expires", default="2099-01-01", help="Expiry date YYYY-MM-DD (default: 2099-01-01)")
-    parser.add_argument("--patch-env", metavar="ENV_FILE", help="Patch an .env file with the new key entry")
-    parser.add_argument("--reload", metavar="BASE_URL", help="Call /key/admin/reload-keys after patching")
-    parser.add_argument("--admin-key", metavar="KEY", help="OLYMPUS_ADMIN_KEY value (required with --reload)")
+    parser.add_argument(
+        "--name", required=True, help="Human-readable key ID (e.g. alice, org-acme)"
+    )
+    parser.add_argument(
+        "--scopes",
+        default=",".join(DEFAULT_SCOPES),
+        help=f"Comma-separated scopes. Default: {','.join(DEFAULT_SCOPES)}. Valid: {','.join(sorted(VALID_SCOPES))}",
+    )
+    parser.add_argument(
+        "--expires", default="2099-01-01", help="Expiry date YYYY-MM-DD (default: 2099-01-01)"
+    )
+    parser.add_argument(
+        "--patch-env", metavar="ENV_FILE", help="Patch an .env file with the new key entry"
+    )
+    parser.add_argument(
+        "--reload", metavar="BASE_URL", help="Call /key/admin/reload-keys after patching"
+    )
+    parser.add_argument(
+        "--admin-key", metavar="KEY", help="OLYMPUS_ADMIN_KEY value (required with --reload)"
+    )
     args = parser.parse_args()
 
     scopes = _parse_scopes(args.scopes)

@@ -320,6 +320,7 @@ async def test_admin_generate_success(auth_client):
     assert data["expires_at"] == "2099-01-01T00:00:00Z"
     # env_entry must be valid JSON containing the key_hash
     import json as _json
+
     entry = _json.loads(data["env_entry"])
     assert entry["key_hash"] == data["key_hash"]
     assert entry["key_id"] == "ops-key"

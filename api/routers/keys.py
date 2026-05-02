@@ -14,7 +14,6 @@ import os
 import secrets
 from datetime import datetime, timezone
 
-from protocol.hashes import hash_bytes as _hash_bytes
 from fastapi import APIRouter, HTTPException, Request, status
 from pydantic import BaseModel, field_validator
 from sqlalchemy import select
@@ -24,6 +23,7 @@ from api.deps import DBSession
 from api.models.credential import KeyCredential
 from api.schemas.credential import CredentialCreate, CredentialResponse
 from api.services.hasher import generate_commit_id
+from protocol.hashes import hash_bytes as _hash_bytes
 from protocol.log_sanitization import sanitize_for_log
 
 
@@ -137,7 +137,9 @@ class GenerateKeyResponse(BaseModel):
     env_entry: str
 
 
-@router.post("/admin/generate", response_model=GenerateKeyResponse, status_code=status.HTTP_201_CREATED)
+@router.post(
+    "/admin/generate", response_model=GenerateKeyResponse, status_code=status.HTTP_201_CREATED
+)
 async def admin_generate_key(request: Request, body: GenerateKeyRequest) -> GenerateKeyResponse:
     """Generate a new API key and return the raw key + env-var JSON entry.
 
@@ -167,7 +169,11 @@ async def admin_generate_key(request: Request, body: GenerateKeyRequest) -> Gene
         "scopes": body.scopes,
         "expires_at": body.expires_at,
     }
-    logger.info("Admin generated API key key_id=%s scopes=%s", sanitize_for_log(body.name), body.scopes)
+    logger.info(
+        "Admin generated API key key_id=%s scopes=%s",
+        sanitize_for_log(body.name),
+        [sanitize_for_log(scope) for scope in body.scopes],
+    )
     return GenerateKeyResponse(
         raw_key=raw_key,
         key_hash=key_hash,

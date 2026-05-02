@@ -40,6 +40,7 @@ from fastapi import APIRouter, File, HTTPException, Path, Request, UploadFile
 from api.auth import (
     RequireCommitScope,
     RequireIngestScope,
+    RequireVerifyScope,
     _get_backend as _get_rate_limit_backend,
     _get_client_ip,
     _register_api_key_for_tests as _auth_register_api_key_for_tests,
@@ -668,9 +669,7 @@ async def _apply_ip_rate_limit(request: Request, action: str) -> None:
     """Apply IP-only rate limiting for public (unauthenticated) endpoints."""
     client_ip = _get_client_ip(request)
     loop = asyncio.get_running_loop()
-    ip_allowed = await loop.run_in_executor(
-        None, _consume_rate_limit, "ip", client_ip, action
-    )
+    ip_allowed = await loop.run_in_executor(None, _consume_rate_limit, "ip", client_ip, action)
     if not ip_allowed:
         logger.warning(
             "rate_limit_hit",
@@ -1270,7 +1269,7 @@ async def get_ingestion_proof(
 
 @router.get("/records/hash/{content_hash}/verify", response_model=HashVerificationResponse)
 async def verify_ingested_content_hash(
-    content_hash: str, request: Request
+    content_hash: str, request: Request, _api_key: RequireVerifyScope
 ) -> HashVerificationResponse:
     """
     Verify that a committed BLAKE3 content hash exists in the ingestion store.

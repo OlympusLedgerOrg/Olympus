@@ -229,21 +229,24 @@ def _constant_time_lookup(key_hash: str) -> tuple[_APIKeyRecord | None, bool]:
 async def _db_lookup_key(key_hash: str) -> tuple[_APIKeyRecord | None, bool]:
     """Check api_keys table for a matching DB-backed key. Returns (record, expired)."""
     try:
+        import json as _json
+
         from api.db import AsyncSessionLocal
         from api.models.api_key import ApiKey
-        import json as _json
 
         async with AsyncSessionLocal() as session:
             result = await session.execute(
-                select(ApiKey)
-                .where(ApiKey.key_hash == key_hash)
-                .where(ApiKey.revoked_at.is_(None))
+                select(ApiKey).where(ApiKey.key_hash == key_hash).where(ApiKey.revoked_at.is_(None))
             )
             row = result.scalars().first()
             if row is None:
                 return None, False
             now = datetime.now(timezone.utc).replace(tzinfo=None)
-            expires = row.expires_at.replace(tzinfo=None) if row.expires_at.tzinfo is not None else row.expires_at
+            expires = (
+                row.expires_at.replace(tzinfo=None)
+                if row.expires_at.tzinfo is not None
+                else row.expires_at
+            )
             expired = now >= expires
             record = _APIKeyRecord(
                 key_id=row.id,
