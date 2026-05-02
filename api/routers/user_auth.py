@@ -271,8 +271,11 @@ async def create_key(body: KeyCreateRequest, request: Request, db: DBSession, _r
     user, caller_key = await _require_db_user_and_key(request, db)
     try:
         caller_scopes = set(json.loads(caller_key.scopes))
-    except (TypeError, ValueError):
-        caller_scopes = set()
+    except (TypeError, ValueError) as e:
+        # A corrupt scope blob means we cannot safely reason about subsets;
+        # refuse rather than fall back to an empty (or open) set.
+        logger.error("Corrupt scopes for key %s: %s", sanitize_for_log(caller_key.id), e)
+        raise HTTPException(status_code=500, detail="Caller key has invalid scope data.")
     scopes = _validate_scopes(body.scopes, caller_scopes, context="create_key")
     expires = _parse_expires(body.expires_at)
     raw_key, key_record = _make_api_key(user.id, body.name, scopes, expires)
