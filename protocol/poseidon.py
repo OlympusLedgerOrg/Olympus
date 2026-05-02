@@ -14,8 +14,9 @@ Usage:
     from protocol.poseidon import poseidon_hash, poseidon_leaf_hash, poseidon_node_hash
 """
 
+from collections.abc import Mapping
 from types import MappingProxyType
-from typing import Final, Mapping, cast
+from typing import Final, cast
 
 from olympus_core.poseidon import (
     bytes_to_field_element,
