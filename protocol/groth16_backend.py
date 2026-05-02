@@ -33,8 +33,11 @@ Usage::
 from __future__ import annotations
 
 import json
+import logging
+import os
 import re
 import shutil
+import signal
 import subprocess  # nosec B404
 import tempfile
 from pathlib import Path
@@ -50,6 +53,151 @@ from .proof_interface import (
     Statement,
     Witness,
 )
+
+_log = logging.getLogger(__name__)
+
+# Per-operation timeout constants (seconds)
+_WITNESS_TIMEOUT_SECS = 120  # witness gen can be slow on large circuits
+_PROOF_TIMEOUT_SECS = 300    # proof gen is the longest step
+_VERIFY_TIMEOUT_SECS = 60    # verify is fast
+
+
+def _make_pdeathsig_preexec():
+    """
+    Return a preexec_fn that sets PR_SET_PDEATHSIG=SIGTERM on Linux so the
+    child process is automatically killed when its parent process dies.
+    Returns None on non-Linux platforms (Popen accepts None for preexec_fn).
+    """
+    import sys
+
+    if sys.platform != "linux":
+        return None
+    import ctypes
+
+    _PR_SET_PDEATHSIG = 1
+    try:
+        libc = ctypes.CDLL("libc.so.6", use_errno=True)
+    except OSError:
+        return None
+
+    def _preexec() -> None:
+        libc.prctl(_PR_SET_PDEATHSIG, signal.SIGTERM, 0, 0, 0)
+
+    return _preexec
+
+
+def _try_limit_cgroup(pid: int, *, memory_bytes: int) -> None:
+    """
+    Best-effort: move *pid* into a dedicated cgroupv2 leaf and cap its memory.
+
+    Silently no-ops if not on Linux, if /sys/fs/cgroup is not a cgroupv2
+    unified hierarchy, if the process lacks write permission, or on any
+    other OS/IO error. Never raises; failures are logged at DEBUG level so
+    they don't obscure the real work.
+    """
+    import sys
+
+    if sys.platform != "linux":
+        return
+    cgroup_root = Path("/sys/fs/cgroup")
+    try:
+        # Verify cgroupv2 unified hierarchy
+        if not (cgroup_root / "cgroup.controllers").exists():
+            return
+        # Create a per-PID leaf under an olympus sub-tree
+        leaf = cgroup_root / "olympus" / f"snarkjs-{pid}"
+        leaf.mkdir(parents=True, exist_ok=True)
+        # Cap memory before the process can allocate much
+        (leaf / "memory.max").write_text(str(memory_bytes), encoding="ascii")
+        # Move the process into the leaf
+        (leaf / "cgroup.procs").write_text(str(pid), encoding="ascii")
+    except Exception as exc:  # noqa: BLE001
+        _log.debug("_try_limit_cgroup: could not limit pid %d: %s", pid, exc)
+
+
+def _run_subprocess(
+    cmd: list[str],
+    *,
+    cwd: Path | None = None,
+    timeout: int,
+    check: bool = True,
+) -> subprocess.CompletedProcess[str]:
+    """
+    Run a subprocess with timeout and best-effort process group cleanup.
+
+    Uses start_new_session=True so the entire npx + Node.js tree can be
+    killed as a group on timeout. If the container security policy blocks
+    setsid (OSError on Popen), falls back to plain Popen with
+    PR_SET_PDEATHSIG set via preexec_fn (_make_pdeathsig_preexec) on Linux
+    so children are still signalled when the parent dies — timeout still
+    applies, but only the direct child is killed on expiry.
+
+    After a successful Popen the child is moved into a memory-bounded
+    cgroupv2 leaf (_try_limit_cgroup) to prevent a runaway snarkjs circuit
+    from OOM-killing the whole runner.
+    """
+    use_new_session = True
+    try:
+        proc = subprocess.Popen(  # nosec B603
+            cmd,
+            cwd=cwd,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            start_new_session=True,
+        )
+    except OSError:
+        # setsid(2) blocked by container security policy (seccomp/gVisor).
+        # Fall back: set PR_SET_PDEATHSIG so children die with the parent,
+        # but orphaned siblings may still survive if npx is killed.
+        _log.warning(
+            "start_new_session=True failed (seccomp restriction?); "
+            "falling back to plain subprocess — orphaned children possible on timeout"
+        )
+        use_new_session = False
+        proc = subprocess.Popen(  # nosec B603
+            cmd,
+            cwd=cwd,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            preexec_fn=_make_pdeathsig_preexec(),
+        )
+
+    # After Popen, move the child into a memory-bounded cgroup
+    # Prevents a runaway snarkjs circuit from OOMing the whole runner
+    _try_limit_cgroup(proc.pid, memory_bytes=2 * 1024**3)  # 2GB ceiling
+
+    with proc:
+        try:
+            stdout, stderr = proc.communicate(timeout=timeout)
+        except subprocess.TimeoutExpired:
+            if use_new_session:
+                # Kill the whole process group
+                try:
+                    os.killpg(os.getpgid(proc.pid), signal.SIGTERM)
+                except ProcessLookupError:
+                    pass
+                try:
+                    proc.communicate(timeout=5)
+                except subprocess.TimeoutExpired:
+                    try:
+                        os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
+                    except ProcessLookupError:
+                        pass
+                    proc.communicate()
+            else:
+                # Best effort: kill just the direct child
+                proc.kill()
+                proc.communicate()
+            raise
+
+        returncode = proc.wait()
+
+    completed = subprocess.CompletedProcess(cmd, returncode, stdout, stderr)
+    if check and returncode != 0:
+        raise subprocess.CalledProcessError(returncode, cmd, stdout, stderr)
+    return completed
 
 
 class Groth16Backend(ProofBackendProtocol):
@@ -212,7 +360,7 @@ class Groth16Backend(ProofBackendProtocol):
             # Generate witness
             witness_path = tmp_path / "witness.wtns"
             try:
-                subprocess.run(  # nosec B603
+                _run_subprocess(
                     [
                         node_bin,
                         str(generate_witness_js),
@@ -220,9 +368,7 @@ class Groth16Backend(ProofBackendProtocol):
                         str(input_path),
                         str(witness_path),
                     ],
-                    check=True,
-                    capture_output=True,
-                    text=True,
+                    timeout=_WITNESS_TIMEOUT_SECS,
                 )
             except subprocess.CalledProcessError as e:
                 raise ProofGenerationError(f"Witness generation failed: {e.stderr}") from e
@@ -240,7 +386,8 @@ class Groth16Backend(ProofBackendProtocol):
                         str(witness_path),
                         str(proof_path),
                         str(public_path),
-                    ]
+                    ],
+                    timeout=_PROOF_TIMEOUT_SECS,
                 )
             except subprocess.CalledProcessError as e:
                 raise ProofGenerationError(f"Proof generation failed: {e.stderr}") from e
@@ -304,24 +451,29 @@ class Groth16Backend(ProofBackendProtocol):
 
             try:
                 self._run_snarkjs(
-                    ["groth16", "verify", str(vkey_path), str(public_path), str(proof_path)]
+                    ["groth16", "verify", str(vkey_path), str(public_path), str(proof_path)],
+                    timeout=_VERIFY_TIMEOUT_SECS,
                 )
                 return True
             except subprocess.CalledProcessError:
                 return False
 
-    def _run_snarkjs(self, args: list[str]) -> subprocess.CompletedProcess[str]:
+    def _run_snarkjs(
+        self, args: list[str], *, timeout: int = _PROOF_TIMEOUT_SECS
+    ) -> subprocess.CompletedProcess[str]:
         """
         Execute a snarkjs command.
 
         Args:
             args: Arguments to pass to snarkjs
+            timeout: Maximum seconds to wait before killing the process tree
 
         Returns:
             CompletedProcess with stdout/stderr
 
         Raises:
             subprocess.CalledProcessError: If command fails
+            subprocess.TimeoutExpired: If command exceeds timeout
         """
         launcher = self._resolve_snarkjs_bin()
         if self.snarkjs_bin == "npx":
@@ -329,14 +481,7 @@ class Groth16Backend(ProofBackendProtocol):
         else:
             cmd = [launcher, *args]
 
-        return subprocess.run(  # nosec B603
-            cmd,
-            cwd=self.circuits_dir,
-            check=True,
-            capture_output=True,
-            text=True,
-            timeout=30,
-        )
+        return _run_subprocess(cmd, cwd=self.circuits_dir, timeout=timeout)
 
     def _find_verification_key(self, circuit: str) -> Path | None:
         """
