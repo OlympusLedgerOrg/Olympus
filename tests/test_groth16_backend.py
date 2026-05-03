@@ -496,6 +496,7 @@ class TestRunSnarkjs:
         assert "groth16" in cmd
         # Default timeout for _run_snarkjs is _PROOF_TIMEOUT_SECS
         from protocol.groth16_backend import _PROOF_TIMEOUT_SECS
+
         assert call_args.kwargs["timeout"] == _PROOF_TIMEOUT_SECS
 
     def test_run_snarkjs_with_direct_binary(self, tmp_path: Path) -> None:
@@ -522,6 +523,7 @@ class TestRunSnarkjs:
         assert cmd[0] == "/usr/local/bin/snarkjs"
         assert cmd[1] == "groth16"  # No "snarkjs" prefix
         from protocol.groth16_backend import _PROOF_TIMEOUT_SECS
+
         assert call_args.kwargs["timeout"] == _PROOF_TIMEOUT_SECS
 
     def test_run_snarkjs_timeout_raises_timeout_expired(self) -> None:

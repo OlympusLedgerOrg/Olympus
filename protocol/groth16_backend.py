@@ -60,8 +60,8 @@ _log = logging.getLogger(__name__)
 
 # Per-operation timeout constants (seconds)
 _WITNESS_TIMEOUT_SECS = 120  # witness gen can be slow on large circuits
-_PROOF_TIMEOUT_SECS = 300    # proof gen is the longest step
-_VERIFY_TIMEOUT_SECS = 60    # verify is fast
+_PROOF_TIMEOUT_SECS = 300  # proof gen is the longest step
+_VERIFY_TIMEOUT_SECS = 60  # verify is fast
 
 
 def _make_pdeathsig_preexec() -> Callable[[], None] | None:

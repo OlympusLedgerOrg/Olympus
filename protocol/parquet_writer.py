@@ -182,9 +182,7 @@ def write_deterministic_parquet(
     elif _PYARROW_AVAILABLE and isinstance(data, pa.Table):
         table = data
     else:
-        raise TypeError(
-            f"data must be a pyarrow.Table or list[dict], got {type(data).__name__}"
-        )
+        raise TypeError(f"data must be a pyarrow.Table or list[dict], got {type(data).__name__}")
 
     if table.num_rows == 0:
         raise ValueError("Cannot write an empty table to Parquet")
@@ -287,7 +285,7 @@ def verify_parquet_determinism(
 
     Returns:
         ``True`` if both files have the same BLAKE3 hash.
-    """ 
+    """
 
     def _hash_file(path: str | Path) -> str:
         hasher = _blake3.blake3()
