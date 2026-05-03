@@ -25,7 +25,7 @@ output:
 
 | File | Source | BLAKE2b-512 hash |
 |------|--------|------------------|
-| `powersOfTau28_hez_final_19.ptau` | [Polygon/zkEVM GCS](https://storage.googleapis.com/zkevm/ptau/powersOfTau28_hez_final_19.ptau) | `bca9d8b04242f175189872c42ceaa21e2951e0f0f272a0cc54fc37193ff664860eaf1c555c70cdedfaf9fb74927de7aa1d33dc1e2a7f1a50619484989da0887` |
+| `powersOfTau28_hez_final_19.ptau` | [Polygon/zkEVM GCS](https://storage.googleapis.com/zkevm/ptau/powersOfTau28_hez_final_19.ptau) | `bca9d8b04242f175189872c42ceaa21e2951e0f0f272a0cc54fc37193ff6648600eaf1c555c70cdedfaf9fb74927de7aa1d33dc1e2a7f1a50619484989da0887` |
 
 > **Upgrade note (2026-05):** Upgraded from `powersOfTau28_hez_final_17.ptau`
 > (2^17 = ~131k constraints) to `powersOfTau28_hez_final_19.ptau`
@@ -38,7 +38,7 @@ output:
 This file supports circuits up to 2^19 constraints (~524 000 R1CS rows), which
 covers all current Olympus circuits with significant headroom. It is automatically
 downloaded by `.github/workflows/copilot-setup-steps.yml` and integrity-checked
-with `b2sum` on every CI run. **No new Phase 1 ceremony is required or planned.**
+with `b2sum` when the PTAU cache is missed in CI. **No new Phase 1 ceremony is required or planned.**
 
 > ⚠️ **GCS URL stability:** The Polygon/zkEVM GCS bucket is the current
 > canonical host. If this URL ever becomes unavailable (as the original Hermez
