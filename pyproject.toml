@@ -26,6 +26,7 @@ dependencies = [
     "PyNaCl==1.6.2",
     "fastapi==0.136.1",
     "starlette==1.0.0",
+    # Keep uvloop-backed extras off Windows; uvloop is non-Windows-only.
     "uvicorn[standard]==0.46.0; platform_system != 'Windows'",
     "uvicorn==0.46.0; platform_system == 'Windows'",
     "psycopg[binary]==3.3.3",
