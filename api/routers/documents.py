@@ -224,8 +224,12 @@ async def verify_document(body: DocVerifyRequest, db: DBSession, _rl: RateLimit)
     if raw_details:
         try:
             commit_kind = json.loads(raw_details).get("kind", "unknown")
-        except (json.JSONDecodeError, AttributeError):
-            pass
+        except (json.JSONDecodeError, AttributeError, TypeError):
+            logger.warning(
+                "Failed to parse LedgerActivity.details_json for commit_id=%s; defaulting kind='unknown'",
+                sanitize_for_log(commit.commit_id),
+                exc_info=True,
+            )
 
     # Rebuild the Merkle tree for the shard and generate an inclusion proof
     all_hashes_result = await db.execute(

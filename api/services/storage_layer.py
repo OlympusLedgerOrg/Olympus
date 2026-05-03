@@ -16,6 +16,7 @@ Environment Variables:
 from __future__ import annotations
 
 import asyncio
+import functools
 import logging
 import os
 from contextlib import contextmanager
@@ -50,7 +51,6 @@ logger = logging.getLogger(__name__)
 _storage: StorageLayer | None = None
 _db_error: str | None = None
 _VERIFYING_SSLMODES = {"verify-full", "verify-ca"}
-_logged_dev_tls_warning = False
 
 
 def _extract_sslmode(database_url: str) -> str:
@@ -72,21 +72,23 @@ def _extract_sslmode(database_url: str) -> str:
     return ""
 
 
+@functools.lru_cache(maxsize=1)
+def _log_non_verifying_tls_dev_warning_once() -> None:
+    """Log a development-only TLS warning once per process."""
+    logger.warning(
+        "Non-verifying Postgres sslmode is allowed only in development. "
+        "Use sslmode=verify-full in production."
+    )
+
+
 def _enforce_postgres_tls_mode(database_url: str) -> None:
     """Require certificate-verifying Postgres TLS outside development."""
-    global _logged_dev_tls_warning
-
     env = os.environ.get("OLYMPUS_ENV", "production")
     sslmode = _extract_sslmode(database_url)
 
     if env == "development":
-        if sslmode not in _VERIFYING_SSLMODES and not _logged_dev_tls_warning:
-            _logged_dev_tls_warning = True
-            logger.warning(
-                "Non-verifying Postgres sslmode=%r allowed only in development. "
-                "Use sslmode=verify-full in production.",
-                sslmode or "<unset>",
-            )
+        if sslmode not in _VERIFYING_SSLMODES:
+            _log_non_verifying_tls_dev_warning_once()
         return
 
     if sslmode in _VERIFYING_SSLMODES:

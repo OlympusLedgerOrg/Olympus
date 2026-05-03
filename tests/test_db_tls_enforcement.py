@@ -47,7 +47,7 @@ class _FakeStorageLayer:
 def _reset_storage_state(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(storage_layer, "_storage", None)
     monkeypatch.setattr(storage_layer, "_db_error", None)
-    monkeypatch.setattr(storage_layer, "_logged_dev_tls_warning", False)
+    storage_layer._log_non_verifying_tls_dev_warning_once.cache_clear()
 
 
 def test_startup_rejects_sslmode_require_in_production(monkeypatch: pytest.MonkeyPatch):
