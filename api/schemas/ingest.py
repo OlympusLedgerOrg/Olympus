@@ -249,6 +249,9 @@ class IngestionProofResponse(BaseModel):
     poseidon_root: str | None = Field(
         None, description="Optional Poseidon root associated with the commitment"
     )
+    hash_suite: str | None = Field(
+        None, description="Poseidon hash suite identifier (e.g. 'poseidon-bn254-v1') — see ADR-0009"
+    )
 
 
 class HashVerificationResponse(IngestionProofResponse):
@@ -281,6 +284,7 @@ class ProofVerificationResponse(BaseModel):
     merkle_proof_valid: bool
     known_to_server: bool
     poseidon_root: str | None = None
+    hash_suite: str | None = None
 
 
 # DEPRECATED: submit_proof_bundle no longer accepts a JSON body.
@@ -363,4 +367,7 @@ class ArtifactCommitResponse(BaseModel):
     ledger_entry_hash: str = Field(..., description="Hash of the ledger entry")
     poseidon_root: str | None = Field(
         None, description="Optional Poseidon root bound to the artifact commitment"
+    )
+    hash_suite: str | None = Field(
+        None, description="Poseidon hash suite identifier (e.g. 'poseidon-bn254-v1') — see ADR-0009"
     )
