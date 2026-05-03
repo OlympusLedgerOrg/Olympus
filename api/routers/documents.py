@@ -225,6 +225,7 @@ async def verify_document(body: DocVerifyRequest, db: DBSession, _rl: RateLimit)
         try:
             commit_kind = json.loads(raw_details).get("kind", "unknown")
         except (json.JSONDecodeError, AttributeError, TypeError):
+            commit_kind = "unknown"
             logger.warning(
                 "Failed to parse LedgerActivity.details_json for commit_id=%s; defaulting kind='unknown'",
                 sanitize_for_log(commit.commit_id),
