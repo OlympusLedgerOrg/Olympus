@@ -19,23 +19,54 @@ import (
 const _ = grpc.SupportPackageIsVersion9
 
 const (
-	CdhsSmfService_Update_FullMethodName             = "/olympus.cdhs_smf.v1.CdhsSmfService/Update"
-	CdhsSmfService_ProveInclusion_FullMethodName     = "/olympus.cdhs_smf.v1.CdhsSmfService/ProveInclusion"
-	CdhsSmfService_VerifyInclusion_FullMethodName    = "/olympus.cdhs_smf.v1.CdhsSmfService/VerifyInclusion"
-	CdhsSmfService_ProveNonInclusion_FullMethodName  = "/olympus.cdhs_smf.v1.CdhsSmfService/ProveNonInclusion"
-	CdhsSmfService_VerifyNonInclusion_FullMethodName = "/olympus.cdhs_smf.v1.CdhsSmfService/VerifyNonInclusion"
-	CdhsSmfService_Canonicalize_FullMethodName       = "/olympus.cdhs_smf.v1.CdhsSmfService/Canonicalize"
-	CdhsSmfService_GetRoot_FullMethodName            = "/olympus.cdhs_smf.v1.CdhsSmfService/GetRoot"
-	CdhsSmfService_SignRoot_FullMethodName           = "/olympus.cdhs_smf.v1.CdhsSmfService/SignRoot"
-	CdhsSmfService_ReplayLeaves_FullMethodName       = "/olympus.cdhs_smf.v1.CdhsSmfService/ReplayLeaves"
+	CdhsSmfService_Update_FullMethodName               = "/olympus.cdhs_smf.v1.CdhsSmfService/Update"
+	CdhsSmfService_PrepareUpdate_FullMethodName        = "/olympus.cdhs_smf.v1.CdhsSmfService/PrepareUpdate"
+	CdhsSmfService_CommitPreparedUpdate_FullMethodName = "/olympus.cdhs_smf.v1.CdhsSmfService/CommitPreparedUpdate"
+	CdhsSmfService_AbortPreparedUpdate_FullMethodName  = "/olympus.cdhs_smf.v1.CdhsSmfService/AbortPreparedUpdate"
+	CdhsSmfService_ProveInclusion_FullMethodName       = "/olympus.cdhs_smf.v1.CdhsSmfService/ProveInclusion"
+	CdhsSmfService_VerifyInclusion_FullMethodName      = "/olympus.cdhs_smf.v1.CdhsSmfService/VerifyInclusion"
+	CdhsSmfService_ProveNonInclusion_FullMethodName    = "/olympus.cdhs_smf.v1.CdhsSmfService/ProveNonInclusion"
+	CdhsSmfService_VerifyNonInclusion_FullMethodName   = "/olympus.cdhs_smf.v1.CdhsSmfService/VerifyNonInclusion"
+	CdhsSmfService_Canonicalize_FullMethodName         = "/olympus.cdhs_smf.v1.CdhsSmfService/Canonicalize"
+	CdhsSmfService_GetRoot_FullMethodName              = "/olympus.cdhs_smf.v1.CdhsSmfService/GetRoot"
+	CdhsSmfService_SignRoot_FullMethodName             = "/olympus.cdhs_smf.v1.CdhsSmfService/SignRoot"
+	CdhsSmfService_ReplayLeaves_FullMethodName         = "/olympus.cdhs_smf.v1.CdhsSmfService/ReplayLeaves"
 )
 
 // CdhsSmfServiceClient is the client API for CdhsSmfService service.
 //
 // For semantics around ctx use and closing/ending streaming RPCs, please refer to https://pkg.go.dev/google.golang.org/grpc/?tab=doc#ClientConn.NewStream.
 type CdhsSmfServiceClient interface {
-	// Insert or update a record in the global SMT
+	// Insert or update a record in the global SMT.
+	//
+	// DEPRECATED for write paths that require crash safety: this RPC mutates
+	// the in-memory SMT immediately, before any external storage durability
+	// step. Sequencers MUST use the two-phase
+	// PrepareUpdate / CommitPreparedUpdate flow (see H-2) so that durable
+	// (Postgres) state and live (Rust) state cannot diverge on storage failure.
+	// Update() is retained for tests and for callers that have no external
+	// durability requirements.
 	Update(ctx context.Context, in *UpdateRequest, opts ...grpc.CallOption) (*UpdateResponse, error)
+	// Phase 1 of two-phase commit: compute the new root + deltas for an update
+	// WITHOUT mutating the live in-memory SMT. The prepared transaction is
+	// held in a bounded LRU keyed by transaction_id; the caller MUST follow
+	// up with either CommitPreparedUpdate or AbortPreparedUpdate. Prepared
+	// transactions whose TTL elapses are evicted and treated as aborted.
+	//
+	// A prepared-but-uncommitted update MUST NOT appear in any signed root
+	// or proof returned by GetRoot / ProveInclusion / Update.
+	PrepareUpdate(ctx context.Context, in *PrepareUpdateRequest, opts ...grpc.CallOption) (*PrepareUpdateResponse, error)
+	// Phase 2 of two-phase commit: atomically apply a previously prepared
+	// update to the live SMT. Returns NOT_FOUND if the transaction id is
+	// unknown (already committed, aborted, or evicted), or FAILED_PRECONDITION
+	// if another commit has advanced the root since the transaction was
+	// prepared (the caller should Abort and re-prepare).
+	CommitPreparedUpdate(ctx context.Context, in *CommitPreparedUpdateRequest, opts ...grpc.CallOption) (*CommitPreparedUpdateResponse, error)
+	// Discard a prepared transaction. Idempotent: returns OK whether or not
+	// the transaction is currently in the prepared store. Callers MUST invoke
+	// this on any failure path between PrepareUpdate and CommitPreparedUpdate
+	// so that the prepared LRU does not fill up with abandoned entries.
+	AbortPreparedUpdate(ctx context.Context, in *AbortPreparedUpdateRequest, opts ...grpc.CallOption) (*AbortPreparedUpdateResponse, error)
 	// Generate an inclusion proof for a key
 	ProveInclusion(ctx context.Context, in *ProveInclusionRequest, opts ...grpc.CallOption) (*ProveInclusionResponse, error)
 	// Verify an inclusion proof
@@ -66,6 +97,36 @@ func (c *cdhsSmfServiceClient) Update(ctx context.Context, in *UpdateRequest, op
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(UpdateResponse)
 	err := c.cc.Invoke(ctx, CdhsSmfService_Update_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *cdhsSmfServiceClient) PrepareUpdate(ctx context.Context, in *PrepareUpdateRequest, opts ...grpc.CallOption) (*PrepareUpdateResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(PrepareUpdateResponse)
+	err := c.cc.Invoke(ctx, CdhsSmfService_PrepareUpdate_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *cdhsSmfServiceClient) CommitPreparedUpdate(ctx context.Context, in *CommitPreparedUpdateRequest, opts ...grpc.CallOption) (*CommitPreparedUpdateResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(CommitPreparedUpdateResponse)
+	err := c.cc.Invoke(ctx, CdhsSmfService_CommitPreparedUpdate_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *cdhsSmfServiceClient) AbortPreparedUpdate(ctx context.Context, in *AbortPreparedUpdateRequest, opts ...grpc.CallOption) (*AbortPreparedUpdateResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(AbortPreparedUpdateResponse)
+	err := c.cc.Invoke(ctx, CdhsSmfService_AbortPreparedUpdate_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -156,8 +217,36 @@ func (c *cdhsSmfServiceClient) ReplayLeaves(ctx context.Context, in *ReplayReque
 // All implementations must embed UnimplementedCdhsSmfServiceServer
 // for forward compatibility.
 type CdhsSmfServiceServer interface {
-	// Insert or update a record in the global SMT
+	// Insert or update a record in the global SMT.
+	//
+	// DEPRECATED for write paths that require crash safety: this RPC mutates
+	// the in-memory SMT immediately, before any external storage durability
+	// step. Sequencers MUST use the two-phase
+	// PrepareUpdate / CommitPreparedUpdate flow (see H-2) so that durable
+	// (Postgres) state and live (Rust) state cannot diverge on storage failure.
+	// Update() is retained for tests and for callers that have no external
+	// durability requirements.
 	Update(context.Context, *UpdateRequest) (*UpdateResponse, error)
+	// Phase 1 of two-phase commit: compute the new root + deltas for an update
+	// WITHOUT mutating the live in-memory SMT. The prepared transaction is
+	// held in a bounded LRU keyed by transaction_id; the caller MUST follow
+	// up with either CommitPreparedUpdate or AbortPreparedUpdate. Prepared
+	// transactions whose TTL elapses are evicted and treated as aborted.
+	//
+	// A prepared-but-uncommitted update MUST NOT appear in any signed root
+	// or proof returned by GetRoot / ProveInclusion / Update.
+	PrepareUpdate(context.Context, *PrepareUpdateRequest) (*PrepareUpdateResponse, error)
+	// Phase 2 of two-phase commit: atomically apply a previously prepared
+	// update to the live SMT. Returns NOT_FOUND if the transaction id is
+	// unknown (already committed, aborted, or evicted), or FAILED_PRECONDITION
+	// if another commit has advanced the root since the transaction was
+	// prepared (the caller should Abort and re-prepare).
+	CommitPreparedUpdate(context.Context, *CommitPreparedUpdateRequest) (*CommitPreparedUpdateResponse, error)
+	// Discard a prepared transaction. Idempotent: returns OK whether or not
+	// the transaction is currently in the prepared store. Callers MUST invoke
+	// this on any failure path between PrepareUpdate and CommitPreparedUpdate
+	// so that the prepared LRU does not fill up with abandoned entries.
+	AbortPreparedUpdate(context.Context, *AbortPreparedUpdateRequest) (*AbortPreparedUpdateResponse, error)
 	// Generate an inclusion proof for a key
 	ProveInclusion(context.Context, *ProveInclusionRequest) (*ProveInclusionResponse, error)
 	// Verify an inclusion proof
@@ -186,6 +275,15 @@ type UnimplementedCdhsSmfServiceServer struct{}
 
 func (UnimplementedCdhsSmfServiceServer) Update(context.Context, *UpdateRequest) (*UpdateResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method Update not implemented")
+}
+func (UnimplementedCdhsSmfServiceServer) PrepareUpdate(context.Context, *PrepareUpdateRequest) (*PrepareUpdateResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method PrepareUpdate not implemented")
+}
+func (UnimplementedCdhsSmfServiceServer) CommitPreparedUpdate(context.Context, *CommitPreparedUpdateRequest) (*CommitPreparedUpdateResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method CommitPreparedUpdate not implemented")
+}
+func (UnimplementedCdhsSmfServiceServer) AbortPreparedUpdate(context.Context, *AbortPreparedUpdateRequest) (*AbortPreparedUpdateResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method AbortPreparedUpdate not implemented")
 }
 func (UnimplementedCdhsSmfServiceServer) ProveInclusion(context.Context, *ProveInclusionRequest) (*ProveInclusionResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method ProveInclusion not implemented")
@@ -246,6 +344,60 @@ func _CdhsSmfService_Update_Handler(srv interface{}, ctx context.Context, dec fu
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
 		return srv.(CdhsSmfServiceServer).Update(ctx, req.(*UpdateRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _CdhsSmfService_PrepareUpdate_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(PrepareUpdateRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(CdhsSmfServiceServer).PrepareUpdate(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: CdhsSmfService_PrepareUpdate_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(CdhsSmfServiceServer).PrepareUpdate(ctx, req.(*PrepareUpdateRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _CdhsSmfService_CommitPreparedUpdate_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(CommitPreparedUpdateRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(CdhsSmfServiceServer).CommitPreparedUpdate(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: CdhsSmfService_CommitPreparedUpdate_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(CdhsSmfServiceServer).CommitPreparedUpdate(ctx, req.(*CommitPreparedUpdateRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _CdhsSmfService_AbortPreparedUpdate_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(AbortPreparedUpdateRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(CdhsSmfServiceServer).AbortPreparedUpdate(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: CdhsSmfService_AbortPreparedUpdate_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(CdhsSmfServiceServer).AbortPreparedUpdate(ctx, req.(*AbortPreparedUpdateRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
@@ -404,6 +556,18 @@ var CdhsSmfService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "Update",
 			Handler:    _CdhsSmfService_Update_Handler,
+		},
+		{
+			MethodName: "PrepareUpdate",
+			Handler:    _CdhsSmfService_PrepareUpdate_Handler,
+		},
+		{
+			MethodName: "CommitPreparedUpdate",
+			Handler:    _CdhsSmfService_CommitPreparedUpdate_Handler,
+		},
+		{
+			MethodName: "AbortPreparedUpdate",
+			Handler:    _CdhsSmfService_AbortPreparedUpdate_Handler,
 		},
 		{
 			MethodName: "ProveInclusion",

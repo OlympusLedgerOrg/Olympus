@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"crypto/tls"
 	"encoding/hex"
@@ -19,6 +20,7 @@ import (
 	"github.com/OlympusLedgerOrg/Olympus/services/sequencer/internal/api"
 	"github.com/OlympusLedgerOrg/Olympus/services/sequencer/internal/client"
 	"github.com/OlympusLedgerOrg/Olympus/services/sequencer/internal/config"
+	"github.com/OlympusLedgerOrg/Olympus/services/sequencer/internal/metrics"
 	"github.com/OlympusLedgerOrg/Olympus/services/sequencer/internal/storage"
 )
 
@@ -92,8 +94,37 @@ func main() {
 	}
 	defer store.Close()
 
-	// Create sequencer service
-	sequencer := api.NewSequencer(smtClient, store, apiToken)
+	// Create sequencer service. Wire metrics + an explicit
+	// storage-commit timeout (H-2). The storage-commit timeout MUST stay
+	// strictly less than the Rust prepared-LRU TTL (default 30s); see
+	// api.DefaultStorageCommitTimeout for the rationale.
+	mreg := metrics.New().WithConstLabels(map[string]string{"service": "sequencer"})
+	storageCommitTimeout := api.DefaultStorageCommitTimeout
+	if v := os.Getenv("OLYMPUS_SEQUENCER_STORAGE_COMMIT_TIMEOUT"); v != "" {
+		d, err := time.ParseDuration(v)
+		if err != nil {
+			log.Fatalf("Invalid OLYMPUS_SEQUENCER_STORAGE_COMMIT_TIMEOUT=%q: %v", v, err)
+		}
+		if d <= 0 {
+			log.Fatalf("OLYMPUS_SEQUENCER_STORAGE_COMMIT_TIMEOUT must be positive, got %s", d)
+		}
+		// Defence in depth: even if an operator overrides the LRU TTL on
+		// the Rust side, the Go-side commit budget must still be
+		// strictly shorter than the documented default (30s) to maintain
+		// the H-2 ordering guarantee. Operators that need to push the
+		// LRU TTL higher must coordinate both knobs together.
+		const rustPreparedTxTTL = 30 * time.Second
+		if d >= rustPreparedTxTTL {
+			log.Fatalf("OLYMPUS_SEQUENCER_STORAGE_COMMIT_TIMEOUT (%s) must be strictly less than the Rust prepared-tx LRU TTL (%s) to ensure Go aborts before the LRU prunes; see services/cdhs-smf-rust/src/prepared.rs::DEFAULT_PREPARED_TTL",
+				d, rustPreparedTxTTL)
+		}
+		storageCommitTimeout = d
+	}
+	sequencer := api.NewSequencer(smtClient, store, apiToken,
+		api.WithMetrics(mreg),
+		api.WithStorageCommitTimeout(storageCommitTimeout),
+	)
+	log.Printf("H-2 storage-commit timeout: %s (Rust LRU TTL: 30s)", storageCommitTimeout)
 
 	// Startup replay: restore in-memory SMT from persisted leaves before
 	// accepting traffic, so proof and root queries are consistent from the
@@ -120,6 +151,50 @@ func main() {
 	}
 	log.Printf("Startup replay complete: replayed %d leaves, root_hash=%s",
 		len(leaves), hex.EncodeToString(replayResp.RootHash))
+
+	// H-2 crash-recovery convergence assertion.
+	//
+	// If the Go process previously crashed *between* a successful
+	// Postgres COMMIT (step b) and a successful CommitPreparedUpdate
+	// (step c), the prepared transaction expires from the Rust LRU and
+	// the live SMT lags durable Postgres state. The deterministic
+	// startup-replay above is the recovery mechanism: it re-applies
+	// every persisted leaf into the Rust SMT, including any leaves that
+	// were durable-but-uncommitted at the prior crash time.
+	//
+	// To prove that the recovery was complete (and to fail loudly on
+	// any silent replay bug or Postgres tampering), we assert that the
+	// resulting live root equals the latest signed root in Postgres. If
+	// they differ, the live SMT is *not* the same tree the service
+	// previously signed, and serving any subsequent proof would be
+	// unsafe — abort the boot.
+	expectedRoot, expectedSize, latestErr := store.GetLatestRoot(ctx)
+	if latestErr != nil {
+		log.Fatalf("Startup convergence: failed to query latest signed root: %v", latestErr)
+	}
+	if expectedSize == 0 {
+		// No signed roots durably persisted yet. The replayed tree
+		// must therefore also be empty; anything else means leaves
+		// exist without their corresponding signed roots, which is a
+		// torn-write the operator must investigate.
+		if len(leaves) != 0 {
+			log.Fatalf("Startup convergence FAILED: replayed %d leaves but cdhs_smf_roots is empty. "+
+				"Durable state is inconsistent — refusing to serve.", len(leaves))
+		}
+		log.Printf("Startup convergence OK: empty database, empty tree")
+	} else {
+		if uint64(len(leaves)) != expectedSize {
+			log.Fatalf("Startup convergence FAILED: replayed %d leaves but latest signed tree_size is %d. "+
+				"Durable state is inconsistent — refusing to serve.",
+				len(leaves), expectedSize)
+		}
+		if !bytes.Equal(replayResp.RootHash, expectedRoot) {
+			log.Fatalf("Startup convergence FAILED: replayed root_hash=%s but latest signed root_hash=%s. "+
+				"The live SMT is not the same tree the service previously signed — refusing to serve.",
+				hex.EncodeToString(replayResp.RootHash), hex.EncodeToString(expectedRoot))
+		}
+		log.Printf("Startup convergence OK: replayed root matches latest signed root at tree_size=%d", expectedSize)
+	}
 
 	// Start HTTP/gRPC server
 	listener, err := net.Listen("tcp", httpAddr)
