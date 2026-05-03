@@ -28,17 +28,17 @@ export default function FileTab({
     <div>
       <FileHasher onHash={onHash} onProgress={onProgress} onFile={onFile} />
       {fileProgress > 0 && fileProgress < 100 && (
-        <p style={{ fontSize: "0.65rem", color: "rgba(0,255,65,0.45)" }}>
+        <p className={skin.classes.mutedText} style={{ fontSize: "0.65rem" }}>
           HASHING... {fileProgress}%
         </p>
       )}
       {fileHash && (
         <div style={{ marginTop: "1rem" }}>
           <p
+            className={skin.classes.mutedText}
             style={{
               fontSize: "0.55rem",
               letterSpacing: "0.1em",
-              color: "rgba(0,255,65,0.45)",
               margin: "0 0 0.25rem",
             }}
           >
@@ -48,10 +48,10 @@ export default function FileTab({
           {commitContentHash && (
             <div style={{ marginTop: "0.85rem" }}>
               <p
+                className={skin.classes.mutedText}
                 style={{
                   fontSize: "0.55rem",
                   letterSpacing: "0.1em",
-                  color: "rgba(0,255,65,0.65)",
                   margin: "0 0 0.25rem",
                 }}
               >

@@ -8,7 +8,11 @@ export function SkinProvider({ children }: { children: React.ReactNode }) {
 
   const setSkinId = useCallback((id: SkinId) => {
     setSkinIdState(id);
-    localStorage.setItem(STORAGE_KEY, id);
+    try {
+      localStorage.setItem(STORAGE_KEY, id);
+    } catch {
+      // Ignore storage failures so skin changes still apply in memory.
+    }
   }, []);
 
   const skin = SKIN_REGISTRY[skinId];

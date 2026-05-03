@@ -18,6 +18,7 @@ export default function SkinSelector() {
           <button
             key={id}
             type="button"
+            aria-pressed={active}
             title={s.description}
             onClick={() => setSkinId(id)}
             style={{

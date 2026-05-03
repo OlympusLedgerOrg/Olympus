@@ -13,8 +13,13 @@ export const STORAGE_KEY = "olympus_skin";
 export const SkinContext = createContext<SkinContextValue | null>(null);
 
 export function loadSkinId(): SkinId {
-  const stored = localStorage.getItem(STORAGE_KEY) as SkinId | null;
-  return stored && stored in SKIN_REGISTRY ? stored : DEFAULT_SKIN_ID;
+  try {
+    const stored = localStorage.getItem(STORAGE_KEY) as SkinId | null;
+    return stored && stored in SKIN_REGISTRY ? stored : DEFAULT_SKIN_ID;
+  } catch {
+    // localStorage may be unavailable in hardened/private-browsing contexts.
+    return DEFAULT_SKIN_ID;
+  }
 }
 
 /** Consume the active skin. Must be used inside <SkinProvider>. */
