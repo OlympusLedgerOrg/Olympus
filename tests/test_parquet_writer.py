@@ -293,10 +293,10 @@ class TestErrorCases:
             )
 
     @pytest.mark.skipif(not _PYARROW_AVAILABLE, reason="pyarrow not installed")
-    def test_unsupported_type_raises_type_error(self, tmp_path: Path) -> None:
+    def test_unsupported_type_raises_value_error(self, tmp_path: Path) -> None:
         from protocol.parquet_writer import write_deterministic_parquet
 
-        with pytest.raises(TypeError):
+        with pytest.raises(ValueError):
             write_deterministic_parquet("not-a-table", tmp_path / "out.parquet")  # type: ignore[arg-type]
 
     def test_pyarrow_not_available_raises_import_error(self) -> None:

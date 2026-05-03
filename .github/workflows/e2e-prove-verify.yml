@@ -1,0 +1,133 @@
+name: "E2E: Insert → Prove → Verify"
+
+# This is the core integrity proof that Olympus works end-to-end.
+# A journalist submits a document → we generate a Merkle proof → we verify it.
+# If ANY step breaks, the ledger's core promise is broken.
+# This workflow runs on every push to main and every PR targeting main.
+
+on:
+  push:
+    branches: [main, "copilot/**"]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: e2e-prove-verify-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  e2e-prove-verify:
+    name: "insert → prove → verify (Postgres)"
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+
+    env:
+      DATABASE_URL: postgresql://olympus:olympus@localhost:5432/olympus
+      TEST_DATABASE_URL: postgresql://olympus:olympus@localhost:5432/olympus
+      PGHOST: localhost
+      PGPORT: "5432"
+      PGUSER: olympus
+      PGPASSWORD: olympus
+      PGDATABASE: olympus
+
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: olympus
+          POSTGRES_PASSWORD: olympus
+          POSTGRES_DB: olympus
+        options: >-
+          --health-cmd "pg_isready -U olympus"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+        ports:
+          - 5432:5432
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+          cache: "pip"
+
+      - name: Set up Node.js 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Install Rust stable
+        run: rustup toolchain install stable --no-self-update && rustup default stable
+
+      - name: Install Python dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install --require-hashes -r requirements-dev.txt
+          pip install -e . --no-deps
+
+      - name: Install Circom compiler
+        run: npm install --global circom2@0.2.22
+
+      - name: Generate ephemeral CI signing key
+        # Generates a random key at runtime rather than hardcoding one in the
+        # workflow file, avoiding patterns that could be copied to production.
+        run: |
+          SIGNING_KEY=$(python -c 'import secrets; print(secrets.token_hex(32))')
+          echo "::add-mask::${SIGNING_KEY}"
+          echo "OLYMPUS_INGEST_SIGNING_KEY=${SIGNING_KEY}" >> "$GITHUB_ENV"
+
+      - name: Build olympus_core Rust extension
+        run: maturin build --release --out dist && pip install --force-reinstall dist/*.whl
+
+      - name: Configure CI-sized redaction circuit
+        run: |
+          python -m proofs.proof_generator configure \
+            --redaction-max-leaves 4 \
+            --redaction-merkle-depth 2
+
+      - name: Build proof artifacts for redaction round-trip
+        env:
+          OLYMPUS_REDACTION_MAX_LEAVES: "4"
+          OLYMPUS_REDACTION_MERKLE_DEPTH: "2"
+        run: bash proofs/setup_circuits.sh --allow-dev-ptau
+
+      - name: "Step 1 of 3 — INSERT: ingest documents into the ledger"
+        # What this tests: a document can be submitted and stored in the Merkle tree.
+        # If this fails: no one can submit records to Olympus.
+        run: |
+          pytest tests/test_ingest_e2e_postgres.py -v --tb=short \
+            -m "not slow" \
+            --junit-xml=test-results/step1-insert.xml
+
+      - name: "Step 2 of 3 — PROVE: generate Merkle inclusion proofs"
+        # What this tests: given a stored document, we can generate a cryptographic
+        # proof that it exists in the tree at a specific position.
+        # If this fails: users can't get proof their document was recorded.
+        env:
+          OLYMPUS_REDACTION_MAX_LEAVES: "4"
+          OLYMPUS_REDACTION_MERKLE_DEPTH: "2"
+        run: |
+          pytest tests/test_proof_generator.py -v --tb=short \
+            --junit-xml=test-results/step2-prove.xml
+
+      - name: "Step 3 of 3 — VERIFY: independently verify the proof is valid"
+        # What this tests: the proof generated in Step 2 is cryptographically valid.
+        # A third party with only the proof + root hash can confirm the document existed.
+        # If this fails: the entire trust model of Olympus is broken.
+        run: |
+          pytest tests/test_rt_m1_post_persist_verify.py tests/test_merkle_proof_verification.py \
+            tests/test_verify_bundle.py -v --tb=short \
+            --junit-xml=test-results/step3-verify.xml
+
+      - name: Upload E2E test results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: e2e-prove-verify-results-${{ github.sha }}
+          path: test-results/
+          retention-days: 30

@@ -14,7 +14,9 @@ Usage:
     from protocol.poseidon import poseidon_hash, poseidon_leaf_hash, poseidon_node_hash
 """
 
-from typing import cast
+from collections.abc import Mapping
+from types import MappingProxyType
+from typing import Final, cast
 
 from olympus_core.poseidon import (
     bytes_to_field_element,
@@ -31,6 +33,46 @@ SNARK_SCALAR_FIELD = int(get_bn254_scalar_field())
 # Domain separation constants (must match Rust implementation)
 POSEIDON_DOMAIN_LEAF = 0
 POSEIDON_DOMAIN_NODE = 1
+
+# The canonical identifier for the Poseidon hash suite used in all Olympus circuits.
+# This constant is emitted in proof bundle metadata so verifiers can select
+# the correct parameter set. MUST NOT be changed — see ADR-0009.
+HASH_SUITE_VERSION: Final[str] = "poseidon-bn254-v1"
+
+# Full parameter set for poseidon-bn254-v1 — pinned per ADR-0009.
+# Exposed as an immutable MappingProxyType so accidental runtime mutations
+# (e.g. POSEIDON_PARAMS["n_rounds_f"] = 6) raise a TypeError immediately.
+# Values are derived from the already-defined constants above to eliminate
+# duplicate literals that could drift independently.
+POSEIDON_PARAMS: Final[Mapping[str, object]] = MappingProxyType(
+    {
+        "suite_id": HASH_SUITE_VERSION,
+        "curve": "BN254",
+        "width": 3,  # t=3: capacity=1, rate=2
+        "arity": 2,  # 2 inputs per hash call
+        "n_rounds_f": 8,  # full rounds (4 before + 4 after partial)
+        "n_rounds_p": 57,  # partial rounds
+        "sbox_exponent": 5,  # x^5 mod p
+        "field_modulus": SNARK_SCALAR_FIELD,
+        "domain_tag_leaf": POSEIDON_DOMAIN_LEAF,
+        "domain_tag_node": POSEIDON_DOMAIN_NODE,
+        "constants_source": "circomlibjs/src/poseidon_constants.json",
+    }
+)
+
+
+def poseidon_params_dict() -> dict[str, object]:
+    """Return the pinned Poseidon parameters as a plain, JSON-serializable dict.
+
+    Use this function whenever you need to embed the parameter set in a JSON
+    response or schema — *not* ``POSEIDON_PARAMS`` directly, because that is a
+    ``MappingProxyType`` and some serializers (e.g. ``json.dumps``) will raise
+    a ``TypeError`` when they encounter it.
+
+    Returns:
+        A shallow copy of ``POSEIDON_PARAMS`` as a plain ``dict``.
+    """
+    return dict(POSEIDON_PARAMS)
 
 
 def poseidon_hash(a: int, b: int) -> int:
@@ -119,6 +161,9 @@ __all__ = [
     "SNARK_SCALAR_FIELD",
     "POSEIDON_DOMAIN_LEAF",
     "POSEIDON_DOMAIN_NODE",
+    "HASH_SUITE_VERSION",
+    "POSEIDON_PARAMS",
+    "poseidon_params_dict",
     "poseidon_hash",
     "poseidon_hash_bn128",
     "poseidon_leaf_hash",

@@ -15,6 +15,8 @@ const fs = require("fs");
 const path = require("path");
 
 const BUILD_DIR = path.join(__dirname, "..", "build");
+const POSEIDON_DOMAIN_NODE = 1;
+const POSEIDON_DOMAIN_COMMITMENT = 3;
 
 function envInt(name, fallback) {
   if (!process.env[name]) {
@@ -28,7 +30,14 @@ function envInt(name, fallback) {
 }
 
 // -----------------------------------------------------------------------
-// Build a depth-N Merkle tree from leaves using Poseidon(2)
+function domainPoseidon(poseidon, F, domain, left, right) {
+  const taggedLeft = poseidon([BigInt(domain), left]);
+  const out = poseidon([F.toObject(taggedLeft), right]);
+  return F.toObject(out);
+}
+
+// Build a depth-N Merkle tree from leaves using the same domain-separated
+// node hash as proofs/circuits/lib/merkleProof.circom.
 // Returns { root, layers } where layers[0] = leaves
 // -----------------------------------------------------------------------
 function buildMerkleTree(poseidon, F, leaves, depth) {
@@ -44,8 +53,9 @@ function buildMerkleTree(poseidon, F, leaves, depth) {
   for (let d = 0; d < depth; d++) {
     const next = [];
     for (let i = 0; i < current.length; i += 2) {
-      const h = poseidon([current[i], current[i + 1]]);
-      next.push(F.toObject(h));
+      next.push(
+        domainPoseidon(poseidon, F, POSEIDON_DOMAIN_NODE, current[i], current[i + 1])
+      );
     }
     current = next;
     layers.push(current);
@@ -166,9 +176,21 @@ async function main() {
     // Compute redacted commitment: chain Poseidon over revealed leaves
     const revealedLeaves = allLeaves.map((v, i) => (revealMask[i] === 1 ? v : BigInt(0)));
 
-    let acc = F.toObject(poseidon([BigInt(revealedCount), revealedLeaves[0]]));
+    let acc = domainPoseidon(
+      poseidon,
+      F,
+      POSEIDON_DOMAIN_COMMITMENT,
+      BigInt(revealedCount),
+      revealedLeaves[0]
+    );
     for (let k = 1; k < maxLeaves; k++) {
-      acc = F.toObject(poseidon([acc, revealedLeaves[k]]));
+      acc = domainPoseidon(
+        poseidon,
+        F,
+        POSEIDON_DOMAIN_COMMITMENT,
+        acc,
+        revealedLeaves[k]
+      );
     }
 
     const input = {

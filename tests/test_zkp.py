@@ -1,5 +1,7 @@
 import json
+import shutil
 import subprocess
+import sys
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -169,7 +171,7 @@ def test_prove_existence_success(tmp_path: Path):
     mock_result = MagicMock(spec=subprocess.CompletedProcess)
 
     with patch("shutil.which", return_value="/usr/bin/snarkjs"):
-        with patch("subprocess.run", return_value=mock_result):
+        with patch("protocol.zkp._run_subprocess", return_value=mock_result):
             result = prover.prove_existence(
                 leaf="0",
                 root="0",
@@ -211,7 +213,7 @@ def test_verify_success(tmp_path: Path):
     mock_result = MagicMock(spec=subprocess.CompletedProcess)
 
     with patch("shutil.which", return_value="/usr/bin/snarkjs"):
-        with patch("subprocess.run", return_value=mock_result):
+        with patch("protocol.zkp._run_subprocess", return_value=mock_result):
             assert prover.verify(dummy_proof) is True
 
 
@@ -224,8 +226,68 @@ def test_verify_failure(tmp_path: Path):
     dummy_proof = ZKProof(proof={}, public_signals=[], circuit="document_existence")
 
     with patch("shutil.which", return_value="/usr/bin/snarkjs"):
-        with patch("subprocess.run", side_effect=subprocess.CalledProcessError(1, "snarkjs")):
+        with patch(
+            "protocol.zkp._run_subprocess",
+            side_effect=subprocess.CalledProcessError(1, "snarkjs"),
+        ):
             assert prover.verify(dummy_proof, verification_key_path=vkey) is False
+
+
+def test_run_kills_process_group_on_timeout(tmp_path: Path) -> None:
+    """Verify _run raises TimeoutExpired and does not leave orphans."""
+    prover = Groth16Prover(tmp_path, snarkjs_bin="npx")
+    prover._snarkjs_path = shutil.which("sleep") or "/bin/sleep"
+    prover.snarkjs_bin = "sleep"
+
+    # Monkeypatch _build_cmd to run `sleep 60` (a long-running process)
+    with patch.object(prover, "_build_cmd", return_value=["sleep", "60"]):
+        with patch.object(prover, "_check_snarkjs", return_value=None):
+            with pytest.raises(subprocess.TimeoutExpired):
+                prover._run([], timeout=1)
+
+
+def test_run_subprocess_fallback_uses_pdeathsig(monkeypatch: pytest.MonkeyPatch) -> None:
+    """When start_new_session raises OSError, _make_pdeathsig_preexec is called."""
+    zkp_mod = sys.modules["protocol.zkp"]
+
+    preexec_called = []
+
+    def fake_pdeathsig():
+        preexec_called.append(True)
+        return lambda: None
+
+    monkeypatch.setattr(zkp_mod, "_make_pdeathsig_preexec", fake_pdeathsig)
+
+    original_popen = subprocess.Popen
+    call_count = [0]
+
+    def popen_raise_first(*args, **kwargs):
+        call_count[0] += 1
+        if call_count[0] == 1:
+            raise OSError("setsid blocked")
+        return original_popen(*args, **kwargs)
+
+    monkeypatch.setattr(subprocess, "Popen", popen_raise_first)
+
+    # Should not raise — falls back and completes
+    zkp_mod._run_subprocess(["echo", "ok"], timeout=5)
+    assert preexec_called, "preexec_fn factory was not called on OSError fallback"
+
+
+def test_try_limit_cgroup_called_after_popen(monkeypatch: pytest.MonkeyPatch) -> None:
+    """_try_limit_cgroup is called with the child PID after every successful Popen."""
+    zkp_mod = sys.modules["protocol.zkp"]
+
+    limited_pids: list[int] = []
+
+    def fake_limit(pid: int, *, memory_bytes: int) -> None:
+        limited_pids.append(pid)
+
+    monkeypatch.setattr(zkp_mod, "_try_limit_cgroup", fake_limit)
+
+    result = zkp_mod._run_subprocess(["echo", "ok"], timeout=5)
+    assert result.returncode == 0
+    assert len(limited_pids) == 1, "expected exactly one _try_limit_cgroup call"
 
 
 # --- CI gate: verification key presence (fix-11) ---
