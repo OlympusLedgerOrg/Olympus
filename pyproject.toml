@@ -83,7 +83,7 @@ observability = [
     "prometheus-client==0.25.0",
 ]
 parquet = [
-    "pyarrow>=15.0.0",
+    "pyarrow>=24.0.0",
 ]
 
 [project.scripts]
