@@ -72,6 +72,22 @@ if ($pyRaw -notmatch "3\.(1[0-9]|[2-9]\d)") {
 }
 Write-Ok "$pyRaw"
 
+# Optional ZK/prover toolchain checks (snarkjs / rapidsnark workflows)
+$npxCmd = Get-Command npx -ErrorAction SilentlyContinue
+if ($null -eq $npxCmd) {
+    Write-Warn "npx not found. ZK tooling (snarkjs/rapidsnark workflows) may fail until Node.js is installed."
+} else {
+    Write-Ok "npx detected: $($npxCmd.Source)"
+}
+
+$nasmCmd = Get-Command nasm -ErrorAction SilentlyContinue
+if ($null -eq $nasmCmd) {
+    Write-Warn "nasm not found. rapidsnark builds that compile ffiasm-generated .asm files may fail."
+    Write-Warn "Install Netwide Assembler (nasm) and ensure it is on PATH for proof-generation workflows."
+} else {
+    Write-Ok "nasm detected: $($nasmCmd.Source)"
+}
+
 # Docker (only needed when not skipped)
 if (-not $SkipDocker) {
     try {
