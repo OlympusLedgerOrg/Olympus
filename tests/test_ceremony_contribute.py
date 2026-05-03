@@ -48,12 +48,15 @@ class TestHashFile:
         """Same file → same BLAKE3 hash. Proves our hashing is stable."""
         from ceremony_contribute import _hash_file
 
+        from protocol.hashes import hash_hex
+
         f = tmp_path / "test.zkey"
         f.write_bytes(b"deterministic content")
 
         h1 = _hash_file(f)
         h2 = _hash_file(f)
         assert h1 == h2
+        assert h1 == hash_hex(b"deterministic content")
         assert len(h1) == 64  # BLAKE3 hex digest is 64 chars
 
     def test_different_content_different_hash(self, tmp_path: Path) -> None:
@@ -239,7 +242,16 @@ class TestCeremonyContributeSuccess:
 
         sidecar = output.with_suffix(".metadata.json")
         assert sidecar.exists()
-        data = json.loads(sidecar.read_text())
+        sidecar_text = sidecar.read_text()
+        assert sidecar_text.endswith("\n")
+        assert (
+            sidecar_text
+            == json.dumps(
+                json.loads(sidecar_text), sort_keys=True, separators=(",", ":"), ensure_ascii=True
+            )
+            + "\n"
+        )
+        data = json.loads(sidecar_text)
         assert data["participant"] == "Alice"
         assert "zkey_blake3_hex" in data
         assert "circuit_blake3_hex" in data
@@ -367,6 +379,69 @@ class TestCeremonyContributeFailures:
 
         assert intermediate_paths
         assert all(not path.exists() for path in intermediate_paths)
+
+    def test_groth16_setup_timeout_raises_runtime_error(self, tmp_path: Path) -> None:
+        """Timeouts include command duration and captured output."""
+        from ceremony_contribute import contribute
+
+        ptau, circuit, _r1cs, output = _write_fake_files(tmp_path)
+        timeout = subprocess.TimeoutExpired(
+            cmd="snarkjs",
+            timeout=1800,
+            output="setup stdout",
+            stderr="setup stderr",
+        )
+
+        with (
+            patch("ceremony_contribute._check_snarkjs", return_value=True),
+            patch("ceremony_contribute.subprocess.run", side_effect=timeout),
+        ):
+            with pytest.raises(
+                RuntimeError, match="groth16 setup timed out after 1800"
+            ) as exc_info:
+                contribute(
+                    ptau_path=ptau,
+                    circuit_path=circuit,
+                    participant_name="test",
+                    output_path=output,
+                )
+        assert "stdout: setup stdout" in str(exc_info.value)
+        assert "stderr: setup stderr" in str(exc_info.value)
+
+    def test_zkey_contribute_timeout_raises_runtime_error(self, tmp_path: Path) -> None:
+        """Contribution timeouts are converted to RuntimeError for main()."""
+        from ceremony_contribute import contribute
+
+        ptau, circuit, _r1cs, output = _write_fake_files(tmp_path)
+
+        def fake_run_timeout_on_contribute(cmd: list[str], **kwargs: Any) -> MagicMock:
+            if "setup" in cmd:
+                mock = MagicMock()
+                mock.returncode = 0
+                Path(cmd[-1]).write_bytes(b"initial zkey")
+                return mock
+            raise subprocess.TimeoutExpired(
+                cmd="snarkjs",
+                timeout=3600,
+                output=b"contribute stdout",
+                stderr=b"contribute stderr",
+            )
+
+        with (
+            patch("ceremony_contribute._check_snarkjs", return_value=True),
+            patch("ceremony_contribute.subprocess.run", side_effect=fake_run_timeout_on_contribute),
+        ):
+            with pytest.raises(
+                RuntimeError, match="zkey contribute timed out after 3600"
+            ) as exc_info:
+                contribute(
+                    ptau_path=ptau,
+                    circuit_path=circuit,
+                    participant_name="test",
+                    output_path=output,
+                )
+        assert "stdout: contribute stdout" in str(exc_info.value)
+        assert "stderr: contribute stderr" in str(exc_info.value)
 
 
 # ---------------------------------------------------------------------------

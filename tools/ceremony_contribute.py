@@ -37,14 +37,15 @@ import sys
 from datetime import datetime, timezone
 from pathlib import Path
 
-import blake3 as _blake3
-
 
 # Standalone tools are often invoked from outside the repository root.
 # Make internal imports deterministic instead of silently falling back.
 REPO_ROOT = Path(__file__).resolve().parent.parent
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
+
+from protocol.hashes import hash_hex  # noqa: E402
+
 
 try:
     from protocol.timestamps import current_timestamp  # noqa: E402
@@ -64,8 +65,8 @@ INITIAL_ZKEY_PREFIX = "_tmp_setup_"
 def _hash_file(path: Path) -> str:
     """Compute BLAKE3 hash of a file. Used to verify ceremony artifacts.
 
-    Uses BLAKE3 per project policy (not SHA-256) so hashes are consistent
-    with the rest of the Olympus toolchain.
+    Uses the canonical project hashing API so hashes are consistent with the
+    rest of the Olympus toolchain.
 
     Args:
         path: Path to the file to hash.
@@ -73,11 +74,27 @@ def _hash_file(path: Path) -> str:
     Returns:
         Lowercase hex-encoded BLAKE3 digest (64 characters).
     """
-    hasher = _blake3.blake3()
-    with path.open("rb") as fh:
-        while chunk := fh.read(1 << 20):
-            hasher.update(chunk)
-    return hasher.hexdigest()
+    return hash_hex(path.read_bytes())
+
+
+def _format_timeout_error(step: str, timeout: subprocess.TimeoutExpired) -> RuntimeError:
+    """Return a RuntimeError with details from a timed-out snarkjs command."""
+
+    def _decode_output(value: bytes | str | None) -> str:
+        if value is None:
+            return ""
+        if isinstance(value, bytes):
+            return value.decode("utf-8", errors="replace")
+        return value
+
+    stdout = _decode_output(timeout.output)
+    stderr = _decode_output(timeout.stderr)
+    details = [f"{step} timed out after {timeout.timeout} seconds"]
+    if stdout:
+        details.append(f"stdout: {stdout}")
+    if stderr:
+        details.append(f"stderr: {stderr}")
+    return RuntimeError("; ".join(details))
 
 
 def _check_snarkjs() -> bool:
@@ -133,7 +150,6 @@ def contribute(
     Raises:
         FileNotFoundError: If ptau_path, circuit_path, or the sibling .r1cs do not exist.
         RuntimeError: If snarkjs is unavailable or a subprocess exits non-zero.
-        subprocess.TimeoutExpired: If snarkjs exceeds the configured timeout.
     """
     if not ptau_path.exists():
         raise FileNotFoundError(f"PTAU file not found: {ptau_path}")
@@ -158,20 +174,23 @@ def contribute(
 
     try:
         # Step 1: groth16 setup — produces the initial (pre-contribution) .zkey.
-        setup_result = subprocess.run(
-            [
-                "npx",
-                "snarkjs",
-                "groth16",
-                "setup",
-                str(r1cs_path),
-                str(ptau_path),
-                str(initial_zkey),
-            ],
-            capture_output=True,
-            text=True,
-            timeout=1800,  # 30 minutes max
-        )
+        try:
+            setup_result = subprocess.run(
+                [
+                    "npx",
+                    "snarkjs",
+                    "groth16",
+                    "setup",
+                    str(r1cs_path),
+                    str(ptau_path),
+                    str(initial_zkey),
+                ],
+                capture_output=True,
+                text=True,
+                timeout=1800,  # 30 minutes max
+            )
+        except subprocess.TimeoutExpired as exc:
+            raise _format_timeout_error("groth16 setup", exc) from exc
         if setup_result.returncode != 0:
             raise RuntimeError(
                 f"groth16 setup failed (exit {setup_result.returncode}): {setup_result.stderr}"
@@ -179,21 +198,24 @@ def contribute(
 
         # Step 2: zkey contribute — pass entropy via -e so snarkjs is
         # non-interactive while stdout/stderr are captured.
-        contribute_result = subprocess.run(
-            [
-                "npx",
-                "snarkjs",
-                "zkey",
-                "contribute",
-                str(initial_zkey),
-                str(output_path),
-                f"--name={participant_name}",
-                f"-e={contribution_entropy}",
-            ],
-            capture_output=True,
-            text=True,
-            timeout=3600,  # 60 minutes max
-        )
+        try:
+            contribute_result = subprocess.run(
+                [
+                    "npx",
+                    "snarkjs",
+                    "zkey",
+                    "contribute",
+                    str(initial_zkey),
+                    str(output_path),
+                    f"--name={participant_name}",
+                    f"-e={contribution_entropy}",
+                ],
+                capture_output=True,
+                text=True,
+                timeout=3600,  # 60 minutes max
+            )
+        except subprocess.TimeoutExpired as exc:
+            raise _format_timeout_error("zkey contribute", exc) from exc
         if contribute_result.returncode != 0:
             raise RuntimeError(
                 f"zkey contribute failed (exit {contribute_result.returncode}): "
@@ -228,7 +250,10 @@ def contribute(
     }
 
     sidecar = output_path.with_suffix(".metadata.json")
-    sidecar.write_text(json.dumps(metadata, indent=2) + "\n", encoding="utf-8")
+    sidecar.write_text(
+        json.dumps(metadata, sort_keys=True, separators=(",", ":"), ensure_ascii=True) + "\n",
+        encoding="utf-8",
+    )
 
     logger.info("=== CONTRIBUTION COMPLETE ===")
     logger.info("zkey BLAKE3 hash (publish this): %s", zkey_hash)
@@ -300,7 +325,7 @@ def main() -> int:
             output_path=args.output,
             entropy=args.entropy,
         )
-    except (FileNotFoundError, RuntimeError, subprocess.TimeoutExpired) as exc:
+    except (FileNotFoundError, RuntimeError) as exc:
         logger.error("Ceremony contribution failed: %s", exc)
         return 1
 
