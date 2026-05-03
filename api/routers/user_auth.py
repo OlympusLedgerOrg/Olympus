@@ -26,11 +26,11 @@ from sqlalchemy import select
 
 from api.auth import (
     RateLimit,
-    _TokenBucket,
     _extract_key,
     _get_backend,
     _get_client_ip,
     _hash_key,
+    _TokenBucket,
 )
 from api.deps import DBSession
 from api.models.api_key import ApiKey
@@ -57,7 +57,8 @@ _REGISTRATION_APPROVAL_HEADER = "x-admin-registration-approval"
 _REGISTER_RATE_LIMIT_MINUTE_CAPACITY = 1.0
 _REGISTER_RATE_LIMIT_MINUTE_REFILL = 1.0 / 60.0
 _REGISTER_RATE_LIMIT_DAY_CAPACITY = 10.0
-_REGISTER_RATE_LIMIT_DAY_REFILL = 10.0 / 86_400.0
+_SECONDS_PER_DAY = 86_400.0
+_REGISTER_RATE_LIMIT_DAY_REFILL = 10.0 / _SECONDS_PER_DAY
 
 # scrypt params — tuned for ~100ms on modest hardware
 _SCRYPT_N = 2**14
@@ -325,6 +326,13 @@ async def register(
     if len(body.password) < 12:
         raise HTTPException(status_code=422, detail="Password must be at least 12 characters.")
 
+    unknown = set(body.scopes) - _VALID_SCOPES
+    if unknown:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Unknown scope(s) in register: {', '.join(sorted(unknown))}",
+        )
+
     requested_scopes = set(body.scopes)
     requesting_privileged = bool(requested_scopes & _PRIVILEGED_REGISTRATION_SCOPES)
     has_admin_approval = _has_valid_registration_approval(body, request)
@@ -334,6 +342,7 @@ async def register(
             status_code=403,
             detail=(
                 "Privileged registration scopes require admin approval. "
+                f"Requested: {', '.join(sorted(requested_scopes & _PRIVILEGED_REGISTRATION_SCOPES))}. "
                 f"Provide {_REGISTRATION_APPROVAL_HEADER} signed with OLYMPUS_ADMIN_KEY, "
                 f"or set {_ALLOW_PUBLIC_WRITE_REG_ENV}=1."
             ),

@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-from fastapi.routing import APIRoute
 import pytest
+from fastapi.routing import APIRoute
 from fastapi.testclient import TestClient
 
 import api.main as api_main

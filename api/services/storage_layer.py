@@ -50,7 +50,6 @@ logger = logging.getLogger(__name__)
 _storage: StorageLayer | None = None
 _db_error: str | None = None
 _VERIFYING_SSLMODES = {"verify-full", "verify-ca"}
-_INSECURE_SSLMODES = {"", "disable", "allow", "prefer", "require"}
 _logged_dev_tls_warning = False
 
 
@@ -87,11 +86,10 @@ def _enforce_postgres_tls_mode(database_url: str) -> None:
     if sslmode in _VERIFYING_SSLMODES:
         return
 
-    if sslmode in _INSECURE_SSLMODES or sslmode not in _VERIFYING_SSLMODES:
-        raise SystemExit(
-            "Refusing startup: DATABASE_URL must set sslmode=verify-full or sslmode=verify-ca "
-            "when OLYMPUS_ENV != 'development'."
-        )
+    raise SystemExit(
+        "Refusing startup: DATABASE_URL must set sslmode=verify-full or sslmode=verify-ca "
+        "when OLYMPUS_ENV != 'development'."
+    )
 
 
 def _get_storage() -> StorageLayer:
@@ -118,13 +116,13 @@ def _get_storage() -> StorageLayer:
 
     # Try to initialize the storage layer
     try:
-        from storage.postgres import StorageLayer
-
         # Get database connection string from environment
         DATABASE_URL = os.environ.get("DATABASE_URL")
         if not DATABASE_URL:
             raise RuntimeError("DATABASE_URL is required.")
         _enforce_postgres_tls_mode(DATABASE_URL)
+
+        from storage.postgres import StorageLayer
 
         parsed_url = urlparse(DATABASE_URL)
         if parsed_url.scheme in {"postgres", "postgresql", "postgresql+asyncpg"}:
@@ -137,6 +135,9 @@ def _get_storage() -> StorageLayer:
                 f"db={parsed_url.path.lstrip('/') if parsed_url.path else 'unknown'}"
             )
         else:
+            # Defensive fallback for libpq keyword=value DSNs (e.g.
+            # "host=... dbname=... user=... sslmode=verify-full"), where
+            # urlparse() will not expose postgres URL components.
             logger.info("Connecting to database via DSN form (scheme not embedded).")
 
         psycopg_database_url = (

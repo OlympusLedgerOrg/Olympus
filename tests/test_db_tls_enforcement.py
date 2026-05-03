@@ -11,7 +11,7 @@ class _DummyCursor:
     def __enter__(self):
         return self
 
-    def __exit__(self, exc_type, exc, tb):
+    def __exit__(self, exc_type, exc_val, exc_tb):
         return False
 
     def execute(self, _query: str) -> None:
@@ -25,7 +25,7 @@ class _DummyConnection:
     def __enter__(self):
         return self
 
-    def __exit__(self, exc_type, exc, tb):
+    def __exit__(self, exc_type, exc_val, exc_tb):
         return False
 
     def cursor(self):
@@ -52,7 +52,9 @@ def _reset_storage_state(monkeypatch: pytest.MonkeyPatch) -> None:
 
 def test_startup_rejects_sslmode_require_in_production(monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setenv("OLYMPUS_ENV", "production")
-    monkeypatch.setenv("DATABASE_URL", "postgresql://user:pass@localhost:5432/olympus?sslmode=require")
+    monkeypatch.setenv(
+        "DATABASE_URL", "postgresql://user:pass@localhost:5432/olympus?sslmode=require"
+    )
     _reset_storage_state(monkeypatch)
     with pytest.raises(SystemExit, match="sslmode=verify-full"):
         storage_layer._get_storage()
@@ -60,6 +62,7 @@ def test_startup_rejects_sslmode_require_in_production(monkeypatch: pytest.Monke
 
 def test_startup_accepts_sslmode_verify_full(monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setenv("OLYMPUS_ENV", "production")
+    monkeypatch.setenv("OLYMPUS_NODE_REHASH_GATE_SECRET", "test-secret")
     monkeypatch.setenv(
         "DATABASE_URL", "postgresql://user:pass@localhost:5432/olympus?sslmode=verify-full"
     )
@@ -73,7 +76,10 @@ def test_startup_allows_sslmode_disable_in_development_with_warning(
     monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
 ):
     monkeypatch.setenv("OLYMPUS_ENV", "development")
-    monkeypatch.setenv("DATABASE_URL", "postgresql://user:pass@localhost:5432/olympus?sslmode=disable")
+    monkeypatch.setenv("OLYMPUS_NODE_REHASH_GATE_SECRET", "test-secret")
+    monkeypatch.setenv(
+        "DATABASE_URL", "postgresql://user:pass@localhost:5432/olympus?sslmode=disable"
+    )
     _reset_storage_state(monkeypatch)
     monkeypatch.setattr("storage.postgres.StorageLayer", _FakeStorageLayer)
 

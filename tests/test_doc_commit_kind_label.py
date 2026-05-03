@@ -40,7 +40,9 @@ async def client_and_sessionmaker():
 
 
 @pytest.mark.asyncio
-async def test_doc_commit_response_and_ledger_row_include_client_asserted_kind(client_and_sessionmaker):
+async def test_doc_commit_response_and_ledger_row_include_client_asserted_kind(
+    client_and_sessionmaker,
+):
     client, session_factory = client_and_sessionmaker
     doc_hash = blake3.blake3(b"client-asserted-kind").hexdigest()
 

@@ -74,7 +74,9 @@ async def test_public_register_ingest_scope_allowed_with_admin_approval(client):
         "scopes": ["ingest", "verify"],
         "expires_at": "2099-01-01T00:00:00Z",
     }
-    signature = user_auth._registration_approval_signature(payload_to_request(payload), "A" * 32)
+    signature = user_auth._registration_approval_signature(
+        _build_register_request_from_dict(payload), "A" * 32
+    )
     resp = await client.post(
         "/auth/register",
         json=payload,
@@ -84,5 +86,5 @@ async def test_public_register_ingest_scope_allowed_with_admin_approval(client):
     assert resp.json()["scopes"] == ["ingest", "verify"]
 
 
-def payload_to_request(payload: dict[str, object]) -> user_auth.RegisterRequest:
+def _build_register_request_from_dict(payload: dict[str, object]) -> user_auth.RegisterRequest:
     return user_auth.RegisterRequest.model_validate(payload)

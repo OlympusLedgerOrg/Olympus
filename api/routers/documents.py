@@ -7,8 +7,8 @@ POST /doc/verify  — verify a previously committed document hash
 
 from __future__ import annotations
 
-import logging
 import json
+import logging
 from datetime import datetime, timezone
 
 from fastapi import APIRouter, HTTPException, status
