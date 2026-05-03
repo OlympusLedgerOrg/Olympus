@@ -1,0 +1,23 @@
+name: Create Security Label
+
+on:
+  push:
+    branches:
+      - "dependabot/pip/cryptography-47.0.0"
+
+permissions:
+  issues: write
+
+jobs:
+  create-label:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Create security label
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh label create "security" \
+            --color "e11d48" \
+            --description "Pull requests that address a security vulnerability" \
+            --repo "${{ github.repository }}" \
+            2>/dev/null || echo "Label already exists, skipping."
