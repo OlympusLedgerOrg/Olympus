@@ -256,7 +256,17 @@ class TestAppendRecordsBatchErrors:
         client = GoSequencerClient(base_url="http://localhost:8081", token="t")
         with pytest.raises(SequencerUnavailableError):
             await client.append_records_batch(
-                [{"shard_id": "s", "record_type": "doc", "record_id": "r1", "content": b"x"}]
+                [
+                    {
+                        "shard_id": "s",
+                        "record_type": "doc",
+                        "record_id": "r1",
+                        "content": b"x",
+                        "content_type": "json",
+                        "parser_id": "test@1.0.0",
+                        "canonical_parser_version": "v1",
+                    }
+                ]
             )
         await client.close()
 
@@ -270,7 +280,17 @@ class TestAppendRecordsBatchErrors:
         client = GoSequencerClient(base_url="http://localhost:8081", token="t")
         with pytest.raises(SequencerResponseError) as exc_info:
             await client.append_records_batch(
-                [{"shard_id": "s", "record_type": "doc", "record_id": "r1", "content": b"x"}]
+                [
+                    {
+                        "shard_id": "s",
+                        "record_type": "doc",
+                        "record_id": "r1",
+                        "content": b"x",
+                        "content_type": "json",
+                        "parser_id": "test@1.0.0",
+                        "canonical_parser_version": "v1",
+                    }
+                ]
             )
         assert exc_info.value.status_code == 500
         await client.close()

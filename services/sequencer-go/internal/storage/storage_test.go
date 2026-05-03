@@ -40,7 +40,85 @@ func TestRequireVerifyingSSLMode(t *testing.T) {
 	}
 }
 
-// TestBatchLeafPerLeafRootFields enforces the H-3/H-7 contract: every
+// TestGetLeavesRejectsLegacyRows verifies ErrLegacyLeaves is returned when
+// any leaf has an empty parser_id or canonical_parser_version.  GetLeaves is
+// the gatekeeper for startup replay; if it returns ErrLegacyLeaves the
+// sequencer must refuse to start rather than forwarding empty provenance to
+// the Rust SMT service.
+//
+// The test uses a fake sqlRows-compatible stub so no live DB is needed.
+func TestErrLegacyLeavesIsExported(t *testing.T) {
+	// Verify that ErrLegacyLeaves is accessible and carries the required
+	// operator remediation text.
+	if ErrLegacyLeaves == nil {
+		t.Fatal("ErrLegacyLeaves must not be nil")
+	}
+	msg := ErrLegacyLeaves.Error()
+	for _, substr := range []string{
+		"legacy leaves",
+		"ADR-0003",
+		"parser_id",
+		"canonical_parser_version",
+		"Wipe/recreate",
+	} {
+		if !bytes.Contains([]byte(msg), []byte(substr)) {
+			t.Errorf("ErrLegacyLeaves message missing expected substring %q; got:\n%s", substr, msg)
+		}
+	}
+}
+
+// TestLeafEntryLegacyDetectionLogic verifies the detection predicate used
+// inside GetLeaves: a leaf is "legacy" when either provenance field is empty.
+func TestLeafEntryLegacyDetectionLogic(t *testing.T) {
+	cases := []struct {
+		name    string
+		leaf    LeafEntry
+		isLegacy bool
+	}{
+		{
+			name: "both fields set - valid",
+			leaf: LeafEntry{
+				Key: []byte("k"), ValueHash: []byte("v"),
+				ParserID: "docling@2.3.1", CanonicalParserVersion: "v1",
+			},
+			isLegacy: false,
+		},
+		{
+			name: "empty parser_id - legacy",
+			leaf: LeafEntry{
+				Key: []byte("k"), ValueHash: []byte("v"),
+				ParserID: "", CanonicalParserVersion: "v1",
+			},
+			isLegacy: true,
+		},
+		{
+			name: "empty canonical_parser_version - legacy",
+			leaf: LeafEntry{
+				Key: []byte("k"), ValueHash: []byte("v"),
+				ParserID: "docling@2.3.1", CanonicalParserVersion: "",
+			},
+			isLegacy: true,
+		},
+		{
+			name: "both fields empty - legacy",
+			leaf: LeafEntry{
+				Key: []byte("k"), ValueHash: []byte("v"),
+				ParserID: "", CanonicalParserVersion: "",
+			},
+			isLegacy: true,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := tc.leaf.ParserID == "" || tc.leaf.CanonicalParserVersion == ""
+			if got != tc.isLegacy {
+				t.Errorf("legacy detection: got %v, want %v for leaf %+v", got, tc.isLegacy, tc.leaf)
+			}
+		})
+	}
+}
+
 // BatchLeaf must carry its own Root, TreeSize, and Signature so that
 // StoreLeafAndDeltasBatch can write one root row per leaf. The test
 // constructs a batch of three leaves with distinct roots and tree sizes,

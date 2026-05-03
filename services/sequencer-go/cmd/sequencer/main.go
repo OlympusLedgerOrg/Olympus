@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/tls"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"log"
 	"net"
@@ -99,6 +100,9 @@ func main() {
 	// first request.
 	leaves, err := store.GetLeaves(ctx)
 	if err != nil {
+		if errors.Is(err, storage.ErrLegacyLeaves) {
+			log.Fatalf("FATAL: %v", err)
+		}
 		log.Fatalf("Failed to load leaves for startup replay: %v", err)
 	}
 	pbLeaves := make([]*pb.LeafEntry, len(leaves))

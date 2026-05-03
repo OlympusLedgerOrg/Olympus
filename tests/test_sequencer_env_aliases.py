@@ -156,7 +156,7 @@ class TestGoSequencerExperimentalWarning:
         # Reset the once-warning guard so this test sees a fresh state
         from api.services import storage_layer
 
-        monkeypatch.setattr(storage_layer, "_go_sequencer_warned", False)
+        monkeypatch.delattr(storage_layer._use_go_sequencer, "_warned", raising=False)
 
         with caplog.at_level(logging.CRITICAL, logger="api.services.storage_layer"):
             result = storage_layer._use_go_sequencer()
@@ -172,7 +172,7 @@ class TestGoSequencerExperimentalWarning:
 
         from api.services import storage_layer
 
-        monkeypatch.setattr(storage_layer, "_go_sequencer_warned", False)
+        monkeypatch.delattr(storage_layer._use_go_sequencer, "_warned", raising=False)
 
         with caplog.at_level(logging.CRITICAL, logger="api.services.storage_layer"):
             storage_layer._use_go_sequencer()
@@ -188,7 +188,7 @@ class TestGoSequencerExperimentalWarning:
 
         from api.services import storage_layer
 
-        monkeypatch.setattr(storage_layer, "_go_sequencer_warned", False)
+        monkeypatch.delattr(storage_layer._use_go_sequencer, "_warned", raising=False)
 
         with caplog.at_level(logging.CRITICAL, logger="api.services.storage_layer"):
             result = storage_layer._use_go_sequencer()

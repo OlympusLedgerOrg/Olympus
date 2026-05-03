@@ -408,6 +408,11 @@ func (s *PostgresStorage) GetRootByTreeSize(ctx context.Context, treeSize uint64
 
 // GetLeaves retrieves all leaf entries in insertion order (oldest first) for
 // startup replay. Corresponds to the cdhs_smf_leaves table.
+//
+// Returns ErrLegacyLeaves if any row has empty parser_id or
+// canonical_parser_version (pre-ADR-0003 legacy row). The caller must not
+// proceed with Rust ReplayLeaves in that case; the sequencer must refuse to
+// start instead.
 func (s *PostgresStorage) GetLeaves(ctx context.Context) ([]LeafEntry, error) {
 	query := `
 		SELECT key, value_hash, parser_id, canonical_parser_version
@@ -427,6 +432,9 @@ func (s *PostgresStorage) GetLeaves(ctx context.Context) ([]LeafEntry, error) {
 		if err := rows.Scan(&e.Key, &e.ValueHash, &e.ParserID, &e.CanonicalParserVersion); err != nil {
 			return nil, fmt.Errorf("scan leaf row: %w", err)
 		}
+		if e.ParserID == "" || e.CanonicalParserVersion == "" {
+			return nil, ErrLegacyLeaves
+		}
 		leaves = append(leaves, e)
 	}
 	if err := rows.Err(); err != nil {
@@ -435,3 +443,20 @@ func (s *PostgresStorage) GetLeaves(ctx context.Context) ([]LeafEntry, error) {
 
 	return leaves, nil
 }
+
+// ErrLegacyLeaves is returned by GetLeaves when the database contains rows
+// that were written before the ADR-0003 migration (parser_id or
+// canonical_parser_version is empty). The sequencer must not start in this
+// state: replaying empty provenance into the Rust SMT service produces an
+// invalid_argument error, and silently backfilling provenance would
+// cryptographically falsify the audit trail.
+//
+// Remediation: wipe or recreate the sequencer DB (dev/staging), or run an
+// explicit provenance migration tool before restarting.
+var ErrLegacyLeaves = fmt.Errorf(
+	"sequencer DB contains legacy leaves missing ADR-0003 provenance " +
+		"(parser_id/canonical_parser_version). " +
+		"This build requires provenance for replay. " +
+		"Wipe/recreate the sequencer DB (dev/staging) or run an explicit " +
+		"migration tool. Refusing to start to avoid silently rewriting provenance.",
+)

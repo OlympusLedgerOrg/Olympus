@@ -216,3 +216,174 @@ class TestQueueLeafHashClientContract:
                 canonical_parser_version="v1",
             )
         assert exc_info.value.status_code == 422
+
+
+# ---------------------------------------------------------------------------
+# B) append_record_hash: empty-body error does not raise TypeError
+# ---------------------------------------------------------------------------
+
+
+class TestAppendRecordHashEmptyBodyError:
+    """Non-200 with empty response body must not cause TypeError in logging."""
+
+    @pytest.mark.asyncio
+    async def test_empty_body_non_200_raises_response_error_not_type_error(self):
+        """detail must be "" not None — prevents TypeError in %.200s format."""
+
+        async def _post(url, *, json, headers):
+            resp = MagicMock()
+            resp.status_code = 503
+            resp.text = ""  # empty body
+            return resp
+
+        client = GoSequencerClient(base_url="http://localhost:9999", token="tok")
+        client._client = AsyncMock()
+        client._client.post = _post
+
+        # Must raise SequencerResponseError, not TypeError
+        with pytest.raises(SequencerResponseError) as exc_info:
+            await client.append_record_hash(
+                shard_id="s",
+                record_type="doc",
+                record_id="r",
+                value_hash=b"\x00" * 32,
+                parser_id="p@1",
+                canonical_parser_version="v1",
+            )
+        assert exc_info.value.status_code == 503
+        # detail should be empty string, not None
+        assert exc_info.value.detail == ""
+
+    @pytest.mark.asyncio
+    async def test_non_empty_body_preserved_in_detail(self):
+        """detail carries the first 500 chars of a non-empty response body."""
+
+        async def _post(url, *, json, headers):
+            resp = MagicMock()
+            resp.status_code = 400
+            resp.text = "bad parser_id"
+            return resp
+
+        client = GoSequencerClient(base_url="http://localhost:9999", token="tok")
+        client._client = AsyncMock()
+        client._client.post = _post
+
+        with pytest.raises(SequencerResponseError) as exc_info:
+            await client.append_record_hash(
+                shard_id="s",
+                record_type="doc",
+                record_id="r",
+                value_hash=b"\x00" * 32,
+                parser_id="p@1",
+                canonical_parser_version="v1",
+            )
+        assert exc_info.value.detail == "bad parser_id"
+
+
+# ---------------------------------------------------------------------------
+# C) append_record: default content_type + validation
+# ---------------------------------------------------------------------------
+
+
+class TestAppendRecordContentTypeValidation:
+    """append_record() defaults to "json" and rejects invalid content_types."""
+
+    @pytest.mark.asyncio
+    async def test_default_content_type_is_json(self):
+        """Omitting content_type sends content_type=json in the payload."""
+        captured_payload: dict = {}
+
+        async def _post(url, *, json, headers):
+            captured_payload.update(json)
+            return _mock_response(
+                200,
+                {
+                    "new_root": "a" * 64,
+                    "global_key": "b" * 64,
+                    "leaf_value_hash": "c" * 64,
+                    "tree_size": 1,
+                },
+            )
+
+        client = GoSequencerClient(base_url="http://localhost:9999", token="tok")
+        client._client = AsyncMock()
+        client._client.post = _post
+
+        # Omit content_type → should default to "json"
+        await client.append_record(
+            shard_id="s",
+            record_type="doc",
+            record_id="r",
+            content=b'{"k":"v"}',
+            parser_id="p@1",
+            canonical_parser_version="v1",
+        )
+        assert captured_payload["content_type"] == "json"
+
+    @pytest.mark.asyncio
+    async def test_octet_stream_raises_value_error_before_http(self):
+        """application/octet-stream is invalid and raises ValueError client-side."""
+        client = GoSequencerClient(base_url="http://localhost:9999", token="tok")
+        client._client = AsyncMock()
+        client._client.post = AsyncMock(side_effect=AssertionError("must not be called"))
+
+        with pytest.raises(ValueError, match="json/text/plaintext"):
+            await client.append_record(
+                shard_id="s",
+                record_type="doc",
+                record_id="r",
+                content=b"binary",
+                content_type="application/octet-stream",
+                parser_id="p@1",
+                canonical_parser_version="v1",
+            )
+        client._client.post.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_invalid_content_type_raises_before_http(self):
+        """Any unsupported content_type raises ValueError before HTTP."""
+        client = GoSequencerClient(base_url="http://localhost:9999", token="tok")
+        client._client = AsyncMock()
+        client._client.post = AsyncMock(side_effect=AssertionError("must not be called"))
+
+        with pytest.raises(ValueError, match="Invalid content_type"):
+            await client.append_record(
+                shard_id="s",
+                record_type="doc",
+                record_id="r",
+                content=b"data",
+                content_type="binary/octet-stream",
+                parser_id="p@1",
+                canonical_parser_version="v1",
+            )
+        client._client.post.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_valid_content_types_accepted(self):
+        """All three Rust-accepted content_types are forwarded without error."""
+
+        async def _post(url, *, json, headers):
+            return _mock_response(
+                200,
+                {
+                    "new_root": "a" * 64,
+                    "global_key": "b" * 64,
+                    "leaf_value_hash": "c" * 64,
+                    "tree_size": 1,
+                },
+            )
+
+        for ct in ("json", "text", "plaintext"):
+            client = GoSequencerClient(base_url="http://localhost:9999", token="tok")
+            client._client = AsyncMock()
+            client._client.post = _post
+            # Should not raise
+            await client.append_record(
+                shard_id="s",
+                record_type="doc",
+                record_id="r",
+                content=b"data",
+                content_type=ct,
+                parser_id="p@1",
+                canonical_parser_version="v1",
+            )
