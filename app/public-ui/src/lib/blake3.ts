@@ -29,7 +29,7 @@ function ensureInit(): ReturnType<typeof init> {
         // Detect Content Security Policy rejections so we can give users a
         // clear, actionable message instead of a raw WASM compile error.
         const isCsp =
-          /disallowed by embedder|Content.Security.Policy|wasm-unsafe-eval/i.test(
+          /disallowed by embedder|Content Security Policy|wasm-unsafe-eval/i.test(
             msg,
           );
         throw new Error(
