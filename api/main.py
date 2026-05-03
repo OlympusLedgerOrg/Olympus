@@ -41,9 +41,13 @@ from api.routers import agencies, appeals, documents, keys, ledger, requests as 
 from api.routers.admin import router as admin_router
 from api.routers.datasets import router as datasets_router
 from api.routers.federation import router as federation_router
+from api.routers.keys import assert_admin_key_strength_for_environment
 from api.routers.public_stats import router as public_stats_router
 from api.routers.shards import router as shards_router
-from api.routers.user_auth import router as user_auth_router
+from api.routers.user_auth import (
+    log_public_write_registration_override_if_enabled,
+    router as user_auth_router,
+)
 from api.routers.witness import router as witness_router
 from api.sth import router as sth_router
 
@@ -208,6 +212,8 @@ async def lifespan(app: FastAPI):
     _assert_no_multiworker_with_memory_rate_limit()
     _assert_redis_url_when_redis_backend()
     _assert_xff_default_deny()
+    assert_admin_key_strength_for_environment()
+    log_public_write_registration_override_if_enabled()
     try:
         async with engine.begin() as conn:
             await conn.run_sync(Base.metadata.create_all)

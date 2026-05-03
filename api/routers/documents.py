@@ -8,6 +8,7 @@ POST /doc/verify  — verify a previously committed document hash
 from __future__ import annotations
 
 import logging
+import json
 from datetime import datetime, timezone
 
 from fastapi import APIRouter, HTTPException, status
@@ -16,6 +17,7 @@ from sqlalchemy import exists, select
 from api.auth import RateLimit, RequireAPIKey
 from api.deps import DBSession
 from api.models.document import DocCommit
+from api.models.ledger_activity import LedgerActivity
 from api.models.request import PublicRecordsRequest
 from api.schemas.document import (
     DocCommitRequest,
@@ -34,11 +36,16 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/doc", tags=["documents"])
 
 _MERKLE_LEAF_LIMIT = 50_000
+_DOC_COMMIT_KIND = "client_asserted_hash"
 
 
 @router.post(
     "/commit",
     response_model=DocCommitResponse,
+    description=(
+        "Commit a client-asserted BLAKE3 hash. This endpoint does not canonicalize or hash source "
+        "documents server-side; it records the caller-supplied fingerprint."
+    ),
     status_code=status.HTTP_201_CREATED,
     responses={
         status.HTTP_404_NOT_FOUND: {
@@ -131,6 +138,17 @@ async def commit_document(
     new_root = await compute_state_root(shard_id, db)
     commit.merkle_root = new_root
 
+    activity = LedgerActivity(
+        activity_type="DOCUMENT_SUBMITTED",
+        title="Client Hash Committed",
+        description="A client-asserted document hash was committed to the ledger.",
+        related_commit_id=commit_id,
+        related_request_id=body.request_id,
+        user_friendly_status="✓ Complete",
+        details_json=json.dumps({"kind": _DOC_COMMIT_KIND}, sort_keys=True, separators=(",", ":")),
+    )
+    db.add(activity)
+
     await db.commit()
     await db.refresh(commit)
     logger.info(
@@ -145,6 +163,7 @@ async def commit_document(
         epoch=commit.epoch_timestamp,
         shard_id=commit.shard_id,
         merkle_root=commit.merkle_root,
+        kind=_DOC_COMMIT_KIND,
     )
 
 
@@ -219,6 +238,7 @@ async def verify_document(body: DocVerifyRequest, db: DBSession, _rl: RateLimit)
             epoch=commit.epoch_timestamp,
             shard_id=commit.shard_id,
             merkle_root=commit.merkle_root,
+            kind=_DOC_COMMIT_KIND,
         ),
         merkle_proof=merkle_proof_data,
         zk_proof=zk_proof,

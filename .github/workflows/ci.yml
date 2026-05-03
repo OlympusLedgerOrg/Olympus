@@ -155,7 +155,7 @@ jobs:
         pip install -e . --no-deps
 
     - name: Build olympus_core Rust extension
-      run: maturin build --release --out dist && pip install --force-reinstall dist/*.whl
+      run: python -m maturin develop --release
 
     - name: Verify Rust extension is active (not silently skipping)
       run: |
@@ -271,7 +271,7 @@ jobs:
         pip install -e . --no-deps
 
     - name: Build olympus_core Rust extension
-      run: maturin build --release --out dist && pip install --force-reinstall dist/*.whl
+      run: python -m maturin develop --release
 
     - name: Verify dependency consistency
       run: pip check

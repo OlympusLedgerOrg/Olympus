@@ -21,7 +21,7 @@ import os
 from contextlib import contextmanager
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
-from urllib.parse import urlparse
+from urllib.parse import parse_qs, urlparse
 
 from fastapi import HTTPException
 
@@ -49,6 +49,49 @@ logger = logging.getLogger(__name__)
 
 _storage: StorageLayer | None = None
 _db_error: str | None = None
+_VERIFYING_SSLMODES = {"verify-full", "verify-ca"}
+_INSECURE_SSLMODES = {"", "disable", "allow", "prefer", "require"}
+_logged_dev_tls_warning = False
+
+
+def _extract_sslmode(database_url: str) -> str:
+    """Extract sslmode from URL or libpq keyword=value DSN strings."""
+    trimmed = database_url.strip()
+    if trimmed.startswith("postgres://") or trimmed.startswith("postgresql://"):
+        parsed = urlparse(trimmed)
+        return parse_qs(parsed.query).get("sslmode", [""])[0].strip().lower()
+    for field in trimmed.split():
+        key, _, value = field.partition("=")
+        if key.lower() == "sslmode":
+            return value.strip("'\"").strip().lower()
+    return ""
+
+
+def _enforce_postgres_tls_mode(database_url: str) -> None:
+    """Require certificate-verifying Postgres TLS outside development."""
+    global _logged_dev_tls_warning
+
+    env = os.environ.get("OLYMPUS_ENV", "production")
+    sslmode = _extract_sslmode(database_url)
+
+    if env == "development":
+        if sslmode not in _VERIFYING_SSLMODES and not _logged_dev_tls_warning:
+            _logged_dev_tls_warning = True
+            logger.warning(
+                "Non-verifying Postgres sslmode=%r allowed only in development. "
+                "Use sslmode=verify-full in production.",
+                sslmode or "<unset>",
+            )
+        return
+
+    if sslmode in _VERIFYING_SSLMODES:
+        return
+
+    if sslmode in _INSECURE_SSLMODES or sslmode not in _VERIFYING_SSLMODES:
+        raise SystemExit(
+            "Refusing startup: DATABASE_URL must set sslmode=verify-full or sslmode=verify-ca "
+            "when OLYMPUS_ENV != 'development'."
+        )
 
 
 def _get_storage() -> StorageLayer:
@@ -81,18 +124,20 @@ def _get_storage() -> StorageLayer:
         DATABASE_URL = os.environ.get("DATABASE_URL")
         if not DATABASE_URL:
             raise RuntimeError("DATABASE_URL is required.")
+        _enforce_postgres_tls_mode(DATABASE_URL)
 
-        # Validate DATABASE_URL format
         parsed_url = urlparse(DATABASE_URL)
-        if not parsed_url.username:
-            raise RuntimeError("DATABASE_URL missing username/password")
-
-        logger.info(
-            f"Connecting to database: scheme={parsed_url.scheme}, "
-            f"user={parsed_url.username}, "
-            f"host={parsed_url.hostname or 'unknown'}, "
-            f"db={parsed_url.path.lstrip('/') if parsed_url.path else 'unknown'}"
-        )
+        if parsed_url.scheme in {"postgres", "postgresql", "postgresql+asyncpg"}:
+            if not parsed_url.username:
+                raise RuntimeError("DATABASE_URL missing username/password")
+            logger.info(
+                f"Connecting to database: scheme={parsed_url.scheme}, "
+                f"user={parsed_url.username}, "
+                f"host={parsed_url.hostname or 'unknown'}, "
+                f"db={parsed_url.path.lstrip('/') if parsed_url.path else 'unknown'}"
+            )
+        else:
+            logger.info("Connecting to database via DSN form (scheme not embedded).")
 
         psycopg_database_url = (
             "postgresql://" + DATABASE_URL[len("postgresql+asyncpg://") :]

@@ -29,6 +29,20 @@ from protocol.log_sanitization import sanitize_for_log
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/key", tags=["keys"])
+_MIN_ADMIN_KEY_BYTES = 32
+
+
+def assert_admin_key_strength_for_environment() -> None:
+    """Fail closed outside development when OLYMPUS_ADMIN_KEY is configured but weak."""
+    env = os.environ.get("OLYMPUS_ENV", "production")
+    if env == "development":
+        return
+    admin_key = os.environ.get("OLYMPUS_ADMIN_KEY", "")
+    if admin_key and len(admin_key.encode("utf-8")) < _MIN_ADMIN_KEY_BYTES:
+        raise RuntimeError(
+            "Refusing startup with weak OLYMPUS_ADMIN_KEY outside development. "
+            f"Configure at least {_MIN_ADMIN_KEY_BYTES} bytes."
+        )
 
 
 @router.post("/credential", response_model=CredentialResponse, status_code=status.HTTP_201_CREATED)
@@ -140,7 +154,9 @@ class GenerateKeyResponse(BaseModel):
 @router.post(
     "/admin/generate", response_model=GenerateKeyResponse, status_code=status.HTTP_201_CREATED
 )
-async def admin_generate_key(request: Request, body: GenerateKeyRequest) -> GenerateKeyResponse:
+async def admin_generate_key(
+    request: Request, body: GenerateKeyRequest, _rl: RateLimit
+) -> GenerateKeyResponse:
     """Generate a new API key and return the raw key + env-var JSON entry.
 
     Protected by ``X-Admin-Key``. The raw key is returned once — the caller
@@ -160,6 +176,10 @@ async def admin_generate_key(request: Request, body: GenerateKeyRequest) -> Gene
             request.client.host if request.client else "unknown",
         )
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid admin key.")
+
+    logger.warning(
+        "Using /key/admin/generate. Prefer admin-scoped API keys for routine operations."
+    )
 
     raw_key = secrets.token_hex(32)
     key_hash = _hash_bytes(raw_key.encode()).hex()

@@ -26,7 +26,7 @@ jobs:
         run: rustup toolchain install stable --no-self-update && rustup default stable
 
       - name: Build olympus_core Rust extension
-        run: maturin develop
+        run: python -m maturin develop --release
 
       - name: Set up Node.js 20
         uses: actions/setup-node@v4

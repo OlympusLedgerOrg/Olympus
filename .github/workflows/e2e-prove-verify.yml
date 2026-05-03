@@ -82,7 +82,7 @@ jobs:
           echo "OLYMPUS_INGEST_SIGNING_KEY=${SIGNING_KEY}" >> "$GITHUB_ENV"
 
       - name: Build olympus_core Rust extension
-        run: maturin build --release --out dist && pip install --force-reinstall dist/*.whl
+        run: python -m maturin develop --release
 
       - name: Configure CI-sized redaction circuit
         run: |
