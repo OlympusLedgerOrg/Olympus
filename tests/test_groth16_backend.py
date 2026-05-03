@@ -612,9 +612,7 @@ class TestRapidsnarkFallback:
         assert isinstance(proof, Proof)
         assert proof.proof_system == ProofSystemType.GROTH16
 
-    def test_generate_falls_back_to_snarkjs_when_rapidsnark_absent(
-        self, tmp_path: Path
-    ) -> None:
+    def test_generate_falls_back_to_snarkjs_when_rapidsnark_absent(self, tmp_path: Path) -> None:
         """generate() falls back to snarkjs when rapidsnark is not in PATH."""
         circuits_dir = tmp_path / "circuits"
         circuits_dir.mkdir()

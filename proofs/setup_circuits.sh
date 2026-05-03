@@ -50,13 +50,11 @@ PTAU_URL="https://storage.googleapis.com/zkevm/ptau/${PTAU_FILE}"
 PTAU_PATH="${KEYS_DIR}/${PTAU_FILE}"
 PTAU_SOURCE="${PTAU_URL}"
 
-# Known SHA-256 checksums for Hermez PTAU files.
+# Known BLAKE2b-512 checksums for Hermez PTAU files.
 # Source: https://github.com/iden3/snarkjs#7-prepare-phase-2
-# BLAKE2b-512 hashes (authoritative) are in .github/workflows/copilot-setup-steps.yml.
+# Verified via: b2sum powersOfTau28_hez_final_19.ptau
 declare -A PTAU_CHECKSUMS=(
-  [15]="982372c867d229c236091f767e703253249a9b432c1730cbe57e8e864e5ed37f"
-  [17]="3a4ed97a753be2df8a9ee9f69ee1efaf8c988c52f5bfac5f42e9b89c3c4cef4b"
-  [19]="3f428d1a407e4704ef906960e000b03089e5e6ec29bf65b07bb5e3de005f4700"
+  [19]="bca9d8b04242f175189872c42ceaa21e2951e0f0f272a0cc54fc37193ff6648600eaf1c555c70cdedfaf9fb74927de7aa1d33dc1e2a7f1a50619484989da0887"
 )
 
 # -----------------------------------------------------------------------
@@ -143,14 +141,14 @@ else
   fi
 fi
 
-# Verify PTAU SHA-256 checksum (only for known trusted files; skip for local dev)
+# Verify PTAU BLAKE2b-512 checksum (only for known trusted files; skip for local dev)
 echo "==> Verifying PTAU integrity …"
-PTAU_SHA256="$(sha256sum "${PTAU_PATH}" | awk '{print $1}')"
+PTAU_B2="$(b2sum "${PTAU_PATH}" | awk '{print $1}')"
 PTAU_EXPECTED="${PTAU_CHECKSUMS[${PTAU_POWER}]:-}"
-if [ "${PTAU_IS_LOCAL}" -eq 0 ] && [ -n "${PTAU_EXPECTED}" ] && [ "${PTAU_SHA256}" != "${PTAU_EXPECTED}" ]; then
-  echo "ERROR: PTAU SHA-256 mismatch!"
+if [ "${PTAU_IS_LOCAL}" -eq 0 ] && [ -n "${PTAU_EXPECTED}" ] && [ "${PTAU_B2}" != "${PTAU_EXPECTED}" ]; then
+  echo "ERROR: PTAU BLAKE2b-512 mismatch!"
   echo "  Expected: ${PTAU_EXPECTED}"
-  echo "  Got:      ${PTAU_SHA256}"
+  echo "  Got:      ${PTAU_B2}"
   echo "  File may be corrupted or tampered with."
   rm -f "${PTAU_PATH}"
   exit 1
@@ -165,7 +163,7 @@ fi
 # 2.5 Record provenance (PTAU source + hashes + verification key fingerprints)
 # -----------------------------------------------------------------------
 PROVENANCE_FILE="${KEYS_DIR}/PROVENANCE.md"
-PTAU_SHA256="$(sha256sum "${PTAU_PATH}" | awk '{print $1}')"
+PTAU_B2="$(b2sum "${PTAU_PATH}" | awk '{print $1}')"
 {
   echo "# Groth16 Setup Provenance"
   echo ""
@@ -179,7 +177,7 @@ PTAU_SHA256="$(sha256sum "${PTAU_PATH}" | awk '{print $1}')"
   fi
   echo "PTAU_SOURCE: ${PTAU_SOURCE}"
   echo "PTAU_FILE: ${PTAU_FILE}"
-  echo "PTAU_SHA256: ${PTAU_SHA256}"
+  echo "PTAU_B2: ${PTAU_B2}"
   echo ""
   echo "Verification key fingerprints (SHA-256):"
 } > "${PROVENANCE_FILE}"

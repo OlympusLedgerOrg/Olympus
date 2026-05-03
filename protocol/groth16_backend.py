@@ -394,9 +394,7 @@ class Groth16Backend(ProofBackendProtocol):
 
             rapidsnark_bin = self._resolve_rapidsnark_path()
             if rapidsnark_bin is not None:
-                _log.info(
-                    "Using rapidsnark for proof generation (5-10× faster than snarkjs)"
-                )
+                _log.info("Using rapidsnark for proof generation (5-10× faster than snarkjs)")
                 try:
                     _run_subprocess(
                         [
@@ -430,9 +428,7 @@ class Groth16Backend(ProofBackendProtocol):
                         timeout=_PROOF_TIMEOUT_SECS,
                     )
                 except subprocess.CalledProcessError as e:
-                    raise ProofGenerationError(
-                        f"Proof generation failed: {e.stderr}"
-                    ) from e
+                    raise ProofGenerationError(f"Proof generation failed: {e.stderr}") from e
 
             # Read proof and public signals
             with proof_path.open("r", encoding="utf-8") as f:

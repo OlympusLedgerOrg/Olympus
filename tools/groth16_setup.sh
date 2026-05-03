@@ -47,8 +47,8 @@ PTAU_FILE="powersOfTau28_hez_final_${PTAU_POWER}.ptau"
 PTAU_URL="https://storage.googleapis.com/zkevm/ptau/${PTAU_FILE}"
 PTAU_PATH="build/${PTAU_FILE}"
 
-# Known SHA-256 for powersOfTau28_hez_final_19.ptau
-PTAU_EXPECTED_SHA256="3f428d1a407e4704ef906960e000b03089e5e6ec29bf65b07bb5e3de005f4700"
+# Known BLAKE2b-512 for powersOfTau28_hez_final_19.ptau (authoritative Hermez hash)
+PTAU_EXPECTED_B2="bca9d8b04242f175189872c42ceaa21e2951e0f0f272a0cc54fc37193ff6648600eaf1c555c70cdedfaf9fb74927de7aa1d33dc1e2a7f1a50619484989da0887"
 
 if [ -f "${PTAU_PATH}" ]; then
   echo "==> PTAU file already present: ${PTAU_PATH}"
@@ -62,13 +62,13 @@ else
   fi
 fi
 
-# Verify SHA-256 checksum
+# Verify BLAKE2b-512 checksum
 echo "==> Verifying PTAU integrity …"
-PTAU_SHA256="$(sha256sum "${PTAU_PATH}" | awk '{print $1}')"
-if [ "${PTAU_SHA256}" != "${PTAU_EXPECTED_SHA256}" ]; then
-  echo "ERROR: PTAU SHA-256 mismatch!"
-  echo "  Expected: ${PTAU_EXPECTED_SHA256}"
-  echo "  Got:      ${PTAU_SHA256}"
+PTAU_B2="$(b2sum "${PTAU_PATH}" | awk '{print $1}')"
+if [ "${PTAU_B2}" != "${PTAU_EXPECTED_B2}" ]; then
+  echo "ERROR: PTAU BLAKE2b-512 mismatch!"
+  echo "  Expected: ${PTAU_EXPECTED_B2}"
+  echo "  Got:      ${PTAU_B2}"
   echo "  File may be corrupted or tampered with."
   rm -f "${PTAU_PATH}"
   exit 1
@@ -92,7 +92,7 @@ cat <<EOF > build/PROVENANCE.md
 
 Generated: $(date -u +"%Y-%m-%dT%H:%M:%SZ")
 PTAU_SOURCE: ${PTAU_URL}
-PTAU_SHA256: ${PTAU_SHA256}
+PTAU_B2: ${PTAU_B2}
 VKEY_SHA256: ${VKEY_SHA256}
 
 Phase 1: Hermez Powers of Tau (public multi-party ceremony)
