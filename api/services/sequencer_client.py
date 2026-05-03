@@ -449,7 +449,10 @@ class GoSequencerClient:
                 - record_type: Record type
                 - record_id: Record identifier
                 - content: Canonical content bytes
-                - content_type: MIME type (optional, default: "json")
+                - content_type: MIME type understood by the Rust canonicalizer
+                    ("json", "text", or "plaintext"). Defaults to "json".
+                    Do NOT pass "application/octet-stream" — use
+                    ``append_record_hash`` for pre-computed value hashes.
                 - version: Version string (optional, default: "")
                 - metadata: Optional metadata dict
                 - parser_id: ADR-0003 parser identity (required)

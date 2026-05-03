@@ -18,6 +18,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+import threading
 from contextlib import contextmanager
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
@@ -246,6 +247,10 @@ def get_storage_status() -> tuple[str, bool]:
 # ---------------------------------------------------------------------------
 
 
+_go_sequencer_warned: bool = False
+_go_sequencer_warned_lock: threading.Lock = threading.Lock()
+
+
 def _use_go_sequencer() -> bool:
     """Return True when the Go sequencer write path is enabled.
 
@@ -253,24 +258,27 @@ def _use_go_sequencer() -> bool:
     Default is False (direct PostgreSQL writes via storage/postgres.py).
 
     EXPERIMENTAL: When enabled, logs a one-time CRITICAL warning at startup.
+    The warning is emitted at most once per process using a threading.Lock to
+    avoid duplicate messages under concurrent startup probes.
     """
+    global _go_sequencer_warned
+
     enabled = os.environ.get("OLYMPUS_USE_GO_SEQUENCER", "").strip().lower() in {
         "1",
         "true",
         "yes",
         "on",
     }
-    if enabled and not _use_go_sequencer._warned:  # type: ignore[attr-defined]
-        _use_go_sequencer._warned = True  # type: ignore[attr-defined]
-        logger.critical(
-            "Go sequencer path (Path B) is EXPERIMENTAL. "
-            "Known limitations tracked in ARCHITECTURE.md. "
-            "For production journalist workloads use OLYMPUS_USE_GO_SEQUENCER=false."
-        )
+    if enabled:
+        with _go_sequencer_warned_lock:
+            if not _go_sequencer_warned:
+                _go_sequencer_warned = True
+                logger.critical(
+                    "Go sequencer path (Path B) is EXPERIMENTAL. "
+                    "Known limitations tracked in ARCHITECTURE.md. "
+                    "For production journalist workloads use OLYMPUS_USE_GO_SEQUENCER=false."
+                )
     return enabled
-
-
-_use_go_sequencer._warned = False  # type: ignore[attr-defined]
 
 
 def _get_sequencer_client() -> GoSequencerClient:

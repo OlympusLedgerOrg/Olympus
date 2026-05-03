@@ -357,6 +357,9 @@ func (s *PostgresStorage) InitSchema(ctx context.Context) error {
 		-- parser_id and canonical_parser_version (ADR-0003) are bound into the
 		-- leaf hash domain by the Rust service. ADD COLUMN IF NOT EXISTS allows
 		-- this migration to run idempotently against existing dev databases.
+		-- Empty strings in these columns indicate records written before the
+		-- ADR-0003 migration; the Go sequencer validates non-empty values on
+		-- all new writes.
 		CREATE TABLE IF NOT EXISTS cdhs_smf_leaves (
 			id SERIAL PRIMARY KEY,
 			key BYTEA NOT NULL,
