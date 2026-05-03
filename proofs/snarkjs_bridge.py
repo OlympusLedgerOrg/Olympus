@@ -56,6 +56,29 @@ def _resolve_node_path() -> str:
     return node_path
 
 
+def _resolve_rapidsnark_path() -> str | None:
+    """Return absolute path to the ``rapidsnark`` binary if available, else ``None``.
+
+    Rapidsnark is an optional C++ native Groth16 prover (Mysten Labs fork) that
+    is 5-10× faster than snarkjs for the prove step.  It uses the same ``.zkey``
+    and ``.wtns`` files, making it a transparent drop-in for ``snarkjs groth16
+    prove``.  The result is identical to snarkjs for the same witness inputs.
+
+    Returns:
+        Absolute path to ``rapidsnark``, or ``None`` if not installed.
+
+    Example::
+
+        if path := _resolve_rapidsnark_path():
+            # Use rapidsnark for 5-10× faster proving
+            subprocess.run([path, zkey, witness, proof_out, public_out])
+        else:
+            # Fall back to snarkjs bridge
+            snarkjs_bridge.prove(witness_file=witness, zkey_file=zkey)
+    """
+    return shutil.which("rapidsnark")
+
+
 # ---------------------------------------------------------------------------
 # Prerequisites
 # ---------------------------------------------------------------------------

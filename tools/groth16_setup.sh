@@ -5,7 +5,7 @@
 #
 # Automates the full snarkjs pipeline for selective_disclosure_merkle.circom:
 #   1. Compile circuit to R1CS + WASM witness generator
-#   2. Phase 1 — Download Hermez Powers of Tau (bn128, 2^15)
+#   2. Phase 1 — Download Hermez Powers of Tau (bn128, 2^19)
 #   3. Phase 2 — Circuit-specific Groth16 setup
 #   4. Export verification key
 #
@@ -15,7 +15,7 @@
 # Outputs (all written to proofs/build/):
 #   selective_disclosure_merkle.r1cs
 #   selective_disclosure_merkle_js/     (WASM witness generator)
-#   pot15_final.ptau   (Hermez Powers of Tau)
+#   pot19_final.ptau   (Hermez Powers of Tau)
 #   foia_redaction_final.zkey
 #   verification_key.json
 #
@@ -42,13 +42,13 @@ circom selective_disclosure_merkle.circom --r1cs --wasm --sym -o build/
 # -----------------------------------------------------------------------
 # Phase 1: Download Hermez Powers of Tau (public multi-party ceremony)
 # -----------------------------------------------------------------------
-PTAU_POWER=15
+PTAU_POWER=19
 PTAU_FILE="powersOfTau28_hez_final_${PTAU_POWER}.ptau"
-PTAU_URL="https://hermez.s3-eu-west-1.amazonaws.com/${PTAU_FILE}"
+PTAU_URL="https://storage.googleapis.com/zkevm/ptau/${PTAU_FILE}"
 PTAU_PATH="build/${PTAU_FILE}"
 
-# Known SHA-256 for powersOfTau28_hez_final_15.ptau
-PTAU_EXPECTED_SHA256="982372c867d229c236091f767e703253249a9b432c1730cbe57e8e864e5ed37f"
+# Known SHA-256 for powersOfTau28_hez_final_19.ptau
+PTAU_EXPECTED_SHA256="7865c363bc0ca598d998246f41e065bc39682701726056637e6da085025cb7ca"
 
 if [ -f "${PTAU_PATH}" ]; then
   echo "==> PTAU file already present: ${PTAU_PATH}"
@@ -76,7 +76,7 @@ fi
 echo "    PTAU integrity verified ✓"
 
 # Symlink to expected name for backward compatibility
-ln -sf "${PTAU_FILE}" build/pot15_final.ptau 2>/dev/null || true
+ln -sf "${PTAU_FILE}" build/pot19_final.ptau 2>/dev/null || true
 
 echo "Starting Phase 2 (Circuit-Specific Groth16 Setup)..."
 snarkjs groth16 setup build/selective_disclosure_merkle.r1cs "${PTAU_PATH}" build/foia_redaction_0000.zkey

@@ -42,19 +42,21 @@ CIRCUITS=(
 )
 
 # PTAU file — powers of tau ceremony file
-# 2^17 supports up to 131 072 constraints; sufficient for all three circuits
-# including redaction_validity which has ~41 000 constraints.
-PTAU_POWER=17
+# 2^19 supports up to 524 288 constraints; sufficient for all three circuits
+# including non_existence which has ~70 000 constraints.
+PTAU_POWER=19
 PTAU_FILE="powersOfTau28_hez_final_${PTAU_POWER}.ptau"
-PTAU_URL="https://hermez.s3-eu-west-1.amazonaws.com/${PTAU_FILE}"
+PTAU_URL="https://storage.googleapis.com/zkevm/ptau/${PTAU_FILE}"
 PTAU_PATH="${KEYS_DIR}/${PTAU_FILE}"
 PTAU_SOURCE="${PTAU_URL}"
 
 # Known SHA-256 checksums for Hermez PTAU files.
 # Source: https://github.com/iden3/snarkjs#7-prepare-phase-2
+# BLAKE2b-512 hashes (authoritative) are in .github/workflows/copilot-setup-steps.yml.
 declare -A PTAU_CHECKSUMS=(
   [15]="982372c867d229c236091f767e703253249a9b432c1730cbe57e8e864e5ed37f"
   [17]="3a4ed97a753be2df8a9ee9f69ee1efaf8c988c52f5bfac5f42e9b89c3c4cef4b"
+  [19]="7865c363bc0ca598d998246f41e065bc39682701726056637e6da085025cb7ca"
 )
 
 # -----------------------------------------------------------------------
