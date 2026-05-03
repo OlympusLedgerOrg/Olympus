@@ -84,7 +84,7 @@ def test_supplementary_key_sorts_before_upper_bmp_utf16() -> None:
     less than U+E000 (0xE000).  Scalar order would place U+10000 *after*
     U+FFFF, reversing the result.
     """
-    obj = {"\uE000": "pua", "\U00010000": "first-supp"}
+    obj = {"\ue000": "pua", "\U00010000": "first-supp"}
     encoded = canonical_json_encode(obj)
     # 𐀀 (U+10000) must appear first: {"𐀀":"first-supp","\uE000":"pua"}
     first_key_end = encoded.index(":")
@@ -96,34 +96,34 @@ def test_supplementary_key_sorts_before_upper_bmp_utf16() -> None:
 
 def test_emoji_key_sorts_before_upper_bmp_utf16() -> None:
     """U+1F980 (🦀, high surrogate 0xD83E) sorts before U+E000 (0xE000)."""
-    obj = {"\uE000": "pua", "\U0001F980": "crab"}
+    obj = {"\ue000": "pua", "\U0001f980": "crab"}
     encoded = canonical_json_encode(obj)
     first_key_end = encoded.index(":")
     first_key = encoded[1:first_key_end]
-    assert "\U0001F980" in first_key, (
+    assert "\U0001f980" in first_key, (
         f"🦀 (U+1F980) must sort before U+E000 under UTF-16 order, but got: {encoded!r}"
     )
 
 
 def test_non_bmp_3_mixed_key_order() -> None:
     """non-bmp-3: all four keys must appear in UTF-16 order a < b < 𐐷 < 🦀."""
-    obj = {"a": 1, "\U00010437": 2, "b": 3, "\U0001F980": 4}
+    obj = {"a": 1, "\U00010437": 2, "b": 3, "\U0001f980": 4}
     encoded = canonical_json_encode(obj)
     # Extract key order from the encoded string
     parsed_back = json.loads(encoded)
     keys = list(parsed_back.keys())
-    assert keys == ["a", "b", "\U00010437", "\U0001F980"], (
+    assert keys == ["a", "b", "\U00010437", "\U0001f980"], (
         f"Expected UTF-16 key order [a, b, 𐐷, 🦀], got {keys!r}"
     )
 
 
 def test_non_bmp_4_bmp_boundary_key_order() -> None:
     """non-bmp-4: UTF-16 sort must produce 𐀀 < U+E000 < U+FFFD."""
-    obj = {"\uE000": "pua", "\uFFFD": "replacement", "\U00010000": "first-supp"}
+    obj = {"\ue000": "pua", "\ufffd": "replacement", "\U00010000": "first-supp"}
     encoded = canonical_json_encode(obj)
     parsed_back = json.loads(encoded)
     keys = list(parsed_back.keys())
-    assert keys == ["\U00010000", "\uE000", "\uFFFD"], (
+    assert keys == ["\U00010000", "\ue000", "\ufffd"], (
         f"Expected UTF-16 key order [U+10000, U+E000, U+FFFD], got {keys!r}"
     )
 

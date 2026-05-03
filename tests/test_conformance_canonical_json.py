@@ -22,9 +22,7 @@ from protocol.canonical_json import canonical_json_bytes
 from protocol.canonicalizer import Canonicalizer
 
 
-_CONFORMANCE_VECTORS_PATH = (
-    Path(__file__).resolve().parent / "conformance" / "vectors.json"
-)
+_CONFORMANCE_VECTORS_PATH = Path(__file__).resolve().parent / "conformance" / "vectors.json"
 _TSV_VECTORS_PATH = (
     Path(__file__).resolve().parent.parent
     / "verifiers"
@@ -48,9 +46,7 @@ def _load_tsv_vectors() -> list[tuple[str, bytes, bytes, str]]:
         if not line or line.startswith("#"):
             continue
         group_id, input_hex, canonical_hex, hash_hex = line.split("\t")
-        rows.append(
-            (group_id, bytes.fromhex(input_hex), bytes.fromhex(canonical_hex), hash_hex)
-        )
+        rows.append((group_id, bytes.fromhex(input_hex), bytes.fromhex(canonical_hex), hash_hex))
     return rows
 
 
@@ -62,9 +58,7 @@ def _load_tsv_vectors() -> list[tuple[str, bytes, bytes, str]]:
 def test_conformance_vectors_file_is_present_and_parseable() -> None:
     """vectors.json must exist and contain at least the 4 non-BMP vectors."""
     vectors = _load_conformance_vectors()
-    assert len(vectors) >= 4, (
-        f"Expected at least 4 non-BMP vectors, found {len(vectors)}"
-    )
+    assert len(vectors) >= 4, f"Expected at least 4 non-BMP vectors, found {len(vectors)}"
 
 
 def test_conformance_vectors_canonical_hex() -> None:
@@ -80,9 +74,8 @@ def test_conformance_vectors_canonical_hex() -> None:
                 f"  got : {canonical.hex()}\n"
                 f"  want: {v['canonical_hex']}"
             )
-    assert not failures, (
-        "canonical_hex mismatch — cross-language consensus broken:\n"
-        + "\n".join(failures)
+    assert not failures, "canonical_hex mismatch — cross-language consensus broken:\n" + "\n".join(
+        failures
     )
 
 
@@ -96,13 +89,10 @@ def test_conformance_vectors_blake3_hex() -> None:
         got = Canonicalizer.get_hash(canonical).hex()
         if got != v["blake3_hex"]:
             failures.append(
-                f"[{v['id']}] BLAKE3 mismatch\n"
-                f"  got : {got}\n"
-                f"  want: {v['blake3_hex']}"
+                f"[{v['id']}] BLAKE3 mismatch\n  got : {got}\n  want: {v['blake3_hex']}"
             )
     assert not failures, (
-        "BLAKE3 mismatch — SMT leaf hashes will diverge across languages:\n"
-        + "\n".join(failures)
+        "BLAKE3 mismatch — SMT leaf hashes will diverge across languages:\n" + "\n".join(failures)
     )
 
 
@@ -112,8 +102,7 @@ def test_conformance_vectors_input_hex_roundtrip() -> None:
     for v in vectors:
         decoded = bytes.fromhex(v["input_hex"]).decode("utf-8")
         assert decoded == v["input_json"], (
-            f"[{v['id']}] input_hex decodes to {decoded!r}, "
-            f"expected {v['input_json']!r}"
+            f"[{v['id']}] input_hex decodes to {decoded!r}, expected {v['input_json']!r}"
         )
 
 
