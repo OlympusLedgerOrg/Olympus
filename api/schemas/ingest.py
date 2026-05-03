@@ -68,7 +68,7 @@ def check_json_depth(obj: Any, current_depth: int = 0) -> int:
     while stack:
         current, depth = stack.pop()
 
-        if depth >= MAX_CONTENT_DEPTH:
+        if depth > MAX_CONTENT_DEPTH:
             raise ValueError(f"Content nesting depth exceeds limit of {MAX_CONTENT_DEPTH}")
 
         if depth > max_depth:

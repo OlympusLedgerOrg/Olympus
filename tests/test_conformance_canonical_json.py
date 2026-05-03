@@ -21,6 +21,7 @@ from pathlib import Path
 from protocol.canonical_json import canonical_json_bytes
 from protocol.canonicalizer import Canonicalizer
 
+
 _CONFORMANCE_VECTORS_PATH = (
     Path(__file__).resolve().parent / "conformance" / "vectors.json"
 )

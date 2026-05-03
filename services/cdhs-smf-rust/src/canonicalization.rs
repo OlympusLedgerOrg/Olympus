@@ -875,9 +875,11 @@ mod tests {
     // Non-BMP key ordering (RFC 8785 §3.2.3 / UTF-16 sort)
     //
     // These are the canonical cross-language conformance vectors also stored in
-    // tests/conformance/vectors.json.  All four cases produce different byte
-    // output under Unicode scalar order vs UTF-16 order; the expected bytes
-    // below are derived from the Python reference (protocol/canonical_json.py).
+    // tests/conformance/vectors.json.  non-bmp-1 and non-bmp-2 are single-key
+    // objects that confirm non-BMP keys round-trip through UTF-8 encoding
+    // correctly; the sort divergence between Unicode scalar order and UTF-16
+    // order is exercised by the multi-key vectors non-bmp-3 and non-bmp-4.
+    // Expected bytes are derived from the Python reference (protocol/canonical_json.py).
     // -------------------------------------------------------------------------
 
     #[test]

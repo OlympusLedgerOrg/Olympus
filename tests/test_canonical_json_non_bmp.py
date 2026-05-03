@@ -31,6 +31,7 @@ import pytest
 from protocol.canonical_json import canonical_json_bytes, canonical_json_encode
 from protocol.canonicalizer import Canonicalizer
 
+
 _VECTORS_PATH = Path(__file__).resolve().parent / "conformance" / "vectors.json"
 
 
