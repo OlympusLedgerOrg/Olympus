@@ -9,7 +9,11 @@ pub struct UpdateRequest {
     /// Record key components (type, id, version, etc.)
     #[prost(message, optional, tag = "2")]
     pub record_key: ::core::option::Option<RecordKey>,
-    /// Canonicalized record content (already canonicalized)
+    /// Canonicalized record content (already canonicalized).
+    ///
+    /// Mutually exclusive with `pre_hashed_value_hash`: if that field is set,
+    /// `canonical_content` MUST be empty and the service uses the supplied
+    /// 32-byte hash directly as the leaf value, without re-hashing.
     #[prost(bytes = "vec", tag = "3")]
     pub canonical_content: ::prost::alloc::vec::Vec<u8>,
     /// Parser identity ("<name>@<version>", e.g. "docling@2.3.1"). Required by
@@ -22,6 +26,13 @@ pub struct UpdateRequest {
     /// rejected by the service.
     #[prost(string, tag = "5")]
     pub canonical_parser_version: ::prost::alloc::string::String,
+    /// Pre-computed leaf value hash (exactly 32 bytes). When set, the service
+    /// skips the BLAKE3 of `canonical_content` and uses this value directly.
+    /// Used by the `/v1/queue-leaf-hash` API path where the caller already
+    /// holds an opaque 32-byte commitment and does NOT want it re-hashed.
+    /// Either this field OR `canonical_content` MUST be supplied (not both).
+    #[prost(bytes = "vec", tag = "6")]
+    pub pre_hashed_value_hash: ::prost::alloc::vec::Vec<u8>,
 }
 /// Response from update operation
 #[allow(clippy::derive_partial_eq_without_eq)]
@@ -56,7 +67,11 @@ pub struct PrepareUpdateRequest {
     /// Record key components (type, id, version, etc.)
     #[prost(message, optional, tag = "2")]
     pub record_key: ::core::option::Option<RecordKey>,
-    /// Canonicalized record content (already canonicalized)
+    /// Canonicalized record content (already canonicalized).
+    ///
+    /// Mutually exclusive with `pre_hashed_value_hash`: if that field is set,
+    /// `canonical_content` MUST be empty and the service uses the supplied
+    /// 32-byte hash directly as the leaf value, without re-hashing.
     #[prost(bytes = "vec", tag = "3")]
     pub canonical_content: ::prost::alloc::vec::Vec<u8>,
     /// Parser identity ("<name>@<version>"). Required by ADR-0003 and bound
@@ -68,6 +83,13 @@ pub struct PrepareUpdateRequest {
     /// is rejected by the service.
     #[prost(string, tag = "5")]
     pub canonical_parser_version: ::prost::alloc::string::String,
+    /// Pre-computed leaf value hash (exactly 32 bytes). When set, the service
+    /// skips the BLAKE3 of `canonical_content` and uses this value directly.
+    /// Used by the `/v1/queue-leaf-hash` API path where the caller already
+    /// holds an opaque 32-byte commitment and does NOT want it re-hashed.
+    /// Either this field OR `canonical_content` MUST be supplied (not both).
+    #[prost(bytes = "vec", tag = "6")]
+    pub pre_hashed_value_hash: ::prost::alloc::vec::Vec<u8>,
 }
 /// Response from PrepareUpdate. Carries the same data as UpdateResponse so
 /// the sequencer can persist deltas + sign the new root before calling

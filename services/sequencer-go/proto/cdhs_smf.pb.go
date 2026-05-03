@@ -28,7 +28,11 @@ type UpdateRequest struct {
 	ShardId string `protobuf:"bytes,1,opt,name=shard_id,json=shardId,proto3" json:"shard_id,omitempty"`
 	// Record key components (type, id, version, etc.)
 	RecordKey *RecordKey `protobuf:"bytes,2,opt,name=record_key,json=recordKey,proto3" json:"record_key,omitempty"`
-	// Canonicalized record content (already canonicalized)
+	// Canonicalized record content (already canonicalized).
+	//
+	// Mutually exclusive with `pre_hashed_value_hash`: if that field is set,
+	// `canonical_content` MUST be empty and the service uses the supplied
+	// 32-byte hash directly as the leaf value, without re-hashing.
 	CanonicalContent []byte `protobuf:"bytes,3,opt,name=canonical_content,json=canonicalContent,proto3" json:"canonical_content,omitempty"`
 	// Parser identity ("<name>@<version>", e.g. "docling@2.3.1"). Required by
 	// ADR-0003: this is bound into the leaf hash domain. Empty string is
@@ -38,8 +42,14 @@ type UpdateRequest struct {
 	// by ADR-0003: this is bound into the leaf hash domain. Empty string is
 	// rejected by the service.
 	CanonicalParserVersion string `protobuf:"bytes,5,opt,name=canonical_parser_version,json=canonicalParserVersion,proto3" json:"canonical_parser_version,omitempty"`
-	unknownFields          protoimpl.UnknownFields
-	sizeCache              protoimpl.SizeCache
+	// Pre-computed leaf value hash (exactly 32 bytes). When set, the service
+	// skips the BLAKE3 of `canonical_content` and uses this value directly.
+	// Used by the `/v1/queue-leaf-hash` API path where the caller already
+	// holds an opaque 32-byte commitment and does NOT want it re-hashed.
+	// Either this field OR `canonical_content` MUST be supplied (not both).
+	PreHashedValueHash []byte `protobuf:"bytes,6,opt,name=pre_hashed_value_hash,json=preHashedValueHash,proto3" json:"pre_hashed_value_hash,omitempty"`
+	unknownFields      protoimpl.UnknownFields
+	sizeCache          protoimpl.SizeCache
 }
 
 func (x *UpdateRequest) Reset() {
@@ -105,6 +115,13 @@ func (x *UpdateRequest) GetCanonicalParserVersion() string {
 		return x.CanonicalParserVersion
 	}
 	return ""
+}
+
+func (x *UpdateRequest) GetPreHashedValueHash() []byte {
+	if x != nil {
+		return x.PreHashedValueHash
+	}
+	return nil
 }
 
 // Response from update operation
@@ -199,7 +216,11 @@ type PrepareUpdateRequest struct {
 	ShardId string `protobuf:"bytes,1,opt,name=shard_id,json=shardId,proto3" json:"shard_id,omitempty"`
 	// Record key components (type, id, version, etc.)
 	RecordKey *RecordKey `protobuf:"bytes,2,opt,name=record_key,json=recordKey,proto3" json:"record_key,omitempty"`
-	// Canonicalized record content (already canonicalized)
+	// Canonicalized record content (already canonicalized).
+	//
+	// Mutually exclusive with `pre_hashed_value_hash`: if that field is set,
+	// `canonical_content` MUST be empty and the service uses the supplied
+	// 32-byte hash directly as the leaf value, without re-hashing.
 	CanonicalContent []byte `protobuf:"bytes,3,opt,name=canonical_content,json=canonicalContent,proto3" json:"canonical_content,omitempty"`
 	// Parser identity ("<name>@<version>"). Required by ADR-0003 and bound
 	// into the leaf hash domain. Empty string is rejected by the service.
@@ -208,8 +229,14 @@ type PrepareUpdateRequest struct {
 	// Required by ADR-0003 and bound into the leaf hash domain. Empty string
 	// is rejected by the service.
 	CanonicalParserVersion string `protobuf:"bytes,5,opt,name=canonical_parser_version,json=canonicalParserVersion,proto3" json:"canonical_parser_version,omitempty"`
-	unknownFields          protoimpl.UnknownFields
-	sizeCache              protoimpl.SizeCache
+	// Pre-computed leaf value hash (exactly 32 bytes). When set, the service
+	// skips the BLAKE3 of `canonical_content` and uses this value directly.
+	// Used by the `/v1/queue-leaf-hash` API path where the caller already
+	// holds an opaque 32-byte commitment and does NOT want it re-hashed.
+	// Either this field OR `canonical_content` MUST be supplied (not both).
+	PreHashedValueHash []byte `protobuf:"bytes,6,opt,name=pre_hashed_value_hash,json=preHashedValueHash,proto3" json:"pre_hashed_value_hash,omitempty"`
+	unknownFields      protoimpl.UnknownFields
+	sizeCache          protoimpl.SizeCache
 }
 
 func (x *PrepareUpdateRequest) Reset() {
@@ -275,6 +302,13 @@ func (x *PrepareUpdateRequest) GetCanonicalParserVersion() string {
 		return x.CanonicalParserVersion
 	}
 	return ""
+}
+
+func (x *PrepareUpdateRequest) GetPreHashedValueHash() []byte {
+	if x != nil {
+		return x.PreHashedValueHash
+	}
+	return nil
 }
 
 // Response from PrepareUpdate. Carries the same data as UpdateResponse so
@@ -1750,28 +1784,30 @@ var File_cdhs_smf_proto protoreflect.FileDescriptor
 
 const file_cdhs_smf_proto_rawDesc = "" +
 	"\n" +
-	"\x0ecdhs_smf.proto\x12\x13olympus.cdhs_smf.v1\"\xed\x01\n" +
+	"\x0ecdhs_smf.proto\x12\x13olympus.cdhs_smf.v1\"\xa0\x02\n" +
 	"\rUpdateRequest\x12\x19\n" +
 	"\bshard_id\x18\x01 \x01(\tR\ashardId\x12=\n" +
 	"\n" +
 	"record_key\x18\x02 \x01(\v2\x1e.olympus.cdhs_smf.v1.RecordKeyR\trecordKey\x12+\n" +
 	"\x11canonical_content\x18\x03 \x01(\fR\x10canonicalContent\x12\x1b\n" +
 	"\tparser_id\x18\x04 \x01(\tR\bparserId\x128\n" +
-	"\x18canonical_parser_version\x18\x05 \x01(\tR\x16canonicalParserVersion\"\xca\x01\n" +
+	"\x18canonical_parser_version\x18\x05 \x01(\tR\x16canonicalParserVersion\x121\n" +
+	"\x15pre_hashed_value_hash\x18\x06 \x01(\fR\x12preHashedValueHash\"\xca\x01\n" +
 	"\x0eUpdateResponse\x12\x19\n" +
 	"\bnew_root\x18\x01 \x01(\fR\anewRoot\x12\x1d\n" +
 	"\n" +
 	"global_key\x18\x02 \x01(\fR\tglobalKey\x12&\n" +
 	"\x0fleaf_value_hash\x18\x03 \x01(\fR\rleafValueHash\x129\n" +
 	"\x06deltas\x18\x04 \x03(\v2!.olympus.cdhs_smf.v1.SmtNodeDeltaR\x06deltas\x12\x1b\n" +
-	"\ttree_size\x18\x05 \x01(\x04R\btreeSize\"\xf4\x01\n" +
+	"\ttree_size\x18\x05 \x01(\x04R\btreeSize\"\xa7\x02\n" +
 	"\x14PrepareUpdateRequest\x12\x19\n" +
 	"\bshard_id\x18\x01 \x01(\tR\ashardId\x12=\n" +
 	"\n" +
 	"record_key\x18\x02 \x01(\v2\x1e.olympus.cdhs_smf.v1.RecordKeyR\trecordKey\x12+\n" +
 	"\x11canonical_content\x18\x03 \x01(\fR\x10canonicalContent\x12\x1b\n" +
 	"\tparser_id\x18\x04 \x01(\tR\bparserId\x128\n" +
-	"\x18canonical_parser_version\x18\x05 \x01(\tR\x16canonicalParserVersion\"\x97\x02\n" +
+	"\x18canonical_parser_version\x18\x05 \x01(\tR\x16canonicalParserVersion\x121\n" +
+	"\x15pre_hashed_value_hash\x18\x06 \x01(\fR\x12preHashedValueHash\"\x97\x02\n" +
 	"\x15PrepareUpdateResponse\x12%\n" +
 	"\x0etransaction_id\x18\x01 \x01(\tR\rtransactionId\x12\x19\n" +
 	"\bnew_root\x18\x02 \x01(\fR\anewRoot\x12\x1d\n" +

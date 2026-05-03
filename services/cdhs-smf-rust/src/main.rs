@@ -90,6 +90,48 @@ const DEFAULT_SOCKET_PATH: &str = "/run/olympus/cdhs-smf.sock";
 /// large" error.
 const GRPC_MAX_MESSAGE_BYTES: usize = 32 * 1024 * 1024;
 
+/// Resolve the leaf value hash from a request that carries either
+/// `canonical_content` (which the service hashes) OR `pre_hashed_value_hash`
+/// (which the service uses verbatim). The two fields are mutually exclusive:
+///
+///   - both empty           → invalid_argument
+///   - both non-empty       → invalid_argument
+///   - canonical_content    → BLAKE3(canonical_content)
+///   - pre_hashed (32B)     → returned as-is
+///   - pre_hashed (!= 32B)  → invalid_argument
+///
+/// This is the single point where /v1/queue-leaf-hash avoids the
+/// "Rust hashes the already-hashed value a second time" bug: when the Go
+/// sequencer signals "this is already a leaf value hash", we must NOT
+/// run BLAKE3 over it again.
+fn resolve_leaf_value_hash(
+    canonical_content: &[u8],
+    pre_hashed_value_hash: &[u8],
+) -> Result<[u8; 32], Status> {
+    let has_content = !canonical_content.is_empty();
+    let has_prehash = !pre_hashed_value_hash.is_empty();
+    match (has_content, has_prehash) {
+        (false, false) => Err(Status::invalid_argument(
+            "exactly one of canonical_content or pre_hashed_value_hash must be set",
+        )),
+        (true, true) => Err(Status::invalid_argument(
+            "canonical_content and pre_hashed_value_hash are mutually exclusive",
+        )),
+        (true, false) => Ok(crypto::hash_canonical_content(canonical_content)),
+        (false, true) => {
+            if pre_hashed_value_hash.len() != 32 {
+                return Err(Status::invalid_argument(format!(
+                    "pre_hashed_value_hash must be exactly 32 bytes, got {}",
+                    pre_hashed_value_hash.len()
+                )));
+            }
+            let mut out = [0u8; 32];
+            out.copy_from_slice(pre_hashed_value_hash);
+            Ok(out)
+        }
+    }
+}
+
 #[tonic::async_trait]
 impl CdhsSmfServiceTrait for CdhsSmfService {
     async fn update(
@@ -109,8 +151,13 @@ impl CdhsSmfServiceTrait for CdhsSmfService {
         )
         .map_err(|e| Status::invalid_argument(format!("invalid record key: {}", e)))?;
 
-        // Hash the canonical content
-        let leaf_value_hash = crypto::hash_canonical_content(&req.canonical_content);
+        // Hash the canonical content, OR use the supplied pre-computed
+        // value hash directly (mutually exclusive — see
+        // `resolve_leaf_value_hash`). Resolving BEFORE the parser-id
+        // checks keeps the failure modes stable: callers already get
+        // invalid_argument on either error class.
+        let leaf_value_hash =
+            resolve_leaf_value_hash(&req.canonical_content, &req.pre_hashed_value_hash)?;
 
         // ADR-0003: parser_id and canonical_parser_version are bound into
         // the leaf hash domain. Both fields MUST be non-empty strings and
@@ -175,7 +222,8 @@ impl CdhsSmfServiceTrait for CdhsSmfService {
         )
         .map_err(|e| Status::invalid_argument(format!("invalid record key: {}", e)))?;
 
-        let leaf_value_hash = crypto::hash_canonical_content(&req.canonical_content);
+        let leaf_value_hash =
+            resolve_leaf_value_hash(&req.canonical_content, &req.pre_hashed_value_hash)?;
 
         if req.parser_id.is_empty() {
             return Err(Status::invalid_argument(
@@ -694,5 +742,59 @@ async fn shutdown_signal() {
         _ = tokio::signal::ctrl_c() => {
             info!("SIGINT received — beginning graceful shutdown");
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Empty inputs (the default proto state) MUST be rejected so a buggy
+    /// client cannot accidentally store a leaf whose value is BLAKE3(""):
+    /// that hash would collide with every other empty-content record and
+    /// silently corrupt the SMT.
+    #[test]
+    fn resolve_leaf_value_hash_rejects_both_empty() {
+        let err = resolve_leaf_value_hash(&[], &[]).unwrap_err();
+        assert_eq!(err.code(), tonic::Code::InvalidArgument);
+    }
+
+    /// Setting both fields is ambiguous; reject so a misconfigured client
+    /// is loud about it instead of silently preferring one path.
+    #[test]
+    fn resolve_leaf_value_hash_rejects_both_set() {
+        let err = resolve_leaf_value_hash(b"content", &[1u8; 32]).unwrap_err();
+        assert_eq!(err.code(), tonic::Code::InvalidArgument);
+    }
+
+    /// canonical_content path: hash matches BLAKE3(content) — the historical
+    /// /v1/queue-leaf behaviour, unchanged by this refactor.
+    #[test]
+    fn resolve_leaf_value_hash_canonical_content_is_blake3() {
+        let got = resolve_leaf_value_hash(b"hello", &[]).unwrap();
+        let want = crypto::hash_canonical_content(b"hello");
+        assert_eq!(got, want);
+    }
+
+    /// REGRESSION (double-hashing fix): when a 32-byte pre_hashed_value_hash
+    /// is supplied, the service MUST return it unchanged. Without this the
+    /// /v1/queue-leaf-hash path stored BLAKE3(value_hash) instead of the
+    /// caller's value_hash, breaking inclusion-proof verification by
+    /// external Python / Halo2 verifiers that derived value_hash themselves.
+    #[test]
+    fn resolve_leaf_value_hash_pre_hashed_is_returned_verbatim() {
+        let supplied = [0xABu8; 32];
+        let got = resolve_leaf_value_hash(&[], &supplied).unwrap();
+        assert_eq!(got, supplied, "pre-hashed value MUST NOT be re-hashed");
+    }
+
+    /// Wrong-length pre_hashed_value_hash (e.g. a hex-encoded 64-byte string
+    /// passed by mistake) MUST be rejected, not silently truncated/padded.
+    #[test]
+    fn resolve_leaf_value_hash_rejects_wrong_length_pre_hashed() {
+        let err = resolve_leaf_value_hash(&[], &[0u8; 16]).unwrap_err();
+        assert_eq!(err.code(), tonic::Code::InvalidArgument);
+        let err = resolve_leaf_value_hash(&[], &[0u8; 33]).unwrap_err();
+        assert_eq!(err.code(), tonic::Code::InvalidArgument);
     }
 }

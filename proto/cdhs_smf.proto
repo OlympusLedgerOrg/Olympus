@@ -77,7 +77,11 @@ message UpdateRequest {
   // Record key components (type, id, version, etc.)
   RecordKey record_key = 2;
 
-  // Canonicalized record content (already canonicalized)
+  // Canonicalized record content (already canonicalized).
+  //
+  // Mutually exclusive with `pre_hashed_value_hash`: if that field is set,
+  // `canonical_content` MUST be empty and the service uses the supplied
+  // 32-byte hash directly as the leaf value, without re-hashing.
   bytes canonical_content = 3;
 
   // Parser identity ("<name>@<version>", e.g. "docling@2.3.1"). Required by
@@ -89,6 +93,13 @@ message UpdateRequest {
   // by ADR-0003: this is bound into the leaf hash domain. Empty string is
   // rejected by the service.
   string canonical_parser_version = 5;
+
+  // Pre-computed leaf value hash (exactly 32 bytes). When set, the service
+  // skips the BLAKE3 of `canonical_content` and uses this value directly.
+  // Used by the `/v1/queue-leaf-hash` API path where the caller already
+  // holds an opaque 32-byte commitment and does NOT want it re-hashed.
+  // Either this field OR `canonical_content` MUST be supplied (not both).
+  bytes pre_hashed_value_hash = 6;
 }
 
 // Response from update operation
@@ -120,7 +131,11 @@ message PrepareUpdateRequest {
   // Record key components (type, id, version, etc.)
   RecordKey record_key = 2;
 
-  // Canonicalized record content (already canonicalized)
+  // Canonicalized record content (already canonicalized).
+  //
+  // Mutually exclusive with `pre_hashed_value_hash`: if that field is set,
+  // `canonical_content` MUST be empty and the service uses the supplied
+  // 32-byte hash directly as the leaf value, without re-hashing.
   bytes canonical_content = 3;
 
   // Parser identity ("<name>@<version>"). Required by ADR-0003 and bound
@@ -131,6 +146,13 @@ message PrepareUpdateRequest {
   // Required by ADR-0003 and bound into the leaf hash domain. Empty string
   // is rejected by the service.
   string canonical_parser_version = 5;
+
+  // Pre-computed leaf value hash (exactly 32 bytes). When set, the service
+  // skips the BLAKE3 of `canonical_content` and uses this value directly.
+  // Used by the `/v1/queue-leaf-hash` API path where the caller already
+  // holds an opaque 32-byte commitment and does NOT want it re-hashed.
+  // Either this field OR `canonical_content` MUST be supplied (not both).
+  bytes pre_hashed_value_hash = 6;
 }
 
 // Response from PrepareUpdate. Carries the same data as UpdateResponse so

@@ -52,7 +52,7 @@ const DefaultStorageCommitTimeout = 10 * time.Second
 // CommitPreparedUpdate to validate the rollback path.
 type smtBackend interface {
 	Canonicalize(ctx context.Context, contentType string, content []byte) (*pb.CanonicalizeResponse, error)
-	PrepareUpdate(ctx context.Context, shardID string, recordKey *pb.RecordKey, canonicalContent []byte, parserID string, canonicalParserVersion string) (*pb.PrepareUpdateResponse, error)
+	PrepareUpdate(ctx context.Context, shardID string, recordKey *pb.RecordKey, canonicalContent []byte, preHashedValueHash []byte, parserID string, canonicalParserVersion string) (*pb.PrepareUpdateResponse, error)
 	CommitPreparedUpdate(ctx context.Context, transactionID string) (*pb.CommitPreparedUpdateResponse, error)
 	AbortPreparedUpdate(ctx context.Context, transactionID string) error
 	ProveInclusion(ctx context.Context, shardID string, recordKey *pb.RecordKey, root []byte) (*pb.ProveInclusionResponse, error)
@@ -261,22 +261,44 @@ type preparedRecord struct {
 // "all-or-nothing": either they receive a *preparedRecord they may safely
 // commit, or they receive an error and the LRU is already cleaned up.
 //
-// `canonicalContent` is the raw payload to send to PrepareUpdate. For the
-// /v1/queue-leaf path the caller passes Canonicalize's output; for
-// /v1/queue-leaf-hash the caller passes the pre-computed value hash
-// directly (matching the existing single-phase behaviour).
+// Exactly one of `canonicalContent` and `preHashedValueHash` MUST be
+// non-empty:
+//   - For /v1/queue-leaf the caller passes Canonicalize's output as
+//     `canonicalContent` and `nil` as `preHashedValueHash`.
+//   - For /v1/queue-leaf-hash the caller passes `nil` as `canonicalContent`
+//     and the user-supplied 32-byte value as `preHashedValueHash`. The
+//     Rust service uses it verbatim — it does NOT hash it again — so the
+//     leaf value committed to the SMT equals what the caller already
+//     published off-band (regression-tested in the Rust suite as
+//     `resolve_leaf_value_hash_pre_hashed_is_returned_verbatim`).
+//
+// `metrics.PreparedPending` is incremented inside this helper as soon as
+// PrepareUpdate returns successfully, so that the matching decrement in
+// `bestEffortAbort` (called below on contract or sign failure) does not
+// underflow the gauge. Callers MUST therefore NOT increment the gauge
+// themselves; the matching decrement is provided by either
+// `commitPrepared` (success) or `bestEffortAbort` (any failure path).
 func (s *Sequencer) prepareRecord(
 	ctx context.Context,
 	shardID string,
 	recordKey *pb.RecordKey,
 	canonicalContent []byte,
+	preHashedValueHash []byte,
 	parserID string,
 	canonicalParserVersion string,
 ) (*preparedRecord, error) {
-	prepResp, err := s.smtClient.PrepareUpdate(ctx, shardID, recordKey, canonicalContent, parserID, canonicalParserVersion)
+	prepResp, err := s.smtClient.PrepareUpdate(ctx, shardID, recordKey, canonicalContent, preHashedValueHash, parserID, canonicalParserVersion)
 	if err != nil {
 		return nil, fmt.Errorf("prepare update: %w", err)
 	}
+
+	// PrepareUpdate succeeded → there is now a live entry in the Rust LRU
+	// that we own. Bump the gauge BEFORE any branch that may call
+	// `bestEffortAbort` (which decrements it). Doing so here, in the one
+	// place that creates the prepared transaction, removes the previous
+	// race where contract-validation or SignRoot failure decremented the
+	// gauge below the matching increment in the caller.
+	s.metrics.PreparedPending.Add(1)
 
 	// Validate hash-length contract before anything else; the same
 	// invariants we previously checked on UpdateResponse must hold for
@@ -440,13 +462,12 @@ func (s *Sequencer) handleQueueLeaf(w http.ResponseWriter, r *http.Request) {
 	// + deltas in the Rust service WITHOUT mutating live state. SignRoot
 	// is also done here (also read-only) so the durable row can carry a
 	// signature in the same Postgres transaction.
-	prepared, err := s.prepareRecord(ctx, req.ShardID, recordKey, canonResp.CanonicalContent, req.ParserID, req.CanonicalParserVersion)
+	prepared, err := s.prepareRecord(ctx, req.ShardID, recordKey, canonResp.CanonicalContent, nil, req.ParserID, req.CanonicalParserVersion)
 	if err != nil {
 		log.Printf("PrepareUpdate / SignRoot failed: %v", err)
 		http.Error(w, "SMT prepare failed", http.StatusInternalServerError)
 		return
 	}
-	s.metrics.PreparedPending.Add(1)
 
 	// H-2 two-phase commit, step (b): durable Postgres write. Bounded by
 	// `storageCommitTimeout` (default 10s) so we abort the prepared txn
@@ -603,13 +624,12 @@ func (s *Sequencer) handleQueueLeaves(w http.ResponseWriter, r *http.Request) {
 			Metadata:   rec.Metadata,
 		}
 
-		pr, err := s.prepareRecord(ctx, rec.ShardID, recordKey, canonResp.CanonicalContent, rec.ParserID, rec.CanonicalParserVersion)
+		pr, err := s.prepareRecord(ctx, rec.ShardID, recordKey, canonResp.CanonicalContent, nil, rec.ParserID, rec.CanonicalParserVersion)
 		if err != nil {
 			log.Printf("PrepareUpdate / SignRoot failed (record %d of %d, partial batch committed: %d records): %v", i+1, len(req.Records), len(results), err)
 			http.Error(w, "SMT prepare failed", http.StatusInternalServerError)
 			return
 		}
-		s.metrics.PreparedPending.Add(1)
 
 		storeCtx, cancel := s.withStorageTimeout(ctx)
 		storeErr := s.storage.StoreLeafAndDeltas(
@@ -732,9 +752,11 @@ func (s *Sequencer) handleQueueLeafHash(w http.ResponseWriter, r *http.Request) 
 
 	ctx := r.Context()
 
-	// Pass the pre-computed value_hash directly as canonical_content.
-	// The Rust service will incorporate parser_id + canonical_parser_version
-	// into the leaf hash domain exactly as it does for raw-content leaves.
+	// Build the record key. The pre-computed value hash is passed to
+	// prepareRecord via the dedicated `preHashedValueHash` argument so the
+	// Rust service uses it as the leaf value verbatim (no second BLAKE3).
+	// parser_id + canonical_parser_version are still bound into the leaf
+	// hash domain on both code paths.
 	recordKey := &pb.RecordKey{
 		RecordType: req.RecordType,
 		RecordId:   req.RecordID,
@@ -743,13 +765,16 @@ func (s *Sequencer) handleQueueLeafHash(w http.ResponseWriter, r *http.Request) 
 	}
 
 	// H-2 two-phase commit (a): PrepareUpdate + SignRoot. No SMT mutation.
-	prepared, err := s.prepareRecord(ctx, req.ShardID, recordKey, req.ValueHash, req.ParserID, req.CanonicalParserVersion)
+	// Pass the user's pre-computed value hash via `preHashedValueHash` so
+	// the Rust service uses it verbatim. Passing it as `canonicalContent`
+	// would cause Rust to BLAKE3 it again, breaking inclusion-proof
+	// verification by callers that already hold the leaf value hash.
+	prepared, err := s.prepareRecord(ctx, req.ShardID, recordKey, nil, req.ValueHash, req.ParserID, req.CanonicalParserVersion)
 	if err != nil {
 		log.Printf("PrepareUpdate / SignRoot failed (pre-hashed): %v", err)
 		http.Error(w, "SMT prepare failed", http.StatusInternalServerError)
 		return
 	}
-	s.metrics.PreparedPending.Add(1)
 
 	// (b) durable Postgres write, bounded by storageCommitTimeout.
 	storeCtx, cancel := s.withStorageTimeout(ctx)

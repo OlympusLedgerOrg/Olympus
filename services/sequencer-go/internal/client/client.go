@@ -106,11 +106,17 @@ func (c *CdhsSmfClient) Update(ctx context.Context, shardID string, recordKey *p
 // A successful PrepareUpdate does NOT mutate the live in-memory SMT — the
 // new root and deltas it returns reflect what the SMT *will* hold after the
 // matching CommitPreparedUpdate runs.
-func (c *CdhsSmfClient) PrepareUpdate(ctx context.Context, shardID string, recordKey *pb.RecordKey, canonicalContent []byte, parserID string, canonicalParserVersion string) (*pb.PrepareUpdateResponse, error) {
+//
+// Exactly one of `canonicalContent` and `preHashedValueHash` MUST be
+// non-empty. If `preHashedValueHash` is set, the Rust service uses it
+// verbatim as the leaf value (used by /v1/queue-leaf-hash); otherwise the
+// service hashes `canonicalContent` with BLAKE3.
+func (c *CdhsSmfClient) PrepareUpdate(ctx context.Context, shardID string, recordKey *pb.RecordKey, canonicalContent []byte, preHashedValueHash []byte, parserID string, canonicalParserVersion string) (*pb.PrepareUpdateResponse, error) {
 	req := &pb.PrepareUpdateRequest{
 		ShardId:                shardID,
 		RecordKey:              recordKey,
 		CanonicalContent:       canonicalContent,
+		PreHashedValueHash:     preHashedValueHash,
 		ParserId:               parserID,
 		CanonicalParserVersion: canonicalParserVersion,
 	}

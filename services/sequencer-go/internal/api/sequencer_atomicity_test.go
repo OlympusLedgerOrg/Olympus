@@ -90,7 +90,7 @@ func (f *fakeSMT) Canonicalize(_ context.Context, _ string, content []byte) (*pb
 	return &pb.CanonicalizeResponse{CanonicalContent: content}, nil
 }
 
-func (f *fakeSMT) PrepareUpdate(_ context.Context, _ string, recordKey *pb.RecordKey, canonicalContent []byte, _ string, _ string) (*pb.PrepareUpdateResponse, error) {
+func (f *fakeSMT) PrepareUpdate(_ context.Context, _ string, recordKey *pb.RecordKey, canonicalContent []byte, preHashedValueHash []byte, _ string, _ string) (*pb.PrepareUpdateResponse, error) {
 	f.prepareCalls.Add(1)
 	f.logOp("prepare")
 	if f.prepareErr != nil {
@@ -111,8 +111,15 @@ func (f *fakeSMT) PrepareUpdate(_ context.Context, _ string, recordKey *pb.Recor
 	}
 	gk := make([]byte, 32)
 	copy(gk, []byte(recordKey.RecordType+":"+recordKey.RecordId))
+	// Mirror the Rust service's resolve_leaf_value_hash semantics: when
+	// the caller supplies a 32-byte pre-hashed value, we store it
+	// verbatim (no second hash). Otherwise fall back to the raw content.
 	vh := make([]byte, 32)
-	copy(vh, canonicalContent)
+	if len(preHashedValueHash) == 32 {
+		copy(vh, preHashedValueHash)
+	} else {
+		copy(vh, canonicalContent)
+	}
 
 	deltas := make([]*pb.SmtNodeDelta, 256)
 	for i := range deltas {
@@ -502,8 +509,8 @@ type contractViolatingSMTWrap struct {
 func (c *contractViolatingSMTWrap) Canonicalize(ctx context.Context, ct string, content []byte) (*pb.CanonicalizeResponse, error) {
 	return c.inner.Canonicalize(ctx, ct, content)
 }
-func (c *contractViolatingSMTWrap) PrepareUpdate(ctx context.Context, shardID string, recordKey *pb.RecordKey, canonicalContent []byte, parserID string, canonicalParserVersion string) (*pb.PrepareUpdateResponse, error) {
-	resp, err := c.inner.PrepareUpdate(ctx, shardID, recordKey, canonicalContent, parserID, canonicalParserVersion)
+func (c *contractViolatingSMTWrap) PrepareUpdate(ctx context.Context, shardID string, recordKey *pb.RecordKey, canonicalContent []byte, preHashedValueHash []byte, parserID string, canonicalParserVersion string) (*pb.PrepareUpdateResponse, error) {
+	resp, err := c.inner.PrepareUpdate(ctx, shardID, recordKey, canonicalContent, preHashedValueHash, parserID, canonicalParserVersion)
 	if err != nil {
 		return resp, err
 	}
@@ -697,12 +704,12 @@ func TestConcurrentPrepareCommit_StalePreparesRejected(t *testing.T) {
 
 	// Two prepares against the empty live root.
 	p1, err := smt.PrepareUpdate(context.Background(), "s",
-		&pb.RecordKey{RecordType: "doc", RecordId: "1"}, []byte("a"), "p@1", "v1")
+		&pb.RecordKey{RecordType: "doc", RecordId: "1"}, []byte("a"), nil, "p@1", "v1")
 	if err != nil {
 		t.Fatal(err)
 	}
 	p2, err := smt.PrepareUpdate(context.Background(), "s",
-		&pb.RecordKey{RecordType: "doc", RecordId: "2"}, []byte("b"), "p@1", "v1")
+		&pb.RecordKey{RecordType: "doc", RecordId: "2"}, []byte("b"), nil, "p@1", "v1")
 	if err != nil {
 		t.Fatal(err)
 	}

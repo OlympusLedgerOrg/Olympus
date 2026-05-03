@@ -85,16 +85,51 @@ impl PreparedTxStore {
     /// oldest entry if the LRU is at capacity. Returns the number of
     /// currently-tracked entries after insertion (used for the
     /// `prepared_pending` metric).
+    ///
+    /// Before inserting, all expired entries are pruned. This is critical
+    /// under abandoned-prepare load: without the prune, the underlying
+    /// `LruCache` evicts strictly by recency-of-use, which means a brand-new
+    /// live transaction can displace another live transaction while a stale
+    /// expired entry sits at the head of the cache untouched. By reaping
+    /// expired entries first we ensure capacity pressure is only ever
+    /// resolved against entries that are still meaningful.
     pub fn insert(&self, transaction_id: String, prepared: PreparedUpdate) -> usize {
+        let now = Instant::now();
         let mut cache = self.inner.lock().expect("PreparedTxStore mutex poisoned");
+        Self::prune_expired_locked(&mut cache, &self.ttl, now);
         cache.put(
             transaction_id,
             Entry {
                 prepared,
-                inserted_at: Instant::now(),
+                inserted_at: now,
             },
         );
         cache.len()
+    }
+
+    /// Walk the cache and pop every entry whose TTL has elapsed relative to
+    /// `now`. Caller MUST hold the cache mutex. Returns the number of
+    /// entries reaped. Factored out so `insert` and `prune_expired` can
+    /// share a single implementation.
+    fn prune_expired_locked(
+        cache: &mut LruCache<String, Entry>,
+        ttl: &Duration,
+        now: Instant,
+    ) -> usize {
+        // `iter()` yields entries in MRU→LRU order; we collect keys first
+        // so we don't mutate while iterating. Worst case: O(capacity), but
+        // in steady state the cache is small.
+        let mut to_remove: Vec<String> = Vec::new();
+        for (k, v) in cache.iter() {
+            if now.duration_since(v.inserted_at) > *ttl {
+                to_remove.push(k.clone());
+            }
+        }
+        let n = to_remove.len();
+        for k in to_remove {
+            cache.pop(&k);
+        }
+        n
     }
 
     /// Remove and return the prepared transaction, if present and not
@@ -135,18 +170,7 @@ impl PreparedTxStore {
     #[allow(dead_code)]
     pub fn prune_expired(&self) -> usize {
         let mut cache = self.inner.lock().expect("PreparedTxStore mutex poisoned");
-        let now = Instant::now();
-        let mut to_remove: Vec<String> = Vec::new();
-        for (k, v) in cache.iter() {
-            if now.duration_since(v.inserted_at) > self.ttl {
-                to_remove.push(k.clone());
-            }
-        }
-        let n = to_remove.len();
-        for k in to_remove {
-            cache.pop(&k);
-        }
-        n
+        Self::prune_expired_locked(&mut cache, &self.ttl, Instant::now())
     }
 }
 
@@ -233,8 +257,48 @@ mod tests {
         store.insert("y".to_string(), fake_prepared());
         std::thread::sleep(Duration::from_millis(15));
         store.insert("fresh".to_string(), fake_prepared());
+        // After the third insert, x and y should already have been pruned
+        // by `insert`'s prune-on-insert pass — see the test below — so
+        // explicit prune_expired() now reports zero. This makes the public
+        // `prune_expired()` an idempotent best-effort second sweep.
         let pruned = store.prune_expired();
-        assert_eq!(pruned, 2);
+        assert_eq!(pruned, 0);
         assert!(store.take("fresh").is_some());
+    }
+
+    /// REGRESSION: prior to the prune-on-insert fix, the LRU could evict a
+    /// live in-flight transaction in favor of an expired-but-not-yet-pruned
+    /// one. Setup: capacity=2, fill with two stale entries, sleep past TTL,
+    /// then insert a single fresh entry — the stale entries must be reaped
+    /// during the insert (not LRU-evicted to make room) so the cache has
+    /// exactly one entry afterwards instead of a stale one + the fresh one.
+    #[test]
+    fn insert_prunes_expired_before_capacity_eviction() {
+        let store = PreparedTxStore::new(2, Duration::from_millis(10));
+        store.insert("stale-a".to_string(), fake_prepared());
+        store.insert("stale-b".to_string(), fake_prepared());
+        std::thread::sleep(Duration::from_millis(25));
+        let after = store.insert("fresh".to_string(), fake_prepared());
+        // Both stale entries must have been removed by the prune pass, so
+        // only "fresh" remains. Without the fix, len() would be 2 (one
+        // stale entry would have been kept and one LRU-evicted to make
+        // room for "fresh").
+        assert_eq!(after, 1, "insert must prune expired entries before LRU eviction");
+        assert!(store.take("stale-a").is_none());
+        assert!(store.take("stale-b").is_none());
+        assert!(store.take("fresh").is_some());
+    }
+
+    /// REGRESSION (cap=1 boundary): a fresh insert into a full cache whose
+    /// only entry is expired must prune the expired entry and keep the
+    /// fresh one — NOT LRU-evict the fresh one in favor of the stale one.
+    #[test]
+    fn insert_at_capacity_keeps_fresh_over_stale() {
+        let store = PreparedTxStore::new(1, Duration::from_millis(10));
+        store.insert("stale".to_string(), fake_prepared());
+        std::thread::sleep(Duration::from_millis(25));
+        store.insert("fresh".to_string(), fake_prepared());
+        assert!(store.take("stale").is_none());
+        assert!(store.take("fresh").is_some(), "fresh entry must survive prune+insert");
     }
 }
