@@ -1,5 +1,6 @@
 import { BrowserRouter, Routes, Route } from "react-router-dom";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { SkinProvider } from "./skins/SkinProvider";
 import Layout from "./components/Layout";
 import OnboardPage from "./pages/OnboardPage";
 import HomePage from "./pages/HomePage";
@@ -20,18 +21,20 @@ const queryClient = new QueryClient({
 export default function App() {
   return (
     <QueryClientProvider client={queryClient}>
-      <BrowserRouter>
-        <Layout>
-          <Routes>
-            <Route path="/" element={<OnboardPage />} />
-            <Route path="/verify" element={<HomePage />} />
-            <Route path="/record/:proof_id" element={<RecordDetailPage />} />
-            <Route path="/dataset/:dataset_id" element={<DatasetPage />} />
-            <Route path="/ingest" element={<IngestPage />} />
-            <Route path="/admin" element={<AdminPage />} />
-          </Routes>
-        </Layout>
-      </BrowserRouter>
+      <SkinProvider>
+        <BrowserRouter>
+          <Layout>
+            <Routes>
+              <Route path="/" element={<OnboardPage />} />
+              <Route path="/verify" element={<HomePage />} />
+              <Route path="/record/:proof_id" element={<RecordDetailPage />} />
+              <Route path="/dataset/:dataset_id" element={<DatasetPage />} />
+              <Route path="/ingest" element={<IngestPage />} />
+              <Route path="/admin" element={<AdminPage />} />
+            </Routes>
+          </Layout>
+        </BrowserRouter>
+      </SkinProvider>
     </QueryClientProvider>
   );
 }

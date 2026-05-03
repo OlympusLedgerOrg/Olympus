@@ -4,32 +4,60 @@ import GlyphRain from "./GlyphRain";
 import CrtOverlay from "./CrtOverlay";
 import SkylineBackdrop from "./SkylineBackdrop";
 import GlitchMentorPopups from "./GlitchMentorPopups";
+import SkinSelector from "./SkinSelector";
+import { useSkin } from "../skins/SkinContext";
 
 export default function Layout({ children }: { children: React.ReactNode }) {
   const location = useLocation();
+  const { skin } = useSkin();
+  const fx = skin.effects ?? {};
+
+  // Derive header/nav colours from current skin so chrome stays readable.
+  const isLight = skin.id === "basic";
+  const isAmber = skin.id === "terminal";
+  const headerBg = isLight ? "rgba(255,255,255,0.97)" : "rgba(0,0,0,0.92)";
+  const headerBorder = isLight
+    ? "1px solid #e2e8f0"
+    : isAmber
+      ? "1px solid rgba(228,181,90,0.18)"
+      : "1px solid rgba(0,255,65,0.18)";
+
+  const navActive = isLight ? "#1d4ed8" : isAmber ? "#e4b55a" : "#00FF41";
+  const navInactive = isLight
+    ? "#64748b"
+    : isAmber
+      ? "rgba(228,181,90,0.45)"
+      : "rgba(0,255,65,0.45)";
+  const navGlow = (active: boolean) => {
+    if (!active) return "none";
+    if (isLight) return "none";
+    if (isAmber) return "0 0 6px #e4b55a";
+    return "0 0 6px #00FF41";
+  };
+  const logoAccent = isLight ? "#1d4ed8" : "#ff0055";
+  const logoText = isLight ? "#0f172a" : "inherit";
+  const encryptedColor = isLight ? "#dc2626" : isAmber ? "#e4b55a" : "#ff0055";
 
   return (
     <div
+      className={skin.classes.page}
       style={{
-        backgroundColor: "#050505",
-        color: "#00FF41",
-        minHeight: "100vh",
         fontFamily: "'DM Mono', monospace",
         position: "relative",
         overflowX: "hidden",
       }}
     >
-      <SkylineBackdrop />
-      <CrtOverlay />
-      <GlyphRain active />
-      <GlitchMentorPopups />
+      {fx.showSkyscraperBackdrop && <SkylineBackdrop />}
+      {fx.showScanlines && <CrtOverlay />}
+      {fx.showGlitchMentor && <GlitchMentorPopups />}
+      {skin.id === "glitch" && <GlyphRain active />}
 
       {/* Header */}
       <header
         style={{
           padding: "1.1rem 2rem",
-          borderBottom: "1px solid rgba(0,255,65,0.18)",
-          background: "rgba(0,0,0,0.92)",
+          borderBottom: headerBorder,
+          background: headerBg,
           position: "relative",
           zIndex: 10,
         }}
@@ -50,62 +78,71 @@ export default function Layout({ children }: { children: React.ReactNode }) {
               alignItems: "center",
               gap: "0.85rem",
               textDecoration: "none",
-              color: "inherit",
+              color: logoText,
             }}
           >
-            <span style={{ fontSize: "1.3rem", color: "#ff0055" }}>[ø]</span>
+            <span style={{ fontSize: "1.3rem", color: logoAccent }}>[ø]</span>
             <span style={{ letterSpacing: "0.32em", fontSize: "0.78rem" }}>
               OLYMPUS_PROTOCØL
             </span>
           </Link>
 
-          <div style={{ display: "flex", alignItems: "center", gap: "2rem" }}>
+          <div style={{ display: "flex", alignItems: "center", gap: "1.25rem" }}>
             <nav style={{ display: "flex", gap: "1.5rem" }}>
-              <Link
-                to="/"
-                style={{
-                  fontSize: "0.62rem",
-                  letterSpacing: "0.1em",
-                  textDecoration: "none",
-                  color: location.pathname === "/" ? "#00FF41" : "rgba(0,255,65,0.45)",
-                  textShadow: location.pathname === "/" ? "0 0 6px #00FF41" : "none",
-                  transition: "all 0.15s",
-                }}
-              >
-                ACCESS
-              </Link>
-              <Link
-                to="/verify"
-                style={{
-                  fontSize: "0.62rem",
-                  letterSpacing: "0.1em",
-                  textDecoration: "none",
-                  color: location.pathname === "/verify" ? "#00FF41" : "rgba(0,255,65,0.45)",
-                  textShadow: location.pathname === "/verify" ? "0 0 6px #00FF41" : "none",
-                  transition: "all 0.15s",
-                }}
-              >
-                VERIFY
-              </Link>
+              {[
+                { to: "/", label: "ACCESS" },
+                { to: "/verify", label: "VERIFY" },
+              ].map(({ to, label }) => {
+                const active = location.pathname === to;
+                return (
+                  <Link
+                    key={to}
+                    to={to}
+                    style={{
+                      fontSize: "0.62rem",
+                      letterSpacing: "0.1em",
+                      textDecoration: "none",
+                      color: active ? navActive : navInactive,
+                      textShadow: navGlow(active),
+                      transition: "all 0.15s",
+                    }}
+                  >
+                    {label}
+                  </Link>
+                );
+              })}
               <Link
                 to="/admin"
                 style={{
                   fontSize: "0.62rem",
                   letterSpacing: "0.1em",
                   textDecoration: "none",
-                  color: location.pathname === "/admin" ? "#ff0055" : "rgba(255,0,85,0.4)",
-                  textShadow: location.pathname === "/admin" ? "0 0 6px #ff0055" : "none",
+                  color:
+                    location.pathname === "/admin"
+                      ? isLight
+                        ? "#dc2626"
+                        : "#ff0055"
+                      : isLight
+                        ? "#ef4444"
+                        : "rgba(255,0,85,0.4)",
+                  textShadow:
+                    location.pathname === "/admin" && !isLight
+                      ? "0 0 6px #ff0055"
+                      : "none",
                   transition: "all 0.15s",
                 }}
               >
                 ADMIN
               </Link>
             </nav>
+
+            <SkinSelector />
+
             <div
               style={{
-                color: "#ff0055",
+                color: encryptedColor,
                 fontSize: "0.55rem",
-                animation: "flicker 2.4s infinite",
+                animation: skin.id === "glitch" ? "flicker 2.4s infinite" : "none",
                 letterSpacing: "0.08em",
               }}
             >
@@ -138,10 +175,10 @@ export default function Layout({ children }: { children: React.ReactNode }) {
       <footer
         style={{
           padding: "1.5rem",
-          borderTop: "1px solid rgba(0,255,65,0.08)",
+          borderTop: isLight ? "1px solid #e2e8f0" : "1px solid rgba(0,255,65,0.08)",
           textAlign: "center",
           fontSize: "0.55rem",
-          opacity: 0.3,
+          opacity: 0.4,
           letterSpacing: "0.1em",
           position: "relative",
           zIndex: 2,

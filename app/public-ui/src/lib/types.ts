@@ -153,9 +153,18 @@ export interface DatasetVerificationResponse {
 
 // ─── Local state types ────────────────────────────────────────────────────────
 
+export type Tab = "hash" | "file" | "json" | "proof";
+
 export interface RecentVerificationEntry {
   hash: string;
   type: "hash" | "file" | "json" | "proof";
   verdict: Verdict;
   timestamp: number;
+}
+
+/** Shape of the shared verdictResult state. */
+export interface VerdictState {
+  verdict: Verdict;
+  details: VerdictDetail[];
+  displayHash?: string;
 }

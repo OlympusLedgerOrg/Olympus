@@ -182,7 +182,7 @@ def write_deterministic_parquet(
     elif _PYARROW_AVAILABLE and isinstance(data, pa.Table):
         table = data
     else:
-        raise ValueError(f"data must be a pyarrow.Table or list[dict], got {type(data).__name__}")
+        raise TypeError(f"data must be a pyarrow.Table or list[dict], got {type(data).__name__}")
 
     if table.num_rows == 0:
         raise ValueError("Cannot write an empty table to Parquet")

@@ -491,11 +491,297 @@ details summary::-webkit-details-marker {
     grid-template-columns: 1fr;
   }
 
-  .input-row .cyber-button {
+  .input-row .cyber-button,
+  .input-row .basic-button,
+  .input-row .term-button {
     width: 100%;
   }
 
-  .tab-list .tab-btn {
+  .tab-list .tab-btn,
+  .tab-list .basic-tab,
+  .tab-list .basic-tab-active,
+  .tab-list .term-tab,
+  .tab-list .term-tab-active {
     min-width: 7.4rem;
   }
 }
+
+/* ═══════════════════════════════════════════════════════════
+   SKIN SYSTEM
+   ═══════════════════════════════════════════════════════════ */
+
+/* ── Page-level wrappers ─────────────────────────────────── */
+
+.skin-page-glitch {
+  background-color: #050505;
+  color: #00FF41;
+  min-height: 100vh;
+}
+
+.skin-page-basic {
+  background-color: #f0f4f8;
+  color: #0f172a;
+  min-height: 100vh;
+}
+
+.skin-page-terminal {
+  background-color: #0a0a0a;
+  color: #e4b55a;
+  min-height: 100vh;
+}
+
+/* Accent / muted text — resolved per skin via html.skin-* */
+
+html.skin-glitch .skin-accent { color: #00FF41; }
+html.skin-glitch .skin-muted  { color: rgba(0,255,65,0.55); }
+
+html.skin-basic .skin-accent  { color: #1d4ed8; }
+html.skin-basic .skin-muted   { color: #64748b; }
+
+html.skin-terminal .skin-accent { color: #e4b55a; }
+html.skin-terminal .skin-muted  { color: rgba(228,181,90,0.55); }
+
+/* ── Skin: basic ─────────────────────────────────────────── */
+
+.basic-panel {
+  background: #ffffff;
+  border: 1px solid #e2e8f0;
+  border-radius: 8px;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.07);
+}
+
+.basic-card {
+  background: #ffffff;
+  border: 1px solid #e2e8f0;
+  border-radius: 6px;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.05);
+}
+
+.basic-button {
+  background: #0f172a;
+  color: #ffffff;
+  border: 1px solid #0f172a;
+  border-radius: 6px;
+  padding: 0.7rem 1.4rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  font-size: 0.72rem;
+  font-family: "DM Mono", monospace;
+  cursor: pointer;
+  transition: all 0.15s;
+  white-space: nowrap;
+}
+.basic-button:hover:not(:disabled) { background: #1e293b; }
+.basic-button:disabled { opacity: 0.5; cursor: not-allowed; }
+
+.basic-icon-btn {
+  appearance: none;
+  min-height: 2rem;
+  padding: 0.36rem 0.62rem;
+  border: 1px solid #cbd5e1;
+  background: #f8fafc;
+  color: #475569;
+  font-family: "DM Mono", monospace;
+  font-size: 0.58rem;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  border-radius: 4px;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+.basic-icon-btn:hover,
+.basic-icon-btn:focus-visible {
+  border-color: #94a3b8;
+  color: #0f172a;
+  background: #f1f5f9;
+  outline: none;
+}
+
+.basic-input {
+  width: 100%;
+  background: #f8fafc;
+  border: 1px solid #cbd5e1;
+  border-radius: 6px;
+  padding: 0.7rem 0.85rem;
+  color: #0f172a;
+  font-family: "DM Mono", monospace;
+  font-size: 0.78rem;
+  outline: none;
+  box-sizing: border-box;
+  transition: border-color 0.15s;
+}
+.basic-input:focus {
+  border-color: #3b82f6;
+  box-shadow: 0 0 0 2px rgba(59, 130, 246, 0.15);
+}
+.basic-input::placeholder { color: #94a3b8; }
+
+/* Shared structure for both basic tab states */
+.basic-tab,
+.basic-tab-active {
+  flex: 1;
+  padding: 0.65rem 0.5rem;
+  border: none;
+  border-bottom: 2px solid transparent;
+  background: transparent;
+  font-family: "DM Mono", monospace;
+  font-size: 0.62rem;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  cursor: pointer;
+  transition: all 0.15s;
+  white-space: nowrap;
+  min-width: 8.2rem;
+}
+.basic-tab { color: #64748b; }
+.basic-tab:hover { color: #334155; }
+.basic-tab-active {
+  color: #1d4ed8;
+  border-bottom-color: #3b82f6;
+  background: rgba(59, 130, 246, 0.05);
+}
+
+/* ── Skin: terminal ──────────────────────────────────────── */
+
+.term-panel {
+  background: rgba(10, 8, 0, 0.92);
+  border: 1px solid rgba(228, 181, 90, 0.42);
+  box-shadow: 0 0 14px rgba(228, 181, 90, 0.06),
+              inset 0 0 20px rgba(228, 181, 90, 0.02);
+}
+
+.term-card {
+  background: rgba(10, 8, 0, 0.78);
+  border: 1px solid rgba(228, 181, 90, 0.3);
+}
+
+.term-button {
+  background: transparent;
+  color: #e4b55a;
+  border: 1px solid #e4b55a;
+  padding: 0.7rem 1.4rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  font-size: 0.72rem;
+  font-family: "DM Mono", monospace;
+  cursor: pointer;
+  transition: all 0.18s;
+  white-space: nowrap;
+}
+.term-button:hover:not(:disabled) {
+  background: #e4b55a;
+  color: #0a0a0a;
+  box-shadow: 0 0 14px rgba(228, 181, 90, 0.5);
+}
+.term-button:disabled { opacity: 0.5; cursor: not-allowed; }
+
+.term-icon-btn {
+  appearance: none;
+  min-height: 2rem;
+  padding: 0.36rem 0.62rem;
+  border: 1px solid rgba(228, 181, 90, 0.28);
+  background: rgba(0, 0, 0, 0.34);
+  color: rgba(228, 181, 90, 0.72);
+  font-family: "DM Mono", monospace;
+  font-size: 0.58rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+.term-icon-btn:hover,
+.term-icon-btn:focus-visible {
+  border-color: rgba(228, 181, 90, 0.64);
+  background: rgba(228, 181, 90, 0.08);
+  color: #e4b55a;
+  outline: none;
+}
+
+.term-input {
+  width: 100%;
+  background: rgba(0, 0, 0, 0.55);
+  border: 1px solid rgba(228, 181, 90, 0.32);
+  padding: 0.7rem 0.85rem;
+  color: #e4b55a;
+  font-family: "DM Mono", monospace;
+  font-size: 0.78rem;
+  outline: none;
+  box-sizing: border-box;
+  transition: border-color 0.15s;
+}
+.term-input:focus {
+  border-color: #e4b55a;
+  box-shadow: 0 0 8px rgba(228, 181, 90, 0.2);
+}
+.term-input::placeholder { color: rgba(228, 181, 90, 0.25); }
+
+/* Shared structure for both terminal tab states */
+.term-tab,
+.term-tab-active {
+  flex: 1;
+  padding: 0.65rem 0.5rem;
+  border: none;
+  border-bottom: 2px solid transparent;
+  background: transparent;
+  font-family: "DM Mono", monospace;
+  font-size: 0.62rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  cursor: pointer;
+  transition: all 0.15s;
+  white-space: nowrap;
+  min-width: 8.2rem;
+}
+.term-tab { color: rgba(228, 181, 90, 0.38); }
+.term-tab:hover { color: rgba(228, 181, 90, 0.65); }
+.term-tab-active {
+  color: #e4b55a;
+  border-bottom-color: #e4b55a;
+  background: rgba(228, 181, 90, 0.05);
+}
+
+/* ── Basic skin: override global error/verdict colours that stay readable ─ */
+html.skin-basic .err-text { color: #dc2626; }
+html.skin-basic .status-pill {
+  background: rgba(255, 255, 255, 0.7);
+  color: #475569;
+  border-color: #cbd5e1;
+}
+html.skin-basic .status-ok { border-color: #22c55e; color: #16a34a; box-shadow: none; }
+html.skin-basic .status-err { border-color: #f87171; color: #dc2626; }
+html.skin-basic .status-warn { border-color: #fbbf24; color: #d97706; }
+html.skin-basic .status-neutral { border-color: #cbd5e1; color: #64748b; }
+
+html.skin-basic .tab-list { border-bottom-color: #e2e8f0; }
+html.skin-basic .terminal-label { color: #64748b; }
+html.skin-basic .stat-label { color: #64748b; }
+html.skin-basic .stat-card:hover,
+html.skin-basic .stat-card:focus-visible { border-color: #94a3b8; box-shadow: 0 2px 8px rgba(0,0,0,0.08); }
+html.skin-basic .ready-panel { border-color: #e2e8f0; background: #ffffff; color: #475569; }
+html.skin-basic .ready-dot { background: #3b82f6; box-shadow: 0 0 8px #3b82f6; }
+html.skin-basic .side-panel { border-color: #e2e8f0; background: #ffffff; }
+html.skin-basic .side-title { color: #475569; }
+html.skin-basic .flow-step { border-top-color: #e2e8f0; color: #94a3b8; }
+html.skin-basic .flow-step[data-active="true"] { color: #1d4ed8; }
+html.skin-basic .preview-line { border-color: #e2e8f0; background: #f8fafc; color: #334155; }
+
+/* ── Terminal skin: similar overrides ─────────────────────── */
+html.skin-terminal .err-text { color: #f87171; }
+html.skin-terminal .status-pill { border-color: rgba(228,181,90,0.28); color: rgba(228,181,90,0.68); background: rgba(0,0,0,0.46); }
+html.skin-terminal .status-ok  { border-color: rgba(228,181,90,0.55); color: #e4b55a; box-shadow: 0 0 10px rgba(228,181,90,0.1); }
+html.skin-terminal .status-err { border-color: rgba(255,0,85,0.55); color: #ff5577; }
+html.skin-terminal .status-warn { border-color: rgba(228,181,90,0.55); color: #e4b55a; }
+html.skin-terminal .status-neutral { border-color: rgba(228,181,90,0.22); color: rgba(228,181,90,0.52); }
+
+html.skin-terminal .tab-list { border-bottom-color: rgba(228,181,90,0.18); }
+html.skin-terminal .terminal-label { color: rgba(228,181,90,0.58); }
+html.skin-terminal .stat-label { color: rgba(228,181,90,0.55); }
+html.skin-terminal .stat-card:hover,
+html.skin-terminal .stat-card:focus-visible { border-color: rgba(228,181,90,0.65); box-shadow: 0 0 16px rgba(228,181,90,0.1); }
+html.skin-terminal .ready-panel { border-color: rgba(228,181,90,0.18); background: rgba(0,0,0,0.3); color: rgba(228,181,90,0.65); }
+html.skin-terminal .ready-dot { background: #e4b55a; box-shadow: 0 0 12px #e4b55a; animation: none; }
+html.skin-terminal .side-panel { border-color: rgba(228,181,90,0.22); background: rgba(10,8,0,0.7); }
+html.skin-terminal .side-title { color: rgba(228,181,90,0.7); }
+html.skin-terminal .flow-step { border-top-color: rgba(228,181,90,0.12); color: rgba(228,181,90,0.48); }
+html.skin-terminal .flow-step[data-active="true"] { color: #e4b55a; }
+html.skin-terminal .preview-line { border-color: rgba(228,181,90,0.16); background: rgba(0,0,0,0.35); color: rgba(228,181,90,0.78); }
