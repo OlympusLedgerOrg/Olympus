@@ -5,8 +5,9 @@ name: Commit to Olympus
 # to the Olympus ledger for public provenance. Failure here means the release
 # wasn't anchored, not that the code is broken. A human should re-run it.
 #
-# If OLYMPUS_API_URL / OLYMPUS_API_KEY are not configured, the anchoring step
-# is skipped with a notice rather than failing the workflow.
+# If OLYMPUS_API_URL is not configured, the anchoring step is skipped with a
+# notice rather than failing the workflow. OLYMPUS_API_KEY is optional because
+# tools/olympus.py supports keyless/no-auth deployments.
 
 on:
   release:
@@ -42,16 +43,15 @@ jobs:
 
       - name: Check Olympus API is configured
         id: api-check
+        env:
+          OLYMPUS_API_URL: ${{ vars.OLYMPUS_API_URL }}
         run: |
-          if [ -z "${OLYMPUS_API_URL:-}" ] && [ -z "${OLYMPUS_API_KEY:-}" ]; then
+          if [ -z "${OLYMPUS_API_URL:-}" ]; then
             echo "configured=false" >> "$GITHUB_OUTPUT"
-            echo "::notice::Olympus API not configured — skipping artifact anchoring"
+            echo "::notice::Olympus API URL not configured — skipping artifact anchoring"
           else
             echo "configured=true" >> "$GITHUB_OUTPUT"
           fi
-        env:
-          OLYMPUS_API_URL: ${{ vars.OLYMPUS_API_URL }}
-          OLYMPUS_API_KEY: ${{ secrets.OLYMPUS_API_KEY }}
 
       - name: Commit artifacts to Olympus
         id: olympus

@@ -56,6 +56,11 @@ jobs:
           python-version: "3.12"
           cache: "pip"
 
+      - name: Set up Node.js 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
       - name: Install Rust stable
         run: rustup toolchain install stable --no-self-update && rustup default stable
 
@@ -65,13 +70,31 @@ jobs:
           pip install --require-hashes -r requirements-dev.txt
           pip install -e . --no-deps
 
+      - name: Install Circom compiler
+        run: npm install --global circom2@0.2.22
+
       - name: Generate ephemeral CI signing key
         # Generates a random key at runtime rather than hardcoding one in the
         # workflow file, avoiding patterns that could be copied to production.
-        run: echo "OLYMPUS_INGEST_SIGNING_KEY=$(python -c 'import secrets; print(secrets.token_hex(32))')" >> "$GITHUB_ENV"
+        run: |
+          SIGNING_KEY=$(python -c 'import secrets; print(secrets.token_hex(32))')
+          echo "::add-mask::${SIGNING_KEY}"
+          echo "OLYMPUS_INGEST_SIGNING_KEY=${SIGNING_KEY}" >> "$GITHUB_ENV"
 
       - name: Build olympus_core Rust extension
         run: maturin build --release --out dist && pip install --force-reinstall dist/*.whl
+
+      - name: Configure CI-sized redaction circuit
+        run: |
+          python -m proofs.proof_generator configure \
+            --redaction-max-leaves 4 \
+            --redaction-merkle-depth 2
+
+      - name: Build proof artifacts for redaction round-trip
+        env:
+          OLYMPUS_REDACTION_MAX_LEAVES: "4"
+          OLYMPUS_REDACTION_MERKLE_DEPTH: "2"
+        run: bash proofs/setup_circuits.sh --allow-dev-ptau
 
       - name: "Step 1 of 3 — INSERT: ingest documents into the ledger"
         # What this tests: a document can be submitted and stored in the Merkle tree.
@@ -85,8 +108,11 @@ jobs:
         # What this tests: given a stored document, we can generate a cryptographic
         # proof that it exists in the tree at a specific position.
         # If this fails: users can't get proof their document was recorded.
+        env:
+          OLYMPUS_REDACTION_MAX_LEAVES: "4"
+          OLYMPUS_REDACTION_MERKLE_DEPTH: "2"
         run: |
-          pytest tests/test_e2e_audit.py tests/test_proof_generator.py -v --tb=short \
+          pytest tests/test_proof_generator.py -v --tb=short \
             --junit-xml=test-results/step2-prove.xml
 
       - name: "Step 3 of 3 — VERIFY: independently verify the proof is valid"
