@@ -216,6 +216,8 @@ def write_deterministic_parquet(
     writer_kwargs: dict = {
         "compression": compression,
         "version": "2.6",
+        "use_dictionary": False,
+        "data_page_version": "2.0",
         "write_statistics": True,
     }
     # Only pass compression_level for codecs that support it.
