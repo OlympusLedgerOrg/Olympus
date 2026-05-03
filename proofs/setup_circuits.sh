@@ -28,6 +28,11 @@ for arg in "$@"; do
 done
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# Capture the absolute script path BEFORE cd so sha256sum always resolves it,
+# regardless of how the script was invoked (e.g. `bash proofs/setup_circuits.sh`
+# from the repo root leaves BASH_SOURCE[0] as a relative path that breaks after
+# the cd below).
+SCRIPT_SELF="${SCRIPT_DIR}/$(basename "${BASH_SOURCE[0]}")"
 cd "${SCRIPT_DIR}"
 
 BUILD_DIR="${SCRIPT_DIR}/build"
@@ -60,8 +65,25 @@ declare -A PTAU_CHECKSUMS=(
 # -----------------------------------------------------------------------
 # 0. Install npm dependencies (circomlib, snarkjs)
 # -----------------------------------------------------------------------
-echo "==> Installing npm dependencies …"
-npm install --silent
+# Security rationale: tracking the lockfile hash (not just directory presence)
+# guarantees that node_modules always matches the declared dependency tree.
+# A stale node_modules from a prior lockfile version can silently produce
+# different R1CS/WASM/zkey artifacts even when .circom sources are unchanged,
+# because circomlib templates are resolved at compile time from node_modules.
+# Using `npm ci` (instead of `npm install`) enforces exact lockfile parity and
+# fails loudly if package.json and package-lock.json diverge.
+NPM_HASH_FILE="${SCRIPT_DIR}/.last-npm-hash"
+_LOCKFILE_HASH="$(sha256sum package-lock.json | awk '{print $1}')"
+if [ -d "node_modules/snarkjs" ] && [ -d "node_modules/circomlib" ] \
+    && [ -f "${NPM_HASH_FILE}" ] \
+    && [ "$(cat "${NPM_HASH_FILE}")" = "${_LOCKFILE_HASH}" ]; then
+  echo "==> npm dependencies up-to-date (lockfile hash matches), skipping install …"
+else
+  echo "==> Installing npm dependencies (lockfile changed or first install) …"
+  npm ci --silent
+  # Record the lockfile hash so future runs can skip install when nothing changed.
+  echo "${_LOCKFILE_HASH}" > "${NPM_HASH_FILE}"
+fi
 
 # -----------------------------------------------------------------------
 # 1. Verify circom compiler is available
@@ -80,9 +102,46 @@ else
   echo "or via npm: npm install -g circom2"
   exit 1
 fi
-echo "==> Using circom compiler: $(${CIRCOM} --version 2>&1 | head -1)"
+# Guard: re-validate CIRCOM is a usable executable.  The detection block
+# above guarantees this in normal operation, but an explicit check here
+# produces a clear, actionable error if the variable is ever empty (e.g.
+# a future refactor allows an external CIRCOM override that is unset) or
+# accidentally points to a directory instead of a binary.
+if [[ -z "${CIRCOM:-}" ]]; then
+  echo "ERROR: CIRCOM is unset or empty after compiler detection — this is a bug." >&2
+  exit 1
+fi
+if [[ -d "${CIRCOM}" ]] || ! command -v "${CIRCOM}" &>/dev/null; then
+  echo "ERROR: CIRCOM='${CIRCOM}' is not a valid executable (is a directory, or not found in PATH)." >&2
+  exit 1
+fi
+# Capture version once; trim to first line without `| head -1` to avoid
+# SIGPIPE on the assignment in bash set -euo pipefail.  When the version
+# command outputs more than one line, head -1 closes the pipe early and
+# the upstream process receives SIGPIPE (exit 141).  In a standalone
+# assignment `VAR=$(cmd | head -1)` bash 5 propagates that non-zero exit
+# and set -e fires silently.  Capturing the full output first and slicing
+# with bash parameter expansion (`%%$'\n'*`) is SIGPIPE-free.  Note:
+# $'\n' is a bash extension (not POSIX sh), which is fine since this
+# script already requires bash via `set -euo pipefail` and other bashisms.
+_CIRCOM_VER_RAW="$(${CIRCOM} --version 2>&1)"
+_CIRCOM_VER="${_CIRCOM_VER_RAW%%$'\n'*}"
+echo "==> Using circom compiler: ${_CIRCOM_VER}"
 
 SNARKJS="npx snarkjs"
+# Guard: validate the launcher (the first word of SNARKJS, normally "npx")
+# is available in PATH.  Without this check the script would run for
+# several minutes through npm install, PTAU download, and fingerprinting
+# before dying with a cryptic "npx: command not found" inside the circuit
+# loop.  Failing here produces a clear message while the context is still
+# obvious.  SNARKJS pointing to a directory is also caught because
+# command -v rejects non-executable paths.
+_SNARKJS_LAUNCHER="${SNARKJS%% *}"
+if [[ -z "${_SNARKJS_LAUNCHER:-}" ]] || ! command -v "${_SNARKJS_LAUNCHER}" &>/dev/null; then
+  echo "ERROR: '${_SNARKJS_LAUNCHER}' (launcher for SNARKJS='${SNARKJS}') is not found in PATH." >&2
+  echo "       Install Node.js >= 18 and ensure npm ci has been run in proofs/." >&2
+  exit 1
+fi
 
 # -----------------------------------------------------------------------
 # 2. Obtain Powers of Tau file (download or generate locally)
@@ -160,31 +219,75 @@ else
 fi
 
 # -----------------------------------------------------------------------
-# 2.5 Record provenance (PTAU source + hashes + verification key fingerprints)
+# 2.5 Compute a build fingerprint over all inputs that affect compiled artifacts.
+#
+# Security rationale: this fingerprint is used to skip expensive Groth16 setup
+# steps ONLY when ALL of the following are identical to the last successful build:
+#   - every .circom source file (circuit logic and parameters)
+#   - the npm lockfile hash (a circomlib version bump changes compiled R1CS/WASM
+#     even when .circom sources are unchanged; tracking the lockfile hash ensures
+#     every artifact set is traceable to an exact, reproducible dependency tree)
+#   - this setup script itself (build procedure version)
+#   - the circom compiler version (a tool upgrade can produce a different R1CS)
+#   - the snarkjs version (affects zkey format and proof compatibility)
+#   - the PTAU file hash (keys must correspond to the correct ceremony file)
+#
+# The PTAU hash is always verified independently (above) on every run,
+# so a corrupted or substituted PTAU is caught regardless of caching.
 # -----------------------------------------------------------------------
+# POSIX-portable: pipe sorted .circom paths into `while read` + cat rather than
+# `xargs -r cat` (xargs -r is a GNU extension unavailable on macOS/BSD xargs).
+# Guard against an empty circuit directory — a missing circuits/ tree would
+# silently produce the sha256 of empty input and issue a misleading cache hit.
+_CIRCOM_PATHS="$(find circuits -name '*.circom' | LC_ALL=C sort)"
+if [ -z "${_CIRCOM_PATHS}" ]; then
+  echo "ERROR: No .circom source files found under circuits/. Aborting." >&2
+  exit 1
+fi
+_CIRCUITS_HASH="$(printf '%s\n' "${_CIRCOM_PATHS}" \
+  | while IFS= read -r f; do cat "$f"; done \
+  | sha256sum | awk '{print $1}')"
+_SCRIPT_HASH="$(sha256sum "${SCRIPT_SELF}" | awk '{print $1}')"
+# _CIRCOM_VER already set above (SIGPIPE-safe capture near circom detection)
+_SNARKJS_VER="$(node -e "try{console.log(require('./node_modules/snarkjs/package.json').version)}catch(e){console.log('unknown')}" 2>/dev/null)"
+CURRENT_FINGERPRINT="${_CIRCUITS_HASH}:${_SCRIPT_HASH}:${_CIRCOM_VER}:${_SNARKJS_VER}:${PTAU_B2}:${_LOCKFILE_HASH}"
+BUILD_FINGERPRINT_FILE="${BUILD_DIR}/.build-fingerprint"
+BUILD_IN_PROGRESS_FILE="${BUILD_DIR}/.build-in-progress"
 PROVENANCE_FILE="${KEYS_DIR}/PROVENANCE.md"
-PTAU_B2="$(b2sum "${PTAU_PATH}" | awk '{print $1}')"
-{
-  echo "# Groth16 Setup Provenance"
-  echo ""
-  echo "Generated: $(date -u +"%Y-%m-%dT%H:%M:%SZ")"
-  echo ""
-  if [ "${PTAU_IS_LOCAL}" -eq 1 ]; then
-    echo "WARNING: These are DEVELOPMENT keys generated with a locally-created PTAU."
-    echo "         They are NOT suitable for production use."
-    echo "         Production requires the Phase 2 ceremony with the Hermez Phase 1 file."
-    echo ""
-  fi
-  echo "PTAU_SOURCE: ${PTAU_SOURCE}"
-  echo "PTAU_FILE: ${PTAU_FILE}"
-  echo "PTAU_B2: ${PTAU_B2}"
-  echo ""
-  echo "Verification key fingerprints (SHA-256):"
-} > "${PROVENANCE_FILE}"
+
+# -----------------------------------------------------------------------
+# 2.6 Interrupted-build recovery
+#
+# If a previous invocation wrote the in-progress sentinel but was killed
+# before it could remove it (OOM, SIGKILL, runner timeout, Ctrl-C), the
+# build directory may contain partial circuit artifacts — e.g. an r1cs
+# written but its zkey/vkey absent, or a half-written zkey.  Clear those
+# files so the loop below rebuilds cleanly rather than mixing stale and
+# fresh outputs.  Without this guard a subsequent run could match the
+# node_modules lockfile hash while silently using incomplete artifacts.
+# -----------------------------------------------------------------------
+if [ -f "${BUILD_IN_PROGRESS_FILE}" ]; then
+  echo "WARNING: Previous build was interrupted — clearing partial artifacts for a clean rebuild."
+  find "${BUILD_DIR}" -maxdepth 1 -name '*.r1cs'            -delete 2>/dev/null || true
+  find "${BUILD_DIR}" -maxdepth 1 -name '*.zkey'            -delete 2>/dev/null || true
+  find "${BUILD_DIR}" -maxdepth 1 -name '.build-fingerprint' -delete 2>/dev/null || true
+  find "${BUILD_DIR}" -maxdepth 1 -type d -name '*_js' -exec rm -rf {} + 2>/dev/null || true
+  find "${VKEYS_DIR}" -maxdepth 1 -name '*_vkey.json' -delete 2>/dev/null || true
+  rm -f "${BUILD_IN_PROGRESS_FILE}"
+  echo "    Partial artifacts cleared — proceeding with full rebuild."
+fi
 
 # -----------------------------------------------------------------------
 # 3. Compile each circuit and (optionally) run Groth16 setup
 # -----------------------------------------------------------------------
+
+# Write a build-in-progress sentinel before entering the build loop.
+# It is removed only after the fingerprint file is successfully written
+# (see §4 below).  An interrupted build leaves the sentinel in place so
+# the next invocation detects it and clears partial artifacts (§2.6).
+if [ "${COMPILE_ONLY}" -eq 0 ]; then
+  touch "${BUILD_IN_PROGRESS_FILE}"
+fi
 
 for circuit in "${CIRCUITS[@]}"; do
   CIRCOM_FILE="circuits/${circuit}.circom"
@@ -200,6 +303,34 @@ for circuit in "${CIRCUITS[@]}"; do
     continue
   fi
 
+  # Paths for all expected outputs for this circuit (used both in the
+  # fingerprint check below and in the build steps that follow).
+  R1CS="${BUILD_DIR}/${circuit}.r1cs"
+  ZKEY_FINAL="${BUILD_DIR}/${circuit}_final.zkey"
+  VKEY="${VKEYS_DIR}/${circuit}_vkey.json"
+
+  # -----------------------------------------------------------------------
+  # Incremental build check: if all outputs are present AND the fingerprint
+  # matches the current inputs, skip the expensive compile + Groth16 steps.
+  #
+  # This is safe because the fingerprint covers every input that can change
+  # the compiled artifacts (circuit sources, tool versions, PTAU hash).
+  # A cache hit here is only possible when nothing has changed.
+  # -----------------------------------------------------------------------
+  if [ "${COMPILE_ONLY}" -eq 0 ] \
+      && [ -f "${R1CS}" ] \
+      && [ -d "${BUILD_DIR}/${circuit}_js" ] \
+      && [ -f "${ZKEY_FINAL}" ] \
+      && [ -f "${VKEY}" ] \
+      && [ -f "${BUILD_FINGERPRINT_FILE}" ] \
+      && [ "$(cat "${BUILD_FINGERPRINT_FILE}")" = "${CURRENT_FINGERPRINT}" ]; then
+    echo "  [CACHED] Outputs present and fingerprint matches — skipping rebuild."
+    echo "           r1cs: ${R1CS}"
+    echo "           zkey: ${ZKEY_FINAL}"
+    echo "           vkey: ${VKEY}"
+    continue
+  fi
+
   # ---- Compile ----
   echo "  [1/4] Compiling ${CIRCOM_FILE} …"
   ${CIRCOM} "${CIRCOM_FILE}" \
@@ -207,8 +338,6 @@ for circuit in "${CIRCUITS[@]}"; do
     -l circuits \
     -l node_modules \
     -o "${BUILD_DIR}"
-
-  R1CS="${BUILD_DIR}/${circuit}.r1cs"
 
   if [ "${COMPILE_ONLY}" -eq 1 ]; then
     echo "  [--compile-only] Skipping Groth16 setup."
@@ -220,7 +349,6 @@ for circuit in "${CIRCUITS[@]}"; do
   # ---- Phase 2 setup (development contribution) ----
   echo "  [2/4] Groth16 setup …"
   ZKEY_0="${BUILD_DIR}/${circuit}_0000.zkey"
-  ZKEY_FINAL="${BUILD_DIR}/${circuit}_final.zkey"
 
   ${SNARKJS} groth16 setup "${R1CS}" "${PTAU_PATH}" "${ZKEY_0}"
 
@@ -233,10 +361,7 @@ for circuit in "${CIRCUITS[@]}"; do
 
   # ---- Export verification key ----
   echo "  [3/4] Exporting verification key …"
-  VKEY="${VKEYS_DIR}/${circuit}_vkey.json"
   ${SNARKJS} zkey export verificationkey "${ZKEY_FINAL}" "${VKEY}"
-  VKEY_SHA256="$(sha256sum "${VKEY}" | awk '{print $1}')"
-  echo "- ${circuit}_vkey.json: ${VKEY_SHA256}" >> "${PROVENANCE_FILE}"
 
   # ---- Summary ----
   echo "  [4/4] Done."
@@ -249,6 +374,47 @@ echo ""
 if [ "${COMPILE_ONLY}" -eq 1 ]; then
   echo "==> All circuits compiled (R1CS + WASM). Run without --compile-only to generate keys."
 else
+  # -----------------------------------------------------------------------
+  # 4. Write build fingerprint (marks this set of outputs as up-to-date).
+  #    Written after the full circuit loop so every output file is in place
+  #    before we record the fingerprint.  A future run that finds a matching
+  #    fingerprint can skip all compile + Groth16 steps safely.
+  # -----------------------------------------------------------------------
+  echo "${CURRENT_FINGERPRINT}" > "${BUILD_FINGERPRINT_FILE}"
+  # Build completed successfully: remove the in-progress sentinel.
+  # The sentinel's absence tells a future run that the last build finished
+  # cleanly and its artifacts can be trusted.
+  rm -f "${BUILD_IN_PROGRESS_FILE}"
+
+  # -----------------------------------------------------------------------
+  # 5. Record provenance.  Written here (post-loop) so it always reflects
+  #    actual state on disk — whether circuits were freshly built or restored
+  #    from a CI cache.
+  # -----------------------------------------------------------------------
+  {
+    echo "# Groth16 Setup Provenance"
+    echo ""
+    echo "Generated: $(date -u +"%Y-%m-%dT%H:%M:%SZ")"
+    echo ""
+    if [ "${PTAU_IS_LOCAL}" -eq 1 ]; then
+      echo "WARNING: These are DEVELOPMENT keys generated with a locally-created PTAU."
+      echo "         They are NOT suitable for production use."
+      echo "         Production requires the Phase 2 ceremony with the Hermez Phase 1 file."
+      echo ""
+    fi
+    echo "PTAU_SOURCE: ${PTAU_SOURCE}"
+    echo "PTAU_FILE: ${PTAU_FILE}"
+    echo "PTAU_B2: ${PTAU_B2}"
+    echo ""
+    echo "Verification key fingerprints (SHA-256):"
+    for _c in "${CIRCUITS[@]}"; do
+      _vkey="${VKEYS_DIR}/${_c}_vkey.json"
+      if [ -f "${_vkey}" ]; then
+        echo "- ${_c}_vkey.json: $(sha256sum "${_vkey}" | awk '{print $1}')"
+      fi
+    done
+  } > "${PROVENANCE_FILE}"
+
   echo "==> All circuits compiled and development keys generated."
   echo "    WARNING: These keys use a SINGLE dev contribution."
   echo "    Production requires a Phase 2 ceremony with ≥ 3 independent contributors."
