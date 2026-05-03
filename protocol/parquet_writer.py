@@ -287,7 +287,7 @@ def verify_parquet_determinism(
 
     Returns:
         ``True`` if both files have the same BLAKE3 hash.
-    """ 
+    """
 
     def _hash_file(path: str | Path) -> str:
         hasher = _blake3.blake3()
