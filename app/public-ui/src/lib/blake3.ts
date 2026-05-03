@@ -20,9 +20,37 @@ let initPromise: ReturnType<typeof init> | null = null;
 
 function ensureInit(): ReturnType<typeof init> {
   if (!initPromise) {
-    initPromise = init(blake3WasmUrl);
+    initPromise = init(blake3WasmUrl).then(
+      (r) => r,
+      (err: unknown) => {
+        // Clear the cached promise so the caller can retry after transient failures.
+        initPromise = null;
+        const msg = err instanceof Error ? err.message : String(err);
+        // Detect Content Security Policy rejections so we can give users a
+        // clear, actionable message instead of a raw WASM compile error.
+        const isCsp =
+          /disallowed by embedder|Content.Security.Policy|wasm-unsafe-eval/i.test(
+            msg,
+          );
+        throw new Error(
+          isCsp
+            ? "BLAKE3 WASM is blocked by this browser's Content Security Policy. " +
+              "File and JSON hashing are unavailable in this environment."
+            : `BLAKE3 WASM failed to initialize: ${msg}`,
+        );
+      },
+    );
   }
   return initPromise;
+}
+
+/**
+ * Proactively check whether the BLAKE3 WASM module can be loaded.
+ * Resolves with no value on success; rejects with a user-friendly Error on failure.
+ * Safe to call multiple times — the resolved module is cached after the first success.
+ */
+export async function checkWasmAvailable(): Promise<void> {
+  await ensureInit();
 }
 
 /**

@@ -6,6 +6,7 @@ interface JsonTabProps {
   jsonError: string | null;
   jsonCanonical: string | null;
   isPending: boolean;
+  wasmError?: string | null;
   onSubmit: () => Promise<void>;
   onFormat: () => void;
   onMinify: () => void;
@@ -17,6 +18,7 @@ export default function JsonTab({
   jsonError,
   jsonCanonical,
   isPending,
+  wasmError,
   onSubmit,
   onFormat,
   onMinify,
@@ -24,6 +26,11 @@ export default function JsonTab({
   const { skin } = useSkin();
   return (
     <div>
+      {wasmError && (
+        <p className="err-text" style={{ marginBottom: "0.75rem" }}>
+          ⚠ {wasmError}
+        </p>
+      )}
       <div className="field-head">
         <label htmlFor="json-input" className="terminal-label">
           JSON document

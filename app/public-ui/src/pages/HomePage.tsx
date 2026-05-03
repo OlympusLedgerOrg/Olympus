@@ -7,6 +7,7 @@ import { useHashVerification } from "../hooks/useHashVerification";
 import { useProofVerification } from "../hooks/useProofVerification";
 import { useFileCommit } from "../hooks/useFileCommit";
 import { useJsonVerification } from "../hooks/useJsonVerification";
+import { useWasmStatus } from "../hooks/useWasmStatus";
 import { useSkin } from "../skins/SkinContext";
 import CommitPrompt from "../components/CommitPrompt";
 import HashDisplay from "../components/HashDisplay";
@@ -44,6 +45,7 @@ export default function HomePage() {
   const proofHook = useProofVerification(setVerdictResult);
   const fileHook = useFileCommit(setVerdictResult, hashHook.submitHash);
   const jsonHook = useJsonVerification(setVerdictResult, hashHook.submitHash);
+  const { wasmError } = useWasmStatus();
 
   const switchTab = (id: Tab) => {
     setActiveTab(id);
@@ -170,6 +172,7 @@ export default function HomePage() {
                     fileProgress={fileHook.fileProgress}
                     commitContentHash={fileHook.commitContentHash}
                     isPending={isPending}
+                    wasmError={wasmError}
                     onHash={fileHook.onHash}
                     onProgress={fileHook.onProgress}
                     onFile={fileHook.onFile}
@@ -188,6 +191,7 @@ export default function HomePage() {
                     jsonError={jsonHook.jsonError}
                     jsonCanonical={jsonHook.jsonCanonical}
                     isPending={isPending}
+                    wasmError={wasmError}
                     onSubmit={jsonHook.submitJsonDoc}
                     onFormat={jsonHook.formatJson}
                     onMinify={jsonHook.minifyJson}

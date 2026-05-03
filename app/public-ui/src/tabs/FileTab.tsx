@@ -7,6 +7,7 @@ interface FileTabProps {
   fileProgress: number;
   commitContentHash: string | null;
   isPending: boolean;
+  wasmError?: string | null;
   onHash: (hex: string) => void;
   onProgress: (p: number) => void;
   onFile: (f: File) => void;
@@ -18,6 +19,7 @@ export default function FileTab({
   fileProgress,
   commitContentHash,
   isPending,
+  wasmError,
   onHash,
   onProgress,
   onFile,
@@ -26,6 +28,11 @@ export default function FileTab({
   const { skin } = useSkin();
   return (
     <div>
+      {wasmError && (
+        <p className="err-text" style={{ marginBottom: "0.75rem" }}>
+          ⚠ {wasmError}
+        </p>
+      )}
       <FileHasher onHash={onHash} onProgress={onProgress} onFile={onFile} />
       {fileProgress > 0 && fileProgress < 100 && (
         <p className={skin.classes.mutedText} style={{ fontSize: "0.65rem" }}>
