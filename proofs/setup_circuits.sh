@@ -60,14 +60,24 @@ declare -A PTAU_CHECKSUMS=(
 # -----------------------------------------------------------------------
 # 0. Install npm dependencies (circomlib, snarkjs)
 # -----------------------------------------------------------------------
-# Skip install when node_modules already contains the key packages.
-# In CI, node_modules can be restored from cache (keyed on package-lock.json)
-# so that npm install is only paid for on dependency version changes.
-if [ -d "node_modules/snarkjs" ] && [ -d "node_modules/circomlib" ]; then
-  echo "==> npm dependencies already installed (node_modules present), skipping …"
+# Security rationale: tracking the lockfile hash (not just directory presence)
+# guarantees that node_modules always matches the declared dependency tree.
+# A stale node_modules from a prior lockfile version can silently produce
+# different R1CS/WASM/zkey artifacts even when .circom sources are unchanged,
+# because circomlib templates are resolved at compile time from node_modules.
+# Using `npm ci` (instead of `npm install`) enforces exact lockfile parity and
+# fails loudly if package.json and package-lock.json diverge.
+NPM_HASH_FILE="${SCRIPT_DIR}/.last-npm-hash"
+_LOCKFILE_HASH="$(sha256sum package-lock.json | awk '{print $1}')"
+if [ -d "node_modules/snarkjs" ] && [ -d "node_modules/circomlib" ] \
+    && [ -f "${NPM_HASH_FILE}" ] \
+    && [ "$(cat "${NPM_HASH_FILE}")" = "${_LOCKFILE_HASH}" ]; then
+  echo "==> npm dependencies up-to-date (lockfile hash matches), skipping install …"
 else
-  echo "==> Installing npm dependencies …"
-  npm install --silent
+  echo "==> Installing npm dependencies (lockfile changed or first install) …"
+  npm ci --silent
+  # Record the lockfile hash so future runs can skip install when nothing changed.
+  echo "${_LOCKFILE_HASH}" > "${NPM_HASH_FILE}"
 fi
 
 # -----------------------------------------------------------------------

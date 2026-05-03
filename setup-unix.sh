@@ -7,7 +7,7 @@
 #   ./setup-unix.sh --skip-docker                # skip PostgreSQL container step
 #   ./setup-unix.sh --skip-start                 # set up everything, do not start API
 #
-# Requirements: Docker, Python 3.10+
+# Requirements: Docker, Python 3.10+, Rust (cargo)
 
 set -euo pipefail
 
@@ -92,6 +92,14 @@ if [ "$SKIP_DOCKER" = false ]; then
     fi
     ok "$(docker --version)"
 fi
+
+# Rust / Cargo (required by maturin to build the olympus_core extension)
+if ! command -v cargo &>/dev/null; then
+    fail "Rust toolchain not found. Install it with:
+   curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
+Then re-run this script."
+fi
+ok "$(cargo --version)"
 
 # ---------------------------------------------------------------------------
 # 2. PostgreSQL via Docker
@@ -215,7 +223,20 @@ fi
 ok "Dependencies installed."
 
 # ---------------------------------------------------------------------------
-# 6. Database migrations
+# 6. Build olympus_core Rust extension (maturin develop)
+# ---------------------------------------------------------------------------
+# maturin develop compiles the PyO3 Rust extension and installs it directly
+# into the active virtual environment — no wheel file is created.
+# VIRTUAL_ENV must be set (done by `source .venv/bin/activate` above) so that
+# maturin can locate site-packages.  Without this step the Rust-accelerated
+# hashing and canonicalization paths are silently skipped at runtime.
+step "Building olympus_core Rust extension (maturin develop)"
+
+maturin develop
+ok "olympus_core Rust extension built and installed."
+
+# ---------------------------------------------------------------------------
+# 7. Database migrations
 # ---------------------------------------------------------------------------
 step "Running Alembic database migrations"
 
@@ -224,7 +245,7 @@ python -m alembic upgrade head || \
 ok "Database schema is up to date."
 
 # ---------------------------------------------------------------------------
-# 7. Success summary
+# 8. Success summary
 # ---------------------------------------------------------------------------
 echo ""
 echo -e "${_GREEN}╔══════════════════════════════════════════════════╗${_RESET}"
@@ -244,7 +265,7 @@ if [ "$SKIP_START" = true ]; then
 fi
 
 # ---------------------------------------------------------------------------
-# 8. Start API server
+# 9. Start API server
 # ---------------------------------------------------------------------------
 echo ""
 echo -e "${_CYAN}Starting API server — press Ctrl+C to stop.${_RESET}"
