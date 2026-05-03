@@ -15,6 +15,7 @@ import shutil
 import signal
 import subprocess  # nosec B404
 import tempfile
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -33,7 +34,7 @@ SUPPORTED_PROOF_PROTOCOL_VERSIONS = {OLYMPUS_DEFAULT_PROTOCOL_VERSION}
 _PROOF_TIMEOUT_SECS = 300  # proof generation can be slow on large circuits
 
 
-def _make_pdeathsig_preexec():
+def _make_pdeathsig_preexec() -> Callable[[], None] | None:
     """
     Return a preexec_fn that sets PR_SET_PDEATHSIG=SIGTERM on Linux so the
     child process is automatically killed when its parent process dies.

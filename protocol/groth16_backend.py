@@ -40,6 +40,7 @@ import shutil
 import signal
 import subprocess  # nosec B404
 import tempfile
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
@@ -54,6 +55,7 @@ from .proof_interface import (
     Witness,
 )
 
+
 _log = logging.getLogger(__name__)
 
 # Per-operation timeout constants (seconds)
@@ -62,7 +64,7 @@ _PROOF_TIMEOUT_SECS = 300    # proof gen is the longest step
 _VERIFY_TIMEOUT_SECS = 60    # verify is fast
 
 
-def _make_pdeathsig_preexec():
+def _make_pdeathsig_preexec() -> Callable[[], None] | None:
     """
     Return a preexec_fn that sets PR_SET_PDEATHSIG=SIGTERM on Linux so the
     child process is automatically killed when its parent process dies.

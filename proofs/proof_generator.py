@@ -44,7 +44,7 @@ import shutil
 import signal
 import subprocess
 import uuid
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -65,7 +65,7 @@ _log = logging.getLogger(__name__)
 _WITNESS_TIMEOUT_SECS = 120  # witness gen can be slow on large circuits
 
 
-def _make_pdeathsig_preexec():
+def _make_pdeathsig_preexec() -> Callable[[], None] | None:
     """
     Return a preexec_fn that sets PR_SET_PDEATHSIG=SIGTERM on Linux so the
     child process is automatically killed when its parent process dies.

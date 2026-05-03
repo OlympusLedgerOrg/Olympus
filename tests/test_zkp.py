@@ -1,7 +1,7 @@
 import json
-import sys
 import shutil
 import subprocess
+import sys
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
