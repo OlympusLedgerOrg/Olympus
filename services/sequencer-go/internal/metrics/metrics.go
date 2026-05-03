@@ -100,14 +100,18 @@ func (r *Registry) WithConstLabels(labels map[string]string) *Registry {
 func (r *Registry) Handler() http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "text/plain; version=0.0.4; charset=utf-8")
-		r.WriteTo(w)
+		r.Render(w)
 	})
 }
 
-// WriteTo writes the current metrics in Prometheus text format to w. Used
+// Render writes the current metrics in Prometheus text format to w. Used
 // directly by the HTTP handler and by tests that need to inspect the
 // rendered output without spinning up a server.
-func (r *Registry) WriteTo(w io.Writer) {
+//
+// Named Render rather than WriteTo to avoid accidentally satisfying the
+// io.WriterTo interface contract (which would require returning bytes
+// written + error).
+func (r *Registry) Render(w io.Writer) {
 	type metric struct {
 		name string
 		help string

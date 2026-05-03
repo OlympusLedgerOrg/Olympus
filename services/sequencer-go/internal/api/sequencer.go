@@ -174,6 +174,13 @@ func (s *Sequencer) Handler() http.Handler {
 	// have migrated.
 	mux.HandleFunc("/v1/get-consistency-proof", requireToken(s.token, s.handleConsistencyProofGone))
 
+	// /metrics is intentionally unauthenticated: it exposes only the H-2
+	// two-phase-commit counters and contains no record content, no shard
+	// names, and no leaf hashes. Operators that wish to gate it should
+	// bind the metrics endpoint to an internal-only port via a reverse
+	// proxy. The handler is concurrency-safe.
+	mux.Handle("/metrics", s.metrics.Handler())
+
 	return mux
 }
 
