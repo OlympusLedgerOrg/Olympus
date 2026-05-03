@@ -32,7 +32,11 @@ PROOF_ID_PATTERN = r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4
 # H-3 Fix: Content validation limits (matching canonicalizer limits).
 # These are enforced at Pydantic deserialization time, before the potentially
 # expensive canonicalization step, to prevent DoS via deeply nested JSON.
-MAX_CONTENT_DEPTH = 128  # Maximum nesting depth for content JSON
+# MAX_CONTENT_DEPTH must match MAX_JSON_DEPTH in
+# services/cdhs-smf-rust/src/canonicalization.rs (currently 64) so that any
+# input accepted here is also accepted by the Rust canonicalizer — diverging
+# limits produce a silent ingest/reject split across the two paths.
+MAX_CONTENT_DEPTH = 64  # Maximum nesting depth for content JSON
 MAX_CONTENT_SIZE_ESTIMATE = 16 * 1024 * 1024  # 16 MiB rough size limit per record content
 
 
@@ -64,7 +68,7 @@ def check_json_depth(obj: Any, current_depth: int = 0) -> int:
     while stack:
         current, depth = stack.pop()
 
-        if depth >= MAX_CONTENT_DEPTH:
+        if depth > MAX_CONTENT_DEPTH:
             raise ValueError(f"Content nesting depth exceeds limit of {MAX_CONTENT_DEPTH}")
 
         if depth > max_depth:
