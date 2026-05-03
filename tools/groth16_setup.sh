@@ -48,7 +48,7 @@ PTAU_URL="https://storage.googleapis.com/zkevm/ptau/${PTAU_FILE}"
 PTAU_PATH="build/${PTAU_FILE}"
 
 # Known SHA-256 for powersOfTau28_hez_final_19.ptau
-PTAU_EXPECTED_SHA256="7865c363bc0ca598d998246f41e065bc39682701726056637e6da085025cb7ca"
+PTAU_EXPECTED_SHA256="3f428d1a407e4704ef906960e000b03089e5e6ec29bf65b07bb5e3de005f4700"
 
 if [ -f "${PTAU_PATH}" ]; then
   echo "==> PTAU file already present: ${PTAU_PATH}"
