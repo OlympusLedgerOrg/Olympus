@@ -46,7 +46,14 @@ pub fn canonicalize(content_type: &str, content: &[u8]) -> Result<Vec<u8>, Strin
 /// - NFC normalization on all string keys and values
 /// - Duplicate key detection **before** any library-level deduplication,
 ///   covering both byte-identical duplicates and NFC-equivalent duplicates
-/// - Keys sorted lexicographically (by NFC-normalized key)
+/// - Keys sorted by UTF-16 code-unit sequence (RFC 8785 §3.2.3).
+///   See `protocol/canonical_json.py` which uses `k.encode("utf-16-be")`.
+///   UTF-16 and Unicode scalar order agree for U+0000–U+D7FF and U+E000–U+FFFF
+///   (BMP), but diverge for supplementary-plane characters (U+10000+): their
+///   surrogate pairs (0xD800–0xDBFF / 0xDC00–0xDFFF) sort *before* the upper
+///   BMP range U+E000–U+FFFF in UTF-16, while those code points sort *after*
+///   U+FFFF in scalar order.  Using scalar order would produce different hashes
+///   for objects with non-BMP keys — a silent cross-language consensus failure.
 /// - No whitespace (compact separators)
 /// - Non-ASCII characters emitted as raw UTF-8 (not `\uXXXX`)
 /// - Control characters U+0000–U+001F use standard JSON escapes
@@ -432,8 +439,11 @@ impl<'a> JcsParser<'a> {
 
         self.expect_byte(b'}')?;
 
-        // Sort by NFC-normalized key (lexicographic byte order of the key string).
-        pairs.sort_by(|a, b| a.0.cmp(&b.0));
+        // RFC 8785 §3.2.3: sort keys by UTF-16 code-unit sequence.
+        // `str::encode_utf16()` returns a lazy iterator; `Iterator::cmp` does
+        // lexicographic comparison with short-circuit evaluation and zero
+        // heap allocation — no Vec<u16> is ever materialised.
+        pairs.sort_by(|a, b| a.0.encode_utf16().cmp(b.0.encode_utf16()));
 
         out.push(b'{');
         for (i, (k, v)) in pairs.iter().enumerate() {
@@ -858,6 +868,62 @@ mod tests {
         assert!(
             result.is_err(),
             "NFC-equivalent duplicate keys must be rejected"
+        );
+    }
+
+    // -------------------------------------------------------------------------
+    // Non-BMP key ordering (RFC 8785 §3.2.3 / UTF-16 sort)
+    //
+    // These are the canonical cross-language conformance vectors also stored in
+    // tests/conformance/vectors.json.  All four cases produce different byte
+    // output under Unicode scalar order vs UTF-16 order; the expected bytes
+    // below are derived from the Python reference (protocol/canonical_json.py).
+    // -------------------------------------------------------------------------
+
+    #[test]
+    fn test_canonicalize_json_non_bmp_key_deseret_utf8() {
+        // non-bmp-1: {𐐷:1}  canonical_hex = 7b22f09090b7223a317d
+        let input = b"{\"\xf0\x90\x90\xb7\":1}";
+        let canonical = canonicalize("json", input).unwrap();
+        assert_eq!(canonical.as_slice(), b"{\"\xf0\x90\x90\xb7\":1}");
+    }
+
+    #[test]
+    fn test_canonicalize_json_non_bmp_key_crab_emoji_utf8() {
+        // non-bmp-2: {🦀:1}  canonical_hex = 7b22f09fa680223a317d
+        let input = b"{\"\xf0\x9f\xa6\x80\":1}";
+        let canonical = canonicalize("json", input).unwrap();
+        assert_eq!(canonical.as_slice(), b"{\"\xf0\x9f\xa6\x80\":1}");
+    }
+
+    #[test]
+    fn test_canonicalize_json_non_bmp_mixed_keys_utf16_order() {
+        // non-bmp-3: input order a, 𐐷, b, 🦀
+        // UTF-16 sort order: a[0x61] < b[0x62] < 𐐷[0xD801,...] < 🦀[0xD83E,...]
+        // canonical_hex = 7b2261223a312c2262223a332c22f09090b7223a322c22f09fa680223a347d
+        let input = b"{\"a\":1,\"\xf0\x90\x90\xb7\":2,\"b\":3,\"\xf0\x9f\xa6\x80\":4}";
+        let canonical = canonicalize("json", input).unwrap();
+        let expected = b"{\"a\":1,\"b\":3,\"\xf0\x90\x90\xb7\":2,\"\xf0\x9f\xa6\x80\":4}";
+        assert_eq!(
+            canonical.as_slice(),
+            expected,
+            "non-BMP keys must sort before U+E000–U+FFFF (UTF-16 surrogate < BMP upper)"
+        );
+    }
+
+    #[test]
+    fn test_canonicalize_json_non_bmp_bmp_boundary_utf16_order() {
+        // non-bmp-4: keys U+E000, U+FFFD, U+10000 — input in scalar order
+        // UTF-16 sort: U+10000[0xD800,0xDC00] < U+E000[0xE000] < U+FFFD[0xFFFD]
+        // canonical_hex = 7b22f0908080223a2266697273742d73757070222c22ee8080223a22707561222c22efbfbd223a227265706c6163656d656e74227d
+        let input = b"{\"\xee\x80\x80\":\"pua\",\"\xef\xbf\xbd\":\"replacement\",\"\xf0\x90\x80\x80\":\"first-supp\"}";
+        let canonical = canonicalize("json", input).unwrap();
+        // 𐀀 (U+10000, surrogates 0xD800/0xDC00) must come first
+        let expected = b"{\"\xf0\x90\x80\x80\":\"first-supp\",\"\xee\x80\x80\":\"pua\",\"\xef\xbf\xbd\":\"replacement\"}";
+        assert_eq!(
+            canonical.as_slice(),
+            expected,
+            "U+10000 surrogate (0xD800) must sort before U+E000 in UTF-16 order"
         );
     }
 

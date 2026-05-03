@@ -1,0 +1,39 @@
+{
+  "version": "1",
+  "description": "Non-BMP (supplementary-plane) cross-language canonical JSON conformance vectors. Keys must be sorted by UTF-16 code-unit sequence per RFC 8785 §3.2.3. All implementations must produce byte-for-byte identical canonical_hex and blake3_hex values. blake3_hex is raw BLAKE3 of the canonical bytes (no domain-separation prefix), matching Canonicalizer.get_hash() in Python and the equivalent in Rust/Go/JS. Generated from the Python reference implementation (protocol/canonical_json.py).",
+  "key_sort_note": "UTF-16 and Unicode scalar order agree for U+0000–U+D7FF and U+E000–U+FFFF (BMP). They diverge for supplementary-plane characters (U+10000+): their surrogate pairs (0xD800–0xDFFF) sort *before* the upper BMP range U+E000–U+FFFF in UTF-16 order but *after* U+FFFF in scalar order. Implementations using scalar order produce different bytes for objects whose key sets straddle this boundary.",
+  "canonical_json_non_bmp": [
+    {
+      "id": "non-bmp-1",
+      "description": "Single non-BMP key: U+10437 DESERET SMALL LETTER HU (𐐷). UTF-16 surrogate pair: 0xD801 0xDC37. Single-key object; confirms non-BMP keys round-trip through UTF-8 encoding correctly.",
+      "input_json": "{\"𐐷\":1}",
+      "input_hex": "7b22f09090b7223a317d",
+      "canonical_hex": "7b22f09090b7223a317d",
+      "blake3_hex": "c96dd4272879bc5dfa29a5c15b018037196e0080fca9a1d91413400a9267256c"
+    },
+    {
+      "id": "non-bmp-2",
+      "description": "Single non-BMP key: U+1F980 CRAB EMOJI (🦀). UTF-16 surrogate pair: 0xD83E 0xDD80. Single-key object; confirms emoji keys round-trip through UTF-8 encoding correctly.",
+      "input_json": "{\"🦀\":1}",
+      "input_hex": "7b22f09fa680223a317d",
+      "canonical_hex": "7b22f09fa680223a317d",
+      "blake3_hex": "af1518683c553e2197d9026a01105e8c08d420458cc4b30d43542f6bc88a6b6f"
+    },
+    {
+      "id": "non-bmp-3",
+      "description": "Mixed BMP/non-BMP keys. Input order: a, 𐐷, b, 🦀. Correct UTF-16 sort: a[0x0061] < b[0x0062] < 𐐷[0xD801,…] < 🦀[0xD83E,…]. Input is deliberately NOT in UTF-16 order to exercise the sort path.",
+      "input_json": "{\"a\":1,\"𐐷\":2,\"b\":3,\"🦀\":4}",
+      "input_hex": "7b2261223a312c22f09090b7223a322c2262223a332c22f09fa680223a347d",
+      "canonical_hex": "7b2261223a312c2262223a332c22f09090b7223a322c22f09fa680223a347d",
+      "blake3_hex": "52777f51edf933fbf3ef25e14397aaf4b22dbe8e920e449606077a0e474dd997"
+    },
+    {
+      "id": "non-bmp-4",
+      "description": "Keys straddling the BMP/supplementary boundary: U+E000 (BMP private-use area), U+FFFD (replacement character), U+10000 (first supplementary character, 𐀀). Input is in scalar order (U+E000 < U+FFFD < U+10000). UTF-16 sort reverses U+10000: high surrogate 0xD800 < 0xE000 < 0xFFFD. This is the canonical divergence test between scalar and UTF-16 key ordering.",
+      "input_json": "{\"\":\"pua\",\"�\":\"replacement\",\"𐀀\":\"first-supp\"}",
+      "input_hex": "7b22ee8080223a22707561222c22efbfbd223a227265706c6163656d656e74222c22f0908080223a2266697273742d73757070227d",
+      "canonical_hex": "7b22f0908080223a2266697273742d73757070222c22ee8080223a22707561222c22efbfbd223a227265706c6163656d656e74227d",
+      "blake3_hex": "7e60a70ffc84ca988edd4bce59f0ca70fd6b9b6f80639d3dae675c0ecafe28c4"
+    }
+  ]
+}
