@@ -113,10 +113,10 @@ func main() {
 		// strictly shorter than the documented default (30s) to maintain
 		// the H-2 ordering guarantee. Operators that need to push the
 		// LRU TTL higher must coordinate both knobs together.
-		const minLRUTTLGuard = 30 * time.Second
-		if d >= minLRUTTLGuard {
-			log.Fatalf("OLYMPUS_SEQUENCER_STORAGE_COMMIT_TIMEOUT (%s) must be strictly less than the Rust LRU TTL (%s) to ensure Go aborts before the LRU prunes; see services/cdhs-smf-rust/src/prepared.rs::DEFAULT_PREPARED_TTL",
-				d, minLRUTTLGuard)
+		const rustPreparedTxTTL = 30 * time.Second
+		if d >= rustPreparedTxTTL {
+			log.Fatalf("OLYMPUS_SEQUENCER_STORAGE_COMMIT_TIMEOUT (%s) must be strictly less than the Rust prepared-tx LRU TTL (%s) to ensure Go aborts before the LRU prunes; see services/cdhs-smf-rust/src/prepared.rs::DEFAULT_PREPARED_TTL",
+				d, rustPreparedTxTTL)
 		}
 		storageCommitTimeout = d
 	}

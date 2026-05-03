@@ -216,7 +216,7 @@ async def test_storage_commit_timeout_constant_documented() -> None:
         pytest.skip("Go sequencer source not available in this checkout")
     with open(main_go, encoding="utf-8") as f:
         src = f.read()
-    assert "minLRUTTLGuard = 30 * time.Second" in src, (
+    assert "rustPreparedTxTTL = 30 * time.Second" in src, (
         "main.go must guard the storage-commit timeout against the 30s "
         "Rust LRU TTL — see api.DefaultStorageCommitTimeout doc."
     )
