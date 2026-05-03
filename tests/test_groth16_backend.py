@@ -217,6 +217,10 @@ class TestGenerate:
 
         with (
             patch("shutil.which", return_value="/usr/bin/node"),
+            patch(
+                "protocol.groth16_backend.Groth16Backend._resolve_rapidsnark_path",
+                return_value=None,
+            ),
             patch("protocol.groth16_backend._run_subprocess", side_effect=mock_run),
         ):
             proof = backend.generate(statement, witness)
@@ -542,3 +546,110 @@ class TestProofSystemType:
         """Test that proof_system_type property returns GROTH16."""
         backend = Groth16Backend()
         assert backend.proof_system_type == ProofSystemType.GROTH16
+
+
+class TestResolveRapidsnarkPath:
+    """Tests for the _resolve_rapidsnark_path() static method."""
+
+    def test_returns_none_when_not_found(self) -> None:
+        """_resolve_rapidsnark_path() returns None when rapidsnark is not in PATH."""
+        with patch("shutil.which", return_value=None):
+            result = Groth16Backend._resolve_rapidsnark_path()
+        assert result is None
+
+    def test_returns_path_when_found(self) -> None:
+        """_resolve_rapidsnark_path() returns the binary path when rapidsnark is available."""
+        with patch("shutil.which", return_value="/usr/local/bin/rapidsnark") as mock_which:
+            result = Groth16Backend._resolve_rapidsnark_path()
+        mock_which.assert_called_once_with("rapidsnark")
+        assert result == "/usr/local/bin/rapidsnark"
+
+
+class TestRapidsnarkFallback:
+    """Tests for rapidsnark integration in generate()."""
+
+    def test_generate_uses_rapidsnark_when_available(self, tmp_path: Path) -> None:
+        """generate() invokes rapidsnark binary directly when it is found in PATH."""
+        circuits_dir = tmp_path / "circuits"
+        circuits_dir.mkdir()
+        build_dir = tmp_path / "build"
+        build_dir.mkdir()
+
+        zkey_path = build_dir / "test_final.zkey"
+        zkey_path.touch()
+
+        wasm_dir = build_dir / "test_js"
+        wasm_dir.mkdir()
+        (wasm_dir / "test.wasm").touch()
+        (wasm_dir / "generate_witness.js").touch()
+
+        backend = Groth16Backend(circuits_dir=circuits_dir, build_dir=build_dir)
+        statement = Statement(circuit="test", public_inputs={"root": "1"})
+        witness = Witness(private_inputs={"path": "2"})
+
+        def mock_run(cmd: list[str], *, cwd=None, timeout: int, check: bool = True):
+            mock_result = MagicMock()
+            mock_result.returncode = 0
+            mock_result.stdout = ""
+            mock_result.stderr = ""
+            # Rapidsnark prove call: [rapidsnark_bin, zkey, witness, proof, public]
+            # Detect by second arg ending in .zkey (witness gen has generate_witness.js)
+            if len(cmd) == 5 and str(cmd[1]).endswith(".zkey"):
+                Path(cmd[3]).write_text('{"pi_a": [], "pi_b": [], "pi_c": []}')
+                Path(cmd[4]).write_text('["1"]')
+            return mock_result
+
+        with (
+            patch("shutil.which", return_value="/usr/bin/node"),
+            patch(
+                "protocol.groth16_backend.Groth16Backend._resolve_rapidsnark_path",
+                return_value="/usr/local/bin/rapidsnark",
+            ),
+            patch("protocol.groth16_backend._run_subprocess", side_effect=mock_run),
+        ):
+            proof = backend.generate(statement, witness)
+
+        assert isinstance(proof, Proof)
+        assert proof.proof_system == ProofSystemType.GROTH16
+
+    def test_generate_falls_back_to_snarkjs_when_rapidsnark_absent(self, tmp_path: Path) -> None:
+        """generate() falls back to snarkjs when rapidsnark is not in PATH."""
+        circuits_dir = tmp_path / "circuits"
+        circuits_dir.mkdir()
+        build_dir = tmp_path / "build"
+        build_dir.mkdir()
+
+        zkey_path = build_dir / "test_final.zkey"
+        zkey_path.touch()
+
+        wasm_dir = build_dir / "test_js"
+        wasm_dir.mkdir()
+        (wasm_dir / "test.wasm").touch()
+        (wasm_dir / "generate_witness.js").touch()
+
+        backend = Groth16Backend(circuits_dir=circuits_dir, build_dir=build_dir)
+        statement = Statement(circuit="test", public_inputs={"root": "1"})
+        witness = Witness(private_inputs={"path": "2"})
+
+        def mock_run(cmd: list[str], *, cwd=None, timeout: int, check: bool = True):
+            mock_result = MagicMock()
+            mock_result.returncode = 0
+            mock_result.stdout = ""
+            mock_result.stderr = ""
+            if "prove" in cmd:
+                Path(cmd[-2]).write_text('{"pi_a": [], "pi_b": [], "pi_c": []}')
+                Path(cmd[-1]).write_text('["1"]')
+            return mock_result
+
+        with (
+            patch("shutil.which", return_value="/usr/bin/node"),
+            patch(
+                "protocol.groth16_backend.Groth16Backend._resolve_rapidsnark_path",
+                return_value=None,
+            ),
+            patch("protocol.groth16_backend._run_subprocess", side_effect=mock_run),
+        ):
+            proof = backend.generate(statement, witness)
+
+        assert isinstance(proof, Proof)
+        assert proof.proof_system == ProofSystemType.GROTH16

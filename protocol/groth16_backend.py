@@ -258,6 +258,19 @@ class Groth16Backend(ProofBackendProtocol):
             )
         return node_path
 
+    @staticmethod
+    def _resolve_rapidsnark_path() -> str | None:
+        """Return absolute path to the rapidsnark binary if available, else None.
+
+        Rapidsnark is an optional C++ native Groth16 prover that is 5-10× faster
+        than snarkjs for the prove step.  It uses the same ``.zkey`` and ``.wtns``
+        files, so it is a transparent drop-in for the snarkjs prove command.
+
+        Returns:
+            Absolute path to the ``rapidsnark`` binary, or ``None`` if not found.
+        """
+        return shutil.which("rapidsnark")
+
     def _resolve_snarkjs_bin(self) -> str:
         """Return absolute path to the snarkjs launcher (snarkjs or npx)."""
         snarkjs_path = shutil.which(self.snarkjs_bin)
@@ -375,24 +388,47 @@ class Groth16Backend(ProofBackendProtocol):
             except subprocess.CalledProcessError as e:
                 raise ProofGenerationError(f"Witness generation failed: {e.stderr}") from e
 
-            # Generate proof
+            # Generate proof — prefer rapidsnark (C++ native, 5-10× faster) when available
             proof_path = tmp_path / "proof.json"
             public_path = tmp_path / "public.json"
 
-            try:
-                self._run_snarkjs(
-                    [
-                        "groth16",
-                        "prove",
-                        str(zkey_path),
-                        str(witness_path),
-                        str(proof_path),
-                        str(public_path),
-                    ],
-                    timeout=_PROOF_TIMEOUT_SECS,
+            rapidsnark_bin = self._resolve_rapidsnark_path()
+            if rapidsnark_bin is not None:
+                _log.info("Using rapidsnark for proof generation (5-10× faster than snarkjs)")
+                try:
+                    _run_subprocess(
+                        [
+                            rapidsnark_bin,
+                            str(zkey_path),
+                            str(witness_path),
+                            str(proof_path),
+                            str(public_path),
+                        ],
+                        timeout=_PROOF_TIMEOUT_SECS,
+                    )
+                except subprocess.CalledProcessError as e:
+                    raise ProofGenerationError(
+                        f"Proof generation failed (rapidsnark): {e.stderr}"
+                    ) from e
+            else:
+                _log.debug(
+                    "rapidsnark not found in PATH; using snarkjs "
+                    "(install rapidsnark for 5-10× speedup)"
                 )
-            except subprocess.CalledProcessError as e:
-                raise ProofGenerationError(f"Proof generation failed: {e.stderr}") from e
+                try:
+                    self._run_snarkjs(
+                        [
+                            "groth16",
+                            "prove",
+                            str(zkey_path),
+                            str(witness_path),
+                            str(proof_path),
+                            str(public_path),
+                        ],
+                        timeout=_PROOF_TIMEOUT_SECS,
+                    )
+                except subprocess.CalledProcessError as e:
+                    raise ProofGenerationError(f"Proof generation failed: {e.stderr}") from e
 
             # Read proof and public signals
             with proof_path.open("r", encoding="utf-8") as f:

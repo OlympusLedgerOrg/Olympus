@@ -119,7 +119,7 @@ All stages are independently verifiable. The canonicalization version is current
 | BLAKE3 (domain-separated) | All ledger hashing, CD-HS-ST leaf/node hashes, global keys |
 | Ed25519 (PyNaCl / ed25519-dalek) | Shard header signing, federation votes |
 | Poseidon (BN128) | ZK circuit commitments only (separate from BLAKE3 ledger layer) |
-| Groth16 (snarkjs / Circom) | ZK proofs: document existence, redaction validity, non-existence |
+| Groth16 (snarkjs / rapidsnark / Circom) | ZK proofs: document existence, redaction validity, non-existence |
 | RFC 3161 | External timestamp tokens anchoring shard headers |
 
 ## Technology Stack
@@ -129,7 +129,7 @@ All stages are independently verifiable. The canonicalization version is current
 | **Python API** | FastAPI 0.135, SQLAlchemy 2 async, psycopg 3, Pydantic v2, Uvicorn |
 | **Go sequencer** | Go 1.24, gRPC (google.golang.org/grpc v1.79), lib/pq† |
 | **Rust crypto core** | Rust 2021 edition, blake3 1.5, ed25519-dalek 2.1, tonic 0.10 (gRPC)†, pyo3 0.24 |
-| **ZK circuits** | Circom, snarkjs, circomlib (Poseidon); Halo2 gated behind `OLYMPUS_HALO2_ENABLED` |
+| **ZK circuits** | Circom, snarkjs, circomlib (Poseidon); rapidsnark (optional native prover, 5-10× faster); Halo2 gated behind `OLYMPUS_HALO2_ENABLED` |
 | **Database** | PostgreSQL 16 with Alembic migrations |
 | **Quality tooling** | Ruff, mypy, Bandit, pytest (>=85% coverage floor), Hypothesis, pip-audit |
 | **CI** | GitHub Actions: lint, typecheck, unit, smoke, verifier-conformance, CodeQL, dependency-lock |

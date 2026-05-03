@@ -23,14 +23,46 @@ Phase 1 (Powers of Tau) is **complete**. Olympus uses the publicly audited
 [Hermez Network](https://blog.hermez.io/hermez-cryptographic-setup/) Phase 1
 output:
 
-| File | Source | B2 hash |
-|------|--------|---------|
-| `powersOfTau28_hez_final_17.ptau` | Hermez S3 (public) | `6247a3433948b35fbfae414fa5a9355bfb45f56efa7ab4929e669264a0258976741dfbe3288bfb49828e5df02c2e633df38d2245e30162ae7e3bcca5b8b49345` |
+| File | Source | BLAKE2b-512 hash |
+|------|--------|------------------|
+| `powersOfTau28_hez_final_19.ptau` | [Polygon/zkEVM GCS](https://storage.googleapis.com/zkevm/ptau/powersOfTau28_hez_final_19.ptau) | `bca9d8b04242f175189872c42ceaa21e2951e0f0f272a0cc54fc37193ff6648600eaf1c555c70cdedfaf9fb74927de7aa1d33dc1e2a7f1a50619484989da0887` |
 
-This file supports circuits up to 2^17 constraints (~131 000 R1CS rows), which
-covers all current Olympus circuits. It is automatically downloaded by
-`.github/workflows/copilot-setup-steps.yml` and integrity-checked with
-`b2sum` on every CI run. **No new Phase 1 ceremony is required or planned.**
+> **Upgrade note (2026-05):** Upgraded from `powersOfTau28_hez_final_17.ptau`
+> (2^17 = ~131k constraints) to `powersOfTau28_hez_final_19.ptau`
+> (2^19 = ~524k constraints) to provide headroom for future circuits without
+> requiring a new Phase 1 download. All current circuits remain well within limit.
+> The download source was also updated from the legacy Hermez S3 bucket
+> (unreliable) to the Polygon/zkEVM GCS bucket (current canonical host per
+> the official [iden3/snarkjs README](https://github.com/iden3/snarkjs#7-prepare-phase-2)).
+
+This file supports circuits up to 2^19 constraints (~524 000 R1CS rows), which
+covers all current Olympus circuits with significant headroom. It is automatically
+downloaded by `.github/workflows/copilot-setup-steps.yml` and integrity-checked
+with `b2sum` when the PTAU cache is missed in CI. **No new Phase 1 ceremony is required or planned.**
+
+> ⚠️ **GCS URL stability:** The Polygon/zkEVM GCS bucket is the current
+> canonical host. If this URL ever becomes unavailable (as the original Hermez
+> S3 bucket did), update `PTAU_URL` in **three places**:
+> `proofs/setup_circuits.sh`, `tools/groth16_setup.sh`, and
+> `.github/workflows/copilot-setup-steps.yml`. The CI cache (`ptau-19`) will
+> protect existing build environments, but new developer environments will fail
+> until the URL is updated. The BLAKE2b-512 hash above is the integrity anchor
+> regardless of which mirror is used.
+
+#### Future circuit planning
+
+Current constraint counts (approximate):
+
+| Circuit | Constraints | Headroom at power 19 |
+|---------|------------|----------------------|
+| `document_existence` | ~8k | ✅ Ample |
+| `redaction_validity` | ~41k | ✅ Ample |
+| `non_existence` | ~70k | ✅ Ample |
+
+If any future circuit approaches **400k constraints**, re-evaluate upgrading to
+`powersOfTau28_hez_final_20.ptau` (2^20 = ~1M constraints) **before** the
+production Phase 2 ceremony is run with FPF/EFF. Re-running Phase 2 after the
+ceremony is the most expensive possible fix.
 
 ### Phase 2 — Pending ⏳ (Olympus Ceremony)
 

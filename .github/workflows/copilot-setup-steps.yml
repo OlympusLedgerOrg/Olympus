@@ -36,15 +36,23 @@ jobs:
           cache-dependency-path: proofs/package-lock.json
 
       - name: Install proofs JS dependencies
-        run: npm install --prefix proofs
+        run: npm ci --ignore-scripts --prefix proofs
+
+      - name: Cache powers of tau parameters
+        id: cache-ptau
+        uses: actions/cache@v4
+        with:
+          path: proofs/keys/powersOfTau28_hez_final_19.ptau
+          key: ptau-19
 
       - name: Download powers of tau parameters
+        if: steps.cache-ptau.outputs.cache-hit != 'true'
         run: |
           set -euo pipefail
           mkdir -p proofs/keys
-          PTAU_PATH="proofs/keys/powersOfTau28_hez_final_17.ptau"
-          PTAU_URL="https://hermez.s3-eu-west-1.amazonaws.com/powersOfTau28_hez_final_17.ptau"
-          PTAU_B2="6247a3433948b35fbfae414fa5a9355bfb45f56efa7ab4929e669264a0258976741dfbe3288bfb49828e5df02c2e633df38d2245e30162ae7e3bcca5b8b49345"
+          PTAU_PATH="proofs/keys/powersOfTau28_hez_final_19.ptau"
+          PTAU_URL="https://storage.googleapis.com/zkevm/ptau/powersOfTau28_hez_final_19.ptau"
+          PTAU_B2="bca9d8b04242f175189872c42ceaa21e2951e0f0f272a0cc54fc37193ff6648600eaf1c555c70cdedfaf9fb74927de7aa1d33dc1e2a7f1a50619484989da0887"
 
           if curl -fSL --connect-timeout 30 --retry 3 --retry-delay 5 \
             -o "${PTAU_PATH}" "${PTAU_URL}"; then
@@ -53,3 +61,15 @@ jobs:
             echo "WARNING: Could not download PTAU parameters; skipping optional setup step."
             rm -f "${PTAU_PATH}"
           fi
+
+      - name: Install rapidsnark (native C++ Groth16 prover — 5-10× faster than snarkjs)
+        run: |
+          set -euo pipefail
+          # Clone Mysten Labs' rapidsnark fork (Apache 2.0; powers Sui blockchain in production)
+          git clone --depth 1 https://github.com/MystenLabs/rapidsnark.git /tmp/rapidsnark
+          cd /tmp/rapidsnark
+          npm install --silent
+          npx task createFieldSources
+          npx task buildProver
+          sudo cp build/prover /usr/local/bin/rapidsnark
+          rapidsnark --version 2>/dev/null || echo "rapidsnark installed successfully"
