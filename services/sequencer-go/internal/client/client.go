@@ -74,6 +74,13 @@ func (c *CdhsSmfClient) Close() error {
 // parserID and canonicalParserVersion are ADR-0003 parser-provenance fields
 // bound into the leaf hash domain by the Rust service. Both must be non-empty;
 // the Rust service rejects empty strings with an error.
+//
+// DEPRECATED for write paths that require crash safety: this method calls
+// the single-phase Update RPC, which mutates the in-memory SMT immediately,
+// before any external storage durability step. New code SHOULD use
+// PrepareUpdate + CommitPreparedUpdate (with an Abort on failure) so that
+// durable Postgres state and live SMT state cannot diverge on storage
+// failure (H-2).
 func (c *CdhsSmfClient) Update(ctx context.Context, shardID string, recordKey *pb.RecordKey, canonicalContent []byte, parserID string, canonicalParserVersion string) (*pb.UpdateResponse, error) {
 	req := &pb.UpdateRequest{
 		ShardId:                shardID,
@@ -89,6 +96,65 @@ func (c *CdhsSmfClient) Update(ctx context.Context, shardID string, recordKey *p
 	}
 
 	return resp, nil
+}
+
+// PrepareUpdate is phase 1 of the two-phase commit between the Rust SMT and
+// the sequencer's Postgres layer (H-2). It returns a transaction_id that must
+// later be passed to either CommitPreparedUpdate (after the durable storage
+// write succeeds) or AbortPreparedUpdate (on any failure).
+//
+// A successful PrepareUpdate does NOT mutate the live in-memory SMT — the
+// new root and deltas it returns reflect what the SMT *will* hold after the
+// matching CommitPreparedUpdate runs.
+func (c *CdhsSmfClient) PrepareUpdate(ctx context.Context, shardID string, recordKey *pb.RecordKey, canonicalContent []byte, parserID string, canonicalParserVersion string) (*pb.PrepareUpdateResponse, error) {
+	req := &pb.PrepareUpdateRequest{
+		ShardId:                shardID,
+		RecordKey:              recordKey,
+		CanonicalContent:       canonicalContent,
+		ParserId:               parserID,
+		CanonicalParserVersion: canonicalParserVersion,
+	}
+
+	resp, err := c.client.PrepareUpdate(ctx, req)
+	if err != nil {
+		return nil, fmt.Errorf("prepare update failed: %w", err)
+	}
+
+	return resp, nil
+}
+
+// CommitPreparedUpdate is phase 2 of the two-phase commit (H-2). It atomically
+// applies a previously prepared update to the live SMT. Callers MUST only
+// invoke this after the corresponding Postgres COMMIT has succeeded; on any
+// upstream failure they MUST call AbortPreparedUpdate instead.
+//
+// Returns a NotFound gRPC error if the transaction id is unknown (already
+// committed, aborted, or TTL-evicted). Returns FailedPrecondition if another
+// commit advanced the SMT root since the prepare; the caller should then
+// Abort and re-prepare.
+func (c *CdhsSmfClient) CommitPreparedUpdate(ctx context.Context, transactionID string) (*pb.CommitPreparedUpdateResponse, error) {
+	req := &pb.CommitPreparedUpdateRequest{TransactionId: transactionID}
+
+	resp, err := c.client.CommitPreparedUpdate(ctx, req)
+	if err != nil {
+		return nil, fmt.Errorf("commit prepared update failed: %w", err)
+	}
+
+	return resp, nil
+}
+
+// AbortPreparedUpdate discards a prepared transaction. Idempotent: returns
+// nil whether or not the transaction is currently in the prepared store.
+// Callers MUST invoke this on any failure path between PrepareUpdate and
+// CommitPreparedUpdate so the prepared LRU does not fill up with abandoned
+// entries.
+func (c *CdhsSmfClient) AbortPreparedUpdate(ctx context.Context, transactionID string) error {
+	req := &pb.AbortPreparedUpdateRequest{TransactionId: transactionID}
+
+	if _, err := c.client.AbortPreparedUpdate(ctx, req); err != nil {
+		return fmt.Errorf("abort prepared update failed: %w", err)
+	}
+	return nil
 }
 
 // ProveInclusion generates a cryptographic inclusion proof

@@ -189,6 +189,387 @@ func (x *UpdateResponse) GetTreeSize() uint64 {
 	return 0
 }
 
+// Request to prepare an update (phase 1 of two-phase commit).
+//
+// Identical wire shape to UpdateRequest; the difference is purely in the
+// service-side semantics (no SMT mutation).
+type PrepareUpdateRequest struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// Shard identifier (e.g., "watauga:2025:budget")
+	ShardId string `protobuf:"bytes,1,opt,name=shard_id,json=shardId,proto3" json:"shard_id,omitempty"`
+	// Record key components (type, id, version, etc.)
+	RecordKey *RecordKey `protobuf:"bytes,2,opt,name=record_key,json=recordKey,proto3" json:"record_key,omitempty"`
+	// Canonicalized record content (already canonicalized)
+	CanonicalContent []byte `protobuf:"bytes,3,opt,name=canonical_content,json=canonicalContent,proto3" json:"canonical_content,omitempty"`
+	// Parser identity ("<name>@<version>"). Required by ADR-0003 and bound
+	// into the leaf hash domain. Empty string is rejected by the service.
+	ParserId string `protobuf:"bytes,4,opt,name=parser_id,json=parserId,proto3" json:"parser_id,omitempty"`
+	// Operator-controlled stable canonical parser version (e.g. "v1").
+	// Required by ADR-0003 and bound into the leaf hash domain. Empty string
+	// is rejected by the service.
+	CanonicalParserVersion string `protobuf:"bytes,5,opt,name=canonical_parser_version,json=canonicalParserVersion,proto3" json:"canonical_parser_version,omitempty"`
+	unknownFields          protoimpl.UnknownFields
+	sizeCache              protoimpl.SizeCache
+}
+
+func (x *PrepareUpdateRequest) Reset() {
+	*x = PrepareUpdateRequest{}
+	mi := &file_cdhs_smf_proto_msgTypes[2]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *PrepareUpdateRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*PrepareUpdateRequest) ProtoMessage() {}
+
+func (x *PrepareUpdateRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_cdhs_smf_proto_msgTypes[2]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use PrepareUpdateRequest.ProtoReflect.Descriptor instead.
+func (*PrepareUpdateRequest) Descriptor() ([]byte, []int) {
+	return file_cdhs_smf_proto_rawDescGZIP(), []int{2}
+}
+
+func (x *PrepareUpdateRequest) GetShardId() string {
+	if x != nil {
+		return x.ShardId
+	}
+	return ""
+}
+
+func (x *PrepareUpdateRequest) GetRecordKey() *RecordKey {
+	if x != nil {
+		return x.RecordKey
+	}
+	return nil
+}
+
+func (x *PrepareUpdateRequest) GetCanonicalContent() []byte {
+	if x != nil {
+		return x.CanonicalContent
+	}
+	return nil
+}
+
+func (x *PrepareUpdateRequest) GetParserId() string {
+	if x != nil {
+		return x.ParserId
+	}
+	return ""
+}
+
+func (x *PrepareUpdateRequest) GetCanonicalParserVersion() string {
+	if x != nil {
+		return x.CanonicalParserVersion
+	}
+	return ""
+}
+
+// Response from PrepareUpdate. Carries the same data as UpdateResponse so
+// the sequencer can persist deltas + sign the new root before calling
+// CommitPreparedUpdate, plus a transaction_id used to commit/abort.
+type PrepareUpdateResponse struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// Opaque transaction identifier. The caller MUST pass this back to
+	// CommitPreparedUpdate or AbortPreparedUpdate.
+	TransactionId string `protobuf:"bytes,1,opt,name=transaction_id,json=transactionId,proto3" json:"transaction_id,omitempty"`
+	// The root hash that the SMT will hold AFTER this prepared update is
+	// committed. Identical to what Update() would have returned.
+	NewRoot []byte `protobuf:"bytes,2,opt,name=new_root,json=newRoot,proto3" json:"new_root,omitempty"`
+	// The root hash the SMT held at the moment of preparation. Used by
+	// CommitPreparedUpdate to detect that another commit has advanced the
+	// root in the meantime.
+	PriorRoot []byte `protobuf:"bytes,3,opt,name=prior_root,json=priorRoot,proto3" json:"prior_root,omitempty"`
+	// The global key that was computed from (shard_id, record_key).
+	GlobalKey []byte `protobuf:"bytes,4,opt,name=global_key,json=globalKey,proto3" json:"global_key,omitempty"`
+	// The leaf value hash that will be stored.
+	LeafValueHash []byte `protobuf:"bytes,5,opt,name=leaf_value_hash,json=leafValueHash,proto3" json:"leaf_value_hash,omitempty"`
+	// SMT node deltas to persist alongside the leaf. Same length / encoding
+	// as UpdateResponse.deltas.
+	Deltas []*SmtNodeDelta `protobuf:"bytes,6,rep,name=deltas,proto3" json:"deltas,omitempty"`
+	// Tree size after this prepared update is committed.
+	TreeSize      uint64 `protobuf:"varint,7,opt,name=tree_size,json=treeSize,proto3" json:"tree_size,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *PrepareUpdateResponse) Reset() {
+	*x = PrepareUpdateResponse{}
+	mi := &file_cdhs_smf_proto_msgTypes[3]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *PrepareUpdateResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*PrepareUpdateResponse) ProtoMessage() {}
+
+func (x *PrepareUpdateResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_cdhs_smf_proto_msgTypes[3]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use PrepareUpdateResponse.ProtoReflect.Descriptor instead.
+func (*PrepareUpdateResponse) Descriptor() ([]byte, []int) {
+	return file_cdhs_smf_proto_rawDescGZIP(), []int{3}
+}
+
+func (x *PrepareUpdateResponse) GetTransactionId() string {
+	if x != nil {
+		return x.TransactionId
+	}
+	return ""
+}
+
+func (x *PrepareUpdateResponse) GetNewRoot() []byte {
+	if x != nil {
+		return x.NewRoot
+	}
+	return nil
+}
+
+func (x *PrepareUpdateResponse) GetPriorRoot() []byte {
+	if x != nil {
+		return x.PriorRoot
+	}
+	return nil
+}
+
+func (x *PrepareUpdateResponse) GetGlobalKey() []byte {
+	if x != nil {
+		return x.GlobalKey
+	}
+	return nil
+}
+
+func (x *PrepareUpdateResponse) GetLeafValueHash() []byte {
+	if x != nil {
+		return x.LeafValueHash
+	}
+	return nil
+}
+
+func (x *PrepareUpdateResponse) GetDeltas() []*SmtNodeDelta {
+	if x != nil {
+		return x.Deltas
+	}
+	return nil
+}
+
+func (x *PrepareUpdateResponse) GetTreeSize() uint64 {
+	if x != nil {
+		return x.TreeSize
+	}
+	return 0
+}
+
+// Request to atomically commit a previously prepared update.
+type CommitPreparedUpdateRequest struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// Transaction id returned by PrepareUpdate.
+	TransactionId string `protobuf:"bytes,1,opt,name=transaction_id,json=transactionId,proto3" json:"transaction_id,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *CommitPreparedUpdateRequest) Reset() {
+	*x = CommitPreparedUpdateRequest{}
+	mi := &file_cdhs_smf_proto_msgTypes[4]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *CommitPreparedUpdateRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*CommitPreparedUpdateRequest) ProtoMessage() {}
+
+func (x *CommitPreparedUpdateRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_cdhs_smf_proto_msgTypes[4]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use CommitPreparedUpdateRequest.ProtoReflect.Descriptor instead.
+func (*CommitPreparedUpdateRequest) Descriptor() ([]byte, []int) {
+	return file_cdhs_smf_proto_rawDescGZIP(), []int{4}
+}
+
+func (x *CommitPreparedUpdateRequest) GetTransactionId() string {
+	if x != nil {
+		return x.TransactionId
+	}
+	return ""
+}
+
+// Response from CommitPreparedUpdate.
+type CommitPreparedUpdateResponse struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// The new root hash after the prepared update has been applied. Identical
+	// to PrepareUpdateResponse.new_root on success.
+	NewRoot []byte `protobuf:"bytes,1,opt,name=new_root,json=newRoot,proto3" json:"new_root,omitempty"`
+	// Tree size after commit.
+	TreeSize      uint64 `protobuf:"varint,2,opt,name=tree_size,json=treeSize,proto3" json:"tree_size,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *CommitPreparedUpdateResponse) Reset() {
+	*x = CommitPreparedUpdateResponse{}
+	mi := &file_cdhs_smf_proto_msgTypes[5]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *CommitPreparedUpdateResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*CommitPreparedUpdateResponse) ProtoMessage() {}
+
+func (x *CommitPreparedUpdateResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_cdhs_smf_proto_msgTypes[5]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use CommitPreparedUpdateResponse.ProtoReflect.Descriptor instead.
+func (*CommitPreparedUpdateResponse) Descriptor() ([]byte, []int) {
+	return file_cdhs_smf_proto_rawDescGZIP(), []int{5}
+}
+
+func (x *CommitPreparedUpdateResponse) GetNewRoot() []byte {
+	if x != nil {
+		return x.NewRoot
+	}
+	return nil
+}
+
+func (x *CommitPreparedUpdateResponse) GetTreeSize() uint64 {
+	if x != nil {
+		return x.TreeSize
+	}
+	return 0
+}
+
+// Request to discard a previously prepared update.
+type AbortPreparedUpdateRequest struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// Transaction id returned by PrepareUpdate.
+	TransactionId string `protobuf:"bytes,1,opt,name=transaction_id,json=transactionId,proto3" json:"transaction_id,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *AbortPreparedUpdateRequest) Reset() {
+	*x = AbortPreparedUpdateRequest{}
+	mi := &file_cdhs_smf_proto_msgTypes[6]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *AbortPreparedUpdateRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*AbortPreparedUpdateRequest) ProtoMessage() {}
+
+func (x *AbortPreparedUpdateRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_cdhs_smf_proto_msgTypes[6]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use AbortPreparedUpdateRequest.ProtoReflect.Descriptor instead.
+func (*AbortPreparedUpdateRequest) Descriptor() ([]byte, []int) {
+	return file_cdhs_smf_proto_rawDescGZIP(), []int{6}
+}
+
+func (x *AbortPreparedUpdateRequest) GetTransactionId() string {
+	if x != nil {
+		return x.TransactionId
+	}
+	return ""
+}
+
+// Response from AbortPreparedUpdate. Empty for now; the RPC is idempotent
+// and returns OK whether or not the transaction was still present.
+type AbortPreparedUpdateResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *AbortPreparedUpdateResponse) Reset() {
+	*x = AbortPreparedUpdateResponse{}
+	mi := &file_cdhs_smf_proto_msgTypes[7]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *AbortPreparedUpdateResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*AbortPreparedUpdateResponse) ProtoMessage() {}
+
+func (x *AbortPreparedUpdateResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_cdhs_smf_proto_msgTypes[7]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use AbortPreparedUpdateResponse.ProtoReflect.Descriptor instead.
+func (*AbortPreparedUpdateResponse) Descriptor() ([]byte, []int) {
+	return file_cdhs_smf_proto_rawDescGZIP(), []int{7}
+}
+
 // Record key components
 type RecordKey struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
@@ -206,7 +587,7 @@ type RecordKey struct {
 
 func (x *RecordKey) Reset() {
 	*x = RecordKey{}
-	mi := &file_cdhs_smf_proto_msgTypes[2]
+	mi := &file_cdhs_smf_proto_msgTypes[8]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -218,7 +599,7 @@ func (x *RecordKey) String() string {
 func (*RecordKey) ProtoMessage() {}
 
 func (x *RecordKey) ProtoReflect() protoreflect.Message {
-	mi := &file_cdhs_smf_proto_msgTypes[2]
+	mi := &file_cdhs_smf_proto_msgTypes[8]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -231,7 +612,7 @@ func (x *RecordKey) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RecordKey.ProtoReflect.Descriptor instead.
 func (*RecordKey) Descriptor() ([]byte, []int) {
-	return file_cdhs_smf_proto_rawDescGZIP(), []int{2}
+	return file_cdhs_smf_proto_rawDescGZIP(), []int{8}
 }
 
 func (x *RecordKey) GetRecordType() string {
@@ -277,7 +658,7 @@ type SmtNodeDelta struct {
 
 func (x *SmtNodeDelta) Reset() {
 	*x = SmtNodeDelta{}
-	mi := &file_cdhs_smf_proto_msgTypes[3]
+	mi := &file_cdhs_smf_proto_msgTypes[9]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -289,7 +670,7 @@ func (x *SmtNodeDelta) String() string {
 func (*SmtNodeDelta) ProtoMessage() {}
 
 func (x *SmtNodeDelta) ProtoReflect() protoreflect.Message {
-	mi := &file_cdhs_smf_proto_msgTypes[3]
+	mi := &file_cdhs_smf_proto_msgTypes[9]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -302,7 +683,7 @@ func (x *SmtNodeDelta) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SmtNodeDelta.ProtoReflect.Descriptor instead.
 func (*SmtNodeDelta) Descriptor() ([]byte, []int) {
-	return file_cdhs_smf_proto_rawDescGZIP(), []int{3}
+	return file_cdhs_smf_proto_rawDescGZIP(), []int{9}
 }
 
 func (x *SmtNodeDelta) GetPath() []byte {
@@ -341,7 +722,7 @@ type ProveInclusionRequest struct {
 
 func (x *ProveInclusionRequest) Reset() {
 	*x = ProveInclusionRequest{}
-	mi := &file_cdhs_smf_proto_msgTypes[4]
+	mi := &file_cdhs_smf_proto_msgTypes[10]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -353,7 +734,7 @@ func (x *ProveInclusionRequest) String() string {
 func (*ProveInclusionRequest) ProtoMessage() {}
 
 func (x *ProveInclusionRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_cdhs_smf_proto_msgTypes[4]
+	mi := &file_cdhs_smf_proto_msgTypes[10]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -366,7 +747,7 @@ func (x *ProveInclusionRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ProveInclusionRequest.ProtoReflect.Descriptor instead.
 func (*ProveInclusionRequest) Descriptor() ([]byte, []int) {
-	return file_cdhs_smf_proto_rawDescGZIP(), []int{4}
+	return file_cdhs_smf_proto_rawDescGZIP(), []int{10}
 }
 
 func (x *ProveInclusionRequest) GetShardId() string {
@@ -412,7 +793,7 @@ type ProveInclusionResponse struct {
 
 func (x *ProveInclusionResponse) Reset() {
 	*x = ProveInclusionResponse{}
-	mi := &file_cdhs_smf_proto_msgTypes[5]
+	mi := &file_cdhs_smf_proto_msgTypes[11]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -424,7 +805,7 @@ func (x *ProveInclusionResponse) String() string {
 func (*ProveInclusionResponse) ProtoMessage() {}
 
 func (x *ProveInclusionResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_cdhs_smf_proto_msgTypes[5]
+	mi := &file_cdhs_smf_proto_msgTypes[11]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -437,7 +818,7 @@ func (x *ProveInclusionResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ProveInclusionResponse.ProtoReflect.Descriptor instead.
 func (*ProveInclusionResponse) Descriptor() ([]byte, []int) {
-	return file_cdhs_smf_proto_rawDescGZIP(), []int{5}
+	return file_cdhs_smf_proto_rawDescGZIP(), []int{11}
 }
 
 func (x *ProveInclusionResponse) GetGlobalKey() []byte {
@@ -505,7 +886,7 @@ type VerifyInclusionRequest struct {
 
 func (x *VerifyInclusionRequest) Reset() {
 	*x = VerifyInclusionRequest{}
-	mi := &file_cdhs_smf_proto_msgTypes[6]
+	mi := &file_cdhs_smf_proto_msgTypes[12]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -517,7 +898,7 @@ func (x *VerifyInclusionRequest) String() string {
 func (*VerifyInclusionRequest) ProtoMessage() {}
 
 func (x *VerifyInclusionRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_cdhs_smf_proto_msgTypes[6]
+	mi := &file_cdhs_smf_proto_msgTypes[12]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -530,7 +911,7 @@ func (x *VerifyInclusionRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use VerifyInclusionRequest.ProtoReflect.Descriptor instead.
 func (*VerifyInclusionRequest) Descriptor() ([]byte, []int) {
-	return file_cdhs_smf_proto_rawDescGZIP(), []int{6}
+	return file_cdhs_smf_proto_rawDescGZIP(), []int{12}
 }
 
 func (x *VerifyInclusionRequest) GetGlobalKey() []byte {
@@ -588,7 +969,7 @@ type VerifyInclusionResponse struct {
 
 func (x *VerifyInclusionResponse) Reset() {
 	*x = VerifyInclusionResponse{}
-	mi := &file_cdhs_smf_proto_msgTypes[7]
+	mi := &file_cdhs_smf_proto_msgTypes[13]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -600,7 +981,7 @@ func (x *VerifyInclusionResponse) String() string {
 func (*VerifyInclusionResponse) ProtoMessage() {}
 
 func (x *VerifyInclusionResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_cdhs_smf_proto_msgTypes[7]
+	mi := &file_cdhs_smf_proto_msgTypes[13]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -613,7 +994,7 @@ func (x *VerifyInclusionResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use VerifyInclusionResponse.ProtoReflect.Descriptor instead.
 func (*VerifyInclusionResponse) Descriptor() ([]byte, []int) {
-	return file_cdhs_smf_proto_rawDescGZIP(), []int{7}
+	return file_cdhs_smf_proto_rawDescGZIP(), []int{13}
 }
 
 func (x *VerifyInclusionResponse) GetValid() bool {
@@ -645,7 +1026,7 @@ type ProveNonInclusionRequest struct {
 
 func (x *ProveNonInclusionRequest) Reset() {
 	*x = ProveNonInclusionRequest{}
-	mi := &file_cdhs_smf_proto_msgTypes[8]
+	mi := &file_cdhs_smf_proto_msgTypes[14]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -657,7 +1038,7 @@ func (x *ProveNonInclusionRequest) String() string {
 func (*ProveNonInclusionRequest) ProtoMessage() {}
 
 func (x *ProveNonInclusionRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_cdhs_smf_proto_msgTypes[8]
+	mi := &file_cdhs_smf_proto_msgTypes[14]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -670,7 +1051,7 @@ func (x *ProveNonInclusionRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ProveNonInclusionRequest.ProtoReflect.Descriptor instead.
 func (*ProveNonInclusionRequest) Descriptor() ([]byte, []int) {
-	return file_cdhs_smf_proto_rawDescGZIP(), []int{8}
+	return file_cdhs_smf_proto_rawDescGZIP(), []int{14}
 }
 
 func (x *ProveNonInclusionRequest) GetShardId() string {
@@ -709,7 +1090,7 @@ type ProveNonInclusionResponse struct {
 
 func (x *ProveNonInclusionResponse) Reset() {
 	*x = ProveNonInclusionResponse{}
-	mi := &file_cdhs_smf_proto_msgTypes[9]
+	mi := &file_cdhs_smf_proto_msgTypes[15]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -721,7 +1102,7 @@ func (x *ProveNonInclusionResponse) String() string {
 func (*ProveNonInclusionResponse) ProtoMessage() {}
 
 func (x *ProveNonInclusionResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_cdhs_smf_proto_msgTypes[9]
+	mi := &file_cdhs_smf_proto_msgTypes[15]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -734,7 +1115,7 @@ func (x *ProveNonInclusionResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ProveNonInclusionResponse.ProtoReflect.Descriptor instead.
 func (*ProveNonInclusionResponse) Descriptor() ([]byte, []int) {
-	return file_cdhs_smf_proto_rawDescGZIP(), []int{9}
+	return file_cdhs_smf_proto_rawDescGZIP(), []int{15}
 }
 
 func (x *ProveNonInclusionResponse) GetGlobalKey() []byte {
@@ -773,7 +1154,7 @@ type VerifyNonInclusionRequest struct {
 
 func (x *VerifyNonInclusionRequest) Reset() {
 	*x = VerifyNonInclusionRequest{}
-	mi := &file_cdhs_smf_proto_msgTypes[10]
+	mi := &file_cdhs_smf_proto_msgTypes[16]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -785,7 +1166,7 @@ func (x *VerifyNonInclusionRequest) String() string {
 func (*VerifyNonInclusionRequest) ProtoMessage() {}
 
 func (x *VerifyNonInclusionRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_cdhs_smf_proto_msgTypes[10]
+	mi := &file_cdhs_smf_proto_msgTypes[16]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -798,7 +1179,7 @@ func (x *VerifyNonInclusionRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use VerifyNonInclusionRequest.ProtoReflect.Descriptor instead.
 func (*VerifyNonInclusionRequest) Descriptor() ([]byte, []int) {
-	return file_cdhs_smf_proto_rawDescGZIP(), []int{10}
+	return file_cdhs_smf_proto_rawDescGZIP(), []int{16}
 }
 
 func (x *VerifyNonInclusionRequest) GetGlobalKey() []byte {
@@ -835,7 +1216,7 @@ type VerifyNonInclusionResponse struct {
 
 func (x *VerifyNonInclusionResponse) Reset() {
 	*x = VerifyNonInclusionResponse{}
-	mi := &file_cdhs_smf_proto_msgTypes[11]
+	mi := &file_cdhs_smf_proto_msgTypes[17]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -847,7 +1228,7 @@ func (x *VerifyNonInclusionResponse) String() string {
 func (*VerifyNonInclusionResponse) ProtoMessage() {}
 
 func (x *VerifyNonInclusionResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_cdhs_smf_proto_msgTypes[11]
+	mi := &file_cdhs_smf_proto_msgTypes[17]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -860,7 +1241,7 @@ func (x *VerifyNonInclusionResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use VerifyNonInclusionResponse.ProtoReflect.Descriptor instead.
 func (*VerifyNonInclusionResponse) Descriptor() ([]byte, []int) {
-	return file_cdhs_smf_proto_rawDescGZIP(), []int{11}
+	return file_cdhs_smf_proto_rawDescGZIP(), []int{17}
 }
 
 func (x *VerifyNonInclusionResponse) GetValid() bool {
@@ -890,7 +1271,7 @@ type CanonicalizeRequest struct {
 
 func (x *CanonicalizeRequest) Reset() {
 	*x = CanonicalizeRequest{}
-	mi := &file_cdhs_smf_proto_msgTypes[12]
+	mi := &file_cdhs_smf_proto_msgTypes[18]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -902,7 +1283,7 @@ func (x *CanonicalizeRequest) String() string {
 func (*CanonicalizeRequest) ProtoMessage() {}
 
 func (x *CanonicalizeRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_cdhs_smf_proto_msgTypes[12]
+	mi := &file_cdhs_smf_proto_msgTypes[18]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -915,7 +1296,7 @@ func (x *CanonicalizeRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CanonicalizeRequest.ProtoReflect.Descriptor instead.
 func (*CanonicalizeRequest) Descriptor() ([]byte, []int) {
-	return file_cdhs_smf_proto_rawDescGZIP(), []int{12}
+	return file_cdhs_smf_proto_rawDescGZIP(), []int{18}
 }
 
 func (x *CanonicalizeRequest) GetContentType() string {
@@ -945,7 +1326,7 @@ type CanonicalizeResponse struct {
 
 func (x *CanonicalizeResponse) Reset() {
 	*x = CanonicalizeResponse{}
-	mi := &file_cdhs_smf_proto_msgTypes[13]
+	mi := &file_cdhs_smf_proto_msgTypes[19]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -957,7 +1338,7 @@ func (x *CanonicalizeResponse) String() string {
 func (*CanonicalizeResponse) ProtoMessage() {}
 
 func (x *CanonicalizeResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_cdhs_smf_proto_msgTypes[13]
+	mi := &file_cdhs_smf_proto_msgTypes[19]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -970,7 +1351,7 @@ func (x *CanonicalizeResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CanonicalizeResponse.ProtoReflect.Descriptor instead.
 func (*CanonicalizeResponse) Descriptor() ([]byte, []int) {
-	return file_cdhs_smf_proto_rawDescGZIP(), []int{13}
+	return file_cdhs_smf_proto_rawDescGZIP(), []int{19}
 }
 
 func (x *CanonicalizeResponse) GetCanonicalContent() []byte {
@@ -996,7 +1377,7 @@ type GetRootRequest struct {
 
 func (x *GetRootRequest) Reset() {
 	*x = GetRootRequest{}
-	mi := &file_cdhs_smf_proto_msgTypes[14]
+	mi := &file_cdhs_smf_proto_msgTypes[20]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1008,7 +1389,7 @@ func (x *GetRootRequest) String() string {
 func (*GetRootRequest) ProtoMessage() {}
 
 func (x *GetRootRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_cdhs_smf_proto_msgTypes[14]
+	mi := &file_cdhs_smf_proto_msgTypes[20]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1021,7 +1402,7 @@ func (x *GetRootRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetRootRequest.ProtoReflect.Descriptor instead.
 func (*GetRootRequest) Descriptor() ([]byte, []int) {
-	return file_cdhs_smf_proto_rawDescGZIP(), []int{14}
+	return file_cdhs_smf_proto_rawDescGZIP(), []int{20}
 }
 
 // Response with current root
@@ -1037,7 +1418,7 @@ type GetRootResponse struct {
 
 func (x *GetRootResponse) Reset() {
 	*x = GetRootResponse{}
-	mi := &file_cdhs_smf_proto_msgTypes[15]
+	mi := &file_cdhs_smf_proto_msgTypes[21]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1049,7 +1430,7 @@ func (x *GetRootResponse) String() string {
 func (*GetRootResponse) ProtoMessage() {}
 
 func (x *GetRootResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_cdhs_smf_proto_msgTypes[15]
+	mi := &file_cdhs_smf_proto_msgTypes[21]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1062,7 +1443,7 @@ func (x *GetRootResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetRootResponse.ProtoReflect.Descriptor instead.
 func (*GetRootResponse) Descriptor() ([]byte, []int) {
-	return file_cdhs_smf_proto_rawDescGZIP(), []int{15}
+	return file_cdhs_smf_proto_rawDescGZIP(), []int{21}
 }
 
 func (x *GetRootResponse) GetRoot() []byte {
@@ -1094,7 +1475,7 @@ type SignRootRequest struct {
 
 func (x *SignRootRequest) Reset() {
 	*x = SignRootRequest{}
-	mi := &file_cdhs_smf_proto_msgTypes[16]
+	mi := &file_cdhs_smf_proto_msgTypes[22]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1106,7 +1487,7 @@ func (x *SignRootRequest) String() string {
 func (*SignRootRequest) ProtoMessage() {}
 
 func (x *SignRootRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_cdhs_smf_proto_msgTypes[16]
+	mi := &file_cdhs_smf_proto_msgTypes[22]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1119,7 +1500,7 @@ func (x *SignRootRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SignRootRequest.ProtoReflect.Descriptor instead.
 func (*SignRootRequest) Descriptor() ([]byte, []int) {
-	return file_cdhs_smf_proto_rawDescGZIP(), []int{16}
+	return file_cdhs_smf_proto_rawDescGZIP(), []int{22}
 }
 
 func (x *SignRootRequest) GetRoot() []byte {
@@ -1156,7 +1537,7 @@ type SignRootResponse struct {
 
 func (x *SignRootResponse) Reset() {
 	*x = SignRootResponse{}
-	mi := &file_cdhs_smf_proto_msgTypes[17]
+	mi := &file_cdhs_smf_proto_msgTypes[23]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1168,7 +1549,7 @@ func (x *SignRootResponse) String() string {
 func (*SignRootResponse) ProtoMessage() {}
 
 func (x *SignRootResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_cdhs_smf_proto_msgTypes[17]
+	mi := &file_cdhs_smf_proto_msgTypes[23]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1181,7 +1562,7 @@ func (x *SignRootResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SignRootResponse.ProtoReflect.Descriptor instead.
 func (*SignRootResponse) Descriptor() ([]byte, []int) {
-	return file_cdhs_smf_proto_rawDescGZIP(), []int{17}
+	return file_cdhs_smf_proto_rawDescGZIP(), []int{23}
 }
 
 func (x *SignRootResponse) GetSignature() []byte {
@@ -1209,7 +1590,7 @@ type ReplayRequest struct {
 
 func (x *ReplayRequest) Reset() {
 	*x = ReplayRequest{}
-	mi := &file_cdhs_smf_proto_msgTypes[18]
+	mi := &file_cdhs_smf_proto_msgTypes[24]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1221,7 +1602,7 @@ func (x *ReplayRequest) String() string {
 func (*ReplayRequest) ProtoMessage() {}
 
 func (x *ReplayRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_cdhs_smf_proto_msgTypes[18]
+	mi := &file_cdhs_smf_proto_msgTypes[24]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1234,7 +1615,7 @@ func (x *ReplayRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ReplayRequest.ProtoReflect.Descriptor instead.
 func (*ReplayRequest) Descriptor() ([]byte, []int) {
-	return file_cdhs_smf_proto_rawDescGZIP(), []int{18}
+	return file_cdhs_smf_proto_rawDescGZIP(), []int{24}
 }
 
 func (x *ReplayRequest) GetLeaves() []*LeafEntry {
@@ -1263,7 +1644,7 @@ type LeafEntry struct {
 
 func (x *LeafEntry) Reset() {
 	*x = LeafEntry{}
-	mi := &file_cdhs_smf_proto_msgTypes[19]
+	mi := &file_cdhs_smf_proto_msgTypes[25]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1275,7 +1656,7 @@ func (x *LeafEntry) String() string {
 func (*LeafEntry) ProtoMessage() {}
 
 func (x *LeafEntry) ProtoReflect() protoreflect.Message {
-	mi := &file_cdhs_smf_proto_msgTypes[19]
+	mi := &file_cdhs_smf_proto_msgTypes[25]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1288,7 +1669,7 @@ func (x *LeafEntry) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use LeafEntry.ProtoReflect.Descriptor instead.
 func (*LeafEntry) Descriptor() ([]byte, []int) {
-	return file_cdhs_smf_proto_rawDescGZIP(), []int{19}
+	return file_cdhs_smf_proto_rawDescGZIP(), []int{25}
 }
 
 func (x *LeafEntry) GetKey() []byte {
@@ -1330,7 +1711,7 @@ type ReplayResponse struct {
 
 func (x *ReplayResponse) Reset() {
 	*x = ReplayResponse{}
-	mi := &file_cdhs_smf_proto_msgTypes[20]
+	mi := &file_cdhs_smf_proto_msgTypes[26]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1342,7 +1723,7 @@ func (x *ReplayResponse) String() string {
 func (*ReplayResponse) ProtoMessage() {}
 
 func (x *ReplayResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_cdhs_smf_proto_msgTypes[20]
+	mi := &file_cdhs_smf_proto_msgTypes[26]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1355,7 +1736,7 @@ func (x *ReplayResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ReplayResponse.ProtoReflect.Descriptor instead.
 func (*ReplayResponse) Descriptor() ([]byte, []int) {
-	return file_cdhs_smf_proto_rawDescGZIP(), []int{20}
+	return file_cdhs_smf_proto_rawDescGZIP(), []int{26}
 }
 
 func (x *ReplayResponse) GetRootHash() []byte {
@@ -1383,7 +1764,32 @@ const file_cdhs_smf_proto_rawDesc = "" +
 	"global_key\x18\x02 \x01(\fR\tglobalKey\x12&\n" +
 	"\x0fleaf_value_hash\x18\x03 \x01(\fR\rleafValueHash\x129\n" +
 	"\x06deltas\x18\x04 \x03(\v2!.olympus.cdhs_smf.v1.SmtNodeDeltaR\x06deltas\x12\x1b\n" +
-	"\ttree_size\x18\x05 \x01(\x04R\btreeSize\"\xea\x01\n" +
+	"\ttree_size\x18\x05 \x01(\x04R\btreeSize\"\xf4\x01\n" +
+	"\x14PrepareUpdateRequest\x12\x19\n" +
+	"\bshard_id\x18\x01 \x01(\tR\ashardId\x12=\n" +
+	"\n" +
+	"record_key\x18\x02 \x01(\v2\x1e.olympus.cdhs_smf.v1.RecordKeyR\trecordKey\x12+\n" +
+	"\x11canonical_content\x18\x03 \x01(\fR\x10canonicalContent\x12\x1b\n" +
+	"\tparser_id\x18\x04 \x01(\tR\bparserId\x128\n" +
+	"\x18canonical_parser_version\x18\x05 \x01(\tR\x16canonicalParserVersion\"\x97\x02\n" +
+	"\x15PrepareUpdateResponse\x12%\n" +
+	"\x0etransaction_id\x18\x01 \x01(\tR\rtransactionId\x12\x19\n" +
+	"\bnew_root\x18\x02 \x01(\fR\anewRoot\x12\x1d\n" +
+	"\n" +
+	"prior_root\x18\x03 \x01(\fR\tpriorRoot\x12\x1d\n" +
+	"\n" +
+	"global_key\x18\x04 \x01(\fR\tglobalKey\x12&\n" +
+	"\x0fleaf_value_hash\x18\x05 \x01(\fR\rleafValueHash\x129\n" +
+	"\x06deltas\x18\x06 \x03(\v2!.olympus.cdhs_smf.v1.SmtNodeDeltaR\x06deltas\x12\x1b\n" +
+	"\ttree_size\x18\a \x01(\x04R\btreeSize\"D\n" +
+	"\x1bCommitPreparedUpdateRequest\x12%\n" +
+	"\x0etransaction_id\x18\x01 \x01(\tR\rtransactionId\"V\n" +
+	"\x1cCommitPreparedUpdateResponse\x12\x19\n" +
+	"\bnew_root\x18\x01 \x01(\fR\anewRoot\x12\x1b\n" +
+	"\ttree_size\x18\x02 \x01(\x04R\btreeSize\"C\n" +
+	"\x1aAbortPreparedUpdateRequest\x12%\n" +
+	"\x0etransaction_id\x18\x01 \x01(\tR\rtransactionId\"\x1d\n" +
+	"\x1bAbortPreparedUpdateResponse\"\xea\x01\n" +
 	"\tRecordKey\x12\x1f\n" +
 	"\vrecord_type\x18\x01 \x01(\tR\n" +
 	"recordType\x12\x1b\n" +
@@ -1471,9 +1877,12 @@ const file_cdhs_smf_proto_rawDesc = "" +
 	"\tparser_id\x18\x03 \x01(\tR\bparserId\x128\n" +
 	"\x18canonical_parser_version\x18\x04 \x01(\tR\x16canonicalParserVersion\"-\n" +
 	"\x0eReplayResponse\x12\x1b\n" +
-	"\troot_hash\x18\x01 \x01(\fR\brootHash2\x94\a\n" +
+	"\troot_hash\x18\x01 \x01(\fR\brootHash2\xf3\t\n" +
 	"\x0eCdhsSmfService\x12Q\n" +
-	"\x06Update\x12\".olympus.cdhs_smf.v1.UpdateRequest\x1a#.olympus.cdhs_smf.v1.UpdateResponse\x12i\n" +
+	"\x06Update\x12\".olympus.cdhs_smf.v1.UpdateRequest\x1a#.olympus.cdhs_smf.v1.UpdateResponse\x12f\n" +
+	"\rPrepareUpdate\x12).olympus.cdhs_smf.v1.PrepareUpdateRequest\x1a*.olympus.cdhs_smf.v1.PrepareUpdateResponse\x12{\n" +
+	"\x14CommitPreparedUpdate\x120.olympus.cdhs_smf.v1.CommitPreparedUpdateRequest\x1a1.olympus.cdhs_smf.v1.CommitPreparedUpdateResponse\x12x\n" +
+	"\x13AbortPreparedUpdate\x12/.olympus.cdhs_smf.v1.AbortPreparedUpdateRequest\x1a0.olympus.cdhs_smf.v1.AbortPreparedUpdateResponse\x12i\n" +
 	"\x0eProveInclusion\x12*.olympus.cdhs_smf.v1.ProveInclusionRequest\x1a+.olympus.cdhs_smf.v1.ProveInclusionResponse\x12l\n" +
 	"\x0fVerifyInclusion\x12+.olympus.cdhs_smf.v1.VerifyInclusionRequest\x1a,.olympus.cdhs_smf.v1.VerifyInclusionResponse\x12r\n" +
 	"\x11ProveNonInclusion\x12-.olympus.cdhs_smf.v1.ProveNonInclusionRequest\x1a..olympus.cdhs_smf.v1.ProveNonInclusionResponse\x12u\n" +
@@ -1495,63 +1904,77 @@ func file_cdhs_smf_proto_rawDescGZIP() []byte {
 	return file_cdhs_smf_proto_rawDescData
 }
 
-var file_cdhs_smf_proto_msgTypes = make([]protoimpl.MessageInfo, 23)
+var file_cdhs_smf_proto_msgTypes = make([]protoimpl.MessageInfo, 29)
 var file_cdhs_smf_proto_goTypes = []any{
-	(*UpdateRequest)(nil),              // 0: olympus.cdhs_smf.v1.UpdateRequest
-	(*UpdateResponse)(nil),             // 1: olympus.cdhs_smf.v1.UpdateResponse
-	(*RecordKey)(nil),                  // 2: olympus.cdhs_smf.v1.RecordKey
-	(*SmtNodeDelta)(nil),               // 3: olympus.cdhs_smf.v1.SmtNodeDelta
-	(*ProveInclusionRequest)(nil),      // 4: olympus.cdhs_smf.v1.ProveInclusionRequest
-	(*ProveInclusionResponse)(nil),     // 5: olympus.cdhs_smf.v1.ProveInclusionResponse
-	(*VerifyInclusionRequest)(nil),     // 6: olympus.cdhs_smf.v1.VerifyInclusionRequest
-	(*VerifyInclusionResponse)(nil),    // 7: olympus.cdhs_smf.v1.VerifyInclusionResponse
-	(*ProveNonInclusionRequest)(nil),   // 8: olympus.cdhs_smf.v1.ProveNonInclusionRequest
-	(*ProveNonInclusionResponse)(nil),  // 9: olympus.cdhs_smf.v1.ProveNonInclusionResponse
-	(*VerifyNonInclusionRequest)(nil),  // 10: olympus.cdhs_smf.v1.VerifyNonInclusionRequest
-	(*VerifyNonInclusionResponse)(nil), // 11: olympus.cdhs_smf.v1.VerifyNonInclusionResponse
-	(*CanonicalizeRequest)(nil),        // 12: olympus.cdhs_smf.v1.CanonicalizeRequest
-	(*CanonicalizeResponse)(nil),       // 13: olympus.cdhs_smf.v1.CanonicalizeResponse
-	(*GetRootRequest)(nil),             // 14: olympus.cdhs_smf.v1.GetRootRequest
-	(*GetRootResponse)(nil),            // 15: olympus.cdhs_smf.v1.GetRootResponse
-	(*SignRootRequest)(nil),            // 16: olympus.cdhs_smf.v1.SignRootRequest
-	(*SignRootResponse)(nil),           // 17: olympus.cdhs_smf.v1.SignRootResponse
-	(*ReplayRequest)(nil),              // 18: olympus.cdhs_smf.v1.ReplayRequest
-	(*LeafEntry)(nil),                  // 19: olympus.cdhs_smf.v1.LeafEntry
-	(*ReplayResponse)(nil),             // 20: olympus.cdhs_smf.v1.ReplayResponse
-	nil,                                // 21: olympus.cdhs_smf.v1.RecordKey.MetadataEntry
-	nil,                                // 22: olympus.cdhs_smf.v1.SignRootRequest.ContextEntry
+	(*UpdateRequest)(nil),                // 0: olympus.cdhs_smf.v1.UpdateRequest
+	(*UpdateResponse)(nil),               // 1: olympus.cdhs_smf.v1.UpdateResponse
+	(*PrepareUpdateRequest)(nil),         // 2: olympus.cdhs_smf.v1.PrepareUpdateRequest
+	(*PrepareUpdateResponse)(nil),        // 3: olympus.cdhs_smf.v1.PrepareUpdateResponse
+	(*CommitPreparedUpdateRequest)(nil),  // 4: olympus.cdhs_smf.v1.CommitPreparedUpdateRequest
+	(*CommitPreparedUpdateResponse)(nil), // 5: olympus.cdhs_smf.v1.CommitPreparedUpdateResponse
+	(*AbortPreparedUpdateRequest)(nil),   // 6: olympus.cdhs_smf.v1.AbortPreparedUpdateRequest
+	(*AbortPreparedUpdateResponse)(nil),  // 7: olympus.cdhs_smf.v1.AbortPreparedUpdateResponse
+	(*RecordKey)(nil),                    // 8: olympus.cdhs_smf.v1.RecordKey
+	(*SmtNodeDelta)(nil),                 // 9: olympus.cdhs_smf.v1.SmtNodeDelta
+	(*ProveInclusionRequest)(nil),        // 10: olympus.cdhs_smf.v1.ProveInclusionRequest
+	(*ProveInclusionResponse)(nil),       // 11: olympus.cdhs_smf.v1.ProveInclusionResponse
+	(*VerifyInclusionRequest)(nil),       // 12: olympus.cdhs_smf.v1.VerifyInclusionRequest
+	(*VerifyInclusionResponse)(nil),      // 13: olympus.cdhs_smf.v1.VerifyInclusionResponse
+	(*ProveNonInclusionRequest)(nil),     // 14: olympus.cdhs_smf.v1.ProveNonInclusionRequest
+	(*ProveNonInclusionResponse)(nil),    // 15: olympus.cdhs_smf.v1.ProveNonInclusionResponse
+	(*VerifyNonInclusionRequest)(nil),    // 16: olympus.cdhs_smf.v1.VerifyNonInclusionRequest
+	(*VerifyNonInclusionResponse)(nil),   // 17: olympus.cdhs_smf.v1.VerifyNonInclusionResponse
+	(*CanonicalizeRequest)(nil),          // 18: olympus.cdhs_smf.v1.CanonicalizeRequest
+	(*CanonicalizeResponse)(nil),         // 19: olympus.cdhs_smf.v1.CanonicalizeResponse
+	(*GetRootRequest)(nil),               // 20: olympus.cdhs_smf.v1.GetRootRequest
+	(*GetRootResponse)(nil),              // 21: olympus.cdhs_smf.v1.GetRootResponse
+	(*SignRootRequest)(nil),              // 22: olympus.cdhs_smf.v1.SignRootRequest
+	(*SignRootResponse)(nil),             // 23: olympus.cdhs_smf.v1.SignRootResponse
+	(*ReplayRequest)(nil),                // 24: olympus.cdhs_smf.v1.ReplayRequest
+	(*LeafEntry)(nil),                    // 25: olympus.cdhs_smf.v1.LeafEntry
+	(*ReplayResponse)(nil),               // 26: olympus.cdhs_smf.v1.ReplayResponse
+	nil,                                  // 27: olympus.cdhs_smf.v1.RecordKey.MetadataEntry
+	nil,                                  // 28: olympus.cdhs_smf.v1.SignRootRequest.ContextEntry
 }
 var file_cdhs_smf_proto_depIdxs = []int32{
-	2,  // 0: olympus.cdhs_smf.v1.UpdateRequest.record_key:type_name -> olympus.cdhs_smf.v1.RecordKey
-	3,  // 1: olympus.cdhs_smf.v1.UpdateResponse.deltas:type_name -> olympus.cdhs_smf.v1.SmtNodeDelta
-	21, // 2: olympus.cdhs_smf.v1.RecordKey.metadata:type_name -> olympus.cdhs_smf.v1.RecordKey.MetadataEntry
-	2,  // 3: olympus.cdhs_smf.v1.ProveInclusionRequest.record_key:type_name -> olympus.cdhs_smf.v1.RecordKey
-	2,  // 4: olympus.cdhs_smf.v1.ProveNonInclusionRequest.record_key:type_name -> olympus.cdhs_smf.v1.RecordKey
-	22, // 5: olympus.cdhs_smf.v1.SignRootRequest.context:type_name -> olympus.cdhs_smf.v1.SignRootRequest.ContextEntry
-	19, // 6: olympus.cdhs_smf.v1.ReplayRequest.leaves:type_name -> olympus.cdhs_smf.v1.LeafEntry
-	0,  // 7: olympus.cdhs_smf.v1.CdhsSmfService.Update:input_type -> olympus.cdhs_smf.v1.UpdateRequest
-	4,  // 8: olympus.cdhs_smf.v1.CdhsSmfService.ProveInclusion:input_type -> olympus.cdhs_smf.v1.ProveInclusionRequest
-	6,  // 9: olympus.cdhs_smf.v1.CdhsSmfService.VerifyInclusion:input_type -> olympus.cdhs_smf.v1.VerifyInclusionRequest
-	8,  // 10: olympus.cdhs_smf.v1.CdhsSmfService.ProveNonInclusion:input_type -> olympus.cdhs_smf.v1.ProveNonInclusionRequest
-	10, // 11: olympus.cdhs_smf.v1.CdhsSmfService.VerifyNonInclusion:input_type -> olympus.cdhs_smf.v1.VerifyNonInclusionRequest
-	12, // 12: olympus.cdhs_smf.v1.CdhsSmfService.Canonicalize:input_type -> olympus.cdhs_smf.v1.CanonicalizeRequest
-	14, // 13: olympus.cdhs_smf.v1.CdhsSmfService.GetRoot:input_type -> olympus.cdhs_smf.v1.GetRootRequest
-	16, // 14: olympus.cdhs_smf.v1.CdhsSmfService.SignRoot:input_type -> olympus.cdhs_smf.v1.SignRootRequest
-	18, // 15: olympus.cdhs_smf.v1.CdhsSmfService.ReplayLeaves:input_type -> olympus.cdhs_smf.v1.ReplayRequest
-	1,  // 16: olympus.cdhs_smf.v1.CdhsSmfService.Update:output_type -> olympus.cdhs_smf.v1.UpdateResponse
-	5,  // 17: olympus.cdhs_smf.v1.CdhsSmfService.ProveInclusion:output_type -> olympus.cdhs_smf.v1.ProveInclusionResponse
-	7,  // 18: olympus.cdhs_smf.v1.CdhsSmfService.VerifyInclusion:output_type -> olympus.cdhs_smf.v1.VerifyInclusionResponse
-	9,  // 19: olympus.cdhs_smf.v1.CdhsSmfService.ProveNonInclusion:output_type -> olympus.cdhs_smf.v1.ProveNonInclusionResponse
-	11, // 20: olympus.cdhs_smf.v1.CdhsSmfService.VerifyNonInclusion:output_type -> olympus.cdhs_smf.v1.VerifyNonInclusionResponse
-	13, // 21: olympus.cdhs_smf.v1.CdhsSmfService.Canonicalize:output_type -> olympus.cdhs_smf.v1.CanonicalizeResponse
-	15, // 22: olympus.cdhs_smf.v1.CdhsSmfService.GetRoot:output_type -> olympus.cdhs_smf.v1.GetRootResponse
-	17, // 23: olympus.cdhs_smf.v1.CdhsSmfService.SignRoot:output_type -> olympus.cdhs_smf.v1.SignRootResponse
-	20, // 24: olympus.cdhs_smf.v1.CdhsSmfService.ReplayLeaves:output_type -> olympus.cdhs_smf.v1.ReplayResponse
-	16, // [16:25] is the sub-list for method output_type
-	7,  // [7:16] is the sub-list for method input_type
-	7,  // [7:7] is the sub-list for extension type_name
-	7,  // [7:7] is the sub-list for extension extendee
-	0,  // [0:7] is the sub-list for field type_name
+	8,  // 0: olympus.cdhs_smf.v1.UpdateRequest.record_key:type_name -> olympus.cdhs_smf.v1.RecordKey
+	9,  // 1: olympus.cdhs_smf.v1.UpdateResponse.deltas:type_name -> olympus.cdhs_smf.v1.SmtNodeDelta
+	8,  // 2: olympus.cdhs_smf.v1.PrepareUpdateRequest.record_key:type_name -> olympus.cdhs_smf.v1.RecordKey
+	9,  // 3: olympus.cdhs_smf.v1.PrepareUpdateResponse.deltas:type_name -> olympus.cdhs_smf.v1.SmtNodeDelta
+	27, // 4: olympus.cdhs_smf.v1.RecordKey.metadata:type_name -> olympus.cdhs_smf.v1.RecordKey.MetadataEntry
+	8,  // 5: olympus.cdhs_smf.v1.ProveInclusionRequest.record_key:type_name -> olympus.cdhs_smf.v1.RecordKey
+	8,  // 6: olympus.cdhs_smf.v1.ProveNonInclusionRequest.record_key:type_name -> olympus.cdhs_smf.v1.RecordKey
+	28, // 7: olympus.cdhs_smf.v1.SignRootRequest.context:type_name -> olympus.cdhs_smf.v1.SignRootRequest.ContextEntry
+	25, // 8: olympus.cdhs_smf.v1.ReplayRequest.leaves:type_name -> olympus.cdhs_smf.v1.LeafEntry
+	0,  // 9: olympus.cdhs_smf.v1.CdhsSmfService.Update:input_type -> olympus.cdhs_smf.v1.UpdateRequest
+	2,  // 10: olympus.cdhs_smf.v1.CdhsSmfService.PrepareUpdate:input_type -> olympus.cdhs_smf.v1.PrepareUpdateRequest
+	4,  // 11: olympus.cdhs_smf.v1.CdhsSmfService.CommitPreparedUpdate:input_type -> olympus.cdhs_smf.v1.CommitPreparedUpdateRequest
+	6,  // 12: olympus.cdhs_smf.v1.CdhsSmfService.AbortPreparedUpdate:input_type -> olympus.cdhs_smf.v1.AbortPreparedUpdateRequest
+	10, // 13: olympus.cdhs_smf.v1.CdhsSmfService.ProveInclusion:input_type -> olympus.cdhs_smf.v1.ProveInclusionRequest
+	12, // 14: olympus.cdhs_smf.v1.CdhsSmfService.VerifyInclusion:input_type -> olympus.cdhs_smf.v1.VerifyInclusionRequest
+	14, // 15: olympus.cdhs_smf.v1.CdhsSmfService.ProveNonInclusion:input_type -> olympus.cdhs_smf.v1.ProveNonInclusionRequest
+	16, // 16: olympus.cdhs_smf.v1.CdhsSmfService.VerifyNonInclusion:input_type -> olympus.cdhs_smf.v1.VerifyNonInclusionRequest
+	18, // 17: olympus.cdhs_smf.v1.CdhsSmfService.Canonicalize:input_type -> olympus.cdhs_smf.v1.CanonicalizeRequest
+	20, // 18: olympus.cdhs_smf.v1.CdhsSmfService.GetRoot:input_type -> olympus.cdhs_smf.v1.GetRootRequest
+	22, // 19: olympus.cdhs_smf.v1.CdhsSmfService.SignRoot:input_type -> olympus.cdhs_smf.v1.SignRootRequest
+	24, // 20: olympus.cdhs_smf.v1.CdhsSmfService.ReplayLeaves:input_type -> olympus.cdhs_smf.v1.ReplayRequest
+	1,  // 21: olympus.cdhs_smf.v1.CdhsSmfService.Update:output_type -> olympus.cdhs_smf.v1.UpdateResponse
+	3,  // 22: olympus.cdhs_smf.v1.CdhsSmfService.PrepareUpdate:output_type -> olympus.cdhs_smf.v1.PrepareUpdateResponse
+	5,  // 23: olympus.cdhs_smf.v1.CdhsSmfService.CommitPreparedUpdate:output_type -> olympus.cdhs_smf.v1.CommitPreparedUpdateResponse
+	7,  // 24: olympus.cdhs_smf.v1.CdhsSmfService.AbortPreparedUpdate:output_type -> olympus.cdhs_smf.v1.AbortPreparedUpdateResponse
+	11, // 25: olympus.cdhs_smf.v1.CdhsSmfService.ProveInclusion:output_type -> olympus.cdhs_smf.v1.ProveInclusionResponse
+	13, // 26: olympus.cdhs_smf.v1.CdhsSmfService.VerifyInclusion:output_type -> olympus.cdhs_smf.v1.VerifyInclusionResponse
+	15, // 27: olympus.cdhs_smf.v1.CdhsSmfService.ProveNonInclusion:output_type -> olympus.cdhs_smf.v1.ProveNonInclusionResponse
+	17, // 28: olympus.cdhs_smf.v1.CdhsSmfService.VerifyNonInclusion:output_type -> olympus.cdhs_smf.v1.VerifyNonInclusionResponse
+	19, // 29: olympus.cdhs_smf.v1.CdhsSmfService.Canonicalize:output_type -> olympus.cdhs_smf.v1.CanonicalizeResponse
+	21, // 30: olympus.cdhs_smf.v1.CdhsSmfService.GetRoot:output_type -> olympus.cdhs_smf.v1.GetRootResponse
+	23, // 31: olympus.cdhs_smf.v1.CdhsSmfService.SignRoot:output_type -> olympus.cdhs_smf.v1.SignRootResponse
+	26, // 32: olympus.cdhs_smf.v1.CdhsSmfService.ReplayLeaves:output_type -> olympus.cdhs_smf.v1.ReplayResponse
+	21, // [21:33] is the sub-list for method output_type
+	9,  // [9:21] is the sub-list for method input_type
+	9,  // [9:9] is the sub-list for extension type_name
+	9,  // [9:9] is the sub-list for extension extendee
+	0,  // [0:9] is the sub-list for field type_name
 }
 
 func init() { file_cdhs_smf_proto_init() }
@@ -1565,7 +1988,7 @@ func file_cdhs_smf_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_cdhs_smf_proto_rawDesc), len(file_cdhs_smf_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   23,
+			NumMessages:   29,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

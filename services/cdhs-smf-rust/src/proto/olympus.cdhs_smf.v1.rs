@@ -43,6 +43,98 @@ pub struct UpdateResponse {
     #[prost(uint64, tag = "5")]
     pub tree_size: u64,
 }
+/// Request to prepare an update (phase 1 of two-phase commit).
+///
+/// Identical wire shape to UpdateRequest; the difference is purely in the
+/// service-side semantics (no SMT mutation).
+#[allow(clippy::derive_partial_eq_without_eq)]
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct PrepareUpdateRequest {
+    /// Shard identifier (e.g., "watauga:2025:budget")
+    #[prost(string, tag = "1")]
+    pub shard_id: ::prost::alloc::string::String,
+    /// Record key components (type, id, version, etc.)
+    #[prost(message, optional, tag = "2")]
+    pub record_key: ::core::option::Option<RecordKey>,
+    /// Canonicalized record content (already canonicalized)
+    #[prost(bytes = "vec", tag = "3")]
+    pub canonical_content: ::prost::alloc::vec::Vec<u8>,
+    /// Parser identity ("<name>@<version>"). Required by ADR-0003 and bound
+    /// into the leaf hash domain. Empty string is rejected by the service.
+    #[prost(string, tag = "4")]
+    pub parser_id: ::prost::alloc::string::String,
+    /// Operator-controlled stable canonical parser version (e.g. "v1").
+    /// Required by ADR-0003 and bound into the leaf hash domain. Empty string
+    /// is rejected by the service.
+    #[prost(string, tag = "5")]
+    pub canonical_parser_version: ::prost::alloc::string::String,
+}
+/// Response from PrepareUpdate. Carries the same data as UpdateResponse so
+/// the sequencer can persist deltas + sign the new root before calling
+/// CommitPreparedUpdate, plus a transaction_id used to commit/abort.
+#[allow(clippy::derive_partial_eq_without_eq)]
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct PrepareUpdateResponse {
+    /// Opaque transaction identifier. The caller MUST pass this back to
+    /// CommitPreparedUpdate or AbortPreparedUpdate.
+    #[prost(string, tag = "1")]
+    pub transaction_id: ::prost::alloc::string::String,
+    /// The root hash that the SMT will hold AFTER this prepared update is
+    /// committed. Identical to what Update() would have returned.
+    #[prost(bytes = "vec", tag = "2")]
+    pub new_root: ::prost::alloc::vec::Vec<u8>,
+    /// The root hash the SMT held at the moment of preparation. Used by
+    /// CommitPreparedUpdate to detect that another commit has advanced the
+    /// root in the meantime.
+    #[prost(bytes = "vec", tag = "3")]
+    pub prior_root: ::prost::alloc::vec::Vec<u8>,
+    /// The global key that was computed from (shard_id, record_key).
+    #[prost(bytes = "vec", tag = "4")]
+    pub global_key: ::prost::alloc::vec::Vec<u8>,
+    /// The leaf value hash that will be stored.
+    #[prost(bytes = "vec", tag = "5")]
+    pub leaf_value_hash: ::prost::alloc::vec::Vec<u8>,
+    /// SMT node deltas to persist alongside the leaf. Same length / encoding
+    /// as UpdateResponse.deltas.
+    #[prost(message, repeated, tag = "6")]
+    pub deltas: ::prost::alloc::vec::Vec<SmtNodeDelta>,
+    /// Tree size after this prepared update is committed.
+    #[prost(uint64, tag = "7")]
+    pub tree_size: u64,
+}
+/// Request to atomically commit a previously prepared update.
+#[allow(clippy::derive_partial_eq_without_eq)]
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct CommitPreparedUpdateRequest {
+    /// Transaction id returned by PrepareUpdate.
+    #[prost(string, tag = "1")]
+    pub transaction_id: ::prost::alloc::string::String,
+}
+/// Response from CommitPreparedUpdate.
+#[allow(clippy::derive_partial_eq_without_eq)]
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct CommitPreparedUpdateResponse {
+    /// The new root hash after the prepared update has been applied. Identical
+    /// to PrepareUpdateResponse.new_root on success.
+    #[prost(bytes = "vec", tag = "1")]
+    pub new_root: ::prost::alloc::vec::Vec<u8>,
+    /// Tree size after commit.
+    #[prost(uint64, tag = "2")]
+    pub tree_size: u64,
+}
+/// Request to discard a previously prepared update.
+#[allow(clippy::derive_partial_eq_without_eq)]
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct AbortPreparedUpdateRequest {
+    /// Transaction id returned by PrepareUpdate.
+    #[prost(string, tag = "1")]
+    pub transaction_id: ::prost::alloc::string::String,
+}
+/// Response from AbortPreparedUpdate. Empty for now; the RPC is idempotent
+/// and returns OK whether or not the transaction was still present.
+#[allow(clippy::derive_partial_eq_without_eq)]
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct AbortPreparedUpdateResponse {}
 /// Record key components
 #[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
@@ -313,11 +405,57 @@ pub mod cdhs_smf_service_server {
     /// Generated trait containing gRPC methods that should be implemented for use with CdhsSmfServiceServer.
     #[async_trait]
     pub trait CdhsSmfService: Send + Sync + 'static {
-        /// Insert or update a record in the global SMT
+        /// Insert or update a record in the global SMT.
+        ///
+        /// DEPRECATED for write paths that require crash safety: this RPC mutates
+        /// the in-memory SMT immediately, before any external storage durability
+        /// step. Sequencers MUST use the two-phase
+        /// PrepareUpdate / CommitPreparedUpdate flow (see H-2) so that durable
+        /// (Postgres) state and live (Rust) state cannot diverge on storage failure.
+        /// Update() is retained for tests and for callers that have no external
+        /// durability requirements.
         async fn update(
             &self,
             request: tonic::Request<super::UpdateRequest>,
         ) -> std::result::Result<tonic::Response<super::UpdateResponse>, tonic::Status>;
+        /// Phase 1 of two-phase commit: compute the new root + deltas for an update
+        /// WITHOUT mutating the live in-memory SMT. The prepared transaction is
+        /// held in a bounded LRU keyed by transaction_id; the caller MUST follow
+        /// up with either CommitPreparedUpdate or AbortPreparedUpdate. Prepared
+        /// transactions whose TTL elapses are evicted and treated as aborted.
+        ///
+        /// A prepared-but-uncommitted update MUST NOT appear in any signed root
+        /// or proof returned by GetRoot / ProveInclusion / Update.
+        async fn prepare_update(
+            &self,
+            request: tonic::Request<super::PrepareUpdateRequest>,
+        ) -> std::result::Result<
+            tonic::Response<super::PrepareUpdateResponse>,
+            tonic::Status,
+        >;
+        /// Phase 2 of two-phase commit: atomically apply a previously prepared
+        /// update to the live SMT. Returns NOT_FOUND if the transaction id is
+        /// unknown (already committed, aborted, or evicted), or FAILED_PRECONDITION
+        /// if another commit has advanced the root since the transaction was
+        /// prepared (the caller should Abort and re-prepare).
+        async fn commit_prepared_update(
+            &self,
+            request: tonic::Request<super::CommitPreparedUpdateRequest>,
+        ) -> std::result::Result<
+            tonic::Response<super::CommitPreparedUpdateResponse>,
+            tonic::Status,
+        >;
+        /// Discard a prepared transaction. Idempotent: returns OK whether or not
+        /// the transaction is currently in the prepared store. Callers MUST invoke
+        /// this on any failure path between PrepareUpdate and CommitPreparedUpdate
+        /// so that the prepared LRU does not fill up with abandoned entries.
+        async fn abort_prepared_update(
+            &self,
+            request: tonic::Request<super::AbortPreparedUpdateRequest>,
+        ) -> std::result::Result<
+            tonic::Response<super::AbortPreparedUpdateResponse>,
+            tonic::Status,
+        >;
         /// Generate an inclusion proof for a key
         async fn prove_inclusion(
             &self,
@@ -487,6 +625,152 @@ pub mod cdhs_smf_service_server {
                     let fut = async move {
                         let inner = inner.0;
                         let method = UpdateSvc(inner);
+                        let codec = tonic::codec::ProstCodec::default();
+                        let mut grpc = tonic::server::Grpc::new(codec)
+                            .apply_compression_config(
+                                accept_compression_encodings,
+                                send_compression_encodings,
+                            )
+                            .apply_max_message_size_config(
+                                max_decoding_message_size,
+                                max_encoding_message_size,
+                            );
+                        let res = grpc.unary(method, req).await;
+                        Ok(res)
+                    };
+                    Box::pin(fut)
+                }
+                "/olympus.cdhs_smf.v1.CdhsSmfService/PrepareUpdate" => {
+                    #[allow(non_camel_case_types)]
+                    struct PrepareUpdateSvc<T: CdhsSmfService>(pub Arc<T>);
+                    impl<
+                        T: CdhsSmfService,
+                    > tonic::server::UnaryService<super::PrepareUpdateRequest>
+                    for PrepareUpdateSvc<T> {
+                        type Response = super::PrepareUpdateResponse;
+                        type Future = BoxFuture<
+                            tonic::Response<Self::Response>,
+                            tonic::Status,
+                        >;
+                        fn call(
+                            &mut self,
+                            request: tonic::Request<super::PrepareUpdateRequest>,
+                        ) -> Self::Future {
+                            let inner = Arc::clone(&self.0);
+                            let fut = async move {
+                                <T as CdhsSmfService>::prepare_update(&inner, request).await
+                            };
+                            Box::pin(fut)
+                        }
+                    }
+                    let accept_compression_encodings = self.accept_compression_encodings;
+                    let send_compression_encodings = self.send_compression_encodings;
+                    let max_decoding_message_size = self.max_decoding_message_size;
+                    let max_encoding_message_size = self.max_encoding_message_size;
+                    let inner = self.inner.clone();
+                    let fut = async move {
+                        let inner = inner.0;
+                        let method = PrepareUpdateSvc(inner);
+                        let codec = tonic::codec::ProstCodec::default();
+                        let mut grpc = tonic::server::Grpc::new(codec)
+                            .apply_compression_config(
+                                accept_compression_encodings,
+                                send_compression_encodings,
+                            )
+                            .apply_max_message_size_config(
+                                max_decoding_message_size,
+                                max_encoding_message_size,
+                            );
+                        let res = grpc.unary(method, req).await;
+                        Ok(res)
+                    };
+                    Box::pin(fut)
+                }
+                "/olympus.cdhs_smf.v1.CdhsSmfService/CommitPreparedUpdate" => {
+                    #[allow(non_camel_case_types)]
+                    struct CommitPreparedUpdateSvc<T: CdhsSmfService>(pub Arc<T>);
+                    impl<
+                        T: CdhsSmfService,
+                    > tonic::server::UnaryService<super::CommitPreparedUpdateRequest>
+                    for CommitPreparedUpdateSvc<T> {
+                        type Response = super::CommitPreparedUpdateResponse;
+                        type Future = BoxFuture<
+                            tonic::Response<Self::Response>,
+                            tonic::Status,
+                        >;
+                        fn call(
+                            &mut self,
+                            request: tonic::Request<super::CommitPreparedUpdateRequest>,
+                        ) -> Self::Future {
+                            let inner = Arc::clone(&self.0);
+                            let fut = async move {
+                                <T as CdhsSmfService>::commit_prepared_update(
+                                        &inner,
+                                        request,
+                                    )
+                                    .await
+                            };
+                            Box::pin(fut)
+                        }
+                    }
+                    let accept_compression_encodings = self.accept_compression_encodings;
+                    let send_compression_encodings = self.send_compression_encodings;
+                    let max_decoding_message_size = self.max_decoding_message_size;
+                    let max_encoding_message_size = self.max_encoding_message_size;
+                    let inner = self.inner.clone();
+                    let fut = async move {
+                        let inner = inner.0;
+                        let method = CommitPreparedUpdateSvc(inner);
+                        let codec = tonic::codec::ProstCodec::default();
+                        let mut grpc = tonic::server::Grpc::new(codec)
+                            .apply_compression_config(
+                                accept_compression_encodings,
+                                send_compression_encodings,
+                            )
+                            .apply_max_message_size_config(
+                                max_decoding_message_size,
+                                max_encoding_message_size,
+                            );
+                        let res = grpc.unary(method, req).await;
+                        Ok(res)
+                    };
+                    Box::pin(fut)
+                }
+                "/olympus.cdhs_smf.v1.CdhsSmfService/AbortPreparedUpdate" => {
+                    #[allow(non_camel_case_types)]
+                    struct AbortPreparedUpdateSvc<T: CdhsSmfService>(pub Arc<T>);
+                    impl<
+                        T: CdhsSmfService,
+                    > tonic::server::UnaryService<super::AbortPreparedUpdateRequest>
+                    for AbortPreparedUpdateSvc<T> {
+                        type Response = super::AbortPreparedUpdateResponse;
+                        type Future = BoxFuture<
+                            tonic::Response<Self::Response>,
+                            tonic::Status,
+                        >;
+                        fn call(
+                            &mut self,
+                            request: tonic::Request<super::AbortPreparedUpdateRequest>,
+                        ) -> Self::Future {
+                            let inner = Arc::clone(&self.0);
+                            let fut = async move {
+                                <T as CdhsSmfService>::abort_prepared_update(
+                                        &inner,
+                                        request,
+                                    )
+                                    .await
+                            };
+                            Box::pin(fut)
+                        }
+                    }
+                    let accept_compression_encodings = self.accept_compression_encodings;
+                    let send_compression_encodings = self.send_compression_encodings;
+                    let max_decoding_message_size = self.max_decoding_message_size;
+                    let max_encoding_message_size = self.max_encoding_message_size;
+                    let inner = self.inner.clone();
+                    let fut = async move {
+                        let inner = inner.0;
+                        let method = AbortPreparedUpdateSvc(inner);
                         let codec = tonic::codec::ProstCodec::default();
                         let mut grpc = tonic::server::Grpc::new(codec)
                             .apply_compression_config(

@@ -10,8 +10,10 @@ import (
 	"log"
 	"net/http"
 	"strconv"
+	"time"
 
 	"github.com/OlympusLedgerOrg/Olympus/services/sequencer/internal/client"
+	"github.com/OlympusLedgerOrg/Olympus/services/sequencer/internal/metrics"
 	"github.com/OlympusLedgerOrg/Olympus/services/sequencer/internal/storage"
 	pb "github.com/OlympusLedgerOrg/Olympus/services/sequencer/proto"
 )
@@ -22,6 +24,40 @@ import (
 // services/cdhs-smf-rust/src/main.rs::GRPC_MAX_MESSAGE_BYTES). 32 MiB is the
 // agreed ceiling on both sides; see the matching constant in main.rs.
 const maxRequestBodyBytes = 32 << 20 // 32 MiB
+
+// DefaultStorageCommitTimeout is the wall-clock budget the Go sequencer
+// allows for the BEGIN; INSERT...; COMMIT step that durably persists a
+// prepared two-phase-commit transaction (H-2). It MUST be strictly less
+// than the Rust prepared-transaction LRU TTL (default 30s, see
+// services/cdhs-smf-rust/src/prepared.rs::DEFAULT_PREPARED_TTL) so that
+// the Go side gives up and triggers AbortPreparedUpdate well before the
+// Rust LRU could prune the entry on its own. Otherwise we could get into
+// a state where:
+//
+//   - Go is blocked on a slow Postgres COMMIT
+//   - the Rust LRU TTL elapses and discards the prepared txn
+//   - Postgres COMMIT eventually returns OK
+//   - Go calls CommitPreparedUpdate → NOT_FOUND
+//
+// At that point durable state has the leaf but the live SMT does not, and
+// recovery requires a full restart-replay. The 10s default leaves a 3×
+// safety margin against the 30s LRU TTL even after the operator widens
+// either bound.
+const DefaultStorageCommitTimeout = 10 * time.Second
+
+// smtBackend is the subset of *client.CdhsSmfClient that the sequencer
+// API depends on. Defining it here lets unit tests substitute a fake
+// without dialling a real gRPC server, and (more importantly for H-2)
+// lets tests deterministically inject failures between PrepareUpdate and
+// CommitPreparedUpdate to validate the rollback path.
+type smtBackend interface {
+	Canonicalize(ctx context.Context, contentType string, content []byte) (*pb.CanonicalizeResponse, error)
+	PrepareUpdate(ctx context.Context, shardID string, recordKey *pb.RecordKey, canonicalContent []byte, parserID string, canonicalParserVersion string) (*pb.PrepareUpdateResponse, error)
+	CommitPreparedUpdate(ctx context.Context, transactionID string) (*pb.CommitPreparedUpdateResponse, error)
+	AbortPreparedUpdate(ctx context.Context, transactionID string) error
+	ProveInclusion(ctx context.Context, shardID string, recordKey *pb.RecordKey, root []byte) (*pb.ProveInclusionResponse, error)
+	SignRoot(ctx context.Context, root []byte, treeSize uint64, contextData map[string]string) (*pb.SignRootResponse, error)
+}
 
 // storageQuerier is the persistence contract required by the sequencer API.
 // It is satisfied by *storage.PostgresStorage in production and by test
@@ -35,19 +71,58 @@ type storageQuerier interface {
 
 // Sequencer provides a Trillian-shaped log service API
 type Sequencer struct {
-	smtClient *client.CdhsSmfClient
-	storage   storageQuerier
-	token     string
+	smtClient            smtBackend
+	storage              storageQuerier
+	token                string
+	metrics              *metrics.Registry
+	storageCommitTimeout time.Duration
 }
 
-// NewSequencer creates a new sequencer service
-func NewSequencer(smtClient *client.CdhsSmfClient, storage *storage.PostgresStorage, token string) *Sequencer {
-	return &Sequencer{
-		smtClient: smtClient,
-		storage:   storage,
-		token:     token,
+// SequencerOption customises a Sequencer at construction time.
+type SequencerOption func(*Sequencer)
+
+// WithMetrics installs an application metrics registry so the sequencer
+// can publish the H-2 two-phase-commit counters. If unset, the sequencer
+// uses an internal registry whose values are not exported.
+func WithMetrics(m *metrics.Registry) SequencerOption {
+	return func(s *Sequencer) {
+		if m != nil {
+			s.metrics = m
+		}
 	}
 }
+
+// WithStorageCommitTimeout overrides the per-request budget for the
+// Postgres COMMIT phase of the two-phase commit (H-2). Values <= 0 fall
+// back to DefaultStorageCommitTimeout. Operators MUST keep this strictly
+// less than the Rust LRU TTL (see DefaultStorageCommitTimeout doc).
+func WithStorageCommitTimeout(d time.Duration) SequencerOption {
+	return func(s *Sequencer) {
+		if d > 0 {
+			s.storageCommitTimeout = d
+		}
+	}
+}
+
+// NewSequencer creates a new sequencer service. The variadic options
+// preserve backwards compatibility with the original 3-arg constructor.
+func NewSequencer(smtClient *client.CdhsSmfClient, storage *storage.PostgresStorage, token string, opts ...SequencerOption) *Sequencer {
+	s := &Sequencer{
+		smtClient:            smtClient,
+		storage:              storage,
+		token:                token,
+		metrics:              metrics.New(),
+		storageCommitTimeout: DefaultStorageCommitTimeout,
+	}
+	for _, opt := range opts {
+		opt(s)
+	}
+	return s
+}
+
+// Metrics returns the metrics registry the sequencer is publishing into.
+// Callers (cmd/sequencer/main.go) mount its Handler() at /metrics.
+func (s *Sequencer) Metrics() *metrics.Registry { return s.metrics }
 
 // requireToken wraps an HTTP handler with shared-secret token authentication.
 // Hashes both tokens with SHA-256 before comparing to prevent timing side-channels
@@ -153,6 +228,140 @@ type QueueLeavesResponse struct {
 	TreeSize  uint64              `json:"tree_size"`
 }
 
+// preparedRecord bundles everything a handler needs to (a) commit a
+// prepared transaction in the Rust SMT and (b) emit a JSON response. It is
+// the in-process representation produced by `prepareRecord` between the
+// PrepareUpdate RPC and the Postgres write.
+type preparedRecord struct {
+	transactionID string
+	newRoot       []byte
+	globalKey     []byte
+	leafValueHash []byte
+	treeSize      uint64
+	deltas        []storage.SmtDelta
+	signature     []byte
+	parserID      string
+	canonicalPV   string
+}
+
+// prepareRecord runs the read-only side of the two-phase flow for a single
+// record: Canonicalize (optional) → PrepareUpdate → SignRoot. It does NOT
+// mutate the live SMT (PrepareUpdate is read-only by design) and it does
+// not touch storage.
+//
+// On any failure the prepared transaction (if one was created) is aborted
+// before the error is returned, so callers can treat the helper as
+// "all-or-nothing": either they receive a *preparedRecord they may safely
+// commit, or they receive an error and the LRU is already cleaned up.
+//
+// `canonicalContent` is the raw payload to send to PrepareUpdate. For the
+// /v1/queue-leaf path the caller passes Canonicalize's output; for
+// /v1/queue-leaf-hash the caller passes the pre-computed value hash
+// directly (matching the existing single-phase behaviour).
+func (s *Sequencer) prepareRecord(
+	ctx context.Context,
+	shardID string,
+	recordKey *pb.RecordKey,
+	canonicalContent []byte,
+	parserID string,
+	canonicalParserVersion string,
+) (*preparedRecord, error) {
+	prepResp, err := s.smtClient.PrepareUpdate(ctx, shardID, recordKey, canonicalContent, parserID, canonicalParserVersion)
+	if err != nil {
+		return nil, fmt.Errorf("prepare update: %w", err)
+	}
+
+	// Validate hash-length contract before anything else; the same
+	// invariants we previously checked on UpdateResponse must hold for
+	// PrepareUpdateResponse too. On any violation we abort the prepared
+	// transaction so it does not linger in the LRU.
+	if len(prepResp.NewRoot) != 32 || len(prepResp.GlobalKey) != 32 || len(prepResp.LeafValueHash) != 32 || len(prepResp.Deltas) != 256 {
+		s.bestEffortAbort(ctx, prepResp.TransactionId)
+		return nil, fmt.Errorf("rust service violated wire contract: new_root=%d global_key=%d leaf_value_hash=%d deltas=%d",
+			len(prepResp.NewRoot), len(prepResp.GlobalKey), len(prepResp.LeafValueHash), len(prepResp.Deltas))
+	}
+
+	signResp, err := s.smtClient.SignRoot(ctx, prepResp.NewRoot, prepResp.TreeSize, map[string]string{
+		"shard_id":    shardID,
+		"record_type": recordKey.RecordType,
+		"record_id":   recordKey.RecordId,
+	})
+	if err != nil {
+		s.bestEffortAbort(ctx, prepResp.TransactionId)
+		return nil, fmt.Errorf("sign root: %w", err)
+	}
+
+	deltas := make([]storage.SmtDelta, len(prepResp.Deltas))
+	for i, d := range prepResp.Deltas {
+		deltas[i] = storage.SmtDelta{Path: d.Path, Level: d.Level, Hash: d.Hash}
+	}
+
+	return &preparedRecord{
+		transactionID: prepResp.TransactionId,
+		newRoot:       prepResp.NewRoot,
+		globalKey:     prepResp.GlobalKey,
+		leafValueHash: prepResp.LeafValueHash,
+		treeSize:      prepResp.TreeSize,
+		deltas:        deltas,
+		signature:     signResp.Signature,
+		parserID:      parserID,
+		canonicalPV:   canonicalParserVersion,
+	}, nil
+}
+
+// bestEffortAbort calls AbortPreparedUpdate, ignoring errors and using a
+// fresh background context so the abort survives even when the caller's
+// context has been cancelled (e.g. client disconnect mid-request). The
+// AbortPreparedUpdate RPC is idempotent on the Rust side, so a duplicate
+// abort is harmless.
+//
+// Increments `aborts_after_db_failure`: every code path that calls this
+// helper is, by definition, rolling back a prepared transaction because
+// something downstream of PrepareUpdate failed. That is exactly what the
+// counter is meant to expose to operators.
+func (s *Sequencer) bestEffortAbort(parent context.Context, txID string) {
+	if txID == "" {
+		return
+	}
+	// Decouple from the parent context: the abort MUST run even if the
+	// parent was cancelled (which is often *why* we're aborting). Cap
+	// it at storageCommitTimeout so a wedged Rust service can't hang
+	// the handler forever.
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(parent), s.storageCommitTimeout)
+	defer cancel()
+	if err := s.smtClient.AbortPreparedUpdate(ctx, txID); err != nil {
+		log.Printf("AbortPreparedUpdate(%s) failed (entry will TTL-evict from LRU): %v", txID, err)
+	}
+	s.metrics.AbortsAfterDBFailure.Inc()
+	s.metrics.PreparedPending.Add(-1)
+}
+
+// commitPrepared runs the second half of the two-phase flow for a single
+// prepared transaction: it asks the Rust service to atomically advance the
+// live SMT now that durable storage has been written. Increments
+// `commits_after_db_success`. On stale-prepare or NOT_FOUND from the Rust
+// service the error is returned to the caller, which is responsible for
+// surfacing a 5xx — durable state has already been written, so the
+// invariant is that startup-replay will reconcile on the next restart.
+func (s *Sequencer) commitPrepared(ctx context.Context, txID string) error {
+	if _, err := s.smtClient.CommitPreparedUpdate(ctx, txID); err != nil {
+		return err
+	}
+	s.metrics.CommitsAfterDBSuccess.Inc()
+	s.metrics.PreparedPending.Add(-1)
+	return nil
+}
+
+// withStorageTimeout returns a child context bounded by
+// s.storageCommitTimeout, used to cap the BEGIN/INSERT/COMMIT phase. The
+// timeout MUST stay strictly less than the Rust LRU TTL (see
+// DefaultStorageCommitTimeout doc) so storage failure causes the Go side
+// to emit AbortPreparedUpdate before the LRU could prune the entry on
+// its own.
+func (s *Sequencer) withStorageTimeout(parent context.Context) (context.Context, context.CancelFunc) {
+	return context.WithTimeout(parent, s.storageCommitTimeout)
+}
+
 func (s *Sequencer) handleQueueLeaf(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
@@ -204,7 +413,8 @@ func (s *Sequencer) handleQueueLeaf(w http.ResponseWriter, r *http.Request) {
 
 	ctx := r.Context()
 
-	// Step 1: Canonicalize content via Rust service
+	// Step 1: Canonicalize content via Rust service. This is read-only on
+	// the SMT, so it is safe to run before PrepareUpdate.
 	canonResp, err := s.smtClient.Canonicalize(ctx, req.ContentType, req.Content)
 	if err != nil {
 		log.Printf("Canonicalization failed: %v", err)
@@ -212,7 +422,6 @@ func (s *Sequencer) handleQueueLeaf(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Step 2: Update SMT via Rust service, forwarding ADR-0003 parser metadata
 	recordKey := &pb.RecordKey{
 		RecordType: req.RecordType,
 		RecordId:   req.RecordID,
@@ -220,70 +429,66 @@ func (s *Sequencer) handleQueueLeaf(w http.ResponseWriter, r *http.Request) {
 		Metadata:   req.Metadata,
 	}
 
-	updateResp, err := s.smtClient.Update(ctx, req.ShardID, recordKey, canonResp.CanonicalContent, req.ParserID, req.CanonicalParserVersion)
+	// H-2 two-phase commit, step (a): PrepareUpdate. Computes the new root
+	// + deltas in the Rust service WITHOUT mutating live state. SignRoot
+	// is also done here (also read-only) so the durable row can carry a
+	// signature in the same Postgres transaction.
+	prepared, err := s.prepareRecord(ctx, req.ShardID, recordKey, canonResp.CanonicalContent, req.ParserID, req.CanonicalParserVersion)
 	if err != nil {
-		log.Printf("SMT update failed: %v", err)
-		http.Error(w, "SMT update failed", http.StatusInternalServerError)
+		log.Printf("PrepareUpdate / SignRoot failed: %v", err)
+		http.Error(w, "SMT prepare failed", http.StatusInternalServerError)
 		return
 	}
+	s.metrics.PreparedPending.Add(1)
 
-	// Fix 2c: Validate returned hash lengths before storage
-	if len(updateResp.NewRoot) != 32 {
-		log.Printf("Rust service violated hash length contract: NewRoot length %d", len(updateResp.NewRoot))
-		http.Error(w, "upstream error", http.StatusBadGateway)
-		return
-	}
-	if len(updateResp.GlobalKey) != 32 {
-		log.Printf("Rust service violated hash length contract: GlobalKey length %d", len(updateResp.GlobalKey))
-		http.Error(w, "upstream error", http.StatusBadGateway)
-		return
-	}
-	if len(updateResp.LeafValueHash) != 32 {
-		log.Printf("Rust service violated hash length contract: LeafValueHash length %d", len(updateResp.LeafValueHash))
-		http.Error(w, "upstream error", http.StatusBadGateway)
-		return
-	}
-
-	// Fix 2d: Validate delta count before storage
-	if len(updateResp.Deltas) != 256 {
-		log.Printf("Rust service returned wrong delta count: %d", len(updateResp.Deltas))
-		http.Error(w, "upstream error", http.StatusBadGateway)
-		return
-	}
-
-	// Fix 2b: Sign the new root with tree_size from UpdateResponse
-	signResp, err := s.smtClient.SignRoot(ctx, updateResp.NewRoot, updateResp.TreeSize, map[string]string{
-		"shard_id":    req.ShardID,
-		"record_type": req.RecordType,
-		"record_id":   req.RecordID,
-	})
-	if err != nil {
-		log.Printf("Root signing failed: %v", err)
-		http.Error(w, "Signing failed", http.StatusInternalServerError)
-		return
-	}
-
-	// Persist all deltas + root atomically in a single transaction
-	deltas := make([]storage.SmtDelta, len(updateResp.Deltas))
-	for i, d := range updateResp.Deltas {
-		deltas[i] = storage.SmtDelta{
-			Path:  d.Path,
-			Level: d.Level,
-			Hash:  d.Hash,
-		}
-	}
-	if err := s.storage.StoreLeafAndDeltas(ctx, deltas, updateResp.NewRoot, updateResp.TreeSize, signResp.Signature, storage.LeafEntry{Key: updateResp.GlobalKey, ValueHash: updateResp.LeafValueHash, ParserID: req.ParserID, CanonicalParserVersion: req.CanonicalParserVersion}); err != nil {
-		log.Printf("Failed to store leaf and deltas: %v", err)
+	// H-2 two-phase commit, step (b): durable Postgres write. Bounded by
+	// `storageCommitTimeout` (default 10s) so we abort the prepared txn
+	// well before the Rust LRU TTL (default 30s) could prune it on its own.
+	storeCtx, cancel := s.withStorageTimeout(ctx)
+	storeErr := s.storage.StoreLeafAndDeltas(
+		storeCtx,
+		prepared.deltas,
+		prepared.newRoot,
+		prepared.treeSize,
+		prepared.signature,
+		storage.LeafEntry{
+			Key:                    prepared.globalKey,
+			ValueHash:              prepared.leafValueHash,
+			ParserID:               prepared.parserID,
+			CanonicalParserVersion: prepared.canonicalPV,
+		},
+	)
+	cancel()
+	if storeErr != nil {
+		// Rollback path: release the prepared transaction so the Rust LRU
+		// does not fill up, and (importantly) so the live SMT root remains
+		// at the prior value. This is the H-2 "Abort on storage failure"
+		// branch — bestEffortAbort updates aborts_after_db_failure.
+		log.Printf("Failed to store leaf and deltas (aborting prepared tx %s): %v", prepared.transactionID, storeErr)
+		s.bestEffortAbort(ctx, prepared.transactionID)
 		http.Error(w, "Storage failed", http.StatusInternalServerError)
 		return
 	}
 
-	// Return response
+	// H-2 two-phase commit, step (c): atomically advance the live SMT
+	// now that durable state has been persisted. NOT_FOUND or
+	// FailedPrecondition here means recovery falls to startup-replay on
+	// the next sequencer restart (the leaf is already in Postgres). We
+	// surface a 5xx so the client knows the response root is unsafe to
+	// publish even though the leaf is durable.
+	if err := s.commitPrepared(ctx, prepared.transactionID); err != nil {
+		log.Printf("CommitPreparedUpdate(%s) failed AFTER Postgres COMMIT — startup replay will reconcile: %v",
+			prepared.transactionID, err)
+		s.metrics.PreparedPending.Add(-1)
+		http.Error(w, "SMT commit failed after durable write", http.StatusInternalServerError)
+		return
+	}
+
 	resp := QueueLeafResponse{
-		NewRoot:       fmt.Sprintf("%x", updateResp.NewRoot),
-		GlobalKey:     fmt.Sprintf("%x", updateResp.GlobalKey),
-		LeafValueHash: fmt.Sprintf("%x", updateResp.LeafValueHash),
-		TreeSize:      updateResp.TreeSize,
+		NewRoot:       fmt.Sprintf("%x", prepared.newRoot),
+		GlobalKey:     fmt.Sprintf("%x", prepared.globalKey),
+		LeafValueHash: fmt.Sprintf("%x", prepared.leafValueHash),
+		TreeSize:      prepared.treeSize,
 	}
 
 	w.Header().Set("Content-Type", "application/json")
@@ -355,25 +560,35 @@ func (s *Sequencer) handleQueueLeaves(w http.ResponseWriter, r *http.Request) {
 
 	ctx := r.Context()
 
-	// Process all records sequentially (SMT is stateful). The loop fails
-	// fast on the first error: a 1000-record batch must never produce
-	// 1000 error log lines (P-6). Each error path logs exactly one line
-	// that includes the failing record's position (i+1 of N) so the
-	// operator can locate the offender without per-record log spam.
+	// H-2 two-phase commit, batch variant.
+	//
+	// The pre-H-2 batch path issued N Rust Update() calls (each
+	// advancing the live SMT) and ONE Postgres COMMIT at the end. Any
+	// Postgres failure left the live SMT N steps ahead of durable
+	// state — the failure mode the spec calls out by name as the
+	// motivation for H-2 ("Batch mode amplifies this").
+	//
+	// The fix: process each record with the same per-record
+	// `prepare → store → commit` discipline as /v1/queue-leaf. We
+	// trade cross-record Postgres atomicity (records 0..i-1 stay
+	// durable if record i fails) for SMT-vs-Postgres convergence
+	// (the live SMT and durable state advance in lockstep).
+	// Operators that need true all-or-nothing batch semantics should
+	// send N individual /v1/queue-leaf requests inside their own
+	// retry loop — there is no way to recover Postgres-style commit
+	// atomicity across an external service without distributed
+	// transactions, which is out of scope for v1.0.
 	results := make([]QueueLeafResponse, 0, len(req.Records))
-	batchLeaves := make([]storage.BatchLeaf, 0, len(req.Records))
-	var lastUpdateResp *pb.UpdateResponse
+	var lastPrepared *preparedRecord
 
 	for i, rec := range req.Records {
-		// Step 1: Canonicalize content via Rust service
 		canonResp, err := s.smtClient.Canonicalize(ctx, rec.ContentType, rec.Content)
 		if err != nil {
-			log.Printf("Canonicalization failed (record %d of %d, aborting batch): %v", i+1, len(req.Records), err)
+			log.Printf("Canonicalization failed (record %d of %d, partial batch committed: %d records): %v", i+1, len(req.Records), len(results), err)
 			http.Error(w, "Canonicalization failed", http.StatusInternalServerError)
 			return
 		}
 
-		// Step 2: Update SMT via Rust service, forwarding ADR-0003 parser metadata
 		recordKey := &pb.RecordKey{
 			RecordType: rec.RecordType,
 			RecordId:   rec.RecordID,
@@ -381,103 +596,64 @@ func (s *Sequencer) handleQueueLeaves(w http.ResponseWriter, r *http.Request) {
 			Metadata:   rec.Metadata,
 		}
 
-		updateResp, err := s.smtClient.Update(ctx, rec.ShardID, recordKey, canonResp.CanonicalContent, rec.ParserID, rec.CanonicalParserVersion)
+		pr, err := s.prepareRecord(ctx, rec.ShardID, recordKey, canonResp.CanonicalContent, rec.ParserID, rec.CanonicalParserVersion)
 		if err != nil {
-			log.Printf("SMT update failed (record %d of %d, aborting batch): %v", i+1, len(req.Records), err)
-			http.Error(w, "SMT update failed", http.StatusInternalServerError)
+			log.Printf("PrepareUpdate / SignRoot failed (record %d of %d, partial batch committed: %d records): %v", i+1, len(req.Records), len(results), err)
+			http.Error(w, "SMT prepare failed", http.StatusInternalServerError)
 			return
 		}
+		s.metrics.PreparedPending.Add(1)
 
-		// Validate returned hash lengths
-		if len(updateResp.NewRoot) != 32 {
-			log.Printf("Rust service violated hash length contract (record %d of %d): NewRoot length %d", i+1, len(req.Records), len(updateResp.NewRoot))
-			http.Error(w, "upstream error", http.StatusBadGateway)
-			return
-		}
-		if len(updateResp.GlobalKey) != 32 {
-			log.Printf("Rust service violated hash length contract (record %d of %d): GlobalKey length %d", i+1, len(req.Records), len(updateResp.GlobalKey))
-			http.Error(w, "upstream error", http.StatusBadGateway)
-			return
-		}
-		if len(updateResp.LeafValueHash) != 32 {
-			log.Printf("Rust service violated hash length contract (record %d of %d): LeafValueHash length %d", i+1, len(req.Records), len(updateResp.LeafValueHash))
-			http.Error(w, "upstream error", http.StatusBadGateway)
-			return
-		}
-
-		// Validate delta count
-		if len(updateResp.Deltas) != 256 {
-			log.Printf("Rust service returned wrong delta count (record %d of %d): %d", i+1, len(req.Records), len(updateResp.Deltas))
-			http.Error(w, "upstream error", http.StatusBadGateway)
-			return
-		}
-
-		// Collect result
-		results = append(results, QueueLeafResponse{
-			NewRoot:       fmt.Sprintf("%x", updateResp.NewRoot),
-			GlobalKey:     fmt.Sprintf("%x", updateResp.GlobalKey),
-			LeafValueHash: fmt.Sprintf("%x", updateResp.LeafValueHash),
-			TreeSize:      updateResp.TreeSize,
-		})
-
-		// Collect deltas for batch storage
-		deltas := make([]storage.SmtDelta, len(updateResp.Deltas))
-		for j, d := range updateResp.Deltas {
-			deltas[j] = storage.SmtDelta{
-				Path:  d.Path,
-				Level: d.Level,
-				Hash:  d.Hash,
-			}
-		}
-
-		// Sign this intermediate root immediately so that GetRootByTreeSize
-		// can serve every tree size produced during the batch (H-3/H-7).
-		signResp, err := s.smtClient.SignRoot(ctx, updateResp.NewRoot, updateResp.TreeSize, map[string]string{
-			"shard_id":    rec.ShardID,
-			"record_type": rec.RecordType,
-			"record_id":   rec.RecordID,
-		})
-		if err != nil {
-			log.Printf("Root signing failed (record %d of %d, entire batch will be rolled back): %v", i+1, len(req.Records), err)
-			http.Error(w, "Signing failed", http.StatusInternalServerError)
-			return
-		}
-
-		batchLeaves = append(batchLeaves, storage.BatchLeaf{
-			Leaf: storage.LeafEntry{
-				Key:                    updateResp.GlobalKey,
-				ValueHash:              updateResp.LeafValueHash,
-				ParserID:               rec.ParserID,
-				CanonicalParserVersion: rec.CanonicalParserVersion,
+		storeCtx, cancel := s.withStorageTimeout(ctx)
+		storeErr := s.storage.StoreLeafAndDeltas(
+			storeCtx,
+			pr.deltas,
+			pr.newRoot,
+			pr.treeSize,
+			pr.signature,
+			storage.LeafEntry{
+				Key:                    pr.globalKey,
+				ValueHash:              pr.leafValueHash,
+				ParserID:               pr.parserID,
+				CanonicalParserVersion: pr.canonicalPV,
 			},
-			Deltas:    deltas,
-			Root:      updateResp.NewRoot,
-			TreeSize:  updateResp.TreeSize,
-			Signature: signResp.Signature,
-		})
+		)
+		cancel()
+		if storeErr != nil {
+			log.Printf("Storage failed (record %d of %d, aborting prepared tx %s; partial batch committed: %d records): %v",
+				i+1, len(req.Records), pr.transactionID, len(results), storeErr)
+			s.bestEffortAbort(ctx, pr.transactionID)
+			http.Error(w, "Storage failed", http.StatusInternalServerError)
+			return
+		}
 
-		lastUpdateResp = updateResp
+		if err := s.commitPrepared(ctx, pr.transactionID); err != nil {
+			log.Printf("CommitPreparedUpdate(%s) failed AFTER Postgres COMMIT (record %d of %d, partial batch committed: %d records) — startup replay will reconcile: %v",
+				pr.transactionID, i+1, len(req.Records), len(results), err)
+			s.metrics.PreparedPending.Add(-1)
+			http.Error(w, "SMT commit failed after durable write", http.StatusInternalServerError)
+			return
+		}
+
+		results = append(results, QueueLeafResponse{
+			NewRoot:       fmt.Sprintf("%x", pr.newRoot),
+			GlobalKey:     fmt.Sprintf("%x", pr.globalKey),
+			LeafValueHash: fmt.Sprintf("%x", pr.leafValueHash),
+			TreeSize:      pr.treeSize,
+		})
+		lastPrepared = pr
 	}
 
-	// Safety check: should never happen since we validate len(req.Records) > 0
-	if lastUpdateResp == nil {
+	if lastPrepared == nil {
 		log.Printf("No records processed - this should not happen")
 		http.Error(w, "No records processed", http.StatusInternalServerError)
 		return
 	}
 
-	// Store all leaves + deltas + per-leaf roots in a single transaction
-	if err := s.storage.StoreLeafAndDeltasBatch(ctx, batchLeaves); err != nil {
-		log.Printf("Failed to store batch: %v", err)
-		http.Error(w, "Storage failed", http.StatusInternalServerError)
-		return
-	}
-
-	// Return response
 	resp := QueueLeavesResponse{
 		Results:   results,
-		FinalRoot: fmt.Sprintf("%x", lastUpdateResp.NewRoot),
-		TreeSize:  lastUpdateResp.TreeSize,
+		FinalRoot: fmt.Sprintf("%x", lastPrepared.newRoot),
+		TreeSize:  lastPrepared.treeSize,
 	}
 
 	w.Header().Set("Content-Type", "application/json")
@@ -559,64 +735,52 @@ func (s *Sequencer) handleQueueLeafHash(w http.ResponseWriter, r *http.Request) 
 		Metadata:   req.Metadata,
 	}
 
-	updateResp, err := s.smtClient.Update(ctx, req.ShardID, recordKey, req.ValueHash, req.ParserID, req.CanonicalParserVersion)
+	// H-2 two-phase commit (a): PrepareUpdate + SignRoot. No SMT mutation.
+	prepared, err := s.prepareRecord(ctx, req.ShardID, recordKey, req.ValueHash, req.ParserID, req.CanonicalParserVersion)
 	if err != nil {
-		log.Printf("SMT update (pre-hashed) failed: %v", err)
-		http.Error(w, "SMT update failed", http.StatusInternalServerError)
+		log.Printf("PrepareUpdate / SignRoot failed (pre-hashed): %v", err)
+		http.Error(w, "SMT prepare failed", http.StatusInternalServerError)
 		return
 	}
+	s.metrics.PreparedPending.Add(1)
 
-	if len(updateResp.NewRoot) != 32 {
-		log.Printf("Rust service violated hash length contract: NewRoot length %d", len(updateResp.NewRoot))
-		http.Error(w, "upstream error", http.StatusBadGateway)
-		return
-	}
-	if len(updateResp.GlobalKey) != 32 {
-		log.Printf("Rust service violated hash length contract: GlobalKey length %d", len(updateResp.GlobalKey))
-		http.Error(w, "upstream error", http.StatusBadGateway)
-		return
-	}
-	if len(updateResp.LeafValueHash) != 32 {
-		log.Printf("Rust service violated hash length contract: LeafValueHash length %d", len(updateResp.LeafValueHash))
-		http.Error(w, "upstream error", http.StatusBadGateway)
-		return
-	}
-	if len(updateResp.Deltas) != 256 {
-		log.Printf("Rust service returned wrong delta count: %d", len(updateResp.Deltas))
-		http.Error(w, "upstream error", http.StatusBadGateway)
-		return
-	}
-
-	signResp, err := s.smtClient.SignRoot(ctx, updateResp.NewRoot, updateResp.TreeSize, map[string]string{
-		"shard_id":    req.ShardID,
-		"record_type": req.RecordType,
-		"record_id":   req.RecordID,
-	})
-	if err != nil {
-		log.Printf("Root signing failed: %v", err)
-		http.Error(w, "Signing failed", http.StatusInternalServerError)
-		return
-	}
-
-	deltas := make([]storage.SmtDelta, len(updateResp.Deltas))
-	for i, d := range updateResp.Deltas {
-		deltas[i] = storage.SmtDelta{
-			Path:  d.Path,
-			Level: d.Level,
-			Hash:  d.Hash,
-		}
-	}
-	if err := s.storage.StoreLeafAndDeltas(ctx, deltas, updateResp.NewRoot, updateResp.TreeSize, signResp.Signature, storage.LeafEntry{Key: updateResp.GlobalKey, ValueHash: updateResp.LeafValueHash, ParserID: req.ParserID, CanonicalParserVersion: req.CanonicalParserVersion}); err != nil {
-		log.Printf("Failed to store leaf and deltas: %v", err)
+	// (b) durable Postgres write, bounded by storageCommitTimeout.
+	storeCtx, cancel := s.withStorageTimeout(ctx)
+	storeErr := s.storage.StoreLeafAndDeltas(
+		storeCtx,
+		prepared.deltas,
+		prepared.newRoot,
+		prepared.treeSize,
+		prepared.signature,
+		storage.LeafEntry{
+			Key:                    prepared.globalKey,
+			ValueHash:              prepared.leafValueHash,
+			ParserID:               prepared.parserID,
+			CanonicalParserVersion: prepared.canonicalPV,
+		},
+	)
+	cancel()
+	if storeErr != nil {
+		log.Printf("Failed to store leaf and deltas (aborting prepared tx %s): %v", prepared.transactionID, storeErr)
+		s.bestEffortAbort(ctx, prepared.transactionID)
 		http.Error(w, "Storage failed", http.StatusInternalServerError)
 		return
 	}
 
+	// (c) advance live SMT.
+	if err := s.commitPrepared(ctx, prepared.transactionID); err != nil {
+		log.Printf("CommitPreparedUpdate(%s) failed AFTER Postgres COMMIT — startup replay will reconcile: %v",
+			prepared.transactionID, err)
+		s.metrics.PreparedPending.Add(-1)
+		http.Error(w, "SMT commit failed after durable write", http.StatusInternalServerError)
+		return
+	}
+
 	resp := QueueLeafResponse{
-		NewRoot:       fmt.Sprintf("%x", updateResp.NewRoot),
-		GlobalKey:     fmt.Sprintf("%x", updateResp.GlobalKey),
-		LeafValueHash: fmt.Sprintf("%x", updateResp.LeafValueHash),
-		TreeSize:      updateResp.TreeSize,
+		NewRoot:       fmt.Sprintf("%x", prepared.newRoot),
+		GlobalKey:     fmt.Sprintf("%x", prepared.globalKey),
+		LeafValueHash: fmt.Sprintf("%x", prepared.leafValueHash),
+		TreeSize:      prepared.treeSize,
 	}
 
 	w.Header().Set("Content-Type", "application/json")

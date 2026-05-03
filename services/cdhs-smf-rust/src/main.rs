@@ -19,15 +19,20 @@ use std::io;
 use std::os::unix::fs::PermissionsExt;
 use std::path::Path;
 use std::sync::Arc;
+use std::time::Duration;
 
 use tokio::net::UnixListener;
 use tokio::signal::unix::{signal, SignalKind};
 use tokio_stream::wrappers::UnixListenerStream;
 use tonic::{transport::Server, Request, Response, Status};
 use tracing::{info, warn};
+use uuid::Uuid;
 
 use cdhs_smf_service::canonicalization;
 use cdhs_smf_service::crypto;
+use cdhs_smf_service::prepared::{
+    PreparedTxStore, DEFAULT_PREPARED_CAPACITY, DEFAULT_PREPARED_TTL,
+};
 use cdhs_smf_service::smt;
 
 pub use cdhs_smf_service::proto::olympus::cdhs_smf::v1::cdhs_smf_service_server::{
@@ -44,13 +49,24 @@ pub struct CdhsSmfService {
     smt: SparseMerkleTree,
     /// Key manager for Ed25519 signing (Arc-shared with the SIGHUP handler)
     key_manager: Arc<KeyManager>,
+    /// Bounded LRU of prepared two-phase-commit transactions (H-2). See
+    /// `prepared` module docs for the lifecycle and Sacred-Law constraints.
+    prepared: Arc<PreparedTxStore>,
 }
 
 impl CdhsSmfService {
     pub fn new() -> Self {
+        Self::with_prepared_config(DEFAULT_PREPARED_CAPACITY, DEFAULT_PREPARED_TTL)
+    }
+
+    /// Construct a service with explicit prepared-transaction LRU
+    /// capacity / TTL. Used by tests and by env-var-based overrides at
+    /// startup.
+    pub fn with_prepared_config(capacity: usize, ttl: Duration) -> Self {
         Self {
             smt: SparseMerkleTree::new(),
             key_manager: Arc::new(KeyManager::new()),
+            prepared: Arc::new(PreparedTxStore::new(capacity, ttl)),
         }
     }
 
@@ -140,6 +156,146 @@ impl CdhsSmfServiceTrait for CdhsSmfService {
                 .collect(),
             tree_size,
         }))
+    }
+
+    async fn prepare_update(
+        &self,
+        request: Request<PrepareUpdateRequest>,
+    ) -> Result<Response<PrepareUpdateResponse>, Status> {
+        let req = request.into_inner();
+
+        // Same input validation as `update`. We deliberately mirror the
+        // single-phase RPC so the two paths are interchangeable from the
+        // caller's perspective up to the transaction_id round-trip.
+        let global_key = crypto::compute_global_key(
+            &req.shard_id,
+            req.record_key
+                .as_ref()
+                .ok_or_else(|| Status::invalid_argument("record_key required"))?,
+        )
+        .map_err(|e| Status::invalid_argument(format!("invalid record key: {}", e)))?;
+
+        let leaf_value_hash = crypto::hash_canonical_content(&req.canonical_content);
+
+        if req.parser_id.is_empty() {
+            return Err(Status::invalid_argument(
+                "parser_id must be a non-empty string",
+            ));
+        }
+        if req.canonical_parser_version.is_empty() {
+            return Err(Status::invalid_argument(
+                "canonical_parser_version must be a non-empty string",
+            ));
+        }
+
+        // Compute the new root + deltas WITHOUT mutating live state. The
+        // result is staged in `self.prepared` until the sequencer has
+        // committed Postgres and called CommitPreparedUpdate.
+        let prepared = self
+            .smt
+            .compute_update(
+                &global_key,
+                &leaf_value_hash,
+                &req.parser_id,
+                &req.canonical_parser_version,
+            )
+            .await
+            .map_err(|e| Status::internal(format!("compute_update failed: {}", e)))?;
+
+        // Snapshot fields we need to put on the wire BEFORE moving
+        // `prepared` into the LRU.
+        let new_root = prepared.new_root.to_vec();
+        let prior_root = prepared.prior_root.to_vec();
+        let global_key_bytes = prepared.key.to_vec();
+        let leaf_value_hash_bytes = prepared.value_hash.to_vec();
+        let new_tree_size = prepared.new_tree_size;
+        let wire_deltas: Vec<SmtNodeDelta> = prepared
+            .deltas
+            .iter()
+            .map(|d| SmtNodeDelta {
+                path: d.path.clone(),
+                level: d.level,
+                hash: d.hash.to_vec(),
+            })
+            .collect();
+
+        let transaction_id = Uuid::new_v4().to_string();
+        let pending = self.prepared.insert(transaction_id.clone(), prepared);
+        // `prepared_pending` is exported via the dedicated metrics path; we
+        // log here in the structured form the Go layer keys off so that
+        // operators can correlate Rust-side LRU pressure with Go counters.
+        tracing::debug!(
+            target: "cdhs_smf::prepared",
+            metric = "prepared_pending",
+            value = pending,
+            transaction_id = %transaction_id,
+            "prepared transaction inserted"
+        );
+
+        Ok(Response::new(PrepareUpdateResponse {
+            transaction_id,
+            new_root,
+            prior_root,
+            global_key: global_key_bytes,
+            leaf_value_hash: leaf_value_hash_bytes,
+            deltas: wire_deltas,
+            tree_size: new_tree_size,
+        }))
+    }
+
+    async fn commit_prepared_update(
+        &self,
+        request: Request<CommitPreparedUpdateRequest>,
+    ) -> Result<Response<CommitPreparedUpdateResponse>, Status> {
+        let req = request.into_inner();
+
+        if req.transaction_id.is_empty() {
+            return Err(Status::invalid_argument(
+                "transaction_id must be a non-empty string",
+            ));
+        }
+
+        // `take` removes the entry. Whether the underlying `apply_prepared`
+        // succeeds or fails, the transaction is "consumed" at this point —
+        // the caller MUST re-prepare to retry. This matches the Go
+        // sequencer's flow: the sequencer either holds a committed Postgres
+        // row (success) or rolls back via AbortPreparedUpdate (failure).
+        let prepared = self.prepared.take(&req.transaction_id).ok_or_else(|| {
+            Status::not_found(
+                "transaction_id not found (already committed, aborted, or TTL-evicted)",
+            )
+        })?;
+
+        let new_tree_size = prepared.new_tree_size;
+        let new_root = self
+            .smt
+            .apply_prepared(prepared)
+            .await
+            .map_err(|e| Status::failed_precondition(format!("apply_prepared failed: {}", e)))?;
+
+        Ok(Response::new(CommitPreparedUpdateResponse {
+            new_root: new_root.to_vec(),
+            tree_size: new_tree_size,
+        }))
+    }
+
+    async fn abort_prepared_update(
+        &self,
+        request: Request<AbortPreparedUpdateRequest>,
+    ) -> Result<Response<AbortPreparedUpdateResponse>, Status> {
+        let req = request.into_inner();
+
+        if req.transaction_id.is_empty() {
+            return Err(Status::invalid_argument(
+                "transaction_id must be a non-empty string",
+            ));
+        }
+
+        // Idempotent: returns OK whether or not the entry was present. The
+        // Go sequencer can safely call Abort even on paths where the
+        // PrepareUpdate response itself errored (best-effort cleanup).
+        let _was_present = self.prepared.discard(&req.transaction_id);
+        Ok(Response::new(AbortPreparedUpdateResponse {}))
     }
 
     async fn prove_inclusion(

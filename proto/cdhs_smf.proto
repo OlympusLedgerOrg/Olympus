@@ -10,8 +10,39 @@ option go_package = "github.com/OlympusLedgerOrg/Olympus/services/sequencer/prot
 // composite keys that encode both shard identity and record identity.
 
 service CdhsSmfService {
-  // Insert or update a record in the global SMT
+  // Insert or update a record in the global SMT.
+  //
+  // DEPRECATED for write paths that require crash safety: this RPC mutates
+  // the in-memory SMT immediately, before any external storage durability
+  // step. Sequencers MUST use the two-phase
+  // PrepareUpdate / CommitPreparedUpdate flow (see H-2) so that durable
+  // (Postgres) state and live (Rust) state cannot diverge on storage failure.
+  // Update() is retained for tests and for callers that have no external
+  // durability requirements.
   rpc Update(UpdateRequest) returns (UpdateResponse);
+
+  // Phase 1 of two-phase commit: compute the new root + deltas for an update
+  // WITHOUT mutating the live in-memory SMT. The prepared transaction is
+  // held in a bounded LRU keyed by transaction_id; the caller MUST follow
+  // up with either CommitPreparedUpdate or AbortPreparedUpdate. Prepared
+  // transactions whose TTL elapses are evicted and treated as aborted.
+  //
+  // A prepared-but-uncommitted update MUST NOT appear in any signed root
+  // or proof returned by GetRoot / ProveInclusion / Update.
+  rpc PrepareUpdate(PrepareUpdateRequest) returns (PrepareUpdateResponse);
+
+  // Phase 2 of two-phase commit: atomically apply a previously prepared
+  // update to the live SMT. Returns NOT_FOUND if the transaction id is
+  // unknown (already committed, aborted, or evicted), or FAILED_PRECONDITION
+  // if another commit has advanced the root since the transaction was
+  // prepared (the caller should Abort and re-prepare).
+  rpc CommitPreparedUpdate(CommitPreparedUpdateRequest) returns (CommitPreparedUpdateResponse);
+
+  // Discard a prepared transaction. Idempotent: returns OK whether or not
+  // the transaction is currently in the prepared store. Callers MUST invoke
+  // this on any failure path between PrepareUpdate and CommitPreparedUpdate
+  // so that the prepared LRU does not fill up with abandoned entries.
+  rpc AbortPreparedUpdate(AbortPreparedUpdateRequest) returns (AbortPreparedUpdateResponse);
 
   // Generate an inclusion proof for a key
   rpc ProveInclusion(ProveInclusionRequest) returns (ProveInclusionResponse);
@@ -77,6 +108,87 @@ message UpdateResponse {
   // Tree size after this update (number of non-empty leaves)
   uint64 tree_size = 5;
 }
+
+// Request to prepare an update (phase 1 of two-phase commit).
+//
+// Identical wire shape to UpdateRequest; the difference is purely in the
+// service-side semantics (no SMT mutation).
+message PrepareUpdateRequest {
+  // Shard identifier (e.g., "watauga:2025:budget")
+  string shard_id = 1;
+
+  // Record key components (type, id, version, etc.)
+  RecordKey record_key = 2;
+
+  // Canonicalized record content (already canonicalized)
+  bytes canonical_content = 3;
+
+  // Parser identity ("<name>@<version>"). Required by ADR-0003 and bound
+  // into the leaf hash domain. Empty string is rejected by the service.
+  string parser_id = 4;
+
+  // Operator-controlled stable canonical parser version (e.g. "v1").
+  // Required by ADR-0003 and bound into the leaf hash domain. Empty string
+  // is rejected by the service.
+  string canonical_parser_version = 5;
+}
+
+// Response from PrepareUpdate. Carries the same data as UpdateResponse so
+// the sequencer can persist deltas + sign the new root before calling
+// CommitPreparedUpdate, plus a transaction_id used to commit/abort.
+message PrepareUpdateResponse {
+  // Opaque transaction identifier. The caller MUST pass this back to
+  // CommitPreparedUpdate or AbortPreparedUpdate.
+  string transaction_id = 1;
+
+  // The root hash that the SMT will hold AFTER this prepared update is
+  // committed. Identical to what Update() would have returned.
+  bytes new_root = 2;
+
+  // The root hash the SMT held at the moment of preparation. Used by
+  // CommitPreparedUpdate to detect that another commit has advanced the
+  // root in the meantime.
+  bytes prior_root = 3;
+
+  // The global key that was computed from (shard_id, record_key).
+  bytes global_key = 4;
+
+  // The leaf value hash that will be stored.
+  bytes leaf_value_hash = 5;
+
+  // SMT node deltas to persist alongside the leaf. Same length / encoding
+  // as UpdateResponse.deltas.
+  repeated SmtNodeDelta deltas = 6;
+
+  // Tree size after this prepared update is committed.
+  uint64 tree_size = 7;
+}
+
+// Request to atomically commit a previously prepared update.
+message CommitPreparedUpdateRequest {
+  // Transaction id returned by PrepareUpdate.
+  string transaction_id = 1;
+}
+
+// Response from CommitPreparedUpdate.
+message CommitPreparedUpdateResponse {
+  // The new root hash after the prepared update has been applied. Identical
+  // to PrepareUpdateResponse.new_root on success.
+  bytes new_root = 1;
+
+  // Tree size after commit.
+  uint64 tree_size = 2;
+}
+
+// Request to discard a previously prepared update.
+message AbortPreparedUpdateRequest {
+  // Transaction id returned by PrepareUpdate.
+  string transaction_id = 1;
+}
+
+// Response from AbortPreparedUpdate. Empty for now; the RPC is idempotent
+// and returns OK whether or not the transaction was still present.
+message AbortPreparedUpdateResponse {}
 
 // Record key components
 message RecordKey {

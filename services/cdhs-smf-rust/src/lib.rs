@@ -5,5 +5,6 @@
 
 pub mod canonicalization;
 pub mod crypto;
+pub mod prepared;
 pub mod proto;
 pub mod smt;
