@@ -215,7 +215,13 @@ def write_deterministic_parquet(
 
     writer_kwargs: dict = {
         "compression": compression,
+        # Pin the logical Parquet format version so PyArrow default flips cannot alter file bytes.
         "version": "2.6",
+        # Sacred Law: dictionary encoding changes page layout/cardinality heuristics, changing BLAKE3 hashes.
+        "use_dictionary": False,
+        # Sacred Law: page encoding defaults are version-sensitive; v2.0 is part of the hash contract.
+        "data_page_version": "2.0",
+        # Pin statistics emission so row-group metadata remains part of deterministic output.
         "write_statistics": True,
     }
     # Only pass compression_level for codecs that support it.

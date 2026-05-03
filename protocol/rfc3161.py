@@ -25,6 +25,7 @@ from typing import Any
 
 import rfc3161ng
 from cryptography import x509
+from cryptography.exceptions import UnsupportedAlgorithm
 from cryptography.hazmat.primitives import hashes
 from pyasn1.codec.der import decoder  # type: ignore[import-untyped]
 from pyasn1.error import PyAsn1Error  # type: ignore[import-untyped]
@@ -108,11 +109,11 @@ def _extract_tsa_cert_fingerprint(tst_bytes: bytes) -> str | None:
         certificate: x509.Certificate = load_certificate(signed_data, certificate=b"")
         fingerprint = certificate.fingerprint(hashes.SHA256())
         return fingerprint.hex()
-    except (PyAsn1Error, rfc3161ng.TimestampingError, ValueError) as exc:
-        logger.warning("Failed to extract TSA certificate fingerprint: %s", exc)
+    except (PyAsn1Error, rfc3161ng.TimestampingError, UnsupportedAlgorithm, ValueError) as exc:
+        logger.warning("Failed to extract TSA certificate fingerprint: %s", exc, exc_info=True)
         return None
     except Exception as exc:  # pragma: no cover
-        logger.warning("Unexpected error extracting TSA cert fingerprint: %s", exc)
+        logger.warning("Unexpected error extracting TSA cert fingerprint: %s", exc, exc_info=True)
         return None
 
 
@@ -149,11 +150,11 @@ def _extract_message_imprint(tst_bytes: bytes) -> bytes | None:
         if substrate:  # pragma: no cover — requires crafted DER with trailing bytes
             return None
         return bytes(tstinfo["messageImprint"]["hashedMessage"])
-    except (PyAsn1Error, rfc3161ng.TimestampingError, ValueError) as exc:
-        logger.warning("Failed to extract message imprint from TST: %s", exc)
+    except (PyAsn1Error, rfc3161ng.TimestampingError, UnsupportedAlgorithm, ValueError) as exc:
+        logger.warning("Failed to extract message imprint from TST: %s", exc, exc_info=True)
         return None
     except Exception as exc:  # pragma: no cover
-        logger.warning("Unexpected error extracting message imprint: %s", exc)
+        logger.warning("Unexpected error extracting message imprint: %s", exc, exc_info=True)
         return None
 
 
@@ -424,7 +425,16 @@ def verify_timestamp_quorum(
                 trust_store_path=trust_store_path,
             ):
                 valid_count += 1
-        except ValueError:
+        except (ValueError, UnsupportedAlgorithm) as exc:
+            logger.warning("Skipping invalid TSA token from %s: %s", tsa_url, exc, exc_info=True)
+            continue
+        except Exception as exc:
+            logger.warning(
+                "Unexpected TSA verification error from %s: %s",
+                tsa_url,
+                exc,
+                exc_info=True,
+            )
             continue
     return valid_count >= TSA_QUORUM_THRESHOLD
 
@@ -506,11 +516,11 @@ def extract_tsa_certificate(tst_bytes: bytes) -> x509.Certificate | None:
         signed_data = tst.content
         cert: x509.Certificate | None = load_certificate(signed_data, certificate=b"")
         return cert
-    except (PyAsn1Error, rfc3161ng.TimestampingError, ValueError) as exc:
-        logger.warning("Failed to extract TSA certificate: %s", exc)
+    except (PyAsn1Error, rfc3161ng.TimestampingError, UnsupportedAlgorithm, ValueError) as exc:
+        logger.warning("Failed to extract TSA certificate: %s", exc, exc_info=True)
         return None
     except Exception as exc:  # pragma: no cover
-        logger.warning("Unexpected error extracting TSA certificate: %s", exc)
+        logger.warning("Unexpected error extracting TSA certificate: %s", exc, exc_info=True)
         return None
 
 

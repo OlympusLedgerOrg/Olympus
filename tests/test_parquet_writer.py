@@ -7,6 +7,7 @@ Install it with: pip install pyarrow
 from __future__ import annotations
 
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -123,6 +124,52 @@ class TestWriteDeterministicParquet:
         pf = pq.ParquetFile(str(tmp_path / "out.parquet"))
         schema_meta = pf.schema_arrow.metadata or {}
         assert schema_meta.get(b"created_by") == WRITER_CREATED_BY.encode("utf-8")
+
+
+def test_writer_pins_dictionary_and_data_page_defaults(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Writer kwargs pin PyArrow defaults that affect deterministic file bytes."""
+    from protocol import parquet_writer as pw_module
+
+    captured_kwargs: dict = {}
+
+    class FakeSchema:
+        def with_metadata(self, metadata: dict[bytes, bytes]) -> FakeSchema:
+            return self
+
+    class FakeTable:
+        num_rows = 1
+        column_names = ["id"]
+        schema = FakeSchema()
+
+        def slice(self, offset: int, length: int) -> FakeTable:
+            return self
+
+    class FakeParquetWriter:
+        def __init__(self, path: str, schema: FakeSchema, **kwargs: object) -> None:
+            captured_kwargs.update(kwargs)
+            Path(path).write_bytes(b"deterministic parquet bytes")
+
+        def write_table(self, table: FakeTable) -> None:
+            return None
+
+        def close(self) -> None:
+            return None
+
+    monkeypatch.setattr(pw_module, "_PYARROW_AVAILABLE", True)
+    monkeypatch.setattr(pw_module, "_dicts_to_table", lambda records: FakeTable())
+    monkeypatch.setattr(
+        pw_module,
+        "pq",
+        SimpleNamespace(ParquetWriter=FakeParquetWriter),
+        raising=False,
+    )
+
+    pw_module.write_deterministic_parquet([{"id": 1}], tmp_path / "out.parquet")
+
+    assert captured_kwargs["use_dictionary"] is False
+    assert captured_kwargs["data_page_version"] == "2.0"
 
 
 # ---------------------------------------------------------------------------
