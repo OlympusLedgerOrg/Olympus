@@ -69,12 +69,18 @@ func (c *CdhsSmfClient) Close() error {
 	return c.conn.Close()
 }
 
-// Update inserts or updates a record in the global SMT
-func (c *CdhsSmfClient) Update(ctx context.Context, shardID string, recordKey *pb.RecordKey, canonicalContent []byte) (*pb.UpdateResponse, error) {
+// Update inserts or updates a record in the global SMT.
+//
+// parserID and canonicalParserVersion are ADR-0003 parser-provenance fields
+// bound into the leaf hash domain by the Rust service. Both must be non-empty;
+// the Rust service rejects empty strings with an error.
+func (c *CdhsSmfClient) Update(ctx context.Context, shardID string, recordKey *pb.RecordKey, canonicalContent []byte, parserID string, canonicalParserVersion string) (*pb.UpdateResponse, error) {
 	req := &pb.UpdateRequest{
-		ShardId:          shardID,
-		RecordKey:        recordKey,
-		CanonicalContent: canonicalContent,
+		ShardId:                shardID,
+		RecordKey:              recordKey,
+		CanonicalContent:       canonicalContent,
+		ParserId:               parserID,
+		CanonicalParserVersion: canonicalParserVersion,
 	}
 
 	resp, err := c.client.Update(ctx, req)

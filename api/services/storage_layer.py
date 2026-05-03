@@ -251,13 +251,24 @@ def _use_go_sequencer() -> bool:
 
     Controlled by OLYMPUS_USE_GO_SEQUENCER environment variable.
     Default is False (direct PostgreSQL writes via storage/postgres.py).
+
+    EXPERIMENTAL: When enabled, logs a one-time CRITICAL warning at startup.
+    The warning is emitted at most once per process (function-attribute gate).
     """
-    return os.environ.get("OLYMPUS_USE_GO_SEQUENCER", "").strip().lower() in {
+    enabled = os.environ.get("OLYMPUS_USE_GO_SEQUENCER", "").strip().lower() in {
         "1",
         "true",
         "yes",
         "on",
     }
+    if enabled and not getattr(_use_go_sequencer, "_warned", False):
+        setattr(_use_go_sequencer, "_warned", True)
+        logger.critical(
+            "Go sequencer path (Path B) is EXPERIMENTAL. "
+            "Known limitations tracked in ARCHITECTURE.md. "
+            "For production journalist workloads use OLYMPUS_USE_GO_SEQUENCER=false."
+        )
+    return enabled
 
 
 def _get_sequencer_client() -> GoSequencerClient:
@@ -438,16 +449,21 @@ async def append_via_backend(
     )
 
     if isinstance(backend, GoSequencerClient):
-        # Sequencer path: hand the leaf to Go, then optionally fetch an
-        # inclusion proof against the resulting root.
+        # Sequencer path: hand the pre-computed value_hash to Go via the
+        # /v1/queue-leaf-hash endpoint, which bypasses Rust canonicalization.
+        # Previously this called /v1/queue-leaf with content_type=
+        # "application/octet-stream", which the Rust canonicalizer rejects
+        # (H-3). The hash-specific endpoint is the correct path when the
+        # Python layer already holds a canonical content hash.
         version_str = str(version) if version is not None else ""
         try:
-            append_result = await backend.append_record(
+            append_result = await backend.append_record_hash(
                 shard_id=shard_id,
                 record_type=record_type,
                 record_id=record_id,
-                content=value_hash,
-                content_type="application/octet-stream",
+                value_hash=value_hash,
+                parser_id=parser_id,
+                canonical_parser_version=canonical_parser_version,
                 version=version_str,
             )
         except SequencerUnavailableError as exc:

@@ -281,10 +281,13 @@ _write_ledger = Ledger()
 # ---------------------------------------------------------------------------
 
 # All record commits route through the Go sequencer's QueueLeaf endpoint.
-# SEQUENCER_ADDR (default localhost:9090) and SEQUENCER_API_TOKEN configure
+# SEQUENCER_ADDR (default localhost:9090) and OLYMPUS_SEQUENCER_TOKEN configure
 # the HTTP client.
+# SEQUENCER_API_TOKEN is accepted as a deprecated alias for one release.
 _sequencer_addr: str = os.environ.get("SEQUENCER_ADDR", "localhost:9090")
-_sequencer_token: str = os.environ.get("SEQUENCER_API_TOKEN", "")
+_sequencer_token: str = os.environ.get("OLYMPUS_SEQUENCER_TOKEN", "") or os.environ.get(
+    "SEQUENCER_API_TOKEN", ""
+)
 
 # Module-level singleton for sequencer HTTP calls.  Lazily initialised by
 # _get_sequencer_client() so that the connection pool is only created when
@@ -327,8 +330,12 @@ logger.info("ingest_path=sequencer addr=%s", _sequencer_addr)
 # intentionally never logged to avoid credential exposure.
 if not _sequencer_token:
     logger.warning(
-        "ingest: SEQUENCER_API_TOKEN is not set — sequencer requests will be unauthorized"
+        "ingest: OLYMPUS_SEQUENCER_TOKEN is not set — sequencer requests will be unauthorized"
     )
+elif os.environ.get("SEQUENCER_API_TOKEN", "") and not os.environ.get(
+    "OLYMPUS_SEQUENCER_TOKEN", ""
+):
+    logger.warning("ingest: SEQUENCER_API_TOKEN is deprecated; rename to OLYMPUS_SEQUENCER_TOKEN")
 
 
 def _dev_signing_key_enabled() -> bool:

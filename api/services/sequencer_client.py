@@ -32,6 +32,10 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
+# Content types accepted by the Rust canonicalizer (used to validate
+# append_record() calls client-side before any HTTP round-trip).
+_VALID_CONTENT_TYPES: frozenset[str] = frozenset({"json", "text", "plaintext"})
+
 
 # ---------------------------------------------------------------------------
 # Exception types
@@ -265,30 +269,49 @@ class GoSequencerClient:
         record_type: str,
         record_id: str,
         content: bytes,
-        content_type: str = "application/octet-stream",
+        content_type: str = "json",
         version: str = "",
         metadata: dict[str, str] | None = None,
+        parser_id: str = "",
+        canonical_parser_version: str = "",
     ) -> SequencerAppendResult:
         """Append a record to the ledger via the Go sequencer.
 
-        POST /v1/queue-leaf → returns new_root, global_key, leaf_value_hash, tree_size.
+        POST /v1/queue-leaf → Rust service canonicalizes the content, then
+        inserts the leaf into the global SMT.  Use this method when you have
+        raw (not yet hashed) content.  For pre-computed value hashes, use
+        ``append_record_hash`` which calls /v1/queue-leaf-hash and bypasses
+        the Rust canonicalization step.
 
         Args:
             shard_id: Shard identifier (e.g., "test.shard" or "watauga:2025:budget").
             record_type: Record type (e.g., "doc", "dataset", "artifact").
             record_id: Unique record identifier.
-            content: Canonical content bytes to commit.
-            content_type: MIME type of content (default: application/octet-stream).
+            content: Raw content bytes to canonicalize and commit.
+            content_type: MIME type understood by the Rust canonicalizer.
+                Must be one of "json", "text", or "plaintext". Defaults to
+                "json". Do NOT pass "application/octet-stream" — use
+                ``append_record_hash`` for pre-hashed content.
             version: Optional version string (empty string if not versioned).
             metadata: Optional key-value metadata pairs.
+            parser_id: ADR-0003 parser identity (e.g. "docling@2.3.1").
+                Required; empty string is rejected by the Go sequencer.
+            canonical_parser_version: ADR-0003 canonical parser version
+                (e.g. "v1"). Required; empty string is rejected.
 
         Returns:
             SequencerAppendResult with new_root, global_key, leaf_value_hash, tree_size.
 
         Raises:
+            ValueError: If ``content_type`` is not in the Rust-accepted set.
             SequencerUnavailableError: If the sequencer is unreachable.
             SequencerResponseError: If the sequencer returns a non-2xx status.
         """
+        if content_type not in _VALID_CONTENT_TYPES:
+            raise ValueError(
+                f"Invalid content_type {content_type!r} for Rust canonicalizer; "
+                "use json/text/plaintext or call append_record_hash for pre-hashed commits."
+            )
         url = f"{self._base_url}/v1/queue-leaf"
         payload: dict[str, Any] = {
             "shard_id": shard_id,
@@ -297,6 +320,8 @@ class GoSequencerClient:
             "version": version,
             "content": base64.b64encode(content).decode("ascii"),
             "content_type": content_type,
+            "parser_id": parser_id,
+            "canonical_parser_version": canonical_parser_version,
         }
         if metadata:
             payload["metadata"] = metadata
@@ -311,9 +336,97 @@ class GoSequencerClient:
             ) from exc
 
         if resp.status_code != 200:
-            detail = resp.text[:500] if resp.text else None
+            detail = resp.text[:500] if resp.text else ""
             logger.error(
                 "sequencer_error url=%s status=%d body=%.200s",
+                url,
+                resp.status_code,
+                detail,
+            )
+            raise SequencerResponseError(
+                f"Sequencer returned HTTP {resp.status_code}",
+                status_code=resp.status_code,
+                detail=detail,
+            )
+
+        data = resp.json()
+        return SequencerAppendResult(
+            new_root=data["new_root"],
+            global_key=data["global_key"],
+            leaf_value_hash=data["leaf_value_hash"],
+            tree_size=int(data["tree_size"]),
+        )
+
+    async def append_record_hash(
+        self,
+        shard_id: str,
+        record_type: str,
+        record_id: str,
+        value_hash: bytes,
+        parser_id: str,
+        canonical_parser_version: str,
+        version: str = "",
+        metadata: dict[str, str] | None = None,
+    ) -> SequencerAppendResult:
+        """Append a pre-computed 32-byte leaf hash to the ledger.
+
+        POST /v1/queue-leaf-hash → passes ``value_hash`` directly to the Rust
+        SMT service as canonical_content, bypassing the Rust canonicalization
+        step.  Use this method when the caller already holds a canonical content
+        hash (e.g. Python ``storage_layer.py`` sending a pre-hashed value).
+
+        Passing raw binary with content_type="application/octet-stream" to
+        ``append_record`` would be rejected by the Rust canonicalization step
+        (H-3); this endpoint is the correct alternative.
+
+        Args:
+            shard_id: Shard identifier.
+            record_type: Record type.
+            record_id: Unique record identifier.
+            value_hash: Exactly 32-byte pre-computed canonical content hash.
+            parser_id: ADR-0003 parser identity. Required; empty string is
+                rejected by the Go sequencer.
+            canonical_parser_version: ADR-0003 canonical parser version.
+                Required; empty string is rejected.
+            version: Optional version string.
+            metadata: Optional key-value metadata pairs.
+
+        Returns:
+            SequencerAppendResult with new_root, global_key, leaf_value_hash, tree_size.
+
+        Raises:
+            ValueError: If ``value_hash`` is not exactly 32 bytes.
+            SequencerUnavailableError: If the sequencer is unreachable.
+            SequencerResponseError: If the sequencer returns a non-2xx status.
+        """
+        if len(value_hash) != 32:
+            raise ValueError(f"value_hash must be exactly 32 bytes, got {len(value_hash)}")
+        url = f"{self._base_url}/v1/queue-leaf-hash"
+        payload: dict[str, Any] = {
+            "shard_id": shard_id,
+            "record_type": record_type,
+            "record_id": record_id,
+            "version": version,
+            "value_hash": base64.b64encode(value_hash).decode("ascii"),
+            "parser_id": parser_id,
+            "canonical_parser_version": canonical_parser_version,
+        }
+        if metadata:
+            payload["metadata"] = metadata
+
+        try:
+            client = self._get_client()
+            resp = await client.post(url, json=payload, headers=self._headers())
+        except httpx.RequestError as exc:
+            logger.error("sequencer_unreachable url=%s error=%s", url, exc)
+            raise SequencerUnavailableError(
+                f"Sequencer unavailable at {self._base_url}", cause=exc
+            ) from exc
+
+        if resp.status_code != 200:
+            detail = resp.text[:500] if resp.text else ""
+            logger.error(
+                "sequencer_hash_error url=%s status=%d body=%.200s",
                 url,
                 resp.status_code,
                 detail,
@@ -345,18 +458,45 @@ class GoSequencerClient:
                 - shard_id: Shard identifier
                 - record_type: Record type
                 - record_id: Record identifier
-                - content: Canonical content bytes
-                - content_type: MIME type (optional, default: application/octet-stream)
+                - content: Canonical content bytes (required)
+                - content_type: MIME type understood by the Rust canonicalizer.
+                    Must be one of "json", "text", or "plaintext". Defaults to
+                    "json". Do NOT pass "application/octet-stream" — use
+                    ``append_record_hash`` for pre-computed value hashes.
                 - version: Version string (optional, default: "")
                 - metadata: Optional metadata dict
+                - parser_id: ADR-0003 parser identity (required, non-empty)
+                - canonical_parser_version: ADR-0003 canonical parser version
+                    (required, non-empty)
 
         Returns:
             List of SequencerAppendResult in the same order as input records.
 
         Raises:
+            ValueError: If any record is missing or has invalid required fields
+                (parser_id, canonical_parser_version, content_type, content).
+                Raised before any HTTP call is made.
             SequencerUnavailableError: If the sequencer is unreachable.
             SequencerResponseError: If the sequencer returns a non-2xx status.
         """
+        # Validate all records before making any HTTP call so callers get an
+        # immediate, per-record error rather than a confusing 400 from Go.
+        for idx, r in enumerate(records):
+            rid = r.get("record_id", f"<index {idx}>")
+            prefix = f"record {idx} (record_id={rid})"
+            if not r.get("parser_id", ""):
+                raise ValueError(f"{prefix}: parser_id must be non-empty")
+            if not r.get("canonical_parser_version", ""):
+                raise ValueError(f"{prefix}: canonical_parser_version must be non-empty")
+            ct = r.get("content_type", "json")
+            if ct not in _VALID_CONTENT_TYPES:
+                raise ValueError(
+                    f"{prefix}: invalid content_type {ct!r}; "
+                    "use json/text/plaintext or call append_record_hash for pre-hashed commits."
+                )
+            if not isinstance(r.get("content"), bytes):
+                raise ValueError(f"{prefix}: content must be bytes")
+
         url = f"{self._base_url}/v1/queue-leaves"
         payload = {
             "records": [
@@ -366,7 +506,9 @@ class GoSequencerClient:
                     "record_id": r["record_id"],
                     "version": r.get("version", ""),
                     "content": base64.b64encode(r["content"]).decode("ascii"),
-                    "content_type": r.get("content_type", "application/octet-stream"),
+                    "content_type": r.get("content_type", "json"),
+                    "parser_id": r["parser_id"],
+                    "canonical_parser_version": r["canonical_parser_version"],
                     **({"metadata": r["metadata"]} if r.get("metadata") else {}),
                 }
                 for r in records
@@ -383,7 +525,7 @@ class GoSequencerClient:
             ) from exc
 
         if resp.status_code != 200:
-            detail = resp.text[:500] if resp.text else None
+            detail = resp.text[:500] if resp.text else ""
             logger.error(
                 "sequencer_batch_error url=%s status=%d body=%.200s",
                 url,
