@@ -5,6 +5,7 @@ Network calls to the TSA are mocked so that these tests run fully offline.
 """
 
 import hashlib
+import logging
 from datetime import datetime, timezone
 from unittest.mock import MagicMock, patch
 
@@ -580,14 +581,16 @@ def test_verify_timestamp_quorum_failed_token_does_not_count():
 
 
 @pytest.mark.parametrize(
-    "bad_exception",
+    ("bad_exception", "expected_log_fragment"),
     [
-        UnsupportedAlgorithm("unsupported TSA signature algorithm"),
-        RuntimeError("bad TSA verifier failure"),
+        (UnsupportedAlgorithm("unsupported TSA signature algorithm"), "Skipping invalid TSA token"),
+        (RuntimeError("bad TSA verifier failure"), "Unexpected TSA verification error"),
     ],
 )
 def test_verify_timestamp_quorum_bad_tsa_does_not_abort_finalization(
+    caplog: pytest.LogCaptureFixture,
     bad_exception: Exception,
+    expected_log_fragment: str,
 ) -> None:
     """One verifier exception must not prevent a later valid TSA from satisfying quorum."""
     hash_hex = "a" * 64
@@ -595,6 +598,7 @@ def test_verify_timestamp_quorum_bad_tsa_does_not_abort_finalization(
     token_b = TimestampToken(hash_hex, DIGICERT_TSA_URL, b"\x02", "2026-03-01T00:00:01Z")
     token_c = TimestampToken(hash_hex, SECTIGO_TSA_URL, b"\x03", "2026-03-01T00:00:02Z")
 
+    caplog.set_level(logging.WARNING, logger="protocol.rfc3161")
     with patch(
         "protocol.rfc3161.verify_timestamp_token",
         side_effect=[True, bad_exception, True],
@@ -606,6 +610,8 @@ def test_verify_timestamp_quorum_bad_tsa_does_not_abort_finalization(
         )
 
     assert result is True
+    assert expected_log_fragment in caplog.text
+    assert DIGICERT_TSA_URL in caplog.text
 
 
 # ---------------------------------------------------------------------------

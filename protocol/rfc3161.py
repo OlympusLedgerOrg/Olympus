@@ -428,7 +428,7 @@ def verify_timestamp_quorum(
         except (ValueError, UnsupportedAlgorithm) as exc:
             logger.warning("Skipping invalid TSA token from %s: %s", tsa_url, exc, exc_info=True)
             continue
-        except Exception as exc:  # pragma: no cover
+        except Exception as exc:
             logger.warning(
                 "Unexpected TSA verification error from %s: %s",
                 tsa_url,
