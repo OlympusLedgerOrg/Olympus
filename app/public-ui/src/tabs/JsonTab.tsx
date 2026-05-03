@@ -87,7 +87,7 @@ export default function JsonTab({
         type="button"
         className={skin.classes.buttonPrimary}
         onClick={() => void onSubmit()}
-        disabled={isPending || !jsonInput.trim()}
+        disabled={isPending || !jsonInput.trim() || !!wasmError}
         style={{ marginTop: "0.75rem" }}
       >
         {isPending ? "EXECUTING..." : "CANONICALIZE_AND_HASH"}

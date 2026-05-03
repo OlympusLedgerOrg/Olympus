@@ -6,6 +6,7 @@ import type { VerdictState } from "../lib/types";
 export function useJsonVerification(
   setVerdictResult: (r: VerdictState | null) => void,
   submitHash: (hash: string) => void,
+  setHashInput: (hash: string) => void,
 ) {
   const [jsonInput, setJsonInput] = useState("");
   const [jsonError, setJsonError] = useState<string | null>(null);
@@ -20,11 +21,12 @@ export function useJsonVerification(
       const canon = canonicalJsonEncode(parsed);
       const hex = await hashBytes(new TextEncoder().encode(canon));
       setJsonCanonical(canon);
+      setHashInput(hex);
       submitHash(hex);
     } catch (err) {
       setJsonError(err instanceof Error ? err.message : String(err));
     }
-  }, [jsonInput, submitHash, setVerdictResult]);
+  }, [jsonInput, submitHash, setHashInput, setVerdictResult]);
 
   const formatJson = useCallback(() => {
     try {

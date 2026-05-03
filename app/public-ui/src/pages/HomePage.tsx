@@ -44,7 +44,7 @@ export default function HomePage() {
   const hashHook = useHashVerification(setVerdictResult, activeTab);
   const proofHook = useProofVerification(setVerdictResult);
   const fileHook = useFileCommit(setVerdictResult, hashHook.submitHash);
-  const jsonHook = useJsonVerification(setVerdictResult, hashHook.submitHash);
+  const jsonHook = useJsonVerification(setVerdictResult, hashHook.submitHash, hashHook.setHashInput);
   const { wasmError } = useWasmStatus();
 
   const switchTab = (id: Tab) => {

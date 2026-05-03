@@ -71,7 +71,7 @@ export default function FileTab({
             type="button"
             className={skin.classes.buttonPrimary}
             onClick={onVerify}
-            disabled={isPending}
+            disabled={isPending || !!wasmError}
             style={{ marginTop: "1rem" }}
           >
             {isPending ? "EXECUTING..." : "VERIFY_ON_LEDGER"}
