@@ -204,8 +204,8 @@ class TestGenerate:
         mock_completed.stdout = ""
         mock_completed.stderr = ""
 
-        def mock_run(cmd, **kwargs):
-            """Mock subprocess.run to simulate snarkjs behavior."""
+        def mock_run(cmd: list[str], *, cwd: Path | None = None, timeout: int, check: bool = True):
+            """Mock _run_subprocess to simulate snarkjs behavior."""
             # Check if this is the proof generation call (snarkjs groth16 prove)
             if "prove" in cmd:
                 # Write mock proof and public files
@@ -217,7 +217,7 @@ class TestGenerate:
 
         with (
             patch("shutil.which", return_value="/usr/bin/node"),
-            patch("subprocess.run", side_effect=mock_run),
+            patch("protocol.groth16_backend._run_subprocess", side_effect=mock_run),
         ):
             proof = backend.generate(statement, witness)
 
@@ -250,13 +250,15 @@ class TestGenerate:
         statement = Statement(circuit="test", public_inputs={"root": "123"})
         witness = Witness(private_inputs={"path": "456"})
 
-        def mock_run_fail(cmd, **kwargs):
-            """Mock subprocess.run to simulate witness generation failure."""
+        def mock_run_fail(
+            cmd: list[str], *, cwd: Path | None = None, timeout: int, check: bool = True
+        ):
+            """Mock _run_subprocess to simulate witness generation failure."""
             raise subprocess.CalledProcessError(1, cmd, stderr="Witness generation error")
 
         with (
             patch("shutil.which", return_value="/usr/bin/node"),
-            patch("subprocess.run", side_effect=mock_run_fail),
+            patch("protocol.groth16_backend._run_subprocess", side_effect=mock_run_fail),
         ):
             with pytest.raises(ProofGenerationError) as exc_info:
                 backend.generate(statement, witness)
@@ -312,7 +314,7 @@ class TestVerify:
 
         with (
             patch("shutil.which", return_value="/usr/bin/npx"),
-            patch("subprocess.run", return_value=mock_completed),
+            patch("protocol.groth16_backend._run_subprocess", return_value=mock_completed),
         ):
             result = backend.verify(statement, proof)
 
@@ -343,13 +345,15 @@ class TestVerify:
             public_signals=["123"],
         )
 
-        def mock_run_fail(cmd, **kwargs):
-            """Mock subprocess.run to simulate verification failure."""
+        def mock_run_fail(
+            cmd: list[str], *, cwd: Path | None = None, timeout: int, check: bool = True
+        ):
+            """Mock _run_subprocess to simulate verification failure."""
             raise subprocess.CalledProcessError(1, cmd, stderr="Verification failed")
 
         with (
             patch("shutil.which", return_value="/usr/bin/npx"),
-            patch("subprocess.run", side_effect=mock_run_fail),
+            patch("protocol.groth16_backend._run_subprocess", side_effect=mock_run_fail),
         ):
             result = backend.verify(statement, proof)
 
@@ -478,7 +482,9 @@ class TestRunSnarkjs:
 
         with (
             patch("shutil.which", return_value="/usr/bin/npx"),
-            patch("subprocess.run", return_value=mock_completed) as mock_run,
+            patch(
+                "protocol.groth16_backend._run_subprocess", return_value=mock_completed
+            ) as mock_run,
         ):
             backend._run_snarkjs(["groth16", "verify", "vkey.json", "public.json", "proof.json"])
 
@@ -488,7 +494,10 @@ class TestRunSnarkjs:
         assert cmd[0] == "/usr/bin/npx"
         assert cmd[1] == "snarkjs"
         assert "groth16" in cmd
-        assert call_args.kwargs["timeout"] == 30
+        # Default timeout for _run_snarkjs is _PROOF_TIMEOUT_SECS
+        from protocol.groth16_backend import _PROOF_TIMEOUT_SECS
+
+        assert call_args.kwargs["timeout"] == _PROOF_TIMEOUT_SECS
 
     def test_run_snarkjs_with_direct_binary(self, tmp_path: Path) -> None:
         """Test that _run_snarkjs() uses direct binary when snarkjs_bin is not npx."""
@@ -502,7 +511,9 @@ class TestRunSnarkjs:
 
         with (
             patch("shutil.which", return_value="/usr/local/bin/snarkjs"),
-            patch("subprocess.run", return_value=mock_completed) as mock_run,
+            patch(
+                "protocol.groth16_backend._run_subprocess", return_value=mock_completed
+            ) as mock_run,
         ):
             backend._run_snarkjs(["groth16", "verify", "vkey.json", "public.json", "proof.json"])
 
@@ -511,7 +522,17 @@ class TestRunSnarkjs:
         cmd = call_args[0][0]
         assert cmd[0] == "/usr/local/bin/snarkjs"
         assert cmd[1] == "groth16"  # No "snarkjs" prefix
-        assert call_args.kwargs["timeout"] == 30
+        from protocol.groth16_backend import _PROOF_TIMEOUT_SECS
+
+        assert call_args.kwargs["timeout"] == _PROOF_TIMEOUT_SECS
+
+    def test_run_snarkjs_timeout_raises_timeout_expired(self) -> None:
+        """_run_snarkjs raises TimeoutExpired and kills process group on timeout."""
+        backend = Groth16Backend()
+        with patch("shutil.which", return_value="/bin/sleep"):
+            backend.snarkjs_bin = "sleep"
+            with pytest.raises(subprocess.TimeoutExpired):
+                backend._run_snarkjs(["60"], timeout=1)
 
 
 class TestProofSystemType:
