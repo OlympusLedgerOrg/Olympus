@@ -38,6 +38,7 @@ class DocCommitResponse(BaseModel):
     epoch: datetime
     shard_id: str
     merkle_root: str | None
+    kind: str
 
 
 class DocVerifyRequest(BaseModel):

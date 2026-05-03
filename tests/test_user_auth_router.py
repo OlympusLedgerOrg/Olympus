@@ -73,7 +73,7 @@ REG_BODY = {
     "email": "alice@example.com",
     "password": "supersecretpw1234",
     "name": "alice-key",
-    "scopes": ["ingest", "verify"],
+    "scopes": ["read", "verify"],
     "expires_at": "2099-01-01T00:00:00Z",
 }
 
@@ -89,7 +89,7 @@ async def test_register_success(auth_client):
     assert resp.status_code == 201, resp.text
     data = resp.json()
     assert data["email"] == REG_BODY["email"]
-    assert data["scopes"] == ["ingest", "verify"]
+    assert data["scopes"] == ["read", "verify"]
     assert len(data["api_key"]) == 64  # 32 bytes hex
     assert data["user_id"]
     assert data["key_id"]
@@ -144,7 +144,7 @@ async def test_login_success(auth_client):
     data = resp.json()
     assert data["email"] == REG_BODY["email"]
     assert len(data["keys"]) == 1
-    assert data["keys"][0]["scopes"] == ["ingest", "verify"]
+    assert data["keys"][0]["scopes"] == ["read", "verify"]
 
 
 @pytest.mark.asyncio
@@ -214,7 +214,7 @@ async def test_create_list_revoke_key_flow(auth_client):
 
 @pytest.mark.asyncio
 async def test_create_key_rejects_scope_escalation(auth_client):
-    """A key with scopes=[ingest,verify] must not be able to mint an admin key."""
+    """A key with scopes=[read,verify] must not be able to mint an admin key."""
     api_key = await _register_and_get_key(auth_client)
     headers = {"X-API-Key": api_key}
 
@@ -230,7 +230,7 @@ async def test_create_key_rejects_scope_escalation(auth_client):
 @pytest.mark.asyncio
 async def test_create_key_subset_allowed(auth_client):
     """Creating a key with a strict subset of caller's scopes is allowed."""
-    api_key = await _register_and_get_key(auth_client, scopes=["ingest", "verify"])
+    api_key = await _register_and_get_key(auth_client, scopes=["read", "verify"])
     headers = {"X-API-Key": api_key}
     resp = await auth_client.post(
         "/auth/keys", headers=headers, json={"name": "narrow", "scopes": ["verify"]}
@@ -256,7 +256,7 @@ async def test_revoke_key_not_found(auth_client):
 
 GEN_BODY = {
     "name": "ops-key",
-    "scopes": ["ingest", "verify"],
+    "scopes": ["read", "verify"],
     "expires_at": "2099-01-01T00:00:00Z",
 }
 
@@ -316,7 +316,7 @@ async def test_admin_generate_success(auth_client):
     assert len(data["raw_key"]) == 64
     assert len(data["key_hash"]) == 64
     assert data["key_id"] == "ops-key"
-    assert data["scopes"] == ["ingest", "verify"]
+    assert data["scopes"] == ["read", "verify"]
     assert data["expires_at"] == "2099-01-01T00:00:00Z"
     # env_entry must be valid JSON containing the key_hash
     import json as _json

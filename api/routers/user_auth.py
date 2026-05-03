@@ -11,17 +11,27 @@ DELETE /auth/keys/{key_id} — revoke a key
 from __future__ import annotations
 
 import hashlib
+import hmac as _hmac
 import json
 import logging
+import os
 import secrets
 import uuid
 from datetime import datetime, timezone
+from time import monotonic
 
 from fastapi import APIRouter, HTTPException, Request, status
 from pydantic import BaseModel
 from sqlalchemy import select
 
-from api.auth import RateLimit, _extract_key, _hash_key
+from api.auth import (
+    RateLimit,
+    _extract_key,
+    _get_backend,
+    _get_client_ip,
+    _hash_key,
+    _TokenBucket,
+)
 from api.deps import DBSession
 from api.models.api_key import ApiKey
 from api.models.user import User
@@ -31,15 +41,24 @@ from protocol.log_sanitization import sanitize_for_log
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/auth", tags=["auth"])
 
-_DEFAULT_SCOPES = ["ingest", "verify"]
+_REGISTER_DEFAULT_SCOPES = ["read", "verify"]
+_KEY_DEFAULT_SCOPES = ["ingest", "verify"]
 _DEFAULT_EXPIRY = "2099-01-01T00:00:00Z"
 
 # Scopes a new user is allowed to self-assign at registration. Privileged
 # scopes (e.g. "admin", "write") must be granted out-of-band via the admin
 # tooling and cannot be obtained simply by sending them in /auth/register.
-_SELF_SERVICE_SCOPES = {"ingest", "verify", "read", "commit"}
+_SELF_SERVICE_SCOPES = {"read", "verify"}
 # Superset of all known scope strings — used to reject typos / unknown values.
 _VALID_SCOPES = {"read", "write", "ingest", "commit", "verify", "admin"}
+_PRIVILEGED_REGISTRATION_SCOPES = {"ingest", "commit", "write", "admin"}
+_ALLOW_PUBLIC_WRITE_REG_ENV = "OLYMPUS_ALLOW_PUBLIC_WRITE_REGISTRATION"
+_REGISTRATION_APPROVAL_HEADER = "x-admin-registration-approval"
+_REGISTER_RATE_LIMIT_MINUTE_CAPACITY = 1.0
+_REGISTER_RATE_LIMIT_MINUTE_REFILL = 1.0 / 60.0
+_REGISTER_RATE_LIMIT_DAY_CAPACITY = 10.0
+_SECONDS_PER_DAY = 86_400.0
+_REGISTER_RATE_LIMIT_DAY_REFILL = 10.0 / _SECONDS_PER_DAY
 
 # scrypt params — tuned for ~100ms on modest hardware
 _SCRYPT_N = 2**14
@@ -144,7 +163,7 @@ class RegisterRequest(BaseModel):
     email: str
     password: str
     name: str = "default"
-    scopes: list[str] = _DEFAULT_SCOPES
+    scopes: list[str] = _REGISTER_DEFAULT_SCOPES
     expires_at: str = _DEFAULT_EXPIRY
 
 
@@ -155,7 +174,7 @@ class LoginRequest(BaseModel):
 
 class KeyCreateRequest(BaseModel):
     name: str = "default"
-    scopes: list[str] = _DEFAULT_SCOPES
+    scopes: list[str] = _KEY_DEFAULT_SCOPES
     expires_at: str = _DEFAULT_EXPIRY
 
 
@@ -190,11 +209,115 @@ class KeyCreateResponse(BaseModel):
     expires_at: str
 
 
+def _public_write_registration_enabled() -> bool:
+    """Return True only when the explicit public-write override flag is enabled."""
+    return os.environ.get(_ALLOW_PUBLIC_WRITE_REG_ENV, "").strip() == "1"
+
+
+def _registration_approval_payload(body: RegisterRequest) -> str:
+    """Build the canonical payload that must be signed by OLYMPUS_ADMIN_KEY."""
+    scopes = ",".join(sorted(set(body.scopes)))
+    return f"{body.email.lower().strip()}|{scopes}|{body.expires_at}"
+
+
+def _registration_approval_signature(body: RegisterRequest, admin_key: str) -> str:
+    """Return the HMAC-SHA256 signature for the registration approval payload."""
+    return _hmac.new(
+        admin_key.encode("utf-8"),
+        _registration_approval_payload(body).encode("utf-8"),
+        hashlib.sha256,
+    ).hexdigest()
+
+
+def _has_valid_registration_approval(body: RegisterRequest, request: Request) -> bool:
+    """Validate the admin approval header for privileged registration scopes."""
+    provided = request.headers.get(_REGISTRATION_APPROVAL_HEADER, "").strip().lower()
+    if not provided:
+        return False
+    admin_key = os.environ.get("OLYMPUS_ADMIN_KEY", "")
+    if not admin_key:
+        return False
+    expected = _registration_approval_signature(body, admin_key)
+    return _hmac.compare_digest(provided, expected)
+
+
+def log_public_write_registration_override_if_enabled() -> None:
+    """Emit a startup CRITICAL warning when public write registration is enabled."""
+    if _public_write_registration_enabled():
+        logger.critical(
+            "%s=1 enabled: anonymous self-service registration can mint write-capable API keys.",
+            _ALLOW_PUBLIC_WRITE_REG_ENV,
+        )
+
+
+async def registration_rate_limit(request: Request) -> None:
+    """Per-IP registration guardrail: 1/minute and 10/day."""
+    ip = _get_client_ip(request)
+    backend = _get_backend()
+    minute_key = f"register:minute:{ip}"
+    day_key = f"register:day:{ip}"
+
+    if hasattr(backend, "consume_atomic"):
+        minute_ok = backend.consume_atomic(
+            minute_key,
+            _REGISTER_RATE_LIMIT_MINUTE_CAPACITY,
+            _REGISTER_RATE_LIMIT_MINUTE_REFILL,
+        )
+        day_ok = minute_ok and backend.consume_atomic(
+            day_key,
+            _REGISTER_RATE_LIMIT_DAY_CAPACITY,
+            _REGISTER_RATE_LIMIT_DAY_REFILL,
+        )
+        if not day_ok:
+            raise HTTPException(
+                status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+                detail={"detail": "Rate limit exceeded.", "code": "RATE_LIMITED"},
+            )
+        return
+
+    minute_bucket = backend.get(minute_key)
+    if minute_bucket is None:
+        minute_bucket = _TokenBucket(
+            capacity=_REGISTER_RATE_LIMIT_MINUTE_CAPACITY,
+            refill_rate=_REGISTER_RATE_LIMIT_MINUTE_REFILL,
+            tokens=int(_REGISTER_RATE_LIMIT_MINUTE_CAPACITY),
+            last_refill=monotonic(),
+        )
+    if not minute_bucket.consume():
+        backend.set(minute_key, minute_bucket)
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail={"detail": "Rate limit exceeded.", "code": "RATE_LIMITED"},
+        )
+    backend.set(minute_key, minute_bucket)
+
+    day_bucket = backend.get(day_key)
+    if day_bucket is None:
+        day_bucket = _TokenBucket(
+            capacity=_REGISTER_RATE_LIMIT_DAY_CAPACITY,
+            refill_rate=_REGISTER_RATE_LIMIT_DAY_REFILL,
+            tokens=int(_REGISTER_RATE_LIMIT_DAY_CAPACITY),
+            last_refill=monotonic(),
+        )
+    if not day_bucket.consume():
+        backend.set(day_key, day_bucket)
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail={"detail": "Rate limit exceeded.", "code": "RATE_LIMITED"},
+        )
+    backend.set(day_key, day_bucket)
+
+
 # ── routes ────────────────────────────────────────────────────────────────────
 
 
 @router.post("/register", response_model=RegisterResponse, status_code=status.HTTP_201_CREATED)
-async def register(body: RegisterRequest, db: DBSession, _rl: RateLimit) -> RegisterResponse:
+async def register(
+    body: RegisterRequest,
+    request: Request,
+    db: DBSession,
+    _rl: RateLimit,
+) -> RegisterResponse:
     """Create a new user account and issue a first API key."""
     existing = await db.execute(select(User).where(User.email == body.email))
     if existing.scalars().first():
@@ -203,8 +326,31 @@ async def register(body: RegisterRequest, db: DBSession, _rl: RateLimit) -> Regi
     if len(body.password) < 12:
         raise HTTPException(status_code=422, detail="Password must be at least 12 characters.")
 
-    # Self-service registration may only assign non-privileged scopes.
-    scopes = _validate_scopes(body.scopes, _SELF_SERVICE_SCOPES, context="register")
+    unknown = set(body.scopes) - _VALID_SCOPES
+    if unknown:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Unknown scope(s) in register: {', '.join(sorted(unknown))}",
+        )
+
+    requested_scopes = set(body.scopes)
+    requesting_privileged = bool(requested_scopes & _PRIVILEGED_REGISTRATION_SCOPES)
+    has_admin_approval = _has_valid_registration_approval(body, request)
+
+    if requesting_privileged and not (_public_write_registration_enabled() or has_admin_approval):
+        raise HTTPException(
+            status_code=403,
+            detail=(
+                "Privileged registration scopes require admin approval. "
+                f"Requested: {', '.join(sorted(requested_scopes & _PRIVILEGED_REGISTRATION_SCOPES))}. "
+                f"Provide {_REGISTRATION_APPROVAL_HEADER} signed with OLYMPUS_ADMIN_KEY, "
+                f"or set {_ALLOW_PUBLIC_WRITE_REG_ENV}=1."
+            ),
+        )
+
+    allowed_scopes = _VALID_SCOPES if requesting_privileged else _SELF_SERVICE_SCOPES
+    scopes = _validate_scopes(body.scopes, allowed_scopes, context="register")
+    await registration_rate_limit(request)
 
     user = User(
         id=str(uuid.uuid4()),

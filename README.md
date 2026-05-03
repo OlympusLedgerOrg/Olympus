@@ -248,6 +248,13 @@ python -m alembic upgrade head         # apply database migrations
 make dev                               # API on :8000
 ```
 
+### Production security checklist
+
+- Set `DATABASE_URL` with `sslmode=verify-full` (or `sslmode=verify-ca`); non-verifying modes are rejected outside development.
+- Keep `OLYMPUS_ALLOW_PUBLIC_WRITE_REGISTRATION` unset (or not `1`) unless you intentionally allow anonymous write-scope registration.
+- If `OLYMPUS_ADMIN_KEY` is configured in non-development environments, use at least 32 bytes.
+- Prefer admin-scoped API keys over direct `/key/admin/generate` usage for routine operations.
+
 > **First-boot note:** `docker compose up` reads the database password from
 > `./secrets/db_password`. The `bootstrap.sh` step creates that file (mode
 > 600) and seeds `.env` with matching values; without it, the `db` container

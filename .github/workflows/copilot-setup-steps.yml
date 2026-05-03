@@ -17,16 +17,22 @@ jobs:
           python-version: "3.12"
           cache: 'pip'
 
+      - name: Create virtual environment
+        run: |
+          python -m venv .venv
+          echo "VIRTUAL_ENV=${GITHUB_WORKSPACE}/.venv" >> "$GITHUB_ENV"
+          echo "${GITHUB_WORKSPACE}/.venv/bin" >> "$GITHUB_PATH"
+
       - name: Install Python dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install -e ".[dev]"
+          python -m pip install -e ".[dev]"
 
       - name: Install Rust stable
         run: rustup toolchain install stable --no-self-update && rustup default stable
 
       - name: Build olympus_core Rust extension
-        run: maturin develop
+        run: python -m maturin develop --release
 
       - name: Set up Node.js 20
         uses: actions/setup-node@v4
