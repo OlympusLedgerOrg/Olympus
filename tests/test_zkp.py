@@ -1,4 +1,5 @@
 import json
+import sys
 import shutil
 import subprocess
 from pathlib import Path
@@ -247,7 +248,7 @@ def test_run_kills_process_group_on_timeout(tmp_path: Path) -> None:
 
 def test_run_subprocess_fallback_uses_pdeathsig(monkeypatch: pytest.MonkeyPatch) -> None:
     """When start_new_session raises OSError, _make_pdeathsig_preexec is called."""
-    import protocol.zkp as zkp_mod
+    zkp_mod = sys.modules["protocol.zkp"]
 
     preexec_called = []
 
@@ -275,7 +276,7 @@ def test_run_subprocess_fallback_uses_pdeathsig(monkeypatch: pytest.MonkeyPatch)
 
 def test_try_limit_cgroup_called_after_popen(monkeypatch: pytest.MonkeyPatch) -> None:
     """_try_limit_cgroup is called with the child PID after every successful Popen."""
-    import protocol.zkp as zkp_mod
+    zkp_mod = sys.modules["protocol.zkp"]
 
     limited_pids: list[int] = []
 

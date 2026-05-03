@@ -177,14 +177,14 @@ def _run_subprocess(
                 try:
                     os.killpg(os.getpgid(proc.pid), signal.SIGTERM)
                 except ProcessLookupError:
-                    pass
+                    pass  # process already exited before we could signal it
                 try:
                     proc.communicate(timeout=5)
                 except subprocess.TimeoutExpired:
                     try:
                         os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
                     except ProcessLookupError:
-                        pass
+                        pass  # process already exited during the grace period
                     proc.communicate()
             else:
                 # Best effort: kill just the direct child
