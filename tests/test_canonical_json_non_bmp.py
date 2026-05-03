@@ -85,7 +85,7 @@ def test_supplementary_key_sorts_before_upper_bmp_utf16() -> None:
     """
     obj = {"\uE000": "pua", "\U00010000": "first-supp"}
     encoded = canonical_json_encode(obj)
-    # 𐀀 (U+10000) must appear first: {"𐀀":"first-supp","":"pua"}
+    # 𐀀 (U+10000) must appear first: {"𐀀":"first-supp","\uE000":"pua"}
     first_key_end = encoded.index(":")
     first_key = encoded[1:first_key_end]
     assert "\U00010000" in first_key, (
