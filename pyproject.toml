@@ -51,7 +51,7 @@ dependencies = [
     # --- previously missing ---
     "asyncpg>=0.29.0",
     "httpx>=0.28.1",
-    "cryptography>=46.0.0",
+    "cryptography>=47.0.0",
     "pyasn1>=0.6.0",
 ]
 
