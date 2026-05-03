@@ -1,4 +1,4 @@
-"""Tests for append_records_batch() ADR-0003 pre-HTTP validation (task D).
+"""Tests for append_records_batch() ADR-0003 pre-HTTP validation.
 
 Verifies that:
 - Batch records missing parser_id, canonical_parser_version, or valid

@@ -2,6 +2,7 @@ package main
 
 import (
 	"errors"
+	"fmt"
 	"testing"
 
 	"github.com/OlympusLedgerOrg/Olympus/services/sequencer/internal/storage"
@@ -24,16 +25,17 @@ func TestLegacyLeavesDetectedInStartupPath(t *testing.T) {
 		t.Fatal("errors.Is(ErrLegacyLeaves, ErrLegacyLeaves) should be true")
 	}
 
-	// Wrapping via fmt.Errorf %w must still unwrap to ErrLegacyLeaves.
-	wrapped := errors.New("failed to load leaves for startup replay: " +
-		storage.ErrLegacyLeaves.Error())
-	// Plain errors.New does NOT wrap, so this should return false.
-	if errors.Is(wrapped, storage.ErrLegacyLeaves) {
-		t.Fatal("plain errors.New should not satisfy errors.Is for the sentinel")
+	// A properly fmt.Errorf %w-wrapped error must still unwrap to ErrLegacyLeaves.
+	wrapped := fmt.Errorf("failed to load leaves for startup replay: %w", storage.ErrLegacyLeaves)
+	if !errors.Is(wrapped, storage.ErrLegacyLeaves) {
+		t.Fatal("fmt.Errorf %%w-wrapped error should satisfy errors.Is for the sentinel")
 	}
 
-	// A properly wrapped error must unwrap.
-	_ = storage.ErrLegacyLeaves // imported and usable
+	// A plain errors.New (no wrapping) must NOT satisfy errors.Is.
+	notWrapped := errors.New("failed to load leaves: " + storage.ErrLegacyLeaves.Error())
+	if errors.Is(notWrapped, storage.ErrLegacyLeaves) {
+		t.Fatal("plain errors.New should not satisfy errors.Is for the sentinel")
+	}
 }
 
 // TestLegacyLeavesErrorMessageContainsRemediationAction verifies the
