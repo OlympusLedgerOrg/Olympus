@@ -63,3 +63,20 @@ async def test_doc_commit_response_and_ledger_row_include_client_asserted_kind(
     assert activity is not None
     assert activity.details_json is not None
     assert json.loads(activity.details_json)["kind"] == "client_asserted_hash"
+
+
+@pytest.mark.asyncio
+async def test_verify_returns_kind_derived_from_ledger_activity(client_and_sessionmaker):
+    """POST /doc/verify kind is derived from LedgerActivity, not hardcoded."""
+    client, _ = client_and_sessionmaker
+    doc_hash = blake3.blake3(b"verify-kind-derivation").hexdigest()
+
+    commit_resp = await client.post("/doc/commit", json={"doc_hash": doc_hash})
+    assert commit_resp.status_code == 201, commit_resp.text
+    commit_id = commit_resp.json()["commit_id"]
+
+    verify_resp = await client.post("/doc/verify", json={"commit_id": commit_id})
+    assert verify_resp.status_code == 200, verify_resp.text
+    data = verify_resp.json()
+    assert data["verified"] is True
+    assert data["commit"]["kind"] == "client_asserted_hash"

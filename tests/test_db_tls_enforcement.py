@@ -60,6 +60,32 @@ def test_startup_rejects_sslmode_require_in_production(monkeypatch: pytest.Monke
         storage_layer._get_storage()
 
 
+def test_startup_rejects_asyncpg_url_with_weak_sslmode(monkeypatch: pytest.MonkeyPatch):
+    """postgresql+asyncpg:// URLs with non-verifying sslmode must also be rejected."""
+    monkeypatch.setenv("OLYMPUS_ENV", "production")
+    monkeypatch.setenv(
+        "DATABASE_URL",
+        "postgresql+asyncpg://user:pass@localhost:5432/olympus?sslmode=require",
+    )
+    _reset_storage_state(monkeypatch)
+    with pytest.raises(SystemExit, match="sslmode=verify-full"):
+        storage_layer._get_storage()
+
+
+def test_startup_accepts_asyncpg_url_with_verify_full(monkeypatch: pytest.MonkeyPatch):
+    """postgresql+asyncpg://...?sslmode=verify-full must be accepted in production."""
+    monkeypatch.setenv("OLYMPUS_ENV", "production")
+    monkeypatch.setenv("OLYMPUS_NODE_REHASH_GATE_SECRET", "test-secret")
+    monkeypatch.setenv(
+        "DATABASE_URL",
+        "postgresql+asyncpg://user:pass@localhost:5432/olympus?sslmode=verify-full",
+    )
+    _reset_storage_state(monkeypatch)
+    monkeypatch.setattr("storage.postgres.StorageLayer", _FakeStorageLayer)
+
+    assert storage_layer._get_storage() is not None
+
+
 def test_startup_accepts_sslmode_verify_full(monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setenv("OLYMPUS_ENV", "production")
     monkeypatch.setenv("OLYMPUS_NODE_REHASH_GATE_SECRET", "test-secret")

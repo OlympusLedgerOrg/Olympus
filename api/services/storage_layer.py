@@ -54,9 +54,15 @@ _logged_dev_tls_warning = False
 
 
 def _extract_sslmode(database_url: str) -> str:
-    """Extract sslmode from URL or libpq keyword=value DSN strings."""
+    """Extract sslmode from URL or libpq keyword=value DSN strings.
+
+    Handles all postgres URL schemes (postgres://, postgresql://,
+    postgresql+asyncpg://, postgresql+psycopg://, etc.) and libpq
+    keyword=value DSN strings.
+    """
     trimmed = database_url.strip()
-    if trimmed.startswith("postgres://") or trimmed.startswith("postgresql://"):
+    scheme_sep = trimmed.find("://")
+    if scheme_sep != -1 and trimmed[:scheme_sep].lower().startswith("postgres"):
         parsed = urlparse(trimmed)
         return parse_qs(parsed.query).get("sslmode", [""])[0].strip().lower()
     for field in trimmed.split():

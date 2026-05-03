@@ -210,6 +210,23 @@ async def verify_document(body: DocVerifyRequest, db: DBSession, _rl: RateLimit)
             detail="This document is under embargo and not yet publicly available.",
         )
 
+    # Derive provenance kind from the persisted LedgerActivity details.
+    # Commits created via /doc/commit store {"kind":"client_asserted_hash"};
+    # server-side ingest flows do not set this field, so fall back to "unknown".
+    commit_kind = "unknown"
+    activity_result = await db.execute(
+        select(LedgerActivity.details_json)
+        .where(LedgerActivity.related_commit_id == commit.commit_id)
+        .where(LedgerActivity.activity_type == "DOCUMENT_SUBMITTED")
+        .limit(1)
+    )
+    raw_details = activity_result.scalars().first()
+    if raw_details:
+        try:
+            commit_kind = json.loads(raw_details).get("kind", "unknown")
+        except (json.JSONDecodeError, AttributeError):
+            pass
+
     # Rebuild the Merkle tree for the shard and generate an inclusion proof
     all_hashes_result = await db.execute(
         select(DocCommit.doc_hash)
@@ -238,7 +255,7 @@ async def verify_document(body: DocVerifyRequest, db: DBSession, _rl: RateLimit)
             epoch=commit.epoch_timestamp,
             shard_id=commit.shard_id,
             merkle_root=commit.merkle_root,
-            kind=_DOC_COMMIT_KIND,
+            kind=commit_kind,
         ),
         merkle_proof=merkle_proof_data,
         zk_proof=zk_proof,
