@@ -191,8 +191,9 @@ class TestCeremonyContributeSuccess:
                 Path(cmd[5]).write_bytes(b"final key material")
             return mock
 
-        with patch("ceremony_contribute._check_snarkjs", return_value=True), patch(
-            "ceremony_contribute.subprocess.run", side_effect=fake_run
+        with (
+            patch("ceremony_contribute._check_snarkjs", return_value=True),
+            patch("ceremony_contribute.subprocess.run", side_effect=fake_run),
         ):
             meta = contribute(
                 ptau_path=ptau,
@@ -225,8 +226,9 @@ class TestCeremonyContributeSuccess:
                 Path(cmd[5]).write_bytes(b"final")
             return mock
 
-        with patch("ceremony_contribute._check_snarkjs", return_value=True), patch(
-            "ceremony_contribute.subprocess.run", side_effect=fake_run
+        with (
+            patch("ceremony_contribute._check_snarkjs", return_value=True),
+            patch("ceremony_contribute.subprocess.run", side_effect=fake_run),
         ):
             contribute(
                 ptau_path=ptau,
@@ -257,8 +259,9 @@ class TestCeremonyContributeSuccess:
                 Path(cmd[5]).write_bytes(b"final key")
             return mock
 
-        with patch("ceremony_contribute._check_snarkjs", return_value=True), patch(
-            "ceremony_contribute.subprocess.run", side_effect=fake_run
+        with (
+            patch("ceremony_contribute._check_snarkjs", return_value=True),
+            patch("ceremony_contribute.subprocess.run", side_effect=fake_run),
         ):
             contribute(
                 ptau_path=ptau,
@@ -286,8 +289,9 @@ class TestCeremonyContributeSuccess:
                 Path(cmd[5]).write_bytes(b"final key")
             return mock
 
-        with patch("ceremony_contribute._check_snarkjs", return_value=True), patch(
-            "ceremony_contribute.subprocess.run", side_effect=fake_run
+        with (
+            patch("ceremony_contribute._check_snarkjs", return_value=True),
+            patch("ceremony_contribute.subprocess.run", side_effect=fake_run),
         ):
             contribute(
                 ptau_path=ptau,
@@ -318,8 +322,9 @@ class TestCeremonyContributeFailures:
             mock.stderr = "snarkjs error: something went wrong"
             return mock
 
-        with patch("ceremony_contribute._check_snarkjs", return_value=True), patch(
-            "ceremony_contribute.subprocess.run", side_effect=fake_run_fail
+        with (
+            patch("ceremony_contribute._check_snarkjs", return_value=True),
+            patch("ceremony_contribute.subprocess.run", side_effect=fake_run_fail),
         ):
             with pytest.raises(RuntimeError, match="groth16 setup failed"):
                 contribute(
@@ -348,8 +353,9 @@ class TestCeremonyContributeFailures:
                 mock.stderr = "contribute failed"
             return mock
 
-        with patch("ceremony_contribute._check_snarkjs", return_value=True), patch(
-            "ceremony_contribute.subprocess.run", side_effect=fake_run_second_fail
+        with (
+            patch("ceremony_contribute._check_snarkjs", return_value=True),
+            patch("ceremony_contribute.subprocess.run", side_effect=fake_run_second_fail),
         ):
             with pytest.raises(RuntimeError, match="zkey contribute failed"):
                 contribute(
@@ -423,8 +429,9 @@ class TestMain:
             mock.stderr = "setup failed"
             return mock
 
-        with patch("ceremony_contribute._check_snarkjs", return_value=True), patch(
-            "ceremony_contribute.subprocess.run", side_effect=fake_run_fail
+        with (
+            patch("ceremony_contribute._check_snarkjs", return_value=True),
+            patch("ceremony_contribute.subprocess.run", side_effect=fake_run_fail),
         ):
             assert main() == 1
 
@@ -451,8 +458,11 @@ class TestMain:
             ],
         )
 
-        with patch("ceremony_contribute._check_snarkjs", return_value=True), patch(
-            "ceremony_contribute.subprocess.run",
-            side_effect=subprocess.TimeoutExpired("snarkjs", 1800),
+        with (
+            patch("ceremony_contribute._check_snarkjs", return_value=True),
+            patch(
+                "ceremony_contribute.subprocess.run",
+                side_effect=subprocess.TimeoutExpired("snarkjs", 1800),
+            ),
         ):
             assert main() == 1

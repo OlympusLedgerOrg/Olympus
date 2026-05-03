@@ -84,7 +84,16 @@ jobs:
       - name: Build olympus_core Rust extension
         run: maturin build --release --out dist && pip install --force-reinstall dist/*.whl
 
+      - name: Configure CI-sized redaction circuit
+        run: |
+          python -m proofs.proof_generator configure \
+            --redaction-max-leaves 4 \
+            --redaction-merkle-depth 2
+
       - name: Build proof artifacts for redaction round-trip
+        env:
+          OLYMPUS_REDACTION_MAX_LEAVES: "4"
+          OLYMPUS_REDACTION_MERKLE_DEPTH: "2"
         run: bash proofs/setup_circuits.sh --allow-dev-ptau
 
       - name: "Step 1 of 3 — INSERT: ingest documents into the ledger"
@@ -99,6 +108,9 @@ jobs:
         # What this tests: given a stored document, we can generate a cryptographic
         # proof that it exists in the tree at a specific position.
         # If this fails: users can't get proof their document was recorded.
+        env:
+          OLYMPUS_REDACTION_MAX_LEAVES: "4"
+          OLYMPUS_REDACTION_MERKLE_DEPTH: "2"
         run: |
           pytest tests/test_proof_generator.py -v --tb=short \
             --junit-xml=test-results/step2-prove.xml

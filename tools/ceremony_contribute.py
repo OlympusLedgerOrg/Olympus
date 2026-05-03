@@ -144,9 +144,7 @@ def contribute(
 
     r1cs_path = circuit_path.with_suffix(".r1cs")
     if not r1cs_path.exists():
-        raise FileNotFoundError(
-            f"R1CS file not found: {r1cs_path} — compile the circuit first"
-        )
+        raise FileNotFoundError(f"R1CS file not found: {r1cs_path} — compile the circuit first")
 
     output_path = output_path.resolve()
     output_path.parent.mkdir(parents=True, exist_ok=True)
@@ -176,8 +174,7 @@ def contribute(
         )
         if setup_result.returncode != 0:
             raise RuntimeError(
-                f"groth16 setup failed (exit {setup_result.returncode}): "
-                f"{setup_result.stderr}"
+                f"groth16 setup failed (exit {setup_result.returncode}): {setup_result.stderr}"
             )
 
         # Step 2: zkey contribute — pass entropy via -e so snarkjs is
