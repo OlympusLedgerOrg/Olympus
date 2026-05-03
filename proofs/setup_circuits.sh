@@ -28,6 +28,11 @@ for arg in "$@"; do
 done
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# Capture the absolute script path BEFORE cd so sha256sum always resolves it,
+# regardless of how the script was invoked (e.g. `bash proofs/setup_circuits.sh`
+# from the repo root leaves BASH_SOURCE[0] as a relative path that breaks after
+# the cd below).
+SCRIPT_SELF="${SCRIPT_DIR}/$(basename "${BASH_SOURCE[0]}")"
 cd "${SCRIPT_DIR}"
 
 BUILD_DIR="${SCRIPT_DIR}/build"
@@ -182,6 +187,9 @@ fi
 # Security rationale: this fingerprint is used to skip expensive Groth16 setup
 # steps ONLY when ALL of the following are identical to the last successful build:
 #   - every .circom source file (circuit logic and parameters)
+#   - the npm lockfile hash (a circomlib version bump changes compiled R1CS/WASM
+#     even when .circom sources are unchanged; tracking the lockfile hash ensures
+#     every artifact set is traceable to an exact, reproducible dependency tree)
 #   - this setup script itself (build procedure version)
 #   - the circom compiler version (a tool upgrade can produce a different R1CS)
 #   - the snarkjs version (affects zkey format and proof compatibility)
@@ -190,17 +198,59 @@ fi
 # The PTAU hash is always verified independently (above) on every run,
 # so a corrupted or substituted PTAU is caught regardless of caching.
 # -----------------------------------------------------------------------
-_CIRCUITS_HASH="$(find circuits -name '*.circom' | LC_ALL=C sort | xargs -r cat 2>/dev/null | sha256sum | awk '{print $1}')"
-_SCRIPT_HASH="$(sha256sum "${BASH_SOURCE[0]}" | awk '{print $1}')"
+# POSIX-portable: pipe sorted .circom paths into `while read` + cat rather than
+# `xargs -r cat` (xargs -r is a GNU extension unavailable on macOS/BSD xargs).
+# Guard against an empty circuit directory — a missing circuits/ tree would
+# silently produce the sha256 of empty input and issue a misleading cache hit.
+_CIRCOM_PATHS="$(find circuits -name '*.circom' | LC_ALL=C sort)"
+if [ -z "${_CIRCOM_PATHS}" ]; then
+  echo "ERROR: No .circom source files found under circuits/. Aborting." >&2
+  exit 1
+fi
+_CIRCUITS_HASH="$(printf '%s\n' "${_CIRCOM_PATHS}" \
+  | while IFS= read -r f; do cat "$f"; done \
+  | sha256sum | awk '{print $1}')"
+_SCRIPT_HASH="$(sha256sum "${SCRIPT_SELF}" | awk '{print $1}')"
 _CIRCOM_VER="$(${CIRCOM} --version 2>&1 | head -1)"
 _SNARKJS_VER="$(node -e "try{console.log(require('./node_modules/snarkjs/package.json').version)}catch(e){console.log('unknown')}" 2>/dev/null)"
-CURRENT_FINGERPRINT="${_CIRCUITS_HASH}:${_SCRIPT_HASH}:${_CIRCOM_VER}:${_SNARKJS_VER}:${PTAU_B2}"
+CURRENT_FINGERPRINT="${_CIRCUITS_HASH}:${_SCRIPT_HASH}:${_CIRCOM_VER}:${_SNARKJS_VER}:${PTAU_B2}:${_LOCKFILE_HASH}"
 BUILD_FINGERPRINT_FILE="${BUILD_DIR}/.build-fingerprint"
+BUILD_IN_PROGRESS_FILE="${BUILD_DIR}/.build-in-progress"
 PROVENANCE_FILE="${KEYS_DIR}/PROVENANCE.md"
+
+# -----------------------------------------------------------------------
+# 2.6 Interrupted-build recovery
+#
+# If a previous invocation wrote the in-progress sentinel but was killed
+# before it could remove it (OOM, SIGKILL, runner timeout, Ctrl-C), the
+# build directory may contain partial circuit artifacts — e.g. an r1cs
+# written but its zkey/vkey absent, or a half-written zkey.  Clear those
+# files so the loop below rebuilds cleanly rather than mixing stale and
+# fresh outputs.  Without this guard a subsequent run could match the
+# node_modules lockfile hash while silently using incomplete artifacts.
+# -----------------------------------------------------------------------
+if [ -f "${BUILD_IN_PROGRESS_FILE}" ]; then
+  echo "WARNING: Previous build was interrupted — clearing partial artifacts for a clean rebuild."
+  find "${BUILD_DIR}" -maxdepth 1 -name '*.r1cs'            -delete 2>/dev/null || true
+  find "${BUILD_DIR}" -maxdepth 1 -name '*.zkey'            -delete 2>/dev/null || true
+  find "${BUILD_DIR}" -maxdepth 1 -name '.build-fingerprint' -delete 2>/dev/null || true
+  find "${BUILD_DIR}" -maxdepth 1 -type d -name '*_js' -exec rm -rf {} + 2>/dev/null || true
+  find "${VKEYS_DIR}" -maxdepth 1 -name '*_vkey.json' -delete 2>/dev/null || true
+  rm -f "${BUILD_IN_PROGRESS_FILE}"
+  echo "    Partial artifacts cleared — proceeding with full rebuild."
+fi
 
 # -----------------------------------------------------------------------
 # 3. Compile each circuit and (optionally) run Groth16 setup
 # -----------------------------------------------------------------------
+
+# Write a build-in-progress sentinel before entering the build loop.
+# It is removed only after the fingerprint file is successfully written
+# (see §4 below).  An interrupted build leaves the sentinel in place so
+# the next invocation detects it and clears partial artifacts (§2.6).
+if [ "${COMPILE_ONLY}" -eq 0 ]; then
+  touch "${BUILD_IN_PROGRESS_FILE}"
+fi
 
 for circuit in "${CIRCUITS[@]}"; do
   CIRCOM_FILE="circuits/${circuit}.circom"
@@ -294,6 +344,10 @@ else
   #    fingerprint can skip all compile + Groth16 steps safely.
   # -----------------------------------------------------------------------
   echo "${CURRENT_FINGERPRINT}" > "${BUILD_FINGERPRINT_FILE}"
+  # Build completed successfully: remove the in-progress sentinel.
+  # The sentinel's absence tells a future run that the last build finished
+  # cleanly and its artifacts can be trusted.
+  rm -f "${BUILD_IN_PROGRESS_FILE}"
 
   # -----------------------------------------------------------------------
   # 5. Record provenance.  Written here (post-loop) so it always reflects
