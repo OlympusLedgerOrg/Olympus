@@ -161,9 +161,14 @@ func setRehashGate(ctx context.Context, tx *sql.Tx) error {
 }
 
 // LeafEntry represents a single stored leaf for startup replay.
+// ParserID and CanonicalParserVersion are ADR-0003 parser-provenance fields
+// bound into the leaf hash domain. They must be non-empty for any leaf
+// committed after the ADR-0003 migration.
 type LeafEntry struct {
-	Key       []byte
-	ValueHash []byte
+	Key                    []byte
+	ValueHash              []byte
+	ParserID               string
+	CanonicalParserVersion string
 }
 
 // SmtDelta represents a single SMT node delta for batch storage.
@@ -197,10 +202,10 @@ func (s *PostgresStorage) StoreLeafAndDeltas(ctx context.Context, deltas []SmtDe
 
 	// Persist the leaf entry for startup replay
 	leafQuery := `
-		INSERT INTO cdhs_smf_leaves (key, value_hash, created_at)
-		VALUES ($1, $2, NOW())
+		INSERT INTO cdhs_smf_leaves (key, value_hash, parser_id, canonical_parser_version, created_at)
+		VALUES ($1, $2, $3, $4, NOW())
 	`
-	if _, err := tx.ExecContext(ctx, leafQuery, leaf.Key, leaf.ValueHash); err != nil {
+	if _, err := tx.ExecContext(ctx, leafQuery, leaf.Key, leaf.ValueHash, leaf.ParserID, leaf.CanonicalParserVersion); err != nil {
 		return fmt.Errorf("store leaf: %w", err)
 	}
 
@@ -255,8 +260,8 @@ func (s *PostgresStorage) StoreLeafAndDeltasBatch(
 				return fmt.Errorf("store delta at level %d: %w", delta.Level, err)
 			}
 		}
-		leafQuery := `INSERT INTO cdhs_smf_leaves (key, value_hash, created_at) VALUES ($1, $2, NOW())`
-		if _, err := tx.ExecContext(ctx, leafQuery, bl.Leaf.Key, bl.Leaf.ValueHash); err != nil {
+		leafQuery := `INSERT INTO cdhs_smf_leaves (key, value_hash, parser_id, canonical_parser_version, created_at) VALUES ($1, $2, $3, $4, NOW())`
+		if _, err := tx.ExecContext(ctx, leafQuery, bl.Leaf.Key, bl.Leaf.ValueHash, bl.Leaf.ParserID, bl.Leaf.CanonicalParserVersion); err != nil {
 			return fmt.Errorf("store leaf: %w", err)
 		}
 		if _, err := tx.ExecContext(ctx, rootQuery, bl.Root, bl.TreeSize, bl.Signature); err != nil {
@@ -349,12 +354,18 @@ func (s *PostgresStorage) InitSchema(ctx context.Context) error {
 			ON cdhs_smf_nodes(level);
 
 		-- Leaf entries in insertion order, used for startup replay.
+		-- parser_id and canonical_parser_version (ADR-0003) are bound into the
+		-- leaf hash domain by the Rust service. ADD COLUMN IF NOT EXISTS allows
+		-- this migration to run idempotently against existing dev databases.
 		CREATE TABLE IF NOT EXISTS cdhs_smf_leaves (
 			id SERIAL PRIMARY KEY,
 			key BYTEA NOT NULL,
 			value_hash BYTEA NOT NULL,
 			created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 		);
+		ALTER TABLE cdhs_smf_leaves
+			ADD COLUMN IF NOT EXISTS parser_id TEXT NOT NULL DEFAULT '',
+			ADD COLUMN IF NOT EXISTS canonical_parser_version TEXT NOT NULL DEFAULT '';
 	`
 
 	_, err := s.db.ExecContext(ctx, schema)
@@ -396,7 +407,7 @@ func (s *PostgresStorage) GetRootByTreeSize(ctx context.Context, treeSize uint64
 // startup replay. Corresponds to the cdhs_smf_leaves table.
 func (s *PostgresStorage) GetLeaves(ctx context.Context) ([]LeafEntry, error) {
 	query := `
-		SELECT key, value_hash
+		SELECT key, value_hash, parser_id, canonical_parser_version
 		FROM cdhs_smf_leaves
 		ORDER BY id ASC
 	`
@@ -410,7 +421,7 @@ func (s *PostgresStorage) GetLeaves(ctx context.Context) ([]LeafEntry, error) {
 	var leaves []LeafEntry
 	for rows.Next() {
 		var e LeafEntry
-		if err := rows.Scan(&e.Key, &e.ValueHash); err != nil {
+		if err := rows.Scan(&e.Key, &e.ValueHash, &e.ParserID, &e.CanonicalParserVersion); err != nil {
 			return nil, fmt.Errorf("scan leaf row: %w", err)
 		}
 		leaves = append(leaves, e)

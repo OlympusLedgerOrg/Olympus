@@ -178,10 +178,18 @@ class _StubSequencerClient:
         self._append_exc = append_exc
         self._proof_exc = proof_exc
         self.append_calls: list[dict[str, Any]] = []
+        self.append_hash_calls: list[dict[str, Any]] = []
         self.proof_calls: list[dict[str, Any]] = []
 
     async def append_record(self, **kwargs: Any) -> SequencerAppendResult:
         self.append_calls.append(kwargs)
+        if self._append_exc is not None:
+            raise self._append_exc
+        assert self._append_result is not None
+        return self._append_result
+
+    async def append_record_hash(self, **kwargs: Any) -> SequencerAppendResult:
+        self.append_hash_calls.append(kwargs)
         if self._append_exc is not None:
             raise self._append_exc
         assert self._append_result is not None
@@ -247,10 +255,13 @@ async def test_append_via_backend_uses_sequencer_when_flag_enabled(
     assert result.storage_proof is None
     assert result.sequencer_proof is proof
 
-    assert len(stub.append_calls) == 1
-    assert stub.append_calls[0]["shard_id"] == "watauga:2025:budget"
-    assert stub.append_calls[0]["content"] == VALUE_HASH
-    assert stub.append_calls[0]["version"] == "1"
+    # append_via_backend uses append_record_hash (pre-hashed path) for all
+    # sequencer writes since it already holds a canonical content hash.
+    assert len(stub.append_hash_calls) == 1
+    assert stub.append_calls == []
+    assert stub.append_hash_calls[0]["shard_id"] == "watauga:2025:budget"
+    assert stub.append_hash_calls[0]["value_hash"] == VALUE_HASH
+    assert stub.append_hash_calls[0]["version"] == "1"
 
     assert len(stub.proof_calls) == 1
     assert stub.proof_calls[0]["root"] == bytes.fromhex(HEX32_C)
@@ -472,7 +483,7 @@ async def test_append_via_backend_integration_with_mock_sequencer(
     def handler(request: httpx.Request) -> httpx.Response:
         path = request.url.path
         seen.append(path)
-        if path == "/v1/queue-leaf":
+        if path == "/v1/queue-leaf-hash":
             return httpx.Response(
                 200,
                 json={
@@ -512,4 +523,4 @@ async def test_append_via_backend_integration_with_mock_sequencer(
     assert result.root_hash == bytes.fromhex(HEX32_C)
     assert result.sequencer_proof is not None
     assert len(result.sequencer_proof.siblings) == 256
-    assert seen == ["/v1/queue-leaf", "/v1/get-inclusion-proof"]
+    assert seen == ["/v1/queue-leaf-hash", "/v1/get-inclusion-proof"]

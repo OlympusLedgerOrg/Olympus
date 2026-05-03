@@ -78,6 +78,11 @@ func (s *Sequencer) Handler() http.Handler {
 
 	// Trillian-shaped API endpoints
 	mux.HandleFunc("/v1/queue-leaf", requireToken(s.token, s.handleQueueLeaf))
+	// /v1/queue-leaf-hash accepts a pre-computed 32-byte value_hash and bypasses
+	// Rust canonicalization. Use this when the caller already holds a canonical
+	// content hash (e.g. Python storage_layer sending a pre-hashed value).
+	// parser_id and canonical_parser_version are still required (ADR-0003).
+	mux.HandleFunc("/v1/queue-leaf-hash", requireToken(s.token, s.handleQueueLeafHash))
 	mux.HandleFunc("/v1/queue-leaves", requireToken(s.token, s.handleQueueLeaves))
 	mux.HandleFunc("/v1/get-latest-root", requireToken(s.token, s.handleGetLatestRoot))
 	mux.HandleFunc("/v1/get-inclusion-proof", requireToken(s.token, s.handleGetInclusionProof))
@@ -97,15 +102,35 @@ func (s *Sequencer) Handler() http.Handler {
 	return mux
 }
 
-// QueueLeafRequest represents a request to append a record
+// QueueLeafRequest represents a request to append a record.
+// Both parser_id and canonical_parser_version are required ADR-0003 fields
+// that are bound into the leaf hash domain by the Rust service.
 type QueueLeafRequest struct {
-	ShardID     string            `json:"shard_id"`
-	RecordType  string            `json:"record_type"`
-	RecordID    string            `json:"record_id"`
-	Version     string            `json:"version,omitempty"`
-	Metadata    map[string]string `json:"metadata,omitempty"`
-	Content     []byte            `json:"content"`
-	ContentType string            `json:"content_type"`
+	ShardID                string            `json:"shard_id"`
+	RecordType             string            `json:"record_type"`
+	RecordID               string            `json:"record_id"`
+	Version                string            `json:"version,omitempty"`
+	Metadata               map[string]string `json:"metadata,omitempty"`
+	Content                []byte            `json:"content"`
+	ContentType            string            `json:"content_type"`
+	ParserID               string            `json:"parser_id"`
+	CanonicalParserVersion string            `json:"canonical_parser_version"`
+}
+
+// QueueLeafHashRequest represents a request to append a pre-hashed leaf.
+// Use this endpoint (/v1/queue-leaf-hash) when the caller has already computed
+// a canonical value hash and wants to bypass Rust canonicalization. The
+// value_hash is passed directly as canonical_content to the Rust SMT service.
+// parser_id and canonical_parser_version are still required (ADR-0003).
+type QueueLeafHashRequest struct {
+	ShardID                string            `json:"shard_id"`
+	RecordType             string            `json:"record_type"`
+	RecordID               string            `json:"record_id"`
+	Version                string            `json:"version,omitempty"`
+	Metadata               map[string]string `json:"metadata,omitempty"`
+	ValueHash              []byte            `json:"value_hash"`
+	ParserID               string            `json:"parser_id"`
+	CanonicalParserVersion string            `json:"canonical_parser_version"`
 }
 
 // QueueLeafResponse represents the response from queuing a leaf
@@ -168,6 +193,14 @@ func (s *Sequencer) handleQueueLeaf(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "content must not be empty", http.StatusBadRequest)
 		return
 	}
+	if req.ParserID == "" {
+		http.Error(w, "parser_id must not be empty (required by ADR-0003)", http.StatusBadRequest)
+		return
+	}
+	if req.CanonicalParserVersion == "" {
+		http.Error(w, "canonical_parser_version must not be empty (required by ADR-0003)", http.StatusBadRequest)
+		return
+	}
 
 	ctx := r.Context()
 
@@ -179,7 +212,7 @@ func (s *Sequencer) handleQueueLeaf(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Step 2: Update SMT via Rust service
+	// Step 2: Update SMT via Rust service, forwarding ADR-0003 parser metadata
 	recordKey := &pb.RecordKey{
 		RecordType: req.RecordType,
 		RecordId:   req.RecordID,
@@ -187,7 +220,7 @@ func (s *Sequencer) handleQueueLeaf(w http.ResponseWriter, r *http.Request) {
 		Metadata:   req.Metadata,
 	}
 
-	updateResp, err := s.smtClient.Update(ctx, req.ShardID, recordKey, canonResp.CanonicalContent)
+	updateResp, err := s.smtClient.Update(ctx, req.ShardID, recordKey, canonResp.CanonicalContent, req.ParserID, req.CanonicalParserVersion)
 	if err != nil {
 		log.Printf("SMT update failed: %v", err)
 		http.Error(w, "SMT update failed", http.StatusInternalServerError)
@@ -239,7 +272,7 @@ func (s *Sequencer) handleQueueLeaf(w http.ResponseWriter, r *http.Request) {
 			Hash:  d.Hash,
 		}
 	}
-	if err := s.storage.StoreLeafAndDeltas(ctx, deltas, updateResp.NewRoot, updateResp.TreeSize, signResp.Signature, storage.LeafEntry{Key: updateResp.GlobalKey, ValueHash: updateResp.LeafValueHash}); err != nil {
+	if err := s.storage.StoreLeafAndDeltas(ctx, deltas, updateResp.NewRoot, updateResp.TreeSize, signResp.Signature, storage.LeafEntry{Key: updateResp.GlobalKey, ValueHash: updateResp.LeafValueHash, ParserID: req.ParserID, CanonicalParserVersion: req.CanonicalParserVersion}); err != nil {
 		log.Printf("Failed to store leaf and deltas: %v", err)
 		http.Error(w, "Storage failed", http.StatusInternalServerError)
 		return
@@ -310,6 +343,14 @@ func (s *Sequencer) handleQueueLeaves(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, fmt.Sprintf("record %d: content must not be empty", i), http.StatusBadRequest)
 			return
 		}
+		if rec.ParserID == "" {
+			http.Error(w, fmt.Sprintf("record %d: parser_id must not be empty (required by ADR-0003)", i), http.StatusBadRequest)
+			return
+		}
+		if rec.CanonicalParserVersion == "" {
+			http.Error(w, fmt.Sprintf("record %d: canonical_parser_version must not be empty (required by ADR-0003)", i), http.StatusBadRequest)
+			return
+		}
 	}
 
 	ctx := r.Context()
@@ -332,7 +373,7 @@ func (s *Sequencer) handleQueueLeaves(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
-		// Step 2: Update SMT via Rust service
+		// Step 2: Update SMT via Rust service, forwarding ADR-0003 parser metadata
 		recordKey := &pb.RecordKey{
 			RecordType: rec.RecordType,
 			RecordId:   rec.RecordID,
@@ -340,7 +381,7 @@ func (s *Sequencer) handleQueueLeaves(w http.ResponseWriter, r *http.Request) {
 			Metadata:   rec.Metadata,
 		}
 
-		updateResp, err := s.smtClient.Update(ctx, rec.ShardID, recordKey, canonResp.CanonicalContent)
+		updateResp, err := s.smtClient.Update(ctx, rec.ShardID, recordKey, canonResp.CanonicalContent, rec.ParserID, rec.CanonicalParserVersion)
 		if err != nil {
 			log.Printf("SMT update failed (record %d of %d, aborting batch): %v", i+1, len(req.Records), err)
 			http.Error(w, "SMT update failed", http.StatusInternalServerError)
@@ -404,8 +445,10 @@ func (s *Sequencer) handleQueueLeaves(w http.ResponseWriter, r *http.Request) {
 
 		batchLeaves = append(batchLeaves, storage.BatchLeaf{
 			Leaf: storage.LeafEntry{
-				Key:       updateResp.GlobalKey,
-				ValueHash: updateResp.LeafValueHash,
+				Key:                    updateResp.GlobalKey,
+				ValueHash:              updateResp.LeafValueHash,
+				ParserID:               rec.ParserID,
+				CanonicalParserVersion: rec.CanonicalParserVersion,
 			},
 			Deltas:    deltas,
 			Root:      updateResp.NewRoot,
@@ -435,6 +478,145 @@ func (s *Sequencer) handleQueueLeaves(w http.ResponseWriter, r *http.Request) {
 		Results:   results,
 		FinalRoot: fmt.Sprintf("%x", lastUpdateResp.NewRoot),
 		TreeSize:  lastUpdateResp.TreeSize,
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	if err := json.NewEncoder(w).Encode(resp); err != nil {
+		log.Printf("Failed to encode response: %v", err)
+	}
+}
+
+// handleQueueLeafHash handles POST /v1/queue-leaf-hash.
+//
+// Unlike /v1/queue-leaf (which accepts raw content and delegates canonicalization
+// to the Rust service), this endpoint accepts a pre-computed 32-byte value_hash
+// and passes it directly to the Rust SMT Update() call as canonical_content,
+// bypassing the Canonicalize() round-trip. This is the correct path when the
+// Python layer (storage_layer.py) already holds a canonical content hash —
+// sending a pre-hashed value as "application/octet-stream" to /v1/queue-leaf
+// would be rejected by the Rust canonicalization step (H-3).
+//
+// parser_id and canonical_parser_version are still required (ADR-0003): they
+// are bound into the leaf hash domain by the Rust service on both paths.
+func (s *Sequencer) handleQueueLeafHash(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	r.Body = http.MaxBytesReader(w, r.Body, maxRequestBodyBytes)
+
+	var req QueueLeafHashRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, fmt.Sprintf("Invalid request: %v", err), http.StatusBadRequest)
+		return
+	}
+
+	if req.ShardID == "" || len(req.ShardID) > 128 {
+		http.Error(w, "invalid shard_id", http.StatusBadRequest)
+		return
+	}
+	if req.RecordType == "" || len(req.RecordType) > 64 {
+		http.Error(w, "invalid record_type", http.StatusBadRequest)
+		return
+	}
+	if req.RecordID == "" || len(req.RecordID) > 256 {
+		http.Error(w, "invalid record_id", http.StatusBadRequest)
+		return
+	}
+	if len(req.Version) > 64 {
+		http.Error(w, "invalid version", http.StatusBadRequest)
+		return
+	}
+	if req.Version != "" {
+		if _, err := strconv.ParseUint(req.Version, 10, 64); err != nil {
+			http.Error(w, "version must be empty or a base-10 unsigned integer", http.StatusBadRequest)
+			return
+		}
+	}
+	if len(req.ValueHash) != 32 {
+		http.Error(w, "value_hash must be exactly 32 bytes", http.StatusBadRequest)
+		return
+	}
+	if req.ParserID == "" {
+		http.Error(w, "parser_id must not be empty (required by ADR-0003)", http.StatusBadRequest)
+		return
+	}
+	if req.CanonicalParserVersion == "" {
+		http.Error(w, "canonical_parser_version must not be empty (required by ADR-0003)", http.StatusBadRequest)
+		return
+	}
+
+	ctx := r.Context()
+
+	// Pass the pre-computed value_hash directly as canonical_content.
+	// The Rust service will incorporate parser_id + canonical_parser_version
+	// into the leaf hash domain exactly as it does for raw-content leaves.
+	recordKey := &pb.RecordKey{
+		RecordType: req.RecordType,
+		RecordId:   req.RecordID,
+		Version:    req.Version,
+		Metadata:   req.Metadata,
+	}
+
+	updateResp, err := s.smtClient.Update(ctx, req.ShardID, recordKey, req.ValueHash, req.ParserID, req.CanonicalParserVersion)
+	if err != nil {
+		log.Printf("SMT update (pre-hashed) failed: %v", err)
+		http.Error(w, "SMT update failed", http.StatusInternalServerError)
+		return
+	}
+
+	if len(updateResp.NewRoot) != 32 {
+		log.Printf("Rust service violated hash length contract: NewRoot length %d", len(updateResp.NewRoot))
+		http.Error(w, "upstream error", http.StatusBadGateway)
+		return
+	}
+	if len(updateResp.GlobalKey) != 32 {
+		log.Printf("Rust service violated hash length contract: GlobalKey length %d", len(updateResp.GlobalKey))
+		http.Error(w, "upstream error", http.StatusBadGateway)
+		return
+	}
+	if len(updateResp.LeafValueHash) != 32 {
+		log.Printf("Rust service violated hash length contract: LeafValueHash length %d", len(updateResp.LeafValueHash))
+		http.Error(w, "upstream error", http.StatusBadGateway)
+		return
+	}
+	if len(updateResp.Deltas) != 256 {
+		log.Printf("Rust service returned wrong delta count: %d", len(updateResp.Deltas))
+		http.Error(w, "upstream error", http.StatusBadGateway)
+		return
+	}
+
+	signResp, err := s.smtClient.SignRoot(ctx, updateResp.NewRoot, updateResp.TreeSize, map[string]string{
+		"shard_id":    req.ShardID,
+		"record_type": req.RecordType,
+		"record_id":   req.RecordID,
+	})
+	if err != nil {
+		log.Printf("Root signing failed: %v", err)
+		http.Error(w, "Signing failed", http.StatusInternalServerError)
+		return
+	}
+
+	deltas := make([]storage.SmtDelta, len(updateResp.Deltas))
+	for i, d := range updateResp.Deltas {
+		deltas[i] = storage.SmtDelta{
+			Path:  d.Path,
+			Level: d.Level,
+			Hash:  d.Hash,
+		}
+	}
+	if err := s.storage.StoreLeafAndDeltas(ctx, deltas, updateResp.NewRoot, updateResp.TreeSize, signResp.Signature, storage.LeafEntry{Key: updateResp.GlobalKey, ValueHash: updateResp.LeafValueHash, ParserID: req.ParserID, CanonicalParserVersion: req.CanonicalParserVersion}); err != nil {
+		log.Printf("Failed to store leaf and deltas: %v", err)
+		http.Error(w, "Storage failed", http.StatusInternalServerError)
+		return
+	}
+
+	resp := QueueLeafResponse{
+		NewRoot:       fmt.Sprintf("%x", updateResp.NewRoot),
+		GlobalKey:     fmt.Sprintf("%x", updateResp.GlobalKey),
+		LeafValueHash: fmt.Sprintf("%x", updateResp.LeafValueHash),
+		TreeSize:      updateResp.TreeSize,
 	}
 
 	w.Header().Set("Content-Type", "application/json")

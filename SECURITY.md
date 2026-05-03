@@ -198,6 +198,13 @@ endpoint on a single shared-secret bearer token, supplied in the
 in `services/sequencer-go/internal/api/sequencer.go`. The token is the **only**
 authentication or authorization control on the sequencer's HTTP surface.
 
+**Environment variable:** Use `OLYMPUS_SEQUENCER_TOKEN` as the canonical name.
+`SEQUENCER_API_TOKEN` is accepted as a deprecated alias for one release and will
+be removed in the release after that; operators should migrate to
+`OLYMPUS_SEQUENCER_TOKEN` immediately. The Go server logs a startup
+`WARNING` when it detects the deprecated name so that misconfigured deployments
+are visible in container logs.
+
 **Trust assumption (write this down explicitly):**
 
 > Possession of the sequencer token is sufficient to append any leaf to any

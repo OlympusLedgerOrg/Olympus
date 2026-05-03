@@ -268,19 +268,32 @@ class GoSequencerClient:
         content_type: str = "application/octet-stream",
         version: str = "",
         metadata: dict[str, str] | None = None,
+        parser_id: str = "",
+        canonical_parser_version: str = "",
     ) -> SequencerAppendResult:
         """Append a record to the ledger via the Go sequencer.
 
-        POST /v1/queue-leaf → returns new_root, global_key, leaf_value_hash, tree_size.
+        POST /v1/queue-leaf → Rust service canonicalizes the content, then
+        inserts the leaf into the global SMT.  Use this method when you have
+        raw (not yet hashed) content.  For pre-computed value hashes, use
+        ``append_record_hash`` which calls /v1/queue-leaf-hash and bypasses
+        the Rust canonicalization step.
 
         Args:
             shard_id: Shard identifier (e.g., "test.shard" or "watauga:2025:budget").
             record_type: Record type (e.g., "doc", "dataset", "artifact").
             record_id: Unique record identifier.
-            content: Canonical content bytes to commit.
-            content_type: MIME type of content (default: application/octet-stream).
+            content: Raw content bytes to canonicalize and commit.
+            content_type: MIME type understood by the Rust canonicalizer
+                ("json", "text", or "plaintext"). Do NOT pass
+                "application/octet-stream" here — that will be rejected by
+                the Rust service. Use ``append_record_hash`` instead.
             version: Optional version string (empty string if not versioned).
             metadata: Optional key-value metadata pairs.
+            parser_id: ADR-0003 parser identity (e.g. "docling@2.3.1").
+                Required; empty string is rejected by the Go sequencer.
+            canonical_parser_version: ADR-0003 canonical parser version
+                (e.g. "v1"). Required; empty string is rejected.
 
         Returns:
             SequencerAppendResult with new_root, global_key, leaf_value_hash, tree_size.
@@ -297,6 +310,8 @@ class GoSequencerClient:
             "version": version,
             "content": base64.b64encode(content).decode("ascii"),
             "content_type": content_type,
+            "parser_id": parser_id,
+            "canonical_parser_version": canonical_parser_version,
         }
         if metadata:
             payload["metadata"] = metadata
@@ -332,6 +347,94 @@ class GoSequencerClient:
             tree_size=int(data["tree_size"]),
         )
 
+    async def append_record_hash(
+        self,
+        shard_id: str,
+        record_type: str,
+        record_id: str,
+        value_hash: bytes,
+        parser_id: str,
+        canonical_parser_version: str,
+        version: str = "",
+        metadata: dict[str, str] | None = None,
+    ) -> SequencerAppendResult:
+        """Append a pre-computed 32-byte leaf hash to the ledger.
+
+        POST /v1/queue-leaf-hash → passes ``value_hash`` directly to the Rust
+        SMT service as canonical_content, bypassing the Rust canonicalization
+        step.  Use this method when the caller already holds a canonical content
+        hash (e.g. Python ``storage_layer.py`` sending a pre-hashed value).
+
+        Passing raw binary with content_type="application/octet-stream" to
+        ``append_record`` would be rejected by the Rust canonicalization step
+        (H-3); this endpoint is the correct alternative.
+
+        Args:
+            shard_id: Shard identifier.
+            record_type: Record type.
+            record_id: Unique record identifier.
+            value_hash: Exactly 32-byte pre-computed canonical content hash.
+            parser_id: ADR-0003 parser identity. Required; empty string is
+                rejected by the Go sequencer.
+            canonical_parser_version: ADR-0003 canonical parser version.
+                Required; empty string is rejected.
+            version: Optional version string.
+            metadata: Optional key-value metadata pairs.
+
+        Returns:
+            SequencerAppendResult with new_root, global_key, leaf_value_hash, tree_size.
+
+        Raises:
+            ValueError: If ``value_hash`` is not exactly 32 bytes.
+            SequencerUnavailableError: If the sequencer is unreachable.
+            SequencerResponseError: If the sequencer returns a non-2xx status.
+        """
+        if len(value_hash) != 32:
+            raise ValueError(f"value_hash must be exactly 32 bytes, got {len(value_hash)}")
+        url = f"{self._base_url}/v1/queue-leaf-hash"
+        payload: dict[str, Any] = {
+            "shard_id": shard_id,
+            "record_type": record_type,
+            "record_id": record_id,
+            "version": version,
+            "value_hash": base64.b64encode(value_hash).decode("ascii"),
+            "parser_id": parser_id,
+            "canonical_parser_version": canonical_parser_version,
+        }
+        if metadata:
+            payload["metadata"] = metadata
+
+        try:
+            client = self._get_client()
+            resp = await client.post(url, json=payload, headers=self._headers())
+        except httpx.RequestError as exc:
+            logger.error("sequencer_unreachable url=%s error=%s", url, exc)
+            raise SequencerUnavailableError(
+                f"Sequencer unavailable at {self._base_url}", cause=exc
+            ) from exc
+
+        if resp.status_code != 200:
+            detail = resp.text[:500] if resp.text else None
+            logger.error(
+                "sequencer_hash_error url=%s status=%d body=%.200s",
+                url,
+                resp.status_code,
+                detail,
+            )
+            raise SequencerResponseError(
+                f"Sequencer returned HTTP {resp.status_code}",
+                status_code=resp.status_code,
+                detail=detail,
+            )
+
+        data = resp.json()
+        return SequencerAppendResult(
+            new_root=data["new_root"],
+            global_key=data["global_key"],
+            leaf_value_hash=data["leaf_value_hash"],
+            tree_size=int(data["tree_size"]),
+        )
+
     async def append_records_batch(
         self,
         records: list[dict[str, Any]],
@@ -346,9 +449,11 @@ class GoSequencerClient:
                 - record_type: Record type
                 - record_id: Record identifier
                 - content: Canonical content bytes
-                - content_type: MIME type (optional, default: application/octet-stream)
+                - content_type: MIME type (optional, default: "json")
                 - version: Version string (optional, default: "")
                 - metadata: Optional metadata dict
+                - parser_id: ADR-0003 parser identity (required)
+                - canonical_parser_version: ADR-0003 canonical parser version (required)
 
         Returns:
             List of SequencerAppendResult in the same order as input records.
@@ -366,7 +471,9 @@ class GoSequencerClient:
                     "record_id": r["record_id"],
                     "version": r.get("version", ""),
                     "content": base64.b64encode(r["content"]).decode("ascii"),
-                    "content_type": r.get("content_type", "application/octet-stream"),
+                    "content_type": r.get("content_type", "json"),
+                    "parser_id": r.get("parser_id", ""),
+                    "canonical_parser_version": r.get("canonical_parser_version", ""),
                     **({"metadata": r["metadata"]} if r.get("metadata") else {}),
                 }
                 for r in records

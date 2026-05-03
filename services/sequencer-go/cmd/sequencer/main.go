@@ -51,12 +51,23 @@ func main() {
 	}
 
 	httpAddr := os.Getenv("SEQUENCER_HTTP_ADDR")
-	apiToken := os.Getenv("SEQUENCER_API_TOKEN")
+	// OLYMPUS_SEQUENCER_TOKEN is the canonical environment variable name.
+	// SEQUENCER_API_TOKEN is retained as a deprecated alias for one release;
+	// operators should migrate to OLYMPUS_SEQUENCER_TOKEN.
+	apiToken := os.Getenv("OLYMPUS_SEQUENCER_TOKEN")
 	if apiToken == "" {
-		log.Fatalf("SEQUENCER_API_TOKEN is required")
+		apiToken = os.Getenv("SEQUENCER_API_TOKEN")
+		if apiToken != "" {
+			log.Printf("WARNING: SEQUENCER_API_TOKEN is deprecated; " +
+				"rename to OLYMPUS_SEQUENCER_TOKEN. " +
+				"SEQUENCER_API_TOKEN will be removed in the next release.")
+		}
+	}
+	if apiToken == "" {
+		log.Fatalf("OLYMPUS_SEQUENCER_TOKEN (or deprecated SEQUENCER_API_TOKEN) is required")
 	}
 	if len(apiToken) < 32 {
-		log.Fatalf("SEQUENCER_API_TOKEN must be at least 32 bytes")
+		log.Fatalf("OLYMPUS_SEQUENCER_TOKEN must be at least 32 bytes")
 	}
 	if httpAddr == "" {
 		httpAddr = ":8080"
@@ -93,8 +104,10 @@ func main() {
 	pbLeaves := make([]*pb.LeafEntry, len(leaves))
 	for i, l := range leaves {
 		pbLeaves[i] = &pb.LeafEntry{
-			Key:       l.Key,
-			ValueHash: l.ValueHash,
+			Key:                    l.Key,
+			ValueHash:              l.ValueHash,
+			ParserId:               l.ParserID,
+			CanonicalParserVersion: l.CanonicalParserVersion,
 		}
 	}
 	replayResp, err := smtClient.ReplayLeaves(ctx, pbLeaves)
