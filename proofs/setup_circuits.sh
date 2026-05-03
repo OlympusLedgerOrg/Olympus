@@ -102,9 +102,46 @@ else
   echo "or via npm: npm install -g circom2"
   exit 1
 fi
-echo "==> Using circom compiler: $(${CIRCOM} --version 2>&1 | head -1)"
+# Guard: re-validate CIRCOM is a usable executable.  The detection block
+# above guarantees this in normal operation, but an explicit check here
+# produces a clear, actionable error if the variable is ever empty (e.g.
+# a future refactor allows an external CIRCOM override that is unset) or
+# accidentally points to a directory instead of a binary.
+if [[ -z "${CIRCOM:-}" ]]; then
+  echo "ERROR: CIRCOM is unset or empty after compiler detection — this is a bug." >&2
+  exit 1
+fi
+if [[ -d "${CIRCOM}" ]] || ! command -v "${CIRCOM}" &>/dev/null; then
+  echo "ERROR: CIRCOM='${CIRCOM}' is not a valid executable (is a directory, or not found in PATH)." >&2
+  exit 1
+fi
+# Capture version once; trim to first line without `| head -1` to avoid
+# SIGPIPE on the assignment in bash set -euo pipefail.  When the version
+# command outputs more than one line, head -1 closes the pipe early and
+# the upstream process receives SIGPIPE (exit 141).  In a standalone
+# assignment `VAR=$(cmd | head -1)` bash 5 propagates that non-zero exit
+# and set -e fires silently.  Capturing the full output first and slicing
+# with bash parameter expansion (`%%$'\n'*`) is SIGPIPE-free.  Note:
+# $'\n' is a bash extension (not POSIX sh), which is fine since this
+# script already requires bash via `set -euo pipefail` and other bashisms.
+_CIRCOM_VER_RAW="$(${CIRCOM} --version 2>&1)"
+_CIRCOM_VER="${_CIRCOM_VER_RAW%%$'\n'*}"
+echo "==> Using circom compiler: ${_CIRCOM_VER}"
 
 SNARKJS="npx snarkjs"
+# Guard: validate the launcher (the first word of SNARKJS, normally "npx")
+# is available in PATH.  Without this check the script would run for
+# several minutes through npm install, PTAU download, and fingerprinting
+# before dying with a cryptic "npx: command not found" inside the circuit
+# loop.  Failing here produces a clear message while the context is still
+# obvious.  SNARKJS pointing to a directory is also caught because
+# command -v rejects non-executable paths.
+_SNARKJS_LAUNCHER="${SNARKJS%% *}"
+if [[ -z "${_SNARKJS_LAUNCHER:-}" ]] || ! command -v "${_SNARKJS_LAUNCHER}" &>/dev/null; then
+  echo "ERROR: '${_SNARKJS_LAUNCHER}' (launcher for SNARKJS='${SNARKJS}') is not found in PATH." >&2
+  echo "       Install Node.js >= 18 and ensure npm ci has been run in proofs/." >&2
+  exit 1
+fi
 
 # -----------------------------------------------------------------------
 # 2. Obtain Powers of Tau file (download or generate locally)
@@ -211,7 +248,7 @@ _CIRCUITS_HASH="$(printf '%s\n' "${_CIRCOM_PATHS}" \
   | while IFS= read -r f; do cat "$f"; done \
   | sha256sum | awk '{print $1}')"
 _SCRIPT_HASH="$(sha256sum "${SCRIPT_SELF}" | awk '{print $1}')"
-_CIRCOM_VER="$(${CIRCOM} --version 2>&1 | head -1)"
+# _CIRCOM_VER already set above (SIGPIPE-safe capture near circom detection)
 _SNARKJS_VER="$(node -e "try{console.log(require('./node_modules/snarkjs/package.json').version)}catch(e){console.log('unknown')}" 2>/dev/null)"
 CURRENT_FINGERPRINT="${_CIRCUITS_HASH}:${_SCRIPT_HASH}:${_CIRCOM_VER}:${_SNARKJS_VER}:${PTAU_B2}:${_LOCKFILE_HASH}"
 BUILD_FINGERPRINT_FILE="${BUILD_DIR}/.build-fingerprint"

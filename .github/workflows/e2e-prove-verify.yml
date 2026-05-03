@@ -91,9 +91,35 @@ jobs:
             --redaction-merkle-depth 2
 
       # -----------------------------------------------------------------------
-      # Cache steps are placed AFTER "Configure CI-sized redaction circuit" so
-      # that hashFiles('proofs/circuits/**') captures the CI-sized parameters.circom
-      # (shallow Merkle depth / reduced leaf count) rather than the committed defaults.
+      # Guard: verify that parameters.circom was updated to CI-sized values by
+      # the Configure step above BEFORE the cache steps run.  hashFiles() in the
+      # cache keys below is evaluated at runtime when each step executes, so the
+      # Configure step must succeed first.  This step makes that ordering explicit
+      # and fails fast if Configure silently produced wrong output — which would
+      # otherwise cause the wrong circuit cache key and incompatible fingerprints
+      # inside setup_circuits.sh.
+      # -----------------------------------------------------------------------
+      - name: Guard — verify CI-sized parameters.circom before cache-key computation
+        run: |
+          grep -qF 'REDACTION_MERKLE_DEPTH() { return 2; }' proofs/circuits/parameters.circom || {
+            echo "ERROR: REDACTION_MERKLE_DEPTH not set to 2 in proofs/circuits/parameters.circom" >&2
+            echo "  Expected CI-sized value (depth=2) but found committed default." >&2
+            echo "  The 'Configure CI-sized redaction circuit' step must run and succeed before this step." >&2
+            grep -n 'REDACTION_MERKLE_DEPTH' proofs/circuits/parameters.circom >&2 || true
+            exit 1
+          }
+          grep -qF 'REDACTION_MAX_LEAVES() { return 4; }' proofs/circuits/parameters.circom || {
+            echo "ERROR: REDACTION_MAX_LEAVES not set to 4 in proofs/circuits/parameters.circom" >&2
+            echo "  Expected CI-sized value (leaves=4) but found committed default." >&2
+            grep -n 'REDACTION_MAX_LEAVES' proofs/circuits/parameters.circom >&2 || true
+            exit 1
+          }
+          echo "parameters.circom verified — CI-sized values present (depth=2, leaves=4)"
+          echo "hashFiles('proofs/circuits/**') will capture these CI-sized parameters."
+
+      # Cache steps are placed AFTER the guard above so that hashFiles('proofs/circuits/**')
+      # captures the CI-sized parameters.circom (shallow Merkle depth / reduced leaf count)
+      # rather than the committed defaults.
       # -----------------------------------------------------------------------
 
       - name: Cache Hermez PTAU file (576 MB)
