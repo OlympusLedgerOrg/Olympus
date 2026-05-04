@@ -128,7 +128,8 @@ All stages are independently verifiable. The canonicalization version is current
 |-------|-----------|
 | **Python API** | FastAPI 0.135, SQLAlchemy 2 async, psycopg 3, Pydantic v2, Uvicorn |
 | **Go sequencer** | Go 1.24, gRPC (google.golang.org/grpc v1.79), lib/pq† |
-| **Rust crypto core** | Rust 2021 edition, blake3 1.5, ed25519-dalek 2.1, tonic 0.10 (gRPC)†, pyo3 0.24 |
+| **Rust crypto core** | Rust 2021 edition, blake3 1.5, ed25519-dalek 2.1, tonic 0.10 (gRPC)† |
+| **Python Rust extension (`olympus_core`)** | pyo3 0.24; O(n) ADL scanner (CVE-2026-4539), BLAKE3/canonical-JSON acceleration, Poseidon BN254 (mandatory), Groth16 ZK verifier (mandatory), `RustSparseMerkleTree` |
 | **ZK circuits** | Circom, snarkjs, circomlib (Poseidon); rapidsnark (optional native prover, 5-10× faster); Halo2 gated behind `OLYMPUS_HALO2_ENABLED` |
 | **Database** | PostgreSQL 16 with Alembic migrations |
 | **Quality tooling** | Ruff, mypy, Bandit, pytest (>=85% coverage floor), Hypothesis, pip-audit |
@@ -208,8 +209,11 @@ schemas/         JSON schema definitions validated by tools/validate_schemas.py
 services/        Microservices:
                    cdhs-smf-rust/  -- Rust gRPC CD-HS-ST cryptographic core
                    sequencer-go/   -- Go gRPC log sequencer
-src/             Rust PyO3 extension (olympus-core) -- accelerated hashing and
-                   canonicalization callable from Python
+src/             Rust PyO3 extension (olympus_core) -- O(n) ADL scanner
+                   (CVE-2026-4539 fix), BLAKE3/canonical-JSON acceleration
+                   (optional, Python fallbacks exist), Poseidon BN254 hash
+                   (mandatory, no Python fallback), Groth16 ZK verifier
+                   (mandatory, no Python fallback), RustSparseMerkleTree
 storage/         PostgreSQL persistence layer and schema bootstrap
 test_vectors/    Golden test vectors for cross-language determinism harness
 tests/           Python test suite (unit, integration, postgres, adversarial, chaos)
@@ -343,7 +347,7 @@ Olympus is influenced by the operational model of Certificate Transparency and S
 
 - Python requirement: `>=3.10` (3.12 is used for CI tooling and dependency locking).
 - `canonical_v2` is the current canonicalization version. `canonical_v1` remains in `SUPPORTED_VERSIONS` with a deprecation warning.
-- The Rust PyO3 extension (`src/`, built with `maturin`) accelerates hashing and canonicalization. It is optional; the pure-Python fallback in `protocol/hashes.py` is always active when the extension is not built.
+- The Rust PyO3 extension (`src/`, built with `maturin`) provides: O(n) ADL pattern scanning (CVE-2026-4539 fix), accelerated BLAKE3 hashing (`protocol/hashes.py` has a pure-Python fallback) and canonical-JSON encoding (`protocol/canonical_json.py` has a pure-Python fallback), Poseidon BN254 hash for ZK circuits (**mandatory** — `protocol/poseidon.py` has no Python fallback), Groth16 ZK proof verification (**mandatory** — raises HTTP 503 when absent), and `RustSparseMerkleTree` SMT bindings (required in production when `OLYMPUS_REQUIRE_RUST=1`).
 - The Halo2 ZK backend is gated behind `OLYMPUS_HALO2_ENABLED` and is not yet production-ready.
 
 ## External Security Review
