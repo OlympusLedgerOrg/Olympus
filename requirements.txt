@@ -1346,7 +1346,7 @@ python-dotenv==1.2.2 \
     # via
     #   pydantic-settings
     #   uvicorn
-python-magic==0.4.27 ; sys_platform != "win32" \
+python-magic==0.4.27 ; platform_system != "Windows" \
     --hash=sha256:c1ba14b08e4a5f5c31a302b7721239695b2f0f058d125bd5ce1ee36b9d9d3c3b \
     --hash=sha256:c212960ad306f700aa0d01e5d7a325d20548ff97eb9920dcd29513174f0294d3
     # via olympus (pyproject.toml)
