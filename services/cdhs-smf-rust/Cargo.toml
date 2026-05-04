@@ -38,7 +38,7 @@ base64 = "0.21"
 # Bounded LRU for prepared two-phase commit transactions (H-2). Caps memory
 # growth from abandoned PrepareUpdate calls so a buggy or hostile client
 # cannot DoS the service by preparing without committing.
-lru = "0.12"
+lru = "0.16.3"
 uuid = { version = "1.10", features = ["v4"] }
 
 # Unicode normalization for canonicalization
