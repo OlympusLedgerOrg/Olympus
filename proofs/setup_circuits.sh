@@ -71,14 +71,11 @@ _check_required_tool "npx" \
 # These tools are invoked by node subprocesses, so their absence produces a
 # cryptic failure deep inside the vendor build rather than a clear error here.
 _check_required_tool "make" \
-  "Install build tools: sudo apt-get install -y build-essential  (Debian/Ubuntu)
-                        brew install make  (macOS)"
+  "Install build tools: 'sudo apt-get install -y build-essential' (Debian/Ubuntu) or 'brew install make' (macOS)"
 _check_required_tool "g++" \
-  "Install the GNU C++ compiler: sudo apt-get install -y g++  (Debian/Ubuntu)
-                                 brew install gcc  (macOS)"
+  "Install the GNU C++ compiler: 'sudo apt-get install -y g++' (Debian/Ubuntu) or 'brew install gcc' (macOS, provides g++)"
 _check_required_tool "nasm" \
-  "Install nasm (x86 assembler): sudo apt-get install -y nasm  (Debian/Ubuntu)
-                                 brew install nasm  (macOS)"
+  "Install nasm (x86 assembler): 'sudo apt-get install -y nasm' (Debian/Ubuntu) or 'brew install nasm' (macOS)"
 
 unset -f _check_required_tool
 
