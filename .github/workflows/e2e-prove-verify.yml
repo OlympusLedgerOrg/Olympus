@@ -76,6 +76,23 @@ jobs:
           python -m pip install --require-hashes -r requirements-dev.txt
           python -m pip install -e . --no-deps
 
+      # Install native build prerequisites required by the ZK proof toolchain.
+      # rapidsnark and ffiasm (transitive snarkjs/circom dependencies) compile C++
+      # with nasm for field arithmetic; the build fails deep inside vendor code if
+      # these packages are absent.  Installing them here surfaces the dependency
+      # early and clearly rather than letting the error appear as a cryptic node
+      # subprocess exit-code failure during circuit compilation.
+      - name: Install native proof-toolchain prerequisites
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends \
+            build-essential \
+            cmake \
+            g++ \
+            nasm \
+            pkg-config \
+            protobuf-compiler
+
       - name: Install Circom compiler
         run: npm install --global circom2@0.2.22
 
