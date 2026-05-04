@@ -75,15 +75,16 @@ mutation-test:
 mutation-test-report:
 	mutmut results
 
-## fuzz-smoke: Short local fuzz smoke pass (< 3 min, runs in CI on PRs)
+## fuzz-smoke: Short smoke pass covering all fuzz suites (< 3 min, runs in PR CI)
+## Runs both storage and security invariant tests in smoke profile.
 .PHONY: fuzz-smoke fuzz-security-smoke fuzz-24h fuzz-security-24h
 fuzz-smoke:
 	HYPOTHESIS_PROFILE=fuzz_smoke FUZZ_MAX_EXAMPLES=30 \
-	pytest tests/fuzz/test_security_invariants_fuzz.py \
-	  -v --tb=short -m "fuzz and security" \
+	pytest tests/fuzz/ \
+	  -v --tb=short -m "fuzz" \
 	  --hypothesis-seed=0
 
-## fuzz-security-smoke: Short local security fuzz smoke pass only (< 3 min)
+## fuzz-security-smoke: Short local security-only fuzz smoke pass (< 3 min)
 fuzz-security-smoke:
 	HYPOTHESIS_PROFILE=fuzz_smoke FUZZ_MAX_EXAMPLES=30 \
 	pytest tests/fuzz/test_security_invariants_fuzz.py \

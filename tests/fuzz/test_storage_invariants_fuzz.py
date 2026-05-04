@@ -195,7 +195,6 @@ def _run_op(
 
     if op_type == OP_GET_NONEXISTENCE_PROOF:
         # Only request non-existence if we know the key doesn't exist
-        rec_key_tuple = (shard_id, op["record_type"], op["record_id"], op["version"])
         already_appended = any(
             a["shard_id"] == shard_id
             and a["record_type"] == op["record_type"]
@@ -211,7 +210,9 @@ def _run_op(
                 current_root = storage.get_current_root(shard_id)
                 # INV-4: non-existence proof must verify
                 assert verify_nonexistence_proof(nex_proof, expected_root=current_root), (
-                    f"INV-4 FAIL: non-existence proof for {rec_key_tuple} does not verify"
+                    f"INV-4 FAIL: non-existence proof for "
+                    f"({shard_id}, {op['record_type']}, {op['record_id']}, {op['version']}) "
+                    f"does not verify"
                 )
             except ValueError as exc:
                 if "exists" in str(exc):

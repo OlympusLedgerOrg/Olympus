@@ -27,9 +27,6 @@ from hypothesis import strategies as st
 # ---------------------------------------------------------------------------
 
 # Valid shard identifiers (match SHARD_ID_PATTERN in api/schemas/ingest.py)
-_SHARD_ALPHABET = string.ascii_letters + string.digits + "_.:- "
-_SHARD_ALPHABET = _SHARD_ALPHABET.replace(" ", "")  # no spaces
-
 shard_ids = st.text(
     alphabet=string.ascii_letters + string.digits + "_.-",
     min_size=1,
