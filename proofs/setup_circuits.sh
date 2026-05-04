@@ -59,6 +59,7 @@ _check_required_tool() {
 }
 
 # JavaScript runtime — required to run snarkjs and circom wasm binaries
+# (needed in both full and --compile-only modes)
 _check_required_tool "node" \
   "Install Node.js >= 18 from https://nodejs.org/ or via your package manager."
 _check_required_tool "npm" \
@@ -68,14 +69,18 @@ _check_required_tool "npx" \
 
 # Native C++ toolchain — required by rapidsnark/ffiasm (transitive snarkjs
 # dependency) which compiles field-arithmetic code at proof-generation time.
-# These tools are invoked by node subprocesses, so their absence produces a
-# cryptic failure deep inside the vendor build rather than a clear error here.
-_check_required_tool "make" \
-  "Install build tools: 'sudo apt-get install -y build-essential' (Debian/Ubuntu) or 'brew install make' (macOS)"
-_check_required_tool "g++" \
-  "Install the GNU C++ compiler: 'sudo apt-get install -y g++' (Debian/Ubuntu) or 'brew install gcc' (macOS, provides g++)"
-_check_required_tool "nasm" \
-  "Install nasm (x86 assembler): 'sudo apt-get install -y nasm' (Debian/Ubuntu) or 'brew install nasm' (macOS)"
+# These tools are invoked by node subprocesses during Groth16 setup, so their
+# absence produces a cryptic failure deep inside the vendor build rather than a
+# clear error here.  --compile-only exits before any snarkjs/Groth16 work and
+# does not invoke the native toolchain, so these checks are skipped in that mode.
+if [ "${COMPILE_ONLY}" -eq 0 ]; then
+  _check_required_tool "make" \
+    "Install build tools: 'sudo apt-get install -y build-essential' (Debian/Ubuntu) or 'brew install make' (macOS)"
+  _check_required_tool "g++" \
+    "Install the GNU C++ compiler: 'sudo apt-get install -y g++' (Debian/Ubuntu) or 'brew install gcc' (macOS, provides g++)"
+  _check_required_tool "nasm" \
+    "Install nasm (x86 assembler): 'sudo apt-get install -y nasm' (Debian/Ubuntu) or 'brew install nasm' (macOS)"
+fi
 
 unset -f _check_required_tool
 
