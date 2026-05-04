@@ -13,13 +13,13 @@ REM -------------------------------------------------------
 cd /d "%~dp0"
 
 REM -------------------------------------------------------
-REM 1. Check Python 3.10+
+REM 1. Check Python 3.10-3.13
 REM -------------------------------------------------------
 echo [1/7] Checking Python...
 python --version >nul 2>&1
 if errorlevel 1 (
     echo ERROR: Python not found.
-    echo        Install Python 3.10+ from https://python.org and re-run.
+    echo        Install Python 3.10-3.13 (3.12 recommended) from https://python.org and re-run.
     pause
     exit /b 1
 )
@@ -30,12 +30,23 @@ for /f "tokens=1,2 delims=." %%a in ("%PYVER%") do (
     set PY_MINOR=%%b
 )
 if %PY_MAJOR% LSS 3 (
-    echo ERROR: Python 3.10+ required. Found %PYVER%.
+    echo ERROR: Python 3.10-3.13 required. Found %PYVER%.
     pause
     exit /b 1
 )
 if %PY_MAJOR% EQU 3 if %PY_MINOR% LSS 10 (
-    echo ERROR: Python 3.10+ required. Found %PYVER%.
+    echo ERROR: Python 3.10-3.13 required. Found %PYVER%.
+    pause
+    exit /b 1
+)
+
+if %PY_MAJOR% GTR 3 (
+    echo ERROR: Python 3.10-3.13 required. Found %PYVER%.
+    pause
+    exit /b 1
+)
+if %PY_MAJOR% EQU 3 if %PY_MINOR% GTR 13 (
+    echo ERROR: Python 3.10-3.13 required. Found %PYVER%.
     pause
     exit /b 1
 )

@@ -7,7 +7,7 @@
 #   ./setup-unix.sh --skip-docker                # skip PostgreSQL container step
 #   ./setup-unix.sh --skip-start                 # set up everything, do not start API
 #
-# Requirements: Docker, Python 3.10+, Rust (cargo)
+# Requirements: Docker, Python 3.10-3.13, Rust (cargo)
 
 set -euo pipefail
 
@@ -67,21 +67,21 @@ echo -e "${_CYAN}╚════════════════════
 # ---------------------------------------------------------------------------
 step "Checking prerequisites"
 
-# Python 3.10+
+# Python 3.10-3.13
 PYTHON_CMD=""
 for cmd in python3 python; do
     if command -v "$cmd" &>/dev/null; then
         ver=$("$cmd" --version 2>&1 | grep -oE "[0-9]+\.[0-9]+")
         major=$(echo "$ver" | cut -d. -f1)
         minor=$(echo "$ver" | cut -d. -f2)
-        if [ "$major" -ge 3 ] && [ "$minor" -ge 10 ]; then
+        if [ "$major" -eq 3 ] && [ "$minor" -ge 10 ] && [ "$minor" -le 13 ]; then
             PYTHON_CMD="$cmd"
             break
         fi
     fi
 done
 if [ -z "$PYTHON_CMD" ]; then
-    fail "Python 3.10+ not found. Install it from https://python.org and re-run."
+    fail "Python 3.10-3.13 not found. Install it from https://python.org and re-run."
 fi
 ok "$($PYTHON_CMD --version)"
 

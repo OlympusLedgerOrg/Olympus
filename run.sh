@@ -63,7 +63,7 @@ echo -e "${C}   Olympus -- One-Command Setup (Unix/macOS)   ${N}"
 echo -e "${C}=================================================${N}"
 
 # ---------------------------------------------------------------------------
-# 1. Check Python 3.10+
+# 1. Check Python 3.10-3.13
 # ---------------------------------------------------------------------------
 info "Checking Python..."
 
@@ -73,13 +73,13 @@ for cmd in python3 python; do
         ver=$("$cmd" --version 2>&1 | grep -oE "[0-9]+\.[0-9]+")
         major=$(echo "$ver" | cut -d. -f1)
         minor=$(echo "$ver" | cut -d. -f2)
-        if [ "$major" -ge 3 ] && [ "$minor" -ge 10 ]; then
+        if [ "$major" -eq 3 ] && [ "$minor" -ge 10 ] && [ "$minor" -le 13 ]; then
             PYTHON_CMD="$cmd"
             break
         fi
     fi
 done
-[ -n "$PYTHON_CMD" ] || die "Python 3.10+ not found. Install from https://python.org and re-run."
+[ -n "$PYTHON_CMD" ] || die "Python 3.10-3.13 not found. Install from https://python.org and re-run."
 ok "$($PYTHON_CMD --version)"
 
 # ---------------------------------------------------------------------------

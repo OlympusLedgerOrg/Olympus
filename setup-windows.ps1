@@ -61,14 +61,14 @@ Write-Host "==================================================" -ForegroundColor
 # ---------------------------------------------------------------------------
 Write-Step "Checking prerequisites"
 
-# Python 3.10+
+# Python 3.10-3.13
 try {
     $pyRaw = python --version 2>&1
 } catch {
-    Write-Fail "Python not found. Install Python 3.10+ from https://python.org and re-run."
+    Write-Fail "Python not found. Install Python 3.10-3.13 (3.12 recommended) from https://python.org and re-run."
 }
-if ($pyRaw -notmatch "3\.(1[0-9]|[2-9]\d)") {
-    Write-Fail "Python 3.10+ is required (found: $pyRaw). Download from https://python.org."
+if ($pyRaw -notmatch "3\.(1[0-3])(\.|$)") {
+    Write-Fail "Python 3.10-3.13 is currently supported (found: $pyRaw). Use Python 3.12 for best compatibility: https://python.org."
 }
 Write-Ok "$pyRaw"
 
