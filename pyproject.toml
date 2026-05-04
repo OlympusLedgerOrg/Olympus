@@ -172,6 +172,10 @@ markers = [
     "layer4: marks layer-4 (ZK circuit) tests",
     "circuits: marks tests that inspect or exercise ZK circuit source/behavior",
     "differential: marks cross-implementation differential fuzz tests (require Go, Rust, Node)",
+    "fuzz: marks tests that are part of the local-only fuzzing framework",
+    "security: marks tests that verify defensive security invariants",
+    "api: marks tests that exercise the HTTP API layer",
+    "storage: marks tests that exercise the storage layer (may require Postgres)",
 ]
 
 [tool.coverage.run]

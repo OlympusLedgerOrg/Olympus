@@ -1,0 +1,266 @@
+name: Fuzz Nightly
+
+# ---------------------------------------------------------------------------
+# Trigger: scheduled nightly + manual dispatch only.
+# Must NOT run on every pull request — 24-hour fuzz is not a PR gate.
+# ---------------------------------------------------------------------------
+on:
+  schedule:
+    # 03:00 UTC every night
+    - cron: '0 3 * * *'
+  workflow_dispatch:
+    inputs:
+      profile:
+        description: 'Hypothesis profile (fuzz_smoke | fuzz_ci | fuzz_24h)'
+        required: false
+        default: 'fuzz_ci'
+      hours:
+        description: 'Marathon hours for fuzz_24h profile (default: 24)'
+        required: false
+        default: '24'
+      suite:
+        description: 'Test suite (all | security | storage)'
+        required: false
+        default: 'all'
+
+concurrency:
+  group: fuzz-nightly-${{ github.ref }}
+  cancel-in-progress: false   # let a running marathon finish
+
+jobs:
+  # -------------------------------------------------------------------------
+  # Security invariants fuzzing (no Postgres required)
+  # -------------------------------------------------------------------------
+  fuzz-security:
+    name: fuzz-security (${{ inputs.profile || 'fuzz_ci' }})
+    runs-on: ubuntu-latest
+    if: ${{ github.event.inputs.suite != 'storage' }}
+    permissions:
+      contents: read
+
+    env:
+      HYPOTHESIS_PROFILE: ${{ inputs.profile || 'fuzz_ci' }}
+      FUZZ_MAX_EXAMPLES: ${{ inputs.profile == 'fuzz_24h' && '10000' || '200' }}
+
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Set up Python 3.12
+      uses: actions/setup-python@v6
+      with:
+        python-version: "3.12"
+        cache: 'pip'
+
+    - name: Create virtual environment
+      run: |
+        python -m venv .venv
+        echo "VIRTUAL_ENV=${GITHUB_WORKSPACE}/.venv" >> "$GITHUB_ENV"
+        echo "${GITHUB_WORKSPACE}/.venv/bin" >> "$GITHUB_PATH"
+
+    - name: Install system dependencies
+      run: sudo apt-get update && sudo apt-get install -y libmagic1
+
+    - name: Install Python dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install --require-hashes -r requirements-dev.txt
+        pip install psycopg2-binary==2.9.9
+        pip install -e . --no-deps
+
+    - name: Restore Hypothesis example database
+      uses: actions/cache@v4
+      with:
+        path: .hypothesis/examples
+        key: hypothesis-fuzz-security-${{ github.sha }}
+        restore-keys: |
+          hypothesis-fuzz-security-
+
+    - name: Run security invariant fuzz tests
+      run: |
+        pytest tests/fuzz/test_security_invariants_fuzz.py \
+          -v --tb=short \
+          -m "fuzz and security" \
+          --hypothesis-seed=0
+
+    - name: Upload fuzz failure artifacts
+      if: failure()
+      uses: actions/upload-artifact@v4
+      with:
+        name: fuzz-security-artifacts-${{ github.run_id }}
+        path: .hypothesis/fuzz-artifacts/
+        retention-days: 30
+        if-no-files-found: ignore
+
+    - name: Save Hypothesis example database
+      if: always()
+      uses: actions/cache/save@v4
+      with:
+        path: .hypothesis/examples
+        key: hypothesis-fuzz-security-${{ github.sha }}
+
+  # -------------------------------------------------------------------------
+  # Storage/ledger invariants fuzzing (requires Postgres + Rust extension)
+  # -------------------------------------------------------------------------
+  fuzz-storage:
+    name: fuzz-storage (${{ inputs.profile || 'fuzz_ci' }})
+    runs-on: ubuntu-latest
+    if: ${{ github.event.inputs.suite != 'security' }}
+    permissions:
+      contents: read
+
+    env:
+      TEST_DATABASE_URL: postgresql://olympus:olympus@localhost:5432/olympus_fuzz
+      DATABASE_URL: postgresql://olympus:olympus@localhost:5432/olympus_fuzz
+      HYPOTHESIS_PROFILE: ${{ inputs.profile || 'fuzz_ci' }}
+      FUZZ_MAX_EXAMPLES: ${{ inputs.profile == 'fuzz_24h' && '10000' || '200' }}
+      OLYMPUS_INGEST_SIGNING_KEY: "fuzz-test-key-nightly-ci-not-production"
+
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: olympus
+          POSTGRES_PASSWORD: olympus
+          POSTGRES_DB: olympus_fuzz
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Set up Python 3.12
+      uses: actions/setup-python@v6
+      with:
+        python-version: "3.12"
+        cache: 'pip'
+
+    - name: Create virtual environment
+      run: |
+        python -m venv .venv
+        echo "VIRTUAL_ENV=${GITHUB_WORKSPACE}/.venv" >> "$GITHUB_ENV"
+        echo "${GITHUB_WORKSPACE}/.venv/bin" >> "$GITHUB_PATH"
+
+    - name: Install system dependencies
+      run: sudo apt-get update && sudo apt-get install -y libmagic1
+
+    - name: Install Python dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install --require-hashes -r requirements-dev.txt
+        pip install psycopg2-binary==2.9.9
+        pip install -e . --no-deps
+
+    - name: Install Rust toolchain
+      uses: dtolnay/rust-toolchain@stable
+
+    - name: Build olympus_core Rust extension
+      run: python -m maturin develop --release
+      working-directory: services/cdhs-smf-rust
+
+    - name: Restore Hypothesis example database
+      uses: actions/cache@v4
+      with:
+        path: .hypothesis/examples
+        key: hypothesis-fuzz-storage-${{ github.sha }}
+        restore-keys: |
+          hypothesis-fuzz-storage-
+
+    - name: Run storage invariant fuzz tests
+      run: |
+        pytest tests/fuzz/test_storage_invariants_fuzz.py \
+          -v --tb=short \
+          -m "fuzz and storage" \
+          --hypothesis-seed=0
+
+    - name: Upload fuzz failure artifacts
+      if: failure()
+      uses: actions/upload-artifact@v4
+      with:
+        name: fuzz-storage-artifacts-${{ github.run_id }}
+        path: .hypothesis/fuzz-artifacts/
+        retention-days: 30
+        if-no-files-found: ignore
+
+    - name: Save Hypothesis example database
+      if: always()
+      uses: actions/cache/save@v4
+      with:
+        path: .hypothesis/examples
+        key: hypothesis-fuzz-storage-${{ github.sha }}
+
+  # -------------------------------------------------------------------------
+  # 24-hour marathon (manual dispatch only, profile=fuzz_24h)
+  # -------------------------------------------------------------------------
+  fuzz-marathon-security:
+    name: fuzz-marathon-security (24h)
+    runs-on: ubuntu-latest
+    if: >-
+      github.event_name == 'workflow_dispatch' &&
+      github.event.inputs.profile == 'fuzz_24h' &&
+      github.event.inputs.suite != 'storage'
+    timeout-minutes: 1500   # 25 h max (1 h safety margin)
+    permissions:
+      contents: read
+
+    env:
+      HYPOTHESIS_PROFILE: fuzz_24h
+      FUZZ_MAX_EXAMPLES: "10000"
+      FUZZ_HOURS: ${{ inputs.hours || '24' }}
+
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Set up Python 3.12
+      uses: actions/setup-python@v6
+      with:
+        python-version: "3.12"
+        cache: 'pip'
+
+    - name: Create virtual environment
+      run: |
+        python -m venv .venv
+        echo "VIRTUAL_ENV=${GITHUB_WORKSPACE}/.venv" >> "$GITHUB_ENV"
+        echo "${GITHUB_WORKSPACE}/.venv/bin" >> "$GITHUB_PATH"
+
+    - name: Install system dependencies
+      run: sudo apt-get update && sudo apt-get install -y libmagic1
+
+    - name: Install Python dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install --require-hashes -r requirements-dev.txt
+        pip install psycopg2-binary==2.9.9
+        pip install -e . --no-deps
+
+    - name: Restore Hypothesis example database
+      uses: actions/cache@v4
+      with:
+        path: .hypothesis/examples
+        key: hypothesis-fuzz-marathon-${{ github.sha }}
+        restore-keys: |
+          hypothesis-fuzz-marathon-
+          hypothesis-fuzz-security-
+
+    - name: Run 24-hour security fuzz marathon
+      run: bash scripts/fuzz_24h.sh --security-only
+
+    - name: Upload fuzz failure artifacts
+      if: always()
+      uses: actions/upload-artifact@v4
+      with:
+        name: fuzz-marathon-security-artifacts-${{ github.run_id }}
+        path: .hypothesis/fuzz-artifacts/
+        retention-days: 90
+        if-no-files-found: ignore
+
+    - name: Save Hypothesis example database
+      if: always()
+      uses: actions/cache/save@v4
+      with:
+        path: .hypothesis/examples
+        key: hypothesis-fuzz-marathon-${{ github.sha }}

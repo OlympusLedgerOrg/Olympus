@@ -1,5 +1,6 @@
 ## check: Run full quality gate (lint + type-check + bandit + tests)
-.PHONY: check format lint boundary-check vectors check-demo-keys pre-push install-hooks
+.PHONY: check format lint boundary-check vectors check-demo-keys pre-push install-hooks \
+        mutation-test mutation-test-report
 
 check: boundary-check check-demo-keys
 	python tools/validate_schemas.py
@@ -73,3 +74,26 @@ mutation-test:
 ## mutation-test-report: Show mutation testing results summary
 mutation-test-report:
 	mutmut results
+
+## fuzz-smoke: Short local fuzz smoke pass (< 3 min, runs in CI on PRs)
+.PHONY: fuzz-smoke fuzz-security-smoke fuzz-24h fuzz-security-24h
+fuzz-smoke:
+	HYPOTHESIS_PROFILE=fuzz_smoke FUZZ_MAX_EXAMPLES=30 \
+	pytest tests/fuzz/test_security_invariants_fuzz.py \
+	  -v --tb=short -m "fuzz and security" \
+	  --hypothesis-seed=0
+
+## fuzz-security-smoke: Short local security fuzz smoke pass only (< 3 min)
+fuzz-security-smoke:
+	HYPOTHESIS_PROFILE=fuzz_smoke FUZZ_MAX_EXAMPLES=30 \
+	pytest tests/fuzz/test_security_invariants_fuzz.py \
+	  -v --tb=short -m "fuzz and security" \
+	  --hypothesis-seed=0
+
+## fuzz-24h: 24-hour local reliability + security fuzz marathon
+fuzz-24h:
+	bash scripts/fuzz_24h.sh
+
+## fuzz-security-24h: 24-hour local security-only fuzz marathon
+fuzz-security-24h:
+	bash scripts/fuzz_24h.sh --security-only
