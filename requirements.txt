@@ -1346,7 +1346,7 @@ python-dotenv==1.2.2 \
     # via
     #   pydantic-settings
     #   uvicorn
-python-magic==0.4.27 ; platform_system != "Windows" \
+python-magic==0.4.27 ; sys_platform != "win32" \
     --hash=sha256:c1ba14b08e4a5f5c31a302b7721239695b2f0f058d125bd5ce1ee36b9d9d3c3b \
     --hash=sha256:c212960ad306f700aa0d01e5d7a325d20548ff97eb9920dcd29513174f0294d3
     # via olympus (pyproject.toml)
@@ -1563,15 +1563,15 @@ urllib3==2.6.3 \
     # via
     #   botocore
     #   requests
-uvicorn[standard]==0.46.0 ; platform_system != "Windows" \
+uvicorn[standard]==0.46.0 ; sys_platform != "win32" \
     --hash=sha256:bbebbcbed972d162afca128605223022bedd345b7bc7855ce66deb31487a9048 \
     --hash=sha256:fb9da0926999cc6cb22dc7cd71a94a632f078e6ae47ff683c5c420750fb7413d
     # via olympus (pyproject.toml)
-uvicorn==0.46.0 ; platform_system == "Windows" \
+uvicorn==0.46.0 ; sys_platform == "win32" \
     --hash=sha256:bbebbcbed972d162afca128605223022bedd345b7bc7855ce66deb31487a9048 \
     --hash=sha256:fb9da0926999cc6cb22dc7cd71a94a632f078e6ae47ff683c5c420750fb7413d
     # via olympus (pyproject.toml)
-uvloop==0.22.1 ; platform_system != "Windows" \
+uvloop==0.22.1 ; sys_platform != "win32" \
     --hash=sha256:017bd46f9e7b78e81606329d07141d3da446f8798c6baeec124260e22c262772 \
     --hash=sha256:0530a5fbad9c9e4ee3f2b33b148c6a64d47bbad8000ea63704fa8260f4cf728e \
     --hash=sha256:05e4b5f86e621cf3927631789999e697e58f0d2d32675b67d9ca9eb0bca55743 \

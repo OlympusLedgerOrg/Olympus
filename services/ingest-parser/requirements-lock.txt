@@ -14,9 +14,9 @@
 # Core dependencies
 fastapi==0.115.12 \
     --hash=sha256:232fc8bde76906c6d1af4a6e8f29e18e1c6ce95b601f1e38bd63f8c3fb630c17
-uvicorn[standard]==0.34.2 ; platform_system != "Windows" \
+uvicorn[standard]==0.34.2 ; sys_platform != "win32" \
     --hash=sha256:ac26659fb55ed211a2e2ed1e172037b377b7af6f18e1fe89021f11cb7e02e68d
-uvicorn==0.34.2 ; platform_system == "Windows" \
+uvicorn==0.34.2 ; sys_platform == "win32" \
     --hash=sha256:ac26659fb55ed211a2e2ed1e172037b377b7af6f18e1fe89021f11cb7e02e68d
 # CVE fix: python-multipart < 0.0.22 vulnerable to Arbitrary File Write
 python-multipart==0.0.26 \
