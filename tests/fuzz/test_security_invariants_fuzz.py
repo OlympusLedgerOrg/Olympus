@@ -259,16 +259,6 @@ def test_public_read_endpoints_no_secret_leakage() -> None:
 @pytest.mark.fuzz
 @pytest.mark.security
 @pytest.mark.api
-# Known API bug: content size validation raises a ValidationError whose
-# serialization fails in the error handler, producing 500 instead of 422.
-# xfail(strict=False) so the test documents the issue without blocking PRs.
-@pytest.mark.xfail(
-    strict=False,
-    reason=(
-        "Known: content validation errors can produce 500 instead of 422 "
-        "(api/main.py request_validation_exception_handler serialization bug)"
-    ),
-)
 @given(
     field_value=st.sampled_from(
         [
@@ -424,16 +414,6 @@ def test_input_unicode_edge_cases_no_500(uc: str) -> None:
 @pytest.mark.fuzz
 @pytest.mark.security
 @pytest.mark.api
-# Known API bug: the RequestValidationError handler in api/main.py fails to
-# serialize the PydanticValidationError for content depth violations, producing
-# 500 instead of 422. xfail(strict=False) documents the issue without blocking PRs.
-@pytest.mark.xfail(
-    strict=False,
-    reason=(
-        "Known: deeply nested content validation raises 500 instead of 422 "
-        "(api/main.py request_validation_exception_handler serialization bug)"
-    ),
-)
 def test_input_deeply_nested_json_rejected() -> None:
     """
     INPUT-6: A JSON structure nested beyond MAX_CONTENT_DEPTH (64) must return

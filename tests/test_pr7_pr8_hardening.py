@@ -155,6 +155,158 @@ def test_validation_error_detail_preserves_url_key():
     assert "url" in sanitized[0]
 
 
+def test_validation_error_detail_serializes_exception_in_ctx():
+    """
+    _json_safe_validation_detail must convert BaseException instances in ctx['error']
+    to strings so the response can be JSON-serialized.
+
+    This is the bug that caused 500s for deeply-nested content and oversized fields:
+    Pydantic v2 stores the raw ValueError in ``ctx['error']``, which is not
+    JSON-serializable by default.
+    """
+    import json
+
+    from api.main import _json_safe_validation_detail
+
+    detail = [
+        {
+            "type": "value_error",
+            "loc": ("content",),
+            "msg": "Value error, Content nesting depth exceeds limit of 64",
+            "ctx": {"error": ValueError("Content nesting depth exceeds limit of 64")},
+            "url": "https://errors.pydantic.dev/2.13/v/value_error",
+        }
+    ]
+    sanitized = _json_safe_validation_detail(detail)
+
+    # Must be JSON-serializable — no TypeError
+    serialized = json.dumps(sanitized)
+    assert "Content nesting depth exceeds limit of 64" in serialized
+
+    # ctx['error'] must be a string, not an Exception object
+    ctx_error = sanitized[0]["ctx"]["error"]
+    assert isinstance(ctx_error, str), f"ctx['error'] is still {type(ctx_error).__name__}"
+
+
+def test_strip_input_from_errors_removes_input_key():
+    """_strip_input_from_errors must remove the 'input' key and preserve all others."""
+    from api.main import _strip_input_from_errors
+
+    raw = [
+        {
+            "type": "value_error",
+            "loc": ("content",),
+            "msg": "Value error, Content nesting depth exceeds limit of 64",
+            "input": {"child": {"deeply": "nested"}},
+            "ctx": {"error": ValueError("Content nesting depth exceeds limit of 64")},
+            "url": "https://errors.pydantic.dev/2.13/v/value_error",
+        }
+    ]
+    stripped = _strip_input_from_errors(raw)
+
+    assert "input" not in stripped[0], "strip must remove the 'input' key"
+    assert "type" in stripped[0]
+    assert "loc" in stripped[0]
+    assert "msg" in stripped[0]
+    assert "ctx" in stripped[0]
+    assert "url" in stripped[0]
+
+
+def test_deeply_nested_content_returns_422_not_500():
+    """
+    Content exceeding MAX_CONTENT_DEPTH (64) must return 422, not 500.
+
+    Regression test for the bug where the RequestValidationError handler tried
+    to serialize a raw ValueError from ctx['error'] and raised a TypeError.
+    """
+    from fastapi.testclient import TestClient
+
+    from api import ingest as ingest_api
+    from api.app import app
+
+    ingest_api._reset_ingest_state_for_tests()
+    ingest_api._register_api_key_for_tests(
+        api_key="test-deep-nest-key",
+        key_id="test-deep-nest",
+        scopes={"ingest", "read", "write", "commit", "verify"},
+        expires_at="2099-01-01T00:00:00Z",
+    )
+    client = TestClient(app, raise_server_exceptions=False)
+
+    nested: dict = {"leaf": "value"}
+    for _ in range(70):
+        nested = {"child": nested}
+
+    resp = client.post(
+        "/ingest/records",
+        json={
+            "records": [
+                {
+                    "shard_id": "test-depth",
+                    "record_type": "document",
+                    "record_id": "deep-nest",
+                    "version": 1,
+                    "content": nested,
+                }
+            ]
+        },
+        headers={"X-API-Key": "test-deep-nest-key"},
+    )
+    assert resp.status_code == 422, (
+        f"Expected 422 for deeply nested content, got {resp.status_code}. Body: {resp.text[:300]}"
+    )
+    body = resp.json()
+    assert "detail" in body
+    # Must mention the depth limit
+    assert any(
+        "depth" in str(err).lower() or "nesting" in str(err).lower() for err in body["detail"]
+    ), f"422 detail should mention depth/nesting: {body['detail']}"
+
+
+def test_oversized_content_returns_422_not_500():
+    """
+    Content whose serialized size exceeds MAX_CONTENT_SIZE_ESTIMATE must return
+    422, not 500.
+    """
+    from fastapi.testclient import TestClient
+
+    from api import ingest as ingest_api
+    from api.app import app
+
+    ingest_api._reset_ingest_state_for_tests()
+    ingest_api._register_api_key_for_tests(
+        api_key="test-oversized-key",
+        key_id="test-oversized",
+        scopes={"ingest", "read", "write", "commit", "verify"},
+        expires_at="2099-01-01T00:00:00Z",
+    )
+    client = TestClient(app, raise_server_exceptions=False)
+
+    # Build a dict whose estimated JSON size exceeds the 16 MiB limit
+    oversized_value = "a" * (16 * 1024 * 1024 + 1)
+
+    resp = client.post(
+        "/ingest/records",
+        json={
+            "records": [
+                {
+                    "shard_id": "test-size",
+                    "record_type": "document",
+                    "record_id": "oversized",
+                    "version": 1,
+                    "content": {"field": oversized_value},
+                }
+            ]
+        },
+        headers={"X-API-Key": "test-oversized-key"},
+    )
+    assert resp.status_code == 422, (
+        f"Expected 422 for oversized content, got {resp.status_code}. Body: {resp.text[:300]}"
+    )
+    body = resp.json()
+    assert "detail" in body
+
+
 # ── H7: Storage layer error sanitization ───────────────────────────────
 
 
