@@ -301,16 +301,45 @@ class RequestBodySizeLimitMiddleware(BaseHTTPMiddleware):
 
 
 def _json_safe_validation_detail(value: Any) -> Any:
-    """Recursively sanitize validation payloads so JSON rendering cannot fail."""
+    """Recursively sanitize validation payloads so JSON rendering cannot fail.
+
+    Handles all common Pydantic v2 error payload types:
+    - str  — re-encoded with backslashreplace to survive lone surrogates
+    - list / tuple — recursed element-wise
+    - dict  — recursed value-wise (keys are always plain strings in Pydantic errors)
+    - BaseException — converted to str() so ctx['error'] (often a ValueError) is
+      serialisable; the raw exception object is NOT JSON-serialisable
+    - everything else — returned as-is (int, float, bool, None are all safe)
+    """
     if isinstance(value, str):
         return value.encode("utf-8", "backslashreplace").decode("utf-8")
-    if isinstance(value, list):
-        return [_json_safe_validation_detail(item) for item in value]
-    if isinstance(value, tuple):
+    if isinstance(value, (list, tuple)):
         return [_json_safe_validation_detail(item) for item in value]
     if isinstance(value, dict):
         return {key: _json_safe_validation_detail(item) for key, item in value.items()}
+    if isinstance(value, BaseException):
+        # ctx['error'] is a raw exception instance in Pydantic v2 value_error dicts.
+        # Convert to string so the error message is preserved without crashing the
+        # JSON serializer.
+        return str(value)
     return value
+
+
+def _strip_input_from_errors(errors: list[Any]) -> list[Any]:
+    """Remove the 'input' key from each Pydantic error dict before serialization.
+
+    The 'input' field echoes the raw user-supplied payload back in the response.
+    For validation errors on very large or pathological inputs (e.g. deeply-nested
+    JSON, oversized strings) this bloats the response and potentially re-serializes
+    the same invalid data.  Stripping it keeps 422 responses small.
+
+    Note: ``FastAPI``'s ``RequestValidationError.errors()`` does not accept
+    ``include_input=False`` (that parameter belongs to Pydantic's own
+    ``ValidationError.errors()``), so we strip the key in post-processing instead.
+    """
+    return [
+        {k: v for k, v in e.items() if k != "input"} if isinstance(e, dict) else e for e in errors
+    ]
 
 
 def create_app() -> FastAPI:
@@ -370,10 +399,22 @@ def create_app() -> FastAPI:
     async def request_validation_exception_handler(
         request: Request, exc: RequestValidationError
     ) -> JSONResponse:
-        """Return validation errors without re-serializing invalid Unicode input."""
+        """Return validation errors without re-serializing invalid Unicode input.
+
+        ``_strip_input_from_errors`` removes the raw user-supplied payload from
+        each error dict before serialization.  This keeps 422 responses small
+        (the input may be a deeply-nested JSON structure), avoids echoing
+        potentially invalid data back to the caller, and prevents large or
+        exception-valued entries from crashing the JSON encoder.
+        ``_json_safe_validation_detail`` then converts any remaining
+        non-serializable values (e.g. the ``ValueError`` stored in
+        ``ctx['error']`` by Pydantic v2) to safe strings.
+        """
         return JSONResponse(
             status_code=422,
-            content={"detail": _json_safe_validation_detail(exc.errors())},
+            content={
+                "detail": _json_safe_validation_detail(_strip_input_from_errors(exc.errors()))
+            },
         )
 
     # FOIA routers
