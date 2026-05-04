@@ -35,6 +35,53 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SCRIPT_SELF="${SCRIPT_DIR}/$(basename "${BASH_SOURCE[0]}")"
 cd "${SCRIPT_DIR}"
 
+# -----------------------------------------------------------------------
+# Fail-fast prerequisite checks
+#
+# Cryptographic CI must fail early and clearly rather than deep inside
+# transitive vendor tooling (e.g. rapidsnark/ffiasm).  The ZK proof build
+# chain resolves native C++ compilation at runtime through npm postinstall
+# hooks and snarkjs subprocesses; a missing tool produces an opaque
+# exit-code 1 dozens of minutes into a long build.  These checks surface
+# missing dependencies while the context is still obvious and actionable.
+# -----------------------------------------------------------------------
+_check_required_tool() {
+  local tool="${1}"
+  local install_hint="${2:-}"
+  if ! command -v "${tool}" &>/dev/null; then
+    echo "ERROR: Required tool '${tool}' not found in PATH." >&2
+    if [[ -n "${install_hint}" ]]; then
+      echo "       ${install_hint}" >&2
+    fi
+    echo "       Aborting before expensive circuit/proof setup — fix the environment and retry." >&2
+    exit 1
+  fi
+}
+
+# JavaScript runtime — required to run snarkjs and circom wasm binaries
+_check_required_tool "node" \
+  "Install Node.js >= 18 from https://nodejs.org/ or via your package manager."
+_check_required_tool "npm" \
+  "npm ships with Node.js; re-install Node.js to restore it."
+_check_required_tool "npx" \
+  "npx ships with npm >= 5.2.0; upgrade npm with: npm install -g npm"
+
+# Native C++ toolchain — required by rapidsnark/ffiasm (transitive snarkjs
+# dependency) which compiles field-arithmetic code at proof-generation time.
+# These tools are invoked by node subprocesses, so their absence produces a
+# cryptic failure deep inside the vendor build rather than a clear error here.
+_check_required_tool "make" \
+  "Install build tools: sudo apt-get install -y build-essential  (Debian/Ubuntu)
+                        brew install make  (macOS)"
+_check_required_tool "g++" \
+  "Install the GNU C++ compiler: sudo apt-get install -y g++  (Debian/Ubuntu)
+                                 brew install gcc  (macOS)"
+_check_required_tool "nasm" \
+  "Install nasm (x86 assembler): sudo apt-get install -y nasm  (Debian/Ubuntu)
+                                 brew install nasm  (macOS)"
+
+unset -f _check_required_tool
+
 BUILD_DIR="${SCRIPT_DIR}/build"
 KEYS_DIR="${SCRIPT_DIR}/keys"
 VKEYS_DIR="${KEYS_DIR}/verification_keys"
