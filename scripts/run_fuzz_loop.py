@@ -462,7 +462,11 @@ def _run_loop(args: argparse.Namespace) -> int:
         if args.smoke or seed is not None:
             pass_seed = seed if seed is not None else 0
         else:
-            pass_seed = secrets.randbelow(2_147_483_647) + 1
+            # Generate a seed in [1, 2^31-1] — strictly positive so marathon passes
+            # are always distinct from the smoke seed (0), maximising Hypothesis
+            # exploration across passes.  secrets.randbelow(n) returns [0, n), so
+            # +1 shifts the range to [1, 2^31-1] (= INT32_MAX inclusive).
+            pass_seed = secrets.randbelow(2**31 - 1) + 1
 
         cmd = _build_pytest_cmd(modules, marker, pass_seed, platform_name)
         ok, _ = _run_pass(cmd, env, pass_num, pass_seed)

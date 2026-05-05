@@ -291,10 +291,11 @@ oversized_field_strings = st.one_of(
 )
 
 # Unicode edge cases.
-# Note: lone surrogates (\ud800, \udc00) are excluded because Python's standard
-# json.dumps rejects them, making them impossible to send in an HTTP JSON body.
-# The API therefore never sees them — they would produce a test-client encoding
-# error before reaching the server.
+# Note: lone surrogates (any code point in the range \ud800-\udfff — comprising
+# high surrogates \ud800-\udbff and low surrogates \udc00-\udfff) are excluded
+# because Python's standard json.dumps rejects them, making them impossible to
+# send in an HTTP JSON body.  The API therefore never sees them — they would
+# produce a test-client encoding error before reaching the server.
 unicode_edge_strings = st.sampled_from(
     [
         "\u0000",  # null byte
