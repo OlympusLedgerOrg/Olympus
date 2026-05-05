@@ -60,7 +60,7 @@ class TestCanonicalEventFromRaw:
         assert event.canonical_bytes
 
     def test_whitespace_preservation(self) -> None:
-        """Canonical event hashes preserve ordinary string whitespace."""
+        """Canonical events preserve string whitespace and hash whitespace changes."""
         e1 = CanonicalEvent.from_raw({"text": "hello  world"}, schema_version="v1")
         e2 = CanonicalEvent.from_raw({"text": "hello world"}, schema_version="v1")
         e3 = CanonicalEvent.from_raw({"text": "hello  world"}, schema_version="v1")

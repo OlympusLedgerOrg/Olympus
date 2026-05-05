@@ -119,7 +119,7 @@ def test_cli_format_bytes(sample_document):
 
     assert result.returncode == 0
 
-    # Should be compact JSON: no pretty-printing whitespace outside preserved string values.
+    # Compare against json.dumps with compact separators to verify no structural pretty-printing.
     output = result.stdout.strip()
     assert output.startswith('{"metadata"')
     parsed = json.loads(output)
