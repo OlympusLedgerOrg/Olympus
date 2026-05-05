@@ -119,7 +119,7 @@ def test_cli_format_bytes(sample_document):
 
     assert result.returncode == 0
 
-    # Should be compact JSON (no structural whitespace outside string values)
+    # Should be compact JSON: no pretty-printing whitespace outside preserved string values.
     output = result.stdout.strip()
     assert output.startswith('{"metadata"')
     assert output == '{"metadata":{"author":"John   Doe"},"title":"Test  Document","version":1}'
