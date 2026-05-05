@@ -460,9 +460,10 @@ def _run_loop(args: argparse.Namespace) -> int:
             return pass_num < total_passes
         if end_time is not None:
             return time.monotonic() < end_time
-        # Neither bound set — should never happen in normal use (all code
-        # paths above always set at least one of total_passes/end_time).
-        return False
+        # Unreachable: all code paths above set at least one of total_passes/end_time.
+        raise RuntimeError(
+            "Internal error: neither total_passes nor end_time is set — argument handling has a bug"
+        )
 
     while _should_continue():
         pass_num += 1
