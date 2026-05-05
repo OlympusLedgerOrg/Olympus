@@ -40,7 +40,6 @@ from protocol.canonicalizer import canonicalization_provenance
 from protocol.hashes import hash_bytes
 from protocol.ssmf import verify_nonexistence_proof, verify_proof
 from tests.fuzz.artifacts import save_artifact
-from tests.fuzz.conftest import _EXAMPLES_DIR  # noqa: F401 — ensures profile loaded
 from tests.fuzz.strategies import (
     OP_APPEND,
     OP_CHECKPOINT,
@@ -66,11 +65,13 @@ TEST_DB = os.environ.get("TEST_DATABASE_URL", "")
 
 _RUST_AVAILABLE = False
 try:
-    from olympus_core import RustSparseMerkleTree as _RST  # noqa: F401
+    import olympus_core
+
+    getattr(olympus_core, "RustSparseMerkleTree")
 
     _RUST_AVAILABLE = True
-except ImportError:
-    pass
+except (ImportError, AttributeError):
+    _RUST_AVAILABLE = False
 
 pytestmark = [
     pytest.mark.fuzz,

@@ -103,9 +103,6 @@ _LEAK_PATTERNS: list[re.Pattern[str]] = [
     re.compile(r"OLYMPUS_[A-Z_]+=\S+", re.IGNORECASE),  # env var values
 ]
 
-_VALID_4XX_STATUSES = {400, 401, 403, 404, 409, 422}
-_VALID_SUCCESS_STATUSES = {200, 201, 204}
-
 
 def _assert_no_leakage(body_text: str, context: str = "") -> None:
     """Assert that a response body contains no sensitive material."""
@@ -131,10 +128,6 @@ def _sanitize_response_body(resp_text: str) -> str:
 _PROTECTED_ENDPOINTS_POST = [
     "/ingest/records",
     "/ingest/commit",
-]
-
-_PROTECTED_ENDPOINTS_GET_WITH_AUTH = [
-    # These require auth in some configurations; test missing auth behaviour
 ]
 
 
