@@ -63,6 +63,8 @@ class TestCanonicalEventFromRaw:
         """Canonical event hashes preserve ordinary string whitespace."""
         e1 = CanonicalEvent.from_raw({"text": "hello  world"}, schema_version="v1")
         e2 = CanonicalEvent.from_raw({"text": "hello world"}, schema_version="v1")
+        assert e1.payload["text"] == "hello  world"
+        assert e2.payload["text"] == "hello world"
         assert e1.hash_hex != e2.hash_hex
 
 
