@@ -247,7 +247,7 @@ jobs:
           hypothesis-fuzz-security-
 
     - name: Run 24-hour security fuzz marathon
-      run: bash scripts/fuzz_24h.sh --security-only
+      run: python scripts/run_fuzz_loop.py --security-only --hours ${{ env.FUZZ_HOURS }}
 
     - name: Upload fuzz failure artifacts
       if: always()

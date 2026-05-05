@@ -84,7 +84,7 @@ if ($Modules.Count -eq 0) {
 }
 
 # ---------------------------------------------------------------------------
-# Smoke mode
+# Smoke mode: single pass (direct pytest — no loop overhead)
 # ---------------------------------------------------------------------------
 if ($Smoke) {
     Write-Host "--- Smoke pass ---"
@@ -94,34 +94,17 @@ if ($Smoke) {
 }
 
 # ---------------------------------------------------------------------------
-# Marathon mode
+# Marathon mode: delegate to the cross-platform Python loop runner.
+#
+# run_fuzz_loop.py provides:
+#   - OS detection (Windows/Linux/macOS)
+#   - Windows: -p no:cacheprovider + NO_COLOR=1 + PYTHONIOENCODING=utf-8
+#   - Per-pass timing and cumulative pass/fail statistics
+#   - --stop-on-fail, --count, --max, --hours, --os flags
 # ---------------------------------------------------------------------------
-$StartTime = Get-Date
-$EndTime   = $StartTime.AddHours($FuzzHours)
-$Pass      = 0
+$LoopArgs = @("--hours", $FuzzHours.ToString())
+if ($SecurityOnly) { $LoopArgs += "--security-only" }
+elseif ($StorageOnly) { $LoopArgs += "--storage-only" }
 
-Write-Host "Marathon start: $StartTime"
-Write-Host "Marathon end:   $EndTime"
-Write-Host ""
-
-while ((Get-Date) -lt $EndTime) {
-    $Pass++
-    $Seed = (Get-Random -Minimum 1 -Maximum 2147483647)
-    Write-Host "=== Pass $Pass ($(Get-Date -Format 'o')) seed=$Seed ==="
-
-    & pytest @Modules -v --tb=short -m $Marker --hypothesis-seed=$Seed
-    if ($LASTEXITCODE -ne 0) {
-        Write-Warning "FAILURE detected on pass $Pass (seed=$Seed). Artifacts:"
-        Get-ChildItem "$ArtifactDir\*.json" -ErrorAction SilentlyContinue |
-            Sort-Object LastWriteTime -Descending |
-            Select-Object -First 5 |
-            Format-Table Name, Length, LastWriteTime
-        # Continue running to accumulate more failures
-    }
-}
-
-Write-Host ""
-Write-Host "=== Marathon complete after $Pass passes ==="
-Write-Host "Artifacts saved to: $ArtifactDir"
-$artifacts = Get-ChildItem "$ArtifactDir\*.json" -ErrorAction SilentlyContinue
-if ($artifacts) { $artifacts | Format-Table Name, Length } else { Write-Host "(no failure artifacts)" }
+& python scripts/run_fuzz_loop.py @LoopArgs
+exit $LASTEXITCODE

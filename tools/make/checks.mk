@@ -91,10 +91,10 @@ fuzz-security-smoke:
 	  -v --tb=short -m "fuzz and security" \
 	  --hypothesis-seed=0
 
-## fuzz-24h: 24-hour local reliability + security fuzz marathon
+## fuzz-24h: 24-hour local reliability + security fuzz marathon (cross-platform)
 fuzz-24h:
-	bash scripts/fuzz_24h.sh
+	python scripts/run_fuzz_loop.py --hours 24
 
-## fuzz-security-24h: 24-hour local security-only fuzz marathon
+## fuzz-security-24h: 24-hour local security-only fuzz marathon (cross-platform)
 fuzz-security-24h:
-	bash scripts/fuzz_24h.sh --security-only
+	python scripts/run_fuzz_loop.py --security-only --hours 24

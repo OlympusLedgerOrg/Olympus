@@ -38,7 +38,16 @@ settings.register_profile(
     database=DirectoryBasedExampleDatabase(_EXAMPLES_DIR),
 )
 
-settings.load_profile(os.environ.get("HYPOTHESIS_PROFILE", "default"))
+# Load the requested profile.  Fuzz-specific profiles (fuzz_smoke, fuzz_ci,
+# fuzz_24h) are registered by tests/fuzz/conftest.py which loads *after* this
+# file.  If an unrecognised profile is requested we fall back to "default" here
+# so pytest collection does not abort; tests/fuzz/conftest.py will re-apply the
+# correct settings once its profiles are registered.
+_requested_profile = os.environ.get("HYPOTHESIS_PROFILE", "default")
+try:
+    settings.load_profile(_requested_profile)
+except Exception:
+    settings.load_profile("default")
 
 
 def pytest_configure(config):
