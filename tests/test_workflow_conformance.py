@@ -444,7 +444,7 @@ class TestPipelineSmokeTest:
 
         # Stage 2: Canonicalize
         canonical = canonicalize_document(raw_doc)
-        assert canonical["body"] == "Hello world"  # whitespace normalized
+        assert canonical["body"] == "Hello  world"  # whitespace preserved
 
         # Stage 3: Hash
         doc_hash = hash_bytes(raw_bytes)

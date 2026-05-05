@@ -22,6 +22,7 @@ _patches.apply_all()
 import json as _json_mod
 import logging
 import os
+from collections.abc import Sequence
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any
@@ -327,7 +328,7 @@ def _json_safe_validation_detail(value: Any) -> Any:
     return value
 
 
-def _strip_input_from_errors(errors: list[Any]) -> list[Any]:
+def _strip_input_from_errors(errors: Sequence[Any]) -> list[Any]:
     """Remove the 'input' key from each Pydantic error dict before serialization.
 
     The 'input' field echoes the raw user-supplied payload back in the response.
