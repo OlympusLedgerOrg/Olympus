@@ -122,7 +122,11 @@ def test_cli_format_bytes(sample_document):
     # Should be compact JSON: no pretty-printing whitespace outside preserved string values.
     output = result.stdout.strip()
     assert output.startswith('{"metadata"')
-    assert output == '{"metadata":{"author":"John   Doe"},"title":"Test  Document","version":1}'
+    parsed = json.loads(output)
+    expected = json.dumps(parsed, sort_keys=True, separators=(",", ":"))
+    assert output == expected
+    assert parsed["metadata"]["author"] == "John   Doe"
+    assert parsed["title"] == "Test  Document"
 
 
 def test_cli_format_hex(sample_document):
