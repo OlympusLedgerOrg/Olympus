@@ -18,7 +18,7 @@ REGISTRY_PATH = Path(__file__).parent.parent / "examples" / "federation_registry
 
 
 def test_olympus_canon_outputs_canonical_json(tmp_path):
-    """olympus canon normalizes whitespace and preserves deterministic output."""
+    """olympus canon preserves ordinary whitespace and deterministic output."""
     input_file = tmp_path / "input.json"
     input_file.write_text(json.dumps({"body": "Hello  world", "title": "Example"}))
 
@@ -30,7 +30,7 @@ def test_olympus_canon_outputs_canonical_json(tmp_path):
 
     assert result.returncode == 0
     canonical = json.loads(result.stdout)
-    assert canonical["body"] == "Hello world"
+    assert canonical["body"] == "Hello  world"
 
 
 def test_olympus_node_list_outputs_registry_nodes() -> None:

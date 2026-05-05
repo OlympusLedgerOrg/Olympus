@@ -59,11 +59,11 @@ class TestCanonicalEventFromRaw:
         assert event.hash_hex
         assert event.canonical_bytes
 
-    def test_whitespace_normalization(self) -> None:
-        """Multiple spaces should be normalized to single spaces."""
+    def test_whitespace_preservation(self) -> None:
+        """Multiple spaces are semantically significant in canonical events."""
         e1 = CanonicalEvent.from_raw({"text": "hello  world"}, schema_version="v1")
         e2 = CanonicalEvent.from_raw({"text": "hello world"}, schema_version="v1")
-        assert e1.hash_hex == e2.hash_hex
+        assert e1.hash_hex != e2.hash_hex
 
 
 class TestCanonicalEventValidation:
