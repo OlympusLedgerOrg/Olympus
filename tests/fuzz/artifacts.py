@@ -93,6 +93,8 @@ def save_artifact(
     exception: BaseException | None = None,
     seed: int | None = None,
     profile: str | None = None,
+    node_id: str | None = None,
+    hypothesis_blob: str | None = None,
     # API / security test extras
     endpoint: str | None = None,
     expected_status: int | None = None,
@@ -111,8 +113,13 @@ def save_artifact(
         expected: Expected value (root hash hex, invariant, status code …).
         actual: Actual value observed.
         exception: Exception instance (if any).
-        seed: Hypothesis seed integer.
+        seed: Hypothesis seed integer (``--hypothesis-seed=N``).
         profile: Active Hypothesis profile name.
+        node_id: Pytest node ID of the failing test (e.g.
+            ``tests/fuzz/test_security_invariants_fuzz.py::test_foo``).
+        hypothesis_blob: Hypothesis reproduction blob from ``@reproduce_failure``
+            or ``print_blob=True`` output.  When present it is included in the
+            replay command so the exact minimised example can be re-run.
         endpoint: API endpoint or function name (for security tests).
         expected_status: Expected HTTP status code.
         actual_status: Actual HTTP status code returned.
@@ -131,18 +138,28 @@ def save_artifact(
         failing_operation = operations[failing_index]
 
     active_profile = profile or os.environ.get("HYPOTHESIS_PROFILE", "fuzz_smoke")
+    fuzz_max_examples = os.environ.get("FUZZ_MAX_EXAMPLES")
+    python_hash_seed = os.environ.get("PYTHONHASHSEED")
 
-    # Build replay command
+    # Build replay command with enough information to reproduce the failure
+    target = node_id or f"tests/fuzz/{_guess_module(test_name)}"
     replay_cmd_parts = [
         "pytest",
-        f"tests/fuzz/{_guess_module(test_name)}",
-        f"-k '{test_name}'",
+        target,
         "--tb=short",
         "-v",
     ]
     if seed is not None:
         replay_cmd_parts.append(f"--hypothesis-seed={seed}")
-    replay_cmd = " ".join(replay_cmd_parts)
+    if fuzz_max_examples is not None:
+        replay_cmd_parts.append(f"FUZZ_MAX_EXAMPLES={fuzz_max_examples}")
+    if hypothesis_blob is not None:
+        # Hypothesis blob allows exact re-run of the minimised failure even
+        # after the database has been cleared.
+        replay_cmd_parts.append(
+            f"  # To reproduce exactly, add @reproduce_failure('...', {hypothesis_blob!r})"
+        )
+    replay_cmd = " ".join(p for p in replay_cmd_parts if not p.startswith("#"))
 
     exc_text: str | None = None
     if exception is not None:
@@ -153,8 +170,12 @@ def save_artifact(
 
     artifact: dict[str, Any] = {
         "test_name": test_name,
+        "node_id": node_id,
         "seed": seed,
         "profile": active_profile,
+        "fuzz_max_examples": fuzz_max_examples,
+        "python_hash_seed": python_hash_seed,
+        "hypothesis_blob": hypothesis_blob,
         "timestamp": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
         "operations": _sanitize_value(operations[: failing_index + 1]),
         "failing_index": failing_index,

@@ -235,11 +235,19 @@ def _run_op(
         return {"op": op_type, "ok": True}
 
     if op_type == OP_VERIFY_SHARD_HEADER:
-        # INV-2 partial: replay should succeed for any shard with records
+        # INV-2: replay must succeed after every append.
+        # For fuzz_smoke we cap at the last 5 headers to keep CI fast;
+        # for fuzz_ci/fuzz_24h we use the full history so that corruption in
+        # older headers is not missed.
         shard_id_for_replay = f"{shard_namespace}.{op['shard_id']}"
         latest = storage.get_latest_header(shard_id_for_replay)
         if latest is not None:
-            result = storage.verify_state_replay(shard_id_for_replay, max_headers=5)
+            _active_profile = os.environ.get("HYPOTHESIS_PROFILE", "fuzz_smoke")
+            if _active_profile == "fuzz_smoke":
+                result = storage.verify_state_replay(shard_id_for_replay, max_headers=5)
+            else:
+                # fuzz_ci / fuzz_24h: verify full history — no header cap
+                result = storage.verify_state_replay(shard_id_for_replay)
             assert result["verified"], f"INV-2 FAIL: replay failed for {shard_id_for_replay}"
         return {"op": op_type, "ok": True}
 

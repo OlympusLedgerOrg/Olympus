@@ -479,19 +479,67 @@ def test_input_duplicate_record_id_no_ambiguous_state() -> None:
 @settings(max_examples=20, deadline=None)
 def test_input_extra_fields_do_not_affect_canonical_hash(content: dict[str, Any]) -> None:
     """
-    INPUT-8: Extra fields injected outside the canonical content envelope must
-    not alter the canonical hash of the content itself.
+    INPUT-8: The content_hash in the ingest response is derived from the
+    ``content`` field only.  Extra ingest-wrapper fields (shard_id,
+    record_type, record_id, version) must NOT alter the canonical hash of
+    the content itself.
+
+    Verification strategy
+    ---------------------
+    1. Compute the local canonical content hash.
+    2. Ingest the same ``content`` under two different (shard_id, record_type,
+       record_id, version) combinations — i.e., different wrapper metadata.
+    3. Assert the API-returned ``content_hash`` is identical in both responses
+       and matches the locally computed hash.
     """
-    # The canonical hash is computed over `content` only
-    doc_a = canonicalize_document(content)
-    hash_a = hash_bytes(document_to_bytes(doc_a))
+    client = _make_client()
 
-    # "Extra" top-level key added to the raw dict (not to content)
-    content_copy = dict(content)
-    doc_b = canonicalize_document(content_copy)
-    hash_b = hash_bytes(document_to_bytes(doc_b))
+    # Local canonical hash over `content` only
+    local_hash = hash_bytes(document_to_bytes(canonicalize_document(content))).hex()
 
-    assert hash_a == hash_b, "INPUT-8 FAIL: identical content produced different canonical hashes"
+    # Two records with different wrapper metadata but identical content
+    shard_a = f"fuzz-input8-a-{uuid.uuid4().hex[:8]}"
+    shard_b = f"fuzz-input8-b-{uuid.uuid4().hex[:8]}"
+
+    rec_a = {
+        "shard_id": shard_a,
+        "record_type": "document",
+        "record_id": "doc-wrapper-test-alpha",
+        "version": 1,
+        "content": content,
+    }
+    rec_b = {
+        "shard_id": shard_b,
+        "record_type": "artifact",  # different record_type
+        "record_id": "doc-wrapper-test-beta",  # different record_id
+        "version": 2,  # different version
+        "content": content,  # same content
+    }
+
+    resp_a = client.post("/ingest/records", json={"records": [rec_a]}, headers=_auth_headers())
+    if resp_a.status_code != 200:
+        return  # content rejected (e.g. too deep/large)
+
+    data_a = resp_a.json()
+    api_hash_a = data_a["results"][0]["content_hash"]
+
+    # API-computed hash must match local computation
+    assert api_hash_a == local_hash, (
+        f"INPUT-8 FAIL: API content_hash {api_hash_a!r} != local hash {local_hash!r}"
+    )
+
+    resp_b = client.post("/ingest/records", json={"records": [rec_b]}, headers=_auth_headers())
+    if resp_b.status_code != 200:
+        return
+
+    data_b = resp_b.json()
+    api_hash_b = data_b["results"][0]["content_hash"]
+
+    # Same content under different wrapper metadata → identical content_hash
+    assert api_hash_a == api_hash_b, (
+        f"INPUT-8 FAIL: same content under different wrapper metadata produced "
+        f"different hashes: {api_hash_a!r} vs {api_hash_b!r}"
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -556,6 +604,39 @@ def test_canon_different_payloads_different_hash(
 
 @pytest.mark.fuzz
 @pytest.mark.security
+def test_canon_space_vs_empty_string_regression() -> None:
+    """
+    CANON-2 regression: {"0": " "} and {"0": ""} must produce different hashes.
+
+    Hypothesis previously found this minimised failure: the whitespace
+    normalisation path inside canonicalize_document() collapsed " " → "",
+    making two semantically distinct documents hash-collide.
+    """
+    hash_space = hash_bytes(document_to_bytes({"0": " "}))
+    hash_empty = hash_bytes(document_to_bytes({"0": ""}))
+    assert hash_space != hash_empty, (
+        'CANON-2 regression: {"0":" "} and {"0":""} produced the same hash'
+    )
+
+
+@pytest.mark.fuzz
+@pytest.mark.security
+def test_canon_whitespace_string_distinctions() -> None:
+    """
+    CANON-2: Every whitespace-distinct string must produce a unique canonical hash.
+
+    Verifies that the cryptographic hash path preserves exact string values
+    including leading/trailing/internal whitespace and control characters.
+    """
+    strings = ["", " ", "  ", "a", " a", "a ", "\t", "\n", " a ", "a  b", "a b"]
+    hashes = [hash_bytes(document_to_bytes({"v": s})) for s in strings]
+    assert len(set(hashes)) == len(strings), (
+        "CANON-2: two or more whitespace-distinct strings produced the same hash"
+    )
+
+
+@pytest.mark.fuzz
+@pytest.mark.security
 @given(content=content_dicts)
 @settings(max_examples=50, deadline=None)
 def test_canon_field_order_invariance(content: dict[str, Any]) -> None:
@@ -577,11 +658,11 @@ def test_canon_field_order_invariance(content: dict[str, Any]) -> None:
 @settings(max_examples=30, deadline=None)
 def test_canon_whitespace_invariance(content: dict[str, Any]) -> None:
     """
-    CANON-4: Adding leading/trailing whitespace to string values that are later
-    stripped by canonicalization must not change the canonical hash.
+    CANON-4: The canonical JSON encoder is deterministic for the same Python dict.
 
-    Note: only tests the canonical JSON encoder directly; the full
-    canonicalize_document() pipeline may legitimately alter whitespace.
+    Note: tests canonical_json_encode() directly.  canonicalize_document()
+    intentionally preserves exact string values (including whitespace) so that
+    different strings always produce different hashes (CANON-2 fix).
     """
     # Canonical JSON: same Python dict must always encode to the same bytes
     encoded_a = canonical_json_encode(content)
@@ -911,7 +992,17 @@ def test_replay_different_content_same_id_is_different_record(
 ) -> None:
     """
     REPLAY-2: Two records with the same (shard, record_type, record_id, version)
-    but different content must not produce the same content_hash.
+    but semantically different content must produce different content_hashes.
+
+    Policy:
+    * same ID + same hash   → idempotent (deduplicated, proof_id unchanged)
+    * same ID + diff hash   → second submission yields a different content_hash
+                              (the API must not collapse the difference)
+
+    This test verifies the second policy by injecting a semantically distinct
+    ``_extra_key`` into the content and asserting:
+      a) the API accepts both submissions (no 500), and
+      b) when the hashes differ locally, the API-reported hashes also differ.
     """
     from api import ingest as ingest_api
     from api.app import app
@@ -933,6 +1024,7 @@ def test_replay_different_content_same_id_is_different_record(
         "version": 1,
     }
 
+    # --- First submission -------------------------------------------------------
     resp1 = client.post(
         "/ingest/records",
         json={"records": [{**record_base, "content": content}]},
@@ -941,17 +1033,38 @@ def test_replay_different_content_same_id_is_different_record(
     if resp1.status_code != 200:
         return  # skip if content is rejected (e.g. too deep)
 
-    different_content = {**content, "_extra_key": "differs-semantically"}
-    hash_a = hash_bytes(document_to_bytes(canonicalize_document(content)))
-    hash_b = hash_bytes(document_to_bytes(canonicalize_document(different_content)))
+    hash_api_1 = resp1.json()["results"][0]["content_hash"]
 
-    # If canonicalization collapsed the semantic difference (e.g. the extra key
-    # was ignored), skip — this is not a bug.
-    if hash_a == hash_b:
+    # --- Second submission: same record identity, different content -------------
+    different_content = {**content, "_extra_key": "differs-semantically"}
+    hash_local_1 = hash_bytes(document_to_bytes(canonicalize_document(content))).hex()
+    hash_local_2 = hash_bytes(document_to_bytes(canonicalize_document(different_content))).hex()
+
+    # If the canonicalizer collapses the difference (e.g. _extra_key was
+    # rejected at schema validation), skip — not a bug.
+    if hash_local_1 == hash_local_2:
         return
 
-    # Reaching here guarantees hash_a != hash_b (the guard above already ensured it)
-    # so no further assertion is needed.
+    resp2 = client.post(
+        "/ingest/records",
+        json={"records": [{**record_base, "content": different_content}]},
+        headers=_auth_headers(),
+    )
+    assert resp2.status_code != 500, (
+        f"REPLAY-2 FAIL: second submission caused 500: {resp2.text[:200]}"
+    )
+
+    if resp2.status_code != 200:
+        return  # second submission legitimately rejected — acceptable
+
+    hash_api_2 = resp2.json()["results"][0]["content_hash"]
+
+    # Locally the hashes differ → the API must also report different hashes
+    assert hash_api_1 != hash_api_2, (
+        f"REPLAY-2 FAIL: same-ID/different-content submissions produced the same "
+        f"content_hash ({hash_api_1!r}), meaning the API collapsed a semantic "
+        f"difference that the local canonicalizer preserved"
+    )
 
 
 @pytest.mark.fuzz
@@ -1193,21 +1306,29 @@ def test_api_error_response_no_stack_trace() -> None:
 @pytest.mark.security
 @pytest.mark.api
 @given(
-    n_records=st.integers(min_value=1, max_value=50),
+    n_records=st.sampled_from([1, 50, 99, 100, 999, 1000, 1001, 1002, 1005]),
     content=content_dicts,
 )
-@settings(max_examples=10, deadline=None)
+@settings(max_examples=18, deadline=None)
 def test_api_batch_size_limit_enforced(
     n_records: int,
     content: dict[str, Any],
 ) -> None:
     """
-    API-5: Large batches must be bounded or rejected without crashing.
-    Batches > 100 records should be rejected with a 4xx response.
+    API-5: Batch size must be bounded by the schema limit (1000 records).
+
+    * Batches of 1–1000 must not cause a 500.
+    * Batches >1000 must be rejected with 422 (schema validation) or another
+      4xx — never a 500 crash.
+
+    The generator is seeded with boundary values that always include sizes
+    above the limit (1001, 1002, 1005) so the over-limit path is exercised in
+    every Hypothesis run.
     """
+    _SCHEMA_MAX = 1000  # BatchIngestionRequest max_length
+
     client = _make_client()
 
-    # Build a batch of n_records records (may be <= or > the limit)
     records = [
         {
             "shard_id": "fuzz-batch-limit",
@@ -1223,5 +1344,12 @@ def test_api_batch_size_limit_enforced(
         json={"records": records},
         headers=_auth_headers(),
     )
-    assert resp.status_code != 500, f"API-5 FAIL: batch of {n_records} records caused 500"
+
+    if n_records > _SCHEMA_MAX:
+        assert resp.status_code in (400, 422), (
+            f"API-5 FAIL: batch of {n_records} records (>{_SCHEMA_MAX}) returned "
+            f"unexpected status {resp.status_code} — expected 422"
+        )
+    else:
+        assert resp.status_code != 500, f"API-5 FAIL: batch of {n_records} records caused 500"
     _assert_no_leakage(resp.text, context="batch-size")

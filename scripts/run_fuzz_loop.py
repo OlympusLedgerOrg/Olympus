@@ -414,8 +414,16 @@ def _run_loop(args: argparse.Namespace) -> int:
         total_passes: int | None = 1
         end_time: float | None = None
     elif args.count is not None:
-        total_passes = args.count if args.count > 0 else None
-        end_time = None
+        if args.count == 0:
+            # --count 0: unlimited passes bounded by the default hours limit.
+            # This prevents accidental infinite runs — if you truly want no time
+            # bound, use a very large --hours value explicitly.
+            hours = 24.0
+            total_passes = None
+            end_time = time.monotonic() + hours * 3600
+        else:
+            total_passes = args.count
+            end_time = None
     else:
         hours = args.hours if args.hours is not None else 24.0
         total_passes = None
@@ -452,7 +460,9 @@ def _run_loop(args: argparse.Namespace) -> int:
             return pass_num < total_passes
         if end_time is not None:
             return time.monotonic() < end_time
-        return True  # unlimited (--count 0)
+        # Neither bound set — should never happen in normal use (all code
+        # paths above always set at least one of total_passes/end_time).
+        return False
 
     while _should_continue():
         pass_num += 1

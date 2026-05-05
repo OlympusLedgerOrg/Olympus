@@ -181,10 +181,16 @@ def canonicalize_document(
                 items = sorted(items, key=_sort_key)
             return items
         if isinstance(value, str):
-            normalized = normalize_whitespace(value)
+            # Preserve exact string values in the cryptographic hash path.
+            # Whitespace normalization (trimming, collapsing) is intentionally
+            # NOT applied here because it would erase meaningful differences —
+            # e.g. {"0": " "} and {"0": ""} must produce distinct hashes.
+            # Business-level whitespace normalisation must be done *before*
+            # calling canonicalize_document(), keeping policy separate from
+            # cryptographic commitments.
             if scrub_homoglyphs:
-                normalized = _scrub_homoglyphs(normalized)
-            return normalized
+                return _scrub_homoglyphs(value)
+            return value
         if isinstance(value, bool):
             # bool is a subclass of int; must be checked before int
             return value

@@ -48,29 +48,63 @@ def test_canonicalize_document_nested_dict():
     assert list(result["outer"].keys()) == ["a", "z"]
 
 
-def test_canonicalize_document_normalizes_whitespace():
-    """Test that whitespace in string values is normalized."""
+def test_canonicalize_document_preserves_string_whitespace():
+    """Test that whitespace in string values is preserved exactly (CANON-2 fix).
+
+    canonicalize_document() must NOT normalise whitespace in string values
+    because {"0": " "} and {"0": ""} are semantically different documents and
+    must produce different canonical hashes.  Business-level whitespace
+    normalisation belongs in the caller, not in the cryptographic hash path.
+    """
     doc = {"field1": "hello   world", "field2": "multiple  \t  spaces"}
     result = canonicalize_document(doc)
 
-    assert result["field1"] == "hello world"
-    assert result["field2"] == "multiple spaces"
+    assert result["field1"] == "hello   world"
+    assert result["field2"] == "multiple  \t  spaces"
+
+
+def test_canonicalize_document_distinguishes_empty_from_space():
+    """CANON-2 regression: {"0": " "} and {"0": ""} must produce different hashes."""
+    from protocol.hashes import hash_bytes
+
+    hash_space = hash_bytes(document_to_bytes({"0": " "}))
+    hash_empty = hash_bytes(document_to_bytes({"0": ""}))
+    assert hash_space != hash_empty, (
+        "CANON-2 regression: space and empty string produce the same hash"
+    )
+
+
+def test_canonicalize_document_whitespace_string_distinctions():
+    """CANON-2: each distinct whitespace-containing string must hash differently."""
+    from protocol.hashes import hash_bytes
+
+    strings = ["", " ", "  ", "a", " a", "a ", "\t", "\n", " a ", "a  b", "a b"]
+    hashes = [hash_bytes(document_to_bytes({"v": s})) for s in strings]
+    # All must be distinct
+    assert len(set(hashes)) == len(strings), (
+        "CANON-2: two or more whitespace-distinct strings produced the same hash"
+    )
 
 
 def test_canonicalize_document_with_list():
     """Test canonicalization of documents containing lists."""
-    doc = {"items": ["apple", "banana", "cherry", "cafe\u0301"]}
+    # List items that are plain ASCII strings are unchanged.
+    # NFD-form strings (e.g. "cafe\u0301") are no longer NFC-normalised by
+    # canonicalize_document(); exact string values are preserved so that the
+    # cryptographic hash reflects the exact bytes present in the document.
+    doc = {"items": ["apple", "banana", "cherry"]}
     result = canonicalize_document(doc)
 
     # List order should be preserved
-    assert result["items"] == ["apple", "banana", "cherry", "café"]
+    assert result["items"] == ["apple", "banana", "cherry"]
 
 
 def test_canonicalize_document_normalizes_nested_list_dict_strings():
-    """String normalization applies recursively to dicts nested inside lists."""
+    """String values in dicts nested inside lists are passed through unchanged."""
+    # NFD "cafe\u0301" is no longer NFC-converted; exact values are preserved.
     doc = {"items": [{"name": "cafe\u0301"}]}
     result = canonicalize_document(doc)
-    assert result["items"][0]["name"] == "café"
+    assert result["items"][0]["name"] == "cafe\u0301"
 
 
 def test_canonicalize_document_list_with_dicts():
@@ -142,7 +176,12 @@ def test_canonicalize_document_deterministic():
 
 
 def test_canonicalize_document_idempotent_with_unicode():
-    """Test idempotence and unicode handling in nested documents."""
+    """Test idempotence and unicode handling in nested documents.
+
+    canonicalize_document() is still idempotent: calling it twice on the same
+    dict returns the same result.  Whitespace inside string values is preserved
+    exactly (CANON-2 fix) — collapsing must be done by callers before this call.
+    """
     doc = {
         "title": "Résumé   of  José",
         "meta": {"author": "Zoë  Ångström"},
@@ -153,16 +192,24 @@ def test_canonicalize_document_idempotent_with_unicode():
     second = canonicalize_document(first)
 
     assert first == second
-    assert first["title"] == "Résumé of José"
-    assert first["meta"]["author"] == "Zoë Ångström"
-    assert first["sections"][0]["heading"] == "Intro 🌟"
-    assert first["sections"][0]["body"] == "Hello world"
+    # Whitespace is preserved, not collapsed
+    assert first["title"] == "Résumé   of  José"
+    assert first["meta"]["author"] == "Zoë  Ångström"
+    assert first["sections"][0]["heading"] == "Intro   🌟"
+    assert first["sections"][0]["body"] == "Hello   world"
 
 
-def test_document_to_bytes_normalizes_unicode_nfc():
-    """Document bytes must be stable for canonically equivalent Unicode strings."""
-    precomposed = {"name": "café"}
-    decomposed = {"name": "cafe\u0301"}
+def test_document_to_bytes_nfc_normalised_by_canonical_json():
+    """document_to_bytes produces NFC-stable output via canonical JSON NFC normalisation.
+
+    RFC 8785 / JCS mandates NFC normalisation of all string values before
+    encoding.  NFC and NFD forms of visually identical characters therefore
+    produce the same canonical bytes — equivalence is preserved at the JSON
+    layer, not in canonicalize_document().
+    """
+    precomposed = {"name": "café"}  # é = U+00E9 (NFC)
+    decomposed = {"name": "cafe\u0301"}  # e + combining accent (NFD)
+    # canonical_json_encode applies NFC → both map to the same bytes
     assert document_to_bytes(precomposed) == document_to_bytes(decomposed)
 
 
@@ -176,13 +223,16 @@ def test_canonicalize_json():
 
 
 def test_document_to_bytes():
-    """Test document_to_bytes produces canonical bytes."""
+    """Test document_to_bytes produces canonical bytes.
+
+    Keys are sorted; string values are preserved exactly (whitespace not collapsed).
+    """
     doc = {"name": "Alice  Smith", "id": 123}
     result = document_to_bytes(doc)
 
     assert isinstance(result, bytes)
-    # Should be canonical JSON with normalized whitespace
-    assert result == b'{"id":123,"name":"Alice Smith"}'
+    # Keys sorted, string preserved as-is (CANON-2 fix: whitespace not collapsed)
+    assert result == b'{"id":123,"name":"Alice  Smith"}'
 
 
 def test_document_to_bytes_deterministic():
@@ -220,15 +270,15 @@ def test_normalize_whitespace_empty_string():
 
 
 def test_canonicalize_document_with_whitespace_in_nested_strings():
-    """Test whitespace normalization in nested structures."""
+    """String values in nested structures are preserved exactly (CANON-2 fix)."""
     doc = {
         "outer": {"text": "multiple   spaces"},
         "items": [{"description": "  leading and trailing  "}],
     }
     result = canonicalize_document(doc)
 
-    assert result["outer"]["text"] == "multiple spaces"
-    assert result["items"][0]["description"] == "leading and trailing"
+    assert result["outer"]["text"] == "multiple   spaces"
+    assert result["items"][0]["description"] == "  leading and trailing  "
 
 
 def test_canonicalize_document_complex_real_world():
@@ -255,11 +305,12 @@ def test_canonicalize_document_complex_real_world():
     assert list(result.keys()) == ["content", "metadata", "title", "version"]
     assert list(result["metadata"].keys()) == ["author", "created", "tags"]
 
-    # Check whitespace normalization
-    assert result["title"] == "Important Document"
-    assert result["metadata"]["author"] == "John Doe"
-    assert result["content"]["sections"][0]["heading"] == "Section 1"
-    assert result["content"]["sections"][0]["text"] == "This is content"
+    # String values are preserved exactly — whitespace is no longer collapsed
+    # (CANON-2 fix: business-level normalisation must happen before this call)
+    assert result["title"] == "Important  Document"
+    assert result["metadata"]["author"] == "John   Doe"
+    assert result["content"]["sections"][0]["heading"] == "Section  1"
+    assert result["content"]["sections"][0]["text"] == "This  is   content"
 
 
 def test_normalize_whitespace_nbsp():

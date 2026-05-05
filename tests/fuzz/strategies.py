@@ -27,8 +27,9 @@ from hypothesis import strategies as st
 # ---------------------------------------------------------------------------
 
 # Valid shard identifiers (match SHARD_ID_PATTERN in api/schemas/ingest.py)
+# Pattern: ^[a-zA-Z0-9_.:\-]+$  — colon is a supported delimiter (e.g. "watauga:2025:budget")
 shard_ids = st.text(
-    alphabet=string.ascii_letters + string.digits + "_.-",
+    alphabet=string.ascii_letters + string.digits + "_.-:",
     min_size=1,
     max_size=64,
 ).filter(lambda s: s and not s.startswith(".") and not s.endswith("."))

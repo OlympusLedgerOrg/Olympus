@@ -39,6 +39,7 @@ from pathlib import Path
 
 from hypothesis import HealthCheck, Phase, settings
 from hypothesis.database import DirectoryBasedExampleDatabase
+from hypothesis.errors import InvalidArgument as _HypothesisInvalidArgument
 
 
 # ---------------------------------------------------------------------------
@@ -101,6 +102,8 @@ settings.register_profile(
 _profile = os.environ.get("HYPOTHESIS_PROFILE", "fuzz_smoke")
 try:
     settings.load_profile(_profile)
-except Exception:
-    # Unknown profile — fall back to fuzz_smoke so tests still run
+except _HypothesisInvalidArgument:
+    # Only catch the "unknown profile" case.  Any other error (real
+    # configuration bugs, Hypothesis API changes, etc.) must propagate so CI
+    # fails fast rather than silently running the wrong profile.
     settings.load_profile("fuzz_smoke")
