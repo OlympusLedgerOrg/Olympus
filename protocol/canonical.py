@@ -4,8 +4,10 @@ Canonical document representation for Olympus
 This module implements deterministic canonicalization of documents to ensure
 consistent hashing regardless of superficial formatting differences.
 
-This provides basic structural canonicalization: JSON key sorting, whitespace
-normalization, and deterministic byte encoding. For multi-format artifact
+This provides basic structural canonicalization: JSON key sorting, Unicode
+normalization, numeric normalization, and deterministic byte encoding. String
+whitespace is preserved in the cryptographic document hash path. For
+multi-format artifact
 ingestion (JCS/RFC 8785, HTML, DOCX, PDF) with version-pinned pipelines,
 see protocol/canonicalizer.py instead.
 
@@ -181,10 +183,16 @@ def canonicalize_document(
                 items = sorted(items, key=_sort_key)
             return items
         if isinstance(value, str):
-            normalized = normalize_whitespace(value)
+            # Preserve exact string values in the cryptographic hash path.
+            # Whitespace normalization (trimming, collapsing) is intentionally
+            # NOT applied here because it would erase meaningful differences —
+            # e.g. {"0": " "} and {"0": ""} must produce distinct hashes.
+            # Business-level whitespace normalisation must be done *before*
+            # calling canonicalize_document(), keeping policy separate from
+            # cryptographic commitments.
             if scrub_homoglyphs:
-                normalized = _scrub_homoglyphs(normalized)
-            return normalized
+                return _scrub_homoglyphs(value)
+            return value
         if isinstance(value, bool):
             # bool is a subclass of int; must be checked before int
             return value

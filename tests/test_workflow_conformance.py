@@ -303,7 +303,7 @@ class TestEpochAndEvents:
         event = CanonicalEvent.from_raw({"body": "hello  world"}, "1.0.0")
         assert event.schema_version == "1.0.0"
         assert event.hash_hex
-        assert event.payload["body"] == "hello world"
+        assert event.payload["body"] == "hello  world"
 
     def test_canonical_event_rejects_non_dict(self):
         """CanonicalEvent.from_raw raises ValueError for non-dict input."""
@@ -444,7 +444,7 @@ class TestPipelineSmokeTest:
 
         # Stage 2: Canonicalize
         canonical = canonicalize_document(raw_doc)
-        assert canonical["body"] == "Hello world"  # whitespace normalized
+        assert canonical["body"] == "Hello  world"  # whitespace preserved
 
         # Stage 3: Hash
         doc_hash = hash_bytes(raw_bytes)

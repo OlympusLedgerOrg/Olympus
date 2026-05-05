@@ -161,10 +161,10 @@ class TestDocumentCanonicalGoldenValues:
     """Pin exact canonical document outputs for known inputs."""
 
     def test_simple_document(self):
-        """Simple document with sorted keys and normalized whitespace."""
+        """Simple document with sorted keys and preserved whitespace."""
         doc = {"title": "Test", "body": "Hello   world"}
         canonical = canonicalize_document(doc)
-        assert canonical == {"body": "Hello world", "title": "Test"}
+        assert canonical == {"body": "Hello   world", "title": "Test"}
 
     def test_nested_document(self):
         """Nested document with recursive key sorting."""

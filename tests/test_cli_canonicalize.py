@@ -49,9 +49,9 @@ def test_cli_basic_canonicalization(sample_document):
     # Output should be valid JSON
     output = json.loads(result.stdout)
 
-    # Should have normalized whitespace
-    assert output["title"] == "Test Document"
-    assert output["metadata"]["author"] == "John Doe"
+    # Canonicalization preserves ordinary string whitespace.
+    assert output["title"] == "Test  Document"
+    assert output["metadata"]["author"] == "John   Doe"
 
     # Keys should be sorted
     assert list(output.keys()) == ["metadata", "title", "version"]
@@ -91,7 +91,7 @@ def test_cli_output_flag(sample_document, tmp_path):
     with open(output_path) as f:
         output = json.load(f)
 
-    assert output["title"] == "Test Document"
+    assert output["title"] == "Test  Document"
 
 
 def test_cli_format_json(sample_document):
@@ -119,10 +119,14 @@ def test_cli_format_bytes(sample_document):
 
     assert result.returncode == 0
 
-    # Should be compact JSON (no newlines or spaces)
+    # Compare against json.dumps with compact separators to verify no structural pretty-printing.
     output = result.stdout.strip()
     assert output.startswith('{"metadata"')
-    assert "  " not in output  # No double spaces
+    parsed = json.loads(output)
+    expected = json.dumps(parsed, sort_keys=True, separators=(",", ":"))
+    assert output == expected
+    assert parsed["metadata"]["author"] == "John   Doe"
+    assert parsed["title"] == "Test  Document"
 
 
 def test_cli_format_hex(sample_document):
@@ -240,9 +244,9 @@ def test_cli_complex_document(tmp_path):
 
     output = json.loads(result.stdout)
 
-    # Check whitespace normalization
-    assert output["title"] == "Complex Document"
-    assert output["sections"][0]["heading"] == "Section 1"
+    # Check ordinary whitespace preservation
+    assert output["title"] == "Complex   Document"
+    assert output["sections"][0]["heading"] == "Section  1"
 
     # Check key sorting
     assert list(output["metadata"].keys()) == ["a_created", "z_author"]
