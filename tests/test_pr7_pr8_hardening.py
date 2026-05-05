@@ -163,6 +163,9 @@ def test_validation_error_detail_serializes_exception_in_ctx():
     This is the bug that caused 500s for deeply-nested content and oversized fields:
     Pydantic v2 stores the raw ValueError in ``ctx['error']``, which is not
     JSON-serializable by default.
+
+    The sanitizer returns only the exception *type name* (not str(exc)) to avoid
+    leaking internal details from exception messages.
     """
     import json
 
@@ -181,11 +184,12 @@ def test_validation_error_detail_serializes_exception_in_ctx():
 
     # Must be JSON-serializable — no TypeError
     serialized = json.dumps(sanitized)
-    assert "Content nesting depth exceeds limit of 64" in serialized
+    assert serialized  # non-empty
 
-    # ctx['error'] must be a string, not an Exception object
+    # ctx['error'] must be a string (the type name), not an Exception object
     ctx_error = sanitized[0]["ctx"]["error"]
     assert isinstance(ctx_error, str), f"ctx['error'] is still {type(ctx_error).__name__}"
+    assert ctx_error == "ValueError"
 
 
 def test_strip_input_from_errors_removes_input_key():

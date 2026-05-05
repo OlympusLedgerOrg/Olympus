@@ -319,9 +319,11 @@ def _json_safe_validation_detail(value: Any) -> Any:
         return {key: _json_safe_validation_detail(item) for key, item in value.items()}
     if isinstance(value, BaseException):
         # ctx['error'] is a raw exception instance in Pydantic v2 value_error dicts.
-        # Convert to string so the error message is preserved without crashing the
-        # JSON serializer.
-        return str(value)
+        # Return only the exception *type name* — not str(exc) — to avoid leaking
+        # database connection strings, filesystem paths, or internal details that
+        # may appear in exception messages when validation fails deep inside
+        # application code.
+        return type(value).__name__
     return value
 
 

@@ -18,6 +18,7 @@ import psycopg
 import pytest
 from hypothesis import HealthCheck, settings
 from hypothesis.database import DirectoryBasedExampleDatabase
+from hypothesis.errors import InvalidArgument as _HypothesisInvalidArgument
 
 
 # ── Hypothesis profiles ────────────────────────────────────────────────────
@@ -46,7 +47,7 @@ settings.register_profile(
 _requested_profile = os.environ.get("HYPOTHESIS_PROFILE", "default")
 try:
     settings.load_profile(_requested_profile)
-except Exception:
+except _HypothesisInvalidArgument:
     settings.load_profile("default")
 
 

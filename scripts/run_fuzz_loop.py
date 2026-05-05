@@ -60,7 +60,7 @@ from __future__ import annotations
 import argparse
 import os
 import platform
-import random
+import secrets
 import subprocess
 import sys
 import time
@@ -462,7 +462,7 @@ def _run_loop(args: argparse.Namespace) -> int:
         if args.smoke or seed is not None:
             pass_seed = seed if seed is not None else 0
         else:
-            pass_seed = random.randint(1, 2_147_483_647)
+            pass_seed = secrets.randbelow(2_147_483_647) + 1
 
         cmd = _build_pytest_cmd(modules, marker, pass_seed, platform_name)
         ok, _ = _run_pass(cmd, env, pass_num, pass_seed)
