@@ -275,6 +275,7 @@ class StorageLayer:
             open=True,
             kwargs={"autocommit": False, "row_factory": dict_row},
         )
+        self._pool_closed = False
 
         # In-memory LRU cache for Merkle nodes keyed by (shard_id, level, path_bytes).
         # SMT nodes are immutable once written so caching is safe.
@@ -311,7 +312,17 @@ class StorageLayer:
 
     def close(self) -> None:
         """Close all pooled database connections."""
+        if self._pool_closed:
+            return
+        self._pool_closed = True
         self._pool.close()
+
+    def __del__(self) -> None:
+        """Best-effort pool cleanup for tests and short-lived scripts."""
+        try:
+            self.close()
+        except Exception:
+            pass
 
     # ------------------------------------------------------------------
     # Merkle node cache helpers

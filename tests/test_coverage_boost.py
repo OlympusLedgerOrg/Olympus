@@ -16,7 +16,7 @@ Targets:
 
 from __future__ import annotations
 
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 import blake3
 import pytest
@@ -190,7 +190,7 @@ async def test_verify_embargoed_document(client, db_session):
     commit_id = generate_commit_id()
     # SQLite strips tzinfo, so store a naive future datetime and patch the
     # comparison target in the router to also be naive.
-    future_naive = datetime.utcnow() + timedelta(days=30)  # noqa: DTZ003
+    future_naive = (datetime.now(timezone.utc) + timedelta(days=30)).replace(tzinfo=None)
     commit = DocCommit(
         doc_hash=doc_hash,
         commit_id=commit_id,
@@ -203,7 +203,7 @@ async def test_verify_embargoed_document(client, db_session):
 
     # Patch datetime.now in the router module to return a naive UTC datetime
     # so the comparison doesn't raise on SQLite.
-    fake_now = datetime.utcnow()  # noqa: DTZ003
+    fake_now = datetime.now(timezone.utc).replace(tzinfo=None)
     with patch("api.routers.documents.datetime") as mock_dt:
         mock_dt.now.return_value = fake_now
         mock_dt.side_effect = datetime

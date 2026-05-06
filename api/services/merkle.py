@@ -95,6 +95,7 @@ def build_tree(
     leaf_hashes: list[str],
     *,
     preserve_order: bool = False,
+    warn_on_preserve_order: bool = True,
 ) -> MerkleRoot:
     """Build a binary Merkle tree from a list of leaf hashes.
 
@@ -112,8 +113,11 @@ def build_tree(
 
     Args:
         leaf_hashes: Hex-encoded BLAKE3 leaf hashes.
-        preserve_order: If ``True``, skip the canonical sort.  A warning is
-            emitted reminding the caller that ordering responsibility is theirs.
+        preserve_order: If ``True``, skip the canonical sort.
+        warn_on_preserve_order: If ``True`` and ``preserve_order`` is also
+            true, emit a warning reminding the caller that ordering
+            responsibility is theirs. Trusted internal callers that already
+            impose deterministic ordering may disable the warning.
 
     Returns:
         A :class:`MerkleRoot` containing the computed root and internal levels.
@@ -125,10 +129,11 @@ def build_tree(
         raise ValueError("Cannot build a Merkle tree from an empty leaf list.")
 
     if preserve_order:
-        warnings.warn(
-            "preserve_order=True: caller is responsible for deterministic leaf ordering.",
-            stacklevel=2,
-        )
+        if warn_on_preserve_order:
+            warnings.warn(
+                "preserve_order=True: caller is responsible for deterministic leaf ordering.",
+                stacklevel=2,
+            )
         ordered = list(leaf_hashes)
     else:
         ordered = sorted(leaf_hashes)
