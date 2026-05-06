@@ -9,6 +9,25 @@
  * binary, which is then fetched and instantiated by the WASM JS glue.
  */
 
+// ─── CONTRACT ─────────────────────────────────────────────────────────────────
+//
+// This file and frontend/src/lib/olympus-crypto.ts share the same BLAKE3 init
+// logic and must be kept behaviorally identical.
+//
+// Why two files exist:
+//   frontend/ is a migration source directory with no package.json — it cannot
+//   import from app/public-ui/ without a monorepo workspace setup.  Until that
+//   workspace is established the init logic must be kept in sync manually.
+//   If you change one file, change the other.
+//
+// Plain BLAKE3 (hashBytes) = content addressing, display, API lookups.
+// Domain-separated (OLY:LEAF:V1, OLY:NODE:V1) = SMT internals.
+// NEVER compare a plain hashBytes output against a domain-separated hash.
+// They hash the same data but produce different values — that's intentional.
+// Comparing them is always a bug.
+//
+// ─────────────────────────────────────────────────────────────────────────────
+
 import init, {
   hash as _wasmHash,
   create_hasher as _createHasher,
@@ -35,7 +54,7 @@ function ensureInit(): ReturnType<typeof init> {
         throw new Error(
           isCsp
             ? "BLAKE3 WASM is blocked by this browser's Content Security Policy. " +
-              "File and JSON hashing are unavailable in this environment."
+              "All BLAKE3 hashing and verification are unavailable in this environment."
             : `BLAKE3 WASM failed to initialize: ${msg}`,
         );
       },
@@ -61,6 +80,15 @@ export async function hashBytes(data: Uint8Array): Promise<string> {
   await ensureInit();
   const out = new Uint8Array(32);
   _wasmHash(data, out);
+  // ABI guard: blake3-wasm fills `out` in-place. If the calling convention ever
+  // breaks, out stays all-zero and we'd silently commit wrong hashes to the ledger.
+  // BLAKE3 of any input (including empty) is never all-zero, so this catches all cases.
+  if (out.every((b) => b === 0)) {
+    throw new Error(
+      "BLAKE3 WASM produced all-zero digest — possible ABI mismatch. " +
+        "Do not commit hashes from this session.",
+    );
+  }
   return toHex(out);
 }
 
@@ -83,6 +111,13 @@ export async function hashFile(
     // Empty file: hash an empty byte array
     const out = new Uint8Array(32);
     _wasmHash(new Uint8Array(0), out);
+    // ABI guard: BLAKE3 of an empty buffer is non-zero; all-zero means ABI is broken.
+    if (out.every((b) => b === 0)) {
+      throw new Error(
+        "BLAKE3 WASM produced all-zero digest — possible ABI mismatch. " +
+          "Do not commit hashes from this session.",
+      );
+    }
     onProgress?.(100);
     return toHex(out);
   }
@@ -103,8 +138,16 @@ export async function hashFile(
     // Finalise: read the 32-byte digest
     const out = new Uint8Array(32);
     hasher.digest(out);
+    // ABI guard: blake3-wasm fills `out` in-place via hasher.digest(). All-zero means ABI is broken.
+    if (out.every((b) => b === 0)) {
+      throw new Error(
+        "BLAKE3 WASM produced all-zero digest — possible ABI mismatch. " +
+          "Do not commit hashes from this session.",
+      );
+    }
     return toHex(out);
   } finally {
+    // WASM memory is not garbage-collected by the JS engine; free() is mandatory.
     hasher.free();
   }
 }

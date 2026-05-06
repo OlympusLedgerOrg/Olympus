@@ -20,6 +20,25 @@
  * JS/TS host (React, Vue, plain scripts, Node test runners).
  */
 
+// ─── CONTRACT ─────────────────────────────────────────────────────────────────
+//
+// This file and app/public-ui/src/lib/blake3.ts share the same BLAKE3 init
+// logic and must be kept behaviorally identical.
+//
+// Why two files exist:
+//   frontend/ is a migration source directory with no package.json — it cannot
+//   import from app/public-ui/ without a monorepo workspace setup.  Until that
+//   workspace is established the init logic must be kept in sync manually.
+//   If you change one file, change the other.
+//
+// Plain BLAKE3 (blake3Hex / hashBytes) = content addressing, display, API lookups.
+// Domain-separated (OLY:LEAF:V1, OLY:NODE:V1) = SMT internals.
+// NEVER compare a plain blake3Hex output against a domain-separated hash.
+// They hash the same data but produce different values — that's intentional.
+// Comparing them is always a bug.
+//
+// ─────────────────────────────────────────────────────────────────────────────
+
 // ─── Exported types ───────────────────────────────────────────────────────────
 
 /** Any value representable in a canonical JSON document. */
@@ -111,7 +130,24 @@ let _initPromise: ReturnType<typeof init> | null = null;
 
 function _ensureBlake3(): ReturnType<typeof init> {
   if (!_initPromise) {
-    _initPromise = init(blake3WasmUrl);
+    _initPromise = init(blake3WasmUrl).then(
+      (r) => r,
+      (err: unknown) => {
+        // Clear the cached promise so the caller can retry after transient failures.
+        _initPromise = null;
+        const msg = err instanceof Error ? err.message : String(err);
+        // Detect Content Security Policy rejections so journalists on locked-down
+        // browsers get a clear, actionable message instead of a raw WASM compile error.
+        const isCsp =
+          /disallowed by embedder|Content Security Policy|wasm-unsafe-eval/i.test(msg);
+        throw new Error(
+          isCsp
+            ? "BLAKE3 WASM is blocked by this browser's Content Security Policy. " +
+              "All BLAKE3 hashing and verification are unavailable in this environment."
+            : `BLAKE3 WASM failed to initialize: ${msg}`,
+        );
+      },
+    );
   }
   return _initPromise;
 }
@@ -123,6 +159,15 @@ export async function blake3Hex(data: Uint8Array): Promise<string> {
   await _ensureBlake3();
   const out = new Uint8Array(32);
   _wasmHash(data, out);
+  // ABI guard: blake3-wasm fills `out` in-place. If the calling convention ever
+  // breaks, out stays all-zero and we'd silently commit wrong hashes to the ledger.
+  // BLAKE3 of any input (including empty) is never all-zero, so this catches all cases.
+  if (out.every((b) => b === 0)) {
+    throw new Error(
+      "BLAKE3 WASM produced all-zero digest — possible ABI mismatch. " +
+        "Do not commit hashes from this session.",
+    );
+  }
   return _toHex(out);
 }
 
@@ -143,6 +188,13 @@ export async function hashFileBLAKE3(
   if (total === 0) {
     const out = new Uint8Array(32);
     _wasmHash(new Uint8Array(0), out);
+    // ABI guard: BLAKE3 of an empty buffer is non-zero; all-zero means ABI is broken.
+    if (out.every((b) => b === 0)) {
+      throw new Error(
+        "BLAKE3 WASM produced all-zero digest — possible ABI mismatch. " +
+          "Do not commit hashes from this session.",
+      );
+    }
     onProgress?.(100);
     return _toHex(out);
   }
@@ -160,8 +212,16 @@ export async function hashFileBLAKE3(
 
     const out = new Uint8Array(32);
     hasher.digest(out);
+    // ABI guard: blake3-wasm fills `out` in-place via hasher.digest(). All-zero means ABI is broken.
+    if (out.every((b) => b === 0)) {
+      throw new Error(
+        "BLAKE3 WASM produced all-zero digest — possible ABI mismatch. " +
+          "Do not commit hashes from this session.",
+      );
+    }
     return _toHex(out);
   } finally {
+    // WASM memory is not garbage-collected by the JS engine; free() is mandatory.
     hasher.free();
   }
 }

@@ -63,6 +63,73 @@ function testBlake3Raw(vectors) {
   console.log(`  ✓ blake3_raw: ${vectors.blake3_raw.length} vectors`);
 }
 
+/**
+ * Cross-library agreement test: verify that blake3-wasm (the browser WASM
+ * library) and @noble/hashes/blake3 (used by the Node verifier) produce
+ * byte-identical digests for every blake3_raw test vector.
+ *
+ * Rationale: the browser UI commits hashes via blake3-wasm while
+ * verifier.js uses @noble/hashes. Without this test, a silent divergence
+ * between the two libraries could go unnoticed and cause verification failures
+ * for real documents.
+ *
+ * The test skips gracefully with a loud warning when blake3-wasm is not
+ * installed (run `npm install` in verifiers/javascript to enable it).
+ */
+function testCrossLibraryBlake3(vectors) {
+  console.log('Testing cross-library: blake3-wasm vs @noble/hashes/blake3...');
+  let blake3WasmMod;
+  try {
+    blake3WasmMod = require('blake3-wasm');
+  } catch (err) {
+    // Only skip when blake3-wasm is genuinely not installed. Any other failure
+    // (Node/WASM incompatibility, corrupted install, etc.) is a hard error so CI
+    // cannot silently pass without actually checking cross-library agreement.
+    if (err?.code === 'MODULE_NOT_FOUND' && err?.message?.includes('blake3-wasm')) {
+      console.warn(
+        '\n  ⚠️  WARNING: blake3-wasm not installed — cross-library BLAKE3 ' +
+        'agreement test SKIPPED.\n' +
+        '  Run `npm install` in verifiers/javascript to enable this test.\n' +
+        '  Without this test, blake3-wasm (browser) and @noble/hashes (Node/verifier)\n' +
+        '  agreement is UNVERIFIED for your environment.\n'
+      );
+      return;
+    }
+    throw err;
+  }
+
+  // blake3-wasm's default export for Node.js exposes a `hash` function.
+  const wasmHash = blake3WasmMod.hash ?? blake3WasmMod.default?.hash;
+  if (typeof wasmHash !== 'function') {
+    throw new Error(
+      'blake3-wasm is installed but did not export a `hash` function. ' +
+      'This indicates an API incompatibility between the installed version and what the test expects. ' +
+      'Cross-library blake3 agreement is unverified — update blake3-wasm or fix this test.'
+    );
+  }
+
+  let passed = 0;
+  for (const vec of vectors.blake3_raw) {
+    const data = new TextEncoder().encode(vec.input_utf8);
+    const nobleResult = toHex(computeBlake3(data));
+    const wasmResult = toHex(wasmHash(data));
+    assert(
+      nobleResult === wasmResult,
+      `cross-library blake3_raw(${JSON.stringify(vec.input_utf8)}): ` +
+        `@noble/hashes=${nobleResult}, blake3-wasm=${wasmResult}`
+    );
+    assert(
+      nobleResult === vec.hash,
+      `cross-library: both libraries agree but differ from golden vector: ` +
+        `got ${nobleResult}, want ${vec.hash}`
+    );
+    passed++;
+  }
+  console.log(
+    `  ✓ cross-library blake3_raw: ${passed} vectors agree between @noble/hashes and blake3-wasm`
+  );
+}
+
 function testMerkleLeafHash(vectors) {
   console.log('Testing conformance: merkle_leaf_hash...');
   for (const vec of vectors.merkle_leaf_hash) {
@@ -250,6 +317,7 @@ function runConformanceTests() {
   const vectors = loadVectors();
   const canonicalizerVectors = loadCanonicalizerVectors();
   testBlake3Raw(vectors);
+  testCrossLibraryBlake3(vectors);
   testMerkleLeafHash(vectors);
   testMerkleParentHash(vectors);
   testMerkleRoot(vectors);
