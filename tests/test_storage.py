@@ -48,6 +48,7 @@ import psycopg
 import pytest
 from psycopg.rows import dict_row
 
+import storage.postgres as storage_postgres_module
 from protocol.hashes import global_key, hash_bytes, record_key
 from protocol.shards import create_shard_header
 from protocol.ssmf import verify_nonexistence_proof, verify_proof
@@ -1000,6 +1001,148 @@ def test_verify_state_replay_matches_headers_and_ledger(storage, signing_key):
     assert result["verified"] is True
     assert result["headers_checked"] == 3
     assert result["next_seq"] is None
+
+
+def test_same_second_writes_reconstruct_historical_roots(storage, signing_key, monkeypatch):
+    """Replay must still verify historical roots when multiple writes share one timestamp."""
+    shard_id = f"test_same_second_replay_{datetime.now(UTC).timestamp()}"
+    fixed_now = datetime(2026, 1, 1, 0, 0, 0, tzinfo=UTC)
+
+    class FixedDatetime(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return fixed_now if tz is None else fixed_now.astimezone(tz)
+
+    monkeypatch.setattr(storage_postgres_module, "datetime", FixedDatetime)
+    roots: list[bytes] = []
+    for record_id in ("doc-z", "doc-a", "doc-m"):
+        root, _, _, _, _ = storage.append_record(
+            shard_id=shard_id,
+            record_type="document",
+            record_id=record_id,
+            version=1,
+            value_hash=hash_bytes(record_id.encode("utf-8")),
+            signing_key=signing_key,
+        )
+        roots.append(root)
+    monkeypatch.setattr(storage_postgres_module, "datetime", datetime)
+
+    result = storage.verify_state_replay(shard_id)
+    assert result == {"verified": True, "headers_checked": 3, "next_seq": None}
+
+    with storage._get_connection() as conn, conn.cursor(row_factory=dict_row) as cur:
+        cur.execute(
+            """
+            SELECT seq, root
+            FROM shard_headers
+            WHERE shard_id = %s
+            ORDER BY seq ASC
+            """,
+            (shard_id,),
+        )
+        headers = cur.fetchall()
+
+    assert [bytes(row["root"]) for row in headers] == roots
+
+
+def test_append_record_persists_nonzero_leaf_seq(storage, signing_key):
+    """append_record must persist the committed leaf's global_seq into shard_headers.leaf_seq."""
+    shard_id = f"test_leaf_seq_nonzero_{datetime.now(UTC).timestamp()}"
+    record_id = "doc-leaf-seq"
+
+    storage.append_record(
+        shard_id=shard_id,
+        record_type="document",
+        record_id=record_id,
+        version=1,
+        value_hash=hash_bytes(b"leaf-seq-value"),
+        signing_key=signing_key,
+    )
+
+    key = global_key(shard_id, record_key("document", record_id, 1))
+    with storage._get_connection() as conn, conn.cursor(row_factory=dict_row) as cur:
+        cur.execute(
+            """
+            SELECT global_seq
+            FROM smt_leaves
+            WHERE key = %s AND version = %s
+            """,
+            (key, 1),
+        )
+        leaf_row = cur.fetchone()
+        cur.execute(
+            """
+            SELECT leaf_seq
+            FROM shard_headers
+            WHERE shard_id = %s
+            ORDER BY seq DESC
+            LIMIT 1
+            """,
+            (shard_id,),
+        )
+        header_row = cur.fetchone()
+
+    assert leaf_row is not None
+    assert header_row is not None
+    assert int(header_row["leaf_seq"]) > 0
+    assert int(header_row["leaf_seq"]) == int(leaf_row["global_seq"])
+
+
+def test_replay_orders_historical_state_by_global_seq(storage, signing_key, monkeypatch):
+    """Historical replay must follow global_seq order, not a timestamp/key fallback."""
+    shard_id = f"test_replay_global_seq_order_{datetime.now(UTC).timestamp()}"
+    fixed_now = datetime(2026, 1, 1, 0, 0, 0, tzinfo=UTC)
+    first_key = global_key(shard_id, record_key("document", "z-first", 1))
+    second_key = global_key(shard_id, record_key("document", "a-second", 1))
+
+    class FixedDatetime(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return fixed_now if tz is None else fixed_now.astimezone(tz)
+
+    monkeypatch.setattr(storage_postgres_module, "datetime", FixedDatetime)
+    first_root, _, _, _, _ = storage.append_record(
+        shard_id=shard_id,
+        record_type="document",
+        record_id="z-first",
+        version=1,
+        value_hash=hash_bytes(b"z-first"),
+        signing_key=signing_key,
+    )
+    storage.append_record(
+        shard_id=shard_id,
+        record_type="document",
+        record_id="a-second",
+        version=1,
+        value_hash=hash_bytes(b"a-second"),
+        signing_key=signing_key,
+    )
+    monkeypatch.setattr(storage_postgres_module, "datetime", datetime)
+
+    with storage._get_connection() as conn, conn.cursor(row_factory=dict_row) as cur:
+        cur.execute(
+            """
+            SELECT key, value_hash, parser_id, canonical_parser_version
+            FROM smt_leaves
+            WHERE key IN (%s, %s)
+            ORDER BY ts ASC, key ASC
+            LIMIT 1
+            """,
+            (first_key, second_key),
+        )
+        naive_first_row = cur.fetchone()
+
+    assert naive_first_row is not None
+    naive_tree = storage_postgres_module.RustSparseMerkleTree()
+    naive_tree.update(
+        bytes(naive_first_row["key"]),
+        bytes(naive_first_row["value_hash"]),
+        naive_first_row["parser_id"],
+        naive_first_row["canonical_parser_version"],
+    )
+
+    assert naive_tree.get_root() != first_root
+    assert storage.verify_state_replay(shard_id)["verified"] is True
 
 
 def test_verify_state_replay_detects_header_root_divergence(storage, signing_key):

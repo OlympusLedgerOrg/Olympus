@@ -210,6 +210,11 @@ def schema_statements(node_rehash_gate: str) -> list[str]:
         #   Pass 2 — timestamp approximation for any header still at 0 after
         #     pass 1 (journal absent or gap in coverage): assign the max
         #     global_seq of leaves whose ts <= the header's ts.
+        #
+        # Risk note for old databases without journal coverage: this fallback is
+        # best-effort only. If multiple historical writes share ambiguous
+        # timestamps around an upgrade boundary, exact leaf->header mapping may
+        # require manual audit or rebuild from an external append log.
         """
         DO $$
         BEGIN

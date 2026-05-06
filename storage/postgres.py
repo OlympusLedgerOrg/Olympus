@@ -2201,6 +2201,14 @@ class StorageLayer:
             return row[key]
         return row[idx]
 
+    def _fetch_total_count(self, cur: psycopg.Cursor[Any], table_name: str) -> int:
+        """Return ``COUNT(*)`` for a trusted internal table name."""
+        cur.execute(sql.SQL("SELECT COUNT(*) AS cnt FROM {}").format(sql.Identifier(table_name)))
+        row = cur.fetchone()
+        if row is None:
+            raise RuntimeError(f"COUNT(*) query for table '{table_name}' returned no rows")
+        return int(row["cnt"] if isinstance(row, Mapping) else row[0])
+
     def _assert_root_matches_state(
         self,
         cur: psycopg.Cursor[Any],
@@ -2222,8 +2230,11 @@ class StorageLayer:
 
         In both branches the global leaf/header count invariant is checked:
         the total number of rows in ``smt_leaves`` must equal the total number
-        of rows across all ``shard_headers``.  A mismatch indicates that a leaf
-        was inserted outside of ``append_record`` (e.g. a forged leaf).
+        of rows across all ``shard_headers``. This assumes every successful
+        ``append_record()`` transaction appends exactly one leaf row and one
+        shard-header row. A mismatch indicates that a leaf was inserted outside
+        of ``append_record`` (e.g. a forged leaf) or that some non-standard
+        maintenance path broke the expected 1:1 cardinality.
 
         Args:
             cur: Active database cursor (read-only).
@@ -2248,20 +2259,8 @@ class StorageLayer:
             )
 
             # Count invariant — runs in both branches (O(1) table scan).
-            cur.execute("SELECT COUNT(*) AS cnt FROM smt_leaves")
-            total_leaves_row = cur.fetchone()
-            total_leaves = int(
-                total_leaves_row["cnt"]
-                if isinstance(total_leaves_row, Mapping)
-                else total_leaves_row[0]
-            )
-            cur.execute("SELECT COUNT(*) AS cnt FROM shard_headers")
-            total_headers_row = cur.fetchone()
-            total_headers = int(
-                total_headers_row["cnt"]
-                if isinstance(total_headers_row, Mapping)
-                else total_headers_row[0]
-            )
+            total_leaves = self._fetch_total_count(cur, "smt_leaves")
+            total_headers = self._fetch_total_count(cur, "shard_headers")
             if total_leaves != total_headers:
                 raise ValueError(
                     f"Computed root integrity failure for shard '{shard_id}': "
@@ -2304,20 +2303,8 @@ class StorageLayer:
             # Global leaf/header count invariant: every smt_leaf must have
             # a corresponding shard_header (append_record creates exactly
             # one of each per call).  Extra leaves indicate divergence.
-            cur.execute("SELECT COUNT(*) AS cnt FROM smt_leaves")
-            total_leaves_row = cur.fetchone()
-            total_leaves = int(
-                total_leaves_row["cnt"]
-                if isinstance(total_leaves_row, Mapping)
-                else total_leaves_row[0]
-            )
-            cur.execute("SELECT COUNT(*) AS cnt FROM shard_headers")
-            total_headers_row = cur.fetchone()
-            total_headers = int(
-                total_headers_row["cnt"]
-                if isinstance(total_headers_row, Mapping)
-                else total_headers_row[0]
-            )
+            total_leaves = self._fetch_total_count(cur, "smt_leaves")
+            total_headers = self._fetch_total_count(cur, "shard_headers")
             if total_leaves != total_headers:
                 raise ValueError(
                     f"Computed root integrity failure for shard '{shard_id}': "
@@ -2511,6 +2498,10 @@ class StorageLayer:
         leaves inserted since the previous header's ``leaf_seq``.  The
         in-memory tree is carried forward between checkpoints rather than
         being rebuilt from scratch each time.
+
+        The final ``COUNT(smt_leaves) == COUNT(shard_headers)`` check relies on
+        the append contract that every successful ``append_record()`` writes
+        exactly one leaf row and one shard-header row in the same transaction.
 
         When *max_headers* is set the method stops after that many headers
         and returns a cursor (``next_seq``) so callers can page through the
@@ -2711,23 +2702,13 @@ class StorageLayer:
                         f"{tree.get_root().hex()}"
                     )
 
-                # (b) Global leaf/header count invariant: every smt_leaf must
-                # correspond to exactly one shard_header.  Extra leaves indicate
-                # a forged leaf was inserted outside of append_record().
-                cur.execute("SELECT COUNT(*) AS cnt FROM smt_leaves")
-                total_leaves_row = cur.fetchone()
-                total_leaves = int(
-                    total_leaves_row["cnt"]
-                    if isinstance(total_leaves_row, Mapping)
-                    else total_leaves_row[0]
-                )
-                cur.execute("SELECT COUNT(*) AS cnt FROM shard_headers")
-                total_headers_row = cur.fetchone()
-                total_headers_all = int(
-                    total_headers_row["cnt"]
-                    if isinstance(total_headers_row, Mapping)
-                    else total_headers_row[0]
-                )
+                # (b) Global leaf/header count invariant: every successful
+                # append_record() transaction must create exactly one smt_leaf
+                # row and one shard_header row.  Extra leaves indicate a forged
+                # leaf or some other out-of-band write path that broke the
+                # expected 1:1 cardinality.
+                total_leaves = self._fetch_total_count(cur, "smt_leaves")
+                total_headers_all = self._fetch_total_count(cur, "shard_headers")
                 if total_leaves != total_headers_all:
                     raise ValueError(
                         f"Replay mismatch for shard '{shard_id}': {total_leaves} smt_leaves "
