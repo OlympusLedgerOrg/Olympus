@@ -2670,13 +2670,13 @@ class StorageLayer:
                     f"root at leaf_seq={leaf_seq}"
                 )
 
-            expected = self._normalize_root(header["root"])
-            actual = self._normalize_root(replayed_root)
+            persisted_root = self._normalize_root(header["root"])
+            replayed_root_hex = self._normalize_root(replayed_root)
 
-            if expected != actual:
+            if persisted_root != replayed_root_hex:
                 raise ValueError(
                     f"Shard {shard_id!r} root mismatch at leaf_seq={leaf_seq}: "
-                    f"header_root={expected} replay_root={actual}"
+                    f"header_root={persisted_root} replay_root={replayed_root_hex}"
                 )
 
     def replay_tree_incremental(
