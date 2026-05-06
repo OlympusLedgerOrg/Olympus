@@ -27,12 +27,22 @@ def schema_statements(node_rehash_gate: str) -> list[str]:
         """
         DO $$
         BEGIN
+            -- Rename the pre-ADR-0004 "0.1.1" schema table that had shard_id
+            -- but no global_seq.  The current schema has both, so we
+            -- discriminate on global_seq to avoid renaming a fresh table on a
+            -- second init_schema call.
             IF EXISTS (
                 SELECT 1
                 FROM information_schema.columns
                 WHERE table_schema = 'public'
                   AND table_name = 'smt_leaves'
                   AND column_name = 'shard_id'
+            ) AND NOT EXISTS (
+                SELECT 1
+                FROM information_schema.columns
+                WHERE table_schema = 'public'
+                  AND table_name = 'smt_leaves'
+                  AND column_name = 'global_seq'
             ) AND to_regclass('public.smt_leaves_legacy_011') IS NULL THEN
                 EXECUTE 'ALTER TABLE smt_leaves RENAME TO smt_leaves_legacy_011';
             END IF;

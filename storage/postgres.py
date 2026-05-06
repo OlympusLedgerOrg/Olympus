@@ -667,7 +667,7 @@ class StorageLayer:
 
         Raises:
             ValueError: If value_hash is not 32 bytes or record already exists.
-            psycopg.errors.SerializationFailure: If retries are exhausted on conflict.
+            psycopg.errors.SerializationFailure: If retries are exhausted on conflict or deadlock.
         """
         _require_rust_smt()
 
@@ -684,9 +684,17 @@ class StorageLayer:
         # CD-HS-ST: Generate global key that encodes shard identity
         key = global_key(shard_id, rec_key)
 
-        # RT-H2: Retry loop for serialization failures
+        # RT-H2: Retry loop for serialization failures and deadlocks.
+        # Both error classes mean the transaction was rolled back and the
+        # caller must retry — PostgreSQL documentation explicitly recommends
+        # retrying deadlocks (SQLSTATE 40P01) the same way as serialization
+        # failures (SQLSTATE 40001).
         # Total attempts = 1 (initial) + max_serialization_retries (retries)
         max_attempts = 1 + max_serialization_retries
+        _retryable = (
+            psycopg.errors.SerializationFailure,
+            psycopg.errors.DeadlockDetected,
+        )
         for attempt in range(max_attempts):
             try:
                 return self._append_record_inner(
@@ -702,7 +710,7 @@ class StorageLayer:
                     canonicalization=canonicalization,
                     poseidon_root=poseidon_root,
                 )
-            except psycopg.errors.SerializationFailure as e:
+            except _retryable as e:
                 is_last_attempt = attempt == max_attempts - 1
                 if not is_last_attempt:
                     # Exponential backoff: 0.1s, 0.2s, 0.4s, ...
