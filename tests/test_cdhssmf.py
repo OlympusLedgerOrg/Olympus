@@ -6,6 +6,7 @@ the dual-tree structure (per-shard SMTs + forest SMT) into a single global SMT
 with hierarchical key derivation.
 """
 
+import os
 import pathlib
 
 from protocol.hashes import _GLOBAL_SMT_KEY_CONTEXT, global_key, record_key
@@ -226,10 +227,14 @@ def test_global_key_context_uniqueness():
     """
     context = _GLOBAL_SMT_KEY_CONTEXT
     repo_root = pathlib.Path(".")
+    suffixes = {".py", ".rs"}
     occurrences = 0
-    for pattern in ("*.py", "*.rs"):
-        for path in repo_root.rglob(pattern):
-            occurrences += path.read_text(encoding="utf-8").count(context)
+    for dirpath, dirnames, filenames in os.walk(repo_root):
+        dirnames[:] = [d for d in dirnames if not d.startswith(".")]
+        for fname in filenames:
+            if pathlib.PurePath(fname).suffix in suffixes:
+                path = pathlib.Path(dirpath) / fname
+                occurrences += path.read_text(encoding="utf-8").count(context)
     assert occurrences == 3, (
         f"derive_key context string found {occurrences} time(s); "
         "expected exactly 3 (protocol/hashes.py + src/crypto.rs + "
