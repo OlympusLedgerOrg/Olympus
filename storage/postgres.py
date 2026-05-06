@@ -489,6 +489,11 @@ class StorageLayer:
         with self._circuit_lock:
             return time.monotonic() < self._circuit_open_until
 
+    # Stable application-specific key for the init_schema advisory lock.
+    # Chosen to avoid collision with other pg_advisory_xact_lock users.
+    # 0x4F4C5953 = ASCII "OLYS" — fits comfortably in PostgreSQL bigint.
+    _INIT_SCHEMA_ADVISORY_LOCK_KEY = 0x4F4C5953  # 1330661715
+
     def init_schema(self) -> None:
         """
         Initialize database schema.
@@ -498,11 +503,20 @@ class StorageLayer:
         EXISTS, DROP TRIGGER IF EXISTS + CREATE TRIGGER, etc.) so that this
         method is safe to call on both fresh and existing databases without
         requiring any external migration files or tracking tables.
+
+        Concurrent callers are serialized via a PostgreSQL transaction-level
+        advisory lock so that the unconditional DDL statements (ALTER TABLE
+        DROP DEFAULT, DROP/CREATE TRIGGER) cannot deadlock against each other
+        or against concurrent read/write transactions on the same tables.
         """
         stmts = schema_statements(_NODE_REHASH_GATE)
 
         with self._get_connection() as conn:
             with conn.cursor() as cur:
+                cur.execute(
+                    "SELECT pg_advisory_xact_lock(%s)",
+                    (self._INIT_SCHEMA_ADVISORY_LOCK_KEY,),
+                )
                 for stmt in stmts:
                     cur.execute(stmt)
             conn.commit()
