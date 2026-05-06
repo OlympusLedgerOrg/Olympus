@@ -101,6 +101,20 @@ Then re-run this script."
 fi
 ok "$(cargo --version)"
 
+# protoc — Protocol Buffers compiler (needed to regenerate Go/Rust stubs)
+# Only warn if missing; protoc is not required to run the Python API itself.
+if command -v protoc &>/dev/null; then
+    ok "$(protoc --version)"
+else
+    warn "protoc (Protocol Buffers compiler) not found."
+    warn "It is only required when regenerating Go/Rust gRPC stubs."
+    if [[ "$(uname -s)" == "Darwin" ]]; then
+        warn "Install with:  brew install protobuf"
+    else
+        warn "Install with:  sudo apt install -y protobuf-compiler"
+    fi
+fi
+
 # ---------------------------------------------------------------------------
 # 2. PostgreSQL via Docker
 # ---------------------------------------------------------------------------

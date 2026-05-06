@@ -49,6 +49,13 @@ except ImportError:
         ) from None
 
 
+# Maximum nesting depth for canonical JSON encoding.
+# Matches the Rust MAX_JSON_DEPTH (services/cdhs-smf-rust/src/canonicalization.rs)
+# and the API ingest gate (api/schemas/ingest.py MAX_CONTENT_DEPTH).
+# Kept as a single authoritative constant; canonicalizer.py imports this value.
+MAX_JSON_DEPTH: int = 64
+
+
 def canonical_json_encode(obj: Any) -> str:
     """
     Encode object to canonical JSON string.
@@ -122,21 +129,24 @@ def canonical_json_encode_batch(docs: list[Any], *, workers: int | None = None) 
         return list(pool.map(canonical_json_encode, docs))
 
 
-def _normalize_for_canonical_json(obj: Any) -> Any:
+def _normalize_for_canonical_json(obj: Any, _depth: int = 0) -> Any:
     """
     Normalize object values before canonical JSON encoding.
 
     Args:
         obj: Object to normalize.
+        _depth: Current recursion depth (internal use only).
 
     Returns:
         Object transformed into normalized canonical values.
 
     Raises:
-        ValueError: If non-finite values or floats are found, or if normalized
-            dictionary keys collide.
+        ValueError: If non-finite values or floats are found, if normalized
+            dictionary keys collide, or if nesting depth exceeds MAX_JSON_DEPTH.
         TypeError: If dictionary keys are not strings.
     """
+    if _depth > MAX_JSON_DEPTH:
+        raise ValueError(f"JSON nesting depth exceeds limit of {MAX_JSON_DEPTH}")
     if obj is None or isinstance(obj, bool):
         return obj
     if isinstance(obj, str):
@@ -154,7 +164,7 @@ def _normalize_for_canonical_json(obj: Any) -> Any:
             raise ValueError("Infinity is not allowed in canonical JSON")
         raise ValueError("Float values are not allowed in canonical JSON; use Decimal")
     if isinstance(obj, list | tuple):
-        return [_normalize_for_canonical_json(item) for item in obj]
+        return [_normalize_for_canonical_json(item, _depth + 1) for item in obj]
     if isinstance(obj, dict):
         normalized_obj: dict[str, Any] = {}
         for key, value in obj.items():
@@ -163,13 +173,13 @@ def _normalize_for_canonical_json(obj: Any) -> Any:
             normalized_key = unicodedata.normalize("NFC", key)
             if normalized_key in normalized_obj:
                 raise ValueError(f"Duplicate key after NFC normalization: {normalized_key!r}")
-            normalized_obj[normalized_key] = _normalize_for_canonical_json(value)
+            normalized_obj[normalized_key] = _normalize_for_canonical_json(value, _depth + 1)
         return normalized_obj
     # Reject all other types explicitly - prevents silent type fallthrough
     raise TypeError(f"Type {type(obj).__name__} is not JSON-serializable for canonical JSON")
 
 
-def _encode_value(value: Any) -> str:
+def _encode_value(value: Any, _depth: int = 0) -> str:
     """
     Recursively encode a value to canonical JSON string.
 
@@ -180,13 +190,17 @@ def _encode_value(value: Any) -> str:
 
     Args:
         value: Value to encode
+        _depth: Current recursion depth (internal use only).
 
     Returns:
         Canonical JSON string representation
 
     Raises:
         TypeError: If value is not JSON-serializable or object keys are not strings
+        ValueError: If nesting depth exceeds MAX_JSON_DEPTH.
     """
+    if _depth > MAX_JSON_DEPTH:
+        raise ValueError(f"JSON nesting depth exceeds limit of {MAX_JSON_DEPTH}")
     if value is None:
         return "null"
     if value is True:
@@ -210,7 +224,7 @@ def _encode_value(value: Any) -> str:
     if isinstance(value, int | Decimal) and not isinstance(value, bool):
         return _encode_number(value)
     if isinstance(value, list | tuple):
-        return "[" + ",".join(_encode_value(item) for item in value) + "]"
+        return "[" + ",".join(_encode_value(item, _depth + 1) for item in value) + "]"
     if isinstance(value, dict):
         items = []
         for key in value:
@@ -223,7 +237,9 @@ def _encode_value(value: Any) -> str:
         # but after them in code-point order.  utf-16-be gives big-endian
         # 2-byte code units; lexicographic byte comparison equals u16 comparison.
         for key in sorted(value.keys(), key=lambda k: k.encode("utf-16-be")):
-            items.append(f"{_encode_value(key)}:{_encode_value(value[key])}")
+            items.append(
+                f"{_encode_value(key, _depth + 1)}:{_encode_value(value[key], _depth + 1)}"
+            )
         return "{" + ",".join(items) + "}"
     raise TypeError(f"Type {type(value)} is not JSON-serializable")
 

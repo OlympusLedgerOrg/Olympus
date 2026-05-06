@@ -8,8 +8,24 @@ Get Olympus running locally with **one command**.
 |-------------|-------|
 | **Docker** | [docker.com/get-docker](https://docs.docker.com/get-docker/) |
 | **Python 3.10+** | [python.org](https://www.python.org/downloads/) |
+| **Rust / Cargo** | Required by `maturin` to build the `olympus_core` extension. Install via [rustup.rs](https://rustup.rs) |
 
 No other software needs to be installed manually; both scripts handle everything else (PostgreSQL, virtual environment, migrations, API server).
+
+### Optional: Protocol Buffers Compiler (`protoc`)
+
+`protoc` is **only** required when **regenerating gRPC/protobuf stubs** for
+the Go sequencer service (`services/sequencer-go/`) or the Rust CD-HS-ST
+service (`services/cdhs-smf-rust/`).  You do **not** need `protoc` to run
+the Python API.
+
+| Platform | Install command |
+|----------|----------------|
+| macOS | `brew install protobuf` |
+| Debian/Ubuntu | `sudo apt install -y protobuf-compiler` |
+| Other | [github.com/protocolbuffers/protobuf/releases](https://github.com/protocolbuffers/protobuf/releases) |
+
+`setup-unix.sh` will warn (but not fail) if `protoc` is absent.
 
 ---
 

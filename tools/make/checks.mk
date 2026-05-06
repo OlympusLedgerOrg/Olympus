@@ -4,8 +4,8 @@
 
 check: boundary-check check-demo-keys
 	python tools/validate_schemas.py
-	ruff check protocol/ storage/ api/ scaffolding/ tests/
-	ruff format --check protocol/ storage/ api/ scaffolding/ tests/
+	ruff check protocol/ storage/ api/ scaffolding/ tests/ tools/
+	ruff format --check protocol/ storage/ api/ scaffolding/ tests/ tools/
 	mypy protocol/ storage/ api/
 	bandit -r protocol/ storage/ api/ scaffolding/ -f txt
 	pytest tests/ -v --tb=short -m "not postgres and not differential" \
@@ -19,13 +19,13 @@ check: boundary-check check-demo-keys
 
 ## format: Auto-format code with Ruff
 format:
-	ruff format protocol/ storage/ api/ scaffolding/ tests/
-	ruff check --fix protocol/ storage/ api/ scaffolding/ tests/
+	ruff format protocol/ storage/ api/ scaffolding/ tests/ tools/
+	ruff check --fix protocol/ storage/ api/ scaffolding/ tests/ tools/
 
 ## lint: Run Ruff + mypy + bandit (no tests)
 lint:
-	ruff check protocol/ storage/ api/ scaffolding/ tests/
-	ruff format --check protocol/ storage/ api/ scaffolding/ tests/
+	ruff check protocol/ storage/ api/ scaffolding/ tests/ tools/
+	ruff format --check protocol/ storage/ api/ scaffolding/ tests/ tools/
 	mypy protocol/ storage/ api/
 	bandit -r protocol/ storage/ api/ scaffolding/ -f txt
 
@@ -51,8 +51,8 @@ check-demo-keys:
 ## pre-push: Fast local CI gate (lint + typecheck + unit tests) — same as the pre-push hook
 pre-push: boundary-check check-demo-keys
 	python tools/validate_schemas.py
-	ruff check protocol/ storage/ api/ tests/ --output-format=concise
-	ruff format --check protocol/ storage/ api/ tests/
+	ruff check protocol/ storage/ api/ tests/ tools/ --output-format=concise
+	ruff format --check protocol/ storage/ api/ tests/ tools/
 	bandit -r protocol/ storage/ api/ -f txt -q
 	mypy protocol/ storage/ api/ --no-error-summary
 	pytest tests/ -q --tb=short -m "not postgres and not differential" \

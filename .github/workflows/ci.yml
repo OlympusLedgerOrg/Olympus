@@ -57,10 +57,10 @@ jobs:
       run: python tools/validate_schemas.py
 
     - name: Ruff lint
-      run: ruff check protocol/ storage/ api/ tests/ --output-format=github
+      run: ruff check protocol/ storage/ api/ tests/ tools/ --output-format=github
 
     - name: Ruff format check
-      run: ruff format --check protocol/ storage/ api/ tests/
+      run: ruff format --check protocol/ storage/ api/ tests/ tools/
 
     - name: Bandit scan
       run: bandit -r protocol/ storage/ api/ -f txt

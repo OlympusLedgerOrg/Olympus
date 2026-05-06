@@ -22,6 +22,7 @@ from typing import Any
 
 from .canonical_json import canonical_json_bytes
 from .hashes import hash_bytes
+from .proof_interface import Statement
 
 
 _log = logging.getLogger(__name__)
@@ -32,6 +33,10 @@ SUPPORTED_PROOF_PROTOCOL_VERSIONS = {OLYMPUS_DEFAULT_PROTOCOL_VERSION}
 
 # Per-operation timeout constants (seconds)
 _PROOF_TIMEOUT_SECS = 300  # proof generation can be slow on large circuits
+# Groth16 verify < 1 s on BN254; 10 s is a generous safety margin.
+# Matches groth16_backend._VERIFY_TIMEOUT_SECS — do not increase without
+# circuit-specific benchmarking.
+_VERIFY_TIMEOUT_SECS = 10  # verify is fast
 
 
 def _make_pdeathsig_preexec() -> Callable[[], None] | None:
@@ -514,13 +519,40 @@ class Groth16Prover:
         self,
         proof: ZKProof,
         verification_key_path: Path | None = None,
+        statement: Statement | None = None,
     ) -> bool:
-        """Verify a Groth16 proof with snarkjs."""
+        """Verify a Groth16 proof with snarkjs.
+
+        Args:
+            proof: The ZKProof to verify.
+            verification_key_path: Optional explicit path to the vkey JSON file.
+                If omitted, the key is located under ``circuits_dir/keys/``.
+            statement: Optional :class:`~protocol.proof_interface.Statement`
+                whose public inputs must match ``proof.public_signals`` (sorted
+                by key).  When provided, a mismatch raises
+                :class:`~subprocess.CalledProcessError`-compatible error before
+                any subprocess is spawned.  This prevents accepting a valid
+                Groth16 proof that was generated for a *different* statement.
+
+        Returns:
+            True if the proof cryptographically verifies, False otherwise.
+        """
         self._check_snarkjs()
 
         # Validate circuit name before using it in path construction to prevent
         # path-traversal attacks via a crafted circuit identifier.
         self._validate_circuit_name(proof.circuit)
+
+        # B1: Enforce statement ↔ proof public-input equality when a statement
+        # is supplied.  statement.to_list() returns inputs sorted by key.
+        if statement is not None:
+            expected_signals = [str(v) for v in statement.to_list()]
+            actual_signals = [str(v) for v in proof.public_signals]
+            if expected_signals != actual_signals:
+                raise ValueError(
+                    f"Public-input mismatch: statement expects {expected_signals!r} "
+                    f"but proof carries {actual_signals!r}"
+                )
 
         if verification_key_path is not None:
             vkey = verification_key_path
@@ -544,9 +576,11 @@ class Groth16Prover:
                 json.dump(proof.public_signals, f)
 
             try:
+                # B5: use the tight verify-specific timeout (not the proof-gen timeout)
                 self._run(
                     ["groth16", "verify", str(vkey), str(public_path), str(proof_path)],
                     cwd=self.circuits_dir,
+                    timeout=_VERIFY_TIMEOUT_SECS,
                 )
             except subprocess.CalledProcessError:
                 return False

@@ -22,6 +22,8 @@ Pytest markers:  ``fuzz``, ``security``, ``api``, ``storage``
 
 from __future__ import annotations
 
+import functools
+import os
 import re
 import uuid
 from typing import Any
@@ -59,25 +61,69 @@ _TEST_API_KEY = "fuzz-security-test-key-olympus-local"
 _TEST_KEY_ID = "fuzz-security-key"
 _TEST_SCOPES = {"read", "write", "ingest", "commit", "verify"}
 
+# Minimal env vars to set before importing api.app for the first time.
+# DATABASE_URL is removed so the app uses its in-memory fallback.
+# OLYMPUS_ALLOW_DEV_AUTH is intentionally NOT set here — conftest.py handles
+# it.  Setting it ourselves before the first import would bake _allow_dev_auth
+# = True into the auth module's module-level constant, which causes the dev-mode
+# auth bypass to fire whenever the autouse _reset_auth_state fixture clears the
+# key store between parametrised test cases.
+_STARTUP_ENV_VARS: dict[str, str] = {
+    "OLYMPUS_SEQUENCER_TOKEN": "test-sequencer-token",
+}
 
-def _make_client() -> TestClient:
-    """
-    Create a TestClient against the Olympus app with a registered test API key.
 
-    The ingest state is reset to in-memory mode so no Postgres is needed for
-    most security tests.
+@functools.lru_cache(maxsize=1)
+def _get_cached_client() -> TestClient:
     """
+    Import the FastAPI app and create a TestClient once per worker process.
+
+    This function is cached with ``lru_cache(maxsize=1)`` so that the expensive
+    import chain (api.app → api.main → Poseidon/SMT empty-hash precomputation,
+    Pydantic/SQLAlchemy settings loading) happens **once per worker process**, not
+    once per Hypothesis-generated example.
+
+    ``_reset_ingest_state_for_tests()`` is called here to enable in-memory
+    test mode (``_TEST_MODE = True``) and initialise the ingest state.  It runs
+    exactly once because the function is cached.  Key registration is NOT done
+    here — see ``_make_client()`` for the reason.
+    """
+    for key, value in _STARTUP_ENV_VARS.items():
+        os.environ.setdefault(key, value)
+    # Remove DATABASE_URL so the app uses the in-memory SQLite fallback.
+    os.environ.pop("DATABASE_URL", None)
+
     from api import ingest as ingest_api
     from api.app import app
 
+    # Set _TEST_MODE = True and initialise in-memory ingest state.  This must
+    # happen before the TestClient is constructed (which fires the lifespan).
     ingest_api._reset_ingest_state_for_tests()
+    return TestClient(app, raise_server_exceptions=False)
+
+
+def _make_client() -> TestClient:
+    """
+    Return the cached TestClient, re-registering the test API key each call.
+
+    The expensive operations (app import, TestClient construction) are cached
+    via ``_get_cached_client()`` so they run once per worker process.  Key
+    registration is re-done on every call because the autouse
+    ``_reset_auth_state`` teardown fixture clears ``_key_store`` between test
+    functions — the cache has no visibility into that teardown.  Re-registering
+    a key is a cheap dict update (O(1)) and does not weaken auth security: the
+    key store is non-empty so the dev-mode bypass never fires.
+    """
+    from api import ingest as ingest_api
+
+    client = _get_cached_client()
     ingest_api._register_api_key_for_tests(
         api_key=_TEST_API_KEY,
         key_id=_TEST_KEY_ID,
         scopes=_TEST_SCOPES,
         expires_at="2099-01-01T00:00:00Z",
     )
-    return TestClient(app, raise_server_exceptions=False)
+    return client
 
 
 def _auth_headers() -> dict[str, str]:
@@ -200,10 +246,12 @@ def test_auth_scope_enforcement_ingest_only() -> None:
     """
     AUTH-4: A key with only 'read' scope must be rejected from ingest endpoints.
     """
+    # Warm the cached client (imports api.app once), then register an extra key.
+    _get_cached_client()
+
     from api import ingest as ingest_api
     from api.app import app
 
-    ingest_api._reset_ingest_state_for_tests()
     read_only_key = "fuzz-read-only-key-" + uuid.uuid4().hex[:8]
     ingest_api._register_api_key_for_tests(
         api_key=read_only_key,
@@ -997,17 +1045,9 @@ def test_replay_different_content_same_id_is_different_record(
       a) the API accepts both submissions (no 500), and
       b) when the hashes differ locally, the API-reported hashes also differ.
     """
-    from api import ingest as ingest_api
-    from api.app import app
-
-    ingest_api._reset_ingest_state_for_tests()
-    ingest_api._register_api_key_for_tests(
-        api_key=_TEST_API_KEY,
-        key_id=_TEST_KEY_ID,
-        scopes=_TEST_SCOPES,
-        expires_at="2099-01-01T00:00:00Z",
-    )
-    client = TestClient(app, raise_server_exceptions=False)
+    # Use the cached client (F1: avoid re-importing api.app per example).
+    # The cached client already has _TEST_API_KEY registered.
+    client = _make_client()
 
     shard_id = f"fuzz-replay2-{uuid.uuid4().hex[:8]}"
     record_base = {

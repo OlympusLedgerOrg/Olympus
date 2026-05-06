@@ -44,6 +44,7 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
+from .hashes import hash_bytes
 from .proof_interface import (
     BackendNotAvailableError,
     Proof,
@@ -61,7 +62,10 @@ _log = logging.getLogger(__name__)
 # Per-operation timeout constants (seconds)
 _WITNESS_TIMEOUT_SECS = 120  # witness gen can be slow on large circuits
 _PROOF_TIMEOUT_SECS = 300  # proof gen is the longest step
-_VERIFY_TIMEOUT_SECS = 60  # verify is fast
+# Groth16 verify < 1 s on BN254; 10 s is a generous safety margin.
+# Do not increase this without circuit-specific benchmarking — a generous
+# timeout allows malformed proofs to DoS the verifier for the full interval.
+_VERIFY_TIMEOUT_SECS = 10  # verify is fast
 
 
 def _make_pdeathsig_preexec() -> Callable[[], None] | None:
@@ -461,6 +465,20 @@ class Groth16Backend(ProofBackendProtocol):
         """
         Verify a Groth16 proof.
 
+        The verifier performs three checks before delegating to snarkjs:
+
+        1. **Public-input equality** — ``statement.public_inputs`` (sorted by
+           key) must match ``proof.public_signals`` element-for-element.  This
+           prevents an attacker from supplying a valid proof for a *different*
+           statement by presenting mismatched public inputs.
+
+        2. **Verification-key hash pin** — If the environment variable
+           ``OLYMPUS_ZK_VKEY_HASH`` is set, the BLAKE3 digest of the on-disk
+           verification key is compared against it.  A mismatch means the vkey
+           file has been swapped and the verifier refuses to proceed.
+
+        3. **snarkjs groth16 verify** — The cryptographic proof check itself.
+
         Args:
             statement: The public statement that was proven
             proof: The Groth16 proof to verify
@@ -470,7 +488,8 @@ class Groth16Backend(ProofBackendProtocol):
 
         Raises:
             BackendNotAvailableError: If snarkjs is not available
-            ProofVerificationError: If verification fails unexpectedly
+            ProofVerificationError: If public inputs mismatch or vkey hash pin
+                fails, or if verification fails unexpectedly
         """
         if not self.is_available():
             raise BackendNotAvailableError(
@@ -484,10 +503,41 @@ class Groth16Backend(ProofBackendProtocol):
         circuit = proof.circuit
         self._validate_circuit_name(circuit)
 
+        # --- B1: Enforce statement ↔ proof public-input equality ---
+        # statement.to_list() returns inputs sorted by key (deterministic order).
+        # proof.public_signals is the ordered list written by the prover.
+        # Both sides must be equal as strings; a mismatch means the proof was
+        # generated for a different statement and must be rejected immediately,
+        # before any subprocess is spawned.
+        expected_signals = [str(v) for v in statement.to_list()]
+        actual_signals = [str(v) for v in proof.public_signals]
+        if expected_signals != actual_signals:
+            raise ProofVerificationError(
+                f"Public-input mismatch: statement expects {expected_signals!r} "
+                f"but proof carries {actual_signals!r}"
+            )
+
         # Find verification key
         vkey_path = self._find_verification_key(circuit)
         if vkey_path is None:
             raise ProofVerificationError(f"Verification key not found for circuit: {circuit}")
+
+        # --- B2: Pin verification-key hash ---
+        # Read the vkey bytes and verify their BLAKE3 digest against the
+        # OLYMPUS_ZK_VKEY_HASH env var (if set).  An operator must set this
+        # to the digest of the post-ceremony vkey so that a swapped vkey file
+        # is detected before the cryptographic check runs.
+        expected_vkey_hash = os.environ.get("OLYMPUS_ZK_VKEY_HASH", "").strip().lower()
+        vkey_bytes = vkey_path.read_bytes()
+        if expected_vkey_hash:
+            actual_vkey_hash = hash_bytes(vkey_bytes).hex()
+            if actual_vkey_hash != expected_vkey_hash:
+                raise ProofVerificationError(
+                    f"Verification key hash mismatch — expected {expected_vkey_hash!r}, "
+                    f"got {actual_vkey_hash!r}. "
+                    "The vkey file may have been replaced. Update OLYMPUS_ZK_VKEY_HASH "
+                    "if this is an intentional key rotation."
+                )
 
         with tempfile.TemporaryDirectory() as tmpdir:
             tmp_path = Path(tmpdir)
