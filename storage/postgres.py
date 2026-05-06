@@ -2203,6 +2203,8 @@ class StorageLayer:
 
     def _fetch_total_count(self, cur: psycopg.Cursor[Any], table_name: str) -> int:
         """Return ``COUNT(*)`` for a trusted internal table name."""
+        if table_name not in {"smt_leaves", "shard_headers"}:
+            raise ValueError(f"Unsupported internal count table: {table_name}")
         cur.execute(sql.SQL("SELECT COUNT(*) AS cnt FROM {}").format(sql.Identifier(table_name)))
         row = cur.fetchone()
         if row is None:

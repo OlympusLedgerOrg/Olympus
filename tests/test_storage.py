@@ -1003,7 +1003,7 @@ def test_verify_state_replay_matches_headers_and_ledger(storage, signing_key):
     assert result["next_seq"] is None
 
 
-def test_same_second_writes_reconstruct_historical_roots(storage, signing_key, monkeypatch):
+def test_replay_same_second_writes(storage, signing_key, monkeypatch):
     """Replay must still verify historical roots when multiple writes share one timestamp."""
     shard_id = f"test_same_second_replay_{datetime.now(UTC).timestamp()}"
     fixed_now = datetime(2026, 1, 1, 0, 0, 0, tzinfo=UTC)
@@ -1088,7 +1088,7 @@ def test_append_record_persists_nonzero_leaf_seq(storage, signing_key):
     assert int(header_row["leaf_seq"]) == int(leaf_row["global_seq"])
 
 
-def test_replay_orders_historical_state_by_global_seq(storage, signing_key, monkeypatch):
+def test_replay_uses_global_seq_order(storage, signing_key, monkeypatch):
     """Historical replay must follow global_seq order, not a timestamp/key fallback."""
     shard_id = f"test_replay_global_seq_order_{datetime.now(UTC).timestamp()}"
     fixed_now = datetime(2026, 1, 1, 0, 0, 0, tzinfo=UTC)
