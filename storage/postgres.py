@@ -2230,12 +2230,12 @@ class StorageLayer:
             upper_leaf_seq = int(self._row_get(row, "max_seq", 0)) if row is not None else 0
 
         if lower_leaf_seq_exclusive is None:
-            header_window = "sh.leaf_seq > 0 AND sh.leaf_seq <= %s"
-            leaf_window = "sl.global_seq <= %s"
+            header_window_sql = sql.SQL("sh.leaf_seq > 0 AND sh.leaf_seq <= %s")
+            leaf_window_sql = sql.SQL("sl.global_seq <= %s")
             params: tuple[Any, ...] = (upper_leaf_seq,)
         else:
-            header_window = "sh.leaf_seq > %s AND sh.leaf_seq <= %s"
-            leaf_window = "sl.global_seq > %s AND sl.global_seq <= %s"
+            header_window_sql = sql.SQL("sh.leaf_seq > %s AND sh.leaf_seq <= %s")
+            leaf_window_sql = sql.SQL("sl.global_seq > %s AND sl.global_seq <= %s")
             params = (lower_leaf_seq_exclusive, upper_leaf_seq)
 
         cur.execute(
@@ -2252,7 +2252,7 @@ class StorageLayer:
                 ORDER BY sh.leaf_seq ASC
                 LIMIT 1
                 """
-            ).format(sql.SQL(header_window)),
+            ).format(header_window_sql),
             params,
         )
         missing_row = cur.fetchone()
@@ -2277,7 +2277,7 @@ class StorageLayer:
                 ORDER BY sl.global_seq ASC
                 LIMIT 1
                 """
-            ).format(sql.SQL(leaf_window)),
+            ).format(leaf_window_sql),
             params,
         )
         orphan_row = cur.fetchone()
