@@ -1072,7 +1072,7 @@ def test_verify_state_replay_detects_header_root_divergence(storage, signing_key
         storage.get_latest_header(shard_id)
 
 
-def test_replay_naive_datetime_cutoff_is_normalized(storage, signing_key):
+def test_forged_leaf_detected_regardless_of_timestamp(storage, signing_key):
     """A forged leaf inserted outside append_record is always detected, regardless
     of how its timestamp is set.
 

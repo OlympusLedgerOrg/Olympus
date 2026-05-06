@@ -59,7 +59,6 @@ def schema_statements(node_rehash_gate: str) -> list[str]:
         )
         """,
         "CREATE INDEX IF NOT EXISTS smt_leaves_ts_idx ON smt_leaves(ts)",
-        "CREATE UNIQUE INDEX IF NOT EXISTS smt_leaves_global_seq_idx ON smt_leaves(global_seq)",
         # ADR-0003 upgrade: add parser provenance columns to existing smt_leaves.
         # ADD COLUMN IF NOT EXISTS is idempotent; the DEFAULT uses the canonical
         # fallback values so that any previously-committed rows get a meaningful
@@ -69,13 +68,27 @@ def schema_statements(node_rehash_gate: str) -> list[str]:
         "ALTER TABLE smt_leaves ADD COLUMN IF NOT EXISTS canonical_parser_version TEXT NOT NULL DEFAULT 'v1'",
         "ALTER TABLE smt_leaves ALTER COLUMN parser_id DROP DEFAULT",
         "ALTER TABLE smt_leaves ALTER COLUMN canonical_parser_version DROP DEFAULT",
-        # ADR-0004 upgrade: add global_seq (monotonically increasing identity) to
-        # smt_leaves so that replay can use sequence-based windowing instead of
-        # timestamp-based windowing, eliminating clock-skew and same-second
-        # ambiguity.  For existing tables the DO block adds the column; for freshly
-        # created tables it already exists from the CREATE TABLE above.
+        # ADR-0004 upgrade: add global_seq (monotonically increasing) to smt_leaves.
+        #
+        # For freshly created tables the column already exists from the CREATE TABLE
+        # above (GENERATED ALWAYS AS IDENTITY).
+        #
+        # For existing databases:
+        #   1. Add a plain nullable BIGINT column.
+        #   2. Back-fill using ROW_NUMBER() OVER (ORDER BY ts ASC, key ASC) so
+        #      the assigned values exactly reproduce the old timestamp-based replay
+        #      order, keeping the existing database verifiable after the upgrade.
+        #   3. Enforce NOT NULL once every row has a value.
+        #   4. Create a named sequence starting after the highest assigned value
+        #      and attach it as the column default so future INSERTs get the next
+        #      auto-assigned value without specifying global_seq explicitly.
+        #
+        # NOTE: the CREATE UNIQUE INDEX on global_seq is intentionally placed
+        # AFTER this block so that it always runs on a fully-populated column.
         """
         DO $$
+        DECLARE
+            v_max BIGINT;
         BEGIN
             IF NOT EXISTS (
                 SELECT 1
@@ -84,11 +97,39 @@ def schema_statements(node_rehash_gate: str) -> list[str]:
                   AND table_name = 'smt_leaves'
                   AND column_name = 'global_seq'
             ) THEN
+                -- Step 1: add as nullable so the UPDATE below can fill it.
+                ALTER TABLE smt_leaves ADD COLUMN global_seq BIGINT;
+
+                -- Step 2: back-fill in temporal replay order.
+                UPDATE smt_leaves sl
+                SET global_seq = ranked.rn
+                FROM (
+                    SELECT key, version,
+                           ROW_NUMBER() OVER (ORDER BY ts ASC, key ASC) AS rn
+                    FROM smt_leaves
+                ) ranked
+                WHERE sl.key = ranked.key AND sl.version = ranked.version;
+
+                -- Step 3: enforce NOT NULL after all rows have a value.
+                ALTER TABLE smt_leaves ALTER COLUMN global_seq SET NOT NULL;
+
+                -- Step 4: create a sequence starting after the max assigned value
+                -- so that new inserts continue from where the back-fill left off.
+                SELECT COALESCE(MAX(global_seq), 0) INTO v_max FROM smt_leaves;
+                CREATE SEQUENCE IF NOT EXISTS smt_leaves_global_seq_seq
+                    START WITH 1 INCREMENT BY 1;
+                PERFORM setval('smt_leaves_global_seq_seq', v_max);
                 ALTER TABLE smt_leaves
-                    ADD COLUMN global_seq BIGINT GENERATED ALWAYS AS IDENTITY;
+                    ALTER COLUMN global_seq
+                    SET DEFAULT nextval('smt_leaves_global_seq_seq');
+                ALTER SEQUENCE smt_leaves_global_seq_seq
+                    OWNED BY smt_leaves.global_seq;
             END IF;
         END $$;
         """,
+        # Unique index on global_seq — must appear AFTER the DO block above so
+        # that it runs on a fully-populated, non-NULL column in existing databases.
+        "CREATE UNIQUE INDEX IF NOT EXISTS smt_leaves_global_seq_idx ON smt_leaves(global_seq)",
         # ------------------------------------------------------------------
         # SMT Nodes
         # ------------------------------------------------------------------
@@ -154,9 +195,21 @@ def schema_statements(node_rehash_gate: str) -> list[str]:
                 CHECK (tree_size >= 0)
         )
         """,
-        # ADR-0004 upgrade: add leaf_seq to shard_headers to record which
-        # smt_leaves.global_seq was current when this header was committed.
-        # Enables seq-based replay windowing without timestamp dependence.
+        # ADR-0004 upgrade: add leaf_seq to shard_headers and back-fill for
+        # existing databases.
+        #
+        # For freshly created tables the column already exists from the CREATE
+        # TABLE above (DEFAULT 0 on the column definition is just for schema
+        # documentation; the INSERT always supplies an explicit value).
+        #
+        # For existing databases the back-fill uses two passes:
+        #   Pass 1 — smt_change_journal (when available): join on
+        #     shard_id+header_seq to find the exact leaf committed with each
+        #     header, then look up its global_seq.  scj.new_value == the
+        #     leaf's value_hash so the join is deterministic.
+        #   Pass 2 — timestamp approximation for any header still at 0 after
+        #     pass 1 (journal absent or gap in coverage): assign the max
+        #     global_seq of leaves whose ts <= the header's ts.
         """
         DO $$
         BEGIN
@@ -168,6 +221,40 @@ def schema_statements(node_rehash_gate: str) -> list[str]:
                   AND column_name = 'leaf_seq'
             ) THEN
                 ALTER TABLE shard_headers ADD COLUMN leaf_seq BIGINT NOT NULL DEFAULT 0;
+
+                -- Pass 1: back-fill via smt_change_journal when available.
+                -- scj.new_value matches smt_leaves.value_hash for the leaf
+                -- that was committed in the same append_record transaction.
+                IF to_regclass('public.smt_change_journal') IS NOT NULL THEN
+                    UPDATE shard_headers sh
+                    SET leaf_seq = (
+                        SELECT sl.global_seq
+                        FROM smt_change_journal scj
+                        JOIN smt_leaves sl
+                          ON sl.key = scj.key
+                         AND sl.value_hash = scj.new_value
+                        WHERE scj.shard_id = sh.shard_id
+                          AND scj.header_seq = sh.seq
+                        LIMIT 1
+                    )
+                    WHERE leaf_seq = 0
+                      AND EXISTS (
+                          SELECT 1 FROM smt_change_journal scj2
+                          WHERE scj2.shard_id = sh.shard_id
+                            AND scj2.header_seq = sh.seq
+                      );
+                END IF;
+
+                -- Pass 2: timestamp-based fallback for headers with no journal
+                -- coverage.  Assigns the max global_seq of leaves whose ts is
+                -- at or before the header timestamp.
+                UPDATE shard_headers sh
+                SET leaf_seq = (
+                    SELECT COALESCE(MAX(sl.global_seq), 0)
+                    FROM smt_leaves sl
+                    WHERE sl.ts <= sh.ts
+                )
+                WHERE leaf_seq = 0;
             END IF;
         END $$;
         """,

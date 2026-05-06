@@ -2220,10 +2220,10 @@ class StorageLayer:
         from ``smt_nodes`` (O(1)) instead of replaying all leaves.  Historical
         snapshots still require a leaf replay.
 
-        Also verifies the global leaf/header count invariant: the total number
-        of rows in ``smt_leaves`` must equal the total number of rows across all
-        ``shard_headers``.  A mismatch indicates that a leaf was inserted
-        outside of ``append_record`` (e.g. a forged leaf).
+        In both branches the global leaf/header count invariant is checked:
+        the total number of rows in ``smt_leaves`` must equal the total number
+        of rows across all ``shard_headers``.  A mismatch indicates that a leaf
+        was inserted outside of ``append_record`` (e.g. a forged leaf).
 
         Args:
             cur: Active database cursor (read-only).
@@ -2246,6 +2246,28 @@ class StorageLayer:
                 if node_row is not None
                 else EMPTY_HASHES[256]
             )
+
+            # Count invariant — runs in both branches (O(1) table scan).
+            cur.execute("SELECT COUNT(*) AS cnt FROM smt_leaves")
+            total_leaves_row = cur.fetchone()
+            total_leaves = int(
+                total_leaves_row["cnt"]
+                if isinstance(total_leaves_row, Mapping)
+                else total_leaves_row[0]
+            )
+            cur.execute("SELECT COUNT(*) AS cnt FROM shard_headers")
+            total_headers_row = cur.fetchone()
+            total_headers = int(
+                total_headers_row["cnt"]
+                if isinstance(total_headers_row, Mapping)
+                else total_headers_row[0]
+            )
+            if total_leaves != total_headers:
+                raise ValueError(
+                    f"Computed root integrity failure for shard '{shard_id}': "
+                    f"{total_leaves} smt_leaves vs {total_headers} shard_headers — "
+                    "possible forged leaf insertion outside append_record()"
+                )
         else:
             # Historical snapshot — incremental replay from leaves using
             # global_seq-based windowing (ADR-0004).
