@@ -81,25 +81,31 @@ function testCrossLibraryBlake3(vectors) {
   let blake3WasmMod;
   try {
     blake3WasmMod = require('blake3-wasm');
-  } catch (_) {
-    console.warn(
-      '\n  ⚠️  WARNING: blake3-wasm not installed — cross-library BLAKE3 ' +
-      'agreement test SKIPPED.\n' +
-      '  Run `npm install` in verifiers/javascript to enable this test.\n' +
-      '  Without this test, blake3-wasm (browser) and @noble/hashes (Node/verifier)\n' +
-      '  agreement is UNVERIFIED for your environment.\n'
-    );
-    return;
+  } catch (err) {
+    // Only skip when blake3-wasm is genuinely not installed. Any other failure
+    // (Node/WASM incompatibility, corrupted install, etc.) is a hard error so CI
+    // cannot silently pass without actually checking cross-library agreement.
+    if (err && err.code === 'MODULE_NOT_FOUND' && err.message && err.message.includes('blake3-wasm')) {
+      console.warn(
+        '\n  ⚠️  WARNING: blake3-wasm not installed — cross-library BLAKE3 ' +
+        'agreement test SKIPPED.\n' +
+        '  Run `npm install` in verifiers/javascript to enable this test.\n' +
+        '  Without this test, blake3-wasm (browser) and @noble/hashes (Node/verifier)\n' +
+        '  agreement is UNVERIFIED for your environment.\n'
+      );
+      return;
+    }
+    throw err;
   }
 
   // blake3-wasm's default export for Node.js exposes a `hash` function.
   const wasmHash = blake3WasmMod.hash ?? blake3WasmMod.default?.hash;
   if (typeof wasmHash !== 'function') {
-    console.warn(
-      '  ⚠️  WARNING: blake3-wasm did not export a `hash` function — ' +
-      'cross-library test SKIPPED.'
+    throw new Error(
+      'blake3-wasm is installed but did not export a `hash` function. ' +
+      'This indicates an API incompatibility between the installed version and what the test expects. ' +
+      'Cross-library blake3 agreement is unverified — update blake3-wasm or fix this test.'
     );
-    return;
   }
 
   let passed = 0;
