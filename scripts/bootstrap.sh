@@ -193,11 +193,32 @@ if [ -z "$(grep -E '^OLYMPUS_SEQUENCER_TOKEN=' "${ENV_FILE}" | head -n1 | cut -d
     log "Generated OLYMPUS_SEQUENCER_TOKEN."
 fi
 
+if [ -z "$(grep -E '^OLYMPUS_INGEST_SIGNING_KEY=' "${ENV_FILE}" | head -n1 | cut -d= -f2- || true)" ]; then
+    SIGNING_KEY="$(openssl rand -hex 32)"
+    set_env_if_blank "OLYMPUS_INGEST_SIGNING_KEY" "${SIGNING_KEY}"
+    log "Generated OLYMPUS_INGEST_SIGNING_KEY (Ed25519 seed)."
+fi
+
+# Provide safe local-dev defaults for Traefik / Let's Encrypt variables.
+# These suppress docker compose interpolation warnings on workstations that
+# are not yet configured for a public domain.
+CURRENT_DOMAIN="$(grep -E '^OLYMPUS_DOMAIN=' "${ENV_FILE}" | head -n1 | cut -d= -f2- || true)"
+if [ -z "${CURRENT_DOMAIN}" ] || printf '%s' "${CURRENT_DOMAIN}" | grep -q 'yourdomain'; then
+    set_env_if_blank "OLYMPUS_DOMAIN" "localhost"
+    log "Set OLYMPUS_DOMAIN=localhost (update for production)."
+fi
+
+CURRENT_EMAIL="$(grep -E '^ACME_EMAIL=' "${ENV_FILE}" | head -n1 | cut -d= -f2- || true)"
+if [ -z "${CURRENT_EMAIL}" ] || printf '%s' "${CURRENT_EMAIL}" | grep -q 'yourdomain'; then
+    set_env_if_blank "ACME_EMAIL" "admin@localhost"
+    log "Set ACME_EMAIL=admin@localhost (update for production)."
+fi
+
 log "Bootstrap complete."
 log ""
 log "Next steps:"
-log "  1. Review .env and fill in any remaining placeholders"
-log "     (CORS_ORIGINS, OLYMPUS_DOMAIN, ACME_EMAIL, ANTHROPIC_API_KEY, ...)."
+log "  1. Edit .env to set your real OLYMPUS_DOMAIN, ACME_EMAIL, and"
+log "     ANTHROPIC_API_KEY before a production deployment."
 log "  2. Bring the stack up:"
 log "       docker compose up -d"
 log "     Or, with the Go sequencer profile:"

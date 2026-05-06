@@ -13,19 +13,31 @@
 //! - Ed25519 signing for root commitments
 //! - Protobuf API over Unix domain socket
 
+#[cfg(unix)]
 use std::env;
+#[cfg(unix)]
 use std::fs;
+#[cfg(unix)]
 use std::io;
+#[cfg(unix)]
 use std::os::unix::fs::PermissionsExt;
+#[cfg(unix)]
 use std::path::Path;
 use std::sync::Arc;
 use std::time::Duration;
 
+#[cfg(unix)]
 use tokio::net::UnixListener;
+#[cfg(unix)]
 use tokio::signal::unix::{signal, SignalKind};
+#[cfg(unix)]
 use tokio_stream::wrappers::UnixListenerStream;
-use tonic::{transport::Server, Request, Response, Status};
-use tracing::{info, warn};
+#[cfg(unix)]
+use tonic::transport::Server;
+use tonic::{Request, Response, Status};
+#[cfg(unix)]
+use tracing::warn;
+use tracing::info;
 use uuid::Uuid;
 
 use cdhs_smf_service::canonicalization;
@@ -77,6 +89,7 @@ impl CdhsSmfService {
     }
 }
 
+#[cfg(unix)]
 const DEFAULT_SOCKET_PATH: &str = "/run/olympus/cdhs-smf.sock";
 
 /// Maximum gRPC message size accepted from the Go sequencer.
@@ -88,6 +101,7 @@ const DEFAULT_SOCKET_PATH: &str = "/run/olympus/cdhs-smf.sock";
 /// Rust gRPC server allows the same. Tonic's default of 4 MiB would reject
 /// large canonical-content uploads with a misleading "decoded message too
 /// large" error.
+#[cfg(unix)]
 const GRPC_MAX_MESSAGE_BYTES: usize = 32 * 1024 * 1024;
 
 /// Resolve the leaf value hash from a request that carries either
@@ -630,6 +644,7 @@ impl CdhsSmfServiceTrait for CdhsSmfService {
     }
 }
 
+#[cfg(unix)]
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Initialize tracing
@@ -724,12 +739,19 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
+#[cfg(not(unix))]
+fn main() {
+    eprintln!("cdhs-smf-service requires Unix domain sockets; run it under Linux or WSL");
+    std::process::exit(1);
+}
+
 /// Resolves when the process receives SIGTERM or SIGINT (Ctrl-C).
 ///
 /// Used by `serve_with_incoming_shutdown` so tonic stops accepting new
 /// connections and waits for in-flight RPCs (notably `Update`, which mutates
 /// the SMT) to finish before the binary exits. Container orchestrators send
 /// SIGTERM on stop; SIGINT is for interactive runs.
+#[cfg(unix)]
 async fn shutdown_signal() {
     let mut sigterm = match signal(SignalKind::terminate()) {
         Ok(s) => s,
