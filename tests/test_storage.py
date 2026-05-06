@@ -1352,3 +1352,81 @@ def test_init_schema_renames_legacy_smt_tables(storage):
             "hash",
             "ts",
         ]
+
+
+def test_verify_shard_integrity_detects_root_mismatch(storage, signing_key):
+    """verify_shard_integrity must raise when the supplied replayed root differs from the header."""
+    shard_id = f"test_integrity_root_mismatch_{uuid.uuid4().hex}"
+
+    storage.append_record(
+        shard_id=shard_id,
+        record_type="document",
+        record_id="doc-integrity-1",
+        version=1,
+        value_hash=hash_bytes(b"integrity-1"),
+        signing_key=signing_key,
+    )
+
+    with storage._get_connection() as conn, conn.cursor(row_factory=dict_row) as cur:
+        cur.execute(
+            """
+            SELECT leaf_seq, root
+            FROM shard_headers
+            WHERE shard_id = %s AND leaf_seq > 0
+            ORDER BY leaf_seq DESC
+            LIMIT 1
+            """,
+            (shard_id,),
+        )
+        header = cur.fetchone()
+
+    assert header is not None
+    real_leaf_seq = int(header["leaf_seq"])
+
+    # Supply an intentionally wrong replayed root; the persisted header root is correct.
+    wrong_root = b"\xff" * 32
+    assert bytes(header["root"]) != wrong_root
+
+    with pytest.raises(ValueError, match="mismatch"):
+        storage.verify_shard_integrity(shard_id, {real_leaf_seq: wrong_root})
+
+
+def test_verify_shard_integrity_detects_missing_leaf(storage, signing_key):
+    """verify_shard_integrity must raise when a header inside the window has no mapping entry."""
+    shard_id = f"test_integrity_missing_leaf_{uuid.uuid4().hex}"
+
+    storage.append_record(
+        shard_id=shard_id,
+        record_type="document",
+        record_id="doc-missing-1",
+        version=1,
+        value_hash=hash_bytes(b"missing-1"),
+        signing_key=signing_key,
+    )
+
+    with storage._get_connection() as conn, conn.cursor(row_factory=dict_row) as cur:
+        cur.execute(
+            """
+            SELECT leaf_seq
+            FROM shard_headers
+            WHERE shard_id = %s AND leaf_seq > 0
+            ORDER BY leaf_seq DESC
+            LIMIT 1
+            """,
+            (shard_id,),
+        )
+        header = cur.fetchone()
+
+    assert header is not None
+    real_leaf_seq = int(header["leaf_seq"])
+
+    # Build a window [K-1, K+1] that encompasses the header's leaf_seq (K),
+    # but deliberately omits K from the mapping.  verify_shard_integrity must
+    # detect that the header inside the window has no corresponding replay entry.
+    roots_missing_middle = {
+        real_leaf_seq - 1: b"\x01" * 32,
+        real_leaf_seq + 1: b"\x02" * 32,
+    }
+
+    with pytest.raises(ValueError, match="missing leaf_seq"):
+        storage.verify_shard_integrity(shard_id, roots_missing_middle)

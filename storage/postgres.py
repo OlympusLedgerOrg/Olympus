@@ -2553,6 +2553,132 @@ class StorageLayer:
                 return EMPTY_HASHES[256]
             return bytes(row["root"])
 
+    @staticmethod
+    def _normalize_root(root: bytes | str | memoryview | None) -> str:
+        """
+        Standardize a cryptographic root for comparison across storage backends.
+
+        Accepts the full range of persisted root representations (raw bytes,
+        hex strings, memoryview slices, or None for an empty-tree sentinel) and
+        returns a lowercase hex string for uniform comparison.
+
+        Args:
+            root: Raw bytes, hex string, memoryview, or None.
+
+        Returns:
+            Lowercase hex string; empty string when *root* is None.
+        """
+        if root is None:
+            return ""
+        if isinstance(root, memoryview):
+            root = bytes(root)
+        if isinstance(root, bytes):
+            return root.hex()
+        return str(root).lower().removeprefix("0x")
+
+    def get_shard_headers_by_leaf_seq_range(
+        self,
+        shard_id: str,
+        min_leaf_seq: int,
+        max_leaf_seq: int,
+    ) -> list[dict[str, Any]]:
+        """
+        Return shard headers whose ``leaf_seq`` falls in the closed interval
+        ``[min_leaf_seq, max_leaf_seq]``, ordered by ``leaf_seq ASC``.
+
+        Only headers with ``leaf_seq > 0`` are meaningful checkpoints.
+        Headers with ``leaf_seq = 0`` are genesis/system rows that were
+        inserted before the first state-changing ``append_record`` call.
+
+        Args:
+            shard_id: Shard identifier.
+            min_leaf_seq: Lower bound (inclusive) of the ``leaf_seq`` window.
+            max_leaf_seq: Upper bound (inclusive) of the ``leaf_seq`` window.
+
+        Returns:
+            List of row dicts with at minimum ``leaf_seq`` and ``root`` keys.
+        """
+        with self._get_connection() as conn, conn.cursor(row_factory=dict_row) as cur:
+            cur.execute(
+                """
+                SELECT leaf_seq, root
+                FROM shard_headers
+                WHERE shard_id = %s
+                  AND leaf_seq >= %s
+                  AND leaf_seq <= %s
+                ORDER BY leaf_seq ASC
+                """,
+                (shard_id, min_leaf_seq, max_leaf_seq),
+            )
+            return cur.fetchall()
+
+    def verify_shard_integrity(
+        self,
+        shard_id: str,
+        roots_by_leaf_seq: Mapping[int, bytes | str | memoryview | None],
+    ) -> None:
+        """
+        Verify that every persisted shard-header root within a replay window
+        matches the corresponding replayed SMT root.
+
+        The *replay window* is derived from the caller-supplied mapping:
+        ``[min(roots_by_leaf_seq), max(roots_by_leaf_seq)]``.  Every header
+        inside this range must have an entry in the mapping.  Headers with
+        ``leaf_seq <= 0`` are treated as non-state-changing metadata rows and
+        are silently skipped.
+
+        Args:
+            shard_id: Shard identifier.
+            roots_by_leaf_seq: Mapping of ``leaf_seq → replayed SMT root``.
+                The caller is responsible for computing the replayed roots
+                (e.g. by running ``replay_tree_incremental``).  The values
+                may be bytes, hex strings, memoryview slices, or None.
+
+        Raises:
+            ValueError: When a header inside the window is absent from the
+                mapping (missing replay entry), when the mapping provides
+                a ``None`` root for a header (replay gap), or when the
+                persisted header root does not match the replayed root.
+        """
+        if not roots_by_leaf_seq:
+            return
+
+        min_leaf_seq = min(roots_by_leaf_seq)
+        max_leaf_seq = max(roots_by_leaf_seq)
+
+        headers = self.get_shard_headers_by_leaf_seq_range(shard_id, min_leaf_seq, max_leaf_seq)
+
+        for header in headers:
+            leaf_seq = int(header["leaf_seq"])
+
+            # Skip non-state-changing genesis/system headers.
+            if leaf_seq <= 0:
+                continue
+
+            if leaf_seq not in roots_by_leaf_seq:
+                raise ValueError(
+                    f"Integrity Error: shard {shard_id!r} header references "
+                    f"missing leaf_seq={leaf_seq} — replay window lacks an entry "
+                    "for this checkpoint"
+                )
+
+            replayed_root = roots_by_leaf_seq[leaf_seq]
+
+            if replayed_root is None:
+                raise ValueError(
+                    f"Integrity Error: shard {shard_id!r} header has null replayed "
+                    f"root at leaf_seq={leaf_seq}"
+                )
+
+            expected = self._normalize_root(header["root"])
+            actual = self._normalize_root(replayed_root)
+
+            if expected != actual:
+                raise ValueError(
+                    f"Shard {shard_id!r} root mismatch at leaf_seq={leaf_seq}: "
+                    f"header_root={expected} replay_root={actual}"
+                )
+
     def replay_tree_incremental(
         self,
         shard_id: str,
