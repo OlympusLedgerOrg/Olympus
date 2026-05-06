@@ -1715,7 +1715,7 @@ class StorageLayer:
             after_seq: Resume after this sequence number (default 0).
 
         Raises:
-            ValueError: If counts diverge or any root mismatch is detected.
+            ValueError: If structural seq integrity fails or any root mismatch is detected.
         """
         return self.replay_tree_incremental(
             shard_id,
@@ -2201,15 +2201,93 @@ class StorageLayer:
             return row[key]
         return row[idx]
 
-    def _fetch_total_count(self, cur: psycopg.Cursor[Any], table_name: str) -> int:
-        """Return ``COUNT(*)`` for a trusted internal table name."""
-        if table_name not in {"smt_leaves", "shard_headers"}:
-            raise ValueError(f"Unsupported internal count table: {table_name}")
-        cur.execute(sql.SQL("SELECT COUNT(*) AS cnt FROM {}").format(sql.Identifier(table_name)))
-        row = cur.fetchone()
-        if row is None:
-            raise RuntimeError(f"COUNT(*) query for table '{table_name}' returned no rows")
-        return int(row["cnt"] if isinstance(row, Mapping) else row[0])
+    def _assert_leaf_seq_integrity(
+        self,
+        cur: psycopg.Cursor[Any],
+        shard_id: str,
+        error_prefix: str,
+        upper_leaf_seq: int | None,
+        lower_leaf_seq_exclusive: int | None = None,
+    ) -> None:
+        """
+        Verify that replay-relevant ``shard_headers.leaf_seq`` claims match
+        replay-relevant ``smt_leaves.global_seq`` rows exactly.
+
+        Headers with ``leaf_seq <= 0`` are ignored so genesis/system/setup
+        headers that do not correspond to a state-changing SMT write do not fail
+        validation.
+        """
+        if upper_leaf_seq is None:
+            cur.execute(
+                """
+                SELECT GREATEST(
+                    COALESCE((SELECT MAX(global_seq) FROM smt_leaves), 0),
+                    COALESCE((SELECT MAX(leaf_seq) FROM shard_headers), 0)
+                ) AS max_seq
+                """
+            )
+            row = cur.fetchone()
+            upper_leaf_seq = int(self._row_get(row, "max_seq", 0)) if row is not None else 0
+
+        if lower_leaf_seq_exclusive is None:
+            header_window = "sh.leaf_seq > 0 AND sh.leaf_seq <= %s"
+            leaf_window = "sl.global_seq <= %s"
+            params: tuple[Any, ...] = (upper_leaf_seq,)
+        else:
+            header_window = "sh.leaf_seq > %s AND sh.leaf_seq <= %s"
+            leaf_window = "sl.global_seq > %s AND sl.global_seq <= %s"
+            params = (lower_leaf_seq_exclusive, upper_leaf_seq)
+
+        cur.execute(
+            sql.SQL(
+                """
+                SELECT sh.leaf_seq
+                FROM shard_headers sh
+                WHERE {}
+                  AND NOT EXISTS (
+                      SELECT 1
+                      FROM smt_leaves sl
+                      WHERE sl.global_seq = sh.leaf_seq
+                  )
+                ORDER BY sh.leaf_seq ASC
+                LIMIT 1
+                """
+            ).format(sql.SQL(header_window)),
+            params,
+        )
+        missing_row = cur.fetchone()
+        if missing_row is not None:
+            missing_leaf_seq = int(self._row_get(missing_row, "leaf_seq", 0))
+            raise ValueError(
+                f"{error_prefix} for shard '{shard_id}': shard_headers.leaf_seq "
+                f"{missing_leaf_seq} has no corresponding smt_leaves.global_seq"
+            )
+
+        cur.execute(
+            sql.SQL(
+                """
+                SELECT sl.global_seq
+                FROM smt_leaves sl
+                WHERE {}
+                  AND NOT EXISTS (
+                      SELECT 1
+                      FROM shard_headers sh
+                      WHERE sh.leaf_seq = sl.global_seq
+                  )
+                ORDER BY sl.global_seq ASC
+                LIMIT 1
+                """
+            ).format(sql.SQL(leaf_window)),
+            params,
+        )
+        orphan_row = cur.fetchone()
+        if orphan_row is not None:
+            orphaned_leaf_seq = int(self._row_get(orphan_row, "global_seq", 0))
+            raise ValueError(
+                f"{error_prefix} for shard '{shard_id}': orphaned "
+                f"smt_leaves.global_seq {orphaned_leaf_seq} has no corresponding "
+                "shard_headers.leaf_seq claim"
+            )
 
     def _assert_root_matches_state(
         self,
@@ -2230,13 +2308,13 @@ class StorageLayer:
         from ``smt_nodes`` (O(1)) instead of replaying all leaves.  Historical
         snapshots still require a leaf replay.
 
-        In both branches the global leaf/header count invariant is checked:
-        the total number of rows in ``smt_leaves`` must equal the total number
-        of rows across all ``shard_headers``. This assumes every successful
-        ``append_record()`` transaction appends exactly one leaf row and one
-        shard-header row. A mismatch indicates that a leaf was inserted outside
-        of ``append_record`` (e.g. a forged leaf) or that some non-standard
-        maintenance path broke the expected 1:1 cardinality.
+        In both branches the structural ``leaf_seq`` integrity invariant is
+        checked within the replay boundary: every positive
+        ``shard_headers.leaf_seq`` claim must resolve to a matching
+        ``smt_leaves.global_seq`` row, and every replayed ``global_seq`` must be
+        claimed by some header. Headers with ``leaf_seq <= 0`` are treated as
+        non-state-changing metadata/checkpoint headers and are excluded from
+        this integrity check.
 
         Args:
             cur: Active database cursor (read-only).
@@ -2248,7 +2326,8 @@ class StorageLayer:
 
         Raises:
             ValueError: When the recomputed root diverges from ``expected_root``
-                or when the global leaf/header count invariant is violated.
+                or when ``leaf_seq``/``global_seq`` structural integrity is
+                violated.
         """
         if as_of_leaf_seq is None:
             # Fast path: read root directly from smt_nodes (O(1)).
@@ -2259,16 +2338,12 @@ class StorageLayer:
                 if node_row is not None
                 else EMPTY_HASHES[256]
             )
-
-            # Count invariant — runs in both branches (O(1) table scan).
-            total_leaves = self._fetch_total_count(cur, "smt_leaves")
-            total_headers = self._fetch_total_count(cur, "shard_headers")
-            if total_leaves != total_headers:
-                raise ValueError(
-                    f"Computed root integrity failure for shard '{shard_id}': "
-                    f"{total_leaves} smt_leaves vs {total_headers} shard_headers — "
-                    "possible forged leaf insertion outside append_record()"
-                )
+            self._assert_leaf_seq_integrity(
+                cur,
+                shard_id,
+                "Computed root integrity failure",
+                upper_leaf_seq=None,
+            )
         else:
             # Historical snapshot — incremental replay from leaves using
             # global_seq-based windowing (ADR-0004).
@@ -2301,18 +2376,12 @@ class StorageLayer:
                 offset += len(rows)
 
             computed_root = replay_tree.get_root()
-
-            # Global leaf/header count invariant: every smt_leaf must have
-            # a corresponding shard_header (append_record creates exactly
-            # one of each per call).  Extra leaves indicate divergence.
-            total_leaves = self._fetch_total_count(cur, "smt_leaves")
-            total_headers = self._fetch_total_count(cur, "shard_headers")
-            if total_leaves != total_headers:
-                raise ValueError(
-                    f"Computed root integrity failure for shard '{shard_id}': "
-                    f"{total_leaves} smt_leaves vs {total_headers} shard_headers — "
-                    "possible forged leaf insertion outside append_record()"
-                )
+            self._assert_leaf_seq_integrity(
+                cur,
+                shard_id,
+                "Computed root integrity failure",
+                upper_leaf_seq=as_of_leaf_seq,
+            )
 
         if computed_root != expected_root:
             raise ValueError(
@@ -2501,9 +2570,10 @@ class StorageLayer:
         in-memory tree is carried forward between checkpoints rather than
         being rebuilt from scratch each time.
 
-        The final ``COUNT(smt_leaves) == COUNT(shard_headers)`` check relies on
-        the append contract that every successful ``append_record()`` writes
-        exactly one leaf row and one shard-header row in the same transaction.
+        Each replay window also checks structural seq integrity:
+        positive ``shard_headers.leaf_seq`` claims inside the window must match
+        existing ``smt_leaves.global_seq`` rows, and replayed leaves in the
+        same window must be claimed by some header.
 
         When *max_headers* is set the method stops after that many headers
         and returns a cursor (``next_seq``) so callers can page through the
@@ -2528,7 +2598,7 @@ class StorageLayer:
               or ``None`` when verification is complete.
 
         Raises:
-            ValueError: On any root mismatch or count divergence.
+            ValueError: On any root mismatch or structural seq divergence.
         """
         with self._get_connection() as conn, conn.cursor(row_factory=dict_row) as cur:
             # Fetch headers in sequence order, applying cursor filter.
@@ -2655,6 +2725,14 @@ class StorageLayer:
                         )
                     offset += len(rows)
 
+                self._assert_leaf_seq_integrity(
+                    cur,
+                    shard_id,
+                    "Replay mismatch",
+                    upper_leaf_seq=header_leaf_seq,
+                    lower_leaf_seq_exclusive=prev_leaf_seq,
+                )
+
                 computed_root = tree.get_root()
                 header_seq = int(self._row_get(header_row, "seq", 0))
                 expected_header_root = bytes(self._row_get(header_row, "root", 1))
@@ -2702,20 +2780,6 @@ class StorageLayer:
                         f"Replay mismatch for shard '{shard_id}': latest persisted root "
                         f"{latest_header_root.hex()} does not match current state "
                         f"{tree.get_root().hex()}"
-                    )
-
-                # (b) Global leaf/header count invariant: every successful
-                # append_record() transaction must create exactly one smt_leaf
-                # row and one shard_header row.  Extra leaves indicate a forged
-                # leaf or some other out-of-band write path that broke the
-                # expected 1:1 cardinality.
-                total_leaves = self._fetch_total_count(cur, "smt_leaves")
-                total_headers_all = self._fetch_total_count(cur, "shard_headers")
-                if total_leaves != total_headers_all:
-                    raise ValueError(
-                        f"Replay mismatch for shard '{shard_id}': {total_leaves} smt_leaves "
-                        f"vs {total_headers_all} total shard_headers — "
-                        "possible forged leaf outside append_record()"
                     )
 
             return {

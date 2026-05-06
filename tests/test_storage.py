@@ -1149,14 +1149,14 @@ def test_verify_state_replay_detects_header_root_divergence(storage, signing_key
 
     Since shard_headers is append-only (UPDATE/DELETE are rejected by trigger),
     we simulate divergence by inserting a forged leaf directly into smt_leaves
-    outside of append_record.  This changes the tree state without creating a
-    corresponding header, so:
-    - verify_state_replay detects a count mismatch (more leaves than headers).
+    outside of append_record. This changes the tree state without creating a
+    corresponding ``shard_headers.leaf_seq`` claim, so:
+    - verify_state_replay detects an orphaned global_seq in the replay window.
     - get_latest_header detects the same via _assert_root_matches_state.
 
     With seq-based replay (ADR-0004) timestamp backdating is no longer required:
-    the forged leaf gets the next global_seq value and is detected by the global
-    leaf/header count invariant regardless of its ts value.
+    the forged leaf gets the next global_seq value and is detected structurally
+    regardless of its ts value.
     """
     shard_id = f"test_verify_state_replay_detects_divergence_{datetime.now(UTC).timestamp()}"
 
@@ -1183,9 +1183,9 @@ def test_verify_state_replay_detects_header_root_divergence(storage, signing_key
     # so this is a realistic threat vector that the replay verifier must detect.
     #
     # The forged leaf's global_seq is automatically assigned by the IDENTITY
-    # column to be higher than the two legitimate leaves.  The seq-based
-    # invariant (COUNT(smt_leaves) == COUNT(shard_headers)) then detects
-    # the extra leaf without relying on timestamp ordering.
+    # column to be higher than the two legitimate leaves. The seq-based replay
+    # now detects that orphaned global_seq structurally, without relying on
+    # timestamp ordering or raw table counts.
     forged_version = 9999
     forged_record_key = record_key("document", "forged-doc", forged_version)
     forged_key = global_key(shard_id, forged_record_key)
@@ -1206,12 +1206,12 @@ def test_verify_state_replay_detects_header_root_divergence(storage, signing_key
         )
         conn.commit()
 
-    # verify_state_replay should detect the count discrepancy (more leaves than headers).
+    # verify_state_replay should detect the orphaned leaf_seq/global_seq mismatch.
     with pytest.raises(ValueError, match="mismatch"):
         storage.verify_state_replay(shard_id)
 
-    # get_latest_header should also reject the diverged state via the global
-    # leaf/header count invariant check in _assert_root_matches_state.
+    # get_latest_header should also reject the diverged state via the structural
+    # leaf_seq/global_seq integrity check in _assert_root_matches_state.
     with pytest.raises(ValueError, match="Computed root"):
         storage.get_latest_header(shard_id)
 
@@ -1222,10 +1222,10 @@ def test_forged_leaf_detected_regardless_of_timestamp(storage, signing_key):
 
     With seq-based replay (ADR-0004) the replay no longer relies on timestamp
     comparisons, so timezone-naive or backdated timestamps no longer cause
-    leaves to be silently excluded from the replay window.  Instead, the global
-    leaf/header count invariant catches the discrepancy: COUNT(smt_leaves) must
-    equal COUNT(shard_headers), so any extra leaf – regardless of its ts value –
-    causes both verify_state_replay and get_latest_header to raise ValueError.
+    leaves to be silently excluded from the replay window. Instead, structural
+    seq integrity catches the discrepancy: any extra leaf without a matching
+    ``shard_headers.leaf_seq`` claim causes both verify_state_replay and
+    get_latest_header to raise ValueError.
     """
     shard_id = f"test_replay_naive_tz_{datetime.now(UTC).timestamp()}"
 
@@ -1255,8 +1255,8 @@ def test_forged_leaf_detected_regardless_of_timestamp(storage, signing_key):
         # Construct a naive datetime (tzinfo=None) backdated by 1 µs.
         # Under the old timestamp-based replay this would have caused the forged
         # leaf to be included in the first window and trigger a root mismatch;
-        # under seq-based replay the timestamp is irrelevant — the count check
-        # detects the extra leaf instead.
+        # under seq-based replay the timestamp is irrelevant — the structural
+        # seq check detects the extra leaf instead.
         naive_ts = first_header_ts.replace(tzinfo=None) - timedelta(microseconds=1)
         # _NODE_REHASH_GATE is a compile-time BLAKE3 constant; SET LOCAL does
         # not accept psycopg parameters, so f-string interpolation is safe.
@@ -1335,6 +1335,7 @@ def test_init_schema_renames_legacy_smt_tables(storage):
             "parser_id",
             "canonical_parser_version",
             "ts",
+            "global_seq",
         ]
 
         cur.execute(
