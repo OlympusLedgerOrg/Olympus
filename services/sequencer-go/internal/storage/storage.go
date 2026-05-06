@@ -6,6 +6,7 @@ import (
 	"database/sql"
 	"fmt"
 	"net/url"
+	"os"
 	"strings"
 
 	_ "github.com/lib/pq"
@@ -40,6 +41,11 @@ func requireVerifyingSSLMode(connStr string) error {
 	switch mode {
 	case "verify-full", "verify-ca":
 		return nil
+	case "disable":
+		if os.Getenv("SEQUENCER_ALLOW_INSECURE_DB") == "1" {
+			return nil
+		}
+		fallthrough
 	default:
 		return fmt.Errorf("postgres sslmode=%q is not permitted for the cryptographic state DB; "+
 			"use sslmode=verify-full or sslmode=verify-ca", mode)
@@ -136,6 +142,9 @@ func (s *PostgresStorage) StoreNodeDelta(ctx context.Context, path []byte, level
 // Precondition: the caller must have called setRehashGate() on the transaction first;
 // otherwise the ON CONFLICT DO UPDATE will be rejected by the Postgres trigger.
 func storeNodeDeltaInTx(ctx context.Context, tx *sql.Tx, path []byte, level uint32, hash []byte) error {
+	if path == nil {
+		path = []byte{}
+	}
 	query := `
 		INSERT INTO cdhs_smf_nodes (path, level, hash, created_at)
 		VALUES ($1, $2, $3, NOW())
@@ -153,7 +162,7 @@ func storeNodeDeltaInTx(ctx context.Context, tx *sql.Tx, path []byte, level uint
 // Must be called once per transaction before any storeNodeDeltaInTx calls.
 func setRehashGate(ctx context.Context, tx *sql.Tx) error {
 	if _, err := tx.ExecContext(ctx,
-		"SET LOCAL olympus.allow_node_rehash = $1", nodeRehashGate,
+		"SELECT set_config('olympus.allow_node_rehash', $1, true)", nodeRehashGate,
 	); err != nil {
 		return fmt.Errorf("set rehash gate: %w", err)
 	}

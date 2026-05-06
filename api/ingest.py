@@ -522,11 +522,12 @@ async def _fetch_by_content_hash(content_hash_hex: str) -> dict[str, Any] | None
 # are managed by the single MemoryRateLimitBackend (or future Redis backend).
 # ---------------------------------------------------------------------------
 
-_rate_limit_policy: dict[str, tuple[float, float]] = {
+_DEFAULT_RATE_LIMIT_POLICY: dict[str, tuple[float, float]] = {
     "ingest": (60.0, 1.0),
     "commit": (30.0, 0.5),
     "verify": (120.0, 2.0),
 }
+_rate_limit_policy: dict[str, tuple[float, float]] = _DEFAULT_RATE_LIMIT_POLICY.copy()
 
 # Maximum number of entries in ingestion caches to prevent OOM under sustained load
 _INGESTION_CACHE_LRU_CAP = 50_000
@@ -576,7 +577,7 @@ def _register_api_key_for_tests(
 
 def _reset_ingest_state_for_tests() -> None:  # pragma: no cover - test utility
     """Reset in-memory ingestion, auth, and rate-limit state and enable test mode."""
-    global _write_ledger, _storage, _signing_key, _TEST_MODE
+    global _write_ledger, _storage, _signing_key, _TEST_MODE, _rate_limit_policy
     # L4-F: Enable test mode to allow in-memory storage
     _TEST_MODE = True
     storage = _storage
@@ -585,6 +586,7 @@ def _reset_ingest_state_for_tests() -> None:  # pragma: no cover - test utility
     # Reset the unified auth module's key store AND rate-limit backend (H-3)
     _reset_auth_state_for_tests()
     _reset_rate_limit_backend_for_tests()
+    _rate_limit_policy = _DEFAULT_RATE_LIMIT_POLICY.copy()
     _storage = None
     _signing_key = None
     if storage is not None:

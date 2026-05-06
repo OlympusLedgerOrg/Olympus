@@ -81,3 +81,4 @@ olympus_foia.db
 API KEY .txt
 *.txt
 build-log.txt
+.aider*

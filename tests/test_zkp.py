@@ -1,5 +1,4 @@
 import json
-import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -235,12 +234,15 @@ def test_verify_failure(tmp_path: Path):
 
 def test_run_kills_process_group_on_timeout(tmp_path: Path) -> None:
     """Verify _run raises TimeoutExpired and does not leave orphans."""
-    prover = Groth16Prover(tmp_path, snarkjs_bin="npx")
-    prover._snarkjs_path = shutil.which("sleep") or "/bin/sleep"
-    prover.snarkjs_bin = "sleep"
+    prover = Groth16Prover(tmp_path, snarkjs_bin="python")
+    prover._snarkjs_path = sys.executable
 
-    # Monkeypatch _build_cmd to run `sleep 60` (a long-running process)
-    with patch.object(prover, "_build_cmd", return_value=["sleep", "60"]):
+    # Monkeypatch _build_cmd to run a portable long-running process.
+    with patch.object(
+        prover,
+        "_build_cmd",
+        return_value=[sys.executable, "-c", "import time; time.sleep(60)"],
+    ):
         with patch.object(prover, "_check_snarkjs", return_value=None):
             with pytest.raises(subprocess.TimeoutExpired):
                 prover._run([], timeout=1)
@@ -270,8 +272,11 @@ def test_run_subprocess_fallback_uses_pdeathsig(monkeypatch: pytest.MonkeyPatch)
     monkeypatch.setattr(subprocess, "Popen", popen_raise_first)
 
     # Should not raise — falls back and completes
-    zkp_mod._run_subprocess(["echo", "ok"], timeout=5)
-    assert preexec_called, "preexec_fn factory was not called on OSError fallback"
+    zkp_mod._run_subprocess([sys.executable, "-c", "print('ok')"], timeout=5)
+    if sys.platform == "win32":
+        assert not preexec_called, "preexec_fn is Unix-only and must not be used on Windows"
+    else:
+        assert preexec_called, "preexec_fn factory was not called on OSError fallback"
 
 
 def test_try_limit_cgroup_called_after_popen(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -285,7 +290,7 @@ def test_try_limit_cgroup_called_after_popen(monkeypatch: pytest.MonkeyPatch) ->
 
     monkeypatch.setattr(zkp_mod, "_try_limit_cgroup", fake_limit)
 
-    result = zkp_mod._run_subprocess(["echo", "ok"], timeout=5)
+    result = zkp_mod._run_subprocess([sys.executable, "-c", "print('ok')"], timeout=5)
     assert result.returncode == 0
     assert len(limited_pids) == 1, "expected exactly one _try_limit_cgroup call"
 

@@ -18,6 +18,7 @@ import blake3 as _blake3
 import pytest
 
 from protocol.merkle import EMPTY_TREE_HASH, MerkleTree
+from tools.dataset_cli import _scan_files
 
 
 CLI_PATH = Path(__file__).parent.parent / "tools" / "dataset_cli.py"
@@ -439,7 +440,7 @@ def test_commit_manifest_entries_no_sort_key(key_prefix, dataset_dir):
         assert "sort_key" not in entry, f"'sort_key' leaked into manifest entry: {entry}"
 
 
-def test_commit_skips_symlinks(key_prefix, tmp_path):
+def test_commit_skips_symlinks(tmp_path):
     """Symlinks inside the dataset directory must not appear in the manifest.
 
     Path.is_file() follows symlinks, so without an explicit is_symlink() guard
@@ -455,7 +456,37 @@ def test_commit_skips_symlinks(key_prefix, tmp_path):
     try:
         link.symlink_to(real_file)
     except OSError:
-        pytest.skip("filesystem does not support symlinks")
+        class SymlinkLikePath:
+            def is_symlink(self):
+                return True
+
+            def is_file(self):
+                return True
+
+        original_rglob = Path.rglob
+
+        def fake_rglob(self, pattern):
+            if self == ds and pattern == "*":
+                return iter([real_file, SymlinkLikePath()])
+            return original_rglob(self, pattern)
+
+        monkeypatch = pytest.MonkeyPatch()
+        monkeypatch.setattr(Path, "rglob", fake_rglob)
+        try:
+            files = _scan_files(ds)
+        finally:
+            monkeypatch.undo()
+
+        assert [entry["path"] for entry in files] == ["real.txt"]
+        return
+
+    key_prefix = str(tmp_path / "test_key")
+    result = subprocess.run(
+        [sys.executable, str(CLI_PATH), "keygen", "-o", key_prefix],
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 0, result.stderr
 
     result = subprocess.run(
         [

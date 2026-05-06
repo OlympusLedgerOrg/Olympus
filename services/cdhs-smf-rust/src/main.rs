@@ -656,11 +656,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let listener = match UnixListener::bind(socket_path) {
         Ok(l) => l,
         Err(e) if e.kind() == io::ErrorKind::AddrInUse => {
+            if env::var("CDHS_SMF_UNLINK_STALE_SOCKET").as_deref() == Ok("1") {
+                fs::remove_file(socket_path)?;
+                UnixListener::bind(socket_path)?
+            } else {
             return Err(format!(
                 "stale socket at {} — remove and restart.",
                 socket_path.display()
             )
             .into());
+            }
         }
         Err(e) => return Err(e.into()),
     };

@@ -52,7 +52,7 @@ from protocol.hashes import global_key, hash_bytes, record_key
 from protocol.shards import create_shard_header
 from protocol.ssmf import verify_nonexistence_proof, verify_proof
 from protocol.timestamps import current_timestamp
-from storage.postgres import _NODE_REHASH_GATE, StorageLayer
+from storage.postgres import _NODE_REHASH_GATE, _RUST_SMT_AVAILABLE, StorageLayer
 
 
 # Test database connection string
@@ -64,7 +64,8 @@ pytestmark = [
         not TEST_DB,
         reason="TEST_DATABASE_URL is not set; skipping PostgreSQL storage tests.",
     ),
-    pytest.mark.skip(
+    pytest.mark.skipif(
+        not _RUST_SMT_AVAILABLE,
         reason="storage.append_record() requires olympus_core Rust extension. "
         "Run `maturin develop` to build olympus_core, or rewrite tests to use ingest API.",
     ),
@@ -77,6 +78,7 @@ def storage():
     storage = StorageLayer(TEST_DB)
     storage.init_schema()
     yield storage
+    storage.close()
     # Note: We don't clean up tables to preserve append-only semantics
     # In production, use a fresh test database for each run
 
@@ -623,13 +625,9 @@ def test_deterministic_root_recomputation(storage, signing_key):
         )
         roots.append(root)
 
-    # Load tree state and verify root matches
-    with storage._get_connection() as conn, conn.cursor() as cur:
-        tree = storage._load_tree_state(cur)
-        computed_root = tree.get_root()
-
-        # Should match the last recorded root
-        assert computed_root == roots[-1]
+    # Replay the persisted state and verify it matches the latest root.
+    assert storage.verify_state_replay(shard_id)["verified"] is True
+    assert storage.get_current_root(shard_id) == roots[-1]
 
 
 def test_shard_headers_reject_update(storage, signing_key):
@@ -1184,6 +1182,8 @@ def test_init_schema_renames_legacy_smt_tables(storage):
             "key",
             "version",
             "value_hash",
+            "parser_id",
+            "canonical_parser_version",
             "ts",
         ]
 

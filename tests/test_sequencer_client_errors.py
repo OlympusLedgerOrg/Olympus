@@ -535,7 +535,12 @@ class TestGetSequencerHealthStatus:
             return_value=httpx.Response(200, json={"root": "aa" * 32, "tree_size": 0})
         )
         with patch.dict(
-            os.environ, {"OLYMPUS_USE_GO_SEQUENCER": "true", "OLYMPUS_SEQUENCER_TOKEN": "t"}
+            os.environ,
+            {
+                "OLYMPUS_USE_GO_SEQUENCER": "true",
+                "OLYMPUS_SEQUENCER_TOKEN": "t",
+                "OLYMPUS_SEQUENCER_URL": "http://localhost:8081",
+            },
         ):
             # Reset module singleton so it picks up env changes
             sc_mod._sequencer_client = None
@@ -552,7 +557,12 @@ class TestGetSequencerHealthStatus:
             side_effect=httpx.ConnectError("refused")
         )
         with patch.dict(
-            os.environ, {"OLYMPUS_USE_GO_SEQUENCER": "true", "OLYMPUS_SEQUENCER_TOKEN": "t"}
+            os.environ,
+            {
+                "OLYMPUS_USE_GO_SEQUENCER": "true",
+                "OLYMPUS_SEQUENCER_TOKEN": "t",
+                "OLYMPUS_SEQUENCER_URL": "http://localhost:8081",
+            },
         ):
             sc_mod._sequencer_client = None
             status, healthy = await sc_mod.get_sequencer_health_status()
@@ -568,7 +578,12 @@ class TestGetSequencerHealthStatus:
             return_value=httpx.Response(503, text="down")
         )
         with patch.dict(
-            os.environ, {"OLYMPUS_USE_GO_SEQUENCER": "true", "OLYMPUS_SEQUENCER_TOKEN": "t"}
+            os.environ,
+            {
+                "OLYMPUS_USE_GO_SEQUENCER": "true",
+                "OLYMPUS_SEQUENCER_TOKEN": "t",
+                "OLYMPUS_SEQUENCER_URL": "http://localhost:8081",
+            },
         ):
             sc_mod._sequencer_client = None
             status, healthy = await sc_mod.get_sequencer_health_status()

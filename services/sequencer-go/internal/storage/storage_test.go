@@ -6,6 +6,8 @@ import (
 )
 
 func TestRequireVerifyingSSLMode(t *testing.T) {
+	t.Setenv("SEQUENCER_ALLOW_INSECURE_DB", "")
+
 	cases := []struct {
 		name    string
 		connStr string
@@ -37,6 +39,14 @@ func TestRequireVerifyingSSLMode(t *testing.T) {
 				t.Fatalf("expected no error for %q, got %v", tc.connStr, err)
 			}
 		})
+	}
+}
+
+func TestRequireVerifyingSSLModeAllowsExplicitDevDisable(t *testing.T) {
+	t.Setenv("SEQUENCER_ALLOW_INSECURE_DB", "1")
+
+	if err := requireVerifyingSSLMode("postgres://u:p@h/db?sslmode=disable"); err != nil {
+		t.Fatalf("expected explicit dev override to allow sslmode=disable: %v", err)
 	}
 }
 

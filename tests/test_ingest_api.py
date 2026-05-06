@@ -16,8 +16,9 @@ from protocol.ssmf import SPARSE_MERKLE_DEPTH, ExistenceProof, SparseMerkleTree
 
 
 @pytest.fixture()
-def client():
+def client(monkeypatch):
     """Create a test client for the API."""
+    monkeypatch.setenv("OLYMPUS_USE_GO_SEQUENCER", "false")
     ingest_api._reset_ingest_state_for_tests()
     ingest_api._register_api_key_for_tests(
         api_key="test-key",

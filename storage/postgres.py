@@ -1105,7 +1105,7 @@ class StorageLayer:
             # of rebuilding the full tree from leaves (O(N)).
             value_hash_bytes = bytes(row["value_hash"])
             siblings = self._get_proof_path(cur, key)
-            root_hash = self.get_current_root(shard_id)
+            root_hash = self._get_current_global_root(cur)
             return ExistenceProof(
                 key=key,
                 value_hash=value_hash_bytes,
@@ -1155,7 +1155,7 @@ class StorageLayer:
             # ADR-0001 §2: fetch proof path from smt_nodes (O(256)) instead
             # of rebuilding the full tree from leaves (O(N)).
             siblings = self._get_proof_path(cur, key)
-            root_hash = self.get_current_root(shard_id)
+            root_hash = self._get_current_global_root(cur)
             return NonExistenceProof(
                 key=key,
                 siblings=siblings,
@@ -2321,6 +2321,23 @@ class StorageLayer:
             else:
                 siblings.append(EMPTY_HASHES[i])
         return siblings
+
+    def _get_current_global_root(self, cur: psycopg.Cursor[Any]) -> bytes:
+        """Read the current global SMT root from persisted node state."""
+        cur.execute(
+            """
+            SELECT hash
+            FROM smt_nodes
+            WHERE level = 0 AND index = %s
+            LIMIT 1
+            """,
+            (b"",),
+        )
+        row = cur.fetchone()
+        if row is None:
+            return EMPTY_HASHES[256]
+        raw = row[0] if not isinstance(row, Mapping) else row.get("hash")
+        return bytes(raw)
 
     def _get_poseidon_proof_path(
         self,

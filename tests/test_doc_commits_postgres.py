@@ -11,6 +11,7 @@ tests run automatically in the ``integration-postgres`` workflow job.
 from __future__ import annotations
 
 import os
+import uuid
 
 import psycopg
 import pytest
@@ -28,11 +29,6 @@ class TestDocCommitsUniqueHash:
     """Verify that the ``ix_doc_commits_doc_hash_unique`` index prevents
     duplicate ``doc_hash`` values and that conflict handling works.
     """
-
-    # A deterministic fake BLAKE3 hash (64 hex chars)
-    _DOC_HASH = "a" * 64
-    _COMMIT_ID_1 = "0x" + "b" * 64
-    _COMMIT_ID_2 = "0x" + "c" * 64
 
     @pytest.fixture(autouse=True)
     def _ensure_table(self) -> None:
@@ -64,13 +60,19 @@ class TestDocCommitsUniqueHash:
             conn.commit()
 
     @pytest.fixture(autouse=True)
-    def _cleanup(self) -> None:
-        """Remove test rows after each test."""
+    def _unique_values(self) -> None:
+        """Use unique row values so tests are repeat-safe on persistent databases."""
+        run_id = uuid.uuid4().hex
+        self._id_1 = str(uuid.uuid4())
+        self._id_2 = str(uuid.uuid4())
+        self._doc_hash = run_id + uuid.uuid4().hex
+        self._commit_id_1 = "0x" + uuid.uuid4().hex + uuid.uuid4().hex
+        self._commit_id_2 = "0x" + uuid.uuid4().hex + uuid.uuid4().hex
         yield  # type: ignore[misc]
         with psycopg.connect(TEST_DB) as conn, conn.cursor() as cur:
             cur.execute(
-                "DELETE FROM doc_commits WHERE doc_hash = %s",
-                (self._DOC_HASH,),
+                "DELETE FROM doc_commits WHERE id IN (%s, %s)",
+                (self._id_1, self._id_2),
             )
             conn.commit()
 
@@ -79,17 +81,17 @@ class TestDocCommitsUniqueHash:
         with psycopg.connect(TEST_DB) as conn, conn.cursor() as cur:
             cur.execute(
                 "INSERT INTO doc_commits (id, doc_hash, commit_id) VALUES (%s, %s, %s)",
-                ("id-1", self._DOC_HASH, self._COMMIT_ID_1),
+                (self._id_1, self._doc_hash, self._commit_id_1),
             )
             conn.commit()
 
             cur.execute(
                 "SELECT commit_id FROM doc_commits WHERE doc_hash = %s",
-                (self._DOC_HASH,),
+                (self._doc_hash,),
             )
             row = cur.fetchone()
             assert row is not None
-            assert row[0] == self._COMMIT_ID_1
+            assert row[0] == self._commit_id_1
 
     def test_duplicate_doc_hash_raises_unique_violation(self) -> None:
         """A second insert with the same ``doc_hash`` must raise a
@@ -98,7 +100,7 @@ class TestDocCommitsUniqueHash:
         with psycopg.connect(TEST_DB) as conn, conn.cursor() as cur:
             cur.execute(
                 "INSERT INTO doc_commits (id, doc_hash, commit_id) VALUES (%s, %s, %s)",
-                ("id-1", self._DOC_HASH, self._COMMIT_ID_1),
+                (self._id_1, self._doc_hash, self._commit_id_1),
             )
             conn.commit()
 
@@ -106,7 +108,7 @@ class TestDocCommitsUniqueHash:
             with psycopg.connect(TEST_DB) as conn, conn.cursor() as cur:
                 cur.execute(
                     "INSERT INTO doc_commits (id, doc_hash, commit_id) VALUES (%s, %s, %s)",
-                    ("id-2", self._DOC_HASH, self._COMMIT_ID_2),
+                    (self._id_2, self._doc_hash, self._commit_id_2),
                 )
 
     def test_on_conflict_do_nothing(self) -> None:
@@ -116,7 +118,7 @@ class TestDocCommitsUniqueHash:
         with psycopg.connect(TEST_DB) as conn, conn.cursor() as cur:
             cur.execute(
                 "INSERT INTO doc_commits (id, doc_hash, commit_id) VALUES (%s, %s, %s)",
-                ("id-1", self._DOC_HASH, self._COMMIT_ID_1),
+                (self._id_1, self._doc_hash, self._commit_id_1),
             )
             conn.commit()
 
@@ -128,7 +130,7 @@ class TestDocCommitsUniqueHash:
                 ON CONFLICT (doc_hash) DO NOTHING
                 RETURNING commit_id
                 """,
-                ("id-2", self._DOC_HASH, self._COMMIT_ID_2),
+                (self._id_2, self._doc_hash, self._commit_id_2),
             )
             returned = cur.fetchone()
             assert returned is None, "RETURNING should yield no rows on conflict"
@@ -137,8 +139,8 @@ class TestDocCommitsUniqueHash:
             # Verify only the original row exists
             cur.execute(
                 "SELECT commit_id FROM doc_commits WHERE doc_hash = %s",
-                (self._DOC_HASH,),
+                (self._doc_hash,),
             )
             row = cur.fetchone()
             assert row is not None
-            assert row[0] == self._COMMIT_ID_1
+            assert row[0] == self._commit_id_1

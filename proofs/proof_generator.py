@@ -239,8 +239,8 @@ class CircuitConfig:
         return cls(
             document_merkle_depth=20,
             non_existence_merkle_depth=256,
-            redaction_max_leaves=16,
-            redaction_merkle_depth=4,
+            redaction_max_leaves=4,
+            redaction_merkle_depth=2,
             unified_max_sections=8,
             unified_merkle_depth=20,
             unified_smt_depth=256,

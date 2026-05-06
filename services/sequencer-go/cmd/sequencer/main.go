@@ -93,6 +93,9 @@ func main() {
 		log.Fatalf("Failed to initialize storage: %s", redactedErr(err, dbCfg.URL))
 	}
 	defer store.Close()
+	if err := store.InitSchema(ctx); err != nil {
+		log.Fatalf("Failed to initialize storage schema: %v", err)
+	}
 
 	// Create sequencer service. Wire metrics + an explicit
 	// storage-commit timeout (H-2). The storage-commit timeout MUST stay

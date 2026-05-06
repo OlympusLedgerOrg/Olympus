@@ -237,7 +237,7 @@ class TestProofEndpointsUseNodePath(unittest.TestCase):
 
         sl._get_connection = MagicMock(return_value=mock_conn)
         sl._get_proof_path = MagicMock(return_value=expected_siblings)
-        sl.get_current_root = MagicMock(return_value=expected_root)
+        sl._get_current_global_root = MagicMock(return_value=expected_root)
 
         proof = sl.get_proof("shard-1", "document", "doc-1", 1)
 
@@ -246,7 +246,7 @@ class TestProofEndpointsUseNodePath(unittest.TestCase):
         self.assertEqual(proof.root_hash, expected_root)
         self.assertEqual(proof.siblings, expected_siblings)
         sl._get_proof_path.assert_called_once()
-        sl.get_current_root.assert_called_once_with("shard-1")
+        sl._get_current_global_root.assert_called_once_with(mock_cur)
 
     def test_get_proof_returns_none_for_missing_leaf(self):
         """get_proof should return None when the leaf doesn't exist."""
@@ -282,7 +282,7 @@ class TestProofEndpointsUseNodePath(unittest.TestCase):
 
         sl._get_connection = MagicMock(return_value=mock_conn)
         sl._get_proof_path = MagicMock(return_value=expected_siblings)
-        sl.get_current_root = MagicMock(return_value=expected_root)
+        sl._get_current_global_root = MagicMock(return_value=expected_root)
 
         proof = sl.get_nonexistence_proof("shard-1", "document", "missing", 1)
 
@@ -290,7 +290,7 @@ class TestProofEndpointsUseNodePath(unittest.TestCase):
         self.assertEqual(proof.root_hash, expected_root)
         self.assertEqual(proof.siblings, expected_siblings)
         sl._get_proof_path.assert_called_once()
-        sl.get_current_root.assert_called_once_with("shard-1")
+        sl._get_current_global_root.assert_called_once_with(mock_cur)
 
 
 # ---------------------------------------------------------------------------

@@ -18,9 +18,10 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 WORKDIR /src
 
-# Copy only manifests first to cache dependencies
-COPY Cargo.toml Cargo.lock* ./
-COPY build.rs ./
+# Copy only manifests first to cache dependencies. The build context is the
+# repository root so the shared proto definition can be included too.
+COPY services/cdhs-smf-rust/Cargo.toml services/cdhs-smf-rust/Cargo.lock* ./
+COPY services/cdhs-smf-rust/build.rs ./
 
 # Create a dummy main.rs to build dependencies
 RUN mkdir -p src && \
@@ -28,15 +29,14 @@ RUN mkdir -p src && \
     echo 'pub fn placeholder() {}' > src/lib.rs
 
 # Copy proto file for build.rs
-RUN mkdir -p ../proto
-COPY ../proto/cdhs_smf.proto ../proto/ || true
+RUN mkdir -p /proto
+COPY proto/cdhs_smf.proto /proto/
 
 # Build dependencies only (this layer is cached if Cargo.toml/lock unchanged)
 RUN cargo build --release || true
 
 # Now copy the real source code
-COPY src ./src
-COPY ../proto ../proto || true
+COPY services/cdhs-smf-rust/src ./src
 
 # Touch source files to ensure rebuild with real code
 RUN touch src/main.rs src/lib.rs
@@ -50,7 +50,7 @@ RUN cargo build --release
 FROM gcr.io/distroless/cc-debian12
 
 # Copy the compiled binary
-COPY --from=build /src/target/release/cdhs-smf-rust /cdhs-smf-rust
+COPY --from=build /src/target/release/cdhs-smf-service /cdhs-smf-rust
 
 # Create socket directory (will be mounted as volume in production)
 # Note: distroless doesn't have mkdir, so the volume mount handles this

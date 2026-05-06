@@ -74,6 +74,11 @@ from .hashes import SNARK_SCALAR_FIELD, record_key
 from .ssmf import ExistenceProof, verify_proof
 from .zkp import Groth16Prover, ZKProof
 
+try:
+    from proofs import snarkjs_bridge as _snarkjs_bridge
+except Exception:  # pragma: no cover
+    _snarkjs_bridge = None  # type: ignore[assignment]
+
 
 # Record-type namespace used to key Poseidon roots in the SMT.
 # This must remain distinct from all other record types so that
@@ -222,8 +227,24 @@ def verify_zk_redaction(
         return VerificationResult.UNABLE_TO_VERIFY
 
     repo_root = Path(__file__).resolve().parent.parent
-    circuits_dir = repo_root / "proofs" / "circuits"
     vkey_path = repo_root / "proofs" / "keys" / "verification_keys" / "redaction_validity_vkey.json"
+
+    if not vkey_path.exists():
+        return VerificationResult.UNABLE_TO_VERIFY
+
+    # Prefer the persistent Node.js bridge (programmatic API, no CLI dependencies).
+    if _snarkjs_bridge is not None and _snarkjs_bridge.bridge_available():
+        try:
+            verified = _snarkjs_bridge.verify(
+                vkey_file=vkey_path,
+                proof=proof_blob,
+                public_signals=public_signals,
+            )
+        except Exception:
+            return VerificationResult.UNABLE_TO_VERIFY
+        return VerificationResult.VALID if verified else VerificationResult.INVALID
+
+    circuits_dir = repo_root / "proofs" / "circuits"
     prover = Groth16Prover(circuits_dir=circuits_dir)
     proof = ZKProof(proof=proof_blob, public_signals=public_signals, circuit="redaction_validity")
 

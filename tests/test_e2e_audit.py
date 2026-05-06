@@ -145,14 +145,14 @@ def signing_key():
 
 
 @pytest.fixture
-def client(storage, isolated_db_url):
+def client(storage, isolated_db_url, monkeypatch):
     """Create test client for API."""
     # Import here to avoid connecting to Postgres during test collection
     import api.app as api_app
 
     # Override DATABASE_URL for the API
-    os.environ["DATABASE_URL"] = isolated_db_url
-    os.environ["TEST_DATABASE_URL"] = isolated_db_url
+    monkeypatch.setenv("DATABASE_URL", isolated_db_url)
+    monkeypatch.setenv("TEST_DATABASE_URL", isolated_db_url)
 
     # Reset lazy storage state so tests start fresh
     api_app._storage = None

@@ -139,6 +139,11 @@ def _run_subprocess(
     from OOM-killing the whole runner.
     """
     use_new_session = True
+    popen_kwargs: dict[str, Any] = {}
+    if os.name == "nt":
+        popen_kwargs["creationflags"] = subprocess.CREATE_NEW_PROCESS_GROUP
+    else:
+        popen_kwargs["start_new_session"] = True
     try:
         proc = subprocess.Popen(  # nosec B603
             cmd,
@@ -146,8 +151,10 @@ def _run_subprocess(
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             text=True,
-            start_new_session=True,
+            **popen_kwargs,
         )
+    except FileNotFoundError:
+        raise
     except OSError:
         # setsid(2) blocked by container security policy (seccomp/gVisor).
         # Fall back: set PR_SET_PDEATHSIG so children die with the parent,
@@ -157,13 +164,16 @@ def _run_subprocess(
             "falling back to plain subprocess — orphaned children possible on timeout"
         )
         use_new_session = False
+        fallback_kwargs: dict[str, Any] = {}
+        if os.name != "nt":
+            fallback_kwargs["preexec_fn"] = _make_pdeathsig_preexec()
         proc = subprocess.Popen(  # nosec B603
             cmd,
             cwd=cwd,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             text=True,
-            preexec_fn=_make_pdeathsig_preexec(),
+            **fallback_kwargs,
         )
 
     # After Popen, move the child into a memory-bounded cgroup
@@ -174,7 +184,7 @@ def _run_subprocess(
         try:
             stdout, stderr = proc.communicate(timeout=timeout)
         except subprocess.TimeoutExpired:
-            if use_new_session:
+            if use_new_session and os.name != "nt":
                 # Kill the whole process group
                 try:
                     os.killpg(os.getpgid(proc.pid), signal.SIGTERM)
@@ -189,9 +199,13 @@ def _run_subprocess(
                         pass  # process already exited during the grace period
                     proc.communicate()
             else:
-                # Best effort: kill just the direct child
-                proc.kill()
-                proc.communicate()
+                # Best effort on Windows/fallback paths: kill just the direct child.
+                proc.terminate()
+                try:
+                    proc.communicate(timeout=5)
+                except subprocess.TimeoutExpired:
+                    proc.kill()
+                    proc.communicate()
             raise
 
         returncode = proc.wait()

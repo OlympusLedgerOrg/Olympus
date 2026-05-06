@@ -11,7 +11,7 @@ from protocol.canonical import CANONICAL_VERSION
 from protocol.canonicalizer import canonicalization_provenance
 from protocol.hashes import hash_bytes
 from protocol.merkle import deserialize_merkle_proof
-from storage.postgres import StorageLayer
+from storage.postgres import _RUST_SMT_AVAILABLE, StorageLayer
 
 
 TEST_DB = os.environ.get("TEST_DATABASE_URL", "")
@@ -22,7 +22,8 @@ TEST_DB = os.environ.get("TEST_DATABASE_URL", "")
     not TEST_DB,
     reason="TEST_DATABASE_URL is not set; skipping PostgreSQL integration tests.",
 )
-@pytest.mark.skip(
+@pytest.mark.skipif(
+    not _RUST_SMT_AVAILABLE,
     reason="storage.append_record() requires olympus_core Rust extension. "
     "Run `maturin develop` to build olympus_core, or rewrite tests to use ingest API.",
 )
@@ -35,7 +36,7 @@ def test_postgres_persistence_survives_restart():
     shard_id = f"ingest_persistence.{uuid.uuid4()}"
     batch_id = str(uuid.uuid4())
     proof_id = str(uuid.uuid4())
-    value_hash = hash_bytes(b"durable-ingest-payload")
+    value_hash = hash_bytes(f"durable-ingest-payload-{uuid.uuid4()}".encode())
     canonicalization = canonicalization_provenance("application/octet-stream", CANONICAL_VERSION)
 
     root_hash, proof, header, signature, ledger_entry = storage1.append_record(

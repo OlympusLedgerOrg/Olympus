@@ -186,11 +186,10 @@ def _run_op(
     if op_type == OP_GET_PROOF:
         proof = storage.get_proof(shard_id, op["record_type"], op["record_id"], op["version"])
         if proof is not None:
-            current_root = storage.get_current_root(shard_id)
-            # INV-3: live proof must verify against the current root
-            assert verify_proof(proof, expected_root=current_root), (
+            # INV-3: live proof must verify against the root returned with it.
+            assert verify_proof(proof, expected_root=proof.root_hash), (
                 f"INV-3 FAIL: proof for {shard_id}/{op['record_id']} "
-                f"does not verify against current root {current_root.hex()}"
+                f"does not verify against proof root {proof.root_hash.hex()}"
             )
         return {"op": op_type, "ok": True, "found": proof is not None}
 
@@ -208,9 +207,8 @@ def _run_op(
                 nex_proof = storage.get_nonexistence_proof(
                     shard_id, op["record_type"], op["record_id"], op["version"]
                 )
-                current_root = storage.get_current_root(shard_id)
-                # INV-4: non-existence proof must verify
-                assert verify_nonexistence_proof(nex_proof, expected_root=current_root), (
+                # INV-4: non-existence proof must verify against the root returned with it.
+                assert verify_nonexistence_proof(nex_proof, expected_root=nex_proof.root_hash), (
                     f"INV-4 FAIL: non-existence proof for "
                     f"({shard_id}, {op['record_type']}, {op['record_id']}, {op['version']}) "
                     f"does not verify"

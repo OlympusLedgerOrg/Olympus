@@ -142,8 +142,8 @@ async function main() {
   //    Reveal leaves 0 and 2 out of 4 set leaves
   // =====================================================================
   {
-    const maxLeaves = envInt("OLYMPUS_REDACTION_MAX_LEAVES", 16);
-    const depth = envInt("OLYMPUS_REDACTION_MERKLE_DEPTH", 4);
+    const maxLeaves = envInt("OLYMPUS_REDACTION_MAX_LEAVES", 4);
+    const depth = envInt("OLYMPUS_REDACTION_MERKLE_DEPTH", 2);
     const capacity = 1 << depth;
     if (maxLeaves > capacity) {
       throw new Error(

@@ -8,6 +8,7 @@ for proof generation and verification.
 from __future__ import annotations
 
 import subprocess
+import sys
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -533,10 +534,10 @@ class TestRunSnarkjs:
     def test_run_snarkjs_timeout_raises_timeout_expired(self) -> None:
         """_run_snarkjs raises TimeoutExpired and kills process group on timeout."""
         backend = Groth16Backend()
-        with patch("shutil.which", return_value="/bin/sleep"):
-            backend.snarkjs_bin = "sleep"
+        with patch("shutil.which", return_value=sys.executable):
+            backend.snarkjs_bin = "python"
             with pytest.raises(subprocess.TimeoutExpired):
-                backend._run_snarkjs(["60"], timeout=1)
+                backend._run_snarkjs(["-c", "import time; time.sleep(60)"], timeout=1)
 
 
 class TestProofSystemType:

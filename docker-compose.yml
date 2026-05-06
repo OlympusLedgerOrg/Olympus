@@ -100,8 +100,8 @@ services:
   cdhs-smf-rust:
     profiles: [sequencer]
     build:
-      context: services/cdhs-smf-rust
-      dockerfile: Dockerfile
+      context: .
+      dockerfile: services/cdhs-smf-rust/Dockerfile
     container_name: olympus-cdhs-smf-rust
     volumes:
       - olympus-socket:/run/olympus

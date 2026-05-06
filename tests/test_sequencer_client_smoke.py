@@ -22,6 +22,7 @@ from __future__ import annotations
 import os
 
 import pytest
+import pytest_asyncio
 
 
 # Skip all tests in this module if Go sequencer is not enabled
@@ -34,7 +35,7 @@ pytestmark = [
 ]
 
 
-@pytest.fixture
+@pytest_asyncio.fixture
 async def sequencer_client():
     """Create a GoSequencerClient for testing with proper cleanup."""
     from api.services.sequencer_client import GoSequencerClient
@@ -43,6 +44,15 @@ async def sequencer_client():
     yield client
     # Clean up the HTTP client after tests complete
     await client.close()
+
+
+@pytest_asyncio.fixture(autouse=True)
+async def reset_global_sequencer_client():
+    """Avoid reusing a singleton httpx client across pytest event loops."""
+    yield
+    from api.services.sequencer_client import close_sequencer_client
+
+    await close_sequencer_client()
 
 
 class TestGoSequencerClientSmoke:
@@ -81,8 +91,10 @@ class TestGoSequencerClientSmoke:
             record_type="document",
             record_id=record_id,
             content=content,
-            content_type="application/json",
+            content_type="json",
             version="1",
+            parser_id="smoke-test@1.0.0",
+            canonical_parser_version="v1",
         )
 
         assert result is not None
@@ -121,8 +133,10 @@ class TestGoSequencerClientSmoke:
                 "record_type": "document",
                 "record_id": f"batch-doc-{i}-{test_id}",
                 "content": f'{{"batch_index": {i}}}'.encode(),
-                "content_type": "application/json",
+                "content_type": "json",
                 "version": "1",
+                "parser_id": "smoke-test@1.0.0",
+                "canonical_parser_version": "v1",
             }
             for i in range(3)
         ]
@@ -163,8 +177,10 @@ class TestGoSequencerClientSmoke:
             record_type="document",
             record_id=record_id,
             content=content,
-            content_type="application/json",
+            content_type="json",
             version="1",
+            parser_id="smoke-test@1.0.0",
+            canonical_parser_version="v1",
         )
 
         # Get inclusion proof
