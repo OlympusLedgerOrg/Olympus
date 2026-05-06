@@ -1383,6 +1383,11 @@ class StorageLayer:
             self._assert_root_matches_state(
                 cur, shard_id, bytes(row["root"]), as_of_leaf_seq=int(row["leaf_seq"])
             )
+            # Global orphan check: catches forged leaves whose global_seq falls
+            # beyond the last header's leaf_seq window (outside per-header deltas).
+            self._assert_leaf_seq_integrity(
+                cur, shard_id, "Computed root integrity failure", upper_leaf_seq=None
+            )
 
             return {
                 "header": header,
@@ -2909,6 +2914,11 @@ class StorageLayer:
                         f"{latest_header_root.hex()} does not match current state "
                         f"{tree.get_root().hex()}"
                     )
+                # (b) Global orphan check: leaves with global_seq beyond all header
+                # leaf_seq windows are not covered by per-header deltas.
+                self._assert_leaf_seq_integrity(
+                    cur, shard_id, "Replay mismatch", upper_leaf_seq=None
+                )
 
             return {
                 "verified": True,
