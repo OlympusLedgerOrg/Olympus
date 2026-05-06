@@ -47,6 +47,7 @@ def schema_statements(node_rehash_gate: str) -> list[str]:
             canonical_parser_version  TEXT        NOT NULL,
             ts                        TIMESTAMPTZ NOT NULL DEFAULT NOW(),
             global_seq                BIGINT      GENERATED ALWAYS AS IDENTITY,
+            shard_id                  TEXT        NOT NULL DEFAULT '',
             PRIMARY KEY (key, version),
             CONSTRAINT smt_leaves_key_length
                 CHECK (octet_length(key) = 32),
@@ -130,6 +131,49 @@ def schema_statements(node_rehash_gate: str) -> list[str]:
         # Unique index on global_seq — must appear AFTER the DO block above so
         # that it runs on a fully-populated, non-NULL column in existing databases.
         "CREATE UNIQUE INDEX IF NOT EXISTS smt_leaves_global_seq_idx ON smt_leaves(global_seq)",
+        # ADR-0005 upgrade: add shard_id to smt_leaves so per-shard integrity
+        # checks can be scoped without cross-shard false positives/negatives.
+        #
+        # For freshly created tables the column already exists (DEFAULT '' on
+        # the column definition is a schema documentation aid; append_record
+        # always supplies an explicit non-empty value).
+        #
+        # For existing databases:
+        #   1. Add the column as nullable TEXT.
+        #   2. Back-fill from shard_headers via the leaf_seq → global_seq link —
+        #      every leaf written through append_record has exactly one header row
+        #      whose leaf_seq equals the leaf's global_seq.
+        #   3. Set any remaining NULLs to '' (legacy rows without a header link).
+        #   4. Enforce NOT NULL and drop the DEFAULT so future INSERTs must
+        #      supply an explicit value.
+        """
+        DO $$
+        BEGIN
+            IF NOT EXISTS (
+                SELECT 1
+                FROM information_schema.columns
+                WHERE table_schema = 'public'
+                  AND table_name = 'smt_leaves'
+                  AND column_name = 'shard_id'
+            ) THEN
+                ALTER TABLE smt_leaves ADD COLUMN shard_id TEXT;
+
+                UPDATE smt_leaves sl
+                SET shard_id = (
+                    SELECT sh.shard_id
+                    FROM shard_headers sh
+                    WHERE sh.leaf_seq = sl.global_seq
+                    LIMIT 1
+                );
+
+                UPDATE smt_leaves SET shard_id = '' WHERE shard_id IS NULL;
+
+                ALTER TABLE smt_leaves ALTER COLUMN shard_id SET NOT NULL;
+                ALTER TABLE smt_leaves ALTER COLUMN shard_id DROP DEFAULT;
+            END IF;
+        END $$;
+        """,
+        "CREATE INDEX IF NOT EXISTS smt_leaves_shard_global_seq_idx ON smt_leaves(shard_id, global_seq)",
         # ------------------------------------------------------------------
         # SMT Nodes
         # ------------------------------------------------------------------
@@ -192,8 +236,30 @@ def schema_statements(node_rehash_gate: str) -> list[str]:
             CONSTRAINT shard_headers_seq_positive
                 CHECK (seq >= 0),
             CONSTRAINT shard_headers_tree_size_non_negative
-                CHECK (tree_size >= 0)
+                CHECK (tree_size >= 0),
+            CONSTRAINT shard_headers_positive_seq_requires_leaf_seq
+                CHECK (seq = 0 OR leaf_seq > 0)
         )
+        """,
+        # ADR-0005 upgrade: enforce that non-genesis headers must reference a
+        # real leaf.  Headers with seq=0 are permitted to have leaf_seq=0 for
+        # backwards-compat with pre-ADR-0004 genesis rows.  Any header with
+        # seq>0 and leaf_seq=0 would bypass _assert_leaf_seq_integrity checks.
+        """
+        DO $$
+        BEGIN
+            IF NOT EXISTS (
+                SELECT 1 FROM pg_constraint
+                WHERE conname = 'shard_headers_positive_seq_requires_leaf_seq'
+                  AND conrelid = 'shard_headers'::regclass
+            ) THEN
+                ALTER TABLE shard_headers
+                    ADD CONSTRAINT shard_headers_positive_seq_requires_leaf_seq
+                    CHECK (seq = 0 OR leaf_seq > 0) NOT VALID;
+                ALTER TABLE shard_headers
+                    VALIDATE CONSTRAINT shard_headers_positive_seq_requires_leaf_seq;
+            END IF;
+        END $$;
         """,
         # ADR-0004 upgrade: add leaf_seq to shard_headers and back-fill for
         # existing databases.

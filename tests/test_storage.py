@@ -1199,10 +1199,10 @@ def test_verify_state_replay_detects_header_root_divergence(storage, signing_key
         cur.execute(
             """
             INSERT INTO smt_leaves
-                (key, version, value_hash, parser_id, canonical_parser_version, ts)
-            VALUES (%s, %s, %s, %s, %s, NOW())
+                (key, version, value_hash, parser_id, canonical_parser_version, ts, shard_id)
+            VALUES (%s, %s, %s, %s, %s, NOW(), %s)
             """,
-            (forged_key, forged_version, forged_value, "docling@2.3.1", "v1"),
+            (forged_key, forged_version, forged_value, "docling@2.3.1", "v1", shard_id),
         )
         conn.commit()
 
@@ -1266,10 +1266,10 @@ def test_forged_leaf_detected_regardless_of_timestamp(storage, signing_key):
         cur.execute(
             """
             INSERT INTO smt_leaves
-                (key, version, value_hash, parser_id, canonical_parser_version, ts)
-            VALUES (%s, %s, %s, %s, %s, %s)
+                (key, version, value_hash, parser_id, canonical_parser_version, ts, shard_id)
+            VALUES (%s, %s, %s, %s, %s, %s, %s)
             """,
-            (forged_key, forged_version, forged_value, "docling@2.3.1", "v1", naive_ts),
+            (forged_key, forged_version, forged_value, "docling@2.3.1", "v1", naive_ts, shard_id),
         )
         conn.commit()
 
@@ -1336,6 +1336,7 @@ def test_init_schema_renames_legacy_smt_tables(storage):
             "canonical_parser_version",
             "ts",
             "global_seq",
+            "shard_id",
         ]
 
         cur.execute(

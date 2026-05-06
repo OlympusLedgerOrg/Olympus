@@ -792,8 +792,8 @@ class StorageLayer:
             cur.execute(
                 """
                     INSERT INTO smt_leaves
-                        (key, version, value_hash, parser_id, canonical_parser_version, ts)
-                    VALUES (%s, %s, %s, %s, %s, %s)
+                        (key, version, value_hash, parser_id, canonical_parser_version, ts, shard_id)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s)
                     RETURNING global_seq
                     """,
                 (
@@ -803,6 +803,7 @@ class StorageLayer:
                     parser_id,
                     canonical_parser_version,
                     datetime.now(timezone.utc),
+                    shard_id,
                 ),
             )
             leaf_global_seq_row = cur.fetchone()
@@ -2216,51 +2217,65 @@ class StorageLayer:
     ) -> None:
         """
         Verify that replay-relevant ``shard_headers.leaf_seq`` claims match
-        replay-relevant ``smt_leaves.global_seq`` rows exactly.
+        replay-relevant ``smt_leaves.global_seq`` rows exactly, scoped to
+        ``shard_id`` so cross-shard leaf insertions cannot mask or falsely
+        trigger integrity failures for an unrelated shard.
 
         Headers with ``leaf_seq <= 0`` are ignored so genesis/system/setup
         headers that do not correspond to a state-changing SMT write do not fail
         validation.
         """
         if upper_leaf_seq is None:
+            # Compute the upper bound from this shard's own data only, so
+            # concurrent writes to other shards don't expand the window.
             cur.execute(
                 """
                 SELECT GREATEST(
-                    COALESCE((SELECT MAX(global_seq) FROM smt_leaves), 0),
-                    COALESCE((SELECT MAX(leaf_seq) FROM shard_headers), 0)
+                    COALESCE((SELECT MAX(global_seq) FROM smt_leaves WHERE shard_id = %s), 0),
+                    COALESCE((SELECT MAX(leaf_seq)   FROM shard_headers WHERE shard_id = %s), 0)
                 ) AS max_seq
-                """
+                """,
+                (shard_id, shard_id),
             )
             row = cur.fetchone()
             upper_leaf_seq = int(self._row_get(row, "max_seq", 0)) if row is not None else 0
 
+        # Check 1: every shard_headers.leaf_seq in the window must have a
+        # matching smt_leaves.global_seq that also belongs to this shard.
         if lower_leaf_seq_exclusive is None:
-            header_window_sql = sql.SQL("sh.leaf_seq > 0 AND sh.leaf_seq <= %s")
-            leaf_window_sql = sql.SQL("sl.global_seq > 0 AND sl.global_seq <= %s")
-            params: tuple[Any, ...] = (upper_leaf_seq,)
-        else:
-            header_window_sql = sql.SQL("sh.leaf_seq > %s AND sh.leaf_seq <= %s")
-            leaf_window_sql = sql.SQL("sl.global_seq > %s AND sl.global_seq <= %s")
-            params = (lower_leaf_seq_exclusive, upper_leaf_seq)
-
-        # Inject the replay boundary/window predicate for header claims.
-        cur.execute(
-            sql.SQL(
-                """
+            header_params: tuple[Any, ...] = (shard_id, upper_leaf_seq, shard_id)
+            header_sql = """
                 SELECT sh.leaf_seq
                 FROM shard_headers sh
-                WHERE {}
+                WHERE sh.shard_id = %s
+                  AND sh.leaf_seq > 0 AND sh.leaf_seq <= %s
                   AND NOT EXISTS (
                       SELECT 1
                       FROM smt_leaves sl
                       WHERE sl.global_seq = sh.leaf_seq
+                        AND sl.shard_id = %s
                   )
                 ORDER BY sh.leaf_seq ASC
                 LIMIT 1
-                """
-            ).format(header_window_sql),
-            params,
-        )
+            """
+        else:
+            header_params = (shard_id, lower_leaf_seq_exclusive, upper_leaf_seq, shard_id)
+            header_sql = """
+                SELECT sh.leaf_seq
+                FROM shard_headers sh
+                WHERE sh.shard_id = %s
+                  AND sh.leaf_seq > %s AND sh.leaf_seq <= %s
+                  AND NOT EXISTS (
+                      SELECT 1
+                      FROM smt_leaves sl
+                      WHERE sl.global_seq = sh.leaf_seq
+                        AND sl.shard_id = %s
+                  )
+                ORDER BY sh.leaf_seq ASC
+                LIMIT 1
+            """
+
+        cur.execute(header_sql, header_params)
         missing_row = cur.fetchone()
         if missing_row is not None:
             missing_leaf_seq = int(self._row_get(missing_row, "leaf_seq", 0))
@@ -2269,24 +2284,42 @@ class StorageLayer:
                 f"{missing_leaf_seq} has no corresponding smt_leaves.global_seq"
             )
 
-        # Inject the replay boundary/window predicate for leaf rows.
-        cur.execute(
-            sql.SQL(
-                """
+        # Check 2: every smt_leaves.global_seq in the window that belongs to
+        # this shard must be claimed by one of this shard's headers.
+        if lower_leaf_seq_exclusive is None:
+            leaf_params: tuple[Any, ...] = (shard_id, upper_leaf_seq, shard_id)
+            leaf_sql = """
                 SELECT sl.global_seq
                 FROM smt_leaves sl
-                WHERE {}
+                WHERE sl.shard_id = %s
+                  AND sl.global_seq > 0 AND sl.global_seq <= %s
                   AND NOT EXISTS (
                       SELECT 1
                       FROM shard_headers sh
-                      WHERE sh.leaf_seq = sl.global_seq
+                      WHERE sh.shard_id = %s
+                        AND sh.leaf_seq = sl.global_seq
                   )
                 ORDER BY sl.global_seq ASC
                 LIMIT 1
-                """
-            ).format(leaf_window_sql),
-            params,
-        )
+            """
+        else:
+            leaf_params = (shard_id, lower_leaf_seq_exclusive, upper_leaf_seq, shard_id)
+            leaf_sql = """
+                SELECT sl.global_seq
+                FROM smt_leaves sl
+                WHERE sl.shard_id = %s
+                  AND sl.global_seq > %s AND sl.global_seq <= %s
+                  AND NOT EXISTS (
+                      SELECT 1
+                      FROM shard_headers sh
+                      WHERE sh.shard_id = %s
+                        AND sh.leaf_seq = sl.global_seq
+                  )
+                ORDER BY sl.global_seq ASC
+                LIMIT 1
+            """
+
+        cur.execute(leaf_sql, leaf_params)
         orphan_row = cur.fetchone()
         if orphan_row is not None:
             orphaned_leaf_seq = int(self._row_get(orphan_row, "global_seq", 0))
