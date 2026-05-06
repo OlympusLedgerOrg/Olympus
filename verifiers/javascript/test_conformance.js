@@ -85,7 +85,7 @@ function testCrossLibraryBlake3(vectors) {
     // Only skip when blake3-wasm is genuinely not installed. Any other failure
     // (Node/WASM incompatibility, corrupted install, etc.) is a hard error so CI
     // cannot silently pass without actually checking cross-library agreement.
-    if (err && err.code === 'MODULE_NOT_FOUND' && err.message && err.message.includes('blake3-wasm')) {
+    if (err?.code === 'MODULE_NOT_FOUND' && err?.message?.includes('blake3-wasm')) {
       console.warn(
         '\n  ⚠️  WARNING: blake3-wasm not installed — cross-library BLAKE3 ' +
         'agreement test SKIPPED.\n' +
