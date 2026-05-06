@@ -48,7 +48,6 @@ import psycopg
 import pytest
 from psycopg.rows import dict_row
 
-import storage.postgres as storage_postgres_module
 from protocol.hashes import global_key, hash_bytes, record_key
 from protocol.shards import create_shard_header
 from protocol.ssmf import verify_nonexistence_proof, verify_proof
