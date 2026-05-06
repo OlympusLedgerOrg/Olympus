@@ -48,11 +48,11 @@ import psycopg
 import pytest
 from psycopg.rows import dict_row
 
+import storage.postgres as storage_postgres_module
 from protocol.hashes import global_key, hash_bytes, record_key
 from protocol.shards import create_shard_header
 from protocol.ssmf import verify_nonexistence_proof, verify_proof
 from protocol.timestamps import current_timestamp
-from storage.postgres import _NODE_REHASH_GATE, _RUST_SMT_AVAILABLE, StorageLayer
 
 
 # Test database connection string
@@ -67,7 +67,7 @@ pytestmark = [
         reason="TEST_DATABASE_URL is not set; skipping PostgreSQL storage tests.",
     ),
     pytest.mark.skipif(
-        not _RUST_SMT_AVAILABLE,
+        not storage_postgres_module._RUST_SMT_AVAILABLE,
         reason="storage.append_record() requires olympus_core Rust extension. "
         "Run `maturin develop` to build olympus_core, or rewrite tests to use ingest API.",
     ),
@@ -77,7 +77,7 @@ pytestmark = [
 @pytest.fixture
 def storage():
     """Create a storage layer for testing."""
-    storage = StorageLayer(TEST_DB)
+    storage = storage_postgres_module.StorageLayer(TEST_DB)
     storage.init_schema()
     yield storage
     storage.close()
@@ -891,7 +891,7 @@ def test_smt_nodes_reject_delete(storage, signing_key):
             )
 
 
-def _store_ingestion_batch(storage: StorageLayer) -> tuple[str, str]:
+def _store_ingestion_batch(storage: storage_postgres_module.StorageLayer) -> tuple[str, str]:
     batch_id = f"test_ingestion_batch_{uuid.uuid4()}"
     proof_id = str(uuid.uuid4())
     timestamp = current_timestamp()
@@ -1193,7 +1193,9 @@ def test_verify_state_replay_detects_header_root_divergence(storage, signing_key
     with storage._get_connection() as conn, conn.cursor(row_factory=dict_row) as cur:
         # _NODE_REHASH_GATE is a compile-time BLAKE3 constant; SET LOCAL does
         # not accept psycopg parameters, so f-string interpolation is safe.
-        cur.execute(f"SET LOCAL olympus.allow_smt_insert = '{_NODE_REHASH_GATE}'")
+        cur.execute(
+            f"SET LOCAL olympus.allow_smt_insert = '{storage_postgres_module._NODE_REHASH_GATE}'"
+        )
         cur.execute(
             """
             INSERT INTO smt_leaves
@@ -1258,7 +1260,9 @@ def test_forged_leaf_detected_regardless_of_timestamp(storage, signing_key):
         naive_ts = first_header_ts.replace(tzinfo=None) - timedelta(microseconds=1)
         # _NODE_REHASH_GATE is a compile-time BLAKE3 constant; SET LOCAL does
         # not accept psycopg parameters, so f-string interpolation is safe.
-        cur.execute(f"SET LOCAL olympus.allow_smt_insert = '{_NODE_REHASH_GATE}'")
+        cur.execute(
+            f"SET LOCAL olympus.allow_smt_insert = '{storage_postgres_module._NODE_REHASH_GATE}'"
+        )
         cur.execute(
             """
             INSERT INTO smt_leaves
