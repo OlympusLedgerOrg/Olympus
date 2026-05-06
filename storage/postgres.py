@@ -2231,13 +2231,14 @@ class StorageLayer:
 
         if lower_leaf_seq_exclusive is None:
             header_window_sql = sql.SQL("sh.leaf_seq > 0 AND sh.leaf_seq <= %s")
-            leaf_window_sql = sql.SQL("sl.global_seq <= %s")
+            leaf_window_sql = sql.SQL("sl.global_seq > 0 AND sl.global_seq <= %s")
             params: tuple[Any, ...] = (upper_leaf_seq,)
         else:
             header_window_sql = sql.SQL("sh.leaf_seq > %s AND sh.leaf_seq <= %s")
             leaf_window_sql = sql.SQL("sl.global_seq > %s AND sl.global_seq <= %s")
             params = (lower_leaf_seq_exclusive, upper_leaf_seq)
 
+        # Inject the replay boundary/window predicate for header claims.
         cur.execute(
             sql.SQL(
                 """
@@ -2263,6 +2264,7 @@ class StorageLayer:
                 f"{missing_leaf_seq} has no corresponding smt_leaves.global_seq"
             )
 
+        # Inject the replay boundary/window predicate for leaf rows.
         cur.execute(
             sql.SQL(
                 """
