@@ -126,7 +126,7 @@ def load_tree_state(
             """
             SELECT key, value_hash, parser_id, canonical_parser_version
             FROM smt_leaves
-            ORDER BY ts ASC, key ASC
+            ORDER BY global_seq ASC
             """
         )
     else:
@@ -138,7 +138,7 @@ def load_tree_state(
             SELECT key, value_hash, parser_id, canonical_parser_version
             FROM smt_leaves
             WHERE ts <= %s
-            ORDER BY ts ASC, key ASC
+            ORDER BY global_seq ASC
             """,
             (cutoff,),
         )

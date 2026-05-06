@@ -60,6 +60,8 @@ TEST_DB = os.environ.get("TEST_DATABASE_URL", "")
 
 pytestmark = [
     pytest.mark.postgres,
+    pytest.mark.storage,
+    pytest.mark.xdist_group("storage_postgres"),
     pytest.mark.skipif(
         not TEST_DB,
         reason="TEST_DATABASE_URL is not set; skipping PostgreSQL storage tests.",
@@ -1008,7 +1010,11 @@ def test_verify_state_replay_detects_header_root_divergence(storage, signing_key
     outside of append_record.  This changes the tree state without creating a
     corresponding header, so:
     - verify_state_replay detects a count mismatch (more leaves than headers).
-    - get_latest_header detects a root mismatch via _assert_root_matches_state.
+    - get_latest_header detects the same via _assert_root_matches_state.
+
+    With seq-based replay (ADR-0004) timestamp backdating is no longer required:
+    the forged leaf gets the next global_seq value and is detected by the global
+    leaf/header count invariant regardless of its ts value.
     """
     shard_id = f"test_verify_state_replay_detects_divergence_{datetime.now(UTC).timestamp()}"
 
@@ -1031,24 +1037,18 @@ def test_verify_state_replay_detects_header_root_divergence(storage, signing_key
 
     # Simulate state divergence by inserting a forged leaf that was never
     # recorded through append_record.  smt_leaves is append-only (UPDATE/DELETE
-    # are blocked), but plain INSERTs are permitted, so this is a realistic
-    # threat vector that the replay verifier must detect.
+    # are blocked), but plain INSERTs are permitted (via allow_smt_insert gate),
+    # so this is a realistic threat vector that the replay verifier must detect.
     #
-    # Backdate the forged leaf to just before the first persisted header so it
-    # is guaranteed to be included in replay and root verification windows.
-    # This avoids boundary flakiness when multiple headers share close
-    # timestamps.
+    # The forged leaf's global_seq is automatically assigned by the IDENTITY
+    # column to be higher than the two legitimate leaves.  The seq-based
+    # invariant (COUNT(smt_leaves) == COUNT(shard_headers)) then detects
+    # the extra leaf without relying on timestamp ordering.
     forged_version = 9999
     forged_record_key = record_key("document", "forged-doc", forged_version)
     forged_key = global_key(shard_id, forged_record_key)
     forged_value = hash_bytes(b"forged-leaf-value")
     with storage._get_connection() as conn, conn.cursor(row_factory=dict_row) as cur:
-        cur.execute(
-            "SELECT ts FROM shard_headers WHERE shard_id = %s ORDER BY seq ASC LIMIT 1",
-            (shard_id,),
-        )
-        first_header_ts = cur.fetchone()["ts"]
-        forged_ts = first_header_ts - timedelta(microseconds=1)
         # _NODE_REHASH_GATE is a compile-time BLAKE3 constant; SET LOCAL does
         # not accept psycopg parameters, so f-string interpolation is safe.
         cur.execute(f"SET LOCAL olympus.allow_smt_insert = '{_NODE_REHASH_GATE}'")
@@ -1056,32 +1056,32 @@ def test_verify_state_replay_detects_header_root_divergence(storage, signing_key
             """
             INSERT INTO smt_leaves
                 (key, version, value_hash, parser_id, canonical_parser_version, ts)
-            VALUES (%s, %s, %s, %s, %s, %s)
+            VALUES (%s, %s, %s, %s, %s, NOW())
             """,
-            (forged_key, forged_version, forged_value, "docling@2.3.1", "v1", forged_ts),
+            (forged_key, forged_version, forged_value, "docling@2.3.1", "v1"),
         )
         conn.commit()
 
-    # verify_state_replay should detect the discrepancy (count or root mismatch).
+    # verify_state_replay should detect the count discrepancy (more leaves than headers).
     with pytest.raises(ValueError, match="mismatch"):
         storage.verify_state_replay(shard_id)
 
-    # get_latest_header should also reject the diverged state because the
-    # recomputed tree root no longer matches the persisted header root.
+    # get_latest_header should also reject the diverged state via the global
+    # leaf/header count invariant check in _assert_root_matches_state.
     with pytest.raises(ValueError, match="Computed root"):
         storage.get_latest_header(shard_id)
 
 
 def test_replay_naive_datetime_cutoff_is_normalized(storage, signing_key):
-    """Timezone-naive cutoffs must not silently miss leaves near the boundary.
+    """A forged leaf inserted outside append_record is always detected, regardless
+    of how its timestamp is set.
 
-    If _load_tree_state or replay_tree_incremental passes a naive datetime to
-    the WHERE ts <= %s TIMESTAMPTZ comparison, Postgres may apply local-clock
-    semantics and exclude leaves that sit within a microsecond of the boundary.
-    This regression test constructs an explicit naive cutoff and verifies that
-    verify_state_replay still raises for a forged leaf, and that
-    get_latest_header does too — confirming both code paths normalize tzinfo
-    before handing the value to psycopg.
+    With seq-based replay (ADR-0004) the replay no longer relies on timestamp
+    comparisons, so timezone-naive or backdated timestamps no longer cause
+    leaves to be silently excluded from the replay window.  Instead, the global
+    leaf/header count invariant catches the discrepancy: COUNT(smt_leaves) must
+    equal COUNT(shard_headers), so any extra leaf – regardless of its ts value –
+    causes both verify_state_replay and get_latest_header to raise ValueError.
     """
     shard_id = f"test_replay_naive_tz_{datetime.now(UTC).timestamp()}"
 
@@ -1094,7 +1094,10 @@ def test_replay_naive_datetime_cutoff_is_normalized(storage, signing_key):
         signing_key=signing_key,
     )
 
-    # Insert a forged leaf backdated by 1 µs so it falls in the first window.
+    # Insert a forged leaf.  We deliberately set ts to a backdated naive
+    # datetime to confirm that the seq-based invariant still catches it even
+    # when the ts value would previously have caused it to be excluded from
+    # timestamp-based replay windows.
     forged_version = 8888
     forged_record_key = record_key("document", "tz-forged-doc", forged_version)
     forged_key = global_key(shard_id, forged_record_key)
@@ -1105,10 +1108,11 @@ def test_replay_naive_datetime_cutoff_is_normalized(storage, signing_key):
             (shard_id,),
         )
         first_header_ts = cur.fetchone()["ts"]
-        # Construct a naive datetime (tzinfo=None) to simulate application code
-        # that strips timezone info before passing a cutoff to the replay path.
-        # The guard in _load_tree_state / replay_tree_incremental must re-attach
-        # UTC so the TIMESTAMPTZ comparison is unambiguous.
+        # Construct a naive datetime (tzinfo=None) backdated by 1 µs.
+        # Under the old timestamp-based replay this would have caused the forged
+        # leaf to be included in the first window and trigger a root mismatch;
+        # under seq-based replay the timestamp is irrelevant — the count check
+        # detects the extra leaf instead.
         naive_ts = first_header_ts.replace(tzinfo=None) - timedelta(microseconds=1)
         # _NODE_REHASH_GATE is a compile-time BLAKE3 constant; SET LOCAL does
         # not accept psycopg parameters, so f-string interpolation is safe.
@@ -1123,7 +1127,7 @@ def test_replay_naive_datetime_cutoff_is_normalized(storage, signing_key):
         )
         conn.commit()
 
-    # Both replay paths must detect the forged leaf despite the naive timestamp.
+    # Both replay paths must detect the forged leaf regardless of its timestamp.
     with pytest.raises(ValueError, match="mismatch"):
         storage.verify_state_replay(shard_id)
 

@@ -176,6 +176,7 @@ markers = [
     "security: marks tests that verify defensive security invariants",
     "api: marks tests that exercise the HTTP API layer",
     "storage: marks tests that exercise the storage layer (may require Postgres)",
+    "xdist_group: marks tests to run in the same xdist worker group (prevents parallel DB conflicts)",
 ]
 
 [tool.coverage.run]

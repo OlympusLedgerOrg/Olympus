@@ -76,6 +76,7 @@ except (ImportError, AttributeError):
 pytestmark = [
     pytest.mark.fuzz,
     pytest.mark.storage,
+    pytest.mark.xdist_group("storage_postgres"),
     pytest.mark.skipif(
         not TEST_DB,
         reason="TEST_DATABASE_URL not set — skipping storage fuzz tests.",

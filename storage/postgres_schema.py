@@ -46,6 +46,7 @@ def schema_statements(node_rehash_gate: str) -> list[str]:
             parser_id                 TEXT        NOT NULL,
             canonical_parser_version  TEXT        NOT NULL,
             ts                        TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+            global_seq                BIGINT      GENERATED ALWAYS AS IDENTITY,
             PRIMARY KEY (key, version),
             CONSTRAINT smt_leaves_key_length
                 CHECK (octet_length(key) = 32),
@@ -58,6 +59,7 @@ def schema_statements(node_rehash_gate: str) -> list[str]:
         )
         """,
         "CREATE INDEX IF NOT EXISTS smt_leaves_ts_idx ON smt_leaves(ts)",
+        "CREATE UNIQUE INDEX IF NOT EXISTS smt_leaves_global_seq_idx ON smt_leaves(global_seq)",
         # ADR-0003 upgrade: add parser provenance columns to existing smt_leaves.
         # ADD COLUMN IF NOT EXISTS is idempotent; the DEFAULT uses the canonical
         # fallback values so that any previously-committed rows get a meaningful
@@ -67,6 +69,26 @@ def schema_statements(node_rehash_gate: str) -> list[str]:
         "ALTER TABLE smt_leaves ADD COLUMN IF NOT EXISTS canonical_parser_version TEXT NOT NULL DEFAULT 'v1'",
         "ALTER TABLE smt_leaves ALTER COLUMN parser_id DROP DEFAULT",
         "ALTER TABLE smt_leaves ALTER COLUMN canonical_parser_version DROP DEFAULT",
+        # ADR-0004 upgrade: add global_seq (monotonically increasing identity) to
+        # smt_leaves so that replay can use sequence-based windowing instead of
+        # timestamp-based windowing, eliminating clock-skew and same-second
+        # ambiguity.  For existing tables the DO block adds the column; for freshly
+        # created tables it already exists from the CREATE TABLE above.
+        """
+        DO $$
+        BEGIN
+            IF NOT EXISTS (
+                SELECT 1
+                FROM information_schema.columns
+                WHERE table_schema = 'public'
+                  AND table_name = 'smt_leaves'
+                  AND column_name = 'global_seq'
+            ) THEN
+                ALTER TABLE smt_leaves
+                    ADD COLUMN global_seq BIGINT GENERATED ALWAYS AS IDENTITY;
+            END IF;
+        END $$;
+        """,
         # ------------------------------------------------------------------
         # SMT Nodes
         # ------------------------------------------------------------------
@@ -107,6 +129,7 @@ def schema_statements(node_rehash_gate: str) -> list[str]:
             seq                  BIGINT      NOT NULL,
             root                 BYTEA       NOT NULL,
             tree_size            BIGINT      NOT NULL DEFAULT 0,
+            leaf_seq             BIGINT      NOT NULL DEFAULT 0,
             header_hash          BYTEA       NOT NULL,
             sig                  BYTEA       NOT NULL,
             pubkey               BYTEA       NOT NULL,
@@ -130,6 +153,23 @@ def schema_statements(node_rehash_gate: str) -> list[str]:
             CONSTRAINT shard_headers_tree_size_non_negative
                 CHECK (tree_size >= 0)
         )
+        """,
+        # ADR-0004 upgrade: add leaf_seq to shard_headers to record which
+        # smt_leaves.global_seq was current when this header was committed.
+        # Enables seq-based replay windowing without timestamp dependence.
+        """
+        DO $$
+        BEGIN
+            IF NOT EXISTS (
+                SELECT 1
+                FROM information_schema.columns
+                WHERE table_schema = 'public'
+                  AND table_name = 'shard_headers'
+                  AND column_name = 'leaf_seq'
+            ) THEN
+                ALTER TABLE shard_headers ADD COLUMN leaf_seq BIGINT NOT NULL DEFAULT 0;
+            END IF;
+        END $$;
         """,
         """
         CREATE INDEX IF NOT EXISTS shard_headers_shard_seq_desc_idx
