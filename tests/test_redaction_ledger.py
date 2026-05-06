@@ -278,8 +278,10 @@ def test_verify_zk_redaction_maps_public_inputs_and_calls_prover():
         revealed_count=2,
     )
 
-    with patch("protocol.redaction_ledger._snarkjs_bridge", None), \
-         patch("protocol.redaction_ledger.Groth16Prover.verify", return_value=True) as mock_verify:
+    with (
+        patch("protocol.redaction_ledger._snarkjs_bridge", None),
+        patch("protocol.redaction_ledger.Groth16Prover.verify", return_value=True) as mock_verify,
+    ):
         assert verify_zk_redaction(proof_blob, public_inputs) is VerificationResult.VALID
 
     kwargs = mock_verify.call_args[1]
@@ -314,8 +316,10 @@ def test_verify_zk_redaction_reports_missing_verification_key():
         revealed_count=2,
     )
 
-    with patch("protocol.redaction_ledger._snarkjs_bridge", None), \
-         patch("protocol.redaction_ledger.Groth16Prover.verify", side_effect=FileNotFoundError):
+    with (
+        patch("protocol.redaction_ledger._snarkjs_bridge", None),
+        patch("protocol.redaction_ledger.Groth16Prover.verify", side_effect=FileNotFoundError),
+    ):
         result = verify_zk_redaction(proof_blob, public_inputs)
 
     assert result is VerificationResult.UNABLE_TO_VERIFY

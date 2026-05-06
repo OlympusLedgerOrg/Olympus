@@ -39,7 +39,7 @@ from collections.abc import Iterable, Iterator, Mapping
 from contextlib import contextmanager
 from datetime import datetime, timezone
 from threading import Lock
-from typing import Any
+from typing import Any, cast
 
 import nacl.exceptions
 import nacl.signing
@@ -2353,7 +2353,7 @@ class StorageLayer:
         if row is None:
             return EMPTY_HASHES[256]
         raw = row[0] if not isinstance(row, Mapping) else row.get("hash")
-        return bytes(raw)
+        return bytes(cast(bytes, raw))
 
     def _get_poseidon_proof_path(
         self,

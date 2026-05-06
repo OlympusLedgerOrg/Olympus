@@ -74,6 +74,7 @@ from .hashes import SNARK_SCALAR_FIELD, record_key
 from .ssmf import ExistenceProof, verify_proof
 from .zkp import Groth16Prover, ZKProof
 
+
 try:
     from proofs import snarkjs_bridge as _snarkjs_bridge
 except Exception:  # pragma: no cover
