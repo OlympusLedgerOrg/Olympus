@@ -257,7 +257,7 @@ async def submit_observation(
         )
     except (ValueError, AttributeError):
         raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
             detail="checkpoint.timestamp must be a valid ISO 8601 UTC string",
         )
 
@@ -265,7 +265,7 @@ async def submit_observation(
     age_seconds = (now - ts).total_seconds()
     if age_seconds > _MAX_ANNOUNCE_SKEW_SECONDS:
         raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
             detail=(
                 f"Stale announcement: checkpoint.timestamp is {age_seconds:.0f}s old "
                 f"(max {_MAX_ANNOUNCE_SKEW_SECONDS}s)"
@@ -273,7 +273,7 @@ async def submit_observation(
         )
     if age_seconds < -_MAX_ANNOUNCE_SKEW_SECONDS:
         raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
             detail="checkpoint.timestamp is too far in the future",
         )
 

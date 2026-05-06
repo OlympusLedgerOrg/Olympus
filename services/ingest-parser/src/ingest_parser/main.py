@@ -255,7 +255,7 @@ async def parse_document(
     if expected_blake3:
         if not verify_hash(expected_blake3, raw_file_blake3):
             raise HTTPException(
-                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
                 detail=f"Hash mismatch. Expected {expected_blake3}, got {raw_file_blake3}",
             )
 

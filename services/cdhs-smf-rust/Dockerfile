@@ -4,17 +4,12 @@
 # with a gRPC interface over Unix socket. It handles all SMT operations:
 # Update, ProveInclusion, ProveNonInclusion, GetRoot, SignRoot, Canonicalize.
 #
-# Build stage: compile with Rust stable using cargo.
+# Build stage: compile with Rust 1.95 using cargo.
 # Final stage: gcr.io/distroless/cc-debian12 — minimal runtime with C/C++ libs
 #   required for Rust binaries with some dependencies.
 
 # --- Build Stage ---
-FROM rust:1.87-slim-bookworm AS build
-
-# Install protobuf compiler for prost/tonic code generation
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    protobuf-compiler \
-    && rm -rf /var/lib/apt/lists/*
+FROM rust:1.95-slim-bookworm AS build
 
 WORKDIR /src
 
@@ -28,12 +23,13 @@ RUN mkdir -p src && \
     echo 'fn main() { println!("placeholder"); }' > src/main.rs && \
     echo 'pub fn placeholder() {}' > src/lib.rs
 
-# Copy proto file for build.rs
+# Copy proto file for build.rs. build.rs uses protoc-bin-vendored, so this
+# image does not need a system protobuf-compiler package.
 RUN mkdir -p /proto
 COPY proto/cdhs_smf.proto /proto/
 
-# Build dependencies only (this layer is cached if Cargo.toml/lock unchanged)
-RUN cargo build --release || true
+# Fetch dependencies only (this layer is cached if Cargo.toml/lock unchanged).
+RUN cargo fetch --locked
 
 # Now copy the real source code
 COPY services/cdhs-smf-rust/src ./src

@@ -456,6 +456,7 @@ def test_commit_skips_symlinks(tmp_path):
     try:
         link.symlink_to(real_file)
     except OSError:
+
         class SymlinkLikePath:
             def is_symlink(self):
                 return True

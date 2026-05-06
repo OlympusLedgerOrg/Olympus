@@ -7,8 +7,6 @@ using known inputs.
 
 from __future__ import annotations
 
-import warnings
-
 import blake3
 import pytest
 
@@ -41,7 +39,8 @@ class TestBuildTree:
 
     def test_two_leaves_preserve_order(self):
         a, b = _b3("a"), _b3("b")
-        tree = build_tree([a, b], preserve_order=True)
+        with pytest.warns(UserWarning, match="preserve_order"):
+            tree = build_tree([a, b], preserve_order=True)
         # Leaves are first domain-separated, then paired as an internal node:
         # BLAKE3(OLY:NODE:V1 || | || leaf_hash(a) || | || leaf_hash(b))
         leaf_a = _blake3_leaf(bytes.fromhex(a))
@@ -89,17 +88,15 @@ class TestBuildTree:
         """With preserve_order=True, different ordering → different root."""
         leaves = [_b3(s) for s in ["leaf_z", "leaf_a"]]
         root_sorted = build_tree(leaves).root_hash
-        root_ordered = build_tree(leaves, preserve_order=True).root_hash
+        with pytest.warns(UserWarning, match="preserve_order"):
+            root_ordered = build_tree(leaves, preserve_order=True).root_hash
         assert root_sorted != root_ordered
 
     def test_preserve_order_emits_warning(self):
         """preserve_order=True must emit a UserWarning."""
         leaves = [_b3("x")]
-        with warnings.catch_warnings(record=True) as w:
-            warnings.simplefilter("always")
+        with pytest.warns(UserWarning, match="preserve_order"):
             build_tree(leaves, preserve_order=True)
-            assert len(w) == 1
-            assert "preserve_order" in str(w[0].message)
 
     # -------------------------------------------------------------------
     # Finding #8 — lone-node self-pair tests
@@ -208,7 +205,8 @@ class TestVerifyProof:
     def test_tampered_sibling_fails_preserve_order(self):
         """Tamper detection must also work for preserve_order=True trees."""
         leaves = [_b3(s) for s in ["1", "2", "3", "4"]]
-        tree = build_tree(leaves, preserve_order=True)
+        with pytest.warns(UserWarning, match="preserve_order"):
+            tree = build_tree(leaves, preserve_order=True)
         leaf = tree.leaf_hashes[0]
         proof = generate_proof(leaf, tree)
         bad_siblings = [(_b3("evil"), proof.siblings[0][1])] + list(proof.siblings[1:])

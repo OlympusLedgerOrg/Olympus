@@ -39,7 +39,7 @@ from collections.abc import Iterable, Iterator, Mapping
 from contextlib import contextmanager
 from datetime import datetime, timezone
 from threading import Lock
-from typing import Any
+from typing import Any, cast
 
 import nacl.exceptions
 import nacl.signing
@@ -275,6 +275,7 @@ class StorageLayer:
             open=True,
             kwargs={"autocommit": False, "row_factory": dict_row},
         )
+        self._pool_closed = False
 
         # In-memory LRU cache for Merkle nodes keyed by (shard_id, level, path_bytes).
         # SMT nodes are immutable once written so caching is safe.
@@ -311,7 +312,20 @@ class StorageLayer:
 
     def close(self) -> None:
         """Close all pooled database connections."""
+        if self._pool_closed:
+            return
+        self._pool_closed = True
         self._pool.close()
+
+    def __del__(self) -> None:
+        """Best-effort pool cleanup for tests and short-lived scripts."""
+        try:
+            self.close()
+        except Exception:
+            logger.debug(
+                "Suppressed exception during PostgresStorage.__del__ cleanup",
+                exc_info=True,
+            )
 
     # ------------------------------------------------------------------
     # Merkle node cache helpers
@@ -1327,7 +1341,7 @@ class StorageLayer:
                 timestamp_str = ts_value
             elif isinstance(ts_value, datetime):
                 # It's a datetime object from Postgres - convert to ISO 8601 string
-                timestamp_str = ts_value.isoformat().replace("+00:00", "Z")
+                timestamp_str = ts_value.astimezone(timezone.utc).isoformat().replace("+00:00", "Z")
             else:
                 # Unexpected type - raise error for clarity
                 raise TypeError(
@@ -1400,7 +1414,9 @@ class StorageLayer:
                 if isinstance(ts_value, str):
                     timestamp_str = ts_value
                 elif isinstance(ts_value, datetime):
-                    timestamp_str = ts_value.isoformat().replace("+00:00", "Z")
+                    timestamp_str = (
+                        ts_value.astimezone(timezone.utc).isoformat().replace("+00:00", "Z")
+                    )
                 else:
                     raise TypeError(
                         f"Unexpected timestamp type: {type(ts_value).__name__}. "
@@ -1804,7 +1820,7 @@ class StorageLayer:
         for row in rows:
             ts_value = row["gen_time"]
             if isinstance(ts_value, datetime):
-                timestamp_str = ts_value.isoformat().replace("+00:00", "Z")
+                timestamp_str = ts_value.astimezone(timezone.utc).isoformat().replace("+00:00", "Z")
             else:
                 timestamp_str = str(ts_value)
 
@@ -2337,7 +2353,7 @@ class StorageLayer:
         if row is None:
             return EMPTY_HASHES[256]
         raw = row[0] if not isinstance(row, Mapping) else row.get("hash")
-        return bytes(raw)
+        return bytes(cast(bytes, raw))
 
     def _get_poseidon_proof_path(
         self,

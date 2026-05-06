@@ -210,7 +210,11 @@ async def ingest_document(
         )
         existing_hashes = list(existing_hashes_result.scalars().all())
         all_hashes = existing_hashes + [doc_hash]
-        merkle_root = build_tree(all_hashes, preserve_order=True).root_hash
+        merkle_root = build_tree(
+            all_hashes,
+            preserve_order=True,
+            warn_on_preserve_order=False,
+        ).root_hash
 
         stmt = (
             pg_insert(DocCommit)

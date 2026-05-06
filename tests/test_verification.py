@@ -35,6 +35,9 @@ def _make_fake_commit(
 def _make_fake_db(all_hashes=None, raise_on_execute=False):
     """Create a fake async DB session."""
     db = AsyncMock()
+    db.add = MagicMock()
+    db.commit = AsyncMock()
+    db.rollback = AsyncMock()
 
     if raise_on_execute:
         db.execute.side_effect = Exception("DB error")

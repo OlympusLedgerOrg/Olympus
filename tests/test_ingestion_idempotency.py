@@ -44,6 +44,7 @@ def _fake_commit_id() -> str:
 def mock_db() -> AsyncMock:
     """Return an ``AsyncMock`` that behaves like an ``AsyncSession``."""
     db = AsyncMock()
+    db.add = MagicMock()
     db.commit = AsyncMock()
     db.rollback = AsyncMock()
     db.refresh = AsyncMock()

@@ -27,7 +27,7 @@ from __future__ import annotations
 from collections.abc import Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 import blake3 as _blake3
 
@@ -198,7 +198,7 @@ def write_deterministic_parquet(
     # Sort table
     if sort_cols:
         sort_keys = [(col, "ascending") for col in sort_cols]
-        indices = pc.sort_indices(table, sort_keys=sort_keys)
+        indices = cast(Any, pc).sort_indices(table, sort_keys=sort_keys)
         table = table.take(indices)
 
     # Ensure deterministic column order (alphabetical)
