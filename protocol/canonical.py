@@ -339,8 +339,10 @@ def _canonicalize_xml_lxml(text: str) -> str:
     text = unicodedata.normalize("NFC", text)
     try:
         parser = _lxml_etree.XMLParser(  # type: ignore[union-attr]
-            resolve_entities=False,
-            no_network=True,
+            resolve_entities=False,  # block XXE
+            no_network=True,  # no remote DTD/schema fetch
+            load_dtd=False,  # never load any DTD
+            dtd_validation=False,  # never validate against DTD
             remove_comments=True,
             remove_pis=True,
         )

@@ -506,9 +506,11 @@ class Groth16Backend(ProofBackendProtocol):
         # --- B1: Enforce statement ↔ proof public-input equality ---
         # statement.to_list() returns inputs sorted by key (deterministic order).
         # proof.public_signals is the ordered list written by the prover.
-        # Both sides must be equal as strings; a mismatch means the proof was
-        # generated for a different statement and must be rejected immediately,
-        # before any subprocess is spawned.
+        # Both sides are coerced to str so that int/str representations (e.g.
+        # "1" vs 1) compare equal — snarkjs outputs JSON strings for signals,
+        # while some callers may have stored them as ints.
+        # A mismatch means the proof was generated for a different statement;
+        # reject immediately before any subprocess is spawned.
         expected_signals = [str(v) for v in statement.to_list()]
         actual_signals = [str(v) for v in proof.public_signals]
         if expected_signals != actual_signals:

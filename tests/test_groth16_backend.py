@@ -802,7 +802,7 @@ class TestVkeyHashPin:
     ) -> None:
         """Wrong vkey hash raises ProofVerificationError before snarkjs runs."""
         backend, _ = self._setup(tmp_path)
-        monkeypatch.setenv("OLYMPUS_ZK_VKEY_HASH", "deadbeef" * 8)  # wrong 64-char hex
+        monkeypatch.setenv("OLYMPUS_ZK_VKEY_HASH", "deadbeef" * 8)  # 64-char hex, but wrong hash
 
         statement = Statement(circuit="test", public_inputs={"root": "1"})
         proof = Proof(
