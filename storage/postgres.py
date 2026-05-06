@@ -322,7 +322,10 @@ class StorageLayer:
         try:
             self.close()
         except Exception:
-            pass
+            logger.debug(
+                "Suppressed exception during PostgresStorage.__del__ cleanup",
+                exc_info=True,
+            )
 
     # ------------------------------------------------------------------
     # Merkle node cache helpers
@@ -1411,7 +1414,9 @@ class StorageLayer:
                 if isinstance(ts_value, str):
                     timestamp_str = ts_value
                 elif isinstance(ts_value, datetime):
-                    timestamp_str = ts_value.astimezone(timezone.utc).isoformat().replace("+00:00", "Z")
+                    timestamp_str = (
+                        ts_value.astimezone(timezone.utc).isoformat().replace("+00:00", "Z")
+                    )
                 else:
                     raise TypeError(
                         f"Unexpected timestamp type: {type(ts_value).__name__}. "
