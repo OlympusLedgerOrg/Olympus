@@ -794,6 +794,7 @@ class StorageLayer:
                     INSERT INTO smt_leaves
                         (key, version, value_hash, parser_id, canonical_parser_version, ts)
                     VALUES (%s, %s, %s, %s, %s, %s)
+                    RETURNING global_seq
                     """,
                 (
                     key,
@@ -803,6 +804,14 @@ class StorageLayer:
                     canonical_parser_version,
                     datetime.now(timezone.utc),
                 ),
+            )
+            leaf_global_seq_row = cur.fetchone()
+            if leaf_global_seq_row is None:
+                raise RuntimeError("INSERT INTO smt_leaves did not return global_seq")
+            leaf_global_seq: int = int(
+                leaf_global_seq_row["global_seq"]
+                if isinstance(leaf_global_seq_row, Mapping)
+                else leaf_global_seq_row[0]
             )
 
             # --- Persist node deltas ---
@@ -833,7 +842,7 @@ class StorageLayer:
             # eliminating the fragile SELECT MAX(seq) anti-pattern).
             cur.execute(
                 """
-                    SELECT seq, header_hash, ts FROM shard_headers
+                    SELECT seq, header_hash FROM shard_headers
                     WHERE shard_id = %s
                     ORDER BY seq DESC
                     LIMIT 1
@@ -845,16 +854,9 @@ class StorageLayer:
             prev_header_hash = "" if prev_row is None else bytes(prev_row["header_hash"]).hex()
             seq = 0 if prev_row is None else prev_row["seq"] + 1
 
-            # Create shard header
+            # Create shard header — timestamp is best-effort metadata.
+            # Sequence number (seq) is the hard ledger ordering invariant.
             ts = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
-            if prev_row is not None:
-                last_ts_value = prev_row["ts"]
-                if isinstance(last_ts_value, datetime):
-                    last_ts = last_ts_value.astimezone(timezone.utc)
-                else:
-                    last_ts = datetime.fromisoformat(str(last_ts_value).replace("Z", "+00:00"))
-                if datetime.fromisoformat(ts.replace("Z", "+00:00")) <= last_ts:
-                    raise ValueError("New shard header timestamp must be strictly monotonic")
             header = create_shard_header(
                 shard_id=shard_id,
                 root_hash=root_hash,
@@ -872,19 +874,21 @@ class StorageLayer:
             if not verify_header(header, signature, signing_key.verify_key):
                 raise RuntimeError("Shard header signature verification failed before persistence")
 
-            # Insert shard header
+            # Insert shard header (leaf_seq records the global_seq of the leaf
+            # just inserted so replay can use seq-based windowing).
             cur.execute(
                 """
                     INSERT INTO shard_headers
-                        (shard_id, seq, root, tree_size, header_hash,
+                        (shard_id, seq, root, tree_size, leaf_seq, header_hash,
                          sig, pubkey, previous_header_hash, ts)
-                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                     """,
                 (
                     shard_id,
                     seq,
                     root_hash,
                     tree_size,
+                    leaf_global_seq,
                     bytes.fromhex(header["header_hash"]),
                     bytes.fromhex(signature),
                     pubkey,
@@ -1321,7 +1325,8 @@ class StorageLayer:
         with self._get_connection() as conn, conn.cursor(row_factory=dict_row) as cur:
             cur.execute(
                 """
-                    SELECT root, tree_size, header_hash, sig, pubkey, previous_header_hash, ts, seq
+                    SELECT root, tree_size, leaf_seq, header_hash, sig, pubkey,
+                           previous_header_hash, ts, seq
                     FROM shard_headers
                     WHERE shard_id = %s
                     ORDER BY seq DESC
@@ -1372,10 +1377,17 @@ class StorageLayer:
 
             # Guard against SMT divergence.
             # Always use the historical leaf replay path to verify the
-            # header root.  The O(1) smt_nodes shortcut (as_of_ts=None)
+            # header root.  The O(1) smt_nodes shortcut (as_of_leaf_seq=None)
             # cannot detect forged leaves that were inserted directly into
             # smt_leaves without going through the append_record write path.
-            self._assert_root_matches_state(cur, shard_id, bytes(row["root"]), as_of_ts=row["ts"])
+            self._assert_root_matches_state(
+                cur, shard_id, bytes(row["root"]), as_of_leaf_seq=int(row["leaf_seq"])
+            )
+            # Global orphan check: catches forged leaves whose global_seq falls
+            # beyond the last header's leaf_seq window (outside per-header deltas).
+            self._assert_leaf_seq_integrity(
+                cur, shard_id, "Computed root integrity failure", upper_leaf_seq=None
+            )
 
             return {
                 "header": header,
@@ -1708,7 +1720,7 @@ class StorageLayer:
             after_seq: Resume after this sequence number (default 0).
 
         Raises:
-            ValueError: If counts diverge or any root mismatch is detected.
+            ValueError: If structural seq integrity fails or any root mismatch is detected.
         """
         return self.replay_tree_incremental(
             shard_id,
@@ -2194,39 +2206,137 @@ class StorageLayer:
             return row[key]
         return row[idx]
 
+    def _assert_leaf_seq_integrity(
+        self,
+        cur: psycopg.Cursor[Any],
+        shard_id: str,
+        error_prefix: str,
+        upper_leaf_seq: int | None,
+        lower_leaf_seq_exclusive: int | None = None,
+    ) -> None:
+        """
+        Verify that replay-relevant ``shard_headers.leaf_seq`` claims match
+        replay-relevant ``smt_leaves.global_seq`` rows exactly.
+
+        Headers with ``leaf_seq <= 0`` are ignored so genesis/system/setup
+        headers that do not correspond to a state-changing SMT write do not fail
+        validation.
+        """
+        if upper_leaf_seq is None:
+            cur.execute(
+                """
+                SELECT GREATEST(
+                    COALESCE((SELECT MAX(global_seq) FROM smt_leaves), 0),
+                    COALESCE((SELECT MAX(leaf_seq) FROM shard_headers), 0)
+                ) AS max_seq
+                """
+            )
+            row = cur.fetchone()
+            upper_leaf_seq = int(self._row_get(row, "max_seq", 0)) if row is not None else 0
+
+        if lower_leaf_seq_exclusive is None:
+            header_window_sql = sql.SQL("sh.leaf_seq > 0 AND sh.leaf_seq <= %s")
+            leaf_window_sql = sql.SQL("sl.global_seq > 0 AND sl.global_seq <= %s")
+            params: tuple[Any, ...] = (upper_leaf_seq,)
+        else:
+            header_window_sql = sql.SQL("sh.leaf_seq > %s AND sh.leaf_seq <= %s")
+            leaf_window_sql = sql.SQL("sl.global_seq > %s AND sl.global_seq <= %s")
+            params = (lower_leaf_seq_exclusive, upper_leaf_seq)
+
+        # Inject the replay boundary/window predicate for header claims.
+        cur.execute(
+            sql.SQL(
+                """
+                SELECT sh.leaf_seq
+                FROM shard_headers sh
+                WHERE {}
+                  AND NOT EXISTS (
+                      SELECT 1
+                      FROM smt_leaves sl
+                      WHERE sl.global_seq = sh.leaf_seq
+                  )
+                ORDER BY sh.leaf_seq ASC
+                LIMIT 1
+                """
+            ).format(header_window_sql),
+            params,
+        )
+        missing_row = cur.fetchone()
+        if missing_row is not None:
+            missing_leaf_seq = int(self._row_get(missing_row, "leaf_seq", 0))
+            raise ValueError(
+                f"{error_prefix} for shard '{shard_id}': shard_headers.leaf_seq "
+                f"{missing_leaf_seq} has no corresponding smt_leaves.global_seq"
+            )
+
+        # Inject the replay boundary/window predicate for leaf rows.
+        cur.execute(
+            sql.SQL(
+                """
+                SELECT sl.global_seq
+                FROM smt_leaves sl
+                WHERE {}
+                  AND NOT EXISTS (
+                      SELECT 1
+                      FROM shard_headers sh
+                      WHERE sh.leaf_seq = sl.global_seq
+                  )
+                ORDER BY sl.global_seq ASC
+                LIMIT 1
+                """
+            ).format(leaf_window_sql),
+            params,
+        )
+        orphan_row = cur.fetchone()
+        if orphan_row is not None:
+            orphaned_leaf_seq = int(self._row_get(orphan_row, "global_seq", 0))
+            raise ValueError(
+                f"{error_prefix} for shard '{shard_id}': orphaned "
+                f"smt_leaves.global_seq {orphaned_leaf_seq} has no corresponding "
+                "shard_headers.leaf_seq claim"
+            )
+
     def _assert_root_matches_state(
         self,
         cur: psycopg.Cursor[Any],
         shard_id: str,
         expected_root: bytes,
-        as_of_ts: datetime | str | None = None,
+        as_of_leaf_seq: int | None = None,
     ) -> None:
         """
-        Recompute the global SMT root as of *as_of_ts* and ensure it matches
+        Recompute the global SMT root as of *as_of_leaf_seq* and ensure it matches
         ``expected_root``.
 
         Because the CD-HS-ST is a single global tree, the root changes every
-        time *any* shard appends a record.  Comparing against the current root
-        would fail as soon as a second shard writes after the header was
-        created.  Passing the header's own timestamp reconstructs the tree
-        state at that point in time.
+        time *any* shard appends a record.  Passing the header's own
+        ``leaf_seq`` reconstructs the tree state at that exact insertion.
 
-        ADR-0001: When *as_of_ts* is ``None`` the root is read directly from
-        ``smt_nodes`` (O(1)) instead of replaying all leaves.  Historical
+        ADR-0001: When *as_of_leaf_seq* is ``None`` the root is read directly
+        from ``smt_nodes`` (O(1)) instead of replaying all leaves.  Historical
         snapshots still require a leaf replay.
+
+        In both branches the structural ``leaf_seq`` integrity invariant is
+        checked within the replay boundary: every positive
+        ``shard_headers.leaf_seq`` claim must resolve to a matching
+        ``smt_leaves.global_seq`` row, and every replayed ``global_seq`` must be
+        claimed by some header. Headers with ``leaf_seq <= 0`` are treated as
+        non-state-changing metadata/checkpoint headers and are excluded from
+        this integrity check.
 
         Args:
             cur: Active database cursor (read-only).
             shard_id: Shard identifier (used only in error messages).
             expected_root: Root hash from persisted header.
-            as_of_ts: Optional timestamp cutoff for historical replay
-                from ``smt_leaves``.  When *None* the current root node
-                is read directly.
+            as_of_leaf_seq: Optional global_seq upper bound (inclusive) for
+                historical replay from ``smt_leaves``.  When *None* the
+                current root node is read directly.
 
         Raises:
-            ValueError: When the recomputed root diverges from ``expected_root``.
+            ValueError: When the recomputed root diverges from ``expected_root``
+                or when ``leaf_seq``/``global_seq`` structural integrity is
+                violated.
         """
-        if as_of_ts is None:
+        if as_of_leaf_seq is None:
             # Fast path: read root directly from smt_nodes (O(1)).
             cur.execute("SELECT hash FROM smt_nodes WHERE level = 0 AND index = ''::bytea")
             node_row = cur.fetchone()
@@ -2235,15 +2345,17 @@ class StorageLayer:
                 if node_row is not None
                 else EMPTY_HASHES[256]
             )
+            self._assert_leaf_seq_integrity(
+                cur,
+                shard_id,
+                "Computed root integrity failure",
+                upper_leaf_seq=None,
+            )
         else:
-            # Historical snapshot — incremental replay from leaves.
+            # Historical snapshot — incremental replay from leaves using
+            # global_seq-based windowing (ADR-0004).
             _require_rust_smt()
             replay_tree = RustSparseMerkleTree()
-            cutoff = as_of_ts
-            if isinstance(cutoff, str):
-                cutoff = datetime.fromisoformat(cutoff.replace("Z", "+00:00"))
-            if cutoff.tzinfo is None:
-                cutoff = cutoff.replace(tzinfo=timezone.utc)
 
             batch_size = self.DEFAULT_FLUSH_BATCH_SIZE
             offset = 0
@@ -2252,11 +2364,11 @@ class StorageLayer:
                     """
                     SELECT key, value_hash, parser_id, canonical_parser_version
                     FROM smt_leaves
-                    WHERE ts <= %s
-                    ORDER BY ts ASC, key ASC
+                    WHERE global_seq <= %s
+                    ORDER BY global_seq ASC
                     LIMIT %s OFFSET %s
                     """,
-                    (cutoff, batch_size, offset),
+                    (as_of_leaf_seq, batch_size, offset),
                 )
                 rows = cur.fetchall()
                 if not rows:
@@ -2271,6 +2383,12 @@ class StorageLayer:
                 offset += len(rows)
 
             computed_root = replay_tree.get_root()
+            self._assert_leaf_seq_integrity(
+                cur,
+                shard_id,
+                "Computed root integrity failure",
+                upper_leaf_seq=as_of_leaf_seq,
+            )
 
         if computed_root != expected_root:
             raise ValueError(
@@ -2440,6 +2558,132 @@ class StorageLayer:
                 return EMPTY_HASHES[256]
             return bytes(row["root"])
 
+    @staticmethod
+    def _normalize_root(root: bytes | str | memoryview | None) -> str:
+        """
+        Standardize a cryptographic root for comparison across storage backends.
+
+        Accepts the full range of persisted root representations (raw bytes,
+        hex strings, memoryview slices, or None for an empty-tree sentinel) and
+        returns a lowercase hex string for uniform comparison.
+
+        Args:
+            root: Raw bytes, hex string, memoryview, or None.
+
+        Returns:
+            Lowercase hex string; empty string when *root* is None.
+        """
+        if root is None:
+            return ""
+        if isinstance(root, memoryview):
+            root = bytes(root)
+        if isinstance(root, bytes):
+            return root.hex()
+        return str(root).lower().removeprefix("0x")
+
+    def get_shard_headers_by_leaf_seq_range(
+        self,
+        shard_id: str,
+        min_leaf_seq: int,
+        max_leaf_seq: int,
+    ) -> list[dict[str, Any]]:
+        """
+        Return shard headers whose ``leaf_seq`` falls in the closed interval
+        ``[min_leaf_seq, max_leaf_seq]``, ordered by ``leaf_seq ASC``.
+
+        Only headers with ``leaf_seq > 0`` are meaningful checkpoints.
+        Headers with ``leaf_seq = 0`` are genesis/system rows that were
+        inserted before the first state-changing ``append_record`` call.
+
+        Args:
+            shard_id: Shard identifier.
+            min_leaf_seq: Lower bound (inclusive) of the ``leaf_seq`` window.
+            max_leaf_seq: Upper bound (inclusive) of the ``leaf_seq`` window.
+
+        Returns:
+            List of row dicts with at minimum ``leaf_seq`` and ``root`` keys.
+        """
+        with self._get_connection() as conn, conn.cursor(row_factory=dict_row) as cur:
+            cur.execute(
+                """
+                SELECT leaf_seq, root
+                FROM shard_headers
+                WHERE shard_id = %s
+                  AND leaf_seq >= %s
+                  AND leaf_seq <= %s
+                ORDER BY leaf_seq ASC
+                """,
+                (shard_id, min_leaf_seq, max_leaf_seq),
+            )
+            return cur.fetchall()
+
+    def verify_shard_integrity(
+        self,
+        shard_id: str,
+        roots_by_leaf_seq: Mapping[int, bytes | str | memoryview | None],
+    ) -> None:
+        """
+        Verify that every persisted shard-header root within a replay window
+        matches the corresponding replayed SMT root.
+
+        The *replay window* is derived from the caller-supplied mapping:
+        ``[min(roots_by_leaf_seq), max(roots_by_leaf_seq)]``.  Every header
+        inside this range must have an entry in the mapping.  Headers with
+        ``leaf_seq <= 0`` are treated as non-state-changing metadata rows and
+        are silently skipped.
+
+        Args:
+            shard_id: Shard identifier.
+            roots_by_leaf_seq: Mapping of ``leaf_seq → replayed SMT root``.
+                The caller is responsible for computing the replayed roots
+                (e.g. by running ``replay_tree_incremental``).  The values
+                may be bytes, hex strings, memoryview slices, or None.
+
+        Raises:
+            ValueError: When a header inside the window is absent from the
+                mapping (missing replay entry), when the mapping provides
+                a ``None`` root for a header (replay gap), or when the
+                persisted header root does not match the replayed root.
+        """
+        if not roots_by_leaf_seq:
+            return
+
+        min_leaf_seq = min(roots_by_leaf_seq)
+        max_leaf_seq = max(roots_by_leaf_seq)
+
+        headers = self.get_shard_headers_by_leaf_seq_range(shard_id, min_leaf_seq, max_leaf_seq)
+
+        for header in headers:
+            leaf_seq = int(header["leaf_seq"])
+
+            # Skip non-state-changing genesis/system headers.
+            if leaf_seq <= 0:
+                continue
+
+            if leaf_seq not in roots_by_leaf_seq:
+                raise ValueError(
+                    f"Integrity Error: shard {shard_id!r} header references "
+                    f"missing leaf_seq={leaf_seq} — replay window lacks an entry "
+                    "for this checkpoint"
+                )
+
+            replayed_root = roots_by_leaf_seq[leaf_seq]
+
+            if replayed_root is None:
+                raise ValueError(
+                    f"Integrity Error: shard {shard_id!r} header has null replayed "
+                    f"root at leaf_seq={leaf_seq}"
+                )
+
+            persisted_root = self._normalize_root(header["root"])
+            replayed_root_hex = self._normalize_root(replayed_root)
+
+            if persisted_root != replayed_root_hex:
+                raise ValueError(
+                    f"Shard {shard_id!r} root mismatch at leaf_seq={leaf_seq}: "
+                    f"header_root={persisted_root} replay_root={replayed_root_hex}"
+                )
+
     def replay_tree_incremental(
         self,
         shard_id: str,
@@ -2452,11 +2696,17 @@ class StorageLayer:
         root computation incrementally across headers.
 
         ADR-0001 §4 — O(N) total work instead of O(N²).
+        ADR-0004 — seq-based windowing replaces timestamp-based windowing.
 
         Each header's root is verified by replaying **only the delta** of
-        leaves inserted since the previous header's timestamp.  The
+        leaves inserted since the previous header's ``leaf_seq``.  The
         in-memory tree is carried forward between checkpoints rather than
         being rebuilt from scratch each time.
+
+        Each replay window also checks structural seq integrity:
+        positive ``shard_headers.leaf_seq`` claims inside the window must match
+        existing ``smt_leaves.global_seq`` rows, and replayed leaves in the
+        same window must be claimed by some header.
 
         When *max_headers* is set the method stops after that many headers
         and returns a cursor (``next_seq``) so callers can page through the
@@ -2481,13 +2731,13 @@ class StorageLayer:
               or ``None`` when verification is complete.
 
         Raises:
-            ValueError: On any root mismatch or count divergence.
+            ValueError: On any root mismatch or structural seq divergence.
         """
         with self._get_connection() as conn, conn.cursor(row_factory=dict_row) as cur:
             # Fetch headers in sequence order, applying cursor filter.
             cur.execute(
                 """
-                SELECT seq, root, ts
+                SELECT seq, root, leaf_seq
                 FROM shard_headers
                 WHERE shard_id = %s AND seq > %s
                 ORDER BY seq ASC
@@ -2521,40 +2771,38 @@ class StorageLayer:
             else:
                 headers_to_check = headers
 
-            # If resuming, load tree state up to prev header's timestamp.
+            # If resuming, load tree state up to the prev header's leaf_seq.
             _require_rust_smt()
             tree = RustSparseMerkleTree()
-            prev_ts: datetime | None = None
+            prev_leaf_seq: int | None = None
 
             if after_seq >= 0:
-                # Load all leaves up to the timestamp of the header at after_seq
+                # Load all leaves up to the leaf_seq of the header at after_seq
                 # so the tree carries forward correctly.
                 cur.execute(
                     """
-                    SELECT ts FROM shard_headers
+                    SELECT leaf_seq FROM shard_headers
                     WHERE shard_id = %s AND seq = %s
                     """,
                     (shard_id, after_seq),
                 )
                 prev_row = cur.fetchone()
                 if prev_row is not None:
-                    prev_ts = prev_row["ts"]
-                    if isinstance(prev_ts, str):
-                        prev_ts = datetime.fromisoformat(prev_ts.replace("Z", "+00:00"))
-                    if prev_ts.tzinfo is None:
-                        prev_ts = prev_ts.replace(tzinfo=timezone.utc)
-                    # Replay all leaves up to prev_ts to restore tree state.
+                    prev_leaf_seq = int(
+                        prev_row["leaf_seq"] if isinstance(prev_row, Mapping) else prev_row[0]
+                    )
+                    # Replay all leaves up to prev_leaf_seq to restore tree state.
                     offset = 0
                     while True:
                         cur.execute(
-                            sql.SQL("""
+                            """
                             SELECT key, value_hash, parser_id, canonical_parser_version
                             FROM smt_leaves
-                            WHERE ts <= %s
-                            ORDER BY ts ASC, key ASC
+                            WHERE global_seq <= %s
+                            ORDER BY global_seq ASC
                             LIMIT %s OFFSET %s
-                            """),
-                            (prev_ts, batch_size, offset),
+                            """,
+                            (prev_leaf_seq, batch_size, offset),
                         )
                         rows = cur.fetchall()
                         if not rows:
@@ -2569,23 +2817,21 @@ class StorageLayer:
                         offset += len(rows)
 
             # Incremental replay: carry the tree forward, replaying only
-            # leaves between successive header timestamps.
+            # leaves between successive header leaf_seq values.
             headers_checked = 0
 
             for idx, header_row in enumerate(headers_to_check):
-                header_ts = header_row["ts"]
-                if isinstance(header_ts, str):
-                    header_ts = datetime.fromisoformat(header_ts.replace("Z", "+00:00"))
-                if header_ts.tzinfo is None:
-                    header_ts = header_ts.replace(tzinfo=timezone.utc)
+                header_leaf_seq = int(
+                    header_row["leaf_seq"] if isinstance(header_row, Mapping) else header_row[2]
+                )
 
-                # Stream the delta of leaves inserted in (prev_ts, header_ts].
-                if prev_ts is None:
-                    ts_clause = "WHERE ts <= %s"
-                    ts_params: tuple[Any, ...] = (header_ts,)
+                # Stream the delta of leaves inserted in (prev_leaf_seq, header_leaf_seq].
+                if prev_leaf_seq is None:
+                    seq_clause = "WHERE global_seq <= %s"
+                    seq_params: tuple[Any, ...] = (header_leaf_seq,)
                 else:
-                    ts_clause = "WHERE ts > %s AND ts <= %s"
-                    ts_params = (prev_ts, header_ts)
+                    seq_clause = "WHERE global_seq > %s AND global_seq <= %s"
+                    seq_params = (prev_leaf_seq, header_leaf_seq)
 
                 # Paginated fetch for this delta window.
                 offset = 0
@@ -2595,10 +2841,10 @@ class StorageLayer:
                         SELECT key, value_hash, parser_id, canonical_parser_version
                         FROM smt_leaves
                         {}
-                        ORDER BY ts ASC, key ASC
+                        ORDER BY global_seq ASC
                         LIMIT %s OFFSET %s
-                        """).format(sql.SQL(ts_clause)),
-                        (*ts_params, batch_size, offset),
+                        """).format(sql.SQL(seq_clause)),
+                        (*seq_params, batch_size, offset),
                     )
                     rows = cur.fetchall()
                     if not rows:
@@ -2611,6 +2857,14 @@ class StorageLayer:
                             row["canonical_parser_version"],
                         )
                     offset += len(rows)
+
+                self._assert_leaf_seq_integrity(
+                    cur,
+                    shard_id,
+                    "Replay mismatch",
+                    upper_leaf_seq=header_leaf_seq,
+                    lower_leaf_seq_exclusive=prev_leaf_seq,
+                )
 
                 computed_root = tree.get_root()
                 header_seq = int(self._row_get(header_row, "seq", 0))
@@ -2640,9 +2894,7 @@ class StorageLayer:
                         f"expected {shard_root_hex}, computed {computed_root.hex()}"
                     )
 
-                prev_ts = header_ts
-                if prev_ts.tzinfo is None:
-                    prev_ts = prev_ts.replace(tzinfo=timezone.utc)
+                prev_leaf_seq = header_leaf_seq
                 headers_checked += 1
 
             # Determine whether there are more headers to verify.
@@ -2652,9 +2904,9 @@ class StorageLayer:
             else:
                 next_seq = None
 
-            # Final check: when verification is complete, the current tree
-            # must match the latest persisted root.
+            # Final checks when verification is complete.
             if next_seq is None and headers:
+                # (a) The replayed tree root must match the last persisted header.
                 latest_header_root = bytes(self._row_get(headers[-1], "root", 1))
                 if tree.get_root() != latest_header_root:
                     raise ValueError(
@@ -2662,6 +2914,11 @@ class StorageLayer:
                         f"{latest_header_root.hex()} does not match current state "
                         f"{tree.get_root().hex()}"
                     )
+                # (b) Global orphan check: leaves with global_seq beyond all header
+                # leaf_seq windows are not covered by per-header deltas.
+                self._assert_leaf_seq_integrity(
+                    cur, shard_id, "Replay mismatch", upper_leaf_seq=None
+                )
 
             return {
                 "verified": True,

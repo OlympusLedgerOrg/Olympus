@@ -48,11 +48,11 @@ import psycopg
 import pytest
 from psycopg.rows import dict_row
 
+import storage.postgres as storage_postgres_module
 from protocol.hashes import global_key, hash_bytes, record_key
 from protocol.shards import create_shard_header
 from protocol.ssmf import verify_nonexistence_proof, verify_proof
 from protocol.timestamps import current_timestamp
-from storage.postgres import _NODE_REHASH_GATE, _RUST_SMT_AVAILABLE, StorageLayer
 
 
 # Test database connection string
@@ -60,12 +60,14 @@ TEST_DB = os.environ.get("TEST_DATABASE_URL", "")
 
 pytestmark = [
     pytest.mark.postgres,
+    pytest.mark.storage,
+    pytest.mark.xdist_group("storage_postgres"),
     pytest.mark.skipif(
         not TEST_DB,
         reason="TEST_DATABASE_URL is not set; skipping PostgreSQL storage tests.",
     ),
     pytest.mark.skipif(
-        not _RUST_SMT_AVAILABLE,
+        not storage_postgres_module._RUST_SMT_AVAILABLE,
         reason="storage.append_record() requires olympus_core Rust extension. "
         "Run `maturin develop` to build olympus_core, or rewrite tests to use ingest API.",
     ),
@@ -75,7 +77,7 @@ pytestmark = [
 @pytest.fixture
 def storage():
     """Create a storage layer for testing."""
-    storage = StorageLayer(TEST_DB)
+    storage = storage_postgres_module.StorageLayer(TEST_DB)
     storage.init_schema()
     yield storage
     storage.close()
@@ -889,7 +891,7 @@ def test_smt_nodes_reject_delete(storage, signing_key):
             )
 
 
-def _store_ingestion_batch(storage: StorageLayer) -> tuple[str, str]:
+def _store_ingestion_batch(storage: storage_postgres_module.StorageLayer) -> tuple[str, str]:
     batch_id = f"test_ingestion_batch_{uuid.uuid4()}"
     proof_id = str(uuid.uuid4())
     timestamp = current_timestamp()
@@ -1000,15 +1002,161 @@ def test_verify_state_replay_matches_headers_and_ledger(storage, signing_key):
     assert result["next_seq"] is None
 
 
+def test_replay_same_second_writes(storage, signing_key, monkeypatch):
+    """Replay must still verify historical roots when multiple writes share one timestamp."""
+    shard_id = f"test_same_second_replay_{datetime.now(UTC).timestamp()}"
+    fixed_now = datetime(2026, 1, 1, 0, 0, 0, tzinfo=UTC)
+
+    class FixedDatetime(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return fixed_now if tz is None else fixed_now.astimezone(tz)
+
+    monkeypatch.setattr(storage_postgres_module, "datetime", FixedDatetime)
+    roots: list[bytes] = []
+    for record_id in ("doc-z", "doc-a", "doc-m"):
+        root, _, _, _, _ = storage.append_record(
+            shard_id=shard_id,
+            record_type="document",
+            record_id=record_id,
+            version=1,
+            value_hash=hash_bytes(record_id.encode("utf-8")),
+            signing_key=signing_key,
+        )
+        roots.append(root)
+    monkeypatch.setattr(storage_postgres_module, "datetime", datetime)
+
+    result = storage.verify_state_replay(shard_id)
+    assert result == {"verified": True, "headers_checked": 3, "next_seq": None}
+
+    with storage._get_connection() as conn, conn.cursor(row_factory=dict_row) as cur:
+        cur.execute(
+            """
+            SELECT seq, root
+            FROM shard_headers
+            WHERE shard_id = %s
+            ORDER BY seq ASC
+            """,
+            (shard_id,),
+        )
+        headers = cur.fetchall()
+
+    assert [bytes(row["root"]) for row in headers] == roots
+
+
+def test_append_record_persists_nonzero_leaf_seq(storage, signing_key):
+    """append_record must persist the committed leaf's global_seq into shard_headers.leaf_seq."""
+    shard_id = f"test_leaf_seq_nonzero_{datetime.now(UTC).timestamp()}"
+    record_id = "doc-leaf-seq"
+
+    storage.append_record(
+        shard_id=shard_id,
+        record_type="document",
+        record_id=record_id,
+        version=1,
+        value_hash=hash_bytes(b"leaf-seq-value"),
+        signing_key=signing_key,
+    )
+
+    key = global_key(shard_id, record_key("document", record_id, 1))
+    with storage._get_connection() as conn, conn.cursor(row_factory=dict_row) as cur:
+        cur.execute(
+            """
+            SELECT global_seq
+            FROM smt_leaves
+            WHERE key = %s AND version = %s
+            """,
+            (key, 1),
+        )
+        leaf_row = cur.fetchone()
+        cur.execute(
+            """
+            SELECT leaf_seq
+            FROM shard_headers
+            WHERE shard_id = %s
+            ORDER BY seq DESC
+            LIMIT 1
+            """,
+            (shard_id,),
+        )
+        header_row = cur.fetchone()
+
+    assert leaf_row is not None
+    assert header_row is not None
+    assert int(header_row["leaf_seq"]) > 0
+    assert int(header_row["leaf_seq"]) == int(leaf_row["global_seq"])
+
+
+def test_replay_uses_global_seq_order(storage, signing_key, monkeypatch):
+    """Historical replay must follow global_seq order, not a timestamp/key fallback."""
+    shard_id = f"test_replay_global_seq_order_{datetime.now(UTC).timestamp()}"
+    fixed_now = datetime(2026, 1, 1, 0, 0, 0, tzinfo=UTC)
+    first_key = global_key(shard_id, record_key("document", "z-first", 1))
+    second_key = global_key(shard_id, record_key("document", "a-second", 1))
+
+    class FixedDatetime(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return fixed_now if tz is None else fixed_now.astimezone(tz)
+
+    monkeypatch.setattr(storage_postgres_module, "datetime", FixedDatetime)
+    first_root, _, _, _, _ = storage.append_record(
+        shard_id=shard_id,
+        record_type="document",
+        record_id="z-first",
+        version=1,
+        value_hash=hash_bytes(b"z-first"),
+        signing_key=signing_key,
+    )
+    storage.append_record(
+        shard_id=shard_id,
+        record_type="document",
+        record_id="a-second",
+        version=1,
+        value_hash=hash_bytes(b"a-second"),
+        signing_key=signing_key,
+    )
+    monkeypatch.setattr(storage_postgres_module, "datetime", datetime)
+
+    with storage._get_connection() as conn, conn.cursor(row_factory=dict_row) as cur:
+        cur.execute(
+            """
+            SELECT key, value_hash, parser_id, canonical_parser_version
+            FROM smt_leaves
+            WHERE key IN (%s, %s)
+            ORDER BY ts ASC, key ASC
+            LIMIT 1
+            """,
+            (first_key, second_key),
+        )
+        naive_first_row = cur.fetchone()
+
+    assert naive_first_row is not None
+    naive_tree = storage_postgres_module.RustSparseMerkleTree()
+    naive_tree.update(
+        bytes(naive_first_row["key"]),
+        bytes(naive_first_row["value_hash"]),
+        naive_first_row["parser_id"],
+        naive_first_row["canonical_parser_version"],
+    )
+
+    assert naive_tree.get_root() != first_root
+    assert storage.verify_state_replay(shard_id)["verified"] is True
+
+
 def test_verify_state_replay_detects_header_root_divergence(storage, signing_key):
     """Replay must fail if the persisted SMT state deviates from the shard headers.
 
     Since shard_headers is append-only (UPDATE/DELETE are rejected by trigger),
     we simulate divergence by inserting a forged leaf directly into smt_leaves
-    outside of append_record.  This changes the tree state without creating a
-    corresponding header, so:
-    - verify_state_replay detects a count mismatch (more leaves than headers).
-    - get_latest_header detects a root mismatch via _assert_root_matches_state.
+    outside of append_record. This changes the tree state without creating a
+    corresponding ``shard_headers.leaf_seq`` claim, so:
+    - verify_state_replay detects an orphaned global_seq in the replay window.
+    - get_latest_header detects the same via _assert_root_matches_state.
+
+    With seq-based replay (ADR-0004) timestamp backdating is no longer required:
+    the forged leaf gets the next global_seq value and is detected structurally
+    regardless of its ts value.
     """
     shard_id = f"test_verify_state_replay_detects_divergence_{datetime.now(UTC).timestamp()}"
 
@@ -1031,57 +1179,53 @@ def test_verify_state_replay_detects_header_root_divergence(storage, signing_key
 
     # Simulate state divergence by inserting a forged leaf that was never
     # recorded through append_record.  smt_leaves is append-only (UPDATE/DELETE
-    # are blocked), but plain INSERTs are permitted, so this is a realistic
-    # threat vector that the replay verifier must detect.
+    # are blocked), but plain INSERTs are permitted (via allow_smt_insert gate),
+    # so this is a realistic threat vector that the replay verifier must detect.
     #
-    # Backdate the forged leaf to just before the first persisted header so it
-    # is guaranteed to be included in replay and root verification windows.
-    # This avoids boundary flakiness when multiple headers share close
-    # timestamps.
+    # The forged leaf's global_seq is automatically assigned by the IDENTITY
+    # column to be higher than the two legitimate leaves. The seq-based replay
+    # now detects that orphaned global_seq structurally, without relying on
+    # timestamp ordering or raw table counts.
     forged_version = 9999
     forged_record_key = record_key("document", "forged-doc", forged_version)
     forged_key = global_key(shard_id, forged_record_key)
     forged_value = hash_bytes(b"forged-leaf-value")
     with storage._get_connection() as conn, conn.cursor(row_factory=dict_row) as cur:
-        cur.execute(
-            "SELECT ts FROM shard_headers WHERE shard_id = %s ORDER BY seq ASC LIMIT 1",
-            (shard_id,),
-        )
-        first_header_ts = cur.fetchone()["ts"]
-        forged_ts = first_header_ts - timedelta(microseconds=1)
         # _NODE_REHASH_GATE is a compile-time BLAKE3 constant; SET LOCAL does
         # not accept psycopg parameters, so f-string interpolation is safe.
-        cur.execute(f"SET LOCAL olympus.allow_smt_insert = '{_NODE_REHASH_GATE}'")
+        cur.execute(
+            f"SET LOCAL olympus.allow_smt_insert = '{storage_postgres_module._NODE_REHASH_GATE}'"
+        )
         cur.execute(
             """
             INSERT INTO smt_leaves
                 (key, version, value_hash, parser_id, canonical_parser_version, ts)
-            VALUES (%s, %s, %s, %s, %s, %s)
+            VALUES (%s, %s, %s, %s, %s, NOW())
             """,
-            (forged_key, forged_version, forged_value, "docling@2.3.1", "v1", forged_ts),
+            (forged_key, forged_version, forged_value, "docling@2.3.1", "v1"),
         )
         conn.commit()
 
-    # verify_state_replay should detect the discrepancy (count or root mismatch).
+    # verify_state_replay should detect the orphaned leaf_seq/global_seq mismatch.
     with pytest.raises(ValueError, match="mismatch"):
         storage.verify_state_replay(shard_id)
 
-    # get_latest_header should also reject the diverged state because the
-    # recomputed tree root no longer matches the persisted header root.
+    # get_latest_header should also reject the diverged state via the structural
+    # leaf_seq/global_seq integrity check in _assert_root_matches_state.
     with pytest.raises(ValueError, match="Computed root"):
         storage.get_latest_header(shard_id)
 
 
-def test_replay_naive_datetime_cutoff_is_normalized(storage, signing_key):
-    """Timezone-naive cutoffs must not silently miss leaves near the boundary.
+def test_forged_leaf_detected_regardless_of_timestamp(storage, signing_key):
+    """A forged leaf inserted outside append_record is always detected, regardless
+    of how its timestamp is set.
 
-    If _load_tree_state or replay_tree_incremental passes a naive datetime to
-    the WHERE ts <= %s TIMESTAMPTZ comparison, Postgres may apply local-clock
-    semantics and exclude leaves that sit within a microsecond of the boundary.
-    This regression test constructs an explicit naive cutoff and verifies that
-    verify_state_replay still raises for a forged leaf, and that
-    get_latest_header does too — confirming both code paths normalize tzinfo
-    before handing the value to psycopg.
+    With seq-based replay (ADR-0004) the replay no longer relies on timestamp
+    comparisons, so timezone-naive or backdated timestamps no longer cause
+    leaves to be silently excluded from the replay window. Instead, structural
+    seq integrity catches the discrepancy: any extra leaf without a matching
+    ``shard_headers.leaf_seq`` claim causes both verify_state_replay and
+    get_latest_header to raise ValueError.
     """
     shard_id = f"test_replay_naive_tz_{datetime.now(UTC).timestamp()}"
 
@@ -1094,7 +1238,10 @@ def test_replay_naive_datetime_cutoff_is_normalized(storage, signing_key):
         signing_key=signing_key,
     )
 
-    # Insert a forged leaf backdated by 1 µs so it falls in the first window.
+    # Insert a forged leaf.  We deliberately set ts to a backdated naive
+    # datetime to confirm that the seq-based invariant still catches it even
+    # when the ts value would previously have caused it to be excluded from
+    # timestamp-based replay windows.
     forged_version = 8888
     forged_record_key = record_key("document", "tz-forged-doc", forged_version)
     forged_key = global_key(shard_id, forged_record_key)
@@ -1105,14 +1252,17 @@ def test_replay_naive_datetime_cutoff_is_normalized(storage, signing_key):
             (shard_id,),
         )
         first_header_ts = cur.fetchone()["ts"]
-        # Construct a naive datetime (tzinfo=None) to simulate application code
-        # that strips timezone info before passing a cutoff to the replay path.
-        # The guard in _load_tree_state / replay_tree_incremental must re-attach
-        # UTC so the TIMESTAMPTZ comparison is unambiguous.
+        # Construct a naive datetime (tzinfo=None) backdated by 1 µs.
+        # Under the old timestamp-based replay this would have caused the forged
+        # leaf to be included in the first window and trigger a root mismatch;
+        # under seq-based replay the timestamp is irrelevant — the structural
+        # seq check detects the extra leaf instead.
         naive_ts = first_header_ts.replace(tzinfo=None) - timedelta(microseconds=1)
         # _NODE_REHASH_GATE is a compile-time BLAKE3 constant; SET LOCAL does
         # not accept psycopg parameters, so f-string interpolation is safe.
-        cur.execute(f"SET LOCAL olympus.allow_smt_insert = '{_NODE_REHASH_GATE}'")
+        cur.execute(
+            f"SET LOCAL olympus.allow_smt_insert = '{storage_postgres_module._NODE_REHASH_GATE}'"
+        )
         cur.execute(
             """
             INSERT INTO smt_leaves
@@ -1123,7 +1273,7 @@ def test_replay_naive_datetime_cutoff_is_normalized(storage, signing_key):
         )
         conn.commit()
 
-    # Both replay paths must detect the forged leaf despite the naive timestamp.
+    # Both replay paths must detect the forged leaf regardless of its timestamp.
     with pytest.raises(ValueError, match="mismatch"):
         storage.verify_state_replay(shard_id)
 
@@ -1185,6 +1335,7 @@ def test_init_schema_renames_legacy_smt_tables(storage):
             "parser_id",
             "canonical_parser_version",
             "ts",
+            "global_seq",
         ]
 
         cur.execute(
@@ -1201,3 +1352,81 @@ def test_init_schema_renames_legacy_smt_tables(storage):
             "hash",
             "ts",
         ]
+
+
+def test_verify_shard_integrity_detects_root_mismatch(storage, signing_key):
+    """verify_shard_integrity must raise when the supplied replayed root differs from the header."""
+    shard_id = f"test_integrity_root_mismatch_{uuid.uuid4().hex}"
+
+    storage.append_record(
+        shard_id=shard_id,
+        record_type="document",
+        record_id="doc-integrity-1",
+        version=1,
+        value_hash=hash_bytes(b"integrity-1"),
+        signing_key=signing_key,
+    )
+
+    with storage._get_connection() as conn, conn.cursor(row_factory=dict_row) as cur:
+        cur.execute(
+            """
+            SELECT leaf_seq, root
+            FROM shard_headers
+            WHERE shard_id = %s AND leaf_seq > 0
+            ORDER BY leaf_seq DESC
+            LIMIT 1
+            """,
+            (shard_id,),
+        )
+        header = cur.fetchone()
+
+    assert header is not None
+    real_leaf_seq = int(header["leaf_seq"])
+
+    # Supply an intentionally wrong replayed root; the persisted header root is correct.
+    wrong_root = b"\xff" * 32
+    assert bytes(header["root"]) != wrong_root
+
+    with pytest.raises(ValueError, match="mismatch"):
+        storage.verify_shard_integrity(shard_id, {real_leaf_seq: wrong_root})
+
+
+def test_verify_shard_integrity_detects_missing_leaf(storage, signing_key):
+    """verify_shard_integrity must raise when a header inside the window has no mapping entry."""
+    shard_id = f"test_integrity_missing_leaf_{uuid.uuid4().hex}"
+
+    storage.append_record(
+        shard_id=shard_id,
+        record_type="document",
+        record_id="doc-missing-1",
+        version=1,
+        value_hash=hash_bytes(b"missing-1"),
+        signing_key=signing_key,
+    )
+
+    with storage._get_connection() as conn, conn.cursor(row_factory=dict_row) as cur:
+        cur.execute(
+            """
+            SELECT leaf_seq
+            FROM shard_headers
+            WHERE shard_id = %s AND leaf_seq > 0
+            ORDER BY leaf_seq DESC
+            LIMIT 1
+            """,
+            (shard_id,),
+        )
+        header = cur.fetchone()
+
+    assert header is not None
+    real_leaf_seq = int(header["leaf_seq"])
+
+    # Build a window [K-1, K+1] that encompasses the header's leaf_seq (K),
+    # but deliberately omits K from the mapping.  verify_shard_integrity must
+    # detect that the header inside the window has no corresponding replay entry.
+    roots_missing_middle = {
+        real_leaf_seq - 1: b"\x01" * 32,
+        real_leaf_seq + 1: b"\x02" * 32,
+    }
+
+    with pytest.raises(ValueError, match="missing leaf_seq"):
+        storage.verify_shard_integrity(shard_id, roots_missing_middle)
