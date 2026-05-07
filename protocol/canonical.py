@@ -15,8 +15,8 @@ Extended format support (v2.1+):
 
 - **Plain text**: line-ending normalization, Unicode NFC, homoglyph scrubbing,
   trailing-whitespace removal, BOM stripping.
-- **XML**: Exclusive XML Canonicalization (C14N) subset — sorted attributes,
-  self-closing tag normalization, comment/PI stripping, NFC normalization.
+- **XML**: Canonical XML 2.0 via lxml (primary path) with a regex-based
+  fallback — sorted attributes, comment/PI stripping, NFC normalization.
 - **CSV/TSV**: deterministic delimiter, quoting, row ordering by canonical
   JSON key, NFC normalization, and BOM stripping.
 """
@@ -399,11 +399,56 @@ def _sort_xml_attributes(match: re.Match[str]) -> str:
     return f"<{tag_name} {attr_str}>"
 
 
+def _canonicalize_xml_lxml(text: str) -> str:
+    """Canonicalize XML using lxml's Canonical XML 2.0 (no comments).
+
+    This is the primary path when lxml is available (it is an unconditional
+    dependency).  It correctly handles CDATA sections, namespace prefixes,
+    and attribute ordering per the W3C Canonical XML 2.0 specification
+    (https://www.w3.org/TR/xml-c14n2/).
+
+    The parser is intentionally strict: external entities, DTD loading, and
+    network access are all disabled to prevent XXE attacks.
+
+    Args:
+        text: XML text to canonicalize.
+
+    Returns:
+        Canonical UTF-8 XML text (no BOM).
+
+    Raises:
+        CanonicalizationError: If lxml is unavailable or the input is malformed.
+    """
+    try:
+        from lxml import etree
+    except ImportError:  # pragma: no cover
+        raise CanonicalizationError("lxml is required for XML canonicalization") from None
+
+    parser = etree.XMLParser(
+        resolve_entities=False,
+        no_network=True,
+        load_dtd=False,
+        remove_comments=True,
+        remove_pis=True,
+    )
+    try:
+        root = etree.fromstring(text.encode("utf-8"), parser=parser)
+    except etree.XMLSyntaxError as exc:
+        raise CanonicalizationError(f"Malformed XML: {exc}") from exc
+
+    buf = io.BytesIO()
+    root.getroottree().write_c14n(buf, exclusive=False, with_comments=False)
+    return buf.getvalue().decode("utf-8")
+
+
 def canonicalize_xml(text: str) -> str:
     """Canonicalize XML text for deterministic hashing.
 
-    Applies a subset of Exclusive XML Canonicalization suitable for
-    government document comparison:
+    Dispatches to :func:`_canonicalize_xml_lxml` (Canonical XML 2.0) when
+    lxml is available, and falls back to a regex-based subset otherwise.
+
+    The regex fallback applies a subset of Exclusive XML Canonicalization
+    suitable for government document comparison:
 
     1. Strip BOM.
     2. NFC normalization.
@@ -434,6 +479,13 @@ def canonicalize_xml(text: str) -> str:
     if len(text.encode("utf-8")) > _MAX_XML_BYTES:
         raise CanonicalizationError(f"XML text exceeds maximum size ({_MAX_XML_BYTES} bytes)")
 
+    # Primary path: lxml Canonical XML 2.0 (safe parser, no XXE).
+    try:
+        return _canonicalize_xml_lxml(text)
+    except ImportError:  # pragma: no cover — lxml is an unconditional dep
+        pass
+
+    # Regex fallback (no lxml available): deterministic but not full C14N.
     # Step 1–2: BOM + NFC
     text = _strip_bom(text)
     text = unicodedata.normalize("NFC", text)

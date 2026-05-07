@@ -290,3 +290,38 @@ PostgreSQL trigger protection to insert or modify SMT nodes directly.
 4. **Development/test environments** — the secret is recommended but not required.
    A warning is logged when operating without it. Set `OLYMPUS_ENV=development`
    or `OLYMPUS_ENV=test` to allow the deterministic fallback.
+
+### Verification Key Hash Pinning
+
+`Groth16Backend.verify()` accepts an optional `expected_vkey_hash` parameter.
+When set, the on-disk verification key is hashed **before** snarkjs is called and
+operators **must** pin its digest so that a swapped verification key on disk is
+detected before any proof is accepted.
+
+1. **Compute the digest** (after the trusted-setup ceremony):
+   ```bash
+   python -c "
+   from protocol.hashes import hash_bytes
+   import pathlib
+   print(hash_bytes(pathlib.Path('path/to/circuit_vkey.json').read_bytes()).hex())
+   "
+   ```
+   > **Note:** The digest is computed with `protocol.hashes.hash_bytes()`, which
+   > applies Olympus domain-separation (`OLY:LEGACY-BYTES:V1` prefix + BLAKE3).
+   > A raw BLAKE3 digest of the same file will **not** match and verification will
+   > always fail.
+
+2. **Set the environment variable** (or inject via your secrets manager):
+   ```
+   OLYMPUS_ZK_VKEY_HASH=<64-character hex digest>
+   ```
+
+3. **Pass it to the verifier:**
+   ```python
+   import os
+   backend.verify(proof, expected_vkey_hash=os.environ["OLYMPUS_ZK_VKEY_HASH"])
+   ```
+
+4. **Rotate after re-ceremony** — recompute the digest and update the secret
+   whenever the trusted setup is redone. Existing proofs are unaffected; only
+   new verification calls use the updated key.

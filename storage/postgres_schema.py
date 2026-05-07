@@ -112,6 +112,13 @@ def schema_statements(node_rehash_gate: str) -> list[str]:
                 ALTER TABLE smt_leaves ADD COLUMN global_seq BIGINT;
 
                 -- Step 2: back-fill in temporal replay order.
+                -- Suspend append-only triggers: they may already exist from a
+                -- prior init_schema run on an older schema version.  This block
+                -- only executes when global_seq is absent (the controlled
+                -- one-time migration path), so the UPDATE is not a runtime
+                -- mutation — re-enable immediately after.
+                ALTER TABLE smt_leaves DISABLE TRIGGER ALL;
+
                 UPDATE smt_leaves sl
                 SET global_seq = ranked.rn
                 FROM (
@@ -120,6 +127,8 @@ def schema_statements(node_rehash_gate: str) -> list[str]:
                     FROM smt_leaves
                 ) ranked
                 WHERE sl.key = ranked.key AND sl.version = ranked.version;
+
+                ALTER TABLE smt_leaves ENABLE TRIGGER ALL;
 
                 -- Step 3: enforce NOT NULL after all rows have a value.
                 ALTER TABLE smt_leaves ALTER COLUMN global_seq SET NOT NULL;
@@ -168,6 +177,10 @@ def schema_statements(node_rehash_gate: str) -> list[str]:
             ) THEN
                 ALTER TABLE smt_leaves ADD COLUMN shard_id TEXT;
 
+                -- Suspend append-only triggers for this one-time migration
+                -- back-fill (same rationale as the global_seq block above).
+                ALTER TABLE smt_leaves DISABLE TRIGGER ALL;
+
                 UPDATE smt_leaves sl
                 SET shard_id = (
                     SELECT sh.shard_id
@@ -177,6 +190,8 @@ def schema_statements(node_rehash_gate: str) -> list[str]:
                 );
 
                 UPDATE smt_leaves SET shard_id = '' WHERE shard_id IS NULL;
+
+                ALTER TABLE smt_leaves ENABLE TRIGGER ALL;
 
                 ALTER TABLE smt_leaves ALTER COLUMN shard_id SET NOT NULL;
                 ALTER TABLE smt_leaves ALTER COLUMN shard_id DROP DEFAULT;
@@ -303,6 +318,12 @@ def schema_statements(node_rehash_gate: str) -> list[str]:
             ) THEN
                 ALTER TABLE shard_headers ADD COLUMN leaf_seq BIGINT NOT NULL DEFAULT 0;
 
+                -- Suspend append-only triggers for the back-fill UPDATEs below.
+                -- Same rationale as the smt_leaves blocks above: this branch only
+                -- runs when leaf_seq is absent (the controlled one-time migration
+                -- path); re-enable immediately after.
+                ALTER TABLE shard_headers DISABLE TRIGGER ALL;
+
                 -- Pass 1: back-fill via smt_change_journal when available.
                 -- scj.new_value matches smt_leaves.value_hash for the leaf
                 -- that was committed in the same append_record transaction.
@@ -336,6 +357,8 @@ def schema_statements(node_rehash_gate: str) -> list[str]:
                     WHERE sl.ts <= sh.ts
                 )
                 WHERE leaf_seq = 0;
+
+                ALTER TABLE shard_headers ENABLE TRIGGER ALL;
             END IF;
         END $$;
         """,
