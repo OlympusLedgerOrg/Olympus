@@ -183,7 +183,7 @@ Only when all three checks pass can a verifier conclude:
 
 **Implementation evidence:**
 - [`protocol/cross_root_validation.py`](protocol/cross_root_validation.py) —
-  `validate_dual_root_commitment()` enforces the binding between `root_b3`
+  `verify_against_dual_commitment()` enforces the binding between `root_b3`
   and `root_poseidon`.
 - [`protocol/redaction.py`](protocol/redaction.py) —
   `RedactionProtocol.commit_document()` builds the Poseidon Merkle tree;

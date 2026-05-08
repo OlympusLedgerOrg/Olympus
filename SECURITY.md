@@ -301,8 +301,12 @@ disk is detected before any proof is accepted.
 
 1. **Compute the digest** (after ceremony):
    ```bash
-   python -c "import blake3, pathlib; print(blake3.blake3(pathlib.Path('path/to/circuit_vkey.json').read_bytes()).hexdigest())"
+   python -c "from protocol.hashes import hash_bytes; import pathlib; print(hash_bytes(pathlib.Path('path/to/circuit_vkey.json').read_bytes()).hex())"
    ```
+   > **Important:** the digest uses `protocol.hashes.hash_bytes()`, which
+   > applies Olympus domain-separation (`OLY:LEGACY-BYTES:V1` prefix + BLAKE3).
+   > A raw `blake3.blake3(...).hexdigest()` of the same file produces a
+   > **different** value and will always fail the pin check.
 2. **Set the environment variable:**
    ```
    OLYMPUS_ZK_VKEY_HASH=<64-character hex digest>
