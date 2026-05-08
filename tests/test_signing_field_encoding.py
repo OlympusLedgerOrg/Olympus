@@ -76,6 +76,29 @@ def test_encode_signing_fields_accepts_bytes_and_str_mixed() -> None:
     assert isinstance(encoded, bytes)
 
 
+def test_encode_signing_fields_rejects_oversized_field(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Field length > 2**32 - 1 must raise ValueError.
+
+    Lowers the module-level cap so the test does not need to allocate ~4 GiB.
+    """
+    from protocol import hashes
+
+    monkeypatch.setattr(hashes, "_MAX_LENGTH_PREFIXED_FIELD_SIZE", 8)
+    with pytest.raises(ValueError, match="exceeds 4-byte length limit"):
+        hashes.encode_signing_fields("a" * 9)
+    with pytest.raises(ValueError, match="exceeds 4-byte length limit"):
+        hashes.encode_signing_fields(b"\x00" * 9)
+
+
+def test_length_prefixed_bytes_rejects_oversized_field(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The internal length-prefix helper must reject fields beyond the 4-byte cap."""
+    from protocol import hashes
+
+    monkeypatch.setattr(hashes, "_MAX_LENGTH_PREFIXED_FIELD_SIZE", 4)
+    with pytest.raises(ValueError, match="parser_id exceeds maximum length"):
+        hashes._length_prefixed_bytes("parser_id", b"toolong")
+
+
 def test_encode_signing_fields_empty_field_list() -> None:
     assert encode_signing_fields() == b""
 

@@ -104,7 +104,7 @@ def blake3_hash(parts: Sequence[bytes]) -> bytes:
 def _length_prefixed_bytes(field_name: str, value: bytes) -> bytes:
     """Encode variable-length bytes with a 4-byte big-endian length prefix."""
     if len(value) > _MAX_LENGTH_PREFIXED_FIELD_SIZE:
-        raise ValueError(f"{field_name} exceeds maximum length")  # pragma: no cover — 4 GB alloc
+        raise ValueError(f"{field_name} exceeds maximum length")
     return len(value).to_bytes(4, "big") + value
 
 
