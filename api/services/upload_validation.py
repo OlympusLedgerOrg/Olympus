@@ -57,6 +57,13 @@ if sys.platform == "win32":
             os.environ["PATH"] = _magic_lib_dir + os.pathsep + os.environ.get("PATH", "")
             if hasattr(os, "add_dll_directory"):
                 os.add_dll_directory(_magic_lib_dir)
+        # Tell libmagic where its database lives so magic_load() in the
+        # compat shim succeeds.  Without this, magic_open() returns -1
+        # (no database found) and the module-level mime_magic.load() call
+        # in compat.py causes an access violation reading 0xFFFFFFFFFFFFFFFF.
+        _magic_db = os.path.join(_magic_lib_dir, "magic.mgc")
+        if os.path.exists(_magic_db) and "MAGIC" not in os.environ:
+            os.environ["MAGIC"] = _magic_db
 
 import magic
 from fastapi import HTTPException
