@@ -134,7 +134,9 @@ def _make_client() -> TestClient:
     )
     # Reset rate-limit buckets and raise the ceiling so O(max_examples × 2)
     # POST requests never exhaust the default 60-token ingest bucket.
-    ingest_api._set_rate_limit_for_tests("ingest", capacity=10_000.0, refill_rate_per_second=10_000.0)
+    ingest_api._set_rate_limit_for_tests(
+        "ingest", capacity=10_000.0, refill_rate_per_second=10_000.0
+    )
     return client
 
 
