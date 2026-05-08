@@ -19,7 +19,13 @@ from cryptography.hazmat.primitives.kdf.hkdf import HKDF
 
 from .canonical_json import canonical_json_bytes
 from .events import CanonicalEvent
-from .hashes import HASH_SEPARATOR, hash_bytes, shard_header_hash
+from .hashes import (
+    SHARD_NS_PREFIX,
+    blake3_hash,
+    encode_signing_fields,
+    hash_bytes,
+    shard_header_hash,
+)
 from .hlc import HLCTimestamp
 from .log_sanitization import sanitize_for_log
 
@@ -74,8 +80,8 @@ class ShardNamespacePartitioner:
     def shard_id_for_namespace(self, namespace: str) -> str:
         if not isinstance(namespace, str) or not namespace:
             raise ValueError("namespace must be a non-empty string")
-        payload = HASH_SEPARATOR.join([self.prefix, namespace]).encode("utf-8")
-        digest = hash_bytes(payload)
+        payload = encode_signing_fields(self.prefix, namespace)
+        digest = blake3_hash([SHARD_NS_PREFIX, payload])
         index = int.from_bytes(digest, byteorder="big") % self.shard_count
         return f"{self.prefix}-{index}"
 

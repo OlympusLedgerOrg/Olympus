@@ -9,7 +9,13 @@ import nacl.exceptions
 import nacl.signing
 
 from protocol.canonical_json import canonical_json_bytes
-from protocol.hashes import HASH_SEPARATOR, hash_bytes
+from protocol.hashes import (
+    CHAIN_PROOF_COMMIT_PREFIX,
+    KEY_ROTATION_PREFIX,
+    blake3_hash,
+    encode_signing_fields,
+    hash_bytes,
+)
 
 from .identity import FederationRegistry, _parse_timestamp
 from .quorum import NodeSignature
@@ -103,18 +109,16 @@ class RecursiveChainProof:
 
     def proof_commitment_hash(self) -> str:
         """Return a deterministic hash commitment for this proof."""
-        payload = HASH_SEPARATOR.join(
-            [
-                self.proof_type,
-                self.previous_root,
-                self.current_root,
-                str(self.epoch_start),
-                str(self.epoch_end),
-                str(self.transition_count),
-                self.verification_key_hash,
-            ]
-        ).encode("utf-8")
-        return hash_bytes(payload).hex()
+        payload = encode_signing_fields(
+            self.proof_type,
+            self.previous_root,
+            self.current_root,
+            str(self.epoch_start),
+            str(self.epoch_end),
+            str(self.transition_count),
+            self.verification_key_hash,
+        )
+        return blake3_hash([CHAIN_PROOF_COMMIT_PREFIX, payload]).hex()
 
 
 @dataclass(frozen=True)
@@ -242,16 +246,14 @@ def verify_epoch_key_rotation(
         True if the rotation is valid, False otherwise
     """
     # Verify the rotation signature by the old key
-    rotation_payload = HASH_SEPARATOR.join(
-        [
-            record.node_id,
-            str(record.epoch),
-            record.old_pubkey_hash,
-            record.new_pubkey_hash,
-            record.rotated_at,
-        ]
-    ).encode("utf-8")
-    rotation_hash = hash_bytes(rotation_payload)
+    rotation_payload = encode_signing_fields(
+        record.node_id,
+        str(record.epoch),
+        record.old_pubkey_hash,
+        record.new_pubkey_hash,
+        record.rotated_at,
+    )
+    rotation_hash = blake3_hash([KEY_ROTATION_PREFIX, rotation_payload])
 
     try:
         signature_bytes = bytes.fromhex(record.rotation_signature)

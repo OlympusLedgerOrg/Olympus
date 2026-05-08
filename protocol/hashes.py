@@ -73,6 +73,11 @@ ATTESTATION_PREFIX = b"OLY:ATTESTATION:V1"
 DATASET_PREFIX = b"OLY:DATASET:V1"
 DATASET_COMMIT_PREFIX = b"OLY:DATASET-COMMIT:V1"
 DATASET_LINEAGE_PREFIX = b"OLY:DATASET-LINEAGE:V1"
+GOSSIP_SHARE_COMMIT_PREFIX = b"OLY:GOSSIP-SHARE-COMMIT:V1"
+CHAIN_PROOF_COMMIT_PREFIX = b"OLY:CHAIN-PROOF-COMMIT:V1"
+DA_CHALLENGE_PREFIX = b"OLY:DA-CHALLENGE:V1"
+REDACTION_BIND_PREFIX = b"OLY:REDACTION-BIND:V1"
+SHARD_NS_PREFIX = b"OLY:SHARD-NS:V1"
 EVENT_ID_FIELD_NAMES = ("shard_id", "header_hash", "timestamp")
 MAX_EVENT_ID_FIELD_LENGTH = (1 << 32) - 1
 _MAX_LENGTH_PREFIXED_FIELD_SIZE = (1 << 32) - 1
@@ -100,6 +105,35 @@ def _length_prefixed_bytes(field_name: str, value: bytes) -> bytes:
     if len(value) > _MAX_LENGTH_PREFIXED_FIELD_SIZE:
         raise ValueError(f"{field_name} exceeds maximum length")  # pragma: no cover — 4 GB alloc
     return len(value).to_bytes(4, "big") + value
+
+
+def encode_signing_fields(*fields: str) -> bytes:
+    """Encode string fields as a length-prefixed byte string for signing payloads.
+
+    Each UTF-8 field is prefixed with its 4-byte big-endian length before
+    concatenation. This prevents field-injection collisions where a literal
+    ``|`` character inside a peer-controlled field value (e.g. ``node_id``,
+    ``shard_id``, endpoint) could be mistaken for a field boundary when using
+    ``HASH_SEPARATOR.join()``.
+
+    Example — old (broken):
+        HASH_SEPARATOR.join(["a|b", "c"]) == HASH_SEPARATOR.join(["a", "b|c"])
+
+    Example — new (safe):
+        encode_signing_fields("a|b", "c") != encode_signing_fields("a", "b|c")
+
+    Args:
+        *fields: String fields to encode in order.
+
+    Returns:
+        Concatenated length-prefixed UTF-8 bytes.
+    """
+    parts: list[bytes] = []
+    for f in fields:
+        fb = f.encode("utf-8")
+        parts.append(len(fb).to_bytes(4, "big"))
+        parts.append(fb)
+    return b"".join(parts)
 
 
 def record_key(record_type: str, record_id: str, version: int) -> bytes:

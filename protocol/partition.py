@@ -20,6 +20,7 @@ is available in production deployments until Phase 1+ is explicitly announced.
 from __future__ import annotations
 
 import secrets
+from collections import deque
 from collections.abc import Callable, Collection, Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime
@@ -31,6 +32,64 @@ from .timestamps import current_timestamp
 
 
 _partition_tracer = get_tracer("olympus.partition")
+
+
+class EquivocationSeenCache:
+    """Bounded gossip-layer replay-dedup cache for equivocation evidence.
+
+    Tracks evidence keys (e.g. vote hashes) that have already been processed
+    so the gossip handler can skip re-processing duplicates without mutating
+    the stateless :func:`detect_slashable_equivocations` function.
+
+    Implements a simple LRU-style eviction: the oldest entry is evicted when
+    ``maxsize`` is reached.  Thread-safety is the caller's responsibility.
+
+    Args:
+        maxsize: Maximum number of entries to retain (default 4096).
+    """
+
+    def __init__(self, maxsize: int = 4096) -> None:
+        if maxsize < 1:
+            raise ValueError("maxsize must be at least 1")
+        self._maxsize = maxsize
+        self._seen: set[str] = set()
+        self._order: deque[str] = deque()
+
+    # ------------------------------------------------------------------
+    # Public API
+    # ------------------------------------------------------------------
+
+    @property
+    def maxsize(self) -> int:
+        """Maximum capacity of the cache."""
+        return self._maxsize
+
+    def __len__(self) -> int:
+        return len(self._seen)
+
+    def __contains__(self, key: object) -> bool:
+        return key in self._seen
+
+    def add(self, key: str) -> bool:
+        """Record *key* as seen.
+
+        Returns:
+            ``True`` if the key was newly added, ``False`` if it was already
+            present (i.e. a replay was detected).
+        """
+        if key in self._seen:
+            return False
+        if len(self._seen) >= self._maxsize:
+            oldest = self._order.popleft()
+            self._seen.discard(oldest)
+        self._seen.add(key)
+        self._order.append(key)
+        return True
+
+    def clear(self) -> None:
+        """Remove all entries from the cache."""
+        self._seen.clear()
+        self._order.clear()
 
 
 @dataclass(frozen=True)

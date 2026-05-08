@@ -22,7 +22,13 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from .canonical import normalize_whitespace
-from .hashes import blake3_to_field_element, hash_bytes
+from .hashes import (
+    REDACTION_BIND_PREFIX,
+    blake3_hash,
+    blake3_to_field_element,
+    encode_signing_fields,
+    hash_bytes,
+)
 from .merkle import MerkleProof, MerkleTree, verify_proof
 from .poseidon_tree import (
     POSEIDON_DOMAIN_COMMITMENT,
@@ -773,8 +779,6 @@ class RedactionProtocol:
             ValueError: If revealed indices are out of bounds or if document
                 exceeds ``2**poseidon_tree_depth`` sections.
         """
-        from .hashes import HASH_SEPARATOR
-
         max_leaves = 1 << poseidon_tree_depth
 
         # L3-B: Explicit guard before hashing
@@ -814,16 +818,18 @@ class RedactionProtocol:
         redacted_poseidon_root = redacted_poseidon_tree.get_root()
 
         # Bind all four roots together
-        binding_data = HASH_SEPARATOR.join(
+        binding_hash = blake3_hash(
             [
-                orig_blake3_root,
-                redacted_blake3_root,
-                orig_poseidon_root,
-                redacted_poseidon_root,
-                ",".join(str(i) for i in sorted(revealed_indices)),
+                REDACTION_BIND_PREFIX,
+                encode_signing_fields(
+                    orig_blake3_root,
+                    redacted_blake3_root,
+                    orig_poseidon_root,
+                    redacted_poseidon_root,
+                    ",".join(str(i) for i in sorted(revealed_indices)),
+                ),
             ]
-        )
-        binding_hash = hash_bytes(binding_data.encode("utf-8")).hex()
+        ).hex()
 
         return RedactionCorrectnessProof(
             original_blake3_root=orig_blake3_root,
@@ -850,16 +856,16 @@ class RedactionProtocol:
         Returns:
             ``True`` if the binding hash is valid, ``False`` otherwise.
         """
-        from .hashes import HASH_SEPARATOR
-
-        binding_data = HASH_SEPARATOR.join(
+        expected = blake3_hash(
             [
-                proof.original_blake3_root,
-                proof.redacted_blake3_root,
-                proof.original_poseidon_root,
-                proof.redacted_poseidon_root,
-                ",".join(str(i) for i in sorted(proof.revealed_indices)),
+                REDACTION_BIND_PREFIX,
+                encode_signing_fields(
+                    proof.original_blake3_root,
+                    proof.redacted_blake3_root,
+                    proof.original_poseidon_root,
+                    proof.redacted_poseidon_root,
+                    ",".join(str(i) for i in sorted(proof.revealed_indices)),
+                ),
             ]
-        )
-        expected = hash_bytes(binding_data.encode("utf-8")).hex()
+        ).hex()
         return expected == proof.binding_hash
