@@ -72,9 +72,10 @@ jobs:
         run: |
           set -euo pipefail
           # Clone Mysten Labs' rapidsnark fork (Apache 2.0; powers Sui blockchain in production)
-          git clone --depth 1 https://github.com/MystenLabs/rapidsnark.git /tmp/rapidsnark
+          git clone --depth 1 --recurse-submodules --shallow-submodules \
+            https://github.com/MystenLabs/rapidsnark.git /tmp/rapidsnark
           cd /tmp/rapidsnark
-          npm install --silent
+          npm install --silent --no-audit
           npx task createFieldSources
           npx task buildProver
           sudo cp build/prover /usr/local/bin/rapidsnark
