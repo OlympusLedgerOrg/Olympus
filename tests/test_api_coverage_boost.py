@@ -282,6 +282,76 @@ async def test_revoke_credential_already_revoked(fresh_client):
 
 
 @pytest.mark.asyncio
+async def test_revoke_credential_same_key_succeeds(fresh_client):
+    """DELETE /key/credential/{id} succeeds when revoked by the issuing key.
+
+    In dev-auth mode every request authenticates as key_id="dev", so a
+    credential issued and revoked in the same session uses the same key.
+    """
+    create_resp = await fresh_client.post("/key/credential", json=CREDENTIAL_BODY)
+    assert create_resp.status_code == 201
+    cred_id = create_resp.json()["id"]
+
+    revoke_resp = await fresh_client.delete(f"/key/credential/{cred_id}")
+    assert revoke_resp.status_code == 204
+
+
+@pytest.mark.asyncio
+async def test_revoke_credential_foreign_key_returns_404(fresh_client, fresh_session):
+    """H-3: DELETE /key/credential/{id} returns 404 when the caller did not issue it.
+
+    The endpoint must not reveal that the credential exists to a caller whose
+    key_id differs from the one that issued the credential.  404 (not 403) is
+    deliberate to avoid leaking credential existence.
+    """
+    from api.models.credential import KeyCredential
+
+    foreign_key_id = "foreign-key-that-did-not-issue-this-credential"
+    cred = KeyCredential(
+        holder_key="ed25519:somepubkey",
+        credential_type="researcher",
+        issuer="Some Agency",
+        issued_by_key_id=foreign_key_id,
+        commit_id="0x" + "00" * 32,
+    )
+    fresh_session.add(cred)
+    await fresh_session.commit()
+    await fresh_session.refresh(cred)
+
+    # fresh_client authenticates as key_id="dev" (OLYMPUS_ALLOW_DEV_AUTH=1),
+    # which differs from foreign_key_id — ownership check must block revocation.
+    resp = await fresh_client.delete(f"/key/credential/{cred.id}")
+    assert resp.status_code == 404
+    detail = resp.json()["detail"]
+    assert detail["code"] == "CREDENTIAL_NOT_FOUND"
+
+
+@pytest.mark.asyncio
+async def test_revoke_credential_no_issued_by_key_id_succeeds(fresh_client, fresh_session):
+    """Legacy credentials without issued_by_key_id can be revoked by any write key.
+
+    Credentials created before the H-3 fix have issued_by_key_id=None.
+    Those rows must remain revocable by any authenticated caller so existing
+    data is not locked out.
+    """
+    from api.models.credential import KeyCredential
+
+    cred = KeyCredential(
+        holder_key="ed25519:legacypubkey",
+        credential_type="journalist",
+        issuer="Legacy Agency",
+        issued_by_key_id=None,
+        commit_id="0x" + "00" * 32,
+    )
+    fresh_session.add(cred)
+    await fresh_session.commit()
+    await fresh_session.refresh(cred)
+
+    resp = await fresh_client.delete(f"/key/credential/{cred.id}")
+    assert resp.status_code == 204
+
+
+@pytest.mark.asyncio
 async def test_admin_reload_keys_no_admin_key():
     """POST /key/admin/reload-keys returns 503 when OLYMPUS_ADMIN_KEY is not set."""
     engine = create_async_engine(TEST_DB_URL, connect_args={"check_same_thread": False})

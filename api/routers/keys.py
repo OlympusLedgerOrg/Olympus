@@ -47,7 +47,7 @@ def assert_admin_key_strength_for_environment() -> None:
 
 @router.post("/credential", response_model=CredentialResponse, status_code=status.HTTP_201_CREATED)
 async def issue_credential(
-    body: CredentialCreate, db: DBSession, _api_key: RequireAPIKey, _rl: RateLimit
+    body: CredentialCreate, db: DBSession, api_key: RequireAPIKey, _rl: RateLimit
 ):
     """Issue a new SBT-style non-transferable credential.
 
@@ -68,6 +68,7 @@ async def issue_credential(
         issued_at=datetime.now(timezone.utc),
         sbt_nontransferable=True,
         commit_id=commit_id,
+        issued_by_key_id=api_key.key_id,
     )
     db.add(cred)
     await db.commit()
@@ -82,24 +83,40 @@ async def issue_credential(
 
 @router.delete("/credential/{credential_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def revoke_credential(
-    credential_id: str, db: DBSession, _api_key: RequireAPIKey, _rl: RateLimit
+    credential_id: str, db: DBSession, api_key: RequireAPIKey, _rl: RateLimit
 ):
     """Revoke a credential by setting its revoked_at timestamp.
 
     The credential record is retained for audit purposes; Olympus is an
     append-only ledger and does not hard-delete records.
 
+    Only the API key that originally issued a credential may revoke it.
+    Credentials without an ``issued_by_key_id`` (created before this check
+    was introduced) can be revoked by any write-key holder.
+
     Args:
         credential_id: UUID of the credential to revoke.
         db: Injected async database session.
 
     Raises:
-        HTTPException 404: If the credential is not found.
+        HTTPException 404: If the credential is not found or owned by a different key.
         HTTPException 409: If the credential has already been revoked.
     """
     result = await db.execute(select(KeyCredential).where(KeyCredential.id == credential_id))
     cred = result.scalars().first()
+    # Return 404 (not 403) on ownership mismatch to avoid leaking credential existence
+    # to callers who didn't issue it.
     if not cred:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail={"detail": "Credential not found.", "code": "CREDENTIAL_NOT_FOUND"},
+        )
+    if cred.issued_by_key_id is not None and cred.issued_by_key_id != api_key.key_id:
+        logger.warning(
+            "Credential revocation rejected: key %s attempted to revoke credential issued by %s",
+            sanitize_for_log(api_key.key_id),
+            sanitize_for_log(cred.issued_by_key_id),
+        )
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail={"detail": "Credential not found.", "code": "CREDENTIAL_NOT_FOUND"},

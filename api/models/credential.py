@@ -43,3 +43,4 @@ class KeyCredential(Base):
     sbt_nontransferable: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
     commit_id: Mapped[str] = mapped_column(String(66), nullable=False, default="")
     revocation_commit_id: Mapped[str | None] = mapped_column(String(66), nullable=True)
+    issued_by_key_id: Mapped[str | None] = mapped_column(String(256), nullable=True, index=True)
