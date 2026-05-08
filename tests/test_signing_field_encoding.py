@@ -61,8 +61,19 @@ def test_encode_signing_fields_bytes_passthrough() -> None:
     assert len(result) == 4 + 3 + 4 + 5  # [len raw][raw][len "after"]["after"]
 
 
-def test_encode_signing_fields_int_coerced_to_str() -> None:
-    assert encode_signing_fields(42) == encode_signing_fields("42")
+def test_encode_signing_fields_rejects_non_str_or_bytes() -> None:
+    """Wire format must not depend on Python's str() of arbitrary types."""
+    with pytest.raises(TypeError):
+        encode_signing_fields(42)  # type: ignore[arg-type]
+    with pytest.raises(TypeError):
+        encode_signing_fields("ok", {"a": 1})  # type: ignore[arg-type]
+    with pytest.raises(TypeError):
+        encode_signing_fields(None)  # type: ignore[arg-type]
+
+
+def test_encode_signing_fields_accepts_bytes_and_str_mixed() -> None:
+    encoded = encode_signing_fields("text", b"\x00\x01\x02")
+    assert isinstance(encoded, bytes)
 
 
 def test_encode_signing_fields_empty_field_list() -> None:
@@ -273,11 +284,19 @@ def test_da_challenge_hash_pipe_injection_safe() -> None:
 
 
 def test_redaction_binding_pipe_injection_safe() -> None:
-    # Simulate two inputs that would collide with pipe-join but not with encode_signing_fields
-    root_with_pipe = "ab|cd" + "x" * 59
-    root_a = encode_signing_fields(root_with_pipe, "cd", "r3", "r4", "1")
-    root_b = encode_signing_fields("ab", "cd" + "|cd" + "r3", "r4", "1")
-    assert root_a != root_b
+    """Same-arity inputs that would collide under naive pipe-join must differ here.
+
+    Under HASH_SEPARATOR.join both encodings produce "a|b|c|d|e|f"; under
+    encode_signing_fields they MUST differ because field boundaries are
+    bound by length prefixes, not by the literal "|" character.
+    """
+    pipe_join_a = HASH_SEPARATOR.join(["a|b", "c", "d", "e", "f"])
+    pipe_join_b = HASH_SEPARATOR.join(["a", "b|c", "d", "e", "f"])
+    assert pipe_join_a == pipe_join_b  # the legacy collision
+
+    encoded_a = encode_signing_fields("a|b", "c", "d", "e", "f")
+    encoded_b = encode_signing_fields("a", "b|c", "d", "e", "f")
+    assert encoded_a != encoded_b
 
 
 def test_redaction_correctness_proof_roundtrip() -> None:
@@ -371,3 +390,48 @@ def test_equivocation_seen_cache_rejects_non_positive_max_entries() -> None:
         EquivocationSeenCache(max_entries=0)
     with pytest.raises(ValueError):
         EquivocationSeenCache(max_entries=-1)
+
+
+def test_equivocation_seen_cache_is_lru_not_fifo() -> None:
+    """A repeatedly-hit entry must not be evicted under churn (LRU, not FIFO).
+
+    Insertion order is h1, h2, h3. We then hit h1 (refreshing recency) and
+    insert h4. Under FIFO h1 would be evicted; under true LRU h2 is evicted.
+    """
+    cache = EquivocationSeenCache(max_entries=3)
+    cache.is_new("n", "s", 1, "h1")
+    cache.is_new("n", "s", 2, "h2")
+    cache.is_new("n", "s", 3, "h3")
+
+    # Hit h1 -> refreshes its recency
+    assert cache.is_new("n", "s", 1, "h1") is False
+
+    # Adding h4 should evict h2 (now the LRU), not h1
+    cache.is_new("n", "s", 4, "h4")
+    assert cache.is_new("n", "s", 1, "h1") is False  # still present
+    assert cache.is_new("n", "s", 2, "h2") is True  # was evicted
+
+
+# ---------------------------------------------------------------------------
+# DA challenge: response_deadline binding (replication.py)
+# ---------------------------------------------------------------------------
+
+
+def test_da_challenge_hash_binds_response_deadline() -> None:
+    """Two challenges differing only by deadline must produce different hashes."""
+    from protocol.federation.replication import DataAvailabilityChallenge
+
+    base_kwargs = dict(
+        shard_id="shard-1",
+        header_hash="aa" * 32,
+        challenger_id="challenger",
+        challenge_nonce="nonce",
+        issued_at="2026-01-01T00:00:00Z",
+    )
+    h1 = DataAvailabilityChallenge(
+        **base_kwargs, response_deadline="2026-01-01T01:00:00Z"
+    ).challenge_hash()
+    h2 = DataAvailabilityChallenge(
+        **base_kwargs, response_deadline="2026-01-01T02:00:00Z"
+    ).challenge_hash()
+    assert h1 != h2

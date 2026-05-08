@@ -174,9 +174,14 @@ class EquivocationSeenCache:
     the same tuple the slashing detector uses — so truly distinct equivocations
     are never silently dropped, only exact duplicates.
 
+    Eviction is true LRU: a duplicate hit refreshes the entry's recency, so a
+    "hot" equivocation that keeps arriving never ages out and gets re-accepted
+    as new. Insertion-order (FIFO) eviction would weaken the replay-dedup
+    guarantee under sustained churn.
+
     Args:
         max_entries: Maximum number of distinct evidence keys to remember.
-            Oldest entries are evicted LRU-style when the cap is reached.
+            On overflow the least recently observed entry is evicted.
             Default 50_000 covers ~several hours of gossip at high fanout.
     """
 
@@ -184,23 +189,24 @@ class EquivocationSeenCache:
         if max_entries <= 0:
             raise ValueError("max_entries must be positive")
         self._max_entries = max_entries
-        self._seen: set[tuple[str, str, int, str]] = set()
-        self._order: collections.deque[tuple[str, str, int, str]] = collections.deque()
+        self._seen: collections.OrderedDict[tuple[str, str, int, str], None] = (
+            collections.OrderedDict()
+        )
 
     def is_new(self, node_id: str, shard_id: str, round_number: int, vote_hash: str) -> bool:
         """Return ``True`` and record the key if this evidence has not been seen before.
 
         Returns ``False`` if the exact ``(node_id, shard_id, round_number, vote_hash)``
-        tuple was previously recorded.
+        tuple was previously recorded; in that case the entry's LRU position is
+        refreshed so a repeatedly-observed equivocation will not age out.
         """
         key = (node_id, shard_id, round_number, vote_hash)
         if key in self._seen:
+            self._seen.move_to_end(key)
             return False
-        self._seen.add(key)
-        self._order.append(key)
-        while len(self._order) > self._max_entries:
-            old = self._order.popleft()
-            self._seen.discard(old)
+        self._seen[key] = None
+        if len(self._seen) > self._max_entries:
+            self._seen.popitem(last=False)
         return True
 
     def __len__(self) -> int:

@@ -1519,22 +1519,25 @@ def test_verify_epoch_key_rotation_validates_signature() -> None:
     new_key = _test_signing_key(9)
 
     # Compute expected hashes
-    from protocol.hashes import HASH_SEPARATOR, hash_bytes
+    from protocol.hashes import (
+        KEY_ROTATION_PREFIX,
+        blake3_hash,
+        encode_signing_fields,
+        hash_bytes,
+    )
 
     old_pubkey_hash = hash_bytes(old_key.verify_key.encode()).hex()
     new_pubkey_hash = hash_bytes(new_key.verify_key.encode()).hex()
 
-    # Create the rotation payload
-    rotation_payload = HASH_SEPARATOR.join(
-        [
-            "olympus-node-1",
-            "5",
-            old_pubkey_hash,
-            new_pubkey_hash,
-            "2026-03-14T12:00:00Z",
-        ]
-    ).encode()
-    rotation_hash = hash_bytes(rotation_payload)
+    # Create the rotation payload (matches verify_epoch_key_rotation encoding)
+    rotation_payload = encode_signing_fields(
+        "olympus-node-1",
+        "5",
+        old_pubkey_hash,
+        new_pubkey_hash,
+        "2026-03-14T12:00:00Z",
+    )
+    rotation_hash = blake3_hash([KEY_ROTATION_PREFIX, b"|", rotation_payload])
 
     # Sign with old key
     signed = old_key.sign(rotation_hash)

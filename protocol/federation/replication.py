@@ -276,13 +276,18 @@ class DataAvailabilityChallenge:
         }
 
     def challenge_hash(self) -> str:
-        """Return deterministic hash of the challenge for binding responses."""
+        """Return deterministic hash of the challenge for binding responses.
+
+        Binds ``response_deadline`` into the digest so a proof cannot be replayed
+        against a challenge that was modified to extend its acceptable window.
+        """
         payload = encode_signing_fields(
             self.shard_id,
             self.header_hash,
             self.challenger_id,
             self.challenge_nonce,
             self.issued_at,
+            self.response_deadline,
         )
         return blake3_hash([DA_CHALLENGE_PREFIX, b"|", payload]).hex()
 

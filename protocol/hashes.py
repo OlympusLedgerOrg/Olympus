@@ -108,12 +108,17 @@ def _length_prefixed_bytes(field_name: str, value: bytes) -> bytes:
     return len(value).to_bytes(4, "big") + value
 
 
-def encode_signing_fields(*fields: object) -> bytes:
+def encode_signing_fields(*fields: bytes | str) -> bytes:
     """Length-prefix-encode variable-length fields for collision-safe signing/hashing.
 
     Each field is encoded as ``[4-byte big-endian byte-count][UTF-8 bytes]``.
-    ``bytes`` values are used as-is; all other values are coerced via ``str()``
-    then UTF-8-encoded.
+    ``bytes`` values are used as-is; ``str`` values are UTF-8-encoded.
+
+    Only ``bytes`` and ``str`` are accepted — passing other types (``int``,
+    ``dict``, etc.) raises ``TypeError``. Wire-format stability requires callers
+    to perform their own canonicalization (``str(x)``, ``canonical_json_bytes``,
+    ``.hex()``, etc.) before reaching this function, so the encoding never
+    depends on Python's default ``str()`` rendering for arbitrary objects.
 
     This prevents field-injection attacks: a literal ``|`` inside one field
     value can never be mistaken for a field boundary, so::
@@ -121,11 +126,19 @@ def encode_signing_fields(*fields: object) -> bytes:
         encode_signing_fields("a|b", "c") != encode_signing_fields("a", "b|c")
 
     Raises:
+        TypeError: If any field is not ``bytes`` or ``str``.
         ValueError: If any single field exceeds the 4-byte length limit (~4 GB).
     """
     parts: list[bytes] = []
     for field in fields:
-        raw: bytes = field if isinstance(field, bytes) else str(field).encode("utf-8")
+        if isinstance(field, bytes):
+            raw: bytes = field
+        elif isinstance(field, str):
+            raw = field.encode("utf-8")
+        else:
+            raise TypeError(
+                f"encode_signing_fields: field must be bytes or str, got {type(field).__name__}"
+            )
         if len(raw) > _MAX_LENGTH_PREFIXED_FIELD_SIZE:
             raise ValueError(
                 f"encode_signing_fields: field of {len(raw)} bytes exceeds 4-byte length limit"

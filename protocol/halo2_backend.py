@@ -147,8 +147,12 @@ class RedactionEvent:
         """
         Compute a deterministic BLAKE3 hash of the event.
 
-        The hash covers all fields with domain separation and a fixed separator.
-        Returns a hex-encoded string.
+        Fields are encoded with collision-safe length-prefix framing via
+        :func:`encode_signing_fields`, then domain-separated under
+        ``EVENT_PREFIX``. The only literal ``b"|"`` in the input is the byte
+        between the prefix and the encoded payload — field boundaries inside the
+        payload are determined by 4-byte big-endian length prefixes, not by
+        any separator byte. Returns a hex-encoded string.
         """
         payload = encode_signing_fields(
             str(self.event_index),
