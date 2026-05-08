@@ -12,7 +12,7 @@ from protocol.federation.rotation import (
     verify_epoch_key_rotation,
     verify_recursive_chain_proof,
 )
-from protocol.hashes import HASH_SEPARATOR, hash_bytes
+from protocol.hashes import KEY_ROTATION_PREFIX, blake3_hash, encode_signing_fields, hash_bytes
 
 
 def _ts():
@@ -268,16 +268,14 @@ class TestVerifyEpochKeyRotation:
         return old_sk, registry, witnesses
 
     def _sign_rotation(self, old_sk, record):
-        payload = HASH_SEPARATOR.join(
-            [
-                record.node_id,
-                str(record.epoch),
-                record.old_pubkey_hash,
-                record.new_pubkey_hash,
-                record.rotated_at,
-            ]
-        ).encode("utf-8")
-        rotation_hash = hash_bytes(payload)
+        rotation_payload = encode_signing_fields(
+            record.node_id,
+            str(record.epoch),
+            record.old_pubkey_hash,
+            record.new_pubkey_hash,
+            record.rotated_at,
+        )
+        rotation_hash = blake3_hash([KEY_ROTATION_PREFIX, b"|", rotation_payload])
         return old_sk.sign(rotation_hash).signature.hex()
 
     def test_bad_rotation_signature(self):
@@ -331,16 +329,14 @@ class TestVerifyEpochKeyRotation:
             new_pubkey_hash="new",
             rotated_at=_ts(),
         )
-        payload = HASH_SEPARATOR.join(
-            [
-                record_kwargs["node_id"],
-                str(record_kwargs["epoch"]),
-                record_kwargs["old_pubkey_hash"],
-                record_kwargs["new_pubkey_hash"],
-                record_kwargs["rotated_at"],
-            ]
-        ).encode("utf-8")
-        rotation_hash = hash_bytes(payload)
+        rotation_payload = encode_signing_fields(
+            record_kwargs["node_id"],
+            str(record_kwargs["epoch"]),
+            record_kwargs["old_pubkey_hash"],
+            record_kwargs["new_pubkey_hash"],
+            record_kwargs["rotated_at"],
+        )
+        rotation_hash = blake3_hash([KEY_ROTATION_PREFIX, b"|", rotation_payload])
         rotation_sig = old_sk.sign(rotation_hash).signature.hex()
         witness_sig = wsk.sign(rotation_hash).signature.hex()
 
@@ -371,16 +367,8 @@ class TestVerifyEpochKeyRotation:
                 nodes_list[i] = deactivated
         registry2 = FederationRegistry(nodes=tuple(nodes_list), epoch=1)
 
-        payload = HASH_SEPARATOR.join(
-            [
-                "node-main",
-                "1",
-                "old",
-                "new",
-                _ts(),
-            ]
-        ).encode("utf-8")
-        rotation_hash = hash_bytes(payload)
+        rotation_payload = encode_signing_fields("node-main", "1", "old", "new", _ts())
+        rotation_hash = blake3_hash([KEY_ROTATION_PREFIX, b"|", rotation_payload])
         rotation_sig = old_sk.sign(rotation_hash).signature.hex()
         witness_sig = wsk.sign(rotation_hash).signature.hex()
 
@@ -401,16 +389,8 @@ class TestVerifyEpochKeyRotation:
 
     def test_unknown_witness_ignored(self):
         old_sk, registry, witnesses = self._make_registry_and_keys(0)
-        payload = HASH_SEPARATOR.join(
-            [
-                "node-main",
-                "1",
-                "old",
-                "new",
-                _ts(),
-            ]
-        ).encode("utf-8")
-        rotation_hash = hash_bytes(payload)
+        rotation_payload = encode_signing_fields("node-main", "1", "old", "new", _ts())
+        rotation_hash = blake3_hash([KEY_ROTATION_PREFIX, b"|", rotation_payload])
         rotation_sig = old_sk.sign(rotation_hash).signature.hex()
 
         record = EpochKeyRotationRecord(

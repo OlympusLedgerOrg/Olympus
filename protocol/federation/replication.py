@@ -8,7 +8,13 @@ from typing import Any
 import nacl.exceptions
 import nacl.signing
 
-from protocol.hashes import HASH_SEPARATOR, _length_prefixed_bytes, hash_bytes
+from protocol.hashes import (
+    DA_CHALLENGE_PREFIX,
+    _length_prefixed_bytes,
+    blake3_hash,
+    encode_signing_fields,
+    hash_bytes,
+)
 from protocol.timestamps import current_timestamp as _current_timestamp
 
 from .identity import FederationRegistry, _parse_timestamp
@@ -270,17 +276,20 @@ class DataAvailabilityChallenge:
         }
 
     def challenge_hash(self) -> str:
-        """Return deterministic hash of the challenge for binding responses."""
-        payload = HASH_SEPARATOR.join(
-            [
-                self.shard_id,
-                self.header_hash,
-                self.challenger_id,
-                self.challenge_nonce,
-                self.issued_at,
-            ]
-        ).encode("utf-8")
-        return hash_bytes(payload).hex()
+        """Return deterministic hash of the challenge for binding responses.
+
+        Binds ``response_deadline`` into the digest so a proof cannot be replayed
+        against a challenge that was modified to extend its acceptable window.
+        """
+        payload = encode_signing_fields(
+            self.shard_id,
+            self.header_hash,
+            self.challenger_id,
+            self.challenge_nonce,
+            self.issued_at,
+            self.response_deadline,
+        )
+        return blake3_hash([DA_CHALLENGE_PREFIX, b"|", payload]).hex()
 
 
 @dataclass(frozen=True)

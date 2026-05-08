@@ -19,6 +19,7 @@ is available in production deployments until Phase 1+ is explicitly announced.
 
 from __future__ import annotations
 
+import collections
 import secrets
 from collections.abc import Callable, Collection, Iterable, Mapping, Sequence
 from dataclasses import dataclass
@@ -159,6 +160,57 @@ class TransactionBroadcast:
             raise ValueError("witness identifiers must be non-empty strings")
         if len(set(self.witnesses)) != len(self.witnesses):
             raise ValueError("witness identifiers must be unique")
+
+
+class EquivocationSeenCache:
+    """Bounded, persistent dedup cache for gossip-layer equivocation evidence.
+
+    ``detect_slashable_equivocations`` is a stateless batch checker that operates
+    on a single call's worth of votes.  This class sits above it in the gossip
+    handler and suppresses evidence bundles that have already been processed or
+    rebroadcast, preventing replay flooding without any state unbounded growth.
+
+    Each entry is keyed by ``(node_id, shard_id, round_number, vote_hash)`` —
+    the same tuple the slashing detector uses — so truly distinct equivocations
+    are never silently dropped, only exact duplicates.
+
+    Eviction is true LRU: a duplicate hit refreshes the entry's recency, so a
+    "hot" equivocation that keeps arriving never ages out and gets re-accepted
+    as new. Insertion-order (FIFO) eviction would weaken the replay-dedup
+    guarantee under sustained churn.
+
+    Args:
+        max_entries: Maximum number of distinct evidence keys to remember.
+            On overflow the least recently observed entry is evicted.
+            Default 50_000 covers ~several hours of gossip at high fanout.
+    """
+
+    def __init__(self, max_entries: int = 50_000) -> None:
+        if max_entries <= 0:
+            raise ValueError("max_entries must be positive")
+        self._max_entries = max_entries
+        self._seen: collections.OrderedDict[tuple[str, str, int, str], None] = (
+            collections.OrderedDict()
+        )
+
+    def is_new(self, node_id: str, shard_id: str, round_number: int, vote_hash: str) -> bool:
+        """Return ``True`` and record the key if this evidence has not been seen before.
+
+        Returns ``False`` if the exact ``(node_id, shard_id, round_number, vote_hash)``
+        tuple was previously recorded; in that case the entry's LRU position is
+        refreshed so a repeatedly-observed equivocation will not age out.
+        """
+        key = (node_id, shard_id, round_number, vote_hash)
+        if key in self._seen:
+            self._seen.move_to_end(key)
+            return False
+        self._seen[key] = None
+        if len(self._seen) > self._max_entries:
+            self._seen.popitem(last=False)
+        return True
+
+    def __len__(self) -> int:
+        return len(self._seen)
 
 
 def detect_slashable_equivocations(votes: Sequence[PublishedVote]) -> tuple[SlashingEvidence, ...]:

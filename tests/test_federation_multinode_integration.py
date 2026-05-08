@@ -33,7 +33,7 @@ from protocol.federation import (
     verify_federated_header_signatures,
     verify_quorum_certificate,
 )
-from protocol.hashes import HASH_SEPARATOR, hash_bytes
+from protocol.hashes import KEY_ROTATION_PREFIX, blake3_hash, encode_signing_fields, hash_bytes
 from protocol.shards import (
     create_shard_header,
     get_signing_key_from_seed,
@@ -248,16 +248,14 @@ class TestMultiNodeKeyRotation:
         ts = current_timestamp()
 
         # Build rotation payload matching verify_epoch_key_rotation
-        rotation_payload = HASH_SEPARATOR.join(
-            [
-                "olympus-node-1",
-                "1",
-                old_pubkey_hash,
-                new_pubkey_hash,
-                ts,
-            ]
-        ).encode("utf-8")
-        rotation_hash = hash_bytes(rotation_payload)
+        rotation_payload = encode_signing_fields(
+            "olympus-node-1",
+            "1",
+            old_pubkey_hash,
+            new_pubkey_hash,
+            ts,
+        )
+        rotation_hash = blake3_hash([KEY_ROTATION_PREFIX, b"|", rotation_payload])
 
         # Sign rotation with old key
         rotation_sig = old_key.sign(rotation_hash).signature.hex()
@@ -296,16 +294,14 @@ class TestMultiNodeKeyRotation:
         new_pubkey_hash = hash_bytes(bytes(new_key.verify_key)).hex()
         ts = current_timestamp()
 
-        rotation_payload = HASH_SEPARATOR.join(
-            [
-                "olympus-node-1",
-                "1",
-                old_pubkey_hash,
-                new_pubkey_hash,
-                ts,
-            ]
-        ).encode("utf-8")
-        rotation_hash = hash_bytes(rotation_payload)
+        rotation_payload = encode_signing_fields(
+            "olympus-node-1",
+            "1",
+            old_pubkey_hash,
+            new_pubkey_hash,
+            ts,
+        )
+        rotation_hash = blake3_hash([KEY_ROTATION_PREFIX, b"|", rotation_payload])
 
         rotation_sig = old_key.sign(rotation_hash).signature.hex()
 

@@ -52,7 +52,7 @@ from types import MappingProxyType
 from typing import Any
 
 from .canonical_json import canonical_json_bytes
-from .hashes import EVENT_PREFIX, HASH_SEPARATOR, blake3_hash
+from .hashes import EVENT_PREFIX, blake3_hash, encode_signing_fields
 from .proof_interface import (
     BackendNotAvailableError,
     Proof,
@@ -66,8 +66,6 @@ from .timestamps import current_timestamp
 
 RECURSIVE_REDACTION_CIRCUIT = "recursive_redaction_composition"
 # Identifier for the future Halo2 recursive composition circuit (Phase 1+).
-
-_HASH_SEPARATOR_BYTES = HASH_SEPARATOR.encode("utf-8")
 
 
 def recursive_redaction_circuit_id() -> str:
@@ -149,23 +147,26 @@ class RedactionEvent:
         """
         Compute a deterministic BLAKE3 hash of the event.
 
-        The hash covers all fields with domain separation and a fixed separator.
-        Returns a hex-encoded string.
+        Fields are encoded with collision-safe length-prefix framing via
+        :func:`encode_signing_fields`, then domain-separated under
+        ``EVENT_PREFIX``. The only literal ``b"|"`` in the input is the byte
+        between the prefix and the encoded payload — field boundaries inside the
+        payload are determined by 4-byte big-endian length prefixes, not by
+        any separator byte. Returns a hex-encoded string.
         """
-        payload_fields = [
+        payload = encode_signing_fields(
             str(self.event_index),
             self.document_id,
             str(self.version),
-            canonical_json_bytes(self.revealed_indices).decode("utf-8"),
+            canonical_json_bytes(self.revealed_indices),
             self.original_root,
             self.redacted_commitment,
             str(self.revealed_count),
             self.timestamp,
             self.previous_event_hash,
-            canonical_json_bytes(dict(self.zk_proof)).decode("utf-8"),
-        ]
-        payload = HASH_SEPARATOR.join(payload_fields).encode("utf-8")
-        return blake3_hash([EVENT_PREFIX, HASH_SEPARATOR.encode("utf-8"), payload]).hex()
+            canonical_json_bytes(dict(self.zk_proof)),
+        )
+        return blake3_hash([EVENT_PREFIX, b"|", payload]).hex()
 
     def to_dict(self) -> dict[str, Any]:
         """Serialize the event to a dictionary."""
