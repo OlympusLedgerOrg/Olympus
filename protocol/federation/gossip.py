@@ -6,10 +6,10 @@ from typing import Any
 
 from protocol.hashes import (
     _VRF_COMMIT_REVEAL_PREFIX,
-    HASH_SEPARATOR,
+    PROACTIVE_SHARE_COMMIT_PREFIX,
     VRF_SELECTION_PREFIX,
     blake3_hash,
-    hash_bytes,
+    encode_signing_fields,
 )
 from protocol.ledger import Ledger, LedgerEntry
 
@@ -117,15 +117,10 @@ def build_proactive_share_commitments(
         raise ValueError("refresh_nonce must be non-empty")
     commitments: dict[str, str] = {}
     for node in registry.active_nodes():
-        payload = HASH_SEPARATOR.join(
-            [
-                node.node_id,
-                node.pubkey.hex(),
-                str(epoch),
-                refresh_nonce,
-            ]
-        ).encode("utf-8")
-        commitments[node.node_id] = hash_bytes(payload).hex()
+        payload = encode_signing_fields(node.node_id, node.pubkey.hex(), str(epoch), refresh_nonce)
+        commitments[node.node_id] = blake3_hash(
+            [PROACTIVE_SHARE_COMMIT_PREFIX, b"|", payload]
+        ).hex()
     return commitments
 
 
@@ -205,14 +200,13 @@ def vrf_selection_scores(
     selection_seed = blake3_hash(
         [
             VRF_SELECTION_PREFIX,
-            HASH_SEPARATOR.encode("utf-8").join(
-                [
-                    str(shard_id).encode("utf-8"),
-                    str(round_number).encode("utf-8"),
-                    str(effective_epoch).encode("utf-8"),
-                    membership_hash.encode("utf-8"),
-                    entropy_bytes,
-                ]
+            b"|",
+            encode_signing_fields(
+                str(shard_id),
+                str(round_number),
+                str(effective_epoch),
+                membership_hash,
+                entropy_bytes,
             ),
         ]
     )
@@ -270,8 +264,8 @@ def select_vrf_leader(
 
 def build_vrf_reveal_commitment(*, node_id: str, reveal: str) -> str:
     """Build a deterministic commit-reveal binding for VRF anti-grinding rounds."""
-    payload = HASH_SEPARATOR.encode("utf-8").join([node_id.encode("utf-8"), reveal.encode("utf-8")])
-    return blake3_hash([_VRF_COMMIT_REVEAL_PREFIX, payload]).hex()
+    payload = encode_signing_fields(node_id, reveal)
+    return blake3_hash([_VRF_COMMIT_REVEAL_PREFIX, b"|", payload]).hex()
 
 
 def derive_vrf_round_entropy(
@@ -296,7 +290,6 @@ def derive_vrf_round_entropy(
         raise ValueError("At least one reveal is required")
 
     reveal_chunks: list[bytes] = []
-    separator = HASH_SEPARATOR.encode("utf-8")
     for node_id, reveal in sorted(reveals.items()):
         commitment = commitments.get(node_id)
         if commitment is None:
@@ -312,24 +305,17 @@ def derive_vrf_round_entropy(
             if not proof_hash:
                 raise ValueError(f"Missing proof transcript hash for node_id: {node_id}")
 
-        reveal_chunks.append(
-            separator.join(
-                [
-                    node_id.encode("utf-8"),
-                    reveal.encode("utf-8"),
-                    proof_hash.encode("utf-8"),
-                ]
-            )
-        )
+        reveal_chunks.append(encode_signing_fields(node_id, reveal, proof_hash))
 
-    context = separator.join(
-        [
-            shard_id.encode("utf-8"),
-            str(round_number).encode("utf-8"),
-            str(epoch).encode("utf-8"),
-        ]
+    # Wrap context + all per-node chunks in a single length-prefixed payload so
+    # field boundaries are unambiguous across the entire input.
+    payload = encode_signing_fields(
+        shard_id,
+        str(round_number),
+        str(epoch),
+        *reveal_chunks,
     )
-    return blake3_hash([_VRF_COMMIT_REVEAL_PREFIX, context, *reveal_chunks]).hex()
+    return blake3_hash([_VRF_COMMIT_REVEAL_PREFIX, b"|", payload]).hex()
 
 
 def append_quorum_certificate_to_ledger(

@@ -19,6 +19,7 @@ is available in production deployments until Phase 1+ is explicitly announced.
 
 from __future__ import annotations
 
+import collections
 import secrets
 from collections.abc import Callable, Collection, Iterable, Mapping, Sequence
 from dataclasses import dataclass
@@ -159,6 +160,51 @@ class TransactionBroadcast:
             raise ValueError("witness identifiers must be non-empty strings")
         if len(set(self.witnesses)) != len(self.witnesses):
             raise ValueError("witness identifiers must be unique")
+
+
+class EquivocationSeenCache:
+    """Bounded, persistent dedup cache for gossip-layer equivocation evidence.
+
+    ``detect_slashable_equivocations`` is a stateless batch checker that operates
+    on a single call's worth of votes.  This class sits above it in the gossip
+    handler and suppresses evidence bundles that have already been processed or
+    rebroadcast, preventing replay flooding without any state unbounded growth.
+
+    Each entry is keyed by ``(node_id, shard_id, round_number, vote_hash)`` —
+    the same tuple the slashing detector uses — so truly distinct equivocations
+    are never silently dropped, only exact duplicates.
+
+    Args:
+        max_entries: Maximum number of distinct evidence keys to remember.
+            Oldest entries are evicted LRU-style when the cap is reached.
+            Default 50_000 covers ~several hours of gossip at high fanout.
+    """
+
+    def __init__(self, max_entries: int = 50_000) -> None:
+        if max_entries <= 0:
+            raise ValueError("max_entries must be positive")
+        self._max_entries = max_entries
+        self._seen: set[tuple[str, str, int, str]] = set()
+        self._order: collections.deque[tuple[str, str, int, str]] = collections.deque()
+
+    def is_new(self, node_id: str, shard_id: str, round_number: int, vote_hash: str) -> bool:
+        """Return ``True`` and record the key if this evidence has not been seen before.
+
+        Returns ``False`` if the exact ``(node_id, shard_id, round_number, vote_hash)``
+        tuple was previously recorded.
+        """
+        key = (node_id, shard_id, round_number, vote_hash)
+        if key in self._seen:
+            return False
+        self._seen.add(key)
+        self._order.append(key)
+        while len(self._order) > self._max_entries:
+            old = self._order.popleft()
+            self._seen.discard(old)
+        return True
+
+    def __len__(self) -> int:
+        return len(self._seen)
 
 
 def detect_slashable_equivocations(votes: Sequence[PublishedVote]) -> tuple[SlashingEvidence, ...]:

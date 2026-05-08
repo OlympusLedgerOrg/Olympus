@@ -17,7 +17,7 @@ import nacl.exceptions
 from .canonical_json import canonical_json_bytes
 from .checkpoint_types import SignedCheckpoint
 from .federation import FederationRegistry, NodeSignature
-from .hashes import CHECKPOINT_PREFIX, HASH_SEPARATOR, hash_bytes
+from .hashes import CHECKPOINT_PREFIX, blake3_hash, encode_signing_fields, hash_bytes
 
 
 # Domain tag for federation vote messages (distinct from CHECKPOINT_PREFIX hashes).
@@ -59,16 +59,14 @@ def _checkpoint_vote_event_id(
     checkpoint_hash: str, sequence: int, ledger_height: int, registry: FederationRegistry
 ) -> str:
     """Return deterministic event identifier for checkpoint votes."""
-    payload = HASH_SEPARATOR.join(
-        [
-            checkpoint_hash,
-            str(sequence),
-            str(ledger_height),
-            str(registry.epoch),
-            registry.membership_hash(),
-        ]
-    ).encode("utf-8")
-    return hash_bytes(payload).hex()
+    payload = encode_signing_fields(
+        checkpoint_hash,
+        str(sequence),
+        str(ledger_height),
+        str(registry.epoch),
+        registry.membership_hash(),
+    )
+    return blake3_hash([CHECKPOINT_PREFIX, b"|", payload]).hex()
 
 
 def _build_checkpoint_vote_message(

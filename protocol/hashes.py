@@ -73,6 +73,12 @@ ATTESTATION_PREFIX = b"OLY:ATTESTATION:V1"
 DATASET_PREFIX = b"OLY:DATASET:V1"
 DATASET_COMMIT_PREFIX = b"OLY:DATASET-COMMIT:V1"
 DATASET_LINEAGE_PREFIX = b"OLY:DATASET-LINEAGE:V1"
+PROACTIVE_SHARE_COMMIT_PREFIX = b"OLY:PROACTIVE-SHARE-COMMIT:V1"
+DA_CHALLENGE_PREFIX = b"OLY:DA-CHALLENGE:V1"
+CHAIN_PROOF_COMMIT_PREFIX = b"OLY:CHAIN-PROOF-COMMIT:V1"
+REDACTION_BINDING_PREFIX = b"OLY:REDACTION-BINDING:V1"
+SHARD_NAMESPACE_PREFIX = b"OLY:SHARD-NAMESPACE:V1"
+
 EVENT_ID_FIELD_NAMES = ("shard_id", "header_hash", "timestamp")
 MAX_EVENT_ID_FIELD_LENGTH = (1 << 32) - 1
 _MAX_LENGTH_PREFIXED_FIELD_SIZE = (1 << 32) - 1
@@ -100,6 +106,33 @@ def _length_prefixed_bytes(field_name: str, value: bytes) -> bytes:
     if len(value) > _MAX_LENGTH_PREFIXED_FIELD_SIZE:
         raise ValueError(f"{field_name} exceeds maximum length")  # pragma: no cover — 4 GB alloc
     return len(value).to_bytes(4, "big") + value
+
+
+def encode_signing_fields(*fields: object) -> bytes:
+    """Length-prefix-encode variable-length fields for collision-safe signing/hashing.
+
+    Each field is encoded as ``[4-byte big-endian byte-count][UTF-8 bytes]``.
+    ``bytes`` values are used as-is; all other values are coerced via ``str()``
+    then UTF-8-encoded.
+
+    This prevents field-injection attacks: a literal ``|`` inside one field
+    value can never be mistaken for a field boundary, so::
+
+        encode_signing_fields("a|b", "c") != encode_signing_fields("a", "b|c")
+
+    Raises:
+        ValueError: If any single field exceeds the 4-byte length limit (~4 GB).
+    """
+    parts: list[bytes] = []
+    for field in fields:
+        raw: bytes = field if isinstance(field, bytes) else str(field).encode("utf-8")
+        if len(raw) > _MAX_LENGTH_PREFIXED_FIELD_SIZE:
+            raise ValueError(
+                f"encode_signing_fields: field of {len(raw)} bytes exceeds 4-byte length limit"
+            )
+        parts.append(len(raw).to_bytes(4, "big"))
+        parts.append(raw)
+    return b"".join(parts)
 
 
 def record_key(record_type: str, record_id: str, version: int) -> bytes:
