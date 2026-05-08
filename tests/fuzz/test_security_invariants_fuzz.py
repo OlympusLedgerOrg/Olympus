@@ -23,7 +23,6 @@ Pytest markers:  ``fuzz``, ``security``, ``api``, ``storage``
 from __future__ import annotations
 
 import os
-
 import re
 import uuid
 from typing import Any
@@ -31,12 +30,6 @@ from typing import Any
 import pytest
 from fastapi.testclient import TestClient
 from hypothesis import HealthCheck, assume, given, settings, strategies as st
-
-FUZZ_MAX_EXAMPLES = int(os.getenv("FUZZ_MAX_EXAMPLES", "100"))
-CANON_FUZZ_MAX_EXAMPLES = int(os.getenv("CANON_FUZZ_MAX_EXAMPLES", str(FUZZ_MAX_EXAMPLES)))
-PROOF_FUZZ_MAX_EXAMPLES = int(os.getenv("PROOF_FUZZ_MAX_EXAMPLES", str(max(20, FUZZ_MAX_EXAMPLES // 4))))
-API_FUZZ_MAX_EXAMPLES = int(os.getenv("API_FUZZ_MAX_EXAMPLES", str(max(20, FUZZ_MAX_EXAMPLES // 10))))
-
 
 from api.schemas.ingest import BatchIngestionRequest
 from protocol.canonical import canonicalize_document, document_to_bytes
@@ -57,6 +50,16 @@ from tests.fuzz.strategies import (
     sql_injection_strings,
     unicode_edge_strings,
     valid_api_keys,
+)
+
+
+FUZZ_MAX_EXAMPLES = int(os.getenv("FUZZ_MAX_EXAMPLES", "100"))
+CANON_FUZZ_MAX_EXAMPLES = int(os.getenv("CANON_FUZZ_MAX_EXAMPLES", str(FUZZ_MAX_EXAMPLES)))
+PROOF_FUZZ_MAX_EXAMPLES = int(
+    os.getenv("PROOF_FUZZ_MAX_EXAMPLES", str(max(20, FUZZ_MAX_EXAMPLES // 4)))
+)
+API_FUZZ_MAX_EXAMPLES = int(
+    os.getenv("API_FUZZ_MAX_EXAMPLES", str(max(20, FUZZ_MAX_EXAMPLES // 10)))
 )
 
 
@@ -104,7 +107,9 @@ def _get_fuzz_client() -> TestClient:
     # never exhaust the default 60-token limit.  This is idempotent when the
     # policy is already set, and corrective when _reset_ingest_state_for_tests
     # has been called by another test function since the last example.
-    ingest_api._set_rate_limit_for_tests("ingest", capacity=10_000.0, refill_rate_per_second=10_000.0)
+    ingest_api._set_rate_limit_for_tests(
+        "ingest", capacity=10_000.0, refill_rate_per_second=10_000.0
+    )
     return _FUZZ_CLIENT
 
 
@@ -1239,9 +1244,9 @@ def test_api_valid_ingest_returns_stable_shape(content: dict[str, Any]) -> None:
         st.sampled_from(["", " ", "a" * 300]),
         # Generative arms so the 1000-example budget is actually explored.
         sql_injection_strings,
-        st.text(max_size=0),                          # empty via strategy
-        st.text(min_size=257),                        # over typical length limits
-        st.text(st.characters(categories=["Cc"])),    # control characters as record IDs
+        st.text(max_size=0),  # empty via strategy
+        st.text(min_size=257),  # over typical length limits
+        st.text(st.characters(categories=["Cc"])),  # control characters as record IDs
     ),
 )
 @settings(max_examples=API_FUZZ_MAX_EXAMPLES, deadline=None)
@@ -1398,10 +1403,10 @@ def test_api_batch_size_limit_rejects_over_max() -> None:
 @pytest.mark.parametrize(
     "size, should_pass",
     [
-        (0, False),     # below min_length=1
-        (1, True),      # minimum valid
-        (999, True),    # one under limit
-        (1000, True),   # exact limit
+        (0, False),  # below min_length=1
+        (1, True),  # minimum valid
+        (999, True),  # one under limit
+        (1000, True),  # exact limit
         (1001, False),  # one over
         (1005, False),  # well over
     ],

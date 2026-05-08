@@ -65,7 +65,7 @@ from fastapi import HTTPException
 try:
     import zstandard as zstd  # optional: only needed for application/zstd uploads
 except ImportError:  # pragma: no cover
-    zstd = None
+    zstd = None  # type: ignore[assignment]
 
 
 logger = logging.getLogger(__name__)

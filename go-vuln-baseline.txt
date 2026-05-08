@@ -15,4 +15,18 @@
 #
 # Mirrors the policy in cargo-audit-baseline.txt and pip-audit-baseline.txt.
 
-# (no current suppressions)
+# Go 1.25.10 stdlib advisories surfaced by govulncheck v1.3.0 in the
+# verifiers/go module (which declares `go 1.21` and is built with the
+# toolchain govulncheck auto-installs, currently go1.25.10). These are all
+# Go standard-library findings against `go test ./...` of a small BLAKE3
+# verifier library that is not deployed to production; they will fall off
+# the baseline once govulncheck switches to a Go toolchain containing the
+# upstream stdlib patches. See https://pkg.go.dev/vuln/<ID> for details.
+GO-2026-4918
+GO-2026-4971
+GO-2026-4976
+GO-2026-4977
+GO-2026-4980
+GO-2026-4981
+GO-2026-4982
+GO-2026-4986
