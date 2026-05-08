@@ -284,7 +284,9 @@ control_char_strings = st.one_of(
     ),
     # Legacy fixed cases kept as anchors so regressions on known-bad bytes are
     # always covered regardless of Hypothesis shrinking / filtering.
-    st.sampled_from(["\x00", "\x00test\x00", "test\x1atest", "test\r\ntest", "test\x0btest", "\xff\xfe"]),
+    st.sampled_from(
+        ["\x00", "\x00test\x00", "test\x1atest", "test\r\ntest", "test\x0btest", "\xff\xfe"]
+    ),
 )
 
 

@@ -417,12 +417,11 @@ def _canonicalize_xml_lxml(text: str) -> str:
         Canonical UTF-8 XML text (no BOM).
 
     Raises:
-        CanonicalizationError: If lxml is unavailable or the input is malformed.
+        ImportError: If lxml is not installed (propagates to ``canonicalize_xml``
+            which then activates the regex fallback).
+        CanonicalizationError: If the input is malformed XML.
     """
-    try:
-        from lxml import etree
-    except ImportError:  # pragma: no cover
-        raise CanonicalizationError("lxml is required for XML canonicalization") from None
+    from lxml import etree  # ImportError propagates; canonicalize_xml's except clause handles it
 
     parser = etree.XMLParser(
         resolve_entities=False,

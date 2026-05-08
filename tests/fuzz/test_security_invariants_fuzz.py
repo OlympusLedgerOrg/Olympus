@@ -1358,11 +1358,8 @@ def test_api_invalid_surrogate_json_rejected_no_500() -> None:
         content=raw,
         headers={**_auth_headers(), "content-type": "application/json"},
     )
-    assert resp.status_code != 500, (
-        f"API-5 FAIL: lone-surrogate JSON body caused 500. Body: {resp.text[:200]}"
-    )
     assert 400 <= resp.status_code < 500, (
-        f"API-5 FAIL: expected 4xx for invalid JSON, got {resp.status_code}. Body: {resp.text[:200]}"
+        f"API-6 FAIL: expected 4xx for lone-surrogate JSON, got {resp.status_code}. Body: {resp.text[:200]}"
     )
     _assert_no_leakage(resp.text, context="surrogate-json")
 

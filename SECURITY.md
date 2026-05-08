@@ -312,7 +312,7 @@ detected before any proof is accepted.
    > always fail.
 
 2. **Set the environment variable** (or inject via your secrets manager):
-   ```
+   ```sh
    OLYMPUS_ZK_VKEY_HASH=<64-character hex digest>
    ```
 

@@ -80,12 +80,25 @@ function _encode(value: CanonicalJsonValue, depth: number): string {
   // code-unit order is JS default string sort). Sorting on the raw key before
   // normalising would diverge from src/canonical.rs for supplementary-plane
   // characters whose NFC form changes their sort position.
-  const pairs = Object.keys(value)
+  const sortedPairs = Object.keys(value)
     .map((k) => [k, k.normalize("NFC")] as [string, string])
-    .sort((a, b) => (a[1] < b[1] ? -1 : a[1] > b[1] ? 1 : 0))
-    .map(
-      ([orig, nfc]) =>
-        `${JSON.stringify(nfc)}:${_encode((value as Record<string, CanonicalJsonValue>)[orig], depth + 1)}`,
-    );
+    .sort((a, b) => (a[1] < b[1] ? -1 : a[1] > b[1] ? 1 : 0));
+
+  // Reject objects where two distinct raw keys collapse to the same NFC form.
+  // Such objects cannot have a unique canonical encoding and indicate a
+  // malformed input that would silently corrupt ledger hashes.
+  for (let i = 1; i < sortedPairs.length; i++) {
+    if (sortedPairs[i][1] === sortedPairs[i - 1][1]) {
+      throw new Error(
+        `Canonical JSON: keys "${sortedPairs[i - 1][0]}" and "${sortedPairs[i][0]}" ` +
+          `both normalize to "${sortedPairs[i][1]}" — duplicate NFC keys break canonical uniqueness`,
+      );
+    }
+  }
+
+  const pairs = sortedPairs.map(
+    ([orig, nfc]) =>
+      `${JSON.stringify(nfc)}:${_encode((value as Record<string, CanonicalJsonValue>)[orig], depth + 1)}`,
+  );
   return "{" + pairs.join(",") + "}";
 }
