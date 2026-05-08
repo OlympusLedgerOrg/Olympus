@@ -80,10 +80,18 @@ def test_encode_signing_fields_rejects_oversized_field(monkeypatch: pytest.Monke
     """Field length > 2**32 - 1 must raise ValueError.
 
     Lowers the module-level cap so the test does not need to allocate ~4 GiB.
+    Also pins the boundary: ``len == cap`` is accepted, ``len == cap + 1`` is
+    rejected — guards against a regression that flips ``>`` to ``>=``.
     """
     from protocol import hashes
 
     monkeypatch.setattr(hashes, "_MAX_LENGTH_PREFIXED_FIELD_SIZE", 8)
+
+    # At the cap exactly: must succeed (4-byte length prefix can hold this).
+    assert hashes.encode_signing_fields("a" * 8) == b"\x00\x00\x00\x08" + b"a" * 8
+    assert hashes.encode_signing_fields(b"\x00" * 8) == b"\x00\x00\x00\x08" + b"\x00" * 8
+
+    # One byte over: must raise.
     with pytest.raises(ValueError, match="exceeds 4-byte length limit"):
         hashes.encode_signing_fields("a" * 9)
     with pytest.raises(ValueError, match="exceeds 4-byte length limit"):
