@@ -475,7 +475,17 @@ const SMT_EMPTY_LEAF_HEX = toHex(SMT_EMPTY_LEAF);
  * @returns {string} Canonical JSON string.
  * @throws {Error} If val contains NaN, Infinity, or an unsupported type.
  */
+// Maximum nesting depth — matches src/canonical.rs MAX_DEPTH (64).
+const _CANONICAL_JSON_MAX_DEPTH = 64;
+
 function canonicalJsonEncode(val) {
+  return _canonicalJsonEncodeInner(val, 0);
+}
+
+function _canonicalJsonEncodeInner(val, depth) {
+  if (depth > _CANONICAL_JSON_MAX_DEPTH) {
+    throw new Error('canonicalJsonEncode: nesting depth ' + depth + ' exceeds maximum of ' + _CANONICAL_JSON_MAX_DEPTH);
+  }
   if (val === null) return 'null';
   if (typeof val === 'boolean') return val ? 'true' : 'false';
   if (typeof val === 'number') {
@@ -501,17 +511,25 @@ function canonicalJsonEncode(val) {
     return JSON.stringify(s);
   }
   if (Array.isArray(val)) {
-    return '[' + val.map(canonicalJsonEncode).join(',') + ']';
+    return '[' + val.map(function(v) { return _canonicalJsonEncodeInner(v, depth + 1); }).join(',') + ']';
   }
   if (typeof val === 'object') {
-    const keys = Object.keys(val).sort();
-    const normalizedKeys = keys.map(k => k.normalize('NFC'));
-    for (let i = 1; i < normalizedKeys.length; i++) {
-      if (normalizedKeys[i] === normalizedKeys[i - 1]) {
-        throw new Error('canonicalJsonEncode: duplicate object key after NFC normalization: ' + JSON.stringify(normalizedKeys[i]));
+    // NFC-normalise keys first, then sort by normalised form (UTF-16 code-unit
+    // order, which is JS default string sort). Sorting on the raw key before
+    // normalising would diverge from src/canonical.rs for supplementary-plane
+    // characters whose NFC form changes their sort position.
+    const nfcPairs = Object.keys(val).map(function(k) {
+      return { raw: k, nfc: k.normalize('NFC') };
+    });
+    nfcPairs.sort(function(a, b) { return a.nfc < b.nfc ? -1 : a.nfc > b.nfc ? 1 : 0; });
+    for (let i = 1; i < nfcPairs.length; i++) {
+      if (nfcPairs[i].nfc === nfcPairs[i - 1].nfc) {
+        throw new Error('canonicalJsonEncode: duplicate object key after NFC normalization: ' + JSON.stringify(nfcPairs[i].nfc));
       }
     }
-    const pairs = normalizedKeys.map((nk, i) => JSON.stringify(nk) + ':' + canonicalJsonEncode(val[keys[i]]));
+    const pairs = nfcPairs.map(function(p) {
+      return JSON.stringify(p.nfc) + ':' + _canonicalJsonEncodeInner(val[p.raw], depth + 1);
+    });
     return '{' + pairs.join(',') + '}';
   }
   throw new TypeError('canonicalJsonEncode: unsupported type: ' + typeof val);

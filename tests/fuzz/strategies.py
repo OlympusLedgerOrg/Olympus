@@ -263,16 +263,30 @@ path_like_strings = st.sampled_from(
     ]
 )
 
-# Strings containing null bytes and control characters
-control_char_strings = st.sampled_from(
-    [
-        "\x00",
-        "\x00test\x00",
-        "test\x1atest",
-        "test\r\ntest",
-        "test\x0btest",
-        "\xff\xfe",
-    ]
+# Strings containing null bytes and control characters.
+# Built generatively so Hypothesis can explore the full space rather than
+# exhausting a fixed list in the first 6 draws.
+# Cc = Unicode control characters (serializable as JSON).
+# Cs (surrogates) deliberately excluded: Python str can hold them but UTF-8
+# JSON encoding raises UnicodeEncodeError, which is a transport boundary, not
+# an Olympus API bug. Surrogate handling is covered by the dedicated raw-body
+# regression test (test_api_invalid_surrogate_json_rejected_no_500).
+_control_chars = st.characters(categories=["Cc"])
+control_char_strings = st.one_of(
+    # Pure control character (always exercise the raw-byte path)
+    st.text(_control_chars, min_size=1, max_size=1),
+    # Control character embedded in printable text
+    st.builds(
+        lambda prefix, ctrl, suffix: prefix + ctrl + suffix,
+        prefix=st.text(st.characters(categories=["L", "N"]), min_size=0, max_size=16),
+        ctrl=st.text(_control_chars, min_size=1, max_size=3),
+        suffix=st.text(st.characters(categories=["L", "N"]), min_size=0, max_size=16),
+    ),
+    # Legacy fixed cases kept as anchors so regressions on known-bad bytes are
+    # always covered regardless of Hypothesis shrinking / filtering.
+    st.sampled_from(
+        ["\x00", "\x00test\x00", "test\x1atest", "test\r\ntest", "test\x0btest", "\xff\xfe"]
+    ),
 )
 
 

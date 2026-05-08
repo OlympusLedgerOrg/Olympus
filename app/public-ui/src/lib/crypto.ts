@@ -23,20 +23,33 @@ export type CanonicalJsonValue =
   | { [key: string]: CanonicalJsonValue };
 
 /**
+ * Maximum nesting depth. Matches src/canonical.rs MAX_DEPTH (64).
+ * Prevents stack overflow on adversarial input; real ledger documents nest
+ * only a handful of levels.
+ */
+const MAX_DEPTH = 64;
+
+/**
  * Encode a value as canonical JSON (JCS / RFC 8785).
  *
  * Rules:
- *  - Object keys sorted lexicographically (Unicode code-point order).
+ *  - Object keys NFC-normalised first, then sorted by UTF-16 code-unit order
+ *    (RFC 8785 §3.2.3). Sort is on the normalised form — matches src/canonical.rs.
  *  - No whitespace between tokens.
  *  - Strings normalised to NFC.
  *  - Numbers: integers serialised without decimal point; floats use the
  *    shortest representation that round-trips (matching JSON.stringify).
  */
 export function canonicalJsonEncode(value: CanonicalJsonValue): string {
-  return _encode(value);
+  return _encode(value, 0);
 }
 
-function _encode(value: CanonicalJsonValue): string {
+function _encode(value: CanonicalJsonValue, depth: number): string {
+  if (depth > MAX_DEPTH) {
+    throw new Error(
+      `Canonical JSON nesting depth ${depth} exceeds maximum of ${MAX_DEPTH}`,
+    );
+  }
   if (value === null) return "null";
   if (typeof value === "boolean") return value ? "true" : "false";
   if (typeof value === "number") {
@@ -61,12 +74,31 @@ function _encode(value: CanonicalJsonValue): string {
     return JSON.stringify(value.normalize("NFC"));
   }
   if (Array.isArray(value)) {
-    return "[" + value.map(_encode).join(",") + "]";
+    return "[" + value.map((v) => _encode(v, depth + 1)).join(",") + "]";
   }
-  // Object: sort keys lexicographically
-  const sortedKeys = Object.keys(value).sort();
-  const pairs = sortedKeys.map(
-    (k) => `${JSON.stringify(k.normalize("NFC"))}:${_encode((value as Record<string, CanonicalJsonValue>)[k])}`,
+  // Object: NFC-normalise keys first, then sort by normalised form (UTF-16
+  // code-unit order is JS default string sort). Sorting on the raw key before
+  // normalising would diverge from src/canonical.rs for supplementary-plane
+  // characters whose NFC form changes their sort position.
+  const sortedPairs = Object.keys(value)
+    .map((k) => [k, k.normalize("NFC")] as [string, string])
+    .sort((a, b) => (a[1] < b[1] ? -1 : a[1] > b[1] ? 1 : 0));
+
+  // Reject objects where two distinct raw keys collapse to the same NFC form.
+  // Such objects cannot have a unique canonical encoding and indicate a
+  // malformed input that would silently corrupt ledger hashes.
+  for (let i = 1; i < sortedPairs.length; i++) {
+    if (sortedPairs[i][1] === sortedPairs[i - 1][1]) {
+      throw new Error(
+        `Canonical JSON: keys "${sortedPairs[i - 1][0]}" and "${sortedPairs[i][0]}" ` +
+          `both normalize to "${sortedPairs[i][1]}" — duplicate NFC keys break canonical uniqueness`,
+      );
+    }
+  }
+
+  const pairs = sortedPairs.map(
+    ([orig, nfc]) =>
+      `${JSON.stringify(nfc)}:${_encode((value as Record<string, CanonicalJsonValue>)[orig], depth + 1)}`,
   );
   return "{" + pairs.join(",") + "}";
 }

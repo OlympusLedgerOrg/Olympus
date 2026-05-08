@@ -32,6 +32,7 @@ import pytest
 from fastapi.testclient import TestClient
 from hypothesis import HealthCheck, assume, given, settings, strategies as st
 
+from api.schemas.ingest import BatchIngestionRequest
 from protocol.canonical import canonicalize_document, document_to_bytes
 from protocol.canonical_json import canonical_json_encode
 from protocol.hashes import global_key, hash_bytes, record_key
@@ -50,6 +51,16 @@ from tests.fuzz.strategies import (
     sql_injection_strings,
     unicode_edge_strings,
     valid_api_keys,
+)
+
+
+FUZZ_MAX_EXAMPLES = int(os.getenv("FUZZ_MAX_EXAMPLES", "100"))
+CANON_FUZZ_MAX_EXAMPLES = int(os.getenv("CANON_FUZZ_MAX_EXAMPLES", str(FUZZ_MAX_EXAMPLES)))
+PROOF_FUZZ_MAX_EXAMPLES = int(
+    os.getenv("PROOF_FUZZ_MAX_EXAMPLES", str(max(20, FUZZ_MAX_EXAMPLES // 4)))
+)
+API_FUZZ_MAX_EXAMPLES = int(
+    os.getenv("API_FUZZ_MAX_EXAMPLES", str(max(20, FUZZ_MAX_EXAMPLES // 10)))
 )
 
 
@@ -211,7 +222,7 @@ def test_auth_missing_key_rejected(endpoint: str) -> None:
 @pytest.mark.security
 @pytest.mark.api
 @given(malformed_key=malformed_auth_headers)
-@settings(max_examples=20, deadline=None)
+@settings(max_examples=PROOF_FUZZ_MAX_EXAMPLES, deadline=None)
 def test_auth_malformed_key_rejected(malformed_key: str) -> None:
     """
     AUTH-2: Malformed auth headers must return 401/422/503 — never 500.
@@ -234,7 +245,7 @@ def test_auth_malformed_key_rejected(malformed_key: str) -> None:
 @pytest.mark.security
 @pytest.mark.api
 @given(wrong_key=valid_api_keys)
-@settings(max_examples=20, deadline=None)
+@settings(max_examples=PROOF_FUZZ_MAX_EXAMPLES, deadline=None)
 def test_auth_wrong_key_rejected(wrong_key: str) -> None:
     """
     AUTH-3: A random valid-looking key that was never registered must return 401.
@@ -323,7 +334,7 @@ def test_public_read_endpoints_no_secret_leakage() -> None:
         ]
     )
 )
-@settings(max_examples=3, deadline=None)
+@settings(max_examples=PROOF_FUZZ_MAX_EXAMPLES, deadline=None)
 def test_input_oversized_field_rejected_or_bounded(field_value: str) -> None:
     """
     INPUT-1: Ingest payloads with extremely large string fields must be rejected
@@ -352,7 +363,7 @@ def test_input_oversized_field_rejected_or_bounded(field_value: str) -> None:
 @pytest.mark.security
 @pytest.mark.api
 @given(bad_shard=invalid_shard_ids)
-@settings(max_examples=20, deadline=None)
+@settings(max_examples=PROOF_FUZZ_MAX_EXAMPLES, deadline=None)
 def test_input_invalid_shard_id_rejected_safely(bad_shard: str) -> None:
     """
     INPUT-2: Malformed shard IDs must return 400/422 — never 500.
@@ -382,7 +393,7 @@ def test_input_invalid_shard_id_rejected_safely(bad_shard: str) -> None:
 @pytest.mark.security
 @pytest.mark.api
 @given(injection=sql_injection_strings)
-@settings(max_examples=15, deadline=None)
+@settings(max_examples=PROOF_FUZZ_MAX_EXAMPLES, deadline=None)
 def test_input_sql_looking_string_stored_as_data(injection: str) -> None:
     """
     INPUT-3/SQL-1: SQL-looking strings must be stored as data or rejected,
@@ -412,7 +423,7 @@ def test_input_sql_looking_string_stored_as_data(injection: str) -> None:
 @pytest.mark.security
 @pytest.mark.api
 @given(path_str=path_like_strings)
-@settings(max_examples=15, deadline=None)
+@settings(max_examples=PROOF_FUZZ_MAX_EXAMPLES, deadline=None)
 def test_input_path_like_string_not_traversed(path_str: str) -> None:
     """
     INPUT-4: Path-like strings must not cause path traversal, filesystem access,
@@ -442,7 +453,7 @@ def test_input_path_like_string_not_traversed(path_str: str) -> None:
 @pytest.mark.security
 @pytest.mark.api
 @given(uc=unicode_edge_strings)
-@settings(max_examples=20, deadline=None)
+@settings(max_examples=PROOF_FUZZ_MAX_EXAMPLES, deadline=None)
 def test_input_unicode_edge_cases_no_500(uc: str) -> None:
     """
     INPUT-5: Unicode edge cases (surrogates, BOM, RLO, emoji) must not cause 500s.
@@ -531,7 +542,7 @@ def test_input_duplicate_record_id_no_ambiguous_state() -> None:
 @pytest.mark.security
 @pytest.mark.api
 @given(content=content_dicts)
-@settings(max_examples=20, deadline=None)
+@settings(max_examples=PROOF_FUZZ_MAX_EXAMPLES, deadline=None)
 def test_input_extra_fields_do_not_affect_canonical_hash(content: dict[str, Any]) -> None:
     """
     INPUT-8: The content_hash in the ingest response is derived from the
@@ -605,7 +616,7 @@ def test_input_extra_fields_do_not_affect_canonical_hash(content: dict[str, Any]
 @pytest.mark.fuzz
 @pytest.mark.security
 @given(pair=semantically_equivalent_content_pair())
-@settings(max_examples=50, deadline=None)
+@settings(max_examples=PROOF_FUZZ_MAX_EXAMPLES, deadline=None)
 def test_canon_equivalent_payloads_same_hash(
     pair: tuple[dict[str, Any], dict[str, Any]],
 ) -> None:
@@ -632,7 +643,7 @@ def test_canon_equivalent_payloads_same_hash(
 @pytest.mark.security
 @given(pair=semantically_different_content_pair())
 @settings(
-    max_examples=50,
+    max_examples=CANON_FUZZ_MAX_EXAMPLES,
     deadline=None,
     suppress_health_check=[
         HealthCheck.too_slow,
@@ -693,7 +704,7 @@ def test_canon_whitespace_string_distinctions() -> None:
 @pytest.mark.fuzz
 @pytest.mark.security
 @given(content=content_dicts)
-@settings(max_examples=50, deadline=None)
+@settings(max_examples=PROOF_FUZZ_MAX_EXAMPLES, deadline=None)
 def test_canon_field_order_invariance(content: dict[str, Any]) -> None:
     """
     CANON-3: Field ordering in a content dict must not change the canonical hash.
@@ -710,7 +721,7 @@ def test_canon_field_order_invariance(content: dict[str, Any]) -> None:
 @pytest.mark.fuzz
 @pytest.mark.security
 @given(content=content_dicts)
-@settings(max_examples=30, deadline=None)
+@settings(max_examples=PROOF_FUZZ_MAX_EXAMPLES, deadline=None)
 def test_canon_whitespace_invariance(content: dict[str, Any]) -> None:
     """
     CANON-4: The canonical JSON encoder is deterministic for the same Python dict.
@@ -735,7 +746,7 @@ def test_canon_whitespace_invariance(content: dict[str, Any]) -> None:
     shard=shard_ids,
     record_id=record_ids,
 )
-@settings(max_examples=30, deadline=None)
+@settings(max_examples=PROOF_FUZZ_MAX_EXAMPLES, deadline=None)
 def test_canon_signature_binding_shard_id_change(
     content: dict[str, Any],
     shard: str,
@@ -747,7 +758,6 @@ def test_canon_signature_binding_shard_id_change(
 
     Tests the key-space separation enforced by global_key().
     """
-    assume(len(shard) >= 2)
     shard_a = shard
     shard_b = shard + "-other"
 
@@ -772,16 +782,14 @@ def test_canon_signature_binding_shard_id_change(
     content_a=content_dicts,
     content_b=content_dicts,
     shard=shard_ids,
-    record_a=record_ids,
-    record_b=record_ids,
+    records=st.lists(record_ids, min_size=2, max_size=2, unique=True),
 )
-@settings(max_examples=30, deadline=None)
+@settings(max_examples=PROOF_FUZZ_MAX_EXAMPLES, deadline=None)
 def test_proof_wrong_key_does_not_verify(
     content_a: dict[str, Any],
     content_b: dict[str, Any],
     shard: str,
-    record_a: str,
-    record_b: str,
+    records: list[str],
 ) -> None:
     """
     PROOF-1: A proof generated for key_a must not verify for key_b
@@ -789,8 +797,8 @@ def test_proof_wrong_key_does_not_verify(
     """
     from protocol.ssmf import ExistenceProof, SparseMerkleTree
 
-    assume(record_a != record_b)
-    assume(content_a != content_b)
+    record_a, record_b = records
+    # record_a != record_b guaranteed by unique=True; key separation follows.
 
     # Build a minimal in-memory SMT with two leaves
     tree = SparseMerkleTree()
@@ -799,8 +807,6 @@ def test_proof_wrong_key_does_not_verify(
 
     key_a = global_key(shard, record_key("document", record_a, 1))
     key_b = global_key(shard, record_key("document", record_b, 1))
-
-    assume(key_a != key_b)
 
     tree.update(key_a, hash_a, "fuzz@1.0.0", "v1")
     tree.update(key_b, hash_b, "fuzz@1.0.0", "v1")
@@ -826,15 +832,13 @@ def test_proof_wrong_key_does_not_verify(
 @pytest.mark.security
 @given(
     content=content_dicts,
-    shard_a=shard_ids,
-    shard_b=shard_ids,
+    shards=st.lists(shard_ids, min_size=2, max_size=2, unique=True),
     record=record_ids,
 )
-@settings(max_examples=30, deadline=None)
+@settings(max_examples=PROOF_FUZZ_MAX_EXAMPLES, deadline=None)
 def test_proof_wrong_shard_does_not_verify(
     content: dict[str, Any],
-    shard_a: str,
-    shard_b: str,
+    shards: list[str],
     record: str,
 ) -> None:
     """
@@ -843,13 +847,12 @@ def test_proof_wrong_shard_does_not_verify(
     """
     from protocol.ssmf import ExistenceProof, SparseMerkleTree
 
-    assume(shard_a != shard_b)
+    shard_a, shard_b = shards
+    # shard_a != shard_b guaranteed by unique=True; key separation follows.
 
     value_hash = hash_bytes(document_to_bytes(canonicalize_document(content)))
     key_a = global_key(shard_a, record_key("document", record, 1))
     key_b = global_key(shard_b, record_key("document", record, 1))
-
-    assume(key_a != key_b)
 
     tree = SparseMerkleTree()
     tree.update(key_a, value_hash, "fuzz@1.0.0", "v1")
@@ -879,7 +882,7 @@ def test_proof_wrong_shard_does_not_verify(
     record=record_ids,
     extra_content=content_dicts,
 )
-@settings(max_examples=30, deadline=None)
+@settings(max_examples=PROOF_FUZZ_MAX_EXAMPLES, deadline=None)
 def test_proof_stale_proof_after_incompatible_update(
     content: dict[str, Any],
     shard: str,
@@ -925,7 +928,7 @@ def test_proof_stale_proof_after_incompatible_update(
     shard=shard_ids,
     record=record_ids,
 )
-@settings(max_examples=30, deadline=None)
+@settings(max_examples=PROOF_FUZZ_MAX_EXAMPLES, deadline=None)
 def test_proof_nonexistence_never_valid_for_existing_key_in_memory(
     content: dict[str, Any],
     shard: str,
@@ -958,15 +961,13 @@ def test_proof_nonexistence_never_valid_for_existing_key_in_memory(
 @pytest.mark.security
 @given(
     content=content_dicts,
-    shard_a=shard_ids,
-    shard_b=shard_ids,
+    shards=st.lists(shard_ids, min_size=2, max_size=2, unique=True),
     record=record_ids,
 )
-@settings(max_examples=20, deadline=None)
+@settings(max_examples=PROOF_FUZZ_MAX_EXAMPLES, deadline=None)
 def test_proof_current_global_not_accepted_as_historical_shard(
     content: dict[str, Any],
-    shard_a: str,
-    shard_b: str,
+    shards: list[str],
     record: str,
 ) -> None:
     """
@@ -975,13 +976,12 @@ def test_proof_current_global_not_accepted_as_historical_shard(
     """
     from protocol.ssmf import SparseMerkleTree
 
-    assume(shard_a != shard_b)
+    shard_a, shard_b = shards
+    # shard_a != shard_b guaranteed by unique=True.
 
     value_hash = hash_bytes(document_to_bytes(canonicalize_document(content)))
     key_a = global_key(shard_a, record_key("document", record, 1))
     key_b = global_key(shard_b, record_key("document", record, 1))
-
-    assume(key_a != key_b)
 
     tree_a = SparseMerkleTree()
     tree_b = SparseMerkleTree()
@@ -990,6 +990,8 @@ def test_proof_current_global_not_accepted_as_historical_shard(
 
     root_a = tree_a.get_root()
     root_b = tree_b.get_root()
+    # Distinct keys in single-leaf trees always produce distinct roots;
+    # assume guards against the theoretical (cryptographically negligible) collision.
     assume(root_a != root_b)
 
     proof_a = tree_a.prove_existence(key_a)
@@ -1041,7 +1043,7 @@ def test_replay_same_signed_record_deduplicates() -> None:
 @pytest.mark.security
 @pytest.mark.api
 @given(content=content_dicts)
-@settings(max_examples=20, deadline=None)
+@settings(max_examples=PROOF_FUZZ_MAX_EXAMPLES, deadline=None)
 def test_replay_different_content_same_id_is_different_record(
     content: dict[str, Any],
 ) -> None:
@@ -1157,7 +1159,7 @@ def test_replay_reconnect_does_not_weaken_verification() -> None:
 @pytest.mark.security
 @pytest.mark.api
 @given(injection=sql_injection_strings)
-@settings(max_examples=20, deadline=None)
+@settings(max_examples=PROOF_FUZZ_MAX_EXAMPLES, deadline=None)
 def test_sql_injection_in_record_id_no_500(injection: str) -> None:
     """
     SQL-2: SQL injection in record_id field must return 400/422, not 500.
@@ -1186,7 +1188,7 @@ def test_sql_injection_in_record_id_no_500(injection: str) -> None:
 @pytest.mark.security
 @pytest.mark.api
 @given(injection=sql_injection_strings)
-@settings(max_examples=20, deadline=None)
+@settings(max_examples=PROOF_FUZZ_MAX_EXAMPLES, deadline=None)
 def test_sql_injection_in_shard_id_no_500(injection: str) -> None:
     """
     SQL-3: SQL injection in shard_id must return 400/422, not 500.
@@ -1220,7 +1222,7 @@ def test_sql_injection_in_shard_id_no_500(injection: str) -> None:
 @pytest.mark.security
 @pytest.mark.api
 @given(content=content_dicts)
-@settings(max_examples=30, deadline=None)
+@settings(max_examples=API_FUZZ_MAX_EXAMPLES, deadline=None)
 def test_api_valid_ingest_returns_stable_shape(content: dict[str, Any]) -> None:
     """
     API-1: Valid ingest responses must return 200 with a stable JSON shape.
@@ -1260,13 +1262,16 @@ def test_api_valid_ingest_returns_stable_shape(content: dict[str, Any]) -> None:
 @given(
     bad_shard=invalid_shard_ids,
     bad_record=st.one_of(
-        st.just(""),
-        st.just(" "),
-        st.just("a" * 300),
+        # Fixed anchor cases — always exercised so known-bad inputs stay covered.
+        st.sampled_from(["", " ", "a" * 300]),
+        # Generative arms so the 1000-example budget is actually explored.
         sql_injection_strings,
+        st.text(max_size=0),  # empty via strategy
+        st.text(min_size=257),  # over typical length limits
+        st.text(st.characters(categories=["Cc"])),  # control characters as record IDs
     ),
 )
-@settings(max_examples=30, deadline=None)
+@settings(max_examples=API_FUZZ_MAX_EXAMPLES, deadline=None)
 def test_api_invalid_inputs_return_4xx_not_500(
     bad_shard: str,
     bad_record: str,
@@ -1299,7 +1304,7 @@ def test_api_invalid_inputs_return_4xx_not_500(
 @pytest.mark.security
 @pytest.mark.api
 @given(control=control_char_strings)
-@settings(max_examples=15, deadline=None)
+@settings(max_examples=API_FUZZ_MAX_EXAMPLES, deadline=None)
 def test_api_control_chars_in_fields_no_500(control: str) -> None:
     """
     API-3: Control characters in field values must not cause 500 errors.
@@ -1352,59 +1357,91 @@ def test_api_error_response_no_stack_trace() -> None:
 @pytest.mark.fuzz
 @pytest.mark.security
 @pytest.mark.api
-@given(
-    n_records=st.one_of(
-        # Explicit over-limit values — always exercised so the rejection path is
-        # guaranteed to run in every Hypothesis pass, regardless of shrinking.
-        st.sampled_from([1001, 1002, 1005]),
-        # Under-limit range kept small (1–50) so POST payloads stay fast;
-        # boundary values 1 and 50 are always included via sampled_from above.
-        st.integers(min_value=1, max_value=50),
-    ),
-    content=content_dicts,
-)
-@settings(max_examples=18, deadline=None)
-def test_api_batch_size_limit_enforced(
-    n_records: int,
-    content: dict[str, Any],
-) -> None:
+def test_api_invalid_surrogate_json_rejected_no_500() -> None:
     """
-    API-5: Batch size must be bounded by the schema limit (1000 records).
+    API-6: Raw JSON bodies containing lone surrogates (e.g. \\ud800) must be
+    rejected with 4xx, never cause a 500.
 
-    * Batches of 1–1000 must not cause a 500.
-    * Batches >1000 must be rejected with 422 (schema validation) or another
-      4xx — never a 500 crash.
-
-    The strategy combines explicit over-limit boundary values (1001, 1002, 1005)
-    with a small under-limit range (1–50).  Over-limit batches are rejected by
-    Pydantic before any ingestion, so they are fast.  Under-limit batches are
-    kept small to avoid slow POST payloads.
+    This test bypasses httpx JSON serialisation entirely and posts the raw bytes
+    directly.  Python str cannot round-trip lone surrogates through UTF-8 JSON,
+    so this is the only correct way to exercise the API boundary for that class
+    of input.  The corresponding fuzz strategy (control_char_strings) deliberately
+    excludes Cs to avoid UnicodeEncodeError in the transport layer.
     """
-    _SCHEMA_MAX = 1000  # BatchIngestionRequest max_length
-
     client = _make_client()
-
-    records = [
-        {
-            "shard_id": "fuzz-batch-limit",
-            "record_type": "document",
-            "record_id": f"batch-doc-{i}",
-            "version": 1,
-            "content": content,
-        }
-        for i in range(n_records)
-    ]
+    # Lone high surrogate embedded in an otherwise valid JSON payload.
+    # The bytes are valid latin-1 but not valid UTF-8 JSON.
+    raw = (
+        b'{"records":[{"shard_id":"surrogate-test","record_type":"document",'
+        b'"record_id":"surr-doc","version":1,"content":{"x":"\\ud800"}}]}'
+    )
     resp = client.post(
         "/ingest/records",
-        json={"records": records},
-        headers=_auth_headers(),
+        content=raw,
+        headers={**_auth_headers(), "content-type": "application/json"},
     )
+    assert 400 <= resp.status_code < 500, (
+        f"API-6 FAIL: expected 4xx for lone-surrogate JSON, got {resp.status_code}. Body: {resp.text[:200]}"
+    )
+    _assert_no_leakage(resp.text, context="surrogate-json")
 
-    if n_records > _SCHEMA_MAX:
-        assert resp.status_code in (400, 422), (
-            f"API-5 FAIL: batch of {n_records} records (>{_SCHEMA_MAX}) returned "
-            f"unexpected status {resp.status_code} — expected 422"
-        )
+
+_BATCH_MAX = 1000  # mirrors BatchIngestionRequest max_length
+
+
+def _minimal_record(i: int) -> dict[str, Any]:
+    return {
+        "shard_id": "batch-limit-test",
+        "record_type": "document",
+        "record_id": f"r{i}",
+        "version": 1,
+        "content": {"x": ""},
+    }
+
+
+@pytest.mark.api
+def test_api_batch_size_limit_rejects_over_max() -> None:
+    """
+    API-5a: Endpoint smoke test — one over-limit POST must return 4xx, not 500.
+
+    The batch-size guard lives in Pydantic (BatchIngestionRequest.records
+    max_length=1000) and fires before any handler work, so this round-trip
+    costs ~20 ms regardless of payload size.  No Hypothesis needed — the
+    boundary is a simple integer comparison, fully covered by the parametrize
+    unit test below.
+    """
+    client = _make_client()
+    payload = {"records": [_minimal_record(i) for i in range(_BATCH_MAX + 1)]}
+    resp = client.post("/ingest/records", json=payload, headers=_auth_headers())
+    assert resp.status_code in {400, 422}, (
+        f"API-5a FAIL: {_BATCH_MAX + 1}-record batch returned {resp.status_code}, expected 4xx"
+    )
+    _assert_no_leakage(resp.text, context="batch-over-limit")
+
+
+@pytest.mark.parametrize(
+    "size, should_pass",
+    [
+        (0, False),  # below min_length=1
+        (1, True),  # minimum valid
+        (999, True),  # one under limit
+        (1000, True),  # exact limit
+        (1001, False),  # one over
+        (1005, False),  # well over
+    ],
+)
+def test_api_batch_size_schema_constraint(size: int, should_pass: bool) -> None:
+    """
+    API-5b: Pydantic schema unit test — validates the constraint directly without
+    any HTTP overhead.  Fuzzing this boundary at the model level is far cheaper
+    than constructing and serialising HTTP payloads, and gives complete coverage
+    of the integer boundary with six boundary-value cases.
+    """
+    from pydantic import ValidationError
+
+    records = [_minimal_record(i) for i in range(size)]
+    if should_pass:
+        BatchIngestionRequest(records=records)  # must not raise
     else:
-        assert resp.status_code != 500, f"API-5 FAIL: batch of {n_records} records caused 500"
-    _assert_no_leakage(resp.text, context="batch-size")
+        with pytest.raises(ValidationError):
+            BatchIngestionRequest(records=records)

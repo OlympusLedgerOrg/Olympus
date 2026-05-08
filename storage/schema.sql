@@ -48,6 +48,7 @@ CREATE TABLE smt_leaves (
     canonical_parser_version TEXT        NOT NULL,  -- e.g. "v1"
     ts                       TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     global_seq               BIGINT      GENERATED ALWAYS AS IDENTITY,
+    shard_id                 TEXT        NOT NULL DEFAULT '',  -- ADR-0005: scopes per-shard integrity checks
     PRIMARY KEY (key, version),
     CONSTRAINT smt_leaves_key_length
         CHECK (octet_length(key) = 32),
@@ -74,5 +75,7 @@ CREATE TABLE shard_headers (
     previous_header_hash TEXT        NOT NULL,
     ts                   TIMESTAMPTZ NOT NULL,
     created_at           TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    PRIMARY KEY (shard_id, seq)
+    PRIMARY KEY (shard_id, seq),
+    CONSTRAINT shard_headers_positive_seq_requires_leaf_seq
+        CHECK (seq = 0 OR leaf_seq > 0)  -- ADR-0005: prevents genesis-slot header forgery
 );

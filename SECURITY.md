@@ -333,4 +333,3 @@ timeout allows a malformed or adversarially crafted proof to stall the verifier
 process for the full interval, creating a denial-of-service vector.  If your
 circuit genuinely requires longer verification, document the benchmark result
 and update the constant with a comment explaining why.
-

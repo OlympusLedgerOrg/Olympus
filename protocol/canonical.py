@@ -15,8 +15,8 @@ Extended format support (v2.1+):
 
 - **Plain text**: line-ending normalization, Unicode NFC, homoglyph scrubbing,
   trailing-whitespace removal, BOM stripping.
-- **XML**: Exclusive XML Canonicalization (C14N) subset — sorted attributes,
-  self-closing tag normalization, comment/PI stripping, NFC normalization.
+- **XML**: Canonical XML 2.0 via lxml (primary path) with a regex-based
+  fallback — sorted attributes, comment/PI stripping, NFC normalization.
 - **CSV/TSV**: deterministic delimiter, quoting, row ordering by canonical
   JSON key, NFC normalization, and BOM stripping.
 """
@@ -458,7 +458,7 @@ def _sort_xml_attributes(match: re.Match[str]) -> str:
 def canonicalize_xml(text: str) -> str:
     """Canonicalize XML text for deterministic hashing.
 
-    Primary path (when lxml is available — the default): uses lxml's C14N 2.0
+    Primary path (when lxml is available - the default): uses lxml's C14N 2.0
     implementation which correctly handles CDATA sections, namespace prefixes,
     default namespace declarations, and attribute-value entities.
 
@@ -489,16 +489,16 @@ def canonicalize_xml(text: str) -> str:
     if len(text.encode("utf-8")) > _MAX_XML_BYTES:
         raise CanonicalizationError(f"XML text exceeds maximum size ({_MAX_XML_BYTES} bytes)")
 
-    # Primary: lxml C14N 2.0
+    # Primary path: lxml Canonical XML 2.0 (safe parser, no XXE).
     if _LXML_AVAILABLE:
         return _canonicalize_xml_lxml(text)
 
     # Fallback: regex-based subset (lxml not installed)
-    # Step 1–2: BOM + NFC
+    # Step 1-2: BOM + NFC
     text = _strip_bom(text)
     text = unicodedata.normalize("NFC", text)
 
-    # Step 3–5: Remove PIs, comments, DOCTYPE
+    # Step 3-5: Remove PIs, comments, DOCTYPE
     text = _XML_PI_RE.sub("", text)
     text = _XML_COMMENT_RE.sub("", text)
     text = _XML_DOCTYPE_RE.sub("", text)

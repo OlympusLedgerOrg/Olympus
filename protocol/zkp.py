@@ -519,23 +519,39 @@ class Groth16Prover:
         self,
         proof: ZKProof,
         verification_key_path: Path | None = None,
-        statement: Statement | None = None,
+        *,
+        statement: Statement | dict[str, Any] | None = None,
+        expected_vkey_hash: str | None = None,
     ) -> bool:
         """Verify a Groth16 proof with snarkjs.
 
         Args:
-            proof: The ZKProof to verify.
-            verification_key_path: Optional explicit path to the vkey JSON file.
+            proof: The :class:`ZKProof` to verify.
+            verification_key_path: Explicit path to the verification key JSON.
                 If omitted, the key is located under ``circuits_dir/keys/``.
-            statement: Optional :class:`~protocol.proof_interface.Statement`
-                whose public inputs must match ``proof.public_signals`` (sorted
-                by key).  When provided, a mismatch raises
+            statement: Optional :class:`~protocol.proof_interface.Statement` or
+                mapping of public-input name to expected value. When provided,
+                its sorted public inputs must match ``proof.public_signals``.
+                A mismatch raises
                 :class:`ValueError` before any subprocess is spawned.  This
                 prevents accepting a valid Groth16 proof that was generated for
                 a *different* statement.
+            expected_vkey_hash: Optional hex digest produced by
+                ``protocol.hashes.hash_bytes(vkey_bytes).hex()``.  When
+                provided, the on-disk verification key is hashed before the
+                subprocess is called; a mismatch raises :class:`ValueError` so
+                a swapped key is caught before any proof is accepted.
 
         Returns:
-            True if the proof cryptographically verifies, False otherwise.
+            ``True`` if the proof verifies cryptographically, ``False``
+            otherwise.
+
+        Raises:
+            ValueError: If *statement* is provided and its sorted public-input
+                values do not match *proof.public_signals*, or if
+                *expected_vkey_hash* is provided and the on-disk key hash
+                differs.
+            FileNotFoundError: If the verification key file cannot be located.
         """
         self._check_snarkjs()
 
@@ -544,9 +560,13 @@ class Groth16Prover:
         self._validate_circuit_name(proof.circuit)
 
         # B1: Enforce statement ↔ proof public-input equality when a statement
-        # is supplied.  statement.to_list() returns inputs sorted by key.
+        # is supplied.  Statement.to_list() returns inputs sorted by key.
         if statement is not None:
-            expected_signals = [str(v) for v in statement.to_list()]
+            if isinstance(statement, Statement):
+                expected_values = statement.to_list()
+            else:
+                expected_values = [statement[k] for k in sorted(statement.keys())]
+            expected_signals = [str(v) for v in expected_values]
             actual_signals = [str(v) for v in proof.public_signals]
             if expected_signals != actual_signals:
                 raise ValueError(
@@ -564,6 +584,18 @@ class Groth16Prover:
 
         if not vkey.exists():
             raise FileNotFoundError(f"Verification key not found: {vkey}")
+
+        # Optional: verify the on-disk key matches the pinned hash so a
+        # swapped or corrupted key is caught before proof verification runs.
+        if expected_vkey_hash is not None:
+            vkey_bytes = vkey.read_bytes()
+            actual_hash = hash_bytes(vkey_bytes).hex()
+            if actual_hash != expected_vkey_hash:
+                raise ValueError(
+                    f"Verification key hash mismatch for circuit '{proof.circuit}': "
+                    f"expected {expected_vkey_hash!r}, got {actual_hash!r}. "
+                    "The on-disk key may have been replaced or corrupted."
+                )
 
         with tempfile.TemporaryDirectory() as tmpdir:
             tmp_path = Path(tmpdir)
