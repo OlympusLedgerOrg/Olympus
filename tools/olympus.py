@@ -9,8 +9,7 @@ import sys
 from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
-from typing import Optional
-from typing import NoReturn
+from typing import Annotated, NoReturn
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlparse
 from urllib.request import Request, urlopen
@@ -21,13 +20,14 @@ from rich.console import Console
 from rich.panel import Panel
 from rich.syntax import Syntax
 from rich.table import Table
-from typing_extensions import Annotated
+
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from protocol.canonical import canonicalize_document, document_to_bytes
 from protocol.federation import FederationRegistry
 from protocol.hashes import blake3_hash, hash_bytes
+
 
 # ---------------------------------------------------------------------------
 # Console + global state
@@ -78,7 +78,9 @@ app.add_typer(fed_app, name="federation")
 def _global(
     api_url: Annotated[
         str,
-        typer.Option(envvar="OLYMPUS_API_URL", help="API base URL", show_default="http://localhost:8000"),
+        typer.Option(
+            envvar="OLYMPUS_API_URL", help="API base URL", show_default="http://localhost:8000"
+        ),
     ] = "http://localhost:8000",
     api_key: Annotated[
         str,
@@ -102,6 +104,7 @@ def _global(
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
 
 def _die(msg: str) -> NoReturn:
     err.print(f"[bold red]error:[/] {msg}")
@@ -212,16 +215,18 @@ def ingest(
     namespace: Annotated[str, typer.Option(help="Ledger namespace")] = "default",
     id: Annotated[str, typer.Option("--id", help="Artifact ID (defaults to filename)")] = "",
     source_url: Annotated[str, typer.Option(help="Source URL for the artifact")] = "",
-    raw_pdf: Annotated[Optional[Path], typer.Option(help="Raw PDF to anchor alongside", exists=True)] = None,
+    raw_pdf: Annotated[
+        Path | None, typer.Option(help="Raw PDF to anchor alongside", exists=True)
+    ] = None,
     generate_proof: Annotated[
         bool, typer.Option("--generate-proof", help="Fetch proof bundle after commit")
     ] = False,
     verify: Annotated[bool, typer.Option("--verify", help="Verify the committed hash")] = False,
     api_url: Annotated[
-        Optional[str], typer.Option("--api-url", envvar="OLYMPUS_API_URL", help="API base URL")
+        str | None, typer.Option("--api-url", envvar="OLYMPUS_API_URL", help="API base URL")
     ] = None,
     api_key: Annotated[
-        Optional[str], typer.Option("--api-key", envvar="OLYMPUS_API_KEY", help="API key")
+        str | None, typer.Option("--api-key", envvar="OLYMPUS_API_KEY", help="API key")
     ] = None,
     json_out: Annotated[bool, typer.Option("--json", help="Emit machine-readable JSON")] = False,
 ) -> None:
@@ -308,10 +313,10 @@ def commit(
     namespace: Annotated[str, typer.Option(help="Ledger namespace")] = "default",
     id: Annotated[str, typer.Option("--id", help="Artifact ID (defaults to filename)")] = "",
     api_url: Annotated[
-        Optional[str], typer.Option("--api-url", envvar="OLYMPUS_API_URL", help="API base URL")
+        str | None, typer.Option("--api-url", envvar="OLYMPUS_API_URL", help="API base URL")
     ] = None,
     api_key: Annotated[
-        Optional[str], typer.Option("--api-key", envvar="OLYMPUS_API_KEY", help="API key")
+        str | None, typer.Option("--api-key", envvar="OLYMPUS_API_KEY", help="API key")
     ] = None,
 ) -> None:
     """Hash a file and commit it to the ledger, printing the proof ID to stdout."""
@@ -356,12 +361,10 @@ def commit(
     print(proof_id)
 
 
-
-
 @app.command()
 def records(
     file: Annotated[
-        Optional[Path],
+        Path | None,
         typer.Argument(help="JSON file with records array (or pipe to stdin)"),
     ] = None,
     shard_id: Annotated[str, typer.Option(help="Default shard ID")] = "default",
@@ -483,7 +486,7 @@ def verify(
 @app.command()
 def canon(
     input_file: Annotated[Path, typer.Argument(help="JSON file to canonicalize", exists=True)],
-    output: Annotated[Optional[Path], typer.Option("-o", "--output", help="Output file")] = None,
+    output: Annotated[Path | None, typer.Option("-o", "--output", help="Output file")] = None,
     hash_only: Annotated[bool, typer.Option("--hash", help="Print BLAKE3 hash only")] = False,
     format: Annotated[_CanonFormat, typer.Option(help="Output format")] = _CanonFormat.json,
 ) -> None:
@@ -684,6 +687,7 @@ def node_start(
         uvicorn.run("api.main:app", host=host, port=port, reload=True)
     else:
         from api.main import app as api_app  # noqa: PLC0415
+
         uvicorn.run(api_app, host=host, port=port, reload=False)
 
 

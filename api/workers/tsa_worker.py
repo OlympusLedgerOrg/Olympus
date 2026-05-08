@@ -18,9 +18,12 @@ Concurrency model:
 
 * A single worker process runs ``run_worker`` (the consumer) and
   ``run_sweeper`` (the deadline enforcer) as concurrent asyncio tasks.
-* Multiple worker processes can run concurrently — claiming a job is an
-  atomic ``UPDATE ... WHERE status='pending' AND id=?`` that returns the
-  number of rows updated, so two workers never act on the same job.
+* Multiple worker processes can run concurrently — claiming a job is a
+  single ``UPDATE … WHERE id=(SELECT … LIMIT 1) AND status='pending'
+  RETURNING *`` statement.  The sub-select and the row-lock acquisition
+  are evaluated by the database engine in one step; the ``status``
+  guard is re-checked after the lock is held, so at most one worker can
+  win the claim at any PostgreSQL isolation level.
 * The TSA call itself is synchronous (``rfc3161ng`` is a sync HTTP client)
   and is dispatched to a thread via ``asyncio.to_thread`` so it doesn't
   block the event loop.
@@ -94,39 +97,39 @@ def _backoff_seconds(attempts: int) -> float:
 async def claim_one_job(session: AsyncSession) -> TsaJob | None:
     """Atomically claim a single pending job whose ``next_attempt_at`` is due.
 
-    Returns ``None`` when there is nothing to do.  Uses an explicit
-    conditional ``UPDATE`` rather than ``SELECT ... FOR UPDATE`` so the
-    same code path works on SQLite (no row locks) and Postgres.
+    Returns ``None`` when there is nothing to do.
+
+    The claim is a single ``UPDATE … WHERE id=(SELECT … LIMIT 1) AND
+    status='pending' RETURNING *`` statement.  Embedding the candidate
+    lookup as a scalar sub-select inside the UPDATE predicate eliminates
+    the read-modify-write window that existed when a separate SELECT
+    preceded the UPDATE.  PostgreSQL evaluates the sub-select, acquires
+    the row lock, and re-checks ``status = 'pending'`` in one engine
+    step — safe at READ COMMITTED and above without requiring a higher
+    isolation level.  SQLite 3.35+ supports the same syntax.
     """
     now = _utc_now()
-    candidate = (
-        (
-            await session.execute(
-                select(TsaJob)
-                .where(TsaJob.status == "pending", TsaJob.next_attempt_at <= now)
-                .order_by(TsaJob.next_attempt_at.asc())
-                .limit(1)
-            )
-        )
-        .scalars()
-        .first()
+    # Sub-select picks the best candidate inside the UPDATE predicate so
+    # there is no separate round-trip and therefore no TOCTOU window.
+    # The explicit status guard is re-evaluated after row-lock acquisition:
+    # if a concurrent worker already claimed this row, the guard fails and
+    # this worker gets back zero rows (claimed is None → retry next tick).
+    candidate_id_subq = (
+        select(TsaJob.id)
+        .where(TsaJob.status == "pending", TsaJob.next_attempt_at <= now)
+        .order_by(TsaJob.next_attempt_at.asc())
+        .limit(1)
+        .scalar_subquery()
     )
-    if candidate is None:
-        return None
-
-    # Conditional update: only one worker may claim this row.
     result = await session.execute(
         update(TsaJob)
-        .where(TsaJob.id == candidate.id, TsaJob.status == "pending")
+        .where(TsaJob.id == candidate_id_subq, TsaJob.status == "pending")
         .values(status="in_flight", claimed_at=now)
+        .returning(TsaJob)
     )
-    rowcount = getattr(result, "rowcount", 0) or 0
+    claimed = result.scalars().first()
     await session.commit()
-    if rowcount == 0:
-        # Lost the race to another worker; try again next tick.
-        return None
-    await session.refresh(candidate)
-    return candidate
+    return claimed  # None → no work available or lost the race
 
 
 def _fetch_token_sync(hash_hex: str, tsa_url: str):

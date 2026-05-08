@@ -23,6 +23,8 @@ from typing import Any
 import blake3 as _blake3
 import pikepdf
 
+from .canonical_json import MAX_JSON_DEPTH
+
 
 # PHASE-0.1 INSTITUTIONAL PINNING
 # These versions must be strictly adhered to for hash stability.
@@ -62,7 +64,8 @@ def canonicalization_provenance(
 # ---------------------------------------------------------------------------
 MAX_INPUT_SIZE: int = 256 * 1024 * 1024  # 256 MiB per artifact
 MAX_HTML_BYTES: int = 50 * 1024 * 1024  # 50 MiB maximum for HTML canonicalization
-MAX_JSON_DEPTH: int = 128  # Maximum nesting depth for JSON structures
+# MAX_JSON_DEPTH is imported from canonical_json to keep one authoritative value.
+# It equals 64, matching the Rust service and the API ingest gate.
 MAX_DOCX_ENTRIES: int = 10_000  # Maximum ZIP entries in a DOCX file
 MAX_DOCX_DECOMPRESSED: int = 512 * 1024 * 1024  # 512 MiB total decompressed
 

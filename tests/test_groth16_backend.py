@@ -654,3 +654,240 @@ class TestRapidsnarkFallback:
 
         assert isinstance(proof, Proof)
         assert proof.proof_system == ProofSystemType.GROTH16
+
+
+# ---------------------------------------------------------------------------
+# B1: Public-input equality enforcement
+# ---------------------------------------------------------------------------
+
+
+class TestPublicInputEquality:
+    """B1 — verify() must enforce statement↔proof public-input equality."""
+
+    def _make_backend_with_vkey(self, tmp_path: Path) -> tuple[Groth16Backend, Path]:
+        """Helper: create a backend with a vkey on disk."""
+        circuits_dir = tmp_path / "circuits"
+        circuits_dir.mkdir()
+        keys_dir = tmp_path / "keys"
+        vkey_dir = keys_dir / "verification_keys"
+        vkey_dir.mkdir(parents=True)
+        vkey_path = vkey_dir / "test_vkey.json"
+        vkey_path.write_text('{"protocol": "groth16"}')
+        backend = Groth16Backend(circuits_dir=circuits_dir, keys_dir=keys_dir)
+        return backend, vkey_path
+
+    def test_matching_inputs_pass_to_snarkjs(self, tmp_path: Path) -> None:
+        """Matching public inputs allow snarkjs to be called."""
+        backend, _ = self._make_backend_with_vkey(tmp_path)
+        statement = Statement(circuit="test", public_inputs={"a": "1", "b": "2"})
+        # to_list() sorts by key: ["1", "2"]
+        proof = Proof(
+            proof_data={"pi_a": [], "pi_b": [], "pi_c": []},
+            proof_system=ProofSystemType.GROTH16,
+            circuit="test",
+            public_signals=["1", "2"],
+        )
+        mock_completed = MagicMock()
+        mock_completed.returncode = 0
+        with (
+            patch("shutil.which", return_value="/usr/bin/npx"),
+            patch("protocol.groth16_backend._run_subprocess", return_value=mock_completed),
+        ):
+            result = backend.verify(statement, proof)
+        assert result is True
+
+    def test_mismatched_inputs_raise_before_snarkjs(self, tmp_path: Path) -> None:
+        """Mismatched public inputs raise ProofVerificationError before snarkjs runs."""
+        backend, _ = self._make_backend_with_vkey(tmp_path)
+        statement = Statement(circuit="test", public_inputs={"root": "123"})
+        proof = Proof(
+            proof_data={"pi_a": [], "pi_b": [], "pi_c": []},
+            proof_system=ProofSystemType.GROTH16,
+            circuit="test",
+            public_signals=["999"],  # WRONG
+        )
+        with (
+            patch("shutil.which", return_value="/usr/bin/npx"),
+            patch("protocol.groth16_backend._run_subprocess") as mock_run,
+        ):
+            with pytest.raises(ProofVerificationError, match="Public-input mismatch"):
+                backend.verify(statement, proof)
+            # snarkjs must NOT have been called
+            mock_run.assert_not_called()
+
+    def test_mismatched_length_raises(self, tmp_path: Path) -> None:
+        """Different number of public inputs raises ProofVerificationError."""
+        backend, _ = self._make_backend_with_vkey(tmp_path)
+        statement = Statement(circuit="test", public_inputs={"a": "1", "b": "2"})
+        proof = Proof(
+            proof_data={},
+            proof_system=ProofSystemType.GROTH16,
+            circuit="test",
+            public_signals=["1"],  # missing second signal
+        )
+        with (
+            patch("shutil.which", return_value="/usr/bin/npx"),
+            patch("protocol.groth16_backend._run_subprocess") as mock_run,
+        ):
+            with pytest.raises(ProofVerificationError, match="Public-input mismatch"):
+                backend.verify(statement, proof)
+            mock_run.assert_not_called()
+
+    def test_empty_inputs_match(self, tmp_path: Path) -> None:
+        """Empty statement and empty proof signals are equal — passes through."""
+        backend, _ = self._make_backend_with_vkey(tmp_path)
+        statement = Statement(circuit="test", public_inputs={})
+        proof = Proof(
+            proof_data={"pi_a": [], "pi_b": [], "pi_c": []},
+            proof_system=ProofSystemType.GROTH16,
+            circuit="test",
+            public_signals=[],
+        )
+        mock_completed = MagicMock()
+        mock_completed.returncode = 0
+        with (
+            patch("shutil.which", return_value="/usr/bin/npx"),
+            patch("protocol.groth16_backend._run_subprocess", return_value=mock_completed),
+        ):
+            result = backend.verify(statement, proof)
+        assert result is True
+
+
+# ---------------------------------------------------------------------------
+# B2: Verification-key hash pin
+# ---------------------------------------------------------------------------
+
+
+class TestVkeyHashPin:
+    """B2 — verify() must reject a swapped vkey file when OLYMPUS_ZK_VKEY_HASH is set."""
+
+    def _setup(self, tmp_path: Path) -> tuple[Groth16Backend, Path]:
+        circuits_dir = tmp_path / "circuits"
+        circuits_dir.mkdir()
+        keys_dir = tmp_path / "keys"
+        vkey_dir = keys_dir / "verification_keys"
+        vkey_dir.mkdir(parents=True)
+        vkey_path = vkey_dir / "test_vkey.json"
+        vkey_content = b'{"protocol": "groth16"}'
+        vkey_path.write_bytes(vkey_content)
+        backend = Groth16Backend(circuits_dir=circuits_dir, keys_dir=keys_dir)
+        return backend, vkey_path
+
+    def test_correct_hash_passes(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Correct vkey hash pin allows verification to proceed."""
+        from protocol.hashes import hash_bytes as _hash_bytes
+
+        backend, vkey_path = self._setup(tmp_path)
+        correct_hash = _hash_bytes(vkey_path.read_bytes()).hex()
+        monkeypatch.setenv("OLYMPUS_ZK_VKEY_HASH", correct_hash)
+
+        statement = Statement(circuit="test", public_inputs={"root": "1"})
+        proof = Proof(
+            proof_data={"pi_a": [], "pi_b": [], "pi_c": []},
+            proof_system=ProofSystemType.GROTH16,
+            circuit="test",
+            public_signals=["1"],
+        )
+        mock_completed = MagicMock()
+        mock_completed.returncode = 0
+        with (
+            patch("shutil.which", return_value="/usr/bin/npx"),
+            patch("protocol.groth16_backend._run_subprocess", return_value=mock_completed),
+        ):
+            result = backend.verify(statement, proof)
+        assert result is True
+
+    def test_wrong_hash_raises_before_snarkjs(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Wrong vkey hash raises ProofVerificationError before snarkjs runs."""
+        backend, _ = self._setup(tmp_path)
+        monkeypatch.setenv("OLYMPUS_ZK_VKEY_HASH", "deadbeef" * 8)  # 64-char hex, but wrong hash
+
+        statement = Statement(circuit="test", public_inputs={"root": "1"})
+        proof = Proof(
+            proof_data={},
+            proof_system=ProofSystemType.GROTH16,
+            circuit="test",
+            public_signals=["1"],
+        )
+        with (
+            patch("shutil.which", return_value="/usr/bin/npx"),
+            patch("protocol.groth16_backend._run_subprocess") as mock_run,
+        ):
+            with pytest.raises(ProofVerificationError, match="hash mismatch"):
+                backend.verify(statement, proof)
+            mock_run.assert_not_called()
+
+    def test_no_hash_env_var_skips_check(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """When OLYMPUS_ZK_VKEY_HASH is unset the vkey hash check is skipped."""
+        monkeypatch.delenv("OLYMPUS_ZK_VKEY_HASH", raising=False)
+        backend, _ = self._setup(tmp_path)
+        statement = Statement(circuit="test", public_inputs={"root": "1"})
+        proof = Proof(
+            proof_data={"pi_a": [], "pi_b": [], "pi_c": []},
+            proof_system=ProofSystemType.GROTH16,
+            circuit="test",
+            public_signals=["1"],
+        )
+        mock_completed = MagicMock()
+        mock_completed.returncode = 0
+        with (
+            patch("shutil.which", return_value="/usr/bin/npx"),
+            patch("protocol.groth16_backend._run_subprocess", return_value=mock_completed),
+        ):
+            result = backend.verify(statement, proof)
+        assert result is True
+
+
+# ---------------------------------------------------------------------------
+# B5: Verify timeout is tight
+# ---------------------------------------------------------------------------
+
+
+class TestVerifyTimeout:
+    """B5 — _VERIFY_TIMEOUT_SECS must be a small positive value."""
+
+    def test_verify_timeout_is_tight(self) -> None:
+        """_VERIFY_TIMEOUT_SECS must be ≤ 10 seconds."""
+        from protocol.groth16_backend import _VERIFY_TIMEOUT_SECS
+
+        assert _VERIFY_TIMEOUT_SECS <= 10, (
+            f"_VERIFY_TIMEOUT_SECS is {_VERIFY_TIMEOUT_SECS}s — must be ≤ 10s to prevent DoS"
+        )
+        assert _VERIFY_TIMEOUT_SECS > 0
+
+    def test_verify_uses_verify_timeout_not_proof_timeout(self, tmp_path: Path) -> None:
+        """verify() passes _VERIFY_TIMEOUT_SECS to the subprocess, not _PROOF_TIMEOUT_SECS."""
+        from protocol.groth16_backend import _PROOF_TIMEOUT_SECS, _VERIFY_TIMEOUT_SECS
+
+        circuits_dir = tmp_path / "circuits"
+        circuits_dir.mkdir()
+        keys_dir = tmp_path / "keys"
+        vkey_dir = keys_dir / "verification_keys"
+        vkey_dir.mkdir(parents=True)
+        (vkey_dir / "test_vkey.json").write_text('{"protocol": "groth16"}')
+
+        backend = Groth16Backend(circuits_dir=circuits_dir, keys_dir=keys_dir)
+        statement = Statement(circuit="test", public_inputs={"root": "1"})
+        proof = Proof(
+            proof_data={"pi_a": [], "pi_b": [], "pi_c": []},
+            proof_system=ProofSystemType.GROTH16,
+            circuit="test",
+            public_signals=["1"],
+        )
+        mock_completed = MagicMock()
+        mock_completed.returncode = 0
+        with (
+            patch("shutil.which", return_value="/usr/bin/npx"),
+            patch(
+                "protocol.groth16_backend._run_subprocess", return_value=mock_completed
+            ) as mock_run,
+        ):
+            backend.verify(statement, proof)
+
+        call_kwargs = mock_run.call_args.kwargs
+        assert call_kwargs["timeout"] == _VERIFY_TIMEOUT_SECS
+        assert call_kwargs["timeout"] != _PROOF_TIMEOUT_SECS

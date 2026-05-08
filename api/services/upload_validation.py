@@ -340,9 +340,10 @@ def validate_file_magic(content: bytes | bytearray, declared_content_type: str) 
             detected,
         )
 
+    content_bytes = bytes(content)
     if detected == "application/zip":
-        validate_zip_safety(content)
+        validate_zip_safety(content_bytes)
     elif detected == "application/zstd":
-        validate_zstd_safety(content)
+        validate_zstd_safety(content_bytes)
 
     return detected

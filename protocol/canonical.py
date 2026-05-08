@@ -33,6 +33,15 @@ from .canonical_json import canonical_json_encode
 from .canonicalizer import CanonicalizationError
 
 
+try:
+    from lxml import etree as _lxml_etree
+
+    _LXML_AVAILABLE = True
+except ImportError:  # pragma: no cover
+    _LXML_AVAILABLE = False
+    _lxml_etree = None
+
+
 # Unicode space-like characters that unicodedata.normalize("NFKC", ...) does NOT
 # map to ASCII space but that are visually indistinguishable from a regular space
 # (commonly found in PDFs and other document formats).
@@ -302,6 +311,53 @@ def _strip_bom(text: str) -> str:
     return text
 
 
+def _canonicalize_xml_lxml(text: str) -> str:
+    """Canonicalize XML using lxml's Canonical XML 2.0 (no comments).
+
+    This is the primary path when lxml is available (it is an unconditional
+    dependency).  It correctly handles CDATA sections, namespace prefixes,
+    default namespace declarations, and attribute value entities — all cases
+    that the hand-written regex pipeline handles incorrectly or not at all.
+
+    Steps applied before handing to lxml:
+    1. Strip BOM.
+    2. NFC normalize.
+    3. Parse with XXE-safe parser (resolve_entities=False, no_network=True).
+    4. Serialize with C14N 2.0: canonical attribute order, no comments,
+       explicit empty elements (no self-closing shorthand in the output).
+
+    Args:
+        text: XML text to canonicalize.
+
+    Returns:
+        Canonicalized XML as a UTF-8 decoded string.
+
+    Raises:
+        CanonicalizationError: If lxml parse or serialization fails.
+    """
+    text = _strip_bom(text)
+    text = unicodedata.normalize("NFC", text)
+    try:
+        parser = _lxml_etree.XMLParser(
+            resolve_entities=False,  # block XXE
+            no_network=True,  # no remote DTD/schema fetch
+            load_dtd=False,  # never load any DTD
+            dtd_validation=False,  # never validate against DTD
+            remove_comments=True,
+            remove_pis=True,
+        )
+        root = _lxml_etree.fromstring(text.encode("utf-8"), parser=parser)
+        canonical_bytes: bytes = _lxml_etree.tostring(
+            root,
+            method="c14n2",
+            strip_text=False,
+            with_comments=False,
+        )
+        return canonical_bytes.decode("utf-8")
+    except Exception as exc:
+        raise CanonicalizationError(f"XML C14N 2.0 failed: {exc}") from exc
+
+
 def canonicalize_plaintext(text: str, *, scrub_homoglyphs: bool = True) -> str:
     """Canonicalize plain text for deterministic hashing.
 
@@ -402,25 +458,24 @@ def _sort_xml_attributes(match: re.Match[str]) -> str:
 def canonicalize_xml(text: str) -> str:
     """Canonicalize XML text for deterministic hashing.
 
-    Applies a subset of Exclusive XML Canonicalization suitable for
-    government document comparison:
+    Primary path (when lxml is available — the default): uses lxml's C14N 2.0
+    implementation which correctly handles CDATA sections, namespace prefixes,
+    default namespace declarations, and attribute-value entities.
 
+    Fallback (lxml unavailable): applies a regex-based subset of Exclusive XML
+    Canonicalization sufficient for simple government XML artifacts.  This path
+    is retained for environments where lxml cannot be installed; it does *not*
+    guarantee full C14N compliance.
+
+    The lxml path performs:
     1. Strip BOM.
     2. NFC normalization.
-    3. Remove XML processing instructions (``<?...?>``).
-    4. Remove comments (``<!--...-->``).
-    5. Remove DOCTYPE declarations.
-    6. Normalize line endings to ``\\n``.
-    7. Sort attributes within each element alphabetically by name.
-    8. Normalize self-closing tags to ``<tag/>``.
-    9. Collapse inter-tag whitespace to single spaces.
-    10. Strip leading/trailing whitespace.
+    3. Parse with an XXE-safe parser (resolve_entities=False, no_network=True).
+    4. Serialize with W3C C14N 2.0 (canonical attribute order, comments stripped,
+       processing instructions stripped).
 
-    .. note::
-       This is *not* full C14N — it provides deterministic byte output
-       for comparing government XML artifacts without requiring an XML
-       parser dependency.  For W3C Exclusive XML Canonicalization, use
-       lxml-based canonicalization in ``canonicalizer.py``.
+    The fallback path applies the same sequence that was previously the only
+    implementation (regex-based PI/comment/DOCTYPE removal + attribute sorting).
 
     Args:
         text: XML text to canonicalize.
@@ -429,11 +484,16 @@ def canonicalize_xml(text: str) -> str:
         Canonicalized XML text.
 
     Raises:
-        CanonicalizationError: If text exceeds the size limit.
+        CanonicalizationError: If text exceeds the size limit or parsing fails.
     """
     if len(text.encode("utf-8")) > _MAX_XML_BYTES:
         raise CanonicalizationError(f"XML text exceeds maximum size ({_MAX_XML_BYTES} bytes)")
 
+    # Primary: lxml C14N 2.0
+    if _LXML_AVAILABLE:
+        return _canonicalize_xml_lxml(text)
+
+    # Fallback: regex-based subset (lxml not installed)
     # Step 1–2: BOM + NFC
     text = _strip_bom(text)
     text = unicodedata.normalize("NFC", text)

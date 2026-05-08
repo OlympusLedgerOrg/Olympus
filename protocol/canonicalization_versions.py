@@ -52,6 +52,10 @@ VERSION_HISTORY: dict[str, dict[str, dict[str, str | None]]] = {
     "xml": {
         "1.0.0-c14n-subset-nfc": {
             "deployed_at": "2026-04-14T00:00:00Z",
+            "deprecated_at": "2026-05-06T00:00:00Z",
+        },
+        "1.1.0-lxml-c14n2": {
+            "deployed_at": "2026-05-06T00:00:00Z",
             "deprecated_at": None,
         },
     },
@@ -71,7 +75,7 @@ class CanonicalizationVersionError(Exception):
 # Versions for formats defined in canonical.py (not in canonicalizer.py)
 _CANONICAL_MODULE_VERSIONS: dict[str, str] = {
     "plaintext": "1.0.0-nfc-homoglyph",
-    "xml": "1.0.0-c14n-subset-nfc",
+    "xml": "1.1.0-lxml-c14n2",
     "csv": "1.0.0-sorted-quote-minimal",
 }
 
@@ -322,10 +326,10 @@ CANONICAL_TEST_VECTORS: list[CanonicalTestVector] = [
     CanonicalTestVector(
         name="xml_basic",
         format_name="xml",
-        version="1.0.0-c14n-subset-nfc",
+        version="1.1.0-lxml-c14n2",
         input_bytes=b'<?xml version="1.0"?>\n<root b="2" a="1"><child/></root>',
         expected_canonical_hash="",
-        description="XML: PI removal, attribute sorting, self-close normalization",
+        description="XML: PI removal, attribute sorting, self-close normalization (lxml C14N 2.0)",
     ),
     CanonicalTestVector(
         name="csv_basic",
