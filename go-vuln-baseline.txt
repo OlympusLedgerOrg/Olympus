@@ -15,18 +15,49 @@
 #
 # Mirrors the policy in cargo-audit-baseline.txt and pip-audit-baseline.txt.
 
-# Go 1.25.10 stdlib advisories surfaced by govulncheck v1.3.0 in the
-# verifiers/go module (which declares `go 1.21` and is built with the
-# toolchain govulncheck auto-installs, currently go1.25.10). These are all
-# Go standard-library findings against `go test ./...` of a small BLAKE3
-# verifier library that is not deployed to production; they will fall off
-# the baseline once govulncheck switches to a Go toolchain containing the
-# upstream stdlib patches. See https://pkg.go.dev/vuln/<ID> for details.
+# ---------------------------------------------------------------------------
+# Go stdlib vulnerabilities — fixed in Go 1.25.10 / 1.26.3
+#
+# All eight findings below are stdlib-level module findings in the
+# verifiers/go module (go 1.21 minimum; CI scanner runs Go 1.25.x).
+# The verifiers/go module is a pure BLAKE3 hash verifier: it imports only
+# github.com/zeebo/blake3 and never uses net/http, net/http/httputil,
+# net/mail, or html/template.  govulncheck confirms "your code doesn't
+# appear to call these vulnerabilities" — these are module-presence hits,
+# not call-graph reachability findings.
+#
+# Action: update the CI go-version pin to "1.26.3" (or wait for the
+# setup-go manifest to include Go 1.25.10) to remove these entries.
+# ---------------------------------------------------------------------------
+
+# Infinite loop in HTTP/2 transport (net/http/internal/http2, x/net) — not used by verifiers/go
+# https://pkg.go.dev/vuln/GO-2026-4918
 GO-2026-4918
+
+# Panic in Dial/LookupPort on NUL byte on Windows (net) — not used by verifiers/go
+# https://pkg.go.dev/vuln/GO-2026-4971
 GO-2026-4971
+
+# ReverseProxy query-parameter forwarding bypass (net/http/httputil) — not used by verifiers/go
+# https://pkg.go.dev/vuln/GO-2026-4976
 GO-2026-4976
+
+# Quadratic string concat in net/mail consumePhrase — not used by verifiers/go
+# https://pkg.go.dev/vuln/GO-2026-4977
 GO-2026-4977
+
+# Escaper bypass XSS in html/template — not used by verifiers/go
+# https://pkg.go.dev/vuln/GO-2026-4980
 GO-2026-4980
+
+# Crash on long CNAME response (net) — not used by verifiers/go
+# https://pkg.go.dev/vuln/GO-2026-4981
 GO-2026-4981
+
+# Meta content URL escaping bypass XSS in html/template — not used by verifiers/go
+# https://pkg.go.dev/vuln/GO-2026-4982
 GO-2026-4982
+
+# Quadratic string concat in net/mail consumeComment — not used by verifiers/go
+# https://pkg.go.dev/vuln/GO-2026-4986
 GO-2026-4986

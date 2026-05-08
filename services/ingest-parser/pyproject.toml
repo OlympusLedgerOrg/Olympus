@@ -27,8 +27,9 @@ dependencies = [
     # Web framework
     "fastapi>=0.109.0,<1.0.0",
     "uvicorn[standard]>=0.27.0,<1.0.0",
-    # CVE fix: >= 0.0.22 required for Arbitrary File Write fix
-    "python-multipart>=0.0.22,<1.0.0",
+    # CVE fix: >= 0.0.22 required for Arbitrary File Write fix (GHSA-wp53-j4wj-2cfg)
+    # CVE fix: >= 0.0.27 required for DoS via unbounded multipart part headers (GHSA-pp6c-gr5w-3c5g)
+    "python-multipart>=0.0.27,<1.0.0",
     # CVE fix: >= 0.49.1 required for O(n^2) DoS via Range header fix
     "starlette>=0.49.1,<1.0.0",
     # CVE fix: >= 0.16.0 required for malformed Chunked-Encoding fix

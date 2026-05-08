@@ -291,37 +291,45 @@ PostgreSQL trigger protection to insert or modify SMT nodes directly.
    A warning is logged when operating without it. Set `OLYMPUS_ENV=development`
    or `OLYMPUS_ENV=test` to allow the deterministic fallback.
 
-### Verification Key Hash Pinning
+### ZK Verifier Security
 
-`Groth16Backend.verify()` accepts an optional `expected_vkey_hash` parameter.
-When set, the on-disk verification key is hashed **before** snarkjs is called and
-operators **must** pin its digest so that a swapped verification key on disk is
-detected before any proof is accepted.
+#### Verification-Key Hash Pin (`OLYMPUS_ZK_VKEY_HASH`)
 
-1. **Compute the digest** (after the trusted-setup ceremony):
+After the Groth16 trusted-setup ceremony produces the final `_vkey.json` file,
+operators **must** pin its BLAKE3 digest so that a swapped verification key on
+disk is detected before any proof is accepted.
+
+1. **Compute the digest** (after ceremony):
    ```bash
-   python -c "
-   from protocol.hashes import hash_bytes
-   import pathlib
-   print(hash_bytes(pathlib.Path('path/to/circuit_vkey.json').read_bytes()).hex())
-   "
+   python -c "from protocol.hashes import hash_bytes; import pathlib; print(hash_bytes(pathlib.Path('path/to/circuit_vkey.json').read_bytes()).hex())"
    ```
-   > **Note:** The digest is computed with `protocol.hashes.hash_bytes()`, which
+   > **Important:** the digest uses `protocol.hashes.hash_bytes()`, which
    > applies Olympus domain-separation (`OLY:LEGACY-BYTES:V1` prefix + BLAKE3).
-   > A raw BLAKE3 digest of the same file will **not** match and verification will
-   > always fail.
-
-2. **Set the environment variable** (or inject via your secrets manager):
-   ```sh
+   > A raw `blake3.blake3(...).hexdigest()` of the same file produces a
+   > **different** value and will always fail the pin check.
+2. **Set the environment variable:**
+   ```
    OLYMPUS_ZK_VKEY_HASH=<64-character hex digest>
    ```
+3. **What happens on mismatch:** `Groth16Backend.verify()` raises
+   `ProofVerificationError("vkey hash mismatch …")` and refuses to call snarkjs.
+   This prevents an attacker who can write to the filesystem from replacing the
+   vkey file with one that accepts forged proofs.
+4. **Key rotation:** If the vkey is intentionally replaced (e.g., after
+   a re-ceremony), update `OLYMPUS_ZK_VKEY_HASH` in the same deployment step
+   as the new vkey file — never leave them out of sync.
+5. **Ceremony link:** See [`proofs/README.md`](proofs/README.md) for the
+   multi-party ceremony procedure and the expected output artefacts.
 
-3. **Pass it to the verifier:**
-   ```python
-   import os
-   backend.verify(proof, expected_vkey_hash=os.environ["OLYMPUS_ZK_VKEY_HASH"])
-   ```
+#### Verify Timeout (`_VERIFY_TIMEOUT_SECS`)
 
-4. **Rotate after re-ceremony** — recompute the digest and update the secret
-   whenever the trusted setup is redone. Existing proofs are unaffected; only
-   new verification calls use the updated key.
+The Groth16 verification subprocess timeout is intentionally set to **10 seconds**
+(constant `_VERIFY_TIMEOUT_SECS` in `protocol/groth16_backend.py` and
+`protocol/zkp.py`).  Groth16 verification on BN254 completes in under 1 second
+with snarkjs; the 10-second ceiling is a generous safety margin.
+
+**Do not increase this value** without circuit-specific benchmarking.  A generous
+timeout allows a malformed or adversarially crafted proof to stall the verifier
+process for the full interval, creating a denial-of-service vector.  If your
+circuit genuinely requires longer verification, document the benchmark result
+and update the constant with a comment explaining why.

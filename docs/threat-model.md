@@ -139,6 +139,57 @@ repository, with links to the relevant source evidence.
 | Redaction proof binding | Revealed leaves verified against original committed root | [`protocol/redaction.py`](protocol/redaction.py) — `verify_redaction_proof()` |
 | Semantic equivalence | Canonicalization ensures whitespace / formatting changes do not mask content | [`protocol/canonical.py`](protocol/canonical.py) — `normalize_whitespace()` |
 
+#### T4a — Dual-Anchor Binding Requirement
+
+Olympus commits two separate roots for every document that participates in
+ZK-based selective disclosure:
+
+1. **BLAKE3 Merkle root** (`root_b3`) — the operational ledger commitment,
+   stored as the leaf value in the CD-HS-ST Sparse Merkle Tree.
+2. **Poseidon Merkle root** (`root_poseidon`) — the ZK-circuit input, built
+   from the same canonicalized document parts but using a hash function
+   compatible with Groth16 arithmetic circuits.
+
+Both roots are anchored in the **same CD-HS-ST leaf** so that a verifier can
+confirm they refer to the same underlying document.
+
+**Root-swap attack (without dual anchoring):**
+Without dual anchoring, a prover could present:
+- A valid SMT inclusion proof for a committed `root_b3` that corresponds to
+  document _D_, and
+- A valid Groth16 proof whose public input (`poseidon_root`) was derived from
+  a *different* document _D′_.
+
+Because there is no link between the Poseidon root and the ledger commitment,
+the verifier has no way to detect that the ZK proof describes a different
+document than the one on the ledger.
+
+**Verification steps a verifier MUST perform:**
+
+1. **SMT inclusion proof** — Verify that the leaf at the expected CD-HS-ST key
+   contains a commitment binding both `root_b3` and `root_poseidon`.  This
+   proves that the operator committed _this specific Poseidon root_ at a
+   specific ledger sequence number.
+2. **BLAKE3 Merkle proof** — Verify the document's BLAKE3 Merkle path against
+   `root_b3`.  This links the leaf hash back to the actual document bytes.
+3. **Groth16 circuit verification** — Verify the snarkjs proof with
+   `root_poseidon` as the public input.  The circuit attests that the revealed
+   leaves are a subset of the Poseidon Merkle tree whose root is
+   `root_poseidon`.
+
+Only when all three checks pass can a verifier conclude:
+- The document is on the ledger (step 1 + 2).
+- The revealed content is an authentic, non-forged subset of that document
+  (step 3).
+
+**Implementation evidence:**
+- [`protocol/cross_root_validation.py`](protocol/cross_root_validation.py) —
+  `verify_against_dual_commitment()` enforces the binding between `root_b3`
+  and `root_poseidon`.
+- [`protocol/redaction.py`](protocol/redaction.py) —
+  `RedactionProtocol.commit_document()` builds the Poseidon Merkle tree;
+  `verify_redaction_proof()` verifies revealed leaves against the committed root.
+
 ### T5 — Infrastructure / Operational Attacks
 
 | Property | Mitigation | Evidence |
