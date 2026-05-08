@@ -39,7 +39,7 @@ try:
     _LXML_AVAILABLE = True
 except ImportError:  # pragma: no cover
     _LXML_AVAILABLE = False
-    _lxml_etree = None  # type: ignore[assignment]
+    _lxml_etree = None
 
 
 # Unicode space-like characters that unicodedata.normalize("NFKC", ...) does NOT
@@ -338,7 +338,7 @@ def _canonicalize_xml_lxml(text: str) -> str:
     text = _strip_bom(text)
     text = unicodedata.normalize("NFC", text)
     try:
-        parser = _lxml_etree.XMLParser(  # type: ignore[union-attr]
+        parser = _lxml_etree.XMLParser(
             resolve_entities=False,  # block XXE
             no_network=True,  # no remote DTD/schema fetch
             load_dtd=False,  # never load any DTD
@@ -346,8 +346,8 @@ def _canonicalize_xml_lxml(text: str) -> str:
             remove_comments=True,
             remove_pis=True,
         )
-        root = _lxml_etree.fromstring(text.encode("utf-8"), parser=parser)  # type: ignore[union-attr]
-        canonical_bytes: bytes = _lxml_etree.tostring(  # type: ignore[union-attr]
+        root = _lxml_etree.fromstring(text.encode("utf-8"), parser=parser)
+        canonical_bytes: bytes = _lxml_etree.tostring(
             root,
             method="c14n2",
             strip_text=False,
