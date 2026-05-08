@@ -312,7 +312,7 @@ def _strip_bom(text: str) -> str:
 
 
 def _canonicalize_xml_lxml(text: str) -> str:
-    """Canonicalize XML using lxml's C14N 2.0 (Exclusive + no-comments).
+    """Canonicalize XML using lxml's Canonical XML 2.0 (no comments).
 
     This is the primary path when lxml is available (it is an unconditional
     dependency).  It correctly handles CDATA sections, namespace prefixes,

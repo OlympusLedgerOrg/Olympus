@@ -104,7 +104,8 @@ def _get_cached_client() -> TestClient:
 
 def _make_client() -> TestClient:
     """
-    Return the cached TestClient, re-registering the test API key each call.
+    Return the cached TestClient, re-registering the test API key each call
+    and resetting the ingest rate-limit policy to a permissive ceiling.
 
     The expensive operations (app import, TestClient construction) are cached
     via ``_get_cached_client()`` so they run once per worker process.  Key
@@ -113,6 +114,14 @@ def _make_client() -> TestClient:
     functions — the cache has no visibility into that teardown.  Re-registering
     a key is a cheap dict update (O(1)) and does not weaken auth security: the
     key store is non-empty so the dev-mode bypass never fires.
+
+    Rate-limit buckets accumulate across all fuzz tests when the underlying
+    ingest state is only reset once (at ``_get_cached_client()`` time).  A long
+    fuzz session with hundreds of POST requests can exhaust the default 60-token
+    ingest bucket, causing spurious 429 responses that shrink effective coverage.
+    Setting a permissive ceiling here (called once per test function) ensures
+    every new test function starts with a fresh, non-throttled bucket without
+    rebuilding the expensive cached client.
     """
     from api import ingest as ingest_api
 
@@ -123,6 +132,9 @@ def _make_client() -> TestClient:
         scopes=_TEST_SCOPES,
         expires_at="2099-01-01T00:00:00Z",
     )
+    # Reset rate-limit buckets and raise the ceiling so O(max_examples × 2)
+    # POST requests never exhaust the default 60-token ingest bucket.
+    ingest_api._set_rate_limit_for_tests("ingest", capacity=10_000.0, refill_rate_per_second=10_000.0)
     return client
 
 

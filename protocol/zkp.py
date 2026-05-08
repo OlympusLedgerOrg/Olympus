@@ -530,9 +530,9 @@ class Groth16Prover:
             statement: Optional :class:`~protocol.proof_interface.Statement`
                 whose public inputs must match ``proof.public_signals`` (sorted
                 by key).  When provided, a mismatch raises
-                :class:`~subprocess.CalledProcessError`-compatible error before
-                any subprocess is spawned.  This prevents accepting a valid
-                Groth16 proof that was generated for a *different* statement.
+                :class:`ValueError` before any subprocess is spawned.  This
+                prevents accepting a valid Groth16 proof that was generated for
+                a *different* statement.
 
         Returns:
             True if the proof cryptographically verifies, False otherwise.
