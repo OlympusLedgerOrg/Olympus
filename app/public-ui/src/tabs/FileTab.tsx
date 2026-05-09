@@ -74,7 +74,11 @@ export default function FileTab({
             disabled={isPending || !!wasmError}
             style={{ marginTop: "1rem" }}
           >
-            {isPending ? "EXECUTING..." : "VERIFY_ON_LEDGER"}
+            {isPending
+              ? "EXECUTING..."
+              : commitContentHash
+                ? "VERIFY_LEDGER_CONTENT"
+                : "VERIFY_ON_LEDGER"}
           </button>
         </div>
       )}

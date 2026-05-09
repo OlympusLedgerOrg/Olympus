@@ -52,6 +52,16 @@ async def _count_table_if_exists(conn: Any, table_name: str) -> int:
     return await _count_query(conn, stmt)
 
 
+async def _count_distinct_column_if_exists(conn: Any, table_name: str, column_name: str) -> int:
+    if not await _table_exists(conn, table_name):
+        return 0
+
+    stmt = select(func.count(func.distinct(column(column_name)))).select_from(
+        _quoted_table(table_name)
+    )
+    return await _count_query(conn, stmt)
+
+
 def _format_uptime(seconds: int) -> str:
     if seconds < 60:
         return f"{seconds}s"
@@ -83,6 +93,8 @@ async def get_public_stats() -> PublicStats:
         copies = 0
         for table_name in (
             "ledger_entries",
+            "cdhs_smf_leaves",
+            "ingestion_proofs",
             "documents",
             "ingest_records",
             "records",
@@ -92,13 +104,10 @@ async def get_public_stats() -> PublicStats:
                 break
 
         shards = 0
-        if await _table_exists(conn, "shard_headers"):
-            shards = await _count_query(
-                conn,
-                select(func.count(func.distinct(column("shard_id")))).select_from(
-                    _quoted_table("shard_headers")
-                ),
-            )
+        for table_name in ("shard_headers", "ingestion_proofs", "smt_leaves"):
+            shards = await _count_distinct_column_if_exists(conn, table_name, "shard_id")
+            if shards:
+                break
 
         proofs = 0
         for table_name in (

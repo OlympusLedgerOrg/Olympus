@@ -6,7 +6,7 @@ This guide provides copy-paste commands to get Olympus up and running quickly.
 
 ## Prerequisites
 
-- **Python 3.10+** (3.12 recommended)
+- **Python 3.10-3.13** (3.12 recommended)
 - **PostgreSQL 16+** (for E2E tests and production)
 - **Git**
 
@@ -129,7 +129,7 @@ python -c "from psycopg import connect; connect('$DATABASE_URL'); print('Connect
 python tools/validate_schemas.py
 
 # Run linting
-ruff check protocol/ storage/ api/ scaffolding/ tests/
+ruff check .
 
 # Run type checking
 mypy protocol/ storage/ api/
@@ -152,16 +152,16 @@ pytest tests/ -v
 
 ```bash
 # Check code style
-ruff check protocol/ storage/ api/ scaffolding/ tests/
+ruff check .
 
 # Auto-fix issues
-ruff check protocol/ storage/ api/ scaffolding/ tests/ --fix
+ruff check . --fix
 
 # Format code
-ruff format protocol/ storage/ api/ scaffolding/ tests/
+ruff format .
 
 # Check formatting (without changing)
-ruff format --check protocol/ storage/ api/ scaffolding/ tests/
+ruff format --check .
 ```
 
 ### Type Checking
@@ -208,7 +208,9 @@ bandit-baseline -r protocol/ storage/ api/ scaffolding/
 
 ```bash
 # Using uvicorn directly (works without PostgreSQL, DB endpoints return 503)
-uvicorn api.app:app --reload --host 0.0.0.0 --port 8000
+# api.main is the canonical application entrypoint.
+# api.app remains a backward-compatibility shim.
+uvicorn api.main:app --reload --host 0.0.0.0 --port 8000
 
 # Or using the run script
 python run_api.py
@@ -223,12 +225,15 @@ DB-dependent endpoints (`/shards`, `/proof`, `/ledger`) return HTTP 503 if the d
 # Set environment variables
 export DATABASE_URL='postgresql://olympus:olympus@localhost:5432/olympus'
 
-# Run with multiple workers
-uvicorn api.app:app --host 0.0.0.0 --port 8000 --workers 4
+# Single worker works with any rate-limit backend.
+uvicorn api.main:app --host 0.0.0.0 --port 8000 --workers 1
+
+# Multiple workers require a shared rate-limit backend such as Redis.
+uvicorn api.main:app --host 0.0.0.0 --port 8000 --workers 4
 
 # Or with gunicorn (install separately)
 pip install gunicorn
-gunicorn api.app:app \
+gunicorn api.main:app \
   --workers 4 \
   --worker-class uvicorn.workers.UvicornWorker \
   --bind 0.0.0.0:8000
@@ -447,10 +452,10 @@ echo "🔍 Validating schemas..."
 python tools/validate_schemas.py
 
 echo "🔍 Running ruff linting..."
-ruff check protocol/ storage/ api/ scaffolding/ tests/
+ruff check .
 
 echo "🔍 Running ruff format check..."
-ruff format --check protocol/ storage/ api/ scaffolding/ tests/
+ruff format --check .
 
 echo "🔍 Running mypy type checking..."
 mypy protocol/ storage/ api/
@@ -729,7 +734,7 @@ pytest --cov=protocol --cov=scaffolding
 bandit -r protocol/ storage/ api/ scaffolding/
 
 # Run app
-uvicorn api.app:app --reload
+uvicorn api.main:app --reload
 
 # Docker
 docker compose up -d

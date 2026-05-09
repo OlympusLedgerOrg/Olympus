@@ -257,16 +257,27 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
         response.headers["Strict-Transport-Security"] = (
             "max-age=63072000; includeSubDomains; preload"
         )
-        # CSP — restrictive default; operators should customize for their frontend origin
-        response.headers["Content-Security-Policy"] = (
-            "default-src 'self'; "
-            "script-src 'self'; "
-            "style-src 'self'; "
-            "img-src 'self' data:; "
-            "connect-src 'self'; "
-            "frame-ancestors 'none'; "
-            "upgrade-insecure-requests;"
-        )
+        # CSP — /docs and /redoc load Swagger/ReDoc assets from jsdelivr/unpkg CDNs.
+        # All other paths use a strict self-only policy.
+        if request.url.path.rstrip("/") in ("/docs", "/redoc"):
+            response.headers["Content-Security-Policy"] = (
+                "default-src 'self'; "
+                "script-src 'self' https://cdn.jsdelivr.net https://unpkg.com 'unsafe-inline'; "
+                "style-src 'self' https://cdn.jsdelivr.net https://unpkg.com 'unsafe-inline'; "
+                "img-src 'self' data: https://fastapi.tiangolo.com; "
+                "connect-src 'self'; "
+                "frame-ancestors 'none';"
+            )
+        else:
+            response.headers["Content-Security-Policy"] = (
+                "default-src 'self'; "
+                "script-src 'self'; "
+                "style-src 'self'; "
+                "img-src 'self' data:; "
+                "connect-src 'self'; "
+                "frame-ancestors 'none'; "
+                "upgrade-insecure-requests;"
+            )
         # Suppress server identity headers to avoid information disclosure.
         response.headers["Server"] = ""
         return response

@@ -74,7 +74,7 @@ from api.services.poseidon import (
 from api.services.proof_utils import (
     # Backward compatibility exports (re-exported for tests)
     evaluate_proof_bundle as _evaluate_proof_bundle,
-    merkle_proof_from_store as _merkle_proof_from_store,
+    merkle_proof_from_store as _merkle_proof_from_store,  # noqa: F401
     normalize_source_url as _normalize_source_url,  # noqa: F401
     parse_content_hash as _parse_content_hash,  # noqa: F401
     sequencer_proof_to_merkle_proof_dict as _sequencer_proof_to_merkle_proof_dict,
@@ -94,7 +94,6 @@ from protocol.merkle import (
     MERKLE_VERSION,
     PROOF_VERSION,
     MerkleTree,
-    verify_proof,
 )
 from protocol.poseidon_smt import key_to_smt_bytes as _poseidon_smt_key
 from protocol.telemetry import INGEST_TOTAL, LEDGER_HEIGHT, timed_operation
@@ -123,6 +122,7 @@ __all__ = [
     "_value_hash_to_poseidon_field",
     "_normalize_source_url",
     "_parse_content_hash",
+    "_merkle_proof_from_store",
 ]
 
 # Poseidon hash suite identifier emitted in proof bundle metadata — see ADR-0009.
@@ -528,6 +528,43 @@ async def _fetch_by_content_hash(content_hash_hex: str) -> dict[str, Any] | None
     return await loop.run_in_executor(None, _fetch_by_content_hash_sync, content_hash_hex)
 
 
+def _fetch_by_record_identity_sync(
+    shard_id: str, record_type: str, record_id: str, version: int
+) -> dict[str, Any] | None:
+    """Lookup proof metadata by immutable record coordinates from storage."""
+    storage = _get_storage()
+    if storage is None or not hasattr(storage, "get_ingestion_proof_by_record_identity"):
+        return None
+    record = storage.get_ingestion_proof_by_record_identity(
+        shard_id, record_type, record_id, version
+    )
+    if record:
+        _cache_ingestion_record(record)
+    return record
+
+
+async def _fetch_by_record_identity(
+    shard_id: str, record_type: str, record_id: str, version: int
+) -> dict[str, Any] | None:
+    """Lookup proof metadata by immutable record coordinates without blocking."""
+    loop = asyncio.get_running_loop()
+    return await loop.run_in_executor(
+        None, _fetch_by_record_identity_sync, shard_id, record_type, record_id, version
+    )
+
+
+def _ingestion_result_from_existing(existing_record: dict[str, Any]) -> IngestionResult:
+    """Build an idempotent ingestion result from a persisted proof record."""
+    return IngestionResult(
+        proof_id=existing_record["proof_id"],
+        record_id=existing_record["record_id"],
+        shard_id=existing_record["shard_id"],
+        content_hash=existing_record["content_hash"],
+        deduplicated=True,
+        idempotent=True,
+    )
+
+
 # ---------------------------------------------------------------------------
 # Rate-limit policy (action → capacity, refill_rate_per_second)
 #
@@ -831,6 +868,8 @@ async def _call_sequencer_queue_leaf(
     record_id: str,
     version: str | None,
     canonical_content: bytes,
+    parser_id: str | None = None,
+    canonical_parser_version: str | None = None,
 ) -> dict[str, Any]:
     """Call the Go sequencer's QueueLeaf endpoint.
 
@@ -843,6 +882,9 @@ async def _call_sequencer_queue_leaf(
         record_id: Record identifier.
         version: Optional version string (empty string if absent).
         canonical_content: Canonical JSON bytes for the record.
+        parser_id: ADR-0003 parser identity. Defaults to the ingest fallback.
+        canonical_parser_version: ADR-0003 canonical parser version. Defaults
+            to the operator configured ingest version.
 
     Returns:
         Parsed QueueLeafResponse dict from the sequencer.
@@ -857,7 +899,10 @@ async def _call_sequencer_queue_leaf(
         "record_id": record_id,
         "version": version or "",
         "content": base64.b64encode(canonical_content).decode(),
-        "content_type": "application/json",
+        "content_type": "json",
+        "parser_id": parser_id or _FALLBACK_PARSER_ID,
+        "canonical_parser_version": canonical_parser_version
+        or _operator_canonical_parser_version(),
     }
     try:
         client = _get_sequencer_client()
@@ -905,7 +950,10 @@ async def _call_sequencer_queue_leaves_batch(
                 "record_id": r["record_id"],
                 "version": r.get("version") or "",
                 "content": base64.b64encode(r["canonical_content"]).decode(),
-                "content_type": "application/json",
+                "content_type": "json",
+                "parser_id": r.get("parser_id") or _FALLBACK_PARSER_ID,
+                "canonical_parser_version": r.get("canonical_parser_version")
+                or _operator_canonical_parser_version(),
             }
             for r in records
         ]
@@ -1024,7 +1072,31 @@ async def ingest_batch(
 
             # Build batch payload and call sequencer once for all records in this shard
             seq_results: list[dict[str, Any]] | None = None
+            existing_records_by_index: dict[int, dict[str, Any]] = {}
             if storage is not None and _signing_key is not None:
+                for original_idx, record in shard_records:
+                    content_hash = record_data_map[original_idx][0]
+                    existing_record = await _fetch_by_content_hash(content_hash)
+                    if existing_record is not None:
+                        existing_records_by_index[original_idx] = existing_record
+                        continue
+
+                    existing_record = await _fetch_by_record_identity(
+                        record.shard_id,
+                        record.record_type,
+                        record.record_id,
+                        int(record.version) if record.version is not None else 1,
+                    )
+                    if existing_record is not None:
+                        raise HTTPException(
+                            status_code=409,
+                            detail=(
+                                "Record already exists with different content: "
+                                f"{record.record_type}:{record.record_id}:"
+                                f"{record.version if record.version is not None else 1}"
+                            ),
+                        )
+
                 batch_inputs = [
                     {
                         "shard_id": record.shard_id,
@@ -1034,8 +1106,12 @@ async def ingest_batch(
                         "canonical_content": record_data_map[original_idx][3],
                     }
                     for original_idx, record in shard_records
+                    if original_idx not in existing_records_by_index
                 ]
-                seq_results = await _call_sequencer_queue_leaves_batch(batch_inputs)
+                if batch_inputs:
+                    seq_results = await _call_sequencer_queue_leaves_batch(batch_inputs)
+                else:
+                    seq_results = []
 
             loop_index = 0
             for original_idx, record in shard_records:
@@ -1046,23 +1122,24 @@ async def ingest_batch(
                     record_key(record.record_type, record.record_id, record.version)
                 )
 
+                # Durable idempotency is checked before the sequencer call so
+                # retrying the same record never reaches the append-only SMT
+                # as a same-tree-size update.
+                if original_idx in existing_records_by_index:
+                    existing_record = existing_records_by_index[original_idx]
+                    results.append((original_idx, _ingestion_result_from_existing(existing_record)))
+                    dedup_count += 1
+                    ledger_entry_hash = existing_record.get("ledger_entry_hash", ledger_entry_hash)
+                    INGEST_TOTAL.labels(outcome="deduplicated").inc()
+                    continue
+
                 # In-memory-only dedup: when no storage is configured, RT-H1
                 # cannot run, so check the in-memory cache here instead.
                 if storage is None:
                     existing_record = await _fetch_by_content_hash(content_hash)
                     if existing_record is not None:
                         results.append(
-                            (
-                                original_idx,
-                                IngestionResult(
-                                    proof_id=existing_record["proof_id"],
-                                    record_id=existing_record["record_id"],
-                                    shard_id=existing_record["shard_id"],
-                                    content_hash=existing_record["content_hash"],
-                                    deduplicated=True,
-                                    idempotent=True,
-                                ),
-                            )
+                            (original_idx, _ingestion_result_from_existing(existing_record))
                         )
                         dedup_count += 1
                         ledger_entry_hash = existing_record.get(
@@ -1110,6 +1187,7 @@ async def ingest_batch(
                         "leaf_index": str(int(seq_global_key, 16)),
                         "siblings": [],
                         "root_hash": seq_merkle_root,
+                        "content_hash": content_hash,
                         "tree_size": str(seq_resp["tree_size"]),
                         "proof_version": PROOF_VERSION,
                         "tree_version": MERKLE_VERSION,
@@ -1347,7 +1425,13 @@ async def verify_ingested_content_hash(
                 status_code=404, detail="Content hash not found in the ingestion store"
             )
 
-        merkle_proof_valid = verify_proof(_merkle_proof_from_store(record))
+        proof_data = dict(record["merkle_proof"])
+        proof_data.setdefault("content_hash", record["content_hash"])
+        _, _, _, merkle_proof_valid = _evaluate_proof_bundle(
+            record["content_hash"],
+            record["merkle_root"],
+            proof_data,
+        )
         span.set_attribute("merkle_proof_valid", merkle_proof_valid)
         return HashVerificationResponse(**record, merkle_proof_valid=merkle_proof_valid)
 
@@ -1535,6 +1619,18 @@ async def commit_artifact(
         durable_via_storage = storage is not None and _signing_key is not None
         if sequencer_enabled or durable_via_storage:
             try:
+                existing_by_identity = await _fetch_by_record_identity(
+                    shard_id,
+                    "artifact",
+                    request.id,
+                    1,
+                )
+                if existing_by_identity is not None:
+                    raise HTTPException(
+                        status_code=409,
+                        detail=f"Record already exists with different content: artifact:{request.id}:1",
+                    )
+
                 # When the sequencer flag is off, pass the already-resolved
                 # storage object explicitly so the adapter does not call
                 # storage_layer._get_storage() (which would re-read

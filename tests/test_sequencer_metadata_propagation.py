@@ -17,6 +17,7 @@ from api.services.sequencer_client import (
     GoSequencerClient,
     SequencerAppendResult,
 )
+from protocol.hashes import leaf_hash
 
 
 # ---------------------------------------------------------------------------
@@ -129,6 +130,184 @@ class TestAppendRecordHashPayload:
                 parser_id="fallback@1.0.0",
                 canonical_parser_version="v1",
             )
+
+
+# ---------------------------------------------------------------------------
+# api.ingest direct queue-leaf helpers — payload correctness
+# ---------------------------------------------------------------------------
+
+
+class TestIngestQueueLeafPayload:
+    """Unit tests for the direct ingest.py sequencer payload builders."""
+
+    @pytest.mark.asyncio
+    async def test_single_queue_leaf_includes_parser_metadata(self, monkeypatch):
+        """_call_sequencer_queue_leaf sends ADR-0003 metadata and Rust content_type."""
+        from api import ingest as ingest_api
+
+        captured_payload: dict = {}
+
+        class FakeClient:
+            async def post(self, url, *, json, headers):
+                captured_payload.update(json)
+                mock_resp = MagicMock()
+                mock_resp.status_code = 200
+                mock_resp.json.return_value = {
+                    "new_root": "a" * 64,
+                    "global_key": "b" * 64,
+                    "leaf_value_hash": "c" * 64,
+                    "tree_size": 1,
+                }
+                return mock_resp
+
+        monkeypatch.setenv("INGEST_PARSER_CANONICAL_VERSION", "v9")
+        monkeypatch.setattr(ingest_api, "_get_sequencer_client", lambda: FakeClient())
+
+        await ingest_api._call_sequencer_queue_leaf(
+            shard_id="shard-1",
+            record_type="doc",
+            record_id="doc-001",
+            version="1",
+            canonical_content=b'{"k":"v"}',
+        )
+
+        assert captured_payload["content_type"] == "json"
+        assert captured_payload["parser_id"] == "fallback@1.0.0"
+        assert captured_payload["canonical_parser_version"] == "v9"
+
+    @pytest.mark.asyncio
+    async def test_batch_queue_leaves_includes_parser_metadata(self, monkeypatch):
+        """_call_sequencer_queue_leaves_batch sends metadata for every record."""
+        from api import ingest as ingest_api
+
+        captured_payload: dict = {}
+
+        class FakeClient:
+            async def post(self, url, *, json, headers):
+                captured_payload.update(json)
+                mock_resp = MagicMock()
+                mock_resp.status_code = 200
+                mock_resp.json.return_value = {
+                    "results": [
+                        {
+                            "new_root": "a" * 64,
+                            "global_key": "b" * 64,
+                            "leaf_value_hash": "c" * 64,
+                            "tree_size": 1,
+                        }
+                    ]
+                }
+                return mock_resp
+
+        monkeypatch.setenv("INGEST_PARSER_CANONICAL_VERSION", "v7")
+        monkeypatch.setattr(ingest_api, "_get_sequencer_client", lambda: FakeClient())
+
+        await ingest_api._call_sequencer_queue_leaves_batch(
+            [
+                {
+                    "shard_id": "shard-1",
+                    "record_type": "doc",
+                    "record_id": "doc-001",
+                    "version": "1",
+                    "canonical_content": b'{"k":"v"}',
+                }
+            ]
+        )
+
+        record = captured_payload["records"][0]
+        assert record["content_type"] == "json"
+        assert record["parser_id"] == "fallback@1.0.0"
+        assert record["canonical_parser_version"] == "v7"
+
+
+class TestSequencerProofSummaryVerification:
+    """Sequencer batch proof summaries should verify without Merkle leaf-index crashes."""
+
+    def test_empty_sibling_sequencer_summary_verifies_by_adr_leaf_hash(self):
+        from api.services.proof_utils import evaluate_proof_bundle
+
+        content_hash = "11" * 32
+        smt_key = "22" * 32
+        parser_id = "fallback@1.0.0"
+        canonical_parser_version = "v1"
+        root_hash = "33" * 32
+        proof = {
+            "leaf_hash": leaf_hash(
+                bytes.fromhex(smt_key),
+                bytes.fromhex(content_hash),
+                parser_id,
+                canonical_parser_version,
+            ).hex(),
+            "leaf_index": str(int(smt_key, 16)),
+            "siblings": [],
+            "root_hash": root_hash,
+            "tree_size": "1",
+            "smt_key": smt_key,
+            "parser_id": parser_id,
+            "canonical_parser_version": canonical_parser_version,
+        }
+
+        normalized_hash, normalized_root, hash_matches, proof_valid = evaluate_proof_bundle(
+            content_hash,
+            root_hash,
+            proof,
+        )
+
+        assert normalized_hash == content_hash
+        assert normalized_root == root_hash
+        assert hash_matches is True
+        assert proof_valid is True
+
+    def test_empty_sibling_value_hash_summary_requires_content_hash_binding(self):
+        from api.services.proof_utils import evaluate_proof_bundle
+
+        content_hash = "11" * 32
+        root_hash = "33" * 32
+        proof = {
+            "leaf_hash": "44" * 32,
+            "leaf_index": str(int("22" * 32, 16)),
+            "siblings": [],
+            "root_hash": root_hash,
+            "content_hash": content_hash,
+            "tree_size": "1",
+            "smt_key": "22" * 32,
+            "parser_id": "fallback@1.0.0",
+            "canonical_parser_version": "v1",
+        }
+
+        _, _, hash_matches, proof_valid = evaluate_proof_bundle(
+            content_hash,
+            root_hash,
+            proof,
+        )
+
+        assert hash_matches is True
+        assert proof_valid is True
+
+    def test_empty_sibling_value_hash_summary_rejects_unbound_content_hash(self):
+        from api.services.proof_utils import evaluate_proof_bundle
+
+        content_hash = "11" * 32
+        root_hash = "33" * 32
+        proof = {
+            "leaf_hash": "44" * 32,
+            "leaf_index": str(int("22" * 32, 16)),
+            "siblings": [],
+            "root_hash": root_hash,
+            "tree_size": "1",
+            "smt_key": "22" * 32,
+            "parser_id": "fallback@1.0.0",
+            "canonical_parser_version": "v1",
+        }
+
+        _, _, hash_matches, proof_valid = evaluate_proof_bundle(
+            content_hash,
+            root_hash,
+            proof,
+        )
+
+        assert hash_matches is False
+        assert proof_valid is False
 
 
 # ---------------------------------------------------------------------------

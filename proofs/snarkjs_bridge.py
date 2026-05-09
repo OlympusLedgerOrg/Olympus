@@ -83,6 +83,7 @@ def _resolve_rapidsnark_path() -> str | None:
 # Prerequisites
 # ---------------------------------------------------------------------------
 
+
 def _node_available() -> bool:
     """Return True if the ``node`` binary is on PATH."""
     try:
@@ -96,8 +97,7 @@ def _check_prerequisites() -> None:
     """Raise RuntimeError if Node.js or proofs/node_modules is missing."""
     if not _node_available():
         raise RuntimeError(
-            "snarkjs bridge requires Node.js on PATH. "
-            "Install Node >= 18 or use the CLI fallback."
+            "snarkjs bridge requires Node.js on PATH. Install Node >= 18 or use the CLI fallback."
         )
     if not _SCRIPT.exists():
         raise RuntimeError(
@@ -233,8 +233,7 @@ class _SnarkjsNodeProcess:
 
             if response_line is None:
                 raise RuntimeError(
-                    f"snarkjs node process exited unexpectedly.\n"
-                    f"stderr:\n{self._last_stderr()}"
+                    f"snarkjs node process exited unexpectedly.\nstderr:\n{self._last_stderr()}"
                 )
 
             result: dict[str, Any] = json.loads(response_line)
@@ -321,12 +320,14 @@ def full_prove(
     if not zkey_file.exists():
         raise FileNotFoundError(f"ZKey file not found: {zkey_file}")
 
-    result = _get_process().call({
-        "op": "fullProve",
-        "input": input_signals,
-        "wasmFile": str(wasm_file.resolve()),
-        "zkeyFile": str(zkey_file.resolve()),
-    })
+    result = _get_process().call(
+        {
+            "op": "fullProve",
+            "input": input_signals,
+            "wasmFile": str(wasm_file.resolve()),
+            "zkeyFile": str(zkey_file.resolve()),
+        }
+    )
     return result["proof"], result["publicSignals"]
 
 
@@ -354,11 +355,13 @@ def prove(
     if not zkey_file.exists():
         raise FileNotFoundError(f"ZKey file not found: {zkey_file}")
 
-    result = _get_process().call({
-        "op": "prove",
-        "witnessFile": str(witness_file.resolve()),
-        "zkeyFile": str(zkey_file.resolve()),
-    })
+    result = _get_process().call(
+        {
+            "op": "prove",
+            "witnessFile": str(witness_file.resolve()),
+            "zkeyFile": str(zkey_file.resolve()),
+        }
+    )
     return result["proof"], result["publicSignals"]
 
 
@@ -386,10 +389,12 @@ def verify(
     if not vkey_file.exists():
         raise FileNotFoundError(f"Verification key not found: {vkey_file}")
 
-    result = _get_process().call({
-        "op": "verify",
-        "vkeyFile": str(vkey_file.resolve()),
-        "proof": proof,
-        "publicSignals": public_signals,
-    })
+    result = _get_process().call(
+        {
+            "op": "verify",
+            "vkeyFile": str(vkey_file.resolve()),
+            "proof": proof,
+            "publicSignals": public_signals,
+        }
+    )
     return bool(result.get("ok", False))

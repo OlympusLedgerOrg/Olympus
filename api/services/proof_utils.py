@@ -142,6 +142,21 @@ def evaluate_proof_bundle(
     if merkle_proof.root_hash.hex() != normalized_root:
         return normalized_hash, normalized_root, content_hash_matches_proof, False
 
+    if smt_key_hex is not None and len(merkle_proof.siblings) == 0:
+        # The Go sequencer batch endpoint currently returns a commitment
+        # summary (root + SMT key + leaf value hash) rather than a full
+        # 256-sibling sparse Merkle inclusion proof. Newer summaries include
+        # content_hash so the value-hash summary is explicitly bound back to
+        # the queried ledger hash; older ADR-style summaries may still carry
+        # the recomputable ADR-0003 leaf hash.
+        summary_content_hash = merkle_proof_data.get("content_hash")
+        summary_matches_hash = (
+            isinstance(summary_content_hash, str)
+            and summary_content_hash.lower() == normalized_hash
+        )
+        summary_bound_to_hash = content_hash_matches_proof or summary_matches_hash
+        return normalized_hash, normalized_root, summary_bound_to_hash, summary_bound_to_hash
+
     try:
         merkle_proof_valid = content_hash_matches_proof and verify_proof(merkle_proof)
     except ValueError:

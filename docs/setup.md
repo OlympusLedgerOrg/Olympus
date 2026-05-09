@@ -7,7 +7,7 @@ Get Olympus running locally with **one command**.
 | Requirement | Notes |
 |-------------|-------|
 | **Docker** | [docker.com/get-docker](https://docs.docker.com/get-docker/) |
-| **Python 3.10+** | [python.org](https://www.python.org/downloads/) |
+| **Python 3.10-3.13** | [python.org](https://www.python.org/downloads/) |
 | **Rust / Cargo** | Required by `maturin` to build the `olympus_core` extension. Install via [rustup.rs](https://rustup.rs) |
 | **Node.js 20.19+ or 22.12+** | Required for the public UX dev server. Install via [nodejs.org](https://nodejs.org/) |
 
@@ -114,7 +114,7 @@ To use a custom database username and password:
 
 Both scripts perform the same core steps in order:
 
-1. **Check prerequisites** — Python 3.10+. Docker is only required when `-StartDocker` is supplied.
+1. **Check prerequisites** — Python 3.10-3.13. Docker is only required when `-StartDocker` is supplied.
 2. **Start PostgreSQL** — With `-StartDocker`: launches the `olympus-postgres` container on port 5432
    (re-running is safe: an already-running container is reused). Without `-StartDocker`: the script
    expects an external Postgres instance reachable at the configured `DATABASE_URL`; it will fail
@@ -163,7 +163,7 @@ Double-click Olympus-Start-Windows.cmd
 **Unix/macOS:**
 ```bash
 source .venv/bin/activate
-uvicorn api.app:app --reload --host 0.0.0.0 --port 8000
+uvicorn api.main:app --reload --host 0.0.0.0 --port 8000
 ```
 
 ---

@@ -7,7 +7,7 @@
 git clone https://github.com/OlympusLedgerOrg/Olympus.git
 cd Olympus
 
-# Set up Python environment (Python 3.10+)
+# Set up Python environment (Python 3.10-3.13)
 python3 -m venv .venv
 source .venv/bin/activate  # On Windows: .venv\Scripts\activate
 
@@ -24,16 +24,16 @@ python -c "from protocol import hashes; print('✓ Protocol imports working')"
 ### 1. Code Linting & Formatting
 ```bash
 # Check code quality (E, W, F, I, UP rules)
-ruff check protocol/ storage/ api/ scaffolding/ tests/
+ruff check .
 
 # Auto-fix issues
-ruff check protocol/ storage/ api/ scaffolding/ tests/ --fix
+ruff check . --fix
 
 # Check formatting
-ruff format --check protocol/ storage/ api/ scaffolding/ tests/
+ruff format --check .
 
 # Auto-format code
-ruff format protocol/ storage/ api/ scaffolding/ tests/
+ruff format .
 ```
 
 ### 2. Type Checking
@@ -101,9 +101,9 @@ coverage xml  # For CI integration
 
 ## ⚠️ Pre-Scale Constraints
 
-**Hard gates before horizontal scaling:**
+**Hard gate before multi-worker deployments:**
 
-- **`WEB_CONCURRENCY=1` required** — The witness store DB upgrade is incomplete. Running multiple worker processes will cause witness generation race conditions and data corruption. This constraint MUST remain in place until the witness store schema supports concurrent writes.
+- **`WEB_CONCURRENCY=1` with in-memory rate limiting** — When `RATE_LIMIT_BACKEND=memory` (the default), each worker process maintains independent rate-limit buckets, making the effective limit `N x configured_value`. Running multiple workers with memory-backed rate limiting is blocked at startup in production. Use a shared backend such as Redis before raising worker count.
 
   **How to enforce:**
   ```bash
@@ -164,6 +164,7 @@ The GitHub Actions workflow automatically runs on push and PR:
 - ✅ JSON schema validation
 - ✅ Import boundary verification
 - ✅ Cross-language verifier conformance (Python, Go, Rust, JavaScript + 5,000-case determinism harness)
+- ✅ 24-hour reliability fuzzing framework (`tests/fuzz/`, Hypothesis property-based)
 
 ## 🏁 Phase 0 Completion Status
 
@@ -194,8 +195,8 @@ and [`proofs/README.md`](../proofs/README.md) for circuit details.
 python -m pip install --upgrade pip
 pip install -e ".[dev]"
 python tools/validate_schemas.py
-ruff check protocol/ storage/ api/ scaffolding/ tests/
-ruff format --check protocol/ storage/ api/ scaffolding/ tests/
+ruff check .
+ruff format --check .
 mypy protocol/ storage/ api/
 bandit -r protocol/ storage/ api/ scaffolding/ -f txt
 pytest -q -m "not postgres" --cov=protocol --cov=storage --cov=api --cov=scaffolding
@@ -241,16 +242,16 @@ bandit -r protocol/ storage/ api/ scaffolding/
 
 ## ❓ FAQ
 
-**Q: Why does `pip install -e .` fail?**  
+**Q: Why does `pip install -e .` fail?**
 A: Ensure setuptools >= 77.0.0. This is enforced in `pyproject.toml`.
 
-**Q: Coverage is below 85%?**  
+**Q: Coverage is below 85%?**
 A: Run the full test suite including Postgres-marked tests (`pytest tests/ -v`) for complete coverage.
 
-**Q: What about migrations?**  
+**Q: What about migrations?**
 A: `migrations/` is excluded from package distribution but can be included if needed for Alembic runtime.
 
-**Q: Can I use Python 3.10 or 3.11?**  
-A: Yes! The project supports Python 3.10, 3.11, and 3.12.
+**Q: Can I use Python 3.10 or 3.11?**
+A: Yes. The project supports Python 3.10, 3.11, 3.12, and 3.13.
 
 ---

@@ -205,9 +205,7 @@ class RekorAnchor:
             )
 
         try:
-            payload = self._build_hashedrekord_payload(
-                shard_id, seq, header_hash, root_hash
-            )
+            payload = self._build_hashedrekord_payload(shard_id, seq, header_hash, root_hash)
 
             response = await self.http_client.post(
                 f"{self.base_url}/api/v1/log/entries",
