@@ -128,7 +128,8 @@ All stages are independently verifiable. The canonicalization version is current
 |-------|-----------|
 | **Python API** | FastAPI 0.135, SQLAlchemy 2 async, psycopg 3, Pydantic v2, Uvicorn |
 | **Go sequencer** | Go 1.24, gRPC (google.golang.org/grpc v1.79), lib/pq† |
-| **Rust crypto core** | Rust 2021 edition, blake3 1.5, ed25519-dalek 2.1, tonic 0.10 (gRPC)† |
+| **Shared Rust crypto crate** | `crates/olympus-crypto`: protocol-critical BLAKE3 record keys, global keys, SMT leaf/node hashes, empty-leaf sentinel |
+| **Rust CD-HS-ST service** | Rust 2021 edition, shared `olympus-crypto`, ed25519-dalek 2.1, tonic 0.14 (gRPC)† |
 | **Python Rust extension (`olympus_core`)** | pyo3 0.24; O(n) ADL scanner (CVE-2026-4539), BLAKE3/canonical-JSON acceleration, Poseidon BN254 (mandatory), Groth16 ZK verifier (mandatory), `RustSparseMerkleTree` |
 | **ZK circuits** | Circom, snarkjs, circomlib (Poseidon); rapidsnark (optional native prover, 5-10× faster); Halo2 gated behind `OLYMPUS_HALO2_ENABLED` |
 | **Database** | PostgreSQL 16 with Alembic migrations |
@@ -136,7 +137,7 @@ All stages are independently verifiable. The canonicalization version is current
 | **CI** | GitHub Actions: lint, typecheck, unit, smoke, verifier-conformance, CodeQL, dependency-lock |
 | **Wire format** | Protobuf between Go <-> Rust (`proto/cdhs_smf.proto`, `proto/olympus.proto`) |
 
-† Go sequencer and Rust gRPC service are scaffolded for Phase 1; not yet the primary write path. Current write path: Python API → `storage/postgres.py` → embedded Rust PyO3 (`olympus_core`).
+† Go sequencer and Rust gRPC service are scaffolded for Phase 1; not yet the primary write path. Current write path: Python API → `storage/postgres.py` → embedded Rust PyO3 (`olympus_core`). The protocol-critical Rust hash/key primitives are shared by both Rust paths through `crates/olympus-crypto`.
 
 Python version: **>=3.10** (3.12 used for CI tooling and dependency locking).
 
@@ -153,6 +154,7 @@ The three phase-0 blockers were:
 3. **E2E CI integration test against real PostgreSQL** ✓ — covered by the `smoke` workflow and `pytest -m postgres`.
 
 **Phase 1** (greenfield, no migration) services are underway:
+- Shared Rust crypto primitives: `crates/olympus-crypto/`
 - Go sequencer: `services/sequencer-go/`
 - Rust CD-HS-ST service: `services/cdhs-smf-rust/`
 - Shared protobuf definitions: `proto/`
@@ -185,6 +187,15 @@ make dev                             # FastAPI on :8000
 make federation-dev                  # three-node local federation via Docker Compose
 ```
 
+On Windows, the double-click local launcher is:
+
+```text
+Olympus-Start-Windows.cmd
+```
+
+It prepares the local stack and starts the public UX at `http://localhost:5173`
+plus the API at `http://localhost:8000`.
+
 ## Repository Layout
 
 ```text
@@ -206,8 +217,10 @@ protocol/        Python reference implementations -- hashing, CD-HS-ST,
                    canonicalization, Merkle trees, ledger, redaction, federation,
                    attestations, checkpoints, RFC 3161
 schemas/         JSON schema definitions validated by tools/validate_schemas.py
+crates/          Shared Rust crates:
+                   olympus-crypto/ -- protocol-critical hash/key primitives
 services/        Microservices:
-                   cdhs-smf-rust/  -- Rust gRPC CD-HS-ST cryptographic core
+                   cdhs-smf-rust/  -- Rust gRPC CD-HS-ST service
                    sequencer-go/   -- Go gRPC log sequencer
 src/             Rust PyO3 extension (olympus_core) -- O(n) ADL scanner
                    (CVE-2026-4539 fix), BLAKE3/canonical-JSON acceleration
@@ -228,6 +241,10 @@ git clone https://github.com/OlympusLedgerOrg/Olympus.git
 cd Olympus
 python -m pip install -e ".[dev]"
 ```
+
+For one-command local setup, use `setup-windows.ps1` on Windows or
+`setup-unix.sh` on macOS/Linux. The older root `run.sh` and `run.bat`
+wrappers have been removed.
 
 ### Quality gate
 

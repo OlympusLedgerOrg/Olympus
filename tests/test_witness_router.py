@@ -48,6 +48,10 @@ async def session_factory(db_engine):
 
 @pytest_asyncio.fixture()
 async def client(session_factory, monkeypatch):
+    monkeypatch.delenv("OLYMPUS_API_KEYS_JSON", raising=False)
+    monkeypatch.delenv("OLYMPUS_SEQUENCER_TOKEN", raising=False)
+    monkeypatch.delenv("SEQUENCER_API_TOKEN", raising=False)
+
     async def override_get_db():
         async with session_factory() as session:
             yield session

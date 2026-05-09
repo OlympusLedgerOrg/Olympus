@@ -1,0 +1,135 @@
+<!doctype html>
+<html>
+<head>
+  <meta http-equiv="x-ua-compatible" content="IE=edge">
+  <title>Olympus Local App</title>
+  <hta:application
+    id="OlympusLauncher"
+    applicationname="Olympus Local App"
+    border="thin"
+    caption="yes"
+    maximizebutton="no"
+    minimizebutton="yes"
+    scroll="no"
+    showintaskbar="yes"
+    singleinstance="yes"
+    sysmenu="yes"
+    windowstate="normal"
+  />
+  <style>
+    html,
+    body {
+      width: 760px;
+      height: 500px;
+      margin: 0;
+      overflow: hidden;
+      background: #080d12;
+      color: #edf7f4;
+      font-family: "Segoe UI", Arial, sans-serif;
+    }
+
+    .shell {
+      position: relative;
+      width: 760px;
+      height: 500px;
+      background: #080d12;
+    }
+
+    .hero {
+      width: 760px;
+      height: 428px;
+      object-fit: cover;
+      display: block;
+    }
+
+    .fallback {
+      width: 760px;
+      height: 428px;
+      display: none;
+      align-items: center;
+      justify-content: center;
+      background: linear-gradient(135deg, #09121a 0%, #10242a 54%, #231d11 100%);
+      color: #edf7f4;
+      font-size: 44px;
+      font-weight: 700;
+      letter-spacing: 4px;
+    }
+
+    .status {
+      height: 72px;
+      padding: 12px 26px 0;
+      box-sizing: border-box;
+      background: #071015;
+      border-top: 1px solid rgba(116, 221, 196, 0.28);
+    }
+
+    .line {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 18px;
+      font-size: 14px;
+      color: #b8cbc7;
+      margin-bottom: 10px;
+    }
+
+    .url {
+      color: #80e5ca;
+      font-weight: 600;
+    }
+
+    .track {
+      position: relative;
+      width: 100%;
+      height: 10px;
+      overflow: hidden;
+      border-radius: 999px;
+      background: rgba(255, 255, 255, 0.12);
+    }
+
+    .bar {
+      position: absolute;
+      top: 0;
+      left: -35%;
+      width: 35%;
+      height: 10px;
+      border-radius: 999px;
+      background: linear-gradient(90deg, #47d7ff, #66f0c2, #f4c95d);
+    }
+  </style>
+</head>
+<body>
+  <div class="shell">
+    <img id="hero" class="hero" alt="Olympus loading" src="app/public-ui/loading.png">
+    <div id="fallback" class="fallback">OLYMPUS</div>
+    <div class="status">
+      <div class="line">
+        <span>Starting local stack...</span>
+        <span class="url">UX http://localhost:5173</span>
+      </div>
+      <div class="track"><div id="bar" class="bar"></div></div>
+    </div>
+  </div>
+
+  <script language="javascript">
+    window.resizeTo(776, 548);
+    try {
+      var left = Math.max(0, (screen.availWidth - 776) / 2);
+      var top = Math.max(0, (screen.availHeight - 548) / 2);
+      window.moveTo(left, top);
+    } catch (e) {}
+
+    document.getElementById("hero").onerror = function () {
+      this.style.display = "none";
+      document.getElementById("fallback").style.display = "flex";
+    };
+
+    var pos = -35;
+    window.setInterval(function () {
+      pos += 2;
+      if (pos > 100) pos = -35;
+      document.getElementById("bar").style.left = pos + "%";
+    }, 35);
+  </script>
+</body>
+</html>

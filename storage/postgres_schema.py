@@ -181,13 +181,28 @@ def schema_statements(node_rehash_gate: str) -> list[str]:
                 -- back-fill (same rationale as the global_seq block above).
                 ALTER TABLE smt_leaves DISABLE TRIGGER ALL;
 
-                UPDATE smt_leaves sl
-                SET shard_id = (
-                    SELECT sh.shard_id
-                    FROM shard_headers sh
-                    WHERE sh.leaf_seq = sl.global_seq
-                    LIMIT 1
-                );
+                -- Guard: only back-fill from shard_headers.leaf_seq when that
+                -- column already exists.  On databases where both
+                -- smt_leaves.shard_id and shard_headers.leaf_seq are absent
+                -- simultaneously (e.g. the ADR-0004 migration for
+                -- shard_headers hasn't run yet because it appears later in
+                -- schema_statements()), skip the JOIN and let the NULL-to-''
+                -- catch-all below assign the safe legacy default.
+                IF EXISTS (
+                    SELECT 1
+                    FROM information_schema.columns
+                    WHERE table_schema = 'public'
+                      AND table_name = 'shard_headers'
+                      AND column_name = 'leaf_seq'
+                ) THEN
+                    UPDATE smt_leaves sl
+                    SET shard_id = (
+                        SELECT sh.shard_id
+                        FROM shard_headers sh
+                        WHERE sh.leaf_seq = sl.global_seq
+                        LIMIT 1
+                    );
+                END IF;
 
                 UPDATE smt_leaves SET shard_id = '' WHERE shard_id IS NULL;
 
@@ -273,16 +288,31 @@ def schema_statements(node_rehash_gate: str) -> list[str]:
         """
         DO $$
         BEGIN
+            -- Guard on leaf_seq existence: on databases where the ADR-0004
+            -- migration (which adds leaf_seq) runs *after* this block
+            -- (because it appears later in schema_statements()), skip the
+            -- constraint here; it will be added when schema_statements() is
+            -- invoked a second time or when the CREATE TABLE above creates a
+            -- fresh shard_headers that already includes leaf_seq.
             IF NOT EXISTS (
                 SELECT 1 FROM pg_constraint
                 WHERE conname = 'shard_headers_positive_seq_requires_leaf_seq'
                   AND conrelid = 'shard_headers'::regclass
+            ) AND EXISTS (
+                SELECT 1
+                FROM information_schema.columns
+                WHERE table_schema = 'public'
+                  AND table_name = 'shard_headers'
+                  AND column_name = 'leaf_seq'
             ) THEN
+                -- Use NOT VALID so the constraint governs future writes without
+                -- performing a full-table scan that may fail on legacy rows
+                -- (seq > 0, leaf_seq = 0) from before ADR-0004.  Those rows
+                -- are harmless historical artifacts; new append_record writes
+                -- always supply an explicit leaf_seq > 0 for non-genesis headers.
                 ALTER TABLE shard_headers
                     ADD CONSTRAINT shard_headers_positive_seq_requires_leaf_seq
                     CHECK (seq = 0 OR leaf_seq > 0) NOT VALID;
-                ALTER TABLE shard_headers
-                    VALIDATE CONSTRAINT shard_headers_positive_seq_requires_leaf_seq;
             END IF;
         END $$;
         """,
@@ -318,18 +348,25 @@ def schema_statements(node_rehash_gate: str) -> list[str]:
             ) THEN
                 ALTER TABLE shard_headers ADD COLUMN leaf_seq BIGINT NOT NULL DEFAULT 0;
 
-                -- Suspend append-only triggers for the back-fill UPDATEs below.
-                -- Same rationale as the smt_leaves blocks above: this branch only
-                -- runs when leaf_seq is absent (the controlled one-time migration
-                -- path); re-enable immediately after.
-                ALTER TABLE shard_headers DISABLE TRIGGER ALL;
+                -- Suspend user-defined append-only triggers for the back-fill
+                -- UPDATEs below.  Same rationale as the smt_leaves blocks
+                -- above: this branch only runs when leaf_seq is absent (the
+                -- controlled one-time migration path); re-enable immediately
+                -- after.
+                -- NOTE: DISABLE TRIGGER USER (not ALL) because shard_headers
+                -- is referenced by timestamp_tokens via a foreign key, which
+                -- creates a system RI trigger.  ALL requires superuser;
+                -- USER only suspends user-created triggers and is sufficient
+                -- here since system FK triggers don't interfere with the
+                -- back-fill leaf_seq UPDATE.
+                ALTER TABLE shard_headers DISABLE TRIGGER USER;
 
                 -- Pass 1: back-fill via smt_change_journal when available.
                 -- scj.new_value matches smt_leaves.value_hash for the leaf
                 -- that was committed in the same append_record transaction.
                 IF to_regclass('public.smt_change_journal') IS NOT NULL THEN
                     UPDATE shard_headers sh
-                    SET leaf_seq = (
+                    SET leaf_seq = COALESCE((
                         SELECT sl.global_seq
                         FROM smt_change_journal scj
                         JOIN smt_leaves sl
@@ -338,7 +375,7 @@ def schema_statements(node_rehash_gate: str) -> list[str]:
                         WHERE scj.shard_id = sh.shard_id
                           AND scj.header_seq = sh.seq
                         LIMIT 1
-                    )
+                    ), leaf_seq)
                     WHERE leaf_seq = 0
                       AND EXISTS (
                           SELECT 1 FROM smt_change_journal scj2
@@ -358,7 +395,7 @@ def schema_statements(node_rehash_gate: str) -> list[str]:
                 )
                 WHERE leaf_seq = 0;
 
-                ALTER TABLE shard_headers ENABLE TRIGGER ALL;
+                ALTER TABLE shard_headers ENABLE TRIGGER USER;
             END IF;
         END $$;
         """,

@@ -1,40 +1,70 @@
 #Requires -Version 5.1
 <#
 .SYNOPSIS
-    One-command setup for Olympus on Windows.
+    Dev-safe Windows setup for Olympus, with optional WSL live sequencer support.
 
 .DESCRIPTION
-    Checks prerequisites, starts a PostgreSQL Docker container, creates a
-    Python virtual environment, installs dependencies, runs database
-    migrations, and starts the API on http://localhost:8000.
+    This script prepares local Windows dev:
+      - Loads .env
+      - Forces local PostgreSQL URLs if requested
+      - Normalizes integer env vars like MAX_UPLOAD_BYTES
+      - Creates/activates .venv
+      - Installs Python deps
+      - Builds Rust/Python extension with maturin
+      - Installs/starts the public UX
+      - Builds/tests Go sequencer on Windows
+      - Optionally starts CDHS-SMF + Go sequencer inside WSL because CDHS-SMF uses Unix sockets
 
-.PARAMETER DbUser
-    PostgreSQL username (default: olympus).
-
-.PARAMETER DbPassword
-    PostgreSQL password (default: olympus).  Use a strong password in
-    any environment that is reachable from outside your machine.
-
-.PARAMETER SkipDocker
-    Skip the PostgreSQL Docker container step (use if you already have
-    Postgres running externally).
-
-.PARAMETER SkipStart
-    Set up everything but do not start the API server at the end.
-
-.EXAMPLE
-    .\setup-windows.ps1
-
-.EXAMPLE
-    .\setup-windows.ps1 -DbUser myuser -DbPassword s3cr3t
-
-.EXAMPLE
-    .\setup-windows.ps1 -SkipDocker
+    Important:
+      Native Windows can build/test the Go sequencer, but the live daemon path depends on
+      CDHS-SMF over a Unix socket. Use -UseWslSequencer -StartWslCdhsSmf -StartWslGoSequencer
+      for the live smoke-test path.
 #>
+
 param(
     [string]$DbUser     = "olympus",
     [string]$DbPassword = "olympus",
+    [string]$DbHost     = "127.0.0.1",
+    [int]$DbPort        = 5432,
+    [string]$DbName     = "olympus",
+
+    [switch]$StartDocker,
     [switch]$SkipDocker,
+    [switch]$ForceLocalDbUrl,
+
+    [switch]$SkipInstall,
+    [switch]$SkipRustBuild,
+    [switch]$ReleaseRustBuild,
+
+    [switch]$EnableGoSequencer,
+    [switch]$BuildGoSequencer,
+    [switch]$TestGoSequencer,
+    [switch]$StartGoSequencer,
+    [switch]$RunSequencerSmokeTests,
+
+    [ValidateSet("url", "components")]
+    [string]$SequencerDbMode = "url",
+
+    [string]$SequencerHttpAddr = "127.0.0.1:8081",
+    [string]$SequencerUrl = "http://localhost:8081",
+
+    [switch]$UseWslSequencer,
+    [switch]$StartWslCdhsSmf,
+    [switch]$StartWslGoSequencer,
+    [string]$WslDistro = "",
+    [string]$WslRepoPath = "",
+    [string]$WslCdhsSocket = "/run/olympus/cdhs-smf.sock",
+    [string]$WslSequencerHttpAddr = "0.0.0.0:8081",
+    [string]$WslDbHost = "auto",
+
+    [switch]$RequireGoSequencer,
+    [switch]$SkipGoSequencer,
+
+    [switch]$SkipMigrations,
+    [switch]$StampHead,
+    [switch]$ResetDb,
+    [switch]$SkipUi,
+    [int]$UiPort = 5173,
     [switch]$SkipStart
 )
 
@@ -43,59 +73,1046 @@ $ErrorActionPreference = "Stop"
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
-function Write-Step  { param($msg) Write-Host "`n[*] $msg" -ForegroundColor Cyan }
-function Write-Ok    { param($msg) Write-Host "    [+] $msg" -ForegroundColor Green }
-function Write-Warn  { param($msg) Write-Host "    [!] $msg" -ForegroundColor Yellow }
-function Write-Fail  { param($msg) Write-Host "`n[X] $msg" -ForegroundColor Red; exit 1 }
+
+function Write-Step {
+    param([string]$msg)
+    Write-Host "`n[*] $msg" -ForegroundColor Cyan
+}
+
+function Write-Ok {
+    param([string]$msg)
+    Write-Host "    [+] $msg" -ForegroundColor Green
+}
+
+function Write-Warn {
+    param([string]$msg)
+    Write-Host "    [!] $msg" -ForegroundColor Yellow
+}
+
+function Write-Fail {
+    param([string]$msg)
+    Write-Host "`n[X] $msg" -ForegroundColor Red
+    exit 1
+}
+
+function Test-Command {
+    param([string]$Name)
+    return [bool](Get-Command $Name -ErrorAction SilentlyContinue)
+}
+
+function Mask-DatabaseUrl {
+    param([string]$Url)
+
+    if (-not $Url) {
+        return "<empty>"
+    }
+
+    return ($Url -replace '://([^:/@]+):([^@]+)@', '://${1}:***@')
+}
+
+function Load-DotEnv {
+    param([string]$Path)
+
+    if (-not (Test-Path $Path)) {
+        Write-Warn ".env not found at $Path"
+        return
+    }
+
+    Get-Content $Path | ForEach-Object {
+        $line = $_.Trim()
+
+        if (-not $line) { return }
+        if ($line.StartsWith("#")) { return }
+        if (-not $line.Contains("=")) { return }
+
+        $name, $value = $line -split "=", 2
+        $name = $name.Trim()
+        $value = $value.Trim()
+
+        if (
+            ($value.StartsWith('"') -and $value.EndsWith('"')) -or
+            ($value.StartsWith("'") -and $value.EndsWith("'"))
+        ) {
+            $value = $value.Substring(1, $value.Length - 2)
+        }
+
+        if (-not [Environment]::GetEnvironmentVariable($name, "Process")) {
+            [Environment]::SetEnvironmentVariable($name, $value, "Process")
+        }
+    }
+
+    Write-Ok ".env loaded into current PowerShell process."
+}
+
+function Set-DotEnvValue {
+    param(
+        [string]$Path,
+        [string]$Key,
+        [string]$Value
+    )
+
+    if (-not (Test-Path $Path)) {
+        New-Item -Path $Path -ItemType File -Force | Out-Null
+    }
+
+    $lines = @(Get-Content $Path -ErrorAction SilentlyContinue)
+    $found = $false
+    $updated = @()
+
+    foreach ($line in $lines) {
+        if ($line -match "^\s*$([regex]::Escape($Key))=") {
+            $updated += "$Key=$Value"
+            $found = $true
+        } else {
+            $updated += $line
+        }
+    }
+
+    if (-not $found) {
+        $updated += "$Key=$Value"
+    }
+
+    $updated | Set-Content -Path $Path -Encoding UTF8
+}
+
+function Remove-DotEnvKey {
+    param(
+        [string]$Path,
+        [string]$Key
+    )
+
+    if (-not (Test-Path $Path)) {
+        return
+    }
+
+    $lines = @(Get-Content $Path -ErrorAction SilentlyContinue)
+    $updated = @()
+
+    foreach ($line in $lines) {
+        if ($line -match "^\s*$([regex]::Escape($Key))=") {
+            continue
+        }
+
+        $updated += $line
+    }
+
+    $updated | Set-Content -Path $Path -Encoding UTF8
+}
+
+function Save-DotEnvIfMissing {
+    param([string]$Path)
+
+    if (Test-Path $Path) {
+        Write-Ok ".env already exists -- not overwriting."
+        return
+    }
+
+    @"
+# Auto-generated by setup-windows.ps1 -- edit as needed.
+DATABASE_URL=$env:DATABASE_URL
+PSYCOPG_URL=$env:PSYCOPG_URL
+MAX_UPLOAD_BYTES=$env:MAX_UPLOAD_BYTES
+OLYMPUS_INGEST_SIGNING_KEY=$env:OLYMPUS_INGEST_SIGNING_KEY
+OLYMPUS_DEV_SIGNING_KEY=false
+OLYMPUS_USE_GO_SEQUENCER=$env:OLYMPUS_USE_GO_SEQUENCER
+OLYMPUS_SEQUENCER_TOKEN=$env:OLYMPUS_SEQUENCER_TOKEN
+SEQUENCER_API_TOKEN=$env:SEQUENCER_API_TOKEN
+GO_SEQUENCER_URL=$env:GO_SEQUENCER_URL
+SEQUENCER_HTTP_ADDR=$env:SEQUENCER_HTTP_ADDR
+SEQUENCER_ALLOW_INSECURE_DB=$env:SEQUENCER_ALLOW_INSECURE_DB
+"@ | Set-Content -Encoding UTF8 $Path
+
+    Write-Ok ".env written to $Path"
+}
+
+function New-RandomHexKey {
+    $keyBytes = New-Object byte[] 32
+    [System.Security.Cryptography.RandomNumberGenerator]::Create().GetBytes($keyBytes)
+    return ($keyBytes | ForEach-Object { $_.ToString("x2") }) -join ""
+}
+
+function Test-TcpPort {
+    param(
+        [string]$HostName,
+        [int]$Port
+    )
+
+    try {
+        $client = New-Object System.Net.Sockets.TcpClient
+        $iar = $client.BeginConnect($HostName, $Port, $null, $null)
+        $success = $iar.AsyncWaitHandle.WaitOne(1000, $false)
+
+        if ($success) {
+            $client.EndConnect($iar)
+            $client.Close()
+            return $true
+        }
+
+        $client.Close()
+        return $false
+    } catch {
+        return $false
+    }
+}
+
+function Get-HostAndPortFromAddr {
+    param([string]$Addr)
+
+    $parts = $Addr -split ":", 2
+    if ($parts.Count -ne 2) {
+        return @{ Host = "127.0.0.1"; Port = 8081 }
+    }
+
+    $hostPart = $parts[0]
+    if (-not $hostPart -or $hostPart -eq "0.0.0.0") {
+        $hostPart = "127.0.0.1"
+    }
+
+    return @{
+        Host = $hostPart
+        Port = [int]$parts[1]
+    }
+}
+
+function Invoke-PostgresSql {
+    param([string]$Sql)
+
+    $env:PGPASSWORD = $DbPassword
+
+    if (Test-Command "psql") {
+        psql `
+            -h $DbHost `
+            -p $DbPort `
+            -U $DbUser `
+            -d $DbName `
+            -v ON_ERROR_STOP=1 `
+            -c $Sql
+        return
+    }
+
+    if (Test-Command "docker") {
+        $container = docker ps --filter "name=olympus-postgres" --format "{{.Names}}" 2>$null
+
+        if ($container -eq "olympus-postgres") {
+            docker exec `
+                -e PGPASSWORD=$DbPassword `
+                olympus-postgres `
+                psql `
+                -U $DbUser `
+                -d $DbName `
+                -v ON_ERROR_STOP=1 `
+                -c $Sql
+            return
+        }
+    }
+
+    Write-Fail "Could not run SQL. Install psql or run/start the olympus-postgres Docker container."
+}
+
+function Test-PostgresTableExists {
+    param([string]$TableName)
+
+    $code = @"
+import os
+import sys
+
+import psycopg
+
+database_url = os.environ.get("DATABASE_URL") or os.environ.get("PSYCOPG_URL")
+if not database_url:
+    sys.exit(2)
+
+with psycopg.connect(database_url) as conn:
+    with conn.cursor() as cur:
+        cur.execute("SELECT to_regclass(%s) IS NOT NULL", (f"public.{sys.argv[1]}",))
+        print("1" if cur.fetchone()[0] else "0")
+"@
+
+    $result = $code | python - $TableName
+    if ($LASTEXITCODE -ne 0) {
+        Write-Warn "Could not inspect PostgreSQL table '$TableName'."
+        return $false
+    }
+
+    return (($result | Select-Object -Last 1) -eq "1")
+}
+
+function Invoke-AlembicStamp {
+    param([string]$Revision)
+
+    python -m alembic stamp $Revision
+
+    if ($LASTEXITCODE -ne 0) {
+        Write-Fail "Alembic stamp failed with exit code $LASTEXITCODE"
+    }
+}
+
+function Test-RustToolchain {
+    if (-not (Test-Command "cargo")) {
+        Write-Fail "Rust/Cargo not found. Install Rust from https://rustup.rs/, then reopen PowerShell and rerun."
+    }
+
+    $cargoVersion = cargo --version 2>&1
+    Write-Ok "$cargoVersion"
+}
+
+function Test-GoToolchain {
+    if (-not (Test-Command "go")) {
+        if ($RequireGoSequencer -or $BuildGoSequencer -or $TestGoSequencer -or $StartGoSequencer -or $RunSequencerSmokeTests) {
+            Write-Fail "Go toolchain not found. Install Go, reopen PowerShell, and rerun."
+        }
+
+        Write-Warn "Go toolchain not found. Skipping Go sequencer setup."
+        return $false
+    }
+
+    $goVersion = go version 2>&1
+    Write-Ok "$goVersion"
+    return $true
+}
+
+function Test-NodeToolchain {
+    if (-not (Test-Command "node")) {
+        Write-Fail "Node.js not found. Install Node.js 20.19+ or 22.12+, reopen PowerShell, and rerun. Use -SkipUi to skip UX setup."
+    }
+
+    if (-not (Test-Command "npm")) {
+        Write-Fail "npm not found. Install Node.js with npm, reopen PowerShell, and rerun. Use -SkipUi to skip UX setup."
+    }
+
+    $nodeVersion = node --version 2>&1
+    $npmVersion = npm --version 2>&1
+    Write-Ok "node $nodeVersion"
+    Write-Ok "npm $npmVersion"
+}
+
+function Install-PublicUiDeps {
+    param([string]$UiDir)
+
+    if (-not (Test-Path (Join-Path $UiDir "package.json"))) {
+        Write-Warn "Public UX package.json not found at $UiDir. Skipping UX dependency install."
+        return
+    }
+
+    Write-Step "Installing public UX dependencies"
+
+    Push-Location $UiDir
+    try {
+        if (Test-Path "package-lock.json") {
+            npm ci --legacy-peer-deps --no-audit --no-fund
+        } else {
+            npm install --legacy-peer-deps --no-audit --no-fund
+        }
+
+        if ($LASTEXITCODE -ne 0) {
+            Write-Fail "Public UX dependency install failed with exit code $LASTEXITCODE"
+        }
+    } finally {
+        Pop-Location
+    }
+
+    Write-Ok "Public UX dependencies are installed."
+}
+
+function Start-PublicUiServer {
+    param(
+        [string]$UiDir,
+        [int]$Port
+    )
+
+    Write-Step "Starting public UX"
+
+    if (Test-TcpPort -HostName "127.0.0.1" -Port $Port) {
+        Write-Ok "Public UX already appears reachable at http://localhost:$Port"
+        return
+    }
+
+    $pwsh = (Get-Command powershell.exe -ErrorAction SilentlyContinue).Source
+    if (-not $pwsh) {
+        $pwsh = "powershell.exe"
+    }
+
+    $command = @"
+cd '$UiDir'
+`$env:VITE_API_BASE='http://localhost:8000'
+`$env:VITE_API_BASE_URL='http://localhost:8000'
+npm run dev -- --host 127.0.0.1 --port $Port
+"@
+
+    Start-Process -FilePath $pwsh -ArgumentList "-NoExit", "-Command", $command | Out-Null
+
+    for ($i = 0; $i -lt 20; $i++) {
+        Start-Sleep -Milliseconds 500
+
+        if (Test-TcpPort -HostName "127.0.0.1" -Port $Port) {
+            Write-Ok "Public UX is listening at http://localhost:$Port"
+            return
+        }
+    }
+
+    Write-Warn "Public UX window opened, but http://localhost:$Port was not reachable yet."
+}
+
+function Find-GoSequencerDirs {
+    param([string]$Root)
+
+    $goMods = Get-ChildItem -Path $Root -Recurse -Force -Filter "go.mod" |
+        Where-Object {
+            $_.FullName -notmatch "\\.venv\\" -and
+            $_.FullName -notmatch "\\node_modules\\" -and
+            $_.FullName -notmatch "\\target\\" -and
+            $_.FullName -notmatch "\\.git\\"
+        }
+
+    $candidates = @()
+
+    foreach ($goMod in $goMods) {
+        $dir = Split-Path $goMod.FullName -Parent
+        $dirName = Split-Path $dir -Leaf
+        $goModText = Get-Content $goMod.FullName -Raw
+
+        if (
+            $dirName -match "sequencer" -or
+            $goMod.FullName -match "sequencer" -or
+            $goModText -match "sequencer"
+        ) {
+            $candidates += $dir
+        }
+    }
+
+    return $candidates | Select-Object -Unique
+}
+
+function New-GoSequencerTokenIfMissing {
+    param([string]$EnvPath)
+
+    if (-not $env:OLYMPUS_SEQUENCER_TOKEN) {
+        $token = New-RandomHexKey
+        $env:OLYMPUS_SEQUENCER_TOKEN = $token
+        Set-DotEnvValue -Path $EnvPath -Key "OLYMPUS_SEQUENCER_TOKEN" -Value $token
+        Write-Ok "OLYMPUS_SEQUENCER_TOKEN generated and written to .env."
+    } else {
+        Write-Ok "OLYMPUS_SEQUENCER_TOKEN loaded."
+    }
+
+    $env:SEQUENCER_API_TOKEN = $env:OLYMPUS_SEQUENCER_TOKEN
+    Set-DotEnvValue -Path $EnvPath -Key "SEQUENCER_API_TOKEN" -Value $env:SEQUENCER_API_TOKEN
+}
+
+function Normalize-IntegerEnv {
+    param(
+        [string]$EnvPath,
+        [string]$Key,
+        [string]$DefaultValue
+    )
+
+    $current = [Environment]::GetEnvironmentVariable($Key, "Process")
+
+    if (-not $current) {
+        $current = $DefaultValue
+    }
+
+    $clean = ($current -split '#', 2)[0].Trim()
+
+    if ($clean -notmatch '^\d+$') {
+        Write-Warn "$Key had invalid value '$current'. Resetting to $DefaultValue."
+        $clean = $DefaultValue
+    }
+
+    [Environment]::SetEnvironmentVariable($Key, $clean, "Process")
+    Set-DotEnvValue -Path $EnvPath -Key $Key -Value $clean
+
+    Write-Ok "$Key set to $clean"
+}
+
+function Clear-PipTempJunk {
+    param([string]$RepoRoot)
+
+    $sitePackages = Join-Path $RepoRoot ".venv\Lib\site-packages"
+
+    if (-not (Test-Path $sitePackages)) {
+        return
+    }
+
+    $junk = Get-ChildItem $sitePackages -Directory -Force -ErrorAction SilentlyContinue |
+        Where-Object {
+            $_.Name -like "~*" -or
+            $_.Name -like "*.tmp" -or
+            $_.Name -like "pip-*"
+        }
+
+    foreach ($item in $junk) {
+        try {
+            Remove-Item $item.FullName -Recurse -Force -ErrorAction Stop
+            Write-Ok "Removed stale pip temp directory: $($item.Name)"
+        } catch {
+            Write-Warn "Could not remove stale pip temp directory: $($item.FullName)"
+        }
+    }
+}
+
+function Clear-SequencerDbEnv {
+    param([string]$EnvPath)
+
+    $keys = @(
+        "SEQUENCER_DB_URL",
+        "SEQUENCER_DB_HOST",
+        "SEQUENCER_DB_PORT",
+        "SEQUENCER_DB_USER",
+        "SEQUENCER_DB_PASSWORD",
+        "SEQUENCER_DB_PASSWORD_FILE",
+        "SEQUENCER_DB_NAME",
+        "SEQUENCER_DB_SSLMODE"
+    )
+
+    foreach ($key in $keys) {
+        Remove-Item "Env:$key" -ErrorAction SilentlyContinue
+        Remove-DotEnvKey -Path $EnvPath -Key $key
+    }
+}
+
+function Configure-GoSequencerDbEnv {
+    param(
+        [string]$EnvPath,
+        [string]$Mode
+    )
+
+    Write-Step "Configuring Go sequencer DB environment"
+
+    Clear-SequencerDbEnv -EnvPath $EnvPath
+
+    $env:SEQUENCER_ALLOW_INSECURE_DB = "1"
+    Set-DotEnvValue -Path $EnvPath -Key "SEQUENCER_ALLOW_INSECURE_DB" -Value "1"
+    Write-Warn "SEQUENCER_ALLOW_INSECURE_DB=1 set for local development only."
+
+    if ($Mode -eq "url") {
+        $seqDbUrl = "postgresql://${DbUser}:${DbPassword}@${DbHost}:${DbPort}/${DbName}?sslmode=disable"
+
+        $env:SEQUENCER_DB_URL = $seqDbUrl
+        Set-DotEnvValue -Path $EnvPath -Key "SEQUENCER_DB_URL" -Value $seqDbUrl
+
+        Write-Ok "SEQUENCER_DB_URL set to $(Mask-DatabaseUrl $seqDbUrl)"
+        Write-Ok "Sequencer DB mode: url"
+        return
+    }
+
+    $env:SEQUENCER_DB_HOST = $DbHost
+    $env:SEQUENCER_DB_PORT = "$DbPort"
+    $env:SEQUENCER_DB_USER = $DbUser
+    $env:SEQUENCER_DB_PASSWORD = $DbPassword
+    $env:SEQUENCER_DB_NAME = $DbName
+    $env:SEQUENCER_DB_SSLMODE = "disable"
+
+    Set-DotEnvValue -Path $EnvPath -Key "SEQUENCER_DB_HOST" -Value $env:SEQUENCER_DB_HOST
+    Set-DotEnvValue -Path $EnvPath -Key "SEQUENCER_DB_PORT" -Value $env:SEQUENCER_DB_PORT
+    Set-DotEnvValue -Path $EnvPath -Key "SEQUENCER_DB_USER" -Value $env:SEQUENCER_DB_USER
+    Set-DotEnvValue -Path $EnvPath -Key "SEQUENCER_DB_PASSWORD" -Value $env:SEQUENCER_DB_PASSWORD
+    Set-DotEnvValue -Path $EnvPath -Key "SEQUENCER_DB_NAME" -Value $env:SEQUENCER_DB_NAME
+    Set-DotEnvValue -Path $EnvPath -Key "SEQUENCER_DB_SSLMODE" -Value $env:SEQUENCER_DB_SSLMODE
+
+    Write-Ok "Sequencer component DB vars set."
+    Write-Ok "Sequencer DB mode: components"
+}
+
+function Test-WslAvailable {
+    if (-not (Test-Command "wsl.exe")) {
+        Write-Fail "wsl.exe not found. Install WSL first: wsl --install"
+    }
+
+    $list = wsl.exe -l -q 2>$null
+    if ($LASTEXITCODE -ne 0 -or -not $list) {
+        Write-Fail "WSL is installed but no distro appears available. Run: wsl --install -d Ubuntu"
+    }
+
+    Write-Ok "WSL available."
+}
+
+function Convert-ToWslPath {
+    param([string]$WindowsPath)
+
+    if ($WslRepoPath -and $WindowsPath -eq $RepoRoot) {
+        return $WslRepoPath
+    }
+
+    $escaped = $WindowsPath.Replace("\", "\\").Replace("'", "'\''")
+    $cmd = "wslpath -a '$escaped'"
+
+    if ($WslDistro) {
+        $path = wsl.exe -d $WslDistro -- bash -lc $cmd
+    } else {
+        $path = wsl.exe -- bash -lc $cmd
+    }
+
+    if ($LASTEXITCODE -ne 0 -or -not $path) {
+        Write-Fail "Could not convert Windows path '$WindowsPath' to WSL path. Pass -WslRepoPath manually if converting repo root."
+    }
+
+    return ($path | Select-Object -First 1).Trim()
+}
+
+function Invoke-WslCommand {
+    param(
+        [string]$Command,
+        [switch]$IgnoreExitCode
+    )
+
+    $safeTitle = "inline"
+    $scriptName = ".olympus-wsl-$safeTitle-$([Guid]::NewGuid().ToString('N')).sh"
+    $scriptPath = Join-Path $RepoRoot $scriptName
+
+    $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
+    [System.IO.File]::WriteAllText($scriptPath, $Command.Replace("`r`n", "`n"), $utf8NoBom)
+
+    $wslScriptPath = Convert-ToWslPath -WindowsPath $scriptPath
+
+    if ($WslDistro) {
+        wsl.exe -d $WslDistro -- bash $wslScriptPath
+    } else {
+        wsl.exe -- bash $wslScriptPath
+    }
+
+    $exit = $LASTEXITCODE
+
+    Remove-Item $scriptPath -Force -ErrorAction SilentlyContinue
+
+    if (-not $IgnoreExitCode -and $exit -ne 0) {
+        Write-Fail "WSL command failed with exit code $exit"
+    }
+}
+
+function Get-WslDbHost {
+    if ($WslDbHost -and $WslDbHost -ne "auto") {
+        return $WslDbHost
+    }
+
+    $cmd = "awk '/^nameserver/ { print `$2; exit }' /etc/resolv.conf"
+
+    if ($WslDistro) {
+        $raw = wsl.exe -d $WslDistro -- bash -lc $cmd
+    } else {
+        $raw = wsl.exe -- bash -lc $cmd
+    }
+
+    if ($LASTEXITCODE -ne 0 -or -not $raw) {
+        Write-Warn "Could not auto-detect Windows host IP from WSL. Falling back to 127.0.0.1."
+        return "127.0.0.1"
+    }
+
+    $line = ($raw | Select-Object -First 1).Trim()
+
+    if ($line -match '(\d{1,3}(\.\d{1,3}){3})') {
+        return $Matches[1]
+    }
+
+    Write-Warn "Could not parse WSL nameserver from '$line'. Falling back to 127.0.0.1."
+    return "127.0.0.1"
+}
+
+function Get-WslVmIp {
+    $cmd = "hostname -I | awk '{ print `$1; exit }'"
+
+    if ($WslDistro) {
+        $raw = wsl.exe -d $WslDistro -- bash -lc $cmd
+    } else {
+        $raw = wsl.exe -- bash -lc $cmd
+    }
+
+    if ($LASTEXITCODE -ne 0 -or -not $raw) {
+        Write-Warn "Could not auto-detect WSL VM IP. Falling back to localhost for sequencer URL."
+        return ""
+    }
+
+    $line = ($raw | Select-Object -First 1).Trim()
+
+    if ($line -match '(\d{1,3}(\.\d{1,3}){3})') {
+        return $Matches[1]
+    }
+
+    Write-Warn "Could not parse WSL VM IP from '$line'. Falling back to localhost for sequencer URL."
+    return ""
+}
+
+function Start-WslWindow {
+    param(
+        [string]$Title,
+        [string]$Command
+    )
+
+    $pwsh = (Get-Command powershell.exe -ErrorAction SilentlyContinue).Source
+    if (-not $pwsh) {
+        $pwsh = "powershell.exe"
+    }
+
+    $safeTitle = ($Title -replace '[^a-zA-Z0-9_-]', '_')
+    $scriptName = ".olympus-wsl-$safeTitle-$([Guid]::NewGuid().ToString('N')).sh"
+    $scriptPath = Join-Path $RepoRoot $scriptName
+
+    $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
+    [System.IO.File]::WriteAllText($scriptPath, $Command.Replace("`r`n", "`n"), $utf8NoBom)
+
+    $wslScriptPath = Convert-ToWslPath -WindowsPath $scriptPath
+
+    if ($WslDistro) {
+        $psCommand = "Write-Host '$Title' -ForegroundColor Cyan; wsl.exe -d '$WslDistro' -- bash '$wslScriptPath'"
+    } else {
+        $psCommand = "Write-Host '$Title' -ForegroundColor Cyan; wsl.exe -- bash '$wslScriptPath'"
+    }
+
+    Start-Process -FilePath $pwsh -ArgumentList "-NoExit", "-Command", $psCommand | Out-Null
+}
+
+function Wait-WslSocket {
+    param(
+        [string]$SocketPath,
+        [int]$TimeoutSeconds = 60
+    )
+
+    Write-Step "Waiting for WSL socket $SocketPath"
+
+    $deadline = (Get-Date).AddSeconds($TimeoutSeconds)
+
+    while ((Get-Date) -lt $deadline) {
+        $testCmd = "test -S '$SocketPath'"
+
+        if ($WslDistro) {
+            wsl.exe -d $WslDistro -- bash -lc $testCmd | Out-Null
+        } else {
+            wsl.exe -- bash -lc $testCmd | Out-Null
+        }
+
+        if ($LASTEXITCODE -eq 0) {
+            Write-Ok "WSL socket is ready: $SocketPath"
+            return
+        }
+
+        Start-Sleep -Milliseconds 500
+    }
+
+    throw "Timed out waiting for WSL socket: $SocketPath"
+}
+
+function Start-WslCdhsSmfServer {
+    param(
+        [string]$WslRepo,
+        [string]$SocketPath
+    )
+
+    Write-Step "Starting CDHS-SMF under WSL"
+
+    $cmd = @"
+set -e
+mkdir -p /run/olympus 2>/dev/null || sudo mkdir -p /run/olympus
+chmod 777 /run/olympus 2>/dev/null || sudo chmod 777 /run/olympus
+secret_dir="`$HOME/.config/olympus/secrets"
+secret_key="`$secret_dir/sequencer-smt.key"
+mkdir -p "`$secret_dir"
+chmod 700 "`$secret_dir"
+if [ ! -f "`$secret_key" ]; then
+  openssl rand -hex 32 > "`$secret_key"
+fi
+chmod 600 "`$secret_key"
+cd '$WslRepo/services/cdhs-smf-rust'
+export CDHS_SMF_SOCKET='$SocketPath'
+export CDHS_SMF_UNLINK_STALE_SOCKET=1
+export SEQUENCER_SMT_SIGNING_KEY_PATH="`$secret_key"
+export CARGO_TARGET_DIR=/tmp/olympus-cargo-target
+[ -f "`$HOME/.cargo/env" ] && . "`$HOME/.cargo/env"
+echo '[cdhs-smf] socket=$SocketPath'
+echo "[cdhs-smf] signing_key_path=`$secret_key"
+cargo --version
+cargo run
+"@
+
+    Start-WslWindow -Title "Olympus CDHS-SMF WSL server" -Command $cmd
+    Write-Warn "Opened WSL CDHS-SMF window. Leave it open."
+}
+
+function Start-WslGoSequencerServer {
+    param(
+        [string]$WslRepo,
+        [string]$SocketPath,
+        [string]$HttpAddr,
+        [string]$DbHostForWsl
+    )
+
+    Write-Step "Starting Go sequencer under WSL"
+
+    $wslDbUrl = "postgresql://${DbUser}:${DbPassword}@${DbHostForWsl}:${DbPort}/${DbName}?sslmode=disable"
+
+    $cmd = @"
+set -e
+deadline=`$((SECONDS + 60))
+while [ ! -S '$SocketPath' ]; do
+  if [ "`$SECONDS" -ge "`$deadline" ]; then
+    echo '[sequencer] timed out waiting for CDHS-SMF socket: $SocketPath' >&2
+    exit 1
+  fi
+  echo '[sequencer] waiting for CDHS-SMF socket: $SocketPath'
+  sleep 0.5
+done
+cd '$WslRepo/services/sequencer-go'
+export SEQUENCER_ALLOW_INSECURE_DB=1
+export SEQUENCER_DB_URL='$wslDbUrl'
+export SEQUENCER_HTTP_ADDR='$HttpAddr'
+export CDHS_SMF_SOCKET='$SocketPath'
+export OLYMPUS_SEQUENCER_TOKEN='$env:OLYMPUS_SEQUENCER_TOKEN'
+export SEQUENCER_API_TOKEN='$env:SEQUENCER_API_TOKEN'
+[ -f "`$HOME/.cargo/env" ] && . "`$HOME/.cargo/env"
+echo '[sequencer] db=postgresql://${DbUser}:***@${DbHostForWsl}:${DbPort}/${DbName}?sslmode=disable'
+echo '[sequencer] http=$HttpAddr'
+echo '[sequencer] cdhs=$SocketPath'
+go version
+go run ./cmd/sequencer
+"@
+
+    Start-WslWindow -Title "Olympus Go sequencer WSL server" -Command $cmd
+    Write-Warn "Opened WSL Go sequencer window. Leave it open."
+}
+
+function Start-GoSequencerServer {
+    param(
+        [string]$SequencerDir,
+        [string]$Addr
+    )
+
+    Write-Step "Starting native Windows Go sequencer server"
+
+    $addrInfo = Get-HostAndPortFromAddr -Addr $Addr
+    $listenHost = $addrInfo.Host
+    $listenPort = $addrInfo.Port
+
+    if (Test-TcpPort -HostName $listenHost -Port $listenPort) {
+        Write-Ok "Go sequencer already appears reachable at $Addr"
+        return
+    }
+
+    $pwsh = (Get-Command powershell.exe -ErrorAction SilentlyContinue).Source
+    if (-not $pwsh) {
+        $pwsh = "powershell.exe"
+    }
+
+    $command = @"
+cd '$SequencerDir'
+Get-ChildItem Env:SEQUENCER_DB* | Remove-Item -ErrorAction SilentlyContinue
+`$env:SEQUENCER_ALLOW_INSECURE_DB='1'
+`$env:SEQUENCER_HTTP_ADDR='$Addr'
+`$env:OLYMPUS_SEQUENCER_TOKEN='$env:OLYMPUS_SEQUENCER_TOKEN'
+`$env:SEQUENCER_API_TOKEN='$env:SEQUENCER_API_TOKEN'
+`$env:SEQUENCER_DB_URL='$env:SEQUENCER_DB_URL'
+go run .\cmd\sequencer
+"@
+
+    Write-Warn "Opening native Windows Go sequencer window. This may fail if CDHS-SMF Unix socket is required."
+    Start-Process -FilePath $pwsh -ArgumentList "-NoExit", "-Command", $command | Out-Null
+
+    $ready = $false
+
+    for ($i = 0; $i -lt 15; $i++) {
+        Start-Sleep -Seconds 1
+
+        if (Test-TcpPort -HostName $listenHost -Port $listenPort) {
+            $ready = $true
+            break
+        }
+    }
+
+    if ($ready) {
+        Write-Ok "Go sequencer is listening at $Addr"
+    } else {
+        Write-Warn "Go sequencer did not start listening at $Addr. Native Windows likely hit CDHS-SMF Unix socket dependency."
+    }
+}
+
+function Run-SequencerSmokeTests {
+    param([string]$RepoRoot)
+
+    Write-Step "Running Go sequencer live smoke tests"
+
+    $env:GO_SEQUENCER_URL = $SequencerUrl
+    $env:OLYMPUS_USE_GO_SEQUENCER = "1"
+    $env:SEQUENCER_API_TOKEN = $env:OLYMPUS_SEQUENCER_TOKEN
+    $env:MAX_UPLOAD_BYTES = "268435456"
+
+    $addrInfo = Get-HostAndPortFromAddr -Addr "127.0.0.1:8081"
+
+    if (-not (Test-TcpPort -HostName $addrInfo.Host -Port $addrInfo.Port)) {
+        Write-Fail "Sequencer is not listening at 127.0.0.1:8081. Start WSL sequencer/CDHS first."
+    }
+
+    Push-Location $RepoRoot
+    try {
+        python -m pytest tests\test_sequencer_client_smoke.py -vv --tb=short
+
+        if ($LASTEXITCODE -ne 0) {
+            Write-Fail "Go sequencer smoke tests failed with exit code $LASTEXITCODE"
+        }
+    } finally {
+        Pop-Location
+    }
+
+    Write-Ok "Go sequencer smoke tests passed."
+}
 
 # ---------------------------------------------------------------------------
 # Banner
 # ---------------------------------------------------------------------------
+
 Write-Host ""
 Write-Host "==================================================" -ForegroundColor Cyan
-Write-Host "   Olympus -- one-command setup (Windows)        " -ForegroundColor Cyan
+Write-Host "   Olympus -- dev-safe Windows setup + WSL       " -ForegroundColor Cyan
 Write-Host "==================================================" -ForegroundColor Cyan
+
+$RepoRoot = $PSScriptRoot
+if (-not $RepoRoot) {
+    $RepoRoot = (Get-Location).Path
+}
+$envFile = Join-Path $RepoRoot ".env"
+$publicUiDir = Join-Path $RepoRoot "app\public-ui"
 
 # ---------------------------------------------------------------------------
 # 1. Prerequisites
 # ---------------------------------------------------------------------------
+
 Write-Step "Checking prerequisites"
 
-# Python 3.10+
-try {
-    $pyRaw = python --version 2>&1
-} catch {
-    Write-Fail "Python not found. Install Python 3.10+ from https://python.org and re-run."
+if (-not (Test-Command "python")) {
+    Write-Fail "Python not found. Install Python 3.10+ and rerun."
 }
+
+$pyRaw = python --version 2>&1
 if ($pyRaw -notmatch "3\.(1[0-9]|[2-9]\d)") {
-    Write-Fail "Python 3.10+ is required (found: $pyRaw). Download from https://python.org."
+    Write-Fail "Python 3.10+ is required. Found: $pyRaw"
 }
 Write-Ok "$pyRaw"
 
-# Docker (only needed when not skipped)
-if (-not $SkipDocker) {
-    try {
-        $dockerVer = docker --version 2>&1
-    } catch {
-        Write-Fail "Docker not found. Install Docker Desktop from https://www.docker.com/products/docker-desktop and re-run."
-    }
-    Write-Ok "$dockerVer"
+if ($StartDocker -and -not (Test-Command "docker")) {
+    Write-Fail "Docker not found. Install Docker Desktop or run without -StartDocker."
+}
+
+if (-not $SkipRustBuild) {
+    Test-RustToolchain
+}
+
+if (-not $SkipUi) {
+    Test-NodeToolchain
+}
+
+if ($UseWslSequencer -or $StartWslCdhsSmf -or $StartWslGoSequencer) {
+    Test-WslAvailable
 }
 
 # ---------------------------------------------------------------------------
-# 2. PostgreSQL via Docker
+# 2. Load environment
 # ---------------------------------------------------------------------------
-if (-not $SkipDocker) {
-    Write-Step "Starting PostgreSQL (Docker)"
+
+Write-Step "Loading environment"
+
+Load-DotEnv -Path $envFile
+
+$localDbUrl = "postgresql://${DbUser}:${DbPassword}@${DbHost}:${DbPort}/${DbName}"
+
+if ($ForceLocalDbUrl) {
+    $env:DATABASE_URL = $localDbUrl
+    $env:PSYCOPG_URL = $localDbUrl
+
+    Set-DotEnvValue -Path $envFile -Key "DATABASE_URL" -Value $localDbUrl
+    Set-DotEnvValue -Path $envFile -Key "PSYCOPG_URL" -Value $localDbUrl
+
+    Write-Ok "DATABASE_URL forced to $(Mask-DatabaseUrl $localDbUrl)"
+    Write-Ok "PSYCOPG_URL forced to $(Mask-DatabaseUrl $localDbUrl)"
+} elseif (-not $env:DATABASE_URL) {
+    $env:DATABASE_URL = $localDbUrl
+    Write-Ok "DATABASE_URL set to $(Mask-DatabaseUrl $localDbUrl)"
+} else {
+    Write-Ok "DATABASE_URL already set -- using existing value: $(Mask-DatabaseUrl $env:DATABASE_URL)"
+}
+
+if (-not $env:PSYCOPG_URL) {
+    $env:PSYCOPG_URL = $localDbUrl
+    Write-Ok "PSYCOPG_URL set to $(Mask-DatabaseUrl $localDbUrl)"
+}
+
+Normalize-IntegerEnv -EnvPath $envFile -Key "MAX_UPLOAD_BYTES" -DefaultValue "268435456"
+
+if (-not $env:OLYMPUS_DEV_SIGNING_KEY) {
+    $env:OLYMPUS_DEV_SIGNING_KEY = "false"
+    Set-DotEnvValue -Path $envFile -Key "OLYMPUS_DEV_SIGNING_KEY" -Value "false"
+    Write-Ok "OLYMPUS_DEV_SIGNING_KEY set to false."
+} else {
+    Write-Ok "OLYMPUS_DEV_SIGNING_KEY already set to $env:OLYMPUS_DEV_SIGNING_KEY"
+}
+
+if (-not $env:OLYMPUS_INGEST_SIGNING_KEY) {
+    $env:OLYMPUS_INGEST_SIGNING_KEY = New-RandomHexKey
+    Set-DotEnvValue -Path $envFile -Key "OLYMPUS_INGEST_SIGNING_KEY" -Value $env:OLYMPUS_INGEST_SIGNING_KEY
+
+    Write-Warn "OLYMPUS_INGEST_SIGNING_KEY was missing, so a dev key was generated."
+    Write-Warn "This key was written to .env so signatures stay stable across restarts."
+} else {
+    Write-Ok "OLYMPUS_INGEST_SIGNING_KEY loaded."
+}
+
+if (-not $SkipGoSequencer) {
+    if ($EnableGoSequencer) {
+        $env:OLYMPUS_USE_GO_SEQUENCER = "1"
+        Set-DotEnvValue -Path $envFile -Key "OLYMPUS_USE_GO_SEQUENCER" -Value "1"
+        Write-Ok "OLYMPUS_USE_GO_SEQUENCER enabled."
+    } elseif (-not $env:OLYMPUS_USE_GO_SEQUENCER) {
+        $env:OLYMPUS_USE_GO_SEQUENCER = "0"
+        Set-DotEnvValue -Path $envFile -Key "OLYMPUS_USE_GO_SEQUENCER" -Value "0"
+        Write-Ok "OLYMPUS_USE_GO_SEQUENCER defaulted to 0."
+    } else {
+        Write-Ok "OLYMPUS_USE_GO_SEQUENCER already set to $env:OLYMPUS_USE_GO_SEQUENCER"
+    }
+
+    New-GoSequencerTokenIfMissing -EnvPath $envFile
+
+    if ($UseWslSequencer -and $SequencerUrl -eq "http://localhost:8081") {
+        $wslSequencerAddrInfo = Get-HostAndPortFromAddr -Addr $WslSequencerHttpAddr
+        $wslVmIp = Get-WslVmIp
+
+        if ($wslVmIp) {
+            $SequencerUrl = "http://${wslVmIp}:$($wslSequencerAddrInfo.Port)"
+            Write-Ok "WSL sequencer URL set to $SequencerUrl"
+        }
+    }
+
+    $env:GO_SEQUENCER_URL = $SequencerUrl
+    $env:SEQUENCER_HTTP_ADDR = $SequencerHttpAddr
+
+    Set-DotEnvValue -Path $envFile -Key "GO_SEQUENCER_URL" -Value $env:GO_SEQUENCER_URL
+    Set-DotEnvValue -Path $envFile -Key "OLYMPUS_SEQUENCER_URL" -Value $env:GO_SEQUENCER_URL
+    Set-DotEnvValue -Path $envFile -Key "SEQUENCER_HTTP_ADDR" -Value $env:SEQUENCER_HTTP_ADDR
+
+    Configure-GoSequencerDbEnv -EnvPath $envFile -Mode $SequencerDbMode
+} else {
+    Write-Warn "Skipping Go sequencer environment setup."
+}
+
+Save-DotEnvIfMissing -Path $envFile
+
+# ---------------------------------------------------------------------------
+# 3. PostgreSQL
+# ---------------------------------------------------------------------------
+
+Write-Step "Checking PostgreSQL"
+
+$dbReachable = Test-TcpPort -HostName $DbHost -Port $DbPort
+
+if ($dbReachable) {
+    Write-Ok "PostgreSQL is reachable at ${DbHost}:${DbPort}"
+} elseif ($StartDocker -and -not $SkipDocker) {
+    Write-Warn "PostgreSQL not reachable. Starting standalone Docker Postgres."
 
     $running = docker ps --filter "name=olympus-postgres" --format "{{.Names}}" 2>$null
+
     if ($running -eq "olympus-postgres") {
-        Write-Ok "Container 'olympus-postgres' is already running -- reusing it."
+        Write-Ok "Container 'olympus-postgres' is already running."
     } else {
-        # Remove stopped container with the same name if it exists
         $stopped = docker ps -a --filter "name=olympus-postgres" --format "{{.Names}}" 2>$null
+
         if ($stopped -eq "olympus-postgres") {
-            Write-Warn "Removing stopped 'olympus-postgres' container..."
+            Write-Warn "Removing stopped 'olympus-postgres' container."
             docker rm olympus-postgres | Out-Null
         }
 
@@ -103,139 +1120,404 @@ if (-not $SkipDocker) {
             --name olympus-postgres `
             -e POSTGRES_USER=$DbUser `
             -e POSTGRES_PASSWORD=$DbPassword `
-            -e POSTGRES_DB=olympus `
-            -p 5432:5432 `
+            -e POSTGRES_DB=$DbName `
+            -p "${DbPort}:5432" `
             -d postgres:16 | Out-Null
 
-        Write-Ok "Container started -- waiting up to 30 s for Postgres to be ready..."
+        Write-Ok "Container started. Waiting for Postgres..."
 
         $ready = $false
+
         for ($i = 0; $i -lt 30; $i++) {
             Start-Sleep -Seconds 1
-            $pg = docker exec olympus-postgres pg_isready -U $DbUser -d olympus 2>$null
-            if ($LASTEXITCODE -eq 0) { $ready = $true; break }
+            docker exec olympus-postgres pg_isready -U $DbUser -d $DbName 2>$null | Out-Null
+
+            if ($LASTEXITCODE -eq 0) {
+                $ready = $true
+                break
+            }
         }
+
         if (-not $ready) {
-            Write-Fail "Postgres did not become ready in 30 s. Run: docker logs olympus-postgres"
+            Write-Fail "Postgres did not become ready. Run: docker logs olympus-postgres"
         }
-        Write-Ok "PostgreSQL is ready."
+
+        Write-Ok "PostgreSQL Docker container is ready."
     }
-}
-
-# ---------------------------------------------------------------------------
-# 3. Environment variables
-# ---------------------------------------------------------------------------
-Write-Step "Setting environment variables"
-
-if (-not $env:DATABASE_URL) {
-    $env:DATABASE_URL = "postgresql://${DbUser}:${DbPassword}@localhost:5432/olympus"
-    Write-Ok "DATABASE_URL set to postgresql://${DbUser}:***@localhost:5432/olympus"
 } else {
-    Write-Ok "DATABASE_URL already set -- using existing value."
-}
-
-if (-not $env:OLYMPUS_INGEST_SIGNING_KEY) {
-    # Generate a random 32-byte key at setup time so it survives restarts.
-    $keyBytes = New-Object byte[] 32
-    [System.Security.Cryptography.RandomNumberGenerator]::Create().GetBytes($keyBytes)
-    $env:OLYMPUS_INGEST_SIGNING_KEY = ($keyBytes | ForEach-Object { $_.ToString("x2") }) -join ""
-    Write-Ok "OLYMPUS_INGEST_SIGNING_KEY generated (random 32-byte key)."
-    Write-Warn "Persist this key in your .env file to keep ledger entries verifiable:"
-    Write-Host "   OLYMPUS_INGEST_SIGNING_KEY=$env:OLYMPUS_INGEST_SIGNING_KEY" -ForegroundColor Yellow
-} else {
-    Write-Ok "OLYMPUS_INGEST_SIGNING_KEY already set -- using existing value."
-}
-
-# Convenience: also write a .env file so subsequent runs pick up the same values
-$envFile = Join-Path $PSScriptRoot ".env"
-if (-not (Test-Path $envFile)) {
-    @"
-# Auto-generated by setup-windows.ps1 -- edit as needed.
-DATABASE_URL=$env:DATABASE_URL
-OLYMPUS_INGEST_SIGNING_KEY=$env:OLYMPUS_INGEST_SIGNING_KEY
-OLYMPUS_DEV_SIGNING_KEY=false
-"@ | Set-Content -Encoding UTF8 $envFile
-    Write-Ok ".env file written to $envFile"
-} else {
-    Write-Ok ".env already exists -- not overwriting."
+    Write-Fail "PostgreSQL is not reachable at ${DbHost}:${DbPort}. Start it, or run with -StartDocker."
 }
 
 # ---------------------------------------------------------------------------
 # 4. Python virtual environment
 # ---------------------------------------------------------------------------
+
 Write-Step "Setting up Python virtual environment"
 
-$venvDir = Join-Path $PSScriptRoot ".venv"
+$venvDir = Join-Path $RepoRoot ".venv"
+$activateScript = Join-Path $venvDir "Scripts\Activate.ps1"
+
 if (-not (Test-Path $venvDir)) {
     python -m venv $venvDir
     Write-Ok "Virtual environment created at .venv"
 } else {
-    Write-Ok "Virtual environment already exists at .venv"
+    Write-Ok "Virtual environment already exists."
 }
 
-# Activate
-$activateScript = Join-Path $venvDir "Scripts\Activate.ps1"
 if (-not (Test-Path $activateScript)) {
-    Write-Fail "Cannot find .venv\Scripts\Activate.ps1 -- virtual environment may be corrupted. Delete .venv and re-run."
+    Write-Fail "Cannot find .venv\Scripts\Activate.ps1. Delete .venv and rerun."
 }
+
 . $activateScript
 Write-Ok "Virtual environment activated."
 
 # ---------------------------------------------------------------------------
-# 5. Install dependencies
+# 5. Install Python dependencies
 # ---------------------------------------------------------------------------
-Write-Step "Installing Python dependencies (this may take a few minutes)"
 
-python -m pip install --upgrade pip --quiet
-pip install --quiet -r (Join-Path $PSScriptRoot "requirements.txt")
-if (Test-Path (Join-Path $PSScriptRoot "requirements-dev.txt")) {
-    pip install --quiet -r (Join-Path $PSScriptRoot "requirements-dev.txt")
+if (-not $SkipInstall) {
+    Write-Step "Installing Python dependencies"
+
+    Clear-PipTempJunk -RepoRoot $RepoRoot
+
+    python -m pip install --upgrade pip --quiet
+    if ($LASTEXITCODE -ne 0) {
+        Write-Warn "pip upgrade returned exit code $LASTEXITCODE. Continuing."
+    }
+
+    $requirements = Join-Path $RepoRoot "requirements.txt"
+    $requirementsDev = Join-Path $RepoRoot "requirements-dev.txt"
+
+    if (Test-Path $requirements) {
+        python -m pip install --quiet -r $requirements
+        if ($LASTEXITCODE -ne 0) {
+            Write-Fail "Failed to install requirements.txt"
+        }
+    } else {
+        Write-Warn "requirements.txt not found."
+    }
+
+    if (Test-Path $requirementsDev) {
+        python -m pip install --quiet -r $requirementsDev
+        if ($LASTEXITCODE -ne 0) {
+            Write-Fail "Failed to install requirements-dev.txt"
+        }
+    }
+
+    Write-Ok "Installing Olympus package in editable mode."
+
+    python -m pip install --quiet -e "$RepoRoot.[dev]"
+    $editableExit = $LASTEXITCODE
+
+    if ($editableExit -ne 0) {
+        Write-Warn "Editable install with [dev] returned exit code $editableExit. Trying plain editable install."
+        Clear-PipTempJunk -RepoRoot $RepoRoot
+
+        python -m pip install --quiet -e $RepoRoot
+        $plainEditableExit = $LASTEXITCODE
+
+        if ($plainEditableExit -ne 0) {
+            Write-Warn "Plain editable install returned exit code $plainEditableExit. Continuing because maturin will install the Rust package next."
+        }
+    }
+
+    Write-Ok "Dependency step complete."
+} else {
+    Write-Ok "Skipping dependency installation."
 }
-pip install --quiet -e (Join-Path $PSScriptRoot ".[dev]") 2>$null
-if ($LASTEXITCODE -ne 0) {
-    # Fall back to plain install if [dev] extra is not defined
-    pip install --quiet -e $PSScriptRoot
+
+# ---------------------------------------------------------------------------
+# 6. Install public UX dependencies
+# ---------------------------------------------------------------------------
+
+if (-not $SkipUi -and -not $SkipInstall) {
+    Install-PublicUiDeps -UiDir $publicUiDir
+} elseif ($SkipUi) {
+    Write-Ok "Skipping public UX setup."
+} else {
+    Write-Ok "Skipping public UX dependency installation."
 }
-Write-Ok "Dependencies installed."
 
 # ---------------------------------------------------------------------------
-# 6. Database migrations
+# 7. Build Rust/Python extension
 # ---------------------------------------------------------------------------
-Write-Step "Running Alembic database migrations"
 
-Push-Location $PSScriptRoot
-try {
-    python -m alembic upgrade head
-} catch {
-    Write-Fail "Alembic migration failed: $_`nCheck DATABASE_URL and that PostgreSQL is reachable."
-} finally {
-    Pop-Location
+if (-not $SkipRustBuild) {
+    Write-Step "Building Rust/Python extension with maturin"
+
+    if (-not (Test-Command "maturin")) {
+        Write-Warn "maturin not found on PATH. Installing maturin into the venv."
+        python -m pip install maturin --quiet
+
+        if ($LASTEXITCODE -ne 0) {
+            Write-Fail "Failed to install maturin."
+        }
+    }
+
+    Push-Location $RepoRoot
+    try {
+        if ($ReleaseRustBuild) {
+            python -m maturin develop --release
+        } else {
+            python -m maturin develop
+        }
+
+        if ($LASTEXITCODE -ne 0) {
+            Write-Fail "maturin develop failed with exit code $LASTEXITCODE"
+        }
+    } catch {
+        Write-Fail "maturin develop failed: $_"
+    } finally {
+        Pop-Location
+    }
+
+    Write-Ok "Rust/Python extension installed into the active venv."
+} else {
+    Write-Warn "Skipping Rust extension build. SMT tests may be skipped."
 }
-Write-Ok "Database schema is up to date."
 
 # ---------------------------------------------------------------------------
-# 7. Success summary
+# 8. Build/Test native Windows Go sequencer
 # ---------------------------------------------------------------------------
+
+$goSequencerDirs = @()
+
+if (-not $SkipGoSequencer) {
+    if ($BuildGoSequencer -or $TestGoSequencer -or $StartGoSequencer -or $RunSequencerSmokeTests -or $RequireGoSequencer) {
+        Write-Step "Checking native Windows Go sequencer"
+
+        $hasGo = Test-GoToolchain
+
+        if ($hasGo) {
+            $goSequencerDirs = @(Find-GoSequencerDirs -Root $RepoRoot)
+
+            if ($goSequencerDirs.Count -eq 0) {
+                if ($RequireGoSequencer) {
+                    Write-Fail "No Go sequencer go.mod found under repo."
+                } else {
+                    Write-Warn "No Go sequencer go.mod found. Skipping Go sequencer build/test/start."
+                }
+            } else {
+                foreach ($goDir in $goSequencerDirs) {
+                    Write-Ok "Found Go sequencer candidate: $goDir"
+
+                    Push-Location $goDir
+                    try {
+                        if ($TestGoSequencer) {
+                            Write-Step "Running Go sequencer tests in $goDir"
+                            go test ./...
+
+                            if ($LASTEXITCODE -ne 0) {
+                                Write-Fail "Go sequencer tests failed in $goDir"
+                            }
+
+                            Write-Ok "Go sequencer tests passed in $goDir"
+                        }
+
+                        if ($BuildGoSequencer) {
+                            Write-Step "Building Go sequencer in $goDir"
+                            go build ./...
+
+                            if ($LASTEXITCODE -ne 0) {
+                                Write-Fail "Go sequencer build failed in $goDir"
+                            }
+
+                            Write-Ok "Go sequencer build passed in $goDir"
+                        }
+                    } finally {
+                        Pop-Location
+                    }
+                }
+
+                if ($StartGoSequencer -and -not $UseWslSequencer) {
+                    Start-GoSequencerServer -SequencerDir $goSequencerDirs[0] -Addr $SequencerHttpAddr
+                }
+            }
+        }
+    } else {
+        Write-Ok "Native Go sequencer build/test/start not requested."
+    }
+} else {
+    Write-Warn "Go sequencer skipped."
+}
+
+# ---------------------------------------------------------------------------
+# 9. Optional WSL CDHS-SMF + Go sequencer
+# ---------------------------------------------------------------------------
+
+if ($UseWslSequencer -or $StartWslCdhsSmf -or $StartWslGoSequencer) {
+    Write-Step "Preparing WSL live sequencer path"
+
+    Test-WslAvailable
+
+    $resolvedWslRepoPath = Convert-ToWslPath -WindowsPath $RepoRoot
+    $resolvedWslDbHost = Get-WslDbHost
+
+    Write-Ok "WSL repo path: $resolvedWslRepoPath"
+    Write-Ok "WSL DB host: $resolvedWslDbHost"
+    Write-Ok "WSL CDHS socket: $WslCdhsSocket"
+    Write-Ok "WSL sequencer HTTP addr: $WslSequencerHttpAddr"
+
+    Write-Warn "WSL must have Rust, Cargo, and Go installed for live CDHS/sequencer."
+    Write-Warn "If Postgres rejects WSL connections, change postgresql.conf/listen_addresses or use WSL-hosted Postgres."
+
+    if ($StartWslCdhsSmf) {
+        Start-WslCdhsSmfServer -WslRepo $resolvedWslRepoPath -SocketPath $WslCdhsSocket
+    }
+
+    if ($StartWslCdhsSmf -and $StartWslGoSequencer) {
+        Wait-WslSocket -SocketPath $WslCdhsSocket -TimeoutSeconds 60
+    }
+
+    if ($StartWslGoSequencer) {
+        Start-WslGoSequencerServer `
+            -WslRepo $resolvedWslRepoPath `
+            -SocketPath $WslCdhsSocket `
+            -HttpAddr $WslSequencerHttpAddr `
+            -DbHostForWsl $resolvedWslDbHost
+
+        Start-Sleep -Seconds 5
+    }
+}
+
+# ---------------------------------------------------------------------------
+# 10. Database state / Alembic
+# ---------------------------------------------------------------------------
+
+if ($ResetDb) {
+    Write-Step "Resetting dev database schema"
+
+    Write-Warn "Dropping and recreating public schema in database '$DbName'."
+    Invoke-PostgresSql -Sql "DROP SCHEMA public CASCADE; CREATE SCHEMA public;"
+
+    Write-Ok "Database schema reset."
+}
+
+if ($StampHead) {
+    Write-Step "Stamping Alembic head"
+
+    Push-Location $RepoRoot
+    try {
+        Invoke-AlembicStamp -Revision "head"
+    } catch {
+        Write-Fail "Alembic stamp failed: $_"
+    } finally {
+        Pop-Location
+    }
+
+    Write-Ok "Alembic stamped to head."
+}
+
+if (-not $SkipMigrations) {
+    Write-Step "Running Alembic migrations"
+
+    Push-Location $RepoRoot
+    try {
+        python -m alembic upgrade head
+
+        if ($LASTEXITCODE -ne 0) {
+            $initialSchemaPresent = Test-PostgresTableExists -TableName "doc_commits"
+            $alembicVersionPresent = Test-PostgresTableExists -TableName "alembic_version"
+
+            if ($initialSchemaPresent -and -not $alembicVersionPresent) {
+                Write-Warn "Existing Olympus tables found but alembic_version is missing."
+                Write-Warn "Stamping the initial schema revision, then applying remaining migrations."
+                Invoke-AlembicStamp -Revision "150ed68bf7cc"
+                python -m alembic upgrade head
+
+                if ($LASTEXITCODE -ne 0) {
+                    Write-Fail "Alembic migration failed after baseline recovery with exit code $LASTEXITCODE"
+                }
+            } else {
+                Write-Fail "Alembic migration failed with exit code $LASTEXITCODE"
+            }
+        }
+    } catch {
+        Write-Fail "Alembic migration failed: $_`nIf tables already exist but alembic_version is missing, try: .\setup-windows.ps1 -SkipStart -ForceLocalDbUrl -StampHead"
+    } finally {
+        Pop-Location
+    }
+
+    Write-Ok "Database schema is up to date."
+} else {
+    Write-Ok "Skipping Alembic migrations."
+}
+
+# ---------------------------------------------------------------------------
+# 11. Optional smoke tests
+# ---------------------------------------------------------------------------
+
+if ($RunSequencerSmokeTests) {
+    Run-SequencerSmokeTests -RepoRoot $RepoRoot
+}
+
+# ---------------------------------------------------------------------------
+# 12. Success summary
+# ---------------------------------------------------------------------------
+
 Write-Host ""
 Write-Host "==================================================" -ForegroundColor Green
-Write-Host "   Setup complete!                               " -ForegroundColor Green
+Write-Host "   Olympus setup ready                            " -ForegroundColor Green
 Write-Host "==================================================" -ForegroundColor Green
-Write-Host "   API:      http://localhost:8000               " -ForegroundColor Green
-Write-Host "   API docs: http://localhost:8000/docs          " -ForegroundColor Green
-Write-Host "   Database: postgresql://${DbUser}@localhost:5432/olympus" -ForegroundColor Green
+Write-Host "   API:           http://localhost:8000" -ForegroundColor Green
+Write-Host "   API docs:      http://localhost:8000/docs" -ForegroundColor Green
+if (-not $SkipUi) {
+    Write-Host "   UX:            http://localhost:$UiPort" -ForegroundColor Green
+}
+Write-Host "   Database:      $(Mask-DatabaseUrl $env:DATABASE_URL)" -ForegroundColor Green
+Write-Host "   Psycopg:       $(Mask-DatabaseUrl $env:PSYCOPG_URL)" -ForegroundColor Green
+Write-Host "   Max upload:    $env:MAX_UPLOAD_BYTES" -ForegroundColor Green
+Write-Host "   Go seq flag:   OLYMPUS_USE_GO_SEQUENCER=$env:OLYMPUS_USE_GO_SEQUENCER" -ForegroundColor Green
+Write-Host "   Go seq URL:    $env:GO_SEQUENCER_URL" -ForegroundColor Green
+Write-Host "   Insecure DB:   SEQUENCER_ALLOW_INSECURE_DB=$env:SEQUENCER_ALLOW_INSECURE_DB" -ForegroundColor Green
+
+if ($env:SEQUENCER_DB_URL) {
+    Write-Host "   Go seq DB:     $(Mask-DatabaseUrl $env:SEQUENCER_DB_URL)" -ForegroundColor Green
+} elseif ($env:SEQUENCER_DB_HOST) {
+    Write-Host "   Go seq DB:     ${env:SEQUENCER_DB_USER}:***@${env:SEQUENCER_DB_HOST}:${env:SEQUENCER_DB_PORT}/${env:SEQUENCER_DB_NAME}" -ForegroundColor Green
+}
+
+if ($UseWslSequencer -or $StartWslCdhsSmf -or $StartWslGoSequencer) {
+    Write-Host "   WSL mode:      enabled" -ForegroundColor Green
+    Write-Host "   WSL socket:    $WslCdhsSocket" -ForegroundColor Green
+    Write-Host "   WSL HTTP:      $WslSequencerHttpAddr" -ForegroundColor Green
+}
+
 Write-Host "==================================================" -ForegroundColor Green
 
+Write-Host ""
+Write-Host "Useful test commands:" -ForegroundColor Cyan
+Write-Host "  python -m pytest tests\test_storage_protocol.py tests\test_smt_incremental.py -vv --tb=short" -ForegroundColor White
+Write-Host "  python -m pytest tests\test_sequencer_client_errors.py tests\test_sequencer_integration.py tests\test_sequencer_batch_validation.py tests\test_sequencer_content_contract.py tests\test_sequencer_env_aliases.py tests\test_sequencer_metadata_propagation.py tests\test_sequencer_migration.py -vv --tb=short" -ForegroundColor White
+Write-Host "  python -m pytest tests\test_sequencer_client_smoke.py -vv --tb=short    # requires live WSL sequencer/CDHS" -ForegroundColor White
+Write-Host "  python -m pytest tests\test_witness_router.py -vv --tb=short" -ForegroundColor White
+
+Write-Host ""
+Write-Host "Recommended WSL live path:" -ForegroundColor Cyan
+Write-Host "  .\setup-windows.ps1 -SkipStart -ForceLocalDbUrl -SkipMigrations -EnableGoSequencer -UseWslSequencer -WslDbHost 127.0.0.1 -StartWslCdhsSmf -StartWslGoSequencer" -ForegroundColor White
+
 if ($SkipStart) {
-    Write-Host "`nTo start the API later run:" -ForegroundColor Cyan
+    Write-Host ""
+    Write-Host "To start the app later:" -ForegroundColor Cyan
     Write-Host "  .\.venv\Scripts\Activate.ps1" -ForegroundColor White
     Write-Host "  uvicorn api.app:app --reload --host 0.0.0.0 --port 8000" -ForegroundColor White
+    if (-not $SkipUi) {
+        Write-Host "  cd app\public-ui" -ForegroundColor White
+        Write-Host "  npm run dev -- --host 127.0.0.1 --port $UiPort" -ForegroundColor White
+    }
     exit 0
 }
 
 # ---------------------------------------------------------------------------
-# 8. Start API server
+# 13. Start app servers
 # ---------------------------------------------------------------------------
+
 Write-Host ""
+if (-not $SkipUi) {
+    Start-PublicUiServer -UiDir $publicUiDir -Port $UiPort
+    Start-Process "http://localhost:$UiPort" | Out-Null
+}
+
 Write-Host "Starting API server -- press Ctrl+C to stop." -ForegroundColor Cyan
 Write-Host ""
 

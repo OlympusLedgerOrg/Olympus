@@ -6,21 +6,27 @@ the relationship between current and target architectures.
 
 For a 5-minute orientation see [`README.md`](README.md).
 
-## The three Rust stories
+## The Rust stories
 
-There are three separate Rust compilation targets in this repository.
-Each serves a distinct purpose and has its own build, dependency tree,
-and deployment model.
+There are three Rust deployment targets plus one shared library crate in this
+repository. The shared crate owns protocol-critical byte layouts so the Python
+extension and Go-facing sidecar cannot drift.
+
+### Shared crate: `crates/olympus-crypto/`
+
+Small Rust library for BLAKE3 record keys, global SMT keys, SMT leaf/node
+hashes, and the empty-leaf sentinel. Both `olympus_core` and
+`services/cdhs-smf-rust` depend on this crate.
 
 ### 1. `src/` — olympus-core PyO3 extension (cdylib)
 
-Accelerates Python-side hashing, canonicalization, and Groth16
-verification. Built with [maturin](https://github.com/PyO3/maturin) as
-a native Python extension module.
+Accelerates Python-side hashing, canonicalization, SMT operations, Poseidon,
+and Groth16 verification. Built with [maturin](https://github.com/PyO3/maturin)
+as a native Python extension module.
 
-**Optional at runtime.** A pure-Python fallback in `protocol/hashes.py`
-is always available when the extension is not built. CI builds and tests
-both code paths.
+`protocol/hashes.py` still has a pure-Python fallback for BLAKE3 helpers when
+the extension is not built. Poseidon and native Groth16 verification are
+mandatory Rust-backed paths.
 
 ### 2. `services/cdhs-smf-rust/` — CD-HS-ST gRPC service
 
@@ -35,6 +41,11 @@ The Rust CD-HS-ST service owns all Sparse Merkle Tree operations:
 Speaks protobuf over gRPC to the Go sequencer. Defined by
 [`proto/cdhs_smf.proto`](proto/cdhs_smf.proto).
 
+Today this service listens on a Unix domain socket, so Windows development uses
+WSL for the live Go sequencer path. The intended Windows-native direction is to
+keep the Go sequencer but move the sidecar toward shared Rust crypto and a
+Windows-friendly local transport.
+
 ### 3. `verifiers/rust/` — standalone cross-language verifier
 
 No gRPC, no PyO3. A minimal binary that reads a verification bundle
@@ -47,7 +58,7 @@ testing and offline proof verification across language boundaries.
 |---|---|---|
 | **Entry point** | Python FastAPI (`api/`) | Python FastAPI (`api/`) |
 | **Sequencing** | Python `storage/postgres.py` (direct SQL) | Go sequencer (`services/sequencer-go/`) |
-| **Crypto core** | Python `protocol/` + optional Rust PyO3 | Rust gRPC service (`services/cdhs-smf-rust/`) |
+| **Crypto core** | Python `protocol/` + Rust PyO3 (`olympus_core`) | Shared Rust crypto + Rust gRPC service (`services/cdhs-smf-rust/`) |
 | **Database** | PostgreSQL via psycopg 3 | PostgreSQL via psycopg 3 (same database) |
 | **Wire format** | In-process function calls | Protobuf over gRPC (Go ↔ Rust) |
 
@@ -60,6 +71,7 @@ the primary write path while the Go → Rust path is hardened.
 | Concern | Directory |
 |---|---|
 | Protocol truth (hashing, canonicalization, Merkle, ledger, federation) | [`protocol/`](../protocol/) |
+| Shared Rust hash/key primitives | [`crates/olympus-crypto/`](../crates/olympus-crypto/) |
 | Current API (FastAPI endpoints, auth, schemas) | [`api/`](../api/) |
 | Target services (Go sequencer, Rust CD-HS-ST) | [`services/`](../services/) |
 | ZK proof system (Circom circuits, proving keys, ceremony) | [`proofs/`](../proofs/), [`ceremony/`](../ceremony/) |
