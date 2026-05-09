@@ -1599,7 +1599,8 @@ async def commit_artifact(
                         detail=(
                             "A record with different content has already been committed "
                             "for this artifact identity. The ledger is append-only; "
-                            "increment the version or use a different artifact id."
+                            "use a different artifact id or namespace to commit a "
+                            "distinct artifact."
                         ),
                     ) from e
                 logger.exception(

@@ -364,6 +364,19 @@ jobs:
     - name: Build olympus_core Rust extension
       run: python -m maturin develop --release
 
+    - name: Install circom compiler
+      # Download the official pre-built circom binary from iden3/circom releases.
+      # Pinning to an exact version ensures reproducible R1CS/WASM artifacts and
+      # avoids surprises from an upstream circom 2.x API change mid-CI run.
+      # Upgrade by bumping CIRCOM_VERSION after verifying the new binary.
+      run: |
+        CIRCOM_VERSION="v2.1.9"
+        curl -fsSL \
+          "https://github.com/iden3/circom/releases/download/${CIRCOM_VERSION}/circom-linux-amd64" \
+          -o /usr/local/bin/circom
+        chmod +x /usr/local/bin/circom
+        circom --version
+
     - name: Install proofs JS dependencies
       run: npm install --prefix proofs
 
