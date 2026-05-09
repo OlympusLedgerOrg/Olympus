@@ -1558,11 +1558,21 @@ async def commit_artifact(
                 # Storage-layer dedup conflicts surface as ValueError. The
                 # sequencer path translates its own errors to HTTPException
                 # inside the adapter and never raises ValueError here.
+                #
+                # Two distinct signals from the storage layer:
+                #   "Record already exists: ..."              → idempotent retry
+                #                                               (same hash, safe to dedup)
+                #   "Record already exists with different content: ..."
+                #                                             → true conflict (append-only
+                #                                               violation, reject with 409)
                 error_msg = str(e)
+                # Use the colon sentinel to distinguish same-hash dedup from
+                # the "different content" conflict variant.
                 is_dedup = (
-                    "Record already exists" in error_msg
+                    "Record already exists:" in error_msg
                     or "Content hash already committed" in error_msg
                 )
+                is_conflict = "Record already exists with different content:" in error_msg
                 if is_dedup:
                     existing = (await _fetch_by_content_hash(artifact_hash_hex)) or {}
                     existing_proof_id = existing.get("proof_id", proof_id)
@@ -1583,6 +1593,15 @@ async def commit_artifact(
                         )
                         else None,
                     )
+                if is_conflict:
+                    raise HTTPException(
+                        status_code=409,
+                        detail=(
+                            "A record with different content has already been committed "
+                            "for this artifact identity. The ledger is append-only; "
+                            "increment the version or use a different artifact id."
+                        ),
+                    ) from e
                 logger.exception(
                     "artifact_commit_storage_failed",
                     extra={
