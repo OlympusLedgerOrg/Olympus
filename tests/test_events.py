@@ -69,6 +69,12 @@ class TestCanonicalEventFromRaw:
         assert e1.hash_hex != e2.hash_hex
         assert e1.hash_hex == e3.hash_hex
 
+    def test_homoglyphs_preserved_for_event_hashes(self) -> None:
+        """Commit-path event hashing does not scrub visually similar Unicode."""
+        e1 = CanonicalEvent.from_raw({"currency": "USD"}, schema_version="v1")
+        e2 = CanonicalEvent.from_raw({"currency": "\uff35\uff33\uff24"}, schema_version="v1")
+        assert e1.hash_hex != e2.hash_hex
+
 
 class TestCanonicalEventValidation:
     """Tests for input validation in from_raw()."""

@@ -76,6 +76,16 @@ SUPPORTED_VERSIONS = ["canonical_v1", "canonical_v2"]
 """All canonical versions the verifier is willing to accept."""
 
 
+COMMIT_CANONICAL_VERSION = "canonical_commit_v1"
+"""Canonicalization mode used for document commitments and Merkle leaves.
+
+This mode uses the same structural rules as :data:`CANONICAL_VERSION` but
+disables homoglyph scrubbing before encoding bytes.  It is intentionally a
+separate provenance label so verifiers do not replay the display/search
+canonicalizer and derive different commitment bytes.
+"""
+
+
 def _scrub_homoglyphs(text: str) -> str:
     """Replace Unicode characters whose NFKD form is a single ASCII printable char.
 
@@ -252,6 +262,36 @@ def document_to_bytes(
     )
     json_str = canonicalize_json(canonical)
     return json_str.encode("utf-8")
+
+
+def canonicalize_for_commit(doc: dict[str, Any]) -> dict[str, Any]:
+    """Homoglyph-preserving canonicalization for cryptographic commitment.
+
+    Identical to :func:`canonicalize_document` but with homoglyph scrubbing
+    disabled.  Scrubbing is a lossy, non-injective mapping (e.g. ``𝐀`` → ``A``),
+    so enabling it in the commit path allows two semantically distinct documents
+    to produce identical commitment hashes.
+
+    This is not a raw byte-injective transform: NFC Unicode normalization and
+    numeric normalization are still applied, so canonically equivalent spellings
+    such as ``"café"`` and ``"cafe\u0301"`` intentionally commit to the same
+    bytes.
+
+    Use this function everywhere a hash or Merkle leaf is derived from document
+    content.  Use :func:`canonicalize_document` only for display or comparison.
+    """
+    return canonicalize_document(doc, scrub_homoglyphs=False)
+
+
+def document_to_commit_bytes(doc: dict[str, Any]) -> bytes:
+    """Convert a document to its canonical byte representation for commitment.
+
+    Equivalent to ``document_to_bytes(doc, scrub_homoglyphs=False)`` but named
+    explicitly for the commit path so that call sites make their intent clear.
+    Homoglyph scrubbing is disabled to preserve distinct homoglyphs — see
+    :func:`canonicalize_for_commit`.
+    """
+    return document_to_bytes(doc, scrub_homoglyphs=False)
 
 
 def canonicalize_text(text: str) -> str:

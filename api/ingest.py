@@ -81,7 +81,11 @@ from api.services.proof_utils import (
     smt_proof_to_merkle_proof_dict as _smt_proof_to_merkle_proof_dict,
 )
 from api.services.upload_validation import validate_file_magic
-from protocol.canonical import CANONICAL_VERSION, canonicalize_document, document_to_bytes
+from protocol.canonical import (
+    CANONICAL_VERSION,
+    COMMIT_CANONICAL_VERSION,
+    document_to_commit_bytes,
+)
 from protocol.canonicalizer import canonicalization_provenance
 from protocol.hashes import hash_bytes, record_key
 from protocol.ledger import Ledger
@@ -551,12 +555,15 @@ def _append_security_audit_event(event: str, details: dict[str, Any]) -> None:
         "timestamp": current_timestamp(),
         "details": details,
     }
-    payload_hash = hash_bytes(document_to_bytes(canonicalize_document(payload))).hex()
+    payload_hash = hash_bytes(document_to_commit_bytes(payload)).hex()
     _write_ledger.append(
         record_hash=payload_hash,
         shard_id="audit.security",
         shard_root=payload_hash,
-        canonicalization=canonicalization_provenance("application/json", CANONICAL_VERSION),
+        canonicalization=canonicalization_provenance(
+            "application/json",
+            COMMIT_CANONICAL_VERSION,
+        ),
     )
 
 
@@ -779,16 +786,14 @@ async def _async_canonicalize_and_hash(content: dict[str, Any]) -> tuple[bytes, 
 
     # AUDIT(doc_hash provenance): content_hash is the authoritative document
     # fingerprint for the ingest path.  It is derived exclusively from
-    # canonical_v2 bytes:
-    #   1. canonicalize_document() — applies NFC, homoglyph scrub, numeric
-    #      normalization, sorted keys (canonical_v2 pipeline).
-    #   2. document_to_bytes()     — deterministic JSON encoding (RFC 8785-
-    #      style compact separators, ensure_ascii).
-    #   3. hash_bytes()            — BLAKE3 with LEGACY_BYTES_PREFIX domain
-    #      separation.
+    # canonical_commit_v1 bytes:
+    #   1. canonicalize_for_commit() — NFC + sorted keys + numeric normalization,
+    #      homoglyph scrubbing DISABLED (scrubbing is non-injective: two distinct
+    #      documents could otherwise produce the same commitment hash — H-1).
+    #   2. document_to_bytes()       — deterministic JCS/RFC 8785 JSON encoding.
+    #   3. hash_bytes()              — BLAKE3 with LEGACY_BYTES_PREFIX domain sep.
     # The resulting hex digest becomes the Merkle leaf in build_tree().
-    canonical = await loop.run_in_executor(None, canonicalize_document, content)
-    content_bytes = document_to_bytes(canonical)
+    content_bytes = await loop.run_in_executor(None, document_to_commit_bytes, content)
     content_hash = hash_bytes(content_bytes).hex()
 
     return content_bytes, content_hash
@@ -979,7 +984,10 @@ async def ingest_batch(
     # Now process each shard group
     all_results: list[tuple[int, IngestionResult]] = []
     total_dedup_count = 0
-    canonicalization = canonicalization_provenance("application/json", CANONICAL_VERSION)
+    canonicalization = canonicalization_provenance(
+        "application/json",
+        COMMIT_CANONICAL_VERSION,
+    )
     ts = current_timestamp()
     final_ledger_entry_hash = ""
 

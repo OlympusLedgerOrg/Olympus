@@ -14,6 +14,7 @@ from protocol.canonical import (
     _scrub_homoglyphs,
     canonicalize_document,
     document_to_bytes,
+    document_to_commit_bytes,
 )
 from protocol.hashes import hash_bytes
 
@@ -62,6 +63,16 @@ class TestHomoglyphScrub:
         bytes_on = document_to_bytes(doc, scrub_homoglyphs=True)
         bytes_off = document_to_bytes(doc, scrub_homoglyphs=False)
         assert bytes_on != bytes_off, "Opt-out flag had no effect"
+
+    def test_commit_bytes_preserve_homoglyphs_but_not_nfc_variants(self) -> None:
+        """Commit bytes preserve homoglyphs while retaining NFC normalization."""
+        ascii_doc = {"currency": "USD"}
+        fullwidth_doc = {"currency": "\uff35\uff33\uff24"}
+        composed = {"name": "caf\u00e9"}
+        decomposed = {"name": "cafe\u0301"}
+
+        assert document_to_commit_bytes(ascii_doc) != document_to_commit_bytes(fullwidth_doc)
+        assert document_to_commit_bytes(composed) == document_to_commit_bytes(decomposed)
 
 
 # ---------------------------------------------------------------------------

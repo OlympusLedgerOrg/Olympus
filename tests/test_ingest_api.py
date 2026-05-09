@@ -57,6 +57,7 @@ class TestBatchIngestion:
         assert data["results"][0]["deduplicated"] is False
         assert data["results"][0]["content_hash"]  # non-empty
         assert data["ledger_entry_hash"]  # non-empty
+        assert data["canonicalization"]["normalization_mode"] == "canonical_commit_v1"
 
     def test_ingest_batch_multiple_records(self, client: TestClient):
         payload = {

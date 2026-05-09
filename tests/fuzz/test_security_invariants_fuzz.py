@@ -33,7 +33,7 @@ from fastapi.testclient import TestClient
 from hypothesis import HealthCheck, assume, given, settings, strategies as st
 
 from api.schemas.ingest import BatchIngestionRequest
-from protocol.canonical import canonicalize_document, document_to_bytes
+from protocol.canonical import canonicalize_document, document_to_bytes, document_to_commit_bytes
 from protocol.canonical_json import canonical_json_encode
 from protocol.hashes import global_key, hash_bytes, record_key
 from protocol.ssmf import verify_nonexistence_proof, verify_proof
@@ -560,8 +560,8 @@ def test_input_extra_fields_do_not_affect_canonical_hash(content: dict[str, Any]
     """
     client = _make_client()
 
-    # Local canonical hash over `content` only
-    local_hash = hash_bytes(document_to_bytes(canonicalize_document(content))).hex()
+    # Local canonical hash over `content` only — must use commit path (no homoglyph scrubbing)
+    local_hash = hash_bytes(document_to_commit_bytes(content)).hex()
 
     # Two records with different wrapper metadata but identical content
     shard_a = f"fuzz-input8-a-{uuid.uuid4().hex[:8]}"

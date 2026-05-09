@@ -11,8 +11,10 @@ from hypothesis import given, strategies as st
 from protocol.canonical import (
     _scrub_homoglyphs,
     canonicalize_document,
+    canonicalize_for_commit,
     canonicalize_json,
     document_to_bytes,
+    document_to_commit_bytes,
     normalize_whitespace,
 )
 from protocol.canonicalizer import CanonicalizationError
@@ -261,6 +263,68 @@ def test_normalize_whitespace():
 
     # Mixed whitespace
     assert normalize_whitespace("  hello  \t \n  world  ") == "hello world"
+
+
+# ---------------------------------------------------------------------------
+# H-1 security regression: commit-path canonicalization must be injective
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "ascii_char, homoglyph",
+    [
+        ("A", "Ａ"),  # FULLWIDTH LATIN CAPITAL LETTER A
+        ("B", "Ｂ"),  # FULLWIDTH LATIN CAPITAL LETTER B
+        ("a", "ａ"),  # FULLWIDTH LATIN SMALL LETTER A
+        ("A", "\U0001d400"),  # MATHEMATICAL BOLD CAPITAL A
+        ("Z", "Ⓩ"),  # ENCLOSED ALPHANUMERIC Z (circled)
+    ],
+)
+def test_commit_bytes_distinguishes_homoglyphs(ascii_char: str, homoglyph: str) -> None:
+    """H-1: document_to_commit_bytes must produce distinct bytes for homoglyph-distinct docs.
+
+    Homoglyph scrubbing is lossy and non-injective; enabling it in the commit
+    path collapses semantically distinct documents to the same hash.
+    document_to_commit_bytes() must disable scrubbing so that a document
+    containing a Unicode homoglyph differs from one containing its ASCII
+    equivalent.
+    """
+    doc_ascii = {"field": ascii_char}
+    doc_homoglyph = {"field": homoglyph}
+
+    bytes_ascii = document_to_commit_bytes(doc_ascii)
+    bytes_homoglyph = document_to_commit_bytes(doc_homoglyph)
+
+    assert bytes_ascii != bytes_homoglyph, (
+        f"H-1: document_to_commit_bytes collapsed homoglyph {homoglyph!r} "
+        f"(U+{ord(homoglyph):04X}) to its ASCII equivalent {ascii_char!r}"
+    )
+
+
+def test_canonicalize_for_commit_is_injective_on_homoglyphs() -> None:
+    """H-1: canonicalize_for_commit() must not collapse homoglyphs to ASCII."""
+    doc_ascii = {"text": "ABC"}
+    doc_fullwidth = {"text": "ＡＢＣ"}  # Ａ Ｂ Ｃ
+
+    result_ascii = canonicalize_for_commit(doc_ascii)
+    result_fullwidth = canonicalize_for_commit(doc_fullwidth)
+
+    assert result_ascii["text"] != result_fullwidth["text"], (
+        "H-1: canonicalize_for_commit() scrubbed fullwidth chars to ASCII"
+    )
+
+
+def test_canonicalize_document_still_scrubs_by_default() -> None:
+    """canonicalize_document() default (scrub_homoglyphs=True) is unchanged.
+
+    This confirms backward-compatibility: display/comparison paths still
+    normalise homoglyphs; only the commit path uses the injective variant.
+    """
+    doc = {"text": "ＡＢＣ"}  # Ａ Ｂ Ｃ
+    result = canonicalize_document(doc)
+    assert result["text"] == "ABC", (
+        "canonicalize_document() default should still scrub homoglyphs to ASCII"
+    )
 
 
 def test_normalize_whitespace_empty_string():

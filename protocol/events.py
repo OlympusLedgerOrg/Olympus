@@ -10,7 +10,7 @@ rules as document ingestion to guarantee cross-machine reproducibility.
 from dataclasses import dataclass
 from typing import Any
 
-from .canonical import canonicalize_document, document_to_bytes
+from .canonical import canonicalize_for_commit, canonicalize_json
 from .hashes import hash_bytes
 
 
@@ -52,8 +52,8 @@ class CanonicalEvent:
         if not schema_version:
             raise ValueError("schema_version must be a non-empty string")
 
-        canonical_payload = canonicalize_document(event)
-        canonical_bytes = document_to_bytes(canonical_payload)
+        canonical_payload = canonicalize_for_commit(event)
+        canonical_bytes = canonicalize_json(canonical_payload).encode("utf-8")
         event_hash = hash_bytes(canonical_bytes)
         return cls(
             payload=canonical_payload,
