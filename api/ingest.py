@@ -40,7 +40,6 @@ from fastapi import APIRouter, File, HTTPException, Path, Request, UploadFile
 from api.auth import (
     RequireCommitScope,
     RequireIngestScope,
-    RequireVerifyScope,
     _get_backend as _get_rate_limit_backend,
     _get_client_ip,
     _register_api_key_for_tests as _auth_register_api_key_for_tests,
@@ -1313,7 +1312,7 @@ async def get_ingestion_proof(
 
 @router.get("/records/hash/{content_hash}/verify", response_model=HashVerificationResponse)
 async def verify_ingested_content_hash(
-    content_hash: str, request: Request, _api_key: RequireVerifyScope
+    content_hash: str, request: Request
 ) -> HashVerificationResponse:
     """
     Verify that a committed BLAKE3 content hash exists in the ingestion store.
