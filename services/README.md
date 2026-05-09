@@ -127,11 +127,19 @@ This avoids double-serialization when Go serves gRPC externally.
 All hashing uses BLAKE3 with clear domain separation:
 
 ```
-GLOBAL_KEY_PREFIX  = "OLY:CDHS-SMF:GKEY:V1"
-LEAF_HASH_PREFIX   = "OLY:LEAF:V1"
-NODE_HASH_PREFIX   = "OLY:NODE:V1"
-EMPTY_LEAF_PREFIX  = "OLY:EMPTY-LEAF:V1"
+GLOBAL_SMT_KEY_CONTEXT = "olympus 2025-12 global-smt-leaf-key"  # derive_key context
+LEAF_HASH_PREFIX        = "OLY:LEAF:V1"
+NODE_HASH_PREFIX        = "OLY:NODE:V1"
+EMPTY_LEAF_PREFIX       = "OLY:EMPTY-LEAF:V1"
 ```
+
+Global key derivation:
+```
+key_material = len(shard_id) || shard_id || len(record_key) || record_key
+global_key   = BLAKE3.derive_key("olympus 2025-12 global-smt-leaf-key", key_material)
+```
+Where `len(x)` is a 4-byte big-endian length prefix and `record_key` is itself a
+BLAKE3 hash derived with the `OLY:KEY:V1` domain prefix and length-prefixed fields.
 
 Leaf hashing:
 ```
