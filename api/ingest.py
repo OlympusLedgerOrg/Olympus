@@ -283,11 +283,22 @@ _write_ledger = Ledger()
 # Go sequencer client configuration
 # ---------------------------------------------------------------------------
 
+
 # All record commits route through the Go sequencer's QueueLeaf endpoint.
 # SEQUENCER_ADDR (default localhost:9090) and OLYMPUS_SEQUENCER_TOKEN configure
 # the HTTP client.
 # SEQUENCER_API_TOKEN is accepted as a deprecated alias for one release.
-_sequencer_addr: str = os.environ.get("SEQUENCER_ADDR", "localhost:9090")
+def _resolve_sequencer_addr() -> str:
+    # Prefer the canonical OLYMPUS_SEQUENCER_URL (full URL, e.g. http://sequencer-go:8081).
+    # Fall back to bare SEQUENCER_ADDR (host:port) for backwards compatibility.
+    url = os.environ.get("OLYMPUS_SEQUENCER_URL", "")
+    if url:
+        # Strip scheme so callers can prepend http:// uniformly.
+        return url.removeprefix("http://").removeprefix("https://").rstrip("/")
+    return os.environ.get("SEQUENCER_ADDR", "localhost:9090")
+
+
+_sequencer_addr: str = _resolve_sequencer_addr()
 _sequencer_token: str = os.environ.get("OLYMPUS_SEQUENCER_TOKEN", "") or os.environ.get(
     "SEQUENCER_API_TOKEN", ""
 )
