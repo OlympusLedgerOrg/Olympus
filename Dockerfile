@@ -1,4 +1,4 @@
-# Multi-stage build for Olympus
+﻿# Multi-stage build for Olympus
 # Security: Pin specific version for reproducibility
 FROM python:3.12.8-slim AS base
 
@@ -29,6 +29,7 @@ FROM ghcr.io/pyo3/maturin:v1.8.7 AS olympus-core-builder
 WORKDIR /build
 COPY Cargo.toml Cargo.lock ./
 COPY src ./src
+COPY crates ./crates
 RUN maturin build --release --interpreter python3.12 --out /wheels
 
 # Development stage

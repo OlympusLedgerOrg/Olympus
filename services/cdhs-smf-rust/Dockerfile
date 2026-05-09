@@ -18,6 +18,8 @@ WORKDIR /src
 COPY services/cdhs-smf-rust/Cargo.toml services/cdhs-smf-rust/Cargo.lock* ./
 COPY services/cdhs-smf-rust/build.rs ./
 
+COPY crates /crates
+
 # Create a dummy main.rs to build dependencies
 RUN mkdir -p src && \
     echo 'fn main() { println!("placeholder"); }' > src/main.rs && \
