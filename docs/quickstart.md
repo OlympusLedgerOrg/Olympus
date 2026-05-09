@@ -204,6 +204,33 @@ bandit-baseline -r protocol/ storage/ api/ scaffolding/
 
 ## 5. Running the Application
 
+### macOS Double-Click Launcher
+
+On macOS, double-click this file in Finder:
+
+```text
+Olympus-Start-macOS.command
+```
+
+It runs the Unix/macOS setup path, starts the public UX at
+`http://localhost:5173`, opens the browser, and keeps the API running at
+`http://localhost:8000` in the Terminal window.
+
+If macOS says the file is not executable after downloading a zip, run:
+
+```bash
+chmod +x Olympus-Start-macOS.command
+```
+
+### Local Admin User Management
+
+The Windows and macOS setup paths generate `OLYMPUS_ADMIN_KEY` in `.env` when
+it is missing. Use that key on the in-app Admin page to create users.
+
+New users default to `read` + `verify` access. Grant `ingest`, `commit`,
+`write`, or `admin` only from the Admin page when that user should have more
+than verification access.
+
 ### Development Mode (with hot reload)
 
 ```bash

@@ -193,6 +193,12 @@ On Windows, the double-click local launcher is:
 Olympus-Start-Windows.cmd
 ```
 
+On macOS, the Finder double-click local launcher is:
+
+```text
+Olympus-Start-macOS.command
+```
+
 It prepares the local stack and starts the public UX at `http://localhost:5173`
 plus the API at `http://localhost:8000`.
 
@@ -243,8 +249,9 @@ python -m pip install -e ".[dev]"
 ```
 
 For one-command local setup, use `setup-windows.ps1` on Windows or
-`setup-unix.sh` on macOS/Linux. The older root `run.sh` and `run.bat`
-wrappers have been removed.
+`setup-unix.sh` on macOS/Linux. On macOS, you can also double-click
+`Olympus-Start-macOS.command` in Finder to set up and start the local API and
+public UX. The older root `run.sh` and `run.bat` wrappers have been removed.
 
 ### Quality gate
 

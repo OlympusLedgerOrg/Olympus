@@ -65,6 +65,10 @@ param(
     [switch]$ResetDb,
     [switch]$SkipUi,
     [int]$UiPort = 5173,
+    [switch]$HideServerWindows,
+    [switch]$OpenBrowser,
+    [string]$BrowserUrl = "",
+    [switch]$CloseLauncherSplash,
     [switch]$SkipStart
 )
 
@@ -414,6 +418,38 @@ function Install-PublicUiDeps {
     Write-Ok "Public UX dependencies are installed."
 }
 
+function Open-BrowserUrl {
+    param([string]$Url)
+
+    if (-not $Url) {
+        return
+    }
+
+    $browserCandidates = @(
+        @{ Name = "msedge.exe"; Args = @("--new-window", $Url) },
+        @{ Name = "chrome.exe"; Args = @("--new-window", $Url) },
+        @{ Name = "firefox.exe"; Args = @("--new-window", $Url) }
+    )
+
+    foreach ($candidate in $browserCandidates) {
+        $cmd = Get-Command $candidate.Name -ErrorAction SilentlyContinue
+        if ($cmd) {
+            Start-Process -FilePath $cmd.Source -ArgumentList $candidate.Args | Out-Null
+            Write-Ok "Opened browser window: $Url"
+            return
+        }
+    }
+
+    Start-Process $Url | Out-Null
+    Write-Ok "Opened browser URL: $Url"
+}
+
+function Close-LauncherSplash {
+    Get-Process mshta -ErrorAction SilentlyContinue |
+        Where-Object { $_.MainWindowTitle -eq "Olympus Local App" } |
+        Stop-Process -Force -ErrorAction SilentlyContinue
+}
+
 function Start-PublicUiServer {
     param(
         [string]$UiDir,
@@ -439,7 +475,15 @@ cd '$UiDir'
 npm run dev -- --host 127.0.0.1 --port $Port
 "@
 
-    Start-Process -FilePath $pwsh -ArgumentList "-NoExit", "-Command", $command | Out-Null
+    $startArgs = @{
+        FilePath = $pwsh
+        ArgumentList = @("-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", $command)
+    }
+    if ($HideServerWindows) {
+        $startArgs.WindowStyle = "Hidden"
+    }
+
+    Start-Process @startArgs | Out-Null
 
     for ($i = 0; $i -lt 20; $i++) {
         Start-Sleep -Milliseconds 500
@@ -450,7 +494,7 @@ npm run dev -- --host 127.0.0.1 --port $Port
         }
     }
 
-    Write-Warn "Public UX window opened, but http://localhost:$Port was not reachable yet."
+    Write-Warn "Public UX process started, but http://localhost:$Port was not reachable yet."
 }
 
 function Find-GoSequencerDirs {
@@ -765,7 +809,15 @@ function Start-WslWindow {
         $psCommand = "Write-Host '$Title' -ForegroundColor Cyan; wsl.exe -- bash '$wslScriptPath'"
     }
 
-    Start-Process -FilePath $pwsh -ArgumentList "-NoExit", "-Command", $psCommand | Out-Null
+    $startArgs = @{
+        FilePath = $pwsh
+        ArgumentList = @("-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", $psCommand)
+    }
+    if ($HideServerWindows) {
+        $startArgs.WindowStyle = "Hidden"
+    }
+
+    Start-Process @startArgs | Out-Null
 }
 
 function Wait-WslSocket {
@@ -831,7 +883,11 @@ cargo run
 "@
 
     Start-WslWindow -Title "Olympus CDHS-SMF WSL server" -Command $cmd
-    Write-Warn "Opened WSL CDHS-SMF window. Leave it open."
+    if ($HideServerWindows) {
+        Write-Warn "Started WSL CDHS-SMF in a hidden PowerShell process."
+    } else {
+        Write-Warn "Opened WSL CDHS-SMF window. Leave it open."
+    }
 }
 
 function Start-WslGoSequencerServer {
@@ -873,7 +929,11 @@ go run ./cmd/sequencer
 "@
 
     Start-WslWindow -Title "Olympus Go sequencer WSL server" -Command $cmd
-    Write-Warn "Opened WSL Go sequencer window. Leave it open."
+    if ($HideServerWindows) {
+        Write-Warn "Started WSL Go sequencer in a hidden PowerShell process."
+    } else {
+        Write-Warn "Opened WSL Go sequencer window. Leave it open."
+    }
 }
 
 function Start-GoSequencerServer {
@@ -909,8 +969,16 @@ Get-ChildItem Env:SEQUENCER_DB* | Remove-Item -ErrorAction SilentlyContinue
 go run .\cmd\sequencer
 "@
 
-    Write-Warn "Opening native Windows Go sequencer window. This may fail if CDHS-SMF Unix socket is required."
-    Start-Process -FilePath $pwsh -ArgumentList "-NoExit", "-Command", $command | Out-Null
+    Write-Warn "Starting native Windows Go sequencer. This may fail if CDHS-SMF Unix socket is required."
+    $startArgs = @{
+        FilePath = $pwsh
+        ArgumentList = @("-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", $command)
+    }
+    if ($HideServerWindows) {
+        $startArgs.WindowStyle = "Hidden"
+    }
+
+    Start-Process @startArgs | Out-Null
 
     $ready = $false
 
@@ -1057,6 +1125,15 @@ if (-not $env:OLYMPUS_INGEST_SIGNING_KEY) {
     Write-Warn "This key was written to .env so signatures stay stable across restarts."
 } else {
     Write-Ok "OLYMPUS_INGEST_SIGNING_KEY loaded."
+}
+
+if (-not $env:OLYMPUS_ADMIN_KEY) {
+    $env:OLYMPUS_ADMIN_KEY = New-RandomHexKey
+    Set-DotEnvValue -Path $envFile -Key "OLYMPUS_ADMIN_KEY" -Value $env:OLYMPUS_ADMIN_KEY
+    Write-Warn "OLYMPUS_ADMIN_KEY was missing, so a local admin key was generated."
+    Write-Warn "Use this key in the Admin page to create users and assign access."
+} else {
+    Write-Ok "OLYMPUS_ADMIN_KEY loaded."
 }
 
 if (-not $SkipGoSequencer) {
@@ -1524,7 +1601,17 @@ if ($SkipStart) {
 Write-Host ""
 if (-not $SkipUi) {
     Start-PublicUiServer -UiDir $publicUiDir -Port $UiPort
-    Start-Process "http://localhost:$UiPort" | Out-Null
+
+    $targetUrl = $BrowserUrl
+    if (-not $targetUrl) {
+        $targetUrl = "http://localhost:$UiPort"
+    }
+
+    Open-BrowserUrl -Url $targetUrl
+
+    if ($CloseLauncherSplash) {
+        Close-LauncherSplash
+    }
 }
 
 Write-Host "Starting API server -- press Ctrl+C to stop." -ForegroundColor Cyan
