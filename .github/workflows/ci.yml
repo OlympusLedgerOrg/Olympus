@@ -215,11 +215,25 @@ jobs:
     - name: Install proofs JS dependencies
       run: npm install --prefix proofs
 
+    - name: Install optional unit-test dependencies
+      # Parquet tests in tests/test_parquet_writer.py skip without pyarrow.
+      # Install it so the unit lane does not silently skip those cases.
+      run: python -m pip install "pyarrow>=24.0.0"
+
     - name: Run unit tests with coverage floor
       env:
         HYPOTHESIS_PROFILE: ci
       run: |
-        pytest tests/ -v --tb=short -m "not postgres and not differential" \
+        # The unit lane is fast-path only: it must not silently skip tests
+        # because a service was not provisioned. Marker exclusions cover
+        # postgres / differential / slow / fuzz / circuits / layer4. The
+        # explicit --ignore lines drop tests that gate on a live Go
+        # sequencer or generated ZK proof artifacts; those run in the
+        # dedicated `sequencer` and `proofs` lanes (or in `full`).
+        pytest tests/ -v --tb=short \
+          -m "not postgres and not differential and not slow and not fuzz and not circuits and not layer4" \
+          --ignore=tests/test_sequencer_client_smoke.py \
+          --deselect tests/test_proof_generator.py::test_redaction_validity_round_trip_verification \
           --cov=protocol --cov=storage --cov=api \
           --cov-report=xml \
           --cov-fail-under=85
@@ -303,6 +317,179 @@ jobs:
     - name: Run integration tests
       run: |
         pytest tests/ -v --tb=short -m "postgres"
+
+  proofs:
+    name: proofs (zk artifacts, py3.12, ubuntu)
+    # Dedicated lane for tests that require generated ZK circuit artifacts
+    # (R1CS / WASM witness generators / verification keys). These tests
+    # silently skip on the unit lane when artifacts are missing; this lane
+    # owns provisioning them so that skip never appears as "green".
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Set up Python 3.12
+      uses: actions/setup-python@v6
+      with:
+        python-version: "3.12"
+        cache: 'pip'
+
+    - name: Create virtual environment
+      run: |
+        python -m venv .venv
+        echo "VIRTUAL_ENV=${GITHUB_WORKSPACE}/.venv" >> "$GITHUB_ENV"
+        echo "${GITHUB_WORKSPACE}/.venv/bin" >> "$GITHUB_PATH"
+
+    - name: Install system dependencies
+      run: sudo apt-get update && sudo apt-get install -y libmagic1
+
+    - name: Install Rust stable
+      run: rustup toolchain install stable --no-self-update && rustup default stable
+
+    - name: Set up Node.js
+      uses: actions/setup-node@v4
+      with:
+        node-version: '20'
+        cache: 'npm'
+        cache-dependency-path: proofs/package-lock.json
+
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        python -m pip install --require-hashes -r requirements-dev.txt
+        python -m pip install -e . --no-deps
+
+    - name: Build olympus_core Rust extension
+      run: python -m maturin develop --release
+
+    - name: Install circom compiler
+      # Download the official pre-built circom binary from iden3/circom releases.
+      # Pinning to an exact version ensures reproducible R1CS/WASM artifacts and
+      # avoids surprises from an upstream circom 2.x API change mid-CI run.
+      # Upgrade by bumping CIRCOM_VERSION after verifying the new binary.
+      run: |
+        CIRCOM_VERSION="v2.1.9"
+        curl -fsSL \
+          "https://github.com/iden3/circom/releases/download/${CIRCOM_VERSION}/circom-linux-amd64" \
+          -o /usr/local/bin/circom
+        chmod +x /usr/local/bin/circom
+        circom --version
+
+    - name: Install proofs JS dependencies
+      run: npm install --prefix proofs
+
+    - name: Compile circuit artifacts (R1CS + WASM)
+      # --compile-only skips the heavy Groth16 trusted-setup and key
+      # generation. Tests that require .zkey / vkey artifacts will still
+      # skip; the round-trip integration test is exercised by the smoke
+      # workflow. See proofs/setup_circuits.sh for full options.
+      run: bash proofs/setup_circuits.sh --compile-only
+
+    - name: Run proof / circuit tests
+      run: |
+        pytest tests/test_proof_generator.py tests/test_circuit_sources.py tests/test_snarkjs_bridge.py \
+          -v --tb=short
+
+  full:
+    name: full (no-skip strict validation)
+    # Manual lane: provisions every dependency we know about and uses the
+    # tools.pytest_fail_on_skip plugin to fail the build if any test
+    # silently skips. Run on demand before a release or when CI lane
+    # drift is suspected.
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    env:
+      DATABASE_URL: postgresql://olympus:olympus@localhost:5432/olympus
+      TEST_DATABASE_URL: postgresql://olympus:olympus@localhost:5432/olympus
+      OLYMPUS_INGEST_SIGNING_KEY: "0000000000000000000000000000000000000000000000000000000000000000"
+      OLYMPUS_REQUIRE_RUST: "1"
+      OLYMPUS_RUN_SLOW: "1"
+      PGHOST: localhost
+      PGPORT: "5432"
+      PGUSER: olympus
+      PGPASSWORD: olympus
+      PGDATABASE: olympus
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: olympus
+          POSTGRES_PASSWORD: olympus
+          POSTGRES_DB: olympus
+        options: >-
+          --health-cmd "pg_isready -U olympus"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+        ports:
+          - 5432:5432
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Set up Python 3.12
+      uses: actions/setup-python@v6
+      with:
+        python-version: "3.12"
+        cache: 'pip'
+
+    - name: Create virtual environment
+      run: |
+        python -m venv .venv
+        echo "VIRTUAL_ENV=${GITHUB_WORKSPACE}/.venv" >> "$GITHUB_ENV"
+        echo "${GITHUB_WORKSPACE}/.venv/bin" >> "$GITHUB_PATH"
+
+    - name: Install system dependencies
+      run: sudo apt-get update && sudo apt-get install -y libmagic1
+
+    - name: Install Rust stable
+      run: rustup toolchain install stable --no-self-update && rustup default stable
+
+    - name: Set up Node.js
+      uses: actions/setup-node@v4
+      with:
+        node-version: '20'
+        cache: 'npm'
+        cache-dependency-path: proofs/package-lock.json
+
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        python -m pip install --require-hashes -r requirements-dev.txt
+        python -m pip install psycopg2-binary==2.9.9
+        python -m pip install "pyarrow>=24.0.0"
+        python -m pip install -e . --no-deps
+
+    - name: Build olympus_core Rust extension
+      run: python -m maturin develop --release
+
+    - name: Install proofs JS dependencies
+      run: npm install --prefix proofs
+
+    - name: Compile circuit artifacts (R1CS + WASM)
+      run: bash proofs/setup_circuits.sh --compile-only
+
+    - name: Run full strict validation (fail-on-skip)
+      env:
+        HYPOTHESIS_PROFILE: ci
+      run: |
+        # `differential` requires Go+Rust+Node verifiers wired together
+        # (covered by go-verifier / rust-verifier / cross-language jobs);
+        # exclude here so this lane stays self-contained but still strict
+        # about every other test it collects.
+        pytest tests/ -v --tb=short \
+          -m "not differential" \
+          -p tools.pytest_fail_on_skip --fail-on-skip \
+          --allow-skip="filesystem is case-insensitive" \
+          --allow-skip="filesystem does not support this Unicode filename" \
+          --allow-skip="OTel is installed" \
+          --allow-skip="OTel propagator is available" \
+          --allow-skip="OLYMPUS_USE_GO_SEQUENCER is not enabled" \
+          --allow-skip="Go sequencer source not available" \
+          --allow-skip="Halo2 not yet implemented"
 
   supply-chain:
     name: supply-chain (sbom + audit)

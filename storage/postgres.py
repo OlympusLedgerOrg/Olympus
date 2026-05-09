@@ -775,12 +775,25 @@ class StorageLayer:
             conn.execute("SET TRANSACTION ISOLATION LEVEL SERIALIZABLE")
 
             # --- O(1) duplicate check via smt_leaves index ---
+            # Fetch the stored value_hash so we can distinguish an idempotent
+            # retry (same hash → safe to deduplicate) from a true content
+            # conflict (different hash → append-only violation).
             cur.execute(
-                "SELECT 1 FROM smt_leaves WHERE key = %s AND version = %s",
+                "SELECT value_hash FROM smt_leaves WHERE key = %s AND version = %s",
                 (key, version),
             )
-            if cur.fetchone() is not None:
-                raise ValueError(f"Record already exists: {record_type}:{record_id}:{version}")
+            existing_row = cur.fetchone()
+            if existing_row is not None:
+                existing_value_hash = bytes(existing_row["value_hash"])
+                if existing_value_hash == value_hash:
+                    # Exact same content hash: idempotent retry.  Surface as a
+                    # named dedup signal so callers can return a 200 response.
+                    raise ValueError(f"Record already exists: {record_type}:{record_id}:{version}")
+                # Different content for the same key: true append-only conflict.
+                raise ValueError(
+                    f"Record already exists with different content: "
+                    f"{record_type}:{record_id}:{version}"
+                )
 
             # --- O(256) sibling fetch from smt_nodes ---
             siblings = self._get_proof_path(cur, key)

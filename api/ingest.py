@@ -40,6 +40,7 @@ from fastapi import APIRouter, File, HTTPException, Path, Request, UploadFile
 from api.auth import (
     RequireCommitScope,
     RequireIngestScope,
+    RequireVerifyScope,
     _get_backend as _get_rate_limit_backend,
     _get_client_ip,
     _register_api_key_for_tests as _auth_register_api_key_for_tests,
@@ -1323,7 +1324,7 @@ async def get_ingestion_proof(
 
 @router.get("/records/hash/{content_hash}/verify", response_model=HashVerificationResponse)
 async def verify_ingested_content_hash(
-    content_hash: str, request: Request
+    content_hash: str, request: Request, _api_key: RequireVerifyScope
 ) -> HashVerificationResponse:
     """
     Verify that a committed BLAKE3 content hash exists in the ingestion store.
@@ -1331,6 +1332,9 @@ async def verify_ingested_content_hash(
     This endpoint returns the stored proof bundle plus a server-side Merkle proof
     verification result so public portals can display both the commitment data and
     the verifiable transcript needed for independent re-checking.
+
+    Requires the ``verify`` scope. See ``docs/SECURITY_AUDIT_REPORT.md`` (L-1) for
+    the audit finding that established authentication on this route.
     """
     await _apply_ip_rate_limit(request, "verify")
 
@@ -1554,11 +1558,21 @@ async def commit_artifact(
                 # Storage-layer dedup conflicts surface as ValueError. The
                 # sequencer path translates its own errors to HTTPException
                 # inside the adapter and never raises ValueError here.
+                #
+                # Two distinct signals from the storage layer:
+                #   "Record already exists: ..."              → idempotent retry
+                #                                               (same hash, safe to dedup)
+                #   "Record already exists with different content: ..."
+                #                                             → true conflict (append-only
+                #                                               violation, reject with 409)
                 error_msg = str(e)
+                # Use the colon sentinel to distinguish same-hash dedup from
+                # the "different content" conflict variant.
                 is_dedup = (
-                    "Record already exists" in error_msg
+                    "Record already exists:" in error_msg
                     or "Content hash already committed" in error_msg
                 )
+                is_conflict = "Record already exists with different content:" in error_msg
                 if is_dedup:
                     existing = (await _fetch_by_content_hash(artifact_hash_hex)) or {}
                     existing_proof_id = existing.get("proof_id", proof_id)
@@ -1579,6 +1593,16 @@ async def commit_artifact(
                         )
                         else None,
                     )
+                if is_conflict:
+                    raise HTTPException(
+                        status_code=409,
+                        detail=(
+                            "A record with different content has already been committed "
+                            "for this artifact identity. The ledger is append-only; "
+                            "use a different artifact id or namespace to commit a "
+                            "distinct artifact."
+                        ),
+                    ) from e
                 logger.exception(
                     "artifact_commit_storage_failed",
                     extra={

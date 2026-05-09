@@ -463,6 +463,104 @@ class TestArtifactCommit:
         assert resp2.json()["poseidon_root"] is not None
         assert resp2.json()["poseidon_root"].isdigit()
 
+    def test_commit_idempotent_retry_same_hash_returns_200(
+        self, client: TestClient, monkeypatch: pytest.MonkeyPatch
+    ):
+        """An idempotent retry (same namespace/id/hash) must return 200, not 500.
+
+        This guards against a regression where the storage-layer duplicate check
+        compared only the record key (shard_id, record_type, record_id, version)
+        without inspecting the stored value_hash.  Both the old record and the
+        retry carry the same artifact_hash, so the commit is idempotent and the
+        endpoint must return the existing proof_id.
+        """
+        artifact_hash = "ee" * 32
+
+        # Patch the storage layer to simulate a "Record already exists" ValueError
+        # with the same hash — i.e. the idempotent signal emitted after comparing
+        # value_hash inside _append_record_inner.
+
+        class _FakeStorage:
+            _call_count = 0
+
+            def append_record(self, **_kwargs):
+                self._call_count += 1
+                raise ValueError("Record already exists: artifact:idem-test:1")
+
+            def store_ingestion_batch(self, *_args, **_kwargs):
+                pass
+
+        fake_storage = _FakeStorage()
+        monkeypatch.setattr(ingest_api, "_get_storage", lambda: fake_storage)
+        monkeypatch.setattr(ingest_api, "_signing_key", SigningKey(b"\x02" * 32))
+
+        # Pre-populate the in-memory content cache so _fetch_by_content_hash
+        # returns a stub entry (simulating the first commit having been stored).
+        ingest_api._content_index[artifact_hash] = "existing-proof-id"
+        ingest_api._ingestion_store["existing-proof-id"] = {
+            "proof_id": "existing-proof-id",
+            "record_id": "idem-test",
+            "shard_id": "artifacts.ci-idem",
+            "record_type": "artifact",
+            "namespace": "ci-idem",
+            "content_hash": artifact_hash,
+            "ledger_entry_hash": "aa" * 32,
+            "timestamp": "2026-01-01T00:00:00Z",
+            "poseidon_root": "99999",
+        }
+
+        resp = client.post(
+            "/ingest/commit",
+            json={
+                "artifact_hash": artifact_hash,
+                "namespace": "ci-idem",
+                "id": "idem-test",
+            },
+        )
+        assert resp.status_code == 200, resp.text
+        data = resp.json()
+        assert data["proof_id"] == "existing-proof-id"
+        assert data["artifact_hash"] == artifact_hash
+
+    def test_commit_different_hash_same_identity_returns_409(
+        self, client: TestClient, monkeypatch: pytest.MonkeyPatch
+    ):
+        """A different artifact_hash for an already-committed (namespace, id) returns 409.
+
+        This guards against the previous behaviour where any ValueError from the
+        storage layer was treated as an idempotent dedup, meaning a caller could
+        submit a revised artifact under the same identity and receive back the
+        old commitment — silently masking the discrepancy.
+
+        The storage layer now emits a distinct "Record already exists with
+        different content" message when value_hash does not match the stored
+        leaf, and the endpoint must translate that into HTTP 409 Conflict.
+        """
+        artifact_hash_v2 = "ff" * 32  # different hash from the first commit
+
+        class _FakeStorage:
+            def append_record(self, **_kwargs):
+                raise ValueError(
+                    "Record already exists with different content: artifact:conflict-test:1"
+                )
+
+            def store_ingestion_batch(self, *_args, **_kwargs):
+                pass
+
+        monkeypatch.setattr(ingest_api, "_get_storage", lambda: _FakeStorage())
+        monkeypatch.setattr(ingest_api, "_signing_key", SigningKey(b"\x03" * 32))
+
+        resp = client.post(
+            "/ingest/commit",
+            json={
+                "artifact_hash": artifact_hash_v2,
+                "namespace": "ci-conflict",
+                "id": "conflict-test",
+            },
+        )
+        assert resp.status_code == 409, resp.text
+        assert "different content" in resp.json()["detail"].lower()
+
     def test_commit_invalid_hex_rejected(self, client: TestClient):
         resp = client.post(
             "/ingest/commit",
@@ -668,23 +766,15 @@ class TestAuthAndRateLimiting:
         resp = unauth_client.post("/ingest/records", json=payload)
         assert resp.status_code == 401
 
-    def test_verify_endpoint_is_public(self, client: TestClient):
-        """GET /ingest/records/hash/{hash}/verify is a public read endpoint.
+    def test_verify_endpoint_requires_verify_scope(self, client: TestClient):
+        """GET /ingest/records/hash/{hash}/verify requires the ``verify`` scope.
 
-        Verification should be accessible without a verify scope (or any scope
-        at all) so that public portals and citizens can check commitments
-        without needing an API key.  A client that holds only the 'ingest'
-        scope must still be able to verify a hash it just committed.
+        Per ``docs/SECURITY_AUDIT_REPORT.md`` (L-1), this endpoint must require
+        authentication: a client holding only the ``ingest`` scope must be
+        rejected with 403, an unauthenticated client must be rejected with 401,
+        and a client holding the ``verify`` scope must succeed.
         """
-        ingest_api._reset_ingest_state_for_tests()
-        ingest_api._register_api_key_for_tests(
-            api_key="ingest-only",
-            key_id="ingest-only-id",
-            scopes={"ingest"},
-            expires_at="2099-01-01T00:00:00Z",
-        )
-        scoped_client = TestClient(app, headers={"X-API-Key": "ingest-only"})
-
+        # First commit a record with a fully-scoped client so we have a hash to verify.
         payload = {
             "records": [
                 {
@@ -696,18 +786,29 @@ class TestAuthAndRateLimiting:
                 }
             ]
         }
-        ingest_resp = scoped_client.post("/ingest/records", json=payload)
+        ingest_resp = client.post("/ingest/records", json=payload)
         assert ingest_resp.status_code == 200
         content_hash = ingest_resp.json()["results"][0]["content_hash"]
 
-        # Verify with the ingest-only scoped client — should succeed (public endpoint)
-        verify_resp = scoped_client.get(f"/ingest/records/hash/{content_hash}/verify")
-        assert verify_resp.status_code == 200
+        # Register an ingest-only key and confirm it cannot hit the verify endpoint.
+        ingest_api._register_api_key_for_tests(
+            api_key="ingest-only",
+            key_id="ingest-only-id",
+            scopes={"ingest"},
+            expires_at="2099-01-01T00:00:00Z",
+        )
+        scoped_client = TestClient(app, headers={"X-API-Key": "ingest-only"})
+        scoped_resp = scoped_client.get(f"/ingest/records/hash/{content_hash}/verify")
+        assert scoped_resp.status_code == 403, scoped_resp.text
 
-        # Verify with a completely unauthenticated client — should also succeed
+        # Unauthenticated client is rejected (401 — no API key supplied).
         anon_client = TestClient(app)
         anon_resp = anon_client.get(f"/ingest/records/hash/{content_hash}/verify")
-        assert anon_resp.status_code == 200
+        assert anon_resp.status_code == 401, anon_resp.text
+
+        # The fully-scoped fixture client (which has ``verify``) still succeeds.
+        verify_resp = client.get(f"/ingest/records/hash/{content_hash}/verify")
+        assert verify_resp.status_code == 200, verify_resp.text
 
     def test_expired_key_rejected(self):
         ingest_api._reset_ingest_state_for_tests()

@@ -14,7 +14,7 @@ Covers:
 from __future__ import annotations
 
 import os
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 
 import pytest
 import pytest_asyncio
@@ -97,10 +97,14 @@ async def test_register_success(auth_client):
 
 @pytest.mark.asyncio
 async def test_register_duplicate_email_conflict(auth_client):
-    first = await auth_client.post("/auth/register", json=REG_BODY)
-    assert first.status_code == 201
-    second = await auth_client.post("/auth/register", json=REG_BODY)
-    assert second.status_code == 409
+    # Bypass the per-IP 1/min registration limiter so this test exercises the
+    # duplicate-email branch (409) directly rather than racing against the
+    # rate-limit guardrail in registration_rate_limit().
+    with patch("api.routers.user_auth.registration_rate_limit", new=AsyncMock(return_value=None)):
+        first = await auth_client.post("/auth/register", json=REG_BODY)
+        assert first.status_code == 201
+        second = await auth_client.post("/auth/register", json=REG_BODY)
+        assert second.status_code == 409
 
 
 @pytest.mark.asyncio
