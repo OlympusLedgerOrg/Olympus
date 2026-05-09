@@ -216,14 +216,16 @@ def test_global_key_shard_isolation():
 
 def test_global_key_context_uniqueness():
     """
-    The derive_key context string must appear in exactly three places:
-    - ``protocol/hashes.py``                  (Python reference implementation)
-    - ``src/crypto.rs``                       (PyO3 Rust acceleration backend)
-    - ``services/cdhs-smf-rust/src/crypto.rs`` (standalone CD-HS-ST Rust service)
+    The derive_key context string must appear in exactly two places:
+    - ``protocol/hashes.py``              (Python reference implementation)
+    - ``crates/olympus-crypto/src/lib.rs`` (shared Rust crate — single source of
+      truth for both the PyO3 extension and the standalone CD-HS-ST service)
 
-    Any other file using the same string would indicate an accidental
-    copy-paste or a divergent implementation that could silently produce
-    wrong keys.
+    Both ``src/crypto.rs`` and ``services/cdhs-smf-rust/src/crypto.rs`` delegate to
+    ``olympus_crypto::global_key()`` rather than embedding the literal string, so
+    the count is 2, not 3.  Any deviation from this expected count indicates either
+    an accidental copy-paste or an unshared divergent implementation that could
+    silently produce wrong keys.
     """
     context = _GLOBAL_SMT_KEY_CONTEXT
     repo_root = pathlib.Path(".")
@@ -235,8 +237,9 @@ def test_global_key_context_uniqueness():
             if pathlib.PurePath(fname).suffix in suffixes:
                 path = pathlib.Path(dirpath) / fname
                 occurrences += path.read_text(encoding="utf-8").count(context)
-    assert occurrences == 3, (
+    assert occurrences == 2, (
         f"derive_key context string found {occurrences} time(s); "
-        "expected exactly 3 (protocol/hashes.py + src/crypto.rs + "
-        "services/cdhs-smf-rust/src/crypto.rs)"
+        "expected exactly 2 (protocol/hashes.py + crates/olympus-crypto/src/lib.rs). "
+        "src/crypto.rs and services/cdhs-smf-rust/src/crypto.rs must delegate to "
+        "olympus_crypto::global_key() rather than embedding the literal string."
     )
