@@ -112,11 +112,13 @@ To use a custom database username and password:
 
 ## What the scripts do
 
-Both scripts perform the same steps in order:
+Both scripts perform the same core steps in order:
 
-1. **Check prerequisites** — Docker and Python 3.10+.
-2. **Start PostgreSQL** — Launches `olympus-postgres` container on port 5432.
-   Re-running is safe: an already-running container is reused.
+1. **Check prerequisites** — Python 3.10+. Docker is only required when `-StartDocker` is supplied.
+2. **Start PostgreSQL** — With `-StartDocker`: launches the `olympus-postgres` container on port 5432
+   (re-running is safe: an already-running container is reused). Without `-StartDocker`: the script
+   expects an external Postgres instance reachable at the configured `DATABASE_URL`; it will fail
+   early if the database is unreachable.
 3. **Set environment variables** — `DATABASE_URL` and `OLYMPUS_INGEST_SIGNING_KEY`.
    A `.env` file is written to the repo root so values persist between terminal sessions.
 4. **Create virtual environment** — `.venv/` in the repo root.
@@ -125,6 +127,14 @@ Both scripts perform the same steps in order:
 6. **Run Alembic migrations** — Brings the database schema up to date.
 7. **Install public UX dependencies** — `npm ci` in `app/public-ui`.
 8. **Start the app** — API on `http://localhost:8000`, public UX on `http://localhost:5173`.
+
+**Windows-only optional steps (WSL path):**
+
+- If `-UseGoSequencer` is supplied, the script starts the CDHS-SMF Rust service and the Go
+  sequencer inside WSL (requires WSL with Go and Rust installed). The WSL processes run in
+  separate terminal windows that must remain open.
+- WSL helper scripts are written to the system temp directory and self-delete after execution
+  so that embedded credentials do not linger in the repository tree.
 
 ---
 

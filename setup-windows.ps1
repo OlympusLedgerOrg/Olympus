@@ -538,7 +538,8 @@ function Clear-PipTempJunk {
         Where-Object {
             $_.Name -like "~*" -or
             $_.Name -like "*.tmp" -or
-            $_.Name -like "pip-*"
+            $_.Name -like "pip-build-tracker-*" -or
+            $_.Name -like "pip-unpack-*"
         }
 
     foreach ($item in $junk) {
@@ -744,11 +745,17 @@ function Start-WslWindow {
     }
 
     $safeTitle = ($Title -replace '[^a-zA-Z0-9_-]', '_')
-    $scriptName = ".olympus-wsl-$safeTitle-$([Guid]::NewGuid().ToString('N')).sh"
-    $scriptPath = Join-Path $RepoRoot $scriptName
+    $scriptName = "olympus-wsl-$safeTitle-$([Guid]::NewGuid().ToString('N')).sh"
+    # Write to the system temp directory so credentials embedded in the script
+    # are never placed inside the repo tree (prevents accidental commits and
+    # reduces the window during which secrets sit on a predictable path).
+    $scriptPath = Join-Path ([System.IO.Path]::GetTempPath()) $scriptName
 
+    # Prepend a self-delete trap so the script removes itself after execution,
+    # minimising the time credentials are stored on disk.
+    $selfDelete = "trap 'rm -f `"`$0`"' EXIT`n"
     $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
-    [System.IO.File]::WriteAllText($scriptPath, $Command.Replace("`r`n", "`n"), $utf8NoBom)
+    [System.IO.File]::WriteAllText($scriptPath, ($selfDelete + $Command).Replace("`r`n", "`n"), $utf8NoBom)
 
     $wslScriptPath = Convert-ToWslPath -WindowsPath $scriptPath
 
@@ -1206,8 +1213,10 @@ if (-not $SkipInstall) {
 
     Write-Ok "Installing Olympus package in editable mode."
 
-    python -m pip install --quiet -e "$RepoRoot.[dev]"
+    Push-Location $RepoRoot
+    python -m pip install --quiet -e ".[dev]"
     $editableExit = $LASTEXITCODE
+    Pop-Location
 
     if ($editableExit -ne 0) {
         Write-Warn "Editable install with [dev] returned exit code $editableExit. Trying plain editable install."

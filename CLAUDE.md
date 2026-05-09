@@ -85,7 +85,7 @@ Reference implementations in Python, Go, Rust, and JavaScript — used for diffe
 
 ## Critical Invariants
 
-- **Domain prefixes**: All leaf/node hashes must use `OLY:LEAF:V1|` / `OLY:NODE:V1|`. The `cdhs-smf-rust` service uses different prefixes and is a historical artifact — **not for production crypto**.
+- **Domain prefixes**: All leaf/node hashes must use `OLY:LEAF:V1|` / `OLY:NODE:V1|`. Both `olympus_core` (PyO3) and `cdhs-smf-rust` share these prefixes via the `crates/olympus-crypto` crate. Global SMT keys use `BLAKE3.derive_key("olympus 2025-12 global-smt-leaf-key", ...)` with length-prefixed inputs — not a raw prefix tag.
 - **Ed25519 signing keys must be persisted** — ephemeral keys make historical signed roots unverifiable. Any code generating an Ed25519 keypair needs a persistence strategy.
 - **Canonical JSON**: Always JCS/RFC 8785 raw UTF-8. Never `json.dumps` without JCS normalization.
 - **Go sequencer batch inserts**: All 256 delta inserts for a batch must happen inside a single outer DB transaction.
