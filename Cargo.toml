@@ -20,6 +20,7 @@ pyo3 = { version = "0.24", features = ["extension-module", "num-bigint"] }
 regex = "1"
 # BLAKE3 cryptographic hash — used by the crypto and canonical submodules.
 blake3 = "1"
+olympus-crypto = { path = "crates/olympus-crypto" }
 # Unicode NFC normalisation — required for canonical JSON key/value encoding.
 unicode-normalization = "0.1"
 ark-bn254 = "=0.6.0"

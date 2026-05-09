@@ -6,9 +6,10 @@ This directory contains the Phase 1 greenfield implementation of the Constant-De
 
 The CD-HS-ST system consists of three layers:
 
-1. **Rust Service** (`cdhs-smf-rust/`): Cryptographic core and SMT operations
-2. **Go Sequencer** (`sequencer-go/`): Log service and storage orchestration
-3. **Python API** (existing `api/`): High-level API, policy, orchestration
+1. **Shared Rust crypto** (`../crates/olympus-crypto/`): protocol-critical hash/key primitives
+2. **Rust Service** (`cdhs-smf-rust/`): gRPC sidecar for SMT operations, signing, canonicalization
+3. **Go Sequencer** (`sequencer-go/`): Log service and storage orchestration
+4. **Python API** (existing `api/`): High-level API, policy, orchestration
 
 ## Architecture Diagram
 
@@ -31,8 +32,7 @@ The CD-HS-ST system consists of three layers:
                  ▼
 ┌─────────────────────────────────────────────────────────────┐
 │  Rust CD-HS-ST Service (cdhs-smf-rust/)                    │
-│  - BLAKE3 hashing (domain-separated)                        │
-│  - Composite key generation                                 │
+│  - Uses shared olympus-crypto hash/key primitives            │
 │  - SMT update/prove operations                              │
 │  - Ed25519 signing                                          │
 │  - Canonicalization                                         │
@@ -61,13 +61,16 @@ The CD-HS-ST system consists of three layers:
 All records are indexed by a composite key that includes both shard identity and record identity:
 
 ```rust
-global_key = BLAKE3(
-  "OLY:CDHS-SMF:GKEY:V1" ||
-  shard_id ||               // e.g., "watauga:2025:budget"
-  record_type ||            // e.g., "doc"
-  record_id ||              // e.g., "12345"
-  version ||                // e.g., "v1"
-  sorted(metadata)          // deterministic metadata encoding
+record_key = BLAKE3(
+  "OLY:KEY:V1" ||
+  len(record_type) || record_type ||
+  len(record_id) || record_id ||
+  version_u64_be
+)
+
+global_key = BLAKE3-derive-key(
+  "olympus 2025-12 global-smt-leaf-key",
+  len(shard_id) || shard_id || len(record_key) || record_key
 )
 ```
 
@@ -81,8 +84,8 @@ This ensures:
 #### Rust Service
 
 - **DOES**: All cryptographic operations
-  - BLAKE3 hashing with domain separation
-  - Composite key generation
+  - BLAKE3 hashing with domain separation via shared `olympus-crypto`
+  - Composite key generation via shared `olympus-crypto`
   - SMT update/prove operations
   - Ed25519 signing
   - Canonicalization (JSON, text, etc.)
@@ -124,20 +127,32 @@ This avoids double-serialization when Go serves gRPC externally.
 All hashing uses BLAKE3 with clear domain separation:
 
 ```
-GLOBAL_KEY_PREFIX  = "OLY:CDHS-SMF:GKEY:V1"
-LEAF_HASH_PREFIX   = "OLY:SMT:LEAF:V1"
-NODE_HASH_PREFIX   = "OLY:SMT:NODE:V1"
-EMPTY_LEAF_PREFIX  = "OLY:EMPTY-LEAF:V1"
+GLOBAL_SMT_KEY_CONTEXT = "olympus 2025-12 global-smt-leaf-key"  # derive_key context
+LEAF_HASH_PREFIX        = "OLY:LEAF:V1"
+NODE_HASH_PREFIX        = "OLY:NODE:V1"
+EMPTY_LEAF_PREFIX       = "OLY:EMPTY-LEAF:V1"
 ```
+
+Global key derivation:
+```
+key_material = len(shard_id) || shard_id || len(record_key) || record_key
+global_key   = BLAKE3.derive_key("olympus 2025-12 global-smt-leaf-key", key_material)
+```
+Where `len(x)` is a 4-byte big-endian length prefix and `record_key` is itself a
+BLAKE3 hash derived with the `OLY:KEY:V1` domain prefix and length-prefixed fields.
 
 Leaf hashing:
 ```
-leaf_hash = BLAKE3("OLY:SMT:LEAF:V1" || key || value_hash)
+leaf_hash = BLAKE3(
+  "OLY:LEAF:V1" || "|" || key || "|" || value_hash || "|" ||
+  len(parser_id) || parser_id || "|" ||
+  len(canonical_parser_version) || canonical_parser_version
+)
 ```
 
 Node hashing:
 ```
-node_hash = BLAKE3("OLY:SMT:NODE:V1" || left || right)
+node_hash = BLAKE3("OLY:NODE:V1" || "|" || left || "|" || right)
 ```
 
 ## Request Flow Example
@@ -274,6 +289,7 @@ Still needed:
 ### Phase 1 (Greenfield - this implementation)
 
 - ✅ Protobuf definitions (`proto/cdhs_smf.proto`)
+- ✅ Shared Rust crypto primitives (`crates/olympus-crypto`)
 - ✅ Rust CD-HS-ST service skeleton
 - ✅ Go sequencer service skeleton
 - [ ] Integration tests (Rust service)

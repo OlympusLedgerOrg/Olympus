@@ -2,7 +2,6 @@
 
 Revision ID: c1d2e3f4a5b6
 Revises: b3c4d5e6f7a8
-Create Date: 2026-03-31
 """
 
 from collections.abc import Sequence
@@ -17,18 +16,29 @@ depends_on: str | Sequence[str] | None = None
 
 
 def upgrade() -> None:
-    op.execute("CREATE SEQUENCE IF NOT EXISTS display_id_seq START 1 INCREMENT 1")
-    # Seed the sequence to the current max to avoid collisions with existing rows
+    op.execute("CREATE SEQUENCE IF NOT EXISTS display_id_seq START WITH 1 INCREMENT BY 1")
+
+    # If rows already exist, advance the sequence to the highest OLY-NNNN value.
+    # If no rows exist, set sequence to 1 with is_called=false so nextval() returns 1.
     op.execute(
         """
         SELECT setval(
             'display_id_seq',
+            GREATEST(
+                COALESCE(
+                    (SELECT MAX(CAST(SPLIT_PART(display_id, '-', 2) AS INTEGER))
+                     FROM public_records_requests
+                     WHERE display_id LIKE 'OLY-%%'),
+                    1
+                ),
+                1
+            ),
             COALESCE(
                 (SELECT MAX(CAST(SPLIT_PART(display_id, '-', 2) AS INTEGER))
                  FROM public_records_requests
-                 WHERE display_id LIKE 'OLY-%'),
+                 WHERE display_id LIKE 'OLY-%%'),
                 0
-            )
+            ) > 0
         )
         """
     )

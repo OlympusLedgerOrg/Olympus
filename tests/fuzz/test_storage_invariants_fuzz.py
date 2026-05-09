@@ -35,7 +35,7 @@ import nacl.signing
 import pytest
 from hypothesis import given, settings, strategies as st
 
-from protocol.canonical import CANONICAL_VERSION, canonicalize_document, document_to_bytes
+from protocol.canonical import CANONICAL_VERSION, document_to_commit_bytes
 from protocol.canonicalizer import canonicalization_provenance
 from protocol.hashes import hash_bytes
 from protocol.ssmf import verify_nonexistence_proof, verify_proof
@@ -116,8 +116,7 @@ def _unique_shard(prefix: str = "fuzz") -> str:
 
 def _canonicalize_and_hash(content: dict[str, Any]) -> bytes:
     """Canonicalize a content dict and return its 32-byte hash."""
-    canon = canonicalize_document(content)
-    return hash_bytes(document_to_bytes(canon))
+    return hash_bytes(document_to_commit_bytes(content))
 
 
 # ---------------------------------------------------------------------------

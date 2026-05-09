@@ -5,8 +5,8 @@
 //! - Composite key generation
 //! - Ed25519 signing
 
-use blake3;
 use ed25519_dalek::{Signer, SigningKey, VerifyingKey};
+use olympus_crypto as shared_crypto;
 use std::collections::HashMap;
 use tracing::warn;
 use zeroize::Zeroizing;
@@ -29,52 +29,11 @@ pub const SIGNING_KEY_ENV: &str = "SEQUENCER_SMT_SIGNING_KEY";
 
 use crate::proto::olympus::cdhs_smf::v1::RecordKey;
 
-/// Domain separation prefixes for BLAKE3 hashing.
-///
-/// These constants MUST stay in sync with `src/crypto.rs` (PyO3 extension) and
-/// `protocol/hashes.py` (Python reference).  All three implementations must
-/// produce byte-identical hashes for the same inputs.
-///
-/// BLAKE3 derive_key context for global SMT leaf keys — matches the PyO3
-/// extension and `protocol/hashes.py::_GLOBAL_SMT_KEY_CONTEXT`.
-const GLOBAL_SMT_KEY_CONTEXT: &str = "olympus 2025-12 global-smt-leaf-key";
-
-const LEAF_HASH_PREFIX: &[u8] = b"OLY:LEAF:V1";
-const NODE_HASH_PREFIX: &[u8] = b"OLY:NODE:V1";
-const EMPTY_LEAF_PREFIX: &[u8] = b"OLY:EMPTY-LEAF:V1";
-
 /// Domain-separation prefix for Ed25519 signed roots produced by
 /// [`KeyManager::sign_root`].  Versioned (`:V1`) so a future protocol change
 /// can introduce a new tag without ambiguity.  See `sign_root` for the full
 /// signed-message layout.
 const SIG_ROOT_DOMAIN: &[u8] = b"OLY:SIG:ROOT:V1";
-
-/// Field separator between components in leaf/node hashes — matches `SEP` in
-/// `src/crypto.rs` and `HASH_SEPARATOR` in `protocol/hashes.py`.
-const SEP: &[u8] = b"|";
-
-/// Encode a byte slice with a 4-byte big-endian length prefix.
-///
-/// This prevents canonicalization collisions where concatenated variable-length
-/// fields could be misinterpreted — e.g. `shard_id="ab"` + `record_key="cd"`
-/// vs. `shard_id="a"` + `record_key="bcd"` would otherwise hash identically.
-///
-/// # Panics
-///
-/// Panics if `data.len()` exceeds `u32::MAX` (4 GiB).  In practice this is
-/// unreachable for any reasonable input; it exists to prevent silent truncation.
-fn length_prefixed(data: &[u8]) -> Vec<u8> {
-    assert!(
-        data.len() <= u32::MAX as usize,
-        "length_prefixed: data length {} exceeds u32::MAX",
-        data.len()
-    );
-    let len = data.len() as u32;
-    let mut buf = Vec::with_capacity(4 + data.len());
-    buf.extend_from_slice(&len.to_be_bytes());
-    buf.extend_from_slice(data);
-    buf
-}
 
 /// Compute a global key from shard_id and record_key.
 ///
@@ -102,26 +61,8 @@ pub fn compute_global_key(shard_id: &str, record_key: &RecordKey) -> Result<[u8;
 
     // Step 2: Derive global key using BLAKE3 derive_key mode with
     // length-prefixed shard_id and record_key_bytes.
-    let shard_bytes = shard_id.as_bytes();
-    // Hot path: cheap bound check elided in release builds; the inner
-    // `length_prefixed` carries the equivalent `assert!` for production.
-    debug_assert!(shard_bytes.len() <= u32::MAX as usize);
-    debug_assert!(record_key_bytes.len() <= u32::MAX as usize);
-    let mut key_material = Vec::with_capacity(
-        4 + shard_bytes.len() + 4 + record_key_bytes.len(),
-    );
-    key_material.extend_from_slice(&length_prefixed(shard_bytes));
-    key_material.extend_from_slice(&length_prefixed(&record_key_bytes));
-
-    Ok(*blake3::Hasher::new_derive_key(GLOBAL_SMT_KEY_CONTEXT)
-        .update(&key_material)
-        .finalize()
-        .as_bytes())
+    Ok(shared_crypto::global_key(shard_id, &record_key_bytes))
 }
-
-/// Domain-separation prefix for record keys — must match `KEY_PREFIX` in
-/// `src/crypto.rs` and `protocol/hashes.py`.
-const KEY_PREFIX: &[u8] = b"OLY:KEY:V1";
 
 /// Compute record key bytes matching `src/crypto.rs::record_key()` and
 /// `protocol/hashes.py::record_key()`.
@@ -134,11 +75,6 @@ const KEY_PREFIX: &[u8] = b"OLY:KEY:V1";
 /// non-empty and not a valid base-10 u64 to prevent silent key collisions
 /// (e.g. "1" vs "v1" both mapping to 0).
 fn compute_record_key_bytes(rk: &RecordKey) -> Result<[u8; 32], String> {
-    let rt = rk.record_type.as_bytes();
-    let ri = rk.record_id.as_bytes();
-    debug_assert!(rt.len() <= u32::MAX as usize);
-    debug_assert!(ri.len() <= u32::MAX as usize);
-
     let version: u64 = if rk.version.is_empty() {
         0
     } else {
@@ -150,15 +86,11 @@ fn compute_record_key_bytes(rk: &RecordKey) -> Result<[u8; 32], String> {
         })?
     };
 
-    let mut key_data = Vec::with_capacity(
-        KEY_PREFIX.len() + 4 + rt.len() + 4 + ri.len() + 8,
-    );
-    key_data.extend_from_slice(KEY_PREFIX);
-    key_data.extend_from_slice(&length_prefixed(rt));
-    key_data.extend_from_slice(&length_prefixed(ri));
-    key_data.extend_from_slice(&version.to_be_bytes());
-
-    Ok(*blake3::Hasher::new().update(&key_data).finalize().as_bytes())
+    Ok(shared_crypto::record_key(
+        &rk.record_type,
+        &rk.record_id,
+        version,
+    ))
 }
 
 /// Hash canonicalized content for leaf value
@@ -168,7 +100,7 @@ pub fn hash_canonical_content(content: &[u8]) -> [u8; 32] {
 
 /// Generic BLAKE3 hash of bytes
 pub fn hash_bytes(data: &[u8]) -> [u8; 32] {
-    *blake3::hash(data).as_bytes()
+    shared_crypto::hash_bytes(data)
 }
 
 /// Hash a leaf node with domain separation (ADR-0003).
@@ -190,17 +122,7 @@ pub fn hash_leaf(
     parser_id: &[u8],
     canonical_parser_version: &[u8],
 ) -> [u8; 32] {
-    let mut hasher = blake3::Hasher::new();
-    hasher.update(LEAF_HASH_PREFIX);
-    hasher.update(SEP);
-    hasher.update(key);
-    hasher.update(SEP);
-    hasher.update(value_hash);
-    hasher.update(SEP);
-    hasher.update(&length_prefixed(parser_id));
-    hasher.update(SEP);
-    hasher.update(&length_prefixed(canonical_parser_version));
-    *hasher.finalize().as_bytes()
+    shared_crypto::leaf_hash(key, value_hash, parser_id, canonical_parser_version)
 }
 
 /// Hash an internal node with domain separation.
@@ -209,18 +131,12 @@ pub fn hash_leaf(
 ///
 /// Matches `compute_node_hash` in `src/crypto.rs` (PyO3).
 pub fn hash_node(left: &[u8; 32], right: &[u8; 32]) -> [u8; 32] {
-    let mut hasher = blake3::Hasher::new();
-    hasher.update(NODE_HASH_PREFIX);
-    hasher.update(SEP);
-    hasher.update(left);
-    hasher.update(SEP);
-    hasher.update(right);
-    *hasher.finalize().as_bytes()
+    shared_crypto::node_hash(left, right)
 }
 
 /// Get the empty leaf sentinel value
 pub fn empty_leaf() -> [u8; 32] {
-    *blake3::hash(EMPTY_LEAF_PREFIX).as_bytes()
+    shared_crypto::empty_leaf()
 }
 
 /// Key manager for Ed25519 signing with hot-reload support.
@@ -447,13 +363,13 @@ impl KeyManager {
         message.extend_from_slice(&tree_size.to_le_bytes());
 
         // Add sorted context with length-prefixed keys and values.
-        // length_prefixed() asserts that inputs fit in u32, so this is safe.
+        // shared_crypto::length_prefixed() asserts that inputs fit in u32, so this is safe.
         let mut keys: Vec<_> = context.keys().collect();
         keys.sort();
         for key in keys {
-            message.extend_from_slice(&length_prefixed(key.as_bytes()));
+            message.extend_from_slice(&shared_crypto::length_prefixed(key.as_bytes()));
             if let Some(value) = context.get(key) {
-                message.extend_from_slice(&length_prefixed(value.as_bytes()));
+                message.extend_from_slice(&shared_crypto::length_prefixed(value.as_bytes()));
             }
         }
 

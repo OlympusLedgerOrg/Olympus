@@ -41,6 +41,7 @@ env/
 .vscode/*
 !.vscode/settings.json
 .idea/
+.claude/settings.local.json
 *.swp
 *.swo
 *~
@@ -78,6 +79,7 @@ benchmarks/results/
 # Olympus FOIA dev SQLite database
 *.db
 olympus_foia.db
+.olympus-wsl-*.sh
 API KEY .txt
 *.txt
 build-log.txt

@@ -44,6 +44,19 @@ jobs:
       - name: Install proofs JS dependencies
         run: npm ci --ignore-scripts --prefix proofs
 
+      # rapidsnark/ffiasm emits native field arithmetic assembly and requires
+      # nasm plus a small C++ build toolchain.  Install these before the vendor
+      # build so setup failures point at the missing system dependency directly.
+      - name: Install native proof-toolchain prerequisites
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends \
+            build-essential \
+            cmake \
+            g++ \
+            nasm \
+            pkg-config
+
       - name: Cache powers of tau parameters
         id: cache-ptau
         uses: actions/cache@v4

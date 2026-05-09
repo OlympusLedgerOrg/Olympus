@@ -4,45 +4,47 @@
 
 - [Python 3.10+](https://python.org/downloads/)
 - [Docker](https://docs.docker.com/get-docker/) (for the PostgreSQL database)
+- [Node.js 20.19+ or 22.12+](https://nodejs.org/) (for the public UX)
 
 ---
 
 ## One-Command Setup
 
-### Windows — Double-click to start
+### Windows
 
-```
-run.bat
-```
+Double-click this file in the repository root:
 
-Or from Command Prompt / PowerShell:
-
-```cmd
-run.bat
+```text
+Olympus-Start-Windows.cmd
 ```
 
-No execution-policy changes required.
+For advanced setup, open PowerShell in the repository root and run:
+
+```powershell
+.\setup-windows.ps1
+```
 
 ---
 
 ### macOS / Linux
 
 ```bash
-chmod +x run.sh && ./run.sh
+chmod +x setup-unix.sh && ./setup-unix.sh
 ```
 
 ---
 
 ## What it does
 
-Both scripts automatically:
+Both setup scripts automatically:
 
 1. Start a PostgreSQL container via Docker (`olympus-postgres` on port 5432)
 2. Create a Python virtual environment (`.venv/`)
 3. Install all dependencies
 4. Generate a `.env` file with `DATABASE_URL` and `OLYMPUS_INGEST_SIGNING_KEY`
 5. Run Alembic database migrations
-6. Start the API server at **http://localhost:8000**
+6. Install the public UX dependencies
+7. Start the UX at **http://localhost:5173** and the API at **http://localhost:8000**
 
 The scripts are **idempotent** — safe to re-run at any time.
 
@@ -52,6 +54,7 @@ The scripts are **idempotent** — safe to re-run at any time.
 
 | URL | Description |
 |-----|-------------|
+| http://localhost:5173 | Olympus public UX |
 | http://localhost:8000 | Olympus REST API |
 | http://localhost:8000/docs | Interactive API docs (Swagger UI) |
 | http://localhost:8000/redoc | Alternative API docs (ReDoc) |
@@ -60,7 +63,7 @@ The scripts are **idempotent** — safe to re-run at any time.
 
 ## Options
 
-### Unix/macOS (`run.sh`)
+### Unix/macOS (`setup-unix.sh`)
 
 | Flag | Description |
 |------|-------------|
@@ -69,13 +72,12 @@ The scripts are **idempotent** — safe to re-run at any time.
 | `--db-user USER` | Custom PostgreSQL username (default: `olympus`) |
 | `--db-pass PASS` | Custom PostgreSQL password (default: `olympus`) |
 
-### Windows (`run.bat`)
+### Windows (`setup-windows.ps1`)
 
-Set `DATABASE_URL` in your environment before running to skip the Docker step:
+Use PowerShell parameters for custom setup behavior:
 
-```cmd
-set DATABASE_URL=postgresql://myuser:mypass@localhost:5432/olympus
-run.bat
+```powershell
+.\setup-windows.ps1 -SkipStart -ForceLocalDbUrl
 ```
 
 ---
@@ -83,13 +85,13 @@ run.bat
 ## Day-to-day use (after first setup)
 
 **Windows:**
-```cmd
-run.bat
+```text
+Double-click Olympus-Start-Windows.cmd
 ```
 
 **macOS/Linux:**
 ```bash
-./run.sh
+./setup-unix.sh
 ```
 
 The script reuses the existing container and virtual environment — it only re-runs what is needed.
@@ -106,7 +108,7 @@ docker logs olympus-postgres
 **Port 5432 already in use** — stop your local PostgreSQL or pass a custom URL:
 ```bash
 export DATABASE_URL=postgresql://olympus:olympus@localhost:5433/olympus
-./run.sh --skip-docker
+./setup-unix.sh --skip-docker
 ```
 
 **Alembic migration fails** — confirm Postgres is reachable:
