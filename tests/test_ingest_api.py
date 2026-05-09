@@ -668,7 +668,14 @@ class TestAuthAndRateLimiting:
         resp = unauth_client.post("/ingest/records", json=payload)
         assert resp.status_code == 401
 
-    def test_scope_enforced_for_verify(self, client: TestClient):
+    def test_verify_endpoint_is_public(self, client: TestClient):
+        """GET /ingest/records/hash/{hash}/verify is a public read endpoint.
+
+        Verification should be accessible without a verify scope (or any scope
+        at all) so that public portals and citizens can check commitments
+        without needing an API key.  A client that holds only the 'ingest'
+        scope must still be able to verify a hash it just committed.
+        """
         ingest_api._reset_ingest_state_for_tests()
         ingest_api._register_api_key_for_tests(
             api_key="ingest-only",
@@ -690,9 +697,17 @@ class TestAuthAndRateLimiting:
             ]
         }
         ingest_resp = scoped_client.post("/ingest/records", json=payload)
+        assert ingest_resp.status_code == 200
         content_hash = ingest_resp.json()["results"][0]["content_hash"]
+
+        # Verify with the ingest-only scoped client — should succeed (public endpoint)
         verify_resp = scoped_client.get(f"/ingest/records/hash/{content_hash}/verify")
-        assert verify_resp.status_code == 403
+        assert verify_resp.status_code == 200
+
+        # Verify with a completely unauthenticated client — should also succeed
+        anon_client = TestClient(app)
+        anon_resp = anon_client.get(f"/ingest/records/hash/{content_hash}/verify")
+        assert anon_resp.status_code == 200
 
     def test_expired_key_rejected(self):
         ingest_api._reset_ingest_state_for_tests()
