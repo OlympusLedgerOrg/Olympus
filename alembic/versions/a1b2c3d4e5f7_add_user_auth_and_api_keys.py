@@ -42,7 +42,18 @@ def upgrade() -> None:
         columns = {c["name"] for c in inspector.get_columns("users")}
 
         if "email" not in columns:
-            op.add_column("users", sa.Column("email", sa.String(length=320), nullable=False))
+            op.add_column("users", sa.Column("email", sa.String(length=320), nullable=True))
+            op.execute(
+                sa.text(
+                    "UPDATE users SET email = 'legacy+' || id || '@users.local' WHERE email IS NULL"
+                )
+            )
+            op.alter_column(
+                "users",
+                "email",
+                existing_type=sa.String(length=320),
+                nullable=False,
+            )
         if "password_hash" not in columns:
             op.add_column("users", sa.Column("password_hash", sa.String(length=256), nullable=True))
         if "role" not in columns:
