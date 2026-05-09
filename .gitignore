@@ -41,6 +41,7 @@ env/
 .vscode/*
 !.vscode/settings.json
 .idea/
+.claude/settings.local.json
 *.swp
 *.swo
 *~

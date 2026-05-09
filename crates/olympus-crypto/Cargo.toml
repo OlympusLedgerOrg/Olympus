@@ -1,0 +1,9 @@
+[package]
+name = "olympus-crypto"
+version = "0.1.0"
+edition = "2021"
+description = "Shared Olympus protocol crypto primitives"
+license = "Apache-2.0"
+
+[dependencies]
+blake3 = "1"

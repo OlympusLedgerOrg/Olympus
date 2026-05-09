@@ -9,8 +9,9 @@ Get Olympus running locally with **one command**.
 | **Docker** | [docker.com/get-docker](https://docs.docker.com/get-docker/) |
 | **Python 3.10+** | [python.org](https://www.python.org/downloads/) |
 | **Rust / Cargo** | Required by `maturin` to build the `olympus_core` extension. Install via [rustup.rs](https://rustup.rs) |
+| **Node.js 20.19+ or 22.12+** | Required for the public UX dev server. Install via [nodejs.org](https://nodejs.org/) |
 
-No other software needs to be installed manually; both scripts handle everything else (PostgreSQL, virtual environment, migrations, API server).
+No other software needs to be installed manually; both scripts handle everything else (PostgreSQL, virtual environment, migrations, API server, and UX server).
 
 ### Optional: Protocol Buffers Compiler (`protoc`)
 
@@ -31,10 +32,25 @@ the Python API.
 
 ## Windows
 
-Open **PowerShell** (not Command Prompt) in the repository root and run:
+For the full Windows app path, double-click:
+
+```text
+Olympus-Start-Windows.cmd
+```
+
+That launcher starts the API and public UX, and uses the WSL sequencer path when available.
+
+For advanced setup, open **PowerShell** in the repository root and run:
 
 ```powershell
 .\setup-windows.ps1
+```
+
+If the script was downloaded from the internet and PowerShell reports that it
+is not digitally signed, unblock only this file and rerun it:
+
+```powershell
+Unblock-File -LiteralPath .\setup-windows.ps1
 ```
 
 To use a custom database username and password:
@@ -55,8 +71,16 @@ Set-ExecutionPolicy -Scope CurrentUser -ExecutionPolicy RemoteSigned
 |------|---------|-------------|
 | `-DbUser` | `olympus` | PostgreSQL username for the Docker container and `DATABASE_URL`. |
 | `-DbPassword` | `olympus` | PostgreSQL password. Use a strong value for any non-local environment. |
-| `-SkipDocker` | — | Skip the PostgreSQL container step (use when Postgres is already running). |
+| `-StartDocker` | — | Start a standalone local PostgreSQL container if Postgres is not already reachable. |
+| `-SkipDocker` | — | Do not start Docker; fail if PostgreSQL is unreachable. |
 | `-SkipStart` | — | Set everything up but do not start the API at the end. |
+| `-SkipUi` | — | Skip installing and starting the public UX. |
+| `-UiPort` | `5173` | Port for the public UX dev server. |
+| `-ForceLocalDbUrl` | — | Rewrite local DB URLs to `127.0.0.1` for Windows dev. |
+| `-EnableGoSequencer` | — | Enable Python routing through the Go sequencer. |
+| `-UseWslSequencer` | — | Configure the live Go sequencer path for WSL. |
+| `-StartWslCdhsSmf` | — | Open a WSL PowerShell window running the CDHS-SMF Rust service. |
+| `-StartWslGoSequencer` | — | Open a WSL PowerShell window running the Go sequencer. |
 
 ---
 
@@ -91,15 +115,16 @@ To use a custom database username and password:
 Both scripts perform the same steps in order:
 
 1. **Check prerequisites** — Docker and Python 3.10+.
-2. **Start PostgreSQL** — Launches `olympus-postgres` container on port 5432.  
+2. **Start PostgreSQL** — Launches `olympus-postgres` container on port 5432.
    Re-running is safe: an already-running container is reused.
-3. **Set environment variables** — `DATABASE_URL` and `OLYMPUS_INGEST_SIGNING_KEY`.  
+3. **Set environment variables** — `DATABASE_URL` and `OLYMPUS_INGEST_SIGNING_KEY`.
    A `.env` file is written to the repo root so values persist between terminal sessions.
-4. **Create virtual environment** — `.venv/` in the repo root.  
+4. **Create virtual environment** — `.venv/` in the repo root.
    Re-running is safe: an existing venv is reused.
 5. **Install dependencies** — `requirements.txt`, `requirements-dev.txt`, and the `olympus` package.
 6. **Run Alembic migrations** — Brings the database schema up to date.
-7. **Start the API** — `uvicorn api.app:app --reload` on `http://localhost:8000`.
+7. **Install public UX dependencies** — `npm ci` in `app/public-ui`.
+8. **Start the app** — API on `http://localhost:8000`, public UX on `http://localhost:5173`.
 
 ---
 
@@ -107,6 +132,7 @@ Both scripts perform the same steps in order:
 
 | URL | Description |
 |-----|-------------|
+| `http://localhost:5173` | Olympus public UX |
 | `http://localhost:8000` | Olympus REST API |
 | `http://localhost:8000/docs` | Interactive API documentation (Swagger UI) |
 | `http://localhost:8000/redoc` | Alternative API docs (ReDoc) |
@@ -120,9 +146,8 @@ The scripts are **idempotent** — you can run them again at any time to bring t
 If you only want to restart the API (Postgres still running, venv already set up):
 
 **Windows:**
-```powershell
-.\.venv\Scripts\Activate.ps1
-uvicorn api.app:app --reload --host 0.0.0.0 --port 8000
+```text
+Double-click Olympus-Start-Windows.cmd
 ```
 
 **Unix/macOS:**
@@ -156,7 +181,7 @@ python -c "import psycopg; psycopg.connect('postgresql://olympus:olympus@localho
 ```
 
 ### `OLYMPUS_INGEST_SIGNING_KEY` lost after reboot
-The key is printed once during setup with a warning to save it.  
+The key is printed once during setup with a warning to save it.
 Copy it into your `.env` file before closing the terminal:
 ```
 OLYMPUS_INGEST_SIGNING_KEY=<the-key-printed-during-setup>
@@ -168,8 +193,14 @@ Both scripts also write a `.env` file automatically on first run.
 Set-ExecutionPolicy -Scope CurrentUser -ExecutionPolicy RemoteSigned
 ```
 
+For a downloaded local copy, prefer the narrower fix:
+
+```powershell
+Unblock-File -LiteralPath .\setup-windows.ps1
+```
+
 ### Python version too old
-Install Python 3.10 or later from [python.org](https://www.python.org/downloads/).  
+Install Python 3.10 or later from [python.org](https://www.python.org/downloads/).
 On macOS you can also use Homebrew:
 ```bash
 brew install python@3.12

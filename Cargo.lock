@@ -783,10 +783,18 @@ dependencies = [
  "ark-serialize",
  "blake3",
  "num-bigint",
+ "olympus-crypto",
  "pyo3",
  "regex",
  "serde_json",
  "unicode-normalization",
+]
+
+[[package]]
+name = "olympus-crypto"
+version = "0.1.0"
+dependencies = [
+ "blake3",
 ]
 
 [[package]]
