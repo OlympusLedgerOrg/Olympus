@@ -40,6 +40,7 @@ from fastapi import APIRouter, File, HTTPException, Path, Request, UploadFile
 from api.auth import (
     RequireCommitScope,
     RequireIngestScope,
+    RequireVerifyScope,
     _get_backend as _get_rate_limit_backend,
     _get_client_ip,
     _register_api_key_for_tests as _auth_register_api_key_for_tests,
@@ -1323,7 +1324,7 @@ async def get_ingestion_proof(
 
 @router.get("/records/hash/{content_hash}/verify", response_model=HashVerificationResponse)
 async def verify_ingested_content_hash(
-    content_hash: str, request: Request
+    content_hash: str, request: Request, _api_key: RequireVerifyScope
 ) -> HashVerificationResponse:
     """
     Verify that a committed BLAKE3 content hash exists in the ingestion store.
@@ -1331,6 +1332,9 @@ async def verify_ingested_content_hash(
     This endpoint returns the stored proof bundle plus a server-side Merkle proof
     verification result so public portals can display both the commitment data and
     the verifiable transcript needed for independent re-checking.
+
+    Requires the ``verify`` scope. See ``docs/SECURITY_AUDIT_REPORT.md`` (L-1) for
+    the audit finding that established authentication on this route.
     """
     await _apply_ip_rate_limit(request, "verify")
 
