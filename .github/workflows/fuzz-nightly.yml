@@ -148,7 +148,9 @@ jobs:
         echo "${GITHUB_WORKSPACE}/.venv/bin" >> "$GITHUB_PATH"
 
     - name: Install system dependencies
-      run: sudo apt-get update && sudo apt-get install -y libmagic1
+      # protobuf-compiler (protoc) is required to build services/cdhs-smf-rust
+      # which uses tonic-build to generate gRPC stubs at compile time.
+      run: sudo apt-get update && sudo apt-get install -y libmagic1 protobuf-compiler
 
     - name: Install Python dependencies
       run: |
@@ -320,7 +322,9 @@ jobs:
         echo "${GITHUB_WORKSPACE}/.venv/bin" >> "$GITHUB_PATH"
 
     - name: Install system dependencies
-      run: sudo apt-get update && sudo apt-get install -y libmagic1
+      # protobuf-compiler (protoc) is required to build services/cdhs-smf-rust
+      # which uses tonic-build to generate gRPC stubs at compile time.
+      run: sudo apt-get update && sudo apt-get install -y libmagic1 protobuf-compiler
 
     - name: Install Python dependencies
       run: |

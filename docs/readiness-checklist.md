@@ -58,8 +58,9 @@ pip-audit -r requirements.txt
 # Run non-postgres tests
 pytest -q -m "not postgres"
 
-# With coverage
-pytest -q -m "not postgres" --cov=protocol --cov=storage --cov=api --cov=app --cov-report=term-missing
+# With coverage (enforcing the ≥85% floor)
+pytest -q -m "not postgres" --cov=protocol --cov=storage --cov=api --cov=scaffolding \
+  --cov-report=term-missing --cov-fail-under=85
 ```
 
 #### Full Test Suite (Requires PostgreSQL)
@@ -199,7 +200,8 @@ ruff check .
 ruff format --check .
 mypy protocol/ storage/ api/
 bandit -r protocol/ storage/ api/ scaffolding/ -f txt
-pytest -q -m "not postgres" --cov=protocol --cov=storage --cov=api --cov=scaffolding
+pytest -q -m "not postgres" --cov=protocol --cov=storage --cov=api --cov=scaffolding \
+  --cov-report=term-missing --cov-fail-under=85
 ```
 
 ## 🔐 Security Best Practices
@@ -228,9 +230,10 @@ ruff check . && ruff format --check . && mypy protocol/ storage/ api/ && pytest 
 
 **Before pushing:**
 ```bash
-# Full quality check with coverage
+# Full quality check with coverage (enforcing the ≥85% floor)
 ruff check . && ruff format --check . && mypy protocol/ storage/ api/ && \
-pytest -q -m "not postgres" --cov=protocol --cov=storage --cov=api --cov=scaffolding --cov-report=term && \
+pytest -q -m "not postgres" --cov=protocol --cov=storage --cov=api --cov=scaffolding \
+  --cov-report=term-missing --cov-fail-under=85 && \
 bandit -r protocol/ storage/ api/ scaffolding/
 ```
 

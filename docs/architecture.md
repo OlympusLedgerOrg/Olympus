@@ -95,7 +95,32 @@ active development.
 | [`threat-model.md`](threat-model.md) | Security posture for auditors |
 | [`adr/`](adr/) | Architectural Decision Records |
 
-## Phase definitions
+### Go sequencer API — key semantics note
+
+The Go sequencer exposes `GET /v1/get-signed-root-pair`, which returns **two independently
+signed roots** at caller-specified tree sizes. This endpoint is **not** an RFC-6962 /
+Trillian consistency proof. It does not prove that the older root is a cryptographic
+prefix of the newer one. Instead it:
+
+1. Returns `(old_root, old_signature)` for the requested `old_tree_size`.
+2. Returns `(new_root, new_signature)` for the requested `new_tree_size`.
+3. Lets the caller verify both Ed25519 signatures independently and compare the hashes
+   for audit purposes.
+
+The difference matters for external verifiers: a real Trillian consistency proof would
+allow a verifier to cryptographically prove append-only growth using a sibling-hash path
+between the two tree sizes. The CD-HS-ST is a sparse Merkle tree whose proof shape differs
+from RFC 6962's binary log, so that proof type is tracked as a follow-up and not yet
+implemented. See `CHANGELOG.md` for the renaming history (the original route
+`/v1/get-consistency-proof` was misleading and now returns HTTP 410 Gone, redirecting
+callers to `/v1/get-signed-root-pair`).
+
+Operators and external auditors should treat `get-signed-root-pair` as a **dual-signature
+attestation** rather than an append-only proof. Append-only growth can be verified by
+checking that the leaf records present in an older snapshot are still present and
+provable in the newer root via independent inclusion proofs.
+
+
 
 These definitions are the canonical source for phase references
 scattered across other documents.
