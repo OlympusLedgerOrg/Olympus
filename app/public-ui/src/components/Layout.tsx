@@ -4,15 +4,12 @@ import GlyphRain from "./GlyphRain";
 import CrtOverlay from "./CrtOverlay";
 import SkylineBackdrop from "./SkylineBackdrop";
 import GlitchMentorPopups from "./GlitchMentorPopups";
-import TylerDurdenFlash from "./TylerDurdenFlash";
 import SkinSelector from "./SkinSelector";
 import { useSkin } from "../skins/SkinContext";
-import { useEasterEggContext } from "../context/EasterEggContext";
 
 export default function Layout({ children }: { children: React.ReactNode }) {
   const location = useLocation();
   const { skin } = useSkin();
-  const { onLogoClick } = useEasterEggContext();
   const fx = skin.effects ?? {};
 
   // Derive header/nav colours from current skin so chrome stays readable.
@@ -54,8 +51,6 @@ export default function Layout({ children }: { children: React.ReactNode }) {
       {fx.showScanlines && <CrtOverlay />}
       {fx.showGlitchMentor && <GlitchMentorPopups />}
       {skin.id === "glitch" && <GlyphRain active />}
-      {skin.id === "glitch" && <TylerDurdenFlash />}
-
       {/* Header */}
       <header
         style={{
@@ -77,7 +72,6 @@ export default function Layout({ children }: { children: React.ReactNode }) {
         >
           <Link
             to="/"
-            onClick={onLogoClick}
             title="OLYMPUS_PROTOCØL"
             style={{
               display: "flex",
