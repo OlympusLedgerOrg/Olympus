@@ -14,7 +14,7 @@ The answer is **yes** — independently and offline.
 
 | I am a... | Start with |
 |---|---|
-| **Security auditor** | [`docs/threat-model.md`](docs/threat-model.md) → [`storage/postgres.py`](storage/postgres.py) → [`protocol/`](protocol/) |
+| **Security auditor** | [`docs/SECURITY_AUDIT_REPORT_V3.md`](docs/SECURITY_AUDIT_REPORT_V3.md) → [`docs/threat-model.md`](docs/threat-model.md) → [`storage/postgres.py`](storage/postgres.py) → [`protocol/`](protocol/) |
 | **New contributor** | [`docs/quickstart.md`](docs/quickstart.md) → [`docs/development.md`](docs/development.md) → [`CONTRIBUTING.md`](CONTRIBUTING.md) |
 | **Integrator / API user** | [`api/routers/`](api/routers/) → [`schemas/`](schemas/) → [`tools/verify_cli.py`](tools/verify_cli.py) |
 | **Operator / deployer** | [`docs/quickstart.md`](docs/quickstart.md) → [`docs/`](docs/) → [`alembic/`](alembic/) |
@@ -134,16 +134,16 @@ All stages are independently verifiable. The canonicalization version is current
 | **ZK circuits** | Circom, snarkjs, circomlib (Poseidon); rapidsnark (optional native prover, 5-10× faster); Halo2 gated behind `OLYMPUS_HALO2_ENABLED` |
 | **Database** | PostgreSQL 16 with Alembic migrations |
 | **Quality tooling** | Ruff, mypy, Bandit, pytest (>=85% coverage floor), Hypothesis, pip-audit |
-| **CI** | GitHub Actions: lint, typecheck, unit, smoke, verifier-conformance, CodeQL, dependency-lock |
+| **CI** | GitHub Actions: lint, typecheck, unit, smoke, verifier-conformance, fuzz, CodeQL, dependency-lock |
 | **Wire format** | Protobuf between Go <-> Rust (`proto/cdhs_smf.proto`, `proto/olympus.proto`) |
 
 † Go sequencer and Rust gRPC service are scaffolded for Phase 1; not yet the primary write path. Current write path: Python API → `storage/postgres.py` → embedded Rust PyO3 (`olympus_core`). The protocol-critical Rust hash/key primitives are shared by both Rust paths through `crates/olympus-crypto`.
 
-Python version: **>=3.10** (3.12 used for CI tooling and dependency locking).
+Python version: **>=3.10** (3.12 used for CI tooling and dependency locking; 3.13 is also supported).
 
 ## Current Repository State
 
-**Security audit complete (two rounds):** All critical and high findings closed. Remaining medium items (RT-M3 gate secret enforcement, Poseidon O(N) optimization) tracked in [`docs/SECURITY_AUDIT_REPORT_V2.md`](docs/SECURITY_AUDIT_REPORT_V2.md). Rust hot-path live via `olympus_core`. Go verifier vendored and conformance-tested. Coverage ≥85%.
+**Security audit complete (three rounds):** All critical and high findings closed. Current rollout and documentation items are tracked in [`docs/SECURITY_AUDIT_REPORT_V3.md`](docs/SECURITY_AUDIT_REPORT_V3.md). Rust hot-path live via `olympus_core`. Go verifier vendored and conformance-tested. Coverage ≥85%. Local collection snapshot: **3,980 tests collected**.
 
 **Current phase:** Phase 0 (protocol hardening complete, ready for public deployment).
 
@@ -191,6 +191,12 @@ On Windows, the double-click local launcher is:
 
 ```text
 Olympus-Start-Windows.cmd
+```
+
+On macOS, the Finder double-click local launcher is:
+
+```text
+Olympus-Start-macOS.command
 ```
 
 It prepares the local stack and starts the public UX at `http://localhost:5173`
@@ -243,8 +249,9 @@ python -m pip install -e ".[dev]"
 ```
 
 For one-command local setup, use `setup-windows.ps1` on Windows or
-`setup-unix.sh` on macOS/Linux. The older root `run.sh` and `run.bat`
-wrappers have been removed.
+`setup-unix.sh` on macOS/Linux. On macOS, you can also double-click
+`Olympus-Start-macOS.command` in Finder to set up and start the local API and
+public UX. The older root `run.sh` and `run.bat` wrappers have been removed.
 
 ### Quality gate
 
@@ -362,7 +369,7 @@ Olympus is influenced by the operational model of Certificate Transparency and S
 
 ## Notes
 
-- Python requirement: `>=3.10` (3.12 is used for CI tooling and dependency locking).
+- Python requirement: `>=3.10` (3.12 is used for CI tooling and dependency locking; 3.13 is also supported).
 - `canonical_v2` is the current canonicalization version. `canonical_v1` remains in `SUPPORTED_VERSIONS` with a deprecation warning.
 - The Rust PyO3 extension (`src/`, built with `maturin`) provides: O(n) ADL pattern scanning (CVE-2026-4539 fix), accelerated BLAKE3 hashing (`protocol/hashes.py` has a pure-Python fallback) and canonical-JSON encoding (`protocol/canonical_json.py` has a pure-Python fallback), Poseidon BN254 hash for ZK circuits (**mandatory** — `protocol/poseidon.py` has no Python fallback), Groth16 ZK proof verification (**mandatory** — raises HTTP 503 when absent), and `RustSparseMerkleTree` SMT bindings (required in production when `OLYMPUS_REQUIRE_RUST=1`).
 - The Halo2 ZK backend is gated behind `OLYMPUS_HALO2_ENABLED` and is not yet production-ready.
@@ -373,3 +380,5 @@ Olympus is designed to be audit-friendly, and external review is encouraged:
 
 - Security policy and coordinated disclosure: [`SECURITY.md`](SECURITY.md)
 - Threat model for auditors and policymakers: [`docs/threat-model.md`](docs/threat-model.md)
+- Latest security audit report (May 9, 2026 - V3): [`docs/SECURITY_AUDIT_REPORT_V3.md`](docs/SECURITY_AUDIT_REPORT_V3.md)
+- Prior audit rounds: [`docs/SECURITY_AUDIT_REPORT.md`](docs/SECURITY_AUDIT_REPORT.md), [`docs/SECURITY_AUDIT_REPORT_V2.md`](docs/SECURITY_AUDIT_REPORT_V2.md)

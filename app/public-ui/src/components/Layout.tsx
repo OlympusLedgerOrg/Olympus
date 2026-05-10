@@ -51,7 +51,6 @@ export default function Layout({ children }: { children: React.ReactNode }) {
       {fx.showScanlines && <CrtOverlay />}
       {fx.showGlitchMentor && <GlitchMentorPopups />}
       {skin.id === "glitch" && <GlyphRain active />}
-
       {/* Header */}
       <header
         style={{
@@ -73,6 +72,7 @@ export default function Layout({ children }: { children: React.ReactNode }) {
         >
           <Link
             to="/"
+            title="OLYMPUS_PROTOCØL"
             style={{
               display: "flex",
               alignItems: "center",
@@ -81,8 +81,8 @@ export default function Layout({ children }: { children: React.ReactNode }) {
               color: logoText,
             }}
           >
-            <span style={{ fontSize: "1.3rem", color: logoAccent }}>[ø]</span>
-            <span style={{ letterSpacing: "0.32em", fontSize: "0.78rem" }}>
+            <span style={{ fontSize: "1.3rem", color: logoAccent, fontFamily: "var(--font-logo)" }}>[ø]</span>
+            <span style={{ letterSpacing: "0.32em", fontSize: "0.78rem", fontFamily: "var(--font-logo)" }}>
               OLYMPUS_PROTOCØL
             </span>
           </Link>
@@ -90,8 +90,9 @@ export default function Layout({ children }: { children: React.ReactNode }) {
           <div style={{ display: "flex", alignItems: "center", gap: "1.25rem" }}>
             <nav style={{ display: "flex", gap: "1.5rem" }}>
               {[
-                { to: "/", label: "ACCESS" },
+                { to: "/", label: "LEDGER" },
                 { to: "/verify", label: "VERIFY" },
+                { to: "/keys", label: "KEYS" },
               ].map(({ to, label }) => {
                 const active = location.pathname === to;
                 return (
@@ -111,29 +112,6 @@ export default function Layout({ children }: { children: React.ReactNode }) {
                   </Link>
                 );
               })}
-              <Link
-                to="/admin"
-                style={{
-                  fontSize: "0.62rem",
-                  letterSpacing: "0.1em",
-                  textDecoration: "none",
-                  color:
-                    location.pathname === "/admin"
-                      ? isLight
-                        ? "#dc2626"
-                        : "#ff0055"
-                      : isLight
-                        ? "#ef4444"
-                        : "rgba(255,0,85,0.4)",
-                  textShadow:
-                    location.pathname === "/admin" && !isLight
-                      ? "0 0 6px #ff0055"
-                      : "none",
-                  transition: "all 0.15s",
-                }}
-              >
-                ADMIN
-              </Link>
             </nav>
 
             <SkinSelector />

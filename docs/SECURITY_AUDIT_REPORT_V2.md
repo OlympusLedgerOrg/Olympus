@@ -1,11 +1,15 @@
 # Olympus Security Audit Report — V2 (Deep Red Team)
 
-**Version:** 2.0  
-**Audit Date:** April 3, 2026  
-**Report Date:** April 3, 2026  
-**Auditors:** Deep Red Team (structural / protocol-level focus)  
-**Classification:** Public  
+**Version:** 2.1 (updated May 9, 2026; see [V3 report](SECURITY_AUDIT_REPORT_V3.md) for the current re-audit)
+**Audit Date:** April 3, 2026
+**Report Date:** April 3, 2026 (V2.1 cross-reference update: May 9, 2026)
+**Auditors:** Deep Red Team (structural / protocol-level focus)
+**Classification:** Public
 **Scope:** Ledger commitment path, transaction integrity, proof soundness, documentation accuracy
+
+> **Status as of May 9, 2026:** All V2 high- and medium-severity findings are
+> confirmed closed. Current open rollout and documentation items are tracked in
+> [`docs/SECURITY_AUDIT_REPORT_V3.md`](SECURITY_AUDIT_REPORT_V3.md).
 
 ---
 

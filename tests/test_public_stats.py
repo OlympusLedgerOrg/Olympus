@@ -85,3 +85,44 @@ async def test_public_stats_counts_existing_tables_for_both_routes(
     assert versioned_response.json()["copies"] == 2
     assert versioned_response.json()["shards"] == 2
     assert versioned_response.json()["proofs"] == 1
+
+
+@pytest.mark.asyncio
+async def test_public_stats_counts_sequencer_tables_when_legacy_tables_empty(
+    stats_app: FastAPI, sqlite_engine
+) -> None:
+    async with sqlite_engine.begin() as conn:
+        await conn.execute(text("CREATE TABLE ledger_entries (id INTEGER PRIMARY KEY)"))
+        await conn.execute(text("CREATE TABLE cdhs_smf_leaves (id INTEGER PRIMARY KEY)"))
+        await conn.execute(text("INSERT INTO cdhs_smf_leaves DEFAULT VALUES"))
+        await conn.execute(text("INSERT INTO cdhs_smf_leaves DEFAULT VALUES"))
+        await conn.execute(
+            text(
+                """
+                CREATE TABLE ingestion_proofs (
+                    proof_id TEXT PRIMARY KEY,
+                    shard_id TEXT NOT NULL
+                )
+                """
+            )
+        )
+        await conn.execute(
+            text(
+                """
+                INSERT INTO ingestion_proofs (proof_id, shard_id)
+                VALUES ('p1', 'demo'), ('p2', 'demo'), ('p3', 'archive')
+                """
+            )
+        )
+
+    async with AsyncClient(
+        transport=ASGITransport(app=stats_app, raise_app_exceptions=False),
+        base_url="http://test",
+    ) as client:
+        response = await client.get("/v1/public/stats")
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["copies"] == 2
+    assert data["shards"] == 2
+    assert data["proofs"] == 3

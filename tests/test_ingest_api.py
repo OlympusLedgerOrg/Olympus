@@ -1091,7 +1091,10 @@ def test_sequencer_proof_to_merkle_proof_dict_success():
         ({"siblings": ["00" * 32] * (SPARSE_MERKLE_DEPTH - 1)}, "256 siblings"),
         (
             {"siblings": ["00" * 32] * (SPARSE_MERKLE_DEPTH - 1) + ["00" * 31]},
-            f"sibling at level {SPARSE_MERKLE_DEPTH - 1}",
+            # sequencer_proof_to_merkle_proof_dict reverses sibling order
+            # (root-to-leaf -> leaf-to-root), so a bad sibling at the *last*
+            # position of the input lands at leaf-first level 0.
+            "sibling at level 0",
         ),
         (
             {"siblings": ["00" * 32] * (SPARSE_MERKLE_DEPTH - 1) + ["not-hex"]},

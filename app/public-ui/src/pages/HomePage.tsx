@@ -9,6 +9,7 @@ import { useFileCommit } from "../hooks/useFileCommit";
 import { useJsonVerification } from "../hooks/useJsonVerification";
 import { useWasmStatus } from "../hooks/useWasmStatus";
 import { useSkin } from "../skins/SkinContext";
+import CommandDeck from "../components/CommandDeck";
 import CommitPrompt from "../components/CommitPrompt";
 import HashDisplay from "../components/HashDisplay";
 import RecentVerifications from "../components/RecentVerifications";
@@ -16,7 +17,6 @@ import StatCards from "../components/StatCards";
 import TiltContainer from "../components/TiltContainer";
 import VerdictCard from "../components/VerdictCard";
 import HashTab from "../tabs/HashTab";
-import FileTab from "../tabs/FileTab";
 import JsonTab from "../tabs/JsonTab";
 import ProofTab from "../tabs/ProofTab";
 
@@ -38,6 +38,8 @@ export default function HomePage() {
     queryFn: getPublicStats,
     staleTime: 15_000,
     refetchInterval: 30_000,
+    gcTime: 0,          // never keep stale stats in the in-memory cache between mounts
+    placeholderData: FALLBACK_STATS,  // show zeros while loading, never old numbers
   });
   const stats = statsQuery.data ?? FALLBACK_STATS;
 
@@ -69,11 +71,10 @@ export default function HomePage() {
   const operationLabel = isPending
     ? "VERIFYING"
     : verdictResult
-      ? verdictResult.verdict.toUpperCase()
+      ? `LOOKUP_${verdictResult.verdict.toUpperCase()}`
       : "IDLE";
   const tabs: { id: Tab; label: string }[] = [
-    { id: "hash", label: "HASH" },
-    { id: "file", label: "FILE" },
+    { id: "hash", label: "VERIFY" },
     { id: "json", label: "JSON_DOC" },
     { id: "proof", label: "PROOF_BUNDLE" },
   ];
@@ -124,6 +125,8 @@ export default function HomePage() {
 
       <StatCards cards={statCards} onRefetch={() => void statsQuery.refetch()} />
 
+      <CommandDeck activeTab={activeTab} onSelect={switchTab} />
+
       <div className="verify-grid">
         <div style={{ minWidth: 0 }}>
           <TiltContainer>
@@ -162,23 +165,14 @@ export default function HomePage() {
                     onPaste={hashHook.pasteHash}
                     onClear={() => {
                       hashHook.reset();
+                      fileHook.reset();
                       setVerdictResult(null);
                     }}
-                  />
-                )}
-                {activeTab === "file" && (
-                  <FileTab
-                    fileHash={fileHook.fileHash}
-                    fileProgress={fileHook.fileProgress}
-                    commitContentHash={fileHook.commitContentHash}
-                    isPending={isPending}
                     wasmError={wasmError}
-                    onHash={fileHook.onHash}
-                    onProgress={fileHook.onProgress}
                     onFile={fileHook.onFile}
-                    onVerify={() =>
-                      fileHook.fileHash && hashHook.submitHash(fileHook.fileHash)
-                    }
+                    onFileHash={fileHook.onHash}
+                    onFileProgress={fileHook.onProgress}
+                    fileProgress={fileHook.fileProgress}
                   />
                 )}
                 {activeTab === "json" && (
@@ -249,18 +243,14 @@ export default function HomePage() {
             <div className="side-title">SESSION</div>
             <div className="flow-step" data-active={activeTab === "hash"}>
               <span>01</span>
-              <strong>Hash lookup</strong>
-            </div>
-            <div className="flow-step" data-active={activeTab === "file"}>
-              <span>02</span>
-              <strong>Local file hash</strong>
+              <strong>Hash or file</strong>
             </div>
             <div className="flow-step" data-active={activeTab === "json"}>
-              <span>03</span>
+              <span>02</span>
               <strong>Canonical JSON</strong>
             </div>
             <div className="flow-step" data-active={activeTab === "proof"}>
-              <span>04</span>
+              <span>03</span>
               <strong>Proof bundle</strong>
             </div>
             <button

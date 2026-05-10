@@ -1344,6 +1344,31 @@ class StorageLayer:
 
         return self.get_ingestion_proof(row["proof_id"])
 
+    def get_ingestion_proof_by_record_identity(
+        self, shard_id: str, record_type: str, record_id: str, version: int
+    ) -> dict[str, Any] | None:
+        """Retrieve a persisted ingestion proof by immutable record coordinates."""
+        with self._get_connection() as conn, conn.cursor(row_factory=dict_row) as cur:
+            cur.execute(
+                """
+                    SELECT proof_id
+                    FROM ingestion_proofs
+                    WHERE shard_id = %s
+                      AND record_type = %s
+                      AND record_id = %s
+                      AND version = %s
+                    ORDER BY created_at ASC
+                    LIMIT 1
+                """,
+                (shard_id, record_type, record_id, version),
+            )
+            row = cur.fetchone()
+
+        if row is None:
+            return None
+
+        return self.get_ingestion_proof(row["proof_id"])
+
     def get_latest_header(self, shard_id: str) -> dict[str, Any] | None:
         """
         Get the latest shard header.

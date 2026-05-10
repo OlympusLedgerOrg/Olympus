@@ -1,6 +1,7 @@
 import { useCallback, useState } from "react";
 import type { VerdictState } from "../lib/types";
 import { API_BASE, sanitizeId } from "../lib/constants";
+import { getStoredApiKey, setStoredApiKey } from "../lib/storage";
 
 export type CommitStage = "idle" | "committing" | "done" | "error";
 
@@ -11,9 +12,7 @@ export function useFileCommit(
   const [droppedFile, setDroppedFile] = useState<File | null>(null);
   const [fileHash, setFileHash] = useState<string | null>(null);
   const [fileProgress, setFileProgress] = useState(0);
-  const [apiKey, setApiKey] = useState(
-    () => localStorage.getItem("olympus_api_key") ?? "",
-  );
+  const [apiKey, setApiKey] = useState(() => getStoredApiKey());
   const [commitStage, setCommitStage] = useState<CommitStage>("idle");
   const [commitError, setCommitError] = useState<string | null>(null);
   const [commitContentHash, setCommitContentHash] = useState<string | null>(null);
@@ -47,24 +46,22 @@ export function useFileCommit(
     setCommitStage("committing");
     setCommitError(null);
     setCommitContentHash(null);
-    localStorage.setItem("olympus_api_key", apiKey.trim());
+    setStoredApiKey(apiKey.trim());
 
+    // POST raw bytes to /ingest/files. The server stores content_hash =
+    // plain BLAKE3 of file bytes (no JSON wrapper, no canonicalization),
+    // so re-dropping the same file produces the same hash and verifies.
     const recordId = sanitizeId(droppedFile.name.replace(/\.[^.]+$/, ""));
-    const content = {
-      filename: droppedFile.name,
-      size: droppedFile.size,
-      type: droppedFile.type || "application/octet-stream",
-      blake3: fileHash,
-    };
+    const form = new FormData();
+    form.append("file", droppedFile, droppedFile.name);
+    form.append("shard_id", "files");
+    form.append("record_id", recordId);
+    form.append("version", "1");
     try {
-      const res = await fetch(`${API_BASE}/ingest/records`, {
+      const res = await fetch(`${API_BASE}/ingest/files`, {
         method: "POST",
-        headers: { "Content-Type": "application/json", "X-API-Key": apiKey.trim() },
-        body: JSON.stringify({
-          records: [
-            { shard_id: "files", record_type: "file", record_id: recordId, version: 1, content },
-          ],
-        }),
+        headers: { "X-API-Key": apiKey.trim() },
+        body: form,
       });
       const data = (await res.json()) as Record<string, unknown>;
       if (!res.ok) {
@@ -73,10 +70,18 @@ export function useFileCommit(
         setCommitStage("error");
         return;
       }
-      const results = (data as { results?: Array<{ content_hash: string }> }).results;
-      const contentHash = results?.[0]?.content_hash;
+      const contentHash = (data as { content_hash?: string }).content_hash;
       if (!contentHash) {
         setCommitError("Server response missing content_hash — cannot verify");
+        setCommitStage("error");
+        return;
+      }
+      // Sanity check: server's content_hash must equal what we hashed locally,
+      // since both are plain BLAKE3 of the same bytes.
+      if (contentHash.toLowerCase() !== fileHash.toLowerCase()) {
+        setCommitError(
+          `Server hash ${contentHash.slice(0, 12)}… disagrees with local ${fileHash.slice(0, 12)}…`,
+        );
         setCommitStage("error");
         return;
       }

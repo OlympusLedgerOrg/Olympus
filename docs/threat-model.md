@@ -139,6 +139,12 @@ repository, with links to the relevant source evidence.
 | Redaction proof binding | Revealed leaves verified against original committed root | [`protocol/redaction.py`](protocol/redaction.py) — `verify_redaction_proof()` |
 | Semantic equivalence | Canonicalization ensures whitespace / formatting changes do not mask content | [`protocol/canonical.py`](protocol/canonical.py) — `normalize_whitespace()` |
 
+> **Verifier note:** selective-disclosure verification requires both the ZK proof
+> and the CD-HS-ST inclusion proof. A Groth16 proof alone proves membership in a
+> Poseidon tree; the surrounding SMT inclusion proof binds that root to the
+> document identity and ledger sequence. See
+> [`docs/SECURITY_AUDIT_REPORT_V3.md`](SECURITY_AUDIT_REPORT_V3.md).
+
 #### T4a — Dual-Anchor Binding Requirement
 
 Olympus commits two separate roots for every document that participates in

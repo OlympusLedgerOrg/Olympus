@@ -57,7 +57,9 @@ jobs:
             libgmp-dev \
             libsodium-dev \
             nasm \
-            pkg-config
+            pkg-config \
+            libgmp-dev \
+            libsodium-dev
 
       - name: Cache powers of tau parameters
         id: cache-ptau

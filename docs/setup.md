@@ -7,7 +7,7 @@ Get Olympus running locally with **one command**.
 | Requirement | Notes |
 |-------------|-------|
 | **Docker** | [docker.com/get-docker](https://docs.docker.com/get-docker/) |
-| **Python 3.10+** | [python.org](https://www.python.org/downloads/) |
+| **Python 3.10-3.13** | [python.org](https://www.python.org/downloads/) |
 | **Rust / Cargo** | Required by `maturin` to build the `olympus_core` extension. Install via [rustup.rs](https://rustup.rs) |
 | **Node.js 20.19+ or 22.12+** | Required for the public UX dev server. Install via [nodejs.org](https://nodejs.org/) |
 
@@ -73,6 +73,7 @@ Set-ExecutionPolicy -Scope CurrentUser -ExecutionPolicy RemoteSigned
 | `-DbPassword` | `olympus` | PostgreSQL password. Use a strong value for any non-local environment. |
 | `-StartDocker` | — | Start a standalone local PostgreSQL container if Postgres is not already reachable. |
 | `-SkipDocker` | — | Do not start Docker; fail if PostgreSQL is unreachable. |
+| `-SkipFirstBoot` | — | Skip the idempotent first-boot bootstrap that creates `.env` and local secrets. |
 | `-SkipStart` | — | Set everything up but do not start the API at the end. |
 | `-SkipUi` | — | Skip installing and starting the public UX. |
 | `-UiPort` | `5173` | Port for the public UX dev server. |
@@ -114,19 +115,21 @@ To use a custom database username and password:
 
 Both scripts perform the same core steps in order:
 
-1. **Check prerequisites** — Python 3.10+. Docker is only required when `-StartDocker` is supplied.
-2. **Start PostgreSQL** — With `-StartDocker`: launches the `olympus-postgres` container on port 5432
+1. **First boot bootstrap** — Runs `scripts\bootstrap.ps1` to create `.env`, `secrets\db_password`,
+   and local secret defaults when missing. Re-running is safe and preserves existing values.
+2. **Check prerequisites** — Python 3.10-3.13. Docker is only required when `-StartDocker` is supplied.
+3. **Start PostgreSQL** — With `-StartDocker`: launches the `olympus-postgres` container on port 5432
    (re-running is safe: an already-running container is reused). Without `-StartDocker`: the script
    expects an external Postgres instance reachable at the configured `DATABASE_URL`; it will fail
    early if the database is unreachable.
-3. **Set environment variables** — `DATABASE_URL` and `OLYMPUS_INGEST_SIGNING_KEY`.
+4. **Set environment variables** — `DATABASE_URL` and `OLYMPUS_INGEST_SIGNING_KEY`.
    A `.env` file is written to the repo root so values persist between terminal sessions.
-4. **Create virtual environment** — `.venv/` in the repo root.
+5. **Create virtual environment** — `.venv/` in the repo root.
    Re-running is safe: an existing venv is reused.
-5. **Install dependencies** — `requirements.txt`, `requirements-dev.txt`, and the `olympus` package.
-6. **Run Alembic migrations** — Brings the database schema up to date.
-7. **Install public UX dependencies** — `npm ci` in `app/public-ui`.
-8. **Start the app** — API on `http://localhost:8000`, public UX on `http://localhost:5173`.
+6. **Install dependencies** — `requirements.txt`, `requirements-dev.txt`, and the `olympus` package.
+7. **Run Alembic migrations** — Brings the database schema up to date.
+8. **Install public UX dependencies** — `npm ci` in `app/public-ui`.
+9. **Start the app** — API on `http://localhost:8000`, public UX on `http://localhost:5173`.
 
 **Windows-only optional steps (WSL path):**
 
@@ -163,7 +166,7 @@ Double-click Olympus-Start-Windows.cmd
 **Unix/macOS:**
 ```bash
 source .venv/bin/activate
-uvicorn api.app:app --reload --host 0.0.0.0 --port 8000
+uvicorn api.main:app --reload --host 0.0.0.0 --port 8000
 ```
 
 ---

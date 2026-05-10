@@ -2,12 +2,12 @@
 Tests for the DB-backed user auth endpoints introduced in PR #768.
 
 Covers:
-    - POST /auth/register — happy path, duplicate email, weak password,
+    - POST /auth/register â€” happy path, duplicate email, weak password,
       privileged-scope rejection.
-    - POST /auth/login — happy path, invalid credentials.
-    - POST /auth/keys, GET /auth/keys, DELETE /auth/keys/{id} — auth flow,
+    - POST /auth/login â€” happy path, invalid credentials.
+    - POST /auth/keys, GET /auth/keys, DELETE /auth/keys/{id} â€” auth flow,
       subset-of-caller-scopes enforcement, listing, revocation, 401.
-    - POST /key/admin/generate — missing admin key (503), wrong admin key
+    - POST /key/admin/generate â€” missing admin key (503), wrong admin key
       (401), success path with response shape.
 """
 

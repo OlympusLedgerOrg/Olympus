@@ -1,11 +1,14 @@
 """
 User authentication and API key management.
 
-POST  /auth/register       — create account + first API key
-POST  /auth/login          — password → list of active API keys
-POST  /auth/keys           — generate additional API key (requires auth)
-GET   /auth/keys           — list caller's active keys
-DELETE /auth/keys/{key_id} — revoke a key
+POST   /auth/register          — create account + first API key
+POST   /auth/login             — password → list of active API keys
+POST   /auth/reissue-key       — email + password → fresh API key (recovery, no key required)
+POST   /auth/keys              — generate additional API key (requires auth)
+GET    /auth/keys              — list caller's active keys
+DELETE /auth/keys/{key_id}     — revoke a key
+DELETE /auth/me                — delete own account + all keys (email + password, no key required)
+DELETE /auth/admin/users/{uid} — admin: delete any user account + all their keys
 """
 
 from __future__ import annotations
@@ -178,6 +181,11 @@ class KeyCreateRequest(BaseModel):
     expires_at: str = _DEFAULT_EXPIRY
 
 
+class AdminRegisterRequest(RegisterRequest):
+    role: str = "user"
+    scopes: list[str] = _REGISTER_DEFAULT_SCOPES
+
+
 class KeyInfo(BaseModel):
     id: str
     name: str
@@ -195,6 +203,10 @@ class RegisterResponse(BaseModel):
     scopes: list[str]
 
 
+class AdminRegisterResponse(RegisterResponse):
+    role: str
+
+
 class LoginResponse(BaseModel):
     user_id: str
     email: str
@@ -207,6 +219,12 @@ class KeyCreateResponse(BaseModel):
     name: str
     scopes: list[str]
     expires_at: str
+
+
+class ReissueKeyRequest(BaseModel):
+    email: str
+    password: str
+    scopes: list[str] = ["read", "verify", "ingest", "commit", "write"]
 
 
 def _public_write_registration_enabled() -> bool:
@@ -239,6 +257,67 @@ def _has_valid_registration_approval(body: RegisterRequest, request: Request) ->
         return False
     expected = _registration_approval_signature(body, admin_key)
     return _hmac.compare_digest(provided, expected)
+
+
+def _require_admin_key(request: Request) -> None:
+    admin_key = os.environ.get("OLYMPUS_ADMIN_KEY", "")
+    if not admin_key:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Admin user creation is not configured. Set OLYMPUS_ADMIN_KEY.",
+        )
+    provided = request.headers.get("x-admin-key", "")
+    if not _hmac.compare_digest(provided, admin_key):
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid admin key.")
+
+
+async def _require_admin_authority(request: Request, db: DBSession) -> None:
+    """Allow either the local operator secret or an admin-scoped API key."""
+    admin_key = os.environ.get("OLYMPUS_ADMIN_KEY", "")
+    provided_admin_key = request.headers.get("x-admin-key", "")
+    if admin_key and _hmac.compare_digest(provided_admin_key, admin_key):
+        return
+
+    user, key_record = await _require_db_user_and_key(request, db)
+    try:
+        scopes = set(json.loads(key_record.scopes))
+    except (TypeError, ValueError) as e:
+        logger.error("Corrupt scopes for key %s: %s", sanitize_for_log(key_record.id), e)
+        raise HTTPException(status_code=500, detail="Caller key has invalid scope data.")
+
+    if user.role != "admin" or "admin" not in scopes:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Admin access required.")
+
+
+async def _create_user_with_key(
+    *,
+    body: RegisterRequest,
+    db: DBSession,
+    scopes: list[str],
+    role: str = "user",
+) -> tuple[User, ApiKey, str]:
+    existing = await db.execute(select(User).where(User.email == body.email))
+    if existing.scalars().first():
+        raise HTTPException(status_code=409, detail="Email already registered.")
+
+    if len(body.password) < 12:
+        raise HTTPException(status_code=422, detail="Password must be at least 12 characters.")
+
+    user = User(
+        id=str(uuid.uuid4()),
+        email=body.email,
+        password_hash=_hash_password(body.password),
+        role=role,
+        created_at=_naive_utc(),
+    )
+    db.add(user)
+    await db.flush()
+
+    expires = _parse_expires(body.expires_at)
+    raw_key, key_record = _make_api_key(user.id, body.name, scopes, expires)
+    db.add(key_record)
+    await db.commit()
+    return user, key_record, raw_key
 
 
 def log_public_write_registration_override_if_enabled() -> None:
@@ -319,13 +398,6 @@ async def register(
     _rl: RateLimit,
 ) -> RegisterResponse:
     """Create a new user account and issue a first API key."""
-    existing = await db.execute(select(User).where(User.email == body.email))
-    if existing.scalars().first():
-        raise HTTPException(status_code=409, detail="Email already registered.")
-
-    if len(body.password) < 12:
-        raise HTTPException(status_code=422, detail="Password must be at least 12 characters.")
-
     unknown = set(body.scopes) - _VALID_SCOPES
     if unknown:
         raise HTTPException(
@@ -352,19 +424,7 @@ async def register(
     scopes = _validate_scopes(body.scopes, allowed_scopes, context="register")
     await registration_rate_limit(request)
 
-    user = User(
-        id=str(uuid.uuid4()),
-        email=body.email,
-        password_hash=_hash_password(body.password),
-        created_at=_naive_utc(),
-    )
-    db.add(user)
-    await db.flush()
-
-    expires = _parse_expires(body.expires_at)
-    raw_key, key_record = _make_api_key(user.id, body.name, scopes, expires)
-    db.add(key_record)
-    await db.commit()
+    user, key_record, raw_key = await _create_user_with_key(body=body, db=db, scopes=scopes)
 
     logger.info("Registered user %s", sanitize_for_log(body.email))
     return RegisterResponse(
@@ -373,6 +433,44 @@ async def register(
         api_key=raw_key,
         key_id=key_record.id,
         scopes=scopes,
+    )
+
+
+@router.post(
+    "/admin/users",
+    response_model=AdminRegisterResponse,
+    status_code=status.HTTP_201_CREATED,
+)
+async def admin_create_user(
+    body: AdminRegisterRequest,
+    request: Request,
+    db: DBSession,
+    _rl: RateLimit,
+) -> AdminRegisterResponse:
+    """Create a user with admin-selected scopes.
+
+    This is the local/operator path for onboarding users. It is protected by
+    ``X-Admin-Key`` or an admin-scoped ``X-API-Key`` and defaults new users to
+    verify-only access (``read`` + ``verify``). The raw API key is returned once.
+    """
+    await _require_admin_authority(request, db)
+    if body.role not in {"user", "admin"}:
+        raise HTTPException(status_code=422, detail="role must be 'user' or 'admin'.")
+    scopes = _validate_scopes(body.scopes, _VALID_SCOPES, context="admin_create_user")
+    user, key_record, raw_key = await _create_user_with_key(
+        body=body,
+        db=db,
+        scopes=scopes,
+        role=body.role,
+    )
+    logger.info("Admin created user %s", sanitize_for_log(body.email))
+    return AdminRegisterResponse(
+        user_id=user.id,
+        email=user.email,
+        api_key=raw_key,
+        key_id=key_record.id,
+        scopes=scopes,
+        role=user.role,
     )
 
 
@@ -411,6 +509,46 @@ async def login(body: LoginRequest, db: DBSession, _rl: RateLimit) -> LoginRespo
             )
             for k in keys
         ],
+    )
+
+
+@router.post("/reissue-key", response_model=KeyCreateResponse, status_code=status.HTTP_201_CREATED)
+async def reissue_key(body: ReissueKeyRequest, db: DBSession, _rl: RateLimit) -> KeyCreateResponse:
+    """Issue a fresh API key using email + password — no existing key required.
+
+    Recovery path for users whose stored key is lost, expired, or invalid.
+    Scopes are capped to the non-admin self-service set regardless of what
+    is requested; admin scope requires out-of-band provisioning.
+    """
+    result = await db.execute(select(User).where(User.email == body.email))
+    user = result.scalars().first()
+
+    dummy_hash = f"scrypt${_SCRYPT_N}${_SCRYPT_R}${_SCRYPT_P}${'00' * 32}${'00' * 32}"
+    stored_hash = user.password_hash if user and user.password_hash else dummy_hash
+    if not _verify_password(body.password, stored_hash) or not user:
+        raise HTTPException(status_code=401, detail="Invalid email or password.")
+
+    allowed = {"read", "verify", "ingest", "commit", "write"}
+    if _public_write_registration_enabled():
+        allowed.add("write")
+    scopes = _validate_scopes(body.scopes, allowed, context="reissue_key")
+
+    expires = _parse_expires(_DEFAULT_EXPIRY)
+    raw_key, key_record = _make_api_key(user.id, "reissued", scopes, expires)
+    db.add(key_record)
+    await db.commit()
+
+    logger.info(
+        "Reissued API key for user=%s scopes=%s",
+        sanitize_for_log(str(user.id)),
+        [sanitize_for_log(s) for s in scopes],
+    )
+    return KeyCreateResponse(
+        api_key=raw_key,
+        key_id=key_record.id,
+        name="reissued",
+        scopes=scopes,
+        expires_at=key_record.expires_at.isoformat(),
     )
 
 
@@ -485,6 +623,66 @@ async def revoke_key(key_id: str, request: Request, db: DBSession, _rl: RateLimi
     key.revoked_at = datetime.now(timezone.utc)
     await db.commit()
     logger.info("Revoked key %s for user %s", sanitize_for_log(key_id), sanitize_for_log(user.id))
+
+
+class DeleteAccountRequest(BaseModel):
+    email: str
+    password: str
+
+
+@router.delete("/me", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_own_account(body: DeleteAccountRequest, db: DBSession, _rl: RateLimit) -> None:
+    """Delete the caller's account and all associated API keys.
+
+    Accepts email + password — no existing API key required, so users who have
+    lost or invalidated their key can still close their account and re-register.
+    """
+    result = await db.execute(select(User).where(User.email == body.email))
+    user = result.scalars().first()
+
+    dummy_hash = f"scrypt${_SCRYPT_N}${_SCRYPT_R}${_SCRYPT_P}${'00' * 32}${'00' * 32}"
+    stored_hash = user.password_hash if user and user.password_hash else dummy_hash
+    if not _verify_password(body.password, stored_hash) or not user:
+        raise HTTPException(status_code=401, detail="Invalid email or password.")
+
+    await db.execute(
+        select(ApiKey).where(ApiKey.user_id == user.id)  # load to cascade log
+    )
+    from sqlalchemy import delete as sa_delete
+
+    await db.execute(sa_delete(ApiKey).where(ApiKey.user_id == user.id))
+    await db.execute(sa_delete(User).where(User.id == user.id))
+    await db.commit()
+    logger.info(
+        "Account deleted: user=%s email=%s",
+        sanitize_for_log(str(user.id)),
+        sanitize_for_log(body.email),
+    )
+
+
+@router.delete("/admin/users/{user_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def admin_delete_user(user_id: str, request: Request, db: DBSession, _rl: RateLimit) -> None:
+    """Admin: delete any user account and all their API keys.
+
+    Protected by X-Admin-Key header.
+    """
+    _require_admin_key(request)
+
+    result = await db.execute(select(User).where(User.id == user_id))
+    user = result.scalars().first()
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found.")
+
+    from sqlalchemy import delete as sa_delete
+
+    await db.execute(sa_delete(ApiKey).where(ApiKey.user_id == user.id))
+    await db.execute(sa_delete(User).where(User.id == user.id))
+    await db.commit()
+    logger.warning(
+        "Admin deleted account: user=%s email=%s",
+        sanitize_for_log(user_id),
+        sanitize_for_log(user.email),
+    )
 
 
 # ── internal helper ───────────────────────────────────────────────────────────

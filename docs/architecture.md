@@ -56,7 +56,7 @@ testing and offline proof verification across language boundaries.
 
 | | Current working system | Target architecture |
 |---|---|---|
-| **Entry point** | Python FastAPI (`api/`) | Python FastAPI (`api/`) |
+| **Entry point** | Python FastAPI (`api/main.py`; `api.app` is a compatibility shim) | Python FastAPI (`api/main.py`) |
 | **Sequencing** | Python `storage/postgres.py` (direct SQL) | Go sequencer (`services/sequencer-go/`) |
 | **Crypto core** | Python `protocol/` + Rust PyO3 (`olympus_core`) | Shared Rust crypto + Rust gRPC service (`services/cdhs-smf-rust/`) |
 | **Database** | PostgreSQL via psycopg 3 | PostgreSQL via psycopg 3 (same database) |
@@ -64,7 +64,11 @@ testing and offline proof verification across language boundaries.
 
 Both paths write to the **same PostgreSQL database**. The service split
 is in progress, not complete. During Phase 1, the Python path remains
-the primary write path while the Go → Rust path is hardened.
+the primary write path while the Go -> Rust path is hardened.
+
+**Phase 0 is complete.** Phase 1 greenfield services (`services/sequencer-go/`,
+`services/cdhs-smf-rust/`, `proto/`, and shared Rust crypto crates) are under
+active development.
 
 ## Where things live
 

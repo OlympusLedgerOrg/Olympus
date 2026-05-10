@@ -164,9 +164,7 @@ def _compute_dual_commitment(blake3_root_hex: str, poseidon_root_decimal: str) -
     pos_bytes = int(poseidon_root_decimal).to_bytes(32, byteorder="big")
     len_b3 = len(b3_bytes).to_bytes(2, byteorder="big")
     len_pos = len(pos_bytes).to_bytes(2, byteorder="big")
-    return blake3_hash(
-        [LEDGER_PREFIX, sep, len_b3, b3_bytes, sep, len_pos, pos_bytes]
-    ).hex()
+    return blake3_hash([LEDGER_PREFIX, sep, len_b3, b3_bytes, sep, len_pos, pos_bytes]).hex()
 
 
 def test_dual_root_commitment(vectors: dict) -> None:
@@ -292,9 +290,7 @@ def test_federation_vote_event_id(vectors: dict) -> None:
                 _length_prefixed_bytes("header_hash", vec["header_hash"].encode("utf-8")),
                 _length_prefixed_bytes("timestamp", vec["timestamp"].encode("utf-8")),
                 _length_prefixed_bytes("epoch", str(vec["epoch"]).encode("utf-8")),
-                _length_prefixed_bytes(
-                    "membership_hash", vec["membership_hash"].encode("utf-8")
-                ),
+                _length_prefixed_bytes("membership_hash", vec["membership_hash"].encode("utf-8")),
             ]
         )
         got = hash_bytes(payload).hex()

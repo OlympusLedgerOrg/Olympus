@@ -1,5 +1,6 @@
 import { useSkin } from "../skins/SkinContext";
 import { SAMPLE_HASH } from "../lib/constants";
+import FileHasher from "../components/FileHasher";
 
 interface HashTabProps {
   hashInput: string;
@@ -10,6 +11,13 @@ interface HashTabProps {
   onSubmit: (hash: string) => void;
   onPaste: () => Promise<void>;
   onClear: () => void;
+  // File-drop integration: dropping a file hashes locally and populates the
+  // hash field, then the existing VERIFY button submits it.
+  wasmError?: string | null;
+  onFile?: (file: File) => void;
+  onFileHash?: (hex: string) => void;
+  onFileProgress?: (pct: number) => void;
+  fileProgress?: number;
 }
 
 export default function HashTab({
@@ -21,10 +29,40 @@ export default function HashTab({
   onSubmit,
   onPaste,
   onClear,
+  wasmError,
+  onFile,
+  onFileHash,
+  onFileProgress,
+  fileProgress,
 }: HashTabProps) {
   const { skin } = useSkin();
   return (
     <div>
+      {wasmError && (
+        <p className="err-text" style={{ marginBottom: "0.75rem" }}>
+          ⚠ {wasmError}
+        </p>
+      )}
+      {onFile && onFileHash && onFileProgress && (
+        <div style={{ marginBottom: "1rem" }}>
+          <FileHasher
+            onHash={(hex) => {
+              onFileHash(hex);
+              setHashInput(hex);
+            }}
+            onProgress={onFileProgress}
+            onFile={onFile}
+          />
+          {fileProgress !== undefined && fileProgress > 0 && fileProgress < 100 && (
+            <p
+              className={skin.classes.mutedText}
+              style={{ fontSize: "0.65rem", marginTop: "0.4rem" }}
+            >
+              HASHING... {fileProgress}%
+            </p>
+          )}
+        </div>
+      )}
       <div className="field-head">
         <label htmlFor="hash-input" className="terminal-label">
           BLAKE3 content hash
@@ -44,7 +82,7 @@ export default function HashTab({
           onKeyDown={(event) => {
             if (event.key === "Enter") onSubmit(hashInput);
           }}
-          placeholder="ENTER_BLAKE3_HASH..."
+          placeholder="ENTER_BLAKE3_HASH or drop a file above..."
           maxLength={64}
           spellCheck={false}
           autoComplete="off"

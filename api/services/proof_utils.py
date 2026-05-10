@@ -136,11 +136,55 @@ def evaluate_proof_bundle(
                 status_code=400,
                 detail="canonical_parser_version is required and must be a non-empty string",
             )
-        expected_leaf_hash = leaf_hash(smt_key, content_hash_bytes, bundle_parser_id, bundle_cpv)
+        # In sequencer-path proofs the SMT leaf is committed over a separate
+        # value_hash (the canonical-parser output), not the raw content_hash.
+        # When the proof carries an explicit value_hash, use it for the leaf
+        # reconstruction and bind the content via the proof's content_hash
+        # field instead.
+        proof_value_hash_hex = merkle_proof_data.get("value_hash")
+        if isinstance(proof_value_hash_hex, str) and proof_value_hash_hex:
+            try:
+                proof_value_hash = bytes.fromhex(proof_value_hash_hex)
+            except ValueError as exc:
+                raise HTTPException(status_code=400, detail="value_hash must be valid hex") from exc
+            if len(proof_value_hash) != 32:
+                raise HTTPException(
+                    status_code=400, detail="value_hash must be 32 bytes (64 hex chars)"
+                )
+            expected_leaf_hash = leaf_hash(smt_key, proof_value_hash, bundle_parser_id, bundle_cpv)
+        else:
+            expected_leaf_hash = leaf_hash(
+                smt_key, content_hash_bytes, bundle_parser_id, bundle_cpv
+            )
 
     content_hash_matches_proof = merkle_proof.leaf_hash == expected_leaf_hash
+    # When value_hash != content_hash, also require the proof to declare the
+    # content_hash it was built for, matching the queried hash. Otherwise an
+    # attacker could pair an arbitrary content_hash with a valid SMT proof.
+    if smt_key_hex is not None and merkle_proof_data.get("value_hash"):
+        bundle_content_hash = merkle_proof_data.get("content_hash")
+        if (
+            not isinstance(bundle_content_hash, str)
+            or bundle_content_hash.lower() != normalized_hash
+        ):
+            content_hash_matches_proof = False
     if merkle_proof.root_hash.hex() != normalized_root:
         return normalized_hash, normalized_root, content_hash_matches_proof, False
+
+    if smt_key_hex is not None and len(merkle_proof.siblings) == 0:
+        # The Go sequencer batch endpoint currently returns a commitment
+        # summary (root + SMT key + leaf value hash) rather than a full
+        # 256-sibling sparse Merkle inclusion proof. Newer summaries include
+        # content_hash so the value-hash summary is explicitly bound back to
+        # the queried ledger hash; older ADR-style summaries may still carry
+        # the recomputable ADR-0003 leaf hash.
+        summary_content_hash = merkle_proof_data.get("content_hash")
+        summary_matches_hash = (
+            isinstance(summary_content_hash, str)
+            and summary_content_hash.lower() == normalized_hash
+        )
+        summary_bound_to_hash = content_hash_matches_proof or summary_matches_hash
+        return normalized_hash, normalized_root, summary_bound_to_hash, summary_bound_to_hash
 
     try:
         merkle_proof_valid = content_hash_matches_proof and verify_proof(merkle_proof)
@@ -222,9 +266,15 @@ def sequencer_proof_to_merkle_proof_dict(
     if len(proof.siblings) != 256:
         raise ValueError(f"sequencer proof must have 256 siblings, got {len(proof.siblings)}")
 
+    # The Rust SMT emits siblings root-to-leaf; protocol.ssmf.verify_proof
+    # walks them leaf-to-root (level 0 = leaf level). Reverse here so the
+    # API surface is canonical leaf-to-root for all downstream verifiers.
+    sequencer_siblings = list(proof.siblings)
+    leaf_first_siblings = list(reversed(sequencer_siblings))
+
     leaf_index = int.from_bytes(smt_key_bytes, byteorder="big", signed=False)
     siblings_with_positions: list[list[str | bool]] = []
-    for level, sibling_hex in enumerate(proof.siblings):
+    for level, sibling_hex in enumerate(leaf_first_siblings):
         sibling_bytes = bytes.fromhex(sibling_hex)
         if len(sibling_bytes) != 32:
             raise ValueError(f"sequencer sibling at level {level} must decode to 32 bytes")
@@ -240,6 +290,10 @@ def sequencer_proof_to_merkle_proof_dict(
 
     return {
         "leaf_hash": smt_leaf_hash.hex(),
+        # The actual value committed to the SMT leaf, separate from the
+        # path-level leaf_hash. Offline verifiers need this to reconstruct
+        # the leaf hash themselves.
+        "value_hash": value_hash.hex(),
         "leaf_index": str(leaf_index),
         "siblings": siblings_with_positions,
         "root_hash": proof.root,

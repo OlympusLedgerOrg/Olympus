@@ -10,6 +10,7 @@ import (
 	"log"
 	"net/http"
 	"strconv"
+	"sync"
 	"time"
 
 	"github.com/OlympusLedgerOrg/Olympus/services/sequencer/internal/client"
@@ -76,6 +77,7 @@ type Sequencer struct {
 	token                string
 	metrics              *metrics.Registry
 	storageCommitTimeout time.Duration
+	writeMu              sync.Mutex
 }
 
 // SequencerOption customises a Sequencer at construction time.
@@ -451,6 +453,9 @@ func (s *Sequencer) handleQueueLeaf(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
+
 	recordKey := &pb.RecordKey{
 		RecordType: req.RecordType,
 		RecordId:   req.RecordID,
@@ -587,6 +592,9 @@ func (s *Sequencer) handleQueueLeaves(w http.ResponseWriter, r *http.Request) {
 	}
 
 	ctx := r.Context()
+
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
 
 	// H-2 two-phase commit, batch variant.
 	//
@@ -752,6 +760,9 @@ func (s *Sequencer) handleQueueLeafHash(w http.ResponseWriter, r *http.Request) 
 
 	ctx := r.Context()
 
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
+
 	// Build the record key. The pre-computed value hash is passed to
 	// prepareRecord via the dedicated `preHashedValueHash` argument so the
 	// Rust service uses it as the leaf value verbatim (no second BLAKE3).
@@ -888,10 +899,10 @@ func (s *Sequencer) handleGetInclusionProof(w http.ResponseWriter, r *http.Reque
 	}
 
 	resp := map[string]interface{}{
-		"global_key":  fmt.Sprintf("%x", proofResp.GlobalKey),
-		"value_hash":  fmt.Sprintf("%x", proofResp.ValueHash),
-		"siblings":    siblings,
-		"root":        fmt.Sprintf("%x", proofResp.Root),
+		"global_key": fmt.Sprintf("%x", proofResp.GlobalKey),
+		"value_hash": fmt.Sprintf("%x", proofResp.ValueHash),
+		"siblings":   siblings,
+		"root":       fmt.Sprintf("%x", proofResp.Root),
 	}
 
 	w.Header().Set("Content-Type", "application/json")
@@ -967,9 +978,9 @@ func (s *Sequencer) handleGetSignedRootPair(w http.ResponseWriter, r *http.Reque
 		"old_tree_size": oldSize,
 		"new_tree_size": newSize,
 		"old_root":      fmt.Sprintf("%x", oldRoot.RootHash),
-		"old_signature":  fmt.Sprintf("%x", oldRoot.Signature),
+		"old_signature": fmt.Sprintf("%x", oldRoot.Signature),
 		"new_root":      fmt.Sprintf("%x", newRoot.RootHash),
-		"new_signature":  fmt.Sprintf("%x", newRoot.Signature),
+		"new_signature": fmt.Sprintf("%x", newRoot.Signature),
 	}
 
 	w.Header().Set("Content-Type", "application/json")

@@ -89,9 +89,7 @@ class IngestParserClient:
             timeout: Request timeout in seconds (default 300s for large files).
             max_retries: Maximum number of retry attempts on transient failures.
         """
-        self._base_url = base_url or os.getenv(
-            "INGEST_PARSER_URL", "http://localhost:8090"
-        )
+        self._base_url = base_url or os.getenv("INGEST_PARSER_URL", "http://localhost:8090")
         self._timeout = timeout
         self._max_retries = max_retries
         self._client: httpx.AsyncClient | None = None
@@ -198,13 +196,9 @@ class IngestParserClient:
             return ExtractionResult.model_validate(response.json())
 
         except httpx.ConnectError as e:
-            raise ParserConnectionError(
-                f"Failed to connect to parser service: {e}"
-            ) from e
+            raise ParserConnectionError(f"Failed to connect to parser service: {e}") from e
         except httpx.HTTPStatusError as e:
-            raise ParserConnectionError(
-                f"Parser request failed: {e.response.status_code}"
-            ) from e
+            raise ParserConnectionError(f"Parser request failed: {e.response.status_code}") from e
 
     async def parse_file(
         self,

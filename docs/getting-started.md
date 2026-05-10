@@ -2,7 +2,7 @@
 
 ## Prerequisites
 
-- [Python 3.10+](https://python.org/downloads/)
+- [Python 3.10-3.13](https://python.org/downloads/)
 - [Docker](https://docs.docker.com/get-docker/) (for the PostgreSQL database)
 - [Node.js 20.19+ or 22.12+](https://nodejs.org/) (for the public UX)
 
@@ -79,6 +79,10 @@ Use PowerShell parameters for custom setup behavior:
 ```powershell
 .\setup-windows.ps1 -SkipStart -ForceLocalDbUrl
 ```
+
+On first run, `setup-windows.ps1` also runs `scripts\bootstrap.ps1` to create
+`.env` and local secret files if they are missing. Use `-SkipFirstBoot` only
+when you have already prepared those files manually.
 
 ---
 
