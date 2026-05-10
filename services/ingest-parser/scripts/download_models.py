@@ -72,6 +72,7 @@ def download_docling_models(output_dir: Path) -> dict:
         # Compute hash of the model cache directory
         # Docling typically caches models in ~/.cache/docling or similar
         import os
+
         cache_dir = Path(os.path.expanduser("~/.cache/docling"))
 
         if cache_dir.exists():
@@ -81,11 +82,13 @@ def download_docling_models(output_dir: Path) -> dict:
             files = []
             for file_path in sorted(cache_dir.rglob("*")):
                 if file_path.is_file():
-                    files.append({
-                        "path": str(file_path.relative_to(cache_dir)),
-                        "hash": compute_sha256(file_path),
-                        "size": file_path.stat().st_size,
-                    })
+                    files.append(
+                        {
+                            "path": str(file_path.relative_to(cache_dir)),
+                            "hash": compute_sha256(file_path),
+                            "size": file_path.stat().st_size,
+                        }
+                    )
         else:
             model_hash = "sha256_" + "0" * 64
             files = []
@@ -112,6 +115,7 @@ def download_marker_models(output_dir: Path) -> dict:
 
         # Marker also caches models
         import os
+
         cache_dir = Path(os.path.expanduser("~/.cache/marker"))
 
         if cache_dir.exists():
@@ -119,11 +123,13 @@ def download_marker_models(output_dir: Path) -> dict:
             files = []
             for file_path in sorted(cache_dir.rglob("*")):
                 if file_path.is_file():
-                    files.append({
-                        "path": str(file_path.relative_to(cache_dir)),
-                        "hash": compute_sha256(file_path),
-                        "size": file_path.stat().st_size,
-                    })
+                    files.append(
+                        {
+                            "path": str(file_path.relative_to(cache_dir)),
+                            "hash": compute_sha256(file_path),
+                            "size": file_path.stat().st_size,
+                        }
+                    )
         else:
             model_hash = "sha256_" + "0" * 64
             files = []

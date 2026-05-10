@@ -2,7 +2,7 @@
 
 ## Olympus — Executive Summary
 
-**Olympus is a verifiable ledger for sensitive information.**  
+**Olympus is a verifiable ledger for sensitive information.**
 It turns institutional data, compliance actions, and oversight decisions into **cryptographically provable facts**—not dashboards, not trust-me PDFs, not promises.
 
 At its core, Olympus answers one question with mathematical certainty:
@@ -38,7 +38,7 @@ Today’s institutional accountability failures are not abstract—they are stru
 
 Olympus replaces **trust** with **verification**.
 
-If a record is real, Olympus can prove it.  
+If a record is real, Olympus can prove it.
 If it’s missing, Olympus can prove *that too*.
 
 ---
@@ -79,16 +79,16 @@ Every commit is recorded as a chained **ledger entry**:
 
 Olympus supports cryptographic proofs for:
 
-- **Record existence**  
+- **Record existence**
   “This exact record was committed at this time.”
 
-- **Record non-existence**  
+- **Record non-existence**
   “This record did *not* exist at this time.”
 
-- **Shard inclusion**  
+- **Shard inclusion**
   “This jurisdiction’s ledger is part of the global state.”
 
-- **Global state verification**  
+- **Global state verification**
   “All shards roll up into this signed root.”
 
 These proofs are small, fast, and verifiable in browsers, scripts, or court filings.
@@ -105,7 +105,7 @@ These proofs are small, fast, and verifiable in browsers, scripts, or court fili
 | APIs you must believe | Proofs you can verify |
 | “Transparency portals” | Mathematical transparency |
 
-Olympus does not *visualize* trust.  
+Olympus does not *visualize* trust.
 It **eliminates the need for it**.
 
 ---
@@ -127,11 +127,13 @@ The Olympus protocol implementation includes:
 - A working CD-HS-ST (single global 256-level Sparse Merkle Tree)
 - Signed shard headers with Ed25519 and RFC 3161 timestamps
 - Proof generation and verification (existence, non-existence, redaction)
-- FastAPI endpoints, PostgreSQL storage, and comprehensive tests (≥85% coverage)
+- FastAPI endpoints, PostgreSQL storage, and comprehensive tests (≥85% coverage, 3,980 tests collected locally)
 - Deterministic, auditable commit logic with SERIALIZABLE transactions
 - Phase 1 Go sequencer and Rust cryptographic service (in progress, not yet primary write path)
+- 24-hour reliability fuzzing framework and cross-language verifier conformance
+- Three completed security audit rounds; current open rollout items are tracked in [`docs/SECURITY_AUDIT_REPORT_V3.md`](SECURITY_AUDIT_REPORT_V3.md)
 
-The system is in **Phase 0** (protocol hardening). The Python API path is the current primary write path; the Go → Rust service path is being hardened in parallel.
+The system is in **Phase 0 complete / Phase 1 in progress**. The Python API path is the current primary write path; the Go → Rust service path is being hardened in parallel.
 
 ---
 
@@ -141,8 +143,8 @@ Olympus is built on a simple idea:
 
 > **If an institutional action matters, it should be provable.**
 
-No hype.  
-No tokens.  
+No hype.
+No tokens.
 No vibes.
 
 Just receipts.

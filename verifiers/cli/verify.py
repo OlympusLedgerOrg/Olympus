@@ -223,9 +223,7 @@ def smt_proof_command(args):
         raw_parser_id = proof_data.get("parser_id")
         raw_cpv = proof_data.get("canonical_parser_version")
         if not isinstance(raw_parser_id, str) or not raw_parser_id:
-            raise ValueError(
-                "proof.parser_id is required and must be a non-empty string"
-            )
+            raise ValueError("proof.parser_id is required and must be a non-empty string")
         if not isinstance(raw_cpv, str) or not raw_cpv:
             raise ValueError(
                 "proof.canonical_parser_version is required and must be a non-empty string"
@@ -306,9 +304,7 @@ def main():
     )
 
     # smt-proof command (RT-M4: root authentication for SMT proofs)
-    smt_parser = subparsers.add_parser(
-        "smt-proof", help="Verify SMT existence/non-existence proof"
-    )
+    smt_parser = subparsers.add_parser("smt-proof", help="Verify SMT existence/non-existence proof")
     smt_parser.add_argument("--proof", required=True, help="SMT proof or verification bundle JSON")
     smt_parser.add_argument(
         "--expected-root",

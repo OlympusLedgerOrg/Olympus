@@ -5,7 +5,7 @@ const API_BASE =
     (import.meta as { env?: { VITE_API_BASE?: string } }).env?.VITE_API_BASE) ||
   (typeof window !== "undefined" ? window.location.origin : "");
 
-const ALL_SCOPES = ["read", "write", "ingest", "commit", "verify", "admin"] as const;
+const ALL_SCOPES = ["read", "verify", "ingest", "commit", "write", "admin"] as const;
 
 type RegisteredUser = {
   user_id: string;
@@ -13,6 +13,8 @@ type RegisteredUser = {
   api_key: string;
   key_id: string;
   scopes: string[];
+  role: string;
+  password?: string;
 };
 
 function CopyField({ label, value, mono = true }: { label: string; value: string; mono?: boolean }) {
@@ -78,13 +80,22 @@ const labelStyle: React.CSSProperties = {
   marginBottom: "0.4rem",
 };
 
+function generatePassword(): string {
+  const alphabet = "ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789!@#$%";
+  const bytes = new Uint8Array(18);
+  crypto.getRandomValues(bytes);
+  return Array.from(bytes, byte => alphabet[byte % alphabet.length]).join("");
+}
+
 // ── Register panel ────────────────────────────────────────────────────────────
 
 function RegisterPanel() {
+  const [adminKey, setAdminKey] = useState("");
   const [email, setEmail] = useState("");
-  const [password, setPassword] = useState("");
+  const [password, setPassword] = useState(() => generatePassword());
   const [keyName, setKeyName] = useState("default");
-  const [scopes, setScopes] = useState<Set<string>>(new Set(["ingest", "verify"]));
+  const [role, setRole] = useState<"user" | "admin">("user");
+  const [scopes, setScopes] = useState<Set<string>>(new Set(["read", "verify"]));
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [result, setResult] = useState<RegisteredUser | null>(null);
@@ -93,15 +104,36 @@ function RegisterPanel() {
     setScopes(prev => { const n = new Set(prev); n.has(s) ? n.delete(s) : n.add(s); return n; });
   }
 
+  function setPreset(kind: "verify" | "ingest" | "admin") {
+    if (kind === "verify") {
+      setRole("user");
+      setScopes(new Set(["read", "verify"]));
+    } else if (kind === "ingest") {
+      setRole("user");
+      setScopes(new Set(["read", "verify", "ingest", "commit", "write"]));
+    } else {
+      setRole("admin");
+      setScopes(new Set(["read", "verify", "ingest", "commit", "write", "admin"]));
+    }
+  }
+
   async function submit() {
+    if (!adminKey.trim()) { setError("Admin key required."); return; }
     if (!email.trim()) { setError("Email required."); return; }
     if (password.length < 12) { setError("Password must be at least 12 characters."); return; }
+    if (!scopes.has("read") || !scopes.has("verify")) { setError("Local app users need read + verify."); return; }
     setError(null); setResult(null); setLoading(true);
     try {
-      const res = await fetch(`${API_BASE}/auth/register`, {
+      const res = await fetch(`${API_BASE}/auth/admin/users`, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ email: email.trim(), password, name: keyName.trim() || "default", scopes: [...scopes] }),
+        headers: { "Content-Type": "application/json", "X-Admin-Key": adminKey },
+        body: JSON.stringify({
+          email: email.trim(),
+          password,
+          name: keyName.trim() || "default",
+          scopes: [...scopes],
+          role,
+        }),
       });
       const data = await res.json() as Record<string, unknown>;
       if (!res.ok) {
@@ -109,8 +141,8 @@ function RegisterPanel() {
         setError(typeof d === "string" ? d : JSON.stringify(d));
         return;
       }
-      setResult(data as unknown as RegisteredUser);
-      setEmail(""); setPassword("");
+      setResult({ ...(data as unknown as RegisteredUser), password });
+      setEmail(""); setPassword(generatePassword()); setRole("user"); setScopes(new Set(["read", "verify"]));
     } catch (e) { setError(String(e)); }
     finally { setLoading(false); }
   }
@@ -118,7 +150,12 @@ function RegisterPanel() {
   return (
     <div style={{ padding: "1.5rem", border: "1px solid rgba(0,255,65,0.14)", background: "rgba(0,255,65,0.02)", marginBottom: "1.5rem" }}>
       <div style={{ fontSize: "0.58rem", letterSpacing: "0.12em", color: "rgba(0,255,65,0.45)", marginBottom: "1.2rem" }}>
-        REGISTER NEW USER
+        CREATE APP USER
+      </div>
+
+      <div style={{ marginBottom: "1rem" }}>
+        <label style={labelStyle}>LOCAL ADMIN KEY</label>
+        <input type="password" value={adminKey} onChange={e => setAdminKey(e.target.value)} placeholder="OLYMPUS_ADMIN_KEY from .env" style={inputStyle} />
       </div>
 
       <div style={{ marginBottom: "1rem" }}>
@@ -127,8 +164,20 @@ function RegisterPanel() {
       </div>
 
       <div style={{ marginBottom: "1rem" }}>
-        <label style={labelStyle}>PASSWORD (min 12 chars)</label>
-        <input type="password" value={password} onChange={e => setPassword(e.target.value)} placeholder="strong passphrase" style={inputStyle} />
+        <label style={labelStyle}>APP PASSWORD</label>
+        <div style={{ display: "grid", gridTemplateColumns: "minmax(0, 1fr) auto", gap: "0.6rem" }}>
+          <input type="text" value={password} onChange={e => setPassword(e.target.value)} placeholder="strong passphrase" style={inputStyle} />
+          <button type="button" onClick={() => setPassword(generatePassword())} style={{
+            background: "rgba(0,0,0,0.5)",
+            border: "1px solid rgba(0,255,65,0.25)",
+            color: "rgba(0,255,65,0.75)",
+            fontFamily: "'DM Mono', monospace",
+            fontSize: "0.6rem",
+            letterSpacing: "0.08em",
+            padding: "0 0.75rem",
+            cursor: "pointer",
+          }}>GENERATE</button>
+        </div>
       </div>
 
       <div style={{ marginBottom: "1rem" }}>
@@ -137,6 +186,25 @@ function RegisterPanel() {
       </div>
 
       <div style={{ marginBottom: "1.5rem" }}>
+        <label style={labelStyle}>ACCESS PRESET</label>
+        <div style={{ display: "flex", flexWrap: "wrap", gap: "0.5rem", marginBottom: "0.75rem" }}>
+          {([
+            ["verify", "VERIFY ONLY"],
+            ["ingest", "INGEST + VERIFY"],
+            ["admin", "ADMIN"],
+          ] as const).map(([kind, label]) => (
+            <button key={kind} type="button" onClick={() => setPreset(kind)} style={{
+              background: (kind === "admin" ? role === "admin" : kind === "verify" ? scopes.size === 2 : scopes.has("ingest")) ? "rgba(0,255,65,0.18)" : "rgba(0,0,0,0.5)",
+              border: "1px solid rgba(0,255,65,0.3)",
+              color: "#00ff41",
+              fontFamily: "'DM Mono', monospace",
+              fontSize: "0.62rem",
+              letterSpacing: "0.08em",
+              padding: "0.4rem 0.75rem",
+              cursor: "pointer",
+            }}>{label}</button>
+          ))}
+        </div>
         <label style={labelStyle}>SCOPES</label>
         <div style={{ display: "flex", flexWrap: "wrap", gap: "0.5rem" }}>
           {ALL_SCOPES.map(s => (
@@ -165,7 +233,7 @@ function RegisterPanel() {
         letterSpacing: "0.12em",
         cursor: loading ? "not-allowed" : "pointer",
       }}>
-        {loading ? "REGISTERING..." : "CREATE USER + API KEY"}
+        {loading ? "CREATING..." : "CREATE USER"}
       </button>
 
       {error && (
@@ -177,12 +245,15 @@ function RegisterPanel() {
       {result && (
         <div style={{ padding: "1.5rem", border: "1px solid rgba(0,255,65,0.35)", marginTop: "1rem", background: "rgba(0,255,65,0.03)" }}>
           <div style={{ fontSize: "0.58rem", letterSpacing: "0.12em", color: "rgba(0,255,65,0.5)", marginBottom: "1rem" }}>
-            USER CREATED — COPY THE API KEY NOW, IT WON'T BE SHOWN AGAIN
+            USER CREATED — GIVE THIS PASSWORD TO THE USER AND COPY THE API KEY NOW
           </div>
           <CopyField label="EMAIL" value={result.email} mono={false} />
+          <CopyField label="APP PASSWORD" value={result.password ?? ""} mono={false} />
           <CopyField label="API KEY" value={result.api_key} />
           <div style={{ fontSize: "0.62rem", color: "rgba(0,255,65,0.45)", lineHeight: 1.6 }}>
             <strong style={{ color: "rgba(0,255,65,0.7)" }}>USER ID</strong>{" "}{result.user_id}
+            {" · "}
+            <strong style={{ color: "rgba(0,255,65,0.7)" }}>ROLE</strong>{" "}{result.role}
             {" · "}
             <strong style={{ color: "rgba(0,255,65,0.7)" }}>SCOPES</strong>{" "}{result.scopes.join(", ")}
           </div>

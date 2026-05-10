@@ -92,14 +92,10 @@ class DocumentPage(BaseModel):
 class ExtractedDocument(BaseModel):
     """The extracted document content structure."""
 
-    pages: list[DocumentPage] = Field(
-        default_factory=list, description="List of document pages"
-    )
+    pages: list[DocumentPage] = Field(default_factory=list, description="List of document pages")
     total_pages: int = Field(..., ge=0, description="Total number of pages")
     language: str | None = Field(None, description="Detected document language (ISO 639-1)")
-    metadata: dict[str, Any] = Field(
-        default_factory=dict, description="Document-level metadata"
-    )
+    metadata: dict[str, Any] = Field(default_factory=dict, description="Document-level metadata")
 
 
 class Provenance(BaseModel):

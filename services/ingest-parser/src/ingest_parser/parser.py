@@ -349,9 +349,7 @@ class DoclingParser(BaseParser):
                 if block:
                     blocks.append(block)
 
-            page_width, page_height = self._extract_page_dimensions(
-                docling_pages, page_num
-            )
+            page_width, page_height = self._extract_page_dimensions(docling_pages, page_num)
 
             pages.append(
                 DocumentPage(

@@ -86,5 +86,56 @@ async def test_public_register_ingest_scope_allowed_with_admin_approval(client):
     assert resp.json()["scopes"] == ["ingest", "verify"]
 
 
+@pytest.mark.asyncio
+async def test_admin_create_user_defaults_to_verify_only(client):
+    payload = {
+        "email": "admin-created-verify@example.com",
+        "password": "averystrongpassword123",
+    }
+    resp = await client.post(
+        "/auth/admin/users",
+        json=payload,
+        headers={"x-admin-key": "A" * 32},
+    )
+    assert resp.status_code == 201, resp.text
+    body = resp.json()
+    assert body["role"] == "user"
+    assert body["scopes"] == ["read", "verify"]
+    assert body["api_key"]
+
+
+@pytest.mark.asyncio
+async def test_admin_create_user_can_assign_admin_scope(client):
+    payload = {
+        "email": "admin-created-admin@example.com",
+        "password": "averystrongpassword123",
+        "role": "admin",
+        "scopes": ["read", "verify", "admin"],
+    }
+    resp = await client.post(
+        "/auth/admin/users",
+        json=payload,
+        headers={"x-admin-key": "A" * 32},
+    )
+    assert resp.status_code == 201, resp.text
+    body = resp.json()
+    assert body["role"] == "admin"
+    assert body["scopes"] == ["read", "verify", "admin"]
+
+
+@pytest.mark.asyncio
+async def test_admin_create_user_rejects_wrong_admin_key(client):
+    payload = {
+        "email": "admin-created-denied@example.com",
+        "password": "averystrongpassword123",
+    }
+    resp = await client.post(
+        "/auth/admin/users",
+        json=payload,
+        headers={"x-admin-key": "wrong"},
+    )
+    assert resp.status_code == 401, resp.text
+
+
 def _build_register_request_from_dict(payload: dict[str, object]) -> user_auth.RegisterRequest:
     return user_auth.RegisterRequest.model_validate(payload)

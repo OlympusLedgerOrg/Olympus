@@ -4,9 +4,10 @@ This guide covers common development workflows for the Olympus project.
 
 ## Prerequisites
 
-- Python 3.10 or higher (3.12 recommended)
+- Python 3.10-3.13 (3.12 recommended)
 - PostgreSQL 16+ (for database-dependent tests and API)
 - Docker and Docker Compose (optional, for running PostgreSQL)
+- Rust/Cargo and `protoc` when developing the Rust CD-HS-ST service or rebuilding native Rust components
 
 ## Initial Setup
 
@@ -116,8 +117,8 @@ python tools/validate_schemas.py
 
 **Lint and format code:**
 ```bash
-ruff check protocol/ storage/ api/ scaffolding/ tests/
-ruff format protocol/ storage/ api/ scaffolding/ tests/
+ruff check .
+ruff format .
 ```
 
 **Type checking:**
@@ -127,15 +128,15 @@ mypy protocol/ storage/ api/
 
 **Security scanning:**
 ```bash
-bandit -r protocol/ storage/ api/ scaffolding/ -f txt
+bandit -r protocol/ storage/ api/ scaffolding/ services/ verifiers/ -f txt
 ```
 
 ## Running the Application
 
 ### Run the API server
 ```bash
-# Make sure PostgreSQL is running and DATABASE_URL is set
-uvicorn api.app:app --host 127.0.0.1 --port 8000 --reload
+# api.main is the canonical entrypoint; api.app is a compatibility shim
+uvicorn api.main:app --host 127.0.0.1 --port 8000 --reload
 ```
 
 ### Run the API with make

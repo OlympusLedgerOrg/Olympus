@@ -161,15 +161,20 @@ def _run_subprocess(
         except subprocess.TimeoutExpired:
             if use_new_session and os.name != "nt":
                 # Kill the whole process group
+                killpg = getattr(os, "killpg", None)
+                getpgid = getattr(os, "getpgid", None)
                 try:
-                    os.killpg(os.getpgid(proc.pid), signal.SIGTERM)
+                    if killpg is not None and getpgid is not None:
+                        killpg(getpgid(proc.pid), signal.SIGTERM)
                 except ProcessLookupError:
                     pass  # process already exited before we could signal it
                 try:
                     proc.communicate(timeout=5)
                 except subprocess.TimeoutExpired:
+                    sigkill = getattr(signal, "SIGKILL", signal.SIGTERM)
                     try:
-                        os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
+                        if killpg is not None and getpgid is not None:
+                            killpg(getpgid(proc.pid), sigkill)
                     except ProcessLookupError:
                         pass  # process already exited during the grace period
                     proc.communicate()

@@ -26,7 +26,7 @@ const VERDICT_CFG: Record<
     borderColor: "#f59e0b",
     icon: "?",
     label: ">>> RECORD_NOT_FOUND",
-    desc: "This hash has not been committed to the Olympus ledger, or the server could not be reached.",
+    desc: "The API is reachable, but this exact hash is not committed to the Olympus ledger.",
   },
 };
 

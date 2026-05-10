@@ -178,6 +178,11 @@ class KeyCreateRequest(BaseModel):
     expires_at: str = _DEFAULT_EXPIRY
 
 
+class AdminRegisterRequest(RegisterRequest):
+    role: str = "user"
+    scopes: list[str] = _REGISTER_DEFAULT_SCOPES
+
+
 class KeyInfo(BaseModel):
     id: str
     name: str
@@ -193,6 +198,10 @@ class RegisterResponse(BaseModel):
     api_key: str
     key_id: str
     scopes: list[str]
+
+
+class AdminRegisterResponse(RegisterResponse):
+    role: str
 
 
 class LoginResponse(BaseModel):
@@ -239,6 +248,49 @@ def _has_valid_registration_approval(body: RegisterRequest, request: Request) ->
         return False
     expected = _registration_approval_signature(body, admin_key)
     return _hmac.compare_digest(provided, expected)
+
+
+def _require_admin_key(request: Request) -> None:
+    admin_key = os.environ.get("OLYMPUS_ADMIN_KEY", "")
+    if not admin_key:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Admin user creation is not configured. Set OLYMPUS_ADMIN_KEY.",
+        )
+    provided = request.headers.get("x-admin-key", "")
+    if not _hmac.compare_digest(provided, admin_key):
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid admin key.")
+
+
+async def _create_user_with_key(
+    *,
+    body: RegisterRequest,
+    db: DBSession,
+    scopes: list[str],
+    role: str = "user",
+) -> tuple[User, ApiKey, str]:
+    existing = await db.execute(select(User).where(User.email == body.email))
+    if existing.scalars().first():
+        raise HTTPException(status_code=409, detail="Email already registered.")
+
+    if len(body.password) < 12:
+        raise HTTPException(status_code=422, detail="Password must be at least 12 characters.")
+
+    user = User(
+        id=str(uuid.uuid4()),
+        email=body.email,
+        password_hash=_hash_password(body.password),
+        role=role,
+        created_at=_naive_utc(),
+    )
+    db.add(user)
+    await db.flush()
+
+    expires = _parse_expires(body.expires_at)
+    raw_key, key_record = _make_api_key(user.id, body.name, scopes, expires)
+    db.add(key_record)
+    await db.commit()
+    return user, key_record, raw_key
 
 
 def log_public_write_registration_override_if_enabled() -> None:
@@ -319,13 +371,6 @@ async def register(
     _rl: RateLimit,
 ) -> RegisterResponse:
     """Create a new user account and issue a first API key."""
-    existing = await db.execute(select(User).where(User.email == body.email))
-    if existing.scalars().first():
-        raise HTTPException(status_code=409, detail="Email already registered.")
-
-    if len(body.password) < 12:
-        raise HTTPException(status_code=422, detail="Password must be at least 12 characters.")
-
     unknown = set(body.scopes) - _VALID_SCOPES
     if unknown:
         raise HTTPException(
@@ -352,19 +397,7 @@ async def register(
     scopes = _validate_scopes(body.scopes, allowed_scopes, context="register")
     await registration_rate_limit(request)
 
-    user = User(
-        id=str(uuid.uuid4()),
-        email=body.email,
-        password_hash=_hash_password(body.password),
-        created_at=_naive_utc(),
-    )
-    db.add(user)
-    await db.flush()
-
-    expires = _parse_expires(body.expires_at)
-    raw_key, key_record = _make_api_key(user.id, body.name, scopes, expires)
-    db.add(key_record)
-    await db.commit()
+    user, key_record, raw_key = await _create_user_with_key(body=body, db=db, scopes=scopes)
 
     logger.info("Registered user %s", sanitize_for_log(body.email))
     return RegisterResponse(
@@ -373,6 +406,44 @@ async def register(
         api_key=raw_key,
         key_id=key_record.id,
         scopes=scopes,
+    )
+
+
+@router.post(
+    "/admin/users",
+    response_model=AdminRegisterResponse,
+    status_code=status.HTTP_201_CREATED,
+)
+async def admin_create_user(
+    body: AdminRegisterRequest,
+    request: Request,
+    db: DBSession,
+    _rl: RateLimit,
+) -> AdminRegisterResponse:
+    """Create a user with admin-selected scopes.
+
+    This is the local/operator path for onboarding users. It is protected by
+    ``X-Admin-Key`` and defaults new users to verify-only access
+    (``read`` + ``verify``). The raw API key is returned once.
+    """
+    _require_admin_key(request)
+    if body.role not in {"user", "admin"}:
+        raise HTTPException(status_code=422, detail="role must be 'user' or 'admin'.")
+    scopes = _validate_scopes(body.scopes, _VALID_SCOPES, context="admin_create_user")
+    user, key_record, raw_key = await _create_user_with_key(
+        body=body,
+        db=db,
+        scopes=scopes,
+        role=body.role,
+    )
+    logger.info("Admin created user %s", sanitize_for_log(body.email))
+    return AdminRegisterResponse(
+        user_id=user.id,
+        email=user.email,
+        api_key=raw_key,
+        key_id=key_record.id,
+        scopes=scopes,
+        role=user.role,
     )
 
 

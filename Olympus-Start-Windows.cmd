@@ -35,6 +35,10 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File "%~dp0setup-windows.ps1"
   -WslDbHost 127.0.0.1 ^
   -StartWslCdhsSmf ^
   -StartWslGoSequencer ^
+  -HideServerWindows ^
+  -OpenBrowser ^
+  -BrowserUrl "http://localhost:5173" ^
+  -CloseLauncherSplash ^
   %*
 
 set exitcode=%ERRORLEVEL%

@@ -69,7 +69,7 @@ export default function HomePage() {
   const operationLabel = isPending
     ? "VERIFYING"
     : verdictResult
-      ? verdictResult.verdict.toUpperCase()
+      ? `LOOKUP_${verdictResult.verdict.toUpperCase()}`
       : "IDLE";
   const tabs: { id: Tab; label: string }[] = [
     { id: "hash", label: "HASH" },
@@ -177,7 +177,8 @@ export default function HomePage() {
                     onProgress={fileHook.onProgress}
                     onFile={fileHook.onFile}
                     onVerify={() =>
-                      fileHook.fileHash && hashHook.submitHash(fileHook.fileHash)
+                      (fileHook.commitContentHash || fileHook.fileHash) &&
+                      hashHook.submitHash(fileHook.commitContentHash || fileHook.fileHash || "")
                     }
                   />
                 )}
