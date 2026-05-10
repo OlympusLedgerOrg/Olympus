@@ -49,6 +49,7 @@ from api.routers.user_auth import (
     log_public_write_registration_override_if_enabled,
     router as user_auth_router,
 )
+from api.transparency.monitor import router as transparency_monitor_router
 from api.routers.witness import router as witness_router
 from api.sth import router as sth_router
 
@@ -451,6 +452,7 @@ def create_app() -> FastAPI:
     app.include_router(ingest_router)
     app.include_router(sth_router)
     app.include_router(witness_router)
+    app.include_router(transparency_monitor_router)
     app.include_router(datasets_router)
     app.include_router(federation_router)
 

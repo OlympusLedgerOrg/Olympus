@@ -1,0 +1,37 @@
+{
+  "format": "olympus.witness.cosigned-envelope.v1",
+  "domain_separator": "OLY:WITNESS:V1",
+  "height": 123,
+  "root_hash": "2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a",
+  "sequencer_key_id": "sequencer-main",
+  "sequencer_signature": "abababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababab",
+  "witness_threshold": 2,
+  "timestamp": "2026-05-10T21:40:09Z",
+  "witness_cosignatures": [
+    {
+      "witness_id": "w1",
+      "public_key_hex": "8a88e3dd7409f195fd52db2d3cba5d72ca6709bf1d94121bf3748801b40f6f5c",
+      "signature_hex": "a3c513822d52d7b36c8ad6426a08a5378535db0143589e08abc735867204cb2479484536928180b271d7366e803870a4887b04b86b1ff3ffa90ef7e3bc61a60a"
+    },
+    {
+      "witness_id": "w2",
+      "public_key_hex": "8139770ea87d175f56a35466c34c7ecccb8d8a91b4ee37a25df60f5b8fc9b394",
+      "signature_hex": "3d7ec717d1c7684ff26c75d54f6b686f66026b89a28af576f8c0a7d3d4d2600194f68d3ad8746b982e8bb521eaace1240707ee980c376ac6d1933e243ca36e09"
+    },
+    {
+      "witness_id": "w3",
+      "public_key_hex": "ed4928c628d1c2c6eae90338905995612959273a5c63f93636c14614ac8737d1",
+      "signature_hex": "c5e2bbd9170219bd1d91c736028a17c8653aa34826e18f7105c63e3cfee8516bf7be530a3e2a123315828ed91b98f2fb2d8ffc68ef13ee34d6662a1fc41a2e0b"
+    }
+  ],
+  "notes": "Scaffold golden vector for cross-language envelope parsing and witness threshold verification. This fixture intentionally pins domain separation and field names so follow-up transport implementations remain wire-compatible across Python, Rust, Go, and JavaScript verifiers.",
+  "expected": {
+    "accept": true,
+    "valid_witnesses": [
+      "w1",
+      "w2",
+      "w3"
+    ],
+    "minimum_threshold": 2
+  }
+}

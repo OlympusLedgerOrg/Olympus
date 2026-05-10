@@ -8,8 +8,11 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"net"
 	"net/http"
+	"net/url"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -77,6 +80,7 @@ type Sequencer struct {
 	token                string
 	metrics              *metrics.Registry
 	storageCommitTimeout time.Duration
+	witnessClients       []WitnessClient
 	writeMu              sync.Mutex
 }
 
@@ -103,6 +107,13 @@ func WithStorageCommitTimeout(d time.Duration) SequencerOption {
 		if d > 0 {
 			s.storageCommitTimeout = d
 		}
+	}
+}
+
+// WithWitnessClients installs witness cosigning clients for SignAndCosignRoot.
+func WithWitnessClients(clients []WitnessClient) SequencerOption {
+	return func(s *Sequencer) {
+		s.witnessClients = clients
 	}
 }
 
@@ -235,6 +246,78 @@ type QueueLeavesResponse struct {
 	Results   []QueueLeafResponse `json:"results"`
 	FinalRoot string              `json:"final_root"`
 	TreeSize  uint64              `json:"tree_size"`
+}
+
+// WitnessCosignature is a witness attestaton over a sequencer-signed root.
+type WitnessCosignature struct {
+	WitnessID string `json:"witness_id"`
+	Signature []byte `json:"signature"`
+}
+
+// SignedRootEnvelope is the sequencer + witness signed root payload.
+type SignedRootEnvelope struct {
+	Root                 [32]byte             `json:"root"`
+	TreeSize             uint64               `json:"tree_size"`
+	SequencerSignature   []byte               `json:"sequencer_signature"`
+	WitnessCosignatures  []WitnessCosignature `json:"witness_cosignatures"`
+	Timestamp            time.Time            `json:"timestamp"`
+}
+
+// WitnessClient requests witness co-signatures for checkpoint roots.
+type WitnessClient interface {
+	URL() string
+	CosignRoot(ctx context.Context, root [32]byte, treeSize uint64, sequencerSig []byte) (WitnessCosignature, error)
+}
+
+func validateWitnessURL(raw string) error {
+	u, err := url.Parse(strings.TrimSpace(raw))
+	if err != nil {
+		return fmt.Errorf("invalid witness URL: %w", err)
+	}
+	if u.Scheme != "https" && u.Scheme != "http" {
+		return fmt.Errorf("witness URL scheme must be http or https")
+	}
+	host := strings.TrimSpace(u.Hostname())
+	if host == "" {
+		return fmt.Errorf("witness URL host is required")
+	}
+	if strings.EqualFold(host, "localhost") {
+		return fmt.Errorf("witness URL host localhost is not allowed")
+	}
+	if ip := net.ParseIP(host); ip != nil {
+		if ip.IsLoopback() || ip.IsPrivate() || ip.IsUnspecified() || ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() {
+			return fmt.Errorf("witness URL private/link-local host is not allowed")
+		}
+	}
+	return nil
+}
+
+// SignAndCosignRoot signs a root with the sequencer key and requests witness co-signatures.
+//
+// Witness transport is intentionally interface-driven in this scaffold so tests
+// can inject deterministic fakes and real networking can be added in a follow-up.
+func (s *Sequencer) SignAndCosignRoot(root [32]byte) (SignedRootEnvelope, error) {
+	signResp, err := s.smtClient.SignRoot(context.Background(), root[:], 0, map[string]string{"mode": "scaffold"})
+	if err != nil {
+		return SignedRootEnvelope{}, fmt.Errorf("sign root: %w", err)
+	}
+	envelope := SignedRootEnvelope{
+		Root:               root,
+		TreeSize:           0,
+		SequencerSignature: append([]byte(nil), signResp.Signature...),
+		Timestamp:          time.Now().UTC(),
+	}
+	for _, witness := range s.witnessClients {
+		if err := validateWitnessURL(witness.URL()); err != nil {
+			return SignedRootEnvelope{}, err
+		}
+		cosig, err := witness.CosignRoot(context.Background(), root, envelope.TreeSize, envelope.SequencerSignature)
+		if err != nil {
+			return SignedRootEnvelope{}, fmt.Errorf("witness cosign failed for %s: %w", witness.URL(), err)
+		}
+		envelope.WitnessCosignatures = append(envelope.WitnessCosignatures, cosig)
+	}
+	return envelope, nil
 }
 
 // preparedRecord bundles everything a handler needs to (a) commit a
