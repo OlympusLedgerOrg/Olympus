@@ -53,7 +53,7 @@ The current open items are no longer V2 high/medium blockers. They are operation
 
 | ID | Severity | Status | Description |
 |---|---|---|---|
-| V3-O1 | Medium | Open | Parser version is still not bound into the leaf-hash contract. ADR-0003 remains proposed and verifier vectors still use `OLY:LEAF:V1`. |
+| V3-O1 | Low | Open | ADR-0003 is **Accepted** and the operational leaf-hash now binds `parser_id` and `canonical_parser_version` (`crates/olympus-crypto/`, `src/crypto.rs`, `src/smt.rs`). Remaining gap is verifier/vector rollout: published verifier vectors at `verifiers/test_vectors/vectors.json` still encode the pre-binding `OLY:LEAF:V1` shape and external verifier releases need a regenerated parity corpus. |
 | V3-O2 | Medium | Open | Multi-worker production deployments require a non-memory rate-limit backend. Keep `WEB_CONCURRENCY=1` with the default memory backend. |
 | V3-O3 | Low | Open | Ingest parser determinism has API/schema tests but no committed parser-output vector corpus comparable to verifier vectors. |
 | V3-O4 | Low | Open | External audit consumers would benefit from a machine-readable verifier parity results artifact. |
@@ -76,7 +76,7 @@ The current open items are no longer V2 high/medium blockers. They are operation
 
 ## Recommended Follow-On Work
 
-1. Decide ADR-0003 and, if accepted, bind parser identity/version into the leaf-hash wire format.
+1. Regenerate and publish verifier vectors (`verifiers/test_vectors/vectors.json`) for the ADR-0003 leaf-hash binding and ship a verifier release that consumes them.
 2. Add committed ingest parser determinism vectors.
 3. Publish verifier parity results as a checked-in artifact or release artifact.
 4. Keep production deployment examples pinned to `api.main:app`.

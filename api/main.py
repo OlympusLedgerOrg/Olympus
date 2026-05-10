@@ -257,9 +257,16 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
         response.headers["Strict-Transport-Security"] = (
             "max-age=63072000; includeSubDomains; preload"
         )
-        # CSP — /docs and /redoc load Swagger/ReDoc assets from jsdelivr/unpkg CDNs.
-        # All other paths use a strict self-only policy.
-        if request.url.path.rstrip("/") in ("/docs", "/redoc"):
+        # CSP — /docs and /redoc (and their subpaths like /docs/oauth2-redirect)
+        # load Swagger/ReDoc assets from jsdelivr/unpkg CDNs. All other paths
+        # use a strict self-only policy.
+        _docs_path = request.url.path.rstrip("/")
+        if (
+            _docs_path == "/docs"
+            or _docs_path == "/redoc"
+            or request.url.path.startswith("/docs/")
+            or request.url.path.startswith("/redoc/")
+        ):
             response.headers["Content-Security-Policy"] = (
                 "default-src 'self'; "
                 "script-src 'self' https://cdn.jsdelivr.net https://unpkg.com 'unsafe-inline'; "
