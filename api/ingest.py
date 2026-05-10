@@ -1457,6 +1457,10 @@ async def ingest_raw_file(
     batch_id = str(uuid.uuid4())
     proof_id = str(uuid.uuid4())
 
+    # Trigger lazy init so _signing_key is populated for the storage path
+    # (no-op on the sequencer path, which doesn't need a Python-side key).
+    _get_storage()
+
     append_result = await append_via_backend(
         shard_id=shard_id,
         record_type=record_type,
@@ -1466,6 +1470,7 @@ async def ingest_raw_file(
         parser_id=RAW_BYTES_PARSER_ID,
         canonical_parser_version=RAW_BYTES_CPV,
         want_proof=False,
+        signing_key=_signing_key,
     )
 
     sequencer_path = _sl_use_go_sequencer()

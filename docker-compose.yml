@@ -176,6 +176,13 @@ services:
       SEQUENCER_HTTP_ADDR: ":8081"
       # Maximum batch size for /v1/queue-leaves (default: 1000)
       OLYMPUS_SEQUENCER_MAX_BATCH_SIZE: ${OLYMPUS_SEQUENCER_MAX_BATCH_SIZE:-1000}
+      # H-2 storage-commit timeout. Default in sequencer-go is 10s, which is
+      # too tight on slow disks (Docker Desktop on Windows/macOS), causing
+      # Go to abort the prepared tx after Postgres has actually committed —
+      # leaving an orphaned cdhs_smf_roots row that blocks all subsequent
+      # writes with "duplicate key" on tree_size. 25s gives Postgres
+      # headroom while staying under the Rust 30s LRU TTL.
+      OLYMPUS_SEQUENCER_STORAGE_COMMIT_TIMEOUT: ${OLYMPUS_SEQUENCER_STORAGE_COMMIT_TIMEOUT:-25s}
     secrets:
       - db_password
     ports:
