@@ -54,6 +54,8 @@ jobs:
             build-essential \
             cmake \
             g++ \
+            libgmp-dev \
+            libsodium-dev \
             nasm \
             pkg-config
 
@@ -88,8 +90,9 @@ jobs:
           git clone --depth 1 --recurse-submodules --shallow-submodules \
             https://github.com/MystenLabs/rapidsnark.git /tmp/rapidsnark
           cd /tmp/rapidsnark
-          npm install --silent --no-audit
-          npx task createFieldSources
-          npx task buildProver
-          sudo cp build/prover /usr/local/bin/rapidsnark
+          mkdir build
+          cd build
+          cmake .. -DCMAKE_BUILD_TYPE=Release
+          make -j"$(nproc)" prover
+          sudo cp prover /usr/local/bin/rapidsnark
           rapidsnark --version 2>/dev/null || echo "rapidsnark installed successfully"

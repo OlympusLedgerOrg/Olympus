@@ -259,12 +259,15 @@ available CPU cores using hand-tuned Intel assembly.
 **Install rapidsnark:**
 
 ```bash
+sudo apt-get update
+sudo apt-get install -y --no-install-recommends cmake build-essential libgmp-dev libsodium-dev nasm
 git clone --depth 1 https://github.com/MystenLabs/rapidsnark.git /tmp/rapidsnark
 cd /tmp/rapidsnark
-npm install
-npx task createFieldSources
-npx task buildProver
-sudo cp build/prover /usr/local/bin/rapidsnark
+mkdir build
+cd build
+cmake .. -DCMAKE_BUILD_TYPE=Release
+make -j"$(nproc)" prover
+sudo cp prover /usr/local/bin/rapidsnark
 ```
 
 Once installed, `Groth16Backend.generate()` in `protocol/groth16_backend.py`
