@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import { reissueKey } from "../lib/api";
 import { setStoredApiKey } from "../lib/storage";
 
 const PROFILE_KEY = "olympus_startup_profile_v1";
@@ -353,7 +354,17 @@ export default function StartupGate({ children }: { children: React.ReactNode })
       };
       localStorage.setItem(PROFILE_KEY, JSON.stringify(nextProfile));
       setProfile(nextProfile);
-      enterConsole();
+
+      // Issue a fresh API key — recovery path for lost/expired keys
+      try {
+        const keyData = await reissueKey(email.trim(), password);
+        setStoredApiKey(keyData.api_key);
+        setNewApiKey(keyData.api_key);
+        setShowKey(true);
+      } catch {
+        // Reissue failed (e.g. rate limit) — enter console anyway, key page can help
+        enterConsole();
+      }
     } catch (err) {
       setError(err instanceof Error ? err.message : "Could not sign in.");
     } finally {

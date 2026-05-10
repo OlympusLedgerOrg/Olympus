@@ -218,6 +218,12 @@ class KeyCreateResponse(BaseModel):
     expires_at: str
 
 
+class ReissueKeyRequest(BaseModel):
+    email: str
+    password: str
+    scopes: list[str] = ["read", "verify", "ingest", "commit", "write"]
+
+
 def _public_write_registration_enabled() -> bool:
     """Return True only when the explicit public-write override flag is enabled."""
     return os.environ.get(_ALLOW_PUBLIC_WRITE_REG_ENV, "").strip() == "1"
@@ -500,6 +506,46 @@ async def login(body: LoginRequest, db: DBSession, _rl: RateLimit) -> LoginRespo
             )
             for k in keys
         ],
+    )
+
+
+@router.post("/reissue-key", response_model=KeyCreateResponse, status_code=status.HTTP_201_CREATED)
+async def reissue_key(body: ReissueKeyRequest, db: DBSession, _rl: RateLimit) -> KeyCreateResponse:
+    """Issue a fresh API key using email + password — no existing key required.
+
+    Recovery path for users whose stored key is lost, expired, or invalid.
+    Scopes are capped to the non-admin self-service set regardless of what
+    is requested; admin scope requires out-of-band provisioning.
+    """
+    result = await db.execute(select(User).where(User.email == body.email))
+    user = result.scalars().first()
+
+    dummy_hash = f"scrypt${_SCRYPT_N}${_SCRYPT_R}${_SCRYPT_P}${'00' * 32}${'00' * 32}"
+    stored_hash = user.password_hash if user and user.password_hash else dummy_hash
+    if not _verify_password(body.password, stored_hash) or not user:
+        raise HTTPException(status_code=401, detail="Invalid email or password.")
+
+    allowed = {"read", "verify", "ingest", "commit", "write"}
+    if _public_write_registration_enabled():
+        allowed.add("write")
+    scopes = _validate_scopes(body.scopes, allowed, context="reissue_key")
+
+    expires = _parse_expires(_DEFAULT_EXPIRY)
+    raw_key, key_record = _make_api_key(user.id, "reissued", scopes, expires)
+    db.add(key_record)
+    await db.commit()
+
+    logger.info(
+        "Reissued API key for user=%s scopes=%s",
+        sanitize_for_log(str(user.id)),
+        [sanitize_for_log(s) for s in scopes],
+    )
+    return KeyCreateResponse(
+        api_key=raw_key,
+        key_id=key_record.id,
+        name="reissued",
+        scopes=scopes,
+        expires_at=key_record.expires_at.isoformat(),
     )
 
 
