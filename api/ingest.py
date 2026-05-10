@@ -34,6 +34,7 @@ from datetime import datetime, timezone
 from time import monotonic
 from typing import TYPE_CHECKING, Any, cast
 
+import blake3 as _blake3
 import httpx
 import nacl.signing
 from fastapi import APIRouter, File, HTTPException, Path, Request, UploadFile
@@ -88,7 +89,7 @@ from protocol.canonical import (
     document_to_commit_bytes,
 )
 from protocol.canonicalizer import canonicalization_provenance
-from protocol.hashes import hash_bytes, record_key
+from protocol.hashes import global_key as _global_key, hash_bytes, record_key
 from protocol.ledger import Ledger
 from protocol.log_sanitization import sanitize_for_log
 from protocol.merkle import (
@@ -99,6 +100,13 @@ from protocol.merkle import (
 from protocol.poseidon_smt import key_to_smt_bytes as _poseidon_smt_key
 from protocol.telemetry import INGEST_TOTAL, LEDGER_HEIGHT, timed_operation
 from protocol.timestamps import current_timestamp
+
+
+# Parser identity for the raw-bytes ingestion path. The content_hash for
+# records committed via /ingest/files is plain BLAKE3 of the raw file bytes
+# (no domain prefix), so a `blake3sum file` from anywhere reproduces it.
+RAW_BYTES_PARSER_ID = "raw-bytes@1.0.0"
+RAW_BYTES_CPV = "v1"
 
 
 if TYPE_CHECKING:
@@ -1406,6 +1414,144 @@ async def ingest_batch(
         canonicalization=canonicalization,
         batch_id=batch_id,
     )
+
+
+@router.post("/files")
+async def ingest_raw_file(
+    request: Request,
+    _api_key: RequireIngestScope,
+    file: UploadFile = File(...),
+    shard_id: str = "files",
+    record_id: str | None = None,
+    version: int = 1,
+) -> dict[str, Any]:
+    """Ingest a file by its raw bytes — no JSON wrapper, no canonicalization.
+
+    The committed `content_hash` is plain BLAKE3 of the file bytes (the same
+    value `blake3sum file` produces and the same value the in-browser hasher
+    computes), so dropping the same file again will round-trip verify.
+
+    Distinct from POST /ingest/records, which canonicalizes a JSON document
+    and hashes the canonical form.
+    """
+    from api.services.storage_layer import (
+        _use_go_sequencer as _sl_use_go_sequencer,
+        append_via_backend,
+    )
+
+    settings = get_settings()
+    max_mb = settings.max_upload_bytes // 1024 // 1024
+    file_bytes = await _read_upload_bounded(file, settings.max_upload_bytes, max_mb)
+
+    # content_hash for raw-bytes records is plain BLAKE3 (no domain prefix),
+    # so a CLI `blake3sum` and the in-browser hasher both reproduce it.
+    digest = _blake3.blake3(bytes(file_bytes)).digest()
+    content_hash = digest.hex()
+
+    if record_id is None or not record_id.strip():
+        # Default to the BLAKE3 prefix so identical bytes always re-use the
+        # same record slot (idempotent re-commit). Callers can override.
+        record_id = content_hash[:32]
+
+    record_type = "file"
+    batch_id = str(uuid.uuid4())
+    proof_id = str(uuid.uuid4())
+
+    append_result = await append_via_backend(
+        shard_id=shard_id,
+        record_type=record_type,
+        record_id=record_id,
+        version=version,
+        value_hash=digest,
+        parser_id=RAW_BYTES_PARSER_ID,
+        canonical_parser_version=RAW_BYTES_CPV,
+        want_proof=False,
+    )
+
+    sequencer_path = _sl_use_go_sequencer()
+    merkle_root_hex = append_result.root_hash.hex()
+    ts = append_result.ts
+
+    # Build a commitment-summary proof identical in shape to the existing
+    # sequencer ingest path (siblings expanded lazily by the verify endpoint).
+    if sequencer_path:
+        smt_key_hex = _global_key(shard_id, record_key(record_type, record_id, version)).hex()
+        merkle_proof: dict[str, Any] = {
+            "leaf_hash": content_hash,
+            "leaf_index": str(int(smt_key_hex, 16)),
+            "siblings": [],
+            "root_hash": merkle_root_hex,
+            "content_hash": content_hash,
+            "value_hash": content_hash,
+            "tree_size": "1",
+            "proof_version": PROOF_VERSION,
+            "tree_version": MERKLE_VERSION,
+            "smt_key": smt_key_hex,
+            "parser_id": RAW_BYTES_PARSER_ID,
+            "canonical_parser_version": RAW_BYTES_CPV,
+        }
+    else:
+        # Storage-path: append_via_backend returned a real ExistenceProof.
+        merkle_proof = _smt_proof_to_merkle_proof_dict(
+            append_result.storage_proof,  # type: ignore[arg-type]
+            digest,
+        )
+        merkle_proof["content_hash"] = content_hash
+        merkle_proof["value_hash"] = content_hash
+
+    canonicalization_meta = {
+        "format": file.content_type or "application/octet-stream",
+        "normalization_mode": "raw_bytes_v1",
+        "fallback_reason": None,
+        "parser_id": RAW_BYTES_PARSER_ID,
+        "canonical_parser_version": RAW_BYTES_CPV,
+        "filename": file.filename,
+        "size_bytes": len(file_bytes),
+    }
+
+    ingestion_entry = {
+        "proof_id": proof_id,
+        "record_id": record_id,
+        "shard_id": shard_id,
+        "record_type": record_type,
+        "version": version,
+        "content_hash": content_hash,
+        "merkle_root": merkle_root_hex,
+        "merkle_proof": merkle_proof,
+        "ledger_entry_hash": append_result.ledger_entry_hash,
+        "timestamp": ts,
+        "canonicalization": canonicalization_meta,
+        "persisted": True,
+        "batch_id": batch_id,
+        "batch_index": 0,
+        "poseidon_root": append_result.poseidon_root,
+    }
+
+    _cache_ingestion_record(ingestion_entry)
+    storage = _get_storage()
+    if storage is not None:
+        try:
+            storage.store_ingestion_batch(batch_id, [ingestion_entry])
+        except Exception as exc:  # noqa: BLE001
+            logger.error("file_ingest_persist_failed proof_id=%s error=%s", proof_id, exc)
+
+    INGEST_TOTAL.labels(outcome="committed").inc()
+    logger.info(
+        "raw-bytes file ingested record_id=%s content_hash=%s size=%d",
+        record_id,
+        content_hash,
+        len(file_bytes),
+    )
+
+    return {
+        "proof_id": proof_id,
+        "record_id": record_id,
+        "shard_id": shard_id,
+        "content_hash": content_hash,
+        "merkle_root": merkle_root_hex,
+        "timestamp": ts,
+        "size_bytes": len(file_bytes),
+    }
 
 
 @router.get("/records/{proof_id}/proof", response_model=IngestionProofResponse)
