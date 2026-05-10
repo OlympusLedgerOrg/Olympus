@@ -17,7 +17,6 @@ import StatCards from "../components/StatCards";
 import TiltContainer from "../components/TiltContainer";
 import VerdictCard from "../components/VerdictCard";
 import HashTab from "../tabs/HashTab";
-import FileTab from "../tabs/FileTab";
 import JsonTab from "../tabs/JsonTab";
 import ProofTab from "../tabs/ProofTab";
 
@@ -75,8 +74,7 @@ export default function HomePage() {
       ? `LOOKUP_${verdictResult.verdict.toUpperCase()}`
       : "IDLE";
   const tabs: { id: Tab; label: string }[] = [
-    { id: "hash", label: "HASH" },
-    { id: "file", label: "FILE" },
+    { id: "hash", label: "VERIFY" },
     { id: "json", label: "JSON_DOC" },
     { id: "proof", label: "PROOF_BUNDLE" },
   ];
@@ -167,24 +165,14 @@ export default function HomePage() {
                     onPaste={hashHook.pasteHash}
                     onClear={() => {
                       hashHook.reset();
+                      fileHook.reset();
                       setVerdictResult(null);
                     }}
-                  />
-                )}
-                {activeTab === "file" && (
-                  <FileTab
-                    fileHash={fileHook.fileHash}
-                    fileProgress={fileHook.fileProgress}
-                    commitContentHash={fileHook.commitContentHash}
-                    isPending={isPending}
                     wasmError={wasmError}
-                    onHash={fileHook.onHash}
-                    onProgress={fileHook.onProgress}
                     onFile={fileHook.onFile}
-                    onVerify={() =>
-                      (fileHook.commitContentHash || fileHook.fileHash) &&
-                      hashHook.submitHash(fileHook.commitContentHash || fileHook.fileHash || "")
-                    }
+                    onFileHash={fileHook.onHash}
+                    onFileProgress={fileHook.onProgress}
+                    fileProgress={fileHook.fileProgress}
                   />
                 )}
                 {activeTab === "json" && (
@@ -255,18 +243,14 @@ export default function HomePage() {
             <div className="side-title">SESSION</div>
             <div className="flow-step" data-active={activeTab === "hash"}>
               <span>01</span>
-              <strong>Hash lookup</strong>
-            </div>
-            <div className="flow-step" data-active={activeTab === "file"}>
-              <span>02</span>
-              <strong>Local file hash</strong>
+              <strong>Hash or file</strong>
             </div>
             <div className="flow-step" data-active={activeTab === "json"}>
-              <span>03</span>
+              <span>02</span>
               <strong>Canonical JSON</strong>
             </div>
             <div className="flow-step" data-active={activeTab === "proof"}>
-              <span>04</span>
+              <span>03</span>
               <strong>Proof bundle</strong>
             </div>
             <button

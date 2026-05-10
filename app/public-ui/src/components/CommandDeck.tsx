@@ -12,31 +12,25 @@ type Command = {
 const COMMANDS: Command[] = [
   {
     id: "hash",
-    code: "HASH",
-    title: "Verify a digest",
-    description: "Paste a BLAKE3 hash and ask the ledger if the artifact is known.",
+    code: "VERIFY",
+    title: "Hash or drop a file",
+    description:
+      "Paste a BLAKE3 hash, or drop a file to hash it locally — then ask the ledger if it's known.",
     hotkey: "01",
-  },
-  {
-    id: "file",
-    code: "FILE",
-    title: "Drop a file",
-    description: "Hash locally in-browser first, then verify or commit when unknown.",
-    hotkey: "02",
   },
   {
     id: "json",
     code: "JSON",
     title: "Canon-check JSON",
     description: "Normalize document payloads before lookup so whitespace cannot gaslight you.",
-    hotkey: "03",
+    hotkey: "02",
   },
   {
     id: "proof",
     code: "PROOF",
     title: "Audit a bundle",
     description: "Submit the full proof object and make the backend prove its receipts.",
-    hotkey: "04",
+    hotkey: "03",
   },
 ];
 
