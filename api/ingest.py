@@ -26,6 +26,7 @@ import base64
 import json
 import logging
 import os
+import types
 import uuid
 from collections import OrderedDict
 from contextlib import suppress
@@ -977,6 +978,53 @@ async def _call_sequencer_queue_leaves_batch(
     return cast(list[dict[str, Any]], data["results"])
 
 
+async def _call_sequencer_get_inclusion_proof(
+    shard_id: str,
+    record_type: str,
+    record_id: str,
+    root_hex: str | None = None,
+    version: str | None = None,
+) -> dict[str, Any] | None:
+    """Fetch a fully-populated SMT inclusion proof from the Go sequencer.
+
+    Returns the raw response dict (with hex-encoded global_key, value_hash,
+    siblings list, root) or None if the sequencer is unreachable / errors.
+    The verify path treats failure as non-fatal — the cached commitment
+    summary is still returned.
+    """
+    url = f"http://{_sequencer_addr}/v1/get-inclusion-proof"
+    params: dict[str, str] = {
+        "shard_id": shard_id,
+        "record_type": record_type,
+        "record_id": record_id,
+    }
+    if version:
+        params["version"] = version
+    if root_hex:
+        params["root"] = root_hex
+
+    try:
+        client = _get_sequencer_client()
+        resp = await client.get(
+            url,
+            params=params,
+            headers={"X-Sequencer-Token": _sequencer_token},
+        )
+    except httpx.RequestError as exc:
+        logger.warning("sequencer_proof_unreachable url=%s error=%s", url, exc)
+        return None
+
+    if resp.status_code != 200:
+        logger.warning(
+            "sequencer_proof_error status=%d body=%.200s",
+            resp.status_code,
+            resp.text,
+        )
+        return None
+
+    return cast(dict[str, Any], resp.json())
+
+
 # ---------------------------------------------------------------------------
 # Endpoints
 # ---------------------------------------------------------------------------
@@ -1427,6 +1475,47 @@ async def verify_ingested_content_hash(
 
         proof_data = dict(record["merkle_proof"])
         proof_data.setdefault("content_hash", record["content_hash"])
+
+        # Sequencer-path records are stored with an empty siblings array
+        # (commitment summary, not full SMT inclusion proof). Expand on read
+        # by fetching the real 256-sibling proof from the sequencer so
+        # offline verifiers can independently reconstruct the root.
+        from api.services.storage_layer import _use_go_sequencer as _sl_use_go_sequencer
+
+        if _sl_use_go_sequencer() and proof_data.get("smt_key") and not proof_data.get("siblings"):
+            # Anchor against the latest signed root: the Rust SMT retains
+            # only the current root, and global_keys are unique-per-leaf so
+            # inclusion in the latest root proves the same fact as inclusion
+            # in any historical root. The response surfaces the latest root
+            # alongside the freshly-fetched proof so they're consistent.
+            seq_proof = await _call_sequencer_get_inclusion_proof(
+                shard_id=record["shard_id"],
+                record_type=record["record_type"],
+                record_id=str(record["record_id"]),
+                version=str(record.get("version") or ""),
+                root_hex=None,
+            )
+            if seq_proof and len(seq_proof.get("siblings", [])) == 256:
+                expanded = _sequencer_proof_to_merkle_proof_dict(
+                    types.SimpleNamespace(
+                        global_key=seq_proof["global_key"],
+                        value_hash=seq_proof["value_hash"],
+                        siblings=seq_proof["siblings"],
+                        root=seq_proof["root"],
+                    ),
+                    bytes.fromhex(seq_proof["value_hash"]),
+                    proof_data.get("parser_id") or _FALLBACK_PARSER_ID,
+                    proof_data.get("canonical_parser_version")
+                    or _operator_canonical_parser_version(),
+                )
+                expanded["content_hash"] = record["content_hash"]
+                proof_data = expanded
+                record = {
+                    **record,
+                    "merkle_root": seq_proof["root"],
+                    "merkle_proof": proof_data,
+                }
+
         _, _, _, merkle_proof_valid = _evaluate_proof_bundle(
             record["content_hash"],
             record["merkle_root"],
