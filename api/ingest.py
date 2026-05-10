@@ -37,7 +37,7 @@ from typing import TYPE_CHECKING, Any, cast
 import blake3 as _blake3
 import httpx
 import nacl.signing
-from fastapi import APIRouter, File, HTTPException, Path, Request, UploadFile
+from fastapi import APIRouter, File, Form, HTTPException, Path, Request, UploadFile
 
 from api.auth import (
     RateLimit,
@@ -1422,9 +1422,9 @@ async def ingest_raw_file(
     request: Request,
     _api_key: RequireIngestScope,
     file: UploadFile = File(...),
-    shard_id: str = "files",
-    record_id: str | None = None,
-    version: int = 1,
+    shard_id: str = Form("files"),
+    record_id: str | None = Form(None),
+    version: int = Form(1),
 ) -> dict[str, Any]:
     """Ingest a file by its raw bytes — no JSON wrapper, no canonicalization.
 
@@ -1435,6 +1435,9 @@ async def ingest_raw_file(
     Distinct from POST /ingest/records, which canonicalizes a JSON document
     and hashes the canonical form.
     """
+    # Apply rate limiting after authentication
+    await _apply_rate_limits(request, _api_key.key_id, "ingest")
+
     from api.services.storage_layer import (
         _use_go_sequencer as _sl_use_go_sequencer,
         append_via_backend,
@@ -1536,10 +1539,7 @@ async def ingest_raw_file(
     _cache_ingestion_record(ingestion_entry)
     storage = _get_storage()
     if storage is not None:
-        try:
-            storage.store_ingestion_batch(batch_id, [ingestion_entry])
-        except Exception as exc:  # noqa: BLE001
-            logger.error("file_ingest_persist_failed proof_id=%s error=%s", proof_id, exc)
+        storage.store_ingestion_batch(batch_id, [ingestion_entry])
 
     INGEST_TOTAL.labels(outcome="committed").inc()
     logger.info(
@@ -1640,14 +1640,17 @@ async def verify_ingested_content_hash(
             # inclusion in the latest root proves the same fact as inclusion
             # in any historical root. The response surfaces the latest root
             # alongside the freshly-fetched proof so they're consistent.
+            version = record.get("version")
+            version_str = "" if version is None else str(version)
             seq_proof = await _call_sequencer_get_inclusion_proof(
                 shard_id=record["shard_id"],
                 record_type=record["record_type"],
                 record_id=str(record["record_id"]),
-                version=str(record.get("version") or ""),
+                version=version_str,
                 root_hex=None,
             )
-            if seq_proof and len(seq_proof.get("siblings", [])) == 256:
+            siblings_list = seq_proof.get("siblings", []) if seq_proof else []
+            if seq_proof and len(siblings_list) == 256:
                 expanded = _sequencer_proof_to_merkle_proof_dict(
                     types.SimpleNamespace(
                         global_key=seq_proof["global_key"],
@@ -1667,6 +1670,15 @@ async def verify_ingested_content_hash(
                     "merkle_root": seq_proof["root"],
                     "merkle_proof": proof_data,
                 }
+            elif seq_proof:
+                # Log warning when seq_proof exists but siblings list is missing or wrong length
+                logger.warning(
+                    "sequencer proof expansion failed: siblings missing or invalid length "
+                    "record_id=%s siblings_length=%d seq_proof_keys=%s",
+                    record.get("record_id"),
+                    len(siblings_list),
+                    list(seq_proof.keys()) if seq_proof else [],
+                )
 
         _, _, _, merkle_proof_valid = _evaluate_proof_bundle(
             record["content_hash"],
