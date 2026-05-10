@@ -9,6 +9,7 @@ import { useFileCommit } from "../hooks/useFileCommit";
 import { useJsonVerification } from "../hooks/useJsonVerification";
 import { useWasmStatus } from "../hooks/useWasmStatus";
 import { useSkin } from "../skins/SkinContext";
+import CommandDeck from "../components/CommandDeck";
 import CommitPrompt from "../components/CommitPrompt";
 import HashDisplay from "../components/HashDisplay";
 import RecentVerifications from "../components/RecentVerifications";
@@ -38,6 +39,8 @@ export default function HomePage() {
     queryFn: getPublicStats,
     staleTime: 15_000,
     refetchInterval: 30_000,
+    gcTime: 0,          // never keep stale stats in the in-memory cache between mounts
+    placeholderData: FALLBACK_STATS,  // show zeros while loading, never old numbers
   });
   const stats = statsQuery.data ?? FALLBACK_STATS;
 
@@ -123,6 +126,8 @@ export default function HomePage() {
       </div>
 
       <StatCards cards={statCards} onRefetch={() => void statsQuery.refetch()} />
+
+      <CommandDeck activeTab={activeTab} onSelect={switchTab} />
 
       <div className="verify-grid">
         <div style={{ minWidth: 0 }}>

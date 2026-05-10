@@ -262,6 +262,24 @@ def _require_admin_key(request: Request) -> None:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid admin key.")
 
 
+async def _require_admin_authority(request: Request, db: DBSession) -> None:
+    """Allow either the local operator secret or an admin-scoped API key."""
+    admin_key = os.environ.get("OLYMPUS_ADMIN_KEY", "")
+    provided_admin_key = request.headers.get("x-admin-key", "")
+    if admin_key and _hmac.compare_digest(provided_admin_key, admin_key):
+        return
+
+    user, key_record = await _require_db_user_and_key(request, db)
+    try:
+        scopes = set(json.loads(key_record.scopes))
+    except (TypeError, ValueError) as e:
+        logger.error("Corrupt scopes for key %s: %s", sanitize_for_log(key_record.id), e)
+        raise HTTPException(status_code=500, detail="Caller key has invalid scope data.")
+
+    if user.role != "admin" or "admin" not in scopes:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Admin access required.")
+
+
 async def _create_user_with_key(
     *,
     body: RegisterRequest,
@@ -423,10 +441,10 @@ async def admin_create_user(
     """Create a user with admin-selected scopes.
 
     This is the local/operator path for onboarding users. It is protected by
-    ``X-Admin-Key`` and defaults new users to verify-only access
-    (``read`` + ``verify``). The raw API key is returned once.
+    ``X-Admin-Key`` or an admin-scoped ``X-API-Key`` and defaults new users to
+    verify-only access (``read`` + ``verify``). The raw API key is returned once.
     """
-    _require_admin_key(request)
+    await _require_admin_authority(request, db)
     if body.role not in {"user", "admin"}:
         raise HTTPException(status_code=422, detail="role must be 'user' or 'admin'.")
     scopes = _validate_scopes(body.scopes, _VALID_SCOPES, context="admin_create_user")

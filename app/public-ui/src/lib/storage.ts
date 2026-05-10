@@ -57,3 +57,23 @@ export function clearRecentVerifications(): void {
     // ignore
   }
 }
+
+// ─── API key storage ──────────────────────────────────────────────────────────
+
+const API_KEY_STORAGE_KEY = "olympus_api_key";
+
+export function getStoredApiKey(): string {
+  try {
+    return localStorage.getItem(API_KEY_STORAGE_KEY) ?? "";
+  } catch {
+    return "";
+  }
+}
+
+export function setStoredApiKey(key: string, _meta?: Record<string, unknown>): void {
+  try {
+    localStorage.setItem(API_KEY_STORAGE_KEY, key);
+  } catch {
+    // localStorage may be unavailable
+  }
+}

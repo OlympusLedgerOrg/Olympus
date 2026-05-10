@@ -14,13 +14,13 @@
     showintaskbar="yes"
     singleinstance="yes"
     sysmenu="yes"
-    windowstate="normal"
+    windowstate="maximize"
   />
   <style>
     html,
     body {
-      width: 760px;
-      height: 500px;
+      width: 100%;
+      height: 100%;
       margin: 0;
       overflow: hidden;
       background: #080d12;
@@ -30,21 +30,22 @@
 
     .shell {
       position: relative;
-      width: 760px;
-      height: 500px;
+      width: 100vw;
+      height: 100vh;
+      overflow: hidden;
       background: #080d12;
     }
 
     .hero {
-      width: 760px;
-      height: 428px;
+      width: 100vw;
+      height: 100vh;
       object-fit: cover;
       display: block;
     }
 
     .fallback {
-      width: 760px;
-      height: 428px;
+      width: 100vw;
+      height: 100vh;
       display: none;
       align-items: center;
       justify-content: center;
@@ -56,10 +57,14 @@
     }
 
     .status {
+      position: absolute;
+      left: 0;
+      right: 0;
+      bottom: 0;
       height: 72px;
       padding: 12px 26px 0;
       box-sizing: border-box;
-      background: #071015;
+      background: rgba(7, 16, 21, 0.88);
       border-top: 1px solid rgba(116, 221, 196, 0.28);
     }
 
@@ -104,19 +109,22 @@
     <div id="fallback" class="fallback">OLYMPUS</div>
     <div class="status">
       <div class="line">
-        <span>Starting local stack...</span>
-        <span class="url">UX http://localhost:5173</span>
+        <span id="statusText">Starting local stack...</span>
+        <span class="url">UX http://localhost:5173 // API http://localhost:8000</span>
       </div>
       <div class="track"><div id="bar" class="bar"></div></div>
     </div>
   </div>
 
   <script language="javascript">
-    window.resizeTo(776, 548);
+    var targetUrl = "http://localhost:5173";
+    var apiUrl = "http://localhost:8000/v1/public/stats";
+    var startedAt = new Date().getTime();
+    var minimumDisplayMs = 7000;
+
     try {
-      var left = Math.max(0, (screen.availWidth - 776) / 2);
-      var top = Math.max(0, (screen.availHeight - 548) / 2);
-      window.moveTo(left, top);
+      window.moveTo(0, 0);
+      window.resizeTo(screen.availWidth, screen.availHeight);
     } catch (e) {}
 
     document.getElementById("hero").onerror = function () {
@@ -130,6 +138,77 @@
       if (pos > 100) pos = -35;
       document.getElementById("bar").style.left = pos + "%";
     }, 35);
+
+    function setStatus(text) {
+      try {
+        document.getElementById("statusText").innerText = text;
+      } catch (e) {}
+    }
+
+    function checkUrl(url, onReady, onPending) {
+      try {
+        var req = null;
+        if (window.XMLHttpRequest) {
+          req = new XMLHttpRequest();
+        } else {
+          req = new ActiveXObject("Microsoft.XMLHTTP");
+        }
+
+        req.onreadystatechange = function () {
+          if (req.readyState !== 4) return;
+          if (req.status >= 200 && req.status < 500) {
+            onReady();
+          } else {
+            onPending();
+          }
+        };
+
+        req.open("GET", url + (url.indexOf("?") >= 0 ? "&" : "?") + "olympusLauncherReady=" + new Date().getTime(), true);
+        req.send();
+      } catch (e) {
+        onPending();
+      }
+    }
+
+    function tryOpenApp() {
+      setStatus("Waiting for API...");
+      checkUrl(apiUrl, function () {
+        setStatus("Waiting for UX...");
+        checkUrl(targetUrl + "/", function () {
+          setStatus("Opening Olympus...");
+          openAppAndCloseSplash();
+        }, function () {
+          window.setTimeout(tryOpenApp, 1000);
+        });
+      }, function () {
+        window.setTimeout(tryOpenApp, 1000);
+      });
+    }
+
+    window.setTimeout(tryOpenApp, 1000);
+
+    function openAppAndCloseSplash() {
+      var elapsed = new Date().getTime() - startedAt;
+      var remaining = minimumDisplayMs - elapsed;
+      if (remaining > 0) {
+        setStatus("Olympus is ready...");
+        window.setTimeout(openAppAndCloseSplash, remaining);
+        return;
+      }
+
+      try {
+        var shell = new ActiveXObject("WScript.Shell");
+        shell.Run('cmd /c start "" "' + targetUrl + '"', 0, false);
+      } catch (e) {
+        try {
+          window.open(targetUrl, "_blank");
+        } catch (ignored) {}
+      }
+
+      window.setTimeout(function () {
+        window.close();
+      }, 1500);
+    }
   </script>
 </body>
 </html>

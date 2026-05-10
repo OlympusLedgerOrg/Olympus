@@ -4,7 +4,7 @@ import { Link } from "react-router-dom";
 const API_BASE =
   (typeof import.meta !== "undefined" &&
     (import.meta as { env?: { VITE_API_BASE?: string } }).env?.VITE_API_BASE) ||
-  (typeof window !== "undefined" ? window.location.origin : "");
+  "";
 
 type Step = "form" | "done";
 
@@ -92,7 +92,17 @@ export default function OnboardPage() {
       const data = await res.json() as Record<string, unknown>;
       if (!res.ok) {
         const d = data.detail;
-        setError(typeof d === "string" ? d : "Registration failed.");
+        const nested =
+          d && typeof d === "object" && "detail" in d
+            ? (d as { detail?: unknown }).detail
+            : null;
+        setError(
+          typeof d === "string"
+            ? d
+            : typeof nested === "string"
+              ? nested
+              : "Registration failed.",
+        );
         return;
       }
       setApiKey(data.api_key as string);

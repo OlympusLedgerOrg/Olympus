@@ -80,6 +80,10 @@ Use PowerShell parameters for custom setup behavior:
 .\setup-windows.ps1 -SkipStart -ForceLocalDbUrl
 ```
 
+On first run, `setup-windows.ps1` also runs `scripts\bootstrap.ps1` to create
+`.env` and local secret files if they are missing. Use `-SkipFirstBoot` only
+when you have already prepared those files manually.
+
 ---
 
 ## Day-to-day use (after first setup)

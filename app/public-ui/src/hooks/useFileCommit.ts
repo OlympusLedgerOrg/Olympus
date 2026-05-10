@@ -1,6 +1,7 @@
 import { useCallback, useState } from "react";
 import type { VerdictState } from "../lib/types";
 import { API_BASE, sanitizeId } from "../lib/constants";
+import { getStoredApiKey, setStoredApiKey } from "../lib/storage";
 
 export type CommitStage = "idle" | "committing" | "done" | "error";
 
@@ -11,9 +12,7 @@ export function useFileCommit(
   const [droppedFile, setDroppedFile] = useState<File | null>(null);
   const [fileHash, setFileHash] = useState<string | null>(null);
   const [fileProgress, setFileProgress] = useState(0);
-  const [apiKey, setApiKey] = useState(
-    () => localStorage.getItem("olympus_api_key") ?? "",
-  );
+  const [apiKey, setApiKey] = useState(() => getStoredApiKey());
   const [commitStage, setCommitStage] = useState<CommitStage>("idle");
   const [commitError, setCommitError] = useState<string | null>(null);
   const [commitContentHash, setCommitContentHash] = useState<string | null>(null);
@@ -47,7 +46,7 @@ export function useFileCommit(
     setCommitStage("committing");
     setCommitError(null);
     setCommitContentHash(null);
-    localStorage.setItem("olympus_api_key", apiKey.trim());
+    setStoredApiKey(apiKey.trim());
 
     const recordId = sanitizeId(droppedFile.name.replace(/\.[^.]+$/, ""));
     const content = {

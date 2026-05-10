@@ -228,15 +228,22 @@ services:
       - "traefik.http.middlewares.redirect-to-https.redirectscheme.scheme=https"
       - "traefik.http.routers.api-http.middlewares=redirect-to-https"
     environment:
-      # Construct URL at runtime from components, not as a single credential-bearing string
+      # Always use Docker service names for intra-stack connectivity.
+      # These hard-coded values override whatever DATABASE_URL is in .env so
+      # the container can never accidentally try to reach 127.0.0.1.
       DATABASE_HOST: db
       DATABASE_NAME: ${DATABASE_NAME:?DATABASE_NAME must be set}
       DATABASE_USER: ${DATABASE_USER:?DATABASE_USER must be set}
       DATABASE_PASSWORD_FILE: /run/secrets/db_password
+      DATABASE_URL: "postgresql://${DATABASE_USER:-olympus}:${POSTGRES_PASSWORD:-olympus}@db:5432/${DATABASE_NAME:-olympus}"
+      PSYCOPG_URL: "postgresql://${DATABASE_USER:-olympus}:${POSTGRES_PASSWORD:-olympus}@db:5432/${DATABASE_NAME:-olympus}"
       OLYMPUS_DEV_SIGNING_KEY: ${OLYMPUS_DEV_SIGNING_KEY:-true}
-      # Go sequencer configuration
+      # Allow self-registration with ingest/write/admin scopes (first-boot UX)
+      OLYMPUS_ALLOW_PUBLIC_WRITE_REGISTRATION: ${OLYMPUS_ALLOW_PUBLIC_WRITE_REGISTRATION:-1}
+      # Go sequencer configuration — always use Docker service name
       OLYMPUS_USE_GO_SEQUENCER: ${OLYMPUS_USE_GO_SEQUENCER:-true}
-      OLYMPUS_SEQUENCER_URL: ${OLYMPUS_SEQUENCER_URL:-http://sequencer-go:8081}
+      OLYMPUS_SEQUENCER_URL: "http://sequencer-go:8081"
+      GO_SEQUENCER_URL: "http://sequencer-go:8081"
       OLYMPUS_SEQUENCER_TOKEN: ${OLYMPUS_SEQUENCER_TOKEN:-dev-sequencer-token-change-me-32b}
       OLYMPUS_SEQUENCER_TIMEOUT_SECONDS: ${OLYMPUS_SEQUENCER_TIMEOUT_SECONDS:-30}
     ports:
@@ -295,7 +302,7 @@ services:
       - "traefik.http.routers.public-ui.tls.certresolver=letsencrypt"
       - "traefik.http.services.public-ui.loadbalancer.server.port=8080"
     ports:
-      - "127.0.0.1:8090:8080"
+      - "127.0.0.1:8080:8080"  # direct local access without Traefik
     networks:
       - frontend
     healthcheck:

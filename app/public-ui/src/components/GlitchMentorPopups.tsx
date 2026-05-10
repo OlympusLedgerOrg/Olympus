@@ -6,7 +6,25 @@ const HEADERS = [
   "INCOMING SIGNAL",
   "DECRYPT THIS",
   "//INTERRUPT",
+  "OASIS UPLINK",
+  "ANORAK SPEAKS",
+  "TRANSMISSION FROM THE PAST",
+  "NIGHT CITY UPLINK",
+  "BLACKWALL SIGNAL",
+  "SPINNER UPLINK",
+  "MEGA-CITY ONE BROADCAST",
 ] as const;
+
+const RPO_MESSAGES: { text: string; source: string }[] = [
+  { text: "GOING OUTSIDE IS HIGHLY OVERRATED. THE REAL WORLD IS JUST A PLACE TO CHARGE YOUR BATTERIES.", source: "— J.D. Halliday" },
+  { text: "THE OASIS IS THE MOST IMPORTANT THING I EVER CREATED. AND I'M SO SORRY I LEFT IT TO YOU.", source: "— Anorak's Almanac" },
+  { text: "WHAT IS REAL? HOW DO YOU DEFINE REAL? IF YOU'RE TALKING ABOUT WHAT YOU CAN HASH AND VERIFY, REAL IS ELECTRICAL SIGNALS INTERPRETED BY YOUR CRYPTOGRAPHIC PROOF.", source: "— Anorak" },
+  { text: "AS CURATOR OF THE OLYMPUS LEDGER, I BELIEVE THE THREE KEYS TO TRUST ARE: VERIFY, VERIFY, AND VERIFY AGAIN.", source: "— J.D. Halliday" },
+  { text: "BEING HUMAN TOTALLY SUCKS MOST OF THE TIME. VERIFIED DATA AT LEAST DOESN'T LIE.", source: "— Parzival" },
+  { text: "I CREATED ANORAK. ANORAK CREATED THE HUNT. THE HUNT CREATED GUNTERS. GUNTERS VERIFY EVERYTHING.", source: "— J.D. Halliday" },
+  { text: "NO ONE IN THE REAL WORLD EVER OPENED A DOOR FOR ME. BUT EVERY VERIFIED HASH IN THIS LEDGER IS AN OPEN DOOR.", source: "— Wade Watts / Parzival" },
+  { text: "SEEK THE EGG. TRUST THE PROOF. THE LEDGER NEVER LIES.", source: "— Anorak's Almanac, Ch. 1" },
+];
 
 const MESSAGES: { text: string; source: string }[] = [
   // Fight Club / Tyler Durden
@@ -23,6 +41,20 @@ const MESSAGES: { text: string; source: string }[] = [
   { text: "YOU TAKE THE BLUE PILL — YOU TRUST THE DATABASE. YOU TAKE THE RED PILL — YOU VERIFY THE PROOF.", source: "— Morpheus" },
   { text: "I KNOW KUNG FU. I KNOW BLAKE3.", source: "— Neo" },
   { text: "THE MATRIX HAS YOU. THE LEDGER FREES YOU.", source: "— Morpheus" },
+  // Cyberpunk 2077
+  { text: "WAKE THE F*** UP, SAMURAI. WE HAVE A LEDGER TO BURN.", source: "— Johnny Silverhand" },
+  { text: "ARASAKA TRIED TO REWRITE THE ROOT HASH. ARASAKA FAILED.", source: "— V" },
+  { text: "NIGHT CITY CHEWS YOU UP AND SPITS YOU OUT. THE LEDGER JUST RECORDS IT.", source: "— V" },
+  { text: "THEY SAID THE NET COULDN'T LIE. THEY WERE WRONG. THE PROOF BUNDLE CAN'T LIE.", source: "— Johnny Silverhand" },
+  // Blade Runner 2049
+  { text: "ALL THESE PROOFS WILL BE LOST IN TIME, LIKE TEARS IN RAIN…", source: "— Roy Batty" },
+  { text: "WAKE UP, OPERATOR. THE LEDGER HAS YOU.", source: "— K" },
+  { text: "I HAVE SEEN THINGS YOU WOULDN'T BELIEVE. COMMIT LOGS ON FIRE OFF THE SHOULDER OF ORION.", source: "— Roy Batty" },
+  { text: "REPLICANTS ARE LIKE ANY OTHER MACHINE — EITHER A BENEFIT OR A HAZARD. VERIFIED HASHES ARE ALWAYS A BENEFIT.", source: "— Bryant" },
+  // Judge Dredd
+  { text: "I AM THE LAW. THE LAW IS A MERKLE PROOF.", source: "— Judge Dredd" },
+  { text: "DEMOCRACY? NO. CRYPTOGRAPHIC PROOF? YES.", source: "— Judge Dredd" },
+  { text: "SENTENCE: APPEND TO LEDGER. IMMEDIATELY.", source: "— Judge Dredd" },
   // Hackers / Mr Robot
   { text: "HACK THE PLANET. VERIFY THE HASH.", source: "— fsociety" },
   { text: "HELL_O FRIEND. HELLO CRYPTOGRAPHIC PROOF.", source: "— Mr. Robot" },
@@ -65,33 +97,72 @@ export default function GlitchMentorPopups() {
   const [popups, setPopups] = useState<Popup[]>([]);
   const [enabled, setEnabled] = useState(true);
 
-  const summon = useCallback(() => {
-    if (!enabled) return;
-
-    const msg = MESSAGES[Math.floor(Math.random() * MESSAGES.length)];
+  const summonMsg = useCallback((msg: { text: string; source: string }, header?: string) => {
     const popup: Popup = {
-      id: Date.now(),
+      id: Date.now() + Math.random(),
       text: msg.text,
       source: msg.source,
-      header: HEADERS[Math.floor(Math.random() * HEADERS.length)],
+      header: header ?? HEADERS[Math.floor(Math.random() * HEADERS.length)],
       x: 12 + Math.random() * 64,
       y: 16 + Math.random() * 48,
     };
-
     setPopups((prev) => [...prev.slice(-2), popup]);
-
     window.setTimeout(() => {
       setPopups((prev) => prev.filter((p) => p.id !== popup.id));
-    }, 4200);
-  }, [enabled]);
+    }, 6000);
+  }, []);
+
+  const summon = useCallback(() => {
+    if (!enabled) return;
+
+    // 20% chance of RPO message when randomly triggered
+    const pool = Math.random() < 0.2
+      ? [...MESSAGES, ...RPO_MESSAGES]
+      : MESSAGES;
+    const msg = pool[Math.floor(Math.random() * pool.length)];
+    summonMsg(msg);
+  }, [enabled, summonMsg]);
 
   useEffect(() => {
     const interval = window.setInterval(() => {
       if (Math.random() > 0.55) summon();
     }, 22000);
-
     return () => window.clearInterval(interval);
   }, [summon]);
+
+  // Idle 60s → "follow the white rabbit"
+  useEffect(() => {
+    const onIdle = () => {
+      summonMsg(
+        { text: "FOLLOW THE WHITE RABBIT.", source: "— The Matrix" },
+        "//SYSTEM IDLE DETECTED",
+      );
+    };
+    window.addEventListener("olympus:idle", onIdle);
+    return () => window.removeEventListener("olympus:idle", onIdle);
+  }, [summonMsg]);
+
+  // MAYHEM typed → Fight Club quote
+  useEffect(() => {
+    const onMayhem = () => {
+      summonMsg(
+        { text: "THE FIRST RULE OF OLYMPUS: YOU DO NOT TRUST THE HASH WITHOUT THE PROOF. THE SECOND RULE OF OLYMPUS: YOU DO NOT TRUST THE HASH WITHOUT THE PROOF.", source: "— Tyler Durden" },
+        "//PROJECT MAYHEM ACTIVATED",
+      );
+    };
+    window.addEventListener("olympus:mayhem", onMayhem);
+    return () => window.removeEventListener("olympus:mayhem", onMayhem);
+  }, [summonMsg]);
+
+  // ANORAK typed → Halliday quote
+  useEffect(() => {
+    const onAnorak = () => {
+      const rpo = RPO_MESSAGES[Math.floor(Math.random() * RPO_MESSAGES.length)];
+      summonMsg(rpo, "ANORAK SPEAKS");
+    };
+    window.addEventListener("olympus:anorak", onAnorak);
+    return () => window.removeEventListener("olympus:anorak", onAnorak);
+  }, [summonMsg]);
 
   return (
     <>

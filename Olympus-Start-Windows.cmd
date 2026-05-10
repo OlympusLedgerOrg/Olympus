@@ -4,9 +4,16 @@ setlocal
 title Olympus Local App
 cd /d "%~dp0"
 
-where powershell.exe >nul 2>nul
+set "OLYMPUS_PS=powershell.exe"
+
+where pwsh.exe >nul 2>nul
+if not errorlevel 1 (
+  set "OLYMPUS_PS=pwsh.exe"
+)
+
+where "%OLYMPUS_PS%" >nul 2>nul
 if errorlevel 1 (
-  echo [X] Windows PowerShell was not found.
+  echo [X] PowerShell was not found.
   echo     Olympus setup needs the bundled Windows automation script.
   pause
   exit /b 1
@@ -27,7 +34,7 @@ if exist "%~dp0Olympus-Launcher.hta" (
   start "Olympus Launcher" mshta.exe "%~dp0Olympus-Launcher.hta"
 )
 
-powershell.exe -NoProfile -ExecutionPolicy Bypass -File "%~dp0setup-windows.ps1" ^
+"%OLYMPUS_PS%" -NoProfile -ExecutionPolicy Bypass -File "%~dp0setup-windows.ps1" ^
   -StartDocker ^
   -ForceLocalDbUrl ^
   -EnableGoSequencer ^
@@ -36,14 +43,11 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File "%~dp0setup-windows.ps1"
   -StartWslCdhsSmf ^
   -StartWslGoSequencer ^
   -HideServerWindows ^
-  -OpenBrowser ^
-  -BrowserUrl "http://localhost:5173" ^
-  -CloseLauncherSplash ^
   %*
 
 set exitcode=%ERRORLEVEL%
-taskkill /FI "WINDOWTITLE eq Olympus Local App" /IM mshta.exe /F >nul 2>nul
 if not "%exitcode%"=="0" (
+  taskkill /FI "WINDOWTITLE eq Olympus Local App" /IM mshta.exe /F >nul 2>nul
   echo.
   echo [X] Olympus launcher exited with code %exitcode%.
   pause

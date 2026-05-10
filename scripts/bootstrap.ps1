@@ -179,6 +179,12 @@ if ($signingKey -eq '') {
     Log "Generated OLYMPUS_INGEST_SIGNING_KEY (Ed25519 seed)."
 }
 
+Set-EnvIfBlank 'OLYMPUS_ALLOW_PUBLIC_WRITE_REGISTRATION' '1'
+Log "Enabled OLYMPUS_ALLOW_PUBLIC_WRITE_REGISTRATION=1 for local first-start onboarding."
+
+Set-EnvIfBlank 'CORS_ORIGINS' 'http://localhost:5173,http://127.0.0.1:5173,http://localhost:8000,http://127.0.0.1:8000,http://localhost:8080,http://127.0.0.1:8080' @('yourdomain')
+Log "Set local CORS_ORIGINS for the Windows first-start UI."
+
 # Safe local-dev defaults for Traefik / Let's Encrypt.
 $domain = Get-EnvValue 'OLYMPUS_DOMAIN'
 if (($domain -eq '') -or ($domain -like '*yourdomain*')) {

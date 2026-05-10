@@ -84,3 +84,11 @@ API KEY .txt
 *.txt
 build-log.txt
 .aider*
+# Runtime log files
+*.log
+*.err.log
+logs/
+.olympus-logs/
+api-*.log
+api-*.err.log
+vite-restart.*
