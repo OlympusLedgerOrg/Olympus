@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-from typing import List
-
 from fastapi.testclient import TestClient
 from nacl.encoding import HexEncoder
 from nacl.signing import SigningKey

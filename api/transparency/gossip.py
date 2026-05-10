@@ -10,7 +10,7 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from typing import List, Protocol
+from typing import Protocol
 
 from api.transparency.witness import WitnessCosignature
 
@@ -26,7 +26,7 @@ class SignedRootEnvelope:
     root_hash: str
     sequencer_signature: str
     sequencer_key_id: str
-    witness_cosignatures: List[WitnessCosignature]
+    witness_cosignatures: list[WitnessCosignature]
     timestamp: str
 
 
@@ -53,7 +53,7 @@ class GossipPeer(Protocol):
     async def submit_root(self, envelope: SignedRootEnvelope) -> None:
         """Submit a signed root to this peer."""
 
-    async def fetch_peer_roots(self) -> List[SignedRootEnvelope]:
+    async def fetch_peer_roots(self) -> list[SignedRootEnvelope]:
         """Fetch signed roots observed by this peer."""
 
 
@@ -66,7 +66,7 @@ async def submit_root(peer: GossipPeer, envelope: SignedRootEnvelope) -> None:
         raise
 
 
-async def fetch_peer_roots(peer: GossipPeer) -> List[SignedRootEnvelope]:
+async def fetch_peer_roots(peer: GossipPeer) -> list[SignedRootEnvelope]:
     """Fetch peer roots with defensive logging."""
     try:
         return await peer.fetch_peer_roots()
@@ -76,8 +76,8 @@ async def fetch_peer_roots(peer: GossipPeer) -> List[SignedRootEnvelope]:
 
 
 def detect_equivocation(
-    peer_a_roots: List[SignedRootEnvelope],
-    peer_b_roots: List[SignedRootEnvelope],
+    peer_a_roots: list[SignedRootEnvelope],
+    peer_b_roots: list[SignedRootEnvelope],
 ) -> SplitViewEvidence | None:
     """Detect split-view evidence across two peer root sets."""
     try:

@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-from typing import List
-
 from nacl.encoding import HexEncoder
 from nacl.signing import SigningKey
 
@@ -20,7 +18,7 @@ def _cosig(seed: int, root: bytes, witness_id: str) -> WitnessCosignature:
 
 def test_witness_threshold_2_of_3_passes() -> None:
     root = bytes([3]) * 32
-    signatures: List[WitnessCosignature] = [
+    signatures: list[WitnessCosignature] = [
         _cosig(1, root, "w1"),
         _cosig(2, root, "w2"),
         _cosig(3, root, "w3"),

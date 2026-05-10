@@ -10,9 +10,8 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
-from typing import List, Protocol
+from typing import Protocol
 
-import nacl.encoding
 import nacl.exceptions
 import nacl.signing
 
@@ -60,7 +59,7 @@ def witness_payload(root: bytes) -> bytes:
 
 def verify_cosignature(
     root: bytes,
-    signatures: List[WitnessCosignature],
+    signatures: list[WitnessCosignature],
     threshold: int = 2,
 ) -> bool:
     """Verify that at least ``threshold`` witness signatures are valid.
@@ -83,8 +82,7 @@ def verify_cosignature(
                 continue
             try:
                 verify_key = nacl.signing.VerifyKey(
-                    cosig.public_key_hex,
-                    encoder=nacl.encoding.HexEncoder,
+                    bytes.fromhex(cosig.public_key_hex),
                 )
                 verify_key.verify(
                     payload,

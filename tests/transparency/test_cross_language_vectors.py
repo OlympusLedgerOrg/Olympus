@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import subprocess
-import sys
 from pathlib import Path
 
 from verifiers.python.witness_cosignature import verify_witness_envelope

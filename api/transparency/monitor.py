@@ -19,6 +19,7 @@ from pydantic import BaseModel, Field
 from api.transparency.gossip import SignedRootEnvelope, SplitViewEvidence
 from api.transparency.witness import WitnessCosignature, verify_cosignature
 from protocol.hashes import hash_string
+from protocol.log_sanitization import sanitize_for_log
 from protocol.ssmf import (
     ExistenceProof,
     NonExistenceProof,
@@ -189,7 +190,11 @@ async def get_signed_root_by_height(height: int) -> dict[str, Any]:
     except HTTPException:
         raise
     except Exception:
-        logger.error("Failed to fetch signed root at height=%s", height, exc_info=True)
+        logger.error(
+            "Failed to fetch signed root at height=%s",
+            sanitize_for_log(height),
+            exc_info=True,
+        )
         raise HTTPException(status_code=500, detail="Failed to fetch signed root") from None
 
 
@@ -221,7 +226,11 @@ async def get_inclusion(key: str) -> dict[str, Any]:
     except HTTPException:
         raise
     except Exception:
-        logger.error("Failed to fetch inclusion proof for key=%s", key, exc_info=True)
+        logger.error(
+            "Failed to fetch inclusion proof for key=%s",
+            sanitize_for_log(key),
+            exc_info=True,
+        )
         raise HTTPException(status_code=500, detail="Failed to fetch inclusion proof") from None
 
 
@@ -241,7 +250,11 @@ async def get_non_inclusion(key: str) -> dict[str, Any]:
     except HTTPException:
         raise
     except Exception:
-        logger.error("Failed to fetch non-inclusion proof for key=%s", key, exc_info=True)
+        logger.error(
+            "Failed to fetch non-inclusion proof for key=%s",
+            sanitize_for_log(key),
+            exc_info=True,
+        )
         raise HTTPException(status_code=500, detail="Failed to fetch non-inclusion proof") from None
 
 

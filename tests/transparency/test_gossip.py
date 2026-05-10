@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-from typing import List
-
 from api.transparency.gossip import SignedRootEnvelope, detect_equivocation
 from api.transparency.witness import WitnessCosignature
 
@@ -20,8 +18,8 @@ def _env(height: int, root_hash: str, signature: str) -> SignedRootEnvelope:
 
 
 def test_detect_equivocation_returns_evidence_for_conflicting_same_height() -> None:
-    peer_a: List[SignedRootEnvelope] = [_env(7, "aa" * 32, "ab" * 64)]
-    peer_b: List[SignedRootEnvelope] = [_env(7, "bb" * 32, "cd" * 64)]
+    peer_a: list[SignedRootEnvelope] = [_env(7, "aa" * 32, "ab" * 64)]
+    peer_b: list[SignedRootEnvelope] = [_env(7, "bb" * 32, "cd" * 64)]
     evidence = detect_equivocation(peer_a, peer_b)
     assert evidence is not None
     assert evidence.height == 7
