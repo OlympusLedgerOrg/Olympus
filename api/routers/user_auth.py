@@ -1,11 +1,14 @@
 """
 User authentication and API key management.
 
-POST  /auth/register       — create account + first API key
-POST  /auth/login          — password → list of active API keys
-POST  /auth/keys           — generate additional API key (requires auth)
-GET   /auth/keys           — list caller's active keys
-DELETE /auth/keys/{key_id} — revoke a key
+POST   /auth/register          — create account + first API key
+POST   /auth/login             — password → list of active API keys
+POST   /auth/reissue-key       — email + password → fresh API key (recovery, no key required)
+POST   /auth/keys              — generate additional API key (requires auth)
+GET    /auth/keys              — list caller's active keys
+DELETE /auth/keys/{key_id}     — revoke a key
+DELETE /auth/me                — delete own account + all keys (email + password, no key required)
+DELETE /auth/admin/users/{uid} — admin: delete any user account + all their keys
 """
 
 from __future__ import annotations
@@ -620,6 +623,66 @@ async def revoke_key(key_id: str, request: Request, db: DBSession, _rl: RateLimi
     key.revoked_at = datetime.now(timezone.utc)
     await db.commit()
     logger.info("Revoked key %s for user %s", sanitize_for_log(key_id), sanitize_for_log(user.id))
+
+
+class DeleteAccountRequest(BaseModel):
+    email: str
+    password: str
+
+
+@router.delete("/me", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_own_account(body: DeleteAccountRequest, db: DBSession, _rl: RateLimit) -> None:
+    """Delete the caller's account and all associated API keys.
+
+    Accepts email + password — no existing API key required, so users who have
+    lost or invalidated their key can still close their account and re-register.
+    """
+    result = await db.execute(select(User).where(User.email == body.email))
+    user = result.scalars().first()
+
+    dummy_hash = f"scrypt${_SCRYPT_N}${_SCRYPT_R}${_SCRYPT_P}${'00' * 32}${'00' * 32}"
+    stored_hash = user.password_hash if user and user.password_hash else dummy_hash
+    if not _verify_password(body.password, stored_hash) or not user:
+        raise HTTPException(status_code=401, detail="Invalid email or password.")
+
+    await db.execute(
+        select(ApiKey).where(ApiKey.user_id == user.id)  # load to cascade log
+    )
+    from sqlalchemy import delete as sa_delete
+
+    await db.execute(sa_delete(ApiKey).where(ApiKey.user_id == user.id))
+    await db.execute(sa_delete(User).where(User.id == user.id))
+    await db.commit()
+    logger.info(
+        "Account deleted: user=%s email=%s",
+        sanitize_for_log(str(user.id)),
+        sanitize_for_log(body.email),
+    )
+
+
+@router.delete("/admin/users/{user_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def admin_delete_user(user_id: str, request: Request, db: DBSession, _rl: RateLimit) -> None:
+    """Admin: delete any user account and all their API keys.
+
+    Protected by X-Admin-Key header.
+    """
+    _require_admin_key(request)
+
+    result = await db.execute(select(User).where(User.id == user_id))
+    user = result.scalars().first()
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found.")
+
+    from sqlalchemy import delete as sa_delete
+
+    await db.execute(sa_delete(ApiKey).where(ApiKey.user_id == user.id))
+    await db.execute(sa_delete(User).where(User.id == user.id))
+    await db.commit()
+    logger.warning(
+        "Admin deleted account: user=%s email=%s",
+        sanitize_for_log(user_id),
+        sanitize_for_log(user.email),
+    )
 
 
 # ── internal helper ───────────────────────────────────────────────────────────
