@@ -216,8 +216,23 @@ def smt_proof_command(args):
         if header_root:
             expected_root = bytes.fromhex(header_root)
 
-    proof_data = data.get("proof", data)
+    # Accept the API's verify response shape directly: it nests the SMT
+    # data under "merkle_proof" (vs the protocol-native "proof" / flat key).
+    proof_data = data.get("proof", data.get("merkle_proof", data))
     is_existence = proof_data.get("exists", True)
+
+    # The protocol layer uses "key" / "value_hash"; the API ships "smt_key"
+    # and (for sequencer-path proofs) an explicit "value_hash" field.
+    key_hex = proof_data.get("key") or proof_data.get("smt_key")
+    if not key_hex:
+        raise ValueError("proof must include 'key' or 'smt_key'")
+
+    # Siblings may be bare hex strings (protocol-native) or [hex, is_right]
+    # pairs (API merkle_proof format). The is_right bit is advisory —
+    # verify_proof derives direction from the key bits — so we drop it.
+    raw_siblings = proof_data["siblings"]
+    siblings_hex = [s[0] if isinstance(s, list) else s for s in raw_siblings]
+    siblings_bytes = [bytes.fromhex(s) for s in siblings_hex]
 
     if is_existence:
         raw_parser_id = proof_data.get("parser_id")
@@ -229,18 +244,18 @@ def smt_proof_command(args):
                 "proof.canonical_parser_version is required and must be a non-empty string"
             )
         proof = ExistenceProof(
-            key=bytes.fromhex(proof_data["key"]),
+            key=bytes.fromhex(key_hex),
             value_hash=bytes.fromhex(proof_data["value_hash"]),
             parser_id=raw_parser_id,
             canonical_parser_version=raw_cpv,
-            siblings=[bytes.fromhex(s) for s in proof_data["siblings"]],
+            siblings=siblings_bytes,
             root_hash=bytes.fromhex(proof_data["root_hash"]),
         )
         is_valid = verify_ex_proof(proof, expected_root=expected_root)
     else:
         proof = NonExistenceProof(
-            key=bytes.fromhex(proof_data["key"]),
-            siblings=[bytes.fromhex(s) for s in proof_data["siblings"]],
+            key=bytes.fromhex(key_hex),
+            siblings=siblings_bytes,
             root_hash=bytes.fromhex(proof_data["root_hash"]),
         )
         is_valid = verify_ne_proof(proof, expected_root=expected_root)

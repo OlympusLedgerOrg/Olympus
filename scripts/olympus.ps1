@@ -28,7 +28,7 @@ param(
     [string]$KeyName   = "",
     [string[]]$Scopes  = @("ingest","verify"),
     [string]$Expires   = "2099-01-01T00:00:00Z",
-    [string]$BaseUrl   = "http://localhost:8090"
+    [string]$BaseUrl   = "http://localhost:8000"
 )
 
 Set-StrictMode -Version Latest

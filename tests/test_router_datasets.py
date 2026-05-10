@@ -28,6 +28,7 @@ import api.auth as auth_module
 from api.deps import get_db
 from api.main import create_app
 from api.models import Base
+from api.models.credential import KeyCredential
 from protocol.hashes import (
     DATASET_LINEAGE_PREFIX,
     _length_prefixed_bytes,
@@ -228,6 +229,48 @@ def build_lineage_request(
         "committer_pubkey": pubkey_hex,
         "commit_signature": signature,
     }
+
+
+@pytest.mark.asyncio
+async def test_require_active_key_credential_rejects_uncredentialed_key(monkeypatch, db_engine):
+    """Production dataset commits require an active SBT for the Ed25519 key."""
+    from fastapi import HTTPException
+
+    from api.routers.datasets import _require_active_key_credential
+
+    monkeypatch.setenv("OLYMPUS_ENV", "production")
+    monkeypatch.delenv("OLYMPUS_ALLOW_DEV_AUTH", raising=False)
+    session_factory = async_sessionmaker(db_engine, expire_on_commit=False, class_=AsyncSession)
+
+    async with session_factory() as session:
+        with pytest.raises(HTTPException) as exc:
+            await _require_active_key_credential(session, "a" * 64)
+
+    assert exc.value.status_code == 403
+    assert "no active SBT credential" in exc.value.detail
+
+
+@pytest.mark.asyncio
+async def test_require_active_key_credential_accepts_active_sbt(monkeypatch, db_engine):
+    """An active SBT authorizes the matching Ed25519 committer key."""
+    from api.routers.datasets import _require_active_key_credential
+
+    monkeypatch.setenv("OLYMPUS_ENV", "production")
+    monkeypatch.delenv("OLYMPUS_ALLOW_DEV_AUTH", raising=False)
+    pubkey = "b" * 64
+    session_factory = async_sessionmaker(db_engine, expire_on_commit=False, class_=AsyncSession)
+
+    async with session_factory() as session:
+        session.add(
+            KeyCredential(
+                holder_key=pubkey,
+                credential_type="journalist",
+                issuer="Test Authority",
+                commit_id="0x" + "00" * 32,
+            )
+        )
+        await session.commit()
+        await _require_active_key_credential(session, pubkey)
 
 
 # ---------------------------------------------------------------------------

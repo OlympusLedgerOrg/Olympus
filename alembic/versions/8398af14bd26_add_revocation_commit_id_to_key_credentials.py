@@ -2,51 +2,47 @@
 
 Revision ID: 8398af14bd26
 Revises: 150ed68bf7cc
-Create Date: 2026-03-20
+Create Date: 2026-05-09
 """
 
-from collections.abc import Sequence
-
 import sqlalchemy as sa
+from sqlalchemy import inspect
 
 from alembic import op
 
 
-revision: str = "8398af14bd26"
-down_revision: str | Sequence[str] | None = "150ed68bf7cc"
-branch_labels: str | Sequence[str] | None = None
-depends_on: str | Sequence[str] | None = None
-
-
-def _validate_revision_identifiers() -> None:
-    """Keep Alembic's module-level revision identifiers explicit for analyzers."""
-    if not isinstance(revision, str):
-        raise ValueError("Alembic revision must be a string")
-    for name, value in (
-        ("down_revision", down_revision),
-        ("branch_labels", branch_labels),
-        ("depends_on", depends_on),
-    ):
-        if value is None or isinstance(value, str):
-            continue
-        if (
-            isinstance(value, Sequence)
-            and not isinstance(value, bytes)
-            and all(isinstance(item, str) for item in value)
-        ):
-            continue
-        raise ValueError(f"Alembic {name} must be a string, sequence of strings, or None")
-
-
-_validate_revision_identifiers()
+revision = "8398af14bd26"
+down_revision = "150ed68bf7cc"
+branch_labels = None
+depends_on = None
 
 
 def upgrade() -> None:
-    op.add_column(
-        "key_credentials",
-        sa.Column("revocation_commit_id", sa.String(length=64), nullable=True),
-    )
+    bind = op.get_bind()
+    inspector = inspect(bind)
+
+    if "key_credentials" not in inspector.get_table_names():
+        # Older/local DBs may not have key_credentials yet at this point
+        # in the migration chain. Later migrations can create/populate it.
+        return
+
+    columns = {column["name"] for column in inspector.get_columns("key_credentials")}
+
+    if "revocation_commit_id" not in columns:
+        op.add_column(
+            "key_credentials",
+            sa.Column("revocation_commit_id", sa.String(length=64), nullable=True),
+        )
 
 
 def downgrade() -> None:
-    op.drop_column("key_credentials", "revocation_commit_id")
+    bind = op.get_bind()
+    inspector = inspect(bind)
+
+    if "key_credentials" not in inspector.get_table_names():
+        return
+
+    columns = {column["name"] for column in inspector.get_columns("key_credentials")}
+
+    if "revocation_commit_id" in columns:
+        op.drop_column("key_credentials", "revocation_commit_id")

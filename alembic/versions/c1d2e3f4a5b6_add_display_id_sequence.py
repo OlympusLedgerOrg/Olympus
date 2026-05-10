@@ -4,22 +4,34 @@ Revision ID: c1d2e3f4a5b6
 Revises: b3c4d5e6f7a8
 """
 
-from collections.abc import Sequence
+from sqlalchemy import inspect
 
 from alembic import op
 
 
-revision: str = "c1d2e3f4a5b6"
-down_revision: str | Sequence[str] | None = "b3c4d5e6f7a8"
-branch_labels: str | Sequence[str] | None = None
-depends_on: str | Sequence[str] | None = None
+revision = "c1d2e3f4a5b6"
+down_revision = "b3c4d5e6f7a8"
+branch_labels = None
+depends_on = None
 
 
 def upgrade() -> None:
+    bind = op.get_bind()
+    inspector = inspect(bind)
+    tables = set(inspector.get_table_names())
+
     op.execute("CREATE SEQUENCE IF NOT EXISTS display_id_seq START WITH 1 INCREMENT BY 1")
 
-    # If rows already exist, advance the sequence to the highest OLY-NNNN value.
-    # If no rows exist, set sequence to 1 with is_called=false so nextval() returns 1.
+    if "public_records_requests" not in tables:
+        # Older/local DBs may not have this table at this point in the chain.
+        # Keep the sequence at 1 and let later app/table logic use it.
+        return
+
+    columns = {column["name"] for column in inspector.get_columns("public_records_requests")}
+
+    if "display_id" not in columns:
+        return
+
     op.execute(
         """
         SELECT setval(

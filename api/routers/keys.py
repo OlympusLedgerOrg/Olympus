@@ -14,6 +14,8 @@ import os
 import secrets
 from datetime import datetime, timezone
 
+import nacl.exceptions
+import nacl.signing
 from fastapi import APIRouter, HTTPException, Request, status
 from pydantic import BaseModel, field_validator
 from sqlalchemy import select
@@ -30,6 +32,7 @@ from protocol.log_sanitization import sanitize_for_log
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/key", tags=["keys"])
 _MIN_ADMIN_KEY_BYTES = 32
+_CREDENTIAL_BINDING_DOMAIN = "OLYMPUS:SBT_BINDING:V1"
 
 
 def assert_admin_key_strength_for_environment() -> None:
@@ -42,6 +45,72 @@ def assert_admin_key_strength_for_environment() -> None:
         raise RuntimeError(
             "Refusing startup with weak OLYMPUS_ADMIN_KEY outside development. "
             f"Configure at least {_MIN_ADMIN_KEY_BYTES} bytes."
+        )
+
+
+def _dev_auth_bypass_active(api_key_id: str) -> bool:
+    """Return True for the test/local dev API key bypass identity."""
+    return (
+        os.environ.get("OLYMPUS_ENV") == "development"
+        and os.environ.get("OLYMPUS_ALLOW_DEV_AUTH") == "1"
+        and api_key_id == "dev"
+    )
+
+
+def credential_binding_payload(
+    *,
+    holder_key: str,
+    credential_type: str,
+    issuer: str,
+    issued_by_key_id: str,
+) -> bytes:
+    """Canonical bytes signed by a holder before an SBT credential is minted."""
+    payload = {
+        "domain": _CREDENTIAL_BINDING_DOMAIN,
+        "holder_key": holder_key,
+        "credential_type": credential_type,
+        "issuer": issuer,
+        "issued_by_key_id": issued_by_key_id,
+        "sbt_nontransferable": True,
+    }
+    return json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
+
+
+def _verify_holder_possession(
+    *,
+    holder_key: str,
+    signature_hex: str | None,
+    credential_type: str,
+    issuer: str,
+    issued_by_key_id: str,
+) -> None:
+    """Require an Ed25519 proof that the credential recipient controls holder_key."""
+    if signature_hex is None:
+        raise HTTPException(
+            status_code=422,
+            detail={
+                "detail": "holder_signature is required to issue a credential.",
+                "code": "HOLDER_SIGNATURE_REQUIRED",
+            },
+        )
+    try:
+        verify_key = nacl.signing.VerifyKey(bytes.fromhex(holder_key))
+        verify_key.verify(
+            credential_binding_payload(
+                holder_key=holder_key,
+                credential_type=credential_type,
+                issuer=issuer,
+                issued_by_key_id=issued_by_key_id,
+            ),
+            bytes.fromhex(signature_hex),
+        )
+    except (ValueError, nacl.exceptions.BadSignatureError):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail={
+                "detail": "Invalid Ed25519 holder signature.",
+                "code": "HOLDER_SIGNATURE_INVALID",
+            },
         )
 
 
@@ -60,6 +129,15 @@ async def issue_credential(
     Returns:
         Created credential record.
     """
+    if not _dev_auth_bypass_active(api_key.key_id):
+        _verify_holder_possession(
+            holder_key=body.holder_key,
+            signature_hex=body.holder_signature,
+            credential_type=body.credential_type,
+            issuer=body.issuer,
+            issued_by_key_id=api_key.key_id,
+        )
+
     commit_id = generate_commit_id()
     cred = KeyCredential(
         holder_key=body.holder_key,

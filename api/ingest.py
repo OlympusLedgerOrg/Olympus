@@ -26,6 +26,7 @@ import base64
 import json
 import logging
 import os
+import types
 import uuid
 from collections import OrderedDict
 from contextlib import suppress
@@ -33,11 +34,13 @@ from datetime import datetime, timezone
 from time import monotonic
 from typing import TYPE_CHECKING, Any, cast
 
+import blake3 as _blake3
 import httpx
 import nacl.signing
-from fastapi import APIRouter, File, HTTPException, Path, Request, UploadFile
+from fastapi import APIRouter, File, Form, HTTPException, Path, Request, UploadFile
 
 from api.auth import (
+    RateLimit,
     RequireCommitScope,
     RequireIngestScope,
     RequireVerifyScope,
@@ -87,7 +90,7 @@ from protocol.canonical import (
     document_to_commit_bytes,
 )
 from protocol.canonicalizer import canonicalization_provenance
-from protocol.hashes import hash_bytes, record_key
+from protocol.hashes import global_key as _global_key, hash_bytes, record_key
 from protocol.ledger import Ledger
 from protocol.log_sanitization import sanitize_for_log
 from protocol.merkle import (
@@ -98,6 +101,13 @@ from protocol.merkle import (
 from protocol.poseidon_smt import key_to_smt_bytes as _poseidon_smt_key
 from protocol.telemetry import INGEST_TOTAL, LEDGER_HEIGHT, timed_operation
 from protocol.timestamps import current_timestamp
+
+
+# Parser identity for the raw-bytes ingestion path. The content_hash for
+# records committed via /ingest/files is plain BLAKE3 of the raw file bytes
+# (no domain prefix), so a `blake3sum file` from anywhere reproduces it.
+RAW_BYTES_PARSER_ID = "raw-bytes@1.0.0"
+RAW_BYTES_CPV = "v1"
 
 
 if TYPE_CHECKING:
@@ -977,6 +987,53 @@ async def _call_sequencer_queue_leaves_batch(
     return cast(list[dict[str, Any]], data["results"])
 
 
+async def _call_sequencer_get_inclusion_proof(
+    shard_id: str,
+    record_type: str,
+    record_id: str,
+    root_hex: str | None = None,
+    version: str | None = None,
+) -> dict[str, Any] | None:
+    """Fetch a fully-populated SMT inclusion proof from the Go sequencer.
+
+    Returns the raw response dict (with hex-encoded global_key, value_hash,
+    siblings list, root) or None if the sequencer is unreachable / errors.
+    The verify path treats failure as non-fatal — the cached commitment
+    summary is still returned.
+    """
+    url = f"http://{_sequencer_addr}/v1/get-inclusion-proof"
+    params: dict[str, str] = {
+        "shard_id": shard_id,
+        "record_type": record_type,
+        "record_id": record_id,
+    }
+    if version:
+        params["version"] = version
+    if root_hex:
+        params["root"] = root_hex
+
+    try:
+        client = _get_sequencer_client()
+        resp = await client.get(
+            url,
+            params=params,
+            headers={"X-Sequencer-Token": _sequencer_token},
+        )
+    except httpx.RequestError as exc:
+        logger.warning("sequencer_proof_unreachable url=%s error=%s", url, exc)
+        return None
+
+    if resp.status_code != 200:
+        logger.warning(
+            "sequencer_proof_error status=%d body=%.200s",
+            resp.status_code,
+            resp.text,
+        )
+        return None
+
+    return cast(dict[str, Any], resp.json())
+
+
 # ---------------------------------------------------------------------------
 # Endpoints
 # ---------------------------------------------------------------------------
@@ -1360,6 +1417,149 @@ async def ingest_batch(
     )
 
 
+@router.post("/files")
+async def ingest_raw_file(
+    request: Request,
+    _api_key: RequireIngestScope,
+    file: UploadFile = File(...),
+    shard_id: str = Form("files"),
+    record_id: str | None = Form(None),
+    version: int = Form(1),
+) -> dict[str, Any]:
+    """Ingest a file by its raw bytes — no JSON wrapper, no canonicalization.
+
+    The committed `content_hash` is plain BLAKE3 of the file bytes (the same
+    value `blake3sum file` produces and the same value the in-browser hasher
+    computes), so dropping the same file again will round-trip verify.
+
+    Distinct from POST /ingest/records, which canonicalizes a JSON document
+    and hashes the canonical form.
+    """
+    # Apply rate limiting after authentication
+    await _apply_rate_limits(request, _api_key.key_id, "ingest")
+
+    from api.services.storage_layer import (
+        _use_go_sequencer as _sl_use_go_sequencer,
+        append_via_backend,
+    )
+
+    settings = get_settings()
+    max_mb = settings.max_upload_bytes // 1024 // 1024
+    file_bytes = await _read_upload_bounded(file, settings.max_upload_bytes, max_mb)
+
+    # content_hash for raw-bytes records is plain BLAKE3 (no domain prefix),
+    # so a CLI `blake3sum` and the in-browser hasher both reproduce it.
+    digest = _blake3.blake3(bytes(file_bytes)).digest()
+    content_hash = digest.hex()
+
+    if record_id is None or not record_id.strip():
+        # Default to the BLAKE3 prefix so identical bytes always re-use the
+        # same record slot (idempotent re-commit). Callers can override.
+        record_id = content_hash[:32]
+
+    record_type = "file"
+    batch_id = str(uuid.uuid4())
+    proof_id = str(uuid.uuid4())
+
+    # Trigger lazy init so _signing_key is populated for the storage path
+    # (no-op on the sequencer path, which doesn't need a Python-side key).
+    _get_storage()
+
+    append_result = await append_via_backend(
+        shard_id=shard_id,
+        record_type=record_type,
+        record_id=record_id,
+        version=version,
+        value_hash=digest,
+        parser_id=RAW_BYTES_PARSER_ID,
+        canonical_parser_version=RAW_BYTES_CPV,
+        want_proof=False,
+        signing_key=_signing_key,
+    )
+
+    sequencer_path = _sl_use_go_sequencer()
+    merkle_root_hex = append_result.root_hash.hex()
+    ts = append_result.ts
+
+    # Build a commitment-summary proof identical in shape to the existing
+    # sequencer ingest path (siblings expanded lazily by the verify endpoint).
+    if sequencer_path:
+        smt_key_hex = _global_key(shard_id, record_key(record_type, record_id, version)).hex()
+        merkle_proof: dict[str, Any] = {
+            "leaf_hash": content_hash,
+            "leaf_index": str(int(smt_key_hex, 16)),
+            "siblings": [],
+            "root_hash": merkle_root_hex,
+            "content_hash": content_hash,
+            "value_hash": content_hash,
+            "tree_size": "1",
+            "proof_version": PROOF_VERSION,
+            "tree_version": MERKLE_VERSION,
+            "smt_key": smt_key_hex,
+            "parser_id": RAW_BYTES_PARSER_ID,
+            "canonical_parser_version": RAW_BYTES_CPV,
+        }
+    else:
+        # Storage-path: append_via_backend returned a real ExistenceProof.
+        merkle_proof = _smt_proof_to_merkle_proof_dict(
+            append_result.storage_proof,  # type: ignore[arg-type]
+            digest,
+        )
+        merkle_proof["content_hash"] = content_hash
+        merkle_proof["value_hash"] = content_hash
+
+    canonicalization_meta = {
+        "format": file.content_type or "application/octet-stream",
+        "normalization_mode": "raw_bytes_v1",
+        "fallback_reason": None,
+        "parser_id": RAW_BYTES_PARSER_ID,
+        "canonical_parser_version": RAW_BYTES_CPV,
+        "filename": file.filename,
+        "size_bytes": len(file_bytes),
+    }
+
+    ingestion_entry = {
+        "proof_id": proof_id,
+        "record_id": record_id,
+        "shard_id": shard_id,
+        "record_type": record_type,
+        "version": version,
+        "content_hash": content_hash,
+        "merkle_root": merkle_root_hex,
+        "merkle_proof": merkle_proof,
+        "ledger_entry_hash": append_result.ledger_entry_hash,
+        "timestamp": ts,
+        "canonicalization": canonicalization_meta,
+        "persisted": True,
+        "batch_id": batch_id,
+        "batch_index": 0,
+        "poseidon_root": append_result.poseidon_root,
+    }
+
+    _cache_ingestion_record(ingestion_entry)
+    storage = _get_storage()
+    if storage is not None:
+        storage.store_ingestion_batch(batch_id, [ingestion_entry])
+
+    INGEST_TOTAL.labels(outcome="committed").inc()
+    logger.info(
+        "raw-bytes file ingested record_id=%s content_hash=%s size=%d",
+        sanitize_for_log(record_id),
+        content_hash,
+        len(file_bytes),
+    )
+
+    return {
+        "proof_id": proof_id,
+        "record_id": record_id,
+        "shard_id": shard_id,
+        "content_hash": content_hash,
+        "merkle_root": merkle_root_hex,
+        "timestamp": ts,
+        "size_bytes": len(file_bytes),
+    }
+
+
 @router.get("/records/{proof_id}/proof", response_model=IngestionProofResponse)
 async def get_ingestion_proof(
     *,
@@ -1402,7 +1602,7 @@ async def get_ingestion_proof(
 
 @router.get("/records/hash/{content_hash}/verify", response_model=HashVerificationResponse)
 async def verify_ingested_content_hash(
-    content_hash: str, request: Request, _api_key: RequireVerifyScope
+    content_hash: str, request: Request, _api_key: RequireVerifyScope, _rl: RateLimit
 ) -> HashVerificationResponse:
     """
     Verify that a committed BLAKE3 content hash exists in the ingestion store.
@@ -1427,6 +1627,59 @@ async def verify_ingested_content_hash(
 
         proof_data = dict(record["merkle_proof"])
         proof_data.setdefault("content_hash", record["content_hash"])
+
+        # Sequencer-path records are stored with an empty siblings array
+        # (commitment summary, not full SMT inclusion proof). Expand on read
+        # by fetching the real 256-sibling proof from the sequencer so
+        # offline verifiers can independently reconstruct the root.
+        from api.services.storage_layer import _use_go_sequencer as _sl_use_go_sequencer
+
+        if _sl_use_go_sequencer() and proof_data.get("smt_key") and not proof_data.get("siblings"):
+            # Anchor against the latest signed root: the Rust SMT retains
+            # only the current root, and global_keys are unique-per-leaf so
+            # inclusion in the latest root proves the same fact as inclusion
+            # in any historical root. The response surfaces the latest root
+            # alongside the freshly-fetched proof so they're consistent.
+            version = record.get("version")
+            version_str = "" if version is None else str(version)
+            seq_proof = await _call_sequencer_get_inclusion_proof(
+                shard_id=record["shard_id"],
+                record_type=record["record_type"],
+                record_id=str(record["record_id"]),
+                version=version_str,
+                root_hex=None,
+            )
+            siblings_list = seq_proof.get("siblings", []) if seq_proof else []
+            if seq_proof and len(siblings_list) == 256:
+                expanded = _sequencer_proof_to_merkle_proof_dict(
+                    types.SimpleNamespace(
+                        global_key=seq_proof["global_key"],
+                        value_hash=seq_proof["value_hash"],
+                        siblings=seq_proof["siblings"],
+                        root=seq_proof["root"],
+                    ),
+                    bytes.fromhex(seq_proof["value_hash"]),
+                    proof_data.get("parser_id") or _FALLBACK_PARSER_ID,
+                    proof_data.get("canonical_parser_version")
+                    or _operator_canonical_parser_version(),
+                )
+                expanded["content_hash"] = record["content_hash"]
+                proof_data = expanded
+                record = {
+                    **record,
+                    "merkle_root": seq_proof["root"],
+                    "merkle_proof": proof_data,
+                }
+            elif seq_proof:
+                # Log warning when seq_proof exists but siblings list is missing or wrong length
+                logger.warning(
+                    "sequencer proof expansion failed: siblings missing or invalid length "
+                    "record_id=%s siblings_length=%d seq_proof_keys=%s",
+                    record.get("record_id"),
+                    len(siblings_list),
+                    list(seq_proof.keys()) if seq_proof else [],
+                )
+
         _, _, _, merkle_proof_valid = _evaluate_proof_bundle(
             record["content_hash"],
             record["merkle_root"],

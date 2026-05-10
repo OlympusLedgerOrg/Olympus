@@ -19,6 +19,7 @@ import zipfile
 from datetime import datetime, timezone
 from unittest.mock import patch
 
+import nacl.signing
 import pytest
 import pytest_asyncio
 from httpx import ASGITransport, AsyncClient
@@ -240,6 +241,59 @@ CREDENTIAL_BODY = {
     "credential_type": "journalist",
     "issuer": "Watauga County Clerk",
 }
+
+
+def test_credential_binding_payload_accepts_valid_holder_signature():
+    """SBT issuance binds to proof-of-possession of the Ed25519 holder key."""
+    from api.routers.keys import _verify_holder_possession, credential_binding_payload
+
+    signing_key = nacl.signing.SigningKey.generate()
+    holder_key = bytes(signing_key.verify_key).hex()
+    payload = credential_binding_payload(
+        holder_key=holder_key,
+        credential_type="journalist",
+        issuer="Watauga County Clerk",
+        issued_by_key_id="issuer-key",
+    )
+    signature = signing_key.sign(payload).signature.hex()
+
+    _verify_holder_possession(
+        holder_key=holder_key,
+        signature_hex=signature,
+        credential_type="journalist",
+        issuer="Watauga County Clerk",
+        issued_by_key_id="issuer-key",
+    )
+
+
+def test_credential_binding_rejects_missing_or_invalid_holder_signature():
+    """Credential minting must fail closed without holder-key possession proof."""
+    from fastapi import HTTPException
+
+    from api.routers.keys import _verify_holder_possession
+
+    signing_key = nacl.signing.SigningKey.generate()
+    holder_key = bytes(signing_key.verify_key).hex()
+
+    with pytest.raises(HTTPException) as missing:
+        _verify_holder_possession(
+            holder_key=holder_key,
+            signature_hex=None,
+            credential_type="journalist",
+            issuer="Watauga County Clerk",
+            issued_by_key_id="issuer-key",
+        )
+    assert missing.value.status_code == 422
+
+    with pytest.raises(HTTPException) as invalid:
+        _verify_holder_possession(
+            holder_key=holder_key,
+            signature_hex="00" * 64,
+            credential_type="journalist",
+            issuer="Watauga County Clerk",
+            issued_by_key_id="issuer-key",
+        )
+    assert invalid.value.status_code == 403
 
 
 @pytest.mark.asyncio

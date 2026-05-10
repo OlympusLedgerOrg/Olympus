@@ -97,14 +97,7 @@ jobs:
           PROOF_IDS="${{ steps.olympus.outputs.proof_ids }}"
           EXISTING_NOTES=$(gh release view "$REF_NAME" --json body -q '.body // ""')
 
-          NOTES_APPEND=$(cat <<EOF
-## Olympus Provenance
-
-Proof IDs: \`${PROOF_IDS}\`
-
-These artifacts have been anchored to the [Olympus](https://github.com/OlympusLedgerOrg/Olympus) public ledger.
-EOF
-)
+          NOTES_APPEND=$(printf '## Olympus Provenance\n\nProof IDs: `%s`\n\nThese artifacts have been anchored to the [Olympus](https://github.com/OlympusLedgerOrg/Olympus) public ledger.' "${PROOF_IDS}")
 
           printf '%s\n\n%s\n' "${EXISTING_NOTES}" "${NOTES_APPEND}" > /tmp/updated-notes.txt
           gh release edit "$REF_NAME" --notes-file /tmp/updated-notes.txt

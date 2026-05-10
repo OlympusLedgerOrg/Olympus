@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 from datetime import datetime, timezone
 
 import nacl.exceptions
@@ -54,6 +55,7 @@ from protocol.hashes import (
     compute_dataset_commit_id,
     dataset_key,
 )
+from protocol.log_sanitization import sanitize_for_log
 
 
 logger = logging.getLogger(__name__)
@@ -114,10 +116,58 @@ async def _check_key_not_revoked(db: DBSession, pubkey_hex: str) -> None:
         )
 
 
+def _dev_sbt_bypass_allowed() -> bool:
+    """Keep local/dev tests usable while production requires SBT-backed keys."""
+    return (
+        os.environ.get("OLYMPUS_ENV") == "development"
+        and os.environ.get("OLYMPUS_ALLOW_DEV_AUTH") == "1"
+        and os.environ.get("OLYMPUS_REQUIRE_SBT_FOR_DATASET_COMMITS") != "1"
+    )
+
+
+async def _require_active_key_credential(db: DBSession, pubkey_hex: str) -> None:
+    """Require an active SBT credential for the Ed25519 committer key."""
+    now = datetime.now(timezone.utc)
+    # Check for an active credential with a single LIMIT 1 lookup so we don't
+    # scan every credential row for hot-path commits.
+    active_q = (
+        select(KeyCredential.id)
+        .where(
+            KeyCredential.holder_key == pubkey_hex,
+            (KeyCredential.revoked_at.is_(None)) | (KeyCredential.revoked_at > now),
+        )
+        .limit(1)
+    )
+    has_active = (await db.execute(active_q)).scalar_one_or_none() is not None
+    if has_active:
+        return
+    any_q = select(KeyCredential.id).where(KeyCredential.holder_key == pubkey_hex).limit(1)
+    has_any = (await db.execute(any_q)).scalar_one_or_none() is not None
+    if has_any:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Committer key credential has been revoked.",
+        )
+    if _dev_sbt_bypass_allowed():
+        logger.warning(
+            "dev_sbt_bypass_allowed_for_committer pubkey=%s",
+            sanitize_for_log(pubkey_hex),
+        )
+        return
+    raise HTTPException(
+        status_code=status.HTTP_403_FORBIDDEN,
+        detail="Committer key has no active SBT credential.",
+    )
+
+
 def _is_key_revoked_at(revoked_at: datetime | None, reference: datetime) -> bool:
     """Return True if the key was revoked before ``reference``."""
     if revoked_at is None:
         return False
+    if revoked_at.tzinfo is None and reference.tzinfo is not None:
+        revoked_at = revoked_at.replace(tzinfo=timezone.utc)
+    if reference.tzinfo is None and revoked_at.tzinfo is not None:
+        reference = reference.replace(tzinfo=timezone.utc)
     return revoked_at <= reference
 
 
@@ -245,8 +295,8 @@ async def commit_dataset(
             },
         )
 
-    # 7. Cross-reference committer key against key_credentials (D12)
-    await _check_key_not_revoked(db, body.committer_pubkey)
+    # 7. Require active SBT credential for the Ed25519 committer key.
+    await _require_active_key_credential(db, body.committer_pubkey)
 
     # 8. epoch_timestamp (set AFTER identity computation — not in hash)
     epoch_ts = datetime.now(timezone.utc)
@@ -590,19 +640,25 @@ async def verify_dataset(
         current = parent
     checks["chain_valid"] = chain_valid
 
-    # 5. Key revocation cross-reference (D12)
+    # 5. Key credential cross-reference
     key_revoked: bool | None = None
+    key_credential_active = False
     cred_result = await db.execute(
         select(KeyCredential.revoked_at).where(
             KeyCredential.holder_key == artifact.committer_pubkey
         )
     )
-    cred_revoked_at = cred_result.scalars().first()
-    if cred_revoked_at is not None:
-        key_revoked = _is_key_revoked_at(cred_revoked_at, artifact.epoch_timestamp)
+    cred_revocations = list(cred_result.scalars().all())
+    if cred_revocations:
+        key_revoked = all(_is_key_revoked_at(r, artifact.epoch_timestamp) for r in cred_revocations)
+        key_credential_active = any(
+            not _is_key_revoked_at(r, artifact.epoch_timestamp) for r in cred_revocations
+        )
     else:
         key_revoked = False
+        key_credential_active = _dev_sbt_bypass_allowed()
     checks["key_not_revoked"] = not key_revoked
+    checks["key_credential_active"] = key_credential_active
 
     # 6. Merkle inclusion proof
     all_hashes_result = await db.execute(
@@ -894,8 +950,8 @@ async def commit_lineage(
             detail="Invalid Ed25519 signature.",
         )
 
-    # 5. Cross-reference key revocation
-    await _check_key_not_revoked(db, body.committer_pubkey)
+    # 5. Require active SBT credential for the Ed25519 committer key.
+    await _require_active_key_credential(db, body.committer_pubkey)
 
     epoch_ts = datetime.now(timezone.utc)
     shard_id = DEFAULT_SHARD_ID

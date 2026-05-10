@@ -15,6 +15,14 @@ class CredentialCreate(BaseModel):
     holder_key: str = Field(..., min_length=1, max_length=512)
     credential_type: str = Field(..., min_length=1, max_length=64, pattern=r"^[a-zA-Z0-9_\-]+$")
     issuer: str = Field(..., min_length=1, max_length=500)
+    holder_signature: str | None = Field(
+        None,
+        pattern=r"^[0-9a-f]{128}$",
+        description=(
+            "Hex Ed25519 signature proving possession of holder_key. "
+            "Required outside development bypass mode."
+        ),
+    )
 
 
 class CredentialResponse(BaseModel):
