@@ -17,7 +17,7 @@ type StartupProfile = {
   createdAt: string;
 };
 
-type GateMode = "loading" | "setup" | "unlock";
+type GateMode = "loading" | "setup" | "login" | "unlock";
 
 function bytesToBase64(bytes: Uint8Array): string {
   let binary = "";
@@ -219,10 +219,11 @@ export default function StartupGate({ children }: { children: React.ReactNode })
     setMode(saved ? "unlock" : "setup");
   }, []);
 
-  const title = useMemo(
-    () => (mode === "setup" ? "FIRST BOOT" : "STARTUP LOCK"),
-    [mode],
-  );
+  const title = useMemo(() => {
+    if (mode === "setup") return "FIRST BOOT";
+    if (mode === "login") return "SIGN IN";
+    return "STARTUP LOCK";
+  }, [mode]);
 
   async function createProfile(event: React.FormEvent) {
     event.preventDefault();
@@ -256,30 +257,12 @@ export default function StartupGate({ children }: { children: React.ReactNode })
           break;
         }
         const detail = typeof data.detail === "string" ? data.detail : JSON.stringify(data.detail);
-        // Email already registered — try to login with same credentials to recover key
+        // Email already registered — switch to sign-in mode with email pre-filled
         if (res.status === 409) {
-          const loginRes = await fetch(`${API_BASE}/auth/login`, {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ email: email.trim(), password }),
-          });
-          const loginData = await loginRes.json() as { keys?: Array<{ id: string; scopes: string[] }>; detail?: unknown };
-          if (loginRes.ok && loginData.keys?.length) {
-            // Login succeeded — but we can't recover the raw key (only hashes stored).
-            // Create a fresh key for this session via /auth/keys.
-            const firstKey = loginData.keys[0];
-            grantedScopes = firstKey.scopes;
-            setError("Account already exists. Your key was already generated — check your saved copy. If you lost it, reset your account below.");
-            setBusy(false);
-            return;
-          }
-          if (!loginRes.ok) {
-            const d = typeof loginData.detail === "string" ? loginData.detail : "";
-            setError(d || "Account exists but password did not match. Reset your account below to start fresh.");
-            setBusy(false);
-            return;
-          }
-          break;
+          setMode("login");
+          setError("This email is already registered. Sign in below.");
+          setBusy(false);
+          return;
         }
         // If it's a scope-forbidden error, retry with fewer scopes
         if (res.status === 403 && detail.includes("Scope")) continue;
@@ -332,6 +315,50 @@ export default function StartupGate({ children }: { children: React.ReactNode })
     setPassword("");
     setConfirm("");
     setNewApiKey("");
+  }
+
+  async function signIn(event: React.FormEvent) {
+    event.preventDefault();
+    setError(null);
+    if (!email.trim() || !email.includes("@")) { setError("Enter a valid email."); return; }
+    if (!password) { setError("Enter your password."); return; }
+    if (!crypto.subtle) { setError("Browser does not support local password verification."); return; }
+
+    setBusy(true);
+    try {
+      const res = await fetch(`${API_BASE}/auth/login`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ email: email.trim(), password }),
+      });
+      const data = await res.json() as { user_id?: string; email?: string; keys?: Array<{ id: string; scopes: string[] }>; detail?: unknown };
+      if (!res.ok) {
+        const detail = typeof data.detail === "string" ? data.detail : "";
+        setError(detail || "Sign-in failed — check your email and password.");
+        return;
+      }
+
+      // Build local PBKDF2 profile so future visits use the fast unlock flow
+      const name = (data.email ?? email.trim()).split("@")[0] || "operator";
+      const saltBytes = new Uint8Array(16);
+      crypto.getRandomValues(saltBytes);
+      const salt = bytesToBase64(saltBytes);
+      const verifier = await deriveVerifier(password, salt);
+      const nextProfile: StartupProfile = {
+        operator: name,
+        email: email.trim(),
+        salt,
+        verifier,
+        createdAt: new Date().toISOString(),
+      };
+      localStorage.setItem(PROFILE_KEY, JSON.stringify(nextProfile));
+      setProfile(nextProfile);
+      enterConsole();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Could not sign in.");
+    } finally {
+      setBusy(false);
+    }
   }
 
   async function unlock(event: React.FormEvent) {
@@ -392,7 +419,9 @@ export default function StartupGate({ children }: { children: React.ReactNode })
               <p>
                 {mode === "setup"
                   ? "Create your operator account. Your API key is generated server-side and stored locally — copy it before leaving."
-                  : `Welcome back, ${profile?.operator ?? "OPERATOR"}. Enter your password to unlock this session.`}
+                  : mode === "login"
+                    ? "Sign in with your existing account to unlock the console."
+                    : `Welcome back, ${profile?.operator ?? "OPERATOR"}. Enter your password to unlock this session.`}
               </p>
             )}
             <div className="startup-status">
@@ -463,7 +492,7 @@ export default function StartupGate({ children }: { children: React.ReactNode })
               <div style={{ marginBottom: "1rem" }}>
                 <label style={lbl}>PASSWORD</label>
                 <input type="password" value={password} onChange={e => setPassword(e.target.value)}
-                  autoComplete="new-password" placeholder="at least 10 characters" style={inp} />
+                  autoComplete="new-password" placeholder="at least 12 characters" style={inp} />
               </div>
               <div style={{ marginBottom: "1.25rem" }}>
                 <label style={lbl}>CONFIRM PASSWORD</label>
@@ -480,9 +509,50 @@ export default function StartupGate({ children }: { children: React.ReactNode })
               }}>
                 {busy ? "INITIALIZING..." : "INITIALIZE OPERATOR"}
               </button>
-              <p className="startup-note" style={{ marginTop: "1rem" }}>
-                Creates your account on the Olympus ledger API and generates an API key.
-              </p>
+              <button type="button" onClick={() => { setMode("login"); setError(null); }}
+                style={{ marginTop: "0.75rem", width: "100%", background: "none",
+                  border: "none", color: "rgba(0,255,65,0.4)", fontSize: "0.58rem",
+                  letterSpacing: "0.08em", cursor: "pointer", fontFamily: "'DM Mono', monospace" }}>
+                ALREADY HAVE AN ACCOUNT? SIGN IN
+              </button>
+            </form>
+
+          /* ── Login form ── */
+          ) : mode === "login" ? (
+            <form className="startup-panel" onSubmit={(event) => void signIn(event)}>
+              <div style={{ marginBottom: "1rem" }}>
+                <label style={lbl}>EMAIL</label>
+                <input autoFocus type="email" value={email} onChange={e => setEmail(e.target.value)}
+                  autoComplete="email" placeholder="you@example.com" style={inp} />
+              </div>
+              <div style={{ marginBottom: "1.25rem" }}>
+                <label style={lbl}>PASSWORD</label>
+                <input type="password" value={password} onChange={e => setPassword(e.target.value)}
+                  autoComplete="current-password" placeholder="your password" style={inp} />
+              </div>
+              {error && <div className="startup-error">{error}</div>}
+              <button type="submit" disabled={busy} style={{
+                width: "100%", padding: "0.8rem",
+                background: busy ? "rgba(0,255,65,0.06)" : "rgba(0,255,65,0.14)",
+                border: "1px solid rgba(0,255,65,0.6)", color: "#00ff41",
+                fontFamily: "'DM Mono', monospace", fontSize: "0.72rem",
+                letterSpacing: "0.14em", cursor: busy ? "not-allowed" : "pointer",
+              }}>
+                {busy ? "SIGNING IN..." : "SIGN IN"}
+              </button>
+              <div style={{ marginTop: "0.75rem", display: "flex", gap: "0.75rem", justifyContent: "center" }}>
+                <button type="button" onClick={() => { setMode("setup"); setError(null); }}
+                  style={{ background: "none", border: "none", color: "rgba(0,255,65,0.4)", fontSize: "0.58rem",
+                    letterSpacing: "0.08em", cursor: "pointer", fontFamily: "'DM Mono', monospace" }}>
+                  CREATE NEW ACCOUNT
+                </button>
+                <span style={{ color: "rgba(0,255,65,0.2)", fontSize: "0.58rem" }}>·</span>
+                <button type="button" onClick={resetProfile}
+                  style={{ background: "none", border: "none", color: "rgba(0,255,65,0.25)", fontSize: "0.58rem",
+                    letterSpacing: "0.08em", cursor: "pointer", fontFamily: "'DM Mono', monospace" }}>
+                  RESET LOCAL DATA
+                </button>
+              </div>
             </form>
 
           /* ── Unlock form ── */
@@ -513,12 +583,19 @@ export default function StartupGate({ children }: { children: React.ReactNode })
               }}>
                 {busy ? "CHECKING..." : "UNLOCK CONSOLE"}
               </button>
-              <button className="startup-reset" type="button" onClick={resetProfile}
-                style={{ marginTop: "0.75rem", width: "100%", background: "none",
-                  border: "none", color: "rgba(0,255,65,0.3)", fontSize: "0.58rem",
-                  letterSpacing: "0.08em", cursor: "pointer", fontFamily: "'DM Mono', monospace" }}>
-                RESET / CREATE NEW ACCOUNT
-              </button>
+              <div style={{ marginTop: "0.75rem", display: "flex", gap: "0.75rem", justifyContent: "center" }}>
+                <button type="button" onClick={() => { setMode("login"); setEmail(profile?.email ?? ""); setPassword(""); setError(null); }}
+                  style={{ background: "none", border: "none", color: "rgba(0,255,65,0.4)", fontSize: "0.58rem",
+                    letterSpacing: "0.08em", cursor: "pointer", fontFamily: "'DM Mono', monospace" }}>
+                  SIGN IN AGAIN
+                </button>
+                <span style={{ color: "rgba(0,255,65,0.2)", fontSize: "0.58rem" }}>·</span>
+                <button type="button" onClick={resetProfile}
+                  style={{ background: "none", border: "none", color: "rgba(0,255,65,0.25)", fontSize: "0.58rem",
+                    letterSpacing: "0.08em", cursor: "pointer", fontFamily: "'DM Mono', monospace" }}>
+                  RESET / NEW ACCOUNT
+                </button>
+              </div>
             </form>
           )}
         </div>
