@@ -242,11 +242,11 @@ services:
       DATABASE_NAME: ${DATABASE_NAME:?DATABASE_NAME must be set}
       DATABASE_USER: ${DATABASE_USER:?DATABASE_USER must be set}
       DATABASE_PASSWORD_FILE: /run/secrets/db_password
-      DATABASE_URL: "postgresql://${DATABASE_USER:-olympus}:${POSTGRES_PASSWORD:-olympus}@db:5432/${DATABASE_NAME:-olympus}"
-      PSYCOPG_URL: "postgresql://${DATABASE_USER:-olympus}:${POSTGRES_PASSWORD:-olympus}@db:5432/${DATABASE_NAME:-olympus}"
       OLYMPUS_DEV_SIGNING_KEY: ${OLYMPUS_DEV_SIGNING_KEY:-true}
-      # Allow self-registration with ingest/write/admin scopes (first-boot UX)
-      OLYMPUS_ALLOW_PUBLIC_WRITE_REGISTRATION: ${OLYMPUS_ALLOW_PUBLIC_WRITE_REGISTRATION:-1}
+      # Self-registration with ingest/write/admin scopes is OFF by default.
+      # Enable explicitly (set OLYMPUS_ALLOW_PUBLIC_WRITE_REGISTRATION=1) only
+      # for local first-boot onboarding; never enable in shared/public deploys.
+      OLYMPUS_ALLOW_PUBLIC_WRITE_REGISTRATION: ${OLYMPUS_ALLOW_PUBLIC_WRITE_REGISTRATION:-0}
       # Go sequencer configuration — always use Docker service name
       OLYMPUS_USE_GO_SEQUENCER: ${OLYMPUS_USE_GO_SEQUENCER:-true}
       OLYMPUS_SEQUENCER_URL: "http://sequencer-go:8081"

@@ -1,5 +1,6 @@
 import { useCallback, useRef, useState } from "react";
 import { hashFile } from "../lib/blake3";
+import { getStoredApiKey, setStoredApiKey } from "../lib/storage";
 
 const API_BASE =
   (typeof import.meta !== "undefined" &&
@@ -36,7 +37,7 @@ export default function IngestPage() {
   const [stage, setStage] = useState<Stage>("idle");
   const [file, setFile] = useState<File | null>(null);
   const [hash, setHash] = useState("");
-  const [apiKey, setApiKey] = useState(() => localStorage.getItem("olympus_api_key") ?? "");
+  const [apiKey, setApiKey] = useState(() => getStoredApiKey());
   const [shardId, setShardId] = useState("files");
   const [recordType, setRecordType] = useState("file");
   const [recordId, setRecordId] = useState("");
@@ -47,7 +48,7 @@ export default function IngestPage() {
   const inputRef = useRef<HTMLInputElement>(null);
 
   function saveKey() {
-    localStorage.setItem("olympus_api_key", apiKey.trim());
+    setStoredApiKey(apiKey.trim());
     setKeySaved(true);
     setTimeout(() => setKeySaved(false), 2000);
   }
@@ -85,7 +86,7 @@ export default function IngestPage() {
     if (!file || !hash || !apiKey.trim()) return;
     setStage("committing");
     setError(null);
-    localStorage.setItem("olympus_api_key", apiKey.trim());
+    setStoredApiKey(apiKey.trim());
 
     const content = {
       filename: file.name, size: file.size,

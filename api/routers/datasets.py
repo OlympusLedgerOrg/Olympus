@@ -55,6 +55,7 @@ from protocol.hashes import (
     compute_dataset_commit_id,
     dataset_key,
 )
+from protocol.log_sanitization import sanitize_for_log
 
 
 logger = logging.getLogger(__name__)
@@ -126,23 +127,32 @@ def _dev_sbt_bypass_allowed() -> bool:
 
 async def _require_active_key_credential(db: DBSession, pubkey_hex: str) -> None:
     """Require an active SBT credential for the Ed25519 committer key."""
-    result = await db.execute(
-        select(KeyCredential.revoked_at)
-        .where(KeyCredential.holder_key == pubkey_hex)
-        .order_by(KeyCredential.issued_at.desc())
-    )
-    rows = list(result.scalars().all())
     now = datetime.now(timezone.utc)
-    has_active = any(not _is_key_revoked_at(revoked_at, now) for revoked_at in rows)
+    # Check for an active credential with a single LIMIT 1 lookup so we don't
+    # scan every credential row for hot-path commits.
+    active_q = (
+        select(KeyCredential.id)
+        .where(
+            KeyCredential.holder_key == pubkey_hex,
+            (KeyCredential.revoked_at.is_(None)) | (KeyCredential.revoked_at > now),
+        )
+        .limit(1)
+    )
+    has_active = (await db.execute(active_q)).scalar_one_or_none() is not None
     if has_active:
         return
-    if rows:
+    any_q = select(KeyCredential.id).where(KeyCredential.holder_key == pubkey_hex).limit(1)
+    has_any = (await db.execute(any_q)).scalar_one_or_none() is not None
+    if has_any:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Committer key credential has been revoked.",
         )
     if _dev_sbt_bypass_allowed():
-        logger.warning("dev_sbt_bypass_allowed_for_committer pubkey=%s", pubkey_hex)
+        logger.warning(
+            "dev_sbt_bypass_allowed_for_committer pubkey=%s",
+            sanitize_for_log(pubkey_hex),
+        )
         return
     raise HTTPException(
         status_code=status.HTTP_403_FORBIDDEN,

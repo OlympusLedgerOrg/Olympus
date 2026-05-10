@@ -1,14 +1,14 @@
 """
-Write API for Olympus â€” batch record ingestion and proof retrieval.
+Write API for Olympus — batch record ingestion and proof retrieval.
 
 This module provides FastAPI endpoints for ingesting records into Olympus,
 including batch operations, content-hash deduplication, and asynchronous
 proof retrieval.
 
 Endpoints:
-    POST /ingest/records         â€” Atomically ingest a batch of records
-    GET  /ingest/records/{proof_id}/proof â€” Retrieve proof for an ingested record
-    POST /ingest/commit          â€” Commit a pre-computed artifact hash to the ledger
+    POST /ingest/records         — Atomically ingest a batch of records
+    GET  /ingest/records/{proof_id}/proof — Retrieve proof for an ingested record
+    POST /ingest/commit          — Commit a pre-computed artifact hash to the ledger
 
 All write operations are append-only and maintain ledger chain integrity.
 
@@ -43,6 +43,7 @@ from api.auth import (
     RateLimit,
     RequireCommitScope,
     RequireIngestScope,
+    RequireVerifyScope,
     _get_backend as _get_rate_limit_backend,
     _get_client_ip,
     _register_api_key_for_tests as _auth_register_api_key_for_tests,
@@ -134,7 +135,7 @@ __all__ = [
     "_merkle_proof_from_store",
 ]
 
-# Poseidon hash suite identifier emitted in proof bundle metadata â€” see ADR-0009.
+# Poseidon hash suite identifier emitted in proof bundle metadata — see ADR-0009.
 # Defined here as a string literal to keep api.ingest importable without the
 # olympus_core Rust extension. The authoritative definition (with full parameter
 # dict) lives in protocol/poseidon.py::HASH_SUITE_VERSION.
@@ -277,10 +278,10 @@ _signing_key: nacl.signing.SigningKey | None = None
 _TEST_MODE: bool = False
 
 # Legacy in-memory stores (kept for backward compatibility during migration)
-# proof_id â†’ ingestion metadata (LRU-bounded to prevent OOM)
+# proof_id → ingestion metadata (LRU-bounded to prevent OOM)
 _ingestion_store: OrderedDict[str, dict[str, Any]] = OrderedDict()
 
-# content_hash â†’ proof_id (dedup index, LRU-bounded to prevent OOM)
+# content_hash → proof_id (dedup index, LRU-bounded to prevent OOM)
 _content_index: OrderedDict[str, str] = OrderedDict()
 
 # Shared ledger for write path (legacy, unused when storage is enabled)
@@ -349,12 +350,12 @@ async def _close_sequencer_client() -> None:
 
 
 logger.info("ingest_path=sequencer addr=%s", _sequencer_addr)
-# Warn loudly if the auth token is missing â€” requests will be rejected
+# Warn loudly if the auth token is missing — requests will be rejected
 # by the sequencer's requireToken middleware.  The token value itself is
 # intentionally never logged to avoid credential exposure.
 if not _sequencer_token:
     logger.warning(
-        "ingest: OLYMPUS_SEQUENCER_TOKEN is not set â€” sequencer requests will be unauthorized"
+        "ingest: OLYMPUS_SEQUENCER_TOKEN is not set — sequencer requests will be unauthorized"
     )
 elif os.environ.get("SEQUENCER_API_TOKEN", "") and not os.environ.get(
     "OLYMPUS_SEQUENCER_TOKEN", ""
@@ -374,7 +375,7 @@ def _dev_signing_key_enabled() -> bool:
 
 _EPHEMERAL_KEY_WITH_DB_ERROR = (
     "OLYMPUS_DEV_SIGNING_KEY=1 is set but DATABASE_URL is also configured. "
-    "Ephemeral signing keys cannot be used with a persistent database â€” all signed "
+    "Ephemeral signing keys cannot be used with a persistent database — all signed "
     "shard headers would become permanently unverifiable after restart. "
     "Either set OLYMPUS_INGEST_SIGNING_KEY to a stable key, or unset DATABASE_URL "
     "to use in-memory mode only."
@@ -575,7 +576,7 @@ def _ingestion_result_from_existing(existing_record: dict[str, Any]) -> Ingestio
 
 
 # ---------------------------------------------------------------------------
-# Rate-limit policy (action â†’ capacity, refill_rate_per_second)
+# Rate-limit policy (action → capacity, refill_rate_per_second)
 #
 # H-3 Fix: The bucket *storage* is now delegated to the shared auth backend
 # (api.auth._get_backend), eliminating the dual-system vulnerability.  Only
@@ -790,7 +791,7 @@ def _build_poseidon_smt_for_storage_shard(
     from protocol.poseidon_smt import PoseidonSMT
 
     with storage._get_connection() as conn, conn.cursor() as cur:
-        # O(N) leaf scan â€” only runs when Poseidon / ZK proofs are enabled.
+        # O(N) leaf scan — only runs when Poseidon / ZK proofs are enabled.
         if up_to_ts is not None:
             if isinstance(up_to_ts, str):
                 up_to_ts = datetime.fromisoformat(up_to_ts)
@@ -844,11 +845,11 @@ async def _async_canonicalize_and_hash(content: dict[str, Any]) -> tuple[bytes, 
     # AUDIT(doc_hash provenance): content_hash is the authoritative document
     # fingerprint for the ingest path.  It is derived exclusively from
     # canonical_commit_v1 bytes:
-    #   1. canonicalize_for_commit() â€” NFC + sorted keys + numeric normalization,
+    #   1. canonicalize_for_commit() — NFC + sorted keys + numeric normalization,
     #      homoglyph scrubbing DISABLED (scrubbing is non-injective: two distinct
-    #      documents could otherwise produce the same commitment hash â€” H-1).
-    #   2. document_to_bytes()       â€” deterministic JCS/RFC 8785 JSON encoding.
-    #   3. hash_bytes()              â€” BLAKE3 with LEGACY_BYTES_PREFIX domain sep.
+    #      documents could otherwise produce the same commitment hash — H-1).
+    #   2. document_to_bytes()       — deterministic JCS/RFC 8785 JSON encoding.
+    #   3. hash_bytes()              — BLAKE3 with LEGACY_BYTES_PREFIX domain sep.
     # The resulting hex digest becomes the Merkle leaf in build_tree().
     content_bytes = await loop.run_in_executor(None, document_to_commit_bytes, content)
     content_hash = hash_bytes(content_bytes).hex()
@@ -1121,7 +1122,7 @@ async def ingest_batch(
             # Poseidon SMT for local tracking of root within this batch.
             # When storage is configured, the authoritative Poseidon root is
             # computed incrementally inside the SERIALIZABLE transaction
-            # (storage/postgres.py) â€” O(log N) per record, not O(N).
+            # (storage/postgres.py) — O(log N) per record, not O(N).
             # We only need a local PoseidonSMT to carry forward the root
             # between records in the same batch for metadata purposes.
             poseidon_smt = PoseidonSMT()
@@ -1543,7 +1544,7 @@ async def ingest_raw_file(
     INGEST_TOTAL.labels(outcome="committed").inc()
     logger.info(
         "raw-bytes file ingested record_id=%s content_hash=%s size=%d",
-        record_id,
+        sanitize_for_log(record_id),
         content_hash,
         len(file_bytes),
     )
@@ -1601,7 +1602,7 @@ async def get_ingestion_proof(
 
 @router.get("/records/hash/{content_hash}/verify", response_model=HashVerificationResponse)
 async def verify_ingested_content_hash(
-    content_hash: str, request: Request, _rl: RateLimit
+    content_hash: str, request: Request, _api_key: RequireVerifyScope, _rl: RateLimit
 ) -> HashVerificationResponse:
     """
     Verify that a committed BLAKE3 content hash exists in the ingestion store.
@@ -1715,7 +1716,7 @@ async def submit_proof_bundle(
 
     The caller supplies only the raw document bytes. The server
     canonicalizes, hashes, and looks up its authoritative proof record.
-    No caller-supplied metadata is accepted â€” all proof fields are
+    No caller-supplied metadata is accepted — all proof fields are
     derived from the server's own ingestion records.
 
     Returns 404 if the document has not been committed yet. Commit
@@ -1738,7 +1739,7 @@ async def submit_proof_bundle(
     file_bytes = await _read_upload_bounded(file, settings.max_upload_bytes, max_mb)
     validate_file_magic(file_bytes, file.content_type or "application/octet-stream")
 
-    # Parse as JSON and canonicalize â€” same pipeline as the main ingest path.
+    # Parse as JSON and canonicalize — same pipeline as the main ingest path.
     try:
         content = json.loads(file_bytes)
     except (json.JSONDecodeError, UnicodeDecodeError) as exc:

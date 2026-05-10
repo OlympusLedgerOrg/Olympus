@@ -1,4 +1,4 @@
-import { useEffect, useRef, type FC } from "react";
+import { useEffect, useMemo, useRef, type FC } from "react";
 
 const buildings = [
   { left: "2%",  width: "8%",  height: "34%", delay: "0s",   windows: 4 },
@@ -121,7 +121,15 @@ const NeonSmiley: FC = () => (
 );
 
 const WindowGrid: FC<{ cols: number; rows: number }> = ({ cols, rows }) => {
-  const cells = Array.from({ length: cols * rows }, (_, i) => i);
+  const cells = useMemo(() => {
+    return Array.from({ length: cols * rows }, (_, i) => {
+      const lit = Math.random() > 0.45;
+      const red = lit && Math.random() > 0.88;
+      const duration = 3 + Math.random() * 9;
+      const delay = Math.random() * 4;
+      return { i, lit, red, duration, delay };
+    });
+  }, [cols, rows]);
   return (
     <div style={{
       position: "absolute",
@@ -131,9 +139,7 @@ const WindowGrid: FC<{ cols: number; rows: number }> = ({ cols, rows }) => {
       gap: "3px",
       padding: "4px",
     }}>
-      {cells.map((i) => {
-        const lit = Math.random() > 0.45;
-        const red  = lit && Math.random() > 0.88;
+      {cells.map(({ i, lit, red, duration, delay }) => {
         return (
           <div key={i} style={{
             aspectRatio: "1 / 1.4",
@@ -145,7 +151,7 @@ const WindowGrid: FC<{ cols: number; rows: number }> = ({ cols, rows }) => {
             boxShadow: lit
               ? `0 0 4px ${red ? "rgba(255,0,85,0.8)" : "rgba(0,255,65,0.5)"}`
               : "none",
-            animation: lit ? `winBlink ${3 + Math.random() * 9}s ease-in-out infinite ${Math.random() * 4}s` : "none",
+            animation: lit ? `winBlink ${duration}s ease-in-out infinite ${delay}s` : "none",
           }} />
         );
       })}
