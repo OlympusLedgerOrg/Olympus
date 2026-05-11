@@ -17,7 +17,6 @@ import pytest_asyncio
 
 import api.routers.witness as witness_module
 from api.routers.witness import (
-    _RegistryCache,
     _env_flag_enabled,
     _load_federation_registry,
     _resolve_node_pubkey,
@@ -247,7 +246,7 @@ class TestResolveNodePubkey:
 TEST_DB_URL = "sqlite+aiosqlite:///:memory:"
 
 
-@pytest_asyncio.fixture(scope="module")
+@pytest_asyncio.fixture()
 async def direct_db_engine():
     from sqlalchemy.ext.asyncio import create_async_engine
 
@@ -260,7 +259,7 @@ async def direct_db_engine():
     await engine.dispose()
 
 
-@pytest_asyncio.fixture(scope="module")
+@pytest_asyncio.fixture()
 async def direct_session_factory(direct_db_engine):
     from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
@@ -276,11 +275,9 @@ class TestEndpointDirectCall:
     ) -> None:
         from fastapi import HTTPException
 
-        from api.routers.witness import get_latest_checkpoint
-
         async with direct_session_factory() as db:
             with pytest.raises(HTTPException) as exc_info:
-                await get_latest_checkpoint(db)
+                await witness_module.get_latest_checkpoint(db)
         assert exc_info.value.status_code == 404
 
     @pytest.mark.asyncio
@@ -289,29 +286,23 @@ class TestEndpointDirectCall:
     ) -> None:
         from fastapi import HTTPException
 
-        from api.routers.witness import get_checkpoint_by_sequence
-
         async with direct_session_factory() as db:
             with pytest.raises(HTTPException) as exc_info:
-                await get_checkpoint_by_sequence(99999, db)
+                await witness_module.get_checkpoint_by_sequence(99999, db)
         assert exc_info.value.status_code == 404
 
     @pytest.mark.asyncio
     async def test_list_checkpoints_returns_empty_list(
         self, direct_session_factory
     ) -> None:
-        from api.routers.witness import list_checkpoints
-
         async with direct_session_factory() as db:
-            result = await list_checkpoints(db=db, limit=10, offset=0)
+            result = await witness_module.list_checkpoints(db=db, limit=10, offset=0)
         assert result == []
 
     @pytest.mark.asyncio
     async def test_witness_health_returns_ok(self, direct_session_factory) -> None:
-        from api.routers.witness import witness_health
-
         async with direct_session_factory() as db:
-            result = await witness_health(db)
+            result = await witness_module.witness_health(db)
         assert result.status == "ok"
         assert result.observation_count >= 0
 
@@ -319,10 +310,8 @@ class TestEndpointDirectCall:
     async def test_get_gossip_state_returns_empty_list(
         self, direct_session_factory
     ) -> None:
-        from api.routers.witness import get_gossip_state
-
         async with direct_session_factory() as db:
-            result = await get_gossip_state(db=db)
+            result = await witness_module.get_gossip_state(db=db)
         assert result == []
 
     @pytest.mark.asyncio
@@ -336,7 +325,6 @@ class TestEndpointDirectCall:
         import nacl.signing as _nacl_signing
 
         from api.auth import _APIKeyRecord
-        from api.routers.witness import submit_observation
         from api.schemas.witness import WitnessAnnounceRequest, WitnessCheckpoint
         from protocol.hashes import hash_bytes
         from protocol.timestamps import current_timestamp
@@ -368,7 +356,7 @@ class TestEndpointDirectCall:
         )
 
         async with direct_session_factory() as db:
-            response = await submit_observation(request, dev_key, db)
+            response = await witness_module.submit_observation(request, dev_key, db)
         assert response.origin == origin
         assert response.sequence == seq
         assert response.status == "recorded"
@@ -385,7 +373,6 @@ class TestEndpointDirectCall:
         from fastapi import HTTPException
 
         from api.auth import _APIKeyRecord
-        from api.routers.witness import submit_observation
         from api.schemas.witness import WitnessAnnounceRequest, WitnessCheckpoint
         from protocol.hashes import hash_bytes
         from protocol.timestamps import current_timestamp
@@ -424,10 +411,10 @@ class TestEndpointDirectCall:
         )
 
         async with direct_session_factory() as db:
-            await submit_observation(request1, dev_key, db)
+            await witness_module.submit_observation(request1, dev_key, db)
         async with direct_session_factory() as db:
             with pytest.raises(HTTPException) as exc_info:
-                await submit_observation(request2, dev_key, db)
+                await witness_module.submit_observation(request2, dev_key, db)
         assert exc_info.value.status_code == 409
         assert "nonce" in exc_info.value.detail.lower()
 
@@ -443,7 +430,6 @@ class TestEndpointDirectCall:
         from fastapi import HTTPException
 
         from api.auth import _APIKeyRecord
-        from api.routers.witness import submit_observation
         from api.schemas.witness import WitnessAnnounceRequest, WitnessCheckpoint
         from protocol.hashes import hash_bytes
         from protocol.timestamps import current_timestamp
@@ -474,10 +460,10 @@ class TestEndpointDirectCall:
             )
 
         async with direct_session_factory() as db:
-            await submit_observation(_make_req(uuid.uuid4().hex), dev_key, db)
+            await witness_module.submit_observation(_make_req(uuid.uuid4().hex), dev_key, db)
         async with direct_session_factory() as db:
             with pytest.raises(HTTPException) as exc_info:
-                await submit_observation(_make_req(uuid.uuid4().hex), dev_key, db)
+                await witness_module.submit_observation(_make_req(uuid.uuid4().hex), dev_key, db)
         assert exc_info.value.status_code == 409
 
     @pytest.mark.asyncio
@@ -491,7 +477,6 @@ class TestEndpointDirectCall:
         import nacl.signing as _nacl_signing
 
         from api.auth import _APIKeyRecord
-        from api.routers.witness import get_latest_checkpoint, submit_observation
         from api.schemas.witness import WitnessAnnounceRequest, WitnessCheckpoint
         from protocol.hashes import hash_bytes
         from protocol.timestamps import current_timestamp
@@ -520,10 +505,10 @@ class TestEndpointDirectCall:
             node_signature=sig_hex,
         )
         async with direct_session_factory() as db:
-            await submit_observation(req, dev_key, db)
+            await witness_module.submit_observation(req, dev_key, db)
 
         async with direct_session_factory() as db:
-            result = await get_latest_checkpoint(db)
+            result = await witness_module.get_latest_checkpoint(db)
         assert result.checkpoint.sequence == seq
 
     @pytest.mark.asyncio
@@ -537,7 +522,6 @@ class TestEndpointDirectCall:
         import nacl.signing as _nacl_signing
 
         from api.auth import _APIKeyRecord
-        from api.routers.witness import get_checkpoint_by_sequence, submit_observation
         from api.schemas.witness import WitnessAnnounceRequest, WitnessCheckpoint
         from protocol.hashes import hash_bytes
         from protocol.timestamps import current_timestamp
@@ -566,10 +550,10 @@ class TestEndpointDirectCall:
             node_signature=sig_hex,
         )
         async with direct_session_factory() as db:
-            await submit_observation(req, dev_key, db)
+            await witness_module.submit_observation(req, dev_key, db)
 
         async with direct_session_factory() as db:
-            result = await get_checkpoint_by_sequence(seq, db)
+            result = await witness_module.get_checkpoint_by_sequence(seq, db)
         assert result.checkpoint.sequence == seq
 
     @pytest.mark.asyncio
@@ -583,17 +567,15 @@ class TestEndpointDirectCall:
         import nacl.signing as _nacl_signing
 
         from api.auth import _APIKeyRecord
-        import api.routers.witness as wm
-        from api.routers.witness import submit_observation
         from api.schemas.witness import WitnessAnnounceRequest, WitnessCheckpoint
         from protocol.hashes import hash_bytes
         from protocol.timestamps import current_timestamp
 
         signing_key = _nacl_signing.SigningKey.generate()
         pubkey_hex = signing_key.verify_key.encode().hex()
-        monkeypatch.setattr(wm, "_resolve_node_pubkey", lambda o: pubkey_hex)
+        monkeypatch.setattr(witness_module, "_resolve_node_pubkey", lambda o: pubkey_hex)
         # Reduce nonce capacity to 1 so the second submission triggers eviction.
-        monkeypatch.setattr(wm, "_MAX_NONCE_ENTRIES", 1)
+        monkeypatch.setattr(witness_module, "_MAX_NONCE_ENTRIES", 1)
 
         dev_key = _APIKeyRecord(
             key_id="test",
@@ -614,9 +596,11 @@ class TestEndpointDirectCall:
 
         ts = current_timestamp()
         async with direct_session_factory() as db:
-            await submit_observation(_make_req("evict-nonce-a", 101, ts), dev_key, db)
+            await witness_module.submit_observation(_make_req("evict-nonce-a", 101, ts), dev_key, db)
         async with direct_session_factory() as db:
-            resp = await submit_observation(_make_req("evict-nonce-b", 102, ts), dev_key, db)
+            resp = await witness_module.submit_observation(
+                _make_req("evict-nonce-b", 102, ts), dev_key, db
+            )
         assert resp.status == "recorded"
 
     @pytest.mark.asyncio
@@ -630,17 +614,15 @@ class TestEndpointDirectCall:
         import nacl.signing as _nacl_signing
 
         from api.auth import _APIKeyRecord
-        import api.routers.witness as wm
-        from api.routers.witness import submit_observation
         from api.schemas.witness import WitnessAnnounceRequest, WitnessCheckpoint
         from protocol.hashes import hash_bytes
         from protocol.timestamps import current_timestamp
 
         signing_key = _nacl_signing.SigningKey.generate()
         pubkey_hex = signing_key.verify_key.encode().hex()
-        monkeypatch.setattr(wm, "_resolve_node_pubkey", lambda o: pubkey_hex)
+        monkeypatch.setattr(witness_module, "_resolve_node_pubkey", lambda o: pubkey_hex)
         # Reduce observation capacity to 1 so the second submission triggers eviction.
-        monkeypatch.setattr(wm, "_MAX_OBSERVATIONS", 1)
+        monkeypatch.setattr(witness_module, "_MAX_OBSERVATIONS", 1)
 
         dev_key = _APIKeyRecord(
             key_id="test",
@@ -661,9 +643,13 @@ class TestEndpointDirectCall:
 
         ts = current_timestamp()
         async with direct_session_factory() as db:
-            await submit_observation(_make_req("evict-obs-a", 201, ts), dev_key, db)
+            await witness_module.submit_observation(
+                _make_req("evict-obs-a", 201, ts), dev_key, db
+            )
         async with direct_session_factory() as db:
-            resp = await submit_observation(_make_req("evict-obs-b", 202, ts), dev_key, db)
+            resp = await witness_module.submit_observation(
+                _make_req("evict-obs-b", 202, ts), dev_key, db
+            )
         assert resp.status == "recorded"
 
     @pytest.mark.asyncio
@@ -677,7 +663,6 @@ class TestEndpointDirectCall:
         import nacl.signing as _nacl_signing
 
         from api.auth import _APIKeyRecord
-        from api.routers.witness import get_gossip_state, submit_observation
         from api.schemas.witness import WitnessAnnounceRequest, WitnessCheckpoint
         from protocol.hashes import hash_bytes
         from protocol.timestamps import current_timestamp
@@ -729,12 +714,12 @@ class TestEndpointDirectCall:
         )
 
         async with direct_session_factory() as db:
-            await submit_observation(req_a, dev_key, db)
+            await witness_module.submit_observation(req_a, dev_key, db)
         async with direct_session_factory() as db:
-            await submit_observation(req_b, dev_key, db)
+            await witness_module.submit_observation(req_b, dev_key, db)
 
         async with direct_session_factory() as db:
-            conflicts = await get_gossip_state(db=db)
+            conflicts = await witness_module.get_gossip_state(db=db)
 
         assert any(c.sequence == shared_seq for c in conflicts)
         conflict = next(c for c in conflicts if c.sequence == shared_seq)

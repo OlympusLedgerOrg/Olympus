@@ -652,7 +652,6 @@ async def test_submit_observation_rejects_bad_signature(
     """A signature that does not verify against the registered key returns 401."""
     # Sign with a *different* key than what we register.
     wrong_key = nacl.signing.SigningKey.generate()
-    ch = "ab" * 32
     wrong_sig = (
         wrong_key.sign(hash_bytes(b"wrong-payload")).signature.hex()
     )
