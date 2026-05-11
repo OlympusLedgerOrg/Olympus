@@ -132,7 +132,7 @@ def _normalize_unicode_spaces(text: str) -> str:
 
 # Backwards-compatible alias for the historical name.  The behavior is now
 # Unicode-space normalization only, not homoglyph folding.
-_scrub_homoglyphs = _normalize_unicode_spaces
+_unused_scrub_homoglyphs_alias = _normalize_unicode_spaces
 
 
 def canonicalize_json(data: dict[str, Any]) -> str:
