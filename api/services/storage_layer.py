@@ -114,13 +114,10 @@ def _get_storage() -> StorageLayer:
     Raises:
         HTTPException: 503 if database is not available
     """
-    global _storage, _db_error
+    global _storage
 
     if _storage is not None:
         return _storage
-
-    # Reset previous error so we retry the connection
-    _db_error = None
 
     # Try to initialize the storage layer
     try:
@@ -178,7 +175,6 @@ def _get_storage() -> StorageLayer:
         return _storage
 
     except Exception as e:
-        _db_error = str(e)
         logger.error("Database initialization failed: %s", e, exc_info=True)
         raise HTTPException(
             status_code=503,
