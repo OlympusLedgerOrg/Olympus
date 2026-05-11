@@ -600,6 +600,7 @@ async def _make_isolated_client(session_factory, monkeypatch, pubkey_resolver=No
 
     pubkey_resolver: callable(origin) -> str|None, or None to use real lookup.
     """
+
     async def override_get_db():
         async with session_factory() as session:
             yield session
@@ -621,18 +622,14 @@ async def test_submit_observation_rejects_unparseable_timestamp(
     async with await _make_isolated_client(
         session_factory, monkeypatch, pubkey_resolver=lambda o: _TEST_PUBKEY_HEX
     ) as ac:
-        payload = _announcement_payload(
-            "ts-parse-node", 1, timestamp="NOT-AN-ISO-DATE"
-        )
+        payload = _announcement_payload("ts-parse-node", 1, timestamp="NOT-AN-ISO-DATE")
         resp = await ac.post("/witness/observations", json=payload)
     assert resp.status_code == 422
     assert "ISO 8601" in resp.json()["detail"]
 
 
 @pytest.mark.asyncio
-async def test_submit_observation_rejects_unknown_origin(
-    session_factory, monkeypatch
-) -> None:
+async def test_submit_observation_rejects_unknown_origin(session_factory, monkeypatch) -> None:
     """An origin not in the registry returns 403 Forbidden."""
     async with await _make_isolated_client(
         session_factory,
@@ -646,15 +643,11 @@ async def test_submit_observation_rejects_unknown_origin(
 
 
 @pytest.mark.asyncio
-async def test_submit_observation_rejects_bad_signature(
-    session_factory, monkeypatch
-) -> None:
+async def test_submit_observation_rejects_bad_signature(session_factory, monkeypatch) -> None:
     """A signature that does not verify against the registered key returns 401."""
     # Sign with a *different* key than what we register.
     wrong_key = nacl.signing.SigningKey.generate()
-    wrong_sig = (
-        wrong_key.sign(hash_bytes(b"wrong-payload")).signature.hex()
-    )
+    wrong_sig = wrong_key.sign(hash_bytes(b"wrong-payload")).signature.hex()
 
     async with await _make_isolated_client(
         session_factory, monkeypatch, pubkey_resolver=lambda o: _TEST_PUBKEY_HEX
@@ -666,9 +659,7 @@ async def test_submit_observation_rejects_bad_signature(
 
 
 @pytest.mark.asyncio
-async def test_submit_observation_rejects_malformed_pubkey(
-    session_factory, monkeypatch
-) -> None:
+async def test_submit_observation_rejects_malformed_pubkey(session_factory, monkeypatch) -> None:
     """A pubkey that is not a valid 32-byte Ed25519 key returns 400."""
     # 4-byte pubkey hex — will fail nacl.signing.VerifyKey with ValueError.
     short_pubkey_hex = "deadbeef"

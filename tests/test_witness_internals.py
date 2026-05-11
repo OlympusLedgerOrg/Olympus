@@ -208,9 +208,7 @@ class TestResolveNodePubkey:
         result = _resolve_node_pubkey("fallback-node.example.com")
         assert result == fallback_pubkey_hex
 
-    def test_guardian_enabled_missing_registry_logs_and_falls_back(
-        self, monkeypatch
-    ):
+    def test_guardian_enabled_missing_registry_logs_and_falls_back(self, monkeypatch):
         """When Guardian is active but registry file is missing, logs warning and falls back."""
         signing_key = nacl.signing.SigningKey.generate()
         pubkey_hex = signing_key.verify_key.encode().hex()
@@ -281,9 +279,7 @@ class TestEndpointDirectCall:
         assert exc_info.value.status_code == 404
 
     @pytest.mark.asyncio
-    async def test_get_checkpoint_by_sequence_raises_404(
-        self, direct_session_factory
-    ) -> None:
+    async def test_get_checkpoint_by_sequence_raises_404(self, direct_session_factory) -> None:
         from fastapi import HTTPException
 
         async with direct_session_factory() as db:
@@ -292,9 +288,7 @@ class TestEndpointDirectCall:
         assert exc_info.value.status_code == 404
 
     @pytest.mark.asyncio
-    async def test_list_checkpoints_returns_empty_list(
-        self, direct_session_factory
-    ) -> None:
+    async def test_list_checkpoints_returns_empty_list(self, direct_session_factory) -> None:
         async with direct_session_factory() as db:
             result = await witness_module.list_checkpoints(db=db, limit=10, offset=0)
         assert result == []
@@ -307,9 +301,7 @@ class TestEndpointDirectCall:
         assert result.observation_count >= 0
 
     @pytest.mark.asyncio
-    async def test_get_gossip_state_returns_empty_list(
-        self, direct_session_factory
-    ) -> None:
+    async def test_get_gossip_state_returns_empty_list(self, direct_session_factory) -> None:
         async with direct_session_factory() as db:
             result = await witness_module.get_gossip_state(db=db)
         assert result == []
@@ -342,9 +334,7 @@ class TestEndpointDirectCall:
 
         request = WitnessAnnounceRequest(
             origin=origin,
-            checkpoint=WitnessCheckpoint(
-                sequence=seq, checkpoint_hash=ch, timestamp=ts
-            ),
+            checkpoint=WitnessCheckpoint(sequence=seq, checkpoint_hash=ch, timestamp=ts),
             nonce=uuid.uuid4().hex,
             node_signature=sig_hex,
         )
@@ -596,7 +586,9 @@ class TestEndpointDirectCall:
 
         ts = current_timestamp()
         async with direct_session_factory() as db:
-            await witness_module.submit_observation(_make_req("evict-nonce-a", 101, ts), dev_key, db)
+            await witness_module.submit_observation(
+                _make_req("evict-nonce-a", 101, ts), dev_key, db
+            )
         async with direct_session_factory() as db:
             resp = await witness_module.submit_observation(
                 _make_req("evict-nonce-b", 102, ts), dev_key, db
@@ -643,9 +635,7 @@ class TestEndpointDirectCall:
 
         ts = current_timestamp()
         async with direct_session_factory() as db:
-            await witness_module.submit_observation(
-                _make_req("evict-obs-a", 201, ts), dev_key, db
-            )
+            await witness_module.submit_observation(_make_req("evict-obs-a", 201, ts), dev_key, db)
         async with direct_session_factory() as db:
             resp = await witness_module.submit_observation(
                 _make_req("evict-obs-b", 202, ts), dev_key, db
@@ -697,18 +687,14 @@ class TestEndpointDirectCall:
         payload_a = hash_bytes(f"{origin_a}:{shared_seq}:{ch_a}".encode())
         req_a = WitnessAnnounceRequest(
             origin=origin_a,
-            checkpoint=WitnessCheckpoint(
-                sequence=shared_seq, checkpoint_hash=ch_a, timestamp=ts
-            ),
+            checkpoint=WitnessCheckpoint(sequence=shared_seq, checkpoint_hash=ch_a, timestamp=ts),
             nonce=uuid.uuid4().hex,
             node_signature=key_a.sign(payload_a).signature.hex(),
         )
         payload_b = hash_bytes(f"{origin_b}:{shared_seq}:{ch_b}".encode())
         req_b = WitnessAnnounceRequest(
             origin=origin_b,
-            checkpoint=WitnessCheckpoint(
-                sequence=shared_seq, checkpoint_hash=ch_b, timestamp=ts
-            ),
+            checkpoint=WitnessCheckpoint(sequence=shared_seq, checkpoint_hash=ch_b, timestamp=ts),
             nonce=uuid.uuid4().hex,
             node_signature=key_b.sign(payload_b).signature.hex(),
         )
