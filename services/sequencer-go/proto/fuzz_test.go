@@ -47,6 +47,19 @@ func seedBytes(t testing.TB, msg proto.Message) []byte {
 	return b
 }
 
+// maxFuzzInputBytes caps the size of a single fuzz input. Real Go↔Rust
+// boundary messages are well under this size — a maximum-depth
+// 256-sibling Merkle proof with 32-byte hashes serialises to ~9 KiB, and
+// a maximum-depth UpdateResponse with 256 SmtNodeDelta entries to ~11 KiB.
+// 16 KiB therefore comfortably accommodates every legitimate seed while
+// preventing the libFuzzer engine from stalling a worker by generating
+// multi-megabyte inputs that decode into pathological proto structures
+// (deeply-nested groups, huge repeated fields, etc.). Without this cap a
+// single slow input can starve the per-execution context and surface as
+// "context deadline exceeded" in CI even though no panic or wire-format
+// bug has been found.
+const maxFuzzInputBytes = 16384
+
 // FuzzUnmarshalUpdateResponse fuzzes the UpdateResponse message — the most
 // security-critical response from the Rust service, carrying the new SMT root,
 // global key, leaf-value hash, and all node deltas to be persisted.
@@ -78,6 +91,9 @@ func FuzzUnmarshalUpdateResponse(f *testing.F) {
 	f.Add([]byte("\xff\xff\xff\xff\xff"))
 
 	f.Fuzz(func(t *testing.T, data []byte) {
+		if len(data) > maxFuzzInputBytes {
+			t.Skip()
+		}
 		msg := &pb.UpdateResponse{}
 		if err := proto.Unmarshal(data, msg); err != nil {
 			// Parse errors are expected for malformed input; not a failure.
@@ -109,6 +125,9 @@ func FuzzUnmarshalProveInclusion(f *testing.F) {
 	f.Add([]byte("\x00"))
 
 	f.Fuzz(func(t *testing.T, data []byte) {
+		if len(data) > maxFuzzInputBytes {
+			t.Skip()
+		}
 		msg := &pb.ProveInclusionResponse{}
 		if err := proto.Unmarshal(data, msg); err != nil {
 			return
@@ -135,6 +154,9 @@ func FuzzUnmarshalProveNonInclusion(f *testing.F) {
 	f.Add([]byte{})
 
 	f.Fuzz(func(t *testing.T, data []byte) {
+		if len(data) > maxFuzzInputBytes {
+			t.Skip()
+		}
 		msg := &pb.ProveNonInclusionResponse{}
 		if err := proto.Unmarshal(data, msg); err != nil {
 			return
@@ -157,6 +179,9 @@ func FuzzUnmarshalCanonicalize(f *testing.F) {
 	f.Add([]byte{})
 
 	f.Fuzz(func(t *testing.T, data []byte) {
+		if len(data) > maxFuzzInputBytes {
+			t.Skip()
+		}
 		msg := &pb.CanonicalizeResponse{}
 		if err := proto.Unmarshal(data, msg); err != nil {
 			return
@@ -178,6 +203,9 @@ func FuzzUnmarshalGetRoot(f *testing.F) {
 	f.Add([]byte{})
 
 	f.Fuzz(func(t *testing.T, data []byte) {
+		if len(data) > maxFuzzInputBytes {
+			t.Skip()
+		}
 		msg := &pb.GetRootResponse{}
 		if err := proto.Unmarshal(data, msg); err != nil {
 			return
@@ -199,6 +227,9 @@ func FuzzUnmarshalSignRoot(f *testing.F) {
 	f.Add([]byte{})
 
 	f.Fuzz(func(t *testing.T, data []byte) {
+		if len(data) > maxFuzzInputBytes {
+			t.Skip()
+		}
 		msg := &pb.SignRootResponse{}
 		if err := proto.Unmarshal(data, msg); err != nil {
 			return
