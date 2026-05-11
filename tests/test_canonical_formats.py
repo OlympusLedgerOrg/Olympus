@@ -76,6 +76,37 @@ class TestCanonicalizePlaintext:
         result = canonicalize_plaintext("\uff21\uff22\uff23", scrub_homoglyphs=False)
         assert result == "\uff21\uff22\uff23"
 
+    def test_normalize_unicode_spaces_keyword_supported(self) -> None:
+        """The renamed keyword maps Unicode space separators to ASCII space."""
+        result = canonicalize_plaintext("Hello\u00a0World", normalize_unicode_spaces=True)
+        assert result == "Hello World"
+
+    def test_normalize_unicode_spaces_false_skips_explicit_translation(self) -> None:
+        """With the flag off, the explicit Unicode-space translation is skipped.
+
+        Plaintext mode still collapses whitespace via :py:meth:`str.split`,
+        so NBSP between words is collapsed to a single ASCII space — the
+        per-line ``" ".join(line.split())`` step intentionally treats any
+        Unicode whitespace as a separator.  But a *leading* NBSP is preserved
+        as a distinct codepoint when the explicit translation is disabled.
+        """
+        # With flag on: leading NBSP becomes ASCII space, then collapsed.
+        on = canonicalize_plaintext("\u00a0Hello", normalize_unicode_spaces=True)
+        # With flag off: leading NBSP is preserved through the explicit step,
+        # then ``str.split`` strips it as leading whitespace (it is Unicode
+        # whitespace).  The two outputs must still be equal at this point;
+        # the meaningful divergence shows up in the JSON canonicalizer's
+        # value path, exercised in test_canonical_document.py.
+        off = canonicalize_plaintext("\u00a0Hello", normalize_unicode_spaces=False)
+        assert on == "Hello"
+        assert off == "Hello"
+
+    def test_scrub_homoglyphs_keyword_alias_supported(self) -> None:
+        """``scrub_homoglyphs`` remains as a backward-compatible alias."""
+        a = canonicalize_plaintext("Hello\u00a0World", scrub_homoglyphs=True)
+        b = canonicalize_plaintext("Hello\u00a0World", normalize_unicode_spaces=True)
+        assert a == b == "Hello World"
+
     def test_idempotent(self) -> None:
         """Canonicalization is idempotent: C(x) == C(C(x))."""
         text = "  Hello   World  \r\n\r\n  Second   line  \r\n"

@@ -9,7 +9,7 @@ import pytest
 from hypothesis import given, strategies as st
 
 from protocol.canonical import (
-    _scrub_homoglyphs,
+    _normalize_unicode_spaces,
     canonicalize_document,
     canonicalize_for_commit,
     canonicalize_json,
@@ -520,8 +520,27 @@ def test_bool_not_coerced_to_int() -> None:
         ("USD", "USD"),  # already clean — no change
     ],
 )
-def test_unicode_space_scrub_normalizes_spaces_only(variant: str, expected: str) -> None:
-    assert _scrub_homoglyphs(variant) == expected
+def test_normalize_unicode_spaces_maps_space_separators_to_ascii_space(
+    variant: str, expected: str
+) -> None:
+    assert _normalize_unicode_spaces(variant) == expected
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        "\u00b9",  # ¹ SUPERSCRIPT ONE
+        "\uff21",  # Ａ FULLWIDTH LATIN CAPITAL LETTER A
+        "\u2163",  # Ⅳ ROMAN NUMERAL FOUR
+        # NOTE: U+212A KELVIN SIGN is intentionally excluded because Unicode
+        # NFC itself folds it to ASCII "K"; the helper preserves the input,
+        # but downstream NFC normalization will collapse it.
+        "\u2116",  # № NUMERO SIGN
+    ],
+)
+def test_normalize_unicode_spaces_preserves_compatibility_glyphs(value: str) -> None:
+    """Compatibility glyphs must not be folded by the space-normalization helper."""
+    assert _normalize_unicode_spaces(value) == value
 
 
 def test_compatibility_glyph_variants_produce_distinct_canonical_bytes() -> None:
@@ -536,18 +555,32 @@ def test_compatibility_glyph_variants_produce_distinct_canonical_bytes() -> None
     assert len(set(hashes)) == len(variants), "Compatibility glyph variants collided"
 
 
-def test_non_ascii_legitimate_content_survives_scrub() -> None:
+def test_non_ascii_legitimate_content_survives_normalization() -> None:
     """Arabic, CJK, accented Latin must not be destroyed."""
-    assert _scrub_homoglyphs("\u0645\u0631\u062d\u0628\u0627") == "\u0645\u0631\u062d\u0628\u0627"
-    assert _scrub_homoglyphs("\u65e5\u672c\u8a9e") == "\u65e5\u672c\u8a9e"
-    assert _scrub_homoglyphs("caf\u00e9") == "caf\u00e9"
+    assert (
+        _normalize_unicode_spaces("\u0645\u0631\u062d\u0628\u0627")
+        == "\u0645\u0631\u062d\u0628\u0627"
+    )
+    assert _normalize_unicode_spaces("\u65e5\u672c\u8a9e") == "\u65e5\u672c\u8a9e"
+    assert _normalize_unicode_spaces("caf\u00e9") == "caf\u00e9"
 
 
-def test_scrub_homoglyphs_false_preserves_unicode_space() -> None:
+def test_normalize_unicode_spaces_false_preserves_unicode_space() -> None:
     doc = {"text": "hello\u00a0world"}
-    bytes_on = document_to_bytes(doc, scrub_homoglyphs=True)
-    bytes_off = document_to_bytes(doc, scrub_homoglyphs=False)
+    bytes_on = document_to_bytes(doc, normalize_unicode_spaces=True)
+    bytes_off = document_to_bytes(doc, normalize_unicode_spaces=False)
     assert bytes_on != bytes_off
+
+
+def test_scrub_homoglyphs_keyword_alias_is_backwards_compatible() -> None:
+    """The legacy ``scrub_homoglyphs`` keyword still works as an alias."""
+    doc = {"text": "hello\u00a0world"}
+    assert document_to_bytes(doc, scrub_homoglyphs=False) == document_to_bytes(
+        doc, normalize_unicode_spaces=False
+    )
+    assert document_to_bytes(doc, scrub_homoglyphs=True) == document_to_bytes(
+        doc, normalize_unicode_spaces=True
+    )
 
 
 def test_canonical_hash_does_not_nfkd_fold_superscript_one() -> None:
@@ -563,6 +596,9 @@ def test_canonical_hash_does_not_nfkd_fold_superscript_one() -> None:
         ("1", "¹"),
         ("A", "Ａ"),
         ("IV", "Ⅳ"),
+        # NOTE: ("K", "\u212a") (Kelvin sign) is intentionally excluded because
+        # NFC itself folds U+212A KELVIN SIGN to ASCII "K" per the Unicode
+        # standard, and NFC is an allowed step in the canonical hash path.
         ("No", "№"),
     ],
 )

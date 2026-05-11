@@ -13,8 +13,8 @@ see protocol/canonicalizer.py instead.
 
 Extended format support (v2.1+):
 
-- **Plain text**: line-ending normalization, Unicode NFC, Unicode space cleanup,
-  trailing-whitespace removal, BOM stripping.
+- **Plain text**: line-ending normalization, Unicode NFC, Unicode space
+  separator normalization, trailing-whitespace removal, BOM stripping.
 - **XML**: Canonical XML 2.0 via lxml (primary path) with a regex-based
   fallback — sorted attributes, comment/PI stripping, NFC normalization.
 - **CSV/TSV**: deterministic delimiter, quoting, row ordering by canonical
@@ -42,15 +42,40 @@ except ImportError:  # pragma: no cover
     _lxml_etree = None
 
 
-# Unicode space-like characters that unicodedata.normalize("NFKC", ...) does NOT
-# map to ASCII space but that are visually indistinguishable from a regular space
-# (commonly found in PDFs and other document formats).
-_RESIDUAL_UNICODE_SPACES = str.maketrans(
+# Unicode space separators that should be mapped to ASCII space.  These are
+# Unicode space characters that NFC preserves as semantically distinct (and
+# that NFKC would otherwise fold).  Defined at module scope so the canonical/
+# hashing hot path does not allocate a new mapping per call.
+#
+# This table only normalizes whitespace.  It must NOT be extended with
+# compatibility glyph folding (e.g. ``¹`` → ``1``, ``Ａ`` → ``A``,
+# ``Ⅳ`` → ``IV``, ``№`` → ``No``); those characters must stay distinct in
+# committed content hashes.
+_UNICODE_SPACE_TRANSLATION = str.maketrans(
     {
         "\u00a0": " ",  # NO-BREAK SPACE
+        "\u1680": " ",  # OGHAM SPACE MARK
+        "\u2000": " ",  # EN QUAD
+        "\u2001": " ",  # EM QUAD
+        "\u2002": " ",  # EN SPACE
+        "\u2003": " ",  # EM SPACE
+        "\u2004": " ",  # THREE-PER-EM SPACE
+        "\u2005": " ",  # FOUR-PER-EM SPACE
+        "\u2006": " ",  # SIX-PER-EM SPACE
+        "\u2007": " ",  # FIGURE SPACE
+        "\u2008": " ",  # PUNCTUATION SPACE
+        "\u2009": " ",  # THIN SPACE
+        "\u200a": " ",  # HAIR SPACE
         "\u202f": " ",  # NARROW NO-BREAK SPACE
+        "\u205f": " ",  # MEDIUM MATHEMATICAL SPACE
+        "\u3000": " ",  # IDEOGRAPHIC SPACE
     }
 )
+
+# Backwards-compatible alias for the historical name.  Both names refer to
+# the same translation table; prefer ``_UNICODE_SPACE_TRANSLATION`` in new
+# code.
+_RESIDUAL_UNICODE_SPACES = _UNICODE_SPACE_TRANSLATION
 
 
 CANONICAL_VERSION = "canonical_v2"
@@ -64,8 +89,9 @@ Version history:
 - ``canonical_v2`` — (current) lone Merkle nodes are self-paired instead of
   promoted, preventing batching-boundary root divergence.  Float values are
   normalised to ``int`` when whole, or to ``Decimal`` otherwise; NaN / Inf
-  are rejected.  The legacy homoglyph-scrub hook only maps Unicode space
-  separators to ASCII spaces and does not compatibility-fold payload text.
+  are rejected.  The optional Unicode-space normalization hook only maps
+  Unicode space separators to ASCII spaces and does not compatibility-fold
+  payload text.
 
 Cross-version verification: the verifier accepts proofs generated under any
 version listed in :data:`SUPPORTED_VERSIONS`.  ``canonical_v1`` proofs emit
@@ -80,45 +106,33 @@ COMMIT_CANONICAL_VERSION = "canonical_commit_v1"
 """Canonicalization mode used for document commitments and Merkle leaves.
 
 This mode uses the same structural rules as :data:`CANONICAL_VERSION` but
-disables homoglyph scrubbing before encoding bytes.  It is intentionally a
-separate provenance label so verifiers do not replay the display/search
+disables Unicode-space normalization before encoding bytes.  It is intentionally
+a separate provenance label so verifiers do not replay the display/search
 canonicalizer and derive different commitment bytes.
 """
 
 
-def _scrub_homoglyphs(text: str) -> str:
-    """Ledger-safe Unicode space cleanup.
+def _normalize_unicode_spaces(text: str) -> str:
+    """Normalize Unicode space separators to ASCII spaces.
 
-    The function name is retained for backwards-compatible call sites, but it
-    must not compatibility-fold Unicode glyphs.  Distinct payload text such as
-    ``¹`` vs ``1``, ``Ⅳ`` vs ``IV``, and ``Ａ`` vs ``A`` must remain distinct
-    for content hashes.
+    This intentionally does **not** compatibility-fold glyphs such as
+    ``¹``, ``Ａ``, ``Ⅳ``, ``K``, ``№``.  Those characters must remain
+    distinct for committed content hashes; folding them would let two
+    semantically distinct documents collide in the ledger.
 
     Args:
         text: Input string (should already be NFC-normalised).
 
     Returns:
-        String with Unicode space equivalents replaced by ASCII spaces.
+        String with recognized Unicode space separators replaced by ASCII
+        ``" "``.
     """
-    unicode_space_equivalents = {
-        "\u00a0",  # NO-BREAK SPACE
-        "\u1680",  # OGHAM SPACE MARK
-        "\u2000",  # EN QUAD
-        "\u2001",  # EM QUAD
-        "\u2002",  # EN SPACE
-        "\u2003",  # EM SPACE
-        "\u2004",  # THREE-PER-EM SPACE
-        "\u2005",  # FOUR-PER-EM SPACE
-        "\u2006",  # SIX-PER-EM SPACE
-        "\u2007",  # FIGURE SPACE
-        "\u2008",  # PUNCTUATION SPACE
-        "\u2009",  # THIN SPACE
-        "\u200a",  # HAIR SPACE
-        "\u202f",  # NARROW NO-BREAK SPACE
-        "\u205f",  # MEDIUM MATHEMATICAL SPACE
-        "\u3000",  # IDEOGRAPHIC SPACE
-    }
-    return "".join(" " if ch in unicode_space_equivalents else ch for ch in text)
+    return text.translate(_UNICODE_SPACE_TRANSLATION)
+
+
+# Backwards-compatible alias for the historical name.  The behavior is now
+# Unicode-space normalization only, not homoglyph folding.
+_scrub_homoglyphs = _normalize_unicode_spaces
 
 
 def canonicalize_json(data: dict[str, Any]) -> str:
@@ -163,7 +177,8 @@ def normalize_whitespace(text: str) -> str:
 def canonicalize_document(
     doc: dict[str, Any],
     *,
-    scrub_homoglyphs: bool = True,
+    normalize_unicode_spaces: bool = True,
+    scrub_homoglyphs: bool | None = None,
     sorted_list_keys: set[str] | None = None,
 ) -> dict[str, Any]:
     """
@@ -173,9 +188,14 @@ def canonicalize_document(
 
     Args:
         doc: Document to canonicalize
-        scrub_homoglyphs: Legacy name. If ``True`` (default), replace Unicode
-            space equivalents with ASCII spaces. Compatibility glyphs are
-            preserved because folding them is non-injective for content hashes.
+        normalize_unicode_spaces: If ``True`` (default), replace recognized
+            Unicode space separators in string values with ASCII space.
+            Compatibility glyphs (e.g. ``¹``, ``Ａ``, ``Ⅳ``, ``№``) are
+            preserved because folding them is non-injective for content
+            hashes.
+        scrub_homoglyphs: Backward-compatible alias for the old parameter
+            name. The behavior is now Unicode-space normalization only, not
+            homoglyph folding.
         sorted_list_keys: Optional set of field names whose array values
             should be sorted for canonical ordering.  Fields not in this set
             preserve their original order.  Sorting uses the canonical JSON
@@ -185,6 +205,8 @@ def canonicalize_document(
     Returns:
         Canonicalized document
     """
+    if scrub_homoglyphs is not None:
+        normalize_unicode_spaces = scrub_homoglyphs
     if not isinstance(doc, dict):
         raise ValueError("Document must be a dictionary")
 
@@ -200,7 +222,7 @@ def canonicalize_document(
         if isinstance(value, dict):
             return canonicalize_document(
                 value,
-                scrub_homoglyphs=scrub_homoglyphs,
+                normalize_unicode_spaces=normalize_unicode_spaces,
                 sorted_list_keys=sorted_list_keys,
             )
         if isinstance(value, list):
@@ -216,8 +238,8 @@ def canonicalize_document(
             # Business-level whitespace normalisation must be done *before*
             # calling canonicalize_document(), keeping policy separate from
             # cryptographic commitments.
-            if scrub_homoglyphs:
-                return _scrub_homoglyphs(value)
+            if normalize_unicode_spaces:
+                return _normalize_unicode_spaces(value)
             return value
         if isinstance(value, bool):
             # bool is a subclass of int; must be checked before int
@@ -248,7 +270,8 @@ def canonicalize_document(
 def document_to_bytes(
     doc: dict[str, Any],
     *,
-    scrub_homoglyphs: bool = True,
+    normalize_unicode_spaces: bool = True,
+    scrub_homoglyphs: bool | None = None,
     sorted_list_keys: set[str] | None = None,
 ) -> bytes:
     """
@@ -256,15 +279,20 @@ def document_to_bytes(
 
     Args:
         doc: Document to convert
-        scrub_homoglyphs: Forwarded to :func:`canonicalize_document`.
+        normalize_unicode_spaces: Forwarded to :func:`canonicalize_document`.
+        scrub_homoglyphs: Backward-compatible alias for
+            ``normalize_unicode_spaces``. The behavior is now Unicode-space
+            normalization only, not homoglyph folding.
         sorted_list_keys: Forwarded to :func:`canonicalize_document`.
 
     Returns:
         Canonical bytes
     """
+    if scrub_homoglyphs is not None:
+        normalize_unicode_spaces = scrub_homoglyphs
     canonical = canonicalize_document(
         doc,
-        scrub_homoglyphs=scrub_homoglyphs,
+        normalize_unicode_spaces=normalize_unicode_spaces,
         sorted_list_keys=sorted_list_keys,
     )
     json_str = canonicalize_json(canonical)
@@ -272,12 +300,13 @@ def document_to_bytes(
 
 
 def canonicalize_for_commit(doc: dict[str, Any]) -> dict[str, Any]:
-    """Homoglyph-preserving canonicalization for cryptographic commitment.
+    """Compatibility-preserving canonicalization for cryptographic commitment.
 
-    Identical to :func:`canonicalize_document` but with homoglyph scrubbing
-    disabled.  Scrubbing is a lossy, non-injective mapping (e.g. ``𝐀`` → ``A``),
-    so enabling it in the commit path allows two semantically distinct documents
-    to produce identical commitment hashes.
+    Identical to :func:`canonicalize_document` but with the optional
+    Unicode-space normalization disabled.  The space-only mapping is still
+    non-injective (it collapses several distinct space codepoints to ASCII
+    ``" "``), so the commit path skips it to keep distinct payload bytes
+    distinct.
 
     This is not a raw byte-injective transform: NFC Unicode normalization and
     numeric normalization are still applied, so canonically equivalent spellings
@@ -287,18 +316,18 @@ def canonicalize_for_commit(doc: dict[str, Any]) -> dict[str, Any]:
     Use this function everywhere a hash or Merkle leaf is derived from document
     content.  Use :func:`canonicalize_document` only for display or comparison.
     """
-    return canonicalize_document(doc, scrub_homoglyphs=False)
+    return canonicalize_document(doc, normalize_unicode_spaces=False)
 
 
 def document_to_commit_bytes(doc: dict[str, Any]) -> bytes:
     """Convert a document to its canonical byte representation for commitment.
 
-    Equivalent to ``document_to_bytes(doc, scrub_homoglyphs=False)`` but named
-    explicitly for the commit path so that call sites make their intent clear.
-    Homoglyph scrubbing is disabled to preserve distinct homoglyphs — see
-    :func:`canonicalize_for_commit`.
+    Equivalent to ``document_to_bytes(doc, normalize_unicode_spaces=False)``
+    but named explicitly for the commit path so that call sites make their
+    intent clear.  Unicode-space normalization is disabled to preserve every
+    distinct payload codepoint — see :func:`canonicalize_for_commit`.
     """
-    return document_to_bytes(doc, scrub_homoglyphs=False)
+    return document_to_bytes(doc, normalize_unicode_spaces=False)
 
 
 def canonicalize_text(text: str) -> str:
@@ -405,7 +434,12 @@ def _canonicalize_xml_lxml(text: str) -> str:
         raise CanonicalizationError(f"XML C14N 2.0 failed: {exc}") from exc
 
 
-def canonicalize_plaintext(text: str, *, scrub_homoglyphs: bool = True) -> str:
+def canonicalize_plaintext(
+    text: str,
+    *,
+    normalize_unicode_spaces: bool = True,
+    scrub_homoglyphs: bool | None = None,
+) -> str:
     """Canonicalize plain text for deterministic hashing.
 
     Produces a deterministic plain-text representation by:
@@ -413,16 +447,27 @@ def canonicalize_plaintext(text: str, *, scrub_homoglyphs: bool = True) -> str:
     1. Stripping BOM (U+FEFF).
     2. Normalizing to Unicode NFC.
     3. Converting all line endings to Unix ``\\n``.
-    4. Replacing Unicode space-like characters with ASCII space.
-    5. Collapsing runs of spaces within each line.
+    4. Optionally mapping recognized Unicode space separators to ASCII space
+       (gated by ``normalize_unicode_spaces``).
+    5. Collapsing runs of whitespace within each line — this is a plaintext
+       mode behavior and uses Python's :py:meth:`str.split`, which collapses
+       any Unicode whitespace, regardless of the flag above.
     6. Stripping trailing whitespace from each line.
     7. Removing leading/trailing blank lines.
-    8. Optionally applying legacy Unicode space cleanup (default: on).
+
+    The optional explicit Unicode-space translation in step 4 only normalizes
+    *space separators* to ASCII space.  It never compatibility-folds glyphs
+    (``¹`` stays ``¹``, ``Ａ`` stays ``Ａ``).
 
     Args:
         text: Input plain text.
-        scrub_homoglyphs: Legacy name. If ``True`` (default), replace Unicode
-            space equivalents without compatibility-folding glyphs.
+        normalize_unicode_spaces: If ``True`` (default), apply explicit
+            Unicode space-separator translation in step 4.  Setting this to
+            ``False`` skips the explicit translation table; note that step 5
+            (whitespace collapse via :py:meth:`str.split`) still runs
+            because it is part of plaintext canonicalization.
+        scrub_homoglyphs: Backward-compatible alias for the old parameter
+            name.  The behavior is now Unicode-space normalization only.
 
     Returns:
         Canonicalized plain text.
@@ -430,6 +475,8 @@ def canonicalize_plaintext(text: str, *, scrub_homoglyphs: bool = True) -> str:
     Raises:
         CanonicalizationError: If text exceeds the size limit.
     """
+    if scrub_homoglyphs is not None:
+        normalize_unicode_spaces = scrub_homoglyphs
     if len(text.encode("utf-8")) > _MAX_PLAINTEXT_BYTES:
         raise CanonicalizationError(
             f"Plain text exceeds maximum size ({_MAX_PLAINTEXT_BYTES} bytes)"
@@ -444,20 +491,18 @@ def canonicalize_plaintext(text: str, *, scrub_homoglyphs: bool = True) -> str:
     # Step 3: Normalize line endings
     text = text.replace("\r\n", "\n").replace("\r", "\n")
 
-    # Steps 4–6: per-line normalization
+    # Steps 4–6: per-line normalization.  The explicit Unicode-space
+    # translation is gated by the flag so callers can opt out; whitespace
+    # collapse remains part of plaintext mode in either case.
     lines: list[str] = []
     for line in text.split("\n"):
-        # Replace Unicode spaces
-        line = line.translate(_RESIDUAL_UNICODE_SPACES)
+        if normalize_unicode_spaces:
+            line = _normalize_unicode_spaces(line)
         # Collapse whitespace within line
         line = " ".join(line.split())
         lines.append(line)
 
-    # Step 7: Unicode space cleanup (before trimming, to avoid changing structure)
-    if scrub_homoglyphs:
-        lines = [_scrub_homoglyphs(line) for line in lines]
-
-    # Step 8: Remove leading/trailing blank lines
+    # Step 7: Remove leading/trailing blank lines
     while lines and not lines[0]:
         lines.pop(0)
     while lines and not lines[-1]:
@@ -467,20 +512,31 @@ def canonicalize_plaintext(text: str, *, scrub_homoglyphs: bool = True) -> str:
 
 
 def canonicalize_plaintext_bytes(
-    data: bytes, *, encoding: str = "utf-8", scrub_homoglyphs: bool = True
+    data: bytes,
+    *,
+    encoding: str = "utf-8",
+    normalize_unicode_spaces: bool = True,
+    scrub_homoglyphs: bool | None = None,
 ) -> bytes:
     """Canonicalize plain text bytes for deterministic hashing.
 
     Args:
         data: Raw text bytes.
         encoding: Source encoding (default UTF-8).
-        scrub_homoglyphs: Forwarded to :func:`canonicalize_plaintext`.
+        normalize_unicode_spaces: Forwarded to :func:`canonicalize_plaintext`.
+        scrub_homoglyphs: Backward-compatible alias for
+            ``normalize_unicode_spaces``.
 
     Returns:
         Canonical UTF-8 bytes.
     """
+    if scrub_homoglyphs is not None:
+        normalize_unicode_spaces = scrub_homoglyphs
     text = data.decode(encoding)
-    return canonicalize_plaintext(text, scrub_homoglyphs=scrub_homoglyphs).encode("utf-8")
+    return canonicalize_plaintext(
+        text,
+        normalize_unicode_spaces=normalize_unicode_spaces,
+    ).encode("utf-8")
 
 
 def _sort_xml_attributes(match: re.Match[str]) -> str:

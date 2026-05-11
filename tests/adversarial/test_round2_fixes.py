@@ -1,5 +1,5 @@
 """
-Adversarial probes for Round 2 fixes: Unicode homoglyph scrub (Finding #3),
+Adversarial probes for Round 2 fixes: Unicode space normalization (Finding #3),
 idempotency gate (Finding #5), and domain separation (Finding #10).
 
 Each test was originally an ``xfail`` that has been verified to flip clean
@@ -11,7 +11,7 @@ from __future__ import annotations
 import pytest
 
 from protocol.canonical import (
-    _scrub_homoglyphs,
+    _normalize_unicode_spaces,
     canonicalize_document,
     document_to_bytes,
     document_to_commit_bytes,
@@ -24,7 +24,7 @@ from protocol.hashes import hash_bytes
 # ---------------------------------------------------------------------------
 
 
-class TestHomoglyphScrub:
+class TestUnicodeSpaceNormalization:
     """Adversarial probes: compatibility glyphs must remain hash-distinct."""
 
     @pytest.mark.parametrize(
@@ -36,8 +36,8 @@ class TestHomoglyphScrub:
             ("USD", "USD"),  # already clean
         ],
     )
-    def test_scrub_normalizes_unicode_spaces_only(self, variant: str, expected: str) -> None:
-        assert _scrub_homoglyphs(variant) == expected
+    def test_normalize_maps_unicode_spaces_only(self, variant: str, expected: str) -> None:
+        assert _normalize_unicode_spaces(variant) == expected
 
     def test_compatibility_glyph_variants_produce_distinct_bytes(self) -> None:
         base = {"invoice_id": "INV-8842", "amount": 100}
@@ -53,19 +53,20 @@ class TestHomoglyphScrub:
     def test_non_ascii_legitimate_content_survives(self) -> None:
         """Arabic, CJK, accented Latin must not be destroyed."""
         assert (
-            _scrub_homoglyphs("\u0645\u0631\u062d\u0628\u0627") == "\u0645\u0631\u062d\u0628\u0627"
+            _normalize_unicode_spaces("\u0645\u0631\u062d\u0628\u0627")
+            == "\u0645\u0631\u062d\u0628\u0627"
         )  # مرحبا
-        assert _scrub_homoglyphs("\u65e5\u672c\u8a9e") == "\u65e5\u672c\u8a9e"  # 日本語
-        assert _scrub_homoglyphs("caf\u00e9") == "caf\u00e9"  # café
+        assert _normalize_unicode_spaces("\u65e5\u672c\u8a9e") == "\u65e5\u672c\u8a9e"  # 日本語
+        assert _normalize_unicode_spaces("caf\u00e9") == "caf\u00e9"  # café
 
-    def test_scrub_opt_out_preserves_unicode_space(self) -> None:
+    def test_normalize_opt_out_preserves_unicode_space(self) -> None:
         doc = {"currency": "US\u00a0D"}
-        bytes_on = document_to_bytes(doc, scrub_homoglyphs=True)
-        bytes_off = document_to_bytes(doc, scrub_homoglyphs=False)
+        bytes_on = document_to_bytes(doc, normalize_unicode_spaces=True)
+        bytes_off = document_to_bytes(doc, normalize_unicode_spaces=False)
         assert bytes_on != bytes_off, "Opt-out flag had no effect"
 
-    def test_commit_bytes_preserve_homoglyphs_but_not_nfc_variants(self) -> None:
-        """Commit bytes preserve homoglyphs while retaining NFC normalization."""
+    def test_commit_bytes_preserve_compatibility_glyphs_but_not_nfc_variants(self) -> None:
+        """Commit bytes preserve compatibility glyphs while retaining NFC normalization."""
         ascii_doc = {"currency": "USD"}
         fullwidth_doc = {"currency": "\uff35\uff33\uff24"}
         composed = {"name": "caf\u00e9"}
