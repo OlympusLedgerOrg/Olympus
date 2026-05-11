@@ -2,7 +2,12 @@ from __future__ import annotations
 
 import pytest
 
-from api.transparency.gossip import SignedRootEnvelope, detect_equivocation, fetch_peer_roots, submit_root
+from api.transparency.gossip import (
+    SignedRootEnvelope,
+    detect_equivocation,
+    fetch_peer_roots,
+    submit_root,
+)
 from api.transparency.witness import WitnessCosignature
 
 

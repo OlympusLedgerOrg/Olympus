@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import pytest
 from fastapi.testclient import TestClient
 from nacl.encoding import HexEncoder
 from nacl.signing import SigningKey
@@ -19,7 +18,9 @@ class _Backend:
         self.key = bytes.fromhex("11" * 32)
         self.absent_key = bytes.fromhex("22" * 32)
         self.value = hash_string("monitor-api-test")
-        self.tree.update(self.key, self.value, parser_id="docling@2.3.1", canonical_parser_version="v1")
+        self.tree.update(
+            self.key, self.value, parser_id="docling@2.3.1", canonical_parser_version="v1"
+        )
         self.root_hex = self.tree.get_root().hex()
 
         payload = b"OLY:WITNESS:V1|" + bytes.fromhex(self.root_hex)
@@ -53,8 +54,14 @@ class _Backend:
 
     def witness_keys(self) -> list[monitor.WitnessKeyInfo]:
         return [
-            monitor.WitnessKeyInfo(witness_id="w1", public_key_hex=self._envelope.witness_cosignatures[0].public_key_hex),
-            monitor.WitnessKeyInfo(witness_id="w2", public_key_hex=self._envelope.witness_cosignatures[1].public_key_hex),
+            monitor.WitnessKeyInfo(
+                witness_id="w1",
+                public_key_hex=self._envelope.witness_cosignatures[0].public_key_hex,
+            ),
+            monitor.WitnessKeyInfo(
+                witness_id="w2",
+                public_key_hex=self._envelope.witness_cosignatures[1].public_key_hex,
+            ),
         ]
 
     def inclusion_proof(self, key: bytes) -> ExistenceProof:

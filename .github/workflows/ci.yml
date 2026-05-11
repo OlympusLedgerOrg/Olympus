@@ -67,6 +67,7 @@ jobs:
 
   typecheck:
     name: typecheck (py${{ matrix.python-version }}, ${{ matrix.os }})
+    needs: [lint]
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
@@ -134,6 +135,7 @@ jobs:
 
   unit:
     name: unit (py${{ matrix.python-version }}, ${{ matrix.os }})
+    needs: [lint]
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false

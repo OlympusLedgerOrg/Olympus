@@ -1,8 +1,8 @@
 from __future__ import annotations
 
-import pytest
-
 from datetime import datetime, timedelta, timezone
+
+import pytest
 
 from api.transparency.mmd import MaximumMergeDelay, check_mmd
 

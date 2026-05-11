@@ -98,8 +98,12 @@ class _InMemoryTransparencyBackend:
             sequencer_signature="ff" * 64,
             sequencer_key_id="sequencer-main",
             witness_cosignatures=[
-                WitnessCosignature(witness_id="w1", signature_hex="11" * 64, public_key_hex="aa" * 32),
-                WitnessCosignature(witness_id="w2", signature_hex="22" * 64, public_key_hex="bb" * 32),
+                WitnessCosignature(
+                    witness_id="w1", signature_hex="11" * 64, public_key_hex="aa" * 32
+                ),
+                WitnessCosignature(
+                    witness_id="w2", signature_hex="22" * 64, public_key_hex="bb" * 32
+                ),
             ],
             timestamp=ts,
         )
@@ -263,7 +267,9 @@ async def submit_equivocation_evidence(payload: SplitViewSubmission) -> dict[str
     """Accept split-view evidence for public monitor verification workflows."""
     try:
         if payload.root_a == payload.root_b:
-            raise HTTPException(status_code=400, detail="Split-view evidence requires conflicting roots")
+            raise HTTPException(
+                status_code=400, detail="Split-view evidence requires conflicting roots"
+            )
 
         evidence = SplitViewEvidence(
             height=payload.height,
@@ -287,4 +293,6 @@ async def submit_equivocation_evidence(payload: SplitViewSubmission) -> dict[str
         raise
     except Exception:
         logger.error("Failed to process equivocation evidence submission", exc_info=True)
-        raise HTTPException(status_code=500, detail="Failed to process equivocation evidence") from None
+        raise HTTPException(
+            status_code=500, detail="Failed to process equivocation evidence"
+        ) from None
