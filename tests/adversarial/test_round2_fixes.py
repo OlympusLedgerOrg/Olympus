@@ -20,26 +20,26 @@ from protocol.hashes import hash_bytes
 
 
 # ---------------------------------------------------------------------------
-# Finding #3 — Unicode homoglyph scrub
+# Finding #3 — Unicode space cleanup without compatibility folding
 # ---------------------------------------------------------------------------
 
 
 class TestHomoglyphScrub:
-    """Adversarial probes: visually identical Unicode must hash identically."""
+    """Adversarial probes: compatibility glyphs must remain hash-distinct."""
 
     @pytest.mark.parametrize(
         "variant,expected",
         [
-            ("US\uff24", "USD"),  # fullwidth D
-            ("\U0001d414\U0001d412\U0001d403", "USD"),  # mathematical bold
-            ("\uff35\uff33\uff24", "USD"),  # all fullwidth
+            ("US\u00a0D", "US D"),  # no-break space
+            ("US\u2009D", "US D"),  # thin space
+            ("US\u3000D", "US D"),  # ideographic space
             ("USD", "USD"),  # already clean
         ],
     )
-    def test_scrub_normalizes_to_ascii(self, variant: str, expected: str) -> None:
+    def test_scrub_normalizes_unicode_spaces_only(self, variant: str, expected: str) -> None:
         assert _scrub_homoglyphs(variant) == expected
 
-    def test_homoglyph_variants_produce_identical_bytes(self) -> None:
+    def test_compatibility_glyph_variants_produce_distinct_bytes(self) -> None:
         base = {"invoice_id": "INV-8842", "amount": 100}
         variants = [
             {**base, "currency": "USD"},
@@ -48,7 +48,7 @@ class TestHomoglyphScrub:
             {**base, "currency": "\uff35\uff33\uff24"},  # all fullwidth
         ]
         hashes = [document_to_bytes(v) for v in variants]
-        assert len(set(hashes)) == 1, "Homoglyph variants produced divergent bytes"
+        assert len(set(hashes)) == len(variants), "Compatibility glyph variants collided"
 
     def test_non_ascii_legitimate_content_survives(self) -> None:
         """Arabic, CJK, accented Latin must not be destroyed."""
@@ -58,8 +58,8 @@ class TestHomoglyphScrub:
         assert _scrub_homoglyphs("\u65e5\u672c\u8a9e") == "\u65e5\u672c\u8a9e"  # 日本語
         assert _scrub_homoglyphs("caf\u00e9") == "caf\u00e9"  # café
 
-    def test_scrub_opt_out_preserves_fullwidth(self) -> None:
-        doc = {"currency": "\uff35\uff33\uff24"}
+    def test_scrub_opt_out_preserves_unicode_space(self) -> None:
+        doc = {"currency": "US\u00a0D"}
         bytes_on = document_to_bytes(doc, scrub_homoglyphs=True)
         bytes_off = document_to_bytes(doc, scrub_homoglyphs=False)
         assert bytes_on != bytes_off, "Opt-out flag had no effect"

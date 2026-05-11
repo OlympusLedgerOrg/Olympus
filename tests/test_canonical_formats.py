@@ -66,17 +66,15 @@ class TestCanonicalizePlaintext:
         result = canonicalize_plaintext("Para 1\n\nPara 2")
         assert result == "Para 1\n\nPara 2"
 
-    def test_homoglyph_scrubbing(self) -> None:
-        """Fullwidth characters are replaced with ASCII equivalents."""
-        # U+FF21 = FULLWIDTH LATIN CAPITAL LETTER A
+    def test_compatibility_glyphs_preserved(self) -> None:
+        """Fullwidth characters are preserved, not compatibility-folded."""
         result = canonicalize_plaintext("\uff21\uff22\uff23")
-        assert result == "ABC"
+        assert result == "\uff21\uff22\uff23"
 
-    def test_homoglyph_scrubbing_disabled(self) -> None:
-        """Homoglyph scrubbing can be disabled."""
+    def test_legacy_scrub_flag_false_preserves_compatibility_glyphs(self) -> None:
+        """The legacy scrub flag must not affect compatibility glyphs."""
         result = canonicalize_plaintext("\uff21\uff22\uff23", scrub_homoglyphs=False)
-        # Should keep fullwidth chars
-        assert "\uff21" in result
+        assert result == "\uff21\uff22\uff23"
 
     def test_idempotent(self) -> None:
         """Canonicalization is idempotent: C(x) == C(C(x))."""

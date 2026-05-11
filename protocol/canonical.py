@@ -13,7 +13,7 @@ see protocol/canonicalizer.py instead.
 
 Extended format support (v2.1+):
 
-- **Plain text**: line-ending normalization, Unicode NFC, homoglyph scrubbing,
+- **Plain text**: line-ending normalization, Unicode NFC, Unicode space cleanup,
   trailing-whitespace removal, BOM stripping.
 - **XML**: Canonical XML 2.0 via lxml (primary path) with a regex-based
   fallback — sorted attributes, comment/PI stripping, NFC normalization.
@@ -64,8 +64,8 @@ Version history:
 - ``canonical_v2`` — (current) lone Merkle nodes are self-paired instead of
   promoted, preventing batching-boundary root divergence.  Float values are
   normalised to ``int`` when whole, or to ``Decimal`` otherwise; NaN / Inf
-  are rejected.  Homoglyph scrub collapses fullwidth Latin, mathematical
-  alphanumerics, and enclosed alphanumerics to their ASCII equivalents.
+  are rejected.  The legacy homoglyph-scrub hook only maps Unicode space
+  separators to ASCII spaces and does not compatibility-fold payload text.
 
 Cross-version verification: the verifier accepts proofs generated under any
 version listed in :data:`SUPPORTED_VERSIONS`.  ``canonical_v1`` proofs emit
@@ -87,30 +87,38 @@ canonicalizer and derive different commitment bytes.
 
 
 def _scrub_homoglyphs(text: str) -> str:
-    """Replace Unicode characters whose NFKD form is a single ASCII printable char.
+    """Ledger-safe Unicode space cleanup.
 
-    This catches fullwidth Latin (U+FF01–U+FF5E), mathematical bold/italic/
-    script/fraktur alphanumerics, and enclosed alphanumerics — all visually
-    similar to ASCII but distinct under NFC.
-
-    Legitimate non-ASCII content (Arabic, CJK, accented Latin such as ``é``)
-    is left untouched because its NFKD decomposition either maps to multiple
-    characters or to a codepoint outside the ASCII printable range.
+    The function name is retained for backwards-compatible call sites, but it
+    must not compatibility-fold Unicode glyphs.  Distinct payload text such as
+    ``¹`` vs ``1``, ``Ⅳ`` vs ``IV``, and ``Ａ`` vs ``A`` must remain distinct
+    for content hashes.
 
     Args:
         text: Input string (should already be NFC-normalised).
 
     Returns:
-        String with ASCII-equivalent homoglyphs replaced.
+        String with Unicode space equivalents replaced by ASCII spaces.
     """
-    out: list[str] = []
-    for ch in text:
-        decomposed = unicodedata.normalize("NFKD", ch)
-        if len(decomposed) == 1 and 0x20 <= ord(decomposed) <= 0x7E:
-            out.append(decomposed)
-        else:
-            out.append(ch)
-    return "".join(out)
+    unicode_space_equivalents = {
+        "\u00a0",  # NO-BREAK SPACE
+        "\u1680",  # OGHAM SPACE MARK
+        "\u2000",  # EN QUAD
+        "\u2001",  # EM QUAD
+        "\u2002",  # EN SPACE
+        "\u2003",  # EM SPACE
+        "\u2004",  # THREE-PER-EM SPACE
+        "\u2005",  # FOUR-PER-EM SPACE
+        "\u2006",  # SIX-PER-EM SPACE
+        "\u2007",  # FIGURE SPACE
+        "\u2008",  # PUNCTUATION SPACE
+        "\u2009",  # THIN SPACE
+        "\u200a",  # HAIR SPACE
+        "\u202f",  # NARROW NO-BREAK SPACE
+        "\u205f",  # MEDIUM MATHEMATICAL SPACE
+        "\u3000",  # IDEOGRAPHIC SPACE
+    }
+    return "".join(" " if ch in unicode_space_equivalents else ch for ch in text)
 
 
 def canonicalize_json(data: dict[str, Any]) -> str:
@@ -165,10 +173,9 @@ def canonicalize_document(
 
     Args:
         doc: Document to canonicalize
-        scrub_homoglyphs: If ``True`` (default), replace Unicode characters
-            whose NFKD decomposition is a single ASCII printable character
-            with that ASCII character.  Set to ``False`` only if the corpus
-            intentionally uses fullwidth characters as data.
+        scrub_homoglyphs: Legacy name. If ``True`` (default), replace Unicode
+            space equivalents with ASCII spaces. Compatibility glyphs are
+            preserved because folding them is non-injective for content hashes.
         sorted_list_keys: Optional set of field names whose array values
             should be sorted for canonical ordering.  Fields not in this set
             preserve their original order.  Sorting uses the canonical JSON
@@ -410,11 +417,12 @@ def canonicalize_plaintext(text: str, *, scrub_homoglyphs: bool = True) -> str:
     5. Collapsing runs of spaces within each line.
     6. Stripping trailing whitespace from each line.
     7. Removing leading/trailing blank lines.
-    8. Optionally scrubbing homoglyphs (default: on).
+    8. Optionally applying legacy Unicode space cleanup (default: on).
 
     Args:
         text: Input plain text.
-        scrub_homoglyphs: If ``True`` (default), replace homoglyphs.
+        scrub_homoglyphs: Legacy name. If ``True`` (default), replace Unicode
+            space equivalents without compatibility-folding glyphs.
 
     Returns:
         Canonicalized plain text.
@@ -445,7 +453,7 @@ def canonicalize_plaintext(text: str, *, scrub_homoglyphs: bool = True) -> str:
         line = " ".join(line.split())
         lines.append(line)
 
-    # Step 7: Homoglyph scrubbing (before trimming, to avoid changing structure)
+    # Step 7: Unicode space cleanup (before trimming, to avoid changing structure)
     if scrub_homoglyphs:
         lines = [_scrub_homoglyphs(line) for line in lines]
 
