@@ -5,7 +5,6 @@ from __future__ import annotations
 from typing import Any
 
 from protocol.hashes import (
-    _VRF_COMMIT_REVEAL_PREFIX,
     PROACTIVE_SHARE_COMMIT_PREFIX,
     VRF_SELECTION_PREFIX,
     blake3_hash,
@@ -28,6 +27,11 @@ from .quorum import (
     build_quorum_certificate,
     count_verified_quorum_signers,
 )
+
+
+# Domain-separation prefix for VRF commit-reveal bindings.
+# Prevents VRF commit hashes from being confused with other hash domains.
+_VRF_COMMIT_REVEAL_PREFIX = b"OLY:VRF-COMMIT-REVEAL:V1"
 
 
 def resolve_canonical_fork(

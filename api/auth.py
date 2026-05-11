@@ -96,6 +96,11 @@ def _load_keys() -> None:
             return
         _load_keys_locked()
         _keys_loaded = True
+    if _keys_loaded and not _key_store:
+        logger.warning(
+            "No API keys found in OLYMPUS_API_KEYS_JSON or OLYMPUS_FOIA_API_KEYS. "
+            "All authenticated endpoints will reject requests until keys are configured."
+        )
 
 
 def _load_keys_locked() -> None:

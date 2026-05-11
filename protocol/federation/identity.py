@@ -34,10 +34,6 @@ MIN_ACTIVE_GUARDIANS_FOR_BFT = 3
 # permanent ``valid_until`` (e.g. ``"2099-12-31"``) which would keep a rotated
 # key valid forever and defeat the purpose of rotation.
 MAX_KEY_OVERLAP_WINDOW = timedelta(days=30)
-_HEADER_EXCLUDED_FIELDS: frozenset[str] = frozenset(
-    {"header_hash", "signature", "timestamp_token", "quorum_certificate_hash"}
-)
-_CERTIFICATE_SIGNATURE_SCHEME_ED25519 = "ed25519"
 DEFAULT_MAX_CERTIFICATE_CLOCK_SKEW_SECONDS = 120
 
 
