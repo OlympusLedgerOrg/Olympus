@@ -225,8 +225,14 @@ async def get_inclusion(key: str) -> dict[str, Any]:
             "proof": _proof_to_dict(proof),
             "proof_valid": verify_proof(proof, expected_root=expected_root),
         }
-    except ValueError:
-        raise HTTPException(status_code=404, detail="Key is not present in latest root") from None
+    except ValueError as exc:
+        msg = str(exc)
+        # prove_existence raises ValueError("Key does not exist in tree") → 404
+        if "does not exist" in msg:
+            raise HTTPException(
+                status_code=404, detail="Key is not present in latest root"
+            ) from exc
+        raise HTTPException(status_code=400, detail=msg) from exc
     except HTTPException:
         raise
     except Exception:
@@ -252,7 +258,13 @@ async def get_non_inclusion(key: str) -> dict[str, Any]:
             "proof_valid": verify_nonexistence_proof(proof, expected_root=expected_root),
         }
     except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
+        msg = str(exc)
+        # prove_nonexistence raises ValueError("Key exists in tree…") → 409 Conflict
+        if "exists in tree" in msg:
+            raise HTTPException(
+                status_code=409, detail="Key is present in tree; non-inclusion proof unavailable"
+            ) from exc
+        raise HTTPException(status_code=400, detail=msg) from exc
     except HTTPException:
         raise
     except Exception:

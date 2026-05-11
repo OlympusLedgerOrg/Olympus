@@ -199,7 +199,30 @@ class _FailingBackend:
         raise RuntimeError("forced failure")
 
 
-def test_monitor_backend_exceptions_return_500() -> None:
+def test_monitor_inclusion_absent_key_returns_404() -> None:
+    """prove_existence raises ValueError for absent key → 404."""
+    previous = monitor._backend
+    backend = _Backend()
+    monitor.set_transparency_backend(backend)
+    client = TestClient(app)
+    try:
+        resp = client.get(f"/transparency/v1/inclusion/{backend.absent_key.hex()}")
+        assert resp.status_code == 404
+    finally:
+        monitor.set_transparency_backend(previous)
+
+
+def test_monitor_non_inclusion_present_key_returns_409() -> None:
+    """prove_nonexistence raises ValueError for present key → 409 Conflict."""
+    previous = monitor._backend
+    backend = _Backend()
+    monitor.set_transparency_backend(backend)
+    client = TestClient(app)
+    try:
+        resp = client.get(f"/transparency/v1/non-inclusion/{backend.key.hex()}")
+        assert resp.status_code == 409
+    finally:
+        monitor.set_transparency_backend(previous)
     previous = monitor._backend
     monitor.set_transparency_backend(_FailingBackend())
     client = TestClient(app, raise_server_exceptions=False)
