@@ -12,10 +12,6 @@ from protocol.hashes import (
 )
 from protocol.ledger import Ledger, LedgerEntry
 
-# Domain-separation prefix for VRF commit-reveal bindings.
-# Prevents VRF commit hashes from being confused with other hash domains.
-_VRF_COMMIT_REVEAL_PREFIX = b"OLY:VRF-COMMIT-REVEAL:V1"
-
 from .identity import (
     DEFAULT_MAX_CERTIFICATE_CLOCK_SKEW_SECONDS,
     FederationRegistry,
@@ -31,6 +27,11 @@ from .quorum import (
     build_quorum_certificate,
     count_verified_quorum_signers,
 )
+
+
+# Domain-separation prefix for VRF commit-reveal bindings.
+# Prevents VRF commit hashes from being confused with other hash domains.
+_VRF_COMMIT_REVEAL_PREFIX = b"OLY:VRF-COMMIT-REVEAL:V1"
 
 
 def resolve_canonical_fork(

@@ -22,6 +22,7 @@ from .identity import (
     _to_int,
 )
 
+
 # Header fields excluded when computing the signable header payload.
 # Excludes fields that are added by or derived from the signing step itself
 # so that signers commit only to the canonical application-level content.
