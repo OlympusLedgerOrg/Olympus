@@ -163,6 +163,38 @@ class TestRecordObservation:
         obs = monitor.record_observation(node_id="n1", shard_id="s1", sth=sth2, proof=proof)
         assert obs.sth == sth2
 
+    def test_invalid_consistency_proof_rejected(self) -> None:
+        """A tampered consistency proof increments the failure counter and raises ValueError."""
+        from unittest.mock import MagicMock, patch
+
+        monitor = LogMonitor()
+        key = nacl.signing.SigningKey.generate()
+        leaves = [hash_bytes(f"leaf-{i}".encode()) for i in range(10)]
+        old_tree = MerkleTree(leaves[:5])
+        new_tree = MerkleTree(leaves[:10])
+
+        sth1 = _make_sth(key, 1, old_tree)
+        monitor.record_observation(node_id="n1", shard_id="s1", sth=sth1)
+
+        sth2 = _make_sth(key, 2, new_tree)
+        valid_proof = generate_consistency_proof(5, 10, new_tree)
+        # Tamper with the proof nodes so verification fails.
+        tampered_proof = ConsistencyProof(
+            old_tree_size=valid_proof.old_tree_size,
+            new_tree_size=valid_proof.new_tree_size,
+            proof_nodes=[hash_bytes(b"wrong-node")] * len(valid_proof.proof_nodes),
+        )
+
+        mock_counter = MagicMock()
+        with patch("protocol.monitoring._MONITOR_CONSISTENCY_FAILURES", mock_counter):
+            with pytest.raises(ValueError, match="Consistency proof rejected"):
+                monitor.record_observation(
+                    node_id="n1", shard_id="s1", sth=sth2, proof=tampered_proof
+                )
+
+        mock_counter.labels.assert_called_once_with(shard_id="s1", node_id="n1")
+        mock_counter.labels.return_value.inc.assert_called_once()
+
 
 # ------------------------------------------------------------------ #
 # split_view_evidence

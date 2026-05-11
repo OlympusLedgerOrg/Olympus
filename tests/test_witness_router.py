@@ -588,3 +588,86 @@ async def test_stored_announcement_has_received_at(client) -> None:
     body = resp.json()
     assert "received_at" in body
     assert body["received_at"].endswith("Z")
+
+
+# ---------------------------------------------------------------------------
+# Exception handler coverage: pre-await paths in submit_observation
+# ---------------------------------------------------------------------------
+
+
+async def _make_isolated_client(session_factory, monkeypatch, pubkey_resolver=None):
+    """Build a fresh ASGI client with an isolated DB override.
+
+    pubkey_resolver: callable(origin) -> str|None, or None to use real lookup.
+    """
+
+    async def override_get_db():
+        async with session_factory() as session:
+            yield session
+
+    app = create_app()
+    app.dependency_overrides[get_db] = override_get_db
+
+    if pubkey_resolver is not None:
+        monkeypatch.setattr(witness_module, "_resolve_node_pubkey", pubkey_resolver)
+
+    return AsyncClient(transport=ASGITransport(app=app), base_url="http://test")
+
+
+@pytest.mark.asyncio
+async def test_submit_observation_rejects_unparseable_timestamp(
+    session_factory, monkeypatch
+) -> None:
+    """A timestamp string that fromisoformat cannot parse returns 422."""
+    async with await _make_isolated_client(
+        session_factory, monkeypatch, pubkey_resolver=lambda o: _TEST_PUBKEY_HEX
+    ) as ac:
+        payload = _announcement_payload("ts-parse-node", 1, timestamp="NOT-AN-ISO-DATE")
+        resp = await ac.post("/witness/observations", json=payload)
+    assert resp.status_code == 422
+    assert "ISO 8601" in resp.json()["detail"]
+
+
+@pytest.mark.asyncio
+async def test_submit_observation_rejects_unknown_origin(session_factory, monkeypatch) -> None:
+    """An origin not in the registry returns 403 Forbidden."""
+    async with await _make_isolated_client(
+        session_factory,
+        monkeypatch,
+        pubkey_resolver=lambda origin: None,  # no registered pubkey
+    ) as ac:
+        payload = _announcement_payload("unregistered-origin", 1)
+        resp = await ac.post("/witness/observations", json=payload)
+    assert resp.status_code == 403
+    assert "Unknown origin" in resp.json()["detail"]
+
+
+@pytest.mark.asyncio
+async def test_submit_observation_rejects_bad_signature(session_factory, monkeypatch) -> None:
+    """A signature that does not verify against the registered key returns 401."""
+    # Sign with a *different* key than what we register.
+    wrong_key = nacl.signing.SigningKey.generate()
+    wrong_sig = wrong_key.sign(hash_bytes(b"wrong-payload")).signature.hex()
+
+    async with await _make_isolated_client(
+        session_factory, monkeypatch, pubkey_resolver=lambda o: _TEST_PUBKEY_HEX
+    ) as ac:
+        payload = _announcement_payload("bad-sig-node", 1, node_signature=wrong_sig)
+        resp = await ac.post("/witness/observations", json=payload)
+    assert resp.status_code == 401
+    assert "signature" in resp.json()["detail"].lower()
+
+
+@pytest.mark.asyncio
+async def test_submit_observation_rejects_malformed_pubkey(session_factory, monkeypatch) -> None:
+    """A pubkey that is not a valid 32-byte Ed25519 key returns 400."""
+    # 4-byte pubkey hex — will fail nacl.signing.VerifyKey with ValueError.
+    short_pubkey_hex = "deadbeef"
+
+    async with await _make_isolated_client(
+        session_factory, monkeypatch, pubkey_resolver=lambda o: short_pubkey_hex
+    ) as ac:
+        payload = _announcement_payload("malformed-key-node", 1)
+        resp = await ac.post("/witness/observations", json=payload)
+    assert resp.status_code == 400
+    assert "Malformed" in resp.json()["detail"]
