@@ -271,8 +271,6 @@ def db_op(description: str) -> Generator[None, None, None]:
 
 def get_storage_status() -> tuple[str, bool]:
     """Return (db_status_string, db_check_bool) for the health endpoint."""
-    global _storage, _db_error
-
     db_status = (
         "connected" if _storage is not None else ("error" if _db_error else "not_initialized")
     )

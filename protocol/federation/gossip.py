@@ -5,13 +5,16 @@ from __future__ import annotations
 from typing import Any
 
 from protocol.hashes import (
-    _VRF_COMMIT_REVEAL_PREFIX,
     PROACTIVE_SHARE_COMMIT_PREFIX,
     VRF_SELECTION_PREFIX,
     blake3_hash,
     encode_signing_fields,
 )
 from protocol.ledger import Ledger, LedgerEntry
+
+# Domain-separation prefix for VRF commit-reveal bindings.
+# Prevents VRF commit hashes from being confused with other hash domains.
+_VRF_COMMIT_REVEAL_PREFIX = b"OLY:VRF-COMMIT-REVEAL:V1"
 
 from .identity import (
     DEFAULT_MAX_CERTIFICATE_CLOCK_SKEW_SECONDS,

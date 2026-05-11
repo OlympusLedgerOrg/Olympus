@@ -7,8 +7,6 @@ continue to work unchanged.
 """
 
 from protocol.federation.identity import (
-    _CERTIFICATE_SIGNATURE_SCHEME_ED25519,
-    _HEADER_EXCLUDED_FIELDS,
     DEFAULT_MAX_CERTIFICATE_CLOCK_SKEW_SECONDS,
     FEDERATION_DOMAIN_TAG,
     FederationKeyHistoryEntry,
@@ -26,6 +24,8 @@ from protocol.federation.quorum import (
     FederationVoteMessage,
     NodeSignature,
     QuorumNotReached,
+    _CERTIFICATE_SIGNATURE_SCHEME_ED25519,
+    _HEADER_EXCLUDED_FIELDS,
     _build_federation_vote_message,
     _federation_vote_event_id,
     _header_hash_matches_commitment,

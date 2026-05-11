@@ -16,13 +16,21 @@ from protocol.canonical_json import canonical_json_bytes
 from protocol.hashes import _length_prefixed_bytes, hash_bytes, shard_header_hash
 
 from .identity import (
-    _CERTIFICATE_SIGNATURE_SCHEME_ED25519,
-    _HEADER_EXCLUDED_FIELDS,
     FEDERATION_DOMAIN_TAG,
     FederationRegistry,
     _extract_round_and_height,
     _to_int,
 )
+
+# Header fields excluded when computing the signable header payload.
+# Excludes fields that are added by or derived from the signing step itself
+# so that signers commit only to the canonical application-level content.
+_HEADER_EXCLUDED_FIELDS: frozenset[str] = frozenset(
+    {"header_hash", "signature", "timestamp_token", "quorum_certificate_hash"}
+)
+
+# Ed25519 scheme tag stored in quorum certificates to identify the signature algorithm.
+_CERTIFICATE_SIGNATURE_SCHEME_ED25519 = "ed25519"
 
 
 logger = logging.getLogger(__name__)
