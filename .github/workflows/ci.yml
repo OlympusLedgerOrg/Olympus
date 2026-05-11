@@ -612,7 +612,7 @@ jobs:
 
       - uses: actions/setup-go@v5
         with:
-          go-version: "1.24"
+          go-version: "1.25"
           cache: true
           cache-dependency-path: services/sequencer-go/go.sum
 
@@ -622,27 +622,27 @@ jobs:
 
       - name: Fuzz UpdateResponse (10 s)
         working-directory: services/sequencer-go
-        run: go test ./proto/ -run='^$' -fuzz=FuzzUnmarshalUpdateResponse -fuzztime=10s
+        run: go test ./proto/ -run='^$' -fuzz=FuzzUnmarshalUpdateResponse -fuzztime=10s -timeout=60s
 
       - name: Fuzz ProveInclusion (10 s)
         working-directory: services/sequencer-go
-        run: go test ./proto/ -run='^$' -fuzz=FuzzUnmarshalProveInclusion -fuzztime=10s
+        run: go test ./proto/ -run='^$' -fuzz=FuzzUnmarshalProveInclusion -fuzztime=10s -timeout=60s
 
       - name: Fuzz ProveNonInclusion (10 s)
         working-directory: services/sequencer-go
-        run: go test ./proto/ -run='^$' -fuzz=FuzzUnmarshalProveNonInclusion -fuzztime=10s
+        run: go test ./proto/ -run='^$' -fuzz=FuzzUnmarshalProveNonInclusion -fuzztime=10s -timeout=60s
 
       - name: Fuzz Canonicalize (10 s)
         working-directory: services/sequencer-go
-        run: go test ./proto/ -run='^$' -fuzz=FuzzUnmarshalCanonicalize -fuzztime=10s
+        run: go test ./proto/ -run='^$' -fuzz=FuzzUnmarshalCanonicalize -fuzztime=10s -timeout=60s
 
       - name: Fuzz GetRoot (10 s)
         working-directory: services/sequencer-go
-        run: go test ./proto/ -run='^$' -fuzz=FuzzUnmarshalGetRoot -fuzztime=10s
+        run: go test ./proto/ -run='^$' -fuzz=FuzzUnmarshalGetRoot -fuzztime=10s -timeout=60s
 
       - name: Fuzz SignRoot (10 s)
         working-directory: services/sequencer-go
-        run: go test ./proto/ -run='^$' -fuzz=FuzzUnmarshalSignRoot -fuzztime=10s
+        run: go test ./proto/ -run='^$' -fuzz=FuzzUnmarshalSignRoot -fuzztime=10s -timeout=60s
 
   rust-verifier:
     name: Rust verifier conformance

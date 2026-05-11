@@ -9,7 +9,7 @@
 # securityContext.readOnlyRootFilesystem: true).
 
 # --- Build Stage ---
-FROM golang:1.24.13-alpine AS build
+FROM golang:1.25.0-alpine AS build
 
 WORKDIR /src
 
