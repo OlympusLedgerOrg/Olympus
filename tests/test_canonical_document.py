@@ -9,7 +9,7 @@ import pytest
 from hypothesis import given, strategies as st
 
 from protocol.canonical import (
-    _scrub_homoglyphs,
+    _normalize_unicode_spaces,
     canonicalize_document,
     canonicalize_for_commit,
     canonicalize_json,
@@ -314,17 +314,11 @@ def test_canonicalize_for_commit_is_injective_on_homoglyphs() -> None:
     )
 
 
-def test_canonicalize_document_still_scrubs_by_default() -> None:
-    """canonicalize_document() default (scrub_homoglyphs=True) is unchanged.
-
-    This confirms backward-compatibility: display/comparison paths still
-    normalise homoglyphs; only the commit path uses the injective variant.
-    """
+def test_canonicalize_document_preserves_compatibility_glyphs_by_default() -> None:
+    """canonicalize_document() must not compatibility-fold payload text."""
     doc = {"text": "ＡＢＣ"}  # Ａ Ｂ Ｃ
     result = canonicalize_document(doc)
-    assert result["text"] == "ABC", (
-        "canonicalize_document() default should still scrub homoglyphs to ASCII"
-    )
+    assert result["text"] == "ＡＢＣ"
 
 
 def test_normalize_whitespace_empty_string():
@@ -513,24 +507,43 @@ def test_bool_not_coerced_to_int() -> None:
 
 
 # ---------------------------------------------------------------------------
-# Homoglyph scrub tests (Finding #3 — Red Team Hardening Round 2)
+# Unicode space cleanup tests (Finding #3 — Red Team Hardening Round 2)
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.parametrize(
     "variant,expected",
     [
-        ("US\uff24", "USD"),  # fullwidth D
-        ("\U0001d414\U0001d412\U0001d403", "USD"),  # mathematical bold
-        ("\uff35\uff33\uff24", "USD"),  # all fullwidth
+        ("hello\u00a0world", "hello world"),  # no-break space
+        ("hello\u2009world", "hello world"),  # thin space
+        ("hello\u3000world", "hello world"),  # ideographic space
         ("USD", "USD"),  # already clean — no change
     ],
 )
-def test_homoglyph_scrub_normalizes_to_ascii(variant: str, expected: str) -> None:
-    assert _scrub_homoglyphs(variant) == expected
+def test_normalize_unicode_spaces_maps_space_separators_to_ascii_space(
+    variant: str, expected: str
+) -> None:
+    assert _normalize_unicode_spaces(variant) == expected
 
 
-def test_homoglyph_variants_produce_identical_canonical_bytes() -> None:
+@pytest.mark.parametrize(
+    "value",
+    [
+        "\u00b9",  # ¹ SUPERSCRIPT ONE
+        "\uff21",  # Ａ FULLWIDTH LATIN CAPITAL LETTER A
+        "\u2163",  # Ⅳ ROMAN NUMERAL FOUR
+        # NOTE: U+212A KELVIN SIGN is intentionally excluded because Unicode
+        # NFC itself folds it to ASCII "K"; the helper preserves the input,
+        # but downstream NFC normalization will collapse it.
+        "\u2116",  # № NUMERO SIGN
+    ],
+)
+def test_normalize_unicode_spaces_preserves_compatibility_glyphs(value: str) -> None:
+    """Compatibility glyphs must not be folded by the space-normalization helper."""
+    assert _normalize_unicode_spaces(value) == value
+
+
+def test_compatibility_glyph_variants_produce_distinct_canonical_bytes() -> None:
     base = {"invoice_id": "INV-8842", "amount": 100}
     variants = [
         {**base, "currency": "USD"},
@@ -539,21 +552,61 @@ def test_homoglyph_variants_produce_identical_canonical_bytes() -> None:
         {**base, "currency": "\uff35\uff33\uff24"},
     ]
     hashes = [document_to_bytes(v) for v in variants]
-    assert len(set(hashes)) == 1, "Homoglyph variants produced divergent bytes"
+    assert len(set(hashes)) == len(variants), "Compatibility glyph variants collided"
 
 
-def test_non_ascii_legitimate_content_survives_scrub() -> None:
+def test_non_ascii_legitimate_content_survives_normalization() -> None:
     """Arabic, CJK, accented Latin must not be destroyed."""
-    assert _scrub_homoglyphs("\u0645\u0631\u062d\u0628\u0627") == "\u0645\u0631\u062d\u0628\u0627"
-    assert _scrub_homoglyphs("\u65e5\u672c\u8a9e") == "\u65e5\u672c\u8a9e"
-    assert _scrub_homoglyphs("caf\u00e9") == "caf\u00e9"
+    assert (
+        _normalize_unicode_spaces("\u0645\u0631\u062d\u0628\u0627")
+        == "\u0645\u0631\u062d\u0628\u0627"
+    )
+    assert _normalize_unicode_spaces("\u65e5\u672c\u8a9e") == "\u65e5\u672c\u8a9e"
+    assert _normalize_unicode_spaces("caf\u00e9") == "caf\u00e9"
 
 
-def test_scrub_homoglyphs_false_preserves_fullwidth() -> None:
-    doc = {"currency": "\uff35\uff33\uff24"}
-    bytes_on = document_to_bytes(doc, scrub_homoglyphs=True)
-    bytes_off = document_to_bytes(doc, scrub_homoglyphs=False)
+def test_normalize_unicode_spaces_false_preserves_unicode_space() -> None:
+    doc = {"text": "hello\u00a0world"}
+    bytes_on = document_to_bytes(doc, normalize_unicode_spaces=True)
+    bytes_off = document_to_bytes(doc, normalize_unicode_spaces=False)
     assert bytes_on != bytes_off
+
+
+def test_scrub_homoglyphs_keyword_alias_is_backwards_compatible() -> None:
+    """The legacy ``scrub_homoglyphs`` keyword still works as an alias."""
+    doc = {"text": "hello\u00a0world"}
+    assert document_to_bytes(doc, scrub_homoglyphs=False) == document_to_bytes(
+        doc, normalize_unicode_spaces=False
+    )
+    assert document_to_bytes(doc, scrub_homoglyphs=True) == document_to_bytes(
+        doc, normalize_unicode_spaces=True
+    )
+
+
+def test_canonical_hash_does_not_nfkd_fold_superscript_one() -> None:
+    """Compatibility glyphs must remain distinct in content hashes."""
+    from protocol.hashes import hash_bytes
+
+    assert hash_bytes(document_to_bytes({"0": "1"})) != hash_bytes(document_to_bytes({"0": "¹"}))
+
+
+@pytest.mark.parametrize(
+    ("left", "right"),
+    [
+        ("1", "¹"),
+        ("A", "Ａ"),
+        ("IV", "Ⅳ"),
+        # NOTE: ("K", "\u212a") (Kelvin sign) is intentionally excluded because
+        # NFC itself folds U+212A KELVIN SIGN to ASCII "K" per the Unicode
+        # standard, and NFC is an allowed step in the canonical hash path.
+        ("No", "№"),
+    ],
+)
+def test_canonical_hash_preserves_unicode_compatibility_distinctions(left: str, right: str) -> None:
+    """NFC is allowed, but NFKC/NFKD compatibility folding is not."""
+    from protocol.hashes import hash_bytes
+
+    assert hash_bytes(document_to_bytes({"x": left})) != hash_bytes(document_to_bytes({"x": right}))
 
 
 # ---------------------------------------------------------------------------

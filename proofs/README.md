@@ -260,14 +260,14 @@ available CPU cores using hand-tuned Intel assembly.
 
 ```bash
 sudo apt-get update
-sudo apt-get install -y --no-install-recommends cmake build-essential libgmp-dev libsodium-dev nasm
-git clone --depth 1 https://github.com/MystenLabs/rapidsnark.git /tmp/rapidsnark
+sudo apt-get install -y --no-install-recommends build-essential g++ libgmp-dev libsodium-dev nasm pkg-config
+git clone --recursive https://github.com/MystenLabs/rapidsnark.git /tmp/rapidsnark
 cd /tmp/rapidsnark
-mkdir build
-cd build
-cmake .. -DCMAKE_BUILD_TYPE=Release
-make -j"$(nproc)" prover
-sudo cp prover /usr/local/bin/rapidsnark
+npm install
+git submodule update --init --recursive
+npx task createFieldSources
+npx task buildProver
+sudo cp /tmp/rapidsnark/build/prover /usr/local/bin/rapidsnark
 ```
 
 Once installed, `Groth16Backend.generate()` in `protocol/groth16_backend.py`

@@ -37,7 +37,7 @@ from typing import Any, BinaryIO, TextIO
 
 import blake3 as _blake3
 
-from .canonical import _scrub_homoglyphs, _strip_bom, normalize_whitespace
+from .canonical import _normalize_unicode_spaces, _strip_bom, normalize_whitespace
 from .canonical_json import canonical_json_encode
 from .canonicalizer import CanonicalizationError
 
@@ -148,12 +148,21 @@ def _merge_sorted_runs(run_paths: list[str], output: TextIO) -> int:
 # ---------------------------------------------------------------------------
 
 
-def _canonicalize_json_record(line: str, *, scrub_homoglyphs: bool = True) -> str:
+def _canonicalize_json_record(
+    line: str,
+    *,
+    normalize_unicode_spaces: bool = True,
+    scrub_homoglyphs: bool | None = None,
+) -> str:
     """Canonicalize a single JSON record (one line of JSONL).
 
     Args:
         line: A single JSON-encoded line.
-        scrub_homoglyphs: Replace homoglyphs with ASCII equivalents.
+        normalize_unicode_spaces: Replace Unicode space separators in string
+            values with ASCII space.  Compatibility glyphs are preserved.
+        scrub_homoglyphs: Backward-compatible alias for
+            ``normalize_unicode_spaces``. The behavior is now Unicode-space
+            normalization only, not homoglyph folding.
 
     Returns:
         Canonical JSON string for this record.
@@ -161,6 +170,8 @@ def _canonicalize_json_record(line: str, *, scrub_homoglyphs: bool = True) -> st
     Raises:
         CanonicalizationError: On invalid JSON.
     """
+    if scrub_homoglyphs is not None:
+        normalize_unicode_spaces = scrub_homoglyphs
     stripped = line.strip()
     if not stripped:
         raise CanonicalizationError("Empty JSONL line")
@@ -181,8 +192,8 @@ def _canonicalize_json_record(line: str, *, scrub_homoglyphs: bool = True) -> st
             return [_canon_value(v) for v in val]
         if isinstance(val, str):
             normalized = normalize_whitespace(val)
-            if scrub_homoglyphs:
-                normalized = _scrub_homoglyphs(normalized)
+            if normalize_unicode_spaces:
+                normalized = _normalize_unicode_spaces(normalized)
             return normalized
         return val
 
@@ -207,7 +218,8 @@ def canonicalize_jsonl_streaming(
     *,
     sort_key: str | None = None,
     chunk_mem: int = DEFAULT_CHUNK_MEM_BYTES,
-    scrub_homoglyphs: bool = True,
+    normalize_unicode_spaces: bool = True,
+    scrub_homoglyphs: bool | None = None,
 ) -> StreamingJsonlResult:
     """Canonicalize a JSONL file using streaming external merge sort.
 
@@ -225,7 +237,9 @@ def canonicalize_jsonl_streaming(
         output_path: Destination path for the canonical ``.jsonl``.
         sort_key: Optional top-level JSON field name to sort by.
         chunk_mem: Max in-memory buffer (bytes) before spilling.
-        scrub_homoglyphs: Forwarded to per-record canonicalization.
+        normalize_unicode_spaces: Forwarded to per-record canonicalization.
+        scrub_homoglyphs: Backward-compatible alias for
+            ``normalize_unicode_spaces``.
 
     Returns:
         :class:`StreamingJsonlResult` with record count and hash.
@@ -233,6 +247,8 @@ def canonicalize_jsonl_streaming(
     Raises:
         CanonicalizationError: If any record fails canonicalization.
     """
+    if scrub_homoglyphs is not None:
+        normalize_unicode_spaces = scrub_homoglyphs
     input_path = Path(input_path)
     output_path = Path(output_path)
 
@@ -246,7 +262,10 @@ def canonicalize_jsonl_streaming(
             for raw_line in fh:
                 if not raw_line.strip():
                     continue  # skip blank lines
-                canonical = _canonicalize_json_record(raw_line, scrub_homoglyphs=scrub_homoglyphs)
+                canonical = _canonicalize_json_record(
+                    raw_line,
+                    normalize_unicode_spaces=normalize_unicode_spaces,
+                )
 
                 # If a sort key is specified, prepend it for sorting, then
                 # strip it after the merge.  Format: "<sort_value>\t<record>"
