@@ -225,7 +225,7 @@ async def get_inclusion(key: str) -> dict[str, Any]:
             "proof": _proof_to_dict(proof),
             "proof_valid": verify_proof(proof, expected_root=expected_root),
         }
-    except KeyError:
+    except ValueError:
         raise HTTPException(status_code=404, detail="Key is not present in latest root") from None
     except HTTPException:
         raise
@@ -251,6 +251,8 @@ async def get_non_inclusion(key: str) -> dict[str, Any]:
             "proof": _proof_to_dict(proof),
             "proof_valid": verify_nonexistence_proof(proof, expected_root=expected_root),
         }
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
     except HTTPException:
         raise
     except Exception:

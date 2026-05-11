@@ -15,6 +15,8 @@ from typing import Protocol
 import nacl.exceptions
 import nacl.signing
 
+from protocol.log_sanitization import sanitize_for_log
+
 
 logger = logging.getLogger(__name__)
 
@@ -92,12 +94,12 @@ def verify_cosignature(
             except (nacl.exceptions.BadSignatureError, ValueError):
                 logger.warning(
                     "Rejected malformed/invalid witness signature for witness_id=%s",
-                    cosig.witness_id,
+                    sanitize_for_log(cosig.witness_id),
                 )
             except Exception:
                 logger.error(
                     "Failed while verifying witness signature for witness_id=%s",
-                    cosig.witness_id,
+                    sanitize_for_log(cosig.witness_id),
                     exc_info=True,
                 )
 

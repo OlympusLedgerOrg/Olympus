@@ -56,6 +56,11 @@ fn main() {
     }
 
     if valid.len() < env.witness_threshold {
-        panic!("threshold not met");
+        eprintln!(
+            "error: witness threshold not met ({}/{} valid)",
+            valid.len(),
+            env.witness_threshold
+        );
+        std::process::exit(1);
     }
 }

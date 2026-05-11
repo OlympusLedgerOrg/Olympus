@@ -248,7 +248,7 @@ type QueueLeavesResponse struct {
 	TreeSize  uint64              `json:"tree_size"`
 }
 
-// WitnessCosignature is a witness attestaton over a sequencer-signed root.
+// WitnessCosignature is a witness attestation over a sequencer-signed root.
 type WitnessCosignature struct {
 	WitnessID string `json:"witness_id"`
 	Signature []byte `json:"signature"`
@@ -256,11 +256,11 @@ type WitnessCosignature struct {
 
 // SignedRootEnvelope is the sequencer + witness signed root payload.
 type SignedRootEnvelope struct {
-	Root                 [32]byte             `json:"root"`
-	TreeSize             uint64               `json:"tree_size"`
-	SequencerSignature   []byte               `json:"sequencer_signature"`
-	WitnessCosignatures  []WitnessCosignature `json:"witness_cosignatures"`
-	Timestamp            time.Time            `json:"timestamp"`
+	Root                [32]byte             `json:"root"`
+	TreeSize            uint64               `json:"tree_size"`
+	SequencerSignature  []byte               `json:"sequencer_signature"`
+	WitnessCosignatures []WitnessCosignature `json:"witness_cosignatures"`
+	Timestamp           time.Time            `json:"timestamp"`
 }
 
 // WitnessClient requests witness co-signatures for checkpoint roots.
@@ -284,9 +284,24 @@ func validateWitnessURL(raw string) error {
 	if strings.EqualFold(host, "localhost") {
 		return fmt.Errorf("witness URL host localhost is not allowed")
 	}
+	// Reject literal private/loopback addresses.
 	if ip := net.ParseIP(host); ip != nil {
 		if ip.IsLoopback() || ip.IsPrivate() || ip.IsUnspecified() || ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() {
 			return fmt.Errorf("witness URL private/link-local host is not allowed")
+		}
+		// Literal public IP — no DNS resolution needed.
+		return nil
+	}
+	// Resolve the hostname to catch DNS-rebinding to private ranges.
+	addrs, err := net.LookupHost(host)
+	if err != nil {
+		return fmt.Errorf("witness URL host resolution failed: %w", err)
+	}
+	for _, addr := range addrs {
+		if ip := net.ParseIP(addr); ip != nil {
+			if ip.IsLoopback() || ip.IsPrivate() || ip.IsUnspecified() || ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() {
+				return fmt.Errorf("witness URL resolves to private/link-local address %s", addr)
+			}
 		}
 	}
 	return nil
@@ -296,8 +311,8 @@ func validateWitnessURL(raw string) error {
 //
 // Witness transport is intentionally interface-driven in this scaffold so tests
 // can inject deterministic fakes and real networking can be added in a follow-up.
-func (s *Sequencer) SignAndCosignRoot(root [32]byte) (SignedRootEnvelope, error) {
-	signResp, err := s.smtClient.SignRoot(context.Background(), root[:], 0, map[string]string{"mode": "scaffold"})
+func (s *Sequencer) SignAndCosignRoot(ctx context.Context, root [32]byte) (SignedRootEnvelope, error) {
+	signResp, err := s.smtClient.SignRoot(ctx, root[:], 0, map[string]string{"mode": "scaffold"})
 	if err != nil {
 		return SignedRootEnvelope{}, fmt.Errorf("sign root: %w", err)
 	}
@@ -311,7 +326,7 @@ func (s *Sequencer) SignAndCosignRoot(root [32]byte) (SignedRootEnvelope, error)
 		if err := validateWitnessURL(witness.URL()); err != nil {
 			return SignedRootEnvelope{}, err
 		}
-		cosig, err := witness.CosignRoot(context.Background(), root, envelope.TreeSize, envelope.SequencerSignature)
+		cosig, err := witness.CosignRoot(ctx, root, envelope.TreeSize, envelope.SequencerSignature)
 		if err != nil {
 			return SignedRootEnvelope{}, fmt.Errorf("witness cosign failed for %s: %w", witness.URL(), err)
 		}

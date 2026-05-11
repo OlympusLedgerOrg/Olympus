@@ -87,7 +87,9 @@ pub fn verify_witness_cosignature(
     let mut valid: HashSet<usize> = HashSet::new();
     for cosig in cosigs {
         if cosig.witness_index >= witness_keys.len() {
-            return Err(CryptoError::InvalidWitnessIndex);
+            // Skip unknown indices rather than aborting — an untrusted sender
+            // providing an out-of-range index must not deny the whole batch.
+            continue;
         }
         if valid.contains(&cosig.witness_index) {
             continue;
@@ -95,7 +97,7 @@ pub fn verify_witness_cosignature(
         let sig = Signature::from_slice(&cosig.signature)
             .map_err(|_| CryptoError::InvalidSignatureFormat)?;
         if witness_keys[cosig.witness_index]
-            .verify(&payload, &sig)
+            .verify_strict(&payload, &sig)
             .is_ok()
         {
             valid.insert(cosig.witness_index);
