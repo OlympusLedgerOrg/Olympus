@@ -8,6 +8,9 @@
 use olympus_crypto as shared_crypto;
 use pyo3::prelude::*;
 use pyo3::types::{PyBytes, PyList};
+use std::collections::HashSet;
+
+use ed25519_dalek::{Signature, Verifier, VerifyingKey};
 
 // ---------------------------------------------------------------------------
 // Protocol constants — must stay in sync with protocol/hashes.py
@@ -41,6 +44,71 @@ pub(crate) fn compute_node_hash(left: &[u8], right: &[u8]) -> [u8; 32] {
 /// Compute the domain-separated empty-leaf sentinel: `BLAKE3(b"OLY:EMPTY-LEAF:V1")`.
 pub(crate) fn compute_empty_leaf() -> [u8; 32] {
     shared_crypto::empty_leaf()
+}
+
+/// Domain-separated witness cosignature wrapper.
+const WITNESS_PREFIX: &[u8] = b"OLY:WITNESS:V1|";
+
+/// Witness cosignature tuple used by root attestation verification.
+#[derive(Clone, Debug)]
+pub struct Cosignature {
+    /// Index into the `witness_keys` array.
+    pub witness_index: usize,
+    /// Raw Ed25519 signature bytes.
+    pub signature: [u8; 64],
+}
+
+/// Errors returned by witness cosignature verification.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum CryptoError {
+    InvalidThreshold,
+    InvalidWitnessIndex,
+    InvalidSignatureFormat,
+    ThresholdNotMet,
+}
+
+/// Verify witness co-signatures over a root checkpoint.
+///
+/// The payload is domain-separated as `OLY:WITNESS:V1| || root`.
+pub fn verify_witness_cosignature(
+    root: &[u8; 32],
+    cosigs: &[Cosignature],
+    witness_keys: &[VerifyingKey],
+    threshold: usize,
+) -> Result<(), CryptoError> {
+    if threshold == 0 || threshold > witness_keys.len() {
+        return Err(CryptoError::InvalidThreshold);
+    }
+
+    let mut payload = [0u8; WITNESS_PREFIX.len() + 32];
+    payload[..WITNESS_PREFIX.len()].copy_from_slice(WITNESS_PREFIX);
+    payload[WITNESS_PREFIX.len()..].copy_from_slice(root);
+
+    let mut valid: HashSet<usize> = HashSet::new();
+    for cosig in cosigs {
+        if cosig.witness_index >= witness_keys.len() {
+            // Skip unknown indices rather than aborting — an untrusted sender
+            // providing an out-of-range index must not deny the whole batch.
+            continue;
+        }
+        if valid.contains(&cosig.witness_index) {
+            continue;
+        }
+        let sig = Signature::from_slice(&cosig.signature)
+            .map_err(|_| CryptoError::InvalidSignatureFormat)?;
+        if witness_keys[cosig.witness_index]
+            .verify_strict(&payload, &sig)
+            .is_ok()
+        {
+            valid.insert(cosig.witness_index);
+        }
+    }
+
+    if valid.len() >= threshold {
+        Ok(())
+    } else {
+        Err(CryptoError::ThresholdNotMet)
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -164,4 +232,58 @@ pub fn register(py: Python<'_>, m: &Bound<'_, PyModule>) -> PyResult<()> {
         .set_item("olympus_core.crypto", m)?;
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use ed25519_dalek::{Signer, SigningKey};
+
+    fn make_key(seed: u8) -> SigningKey {
+        SigningKey::from_bytes(&[seed; 32])
+    }
+
+    #[test]
+    fn witness_cosignature_threshold_passes() {
+        let root = [7u8; 32];
+        let k1 = make_key(1);
+        let k2 = make_key(2);
+        let k3 = make_key(3);
+        let keys = vec![k1.verifying_key(), k2.verifying_key(), k3.verifying_key()];
+
+        let mut payload = Vec::with_capacity(WITNESS_PREFIX.len() + root.len());
+        payload.extend_from_slice(WITNESS_PREFIX);
+        payload.extend_from_slice(&root);
+
+        let c1 = Cosignature {
+            witness_index: 0,
+            signature: k1.sign(&payload).to_bytes(),
+        };
+        let c2 = Cosignature {
+            witness_index: 1,
+            signature: k2.sign(&payload).to_bytes(),
+        };
+
+        assert!(verify_witness_cosignature(&root, &[c1, c2], &keys, 2).is_ok());
+    }
+
+    #[test]
+    fn witness_cosignature_threshold_fails() {
+        let root = [9u8; 32];
+        let k1 = make_key(11);
+        let k2 = make_key(12);
+        let keys = vec![k1.verifying_key(), k2.verifying_key()];
+
+        let mut payload = Vec::with_capacity(WITNESS_PREFIX.len() + root.len());
+        payload.extend_from_slice(WITNESS_PREFIX);
+        payload.extend_from_slice(&root);
+
+        let c1 = Cosignature {
+            witness_index: 0,
+            signature: k1.sign(&payload).to_bytes(),
+        };
+
+        let err = verify_witness_cosignature(&root, &[c1], &keys, 2).expect_err("must fail");
+        assert_eq!(err, CryptoError::ThresholdNotMet);
+    }
 }
