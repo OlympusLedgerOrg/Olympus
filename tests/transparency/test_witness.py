@@ -41,3 +41,17 @@ def test_witness_malformed_signature_rejected() -> None:
         public_key_hex=good.public_key_hex,
     )
     assert not verify_cosignature(root, [good, bad], threshold=2)
+
+
+def test_witness_root_wrong_length_returns_false() -> None:
+    assert not verify_cosignature(b"\x00" * 16, [], threshold=1)
+
+
+def test_witness_zero_threshold_returns_false() -> None:
+    assert not verify_cosignature(b"\x00" * 32, [], threshold=0)
+
+
+def test_witness_duplicate_witness_id_counts_once() -> None:
+    root = bytes([6]) * 32
+    cosig = _cosig(1, root, "w1")
+    assert not verify_cosignature(root, [cosig, cosig], threshold=2)

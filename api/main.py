@@ -49,9 +49,9 @@ from api.routers.user_auth import (
     log_public_write_registration_override_if_enabled,
     router as user_auth_router,
 )
-from api.transparency.monitor import router as transparency_monitor_router
 from api.routers.witness import router as witness_router
 from api.sth import router as sth_router
+from api.transparency.monitor import router as transparency_monitor_router
 
 
 class _JSONLogFormatter(logging.Formatter):

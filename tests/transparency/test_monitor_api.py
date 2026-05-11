@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import pytest
 from fastapi.testclient import TestClient
 from nacl.encoding import HexEncoder
 from nacl.signing import SigningKey
@@ -104,5 +105,102 @@ def test_monitor_endpoints_shapes_and_proofs() -> None:
         )
         assert equivocation.status_code == 200
         assert equivocation.json()["accepted"] is True
+    finally:
+        monitor.set_transparency_backend(previous)
+
+
+def test_monitor_default_in_memory_backend() -> None:
+    """Exercises _InMemoryTransparencyBackend paths without a custom backend."""
+    client = TestClient(app)
+    resp = client.get("/transparency/v1/signed-root")
+    assert resp.status_code == 200
+    data = resp.json()
+    assert "root_hash" in data
+
+    height = data["height"]
+    by_height = client.get(f"/transparency/v1/signed-root/{height}")
+    assert by_height.status_code == 200
+
+    missing = client.get(f"/transparency/v1/signed-root/{height + 999}")
+    assert missing.status_code == 404
+
+    witnesses = client.get("/transparency/v1/witnesses")
+    assert witnesses.status_code == 200
+
+    existing_key = "11" * 32
+    inclusion = client.get(f"/transparency/v1/inclusion/{existing_key}")
+    assert inclusion.status_code == 200
+
+    absent_key = "22" * 32
+    non_inclusion = client.get(f"/transparency/v1/non-inclusion/{absent_key}")
+    assert non_inclusion.status_code == 200
+
+
+def test_monitor_invalid_hex_key() -> None:
+    client = TestClient(app)
+    resp = client.get("/transparency/v1/inclusion/notvalidhex")
+    assert resp.status_code == 400
+
+    resp2 = client.get("/transparency/v1/non-inclusion/notvalidhex")
+    assert resp2.status_code == 400
+
+
+def test_monitor_short_key_rejected() -> None:
+    client = TestClient(app)
+    short_key = "aabb"
+    resp = client.get(f"/transparency/v1/inclusion/{short_key}")
+    assert resp.status_code == 400
+
+    resp2 = client.get(f"/transparency/v1/non-inclusion/{short_key}")
+    assert resp2.status_code == 400
+
+
+def test_monitor_same_root_equivocation_rejected() -> None:
+    client = TestClient(app)
+    resp = client.post(
+        "/transparency/v1/gossip/equivocation",
+        json={
+            "height": 1,
+            "sequencer_key_id": "k1",
+            "root_a": "aa" * 32,
+            "root_b": "aa" * 32,
+            "signature_a": "11" * 64,
+            "signature_b": "11" * 64,
+            "source_peer_a": "peer-a",
+            "source_peer_b": "peer-b",
+        },
+    )
+    assert resp.status_code == 400
+
+
+class _FailingBackend:
+    """Raises RuntimeError on every call to exercise exception-handler paths."""
+
+    def latest_signed_root(self) -> SignedRootEnvelope:
+        raise RuntimeError("forced failure")
+
+    def signed_root_by_height(self, height: int) -> SignedRootEnvelope | None:
+        raise RuntimeError("forced failure")
+
+    def witness_keys(self) -> list[monitor.WitnessKeyInfo]:
+        raise RuntimeError("forced failure")
+
+    def inclusion_proof(self, key: bytes) -> ExistenceProof:
+        raise RuntimeError("forced failure")
+
+    def non_inclusion_proof(self, key: bytes) -> NonExistenceProof:
+        raise RuntimeError("forced failure")
+
+
+def test_monitor_backend_exceptions_return_500() -> None:
+    previous = monitor._backend
+    monitor.set_transparency_backend(_FailingBackend())
+    client = TestClient(app, raise_server_exceptions=False)
+    try:
+        assert client.get("/transparency/v1/signed-root").status_code == 500
+        assert client.get("/transparency/v1/signed-root/1").status_code == 500
+        assert client.get("/transparency/v1/witnesses").status_code == 500
+        assert client.get(f"/transparency/v1/inclusion/{'aa' * 32}").status_code == 500
+        assert client.get(f"/transparency/v1/non-inclusion/{'aa' * 32}").status_code == 500
     finally:
         monitor.set_transparency_backend(previous)

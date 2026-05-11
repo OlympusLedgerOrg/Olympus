@@ -2,4 +2,5 @@
 
 from api.transparency.monitor import router
 
+
 __all__ = ["router"]
