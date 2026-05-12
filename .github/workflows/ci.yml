@@ -168,6 +168,9 @@ jobs:
     - name: Install Rust stable
       run: rustup toolchain install stable --no-self-update && rustup default stable
 
+    - name: Cache Rust build artifacts
+      uses: Swatinem/rust-cache@v2
+
     - name: Install dependencies
       run: |
         python -m pip install --upgrade pip
@@ -303,6 +306,9 @@ jobs:
     - name: Install Rust stable
       run: rustup toolchain install stable --no-self-update && rustup default stable
 
+    - name: Cache Rust build artifacts
+      uses: Swatinem/rust-cache@v2
+
     - name: Install dependencies
       run: |
         python -m pip install --upgrade pip
@@ -326,36 +332,33 @@ jobs:
     # (R1CS / WASM witness generators / verification keys). These tests
     # silently skip on the unit lane when artifacts are missing; this lane
     # owns provisioning them so that skip never appears as "green".
+    #
+    # Uses the pre-baked olympus-ci container image which ships:
+    #   Rust stable · Node.js 20 · circom v2.1.9 · Python 3.12 · libmagic1
+    # This eliminates the ~4 min toolchain install that ran on every PR.
+    # Rebuild the image by merging a change to docker/Dockerfile.ci.
     runs-on: ubuntu-latest
+    container:
+      image: ghcr.io/olympusledgerorg/olympus-ci:latest
+      credentials:
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN }}
     permissions:
       contents: read
+      packages: read
     steps:
     - uses: actions/checkout@v4
 
-    - name: Set up Python 3.12
-      uses: actions/setup-python@v6
+    # pip caching — replaces actions/setup-python (Python 3.12 is in the image)
+    - name: Cache pip packages
+      uses: actions/cache@v4
       with:
-        python-version: "3.12"
-        cache: 'pip'
+        path: ~/.cache/pip
+        key: pip-proofs-${{ hashFiles('requirements-dev.txt') }}
+        restore-keys: pip-proofs-
 
-    - name: Create virtual environment
-      run: |
-        python -m venv .venv
-        echo "VIRTUAL_ENV=${GITHUB_WORKSPACE}/.venv" >> "$GITHUB_ENV"
-        echo "${GITHUB_WORKSPACE}/.venv/bin" >> "$GITHUB_PATH"
-
-    - name: Install system dependencies
-      run: sudo apt-get update && sudo apt-get install -y libmagic1
-
-    - name: Install Rust stable
-      run: rustup toolchain install stable --no-self-update && rustup default stable
-
-    - name: Set up Node.js
-      uses: actions/setup-node@v4
-      with:
-        node-version: '20'
-        cache: 'npm'
-        cache-dependency-path: proofs/package-lock.json
+    - name: Cache Rust build artifacts
+      uses: Swatinem/rust-cache@v2
 
     - name: Install dependencies
       run: |
@@ -366,23 +369,28 @@ jobs:
     - name: Build olympus_core Rust extension
       run: python -m maturin develop --release
 
-    - name: Install circom compiler
-      # Download the official pre-built circom binary from iden3/circom releases.
-      # Pinning to an exact version ensures reproducible R1CS/WASM artifacts and
-      # avoids surprises from an upstream circom 2.x API change mid-CI run.
-      # Upgrade by bumping CIRCOM_VERSION after verifying the new binary.
-      run: |
-        CIRCOM_VERSION="v2.1.9"
-        curl -fsSL \
-          "https://github.com/iden3/circom/releases/download/${CIRCOM_VERSION}/circom-linux-amd64" \
-          -o /usr/local/bin/circom
-        chmod +x /usr/local/bin/circom
-        circom --version
+    # Circuit artifacts are deterministic outputs of the .circom sources +
+    # circom version. Cache them so compilation only runs when circuits change.
+    # Key includes package-lock.json because circomlib version affects R1CS output.
+    - name: Cache compiled circuit artifacts
+      id: cache-circuits
+      uses: actions/cache@v4
+      with:
+        path: proofs/build
+        key: circuits-${{ hashFiles('proofs/circuits/**/*.circom', 'proofs/package-lock.json') }}-circom-v2.1.9
+
+    - name: Cache npm packages
+      uses: actions/cache@v4
+      with:
+        path: ~/.npm
+        key: npm-proofs-${{ hashFiles('proofs/package-lock.json') }}
+        restore-keys: npm-proofs-
 
     - name: Install proofs JS dependencies
-      run: npm install --prefix proofs
+      run: npm ci --prefix proofs
 
     - name: Compile circuit artifacts (R1CS + WASM)
+      if: steps.cache-circuits.outputs.cache-hit != 'true'
       # --compile-only skips the heavy Groth16 trusted-setup and key
       # generation. Tests that require .zkey / vkey artifacts will still
       # skip; the round-trip integration test is exercised by the smoke
@@ -404,6 +412,7 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
+      packages: read
     env:
       DATABASE_URL: postgresql://olympus:olympus@localhost:5432/olympus
       TEST_DATABASE_URL: postgresql://olympus:olympus@localhost:5432/olympus
@@ -429,33 +438,23 @@ jobs:
           --health-retries 20
         ports:
           - 5432:5432
+    container:
+      image: ghcr.io/olympusledgerorg/olympus-ci:latest
+      credentials:
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN }}
     steps:
     - uses: actions/checkout@v4
 
-    - name: Set up Python 3.12
-      uses: actions/setup-python@v6
+    - name: Cache pip packages
+      uses: actions/cache@v4
       with:
-        python-version: "3.12"
-        cache: 'pip'
+        path: ~/.cache/pip
+        key: pip-full-${{ hashFiles('requirements-dev.txt') }}
+        restore-keys: pip-full-
 
-    - name: Create virtual environment
-      run: |
-        python -m venv .venv
-        echo "VIRTUAL_ENV=${GITHUB_WORKSPACE}/.venv" >> "$GITHUB_ENV"
-        echo "${GITHUB_WORKSPACE}/.venv/bin" >> "$GITHUB_PATH"
-
-    - name: Install system dependencies
-      run: sudo apt-get update && sudo apt-get install -y libmagic1
-
-    - name: Install Rust stable
-      run: rustup toolchain install stable --no-self-update && rustup default stable
-
-    - name: Set up Node.js
-      uses: actions/setup-node@v4
-      with:
-        node-version: '20'
-        cache: 'npm'
-        cache-dependency-path: proofs/package-lock.json
+    - name: Cache Rust build artifacts
+      uses: Swatinem/rust-cache@v2
 
     - name: Install dependencies
       run: |
@@ -468,10 +467,25 @@ jobs:
     - name: Build olympus_core Rust extension
       run: python -m maturin develop --release
 
+    - name: Cache npm packages
+      uses: actions/cache@v4
+      with:
+        path: ~/.npm
+        key: npm-proofs-${{ hashFiles('proofs/package-lock.json') }}
+        restore-keys: npm-proofs-
+
     - name: Install proofs JS dependencies
-      run: npm install --prefix proofs
+      run: npm ci --prefix proofs
+
+    - name: Cache compiled circuit artifacts
+      id: cache-circuits
+      uses: actions/cache@v4
+      with:
+        path: proofs/build
+        key: circuits-${{ hashFiles('proofs/circuits/**/*.circom', 'proofs/package-lock.json') }}-circom-v2.1.9
 
     - name: Compile circuit artifacts (R1CS + WASM)
+      if: steps.cache-circuits.outputs.cache-hit != 'true'
       run: bash proofs/setup_circuits.sh --compile-only
 
     - name: Run full strict validation (fail-on-skip)
@@ -657,6 +671,11 @@ jobs:
       - name: Install Rust stable
         run: rustup toolchain install stable --no-self-update && rustup default stable
 
+      - name: Cache Rust build artifacts
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: verifiers/rust -> target
+
       - name: Run Rust verifier tests
         working-directory: verifiers/rust
         run: cargo test
@@ -677,6 +696,11 @@ jobs:
           rustup toolchain install stable --no-self-update
           rustup toolchain install nightly --no-self-update
           rustup default stable
+
+      - name: Cache Rust build artifacts
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: services/cdhs-smf-rust -> target
 
       - name: Install protoc
         run: sudo apt-get update -qq && sudo apt-get install -y -qq protobuf-compiler
@@ -704,6 +728,12 @@ jobs:
 
       - name: Install Rust nightly
         run: rustup toolchain install nightly --no-self-update
+
+      - name: Cache Rust build artifacts
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: services/cdhs-smf-rust -> target
+          key: nightly
 
       - name: Install cargo-fuzz
         run: cargo +nightly install cargo-fuzz
@@ -746,6 +776,12 @@ jobs:
       - name: Install Rust nightly
         run: rustup toolchain install nightly --no-self-update
 
+      - name: Cache Rust build artifacts
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: verifiers/rust -> target
+          key: nightly
+
       - name: Install cargo-fuzz
         run: cargo +nightly install cargo-fuzz
 
@@ -784,6 +820,9 @@ jobs:
 
       - name: Install Rust stable
         run: rustup toolchain install stable --no-self-update && rustup default stable
+
+      - name: Cache Rust build artifacts
+        uses: Swatinem/rust-cache@v2
 
       - name: Install system dependencies
         run: sudo apt-get update && sudo apt-get install -y libmagic1

@@ -12,10 +12,10 @@ import { useSkin } from "../skins/SkinContext";
 import CommandDeck from "../components/CommandDeck";
 import CommitPrompt from "../components/CommitPrompt";
 import HashDisplay from "../components/HashDisplay";
+import ProofResultPanel from "../components/ProofResultPanel";
 import RecentVerifications from "../components/RecentVerifications";
 import StatCards from "../components/StatCards";
 import TiltContainer from "../components/TiltContainer";
-import VerdictCard from "../components/VerdictCard";
 import HashTab from "../tabs/HashTab";
 import JsonTab from "../tabs/JsonTab";
 import ProofTab from "../tabs/ProofTab";
@@ -214,10 +214,7 @@ export default function HomePage() {
                   <HashDisplay hash={verdictResult.displayHash} />
                 </div>
               )}
-              <VerdictCard
-                verdict={verdictResult.verdict}
-                details={verdictResult.details}
-              />
+              <ProofResultPanel verdict={verdictResult} />
               {verdictResult.verdict === "unknown" &&
                 fileHook.droppedFile &&
                 fileHook.commitStage !== "done" && (
