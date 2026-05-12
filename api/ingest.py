@@ -1452,6 +1452,21 @@ async def ingest_raw_file(
     digest = _blake3.blake3(bytes(file_bytes)).digest()
     content_hash = digest.hex()
 
+    query_shard_id = request.query_params.get("shard_id")
+    if query_shard_id is not None:
+        shard_id = query_shard_id
+
+    query_record_id = request.query_params.get("record_id")
+    if query_record_id is not None:
+        record_id = query_record_id
+
+    query_version = request.query_params.get("version")
+    if query_version is not None:
+        try:
+            version = int(query_version)
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail="version must be an integer") from exc
+
     if record_id is None or not record_id.strip():
         # Default to the BLAKE3 prefix so identical bytes always re-use the
         # same record slot (idempotent re-commit). Callers can override.

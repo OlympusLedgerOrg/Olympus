@@ -295,7 +295,6 @@ jobs:
       uses: actions/setup-python@v6
       with:
         python-version: "3.12"
-        cache: "pip"
 
     - name: Create virtual environment
       run: |
@@ -336,25 +335,45 @@ jobs:
     # silently skip on the unit lane when artifacts are missing; this lane
     # owns provisioning them so that skip never appears as "green".
     #
-    # Uses the pre-baked olympus-ci container image which ships:
-    #   Rust stable · Node.js 20 · circom v2.1.9 · Python 3.12 · libmagic1
-    # This eliminates the ~4 min toolchain install that ran on every PR.
-    # Rebuild the image by merging a change to docker/Dockerfile.ci.
-    # continue-on-error: image may not exist on first merge; removed once built.
-    continue-on-error: true
     runs-on: ubuntu-latest
-    container:
-      image: ghcr.io/olympusledgerorg/olympus-ci:latest
-      credentials:
-        username: ${{ github.actor }}
-        password: ${{ secrets.GITHUB_TOKEN }}
     permissions:
       contents: read
       packages: read
     steps:
     - uses: actions/checkout@v4
 
-    # pip caching — replaces actions/setup-python (Python 3.12 is in the image)
+    - name: Set up Python 3.12
+      uses: actions/setup-python@v6
+      with:
+        python-version: "3.12"
+        cache: "pip"
+
+    - name: Install native proof-toolchain prerequisites
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y --no-install-recommends \
+          build-essential \
+          cmake \
+          libgmp-dev \
+          libmagic1 \
+          libsodium-dev \
+          nasm
+
+    - name: Install Rust stable
+      run: rustup toolchain install stable --no-self-update && rustup default stable
+
+    - name: Set up Node.js
+      uses: actions/setup-node@v4
+      with:
+        node-version: '20'
+
+    - name: Install circom compiler
+      run: |
+        curl -fsSL -o /tmp/circom "https://github.com/iden3/circom/releases/download/${CIRCOM_VERSION}/circom-linux-amd64"
+        sudo install -m 0755 /tmp/circom /usr/local/bin/circom
+        circom --version
+
+    # pip caching for proof-lane Python dependencies
     - name: Cache pip packages
       uses: actions/cache@v4
       with:
