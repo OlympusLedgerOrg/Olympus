@@ -322,9 +322,7 @@ class TestEndpointDirectCall:
 
         signing_key = _nacl_signing.SigningKey.generate()
         pubkey_hex = signing_key.verify_key.encode().hex()
-        monkeypatch.setattr(
-            witness_module, "witness_module._resolve_node_pubkey", lambda o: pubkey_hex
-        )
+        monkeypatch.setattr(witness_module, "_resolve_node_pubkey", lambda o: pubkey_hex)
 
         ch = "cd" * 32
         origin = "direct-test-origin"
@@ -370,9 +368,7 @@ class TestEndpointDirectCall:
 
         signing_key = _nacl_signing.SigningKey.generate()
         pubkey_hex = signing_key.verify_key.encode().hex()
-        monkeypatch.setattr(
-            witness_module, "witness_module._resolve_node_pubkey", lambda o: pubkey_hex
-        )
+        monkeypatch.setattr(witness_module, "_resolve_node_pubkey", lambda o: pubkey_hex)
 
         nonce = uuid.uuid4().hex
         ch = "ef" * 32
@@ -429,9 +425,7 @@ class TestEndpointDirectCall:
 
         signing_key = _nacl_signing.SigningKey.generate()
         pubkey_hex = signing_key.verify_key.encode().hex()
-        monkeypatch.setattr(
-            witness_module, "witness_module._resolve_node_pubkey", lambda o: pubkey_hex
-        )
+        monkeypatch.setattr(witness_module, "_resolve_node_pubkey", lambda o: pubkey_hex)
 
         ch = "12" * 32
         origin = "dup-key-origin"
@@ -478,9 +472,7 @@ class TestEndpointDirectCall:
 
         signing_key = _nacl_signing.SigningKey.generate()
         pubkey_hex = signing_key.verify_key.encode().hex()
-        monkeypatch.setattr(
-            witness_module, "witness_module._resolve_node_pubkey", lambda o: pubkey_hex
-        )
+        monkeypatch.setattr(witness_module, "_resolve_node_pubkey", lambda o: pubkey_hex)
 
         ch = "aa" * 32
         origin = "latest-cp-origin"
@@ -525,9 +517,7 @@ class TestEndpointDirectCall:
 
         signing_key = _nacl_signing.SigningKey.generate()
         pubkey_hex = signing_key.verify_key.encode().hex()
-        monkeypatch.setattr(
-            witness_module, "witness_module._resolve_node_pubkey", lambda o: pubkey_hex
-        )
+        monkeypatch.setattr(witness_module, "_resolve_node_pubkey", lambda o: pubkey_hex)
 
         ch = "bb" * 32
         origin = "seq-cp-origin"
@@ -572,9 +562,7 @@ class TestEndpointDirectCall:
 
         signing_key = _nacl_signing.SigningKey.generate()
         pubkey_hex = signing_key.verify_key.encode().hex()
-        monkeypatch.setattr(
-            witness_module, "witness_module._resolve_node_pubkey", lambda o: pubkey_hex
-        )
+        monkeypatch.setattr(witness_module, "_resolve_node_pubkey", lambda o: pubkey_hex)
         # Reduce nonce capacity to 1 so the second submission triggers eviction.
         monkeypatch.setattr(witness_module, "_MAX_NONCE_ENTRIES", 1)
 
@@ -623,9 +611,7 @@ class TestEndpointDirectCall:
 
         signing_key = _nacl_signing.SigningKey.generate()
         pubkey_hex = signing_key.verify_key.encode().hex()
-        monkeypatch.setattr(
-            witness_module, "witness_module._resolve_node_pubkey", lambda o: pubkey_hex
-        )
+        monkeypatch.setattr(witness_module, "_resolve_node_pubkey", lambda o: pubkey_hex)
         # Reduce observation capacity to 1 so the second submission triggers eviction.
         monkeypatch.setattr(witness_module, "_MAX_OBSERVATIONS", 1)
 
@@ -683,7 +669,7 @@ class TestEndpointDirectCall:
         def _pubkey_for(origin: str) -> str:
             return pubkey_a if origin == origin_a else pubkey_b
 
-        monkeypatch.setattr(witness_module, "witness_module._resolve_node_pubkey", _pubkey_for)
+        monkeypatch.setattr(witness_module, "_resolve_node_pubkey", _pubkey_for)
 
         dev_key = _APIKeyRecord(
             key_id="test",
