@@ -1483,13 +1483,13 @@ async def ingest_raw_file(
             version = int(query_version)
         except ValueError as exc:
             raise HTTPException(status_code=422, detail="version must be an integer") from exc
+    if version < 1:
+        raise HTTPException(status_code=422, detail="version must be >= 1")
 
     if record_id is None or not record_id.strip():
         # Default to the BLAKE3 prefix so identical bytes always re-use the
         # same record slot (idempotent re-commit). Callers can override.
         record_id = content_hash[:32]
-    if version < 1:
-        raise HTTPException(status_code=422, detail="version must be >= 1")
     _validate_raw_file_identifier(shard_id, name="shard_id", is_shard=True)
     _validate_raw_file_identifier(record_id, name="record_id")
 
