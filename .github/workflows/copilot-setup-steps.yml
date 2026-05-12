@@ -28,6 +28,9 @@ jobs:
           python -m pip install --upgrade pip
           python -m pip install -e ".[dev]"
 
+      - name: Install agent pre-commit hooks
+        run: pre-commit install --install-hooks
+
       - name: Lint (ruff)
         run: python -m ruff check .
 

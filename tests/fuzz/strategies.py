@@ -47,9 +47,30 @@ record_versions = st.integers(min_value=1, max_value=10)
 # Record types
 record_types = st.sampled_from(["document", "artifact", "report", "policy", "index"])
 
+# Unicode compatibility collapse zones.  These are deliberately overrepresented
+# in canonicalizer fuzzing because NFKC/NFKD would silently fold them into ASCII
+# or multi-character Latin strings.
+_compatibility_collapse_chars = st.one_of(
+    st.sampled_from(["\u00b9", "\u00b2", "\u00b3"]),  # superscripts ¹ ² ³
+    st.characters(min_codepoint=0xFF21, max_codepoint=0xFF5A),  # fullwidth Latin
+    st.characters(min_codepoint=0x2160, max_codepoint=0x2188),  # Roman numerals
+    st.characters(min_codepoint=0x2100, max_codepoint=0x214F),  # letterlike symbols
+)
+
+compatibility_collapse_strings = st.one_of(
+    st.text(alphabet=_compatibility_collapse_chars, min_size=1, max_size=12),
+    st.builds(
+        lambda prefix, compat, suffix: prefix + compat + suffix,
+        prefix=st.text(alphabet=string.ascii_letters + string.digits, min_size=0, max_size=12),
+        compat=st.text(alphabet=_compatibility_collapse_chars, min_size=1, max_size=6),
+        suffix=st.text(alphabet=string.ascii_letters + string.digits, min_size=0, max_size=12),
+    ),
+)
+
 # Arbitrary content dicts (bounded depth/size to stay under MAX_CONTENT_DEPTH=64)
 _content_leaf = st.one_of(
     st.text(max_size=128),
+    compatibility_collapse_strings,
     st.integers(min_value=-1_000_000, max_value=1_000_000),
     st.booleans(),
     st.none(),
@@ -311,19 +332,22 @@ oversized_field_strings = st.one_of(
 # because Python's standard json.dumps rejects them, making them impossible to
 # send in an HTTP JSON body.  The API therefore never sees them — they would
 # produce a test-client encoding error before reaching the server.
-unicode_edge_strings = st.sampled_from(
-    [
-        "\u0000",  # null byte
-        "\ufffe",  # BOM
-        "\u202e",  # right-to-left override
-        "\u00e9",  # NFC e-acute
-        "\u0065\u0301",  # NFD e + combining accent (semantically equal to \u00e9)
-        "\uff41",  # fullwidth Latin small a
-        "\u0041\u0301",  # A + combining accent
-        "テスト",  # Japanese
-        "测试",  # Chinese
-        "🔐",  # Emoji
-    ]
+unicode_edge_strings = st.one_of(
+    st.sampled_from(
+        [
+            "\u0000",  # null byte
+            "\ufffe",  # designated noncharacter
+            "\u202e",  # right-to-left override
+            "\u00e9",  # NFC e-acute
+            "\u0065\u0301",  # NFD e + combining accent (semantically equal to \u00e9)
+            "\uff41",  # fullwidth Latin small a
+            "\u0041\u0301",  # A + combining accent
+            "テスト",  # Japanese
+            "测试",  # Chinese
+            "🔐",  # Emoji
+        ]
+    ),
+    compatibility_collapse_strings,
 )
 
 # Malformed auth header values
@@ -371,7 +395,10 @@ def semantically_equivalent_content_pair(draw: Any) -> tuple[dict[str, Any], dic
             unique=True,
         )
     )
-    values = {k: draw(st.one_of(st.text(max_size=32), st.integers())) for k in keys}
+    values = {
+        k: draw(st.one_of(st.text(max_size=32), compatibility_collapse_strings, st.integers()))
+        for k in keys
+    }
     # Produce two dicts with the same content but different creation order
     doc_a = dict(values)
     doc_b = dict(reversed(list(values.items())))
@@ -388,9 +415,11 @@ def semantically_different_content_pair(draw: Any) -> tuple[dict[str, Any], dict
     # Mutate one value to ensure difference
     key = draw(st.sampled_from(list(doc_a.keys())))
     old_val = doc_a[key]
-    new_val = draw(st.one_of(st.text(max_size=32), st.integers()))
+    new_val = draw(st.one_of(st.text(max_size=32), compatibility_collapse_strings, st.integers()))
     # Ensure actual difference
     while new_val == old_val:
-        new_val = draw(st.one_of(st.text(max_size=32), st.integers()))
+        new_val = draw(
+            st.one_of(st.text(max_size=32), compatibility_collapse_strings, st.integers())
+        )
     doc_b = {**doc_a, key: new_val}
     return doc_a, doc_b

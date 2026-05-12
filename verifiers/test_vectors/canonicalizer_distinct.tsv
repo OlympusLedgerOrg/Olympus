@@ -1,0 +1,41 @@
+# TSV columns: description, left_input_hex, right_input_hex, reason
+# description	left_input_hex	right_input_hex	reason
+value-superscript-one-vs-digit-one	7b22636c61696d223a2231227d	7b22636c61696d223a22c2b9227d	NFKC would collapse ¹ to 1 in string values
+key-superscript-one-vs-digit-one	7b2231223a22636c61696d227d	7b22c2b9223a22636c61696d227d	NFKC would collapse ¹ to 1 in object keys
+value-superscript-two-vs-digit-two	7b22636c61696d223a2232227d	7b22636c61696d223a22c2b2227d	NFKC would collapse ² to 2 in string values
+key-superscript-two-vs-digit-two	7b2232223a22636c61696d227d	7b22c2b2223a22636c61696d227d	NFKC would collapse ² to 2 in object keys
+value-superscript-three-vs-digit-three	7b22636c61696d223a2233227d	7b22636c61696d223a22c2b3227d	NFKC would collapse ³ to 3 in string values
+key-superscript-three-vs-digit-three	7b2233223a22636c61696d227d	7b22c2b3223a22636c61696d227d	NFKC would collapse ³ to 3 in object keys
+value-roman-four-vs-iv	7b22636c61696d223a224956227d	7b22636c61696d223a22e285a3227d	NFKC would collapse Ⅳ to IV in string values
+key-roman-four-vs-iv	7b224956223a22636c61696d227d	7b22e285a3223a22636c61696d227d	NFKC would collapse Ⅳ to IV in object keys
+value-fullwidth-a-vs-ascii-a	7b22636c61696d223a2241227d	7b22636c61696d223a22efbca1227d	NFKC would collapse fullwidth A to A in string values
+key-fullwidth-a-vs-ascii-a	7b2241223a22636c61696d227d	7b22efbca1223a22636c61696d227d	NFKC would collapse fullwidth A to A in object keys
+value-fullwidth-usd-vs-ascii-usd	7b22636c61696d223a22555344227d	7b22636c61696d223a22efbcb5efbcb3efbca4227d	NFKC would collapse fullwidth letters to ASCII in string values
+key-fullwidth-usd-vs-ascii-usd	7b22555344223a22636c61696d227d	7b22efbcb5efbcb3efbca4223a22636c61696d227d	NFKC would collapse fullwidth letters to ASCII in object keys
+value-math-bold-a-vs-ascii-a	7b22636c61696d223a2241227d	7b22636c61696d223a22f09d9080227d	NFKC would collapse mathematical bold A to A in string values
+key-math-bold-a-vs-ascii-a	7b2241223a22636c61696d227d	7b22f09d9080223a22636c61696d227d	NFKC would collapse mathematical bold A to A in object keys
+value-circled-one-vs-digit-one	7b22636c61696d223a2231227d	7b22636c61696d223a22e291a0227d	NFKC would collapse ① to 1 in string values
+key-circled-one-vs-digit-one	7b2231223a22636c61696d227d	7b22e291a0223a22636c61696d227d	NFKC would collapse ① to 1 in object keys
+value-ligature-fi-vs-ascii-fi	7b22636c61696d223a226669227d	7b22636c61696d223a22efac81227d	NFKC would collapse ﬁ to fi in string values
+key-ligature-fi-vs-ascii-fi	7b226669223a22636c61696d227d	7b22efac81223a22636c61696d227d	NFKC would collapse ﬁ to fi in object keys
+value-square-kg-vs-ascii-kg	7b22636c61696d223a226b67227d	7b22636c61696d223a22e38e8f227d	NFKC would collapse ㎏ to kg in string values
+key-square-kg-vs-ascii-kg	7b226b67223a22636c61696d227d	7b22e38e8f223a22636c61696d227d	NFKC would collapse ㎏ to kg in object keys
+value-zero-width-space-vs-empty	7b22636c61696d223a2268656c6c6fe2808b776f726c64227d	7b22636c61696d223a2268656c6c6f776f726c64227d	U+200B must be preserved or rejected, not silently erased
+value-zero-width-non-joiner-vs-empty	7b22636c61696d223a2268656c6c6fe2808c776f726c64227d	7b22636c61696d223a2268656c6c6f776f726c64227d	U+200C must be preserved or rejected, not silently erased
+value-zero-width-joiner-vs-empty	7b22636c61696d223a2268656c6c6fe2808d776f726c64227d	7b22636c61696d223a2268656c6c6f776f726c64227d	U+200D must be preserved or rejected, not silently erased
+value-word-joiner-vs-empty	7b22636c61696d223a2268656c6c6fe281a0776f726c64227d	7b22636c61696d223a2268656c6c6f776f726c64227d	U+2060 must be preserved or rejected, not silently erased
+value-interior-bom-vs-empty	7b22636c61696d223a2268656c6c6fefbbbf776f726c64227d	7b22636c61696d223a2268656c6c6f776f726c64227d	Interior U+FEFF must be preserved or rejected, not silently erased
+value-right-to-left-override-vs-empty	7b22636c61696d223a2268656c6c6fe280ae776f726c64227d	7b22636c61696d223a2268656c6c6f776f726c64227d	U+202E must be preserved or rejected, not silently erased
+# Explicit structural identity and bidi/invisible distinctness vectors
+explicit-key-one-vs-superscript-one	7b2231223a2261227d	7b22c2b9223a2261227d	NFKC would collapse key ¹ to 1
+explicit-key-a-vs-fullwidth-a	7b2241223a2261227d	7b22efbca1223a2261227d	NFKC would collapse key fullwidth A to A
+explicit-key-fi-vs-ligature-fi	7b226669223a2261227d	7b22efac81223a2261227d	NFKC would collapse key ﬁ to fi
+nested-key-kg-vs-square-kg	7b226f75746572223a7b226b67223a317d7d	7b226f75746572223a7b22e38e8f223a317d7d	NFKC would collapse nested key ㎏ to kg
+value-abc-vs-a-right-to-left-mark-bc	7b22636c61696d223a22616263227d	7b22636c61696d223a2261e2808f6263227d	U+200F RIGHT-TO-LEFT MARK must not be silently erased
+key-abc-vs-a-right-to-left-mark-bc	7b22616263223a317d	7b2261e2808f6263223a317d	U+200F RIGHT-TO-LEFT MARK must not be silently erased
+value-abc-vs-a-left-to-right-mark-bc	7b22636c61696d223a22616263227d	7b22636c61696d223a2261e2808e6263227d	U+200E LEFT-TO-RIGHT MARK must not be silently erased
+key-abc-vs-a-left-to-right-mark-bc	7b22616263223a317d	7b2261e2808e6263223a317d	U+200E LEFT-TO-RIGHT MARK must not be silently erased
+value-abc-vs-a-right-to-left-override-bc	7b22636c61696d223a22616263227d	7b22636c61696d223a2261e280ae6263227d	U+202E RIGHT-TO-LEFT OVERRIDE must not be silently erased
+key-abc-vs-a-right-to-left-override-bc	7b22616263223a317d	7b2261e280ae6263223a317d	U+202E RIGHT-TO-LEFT OVERRIDE must not be silently erased
+value-abc-vs-a-left-to-right-isolate-bc	7b22636c61696d223a22616263227d	7b22636c61696d223a2261e281a66263227d	U+2066 LEFT-TO-RIGHT ISOLATE must not be silently erased
+key-abc-vs-a-left-to-right-isolate-bc	7b22616263223a317d	7b2261e281a66263223a317d	U+2066 LEFT-TO-RIGHT ISOLATE must not be silently erased
