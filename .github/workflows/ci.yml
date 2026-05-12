@@ -13,6 +13,9 @@ concurrency:
   group: ci-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
+env:
+  CIRCOM_VERSION: v2.1.9
+
 jobs:
   lint:
     name: lint (py${{ matrix.python-version }}, ${{ matrix.os }})
@@ -379,7 +382,7 @@ jobs:
       uses: actions/cache@v4
       with:
         path: proofs/build
-        key: circuits-${{ hashFiles('proofs/circuits/**/*.circom', 'proofs/package-lock.json') }}-circom-v2.1.9
+        key: circuits-${{ hashFiles('proofs/circuits/**/*.circom', 'proofs/package-lock.json') }}-circom-${{ env.CIRCOM_VERSION }}
 
     - name: Cache npm packages
       uses: actions/cache@v4
@@ -484,7 +487,7 @@ jobs:
       uses: actions/cache@v4
       with:
         path: proofs/build
-        key: circuits-${{ hashFiles('proofs/circuits/**/*.circom', 'proofs/package-lock.json') }}-circom-v2.1.9
+        key: circuits-${{ hashFiles('proofs/circuits/**/*.circom', 'proofs/package-lock.json') }}-circom-${{ env.CIRCOM_VERSION }}
 
     - name: Compile circuit artifacts (R1CS + WASM)
       if: steps.cache-circuits.outputs.cache-hit != 'true'

@@ -1425,7 +1425,7 @@ header nav a:hover { filter: brightness(1.35); }
   border-radius: 50%;
   background: var(--accent);
   box-shadow: 0 0 12px var(--accent);
-  animation: proofPulse 1.6s ease-in-out infinite;
+  animation: proof-pulse 1.6s ease-in-out infinite;
 }
 .proof-fields {
   display: grid;
@@ -1498,7 +1498,7 @@ header nav a:hover { filter: brightness(1.35); }
   box-shadow: 0 0 14px var(--accent-glow);
   transform: translateY(-1px);
 }
-@keyframes proofPulse {
+@keyframes proof-pulse {
   0%, 100% { opacity: 0.42; transform: scale(0.82); }
   50% { opacity: 1; transform: scale(1); }
 }

@@ -1539,7 +1539,15 @@ async def ingest_raw_file(
     _cache_ingestion_record(ingestion_entry)
     storage = _get_storage()
     if storage is not None:
-        storage.store_ingestion_batch(batch_id, [ingestion_entry])
+        try:
+            storage.store_ingestion_batch(batch_id, [ingestion_entry])
+        except Exception:
+            logger.error(
+                "file_ingest_persist_failed batch_id=%s record_id=%s",
+                batch_id,
+                sanitize_for_log(record_id),
+                exc_info=True,
+            )
 
     INGEST_TOTAL.labels(outcome="committed").inc()
     logger.info(

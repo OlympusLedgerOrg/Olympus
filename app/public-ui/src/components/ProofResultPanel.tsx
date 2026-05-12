@@ -30,7 +30,9 @@ const COPYABLE_FIELDS = new Set([
 ]);
 
 function asObject(value: unknown): Record<string, unknown> {
-  return value && typeof value === "object" ? (value as Record<string, unknown>) : {};
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : {};
 }
 
 function asString(value: unknown): string | undefined {
@@ -125,14 +127,19 @@ function downloadJson(filename: string, payload: string) {
   a.href = url;
   a.download = filename;
   a.click();
-  URL.revokeObjectURL(url);
+  setTimeout(() => URL.revokeObjectURL(url), 0);
 }
 
 export default function ProofResultPanel({ verdict }: { verdict: VerdictState }) {
   const result = normalizeResult(verdict);
   const cfg = statusConfig(verdict.verdict);
   const committedAt = result.committed_at ?? result.timestamp;
-  const proofJson = JSON.stringify(result.proof_json ?? result, null, 2);
+  let proofJson: string;
+  try {
+    proofJson = JSON.stringify(result.proof_json ?? result, null, 2);
+  } catch {
+    proofJson = JSON.stringify({ error: "proof_json not serializable" }, null, 2);
+  }
   const proofLabel =
     result.merkle_proof_valid === true
       ? "VALID"
@@ -204,7 +211,7 @@ export default function ProofResultPanel({ verdict }: { verdict: VerdictState })
               type="button"
               onClick={() =>
                 document
-                  .querySelector(".proof-path, .verdict-card")
+                  .querySelector(".proof-path")
                   ?.scrollIntoView({ behavior: "smooth", block: "center" })
               }
             >

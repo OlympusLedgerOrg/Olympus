@@ -18,7 +18,7 @@
 # .github/workflows/build-ci-image.yml. Pin to a SHA in ci.yml for
 # reproducibility; use :latest for rolling updates.
 
-FROM ubuntu-22.04
+FROM ubuntu:22.04
 
 LABEL org.opencontainers.image.source="https://github.com/OlympusLedgerOrg/Olympus"
 LABEL org.opencontainers.image.description="Olympus CI — Rust stable + Node 20 + circom 2.1.9 + Python 3.12"
@@ -30,10 +30,14 @@ ENV RUSTUP_HOME=/usr/local/rustup
 ENV PATH=/usr/local/cargo/bin:$PATH
 
 # ── System packages ───────────────────────────────────────────────────────────
+# python3.12 is not in ubuntu:22.04 default repos; install via deadsnakes PPA.
 RUN apt-get update && apt-get install -y --no-install-recommends \
+    ca-certificates \
+    software-properties-common \
+    && add-apt-repository ppa:deadsnakes/ppa \
+    && apt-get update && apt-get install -y --no-install-recommends \
     # Core build tools
     build-essential \
-    ca-certificates \
     curl \
     git \
     pkg-config \
@@ -89,3 +93,10 @@ RUN python --version \
  && rustc --version \
  && maturin --version \
  && echo "All tools verified OK"
+
+# ── Drop root ─────────────────────────────────────────────────────────────────
+RUN groupadd --gid 1001 ciuser \
+ && useradd --uid 1001 --gid ciuser --shell /bin/bash --create-home ciuser \
+ && chown -R ciuser:ciuser /usr/local/cargo /usr/local/rustup
+
+USER ciuser
