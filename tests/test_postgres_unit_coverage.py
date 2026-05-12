@@ -397,10 +397,14 @@ class TestClose:
 
     def test_del_suppresses_exceptions(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setattr(pm, "ConnectionPool", _FakePool)
-        s = StorageLayer("postgresql://unused")
-        # Force close to raise; deleting s triggers __del__ which must not propagate
-        s._pool.close = lambda: (_ for _ in ()).throw(RuntimeError("oops"))  # type: ignore
-        del s  # triggers __del__ naturally via reference counting
+
+        def _make_and_drop() -> None:
+            s = StorageLayer("postgresql://unused")
+            # Force close() to raise; __del__ is triggered when s goes out of scope
+            s._pool.close = lambda: (_ for _ in ()).throw(RuntimeError("oops"))  # type: ignore
+            # s leaves scope here — __del__ is called and must not propagate
+
+        _make_and_drop()  # must not raise
 
 
 # ---------------------------------------------------------------------------
