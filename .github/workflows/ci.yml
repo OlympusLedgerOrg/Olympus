@@ -369,7 +369,7 @@ jobs:
 
     - name: Install circom compiler
       run: |
-        curl -fsSL -o /tmp/circom "https://github.com/iden3/circom/releases/download/${CIRCOM_VERSION}/circom-linux-amd64"
+        curl -fsSL -o /tmp/circom "https://github.com/iden3/circom/releases/download/${{ env.CIRCOM_VERSION }}/circom-linux-amd64"
         sudo install -m 0755 /tmp/circom /usr/local/bin/circom
         circom --version
 
