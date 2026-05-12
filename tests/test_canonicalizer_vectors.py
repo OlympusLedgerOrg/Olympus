@@ -101,7 +101,9 @@ def test_positive_canonicalizer_vectors_match_expected_output_and_hash() -> None
         assert len(hashes) == 1, f"group {group_id} produced multiple canonical hashes"
 
 
-@pytest.mark.parametrize(("description", "left_input", "right_input", "reason"), _load_distinct_vectors())
+@pytest.mark.parametrize(
+    ("description", "left_input", "right_input", "reason"), _load_distinct_vectors()
+)
 def test_distinct_canonicalizer_vectors_do_not_collapse(
     description: str, left_input: bytes, right_input: bytes, reason: str
 ) -> None:
