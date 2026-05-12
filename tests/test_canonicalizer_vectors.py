@@ -8,7 +8,7 @@ from pathlib import Path
 
 import pytest
 
-from protocol.canonical import document_to_bytes
+from protocol.canonical import document_to_bytes, document_to_commit_bytes
 from protocol.canonicalizer import CanonicalizationError, Canonicalizer
 
 
@@ -111,6 +111,15 @@ def test_distinct_canonicalizer_vectors_do_not_collapse(
     assert left != right, f"{description} collapsed canonical bytes: {reason}"
     assert Canonicalizer.get_hash(left) != Canonicalizer.get_hash(right), (
         f"{description} collided canonical hashes: {reason}"
+    )
+
+    left_commit = document_to_commit_bytes(json.loads(left_input.decode("utf-8")))
+    right_commit = document_to_commit_bytes(json.loads(right_input.decode("utf-8")))
+    assert left_commit != right_commit, (
+        f"{description} collapsed commitment canonical bytes: {reason}"
+    )
+    assert Canonicalizer.get_hash(left_commit) != Canonicalizer.get_hash(right_commit), (
+        f"{description} collided commitment canonical hashes: {reason}"
     )
 
 
