@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
+import blake3
 import pytest
 from fastapi.testclient import TestClient
 from nacl.signing import SigningKey
@@ -421,7 +422,7 @@ class TestRawFileIngestion:
         monkeypatch.setattr(storage_layer_api, "_use_go_sequencer", lambda: True)
 
         file_bytes = b"raw olympus upload bytes"
-        digest = hash_bytes(file_bytes).hex()
+        digest = blake3.blake3(file_bytes).hexdigest()
 
         resp = client.post(
             "/ingest/files",
