@@ -1,15 +1,12 @@
 # Groth16 Setup Provenance
 
-Generated: 2026-04-30T23:36:47Z
+Generated: 2026-05-12T21:27:41Z
 
-WARNING: These are DEVELOPMENT keys generated with a locally-created PTAU.
-         They are NOT suitable for production use.
-         Production requires the Phase 2 ceremony with the Hermez Phase 1 file.
-
-PTAU_SOURCE: local-dev (snarkjs powersoftau — NOT from trusted ceremony)
-PTAU_FILE: dev_pot16_final.ptau
-PTAU_SHA256: 3bf0ee159c521eac200721ea019e7d8dc23b3f88abd4ee329962e3c70b3a9f9f
+PTAU_SOURCE: https://storage.googleapis.com/zkevm/ptau/powersOfTau28_hez_final_19.ptau
+PTAU_FILE: powersOfTau28_hez_final_19.ptau
+PTAU_B2: bca9d8b04242f175189872c42ceaa21e2951e0f0f272a0cc54fc37193ff6648600eaf1c555c70cdedfaf9fb74927de7aa1d33dc1e2a7f1a50619484989da0887
 
 Verification key fingerprints (SHA-256):
-- document_existence_vkey.json: a03cb569cd594e9ec57e362cbc36aec6e8c71e8d230c080e480347e0925875bc
-- redaction_validity_vkey.json: 2dda8c904c151f865984df709e079bbcba75848dbdae1b77fc5dabf576c2134c
+- document_existence_vkey.json: b335f483df13b46768c850810e8ccc10a5feb42bed11580c8df9e9b8ed7b3a96
+- redaction_validity_vkey.json: 932f70561f77d1ffdf6b8816506546c6573cf73b383b3ac3c9e39fdfe8148a88
+- non_existence_vkey.json: 372be46faa94d7fa4a8288169280dcf88e1076c7d6338a0dafbe0c34fee79510
