@@ -1,0 +1,91 @@
+# Olympus CI base image
+# Bakes in the slow-to-install native toolchain so CI jobs skip the install
+# phase entirely and go straight to checkout → pip install → test.
+#
+# Pre-installed:
+#   - Python 3.12 + pip
+#   - Rust stable (system-wide via rustup)
+#   - Node.js 20 (via NodeSource)
+#   - circom v2.1.9 (pinned binary — bump CIRCOM_VERSION when upgrading)
+#   - libmagic1, protoc, build-essential
+#
+# NOT pre-installed (intentionally):
+#   - Python packages (requirements.txt changes too often)
+#   - npm packages for proofs/ (same reason)
+#   - olympus_core wheel (built by maturin, cached via Swatinem/rust-cache)
+#
+# Rebuild trigger: any change to this file pushes a new :latest via
+# .github/workflows/build-ci-image.yml. Pin to a SHA in ci.yml for
+# reproducibility; use :latest for rolling updates.
+
+FROM ubuntu-22.04
+
+LABEL org.opencontainers.image.source="https://github.com/OlympusLedgerOrg/Olympus"
+LABEL org.opencontainers.image.description="Olympus CI — Rust stable + Node 20 + circom 2.1.9 + Python 3.12"
+
+ENV DEBIAN_FRONTEND=noninteractive
+# Install Rust system-wide so all users (including the runner user) can access it.
+ENV CARGO_HOME=/usr/local/cargo
+ENV RUSTUP_HOME=/usr/local/rustup
+ENV PATH=/usr/local/cargo/bin:$PATH
+
+# ── System packages ───────────────────────────────────────────────────────────
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    # Core build tools
+    build-essential \
+    ca-certificates \
+    curl \
+    git \
+    pkg-config \
+    # Python 3.12
+    python3.12 \
+    python3.12-dev \
+    python3.12-venv \
+    python3-pip \
+    # Olympus runtime deps
+    libmagic1 \
+    libmagic-dev \
+    # Required by cdhs-smf-rust (gRPC codegen)
+    protobuf-compiler \
+    # b2sum for PTAU integrity check in setup_circuits.sh
+    coreutils \
+    && rm -rf /var/lib/apt/lists/*
+
+# Make python3.12 the default python/python3
+RUN update-alternatives --install /usr/bin/python  python  /usr/bin/python3.12 1 \
+ && update-alternatives --install /usr/bin/python3 python3 /usr/bin/python3.12 1 \
+ && python --version
+
+# ── Node.js 20 ───────────────────────────────────────────────────────────────
+RUN curl -fsSL https://deb.nodesource.com/setup_20.x | bash - \
+ && apt-get install -y --no-install-recommends nodejs \
+ && rm -rf /var/lib/apt/lists/* \
+ && node --version && npm --version
+
+# ── Rust stable (system-wide) ─────────────────────────────────────────────────
+RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \
+    | sh -s -- -y --default-toolchain stable --no-modify-path --profile minimal \
+ && rustup component add rustfmt clippy \
+ && rustc --version && cargo --version
+
+# ── circom v2.1.9 ─────────────────────────────────────────────────────────────
+# Pinned to exact version — R1CS/WASM artifacts are compiler-version-sensitive.
+# Update CIRCOM_VERSION + rebuild image + update the circuit cache key in ci.yml.
+ARG CIRCOM_VERSION=v2.1.9
+RUN curl -fsSL \
+    "https://github.com/iden3/circom/releases/download/${CIRCOM_VERSION}/circom-linux-amd64" \
+    -o /usr/local/bin/circom \
+ && chmod +x /usr/local/bin/circom \
+ && circom --version
+
+# ── maturin (needed to build olympus_core PyO3 extension) ────────────────────
+RUN cargo install maturin --locked \
+ && maturin --version
+
+# ── Smoke test ────────────────────────────────────────────────────────────────
+RUN python --version \
+ && node --version \
+ && circom --version \
+ && rustc --version \
+ && maturin --version \
+ && echo "All tools verified OK"
