@@ -181,15 +181,11 @@ markers = [
 ]
 
 [tool.coverage.run]
-source = ["protocol", "storage", "api", "scaffolding"]
+source = ["protocol", "storage", "api", "scaffolding", "tests"]
 omit = [
-    "*/tests/*",
     "*/__pycache__/*",
     "*/venv/*",
     "*/.venv/*",
-    "storage/postgres.py",
-    "protocol/poseidon_js.py",
-    "api/app.py",
 ]
 branch = true
 
