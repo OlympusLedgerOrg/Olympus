@@ -217,7 +217,7 @@ class TestValidatePayload:
 # ---------------------------------------------------------------------------
 
 
-def _make_process_with_mock_stdin(response_json: str | None = None) -> pjs._PoseidonNodeProcess:
+def _make_mocked_process(response_json: str | None = None) -> pjs._PoseidonNodeProcess:
     """Return a _PoseidonNodeProcess with a mocked internal process."""
     proc_instance = pjs._PoseidonNodeProcess(Path("/tmp/fake.js"))
     mock_proc = MagicMock()
@@ -231,17 +231,17 @@ def _make_process_with_mock_stdin(response_json: str | None = None) -> pjs._Pose
 
 class TestPoseidonNodeProcessCall:
     def test_successful_hash2_call(self) -> None:
-        proc_instance = _make_process_with_mock_stdin('{"out":"99"}')
+        proc_instance = _make_mocked_process('{"out":"99"}')
         result = proc_instance.call({"op": "hash2", "a": "1", "b": "2"})
         assert result == {"out": "99"}
 
     def test_error_in_response_raises(self) -> None:
-        proc_instance = _make_process_with_mock_stdin('{"error":"compute failed"}')
+        proc_instance = _make_mocked_process('{"error":"compute failed"}')
         with pytest.raises(RuntimeError, match="Node Poseidon error"):
             proc_instance.call({"op": "hash2", "a": "1", "b": "2"})
 
     def test_none_sentinel_raises(self) -> None:
-        proc_instance = _make_process_with_mock_stdin(None)
+        proc_instance = _make_mocked_process(None)
         proc_instance._stdout_queue.put(None)  # EOF sentinel
         with pytest.raises(RuntimeError, match="exited unexpectedly"):
             proc_instance.call({"op": "hash2", "a": "1", "b": "2"})

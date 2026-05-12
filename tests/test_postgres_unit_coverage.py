@@ -103,10 +103,10 @@ def _storage_with_cursor(
     conn.cursor.return_value.__exit__ = MagicMock(return_value=False)
 
     @contextmanager
-    def _fake_get_conn():  # type: ignore[return]
+    def _fake_get_connection():  # type: ignore[return]
         yield conn
 
-    s._get_connection = _fake_get_conn  # type: ignore[method-assign]
+    s._get_connection = _fake_get_connection  # type: ignore[method-assign]
     return s, conn, cursor
 
 
@@ -1849,21 +1849,11 @@ class TestGetProof:
             "parser_id": "test-parser",
             "canonical_parser_version": "1.0",
         }
-        # fetchone returns: leaf row; _get_proof_path uses fetchall; _get_current_global_root uses fetchone
-        s = _bare_storage()
-        cursor = MagicMock()
+        # fetchone: first call returns leaf row, second returns global root
+        # fetchall: returns 256 sibling rows for the proof path
+        s, conn, cursor = _storage_with_cursor()
         cursor.fetchone.side_effect = [leaf_row, {"hash": b"\xbb" * 32}]
         cursor.fetchall.return_value = [{"hash": None}] * 256
-
-        conn = MagicMock()
-        conn.cursor.return_value.__enter__ = MagicMock(return_value=cursor)
-        conn.cursor.return_value.__exit__ = MagicMock(return_value=False)
-
-        @contextmanager
-        def _fake_conn():  # type: ignore[return]
-            yield conn
-
-        s._get_connection = _fake_conn  # type: ignore[method-assign]
         result = s.get_proof("shard1", "document", "rec1", 1)
         assert result is not None
         assert result.value_hash == b"\xaa" * 32
