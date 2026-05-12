@@ -236,7 +236,7 @@ jobs:
           -m "not postgres and not differential and not slow and not fuzz and not circuits and not layer4" \
           --ignore=tests/test_sequencer_client_smoke.py \
           --deselect tests/test_proof_generator.py::test_redaction_validity_round_trip_verification \
-          --cov=protocol --cov=storage --cov=api \
+          --cov=protocol --cov=scaffolding --cov=storage --cov=api --cov=tests \
           --cov-report=xml \
           --cov-fail-under=85
 
