@@ -105,6 +105,8 @@ def test_positive_canonicalizer_vectors_match_expected_output_and_hash() -> None
 def test_distinct_canonicalizer_vectors_do_not_collapse(
     description: str, left_input: bytes, right_input: bytes, reason: str
 ) -> None:
+    left_obj = json.loads(left_input)
+    right_obj = json.loads(right_input)
     left = Canonicalizer.json_jcs(left_input)
     right = Canonicalizer.json_jcs(right_input)
 
@@ -113,8 +115,8 @@ def test_distinct_canonicalizer_vectors_do_not_collapse(
         f"{description} collided canonical hashes: {reason}"
     )
 
-    left_commit = document_to_commit_bytes(json.loads(left_input.decode("utf-8")))
-    right_commit = document_to_commit_bytes(json.loads(right_input.decode("utf-8")))
+    left_commit = document_to_commit_bytes(left_obj)
+    right_commit = document_to_commit_bytes(right_obj)
     assert left_commit != right_commit, (
         f"{description} collapsed commitment canonical bytes: {reason}"
     )

@@ -336,7 +336,7 @@ unicode_edge_strings = st.one_of(
     st.sampled_from(
         [
             "\u0000",  # null byte
-            "\ufffe",  # BOM
+            "\ufffe",  # designated noncharacter
             "\u202e",  # right-to-left override
             "\u00e9",  # NFC e-acute
             "\u0065\u0301",  # NFD e + combining accent (semantically equal to \u00e9)
