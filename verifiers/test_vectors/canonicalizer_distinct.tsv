@@ -1,3 +1,4 @@
+# TSV columns: description, left_input_hex, right_input_hex, reason
 # description	left_input_hex	right_input_hex	reason
 value-superscript-one-vs-digit-one	7b22636c61696d223a2231227d	7b22636c61696d223a22c2b9227d	NFKC would collapse ¹ to 1 in string values
 key-superscript-one-vs-digit-one	7b2231223a22636c61696d227d	7b22c2b9223a22636c61696d227d	NFKC would collapse ¹ to 1 in object keys

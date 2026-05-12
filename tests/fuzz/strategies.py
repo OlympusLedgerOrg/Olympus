@@ -58,7 +58,6 @@ _compatibility_collapse_chars = st.one_of(
 )
 
 compatibility_collapse_strings = st.one_of(
-    _compatibility_collapse_chars,
     st.text(alphabet=_compatibility_collapse_chars, min_size=1, max_size=12),
     st.builds(
         lambda prefix, compat, suffix: prefix + compat + suffix,

@@ -1,3 +1,4 @@
+# TSV columns: description, unicode_doc_json_hex, ascii_doc_json_hex, reason
 # description	unicode_doc_json_hex	ascii_doc_json_hex	reason
 u00a0-no-break-space	7b22636c61696d223a2268656c6c6fc2a0776f726c64227d	7b22636c61696d223a2268656c6c6f20776f726c64227d	U+00A0 NO-BREAK SPACE maps to ASCII space
 u1680-ogham-space-mark	7b22636c61696d223a2268656c6c6fe19a80776f726c64227d	7b22636c61696d223a2268656c6c6f20776f726c64227d	U+1680 OGHAM SPACE MARK maps to ASCII space
