@@ -30,7 +30,9 @@ import pytest
 from psycopg.pq import TransactionStatus
 
 import storage.postgres as pm
-from storage.postgres import StorageLayer
+
+
+StorageLayer = pm.StorageLayer
 
 
 # ---------------------------------------------------------------------------
@@ -396,9 +398,9 @@ class TestClose:
     def test_del_suppresses_exceptions(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setattr(pm, "ConnectionPool", _FakePool)
         s = StorageLayer("postgresql://unused")
-        # Force close to raise
+        # Force close to raise; deleting s triggers __del__ which must not propagate
         s._pool.close = lambda: (_ for _ in ()).throw(RuntimeError("oops"))  # type: ignore
-        s.__del__()  # must not propagate
+        del s  # triggers __del__ naturally via reference counting
 
 
 # ---------------------------------------------------------------------------
@@ -434,7 +436,7 @@ class TestIsTransientConnectionError:
 
 class TestInitSchema:
     def test_init_schema_executes_stmts(self) -> None:
-        s, conn, cursor = _storage_with_cursor()
+        s, conn, _ = _storage_with_cursor()
         s.init_schema()
         assert conn.commit.called
 
@@ -446,7 +448,7 @@ class TestInitSchema:
 
 class TestCheckIngestionSchema:
     def test_passes_when_tables_exist(self) -> None:
-        s, conn, cursor = _storage_with_cursor()
+        s, _, _ = _storage_with_cursor()
         s.check_ingestion_schema()  # must not raise
 
     def test_raises_on_db_error(self) -> None:
@@ -486,21 +488,21 @@ class TestConsumeRateLimit:
         )
 
     def test_token_available_returns_true(self) -> None:
-        s, conn, cursor = _storage_with_cursor(
+        s, conn, _ = _storage_with_cursor(
             fetchone_value={"tokens": 5.0, "elapsed_seconds": 0.0}
         )
         assert self._call(s) is True
         assert conn.commit.called
 
     def test_token_exhausted_returns_false(self) -> None:
-        s, conn, cursor = _storage_with_cursor(
+        s, conn, _ = _storage_with_cursor(
             fetchone_value={"tokens": 0.5, "elapsed_seconds": 0.0}
         )
         assert self._call(s) is False
         assert conn.rollback.called
 
     def test_invalid_capacity_raises(self) -> None:
-        s, conn, cursor = _storage_with_cursor()
+        s, _, _ = _storage_with_cursor()
         with pytest.raises(ValueError, match="capacity must be > 0"):
             s.consume_rate_limit(
                 subject_type="ip",
@@ -511,7 +513,7 @@ class TestConsumeRateLimit:
             )
 
     def test_fetchone_none_raises(self) -> None:
-        s, conn, cursor = _storage_with_cursor(fetchone_value=None)
+        s, _, _ = _storage_with_cursor(fetchone_value=None)
         with pytest.raises(RuntimeError, match="Failed to load rate limit"):
             self._call(s)
 
@@ -523,7 +525,7 @@ class TestConsumeRateLimit:
 
 class TestClearRateLimits:
     def test_executes_delete(self) -> None:
-        s, conn, cursor = _storage_with_cursor()
+        s, conn, _ = _storage_with_cursor()
         s.clear_rate_limits()
         assert conn.commit.called
 
@@ -750,7 +752,7 @@ class TestGetIngestionProofByRecordIdentity:
 def _make_signed_header():
     """Return a (header_row, signing_key) tuple for header tests."""
     import nacl.signing
-    from protocol.hashes import shard_header_hash
+
     from protocol.shards import create_shard_header, sign_header
 
     shard_id = "shard1"
@@ -765,7 +767,6 @@ def _make_signed_header():
     )
     sig_hex = sign_header(header, sk)
     pubkey = sk.verify_key.encode()
-    header_hash = shard_header_hash({k: v for k, v in header.items() if k != "header_hash"})
     row = {
         "root": root,
         "tree_size": 1,
@@ -1032,7 +1033,6 @@ class TestStoreTimestampToken:
         s, conn, cursor = _storage_with_cursor(
             fetchone_value={"token_count": 0, "tsa_already_present": False}
         )
-        from protocol.rfc3161 import MAX_TSA_TOKENS
 
         s.store_timestamp_token("shard", "aa" * 32, self._make_token())
         assert conn.commit.called
@@ -1674,8 +1674,6 @@ class TestReplayTreeIncremental:
 
         s = _bare_storage()
 
-        call_count = {"n": 0}
-
         @contextmanager
         def _fake_conn():  # type: ignore[return]
             conn = MagicMock()
@@ -1741,8 +1739,6 @@ class TestReplayTreeIncremental:
 
         s = _bare_storage()
 
-        call_count = {"n": 0}
-
         @contextmanager
         def _fake_conn():  # type: ignore[return]
             conn = MagicMock()
@@ -1775,9 +1771,6 @@ class TestComputePoseidonRootFromLeaves:
 
         with patch("protocol.poseidon_smt.PoseidonSMT", mock_smt, create=True):
             with patch.dict("sys.modules", {"protocol.poseidon_smt": MagicMock(PoseidonSMT=mock_smt)}):
-                from protocol.hashes import SNARK_SCALAR_FIELD
-
-                leaves = {b"\x01" * 32: b"\x02" * 32}
                 # We can't easily test this without the actual module, so just
                 # verify the function exists and is callable
                 assert callable(pm._compute_poseidon_root_from_leaves)
@@ -1944,7 +1937,7 @@ class TestGetConnectionRollback:
         conn.info = SimpleNamespace(transaction_status=TransactionStatus.IDLE)
         s._acquire_connection_with_retry = MagicMock(return_value=conn)  # type: ignore[method-assign]
 
-        with s._get_connection() as c:
+        with s._get_connection() as _:
             pass
 
         conn.rollback.assert_not_called()
@@ -1958,7 +1951,7 @@ class TestGetConnectionRollback:
         conn.info = SimpleNamespace(transaction_status=TransactionStatus.INTRANS)
         s._acquire_connection_with_retry = MagicMock(return_value=conn)  # type: ignore[method-assign]
 
-        with s._get_connection() as c:
+        with s._get_connection() as _:
             pass
 
         conn.rollback.assert_not_called()

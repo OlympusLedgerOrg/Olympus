@@ -18,9 +18,6 @@ All subprocess interactions are mocked.  Tests cover:
 
 from __future__ import annotations
 
-import json
-import queue
-import threading
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
