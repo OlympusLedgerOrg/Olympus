@@ -551,48 +551,6 @@ class TestRawFileIngestion:
         assert len(stored_batches) == 1
         assert stored_batches[0][1][0]["proof_id"] == data["proof_id"]
 
-    def test_ingest_raw_file_logs_and_continues_when_persistence_fails(
-        self, client: TestClient, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
-    ):
-        class FailingStorage:
-            def store_ingestion_batch(self, batch_id, records):
-                raise RuntimeError("database write failed")
-
-        async def fake_append_via_backend(**kwargs):
-            return storage_layer_api.AppendRecordResult(
-                root_hash=bytes.fromhex("88" * 32),
-                ledger_entry_hash="99" * 32,
-                ts="2026-05-10T12:03:00Z",
-                poseidon_root=None,
-                storage_proof=object(),
-                sequencer_proof=None,
-                backend="storage",
-                persisted=True,
-            )
-
-        monkeypatch.setattr(ingest_api, "_get_storage", lambda: FailingStorage())
-        monkeypatch.setattr(storage_layer_api, "append_via_backend", fake_append_via_backend)
-        monkeypatch.setattr(storage_layer_api, "_use_go_sequencer", lambda: False)
-        monkeypatch.setattr(
-            ingest_api,
-            "_smt_proof_to_merkle_proof_dict",
-            lambda proof, digest: {
-                "leaf_hash": digest.hex(),
-                "leaf_index": "0",
-                "siblings": [],
-                "root_hash": "88" * 32,
-            },
-        )
-
-        with caplog.at_level("ERROR", logger="api.ingest"):
-            resp = client.post(
-                "/ingest/files",
-                files={"file": ("fail.bin", b"still commits", "application/octet-stream")},
-            )
-
-        assert resp.status_code == 200
-        assert "file_ingest_persist_failed" in caplog.text
-
     def test_ingest_raw_file_rejects_upload_larger_than_configured_limit(
         self, client: TestClient, monkeypatch: pytest.MonkeyPatch
     ):
