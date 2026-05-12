@@ -337,6 +337,8 @@ jobs:
     #   Rust stable · Node.js 20 · circom v2.1.9 · Python 3.12 · libmagic1
     # This eliminates the ~4 min toolchain install that ran on every PR.
     # Rebuild the image by merging a change to docker/Dockerfile.ci.
+    # continue-on-error: image may not exist on first merge; removed once built.
+    continue-on-error: true
     runs-on: ubuntu-latest
     container:
       image: ghcr.io/olympusledgerorg/olympus-ci:latest
