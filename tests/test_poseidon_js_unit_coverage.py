@@ -152,9 +152,7 @@ class TestValidatePayload:
             self.proc._validate_payload({"op": "hash2", "a": "1", "b": None})
 
     def test_batch_hash2_valid(self) -> None:
-        self.proc._validate_payload(
-            {"op": "batch_hash2", "pairs": [{"a": "1", "b": "2"}]}
-        )
+        self.proc._validate_payload({"op": "batch_hash2", "pairs": [{"a": "1", "b": "2"}]})
 
     def test_batch_hash2_empty_pairs_raises(self) -> None:
         with pytest.raises(ValueError, match="non-empty"):
@@ -166,15 +164,11 @@ class TestValidatePayload:
 
     def test_batch_hash2_pair_not_dict_raises(self) -> None:
         with pytest.raises(ValueError, match="must be a dict"):
-            self.proc._validate_payload(
-                {"op": "batch_hash2", "pairs": [["1", "2"]]}
-            )
+            self.proc._validate_payload({"op": "batch_hash2", "pairs": [["1", "2"]]})
 
     def test_batch_hash2_bad_pair_field_raises(self) -> None:
         with pytest.raises(ValueError, match="decimal string"):
-            self.proc._validate_payload(
-                {"op": "batch_hash2", "pairs": [{"a": "abc", "b": "1"}]}
-            )
+            self.proc._validate_payload({"op": "batch_hash2", "pairs": [{"a": "abc", "b": "1"}]})
 
     def test_merkle_root_valid(self) -> None:
         self.proc._validate_payload({"op": "merkle_root", "leaves": ["1", "2", "3"]})
@@ -192,9 +186,7 @@ class TestValidatePayload:
 
     def test_merkle_root_invalid_depth_raises(self) -> None:
         with pytest.raises(ValueError, match="depth must be an integer"):
-            self.proc._validate_payload(
-                {"op": "merkle_root", "leaves": ["1"], "depth": "5"}
-            )
+            self.proc._validate_payload({"op": "merkle_root", "leaves": ["1"], "depth": "5"})
 
     def test_invalid_op_raises(self) -> None:
         with pytest.raises(ValueError, match="Unsupported poseidon_js op"):

@@ -354,7 +354,11 @@ class TestIterIngestionProofRows:
         assert rows[0][0] == "proof-0"
 
     def test_batch_index_default(self) -> None:
-        rows = list(StorageLayer._iter_ingestion_proof_rows("b", [self._make_record(0), self._make_record(1)]))
+        rows = list(
+            StorageLayer._iter_ingestion_proof_rows(
+                "b", [self._make_record(0), self._make_record(1)]
+            )
+        )
         assert rows[0][2] == 0  # batch_index
         assert rows[1][2] == 1
 
@@ -480,9 +484,7 @@ class TestCheckIngestionSchema:
 
 
 class TestConsumeRateLimit:
-    def _call(
-        self, s: StorageLayer, tokens: float = 5.0, elapsed: float = 0.0
-    ) -> bool:
+    def _call(self, s: StorageLayer, tokens: float = 5.0, elapsed: float = 0.0) -> bool:
         return s.consume_rate_limit(
             subject_type="ip",
             subject="127.0.0.1",
@@ -492,16 +494,12 @@ class TestConsumeRateLimit:
         )
 
     def test_token_available_returns_true(self) -> None:
-        s, conn, _ = _storage_with_cursor(
-            fetchone_value={"tokens": 5.0, "elapsed_seconds": 0.0}
-        )
+        s, conn, _ = _storage_with_cursor(fetchone_value={"tokens": 5.0, "elapsed_seconds": 0.0})
         assert self._call(s) is True
         assert conn.commit.called
 
     def test_token_exhausted_returns_false(self) -> None:
-        s, conn, _ = _storage_with_cursor(
-            fetchone_value={"tokens": 0.5, "elapsed_seconds": 0.0}
-        )
+        s, conn, _ = _storage_with_cursor(fetchone_value={"tokens": 0.5, "elapsed_seconds": 0.0})
         assert self._call(s) is False
         assert conn.rollback.called
 
@@ -635,7 +633,9 @@ class TestAppendRecordOuter:
         )
         assert call_count["n"] == 2
 
-    def test_serialization_failure_exhausted_reraises(self, monkeypatch: pytest.MonkeyPatch) -> None:
+    def test_serialization_failure_exhausted_reraises(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         import time
 
         monkeypatch.setattr(pm, "_RUST_SMT_AVAILABLE", True)
@@ -943,9 +943,7 @@ class TestVerifyPersistedRoot:
         from protocol.ssmf import EMPTY_HASHES
 
         root = EMPTY_HASHES[256]
-        s, conn, cursor = _storage_with_cursor(
-            fetchone_side_effect=[{"root": root}, None]
-        )
+        s, conn, cursor = _storage_with_cursor(fetchone_side_effect=[{"root": root}, None])
         assert s.verify_persisted_root("shard1") is True
 
 
@@ -1268,18 +1266,14 @@ class TestGetRootDiff:
             s.get_root_diff("shard1", 0, 1)
 
     def test_to_seq_not_found(self) -> None:
-        s, conn, cursor = _storage_with_cursor(
-            fetchone_side_effect=[self._header_row(0), None]
-        )
+        s, conn, cursor = _storage_with_cursor(fetchone_side_effect=[self._header_row(0), None])
         with pytest.raises(ValueError, match="not found"):
             s.get_root_diff("shard1", 0, 1)
 
     def test_journal_diff_used_when_available(self) -> None:
         from_row = self._header_row(0)
         to_row = self._header_row(1)
-        s, conn, cursor = _storage_with_cursor(
-            fetchone_side_effect=[from_row, to_row]
-        )
+        s, conn, cursor = _storage_with_cursor(fetchone_side_effect=[from_row, to_row])
         journal_result = {"added": [{"key": "aa" * 32}], "changed": [], "removed": []}
         s._diff_from_journal = MagicMock(return_value=journal_result)  # type: ignore[method-assign]
         result = s.get_root_diff("shard1", 0, 1)
@@ -1379,9 +1373,7 @@ class TestDiffFromJournal:
             {"key": key_in, "old_value": None, "new_value": b"\x02" * 32},
             {"key": key_out_high, "old_value": None, "new_value": b"\x03" * 32},
         ]
-        result = s._diff_from_journal(
-            cursor, "shard1", 0, 1, b"\x10" * 32, b"\xf0" * 32
-        )
+        result = s._diff_from_journal(cursor, "shard1", 0, 1, b"\x10" * 32, b"\xf0" * 32)
         assert result is not None
         assert len(result["added"]) == 1
         assert result["added"][0]["key"] == key_in.hex()
@@ -1733,9 +1725,7 @@ class TestReplayTreeIncremental:
         mock_tree.get_root.return_value = root
         monkeypatch.setattr(pm, "RustSparseMerkleTree", MagicMock(return_value=mock_tree))
 
-        headers = [
-            {"seq": i, "root": root, "leaf_seq": i + 1} for i in range(3)
-        ]
+        headers = [{"seq": i, "root": root, "leaf_seq": i + 1} for i in range(3)]
         ledger_rows = [
             {"seq": i, "payload": json.dumps({"shard_root": root.hex()})} for i in range(3)
         ]
@@ -1774,7 +1764,9 @@ class TestComputePoseidonRootFromLeaves:
         mock_smt.return_value = mock_smt_instance
 
         with patch("protocol.poseidon_smt.PoseidonSMT", mock_smt, create=True):
-            with patch.dict("sys.modules", {"protocol.poseidon_smt": MagicMock(PoseidonSMT=mock_smt)}):
+            with patch.dict(
+                "sys.modules", {"protocol.poseidon_smt": MagicMock(PoseidonSMT=mock_smt)}
+            ):
                 # We can't easily test this without the actual module, so just
                 # verify the function exists and is callable
                 assert callable(pm._compute_poseidon_root_from_leaves)
@@ -1987,6 +1979,7 @@ class TestAcquireConnectionWithRetry:
             call_count["n"] += 1
             if call_count["n"] < 2:
                 from psycopg import OperationalError
+
                 raise OperationalError("connection failed")
             return original_getconn()
 
@@ -2003,11 +1996,14 @@ class TestAcquireConnectionWithRetry:
         s = StorageLayer("postgresql://unused", connection_retries=2)
 
         from psycopg import OperationalError
+
         s._pool.getconn = MagicMock(side_effect=OperationalError("always fails"))  # type: ignore
         with pytest.raises(RuntimeError, match="Failed to acquire PostgreSQL connection"):
             s._acquire_connection_with_retry()
 
-    def test_non_transient_error_propagates_immediately(self, monkeypatch: pytest.MonkeyPatch) -> None:
+    def test_non_transient_error_propagates_immediately(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         monkeypatch.setattr(pm, "ConnectionPool", _FakePool)
         s = StorageLayer("postgresql://unused")
         s._pool.getconn = MagicMock(side_effect=ValueError("non-transient"))  # type: ignore
@@ -2032,7 +2028,9 @@ class TestCircuitBreakerHelpers:
         s._record_connection_failure()
         assert s._consecutive_connection_failures == 1
 
-    def test_record_failure_opens_circuit_at_threshold(self, monkeypatch: pytest.MonkeyPatch) -> None:
+    def test_record_failure_opens_circuit_at_threshold(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         import time
 
         monkeypatch.setattr(pm, "ConnectionPool", _FakePool)
@@ -2073,6 +2071,7 @@ class TestCircuitBreakerHelpers:
 class TestStoreIngestionBatch:
     def _make_record(self, idx: int = 0) -> dict[str, Any]:
         from protocol.hashes import hash_bytes
+
         return {
             "proof_id": f"proof-{idx}",
             "record_id": f"rec-{idx}",
@@ -2128,6 +2127,7 @@ class TestComputePoseidonRootFromLeavesActual:
         mock_smt_cls = MagicMock(return_value=mock_smt_instance)
 
         import sys
+
         mock_module = MagicMock()
         mock_module.PoseidonSMT = mock_smt_cls
         original = sys.modules.get("protocol.poseidon_smt")
@@ -2150,6 +2150,7 @@ class TestComputePoseidonRootFromLeavesActual:
         mock_smt_cls = MagicMock(return_value=mock_smt_instance)
 
         import sys
+
         mock_module = MagicMock()
         mock_module.PoseidonSMT = mock_smt_cls
         original = sys.modules.get("protocol.poseidon_smt")
@@ -2259,7 +2260,9 @@ class TestReplayTreeIncrementalErrorPaths:
         with pytest.raises(ValueError, match="ledger root mismatch"):
             s.replay_tree_incremental("shard1")
 
-    def test_replay_with_after_seq_loads_prior_leaves(self, monkeypatch: pytest.MonkeyPatch) -> None:
+    def test_replay_with_after_seq_loads_prior_leaves(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         monkeypatch.setattr(pm, "_RUST_SMT_AVAILABLE", True)
         root = b"\xfa" * 32
         mock_tree = MagicMock()
@@ -2275,7 +2278,14 @@ class TestReplayTreeIncrementalErrorPaths:
             cursor.fetchall.side_effect = [
                 [{"seq": 1, "root": root, "leaf_seq": 2}],
                 [{"seq": 1, "payload": json.dumps({"shard_root": root.hex()})}],
-                [{"key": b"\x01" * 32, "value_hash": b"\x02" * 32, "parser_id": "p", "canonical_parser_version": "1"}],
+                [
+                    {
+                        "key": b"\x01" * 32,
+                        "value_hash": b"\x02" * 32,
+                        "parser_id": "p",
+                        "canonical_parser_version": "1",
+                    }
+                ],
                 [],
                 [],
             ]
@@ -2307,7 +2317,14 @@ class TestReplayTreeIncrementalErrorPaths:
             cursor.fetchall.side_effect = [
                 [{"seq": 0, "root": root, "leaf_seq": 1}],
                 [{"seq": 0, "payload": json.dumps({"shard_root": root.hex()})}],
-                [{"key": b"\x01" * 32, "value_hash": b"\x02" * 32, "parser_id": "parser", "canonical_parser_version": "1.0"}],
+                [
+                    {
+                        "key": b"\x01" * 32,
+                        "value_hash": b"\x02" * 32,
+                        "parser_id": "parser",
+                        "canonical_parser_version": "1.0",
+                    }
+                ],
                 [],
             ]
             cursor.fetchone.return_value = None
@@ -2320,6 +2337,4 @@ class TestReplayTreeIncrementalErrorPaths:
 
         result = s.replay_tree_incremental("shard1")
         assert result["headers_checked"] == 1
-        mock_tree.update.assert_called_once_with(
-            b"\x01" * 32, b"\x02" * 32, "parser", "1.0"
-        )
+        mock_tree.update.assert_called_once_with(b"\x01" * 32, b"\x02" * 32, "parser", "1.0")
