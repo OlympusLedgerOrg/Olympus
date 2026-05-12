@@ -15,7 +15,7 @@ export function useProofVerification(
     mutationFn: verifyProofBundle,
     onSuccess: (data) => {
       const result = proofVerificationToVerdict(data);
-      setVerdictResult({ ...result, displayHash: data.content_hash });
+      setVerdictResult({ ...result, displayHash: data.content_hash, raw: data });
       addRecentVerification({
         hash: data.content_hash,
         type: "proof",

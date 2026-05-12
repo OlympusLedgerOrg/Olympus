@@ -167,4 +167,6 @@ export interface VerdictState {
   verdict: Verdict;
   details: VerdictDetail[];
   displayHash?: string;
+  /** Raw API response used by proof result panels and receipt export. */
+  raw?: unknown;
 }

@@ -4,12 +4,14 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
+import blake3
 import pytest
 from fastapi.testclient import TestClient
 from nacl.signing import SigningKey
 
 from api import ingest as ingest_api
 from api.app import app
+from api.services import storage_layer as storage_layer_api
 from protocol.hashes import hash_bytes, leaf_hash, record_key
 from protocol.merkle import MerkleTree, deserialize_merkle_proof, verify_proof
 from protocol.ssmf import SPARSE_MERKLE_DEPTH, ExistenceProof, SparseMerkleTree
@@ -389,6 +391,187 @@ class TestSubmittedProofBundles:
         )
 
         assert resp.status_code == 422
+
+
+# ---------------------------------------------------------------------------
+# POST /ingest/files
+# ---------------------------------------------------------------------------
+
+
+class TestRawFileIngestion:
+    def test_ingest_raw_file_uses_blake3_digest_and_default_record_id(
+        self, client: TestClient, monkeypatch: pytest.MonkeyPatch
+    ):
+        calls: list[dict[str, object]] = []
+
+        async def fake_append_via_backend(**kwargs):
+            calls.append(kwargs)
+            return storage_layer_api.AppendRecordResult(
+                root_hash=bytes.fromhex("11" * 32),
+                ledger_entry_hash="22" * 32,
+                ts="2026-05-10T12:00:00Z",
+                poseidon_root=None,
+                storage_proof=None,
+                sequencer_proof=None,
+                backend="sequencer",
+                persisted=False,
+            )
+
+        monkeypatch.setattr(ingest_api, "_get_storage", lambda: None)
+        monkeypatch.setattr(storage_layer_api, "append_via_backend", fake_append_via_backend)
+        monkeypatch.setattr(storage_layer_api, "_use_go_sequencer", lambda: True)
+
+        file_bytes = b"raw olympus upload bytes"
+        digest = blake3.blake3(file_bytes).hexdigest()
+
+        resp = client.post(
+            "/ingest/files",
+            files={"file": ("evidence.bin", file_bytes, "application/octet-stream")},
+        )
+
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["record_id"] == digest[:32]
+        assert data["shard_id"] == "files"
+        assert data["content_hash"] == digest
+        assert data["merkle_root"] == "11" * 32
+        assert data["timestamp"] == "2026-05-10T12:00:00Z"
+        assert data["size_bytes"] == len(file_bytes)
+
+        assert len(calls) == 1
+        assert calls[0]["shard_id"] == "files"
+        assert calls[0]["record_type"] == "file"
+        assert calls[0]["record_id"] == digest[:32]
+        assert calls[0]["version"] == 1
+        assert calls[0]["value_hash"] == bytes.fromhex(digest)
+        assert calls[0]["parser_id"] == ingest_api.RAW_BYTES_PARSER_ID
+        assert calls[0]["canonical_parser_version"] == ingest_api.RAW_BYTES_CPV
+        assert calls[0]["want_proof"] is False
+
+        proof_resp = client.get(f"/ingest/records/{data['proof_id']}/proof")
+        assert proof_resp.status_code == 200
+        proof_data = proof_resp.json()
+        assert proof_data["record_id"] == digest[:32]
+        assert proof_data["content_hash"] == digest
+        assert proof_data["canonicalization"]["normalization_mode"] == "raw_bytes_v1"
+        assert proof_data["canonicalization"]["filename"] == "evidence.bin"
+        assert proof_data["canonicalization"]["size_bytes"] == len(file_bytes)
+
+    def test_ingest_raw_file_passes_explicit_shard_record_and_version(
+        self, client: TestClient, monkeypatch: pytest.MonkeyPatch
+    ):
+        calls: list[dict[str, object]] = []
+
+        async def fake_append_via_backend(**kwargs):
+            calls.append(kwargs)
+            return storage_layer_api.AppendRecordResult(
+                root_hash=bytes.fromhex("33" * 32),
+                ledger_entry_hash="44" * 32,
+                ts="2026-05-10T12:01:00Z",
+                poseidon_root="12345",
+                storage_proof=None,
+                sequencer_proof=None,
+                backend="sequencer",
+                persisted=False,
+            )
+
+        monkeypatch.setattr(ingest_api, "_get_storage", lambda: None)
+        monkeypatch.setattr(storage_layer_api, "append_via_backend", fake_append_via_backend)
+        monkeypatch.setattr(storage_layer_api, "_use_go_sequencer", lambda: True)
+
+        resp = client.post(
+            "/ingest/files",
+            params={"shard_id": "custom-shard", "record_id": "custom-record", "version": 7},
+            files={"file": ("custom.txt", b"custom bytes", "text/plain")},
+        )
+
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["record_id"] == "custom-record"
+        assert data["shard_id"] == "custom-shard"
+        assert calls[0]["record_id"] == "custom-record"
+        assert calls[0]["shard_id"] == "custom-shard"
+        assert calls[0]["version"] == 7
+
+        cached = ingest_api._ingestion_store[data["proof_id"]]
+        assert cached["poseidon_root"] == "12345"
+        assert cached["hash_suite"] == ingest_api._HASH_SUITE_VERSION
+        assert cached["canonicalization"]["format"] == "text/plain"
+
+    def test_ingest_raw_file_storage_path_expands_storage_proof_and_persists(
+        self, client: TestClient, monkeypatch: pytest.MonkeyPatch
+    ):
+        stored_batches: list[tuple[str, list[dict[str, object]]]] = []
+
+        class FakeStorage:
+            def store_ingestion_batch(self, batch_id, records):
+                stored_batches.append((batch_id, records))
+
+        async def fake_append_via_backend(**kwargs):
+            return storage_layer_api.AppendRecordResult(
+                root_hash=bytes.fromhex("55" * 32),
+                ledger_entry_hash="66" * 32,
+                ts="2026-05-10T12:02:00Z",
+                poseidon_root="67890",
+                storage_proof=object(),
+                sequencer_proof=None,
+                backend="storage",
+                persisted=True,
+            )
+
+        monkeypatch.setattr(ingest_api, "_get_storage", lambda: FakeStorage())
+        monkeypatch.setattr(storage_layer_api, "append_via_backend", fake_append_via_backend)
+        monkeypatch.setattr(storage_layer_api, "_use_go_sequencer", lambda: False)
+        monkeypatch.setattr(
+            ingest_api,
+            "_smt_proof_to_merkle_proof_dict",
+            lambda proof, digest: {
+                "leaf_hash": digest.hex(),
+                "leaf_index": "9",
+                "siblings": ["77" * 32],
+                "root_hash": "55" * 32,
+                "proof_version": "test-proof",
+                "tree_version": "test-tree",
+                "tree_size": "1",
+            },
+        )
+
+        resp = client.post(
+            "/ingest/files",
+            files={"file": ("storage.bin", b"storage bytes", "application/octet-stream")},
+        )
+
+        assert resp.status_code == 200
+        data = resp.json()
+        cached = ingest_api._ingestion_store[data["proof_id"]]
+        assert cached["merkle_proof"]["leaf_hash"] == data["content_hash"]
+        assert cached["merkle_proof"]["content_hash"] == data["content_hash"]
+        assert cached["merkle_proof"]["value_hash"] == data["content_hash"]
+        assert cached["poseidon_root"] == "67890"
+        assert len(stored_batches) == 1
+        assert stored_batches[0][1][0]["proof_id"] == data["proof_id"]
+
+    def test_ingest_raw_file_rejects_upload_larger_than_configured_limit(
+        self, client: TestClient, monkeypatch: pytest.MonkeyPatch
+    ):
+        async def fail_if_called(**kwargs):
+            raise AssertionError("append_via_backend should not run for oversized upload")
+
+        monkeypatch.setattr(ingest_api, "_get_storage", lambda: None)
+        monkeypatch.setattr(storage_layer_api, "append_via_backend", fail_if_called)
+        monkeypatch.setattr(
+            ingest_api,
+            "get_settings",
+            lambda: SimpleNamespace(max_upload_bytes=4, upload_read_timeout_seconds=1),
+        )
+
+        resp = client.post(
+            "/ingest/files",
+            files={"file": ("too-large.bin", b"12345", "application/octet-stream")},
+        )
+
+        assert resp.status_code == 413
+        assert resp.json()["detail"] == "File exceeds maximum size of 0 MB."
 
 
 # ---------------------------------------------------------------------------

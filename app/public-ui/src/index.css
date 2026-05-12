@@ -1337,3 +1337,179 @@ header nav a:hover { filter: brightness(1.35); }
   border: 1px solid rgba(245, 158, 11, 0.35);
   padding: 0.6rem 0.75rem;
 }
+
+/* ─── Cinematic verification result panel ───────────────────────────────── */
+.proof-result-panel {
+  position: relative;
+  z-index: 5;
+  isolation: isolate;
+  margin-top: 1.5rem;
+  overflow: hidden;
+  border: 1px solid var(--border-strong);
+  background:
+    radial-gradient(circle at 18% 0%, color-mix(in srgb, var(--accent) 18%, transparent), transparent 32%),
+    linear-gradient(135deg, rgba(0, 0, 0, 0.96), color-mix(in srgb, var(--bg-0) 82%, black));
+  box-shadow: var(--glow-lg);
+  clip-path: polygon(0 0, 97% 0, 100% 3%, 100% 100%, 3% 100%, 0 97%);
+}
+.proof-result-panel[data-verdict="denied"] {
+  --accent: var(--danger);
+  --accent-glow: color-mix(in srgb, var(--danger) 42%, transparent);
+  --border-strong: color-mix(in srgb, var(--danger) 72%, transparent);
+}
+.proof-result-panel[data-verdict="pending"] {
+  --accent: var(--warn);
+  --accent-glow: color-mix(in srgb, var(--warn) 36%, transparent);
+  --border-strong: color-mix(in srgb, var(--warn) 62%, transparent);
+}
+.proof-result-scanlines {
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  pointer-events: none;
+  background: repeating-linear-gradient(0deg, transparent 0 7px, rgba(255, 255, 255, 0.035) 8px);
+  mix-blend-mode: screen;
+}
+.proof-result-grid {
+  position: relative;
+  z-index: 1;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 1.2rem;
+  padding: clamp(1rem, 3vw, 1.55rem);
+}
+.proof-result-main {
+  min-width: 0;
+}
+.proof-kicker {
+  margin: 0 0 0.55rem;
+  color: var(--fg-muted);
+  font-family: var(--font-terminal);
+  font-size: 0.58rem;
+  letter-spacing: 0.16em;
+}
+.proof-result-main h2 {
+  margin: 0;
+  color: var(--accent);
+  font-family: var(--font-section);
+  font-size: clamp(1.35rem, 4vw, 2.6rem);
+  letter-spacing: 0.02em;
+  text-shadow: 0 0 18px var(--accent-glow);
+}
+.proof-result-main h2 span {
+  display: inline-block;
+  min-width: 1.1em;
+}
+.proof-subtitle {
+  max-width: 46rem;
+  margin: 0.65rem 0 0;
+  color: var(--fg-2);
+  font-size: 0.76rem;
+  line-height: 1.65;
+}
+.proof-valid-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.45rem;
+  margin-top: 0.9rem;
+  padding: 0.32rem 0.62rem;
+  border: 1px solid color-mix(in srgb, var(--accent) 42%, transparent);
+  background: color-mix(in srgb, var(--accent) 8%, transparent);
+  color: var(--accent);
+  font-family: var(--font-terminal);
+  font-size: 0.62rem;
+}
+.proof-valid-badge span {
+  width: 0.48rem;
+  height: 0.48rem;
+  border-radius: 50%;
+  background: var(--accent);
+  box-shadow: 0 0 12px var(--accent);
+  animation: proof-pulse 1.6s ease-in-out infinite;
+}
+.proof-fields {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.6rem;
+  margin-top: 1rem;
+}
+.proof-field {
+  min-width: 0;
+  padding: 0.65rem;
+  border: 1px solid var(--border-2);
+  background: rgba(0, 0, 0, 0.34);
+}
+.proof-field-label {
+  margin-bottom: 0.32rem;
+  color: var(--fg-muted);
+  font-family: var(--font-terminal);
+  font-size: 0.53rem;
+  letter-spacing: 0.12em;
+}
+.proof-field-value {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.55rem;
+  min-width: 0;
+}
+.proof-field-value code {
+  min-width: 0;
+  color: var(--fg-1);
+  font-family: var(--font-terminal);
+  font-size: 0.66rem;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+.proof-field-inline {
+  grid-column: 1 / -1;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.8rem;
+}
+.proof-merkle-badge {
+  color: var(--accent);
+  font-family: var(--font-terminal);
+  font-size: 0.68rem;
+  text-shadow: 0 0 10px var(--accent-glow);
+}
+.proof-result-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.55rem;
+  margin-top: 1rem;
+}
+.proof-result-actions button {
+  min-height: 2.15rem;
+  border: 1px solid color-mix(in srgb, var(--accent) 36%, transparent);
+  background: rgba(0, 0, 0, 0.35);
+  color: var(--accent);
+  cursor: pointer;
+  font-family: var(--font-terminal);
+  font-size: 0.6rem;
+  letter-spacing: 0.08em;
+  padding: 0.48rem 0.68rem;
+  transition: background 0.15s ease, box-shadow 0.15s ease, transform 0.15s ease;
+}
+.proof-result-actions button:hover,
+.proof-result-actions button:focus-visible {
+  background: color-mix(in srgb, var(--accent) 10%, transparent);
+  box-shadow: 0 0 14px var(--accent-glow);
+  transform: translateY(-1px);
+}
+@keyframes proof-pulse {
+  0%, 100% { opacity: 0.42; transform: scale(0.82); }
+  50% { opacity: 1; transform: scale(1); }
+}
+@media (max-width: 960px) {
+  .proof-result-grid,
+  .proof-fields {
+    grid-template-columns: 1fr;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .proof-valid-badge span {
+    animation: none;
+  }
+}

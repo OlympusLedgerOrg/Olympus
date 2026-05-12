@@ -33,7 +33,7 @@ export function useHashVerification(
     mutationFn: verifyHash,
     onSuccess: (data) => {
       const result = hashVerificationToVerdict(data);
-      setVerdictResult({ ...result, displayHash: data.content_hash });
+      setVerdictResult({ ...result, displayHash: data.content_hash, raw: data });
       addRecentVerification({
         hash: data.content_hash,
         type: activeTab === "file" ? "file" : activeTab === "json" ? "json" : "hash",
