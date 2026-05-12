@@ -26,6 +26,7 @@ import base64
 import json
 import logging
 import os
+import re
 import types
 import uuid
 from collections import OrderedDict
@@ -55,7 +56,10 @@ from api.config import get_settings
 
 # Import schemas from the new extracted module
 from api.schemas.ingest import (
+    IDENTIFIER_MAX_LEN as _IDENTIFIER_MAX_LEN,
+    IDENTIFIER_PATTERN as _IDENTIFIER_PATTERN,
     PROOF_ID_PATTERN as _PROOF_ID_PATTERN,
+    SHARD_ID_PATTERN as _SHARD_ID_PATTERN,
     ArtifactCommitRequest,
     ArtifactCommitResponse,
     BatchIngestionRequest,
@@ -140,6 +144,19 @@ __all__ = [
 # olympus_core Rust extension. The authoritative definition (with full parameter
 # dict) lives in protocol/poseidon.py::HASH_SUITE_VERSION.
 _HASH_SUITE_VERSION = "poseidon-bn254-v1"
+_IDENTIFIER_RE = re.compile(_IDENTIFIER_PATTERN)
+_SHARD_ID_RE = re.compile(_SHARD_ID_PATTERN)
+
+
+def _validate_raw_file_identifier(value: str, *, name: str, is_shard: bool = False) -> None:
+    """Validate raw file ingest identifiers against the shared ingest allowlist."""
+    if len(value) > _IDENTIFIER_MAX_LEN:
+        raise HTTPException(
+            status_code=422, detail=f"{name} must be <= {_IDENTIFIER_MAX_LEN} chars"
+        )
+    pattern = _SHARD_ID_RE if is_shard else _IDENTIFIER_RE
+    if pattern.fullmatch(value) is None:
+        raise HTTPException(status_code=422, detail=f"{name} contains invalid characters")
 
 
 def _attach_poseidon_hash_suite(bundle: dict[str, Any]) -> dict[str, Any]:
@@ -1471,6 +1488,10 @@ async def ingest_raw_file(
         # Default to the BLAKE3 prefix so identical bytes always re-use the
         # same record slot (idempotent re-commit). Callers can override.
         record_id = content_hash[:32]
+    if version < 1:
+        raise HTTPException(status_code=422, detail="version must be >= 1")
+    _validate_raw_file_identifier(shard_id, name="shard_id", is_shard=True)
+    _validate_raw_file_identifier(record_id, name="record_id")
 
     record_type = "file"
     batch_id = str(uuid.uuid4())
