@@ -726,7 +726,7 @@ class ProofGenerator:
             )
 
         # Original leaf values as field integers (matching what the Merkle tree uses)
-        raw_leaves: list[int] = [v % SNARK_SCALAR_FIELD for v in tree._leaves]
+        raw_leaves: list[int] = [v % SNARK_SCALAR_FIELD for v in tree.leaves]
 
         # Merkle inclusion proof for every leaf
         all_path_elements: list[list[str]] = []

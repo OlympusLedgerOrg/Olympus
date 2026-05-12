@@ -109,7 +109,7 @@ class TestWitnessFromRedaction:
         witness = ProofGenerator.witness_from_redaction(tree, mask, circuit_config=cfg)
         inp = witness.inputs
 
-        raw = [v % SNARK_SCALAR_FIELD for v in tree._leaves]
+        raw = [v % SNARK_SCALAR_FIELD for v in tree.leaves]
         expected_commitment = _expected_commitment(raw, mask)
 
         assert inp["redactedCommitment"] == expected_commitment
@@ -127,7 +127,7 @@ class TestWitnessFromRedaction:
         inp = witness.inputs
 
         assert inp["revealedCount"] == "0"
-        raw = [v % SNARK_SCALAR_FIELD for v in tree._leaves]
+        raw = [v % SNARK_SCALAR_FIELD for v in tree.leaves]
         assert inp["redactedCommitment"] == _expected_commitment(raw, mask)
 
     def test_path_elements_shape(self) -> None:
