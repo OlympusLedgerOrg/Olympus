@@ -28,7 +28,7 @@ from api.schemas.document import (
 from api.services.hasher import generate_commit_id
 from api.services.merkle import MerkleProof, build_tree, generate_proof
 from api.services.shard import DEFAULT_SHARD_ID, compute_state_root
-from api.services.zkproof import generate_proof_stub
+from api.services.zkproof import maybe_generate_document_proof
 from protocol.log_sanitization import sanitize_for_log
 
 
@@ -172,8 +172,10 @@ async def verify_document(body: DocVerifyRequest, db: DBSession, _rl: RateLimit)
     """Verify a previously committed document hash.
 
     Looks up the commit by ``commit_id`` or ``doc_hash`` (at least one is
-    required), regenerates the Merkle inclusion proof and ZK proof stub,
-    and returns a verification result.
+    required), regenerates the Merkle inclusion proof, and returns a
+    verification result. Development mode includes a clearly marked ZK proof
+    stub; production returns ``zk_proof=None`` until a real document proof
+    backend is configured.
 
     Args:
         body: Verify request with at least one of commit_id or doc_hash.
@@ -254,7 +256,7 @@ async def verify_document(body: DocVerifyRequest, db: DBSession, _rl: RateLimit)
         except ValueError:
             merkle_proof_data = None
 
-    zk_proof = generate_proof_stub(commit.commit_id, commit.doc_hash)
+    zk_proof = maybe_generate_document_proof(commit.commit_id, commit.doc_hash)
 
     return DocVerifyResponse(
         verified=True,

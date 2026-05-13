@@ -245,8 +245,8 @@ class CircuitConfig:
         return cls(
             document_merkle_depth=20,
             non_existence_merkle_depth=256,
-            redaction_max_leaves=4,
-            redaction_merkle_depth=2,
+            redaction_max_leaves=64,
+            redaction_merkle_depth=6,
             unified_max_sections=8,
             unified_merkle_depth=20,
             unified_smt_depth=256,
@@ -460,10 +460,13 @@ class ProofGenerator:
         Uses the persistent Node.js snarkjs bridge when available,
         falling back to the CLI subprocess (npx snarkjs) otherwise.
         """
-        if not self.snarkjs_available:
+        can_prove = snarkjs_bridge.prove_available() or shutil.which(self.snarkjs_bin) is not None
+        if not can_prove:
             raise RuntimeError(
-                f"snarkjs binary '{self.snarkjs_bin}' not found and Node.js bridge "
-                "unavailable. Install Node.js/npm or install snarkjs globally."
+                f"snarkjs binary '{self.snarkjs_bin}' not found, Node.js bridge unavailable, "
+                "and optional RapidSNARK unavailable. Install Node.js/npm or snarkjs. "
+                "Set OLYMPUS_ENABLE_RAPIDSNARK=1 on supported Linux x86-64 hosts to use "
+                "RapidSNARK."
             )
 
         zkey_path = self.build_dir / f"{self.circuit}_final.zkey"
@@ -472,28 +475,35 @@ class ProofGenerator:
                 f"ZKey file not found: {zkey_path}. Run 'bash setup_circuits.sh' first."
             )
 
-        # --- Preferred path: Node.js bridge ---
+        # --- Optional native path when enabled and a witness file exists; otherwise Node.js bridge ---
+        if (
+            witness.witness_path is not None
+            and witness.witness_path.exists()
+            and snarkjs_bridge.prove_available()
+        ):
+            proof_dict, public_signals = snarkjs_bridge.prove(
+                witness_file=witness.witness_path,
+                zkey_file=zkey_path,
+            )
+            return ZKProof(
+                proof=proof_dict,
+                public_signals=public_signals,
+                circuit=self.circuit,
+            )
+
         if snarkjs_bridge.bridge_available():
-            # If we have a witness file, use prove(); otherwise use fullProve()
-            # with the raw input signals + WASM.
-            if witness.witness_path is not None and witness.witness_path.exists():
-                proof_dict, public_signals = snarkjs_bridge.prove(
-                    witness_file=witness.witness_path,
-                    zkey_file=zkey_path,
+            # fullProve: witness generation + proving in one step
+            wasm_file = self.build_dir / f"{self.circuit}_js" / f"{self.circuit}.wasm"
+            if not wasm_file.exists():
+                raise FileNotFoundError(
+                    f"WASM witness generator not found: {wasm_file}. "
+                    "Run 'bash setup_circuits.sh --compile-only' first."
                 )
-            else:
-                # fullProve: witness generation + proving in one step
-                wasm_file = self.build_dir / f"{self.circuit}_js" / f"{self.circuit}.wasm"
-                if not wasm_file.exists():
-                    raise FileNotFoundError(
-                        f"WASM witness generator not found: {wasm_file}. "
-                        "Run 'bash setup_circuits.sh --compile-only' first."
-                    )
-                proof_dict, public_signals = snarkjs_bridge.full_prove(
-                    input_signals=witness.inputs,
-                    wasm_file=wasm_file,
-                    zkey_file=zkey_path,
-                )
+            proof_dict, public_signals = snarkjs_bridge.full_prove(
+                input_signals=witness.inputs,
+                wasm_file=wasm_file,
+                zkey_file=zkey_path,
+            )
             return ZKProof(
                 proof=proof_dict,
                 public_signals=public_signals,

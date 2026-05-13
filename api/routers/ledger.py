@@ -210,14 +210,15 @@ async def get_commit_proof(
     response: Response,
     _rl: RateLimit,
 ) -> ProofResponse | PendingProofResponse:
-    """Return the Merkle inclusion proof and ZK proof stub for a commit.
+    """Return the Merkle inclusion proof and ZK proof status for a commit.
 
     Args:
         commit_id: Hex commit identifier (e.g. ``"0xc7d4a2f8e1b3095d"``).
         db: Injected async database session.
 
     Returns:
-        Merkle proof, ZK proof stub, shard, and epoch.
+        Merkle proof plus either a development proof stub or a pending proof
+        response, shard, and epoch.
 
     Raises:
         HTTPException 404: If the commit is not found.
@@ -260,9 +261,9 @@ async def get_commit_proof(
 
     _env = _os.getenv("OLYMPUS_ENV", "production")
     if _env == "development":
-        from api.services.zkproof import generate_proof_stub
+        from api.services.zkproof import maybe_generate_document_proof
 
-        zk_proof = generate_proof_stub(commit.commit_id, commit.doc_hash)
+        zk_proof = maybe_generate_document_proof(commit.commit_id, commit.doc_hash)
     else:
         response.status_code = status.HTTP_202_ACCEPTED
         return PendingProofResponse(
@@ -284,7 +285,7 @@ async def get_commit_proof(
         zk_proof=zk_proof,
         shard_id=commit.shard_id,
         epoch=commit.epoch_timestamp,
-        proof_type=zk_proof.get("proof_type", "unknown"),
+        proof_type=zk_proof.get("proof_type", "unknown"),  # type: ignore[union-attr]
     )
 
 

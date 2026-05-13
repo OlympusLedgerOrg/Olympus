@@ -7,6 +7,7 @@ for proof generation and verification.
 
 from __future__ import annotations
 
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -554,16 +555,59 @@ class TestResolveRapidsnarkPath:
 
     def test_returns_none_when_not_found(self) -> None:
         """_resolve_rapidsnark_path() returns None when rapidsnark is not in PATH."""
-        with patch("shutil.which", return_value=None):
+        with (
+            patch.dict(os.environ, {"OLYMPUS_ENABLE_RAPIDSNARK": "1"}),
+            patch(
+                "protocol.groth16_backend.Groth16Backend._rapidsnark_platform_supported",
+                return_value=True,
+            ),
+            patch("shutil.which", return_value=None),
+        ):
             result = Groth16Backend._resolve_rapidsnark_path()
         assert result is None
 
     def test_returns_path_when_found(self) -> None:
         """_resolve_rapidsnark_path() returns the binary path when rapidsnark is available."""
-        with patch("shutil.which", return_value="/usr/local/bin/rapidsnark") as mock_which:
+        with (
+            patch.dict(os.environ, {"OLYMPUS_ENABLE_RAPIDSNARK": "1"}),
+            patch(
+                "protocol.groth16_backend.Groth16Backend._rapidsnark_platform_supported",
+                return_value=True,
+            ),
+            patch("shutil.which", return_value="/usr/local/bin/rapidsnark") as mock_which,
+        ):
             result = Groth16Backend._resolve_rapidsnark_path()
         mock_which.assert_called_once_with("rapidsnark")
         assert result == "/usr/local/bin/rapidsnark"
+
+    def test_disabled_by_default_even_when_binary_exists(self) -> None:
+        with (
+            patch.dict(os.environ, {}, clear=True),
+            patch(
+                "protocol.groth16_backend.Groth16Backend._rapidsnark_platform_supported",
+                return_value=True,
+            ),
+            patch("shutil.which", return_value="/usr/local/bin/rapidsnark"),
+        ):
+            assert Groth16Backend._resolve_rapidsnark_path() is None
+            assert Groth16Backend.rapidsnark_unavailable_reason() == (
+                "OLYMPUS_ENABLE_RAPIDSNARK is not set to 1"
+            )
+
+    def test_enabled_but_unsupported_platform_returns_reason(self) -> None:
+        with (
+            patch.dict(os.environ, {"OLYMPUS_ENABLE_RAPIDSNARK": "1"}),
+            patch(
+                "protocol.groth16_backend.Groth16Backend._rapidsnark_platform_supported",
+                return_value=False,
+            ),
+            patch("protocol.groth16_backend.platform.system", return_value="Windows"),
+            patch("protocol.groth16_backend.platform.machine", return_value="AMD64"),
+        ):
+            assert Groth16Backend._resolve_rapidsnark_path() is None
+            assert Groth16Backend.rapidsnark_unavailable_reason() == (
+                "unsupported platform Windows AMD64"
+            )
 
 
 class TestRapidsnarkFallback:
@@ -601,6 +645,7 @@ class TestRapidsnarkFallback:
             return mock_result
 
         with (
+            patch.dict(os.environ, {"OLYMPUS_ENABLE_RAPIDSNARK": "1"}),
             patch("shutil.which", return_value="/usr/bin/node"),
             patch(
                 "protocol.groth16_backend.Groth16Backend._resolve_rapidsnark_path",
@@ -654,6 +699,56 @@ class TestRapidsnarkFallback:
 
         assert isinstance(proof, Proof)
         assert proof.proof_system == ProofSystemType.GROTH16
+
+    def test_generate_warns_when_requested_rapidsnark_unavailable(
+        self, tmp_path: Path, caplog
+    ) -> None:
+        """Explicit RapidSNARK requests warn before falling back to snarkjs."""
+        circuits_dir = tmp_path / "circuits"
+        circuits_dir.mkdir()
+        build_dir = tmp_path / "build"
+        build_dir.mkdir()
+
+        zkey_path = build_dir / "test_final.zkey"
+        zkey_path.touch()
+
+        wasm_dir = build_dir / "test_js"
+        wasm_dir.mkdir()
+        (wasm_dir / "test.wasm").touch()
+        (wasm_dir / "generate_witness.js").touch()
+
+        backend = Groth16Backend(circuits_dir=circuits_dir, build_dir=build_dir)
+        statement = Statement(circuit="test", public_inputs={"root": "1"})
+        witness = Witness(private_inputs={"path": "2"})
+
+        def mock_run(cmd: list[str], *, cwd=None, timeout: int, check: bool = True):
+            mock_result = MagicMock()
+            mock_result.returncode = 0
+            mock_result.stdout = ""
+            mock_result.stderr = ""
+            if "prove" in cmd:
+                Path(cmd[-2]).write_text('{"pi_a": [], "pi_b": [], "pi_c": []}')
+                Path(cmd[-1]).write_text('["1"]')
+            return mock_result
+
+        with (
+            patch.dict(os.environ, {"OLYMPUS_ENABLE_RAPIDSNARK": "1"}),
+            patch("shutil.which", return_value="/usr/bin/node"),
+            patch(
+                "protocol.groth16_backend.Groth16Backend._rapidsnark_platform_supported",
+                return_value=False,
+            ),
+            patch("protocol.groth16_backend.platform.system", return_value="Windows"),
+            patch("protocol.groth16_backend.platform.machine", return_value="AMD64"),
+            patch("protocol.groth16_backend._run_subprocess", side_effect=mock_run),
+        ):
+            proof = backend.generate(statement, witness)
+
+        assert isinstance(proof, Proof)
+        assert (
+            "RapidSNARK requested but unavailable: unsupported platform Windows AMD64"
+            in caplog.text
+        )
 
 
 # ---------------------------------------------------------------------------

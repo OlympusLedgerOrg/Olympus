@@ -52,31 +52,39 @@ _keys_loaded = False
 _key_store: dict[str, _APIKeyRecord] = {}
 _load_keys_lock = Lock()
 
-# ── Module-level dev auth bypass detection ──
-# Emit a one-time startup warning when the dev auth bypass is active so
-# operators notice immediately if OLYMPUS_ALLOW_DEV_AUTH leaks to a
-# non-development environment.
+# ── Dev auth bypass detection ──
+# Re-read OLYMPUS_ENV at request time (inside require_api_key) so that
+# test fixtures using patch.dict(os.environ, ...) take effect.
+# Module-level: only emit a startup notice so operators know they are in dev mode.
 _env = os.environ.get("OLYMPUS_ENV", "production")
-_allow_dev_auth = os.environ.get("OLYMPUS_ALLOW_DEV_AUTH") == "1"
-if _env == "development" and _allow_dev_auth:
-    logger.warning("DEV AUTH BYPASS ACTIVE — never enable OLYMPUS_ALLOW_DEV_AUTH=1 in production")
-elif _allow_dev_auth:
-    logger.error(
-        "OLYMPUS_ALLOW_DEV_AUTH=1 is set but OLYMPUS_ENV=%s (not 'development'). "
-        "The dev auth bypass is NOT active, but this flag should be removed "
-        "from non-development environments.",
-        _env,
+if _env == "development":
+    logger.warning(
+        "OLYMPUS_ENV=development — API key auth is bypassed when no keys are configured. "
+        "Never run in development mode in production."
     )
 
 
 @dataclass
 class _APIKeyRecord:
-    """Internal record for a hashed API key."""
+    """Internal record for a hashed API key.
+
+    Operator-bound keys carry the operator's Ed25519 identity and role so
+    every authenticated request can answer:
+        "which Ed25519 identity made this call?"
+        "which SBT/role credential authorises it?"
+
+    Legacy env-var keys leave the operator fields as ``None``.
+    """
 
     key_id: str
     key_hash: str
     scopes: set[str]
     expires_at: datetime
+    # Operator identity context — None for legacy env-var keys
+    operator_id: str | None = None
+    ed25519_public_key: str | None = None
+    operator_role: str | None = None
+    credential_id: str | None = None
 
 
 def _hash_key(raw_key: str) -> str:
@@ -232,12 +240,20 @@ def _constant_time_lookup(key_hash: str) -> tuple[_APIKeyRecord | None, bool]:
 
 
 async def _db_lookup_key(key_hash: str) -> tuple[_APIKeyRecord | None, bool]:
-    """Check api_keys table for a matching DB-backed key. Returns (record, expired)."""
+    """Check api_keys table for a matching DB-backed key.
+
+    Returns ``(record, expired)``.  On success:
+    - Populates operator identity fields (operator_id, ed25519_public_key,
+      operator_role, credential_id) when the key is operator-bound.
+    - Rejects the key if the bound operator has been revoked.
+    - Updates ``last_used_at`` on the key row (best-effort; never raises).
+    """
     try:
         import json as _json
 
         from api.db import AsyncSessionLocal
         from api.models.api_key import ApiKey
+        from api.models.operator import Operator
 
         async with AsyncSessionLocal() as session:
             result = await session.execute(
@@ -253,11 +269,42 @@ async def _db_lookup_key(key_hash: str) -> tuple[_APIKeyRecord | None, bool]:
                 else row.expires_at
             )
             expired = now >= expires
+
+            # ── Operator liveness check ───────────────────────────────────────
+            operator_id: str | None = row.operator_id
+            ed25519_public_key: str | None = row.ed25519_public_key
+            operator_role: str | None = None
+            credential_id: str | None = row.credential_id
+
+            if operator_id:
+                op_result = await session.execute(
+                    select(Operator).where(Operator.id == operator_id)
+                )
+                operator = op_result.scalars().first()
+                if operator is None or operator.revoked_at is not None:
+                    # Operator revoked — treat key as invalid
+                    return None, False
+                operator_role = operator.role
+                # Freshen credential binding from operator row (may be updated
+                # after the key was minted, e.g. when SBT is issued).
+                credential_id = operator.credential_id or credential_id
+
+            # ── Update last_used_at (best-effort, non-blocking) ───────────────
+            try:
+                row.last_used_at = now
+                await session.commit()
+            except Exception:  # nosec B110
+                pass  # Never let a telemetry write block auth
+
             record = _APIKeyRecord(
                 key_id=row.id,
                 key_hash=key_hash,
                 scopes=set(_json.loads(row.scopes)),
                 expires_at=expires.replace(tzinfo=timezone.utc),
+                operator_id=operator_id,
+                ed25519_public_key=ed25519_public_key,
+                operator_role=operator_role,
+                credential_id=credential_id,
             )
             return record, expired
     except Exception:
@@ -274,12 +321,15 @@ async def require_api_key(request: Request) -> _APIKeyRecord:
     """
     _load_keys()
 
-    # If no keys are configured, allow dev-mode bypass ONLY in development.
-    # In production (or any non-development environment) this is a fatal
-    # misconfiguration — refuse to serve write requests.
+    # If no keys are configured, allow bypass in development mode — no extra
+    # env flag needed.  Re-read OLYMPUS_ENV here (not from the module-level
+    # snapshot) so that test fixtures using patch.dict take effect immediately.
     if not _key_store:
-        if _env == "development" and _allow_dev_auth:
-            logger.critical("No API keys configured — dev-mode auth bypass active")
+        if os.environ.get("OLYMPUS_ENV", "production") == "development":
+            logger.warning(
+                "No API keys configured — dev bypass active (OLYMPUS_ENV=development). "
+                "All write requests are accepted without authentication."
+            )
             return _APIKeyRecord(
                 key_id="dev",
                 key_hash="",
@@ -288,8 +338,8 @@ async def require_api_key(request: Request) -> _APIKeyRecord:
             )
         logger.critical(
             "Authentication not configured. Refusing unauthenticated write access. "
-            "Configure API keys or set OLYMPUS_ENV=development and "
-            "OLYMPUS_ALLOW_DEV_AUTH=1 for local testing."
+            "Set OLYMPUS_ENV=development for local development (no API key required), "
+            "or configure OLYMPUS_API_KEYS_JSON for production."
         )
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -330,6 +380,16 @@ async def require_api_key(request: Request) -> _APIKeyRecord:
     return record
 
 
+def is_dev_bypass_active() -> bool:
+    """Return True when the no-key dev bypass applies to the current request.
+
+    Checks at call time (not import time) so that test fixtures using
+    ``patch.dict(os.environ, ...)`` take effect immediately.
+    """
+    _load_keys()
+    return not _key_store and os.environ.get("OLYMPUS_ENV", "production") == "development"
+
+
 # Typed dependency for use in route signatures
 RequireAPIKey = Annotated[_APIKeyRecord, Depends(require_api_key)]
 
@@ -359,10 +419,14 @@ def require_api_key_with_scope(required_scope: str) -> Any:
     async def _require_scoped_key(request: Request) -> _APIKeyRecord:
         _load_keys()
 
-        # If no keys are configured, allow dev-mode bypass ONLY in development.
+        # If no keys are configured, allow bypass in development mode.
+        # Re-read OLYMPUS_ENV at request time so patch.dict works in tests.
         if not _key_store:
-            if _env == "development" and _allow_dev_auth:
-                logger.critical("No API keys configured — dev-mode auth bypass active")
+            if os.environ.get("OLYMPUS_ENV", "production") == "development":
+                logger.warning(
+                    "No API keys configured — dev bypass active (OLYMPUS_ENV=development). "
+                    "All requests are accepted without authentication."
+                )
                 return _APIKeyRecord(
                     key_id="dev",
                     key_hash="",
@@ -371,8 +435,8 @@ def require_api_key_with_scope(required_scope: str) -> Any:
                 )
             logger.critical(
                 "Authentication not configured. Refusing unauthenticated access. "
-                "Configure API keys or set OLYMPUS_ENV=development and "
-                "OLYMPUS_ALLOW_DEV_AUTH=1 for local testing."
+                "Set OLYMPUS_ENV=development for local development (no API key required), "
+                "or configure OLYMPUS_API_KEYS_JSON for production."
             )
             raise HTTPException(
                 status_code=status.HTTP_503_SERVICE_UNAVAILABLE,

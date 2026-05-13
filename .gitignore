@@ -76,6 +76,7 @@ htmlcov/
 !proofs/circuits/lib/*.circom
 # Node.js
 node_modules/
+proofs/.last-npm-hash
 # Rust
 verifiers/rust/target/
 # Root-level Rust/maturin build artefacts (olympus_core extension)

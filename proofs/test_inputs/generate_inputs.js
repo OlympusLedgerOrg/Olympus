@@ -93,7 +93,9 @@ async function main() {
     const depth = envInt("OLYMPUS_DOCUMENT_MERKLE_DEPTH", 20);
     const leafValue = BigInt(42);
     const leafIndex = 0;
-    const treeSize = 1 << depth;
+    // treeSize must be < 2^depth (LessThanBounded(depth) constraint).
+    // We have 1 committed leaf at index 0, so treeSize=1 is correct.
+    const treeSize = 1;
 
     const { root, layers } = buildMerkleTree(poseidon, F, [leafValue], depth);
     const { pathElements, pathIndices } = getMerkleProof(layers, leafIndex, depth);
@@ -113,23 +115,41 @@ async function main() {
   }
 
   // =====================================================================
-  // 2. non_existence  (configurable depth, prove leaf at index 5 is empty (0))
-  //    NOTE: For smoke tests we use an all-zero tree, so every index is empty.
+  // 2. non_existence  (depth=256 sparse Merkle, prove all-zero key absent)
+  //
+  // Circuit interface: root (public), key[32] + pathElements[256] (private).
+  // pathIndices are derived internally from key bits — NOT a circuit input.
+  //
+  // We use an all-zero empty tree.  For a sparse tree where every leaf = 0
+  // the level hashes collapse: levelHash[0] = 0 (sentinel), and each higher
+  // level is domainPoseidon(NODE, levelHash[d], levelHash[d]).
+  // For the all-zero key every path bit is 0 (go left at every level), so
+  // every sibling is the right child = levelHash[d].
   // =====================================================================
   {
-    const depth = envInt("OLYMPUS_NON_EXISTENCE_MERKLE_DEPTH", 20);
-    const leafIndex = 5;
-    const treeSize = 1 << depth;
+    const SMT_DEPTH = 256;
+    // All-zero 32-byte key
+    const key = Array(SMT_DEPTH / 8).fill(0);
 
-    const { root, layers } = buildMerkleTree(poseidon, F, [], depth);
-    const { pathElements, pathIndices } = getMerkleProof(layers, leafIndex, depth);
+    // Build per-level zero hashes lazily (avoids 2^256 allocation)
+    const levelHashes = [BigInt(0)]; // levelHashes[0] = leaf sentinel = 0
+    for (let d = 0; d < SMT_DEPTH; d++) {
+      levelHashes.push(
+        domainPoseidon(poseidon, F, POSEIDON_DOMAIN_NODE, levelHashes[d], levelHashes[d])
+      );
+    }
+    const root = levelHashes[SMT_DEPTH];
+
+    // For all-zero key: all path bits are 0 (go left), sibling at level d is levelHashes[d]
+    const pathElements = [];
+    for (let d = 0; d < SMT_DEPTH; d++) {
+      pathElements.push(levelHashes[d]);
+    }
 
     const input = {
       root: root.toString(),
-      leafIndex: leafIndex.toString(),
-      treeSize: treeSize.toString(),
+      key: key.map((v) => v.toString()),
       pathElements: pathElements.map((e) => e.toString()),
-      pathIndices: pathIndices.map((e) => e.toString()),
     };
 
     const outPath = path.join(BUILD_DIR, "non_existence_input.json");
@@ -142,8 +162,8 @@ async function main() {
   //    Reveal leaves 0 and 2 out of 4 set leaves
   // =====================================================================
   {
-    const maxLeaves = envInt("OLYMPUS_REDACTION_MAX_LEAVES", 4);
-    const depth = envInt("OLYMPUS_REDACTION_MERKLE_DEPTH", 2);
+    const maxLeaves = envInt("OLYMPUS_REDACTION_MAX_LEAVES", 64);
+    const depth = envInt("OLYMPUS_REDACTION_MERKLE_DEPTH", 6);
     const capacity = 1 << depth;
     if (maxLeaves > capacity) {
       throw new Error(

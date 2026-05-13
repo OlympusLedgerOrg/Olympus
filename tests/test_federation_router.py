@@ -15,6 +15,7 @@ from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 
@@ -65,6 +66,14 @@ def _make_mock_db_session(local_root: str | None = None) -> AsyncMock:
     return session
 
 
+def _make_federation_test_app() -> FastAPI:
+    from api.routers import federation as fed_mod
+
+    app = FastAPI()
+    app.include_router(fed_mod.router, prefix="/v1")
+    return app
+
+
 # ---------------------------------------------------------------------------
 # GET /v1/federation/status
 # ---------------------------------------------------------------------------
@@ -72,9 +81,8 @@ def _make_mock_db_session(local_root: str | None = None) -> AsyncMock:
 
 class TestFederationStatusEndpoint:
     def test_status_disabled(self) -> None:
-        from api.main import app
-
         with patch.dict(os.environ, {"OLYMPUS_GUARDIAN_ENABLED": "false"}):
+            app = _make_federation_test_app()
             with TestClient(app) as client:
                 response = client.get("/v1/federation/status")
         assert response.status_code == 200
@@ -82,13 +90,13 @@ class TestFederationStatusEndpoint:
         assert data["guardian_enabled"] is False
 
     def test_status_enabled_registry_loaded(self) -> None:
-        from api.main import app
         from api.routers import federation as fed_mod
 
         # Reset the registry cache to force a reload with the test env
         fed_mod._registry_cache = None
 
         with patch.dict(os.environ, _GUARDIAN_ENV):
+            app = _make_federation_test_app()
             with TestClient(app) as client:
                 response = client.get("/v1/federation/status")
         assert response.status_code == 200
@@ -101,7 +109,6 @@ class TestFederationStatusEndpoint:
         assert data.get("local_node_id") == "olympus-node-1"
 
     def test_status_enabled_registry_missing(self) -> None:
-        from api.main import app
         from api.routers import federation as fed_mod
 
         fed_mod._registry_cache = None
@@ -112,6 +119,7 @@ class TestFederationStatusEndpoint:
             "OLYMPUS_INGEST_SIGNING_KEY": _NODE1_SIGNING_KEY_HEX,
         }
         with patch.dict(os.environ, env):
+            app = _make_federation_test_app()
             with TestClient(app) as client:
                 response = client.get("/v1/federation/status")
         assert response.status_code == 200
@@ -121,7 +129,6 @@ class TestFederationStatusEndpoint:
 
     def test_status_enabled_no_signing_key(self) -> None:
         """local_node_id should be None when no signing key is configured."""
-        from api.main import app
         from api.routers import federation as fed_mod
 
         fed_mod._registry_cache = None
@@ -133,6 +140,7 @@ class TestFederationStatusEndpoint:
         # Remove signing key from env
         with patch.dict(os.environ, env):
             os.environ.pop("OLYMPUS_INGEST_SIGNING_KEY", None)
+            app = _make_federation_test_app()
             with TestClient(app) as client:
                 response = client.get("/v1/federation/status")
         assert response.status_code == 200
