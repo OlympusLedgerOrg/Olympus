@@ -293,8 +293,8 @@ async def _db_lookup_key(key_hash: str) -> tuple[_APIKeyRecord | None, bool]:
             try:
                 row.last_used_at = now
                 await session.commit()
-            except Exception:  # nosec B110
-                pass  # Never let a telemetry write block auth
+            except Exception:
+                logger.debug("last_used_at telemetry write failed (non-blocking)", exc_info=True)
 
             record = _APIKeyRecord(
                 key_id=row.id,

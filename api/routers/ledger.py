@@ -285,7 +285,7 @@ async def get_commit_proof(
         zk_proof=zk_proof,
         shard_id=commit.shard_id,
         epoch=commit.epoch_timestamp,
-        proof_type=zk_proof.get("proof_type", "unknown"),  # type: ignore[union-attr]
+        proof_type=(zk_proof or {}).get("proof_type", "unknown"),
     )
 
 
