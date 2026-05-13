@@ -119,7 +119,7 @@ All stages are independently verifiable. The canonicalization version is current
 | BLAKE3 (domain-separated) | All ledger hashing, CD-HS-ST leaf/node hashes, global keys |
 | Ed25519 (PyNaCl / ed25519-dalek) | Shard header signing, federation votes |
 | Poseidon (BN128) | ZK circuit commitments only (separate from BLAKE3 ledger layer) |
-| Groth16 (snarkjs / rapidsnark / Circom) | ZK proofs: document existence, redaction validity, non-existence |
+| Groth16 (snarkjs / optional RapidSNARK / Circom) | ZK proofs: document existence, redaction validity, non-existence |
 | RFC 3161 | External timestamp tokens anchoring shard headers |
 
 ## Technology Stack
@@ -131,7 +131,7 @@ All stages are independently verifiable. The canonicalization version is current
 | **Shared Rust crypto crate** | `crates/olympus-crypto`: protocol-critical BLAKE3 record keys, global keys, SMT leaf/node hashes, empty-leaf sentinel |
 | **Rust CD-HS-ST service** | Rust 2021 edition, shared `olympus-crypto`, ed25519-dalek 2.1, tonic 0.14 (gRPC)† |
 | **Python Rust extension (`olympus_core`)** | pyo3 0.24; O(n) ADL scanner (CVE-2026-4539), BLAKE3/canonical-JSON acceleration, Poseidon BN254 (mandatory), Groth16 ZK verifier (mandatory), `RustSparseMerkleTree` |
-| **ZK circuits** | Circom, snarkjs, circomlib (Poseidon); rapidsnark (optional native prover, 5-10× faster); Halo2 gated behind `OLYMPUS_HALO2_ENABLED` |
+| **ZK circuits** | Circom, snarkjs, circomlib (Poseidon); RapidSNARK optional behind `OLYMPUS_ENABLE_RAPIDSNARK=1` on Linux x86-64; Halo2 gated behind `OLYMPUS_HALO2_ENABLED` |
 | **Database** | PostgreSQL 16 with Alembic migrations |
 | **Quality tooling** | Ruff, mypy, Bandit, pytest (>=85% coverage floor), Hypothesis, pip-audit |
 | **CI** | GitHub Actions: lint, typecheck, unit, smoke, verifier-conformance, fuzz, CodeQL, dependency-lock |

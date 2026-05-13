@@ -50,35 +50,21 @@ jobs:
       - name: Install proofs JS dependencies
         run: npm ci --ignore-scripts --prefix proofs
 
-      # rapidsnark/ffiasm emits native field arithmetic assembly and requires
-      # nasm plus a small C++ build toolchain. Install these before the vendor
-      # build so setup failures point at the missing system dependency directly.
-      - name: Install native proof-toolchain prerequisites
-        run: |
-          sudo apt-get update -qq
-          sudo apt-get install -y --no-install-recommends \
-            build-essential \
-            g++ \
-            libgmp-dev \
-            libsodium-dev \
-            nasm \
-            pkg-config
-
       - name: Cache powers of tau parameters
         id: cache-ptau
         uses: actions/cache@v4
         with:
-          path: proofs/keys/powersOfTau28_hez_final_19.ptau
-          key: ptau-19
+          path: proofs/keys/powersOfTau28_hez_final_20.ptau
+          key: ptau-20
 
       - name: Download powers of tau parameters
         if: steps.cache-ptau.outputs.cache-hit != 'true'
         run: |
           set -euo pipefail
           mkdir -p proofs/keys
-          PTAU_PATH="proofs/keys/powersOfTau28_hez_final_19.ptau"
-          PTAU_URL="https://storage.googleapis.com/zkevm/ptau/powersOfTau28_hez_final_19.ptau"
-          PTAU_B2="bca9d8b04242f175189872c42ceaa21e2951e0f0f272a0cc54fc37193ff6648600eaf1c555c70cdedfaf9fb74927de7aa1d33dc1e2a7f1a50619484989da0887"
+          PTAU_PATH="proofs/keys/powersOfTau28_hez_final_20.ptau"
+          PTAU_URL="https://storage.googleapis.com/zkevm/ptau/powersOfTau28_hez_final_20.ptau"
+          PTAU_B2="89a66eb5590a1c94e3f1ee0e72acf49b1669e050bb5f93c73b066b564dca4e0c7556a52b323178269d64af325d8fdddb33da3a27c34409b821de82aa2bf1a27b"
 
           if curl -fSL --connect-timeout 30 --retry 3 --retry-delay 5 \
             -o "${PTAU_PATH}" "${PTAU_URL}"; then
@@ -87,18 +73,3 @@ jobs:
             echo "WARNING: Could not download PTAU parameters; skipping optional setup step."
             rm -f "${PTAU_PATH}"
           fi
-
-      - name: Install rapidsnark (native C++ Groth16 prover — 5-10× faster than snarkjs)
-        run: |
-          set -euo pipefail
-          # Use Mysten Labs' native task-based build. The prover binary is
-          # produced at /tmp/rapidsnark/build/prover.
-          git clone --recursive https://github.com/MystenLabs/rapidsnark.git /tmp/rapidsnark
-          cd /tmp/rapidsnark
-          npm install
-          git submodule update --init --recursive
-          npx task createFieldSources
-          npx task buildProver
-          test -x /tmp/rapidsnark/build/prover
-          sudo cp /tmp/rapidsnark/build/prover /usr/local/bin/rapidsnark
-          rapidsnark --version 2>/dev/null || echo "rapidsnark installed successfully"

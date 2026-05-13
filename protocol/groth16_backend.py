@@ -35,6 +35,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import platform
 import re
 import shutil
 import signal
@@ -66,6 +67,7 @@ _PROOF_TIMEOUT_SECS = 300  # proof gen is the longest step
 # Do not increase this without circuit-specific benchmarking — a generous
 # timeout allows malformed proofs to DoS the verifier for the full interval.
 _VERIFY_TIMEOUT_SECS = 10  # verify is fast
+_RAPIDSNARK_SUPPORTED_ARCHES = frozenset({"x86_64", "amd64"})
 
 
 def _make_pdeathsig_preexec() -> Callable[[], None] | None:
@@ -286,13 +288,42 @@ class Groth16Backend(ProofBackendProtocol):
         """Return absolute path to the rapidsnark binary if available, else None.
 
         Rapidsnark is an optional C++ native Groth16 prover that is 5-10× faster
-        than snarkjs for the prove step.  It uses the same ``.zkey`` and ``.wtns``
-        files, so it is a transparent drop-in for the snarkjs prove command.
+        than snarkjs for the prove step. It is only considered when
+        ``OLYMPUS_ENABLE_RAPIDSNARK=1`` and the platform is Linux x86-64,
+        because the optimized assembly path is not a portable default.
 
         Returns:
             Absolute path to the ``rapidsnark`` binary, or ``None`` if not found.
         """
+        if os.getenv("OLYMPUS_ENABLE_RAPIDSNARK") != "1":
+            return None
+        if not Groth16Backend._rapidsnark_platform_supported():
+            return None
         return shutil.which("rapidsnark")
+
+    @staticmethod
+    def _rapidsnark_requested() -> bool:
+        """Return True when the operator explicitly requested RapidSNARK."""
+        return os.getenv("OLYMPUS_ENABLE_RAPIDSNARK") == "1"
+
+    @staticmethod
+    def _rapidsnark_platform_supported() -> bool:
+        """Return True when the default RapidSNARK binary path is supported."""
+        return (
+            platform.system() == "Linux"
+            and platform.machine().lower() in _RAPIDSNARK_SUPPORTED_ARCHES
+        )
+
+    @staticmethod
+    def rapidsnark_unavailable_reason() -> str | None:
+        """Explain why RapidSNARK is unavailable, or return None when usable."""
+        if not Groth16Backend._rapidsnark_requested():
+            return "OLYMPUS_ENABLE_RAPIDSNARK is not set to 1"
+        if not Groth16Backend._rapidsnark_platform_supported():
+            return f"unsupported platform {platform.system()} {platform.machine()}"
+        if shutil.which("rapidsnark") is None:
+            return "rapidsnark not found on PATH"
+        return None
 
     def _resolve_snarkjs_bin(self) -> str:
         """Return absolute path to the snarkjs launcher (snarkjs or npx)."""
@@ -411,7 +442,8 @@ class Groth16Backend(ProofBackendProtocol):
             except subprocess.CalledProcessError as e:
                 raise ProofGenerationError(f"Witness generation failed: {e.stderr}") from e
 
-            # Generate proof — prefer rapidsnark (C++ native, 5-10× faster) when available
+            # Generate proof. RapidSNARK is optional and explicitly gated because
+            # its optimized assembly path is platform-specific.
             proof_path = tmp_path / "proof.json"
             public_path = tmp_path / "public.json"
 
@@ -434,10 +466,14 @@ class Groth16Backend(ProofBackendProtocol):
                         f"Proof generation failed (rapidsnark): {e.stderr}"
                     ) from e
             else:
-                _log.debug(
-                    "rapidsnark not found in PATH; using snarkjs "
-                    "(install rapidsnark for 5-10× speedup)"
-                )
+                reason = self.rapidsnark_unavailable_reason()
+                if self._rapidsnark_requested():
+                    _log.warning(
+                        "RapidSNARK requested but unavailable: %s. Falling back to snarkjs.",
+                        reason,
+                    )
+                else:
+                    _log.debug("RapidSNARK unavailable (%s); using snarkjs", reason)
                 try:
                     self._run_snarkjs(
                         [

@@ -1438,6 +1438,21 @@ async def ingest_raw_file(
     # Apply rate limiting after authentication
     await _apply_rate_limits(request, _api_key.key_id, "ingest")
 
+    # FastAPI treats this multipart endpoint's scalar fields as form fields.
+    # Keep query-parameter compatibility for existing clients/tests that call
+    # /ingest/files?shard_id=...&record_id=...&version=... while uploading only
+    # the file part as multipart form data.
+    query = request.query_params
+    if "shard_id" in query:
+        shard_id = query["shard_id"]
+    if "record_id" in query:
+        record_id = query["record_id"]
+    if "version" in query:
+        try:
+            version = int(query["version"])
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail="version must be an integer") from exc
+
     from api.services.storage_layer import (
         _use_go_sequencer as _sl_use_go_sequencer,
         append_via_backend,

@@ -533,8 +533,9 @@ class UnifiedProofGenerator:
             )
 
         # For minimal witness-backed proof, use simple SMT structure
-        from proofs.proof_generator import ProofGenerator
-        from protocol.hashes import blake3_hash
+        from proofs.proof_generator import Witness
+        from protocol.hashes import SNARK_SCALAR_FIELD, blake3_hash
+        from protocol.poseidon_bn128 import poseidon_hash_bn128
         from protocol.poseidon_smt import PoseidonSMT, key_to_smt_bytes
 
         leaf_hashes = [
@@ -548,7 +549,23 @@ class UnifiedProofGenerator:
             smt.update(key, int.from_bytes(leaf_hash, byteorder="big"))
 
         target_key = key_to_smt_bytes(blake3_hash([b"0"]))
-        witness = ProofGenerator.witness_from_smt_existence(smt, target_key)
+        target_value = smt.get(target_key)
+        if target_value is None:
+            raise ValueError("target section is absent from Poseidon SMT")
+        path = smt._key_to_path(target_key)
+        key_int = int.from_bytes(target_key, byteorder="big") % SNARK_SCALAR_FIELD
+        leaf = poseidon_hash_bn128(key_int, target_value % SNARK_SCALAR_FIELD) % SNARK_SCALAR_FIELD
+        witness = Witness(
+            circuit="document_existence",
+            inputs={
+                "root": str(smt.get_root()),
+                "leaf": str(leaf),
+                "leafIndex": str(int.from_bytes(target_key, byteorder="big")),
+                "treeSize": "1",
+                "pathElements": [str(element) for element in smt._collect_siblings(path)],
+                "pathIndices": [str(index) for index in reversed(path)],
+            },
+        )
 
         poseidon_root = str(smt.get_root())
         return UnifiedProof(

@@ -31,6 +31,7 @@ from api.models.dataset import (
     DatasetArtifactFile,
     DatasetLineageEvent,
 )
+from api.models.signing_key import AccountSigningKey
 from api.models.tsa_job import TsaJob
 from api.schemas.dataset import (
     DatasetCommitRequest,
@@ -128,6 +129,20 @@ def _dev_sbt_bypass_allowed() -> bool:
 async def _require_active_key_credential(db: DBSession, pubkey_hex: str) -> None:
     """Require an active SBT credential for the Ed25519 committer key."""
     now = datetime.now(timezone.utc)
+    signing_key_q = select(AccountSigningKey.revoked_at).where(
+        AccountSigningKey.public_key == pubkey_hex
+    )
+    signing_key_rows = (await db.execute(signing_key_q)).scalars().all()
+    if signing_key_rows:
+        if any(
+            r is None or _normalize_datetime_for_compare(r, now) > now for r in signing_key_rows
+        ):
+            return
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Committer signing key has been revoked.",
+        )
+
     # Check for an active credential with a single LIMIT 1 lookup so we don't
     # scan every credential row for hot-path commits.
     active_q = (
@@ -169,6 +184,14 @@ def _is_key_revoked_at(revoked_at: datetime | None, reference: datetime) -> bool
     if reference.tzinfo is None and revoked_at.tzinfo is not None:
         reference = reference.replace(tzinfo=timezone.utc)
     return revoked_at <= reference
+
+
+def _normalize_datetime_for_compare(value: datetime, reference: datetime) -> datetime:
+    if value.tzinfo is None and reference.tzinfo is not None:
+        return value.replace(tzinfo=timezone.utc)
+    if reference.tzinfo is None and value.tzinfo is not None:
+        return value.replace(tzinfo=None)
+    return value
 
 
 def _compute_timestamp_state(
