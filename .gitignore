@@ -101,3 +101,6 @@ logs/
 api-*.log
 api-*.err.log
 vite-restart.*
+# Local demo recordings are referenced from docs but should be uploaded as release
+# assets or external grant-portal links instead of committed to the repository.
+Recording *.mp4
