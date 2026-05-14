@@ -42,6 +42,7 @@ echo.
 %PS% -NoProfile -ExecutionPolicy Bypass -File "%~dp0setup-windows.ps1" ^
      -UsePortablePostgres ^
      -ForceLocalDbUrl ^
+     -DbPort 5433 ^
      -SkipRustBuild ^
      -SkipStart
 if errorlevel 1 (
