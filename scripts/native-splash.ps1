@@ -1,7 +1,7 @@
 param(
     [string]$RepoRoot = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path,
     [string]$LogPath = (Join-Path $env:TEMP "olympus-native-start.log"),
-    [string]$AppUrl = "http://localhost:8000",
+    [string]$AppUrl = "http://127.0.0.1:8000",
     [int]$Port = 8765
 )
 

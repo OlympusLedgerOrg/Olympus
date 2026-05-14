@@ -24,7 +24,8 @@ echo.
 break > "%START_LOG%"
 call :log "OLYMPUS_PROTOCOL native launcher opened."
 call :log "Loading splash art and startup progress."
-start "" /min %PS% -NoProfile -ExecutionPolicy Bypass -File "%~dp0scripts\native-splash.ps1" -RepoRoot "%~dp0" -LogPath "%START_LOG%"
+%PS% -NoProfile -ExecutionPolicy Bypass -Command "Get-CimInstance Win32_Process | Where-Object { $_.ProcessId -ne $PID -and $_.CommandLine -like '* -File *native-splash.ps1*' } | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }" >nul 2>nul
+start "" /min %PS% -NoProfile -ExecutionPolicy Bypass -File "%~dp0scripts\native-splash.ps1" -RepoRoot "%~dp0" -LogPath "%START_LOG%" -AppUrl "http://127.0.0.1:8000"
 
 :: Step 1: First-boot bootstrap (.env + secrets)
 echo [1/3] Bootstrap ...
@@ -64,8 +65,8 @@ echo.
 echo  ------------------------------------------------------------
 echo  Olympus is starting
 echo.
-echo  UI + API:  http://localhost:8000
-echo  Health:    http://localhost:8000/health
+echo  UI + API:  http://127.0.0.1:8000
+echo  Health:    http://127.0.0.1:8000/health
 echo.
 echo  To stop:   press Ctrl+C
 echo  ------------------------------------------------------------
