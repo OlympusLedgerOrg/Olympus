@@ -1,5 +1,6 @@
 @echo off
 setlocal EnableDelayedExpansion
+chcp 65001 >nul
 
 title Olympus — Native  (no Docker required)
 cd /d "%~dp0"
@@ -63,6 +64,17 @@ echo  ║                                                          ║
 echo  ║  To stop:   press Ctrl+C                                ║
 echo  ╚══════════════════════════════════════════════════════════╝
 echo.
+
+%PS% -NoProfile -ExecutionPolicy Bypass -Command "Start-Process cmd.exe -WindowStyle Hidden -ArgumentList '/c','timeout /t 4 /nobreak >nul && start \"\" \"http://localhost:8000\"'" >nul 2>nul
+
+:: Load environment variables from .env (skip blank lines and comments)
+if exist "%~dp0.env" (
+  for /f "usebackq eol=# tokens=1,* delims==" %%A in ("%~dp0.env") do (
+    if not "%%A"=="" if not "%%B"=="" (
+      set "%%A=%%B"
+    )
+  )
+)
 
 :: Activate venv and launch uvicorn
 if exist "%~dp0.venv\Scripts\activate.bat" (

@@ -30,7 +30,7 @@ from typing import Any
 from fastapi import APIRouter, FastAPI, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
+from fastapi.responses import FileResponse, JSONResponse
 from starlette.middleware.base import BaseHTTPMiddleware
 
 from api.auth import _assert_xff_default_deny
@@ -482,8 +482,14 @@ def create_app() -> FastAPI:
     app.include_router(v1)
 
     @app.get("/", tags=["health"])
-    async def root() -> dict[str, Any]:
-        """API root with version info."""
+    async def root() -> Any:
+        """Serve the bundled UI when present; otherwise expose API version info."""
+        ui_index = (
+            Path(__file__).resolve().parent.parent / "app" / "public-ui" / "dist" / "index.html"
+        )
+        if ui_index.exists():
+            return FileResponse(ui_index)
+
         return {
             "service": settings.app_title,
             "version": settings.app_version,
