@@ -135,7 +135,7 @@ All stages are independently verifiable. The canonicalization version is current
 | **ZK circuits** | Circom, snarkjs, circomlib (Poseidon); RapidSNARK optional behind `OLYMPUS_ENABLE_RAPIDSNARK=1` on Linux x86-64; Halo2 gated behind `OLYMPUS_HALO2_ENABLED` |
 | **Database** | PostgreSQL 18 recommended, PostgreSQL 16+ supported, with Alembic migrations |
 | **Quality tooling** | Ruff, mypy, Bandit, pytest (>=85% coverage floor), Hypothesis, pip-audit |
-| **CI** | GitHub Actions: lint, typecheck, unit, smoke, verifier-conformance, fuzz, CodeQL, dependency-lock |
+| **CI** | GitHub Actions workflows exist for lint, typecheck, unit, smoke, verifier-conformance, fuzz, CodeQL, and dependency-lock. Current demo releases are locally verified because hosted CI minutes are constrained. |
 | **Wire format** | Protobuf between Go <-> Rust (`proto/cdhs_smf.proto`, `proto/olympus.proto`) |
 
 † Go sequencer and Rust gRPC service are scaffolded for Phase 1; not yet the primary write path. Current write path: Python API → `storage/postgres.py` → embedded Rust PyO3 (`olympus_core`). The protocol-critical Rust hash/key primitives are shared by both Rust paths through `crates/olympus-crypto`.
@@ -144,15 +144,15 @@ Python version: **>=3.10** (3.12 used for CI tooling and dependency locking; 3.1
 
 ## Current Repository State
 
-**Security audit complete (three rounds):** All critical and high findings closed. Current rollout and documentation items are tracked in [`docs/SECURITY_AUDIT_REPORT_V3.md`](docs/SECURITY_AUDIT_REPORT_V3.md). Rust hot-path live via `olympus_core`. Go verifier vendored and conformance-tested. Coverage ≥85%. Local collection snapshot: **3,980 tests collected**.
+**Security review status:** Internal audit notes and prior review rounds are tracked in [`docs/SECURITY_AUDIT_REPORT_V3.md`](docs/SECURITY_AUDIT_REPORT_V3.md). Rust hot-path code is live via `olympus_core`; Go verifier code is vendored and covered by conformance tests. A funded external review is still recommended before production deployment.
 
-**Current phase:** Phase 0 (protocol hardening complete, ready for public deployment).
+**Current phase:** Phase 0 local verified demo / prototype hardening. The project is suitable for outside evaluation and grant review, but should not be described as production-certified.
 
 The three phase-0 blockers were:
 
 1. **Groth16 trusted setup ceremony** ✓ — ceremony infrastructure lives in `ceremony/`; the production ceremony is an external dependency.
 2. **Federation decomposition** ✓ — complete; `protocol/federation/` now splits gossip, identity, quorum, replication, and rotation into focused modules.
-3. **E2E CI integration test against real PostgreSQL** ✓ — covered by the `smoke` workflow and `pytest -m postgres`.
+3. **E2E PostgreSQL smoke coverage** — workflow and local targets exist; demo release validation is currently run locally when hosted CI is unavailable.
 
 **Phase 1** (greenfield, no migration) services are underway:
 - Shared Rust crypto primitives: `crates/olympus-crypto/`
@@ -178,7 +178,7 @@ The three phase-0 blockers were:
 ```bash
 python -m pip install -e ".[dev]"   # install package + dev tooling
 make help                            # list all make targets
-make check                           # Ruff + mypy + Bandit + full test suite (>=85% coverage)
+make check                           # Ruff + mypy + Bandit + full test suite with configured coverage floor
 make lint                            # Ruff + mypy + Bandit, no tests
 make format                          # auto-format with Ruff
 make vectors                         # verify golden canonicalization + hash vectors

@@ -9,6 +9,8 @@ This demo shows the working Olympus proof loop without asking a reviewer to unde
 
 The recording should show the core story: double-click start, ingest a file, verify it, reject a bad API key, reject an already committed record, download a proof bundle, and verify that proof bundle.
 
+This is a local verified demo release, not a production certification. Automated GitHub CI is not treated as the release gate for this demo package.
+
 ## What Works Now
 
 - Olympus starts from the double-click Windows launcher.

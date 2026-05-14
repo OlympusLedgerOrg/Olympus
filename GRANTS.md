@@ -52,6 +52,8 @@ Strong framing:
 
 > Olympus is a privacy-preserving proof layer for public documents. It lets institutions publish cryptographic receipts that citizens, journalists, and auditors can verify independently, even offline, without trusting the original website.
 
+For today, phrase "offline" as a roadmap or verifier goal unless the reviewer is using one of the local verifier paths. The live demo is a local web app and API-backed workflow, with proof bundles designed to become portable verification artifacts.
+
 Avoid leading with implementation details like Rust, Go, sparse trees, or API internals. Those matter after the reviewer understands the civic problem.
 
 ## Funding Would Unlock
@@ -68,7 +70,7 @@ Avoid leading with implementation details like Rust, Go, sparse trees, or API in
 Before submitting this to a grant reviewer, package these together:
 
 - [DEMO.md](./DEMO.md)
-- demo video link or attached recording
+- demo release link or attached recording
 - one sample PDF
 - one proof bundle JSON generated from that PDF
 - screenshots of commit, verify, duplicate rejection, and proof verification
