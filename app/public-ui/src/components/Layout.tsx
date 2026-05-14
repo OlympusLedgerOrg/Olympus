@@ -11,6 +11,8 @@ export default function Layout({ children }: { children: React.ReactNode }) {
   const location = useLocation();
   const { skin } = useSkin();
   const fx = skin.effects ?? {};
+  const canManageKeys =
+    typeof window !== "undefined" && Boolean(localStorage.getItem("olympus_admin_key"));
 
   // Derive header/nav colours from current skin so chrome stays readable.
   const isLight = skin.id === "basic";
@@ -90,9 +92,8 @@ export default function Layout({ children }: { children: React.ReactNode }) {
           <div style={{ display: "flex", alignItems: "center", gap: "1.25rem" }}>
             <nav style={{ display: "flex", gap: "1.5rem" }}>
               {[
-                { to: "/", label: "LEDGER" },
                 { to: "/verify", label: "VERIFY" },
-                { to: "/keys", label: "KEYS" },
+                ...(canManageKeys ? [{ to: "/keys", label: "KEYS" }] : []),
               ].map(({ to, label }) => {
                 const active = location.pathname === to;
                 return (

@@ -128,6 +128,22 @@ def _format_uptime(seconds: int) -> str:
     return f"{seconds // 86400}d"
 
 
+async def _count_public_proofs(conn: Any) -> int:
+    if await _table_exists(conn, "ingestion_proofs"):
+        proofs = await _count_table_if_exists(conn, "ingestion_proofs")
+    else:
+        proofs = 0
+
+    for table_name, column_name in (
+        ("doc_commits", "zk_proof"),
+        ("dataset_artifacts", "zk_proof"),
+        ("credential_ledger_events", "inclusion_proof"),
+    ):
+        proofs += await _count_non_empty_column_if_exists(conn, table_name, column_name)
+
+    return proofs
+
+
 @router.get("/stats", response_model=PublicStats)
 async def get_public_stats() -> PublicStats:
     """Return aggregated public ledger statistics from an async GET endpoint.
@@ -157,6 +173,7 @@ async def get_public_stats() -> PublicStats:
 
         shard_ids: set[str] = set()
         for table_name in (
+            "ingestion_proofs",
             "doc_commits",
             "dataset_artifacts",
             "dataset_lineage_events",
@@ -164,13 +181,7 @@ async def get_public_stats() -> PublicStats:
             shard_ids.update(await _distinct_column_values_if_exists(conn, table_name, "shard_id"))
         shards = len(shard_ids)
 
-        proofs = 0
-        for table_name, column_name in (
-            ("doc_commits", "zk_proof"),
-            ("dataset_artifacts", "zk_proof"),
-            ("credential_ledger_events", "inclusion_proof"),
-        ):
-            proofs += await _count_non_empty_column_if_exists(conn, table_name, column_name)
+        proofs = await _count_public_proofs(conn)
 
     uptime_seconds = int(now - _STARTED_AT)
 
