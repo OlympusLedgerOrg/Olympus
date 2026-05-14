@@ -14,6 +14,7 @@ The answer is **yes** — independently and offline.
 
 | I am a... | Start with |
 |---|---|
+| **Grant reviewer / outside evaluator** | [`GRANTS.md`](GRANTS.md) -> [`DEMO.md`](DEMO.md) |
 | **Security auditor** | [`docs/SECURITY_AUDIT_REPORT_V3.md`](docs/SECURITY_AUDIT_REPORT_V3.md) → [`docs/threat-model.md`](docs/threat-model.md) → [`storage/postgres.py`](storage/postgres.py) → [`protocol/`](protocol/) |
 | **New contributor** | [`docs/quickstart.md`](docs/quickstart.md) → [`docs/development.md`](docs/development.md) → [`CONTRIBUTING.md`](CONTRIBUTING.md) |
 | **Integrator / API user** | [`api/routers/`](api/routers/) → [`schemas/`](schemas/) → [`tools/verify_cli.py`](tools/verify_cli.py) |
