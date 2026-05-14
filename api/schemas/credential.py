@@ -167,6 +167,85 @@ class CredentialResponse(BaseModel):
     model_config = {"from_attributes": True}
 
 
+# ── EVM mirror operations ─────────────────────────────────────────────────────
+
+
+class EvmMintQueueRequest(BaseModel):
+    """Request body for queueing the optional ERC-5484 on-chain mirror."""
+
+    wallet_address: str | None = Field(
+        None,
+        pattern=r"^0x[a-fA-F0-9]{40}$",
+        description=(
+            "Recipient EVM wallet. If omitted, Olympus uses the latest verified "
+            "wallet binding for the credential holder/signing key."
+        ),
+    )
+    token_uri: str = Field(
+        "",
+        max_length=500,
+        description="Optional tokenURI override. Defaults to /sbt/metadata/{credential_id}.",
+    )
+    chain_id: int | None = Field(None, ge=1, description="Optional target chain override.")
+    contract_address: str | None = Field(
+        None,
+        pattern=r"^0x[a-fA-F0-9]{40}$",
+        description="Optional deployed OlympusCredential contract override.",
+    )
+    flush: bool = Field(
+        False,
+        description="When true, immediately flush pending EVM ops after queueing this mint.",
+    )
+
+
+class EvmPendingOpResponse(BaseModel):
+    """Public representation of an EVM pending operation row."""
+
+    id: str
+    op_type: str
+    credential_id: str
+    ledger_commit_id: str
+    token_id: str
+    wallet_address: str | None = None
+    holder_key_id: str | None = None
+    burn_authorization: str | None = None
+    credential_type: str | None = None
+    token_uri: str | None = None
+    status: str
+    chain_id: int
+    contract_address: str
+    batch_tx_hash: str | None = None
+    error: str | None = None
+
+    model_config = {"from_attributes": True}
+
+
+class EvmMintQueueResponse(BaseModel):
+    """Response after queueing an optional EVM SBT mint."""
+
+    credential_id: str
+    evm_status: str
+    op: EvmPendingOpResponse
+    flush_result: dict | None = None
+
+
+class EvmFlushRequest(BaseModel):
+    """Request body for flushing queued optional EVM SBT operations."""
+
+    max_batch: int = Field(50, ge=1, le=500)
+    mints: bool = True
+    burns: bool = True
+    reset_stale_submitted: bool = True
+
+
+class EvmFlushResponse(BaseModel):
+    """Response from the optional EVM SBT flush endpoint."""
+
+    reset_submitted: int = 0
+    burns: dict | None = None
+    mints: dict | None = None
+
+
 # ── Ledger event ──────────────────────────────────────────────────────────────
 
 

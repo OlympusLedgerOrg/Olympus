@@ -385,6 +385,7 @@ Olympus is influenced by the operational model of Certificate Transparency and S
 | Canonicalization + verification CLIs | `tools/canonicalize_cli.py`, `tools/verify_cli.py`, `tools/olympus.py` |
 | ZK proof setup and circuits | `proofs/README.md`, `proofs/circuits/` |
 | Runnable demos | `examples/README.md` |
+| Optional EVM SBT deployment | [`docs/sbt-deployment.md`](docs/sbt-deployment.md) |
 | Interoperability helpers | `integrations/README.md` |
 | Extended setup guide | [`docs/quickstart.md`](docs/quickstart.md) |
 | Full developer workflow | [`docs/development.md`](docs/development.md) |

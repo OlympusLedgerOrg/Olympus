@@ -272,6 +272,10 @@ ignore_missing_imports = true
 module = "botocore.*"
 ignore_missing_imports = true
 
+[[tool.mypy.overrides]]
+module = "eth_account.*"
+ignore_missing_imports = true
+
 [tool.bandit]
 exclude_dirs = ["tests", ".venv", "venv"]
 skips = ["B101"]  # Skip assert_used check (assertions are fine in tests)

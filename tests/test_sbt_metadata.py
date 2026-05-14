@@ -22,7 +22,7 @@ Covers:
 from __future__ import annotations
 
 from datetime import datetime, timezone
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -105,6 +105,31 @@ def _make_evm_op(
     op.status = status
     op.credential_id = credential_id
     op.queued_at = queued_at or datetime(2024, 6, 1, tzinfo=timezone.utc)
+    return op
+
+
+def _make_pending_op_response(
+    *,
+    id: str = "op-1",
+    credential_id: str = "cred-abc",
+    status: str = "pending",
+):
+    op = MagicMock()
+    op.id = id
+    op.op_type = "mint"
+    op.credential_id = credential_id
+    op.ledger_commit_id = "0x" + "ab" * 32
+    op.token_id = "12345"
+    op.wallet_address = "0x" + "1" * 40
+    op.holder_key_id = "aa" * 32
+    op.burn_authorization = "issuer_only"
+    op.credential_type = "journalist"
+    op.token_uri = "http://localhost:8000/sbt/metadata/cred-abc"
+    op.status = status
+    op.chain_id = 31337
+    op.contract_address = "0x" + "c" * 40
+    op.batch_tx_hash = None
+    op.error = None
     return op
 
 
@@ -281,7 +306,199 @@ class TestGetCredential:
             )
 
         assert exc_info.value.status_code == 404
+        assert isinstance(exc_info.value.detail, dict)
         assert exc_info.value.detail["code"] == "CREDENTIAL_NOT_FOUND"
+
+
+# ─── Tests: optional EVM SBT mint queue / flush endpoints ─────────────────────
+
+
+class TestEvmMintQueue:
+    @pytest.mark.asyncio
+    async def test_requires_admin_scope(self):
+        from fastapi import HTTPException
+
+        from api.routers.keys import queue_credential_evm_mint
+        from api.schemas.credential import EvmMintQueueRequest
+
+        db = _make_db()
+        api_key = MagicMock()
+        api_key.scopes = {"write"}
+
+        with pytest.raises(HTTPException) as exc_info:
+            await queue_credential_evm_mint(
+                credential_id="cred-abc",
+                body=EvmMintQueueRequest(
+                    wallet_address="0x" + "1" * 40,
+                    token_uri="",
+                    chain_id=None,
+                    contract_address=None,
+                    flush=False,
+                ),
+                db=db,
+                api_key=api_key,
+                _rl=None,
+            )
+
+        assert exc_info.value.status_code == 403
+
+    @pytest.mark.asyncio
+    async def test_queues_mint_with_explicit_wallet(self, monkeypatch):
+        from api.routers.keys import queue_credential_evm_mint
+        from api.schemas.credential import EvmMintQueueRequest
+
+        monkeypatch.setenv("OLYMPUS_EVM_CONTRACT_ADDRESS", "0x" + "c" * 40)
+        monkeypatch.setenv("OLYMPUS_EVM_CHAIN_ID", "31337")
+        db = _make_db()
+        cred = _make_credential()
+        op = _make_pending_op_response()
+
+        cred_result = MagicMock()
+        cred_result.scalar_one_or_none.return_value = cred
+        existing_mint_result = MagicMock()
+        existing_mint_result.scalar_one_or_none.return_value = None
+        burn_result = MagicMock()
+        burn_result.scalar_one_or_none.return_value = None
+        mint_result = MagicMock()
+        mint_result.scalar_one_or_none.return_value = _make_evm_op(status="pending")
+        db.execute.side_effect = [cred_result, existing_mint_result, burn_result, mint_result]
+        db.flush = AsyncMock()
+        db.refresh = AsyncMock()
+
+        api_key = MagicMock()
+        api_key.scopes = {"admin"}
+
+        with patch("api.routers.keys.queue_mint", AsyncMock(return_value=op)) as queue_mock:
+            response = await queue_credential_evm_mint(
+                credential_id="cred-abc",
+                body=EvmMintQueueRequest(
+                    wallet_address="0x" + "1" * 40,
+                    token_uri="",
+                    chain_id=None,
+                    contract_address=None,
+                    flush=False,
+                ),
+                db=db,
+                api_key=api_key,
+                _rl=None,
+            )
+
+        queue_mock.assert_awaited_once()
+        assert queue_mock.await_args is not None
+        queued_kwargs = queue_mock.await_args.kwargs
+        assert queued_kwargs["credential_id"] == "cred-abc"
+        assert queued_kwargs["wallet_address"] == "0x" + "1" * 40
+        assert queued_kwargs["chain_id"] == 31337
+        assert queued_kwargs["contract_address"] == "0x" + "c" * 40
+        assert queued_kwargs["token_uri"].endswith("/sbt/metadata/cred-abc")
+        assert response.evm_status == "pending"
+        assert response.op.id == "op-1"
+
+    @pytest.mark.asyncio
+    async def test_existing_pending_mint_returns_409(self):
+        from fastapi import HTTPException
+
+        from api.routers.keys import queue_credential_evm_mint
+        from api.schemas.credential import EvmMintQueueRequest
+
+        db = _make_db()
+        cred_result = MagicMock()
+        cred_result.scalar_one_or_none.return_value = _make_credential()
+        existing_mint_result = MagicMock()
+        existing = _make_pending_op_response(status="pending")
+        existing_mint_result.scalar_one_or_none.return_value = existing
+        burn_result = MagicMock()
+        burn_result.scalar_one_or_none.return_value = None
+        mint_result = MagicMock()
+        mint_result.scalar_one_or_none.return_value = _make_evm_op(status="pending")
+        db.execute.side_effect = [cred_result, existing_mint_result, burn_result, mint_result]
+
+        api_key = MagicMock()
+        api_key.scopes = {"admin"}
+
+        with pytest.raises(HTTPException) as exc_info:
+            await queue_credential_evm_mint(
+                credential_id="cred-abc",
+                body=EvmMintQueueRequest(
+                    wallet_address="0x" + "1" * 40,
+                    token_uri="",
+                    chain_id=None,
+                    contract_address=None,
+                    flush=False,
+                ),
+                db=db,
+                api_key=api_key,
+                _rl=None,
+            )
+
+        assert exc_info.value.status_code == 409
+        assert isinstance(exc_info.value.detail, dict)
+        assert exc_info.value.detail["code"] == "EVM_MINT_ALREADY_EXISTS"
+
+
+class TestEvmFlushEndpoint:
+    @pytest.mark.asyncio
+    async def test_flush_requires_admin_scope(self):
+        from fastapi import HTTPException
+
+        from api.routers.keys import flush_queued_evm_ops
+        from api.schemas.credential import EvmFlushRequest
+
+        api_key = MagicMock()
+        api_key.scopes = {"write"}
+
+        with pytest.raises(HTTPException) as exc_info:
+            await flush_queued_evm_ops(
+                body=EvmFlushRequest(
+                    max_batch=50,
+                    mints=True,
+                    burns=True,
+                    reset_stale_submitted=True,
+                ),
+                db=_make_db(),
+                api_key=api_key,
+                _rl=None,
+            )
+
+        assert exc_info.value.status_code == 403
+
+    @pytest.mark.asyncio
+    async def test_flush_calls_reset_burns_and_mints(self):
+        from api.routers.keys import flush_queued_evm_ops
+        from api.schemas.credential import EvmFlushRequest
+
+        api_key = MagicMock()
+        api_key.scopes = {"admin"}
+        db = _make_db()
+
+        with (
+            patch("api.routers.keys.check_submitted_ops", AsyncMock(return_value=2)),
+            patch(
+                "api.routers.keys.flush_pending_burns",
+                AsyncMock(return_value={"submitted": 1, "confirmed": 1}),
+            ) as burns,
+            patch(
+                "api.routers.keys.flush_pending_mints",
+                AsyncMock(return_value={"submitted": 3, "confirmed": 3}),
+            ) as mints,
+        ):
+            response = await flush_queued_evm_ops(
+                body=EvmFlushRequest(
+                    max_batch=25,
+                    mints=True,
+                    burns=True,
+                    reset_stale_submitted=True,
+                ),
+                db=db,
+                api_key=api_key,
+                _rl=None,
+            )
+
+        burns.assert_awaited_once_with(db, 25)
+        mints.assert_awaited_once_with(db, 25)
+        assert response.reset_submitted == 2
+        assert response.burns == {"submitted": 1, "confirmed": 1}
+        assert response.mints == {"submitted": 3, "confirmed": 3}
 
 
 # ─── Tests: GET /sbt/metadata/{credential_id} ─────────────────────────────────
@@ -301,6 +518,7 @@ class TestSbtMetadataEndpoint:
             await get_sbt_metadata(credential_id="no-such-id", db=db)
 
         assert exc_info.value.status_code == 404
+        assert isinstance(exc_info.value.detail, dict)
         assert exc_info.value.detail["code"] == "CREDENTIAL_NOT_FOUND"
 
     @pytest.mark.asyncio

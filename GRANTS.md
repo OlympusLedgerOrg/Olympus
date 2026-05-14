@@ -23,6 +23,7 @@ The current prototype already demonstrates the core grant-relevant workflow:
 - successful ledger verification for committed files
 - downloadable proof bundles
 - proof bundle verification from JSON or a small proof package file
+- optional admin-controlled EVM SBT queue/flush endpoints for deployment mirrors
 
 Demo guide and video link: [DEMO.md](./DEMO.md)
 
