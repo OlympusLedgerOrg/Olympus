@@ -1568,6 +1568,14 @@ if (-not $env:OLYMPUS_ALLOW_PUBLIC_WRITE_REGISTRATION) {
     Write-Ok "OLYMPUS_ALLOW_PUBLIC_WRITE_REGISTRATION already set to $env:OLYMPUS_ALLOW_PUBLIC_WRITE_REGISTRATION"
 }
 
+if (-not $env:OLYMPUS_REGISTER_RATE_LIMIT_MINUTE_CAPACITY) {
+    $env:OLYMPUS_REGISTER_RATE_LIMIT_MINUTE_CAPACITY = "10"
+    Set-DotEnvValue -Path $envFile -Key "OLYMPUS_REGISTER_RATE_LIMIT_MINUTE_CAPACITY" -Value "10"
+    Write-Warn "OLYMPUS_REGISTER_RATE_LIMIT_MINUTE_CAPACITY=10 set for local onboarding."
+} else {
+    Write-Ok "OLYMPUS_REGISTER_RATE_LIMIT_MINUTE_CAPACITY already set to $env:OLYMPUS_REGISTER_RATE_LIMIT_MINUTE_CAPACITY"
+}
+
 $localCorsOrigins = "http://localhost:$UiPort,http://127.0.0.1:$UiPort,http://localhost:8000,http://127.0.0.1:8000,http://localhost:8080,http://127.0.0.1:8080"
 if (-not $env:CORS_ORIGINS -or $env:CORS_ORIGINS -match "yourdomain") {
     $env:CORS_ORIGINS = $localCorsOrigins
